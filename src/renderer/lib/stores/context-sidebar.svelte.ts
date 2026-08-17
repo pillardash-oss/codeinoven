@@ -90,6 +90,26 @@ export interface GitContextTab {
   threadId: string
 }
 
+export interface ThreadNoteContextTab {
+  id: string
+  kind: 'thread-note'
+  title: string
+  projectId: string
+  threadId: string
+  /** Display name of the owning thread, used in the delete confirmation. */
+  threadTitle: string
+  /** The last-saved body, or null before the first save. Diffing against
+   *  this (rather than a separate `dirty` flag) is what lets the panel
+   *  survive a hide/show without losing an unsaved draft — both fields
+   *  live on the tab itself, not in the component that gets unmounted. */
+  savedBody: string | null
+  draftBody: string
+  mode: 'edit' | 'read'
+  loading: boolean
+  saving: boolean
+  error: string | null
+}
+
 export interface CloudDeploymentContextTab {
   id: string
   kind: 'cloud-deployment'
@@ -166,6 +186,7 @@ export type ContextSidebarTab =
   | DebuggerContextTab
   | SourcesContextTab
   | GitContextTab
+  | ThreadNoteContextTab
   | CloudDeploymentContextTab
   | TemporaryChatContextTab
   | NotificationContextTab
@@ -410,14 +431,21 @@ class ContextSidebarState {
     if (context) context.visible = false
   }
 
+  /** Opened from the dock rail's Files icon. Reveals whatever file panel was
+   *  last in focus instead of always jumping to the empty "Open file"
+   *  browser tab — hiding the sidebar must not lose the file the user was
+   *  looking at. The browser tab only ever appears when no file has been
+   *  opened yet. */
   openFiles(projectId: string, threadId: string): void {
     const context = this.ensureContext(projectId, threadId)
-    const id = `files:${projectId}:${threadId}:browser`
-    const existing = context.tabs.find((tab) => tab.id === id)
-    if (existing) {
-      this.focusInContext(context, id)
+    const filesTabs = context.tabs.filter((tab) => tab.kind === 'files')
+    if (filesTabs.length > 0) {
+      const activeTab = context.tabs.find((tab) => tab.id === context.sidebarActiveTabId)
+      const target = activeTab?.kind === 'files' ? activeTab.id : filesTabs.at(-1)!.id
+      this.focusInContext(context, target)
       return
     }
+    const id = `files:${projectId}:${threadId}:browser`
     this.open(context, {
       id,
       kind: 'files',
@@ -498,7 +526,13 @@ class ContextSidebarState {
     projectId: string,
     previousFileTabId: string,
     nextFileTabId: string,
-    nextPath: string
+    nextPath: string,
+    preview: boolean,
+    /** False for bulk remaps (e.g. a directory rename touching many open
+     *  tabs at once) — those shouldn't fight over which tab ends up
+     *  focused. True for a remap that represents the user looking at this
+     *  file right now (a preview replacing another preview). */
+    focus: boolean
   ): boolean {
     for (const context of Object.values(this.contexts)) {
       const index = context.tabs.findIndex(
@@ -514,9 +548,16 @@ class ContextSidebarState {
         id: nextId,
         title: nextPath.split('/').at(-1) ?? nextPath,
         fileTabId: nextFileTabId,
-        path: nextPath
+        path: nextPath,
+        preview
       }
-      if (context.activeTabId === previous.id) context.activeTabId = nextId
+      if (focus) {
+        context.activeTabId = nextId
+        this.trackRegionActiveTab(context, nextId)
+        this.revealRegion(context, nextId)
+      } else if (context.activeTabId === previous.id) {
+        context.activeTabId = nextId
+      }
       return true
     }
     return false
@@ -574,19 +615,28 @@ class ContextSidebarState {
     }
   }
 
+  /** `checkpointId`/`revealPath` are `undefined` (omitted) for a plain
+   *  reopen — the dock rail's toggle calls this with no reveal target and
+   *  must not clobber whatever checkpoint the user already had selected.
+   *  `null` is only meaningful when explicitly passed, e.g. to clear a
+   *  reveal. Without this distinction every dock-icon toggle reset the tab
+   *  back to its defaults, which is what made the panel look like it never
+   *  remembered anything and re-fetched from scratch every time. */
   openDiff(
     projectId: string,
     threadId: string,
-    checkpointId: string | null = null,
-    revealPath: string | null = null
+    checkpointId?: string | null,
+    revealPath?: string | null
   ): void {
     const context = this.ensureContext(projectId, threadId)
     const id = `diff:${projectId}:${threadId}`
     const existing = context.tabs.find((tab) => tab.id === id)
     if (existing?.kind === 'diff') {
-      existing.checkpointId = checkpointId
-      existing.revealPath = revealPath
-      existing.revealNonce += 1
+      if (checkpointId !== undefined) existing.checkpointId = checkpointId
+      if (revealPath !== undefined) {
+        existing.revealPath = revealPath
+        existing.revealNonce += 1
+      }
       this.focusInContext(context, id)
       return
     }
@@ -596,8 +646,8 @@ class ContextSidebarState {
       title: 'Changes',
       projectId,
       threadId,
-      checkpointId,
-      revealPath,
+      checkpointId: checkpointId ?? null,
+      revealPath: revealPath ?? null,
       revealNonce: 1
     })
   }
@@ -638,6 +688,59 @@ class ContextSidebarState {
     // re-reads local status and the connection-gated PR indicators so the
     // panel never shows data older than the moment it was opened.
     gitState.notifyGitPanelOpened(projectId)
+  }
+
+  /** Opens the thread's note as a sidebar panel, creating one the first time
+   *  it's visited so the panel is ready to write into even before a note
+   *  exists. The body loads asynchronously onto the tab itself (not local
+   *  component state) so an in-progress draft survives the panel being
+   *  hidden and shown again. */
+  openThreadNote(projectId: string, threadId: string, threadTitle: string): void {
+    const context = this.ensureContext(projectId, threadId)
+    const id = `note:${projectId}:${threadId}`
+    const existing = context.tabs.find((tab) => tab.id === id)
+    if (existing) {
+      this.focusInContext(context, id)
+      return
+    }
+    this.open(context, {
+      id,
+      kind: 'thread-note',
+      title: 'Notes',
+      projectId,
+      threadId,
+      threadTitle,
+      savedBody: null,
+      draftBody: '',
+      mode: 'edit',
+      loading: true,
+      saving: false,
+      error: null
+    })
+    void this.loadThreadNote(context, id, projectId, threadId)
+  }
+
+  private async loadThreadNote(
+    context: ThreadSidebarContext,
+    tabId: string,
+    projectId: string,
+    threadId: string
+  ): Promise<void> {
+    try {
+      const note = await invoke('note:get', projectId, threadId)
+      const tab = context.tabs.find((candidate) => candidate.id === tabId)
+      if (!tab || tab.kind !== 'thread-note') return
+      tab.savedBody = note?.body ?? null
+      tab.draftBody = note?.body ?? ''
+      // A saved note opens in read mode so the user reads it, not its source.
+      tab.mode = note ? 'read' : 'edit'
+      tab.loading = false
+    } catch (err) {
+      const tab = context.tabs.find((candidate) => candidate.id === tabId)
+      if (!tab || tab.kind !== 'thread-note') return
+      tab.error = err instanceof Error ? err.message : 'Could not load the note'
+      tab.loading = false
+    }
   }
 
   openCloudDeployments(projectId: string, threadId: string): void {
@@ -1129,7 +1232,7 @@ class ContextSidebarState {
       terminalSequence: 0
     }
     this.contexts[key] = context
-    return context
+    return this.contexts[key]
   }
 
   private focusInContext(context: ThreadSidebarContext, id: string): void {

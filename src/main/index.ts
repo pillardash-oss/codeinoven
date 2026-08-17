@@ -30,7 +30,6 @@ import {
 import { getTrafficLightArg, warmTrafficLightDetection } from './system/titlebar'
 import { PrivilegedIpcValidator } from './ipc/ipc-validation'
 import type { CloseConfirmationProject, ThreadClickedPayload } from '../lib/ipc-contract'
-import type { Thread } from '../lib/types'
 import { startupTelemetry } from './system/startup-telemetry'
 import {
   handleFatalStartupFailure,
@@ -47,6 +46,7 @@ import { ThreadCreationCoordinator } from './chat/thread-creation-coordinator'
 import type { PtyService } from './system/pty-service'
 import type { ProviderConnectionService } from './providers/provider-connection'
 import type { HarnessUpdateService } from './agents/harness-update-service'
+import type { HarnessAutoUpdateService } from './agents/harness-auto-update-service'
 import type { HarnessInstallService } from './agents/harness-install-service'
 import type { NotificationService } from './notifications/notification-service'
 import type { RemoteModeController } from './remote/remote-mode'
@@ -123,14 +123,7 @@ function getActiveThreadProjects(): CloseConfirmationProject[] {
   try {
     const threadRepo = new ThreadRepo(database)
     const projectRepo = new ProjectRepo(database)
-    type ActiveThread = Thread & { status: 'planning' | 'executing' }
-    const active: ActiveThread[] = threadRepo
-      .listAll()
-      .filter(
-        (t): t is ActiveThread =>
-          !t.archived && (t.status === 'planning' || t.status === 'executing')
-      )
-      .sort((a, b) => b.lastActivity - a.lastActivity)
+    const active = threadRepo.listActive()
     if (active.length === 0) return []
     const byProject = new Map<string, CloseConfirmationProject>()
     for (const thread of active) {
@@ -347,6 +340,7 @@ let chatEngine: ChatEngine | null = null
 let ptyService: PtyService | null = null
 let providerConnection: ProviderConnectionService | null = null
 let harnessUpdateService: HarnessUpdateService | null = null
+let harnessAutoUpdateService: HarnessAutoUpdateService | null = null
 let harnessInstallService: HarnessInstallService | null = null
 let harnessManifestService: HarnessManifestService | null = null
 let computerUsePipService: ComputerUsePipService | null = null
@@ -563,6 +557,7 @@ async function bootPostPaintServices(): Promise<void> {
       { ProviderConnectionService },
       { HarnessUpdateService },
       { HarnessInstallService },
+      { HarnessAutoUpdateService },
       { RemoteModeController, DEFAULT_LAN_PORT, remoteEnvInt, remotePeerSecret },
       { RemoteRpcDispatcher },
       { DeviceCredentialService },
@@ -575,6 +570,7 @@ async function bootPostPaintServices(): Promise<void> {
       import('./providers/provider-connection'),
       import('./agents/harness-update-service'),
       import('./agents/harness-install-service'),
+      import('./agents/harness-auto-update-service'),
       import('./remote/remote-mode'),
       import('./remote/remote-rpc'),
       import('./remote/device-credential-service'),
@@ -587,6 +583,7 @@ async function bootPostPaintServices(): Promise<void> {
     ptyService = new PtyService(storage, database)
     providerConnection = new ProviderConnectionService()
     harnessUpdateService = new HarnessUpdateService(providerConnection)
+    harnessAutoUpdateService = new HarnessAutoUpdateService(storage)
     harnessInstallService = new HarnessInstallService(providerConnection)
     notificationService = new NotificationService(storage, database, openThreadFromNotification)
 
@@ -658,6 +655,7 @@ async function bootPostPaintServices(): Promise<void> {
     ptyService.register()
     providerConnection.register()
     harnessUpdateService.register()
+    harnessAutoUpdateService.register()
     harnessInstallService.register()
 
     const { registerProviderAccountIpc } = await import('./ipc/provider-account-ipc')
@@ -670,15 +668,6 @@ async function bootPostPaintServices(): Promise<void> {
     // Wire PTY to the window now that it exists.
     if (mainWindow && !mainWindow.isDestroyed()) {
       ptyService.attach(mainWindow.webContents)
-    }
-
-    try {
-      const deleted = await chatEngine?.purgeArchivedThreads()
-      if (deleted && (deleted.tasks > 0 || deleted.rows > 0 || deleted.directories > 0)) {
-        Logger.info('Permanently deleted legacy task residue', deleted)
-      }
-    } catch (error) {
-      Logger.error('Legacy archived task deletion failed (non-fatal):', error)
     }
 
     try {

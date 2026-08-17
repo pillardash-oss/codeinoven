@@ -36,7 +36,7 @@ describe('formatHistoryRecap', () => {
     expect(recap).not.toContain('u'.repeat(2_000))
   })
 
-  it('keeps the legacy 24k character slice when no budget is given', () => {
+  it('keeps the default 24k character cap when no budget is given', () => {
     const messages = [message('user', 'x'.repeat(30_000)), message('assistant', 'ok')]
     const recap = formatHistoryRecap(messages, {})
     expect(recap).toContain('Transcript restored from history:')

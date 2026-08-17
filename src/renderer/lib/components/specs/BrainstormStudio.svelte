@@ -841,16 +841,19 @@
               markDirty()
             }}
           />
-          <EditableMarkdown
-            text={draft.content.summary}
-            readOnly={!canEdit}
-            class="brainstorm-markdown max-w-3xl whitespace-pre-wrap rounded-lg px-2 py-1 text-base text-muted outline-none focus:bg-surface focus:text-foreground"
-            ariaLabel="Brainstorm summary"
-            onChange={(value) => {
-              draft.content.summary = value
-              markDirty()
-            }}
-          />
+          <section id="brainstorm-section-tldr" class="space-y-2 scroll-mt-5">
+            <h2 class="text-xl font-semibold tracking-tight">TL;DR</h2>
+            <EditableMarkdown
+              text={draft.content.summary}
+              readOnly={!canEdit}
+              class="brainstorm-markdown max-w-3xl whitespace-pre-wrap rounded-lg px-2 py-1 text-base text-muted outline-none focus:bg-surface focus:text-foreground"
+              ariaLabel="Brainstorm TL;DR"
+              onChange={(value) => {
+                draft.content.summary = value
+                markDirty()
+              }}
+            />
+          </section>
         </header>
 
         {#each visibleSections as sectionDefinition (sectionDefinition.id)}

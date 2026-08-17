@@ -1,14 +1,28 @@
-import { BrowserWindow } from 'electron'
-import type { ComputerUsePipFrame, ComputerUsePipState } from '../../lib/types'
+import { BrowserWindow, nativeImage } from 'electron'
+import type {
+  ComputerUsePipCursor,
+  ComputerUsePipFrame,
+  ComputerUsePipState
+} from '../../lib/types'
 import { CuaBridgeService } from './cua-bridge-service'
 import { StdioMcpClient, type McpClient } from '../agents/mcp-stdio-client'
 import type { StorageEngine } from '../storage/storage-engine'
 import { Logger } from '../system/logger'
 import { sendToRenderer } from '../ipc/renderer-delivery'
 
-const POLL_INTERVAL_MS = 1_000
-const MAX_MISSES = 6
+const TARGET_FRAME_RATE = 15
+const FRAME_INTERVAL_MS = Math.round(1_000 / TARGET_FRAME_RATE)
+const MAX_MISSES = TARGET_FRAME_RATE
 const AUTO_DISMISS_GRACE_MS = 3_000
+const MAX_FRAME_DIMENSION = 448
+const JPEG_QUALITY = 78
+
+interface WindowBounds {
+  x: number
+  y: number
+  width: number
+  height: number
+}
 
 interface WindowRecord {
   window_id: number
@@ -17,13 +31,20 @@ interface WindowRecord {
   is_on_screen?: boolean
   on_current_space?: boolean | null
   z_index?: number | null
+  bounds?: WindowBounds
+}
+
+interface CursorPosition {
+  x: number
+  y: number
+  visible?: boolean
 }
 
 /**
  * Floating PiP monitor for computer use. The utility orchestration service
  * notifies this service whenever an agent drives an app through the Cua
  * driver; the service then latches onto that pid, polls its frontmost window,
- * and streams compressed frames to the renderer for an always-visible overlay.
+ * and streams bounded JPEG frames to the renderer for an always-visible overlay.
  */
 export class ComputerUsePipService {
   private readonly cuaBridge: CuaBridgeService
@@ -34,7 +55,10 @@ export class ComputerUsePipService {
   private timer: ReturnType<typeof setInterval> | null = null
   private active = false
   private misses = 0
+  private captureInFlight = false
   private ownerThreadId: string | null = null
+  private targetSessionId: string | null = null
+  private cursor: ComputerUsePipCursor | null = null
   private dismissedThreadId: string | null = null
   private autoDismissTimer: ReturnType<typeof setTimeout> | null = null
 
@@ -43,13 +67,17 @@ export class ComputerUsePipService {
   }
 
   /** Latch onto the app (pid) a thread's agent is currently driving. */
-  async track(pid: number, threadId: string): Promise<void> {
+  async track(pid: number, threadId: string, sessionId?: string): Promise<void> {
     if (!Number.isInteger(pid) || pid <= 0) return
     this.clearAutoDismiss()
     // The user closed the overlay this turn — keep it hidden for the rest of
     // the turn; only the next agent turn (after a new user message) re-enables it.
     if (this.dismissedThreadId === threadId) return
+    const targetChanged =
+      this.targetPid !== pid || this.targetSessionId !== (sessionId ?? null) || !this.active
     this.ownerThreadId = threadId
+    this.targetSessionId = sessionId ?? null
+    if (targetChanged) this.cursor = null
     if (this.active && this.targetPid === pid) return
     this.targetPid = pid
     this.misses = 0
@@ -105,6 +133,8 @@ export class ComputerUsePipService {
     this.windowId = null
     this.misses = 0
     this.ownerThreadId = null
+    this.targetSessionId = null
+    this.cursor = null
     this.clearAutoDismiss()
     this.clearLoop()
     if (wasActive) this.broadcastState()
@@ -141,7 +171,7 @@ export class ComputerUsePipService {
     if (this.timer || !this.active) return
     this.timer = setInterval(() => {
       void this.captureOnce()
-    }, POLL_INTERVAL_MS)
+    }, FRAME_INTERVAL_MS)
   }
 
   private clearLoop(): void {
@@ -169,8 +199,10 @@ export class ComputerUsePipService {
   }
 
   private async captureOnce(): Promise<void> {
-    if (!this.active || this.targetPid === null) return
+    if (!this.active || this.targetPid === null || this.captureInFlight) return
+    this.captureInFlight = true
     const pid = this.targetPid
+    const sessionId = this.targetSessionId
     try {
       const client = await this.ensureClient()
       const window = await this.frontmostWindow(client, pid)
@@ -182,25 +214,43 @@ export class ComputerUsePipService {
       this.misses = 0
       this.appName = window.app_name || this.appName || 'App'
       this.windowId = window.window_id
-      const result = await client.callTool('get_window_state', {
+      const screenshotRequest = client.callTool('get_window_state', {
         pid,
         window_id: window.window_id,
         include_screenshot: true,
-        max_elements: 1
+        max_elements: 1,
+        ...(sessionId ? { session: sessionId } : {})
       })
-      const image = extractImage(result)
+      const cursorRequest = sessionId
+        ? client.callTool('get_agent_cursor_state', { session: sessionId })
+        : Promise.resolve(null)
+      const [screenshotResult, cursorResult] = await Promise.allSettled([
+        screenshotRequest,
+        cursorRequest
+      ])
+      const image =
+        screenshotResult.status === 'fulfilled' ? extractImage(screenshotResult.value) : null
       if (!image) return
+      const optimizedImage = optimizeImage(image)
+      if (cursorResult.status === 'fulfilled') {
+        const cursorPosition = extractCursorPosition(cursorResult.value)
+        if (cursorPosition) {
+          const projectedCursor = projectCursor(cursorPosition, window, optimizedImage)
+          if (projectedCursor) this.cursor = projectedCursor
+        }
+      }
       // The overlay may have been dismissed (or re-targeted) while we awaited
       // the driver — never resurrect it with a stale frame.
-      if (!this.active || this.targetPid !== pid) return
+      if (!this.active || this.targetPid !== pid || this.targetSessionId !== sessionId) return
       const frame: ComputerUsePipFrame = {
         pid,
         appName: this.appName,
         windowId: window.window_id,
-        dataUrl: image.dataUrl,
-        width: image.width,
-        height: image.height,
-        timestamp: Date.now()
+        dataUrl: optimizedImage.dataUrl,
+        width: optimizedImage.width,
+        height: optimizedImage.height,
+        timestamp: Date.now(),
+        ...(this.cursor ? { cursor: this.cursor } : {})
       }
       this.broadcast('computerUse:pipFrame', frame)
     } catch (error) {
@@ -212,6 +262,8 @@ export class ComputerUsePipService {
         this.client = null
         this.hide()
       }
+    } finally {
+      this.captureInFlight = false
     }
   }
 
@@ -260,6 +312,14 @@ function extractWindows(result: unknown): WindowRecord[] {
       record.on_current_space = value['on_current_space']
     }
     if (typeof value['z_index'] === 'number') record.z_index = value['z_index']
+    const bounds = recordValue(value['bounds'])
+    const x = Number(bounds['x'])
+    const y = Number(bounds['y'])
+    const width = Number(bounds['width'])
+    const height = Number(bounds['height'])
+    if ([x, y, width, height].every(Number.isFinite) && width > 0 && height > 0) {
+      record.bounds = { x, y, width, height }
+    }
     return [record]
   })
 }
@@ -282,6 +342,106 @@ function extractImage(result: unknown): { dataUrl: string; width: number; height
     }
   }
   return null
+}
+
+function optimizeImage(image: { dataUrl: string; width: number; height: number }): {
+  dataUrl: string
+  width: number
+  height: number
+} {
+  try {
+    const source = nativeImage.createFromDataURL(image.dataUrl)
+    if (source.isEmpty()) return image
+    const sourceSize = source.getSize()
+    const width = sourceSize.width || image.width
+    const height = sourceSize.height || image.height
+    if (width <= 0 || height <= 0) return image
+    const scale = Math.min(1, MAX_FRAME_DIMENSION / Math.max(width, height))
+    const resized =
+      scale < 1
+        ? source.resize({
+            width: Math.max(1, Math.round(width * scale)),
+            height: Math.max(1, Math.round(height * scale))
+          })
+        : source
+    const size = resized.getSize()
+    const encoded = resized.toJPEG(JPEG_QUALITY)
+    return {
+      dataUrl: `data:image/jpeg;base64,${encoded.toString('base64')}`,
+      width: size.width,
+      height: size.height
+    }
+  } catch (error) {
+    Logger.dev('Computer-use PiP frame optimization failed; using source image:', error)
+    return image
+  }
+}
+
+function extractCursorPosition(result: unknown): CursorPosition | null {
+  const structured = recordValue(result)['structuredContent']
+  const roots = [structured, result]
+  for (const root of roots) {
+    const record = recordValue(root)
+    const point = firstPoint([
+      record['position'],
+      record['screen_position'],
+      record['screenPosition'],
+      record['coordinates'],
+      record['cursor_position'],
+      record['cursor'],
+      record
+    ])
+    if (!point) continue
+    const visible = booleanValue(record['visible']) ?? booleanValue(record['enabled'])
+    return { ...point, ...(visible === undefined ? {} : { visible }) }
+  }
+  return null
+}
+
+function firstPoint(values: unknown[]): { x: number; y: number } | null {
+  for (const value of values) {
+    const point = pointValue(value)
+    if (point) return point
+  }
+  return null
+}
+
+function pointValue(value: unknown): { x: number; y: number } | null {
+  if (Array.isArray(value) && value.length >= 2) {
+    const x = Number(value[0])
+    const y = Number(value[1])
+    return Number.isFinite(x) && Number.isFinite(y) ? { x, y } : null
+  }
+  const record = recordValue(value)
+  const x = Number(record['x'])
+  const y = Number(record['y'])
+  if (Number.isFinite(x) && Number.isFinite(y)) return { x, y }
+  for (const key of ['position', 'screen_position', 'screenPosition', 'coordinates']) {
+    const point = pointValue(record[key])
+    if (point) return point
+  }
+  return null
+}
+
+function booleanValue(value: unknown): boolean | undefined {
+  return typeof value === 'boolean' ? value : undefined
+}
+
+function projectCursor(
+  position: CursorPosition,
+  window: WindowRecord,
+  image: { width: number; height: number }
+): ComputerUsePipCursor | null {
+  const bounds = window.bounds
+  if (!bounds || image.width <= 0 || image.height <= 0) return null
+  const x = ((position.x - bounds.x) / bounds.width) * image.width
+  const y = ((position.y - bounds.y) / bounds.height) * image.height
+  if (!Number.isFinite(x) || !Number.isFinite(y)) return null
+  return {
+    visible: position.visible !== false,
+    x: Math.min(Math.max(0, x), image.width),
+    y: Math.min(Math.max(0, y), image.height)
+  }
 }
 
 function recordValue(value: unknown): Record<string, unknown> {

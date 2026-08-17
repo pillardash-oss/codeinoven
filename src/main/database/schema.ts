@@ -78,15 +78,14 @@ WHEN new.name != old.name BEGIN
   INSERT INTO project_fts(rowid, name) VALUES (new.rowid, new.name);
 END;`
 
-export const THREADS_SQL = `
--- ─── Threads ────────────────────────────────────────────────────────────
-CREATE TABLE IF NOT EXISTS threads (
+export function threadsTableSql(tableName: 'threads' | 'threads_new'): string {
+  return `CREATE TABLE IF NOT EXISTS ${tableName} (
   id                   TEXT PRIMARY KEY NOT NULL,
   project_id           TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
   provider_id          TEXT NOT NULL DEFAULT '',
   title                TEXT NOT NULL DEFAULT 'New Thread',
   title_source         TEXT NOT NULL DEFAULT 'default' CHECK(title_source IN ('default','auto','manual')),
-  status               TEXT NOT NULL DEFAULT 'created' CHECK(status IN ('created','planning','awaiting_approval','executing','interrupted','completed','failed')),
+  status               TEXT NOT NULL DEFAULT 'created' CHECK(status IN ('created','planning','awaiting_approval','spec','executing','working-paused','interrupted','completed','failed')),
   pinned               INTEGER NOT NULL DEFAULT 0,
   pinned_at            INTEGER,
   sort_order           INTEGER,
@@ -117,15 +116,26 @@ CREATE TABLE IF NOT EXISTS threads (
   updated_at           INTEGER NOT NULL,
   last_activity        INTEGER NOT NULL,
   working_directory    TEXT NOT NULL DEFAULT ''
-);
+);`
+}
 
+export const THREAD_INDEXES_SQL = `
 CREATE INDEX IF NOT EXISTS idx_threads_status ON threads(status);
 CREATE INDEX IF NOT EXISTS idx_threads_project_listing
   ON threads(project_id, archived, pinned DESC, pinned_at DESC, sort_order, last_activity DESC);
 CREATE INDEX IF NOT EXISTS idx_threads_activity_listing
   ON threads(pinned DESC, pinned_at DESC, last_activity DESC);
 CREATE INDEX IF NOT EXISTS idx_threads_default_listing
-  ON threads(pinned DESC, pinned_at DESC, sort_order, last_activity DESC);`
+  ON threads(pinned DESC, pinned_at DESC, sort_order, last_activity DESC);
+CREATE INDEX IF NOT EXISTS idx_threads_active_listing
+  ON threads(last_activity DESC, id ASC)
+  WHERE archived = 0 AND status IN ('planning', 'executing');`
+
+export const THREADS_SQL = `
+-- ─── Threads ────────────────────────────────────────────────────────────
+${threadsTableSql('threads')}
+
+${THREAD_INDEXES_SQL}`
 
 export const HISTORY_SQL = `
 -- ─── History Entries ────────────────────────────────────────────────────
@@ -174,13 +184,13 @@ CREATE TABLE IF NOT EXISTS agent_messages (
   thread_id       TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
   session_id      TEXT,
   role            TEXT NOT NULL CHECK(role IN ('user','assistant')),
-  origin          TEXT NOT NULL DEFAULT 'legacy' CHECK(origin IN ('user','assistant','harness','orchestrator','subagent','compaction','provider','legacy')),
+  origin          TEXT NOT NULL DEFAULT 'provider' CHECK(origin IN ('user','assistant','harness','orchestrator','subagent','compaction','provider')),
   visibility      TEXT NOT NULL DEFAULT 'conversation' CHECK(visibility IN ('conversation','working_trace','subagent_trace','hidden')),
   parts           TEXT NOT NULL DEFAULT '[]',
   search_text     TEXT NOT NULL DEFAULT '',
   content_hash    TEXT,
   transport_parts TEXT,
-  transport_origin TEXT CHECK(transport_origin IS NULL OR transport_origin IN ('user','assistant','harness','orchestrator','subagent','compaction','provider','legacy')),
+  transport_origin TEXT CHECK(transport_origin IS NULL OR transport_origin IN ('user','assistant','harness','orchestrator','subagent','compaction','provider')),
   model_id        TEXT,
   provider_id     TEXT,
   harness_id      TEXT,
@@ -744,7 +754,7 @@ CREATE TABLE IF NOT EXISTS thread_notes (
   updated_at INTEGER NOT NULL
 );`
 
-/** Canonical fresh-install schema. There are no historical migrations. */
+/** Canonical fresh-install schema. */
 export const DATABASE_SCHEMA_SQL = [
   SCHEMA_SQL,
   PROJECT_FTS_SQL,

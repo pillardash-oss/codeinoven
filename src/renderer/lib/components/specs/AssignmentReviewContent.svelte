@@ -249,12 +249,13 @@
       ariaLabel="Assignment title"
       onChange={(value) => update({ ...content, title: value })}
     />
+    <h3 class="text-sm font-semibold uppercase tracking-wide text-dimmed">TL;DR</h3>
     <EditableMarkdown
       {readOnly}
       class="rounded-lg px-2 py-1 text-sm leading-7 text-muted outline-none focus:bg-surface focus:text-foreground"
       text={content.summary}
-      fallback="No assignment summary."
-      ariaLabel="Assignment summary"
+      fallback="No assignment TL;DR."
+      ariaLabel="Assignment TL;DR"
       onChange={(value) => update({ ...content, summary: value })}
     />
     {@render AnnotationBubbles('overview')}

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { X, PictureInPicture2 } from '@lucide/svelte'
+  import { MousePointer2, X, PictureInPicture2 } from '@lucide/svelte'
   import { onMount } from 'svelte'
   import { pipState } from '$lib/stores/pip.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
@@ -28,8 +28,26 @@
       pipState.threadId === workspaceState.selectedThread?.id
   )
 
+  const PREVIEW_WIDTH = 224
+  const PREVIEW_HEIGHT = 144
+  const cursorPosition = $derived.by(() => {
+    if (!pipState.cursorVisible || pipState.frameWidth <= 0 || pipState.frameHeight <= 0) {
+      return null
+    }
+    const scale = Math.min(
+      PREVIEW_WIDTH / pipState.frameWidth,
+      PREVIEW_HEIGHT / pipState.frameHeight
+    )
+    const renderedWidth = pipState.frameWidth * scale
+    const renderedHeight = pipState.frameHeight * scale
+    return {
+      left: (PREVIEW_WIDTH - renderedWidth) / 2 + pipState.cursorX * scale,
+      top: (PREVIEW_HEIGHT - renderedHeight) / 2 + pipState.cursorY * scale
+    }
+  })
+
   /** Anchor the overlay to the bottom-right corner on first appearance. */
-  function anchorOverlay(node: HTMLDivElement): { destroy(): void } {
+  function anchorOverlay(node: HTMLDivElement): () => void {
     overlayElement = node
     if (!userMoved) {
       const rect = node.getBoundingClientRect()
@@ -38,10 +56,8 @@
         y: Math.max(0, window.innerHeight - rect.height - 24)
       }
     }
-    return {
-      destroy() {
-        if (overlayElement === node) overlayElement = undefined
-      }
+    return () => {
+      if (overlayElement === node) overlayElement = undefined
     }
   }
 
@@ -89,7 +105,7 @@
 
 {#if visible}
   <div
-    use:anchorOverlay
+    {@attach anchorOverlay}
     class="fixed z-50 select-none rounded-xl border bg-surface shadow-2xl"
     style="left: {position.x}px; top: {position.y}px;"
     role="group"
@@ -127,12 +143,23 @@
       aria-label="Bring {pipState.appName} to the front"
       onclick={() => void pipState.bringToFront()}
     >
-      <img
-        src={pipState.frameDataUrl}
-        alt="Live preview of {pipState.appName}"
-        class="h-36 w-56 rounded-md border border-border object-contain bg-app"
-        draggable="false"
-      />
+      <div class="relative h-36 w-56 overflow-hidden rounded-md border border-border bg-app">
+        <img
+          src={pipState.frameDataUrl}
+          alt="Live preview of {pipState.appName}"
+          class="h-full w-full object-contain"
+          draggable="false"
+        />
+        {#if cursorPosition}
+          <MousePointer2
+            size={18}
+            strokeWidth={2.5}
+            class="pointer-events-none absolute -translate-x-1/2 -translate-y-1/2 text-accent drop-shadow-md"
+            style="left: {cursorPosition.left}px; top: {cursorPosition.top}px;"
+            aria-hidden="true"
+          />
+        {/if}
+      </div>
     </button>
   </div>
 {/if}

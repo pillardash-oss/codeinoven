@@ -296,9 +296,7 @@ export class GitHubAuthService {
         ...(refreshTokenExpiresAt > 0 ? { refreshTokenExpiresAt } : {})
       }
     } catch {
-      // Existing installations stored the access token directly. Keep accepting
-      // it; the next successful device flow migrates the entry to versioned JSON.
-      return { version: 1, accessToken: value }
+      throw new Error('Invalid stored GitHub credentials')
     }
   }
 

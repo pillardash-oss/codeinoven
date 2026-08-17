@@ -56,6 +56,15 @@ class AgentRunsStore {
     return this.runs.get(threadKey(projectId, threadId))?.busy ?? false
   }
 
+  /** Whether this thread's run state has been settled by a live session check
+   *  (a ThreadView mounted for it and its live status was observed, or its
+   *  session streamed activity). Once settled, `isBusy` is authoritative and a
+   *  stale persisted `planning`/`executing` status must not keep the working
+   *  UI (row spinner, header indicator) alive. */
+  hasSettled(projectId: string, threadId: string): boolean {
+    return this.runs.has(threadKey(projectId, threadId))
+  }
+
   /** ID of the user message that started the current turn, if any. */
   currentTurnUserMessageId(projectId: string, threadId: string): string | null {
     return this.runs.get(threadKey(projectId, threadId))?.currentTurnUserMessageId ?? null
@@ -101,6 +110,12 @@ class AgentRunsStore {
     openTrace = true
   ): void {
     const entry = this.entry(projectId, threadId)
+    const previousBusy = entry.busy
+    const previousLive = entry.live
+    const previousBusySince = entry.busySince
+    const previousTurnUserMessageId = entry.currentTurnUserMessageId
+    const previousTraceOpen = entry.traceOpen
+    const previousTraceUserOpened = entry.traceUserOpened
     const wasBusy = entry.busy
     const isNewTurn =
       busy &&
@@ -130,7 +145,16 @@ class AgentRunsStore {
       entry.traceOpen = false
     }
 
-    this.#notify()
+    if (
+      entry.busy !== previousBusy ||
+      entry.live !== previousLive ||
+      entry.busySince !== previousBusySince ||
+      entry.currentTurnUserMessageId !== previousTurnUserMessageId ||
+      entry.traceOpen !== previousTraceOpen ||
+      entry.traceUserOpened !== previousTraceUserOpened
+    ) {
+      this.#notify()
+    }
   }
 
   /** Toggle the working trace open/closed state, recording user intent. */
@@ -144,6 +168,11 @@ class AgentRunsStore {
   /** Mark the run idle and close the trace unless the user opened it. */
   setIdle(projectId: string, threadId: string): void {
     const entry = this.entry(projectId, threadId)
+    const previousBusy = entry.busy
+    const previousLive = entry.live
+    const previousBusySince = entry.busySince
+    const previousTurnUserMessageId = entry.currentTurnUserMessageId
+    const previousTraceOpen = entry.traceOpen
     entry.busy = false
     entry.live = false
     entry.busySince = null
@@ -151,7 +180,15 @@ class AgentRunsStore {
     if (!entry.traceUserOpened) {
       entry.traceOpen = false
     }
-    this.#notify()
+    if (
+      entry.busy !== previousBusy ||
+      entry.live !== previousLive ||
+      entry.busySince !== previousBusySince ||
+      entry.currentTurnUserMessageId !== previousTurnUserMessageId ||
+      entry.traceOpen !== previousTraceOpen
+    ) {
+      this.#notify()
+    }
   }
 
   /** Clear the run state for a thread (e.g. on deletion). */

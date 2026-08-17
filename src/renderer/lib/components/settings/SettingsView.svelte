@@ -456,7 +456,7 @@
               <div>
                 <p class="text-sm font-medium">Keep device on while work is in progress</p>
                 <p class="text-xs text-dimmed">
-                  Prevent the display and system from sleeping while any agent is working
+                  Prevent sleep while an agent is actively working; spec-ready threads stay idle
                 </p>
               </div>
               <Switch

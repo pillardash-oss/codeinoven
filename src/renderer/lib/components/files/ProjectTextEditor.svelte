@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { onDestroy } from 'svelte'
+
   import { highlightFileContent } from './file-language'
 
   interface Props {
@@ -40,6 +42,7 @@
   let highlightLayer = $state<HTMLPreElement | null>(null)
   let findHighlightLayer = $state<HTMLPreElement | null>(null)
   let handledFocusLineRequest = 0
+  let pendingScrollFrame: number | null = null
   let highlighted = $derived(highlightFileContent(value, path))
   let lineMetrics = $derived.by(() => {
     let count = 1
@@ -109,6 +112,7 @@
     const textBefore = value.slice(0, match[0])
     const linesBefore = textBefore.split('\n').length - 1
     editor.scrollTop = Math.max(0, linesBefore * lineHeight - editor.clientHeight / 3)
+    flushScrollSynchronization()
   })
 
   $effect(() => {
@@ -121,10 +125,11 @@
     // its selection: the user's caret remains wherever they put it.
     const line = Math.max(1, Math.floor(requestedLine))
     editor.scrollTop = Math.max(0, (line - 1) * 20 - editor.clientHeight / 3)
-    handleScroll()
+    flushScrollSynchronization()
   })
 
-  function handleScroll(): void {
+  function synchronizeScrollLayers(): void {
+    pendingScrollFrame = null
     if (!editor) return
     if (gutter) gutter.scrollTop = editor.scrollTop
     if (highlightLayer) {
@@ -136,6 +141,25 @@
       findHighlightLayer.scrollLeft = editor.scrollLeft
     }
   }
+
+  function flushScrollSynchronization(): void {
+    if (pendingScrollFrame !== null) {
+      cancelAnimationFrame(pendingScrollFrame)
+    }
+    synchronizeScrollLayers()
+  }
+
+  function handleScroll(): void {
+    if (pendingScrollFrame !== null) return
+    pendingScrollFrame = requestAnimationFrame(synchronizeScrollLayers)
+  }
+
+  onDestroy(() => {
+    if (pendingScrollFrame !== null) {
+      cancelAnimationFrame(pendingScrollFrame)
+      pendingScrollFrame = null
+    }
+  })
 </script>
 
 <div class="flex min-h-0 flex-1 overflow-hidden bg-app">

@@ -119,31 +119,31 @@ The public-facing cutover.
 
 ## Quick reference: files created
 
-| File | Purpose |
-| ---- | ------- |
-| `docs/RELEASE_CHECKLIST.md` | This checklist |
-| `SECURITY.md` | Private vuln reporting + SLA |
-| `CODE_OF_CONDUCT.md` | Contributor covenant |
-| `MAINTAINERS.md` | Triage/merge policy, labels, saved replies |
-| `CHANGELOG.md` | Release history |
-| `.env.example` | Documented env contract |
-| `.github/dependabot.yml` | Dependency bump automation |
-| `.github/CODEOWNERS` | Auto-review routing |
-| `.github/FUNDING.yml` | Sponsorship signal |
-| `.github/PULL_REQUEST_TEMPLATE.md` | PR checklist |
-| `.github/ISSUE_TEMPLATE/*.yml` | Bug/feature forms + config |
-| `.github/workflows/release.yml` | Tagged release + publish (added previously) |
-| `.github/workflows/security.yml` | Gitleaks + `bun audit` |
-| `.github/workflows/stale.yml` | Stale issue/PR cleanup |
-| `.github/workflows/nightly.yml` | Scheduled nightly prerelease build |
-| `docs/SECRETS.md` | Where to get and store every secret |
+| File                               | Purpose                                     |
+| ---------------------------------- | ------------------------------------------- |
+| `docs/RELEASE_CHECKLIST.md`        | This checklist                              |
+| `SECURITY.md`                      | Private vuln reporting + SLA                |
+| `CODE_OF_CONDUCT.md`               | Contributor covenant                        |
+| `MAINTAINERS.md`                   | Triage/merge policy, labels, saved replies  |
+| `CHANGELOG.md`                     | Release history                             |
+| `.env.example`                     | Documented env contract                     |
+| `.github/dependabot.yml`           | Dependency bump automation                  |
+| `.github/CODEOWNERS`               | Auto-review routing                         |
+| `.github/FUNDING.yml`              | Sponsorship signal                          |
+| `.github/PULL_REQUEST_TEMPLATE.md` | PR checklist                                |
+| `.github/ISSUE_TEMPLATE/*.yml`     | Bug/feature forms + config                  |
+| `.github/workflows/release.yml`    | Tagged release + publish (added previously) |
+| `.github/workflows/security.yml`   | Gitleaks + `bun audit`                      |
+| `.github/workflows/stale.yml`      | Stale issue/PR cleanup                      |
+| `.github/workflows/nightly.yml`    | Scheduled nightly prerelease build          |
+| `docs/SECRETS.md`                  | Where to get and store every secret         |
 
 ## Quick reference: files fixed
 
-| File | Fix |
-| ---- | --- |
-| `package.json` | Removed `"private": true` |
-| `electron-builder.yml` | `publish.owner` → `pillardash-oss`; signing driven by env (no hardcoded identity/`forceCodeSigning`) |
-| `README.md` | Release links → OSS repo; homepage URL + badges + security note |
-| `.github/workflows/release.yml` | Node 24 action versions + `SHA256SUMS.txt` |
-| `.github/workflows/quality.yml` | `checkout@v6` + concurrency |
+| File                            | Fix                                                                                                  |
+| ------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| `package.json`                  | Removed `"private": true`                                                                            |
+| `electron-builder.yml`          | `publish.owner` → `pillardash-oss`; signing driven by env (no hardcoded identity/`forceCodeSigning`) |
+| `README.md`                     | Release links → OSS repo; homepage URL + badges + security note                                      |
+| `.github/workflows/release.yml` | Node 24 action versions + `SHA256SUMS.txt`                                                           |
+| `.github/workflows/quality.yml` | `checkout@v6` + concurrency                                                                          |

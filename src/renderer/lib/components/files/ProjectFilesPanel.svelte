@@ -1,5 +1,7 @@
 <script lang="ts">
   import { onMount, tick } from 'svelte'
+  import { slide } from 'svelte/transition'
+  import { cubicOut } from 'svelte/easing'
   import { AlertDialog, Dialog } from 'bits-ui'
   import { toast } from 'svelte-sonner'
   import {
@@ -7,13 +9,14 @@
     Code2,
     Eye,
     FileDiff,
+    FolderTree,
     FolderOpen,
     Loader2,
-    PanelRight,
     Save,
     X
   } from '@lucide/svelte'
   import { invoke, subscribe } from '$lib/ipc.svelte'
+  import { motionDuration } from '$lib/motion'
   import { isAudioMime, isImageMime, isSvgMime, isVideoMime, mimeFromPath } from '$lib/mime'
   import { projectFilePreviewUrl } from '$lib/file-preview'
   import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
@@ -468,7 +471,7 @@
           title={projectState.explorerVisible ? 'Hide file explorer' : 'Show file explorer'}
           onclick={() => projectFilesWorkspace.toggleExplorer(projectId)}
         >
-          <PanelRight size={15} />
+          <FolderTree size={15} />
         </button>
       </div>
 
@@ -744,15 +747,22 @@
     </section>
 
     {#if projectState.explorerVisible}
-      <ProjectFileExplorer
-        {projectId}
-        {projectName}
-        {projectState}
-        selectedPath={activeTab?.path ?? null}
-        {lastTurnPaths}
-        {activeCheckpointPaths}
-        activeCheckpointId={activeTab?.checkpointId ?? null}
-      />
+      <div
+        class="min-h-0"
+        transition:slide={{ axis: 'x', duration: motionDuration(180), easing: cubicOut }}
+      >
+        <ProjectFileExplorer
+          {projectId}
+          {projectName}
+          {projectState}
+          onWidthChange={(width, persist) =>
+            projectFilesWorkspace.setExplorerWidth(projectId, width, persist)}
+          selectedPath={activeTab?.path ?? null}
+          {lastTurnPaths}
+          {activeCheckpointPaths}
+          activeCheckpointId={activeTab?.checkpointId ?? null}
+        />
+      </div>
     {/if}
   </div>
 </div>
@@ -802,7 +812,7 @@
           title={fullscreenExplorerOpen ? 'Hide file tree' : 'Show file tree'}
           onclick={() => (fullscreenExplorerOpen = !fullscreenExplorerOpen)}
         >
-          <PanelRight size={15} />
+          <FolderTree size={15} />
         </button>
         <Dialog.Close
           class="titlebar-no-drag flex h-7 w-7 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
@@ -1008,16 +1018,23 @@
           {/if}
         </div>
         {#if fullscreenExplorerOpen && activeTab}
-          <ProjectFileExplorer
-            {projectId}
-            {projectName}
-            {projectState}
-            selectedPath={activeTab.path}
-            {lastTurnPaths}
-            {activeCheckpointPaths}
-            activeCheckpointId={activeTab.checkpointId}
-            onFileSelect={fullscreenOpenFile}
-          />
+          <div
+            class="min-h-0"
+            transition:slide={{ axis: 'x', duration: motionDuration(180), easing: cubicOut }}
+          >
+            <ProjectFileExplorer
+              {projectId}
+              {projectName}
+              {projectState}
+              onWidthChange={(width, persist) =>
+                projectFilesWorkspace.setExplorerWidth(projectId, width, persist)}
+              selectedPath={activeTab.path}
+              {lastTurnPaths}
+              {activeCheckpointPaths}
+              activeCheckpointId={activeTab.checkpointId}
+              onFileSelect={fullscreenOpenFile}
+            />
+          </div>
         {/if}
       </div>
     </Dialog.Content>

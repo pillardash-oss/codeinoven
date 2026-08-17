@@ -5,6 +5,7 @@ import { fileURLToPath } from 'url'
 import { promisify } from 'util'
 import type {
   AgentEvent,
+  AgentQuestion,
   AgentProviderIssue,
   AgentRateLimitWindow,
   AgentUsageCredits,
@@ -13,6 +14,7 @@ import type {
   AgentTokenUsage,
   NormalizedUsage,
   PermissionLevel,
+  PermissionReply,
   PromptAttachment,
   ProviderCatalog,
   SessionAgentEvent,
@@ -20,6 +22,7 @@ import type {
   ThreadSettings,
   ThinkingPreset
 } from '../../lib/types'
+import { normalizeAgentQuestions, permissionPatterns } from '../../lib/agent-interactions'
 import { classifyProviderIssue } from '../../lib/provider-issue'
 import { resolveFastModelId } from '../../lib/fast-inference'
 import { BaseUrlProviderService } from '../providers/base-url-provider-service'
@@ -114,6 +117,15 @@ interface CodexContextUsageWaiter {
   timer: ReturnType<typeof setTimeout>
 }
 
+interface CodexServerRequest {
+  id: string | number
+  host: CodexAppServerHost
+  sessionId: string
+  method: string
+  params: Record<string, unknown>
+  questions?: AgentQuestion[]
+}
+
 function record(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === 'object' ? (value as Record<string, unknown>) : null
 }
@@ -130,22 +142,48 @@ function notificationThreadId(params: Record<string, unknown>): string | undefin
 
 function codexThinkingPresets(value: unknown): ThinkingPreset[] | undefined {
   if (!Array.isArray(value) || value.length === 0) return undefined
-  const descriptions = new Map<string, string>()
+  const presets: ThinkingPreset[] = []
   for (const option of value) {
     const entry = record(option)
-    const effort = stringValue(entry?.['reasoningEffort'])
+    const effort =
+      stringValue(entry?.['reasoningEffort']) ?? stringValue(entry?.['reasoning_effort'])
     if (!effort) continue
-    descriptions.set(effort, stringValue(entry?.['description']) ?? `${effort} reasoning effort`)
+    const knownPreset = THINKING_PRESETS.find((preset) => preset.id === effort)
+    presets.push({
+      id: effort,
+      label: knownPreset?.label ?? humanizeCodexLabel(effort),
+      ...((stringValue(entry?.['description']) ?? knownPreset?.description)
+        ? { description: stringValue(entry?.['description']) ?? knownPreset?.description }
+        : {})
+    })
   }
-  const presets = THINKING_PRESETS.filter((preset) => descriptions.has(preset.id)).map(
-    (preset) => ({ ...preset, description: descriptions.get(preset.id) })
-  )
   return presets.length > 0 ? presets : undefined
+}
+
+function humanizeCodexLabel(value: string): string {
+  return value.replace(/[-_]+/gu, ' ').replace(/\b\w/gu, (character) => character.toUpperCase())
+}
+
+function codexInputModalities(model: Record<string, unknown>): string[] | undefined {
+  const raw = model['inputModalities'] ?? model['input_modalities']
+  if (!Array.isArray(raw)) return undefined
+  return raw.filter((value): value is string => typeof value === 'string')
+}
+
+function codexModelSupportsAttachments(model: Record<string, unknown>): boolean {
+  const inputModalities = codexInputModalities(model)
+  if (inputModalities !== undefined) {
+    return inputModalities.some((modality) => modality.toLowerCase() === 'image')
+  }
+  const capabilities = record(model['capabilities'])
+  const explicitVision = capabilities?.['vision'] ?? capabilities?.['attachment']
+  return typeof explicitVision === 'boolean' ? explicitVision : true
 }
 
 function mapCodexModel(value: unknown): ProviderModel | null {
   const model = record(value)
-  const id = stringValue(model?.['id'])
+  if (!model) return null
+  const id = stringValue(model?.['id']) ?? stringValue(model?.['model'])
   if (!id || model?.['hidden'] === true) return null
   const serviceTiers = Array.isArray(model?.['serviceTiers']) ? model['serviceTiers'] : []
   const additionalSpeedTiers = Array.isArray(model?.['additionalSpeedTiers'])
@@ -156,17 +194,13 @@ function mapCodexModel(value: unknown): ProviderModel | null {
     numberValue(model?.['contextWindow']) ??
     numberValue(model?.['context_window']) ??
     numberValue(model?.['modelContextWindow'])
-  // Read a structured vision capability when the codex catalog reports one;
-  // unknown state defaults to vision-capable.
-  const capabilities = record(model?.['capabilities'])
-  const explicitVision = capabilities?.['vision'] ?? capabilities?.['attachment']
   return {
     id,
     providerId: 'openai',
-    name: stringValue(model?.['displayName']) ?? id,
+    name: stringValue(model?.['displayName']) ?? stringValue(model?.['model']) ?? id,
     reasoning: thinkingPresets !== undefined,
     thinkingPresets,
-    attachment: explicitVision === undefined ? true : explicitVision !== false,
+    attachment: codexModelSupportsAttachments(model),
     toolcall: true,
     ...(contextWindow === undefined ? {} : { contextWindow }),
     fastSupported:
@@ -224,7 +258,7 @@ export class CodexDriver extends PersistentCliDriver {
     steering: true,
     nativeResume: true,
     messageHistory: 'mirrored',
-    interactivePermissions: false,
+    interactivePermissions: true,
     attachments: true,
     commands: false,
     providerCatalog: true,
@@ -242,6 +276,7 @@ export class CodexDriver extends PersistentCliDriver {
    *  chats inbox (`chats-cwd`) runs on its own isolated app-server. */
   private hostsByProjectPath = new Map<string, CodexAppServerHost>()
   private hostsStartingByProjectPath = new Map<string, Promise<CodexAppServerHost>>()
+  private serverRequests = new Map<string, CodexServerRequest>()
 
   protected async ensureCliReady(): Promise<void> {
     try {
@@ -351,7 +386,14 @@ export class CodexDriver extends PersistentCliDriver {
         : await this.appServerRequest(host, 'thread/start', {
             cwd: projectPath,
             model: options.settings.modelId,
-            approvalPolicy: 'never',
+            approvalPolicy: codexApprovalPolicy(
+              options.readOnly === true,
+              options.settings.permissionLevel
+            ),
+            ...(codexApprovalPolicy(options.readOnly === true, options.settings.permissionLevel) ===
+            'on-request'
+              ? { approvalsReviewer: 'user' }
+              : {}),
             sandbox: sandboxFor(options.readOnly === true, options.settings.permissionLevel),
             serviceName: 'codeinoven'
           })
@@ -367,7 +409,14 @@ export class CodexDriver extends PersistentCliDriver {
         clientUserMessageId: options.userMessageId,
         input: await this.codexInput(options.text, options.systemPrompt, options.attachments),
         cwd: projectPath,
-        approvalPolicy: 'never',
+        approvalPolicy: codexApprovalPolicy(
+          options.readOnly === true,
+          options.settings.permissionLevel
+        ),
+        ...(codexApprovalPolicy(options.readOnly === true, options.settings.permissionLevel) ===
+        'on-request'
+          ? { approvalsReviewer: 'user' }
+          : {}),
         sandboxPolicy: codexSandboxPolicy(
           projectPath,
           options.readOnly === true,
@@ -411,6 +460,64 @@ export class CodexDriver extends PersistentCliDriver {
       expectedTurnId: active.turnId
     })
     await this.persistSession(session)
+  }
+
+  override async replyPermission(
+    _projectPath: string,
+    requestId: string,
+    reply: PermissionReply,
+    message?: string,
+    _sessionId?: string
+  ): Promise<void> {
+    const request = this.serverRequests.get(requestId)
+    if (!request || !isCodexPermissionRequest(request.method)) {
+      throw new Error(`Codex permission request is no longer pending: ${requestId}`)
+    }
+    const decision =
+      reply === 'reject' ? 'decline' : reply === 'always' ? 'acceptForSession' : 'accept'
+    const result: Record<string, unknown> =
+      request.method === 'item/permissions/requestApproval'
+        ? {
+            permissions: reply === 'reject' ? {} : (request.params['permissions'] ?? {}),
+            scope: reply === 'always' ? 'session' : 'turn'
+          }
+        : { decision, ...(message ? { message } : {}) }
+    this.writeServerResponse(request, result)
+    this.serverRequests.delete(requestId)
+  }
+
+  override async replyToQuestion(
+    _projectPath: string,
+    _sessionId: string,
+    requestId: string,
+    answers: string[][]
+  ): Promise<void> {
+    const request = this.serverRequests.get(requestId)
+    if (!request || !isCodexQuestionRequest(request.method)) {
+      throw new Error(`Codex question request is no longer pending: ${requestId}`)
+    }
+    const questionIds = codexQuestionIds(request.params)
+    const mappedAnswers: Record<string, { answers: string[] }> = {}
+    questionIds.forEach((id, index) => {
+      mappedAnswers[id] = { answers: answers[index] ?? [] }
+    })
+    this.writeServerResponse(request, { answers: mappedAnswers })
+    this.serverRequests.delete(requestId)
+  }
+
+  override async rejectQuestion(
+    _projectPath: string,
+    _sessionId: string,
+    requestId: string
+  ): Promise<void> {
+    const request = this.serverRequests.get(requestId)
+    if (!request || !isCodexQuestionRequest(request.method)) {
+      throw new Error(`Codex question request is no longer pending: ${requestId}`)
+    }
+    const answers: Record<string, { answers: string[] }> = {}
+    for (const id of codexQuestionIds(request.params)) answers[id] = { answers: [] }
+    this.writeServerResponse(request, { answers })
+    this.serverRequests.delete(requestId)
   }
 
   override async abort(projectPath: string, sessionId: string): Promise<void> {
@@ -463,6 +570,7 @@ export class CodexDriver extends PersistentCliDriver {
     }
     this.hostsByProjectPath.clear()
     this.hostsStartingByProjectPath.clear()
+    this.serverRequests.clear()
     super.dispose()
   }
 
@@ -631,7 +739,7 @@ export class CodexDriver extends PersistentCliDriver {
       return
     }
     if (responseId !== undefined && method) {
-      this.respondToUnsupportedAppServerRequest(host, responseId, method)
+      this.handleServerRequest(host, responseId, method, recordValue(payload['params']) ?? {})
       return
     }
     if (method) this.handleAppServerNotification(host, method, recordValue(payload['params']) ?? {})
@@ -643,6 +751,22 @@ export class CodexDriver extends PersistentCliDriver {
     params: Record<string, unknown>
   ): void {
     void _host
+    if (method === 'serverRequest/resolved') {
+      const requestId = appServerRequestId(params['requestId'] ?? params['request_id'])
+      if (requestId === undefined) return
+      const request = this.serverRequests.get(String(requestId))
+      if (!request) return
+      this.serverRequests.delete(String(requestId))
+      if (isCodexQuestionRequest(request.method)) {
+        this.emit({
+          type: 'question.resolved',
+          sessionId: request.sessionId,
+          requestId: String(requestId),
+          resolution: 'answered'
+        })
+      }
+      return
+    }
     const threadId = notificationThreadId(params)
     if (threadId && method === 'thread/tokenUsage/updated') {
       const waiter = this.contextUsageByThreadId.get(threadId)
@@ -761,6 +885,73 @@ export class CodexDriver extends PersistentCliDriver {
       return
     }
     void this.completeAppServerTurn(active, message)
+  }
+
+  private handleServerRequest(
+    host: CodexAppServerHost,
+    id: string | number,
+    method: string,
+    params: Record<string, unknown>
+  ): void {
+    const active = this.activeTurnForNotification(params)
+    if (!active) {
+      this.respondToUnsupportedAppServerRequest(host, id, method)
+      return
+    }
+    if (isCodexPermissionRequest(method)) {
+      const request: CodexServerRequest = {
+        id,
+        host,
+        sessionId: active.session.id,
+        method,
+        params
+      }
+      this.serverRequests.set(String(id), request)
+      this.emit({
+        type: 'permission.asked',
+        sessionId: active.session.id,
+        permission: {
+          id: String(id),
+          sessionId: active.session.id,
+          permission:
+            method === 'item/fileChange/requestApproval'
+              ? 'edit'
+              : method === 'item/commandExecution/requestApproval'
+                ? 'command'
+                : 'permissions',
+          patterns: permissionPatterns(params),
+          metadata: { method, ...params }
+        }
+      })
+      return
+    }
+    if (isCodexQuestionRequest(method)) {
+      const questions = normalizeAgentQuestions(
+        params,
+        stringValue(params['message']) ?? stringValue(params['prompt'])
+      )
+      const request: CodexServerRequest = {
+        id,
+        host,
+        sessionId: active.session.id,
+        method,
+        params,
+        questions
+      }
+      this.serverRequests.set(String(id), request)
+      this.emit({
+        type: 'question.asked',
+        sessionId: active.session.id,
+        requestId: String(id),
+        questions
+      })
+      return
+    }
+    this.respondToUnsupportedAppServerRequest(host, id, method)
+  }
+
+  private writeServerResponse(request: CodexServerRequest, result: Record<string, unknown>): void {
+    request.host.child.stdin?.write(`${JSON.stringify({ id: request.id, result })}\n`)
   }
 
   private async retryWithoutReasoningSummary(active: CodexAppServerTurn): Promise<void> {
@@ -1056,12 +1247,24 @@ export class CodexDriver extends PersistentCliDriver {
 
   /**
    * Codex item ids are only unique within a Codex thread, so every id is
-   * namespaced with the CodeInOven session when parsed. Session records written
-   * by older builds still hold raw item ids; normalize those on read (and
-   * collapse the raw + namespaced duplicates a resumed thread can produce).
+   * namespaced with the CodeInOven session when parsed. Normalize native item
+   * ids on read and collapse duplicate ids a resumed thread can produce.
    */
   async loadMessages(projectPath: string, sessionId: string): Promise<AgentMessage[]> {
     const messages = await super.loadMessages(projectPath, sessionId)
+    return this.normalizeSessionMessages(messages, sessionId)
+  }
+
+  async loadMessagesSince(
+    projectPath: string,
+    sessionId: string,
+    messageId: string
+  ): Promise<AgentMessage[]> {
+    const messages = await super.loadMessagesSince(projectPath, sessionId, messageId)
+    return this.normalizeSessionMessages(messages, sessionId)
+  }
+
+  private normalizeSessionMessages(messages: AgentMessage[], sessionId: string): AgentMessage[] {
     const byId = new Map<string, AgentMessage>()
     for (const message of messages) {
       const renamed = namespacedMessage(message, sessionId)
@@ -1443,6 +1646,33 @@ function sandboxFor(readOnly: boolean, permissionLevel: PermissionLevel): string
   return permissionLevel === 'full_access' ? 'danger-full-access' : 'workspace-write'
 }
 
+function codexApprovalPolicy(
+  readOnly: boolean,
+  permissionLevel: PermissionLevel
+): 'never' | 'on-request' {
+  return readOnly || permissionLevel === 'full_access' ? 'never' : 'on-request'
+}
+
+function isCodexPermissionRequest(method: string): boolean {
+  return (
+    method === 'item/commandExecution/requestApproval' ||
+    method === 'item/fileChange/requestApproval' ||
+    method === 'item/permissions/requestApproval'
+  )
+}
+
+function isCodexQuestionRequest(method: string): boolean {
+  return method === 'item/tool/requestUserInput'
+}
+
+function codexQuestionIds(params: Record<string, unknown>): string[] {
+  const questions = Array.isArray(params['questions']) ? params['questions'] : []
+  return questions.map((question, index) => {
+    const entry = recordValue(question)
+    return stringValue(entry?.['id']) ?? `question-${index}`
+  })
+}
+
 function codexSandboxPolicy(
   projectPath: string,
   readOnly: boolean,
@@ -1484,7 +1714,9 @@ function normalizeAppServerItem(
     commandExecution: 'command_execution',
     fileChange: 'file_change',
     mcpToolCall: 'mcp_tool_call',
-    dynamicToolCall: 'function_call'
+    dynamicToolCall: 'function_call',
+    planUpdate: 'plan_update',
+    todoList: 'todo_list'
   }
   return {
     ...item,
@@ -1537,6 +1769,8 @@ function parseItem(
     return parseTool(item, messageId, completed, sessionId, 'file_change')
   if (itemType === 'contextCompaction')
     return parseCompaction(item, messageId, completed, sessionId)
+  if (itemType === 'plan_update' || itemType === 'todo_list' || itemType === 'plan')
+    return parseTool(item, messageId, completed, sessionId, itemType)
   if (itemType === 'mcp_tool_call' || itemType === 'function_call')
     return parseTool(
       item,
@@ -1692,6 +1926,9 @@ function toolInput(item: Record<string, unknown>): Record<string, unknown> {
     } catch {
       // Preserve schema tolerance for non-JSON provider payloads.
     }
+  }
+  for (const key of ['plan', 'steps', 'tasks', 'todos', 'todoList', 'todo_list', 'checklist']) {
+    if (Array.isArray(item[key])) return { [key]: item[key] }
   }
   if (Array.isArray(item['changes'])) return { changes: item['changes'] }
   return {}
@@ -1976,7 +2213,7 @@ export function mapCodexRateLimits(value: unknown): {
 }
 
 /**
- * Rewrite a legacy codex message id into its session-namespaced form. Only
+ * Rewrite a native Codex message id into its session-namespaced form. Only
  * assistant messages carry raw codex item ids; user messages keep the
  * generated id CodeInOven assigned at send time.
  */

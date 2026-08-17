@@ -50,7 +50,7 @@ export class RestartRecoveryService {
   }
 
   async recover(): Promise<RestartRecoveryResult> {
-    const allThreads = this.threads.listAll()
+    const allThreads = await this.threads.listAllViaWorker()
     const recovered: Thread[] = []
     const completed: Thread[] = []
     const failures: RestartRecoveryFailure[] = []
@@ -58,7 +58,7 @@ export class RestartRecoveryService {
     for (const thread of allThreads) {
       if (!RECOVERABLE_STATUSES.has(thread.status)) continue
 
-      if (this.turnDemonstrablyCompleted(thread)) {
+      if (await this.turnDemonstrablyCompleted(thread)) {
         try {
           await this.checkpoints.markActiveCompleted(thread.projectId, thread.id)
         } catch (error) {
@@ -112,24 +112,40 @@ export class RestartRecoveryService {
    * (non-empty text or structured output) for the latest user message and did
    * not end on an error.
    */
-  private turnDemonstrablyCompleted(thread: Thread): boolean {
-    const rows = this.db.all<{
-      role: string
-      error: string | null
-      parts: string
-      structured_output: string | null
-    }>(
-      'SELECT role, error, parts, structured_output FROM agent_messages WHERE thread_id = ? ORDER BY created_at ASC, id ASC',
-      thread.id
+  private async turnDemonstrablyCompleted(thread: Thread): Promise<boolean> {
+    const result = await this.db.queryViaWorker(
+      `WITH latest_user AS (
+         SELECT created_at, id
+         FROM agent_messages
+         WHERE thread_id = ? AND role = 'user'
+         ORDER BY created_at DESC, id DESC
+         LIMIT 1
+       )
+       SELECT assistant.role, assistant.error, assistant.parts, assistant.structured_output
+       FROM agent_messages AS assistant
+       LEFT JOIN latest_user ON 1 = 1
+       WHERE assistant.thread_id = ?
+         AND assistant.role = 'assistant'
+         AND (
+           latest_user.id IS NULL
+           OR assistant.created_at > latest_user.created_at
+           OR (assistant.created_at = latest_user.created_at AND assistant.id > latest_user.id)
+         )
+       ORDER BY assistant.created_at DESC, assistant.id DESC`,
+      [thread.id, thread.id],
+      1
     )
-    let latestUserIndex = -1
-    for (let index = 0; index < rows.length; index += 1) {
-      if (rows[index].role === 'user') latestUserIndex = index
+    if (!result.ok) {
+      throw new Error(result.error ?? 'agent message recovery query failed')
     }
-    const turnAssistant = rows
-      .slice(latestUserIndex + 1)
-      .reverse()
-      .find((row) => row.role === 'assistant')
+    const turnAssistant = result.rows[0] as
+      | {
+          role: string
+          error: string | null
+          parts: string
+          structured_output: string | null
+        }
+      | undefined
     if (!turnAssistant) return false
     if (turnAssistant.error) return false
     if (turnAssistant.structured_output != null) return true

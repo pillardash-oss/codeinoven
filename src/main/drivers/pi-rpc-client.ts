@@ -23,6 +23,8 @@ interface PiRpcOptions {
   args?: string[]
   /** Called once per agent event record streamed from the pi process. */
   onEvent?: (record: Record<string, unknown>) => void
+  /** Called for dialog-style extension UI requests that need a human answer. */
+  onUiRequest?: (record: Record<string, unknown>) => void
   /** Called once when the pi process exits unexpectedly. */
   onExit?: (code: number | null) => void
 }
@@ -45,6 +47,7 @@ export class PiRpcClient {
   private readonly child: ChildProcess
   private readonly onEvent: (record: Record<string, unknown>) => void
   private readonly onExit: (code: number | null) => void
+  private readonly onUiRequest: (record: Record<string, unknown>) => void
   private readonly pending = new Map<string, PendingRequest>()
   private buffer = ''
   private nextId = 1
@@ -52,6 +55,7 @@ export class PiRpcClient {
 
   constructor(options: PiRpcOptions) {
     this.onEvent = options.onEvent ?? (() => undefined)
+    this.onUiRequest = options.onUiRequest ?? ((record) => this.answerExtensionUiRequest(record))
     this.onExit = options.onExit ?? (() => undefined)
     this.child = spawn('pi', ['--mode', 'rpc', ...(options.args ?? [])], {
       cwd: options.cwd,
@@ -108,9 +112,7 @@ export class PiRpcClient {
   /** Steer the active turn. Requires a running turn. */
   async steer(message: string, images?: PiRpcImage[]): Promise<void> {
     await this.send(
-      images && images.length > 0
-        ? { type: 'steer', message, images }
-        : { type: 'steer', message }
+      images && images.length > 0 ? { type: 'steer', message, images } : { type: 'steer', message }
     )
   }
 
@@ -163,7 +165,17 @@ export class PiRpcClient {
       return
     }
     if (type === 'extension_ui_request') {
-      this.answerExtensionUiRequest(record)
+      const method = record['method']
+      if (
+        method === 'select' ||
+        method === 'confirm' ||
+        method === 'input' ||
+        method === 'editor'
+      ) {
+        this.onUiRequest(record)
+      } else {
+        this.answerExtensionUiRequest(record)
+      }
       return
     }
     this.onEvent(record)
@@ -199,6 +211,16 @@ export class PiRpcClient {
       cancelled: true
     }
     this.child.stdin?.write(`${JSON.stringify(response)}\n`)
+  }
+
+  /** Resolve a dialog request using Pi's extension UI response protocol. */
+  respondToExtensionUiRequest(
+    requestId: string | number,
+    response: { value?: string; confirmed?: boolean; cancelled?: boolean }
+  ): void {
+    this.child.stdin?.write(
+      `${JSON.stringify({ type: 'extension_ui_response', id: requestId, ...response })}\n`
+    )
   }
 
   private failAll(error: Error): void {

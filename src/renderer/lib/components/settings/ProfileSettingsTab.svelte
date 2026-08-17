@@ -288,6 +288,16 @@
     }).format(value)
   }
 
+  function formatDateTime(value: number): string {
+    return new Intl.DateTimeFormat(undefined, {
+      day: 'numeric',
+      month: 'short',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit'
+    }).format(value)
+  }
+
   function formatIdentifier(value: string): string {
     return value
       .split(/[-_]/u)
@@ -625,7 +635,9 @@
                 <div class="min-w-0">
                   <p class="truncate text-sm font-semibold">{device.deviceLabel}</p>
                   <p class="mt-0.5 text-[11px] text-dimmed">
-                    {platformLabel(device.platform)} · last synced {formatDate(device.updatedAt)}
+                    {platformLabel(device.platform)} · last synced {formatDateTime(
+                      device.updatedAt
+                    )}
                   </p>
                 </div>
                 <span

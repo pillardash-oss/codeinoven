@@ -23,7 +23,9 @@ const THREAD_STATUSES = new Set<ThreadStatus>([
   'created',
   'planning',
   'awaiting_approval',
+  'spec',
   'executing',
+  'working-paused',
   'interrupted',
   'completed',
   'failed'
@@ -98,7 +100,15 @@ const CREATE_THREAD_FIELDS = new Set([
   'scopeBucketId'
 ])
 
-const SCOPE_SLICES = new Set<ScopeSlice>(['todo', 'working', 'issue', 'unread', 'done', 'pinned'])
+const SCOPE_SLICES = new Set<ScopeSlice>([
+  'todo',
+  'working',
+  'spec',
+  'issue',
+  'unread',
+  'done',
+  'pinned'
+])
 
 export function validateScopeSlice(value: unknown): ScopeSlice {
   if (typeof value !== 'string' || !SCOPE_SLICES.has(value as ScopeSlice)) {

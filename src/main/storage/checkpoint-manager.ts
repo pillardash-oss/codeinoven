@@ -89,14 +89,7 @@ class StorageCheckpointBlobStore implements CheckpointBlobStore {
     try {
       return await readFile(join(getConfigRoot(), `projects/${this.projectId}/blobs/${hash}`))
     } catch (error) {
-      if (isMissing(error)) {
-        try {
-          return await readFile(join(getConfigRoot(), `blobs/${hash}`))
-        } catch (legacyError) {
-          if (isMissing(legacyError)) return null
-          throw legacyError
-        }
-      }
+      if (isMissing(error)) return null
       throw error
     }
   }
@@ -423,6 +416,9 @@ export class CheckpointManager {
       rolledBackAt: checkpoint.rolledBackAt,
       rolledBackPaths: checkpoint.rolledBackPaths,
       failure: checkpoint.failure,
+      ...(checkpoint.after?.skippedFiles && checkpoint.after.skippedFiles.length > 0
+        ? { skippedFiles: checkpoint.after.skippedFiles }
+        : {}),
       gitHead: checkpoint.before.git?.head
     }))
   }
@@ -473,10 +469,9 @@ export class CheckpointManager {
   }
 
   /**
-   * Checkpoints written before path-filter provenance was stored can contain
-   * complete before/after snapshots but an empty change list when a harness's
-   * mutation tool name was unknown. Rebuild that unfiltered diff on read so
-   * those already-finished turns remain reviewable and rollback-capable.
+   * Older checkpoints can have complete before/after snapshots but no recorded
+   * path filter. Rebuild their diff on read so persisted turns remain visible
+   * and rollback-capable after the checkpoint format evolved.
    */
   private recoverUnfilteredChanges(projectId: string, checkpoint: TurnCheckpoint): TurnCheckpoint {
     if (
@@ -562,8 +557,7 @@ export class CheckpointManager {
    * paths. The full maps duplicate the per-change snapshots and dominate the
    * row size (each entry is a tracked repo file), so a finished checkpoint only
    * retains what rollback, summaries, diffs, and blob pruning actually need.
-   * Checkpoints with an empty change list keep their full maps so the legacy
-   * `recoverUnfilteredChanges` pass can still rebuild the diff.
+   * Checkpoints with an empty change list keep their full maps for inspection.
    */
   private compactCheckpoint(checkpoint: TurnCheckpoint): TurnCheckpoint {
     if (checkpoint.changes.length === 0) return checkpoint

@@ -158,11 +158,6 @@ export class GitState {
   private githubProbe: Promise<boolean> | null = null
   private lastGithubProbeAt = 0
 
-  /** Compatibility alias for the PR-detail notice; all mutations now share the same state. */
-  get reviewPermission(): GitHubPermissionRequired | null {
-    return this.githubPermission
-  }
-
   private resolveGitHubMutation<T>(result: GitHubMutationResult<T>): T | null {
     if (result.status === 'permission_required') {
       this.githubPermission = result

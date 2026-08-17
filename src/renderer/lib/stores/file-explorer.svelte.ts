@@ -11,11 +11,16 @@ import { APP_SLUG } from '$shared/brand'
 
 export const FILE_EXPLORER_STORAGE_KEY = `${APP_SLUG}.fileExplorer.v1`
 
+export const FILE_EXPLORER_DEFAULT_WIDTH = 208
+export const FILE_EXPLORER_MIN_WIDTH = 176
+export const FILE_EXPLORER_MAX_WIDTH = 480
+
 export interface FileExplorerProjectState {
   expandedDirectories: Record<string, boolean>
   revealedPath: string | null
   selectedPaths: string[]
   explorerVisible: boolean
+  width: number
 }
 
 export interface FileExplorerSnapshot {
@@ -35,7 +40,8 @@ export function emptyFileExplorerProjectState(): FileExplorerProjectState {
     expandedDirectories: {},
     revealedPath: null,
     selectedPaths: [],
-    explorerVisible: true
+    explorerVisible: true,
+    width: FILE_EXPLORER_DEFAULT_WIDTH
   }
 }
 
@@ -69,13 +75,23 @@ function parseSelectedPaths(value: unknown): string[] {
   return value.filter(isValidPath).slice(0, MAX_SELECTED_PATHS)
 }
 
+export function clampFileExplorerWidth(value: number): number {
+  if (!Number.isFinite(value)) return FILE_EXPLORER_DEFAULT_WIDTH
+  return Math.round(Math.max(FILE_EXPLORER_MIN_WIDTH, Math.min(value, FILE_EXPLORER_MAX_WIDTH)))
+}
+
+function parseWidth(value: unknown): number {
+  return typeof value === 'number' ? clampFileExplorerWidth(value) : FILE_EXPLORER_DEFAULT_WIDTH
+}
+
 function parseProjectState(value: unknown): FileExplorerProjectState | null {
   if (!isRecord(value)) return null
   return {
     expandedDirectories: parseExpandedDirectories(value.expandedDirectories),
     revealedPath: isValidPath(value.revealedPath) ? value.revealedPath : null,
     selectedPaths: parseSelectedPaths(value.selectedPaths),
-    explorerVisible: value.explorerVisible !== false
+    explorerVisible: value.explorerVisible !== false,
+    width: parseWidth(value.width)
   }
 }
 
@@ -116,8 +132,15 @@ function persistSnapshot(snapshot: FileExplorerSnapshot): void {
   }
 }
 
+/** Debounce window for writing the snapshot to localStorage. Expanding the tree
+ *  (e.g. the search flow expanding every result's ancestor folders) mutates the
+ *  snapshot in a burst; serializing the whole snapshot synchronously on every
+ *  single update froze the renderer. Only the latest state is ever written. */
+const PERSIST_DEBOUNCE_MS = 150
+
 class FileExplorerStore {
   private byProject: Record<string, FileExplorerProjectState> = $state(loadSnapshot().projects)
+  private persistTimer: ReturnType<typeof setTimeout> | null = null
 
   /** The persisted explorer position for a project, or a fresh default. */
   project(projectId: string): FileExplorerProjectState {
@@ -130,7 +153,15 @@ class FileExplorerStore {
       ...this.byProject,
       [projectId]: { ...this.project(projectId), ...patch }
     }
-    persistSnapshot({ version: 1, projects: this.byProject })
+    this.schedulePersist()
+  }
+
+  private schedulePersist(): void {
+    if (this.persistTimer) clearTimeout(this.persistTimer)
+    this.persistTimer = setTimeout(() => {
+      this.persistTimer = null
+      persistSnapshot({ version: 1, projects: this.byProject })
+    }, PERSIST_DEBOUNCE_MS)
   }
 }
 

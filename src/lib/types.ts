@@ -69,7 +69,7 @@ export interface AttachmentStorageScope {
 
 export const DEFAULT_SCOPE_BUCKET_ID = 'default'
 
-export type ScopeSlice = 'todo' | 'working' | 'issue' | 'unread' | 'done' | 'pinned'
+export type ScopeSlice = 'todo' | 'working' | 'spec' | 'issue' | 'unread' | 'done' | 'pinned'
 
 export interface ScopeBucket {
   id: string
@@ -127,26 +127,22 @@ export type ThreadStatus =
   | 'created'
   | 'planning'
   | 'awaiting_approval'
+  | 'spec'
   | 'executing'
+  | 'working-paused'
   | 'interrupted'
   | 'completed'
   | 'failed'
 
+import {
+  isThreadBusyStatus,
+  isThreadExecutionActiveStatus,
+  isThreadRetryPausedStatus,
+  threadStatusPolicy
+} from './thread-status-policy'
+
 export function scopeSliceForStatus(status: ThreadStatus): ScopeSlice {
-  switch (status) {
-    case 'created':
-      return 'todo'
-    case 'planning':
-    case 'executing':
-    case 'awaiting_approval':
-      return 'working'
-    case 'interrupted':
-      return 'done'
-    case 'failed':
-      return 'issue'
-    case 'completed':
-      return 'done'
-  }
+  return threadStatusPolicy(status).scopeSlice
 }
 
 export type ThreadTitleSource = 'default' | 'auto' | 'manual'
@@ -183,7 +179,7 @@ export interface Thread {
   contextUsage?: ThreadContextUsage
   /** Harness session id bound to this thread, once a conversation has started. */
   sessionId?: string
-  /** Harness that created the bound session. A session never migrates across
+  /** Harness that created the bound session. A session never moves across
    *  harnesses: even when `settings.harnessId` changes (mid-run switch), this
    *  field keeps identifying the driver that owns `sessionId` so the old
    *  session is read/synced through the correct driver. */
@@ -255,7 +251,17 @@ export function isOrchestrationChildThread(thread: Thread): boolean {
 
 /** A harness is actively producing work for this persisted thread. */
 export function isThreadWorking(thread: Thread): boolean {
-  return thread.status === 'planning' || thread.status === 'executing'
+  return isThreadExecutionActiveStatus(thread.status)
+}
+
+/** True while the row should continue presenting an in-progress indicator. */
+export function isThreadBusy(thread: Thread): boolean {
+  return isThreadBusyStatus(thread.status)
+}
+
+/** True when the provider is paused until an automatic retry deadline. */
+export function isThreadRetryPaused(thread: Thread): boolean {
+  return isThreadRetryPausedStatus(thread.status)
 }
 
 /**
@@ -713,6 +719,13 @@ export interface CuaBridgeStatus {
   detail?: string
 }
 
+/** Cursor position projected into the dimensions of a computer-use PiP frame. */
+export interface ComputerUsePipCursor {
+  visible: boolean
+  x: number
+  y: number
+}
+
 /** One rendered frame of the app an agent is driving, pushed to the renderer. */
 export interface ComputerUsePipFrame {
   pid: number
@@ -722,6 +735,7 @@ export interface ComputerUsePipFrame {
   width: number
   height: number
   timestamp: number
+  cursor?: ComputerUsePipCursor
 }
 
 /** Live state of the computer-use PiP monitor. */
@@ -841,6 +855,8 @@ export interface ProviderCatalog {
   name: string
   harnessId: string
   models: ProviderModel[]
+  /** True when the owning harness accepts prompt attachments at all. */
+  supportsAttachments?: boolean
   /** Explicit discovery state when a harness cannot report account-selectable models. */
   catalogStatus?: 'available' | 'unavailable'
   /** Operator-facing reason for an unavailable authoritative catalog. */
@@ -1314,14 +1330,7 @@ export interface UserMessagePresentation {
 
 /** Durable source identity for a persisted conversation record. */
 export type AgentMessageOrigin =
-  | 'user'
-  | 'assistant'
-  | 'harness'
-  | 'orchestrator'
-  | 'subagent'
-  | 'compaction'
-  | 'provider'
-  | 'legacy'
+  'user' | 'assistant' | 'harness' | 'orchestrator' | 'subagent' | 'compaction' | 'provider'
 
 /** Durable UI channel for a persisted conversation record. */
 export type AgentMessageVisibility = 'conversation' | 'working_trace' | 'subagent_trace' | 'hidden'
@@ -1926,6 +1935,21 @@ export type AgentPart =
       presentation: UserMessagePresentation
     }
 
+/** A generated image that can be previewed from a conversation or its context sidebar. */
+export interface AgentArtifact {
+  id: string
+  kind: 'image'
+  filename: string
+  mime: string
+  path: string
+  url: string
+  messageId: string
+  createdAt: number
+  scope: 'chat' | 'project'
+  /** Project-relative path when the artifact lives inside the active project. */
+  relativePath?: string
+}
+
 /** A message in the agent conversation. */
 export interface AgentMessage {
   id: string
@@ -2266,6 +2290,8 @@ export interface TurnCheckpointSummary {
   label: string
   status: TurnCheckpointStatus
   changes: TurnCheckpointChangeSummary[]
+  /** Paths too large to be captured by the checkpoint (no rollback coverage). */
+  skippedFiles?: string[]
   createdAt: number
   completedAt?: number
   rolledBackAt?: number
@@ -2808,9 +2834,9 @@ export interface AuditReportContent {
   findings: AuditFinding[]
   resolutionRecommendation: string
   conclusion: string
-  /** Required for newly generated Assignment audits; optional for legacy persisted reports. */
+  /** Required for Assignment audits; omitted when file evidence is unavailable. */
   auditedFiles?: AuditedFileEvidence[]
-  /** Required for newly generated Assignment audits; optional for legacy persisted reports. */
+  /** Required for Assignment audits; omitted when verification evidence is unavailable. */
   verification?: AuditVerificationEvidence
 }
 
@@ -2925,7 +2951,7 @@ export interface EditorInfo {
 export type ThemePreference = 'light' | 'dark' | 'system'
 export type SlashCommandMode = 'app' | 'passthrough'
 
-export type MemoryCategory = 'behavioral' | 'project-rule' | 'identity' | 'preference'
+export type MemoryCategory = 'behavioral' | 'project-rule' | 'identity' | 'preference' | 'models'
 export type MemoryPriority = 'critical' | 'high' | 'medium' | 'low'
 export type MemoryScope = 'global' | 'projects' | 'project' | 'thread' | 'chat'
 export type MemorySource = 'manual' | 'auto-detected'
@@ -2944,6 +2970,8 @@ export interface MemoryEntry {
   lastReinforced: number
   projectId?: string
   threadId?: string
+  /** Harness-scoped model keys for model-specific memories. */
+  modelKeys?: string[]
 }
 
 export interface MemoryConfig {
@@ -2963,6 +2991,8 @@ export interface MemoryProposal {
   scope: MemoryScope
   projectId?: string
   threadId?: string
+  /** Harness-scoped model keys for model-specific proposals. */
+  modelKeys?: string[]
   createdAt: number
   expiresAt: number
   status: 'pending' | 'approved' | 'rejected'
@@ -3010,13 +3040,15 @@ export interface AppConfig {
   memory: MemoryConfig
   /** User-selected defaults for Engineering agent roles. Roles remain unset after installation. */
   agentDefaults: AgentDefaultsConfig
+  /** Editable default behavior prompt for project Engineering implementation turns. */
+  agentBehaviorPrompt: string
   /** Automatically download available updates in the background. */
   autoDownloadUpdates: boolean
   /** Automatically quit and install after an update is downloaded. */
   autoInstallUpdates: boolean
   /** Update channel to receive over-the-air updates from. `stable` is the default; `nightly` opts into prerelease builds. */
   updateChannel: 'stable' | 'nightly'
-  /** Prevent the display and system from sleeping while any agent is working. */
+  /** Prevent sleep while a harness is actively working; review-ready spec threads stay idle. */
   keepAwakeWhileWorking: boolean
   /** When true, sending an image to a text-only model auto-uses the configured
    *  image descriptor model instead of showing the vision-model picker card. */
@@ -3054,6 +3086,7 @@ export type AppConfigPatch = Partial<
     | 'preferredEditor'
     | 'memory'
     | 'agentDefaults'
+    | 'agentBehaviorPrompt'
     | 'autoDownloadUpdates'
     | 'autoInstallUpdates'
     | 'updateChannel'
