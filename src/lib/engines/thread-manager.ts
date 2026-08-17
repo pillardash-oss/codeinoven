@@ -211,6 +211,24 @@ export function remapCopiedMessages(messages: AgentMessage[]): AgentMessage[] {
   })
 }
 
+/**
+ * Keep the latest completed compaction and everything after it. A compaction
+ * replaces the harness context that preceded it, so older mirrored messages
+ * are unnecessary when creating a new branch from this history.
+ */
+function historyFromLatestCompaction(messages: AgentMessage[]): AgentMessage[] {
+  const latestCompactionIndex = messages.findLastIndex((message) =>
+    message.parts.some(
+      (part) =>
+        part.type === 'compaction-summary' ||
+        (part.type === 'compaction' &&
+          typeof part.summary === 'string' &&
+          part.summary.trim().length > 0)
+    )
+  )
+  return latestCompactionIndex === -1 ? messages : messages.slice(latestCompactionIndex)
+}
+
 export class ThreadManager {
   private threadRepo: ThreadRepo
   private projectRepo: ProjectRepo
@@ -1128,6 +1146,7 @@ export class ThreadManager {
       }
       copied = parentMessages.slice(0, cutoff + 1)
     }
+    copied = historyFromLatestCompaction(copied)
 
     const destinationPath = this.projectRepo.get(destinationProjectId)?.path ?? ''
     const forked = await this.createThread({
