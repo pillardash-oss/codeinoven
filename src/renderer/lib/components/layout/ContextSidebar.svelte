@@ -72,7 +72,13 @@
 
   // Every other tool opens from the context dock rail and owns the whole panel,
   // so only these kinds get a tab strip — the rest get a plain titled header.
-  const TABBED_KINDS = new Set<ContextSidebarTab['kind']>(['terminal', 'temporary-chat'])
+  // Sub-agents share one panel toggle, so their tabs stay together here rather
+  // than competing with the other context tools.
+  const TABBED_KINDS = new Set<ContextSidebarTab['kind']>([
+    'terminal',
+    'temporary-chat',
+    'subagent'
+  ])
 
   // These tools are opened and closed from their own rail icon, and each one
   // already owns its full-height content — the generic title-and-close header

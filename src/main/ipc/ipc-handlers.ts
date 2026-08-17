@@ -4791,13 +4791,6 @@ export function registerIpcHandlers(
     }
   }
 
-  ipcMain.handle('note:get', async (_, projectId: unknown, threadId: unknown) => {
-    const validProjectId = validateEntityId(projectId, 'Project ID')
-    const validThreadId = validateEntityId(threadId, 'Thread ID')
-    const thread = await threadManager.getThread(validProjectId, validThreadId)
-    if (!thread) return null
-    return noteRepo.get(validThreadId)
-  })
   ipcMain.handle('note:save', async (_, projectId: unknown, threadId: unknown, body: unknown) => {
     const validProjectId = validateEntityId(projectId, 'Project ID')
     const validThreadId = validateEntityId(threadId, 'Thread ID')

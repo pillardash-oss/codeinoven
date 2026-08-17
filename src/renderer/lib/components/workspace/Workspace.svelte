@@ -20,6 +20,7 @@
     Copy,
     FolderKanban,
     ArrowUpDown,
+    Bot,
     Check,
     BrainCircuit,
     Bug,
@@ -706,6 +707,15 @@
     if (tab) contextSidebarState.focus(tab.id)
   }
 
+  let subagentTabs = $derived(
+    contextSidebarState.sidebarTabs.filter((tab) => tab.kind === 'subagent')
+  )
+
+  function focusSubagent(): void {
+    const tab = subagentTabs.at(-1)
+    if (tab) contextSidebarState.focus(tab.id)
+  }
+
   function openMemoryTab(): void {
     if (!selectedThread) return
     contextSidebarState.openMemory(selectedThread.projectId, selectedThread.id)
@@ -910,10 +920,10 @@
         ]
       : []
 
-    // The thread-note indicator sits alone at the very bottom, below its own
-    // hairline. It's always present — not just once a note exists — so it
-    // also doubles as the "add a note" entry point; the amber tone only
-    // kicks in once there's something written to draw attention to.
+    // The thread-note indicator sits below its own hairline. It's always
+    // present — not just once a note exists — so it also doubles as the "add a
+    // note" entry point; the amber tone only kicks in once there's something
+    // written to draw attention to.
     const hasThreadNote = threadNotesState.has(selectedThread.id)
     const threadNote: ContextDockItem[] = [
       {
@@ -933,7 +943,33 @@
       }
     ]
 
-    return [history, workspaceTools, sessionTools, temporaryChats, coordination, threadNote]
+    // Sub-agents appear only after the first one is opened. The group shares
+    // one toggle, while the sidebar keeps each sub-agent in its own tab.
+    const subagents: ContextDockItem[] = []
+    if (subagentTabs.length > 0) {
+      const name =
+        subagentTabs.length === 1
+          ? (subagentTabs.at(-1)?.title ?? 'Sub-agent')
+          : `${subagentTabs.length} sub-agents`
+      subagents.push({
+        id: 'subagent',
+        label: dockKindActive('subagent') ? `Hide ${name}` : `Show ${name}`,
+        icon: Bot,
+        active: dockKindActive('subagent'),
+        tone: 'info',
+        onSelect: () => toggleDockPanel('subagent', focusSubagent)
+      })
+    }
+
+    return [
+      history,
+      workspaceTools,
+      sessionTools,
+      temporaryChats,
+      coordination,
+      threadNote,
+      subagents
+    ]
   })
 
   function openNestedSubagent(part: Extract<AgentPart, { type: 'subagent' }>): void {
