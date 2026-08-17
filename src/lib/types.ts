@@ -1298,12 +1298,20 @@ export interface AgentToolState {
   time?: { start: number; end?: number }
 }
 
-/** A live operating-system process started beneath one task's agent harness. */
+/**
+ * A live operating-system process started beneath one task's agent harness.
+ *
+ * `scope` distinguishes processes started beneath a thread's own per-session
+ * harness (`'thread'`) from processes started beneath a shared, app-wide
+ * harness that is not tied to a single thread (e.g. the pooled opencode server),
+ * so callers can show the right context and warn the user before killing it.
+ */
 export interface AgentRunningProcess {
   pid: number
   parentPid: number
   command: string
   startedAt: number
+  scope: 'thread' | 'app'
 }
 
 /** Provider-neutral lifecycle state for one delegated child-agent task. */
@@ -2016,6 +2024,20 @@ export interface UserMessageSummary {
   id: string
   content: string
   createdAt: number
+}
+
+/** Options controlling how a conversation transcript is serialized. */
+export interface TranscriptExportOptions {
+  /** Whether the working trace (reasoning, tool calls, sub-agents) is included. */
+  includeTrace: boolean
+}
+
+/** Absolute location of a written transcript and where it was stored. */
+export interface TranscriptExportResult {
+  /** Absolute path of the written Markdown file. */
+  path: string
+  /** Where the transcript was stored — project scratch vs. chat temp dir. */
+  location: 'project' | 'chat'
 }
 
 // ─── Agent streaming events (forwarded main → renderer) ────────────────────
