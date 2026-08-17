@@ -233,6 +233,15 @@ function closeSessionSockets(sessionId: string, code: number, reason: string): v
 }
 
 async function handleEnrollmentRequest(request: Request): Promise<Response> {
+  try {
+    return await handleEnrollmentRequestInner(request)
+  } catch (error) {
+    process.stderr.write(`desktop enrollment failed: ${String(error)}\n`)
+    return json({ error: 'enrollment-failed' }, 500)
+  }
+}
+
+async function handleEnrollmentRequestInner(request: Request): Promise<Response> {
   const body = await readJsonObject(request)
   const name = normalizeLabel(body?.['name'])
   const platform = normalizeLabel(body?.['platform'], 50)
