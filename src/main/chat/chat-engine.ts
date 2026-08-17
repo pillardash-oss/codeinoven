@@ -2576,7 +2576,12 @@ export class ChatEngine {
     projectPath: string
   ): Promise<DriverDiscovery> {
     const budget = ChatEngine.CATALOG_DRIVER_BUDGET_MS
-    const probe = driver.listProviders(projectPath)
+    const probe = driver.listProviders(projectPath).then((catalogs) =>
+      catalogs.map((catalog) => ({
+        ...catalog,
+        supportsAttachments: driver.capabilities.attachments
+      }))
+    )
     let timer: ReturnType<typeof setTimeout> | undefined
     try {
       const catalogs = await Promise.race([

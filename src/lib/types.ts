@@ -855,6 +855,8 @@ export interface ProviderCatalog {
   name: string
   harnessId: string
   models: ProviderModel[]
+  /** True when the owning harness accepts prompt attachments at all. */
+  supportsAttachments?: boolean
   /** Explicit discovery state when a harness cannot report account-selectable models. */
   catalogStatus?: 'available' | 'unavailable'
   /** Operator-facing reason for an unavailable authoritative catalog. */

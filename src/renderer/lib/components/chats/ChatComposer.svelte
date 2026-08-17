@@ -572,9 +572,14 @@
     selectedProvider?.models.find((model) => model.id === resolved.modelId)
   )
 
+  /** True when the selected harness cannot accept any prompt attachments. */
+  let selectedHarnessLacksAttachments = $derived(
+    resolved.harnessId === 'muse' || selectedProvider?.supportsAttachments === false
+  )
   /** True when the catalog reports this model cannot see images. */
   let selectedModelLacksVision = $derived(selectedModel?.attachment === false)
   let hasImageAttachments = $derived(attachments.some(isImageAttachment))
+  let attachmentBlockedNotice = $state(false)
 
   function isImageAttachment(file: PromptAttachment): boolean {
     if (file.mime.startsWith('image/')) return true
@@ -800,6 +805,10 @@
         return
       }
     }
+    if (selectedHarnessLacksAttachments && attachments.length > 0) {
+      attachmentBlockedNotice = true
+      return
+    }
     // When working and not direct, the parent (ThreadView) queues the message instead of sending it.
     // We still clear the input so the user can type their next message.
     if (shouldInterceptImageGate()) {
@@ -810,6 +819,10 @@
   }
 
   function performSend(direct?: boolean): void {
+    if (selectedHarnessLacksAttachments && attachments.length > 0) {
+      attachmentBlockedNotice = true
+      return
+    }
     const msg = value.trim()
     value = ''
     onValueChange?.('')
@@ -1130,6 +1143,10 @@
     selections: ReadonlyArray<{ path: string; file?: File }>
   ): Promise<void> {
     if (readOnlyMode && !allowAttachments) return
+    if (selectedHarnessLacksAttachments) {
+      attachmentBlockedNotice = true
+      return
+    }
     const addedAttachments = selections.map(({ path, file }) => {
       const filename =
         file?.name ?? (path.split('/').pop() ?? path.split('\\').pop() ?? 'file').split('?')[0]
@@ -1176,6 +1193,10 @@
 
   async function pickAttachment(): Promise<void> {
     if (readOnlyMode && !allowAttachments) return
+    if (selectedHarnessLacksAttachments) {
+      attachmentBlockedNotice = true
+      return
+    }
     const paths = await invoke('dialog:pickFiles', attachmentStorage)
     await addFileAttachments(paths.map((path) => ({ path })))
   }
@@ -1211,6 +1232,10 @@
 
   async function handleDropFiles(dt: DataTransfer | null): Promise<void> {
     if (readOnlyMode && !allowAttachments) return
+    if (selectedHarnessLacksAttachments) {
+      attachmentBlockedNotice = true
+      return
+    }
     if (!dt) return
     const files = dt.files
     if (!files || files.length === 0) return
@@ -1232,6 +1257,7 @@
   onMount(() => {
     function onDragOver(e: DragEvent): void {
       if (readOnlyMode && !allowAttachments) return
+      if (selectedHarnessLacksAttachments) return
       if (overFileTree(e)) {
         // The file tree owns the drop in its region; hide the composer overlay.
         if (isDragging) isDragging = false
@@ -1245,6 +1271,7 @@
 
     function onDragLeave(e: DragEvent): void {
       if (readOnlyMode && !allowAttachments) return
+      if (selectedHarnessLacksAttachments) return
       if (
         e.clientX <= 0 ||
         e.clientY <= 0 ||
@@ -1257,6 +1284,13 @@
 
     function onDrop(e: DragEvent): void {
       if (readOnlyMode && !allowAttachments) return
+      if (selectedHarnessLacksAttachments) {
+        if (hasFiles(e.dataTransfer)) {
+          e.preventDefault()
+          attachmentBlockedNotice = true
+        }
+        return
+      }
       if (overFileTree(e)) return
       e.preventDefault()
       isDragging = false
@@ -1278,6 +1312,16 @@
     if (readOnlyMode && !allowAttachments) return
     const items = e.clipboardData?.items
     if (!items) return
+    if (selectedHarnessLacksAttachments) {
+      const hasFile = Array.from(items).some(
+        (item) => item.kind === 'file' || item.type.startsWith('image/')
+      )
+      if (hasFile) {
+        e.preventDefault()
+        attachmentBlockedNotice = true
+      }
+      return
+    }
     let hasFileAttachment = false
 
     for (const item of Array.from(items)) {
@@ -1563,6 +1607,15 @@
           aria-label="Don't ask again for this vision model"
         />
       </div>
+    </div>
+  {/if}
+
+  {#if selectedHarnessLacksAttachments && (attachmentBlockedNotice || attachments.length > 0)}
+    <div
+      class="mx-3 mt-2.5 rounded-lg border border-danger/30 bg-danger/5 px-3 py-2 text-xs text-danger"
+      role="status"
+    >
+      This model cannot accept file attachments. Choose another model before sending this file.
     </div>
   {/if}
 
@@ -2050,9 +2103,12 @@
               <!-- Attach file -->
               <button
                 type="button"
-                class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-xs text-foreground transition-colors hover:bg-elevated"
+                class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-xs text-foreground transition-colors hover:bg-elevated disabled:cursor-not-allowed disabled:opacity-50"
                 role="menuitem"
-                title="Attach files to this message"
+                title={selectedHarnessLacksAttachments
+                  ? 'Attachments are unavailable for this model'
+                  : 'Attach files to this message'}
+                disabled={selectedHarnessLacksAttachments}
                 onclick={() => {
                   plusMenuOpen = false
                   void pickAttachment()
