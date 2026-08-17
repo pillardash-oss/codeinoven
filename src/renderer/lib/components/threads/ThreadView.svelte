@@ -2412,12 +2412,17 @@
   let locallySubmittedTurnAcknowledged = false
 
   onMount(() => {
+    // The parent clears its selected thread before Svelte runs this cleanup.
+    // Keep the mounted identity stable so teardown never crosses the chat /
+    // project boundary through the now-null live prop.
+    const mountedProjectId = thread.projectId
+    const mountedThreadId = thread.id
     workspaceState.jumpToMessage = jumpToMessage
     void refreshEfficiencyKpis()
     scheduleResponseHighlightRestore(responseReferences)
     // This view owns dispatch of the thread's queued message while mounted;
     // the background dispatcher must defer to it to avoid a double send.
-    queuedMessageDispatcher.markMounted(thread.projectId, thread.id)
+    queuedMessageDispatcher.markMounted(mountedProjectId, mountedThreadId)
 
     const onResize = (): void => scheduleResponseBubbleUpdate()
     window.addEventListener('resize', onResize)
@@ -2464,10 +2469,10 @@
 
     return () => {
       alive = false
-      queuedMessageDispatcher.markUnmounted(thread.projectId, thread.id)
+      queuedMessageDispatcher.markUnmounted(mountedProjectId, mountedThreadId)
       // Save scroll position so switching back snaps to the right place
       if (scrollEl) {
-        threadScrollPositions.set(thread.id, {
+        threadScrollPositions.set(mountedThreadId, {
           top: scrollEl.scrollTop,
           renderedStartIndex: visibleStartIndex,
           awayFromBottom: userScrolledAway
