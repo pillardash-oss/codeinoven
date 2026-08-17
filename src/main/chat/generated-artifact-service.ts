@@ -92,6 +92,8 @@ interface ScannedImage {
   modifiedAt: number
 }
 
+type ProjectArtifactThread = Pick<Thread, 'id' | 'title' | 'featureSlug'>
+
 function isImagePath(value: string): boolean {
   return IMAGE_EXTENSIONS.has(extname(value.split(/[?#]/u)[0] ?? '').toLowerCase())
 }
@@ -180,6 +182,19 @@ function isStaleProjectImage(value: string, context: ArtifactContext): boolean {
   )
 }
 
+function projectArtifactDirectory(thread: ProjectArtifactThread): string {
+  return join(
+    PROJECT_DATA_DIRECTORY,
+    'work',
+    thread.featureSlug ?? featureSlugFromTitle(thread.title),
+    thread.id
+  )
+}
+
+function promptPath(path: string): string {
+  return path.split(sep).join('/')
+}
+
 async function atomicWriteBuffer(path: string, bytes: Buffer): Promise<void> {
   const temporaryPath = `${path}.${process.pid}.${createHash('sha1').update(path).digest('hex').slice(0, 12)}.tmp`
   try {
@@ -203,8 +218,8 @@ async function regularFile(path: string): Promise<boolean> {
 /**
  * Captures image outputs from harness messages and tool results into stable,
  * user-visible locations. Chat artifacts are app-owned; project artifacts are
- * kept in the current feature's `.cio/work/<feature>` scratch directory unless
- * the agent already produced a file inside the project.
+ * kept in the current thread's `.cio/work/<feature>/<threadId>` scratch
+ * directory unless the agent already produced a file inside the project.
  */
 export class GeneratedArtifactService {
   constructor(private readonly storage: StorageEngine) {}
@@ -214,12 +229,7 @@ export class GeneratedArtifactService {
     const artifactRoot =
       scope === 'chat'
         ? this.storage.resolve(join(CHAT_ARTIFACTS_DIRECTORY, thread.id))
-        : resolve(
-            projectPath,
-            PROJECT_DATA_DIRECTORY,
-            'work',
-            thread.featureSlug ?? featureSlugFromTitle(thread.title)
-          )
+        : resolve(projectPath, projectArtifactDirectory(thread))
     return {
       scope,
       projectPath,
@@ -501,6 +511,6 @@ export function artifactInstruction(
   if (thread.projectId === INBOX_PROJECT_ID) {
     return `When you generate an image in this chat and the user does not specify a destination, save the bitmap under ${CHAT_ARTIFACTS_DIRECTORY}/${thread.id}/ and include it as an image output or Markdown image. Keep the filename descriptive.`
   }
-  const feature = thread.featureSlug ?? featureSlugFromTitle(thread.title)
-  return `When you generate an image while working on this project and the user does not specify a destination, save the bitmap under .cio/work/${feature}/ and include it as an image output or Markdown image. If the user specifies a project path, honor that path instead.`
+  const artifactDirectory = promptPath(projectArtifactDirectory(thread))
+  return `When you generate an image while working on this project and the user does not specify a destination, save the bitmap under ${artifactDirectory}/ and include it as an image output or Markdown image. If the user specifies a project path, honor that path instead.`
 }
