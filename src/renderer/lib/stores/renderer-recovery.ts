@@ -336,22 +336,6 @@ function parseStartAfterThreads(value: unknown): StartAfterThreadReference[] {
   return references
 }
 
-/**
- * Read the persisted start-after dependencies. New records store an array under
- * `startAfterThreads`; legacy records stored a single thread under
- * `startAfterThreadId`/`startAfterThreadTitle`. When the array is absent, fall
- * back to the legacy single reference so an upgrade never loses a selection.
- */
-function parseDraftStartAfterThreads(raw: Record<string, unknown>): StartAfterThreadReference[] {
-  const references = parseStartAfterThreads(raw.startAfterThreads)
-  if (references.length > 0) return references
-  const legacy = parseStartAfterThread({
-    id: raw.startAfterThreadId,
-    title: raw.startAfterThreadTitle
-  })
-  return legacy ? [legacy] : []
-}
-
 function parseFavoriteModels(value: unknown): string[] {
   if (!Array.isArray(value)) return []
   return value.filter((s): s is string => typeof s === 'string' && s.length > 0)
@@ -387,7 +371,7 @@ function parseDrafts(value: unknown): Record<string, ComposerDraftEntry> {
     const promptReferences = Array.isArray(raw.promptReferences)
       ? raw.promptReferences.filter(isQueuedResponseReference).slice(0, 20)
       : []
-    const startAfterThreads = parseDraftStartAfterThreads(raw)
+    const startAfterThreads = parseStartAfterThreads(raw.startAfterThreads)
     drafts[key] = {
       text,
       attachments,
@@ -434,7 +418,7 @@ function parseQueuedMessages(value: unknown): Record<string, QueuedMessageEntry>
       projectReferences,
       presentation: isUserMessagePresentation(raw.presentation) ? raw.presentation : undefined,
       taskReferences,
-      startAfterThreads: parseDraftStartAfterThreads(raw)
+      startAfterThreads: parseStartAfterThreads(raw.startAfterThreads)
     }
     count += 1
   }
