@@ -1116,7 +1116,10 @@ export class ThreadManager {
       const destination = this.projectRepo.get(destinationProjectId)
       if (!destination) throw new Error(`Project not found: ${destinationProjectId}`)
     }
-    const parentMessages = this.agentMessageRepo.loadAllByThread(threadId)
+    // Forking can copy a large transcript. Use the worker-backed paged reader
+    // instead of running the unbounded repository query on Electron's main
+    // connection while active agent streams remain responsive.
+    const parentMessages = await this.loadMessageRecords(projectId, threadId)
     let copied = parentMessages
     if (messageId) {
       const cutoff = parentMessages.findIndex((message) => message.id === messageId)
