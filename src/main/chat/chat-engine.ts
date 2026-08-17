@@ -192,7 +192,7 @@ import {
   validateMermaidOutput,
   type MermaidValidationFailure
 } from './mermaid-output-validator'
-import { concludesCapabilityUnavailable, searchNudgePrompt } from './not-available-detector'
+import { detectUnavailableToolCall, searchNudgePromptForToolCall } from './not-available-detector'
 
 /**
  * Workflow instruction injected into every prompt when Engineering is
@@ -423,7 +423,7 @@ function patchPaths(patch: string): string[] {
   )
 }
 
-function changedPathsFromTool(
+export function changedPathsFromTool(
   projectPath: string,
   part: Extract<AgentPart, { type: 'tool' }>
 ): string[] {
@@ -13223,6 +13223,11 @@ export class ChatEngine {
           perSession.set(part.id, { start, end })
           part.state.time = { start, end }
         }
+        if (part.state.status === 'error') {
+          void this.nudgeUnavailableToolCall(driverId, event.sessionId, part).catch((error) =>
+            Logger.dev('Unavailable-tool search nudge failed:', error)
+          )
+        }
       }
     }
 
@@ -13310,6 +13315,62 @@ export class ChatEngine {
     }
     // Everything else broadcasts directly to renderers.
     this.broadcast(event)
+  }
+
+  /**
+   * Steer the active turn immediately after a native capability tool reports
+   * that its MCP/skill/utility is unavailable. This is deliberately attached
+   * to the tool error event: a direct app-utility activation is allowed to
+   * proceed, while a native-harness miss gets one chance to discover the same
+   * capability through utility_search before the agent gives up.
+   */
+  private async nudgeUnavailableToolCall(
+    driverId: string,
+    sessionId: string,
+    part: Extract<AgentPart, { type: 'tool' }>
+  ): Promise<void> {
+    const info = this.sessionRegistry.get(sessionId)
+    if (!info || info.ephemeral || !info.activeTurnId) return
+    if ((this.searchNudgeAttempts.get(sessionId) ?? 0) >= 1) return
+    const toolName = part.tool.trim()
+    if (!toolName || toolName.toLocaleLowerCase().includes('utility_search')) return
+    const toolError = [part.state.error, part.state.output, part.state.title]
+      .filter((value): value is string => Boolean(value?.trim()))
+      .join('\n')
+    const claim = detectUnavailableToolCall(toolName, toolError)
+    if (!claim) return
+
+    const utilityTurn = this.utilityTurns.get(sessionId)
+    if (
+      !utilityTurn ||
+      (!utilityTurn.gateway.instructions.trim() && !utilityTurn.gateway.directInstructions.trim())
+    ) {
+      return
+    }
+    if (
+      this.utilityOrchestration.hasSearched(utilityTurn.gateway.id) ||
+      this.utilityOrchestration.hasActivatedOnDemand(utilityTurn.gateway.id)
+    ) {
+      return
+    }
+    const thread = await this.threadManager.getThread(info.projectId, info.threadId)
+    const driver = this.drivers.get(driverId)
+    if (!thread?.settings || !driver?.steerPrompt) return
+
+    this.searchNudgeAttempts.set(sessionId, 1)
+    await this.sendPrompt(
+      info.projectId,
+      info.threadId,
+      thread.settings,
+      searchNudgePromptForToolCall(claim, toolName, toolError),
+      [],
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      'internal'
+    )
   }
 
   /** Expose isolated Brainstorm research activity without leaking its final JSON response. */
@@ -14201,61 +14262,6 @@ export class ChatEngine {
           await this.broadcastThreadSessionError(info.projectId, info.threadId, sessionId, issue)
         }
         return
-      }
-      // The agent concluded a capability/tool/MCP does not exist, yet never
-      // used utility_search despite the gateway exposing it this turn. The
-      // sentence-local detector returns a concrete target, so this deterministic
-      // feedback can request a search without a second model judgment or an
-      // unrelated context shift. One nudge per turn so it cannot loop.
-      if (
-        !failure &&
-        !awaitingUser &&
-        !suppressTerminalAnswer &&
-        turnAssistant &&
-        thread?.settings &&
-        (this.searchNudgeAttempts.get(sessionId) ?? 0) < 1
-      ) {
-        const utilityTurn = this.utilityTurns.get(sessionId)
-        if (
-          utilityTurn &&
-          (utilityTurn.gateway.instructions.trim() || utilityTurn.gateway.directInstructions.trim())
-        ) {
-          const claimedUnavailable = concludesCapabilityUnavailable(assistantText(turnAssistant))
-          const searched = this.utilityOrchestration.hasSearched(utilityTurn.gateway.id)
-          if (claimedUnavailable && !searched) {
-            this.searchNudgeAttempts.set(sessionId, 1)
-            await this.finishCheckpoint(sessionId, info, 'completed')
-            await this.cleanupTurnUtilities(sessionId)
-            turnUtilitiesCleaned = true
-            if (pendingMemory) this.pendingMemoryDecisions.set(sessionId, pendingMemory)
-            try {
-              await this.sendPrompt(
-                info.projectId,
-                info.threadId,
-                thread.settings,
-                searchNudgePrompt(claimedUnavailable),
-                [],
-                undefined,
-                undefined,
-                undefined,
-                undefined,
-                undefined,
-                'internal'
-              )
-            } catch (error) {
-              this.pendingMemoryDecisions.delete(sessionId)
-              const issue = this.fallbackProviderIssue(info.driverId, rawErrorMessage(error))
-              await this.threadManager.setStatus(info.projectId, info.threadId, 'failed')
-              await this.broadcastThreadSessionError(
-                info.projectId,
-                info.threadId,
-                sessionId,
-                issue
-              )
-            }
-            return
-          }
-        }
       }
       const persistedRevision = this.pendingSpecRevisions.has(sessionId)
         ? null
