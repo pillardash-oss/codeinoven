@@ -155,7 +155,7 @@ function codexThinkingPresets(value: unknown): ThinkingPreset[] | undefined {
   return presets.length > 0 ? presets : undefined
 }
 
-function isCodexTextOnlyModel(id: string): boolean {
+export function isCodexTextOnlyModel(id: string): boolean {
   return /^gpt-5\.3-codex-spark(?:-|$)/iu.test(id)
 }
 
