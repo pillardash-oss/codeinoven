@@ -253,8 +253,9 @@
   onMount(() => {
     void (async () => {
       await providerStore.init()
+      await providerStore.checkAll()
       await Promise.all([
-        providerStore.checkAll().then(() => checkAllAuth()),
+        checkAllAuth(),
         baseUrlProviderStore.load(),
         harnessLifecycleStore.checkAll(),
         loadManifests(),
