@@ -30,7 +30,7 @@ export const GATEWAY_TOOLS: GatewayToolDefinition[] = [
   {
     name: UTILITY_SEARCH_TOOL_NAME,
     description:
-      'Search app-managed MCP servers, skills, web services, and computer-use capabilities when a skill or MCP is not directly available. The result carries an explicit `notFound` boolean: when it is true, no eligible utility matched, so you may confidently conclude the capability does not exist in this session. Only conclude something does not exist after a search where notFound is true.',
+      'Search app-managed MCP servers, skills, utilities, web services, and computer-use capabilities when a needed capability is not directly available. The result carries an explicit `notFound` boolean: when it is true, no eligible utility matched, so you may confidently conclude the capability does not exist in this session. Only conclude something does not exist after a search where notFound is true.',
     inputSchema: {
       type: 'object',
       properties: {
