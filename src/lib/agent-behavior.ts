@@ -1,11 +1,13 @@
 /**
- * Default operational behavior for project Engineering implementation turns.
+ * Default operational behavior for implementation turns.
  *
- * Keep this prompt in application source so the behavior is available without
- * a repository-owned AGENTS.md file. Users can override it from Settings →
- * Agents; the source value remains the reset-to-default contract.
+ * The application writes this default to behavior.md in its config directory
+ * and uses that file as the user-editable override. This source value remains
+ * the reset-to-default contract.
  */
-export const DEFAULT_AGENT_BEHAVIOR_PROMPT = `Agent behavior for project Engineering implementation work:
+export const AGENT_BEHAVIOR_FILENAME = 'behavior.md'
+
+export const DEFAULT_AGENT_BEHAVIOR_PROMPT = `Agent behavior for implementation work:
 
 Unless the user explicitly overrides these rules, follow this work ethic:
 
@@ -24,7 +26,7 @@ Unless the user explicitly overrides these rules, follow this work ethic:
    - Do not claim work, verification, or evidence that was not actually performed.
 
 3. Commits
-   - Commit after each completed unit of work so the change can be audited and rolled back.
+   - Always commit after completing every work item so the change can be audited and rolled back.
    - Use this commit-message pattern: (MODEL_NAME) <type>: <title>
    - Use a type that matches the work, such as feat, fix, chore, refactor, docs, or test.
    - Commit only the files changed for the current work. Never commit ignored files.
@@ -40,6 +42,6 @@ Unless the user explicitly overrides these rules, follow this work ethic:
    - Use the equivalent MCP or skill available for the technology being changed. For Svelte or SvelteKit work, consult the current Svelte documentation and use the Svelte validation workflow before reporting completion.
    - Keep implementation changes type-safe and follow the project's established conventions.
 
-These are the default application rules for Engineering implementation work. A direct user instruction overrides them for that task.`
+These are the default application rules for implementation work. A direct user instruction overrides them for that task.`
 
 export const AGENT_BEHAVIOR_PROMPT_MAX_LENGTH = 32_000

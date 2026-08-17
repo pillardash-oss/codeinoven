@@ -13,7 +13,7 @@ import {
   resolveWithinRoot
 } from '../../lib/utils'
 import type { AppConfig } from '../../lib/types'
-import { DEFAULT_AGENT_BEHAVIOR_PROMPT } from '../../lib/agent-behavior'
+import { AGENT_BEHAVIOR_FILENAME, DEFAULT_AGENT_BEHAVIOR_PROMPT } from '../../lib/agent-behavior'
 import type { CloudDeploymentAccountRegistry, CloudDeploymentConfig } from '../../lib/types'
 import type { Project } from '../../lib/types'
 import { featureArtifactDirectory, featureSlugFromTitle } from '../../lib/project-artifacts'
@@ -78,6 +78,15 @@ export class StorageEngine {
       await writeJson(configPath, DEFAULT_CONFIG)
     }
 
+    // Keep the behavior prompt as a human-editable file at the application config root.
+    if ((await this.readRaw(AGENT_BEHAVIOR_FILENAME)) === null) {
+      const configuredBehavior =
+        typeof existing?.agentBehaviorPrompt === 'string' && existing.agentBehaviorPrompt.trim()
+          ? existing.agentBehaviorPrompt
+          : DEFAULT_AGENT_BEHAVIOR_PROMPT
+      await this.writeRaw(AGENT_BEHAVIOR_FILENAME, configuredBehavior)
+    }
+
     // Create default providers file if missing
     const providersPath = this.resolve('providers.json')
     const providers = await readJson(providersPath)
@@ -106,17 +115,24 @@ export class StorageEngine {
         ...(config?.memory ?? {}),
         entries: config?.memory?.entries ?? []
       },
-      agentBehaviorPrompt:
-        typeof config?.agentBehaviorPrompt === 'string' &&
-        config.agentBehaviorPrompt.trim().length > 0
-          ? config.agentBehaviorPrompt
-          : DEFAULT_AGENT_BEHAVIOR_PROMPT
+      agentBehaviorPrompt: await this.readBehaviorPrompt(config)
     }
   }
 
   /** Write the global config */
   async saveConfig(config: AppConfig): Promise<void> {
-    await writeJson(this.resolve('config.json'), config)
+    const { agentBehaviorPrompt, ...persistedConfig } = config
+    await writeJson(this.resolve('config.json'), persistedConfig)
+    await this.writeRaw(AGENT_BEHAVIOR_FILENAME, agentBehaviorPrompt)
+  }
+
+  private async readBehaviorPrompt(config: Partial<AppConfig> | null): Promise<string> {
+    const behaviorFile = await this.readRaw(AGENT_BEHAVIOR_FILENAME)
+    if (behaviorFile?.trim()) return behaviorFile
+    if (typeof config?.agentBehaviorPrompt === 'string' && config.agentBehaviorPrompt.trim()) {
+      return config.agentBehaviorPrompt
+    }
+    return DEFAULT_AGENT_BEHAVIOR_PROMPT
   }
 
   /**
