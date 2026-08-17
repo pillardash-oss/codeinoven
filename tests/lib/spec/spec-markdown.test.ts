@@ -67,11 +67,12 @@ function createSpec(): EngineeringSpec {
 }
 
 describe('engineering specification Markdown', () => {
-  it('round-trips all eight headings and structured implementation details', () => {
+  it('round-trips the TL;DR, eight document headings, and structured implementation details', () => {
     const spec = createSpec()
     const markdown = exportEngineeringSpecMarkdown(spec)
 
-    expect(markdown.match(/^## /gm)).toHaveLength(8)
+    expect(markdown.match(/^## /gm)).toHaveLength(9)
+    expect(markdown).toContain('## TL;DR')
     expect(markdown).toContain('## Additional Info')
     expect(markdown).toContain('## Constraints & Risks')
     expect(importEngineeringSpecMarkdown(markdown)).toEqual({
