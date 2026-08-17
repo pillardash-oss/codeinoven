@@ -374,7 +374,7 @@ export class ThreadManager {
       // The new thread lands first so the optimistic create always yields a
       // persisted row; the bounded bucket delete is best-effort cleanup that
       // must never roll back the creation it is making room for.
-      this.threadRepo.upsert(thread)
+      await this.threadRepo.upsertViaWorker(thread)
       if (toEvict) {
         try {
           await this.deleteThread(input.projectId, toEvict.id)
