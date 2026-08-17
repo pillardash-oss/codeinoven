@@ -51,12 +51,14 @@
     threadId?: string
   }
 
-  type SourcesSection = 'sources' | 'mcps' | 'skills' | 'processes' | 'artifacts' | 'facts'
+  type SourcesSection = 'sources' | 'processes' | 'artifacts' | 'contexts'
+  type ContextSection = 'mcps' | 'skills' | 'memory'
   type OriginFilter = 'all' | AgentCapabilityOrigin
   type SourceFilter = 'all' | AgentSource['kind']
 
   let { sources, projectId, threadId }: Props = $props()
   let section = $state<SourcesSection>('sources')
+  let contextSection = $state<ContextSection>('mcps')
   let originFilter = $state<OriginFilter>('all')
   let sourceFilter = $state<SourceFilter>('all')
   let searchQuery = $state('')
@@ -79,9 +81,9 @@
   let artifactsLoading = $state(false)
   let artifactsError = $state('')
   let previewArtifact = $state<AgentArtifact | null>(null)
-  let facts = $state<MemoryEntry[]>([])
-  let factsLoading = $state(false)
-  let factsError = $state('')
+  let memory = $state<MemoryEntry[]>([])
+  let memoryLoading = $state(false)
+  let memoryError = $state('')
 
   function preloadMedia(nextSources: AgentSource[], nextArtifacts: AgentArtifact[]): void {
     for (const source of nextSources) {
@@ -109,7 +111,7 @@
     void loadCapabilities()
     void loadProcesses()
     void loadArtifacts()
-    void loadFacts()
+    void loadMemory()
     const unsubscribeProcesses = subscribe(
       'agent:processesChanged',
       (changedProjectId, changedThreadId) => {
@@ -136,7 +138,7 @@
   const citationCount = $derived(sources.filter((source) => source.kind === 'file-citation').length)
   const sectionCount = $derived(sources.filter((source) => source.kind === 'section').length)
   const artifactCount = $derived(artifacts.length)
-  const factCount = $derived(facts.length)
+  const memoryCount = $derived(memory.length)
 
   const filteredSources = $derived(
     sourceFilter === 'all' ? sources : sources.filter((source) => source.kind === sourceFilter)
@@ -214,13 +216,13 @@
     }
   }
 
-  async function loadFacts(): Promise<void> {
+  async function loadMemory(): Promise<void> {
     if (!projectId || !threadId) {
-      facts = []
+      memory = []
       return
     }
-    factsLoading = true
-    factsError = ''
+    memoryLoading = true
+    memoryError = ''
     try {
       const entries =
         projectId === INBOX_PROJECT_ID
@@ -242,16 +244,16 @@
               ...projectEntries,
               ...threadEntries
             ])
-      facts = [
+      memory = [
         ...new Map(
           entries.filter((entry) => entry.enabled).map((entry) => [entry.id, entry])
         ).values()
       ]
     } catch (loadError) {
-      factsError =
-        loadError instanceof Error ? loadError.message : 'Active facts could not be loaded.'
+      memoryError =
+        loadError instanceof Error ? loadError.message : 'Active memory could not be loaded.'
     } finally {
-      factsLoading = false
+      memoryLoading = false
     }
   }
 
@@ -263,11 +265,11 @@
     void invoke('shell:revealPath', artifact.path)
   }
 
-  function factScopeLabel(fact: MemoryEntry): string {
-    if (fact.scope === 'global') return 'Global'
-    if (fact.scope === 'thread') return 'Thread'
-    if (fact.scope === 'chat') return 'Chat'
-    if (fact.scope === 'project') return 'Project'
+  function memoryScopeLabel(entry: MemoryEntry): string {
+    if (entry.scope === 'global') return 'Global'
+    if (entry.scope === 'thread') return 'Thread'
+    if (entry.scope === 'chat') return 'Chat'
+    if (entry.scope === 'project') return 'Project'
     return 'Projects'
   }
 
@@ -313,6 +315,9 @@
   function processStartedAt(startedAt: number): string {
     return new Date(startedAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
   }
+
+  const threadProcesses = $derived(processes.filter((process) => process.scope === 'thread'))
+  const appProcesses = $derived(processes.filter((process) => process.scope === 'app'))
 
   function originLabel(entry: AgentCapabilityEntry): string {
     if (entry.origin === 'application') return 'CodeInOven'
@@ -431,16 +436,16 @@
         <p class="mt-0.5 text-[11px] text-dimmed">
           {#if section === 'sources'}
             Attachments, researched websites, and generated images.
-          {:else if section === 'mcps'}
-            MCP servers available to this conversation.
-          {:else if section === 'skills'}
-            Reusable skills available to this conversation.
           {:else if section === 'artifacts'}
             Generated images captured from this conversation.
-          {:else if section === 'facts'}
-            Active memory facts applied to this conversation.
-          {:else}
+          {:else if section === 'processes'}
             Commands still running for this task.
+          {:else if contextSection === 'mcps'}
+            MCP servers available to this conversation.
+          {:else if contextSection === 'skills'}
+            Reusable skills available to this conversation.
+          {:else}
+            Active memory applied to this conversation.
           {/if}
         </p>
       </div>
@@ -449,28 +454,28 @@
           {filteredSources.length}{#if sourceFilter !== 'all' && filteredSources.length !== sources.length}
             <span class="text-dimmed"> / {sources.length}</span>
           {/if}
-        {:else if section === 'mcps'}
-          {filteredMcps.length}
-        {:else if section === 'skills'}
-          {filteredSkills.length}
         {:else if section === 'artifacts'}
           {artifactCount}
-        {:else if section === 'facts'}
-          {factCount}
-        {:else}
+        {:else if section === 'processes'}
           {processes.length}
+        {:else if contextSection === 'mcps'}
+          {filteredMcps.length}
+        {:else if contextSection === 'skills'}
+          {filteredSkills.length}
+        {:else}
+          {memoryCount}
         {/if}
       </span>
     </div>
 
     <div
-      class="mt-3 flex w-max items-center gap-0.5 rounded-lg border bg-elevated p-0.5"
+      class="mt-3 flex w-full items-center gap-0.5 overflow-x-auto rounded-lg border bg-elevated p-0.5"
       role="tablist"
       aria-label="Sources sections"
     >
       <button
         type="button"
-        class="flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium transition-colors {section ===
+        class="flex shrink-0 items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium transition-colors {section ===
         'sources'
           ? 'bg-surface text-foreground shadow-sm'
           : 'text-muted hover:text-foreground'}"
@@ -483,33 +488,7 @@
       </button>
       <button
         type="button"
-        class="flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium transition-colors {section ===
-        'mcps'
-          ? 'bg-surface text-foreground shadow-sm'
-          : 'text-muted hover:text-foreground'}"
-        role="tab"
-        aria-selected={section === 'mcps'}
-        title="View MCP servers available to this conversation"
-        onclick={() => (section = 'mcps')}
-      >
-        MCPs
-      </button>
-      <button
-        type="button"
-        class="flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium transition-colors {section ===
-        'skills'
-          ? 'bg-surface text-foreground shadow-sm'
-          : 'text-muted hover:text-foreground'}"
-        role="tab"
-        aria-selected={section === 'skills'}
-        title="View skills available to this conversation"
-        onclick={() => (section = 'skills')}
-      >
-        Skills
-      </button>
-      <button
-        type="button"
-        class="flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium transition-colors {section ===
+        class="flex shrink-0 items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium transition-colors {section ===
         'processes'
           ? 'bg-surface text-foreground shadow-sm'
           : 'text-muted hover:text-foreground'}"
@@ -519,10 +498,11 @@
         onclick={() => (section = 'processes')}
       >
         Processes
+        {#if processes.length > 0}<span class="text-[10px] tabular-nums">{processes.length}</span>{/if}
       </button>
       <button
         type="button"
-        class="flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium transition-colors {section ===
+        class="flex shrink-0 items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium transition-colors {section ===
         'artifacts'
           ? 'bg-surface text-foreground shadow-sm'
           : 'text-muted hover:text-foreground'}"
@@ -537,22 +517,73 @@
       </button>
       <button
         type="button"
-        class="flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium transition-colors {section ===
-        'facts'
+        class="flex shrink-0 items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium transition-colors {section ===
+        'contexts'
           ? 'bg-surface text-foreground shadow-sm'
           : 'text-muted hover:text-foreground'}"
         role="tab"
-        aria-selected={section === 'facts'}
-        title="View active memory facts"
-        onclick={() => (section = 'facts')}
+        aria-selected={section === 'contexts'}
+        title="View MCP servers, skills, and memory for this conversation"
+        onclick={() => (section = 'contexts')}
       >
         <Brain size={12} />
-        Active facts
-        {#if factCount > 0}<span class="text-[10px] tabular-nums">{factCount}</span>{/if}
+        Contexts
+        {#if contextSection === 'memory' && memoryCount > 0}
+          <span class="text-[10px] tabular-nums">{memoryCount}</span>
+        {/if}
       </button>
     </div>
 
-    {#if section === 'mcps' || section === 'skills'}
+    {#if section === 'contexts'}
+      <div
+        class="mt-3 flex w-full items-center gap-0.5 overflow-x-auto rounded-lg border bg-elevated p-0.5"
+        role="tablist"
+        aria-label="Context sections"
+      >
+        <button
+          type="button"
+          class="flex shrink-0 items-center gap-1.5 rounded-md px-2.5 py-1 text-[11px] font-medium transition-colors {contextSection ===
+          'mcps'
+            ? 'bg-surface text-foreground shadow-sm'
+            : 'text-muted hover:text-foreground'}"
+          role="tab"
+          aria-selected={contextSection === 'mcps'}
+          title="View MCP servers available to this conversation"
+          onclick={() => (contextSection = 'mcps')}
+        >
+          MCPs
+        </button>
+        <button
+          type="button"
+          class="flex shrink-0 items-center gap-1.5 rounded-md px-2.5 py-1 text-[11px] font-medium transition-colors {contextSection ===
+          'skills'
+            ? 'bg-surface text-foreground shadow-sm'
+            : 'text-muted hover:text-foreground'}"
+          role="tab"
+          aria-selected={contextSection === 'skills'}
+          title="View skills available to this conversation"
+          onclick={() => (contextSection = 'skills')}
+        >
+          Skills
+        </button>
+        <button
+          type="button"
+          class="flex shrink-0 items-center gap-1.5 rounded-md px-2.5 py-1 text-[11px] font-medium transition-colors {contextSection ===
+          'memory'
+            ? 'bg-surface text-foreground shadow-sm'
+            : 'text-muted hover:text-foreground'}"
+          role="tab"
+          aria-selected={contextSection === 'memory'}
+          title="View active memory applied to this conversation"
+          onclick={() => (contextSection = 'memory')}
+        >
+          Memory
+          {#if memoryCount > 0}<span class="text-[10px] tabular-nums">{memoryCount}</span>{/if}
+        </button>
+      </div>
+    {/if}
+
+    {#if (section === 'contexts' && contextSection === 'mcps') || (section === 'contexts' && contextSection === 'skills')}
       <div
         class="mt-3 flex w-max items-center gap-0.5 rounded-lg border bg-elevated p-0.5"
         role="group"
@@ -612,11 +643,11 @@
           size={13}
           class="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-dimmed"
         />
-        <span class="sr-only">Search {section === 'mcps' ? 'MCP servers' : 'skills'}</span>
+        <span class="sr-only">Search {contextSection === 'mcps' ? 'MCP servers' : 'skills'}</span>
         <input
           class="h-8 w-full rounded-lg border bg-elevated pl-8 pr-3 text-xs outline-none placeholder:text-dimmed focus:border-primary"
           type="search"
-          placeholder={section === 'mcps' ? 'Search MCP servers' : 'Search skills'}
+          placeholder={contextSection === 'mcps' ? 'Search MCP servers' : 'Search skills'}
           bind:value={searchQuery}
         />
       </label>
@@ -885,7 +916,7 @@
           </div>
         {/each}
       {/if}
-    {:else if section === 'mcps'}
+    {:else if section === 'contexts' && contextSection === 'mcps'}
       {#if capabilitiesLoading}
         <div class="flex h-full items-center justify-center px-8 text-center">
           <p class="text-xs text-dimmed">Loading MCP servers…</p>
@@ -981,7 +1012,7 @@
           </div>
         {/each}
       {/if}
-    {:else if section === 'skills'}
+    {:else if section === 'contexts' && contextSection === 'skills'}
       {#if capabilitiesLoading}
         <div class="flex h-full items-center justify-center px-8 text-center">
           <p class="text-xs text-dimmed">Loading skills…</p>
@@ -1166,16 +1197,16 @@
           </article>
         {/each}
       {/if}
-    {:else if section === 'facts'}
-      {#if factsLoading && facts.length === 0}
+    {:else if section === 'contexts' && contextSection === 'memory'}
+      {#if memoryLoading && memory.length === 0}
         <div class="flex h-full items-center justify-center px-8 text-center">
-          <p class="text-xs text-dimmed">Loading active facts…</p>
+          <p class="text-xs text-dimmed">Loading active memory…</p>
         </div>
-      {:else if factsError && facts.length === 0}
+      {:else if memoryError && memory.length === 0}
         <div class="flex h-full items-center justify-center px-8 text-center">
-          <p class="max-w-64 text-xs leading-relaxed text-danger" role="alert">{factsError}</p>
+          <p class="max-w-64 text-xs leading-relaxed text-danger" role="alert">{memoryError}</p>
         </div>
-      {:else if facts.length === 0}
+      {:else if memory.length === 0}
         <div class="flex h-full items-center justify-center px-8 text-center">
           <div class="max-w-64">
             <span
@@ -1183,7 +1214,7 @@
             >
               <Brain size={18} />
             </span>
-            <h2 class="mt-3 text-sm font-semibold text-foreground">No active facts</h2>
+            <h2 class="mt-3 text-sm font-semibold text-foreground">No memory</h2>
             <p class="mt-1 text-xs leading-relaxed text-dimmed">
               Enabled memory entries for this conversation will appear here.
             </p>
@@ -1191,7 +1222,7 @@
               <button
                 type="button"
                 class="mt-3 rounded-lg border border-border bg-elevated px-2.5 py-1.5 text-xs font-medium text-foreground transition-colors hover:bg-overlay"
-                title="Open active memory facts"
+                title="Open active memory"
                 onclick={openActiveFacts}
               >
                 Open Memory
@@ -1200,37 +1231,37 @@
           </div>
         </div>
       {:else}
-        {#if factsError}
+        {#if memoryError}
           <p class="border-b border-border px-4 py-2 text-xs text-danger" role="alert">
-            {factsError}
+            {memoryError}
           </p>
         {/if}
         <div class="border-b border-border px-4 py-2">
           <button
             type="button"
             class="rounded-lg border border-border bg-elevated px-2.5 py-1.5 text-xs font-medium text-foreground transition-colors hover:bg-overlay"
-            title="Manage active memory facts"
+            title="Manage active memory"
             onclick={openActiveFacts}
           >
             Manage Memory
           </button>
         </div>
-        {#each facts as fact (fact.id)}
+        {#each memory as entry (entry.id)}
           <article class="border-b border-border px-4 py-3">
             <div class="flex items-center gap-2">
               <Brain size={13} class="shrink-0 text-primary" />
               <p
                 class="min-w-0 flex-1 truncate text-xs font-semibold text-foreground"
-                title={fact.label}
+                title={entry.label}
               >
-                {fact.label}
+                {entry.label}
               </p>
               <span class="shrink-0 rounded-md bg-raised px-1.5 py-0.5 text-[10px] text-muted">
-                {factScopeLabel(fact)}
+                {memoryScopeLabel(entry)}
               </span>
             </div>
             <p class="mt-2 whitespace-pre-wrap text-[11px] leading-relaxed text-muted">
-              {fact.content}
+              {entry.content}
             </p>
           </article>
         {/each}
@@ -1266,7 +1297,7 @@
             {processesError}
           </p>
         {/if}
-        {#each processes as runningProcess (runningProcess.pid)}
+        {#each threadProcesses as runningProcess (runningProcess.pid)}
           <div class="border-b border-border px-4 py-3 transition-colors hover:bg-elevated">
             <div class="flex items-start gap-3">
               <span
@@ -1309,6 +1340,70 @@
             </div>
           </div>
         {/each}
+
+        {#if appProcesses.length > 0}
+          <div class="border-b border-border bg-elevated/60 px-4 py-3">
+            <div class="flex items-center gap-2">
+              <Globe2 size={13} class="shrink-0 text-dimmed" />
+              <p class="text-[11px] font-semibold text-foreground">App-wide processes</p>
+            </div>
+            <p class="mt-1 text-[10px] leading-relaxed text-dimmed">
+              These processes run under a shared server used by every thread, so they are not tied
+              to this conversation. Stopping one affects all threads using the app.
+            </p>
+          </div>
+          {#each appProcesses as runningProcess (runningProcess.pid)}
+            <div
+              class="border-b border-border px-4 py-3 transition-colors hover:bg-elevated"
+              title={runningProcess.command}
+            >
+              <div class="flex items-start gap-3">
+                <span
+                  class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-raised text-muted"
+                >
+                  <Globe2 size={15} />
+                </span>
+                <div class="min-w-0 flex-1">
+                  <div class="flex items-center gap-2">
+                    <p class="truncate text-xs font-semibold text-foreground">
+                      {processName(runningProcess.command)}
+                    </p>
+                    <span
+                      class="shrink-0 rounded-md bg-amber-500/10 px-1.5 py-0.5 text-[10px] font-medium text-amber-500"
+                    >
+                      App
+                    </span>
+                    <span class="shrink-0 rounded-md bg-raised px-1.5 py-0.5 text-[10px] text-muted">
+                      Running
+                    </span>
+                  </div>
+                  <p
+                    class="mt-1 line-clamp-2 font-mono text-[10px] leading-relaxed text-dimmed"
+                    title={runningProcess.command}
+                  >
+                    {runningProcess.command}
+                  </p>
+                  <p class="mt-1 text-[10px] text-dimmed tabular-nums">
+                    PID {runningProcess.pid} · Started {processStartedAt(runningProcess.startedAt)}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  class="flex h-7 shrink-0 items-center gap-1.5 rounded-lg border border-danger/30 bg-danger/10 px-2 text-[11px] font-medium text-danger transition-colors hover:bg-danger/15 disabled:opacity-50"
+                  disabled={stoppingPids.has(runningProcess.pid)}
+                  aria-label={`Stop ${processName(runningProcess.command)} process ${runningProcess.pid}`}
+                  title={`Stop app-wide process ${runningProcess.pid}. This affects every thread using the app.`}
+                  onclick={() => stopProcess(runningProcess.pid)}
+                >
+                  {#if stoppingPids.has(runningProcess.pid)}
+                    <Loader2 size={12} class="animate-spin" />
+                  {/if}
+                  Stop
+                </button>
+              </div>
+            </div>
+          {/each}
+        {/if}
       {/if}
     {/if}
   </div>
