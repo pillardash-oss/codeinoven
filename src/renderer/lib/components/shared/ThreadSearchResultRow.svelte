@@ -5,6 +5,7 @@
   import StatusBadge from '$lib/components/shared/StatusBadge.svelte'
   import ThreadHoverPopover from '$lib/components/shared/ThreadHoverPopover.svelte'
   import { agentRuns } from '$lib/stores/agent-runs.svelte'
+  import { statusBadgeForThread } from '$lib/thread-status-badge'
   import { isThreadWorking, type Thread, type ThreadSearchResult } from '$shared/types'
 
   interface Props {
@@ -197,11 +198,7 @@
           variant={badgeProps.variant ?? 'dot'}
           animated={badgeProps.animated}
           size="sm"
-          title={isRetryPaused
-            ? 'Waiting to retry'
-            : thread.status === 'spec'
-              ? 'Spec ready'
-              : thread.status.replace('_', ' ')}
+          title={statusBadgeForThread(thread, isWorking)?.label}
         />
       {:else}
         <span class="h-2 w-2 rounded-full border border-border-strong bg-transparent"></span>

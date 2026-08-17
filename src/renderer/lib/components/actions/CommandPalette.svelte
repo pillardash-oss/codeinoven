@@ -6,6 +6,7 @@
   import { filterActions } from '../../actions'
   import type { ActionDefinition, ActionSelection } from '../../actions'
   import { displayShortcutKey, displayShortcutLabel } from '../../shortcut-display'
+  import StatusBadge from '$lib/components/shared/StatusBadge.svelte'
 
   interface Props {
     open: boolean
@@ -250,6 +251,22 @@
                   class="min-w-0 truncate rounded-md border border-border px-1.5 py-0.5 text-[9px] font-medium text-dimmed"
                 >
                   {action.source.label}
+                </span>
+              {/if}
+              {#if action.status}
+                <span
+                  class="inline-flex shrink-0 items-center gap-1 rounded-md border border-border bg-raised px-1.5 py-0.5 text-[9px] font-medium text-dimmed"
+                >
+                  <StatusBadge
+                    stage={action.status.stage}
+                    tone={action.status.tone}
+                    kind={action.status.kind}
+                    variant={action.status.variant ?? 'dot'}
+                    animated={action.status.animated}
+                    size="sm"
+                    title={action.status.label}
+                  />
+                  <span class="truncate">{action.status.label}</span>
                 </span>
               {/if}
             </span>

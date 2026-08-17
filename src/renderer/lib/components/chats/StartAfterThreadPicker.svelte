@@ -4,6 +4,7 @@
   import { isOrchestrationChildThread, isThreadBusy } from '$shared/types'
   import { agentRuns } from '$lib/stores/agent-runs.svelte'
   import { invoke } from '$lib/ipc.svelte'
+  import { statusBadgeForThread } from '$lib/thread-status-badge'
   import CommandPalette from '../actions/CommandPalette.svelte'
   import type { ActionDefinition, ActionSelection } from '$lib/actions'
 
@@ -76,20 +77,25 @@
   })
 
   let actions = $derived<ActionDefinition[]>(
-    threads.map((thread) => ({
-      id: `start-after:${thread.id}`,
-      title: thread.title,
-      description: stageLabel(thread),
-      category: 'thread',
-      source: {
-        id: `project:${thread.projectId}`,
-        label: 'This project',
-        kind: 'app'
-      },
-      icon: isLiveWorking(thread) ? MessagesSquare : Clock,
-      keywords: [stageLabel(thread), 'working', 'attention', 'start after'],
-      disabledReason: selectedIds.includes(thread.id) ? 'Already selected' : undefined
-    }))
+    threads.map((thread) => {
+      const liveWorking = isLiveWorking(thread)
+      const status = statusBadgeForThread(thread, liveWorking)
+      return {
+        id: `start-after:${thread.id}`,
+        title: thread.title,
+        description: stageLabel(thread),
+        category: 'thread',
+        source: {
+          id: `project:${thread.projectId}`,
+          label: 'This project',
+          kind: 'app'
+        },
+        icon: liveWorking ? MessagesSquare : Clock,
+        ...(status ? { status } : {}),
+        keywords: [stageLabel(thread), 'working', 'attention', 'start after'],
+        disabledReason: selectedIds.includes(thread.id) ? 'Already selected' : undefined
+      }
+    })
   )
 
   function selectThread(selection: ActionSelection): void {

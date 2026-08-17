@@ -79,6 +79,7 @@
     DEFAULT_THREAD_TITLE,
     INBOX_PROJECT_ID,
     isOrchestrationChildThread,
+    isThreadWorking,
     type AppConfig,
     type AppConfigPatch,
     type Project,
@@ -92,6 +93,8 @@
     CloseConfirmationPayload,
     ThreadClickedPayload
   } from '$shared/ipc-contract'
+  import { agentRuns } from '$lib/stores/agent-runs.svelte'
+  import { statusBadgeForThread } from '$lib/thread-status-badge'
 
   type View = MainView
 
@@ -913,6 +916,10 @@
       const projectIconUri = project
         ? (getProjectIcon(project, projectIconUrls.get(project.id)) ?? undefined)
         : undefined
+      const isLiveWorking = agentRuns.hasSettled(thread.projectId, thread.id)
+        ? agentRuns.isBusy(thread.projectId, thread.id)
+        : Boolean(thread.sessionId) && isThreadWorking(thread)
+      const status = statusBadgeForThread(thread, isLiveWorking)
       actions.push({
         id,
         title: thread.title,
@@ -927,6 +934,7 @@
           ...(project?.color ? { color: project.color } : {})
         },
         ...(projectIconUri ? { iconUri: projectIconUri } : { icon: MessagesSquare }),
+        ...(status ? { status } : {}),
         keywords: [project?.name ?? thread.projectId, thread.title, ...(snippet ? [snippet] : [])]
       })
     }
