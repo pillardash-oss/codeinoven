@@ -444,7 +444,7 @@ function changedPathsFromTool(
       }
     }
   }
-  for (const key of ['patch', 'diff']) {
+  for (const key of ['patch', 'patchText', 'diff']) {
     if (typeof input[key] === 'string') candidates.push(...patchPaths(input[key]))
   }
   return [
