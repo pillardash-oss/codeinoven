@@ -1715,17 +1715,26 @@ export class OpenCodeDriver implements HarnessDriver {
     sessionId: string,
     settings: ThreadSettings
   ): Promise<void> {
-    const handle = this.turnServers.get(sessionId) ?? (await this.ensureServer(projectPath))
+    // Manual compaction is available only after the turn becomes idle. At that
+    // boundary the per-turn server is being torn down, so reusing it races the
+    // cleanup that follows OpenCode's idle event. Use the stable project server
+    // for maintenance requests instead of sending them to a dying process.
+    const handle = await this.ensureServer(projectPath)
     const res = await fetch(`${handle.baseUrl}/session/${sessionId}/summarize`, {
       method: 'POST',
       headers: this.headersFor(handle, { 'Content-Type': 'application/json' }),
       body: JSON.stringify({
         providerID: settings.providerId,
-        modelID: settings.modelId
+        modelID: settings.modelId,
+        auto: false
       })
     })
     if (!res.ok) {
       throw await errorFromResponse(res, 'Failed to compact session')
+    }
+    const accepted = (await res.json()) as unknown
+    if (accepted !== true) {
+      throw new Error('OpenCode did not accept the manual compaction request')
     }
   }
 
