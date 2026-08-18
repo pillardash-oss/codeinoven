@@ -173,7 +173,7 @@
         align="end"
         sideOffset={6}
         collisionPadding={8}
-        class="z-50 w-44 overflow-hidden rounded-xl border bg-surface p-1 shadow-lg"
+        class="z-60 w-44 overflow-hidden rounded-xl border bg-surface p-1 shadow-lg"
       >
         <DropdownMenu.Item
           class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-sm text-foreground outline-none transition-colors hover:bg-elevated focus:bg-elevated"
