@@ -200,6 +200,25 @@ export async function loadDeviceIdentity(
   return { id, name }
 }
 
+/**
+ * Replace a stale browser identity after the service confirms that its id is
+ * owned by another account. The existing name is preserved; grant keys are
+ * namespaced by device id, so the next load creates fresh non-extractable keys.
+ */
+export async function rotateDeviceIdentity(
+  storage: Storage = globalThis.localStorage
+): Promise<DeviceIdentity> {
+  const id = randomId()
+  let name = defaultDeviceName()
+  try {
+    name = storage.getItem(DEVICE_NAME_KEY) || name
+    storage.setItem(DEVICE_ID_KEY, id)
+  } catch {
+    // An ephemeral identity still lets this claim proceed for the current page.
+  }
+  return { id, name }
+}
+
 /** Persist a local device name override (used when the phone sets its own). */
 export async function persistDeviceName(
   name: string,

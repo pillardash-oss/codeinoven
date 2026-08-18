@@ -1,4 +1,4 @@
-import { loadDeviceIdentity } from './device-identity'
+import { loadDeviceIdentity, rotateDeviceIdentity } from './device-identity'
 
 const DATABASE_NAME = 'codeinoven-remote-keys'
 const STORE_NAME = 'control-keys'
@@ -75,6 +75,16 @@ function grantContext(desktopId: string, mobileDeviceId: string): Uint8Array<Arr
 
 export async function mobileGrantIdentity(): Promise<MobileGrantIdentity> {
   const identity = await loadDeviceIdentity()
+  const keys = await loadOrCreateKeys(identity.id)
+  return {
+    id: identity.id,
+    name: identity.name,
+    publicKey: await crypto.subtle.exportKey('jwk', keys.publicKey)
+  }
+}
+
+export async function rotateMobileGrantIdentity(): Promise<MobileGrantIdentity> {
+  const identity = await rotateDeviceIdentity()
   const keys = await loadOrCreateKeys(identity.id)
   return {
     id: identity.id,

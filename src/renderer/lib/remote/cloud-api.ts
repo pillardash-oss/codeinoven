@@ -1,4 +1,9 @@
-import { decryptDesktopGrant, mobileGrantIdentity } from './mobile-control-key'
+import {
+  decryptDesktopGrant,
+  mobileGrantIdentity,
+  rotateMobileGrantIdentity,
+  type MobileGrantIdentity
+} from './mobile-control-key'
 
 export interface CloudUser {
   id: string
@@ -77,8 +82,10 @@ export async function listCloudDesktops(): Promise<CloudDesktop[]> {
   return response.desktops
 }
 
-export async function claimCloudDesktop(code: string): Promise<string> {
-  const identity = await mobileGrantIdentity()
+async function claimCloudDesktopWithIdentity(
+  code: string,
+  identity: MobileGrantIdentity
+): Promise<string> {
   const response = await apiRequest<{ desktopId: string }>('/v1/device-enrollments/claim', {
     method: 'POST',
     body: JSON.stringify({
@@ -89,6 +96,15 @@ export async function claimCloudDesktop(code: string): Promise<string> {
     })
   })
   return response.desktopId
+}
+
+export async function claimCloudDesktop(code: string): Promise<string> {
+  try {
+    return await claimCloudDesktopWithIdentity(code, await mobileGrantIdentity())
+  } catch (error) {
+    if (!(error instanceof CloudApiError) || error.code !== 'mobile-device-mismatch') throw error
+    return claimCloudDesktopWithIdentity(code, await rotateMobileGrantIdentity())
+  }
 }
 
 export async function cloudDesktopConnection(desktopId: string): Promise<CloudDesktopConnection> {
