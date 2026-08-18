@@ -3168,6 +3168,15 @@ export function registerIpcHandlers(
         requireString(name, 'File name')
       )
   )
+  ipcMain.handle(
+    'projectFiles:createDirectory',
+    (_, projectId: unknown, relativeDirectory: unknown, name: unknown) =>
+      projectFilesService.createDirectory(
+        validateEntityId(projectId, 'Project ID'),
+        requireString(relativeDirectory, 'Project directory', true),
+        requireString(name, 'Folder name')
+      )
+  )
   ipcMain.handle('projectFiles:delete', async (_, projectId: unknown, relativePath: unknown) => {
     const validatedProjectId = validateEntityId(projectId, 'Project ID')
     const target = await projectFilesService.resolveForTrash(

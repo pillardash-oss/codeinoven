@@ -268,6 +268,20 @@ export class ProjectFilesService {
     })
   }
 
+  async createDirectory(
+    projectId: string,
+    relativeDirectory: string,
+    name: string
+  ): Promise<ProjectFileEntry> {
+    return this.runMutationExclusive(async () => {
+      const root = await this.projectRoot(projectId)
+      const target = await this.resolveNewPath(root, relativeDirectory, name)
+      await mkdir(target.absolutePath)
+      this.invalidateProject(projectId)
+      return { name, path: target.relativePath, kind: 'directory' }
+    })
+  }
+
   async renameEntry(
     projectId: string,
     relativePath: string,

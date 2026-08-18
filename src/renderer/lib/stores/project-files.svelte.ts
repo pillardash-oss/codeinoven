@@ -307,6 +307,13 @@ class ProjectFilesWorkspace {
     await this.openFile(projectId, entry.path)
   }
 
+  async createDirectory(projectId: string, directory: string, name: string): Promise<void> {
+    await this.runFileOperation(() =>
+      invoke('projectFiles:createDirectory', projectId, directory, name)
+    )
+    await this.loadDirectory(projectId, directory, true)
+  }
+
   async renameFile(projectId: string, path: string, name: string): Promise<void> {
     const state = this.ensureState(projectId)
     const next = await this.runFileOperation(() =>

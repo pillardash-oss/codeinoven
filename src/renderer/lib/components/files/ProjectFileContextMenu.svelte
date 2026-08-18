@@ -1,7 +1,16 @@
 <script lang="ts">
   import type { Snippet } from 'svelte'
   import { ContextMenu } from 'bits-ui'
-  import { ClipboardPaste, Copy, FilePlus2, Info, Pencil, Scissors, Trash2 } from '@lucide/svelte'
+  import {
+    ClipboardPaste,
+    Copy,
+    FilePlus2,
+    FolderPlus,
+    Info,
+    Pencil,
+    Scissors,
+    Trash2
+  } from '@lucide/svelte'
   import type { ProjectFileEntry } from '$shared/types'
 
   interface Props {
@@ -10,6 +19,7 @@
     canPaste: boolean
     children: Snippet
     onCreateFile: () => void
+    onCreateFolder: () => void
     onCopy: () => void
     onCopyPath: () => void
     onCut: () => void
@@ -25,6 +35,7 @@
     canPaste,
     children,
     onCreateFile,
+    onCreateFolder,
     onCopy,
     onCopyPath,
     onCut,
@@ -60,6 +71,10 @@
         <ContextMenu.Item class={itemClass} onSelect={onCreateFile}>
           <FilePlus2 size={13} class="text-muted" />
           New file
+        </ContextMenu.Item>
+        <ContextMenu.Item class={itemClass} onSelect={onCreateFolder}>
+          <FolderPlus size={13} class="text-muted" />
+          New folder
         </ContextMenu.Item>
       {/if}
 

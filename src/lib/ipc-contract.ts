@@ -1148,6 +1148,10 @@ export interface IpcInvokeContract {
     [projectId: string, relativeDirectory: string, name: string],
     ProjectFileEntry
   >
+  'projectFiles:createDirectory': Contract<
+    [projectId: string, relativeDirectory: string, name: string],
+    ProjectFileEntry
+  >
   'projectFiles:delete': Contract<[projectId: string, relativePath: string], void>
   'projectFiles:info': Contract<[projectId: string, relativePath: string], ProjectFileInfo>
   'projectFiles:openInEditor': Contract<[projectId: string, relativePath: string], void>

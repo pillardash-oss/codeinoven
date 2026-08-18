@@ -101,6 +101,7 @@
   let lastAppliedCheckpointId = $state<string | null>(null)
   let inlineEdit = $state<
     | { kind: 'create'; directory: string; value: string }
+    | { kind: 'create-directory'; directory: string; value: string }
     | { kind: 'rename'; entry: ProjectFileEntry; value: string }
     | null
   >(null)
@@ -133,7 +134,10 @@
   let treeRows = $derived.by((): TreeRow[] => {
     const rows: TreeRow[] = []
     const walk = (directory: string, depth: number): void => {
-      if (inlineEdit?.kind === 'create' && inlineEdit.directory === directory) {
+      if (
+        (inlineEdit?.kind === 'create' || inlineEdit?.kind === 'create-directory') &&
+        inlineEdit.directory === directory
+      ) {
         rows.push({
           kind: 'create',
           key: `create:${directory}`,
@@ -699,6 +703,18 @@
     inlineInput?.select()
   }
 
+  async function startCreateFolder(directory: string): Promise<void> {
+    if (directory) {
+      projectFilesWorkspace.markDirectoryExpanded(projectId, directory)
+      await projectFilesWorkspace.loadDirectory(projectId, directory)
+    }
+    inlineEdit = { kind: 'create-directory', directory, value: '' }
+    await tick()
+    scrollTreeKeyIntoView(`create:${directory}`)
+    await tick()
+    inlineInput?.focus()
+  }
+
   async function startRename(entry: ProjectFileEntry): Promise<void> {
     inlineEdit = { kind: 'rename', entry, value: entry.name }
     await tick()
@@ -722,6 +738,8 @@
     try {
       if (edit.kind === 'create') {
         await projectFilesWorkspace.createFile(projectId, edit.directory, name)
+      } else if (edit.kind === 'create-directory') {
+        await projectFilesWorkspace.createDirectory(projectId, edit.directory, name)
       } else {
         await projectFilesWorkspace.renameFile(projectId, edit.entry.path, name)
       }
@@ -1143,6 +1161,24 @@
       />
     </div>
   {/if}
+  {#if inlineEdit?.kind === 'create-directory' && inlineEdit.directory === row.directory}
+    <div
+      class="flex h-7 items-center gap-1.5 pr-2 text-[11px] text-foreground"
+      style:padding-left={`${22 + row.depth * 14}px`}
+    >
+      <FolderTypeIcon name={inlineEdit.value} size={13} />
+      <input
+        bind:this={inlineInput}
+        bind:value={inlineEdit.value}
+        class="h-6 min-w-0 flex-1 rounded border border-primary bg-app px-1.5 text-[11px] text-foreground outline-none"
+        aria-label="New folder name"
+        placeholder="folder-name"
+        disabled={operationPending}
+        onkeydown={handleInlineKeydown}
+        onblur={() => void commitInlineEdit()}
+      />
+    </div>
+  {/if}
 {/snippet}
 
 {#snippet errorTreeRow(row: ErrorTreeRow)}
@@ -1168,6 +1204,8 @@
     selectedPaths={projectState.selectedPaths}
     canPaste={canPaste()}
     onCreateFile={() => void startCreate(entry.path)}
+    onCreateFolder={() =>
+      void startCreateFolder(entry.kind === 'directory' ? entry.path : parentDirectory(entry.path))}
     onCopy={() => void copyForPaste(selectionPathsFor(entry), 'copy')}
     onCopyPath={() => void copyPaths(selectionPathsFor(entry))}
     onCut={() => void copyForPaste(selectionPathsFor(entry), 'move')}
@@ -1388,6 +1426,7 @@
     selectedPaths={projectState.selectedPaths}
     canPaste={canPaste()}
     onCreateFile={() => void startCreate('')}
+    onCreateFolder={() => void startCreateFolder('')}
     onCopy={() => undefined}
     onCopyPath={() => undefined}
     onCut={() => undefined}
