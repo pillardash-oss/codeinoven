@@ -111,6 +111,8 @@ export interface CliTurnCommand {
   loadTrailingRecords?: () => Promise<unknown[]>
   /** Keep the logical turn paused when trailing records surfaced a blocking interaction. */
   suppressIdle?: () => boolean
+  /** Treat a provider-specific, deliberately requested process stop as a successful exit. */
+  isExpectedExit?: (code: number | null, signal: NodeJS.Signals | null) => boolean
   /** Called when spawning fails or the child exits. Must be safe to call more than once. */
   onProcessExit?: () => void
 }
@@ -452,7 +454,7 @@ export abstract class PersistentCliDriver implements HarnessDriver {
       if (stdoutBuffer.trim())
         this.consumeJsonLine(stdoutBuffer.trim(), session, projectPath, invocation)
       const failure =
-        code === 0 || signal === 'SIGTERM'
+        code === 0 || signal === 'SIGTERM' || invocation.isExpectedExit?.(code, signal)
           ? undefined
           : `Harness process exited with code ${code ?? 'unknown'}${
               stderrBuffer.trim() ? `: ${stderrBuffer.trim()}` : ''

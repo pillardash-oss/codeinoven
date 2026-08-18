@@ -392,6 +392,8 @@ interface MuseTurnState {
   promotedInteractions: Set<string>
   /** Tool tasks synchronously stopped before Muse could execute them. */
   gatedTaskIds: Set<string>
+  /** Muse converts CodeInOven's deliberate SIGTERM into numeric exit code 143. */
+  expectsProcessStop: boolean
 }
 
 function museMessage(state: MuseTurnState): AgentMessage {
@@ -952,7 +954,8 @@ export class MuseDriver extends PersistentCliDriver {
       toolByCall: new Map(),
       needsExport: false,
       promotedInteractions: new Set(),
-      gatedTaskIds: new Set()
+      gatedTaskIds: new Set(),
+      expectsProcessStop: false
     }
     this.turnStates.set(session.id, turnState)
     this.continuationOptions.set(session.id, { ...options, text: '', attachments: [] })
@@ -977,6 +980,7 @@ export class MuseDriver extends PersistentCliDriver {
         }
         turnState.gatedTaskIds.add(taskId)
         turnState.needsExport = true
+        turnState.expectsProcessStop = true
         this.stopActiveProcess(session.id)
       },
       loadTrailingRecords: async () => {
@@ -985,6 +989,7 @@ export class MuseDriver extends PersistentCliDriver {
         return readMuseTrailingRecords(session.nativeSessionId, state.runId)
       },
       suppressIdle: () => turnState.promotedInteractions.size > 0,
+      isExpectedExit: () => turnState.expectsProcessStop,
       onProcessExit: () => this.approvedToolAllowances.delete(session.id)
     }
   }
