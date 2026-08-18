@@ -26,6 +26,7 @@
   } from '$lib/remote/cloud-auth'
   import {
     claimCloudDesktop,
+    CloudApiError,
     cloudDesktopConnection,
     listCloudDesktops,
     renameCloudDesktop,
@@ -42,6 +43,8 @@
 
   const PENDING_ENROLLMENT_CODE_KEY = 'codeinoven:pending-remote-enrollment'
   const DESKTOP_STATUS_REFRESH_MAX_DELAY_MS = 15_000
+  const DESKTOP_APPROVAL_TIMEOUT_MS = 60_000
+  const DESKTOP_CONNECTION_TIMEOUT_MS = 60_000
 
   interface Props {
     onOpenWorkspace: () => void
@@ -133,6 +136,7 @@
   let automaticSignInStarted = false
   let automaticDesktopRestoreStarted = false
   let desktopStatusRefreshTimer: ReturnType<typeof setTimeout> | null = null
+  let connectionAbortController: AbortController | null = null
   let sessionConnected = $derived(
     remoteSession.snapshot.route.kind === 'LAN_CONNECTED' ||
       remoteSession.snapshot.route.kind === 'RELAY_CONNECTED'
@@ -161,6 +165,10 @@
         'That desktop belongs to another account. Sign in with the same account as the desktop.',
       'device-not-approved':
         'This PWA installation is not approved for that desktop. Add it again with a new code.',
+      'desktop-approval-timeout':
+        'The desktop did not approve this phone within one minute. Keep the desktop open and create a new pairing code.',
+      'desktop-connection-timeout':
+        'The desktop approved this phone, but the secure connection did not finish within one minute. Try opening it again.',
       'rate-limited': 'Too many attempts. Wait a minute and try again.',
       unauthorized: 'Your session expired. Sign in again.',
       'request-failed': 'The remote service is unavailable.'
@@ -302,6 +310,7 @@
 
   async function claimDesktopCode(): Promise<void> {
     if (busy) return
+    let claimedDesktopId: string | null = null
     const formattedCode = normalizeEnrollmentCode(claimCode)
     claimCode = formattedCode
     if (formattedCode.replaceAll('-', '').length !== 16) {
@@ -312,6 +321,7 @@
     claimError = ''
     try {
       const desktopId = await claimCloudDesktop(formattedCode)
+      claimedDesktopId = desktopId
       connectingDesktopId = desktopId
       savePreferredDesktop(desktopId)
       claimCode = ''
@@ -322,12 +332,12 @@
       } catch (error) {
         errorMessage = readableError(error)
       }
-      watchDesktopStatus(desktopId, true)
     } catch (error) {
       claimError = readableError(error)
     } finally {
       busy = false
     }
+    if (claimedDesktopId) void connectDesktop(claimedDesktopId)
   }
 
   function enrollmentCodeFromQr(value: string): string | null {
@@ -362,6 +372,77 @@
     void claimDesktopCode()
   }
 
+  function waitForRetry(delayMs: number, signal: AbortSignal): Promise<void> {
+    return new Promise<void>((resolve, reject) => {
+      if (signal.aborted) {
+        reject(signal.reason)
+        return
+      }
+      const timer = window.setTimeout(() => {
+        signal.removeEventListener('abort', abort)
+        resolve()
+      }, delayMs)
+      const abort = (): void => {
+        window.clearTimeout(timer)
+        reject(signal.reason)
+      }
+      signal.addEventListener('abort', abort, { once: true })
+    })
+  }
+
+  async function waitForDesktopApproval(
+    desktopId: string,
+    signal: AbortSignal
+  ): Promise<Awaited<ReturnType<typeof cloudDesktopConnection>>> {
+    const deadline = Date.now() + DESKTOP_APPROVAL_TIMEOUT_MS
+    let attempt = 0
+    while (!signal.aborted) {
+      try {
+        return await cloudDesktopConnection(desktopId)
+      } catch (error) {
+        if (!(error instanceof CloudApiError) || error.code !== 'device-not-approved') throw error
+        const remaining = deadline - Date.now()
+        if (remaining <= 0) throw new Error('desktop-approval-timeout', { cause: error })
+        const retryDelay = Math.min(750 * 2 ** Math.min(attempt, 2), 3_000, remaining)
+        attempt += 1
+        await waitForRetry(retryDelay, signal)
+      }
+    }
+    throw signal.reason
+  }
+
+  function waitForSessionConnection(signal: AbortSignal): Promise<void> {
+    const route = remoteSession.snapshot.route
+    if (route.kind === 'RELAY_CONNECTED' || route.kind === 'LAN_CONNECTED') {
+      return Promise.resolve()
+    }
+    return new Promise<void>((resolve, reject) => {
+      const cleanup = (): void => {
+        window.clearTimeout(timer)
+        stopListening()
+        signal.removeEventListener('abort', abort)
+      }
+      const finish = (): void => {
+        cleanup()
+        resolve()
+      }
+      const abort = (): void => {
+        cleanup()
+        reject(signal.reason)
+      }
+      const stopListening = remoteSession.onStateChange((snapshot) => {
+        if (snapshot.route.kind === 'RELAY_CONNECTED' || snapshot.route.kind === 'LAN_CONNECTED') {
+          finish()
+        }
+      })
+      const timer = window.setTimeout(() => {
+        cleanup()
+        reject(new Error('desktop-connection-timeout'))
+      }, DESKTOP_CONNECTION_TIMEOUT_MS)
+      signal.addEventListener('abort', abort, { once: true })
+    })
+  }
+
   async function connectDesktop(desktopId: string): Promise<void> {
     if (busy) return
     if (connectedDesktopId === desktopId && sessionConnected) {
@@ -371,10 +452,13 @@
     busy = true
     connectedDesktopId = null
     connectingDesktopId = desktopId
+    connectionAbortController?.abort()
+    const controller = new AbortController()
+    connectionAbortController = controller
     savePreferredDesktop(desktopId)
     errorMessage = ''
     try {
-      const connection = await cloudDesktopConnection(desktopId)
+      const connection = await waitForDesktopApproval(desktopId, controller.signal)
       let lanTarget
       if (connection.lanEndpoint) {
         const lanUrl = new URL(connection.lanEndpoint)
@@ -391,24 +475,20 @@
         relayPath: connection.relayPath,
         lanTarget
       })
-      const route = remoteSession.snapshot.route
-      if (route.kind !== 'RELAY_CONNECTED' && route.kind !== 'LAN_CONNECTED') {
-        if (route.kind === 'DISCONNECTED' && route.reason === 'desktop-offline') {
-          watchDesktopStatus(desktopId, false)
-        } else {
-          connectingDesktopId = null
-          errorMessage = 'The desktop relay could not be reached.'
-        }
-      } else {
-        connectedDesktopId = desktopId
-        stopDesktopStatusRefresh(false)
-        connectingDesktopId = null
-      }
+      await waitForSessionConnection(controller.signal)
+      connectedDesktopId = desktopId
+      stopDesktopStatusRefresh(false)
+      connectingDesktopId = null
     } catch (error) {
+      if (controller.signal.aborted) return
+      remoteSession.disconnect()
       connectingDesktopId = null
       errorMessage = readableError(error)
     } finally {
-      busy = false
+      if (connectionAbortController === controller) {
+        connectionAbortController = null
+        busy = false
+      }
     }
   }
 
@@ -466,6 +546,7 @@
     if (interactionsLocked) return
     busy = true
     try {
+      connectionAbortController?.abort()
       remoteSession.disconnect()
       clearPreferredDesktop()
       await logoutCloudAccount()
@@ -489,6 +570,7 @@
     })
     void restoreSession()
     return () => {
+      connectionAbortController?.abort()
       stopSessionListener()
       stopDesktopStatusRefresh()
     }

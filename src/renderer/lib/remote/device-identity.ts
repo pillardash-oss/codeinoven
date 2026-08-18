@@ -29,6 +29,9 @@ export interface DeviceIdentity {
   name: string
 }
 
+/** Stable fallback for browsers that deny localStorage for the current page. */
+let volatileIdentity: DeviceIdentity | null = null
+
 /**
  * Per-device proof-of-possession key material (A-04). The private signing and
  * agreement `CryptoKey` objects are non-exportable and never transmitted.
@@ -179,10 +182,11 @@ export async function loadDeviceIdentity(
     id = storage.getItem(DEVICE_ID_KEY) ?? ''
     name = storage.getItem(DEVICE_NAME_KEY) ?? ''
   } catch {
-    // storage unavailable — fall through to a fresh ephemeral identity
+    // Storage unavailable — fall through to the page-lifetime identity.
   }
+  const fallback = id ? null : volatileIdentity
   if (!id) {
-    id = randomId()
+    id = fallback?.id ?? randomId()
     try {
       storage.setItem(DEVICE_ID_KEY, id)
     } catch {
@@ -190,14 +194,15 @@ export async function loadDeviceIdentity(
     }
   }
   if (!name) {
-    name = defaultDeviceName()
+    name = fallback?.name ?? defaultDeviceName()
     try {
       storage.setItem(DEVICE_NAME_KEY, name)
     } catch {
       // ephemeral name is fine if storage cannot persist
     }
   }
-  return { id, name }
+  volatileIdentity = { id, name }
+  return volatileIdentity
 }
 
 /**
@@ -209,14 +214,15 @@ export async function rotateDeviceIdentity(
   storage: Storage = globalThis.localStorage
 ): Promise<DeviceIdentity> {
   const id = randomId()
-  let name = defaultDeviceName()
+  let name = volatileIdentity?.name ?? defaultDeviceName()
   try {
     name = storage.getItem(DEVICE_NAME_KEY) || name
     storage.setItem(DEVICE_ID_KEY, id)
   } catch {
     // An ephemeral identity still lets this claim proceed for the current page.
   }
-  return { id, name }
+  volatileIdentity = { id, name }
+  return volatileIdentity
 }
 
 /** Persist a local device name override (used when the phone sets its own). */
