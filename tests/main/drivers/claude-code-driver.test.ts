@@ -499,7 +499,7 @@ describe('ClaudeCodeDriver', () => {
     child.emit('exit', 0, null)
   })
 
-  it('surfaces an AskUserQuestion tool immediately and upgrades its native reply transport', async () => {
+  it('waits for complete AskUserQuestion input and upgrades its native reply transport', async () => {
     const child = new FakeChild()
     spawnMock.mockReturnValue(child as unknown as ChildProcess)
     const driver = new ClaudeCodeDriver(await storage())
@@ -519,6 +519,34 @@ describe('ClaudeCodeDriver', () => {
         engineeringMode: false
       }
     })
+    child.stdout.emit(
+      'data',
+      Buffer.from(
+        `${JSON.stringify({
+          type: 'stream_event',
+          session_id: 'native-1',
+          event: {
+            type: 'message_start',
+            message: { id: 'assistant-1', content: [] }
+          }
+        })}\n${JSON.stringify({
+          type: 'stream_event',
+          session_id: 'native-1',
+          event: {
+            type: 'content_block_start',
+            index: 0,
+            content_block: {
+              type: 'tool_use',
+              id: 'tool-question-1',
+              name: 'AskUserQuestion',
+              input: {}
+            }
+          }
+        })}\n`
+      )
+    )
+    expect(events.some((event) => event.type === 'question.asked')).toBe(false)
+
     child.stdout.emit(
       'data',
       Buffer.from(

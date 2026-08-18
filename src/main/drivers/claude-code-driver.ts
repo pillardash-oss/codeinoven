@@ -1006,6 +1006,13 @@ export function mapClaudeCodeRecord(
     const current = latestAssistant(context)
     if (eventType === 'content_block_start' && current) {
       const block = record(event?.['content_block'])
+      // Claude streams tool blocks before their JSON input. Promoting an empty
+      // AskUserQuestion block creates a fallback question that races the
+      // completed assistant record and native can_use_tool request. Wait for
+      // either complete record, both of which carry the real question input.
+      if (block?.['type'] === 'tool_use' && string(block['name']) === 'AskUserQuestion') {
+        return nativeSessionId ? { nativeSessionId } : null
+      }
       const index = number(event?.['index']) ?? current.parts.length
       const part = block ? partFromBlock(current.id, block, index) : null
       return part
