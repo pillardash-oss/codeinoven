@@ -304,14 +304,6 @@ export class RemoteControlDatabase {
     )
   }
 
-  rotateDesktopProfileToken(id: string, hash: string): boolean {
-    return (
-      this.db
-        .prepare('UPDATE desktops SET profile_token_hash = ? WHERE id = ? AND revoked_at IS NULL')
-        .run(hash, id).changes === 1
-    )
-  }
-
   listDesktops(userId: string): DesktopRecord[] {
     return this.db
       .prepare(
@@ -349,11 +341,29 @@ export class RemoteControlDatabase {
     return desktop
   }
 
-  deleteEnrollmentForDesktop(desktopId: string): void {
-    this.db.prepare('DELETE FROM enrollments WHERE desktop_id = ?').run(desktopId)
+  createEnrollment(enrollment: EnrollmentRecord, createdAt: number): void {
+    this.insertEnrollment(enrollment, createdAt)
   }
 
-  createEnrollment(enrollment: EnrollmentRecord, createdAt: number): void {
+  replaceDesktopEnrollment(input: {
+    desktopId: string
+    profileTokenHash: string
+    enrollment: EnrollmentRecord
+    createdAt: number
+  }): boolean {
+    const replace = this.db.transaction((replaceInput: typeof input) => {
+      const rotated = this.db
+        .prepare('UPDATE desktops SET profile_token_hash = ? WHERE id = ? AND revoked_at IS NULL')
+        .run(replaceInput.profileTokenHash, replaceInput.desktopId)
+      if (rotated.changes !== 1) return false
+      this.db.prepare('DELETE FROM enrollments WHERE desktop_id = ?').run(replaceInput.desktopId)
+      this.insertEnrollment(replaceInput.enrollment, replaceInput.createdAt)
+      return true
+    })
+    return replace.immediate(input)
+  }
+
+  private insertEnrollment(enrollment: EnrollmentRecord, createdAt: number): void {
     this.db
       .prepare(
         `INSERT INTO enrollments(

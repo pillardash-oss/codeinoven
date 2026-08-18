@@ -11,12 +11,7 @@ import {
   remotePublicOrigin,
   trustRemoteProxy
 } from './runtime-config'
-import type {
-  AuthenticatedSession,
-  DesktopRecord,
-  EnrollmentRecord,
-  RelaySocketData
-} from './types'
+import type { AuthenticatedSession, EnrollmentRecord, RelaySocketData } from './types'
 
 const ENROLLMENT_TTL_MS = 10 * 60 * 1_000
 const MAX_JSON_BYTES = 16 * 1_024
@@ -279,13 +274,9 @@ async function handleEnrollmentRequestInner(request: Request): Promise<Response>
   const desktopId = existing?.id ?? crypto.randomUUID()
   const deviceToken = existing ? null : randomToken()
   const profileToken = accountUserId && presentedToken ? presentedToken : randomToken()
+  const desktopProfileTokenHash = tokenHash(accountUserId ? randomToken() : profileToken)
   const now = Date.now()
-  if (existing) {
-    database.deleteEnrollmentForDesktop(existing.id)
-    if (!database.rotateDesktopProfileToken(existing.id, tokenHash(profileToken))) {
-      return json({ error: 'unauthorized' }, 401)
-    }
-  } else if (deviceToken) {
+  if (!existing && deviceToken) {
     database.createDesktop({
       id: desktopId,
       user_id: accountUserId,
@@ -293,7 +284,7 @@ async function handleEnrollmentRequestInner(request: Request): Promise<Response>
       platform,
       lan_endpoint: lanEndpoint,
       token_hash: tokenHash(deviceToken),
-      profile_token_hash: tokenHash(accountUserId ? randomToken() : profileToken),
+      profile_token_hash: desktopProfileTokenHash,
       control_secret_cipher: '',
       created_at: now,
       last_seen_at: null,
@@ -313,7 +304,20 @@ async function handleEnrollmentRequestInner(request: Request): Promise<Response>
     grant_ciphertext: null,
     desktop_public_key: null
   }
-  database.createEnrollment(enrollment, now)
+  if (existing) {
+    if (
+      !database.replaceDesktopEnrollment({
+        desktopId: existing.id,
+        profileTokenHash: desktopProfileTokenHash,
+        enrollment,
+        createdAt: now
+      })
+    ) {
+      return json({ error: 'unauthorized' }, 401)
+    }
+  } else {
+    database.createEnrollment(enrollment, now)
+  }
   database.audit('desktop.enrollment-created', existing?.user_id ?? accountUserId, desktopId)
   return json(
     {
