@@ -31,11 +31,56 @@
     xl: 'max-w-5xl'
   } as const
 
-  // Let the Cmd/Ctrl+W "close the active surface" shortcut close this modal.
-  $effect(() => {
-    if (!open) return
-    return registerOverlayClose(onClose)
-  })
+  const INPUT_FIELD_SELECTOR = [
+    'input:not([type="hidden"]):not([disabled]):not([readonly])',
+    'textarea:not([disabled]):not([readonly])',
+    'select:not([disabled])',
+    '[contenteditable="true"]:not([aria-disabled="true"])'
+  ].join(',')
+
+  const PRIMARY_ACTION_SELECTOR =
+    'button.bg-primary:not([disabled]), button.bg-danger:not([disabled])'
+
+  function isFocusableTarget(element: HTMLElement): boolean {
+    return (
+      element.getAttribute('aria-disabled') !== 'true' &&
+      !element.closest('[hidden], [inert], [aria-hidden="true"]') &&
+      element.checkVisibility()
+    )
+  }
+
+  function firstFocusable(panel: HTMLElement, selector: string): HTMLElement | undefined {
+    return Array.from(panel.querySelectorAll<HTMLElement>(selector)).find(isFocusableTarget)
+  }
+
+  function primaryAction(panel: HTMLElement): HTMLElement | undefined {
+    const footerActions = Array.from(
+      panel.querySelectorAll<HTMLElement>('[data-modal-footer] button:not([disabled])')
+    ).filter(isFocusableTarget)
+
+    return (
+      firstFocusable(panel, '[data-modal-primary]:not([disabled])') ??
+      firstFocusable(panel, '[data-modal-footer] button[type="submit"]:not([disabled])') ??
+      firstFocusable(panel, `[data-modal-footer] :is(${PRIMARY_ACTION_SELECTOR})`) ??
+      footerActions.at(-1) ??
+      firstFocusable(panel, PRIMARY_ACTION_SELECTOR)
+    )
+  }
+
+  function setupModal(panel: HTMLElement): () => void {
+    const unregisterOverlayClose = registerOverlayClose(() => onClose())
+    const animationFrame = requestAnimationFrame(() => {
+      const inputField = firstFocusable(panel, INPUT_FIELD_SELECTOR)
+      const defaultAction = primaryAction(panel)
+
+      ;(inputField ?? defaultAction)?.focus({ preventScroll: true })
+    })
+
+    return () => {
+      cancelAnimationFrame(animationFrame)
+      unregisterOverlayClose()
+    }
+  }
 </script>
 
 <svelte:window
@@ -63,6 +108,7 @@
         class="relative mx-6 flex max-h-[calc(100vh-3rem)] w-full flex-col overflow-hidden rounded-2xl border bg-surface shadow-xl {widths[
           size
         ]}"
+        {@attach setupModal}
       >
         <div class="flex shrink-0 items-center justify-between border-b px-6 py-4">
           <h2 class="text-base font-semibold">{title}</h2>
@@ -81,7 +127,10 @@
         </div>
 
         {#if footer}
-          <div class="flex shrink-0 items-center justify-end gap-2 border-t bg-surface px-6 py-4">
+          <div
+            class="flex shrink-0 items-center justify-end gap-2 border-t bg-surface px-6 py-4"
+            data-modal-footer
+          >
             {@render footer()}
           </div>
         {/if}
