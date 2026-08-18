@@ -414,36 +414,32 @@
     throw signal.reason
   }
 
-  function waitForSessionConnection(signal: AbortSignal): Promise<void> {
+  function sessionIsConnected(): boolean {
     const route = remoteSession.snapshot.route
-    if (route.kind === 'RELAY_CONNECTED' || route.kind === 'LAN_CONNECTED') {
-      return Promise.resolve()
+    return route.kind === 'RELAY_CONNECTED' || route.kind === 'LAN_CONNECTED'
+  }
+
+  async function connectSessionUntilReady(
+    route: Parameters<typeof remoteSession.connectAccountDesktop>[0],
+    signal: AbortSignal
+  ): Promise<void> {
+    const deadline = Date.now() + DESKTOP_CONNECTION_TIMEOUT_MS
+    let attempt = 0
+    while (!signal.aborted) {
+      if (sessionIsConnected()) return
+      await remoteSession.connectAccountDesktop(route)
+      if (sessionIsConnected()) return
+
+      const remaining = deadline - Date.now()
+      if (remaining <= 0) throw new Error('desktop-connection-timeout')
+      // Grant upload deliberately restarts the desktop relay. A phone can reach
+      // the relay during that short offline window; retry the complete session
+      // instead of leaving the first failed socket to time out passively.
+      const retryDelay = Math.min(750 * 2 ** Math.min(attempt, 2), 3_000, remaining)
+      attempt += 1
+      await waitForRetry(retryDelay, signal)
     }
-    return new Promise<void>((resolve, reject) => {
-      const cleanup = (): void => {
-        window.clearTimeout(timer)
-        stopListening()
-        signal.removeEventListener('abort', abort)
-      }
-      const finish = (): void => {
-        cleanup()
-        resolve()
-      }
-      const abort = (): void => {
-        cleanup()
-        reject(signal.reason)
-      }
-      const stopListening = remoteSession.onStateChange((snapshot) => {
-        if (snapshot.route.kind === 'RELAY_CONNECTED' || snapshot.route.kind === 'LAN_CONNECTED') {
-          finish()
-        }
-      })
-      const timer = window.setTimeout(() => {
-        cleanup()
-        reject(new Error('desktop-connection-timeout'))
-      }, DESKTOP_CONNECTION_TIMEOUT_MS)
-      signal.addEventListener('abort', abort, { once: true })
-    })
+    throw signal.reason
   }
 
   async function connectDesktop(desktopId: string, claimedMobileDeviceId?: string): Promise<void> {
@@ -475,14 +471,16 @@
           scheme: 'wss' as const
         }
       }
-      await remoteSession.connectAccountDesktop({
-        desktopId,
-        mobileDeviceId: connection.mobileDeviceId,
-        controlSecret: connection.controlSecret,
-        relayPath: connection.relayPath,
-        lanTarget
-      })
-      await waitForSessionConnection(controller.signal)
+      await connectSessionUntilReady(
+        {
+          desktopId,
+          mobileDeviceId: connection.mobileDeviceId,
+          controlSecret: connection.controlSecret,
+          relayPath: connection.relayPath,
+          lanTarget
+        },
+        controller.signal
+      )
       connectedDesktopId = desktopId
       stopDesktopStatusRefresh(false)
       connectingDesktopId = null
