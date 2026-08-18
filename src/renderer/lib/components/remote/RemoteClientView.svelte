@@ -27,6 +27,33 @@
   const pairedDevices = $derived(
     remoteStatus?.devices.filter((device) => device.revokedAt === null) ?? []
   )
+  const cloudConnectionNotice = $derived.by(() => {
+    const cloud = remoteStatus?.cloud
+    if (!cloud?.desktopId || cloud.state === 'enrollment-pending') return null
+    if (cloud.state === 'connecting') {
+      return {
+        tone: 'connecting' as const,
+        title: 'Connecting to the cloud relay',
+        detail: 'Your phone approved this desktop. CodeInOven is finishing the secure connection.'
+      }
+    }
+    if (cloud.state === 'online') {
+      return {
+        tone: 'online' as const,
+        title: 'Cloud relay connected',
+        detail: 'This desktop is online and ready for remote connections.'
+      }
+    }
+    return {
+      tone: 'offline' as const,
+      title: cloud.state === 'disabled' ? 'Remote access is paused' : 'Cloud relay is offline',
+      detail:
+        cloud.lastError ??
+        (cloud.state === 'disabled'
+          ? 'Enable Remote mode to bring this desktop online.'
+          : 'CodeInOven is trying to reconnect automatically.')
+    }
+  })
   const accountInitials = $derived.by(() => {
     const source = accountProfile?.displayName || accountProfile?.email || ''
     return source
@@ -399,6 +426,31 @@
           </p>
         {/if}
       {:else}
+        {#if cloudConnectionNotice}
+          <div
+            class={cloudConnectionNotice.tone === 'online'
+              ? 'mt-4 flex items-start gap-2 rounded-lg border border-success/20 bg-success/5 p-3'
+              : cloudConnectionNotice.tone === 'connecting'
+                ? 'mt-4 flex items-start gap-2 rounded-lg border border-primary/20 bg-primary/5 p-3'
+                : 'mt-4 flex items-start gap-2 rounded-lg border border-danger/20 bg-danger/5 p-3'}
+            role="status"
+          >
+            {#if cloudConnectionNotice.tone === 'connecting'}
+              <RefreshCw size={14} class="mt-0.5 shrink-0 animate-spin text-primary" />
+            {:else if cloudConnectionNotice.tone === 'online'}
+              <CheckCircle2 size={14} class="mt-0.5 shrink-0 text-success" />
+            {:else}
+              <Globe2 size={14} class="mt-0.5 shrink-0 text-danger" />
+            {/if}
+            <div>
+              <p class="text-xs font-semibold text-foreground">{cloudConnectionNotice.title}</p>
+              <p class="mt-1 text-xs leading-relaxed text-muted">
+                {cloudConnectionNotice.detail}
+              </p>
+            </div>
+          </div>
+        {/if}
+
         <div class="mt-4 border-y py-4">
           <h3 class="text-sm font-semibold text-foreground">Open the mobile app</h3>
           <p class="mt-1 text-xs leading-relaxed text-muted">

@@ -23,6 +23,7 @@
   import { remoteSession } from '$lib/remote/session-store.svelte'
 
   const PENDING_ENROLLMENT_CODE_KEY = 'codeinoven:pending-remote-enrollment'
+  const CLAIM_STATUS_REFRESH_DELAYS_MS = [1_000, 2_000, 3_000, 5_000] as const
 
   function normalizeEnrollmentCode(value: string): string {
     const compact = value
@@ -94,9 +95,11 @@
   let claimCode = $state(enrollmentCodeFromLink)
   let claimFromLink = $state(enrollmentCodeFromLink.length > 0)
   let scannerOpen = $state(false)
+  let connectingDesktopId = $state<string | null>(null)
   let activeSignInProvider = $state<CloudAuthProvider | null>(null)
   let revokeCandidate = $state<CloudDesktop | null>(null)
   let automaticSignInStarted = false
+  let desktopStatusRefreshTimer: ReturnType<typeof setTimeout> | null = null
 
   function readableError(error: unknown): string {
     if (!(error instanceof Error)) return 'The request could not be completed.'
@@ -158,11 +161,50 @@
     errorMessage = ''
     try {
       desktops = await listCloudDesktops()
+      if (
+        connectingDesktopId &&
+        desktops.some((desktop) => desktop.id === connectingDesktopId && desktop.online)
+      ) {
+        stopDesktopStatusRefresh()
+      }
     } catch (error) {
       errorMessage = readableError(error)
     } finally {
       busy = false
     }
+  }
+
+  function stopDesktopStatusRefresh(): void {
+    if (desktopStatusRefreshTimer !== null) clearTimeout(desktopStatusRefreshTimer)
+    desktopStatusRefreshTimer = null
+    connectingDesktopId = null
+  }
+
+  function scheduleDesktopStatusRefresh(desktopId: string, attempt = 0): void {
+    if (desktopStatusRefreshTimer !== null) clearTimeout(desktopStatusRefreshTimer)
+    const delay = CLAIM_STATUS_REFRESH_DELAYS_MS[attempt]
+    if (delay === undefined) {
+      stopDesktopStatusRefresh()
+      return
+    }
+    desktopStatusRefreshTimer = setTimeout(() => {
+      desktopStatusRefreshTimer = null
+      void refreshClaimedDesktopStatus(desktopId, attempt)
+    }, delay)
+  }
+
+  async function refreshClaimedDesktopStatus(desktopId: string, attempt: number): Promise<void> {
+    if (connectingDesktopId !== desktopId) return
+    try {
+      desktops = await listCloudDesktops()
+      if (desktops.some((desktop) => desktop.id === desktopId && desktop.online)) {
+        stopDesktopStatusRefresh()
+        return
+      }
+    } catch {
+      // Keep the newly paired desktop visible while the normal UI handles manual retries.
+    }
+    if (connectingDesktopId === desktopId) scheduleDesktopStatusRefresh(desktopId, attempt + 1)
   }
 
   async function claimDesktopCode(): Promise<void> {
@@ -176,11 +218,17 @@
     busy = true
     claimError = ''
     try {
-      await claimCloudDesktop(formattedCode)
+      const desktopId = await claimCloudDesktop(formattedCode)
+      connectingDesktopId = desktopId
       claimCode = ''
       claimFromLink = false
       clearPersistedEnrollmentCode()
       desktops = await listCloudDesktops()
+      if (desktops.some((desktop) => desktop.id === desktopId && desktop.online)) {
+        stopDesktopStatusRefresh()
+      } else {
+        scheduleDesktopStatusRefresh(desktopId)
+      }
     } catch (error) {
       claimError = readableError(error)
     } finally {
@@ -265,6 +313,7 @@
       remoteSession.disconnect()
       await revokeCloudDesktop(candidate.id)
       desktops = desktops.filter((desktop) => desktop.id !== candidate.id)
+      if (connectingDesktopId === candidate.id) stopDesktopStatusRefresh()
       revokeCandidate = null
     } catch (error) {
       errorMessage = readableError(error)
@@ -279,6 +328,7 @@
     try {
       remoteSession.disconnect()
       await logoutCloudAccount()
+      stopDesktopStatusRefresh()
       user = null
       desktops = []
     } finally {
@@ -288,6 +338,7 @@
 
   onMount(() => {
     void restoreSession()
+    return stopDesktopStatusRefresh
   })
 </script>
 
@@ -465,8 +516,13 @@
                 class={desktop.online
                   ? 'rounded-full bg-primary/10 px-2 py-1 text-[10px] font-semibold text-primary'
                   : 'rounded-full bg-raised px-2 py-1 text-[10px] font-semibold text-dimmed'}
+                aria-live="polite"
               >
-                {desktop.online ? 'Connect' : 'Offline'}
+                {desktop.online
+                  ? 'Connect'
+                  : connectingDesktopId === desktop.id
+                    ? 'Connecting…'
+                    : 'Offline'}
               </span>
             </button>
             <button
