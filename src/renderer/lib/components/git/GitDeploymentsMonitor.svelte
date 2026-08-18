@@ -33,14 +33,14 @@
     onRequestedRunOpened?: () => void
     onAgentDiagnoseRun: (
       run: GitHubWorkflowRun,
-      jobs: GitHubDeploymentJob[],
-      logs: GitHubDeploymentJobLog[]
+      job: GitHubDeploymentJob,
+      log: GitHubDeploymentJobLog | null
     ) => void
     onAgentDiagnoseDeployment: (
       deployment: GitHubDeployment,
       run: GitHubWorkflowRun | null,
-      jobs: GitHubDeploymentJob[],
-      logs: GitHubDeploymentJobLog[]
+      job: GitHubDeploymentJob,
+      log: GitHubDeploymentJobLog | null
     ) => void
   }
 
@@ -186,38 +186,6 @@
       </p>
     </div>
   {:else}
-    <div class="flex shrink-0 items-center border-b border-border px-3 py-2">
-      <div class="min-w-0 flex-1">
-        <p class="text-[11px] font-semibold text-foreground">Deployment monitor</p>
-        <p class="truncate text-[9px] text-dimmed">
-          {identity.owner}/{identity.repo}
-          {#if overview}
-            · updated {relativeTime(overview.fetchedAt)}
-          {/if}
-        </p>
-      </div>
-      <button
-        type="button"
-        class="flex h-7 w-7 items-center justify-center rounded-md text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
-        title="View workflow runs on GitHub"
-        aria-label="View workflow runs on GitHub"
-        onclick={() =>
-          void openInBrowser(`https://github.com/${identity.owner}/${identity.repo}/actions`)}
-      >
-        <ExternalLink size={12} />
-      </button>
-      <button
-        type="button"
-        class="flex h-7 w-7 items-center justify-center rounded-md text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-50"
-        title="Refresh deployments"
-        aria-label="Refresh deployments"
-        disabled={loading}
-        onclick={() => void load(true)}
-      >
-        <RefreshCw size={12} class={loading ? 'animate-spin' : ''} />
-      </button>
-    </div>
-
     {#if selectedRun && identity}
       <GitWorkflowRunDetail
         {projectId}
@@ -283,6 +251,26 @@
             <span class="ml-auto text-[9px] tabular-nums text-dimmed">
               {overview.workflowRuns.length}
             </span>
+            <button
+              type="button"
+              class="flex h-5 w-5 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+              title="View workflow runs on GitHub"
+              aria-label="View workflow runs on GitHub"
+              onclick={() =>
+                void openInBrowser(`https://github.com/${identity.owner}/${identity.repo}/actions`)}
+            >
+              <ExternalLink size={11} />
+            </button>
+            <button
+              type="button"
+              class="flex h-5 w-5 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-50"
+              title="Refresh deployments"
+              aria-label="Refresh deployments"
+              disabled={loading}
+              onclick={() => void load(true)}
+            >
+              <RefreshCw size={11} class={loading ? 'animate-spin' : ''} />
+            </button>
           </div>
           {#if overview.workflowRuns.length === 0}
             <p class="px-3 py-5 text-center text-[10px] text-dimmed">
