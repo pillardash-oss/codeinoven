@@ -242,64 +242,53 @@
 
         <h3 class="mt-4 text-sm font-semibold text-foreground">Continue on your phone</h3>
         <p class="mt-1 text-xs leading-relaxed text-muted">
-          The QR opens the mobile PWA and carries this one-time code. It does not contain your
-          desktop control secret.
+          First open the mobile website. Then pair this desktop by scanning the second QR or typing
+          the code below.
         </p>
 
-        <div class="mt-4 flex flex-col gap-4 sm:flex-row">
-          {#if enrollmentLink}
-            <EnrollmentQr value={enrollmentLink} />
-          {/if}
-
-          <ol class="min-w-0 flex-1 space-y-3 text-xs text-muted">
-            <li class="flex gap-2.5">
-              <span
-                class="grid h-5 w-5 shrink-0 place-items-center rounded-full bg-primary text-[10px] font-bold text-on-primary"
-                >1</span
-              >
-              <span>Scan the QR code with your phone, or copy the mobile-app link below.</span>
-            </li>
-            <li class="flex gap-2.5">
-              <span
-                class="grid h-5 w-5 shrink-0 place-items-center rounded-full bg-primary text-[10px] font-bold text-on-primary"
-                >2</span
-              >
-              <span> Sign in with the same Google or Apple account if your phone asks. </span>
-            </li>
-            <li class="flex gap-2.5">
-              <span
-                class="grid h-5 w-5 shrink-0 place-items-center rounded-full bg-primary text-[10px] font-bold text-on-primary"
-                >3</span
-              >
-              <span>The signed-in account adds this desktop automatically.</span>
-            </li>
-          </ol>
-        </div>
-
         {#if mobileAppUrl && enrollmentLink}
-          <div class="mt-4 rounded-lg bg-raised p-3">
-            <p class="text-[10px] font-semibold uppercase tracking-wide text-dimmed">Mobile app</p>
-            <p class="mt-1 truncate text-xs text-foreground" title={mobileAppUrl}>{mobileAppUrl}</p>
-            <div class="mt-2 flex flex-wrap gap-2">
-              <button
-                type="button"
-                class="flex h-8 cursor-pointer items-center gap-1.5 rounded-lg border px-2.5 text-[11px] font-medium text-muted transition hover:bg-elevated hover:text-foreground"
-                title="Copy mobile app link"
-                aria-label="Copy mobile app link"
-                onclick={() => void copyEnrollmentValue('link', enrollmentLink)}
-              >
-                {#if copied === 'link'}<Check size={13} />{:else}<Copy size={13} />{/if}
-                {copied === 'link' ? 'Copied link' : 'Copy link'}
-              </button>
-              <button
-                type="button"
-                class="flex h-8 cursor-pointer items-center gap-1.5 rounded-lg border px-2.5 text-[11px] font-medium text-muted transition hover:bg-elevated hover:text-foreground"
-                title="Open mobile app in browser"
-                aria-label="Open mobile app in browser"
-                onclick={() => void openInBrowser(enrollmentLink)}
-              >
-                <ExternalLink size={13} /> Open link
-              </button>
+          <div class="mt-4 grid gap-4 sm:grid-cols-2">
+            <div class="border-y py-3">
+              <p class="text-xs font-semibold text-foreground">1. Open the mobile website</p>
+              <p class="mt-1 min-h-10 text-[11px] leading-relaxed text-muted">
+                Scan this QR only to open the PWA, then sign in with the same account.
+              </p>
+              <div class="mt-3"><EnrollmentQr value={mobileAppUrl} /></div>
+              <p class="mt-3 truncate text-[11px] text-dimmed" title={mobileAppUrl}>
+                {mobileAppUrl}
+              </p>
+              <div class="mt-2 flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  class="flex h-8 cursor-pointer items-center gap-1.5 rounded-lg border px-2.5 text-[11px] font-medium text-muted transition hover:bg-elevated hover:text-foreground"
+                  title="Copy mobile website link"
+                  aria-label="Copy mobile website link"
+                  onclick={() => void copyEnrollmentValue('link', mobileAppUrl)}
+                >
+                  {#if copied === 'link'}<Check size={13} />{:else}<Copy size={13} />{/if}
+                  {copied === 'link' ? 'Copied link' : 'Copy link'}
+                </button>
+                <button
+                  type="button"
+                  class="flex h-8 cursor-pointer items-center gap-1.5 rounded-lg border px-2.5 text-[11px] font-medium text-muted transition hover:bg-elevated hover:text-foreground"
+                  title="Open mobile website in browser"
+                  aria-label="Open mobile website in browser"
+                  onclick={() => void openInBrowser(mobileAppUrl)}
+                >
+                  <ExternalLink size={13} /> Open website
+                </button>
+              </div>
+            </div>
+
+            <div class="border-y py-3">
+              <p class="text-xs font-semibold text-foreground">2. Pair this desktop</p>
+              <p class="mt-1 min-h-10 text-[11px] leading-relaxed text-muted">
+                After signing in, scan this QR to fill and submit the one-time code automatically.
+              </p>
+              <div class="mt-3"><EnrollmentQr value={enrollmentLink} /></div>
+              <p class="mt-3 text-[11px] leading-relaxed text-dimmed">
+                This QR contains the temporary pairing link, not your desktop control secret.
+              </p>
             </div>
           </div>
         {/if}

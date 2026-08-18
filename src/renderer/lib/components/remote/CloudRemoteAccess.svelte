@@ -1,5 +1,7 @@
 <script lang="ts">
+  import { AlertDialog } from 'bits-ui'
   import { Laptop, LogOut, Plus, RefreshCw, ShieldCheck, Trash2 } from '@lucide/svelte'
+  import { onMount } from 'svelte'
   import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
   import {
     completeCloudAuthCallback,
@@ -22,10 +24,11 @@
   const PENDING_ENROLLMENT_CODE_KEY = 'codeinoven:pending-remote-enrollment'
 
   function normalizeEnrollmentCode(value: string): string {
-    return value
+    const compact = value
       .toUpperCase()
-      .replace(/[^A-Z0-9-]/g, '')
-      .slice(0, 19)
+      .replace(/[^A-Z0-9]/g, '')
+      .slice(0, 16)
+    return compact.match(/.{1,4}/g)?.join('-') ?? ''
   }
 
   function persistEnrollmentCode(code: string): void {
@@ -86,6 +89,7 @@
   let loading = $state(true)
   let busy = $state(false)
   let errorMessage = $state('')
+  let claimError = $state('')
   let claimCode = $state(enrollmentCodeFromLink)
   let claimFromLink = $state(enrollmentCodeFromLink.length > 0)
   let activeSignInProvider = $state<CloudAuthProvider | null>(null)
@@ -99,6 +103,8 @@
       'apple-sign-in-failed': 'Apple sign-in could not be completed.',
       'oauth-session-failed': 'Sign-in completed, but the mobile session could not be established.',
       'invalid-enrollment-code': 'That desktop code is invalid or has expired.',
+      'enrollment-conflict':
+        'That desktop belongs to another account. Sign in with the same account as the desktop.',
       'device-not-approved':
         'This PWA installation is not approved for that desktop. Add it again with a new code.',
       'rate-limited': 'Too many attempts. Wait a minute and try again.',
@@ -158,17 +164,23 @@
   }
 
   async function claimDesktopCode(): Promise<void> {
-    if (busy || claimCode.trim().length === 0) return
+    if (busy) return
+    const formattedCode = normalizeEnrollmentCode(claimCode)
+    claimCode = formattedCode
+    if (formattedCode.replaceAll('-', '').length !== 16) {
+      claimError = 'Enter all 16 characters from the desktop pairing code.'
+      return
+    }
     busy = true
-    errorMessage = ''
+    claimError = ''
     try {
-      await claimCloudDesktop(claimCode.trim())
+      await claimCloudDesktop(formattedCode)
       claimCode = ''
       claimFromLink = false
       clearPersistedEnrollmentCode()
       desktops = await listCloudDesktops()
     } catch (error) {
-      errorMessage = readableError(error)
+      claimError = readableError(error)
     } finally {
       busy = false
     }
@@ -216,13 +228,14 @@
   }
 
   async function removeDesktop(): Promise<void> {
-    if (busy || !revokeCandidate) return
+    const candidate = revokeCandidate
+    if (busy || !candidate) return
     busy = true
     errorMessage = ''
     try {
       remoteSession.disconnect()
-      await revokeCloudDesktop(revokeCandidate.id)
-      desktops = desktops.filter((desktop) => desktop.id !== revokeCandidate?.id)
+      await revokeCloudDesktop(candidate.id)
+      desktops = desktops.filter((desktop) => desktop.id !== candidate.id)
       revokeCandidate = null
     } catch (error) {
       errorMessage = readableError(error)
@@ -244,7 +257,7 @@
     }
   }
 
-  $effect(() => {
+  onMount(() => {
     void restoreSession()
   })
 </script>
@@ -267,17 +280,26 @@
         class="h-10 min-w-0 flex-1 rounded-lg border bg-elevated px-3 font-mono text-sm uppercase outline-none focus:border-primary focus:ring-2 focus:ring-primary/20"
         aria-label="Desktop enrollment code"
         autocomplete="one-time-code"
+        autocapitalize="characters"
         placeholder="ABCD-EFGH-IJKL-MNOP"
         bind:value={claimCode}
+        oninput={() => {
+          claimCode = normalizeEnrollmentCode(claimCode)
+          claimError = ''
+        }}
         maxlength="19"
         required
       />
       <button
         class="h-10 rounded-lg bg-primary px-4 text-sm font-semibold text-on-primary hover:bg-primary-hover disabled:opacity-50"
         type="submit"
-        disabled={busy}>Add</button
+        disabled={busy || claimCode.replaceAll('-', '').length !== 16}
+        >{busy ? 'Adding…' : 'Add'}</button
       >
     </div>
+    {#if claimError}
+      <p class="mt-2 text-xs leading-relaxed text-danger" role="alert">{claimError}</p>
+    {/if}
   </form>
 {/snippet}
 
@@ -323,7 +345,9 @@
     </section>
   </main>
 {:else}
-  <main class="mx-auto flex min-h-dvh w-full max-w-md flex-col bg-app p-6 pb-12 text-foreground">
+  <main
+    class="mx-auto flex h-dvh w-full max-w-md flex-col overflow-y-auto overscroll-contain bg-app p-6 pb-12 text-foreground"
+  >
     <header class="mb-6 flex items-start gap-3">
       <div
         class="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-primary text-on-primary"
@@ -420,29 +444,6 @@
         {/each}
       </section>
 
-      {#if revokeCandidate}
-        <section class="rounded-xl border border-danger/30 bg-danger/5 p-4" aria-live="polite">
-          <p class="text-sm font-semibold">Remove {revokeCandidate.name}?</p>
-          <p class="mt-1 text-xs leading-relaxed text-muted">
-            This immediately revokes its internet access. Reconnect it later with a new code.
-          </p>
-          <div class="mt-3 flex justify-end gap-2">
-            <button
-              type="button"
-              class="h-9 rounded-lg px-3 text-xs font-medium text-muted hover:bg-elevated"
-              disabled={busy}
-              onclick={() => (revokeCandidate = null)}>Cancel</button
-            >
-            <button
-              type="button"
-              class="h-9 rounded-lg bg-danger px-3 text-xs font-semibold text-on-primary disabled:opacity-50"
-              disabled={busy}
-              onclick={() => void removeDesktop()}>Remove access</button
-            >
-          </div>
-        </section>
-      {/if}
-
       {#if errorMessage}
         <p class="rounded-lg bg-danger/10 px-3 py-2 text-xs text-danger" aria-live="polite">
           {errorMessage}
@@ -450,4 +451,39 @@
       {/if}
     </div>
   </main>
+
+  <AlertDialog.Root
+    open={revokeCandidate !== null}
+    onOpenChange={(open) => {
+      if (!open) revokeCandidate = null
+    }}
+  >
+    <AlertDialog.Portal>
+      <AlertDialog.Overlay class="fixed inset-0 z-50 bg-overlay/70" />
+      <AlertDialog.Content
+        class="fixed left-1/2 top-1/2 z-50 w-[min(28rem,calc(100vw-2rem))] -translate-x-1/2 -translate-y-1/2 rounded-xl border border-border bg-surface p-5 shadow-xl"
+      >
+        <AlertDialog.Title class="text-sm font-semibold text-foreground">
+          Remove {revokeCandidate?.name ?? 'desktop'}?
+        </AlertDialog.Title>
+        <AlertDialog.Description class="mt-2 text-xs leading-5 text-muted">
+          This immediately revokes its internet access. Reconnect it later with a new pairing code.
+        </AlertDialog.Description>
+        <div class="mt-5 flex justify-end gap-2">
+          <AlertDialog.Cancel
+            class="h-9 cursor-pointer rounded-lg border border-border px-3 text-xs font-medium text-foreground hover:bg-elevated"
+          >
+            Cancel
+          </AlertDialog.Cancel>
+          <AlertDialog.Action
+            class="h-9 cursor-pointer rounded-lg bg-danger px-3 text-xs font-semibold text-on-primary hover:bg-danger-hover disabled:opacity-50"
+            disabled={busy}
+            onclick={() => void removeDesktop()}
+          >
+            {busy ? 'Removing…' : 'Remove access'}
+          </AlertDialog.Action>
+        </div>
+      </AlertDialog.Content>
+    </AlertDialog.Portal>
+  </AlertDialog.Root>
 {/if}
