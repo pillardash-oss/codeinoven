@@ -1,13 +1,14 @@
 <script lang="ts">
   import { Check, ChevronRight, Circle, ListChecks, Loader2 } from '@lucide/svelte'
-  import type { AgentTodoItem } from '$lib/agent-todos'
+  import { activeAgentTodoIndex, type AgentTodoItem } from '$lib/agent-todos'
 
   interface Props {
     items: AgentTodoItem[]
     signature: string
+    busy: boolean
   }
 
-  let { items, signature }: Props = $props()
+  let { items, signature, busy }: Props = $props()
 
   let open = $state(false)
   let userPinnedOpen = $state(false)
@@ -18,7 +19,7 @@
     items.find((item) => item.status === 'in_progress') ??
       items.find((item) => item.status === 'pending')
   )
-  let activeIndex = $derived(items.findIndex((item) => item.status === 'in_progress'))
+  let activeIndex = $derived(activeAgentTodoIndex(items, busy))
   let progressLabel = $derived(
     activeIndex >= 0
       ? `Working on ${activeIndex + 1} of ${items.length} · ${completedCount} done`
@@ -89,7 +90,7 @@
                 >
                   <Check size={11} />
                 </span>
-              {:else if item.status === 'in_progress'}
+              {:else if index === activeIndex}
                 <Loader2 size={13} class="animate-spin text-info" />
               {:else}
                 <Circle size={12} class="text-dimmed" />

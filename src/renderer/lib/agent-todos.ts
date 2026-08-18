@@ -20,6 +20,20 @@ export interface AgentTodoSnapshot {
   signature: string
 }
 
+/**
+ * Resolve the task that should be presented as active.
+ *
+ * Harnesses do not always publish an `in_progress` transition before starting
+ * work. While the turn is live, fall back to the first pending item so the task
+ * card still reflects observed agent activity. An explicit provider status
+ * always wins.
+ */
+export function activeAgentTodoIndex(items: AgentTodoItem[], busy: boolean): number {
+  const explicitIndex = items.findIndex((item) => item.status === 'in_progress')
+  if (explicitIndex >= 0) return explicitIndex
+  return busy ? items.findIndex((item) => item.status === 'pending') : -1
+}
+
 type ToolPart = Extract<AgentPart, { type: 'tool' }>
 
 export function isTodoToolPart(part: AgentPart): part is ToolPart {

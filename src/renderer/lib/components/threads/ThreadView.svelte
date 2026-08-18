@@ -7767,7 +7767,7 @@
               />
             {:else}
               {#if activeTodo}
-                <AgentTodoCard items={activeTodo.items} signature={activeTodo.signature} />
+                <AgentTodoCard items={activeTodo.items} signature={activeTodo.signature} {busy} />
               {/if}
               {#key composerRestoreKey}
                 <ChatComposer
