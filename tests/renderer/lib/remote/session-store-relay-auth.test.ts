@@ -98,7 +98,10 @@ describe('RemoteSessionStore — relay device auth gating', () => {
     await vi.waitFor(() => {
       expect(
         sentFrames.current.some(
-          (f) => f.includes('remote:device:auth') && f.includes('challenge-1')
+          (f) =>
+            f.includes('remote:device:auth') &&
+            f.includes('challenge-1') &&
+            f.includes('connectionId')
         )
       ).toBe(true)
     })

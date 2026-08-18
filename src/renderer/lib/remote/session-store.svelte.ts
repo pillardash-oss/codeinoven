@@ -63,6 +63,8 @@ export class RemoteSessionStore {
   private relayDeviceAuth: Promise<void> | null = null
   private relayChallengeReceived = false
   private relayBootstrapFallbackAttempted = false
+  /** Unique identity for the current browser relay WebSocket connection. */
+  private relayConnectionId = ''
 
   private async ensureKeyMaterial(desktopId: string | null = null): Promise<DeviceKeyMaterial> {
     if (this.keyMaterial && this.keyMaterialDesktopId === desktopId) return this.keyMaterial
@@ -168,7 +170,8 @@ export class RemoteSessionStore {
       type: 'remote:device:auth',
       nonce,
       signature,
-      deviceName: keyMaterial.deviceName
+      deviceName: keyMaterial.deviceName,
+      connectionId: this.relayConnectionId
     }
     if (keyMaterial.deviceId) {
       authFrame['deviceId'] = keyMaterial.deviceId
@@ -240,6 +243,7 @@ export class RemoteSessionStore {
     await this.ensureKeyMaterial(input.desktopId)
     this.dispatch({ type: 'relayProbeStart' })
     this.relayChallengeReceived = false
+    this.relayConnectionId = globalThis.crypto.randomUUID()
     // Install the first listener before opening the socket so a challenge
     // replayed from the relay buffer cannot arrive before the phone is ready.
     this.relayDeviceAuth = this.beginRelayDeviceAuth()
@@ -267,6 +271,7 @@ export class RemoteSessionStore {
             awaitingInitialConnection = false
           } else {
             this.relayChallengeReceived = false
+            this.relayConnectionId = globalThis.crypto.randomUUID()
             this.relayDeviceAuth = this.beginRelayDeviceAuth()
             void this.relayDeviceAuth
               .then(() => {
@@ -284,7 +289,10 @@ export class RemoteSessionStore {
           // new mobile connection explicitly requests its own one-time device
           // challenge after its listener is installed.
           if (!this.relayChallengeReceived) {
-            void this.sendRaw({ type: 'remote:device:challenge-request' })
+            void this.sendRaw({
+              type: 'remote:device:challenge-request',
+              connectionId: this.relayConnectionId
+            })
           }
           return
         }
@@ -427,6 +435,7 @@ export class RemoteSessionStore {
 
   private closeChannels(): void {
     this.relayDeviceAuth = null
+    this.relayConnectionId = ''
     if (this.lanUpgradeTimer !== null) window.clearTimeout(this.lanUpgradeTimer)
     this.lanUpgradeTimer = null
     if (this.accountReconnectTimer !== null) window.clearTimeout(this.accountReconnectTimer)

@@ -742,6 +742,48 @@ describe('CloudRelayClient — relay device proof of possession (A-04)', () => {
     dispose()
   })
 
+  it('keeps the authenticated device bound when its delayed startup request arrives', async () => {
+    const credentials = new DeviceCredentialService(makeRawDatabase())
+    const { harness, socket, dispose } = await makeRelayHarness(credentials)
+    const nonce = await challengeNonceOf(socket)
+    const bootstrap = await credentials.createPairingBootstrap()
+    const connectionId = 'mobile-socket-1'
+    const frame = await authFrame(
+      nonce,
+      { deviceId: null, authVersion: undefined },
+      bootstrap.value
+    )
+    frame['connectionId'] = connectionId
+
+    await receivedData(socket, frame)
+    await vi.waitFor(async () => {
+      expect(harness.client.boundDeviceId()).not.toBeNull()
+    })
+
+    // This request was sent at mobile socket startup but decrypted after the
+    // proof completed. It must re-confirm, not revoke, the established device.
+    await receivedData(socket, {
+      type: 'remote:device:challenge-request',
+      connectionId
+    })
+    await vi.waitFor(async () => {
+      const okFrames = (await readBodies(socket)).filter(
+        (body) => body.type === 'remote:device:ok' && body.connectionId === connectionId
+      )
+      expect(okFrames).toHaveLength(2)
+    })
+
+    const reply = await invokeReply(socket, 22, {
+      rpc: 'invoke',
+      id: 22,
+      channel: 'project:list',
+      args: []
+    })
+    expect(reply?.rpc).toBe('result')
+    harness.client.close()
+    dispose()
+  })
+
   it('rejects an invoke carrying a caller-forged device context', async () => {
     const credentials = new DeviceCredentialService(makeRawDatabase())
     const { harness, socket, dispose } = await makeRelayHarness(credentials)
