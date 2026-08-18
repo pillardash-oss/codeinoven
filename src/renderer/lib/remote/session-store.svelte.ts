@@ -274,8 +274,9 @@ export class RemoteSessionStore {
           } else {
             this.relayChallengeReceived = false
             this.relayConnectionId = globalThis.crypto.randomUUID()
-            this.relayDeviceAuth = this.beginRelayDeviceAuth()
-            void this.relayDeviceAuth
+            const deviceAuth = this.beginRelayDeviceAuth()
+            this.relayDeviceAuth = deviceAuth
+            void deviceAuth
               .then(() => {
                 if (this.accountRelayClient !== client) return
                 this.recovering = false
@@ -314,10 +315,13 @@ export class RemoteSessionStore {
     })
     this.accountRelayClient = client
     const outcome = await client.connect()
+    awaitingInitialConnection = false
     if (outcome === 'open') {
       this.accountReconnectAttempt = 0
       try {
-        await this.relayDeviceAuth
+        const deviceAuth = this.relayDeviceAuth
+        if (!deviceAuth) throw new Error('Relay device authentication did not start')
+        await deviceAuth
       } catch (error) {
         if (this.accountRelayClient === client) {
           this.dispatch({ type: 'disconnected', reason: 'device-auth-failed' })
@@ -330,6 +334,10 @@ export class RemoteSessionStore {
       this.scheduleLanUpgrade()
       return
     }
+    // The first socket can legitimately report the desktop offline. Mark the
+    // current authentication waiter as observed; the reconnect event replaces
+    // it with a fresh challenge and timeout when the desktop appears.
+    void this.relayDeviceAuth?.catch(() => undefined)
     // The client self-reconnects; reflect the transient failure only.
     this.dispatch({
       type: 'disconnected',

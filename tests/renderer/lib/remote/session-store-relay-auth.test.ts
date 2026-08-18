@@ -13,9 +13,10 @@ import {
 } from '$lib/remote/device-identity'
 import { RemoteSessionStore } from '$lib/remote/session-store.svelte'
 
-const { relayOnEvent, sentFrames, identityOverride } = vi.hoisted(() => {
+const { relayOnEvent, relayOutcome, sentFrames, identityOverride } = vi.hoisted(() => {
   return {
     relayOnEvent: { current: null as ((event: AccountRelayEvent) => void) | null },
+    relayOutcome: { current: 'open' as 'open' | 'offline' | 'failed' },
     sentFrames: { current: [] as string[] },
     identityOverride: { current: null as DeviceKeyMaterial | null }
   }
@@ -35,7 +36,7 @@ vi.mock('$lib/remote/account-relay', () => ({
   createAccountRelayClient: (options: { onEvent: (event: AccountRelayEvent) => void }) => {
     relayOnEvent.current = options.onEvent
     return {
-      connect: async (): Promise<'open' | 'offline' | 'failed'> => 'open',
+      connect: async (): Promise<'open' | 'offline' | 'failed'> => relayOutcome.current,
       send: async (data: string): Promise<void> => {
         sentFrames.current.push(data)
       },
@@ -74,10 +75,38 @@ afterEach(() => {
   vi.useRealTimers()
   sentFrames.current = []
   relayOnEvent.current = null
+  relayOutcome.current = 'open'
   identityOverride.current = null
 })
 
 describe('RemoteSessionStore — relay device auth gating', () => {
+  it('starts a fresh device challenge when an initially offline desktop reconnects', async () => {
+    vi.useFakeTimers()
+    relayOutcome.current = 'offline'
+    const store = new RemoteSessionStore()
+
+    await store.connectCloud({
+      desktopId: 'desktop-1',
+      mobileDeviceId: 'mobile-1',
+      controlSecret: 'secret'
+    })
+    expect(store.snapshot.route).toMatchObject({
+      kind: 'DISCONNECTED',
+      reason: 'desktop-offline'
+    })
+
+    await vi.advanceTimersByTimeAsync(12_000)
+    relayOnEvent.current?.({ kind: 'connected', url: 'wss://relay.test/v1/relay' })
+    message({ type: 'remote:device:challenge', nonce: 'reconnect-challenge' })
+    await vi.waitFor(() => {
+      expect(sentFrames.current.some((frame) => frame.includes('reconnect-challenge'))).toBe(true)
+    })
+
+    message({ type: 'remote:device:ok', device: { id: 'dev-1', authVersion: 1 } })
+    await vi.waitFor(() => expect(store.snapshot.route.kind).toBe('RELAY_CONNECTED'))
+    store.disconnect()
+  })
+
   it('does not release queued RPC until the device authenticates', async () => {
     const store = new RemoteSessionStore()
     const connection = store.connectCloud({

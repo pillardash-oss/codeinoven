@@ -1,6 +1,16 @@
 <script lang="ts">
-  import { AlertDialog } from 'bits-ui'
-  import { Laptop, LogOut, Plus, RefreshCw, ScanLine, ShieldCheck, Trash2, X } from '@lucide/svelte'
+  import { AlertDialog, Dialog } from 'bits-ui'
+  import {
+    Laptop,
+    LogOut,
+    Pencil,
+    Plus,
+    RefreshCw,
+    ScanLine,
+    ShieldCheck,
+    Trash2,
+    X
+  } from '@lucide/svelte'
   import { onMount } from 'svelte'
   import EnrollmentCodeScanner from '$lib/components/remote/EnrollmentCodeScanner.svelte'
   import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
@@ -16,6 +26,7 @@
     claimCloudDesktop,
     cloudDesktopConnection,
     listCloudDesktops,
+    renameCloudDesktop,
     revokeCloudDesktop,
     type CloudDesktop,
     type CloudUser
@@ -28,7 +39,7 @@
   } from '$lib/remote/preferred-desktop'
 
   const PENDING_ENROLLMENT_CODE_KEY = 'codeinoven:pending-remote-enrollment'
-  const CLAIM_STATUS_REFRESH_DELAYS_MS = [1_000, 2_000, 3_000, 5_000] as const
+  const DESKTOP_STATUS_REFRESH_MAX_DELAY_MS = 15_000
 
   function normalizeEnrollmentCode(value: string): string {
     const compact = value
@@ -102,7 +113,13 @@
   let claimFromLink = $state(enrollmentCodeFromLink.length > 0)
   let scannerOpen = $state(false)
   let connectingDesktopId = $state<string | null>(null)
+  let watchedDesktopId = $state<string | null>(null)
+  let connectWhenDesktopOnline = $state(false)
   let activeSignInProvider = $state<CloudAuthProvider | null>(null)
+  let renameCandidate = $state<CloudDesktop | null>(null)
+  let renameValue = $state('')
+  let renameError = $state('')
+  let renameBusy = $state(false)
   let revokeCandidate = $state<CloudDesktop | null>(null)
   let automaticSignInStarted = false
   let automaticDesktopRestoreStarted = false
@@ -140,13 +157,14 @@
     loading = true
     sessionUnavailable = false
     const returningFromSignIn = hasCloudAuthCallback()
+    let desktopListLoaded = false
     try {
       await completeCloudAuthCallback()
       user = await currentCloudUser()
       try {
         desktops = await listCloudDesktops()
+        desktopListLoaded = true
       } catch (error) {
-        desktops = []
         errorMessage = readableError(error)
       }
     } catch (error) {
@@ -165,10 +183,17 @@
     } else if (user) {
       const preferredDesktopId = loadPreferredDesktop()
       const preferredDesktop = desktops.find((desktop) => desktop.id === preferredDesktopId)
-      if (preferredDesktop?.online && !automaticDesktopRestoreStarted) {
+      if (preferredDesktop && !automaticDesktopRestoreStarted) {
         automaticDesktopRestoreStarted = true
-        void connectDesktop(preferredDesktop.id)
-      } else if (preferredDesktopId && !preferredDesktop) {
+        if (preferredDesktop.online) {
+          void connectDesktop(preferredDesktop.id)
+        } else {
+          watchDesktopStatus(preferredDesktop.id, true)
+        }
+      } else if (!desktopListLoaded && preferredDesktopId && !automaticDesktopRestoreStarted) {
+        automaticDesktopRestoreStarted = true
+        watchDesktopStatus(preferredDesktopId, true)
+      } else if (desktopListLoaded && preferredDesktopId && !preferredDesktop) {
         clearPreferredDesktop()
       }
     }
@@ -195,10 +220,10 @@
     try {
       desktops = await listCloudDesktops()
       if (
-        connectingDesktopId &&
-        desktops.some((desktop) => desktop.id === connectingDesktopId && desktop.online)
+        watchedDesktopId &&
+        desktops.some((desktop) => desktop.id === watchedDesktopId && desktop.online)
       ) {
-        stopDesktopStatusRefresh()
+        desktopBecameOnline(watchedDesktopId)
       }
     } catch (error) {
       errorMessage = readableError(error)
@@ -207,37 +232,57 @@
     }
   }
 
-  function stopDesktopStatusRefresh(): void {
+  function stopDesktopStatusRefresh(clearConnecting = true): void {
     if (desktopStatusRefreshTimer !== null) clearTimeout(desktopStatusRefreshTimer)
     desktopStatusRefreshTimer = null
-    connectingDesktopId = null
+    watchedDesktopId = null
+    connectWhenDesktopOnline = false
+    if (clearConnecting) connectingDesktopId = null
   }
 
-  function scheduleDesktopStatusRefresh(desktopId: string, attempt = 0): void {
+  function desktopStatusRefreshDelay(attempt: number): number {
+    return Math.min(1_000 * 2 ** Math.min(attempt, 4), DESKTOP_STATUS_REFRESH_MAX_DELAY_MS)
+  }
+
+  function watchDesktopStatus(desktopId: string, shouldConnect: boolean, attempt = 0): void {
+    watchedDesktopId = desktopId
+    connectWhenDesktopOnline = shouldConnect
     if (desktopStatusRefreshTimer !== null) clearTimeout(desktopStatusRefreshTimer)
-    const delay = CLAIM_STATUS_REFRESH_DELAYS_MS[attempt]
-    if (delay === undefined) {
-      stopDesktopStatusRefresh()
-      return
-    }
     desktopStatusRefreshTimer = setTimeout(() => {
       desktopStatusRefreshTimer = null
       void refreshClaimedDesktopStatus(desktopId, attempt)
-    }, delay)
+    }, desktopStatusRefreshDelay(attempt))
+  }
+
+  function desktopBecameOnline(desktopId: string): void {
+    const shouldConnect = connectWhenDesktopOnline
+    stopDesktopStatusRefresh(false)
+    if (shouldConnect) {
+      window.setTimeout(() => void connectDesktop(desktopId), 0)
+    } else {
+      connectingDesktopId = null
+    }
   }
 
   async function refreshClaimedDesktopStatus(desktopId: string, attempt: number): Promise<void> {
-    if (connectingDesktopId !== desktopId) return
+    if (watchedDesktopId !== desktopId) return
     try {
       desktops = await listCloudDesktops()
-      if (desktops.some((desktop) => desktop.id === desktopId && desktop.online)) {
+      const desktop = desktops.find((candidate) => candidate.id === desktopId)
+      if (!desktop) {
+        if (loadPreferredDesktop() === desktopId) clearPreferredDesktop()
         stopDesktopStatusRefresh()
         return
       }
+      if (desktop.online) {
+        desktopBecameOnline(desktopId)
+        return
+      }
     } catch {
-      // Keep the newly paired desktop visible while the normal UI handles manual retries.
+      // A transient list failure must not discard the saved desktop or stop reconnection.
     }
-    if (connectingDesktopId === desktopId) scheduleDesktopStatusRefresh(desktopId, attempt + 1)
+    if (watchedDesktopId === desktopId)
+      watchDesktopStatus(desktopId, connectWhenDesktopOnline, attempt + 1)
   }
 
   async function claimDesktopCode(): Promise<void> {
@@ -253,15 +298,16 @@
     try {
       const desktopId = await claimCloudDesktop(formattedCode)
       connectingDesktopId = desktopId
+      savePreferredDesktop(desktopId)
       claimCode = ''
       claimFromLink = false
       clearPersistedEnrollmentCode()
-      desktops = await listCloudDesktops()
-      if (desktops.some((desktop) => desktop.id === desktopId && desktop.online)) {
-        stopDesktopStatusRefresh()
-      } else {
-        scheduleDesktopStatusRefresh(desktopId)
+      try {
+        desktops = await listCloudDesktops()
+      } catch (error) {
+        errorMessage = readableError(error)
       }
+      watchDesktopStatus(desktopId, true)
     } catch (error) {
       claimError = readableError(error)
     } finally {
@@ -304,6 +350,8 @@
   async function connectDesktop(desktopId: string): Promise<void> {
     if (busy) return
     busy = true
+    connectingDesktopId = desktopId
+    savePreferredDesktop(desktopId)
     errorMessage = ''
     try {
       const connection = await cloudDesktopConnection(desktopId)
@@ -325,17 +373,49 @@
       })
       const route = remoteSession.snapshot.route
       if (route.kind !== 'RELAY_CONNECTED' && route.kind !== 'LAN_CONNECTED') {
-        errorMessage =
-          route.kind === 'DISCONNECTED' && route.reason === 'desktop-offline'
-            ? 'That desktop is offline. Open CodeInOven and enable Remote mode.'
-            : 'The desktop relay could not be reached.'
+        if (route.kind === 'DISCONNECTED' && route.reason === 'desktop-offline') {
+          watchDesktopStatus(desktopId, false)
+        } else {
+          connectingDesktopId = null
+          errorMessage = 'The desktop relay could not be reached.'
+        }
       } else {
-        savePreferredDesktop(desktopId)
+        stopDesktopStatusRefresh()
       }
     } catch (error) {
+      connectingDesktopId = null
       errorMessage = readableError(error)
     } finally {
       busy = false
+    }
+  }
+
+  function beginRename(desktop: CloudDesktop): void {
+    renameCandidate = desktop
+    renameValue = desktop.name
+    renameError = ''
+  }
+
+  async function confirmRename(): Promise<void> {
+    const candidate = renameCandidate
+    const name = renameValue.trim()
+    if (!candidate || renameBusy) return
+    if (!name) {
+      renameError = 'Enter a name for this desktop.'
+      return
+    }
+    renameBusy = true
+    renameError = ''
+    try {
+      await renameCloudDesktop(candidate.id, name)
+      desktops = desktops.map((desktop) =>
+        desktop.id === candidate.id ? { ...desktop, name } : desktop
+      )
+      renameCandidate = null
+    } catch (error) {
+      renameError = readableError(error)
+    } finally {
+      renameBusy = false
     }
   }
 
@@ -350,6 +430,7 @@
       desktops = desktops.filter((desktop) => desktop.id !== candidate.id)
       if (loadPreferredDesktop() === candidate.id) clearPreferredDesktop()
       if (connectingDesktopId === candidate.id) stopDesktopStatusRefresh()
+      if (watchedDesktopId === candidate.id) stopDesktopStatusRefresh()
       revokeCandidate = null
     } catch (error) {
       revokeCandidate = null
@@ -375,8 +456,16 @@
   }
 
   onMount(() => {
+    const stopSessionListener = remoteSession.onStateChange((snapshot) => {
+      if (snapshot.route.kind === 'RELAY_CONNECTED' || snapshot.route.kind === 'LAN_CONNECTED') {
+        stopDesktopStatusRefresh()
+      }
+    })
     void restoreSession()
-    return stopDesktopStatusRefresh
+    return () => {
+      stopSessionListener()
+      stopDesktopStatusRefresh()
+    }
   })
 </script>
 
@@ -547,7 +636,7 @@
             <button
               type="button"
               class="flex min-w-0 flex-1 items-center gap-3 rounded-lg p-1 text-left hover:bg-elevated disabled:opacity-60"
-              disabled={busy || !desktop.online}
+              disabled={busy}
               onclick={() => void connectDesktop(desktop.id)}
             >
               <div
@@ -560,12 +649,28 @@
                 <p class="truncate text-xs text-muted">{desktop.platform}</p>
               </div>
               <span
-                class={desktop.online
+                class={desktop.online || connectingDesktopId === desktop.id
                   ? 'rounded-full bg-primary/10 px-2 py-1 text-[10px] font-semibold text-primary'
                   : 'rounded-full bg-raised px-2 py-1 text-[10px] font-semibold text-dimmed'}
               >
-                {desktop.online ? 'Connect' : 'Offline'}
+                {connectingDesktopId === desktop.id
+                  ? watchedDesktopId === desktop.id && connectWhenDesktopOnline
+                    ? 'Finishing setup…'
+                    : 'Connecting…'
+                  : desktop.online
+                    ? 'Connect'
+                    : 'Offline'}
               </span>
+            </button>
+            <button
+              type="button"
+              class="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg text-muted hover:bg-elevated hover:text-foreground disabled:opacity-50"
+              title={`Rename ${desktop.name}`}
+              aria-label={`Rename ${desktop.name}`}
+              disabled={busy}
+              onclick={() => beginRename(desktop)}
+            >
+              <Pencil size={15} />
             </button>
             <button
               type="button"
@@ -608,6 +713,65 @@
       </button>
     </div>
   {/if}
+
+  <Dialog.Root
+    open={renameCandidate !== null}
+    onOpenChange={(open) => {
+      if (!open && !renameBusy) renameCandidate = null
+    }}
+  >
+    <Dialog.Portal>
+      <Dialog.Overlay class="fixed inset-0 z-50 bg-overlay/70" />
+      <Dialog.Content
+        class="fixed left-1/2 top-1/2 z-50 w-[min(28rem,calc(100vw-2rem))] -translate-x-1/2 -translate-y-1/2 rounded-xl border border-border bg-surface p-5 shadow-xl outline-none"
+      >
+        <Dialog.Title class="text-sm font-semibold text-foreground">Rename desktop</Dialog.Title>
+        <Dialog.Description class="mt-2 text-xs leading-5 text-muted">
+          Choose the name shown in your remote desktop list.
+        </Dialog.Description>
+        <form
+          class="mt-4"
+          onsubmit={(event: SubmitEvent) => {
+            event.preventDefault()
+            void confirmRename()
+          }}
+        >
+          <label class="mb-1 block text-xs font-medium text-muted" for="remote-desktop-name">
+            Desktop name
+          </label>
+          <input
+            id="remote-desktop-name"
+            class="h-10 w-full rounded-lg border bg-elevated px-3 text-sm outline-none focus:border-primary focus:ring-2 focus:ring-primary/20"
+            type="text"
+            bind:value={renameValue}
+            maxlength="80"
+            autocomplete="off"
+            oninput={() => (renameError = '')}
+          />
+          {#if renameError}
+            <p class="mt-2 text-xs leading-relaxed text-danger" role="alert">{renameError}</p>
+          {/if}
+          <div class="mt-5 flex justify-end gap-2">
+            <button
+              type="button"
+              class="h-9 cursor-pointer rounded-lg border border-border px-3 text-xs font-medium text-foreground hover:bg-elevated"
+              disabled={renameBusy}
+              onclick={() => (renameCandidate = null)}
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              class="h-9 cursor-pointer rounded-lg bg-primary px-3 text-xs font-semibold text-on-primary hover:bg-primary-hover disabled:opacity-50"
+              disabled={renameBusy || !renameValue.trim()}
+            >
+              {renameBusy ? 'Saving…' : 'Save name'}
+            </button>
+          </div>
+        </form>
+      </Dialog.Content>
+    </Dialog.Portal>
+  </Dialog.Root>
 
   <AlertDialog.Root
     open={revokeCandidate !== null}
