@@ -683,7 +683,10 @@
   async function copyPaths(paths: string[]): Promise<void> {
     const label = paths.length === 1 ? 'Path' : `${paths.length} paths`
     try {
-      await copyText(paths.map((path) => `@${path}`).join('\n'))
+      const infos = await Promise.all(
+        paths.map((path) => projectFilesWorkspace.fileInfo(projectId, path))
+      )
+      await copyText(infos.map((info) => info.absolutePath).join('\n'))
       toast.success(`${label} copied`)
     } catch {
       toast.error(`The ${label.toLocaleLowerCase()} could not be copied`)
