@@ -1,5 +1,15 @@
 <script lang="ts">
-  import { Check, Code2, Copy, Expand, MessageSquarePlus, X } from '@lucide/svelte'
+  import {
+    Check,
+    Code2,
+    Copy,
+    Expand,
+    MessageSquarePlus,
+    RotateCcw,
+    X,
+    ZoomIn,
+    ZoomOut
+  } from '@lucide/svelte'
   import { Dialog } from 'bits-ui'
   import { copyText } from '$lib/copy-text'
   import type { Attachment } from 'svelte/attachments'
@@ -26,6 +36,101 @@
    *  transient failure, so the user never has to switch threads to recover. */
   let retryKey = $state(0)
   let copyResetTimer: ReturnType<typeof setTimeout> | undefined
+
+  const MIN_ZOOM = 0.5
+  const MAX_ZOOM = 6
+  let zoom = $state(1)
+  let panX = $state(0)
+  let panY = $state(0)
+  let isPanning = $state(false)
+  let panStart = { x: 0, y: 0, panX: 0, panY: 0 }
+  let fullscreenViewport = $state<HTMLDivElement>()
+  let fullscreenSvgEl = $state<HTMLDivElement>()
+
+  $effect(() => {
+    if (!expanded) {
+      zoom = 1
+      panX = 0
+      panY = 0
+    }
+  })
+
+  function clampZoom(value: number): number {
+    return Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, value))
+  }
+
+  // Anchors zoom on the cursor by measuring the diagram's live (already
+  // transformed) rect rather than assuming its untransformed offset —
+  // flex-centering can put that offset anywhere, and guessing it caused
+  // the anchor point to drift on repeated zoom steps.
+  function zoomAt(clientX: number, clientY: number, nextZoom: number): void {
+    const rect = fullscreenSvgEl?.getBoundingClientRect()
+    if (!rect || rect.width === 0 || rect.height === 0) {
+      zoom = nextZoom
+      return
+    }
+    const scaleRatio = nextZoom / zoom
+    const fracX = (clientX - rect.left) / rect.width
+    const fracY = (clientY - rect.top) / rect.height
+    const newLeft = clientX - fracX * rect.width * scaleRatio
+    const newTop = clientY - fracY * rect.height * scaleRatio
+    panX += newLeft - rect.left
+    panY += newTop - rect.top
+    zoom = nextZoom
+  }
+
+  function onWheel(event: WheelEvent): void {
+    event.preventDefault()
+    const factor = event.deltaY < 0 ? 1.15 : 1 / 1.15
+    zoomAt(event.clientX, event.clientY, clampZoom(zoom * factor))
+  }
+
+  function zoomByButton(factor: number): void {
+    const rect = fullscreenViewport?.getBoundingClientRect()
+    const center = rect
+      ? { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 }
+      : { x: 0, y: 0 }
+    zoomAt(center.x, center.y, clampZoom(zoom * factor))
+  }
+
+  function resetView(): void {
+    zoom = 1
+    panX = 0
+    panY = 0
+  }
+
+  function onPointerDown(event: PointerEvent): void {
+    if (zoom === 1) return
+    isPanning = true
+    panStart = { x: event.clientX, y: event.clientY, panX, panY }
+    ;(event.currentTarget as HTMLElement).setPointerCapture(event.pointerId)
+  }
+
+  function onPointerMove(event: PointerEvent): void {
+    if (!isPanning) return
+    panX = panStart.panX + (event.clientX - panStart.x)
+    panY = panStart.panY + (event.clientY - panStart.y)
+  }
+
+  function onPointerUp(): void {
+    isPanning = false
+  }
+
+  // The same snippet renders both the inline and fullscreen diagram, so
+  // bind:this can't target one instance only — use attachments instead.
+  function bindFullscreenViewport(el: HTMLDivElement): () => void {
+    fullscreenViewport = el
+    return () => {
+      if (fullscreenViewport === el) fullscreenViewport = undefined
+    }
+  }
+
+  function bindFullscreenSvg(el: HTMLDivElement): () => void {
+    fullscreenSvgEl = el
+    return () => {
+      if (fullscreenSvgEl === el) fullscreenSvgEl = undefined
+    }
+  }
 
   function cssToken(style: CSSStyleDeclaration, name: string, fallback: string): string {
     return style.getPropertyValue(name).trim() || fallback
@@ -103,15 +208,32 @@
 
 {#snippet diagramContent(fullscreen = false)}
   <div
+    {@attach fullscreen ? bindFullscreenViewport : () => {}}
     class={[
-      'relative flex min-h-32 items-center justify-center overflow-auto bg-surface p-4',
-      fullscreen && 'h-full min-h-0'
+      'relative flex min-h-32 items-center justify-center bg-surface p-4',
+      fullscreen ? 'h-full min-h-0 touch-none overflow-hidden' : 'overflow-auto',
+      fullscreen && zoom > 1 && (isPanning ? 'cursor-grabbing' : 'cursor-grab')
     ]}
     aria-label="Mermaid diagram"
+    role={fullscreen ? 'group' : undefined}
+    onwheel={fullscreen && svg ? onWheel : undefined}
+    onpointerdown={fullscreen ? onPointerDown : undefined}
+    onpointermove={fullscreen ? onPointerMove : undefined}
+    onpointerup={fullscreen ? onPointerUp : undefined}
+    onpointercancel={fullscreen ? onPointerUp : undefined}
+    ondblclick={fullscreen ? resetView : undefined}
   >
     {#if svg}
       <!-- eslint-disable-next-line svelte/no-at-html-tags -- Mermaid SVG is strict-mode rendered and DOMPurify-sanitized -->
-      <div class="mermaid-svg min-w-full">{@html svg}</div>
+      <div
+        {@attach fullscreen ? bindFullscreenSvg : () => {}}
+        class={['mermaid-svg min-w-full', fullscreen && 'mermaid-svg-fullscreen']}
+        style={fullscreen
+          ? `transform: translate(${panX}px, ${panY}px) scale(${zoom}); transform-origin: 0 0;`
+          : undefined}
+      >
+        {@html svg}
+      </div>
     {:else if rendering}
       <div class="flex items-center gap-2 text-xs text-dimmed" role="status">
         <span class="size-3 animate-spin rounded-full border border-dimmed border-t-transparent"
@@ -124,6 +246,47 @@
       <span class="absolute right-3 bottom-3 text-[10px] text-dimmed" role="status">
         Updating…
       </span>
+    {/if}
+
+    {#if fullscreen && svg}
+      <div
+        class="absolute right-3 bottom-3 flex items-center gap-0.5 rounded-lg border bg-elevated/95 p-1 shadow-lg backdrop-blur-sm"
+      >
+        <button
+          type="button"
+          class="rounded p-1 text-dimmed transition-colors hover:bg-overlay hover:text-foreground disabled:pointer-events-none disabled:opacity-30"
+          aria-label="Zoom out"
+          title="Zoom out"
+          disabled={zoom <= MIN_ZOOM}
+          onclick={() => zoomByButton(1 / 1.4)}
+        >
+          <ZoomOut size={14} />
+        </button>
+        <span class="w-10 text-center font-mono text-[10px] text-dimmed">
+          {Math.round(zoom * 100)}%
+        </span>
+        <button
+          type="button"
+          class="rounded p-1 text-dimmed transition-colors hover:bg-overlay hover:text-foreground disabled:pointer-events-none disabled:opacity-30"
+          aria-label="Zoom in"
+          title="Zoom in"
+          disabled={zoom >= MAX_ZOOM}
+          onclick={() => zoomByButton(1.4)}
+        >
+          <ZoomIn size={14} />
+        </button>
+        <div class="mx-0.5 h-4 w-px bg-border/60" aria-hidden="true"></div>
+        <button
+          type="button"
+          class="rounded p-1 text-dimmed transition-colors hover:bg-overlay hover:text-foreground disabled:pointer-events-none disabled:opacity-30"
+          aria-label="Reset zoom and pan"
+          title="Reset zoom and pan"
+          disabled={zoom === 1 && panX === 0 && panY === 0}
+          onclick={resetView}
+        >
+          <RotateCcw size={14} />
+        </button>
+      </div>
     {/if}
   </div>
 {/snippet}
@@ -254,5 +417,9 @@
     height: auto;
     max-height: 70vh;
     margin-inline: auto;
+  }
+
+  .mermaid-svg-fullscreen :global(svg) {
+    max-height: 100%;
   }
 </style>
