@@ -369,9 +369,10 @@ export class DatabaseWorker {
   }
 
   /**
-   * Bounded read on the worker's connection. `sql` must not contain LIMIT;
-   * `maxRows` (>0) bounds the response and reports truncation. Serialized with
-   * every other request and the maintenance loop.
+   * Bounded read on the worker's connection. `maxRows` (>0) bounds the
+   * response and reports truncation; caller-owned LIMIT clauses are preserved
+   * inside an outer safety bound. Serialized with every other request and the
+   * maintenance loop.
    */
   async query(sql: string, params: unknown[], maxRows: number): Promise<ResultForRequest<'query'>> {
     return this.request({ kind: 'query', sql, params, maxRows })

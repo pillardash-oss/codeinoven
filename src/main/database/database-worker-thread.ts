@@ -35,6 +35,7 @@ import {
 import { mapMessageRows } from './repositories/agent-message-repo'
 import { runHistoryAppend, type HistoryAppendArgs } from './repositories/history-repo'
 import { buildTranscriptMarkdown } from '../../lib/transcript'
+import { buildBoundedQuery } from './bounded-query'
 
 /** Executor adapter over this worker's own connection. */
 function executor(): ProviderDeltaSyncExecutor {
@@ -467,21 +468,21 @@ function health(): DatabaseWorkerResult {
 }
 
 /**
- * Bounded read: the caller's SQL must not contain LIMIT; `maxRows` (>0) bounds
- * the response and reports `truncated` when more rows matched.
+ * Bounded read: `maxRows` (>0) bounds the response and reports `truncated`
+ * when more rows matched. Caller-owned LIMIT clauses remain inside an outer
+ * safety bound.
  */
 function query(request: Extract<DatabaseWorkerRequest, { kind: 'query' }>): DatabaseWorkerResult {
   try {
-    const maxRows = Math.max(0, Math.floor(request.maxRows))
-    let sql = request.sql.replace(/;\s*$/u, '')
+    const boundedQuery = buildBoundedQuery(request.sql, request.maxRows)
     const params = [...request.params]
-    if (maxRows > 0) {
-      sql = `${sql} LIMIT ?`
-      params.push(maxRows + 1)
+    if (boundedQuery.limitParam !== undefined) {
+      params.push(boundedQuery.limitParam)
     }
     const rows = connection()
-      .prepare(sql)
+      .prepare(boundedQuery.sql)
       .all(...params) as Record<string, unknown>[]
+    const maxRows = Math.max(0, Math.floor(request.maxRows))
     const truncated = maxRows > 0 && rows.length > maxRows
     return { kind: 'query', ok: true, rows: truncated ? rows.slice(0, maxRows) : rows, truncated }
   } catch (error) {

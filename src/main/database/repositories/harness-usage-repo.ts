@@ -781,7 +781,7 @@ export class HarnessUsageRepo {
    * Run an aggregate read on the maintenance worker connection so large
    * analytics scans never block the Electron main thread (primary-connection
    * fallback for in-memory test databases). Bounded far above any real result
-   * set; the caller's SQL must not contain LIMIT.
+   * set; any caller-owned LIMIT remains valid inside the worker's outer bound.
    */
   private async aggregate<T>(sql: string, params: unknown[]): Promise<T[]> {
     const result = await this.db.queryViaWorker(sql, params, ANALYTICS_MAX_ROWS)
