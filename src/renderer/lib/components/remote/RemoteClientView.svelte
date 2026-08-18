@@ -532,7 +532,7 @@
   </section>
 
   <ConnectedDevices
-    devices={remoteStatus?.devices ?? []}
+    devices={pairedDevices}
     {busy}
     onRename={(deviceId, name) => void handleRenameDevice(deviceId, name)}
     onDisconnect={(deviceId) => void handleDisconnectDevice(deviceId)}
