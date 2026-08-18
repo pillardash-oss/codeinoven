@@ -1,15 +1,23 @@
 import { spawn } from 'child_process'
-import { readFile, readdir } from 'node:fs/promises'
-import { homedir } from 'os'
+import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises'
+import { homedir, tmpdir } from 'os'
 import { join } from 'path'
 import type {
   AgentMessage,
   AgentPart,
   AgentProviderIssue,
+  PermissionReply,
   ProviderCatalog,
   ProviderModel,
   SessionAgentEvent
 } from '../../lib/types'
+import {
+  isQuestionToolName,
+  isTodoToolName,
+  normalizeAgentQuestions,
+  normalizeInteractionName,
+  permissionPatterns
+} from '../../lib/agent-interactions'
 import { attachmentReference, attachmentTarget } from './attachment-reference'
 import { buildHarnessEnvironment } from './cli-environment'
 import type {
@@ -44,11 +52,11 @@ import type { StorageEngine } from '../storage/storage-engine'
  *   - `task.lifecycle.side_effect_intent` → tool running + provider call id
  *   - `task.lifecycle.output` → tool chunk (bash `{command,description,output}`)
  *   - `tool.result` → authoritative tool completion (`call_id`, `text`)
- * The run/session id shared by every record is `payload.run_stream.id`
- * (== `payload.command_id`). Despite the `--session-id` flag, separate `exec`
- * invocations do NOT resume prior context (each run is a fresh session whose id
- * is never surfaced in the JSONL), so multi-turn context is replayed into the
- * prompt instead of relying on native resume.
+ * The provider session UUID is `envelope.stream.id`; `payload.run_stream.id`
+ * is only the current turn/run UUID. Passing the session UUID back through
+ * `--session-id` resumes Muse's retained native conversation. The live stream
+ * omits rich interaction arguments, which are recovered after affected turns
+ * through Muse's documented durable session export.
  * There is no per-record token/usage telemetry.
  *
  * Meta's Muse Code launch documentation also demonstrates a local video file
@@ -57,6 +65,7 @@ import type { StorageEngine } from '../storage/storage-engine'
  */
 
 const MUSE_PROBE_TIMEOUT_MS = 15_000
+const MUSE_EXPORT_TIMEOUT_MS = 15_000
 
 /** Provider id under which every Muse-cloud model is catalogued. */
 const MUSE_PROVIDER_ID = 'meta'
@@ -224,6 +233,109 @@ function numberValue(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isFinite(value) ? value : undefined
 }
 
+function parseRecord(value: unknown): Record<string, unknown> | null {
+  if (typeof value !== 'string') return record(value)
+  try {
+    return record(JSON.parse(value) as unknown)
+  } catch {
+    return null
+  }
+}
+
+function firstString(...values: unknown[]): string | undefined {
+  return values.find((value): value is string => typeof value === 'string' && value.length > 0)
+}
+
+function normalizeMuseQuestions(value: unknown) {
+  const source = record(value)
+  const rawQuestions = Array.isArray(source?.['questions']) ? source['questions'] : []
+  const questions = rawQuestions.map((rawQuestion) => {
+    const question = record(rawQuestion)
+    const selection = record(question?.['selection'])
+    if (!question || selection?.['mode'] !== 'multiple') return rawQuestion
+    return { ...question, multiple: true }
+  })
+  return normalizeAgentQuestions({ questions })
+}
+
+function museToolNeedsPermission(toolName: string): boolean {
+  if (isQuestionToolName(toolName) || isTodoToolName(toolName)) return false
+  const name = normalizeInteractionName(toolName)
+  return [
+    'bash',
+    'shell',
+    'terminal',
+    'exec',
+    'command',
+    'write',
+    'edit',
+    'patch',
+    'delete',
+    'remove',
+    'move',
+    'rename',
+    'create',
+    'mkdir',
+    'save',
+    'copy',
+    'chmod',
+    'chown',
+    'install',
+    'upload',
+    'deploy',
+    'commit',
+    'push',
+    'merge',
+    'reset',
+    'checkout'
+  ].some((operation) => name.includes(operation))
+}
+
+/**
+ * Muse intentionally keeps sensitive tool arguments out of the live JSONL
+ * stream. Its documented session export contains the complete committed tool
+ * calls, questions, approvals, and todo snapshots. Export only after a turn
+ * that needs this enrichment, and keep the temporary document outside the
+ * project so ordinary turns pay no disk or parsing cost.
+ */
+async function readMuseTrailingRecords(nativeSessionId: string, runId: string): Promise<unknown[]> {
+  const directory = await mkdtemp(join(tmpdir(), 'codeinoven-muse-export-'))
+  const outputPath = join(directory, 'session.json')
+  try {
+    const result = await runMuse(
+      ['export', '--session', nativeSessionId, '--out', outputPath],
+      MUSE_EXPORT_TIMEOUT_MS
+    )
+    if (!result.succeeded) {
+      throw new Error(result.stderr.trim() || result.stdout.trim() || 'Muse export failed')
+    }
+    const root = record(JSON.parse(await readFile(outputPath, 'utf8')) as unknown)
+    const events = Array.isArray(root?.['events']) ? root['events'] : []
+    return events.flatMap((rawEvent) => {
+      const envelope = record(record(rawEvent)?.['envelope'])
+      const payload = record(envelope?.['payload'])
+      const event = record(payload?.['event'])
+      if (
+        envelope?.['payload_type'] !== 'runtime.session' ||
+        payload?.['run_id'] !== runId ||
+        !event
+      ) {
+        return []
+      }
+      const kind = stringValue(event['kind']) ?? ''
+      const carriesInteraction =
+        kind === 'assistant_tool_calls_committed' ||
+        kind === 'user_input_prompt_requested' ||
+        kind === 'todo_snapshot_updated' ||
+        (kind.includes('approval') &&
+          (kind.includes('request') || kind.includes('proposed') || kind.includes('pending')))
+      return carriesInteraction ? [envelope] : []
+    })
+  } finally {
+    await rm(directory, { recursive: true, force: true })
+  }
+}
+
 function museIssue(error: string): AgentProviderIssue {
   const normalized = error.toLowerCase()
   const quota =
@@ -251,6 +363,10 @@ interface MuseToolState {
   input: Record<string, unknown>
   output?: string
   title?: string
+  /** Muse policy outcome retained until exported arguments make a card useful. */
+  policyDecision?: string
+  /** CodeInOven stopped this call before execution to request user approval. */
+  requiresPermission?: boolean
   start: number
   end?: number
 }
@@ -268,6 +384,14 @@ interface MuseTurnState {
   tools: Map<string, MuseToolState>
   /** Reverse map: provider `call_id` → `task_id`, for `tool.result` correlation. */
   toolByCall: Map<string, string>
+  /** Muse run UUID used to select only this turn from the cumulative export. */
+  runId?: string
+  /** True when the live stream omitted data required by a shared interaction card. */
+  needsExport: boolean
+  /** Exported question/approval ids already promoted into the shared event stream. */
+  promotedInteractions: Set<string>
+  /** Tool tasks synchronously stopped before Muse could execute them. */
+  gatedTaskIds: Set<string>
 }
 
 function museMessage(state: MuseTurnState): AgentMessage {
@@ -322,6 +446,58 @@ function museToolEvent(context: CliLineParseContext, state: MuseTurnState, tool:
   return { type: 'message.part.updated' as const, sessionId: context.sessionId, part }
 }
 
+function museToolForCall(
+  state: MuseTurnState,
+  toolName: string,
+  callId?: string
+): MuseToolState | undefined {
+  const taskId = callId ? state.toolByCall.get(callId) : undefined
+  if (taskId) return state.tools.get(taskId)
+  return [...state.tools.values()].find(
+    (tool) => tool.tool === toolName && Object.keys(tool.input).length === 0
+  )
+}
+
+function musePermissionEvent(
+  context: CliLineParseContext,
+  state: MuseTurnState,
+  event: Record<string, unknown>
+): SessionAgentEvent | null {
+  const details = record(event['request']) ?? record(event['approval']) ?? event
+  const requestId = firstString(
+    details['approval_id'],
+    details['request_id'],
+    details['prompt_id'],
+    details['tool_call_id'],
+    event['approval_id'],
+    event['request_id']
+  )
+  if (!requestId || state.promotedInteractions.has(`permission:${requestId}`)) return null
+  const toolName =
+    firstString(details['tool_name'], details['operation'], details['name']) ?? 'permission'
+  const input =
+    parseRecord(details['input']) ??
+    parseRecord(details['arguments']) ??
+    parseRecord(details['args']) ??
+    {}
+  for (const key of ['command', 'path', 'cwd', 'description']) {
+    const value = details[key]
+    if (value !== undefined && input[key] === undefined) input[key] = value
+  }
+  state.promotedInteractions.add(`permission:${requestId}`)
+  return {
+    type: 'permission.asked',
+    sessionId: context.sessionId,
+    permission: {
+      id: requestId,
+      sessionId: context.sessionId,
+      permission: toolName,
+      patterns: permissionPatterns(input),
+      metadata: { tool: toolName, input }
+    }
+  }
+}
+
 /** Normalize a Muse `tool.<name>` task kind / `tool:<name>` operation into a name. */
 function museToolName(value: unknown, strip: 'task_kind' | 'operation'): string | undefined {
   const raw = stringValue(value)
@@ -356,9 +532,9 @@ function escapeMuseMentions(text: string): string {
  *
  * Every line is `{ record_type, payload_type, payload }`; the meaningful
  * payloads are `run.output.delta` (streaming text), `run.terminal.completed`
- * (turn end), and `run.model.configured` (provenance). The run id carried by
- * every record (`payload.run_stream.id` / `payload.command_id`) is surfaced as
- * the native session id so the next turn can resume via `--session-id`.
+ * (turn end), and `run.model.configured` (provenance). The top-level session
+ * stream id is retained for `--session-id`; the nested run id only correlates
+ * the current turn with its exported interaction details.
  *
  * Unknown record types are ignored so schema drift degrades to a silent turn
  * rather than a broken session. Keeping this boundary pure makes it testable.
@@ -372,12 +548,112 @@ export function mapMuseRecord(
   const payload = record(entry?.['payload'])
   if (!entry || !payload) return null
 
-  const runStream = record(payload['run_stream'])
-  const nativeSessionId = stringValue(runStream?.['id']) ?? stringValue(payload['command_id'])
+  const stream = record(entry['stream'])
+  const nativeSessionId = stream?.['kind'] === 'session' ? stringValue(stream['id']) : undefined
   const base: CliLineParseResult = nativeSessionId ? { nativeSessionId } : {}
 
   const payloadType = stringValue(entry['payload_type'])
   const taskId = stringValue(payload['task_id'])
+  const runStream = record(payload['run_stream'])
+  const observedRunId = stringValue(runStream?.['id']) ?? stringValue(payload['run_id'])
+  if (observedRunId) state.runId ??= observedRunId
+
+  if (payloadType?.includes('approval')) {
+    state.needsExport = true
+    if (
+      payloadType.includes('request') ||
+      payloadType.includes('proposed') ||
+      payloadType.includes('pending')
+    ) {
+      const approvalEvent = musePermissionEvent(context, state, record(payload['event']) ?? payload)
+      if (approvalEvent) return { ...base, events: [approvalEvent] }
+    }
+  }
+
+  if (payloadType === 'runtime.session') {
+    const exportedEvent = record(payload['event'])
+    const exportedRunId = stringValue(payload['run_id'])
+    if (!exportedEvent || (state.runId && exportedRunId !== state.runId)) return base
+    const kind = stringValue(exportedEvent['kind'])
+
+    if (kind === 'assistant_tool_calls_committed') {
+      const calls = Array.isArray(exportedEvent['tool_calls']) ? exportedEvent['tool_calls'] : []
+      const events: SessionAgentEvent[] = []
+      for (const rawCall of calls) {
+        const call = record(rawCall)
+        const callId = stringValue(call?.['call_id'])
+        const toolName = stringValue(call?.['name'])
+        if (!callId || !toolName) continue
+        const tool = museToolForCall(state, toolName, callId)
+        if (!tool) continue
+        const input = parseRecord(call?.['args'])
+        if (input) tool.input = input
+        tool.callId = callId
+        state.toolByCall.set(callId, tool.taskId)
+        events.push(museToolEvent(context, state, tool))
+        if (
+          tool.requiresPermission ||
+          (tool.policyDecision &&
+            !tool.policyDecision.startsWith('allow') &&
+            tool.policyDecision !== 'not_applicable')
+        ) {
+          const permissionEvent = musePermissionEvent(context, state, {
+            approval_id: callId,
+            tool_name: toolName,
+            input: tool.input
+          })
+          if (permissionEvent) events.push(permissionEvent)
+        }
+      }
+      return events.length > 0 ? { ...base, events } : base
+    }
+
+    if (kind === 'todo_snapshot_updated') {
+      const items = Array.isArray(exportedEvent['items']) ? exportedEvent['items'] : []
+      const tool = [...state.tools.values()].findLast((candidate) => isTodoToolName(candidate.tool))
+      if (!tool || items.length === 0) return base
+      tool.input = { todos: items }
+      return { ...base, events: [museToolEvent(context, state, tool)] }
+    }
+
+    if (kind === 'user_input_prompt_requested') {
+      const requestId =
+        firstString(exportedEvent['tool_call_id'], exportedEvent['prompt_id']) ?? taskId
+      if (!requestId || state.promotedInteractions.has(`question:${requestId}`)) return base
+      const tool = museToolForCall(state, 'request_user_input', requestId)
+      if (tool && Object.keys(tool.input).length === 0) {
+        tool.input = { questions: exportedEvent['questions'] }
+      }
+      const questions = normalizeMuseQuestions(
+        tool?.input ?? { questions: exportedEvent['questions'] }
+      )
+      state.promotedInteractions.add(`question:${requestId}`)
+      return {
+        ...base,
+        events: [
+          ...(tool ? [museToolEvent(context, state, tool)] : []),
+          {
+            type: 'question.asked',
+            sessionId: context.sessionId,
+            requestId,
+            questions,
+            ...(tool
+              ? { tool: { messageID: state.messageId, callID: tool.callId ?? requestId } }
+              : {})
+          }
+        ]
+      }
+    }
+
+    if (
+      kind?.includes('approval') &&
+      (kind.includes('request') || kind.includes('proposed') || kind.includes('pending'))
+    ) {
+      const event = musePermissionEvent(context, state, exportedEvent)
+      return event ? { ...base, events: [event] } : base
+    }
+    return base
+  }
 
   // Tool call proposed — announce a pending tool card in the working trace.
   if (payloadType === 'task.lifecycle.proposed') {
@@ -389,10 +665,28 @@ export function mapMuseRecord(
         tool: taskKind,
         status: 'pending',
         input: {},
+        ...(state.gatedTaskIds.has(taskId) ? { requiresPermission: true } : {}),
         start: Date.now()
       }
       state.tools.set(taskId, tool)
+      if (isQuestionToolName(taskKind) || isTodoToolName(taskKind)) state.needsExport = true
+      // A rich question is promoted from Muse's retained export after the
+      // headless turn auto-resolves it. Emitting the empty live tool here would
+      // create a duplicate generic question card first.
+      if (isQuestionToolName(taskKind)) return base
       return { ...base, events: [museToolEvent(context, state, tool)] }
+    }
+    return base
+  }
+
+  if (payloadType === 'task.lifecycle.scheduled') {
+    const tool = taskId ? state.tools.get(taskId) : undefined
+    if (!tool) return base
+    const idempotencyKey = stringValue(record(payload['event'])?.['idempotency_key'])
+    const callId = idempotencyKey?.split(':').find((segment) => segment.startsWith('call_'))
+    if (callId) {
+      tool.callId = callId
+      state.toolByCall.set(callId, tool.taskId)
     }
     return base
   }
@@ -403,6 +697,13 @@ export function mapMuseRecord(
     const tool = taskId ? state.tools.get(taskId) : undefined
     if (!tool) return base
     const event = record(payload['event'])
+    const policyDecision = stringValue(event?.['policy_decision'])
+    if (policyDecision) {
+      tool.policyDecision = policyDecision
+      if (!policyDecision.startsWith('allow') && policyDecision !== 'not_applicable') {
+        state.needsExport = true
+      }
+    }
     const idempotencyKey = stringValue(event?.['idempotency_key'])
     const foundCallId = idempotencyKey?.split(':').find((segment) => segment.startsWith('call_'))
     if (foundCallId && taskId) {
@@ -410,6 +711,7 @@ export function mapMuseRecord(
       state.toolByCall.set(foundCallId, taskId)
     }
     tool.status = 'running'
+    if (isQuestionToolName(tool.tool)) return base
     return { ...base, events: [museToolEvent(context, state, tool)] }
   }
 
@@ -441,6 +743,7 @@ export function mapMuseRecord(
       tool.output = chunk
       if (!tool.title) tool.title = tool.tool
     }
+    if (isQuestionToolName(tool.tool)) return base
     return { ...base, events: [museToolEvent(context, state, tool)] }
   }
 
@@ -467,6 +770,7 @@ export function mapMuseRecord(
       if (!tool.title) tool.title = editedPath
     }
     tool.end = Date.now()
+    if (isQuestionToolName(tool.tool)) return base
     return { ...base, events: [museToolEvent(context, state, tool)] }
   }
 
@@ -539,9 +843,9 @@ export class MuseDriver extends PersistentCliDriver {
     runtimeTopology: { kind: 'turn_process', scope: 'session' },
     streaming: true,
     steering: false,
-    nativeResume: false,
-    messageHistory: 'mirrored',
-    interactivePermissions: false,
+    nativeResume: true,
+    messageHistory: 'native',
+    interactivePermissions: true,
     attachments: true,
     commands: false,
     providerCatalog: true,
@@ -553,6 +857,9 @@ export class MuseDriver extends PersistentCliDriver {
   }
 
   private turnStates = new Map<string, MuseTurnState>()
+  private continuationOptions = new Map<string, SendPromptOptions>()
+  private approvedToolAllowances = new Map<string, number>()
+  private hiddenContinuationSessions = new Set<string>()
 
   constructor(storage: StorageEngine) {
     super(storage)
@@ -585,7 +892,13 @@ export class MuseDriver extends PersistentCliDriver {
     session: PersistentCliSession,
     options: SendPromptOptions
   ): Promise<CliTurnCommand> {
-    const args: string[] = ['exec', '--json']
+    const args: string[] = [
+      'exec',
+      '--json',
+      '--trust-workspace',
+      '--no-foreign-personal-context',
+      '--user-input-auto-resolve'
+    ]
     if (session.nativeSessionId) args.push('--session-id', session.nativeSessionId)
     if (options.settings.providerId && options.settings.providerId !== 'default') {
       args.push('--provider', options.settings.providerId)
@@ -600,11 +913,6 @@ export class MuseDriver extends PersistentCliDriver {
     } else if (options.settings.permissionLevel === 'full_access') {
       // Full Access trusts the workspace and bypasses approval and the sandbox.
       args.push('--yolo')
-    } else {
-      // Auto Review runs the turn autonomously inside Muse's OS sandbox,
-      // disabling approval prompts so headless exec is not left waiting on a
-      // card nobody can see. Full Access (above) additionally drops the sandbox.
-      args.push('--disable-approval')
     }
 
     const attachmentReferences: string[] = []
@@ -625,7 +933,6 @@ export class MuseDriver extends PersistentCliDriver {
 
     const prompt = [
       options.systemPrompt,
-      this.buildHistoryBlock(session),
       attachmentReferences.join('\n\n'),
       escapeMuseMentions(options.text)
     ]
@@ -634,7 +941,7 @@ export class MuseDriver extends PersistentCliDriver {
     args.push(prompt)
 
     const turnIndex = session.messages.filter((message) => message.role === 'assistant').length + 1
-    this.turnStates.set(session.id, {
+    const turnState: MuseTurnState = {
       turnIndex,
       messageId: `muse:${session.id}:${turnIndex}`,
       createdAt: Date.now(),
@@ -642,29 +949,123 @@ export class MuseDriver extends PersistentCliDriver {
       parts: [],
       started: false,
       tools: new Map(),
-      toolByCall: new Map()
-    })
-    return { command: 'muse', args, env: buildHarnessEnvironment() }
+      toolByCall: new Map(),
+      needsExport: false,
+      promotedInteractions: new Set(),
+      gatedTaskIds: new Set()
+    }
+    this.turnStates.set(session.id, turnState)
+    this.continuationOptions.set(session.id, { ...options, text: '', attachments: [] })
+    return {
+      command: 'muse',
+      args,
+      env: buildHarnessEnvironment(),
+      onJsonRecord: (value) => {
+        if (options.settings.permissionLevel === 'full_access') return
+        const envelope = record(value)
+        if (envelope?.['payload_type'] !== 'task.lifecycle.proposed') return
+        const payload = record(envelope['payload'])
+        const event = record(payload?.['event'])
+        const taskId = stringValue(payload?.['task_id'])
+        const taskKind = museToolName(event?.['task_kind'], 'task_kind')
+        if (!taskId || !taskKind || !museToolNeedsPermission(taskKind)) return
+        const allowance = this.approvedToolAllowances.get(session.id) ?? 0
+        if (allowance > 0) {
+          if (allowance === 1) this.approvedToolAllowances.delete(session.id)
+          else this.approvedToolAllowances.set(session.id, allowance - 1)
+          return
+        }
+        turnState.gatedTaskIds.add(taskId)
+        turnState.needsExport = true
+        this.stopActiveProcess(session.id)
+      },
+      loadTrailingRecords: async () => {
+        const state = this.turnStates.get(session.id)
+        if (!state?.needsExport || !session.nativeSessionId || !state.runId) return []
+        return readMuseTrailingRecords(session.nativeSessionId, state.runId)
+      },
+      suppressIdle: () => turnState.promotedInteractions.size > 0,
+      onProcessExit: () => this.approvedToolAllowances.delete(session.id)
+    }
   }
 
-  /**
-   * Muse's `exec` does not resume prior context across invocations, so prior
-   * turns are replayed into the prompt as a clearly delimited transcript.
-   * `session.messages` at this point holds only completed prior turns (the
-   * current user message is appended by the base class after this runs).
-   */
-  private buildHistoryBlock(session: PersistentCliSession): string {
-    if (session.messages.length === 0) return ''
-    const transcript = session.messages
-      .map((message) => {
-        const text = message.parts
-          .filter((part): part is Extract<AgentPart, { type: 'text' }> => part.type === 'text')
-          .map((part) => part.text)
-          .join('\n')
-        return `[${message.role}]\n${escapeMuseMentions(text)}`
-      })
-      .join('\n\n')
-    return `Previous conversation:\n${transcript}`
+  override async replyPermission(
+    projectPath: string,
+    requestId: string,
+    reply: PermissionReply,
+    message?: string,
+    sessionId?: string
+  ): Promise<void> {
+    if (!sessionId) throw new Error(`Muse permission request is no longer pending: ${requestId}`)
+    if (reply === 'reject' && !message) return
+    const action =
+      reply === 'reject'
+        ? `The user rejected the requested action and supplied this alternative:\n${message ?? ''}`
+        : `The user approved the requested action through CodeInOven (${reply}). Execute only that approved action, then continue. Ask again before any different action that requires approval.`
+    if (reply === 'reject') {
+      await this.continueInteraction(projectPath, sessionId, action)
+      return
+    }
+    this.approvedToolAllowances.set(sessionId, 1)
+    try {
+      await this.continueInteraction(projectPath, sessionId, action)
+    } catch (error) {
+      this.approvedToolAllowances.delete(sessionId)
+      throw error
+    }
+  }
+
+  override async replyToQuestion(
+    projectPath: string,
+    sessionId: string,
+    _requestId: string,
+    answers: string[][]
+  ): Promise<void> {
+    const formatted = answers
+      .map((values, index) => `${index + 1}. ${values.join(', ')}`)
+      .join('\n')
+    await this.continueInteraction(
+      projectPath,
+      sessionId,
+      `The user answered Muse's earlier request_user_input prompt through CodeInOven:\n${formatted}\nContinue from these answers without asking the same question again.`
+    )
+  }
+
+  override async rejectQuestion(
+    projectPath: string,
+    sessionId: string,
+    _requestId: string
+  ): Promise<void> {
+    await this.continueInteraction(
+      projectPath,
+      sessionId,
+      "The user dismissed Muse's earlier request_user_input prompt. Continue without that answer, or explain why the task cannot continue."
+    )
+  }
+
+  private async continueInteraction(
+    projectPath: string,
+    sessionId: string,
+    text: string
+  ): Promise<void> {
+    const options = this.continuationOptions.get(sessionId)
+    if (!options) throw new Error(`Muse interaction session is unavailable: ${sessionId}`)
+    this.hiddenContinuationSessions.add(sessionId)
+    try {
+      await this.sendPrompt(projectPath, { ...options, sessionId, text, attachments: [] })
+    } finally {
+      this.hiddenContinuationSessions.delete(sessionId)
+    }
+  }
+
+  protected override appendUserMessage(
+    session: PersistentCliSession,
+    options: Pick<SendPromptOptions, 'text' | 'attachments' | 'userMessageId'>
+  ): void {
+    super.appendUserMessage(session, options)
+    if (!this.hiddenContinuationSessions.has(session.id)) return
+    const message = session.messages.findLast((candidate) => candidate.role === 'user')
+    if (message) message.visibility = 'hidden'
   }
 
   protected parseJsonLine(value: unknown, context: CliLineParseContext): CliLineParseResult | null {
@@ -675,6 +1076,9 @@ export class MuseDriver extends PersistentCliDriver {
 
   dispose(): void {
     this.turnStates.clear()
+    this.continuationOptions.clear()
+    this.approvedToolAllowances.clear()
+    this.hiddenContinuationSessions.clear()
     super.dispose()
   }
 }

@@ -104,6 +104,13 @@ export interface CliTurnCommand {
   provenanceModelId?: string
   /** Called for each parsed provider record before provider-specific mapping. */
   onJsonRecord?: (value: unknown) => void
+  /**
+   * Load provider records that only become available after the process exits
+   * (for example, interaction details from a retained session export).
+   */
+  loadTrailingRecords?: () => Promise<unknown[]>
+  /** Keep the logical turn paused when trailing records surfaced a blocking interaction. */
+  suppressIdle?: () => boolean
   /** Called when spawning fails or the child exits. Must be safe to call more than once. */
   onProcessExit?: () => void
 }
@@ -387,6 +394,16 @@ export abstract class PersistentCliDriver implements HarnessDriver {
       completed = true
       invocation.onProcessExit?.()
       this.activeProcesses.delete(session.id)
+      if (invocation.loadTrailingRecords && !this.deletedSessions.has(session.id)) {
+        try {
+          const records = await invocation.loadTrailingRecords()
+          for (const record of records) {
+            this.consumeJsonValue(record, session, projectPath)
+          }
+        } catch (trailingError) {
+          Logger.dev(`${this.name} trailing interaction records were unavailable:`, trailingError)
+        }
+      }
       if (!this.deletedSessions.has(session.id)) {
         try {
           await this.persistSession(session)
@@ -418,7 +435,9 @@ export abstract class PersistentCliDriver implements HarnessDriver {
         })
       }
       this.structuredProcessIssues.delete(session.id)
-      this.emit({ type: 'session.idle', sessionId: session.id })
+      if (!invocation.suppressIdle?.()) {
+        this.emit({ type: 'session.idle', sessionId: session.id })
+      }
     }
 
     child.stdout?.on('data', (chunk: Buffer) => {
@@ -595,6 +614,12 @@ export abstract class PersistentCliDriver implements HarnessDriver {
     child.stdin.write(input)
   }
 
+  /** Stop a turn synchronously at a provider record boundary. */
+  protected stopActiveProcess(sessionId: string): void {
+    const child = this.activeProcesses.get(sessionId)
+    if (child && !child.killed) child.kill()
+  }
+
   /** Close a streaming-input turn after its final provider result arrives. */
   protected closeActiveInput(sessionId: string): void {
     this.activeProcesses.get(sessionId)?.stdin?.end()
@@ -711,6 +736,14 @@ export abstract class PersistentCliDriver implements HarnessDriver {
       value = recovered
     }
     invocation.onJsonRecord?.(value)
+    this.consumeJsonValue(value, session, projectPath)
+  }
+
+  private consumeJsonValue(
+    value: unknown,
+    session: PersistentCliSession,
+    projectPath: string
+  ): void {
     const result = this.parseJsonLine(value, {
       session,
       sessionId: session.id,
