@@ -23,6 +23,7 @@
   import type { AgentPart, AgentToolStatus, ThinkingLevel } from '$shared/types'
   import { isImageMime } from '$lib/mime'
   import { FileBlobUrlManager } from '$lib/media-urls.svelte'
+  import { latestWorkingTraceParts } from '$lib/working-trace-parts'
 
   interface Props {
     parts: AgentPart[]
@@ -87,12 +88,13 @@
   let closeTimer: ReturnType<typeof setTimeout> | null = null
   let imageUrls = new FileBlobUrlManager()
   let elapsed = $state(0)
+  const visibleParts = $derived(latestWorkingTraceParts(parts))
 
   // When no explicit start is available, fall back to the earliest working
   // part timestamp so the timer keeps counting even at message boundaries.
   const effectiveStartTime = $derived.by((): number | undefined => {
     if (startTime && startTime > 0) return startTime
-    for (const part of parts) {
+    for (const part of visibleParts) {
       const start =
         part.type === 'tool'
           ? part.state.time?.start
@@ -133,7 +135,7 @@
   // reliably in the Electron renderer.
   $effect(() => {
     if (!isOpen) return
-    for (const part of parts) {
+    for (const part of visibleParts) {
       if (part.type === 'file' && isImageMime(part.mime) && part.url.startsWith('file://')) {
         void imageUrls.load(part.url, part.mime)
       }
@@ -147,7 +149,7 @@
   }
 
   $effect(() => {
-    if (busy && parts.length > 0) {
+    if (busy && visibleParts.length > 0) {
       if (closeTimer) {
         clearTimeout(closeTimer)
         closeTimer = null
@@ -200,21 +202,21 @@
   }
 
   let lastReasoningId = $derived.by((): string | null => {
-    for (let i = parts.length - 1; i >= 0; i--) {
-      if (parts[i].type === 'reasoning') return parts[i].id
+    for (let i = visibleParts.length - 1; i >= 0; i--) {
+      if (visibleParts[i].type === 'reasoning') return visibleParts[i].id
     }
     return null
   })
   type SubagentPart = Extract<AgentPart, { type: 'subagent' }>
   const subagentParts = $derived(
-    parts.filter((part): part is SubagentPart => part.type === 'subagent')
+    visibleParts.filter((part): part is SubagentPart => part.type === 'subagent')
   )
   const subagentCount = $derived(subagentParts.length)
   const activeSubagentCount = $derived(
     subagentParts.filter((part) => part.activity.status === 'running').length
   )
   const hasCompaction = $derived(
-    parts.some((part) => part.type === 'compaction' || part.type === 'compaction-summary')
+    visibleParts.some((part) => part.type === 'compaction' || part.type === 'compaction-summary')
   )
 
   // Live clock for the sub-agent dropdown list — ticks only while any sub-agent is running.
@@ -257,7 +259,7 @@
       <Cog size={12} class="shrink-0" />
     {/if}
     Working Trace
-    <span class="tabular-nums text-dimmed">({parts.length})</span>
+    <span class="tabular-nums text-dimmed">({visibleParts.length})</span>
     {#if hasCompaction || subagentCount > 0}
       <span class="ml-auto flex items-center gap-1.5">
         {#if hasCompaction}
@@ -365,7 +367,7 @@
   </summary>
   {#if isOpen}
     <div class="flex flex-col px-3 pb-3 [&>*:first-child]:mt-2 [&>*+*]:mt-2">
-      {#each parts as part (part.id)}
+      {#each visibleParts as part (part.id)}
         {#if part.type === 'reasoning'}
           <ThinkingBlock {part} active={busy && part.id === lastReasoningId} {onCiteFile} />
         {:else if part.type === 'tool'}
