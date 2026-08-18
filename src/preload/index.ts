@@ -134,6 +134,7 @@ const INVOKE_CHANNELS = [
   'workerNames:getSettings',
   'workerNames:saveCustom',
   'dialog:pickFolder',
+  'attachment:saveText',
   'clipboard:saveImage',
   'clipboard:writeText',
   'clipboard:readText',

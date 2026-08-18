@@ -84,6 +84,8 @@
   } from '$shared/types'
 
   type StartAfterSelection = Pick<Thread, 'id' | 'title'>
+  const MAX_PROMPT_CHARACTERS = 200_000
+  const LONG_PASTE_ATTACHMENT_CHARACTERS = 100_000
 
   interface Props {
     /** Called with the trimmed message and attachments when the user sends.
@@ -583,6 +585,7 @@
   let selectedModelLacksVision = $derived(selectedModel?.attachment === false)
   let hasImageAttachments = $derived(attachments.some(isImageAttachment))
   let attachmentBlockedNotice = $state(false)
+  let textAttachmentError = $state('')
 
   function isImageAttachment(file: PromptAttachment): boolean {
     if (file.mime.startsWith('image/')) return true
@@ -694,8 +697,8 @@
    *  empty message can still be sent (the comment is the payload). */
   let hasCommentReference = $derived(references.some((reference) => Boolean(reference.comment)))
 
-  /** Whether there is anything to send: text or a commented selection. */
-  let hasSendableContent = $derived(hasText || hasCommentReference)
+  /** Whether there is anything to send: text, an attachment, or a commented selection. */
+  let hasSendableContent = $derived(hasText || attachments.length > 0 || hasCommentReference)
 
   /** Whether the button should show the stop icon (agent working, nothing to send). */
   let canStop = $derived(working && !hasSendableContent)
@@ -790,7 +793,7 @@
     }
     cancelStop()
     const msg = value.trim()
-    if (!msg && !hasCommentReference) return
+    if (!msg && attachments.length === 0 && !hasCommentReference) return
     historyIndex = -1
     savedValue = ''
     const slashCommand = /^\/([^\s]+)(?:\s+([\s\S]*))?$/u.exec(msg)
@@ -1159,6 +1162,42 @@
     await addFileAttachments([{ path: filePath, file }])
   }
 
+  function isEditablePastedTextAttachment(file: PromptAttachment): boolean {
+    if (file.mime !== 'text/plain') return false
+    const path = fileUrlToPath(file.url)
+    return /^pasted-[0-9a-f-]+\.txt$/u.test(path.split(/[/\\]/u).pop() ?? '')
+  }
+
+  async function addPastedTextAttachment(text: string): Promise<void> {
+    if (!attachmentStorage) throw new Error('Attachment storage is unavailable for this chat.')
+    const path = await invoke('attachment:saveText', attachmentStorage, text)
+    const attachment: PromptAttachment = {
+      mime: 'text/plain',
+      url: pathToFileUrl(path),
+      filename: 'Pasted text.txt'
+    }
+    attachments = [...attachments, attachment]
+    previewTexts = { ...previewTexts, [attachment.url]: text }
+    onAttachmentsChange?.([...attachments])
+  }
+
+  async function savePastedTextAttachment(
+    attachment: PromptAttachment,
+    text: string
+  ): Promise<void> {
+    if (!attachmentStorage || !isEditablePastedTextAttachment(attachment)) {
+      throw new Error('This attachment is not editable here.')
+    }
+    await invoke('attachment:saveText', attachmentStorage, text, fileUrlToPath(attachment.url))
+    previewTexts = { ...previewTexts, [attachment.url]: text }
+  }
+
+  async function savePreviewText(text: string): Promise<void> {
+    const attachment = previewFile
+    if (!attachment) throw new Error('The attachment preview is no longer open.')
+    await savePastedTextAttachment(attachment, text)
+  }
+
   function removeAttachment(index: number): void {
     const removed = attachments[index]
     if (removed) {
@@ -1305,6 +1344,26 @@
 
   async function handlePaste(e: ClipboardEvent): Promise<void> {
     if (readOnlyMode && !allowAttachments) return
+    const pastedText = e.clipboardData?.getData('text/plain') ?? ''
+    const shouldAttachText =
+      pastedText.length >= LONG_PASTE_ATTACHMENT_CHARACTERS ||
+      value.length + pastedText.length > MAX_PROMPT_CHARACTERS
+    if (
+      shouldAttachText &&
+      pastedText.length > 0 &&
+      attachmentStorage &&
+      !selectedHarnessLacksAttachments
+    ) {
+      e.preventDefault()
+      textAttachmentError = ''
+      try {
+        await addPastedTextAttachment(pastedText)
+      } catch (error) {
+        textAttachmentError =
+          error instanceof Error ? error.message : 'The pasted text could not be attached.'
+      }
+      return
+    }
     const items = e.clipboardData?.items
     if (!items) return
     if (selectedHarnessLacksAttachments) {
@@ -1492,6 +1551,7 @@
     attachment={previewFile}
     src={previewUrls[previewFile.url]}
     text={previewTexts[previewFile.url]}
+    onSaveText={isEditablePastedTextAttachment(previewFile) ? savePreviewText : undefined}
     onClose={() => (previewFile = null)}
   />
 {/if}
@@ -1611,6 +1671,15 @@
       role="status"
     >
       This model cannot accept file attachments. Choose another model before sending this file.
+    </div>
+  {/if}
+
+  {#if textAttachmentError}
+    <div
+      class="mx-3 mt-2.5 rounded-lg border border-danger/30 bg-danger/5 px-3 py-2 text-xs text-danger"
+      role="status"
+    >
+      {textAttachmentError}
     </div>
   {/if}
 

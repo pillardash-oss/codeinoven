@@ -5,7 +5,7 @@ import { existsSync, readFileSync } from 'node:fs'
 import { lstat, readFile, writeFile, mkdir, stat } from 'fs/promises'
 import { release } from 'os'
 import { randomUUID } from 'node:crypto'
-import { basename, dirname, extname, isAbsolute, join } from 'path'
+import { basename, dirname, extname, isAbsolute, join, resolve } from 'path'
 import { APP_NAME, APP_SLUG } from '../../lib/brand'
 import { modelKey } from '../../lib/model-keys'
 import type { Database } from '../database/database'
@@ -2727,6 +2727,39 @@ export function registerIpcHandlers(
   })
 
   ipcMain.handle('clipboard:readText', () => clipboard.readText())
+
+  ipcMain.handle(
+    'attachment:saveText',
+    async (_event, rawScope: unknown, rawText: unknown, rawExistingPath: unknown) => {
+      const scope = validateAttachmentStorageScope(rawScope)
+      const text = validateBoundedString(rawText, 'Text attachment', 1, 16 * 1024 * 1024)
+      if (Buffer.byteLength(text, 'utf8') > 16 * 1024 * 1024) {
+        throw new TypeError('Text attachment must be at most 16 MB')
+      }
+
+      const directory = await attachmentStorageDirectory(scope)
+      await mkdir(directory, { recursive: true })
+      let targetPath: string
+      if (rawExistingPath === undefined) {
+        targetPath = join(directory, `pasted-${randomUUID()}.txt`)
+      } else {
+        if (typeof rawExistingPath !== 'string') {
+          throw new TypeError('Existing text attachment path must be a string')
+        }
+        targetPath = resolve(rawExistingPath)
+        if (
+          resolve(dirname(targetPath)) !== resolve(directory) ||
+          !/^pasted-[0-9a-f-]+\.txt$/u.test(basename(targetPath))
+        ) {
+          throw new TypeError('Existing text attachment path is outside this composer')
+        }
+      }
+
+      await atomicWrite(targetPath, text)
+      await privilegedIpc.registerUserSelectedFile(targetPath)
+      return targetPath
+    }
+  )
 
   ipcMain.handle('clipboard:saveImage', async (_event, rawScope: unknown) => {
     try {

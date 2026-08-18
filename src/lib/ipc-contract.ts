@@ -748,6 +748,10 @@ export interface IpcInvokeContract {
   'workerNames:saveCustom': Contract<[names: string[]], void>
   'dialog:pickFolder': Contract<[], string | null>
   'clipboard:saveImage': Contract<[scope: AttachmentStorageScope], string | null>
+  'attachment:saveText': Contract<
+    [scope: AttachmentStorageScope, text: string, existingPath?: string],
+    string
+  >
   'clipboard:writeText': Contract<[text: string], void>
   'clipboard:readText': Contract<[], string>
   'dialog:pickFile': Contract<[scope?: AttachmentStorageScope], string | null>
