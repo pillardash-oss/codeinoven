@@ -550,6 +550,7 @@ export class RemoteModeController {
       enrollmentExpiresAt: null,
       lastError: null
     }
+    this.refreshDevices(new Set())
   }
 
   /**
@@ -1888,9 +1889,16 @@ export class RemoteModeController {
         this.scheduleAccountProfileSync(0)
         this.broadcast()
       },
+      onDeviceAuthenticated: (deviceId) => {
+        const connectedIds = new Set(this.gateway?.listDevices().map((device) => device.id) ?? [])
+        connectedIds.add(deviceId)
+        this.refreshDevices(connectedIds)
+        this.broadcast()
+      },
       onDisconnected: (reason) => {
         if (this.cloudRelay !== relay) return
         this.cloudStatus = { ...this.cloudStatus, state: 'offline', lastError: reason }
+        this.refreshDevices(new Set(this.gateway?.listDevices().map((device) => device.id) ?? []))
         this.broadcast()
       },
       onRpc: async (channel, args, device) => {
@@ -1920,7 +1928,8 @@ export class RemoteModeController {
     this.cloudAbortController = null
     this.cloudRelay?.close()
     this.cloudRelay = null
-    if (this.devices.length === 0) setRemoteEventForwarder(null)
+    this.refreshDevices(new Set(this.gateway?.listDevices().map((device) => device.id) ?? []))
+    if (!this.devices.some((device) => device.connected)) setRemoteEventForwarder(null)
     if (this.cloudStatus.state !== 'disabled') {
       this.cloudStatus = { ...this.cloudStatus, state: 'offline' }
     }

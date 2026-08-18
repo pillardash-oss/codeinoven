@@ -24,6 +24,9 @@
 
   const initializing = $derived(remoteLoading || accountLoading)
   const accountProfile = $derived(accountState.profile)
+  const pairedDevices = $derived(
+    remoteStatus?.devices.filter((device) => device.revokedAt === null) ?? []
+  )
   const accountInitials = $derived.by(() => {
     const source = accountProfile?.displayName || accountProfile?.email || ''
     return source
@@ -428,15 +431,43 @@
           </p>
         {/if}
       {:else}
-        <div class="mt-3 flex items-center justify-between gap-3 text-xs">
-          <span class="text-muted">Connection</span>
-          <span class="font-medium text-foreground">
-            {remoteStatus.cloud.state === 'online'
-              ? 'Ready'
-              : remoteStatus.cloud.state === 'connecting'
-                ? 'Connecting…'
-                : 'Offline'}
-          </span>
+        <div class="mt-4 border-y py-4">
+          <h3 class="text-sm font-semibold text-foreground">Open the mobile app</h3>
+          <p class="mt-1 text-xs leading-relaxed text-muted">
+            {pairedDevices.length > 0
+              ? `${pairedDevices.length} ${pairedDevices.length === 1 ? 'phone is' : 'phones are'} paired. Scan to open the PWA and connect.`
+              : 'No phone has completed pairing yet. Scan to open the PWA and finish connecting this desktop.'}
+          </p>
+
+          {#if mobileAppUrl}
+            <div class="mt-4 flex flex-col gap-4 sm:flex-row sm:items-center">
+              <EnrollmentQr value={mobileAppUrl} />
+              <div class="min-w-0 flex-1">
+                <p class="truncate text-xs text-foreground" title={mobileAppUrl}>{mobileAppUrl}</p>
+                <div class="mt-3 flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    class="flex h-8 cursor-pointer items-center gap-1.5 rounded-lg border px-2.5 text-[11px] font-medium text-muted transition hover:bg-elevated hover:text-foreground"
+                    title="Copy mobile app link"
+                    aria-label="Copy mobile app link"
+                    onclick={() => void copyEnrollmentValue('link', mobileAppUrl)}
+                  >
+                    {#if copied === 'link'}<Check size={13} />{:else}<Copy size={13} />{/if}
+                    {copied === 'link' ? 'Copied link' : 'Copy link'}
+                  </button>
+                  <button
+                    type="button"
+                    class="flex h-8 cursor-pointer items-center gap-1.5 rounded-lg border px-2.5 text-[11px] font-medium text-muted transition hover:bg-elevated hover:text-foreground"
+                    title="Open mobile app in browser"
+                    aria-label="Open mobile app in browser"
+                    onclick={() => void openInBrowser(mobileAppUrl)}
+                  >
+                    <ExternalLink size={13} /> Open link
+                  </button>
+                </div>
+              </div>
+            </div>
+          {/if}
         </div>
         {#if remoteStatus.cloud.lastError}
           <p class="mt-2 text-[11px] text-danger">{remoteStatus.cloud.lastError}</p>
@@ -461,7 +492,7 @@
           onclick={() => void beginCloudEnrollment()}
         >
           {remoteStatus.cloud.desktopId
-            ? 'Create new code'
+            ? 'Pair another phone'
             : busy
               ? 'Creating pairing code…'
               : 'Create pairing code'}

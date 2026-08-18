@@ -29,11 +29,7 @@
     <QrCode size={32} class="animate-pulse text-dimmed" />
   {:then url}
     {#if url}
-      <img
-        src={url}
-        alt="QR code to open the mobile PWA and add this desktop"
-        class="h-full w-full"
-      />
+      <img src={url} alt="QR code to open the mobile PWA" class="h-full w-full" />
     {:else}
       <p class="px-3 text-center text-xs text-danger">Could not generate the QR code.</p>
     {/if}

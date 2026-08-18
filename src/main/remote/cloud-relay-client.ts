@@ -29,6 +29,8 @@ export interface CloudRelayClientOptions {
     args: unknown[],
     device?: RemoteRpcDeviceContext
   ) => Promise<{ ok: boolean; result?: unknown; message?: string }>
+  /** Called whenever a phone proves its persisted or newly enrolled identity. */
+  onDeviceAuthenticated?: (deviceId: string) => void
   /**
    * Device credential service used to authenticate the phone over the relay.
    * Every RPC invoke is bound to the device that authenticated this relay
@@ -650,6 +652,7 @@ export class CloudRelayClient {
       allProjects: device.allProjects,
       projectIds: device.projectIds
     }
+    this.options.onDeviceAuthenticated?.(device.deviceId)
     void this.send({
       type: 'remote:device:ok',
       device: { id: device.deviceId, authVersion: device.authVersion }
