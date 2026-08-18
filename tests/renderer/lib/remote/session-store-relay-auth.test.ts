@@ -48,6 +48,13 @@ function message(record: unknown): void {
   relayOnEvent.current?.({ kind: 'message', data: JSON.stringify(record) })
 }
 
+async function waitForRelayClient(store: RemoteSessionStore): Promise<void> {
+  await vi.waitFor(() => {
+    const client = (store as unknown as { accountRelayClient: unknown }).accountRelayClient
+    expect(client).not.toBeNull()
+  })
+}
+
 beforeAll(() => {
   // The store uses a browser `window` (origin + timers); polyfill under vitest.
   if (!('window' in globalThis)) {
@@ -73,16 +80,17 @@ afterEach(() => {
 describe('RemoteSessionStore — relay device auth gating', () => {
   it('does not release queued RPC until the device authenticates', async () => {
     const store = new RemoteSessionStore()
-    await store.connectCloud({
+    const connection = store.connectCloud({
       desktopId: 'desktop-1',
       mobileDeviceId: 'mobile-1',
       controlSecret: 'secret'
     })
+    await waitForRelayClient(store)
 
     // RPC sent before the device challenge/ok is held back.
     void store.sendPayload({ rpc: 'invoke', id: 1, channel: 'project:list', args: [] })
-    await Promise.resolve()
-    await Promise.resolve()
+    await waitForRelayClient(store)
+    await waitForRelayClient(store)
     expect(sentFrames.current.some((f) => f.includes('project:list'))).toBe(false)
 
     // The desktop issues its challenge; the phone replies (auth frame sent).
@@ -97,6 +105,7 @@ describe('RemoteSessionStore — relay device auth gating', () => {
 
     // Desktop confirms the binding → queued RPC is released.
     message({ type: 'remote:device:ok', device: { id: 'dev-1', authVersion: 1 } })
+    await connection
     await vi.waitFor(() => {
       expect(sentFrames.current.some((f) => f.includes('project:list'))).toBe(true)
     })
@@ -105,17 +114,19 @@ describe('RemoteSessionStore — relay device auth gating', () => {
 
   it('rejects authentication on remote:device:error and never sends queued RPC', async () => {
     const store = new RemoteSessionStore()
-    await store.connectCloud({
+    const connection = store.connectCloud({
       desktopId: 'desktop-1',
       mobileDeviceId: 'mobile-1',
       controlSecret: 'secret'
     })
+    await waitForRelayClient(store)
 
     message({ type: 'remote:device:challenge', nonce: 'challenge-1' })
     await vi.waitFor(() => {
       expect(sentFrames.current.some((f) => f.includes('remote:device:auth'))).toBe(true)
     })
     message({ type: 'remote:device:error', reason: 'signature_invalid' })
+    await connection
 
     await store.sendPayload({ rpc: 'invoke', id: 2, channel: 'project:list', args: [] })
     expect(sentFrames.current.some((f) => f.includes('project:list'))).toBe(false)
@@ -128,11 +139,12 @@ describe('RemoteSessionStore — relay device auth gating', () => {
     })
     identityOverride.current = { ...material, deviceId: 'other-desktop-device', authVersion: 2 }
     const store = new RemoteSessionStore()
-    await store.connectCloud({
+    const connection = store.connectCloud({
       desktopId: 'fresh-desktop',
       mobileDeviceId: 'mobile-1',
       controlSecret: 'fresh-bootstrap'
     })
+    await waitForRelayClient(store)
 
     void store.sendPayload({ rpc: 'invoke', id: 4, channel: 'project:list', args: [] })
     message({ type: 'remote:device:challenge', nonce: 'challenge-old-id' })
@@ -148,7 +160,7 @@ describe('RemoteSessionStore — relay device auth gating', () => {
     await vi.waitFor(() => {
       expect(sentFrames.current.some((frame) => frame.includes('challenge-request'))).toBe(true)
     })
-    expect(store.snapshot.route.kind).toBe('RELAY_CONNECTED')
+    expect(store.snapshot.route.kind).not.toBe('RELAY_CONNECTED')
     expect(sentFrames.current.some((frame) => frame.includes('project:list'))).toBe(false)
     message({ type: 'remote:device:challenge', nonce: 'challenge-bootstrap' })
     await vi.waitFor(() => {
@@ -160,6 +172,7 @@ describe('RemoteSessionStore — relay device auth gating', () => {
     })
 
     message({ type: 'remote:device:ok', device: { id: 'fresh-device', authVersion: 1 } })
+    await connection
     await vi.waitFor(() => {
       expect(sentFrames.current.some((frame) => frame.includes('project:list'))).toBe(true)
     })
@@ -169,11 +182,12 @@ describe('RemoteSessionStore — relay device auth gating', () => {
   it('gates queued RPC until an authentication timeout resolves it as a failure', async () => {
     vi.useFakeTimers()
     const store = new RemoteSessionStore()
-    await store.connectCloud({
+    const connection = store.connectCloud({
       desktopId: 'desktop-1',
       mobileDeviceId: 'mobile-1',
       controlSecret: 'secret'
     })
+    await waitForRelayClient(store)
 
     // No challenge/ok arrives within the deadline.
     let sent = false
@@ -181,6 +195,7 @@ describe('RemoteSessionStore — relay device auth gating', () => {
       sent = true
     })
     await vi.advanceTimersByTimeAsync(13_000)
+    await connection
     expect(sent).toBe(true)
     expect(sentFrames.current.some((f) => f.includes('project:list'))).toBe(false)
     store.disconnect()

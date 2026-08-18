@@ -243,11 +243,6 @@ export class RemoteSessionStore {
     // Install the first listener before opening the socket so a challenge
     // replayed from the relay buffer cannot arrive before the phone is ready.
     this.relayDeviceAuth = this.beginRelayDeviceAuth()
-    this.relayDeviceAuth.catch(() => {
-      if (this.snapshot.route.kind === 'RELAY_CONNECTED') {
-        this.dispatch({ type: 'disconnected', reason: 'device-auth-failed' })
-      }
-    })
     let awaitingInitialConnection = true
     // The account-relay client owns reconnection (full-jitter backoff that
     // preserves its bounded queue across socket drops), so the store never
@@ -268,17 +263,22 @@ export class RemoteSessionStore {
         }
         if (event.kind === 'connected' && this.accountRelayClient === client) {
           this.accountReconnectAttempt = 0
-          this.dispatch({ type: 'relayConnected', relay: { url: window.location.origin } })
           if (awaitingInitialConnection) {
             awaitingInitialConnection = false
           } else {
             this.relayChallengeReceived = false
             this.relayDeviceAuth = this.beginRelayDeviceAuth()
-            this.relayDeviceAuth.catch(() => {
-              if (this.snapshot.route.kind === 'RELAY_CONNECTED') {
-                this.dispatch({ type: 'disconnected', reason: 'device-auth-failed' })
-              }
-            })
+            void this.relayDeviceAuth
+              .then(() => {
+                if (this.accountRelayClient !== client) return
+                this.dispatch({ type: 'relayConnected', relay: { url: window.location.origin } })
+                this.scheduleLanUpgrade()
+              })
+              .catch(() => {
+                if (this.accountRelayClient === client) {
+                  this.dispatch({ type: 'disconnected', reason: 'device-auth-failed' })
+                }
+              })
           }
           // The desktop relay socket may outlive many mobile reconnects, so a
           // new mobile connection explicitly requests its own one-time device
@@ -286,7 +286,6 @@ export class RemoteSessionStore {
           if (!this.relayChallengeReceived) {
             void this.sendRaw({ type: 'remote:device:challenge-request' })
           }
-          this.scheduleLanUpgrade()
           return
         }
         if (event.kind === 'offline' && this.accountRelayClient === client) {
@@ -303,6 +302,15 @@ export class RemoteSessionStore {
     const outcome = await client.connect()
     if (outcome === 'open') {
       this.accountReconnectAttempt = 0
+      try {
+        await this.relayDeviceAuth
+      } catch {
+        if (this.accountRelayClient === client) {
+          this.dispatch({ type: 'disconnected', reason: 'device-auth-failed' })
+        }
+        return
+      }
+      if (this.accountRelayClient !== client) return
       this.dispatch({ type: 'relayConnected', relay: { url: window.location.origin } })
       this.scheduleLanUpgrade()
       return
