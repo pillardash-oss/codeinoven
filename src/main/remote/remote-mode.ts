@@ -35,12 +35,7 @@ import type {
 } from '../../lib/types'
 import { createKeepAliveSession, type KeepAliveSession } from '../../renderer/lib/remote/keep-alive'
 import { handshakeTranscript } from '../../renderer/lib/remote/device-identity'
-import {
-  isPairingExpired,
-  loadOrCreatePeerSecret,
-  readPairingExpiry,
-  rotatePeerSecret
-} from './peer-secret'
+import { PAIRING_TTL_MS, loadOrCreatePeerSecret, writePairingExpiry } from './peer-secret'
 import { RemoteRpcDispatcher } from './remote-rpc'
 import { DeviceCredentialService, type EnrolledDevice } from './device-credential-service'
 import { AccountProfileRepo } from '../database/repositories/account-profile-repo'
@@ -644,43 +639,16 @@ export class RemoteModeController {
     }
   }
 
-  /**
-   * Keep the short-lived account enrollment bootstrap synchronized with the
-   * current LAN control secret.
-   */
+  /** Keep a short-lived enrollment window around the stable transport key. */
   private async syncPairingState(): Promise<void> {
     const directory = join(app.getPath('userData'), 'remote-gateway')
-    if (this.credentials && !this.peerSecret && (await isPairingExpired(directory))) {
-      this.resolvedPeerSecret = await rotatePeerSecret(directory)
-      this.gateway?.setPeerSecret(this.resolvedPeerSecret)
-      Logger.info('Remote account enrollment bootstrap rotated after expiry')
-    }
     const secret = this.resolvedPeerSecret
     if (!secret) return
-    const expiresAt = await readPairingExpiry(directory)
+    const expiresAt = Date.now() + PAIRING_TTL_MS
+    if (!this.peerSecret) await writePairingExpiry(directory, expiresAt)
     if (this.credentials) {
-      await this.credentials.registerPairingValue(secret, {
-        expiresAt: expiresAt ?? Date.now() + 5 * 60 * 1_000
-      })
+      await this.credentials.registerPairingValue(secret, { expiresAt })
     }
-  }
-
-  /**
-   * Rotate the LAN control secret and its short-lived account enrollment
-   * bootstrap before issuing a new account enrollment code.
-   */
-  private async rotatePairingBootstrap(): Promise<void> {
-    if (this.peerSecret) return
-    const directory = join(app.getPath('userData'), 'remote-gateway')
-    this.resolvedPeerSecret = await rotatePeerSecret(directory)
-    this.gateway?.setPeerSecret(this.resolvedPeerSecret)
-    const expiresAt = Date.now() + 5 * 60 * 1_000
-    if (this.credentials && this.resolvedPeerSecret) {
-      await this.credentials.registerPairingValue(this.resolvedPeerSecret, {
-        expiresAt
-      })
-    }
-    this.broadcast()
   }
 
   get status(): RemoteModeStatus {
@@ -1509,15 +1477,10 @@ export class RemoteModeController {
     if (!this.vault.isAvailable()) throw new Error('OS credential encryption is unavailable')
     if (!(await this.resolvePeerSecret())) throw new Error('Remote control secret is unavailable')
 
-    // A hosted enrollment must never issue a control grant from an expired or
-    // already-consumed LAN bootstrap. Generate and register a fresh one before
-    // the one-time account code is created. A fixed operator-provided secret
-    // cannot be rotated, so re-register it with a fresh enrollment window.
-    if (this.peerSecret) {
-      await this.syncPairingState()
-    } else {
-      await this.rotatePairingBootstrap()
-    }
+    // Open a fresh one-time enrollment window without rotating the transport
+    // key already encrypted for approved phones. Rotating that shared key here
+    // made every older cloud grant unusable whenever another phone was paired.
+    await this.syncPairingState()
 
     const previous =
       this.cloudConfig ?? (await this.storage.read<CloudAccessConfig>(CLOUD_CONFIG_PATH))
@@ -1969,8 +1932,6 @@ export class RemoteModeController {
     }
     await this.resolvePeerSecret()
     if (prepareEnrollment) await this.syncPairingState()
-    // Explicit enrollment may rotate an expired persisted secret. Restoration
-    // deliberately skips that work and reuses the enrolled device's key.
     const peerSecret = this.resolvedPeerSecret
     const gateway = new RemoteGateway({
       port: this.lanPort,

@@ -3,6 +3,7 @@
 import { Database } from 'bun:sqlite'
 import type {
   AuthenticatedSession,
+  DesktopGrantRecord,
   DesktopRecord,
   EnrollmentRecord,
   MobileDeviceRecord,
@@ -82,6 +83,15 @@ CREATE TABLE IF NOT EXISTS mobile_devices (
 );
 CREATE INDEX IF NOT EXISTS mobile_devices_user_idx ON mobile_devices(user_id, revoked_at);
 
+CREATE TABLE IF NOT EXISTS desktop_grants (
+  desktop_id TEXT NOT NULL REFERENCES desktops(id) ON DELETE CASCADE,
+  mobile_device_id TEXT NOT NULL REFERENCES mobile_devices(id) ON DELETE CASCADE,
+  grant_ciphertext TEXT NOT NULL,
+  desktop_public_key TEXT NOT NULL,
+  PRIMARY KEY(desktop_id, mobile_device_id)
+);
+CREATE INDEX IF NOT EXISTS desktop_grants_mobile_idx ON desktop_grants(mobile_device_id);
+
 CREATE TABLE IF NOT EXISTS audit_events (
   id TEXT PRIMARY KEY,
   user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
@@ -121,9 +131,23 @@ export class RemoteControlDatabase {
       PRAGMA journal_size_limit = 33554432;
     `)
     this.db.transaction(() => this.db.exec(SCHEMA))()
+    this.migrateEnrollmentGrants()
     this.ensureUserImageColumn()
     this.ensureDesktopProfileTokenColumn()
     this.db.exec('PRAGMA optimize = 0x10002;')
+  }
+
+  private migrateEnrollmentGrants(): void {
+    this.db.exec(`
+      INSERT OR IGNORE INTO desktop_grants(
+        desktop_id, mobile_device_id, grant_ciphertext, desktop_public_key
+      )
+      SELECT desktop_id, mobile_device_id, grant_ciphertext, desktop_public_key
+      FROM enrollments
+      WHERE mobile_device_id IS NOT NULL
+        AND grant_ciphertext IS NOT NULL
+        AND desktop_public_key IS NOT NULL
+    `)
   }
 
   private ensureUserImageColumn(): void {
@@ -496,31 +520,44 @@ export class RemoteControlDatabase {
     desktopPublicKey: string,
     grantCiphertext: string
   ): boolean {
-    return (
-      this.db
+    const save = this.db.transaction(() => {
+      const enrollmentUpdated = this.db
         .prepare(
           `UPDATE enrollments SET desktop_public_key = ?, grant_ciphertext = ?
            WHERE desktop_id = ? AND mobile_device_id = ? AND claimed_at IS NOT NULL`
         )
-        .run(desktopPublicKey, grantCiphertext, desktopId, mobileDeviceId).changes === 1
-    )
+        .run(desktopPublicKey, grantCiphertext, desktopId, mobileDeviceId).changes
+      if (enrollmentUpdated !== 1) return false
+      this.db
+        .prepare(
+          `INSERT INTO desktop_grants(
+             desktop_id, mobile_device_id, desktop_public_key, grant_ciphertext
+           ) VALUES(?, ?, ?, ?)
+           ON CONFLICT(desktop_id, mobile_device_id) DO UPDATE SET
+             desktop_public_key = excluded.desktop_public_key,
+             grant_ciphertext = excluded.grant_ciphertext`
+        )
+        .run(desktopId, mobileDeviceId, desktopPublicKey, grantCiphertext)
+      return true
+    })
+    return save.immediate()
   }
 
   enrollmentGrant(
     desktopId: string,
     userId: string,
     mobileDeviceId: string
-  ): EnrollmentRecord | null {
+  ): DesktopGrantRecord | null {
     return (
       (this.db
         .prepare(
-          `SELECT e.* FROM enrollments e
-           JOIN desktops d ON d.id = e.desktop_id
-           JOIN mobile_devices m ON m.id = e.mobile_device_id
-           WHERE e.desktop_id = ? AND d.user_id = ? AND e.mobile_device_id = ?
+          `SELECT g.* FROM desktop_grants g
+           JOIN desktops d ON d.id = g.desktop_id
+           JOIN mobile_devices m ON m.id = g.mobile_device_id
+           WHERE g.desktop_id = ? AND d.user_id = ? AND g.mobile_device_id = ?
              AND d.revoked_at IS NULL AND m.revoked_at IS NULL`
         )
-        .get(desktopId, userId, mobileDeviceId) as EnrollmentRecord | undefined) ?? null
+        .get(desktopId, userId, mobileDeviceId) as DesktopGrantRecord | undefined) ?? null
     )
   }
 

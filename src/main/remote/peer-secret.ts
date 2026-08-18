@@ -16,8 +16,9 @@
  * short-lived **pairing bootstrap**: it may enroll a device but never grants
  * RPC authority on its own (device records carry the actual scoped
  * credentials). The bootstrap expires `PAIRING_TTL_MS` (five minutes) after
- * it is issued and is rotated by `rotatePeerSecret` once a device enrolls, so
- * a stale QR code cannot keep granting sessions.
+ * it is issued. The persisted value also encrypts transport payloads, so
+ * refreshing an enrollment window must not rotate it and invalidate grants
+ * held by already approved phones.
  */
 
 import { randomBytes } from 'node:crypto'

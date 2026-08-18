@@ -35,8 +35,31 @@ function enrollment(id: string, desktopId: string, codeHash: string): Enrollment
 describe('desktop enrollment replacement', () => {
   test('replaces the profile hash and enrollment atomically', () => {
     const database = new RemoteControlDatabase(':memory:')
+    database.upsertOAuthUser({
+      id: 'owner',
+      email: 'owner@example.com',
+      displayName: 'Owner',
+      image: null
+    })
     database.createDesktop(desktop('desktop-a', 'profile-a'))
     database.createEnrollment(enrollment('old', 'desktop-a', 'old-code'), 1)
+    expect(
+      database.claimEnrollment({
+        codeHash: 'old-code',
+        userId: 'owner',
+        mobileDeviceId: 'mobile-a',
+        mobileName: 'Android phone',
+        mobilePublicKey: 'mobile-public-key'
+      })
+    ).toEqual({ desktopId: 'desktop-a', newlyClaimed: true })
+    expect(
+      database.saveDesktopGrant(
+        'desktop-a',
+        'mobile-a',
+        'desktop-public-key',
+        'encrypted-control-grant'
+      )
+    ).toBe(true)
 
     expect(
       database.replaceDesktopEnrollment({
@@ -48,6 +71,12 @@ describe('desktop enrollment replacement', () => {
     ).toBe(true)
     expect(database.findDesktop('desktop-a')?.profile_token_hash).toBe('profile-b')
     expect(database.enrollmentForDesktop('desktop-a')?.id).toBe('new')
+    expect(database.enrollmentGrant('desktop-a', 'owner', 'mobile-a')).toEqual({
+      desktop_id: 'desktop-a',
+      mobile_device_id: 'mobile-a',
+      desktop_public_key: 'desktop-public-key',
+      grant_ciphertext: 'encrypted-control-grant'
+    })
     database.close()
   })
 

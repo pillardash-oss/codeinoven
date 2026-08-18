@@ -60,3 +60,10 @@ export interface MobileDeviceRecord {
   last_seen_at: number
   revoked_at: number | null
 }
+
+export interface DesktopGrantRecord {
+  desktop_id: string
+  mobile_device_id: string
+  grant_ciphertext: string
+  desktop_public_key: string
+}
