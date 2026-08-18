@@ -1739,7 +1739,7 @@
     projects = projects.map((p) => (p.id === updated.id ? updated : p))
   }
 
-  async function revealProjectInFinder(projectId: string): Promise<void> {
+  async function revealProjectInFileManager(projectId: string): Promise<void> {
     const project = projects.find((p) => p.id === projectId)
     if (!project || !project.path) return
     await invoke('shell:revealPath', project.path)
@@ -3010,11 +3010,11 @@
                         </DropdownMenu.Item>
                         <DropdownMenu.Item
                           class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-sm text-foreground outline-none transition-colors hover:bg-elevated focus:bg-elevated"
-                          onSelect={() => revealProjectInFinder(project.id)}
+                          onSelect={() => revealProjectInFileManager(project.id)}
                         >
                           <FolderOpen size={14} class="text-muted" />
                           {navigator.platform.toUpperCase().indexOf('MAC') >= 0
-                            ? 'Reveal in Finder'
+                            ? 'Reveal in File Manager'
                             : 'Show in Explorer'}
                         </DropdownMenu.Item>
                         <DropdownMenu.Item
@@ -3212,11 +3212,11 @@
                       </DropdownMenu.Item>
                       <DropdownMenu.Item
                         class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-sm text-foreground outline-none transition-colors hover:bg-elevated focus:bg-elevated"
-                        onSelect={() => revealProjectInFinder(project.id)}
+                        onSelect={() => revealProjectInFileManager(project.id)}
                       >
                         <FolderOpen size={14} class="text-muted" />
                         {navigator.platform.toUpperCase().indexOf('MAC') >= 0
-                          ? 'Reveal in Finder'
+                          ? 'Reveal in File Manager'
                           : 'Show in Explorer'}
                       </DropdownMenu.Item>
                       <DropdownMenu.Item
