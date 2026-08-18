@@ -101,7 +101,7 @@ describe('ClaudeCodeDriver', () => {
         '--tools',
         'AskUserQuestion,Read',
         '--permission-mode',
-        'default'
+        'manual'
       ]),
       expect.objectContaining({
         env: expect.objectContaining({
@@ -157,7 +157,7 @@ describe('ClaudeCodeDriver', () => {
     })
     expect(spawnMock).toHaveBeenLastCalledWith(
       'claude',
-      expect.arrayContaining(['--resume', 'native-1', '--permission-mode', 'default']),
+      expect.arrayContaining(['--resume', 'native-1', '--permission-mode', 'manual']),
       expect.any(Object)
     )
     next.emit('exit', 0, null)
@@ -497,7 +497,7 @@ describe('ClaudeCodeDriver', () => {
     child.emit('exit', 0, null)
   })
 
-  it('surfaces an AskUserQuestion control request and replies with answered input', async () => {
+  it('surfaces an AskUserQuestion tool immediately and upgrades its native reply transport', async () => {
     const child = new FakeChild()
     spawnMock.mockReturnValue(child as unknown as ChildProcess)
     const driver = new ClaudeCodeDriver(await storage())
@@ -521,6 +521,33 @@ describe('ClaudeCodeDriver', () => {
       'data',
       Buffer.from(
         `${JSON.stringify({
+          type: 'assistant',
+          session_id: 'native-1',
+          message: {
+            id: 'assistant-1',
+            content: [
+              {
+                type: 'tool_use',
+                id: 'tool-question-1',
+                name: 'AskUserQuestion',
+                input: {
+                  questions: [{ question: 'Which approach?', options: ['A', 'B'] }]
+                }
+              }
+            ]
+          }
+        })}\n`
+      )
+    )
+    const questionEvent = events.find((event) => event.type === 'question.asked')
+    expect(questionEvent).toBeDefined()
+    if (!questionEvent || questionEvent.type !== 'question.asked') throw new Error('unreachable')
+    expect(questionEvent.questions[0]?.prompt).toBe('Which approach?')
+
+    child.stdout.emit(
+      'data',
+      Buffer.from(
+        `${JSON.stringify({
           type: 'control_request',
           request_id: 'question-1',
           session_id: 'native-1',
@@ -534,10 +561,9 @@ describe('ClaudeCodeDriver', () => {
         })}\n`
       )
     )
-    const questionEvent = events.find((event) => event.type === 'question.asked')
-    expect(questionEvent).toBeDefined()
-    if (!questionEvent || questionEvent.type !== 'question.asked') throw new Error('unreachable')
-    expect(questionEvent.questions[0]?.prompt).toBe('Which approach?')
+    const questionEvents = events.filter((event) => event.type === 'question.asked')
+    expect(questionEvents).toHaveLength(2)
+    expect(questionEvents[1]?.requestId).toBe(questionEvent.requestId)
 
     await driver.replyToQuestion('/project', sessionId, questionEvent.requestId, [['A']])
     const lastWrite = child.stdin.write.mock.calls.at(-1)?.[0] as string

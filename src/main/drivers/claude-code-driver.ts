@@ -19,11 +19,7 @@ import type {
   SessionAgentEvent,
   ThinkingPreset
 } from '../../lib/types'
-import {
-  isQuestionToolName,
-  normalizeAgentQuestions,
-  permissionPatterns
-} from '../../lib/agent-interactions'
+import { normalizeAgentQuestions, permissionPatterns } from '../../lib/agent-interactions'
 import { fastSelectionModelId, resolveFastModelId } from '../../lib/fast-inference'
 import { classifyProviderIssue } from '../../lib/provider-issue'
 import type { StorageEngine } from '../storage/storage-engine'
@@ -196,6 +192,7 @@ type ClaudeQuestionRequest =
       questions: AgentQuestion[]
       transport: 'control'
       input: Record<string, unknown>
+      controlRequestId: string
     }
   | {
       sessionId: string
@@ -208,6 +205,14 @@ interface ClaudePermissionRequest {
   sessionId: string
   input: Record<string, unknown>
 }
+
+function sameClaudeQuestions(left: AgentQuestion[], right: AgentQuestion[]): boolean {
+  return (
+    left.length === right.length &&
+    left.every((question, index) => question.prompt === right[index]?.prompt)
+  )
+}
+
 type ClaudeInputBlock =
   | { type: 'text'; text: string }
   | {
@@ -846,7 +851,7 @@ export function mapClaudeCodeRecord(
             sessionId: context.sessionId,
             requestId,
             questions: normalizeAgentQuestions(input),
-            metadata: { transport: 'control', input }
+            metadata: { transport: 'control', input, controlRequestId: requestId }
           }
         ]
       }
@@ -1357,7 +1362,7 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
           type: 'control_response',
           response: {
             subtype: 'success',
-            request_id: requestId,
+            request_id: request.controlRequestId,
             response: {
               behavior: 'allow',
               updatedInput: { ...request.input, answers: answersByPrompt }
@@ -1391,7 +1396,7 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
           type: 'control_response',
           response: {
             subtype: 'success',
-            request_id: requestId,
+            request_id: request.controlRequestId,
             response: { behavior: 'deny', message: 'The user dismissed this question.' }
           }
         })}\n`
@@ -1435,23 +1440,18 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
     sessionId: string,
     events: SessionAgentEvent[]
   ): SessionAgentEvent[] {
-    const questionToolCallIds = new Set(
-      events.flatMap((event) =>
-        event.type === 'message.part.updated' &&
-        event.part.type === 'tool' &&
-        isQuestionToolName(event.part.tool)
-          ? [event.part.callID]
-          : []
+    const normalized = super.normalizeInteractionEvents(sessionId, events).map((event) => {
+      if (event.type !== 'question.asked' || event.metadata?.['transport'] !== 'control') {
+        return event
+      }
+      const fallback = [...this.pendingClaudeQuestions.entries()].find(
+        ([, request]) =>
+          request.sessionId === sessionId &&
+          request.transport === 'tool_result' &&
+          sameClaudeQuestions(request.questions, event.questions)
       )
-    )
-    const normalized = super
-      .normalizeInteractionEvents(sessionId, events)
-      .filter(
-        (event) =>
-          event.type !== 'question.asked' ||
-          !event.tool ||
-          !questionToolCallIds.has(event.tool.callID)
-      )
+      return fallback ? { ...event, requestId: fallback[0] } : event
+    })
     for (const event of normalized) {
       if (event.type === 'permission.asked' && event.permission.id) {
         const input = record(event.permission.metadata['input']) ?? {}
@@ -1464,7 +1464,8 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
             sessionId,
             questions: event.questions,
             transport: 'control',
-            input
+            input,
+            controlRequestId: string(event.metadata['controlRequestId']) ?? event.requestId
           })
         } else if (event.tool) {
           this.pendingClaudeQuestions.set(event.requestId, {
@@ -1621,7 +1622,7 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
       args.push('--json-schema', JSON.stringify(options.structuredOutput.schema))
     if (options.settings.permissionLevel === 'full_access')
       args.push('--permission-mode', 'bypassPermissions')
-    else args.push('--permission-mode', 'default')
+    else args.push('--permission-mode', 'manual')
     const env = await this.customProviderEnv(options.settings.providerId)
     const input = await claudeStreamInput(options.text, options.attachments)
     const trackAuthentication =
