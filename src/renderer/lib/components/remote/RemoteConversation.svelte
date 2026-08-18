@@ -2,12 +2,27 @@
   import { onMount } from 'svelte'
   import type { Attachment } from 'svelte/attachments'
   import { SvelteMap } from 'svelte/reactivity'
-  import { Loader2, Send, FileText, RefreshCw } from '@lucide/svelte'
+  import { Loader2, FileText, RefreshCw } from '@lucide/svelte'
   import { threadMessages } from '$lib/stores/thread-messages.svelte'
   import { agentRuns } from '$lib/stores/agent-runs.svelte'
-  import { threadSettings, chatEffectiveSettings } from '$lib/stores/thread-settings.svelte'
+  import {
+    threadSettings,
+    chatSettings,
+    chatEffectiveSettings
+  } from '$lib/stores/thread-settings.svelte'
+  import { providerCatalog } from '$lib/stores/provider-catalog.svelte'
   import { invoke } from '$lib/ipc.svelte'
-  import type { AgentMessage, AgentPart, Thread, ThreadSettings } from '$shared/types'
+  import { messageId } from '$shared/id'
+  import ChatComposer from '../chats/ChatComposer.svelte'
+  import type {
+    AgentMessage,
+    AgentPart,
+    PromptAttachment,
+    Thread,
+    ThreadSettings
+  } from '$shared/types'
+
+  type StartAfterSelection = Pick<Thread, 'id' | 'title'>
 
   interface Props {
     thread: Thread
@@ -23,7 +38,6 @@
   let loadError = $derived(threadMessages.error(thread.projectId, thread.id))
   let busy = $derived(agentRuns.isBusy(thread.projectId, thread.id))
 
-  let draft = $state('')
   let sendError = $state('')
   let scrollEl = $state<HTMLDivElement>()
   /** Whether the user has scrolled away from the live tail. While away, the
@@ -60,10 +74,27 @@
     }
   }
 
-  /** Effective agent settings for this thread — chats keep their own model. */
-  let settings = $derived.by((): ThreadSettings =>
+  /** Effective agent settings for this thread — chats keep their own model.
+   *  Held as local state (not a pure derive) so the composer's toolbar edits
+   *  (model/permission/thinking) are reflected immediately without a round
+   *  trip, matching desktop's ThreadView. */
+  let settings = $state<ThreadSettings>(
     chatMode ? chatEffectiveSettings() : threadSettings.initialFor(thread)
   )
+
+  function updateSettings(updated: ThreadSettings): void {
+    settings = updated
+  }
+
+  // Provider/model catalog — hydrate this project's catalog if it hasn't
+  // been fetched yet (desktop's App.svelte seeds every project at startup;
+  // mobile only ever opens one project's threads at a time).
+  let providers = $derived(providerCatalog.cached(thread.projectId) ?? [])
+  onMount(() => {
+    if (!providerCatalog.cached(thread.projectId)) {
+      void providerCatalog.refresh(thread.projectId)
+    }
+  })
 
   onMount(() => {
     const { projectId, id } = thread
@@ -156,26 +187,80 @@
     ).length
   }
 
-  async function send(): Promise<void> {
-    const text = draft.trim()
-    if (!text || busy) return
-    draft = ''
+  // ─── Sending, queued "start after" dependencies, and abort ──────────────
+  let queuedMessage = $state<{
+    text: string
+    attachments: PromptAttachment[]
+    startAfterThreads: StartAfterSelection[]
+  } | null>(null)
+
+  async function deliver(text: string, attachments: PromptAttachment[]): Promise<void> {
     sendError = ''
+    const userMessageId = messageId()
+    userScrolledAway = false
+    agentRuns.setBusy(thread.projectId, thread.id, true, userMessageId)
+    if (chatMode) {
+      chatSettings.commit(settings)
+    } else {
+      threadSettings.commit(settings)
+    }
     try {
       const sessionId = await invoke('agent:ensureSession', thread.projectId, thread.id)
       threadMessages.setSessionId(thread.projectId, thread.id, sessionId)
-      await threadMessages.send(thread.projectId, thread.id, settings, text, [], undefined)
+      await threadMessages.send(
+        thread.projectId,
+        thread.id,
+        settings,
+        text,
+        attachments,
+        undefined,
+        userMessageId
+      )
     } catch (error) {
+      agentRuns.setIdle(thread.projectId, thread.id)
       sendError = error instanceof Error ? error.message : 'The message could not be sent.'
     }
   }
 
-  function onComposerKeydown(event: KeyboardEvent): void {
-    // Enter is never a send key — only Cmd/Ctrl+Enter sends, so plain Enter and
-    // Shift+Enter always insert newlines without risking a premature send.
-    if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
-      event.preventDefault()
-      void send()
+  /** Once every dependency thread this message waits on goes idle, deliver it. */
+  $effect(() => {
+    const pending = queuedMessage
+    if (!pending || pending.startAfterThreads.length === 0) return
+    const stillBusy = pending.startAfterThreads.some((dep) =>
+      agentRuns.hasSettled(thread.projectId, dep.id)
+        ? agentRuns.isBusy(thread.projectId, dep.id)
+        : false
+    )
+    if (stillBusy) return
+    queuedMessage = null
+    void deliver(pending.text, pending.attachments)
+  })
+
+  function handleSend(
+    text: string,
+    attachments: PromptAttachment[],
+    direct?: boolean,
+    _projectReferences?: unknown,
+    _taskReferences?: unknown,
+    startAfterThreads?: StartAfterSelection[]
+  ): void {
+    const msg = text.trim()
+    if (!msg && attachments.length === 0) return
+    const dependencies = (startAfterThreads ?? []).filter((dep) => dep.id !== thread.id)
+    if (dependencies.length > 0 || (busy && !direct)) {
+      queuedMessage = { text: msg, attachments, startAfterThreads: dependencies }
+      return
+    }
+    void deliver(msg, attachments)
+  }
+
+  async function abortRun(): Promise<void> {
+    if (!busy) return
+    try {
+      await invoke('agent:abort', thread.projectId, thread.id)
+      agentRuns.setIdle(thread.projectId, thread.id)
+    } catch (error) {
+      sendError = error instanceof Error ? error.message : 'The request could not be stopped.'
     }
   }
 </script>
@@ -317,36 +402,41 @@
           {sendError}
         </p>
       {/if}
+
+      {#if queuedMessage}
+        <p class="rounded-xl border border-border bg-elevated px-3 py-2 text-[12px] text-dimmed">
+          Queued — will send once {queuedMessage.startAfterThreads.length === 1
+            ? 'the selected thread finishes'
+            : 'the selected threads finish'}.
+        </p>
+      {/if}
     </div>
   </div>
 
   <div
-    class="shrink-0 border-t border-border bg-surface px-3 pb-[max(env(safe-area-inset-bottom),0.75rem)] pt-2.5"
+    class="shrink-0 border-t border-border bg-surface px-2 pb-[max(env(safe-area-inset-bottom),0.5rem)] pt-2"
   >
-    <form
-      class="flex items-end gap-2"
-      onsubmit={(event: SubmitEvent) => {
-        event.preventDefault()
-        void send()
+    <ChatComposer
+      onSend={handleSend}
+      working={busy}
+      onStop={abortRun}
+      placeholder={busy ? `${chatMode ? 'Chat' : 'Agent'} is working — type to queue` : 'Message…'}
+      {settings}
+      onSettingsChange={updateSettings}
+      {providers}
+      harnessId={settings.harnessId}
+      projectId={thread.projectId}
+      threadId={thread.id}
+      attachmentStorage={{
+        kind: chatMode ? 'chat' : 'project',
+        projectId: thread.projectId,
+        threadId: thread.id
       }}
-    >
-      <textarea
-        bind:value={draft}
-        rows={1}
-        class="min-h-10 flex-1 resize-none rounded-xl border border-border bg-elevated px-3 py-2 text-sm text-foreground outline-none placeholder:text-dimmed focus:border-primary"
-        placeholder={busy ? 'Wait for the agent to finish…' : 'Message…'}
-        aria-label="Message"
-        disabled={busy}
-        onkeydown={onComposerKeydown}></textarea>
-      <button
-        type="submit"
-        class="flex h-10 w-10 shrink-0 cursor-pointer items-center justify-center rounded-xl bg-primary text-on-primary transition-colors hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-50"
-        disabled={busy || draft.trim().length === 0}
-        title="Send message"
-        aria-label="Send message"
-      >
-        <Send size={17} />
-      </button>
-    </form>
+      contextUsage={thread.contextUsage}
+      hidePermissionSelector={chatMode}
+      showEngineeringMode={false}
+      showChatModes={false}
+      initialStartAfterThreads={queuedMessage?.startAfterThreads}
+    />
   </div>
 </div>
