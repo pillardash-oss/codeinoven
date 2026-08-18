@@ -4,6 +4,8 @@ import { UTILITY_KIND_VALUES } from './types'
 export const UTILITY_SEARCH_TOOL_NAME = 'utility_search'
 export const UTILITY_ACTIVATE_TOOL_NAME = 'utility_activate'
 export const UTILITY_INVOKE_TOOL_NAME = 'utility_invoke'
+/** Shell-callable recovery tool; intentionally never transported through MCP. */
+export const RETRIEVE_MCP_HOST_TOOL_NAME = 'retrieve_mcp_host'
 
 /** One tool the utility gateway MCP exposes to agents. */
 export interface GatewayToolDefinition {

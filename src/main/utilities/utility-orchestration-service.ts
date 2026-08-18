@@ -15,6 +15,7 @@ import { UtilityRegistryService } from './utility-registry-service'
 import { CuaBridgeService } from './cua-bridge-service'
 import {
   GATEWAY_TOOLS,
+  RETRIEVE_MCP_HOST_TOOL_NAME,
   UTILITY_SEARCH_TOOL_NAME,
   UTILITY_ACTIVATE_TOOL_NAME,
   UTILITY_INVOKE_TOOL_NAME
@@ -40,8 +41,11 @@ import {
 } from '../providers/image-descriptor-provider'
 import { budgetToolResult, DEFAULT_PROMPT_BUDGET } from '../../lib/prompt-budget'
 import { Logger } from '../system/logger'
+import { instanceRegistry } from '../system/instance-registry'
 
 const BRIDGE_SCRIPT_PATH = 'runtime/utility-gateway/bridge.mjs'
+const RETRIEVE_MCP_HOST_ROUTE = '/retrieve-mcp-host'
+const RETRIEVE_MCP_HOST_SCRIPT_PATH = `runtime/utility-gateway/${RETRIEVE_MCP_HOST_TOOL_NAME}`
 const MAX_REQUEST_BYTES = 1_000_000
 const CUA_UTILITY_ID = 'codeinoven:cua-driver'
 const UTILITY_SEARCH_STOP_WORDS = new Set([
@@ -128,7 +132,7 @@ export class UtilityOrchestrationService {
   private readonly vault: SecretVault
   private readonly turns = new Map<
     string,
-    { state: TurnState; scriptPath: string; token: string }
+    { state: TurnState; scriptPath: string; retrieverPath: string; token: string }
   >()
   private readonly turnIdsByToken = new Map<string, string>()
   private gatewayServer: Server | null = null
@@ -239,8 +243,13 @@ export class UtilityOrchestrationService {
     const bridgeUrl = await this.ensureGatewayServer()
     const token = randomBytes(32).toString('hex')
     const scriptPath = `${BRIDGE_SCRIPT_PATH}.${id}.mjs`
+    const retrieverPath = `${RETRIEVE_MCP_HOST_SCRIPT_PATH}.${id}.mjs`
     await this.storage.writeRaw(scriptPath, buildUtilityGatewayScript(gatewayTools))
-    this.turns.set(id, { state, scriptPath, token })
+    await this.storage.writeRaw(
+      retrieverPath,
+      buildMcpHostRetrieverScript(this.storage.resolve('instances'), request.sessionId)
+    )
+    this.turns.set(id, { state, scriptPath, retrieverPath, token })
     this.turnIdsByToken.set(token, id)
 
     const gateway = gatewayUtility(request, this.storage.resolve(scriptPath), bridgeUrl, token)
@@ -264,6 +273,7 @@ export class UtilityOrchestrationService {
         'App-managed utilities are available through a turn-scoped loopback gateway. Use the shell to POST JSON with curl, setting Content-Type: application/json and the authorization header below; never print or persist the bearer token.',
         `Gateway: ${bridgeUrl}`,
         `Authorization header: Bearer ${token}`,
+        `Recovery tool: if that gateway is unreachable, call ${RETRIEVE_MCP_HOST_TOOL_NAME} through the shell with \`bun ${shellQuote(this.storage.resolve(retrieverPath))}\`. It discovers the owning live CodeInOven instance without MCP and returns the current \`mcpHost\`. Retry the original route against that host with the current turn's authorization header. Never print or persist the bearer token.`,
         'Search when you need to discover a capability: POST /search with {"query":"capability","kinds":["mcp","skill","computer_use","image_descriptor"]}; the response includes a `notFound` boolean indicating no eligible match.',
         'Activate: POST /activate with {"utility_id":"id-from-search"}; if you already know an eligible utility id, activate it directly without searching first.',
         'Invoke: POST /invoke with {"utility_id":"id","operation":"tool-or-operation","input":{}}.',
@@ -280,6 +290,7 @@ export class UtilityOrchestrationService {
     this.gatewayServer = null
     this.gatewayBaseUrl = null
     this.gatewayStarting = null
+    instanceRegistry.setMcpHost(null)
     if (server) await new Promise<void>((resolve) => server.close(() => resolve()))
   }
 
@@ -305,6 +316,7 @@ export class UtilityOrchestrationService {
     await this.endComputerUseSessions(turn.state)
     await Promise.allSettled([...turn.state.clients.values()].map((client) => client.close()))
     await this.storage.remove(turn.scriptPath)
+    await this.storage.remove(turn.retrieverPath)
     await this.audit(turn.state, 'turn.cleaned', {
       activatedUtilityIds: [...turn.state.activated.keys()]
     })
@@ -312,6 +324,19 @@ export class UtilityOrchestrationService {
 
   private async handleRequest(request: IncomingMessage, response: ServerResponse): Promise<void> {
     try {
+      if (request.method === 'POST' && request.url === RETRIEVE_MCP_HOST_ROUTE) {
+        const input = await readJsonBody(request)
+        const sessionId = requiredString(input['session_id'], 'session_id', 128)
+        const ownsSession = [...this.turns.values()].some(
+          ({ state }) => state.request.sessionId === sessionId
+        )
+        if (!ownsSession || !this.gatewayBaseUrl) {
+          this.respond(response, 404, { error: 'Utility session is not owned by this instance' })
+          return
+        }
+        this.respond(response, 200, { mcpHost: this.gatewayBaseUrl })
+        return
+      }
       const authorization = request.headers.authorization
       const token = authorization?.startsWith('Bearer ') ? authorization.slice(7) : ''
       const turnId = this.turnIdsByToken.get(token)
@@ -360,6 +385,7 @@ export class UtilityOrchestrationService {
         }
         this.gatewayServer = server
         this.gatewayBaseUrl = `http://127.0.0.1:${address.port}`
+        instanceRegistry.setMcpHost(this.gatewayBaseUrl)
         resolve(this.gatewayBaseUrl)
       })
     })
@@ -1086,4 +1112,101 @@ for await (const line of lines) {
   }
 }
 `
+}
+
+/**
+ * Build a turn-scoped, shell-callable host resolver. It reads only public
+ * process metadata and probes every loopback gateway in parallel; bearer
+ * credentials never enter the registry, command arguments, or tool output.
+ */
+function buildMcpHostRetrieverScript(instanceDirectory: string, sessionId: string): string {
+  return String.raw`import { promises as fs } from 'node:fs'
+import { join } from 'node:path'
+
+const instanceDirectory = ${JSON.stringify(instanceDirectory)}
+const sessionId = ${JSON.stringify(sessionId)}
+
+function validLoopbackHost(value) {
+  if (typeof value !== 'string') return null
+  try {
+    const url = new URL(value)
+    return url.protocol === 'http:' && url.hostname === '127.0.0.1' ? url.origin : null
+  } catch {
+    return null
+  }
+}
+
+async function registeredHosts() {
+  let files
+  try {
+    files = await fs.readdir(instanceDirectory)
+  } catch {
+    return []
+  }
+  const entries = await Promise.all(
+    files
+      .filter((file) => file.endsWith('.json'))
+      .map(async (file) => {
+        try {
+          return JSON.parse(await fs.readFile(join(instanceDirectory, file), 'utf8'))
+        } catch {
+          return null
+        }
+      })
+  )
+  const newestAllowedHeartbeat = Date.now() - 120_000
+  return [
+    ...new Set(
+      entries
+        .filter(
+          (entry) =>
+            typeof entry?.lastHeartbeat === 'number' &&
+            entry.lastHeartbeat >= newestAllowedHeartbeat
+        )
+        .map((entry) => validLoopbackHost(entry.mcpHost))
+        .filter(Boolean)
+    )
+  ]
+}
+
+async function resolveHost(host) {
+  try {
+    const response = await fetch(host + ${JSON.stringify(RETRIEVE_MCP_HOST_ROUTE)}, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ session_id: sessionId }),
+      signal: AbortSignal.timeout(1500)
+    })
+    if (!response.ok) return null
+    const body = await response.json()
+    return validLoopbackHost(body?.mcpHost)
+  } catch {
+    return null
+  }
+}
+
+const hosts = await registeredHosts()
+let resolved = null
+try {
+  resolved = await Promise.any(
+    hosts.map(async (host) => {
+      const candidate = await resolveHost(host)
+      if (!candidate) throw new Error('Not the owning instance')
+      return candidate
+    })
+  )
+} catch {
+  // No registered live instance owns this session.
+}
+if (!resolved) {
+  process.stderr.write('No live CodeInOven instance owns this utility session.\n')
+  process.exitCode = 1
+} else {
+  process.stdout.write(JSON.stringify({ mcpHost: resolved }) + '\n')
+}
+`
+}
+
+function shellQuote(value: string): string {
+  return `'${value.replaceAll("'", `'\\''`)}'`
 }
