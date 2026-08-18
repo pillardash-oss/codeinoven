@@ -606,6 +606,7 @@ export class PiDriver extends PersistentCliDriver {
   private sessionProjects = new Map<string, string>()
   private activeTurns = new Set<string>()
   private pendingUiRequests = new Map<string, PiUiRequest>()
+  private piExecutable: Promise<string | null> | null = null
 
   constructor(
     storage: StorageEngine,
@@ -620,7 +621,7 @@ export class PiDriver extends PersistentCliDriver {
   }
 
   protected async ensureCliReady(): Promise<void> {
-    const executable = await resolvePiExecutable()
+    const executable = await this.resolvePiExecutable()
     if (!executable) {
       throw new Error(
         'Pi is not installed. Install the Pi CLI globally, then retry. (npm i -g @earendil-works/pi-coding-agent)'
@@ -629,9 +630,11 @@ export class PiDriver extends PersistentCliDriver {
   }
 
   async listProviders(projectPath: string): Promise<ProviderCatalog[]> {
+    const executable = await this.resolvePiExecutable()
+    if (!executable) return structuredClone(PI_FALLBACK_CATALOG)
     try {
       const overlay = await this.buildProviderOverlay(projectPath)
-      const models = await this.discoverModels(projectPath, overlay)
+      const models = await this.discoverModels(projectPath, overlay, executable)
       await overlay.cleanup()
       if (models.length === 0) return structuredClone(PI_FALLBACK_CATALOG)
       const byProvider = new Map<string, ProviderModel[]>()
@@ -670,10 +673,12 @@ export class PiDriver extends PersistentCliDriver {
 
   private async discoverModels(
     projectPath: string,
-    overlay: ProviderOverlay
+    overlay: ProviderOverlay,
+    executable: string
   ): Promise<Array<Record<string, unknown>>> {
     let models: unknown
     const client = new PiRpcClient({
+      executable,
       cwd: projectPath,
       env: { ...buildHarnessEnvironment(), ...overlay.env },
       args: overlay.args
@@ -911,7 +916,14 @@ export class PiDriver extends PersistentCliDriver {
           ])
         )
       : {}
+    const executable = await this.resolvePiExecutable()
+    if (!executable) {
+      throw new Error(
+        'Pi is not installed. Install the Pi CLI globally, then retry. (npm i -g @earendil-works/pi-coding-agent)'
+      )
+    }
     const client = new PiRpcClient({
+      executable,
       cwd: projectPath,
       env: {
         ...buildHarnessEnvironment(),
@@ -942,6 +954,11 @@ export class PiDriver extends PersistentCliDriver {
       )
     }
     return client
+  }
+
+  private resolvePiExecutable(): Promise<string | null> {
+    this.piExecutable ??= resolvePiExecutable()
+    return this.piExecutable
   }
 
   private handleRpcEvent(
