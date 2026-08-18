@@ -1,5 +1,8 @@
 import { execFile, spawn } from 'child_process'
 import type { ChildProcess } from 'child_process'
+import { readFile } from 'node:fs/promises'
+import { homedir } from 'node:os'
+import { join } from 'node:path'
 import { promisify } from 'util'
 import { Logger } from '../system/logger'
 import type {
@@ -9,6 +12,7 @@ import type {
   AgentProviderIssue,
   AgentQuestion,
   AgentQuestionRequest,
+  AgentRateLimitWindow,
   AgentSubagentActivity,
   AgentTokenUsage,
   AgentToolState,
@@ -46,7 +50,21 @@ import { buildTitlePrompt, sanitizeGeneratedTitle } from '../chat/title-generato
 /** Time allowed for an opencode server to announce its port before giving up. */
 const SERVER_START_TIMEOUT_MS = 25000
 const MODEL_DISCOVERY_TIMEOUT_MS = 20_000
+const ACCOUNT_USAGE_TIMEOUT_MS = 10_000
+const ACCOUNT_USAGE_ENDPOINT = 'https://opencode.ai/zen/go/v1/usage'
 const execFileAsync = promisify(execFile)
+
+const OPENCODE_ACCOUNT_PROVIDER_IDS = ['opencode-go', 'opencode'] as const
+const OPENCODE_USAGE_WINDOWS: ReadonlyArray<{
+  id: string
+  key: string
+  label: string
+  windowMinutes?: number
+}> = [
+  { id: 'rolling', key: 'rolling', label: '5-hour limit', windowMinutes: 300 },
+  { id: 'weekly', key: 'weekly', label: 'Weekly limit', windowMinutes: 10_080 },
+  { id: 'monthly', key: 'monthly', label: 'Monthly limit' }
+]
 
 /** Reasoning-effort variants offered for custom reasoning models. */
 const STANDARD_THINKING_VARIANTS: ReadonlyArray<{ id: string; label: string }> = [
@@ -93,6 +111,62 @@ function stringValue(value: unknown): string | undefined {
 
 function numberValue(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isFinite(value) ? value : undefined
+}
+
+function timestampValue(value: unknown): number | undefined {
+  const parsed = typeof value === 'string' ? Date.parse(value) : Number.NaN
+  return Number.isFinite(parsed) ? parsed : undefined
+}
+
+function apiKeyFromOpenCodeAuth(value: unknown): string | undefined {
+  const auth = recordValue(value)
+  if (!auth) return undefined
+  for (const providerId of OPENCODE_ACCOUNT_PROVIDER_IDS) {
+    const entry = recordValue(auth[providerId])
+    const key = stringValue(entry?.['key'])
+    if (key) return key
+  }
+  return undefined
+}
+
+/** Normalize OpenCode Go's account-wide quota windows for the battery popover. */
+export function mapOpenCodeAccountUsage(value: unknown): AgentRateLimitWindow[] {
+  const usage = recordValue(recordValue(value)?.['usage'])
+  if (!usage) return []
+  return OPENCODE_USAGE_WINDOWS.flatMap((definition) => {
+    const window = recordValue(usage[definition.key])
+    if (!window) return []
+    const percent = numberValue(window['percent'])
+    const resetsAt = timestampValue(window['resetsAt'])
+    if (percent === undefined && resetsAt === undefined) return []
+    const status = stringValue(window['status'])
+    return [
+      {
+        id: `opencode-go:${definition.id}`,
+        label: definition.label,
+        ...(status ? { status } : {}),
+        ...(percent === undefined ? {} : { usedPercent: Math.max(0, Math.min(100, percent)) }),
+        ...(resetsAt === undefined ? {} : { resetsAt }),
+        ...(definition.windowMinutes === undefined
+          ? {}
+          : { windowMinutes: definition.windowMinutes })
+      }
+    ]
+  })
+}
+
+function openCodeAuthPaths(environment: NodeJS.ProcessEnv): string[] {
+  const home = homedir()
+  return [
+    ...(environment['XDG_DATA_HOME']
+      ? [join(environment['XDG_DATA_HOME'], 'opencode', 'auth.json')]
+      : []),
+    ...(environment['LOCALAPPDATA']
+      ? [join(environment['LOCALAPPDATA'], 'opencode', 'auth.json')]
+      : []),
+    join(home, '.local', 'share', 'opencode', 'auth.json'),
+    join(home, '.opencode', 'data', 'auth.json')
+  ].filter((path, index, paths) => paths.indexOf(path) === index)
 }
 
 function textValue(value: unknown): string | undefined {
@@ -937,6 +1011,8 @@ export class OpenCodeDriver implements HarnessDriver {
   private isolatedServers = new Set<IsolatedHandle>()
   private titleSessions = new Set<string>()
   private processObserver: AgentProcessObserver | null = null
+  /** Coalesce concurrent battery hovers across threads into one account request. */
+  private accountUsageRequest: Promise<{ rateLimits: AgentRateLimitWindow[] } | null> | null = null
 
   /**
    * Optional collaborators for custom base-URL providers. When supplied, the
@@ -1556,6 +1632,67 @@ export class OpenCodeDriver implements HarnessDriver {
         inputSchema: recordValue(item['parameters']) ?? {}
       }))
       .filter((tool) => tool.name)
+  }
+
+  /** Fetch OpenCode Go's account-wide quota windows without starting a model turn. */
+  async readAccountUsage(
+    _projectPath: string
+  ): Promise<{ rateLimits: AgentRateLimitWindow[] } | null> {
+    void _projectPath
+    if (this.accountUsageRequest) return this.accountUsageRequest
+    const request = this.fetchAccountUsage()
+    this.accountUsageRequest = request
+    try {
+      return await request
+    } finally {
+      if (this.accountUsageRequest === request) this.accountUsageRequest = null
+    }
+  }
+
+  private async fetchAccountUsage(): Promise<{ rateLimits: AgentRateLimitWindow[] } | null> {
+    try {
+      const apiKey = await this.readOpenCodeApiKey()
+      if (!apiKey) return null
+      const response = await fetch(ACCOUNT_USAGE_ENDPOINT, {
+        headers: { Authorization: `Bearer ${apiKey}` },
+        signal: AbortSignal.timeout(ACCOUNT_USAGE_TIMEOUT_MS)
+      })
+      // A valid Zen key may not belong to an OpenCode Go subscription. Treat
+      // both missing access and missing entitlement as unsupported telemetry.
+      if (response.status === 401 || response.status === 403) return null
+      if (!response.ok) throw new Error(`OpenCode usage request failed (${response.status})`)
+      const rateLimits = mapOpenCodeAccountUsage((await response.json()) as unknown)
+      return rateLimits.length > 0 ? { rateLimits } : null
+    } catch (error) {
+      Logger.dev('OpenCode on-demand account usage refresh unavailable:', error)
+      return null
+    }
+  }
+
+  private async readOpenCodeApiKey(): Promise<string | undefined> {
+    const environment = this.buildEnv()
+    const environmentKey = stringValue(environment['OPENCODE_API_KEY'])
+    if (environmentKey) return environmentKey
+
+    const authContent = stringValue(environment['OPENCODE_AUTH_CONTENT'])
+    if (authContent) {
+      try {
+        const key = apiKeyFromOpenCodeAuth(JSON.parse(authContent) as unknown)
+        if (key) return key
+      } catch {
+        // Fall back to OpenCode's persisted auth file.
+      }
+    }
+
+    for (const path of openCodeAuthPaths(environment)) {
+      try {
+        const key = apiKeyFromOpenCodeAuth(JSON.parse(await readFile(path, 'utf8')) as unknown)
+        if (key) return key
+      } catch {
+        // OpenCode may not use this platform-specific data path.
+      }
+    }
+    return undefined
   }
 
   async runCommand(
