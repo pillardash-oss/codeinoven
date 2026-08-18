@@ -2,7 +2,7 @@ import { app, dialog, shell, clipboard, BrowserWindow, nativeImage } from 'elect
 import type { IpcMainInvokeEvent } from 'electron'
 import { appRendererNavigationTargets, trustedIpcMain as ipcMain } from './trusted-ipc-main'
 import { existsSync, readFileSync } from 'node:fs'
-import { lstat, readFile, writeFile, mkdir, stat } from 'fs/promises'
+import { lstat, readFile, writeFile, mkdir, rename, rm, stat } from 'fs/promises'
 import { release } from 'os'
 import { randomUUID } from 'node:crypto'
 import { basename, dirname, extname, isAbsolute, join, resolve } from 'path'
@@ -173,6 +173,7 @@ import { CLOUD_DEPLOYMENT_PROVIDER_KIND_VALUES } from '../../lib/types'
 type NewAssignmentProvenance = Omit<AssignmentProvenance, 'createdAt' | 'parentVersion'>
 
 const THEMES = new Set(['light', 'dark', 'system'])
+const MAX_PATHLESS_ATTACHMENT_BYTES = 32 * 1024 * 1024
 /** Pull requests fetched per sidebar page. */
 const PR_PAGE_SIZE = 20
 const GITHUB_REPOSITORY_ACCESS_MESSAGE =
@@ -1453,15 +1454,53 @@ export function registerIpcHandlers(
       : join(getConfigRoot(), 'projects', scope.projectId, 'threads', scope.threadId, 'tmp')
   }
 
-  // A native File supplied by Electron's webUtils represents an explicit user
-  // drop/paste gesture. The preload keeps this channel private so renderer code
-  // cannot grant an arbitrary string path.
-  privileged('file:registerSelection', async (_event, path: unknown, rawScope: unknown) => {
-    if (typeof path !== 'string' || path.length === 0) return null
+  // A File supplied through the preload represents an explicit user drop/paste
+  // gesture. Native files arrive as paths; website drags can arrive as pathless
+  // bytes and must be retained before the renderer can attach them.
+  privileged('file:registerSelection', async (_event, selection: unknown, rawScope: unknown) => {
     const scope = rawScope === undefined ? null : validateAttachmentStorageScope(rawScope)
-    const retainedPath = scope
-      ? await retainTemporaryAttachment(path, await attachmentStorageDirectory(scope))
-      : path
+    let retainedPath: string
+
+    if (typeof selection === 'string') {
+      if (selection.length === 0) return null
+      retainedPath = scope
+        ? await retainTemporaryAttachment(selection, await attachmentStorageDirectory(scope))
+        : selection
+    } else {
+      if (!scope || typeof selection !== 'object' || selection === null) return null
+      const record = selection as Record<string, unknown>
+      const originalFilename = validateBoundedString(
+        record['filename'],
+        'Dropped attachment filename',
+        1,
+        255
+      )
+      const bytes = record['bytes']
+      if (!(bytes instanceof Uint8Array)) {
+        throw new TypeError('Dropped attachment bytes must be binary data')
+      }
+      if (bytes.byteLength === 0 || bytes.byteLength > MAX_PATHLESS_ATTACHMENT_BYTES) {
+        throw new TypeError('Dropped browser attachment must be between 1 byte and 32 MB')
+      }
+
+      const originalExtension = extname(originalFilename)
+      const safeExtension = /^\.[a-z0-9]{1,16}$/iu.test(originalExtension)
+        ? originalExtension.toLowerCase()
+        : ''
+      const filename = `dropped-${randomUUID()}${safeExtension}`
+      const directory = await attachmentStorageDirectory(scope)
+      await mkdir(directory, { recursive: true })
+      retainedPath = join(directory, filename)
+      const stagingPath = join(directory, `.${filename}.${process.pid}.${randomUUID()}.tmp`)
+      try {
+        await writeFile(stagingPath, bytes, { flag: 'wx', mode: 0o600 })
+        await rename(stagingPath, retainedPath)
+      } catch (error) {
+        await rm(stagingPath, { force: true }).catch(() => undefined)
+        throw error
+      }
+    }
+
     await privilegedIpc.registerUserSelectedFile(retainedPath)
     return retainedPath
   })

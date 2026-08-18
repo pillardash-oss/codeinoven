@@ -505,7 +505,8 @@ export interface AppBridge {
    *  performed by the validated main-process `file:read` channel so the preload
    *  never touches the filesystem directly and only scoped paths can be read. */
   readFile: (path: string) => Promise<Uint8Array<ArrayBuffer>>
-  /** Resolve, retain when ephemeral, and register a native File from a drop/paste gesture. */
+  /** Resolve and register a File from a drop/paste gesture. Pathless browser
+   *  files are persisted into the supplied attachment scope. */
   registerFileSelection: (file: File, scope?: AttachmentStorageScope) => Promise<string>
   /** Resolve the absolute path of a native File from a drop/paste gesture ('' when unavailable). */
   getPathForFile: (file: File) => string
@@ -514,6 +515,7 @@ export interface AppBridge {
 }
 
 const trafficLightArg = process.argv.find((arg) => arg.startsWith(TRAFFIC_LIGHT_ARG_PREFIX))
+const MAX_PATHLESS_ATTACHMENT_BYTES = 32 * 1024 * 1024
 
 /**
  * Platform truth the flag is only an enhancement for. macOS always draws its
@@ -570,8 +572,22 @@ const bridge: AppBridge = {
   },
   registerFileSelection: async (file: File, scope?: AttachmentStorageScope): Promise<string> => {
     const path = webUtils.getPathForFile(file)
-    if (!path) return ''
-    const registered = await ipcRenderer.invoke('file:registerSelection', path, scope)
+    if (path) {
+      const registered = await ipcRenderer.invoke('file:registerSelection', path, scope)
+      return typeof registered === 'string' ? registered : ''
+    }
+    if (!scope) return ''
+    if (file.size === 0) throw new TypeError('Dropped attachment is empty')
+    if (file.size > MAX_PATHLESS_ATTACHMENT_BYTES) {
+      throw new TypeError('Dropped browser attachment must be at most 32 MB')
+    }
+
+    const bytes = new Uint8Array(await file.arrayBuffer())
+    const registered = await ipcRenderer.invoke(
+      'file:registerSelection',
+      { filename: file.name, bytes },
+      scope
+    )
     return typeof registered === 'string' ? registered : ''
   },
   getPathForFile: (file: File): string => webUtils.getPathForFile(file),
