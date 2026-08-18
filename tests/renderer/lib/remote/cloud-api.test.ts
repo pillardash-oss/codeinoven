@@ -40,7 +40,10 @@ describe('cloud desktop revocation', () => {
       .mockResolvedValueOnce(Response.json({ desktopId: 'desktop-1' }))
     vi.stubGlobal('fetch', fetchMock)
 
-    await expect(claimCloudDesktop('ABCD-EFGH-IJKL-MNOP')).resolves.toBe('desktop-1')
+    await expect(claimCloudDesktop('ABCD-EFGH-IJKL-MNOP')).resolves.toEqual({
+      desktopId: 'desktop-1',
+      mobileDeviceId: 'fresh-device-1234'
+    })
     expect(mobileIdentityMocks.rotate).toHaveBeenCalledOnce()
     expect(fetchMock).toHaveBeenCalledTimes(2)
   })

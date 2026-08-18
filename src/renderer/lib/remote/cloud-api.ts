@@ -29,6 +29,11 @@ export interface CloudDesktopConnection {
   relayPath: string
 }
 
+export interface CloudEnrollmentClaim {
+  desktopId: string
+  mobileDeviceId: string
+}
+
 interface EncryptedDesktopConnection {
   desktop: Pick<CloudDesktop, 'id' | 'name' | 'platform' | 'online'>
   grant: {
@@ -85,7 +90,7 @@ export async function listCloudDesktops(): Promise<CloudDesktop[]> {
 async function claimCloudDesktopWithIdentity(
   code: string,
   identity: MobileGrantIdentity
-): Promise<string> {
+): Promise<CloudEnrollmentClaim> {
   const response = await apiRequest<{ desktopId: string }>('/v1/device-enrollments/claim', {
     method: 'POST',
     body: JSON.stringify({
@@ -95,10 +100,10 @@ async function claimCloudDesktopWithIdentity(
       mobilePublicKey: identity.publicKey
     })
   })
-  return response.desktopId
+  return { desktopId: response.desktopId, mobileDeviceId: identity.id }
 }
 
-export async function claimCloudDesktop(code: string): Promise<string> {
+export async function claimCloudDesktop(code: string): Promise<CloudEnrollmentClaim> {
   try {
     return await claimCloudDesktopWithIdentity(code, await mobileGrantIdentity())
   } catch (error) {
@@ -107,21 +112,27 @@ export async function claimCloudDesktop(code: string): Promise<string> {
   }
 }
 
-export async function cloudDesktopConnection(desktopId: string): Promise<CloudDesktopConnection> {
-  const identity = await mobileGrantIdentity()
+export async function cloudDesktopConnection(
+  desktopId: string,
+  claimedMobileDeviceId?: string
+): Promise<CloudDesktopConnection> {
+  // A fresh claim must request the grant with the exact identity that consumed
+  // its one-time code. Android can change storage availability while moving
+  // between the QR scanner, browser, and installed PWA.
+  const mobileDeviceId = claimedMobileDeviceId ?? (await mobileGrantIdentity()).id
   const response = await apiRequest<EncryptedDesktopConnection>(
-    `/v1/desktops/${encodeURIComponent(desktopId)}/connection?mobileDeviceId=${encodeURIComponent(identity.id)}`
+    `/v1/desktops/${encodeURIComponent(desktopId)}/connection?mobileDeviceId=${encodeURIComponent(mobileDeviceId)}`
   )
-  if (response.grant.mobileDeviceId !== identity.id) throw new Error('device-not-approved')
+  if (response.grant.mobileDeviceId !== mobileDeviceId) throw new Error('device-not-approved')
   return {
     desktop: response.desktop,
     controlSecret: await decryptDesktopGrant({
       desktopId,
-      mobileDeviceId: identity.id,
+      mobileDeviceId,
       desktopPublicKey: response.grant.desktopPublicKey,
       ciphertext: response.grant.ciphertext
     }),
-    mobileDeviceId: identity.id,
+    mobileDeviceId,
     lanEndpoint: response.lanEndpoint,
     relayPath: response.relayPath
   }

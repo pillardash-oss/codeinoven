@@ -32,6 +32,7 @@
     renameCloudDesktop,
     revokeCloudDesktop,
     type CloudDesktop,
+    type CloudEnrollmentClaim,
     type CloudUser
   } from '$lib/remote/cloud-api'
   import { remoteSession } from '$lib/remote/session-store.svelte'
@@ -310,7 +311,7 @@
 
   async function claimDesktopCode(): Promise<void> {
     if (busy) return
-    let claimedDesktopId: string | null = null
+    let claimedDesktop: CloudEnrollmentClaim | null = null
     const formattedCode = normalizeEnrollmentCode(claimCode)
     claimCode = formattedCode
     if (formattedCode.replaceAll('-', '').length !== 16) {
@@ -320,10 +321,9 @@
     busy = true
     claimError = ''
     try {
-      const desktopId = await claimCloudDesktop(formattedCode)
-      claimedDesktopId = desktopId
-      connectingDesktopId = desktopId
-      savePreferredDesktop(desktopId)
+      claimedDesktop = await claimCloudDesktop(formattedCode)
+      connectingDesktopId = claimedDesktop.desktopId
+      savePreferredDesktop(claimedDesktop.desktopId)
       claimCode = ''
       claimFromLink = false
       clearPersistedEnrollmentCode()
@@ -337,7 +337,9 @@
     } finally {
       busy = false
     }
-    if (claimedDesktopId) void connectDesktop(claimedDesktopId)
+    if (claimedDesktop) {
+      void connectDesktop(claimedDesktop.desktopId, claimedDesktop.mobileDeviceId)
+    }
   }
 
   function enrollmentCodeFromQr(value: string): string | null {
@@ -392,13 +394,14 @@
 
   async function waitForDesktopApproval(
     desktopId: string,
-    signal: AbortSignal
+    signal: AbortSignal,
+    claimedMobileDeviceId?: string
   ): Promise<Awaited<ReturnType<typeof cloudDesktopConnection>>> {
     const deadline = Date.now() + DESKTOP_APPROVAL_TIMEOUT_MS
     let attempt = 0
     while (!signal.aborted) {
       try {
-        return await cloudDesktopConnection(desktopId)
+        return await cloudDesktopConnection(desktopId, claimedMobileDeviceId)
       } catch (error) {
         if (!(error instanceof CloudApiError) || error.code !== 'device-not-approved') throw error
         const remaining = deadline - Date.now()
@@ -443,7 +446,7 @@
     })
   }
 
-  async function connectDesktop(desktopId: string): Promise<void> {
+  async function connectDesktop(desktopId: string, claimedMobileDeviceId?: string): Promise<void> {
     if (busy) return
     if (connectedDesktopId === desktopId && sessionConnected) {
       onOpenWorkspace()
@@ -458,7 +461,11 @@
     savePreferredDesktop(desktopId)
     errorMessage = ''
     try {
-      const connection = await waitForDesktopApproval(desktopId, controller.signal)
+      const connection = await waitForDesktopApproval(
+        desktopId,
+        controller.signal,
+        claimedMobileDeviceId
+      )
       let lanTarget
       if (connection.lanEndpoint) {
         const lanUrl = new URL(connection.lanEndpoint)
