@@ -5,7 +5,11 @@
   import { invoke, subscribe } from '$lib/ipc.svelte'
   import { scopeState, type ThreadStage } from '$lib/stores/scope.svelte'
   import { threadSettings } from '$lib/stores/thread-settings.svelte'
-  import { settingsForNewThread } from '$lib/thread-settings-inheritance'
+  import {
+    persistInheritedThreadSettings,
+    settingsForNewThread,
+    threadWithInheritedSettings
+  } from '$lib/thread-settings-inheritance'
   import { workspaceState, findEmptyNewThread } from '$lib/stores/workspace.svelte'
   import {
     DEFAULT_SCOPE_BUCKET_ID,
@@ -209,19 +213,26 @@
       return
     }
     try {
-      const thread = await invoke('thread:create', {
+      const created = await invoke('thread:create', {
         projectId: activeProject.id,
         providerId: 'opencode',
         title: DEFAULT_THREAD_TITLE,
         workingDirectory: activeProject.path,
         settings: inheritedSettings,
-        ...(activeThread?.settings ? { inheritSettings: true } : {}),
         scopeBucketId: bucketId
       })
+      const thread = activeThread?.settings
+        ? threadWithInheritedSettings(created, inheritedSettings)
+        : created
       scopeState.updateThread(thread)
       scopeState.showSidebarForThread(thread, bucketId)
       navigateToProjects?.()
       workspaceState.openThread(thread, activeProject)
+      if (activeThread?.settings) {
+        void persistInheritedThreadSettings(thread, inheritedSettings).catch((error) => {
+          actionError = errorMessage(error, 'The inherited thread settings could not be saved.')
+        })
+      }
     } catch (error) {
       actionError = errorMessage(error, 'The thread could not be created.')
     }

@@ -80,7 +80,11 @@
     chatSettings,
     chatEffectiveSettings
   } from '$lib/stores/thread-settings.svelte'
-  import { settingsForNewThread } from '$lib/thread-settings-inheritance'
+  import {
+    persistInheritedThreadSettings,
+    settingsForNewThread,
+    threadWithInheritedSettings
+  } from '$lib/thread-settings-inheritance'
   import { providerCatalog } from '$lib/stores/provider-catalog.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
   import { gitState } from '$lib/stores/git.svelte'
@@ -2074,15 +2078,17 @@
       }
       return
     }
-    const thread = await invoke('thread:create', {
+    const created = await invoke('thread:create', {
       projectId: project.id,
       providerId: 'opencode',
       title: DEFAULT_THREAD_TITLE,
       workingDirectory: project.path,
       settings: inheritedSettings,
-      ...(activeThread?.settings ? { inheritSettings: true } : {}),
       ...(scopeBucketId ? { scopeBucketId } : {})
     })
+    const thread = activeThread?.settings
+      ? threadWithInheritedSettings(created, inheritedSettings)
+      : created
     upsertThreadInList(thread)
     expandedFolders.add(project.id)
     if (scopeBucketId) {
@@ -2090,6 +2096,11 @@
       scopeState.showSidebarForThread(thread, scopeBucketId)
     }
     workspaceState.openThread(thread, project)
+    if (activeThread?.settings) {
+      void persistInheritedThreadSettings(thread, inheritedSettings).catch((error) => {
+        reportError(error, 'The inherited thread settings could not be saved.')
+      })
+    }
   }
 
   /** Start a fresh standalone chat — shows the composer immediately. */

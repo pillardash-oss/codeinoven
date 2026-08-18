@@ -24,6 +24,7 @@
     Zap,
     ShieldAlert,
     Eye,
+    Image as ImageIcon,
     Video,
     Check
   } from '@lucide/svelte'
@@ -1953,11 +1954,15 @@
                   onclick={() => (previewFile = file)}
                 >
                   {#if previewKind === 'image'}
-                    <img
-                      src={previewUrls[file.url] ?? file.url}
-                      alt={file.filename ?? 'file'}
-                      class="h-5 w-5 shrink-0 rounded object-cover"
-                    />
+                    {#if previewUrls[file.url]}
+                      <img
+                        src={previewUrls[file.url]}
+                        alt={file.filename ?? 'file'}
+                        class="h-5 w-5 shrink-0 rounded object-cover"
+                      />
+                    {:else}
+                      <ImageIcon size={11} class="shrink-0" />
+                    {/if}
                   {:else if previewKind === 'video'}
                     <Video size={11} class="shrink-0" />
                   {:else if previewKind === 'audio'}

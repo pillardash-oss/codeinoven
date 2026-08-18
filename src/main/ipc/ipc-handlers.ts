@@ -4668,7 +4668,7 @@ export function registerIpcHandlers(
   // ─── Threads ────────────────────────────────────────────────────────────
   ipcMain.handle('thread:create', async (_, input: unknown) => {
     const validated = validateCreateThreadInput(input)
-    if (validated.settings?.engineeringMode && validated.inheritSettings !== true) {
+    if (validated.settings?.engineeringMode) {
       const baseSettings = { ...validated.settings }
       delete baseSettings.loopAuditor
       const defaults = (await storage.getConfig()).agentDefaults
@@ -5015,12 +5015,13 @@ export function registerIpcHandlers(
   )
   ipcMain.handle(
     'thread:updateSettings',
-    (_, projectId: unknown, threadId: unknown, settings: unknown) =>
-      threadManager.updateSettings(
-        validateEntityId(projectId, 'Project ID'),
-        validateEntityId(threadId, 'Thread ID'),
-        validateThreadSettings(settings)
-      )
+    async (_, projectId: unknown, threadId: unknown, settings: unknown) => {
+      const safeProjectId = validateEntityId(projectId, 'Project ID')
+      const safeThreadId = validateEntityId(threadId, 'Thread ID')
+      const safeSettings = validateThreadSettings(settings)
+      await threadCreation.awaitReady(safeThreadId)
+      return threadManager.updateSettings(safeProjectId, safeThreadId, safeSettings)
+    }
   )
   ipcMain.handle(
     'thread:fork',

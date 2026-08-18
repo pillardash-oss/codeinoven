@@ -63,6 +63,16 @@
     onClose()
   }
 
+  function closeFromButton(event: MouseEvent): void {
+    event.stopPropagation()
+    requestClose()
+  }
+
+  function downloadFromButton(event: MouseEvent): void {
+    event.stopPropagation()
+    handleDownload()
+  }
+
   async function saveText(): Promise<void> {
     if (!onSaveText || !dirty || saving) return
     saving = true
@@ -219,7 +229,7 @@
       class="absolute right-4 top-4 flex h-8 w-8 items-center justify-center rounded-full bg-surface text-foreground transition-colors hover:bg-elevated"
       aria-label="Close preview"
       title="Close preview (Esc)"
-      onclick={requestClose}
+      onclick={closeFromButton}
     >
       <X size={18} />
     </button>
@@ -228,7 +238,7 @@
       class="absolute right-4 top-16 flex h-8 w-8 items-center justify-center rounded-full bg-surface text-foreground transition-colors hover:bg-elevated"
       aria-label="Download file"
       title="Download file"
-      onclick={handleDownload}
+      onclick={downloadFromButton}
     >
       <Download size={16} />
     </button>

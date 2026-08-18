@@ -298,8 +298,6 @@ export interface CreateThreadInput {
   title: string
   workingDirectory?: string
   settings?: ThreadSettings
-  /** The supplied settings were cloned from the active thread and must win over global defaults. */
-  inheritSettings?: boolean
   titleSource?: ThreadTitleSource
   featureSlug?: string
   scopeBucketId?: string
