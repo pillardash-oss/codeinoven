@@ -102,6 +102,14 @@ const AUTH_CONFIRM_POLL_MS = 200
  */
 const ONE_SHOT_SPAWN_LIMIT = 4
 
+/** Keep Claude Code's native per-repository memory from crossing app threads. */
+function buildClaudeEnvironment(): NodeJS.ProcessEnv {
+  return {
+    ...buildHarnessEnvironment(),
+    CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1'
+  }
+}
+
 /** A tiny FIFO semaphore used to bound concurrent one-shot claude spawns. */
 class OneShotSpawnGate {
   private readonly queue: (() => void)[] = []
@@ -249,7 +257,7 @@ async function discoverClaudeModels(projectPath: string): Promise<ProviderModel[
     prompt: keepClaudeDiscoveryOpen(),
     options: {
       cwd: projectPath,
-      env: buildHarnessEnvironment(),
+      env: buildClaudeEnvironment(),
       pathToClaudeCodeExecutable: 'claude',
       tools: []
     }
@@ -1417,7 +1425,7 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
         try {
           child = spawn('claude', ['--version'], {
             cwd: projectPath,
-            env: buildHarnessEnvironment(),
+            env: buildClaudeEnvironment(),
             stdio: ['ignore', 'ignore', 'pipe']
           })
         } catch (error) {
@@ -1686,7 +1694,7 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
           ['auth', 'status', '--json'],
           {
             cwd: projectPath,
-            env: buildHarnessEnvironment(),
+            env: buildClaudeEnvironment(),
             timeout: PRE_FLIGHT_AUTH_PROBE_TIMEOUT_MS,
             maxBuffer: 1024 * 1024
           },
@@ -1743,7 +1751,7 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
    * active endpoint per process, so only the selected provider is applied.
    */
   private async customProviderEnv(providerId: string): Promise<NodeJS.ProcessEnv> {
-    const env = buildHarnessEnvironment()
+    const env = buildClaudeEnvironment()
     if (!this.baseUrlProviders || !this.secretVault || !providerId) return env
     const provider = await this.baseUrlProviders.getProvider(this.id, providerId)
     if (!provider || provider.harnessId !== this.id || !provider.enabled) return env
@@ -1894,7 +1902,7 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
                 ],
                 {
                   cwd: projectPath,
-                  env: buildHarnessEnvironment(),
+                  env: buildClaudeEnvironment(),
                   // Usage telemetry is a side channel; do not leave a piped
                   // stderr buffer undrained while the probe waits for JSON.
                   stdio: ['pipe', 'pipe', 'ignore']
