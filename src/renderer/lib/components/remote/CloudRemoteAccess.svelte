@@ -1,7 +1,8 @@
 <script lang="ts">
   import { AlertDialog } from 'bits-ui'
-  import { Laptop, LogOut, Plus, RefreshCw, ShieldCheck, Trash2 } from '@lucide/svelte'
+  import { Laptop, LogOut, Plus, RefreshCw, ScanLine, ShieldCheck, Trash2 } from '@lucide/svelte'
   import { onMount } from 'svelte'
+  import EnrollmentCodeScanner from '$lib/components/remote/EnrollmentCodeScanner.svelte'
   import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
   import {
     completeCloudAuthCallback,
@@ -92,6 +93,7 @@
   let claimError = $state('')
   let claimCode = $state(enrollmentCodeFromLink)
   let claimFromLink = $state(enrollmentCodeFromLink.length > 0)
+  let scannerOpen = $state(false)
   let activeSignInProvider = $state<CloudAuthProvider | null>(null)
   let revokeCandidate = $state<CloudDesktop | null>(null)
   let automaticSignInStarted = false
@@ -186,6 +188,33 @@
     }
   }
 
+  function enrollmentCodeFromQr(value: string): string | null {
+    let candidate = value
+    try {
+      const scannedUrl = new URL(value)
+      candidate =
+        new URLSearchParams(scannedUrl.hash.slice(1)).get('enroll') ??
+        scannedUrl.searchParams.get('enroll') ??
+        ''
+    } catch {
+      // A scanner may return the formatted one-time code directly.
+    }
+    const formatted = normalizeEnrollmentCode(candidate)
+    return formatted.replaceAll('-', '').length === 16 ? formatted : null
+  }
+
+  function handleScannedEnrollment(value: string): boolean {
+    const code = enrollmentCodeFromQr(value)
+    if (!code) return false
+    claimCode = code
+    claimFromLink = true
+    claimError = ''
+    persistEnrollmentCode(code)
+    scannerOpen = false
+    void claimDesktopCode()
+    return true
+  }
+
   function claimDesktop(event: SubmitEvent): void {
     event.preventDefault()
     void claimDesktopCode()
@@ -275,6 +304,24 @@
         ? 'The one-time code from the QR is ready. Tap Add to connect this desktop to your account.'
         : 'Enter the one-time code shown in Remote settings on your desktop.'}
     </p>
+    <button
+      class="mt-3 flex h-10 w-full cursor-pointer items-center justify-center gap-2 rounded-lg bg-primary px-4 text-sm font-semibold text-on-primary hover:bg-primary-hover disabled:opacity-50"
+      type="button"
+      disabled={busy}
+      onclick={() => {
+        claimError = ''
+        scannerOpen = true
+      }}
+    >
+      <ScanLine size={16} /> Scan pairing QR
+    </button>
+    <div class="my-3 flex items-center gap-3" aria-hidden="true">
+      <span class="h-px flex-1 bg-border"></span>
+      <span class="text-[10px] font-semibold uppercase tracking-wide text-dimmed">
+        Or enter the code
+      </span>
+      <span class="h-px flex-1 bg-border"></span>
+    </div>
     <div class="mt-3 flex gap-2">
       <input
         class="h-10 min-w-0 flex-1 rounded-lg border bg-elevated px-3 font-mono text-sm uppercase outline-none focus:border-primary focus:ring-2 focus:ring-primary/20"
@@ -486,4 +533,8 @@
       </AlertDialog.Content>
     </AlertDialog.Portal>
   </AlertDialog.Root>
+
+  {#if scannerOpen}
+    <EnrollmentCodeScanner onScan={handleScannedEnrollment} onClose={() => (scannerOpen = false)} />
+  {/if}
 {/if}

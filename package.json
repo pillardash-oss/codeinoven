@@ -91,6 +91,7 @@
     "mermaid": "^11.16.1",
     "prettier": "^3.9.6",
     "prettier-plugin-svelte": "^4.1.1",
+    "qr-scanner": "1.4.2",
     "qrcode": "^1.5.4",
     "selfsigned": "^5.5.0",
     "simple-git": "^3.36.0",
