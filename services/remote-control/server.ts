@@ -704,11 +704,12 @@ const server: Server<RelaySocketData> = serve<RelaySocketData>({
     maxPayloadLength: MAX_RELAY_BYTES,
     open(socket) {
       if (socket.data.role === 'mobile' && socket.data.desktopId && socket.data.sessionId) {
-        // The hub delivers any replayed buffered frames itself (single path).
-        relayHub.connectMobile(socket.data.desktopId, socket)
         const sockets = sessionSockets.get(socket.data.sessionId) ?? new Set()
         sockets.add(socket)
         sessionSockets.set(socket.data.sessionId, sockets)
+        // Establish the protocol state before the hub replays retained data.
+        // Sending ciphertext first makes a reconnect process data while it
+        // still considers the socket unauthenticated and can lose its ACK.
         socket.send(
           JSON.stringify({
             type: 'relay:authenticated',
@@ -716,6 +717,8 @@ const server: Server<RelaySocketData> = serve<RelaySocketData>({
             online: relayHub.desktopOnline(socket.data.desktopId)
           })
         )
+        // The hub delivers any replayed buffered frames itself (single path).
+        relayHub.connectMobile(socket.data.desktopId, socket)
       } else {
         socket.send(JSON.stringify({ type: 'relay:authentication-required' }))
       }

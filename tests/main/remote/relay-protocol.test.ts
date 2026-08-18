@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import { CloudRelayClient } from '../../../src/main/remote/cloud-relay-client'
 import {
   createAccountRelayClient,
+  type AccountRelayEvent,
   type AccountRelayClient
 } from '../../../src/renderer/lib/remote/account-relay'
 import {
@@ -9,6 +10,7 @@ import {
   type RelayRole,
   type RelaySocket
 } from '../../../services/remote-control/relay-hub'
+import { encryptPayload } from '../../../src/renderer/lib/remote/session-security'
 
 /**
  * End-to-end protocol coverage that exercises the REAL production relay hub
@@ -217,6 +219,57 @@ afterAll(() => {
 })
 
 describe('account relay end-to-end protocol (real RelayHub)', () => {
+  it('acknowledges a replay already accepted before a reconnect', async () => {
+    const encrypted = await encryptPayload(SECRET, JSON.stringify({ rpc: 'event', channel: 'a' }))
+    const frame = JSON.stringify({
+      type: 'relay:data',
+      id: '12345678-1234-1234-1234-123456789abc:replay',
+      payload: encrypted
+    })
+
+    const firstSocket = new DuplexSocket()
+    const firstMessages: string[] = []
+    const firstClient = createAccountRelayClient({
+      desktopId: DESKTOP_ID,
+      mobileDeviceId: 'mobile-1',
+      controlSecret: SECRET,
+      socketFactory: () => asWebSocket(firstSocket),
+      onEvent: (event) => {
+        if (event.kind === 'message') firstMessages.push(event.data)
+      }
+    })
+    void firstClient.connect()
+    authenticateMobile(firstSocket)
+    firstSocket.deliver(frame)
+    await vi.waitFor(() => expect(firstMessages).toHaveLength(1))
+    firstClient.close()
+
+    const secondSocket = new DuplexSocket()
+    const secondEvents: AccountRelayEvent[] = []
+    const secondClient = createAccountRelayClient({
+      desktopId: DESKTOP_ID,
+      mobileDeviceId: 'mobile-1',
+      controlSecret: SECRET,
+      socketFactory: () => asWebSocket(secondSocket),
+      onEvent: (event) => secondEvents.push(event)
+    })
+    void secondClient.connect()
+    authenticateMobile(secondSocket)
+    secondSocket.deliver(frame)
+
+    await vi.waitFor(() => {
+      expect(secondSocket.sent).toContain(
+        JSON.stringify({
+          type: 'relay:ack',
+          id: '12345678-1234-1234-1234-123456789abc:replay'
+        })
+      )
+    })
+    expect(secondSocket.readyState).toBe(DuplexSocket.OPEN)
+    expect(secondEvents.some((event) => event.kind === 'disconnected')).toBe(false)
+    secondClient.close()
+  })
+
   it('confirms delivery only after the receiver acknowledges end to end', async () => {
     const hub = new RelayHub()
     const mobileMessages: string[] = []
