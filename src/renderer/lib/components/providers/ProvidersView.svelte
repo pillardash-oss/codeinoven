@@ -650,8 +650,8 @@
             ? 'border-l-[3px] border-l-primary'
             : ''}"
         >
-          <div class="flex flex-wrap items-center gap-3">
-            <div class="flex min-w-0 flex-1 basis-56 items-center gap-3">
+          <div class="grid grid-cols-[13rem_10rem_11rem_minmax(0,1fr)_auto] items-center gap-3">
+            <div class="flex min-w-0 items-center gap-3">
               <div class="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-elevated">
                 <AgentIcon agentId={provider.id} label={provider.name} size={20} />
               </div>
@@ -663,20 +663,20 @@
               </div>
             </div>
 
-            <div class="shrink-0">
+            <div class="min-w-0">
               {#key provider.status}
                 <span
-                  class="inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1 text-[11px] font-medium {badge.classes}"
+                  class="inline-flex max-w-full items-center gap-1.5 truncate rounded-lg border px-2.5 py-1 text-[11px] font-medium {badge.classes}"
                   in:fade={{ duration: 150 }}
                   title={badge.label}
                 >
-                  <badge.Icon size={12} class={badge.spin ? 'animate-spin' : ''} />
-                  {badge.label}
+                  <badge.Icon size={12} class="shrink-0 {badge.spin ? 'animate-spin' : ''}" />
+                  <span class="truncate">{badge.label}</span>
                 </span>
               {/key}
             </div>
 
-            <div class="hidden min-w-0 shrink-0 basis-48 md:block">
+            <div class="min-w-0">
               <p class="text-[10px] font-medium uppercase tracking-wide text-dimmed">Path</p>
               <div class="mt-0.5 flex items-center gap-1.5">
                 <span
@@ -704,7 +704,7 @@
               </div>
             </div>
 
-            <div class="hidden min-w-0 shrink-0 basis-44 lg:block">
+            <div class="min-w-0">
               {#if provider.status === 'error'}
                 <p class="text-[10px] font-medium uppercase tracking-wide text-dimmed">Issue</p>
                 <p class="mt-0.5 truncate text-xs text-danger" title={provider.detail}>
@@ -725,7 +725,7 @@
               {/if}
             </div>
 
-            <div class="ml-auto flex flex-wrap items-center justify-end gap-2">
+            <div class="flex items-center justify-end gap-2">
               {#if provider.status === 'error'}
                 <button
                   class="flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-50"

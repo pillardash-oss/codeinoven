@@ -1,6 +1,6 @@
 <script lang="ts">
   import { AlertDialog } from 'bits-ui'
-  import { Laptop, LogOut, Plus, RefreshCw, ScanLine, ShieldCheck, Trash2 } from '@lucide/svelte'
+  import { Laptop, LogOut, Plus, RefreshCw, ScanLine, ShieldCheck, Trash2, X } from '@lucide/svelte'
   import { onMount } from 'svelte'
   import EnrollmentCodeScanner from '$lib/components/remote/EnrollmentCodeScanner.svelte'
   import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
@@ -316,6 +316,7 @@
       if (connectingDesktopId === candidate.id) stopDesktopStatusRefresh()
       revokeCandidate = null
     } catch (error) {
+      revokeCandidate = null
       errorMessage = readableError(error)
     } finally {
       busy = false
@@ -546,14 +547,26 @@
           </div>
         {/each}
       </section>
-
-      {#if errorMessage}
-        <p class="rounded-lg bg-danger/10 px-3 py-2 text-xs text-danger" aria-live="polite">
-          {errorMessage}
-        </p>
-      {/if}
     </div>
   </main>
+
+  {#if errorMessage}
+    <div
+      class="fixed left-1/2 top-[max(1rem,env(safe-area-inset-top))] z-60 flex w-[min(26rem,calc(100vw-2rem))] -translate-x-1/2 items-start gap-3 rounded-xl border border-danger/30 bg-surface px-4 py-3 text-sm text-danger shadow-xl"
+      role="alert"
+    >
+      <p class="min-w-0 flex-1 leading-5">{errorMessage}</p>
+      <button
+        type="button"
+        class="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-danger hover:bg-danger/10"
+        title="Dismiss error"
+        aria-label="Dismiss error"
+        onclick={() => (errorMessage = '')}
+      >
+        <X size={15} />
+      </button>
+    </div>
+  {/if}
 
   <AlertDialog.Root
     open={revokeCandidate !== null}

@@ -457,9 +457,11 @@ async function mutateDesktop(
   desktopId: string
 ): Promise<Response> {
   if (request.method === 'DELETE') {
-    if (!database.revokeDesktop(desktopId, session.userId)) return json({ error: 'not-found' }, 404)
-    closeDesktop(desktopId, 4003, 'revoked')
-    database.audit('desktop.revoked', session.userId, desktopId)
+    const revoked = database.revokeDesktop(desktopId, session.userId)
+    if (revoked) {
+      closeDesktop(desktopId, 4003, 'revoked')
+      database.audit('desktop.revoked', session.userId, desktopId)
+    }
     return new Response(null, { status: 204 })
   }
   const body = await readJsonObject(request)

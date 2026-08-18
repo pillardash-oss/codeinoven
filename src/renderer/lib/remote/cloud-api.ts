@@ -119,5 +119,12 @@ export async function renameCloudDesktop(desktopId: string, name: string): Promi
 }
 
 export async function revokeCloudDesktop(desktopId: string): Promise<void> {
-  await apiRequest(`/v1/desktops/${encodeURIComponent(desktopId)}`, { method: 'DELETE' })
+  try {
+    await apiRequest(`/v1/desktops/${encodeURIComponent(desktopId)}`, { method: 'DELETE' })
+  } catch (error) {
+    // A stale client can still list a desktop that another client already revoked.
+    // DELETE remains successful when the requested access is already absent.
+    if (error instanceof CloudApiError && error.status === 404) return
+    throw error
+  }
 }
