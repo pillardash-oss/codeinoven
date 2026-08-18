@@ -206,12 +206,13 @@ const QUESTION_TOOL_INSTRUCTION = [
   'Put the recommended option first and suffix its label with `(Recommended)`. Set `multiple: true` only when the user may pick more than one option; custom answers are enabled by default.'
 ].join(' ')
 
-const MEMORY_SYSTEM_INSTRUCTION = [
-  'After each completed user-and-assistant turn, the application evaluates memory separately through its `propose_memory` structured-output workflow.',
-  'Words such as global, project, thread, chat, repository, or codebase qualify the memory scope; they do not authorize a file change.',
-  'Do not create or modify AGENTS.md, CLAUDE.md, README files, instruction files, configuration, or any other project file solely to persist the requested memory.',
+const MEMORY_RESPONSE_BOUNDARY_INSTRUCTION = [
+  'A request to remember a preference, rule, or fact does not authorize a project-file change.',
+  'Do not create or modify AGENTS.md, CLAUDE.md, README files, instruction files, configuration, or any other project file solely to remember information.',
   'Only modify a file when the user separately and explicitly asks you to edit that file or perform implementation work.',
-  'Do not claim the memory is already persisted because proposals require user approval.'
+  'Keep the user-facing response focused exclusively on the current request and its outcome.',
+  'Treat all application-owned post-turn processing as invisible orchestration: do not mention, announce, simulate, or report it unless the user explicitly asks how that processing works.',
+  'Do not claim that information was persisted when no user-visible persistence action occurred.'
 ].join(' ')
 
 /** Guidance injected for models that cannot see images (attachment: false). */
@@ -4841,7 +4842,7 @@ export class ChatEngine {
           activeBrainstormTurn: Boolean(activeBrainstormTurn),
           assignmentMode: settings.assignmentMode === true,
           revisionPrompt: '',
-          memoryInstruction: MEMORY_SYSTEM_INSTRUCTION,
+          memoryInstruction: MEMORY_RESPONSE_BOUNDARY_INSTRUCTION,
           imageDescriptorNote,
           behaviorPrompt: promptBehavior,
           utilityInstructions,
@@ -4853,7 +4854,7 @@ export class ChatEngine {
               ? FILE_SYSTEM_CHAT_SYSTEM_PROMPT
               : CHAT_SYSTEM_PROMPT
             : '',
-          memoryInstruction: MEMORY_SYSTEM_INSTRUCTION,
+          memoryInstruction: MEMORY_RESPONSE_BOUNDARY_INSTRUCTION,
           imageDescriptorNote,
           assignmentCoordinatorSystemPrompt,
           behaviorPrompt: promptBehavior,
@@ -4998,7 +4999,7 @@ export class ChatEngine {
             activeBrainstormTurn: Boolean(activeBrainstormTurn),
             assignmentMode: settings.assignmentMode === true,
             revisionPrompt,
-            memoryInstruction: MEMORY_SYSTEM_INSTRUCTION,
+            memoryInstruction: MEMORY_RESPONSE_BOUNDARY_INSTRUCTION,
             imageDescriptorNote,
             behaviorPrompt,
             utilityInstructions,
@@ -5068,7 +5069,7 @@ export class ChatEngine {
                 ? FILE_SYSTEM_CHAT_SYSTEM_PROMPT
                 : CHAT_SYSTEM_PROMPT
               : '',
-            memoryInstruction: MEMORY_SYSTEM_INSTRUCTION,
+            memoryInstruction: MEMORY_RESPONSE_BOUNDARY_INSTRUCTION,
             imageDescriptorNote,
             assignmentCoordinatorSystemPrompt,
             behaviorPrompt,
@@ -15974,7 +15975,8 @@ export class ChatEngine {
       status: 'pending_approval',
       proposalId: proposal.id,
       scope: proposal.scope,
-      message: 'Memory proposal created. Tell the user it is awaiting their approval.'
+      message:
+        'Memory proposal created. The application will request approval separately; do not mention this internal workflow in the task response.'
     }
   }
 

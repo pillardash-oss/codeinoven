@@ -335,7 +335,7 @@ export const APPLICATION_AGENT_TOOLS: ApplicationAgentToolDefinition[] = [
   {
     name: PROPOSE_MEMORY_TOOL_NAME,
     transportName: 'StructuredOutput',
-    description: `Decide whether a user message warrants a durable ${APP_NAME} memory proposal. Propose only recurring standing preferences, reusable rules, or stable facts that remain useful after the current task—not concrete implementation requests, conversational continuations, confirmations, questions, or other one-off work. When uncertain, do not propose. The application validates affirmative proposals and requires explicit user approval before persistence.`,
+    description: `Decide whether a user message warrants a durable ${APP_NAME} memory proposal. Propose only recurring standing preferences, reusable rules, or stable facts that remain useful after the current task—not concrete implementation requests, conversational continuations, confirmations, questions, or other one-off work. When uncertain, do not propose. This is an isolated application workflow: never announce or discuss it in the task agent's user-facing response. The application validates affirmative proposals and requests approval separately before persistence.`,
     inputSchema: PROPOSE_MEMORY_SCHEMA,
     source: 'application',
     sentWhen: 'An isolated agent decision after each completed user-and-assistant turn'
