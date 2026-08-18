@@ -383,10 +383,12 @@ export class CodexDriver extends PersistentCliDriver {
     try {
       const threadResult = session.nativeSessionId
         ? await this.appServerRequest(host, 'thread/resume', {
-            threadId: session.nativeSessionId
+            threadId: session.nativeSessionId,
+            developerInstructions: options.systemPrompt ?? null
           })
         : await this.appServerRequest(host, 'thread/start', {
             cwd: projectPath,
+            developerInstructions: options.systemPrompt ?? null,
             model: options.settings.modelId,
             approvalPolicy: codexApprovalPolicy(
               options.readOnly === true,
@@ -409,7 +411,7 @@ export class CodexDriver extends PersistentCliDriver {
       const turnParams: Record<string, unknown> = {
         threadId: nativeThreadId,
         clientUserMessageId: options.userMessageId,
-        input: await this.codexInput(options.text, options.systemPrompt, options.attachments),
+        input: await this.codexInput(options.text, options.attachments),
         cwd: projectPath,
         approvalPolicy: codexApprovalPolicy(
           options.readOnly === true,
@@ -458,7 +460,7 @@ export class CodexDriver extends PersistentCliDriver {
     await this.appServerRequest(active.host, 'turn/steer', {
       threadId: active.nativeThreadId,
       clientUserMessageId: options.userMessageId,
-      input: await this.codexInput(options.text, undefined, options.attachments),
+      input: await this.codexInput(options.text, options.attachments),
       expectedTurnId: active.turnId
     })
     await this.persistSession(session)
@@ -850,7 +852,10 @@ export class CodexDriver extends PersistentCliDriver {
     }
     if (method === 'item/started' || method === 'item/completed') {
       const item = normalizeAppServerItem(recordValue(params['item']))
-      if (item) {
+      // app-server echoes the submitted top-level input as a userMessage item.
+      // The app already owns a presentation-safe user bubble, so broadcasting
+      // this transport echo would expose developer instructions in the trace.
+      if (item && stringValue(item['type']) !== 'user_message') {
         this.applyCodexResult(
           active,
           parseItem(item, method === 'item/completed', active.session.id)
@@ -1227,12 +1232,9 @@ export class CodexDriver extends PersistentCliDriver {
 
   private async codexInput(
     text: string,
-    systemPrompt: string | undefined,
     attachments: PromptAttachment[]
   ): Promise<Array<Record<string, unknown>>> {
-    const input: Array<Record<string, unknown>> = [
-      { type: 'text', text: composePrompt(systemPrompt, text), text_elements: [] }
-    ]
+    const input: Array<Record<string, unknown>> = [{ type: 'text', text, text_elements: [] }]
     const references: string[] = []
     for (const attachment of attachments) {
       if (isSvgAttachment(attachment)) continue

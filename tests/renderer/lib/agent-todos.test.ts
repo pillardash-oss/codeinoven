@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import type { AgentMessage } from '../../../src/lib/types'
-import { activeAgentTodoIndex, latestAgentTodo } from '../../../src/renderer/lib/agent-todos'
+import {
+  activeAgentTodoIndex,
+  agentTodoProgressLabel,
+  latestAgentTodo
+} from '../../../src/renderer/lib/agent-todos'
 
 describe('latestAgentTodo', () => {
   it('infers the first pending task as active only while the agent is working', () => {
@@ -21,6 +25,12 @@ describe('latestAgentTodo', () => {
 
     expect(activeAgentTodoIndex(items, true)).toBe(1)
     expect(activeAgentTodoIndex(items, false)).toBe(1)
+  })
+
+  it('omits redundant completion copy while a task is active', () => {
+    expect(agentTodoProgressLabel(6, 0, 0)).toBe('Working on 1 of 6')
+    expect(agentTodoProgressLabel(6, 0, -1)).toBe('6 tasks')
+    expect(agentTodoProgressLabel(6, 6, -1)).toBe('6/6 done')
   })
 
   it('tracks Codex plan status changes in the latest snapshot', () => {

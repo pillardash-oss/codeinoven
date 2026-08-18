@@ -205,7 +205,13 @@ describe('CodexDriver', () => {
     const sharedChild = new FakeChild()
     spawnMock.mockReturnValue(sharedChild as unknown as ChildProcess)
     const sessionId = await driver.createSession('/project', 'Codex')
-    await driver.sendPrompt('/project', { sessionId, settings, text: 'first', attachments: [] })
+    await driver.sendPrompt('/project', {
+      sessionId,
+      settings,
+      text: 'first',
+      attachments: [],
+      systemPrompt: 'Internal memory contract'
+    })
     expect(spawnMock.mock.calls[0]?.[1]).toEqual([
       'app-server',
       '--enable',
@@ -215,14 +221,37 @@ describe('CodexDriver', () => {
     ])
     expect(sharedChild.requests()).toContainEqual(
       expect.objectContaining({
+        method: 'thread/start',
+        params: expect.objectContaining({
+          developerInstructions: 'Internal memory contract'
+        })
+      })
+    )
+    expect(sharedChild.requests()).toContainEqual(
+      expect.objectContaining({
         method: 'turn/start',
         params: expect.objectContaining({
           threadId: 'native-1',
           model: 'gpt-5.6-sol',
+          input: [{ type: 'text', text: 'first', text_elements: [] }],
           sandboxPolicy: expect.objectContaining({ type: 'workspaceWrite' })
         })
       })
     )
+    const eventsBeforeInputEcho = events.length
+    sharedChild.emitPayload({
+      method: 'item/started',
+      params: {
+        threadId: 'native-1',
+        turnId: 'turn-1',
+        item: {
+          id: 'input-echo',
+          type: 'userMessage',
+          content: [{ type: 'text', text: 'Internal memory contract\n\nfirst' }]
+        }
+      }
+    })
+    expect(events).toHaveLength(eventsBeforeInputEcho)
     sharedChild.emitPayload({
       id: 'permission-1',
       method: 'item/commandExecution/requestApproval',
@@ -397,7 +426,7 @@ describe('CodexDriver', () => {
     expect(sharedChild.requests()).toContainEqual({
       id: expect.any(Number),
       method: 'thread/resume',
-      params: { threadId: 'native-1' }
+      params: { threadId: 'native-1', developerInstructions: null }
     })
     expect(sharedChild.requests()).toContainEqual(
       expect.objectContaining({

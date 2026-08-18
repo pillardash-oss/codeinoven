@@ -34,6 +34,16 @@ export function activeAgentTodoIndex(items: AgentTodoItem[], busy: boolean): num
   return busy ? items.findIndex((item) => item.status === 'pending') : -1
 }
 
+export function agentTodoProgressLabel(
+  itemCount: number,
+  completedCount: number,
+  activeIndex: number
+): string {
+  if (activeIndex >= 0) return `Working on ${activeIndex + 1} of ${itemCount}`
+  if (completedCount === 0) return `${itemCount} tasks`
+  return `${completedCount}/${itemCount} done`
+}
+
 type ToolPart = Extract<AgentPart, { type: 'tool' }>
 
 export function isTodoToolPart(part: AgentPart): part is ToolPart {

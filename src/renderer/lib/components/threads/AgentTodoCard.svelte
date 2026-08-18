@@ -1,6 +1,10 @@
 <script lang="ts">
   import { Check, ChevronRight, Circle, ListChecks, Loader2 } from '@lucide/svelte'
-  import { activeAgentTodoIndex, type AgentTodoItem } from '$lib/agent-todos'
+  import {
+    activeAgentTodoIndex,
+    agentTodoProgressLabel,
+    type AgentTodoItem
+  } from '$lib/agent-todos'
 
   interface Props {
     items: AgentTodoItem[]
@@ -20,11 +24,7 @@
       items.find((item) => item.status === 'pending')
   )
   let activeIndex = $derived(activeAgentTodoIndex(items, busy))
-  let progressLabel = $derived(
-    activeIndex >= 0
-      ? `Working on ${activeIndex + 1} of ${items.length} · ${completedCount} done`
-      : `${completedCount}/${items.length} done`
-  )
+  let progressLabel = $derived(agentTodoProgressLabel(items.length, completedCount, activeIndex))
 
   $effect(() => {
     const currentSignature = signature
