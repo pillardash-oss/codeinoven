@@ -277,9 +277,16 @@ class ContextSidebarState {
   get tabs(): ContextSidebarTab[] {
     return [
       ...(this.activeProjectContext?.tabs ?? EMPTY_TABS),
-      ...(this.activeContext?.tabs ?? EMPTY_TABS),
+      ...(this.activeContext?.tabs.filter((tab) => !isProjectTab(tab)) ?? EMPTY_TABS),
       ...(this.notificationsVisible ? [NOTIFICATIONS_TAB] : [])
     ]
+  }
+
+  /** Resolve a live temporary-chat tab without passing its mutable proxy
+   *  through a component prop. The sidebar store remains the sole owner. */
+  temporaryChatTab(tabId: string): TemporaryChatContextTab | null {
+    const tab = this.activeContext?.tabs.find((candidate) => candidate.id === tabId)
+    return tab?.kind === 'temporary-chat' ? tab : null
   }
 
   get activeTabId(): string | null {
@@ -302,7 +309,7 @@ class ContextSidebarState {
   get sidebarTabs(): ContextSidebarTab[] {
     const tabs = [
       ...(this.activeProjectContext?.tabs ?? EMPTY_TABS),
-      ...(this.activeContext?.tabs ?? EMPTY_TABS)
+      ...(this.activeContext?.tabs.filter((tab) => !isProjectTab(tab)) ?? EMPTY_TABS)
     ]
     const positionedTabs =
       this.terminalPlacement === 'bottom' ? tabs.filter((tab) => tab.kind !== 'terminal') : tabs

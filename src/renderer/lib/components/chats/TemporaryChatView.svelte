@@ -52,12 +52,20 @@
   } from '$shared/types'
 
   interface Props {
-    tab: TemporaryChatContextTab
+    tabId: string
     /** Promote the side chat into a regular thread, then open it. */
     onContinueInThread?: (tab: TemporaryChatContextTab) => void | Promise<void>
   }
 
-  let { tab, onContinueInThread }: Props = $props()
+  let { tabId, onContinueInThread }: Props = $props()
+
+  function resolveTab(): TemporaryChatContextTab {
+    const current = contextSidebarState.temporaryChatTab(tabId)
+    if (!current) throw new Error(`Temporary chat tab is unavailable: ${tabId}`)
+    return current
+  }
+
+  const tab = resolveTab()
   /** Reactive provider catalog for the tab's project — seeded from the cache
    *  and kept current when the model picker lazily refreshes the store. */
   let providers = $derived(providerCatalog.cached(tab.projectId) ?? providerCatalog.allCached())

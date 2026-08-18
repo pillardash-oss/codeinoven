@@ -3405,7 +3405,7 @@
                 {/await}
               {:else if activeContextTab.kind === 'temporary-chat'}
                 <TemporaryChatView
-                  tab={activeContextTab}
+                  tabId={activeContextTab.id}
                   onContinueInThread={handleContinueInThread}
                 />
               {:else if activeContextTab.kind === 'notifications'}
