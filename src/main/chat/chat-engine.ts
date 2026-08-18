@@ -5266,8 +5266,9 @@ export class ChatEngine {
 
   /**
    * Run a disposable project-scoped agent task without creating a Thread row.
-   * Like title generation, this sends only the caller's exact task prompt with
-   * minimal reasoning instead of assembling durable thread context.
+   * Like title generation, this sends only the caller's exact task prompt
+   * instead of assembling durable thread context. Model and thinking settings
+   * remain under the user's control.
    * Session and process bookkeeping are torn down before the result crosses
    * IPC, so virtual work cannot consume project thread capacity.
    */
@@ -5282,8 +5283,6 @@ export class ChatEngine {
     virtualTaskId = validateEntityId(virtualTaskId, 'Virtual task ID')
     settings = validateThreadSettings({
       ...settings,
-      thinkingLevel: 'minimal',
-      inferenceMode: 'normal',
       engineeringMode: false,
       assignmentMode: false,
       loopMode: false
