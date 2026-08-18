@@ -1,8 +1,48 @@
 import { defineConfig, loadEnv } from 'electron-vite'
 import { svelte } from '@sveltejs/vite-plugin-svelte'
 import tailwindcss from '@tailwindcss/vite'
+import { readFileSync } from 'node:fs'
 import { resolve } from 'path'
+import type { Plugin, PreviewServer, ViteDevServer } from 'vite'
 import packageJson from './package.json'
+
+const pwaManifestPath = resolve(__dirname, 'src/renderer/static/manifest.webmanifest')
+const pwaManifest = JSON.parse(readFileSync(pwaManifestPath, 'utf8')) as Record<string, unknown>
+const versionedPwaManifest = `${JSON.stringify(
+  { ...pwaManifest, version: packageJson.version },
+  null,
+  2
+)}\n`
+
+function serveVersionedPwaManifest(server: PreviewServer | ViteDevServer): void {
+  server.middlewares.use((request, response, next) => {
+    const pathname = new URL(request.url ?? '/', 'http://localhost').pathname
+    if (pathname !== '/manifest.webmanifest') {
+      next()
+      return
+    }
+    response.statusCode = 200
+    response.setHeader('Content-Type', 'application/manifest+json; charset=utf-8')
+    response.setHeader('Cache-Control', 'no-store')
+    response.end(versionedPwaManifest)
+  })
+}
+
+/** Keep every served PWA manifest on the same version source as the desktop and remote UI. */
+function pwaManifestVersionPlugin(): Plugin {
+  return {
+    name: 'codeinoven-pwa-manifest-version',
+    configureServer: serveVersionedPwaManifest,
+    configurePreviewServer: serveVersionedPwaManifest,
+    generateBundle() {
+      this.emitFile({
+        type: 'asset',
+        fileName: 'manifest.webmanifest',
+        source: versionedPwaManifest
+      })
+    }
+  }
+}
 
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), [
@@ -71,7 +111,11 @@ export default defineConfig(({ mode }) => {
       },
       root: resolve(__dirname, 'src/renderer'),
       publicDir: resolve(__dirname, 'src/renderer/static'),
-      plugins: [svelte({ configFile: resolve(__dirname, 'svelte.config.js') }), tailwindcss()],
+      plugins: [
+        pwaManifestVersionPlugin(),
+        svelte({ configFile: resolve(__dirname, 'svelte.config.js') }),
+        tailwindcss()
+      ],
       resolve: {
         alias: {
           $lib: resolve(__dirname, 'src/renderer/lib'),
