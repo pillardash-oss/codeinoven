@@ -1,9 +1,10 @@
 <script lang="ts">
   import { AlertDialog } from 'bits-ui'
-  import { X, Download, FileQuestion, Loader2, Save } from '@lucide/svelte'
+  import { X, Download, FileQuestion, Loader2, Save, WrapText } from '@lucide/svelte'
   import MarkdownView from '../markdown/MarkdownView.svelte'
   import ProjectTextEditor from '../files/ProjectTextEditor.svelte'
   import { trafficLightInsetStyle } from '$lib/stores/traffic-light.svelte'
+  import { wrapTextState, wrapToggleLabel } from '$lib/stores/wrap-text.svelte'
   import type { PromptAttachment } from '$shared/types'
   import { attachmentPreviewKind } from '$lib/mime'
 
@@ -33,6 +34,7 @@
   let saveError = $state('')
   let confirmCloseOpen = $state(false)
   const dirty = $derived(editableText && draft !== (text ?? ''))
+  const wrapTitle = $derived(wrapToggleLabel(wrapTextState.wrapped))
 
   function triggerDownload(url: string, name: string): void {
     const link = document.createElement('a')
@@ -113,6 +115,19 @@
       </button>
       <button
         type="button"
+        class={[
+          'titlebar-no-drag flex h-7 w-7 items-center justify-center rounded transition-colors hover:bg-elevated hover:text-foreground',
+          wrapTextState.wrapped ? 'text-primary' : 'text-dimmed'
+        ]}
+        aria-label={wrapTitle}
+        aria-pressed={wrapTextState.wrapped}
+        title={wrapTitle}
+        onclick={() => wrapTextState.toggle()}
+      >
+        <WrapText size={14} />
+      </button>
+      <button
+        type="button"
         class="titlebar-no-drag flex h-7 w-7 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
         aria-label="Download attachment"
         title="Download attachment"
@@ -135,7 +150,7 @@
       path={filename}
       ariaLabel={`Edit ${filename} fullscreen`}
       spellcheck={kind === 'markdown'}
-      wrap
+      wrap={wrapTextState.wrapped}
       onInput={({ currentTarget }) => (draft = currentTarget.value)}
     />
   </div>
