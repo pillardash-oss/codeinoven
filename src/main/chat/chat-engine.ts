@@ -146,6 +146,7 @@ import type {
 import { INBOX_PROJECT_ID, isOrchestrationChildThread } from '../../lib/types'
 import { modelKey } from '../../lib/model-keys'
 import { APP_NAME } from '../../lib/brand'
+import { DEFAULT_AGENT_BEHAVIOR_PROMPT } from '../../lib/agent-behavior'
 import { estimateTokenCostUsd } from '../providers/pricing'
 import {
   budgetTurnLayers,
@@ -3594,7 +3595,8 @@ export class ChatEngine {
     threadId: string,
     projectPath: string,
     mode: 'brainstorm' | 'implement' | 'chat',
-    settings?: ThreadSettings
+    settings?: ThreadSettings,
+    threadScope: 'project' | 'chat' = 'project'
   ): Promise<string> {
     try {
       const threadSettings =
@@ -3617,10 +3619,18 @@ export class ChatEngine {
         config.agentBehaviorPrompt,
         threadSettings?.providerId && threadSettings.modelId
           ? modelKey(harnessId, threadSettings.providerId, threadSettings.modelId)
-          : undefined
+          : undefined,
+        threadScope
       )
-    } catch {
-      return ''
+    } catch (error) {
+      Logger.error('Behavior prompt assembly failed', {
+        projectId,
+        threadId,
+        mode,
+        threadScope,
+        error: rawErrorMessage(error)
+      })
+      return threadScope === 'project' ? DEFAULT_AGENT_BEHAVIOR_PROMPT : ''
     }
   }
 
@@ -4799,7 +4809,14 @@ export class ChatEngine {
     const [checkpointId, utilityInstructions, behaviorPrompt, rawRecap] = await Promise.all([
       checkpointPromise,
       utilityInstructionsPromise,
-      this.getBehaviorPrompt(projectId, threadId, projectPath, behaviorMode, settings),
+      this.getBehaviorPrompt(
+        projectId,
+        threadId,
+        projectPath,
+        behaviorMode,
+        settings,
+        isChatThread ? 'chat' : 'project'
+      ),
       this.buildHistoryRecap(projectId, threadId, driverId),
       transportPromise
     ])

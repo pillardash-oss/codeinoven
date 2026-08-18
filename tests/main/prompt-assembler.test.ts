@@ -8,24 +8,7 @@ function assembler(): PromptAssembler {
 }
 
 describe('PromptAssembler application behavior', () => {
-  it('uses the application behavior layer for implementation turns without reading AGENTS.md', async () => {
-    const layers = await assembler().getLayers(
-      'project-1',
-      'thread-1',
-      '/nonexistent-project',
-      null,
-      undefined,
-      'implement',
-      'Custom implementation behavior.'
-    )
-    const behaviorLayer = layers.find((layer) =>
-      layer.title.startsWith('Agent behavior (Engineering implementation)')
-    )
-    expect(behaviorLayer?.content).toBe('Custom implementation behavior.')
-    expect(layers.some((layer) => layer.title.includes('AGENTS.md'))).toBe(false)
-  })
-
-  it('omits the application behavior layer from chat turns', async () => {
+  it('uses the application behavior layer for project turns without reading AGENTS.md', async () => {
     const layers = await assembler().getLayers(
       'project-1',
       'thread-1',
@@ -34,6 +17,25 @@ describe('PromptAssembler application behavior', () => {
       undefined,
       'chat',
       'Custom implementation behavior.'
+    )
+    const behaviorLayer = layers.find((layer) =>
+      layer.title.startsWith('Agent behavior (Project thread)')
+    )
+    expect(behaviorLayer?.content).toBe('Custom implementation behavior.')
+    expect(layers.some((layer) => layer.title.includes('AGENTS.md'))).toBe(false)
+  })
+
+  it('omits the application behavior layer from standalone chat threads', async () => {
+    const layers = await assembler().getLayers(
+      'inbox',
+      'thread-1',
+      '',
+      null,
+      undefined,
+      'chat',
+      'Custom implementation behavior.',
+      undefined,
+      'chat'
     )
     expect(layers.some((layer) => layer.title.startsWith('Agent behavior'))).toBe(false)
   })

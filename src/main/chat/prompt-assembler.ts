@@ -51,6 +51,9 @@ export interface DriverInfo {
  */
 export type BehaviorMode = 'brainstorm' | 'implement' | 'chat'
 
+/** Whether the thread belongs to a real project or the standalone Chats inbox. */
+export type BehaviorThreadScope = 'project' | 'chat'
+
 /**
  * Collapse every whitespace run into a single space so structurally identical
  * instruction layers hash equally regardless of line wrapping or indentation.
@@ -95,7 +98,8 @@ export class PromptAssembler {
     },
     mode: BehaviorMode = 'implement',
     agentBehaviorPrompt = DEFAULT_AGENT_BEHAVIOR_PROMPT,
-    modelKey?: string
+    modelKey?: string,
+    threadScope: BehaviorThreadScope = 'project'
   ): Promise<BehaviorLayer[]> {
     const layers: BehaviorLayer[] = []
 
@@ -109,10 +113,10 @@ export class PromptAssembler {
       })
     )
 
-    if (mode === 'implement') {
+    if (threadScope === 'project') {
       layers.push(
         withLayerAccounting({
-          title: 'Agent behavior (Engineering implementation)',
+          title: 'Agent behavior (Project thread)',
           content: normalizeAgentBehaviorPrompt(agentBehaviorPrompt),
           editable: true,
           defaultOpen: false
@@ -179,7 +183,8 @@ export class PromptAssembler {
     },
     mode: BehaviorMode = 'implement',
     agentBehaviorPrompt = DEFAULT_AGENT_BEHAVIOR_PROMPT,
-    modelKey?: string
+    modelKey?: string,
+    threadScope: BehaviorThreadScope = 'project'
   ): Promise<string> {
     const layers = await this.getLayers(
       projectId,
@@ -189,7 +194,8 @@ export class PromptAssembler {
       systemPromptConstants,
       mode,
       agentBehaviorPrompt,
-      modelKey
+      modelKey,
+      threadScope
     )
     const parts = layers
       .filter((layer) => layer.skipInPrompt !== true)

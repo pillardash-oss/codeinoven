@@ -168,7 +168,7 @@ import type {
   CloudDeploymentProviderKind,
   CloudDeploymentStatus
 } from '../../lib/types'
-import { CLOUD_DEPLOYMENT_PROVIDER_KIND_VALUES } from '../../lib/types'
+import { CLOUD_DEPLOYMENT_PROVIDER_KIND_VALUES, INBOX_PROJECT_ID } from '../../lib/types'
 
 type NewAssignmentProvenance = Omit<AssignmentProvenance, 'createdAt' | 'parentVersion'>
 
@@ -1607,7 +1607,8 @@ export function registerIpcHandlers(
       (await storage.getConfig()).agentBehaviorPrompt,
       thread?.settings?.providerId && thread.settings.modelId
         ? modelKey(harnessId, thread.settings.providerId, thread.settings.modelId)
-        : undefined
+        : undefined,
+      safeProjectId === INBOX_PROJECT_ID ? 'chat' : 'project'
     )
   })
   ipcMain.handle('memory:getRaw', (_, projectId?: unknown, threadId?: unknown) =>

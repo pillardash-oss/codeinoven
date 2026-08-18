@@ -13,7 +13,10 @@
   import { providerCatalog } from '$lib/stores/provider-catalog.svelte'
   import { invoke } from '$lib/ipc.svelte'
   import { messageId } from '$shared/id'
+  import { isTodoToolPart } from '$lib/agent-todos'
   import ChatComposer from '../chats/ChatComposer.svelte'
+  import WorkingTrace from '../threads/WorkingTrace.svelte'
+  import MarkdownView from '../markdown/MarkdownView.svelte'
   import type {
     AgentMessage,
     AgentPart,
@@ -166,25 +169,35 @@
       .join('\n')
   }
 
-  function reasoningFor(message: AgentMessage): string {
-    return message.parts
-      .filter(
-        (part): part is Extract<AgentPart, { type: 'reasoning' }> => part.type === 'reasoning'
-      )
-      .map((part) => part.summary ?? part.text)
-      .join('\n')
-  }
-
   function fileParts(message: AgentMessage): Extract<AgentPart, { type: 'file' }>[] {
     return message.parts.filter(
       (part): part is Extract<AgentPart, { type: 'file' }> => part.type === 'file'
     )
   }
 
-  function toolCount(message: AgentMessage): number {
-    return message.parts.filter(
-      (part): part is Extract<AgentPart, { type: 'tool' }> => part.type === 'tool'
-    ).length
+  /** The message's own final answer — the last text part, shown as the
+   *  primary response outside the collapsible trace. Mirrors desktop's
+   *  ThreadView getTurnFinalText, simplified to a single message (mobile
+   *  doesn't merge multi-message turns into one trace). */
+  function finalTextPart(message: AgentMessage): Extract<AgentPart, { type: 'text' }> | undefined {
+    const textParts = message.parts.filter(
+      (part): part is Extract<AgentPart, { type: 'text' }> => part.type === 'text'
+    )
+    return textParts[textParts.length - 1]
+  }
+
+  /** Everything else — tool calls, reasoning, subagent activity — rendered
+   *  inside the collapsible WorkingTrace. Mirrors ThreadView's
+   *  getTurnWorkingParts filtering (final text, questions, and the todo tool
+   *  excluded). */
+  function traceParts(message: AgentMessage): AgentPart[] {
+    const final = finalTextPart(message)
+    return message.parts.filter((part) => {
+      if (part.type === 'question') return false
+      if (part.type === 'text' && part.id === final?.id) return false
+      if (isTodoToolPart(part)) return false
+      return true
+    })
   }
 
   // ─── Sending, queued "start after" dependencies, and abort ──────────────
@@ -287,9 +300,8 @@
       {:else}
         {#each messages as message, index (message.id)}
           {@const text = textFor(message)}
-          {@const reasoning = reasoningFor(message)}
           {@const files = fileParts(message)}
-          {@const tools = toolCount(message)}
+          {@const isLatest = index === messages.length - 1}
           <div
             {@attach registerMessageElement}
             class="group flex flex-col gap-1.5"
@@ -314,15 +326,14 @@
                     </div>
                   {/if}
                   {#if text}
-                    <p
-                      class="whitespace-pre-wrap break-words text-sm leading-relaxed text-foreground"
-                    >
-                      {text}
-                    </p>
+                    <div class="text-sm text-foreground">
+                      <MarkdownView {text} />
+                    </div>
                   {/if}
                 </div>
               </div>
             {:else}
+              {@const trace = traceParts(message)}
               <div class="flex flex-col gap-1.5">
                 {#if message.error}
                   <p
@@ -331,24 +342,21 @@
                     {message.error}
                   </p>
                 {/if}
-                {#if reasoning}
-                  <p
-                    class="whitespace-pre-wrap break-words text-[12px] leading-relaxed text-dimmed"
-                  >
-                    {reasoning}
-                  </p>
+                {#if trace.length > 0}
+                  <WorkingTrace
+                    parts={trace}
+                    open={isLatest && busy}
+                    busy={isLatest && busy}
+                    latest={isLatest}
+                    done={!isLatest || !busy}
+                    projectId={thread.projectId}
+                    threadId={thread.id}
+                  />
                 {/if}
                 {#if text}
-                  <p
-                    class="whitespace-pre-wrap break-words text-sm leading-relaxed text-foreground"
-                  >
-                    {text}
-                  </p>
-                {/if}
-                {#if tools > 0}
-                  <p class="text-[11px] text-dimmed">
-                    {tools} tool {tools === 1 ? 'call' : 'calls'} this turn
-                  </p>
+                  <div class="text-sm text-foreground">
+                    <MarkdownView {text} />
+                  </div>
                 {/if}
                 {#if files.length > 0}
                   <div class="flex flex-wrap gap-1.5">
@@ -365,7 +373,7 @@
                     {/each}
                   </div>
                 {/if}
-                {#if index === messages.length - 1 && busy}
+                {#if isLatest && busy && trace.length === 0 && !text}
                   <div class="flex items-center gap-2 text-xs text-dimmed">
                     <Loader2 size={13} class="animate-spin" />
                     Working…
