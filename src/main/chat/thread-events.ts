@@ -1,9 +1,12 @@
 import { BrowserWindow } from 'electron'
-import type { Thread } from '../../lib/types'
+import type { AgentEvent, Thread } from '../../lib/types'
 import type { NotificationService } from '../notifications/notification-service'
 import type { PowerWakeService } from '../system/power-wake-service'
 import { forwardRemoteEvent } from '../remote/remote-event-forwarder'
 import { sendToRenderer } from '../ipc/renderer-delivery'
+import { instanceRegistry } from '../system/instance-registry'
+
+type CheckpointUpdatedEvent = Extract<AgentEvent, { type: 'checkpoint.updated' }>
 
 let _notificationService: NotificationService | null = null
 let _powerWakeService: PowerWakeService | null = null
@@ -66,6 +69,16 @@ export function broadcastAgentProcessesChanged(projectId: string, threadId: stri
     sendToRenderer(win.webContents, 'agent:processesChanged', projectId, threadId)
   }
 }
+
+/** Deliver another process's persisted checkpoint invalidation locally. */
+function deliverCrossInstanceCheckpointUpdated(event: CheckpointUpdatedEvent): void {
+  for (const win of BrowserWindow.getAllWindows()) {
+    sendToRenderer(win.webContents, 'agent:event', event)
+  }
+  forwardRemoteEvent('agent:event', event)
+}
+
+instanceRegistry.onCheckpointUpdated(deliverCrossInstanceCheckpointUpdated)
 
 /**
  * Pipe a temporary chat (side chat) completion through the parent thread's

@@ -1,10 +1,29 @@
-import { mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import {
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  renameSync,
+  rmSync,
+  watch,
+  writeFileSync,
+  type FSWatcher
+} from 'node:fs'
 import { join } from 'node:path'
+import type { AgentEvent } from '../../lib/types'
 import { getConfigRoot } from '../../lib/utils'
 
 const HEARTBEAT_MS = 30_000
 /** Instances whose heartbeat is older than this are treated as gone. */
 const STALE_MS = 120_000
+const CHECKPOINT_EVENT_STALE_MS = 120_000
+
+type CheckpointUpdatedEvent = Extract<AgentEvent, { type: 'checkpoint.updated' }>
+
+interface CrossInstanceCheckpointEvent {
+  id: string
+  emittedAt: number
+  event: CheckpointUpdatedEvent
+}
 
 interface InstanceEntry {
   pid: number
@@ -12,6 +31,8 @@ interface InstanceEntry {
   lastHeartbeat: number
   /** Live app-utility gateway owned by this process, when one has been started. */
   mcpHost?: string
+  /** Latest durable-state invalidation emitted by this process. */
+  checkpointEvent?: CrossInstanceCheckpointEvent
 }
 
 /**
@@ -26,6 +47,10 @@ export class InstanceRegistry {
   private readonly dir: string
   private readonly selfEntry: InstanceEntry
   private heartbeatTimer: ReturnType<typeof setInterval> | null = null
+  private watcher: FSWatcher | null = null
+  private checkpointEventSequence = 0
+  private readonly checkpointListeners = new Set<(event: CheckpointUpdatedEvent) => void>()
+  private readonly seenCheckpointEvents = new Set<string>()
 
   constructor() {
     this.dir = join(getConfigRoot(), 'instances')
@@ -37,6 +62,7 @@ export class InstanceRegistry {
     try {
       mkdirSync(this.dir, { recursive: true })
       this.writeEntry()
+      this.startWatcher()
       this.heartbeatTimer = setInterval(() => this.writeEntry(), HEARTBEAT_MS)
       if (this.heartbeatTimer.unref) this.heartbeatTimer.unref()
     } catch {
@@ -50,6 +76,8 @@ export class InstanceRegistry {
       clearInterval(this.heartbeatTimer)
       this.heartbeatTimer = null
     }
+    this.watcher?.close()
+    this.watcher = null
     try {
       rmSync(join(this.dir, `${this.selfEntry.pid}.json`), { force: true })
     } catch {
@@ -69,6 +97,33 @@ export class InstanceRegistry {
     } catch {
       // Recovery metadata is best effort; the gateway remains usable directly.
     }
+  }
+
+  /**
+   * Notify every other app process that a persisted turn checkpoint changed.
+   * The event rides on this process's existing heartbeat record, so delivery
+   * stays event-driven without opening a port, polling SQLite, or growing an
+   * unbounded event log.
+   */
+  publishCheckpointUpdated(event: CheckpointUpdatedEvent): void {
+    this.checkpointEventSequence += 1
+    this.selfEntry.checkpointEvent = {
+      id: `${this.selfEntry.pid}:${this.selfEntry.startedAt}:${this.checkpointEventSequence}`,
+      emittedAt: Date.now(),
+      event
+    }
+    try {
+      this.writeEntry()
+    } catch {
+      // The local renderer already received the event; cross-instance delivery
+      // is best effort and a later mount still hydrates from the shared DB.
+    }
+  }
+
+  /** Subscribe to checkpoint invalidations emitted by another app process. */
+  onCheckpointUpdated(listener: (event: CheckpointUpdatedEvent) => void): () => void {
+    this.checkpointListeners.add(listener)
+    return () => this.checkpointListeners.delete(listener)
   }
 
   /**
@@ -98,8 +153,64 @@ export class InstanceRegistry {
     const payload = JSON.stringify(this.selfEntry)
     const tmpPath = join(this.dir, `.${this.selfEntry.pid}.tmp`)
     writeFileSync(tmpPath, payload, 'utf8')
-    writeFileSync(join(this.dir, `${this.selfEntry.pid}.json`), payload, 'utf8')
-    rmSync(tmpPath, { force: true })
+    renameSync(tmpPath, join(this.dir, `${this.selfEntry.pid}.json`))
+  }
+
+  private startWatcher(): void {
+    if (this.watcher) return
+    try {
+      this.watcher = watch(this.dir, { persistent: false }, (_eventType, filename) => {
+        try {
+          const file = filename?.toString()
+          const files = file
+            ? [file]
+            : readdirSync(this.dir).filter((candidate) => candidate.endsWith('.json'))
+          for (const candidate of files) {
+            if (!candidate.endsWith('.json') || candidate === `${this.selfEntry.pid}.json`) continue
+            const entry = this.readEntry(candidate)
+            if (entry) this.consumeCheckpointEvent(entry)
+          }
+        } catch {
+          // The directory can disappear during shutdown between notification
+          // delivery and the read. A later heartbeat restores normal delivery.
+        }
+      })
+      this.watcher.on('error', () => {
+        this.watcher?.close()
+        this.watcher = null
+      })
+    } catch {
+      // Cross-instance invalidation is supplementary. The shared database
+      // remains authoritative and thread mount still hydrates from it.
+      this.watcher = null
+    }
+  }
+
+  private consumeCheckpointEvent(entry: InstanceEntry): void {
+    const update = entry.checkpointEvent
+    if (
+      !update ||
+      typeof update.id !== 'string' ||
+      typeof update.emittedAt !== 'number' ||
+      this.seenCheckpointEvents.has(update.id)
+    ) {
+      return
+    }
+    if (Date.now() - update.emittedAt > CHECKPOINT_EVENT_STALE_MS) return
+    if (!isCheckpointUpdatedEvent(update.event)) return
+
+    this.seenCheckpointEvents.add(update.id)
+    if (this.seenCheckpointEvents.size > 1_024) {
+      const oldest = this.seenCheckpointEvents.values().next().value
+      if (oldest) this.seenCheckpointEvents.delete(oldest)
+    }
+    for (const listener of this.checkpointListeners) {
+      try {
+        listener(update.event)
+      } catch {
+        // One consumer must not prevent another renderer invalidation.
+      }
+    }
   }
 
   private readEntry(file: string): InstanceEntry | null {
@@ -134,3 +245,15 @@ export class InstanceRegistry {
 
 /** Singleton shared by the main process lifecycle. */
 export const instanceRegistry = new InstanceRegistry()
+
+function isCheckpointUpdatedEvent(value: unknown): value is CheckpointUpdatedEvent {
+  if (!value || typeof value !== 'object') return false
+  const candidate = value as Partial<CheckpointUpdatedEvent>
+  return (
+    candidate.type === 'checkpoint.updated' &&
+    typeof candidate.sessionId === 'string' &&
+    typeof candidate.projectId === 'string' &&
+    typeof candidate.threadId === 'string' &&
+    typeof candidate.checkpointId === 'string'
+  )
+}

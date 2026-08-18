@@ -49,6 +49,7 @@ import { HarnessUsageRepo } from '../database/repositories/harness-usage-repo'
 import { TurnFeedbackRepo } from '../database/repositories/turn-feedback-repo'
 import type { StorageEngine } from '../storage/storage-engine'
 import type { PendingRetryRecord, RetrySchedulerService } from '../system/retry-scheduler-service'
+import { instanceRegistry } from '../system/instance-registry'
 import { SecretVault } from '../storage/secret-vault'
 import { UtilityRuntimeService } from '../utilities/utility-runtime-service'
 import { UtilityRegistryService } from '../utilities/utility-registry-service'
@@ -15386,13 +15387,17 @@ export class ChatEngine {
       info.openUnboundedTools = undefined
       info.unboundedWindowStart = undefined
       info.pendingWindowScans = undefined
-      this.broadcast({
+      const checkpointEvent = {
         type: 'checkpoint.updated',
         sessionId,
         projectId: info.projectId,
         threadId: info.threadId,
         checkpointId: checkpoint.id
-      })
+      } satisfies Extract<AgentEvent, { type: 'checkpoint.updated' }>
+      // Preserve normal stream ordering in this process, then invalidate every
+      // other process that shares the durable checkpoint database.
+      this.broadcast(checkpointEvent)
+      instanceRegistry.publishCheckpointUpdated(checkpointEvent)
     } catch (error) {
       Logger.error('turn checkpoint completion failed:', error)
     }
