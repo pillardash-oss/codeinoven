@@ -1,10 +1,21 @@
 <script lang="ts">
   import { AlertDialog } from 'bits-ui'
-  import { X, Download, FileQuestion, Loader2, Save, WrapText } from '@lucide/svelte'
+  import {
+    X,
+    Download,
+    FileQuestion,
+    Loader2,
+    RotateCcw,
+    Save,
+    WrapText,
+    ZoomIn,
+    ZoomOut
+  } from '@lucide/svelte'
   import MarkdownView from '../markdown/MarkdownView.svelte'
   import ProjectTextEditor from '../files/ProjectTextEditor.svelte'
   import { trafficLightInsetStyle } from '$lib/stores/traffic-light.svelte'
   import { wrapTextState, wrapToggleLabel } from '$lib/stores/wrap-text.svelte'
+  import { PanZoom } from '$lib/pan-zoom.svelte'
   import type { PromptAttachment } from '$shared/types'
   import { attachmentPreviewKind } from '$lib/mime'
 
@@ -34,6 +45,17 @@
   let saveError = $state('')
   let confirmCloseOpen = $state(false)
   const dirty = $derived(editableText && draft !== (text ?? ''))
+
+  const panZoom = new PanZoom()
+  let imageViewport = $state<HTMLDivElement>()
+
+  // The component instance is reused if the caller swaps `attachment`
+  // without unmounting (same `{#if previewFile}` block) — reset zoom/pan so
+  // it doesn't carry over onto the next image.
+  $effect(() => {
+    void attachment.url
+    panZoom.reset()
+  })
   const wrapTitle = $derived(wrapToggleLabel(wrapTextState.wrapped))
 
   function triggerDownload(url: string, name: string): void {
@@ -181,11 +203,67 @@
       onclick={(e: MouseEvent) => e.stopPropagation()}
     >
       {#if kind === 'image' && src}
-        <img
-          {src}
-          alt={filename}
-          class="max-h-[80vh] max-w-[85vw] rounded-lg object-contain shadow-2xl"
-        />
+        <div
+          bind:this={imageViewport}
+          role="group"
+          class={[
+            'flex touch-none items-center justify-center overflow-hidden',
+            panZoom.zoom > 1 && (panZoom.isPanning ? 'cursor-grabbing' : 'cursor-grab')
+          ]}
+          onwheel={panZoom.onWheel}
+          onpointerdown={panZoom.onPointerDown}
+          onpointermove={panZoom.onPointerMove}
+          onpointerup={panZoom.onPointerUp}
+          onpointercancel={panZoom.onPointerUp}
+          ondblclick={() => panZoom.reset()}
+        >
+          <img
+            {@attach panZoom.bindTarget}
+            {src}
+            alt={filename}
+            draggable="false"
+            class="max-h-[80vh] max-w-[85vw] rounded-lg object-contain shadow-2xl"
+            style={panZoom.transform}
+          />
+        </div>
+        <div
+          class="absolute right-3 bottom-3 flex items-center gap-0.5 rounded-lg border bg-elevated/95 p-1 shadow-lg backdrop-blur-sm"
+        >
+          <button
+            type="button"
+            class="rounded p-1 text-dimmed transition-colors hover:bg-overlay hover:text-foreground disabled:pointer-events-none disabled:opacity-30"
+            aria-label="Zoom out"
+            title="Zoom out"
+            disabled={panZoom.zoom <= panZoom.min}
+            onclick={() => panZoom.zoomByButton(1 / 1.4, imageViewport)}
+          >
+            <ZoomOut size={14} />
+          </button>
+          <span class="w-10 text-center font-mono text-[10px] text-dimmed">
+            {Math.round(panZoom.zoom * 100)}%
+          </span>
+          <button
+            type="button"
+            class="rounded p-1 text-dimmed transition-colors hover:bg-overlay hover:text-foreground disabled:pointer-events-none disabled:opacity-30"
+            aria-label="Zoom in"
+            title="Zoom in"
+            disabled={panZoom.zoom >= panZoom.max}
+            onclick={() => panZoom.zoomByButton(1.4, imageViewport)}
+          >
+            <ZoomIn size={14} />
+          </button>
+          <div class="mx-0.5 h-4 w-px bg-border/60" aria-hidden="true"></div>
+          <button
+            type="button"
+            class="rounded p-1 text-dimmed transition-colors hover:bg-overlay hover:text-foreground disabled:pointer-events-none disabled:opacity-30"
+            aria-label="Reset zoom and pan"
+            title="Reset zoom and pan"
+            disabled={panZoom.zoom === 1 && panZoom.panX === 0 && panZoom.panY === 0}
+            onclick={() => panZoom.reset()}
+          >
+            <RotateCcw size={14} />
+          </button>
+        </div>
       {:else if kind === 'video' && src}
         <video
           {src}
