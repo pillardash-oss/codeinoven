@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onDestroy, tick } from 'svelte'
+  import { onDestroy, onMount, tick } from 'svelte'
   import { SvelteMap, SvelteSet } from 'svelte/reactivity'
   import { AlertDialog, Dialog } from 'bits-ui'
   import { toast } from 'svelte-sonner'
@@ -334,6 +334,10 @@
     clearSearchExpansions()
   })
 
+  onMount(() => {
+    if (selectedPath) void projectFilesWorkspace.focusFileInExplorer(projectId, selectedPath)
+  })
+
   async function openFilter(): Promise<void> {
     filterOpen = true
     await tick()
@@ -410,10 +414,12 @@
     if (index !== undefined) scrollTreeIndexIntoView(index)
   }
 
-  async function focusRevealedTreePath(path: string): Promise<void> {
+  async function focusRevealedTreePath(path: string, focusRequest: number): Promise<void> {
     await tick()
+    if (projectState.focusRequest !== focusRequest) return
     scrollTreePathIntoView(path)
     await tick()
+    if (projectState.focusRequest !== focusRequest) return
     const row = [...(treeScroll?.querySelectorAll<HTMLElement>('[data-tree-path]') ?? [])].find(
       (element) => element.dataset.treePath === path
     )
@@ -421,10 +427,11 @@
   }
 
   $effect(() => {
-    const path = revealedSearchPath ?? projectState.revealedPath ?? selectedPath
+    const focusRequest = projectState.focusRequest
+    const path = revealedSearchPath ?? selectedPath ?? projectState.revealedPath
     if (!path || !projectState.entriesByDirectory[parentDirectory(path)]) return
     if (suppressRevealScroll) return
-    void focusRevealedTreePath(path)
+    void focusRevealedTreePath(path, focusRequest)
   })
 
   /** Suppress the auto-reveal scroll for the rest of the current pointer
@@ -511,12 +518,10 @@
   }
 
   function isRowActive(path: string): boolean {
-    if (projectState.selectedPaths.includes(path)) return true
     if (revealedSearchPath === path) return true
-    if (projectState.selectedPaths.length === 0) {
-      return selectedPath === path || projectState.revealedPath === path
-    }
-    return false
+    if (selectedPath) return selectedPath === path
+    if (projectState.selectedPaths.includes(path)) return true
+    return projectState.revealedPath === path
   }
 
   function extendSelectionTo(path: string): void {

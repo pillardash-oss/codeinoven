@@ -55,6 +55,7 @@ export interface ProjectFilesState {
   explorerVisible: boolean
   explorerWidth: number
   revealedPath: string | null
+  focusRequest: number
   selectedPaths: string[]
   selectionAnchor: string | null
   loadingPaths: Record<string, boolean>
@@ -84,6 +85,7 @@ export function createProjectFilesState(projectId: string): ProjectFilesState {
     explorerVisible: explorer.explorerVisible,
     explorerWidth: explorer.width,
     revealedPath: explorer.revealedPath,
+    focusRequest: 0,
     selectedPaths: [...explorer.selectedPaths],
     selectionAnchor: null,
     loadingPaths: {},
@@ -101,6 +103,7 @@ function errorMessage(error: unknown): string {
 class ProjectFilesWorkspace {
   private projects: Record<string, ProjectFilesState> = $state({})
   private directoryLoads = new Map<string, Promise<void>>()
+  private focusGenerations = new Map<string, number>()
   /** Fresh project states whose persisted expansion still needs to be populated. */
   private pendingRestores = new Set<string>()
   clipboard: ProjectFileClipboard | null = $state(null)
@@ -624,12 +627,25 @@ class ProjectFilesWorkspace {
 
   async revealDirectory(projectId: string, directory: string): Promise<void> {
     const state = this.ensureState(projectId)
+    const generation = this.beginFocus(projectId)
     state.explorerVisible = true
     await this.expandDirectoryPath(projectId, state, directory)
+    if (!this.isCurrentFocus(projectId, generation)) return
     state.revealedPath = directory || null
     state.selectedPaths = directory ? [directory] : []
     state.selectionAnchor = directory || null
+    state.focusRequest += 1
     this.persistExplorer(projectId)
+  }
+
+  private beginFocus(projectId: string): number {
+    const generation = (this.focusGenerations.get(projectId) ?? 0) + 1
+    this.focusGenerations.set(projectId, generation)
+    return generation
+  }
+
+  private isCurrentFocus(projectId: string, generation: number): boolean {
+    return this.focusGenerations.get(projectId) === generation
   }
 
   private async expandDirectoryPath(
@@ -647,12 +663,30 @@ class ProjectFilesWorkspace {
 
   async revealFile(projectId: string, path: string): Promise<void> {
     const state = this.ensureState(projectId)
+    const generation = this.beginFocus(projectId)
     state.explorerVisible = true
     await this.loadDirectory(projectId, '')
     await this.expandDirectoryPath(projectId, state, this.parentDirectory(path))
+    if (!this.isCurrentFocus(projectId, generation)) return
     state.revealedPath = path
     state.selectedPaths = [path]
     state.selectionAnchor = path
+    state.focusRequest += 1
+    this.persistExplorer(projectId)
+  }
+
+  /** Keep a mounted explorer aligned with the active file tab without opening
+   *  an explorer that the user chose to hide. */
+  async focusFileInExplorer(projectId: string, path: string): Promise<void> {
+    const state = this.ensureState(projectId)
+    const generation = this.beginFocus(projectId)
+    await this.loadDirectory(projectId, '')
+    await this.expandDirectoryPath(projectId, state, this.parentDirectory(path))
+    if (!this.isCurrentFocus(projectId, generation)) return
+    state.revealedPath = path
+    state.selectedPaths = [path]
+    state.selectionAnchor = path
+    state.focusRequest += 1
     this.persistExplorer(projectId)
   }
 
