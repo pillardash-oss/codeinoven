@@ -33,7 +33,7 @@ import {
 } from './thread-events'
 import { updateRetryWakeWindow } from './thread-events'
 import { MemoryService, estimateTokens } from './memory-service'
-import { PromptAssembler } from './prompt-assembler'
+import { PromptAssembler, type BehaviorMode, type BehaviorThreadScope } from './prompt-assembler'
 import { PermissionPolicy, type PermissionDecisionResult } from '../permissions/permission-policy'
 import {
   validateBoundedString,
@@ -3594,9 +3594,9 @@ export class ChatEngine {
     projectId: string,
     threadId: string,
     projectPath: string,
-    mode: 'brainstorm' | 'implement' | 'chat',
+    mode: BehaviorMode,
     settings?: ThreadSettings,
-    threadScope: 'project' | 'chat' = 'project'
+    threadScope: BehaviorThreadScope = 'project'
   ): Promise<string> {
     try {
       const threadSettings =

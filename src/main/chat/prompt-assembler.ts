@@ -47,7 +47,8 @@ export interface DriverInfo {
  *   (which already embeds the mermaid instruction).
  * - `'implement'` — the implement branch sends `SPEC_IMPLEMENT_SYSTEM_PROMPT` and
  *   excludes `MERMAID_OUTPUT_INSTRUCTION`.
- * - `'chat'` — engineering prompts are omitted while shared behavior and memory remain active.
+ * - `'chat'` — engineering prompts are omitted. Project-thread behavior remains active,
+ *   while standalone Chats inbox threads receive no Agent behavior layer.
  */
 export type BehaviorMode = 'brainstorm' | 'implement' | 'chat'
 
