@@ -60,6 +60,7 @@
   import { providerCatalog } from '$lib/stores/provider-catalog.svelte'
   import { providerStore } from '$lib/stores/providers.svelte'
   import { harnessLifecycleStore } from '$lib/stores/harness-lifecycle.svelte'
+  import { prLifecycleStore } from '$lib/stores/pr-lifecycle.svelte'
   import { loadProjectIcons, getProjectIcon } from '$lib/project-icons'
   import { preloadScopeChunk, preloadSettingsChunk } from '$lib/page-preload'
   import { APP_NAME } from '$shared/brand'
@@ -1647,6 +1648,13 @@
     <!-- Floats above every view — survives navigation while tasks keep running. -->
     {#await import('$lib/components/providers/HarnessRunModal.svelte') then { default: HarnessRunModal }}
       <HarnessRunModal />
+    {/await}
+  {/if}
+
+  {#if prLifecycleStore.drafts.length}
+    <!-- Floats above every view — survives thread/project/view and sidebar visibility. -->
+    {#await import('$lib/components/git/PrDockHost.svelte') then { default: PrDockHost }}
+      <PrDockHost />
     {/await}
   {/if}
 

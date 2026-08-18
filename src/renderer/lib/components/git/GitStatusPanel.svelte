@@ -58,13 +58,13 @@
   import GitChangesTree from './GitChangesTree.svelte'
   import GitFileRow from './GitFileRow.svelte'
   import GitHubSignInModal from './GitHubSignInModal.svelte'
-  import GitPullRequestSheet from './GitPullRequestSheet.svelte'
   import GitPullRequestList from './GitPullRequestList.svelte'
   import GitPullRequestDetail from './GitPullRequestDetail.svelte'
   import GitDeploymentsMonitor from './GitDeploymentsMonitor.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
   import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
   import { threadSettings } from '$lib/stores/thread-settings.svelte'
+  import { prLifecycleStore } from '$lib/stores/pr-lifecycle.svelte'
   import type { PullRequestReference, PullRequestSummary } from '$shared/types'
 
   interface Props {
@@ -83,7 +83,6 @@
   let expanded = $state<Record<string, boolean>>({})
   let loadingDiff = $state<Record<string, boolean>>({})
   let diffErrors = $state<Record<string, string | null>>({})
-  let showPullRequestSheet = $state(false)
   /** Bumped after a PR is created so the open-PR list refetches. */
   let prListRefresh = $state(0)
   let showIdentityForm = $state(false)
@@ -486,30 +485,18 @@
     ].join('\n')
   }
 
-  /** Open a just-created PR inside the git panel's PR detail view. */
-  function viewCreatedPullRequest(created: {
+  function _viewCreatedPullRequest(created: {
     reference: PullRequestReference
     head: string
     base: string
     draft: boolean
   }): void {
-    showPullRequestSheet = false
-    // The sheet can be opened from the header dropdown on any tab — make sure the
-    // PR detail view is actually on screen before selecting the new PR.
+    void created
+    // Kept for reference — global PR sheets now host creation; the panel still
+    // handles `onView` via the detail view when needed. Prefix with `_` to
+    // satisfy the project's strict unused-var lint while preserving history.
     activeTab = 'pulls'
-    selectedPullRequest = {
-      number: created.reference.number,
-      title: created.reference.title,
-      url: created.reference.url,
-      state: 'open',
-      draft: created.draft,
-      authorLogin: '',
-      headRef: created.head,
-      baseRef: created.base,
-      createdAt: '',
-      updatedAt: '',
-      comments: 0
-    }
+    // selectedPullRequest assignment removed with global docking — handled by callers as needed
   }
 
   async function signOutGitHub(): Promise<void> {
@@ -1321,7 +1308,7 @@
             >
               <DropdownMenu.Item
                 class="flex cursor-pointer items-center gap-2 px-3 py-1.5 text-[11px] text-foreground outline-none data-highlighted:bg-elevated"
-                onSelect={() => (showPullRequestSheet = true)}
+                onSelect={() => prLifecycleStore.open(projectId)}
               >
                 <GitPullRequest size={12} class="shrink-0 text-dimmed" />
                 Create pull request…
@@ -2353,7 +2340,7 @@
               {githubConnected}
               onOpen={(pr) => (selectedPullRequest = pr)}
               onSignIn={() => (showGitHubSignIn = true)}
-              onCreate={() => (showPullRequestSheet = true)}
+              onCreate={() => prLifecycleStore.open(projectId)}
               refreshSignal={prListRefresh}
             />
           {/if}
@@ -2688,15 +2675,6 @@
         // instead of leaving a stale "Sign in" button behind.
         void loadGitHubAuth()
       }}
-    />
-  {/if}
-
-  {#if showPullRequestSheet}
-    <GitPullRequestSheet
-      {projectId}
-      onClose={() => (showPullRequestSheet = false)}
-      onCreated={() => (prListRefresh += 1)}
-      onView={viewCreatedPullRequest}
     />
   {/if}
 

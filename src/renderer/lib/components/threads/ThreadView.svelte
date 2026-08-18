@@ -337,6 +337,16 @@
     else threadSettings.commit(next)
   }
 
+  /** Keep Recent aligned with the model that actually starts a turn. Picker
+   *  selections are recorded for instant feedback, but sends can use an
+   *  inherited or otherwise preselected model without opening the picker. */
+  function recordModelUse(): void {
+    if (!settings.harnessId || !settings.providerId || !settings.modelId) return
+    const key = modelKey(settings.harnessId, settings.providerId, settings.modelId)
+    if (chatMode) rendererRecovery.addChatRecentModel(key)
+    else rendererRecovery.addRecentModel(key)
+  }
+
   let commands = $state<ScopedHarnessCommand[]>([])
   let pendingPermissions = $state<PermissionRequest[]>([])
   let pendingImageDescriptorError = $state<ImageDescriptorErrorRequest | null>(null)
@@ -3495,6 +3505,8 @@
       return
     }
 
+    recordModelUse()
+
     // Snap scroll to bottom — the user just sent something, they want to see it
     userScrolledAway = false
     idleAttentionHandled = false
@@ -3734,6 +3746,7 @@
 
     const { projectId, id } = thread
     const userMessageId = messageId()
+    recordModelUse()
 
     try {
       const sendPromise = threadMessages.steer(

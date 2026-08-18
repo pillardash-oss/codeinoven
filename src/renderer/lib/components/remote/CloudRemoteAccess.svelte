@@ -2,7 +2,9 @@
   import { Laptop, LogOut, Plus, RefreshCw, ShieldCheck, Trash2 } from '@lucide/svelte'
   import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
   import {
+    completeCloudAuthCallback,
     currentCloudUser,
+    hasCloudAuthCallback,
     logoutCloudAccount,
     signInWithCloudProvider,
     type CloudAuthProvider
@@ -93,8 +95,9 @@
   function readableError(error: unknown): string {
     if (!(error instanceof Error)) return 'The request could not be completed.'
     const messages: Record<string, string> = {
-      'google-sign-in-failed': 'Google sign-in could not be started.',
-      'apple-sign-in-failed': 'Apple sign-in could not be started.',
+      'google-sign-in-failed': 'Google sign-in could not be completed.',
+      'apple-sign-in-failed': 'Apple sign-in could not be completed.',
+      'oauth-session-failed': 'Sign-in completed, but the mobile session could not be established.',
       'invalid-enrollment-code': 'That desktop code is invalid or has expired.',
       'device-not-approved':
         'This PWA installation is not approved for that desktop. Add it again with a new code.',
@@ -107,12 +110,15 @@
 
   async function restoreSession(): Promise<void> {
     loading = true
+    const returningFromSignIn = hasCloudAuthCallback()
     try {
+      await completeCloudAuthCallback()
       user = await currentCloudUser()
       desktops = await listCloudDesktops()
-    } catch {
+    } catch (error) {
       user = null
       desktops = []
+      if (returningFromSignIn) errorMessage = readableError(error)
     } finally {
       loading = false
     }

@@ -13,7 +13,7 @@ Unless the user explicitly overrides these rules, follow this work ethic:
 
 1. Planning
    - Before starting a feature, bug fix, chore, or other implementation task, create or update a simple plan.md for that work.
-   - For CodeInOven implementation work, keep plan.md and progress.md in the active \`.cio/work\` or \`.cio/specs/<feature-slug>/\` and any other work lifecycle directory; do not create duplicate copies in the repository root, unless explicitly asked to.
+   - For CodeInOven implementation work, use \`.cio/specs/<feature-slug>/\` for plan.md, progress.md, and other lifecycle artifacts only in Engineering mode (\`engineer\`, \`assignment\`, or \`achievement\`). Regular chats must not create, modify, or use \`.cio/specs/\`; keep their plan.md, progress.md, and other non-source work in \`.cio/work/<feature>/\`. Do not create duplicate copies in the repository root.
    - Put the current phase at the top of plan.md.
    - Use a checklist-style plan with nested checklist items where useful.
    - Mark checklist items in progress or complete as the work advances.

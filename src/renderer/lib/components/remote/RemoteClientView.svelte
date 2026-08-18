@@ -90,17 +90,15 @@
     await invoke('remote:rejectStepUp', approvalId)
   }
 
-  async function beginCloudEnrollment(reportFailure = true): Promise<void> {
+  async function beginCloudEnrollment(): Promise<void> {
     if (busy) return
     busy = true
     enrollmentError = ''
     try {
       remoteStatus = await invoke('remote:beginCloudEnrollment')
     } catch {
-      if (reportFailure) {
-        enrollmentError =
-          'A pairing code could not be created. Check the remote service and try again.'
-      }
+      enrollmentError =
+        'A pairing code could not be created. Check the remote service and try again.'
     } finally {
       busy = false
     }
@@ -136,16 +134,6 @@
         : { status: 'signed-out', profile: null }
     remoteLoading = false
     accountLoading = false
-
-    if (
-      accountState.status === 'signed-in' &&
-      remoteStatus?.cloud.configured &&
-      !remoteStatus.cloud.desktopId &&
-      remoteStatus.cloud.state !== 'connecting' &&
-      remoteStatus.cloud.state !== 'enrollment-pending'
-    ) {
-      await beginCloudEnrollment(false)
-    }
   }
 
   async function resetCloudEnrollment(): Promise<void> {
@@ -167,22 +155,13 @@
       accountState = state
       accountLoading = false
       accountError = state.status === 'error' ? state.message : ''
-      if (
-        state.status === 'signed-in' &&
-        remoteStatus?.cloud.configured &&
-        !remoteStatus.cloud.desktopId &&
-        remoteStatus.cloud.state !== 'connecting' &&
-        remoteStatus.cloud.state !== 'enrollment-pending'
-      ) {
-        void beginCloudEnrollment(false)
-      }
     })
     const unsubStepUp = subscribe('remote:stepUpPending', (approvals) => {
       pendingApprovals = approvals
     })
     // Restored account sessions do not emit a fresh profile-change event. Load
-    // account and remote state together so an already signed-in user proceeds
-    // directly to desktop enrollment.
+    // account and remote state together, but keep enrollment behind the explicit
+    // “Create pairing code” action.
     void initializeRemoteAccess()
     return () => {
       unsubStatus()

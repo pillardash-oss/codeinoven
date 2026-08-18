@@ -379,6 +379,14 @@
     }
   }
 
+  /** Record the model when a temporary-chat turn actually starts. */
+  function recordModelUse(): void {
+    if (!tab.settings.harnessId || !tab.settings.providerId || !tab.settings.modelId) return
+    rendererRecovery.addChatRecentModel(
+      modelKey(tab.settings.harnessId, tab.settings.providerId, tab.settings.modelId)
+    )
+  }
+
   const DEFAULT_ELABORATE_PROMPT =
     'Explain this selection in detail. Be clear and explain in simple terms, ensure you do not overwhelm the user with so much jargons, unless explicitly asked to. Do not perform any execution, make code changes, run tests, or do anything beyond: read-only and findings based on the available context. Focus on answering just the selection and avoiding mentioning anything unrelated!'
 
@@ -439,6 +447,7 @@
       }
       return
     }
+    recordModelUse()
     const temporaryChatId = tab.temporaryChatId
     const attachedSelections = tab.selectionAttached ? [...tab.selections] : []
     const outgoing = userMessage(
@@ -543,6 +552,7 @@
       tab.selectionMessageId = outgoing.id
     }
     tab.sessionStarted = true
+    recordModelUse()
     try {
       await invoke(
         'agent:steerTemporaryPrompt',

@@ -44,9 +44,24 @@
       base: string
       draft: boolean
     }) => void
+    /** When provided, the docked state is owned by the global pr lifecycle store. */
+    minimized?: boolean
+    onMinimize?: () => void
+    onExpand?: () => void
+    /** Override the default localStorage key so multiple docked drafts don't collide. */
+    storageKey?: string
   }
 
-  let { projectId, onClose, onCreated, onView }: Props = $props()
+  let {
+    projectId,
+    onClose,
+    onCreated,
+    onView,
+    minimized: minimizedProp,
+    onMinimize: onMinimizeProp,
+    onExpand: onExpandProp,
+    storageKey: storageKeyProp
+  }: Props = $props()
 
   let originIdentity = $state<{ owner: string; repo: string } | null>(null)
   let title = $state('')
@@ -70,8 +85,21 @@
   let pushRejected = $state(false)
   /** Which recovery action is running ('merge' | 'rebase'), to disable buttons. */
   let recoverMode = $state<'merge' | 'rebase' | null>(null)
-  /** True while the panel is collapsed into the bottom-right dock. */
-  let minimized = $state(false)
+  /** True while the panel is collapsed into the bottom-right dock (local fallback). */
+  let localMinimized = $state(false)
+  const minimized = $derived(minimizedProp ?? localMinimized)
+
+  function handleMinimize(): void {
+    if (onMinimizeProp) onMinimizeProp()
+    else localMinimized = true
+  }
+
+  function handleExpand(): void {
+    if (onExpandProp) onExpandProp()
+    else localMinimized = false
+  }
+
+  const effectiveStorageKey = $derived(storageKeyProp ?? `${APP_SLUG}.pullRequestSheet.v1`)
 
   // ─── Compose with agent ────────────────────────────────────────────────────
   /** True while the compose dropdown is open. */
@@ -511,18 +539,18 @@
   title="New pull request"
   {minimized}
   closable={Boolean(result)}
-  onMinimize={() => (minimized = true)}
+  onMinimize={handleMinimize}
   {onClose}
-  onExpand={() => (minimized = false)}
+  onExpand={handleExpand}
   dragLabel="Drag to move the pull request panel"
-  storageKey={`${APP_SLUG}.pullRequestSheet.v1`}
+  storageKey={effectiveStorageKey}
 >
   {#snippet dock()}
     <button
       class="flex cursor-pointer items-center gap-1.5 rounded-xl border bg-surface px-3 py-2 shadow-xl transition-colors hover:bg-elevated"
       title="Show pull request creation"
       aria-label="Show pull request creation"
-      onclick={() => (minimized = false)}
+      onclick={handleExpand}
     >
       {#if result}
         <CheckCircle2 size={14} class="shrink-0 text-success" />

@@ -186,6 +186,8 @@ self.addEventListener('fetch', (event) => {
   // enter Cache Storage or be replayed after sign-out/revocation. The precache
   // manifest is mutable version metadata, never cached either.
   if (
+    url.pathname.startsWith('/api/auth') ||
+    url.pathname.startsWith('/desktop/') ||
     url.pathname.startsWith('/v1/') ||
     url.pathname === '/healthz' ||
     url.pathname === '/precache-manifest.json'
