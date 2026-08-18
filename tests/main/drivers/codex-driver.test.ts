@@ -21,6 +21,7 @@ vi.mock('child_process', async (importOriginal) => {
 class FakeChild extends EventEmitter {
   private threadSequence = 0
   private turnSequence = 0
+  threadReadResult: Record<string, unknown> = {}
   stdout = new EventEmitter()
   stderr = new EventEmitter()
   stdin = {
@@ -51,7 +52,9 @@ class FakeChild extends EventEmitter {
             : method === 'turn/steer'
               ? { turnId: 'turn-1' }
               : {}
-      queueMicrotask(() => this.emitPayload({ id, result }))
+      queueMicrotask(() =>
+        this.emitPayload({ id, result: method === 'thread/read' ? this.threadReadResult : result })
+      )
       return true
     }),
     end: vi.fn()
@@ -96,6 +99,105 @@ const settings = {
 }
 
 describe('CodexDriver', () => {
+  it('maps Codex collaboration items into a visible subagent lifecycle', async () => {
+    const driver = new CodexDriver(await storage())
+    const events: AgentEvent[] = []
+    driver.onEvent((event) => events.push(event))
+    const child = new FakeChild()
+    spawnMock.mockReturnValue(child as unknown as ChildProcess)
+    const sessionId = await driver.createSession('/project', 'Codex')
+    await driver.sendPrompt('/project', {
+      sessionId,
+      settings,
+      text: 'Delegate research',
+      attachments: []
+    })
+
+    child.emitPayload({
+      method: 'item/started',
+      params: {
+        threadId: 'native-1',
+        turnId: 'turn-1',
+        item: {
+          id: 'collab-1',
+          type: 'collabToolCall',
+          tool: 'spawnAgent',
+          status: 'inProgress',
+          senderThreadId: 'native-1',
+          newThreadId: 'native-child-1',
+          prompt: 'Inspect the renderer'
+        }
+      }
+    })
+    child.emitPayload({
+      method: 'item/completed',
+      params: {
+        threadId: 'native-1',
+        turnId: 'turn-1',
+        item: {
+          id: 'collab-1',
+          type: 'collabToolCall',
+          tool: 'spawnAgent',
+          status: 'completed',
+          senderThreadId: 'native-1',
+          newThreadId: 'native-child-1',
+          prompt: 'Inspect the renderer',
+          output: 'Renderer inspected'
+        }
+      }
+    })
+
+    const activities = events
+      .filter((event) => event.type === 'message.part.updated')
+      .map((event) => event.part)
+      .filter((part) => part.type === 'subagent')
+      .map((part) => part.activity)
+    expect(activities).toContainEqual(
+      expect.objectContaining({
+        status: 'running',
+        childSessionId: 'native-child-1',
+        providerTaskId: `${sessionId}:collab-1`
+      })
+    )
+    expect(activities).toContainEqual(
+      expect.objectContaining({
+        status: 'completed',
+        childSessionId: 'native-child-1',
+        output: 'Renderer inspected'
+      })
+    )
+    child.threadReadResult = {
+      thread: {
+        id: 'native-child-1',
+        turns: [
+          {
+            id: 'child-turn-1',
+            items: [
+              {
+                id: 'child-user-1',
+                type: 'userMessage',
+                content: [{ type: 'text', text: 'Inspect the renderer' }]
+              },
+              {
+                id: 'child-answer-1',
+                type: 'agentMessage',
+                text: 'Renderer inspected'
+              }
+            ]
+          }
+        ]
+      }
+    }
+    const childMessages = await driver.loadMessages('/project', 'native-child-1')
+    expect(childMessages).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ role: 'user', visibility: 'subagent_trace' }),
+        expect.objectContaining({ role: 'assistant', visibility: 'subagent_trace' })
+      ])
+    )
+    child.emit('exit', 0, null)
+  })
+
   it('runs new and resumed turns through one shared app-server with the selected sandbox', async () => {
     const driver = new CodexDriver(await storage())
     const events: AgentEvent[] = []
@@ -309,6 +411,8 @@ describe('CodexDriver', () => {
 
   it('maps Codex tool and assistant items to render events', async () => {
     const driver = new CodexDriver(await storage())
+    const events: AgentEvent[] = []
+    driver.onEvent((event) => events.push(event))
     const child = new FakeChild()
     spawnMock.mockReturnValue(child as unknown as ChildProcess)
     const sessionId = await driver.createSession('/project', 'Codex')
@@ -338,6 +442,18 @@ describe('CodexDriver', () => {
       params: {
         threadId: 'native-1',
         turnId: 'turn-1',
+        explanation: 'Initial plan',
+        plan: [
+          { step: 'Inspect the driver', status: 'pending' },
+          { step: 'Apply the fix', status: 'pending' }
+        ]
+      }
+    })
+    child.emitPayload({
+      method: 'turn/plan/updated',
+      params: {
+        threadId: 'native-1',
+        turnId: 'turn-1',
         explanation: 'Implementation plan',
         plan: [
           { step: 'Inspect the driver', status: 'completed' },
@@ -350,7 +466,8 @@ describe('CodexDriver', () => {
       params: { turn: { id: 'turn-1', status: 'completed' } }
     })
     await new Promise((resolve) => setTimeout(resolve, 0))
-    await expect(driver.loadMessages('/project', sessionId)).resolves.toEqual([
+    const messages = await driver.loadMessages('/project', sessionId)
+    expect(messages).toEqual([
       expect.objectContaining({ role: 'user' }),
       expect.objectContaining({
         id: `${sessionId}:cmd-1`,
@@ -376,6 +493,21 @@ describe('CodexDriver', () => {
           })
         ]
       })
+    ])
+    expect(
+      events
+        .filter((event) => event.type === 'message.part.updated')
+        .filter((event) => event.part.type === 'tool' && event.part.tool === 'plan_update')
+        .map((event) => (event.part.type === 'tool' ? event.part.state.input['plan'] : undefined))
+    ).toEqual([
+      [
+        { step: 'Inspect the driver', status: 'pending' },
+        { step: 'Apply the fix', status: 'pending' }
+      ],
+      [
+        { step: 'Inspect the driver', status: 'completed' },
+        { step: 'Apply the fix', status: 'inProgress' }
+      ]
     ])
   })
 

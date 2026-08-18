@@ -1,11 +1,5 @@
 <script lang="ts">
-  import {
-    Check,
-    ChevronRight,
-    Circle,
-    ListChecks,
-    Loader2
-  } from '@lucide/svelte'
+  import { Check, ChevronRight, Circle, ListChecks, Loader2 } from '@lucide/svelte'
   import type { AgentTodoItem } from '$lib/agent-todos'
 
   interface Props {
@@ -19,12 +13,16 @@
   let userPinnedOpen = $state(false)
   let lastSignature = $state('')
 
-  let completedCount = $derived(
-    items.filter((item) => item.status === 'completed').length
-  )
+  let completedCount = $derived(items.filter((item) => item.status === 'completed').length)
   let currentItem = $derived(
     items.find((item) => item.status === 'in_progress') ??
       items.find((item) => item.status === 'pending')
+  )
+  let activeIndex = $derived(items.findIndex((item) => item.status === 'in_progress'))
+  let progressLabel = $derived(
+    activeIndex >= 0
+      ? `Working on ${activeIndex + 1} of ${items.length} · ${completedCount} done`
+      : `${completedCount}/${items.length} done`
   )
 
   $effect(() => {
@@ -66,7 +64,7 @@
     <ListChecks size={14} class="shrink-0 text-info" />
     <span class="shrink-0 text-xs font-semibold text-foreground">Tasks</span>
     <span class="shrink-0 text-[11px] tabular-nums text-dimmed">
-      {completedCount}/{items.length}
+      {progressLabel}
     </span>
     {#if !open && currentItem}
       <span class="min-w-0 flex-1 truncate text-xs text-muted">{currentItem.label}</span>
@@ -86,7 +84,9 @@
           <li class="flex items-start gap-2 text-xs">
             <span class="mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center">
               {#if item.status === 'completed'}
-                <span class="flex h-4 w-4 items-center justify-center rounded-full bg-success/15 text-success">
+                <span
+                  class="flex h-4 w-4 items-center justify-center rounded-full bg-success/15 text-success"
+                >
                   <Check size={11} />
                 </span>
               {:else if item.status === 'in_progress'}

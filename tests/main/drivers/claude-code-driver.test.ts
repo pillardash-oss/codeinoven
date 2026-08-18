@@ -9,7 +9,8 @@ import { StorageEngine } from '../../../src/main/storage/storage-engine'
 import { ClaudeCodeDriver, mapClaudeCodeRecord } from '../../../src/main/drivers/claude-code-driver'
 import type {
   CliLineParseContext,
-  CliLineParseResult
+  CliLineParseResult,
+  PersistentCliSession
 } from '../../../src/main/drivers/persistent-cli-driver'
 
 const spawnMock = vi.hoisted(() => vi.fn())
@@ -98,6 +99,7 @@ describe('ClaudeCodeDriver', () => {
         'stdio',
         '--verbose',
         '--include-partial-messages',
+        '--forward-subagent-text',
         '--model',
         'sonnet',
         '--tools',
@@ -243,6 +245,124 @@ describe('ClaudeCodeDriver', () => {
         (event) => event.type === 'session.error' && event.error?.includes('process exited')
       )
     ).toBe(false)
+  })
+
+  it('maps Claude Agent delegation and child output into one subagent lifecycle', () => {
+    const session: PersistentCliSession = {
+      id: 'session-1',
+      title: 'Claude thread',
+      projectPathHash: 'hash',
+      messages: [],
+      createdAt: 1,
+      updatedAt: 1
+    }
+    const started = mapClaudeCodeRecord(
+      {
+        type: 'assistant',
+        session_id: 'native-1',
+        message: {
+          id: 'assistant-1',
+          content: [
+            {
+              type: 'tool_use',
+              id: 'agent-call-1',
+              name: 'Agent',
+              input: {
+                subagent_type: 'Explore',
+                description: 'Trace the renderer',
+                prompt: 'Find the rendering path'
+              }
+            }
+          ]
+        }
+      },
+      { sessionId: 'session-1', session }
+    )
+    const startMessage = started?.messages?.[0]
+    expect(startMessage?.parts[0]).toEqual(
+      expect.objectContaining({
+        type: 'subagent',
+        callID: 'agent-call-1',
+        activity: expect.objectContaining({
+          status: 'pending',
+          agent: 'Explore',
+          description: 'Trace the renderer',
+          providerTaskId: 'agent-call-1'
+        })
+      })
+    )
+    if (startMessage) session.messages.push(startMessage)
+
+    const child = mapClaudeCodeRecord(
+      {
+        type: 'assistant',
+        session_id: 'native-1',
+        parent_tool_use_id: 'agent-call-1',
+        message: { id: 'child-1', content: [{ type: 'text', text: 'Renderer path found.' }] }
+      },
+      { sessionId: 'session-1', session }
+    )
+    expect(child?.events).toContainEqual(
+      expect.objectContaining({
+        type: 'message.part.updated',
+        part: expect.objectContaining({
+          type: 'subagent',
+          activity: expect.objectContaining({ status: 'running', output: 'Renderer path found.' })
+        })
+      })
+    )
+
+    const completed = mapClaudeCodeRecord(
+      {
+        type: 'user',
+        session_id: 'native-1',
+        message: {
+          content: [{ type: 'tool_result', tool_use_id: 'agent-call-1', content: 'Final findings' }]
+        }
+      },
+      { sessionId: 'session-1', session }
+    )
+    expect(completed?.events).toContainEqual(
+      expect.objectContaining({
+        type: 'message.part.updated',
+        part: expect.objectContaining({
+          type: 'subagent',
+          activity: expect.objectContaining({ status: 'completed', output: 'Final findings' })
+        })
+      })
+    )
+  })
+
+  it('maps Claude compact boundaries into automatic compaction activity', () => {
+    const result = mapClaudeCodeRecord(
+      {
+        type: 'system',
+        subtype: 'compact_boundary',
+        session_id: 'native-1',
+        uuid: 'compact-1',
+        compact_metadata: { trigger: 'auto', pre_tokens: 180000 }
+      },
+      {
+        sessionId: 'session-1',
+        session: {
+          id: 'session-1',
+          title: 'Claude thread',
+          projectPathHash: 'hash',
+          messages: [],
+          createdAt: 1,
+          updatedAt: 1
+        }
+      }
+    )
+    expect(result?.events).toContainEqual(
+      expect.objectContaining({
+        type: 'message.part.updated',
+        part: expect.objectContaining({ type: 'compaction', auto: true, overflow: true })
+      })
+    )
+    expect(result?.events).toContainEqual(
+      expect.objectContaining({ type: 'message.completed', compaction: true })
+    )
   })
 
   it('maps Claude authentication_failed metadata to a structured authentication issue', () => {

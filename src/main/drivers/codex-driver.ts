@@ -267,7 +267,7 @@ export class CodexDriver extends PersistentCliDriver {
     sessionStatus: true,
     contextUsage: true,
     compaction: true,
-    subagents: false,
+    subagents: true,
     nativeUtilities: ['web_search', 'web_fetch']
   }
   private activeTurns = new Map<string, CodexAppServerTurn>()
@@ -1299,8 +1299,15 @@ export class CodexDriver extends PersistentCliDriver {
    * ids on read and collapse duplicate ids a resumed thread can produce.
    */
   async loadMessages(projectPath: string, sessionId: string): Promise<AgentMessage[]> {
-    const messages = await super.loadMessages(projectPath, sessionId)
-    return this.normalizeSessionMessages(messages, sessionId)
+    try {
+      const messages = await super.loadMessages(projectPath, sessionId)
+      return this.normalizeSessionMessages(messages, sessionId)
+    } catch (error) {
+      if (!(error instanceof Error) || !error.message.startsWith('CLI session is unavailable:')) {
+        throw error
+      }
+      return this.loadNativeThreadMessages(projectPath, sessionId)
+    }
   }
 
   async loadMessagesSince(
@@ -1308,8 +1315,46 @@ export class CodexDriver extends PersistentCliDriver {
     sessionId: string,
     messageId: string
   ): Promise<AgentMessage[]> {
-    const messages = await super.loadMessagesSince(projectPath, sessionId, messageId)
-    return this.normalizeSessionMessages(messages, sessionId)
+    try {
+      const messages = await super.loadMessagesSince(projectPath, sessionId, messageId)
+      return this.normalizeSessionMessages(messages, sessionId)
+    } catch (error) {
+      if (!(error instanceof Error) || !error.message.startsWith('CLI session is unavailable:')) {
+        throw error
+      }
+      const messages = await this.loadNativeThreadMessages(projectPath, sessionId)
+      const startIndex = messages.findLastIndex((message) => message.id === messageId)
+      return startIndex >= 0 ? messages.slice(startIndex) : messages
+    }
+  }
+
+  private async loadNativeThreadMessages(
+    projectPath: string,
+    nativeThreadId: string
+  ): Promise<AgentMessage[]> {
+    const host = await this.ensureAppServerHost(projectPath)
+    const result = await this.appServerRequest(host, 'thread/read', {
+      threadId: nativeThreadId,
+      includeTurns: true
+    })
+    const thread = recordValue(result['thread']) ?? result
+    const turns = Array.isArray(thread['turns']) ? thread['turns'] : []
+    const messages: AgentMessage[] = []
+    for (const turnValue of turns) {
+      const turn = recordValue(turnValue)
+      const items = turn && Array.isArray(turn['items']) ? turn['items'] : []
+      for (const itemValue of items) {
+        const item = normalizeAppServerItem(recordValue(itemValue))
+        if (!item) continue
+        const parsed = parseItem(item, true, nativeThreadId)
+        if (parsed?.messages) messages.push(...parsed.messages)
+      }
+    }
+    return this.normalizeSessionMessages(messages, nativeThreadId).map((message) => ({
+      ...message,
+      origin: 'subagent',
+      visibility: 'subagent_trace'
+    }))
   }
 
   private normalizeSessionMessages(messages: AgentMessage[], sessionId: string): AgentMessage[] {
@@ -1830,10 +1875,12 @@ function normalizeAppServerItem(
   const rawType = stringValue(item['type'])
   const types: Record<string, string> = {
     agentMessage: 'agent_message',
+    userMessage: 'user_message',
     commandExecution: 'command_execution',
     fileChange: 'file_change',
     mcpToolCall: 'mcp_tool_call',
     dynamicToolCall: 'function_call',
+    collabToolCall: 'collab_tool_call',
     planUpdate: 'plan_update',
     todoList: 'todo_list'
   }
@@ -1882,12 +1929,15 @@ function parseItem(
   // key never collides across threads or freshly recreated sessions.
   const messageId = `${sessionId}:${itemId}`
   if (itemType === 'agent_message') return parseAgentMessage(item, messageId, completed, sessionId)
+  if (itemType === 'user_message') return parseUserMessage(item, messageId, completed, sessionId)
   if (itemType === 'reasoning') return parseReasoning(item, messageId, completed, sessionId)
   if (itemType === 'command_execution') return parseCommand(item, messageId, completed, sessionId)
   if (itemType === 'file_change')
     return parseTool(item, messageId, completed, sessionId, 'file_change')
   if (itemType === 'contextCompaction')
     return parseCompaction(item, messageId, completed, sessionId)
+  if (itemType === 'collab_tool_call')
+    return parseCollaboration(item, messageId, completed, sessionId)
   if (itemType === 'plan_update' || itemType === 'todo_list' || itemType === 'plan')
     return parseTool(item, messageId, completed, sessionId, itemType)
   if (itemType === 'mcp_tool_call' || itemType === 'function_call')
@@ -1899,6 +1949,114 @@ function parseItem(
       stringValue(item['tool']) ?? stringValue(item['name']) ?? 'mcp_tool_call'
     )
   return null
+}
+
+function codexUserMessageText(item: Record<string, unknown>): string {
+  const direct = stringValue(item['text'])
+  if (direct) return direct
+  const content = item['content']
+  if (!Array.isArray(content)) return ''
+  return content
+    .map((value) => {
+      if (typeof value === 'string') return value
+      const entry = recordValue(value)
+      if (!entry) return ''
+      return (
+        stringValue(entry['text']) ??
+        stringValue(entry['url']) ??
+        stringValue(entry['path']) ??
+        stringValue(entry['name']) ??
+        ''
+      )
+    })
+    .filter(Boolean)
+    .join('\n')
+}
+
+function parseUserMessage(
+  item: Record<string, unknown>,
+  itemId: string,
+  completed: boolean,
+  sessionId: string
+): CliLineParseResult {
+  const part = {
+    type: 'text' as const,
+    id: `${itemId}:text`,
+    messageID: itemId,
+    text: codexUserMessageText(item)
+  }
+  const events: SessionAgentEvent[] = [{ type: 'message.part.updated', sessionId, part }]
+  if (completed) events.push({ type: 'message.completed', sessionId, messageId: itemId })
+  const message: AgentMessage = {
+    id: itemId,
+    role: 'user',
+    origin: 'subagent',
+    visibility: 'subagent_trace',
+    parts: [part],
+    createdAt: Date.now(),
+    ...(completed ? { completedAt: Date.now() } : {})
+  }
+  return { events, messages: [message] }
+}
+
+function parseCollaboration(
+  item: Record<string, unknown>,
+  itemId: string,
+  completed: boolean,
+  sessionId: string
+): CliLineParseResult {
+  const providerStatus = stringValue(item['status'])
+  const failed =
+    providerStatus === 'failed' || providerStatus === 'error' || providerStatus === 'declined'
+  const tool = stringValue(item['tool']) ?? 'collaboration'
+  const prompt = stringValue(item['prompt'])
+  const childSessionId =
+    stringValue(item['newThreadId']) ??
+    stringValue(item['new_thread_id']) ??
+    stringValue(item['receiverThreadId']) ??
+    stringValue(item['receiver_thread_id'])
+  const agentStatus = recordValue(item['agentStatus'] ?? item['agent_status'])
+  const agent =
+    stringValue(agentStatus?.['name']) ??
+    stringValue(agentStatus?.['agent']) ??
+    stringValue(item['agent']) ??
+    'Codex'
+  const output =
+    stringValue(item['output']) ?? stringValue(item['result']) ?? stringValue(item['message'])
+  const status = !completed
+    ? ('running' as const)
+    : failed
+      ? ('error' as const)
+      : ('completed' as const)
+  const part = {
+    type: 'subagent' as const,
+    id: `${itemId}:subagent`,
+    messageID: itemId,
+    callID: itemId,
+    activity: {
+      status,
+      agent,
+      description: stringValue(item['description']) ?? prompt ?? tool,
+      ...(prompt ? { prompt } : {}),
+      ...(childSessionId ? { childSessionId } : {}),
+      providerTaskId: itemId,
+      background: item['background'] === true,
+      ...(output ? { output } : {}),
+      ...(failed ? { error: output ?? `Codex ${tool} failed` } : {})
+    }
+  }
+  const events: SessionAgentEvent[] = [{ type: 'message.part.updated', sessionId, part }]
+  if (completed) events.push({ type: 'message.completed', sessionId, messageId: itemId })
+  const message: AgentMessage = {
+    id: itemId,
+    role: 'assistant',
+    origin: 'subagent',
+    visibility: 'working_trace',
+    parts: [part],
+    createdAt: Date.now(),
+    ...(completed ? { completedAt: Date.now() } : {})
+  }
+  return { events, messages: [message] }
 }
 
 function parseAgentMessage(

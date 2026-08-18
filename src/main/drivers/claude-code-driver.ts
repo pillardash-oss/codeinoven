@@ -593,6 +593,39 @@ function toolPart(
   }
 }
 
+function isClaudeSubagentTool(name: string): boolean {
+  return name === 'Agent' || name === 'Task'
+}
+
+function claudeSubagentPart(
+  messageId: string,
+  callId: string,
+  name: string,
+  input: Record<string, unknown>,
+  status: 'pending' | 'running' | 'completed' | 'error',
+  output?: string
+): AgentPart {
+  const description =
+    string(input['description']) ?? string(input['name']) ?? string(input['subagent_type']) ?? name
+  return {
+    type: 'subagent',
+    id: `claude-subagent-${callId}`,
+    messageID: messageId,
+    callID: callId,
+    activity: {
+      status,
+      agent: string(input['subagent_type']) ?? string(input['agent']) ?? name,
+      description,
+      prompt: string(input['prompt']),
+      providerTaskId: callId,
+      modelId: string(input['model']),
+      background: input['run_in_background'] === true || input['background'] === true,
+      ...(output ? { output } : {}),
+      ...(status === 'error' ? { error: output ?? 'Claude sub-agent task failed' } : {})
+    }
+  }
+}
+
 function summaryText(value: unknown): string | undefined {
   if (typeof value === 'string') return value
   if (!Array.isArray(value)) return undefined
@@ -737,13 +770,12 @@ function partFromBlock(
   }
   if (type === 'tool_use') {
     const callId = string(block['id']) ?? `claude-call-${messageId}-${index}`
-    return toolPart(
-      messageId,
-      callId,
-      string(block['name']) ?? 'unknown',
-      record(block['input']) ?? {},
-      'pending'
-    )
+    const name = string(block['name']) ?? 'unknown'
+    const input = record(block['input']) ?? {}
+    if (isClaudeSubagentTool(name)) {
+      return claudeSubagentPart(messageId, callId, name, input, 'pending')
+    }
+    return toolPart(messageId, callId, name, input, 'pending')
   }
   return null
 }
@@ -756,6 +788,20 @@ function findToolPart(
     const part = message.parts.find(
       (candidate): candidate is Extract<AgentPart, { type: 'tool' }> =>
         candidate.type === 'tool' && candidate.callID === callId
+    )
+    if (part) return part
+  }
+  return undefined
+}
+
+function findSubagentPart(
+  context: CliLineParseContext,
+  callId: string
+): Extract<AgentPart, { type: 'subagent' }> | undefined {
+  for (const message of [...context.session.messages].reverse()) {
+    const part = message.parts.find(
+      (candidate): candidate is Extract<AgentPart, { type: 'subagent' }> =>
+        candidate.type === 'subagent' && candidate.callID === callId
     )
     if (part) return part
   }
@@ -834,6 +880,44 @@ export function mapClaudeCodeRecord(
   const nativeSessionId = string(entry['session_id'])
   if (type === 'system' && entry['subtype'] === 'init') return { nativeSessionId }
 
+  if (type === 'system' && entry['subtype'] === 'compact_boundary') {
+    const metadata = record(entry['compact_metadata']) ?? record(entry['compactMetadata'])
+    const trigger = string(metadata?.['trigger'])
+    const messageId =
+      string(entry['uuid']) ??
+      `claude-compaction-${context.sessionId}-${number(metadata?.['pre_tokens']) ?? Date.now()}`
+    const part = {
+      type: 'compaction' as const,
+      id: `${messageId}:compaction`,
+      messageID: messageId,
+      auto: trigger !== 'manual',
+      overflow: trigger === 'auto'
+    }
+    return {
+      nativeSessionId,
+      messages: [
+        {
+          id: messageId,
+          role: 'assistant',
+          origin: 'compaction',
+          visibility: 'working_trace',
+          parts: [part],
+          createdAt: Date.now(),
+          completedAt: Date.now()
+        }
+      ],
+      events: [
+        { type: 'message.part.updated', sessionId: context.sessionId, part },
+        {
+          type: 'message.completed',
+          sessionId: context.sessionId,
+          messageId,
+          compaction: true
+        }
+      ]
+    }
+  }
+
   if (type === 'control_request') {
     const request = record(entry['request'])
     const requestId = string(entry['request_id'])
@@ -906,6 +990,29 @@ export function mapClaudeCodeRecord(
   if (type === 'assistant') {
     const rawMessage = record(entry['message'])
     if (!rawMessage) return nativeSessionId ? { nativeSessionId } : null
+    const parentCallId = string(entry['parent_tool_use_id'])
+    if (parentCallId) {
+      const existing = findSubagentPart(context, parentCallId)
+      if (!existing) return nativeSessionId ? { nativeSessionId } : null
+      const output = Array.isArray(rawMessage['content'])
+        ? rawMessage['content']
+            .map((block) => serializeContent(record(block)?.['text']))
+            .filter((text): text is string => Boolean(text))
+            .join('\n')
+        : undefined
+      const part: Extract<AgentPart, { type: 'subagent' }> = {
+        ...existing,
+        activity: {
+          ...existing.activity,
+          status: 'running',
+          ...(output ? { output } : {})
+        }
+      }
+      return {
+        nativeSessionId,
+        events: [{ type: 'message.part.updated', sessionId: context.sessionId, part }]
+      }
+    }
     const incoming = messageFromAssistant(rawMessage)
     const existing = context.session.messages.find((message) => message.id === incoming.id)
     const mapped = existing ? mergeAssistantRecord(existing, incoming) : incoming
@@ -966,6 +1073,21 @@ export function mapClaudeCodeRecord(
       if (!block || block['type'] !== 'tool_result') continue
       const callId = string(block['tool_use_id'])
       if (!callId) continue
+      const existingSubagent = findSubagentPart(context, callId)
+      if (existingSubagent) {
+        const output = serializeContent(block['content'])
+        const failed = block['is_error'] === true
+        parts.push({
+          ...existingSubagent,
+          activity: {
+            ...existingSubagent.activity,
+            status: failed ? 'error' : 'completed',
+            ...(output ? { output } : {}),
+            ...(failed ? { error: output ?? 'Claude sub-agent task failed' } : {})
+          }
+        })
+        continue
+      }
       const existing = findToolPart(context, callId)
       if (!existing) continue
       const output = serializeContent(block['content'])
@@ -1202,7 +1324,7 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
     sessionStatus: true,
     contextUsage: true,
     compaction: false,
-    subagents: false,
+    subagents: true,
     structuredOutput: true,
     nativeUtilities: ['web_search', 'web_fetch']
   }
@@ -1608,6 +1730,7 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
       'stdio',
       '--verbose',
       '--include-partial-messages',
+      '--forward-subagent-text',
       '--thinking-display',
       'summarized'
     ]
