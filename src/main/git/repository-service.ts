@@ -22,11 +22,14 @@ export class RepositoryService {
     try {
       const result = await this.runGit(['-C', validatedPath, 'rev-parse', '--show-toplevel'])
       const repositoryRoot = result.stdout.trim()
+      const canonicalRepositoryRoot = repositoryRoot
+        ? await realpath(repositoryRoot)
+        : validatedPath
 
       return {
         status: 'git',
         projectPath: validatedPath,
-        repositoryRoot: repositoryRoot || validatedPath
+        repositoryRoot: canonicalRepositoryRoot
       }
     } catch (failure) {
       const commandFailure = failure as GitCommandFailure

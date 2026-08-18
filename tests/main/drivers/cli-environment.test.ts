@@ -29,7 +29,7 @@ afterEach(async () => {
   }
 })
 
-describe('buildHarnessEnvironment — unix nvm', () => {
+describe.skipIf(process.platform === 'win32')('buildHarnessEnvironment — unix nvm', () => {
   it('puts the user nvm default major version first in PATH', async () => {
     const home = await makeNvmHome(['v19.0.1', 'v24.18.0', 'v22.19.0'], '24')
     const env = buildHarnessEnvironment({ HOME: home, PATH: '/usr/bin' }, 'darwin')
@@ -56,12 +56,11 @@ describe('buildHarnessEnvironment — unix nvm', () => {
       join(home, '.nvm', 'versions', 'node', 'v19.0.1', 'bin')
     ])
   })
+})
 
-  it('sets the owned process marker', async () => {
-    const home = await makeNvmHome(['v24.18.0'])
-    const env = buildHarnessEnvironment({ HOME: home }, 'darwin')
-    expect(env[OWNED_PROCESS_MARKER]).toBe('1')
-  })
+it('sets the owned process marker', () => {
+  const env = buildHarnessEnvironment({}, process.platform)
+  expect(env[OWNED_PROCESS_MARKER]).toBe('1')
 })
 
 describe('buildHarnessEnvironment — windows (nvm-windows)', () => {

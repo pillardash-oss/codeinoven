@@ -178,6 +178,11 @@ jobs:
     name: Windows quality and packaged startup
     runs-on: windows-latest
     timeout-minutes: 40
+    env:
+      GIT_AUTHOR_NAME: CodeInOven CI
+      GIT_AUTHOR_EMAIL: ci@codeinoven.invalid
+      GIT_COMMITTER_NAME: CodeInOven CI
+      GIT_COMMITTER_EMAIL: ci@codeinoven.invalid
 
     steps:
       - name: Check out repository

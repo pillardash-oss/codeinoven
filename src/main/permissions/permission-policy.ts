@@ -1,4 +1,5 @@
 import { basename, isAbsolute, relative, resolve, sep } from 'path'
+import { tmpdir } from 'os'
 
 export type PermissionRisk = 'low' | 'medium' | 'high' | 'critical'
 export type PermissionPolicyMode = 'auto_review' | 'full_access'
@@ -326,7 +327,7 @@ function isWithinDirectory(directory: string, candidate: string): boolean {
 }
 
 function isAllowedExternalPath(path: string): boolean {
-  return path.startsWith('/tmp/') || path === '/tmp'
+  return path.startsWith('/tmp/') || path === '/tmp' || isWithinDirectory(resolve(tmpdir()), path)
 }
 
 function globMatcher(pattern: string): RegExp {

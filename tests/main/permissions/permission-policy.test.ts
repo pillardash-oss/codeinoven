@@ -1,11 +1,13 @@
 import { describe, expect, it } from 'vitest'
+import { tmpdir } from 'os'
+import { resolve } from 'path'
 import {
   PermissionPolicy,
   classifyPermissionRisk,
   normalizePermissionName
 } from '../../../src/main/permissions/permission-policy'
 
-const projectRoot = '/workspace/project'
+const projectRoot = resolve('/workspace/project')
 
 describe('permission policy', () => {
   it('normalizes permission names and assigns each risk tier', () => {
@@ -24,7 +26,7 @@ describe('permission policy', () => {
       approved: true,
       risk: 'low',
       approval: { required: false },
-      scope: { projectRoot, paths: [`${projectRoot}/src/main.ts`] }
+      scope: { projectRoot, paths: [resolve(projectRoot, 'src/main.ts')] }
     })
     expect(policy.evaluate({ permission: 'write-file', path: 'src/main.ts' }).approved).toBe(true)
     expect(policy.evaluate({ permission: 'shell-exec' })).toMatchObject({
@@ -72,13 +74,13 @@ describe('permission policy', () => {
     expect(policy.evaluate({ permission: 'Bash', commands: ['bun run test'] }).approved).toBe(true)
   })
 
-  it('allows /tmp/ paths in auto_review mode', () => {
+  it('allows system temporary paths in auto_review mode', () => {
     const policy = new PermissionPolicy({
       projectRoot,
       mode: 'auto_review'
     })
 
-    const result = policy.evaluate({ permission: 'read', paths: ['/tmp/build.log'] })
+    const result = policy.evaluate({ permission: 'read', paths: [resolve(tmpdir(), 'build.log')] })
     expect(result.approved).toBe(true)
   })
 
@@ -124,7 +126,7 @@ describe('permission policy', () => {
         permission: '',
         decision: 'ask',
         risk: 'high',
-        scope: { projectRoot, paths: [`${projectRoot}/internal-only.txt`] },
+        scope: { projectRoot, paths: [resolve(projectRoot, 'internal-only.txt')] },
         expiresAt: 46_000
       }
     })
