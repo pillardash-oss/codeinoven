@@ -101,6 +101,9 @@ export class EnrollmentClaimConflictError extends Error {
   }
 }
 
+export type EnrollmentClaimFailure =
+  'not-found' | 'account-mismatch' | 'already-claimed' | 'mobile-device-mismatch'
+
 export class RemoteControlDatabase {
   private readonly db: Database
 
@@ -456,6 +459,35 @@ export class RemoteControlDatabase {
     })
 
     return claim.immediate(input)
+  }
+
+  enrollmentClaimFailure(input: {
+    codeHash: string
+    userId: string
+    mobileDeviceId: string
+    mobilePublicKey: string
+  }): EnrollmentClaimFailure {
+    const enrollment = this.db
+      .prepare(
+        `SELECT e.claimed_at, e.mobile_device_id, e.mobile_public_key, d.user_id
+         FROM enrollments e
+         JOIN desktops d ON d.id = e.desktop_id
+         WHERE e.code_hash = ? AND e.expires_at > ? AND d.revoked_at IS NULL`
+      )
+      .get(input.codeHash, Date.now()) as
+      | {
+          claimed_at: number | null
+          mobile_device_id: string | null
+          mobile_public_key: string | null
+          user_id: string | null
+        }
+      | undefined
+    if (!enrollment) return 'not-found'
+    if (enrollment.user_id && enrollment.user_id !== input.userId) return 'account-mismatch'
+    if (enrollment.claimed_at !== null) return 'already-claimed'
+    const mobileDevice = this.findMobileDevice(input.mobileDeviceId)
+    if (mobileDevice && mobileDevice.user_id !== input.userId) return 'mobile-device-mismatch'
+    return 'not-found'
   }
 
   saveDesktopGrant(

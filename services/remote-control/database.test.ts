@@ -99,3 +99,35 @@ describe('OAuth identity resolution', () => {
     database.close()
   })
 })
+
+describe('enrollment claim diagnostics', () => {
+  test('distinguishes a wrong account from a missing code', () => {
+    const database = new RemoteControlDatabase(':memory:')
+    database.upsertOAuthUser({
+      id: 'desktop-owner',
+      email: 'owner@example.com',
+      displayName: 'Owner',
+      image: null
+    })
+    database.createDesktop({ ...desktop('desktop-a', 'profile-a'), user_id: 'desktop-owner' })
+    database.createEnrollment(enrollment('pending', 'desktop-a', 'pending-code'), Date.now())
+
+    expect(
+      database.enrollmentClaimFailure({
+        codeHash: 'pending-code',
+        userId: 'different-user',
+        mobileDeviceId: 'mobile-device-1234',
+        mobilePublicKey: 'public-key'
+      })
+    ).toBe('account-mismatch')
+    expect(
+      database.enrollmentClaimFailure({
+        codeHash: 'missing-code',
+        userId: 'desktop-owner',
+        mobileDeviceId: 'mobile-device-1234',
+        mobilePublicKey: 'public-key'
+      })
+    ).toBe('not-found')
+    database.close()
+  })
+})

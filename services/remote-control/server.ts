@@ -371,7 +371,24 @@ async function handleEnrollmentClaim(
     database.audit('desktop.enrollment-conflict', session.userId, error.desktopId)
     return json({ error: 'enrollment-conflict' }, 409)
   }
-  if (!claimed) return json({ error: 'invalid-enrollment-code' }, 400)
+  if (!claimed) {
+    const failure = database.enrollmentClaimFailure({
+      codeHash: tokenHash(rawCode),
+      userId: session.userId,
+      mobileDeviceId,
+      mobilePublicKey
+    })
+    if (failure === 'account-mismatch') {
+      return json({ error: 'enrollment-account-mismatch' }, 403)
+    }
+    if (failure === 'already-claimed') {
+      return json({ error: 'enrollment-already-claimed' }, 409)
+    }
+    if (failure === 'mobile-device-mismatch') {
+      return json({ error: 'mobile-device-mismatch' }, 409)
+    }
+    return json({ error: 'invalid-enrollment-code' }, 400)
+  }
   if (claimed.newlyClaimed) {
     database.audit('desktop.claimed', session.userId, claimed.desktopId)
   }
