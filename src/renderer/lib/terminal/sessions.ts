@@ -23,6 +23,27 @@ export interface TerminalSession {
 
 const MAX_RESPAWNS = 5
 const RESPAWN_BACKOFF_RESET_MS = 2000
+const RESIZE_SETTLE_MS = 100
+
+/**
+ * Keep the terminal grid fitted to its host, including the final frame of a
+ * sidebar resize. ghostty-web's observer drops resize notifications while its
+ * previous fit is still settling, which can leave the canvas at an older width
+ * when the last notification arrives inside that window.
+ */
+function observeTerminalResize(host: HTMLDivElement, fitAddon: FitAddon): () => void {
+  let settleTimer: ReturnType<typeof setTimeout> | undefined
+  const observer = new ResizeObserver(() => {
+    if (settleTimer) clearTimeout(settleTimer)
+    settleTimer = setTimeout(() => fitAddon.fit(), RESIZE_SETTLE_MS)
+  })
+  observer.observe(host)
+
+  return () => {
+    observer.disconnect()
+    if (settleTimer) clearTimeout(settleTimer)
+  }
+}
 
 function readThemeColor(styles: CSSStyleDeclaration, token: string): string {
   return styles.getPropertyValue(token).trim()
@@ -150,7 +171,6 @@ class TerminalSessionManager {
     const host = document.createElement('div')
     host.className = 'terminal-host'
     term.open(host)
-    fitAddon.observeResize()
 
     // Reflect terminal focus to the app's shortcut routing. On non-mac platforms
     // Ctrl+W must keep its shell delete-word behavior while the terminal is
@@ -192,7 +212,7 @@ class TerminalSessionManager {
 
     const subs: Array<() => void> = []
     const cursorShape = new CursorShapeDecoder()
-    subs.push(cleanupFocus)
+    subs.push(cleanupFocus, observeTerminalResize(host, fitAddon))
 
     // PTY output → terminal buffer. Always active so the buffer stays current
     // even while the panel is hidden or the component is unmounted. DECSCUSR
