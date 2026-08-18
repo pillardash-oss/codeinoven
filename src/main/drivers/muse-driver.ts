@@ -77,6 +77,7 @@ interface MuseCliCapabilities {
   reasoningEfforts: ThinkingLevel[]
   thinkingPresets: ThinkingPreset[]
   attachments: boolean
+  toolCalls: boolean
 }
 
 let museCliCapabilitiesProbe: Promise<MuseCliCapabilities> | undefined
@@ -100,7 +101,8 @@ function parseMuseCliCapabilities(help: string): MuseCliCapabilities {
       id: effort,
       label: thinkingPresetLabel(effort)
     })),
-    attachments: /^\s*--image\s+<PATH>/mu.test(help)
+    attachments: /^\s*--image\s+<PATH>/mu.test(help),
+    toolCalls: /^\s*--disable-(?:shell|write)\b/mu.test(help)
   }
 }
 
@@ -138,7 +140,7 @@ function museModel(
       ? { thinkingPresets: capabilities.thinkingPresets }
       : {}),
     attachment: capabilities.attachments,
-    toolcall: true,
+    toolcall: capabilities.toolCalls,
     ...(contextWindow === undefined ? {} : { contextWindow })
   }
 }
