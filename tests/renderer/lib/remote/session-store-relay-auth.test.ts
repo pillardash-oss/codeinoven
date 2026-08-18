@@ -6,12 +6,28 @@
 
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import type { AccountRelayEvent } from '../../../../src/renderer/lib/remote/account-relay'
+import {
+  createMemoryDeviceKeyStore,
+  loadOrCreateDeviceKeyMaterial,
+  type DeviceKeyMaterial
+} from '$lib/remote/device-identity'
 import { RemoteSessionStore } from '$lib/remote/session-store.svelte'
 
-const { relayOnEvent, sentFrames } = vi.hoisted(() => {
+const { relayOnEvent, sentFrames, identityOverride } = vi.hoisted(() => {
   return {
     relayOnEvent: { current: null as ((event: AccountRelayEvent) => void) | null },
-    sentFrames: { current: [] as string[] }
+    sentFrames: { current: [] as string[] },
+    identityOverride: { current: null as DeviceKeyMaterial | null }
+  }
+})
+
+vi.mock('$lib/remote/device-identity', async (importOriginal) => {
+  const original = await importOriginal<typeof import('$lib/remote/device-identity')>()
+  return {
+    ...original,
+    loadOrCreateDeviceKeyMaterial: async (
+      options?: Parameters<typeof original.loadOrCreateDeviceKeyMaterial>[0]
+    ) => identityOverride.current ?? original.loadOrCreateDeviceKeyMaterial(options)
   }
 })
 
@@ -51,6 +67,7 @@ afterEach(() => {
   vi.useRealTimers()
   sentFrames.current = []
   relayOnEvent.current = null
+  identityOverride.current = null
 })
 
 describe('RemoteSessionStore — relay device auth gating', () => {
@@ -102,6 +119,50 @@ describe('RemoteSessionStore — relay device auth gating', () => {
 
     await store.sendPayload({ rpc: 'invoke', id: 2, channel: 'project:list', args: [] })
     expect(sentFrames.current.some((f) => f.includes('project:list'))).toBe(false)
+    store.disconnect()
+  })
+
+  it('re-enrolls with the approved bootstrap when the saved id belongs to another desktop', async () => {
+    const material = await loadOrCreateDeviceKeyMaterial({
+      store: createMemoryDeviceKeyStore()
+    })
+    identityOverride.current = { ...material, deviceId: 'other-desktop-device', authVersion: 2 }
+    const store = new RemoteSessionStore()
+    await store.connectCloud({
+      desktopId: 'fresh-desktop',
+      mobileDeviceId: 'mobile-1',
+      controlSecret: 'fresh-bootstrap'
+    })
+
+    void store.sendPayload({ rpc: 'invoke', id: 4, channel: 'project:list', args: [] })
+    message({ type: 'remote:device:challenge', nonce: 'challenge-old-id' })
+    await vi.waitFor(() => {
+      expect(
+        sentFrames.current.some(
+          (frame) => frame.includes('remote:device:auth') && frame.includes('other-desktop-device')
+        )
+      ).toBe(true)
+    })
+
+    message({ type: 'remote:device:error', reason: 'not_found' })
+    await vi.waitFor(() => {
+      expect(sentFrames.current.some((frame) => frame.includes('challenge-request'))).toBe(true)
+    })
+    expect(store.snapshot.route.kind).toBe('RELAY_CONNECTED')
+    expect(sentFrames.current.some((frame) => frame.includes('project:list'))).toBe(false)
+    message({ type: 'remote:device:challenge', nonce: 'challenge-bootstrap' })
+    await vi.waitFor(() => {
+      expect(
+        sentFrames.current.some(
+          (frame) => frame.includes('challenge-bootstrap') && frame.includes('fresh-bootstrap')
+        )
+      ).toBe(true)
+    })
+
+    message({ type: 'remote:device:ok', device: { id: 'fresh-device', authVersion: 1 } })
+    await vi.waitFor(() => {
+      expect(sentFrames.current.some((frame) => frame.includes('project:list'))).toBe(true)
+    })
     store.disconnect()
   })
 

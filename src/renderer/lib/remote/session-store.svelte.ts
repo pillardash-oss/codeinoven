@@ -19,6 +19,7 @@ import { remoteLog } from './logger'
 import type { PeerRef } from './routes'
 import {
   handshakeTranscript,
+  clearAssignedDesktop,
   loadOrCreateDeviceKeyMaterial,
   saveAssignedDeviceId,
   saveDeviceAuthVersion,
@@ -57,24 +58,27 @@ export class RemoteSessionStore {
   private messageListeners = new SvelteSet<(plaintext: string) => void>()
   private stateListeners = new SvelteSet<(snapshot: SessionSnapshot) => void>()
   private keyMaterial: DeviceKeyMaterial | null = null
+  private keyMaterialDesktopId: string | null = null
   /** Resolves once the phone has authenticated as a device over the relay. */
   private relayDeviceAuth: Promise<void> | null = null
   private relayChallengeReceived = false
+  private relayBootstrapFallbackAttempted = false
 
-  private async ensureKeyMaterial(): Promise<DeviceKeyMaterial> {
-    if (this.keyMaterial) return this.keyMaterial
-    this.keyMaterial = await loadOrCreateDeviceKeyMaterial()
+  private async ensureKeyMaterial(desktopId: string | null = null): Promise<DeviceKeyMaterial> {
+    if (this.keyMaterial && this.keyMaterialDesktopId === desktopId) return this.keyMaterial
+    this.keyMaterial = await loadOrCreateDeviceKeyMaterial({ desktopId: desktopId ?? undefined })
+    this.keyMaterialDesktopId = desktopId
     return this.keyMaterial
   }
 
   /** Persist the desktop-assigned device id from the enrollment handshake. */
   private async applyAssignedDevice(deviceId: string, authVersion?: number): Promise<void> {
-    await saveAssignedDeviceId(deviceId)
+    await saveAssignedDeviceId(deviceId, undefined, this.keyMaterialDesktopId ?? undefined)
     if (this.keyMaterial) {
       this.keyMaterial.deviceId = deviceId
       if (typeof authVersion === 'number') {
         this.keyMaterial.authVersion = authVersion
-        await saveDeviceAuthVersion(authVersion)
+        await saveDeviceAuthVersion(authVersion, undefined, this.keyMaterialDesktopId ?? undefined)
       }
     }
   }
@@ -88,6 +92,7 @@ export class RemoteSessionStore {
    * session.
    */
   private beginRelayDeviceAuth(): Promise<void> {
+    this.relayBootstrapFallbackAttempted = false
     return new Promise<void>((resolve, reject) => {
       const timer = setTimeout(() => {
         off()
@@ -126,6 +131,20 @@ export class RemoteSessionStore {
           return
         }
         if (record['type'] === 'remote:device:error') {
+          if (this.keyMaterial?.deviceId && !this.relayBootstrapFallbackAttempted) {
+            this.relayBootstrapFallbackAttempted = true
+            this.keyMaterial.deviceId = null
+            this.keyMaterial.authVersion = 1
+            const desktopId = this.keyMaterialDesktopId
+            void (desktopId ? clearAssignedDesktop(desktopId) : Promise.resolve())
+              .then(() => this.sendRaw({ type: 'remote:device:challenge-request' }))
+              .catch((error) => {
+                clearTimeout(timer)
+                off()
+                reject(error instanceof Error ? error : new Error(String(error)))
+              })
+            return
+          }
           clearTimeout(timer)
           off()
           reject(new Error(`Relay device authentication failed: ${String(record['reason'] ?? '')}`))
@@ -136,7 +155,7 @@ export class RemoteSessionStore {
 
   /** Sign the desktop-issued relay challenge nonce and prove possession. */
   private async respondToRelayChallenge(nonce: string): Promise<void> {
-    const keyMaterial = await this.ensureKeyMaterial()
+    const keyMaterial = await this.ensureKeyMaterial(this.keyMaterialDesktopId)
     const transcript = handshakeTranscript({
       nonce,
       deviceId: keyMaterial.deviceId,
@@ -218,6 +237,7 @@ export class RemoteSessionStore {
   }): Promise<void> {
     this.secret = input.controlSecret
     this.closeChannels()
+    await this.ensureKeyMaterial(input.desktopId)
     this.dispatch({ type: 'relayProbeStart' })
     this.relayChallengeReceived = false
     // Install the first listener before opening the socket so a challenge
@@ -299,7 +319,7 @@ export class RemoteSessionStore {
     this.accountRoute = input
     if (input.lanTarget) {
       try {
-        await this.connectLan(input.controlSecret, input.lanTarget)
+        await this.connectLan(input.controlSecret, input.lanTarget, input.desktopId)
         this.accountRoute = input
         if (this.snapshot.route.kind === 'LAN_CONNECTED') return
       } catch (error) {
@@ -316,10 +336,14 @@ export class RemoteSessionStore {
   }
 
   /** Try the exact LAN endpoint supplied by the account connection response. */
-  private async connectLan(secret: string, target: RemoteConnectionTarget): Promise<void> {
+  private async connectLan(
+    secret: string,
+    target: RemoteConnectionTarget,
+    desktopId: string | null = null
+  ): Promise<void> {
     this.secret = secret
     this.closeChannels()
-    const keyMaterial = await this.ensureKeyMaterial()
+    const keyMaterial = await this.ensureKeyMaterial(desktopId)
     const device = {
       deviceId: keyMaterial.deviceId,
       deviceName: keyMaterial.deviceName,
@@ -417,7 +441,7 @@ export class RemoteSessionStore {
     const route = this.accountRoute
     const target = route?.lanTarget
     if (!route || !target || this.snapshot.route.kind !== 'RELAY_CONNECTED') return
-    const keyMaterial = await this.ensureKeyMaterial()
+    const keyMaterial = await this.ensureKeyMaterial(route.desktopId)
     const peer: PeerRef = { host: target.host, port: target.port }
     const device = {
       deviceId: keyMaterial.deviceId,
