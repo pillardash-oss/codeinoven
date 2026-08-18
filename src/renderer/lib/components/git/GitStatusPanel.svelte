@@ -65,6 +65,7 @@
   import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
   import { threadSettings } from '$lib/stores/thread-settings.svelte'
   import { prLifecycleStore } from '$lib/stores/pr-lifecycle.svelte'
+  import { gitPanelView } from '$lib/stores/git-panel-view.svelte'
   import type { PullRequestReference, PullRequestSummary } from '$shared/types'
 
   interface Props {
@@ -76,6 +77,11 @@
 
   type RepoState = 'loading' | 'git_unavailable' | 'not_git' | 'git'
   type TabId = 'changes' | 'history' | 'branches' | 'pulls' | 'deployments' | 'stashes'
+
+  // Hiding the sidebar destroys and recreates this component, so the tab/
+  // selection state is seeded from (and mirrored back into) a persisted
+  // view-state store keyed by project+thread to survive that remount.
+  const savedView = gitPanelView.get(projectId, threadId)
 
   let repoState = $state<RepoState>('loading')
   let preflightDetail = $state('')
@@ -106,8 +112,8 @@
   let newBranchName = $state('')
   let acknowledgeActiveTurn = $state(false)
   let agentTurnActive = $state(false)
-  let activeTab = $state<TabId>('changes')
-  let changesView = $state<'list' | 'tree'>('list')
+  let activeTab = $state<TabId>(savedView.activeTab)
+  let changesView = $state<'list' | 'tree'>(savedView.changesView)
   let selectedPaths = $state<Record<string, boolean>>({})
   let discardConfirm = $state<string[] | null>(null)
   let commitSelection = $state(false)
@@ -120,11 +126,11 @@
   let historyHasMore = $state(true)
   const HISTORY_PAGE_SIZE = 30
   let commitMessage = $state('')
-  let selectedCommit = $state<GitCommitInfo | null>(null)
+  let selectedCommit = $state<GitCommitInfo | null>(savedView.selectedCommit)
   let commitDiffChanges = $state<GitFileChange[]>([])
   let deleteCommitTarget = $state<GitCommitInfo | null>(null)
   let showGitHubSignIn = $state(false)
-  let selectedPullRequest = $state<PullRequestSummary | null>(null)
+  let selectedPullRequest = $state<PullRequestSummary | null>(savedView.selectedPullRequest)
   let githubConnected = $state(false)
   let githubConfigured = $state(false)
   let githubUser = $state<GitHubUser | null>(null)
@@ -141,13 +147,23 @@
   let commitTreeCollapsedDirs = $state<Record<string, boolean>>({})
   let amendMode = $state(false)
   let resetConfirm = $state<{ mode: GitResetMode; target: string } | null>(null)
-  let selectedStash = $state<GitStashEntry | null>(null)
+  let selectedStash = $state<GitStashEntry | null>(savedView.selectedStash)
   let loadingStashDiff = $state(false)
   let stashDiffChanges = $state<GitFileChange[]>([])
   let stashDiffs = $state<Record<string, GitDiff>>({})
   let stashExpanded = $state<Record<string, boolean>>({})
   let loadingStashDiffFile = $state<Record<string, boolean>>({})
   let stashDiffErrors = $state<Record<string, string | null>>({})
+
+  $effect(() => {
+    gitPanelView.set(projectId, threadId, {
+      activeTab,
+      changesView,
+      selectedCommit,
+      selectedPullRequest,
+      selectedStash
+    })
+  })
 
   const resetOptions: Array<{ mode: GitResetMode; label: string; hint: string }> = [
     { mode: 'soft', label: 'Soft', hint: 'keep index + worktree' },
