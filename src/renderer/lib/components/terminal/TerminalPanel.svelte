@@ -55,7 +55,7 @@
   class="terminal-wrap relative h-full w-full overflow-hidden bg-terminal-background"
 >
   <div
-    class="h-full w-full px-2 py-1"
+    class="h-full w-full overflow-hidden py-1 pl-2"
     {@attach attachTerminal(terminalId, projectId, retrySequence)}
   ></div>
   {#if loading}
@@ -82,7 +82,11 @@
 <style>
   .terminal-wrap :global(.terminal-host) {
     height: 100%;
-    width: 100%;
+    /* FitAddon reserves 15px for a DOM scrollbar, but ghostty-web paints its
+       scrollbar inside the canvas. Give that reservation back to the fitter so
+       the final terminal column reaches the panel edge instead of leaving a
+       permanent gutter. The wrapper clips the intentionally oversized host. */
+    width: calc(100% + 15px);
     overflow: hidden;
     outline: none;
     padding: 4px 0;
