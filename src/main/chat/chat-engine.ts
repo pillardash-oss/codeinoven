@@ -617,14 +617,6 @@ const TEMPORARY_CHAT_ALLOWED_TOOLS = [
   'gemini_quota'
 ]
 
-const VIRTUAL_TASK_SYSTEM_PROMPT = [
-  `You are completing a one-shot virtual task inside ${APP_NAME}.`,
-  'Work only in the supplied project and complete the requested deliverable directly.',
-  'Do not create a specification, plan, progress report, Assignment, or durable conversation artifact.',
-  'Do not ask follow-up questions. If something is uncertain, inspect the project and make the narrowest safe inference.',
-  'Do not perform work beyond the explicit prompt.'
-].join(' ')
-
 /** Chat-only instruction — plain chat threads behave like a browser web chatbot. */
 const CHAT_SYSTEM_PROMPT = [
   `You are a general-purpose web chat assistant inside ${APP_NAME}.`,
@@ -5274,6 +5266,8 @@ export class ChatEngine {
 
   /**
    * Run a disposable project-scoped agent task without creating a Thread row.
+   * Like title generation, this sends only the caller's exact task prompt with
+   * minimal reasoning instead of assembling durable thread context.
    * Session and process bookkeeping are torn down before the result crosses
    * IPC, so virtual work cannot consume project thread capacity.
    */
@@ -5288,6 +5282,8 @@ export class ChatEngine {
     virtualTaskId = validateEntityId(virtualTaskId, 'Virtual task ID')
     settings = validateThreadSettings({
       ...settings,
+      thinkingLevel: 'minimal',
+      inferenceMode: 'normal',
       engineeringMode: false,
       assignmentMode: false,
       loopMode: false
@@ -5323,7 +5319,6 @@ export class ChatEngine {
         settings,
         text,
         attachments: [],
-        systemPrompt: VIRTUAL_TASK_SYSTEM_PROMPT,
         readOnly: false,
         userMessageId: turnId
       }
