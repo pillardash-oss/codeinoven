@@ -184,6 +184,11 @@
   import { APP_NAME } from '$shared/brand'
   import { LatestRequestGuard } from '$lib/refresh-guard'
 
+  type WorkingModelSelection = Pick<
+    ThreadSettings,
+    'harnessId' | 'providerId' | 'modelId' | 'thinkingLevel'
+  >
+
   interface Props {
     thread: Thread
     /** True on the Chats tab — hides engineering tooling. */
@@ -314,6 +319,9 @@
       ? normalizeChatSettings(chatSettings.initialFor(thread, chatEffectiveSettings()))
       : threadSettings.initialFor(thread)
   )
+  /** Snapshot of the selection that started the live turn. Model controls can
+   *  still change the next-turn settings while the current turn is running. */
+  let liveWorkingSelection = $state<WorkingModelSelection | null>(null)
   let agentDefaults = $state<AgentDefaultsConfig>({ syncFromThreadChanges: false })
   /** Global "don't ask again" flag for the image-descriptor vision model picker. */
   let imageDescriptorAskAgain = $state(false)
@@ -335,6 +343,19 @@
   function commitSettings(next: ThreadSettings): void {
     if (chatMode) chatSettings.commit(next)
     else threadSettings.commit(next)
+  }
+
+  function captureLiveWorkingSelection(): void {
+    liveWorkingSelection = {
+      harnessId: settings.harnessId,
+      providerId: settings.providerId,
+      modelId: settings.modelId,
+      thinkingLevel: settings.thinkingLevel
+    }
+  }
+
+  function ensureLiveWorkingSelection(): void {
+    if (!liveWorkingSelection) captureLiveWorkingSelection()
   }
 
   /** Keep Recent aligned with the model that actually starts a turn. Picker
@@ -2540,11 +2561,13 @@
   function clearLocalTurn(): void {
     locallySubmittedTurnId = null
     locallySubmittedTurnAcknowledged = false
+    liveWorkingSelection = null
   }
 
   /** Cached thread/session state may describe the previous turn on reconnect. */
   function setIdleFromRestore(): void {
     if (locallySubmittedTurnId) return
+    liveWorkingSelection = null
     agentRuns.setIdle(thread.projectId, thread.id)
   }
 
@@ -2697,6 +2720,7 @@
       // stale persisted `planning`/`executing` status after we had cleared it.
       liveStatusKnown = true
       if (providerStatus?.state === 'waiting' || providerStatus?.state === 'working') {
+        ensureLiveWorkingSelection()
         agentRuns.setBusy(
           projectId,
           id,
@@ -3056,6 +3080,7 @@
         if (event.status.state === 'waiting' || event.status.state === 'working') {
           acknowledgeLocalTurn()
           if (event.status.state === 'working') idleAttentionHandled = false
+          ensureLiveWorkingSelection()
           agentRuns.setBusy(
             thread.projectId,
             thread.id,
@@ -3530,6 +3555,7 @@
     const userMessageId = messageId()
     const { projectId, id } = thread
     beginLocalTurn(userMessageId)
+    captureLiveWorkingSelection()
     agentRuns.setBusy(projectId, id, true, userMessageId)
 
     try {
@@ -6214,6 +6240,49 @@
     return resolveDefaultThinkingLevel(presets, undefined, settings.thinkingLevel) ?? null
   }
 
+  /**
+   * The in-progress assistant message may not have received its model metadata
+   * yet. Use the selection that was sent to the harness until the live turn is
+   * finished, then let the persisted message attribution take over.
+   */
+  let currentWorkingTraceAttribution = $derived.by(() => {
+    const selection = liveWorkingSelection ?? settings
+    const modelId = selection.modelId
+    const baseModelId = fastBaseModelId(modelId)
+    const model =
+      allModels.find(
+        (candidate) => candidate.id === modelId && candidate.providerId === selection.providerId
+      ) ??
+      allModels.find(
+        (candidate) => candidate.id === baseModelId && candidate.providerId === selection.providerId
+      ) ??
+      allModels.find((candidate) => candidate.id === modelId) ??
+      allModels.find((candidate) => candidate.id === baseModelId)
+    const thinkingPresets = model?.thinkingPresets ?? []
+    const provider =
+      providers.find(
+        (candidate) =>
+          candidate.harnessId === selection.harnessId && candidate.id === selection.providerId
+      ) ?? providers.find((candidate) => candidate.id === selection.providerId)
+
+    return {
+      modelLabel: modelId
+        ? (model?.name ?? fastVariantForModelId(modelId)?.label ?? modelId)
+        : null,
+      thinkingLevel:
+        thinkingPresets.length > 0
+          ? (resolveDefaultThinkingLevel(thinkingPresets, undefined, selection.thinkingLevel) ??
+            null)
+          : null,
+      providerName: provider?.name ?? null,
+      harnessId: selection.harnessId || null,
+      harnessName: selection.harnessId
+        ? (getAgentIcon(selection.harnessId)?.name ?? selection.harnessId)
+        : null,
+      isFast: fastVariantForModelId(modelId) !== null
+    }
+  })
+
   function messageHarnessName(msg: AgentMessage): string {
     const id = messageHarnessId(msg)
     return getAgentIcon(id)?.name ?? id
@@ -6968,6 +7037,7 @@
               {@const fastVariant = msg.modelId ? fastVariantForModelId(msg.modelId) : null}
               {@const harnessId = messageHarnessId(msg)}
               {@const harnessName = messageHarnessName(msg)}
+              {@const useLiveAttribution = isLatestTurn && liveBusy}
               {@const isLatest = msgIndex === messages.length - 1}
               {@const questionParts = msg.parts.filter(
                 (p): p is Extract<AgentPart, { type: 'question' }> => p.type === 'question'
@@ -6999,12 +7069,24 @@
                         startTime={isLatestTurn
                           ? (getTurnStartTime(msgIndex) ?? activeTurnStartTime)
                           : getTurnStartTime(msgIndex)}
-                        {modelLabel}
-                        thinkingLevel={msgThinking}
-                        providerName={provider?.name}
-                        {harnessId}
-                        {harnessName}
-                        isFast={fastVariant !== null}
+                        modelLabel={useLiveAttribution
+                          ? currentWorkingTraceAttribution.modelLabel
+                          : modelLabel}
+                        thinkingLevel={useLiveAttribution
+                          ? currentWorkingTraceAttribution.thinkingLevel
+                          : msgThinking}
+                        providerName={useLiveAttribution
+                          ? currentWorkingTraceAttribution.providerName
+                          : provider?.name}
+                        harnessId={useLiveAttribution
+                          ? currentWorkingTraceAttribution.harnessId
+                          : harnessId}
+                        harnessName={useLiveAttribution
+                          ? currentWorkingTraceAttribution.harnessName
+                          : harnessName}
+                        isFast={useLiveAttribution
+                          ? currentWorkingTraceAttribution.isFast
+                          : fastVariant !== null}
                         initialOpen={isLatestTurn &&
                           agentRuns.isTraceOpen(thread.projectId, thread.id)}
                         initialUserOpened={isLatestTurn &&
