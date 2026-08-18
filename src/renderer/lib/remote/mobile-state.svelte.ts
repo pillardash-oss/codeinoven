@@ -16,6 +16,7 @@ import { SvelteMap, SvelteSet } from 'svelte/reactivity'
 import { invoke, subscribe } from '$lib/ipc.svelte'
 import { loadProjectIcons } from '$lib/project-icons'
 import { hasProjectNameCollision } from '$lib/project-location'
+import { agentRuns } from '$lib/stores/agent-runs.svelte'
 import { threadMessages } from '$lib/stores/thread-messages.svelte'
 import {
   coordinatorHasActiveDelegates,
@@ -315,9 +316,10 @@ class MobileState {
   }
 
   isWorking(thread: Thread): boolean {
-    return (
-      isThreadWorking(thread) || coordinatorHasActiveDelegates(thread, this.orchestrationThreads)
-    )
+    const liveWorking = agentRuns.hasSettled(thread.projectId, thread.id)
+      ? agentRuns.isBusy(thread.projectId, thread.id)
+      : Boolean(thread.sessionId) && isThreadWorking(thread)
+    return liveWorking || coordinatorHasActiveDelegates(thread, this.orchestrationThreads)
   }
 }
 

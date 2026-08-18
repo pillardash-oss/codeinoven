@@ -1,6 +1,5 @@
 <script lang="ts">
   import { onMount } from 'svelte'
-  import type { Component } from 'svelte'
   import { DropdownMenu, AlertDialog, Dialog } from 'bits-ui'
   import {
     Bell,
@@ -24,21 +23,13 @@
     X
   } from '@lucide/svelte'
   import Switch from '$lib/components/ui/Switch.svelte'
+  import ThreadDropdown, { type MenuItem } from '$lib/components/shared/ThreadDropdown.svelte'
   import { mobileNotifications } from '$lib/remote/mobile-notifications.svelte'
   import { pwaInstall } from '$lib/remote/pwa-install.svelte'
   import { subscribe } from '$lib/ipc.svelte'
   import { getProjectIcon } from '$lib/project-icons'
   import { mobileState } from '$lib/remote/mobile-state.svelte'
   import type { Thread } from '$shared/types'
-
-  interface RowAction {
-    label: string
-    icon?: Component
-    onClick?: () => void
-    danger?: boolean
-    divider?: boolean
-    disabled?: boolean
-  }
 
   const SIDEBAR_MODES = [
     { id: 'projects', label: 'Projects' },
@@ -126,7 +117,7 @@
   }
 
   // ─── Row action menus ───────────────────────────────────────────────────
-  function threadMenuItems(thread: Thread): RowAction[] {
+  function threadMenuItems(thread: Thread): MenuItem[] {
     return [
       {
         label: 'Rename',
@@ -649,7 +640,7 @@
                     class="flex min-w-0 flex-1 cursor-pointer items-center gap-2 rounded-lg px-2 py-2 text-left transition-colors active:bg-elevated {mobileState
                       .selectedThread?.id === thread.id
                       ? 'bg-elevated'
-                      : ''}"
+                      : ''} {mobileState.isWorking(thread) ? 'animate-pulse bg-thread-working/5' : ''}"
                     title={thread.title}
                     onclick={() => void mobileState.openThread(thread)}
                   >
@@ -661,47 +652,11 @@
                       >{relativeTime(thread.createdAt)}</span
                     >
                   </button>
-                  <DropdownMenu.Root>
-                    <DropdownMenu.Trigger
-                      class="flex h-8 w-8 shrink-0 cursor-pointer items-center justify-center rounded-lg text-dimmed transition-colors active:bg-elevated"
-                      aria-label={`Actions for ${thread.title}`}
-                      title={`Actions for ${thread.title}`}
-                    >
-                      <MoreVertical size={15} />
-                    </DropdownMenu.Trigger>
-                    <DropdownMenu.Portal>
-                      <DropdownMenu.Content
-                        side="bottom"
-                        align="end"
-                        sideOffset={4}
-                        collisionPadding={8}
-                        class="z-50 w-44 overflow-hidden rounded-xl border border-border bg-surface p-1 shadow-lg"
-                      >
-                        {#each threadMenuItems(thread) as item (item.label)}
-                          {#if item.divider}
-                            <DropdownMenu.Separator class="mx-2 my-1 h-px bg-border" />
-                          {:else}
-                            <DropdownMenu.Item
-                              disabled={item.disabled}
-                              class={[
-                                'flex w-full cursor-pointer items-center gap-2 rounded-lg px-2.5 py-2 text-sm outline-none transition-colors max-md:py-2.5',
-                                item.danger
-                                  ? 'text-danger hover:bg-danger/10 focus:bg-danger/10'
-                                  : 'text-foreground hover:bg-elevated focus:bg-elevated'
-                              ]}
-                              onSelect={item.onClick}
-                            >
-                              {#if item.icon}
-                                {@const Icon = item.icon}
-                                <Icon size={13} class={item.danger ? '' : 'text-muted'} />
-                              {/if}
-                              {item.label}
-                            </DropdownMenu.Item>
-                          {/if}
-                        {/each}
-                      </DropdownMenu.Content>
-                    </DropdownMenu.Portal>
-                  </DropdownMenu.Root>
+                  <ThreadDropdown
+                    items={threadMenuItems(thread)}
+                    ariaLabel={`Actions for ${thread.title}`}
+                    vertical
+                  />
                 </div>
               {/each}
             </div>
@@ -743,6 +698,8 @@
                         class="flex min-w-0 flex-1 cursor-pointer items-center gap-2 rounded-lg px-2 py-2 text-left transition-colors active:bg-elevated {mobileState
                           .selectedThread?.id === thread.id
                           ? 'bg-elevated'
+                          : ''} {mobileState.isWorking(thread)
+                          ? 'animate-pulse bg-thread-working/5'
                           : ''}"
                         title={thread.title}
                         onclick={() => void mobileState.openThread(thread)}
@@ -755,47 +712,11 @@
                           >{relativeTime(thread.createdAt)}</span
                         >
                       </button>
-                      <DropdownMenu.Root>
-                        <DropdownMenu.Trigger
-                          class="flex h-8 w-8 shrink-0 cursor-pointer items-center justify-center rounded-lg text-dimmed transition-colors active:bg-elevated"
-                          aria-label={`Actions for ${thread.title}`}
-                          title={`Actions for ${thread.title}`}
-                        >
-                          <MoreVertical size={15} />
-                        </DropdownMenu.Trigger>
-                        <DropdownMenu.Portal>
-                          <DropdownMenu.Content
-                            side="bottom"
-                            align="end"
-                            sideOffset={4}
-                            collisionPadding={8}
-                            class="z-50 w-44 overflow-hidden rounded-xl border border-border bg-surface p-1 shadow-lg"
-                          >
-                            {#each threadMenuItems(thread) as item (item.label)}
-                              {#if item.divider}
-                                <DropdownMenu.Separator class="mx-2 my-1 h-px bg-border" />
-                              {:else}
-                                <DropdownMenu.Item
-                                  disabled={item.disabled}
-                                  class={[
-                                    'flex w-full cursor-pointer items-center gap-2 rounded-lg px-2.5 py-2 text-sm outline-none transition-colors max-md:py-2.5',
-                                    item.danger
-                                      ? 'text-danger hover:bg-danger/10 focus:bg-danger/10'
-                                      : 'text-foreground hover:bg-elevated focus:bg-elevated'
-                                  ]}
-                                  onSelect={item.onClick}
-                                >
-                                  {#if item.icon}
-                                    {@const Icon = item.icon}
-                                    <Icon size={13} class={item.danger ? '' : 'text-muted'} />
-                                  {/if}
-                                  {item.label}
-                                </DropdownMenu.Item>
-                              {/if}
-                            {/each}
-                          </DropdownMenu.Content>
-                        </DropdownMenu.Portal>
-                      </DropdownMenu.Root>
+                      <ThreadDropdown
+                        items={threadMenuItems(thread)}
+                        ariaLabel={`Actions for ${thread.title}`}
+                        vertical
+                      />
                     </div>
                   {:else}
                     <p class="px-2 py-1.5 text-[12px] text-dimmed">No threads yet</p>
@@ -822,7 +743,7 @@
                   class="flex min-w-0 flex-1 cursor-pointer items-center gap-2 rounded-lg px-2 py-2 text-left transition-colors active:bg-elevated {mobileState
                     .selectedThread?.id === thread.id
                     ? 'bg-elevated'
-                    : ''}"
+                    : ''} {mobileState.isWorking(thread) ? 'animate-pulse bg-thread-working/5' : ''}"
                   title={thread.title}
                   onclick={() => void mobileState.openThread(thread)}
                 >
@@ -837,47 +758,11 @@
                     >{relativeTime(thread.createdAt)}</span
                   >
                 </button>
-                <DropdownMenu.Root>
-                  <DropdownMenu.Trigger
-                    class="flex h-8 w-8 shrink-0 cursor-pointer items-center justify-center rounded-lg text-dimmed transition-colors active:bg-elevated"
-                    aria-label={`Actions for ${thread.title}`}
-                    title={`Actions for ${thread.title}`}
-                  >
-                    <MoreVertical size={15} />
-                  </DropdownMenu.Trigger>
-                  <DropdownMenu.Portal>
-                    <DropdownMenu.Content
-                      side="bottom"
-                      align="end"
-                      sideOffset={4}
-                      collisionPadding={8}
-                      class="z-50 w-44 overflow-hidden rounded-xl border border-border bg-surface p-1 shadow-lg"
-                    >
-                      {#each threadMenuItems(thread) as item (item.label)}
-                        {#if item.divider}
-                          <DropdownMenu.Separator class="mx-2 my-1 h-px bg-border" />
-                        {:else}
-                          <DropdownMenu.Item
-                            disabled={item.disabled}
-                            class={[
-                              'flex w-full cursor-pointer items-center gap-2 rounded-lg px-2.5 py-2 text-sm outline-none transition-colors max-md:py-2.5',
-                              item.danger
-                                ? 'text-danger hover:bg-danger/10 focus:bg-danger/10'
-                                : 'text-foreground hover:bg-elevated focus:bg-elevated'
-                            ]}
-                            onSelect={item.onClick}
-                          >
-                            {#if item.icon}
-                              {@const Icon = item.icon}
-                              <Icon size={13} class={item.danger ? '' : 'text-muted'} />
-                            {/if}
-                            {item.label}
-                          </DropdownMenu.Item>
-                        {/if}
-                      {/each}
-                    </DropdownMenu.Content>
-                  </DropdownMenu.Portal>
-                </DropdownMenu.Root>
+                <ThreadDropdown
+                  items={threadMenuItems(thread)}
+                  ariaLabel={`Actions for ${thread.title}`}
+                  vertical
+                />
               </div>
             {:else}
               <p class="px-2 py-12 text-center text-[13px] text-dimmed">No threads yet</p>
@@ -893,7 +778,7 @@
                   class="flex min-w-0 flex-1 cursor-pointer items-center gap-2 rounded-lg px-2 py-2 text-left transition-colors active:bg-elevated {mobileState
                     .selectedThread?.id === thread.id
                     ? 'bg-elevated'
-                    : ''}"
+                    : ''} {mobileState.isWorking(thread) ? 'animate-pulse bg-thread-working/5' : ''}"
                   title={thread.title}
                   onclick={() => void mobileState.openThread(thread)}
                 >
@@ -905,47 +790,11 @@
                     >{relativeTime(thread.createdAt)}</span
                   >
                 </button>
-                <DropdownMenu.Root>
-                  <DropdownMenu.Trigger
-                    class="flex h-8 w-8 shrink-0 cursor-pointer items-center justify-center rounded-lg text-dimmed transition-colors active:bg-elevated"
-                    aria-label={`Actions for ${thread.title}`}
-                    title={`Actions for ${thread.title}`}
-                  >
-                    <MoreVertical size={15} />
-                  </DropdownMenu.Trigger>
-                  <DropdownMenu.Portal>
-                    <DropdownMenu.Content
-                      side="bottom"
-                      align="end"
-                      sideOffset={4}
-                      collisionPadding={8}
-                      class="z-50 w-44 overflow-hidden rounded-xl border border-border bg-surface p-1 shadow-lg"
-                    >
-                      {#each threadMenuItems(thread) as item (item.label)}
-                        {#if item.divider}
-                          <DropdownMenu.Separator class="mx-2 my-1 h-px bg-border" />
-                        {:else}
-                          <DropdownMenu.Item
-                            disabled={item.disabled}
-                            class={[
-                              'flex w-full cursor-pointer items-center gap-2 rounded-lg px-2.5 py-2 text-sm outline-none transition-colors max-md:py-2.5',
-                              item.danger
-                                ? 'text-danger hover:bg-danger/10 focus:bg-danger/10'
-                                : 'text-foreground hover:bg-elevated focus:bg-elevated'
-                            ]}
-                            onSelect={item.onClick}
-                          >
-                            {#if item.icon}
-                              {@const Icon = item.icon}
-                              <Icon size={13} class={item.danger ? '' : 'text-muted'} />
-                            {/if}
-                            {item.label}
-                          </DropdownMenu.Item>
-                        {/if}
-                      {/each}
-                    </DropdownMenu.Content>
-                  </DropdownMenu.Portal>
-                </DropdownMenu.Root>
+                <ThreadDropdown
+                  items={threadMenuItems(thread)}
+                  ariaLabel={`Actions for ${thread.title}`}
+                  vertical
+                />
               </div>
             {:else}
               <div class="flex flex-col items-center gap-2 px-2 py-12 text-center">
