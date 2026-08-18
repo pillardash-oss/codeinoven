@@ -126,9 +126,13 @@ describe('RemoteSessionStore — relay device auth gating', () => {
       expect(sentFrames.current.some((f) => f.includes('remote:device:auth'))).toBe(true)
     })
     message({ type: 'remote:device:error', reason: 'signature_invalid' })
-    await connection
+    await expect(connection).rejects.toThrow(
+      'Relay device authentication failed: signature_invalid'
+    )
 
-    await store.sendPayload({ rpc: 'invoke', id: 2, channel: 'project:list', args: [] })
+    await expect(
+      store.sendPayload({ rpc: 'invoke', id: 2, channel: 'project:list', args: [] })
+    ).rejects.toThrow('Relay device authentication failed: signature_invalid')
     expect(sentFrames.current.some((f) => f.includes('project:list'))).toBe(false)
     store.disconnect()
   })
@@ -190,13 +194,21 @@ describe('RemoteSessionStore — relay device auth gating', () => {
     await waitForRelayClient(store)
 
     // No challenge/ok arrives within the deadline.
-    let sent = false
-    void store.sendPayload({ rpc: 'invoke', id: 3, channel: 'project:list', args: [] }).then(() => {
-      sent = true
+    const pendingSend = store.sendPayload({
+      rpc: 'invoke',
+      id: 3,
+      channel: 'project:list',
+      args: []
     })
+    const sendRejection = expect(pendingSend).rejects.toThrow(
+      'Relay device authentication timed out'
+    )
+    const connectionRejection = expect(connection).rejects.toThrow(
+      'Relay device authentication timed out'
+    )
     await vi.advanceTimersByTimeAsync(13_000)
-    await connection
-    expect(sent).toBe(true)
+    await connectionRejection
+    await sendRejection
     expect(sentFrames.current.some((f) => f.includes('project:list'))).toBe(false)
     store.disconnect()
   })

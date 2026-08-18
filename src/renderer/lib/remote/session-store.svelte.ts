@@ -222,7 +222,7 @@ export class RemoteSessionStore {
       } catch (error) {
         const message = error instanceof Error ? error.message : 'device not authenticated'
         remoteLog.error(`Remote session RPC blocked: ${message}`)
-        return
+        throw error
       }
     }
     await this.sendRaw(payload)
@@ -304,11 +304,11 @@ export class RemoteSessionStore {
       this.accountReconnectAttempt = 0
       try {
         await this.relayDeviceAuth
-      } catch {
+      } catch (error) {
         if (this.accountRelayClient === client) {
           this.dispatch({ type: 'disconnected', reason: 'device-auth-failed' })
         }
-        return
+        throw error
       }
       if (this.accountRelayClient !== client) return
       this.dispatch({ type: 'relayConnected', relay: { url: window.location.origin } })

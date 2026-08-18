@@ -103,6 +103,14 @@
 
   function readableError(error: unknown): string {
     if (!(error instanceof Error)) return 'The request could not be completed.'
+    const relayAuthentication = /^Relay device authentication failed: (.+)$/.exec(error.message)
+    if (relayAuthentication) {
+      const reason = relayAuthentication[1] ?? 'rejected'
+      return `The desktop rejected this phone's security proof (${reason}). Pair this desktop again with a new one-time code.`
+    }
+    if (error.message === 'Relay device authentication timed out') {
+      return 'The desktop did not finish authenticating this phone. Try connecting again.'
+    }
     const messages: Record<string, string> = {
       'google-sign-in-failed': 'Google sign-in could not be completed.',
       'apple-sign-in-failed': 'Apple sign-in could not be completed.',

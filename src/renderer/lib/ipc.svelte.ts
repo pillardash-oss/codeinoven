@@ -9,6 +9,7 @@ import type {
   InvokeResult
 } from '../../preload/index'
 import { agentDebug } from '$lib/stores/agent-debug.svelte'
+import { isRemotePwaRuntime } from '$lib/runtime-context'
 
 declare global {
   interface Window {
@@ -36,7 +37,11 @@ const HYDRATION_CHANNELS = new Set<InvokeChannel>([
 let featureReadyPromise: Promise<void> | null = null
 
 async function waitForFeatureHandlers(channel: InvokeChannel): Promise<void> {
-  if (HYDRATION_CHANNELS.has(channel)) return
+  // The remote PWA talks to the desktop through the capability-scoped RPC
+  // bridge. `app:waitForFeatures` is an Electron renderer lifecycle channel,
+  // not a remote capability, and the desktop is necessarily ready before its
+  // remote gateway can serve workspace RPC.
+  if (isRemotePwaRuntime() || HYDRATION_CHANNELS.has(channel)) return
   featureReadyPromise ??= window.api.invoke('app:waitForFeatures')
   await featureReadyPromise
 }
