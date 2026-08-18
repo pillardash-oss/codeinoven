@@ -96,6 +96,7 @@ const CREATE_THREAD_FIELDS = new Set([
   'title',
   'workingDirectory',
   'settings',
+  'inheritSettings',
   'titleSource',
   'scopeBucketId'
 ])
@@ -661,6 +662,9 @@ export function validateCreateThreadInput(value: unknown): CreateThreadInput {
   }
   if (input.settings !== undefined) {
     sanitized.settings = validateThreadSettings(input.settings)
+  }
+  if (input.inheritSettings !== undefined) {
+    sanitized.inheritSettings = validateBoolean(input.inheritSettings, 'Inherit settings')
   }
   if (input.titleSource !== undefined) {
     sanitized.titleSource = validateThreadTitleSource(input.titleSource)

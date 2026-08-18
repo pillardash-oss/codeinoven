@@ -4668,7 +4668,7 @@ export function registerIpcHandlers(
   // ─── Threads ────────────────────────────────────────────────────────────
   ipcMain.handle('thread:create', async (_, input: unknown) => {
     const validated = validateCreateThreadInput(input)
-    if (validated.settings?.engineeringMode) {
+    if (validated.settings?.engineeringMode && validated.inheritSettings !== true) {
       const baseSettings = { ...validated.settings }
       delete baseSettings.loopAuditor
       const defaults = (await storage.getConfig()).agentDefaults

@@ -298,6 +298,8 @@ export interface CreateThreadInput {
   title: string
   workingDirectory?: string
   settings?: ThreadSettings
+  /** The supplied settings were cloned from the active thread and must win over global defaults. */
+  inheritSettings?: boolean
   titleSource?: ThreadTitleSource
   featureSlug?: string
   scopeBucketId?: string
@@ -806,7 +808,7 @@ export interface AgentDefaultsConfig {
   syncFromThreadChanges: boolean
 }
 
-/** Per-thread agent configuration. The last-used settings seed new threads. */
+/** Per-thread agent configuration. Active-thread settings seed siblings; last-used is the fallback. */
 export interface ThreadSettings {
   /** Agent harness responsible for the session, e.g. opencode or codex. */
   harnessId: string

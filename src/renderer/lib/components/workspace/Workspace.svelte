@@ -80,6 +80,7 @@
     chatSettings,
     chatEffectiveSettings
   } from '$lib/stores/thread-settings.svelte'
+  import { settingsForNewThread } from '$lib/thread-settings-inheritance'
   import { providerCatalog } from '$lib/stores/provider-catalog.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
   import { gitState } from '$lib/stores/git.svelte'
@@ -2047,16 +2048,28 @@
 
   // ─── Thread actions ──────────────────────────────────────────────────────
 
-  /** Create a project task using the user's last mode; fresh installs default to engineering. */
+  /** Create a project task by cloning the active thread; fresh installs use the saved defaults. */
   async function createThreadInProject(project: Project, scopeBucketId?: string): Promise<void> {
+    const activeThread = workspaceState.selectedThread
+    const inheritedSettings = settingsForNewThread(activeThread, threadSettings.lastUsed)
     const existing = findEmptyNewThread(allThreads, project.id, scopeBucketId)
     if (existing) {
       if (workspaceState.selectedThread?.id === existing.id) {
         workspaceState.requestFocusComposer()
       } else {
-        workspaceState.openThread(existing, project)
+        const thread = activeThread?.settings
+          ? await invoke(
+              'thread:updateSettings',
+              existing.projectId,
+              existing.id,
+              inheritedSettings
+            )
+          : existing
+        upsertThreadInList(thread)
+        workspaceState.openThread(thread, project)
         if (scopeBucketId) {
-          scopeState.showSidebarForThread(existing, scopeBucketId)
+          scopeState.updateThread(thread)
+          scopeState.showSidebarForThread(thread, scopeBucketId)
         }
       }
       return
@@ -2066,7 +2079,8 @@
       providerId: 'opencode',
       title: DEFAULT_THREAD_TITLE,
       workingDirectory: project.path,
-      settings: { ...threadSettings.lastUsed },
+      settings: inheritedSettings,
+      ...(activeThread?.settings ? { inheritSettings: true } : {}),
       ...(scopeBucketId ? { scopeBucketId } : {})
     })
     upsertThreadInList(thread)
