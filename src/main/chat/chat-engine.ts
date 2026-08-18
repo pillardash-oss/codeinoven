@@ -13888,12 +13888,14 @@ export class ChatEngine {
       return
     }
 
+    const commands = permissionCommands(request.metadata)
     let policy = new PermissionPolicy({
       projectRoot: info.projectPath,
       mode: level
     }).evaluate({
       permission: request.permission,
-      paths: request.patterns
+      paths: request.patterns.filter((pattern) => !commands.includes(pattern)),
+      commands
     })
     if (!policy.approved) {
       policy = {
@@ -16518,6 +16520,30 @@ function validateGeneratedSpecContentUnchecked(
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function permissionCommands(metadata: Record<string, unknown>): string[] {
+  const commands = new Set<string>()
+  const visit = (value: unknown, depth: number): void => {
+    if (depth > 4 || !isRecord(value)) return
+    for (const [key, candidate] of Object.entries(value)) {
+      if (key === 'command' || key === 'cmd' || key === 'script') {
+        if (typeof candidate === 'string' && candidate.trim()) commands.add(candidate.trim())
+        if (Array.isArray(candidate)) {
+          const tokens = candidate.filter(
+            (token): token is string => typeof token === 'string' && token.trim().length > 0
+          )
+          if (tokens.length > 0) {
+            commands.add(tokens.join(' '))
+            for (const token of tokens) commands.add(token.trim())
+          }
+        }
+      }
+      if (isRecord(candidate)) visit(candidate, depth + 1)
+    }
+  }
+  visit(metadata, 0)
+  return [...commands]
 }
 
 function requiredGeneratedString(value: unknown, label: string): string {

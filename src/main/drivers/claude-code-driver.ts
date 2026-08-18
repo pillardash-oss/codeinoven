@@ -19,7 +19,11 @@ import type {
   SessionAgentEvent,
   ThinkingPreset
 } from '../../lib/types'
-import { permissionPatterns } from '../../lib/agent-interactions'
+import {
+  isQuestionToolName,
+  normalizeAgentQuestions,
+  permissionPatterns
+} from '../../lib/agent-interactions'
 import { fastSelectionModelId, resolveFastModelId } from '../../lib/fast-inference'
 import { classifyProviderIssue } from '../../lib/provider-issue'
 import type { StorageEngine } from '../storage/storage-engine'
@@ -106,8 +110,25 @@ const ONE_SHOT_SPAWN_LIMIT = 4
 function buildClaudeEnvironment(): NodeJS.ProcessEnv {
   return {
     ...buildHarnessEnvironment(),
-    CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1'
+    CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1',
+    CLAUDE_CODE_ENABLE_TODO_TOOLS: '1'
   }
+}
+
+const CLAUDE_TOOL_NAMES: Record<string, string> = {
+  question: 'AskUserQuestion',
+  read: 'Read',
+  glob: 'Glob',
+  grep: 'Grep',
+  list: 'Glob',
+  lsp: 'LSP',
+  bash: 'Bash',
+  webfetch: 'WebFetch',
+  websearch: 'WebSearch'
+}
+
+function claudeToolName(value: string): string {
+  return CLAUDE_TOOL_NAMES[value.toLowerCase()] ?? value
 }
 
 /** A tiny FIFO semaphore used to bound concurrent one-shot claude spawns. */
@@ -169,10 +190,23 @@ interface ClaudeAuthenticationReadiness {
   settled: boolean
 }
 
-interface ClaudeQuestionRequest {
+type ClaudeQuestionRequest =
+  | {
+      sessionId: string
+      questions: AgentQuestion[]
+      transport: 'control'
+      input: Record<string, unknown>
+    }
+  | {
+      sessionId: string
+      questions: AgentQuestion[]
+      transport: 'tool_result'
+      callId: string
+    }
+
+interface ClaudePermissionRequest {
   sessionId: string
-  callId: string
-  questions: AgentQuestion[]
+  input: Record<string, unknown>
 }
 type ClaudeInputBlock =
   | { type: 'text'; text: string }
@@ -803,6 +837,20 @@ export function mapClaudeCodeRecord(
     }
     const input = record(request['input']) ?? {}
     const toolName = string(request['tool_name']) ?? 'tool'
+    if (toolName === 'AskUserQuestion') {
+      return {
+        nativeSessionId,
+        events: [
+          {
+            type: 'question.asked',
+            sessionId: context.sessionId,
+            requestId,
+            questions: normalizeAgentQuestions(input),
+            metadata: { transport: 'control', input }
+          }
+        ]
+      }
+    }
     return {
       nativeSessionId,
       events: [
@@ -1164,7 +1212,7 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
   /** First-party sessions (shared Anthropic OAuth credential) spawned this run. */
   private readonly firstPartySessions = new Set<string>()
   private readonly pendingClaudeQuestions = new Map<string, ClaudeQuestionRequest>()
-  private readonly pendingClaudePermissions = new Map<string, string>()
+  private readonly pendingClaudePermissions = new Map<string, ClaudePermissionRequest>()
   /** Held while a first-party session spawn may be refreshing the credential. */
   private authSlotHeld = false
   /** Resolved when the current credential-refresh window closes. */
@@ -1266,8 +1314,9 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
     message?: string,
     sessionId?: string
   ): Promise<void> {
-    const targetSessionId = sessionId ?? this.pendingClaudePermissions.get(requestId)
-    if (!targetSessionId)
+    const pending = this.pendingClaudePermissions.get(requestId)
+    const targetSessionId = sessionId ?? pending?.sessionId
+    if (!targetSessionId || !pending)
       throw new Error(`Claude permission request is no longer pending: ${requestId}`)
     const response = {
       type: 'control_response',
@@ -1276,6 +1325,7 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
         request_id: requestId,
         response: {
           behavior: reply === 'reject' ? 'deny' : 'allow',
+          ...(reply === 'reject' ? {} : { updatedInput: pending.input }),
           ...(message ? { message } : {})
         }
       }
@@ -1294,17 +1344,34 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
     if (!request || request.sessionId !== sessionId) {
       throw new Error(`Claude question request is no longer pending: ${requestId}`)
     }
-    const answerMap = Object.fromEntries(
+    const answersByPrompt = Object.fromEntries(
       request.questions.map((question, index) => [
         question.prompt,
         (answers[index] ?? []).join(', ')
       ])
     )
-    this.writeClaudeToolResult(
-      request.sessionId,
-      request.callId,
-      JSON.stringify({ answers: answerMap })
-    )
+    if (request.transport === 'control') {
+      this.writeActiveInput(
+        request.sessionId,
+        `${JSON.stringify({
+          type: 'control_response',
+          response: {
+            subtype: 'success',
+            request_id: requestId,
+            response: {
+              behavior: 'allow',
+              updatedInput: { ...request.input, answers: answersByPrompt }
+            }
+          }
+        })}\n`
+      )
+    } else {
+      this.writeClaudeToolResult(
+        request.sessionId,
+        request.callId,
+        JSON.stringify({ answers: answersByPrompt })
+      )
+    }
     this.pendingClaudeQuestions.delete(requestId)
   }
 
@@ -1317,12 +1384,26 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
     if (!request || request.sessionId !== sessionId) {
       throw new Error(`Claude question request is no longer pending: ${requestId}`)
     }
-    this.writeClaudeToolResult(
-      request.sessionId,
-      request.callId,
-      'The user dismissed this question.',
-      true
-    )
+    if (request.transport === 'control') {
+      this.writeActiveInput(
+        request.sessionId,
+        `${JSON.stringify({
+          type: 'control_response',
+          response: {
+            subtype: 'success',
+            request_id: requestId,
+            response: { behavior: 'deny', message: 'The user dismissed this question.' }
+          }
+        })}\n`
+      )
+    } else {
+      this.writeClaudeToolResult(
+        request.sessionId,
+        request.callId,
+        'The user dismissed this question.',
+        true
+      )
+    }
     this.pendingClaudeQuestions.delete(requestId)
   }
 
@@ -1354,17 +1435,45 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
     sessionId: string,
     events: SessionAgentEvent[]
   ): SessionAgentEvent[] {
-    const normalized = super.normalizeInteractionEvents(sessionId, events)
+    const questionToolCallIds = new Set(
+      events.flatMap((event) =>
+        event.type === 'message.part.updated' &&
+        event.part.type === 'tool' &&
+        isQuestionToolName(event.part.tool)
+          ? [event.part.callID]
+          : []
+      )
+    )
+    const normalized = super
+      .normalizeInteractionEvents(sessionId, events)
+      .filter(
+        (event) =>
+          event.type !== 'question.asked' ||
+          !event.tool ||
+          !questionToolCallIds.has(event.tool.callID)
+      )
     for (const event of normalized) {
       if (event.type === 'permission.asked' && event.permission.id) {
-        this.pendingClaudePermissions.set(event.permission.id, sessionId)
+        const input = record(event.permission.metadata['input']) ?? {}
+        this.pendingClaudePermissions.set(event.permission.id, { sessionId, input })
       }
-      if (event.type === 'question.asked' && event.tool) {
-        this.pendingClaudeQuestions.set(event.requestId, {
-          sessionId,
-          callId: event.tool.callID,
-          questions: event.questions
-        })
+      if (event.type === 'question.asked') {
+        const input = record(event.metadata?.['input'])
+        if (event.metadata?.['transport'] === 'control' && input) {
+          this.pendingClaudeQuestions.set(event.requestId, {
+            sessionId,
+            questions: event.questions,
+            transport: 'control',
+            input
+          })
+        } else if (event.tool) {
+          this.pendingClaudeQuestions.set(event.requestId, {
+            sessionId,
+            questions: event.questions,
+            transport: 'tool_result',
+            callId: event.tool.callID
+          })
+        }
       }
     }
     return normalized
@@ -1505,7 +1614,8 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
       JSON.stringify({ showThinkingSummaries: true, ...(fastInference ? { fastMode: true } : {}) })
     )
     if (options.systemPrompt) args.push('--append-system-prompt', options.systemPrompt)
-    if (options.allowedTools !== undefined) args.push('--tools', options.allowedTools.join(','))
+    if (options.allowedTools !== undefined)
+      args.push('--tools', options.allowedTools.map(claudeToolName).join(','))
     else if (options.readOnly) args.push('--tools', 'Read,Glob,Grep,WebFetch,WebSearch')
     if (options.structuredOutput)
       args.push('--json-schema', JSON.stringify(options.structuredOutput.schema))

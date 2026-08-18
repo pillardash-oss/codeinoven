@@ -15,7 +15,10 @@ const TODO_TOOL_NAMES = new Set([
   'tasklistupdate',
   'updatetasklist',
   'checklist',
-  'settasks'
+  'settasks',
+  'taskcreate',
+  'taskupdate',
+  'tasklist'
 ])
 
 const QUESTION_TOOL_NAMES = new Set([

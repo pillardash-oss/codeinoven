@@ -57,6 +57,19 @@ describe('permission policy', () => {
     expect(policy.evaluate({ permission: 'read', paths: ['internal-only.txt'] }).decision).toBe(
       'ask'
     )
+    expect(policy.evaluate({ permission: 'delete-file', path: 'build/output.txt' })).toMatchObject({
+      decision: 'ask',
+      approved: false,
+      risk: 'critical'
+    })
+    expect(policy.evaluate({ permission: 'Bash', commands: ['rm -rf build/cache'] })).toMatchObject(
+      {
+        decision: 'ask',
+        approved: false,
+        risk: 'critical'
+      }
+    )
+    expect(policy.evaluate({ permission: 'Bash', commands: ['bun run test'] }).approved).toBe(true)
   })
 
   it('allows /tmp/ paths in auto_review mode', () => {

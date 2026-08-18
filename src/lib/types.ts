@@ -1847,6 +1847,8 @@ export interface AgentQuestionRequest {
   sessionId: string
   questions: AgentQuestion[]
   tool?: { messageID: string; callID: string }
+  /** Provider transport details needed to answer the blocked native request. */
+  metadata?: Record<string, unknown>
 }
 
 /** Authoritative pending request metadata owned by the main process. */
@@ -2184,6 +2186,7 @@ export type AgentEvent =
       requestId: string
       questions: AgentQuestion[]
       tool?: { messageID: string; callID: string }
+      metadata?: Record<string, unknown>
     }
   | {
       type: 'question.updated'

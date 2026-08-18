@@ -122,6 +122,31 @@ describe('CodexDriver', () => {
       })
     )
     sharedChild.emitPayload({
+      id: 'permission-1',
+      method: 'item/commandExecution/requestApproval',
+      params: {
+        threadId: 'native-1',
+        turnId: 'turn-1',
+        command: 'rm -rf build/cache'
+      }
+    })
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: 'permission.asked',
+        sessionId,
+        permission: expect.objectContaining({
+          id: 'permission-1',
+          permission: 'command',
+          metadata: expect.objectContaining({ command: 'rm -rf build/cache' })
+        })
+      })
+    )
+    await driver.replyPermission('/project', 'permission-1', 'once', undefined, sessionId)
+    expect(sharedChild.requests()).toContainEqual({
+      id: 'permission-1',
+      result: { decision: 'accept' }
+    })
+    sharedChild.emitPayload({
       id: 'question-1',
       method: 'item/tool/requestUserInput',
       params: {

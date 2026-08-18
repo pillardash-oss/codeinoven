@@ -1,5 +1,11 @@
 import type { AgentMessage, AgentPart } from '$shared/types'
-import { isTodoToolName, parseRecord, recordValue, firstString } from '$shared/agent-interactions'
+import {
+  firstString,
+  isTodoToolName,
+  normalizeInteractionName,
+  parseRecord,
+  recordValue
+} from '$shared/agent-interactions'
 
 export type AgentTodoStatus = 'pending' | 'in_progress' | 'completed'
 
@@ -35,18 +41,18 @@ export function latestAgentTodo(messages: AgentMessage[]): AgentTodoSnapshot | n
     .some((message) => message.role === 'assistant')
   if (!hasAssistantMessage) return null
 
-  let latestItems: AgentTodoItem[] | null = null
+  const tasks = new Map<string, AgentTodoItem>()
   for (let index = turnStartIndex; index < messages.length; index++) {
     const message = messages[index]
     if (message?.role !== 'assistant') continue
     for (const part of message.parts) {
       if (!isTodoToolPart(part)) continue
-      const items = parseTodoItems(part.state.input, part.state.output)
-      if (items.length > 0) latestItems = items
+      applyTodoPart(tasks, part)
     }
   }
 
-  if (!latestItems || latestItems.every((item) => item.status === 'completed')) {
+  const latestItems = [...tasks.values()]
+  if (latestItems.length === 0 || latestItems.every((item) => item.status === 'completed')) {
     return null
   }
 
@@ -54,6 +60,71 @@ export function latestAgentTodo(messages: AgentMessage[]): AgentTodoSnapshot | n
     items: latestItems,
     signature: latestItems.map((item) => `${item.id}:${item.status}:${item.label}`).join('|')
   }
+}
+
+function applyTodoPart(tasks: Map<string, AgentTodoItem>, part: ToolPart): void {
+  const tool = normalizeInteractionName(part.tool)
+  if (tool.endsWith('taskcreate')) {
+    applyTaskCreate(tasks, part)
+    return
+  }
+  if (tool.endsWith('taskupdate')) {
+    applyTaskUpdate(tasks, part.state.input)
+    return
+  }
+  if (tool.endsWith('tasklist')) {
+    const items = part.state.output ? parseTodoItems({}, part.state.output) : []
+    if (items.length > 0) replaceTasks(tasks, items)
+    return
+  }
+  const items = parseTodoItems(part.state.input, part.state.output)
+  if (items.length > 0) replaceTasks(tasks, items)
+}
+
+function applyTaskCreate(tasks: Map<string, AgentTodoItem>, part: ToolPart): void {
+  const input = part.state.input
+  const result = parseRecord(part.state.output)
+  const taskResult = recordValue(result?.['task'])
+  const id =
+    firstString(taskResult?.['id'], result?.['id'], input['taskId'], input['task_id']) ??
+    part.callID
+  const label = firstString(
+    taskResult?.['subject'],
+    input['subject'],
+    input['activeForm'],
+    input['description']
+  )
+  if (!label) return
+  tasks.delete(part.callID)
+  tasks.set(id, { id, label, status: normalizeStatus(input) })
+}
+
+function applyTaskUpdate(tasks: Map<string, AgentTodoItem>, input: Record<string, unknown>): void {
+  const id = firstString(input['taskId'], input['task_id'], input['id'])
+  if (!id) return
+  const rawStatus = firstString(input['status'], input['state'])?.toLowerCase()
+  if (rawStatus === 'deleted') {
+    tasks.delete(id)
+    return
+  }
+  const existing = tasks.get(id)
+  const label = firstString(
+    input['subject'],
+    input['activeForm'],
+    input['description'],
+    existing?.label
+  )
+  if (!label) return
+  tasks.set(id, {
+    id,
+    label,
+    status: rawStatus ? normalizeStatus(input) : (existing?.status ?? 'pending')
+  })
+}
+
+function replaceTasks(tasks: Map<string, AgentTodoItem>, items: AgentTodoItem[]): void {
+  tasks.clear()
+  for (const item of items) tasks.set(item.id, item)
 }
 
 function parseTodoItems(input: Record<string, unknown>, output?: string): AgentTodoItem[] {

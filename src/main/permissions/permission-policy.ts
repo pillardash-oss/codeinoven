@@ -8,6 +8,7 @@ export interface PermissionRequest {
   permission: string
   path?: string
   paths?: readonly string[]
+  commands?: readonly string[]
 }
 
 export interface PermissionScope {
@@ -85,6 +86,14 @@ const HIGH_RISK_TERMS = [
   'deploy',
   'config'
 ]
+const DESTRUCTIVE_TERMS = ['delete', 'remove', 'destroy', 'erase', 'wipe']
+const DESTRUCTIVE_COMMAND_PATTERNS = [
+  /(?:^|[;&|]\s*)rm\s+(?=[^\n]*(?:-[a-zA-Z]*[rR][a-zA-Z]*|--recursive)(?:\s|$))/u,
+  /(?:^|[;&|]\s*)find\s+[^\n]+\s-delete(?:\s|$)/u,
+  /(?:^|[;&|]\s*)git\s+clean\s+(?=[^\n]*-[a-zA-Z]*f)(?=[^\n]*-[a-zA-Z]*d)/u,
+  /(?:^|[;&|]\s*)Remove-Item\b[^\n]*\s-Recurse\b/iu,
+  /(?:^|[;&|]\s*)(?:rmdir|rd|del)\b[^\n]*\s\/(?:s|S)\b/u
+]
 const DEFAULT_PROTECTED_PATTERNS = [
   '.git',
   '.env',
@@ -159,7 +168,7 @@ export class PermissionPolicy {
     }
 
     if (this.options.mode === 'auto_review') {
-      return this.evaluateAutoReview(permission, risk, paths, scope)
+      return this.evaluateAutoReview(permission, risk, paths, request.commands ?? [], scope)
     }
 
     return this.evaluateFullAccess(permission, risk, paths, scope)
@@ -169,8 +178,27 @@ export class PermissionPolicy {
     permission: string,
     risk: PermissionRisk,
     paths: readonly string[],
+    commands: readonly string[],
     scope: PermissionScope
   ): PermissionDecisionResult {
+    const destructiveReason = this.getDestructiveReason(permission)
+    if (destructiveReason) {
+      return this.createDecision('ask', false, destructiveReason, risk, scope)
+    }
+
+    const destructiveCommand = commands.find((command) =>
+      DESTRUCTIVE_COMMAND_PATTERNS.some((pattern) => pattern.test(command))
+    )
+    if (destructiveCommand) {
+      return this.createDecision(
+        'ask',
+        false,
+        `Recursive or destructive command requires explicit approval: ${destructiveCommand}`,
+        'critical',
+        scope
+      )
+    }
+
     const pathReason = this.getAutoReviewPathReason(paths)
     if (pathReason) {
       return this.createDecision('ask', false, pathReason, risk, scope)
@@ -183,6 +211,13 @@ export class PermissionPolicy {
       risk,
       scope
     )
+  }
+
+  private getDestructiveReason(permission: string): string | undefined {
+    const terms = normalizePermissionName(permission).split('-').filter(Boolean)
+    return terms.some((term) => DESTRUCTIVE_TERMS.includes(term))
+      ? `Destructive permission requires explicit approval: ${permission}`
+      : undefined
   }
 
   private evaluateFullAccess(
