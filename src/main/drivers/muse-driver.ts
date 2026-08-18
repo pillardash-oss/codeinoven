@@ -13,6 +13,7 @@ import type {
   ThinkingLevel,
   ThinkingPreset
 } from '../../lib/types'
+import { THINKING_LEVEL_ORDER } from '../../lib/thinking-presets'
 import {
   isQuestionToolName,
   isTodoToolName,
@@ -72,60 +73,100 @@ const MUSE_EXPORT_TIMEOUT_MS = 15_000
 /** Provider id under which every Muse-cloud model is catalogued. */
 const MUSE_PROVIDER_ID = 'meta'
 
-/** Reasoning-effort presets supported by Muse's headless `--reasoning-effort` option. */
-const MUSE_THINKING_PRESETS: ThinkingPreset[] = [
-  { id: 'minimal', label: 'Minimal', description: 'Minimum reasoning effort' },
-  { id: 'low', label: 'Low', description: 'Low reasoning effort' },
-  { id: 'medium', label: 'Medium', description: 'Moderate reasoning effort' },
-  { id: 'high', label: 'High', description: 'High reasoning effort' },
-  { id: 'xhigh', label: 'Extra high', description: 'Extra-high reasoning effort' },
-  { id: 'ultra', label: 'Ultra', description: 'Ultra reasoning effort' }
-]
+interface MuseCliCapabilities {
+  reasoningEfforts: ThinkingLevel[]
+  thinkingPresets: ThinkingPreset[]
+  attachments: boolean
+}
 
-/** Map CodeInOven's thinking levels onto Muse's supported reasoning-effort values. */
-const MUSE_REASONING_EFFORT: Record<ThinkingLevel, string> = {
-  minimal: 'minimal',
-  low: 'low',
-  medium: 'medium',
-  high: 'high',
-  xhigh: 'xhigh',
-  max: 'ultra',
-  ultra: 'ultra'
+let museCliCapabilitiesProbe: Promise<MuseCliCapabilities> | undefined
+
+function thinkingPresetLabel(effort: ThinkingLevel): string {
+  if (effort === 'xhigh') return 'Extra high'
+  return `${effort.charAt(0).toUpperCase()}${effort.slice(1)}`
+}
+
+/** Parse the installed Muse CLI's advertised headless capability surface. */
+function parseMuseCliCapabilities(help: string): MuseCliCapabilities {
+  const effortLine = help.match(/Meta reasoning effort:\s*([^\n]+)/iu)?.[1] ?? ''
+  const supportedThinkingLevels = new Set<ThinkingLevel>(THINKING_LEVEL_ORDER)
+  const reasoningEfforts = effortLine
+    .split('|')
+    .map((value) => value.trim())
+    .filter((value): value is ThinkingLevel => supportedThinkingLevels.has(value as ThinkingLevel))
+  return {
+    reasoningEfforts,
+    thinkingPresets: reasoningEfforts.map((effort) => ({
+      id: effort,
+      label: thinkingPresetLabel(effort)
+    })),
+    attachments: /^\s*--image\s+<PATH>/mu.test(help)
+  }
+}
+
+/** Probe once per app process; a failed probe is retryable instead of becoming stale state. */
+async function readMuseCliCapabilities(): Promise<MuseCliCapabilities> {
+  if (!museCliCapabilitiesProbe) {
+    museCliCapabilitiesProbe = runMuse(['exec', '--help'], MUSE_PROBE_TIMEOUT_MS)
+      .then((result) => {
+        if (!result.succeeded) {
+          throw new Error(result.stderr.trim() || result.stdout.trim() || 'Muse help probe failed')
+        }
+        return parseMuseCliCapabilities(`${result.stdout}\n${result.stderr}`)
+      })
+      .catch((error: unknown) => {
+        museCliCapabilitiesProbe = undefined
+        throw error
+      })
+  }
+  return museCliCapabilitiesProbe
+}
+
+function museModel(
+  id: string,
+  providerId: string,
+  name: string,
+  capabilities: MuseCliCapabilities,
+  contextWindow?: number
+): ProviderModel {
+  return {
+    id,
+    providerId,
+    name,
+    reasoning: capabilities.reasoningEfforts.length > 0,
+    ...(capabilities.thinkingPresets.length > 0
+      ? { thinkingPresets: capabilities.thinkingPresets }
+      : {}),
+    attachment: capabilities.attachments,
+    toolcall: true,
+    ...(contextWindow === undefined ? {} : { contextWindow })
+  }
 }
 
 /**
- * Static fallback catalog for the Meta provider. Muse exposes no documented
- * model-list subcommand, so use the CLI's documented default selection rather
- * than fabricating an account-tier model id. A successful run can replace this
- * placeholder with the account's local model catalog.
+ * Fallback catalog for the Meta provider. Muse exposes no model-list
+ * subcommand, so use its default selection without fabricating an account-tier
+ * model id. Capabilities still come from the installed CLI probe.
  */
-const MUSE_FALLBACK_CATALOG: ProviderCatalog[] = [
-  {
-    id: MUSE_PROVIDER_ID,
-    name: 'Meta',
-    harnessId: 'muse',
-    models: [
-      {
-        id: 'default',
-        providerId: MUSE_PROVIDER_ID,
-        name: 'Muse Spark 1.2',
-        reasoning: true,
-        thinkingPresets: MUSE_THINKING_PRESETS,
-        attachment: true,
-        toolcall: true
-      }
-    ]
-  }
-]
+function museFallbackCatalog(capabilities: MuseCliCapabilities): ProviderCatalog[] {
+  return [
+    {
+      id: MUSE_PROVIDER_ID,
+      name: 'Meta',
+      harnessId: 'muse',
+      models: [museModel('default', MUSE_PROVIDER_ID, 'Muse default', capabilities)]
+    }
+  ]
+}
 
 /**
  * Muse caches the provider's model catalog locally at
  * `~/.local/share/muse/model-catalog/*.json`, keyed by provider/profile. Read it
  * so the picker reflects the account's real models (id, display label, context
- * limit) instead of the static fallback. Returns the static fallback when the
- * cache is missing or unreadable (e.g. before the first logged-in run).
+ * limit) instead of the default placeholder. Returns no discovered providers
+ * when the cache is missing or unreadable (e.g. before the first logged-in run).
  */
-async function readMuseModelCatalog(): Promise<ProviderCatalog[]> {
+async function readMuseModelCatalog(capabilities: MuseCliCapabilities): Promise<ProviderCatalog[]> {
   const directory = join(homedir(), '.local', 'share', 'muse', 'model-catalog')
   let files: string[]
   try {
@@ -165,16 +206,13 @@ async function readMuseModelCatalog(): Promise<ProviderCatalog[]> {
       if (!modelId) continue
       const contextLimit = numberValue(row['context_limit'])
       catalogRows.push({
-        model: {
-          id: modelId,
+        model: museModel(
+          modelId,
           providerId,
-          name: stringValue(row['display_label']) ?? modelId,
-          reasoning: true,
-          thinkingPresets: MUSE_THINKING_PRESETS,
-          attachment: true,
-          toolcall: true,
-          ...(contextLimit === undefined ? {} : { contextWindow: contextLimit })
-        },
+          stringValue(row['display_label']) ?? modelId,
+          capabilities,
+          contextLimit
+        ),
         current: row['is_current'] === true,
         default: row['is_default'] === true,
         order: numberValue(row['display_order']) ?? 0
@@ -901,12 +939,14 @@ export class MuseDriver extends PersistentCliDriver {
   }
 
   async listProviders(): Promise<ProviderCatalog[]> {
-    const discovered = await readMuseModelCatalog()
-    return discovered.length > 0 ? discovered : MUSE_FALLBACK_CATALOG
+    const capabilities = await readMuseCliCapabilities()
+    const discovered = await readMuseModelCatalog(capabilities)
+    return discovered.length > 0 ? discovered : museFallbackCatalog(capabilities)
   }
 
   async generateTitle(projectPath: string, options: GenerateTitleOptions): Promise<string | null> {
-    const model = MUSE_FALLBACK_CATALOG[0]?.models[0]
+    const providers = await this.listProviders()
+    const model = providers[0]?.models[0]
     return this.generateTitleWithCandidates(
       projectPath,
       options,
@@ -933,7 +973,22 @@ export class MuseDriver extends PersistentCliDriver {
     if (options.settings.modelId && options.settings.modelId !== 'default') {
       args.push('--model', options.settings.modelId)
     }
-    args.push('--reasoning-effort', MUSE_REASONING_EFFORT[options.settings.thinkingLevel])
+    const cliCapabilities = await readMuseCliCapabilities()
+    const requestedThinkingIndex = THINKING_LEVEL_ORDER.indexOf(options.settings.thinkingLevel)
+    const reasoningEffort = cliCapabilities.reasoningEfforts.reduce<ThinkingLevel | undefined>(
+      (closest, candidate) => {
+        if (!closest) return candidate
+        const candidateDistance = Math.abs(
+          THINKING_LEVEL_ORDER.indexOf(candidate) - requestedThinkingIndex
+        )
+        const closestDistance = Math.abs(
+          THINKING_LEVEL_ORDER.indexOf(closest) - requestedThinkingIndex
+        )
+        return candidateDistance <= closestDistance ? candidate : closest
+      },
+      undefined
+    )
+    if (reasoningEffort) args.push('--reasoning-effort', reasoningEffort)
 
     if (options.readOnly) {
       // Inspection chats must not mutate the workspace.
@@ -946,6 +1001,9 @@ export class MuseDriver extends PersistentCliDriver {
     const attachmentReferences: string[] = []
     for (const attachment of options.attachments) {
       if (attachment.mime.toLocaleLowerCase().startsWith('image/')) {
+        if (!cliCapabilities.attachments) {
+          throw new Error('The installed Muse Code CLI does not advertise image attachments')
+        }
         const target = await attachmentTarget(attachment)
         if (/^(?:data:|https?:\/\/)/u.test(target)) {
           throw new Error(
