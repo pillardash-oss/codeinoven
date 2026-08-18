@@ -148,29 +148,39 @@ async function sessionFromRequest(request: Request): Promise<AuthenticatedSessio
   const credential =
     request.headers.get('authorization') ?? request.headers.get('cookie') ?? account.id
   const now = Date.now()
-  const session: AuthenticatedSession = {
-    id: `convex:${tokenHash(credential)}`,
-    userId: account.id,
-    expiresAt: now + CONVEX_SESSION_TTL_MS
-  }
+  const sessionId = `convex:${tokenHash(credential)}`
   const identitySnapshot = JSON.stringify([
     account.id,
     account.email,
     account.displayName,
     account.image
   ])
-  const persisted = persistedSessions.get(session.id)
+  const persisted = persistedSessions.get(sessionId)
+  let userId = database.resolveOAuthUserId(account.id, account.email)
   if (
     !persisted ||
     persisted.identity !== identitySnapshot ||
-    now - persisted.persistedAt >= SESSION_PERSIST_INTERVAL_MS
+    now - persisted.persistedAt >= SESSION_PERSIST_INTERVAL_MS ||
+    !userId
   ) {
-    database.upsertOAuthUser({
+    userId = database.upsertOAuthUser({
       id: account.id,
       email: account.email,
       displayName: account.displayName,
       image: account.image
     })
+  }
+  if (!userId) return null
+  const session: AuthenticatedSession = {
+    id: sessionId,
+    userId,
+    expiresAt: now + CONVEX_SESSION_TTL_MS
+  }
+  if (
+    !persisted ||
+    persisted.identity !== identitySnapshot ||
+    now - persisted.persistedAt >= SESSION_PERSIST_INTERVAL_MS
+  ) {
     database.rememberOAuthSession(session)
     if (persistedSessions.size >= 10_000) persistedSessions.clear()
     persistedSessions.set(session.id, { identity: identitySnapshot, persistedAt: now })
@@ -256,20 +266,19 @@ async function handleEnrollmentRequestInner(request: Request): Promise<Response>
   const legacyDesktop = presentedHash ? database.findDesktopByTokenHash(presentedHash) : null
   const existing = headerDesktop ?? legacyDesktop
   const accountIdentity = presentedToken ? await accountIdentityFromRequest(request) : null
-  const accountUserId = accountIdentity?.id ?? null
+  const accountUserId = accountIdentity
+    ? database.upsertOAuthUser({
+        id: accountIdentity.id,
+        email: accountIdentity.email,
+        displayName: accountIdentity.displayName,
+        image: accountIdentity.image
+      })
+    : null
   if ((!existing && !accountUserId) || (desktopToken && !accountUserId)) {
     return json({ error: 'unauthorized' }, 401)
   }
   if (existing?.user_id && accountUserId && existing.user_id !== accountUserId) {
     return json({ error: 'enrollment-conflict' }, 403)
-  }
-  if (accountIdentity) {
-    database.upsertOAuthUser({
-      id: accountIdentity.id,
-      email: accountIdentity.email,
-      displayName: accountIdentity.displayName,
-      image: accountIdentity.image
-    })
   }
   const desktopId = existing?.id ?? crypto.randomUUID()
   const deviceToken = existing ? null : randomToken()

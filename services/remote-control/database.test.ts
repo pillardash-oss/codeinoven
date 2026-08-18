@@ -70,3 +70,32 @@ describe('desktop enrollment replacement', () => {
     database.close()
   })
 })
+
+describe('OAuth identity resolution', () => {
+  test('keeps one stable user id when the same email arrives under another provider id', () => {
+    const database = new RemoteControlDatabase(':memory:')
+    expect(
+      database.upsertOAuthUser({
+        id: 'original-user',
+        email: 'person@example.com',
+        displayName: 'Original Name',
+        image: null
+      })
+    ).toBe('original-user')
+
+    expect(
+      database.upsertOAuthUser({
+        id: 'new-provider-user',
+        email: 'person@example.com',
+        displayName: 'Current Name',
+        image: 'https://example.com/avatar.png'
+      })
+    ).toBe('original-user')
+    expect(database.resolveOAuthUserId('new-provider-user', 'person@example.com')).toBe(
+      'original-user'
+    )
+    expect(database.findUserById('new-provider-user')).toBeNull()
+    expect(database.findUserById('original-user')?.display_name).toBe('Current Name')
+    database.close()
+  })
+})
