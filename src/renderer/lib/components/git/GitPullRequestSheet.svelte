@@ -452,6 +452,16 @@
     }, 1500)
   }
 
+  /** PR copy is a direct chat task and must never enter an Engineering lifecycle. */
+  function composeThreadSettings(): ThreadSettings {
+    return {
+      ...composeSettings,
+      engineeringMode: false,
+      assignmentMode: false,
+      loopMode: false
+    }
+  }
+
   /** Kick off the compose agent (or recompose on the same thread). */
   async function runCompose(): Promise<void> {
     if (!originIdentity || !head || !base || composePhase === 'working') return
@@ -460,6 +470,7 @@
     try {
       const project = await invoke('project:get', projectId).catch(() => null)
       if (!project?.path) throw new Error('Could not resolve the project directory')
+      const settings = composeThreadSettings()
 
       if (!composeThreadId) {
         const thread = await invoke('thread:create', {
@@ -467,7 +478,7 @@
           providerId: composeSettings.harnessId,
           title: `Compose PR: ${head} → ${base}`,
           workingDirectory: project.path,
-          settings: { ...composeSettings }
+          settings
         }).catch(() => null)
         if (!thread) throw new Error('Could not create the compose thread')
         composeThreadId = thread.id
@@ -479,7 +490,7 @@
         await threadMessages.send(
           projectId,
           thread.id,
-          composeSettings,
+          settings,
           composePrompt(composeDirectory),
           [],
           undefined
@@ -489,7 +500,7 @@
         await threadMessages.send(
           projectId,
           composeThreadId,
-          composeSettings,
+          settings,
           recomposePrompt(composeDirectory),
           [],
           undefined

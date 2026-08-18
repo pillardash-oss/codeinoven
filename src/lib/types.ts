@@ -819,7 +819,7 @@ export interface ThreadSettings {
   /** Fast inference for this thread's turns; `fast` requests the harness fast tier. */
   inferenceMode?: InferenceMode
   permissionLevel: PermissionLevel
-  /** When true (default), the engineering spec/plan workflow is injected into prompts. */
+  /** When true, the engineering spec/plan workflow is injected into prompts. */
   engineeringMode: boolean
   /** Optional multi-agent planning workflow layered on Engineering mode. */
   assignmentMode?: boolean

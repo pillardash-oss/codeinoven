@@ -12,7 +12,7 @@ export const DEFAULT_SETTINGS: ThreadSettings = {
   thinkingLevel: 'medium',
   inferenceMode: 'normal',
   permissionLevel: 'auto_review',
-  engineeringMode: true,
+  engineeringMode: false,
   loopMode: false,
   fileSystemMode: false
 }
