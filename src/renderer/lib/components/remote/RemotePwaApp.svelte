@@ -11,7 +11,8 @@
     remoteSession.snapshot.route.kind === 'LAN_CONNECTED' ||
       remoteSession.snapshot.route.kind === 'RELAY_CONNECTED'
   )
-  let workspaceActive = $derived(connected || remoteSession.recovering)
+  let workspaceOpened = $state(false)
+  let workspaceActive = $derived(workspaceOpened && (connected || remoteSession.recovering))
 
   // The desktop shell applies the theme from its own root component, which the
   // phone never mounts. Without this the client is stuck in light mode.
@@ -34,8 +35,13 @@
   }
 
   function disconnectDesktop(): void {
+    workspaceOpened = false
     clearPreferredDesktop()
     remoteSession.disconnect()
+  }
+
+  function openWorkspace(): void {
+    if (connected) workspaceOpened = true
   }
 
   onMount(() => {
@@ -74,5 +80,5 @@
     </div>
   {/if}
 {:else}
-  <CloudRemoteAccess />
+  <CloudRemoteAccess onOpenWorkspace={openWorkspace} />
 {/if}

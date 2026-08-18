@@ -123,15 +123,18 @@ export class RemoteSessionStore {
         }
         if (record['type'] === 'remote:device:ok') {
           const assigned = record['device'] as { id?: unknown; authVersion?: unknown } | undefined
-          if (assigned && typeof assigned.id === 'string') {
-            void this.applyAssignedDevice(
-              assigned.id,
-              typeof assigned.authVersion === 'number' ? assigned.authVersion : undefined
-            )
-          }
           clearTimeout(timer)
           off()
-          resolve()
+          if (!assigned || typeof assigned.id !== 'string') {
+            resolve()
+            return
+          }
+          void this.applyAssignedDevice(
+            assigned.id,
+            typeof assigned.authVersion === 'number' ? assigned.authVersion : undefined
+          ).then(resolve, (error: unknown) => {
+            reject(error instanceof Error ? error : new Error(String(error)))
+          })
           return
         }
         if (record['type'] === 'remote:device:error') {

@@ -2,7 +2,9 @@
   import { AlertDialog, Dialog } from 'bits-ui'
   import {
     Laptop,
+    CheckCircle2,
     LogOut,
+    LoaderCircle,
     Pencil,
     Plus,
     RefreshCw,
@@ -40,6 +42,12 @@
 
   const PENDING_ENROLLMENT_CODE_KEY = 'codeinoven:pending-remote-enrollment'
   const DESKTOP_STATUS_REFRESH_MAX_DELAY_MS = 15_000
+
+  interface Props {
+    onOpenWorkspace: () => void
+  }
+
+  let { onOpenWorkspace }: Props = $props()
 
   function normalizeEnrollmentCode(value: string): string {
     const compact = value
@@ -113,6 +121,7 @@
   let claimFromLink = $state(enrollmentCodeFromLink.length > 0)
   let scannerOpen = $state(false)
   let connectingDesktopId = $state<string | null>(null)
+  let connectedDesktopId = $state<string | null>(null)
   let watchedDesktopId = $state<string | null>(null)
   let connectWhenDesktopOnline = $state(false)
   let activeSignInProvider = $state<CloudAuthProvider | null>(null)
@@ -124,6 +133,12 @@
   let automaticSignInStarted = false
   let automaticDesktopRestoreStarted = false
   let desktopStatusRefreshTimer: ReturnType<typeof setTimeout> | null = null
+  let sessionConnected = $derived(
+    remoteSession.snapshot.route.kind === 'LAN_CONNECTED' ||
+      remoteSession.snapshot.route.kind === 'RELAY_CONNECTED'
+  )
+  let finishingConnection = $derived(connectingDesktopId !== null && !sessionConnected)
+  let interactionsLocked = $derived(busy || finishingConnection)
 
   function readableError(error: unknown): string {
     if (!(error instanceof Error)) return 'The request could not be completed.'
@@ -349,7 +364,12 @@
 
   async function connectDesktop(desktopId: string): Promise<void> {
     if (busy) return
+    if (connectedDesktopId === desktopId && sessionConnected) {
+      onOpenWorkspace()
+      return
+    }
     busy = true
+    connectedDesktopId = null
     connectingDesktopId = desktopId
     savePreferredDesktop(desktopId)
     errorMessage = ''
@@ -380,7 +400,9 @@
           errorMessage = 'The desktop relay could not be reached.'
         }
       } else {
-        stopDesktopStatusRefresh()
+        connectedDesktopId = desktopId
+        stopDesktopStatusRefresh(false)
+        connectingDesktopId = null
       }
     } catch (error) {
       connectingDesktopId = null
@@ -441,7 +463,7 @@
   }
 
   async function signOut(): Promise<void> {
-    if (busy) return
+    if (interactionsLocked) return
     busy = true
     try {
       remoteSession.disconnect()
@@ -458,7 +480,11 @@
   onMount(() => {
     const stopSessionListener = remoteSession.onStateChange((snapshot) => {
       if (snapshot.route.kind === 'RELAY_CONNECTED' || snapshot.route.kind === 'LAN_CONNECTED') {
-        stopDesktopStatusRefresh()
+        connectedDesktopId = connectingDesktopId ?? loadPreferredDesktop()
+        stopDesktopStatusRefresh(false)
+        connectingDesktopId = null
+      } else if (connectedDesktopId) {
+        connectedDesktopId = null
       }
     })
     void restoreSession()
@@ -485,7 +511,7 @@
     <button
       class="mt-3 flex h-10 w-full cursor-pointer items-center justify-center gap-2 rounded-lg bg-primary px-4 text-sm font-semibold text-on-primary hover:bg-primary-hover disabled:opacity-50"
       type="button"
-      disabled={busy}
+      disabled={interactionsLocked}
       onclick={() => {
         claimError = ''
         scannerOpen = true
@@ -513,13 +539,14 @@
           claimError = ''
         }}
         maxlength="19"
+        disabled={interactionsLocked}
         required
       />
       <button
         class="h-10 rounded-lg bg-primary px-4 text-sm font-semibold text-on-primary hover:bg-primary-hover disabled:opacity-50"
         type="submit"
-        disabled={busy || claimCode.replaceAll('-', '').length !== 16}
-        >{busy ? 'Adding…' : 'Add'}</button
+        disabled={interactionsLocked || claimCode.replaceAll('-', '').length !== 16}
+        >{interactionsLocked ? 'Adding…' : 'Add'}</button
       >
     </div>
     {#if claimError}
@@ -581,6 +608,7 @@
 {:else}
   <main
     class="mx-auto flex h-dvh w-full max-w-md flex-col overflow-y-auto overscroll-contain bg-app p-6 pb-12 text-foreground"
+    aria-busy={finishingConnection}
   >
     <header class="mb-6 flex items-start gap-3">
       <div
@@ -606,7 +634,7 @@
             class="flex h-9 shrink-0 items-center gap-1.5 rounded-lg px-2.5 text-xs text-muted hover:bg-elevated hover:text-foreground"
             title="Sign out of remote access"
             aria-label="Sign out of remote access"
-            disabled={busy}
+            disabled={interactionsLocked}
             onclick={() => void signOut()}
           >
             <LogOut size={14} /> Sign out
@@ -624,7 +652,7 @@
             class="flex h-8 items-center gap-1.5 rounded-lg px-2 text-xs text-muted hover:bg-elevated hover:text-foreground"
             title="Refresh desktop status"
             aria-label="Refresh desktop status"
-            disabled={busy}
+            disabled={interactionsLocked}
             onclick={() => void refreshDesktops()}
           >
             <RefreshCw size={13} /> Refresh
@@ -636,7 +664,7 @@
             <button
               type="button"
               class="flex min-w-0 flex-1 items-center gap-3 rounded-lg p-1 text-left hover:bg-elevated disabled:opacity-60"
-              disabled={busy}
+              disabled={interactionsLocked}
               onclick={() => void connectDesktop(desktop.id)}
             >
               <div
@@ -646,28 +674,51 @@
               </div>
               <div class="min-w-0 flex-1">
                 <p class="truncate text-sm font-semibold">{desktop.name}</p>
-                <p class="truncate text-xs text-muted">{desktop.platform}</p>
+                <p class="truncate text-xs text-muted">
+                  {#if connectingDesktopId === desktop.id}
+                    Finishing connection…
+                  {:else if connectedDesktopId === desktop.id && sessionConnected}
+                    {desktop.platform} · Tap to open
+                  {:else if desktop.online}
+                    {desktop.platform} · Tap to join
+                  {:else}
+                    {desktop.platform} · Offline
+                  {/if}
+                </p>
               </div>
-              <span
-                class={desktop.online || connectingDesktopId === desktop.id
-                  ? 'rounded-full bg-primary/10 px-2 py-1 text-[10px] font-semibold text-primary'
-                  : 'rounded-full bg-raised px-2 py-1 text-[10px] font-semibold text-dimmed'}
-              >
-                {connectingDesktopId === desktop.id
-                  ? watchedDesktopId === desktop.id && connectWhenDesktopOnline
-                    ? 'Finishing setup…'
-                    : 'Connecting…'
-                  : desktop.online
-                    ? 'Connect'
-                    : 'Offline'}
-              </span>
+              {#if connectingDesktopId === desktop.id}
+                <span
+                  class="flex h-7 w-7 shrink-0 items-center justify-center text-primary"
+                  role="status"
+                  aria-label="Finishing connection"
+                >
+                  <LoaderCircle size={17} class="animate-spin" />
+                </span>
+              {:else if connectedDesktopId === desktop.id && sessionConnected}
+                <span
+                  class="flex h-7 w-7 shrink-0 items-center justify-center text-success"
+                  title="Connected"
+                  aria-label="Connected"
+                >
+                  <CheckCircle2 size={18} />
+                </span>
+              {:else if desktop.online}
+                <span
+                  class="flex h-7 w-7 shrink-0 items-center justify-center text-success"
+                  aria-label="Online"
+                >
+                  <span class="h-2 w-2 rounded-full bg-success"></span>
+                </span>
+              {:else}
+                <span class="shrink-0 text-[10px] font-semibold text-dimmed">Offline</span>
+              {/if}
             </button>
             <button
               type="button"
               class="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg text-muted hover:bg-elevated hover:text-foreground disabled:opacity-50"
               title={`Rename ${desktop.name}`}
               aria-label={`Rename ${desktop.name}`}
-              disabled={busy}
+              disabled={interactionsLocked}
               onclick={() => beginRename(desktop)}
             >
               <Pencil size={15} />
@@ -677,7 +728,7 @@
               class="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg text-muted hover:bg-danger/10 hover:text-danger disabled:opacity-50"
               title={`Remove ${desktop.name}`}
               aria-label={`Remove ${desktop.name}`}
-              disabled={busy}
+              disabled={interactionsLocked}
               onclick={() => (revokeCandidate = desktop)}
             >
               <Trash2 size={15} />
@@ -808,7 +859,7 @@
     </AlertDialog.Portal>
   </AlertDialog.Root>
 
-  {#if scannerOpen}
+  {#if scannerOpen && !interactionsLocked}
     <EnrollmentCodeScanner onScan={handleScannedEnrollment} onClose={() => (scannerOpen = false)} />
   {/if}
 {/if}
