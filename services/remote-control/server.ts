@@ -344,7 +344,7 @@ async function handleEnrollmentClaim(
   if (!withinRateLimit(request, `claim:${session.userId}`, 20)) {
     return json({ error: 'rate-limited' }, 429)
   }
-  let claimed: { desktopId: string } | null
+  let claimed: { desktopId: string; newlyClaimed: boolean } | null
   try {
     claimed = database.claimEnrollment({
       codeHash: tokenHash(rawCode),
@@ -359,7 +359,9 @@ async function handleEnrollmentClaim(
     return json({ error: 'enrollment-conflict' }, 409)
   }
   if (!claimed) return json({ error: 'invalid-enrollment-code' }, 400)
-  database.audit('desktop.claimed', session.userId, claimed.desktopId)
+  if (claimed.newlyClaimed) {
+    database.audit('desktop.claimed', session.userId, claimed.desktopId)
+  }
   return json({ desktopId: claimed.desktopId })
 }
 

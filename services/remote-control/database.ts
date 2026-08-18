@@ -401,21 +401,36 @@ export class RemoteControlDatabase {
     mobileDeviceId: string
     mobileName: string
     mobilePublicKey: string
-  }): { desktopId: string } | null {
+  }): { desktopId: string; newlyClaimed: boolean } | null {
     const claim = this.db.transaction((claimInput: typeof input) => {
       const now = Date.now()
       const enrollment = this.db
         .prepare(
-          `SELECT e.id, e.desktop_id, d.user_id
+          `SELECT e.id, e.desktop_id, e.claimed_at, e.mobile_device_id,
+                  e.mobile_public_key, d.user_id
            FROM enrollments e
            JOIN desktops d ON d.id = e.desktop_id
-           WHERE e.code_hash = ? AND e.expires_at > ? AND e.claimed_at IS NULL
-             AND d.revoked_at IS NULL`
+           WHERE e.code_hash = ? AND e.expires_at > ? AND d.revoked_at IS NULL`
         )
         .get(claimInput.codeHash, now) as
-        { id: string; desktop_id: string; user_id: string | null } | undefined
+        | {
+            id: string
+            desktop_id: string
+            claimed_at: number | null
+            mobile_device_id: string | null
+            mobile_public_key: string | null
+            user_id: string | null
+          }
+        | undefined
       if (!enrollment || (enrollment.user_id && enrollment.user_id !== claimInput.userId)) {
         return null
+      }
+
+      if (enrollment.claimed_at !== null) {
+        return enrollment.mobile_device_id === claimInput.mobileDeviceId &&
+          enrollment.mobile_public_key === claimInput.mobilePublicKey
+          ? { desktopId: enrollment.desktop_id, newlyClaimed: false }
+          : null
       }
 
       const existingDevice = this.findMobileDevice(claimInput.mobileDeviceId)
@@ -460,7 +475,7 @@ export class RemoteControlDatabase {
           now
         )
 
-      return { desktopId: enrollment.desktop_id }
+      return { desktopId: enrollment.desktop_id, newlyClaimed: true }
     })
 
     return claim.immediate(input)
