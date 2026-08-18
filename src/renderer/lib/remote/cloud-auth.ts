@@ -63,14 +63,28 @@ export async function completeCloudAuthCallback(): Promise<void> {
 }
 
 export async function currentCloudUser(): Promise<CloudUser> {
-  const result = await authClient.getSession()
-  if (result.error || !result.data?.user) throw new Error('unauthorized')
-  return {
-    id: result.data.user.id,
-    email: result.data.user.email,
-    displayName: result.data.user.name,
-    image: result.data.user.image ?? null
+  const retryDelays = [0, 300, 1_000, 2_500] as const
+  for (const delay of retryDelays) {
+    if (delay > 0) await new Promise((resolve) => setTimeout(resolve, delay))
+    try {
+      const result = await authClient.getSession()
+      if (result.data?.user) {
+        return {
+          id: result.data.user.id,
+          email: result.data.user.email,
+          displayName: result.data.user.name,
+          image: result.data.user.image ?? null
+        }
+      }
+      // A completed request with no user is an actual signed-out session. Only
+      // transport/server failures are retried while a suspended phone restores
+      // its network connection.
+      if (!result.error) throw new Error('unauthorized')
+    } catch (error) {
+      if (error instanceof Error && error.message === 'unauthorized') throw error
+    }
   }
+  throw new Error('auth-session-unavailable')
 }
 
 export async function signInWithCloudProvider(provider: CloudAuthProvider): Promise<void> {

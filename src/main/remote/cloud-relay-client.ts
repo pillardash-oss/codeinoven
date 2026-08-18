@@ -467,7 +467,19 @@ export class CloudRelayClient {
         this.sendDeviceOk()
         return
       }
-      if (requestedConnectionId && requestedConnectionId !== this.mobileConnectionId) {
+      if (requestedConnectionId && !this.mobileConnectionId) {
+        // The automatic startup challenge is deliberately emitted before the
+        // phone socket has identified itself. Tag that existing challenge with
+        // the first connection id instead of replacing the nonce while the
+        // phone may already be signing it.
+        this.mobileConnectionId = requestedConnectionId
+        if (this.boundDevice) {
+          this.sendDeviceOk()
+          return
+        }
+      } else if (requestedConnectionId && requestedConnectionId !== this.mobileConnectionId) {
+        // A genuinely different phone socket must authenticate against a new
+        // nonce and must never inherit the previous socket's device binding.
         this.mobileConnectionId = requestedConnectionId
         this.pendingDeviceChallenge = ''
       }

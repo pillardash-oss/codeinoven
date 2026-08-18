@@ -21,6 +21,11 @@
     type CloudUser
   } from '$lib/remote/cloud-api'
   import { remoteSession } from '$lib/remote/session-store.svelte'
+  import {
+    clearPreferredDesktop,
+    loadPreferredDesktop,
+    savePreferredDesktop
+  } from '$lib/remote/preferred-desktop'
 
   const PENDING_ENROLLMENT_CODE_KEY = 'codeinoven:pending-remote-enrollment'
   const CLAIM_STATUS_REFRESH_DELAYS_MS = [1_000, 2_000, 3_000, 5_000] as const
@@ -89,6 +94,7 @@
   let user = $state<CloudUser | null>(null)
   let desktops = $state<CloudDesktop[]>([])
   let loading = $state(true)
+  let sessionUnavailable = $state(false)
   let busy = $state(false)
   let errorMessage = $state('')
   let claimError = $state('')
@@ -99,6 +105,7 @@
   let activeSignInProvider = $state<CloudAuthProvider | null>(null)
   let revokeCandidate = $state<CloudDesktop | null>(null)
   let automaticSignInStarted = false
+  let automaticDesktopRestoreStarted = false
   let desktopStatusRefreshTimer: ReturnType<typeof setTimeout> | null = null
 
   function readableError(error: unknown): string {
@@ -115,6 +122,8 @@
       'google-sign-in-failed': 'Google sign-in could not be completed.',
       'apple-sign-in-failed': 'Apple sign-in could not be completed.',
       'oauth-session-failed': 'Sign-in completed, but the mobile session could not be established.',
+      'auth-session-unavailable':
+        'Your signed-in session could not be checked yet. Restore your connection and try again.',
       'invalid-enrollment-code': 'That desktop code is invalid or has expired.',
       'enrollment-conflict':
         'That desktop belongs to another account. Sign in with the same account as the desktop.',
@@ -129,15 +138,22 @@
 
   async function restoreSession(): Promise<void> {
     loading = true
+    sessionUnavailable = false
     const returningFromSignIn = hasCloudAuthCallback()
     try {
       await completeCloudAuthCallback()
       user = await currentCloudUser()
-      desktops = await listCloudDesktops()
+      try {
+        desktops = await listCloudDesktops()
+      } catch (error) {
+        desktops = []
+        errorMessage = readableError(error)
+      }
     } catch (error) {
       user = null
       desktops = []
-      if (returningFromSignIn) errorMessage = readableError(error)
+      sessionUnavailable = error instanceof Error && error.message === 'auth-session-unavailable'
+      if (returningFromSignIn || sessionUnavailable) errorMessage = readableError(error)
     } finally {
       loading = false
     }
@@ -146,6 +162,15 @@
       void beginAccountSignIn(signInProviderFromLink)
     } else if (user && claimFromLink) {
       void claimDesktopCode()
+    } else if (user) {
+      const preferredDesktopId = loadPreferredDesktop()
+      const preferredDesktop = desktops.find((desktop) => desktop.id === preferredDesktopId)
+      if (preferredDesktop?.online && !automaticDesktopRestoreStarted) {
+        automaticDesktopRestoreStarted = true
+        void connectDesktop(preferredDesktop.id)
+      } else if (preferredDesktopId && !preferredDesktop) {
+        clearPreferredDesktop()
+      }
     }
   }
 
@@ -304,6 +329,8 @@
           route.kind === 'DISCONNECTED' && route.reason === 'desktop-offline'
             ? 'That desktop is offline. Open CodeInOven and enable Remote mode.'
             : 'The desktop relay could not be reached.'
+      } else {
+        savePreferredDesktop(desktopId)
       }
     } catch (error) {
       errorMessage = readableError(error)
@@ -321,6 +348,7 @@
       remoteSession.disconnect()
       await revokeCloudDesktop(candidate.id)
       desktops = desktops.filter((desktop) => desktop.id !== candidate.id)
+      if (loadPreferredDesktop() === candidate.id) clearPreferredDesktop()
       if (connectingDesktopId === candidate.id) stopDesktopStatusRefresh()
       revokeCandidate = null
     } catch (error) {
@@ -336,6 +364,7 @@
     busy = true
     try {
       remoteSession.disconnect()
+      clearPreferredDesktop()
       await logoutCloudAccount()
       stopDesktopStatusRefresh()
       user = null
@@ -425,7 +454,16 @@
         </p>
       {/if}
 
-      {#if !loading}
+      {#if !loading && sessionUnavailable}
+        <button
+          class="mt-6 flex h-11 w-full items-center justify-center gap-2 rounded-lg bg-primary px-4 text-sm font-semibold text-on-primary hover:bg-primary-hover disabled:opacity-50"
+          type="button"
+          disabled={busy}
+          onclick={() => void restoreSession()}
+        >
+          <RefreshCw size={16} /> Retry session
+        </button>
+      {:else if !loading}
         <div class="mt-6 w-full space-y-2">
           <button
             class="flex h-11 w-full items-center justify-center gap-2 rounded-lg bg-primary px-4 text-sm font-semibold text-on-primary hover:bg-primary-hover disabled:opacity-50"

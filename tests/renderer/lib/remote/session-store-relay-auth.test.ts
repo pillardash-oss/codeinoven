@@ -215,4 +215,38 @@ describe('RemoteSessionStore — relay device auth gating', () => {
     expect(sentFrames.current.some((f) => f.includes('project:list'))).toBe(false)
     store.disconnect()
   })
+
+  it('preserves the workspace and reconnects when a suspended relay resumes', async () => {
+    const store = new RemoteSessionStore()
+    const firstConnection = store.connectAccountDesktop({
+      desktopId: 'desktop-1',
+      mobileDeviceId: 'mobile-1',
+      controlSecret: 'secret'
+    })
+    await waitForRelayClient(store)
+    message({ type: 'remote:device:challenge', nonce: 'challenge-1' })
+    await vi.waitFor(() => {
+      expect(sentFrames.current.some((frame) => frame.includes('challenge-1'))).toBe(true)
+    })
+    message({ type: 'remote:device:ok', device: { id: 'dev-1', authVersion: 1 } })
+    await firstConnection
+
+    store.suspend()
+    expect(store.recovering).toBe(true)
+    expect(store.snapshot.route.kind).toBe('RELAY_CONNECTED')
+
+    const resumed = store.resume()
+    await waitForRelayClient(store)
+    expect(store.recovering).toBe(true)
+    message({ type: 'remote:device:challenge', nonce: 'challenge-2' })
+    await vi.waitFor(() => {
+      expect(sentFrames.current.some((frame) => frame.includes('challenge-2'))).toBe(true)
+    })
+    message({ type: 'remote:device:ok', device: { id: 'dev-1', authVersion: 1 } })
+    await resumed
+
+    expect(store.recovering).toBe(false)
+    expect(store.snapshot.route.kind).toBe('RELAY_CONNECTED')
+    store.disconnect()
+  })
 })

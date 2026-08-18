@@ -742,6 +742,47 @@ describe('CloudRelayClient — relay device proof of possession (A-04)', () => {
     dispose()
   })
 
+  it('keeps the startup nonce when the first mobile connection id arrives', async () => {
+    const credentials = new DeviceCredentialService(makeRawDatabase())
+    const { harness, socket, dispose } = await makeRelayHarness(credentials)
+    const initialNonce = await challengeNonceOf(socket)
+    const bootstrap = await credentials.createPairingBootstrap()
+    const connectionId = 'first-mobile-socket'
+
+    // The desktop emits an untagged challenge as soon as its relay connects.
+    // The phone then identifies its socket while it may already be signing that
+    // nonce. Binding the first connection id must tag and resend the same nonce.
+    await receivedData(socket, {
+      type: 'remote:device:challenge-request',
+      connectionId
+    })
+    await vi.waitFor(async () => {
+      const challenges = (await readBodies(socket)).filter(
+        (body) => body.type === 'remote:device:challenge'
+      )
+      expect(challenges).toHaveLength(2)
+    })
+    const challenges = (await readBodies(socket)).filter(
+      (body) => body.type === 'remote:device:challenge'
+    )
+    expect(challenges[1]?.['nonce']).toBe(initialNonce)
+    expect(challenges[1]?.['connectionId']).toBe(connectionId)
+
+    const frame = await authFrame(
+      initialNonce,
+      { deviceId: null, authVersion: undefined },
+      bootstrap.value
+    )
+    frame['connectionId'] = connectionId
+    await receivedData(socket, frame)
+    await vi.waitFor(async () => {
+      const bodies = await readBodies(socket)
+      expect(bodies.some((body) => body.type === 'remote:device:ok')).toBe(true)
+    })
+    harness.client.close()
+    dispose()
+  })
+
   it('keeps the authenticated device bound when its delayed startup request arrives', async () => {
     const credentials = new DeviceCredentialService(makeRawDatabase())
     const { harness, socket, dispose } = await makeRelayHarness(credentials)

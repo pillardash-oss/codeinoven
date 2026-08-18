@@ -354,8 +354,12 @@ export const REMOTE_CHANNEL_AUTHORIZATION: Readonly<Record<string, RemoteChannel
   'thread:reorderScope': { scope: 'workspace.write', stepUp: 'none' },
   'scope:save': { scope: 'workspace.write', stepUp: 'none' },
 
-  // workspace.delete — default-No, always step-up
-  'thread:delete': { scope: 'workspace.delete', stepUp: 'always' },
+  // workspace.delete — explicitly scoped and confirmed in the mobile UI.
+  // Requiring a second desktop-local approval made a remote-only delete
+  // impossible: the phone request had already failed before approval and its
+  // retry received a different request id. The authenticated device scope plus
+  // the destructive-action confirmation remains the authorization boundary.
+  'thread:delete': { scope: 'workspace.delete', stepUp: 'none' },
 
   // config.* — workstation-level, always step-up
   'config:get': { scope: 'config.read', stepUp: 'always' },

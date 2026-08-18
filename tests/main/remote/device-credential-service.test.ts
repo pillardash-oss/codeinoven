@@ -79,11 +79,14 @@ describe('Remote channel authorization registry', () => {
     for (const channel of REMOTE_ALLOWED_CHANNELS) expect(registryChannels.has(channel)).toBe(true)
   })
 
-  it('default low-risk scope set covers the conversation + read channels', () => {
+  it('default remote scope set covers workspace actions and conversation channels', () => {
     for (const scope of DEFAULT_DEVICE_SCOPES) {
       expect(DEFAULT_DEVICE_SCOPES.includes(scope)).toBe(true)
     }
     expect(authorizationForChannel('project:list')?.scope).toBe('workspace.read')
+    expect(DEFAULT_DEVICE_SCOPES).toContain('workspace.write')
+    expect(DEFAULT_DEVICE_SCOPES).toContain('workspace.delete')
+    expect(authorizationForChannel('thread:delete')?.stepUp).toBe('none')
     expect(authorizationForChannel('git:push')?.scope).toBe('git.write')
     expect(authorizationForChannel('git:push')?.stepUp).toBe('always')
     expect(authorizationForChannel('checkpoint:rollbackPaths')?.scope).toBe('rollback')
@@ -169,6 +172,39 @@ describe('DeviceCredentialService — enrollment', () => {
     expect(outcome.device.revokedAt).toBeNull()
     // Distinct public-key fingerprint is derived from the key material.
     expect(outcome.device.publicKeyFingerprint.length).toBe(64)
+  })
+
+  it('upgrades the exact legacy read-only profile without invalidating the phone credential', async () => {
+    const db = makeTestDb()
+    const service = new DeviceCredentialService(db)
+    const bootstrap = await service.createPairingBootstrap()
+    const signing = await generateSigningKeyPair()
+    const agreement = await generateSigningKeyPair()
+    const transcript = 'legacy-scope-enrollment'
+    const outcome = await service.enrollDevice({
+      bootstrapValue: bootstrap.value,
+      name: 'Existing phone',
+      signingPublicJwk: signing.publicJwk,
+      agreementPublicJwk: agreement.publicJwk,
+      signingProof: await signTranscript(signing.privateJwk, transcript),
+      proofTranscript: transcript
+    })
+    expect(outcome.ok).toBe(true)
+    if (!outcome.ok || !outcome.device) return
+
+    service.updateScopes(outcome.device.deviceId, [
+      'workspace.read',
+      'conversation.read',
+      'conversation.control',
+      'workflow.read',
+      'git.read',
+      'memory.read'
+    ])
+    const legacyVersion = service.listDevices()[0]?.authVersion
+
+    const restored = new DeviceCredentialService(db).listDevices()[0]
+    expect(restored?.authVersion).toBe(legacyVersion)
+    expect(restored?.scopes).toEqual([...DEFAULT_DEVICE_SCOPES].sort())
   })
 
   it('enrollment consumes the bootstrap (single-use) and rotates older ones', async () => {

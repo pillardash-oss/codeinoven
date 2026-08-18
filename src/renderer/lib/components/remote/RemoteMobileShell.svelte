@@ -82,6 +82,7 @@
   let renameError = $state('')
   let deleteTarget = $state<Thread | null>(null)
   let deleteBusy = $state(false)
+  let deleteError = $state('')
 
   async function confirmRename(): Promise<void> {
     const target = renameTarget
@@ -103,11 +104,12 @@
     const target = deleteTarget
     if (!target || deleteBusy) return
     deleteBusy = true
+    deleteError = ''
     try {
       await mobileState.handleDelete(target)
       deleteTarget = null
-    } catch {
-      deleteTarget = null
+    } catch (error) {
+      deleteError = error instanceof Error ? error.message : 'Could not delete the thread.'
     } finally {
       deleteBusy = false
     }
@@ -116,6 +118,11 @@
   function openRename(thread: Thread): void {
     renameValue = thread.title
     renameTarget = thread
+  }
+
+  function openDelete(thread: Thread): void {
+    deleteError = ''
+    deleteTarget = thread
   }
 
   // ─── Row action menus ───────────────────────────────────────────────────
@@ -141,7 +148,7 @@
         label: 'Delete',
         icon: Trash2,
         danger: true,
-        onClick: () => (deleteTarget = thread)
+        onClick: () => openDelete(thread)
       }
     ]
   }
@@ -228,6 +235,24 @@
   class="mobile-shell flex w-full flex-col overflow-hidden bg-app text-foreground"
   style="height: {shellHeight}"
 >
+  {#if deleteError}
+    <div
+      class="fixed left-1/2 top-[max(1rem,env(safe-area-inset-top))] z-60 flex w-[min(26rem,calc(100vw-2rem))] -translate-x-1/2 items-start gap-3 rounded-xl border border-danger/30 bg-surface px-4 py-3 text-sm text-danger shadow-xl"
+      role="alert"
+    >
+      <p class="min-w-0 flex-1 leading-5">{deleteError}</p>
+      <button
+        type="button"
+        class="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-danger hover:bg-danger/10"
+        title="Dismiss delete error"
+        aria-label="Dismiss delete error"
+        onclick={() => (deleteError = '')}
+      >
+        <X size={15} />
+      </button>
+    </div>
+  {/if}
+
   <!-- Header: menu · centred thread title · overflow menu -->
   <div class="shrink-0 border-b border-border bg-surface pt-[env(safe-area-inset-top)]">
     <header class="grid h-14 grid-cols-[2.75rem_1fr_2.75rem] items-center gap-1 px-2">
@@ -1158,7 +1183,7 @@
   <AlertDialog.Root
     open={deleteTarget !== null}
     onOpenChange={(open) => {
-      if (!open) deleteTarget = null
+      if (!open && !deleteBusy) deleteTarget = null
     }}
   >
     <AlertDialog.Portal>

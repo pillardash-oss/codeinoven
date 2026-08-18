@@ -47,6 +47,8 @@ interface AccountDesktopRoute {
 
 export class RemoteSessionStore {
   snapshot = $state<SessionSnapshot>(initialSession())
+  /** Keeps the mounted workspace visible while a suspended relay reconnects. */
+  recovering = $state(false)
 
   private secret = ''
   private lanTransport: LanTransport | null = null
@@ -276,11 +278,13 @@ export class RemoteSessionStore {
             void this.relayDeviceAuth
               .then(() => {
                 if (this.accountRelayClient !== client) return
+                this.recovering = false
                 this.dispatch({ type: 'relayConnected', relay: { url: window.location.origin } })
                 this.scheduleLanUpgrade()
               })
               .catch(() => {
                 if (this.accountRelayClient === client) {
+                  this.recovering = false
                   this.dispatch({ type: 'disconnected', reason: 'device-auth-failed' })
                 }
               })
@@ -297,11 +301,13 @@ export class RemoteSessionStore {
           return
         }
         if (event.kind === 'offline' && this.accountRelayClient === client) {
+          this.recovering = this.recovering || this.snapshot.route.kind === 'RELAY_CONNECTED'
           this.dispatch({ type: 'disconnected', reason: 'desktop-offline' })
           return
         }
         if (event.kind === 'disconnected' && this.accountRelayClient === client) {
           // The client keeps retrying on its own; surface the state only.
+          this.recovering = this.recovering || this.snapshot.route.kind === 'RELAY_CONNECTED'
           this.dispatch({ type: 'disconnected', reason: event.reason })
         }
       }
@@ -319,6 +325,7 @@ export class RemoteSessionStore {
         throw error
       }
       if (this.accountRelayClient !== client) return
+      this.recovering = false
       this.dispatch({ type: 'relayConnected', relay: { url: window.location.origin } })
       this.scheduleLanUpgrade()
       return
@@ -331,7 +338,11 @@ export class RemoteSessionStore {
   }
 
   /** Prefer the authenticated account LAN route, then use the account relay. */
-  async connectAccountDesktop(input: AccountDesktopRoute): Promise<void> {
+  async connectAccountDesktop(
+    input: AccountDesktopRoute,
+    preserveWorkspace = false
+  ): Promise<void> {
+    if (!preserveWorkspace) this.recovering = false
     this.accountRoute = input
     if (input.lanTarget) {
       try {
@@ -379,6 +390,7 @@ export class RemoteSessionStore {
     )
     if (accepted) {
       remoteLog.info(`Remote session connected over LAN to ${peer.host}:${peer.port}`)
+      this.recovering = false
       this.dispatch({ type: 'lanConnected', peer })
       this.dispatch({ type: 'peerReachableChanged', reachable: true })
       return
@@ -411,6 +423,7 @@ export class RemoteSessionStore {
           return
         }
         if (event.kind === 'disconnected' && this.lanTransport === session) {
+          this.recovering = this.snapshot.route.kind === 'LAN_CONNECTED'
           this.dispatch({ type: 'disconnected', reason: 'lan-lost' })
           this.lanTransport = null
           if (this.accountRoute) void this.connectCloud(this.accountRoute)
@@ -429,6 +442,7 @@ export class RemoteSessionStore {
   /** Tear down any open channel and return to DISCONNECTED. */
   disconnect(): void {
     this.accountRoute = null
+    this.recovering = false
     this.closeChannels()
     this.dispatch({ type: 'disconnected' })
   }
@@ -444,6 +458,29 @@ export class RemoteSessionStore {
     this.lanTransport = null
     this.accountRelayClient?.close()
     this.accountRelayClient = null
+  }
+
+  /**
+   * Re-establish a selected desktop after a phone browser resumes from
+   * suspension. Mobile operating systems may silently discard the WebSocket
+   * while the page is frozen, so waiting only for its close callback can leave
+   * the installed PWA stranded indefinitely.
+   */
+  async resume(): Promise<void> {
+    const route = this.accountRoute
+    if (!route || !this.recovering) return
+    await this.connectAccountDesktop(route, true)
+  }
+
+  /** Mark an account route for verification when the browser is foregrounded. */
+  suspend(): void {
+    if (!this.accountRoute) return
+    if (
+      this.snapshot.route.kind === 'LAN_CONNECTED' ||
+      this.snapshot.route.kind === 'RELAY_CONNECTED'
+    ) {
+      this.recovering = true
+    }
   }
 
   private scheduleLanUpgrade(): void {
