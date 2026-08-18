@@ -1332,6 +1332,13 @@ export class ChatEngine {
    */
   private projectIdleSince = new Map<string, number>()
   /**
+   * Project paths touched by harness operations that may allocate resources
+   * before a session exists. Read-only probes (for example the battery usage
+   * refresh) must remain visible to the idle reaper even when the user never
+   * sends a message and therefore never registers a session.
+   */
+  private projectResourcePaths = new Map<string, Set<string>>()
+  /**
    * Projects whose harness resources have already been released. They are not
    * released again until the project becomes active (a prompt, an event, or a
    * session re-registration) — otherwise the reaper would re-release every
@@ -3854,6 +3861,14 @@ export class ChatEngine {
     this.releasedProjects.delete(projectId)
   }
 
+  /** Record a project path before a driver call can lazily allocate resources. */
+  private trackProjectResourcePath(projectId: string, projectPath: string): void {
+    const paths = this.projectResourcePaths.get(projectId) ?? new Set<string>()
+    paths.add(projectPath)
+    this.projectResourcePaths.set(projectId, paths)
+    this.markProjectActive(projectId)
+  }
+
   /**
    * Release each harness's in-memory resources for projects that have been
    * fully idle (no working turns, no pending input, no in-flight work) for the
@@ -3878,8 +3893,12 @@ export class ChatEngine {
       protectedSessions.add(sessionId)
     }
 
-    // Group registered sessions by project and flag any project with live work.
+    // Seed projects from every driver operation, including probes that run
+    // before a session exists, then merge registered session activity over it.
     const projects = new Map<string, { projectPaths: Set<string>; active: boolean }>()
+    for (const [projectId, projectPaths] of this.projectResourcePaths) {
+      projects.set(projectId, { projectPaths: new Set(projectPaths), active: false })
+    }
     for (const [sessionId, info] of this.sessionRegistry) {
       const status = this.sessionStatuses.get(sessionId)?.state
       const active =
@@ -3907,6 +3926,7 @@ export class ChatEngine {
       }
       this.projectIdleSince.delete(projectId)
       this.releasedProjects.add(projectId)
+      this.projectResourcePaths.delete(projectId)
       Logger.info('Releasing idle project harness resources to free memory', {
         projectId,
         projectPaths: [...project.projectPaths]
@@ -12637,6 +12657,7 @@ export class ChatEngine {
         `Harness driver "${driverId}" is not available. Available: ${[...this.drivers.keys()].join(', ')}`
       )
     }
+    this.trackProjectResourcePath(projectId, projectPath)
 
     // Installation/version probes belong to the explicit Settings harness check.
     // Thread operations call the driver directly so a transient probe cannot
