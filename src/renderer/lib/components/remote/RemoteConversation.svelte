@@ -17,6 +17,8 @@
   import ChatComposer from '../chats/ChatComposer.svelte'
   import WorkingTrace from '../threads/WorkingTrace.svelte'
   import MarkdownView from '../markdown/MarkdownView.svelte'
+  import BottomSheet from '../ui/BottomSheet.svelte'
+  import type { SubagentContextTab } from '$lib/stores/context-sidebar.svelte'
   import type {
     AgentMessage,
     AgentPart,
@@ -276,6 +278,21 @@
       sendError = error instanceof Error ? error.message : 'The request could not be stopped.'
     }
   }
+
+  // ─── Subagent drill-in sheet ──────────────────────────────────────────
+  let openSubagentTab = $state<SubagentContextTab | null>(null)
+
+  function openSubagent(part: Extract<AgentPart, { type: 'subagent' }>): void {
+    openSubagentTab = {
+      id: part.id,
+      kind: 'subagent',
+      title: part.activity.description || part.activity.agent || 'Subagent',
+      projectId: thread.projectId,
+      threadId: thread.id,
+      sourcePartId: part.id,
+      activity: part.activity
+    }
+  }
 </script>
 
 <div class="flex h-full min-h-0 flex-col bg-app">
@@ -351,6 +368,7 @@
                     done={!isLatest || !busy}
                     projectId={thread.projectId}
                     threadId={thread.id}
+                    onOpenSubagent={openSubagent}
                   />
                 {/if}
                 {#if text}
@@ -448,3 +466,18 @@
     />
   </div>
 </div>
+
+{#if openSubagentTab}
+  {@const tab = openSubagentTab}
+  <BottomSheet
+    open
+    title={tab.title}
+    onClose={() => (openSubagentTab = null)}
+    maxHeight="max-h-[88dvh]"
+    fixedHeight
+  >
+    {#await import('../threads/SubagentSessionView.svelte') then { default: SubagentSessionView }}
+      <SubagentSessionView {tab} onOpenSubagent={openSubagent} />
+    {/await}
+  </BottomSheet>
+{/if}

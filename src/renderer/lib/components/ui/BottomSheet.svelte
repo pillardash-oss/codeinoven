@@ -41,7 +41,11 @@
 />
 
 {#if open}
-  <div class="fixed inset-0 z-40 cursor-pointer bg-black/50" role="presentation" onclick={onClose}></div>
+  <div
+    class="fixed inset-0 z-40 cursor-pointer bg-black/50"
+    role="presentation"
+    onclick={onClose}
+  ></div>
   <aside
     class="fixed right-0 bottom-0 left-0 z-50 flex {fixedHeight
       ? maxHeight.replace('max-h-', 'h-')
