@@ -8,7 +8,7 @@ import type {
 } from '$shared/types'
 import type { CloseConfirmationFile } from '$shared/ipc-contract'
 import { invoke } from '$lib/ipc.svelte'
-import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
+import { contextSidebarState, type FilesContextTab } from '$lib/stores/context-sidebar.svelte'
 import { clampFileExplorerWidth, fileExplorerStore } from '$lib/stores/file-explorer.svelte'
 import { gitState } from '$lib/stores/git.svelte'
 import { isImageMime, isPdfMime, mimeFromPath } from '$lib/mime'
@@ -435,6 +435,7 @@ class ProjectFilesWorkspace {
     preferredView: ProjectFileView = 'source',
     focusLine?: number
   ): Promise<void> {
+    if (this.focusOpenFileTab(projectId, path, focusLine)) return
     await this.openWorkingTab(projectId, path, preferredView, false, focusLine)
   }
 
@@ -443,13 +444,7 @@ class ProjectFilesWorkspace {
    *  (or opening it again in normal mode) pins it as a permanent tab. */
   async openFilePreview(projectId: string, path: string): Promise<void> {
     const state = this.ensureState(projectId)
-    const tabId = `working:${path}`
-    if (state.tabs.some((candidate) => candidate.id === tabId)) {
-      state.activeTabId = tabId
-      const threadId = contextSidebarState.threadIdForProject(projectId)
-      if (threadId) contextSidebarState.openProjectFile(projectId, threadId, tabId, path, true)
-      return
-    }
+    if (this.focusOpenFileTab(projectId, path)) return
     const previewTab = state.tabs.find(
       (candidate) => candidate.origin === 'working' && candidate.preview
     )
@@ -458,6 +453,39 @@ class ProjectFilesWorkspace {
       return
     }
     await this.openWorkingTab(projectId, path, 'source', true)
+  }
+
+  /** Focus an existing sidebar file tab by path before any caller creates a
+   *  working-file tab. This also reuses checkpoint tabs, while preferring the
+   *  currently active match and then the ordinary working-file tab. */
+  private focusOpenFileTab(projectId: string, path: string, focusLine?: number): boolean {
+    const matchingTabs = contextSidebarState.tabs.filter(
+      (tab): tab is FilesContextTab =>
+        tab.kind === 'files' &&
+        tab.projectId === projectId &&
+        tab.path === path &&
+        tab.fileTabId !== null
+    )
+    if (matchingTabs.length === 0) return false
+
+    const activeTab = contextSidebarState.activeTab
+    const target =
+      (activeTab?.kind === 'files' && matchingTabs.find((tab) => tab.id === activeTab.id)) ||
+      matchingTabs.find((tab) => tab.fileTabId === `working:${path}`) ||
+      matchingTabs.at(-1)
+    if (!target?.fileTabId) return false
+
+    const state = this.ensureState(projectId)
+    const fileTab = state.tabs.find((tab) => tab.id === target.fileTabId)
+    if (!fileTab) return false
+    state.activeTabId = fileTab.id
+    if (focusLine !== undefined && fileTab.origin === 'working') {
+      fileTab.view = 'source'
+      fileTab.focusLine = Math.max(1, Math.floor(focusLine))
+      fileTab.focusLineRequest += 1
+    }
+    contextSidebarState.focus(target.id)
+    return true
   }
 
   async openCheckpointFile(
