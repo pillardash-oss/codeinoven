@@ -99,6 +99,7 @@ interface CodexAppServerTurn {
   turnId?: string
   failure?: string
   summaryFallbackAttempted?: boolean
+  waitingForRetry?: boolean
   finished: boolean
 }
 
@@ -263,7 +264,7 @@ export class CodexDriver extends PersistentCliDriver {
     attachments: true,
     commands: false,
     providerCatalog: true,
-    sessionStatus: false,
+    sessionStatus: true,
     contextUsage: true,
     compaction: true,
     subagents: false,
@@ -826,6 +827,14 @@ export class CodexDriver extends PersistentCliDriver {
     }
     const active = this.activeTurnForNotification(params)
     if (!active) return
+    if (active.waitingForRetry && isCodexRetryRecoveryActivity(method)) {
+      active.waitingForRetry = false
+      this.emit({
+        type: 'session.status',
+        sessionId: active.session.id,
+        status: { state: 'working' }
+      })
+    }
     if (method === 'turn/started') {
       const turn = recordValue(params['turn'])
       active.turnId = stringValue(turn?.['id']) ?? active.turnId
@@ -893,7 +902,19 @@ export class CodexDriver extends PersistentCliDriver {
     }
     if (method === 'error') {
       const error = recordValue(params['error'])
-      active.failure = stringValue(error?.['message']) ?? 'Codex turn failed'
+      const message = stringValue(error?.['message']) ?? 'Codex turn failed'
+      if (params['willRetry'] === true) {
+        active.failure = undefined
+        active.waitingForRetry = true
+        this.emit({
+          type: 'session.status',
+          sessionId: active.session.id,
+          status: { state: 'waiting', issue: codexRetryIssue(error, message) }
+        })
+      } else {
+        active.waitingForRetry = false
+        active.failure = message
+      }
       return
     }
     if (method !== 'turn/completed') return
@@ -1690,6 +1711,77 @@ function isCodexPermissionRequest(method: string): boolean {
 
 function isCodexQuestionRequest(method: string): boolean {
   return method === 'item/tool/requestUserInput'
+}
+
+function isCodexRetryRecoveryActivity(method: string): boolean {
+  return (
+    method === 'turn/started' ||
+    method === 'item/agentMessage/delta' ||
+    method === 'item/reasoning/textDelta' ||
+    method === 'item/reasoning/summaryTextDelta' ||
+    method === 'item/started' ||
+    method === 'item/completed' ||
+    method === 'turn/plan/updated'
+  )
+}
+
+function codexRetryIssue(
+  error: Record<string, unknown> | null,
+  rawError: string
+): AgentProviderIssue {
+  const errorInfo = error?.['codexErrorInfo']
+  const statusCode = codexErrorStatusCode(errorInfo)
+  const kind = codexRetryIssueKind(errorInfo, rawError, statusCode)
+  const messages: Partial<Record<AgentProviderIssue['kind'], string>> = {
+    network: 'The Codex connection was interrupted. Codex is retrying automatically.',
+    provider_unavailable: 'Codex is temporarily unavailable and is retrying automatically.',
+    rate_limit: 'Codex is waiting before retrying the provider request.',
+    quota: 'Codex is waiting before retrying the provider request.'
+  }
+  return {
+    kind,
+    message: messages[kind] ?? 'Codex is retrying the provider request.',
+    rawError,
+    harnessId: 'codex',
+    retryable: true,
+    ...(statusCode === undefined ? {} : { statusCode })
+  }
+}
+
+function codexRetryIssueKind(
+  errorInfo: unknown,
+  message: string,
+  statusCode: number | undefined
+): AgentProviderIssue['kind'] {
+  if (typeof errorInfo === 'string') {
+    if (errorInfo === 'usageLimitExceeded') return 'quota'
+    if (errorInfo === 'serverOverloaded' || errorInfo === 'internalServerError') {
+      return 'provider_unavailable'
+    }
+    if (errorInfo === 'unauthorized') return 'authentication'
+  }
+  const classified = classifyProviderIssue(message, statusCode)
+  if (classified !== 'unknown' && classified !== 'network') return classified
+  const info = recordValue(errorInfo)
+  if (
+    info?.['httpConnectionFailed'] !== undefined ||
+    info?.['responseStreamConnectionFailed'] !== undefined ||
+    info?.['responseStreamDisconnected'] !== undefined ||
+    info?.['responseTooManyFailedAttempts'] !== undefined
+  ) {
+    return 'network'
+  }
+  return classified
+}
+
+function codexErrorStatusCode(errorInfo: unknown): number | undefined {
+  const info = recordValue(errorInfo)
+  if (!info) return undefined
+  for (const value of Object.values(info)) {
+    const statusCode = numberValue(recordValue(value)?.['httpStatusCode'])
+    if (statusCode !== undefined) return statusCode
+  }
+  return undefined
 }
 
 function codexQuestionIds(params: Record<string, unknown>): string[] {

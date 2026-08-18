@@ -156,6 +156,46 @@ describe('CodexDriver', () => {
       id: 'question-1',
       result: { answers: { scope: { answers: ['Current project'] } } }
     })
+    sharedChild.emitPayload({
+      method: 'error',
+      params: {
+        threadId: 'native-1',
+        turnId: 'turn-1',
+        willRetry: true,
+        error: {
+          message: 'The response stream disconnected.',
+          codexErrorInfo: { responseStreamDisconnected: { httpStatusCode: 502 } }
+        }
+      }
+    })
+    expect(events).toContainEqual({
+      type: 'session.status',
+      sessionId,
+      status: {
+        state: 'waiting',
+        issue: {
+          kind: 'network',
+          message: 'The Codex connection was interrupted. Codex is retrying automatically.',
+          rawError: 'The response stream disconnected.',
+          harnessId: 'codex',
+          retryable: true,
+          statusCode: 502
+        }
+      }
+    })
+    sharedChild.emitPayload({
+      method: 'item/started',
+      params: {
+        threadId: 'native-1',
+        turnId: 'turn-1',
+        item: { id: 'retry-command', type: 'commandExecution', command: 'bun test' }
+      }
+    })
+    expect(events).toContainEqual({
+      type: 'session.status',
+      sessionId,
+      status: { state: 'working' }
+    })
     await driver.steerPrompt('/project', {
       sessionId,
       text: 'focus on tests',
@@ -191,10 +231,35 @@ describe('CodexDriver', () => {
       params: { threadId: 'native-1', turn: { id: 'turn-1', status: 'completed' } }
     })
     sharedChild.emitPayload({
-      method: 'turn/completed',
-      params: { threadId: 'native-2', turn: { id: 'turn-2', status: 'completed' } }
+      method: 'error',
+      params: {
+        threadId: 'native-2',
+        turnId: 'turn-2',
+        willRetry: false,
+        error: {
+          message: 'Codex reached the response retry limit.',
+          codexErrorInfo: { responseTooManyFailedAttempts: { httpStatusCode: 502 } }
+        }
+      }
     })
-    await new Promise((resolve) => setTimeout(resolve, 0))
+    sharedChild.emitPayload({
+      method: 'turn/completed',
+      params: {
+        threadId: 'native-2',
+        turn: {
+          id: 'turn-2',
+          status: 'failed',
+          error: { message: 'Codex reached the response retry limit.' }
+        }
+      }
+    })
+    await vi.waitFor(() => {
+      expect(events).toContainEqual({
+        type: 'session.error',
+        sessionId: workerSessionId,
+        error: 'Codex reached the response retry limit.'
+      })
+    })
     await driver.sendPrompt('/project', {
       sessionId,
       settings: { ...settings, permissionLevel: 'full_access' },
