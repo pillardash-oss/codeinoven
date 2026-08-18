@@ -289,6 +289,14 @@
     await gitState.stage(projectId, allPaths)
   }
 
+  async function unstageAll(): Promise<void> {
+    const allPaths = [...new Set(staged.map((change) => change.path))].filter(
+      (path) => !(gitState.status?.conflicted ?? []).includes(path)
+    )
+    if (allPaths.length === 0) return
+    await gitState.unstage(projectId, allPaths)
+  }
+
   async function checkoutBranch(branch: string): Promise<void> {
     if (!branch || branch === status?.branch) return
     await gitState.checkout(projectId, branch)
@@ -1873,6 +1881,15 @@
                     onclick={() => void stageAll()}
                   >
                     Stage all
+                  </button>
+                {:else if staged.length > 0}
+                  <button
+                    type="button"
+                    class="shrink-0 rounded-md border border-danger/30 px-2 py-1 text-[10px] font-medium text-danger transition-colors hover:bg-danger/10 disabled:cursor-default disabled:opacity-40"
+                    disabled={gitState.isBusy('unstage')}
+                    onclick={() => void unstageAll()}
+                  >
+                    Unstage all
                   </button>
                 {/if}
                 {#if changes.length > 0 && selectedPathList.length > 0}
