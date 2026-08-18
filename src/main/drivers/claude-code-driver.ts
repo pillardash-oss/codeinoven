@@ -1597,6 +1597,8 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
       'stream-json',
       '--input-format',
       'stream-json',
+      '--permission-prompt-tool',
+      'stdio',
       '--verbose',
       '--include-partial-messages',
       '--thinking-display',

@@ -94,6 +94,8 @@ describe('ClaudeCodeDriver', () => {
         'stream-json',
         '--input-format',
         'stream-json',
+        '--permission-prompt-tool',
+        'stdio',
         '--verbose',
         '--include-partial-messages',
         '--model',
