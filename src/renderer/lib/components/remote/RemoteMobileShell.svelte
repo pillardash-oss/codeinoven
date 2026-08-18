@@ -7,6 +7,7 @@
     Check,
     ChevronDown,
     Download,
+    FolderKanban,
     GitBranch,
     History,
     Loader2,
@@ -19,6 +20,7 @@
     GitFork,
     Power,
     Share,
+    Timeline,
     Trash2,
     X
   } from '@lucide/svelte'
@@ -32,9 +34,9 @@
   import type { Thread } from '$shared/types'
 
   const SIDEBAR_MODES = [
-    { id: 'projects', label: 'Projects' },
-    { id: 'threads', label: 'Threads' },
-    { id: 'chats', label: 'Chats' }
+    { id: 'projects', label: 'Projects', icon: FolderKanban },
+    { id: 'threads', label: 'Threads', icon: Timeline },
+    { id: 'chats', label: 'Chats', icon: MessageSquare }
   ] as const
 
   interface Props {
@@ -208,6 +210,8 @@
       mobileNotifications.setOpenHandler(null)
     }
   })
+
+  let activeSidebarMode = $derived(SIDEBAR_MODES.find((m) => m.id === mobileState.sidebarMode))
 
   let showInstall = $derived(!pwaInstall.installed)
 
@@ -560,12 +564,12 @@
             aria-label="Switch sidebar view"
             title="Switch sidebar view"
           >
+            {#if activeSidebarMode}
+              {@const ActiveIcon = activeSidebarMode.icon}
+              <ActiveIcon size={16} class="shrink-0 text-muted" />
+            {/if}
             <span class="truncate text-[15px] font-semibold tracking-tight">
-              {mobileState.sidebarMode === 'projects'
-                ? 'Projects'
-                : mobileState.sidebarMode === 'threads'
-                  ? 'Threads'
-                  : 'Chats'}
+              {activeSidebarMode?.label ?? 'Projects'}
             </span>
             <ChevronDown size={15} class="shrink-0 text-dimmed" />
           </DropdownMenu.Trigger>
@@ -578,6 +582,7 @@
               class="z-50 w-48 overflow-hidden rounded-xl border border-border bg-surface p-1 shadow-xl"
             >
               {#each SIDEBAR_MODES as entry (entry.id)}
+                {@const Icon = entry.icon}
                 <DropdownMenu.Item
                   class="flex w-full cursor-pointer items-center gap-2 rounded-lg px-3 py-2.5 text-[14px] outline-none transition-colors hover:bg-elevated focus:bg-elevated {mobileState.sidebarMode ===
                   entry.id
@@ -585,6 +590,7 @@
                     : 'text-muted'}"
                   onSelect={() => (mobileState.sidebarMode = entry.id)}
                 >
+                  <Icon size={15} class="shrink-0 text-muted" />
                   <span class="flex-1 text-left">{entry.label}</span>
                   {#if mobileState.sidebarMode === entry.id}
                     <Check size={15} class="text-primary" />
