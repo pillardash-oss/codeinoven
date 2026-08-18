@@ -373,35 +373,30 @@ class ContextSidebarState {
     }
     const context = this.activeProjectContext
     if (!context) return
+    const terminalTabs = context.tabs.filter(
+      (tab): tab is TerminalContextTab => tab.kind === 'terminal'
+    )
+    const rememberedTerminalId = context.terminalActiveTabId ?? context.activeTabIds.terminal
+    const activeTerminalId =
+      rememberedTerminalId && terminalTabs.some((tab) => tab.id === rememberedTerminalId)
+        ? rememberedTerminalId
+        : (terminalTabs.at(-1)?.id ?? null)
+
+    this.notificationsVisible = false
     if (placement === 'bottom') {
       context.terminalDockOpen = true
-      const sidebarTabs = [
-        ...(this.activeProjectContext?.tabs ?? EMPTY_TABS),
-        ...(this.activeContext?.tabs ?? EMPTY_TABS)
-      ].filter((tab) => tab.kind !== 'terminal')
-      if (sidebarTabs.length === 0) {
-        // Nothing else lives in the sidebar — close it; only the dock stays.
-        context.visible = false
-      } else {
-        // Bring the remaining (last active non-terminal) tab into focus.
-        const activeKind = context.activeKind
-        const activeId = activeKind ? this.activeTabIdsForKind(activeKind)?.[activeKind] : undefined
-        const focusId =
-          activeKind && activeId && sidebarTabs.some((tab) => tab.id === activeId)
-            ? activeId
-            : (sidebarTabs.at(-1)?.id ?? null)
-        if (focusId) {
-          const tab = sidebarTabs.find((candidate) => candidate.id === focusId)
-          if (tab) {
-            context.activeKind = tab.kind
-            this.activeTabIdsFor(tab)[tab.kind] = tab.id
-          }
-        }
+      context.terminalActiveTabId = activeTerminalId
+      // Moving the terminal out of the sidebar also closes that region. The
+      // bottom dock is the only panel the placement action should reveal.
+      context.visible = false
+    } else {
+      // Terminals rejoin the sidebar as the active tool, rather than revealing
+      // whichever non-terminal panel happened to be active before docking.
+      if (activeTerminalId) {
+        context.activeKind = 'terminal'
+        context.activeTabIds.terminal = activeTerminalId
         context.visible = true
       }
-    } else {
-      // Terminals rejoin the sidebar — reveal it so the shell stays visible.
-      context.visible = true
     }
   }
 
