@@ -1608,7 +1608,7 @@ export function registerIpcHandlers(
       thread?.settings?.providerId && thread.settings.modelId
         ? modelKey(harnessId, thread.settings.providerId, thread.settings.modelId)
         : undefined,
-      safeProjectId === INBOX_PROJECT_ID ? 'chat' : 'project'
+      safeProjectId === INBOX_PROJECT_ID ? 'standalone-chat' : 'project-thread'
     )
   })
   ipcMain.handle('memory:getRaw', (_, projectId?: unknown, threadId?: unknown) =>

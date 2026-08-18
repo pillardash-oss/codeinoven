@@ -8,14 +8,14 @@ function assembler(): PromptAssembler {
 }
 
 describe('PromptAssembler application behavior', () => {
-  it('uses the application behavior layer for project turns without reading AGENTS.md', async () => {
+  it('uses the application behavior layer for Engineering project threads', async () => {
     const layers = await assembler().getLayers(
       'project-1',
       'thread-1',
       '/nonexistent-project',
       null,
       undefined,
-      'chat',
+      'brainstorm',
       'Custom implementation behavior.'
     )
     const behaviorLayer = layers.find((layer) =>
@@ -25,18 +25,25 @@ describe('PromptAssembler application behavior', () => {
     expect(layers.some((layer) => layer.title.includes('AGENTS.md'))).toBe(false)
   })
 
-  it('omits the application behavior layer from standalone chat threads', async () => {
-    const layers = await assembler().getLayers(
-      'inbox',
-      'thread-1',
-      '',
-      null,
-      undefined,
-      'chat',
-      'Custom implementation behavior.',
-      undefined,
-      'chat'
+  it('omits the application behavior layer from chat and ephemeral sessions', async () => {
+    const scopes = ['standalone-chat', 'ephemeral'] as const
+    const scopedLayers = await Promise.all(
+      scopes.map((scope) =>
+        assembler().getLayers(
+          scope === 'standalone-chat' ? 'inbox' : 'project-1',
+          'thread-1',
+          '',
+          null,
+          undefined,
+          'chat',
+          'Custom implementation behavior.',
+          undefined,
+          scope
+        )
+      )
     )
-    expect(layers.some((layer) => layer.title.startsWith('Agent behavior'))).toBe(false)
+    for (const layers of scopedLayers) {
+      expect(layers.some((layer) => layer.title.startsWith('Agent behavior'))).toBe(false)
+    }
   })
 })

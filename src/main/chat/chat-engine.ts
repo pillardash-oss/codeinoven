@@ -33,7 +33,7 @@ import {
 } from './thread-events'
 import { updateRetryWakeWindow } from './thread-events'
 import { MemoryService, estimateTokens } from './memory-service'
-import { PromptAssembler, type BehaviorMode, type BehaviorThreadScope } from './prompt-assembler'
+import { PromptAssembler, type BehaviorExecutionScope, type BehaviorMode } from './prompt-assembler'
 import { PermissionPolicy, type PermissionDecisionResult } from '../permissions/permission-policy'
 import {
   validateBoundedString,
@@ -3596,7 +3596,7 @@ export class ChatEngine {
     projectPath: string,
     mode: BehaviorMode,
     settings?: ThreadSettings,
-    threadScope: BehaviorThreadScope = 'project'
+    executionScope: BehaviorExecutionScope = 'project-thread'
   ): Promise<string> {
     try {
       const threadSettings =
@@ -3620,17 +3620,17 @@ export class ChatEngine {
         threadSettings?.providerId && threadSettings.modelId
           ? modelKey(harnessId, threadSettings.providerId, threadSettings.modelId)
           : undefined,
-        threadScope
+        executionScope
       )
     } catch (error) {
       Logger.error('Behavior prompt assembly failed', {
         projectId,
         threadId,
         mode,
-        threadScope,
+        executionScope,
         error: rawErrorMessage(error)
       })
-      return threadScope === 'project' ? DEFAULT_AGENT_BEHAVIOR_PROMPT : ''
+      return executionScope === 'project-thread' ? DEFAULT_AGENT_BEHAVIOR_PROMPT : ''
     }
   }
 
@@ -4815,7 +4815,7 @@ export class ChatEngine {
         projectPath,
         behaviorMode,
         settings,
-        isChatThread ? 'chat' : 'project'
+        isChatThread ? 'standalone-chat' : 'project-thread'
       ),
       this.buildHistoryRecap(projectId, threadId, driverId),
       transportPromise
@@ -9104,7 +9104,8 @@ export class ChatEngine {
       threadId,
       projectPath,
       'brainstorm',
-      settings
+      settings,
+      'ephemeral'
     )
     const validatedInstructions = validateBoundedString(
       instructions,

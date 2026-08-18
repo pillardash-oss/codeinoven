@@ -47,13 +47,13 @@ export interface DriverInfo {
  *   (which already embeds the mermaid instruction).
  * - `'implement'` — the implement branch sends `SPEC_IMPLEMENT_SYSTEM_PROMPT` and
  *   excludes `MERMAID_OUTPUT_INSTRUCTION`.
- * - `'chat'` — engineering prompts are omitted. Project-thread behavior remains active,
- *   while standalone Chats inbox threads receive no Agent behavior layer.
+ * - `'chat'` — engineering prompts are omitted. Execution scope independently decides
+ *   whether Agent behavior applies; standalone Chats and ephemeral sessions receive none.
  */
 export type BehaviorMode = 'brainstorm' | 'implement' | 'chat'
 
-/** Whether the thread belongs to a real project or the standalone Chats inbox. */
-export type BehaviorThreadScope = 'project' | 'chat'
+/** Runtime scope deciding whether the user-editable Agent behavior is applicable. */
+export type BehaviorExecutionScope = 'project-thread' | 'standalone-chat' | 'ephemeral'
 
 /**
  * Collapse every whitespace run into a single space so structurally identical
@@ -100,7 +100,7 @@ export class PromptAssembler {
     mode: BehaviorMode = 'implement',
     agentBehaviorPrompt = DEFAULT_AGENT_BEHAVIOR_PROMPT,
     modelKey?: string,
-    threadScope: BehaviorThreadScope = 'project'
+    executionScope: BehaviorExecutionScope = 'project-thread'
   ): Promise<BehaviorLayer[]> {
     const layers: BehaviorLayer[] = []
 
@@ -114,7 +114,7 @@ export class PromptAssembler {
       })
     )
 
-    if (threadScope === 'project') {
+    if (executionScope === 'project-thread') {
       layers.push(
         withLayerAccounting({
           title: 'Agent behavior (Project thread)',
@@ -185,7 +185,7 @@ export class PromptAssembler {
     mode: BehaviorMode = 'implement',
     agentBehaviorPrompt = DEFAULT_AGENT_BEHAVIOR_PROMPT,
     modelKey?: string,
-    threadScope: BehaviorThreadScope = 'project'
+    executionScope: BehaviorExecutionScope = 'project-thread'
   ): Promise<string> {
     const layers = await this.getLayers(
       projectId,
@@ -196,7 +196,7 @@ export class PromptAssembler {
       mode,
       agentBehaviorPrompt,
       modelKey,
-      threadScope
+      executionScope
     )
     const parts = layers
       .filter((layer) => layer.skipInPrompt !== true)
