@@ -311,6 +311,174 @@ describe('ClaudeCodeDriver', () => {
     )
     child.emit('exit', 0, null)
   })
+
+  it('surfaces TodoWrite tool calls so the shared todo UI can render them', async () => {
+    const child = new FakeChild()
+    spawnMock.mockReturnValue(child as unknown as ChildProcess)
+    const driver = new ClaudeCodeDriver(await storage())
+    const events: AgentEvent[] = []
+    driver.onEvent((event) => events.push(event))
+    const sessionId = await driver.createSession('/project', 'Claude thread')
+    await driver.sendPrompt('/project', {
+      sessionId,
+      text: 'Plan the work',
+      attachments: [],
+      settings: {
+        harnessId: 'claude-code',
+        providerId: 'anthropic',
+        modelId: '',
+        thinkingLevel: 'low',
+        permissionLevel: 'auto_review',
+        engineeringMode: false
+      }
+    })
+    child.stdout.emit(
+      'data',
+      Buffer.from(
+        `${JSON.stringify({
+          type: 'assistant',
+          session_id: 'native-1',
+          message: {
+            id: 'assistant-1',
+            content: [
+              {
+                type: 'tool_use',
+                id: 'tool-todo-1',
+                name: 'TodoWrite',
+                input: {
+                  todos: [
+                    { content: 'Write tests', status: 'completed', activeForm: 'Writing tests' },
+                    { content: 'Wire UI', status: 'in_progress', activeForm: 'Wiring UI' }
+                  ]
+                }
+              }
+            ]
+          }
+        })}\n`
+      )
+    )
+    const part = events
+      .filter((event) => event.type === 'message.part.updated')
+      .map((event) => event.part)
+      .find((candidate) => candidate.type === 'tool' && candidate.tool === 'TodoWrite')
+    expect(part).toBeDefined()
+    child.emit('exit', 0, null)
+  })
+
+  it('surfaces a native can_use_tool control_request as permission.asked and replies correctly', async () => {
+    const child = new FakeChild()
+    spawnMock.mockReturnValue(child as unknown as ChildProcess)
+    const driver = new ClaudeCodeDriver(await storage())
+    const events: AgentEvent[] = []
+    driver.onEvent((event) => events.push(event))
+    const sessionId = await driver.createSession('/project', 'Claude thread')
+    await driver.sendPrompt('/project', {
+      sessionId,
+      text: 'Delete a file',
+      attachments: [],
+      settings: {
+        harnessId: 'claude-code',
+        providerId: 'anthropic',
+        modelId: '',
+        thinkingLevel: 'low',
+        permissionLevel: 'auto_review',
+        engineeringMode: false
+      }
+    })
+    child.stdout.emit(
+      'data',
+      Buffer.from(
+        `${JSON.stringify({
+          type: 'control_request',
+          request_id: 'perm-1',
+          session_id: 'native-1',
+          request: {
+            subtype: 'can_use_tool',
+            tool_name: 'Bash',
+            input: { command: 'rm file.txt' }
+          }
+        })}\n`
+      )
+    )
+    const permissionEvent = events.find((event) => event.type === 'permission.asked')
+    expect(permissionEvent).toBeDefined()
+    if (!permissionEvent || permissionEvent.type !== 'permission.asked') throw new Error('unreachable')
+    expect(permissionEvent.permission.permission).toBe('Bash')
+
+    await driver.replyPermission(
+      '/project',
+      permissionEvent.permission.id,
+      'once',
+      undefined,
+      sessionId
+    )
+    const lastWrite = child.stdin.write.mock.calls.at(-1)?.[0] as string
+    expect(lastWrite).toBeDefined()
+    const parsed = JSON.parse(lastWrite)
+    expect(parsed.type).toBe('control_response')
+    expect(parsed.response.request_id).toBe('perm-1')
+    expect(parsed.response.response.behavior).toBe('allow')
+
+    child.emit('exit', 0, null)
+  })
+
+  it('surfaces an AskUserQuestion tool_use as question.asked and replies via tool_result', async () => {
+    const child = new FakeChild()
+    spawnMock.mockReturnValue(child as unknown as ChildProcess)
+    const driver = new ClaudeCodeDriver(await storage())
+    const events: AgentEvent[] = []
+    driver.onEvent((event) => events.push(event))
+    const sessionId = await driver.createSession('/project', 'Claude thread')
+    await driver.sendPrompt('/project', {
+      sessionId,
+      text: 'Pick an approach',
+      attachments: [],
+      settings: {
+        harnessId: 'claude-code',
+        providerId: 'anthropic',
+        modelId: '',
+        thinkingLevel: 'low',
+        permissionLevel: 'auto_review',
+        engineeringMode: false
+      }
+    })
+    child.stdout.emit(
+      'data',
+      Buffer.from(
+        `${JSON.stringify({
+          type: 'assistant',
+          session_id: 'native-1',
+          message: {
+            id: 'assistant-1',
+            content: [
+              {
+                type: 'tool_use',
+                id: 'tool-q-1',
+                name: 'AskUserQuestion',
+                input: {
+                  questions: [{ question: 'Which approach?', options: ['A', 'B'] }]
+                }
+              }
+            ]
+          }
+        })}\n`
+      )
+    )
+    const questionEvent = events.find((event) => event.type === 'question.asked')
+    expect(questionEvent).toBeDefined()
+    if (!questionEvent || questionEvent.type !== 'question.asked') throw new Error('unreachable')
+    expect(questionEvent.questions[0]?.prompt).toBe('Which approach?')
+
+    await driver.replyToQuestion('/project', sessionId, questionEvent.requestId, [['A']])
+    const lastWrite = child.stdin.write.mock.calls.at(-1)?.[0] as string
+    expect(lastWrite).toBeDefined()
+    const parsed = JSON.parse(lastWrite)
+    expect(parsed.type).toBe('user')
+    expect(parsed.message.content[0].type).toBe('tool_result')
+    expect(parsed.message.content[0].tool_use_id).toBe('tool-q-1')
+
+    child.emit('exit', 0, null)
+  })
 })
 
 describe('mapClaudeCodeRecord rate limits', () => {
