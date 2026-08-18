@@ -1358,7 +1358,8 @@ export function registerIpcHandlers(
   storage: StorageEngine,
   database: Database,
   updaterService?: UpdaterService,
-  chatEngine?: Pick<ChatEngine, 'loadMessages' | 'deleteThreadSession'>,
+  chatEngine?: Pick<ChatEngine, 'loadMessages' | 'deleteThreadSession'> &
+    Partial<Pick<ChatEngine, 'runVirtualTask'>>,
   options: RegisterIpcHandlersOptions = {}
 ): void {
   const projectManager = options.projectManager ?? new ProjectManager(database)
@@ -4610,44 +4611,34 @@ export function registerIpcHandlers(
     }
   )
 
-  ipcMain.handle('pr:composeWorkspace', async (_, projectId: unknown, threadId: unknown) => {
-    const projectPath = await resolveProjectPath(validateEntityId(projectId, 'Project ID'))
-    const directory = join(
-      projectPath,
-      '.cio',
-      'git',
-      'compose',
-      validateEntityId(threadId, 'Thread ID')
-    )
+  ipcMain.handle('pr:composeWithAgent', async (_, ...args: unknown[]) => {
+    if (!chatEngine?.runVirtualTask) throw new Error('The PR compose agent is unavailable')
+    const safeProjectId = validateEntityId(args[0], 'Project ID')
+    const virtualTaskId = validateEntityId(args[1], 'Virtual task ID')
+    const settings = validateThreadSettings(args[2])
+    const title = validateBoundedString(args[3], 'Virtual task title', 1, 512)
+    const prompt = validateBoundedString(args[4], 'Virtual task prompt', 1, 200_000)
+    const projectPath = await resolveProjectPath(safeProjectId)
+    const directory = join(projectPath, '.cio', 'git', 'compose', virtualTaskId)
+    const reportPath = join(directory, 'compose.json')
     await mkdir(directory, { recursive: true })
-    return directory
-  })
-
-  ipcMain.handle('pr:composeReport', async (_, projectId: unknown, threadId: unknown) => {
-    const projectPath = await resolveProjectPath(validateEntityId(projectId, 'Project ID'))
-    const safeThreadId = validateEntityId(threadId, 'Thread ID')
-    const reportPath = join(projectPath, '.cio', 'git', 'compose', safeThreadId, 'compose.json')
     try {
-      const [raw, stats] = await Promise.all([readFile(reportPath, 'utf-8'), stat(reportPath)])
+      await chatEngine.runVirtualTask(safeProjectId, virtualTaskId, settings, title, prompt)
+      const raw = await readFile(reportPath, 'utf-8')
       const parsed: unknown = JSON.parse(raw)
       const record = isRecord(parsed) ? parsed : {}
-      const title = typeof record['title'] === 'string' ? record['title'] : ''
+      const reportTitle = typeof record['title'] === 'string' ? record['title'] : ''
       const description = typeof record['description'] === 'string' ? record['description'] : ''
+      if (!reportTitle.trim()) throw new Error('The PR compose agent returned no title')
       return {
-        path: reportPath,
-        title,
+        title: reportTitle,
         description,
-        updatedAt: stats.mtimeMs,
-        threadId: safeThreadId
+        taskId: virtualTaskId
       }
-    } catch {
-      return {
-        path: reportPath,
-        title: '',
-        description: '',
-        updatedAt: null,
-        threadId: safeThreadId
-      }
+    } finally {
+      await rm(directory, { recursive: true, force: true }).catch((error) =>
+        Logger.dev('PR compose workspace cleanup was incomplete:', error)
+      )
     }
   })
 

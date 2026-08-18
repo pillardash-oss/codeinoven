@@ -28,6 +28,7 @@ import type {
   PrReviewEvent,
   PrState,
   Project,
+  ThreadSettings,
   PullRequestBundle,
   PullRequestComment,
   PullRequestCompare,
@@ -1504,20 +1505,18 @@ export class GitState {
     }
   }
 
-  /** Create `.cio/git/compose/<threadId>/` for the PR-compose agent. */
-  async createComposeWorkspace(projectId: string, threadId: string): Promise<string | null> {
+  /** Run PR composition as a one-shot virtual agent task with no persisted thread. */
+  async composeWithAgent(
+    projectId: string,
+    virtualTaskId: string,
+    settings: ThreadSettings,
+    title: string,
+    prompt: string
+  ): Promise<PrComposeReport | null> {
     try {
-      return await invoke('pr:composeWorkspace', projectId, threadId)
-    } catch {
-      return null
-    }
-  }
-
-  /** Read the agent's composed PR title/description, if it has written one. */
-  async loadComposeReport(projectId: string, threadId: string): Promise<PrComposeReport | null> {
-    try {
-      return await invoke('pr:composeReport', projectId, threadId)
-    } catch {
+      return await invoke('pr:composeWithAgent', projectId, virtualTaskId, settings, title, prompt)
+    } catch (reason) {
+      this.error = errorMessage(reason, 'The PR compose agent could not complete its task')
       return null
     }
   }

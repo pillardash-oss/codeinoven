@@ -3490,16 +3490,12 @@ export interface PrAgentReport {
   threadId: string | null
 }
 
-/** An agent-composed PR title/description read back from `.cio/git/compose/<threadId>/compose.json`. */
+/** An agent-composed PR title/description produced by a disposable virtual task. */
 export interface PrComposeReport {
-  /** Absolute path to the compose file. */
-  path: string
   title: string
   description: string
-  /** Epoch ms of the last write, or null when no report exists yet. */
-  updatedAt: number | null
-  /** Thread the compose was handed to, so the UI can jump back into it. */
-  threadId: string | null
+  /** Disposable task that produced the report; it is not a persisted Thread id. */
+  taskId: string
 }
 
 /** Repository identity resolved from a remote URL (e.g. `owner/repo`). */

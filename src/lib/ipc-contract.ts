@@ -1079,10 +1079,17 @@ export interface IpcInvokeContract {
   >
   /** Create `.cio/git/pr/<number>/` for an agent review and return its absolute path. */
   'pr:reviewWorkspace': Contract<[projectId: string, pullNumber: number, threadId?: string], string>
-  /** Create `.cio/git/compose/<threadId>/` for the PR-compose agent and return its absolute path. */
-  'pr:composeWorkspace': Contract<[projectId: string, threadId: string], string>
-  /** Read back the agent's `.cio/git/compose/<threadId>/compose.json`, if it wrote one. */
-  'pr:composeReport': Contract<[projectId: string, threadId: string], PrComposeReport>
+  /** Run the PR-compose agent virtually and consume its temporary report. */
+  'pr:composeWithAgent': Contract<
+    [
+      projectId: string,
+      virtualTaskId: string,
+      settings: ThreadSettings,
+      title: string,
+      prompt: string
+    ],
+    PrComposeReport
+  >
   'github:authStatus': Contract<[], GitHubAuthStatus>
   'github:startDeviceFlow': Contract<[], GitHubDeviceCode>
   'github:poll': Contract<[deviceCode: string], GitHubPollResult>

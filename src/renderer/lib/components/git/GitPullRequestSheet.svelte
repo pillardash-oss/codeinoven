@@ -8,7 +8,6 @@
   import ModelPicker from '../shared/ModelPicker.svelte'
   import { APP_SLUG } from '$shared/brand'
   import { threadSettings } from '$lib/stores/thread-settings.svelte'
-  import { threadMessages } from '$lib/stores/thread-messages.svelte'
   import { providerCatalog } from '$lib/stores/provider-catalog.svelte'
   import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
   import { modelKey } from '$lib/model-keys'
@@ -104,21 +103,13 @@
   let composePhase = $state<'idle' | 'working' | 'complete' | 'recompose'>('idle')
   /** Model used for the compose agent — seeded from the last thread model. */
   let composeSettings = $state<ThreadSettings>({ ...threadSettings.lastUsed })
-  /** Thread the compose prompt runs on (created lazily on first compose). */
-  let composeThreadId = $state<string | null>(null)
-  /** Directory where the compose agent writes its `compose.json`. */
-  let composeDirectory = $state<string | null>(null)
-  /** Branch selection the compose thread was created for — detects changes on recompose. */
+  /** Branch selection from the last virtual compose — detects changes on recompose. */
   let composeHead = $state('')
   let composeBase = $state('')
-  /** `updatedAt` of the last compose result we applied, so recompose waits for a fresh write. */
-  let composeLastAppliedAt = $state(0)
   /** Latest compose error, shown inline in the dropdown. */
   let composeError = $state('')
   /** Timer that flips "Complete" → "Recompose" after a short pause. */
   let composeCompleteTimer: ReturnType<typeof setTimeout> | null = null
-  /** Poller that waits for the agent's `compose.json` to appear. */
-  let composePollTimer: ReturnType<typeof setInterval> | null = null
 
   const composeProviders = $derived<ProviderCatalog[]>(
     providerCatalog.cached(projectId) ?? providerCatalog.allCached()
@@ -383,6 +374,10 @@
         : []),
       ...(localChanges ? ['', localChanges] : []),
       '',
+      `Current title: ${JSON.stringify(title)}`,
+      'Current description:',
+      body.trim() || '(empty)',
+      '',
       'Improve on it: re-read the commit range, make the title sharper and the description',
       'clearer and more complete, then overwrite the JSON at',
       `\`${directory}/compose.json\` with the same shape.`,
@@ -395,19 +390,10 @@
       clearTimeout(composeCompleteTimer)
       composeCompleteTimer = null
     }
-    if (composePollTimer !== null) {
-      clearInterval(composePollTimer)
-      composePollTimer = null
-    }
   }
 
   /** Apply a fresh compose report to the form (and, if the PR already exists, to GitHub). */
-  async function applyComposeReport(report: {
-    title: string
-    description: string
-    updatedAt: number | null
-  }): Promise<void> {
-    composeLastAppliedAt = report.updatedAt ?? Date.now()
+  async function applyComposeReport(report: { title: string; description: string }): Promise<void> {
     title = report.title
     body = report.description
     composeError = ''
@@ -436,24 +422,8 @@
     }, 2000)
   }
 
-  /** Poll for the agent's `compose.json` until a fresh result appears, then fill the form. */
-  function pollForComposeResult(): void {
-    clearComposeTimers()
-    if (!composeThreadId) return
-    const threadId = composeThreadId
-    composePollTimer = setInterval(async () => {
-      const report = await gitState.loadComposeReport(projectId, threadId)
-      // Ignore the previous compose's file — recompose must wait for a NEWER
-      // write so the loading state stays visible until the agent actually lands.
-      if (!report || !report.title.trim()) return
-      if (report.updatedAt !== null && report.updatedAt <= composeLastAppliedAt) return
-      clearComposeTimers()
-      await applyComposeReport(report)
-    }, 1500)
-  }
-
-  /** PR copy is a direct chat task and must never enter an Engineering lifecycle. */
-  function composeThreadSettings(): ThreadSettings {
+  /** PR copy is a direct virtual task and must never enter an Engineering lifecycle. */
+  function composeVirtualTaskSettings(): ThreadSettings {
     return {
       ...composeSettings,
       engineeringMode: false,
@@ -462,51 +432,30 @@
     }
   }
 
-  /** Kick off the compose agent (or recompose on the same thread). */
+  /** Kick off a fresh disposable compose or recompose task. */
   async function runCompose(): Promise<void> {
     if (!originIdentity || !head || !base || composePhase === 'working') return
+    const recomposing = composePhase === 'recompose'
+    clearComposeTimers()
     composeError = ''
     composePhase = 'working'
     try {
-      const project = await invoke('project:get', projectId).catch(() => null)
-      if (!project?.path) throw new Error('Could not resolve the project directory')
-      const settings = composeThreadSettings()
-
-      if (!composeThreadId) {
-        const thread = await invoke('thread:create', {
-          projectId,
-          providerId: composeSettings.harnessId,
-          title: `Compose PR: ${head} → ${base}`,
-          workingDirectory: project.path,
-          settings
-        }).catch(() => null)
-        if (!thread) throw new Error('Could not create the compose thread')
-        composeThreadId = thread.id
-        composeDirectory = await gitState.createComposeWorkspace(projectId, thread.id)
-        if (!composeDirectory) throw new Error('Could not prepare the compose workspace')
-        composeHead = head
-        composeBase = base
-        composeLastAppliedAt = 0
-        await threadMessages.send(
-          projectId,
-          thread.id,
-          settings,
-          composePrompt(composeDirectory),
-          [],
-          undefined
-        )
-      } else {
-        if (!composeDirectory) throw new Error('Compose workspace is missing')
-        await threadMessages.send(
-          projectId,
-          composeThreadId,
-          settings,
-          recomposePrompt(composeDirectory),
-          [],
-          undefined
-        )
+      const settings = composeVirtualTaskSettings()
+      const virtualTaskId = crypto.randomUUID()
+      const directory = `.cio/git/compose/${virtualTaskId}`
+      const report = await gitState.composeWithAgent(
+        projectId,
+        virtualTaskId,
+        settings,
+        `Compose PR: ${head} → ${base}`,
+        recomposing ? recomposePrompt(directory) : composePrompt(directory)
+      )
+      if (!report) {
+        throw new Error(gitState.error ?? 'The PR compose agent did not return a result')
       }
-      pollForComposeResult()
+      composeHead = head
+      composeBase = base
+      await applyComposeReport(report)
     } catch (reason) {
       composeError =
         reason instanceof Error ? reason.message : 'The compose agent could not be started'

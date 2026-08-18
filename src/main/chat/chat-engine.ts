@@ -617,6 +617,14 @@ const TEMPORARY_CHAT_ALLOWED_TOOLS = [
   'gemini_quota'
 ]
 
+const VIRTUAL_TASK_SYSTEM_PROMPT = [
+  `You are completing a one-shot virtual task inside ${APP_NAME}.`,
+  'Work only in the supplied project and complete the requested deliverable directly.',
+  'Do not create a specification, plan, progress report, Assignment, or durable conversation artifact.',
+  'Do not ask follow-up questions. If something is uncertain, inspect the project and make the narrowest safe inference.',
+  'Do not perform work beyond the explicit prompt.'
+].join(' ')
+
 /** Chat-only instruction — plain chat threads behave like a browser web chatbot. */
 const CHAT_SYSTEM_PROMPT = [
   `You are a general-purpose web chat assistant inside ${APP_NAME}.`,
@@ -5261,6 +5269,97 @@ export class ChatEngine {
       this.clearCompletionWaiter(temporary.sessionId)
       await this.notifyTemporaryChatCompletion(projectId, threadId, temporary.id, 'error')
       throw error
+    }
+  }
+
+  /**
+   * Run a disposable project-scoped agent task without creating a Thread row.
+   * Session and process bookkeeping are torn down before the result crosses
+   * IPC, so virtual work cannot consume project thread capacity.
+   */
+  async runVirtualTask(
+    projectId: string,
+    virtualTaskId: string,
+    settings: ThreadSettings,
+    title: string,
+    text: string
+  ): Promise<AgentMessage> {
+    projectId = validateEntityId(projectId, 'Project ID')
+    virtualTaskId = validateEntityId(virtualTaskId, 'Virtual task ID')
+    settings = validateThreadSettings({
+      ...settings,
+      engineeringMode: false,
+      assignmentMode: false,
+      loopMode: false
+    })
+    title = validateBoundedString(title, 'Virtual task title', 1, 512)
+    text = validateBoundedString(text, 'Virtual task prompt', 1, 200_000)
+    this.markProjectActive(projectId)
+
+    const driverId = settings.harnessId || 'opencode'
+    const { driver, projectPath } = await this.resolve(projectId, driverId)
+    assertHarnessRequestCapabilities(driver, [], settings.permissionLevel)
+    const isolated =
+      driver instanceof OpenCodeDriver
+        ? await driver.createIsolatedSession(projectPath, title)
+        : undefined
+    const sessionId = isolated?.sessionId ?? (await driver.createSession(projectPath, title))
+    const turnId = createMessageId()
+    this.registerSession(
+      sessionId,
+      projectId,
+      virtualTaskId,
+      projectPath,
+      settings.permissionLevel,
+      driverId,
+      turnId,
+      true
+    )
+    const completion = this.waitForSessionCompletion(sessionId, 180_000, title)
+
+    try {
+      const request: SendPromptOptions = {
+        sessionId,
+        settings,
+        text,
+        attachments: [],
+        systemPrompt: VIRTUAL_TASK_SYSTEM_PROMPT,
+        readOnly: false,
+        userMessageId: turnId
+      }
+      if (isolated && driver instanceof OpenCodeDriver) {
+        await driver.sendPrompt(projectPath, request, isolated)
+      } else {
+        await driver.sendPrompt(projectPath, request)
+      }
+      await completion
+      const messages =
+        isolated && driver instanceof OpenCodeDriver
+          ? await driver.loadMessages(projectPath, sessionId, isolated)
+          : await driver.loadMessages(projectPath, sessionId)
+      const response = [...messages].reverse().find((message) => message.role === 'assistant')
+      if (!response) throw new Error(`${title} returned no response`)
+      if (response.error) throw new Error(response.error)
+      return response
+    } catch (error) {
+      if (isolated && driver instanceof OpenCodeDriver) {
+        await driver.abort(projectPath, sessionId, isolated).catch(() => undefined)
+      } else {
+        await driver.abort(projectPath, sessionId).catch(() => undefined)
+      }
+      throw error
+    } finally {
+      this.clearCompletionWaiter(sessionId)
+      await this.cleanupTurnUtilities(sessionId).catch(() => undefined)
+      this.retireSessionState(sessionId)
+      await this.agentProcesses
+        .releaseThread(projectId, virtualTaskId)
+        .catch((error) => Logger.dev('Virtual task process cleanup was incomplete:', error))
+      if (isolated && driver instanceof OpenCodeDriver) {
+        driver.disposeIsolatedSession(isolated)
+      } else if (driver.deleteSession) {
+        await driver.deleteSession(projectPath, sessionId).catch(() => undefined)
+      }
     }
   }
 
