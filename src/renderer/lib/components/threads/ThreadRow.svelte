@@ -11,6 +11,7 @@
   import ThreadHoverPopover from '$lib/components/shared/ThreadHoverPopover.svelte'
   import StatusBadge from '$lib/components/shared/StatusBadge.svelte'
   import { scopeState } from '$lib/stores/scope.svelte'
+  import { threadNotesState } from '$lib/stores/thread-notes.svelte'
   import { threadMessages } from '$lib/stores/thread-messages.svelte'
   import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
   import { effectiveThreadTitle } from '$lib/stores/draft-label'
@@ -409,9 +410,11 @@
     return scopeState.bucketFor(thread.projectId, bucketId)
   })
 
+  let hasNote = $derived(threadNotesState.has(thread.id))
+
   /** Whether the bottom line (scope/harness/time) is shown. Single harness on
    *  the default scope collapses to a one-line row with the time on the top. */
-  let showBottomRow = $derived(scopeBucket !== null || harnessIds.length > 1)
+  let showBottomRow = $derived(scopeBucket !== null || harnessIds.length > 1 || hasNote)
 
   let scopeColor = $derived(
     scopeBucket ? (scopeBucket.color ?? pickColorForSeed(scopeBucket.id)) : ''
@@ -683,7 +686,12 @@
           </span>
         {/if}
 
-        <span class="flex min-w-0 justify-end">
+        <span class="flex min-w-0 items-center justify-end gap-1">
+          {#if hasNote}
+            <span class="flex shrink-0 items-center text-warning" title="Note attached">
+              <StickyNote size={11} />
+            </span>
+          {/if}
           <span class="whitespace-nowrap text-[10px] text-dimmed">
             {relativeTime(thread.createdAt)}
           </span>
@@ -885,7 +893,12 @@
           </span>
         {/if}
 
-        <span class="col-start-3 flex min-w-0 justify-end">
+        <span class="col-start-3 flex min-w-0 items-center justify-end gap-1">
+          {#if hasNote}
+            <span class="flex shrink-0 items-center text-warning" title="Note attached">
+              <StickyNote size={11} />
+            </span>
+          {/if}
           <span
             class="whitespace-nowrap text-[10px] text-dimmed transition-opacity duration-150 {hovered
               ? 'opacity-0'
