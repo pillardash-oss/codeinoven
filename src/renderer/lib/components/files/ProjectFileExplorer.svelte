@@ -1041,6 +1041,16 @@
     }
   }
 
+  async function revealInFileManager(entry: ProjectFileEntry): Promise<void> {
+    try {
+      const info = await projectFilesWorkspace.fileInfo(projectId, entry.path)
+      const revealed = await invoke('shell:revealPath', info.absolutePath)
+      if (!revealed) toast.error('The item could not be revealed in the file manager')
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'The item could not be revealed')
+    }
+  }
+
   function directoryContainsLastTurnFile(path: string): boolean {
     const prefix = path ? `${path}/` : ''
     return lastTurnPaths.some((changedPath) => changedPath.startsWith(prefix))
@@ -1219,6 +1229,7 @@
       }
     }}
     onInfo={() => void showInfo(entry)}
+    onReveal={() => void revealInFileManager(entry)}
   >
     {#if inlineEdit?.kind === 'rename' && inlineEdit.entry.path === entry.path}
       <div
@@ -1434,6 +1445,7 @@
     onRename={() => undefined}
     onDelete={() => undefined}
     onInfo={() => undefined}
+    onReveal={() => undefined}
   >
     <div
       {@attach attachTreeScroll}

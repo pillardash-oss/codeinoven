@@ -5,6 +5,7 @@
     ClipboardPaste,
     Copy,
     FilePlus2,
+    FolderOpen,
     FolderPlus,
     Info,
     Pencil,
@@ -27,6 +28,7 @@
     onRename: () => void
     onDelete: () => void
     onInfo: () => void
+    onReveal: () => void
   }
 
   let {
@@ -42,7 +44,8 @@
     onPaste,
     onRename,
     onDelete,
-    onInfo
+    onInfo,
+    onReveal
   }: Props = $props()
 
   let selectedCount = $derived(
@@ -94,6 +97,10 @@
         <ContextMenu.Item class={itemClass} onSelect={onCopyPath}>
           <Copy size={13} class="text-muted" />
           {selectedCount > 1 ? `Copy ${selectedCount} paths` : 'Copy path'}
+        </ContextMenu.Item>
+        <ContextMenu.Item class={itemClass} onSelect={onReveal}>
+          <FolderOpen size={13} class="text-muted" />
+          Show in File Manager
         </ContextMenu.Item>
         <ContextMenu.Separator class="my-1 h-px bg-border" />
         {#if isSingle}
