@@ -512,7 +512,14 @@ export class CloudRelayClient {
    */
   private issueDeviceChallenge(): void {
     if (!this.credentials) return
-    this.pendingDeviceChallenge = randomBytes(32).toString('base64url')
+    // The desktop authenticates independently of the mobile socket, so its
+    // automatic challenge can race the mobile's explicit challenge request.
+    // Keep one unspent challenge stable and resend it; replacing it here would
+    // invalidate a proof the phone is already computing and create an endless
+    // challenge/auth mismatch loop.
+    if (!this.pendingDeviceChallenge) {
+      this.pendingDeviceChallenge = randomBytes(32).toString('base64url')
+    }
     void this.send({ type: 'remote:device:challenge', nonce: this.pendingDeviceChallenge })
   }
 

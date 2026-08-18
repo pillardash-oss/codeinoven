@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte'
   import CloudRemoteAccess from '$lib/components/remote/CloudRemoteAccess.svelte'
+  import RemoteMobileShell from '$lib/components/remote/RemoteMobileShell.svelte'
   import { remoteSession } from '$lib/remote/session-store.svelte'
   import { invoke } from '$lib/ipc.svelte'
   import { applyTheme, resolveTheme, watchSystemDark } from '$lib/theme'
@@ -41,21 +42,10 @@
 </script>
 
 {#if connected}
-  {#await import('./RemoteMobileShell.svelte') then { default: RemoteMobileShell }}
-    <RemoteMobileShell
-      onDisconnect={() => remoteSession.disconnect()}
-      onConnected={syncDesktopTheme}
-    />
-  {:catch error}
-    <div
-      class="flex h-full flex-col items-center justify-center gap-3 px-6 text-center text-foreground"
-    >
-      <p class="text-[15px] font-medium">Could not load the workspace</p>
-      <p class="max-w-72 text-[13px] leading-relaxed text-dimmed">
-        {error instanceof Error ? error.message : 'The remote workspace could not be loaded.'}
-      </p>
-    </div>
-  {/await}
+  <RemoteMobileShell
+    onDisconnect={() => remoteSession.disconnect()}
+    onConnected={syncDesktopTheme}
+  />
 {:else}
   <CloudRemoteAccess />
 {/if}

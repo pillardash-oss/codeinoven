@@ -709,6 +709,39 @@ describe('CloudRelayClient — relay device proof of possession (A-04)', () => {
     dispose()
   })
 
+  it('resends the unspent challenge when a mobile request races relay startup', async () => {
+    const credentials = new DeviceCredentialService(makeRawDatabase())
+    const { harness, socket, dispose } = await makeRelayHarness(credentials)
+    const initialNonce = await challengeNonceOf(socket)
+    const bootstrap = await credentials.createPairingBootstrap()
+
+    // relay:authenticated can reach the mobile before async decryption of the
+    // desktop's automatic challenge completes. Its explicit request must not
+    // replace the nonce the phone is already about to sign.
+    await receivedData(socket, { type: 'remote:device:challenge-request' })
+    await vi.waitFor(async () => {
+      const challenges = (await readBodies(socket)).filter(
+        (body) => body.type === 'remote:device:challenge'
+      )
+      expect(challenges).toHaveLength(2)
+    })
+    const challenges = (await readBodies(socket)).filter(
+      (body) => body.type === 'remote:device:challenge'
+    )
+    expect(challenges[1]?.['nonce']).toBe(initialNonce)
+
+    await receivedData(
+      socket,
+      await authFrame(initialNonce, { deviceId: null, authVersion: undefined }, bootstrap.value)
+    )
+    await vi.waitFor(async () => {
+      const bodies = await readBodies(socket)
+      expect(bodies.some((body) => body.type === 'remote:device:ok')).toBe(true)
+    })
+    harness.client.close()
+    dispose()
+  })
+
   it('rejects an invoke carrying a caller-forged device context', async () => {
     const credentials = new DeviceCredentialService(makeRawDatabase())
     const { harness, socket, dispose } = await makeRelayHarness(credentials)
