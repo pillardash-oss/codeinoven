@@ -399,81 +399,75 @@
     workspaceState.openThread(thread, project)
   }
 
-  /** Keep agent context useful without placing hundreds of kilobytes in the composer. */
-  function deploymentEvidence(
-    jobs: GitHubDeploymentJob[],
-    logs: GitHubDeploymentJobLog[]
+  /** Keep one failed job's evidence useful without overfilling the composer. */
+  function failedJobEvidence(
+    job: GitHubDeploymentJob,
+    log: GitHubDeploymentJobLog | null
   ): string[] {
-    const failedJobs = jobs.filter(
-      (job) =>
-        job.status === 'completed' &&
-        job.conclusion !== 'success' &&
-        job.conclusion !== 'neutral' &&
-        job.conclusion !== 'skipped' &&
-        job.conclusion !== 'cancelled'
-    )
-    const jobLines = failedJobs.flatMap((job) => {
-      const failedSteps = job.steps
-        .filter(
-          (step) =>
-            step.status === 'completed' &&
-            step.conclusion !== 'success' &&
-            step.conclusion !== 'neutral' &&
-            step.conclusion !== 'skipped' &&
-            step.conclusion !== 'cancelled'
-        )
-        .map((step) => step.name)
-      return [
-        `- ${job.name}: ${job.conclusion ?? job.status}${failedSteps.length > 0 ? `; failed steps: ${failedSteps.join(', ')}` : ''}`
-      ]
-    })
-    const logLines = logs.slice(0, 3).flatMap((log) => {
-      const maxChars = 12_000
-      const excerpt =
-        log.log.length > maxChars
-          ? `[earlier output omitted]\n${log.log.slice(-maxChars)}`
-          : log.log
-      return ['', `Job ${log.jobId} log excerpt:`, '```text', excerpt, '```']
-    })
-    return [
-      failedJobs.length > 0 ? 'Failed jobs:' : 'No completed failing jobs were reported.',
-      ...jobLines,
-      ...logLines
+    const failedSteps = job.steps
+      .filter(
+        (step) =>
+          step.status === 'completed' &&
+          step.conclusion !== 'success' &&
+          step.conclusion !== 'neutral' &&
+          step.conclusion !== 'skipped' &&
+          step.conclusion !== 'cancelled'
+      )
+      .map((step) => step.name)
+    const lines = [
+      `Failed job: ${job.name}`,
+      `Job ID: ${job.id}`,
+      `Job status: ${job.status}${job.conclusion ? ` / ${job.conclusion}` : ''}`,
+      `Failed steps: ${failedSteps.length > 0 ? failedSteps.join(', ') : '(not reported)'}`,
+      ...(job.url ? [`Job URL: ${job.url}`] : [])
     ]
+    if (!log) {
+      return [
+        ...lines,
+        'Job log: unavailable; diagnose from the supplied metadata and local files.'
+      ]
+    }
+    const maxChars = 24_000
+    const excerpt =
+      log.log.length > maxChars ? `[earlier output omitted]\n${log.log.slice(-maxChars)}` : log.log
+    return [...lines, '', 'Failed job log excerpt:', '```text', excerpt, '```']
   }
 
   function startWorkflowDiagnosis(
     run: GitHubWorkflowRun,
-    jobs: GitHubDeploymentJob[],
-    logs: GitHubDeploymentJobLog[]
+    job: GitHubDeploymentJob,
+    log: GitHubDeploymentJobLog | null
   ): void {
     const prompt = [
-      `Diagnose and resolve GitHub Actions workflow run ${run.name} #${run.runNumber}.`,
+      `Review and resolve the failed GitHub Actions job "${job.name}" only.`,
+      `Workflow: ${run.name} #${run.runNumber}`,
       `Run ID: ${run.id}`,
       `Status: ${run.status}${run.conclusion ? ` / ${run.conclusion}` : ''}`,
       `Branch: ${run.branch || '(unknown)'}`,
       `Commit: ${run.headSha || '(unknown)'}`,
       ...(run.url ? [`Workflow URL: ${run.url}`] : []),
       '',
-      ...deploymentEvidence(jobs, logs),
+      ...failedJobEvidence(job, log),
       '',
-      'Inspect the repository and workflow configuration, identify the root cause, and reproduce it locally where practical.',
+      'Use the supplied job metadata and log as the primary evidence. Do not assume GitHub or the remote repository is accessible.',
+      'If local repository files are available, inspect only what is relevant to this failed job and reproduce the failure where practical.',
       'If the cause is in this repository, implement the smallest correct fix, run the relevant checks/tests, and commit the completed change.',
-      'If the cause is external infrastructure, permissions, or secrets, do not guess or expose credentials; explain the exact action required.',
+      'If repository access is unavailable, diagnose from the evidence and give the exact file/configuration change or operator action required.',
+      'If the cause is external infrastructure, permissions, or secrets, do not guess or expose credentials.',
       'Do not push, rerun workflows, or deploy.'
     ].join('\n')
-    void createDeploymentDiagnosisThread(`Fix workflow ${run.name} #${run.runNumber}`, prompt)
+    void createDeploymentDiagnosisThread(`Review failed job: ${job.name}`, prompt)
   }
 
   function startDeploymentDiagnosis(
     deployment: GitHubDeployment,
     run: GitHubWorkflowRun | null,
-    jobs: GitHubDeploymentJob[],
-    logs: GitHubDeploymentJobLog[]
+    job: GitHubDeploymentJob,
+    log: GitHubDeploymentJobLog | null
   ): void {
     const deploymentUrl = `https://github.com/${encodeURIComponent(githubIdentity?.owner ?? '')}/${encodeURIComponent(githubIdentity?.repo ?? '')}/deployments/${deployment.id}`
     const prompt = [
-      `Diagnose and resolve the ${deployment.environment} deployment.`,
+      `Review and resolve the failed deployment job "${job.name}" only.`,
       `Deployment ID: ${deployment.id}`,
       `Status: ${deployment.latestStatus?.state ?? 'unknown'}`,
       `Ref: ${deployment.ref || '(unknown)'}`,
@@ -481,14 +475,16 @@
       `Deployment URL: ${deploymentUrl}`,
       ...(run ? [`Linked workflow run: ${run.name} #${run.runNumber} (ID ${run.id})`] : []),
       '',
-      ...deploymentEvidence(jobs, logs),
+      ...failedJobEvidence(job, log),
       '',
-      'Inspect the repository, deployment configuration, and workflow configuration; identify the root cause and reproduce it locally where practical.',
+      'Use the supplied job metadata and log as the primary evidence. Do not assume GitHub or the remote repository is accessible.',
+      'If local repository files are available, inspect only what is relevant to this failed job and reproduce the failure where practical.',
       'If the cause is in this repository, implement the smallest correct fix, run the relevant checks/tests, and commit the completed change.',
-      'If the cause is external infrastructure, permissions, or secrets, do not guess or expose credentials; explain the exact action required.',
+      'If repository access is unavailable, diagnose from the evidence and give the exact file/configuration change or operator action required.',
+      'If the cause is external infrastructure, permissions, or secrets, do not guess or expose credentials.',
       'Do not push, rerun workflows, or deploy.'
     ].join('\n')
-    void createDeploymentDiagnosisThread(`Fix ${deployment.environment} deployment`, prompt)
+    void createDeploymentDiagnosisThread(`Review failed job: ${job.name}`, prompt)
   }
 
   /**

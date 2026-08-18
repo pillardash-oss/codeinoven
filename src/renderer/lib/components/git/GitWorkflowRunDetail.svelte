@@ -10,6 +10,7 @@
     RefreshCw,
     Terminal
   } from '@lucide/svelte'
+  import { onMount } from 'svelte'
   import { relativeTime } from '$lib/format/relative-time'
   import { openInBrowser } from '$lib/open-in-browser'
   import { gitState, GitState } from '$lib/stores/git.svelte'
@@ -26,8 +27,8 @@
     onBack: () => void
     onAgentDiagnose: (
       run: GitHubWorkflowRun,
-      jobs: GitHubDeploymentJob[],
-      logs: GitHubDeploymentJobLog[]
+      job: GitHubDeploymentJob,
+      log: GitHubDeploymentJobLog | null
     ) => void
   }
 
@@ -45,6 +46,18 @@
   )
   const detail = $derived(cached?.detail ?? null)
   const loading = $derived(gitState.isBusy('deployment-run-detail'))
+
+  function isFailedJob(job: GitHubDeploymentJob): boolean {
+    return (
+      job.status === 'completed' &&
+      job.conclusion !== 'success' &&
+      job.conclusion !== 'neutral' &&
+      job.conclusion !== 'skipped' &&
+      job.conclusion !== 'cancelled'
+    )
+  }
+
+  const failedJob = $derived((detail?.jobs ?? []).find(isFailedJob) ?? null)
 
   function cachedLog(jobId: number): GitHubDeploymentJobLog | null {
     return (
@@ -108,38 +121,21 @@
     if (open && !cachedLog(jobId) && !loadingLog[jobId]) void loadJobLog(jobId)
   }
 
-  /** Load failed-job evidence before opening the agent diagnosis thread. */
-  async function diagnoseWithAgent(): Promise<void> {
-    if (preparingAgent) return
+  /** Load one failed job's evidence before opening its agent review thread. */
+  async function reviewWithAgent(job: GitHubDeploymentJob): Promise<void> {
+    if (preparingAgent || !isFailedJob(job)) return
     preparingAgent = true
     try {
-      const jobs = detail?.jobs ?? []
-      const failedJobs = jobs.filter(
-        (job) =>
-          job.status === 'completed' &&
-          job.conclusion !== 'success' &&
-          job.conclusion !== 'neutral' &&
-          job.conclusion !== 'skipped' &&
-          job.conclusion !== 'cancelled'
-      )
-      await Promise.all(
-        failedJobs.map((job) =>
-          gitState
-            .ensureDeploymentJobLog(projectId, identity.owner, identity.repo, job.id)
-            .catch(() => null)
-        )
-      )
-      const logs = failedJobs.flatMap((job) => {
-        const log = cachedLog(job.id)
-        return log ? [log] : []
-      })
-      onAgentDiagnose(detail?.run ?? run, jobs, logs)
+      await gitState
+        .ensureDeploymentJobLog(projectId, identity.owner, identity.repo, job.id)
+        .catch(() => null)
+      onAgentDiagnose(detail?.run ?? run, job, cachedLog(job.id))
     } finally {
       preparingAgent = false
     }
   }
 
-  $effect(() => {
+  onMount(() => {
     void loadDetail()
   })
 
@@ -276,22 +272,22 @@
       {#if run.createdAt}
         <span>{relativeTime(run.createdAt)}</span>
       {/if}
-    </div>
-    <div class="mt-2 flex justify-end">
-      <button
-        type="button"
-        class="flex h-7 cursor-pointer items-center gap-1 rounded-md border border-border px-2.5 text-[10px] font-medium text-foreground transition-colors hover:bg-elevated disabled:cursor-default disabled:opacity-40"
-        title="Open an agent thread with this workflow run and its failed-job logs"
-        disabled={preparingAgent || loading}
-        onclick={() => void diagnoseWithAgent()}
-      >
-        {#if preparingAgent}
-          <Loader2 size={12} class="animate-spin" />
-        {:else}
-          <Bot size={12} />
-        {/if}
-        Diagnose with agent
-      </button>
+      {#if failedJob}
+        <button
+          type="button"
+          class="ml-auto flex h-6 cursor-pointer items-center gap-1 rounded-md border border-border px-2 text-[9px] font-medium text-foreground transition-colors hover:bg-elevated disabled:cursor-default disabled:opacity-40"
+          title={`Review failed job ${failedJob.name} with an agent`}
+          disabled={preparingAgent || loading}
+          onclick={() => void reviewWithAgent(failedJob)}
+        >
+          {#if preparingAgent}
+            <Loader2 size={11} class="animate-spin" />
+          {:else}
+            <Bot size={11} />
+          {/if}
+          Review
+        </button>
+      {/if}
     </div>
   </div>
 

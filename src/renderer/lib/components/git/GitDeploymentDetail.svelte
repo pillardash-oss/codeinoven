@@ -12,6 +12,7 @@
     Rocket,
     Terminal
   } from '@lucide/svelte'
+  import { onMount } from 'svelte'
   import { relativeTime } from '$lib/format/relative-time'
   import { openInBrowser } from '$lib/open-in-browser'
   import { gitState, GitState } from '$lib/stores/git.svelte'
@@ -31,8 +32,8 @@
     onAgentDiagnose: (
       deployment: GitHubDeployment,
       run: GitHubWorkflowRun | null,
-      jobs: GitHubDeploymentJob[],
-      logs: GitHubDeploymentJobLog[]
+      job: GitHubDeploymentJob,
+      log: GitHubDeploymentJobLog | null
     ) => void
   }
 
@@ -60,6 +61,18 @@
   const latestStatus = $derived(detail?.deployment.latestStatus ?? deployment.latestStatus)
   /** GitHub returns newest-first; the current status is the first entry. */
   const statusHistory = $derived(detail?.statuses ?? [])
+
+  function isFailedJob(job: GitHubDeploymentJob): boolean {
+    return (
+      job.status === 'completed' &&
+      job.conclusion !== 'success' &&
+      job.conclusion !== 'neutral' &&
+      job.conclusion !== 'skipped' &&
+      job.conclusion !== 'cancelled'
+    )
+  }
+
+  const failedJob = $derived((detail?.jobs ?? []).find(isFailedJob) ?? null)
 
   function cachedLog(jobId: number): GitHubDeploymentJobLog | null {
     return (
@@ -123,38 +136,21 @@
     if (open && !cachedLog(jobId) && !loadingLog[jobId]) void loadJobLog(jobId)
   }
 
-  /** Load failed-job evidence before opening the agent diagnosis thread. */
-  async function diagnoseWithAgent(): Promise<void> {
-    if (preparingAgent) return
+  /** Load one failed job's evidence before opening its agent review thread. */
+  async function reviewWithAgent(job: GitHubDeploymentJob): Promise<void> {
+    if (preparingAgent || !isFailedJob(job)) return
     preparingAgent = true
     try {
-      const jobs = detail?.jobs ?? []
-      const failedJobs = jobs.filter(
-        (job) =>
-          job.status === 'completed' &&
-          job.conclusion !== 'success' &&
-          job.conclusion !== 'neutral' &&
-          job.conclusion !== 'skipped' &&
-          job.conclusion !== 'cancelled'
-      )
-      await Promise.all(
-        failedJobs.map((job) =>
-          gitState
-            .ensureDeploymentJobLog(projectId, identity.owner, identity.repo, job.id)
-            .catch(() => null)
-        )
-      )
-      const logs = failedJobs.flatMap((job) => {
-        const log = cachedLog(job.id)
-        return log ? [log] : []
-      })
-      onAgentDiagnose(deployment, detail?.workflowRun ?? null, jobs, logs)
+      await gitState
+        .ensureDeploymentJobLog(projectId, identity.owner, identity.repo, job.id)
+        .catch(() => null)
+      onAgentDiagnose(deployment, detail?.workflowRun ?? null, job, cachedLog(job.id))
     } finally {
       preparingAgent = false
     }
   }
 
-  $effect(() => {
+  onMount(() => {
     void loadDetail()
   })
 
@@ -280,32 +276,32 @@
         <ExternalLink size={13} />
       </button>
     </div>
-    <div class="mt-1 flex items-center gap-1.5 text-[9px] text-dimmed">
+    <div class="mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-[9px] text-dimmed">
       <span class="max-w-32 truncate font-mono">{deployment.ref}</span>
       <span>·</span>
       <span class="font-mono">{deployment.sha.slice(0, 7)}</span>
       <span>·</span>
       <span>{relativeTime(deployment.updatedAt)}</span>
+      {#if failedJob}
+        <button
+          type="button"
+          class="ml-auto flex h-6 cursor-pointer items-center gap-1 rounded-md border border-border px-2 text-[9px] font-medium text-foreground transition-colors hover:bg-elevated disabled:cursor-default disabled:opacity-40"
+          title={`Review failed job ${failedJob.name} with an agent`}
+          disabled={preparingAgent || loading}
+          onclick={() => void reviewWithAgent(failedJob)}
+        >
+          {#if preparingAgent}
+            <Loader2 size={11} class="animate-spin" />
+          {:else}
+            <Bot size={11} />
+          {/if}
+          Review
+        </button>
+      {/if}
     </div>
     {#if deployment.description}
       <p class="mt-1 truncate text-[10px] text-muted">{deployment.description}</p>
     {/if}
-    <div class="mt-2 flex justify-end">
-      <button
-        type="button"
-        class="flex h-7 cursor-pointer items-center gap-1 rounded-md border border-border px-2.5 text-[10px] font-medium text-foreground transition-colors hover:bg-elevated disabled:cursor-default disabled:opacity-40"
-        title="Open an agent thread with this deployment and its failed-job logs"
-        disabled={preparingAgent || loading}
-        onclick={() => void diagnoseWithAgent()}
-      >
-        {#if preparingAgent}
-          <Loader2 size={12} class="animate-spin" />
-        {:else}
-          <Bot size={12} />
-        {/if}
-        Diagnose with agent
-      </button>
-    </div>
   </div>
 
   {#if loading && !detail}
