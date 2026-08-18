@@ -4,6 +4,7 @@ import { join } from 'path'
 import { tmpdir } from 'os'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { ChildProcess } from 'child_process'
+import type { AgentEvent } from '../../../src/lib/types'
 import { StorageEngine } from '../../../src/main/storage/storage-engine'
 import {
   CodexDriver,
@@ -97,11 +98,19 @@ const settings = {
 describe('CodexDriver', () => {
   it('runs new and resumed turns through one shared app-server with the selected sandbox', async () => {
     const driver = new CodexDriver(await storage())
+    const events: AgentEvent[] = []
+    driver.onEvent((event) => events.push(event))
     const sharedChild = new FakeChild()
     spawnMock.mockReturnValue(sharedChild as unknown as ChildProcess)
     const sessionId = await driver.createSession('/project', 'Codex')
     await driver.sendPrompt('/project', { sessionId, settings, text: 'first', attachments: [] })
-    expect(spawnMock.mock.calls[0]?.[1]).toEqual(['app-server', '--listen', 'stdio://'])
+    expect(spawnMock.mock.calls[0]?.[1]).toEqual([
+      'app-server',
+      '--enable',
+      'default_mode_request_user_input',
+      '--listen',
+      'stdio://'
+    ])
     expect(sharedChild.requests()).toContainEqual(
       expect.objectContaining({
         method: 'turn/start',
@@ -112,6 +121,41 @@ describe('CodexDriver', () => {
         })
       })
     )
+    sharedChild.emitPayload({
+      id: 'question-1',
+      method: 'item/tool/requestUserInput',
+      params: {
+        threadId: 'native-1',
+        turnId: 'turn-1',
+        questions: [
+          {
+            id: 'scope',
+            header: 'Scope',
+            question: 'Which project should Codex update?',
+            options: [{ label: 'Current project', description: 'Continue in this workspace.' }]
+          }
+        ]
+      }
+    })
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: 'question.asked',
+        sessionId,
+        requestId: 'question-1',
+        questions: [
+          expect.objectContaining({
+            header: 'Scope',
+            prompt: 'Which project should Codex update?',
+            options: ['Current project']
+          })
+        ]
+      })
+    )
+    await driver.replyToQuestion('/project', sessionId, 'question-1', [['Current project']])
+    expect(sharedChild.requests()).toContainEqual({
+      id: 'question-1',
+      result: { answers: { scope: { answers: ['Current project'] } } }
+    })
     await driver.steerPrompt('/project', {
       sessionId,
       text: 'focus on tests',
@@ -200,6 +244,18 @@ describe('CodexDriver', () => {
       params: { item: { id: 'msg-1', type: 'agentMessage', text: 'Done' } }
     })
     child.emitPayload({
+      method: 'turn/plan/updated',
+      params: {
+        threadId: 'native-1',
+        turnId: 'turn-1',
+        explanation: 'Implementation plan',
+        plan: [
+          { step: 'Inspect the driver', status: 'completed' },
+          { step: 'Apply the fix', status: 'inProgress' }
+        ]
+      }
+    })
+    child.emitPayload({
       method: 'turn/completed',
       params: { turn: { id: 'turn-1', status: 'completed' } }
     })
@@ -211,7 +267,25 @@ describe('CodexDriver', () => {
         role: 'assistant',
         parts: [expect.objectContaining({ type: 'tool', tool: 'command_execution' })]
       }),
-      expect.objectContaining({ id: `${sessionId}:msg-1`, role: 'assistant' })
+      expect.objectContaining({ id: `${sessionId}:msg-1`, role: 'assistant' }),
+      expect.objectContaining({
+        id: `${sessionId}:turn-1:plan`,
+        role: 'assistant',
+        parts: [
+          expect.objectContaining({
+            type: 'tool',
+            tool: 'plan_update',
+            state: expect.objectContaining({
+              input: {
+                plan: [
+                  { step: 'Inspect the driver', status: 'completed' },
+                  { step: 'Apply the fix', status: 'inProgress' }
+                ]
+              }
+            })
+          })
+        ]
+      })
     ])
   })
 

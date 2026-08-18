@@ -73,6 +73,7 @@ const CODEX_FALLBACK_MODELS = ['gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna']
 const CODEX_COMPACTION_TIMEOUT_MS = 180_000
 const CODEX_USAGE_TIMEOUT_MS = 15_000
 const CODEX_APP_SERVER_REQUEST_TIMEOUT_MS = 30_000
+const CODEX_APP_SERVER_FEATURES = ['default_mode_request_user_input'] as const
 
 interface CodexAppServerHost {
   child: ChildProcess
@@ -600,11 +601,16 @@ export class CodexDriver extends PersistentCliDriver {
 
   private async createAppServerHost(projectPath: string): Promise<CodexAppServerHost> {
     const { env: providerEnv, args: providerArgs } = await this.customProviderOverlay()
-    const child = spawn('codex', [...providerArgs, 'app-server', '--listen', 'stdio://'], {
-      cwd: projectPath,
-      env: { ...buildHarnessEnvironment(), ...providerEnv },
-      stdio: ['pipe', 'pipe', 'pipe']
-    })
+    const featureArgs = CODEX_APP_SERVER_FEATURES.flatMap((feature) => ['--enable', feature])
+    const child = spawn(
+      'codex',
+      [...providerArgs, 'app-server', ...featureArgs, '--listen', 'stdio://'],
+      {
+        cwd: projectPath,
+        env: { ...buildHarnessEnvironment(), ...providerEnv },
+        stdio: ['pipe', 'pipe', 'pipe']
+      }
+    )
     const host: CodexAppServerHost = {
       child,
       nextRequestId: 0,
@@ -839,6 +845,27 @@ export class CodexDriver extends PersistentCliDriver {
         this.applyCodexResult(
           active,
           parseItem(item, method === 'item/completed', active.session.id)
+        )
+      }
+      return
+    }
+    if (method === 'turn/plan/updated') {
+      const turnId = stringValue(params['turnId']) ?? active.turnId
+      const plan = params['plan']
+      if (turnId && Array.isArray(plan)) {
+        this.applyCodexResult(
+          active,
+          parseItem(
+            {
+              id: `${turnId}:plan`,
+              type: 'plan_update',
+              plan,
+              explanation: params['explanation'],
+              output: params['explanation']
+            },
+            true,
+            active.session.id
+          )
         )
       }
       return
