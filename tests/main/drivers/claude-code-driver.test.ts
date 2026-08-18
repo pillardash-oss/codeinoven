@@ -422,6 +422,71 @@ describe('ClaudeCodeDriver', () => {
     child.emit('exit', 0, null)
   })
 
+  it('carries a "provide alternative" reply as a deny + message on the live process, without killing it', async () => {
+    const child = new FakeChild()
+    spawnMock.mockReturnValue(child as unknown as ChildProcess)
+    const driver = new ClaudeCodeDriver(await storage())
+    const events: AgentEvent[] = []
+    driver.onEvent((event) => events.push(event))
+    const sessionId = await driver.createSession('/project', 'Claude thread')
+    await driver.sendPrompt('/project', {
+      sessionId,
+      text: 'Delete a file',
+      attachments: [],
+      settings: {
+        harnessId: 'claude-code',
+        providerId: 'anthropic',
+        modelId: '',
+        thinkingLevel: 'low',
+        permissionLevel: 'auto_review',
+        engineeringMode: false
+      }
+    })
+    child.stdout.emit(
+      'data',
+      Buffer.from(
+        `${JSON.stringify({
+          type: 'control_request',
+          request_id: 'perm-2',
+          session_id: 'native-1',
+          request: {
+            subtype: 'can_use_tool',
+            tool_name: 'Bash',
+            input: { command: 'rm file.txt' }
+          }
+        })}\n`
+      )
+    )
+    const permissionEvent = events.find((event) => event.type === 'permission.asked')
+    expect(permissionEvent).toBeDefined()
+    if (!permissionEvent || permissionEvent.type !== 'permission.asked') throw new Error('unreachable')
+
+    // Mirrors ChatEngine.replyPermission: an alternative always resolves as 'reject'
+    // and carries the user's instruction as the SDK's canUseTool `message` field, so
+    // Claude denies the tool call but keeps streaming the same turn (see
+    // src/main/chat/chat-engine.ts:6887-6900) instead of the process being killed.
+    await driver.replyPermission(
+      '/project',
+      permissionEvent.permission.id,
+      'reject',
+      'Use the archive folder instead of deleting the file.',
+      sessionId
+    )
+    const lastWrite = child.stdin.write.mock.calls.at(-1)?.[0] as string
+    expect(lastWrite).toBeDefined()
+    const parsed = JSON.parse(lastWrite)
+    expect(parsed.type).toBe('control_response')
+    expect(parsed.response.request_id).toBe('perm-2')
+    expect(parsed.response.response.behavior).toBe('deny')
+    expect(parsed.response.response.message).toBe(
+      'Use the archive folder instead of deleting the file.'
+    )
+    // The process must still be alive: this is a continuation, not an abort.
+    expect(child.killed).toBe(false)
+
+    child.emit('exit', 0, null)
+  })
+
   it('surfaces an AskUserQuestion tool_use as question.asked and replies via tool_result', async () => {
     const child = new FakeChild()
     spawnMock.mockReturnValue(child as unknown as ChildProcess)
