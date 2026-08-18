@@ -222,9 +222,9 @@
 
 <Dialog.Root bind:open={expanded}>
   <Dialog.Portal>
-    <Dialog.Overlay class="fixed inset-0 z-50 bg-overlay/80 backdrop-blur-sm" />
+    <Dialog.Overlay class="titlebar-no-drag fixed inset-0 z-50 bg-overlay/80 backdrop-blur-sm" />
     <Dialog.Content
-      class="fixed inset-6 z-50 flex min-h-0 flex-col overflow-hidden rounded-xl border bg-surface shadow-2xl outline-none"
+      class="titlebar-no-drag fixed inset-6 z-50 flex min-h-0 flex-col overflow-hidden rounded-xl border bg-surface shadow-2xl outline-none"
     >
       <div class="flex h-10 shrink-0 items-center justify-between border-b px-3">
         <Dialog.Title class="text-xs font-semibold text-foreground">Mermaid diagram</Dialog.Title>
