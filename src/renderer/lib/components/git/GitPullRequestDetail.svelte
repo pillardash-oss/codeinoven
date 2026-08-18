@@ -47,6 +47,8 @@
     onAgentReview: (pr: PullRequestSummary) => void
     /** Reopen the thread that owns this PR's agent review. */
     onOpenThread: (threadId: string) => void
+    /** Reveal a GitHub Actions check in the in-app Deployments tab. */
+    onOpenWorkflowRun: (runId: number) => void
     /** Resolve a conflicting PR locally: check out the head, merge base, show conflict UI. */
     onResolveLocally?: (pr: PullRequestSummary) => void
     /** Hand a conflicting PR to an agent to resolve and push. */
@@ -60,6 +62,7 @@
     onBack,
     onAgentReview,
     onOpenThread,
+    onOpenWorkflowRun,
     onResolveLocally,
     onResolveWithAgent
   }: Props = $props()
@@ -707,18 +710,36 @@
       {:else}
         {#each checks.checks as check (check.name + (check.url ?? ''))}
           {@const Icon = checkIcon(check)}
+          {@const workflowRunId = check.workflowRunId}
           <div class="flex items-center gap-2 border-b border-border/50 px-3 py-1.5">
-            <Icon size={12} class="shrink-0 {checkClass(check)}" />
-            <span class="min-w-0 flex-1 truncate text-[11px] text-foreground">{check.name}</span>
-            <span class="shrink-0 text-[9px] text-dimmed">
-              {check.status === 'completed' ? (check.conclusion ?? 'done') : check.status}
-            </span>
+            {#if workflowRunId !== null}
+              <button
+                type="button"
+                class="flex min-w-0 flex-1 cursor-pointer items-center gap-2 text-left"
+                title="View {check.name} in Deployments"
+                onclick={() => onOpenWorkflowRun(workflowRunId)}
+              >
+                <Icon size={12} class="shrink-0 {checkClass(check)}" />
+                <span class="min-w-0 flex-1 truncate text-[11px] text-foreground">
+                  {check.name}
+                </span>
+                <span class="shrink-0 text-[9px] text-dimmed">
+                  {check.status === 'completed' ? (check.conclusion ?? 'done') : check.status}
+                </span>
+              </button>
+            {:else}
+              <Icon size={12} class="shrink-0 {checkClass(check)}" />
+              <span class="min-w-0 flex-1 truncate text-[11px] text-foreground">{check.name}</span>
+              <span class="shrink-0 text-[9px] text-dimmed">
+                {check.status === 'completed' ? (check.conclusion ?? 'done') : check.status}
+              </span>
+            {/if}
             {#if check.url}
               <button
                 type="button"
                 class="shrink-0 cursor-pointer rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
-                title="Open {check.name} results"
-                aria-label="Open {check.name} results"
+                title="Open {check.name} externally"
+                aria-label="Open {check.name} externally"
                 onclick={() => void openInBrowser(check.url ?? '')}
               >
                 <ExternalLink size={12} />

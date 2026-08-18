@@ -437,11 +437,14 @@ export class GitHubProvider implements GitProvider {
       for (const run of runs) {
         if (typeof run !== 'object' || run === null) continue
         const record = run as Record<string, unknown>
+        const detailsUrl = this.readString(record, 'details_url')
+        const htmlUrl = this.readString(record, 'html_url')
         checks.push({
           name: this.readString(record, 'name') ?? 'check',
           status: this.toCheckStatus(this.readString(record, 'status')),
           conclusion: this.toCheckConclusion(this.readString(record, 'conclusion')),
-          url: this.readString(record, 'html_url')
+          url: htmlUrl ?? detailsUrl,
+          workflowRunId: this.workflowRunIdFromUrls(detailsUrl, htmlUrl)
         })
       }
     }
@@ -453,12 +456,14 @@ export class GitHubProvider implements GitProvider {
         if (typeof status !== 'object' || status === null) continue
         const record = status as Record<string, unknown>
         const state = this.readString(record, 'state')
+        const targetUrl = this.readString(record, 'target_url')
         checks.push({
           name: this.readString(record, 'context') ?? 'status',
           status: state === 'pending' ? 'in_progress' : 'completed',
           conclusion:
             state === 'success' ? 'success' : state === 'pending' ? null : ('failure' as const),
-          url: this.readString(record, 'target_url')
+          url: targetUrl,
+          workflowRunId: this.workflowRunIdFromUrls(targetUrl)
         })
       }
     }
@@ -642,15 +647,22 @@ export class GitHubProvider implements GitProvider {
   /** Deployment statuses created by Actions carry the run id in their log/env URLs. */
   private runIdFromDeploymentStatuses(statuses: GitHubDeploymentStatus[]): number {
     for (const status of statuses) {
-      for (const url of [status.logUrl, status.environmentUrl]) {
-        if (!url) continue
-        const match = /\/actions\/runs\/(\d+)/u.exec(url)
-        if (!match) continue
-        const id = Number.parseInt(match[1] ?? '', 10)
-        if (Number.isSafeInteger(id) && id > 0) return id
-      }
+      const id = this.workflowRunIdFromUrls(status.logUrl, status.environmentUrl)
+      if (id !== null) return id
     }
     return 0
+  }
+
+  /** Extract an Actions workflow-run id without adding another provider request. */
+  private workflowRunIdFromUrls(...urls: Array<string | null>): number | null {
+    for (const url of urls) {
+      if (!url) continue
+      const match = /\/actions\/runs\/(\d+)/u.exec(url)
+      if (!match) continue
+      const id = Number.parseInt(match[1] ?? '', 10)
+      if (Number.isSafeInteger(id) && id > 0) return id
+    }
+    return null
   }
 
   private async getRunJobs(
@@ -669,11 +681,11 @@ export class GitHubProvider implements GitProvider {
     })
   }
 
-  /** Perform a text/plain fetch (e.g. raw job logs), mirroring `request` auth/refresh. */
+  /** Download redirected raw content while using GitHub's required JSON media type. */
   private async requestText(path: string): Promise<string> {
     const controller = new AbortController()
     const timer = setTimeout(() => controller.abort(), PROVIDER_FETCH_TIMEOUT_MS)
-    const init: RequestInit = { method: 'GET', headers: { Accept: 'text/plain' } }
+    const init: RequestInit = { method: 'GET' }
     try {
       let token = this.token
       let response = await this.fetch(path, init, token, controller.signal)

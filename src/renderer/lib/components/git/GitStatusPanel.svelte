@@ -10,7 +10,11 @@
     GitCommitInfo,
     GitDiff,
     GitFileChange,
+    GitHubDeployment,
+    GitHubDeploymentJob,
+    GitHubDeploymentJobLog,
     GitHubUser,
+    GitHubWorkflowRun,
     GitResetMode,
     GitStashEntry,
     ThreadStatus
@@ -81,7 +85,11 @@
   // Hiding the sidebar destroys and recreates this component, so the tab/
   // selection state is seeded from (and mirrored back into) a persisted
   // view-state store keyed by project+thread to survive that remount.
-  const savedView = gitPanelView.get(projectId, threadId)
+  function initialViewState(): ReturnType<typeof gitPanelView.get> {
+    return gitPanelView.get(projectId, threadId)
+  }
+
+  const savedView = initialViewState()
 
   let repoState = $state<RepoState>('loading')
   let preflightDetail = $state('')
@@ -136,6 +144,8 @@
   let githubUser = $state<GitHubUser | null>(null)
   /** Whether the repo is known to have GitHub deployments — gates the Deployments tab. */
   let hasDeployments = $state(false)
+  /** One PR check-directed workflow run to reveal in the Deployments tab. */
+  let requestedWorkflowRunId = $state<number | null>(null)
   /** Re-entrancy guard for the background deployment probe (not rendered). */
   let detectingDeployments = false
   let loadingCommitDiff = $state(false)
@@ -362,6 +372,123 @@
     } finally {
       detectingDeployments = false
     }
+  }
+
+  /** Route a GitHub Actions PR check into the matching in-app workflow detail. */
+  function openWorkflowRunFromCheck(runId: number): void {
+    selectedPullRequest = null
+    requestedWorkflowRunId = runId
+    hasDeployments = true
+    cacheHasDeployments(projectId, true)
+    activeTab = 'deployments'
+  }
+
+  /** Open a new agent thread with bounded deployment evidence prefilled. */
+  async function createDeploymentDiagnosisThread(title: string, prompt: string): Promise<void> {
+    const project = await invoke('project:get', projectId).catch(() => null)
+    if (!project) return
+    const thread = await invoke('thread:create', {
+      projectId,
+      providerId: 'opencode',
+      title,
+      workingDirectory: project.path,
+      settings: { ...threadSettings.lastUsed }
+    }).catch(() => null)
+    if (!thread) return
+    rendererRecovery.setDraft(projectId, thread.id, prompt, [], [])
+    workspaceState.openThread(thread, project)
+  }
+
+  /** Keep agent context useful without placing hundreds of kilobytes in the composer. */
+  function deploymentEvidence(
+    jobs: GitHubDeploymentJob[],
+    logs: GitHubDeploymentJobLog[]
+  ): string[] {
+    const failedJobs = jobs.filter(
+      (job) =>
+        job.status === 'completed' &&
+        job.conclusion !== 'success' &&
+        job.conclusion !== 'neutral' &&
+        job.conclusion !== 'skipped' &&
+        job.conclusion !== 'cancelled'
+    )
+    const jobLines = failedJobs.flatMap((job) => {
+      const failedSteps = job.steps
+        .filter(
+          (step) =>
+            step.status === 'completed' &&
+            step.conclusion !== 'success' &&
+            step.conclusion !== 'neutral' &&
+            step.conclusion !== 'skipped' &&
+            step.conclusion !== 'cancelled'
+        )
+        .map((step) => step.name)
+      return [
+        `- ${job.name}: ${job.conclusion ?? job.status}${failedSteps.length > 0 ? `; failed steps: ${failedSteps.join(', ')}` : ''}`
+      ]
+    })
+    const logLines = logs.slice(0, 3).flatMap((log) => {
+      const maxChars = 12_000
+      const excerpt =
+        log.log.length > maxChars
+          ? `[earlier output omitted]\n${log.log.slice(-maxChars)}`
+          : log.log
+      return ['', `Job ${log.jobId} log excerpt:`, '```text', excerpt, '```']
+    })
+    return [
+      failedJobs.length > 0 ? 'Failed jobs:' : 'No completed failing jobs were reported.',
+      ...jobLines,
+      ...logLines
+    ]
+  }
+
+  function startWorkflowDiagnosis(
+    run: GitHubWorkflowRun,
+    jobs: GitHubDeploymentJob[],
+    logs: GitHubDeploymentJobLog[]
+  ): void {
+    const prompt = [
+      `Diagnose and resolve GitHub Actions workflow run ${run.name} #${run.runNumber}.`,
+      `Run ID: ${run.id}`,
+      `Status: ${run.status}${run.conclusion ? ` / ${run.conclusion}` : ''}`,
+      `Branch: ${run.branch || '(unknown)'}`,
+      `Commit: ${run.headSha || '(unknown)'}`,
+      ...(run.url ? [`Workflow URL: ${run.url}`] : []),
+      '',
+      ...deploymentEvidence(jobs, logs),
+      '',
+      'Inspect the repository and workflow configuration, identify the root cause, and reproduce it locally where practical.',
+      'If the cause is in this repository, implement the smallest correct fix, run the relevant checks/tests, and commit the completed change.',
+      'If the cause is external infrastructure, permissions, or secrets, do not guess or expose credentials; explain the exact action required.',
+      'Do not push, rerun workflows, or deploy.'
+    ].join('\n')
+    void createDeploymentDiagnosisThread(`Fix workflow ${run.name} #${run.runNumber}`, prompt)
+  }
+
+  function startDeploymentDiagnosis(
+    deployment: GitHubDeployment,
+    run: GitHubWorkflowRun | null,
+    jobs: GitHubDeploymentJob[],
+    logs: GitHubDeploymentJobLog[]
+  ): void {
+    const deploymentUrl = `https://github.com/${encodeURIComponent(githubIdentity?.owner ?? '')}/${encodeURIComponent(githubIdentity?.repo ?? '')}/deployments/${deployment.id}`
+    const prompt = [
+      `Diagnose and resolve the ${deployment.environment} deployment.`,
+      `Deployment ID: ${deployment.id}`,
+      `Status: ${deployment.latestStatus?.state ?? 'unknown'}`,
+      `Ref: ${deployment.ref || '(unknown)'}`,
+      `Commit: ${deployment.sha || '(unknown)'}`,
+      `Deployment URL: ${deploymentUrl}`,
+      ...(run ? [`Linked workflow run: ${run.name} #${run.runNumber} (ID ${run.id})`] : []),
+      '',
+      ...deploymentEvidence(jobs, logs),
+      '',
+      'Inspect the repository, deployment configuration, and workflow configuration; identify the root cause and reproduce it locally where practical.',
+      'If the cause is in this repository, implement the smallest correct fix, run the relevant checks/tests, and commit the completed change.',
+      'If the cause is external infrastructure, permissions, or secrets, do not guess or expose credentials; explain the exact action required.',
+      'Do not push, rerun workflows, or deploy.'
+    ].join('\n')
+    void createDeploymentDiagnosisThread(`Fix ${deployment.environment} deployment`, prompt)
   }
 
   /**
@@ -2346,6 +2473,7 @@
               onBack={() => (selectedPullRequest = null)}
               onAgentReview={(pr) => void startAgentReview(pr)}
               onOpenThread={(threadId) => void openReviewThread(threadId)}
+              onOpenWorkflowRun={openWorkflowRunFromCheck}
               onResolveLocally={(pr) => void resolveConflictsLocally(pr)}
               onResolveWithAgent={(pr) => void startConflictResolution(pr)}
             />
@@ -2367,6 +2495,10 @@
           identity={githubIdentity}
           {githubConnected}
           onSignIn={() => (showGitHubSignIn = true)}
+          requestedRunId={requestedWorkflowRunId}
+          onRequestedRunOpened={() => (requestedWorkflowRunId = null)}
+          onAgentDiagnoseRun={startWorkflowDiagnosis}
+          onAgentDiagnoseDeployment={startDeploymentDiagnosis}
         />
       {:else if activeTab === 'stashes'}
         <div class="p-2">

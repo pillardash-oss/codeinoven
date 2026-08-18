@@ -1,6 +1,7 @@
 <script lang="ts">
   import {
     ArrowLeft,
+    Bot,
     CircleDot,
     CircleX,
     ExternalLink,
@@ -18,7 +19,8 @@
     GitHubDeployment,
     GitHubDeploymentJob,
     GitHubDeploymentJobLog,
-    GitHubDeploymentStatus
+    GitHubDeploymentStatus,
+    GitHubWorkflowRun
   } from '$shared/types'
 
   interface Props {
@@ -26,14 +28,21 @@
     identity: { owner: string; repo: string }
     deployment: GitHubDeployment
     onBack: () => void
+    onAgentDiagnose: (
+      deployment: GitHubDeployment,
+      run: GitHubWorkflowRun | null,
+      jobs: GitHubDeploymentJob[],
+      logs: GitHubDeploymentJobLog[]
+    ) => void
   }
 
-  let { projectId, identity, deployment, onBack }: Props = $props()
+  let { projectId, identity, deployment, onBack, onAgentDiagnose }: Props = $props()
 
   let error = $state('')
   let expandedLog = $state<Record<number, boolean>>({})
   let loadingLog = $state<Record<number, boolean>>({})
   let logErrors = $state<Record<number, string>>({})
+  let preparingAgent = $state(false)
 
   const htmlUrl = $derived(
     `https://github.com/${encodeURIComponent(identity.owner)}/${encodeURIComponent(identity.repo)}/deployments/${deployment.id}`
@@ -112,6 +121,37 @@
     const open = !expandedLog[jobId]
     expandedLog = { ...expandedLog, [jobId]: open }
     if (open && !cachedLog(jobId) && !loadingLog[jobId]) void loadJobLog(jobId)
+  }
+
+  /** Load failed-job evidence before opening the agent diagnosis thread. */
+  async function diagnoseWithAgent(): Promise<void> {
+    if (preparingAgent) return
+    preparingAgent = true
+    try {
+      const jobs = detail?.jobs ?? []
+      const failedJobs = jobs.filter(
+        (job) =>
+          job.status === 'completed' &&
+          job.conclusion !== 'success' &&
+          job.conclusion !== 'neutral' &&
+          job.conclusion !== 'skipped' &&
+          job.conclusion !== 'cancelled'
+      )
+      await Promise.all(
+        failedJobs.map((job) =>
+          gitState
+            .ensureDeploymentJobLog(projectId, identity.owner, identity.repo, job.id)
+            .catch(() => null)
+        )
+      )
+      const logs = failedJobs.flatMap((job) => {
+        const log = cachedLog(job.id)
+        return log ? [log] : []
+      })
+      onAgentDiagnose(deployment, detail?.workflowRun ?? null, jobs, logs)
+    } finally {
+      preparingAgent = false
+    }
   }
 
   $effect(() => {
@@ -250,6 +290,22 @@
     {#if deployment.description}
       <p class="mt-1 truncate text-[10px] text-muted">{deployment.description}</p>
     {/if}
+    <div class="mt-2 flex justify-end">
+      <button
+        type="button"
+        class="flex h-7 cursor-pointer items-center gap-1 rounded-md border border-border px-2.5 text-[10px] font-medium text-foreground transition-colors hover:bg-elevated disabled:cursor-default disabled:opacity-40"
+        title="Open an agent thread with this deployment and its failed-job logs"
+        disabled={preparingAgent || loading}
+        onclick={() => void diagnoseWithAgent()}
+      >
+        {#if preparingAgent}
+          <Loader2 size={12} class="animate-spin" />
+        {:else}
+          <Bot size={12} />
+        {/if}
+        Diagnose with agent
+      </button>
+    </div>
   </div>
 
   {#if loading && !detail}

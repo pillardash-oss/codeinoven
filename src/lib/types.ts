@@ -3448,6 +3448,8 @@ export interface PullRequestCheck {
     | null
   /** Provider page for the run, when one exists. */
   url: string | null
+  /** GitHub Actions workflow-run id, when this check belongs to an Actions run. */
+  workflowRunId: number | null
 }
 
 /** Rolled-up CI state for a pull request head. */
