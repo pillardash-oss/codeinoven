@@ -21,14 +21,10 @@ function defaultState(): GitPanelViewState {
   }
 }
 
-function key(projectId: string, threadId: string): string {
-  return `${projectId}:${threadId}`
-}
-
 /**
  * Remembers each git panel's tab/selection state across the sidebar's
- * hide/show toggle, which destroys and recreates GitStatusPanel (its local
- * $state is not preserved by Svelte across that remount).
+ * hide/show toggle and thread switches. Git is repository context, so one
+ * project owns one view state regardless of which of its threads is active.
  */
 const states = new SvelteMap<string, GitPanelViewState>()
 type PullRequestOpenListener = (
@@ -39,12 +35,12 @@ type PullRequestOpenListener = (
 const pullRequestOpenListeners = new SvelteSet<PullRequestOpenListener>()
 
 export const gitPanelView = {
-  get(projectId: string, threadId: string): GitPanelViewState {
-    const existing = states.get(key(projectId, threadId))
+  get(projectId: string, _threadId: string): GitPanelViewState {
+    const existing = states.get(projectId)
     return existing ? { ...existing } : defaultState()
   },
-  set(projectId: string, threadId: string, state: GitPanelViewState): void {
-    states.set(key(projectId, threadId), { ...state })
+  set(projectId: string, _threadId: string, state: GitPanelViewState): void {
+    states.set(projectId, { ...state })
   },
   /** Persist and publish direct PR navigation for both mounted and remounting Git panels. */
   openPullRequest(projectId: string, threadId: string, pullRequest: PullRequestSummary): void {

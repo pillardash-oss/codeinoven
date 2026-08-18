@@ -134,7 +134,7 @@ class WorkspaceState {
     this.selectedThread = thread
     this.activeProject = project
     this.activeProjectIconUrl = iconUrl ?? null
-    contextSidebarState.activateThread(thread.projectId, thread.id)
+    contextSidebarState.activateThread(thread.projectId, thread.id, thread.title)
     rendererRecovery.setSelectedThread(thread.projectId, thread.id)
     // Event-driven git refresh: every thread open (creation, switch, restore)
     // tells the git store the project is in use, so it can refresh status and
