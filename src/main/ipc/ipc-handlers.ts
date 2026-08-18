@@ -3732,7 +3732,7 @@ export function registerIpcHandlers(
             canonicalGitHubBranch(pr.baseRef) === safeBase
         )
         if (match) {
-          existing = { number: match.number, url: match.url, title: match.title }
+          existing = match
         }
       } catch {
         existing = null

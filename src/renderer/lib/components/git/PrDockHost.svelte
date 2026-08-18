@@ -1,8 +1,33 @@
 <script lang="ts">
+  import { invoke } from '$lib/ipc.svelte'
+  import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
+  import { gitPanelView } from '$lib/stores/git-panel-view.svelte'
   import { prLifecycleStore } from '$lib/stores/pr-lifecycle.svelte'
+  import { workspaceState } from '$lib/stores/workspace.svelte'
+  import type { PullRequestSummary } from '$shared/types'
   import GitPullRequestSheet from './GitPullRequestSheet.svelte'
 
   const store = prLifecycleStore
+
+  async function revealPullRequest(
+    projectId: string,
+    originalThreadId: string,
+    pullRequest: PullRequestSummary
+  ): Promise<void> {
+    const currentThread = workspaceState.selectedThread
+    const threadId = currentThread?.projectId === projectId ? currentThread.id : originalThreadId
+
+    if (currentThread?.projectId !== projectId || currentThread.id !== threadId) {
+      const [project, thread] = await Promise.all([
+        invoke('project:get', projectId).catch(() => null),
+        invoke('thread:get', projectId, threadId).catch(() => null)
+      ])
+      if (thread) workspaceState.openThread(thread, project)
+    }
+
+    gitPanelView.openPullRequest(projectId, threadId, pullRequest)
+    contextSidebarState.openGit(projectId, threadId)
+  }
 </script>
 
 <!--
@@ -19,6 +44,7 @@
     onMinimize={() => store.minimize(draft.id)}
     onExpand={() => store.expand(draft.id)}
     onClose={() => store.close(draft.id)}
+    onView={(pullRequest) => void revealPullRequest(draft.projectId, draft.threadId, pullRequest)}
     storageKey={store.storageKeyFor(draft.id)}
     onCreated={() => {
       // The per-panel prListRefresh signal is intentionally not wired here —

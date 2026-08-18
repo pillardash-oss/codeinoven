@@ -3364,7 +3364,7 @@ export interface PullRequestCompare {
    * GitHub rejects a second open PR for the same pair with a 422, so the form
    * can warn and offer to open the existing PR instead of hitting that error.
    */
-  existing?: PullRequestReference | null
+  existing?: PullRequestSummary | null
 }
 
 /** Full pull request view, loaded when one is opened in the sidebar. */

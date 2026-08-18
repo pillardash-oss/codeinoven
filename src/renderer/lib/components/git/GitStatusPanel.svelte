@@ -70,7 +70,7 @@
   import { threadSettings } from '$lib/stores/thread-settings.svelte'
   import { prLifecycleStore } from '$lib/stores/pr-lifecycle.svelte'
   import { gitPanelView } from '$lib/stores/git-panel-view.svelte'
-  import type { PullRequestReference, PullRequestSummary } from '$shared/types'
+  import type { PullRequestSummary } from '$shared/types'
 
   interface Props {
     projectId: string
@@ -633,20 +633,6 @@
     ].join('\n')
   }
 
-  function _viewCreatedPullRequest(created: {
-    reference: PullRequestReference
-    head: string
-    base: string
-    draft: boolean
-  }): void {
-    void created
-    // Kept for reference — global PR sheets now host creation; the panel still
-    // handles `onView` via the detail view when needed. Prefix with `_` to
-    // satisfy the project's strict unused-var lint while preserving history.
-    activeTab = 'pulls'
-    // selectedPullRequest assignment removed with global docking — handled by callers as needed
-  }
-
   async function signOutGitHub(): Promise<void> {
     const status = await gitState.logoutGitHub()
     githubConnected = status.connected
@@ -1007,17 +993,28 @@
 
   onMount(() => {
     gitState.ensureProjectEvents(projectId)
+    const unsubscribePullRequestOpen = gitPanelView.onPullRequestOpen(
+      (requestedProjectId, requestedThreadId, pullRequest) => {
+        if (requestedProjectId !== projectId || requestedThreadId !== threadId) return
+        selectedPullRequest = pullRequest
+        activeTab = 'pulls'
+      }
+    )
     // Agent-turn state is event-driven: main broadcasts `thread:updated` on
     // every status transition (planning/executing/completed/failed), so the
     // panel reacts to those instead of polling. The one-shot fetch of the
     // current status lives in the `refreshAgentTurnState` $effect above.
-    return subscribe('thread:updated', (...args: unknown[]) => {
+    const unsubscribeThreadUpdates = subscribe('thread:updated', (...args: unknown[]) => {
       const thread = args[0] as
         { projectId?: string; id?: string; status?: ThreadStatus } | undefined
       if (thread && thread.projectId === projectId && thread.id === threadId) {
         agentTurnActive = thread.status === 'executing' || thread.status === 'planning'
       }
     })
+    return () => {
+      unsubscribePullRequestOpen()
+      unsubscribeThreadUpdates()
+    }
   })
 
   const identityNeeded = $derived(
@@ -1456,7 +1453,7 @@
             >
               <DropdownMenu.Item
                 class="flex cursor-pointer items-center gap-2 px-3 py-1.5 text-[11px] text-foreground outline-none data-highlighted:bg-elevated"
-                onSelect={() => prLifecycleStore.open(projectId)}
+                onSelect={() => prLifecycleStore.open(projectId, threadId)}
               >
                 <GitPullRequest size={12} class="shrink-0 text-dimmed" />
                 Create pull request…
@@ -2489,7 +2486,7 @@
               {githubConnected}
               onOpen={(pr) => (selectedPullRequest = pr)}
               onSignIn={() => (showGitHubSignIn = true)}
-              onCreate={() => prLifecycleStore.open(projectId)}
+              onCreate={() => prLifecycleStore.open(projectId, threadId)}
               refreshSignal={prListRefresh}
             />
           {/if}

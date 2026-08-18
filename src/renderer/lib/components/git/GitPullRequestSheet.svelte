@@ -15,6 +15,7 @@
   import type {
     PullRequestCompare,
     PullRequestReference,
+    PullRequestSummary,
     ProviderCatalog,
     ThinkingLevel,
     ThreadSettings
@@ -38,12 +39,7 @@
     /** Fired once a pull request is actually created, so the list can refresh. */
     onCreated?: () => void
     /** Fired from the success screen to open the created PR inside the git panel. */
-    onView?: (created: {
-      reference: PullRequestReference
-      head: string
-      base: string
-      draft: boolean
-    }) => void
+    onView?: (pullRequest: PullRequestSummary) => void
     /** When provided, the docked state is owned by the global pr lifecycle store. */
     minimized?: boolean
     onMinimize?: () => void
@@ -174,6 +170,21 @@
       .replace(/^refs\/remotes\/origin\//u, '')
       .replace(/^refs\/heads\//u, '')
       .replace(/^origin\//u, '')
+  }
+
+  function createdPullRequestSummary(reference: PullRequestReference): PullRequestSummary {
+    const now = new Date().toISOString()
+    return {
+      ...reference,
+      state: 'open',
+      draft,
+      authorLogin: '',
+      headRef: head,
+      baseRef: base,
+      createdAt: now,
+      updatedAt: now,
+      comments: 0
+    }
   }
 
   async function loadOrigin(): Promise<void> {
@@ -679,7 +690,7 @@
             title="Open this pull request in the Git panel"
             onclick={() => {
               onClose()
-              onView?.({ reference: pr, head, base, draft })
+              onView?.(createdPullRequestSummary(pr))
             }}
           >
             <Eye size={12} />
@@ -783,11 +794,14 @@
                 <button
                   type="button"
                   class="mt-2 flex h-7 cursor-pointer items-center gap-1.5 rounded-lg border border-border px-2.5 text-[10px] font-medium text-foreground transition-colors hover:bg-elevated"
-                  title="Open the existing pull request on GitHub"
-                  onclick={() => void openInBrowser(existingPr.url)}
+                  title="Open the existing pull request in the Git panel"
+                  onclick={() => {
+                    onClose()
+                    onView?.(existingPr)
+                  }}
                 >
-                  <ExternalLink size={11} />
-                  Open PR #{existingPr.number}
+                  <Eye size={11} />
+                  View PR #{existingPr.number}
                 </button>
               </div>
             </div>

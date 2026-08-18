@@ -3,6 +3,7 @@ import { APP_SLUG } from '$shared/brand'
 export interface PrDraft {
   id: string
   projectId: string
+  threadId: string
   minimized: boolean
   createdAt: number
 }
@@ -31,11 +32,11 @@ class PrLifecycleStore {
    * a duplicate — call `openNew` when a second draft for the same project
    * is intentionally desired.
    */
-  open(projectId: string): string {
+  open(projectId: string, threadId: string): string {
     const existing = this.drafts.find((draft) => draft.projectId === projectId)
     if (existing) {
       this.drafts = this.drafts.map((draft) =>
-        draft.id === existing.id ? { ...draft, minimized: false } : draft
+        draft.id === existing.id ? { ...draft, threadId, minimized: false } : draft
       )
       this.focusedId = existing.id
       return existing.id
@@ -43,6 +44,7 @@ class PrLifecycleStore {
     const draft: PrDraft = {
       id: crypto.randomUUID(),
       projectId,
+      threadId,
       minimized: false,
       createdAt: Date.now()
     }
@@ -52,10 +54,11 @@ class PrLifecycleStore {
   }
 
   /** Always create a new draft, even if one already exists for the project. */
-  openNew(projectId: string): string {
+  openNew(projectId: string, threadId: string): string {
     const draft: PrDraft = {
       id: crypto.randomUUID(),
       projectId,
+      threadId,
       minimized: false,
       createdAt: Date.now()
     }
