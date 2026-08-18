@@ -625,23 +625,34 @@ class ProjectFilesWorkspace {
   async revealDirectory(projectId: string, directory: string): Promise<void> {
     const state = this.ensureState(projectId)
     state.explorerVisible = true
+    await this.expandDirectoryPath(projectId, state, directory)
     state.revealedPath = directory || null
+    state.selectedPaths = directory ? [directory] : []
+    state.selectionAnchor = directory || null
+    this.persistExplorer(projectId)
+  }
+
+  private async expandDirectoryPath(
+    projectId: string,
+    state: ProjectFilesState,
+    directory: string
+  ): Promise<void> {
     const segments = directory.split('/').filter(Boolean)
     const ancestors = segments.map((_, index) => segments.slice(0, index + 1).join('/'))
     for (const ancestor of ancestors) {
       state.expandedDirectories[ancestor] = true
       await this.loadDirectory(projectId, ancestor)
     }
-    this.persistExplorer(projectId)
   }
 
   async revealFile(projectId: string, path: string): Promise<void> {
     const state = this.ensureState(projectId)
     state.explorerVisible = true
     await this.loadDirectory(projectId, '')
-    await this.revealDirectory(projectId, this.parentDirectory(path))
+    await this.expandDirectoryPath(projectId, state, this.parentDirectory(path))
     state.revealedPath = path
     state.selectedPaths = [path]
+    state.selectionAnchor = path
     this.persistExplorer(projectId)
   }
 

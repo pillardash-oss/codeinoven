@@ -410,11 +410,21 @@
     if (index !== undefined) scrollTreeIndexIntoView(index)
   }
 
+  async function focusRevealedTreePath(path: string): Promise<void> {
+    await tick()
+    scrollTreePathIntoView(path)
+    await tick()
+    const row = [...(treeScroll?.querySelectorAll<HTMLElement>('[data-tree-path]') ?? [])].find(
+      (element) => element.dataset.treePath === path
+    )
+    row?.focus()
+  }
+
   $effect(() => {
     const path = revealedSearchPath ?? projectState.revealedPath ?? selectedPath
     if (!path || !projectState.entriesByDirectory[parentDirectory(path)]) return
     if (suppressRevealScroll) return
-    void tick().then(() => scrollTreePathIntoView(path))
+    void focusRevealedTreePath(path)
   })
 
   /** Suppress the auto-reveal scroll for the rest of the current pointer
