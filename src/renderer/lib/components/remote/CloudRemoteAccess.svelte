@@ -517,13 +517,8 @@
                 class={desktop.online
                   ? 'rounded-full bg-primary/10 px-2 py-1 text-[10px] font-semibold text-primary'
                   : 'rounded-full bg-raised px-2 py-1 text-[10px] font-semibold text-dimmed'}
-                aria-live="polite"
               >
-                {desktop.online
-                  ? 'Connect'
-                  : connectingDesktopId === desktop.id
-                    ? 'Connecting…'
-                    : 'Offline'}
+                {desktop.online ? 'Connect' : 'Offline'}
               </span>
             </button>
             <button

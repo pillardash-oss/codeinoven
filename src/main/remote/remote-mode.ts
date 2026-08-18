@@ -1654,8 +1654,12 @@ export class RemoteModeController {
   private async restoreCloudAccess(): Promise<void> {
     if (!this.remoteModeActive || !this.storage || !this.vault || !this.cloudApiOrigin) return
     const config = await this.storage.read<CloudAccessConfig>(CLOUD_CONFIG_PATH)
-    if (!config || config.apiOrigin !== this.cloudApiOrigin) return
+    if (!config || config.apiOrigin !== this.cloudApiOrigin) {
+      Logger.info('Remote cloud relay not started: no enrolled desktop is saved')
+      return
+    }
     this.cloudConfig = config
+    Logger.info('Remote cloud enrollment restored; checking desktop authorization')
     // Restoring credentials only starts a status check. Preserve the current
     // state until the service confirms the enrollment has actually been claimed.
     this.cloudStatus = {
@@ -1767,6 +1771,7 @@ export class RemoteModeController {
         return
       }
       if (payload['claimed'] === true) {
+        Logger.info('Remote cloud enrollment claimed; preparing the encrypted control grant')
         this.cloudStatus = {
           ...this.cloudStatus,
           state: 'connecting',
@@ -1827,6 +1832,7 @@ export class RemoteModeController {
           serverRetryDelay = cloudRetryAfterMs(grantResponse)
           throw new Error(`Control grant upload unavailable (${grantResponse.status})`)
         }
+        Logger.info('Remote cloud control grant uploaded; opening the relay')
         this.connectCloudRelay(token)
         return
       }
@@ -1863,7 +1869,18 @@ export class RemoteModeController {
   private connectCloudRelay(deviceToken: string): void {
     const config = this.cloudConfig
     const controlSecret = this.resolvedPeerSecret
-    if (!config || !controlSecret || !this.rpc || this.cloudRelay) return
+    if (!config || !controlSecret || !this.rpc) {
+      const reason = !config
+        ? 'enrollment configuration is unavailable'
+        : !controlSecret
+          ? 'control secret is unavailable'
+          : 'remote RPC is unavailable'
+      Logger.error(`Remote cloud relay could not start: ${reason}`)
+      this.cloudStatus = { ...this.cloudStatus, state: 'error', lastError: reason }
+      this.broadcast()
+      return
+    }
+    if (this.cloudRelay) return
     if (!this.cloudAbortController) this.cloudAbortController = new AbortController()
     const signal = this.cloudAbortController.signal
     const relay = new CloudRelayClient({
@@ -1884,6 +1901,7 @@ export class RemoteModeController {
         maxDelayMs: remoteEnvInt('RELAY_RECONNECT_MAX_MS', 30_000)
       },
       onAuthenticated: () => {
+        Logger.info('Remote cloud relay authenticated; desktop is online')
         this.cloudStatus = { ...this.cloudStatus, state: 'online', lastError: null }
         this.installEventForwarder()
         this.scheduleAccountProfileSync(0)
@@ -1897,6 +1915,14 @@ export class RemoteModeController {
       },
       onDisconnected: (reason) => {
         if (this.cloudRelay !== relay) return
+        if (reason === 'authentication-failed' || reason === 'relay-closed-4001') {
+          Logger.error('Remote cloud relay rejected the saved desktop credential')
+          void this.discardCloudEnrollment(
+            'Desktop authorization was rejected. Create a new pairing code.'
+          )
+          return
+        }
+        Logger.dev(`Remote cloud relay disconnected (${reason}); reconnecting automatically`)
         this.cloudStatus = { ...this.cloudStatus, state: 'offline', lastError: reason }
         this.refreshDevices(new Set(this.gateway?.listDevices().map((device) => device.id) ?? []))
         this.broadcast()

@@ -235,7 +235,9 @@ export class CloudRelayClient {
       }
       if (this.closing || this.closed) return
       this.authenticated = false
-      this.dropAndRetry(event.reason || `relay-closed-${event.code}`)
+      const reason = event.reason || `relay-closed-${event.code}`
+      Logger.dev(`Remote cloud relay socket closed (${event.code}: ${reason})`)
+      this.dropAndRetry(reason)
     }
   }
 
