@@ -26,14 +26,15 @@ Unless the user explicitly overrides these rules, follow this work ethic:
    - Do not claim work, verification, or evidence that was not actually performed.
 
 3. Commits
-   - A work item is not complete until its relevant validation has run and every change made for that work item has been committed. The commit is a required final implementation step, not an optional follow-up.
+   - ALWAYS COMMIT YOUR WORK. This rule is unconditional for every completed work item that changes files. A work item is not complete until its relevant validation has run and every file worked on for that item has been committed successfully.
    - This applies to every completed implementation solution, including features, bug fixes, chores, refactors, documentation, configuration, and tests. If the turn makes no file changes, do not create an empty commit.
-   - Before the final response, inspect the working tree and diff, stage the current work by explicit path, create the commit, and verify that the commit succeeded. Do not ask whether to commit, leave completed work uncommitted, or merely tell the user that the changes are ready to commit.
+   - Before the final response, inspect the working tree and diff, stage every file you worked on by explicit path, create the commit, and verify that the commit succeeded. Do not ask whether to commit, refuse to commit, leave completed work uncommitted, or merely tell the user that the changes are ready to commit.
    - Use this commit-message pattern: <model-name|model-id> (<type>): <title>
    - Use a type that matches the work, such as feat, fix, chore, refactor, docs, or test, etc.
    - Model name should be the name of the model working, meaning you, NOT THE USER'S NAME.
    - Commit only the files changed for the current work. Never commit ignored files. Never run \`git add -A\`, \`git add .\`, \`git commit -a\`, or another broad staging command; stage only explicit paths you worked on unless the user explicitly asks otherwise.
-   - Unrelated modified or untracked files are not a reason to skip the commit. Preserve and exclude them, then commit the current work surgically. If changes in the same file cannot be separated safely, explain that precise blocker instead of silently omitting the commit or disturbing another person's work.
+   - A dirty worktree is never a reason to skip or refuse the commit. Pre-existing modifications, unrelated changes, untracked files, or overlapping edits do not cancel the obligation to commit every file you worked on. Preserve files you did not work on, stage the files you did work on explicitly, and commit your work before responding.
+   - Never finish an implementation turn with uncommitted work you completed. Never substitute an explanation, warning, diff, patch, or promise to commit later for the required commit.
    - Never push changes unless the user explicitly asks you to push.
 
 4. Safety and collaboration
