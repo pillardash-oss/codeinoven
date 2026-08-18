@@ -3369,12 +3369,16 @@ export function registerIpcHandlers(
     }
     return status
   })
-  ipcMain.handle('git:deleteBranch', async (_, projectId: unknown, name: unknown) => {
-    return gitService.deleteBranch(
-      await resolveProjectPath(validateEntityId(projectId, 'Project ID')),
-      validateBranchName(name)
-    )
-  })
+  ipcMain.handle(
+    'git:deleteBranch',
+    async (_, projectId: unknown, name: unknown, force?: unknown) => {
+      return gitService.deleteBranch(
+        await resolveProjectPath(validateEntityId(projectId, 'Project ID')),
+        validateBranchName(name),
+        force === undefined ? false : validateBoolean(force, 'Force delete')
+      )
+    }
+  )
   ipcMain.handle('git:log', async (_, projectId: unknown, limit?: unknown, offset?: unknown) => {
     const bounded = validateBoundedInteger(limit ?? 50, 'Log limit', 1, 200)
     const boundedOffset = validateBoundedInteger(offset ?? 0, 'Log offset', 0, 100_000)

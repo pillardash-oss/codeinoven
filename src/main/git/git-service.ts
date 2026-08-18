@@ -320,11 +320,11 @@ export class GitService {
     })
   }
 
-  async deleteBranch(projectPath: string, name: string): Promise<GitStatus> {
+  async deleteBranch(projectPath: string, name: string, force = false): Promise<GitStatus> {
     return this.enqueue(projectPath, async () => {
       const directory = await this.repo(projectPath)
       await this.wrapError(projectPath, 'mutation', async () => {
-        await this.client(directory).deleteLocalBranch(name)
+        await this.client(directory).deleteLocalBranch(name, force)
       })
       return this.readStatus(directory)
     })

@@ -116,6 +116,7 @@
   let pendingOperation = $state<{ kind: 'merge' | 'rebase'; target: string } | null>(null)
   let checkoutConfirm = $state<string | null>(null)
   let deleteBranchConfirm = $state<string | null>(null)
+  let forceDeleteBranchConfirm = $state<string | null>(null)
   let creatingBranch = $state(false)
   let newBranchName = $state('')
   let acknowledgeActiveTurn = $state(false)
@@ -297,8 +298,9 @@
     await gitState.createBranch(projectId, name)
   }
 
-  async function deleteBranchAction(name: string): Promise<void> {
-    await gitState.deleteBranch(projectId, name)
+  async function deleteBranchAction(name: string, force = false): Promise<void> {
+    const result = await gitState.deleteBranch(projectId, name, force)
+    if (result === 'requires-force') forceDeleteBranchConfirm = name
   }
 
   /** Checking out switches the working tree, so it always confirms first from the Branches tab. */
@@ -323,6 +325,13 @@
     if (!target) return
     deleteBranchConfirm = null
     await deleteBranchAction(target)
+  }
+
+  async function confirmForceDeleteBranch(): Promise<void> {
+    const target = forceDeleteBranchConfirm
+    if (!target) return
+    forceDeleteBranchConfirm = null
+    await deleteBranchAction(target, true)
   }
 
   /** `git fetch <remote> <name>` — updates that branch's tracking ref without touching HEAD. */
@@ -3230,6 +3239,42 @@
               class="flex h-8 items-center gap-1.5 rounded-lg bg-danger px-3 text-xs font-medium text-on-primary hover:opacity-90 disabled:opacity-50"
               disabled={gitState.isBusy('checkout')}
               onclick={() => void confirmDeleteBranch()}
+            >
+              {#if gitState.isBusy('checkout')}
+                <Loader2 size={12} class="animate-spin" />
+              {/if}
+              Delete branch
+            </AlertDialog.Action>
+          </div>
+        </AlertDialog.Content>
+      </AlertDialog.Portal>
+    </AlertDialog.Root>
+  {/if}
+
+  {#if forceDeleteBranchConfirm}
+    {@const target = forceDeleteBranchConfirm}
+    <AlertDialog.Root open onOpenChange={() => (forceDeleteBranchConfirm = null)}>
+      <AlertDialog.Portal>
+        <AlertDialog.Content
+          class="fixed left-1/2 top-1/2 z-50 w-[min(28rem,calc(100vw-2rem))] -translate-x-1/2 -translate-y-1/2 rounded-xl border border-border bg-surface p-5 shadow-xl"
+        >
+          <AlertDialog.Title class="text-sm font-semibold text-foreground">
+            Force delete branch “{target}”?
+          </AlertDialog.Title>
+          <AlertDialog.Description class="mt-2 text-xs leading-5 text-muted">
+            Branch <strong class="font-medium text-foreground">{target}</strong> is not fully merged.
+            Are you sure you want to delete it? Unmerged commits may become unreachable.
+          </AlertDialog.Description>
+          <div class="mt-5 flex justify-end gap-2">
+            <AlertDialog.Cancel
+              class="h-8 rounded-lg border border-border px-3 text-xs text-foreground hover:bg-elevated"
+            >
+              Cancel
+            </AlertDialog.Cancel>
+            <AlertDialog.Action
+              class="flex h-8 items-center gap-1.5 rounded-lg bg-danger px-3 text-xs font-medium text-on-primary hover:opacity-90 disabled:opacity-50"
+              disabled={gitState.isBusy('checkout')}
+              onclick={() => void confirmForceDeleteBranch()}
             >
               {#if gitState.isBusy('checkout')}
                 <Loader2 size={12} class="animate-spin" />

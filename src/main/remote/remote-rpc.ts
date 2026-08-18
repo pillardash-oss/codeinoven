@@ -1289,7 +1289,8 @@ export class RemoteRpcDispatcher {
       case 'git:deleteBranch':
         return this.gitService.deleteBranch(
           await this.resolveProjectPath(this.string(args[0])),
-          this.string(args[1])
+          this.string(args[1]),
+          this.optionalBoolean(args[2]) ?? false
         )
       case 'git:log':
         return this.gitService.log(
@@ -1486,6 +1487,12 @@ export class RemoteRpcDispatcher {
 
   private optionalString(value: unknown): string | undefined {
     return typeof value === 'string' ? value : undefined
+  }
+
+  private optionalBoolean(value: unknown): boolean | undefined {
+    if (value === undefined) return undefined
+    if (typeof value !== 'boolean') throw new TypeError('Expected a boolean argument')
+    return value
   }
 
   private stringArray(value: unknown, label: string): string[] {

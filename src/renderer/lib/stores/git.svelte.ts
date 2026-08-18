@@ -122,6 +122,13 @@ export function isPushRejected(message: string): boolean {
   )
 }
 
+export type DeleteBranchResult = 'deleted' | 'requires-force' | 'failed'
+
+/** Git refuses `branch -d` when commits would become unreachable. */
+export function isBranchNotFullyMerged(message: string): boolean {
+  return /branch ['“"]?[^\n]+['”"]? is not fully merged/iu.test(message)
+}
+
 /**
  * Per-project git runtime state, refreshed on panel activation, after every
  * app-driven mutation, and after agent turns land (`checkpoint.updated`).
@@ -628,14 +635,18 @@ export class GitState {
     }
   }
 
-  async deleteBranch(projectId: string, name: string): Promise<void> {
+  async deleteBranch(projectId: string, name: string, force = false): Promise<DeleteBranchResult> {
     this.markBusy('checkout', true)
     this.error = null
     try {
-      this.status = await invoke('git:deleteBranch', projectId, name)
+      this.status = await invoke('git:deleteBranch', projectId, name, force)
       await this.refresh(projectId)
+      return 'deleted'
     } catch (reason) {
-      this.error = errorMessage(reason, 'Branch deletion failed')
+      const message = errorMessage(reason, 'Branch deletion failed')
+      if (!force && isBranchNotFullyMerged(message)) return 'requires-force'
+      this.error = message
+      return 'failed'
     } finally {
       this.markBusy('checkout', false)
     }
