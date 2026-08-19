@@ -176,7 +176,10 @@ import {
 import { deriveTitleFromText } from './title-generator'
 import { createAutoTitleLauncher } from './title-generation-policy'
 import { artifactInstruction, GeneratedArtifactService } from './generated-artifact-service'
-import { classifyProviderIssue } from '../../lib/provider-issue'
+import {
+  classifyProviderIssue,
+  isUsageResetWaitIssue
+} from '../../lib/provider-issue'
 import { generateId } from '../../lib/utils'
 import {
   ensureFeatureSlug,
@@ -3812,12 +3815,12 @@ export class ChatEngine {
     const live = this.sessionStatuses.get(thread.sessionId)
     if (live) return live
     // After an app restart the in-memory status is gone, but a persisted
-    // auto-resume record is authoritative: reconstruct the warning card so the
+    // auto-resume record is authoritative: reconstruct the waiting card so the
     // thread still shows its reset countdown and proves it will auto-run.
     const pending = this.retryScheduler?.getPendingRetry(thread.sessionId)
     if (!pending) return null
     return {
-      state: 'error',
+      state: 'waiting',
       issue: {
         kind: pending.issueKind,
         message: pending.issueMessage,
@@ -13568,14 +13571,24 @@ export class ChatEngine {
         event.status.state === 'waiting' &&
         eventOwner &&
         !eventOwner.ephemeral &&
-        event.status.issue.retryable &&
-        typeof event.status.issue.retryAt === 'number' &&
-        Number.isFinite(event.status.issue.retryAt)
+        event.status.issue.retryable
       ) {
-        updateRetryWakeWindow(event.sessionId, event.status.issue.retryAt)
-        void this.threadManager
-          .setStatus(eventOwner.projectId, eventOwner.threadId, 'working-paused', { read: false })
-          .catch((error) => Logger.error('Retry-paused status update failed:', error))
+        if (
+          typeof event.status.issue.retryAt === 'number' &&
+          Number.isFinite(event.status.issue.retryAt)
+        ) {
+          updateRetryWakeWindow(event.sessionId, event.status.issue.retryAt)
+          void this.threadManager
+            .setStatus(eventOwner.projectId, eventOwner.threadId, 'working-paused', { read: false })
+            .catch((error) => Logger.error('Retry-paused status update failed:', error))
+        }
+        // Record the wait in the retry scheduler for every harness — including
+        // harnesses that schedule their own retry (OpenCode). Their native
+        // resume emits `working` and clears the record; the recorded wait keeps
+        // the thread retryable after an app restart.
+        void this.scheduleAutomaticRetry(event.sessionId, event.status.issue).catch((error) =>
+          Logger.dev('Retry scheduling failed for waiting session:', error)
+        )
       }
       if (event.status.state === 'working' || event.status.state === 'idle') {
         updateRetryWakeWindow(event.sessionId, null)
@@ -13728,16 +13741,30 @@ export class ChatEngine {
       event.type === 'session.idle' ||
       (event.type === 'session.status' && event.status.state === 'idle')
     ) {
-      if (this.sessionStatuses.get(event.sessionId)?.state !== 'error') {
+      const currentStatus = this.sessionStatuses.get(event.sessionId)
+      // A usage-limit reset wait is not really idle: keep the waiting card and
+      // suppress this trailing idle broadcast so the card survives until the
+      // auto-resume (or native harness retry) drives the session again.
+      const resetWaitIdle =
+        currentStatus?.state === 'waiting' && isUsageResetWaitIssue(currentStatus.issue)
+      if (currentStatus?.state !== 'error' && !resetWaitIdle) {
         this.sessionStatuses.set(event.sessionId, { state: 'idle' })
       }
       this.handleSessionIdleSignal(event.sessionId)
+      if (resetWaitIdle) return
     }
     if (event.type === 'session.error') {
       // A deliberate user stop must never surface as a session error.
       if (!this.userAbortedSessions.has(event.sessionId)) {
         const issue: AgentProviderIssue =
           event.issue ?? this.fallbackProviderIssue(driverId, event.error ?? 'Agent session failed')
+        if (isUsageResetWaitIssue(issue)) {
+          // Unified contract: a usage/rate-limit reset is a scheduled wait, not
+          // a failure. Re-surface the reset-wait as a `waiting` card and let
+          // the scheduler resume the thread once the reset passes.
+          this.enterRetryWait(event.sessionId, issue, event.error)
+          return
+        }
         this.sessionStatuses.set(event.sessionId, { state: 'error', issue })
         updateRetryWakeWindow(event.sessionId, null)
         this.clearSessionWatchdog(event.sessionId)
@@ -13755,10 +13782,16 @@ export class ChatEngine {
       } else if (!this.userAbortedSessions.has(event.sessionId)) {
         const issue: AgentProviderIssue =
           event.issue ?? this.fallbackProviderIssue(driverId, event.error)
-        this.sessionStatuses.set(event.sessionId, { state: 'error', issue })
-        updateRetryWakeWindow(event.sessionId, null)
-        this.clearSessionWatchdog(event.sessionId)
-        void this.handleProviderFailure(event.sessionId, issue, event.error)
+        if (isUsageResetWaitIssue(issue)) {
+          // The failed message still broadcasts below; the provider card is
+          // replaced by the unified waiting state instead of an error.
+          this.enterRetryWait(event.sessionId, issue, event.error)
+        } else {
+          this.sessionStatuses.set(event.sessionId, { state: 'error', issue })
+          updateRetryWakeWindow(event.sessionId, null)
+          this.clearSessionWatchdog(event.sessionId)
+          void this.handleProviderFailure(event.sessionId, issue, event.error)
+        }
       }
     }
     // Everything else broadcasts directly to renderers.
@@ -14206,9 +14239,11 @@ export class ChatEngine {
 
   /**
    * Record a thread whose turn ended in a usage/rate-limit reset so the
-   * scheduler resumes it once the reset time passes. Skips harnesses that
-   * schedule their own provider retries (OpenCode), internal/child sessions,
-   * and issues without a usable reset time.
+   * scheduler resumes it once the reset time passes. Every harness is tracked —
+   * including harnesses that schedule their own provider retries (OpenCode): a
+   * native resume emits `working` and clears the record, while the persisted
+   * record keeps the wait alive (and re-runs the thread) across app restarts.
+   * Internal/child sessions and issues without a usable reset time are skipped.
    */
   private async scheduleAutomaticRetry(
     sessionId: string,
@@ -14229,7 +14264,7 @@ export class ChatEngine {
     const info = this.sessionRegistry.get(sessionId)
     if (!info || info.ephemeral === true || this.childSessionOwners.has(sessionId)) return false
     const driver = this.drivers.get(info.driverId)
-    if (!driver || driver.capabilities?.scheduledRetry === true) return false
+    if (!driver) return false
     let retryAt = issue.retryAt
     if (retryAt === undefined && driver.readAccountUsage) {
       // Some harnesses surface a usage reset without attaching it to the error
@@ -14277,6 +14312,23 @@ export class ChatEngine {
   ): Promise<void> {
     const retryScheduled = await this.scheduleAutomaticRetry(sessionId, issue)
     await this.onSessionError(sessionId, error, retryScheduled)
+  }
+
+  /**
+   * Re-surface a terminal usage/rate-limit outcome as the unified waiting card
+   * with a retry time. Also schedules the auto-resume for every harness (native
+   * retry harnesses included) so the wait survives an app restart, and routes
+   * the failed-turn finalization (thread status, checkpoint, assignment reports)
+   * through the same provider-failure path used for errors.
+   */
+  private enterRetryWait(sessionId: string, issue: AgentProviderIssue, error?: string): void {
+    this.sessionStatuses.set(sessionId, { state: 'waiting', issue })
+    updateRetryWakeWindow(sessionId, issue.retryAt ?? null)
+    this.clearSessionWatchdog(sessionId)
+    this.clearPendingQuestionsForSession(sessionId)
+    this.clearPendingPermissionsForSession(sessionId)
+    this.broadcast({ type: 'session.status', sessionId, status: { state: 'waiting', issue } })
+    void this.handleProviderFailure(sessionId, issue, error)
   }
 
   /**

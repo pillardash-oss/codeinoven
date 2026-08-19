@@ -995,7 +995,9 @@ export class OpenCodeDriver implements HarnessDriver {
     structuredOutput: false,
     nativeUtilities: ['web_fetch'],
     // OpenCode schedules and performs its own provider retries (`session.status`
-    // `retry` with a `next` timestamp) — the app must not auto-resume for it.
+    // `retry` with a `next` timestamp). The app still records the wait in the
+    // retry scheduler so a restart can resume the thread while it is awaiting a
+    // reset; OpenCode's own resume clears that record.
     scheduledRetry: true
   }
 

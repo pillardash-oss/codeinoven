@@ -49,8 +49,9 @@ export interface HarnessCapabilities {
   /**
    * The harness schedules and performs its own provider retry after a reset
    * (it emits a `waiting` session status with `retryAt` and resumes the turn
-   * itself). Harnesses without this need the app to auto-resume threads whose
-   * turn ended in a quota/rate-limit error with a reset time.
+   * itself). The app records every harness's reset wait in the retry scheduler
+   * so it survives an app restart; harnesses that resume their own turns simply
+   * clear that record when they resume (`session.status` `working`).
    */
   scheduledRetry?: boolean
 }
