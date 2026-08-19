@@ -815,7 +815,10 @@ export class CodexDriver extends PersistentCliDriver {
         clearTimeout(compaction.timer)
         this.compactionsByThreadId.delete(threadId)
         if (status === 'failed' || status === 'interrupted') {
-          compaction.reject(new Error(`Codex compaction ${status}`))
+          const failure = stringValue(recordValue(turn?.['error'])?.['message'])
+          compaction.reject(
+            new Error(failure ? `Codex compaction failed: ${failure}` : `Codex compaction ${status}`)
+          )
         } else {
           const completed: AgentEvent = {
             type: 'message.completed',
@@ -1461,6 +1464,13 @@ export class CodexDriver extends PersistentCliDriver {
     this.emit({ type: 'message.part.updated', sessionId, part: basePart })
 
     const host = await this.ensureAppServerHost(projectPath)
+    // `thread/compact/start` only accepts threads the app-server has loaded.
+    // Loading (resuming) first is a no-op when the thread is already loaded, and
+    // it turns the "thread not found" rejection into a real compaction run.
+    await this.appServerRequest(host, 'thread/resume', {
+      threadId: nativeThreadId,
+      developerInstructions: null
+    })
     await new Promise<void>((resolve, reject) => {
       const timer = setTimeout(() => {
         this.compactionsByThreadId.delete(nativeThreadId)

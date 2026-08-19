@@ -994,6 +994,72 @@ describe('mapCodexRateLimits', () => {
     })
     expect(telemetry.credits).toEqual({ hasCredits: true, unlimited: true })
   })
+
+  it('loads the native thread before requesting compaction so compact/start finds it', async () => {
+    const driver = new CodexDriver(await storage())
+    const child = new FakeChild()
+    spawnMock.mockReturnValue(child as unknown as ChildProcess)
+    const sessionId = await driver.createSession('/project', 'Codex')
+    await driver.sendPrompt('/project', { sessionId, settings, text: 'seed', attachments: [] })
+
+    const compaction = driver.compactSession('/project', sessionId, settings)
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    const requests = child.requests()
+    const resumeIndex = requests.findIndex((request) => request.method === 'thread/resume')
+    const compactIndex = requests.findIndex((request) => request.method === 'thread/compact/start')
+    expect(resumeIndex).toBeGreaterThanOrEqual(0)
+    expect(compactIndex).toBeGreaterThanOrEqual(0)
+    expect(resumeIndex).toBeLessThan(compactIndex)
+    expect(requests[resumeIndex]).toEqual(
+      expect.objectContaining({
+        method: 'thread/resume',
+        params: {
+          threadId: 'native-1',
+          developerInstructions: null
+        }
+      })
+    )
+
+    child.emitPayload({
+      method: 'turn/completed',
+      params: {
+        threadId: 'native-1',
+        turn: { id: 'compact-turn-1', status: 'completed' }
+      }
+    })
+    await expect(compaction).resolves.toBeUndefined()
+    child.emit('exit', 0, null)
+  })
+
+  it('surfaces the underlying codex error when a compaction turn fails', async () => {
+    const driver = new CodexDriver(await storage())
+    const child = new FakeChild()
+    spawnMock.mockReturnValue(child as unknown as ChildProcess)
+    const sessionId = await driver.createSession('/project', 'Codex')
+    await driver.sendPrompt('/project', { sessionId, settings, text: 'seed', attachments: [] })
+
+    const compaction = driver.compactSession('/project', sessionId, settings)
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    child.emitPayload({
+      method: 'turn/completed',
+      params: {
+        threadId: 'native-1',
+        turn: {
+          id: 'compact-turn-1',
+          status: 'failed',
+          error: {
+            message: 'Codex ran out of room in the model context window.'
+          }
+        }
+      }
+    })
+    await expect(compaction).rejects.toThrow(
+      'Codex compaction failed: Codex ran out of room in the model context window.'
+    )
+    child.emit('exit', 0, null)
+  })
 })
 
 describe('CodexDriver readAccountUsage', () => {
