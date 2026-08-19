@@ -1,9 +1,21 @@
 <script lang="ts">
+  import { untrack } from 'svelte'
   import { invoke } from '$lib/ipc.svelte'
-  import { AlertTriangle, FileWarning, GitMerge, Loader2, Save, Undo2 } from '@lucide/svelte'
-  import type { GitConflictAnalysis, GitConflictHunk } from '$shared/types'
+  import {
+    AlertTriangle,
+    ArrowLeftToLine,
+    ArrowRightToLine,
+    FileWarning,
+    GitMerge,
+    Loader2,
+    Redo2,
+    Save,
+    Undo2
+  } from '@lucide/svelte'
+  import type { GitConflictAnalysis } from '$shared/types'
   import { gitState } from '$lib/stores/git.svelte'
   import { projectFilesWorkspace } from '$lib/stores/project-files.svelte'
+  import { createFileEditor, type FileEditorController } from '$lib/editor/codemirror-file-editor'
 
   interface Props {
     projectId: string
@@ -22,6 +34,14 @@
   let resolutions = $state<(string | null)[]>([])
   let saving = $state(false)
   let saveError = $state<string | null>(null)
+  /** The hunk currently shown in the merge editor. */
+  let activeHunk = $state(0)
+  /** Context lines shown above/below the focused conflict, expandable. */
+  let contextAbove = $state(3)
+  let contextBelow = $state(3)
+  /** Undo/redo stacks of the resolutions array. */
+  let past = $state<(string | null)[][]>([])
+  let future = $state<(string | null)[][]>([])
 
   $effect(() => {
     let cancelled = false
@@ -29,6 +49,9 @@
     error = null
     analysis = null
     resolutions = []
+    activeHunk = 0
+    past = []
+    future = []
     saveError = null
     void invoke('git:analyzeConflict', projectId, path)
       .then((next) => {
@@ -59,6 +82,55 @@
   const resolvedCount = $derived(
     resolutions.filter((resolution) => typeof resolution === 'string').length
   )
+
+  function commit(next: (string | null)[]): void {
+    past = [...past, [...resolutions]]
+    future = []
+    resolutions = next
+  }
+
+  function resolveHunk(index: number, resolution: string): void {
+    if (resolutions[index] === resolution) return
+    const next = [...resolutions]
+    next[index] = resolution
+    commit(next)
+  }
+
+  function clearHunk(index: number): void {
+    if (resolutions[index] === null) return
+    const next = [...resolutions]
+    next[index] = null
+    commit(next)
+  }
+
+  function acceptAll(side: 'theirs' | 'ours'): void {
+    const current = analysis
+    if (!current) return
+    const next = current.hunks.map((hunk) => (side === 'theirs' ? hunk.theirs : hunk.ours))
+    commit(next)
+  }
+
+  function mergeBoth(index: number): void {
+    const hunk = analysis?.hunks[index]
+    if (!hunk) return
+    resolveHunk(index, [hunk.ours, hunk.theirs].filter((side) => side.trim() !== '').join('\n\n'))
+  }
+
+  function undo(): void {
+    const previous = past.at(-1)
+    if (previous === undefined) return
+    past = past.slice(0, -1)
+    future = [...future, [...resolutions]]
+    resolutions = previous
+  }
+
+  function redo(): void {
+    const next = future.at(-1)
+    if (next === undefined) return
+    future = future.slice(0, -1)
+    past = [...past, [...resolutions]]
+    resolutions = next
+  }
 
   function assembleContent(): string {
     const current = analysis
@@ -98,27 +170,6 @@
     }
   }
 
-  function resolveHunk(index: number, resolution: string): void {
-    const next = [...resolutions]
-    next[index] = resolution
-    resolutions = next
-  }
-
-  function clearHunk(index: number): void {
-    const next = [...resolutions]
-    next[index] = null
-    resolutions = next
-  }
-
-  function mergeBoth(index: number): void {
-    const hunk = analysis?.hunks[index]
-    if (!hunk) return
-    resolveHunk(
-      index,
-      [hunk.ours, hunk.theirs].filter((side) => side.trim().length > 0).join('\n\n')
-    )
-  }
-
   async function openInEditor(): Promise<void> {
     try {
       await projectFilesWorkspace.openFile(projectId, path)
@@ -127,72 +178,126 @@
     }
   }
 
-  /** One unchanged source line; its per-pane line numbers. */
-  interface ContextLine {
-    kind: 'context'
-    text: string
-    theirs: number
-    current: number
-    result: number
-  }
+  // ─── Focused merge editor (IntelliJ-style windowing) ─────────────────────
 
-  /** An immediately preceding line shown for orientation before a conflict. */
-  interface ConflictLine {
-    kind: 'conflict'
-    index: number
-    hunk: GitConflictHunk
-    theirs: string
-    ours: string
-  }
+  let theirsHost = $state<HTMLDivElement | null>(null)
+  let resultHost = $state<HTMLDivElement | null>(null)
+  let oursHost = $state<HTMLDivElement | null>(null)
+  let resultController = $state<FileEditorController | null>(null)
+  /** Last resolution text the mounted result editor reflects. */
+  let resultEditorText = $state<string | null>(null)
 
-  type ViewRow = ContextLine | ConflictLine
+  const activeHunkData = $derived(analysis?.hunks[activeHunk] ?? null)
+  const fileLines = $derived(analysis?.content.split('\n') ?? [])
 
-  /**
-   * Rebuild the file as an ordered row list so the three panes stay aligned:
-   * unchanged regions render once (shared across panes), and each conflict
-   * block replaces its region with the incoming/result/current triple. Context
-   * rows around every hunk keep each block anchored to its real position.
-   */
-  const viewRows = $derived.by((): ViewRow[] => {
-    const current = analysis
-    if (!current) return []
-    const fileLines = current.content.split('\n')
-    const rows: ViewRow[] = []
-    let cursor = 0
-    let theirsNumber = 1
-    let currentNumber = 1
-    let resultNumber = 1
-
-    for (let index = 0; index < current.hunks.length; index += 1) {
-      const hunk = current.hunks[index]
-      for (let line = cursor; line < hunk.startLine - 1; line += 1) {
-        rows.push({
-          kind: 'context',
-          text: fileLines[line] ?? '',
-          theirs: theirsNumber,
-          current: currentNumber,
-          result: resultNumber
-        })
-        theirsNumber += 1
-        currentNumber += 1
-        resultNumber += 1
-      }
-      cursor = hunk.endLine
-      rows.push({ kind: 'conflict', index, hunk, theirs: hunk.theirs, ours: hunk.ours })
+  /** Context window above/below the focused hunk (real file lines). */
+  const contextWindow = $derived.by(() => {
+    const hunk = activeHunkData
+    if (!hunk) return { above: [] as string[], below: [] as string[] }
+    const aboveStart = Math.max(1, hunk.startLine - contextAbove)
+    const above: string[] = []
+    for (let line = aboveStart; line < hunk.startLine; line += 1) {
+      above.push(fileLines[line - 1] ?? '')
     }
-    for (let line = cursor; line < fileLines.length - 1; line += 1) {
-      rows.push({
-        kind: 'context',
-        text: fileLines[line] ?? '',
-        theirs: theirsNumber,
-        current: currentNumber,
-        result: resultNumber
+    const below: string[] = []
+    const belowEnd = Math.min(fileLines.length, hunk.endLine + contextBelow)
+    for (let line = hunk.endLine + 1; line <= belowEnd; line += 1) {
+      below.push(fileLines[line - 1] ?? '')
+    }
+    return { above, below }
+  })
+
+  const contextAvailable = $derived.by(() => {
+    const hunk = activeHunkData
+    if (!hunk) return { above: 0, below: 0 }
+    return {
+      above: Math.max(0, hunk.startLine - 1),
+      below: Math.max(0, fileLines.length - hunk.endLine)
+    }
+  })
+
+  /** Create the three CodeMirror editors for the focused hunk's block. */
+  $effect(() => {
+    const hunk = activeHunkData
+    if (!hunk || !theirsHost || !resultHost || !oursHost) return
+
+    const snapshot = untrack(() => ({
+      theirs: hunk.theirs,
+      ours: hunk.ours,
+      result: resolutions[activeHunk] ?? ''
+    }))
+
+    let cancelled = false
+    let editors: FileEditorController[] = []
+
+    void Promise.all([
+      createFileEditor({
+        host: theirsHost,
+        value: snapshot.theirs,
+        path,
+        readonly: true,
+        showLineNumbers: true,
+        ariaLabel: `Incoming version of ${path} — conflict ${activeHunk + 1}`,
+        onDocChange: () => {}
+      }),
+      createFileEditor({
+        host: resultHost,
+        value: snapshot.result,
+        path,
+        readonly: false,
+        showLineNumbers: true,
+        ariaLabel: `Result for ${path} — conflict ${activeHunk + 1}`,
+        onDocChange: (text) => {
+          if (cancelled) return
+          resultEditorText = text
+          const currentText = resolutions[activeHunk]
+          if (currentText === text) return
+          const next = [...resolutions]
+          next[activeHunk] = text
+          past = [...past, [...resolutions]]
+          future = []
+          resolutions = next
+        }
+      }),
+      createFileEditor({
+        host: oursHost,
+        value: snapshot.ours,
+        path,
+        readonly: true,
+        showLineNumbers: true,
+        ariaLabel: `Current version of ${path} — conflict ${activeHunk + 1}`,
+        onDocChange: () => {}
       })
-      theirsNumber += 1
-      currentNumber += 1
-      resultNumber += 1
+    ]).then(([theirs, result, ours]) => {
+      if (cancelled) {
+        theirs.destroy()
+        result.destroy()
+        ours.destroy()
+        return
+      }
+      editors = [theirs, result, ours]
+      resultController = result
+      resultEditorText = snapshot.result
+    })
+
+    return () => {
+      cancelled = true
+      for (const editor of editors) editor.destroy()
+      resultController = null
+      resultEditorText = null
     }
-    return rows
+  })
+
+  // Apply external resolution changes (Use / Merge both / undo / accept all)
+  // to the mounted result editor without recreating it. Typing already keeps
+  // the editor in sync via its doc listener, so we only push when they diverge.
+  $effect(() => {
+    const editor = resultController
+    if (!editor) return
+    const text = resolutions[activeHunk] ?? ''
+    if (text === resultEditorText) return
+    resultEditorText = text
+    editor.setValue(text)
   })
 </script>
 
@@ -252,180 +357,217 @@
           Open in editor
         </button>
       </div>
-    {:else}
-      <!-- Summary -->
+    {:else if analysis}
+      {@const currentAnalysis = analysis}
+      <!-- Summary bar -->
       <div class="flex shrink-0 items-center gap-2 border-b border-border bg-surface px-3 py-1.5">
         <GitMerge size={12} class="shrink-0 text-warning" />
-        <span class="text-[10px] font-medium text-foreground">
-          {analysis.hunks.length} conflict {analysis.hunks.length === 1 ? 'hunk' : 'hunks'}
+        <span class="text-[10px] font-semibold text-foreground">
+          Conflict {activeHunk + 1} of {currentAnalysis.hunks.length}
         </span>
-        <span class="text-[9px] tabular-nums text-dimmed">
-          lines {analysis.hunks[0]?.startLine ?? 0}–{analysis.hunks.at(-1)?.endLine ?? 0}
+        <span class="tabular-nums font-mono text-[9px] text-dimmed">
+          lines {activeHunkData?.startLine ?? 0}–{activeHunkData?.endLine ?? 0}
         </span>
         <span class="flex-1"></span>
         {#if resolvedCount > 0}
           <span
             class="shrink-0 rounded bg-success/15 px-1.5 py-0.5 text-[9px] font-semibold tabular-nums text-success"
           >
-            {resolvedCount}/{analysis.hunks.length} resolved
+            {resolvedCount}/{currentAnalysis.hunks.length} resolved
           </span>
         {:else}
-          <span class="shrink-0 text-[9px] text-dimmed">0/{analysis.hunks.length} resolved</span>
+          <span class="shrink-0 text-[9px] text-dimmed"
+            >0/{currentAnalysis.hunks.length} resolved</span
+          >
         {/if}
       </div>
 
-      <!-- Three-pane column headers -->
+      <!-- Hunk navigation -->
       <div
-        class="grid shrink-0 grid-cols-3 border-b border-border bg-elevated/50 text-[9px] font-semibold uppercase tracking-wide text-muted"
+        class="flex shrink-0 items-center gap-1 border-b border-border bg-elevated/30 px-2 py-1.5"
       >
-        <div class="border-r border-border px-3 py-1.5">
-          Incoming · {analysis.hunks[0]?.theirsLabel ?? 'theirs'}
+        <button
+          type="button"
+          class="flex h-6 w-6 shrink-0 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-default disabled:opacity-30"
+          title="Previous conflict"
+          aria-label="Previous conflict"
+          disabled={activeHunk === 0}
+          onclick={() => (activeHunk = Math.max(0, activeHunk - 1))}
+        >
+          <ArrowLeftToLine size={12} />
+        </button>
+        <div class="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto px-1">
+          {#each currentAnalysis.hunks as hunk, index (index)}
+            {@const resolved = typeof resolutions[index] === 'string'}
+            <button
+              type="button"
+              class={[
+                'flex h-6 shrink-0 items-center gap-1 rounded px-1.5 font-mono text-[9px] tabular-nums transition-colors',
+                index === activeHunk
+                  ? 'bg-primary/15 text-primary'
+                  : resolved
+                    ? 'bg-success/10 text-success'
+                    : 'text-dimmed hover:bg-elevated hover:text-foreground'
+              ]}
+              title={`Conflict ${index + 1} · lines ${hunk.startLine}–${hunk.endLine}${resolved ? ' · resolved' : ''}`}
+              onclick={() => (activeHunk = index)}
+            >
+              {index + 1}
+            </button>
+          {/each}
         </div>
-        <div class="border-r border-border px-3 py-1.5">Result</div>
-        <div class="px-3 py-1.5">Current · {analysis.hunks[0]?.oursLabel ?? 'ours'}</div>
+        <button
+          type="button"
+          class="flex h-6 w-6 shrink-0 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-default disabled:opacity-30"
+          title="Next conflict"
+          aria-label="Next conflict"
+          disabled={activeHunk >= currentAnalysis.hunks.length - 1}
+          onclick={() => (activeHunk = Math.min(currentAnalysis.hunks.length - 1, activeHunk + 1))}
+        >
+          <ArrowRightToLine size={12} />
+        </button>
+        <span class="mx-1 h-4 w-px shrink-0 bg-border"></span>
+        <button
+          type="button"
+          class="flex h-6 shrink-0 items-center gap-1 rounded px-1.5 text-[9px] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-default disabled:opacity-30"
+          title="Undo (Cmd/Ctrl+Z)"
+          aria-label="Undo"
+          disabled={past.length === 0}
+          onclick={undo}
+        >
+          <Undo2 size={11} />
+        </button>
+        <button
+          type="button"
+          class="flex h-6 shrink-0 items-center gap-1 rounded px-1.5 text-[9px] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-default disabled:opacity-30"
+          title="Redo (Cmd/Ctrl+Shift+Z)"
+          aria-label="Redo"
+          disabled={future.length === 0}
+          onclick={redo}
+        >
+          <Redo2 size={11} />
+        </button>
       </div>
 
-      <!-- Aligned rows -->
-      <div class="min-h-0 flex-1 overflow-x-hidden overflow-y-auto">
-        {#each viewRows as row (row.kind === 'conflict' ? `conflict:${row.index}` : `ctx:${row.result}`)}
-          {#if row.kind === 'context'}
+      {#if activeHunkData}
+        {@const hunk = activeHunkData}
+        {@const resolution = resolutions[activeHunk] ?? null}
+        {@const resolved = typeof resolution === 'string'}
+        <!-- Expandable context above -->
+        {#if contextAvailable.above > contextAbove}
+          <button
+            type="button"
+            class="flex h-7 shrink-0 items-center justify-center gap-2 border-b border-border/40 bg-elevated/40 text-[9px] font-medium text-dimmed transition-colors hover:text-foreground"
+            title="Reveal more lines above this conflict"
+            onclick={() => (contextAbove = Math.min(contextAvailable.above, contextAbove + 5))}
+          >
+            <span class="h-px w-8 bg-border"></span>
+            Show {Math.min(5, contextAvailable.above - contextAbove)} lines above
+            <span class="h-px w-8 bg-border"></span>
+          </button>
+        {/if}
+        {#if contextWindow.above.length > 0}
+          <div
+            class="shrink-0 border-b border-border/40 bg-app/60 font-mono text-[11px] leading-5 text-dimmed"
+          >
+            {#each contextWindow.above as line, index (index)}
+              <div class="flex items-center">
+                <span
+                  class="w-10 shrink-0 select-none bg-elevated/30 px-2 text-right text-[9px] tabular-nums text-dimmed"
+                >
+                  {Math.max(hunk.startLine - contextAbove, 1) + index}
+                </span>
+                <span class="min-w-0 flex-1 truncate whitespace-pre px-2">{line}</span>
+              </div>
+            {/each}
+          </div>
+        {/if}
+
+        <!-- Three-pane merge editor (block content only) -->
+        <div class="grid min-h-0 flex-1 grid-cols-3 gap-px bg-border">
+          <!-- Incoming -->
+          <div class="flex min-h-0 min-w-0 flex-col bg-app">
             <div
-              class="grid grid-cols-3 border-b border-border/40 font-mono text-[11px] leading-5 text-foreground"
+              class="flex shrink-0 items-center gap-1.5 border-b border-border bg-elevated/50 px-2 py-1"
             >
-              <div class="flex min-w-0 items-center border-r border-border/40">
-                <span
-                  class="w-10 shrink-0 select-none bg-elevated/30 px-2 text-right text-[9px] tabular-nums text-dimmed"
-                >
-                  {row.theirs}
-                </span>
-                <span class="min-w-0 flex-1 truncate whitespace-pre px-2">{row.text}</span>
-              </div>
-              <div class="flex min-w-0 items-center border-r border-border/40">
-                <span
-                  class="w-10 shrink-0 select-none bg-elevated/30 px-2 text-right text-[9px] tabular-nums text-dimmed"
-                >
-                  {row.result}
-                </span>
-                <span class="min-w-0 flex-1 truncate whitespace-pre px-2">{row.text}</span>
-              </div>
-              <div class="flex min-w-0 items-center">
-                <span
-                  class="w-10 shrink-0 select-none bg-elevated/30 px-2 text-right text-[9px] tabular-nums text-dimmed"
-                >
-                  {row.current}
-                </span>
-                <span class="min-w-0 flex-1 truncate whitespace-pre px-2">{row.text}</span>
-              </div>
+              <span
+                class="rounded bg-accent/15 px-1.5 py-0.5 font-mono text-[8px] font-semibold text-accent"
+              >
+                theirs
+              </span>
+              <span class="truncate font-mono text-[8px] text-dimmed">{hunk.theirsLabel}</span>
             </div>
-          {:else}
-            {@const resolution = resolutions[row.index] ?? null}
-            {@const resolved = typeof resolution === 'string'}
-            <div class="grid grid-cols-3 border-b border-border/40">
-              <!-- Incoming (theirs) -->
-              <div class="min-w-0 border-r border-border/40 bg-danger/5">
-                <div class="flex items-center gap-1 px-3 py-1">
-                  <span
-                    class="rounded bg-accent/15 px-1.5 py-0.5 font-mono text-[8px] font-semibold text-accent"
-                  >
-                    theirs
-                  </span>
-                  <span class="truncate font-mono text-[8px] text-dimmed"
-                    >{row.hunk.theirsLabel}</span
-                  >
-                  <span class="flex-1"></span>
-                  <button
-                    type="button"
-                    class="rounded px-1.5 py-0.5 text-[9px] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
-                    title="Use the incoming side for this conflict"
-                    onclick={() => resolveHunk(row.index, row.theirs)}
-                  >
-                    Use
-                  </button>
-                </div>
-                {#if row.theirs.trim().length === 0}
-                  <p class="px-3 pb-2 font-mono text-[9px] italic text-dimmed">(empty)</p>
-                {:else}
-                  <pre
-                    class="mb-1 whitespace-pre-wrap px-3 pb-2 pt-0.5 font-mono text-[10px] leading-5 text-foreground">{row.theirs}</pre>
-                {/if}
-              </div>
-
-              <!-- Result -->
-              <div class="min-w-0 border-r border-border/40 bg-surface">
-                <div class="flex items-center gap-1 px-3 py-1">
-                  <span
-                    class="rounded bg-primary/10 px-1.5 py-0.5 font-mono text-[8px] font-semibold text-primary"
-                  >
-                    Conflict {row.index + 1}
-                  </span>
-                  <span class="tabular-nums font-mono text-[8px] text-dimmed">
-                    lines {row.hunk.startLine}–{row.hunk.endLine}
-                  </span>
-                  <span class="flex-1"></span>
-                  {#if resolved}
-                    <span
-                      class="rounded bg-success/15 px-1.5 py-0.5 font-mono text-[8px] font-semibold text-success"
-                    >
-                      resolved
-                    </span>
-                    <button
-                      type="button"
-                      class="rounded px-1.5 py-0.5 text-[9px] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
-                      title="Clear this resolution back to unresolved"
-                      onclick={() => clearHunk(row.index)}
-                    >
-                      <Undo2 size={10} />
-                    </button>
-                  {/if}
-                </div>
-                <textarea
-                  class="mb-1 w-full resize-none rounded border border-border bg-app px-2.5 py-1.5 font-mono text-[10px] leading-5 text-foreground outline-none placeholder:text-dimmed focus:border-primary"
-                  rows={Math.max(2, row.theirs.split('\n').length, row.ours.split('\n').length)}
-                  placeholder="Choose a side, merge both, or type the resolution…"
-                  value={resolution ?? ''}
-                  oninput={(event) => resolveHunk(row.index, event.currentTarget.value)}></textarea>
-                <div class="flex items-center gap-2 px-3 pb-1.5">
-                  <button
-                    type="button"
-                    class="rounded border border-border px-1.5 py-0.5 text-[9px] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
-                    title="Keep both sides, stacked"
-                    onclick={() => mergeBoth(row.index)}
-                  >
-                    Merge both
-                  </button>
-                </div>
-              </div>
-
-              <!-- Current (ours) -->
-              <div class="min-w-0 bg-success/5">
-                <div class="flex items-center gap-1 px-3 py-1">
-                  <span
-                    class="rounded bg-primary/10 px-1.5 py-0.5 font-mono text-[8px] font-semibold text-primary"
-                  >
-                    ours
-                  </span>
-                  <span class="truncate font-mono text-[8px] text-dimmed">{row.hunk.oursLabel}</span
-                  >
-                  <span class="flex-1"></span>
-                  <button
-                    type="button"
-                    class="rounded px-1.5 py-0.5 text-[9px] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
-                    title="Use the current side for this conflict"
-                    onclick={() => resolveHunk(row.index, row.ours)}
-                  >
-                    Use
-                  </button>
-                </div>
-                {#if row.ours.trim().length === 0}
-                  <p class="px-3 pb-2 font-mono text-[9px] italic text-dimmed">(empty)</p>
-                {:else}
-                  <pre
-                    class="mb-1 whitespace-pre-wrap px-3 pb-2 pt-0.5 font-mono text-[10px] leading-5 text-foreground">{row.ours}</pre>
-                {/if}
-              </div>
+            <div class="flex min-h-20 min-w-0 grow flex-col overflow-hidden">
+              <div bind:this={theirsHost} class="h-full w-full" data-merge-pane></div>
             </div>
-          {/if}
-        {/each}
+          </div>
+
+          <!-- Result -->
+          <div class="flex min-h-0 min-w-0 flex-col bg-app">
+            <div
+              class="flex shrink-0 items-center gap-1.5 border-b border-border bg-elevated/50 px-2 py-1"
+            >
+              <span
+                class="rounded bg-primary/10 px-1.5 py-0.5 font-mono text-[8px] font-semibold text-primary"
+              >
+                result
+              </span>
+              <span class="truncate font-mono text-[8px] text-dimmed">
+                {resolved ? 'resolved' : 'unresolved'}
+              </span>
+            </div>
+            <div class="flex min-h-20 min-w-0 grow flex-col overflow-hidden">
+              <div bind:this={resultHost} class="h-full w-full" data-merge-pane></div>
+            </div>
+          </div>
+
+          <!-- Current -->
+          <div class="flex min-h-0 min-w-0 flex-col bg-app">
+            <div
+              class="flex shrink-0 items-center gap-1.5 border-b border-border bg-elevated/50 px-2 py-1"
+            >
+              <span
+                class="rounded bg-primary/10 px-1.5 py-0.5 font-mono text-[8px] font-semibold text-primary"
+              >
+                ours
+              </span>
+              <span class="truncate font-mono text-[8px] text-dimmed">{hunk.oursLabel}</span>
+            </div>
+            <div class="flex min-h-20 min-w-0 grow flex-col overflow-hidden">
+              <div bind:this={oursHost} class="h-full w-full" data-merge-pane></div>
+            </div>
+          </div>
+        </div>
+
+        {#if contextWindow.below.length > 0}
+          <div
+            class="shrink-0 border-b border-border/40 bg-app/60 font-mono text-[11px] leading-5 text-dimmed"
+          >
+            {#each contextWindow.below as line, index (index)}
+              <div class="flex items-center">
+                <span
+                  class="w-10 shrink-0 select-none bg-elevated/30 px-2 text-right text-[9px] tabular-nums text-dimmed"
+                >
+                  {hunk.endLine + 1 + index}
+                </span>
+                <span class="min-w-0 flex-1 truncate whitespace-pre px-2">{line}</span>
+              </div>
+            {/each}
+          </div>
+        {/if}
+        {#if contextAvailable.below > contextBelow}
+          <button
+            type="button"
+            class="flex h-7 shrink-0 items-center justify-center gap-2 border-b border-border/40 bg-elevated/40 text-[9px] font-medium text-dimmed transition-colors hover:text-foreground"
+            title="Reveal more lines below this conflict"
+            onclick={() => (contextBelow = Math.min(contextAvailable.below, contextBelow + 5))}
+          >
+            <span class="h-px w-8 bg-border"></span>
+            Show {Math.min(5, contextAvailable.below - contextBelow)} lines below
+            <span class="h-px w-8 bg-border"></span>
+          </button>
+        {/if}
+
         {#if saveError}
           <p
             class="border-b border-danger/25 bg-danger/10 px-3 py-2 text-[10px] leading-relaxed text-danger"
@@ -433,14 +575,76 @@
             {saveError}
           </p>
         {/if}
-      </div>
 
-      <!-- Footer bar -->
+        <!-- Per-hunk accept actions -->
+        <div
+          class="flex shrink-0 items-center gap-2 border-b border-border/40 bg-surface/60 px-3 py-1.5"
+        >
+          <button
+            type="button"
+            class="flex h-8 shrink-0 items-center gap-1.5 rounded-md border border-accent/50 bg-accent/15 px-3 text-[11px] font-semibold text-accent transition-colors hover:bg-accent/25"
+            title={`Use the incoming side (${hunk.theirsLabel}) for this conflict`}
+            onclick={() => resolveHunk(activeHunk, hunk.theirs)}
+          >
+            <ArrowLeftToLine size={13} />
+            Use incoming
+          </button>
+          <span class="text-[9px] text-dimmed">or</span>
+          <button
+            type="button"
+            class="flex h-8 shrink-0 items-center gap-1.5 rounded-md border border-primary/50 bg-primary/15 px-3 text-[11px] font-semibold text-primary transition-colors hover:bg-primary/25"
+            title={`Use the current side (${hunk.oursLabel}) for this conflict`}
+            onclick={() => resolveHunk(activeHunk, hunk.ours)}
+          >
+            Use current
+            <ArrowRightToLine size={13} />
+          </button>
+          <span class="flex-1"></span>
+          <button
+            type="button"
+            class="h-8 shrink-0 rounded border border-border px-2.5 text-[10px] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
+            title="Keep both sides, stacked"
+            onclick={() => mergeBoth(activeHunk)}
+          >
+            Merge both
+          </button>
+          {#if resolved}
+            <button
+              type="button"
+              class="h-8 shrink-0 rounded border border-border px-2.5 text-[10px] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
+              title="Clear this resolution back to unresolved"
+              onclick={() => clearHunk(activeHunk)}
+            >
+              <Undo2 size={12} />
+            </button>
+          {/if}
+        </div>
+      {/if}
+
+      <!-- Footer bar: accept-all left, save right -->
       <div class="flex shrink-0 items-center gap-2 border-t border-border bg-surface px-3 py-2">
+        <button
+          type="button"
+          class="flex h-8 shrink-0 items-center gap-1.5 rounded-md border border-accent/50 px-3 text-[10px] font-semibold text-accent transition-colors hover:bg-accent/10 disabled:cursor-default disabled:opacity-40"
+          title="Set every conflict to the incoming side"
+          onclick={() => acceptAll('theirs')}
+        >
+          <ArrowLeftToLine size={12} />
+          Accept all theirs
+        </button>
+        <button
+          type="button"
+          class="flex h-8 shrink-0 items-center gap-1.5 rounded-md border border-primary/50 px-3 text-[10px] font-semibold text-primary transition-colors hover:bg-primary/10 disabled:cursor-default disabled:opacity-40"
+          title="Set every conflict to the current side"
+          onclick={() => acceptAll('ours')}
+        >
+          Accept all ours
+          <ArrowRightToLine size={12} />
+        </button>
         <span class="flex-1"></span>
         <button
           type="button"
-          class="flex h-7 items-center gap-1.5 rounded-md bg-primary px-2.5 text-[10px] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:cursor-default disabled:opacity-40"
+          class="flex h-8 shrink-0 items-center gap-1.5 rounded-md bg-primary px-3 text-[10px] font-semibold text-on-primary transition-colors hover:bg-primary-hover disabled:cursor-default disabled:opacity-40"
           disabled={!isSaveable || saving}
           onclick={() => void saveFile()}
         >
