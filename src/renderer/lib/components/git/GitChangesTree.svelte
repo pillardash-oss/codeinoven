@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Check, ChevronDown, ChevronRight, Folder, FolderOpen } from '@lucide/svelte'
+  import { Check, ChevronDown, ChevronRight, Folder, FolderOpen, GitMerge } from '@lucide/svelte'
   import { ContextMenu } from 'bits-ui'
   import type { GitDiff, GitFileChange, TurnCheckpointFileDiff } from '$shared/types'
   import FileDiffView from '../files/FileDiffView.svelte'
@@ -20,6 +20,8 @@
     onOpenInEditor: (path: string) => void
     onIgnorePaths: (paths: string[]) => void
     onDiscardPaths: (paths: string[]) => void
+    /** Opens the dedicated conflict-resolution panel for a conflicted file. */
+    onResolveConflict?: (path: string) => void
   }
 
   let {
@@ -36,7 +38,8 @@
     onStashPaths,
     onOpenInEditor,
     onIgnorePaths,
-    onDiscardPaths
+    onDiscardPaths,
+    onResolveConflict
   }: Props = $props()
 
   interface TreeNode {
@@ -200,48 +203,65 @@
 {/snippet}
 
 {#snippet fileActions(change: GitFileChange)}
-  <ContextMenu.Item
-    class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[11px] text-foreground outline-none data-highlighted:bg-elevated"
-    onSelect={() => onToggleStage(change)}
-  >
-    {#if change.staged}
-      <span class="inline-block w-3 text-center text-[10px] text-danger">−</span>
-      Unstage file
-    {:else}
-      <Check size={12} class="text-success" />
-      Stage file
-    {/if}
-  </ContextMenu.Item>
-  <ContextMenu.Separator class="my-1 h-px bg-border" />
-  <ContextMenu.Item
-    class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[11px] text-foreground outline-none data-highlighted:bg-elevated"
-    onSelect={() => onStashPaths([change.path])}
-  >
-    <span class="inline-block w-3 text-center text-[10px]">↓</span>
-    Stash file…
-  </ContextMenu.Item>
-  <ContextMenu.Item
-    class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[11px] text-foreground outline-none data-highlighted:bg-elevated"
-    onSelect={() => onOpenInEditor(change.path)}
-  >
-    <span class="inline-block w-3 text-center text-[10px]">✎</span>
-    Open
-  </ContextMenu.Item>
-  <ContextMenu.Separator class="my-1 h-px bg-border" />
-  <ContextMenu.Item
-    class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[11px] text-foreground outline-none data-highlighted:bg-elevated"
-    onSelect={() => onIgnorePaths([change.path])}
-  >
-    <span class="inline-block w-3 text-center text-[10px]">⊘</span>
-    Add to gitignore
-  </ContextMenu.Item>
-  <ContextMenu.Item
-    class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[11px] text-danger outline-none data-highlighted:bg-elevated"
-    onSelect={() => onDiscardPaths([change.path])}
-  >
-    <span class="inline-block w-3 text-center text-[10px]">⌫</span>
-    Discard changes
-  </ContextMenu.Item>
+  {#if change.status === 'conflicted'}
+    <ContextMenu.Item
+      class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[11px] text-foreground outline-none data-highlighted:bg-elevated"
+      onSelect={() => onResolveConflict?.(change.path)}
+    >
+      <GitMerge size={12} class="text-warning" />
+      Resolve conflict…
+    </ContextMenu.Item>
+    <ContextMenu.Item
+      class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[11px] text-foreground outline-none data-highlighted:bg-elevated"
+      onSelect={() => onOpenInEditor(change.path)}
+    >
+      <span class="inline-block w-3 text-center text-[10px]">✎</span>
+      Open in editor
+    </ContextMenu.Item>
+  {:else}
+    <ContextMenu.Item
+      class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[11px] text-foreground outline-none data-highlighted:bg-elevated"
+      onSelect={() => onToggleStage(change)}
+    >
+      {#if change.staged}
+        <span class="inline-block w-3 text-center text-[10px] text-danger">−</span>
+        Unstage file
+      {:else}
+        <Check size={12} class="text-success" />
+        Stage file
+      {/if}
+    </ContextMenu.Item>
+    <ContextMenu.Separator class="my-1 h-px bg-border" />
+    <ContextMenu.Item
+      class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[11px] text-foreground outline-none data-highlighted:bg-elevated"
+      onSelect={() => onStashPaths([change.path])}
+    >
+      <span class="inline-block w-3 text-center text-[10px]">↓</span>
+      Stash file…
+    </ContextMenu.Item>
+    <ContextMenu.Item
+      class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[11px] text-foreground outline-none data-highlighted:bg-elevated"
+      onSelect={() => onOpenInEditor(change.path)}
+    >
+      <span class="inline-block w-3 text-center text-[10px]">✎</span>
+      Open
+    </ContextMenu.Item>
+    <ContextMenu.Separator class="my-1 h-px bg-border" />
+    <ContextMenu.Item
+      class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[11px] text-foreground outline-none data-highlighted:bg-elevated"
+      onSelect={() => onIgnorePaths([change.path])}
+    >
+      <span class="inline-block w-3 text-center text-[10px]">⊘</span>
+      Add to gitignore
+    </ContextMenu.Item>
+    <ContextMenu.Item
+      class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[11px] text-danger outline-none data-highlighted:bg-elevated"
+      onSelect={() => onDiscardPaths([change.path])}
+    >
+      <span class="inline-block w-3 text-center text-[10px]">⌫</span>
+      Discard changes
+    </ContextMenu.Item>
+  {/if}
 {/snippet}
 
 {#snippet fileRow(change: GitFileChange)}
@@ -270,34 +290,36 @@
         }}
         onkeydown={(e: KeyboardEvent) => e.key === 'Enter' && onToggleDiff(change)}
       >
-        <span
-          role="checkbox"
-          tabindex="0"
-          aria-checked={selectedPaths[change.path]}
-          aria-label={selectedPaths[change.path]
-            ? `Deselect ${change.path}`
-            : `Select ${change.path}`}
-          class={[
-            'flex h-3.5 w-3.5 shrink-0 cursor-pointer items-center justify-center rounded-sm border transition-colors',
-            selectedPaths[change.path] ? 'border-primary bg-primary' : 'border-border bg-elevated'
-          ]}
-          onclick={(event: MouseEvent) => {
-            event.stopPropagation()
-            event.preventDefault()
-            onToggleSelect(change, true)
-          }}
-          onkeydown={(event: KeyboardEvent) => {
-            if (event.key === 'Enter' || event.key === ' ') {
+        {#if change.status !== 'conflicted'}
+          <span
+            role="checkbox"
+            tabindex="0"
+            aria-checked={selectedPaths[change.path]}
+            aria-label={selectedPaths[change.path]
+              ? `Deselect ${change.path}`
+              : `Select ${change.path}`}
+            class={[
+              'flex h-3.5 w-3.5 shrink-0 cursor-pointer items-center justify-center rounded-sm border transition-colors',
+              selectedPaths[change.path] ? 'border-primary bg-primary' : 'border-border bg-elevated'
+            ]}
+            onclick={(event: MouseEvent) => {
               event.stopPropagation()
               event.preventDefault()
               onToggleSelect(change, true)
-            }
-          }}
-        >
-          {#if selectedPaths[change.path]}
-            <Check size={9} class="text-on-primary" />
-          {/if}
-        </span>
+            }}
+            onkeydown={(event: KeyboardEvent) => {
+              if (event.key === 'Enter' || event.key === ' ') {
+                event.stopPropagation()
+                event.preventDefault()
+                onToggleSelect(change, true)
+              }
+            }}
+          >
+            {#if selectedPaths[change.path]}
+              <Check size={9} class="text-on-primary" />
+            {/if}
+          </span>
+        {/if}
         <span
           class={[
             'w-4 shrink-0 text-center font-mono text-[10px] font-semibold',
@@ -455,41 +477,44 @@
 
 {#each sections as section (section.title)}
   {@const tree = buildTree(section.files)}
+  {@const isConflicts = section.title === 'Conflicts'}
   {@const sectionAllSelected =
     section.files.length > 0 && section.files.every((f) => selectedPaths[f.path])}
   {@const sectionSomeSelected = section.files.some((f) => selectedPaths[f.path])}
   <div class="overflow-hidden rounded-lg border border-border bg-surface">
     <div class="flex items-center gap-2 bg-elevated/50 px-3 py-1.5">
-      <span
-        role="checkbox"
-        tabindex="0"
-        aria-checked={sectionAllSelected ? 'true' : sectionSomeSelected ? 'mixed' : 'false'}
-        aria-label={sectionAllSelected
-          ? `Deselect all ${section.files.length} files in ${section.title}`
-          : `Select all ${section.files.length} files in ${section.title}`}
-        class={[
-          'flex h-3.5 w-3.5 shrink-0 cursor-pointer items-center justify-center rounded-sm border transition-colors',
-          sectionAllSelected ? 'border-primary bg-primary' : 'border-border bg-elevated'
-        ]}
-        onclick={(event: MouseEvent) => {
-          event.stopPropagation()
-          event.preventDefault()
-          onToggleSection(section.files)
-        }}
-        onkeydown={(event: KeyboardEvent) => {
-          if (event.key === 'Enter' || event.key === ' ') {
+      {#if !isConflicts}
+        <span
+          role="checkbox"
+          tabindex="0"
+          aria-checked={sectionAllSelected ? 'true' : sectionSomeSelected ? 'mixed' : 'false'}
+          aria-label={sectionAllSelected
+            ? `Deselect all ${section.files.length} files in ${section.title}`
+            : `Select all ${section.files.length} files in ${section.title}`}
+          class={[
+            'flex h-3.5 w-3.5 shrink-0 cursor-pointer items-center justify-center rounded-sm border transition-colors',
+            sectionAllSelected ? 'border-primary bg-primary' : 'border-border bg-elevated'
+          ]}
+          onclick={(event: MouseEvent) => {
             event.stopPropagation()
             event.preventDefault()
             onToggleSection(section.files)
-          }
-        }}
-      >
-        {#if sectionAllSelected}
-          <Check size={9} class="text-on-primary" />
-        {:else if sectionSomeSelected}
-          <span class="h-0.5 w-1.5 rounded-full bg-primary"></span>
-        {/if}
-      </span>
+          }}
+          onkeydown={(event: KeyboardEvent) => {
+            if (event.key === 'Enter' || event.key === ' ') {
+              event.stopPropagation()
+              event.preventDefault()
+              onToggleSection(section.files)
+            }
+          }}
+        >
+          {#if sectionAllSelected}
+            <Check size={9} class="text-on-primary" />
+          {:else if sectionSomeSelected}
+            <span class="h-0.5 w-1.5 rounded-full bg-primary"></span>
+          {/if}
+        </span>
+      {/if}
       <span class="text-[9px] font-semibold uppercase tracking-wide text-muted">
         {section.title}
       </span>

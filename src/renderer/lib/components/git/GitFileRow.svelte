@@ -4,7 +4,7 @@
   import { ContextMenu } from 'bits-ui'
   import FileTypeIcon from '../files/FileTypeIcon.svelte'
   import FileDiffView from '../files/FileDiffView.svelte'
-  import { ChevronDown, ChevronRight, Loader2 } from '@lucide/svelte'
+  import { ChevronDown, ChevronRight, GitMerge, Loader2 } from '@lucide/svelte'
 
   interface Props {
     change: GitFileChange
@@ -21,6 +21,8 @@
     onOpenInEditor?: (path: string) => void
     onIgnore?: (path: string) => void
     onDiscard?: (path: string) => void
+    /** Opens the dedicated conflict-resolution panel for a conflicted file. */
+    onResolveConflict?: (path: string) => void
     readonly?: boolean
     /** Overrides the label shown for the path (e.g. just the basename inside a tree). */
     displayPath?: string
@@ -41,6 +43,7 @@
     onOpenInEditor,
     onIgnore,
     onDiscard,
+    onResolveConflict,
     readonly = false,
     displayPath
   }: Props = $props()
@@ -50,7 +53,8 @@
       (onStash !== undefined ||
         onOpenInEditor !== undefined ||
         onIgnore !== undefined ||
-        onDiscard !== undefined)
+        onDiscard !== undefined ||
+        onResolveConflict !== undefined)
   )
 
   const letter = $derived(
@@ -178,21 +182,33 @@
           {/if}
         </button>
         {#if !readonly}
-          <button
-            type="button"
-            class={[
-              'shrink-0 rounded px-2 py-1 text-[10px] font-medium transition-colors disabled:opacity-40',
-              change.staged
-                ? 'text-danger hover:bg-danger/10'
-                : 'text-muted hover:bg-elevated hover:text-foreground'
-            ]}
-            disabled={change.status === 'conflicted'}
-            aria-label={change.staged ? `Unstage ${change.path}` : `Stage ${change.path}`}
-            title={change.staged ? `Unstage ${change.path}` : `Stage ${change.path}`}
-            onclick={onToggleStage}
-          >
-            {change.staged ? 'Unstage' : 'Stage'}
-          </button>
+          {#if change.status === 'conflicted' && onResolveConflict}
+            <button
+              type="button"
+              class="shrink-0 rounded px-2 py-1 text-[10px] font-medium text-warning transition-colors hover:bg-warning/10"
+              aria-label={`Resolve conflict in ${change.path}`}
+              title={`Resolve conflict in ${change.path}`}
+              onclick={() => onResolveConflict(change.path)}
+            >
+              Resolve
+            </button>
+          {:else}
+            <button
+              type="button"
+              class={[
+                'shrink-0 rounded px-2 py-1 text-[10px] font-medium transition-colors disabled:opacity-40',
+                change.staged
+                  ? 'text-danger hover:bg-danger/10'
+                  : 'text-muted hover:bg-elevated hover:text-foreground'
+              ]}
+              disabled={change.status === 'conflicted'}
+              aria-label={change.staged ? `Unstage ${change.path}` : `Stage ${change.path}`}
+              title={change.staged ? `Unstage ${change.path}` : `Stage ${change.path}`}
+              onclick={onToggleStage}
+            >
+              {change.staged ? 'Unstage' : 'Stage'}
+            </button>
+          {/if}
         {/if}
       </div>
     </ContextMenu.Trigger>
@@ -206,56 +222,77 @@
           sideOffset={4}
           collisionPadding={8}
         >
-          <ContextMenu.Item
-            class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[11px] text-foreground outline-none data-highlighted:bg-elevated"
-            onSelect={() => onToggleStage()}
-          >
-            {#if change.staged}
-              <span class="inline-block w-3 text-center text-[10px] text-danger">−</span>
-              Unstage file
-            {:else}
-              <Check size={12} class="text-success" />
-              Stage file
-            {/if}
-          </ContextMenu.Item>
-          {#if onStash}
-            <ContextMenu.Separator class="my-1 h-px bg-border" />
-            <ContextMenu.Item
-              class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[11px] text-foreground outline-none data-highlighted:bg-elevated"
-              onSelect={() => onStash?.(change.path)}
-            >
-              <span class="inline-block w-3 text-center text-[10px]">↓</span>
-              Stash file…
-            </ContextMenu.Item>
-          {/if}
-          {#if onOpenInEditor}
-            <ContextMenu.Item
-              class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[11px] text-foreground outline-none data-highlighted:bg-elevated"
-              onSelect={() => onOpenInEditor?.(change.path)}
-            >
-              <span class="inline-block w-3 text-center text-[10px]">✎</span>
-              Open
-            </ContextMenu.Item>
-          {/if}
-          {#if onIgnore || onDiscard}
-            <ContextMenu.Separator class="my-1 h-px bg-border" />
-            {#if onIgnore}
+          {#if change.status === 'conflicted'}
+            {#if onResolveConflict}
               <ContextMenu.Item
                 class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[11px] text-foreground outline-none data-highlighted:bg-elevated"
-                onSelect={() => onIgnore?.(change.path)}
+                onSelect={() => onResolveConflict?.(change.path)}
               >
-                <span class="inline-block w-3 text-center text-[10px]">⊘</span>
-                Add to gitignore
+                <GitMerge size={12} class="text-warning" />
+                Resolve conflict…
               </ContextMenu.Item>
             {/if}
-            {#if onDiscard}
+            {#if onOpenInEditor}
               <ContextMenu.Item
-                class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[11px] text-danger outline-none data-highlighted:bg-elevated"
-                onSelect={() => onDiscard?.(change.path)}
+                class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[11px] text-foreground outline-none data-highlighted:bg-elevated"
+                onSelect={() => onOpenInEditor?.(change.path)}
               >
-                <span class="inline-block w-3 text-center text-[10px]">⌫</span>
-                Discard changes
+                <span class="inline-block w-3 text-center text-[10px]">✎</span>
+                Open in editor
               </ContextMenu.Item>
+            {/if}
+          {:else}
+            <ContextMenu.Item
+              class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[11px] text-foreground outline-none data-highlighted:bg-elevated"
+              onSelect={() => onToggleStage()}
+            >
+              {#if change.staged}
+                <span class="inline-block w-3 text-center text-[10px] text-danger">−</span>
+                Unstage file
+              {:else}
+                <Check size={12} class="text-success" />
+                Stage file
+              {/if}
+            </ContextMenu.Item>
+            {#if onStash}
+              <ContextMenu.Separator class="my-1 h-px bg-border" />
+              <ContextMenu.Item
+                class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[11px] text-foreground outline-none data-highlighted:bg-elevated"
+                onSelect={() => onStash?.(change.path)}
+              >
+                <span class="inline-block w-3 text-center text-[10px]">↓</span>
+                Stash file…
+              </ContextMenu.Item>
+            {/if}
+            {#if onOpenInEditor}
+              <ContextMenu.Item
+                class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[11px] text-foreground outline-none data-highlighted:bg-elevated"
+                onSelect={() => onOpenInEditor?.(change.path)}
+              >
+                <span class="inline-block w-3 text-center text-[10px]">✎</span>
+                Open
+              </ContextMenu.Item>
+            {/if}
+            {#if onIgnore || onDiscard}
+              <ContextMenu.Separator class="my-1 h-px bg-border" />
+              {#if onIgnore}
+                <ContextMenu.Item
+                  class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[11px] text-foreground outline-none data-highlighted:bg-elevated"
+                  onSelect={() => onIgnore?.(change.path)}
+                >
+                  <span class="inline-block w-3 text-center text-[10px]">⊘</span>
+                  Add to gitignore
+                </ContextMenu.Item>
+              {/if}
+              {#if onDiscard}
+                <ContextMenu.Item
+                  class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[11px] text-danger outline-none data-highlighted:bg-elevated"
+                  onSelect={() => onDiscard?.(change.path)}
+                >
+                  <span class="inline-block w-3 text-center text-[10px]">⌫</span>
+                  Discard changes
+                </ContextMenu.Item>
+              {/if}
             {/if}
           {/if}
         </ContextMenu.Content>

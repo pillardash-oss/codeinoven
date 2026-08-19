@@ -259,7 +259,8 @@ export class GitService {
       const safePath = this.assertRelativePath(directory, relativePath)
       return this.wrapError(projectPath, 'read', async () => {
         const working = await this.workingFileContent(directory, safePath)
-        if (!working) return { path: safePath, binary: false, truncated: true, content: '', hunks: [] }
+        if (!working)
+          return { path: safePath, binary: false, truncated: true, content: '', hunks: [] }
         if (working.binary) {
           return { path: safePath, binary: true, truncated: false, content: '', hunks: [] }
         }
@@ -294,7 +295,9 @@ export class GitService {
       if (!status.conflicted.includes(safePath)) return this.readStatus(directory)
       await this.wrapError(directory, 'mutation', async () => {
         if (hasConflictMarkers(content)) {
-          throw new Error('This file still has unresolved conflict markers — resolve every conflict first.')
+          throw new Error(
+            'This file still has unresolved conflict markers — resolve every conflict first.'
+          )
         }
         const target = resolve(directory, safePath)
         // Atomic write: same directory + rename, so the working file can never be
@@ -1407,7 +1410,11 @@ function parseConflictHunks(content: string): GitConflictHunk[] {
     const theirs: string[] = []
     let j = i + 1
     // Ours side: everything up to `=======` or a diff3 `|||||||` base marker.
-    while (j < lines.length && !(lines[j] ?? '').startsWith('=======') && !(lines[j] ?? '').startsWith('|||||||')) {
+    while (
+      j < lines.length &&
+      !(lines[j] ?? '').startsWith('=======') &&
+      !(lines[j] ?? '').startsWith('|||||||')
+    ) {
       ours.push(lines[j] ?? '')
       j += 1
     }
@@ -1449,4 +1456,3 @@ function parseConflictHunks(content: string): GitConflictHunk[] {
   }
   return hunks
 }
-

@@ -3407,13 +3407,11 @@ export function registerIpcHandlers(
         validateBoolean(staged, 'Staged')
       )
   )
-  ipcMain.handle(
-    'git:analyzeConflict',
-    async (_, projectId: unknown, relativePath: unknown) =>
-      gitService.analyzeConflict(
-        await resolveProjectPath(validateEntityId(projectId, 'Project ID')),
-        validateGitRelativePath(relativePath)
-      )
+  ipcMain.handle('git:analyzeConflict', async (_, projectId: unknown, relativePath: unknown) =>
+    gitService.analyzeConflict(
+      await resolveProjectPath(validateEntityId(projectId, 'Project ID')),
+      validateGitRelativePath(relativePath)
+    )
   )
   ipcMain.handle(
     'git:saveConflictResolution',

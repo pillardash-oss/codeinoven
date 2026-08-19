@@ -3,6 +3,7 @@ import { APP_SLUG } from '$shared/brand'
 import type {
   GitBranchInfo,
   GitCommitInfo,
+  GitConflictAnalysis,
   GitCredentialStatus,
   GitDiff,
   GitFileChange,
@@ -552,6 +553,33 @@ export class GitState {
       this.status = await invoke('git:stage', projectId, paths)
     } catch (reason) {
       this.error = errorMessage(reason, 'Files could not be staged')
+    } finally {
+      this.markBusy('stage', false)
+    }
+  }
+
+  /**
+   * Fetch the parsed conflict hunks of one conflicted file for the resolution
+   * panel (ours/theirs sides plus their line spans).
+   */
+  async analyzeConflict(projectId: string, path: string): Promise<GitConflictAnalysis> {
+    return invoke('git:analyzeConflict', projectId, path)
+  }
+
+  /**
+   * Persist a fully-resolved conflict file. Writes the assembled content and
+   * stages it so git clears the unmerged entry; refreshes the stored status.
+   * Returns true when saved, false when rejected (leftover markers, busy, etc).
+   */
+  async saveConflictResolution(projectId: string, path: string, content: string): Promise<boolean> {
+    this.markBusy('stage', true)
+    this.error = null
+    try {
+      this.status = await invoke('git:saveConflictResolution', projectId, path, content)
+      return true
+    } catch (reason) {
+      this.error = errorMessage(reason, 'Conflict could not be saved')
+      return false
     } finally {
       this.markBusy('stage', false)
     }
