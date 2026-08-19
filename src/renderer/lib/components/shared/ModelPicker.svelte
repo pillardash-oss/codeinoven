@@ -189,6 +189,8 @@
   /** Keep the trigger readable — long names (e.g. Claude Code's default-model
    *  description) would otherwise swallow the composer's bottom bar. */
   let selectedLabelDisplay = $derived(truncateLabel(selectedLabel))
+  /** Peak/off-peak state of the currently selected model, for the trigger badge. */
+  let selectedPeak = $derived(selectedModel ? peakHoursBadgeFor(selectedModel.id) : null)
   let availableModelKeys = $derived(
     new Set(
       [...displayProviders, ...cachedProviders].flatMap((provider) =>
@@ -836,6 +838,18 @@
           <Cpu size={12} />
         {/if}
         <span class="min-w-0 flex-1 truncate text-left">{selectedLabelDisplay}</span>
+        {#if selectedPeak}
+          <span
+            class={`shrink-0 rounded-sm px-1 py-px text-[7px] font-semibold uppercase leading-none ${selectedPeak.state ===
+            'peak'
+              ? 'bg-amber-500/15 text-amber-500'
+              : 'bg-green-500/15 text-green-500'}`}
+            title={selectedPeak.tooltip}
+            aria-label={selectedPeak.tooltip}
+          >
+            {selectedPeak.triggerLabel}
+          </span>
+        {/if}
         {#if fast}
           <Zap
             size={11}

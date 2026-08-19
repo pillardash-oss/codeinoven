@@ -32,9 +32,11 @@ export interface PeakHoursSchedule {
  *  has no time-of-day pricing. */
 export interface PeakHoursBadge {
   state: 'peak' | 'off-peak'
-  /** Badge label: `Peak` while billing peak, `Off P` while billing off-peak. */
+  /** Badge label for model rows: `Peak` while billing peak, `Off peak` otherwise. */
   label: string
-  /** Tooltip/aria text describing the peak hours in the user's local time. */
+  /** Compact badge label for the composer trigger: `Peak` / `Off P`. */
+  triggerLabel: string
+  /** Tooltip/aria text: `Peak: <local time-ranges>`. */
   tooltip: string
 }
 
@@ -108,7 +110,7 @@ function peakHoursLocalWindows(schedule: PeakHoursSchedule, now: Date): string[]
 export function peakHoursLocalLabel(schedule: PeakHoursSchedule, now = new Date()): string {
   const windows = peakHoursLocalWindows(schedule, now)
   if (windows.length <= 1) return windows[0] ?? ''
-  return `${windows.slice(0, -1).join(', ')} and ${windows.at(-1)}`
+  return windows.join(', ')
 }
 
 /** Badge data for a catalog model id right now, or null when the model has no
@@ -119,7 +121,8 @@ export function peakHoursBadgeFor(modelId: string, now = new Date()): PeakHoursB
   const peak = isPeakHour(schedule, now)
   return {
     state: peak ? 'peak' : 'off-peak',
-    label: peak ? 'Peak' : 'Off P',
-    tooltip: `Peak hours in your timezone: ${peakHoursLocalLabel(schedule, now)}`
+    label: peak ? 'Peak' : 'Off peak',
+    triggerLabel: peak ? 'Peak' : 'Off P',
+    tooltip: `Peak: ${peakHoursLocalLabel(schedule, now)}`
   }
 }
