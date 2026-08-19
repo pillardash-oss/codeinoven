@@ -59,6 +59,7 @@ import {
   validateBranchName,
   validateChecklistItemStatus,
   validateCommitMessage,
+  validateConflictResolutionContent,
   validateCreateProjectInput,
   validateCreateThreadInput,
   validateEntityId,
@@ -3404,6 +3405,23 @@ export function registerIpcHandlers(
         await resolveProjectPath(validateEntityId(projectId, 'Project ID')),
         validateGitRelativePath(relativePath),
         validateBoolean(staged, 'Staged')
+      )
+  )
+  ipcMain.handle(
+    'git:analyzeConflict',
+    async (_, projectId: unknown, relativePath: unknown) =>
+      gitService.analyzeConflict(
+        await resolveProjectPath(validateEntityId(projectId, 'Project ID')),
+        validateGitRelativePath(relativePath)
+      )
+  )
+  ipcMain.handle(
+    'git:saveConflictResolution',
+    async (_, projectId: unknown, relativePath: unknown, content: unknown) =>
+      gitService.saveConflictResolution(
+        await resolveProjectPath(validateEntityId(projectId, 'Project ID')),
+        validateGitRelativePath(relativePath),
+        validateConflictResolutionContent(content)
       )
   )
   ipcMain.handle('git:stage', async (_, projectId: unknown, paths: unknown) =>

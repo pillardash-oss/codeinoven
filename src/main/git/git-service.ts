@@ -1,10 +1,12 @@
-import { stat, open, access, readFile, writeFile, rm, unlink } from 'fs/promises'
+import { stat, open, access, readFile, writeFile, rename, rm, unlink } from 'fs/promises'
 import { resolve, relative, isAbsolute, sep } from 'path'
 import { simpleGit } from 'simple-git'
 import type { LogOptions, SimpleGit, StatusResult } from 'simple-git'
 import type {
   GitBranchInfo,
   GitCommitInfo,
+  GitConflictAnalysis,
+  GitConflictHunk,
   GitDiff,
   GitFileChange,
   GitFileStatus,
@@ -239,6 +241,67 @@ export class GitService {
       if (!file || file.binary || file.truncated) return this.readStatus(directory)
       if (hasConflictMarkers(file.content)) return this.readStatus(directory)
       await this.wrapError(directory, 'mutation', async () => {
+        await this.client(directory).add([safePath])
+      })
+      return this.readStatus(directory)
+    })
+  }
+
+  /**
+   * Parse a conflicted working file into its conflict hunks so the resolution
+   * panel can offer ours/theirs side-by-side editing. Binary and oversized
+   * files report their state without parsing (the user resolves those in the
+   * editor instead).
+   */
+  async analyzeConflict(projectPath: string, relativePath: string): Promise<GitConflictAnalysis> {
+    return this.enqueue(projectPath, async () => {
+      const directory = await this.repo(projectPath)
+      const safePath = this.assertRelativePath(directory, relativePath)
+      return this.wrapError(projectPath, 'read', async () => {
+        const working = await this.workingFileContent(directory, safePath)
+        if (!working) return { path: safePath, binary: false, truncated: true, content: '', hunks: [] }
+        if (working.binary) {
+          return { path: safePath, binary: true, truncated: false, content: '', hunks: [] }
+        }
+        const hunks = parseConflictHunks(working.content)
+        return {
+          path: safePath,
+          binary: false,
+          truncated: working.truncated,
+          content: working.content,
+          hunks
+        }
+      })
+    })
+  }
+
+  /**
+   * Persist a fully-resolved conflict file: replace the working copy with the
+   * user's merged content and stage it so git clears the unmerged entry. The
+   * content must contain no remaining conflict markers, otherwise resolution is
+   * incomplete and the write is refused (a partially-resolved file is never
+   * staged).
+   */
+  async saveConflictResolution(
+    projectPath: string,
+    relativePath: string,
+    content: string
+  ): Promise<GitStatus> {
+    return this.enqueue(projectPath, async () => {
+      const directory = await this.repo(projectPath)
+      const safePath = this.assertRelativePath(directory, relativePath)
+      const status = await this.client(directory).status()
+      if (!status.conflicted.includes(safePath)) return this.readStatus(directory)
+      await this.wrapError(directory, 'mutation', async () => {
+        if (hasConflictMarkers(content)) {
+          throw new Error('This file still has unresolved conflict markers — resolve every conflict first.')
+        }
+        const target = resolve(directory, safePath)
+        // Atomic write: same directory + rename, so the working file can never be
+        // observed half-written.
+        const temp = `${target}.resolve-tmp`
+        await writeFile(temp, content, 'utf-8')
+        await rename(temp, target)
         await this.client(directory).add([safePath])
       })
       return this.readStatus(directory)
@@ -1319,3 +1382,71 @@ export class GitService {
 function hasConflictMarkers(content: string): boolean {
   return /^(?:<<<<<<<[ \t].*|=======$|>>>>>>>[ \t].*)$/mu.test(content)
 }
+
+/**
+ * Parse the well-formed conflict blocks (`<<<<<<<` … `>>>>>>>`) out of a
+ * working file so the resolution panel can render each one. Handles both the
+ * classic two-way shape and the diff3 shape (a `|||||||` base block between
+ * ours and theirs). Returns hunks with 1-based inclusive line spans covering
+ * the whole block including its markers.
+ */
+function parseConflictHunks(content: string): GitConflictHunk[] {
+  const lines = content.split('\n')
+  const hunks: GitConflictHunk[] = []
+  let i = 0
+  while (i < lines.length) {
+    const line = lines[i] ?? ''
+    if (!line.startsWith('<<<<<<<')) {
+      i += 1
+      continue
+    }
+    const startLine = i + 1
+    const oursLabel = line.replace(/^<{7,}(?: |$)/u, '') || 'ours'
+    const ours: string[] = []
+    let base: string[] | null = null
+    const theirs: string[] = []
+    let j = i + 1
+    // Ours side: everything up to `=======` or a diff3 `|||||||` base marker.
+    while (j < lines.length && !(lines[j] ?? '').startsWith('=======') && !(lines[j] ?? '').startsWith('|||||||')) {
+      ours.push(lines[j] ?? '')
+      j += 1
+    }
+    // Diff3 base: between `|||||||` and `=======`.
+    if (j < lines.length && (lines[j] ?? '') !== '=======') {
+      j += 1
+      const baseLines: string[] = []
+      while (j < lines.length && !(lines[j] ?? '').startsWith('=======')) {
+        baseLines.push(lines[j] ?? '')
+        j += 1
+      }
+      base = baseLines
+    }
+    if (j >= lines.length) {
+      i = startLine
+      continue // Malformed block — skip forward so we never loop forever.
+    }
+    j += 1 // consume `=======`
+    while (j < lines.length && !(lines[j] ?? '').startsWith('>>>>>>>')) {
+      theirs.push(lines[j] ?? '')
+      j += 1
+    }
+    if (j >= lines.length) {
+      i = startLine
+      continue // Unclosed block — not a usable hunk.
+    }
+    const endLine = j + 1
+    const theirsLabel = (lines[j] ?? '').replace(/^>{7,}(?: |$)/u, '') || 'theirs'
+    hunks.push({
+      startLine,
+      endLine,
+      oursLabel,
+      theirsLabel,
+      ours: ours.join('\n'),
+      theirs: theirs.join('\n'),
+      base: base === null ? null : base.join('\n')
+    })
+    i = j + 1
+  }
+  return hunks
+}
+

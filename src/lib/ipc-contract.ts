@@ -58,6 +58,7 @@ import type {
   ProjectTextFile,
   GitBranchInfo,
   GitCommitInfo,
+  GitConflictAnalysis,
   GitCredentialStatus,
   GitDiff,
   GitFileChange,
@@ -779,6 +780,11 @@ export interface IpcInvokeContract {
   'editors:setPreferred': Contract<[editorId: EditorId], void>
   'git:status': Contract<[projectId: string], GitStatus>
   'git:diff': Contract<[projectId: string, relativePath: string, staged: boolean], GitDiff>
+  'git:analyzeConflict': Contract<[projectId: string, relativePath: string], GitConflictAnalysis>
+  'git:saveConflictResolution': Contract<
+    [projectId: string, relativePath: string, content: string],
+    GitStatus
+  >
   'git:stage': Contract<[projectId: string, paths: string[]], GitStatus>
   'git:resolveConflicted': Contract<[projectId: string, path: string], GitStatus>
   'git:unstage': Contract<[projectId: string, paths: string[]], GitStatus>

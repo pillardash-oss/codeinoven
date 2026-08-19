@@ -122,6 +122,8 @@ const GIT_BRANCH_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._/-]*$/u
 const GIT_REMOTE_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/u
 const GIT_URL_SCHEMES = new Set(['https', 'http', 'ssh', 'git', 'file'])
 const GIT_COMMIT_MESSAGE_MAX = 4096
+/** Upper bound on one assembled conflict-resolution payload (child of MAX_DIFF_BYTES). */
+const GIT_CONFLICT_RESOLUTION_MAX = 500 * 1024
 const GIT_RESET_MODES = new Set(['soft', 'mixed', 'hard'])
 
 /**
@@ -162,6 +164,22 @@ export function validateCommitMessage(value: unknown): string {
   if (typeof value !== 'string') throw new TypeError('Commit message must be a string')
   if (value.length === 0 || value.length > GIT_COMMIT_MESSAGE_MAX || value.includes('\0')) {
     throw new TypeError(`Commit message must be between 1 and ${GIT_COMMIT_MESSAGE_MAX} characters`)
+  }
+  return value.replace(/\r\n/gu, '\n')
+}
+
+/**
+ * Validate assembled conflict-resolution content: free-form multi-line text up
+ * to the diff bounded cap, without NUL control characters.
+ */
+export function validateConflictResolutionContent(value: unknown): string {
+  if (typeof value !== 'string' || value.includes('\0')) {
+    throw new TypeError('Conflict resolution must be a string without NUL characters')
+  }
+  if (value.length > GIT_CONFLICT_RESOLUTION_MAX) {
+    throw new TypeError(
+      `Conflict resolution must be at most ${GIT_CONFLICT_RESOLUTION_MAX} characters`
+    )
   }
   return value.replace(/\r\n/gu, '\n')
 }

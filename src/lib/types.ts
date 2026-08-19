@@ -3252,6 +3252,41 @@ export interface MergeSummary {
   aborted: boolean
 }
 
+/**
+ * One conflict block parsed from a conflicted working file: the full span from
+ * the `<<<<<<<` marker through the `>>>>>>>` marker (inclusive), plus the two
+ * sides. `ours` is the top side (the current branch/HEAD), `theirs` is the
+ * bottom side (the incoming branch). `base` is only present with
+ * `merge.conflictStyle=diff3`.
+ */
+export interface GitConflictHunk {
+  /** 1-based inclusive line range covering the whole block including markers. */
+  startLine: number
+  endLine: number
+  /** Label from the `<<<<<<<` marker (e.g. `HEAD` or a branch name). */
+  oursLabel: string
+  /** Label from the `>>>>>>>` marker (e.g. the incoming branch name). */
+  theirsLabel: string
+  /** Our/current side (lines joined), whatever was already there. */
+  ours: string
+  /** Their/incoming side (lines joined). */
+  theirs: string
+  /** Common ancestor content for diff3 conflicts, when git provides it. */
+  base: string | null
+}
+
+/** Parsed conflict file for the resolution UI, bounded to protect the IPC. */
+export interface GitConflictAnalysis {
+  path: string
+  /** True when the file has binary content and cannot be resolved in the panel. */
+  binary: boolean
+  /** True when the file is too large to safely reassemble — resolve in the editor. */
+  truncated: boolean
+  /** The raw working-tree content (may still contain conflict markers). */
+  content: string
+  hunks: GitConflictHunk[]
+}
+
 /** Request to prepare a local merge to resolve a PR's online conflicts. */
 export interface PrResolveOptions {
   /** Remote to fetch the PR head and base from (e.g. `origin`). */

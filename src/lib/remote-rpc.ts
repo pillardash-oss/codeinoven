@@ -186,6 +186,8 @@ export const REMOTE_ALLOWED_CHANNELS: readonly string[] = [
   'repository:preflight',
   'git:status',
   'git:diff',
+  'git:analyzeConflict',
+  'git:saveConflictResolution',
   'git:stage',
   'git:resolveConflicted',
   'git:unstage',
@@ -522,6 +524,7 @@ export const REMOTE_CHANNEL_AUTHORIZATION: Readonly<Record<string, RemoteChannel
   // git.read — default, no step-up
   'git:status': { scope: 'git.read', stepUp: 'none' },
   'git:diff': { scope: 'git.read', stepUp: 'none' },
+  'git:analyzeConflict': { scope: 'git.read', stepUp: 'none' },
   'git:branches': { scope: 'git.read', stepUp: 'none' },
   'git:log': { scope: 'git.read', stepUp: 'none' },
   'git:commitDiff': { scope: 'git.read', stepUp: 'none' },
@@ -536,6 +539,7 @@ export const REMOTE_CHANNEL_AUTHORIZATION: Readonly<Record<string, RemoteChannel
 
   // git.write — default-No, always step-up
   'git:stage': { scope: 'git.write', stepUp: 'always' },
+  'git:saveConflictResolution': { scope: 'git.write', stepUp: 'always' },
   'git:resolveConflicted': { scope: 'git.write', stepUp: 'always' },
   'git:unstage': { scope: 'git.write', stepUp: 'always' },
   'git:commit': { scope: 'git.write', stepUp: 'always' },

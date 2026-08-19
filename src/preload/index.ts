@@ -153,6 +153,8 @@ const INVOKE_CHANNELS = [
   'editors:setPreferred',
   'git:status',
   'git:diff',
+  'git:analyzeConflict',
+  'git:saveConflictResolution',
   'git:stage',
   'git:resolveConflicted',
   'git:unstage',
