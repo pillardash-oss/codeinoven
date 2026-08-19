@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import type { MemoryService } from '../../src/main/chat/memory-service'
-import { PromptAssembler } from '../../src/main/chat/prompt-assembler'
+import {
+  abbreviatedWorkspaceGuard,
+  PromptAssembler
+} from '../../src/main/chat/prompt-assembler'
 
 function assembler(): PromptAssembler {
   const memoryService = { formatCurrent: async () => '' } as unknown as MemoryService
@@ -45,5 +48,69 @@ describe('PromptAssembler application behavior', () => {
     for (const layers of scopedLayers) {
       expect(layers.some((layer) => layer.title.startsWith('Agent behavior'))).toBe(false)
     }
+  })
+
+  it('omits the workspace-scope guard layer for pure inbox chat', async () => {
+    const layers = await assembler().getLayers(
+      'inbox',
+      'thread-1',
+      '',
+      null,
+      undefined,
+      'chat',
+      'Custom.',
+      undefined,
+      'standalone-chat',
+      'omitted'
+    )
+    const harness = layers.find((layer) => layer.title.startsWith('Harness:'))
+    expect(harness).toBeUndefined()
+  })
+
+  it('sends only an abbreviated scope guard for scoped modes running in a real project', async () => {
+    const layers = await assembler().getLayers(
+      'project-1',
+      'thread-1',
+      '/project',
+      { id: 'opencode', name: 'OpenCode' },
+      undefined,
+      'chat',
+      'Custom.',
+      undefined,
+      'ephemeral',
+      'abbreviated'
+    )
+    const harness = layers.find((layer) => layer.title.startsWith('Harness:'))
+    expect(harness).toBeDefined()
+    expect(harness?.title).toContain('scope guard')
+    expect(harness?.content).toContain('You are working inside')
+    expect(harness?.content.length).toBeLessThan(1_200)
+  })
+
+  it('produces the full workspace context by default (engineering modes)', async () => {
+    const layers = await assembler().getLayers(
+      'project-1',
+      'thread-1',
+      '/project',
+      { id: 'opencode', name: 'OpenCode' },
+      undefined,
+      'implement',
+      'Custom.',
+      undefined,
+      'project-thread',
+      'full'
+    )
+    const harness = layers.find((layer) => layer.title.startsWith('Harness:'))
+    expect(harness).toBeDefined()
+    expect(harness?.title).not.toContain('scope guard')
+    expect(harness?.content).toContain('WORKING SCOPE')
+  })
+
+  it('exported abbreviated guard is compact and keeps the core scope guarantees', () => {
+    const guard = abbreviatedWorkspaceGuard({ id: 'opencode', name: 'OpenCode' }, '/project')
+    expect(guard.length).toBeLessThan(1_200)
+    expect(guard).toContain('project')
+    expect(guard).toContain('.cio/')
+    expect(guard).not.toContain('WORKING SCOPE')
   })
 })

@@ -1376,6 +1376,9 @@ export class OpenCodeDriver implements HarnessDriver {
     if (tools !== undefined) {
       body['tools'] = tools
     }
+    if (opts.agent) {
+      body['agent'] = opts.agent
+    }
     if (opts.structuredOutput) {
       body['format'] = {
         type: 'json_schema',

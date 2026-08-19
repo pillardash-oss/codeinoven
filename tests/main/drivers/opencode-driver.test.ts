@@ -3,8 +3,11 @@ import {
   mapOpenCodeEvent,
   mapOpenCodePart,
   opencodePermissionTools,
-  parseOpenCodeModels
+  parseOpenCodeModels,
+  OpenCodeDriver
 } from '../../../src/main/drivers/opencode-driver'
+import type { IsolatedHandle } from '../../../src/main/drivers/opencode-driver'
+import type { SendPromptOptions } from '../../../src/main/drivers/driver.interface'
 
 vi.mock('child_process', () => ({ execFile: vi.fn(), spawn: vi.fn() }))
 
@@ -650,5 +653,67 @@ describe('opencodePermissionTools', () => {
       '*': false,
       external_directory: true
     })
+  })
+})
+
+describe('OpenCodeDriver prompt body agent field', () => {
+  const settings = {
+    harnessId: 'opencode',
+    providerId: 'anthropic',
+    modelId: 'claude-sonnet-4-5',
+    thinkingLevel: 'medium',
+    permissionLevel: 'auto_review',
+    engineeringMode: false
+  } as const
+
+  function isolatedHandle(baseUrl: string): IsolatedHandle {
+    return {
+      projectPath: '/tmp/proj',
+      runtimeId: null,
+      port: 4321,
+      baseUrl,
+      process: {} as unknown as import('child_process').ChildProcess,
+      abortController: new AbortController(),
+      sessionId: 'session-1'
+    }
+  }
+
+  async function capturePromptBody(
+    agent: string | undefined,
+    baseUrl = 'http://127.0.0.1:4321'
+  ): Promise<Record<string, unknown>> {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 204 }))
+    vi.stubGlobal('fetch', fetchMock)
+    try {
+      const driver = new OpenCodeDriver()
+      const opts: SendPromptOptions = {
+        sessionId: 'session-1',
+        settings,
+        text: 'hello',
+        attachments: [],
+        readOnly: true,
+        systemPrompt: 'system',
+        allowedTools: ['read'],
+        userMessageId: 'msg-1',
+        ...(agent ? { agent } : {})
+      }
+      await driver.sendPrompt('/tmp/proj', opts, isolatedHandle(baseUrl))
+      const [callUrl, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+      expect(callUrl).toBe(`${baseUrl}/session/session-1/prompt_async`)
+      const body = typeof init.body === 'string' ? init.body : JSON.stringify(init.body)
+      return JSON.parse(body as string) as Record<string, unknown>
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  }
+
+  it('emits the lean agent identifier in the prompt body when set', async () => {
+    const body = await capturePromptBody('cio-chat')
+    expect(body['agent']).toBe('cio-chat')
+  })
+
+  it('omits the agent field when none is set', async () => {
+    const body = await capturePromptBody(undefined)
+    expect(body['agent']).toBeUndefined()
   })
 })

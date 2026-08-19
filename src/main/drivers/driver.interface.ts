@@ -172,6 +172,14 @@ export interface SendPromptOptions {
   attachments: PromptAttachment[]
   /** Enforce a non-mutating harness sandbox for temporary inspection chats. */
   readOnly?: boolean
+  /**
+   * Lean app-managed opencode agent name (e.g. `cio-chat`) for trimmed
+   * lightweight modes. Non-opencode drivers ignore it; the opencode driver
+   * emits it in the prompt body so the harness prunes denied tool/skill
+   * schemas server-side. Omitted for engineering/implement modes, which keep
+   * the full built-in opencode experience.
+   */
+  agent?: string
   /** Injected system prompt when Engineering is enabled. */
   systemPrompt?: string
   /** Exact harness tool IDs allowed for this turn; omitted to use harness defaults. */

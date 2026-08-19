@@ -110,6 +110,21 @@ describe('lean agent definitions', () => {
     expect([...allowedKeys].sort()).toEqual([...documentedAllowed].sort())
   })
 
+  it('maps every trimmed mode to exactly one lean agent', () => {
+    const expected: Record<LeanAgentMode, string> = {
+      'inbox-chat': 'cio-chat',
+      'file-system-chat': 'cio-chat-fs',
+      ephemeral: 'cio-eph',
+      'image-description': 'cio-img-desc',
+      'pr-compose': 'cio-pr-compose',
+      brainstorm: 'cio-brainstorm'
+    }
+    for (const [mode, name] of Object.entries(expected) as Array<[LeanAgentMode, string]>) {
+      expect(leanAgentNameForMode(mode)).toBe(name)
+      expect(leanAgentDefinition(name)).toBeDefined()
+    }
+  })
+
   it('grants no heavy tool outside the documented set', () => {
     for (const agent of LEAN_AGENTS) {
       for (const key of HEAVY_KEYS) {
