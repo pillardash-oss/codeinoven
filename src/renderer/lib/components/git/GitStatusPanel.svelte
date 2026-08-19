@@ -52,6 +52,7 @@
   import { onMount } from 'svelte'
   import FileTypeIcon from '../files/FileTypeIcon.svelte'
   import { projectFilesWorkspace } from '$lib/stores/project-files.svelte'
+  import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
   import BranchActionsMenu from './BranchActionsMenu.svelte'
   import DiffLayoutToggle from '../ui/DiffLayoutToggle.svelte'
   import Modal from '../ui/Modal.svelte'
@@ -65,7 +66,6 @@
   import GitPullRequestList from './GitPullRequestList.svelte'
   import GitPullRequestDetail from './GitPullRequestDetail.svelte'
   import GitDeploymentsMonitor from './GitDeploymentsMonitor.svelte'
-  import GitConflictResolver from './GitConflictResolver.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
   import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
   import { threadSettings } from '$lib/stores/thread-settings.svelte'
@@ -115,12 +115,6 @@
   let stashDropTarget = $state<GitStashEntry | null>(null)
   let mergeTarget = $state('')
   let pendingOperation = $state<{ kind: 'merge' | 'rebase'; target: string } | null>(null)
-  /**
-   * Dedicated conflict-resolution panel. When non-null it is open; the string is
-   * the initially focused conflicted file (undefined when resolving all).
-   */
-  let conflictResolverOpen = $state(false)
-  let conflictResolverInitial = $state<string | undefined>(undefined)
   let checkoutConfirm = $state<string | null>(null)
   let deleteBranchConfirm = $state<string | null>(null)
   let forceDeleteBranchConfirm = $state<string | null>(null)
@@ -1152,9 +1146,16 @@
     }
   }
 
-  function openConflictResolver(paths: string[], initial?: string): void {
-    conflictResolverInitial = initial ?? paths[0] ?? undefined
-    conflictResolverOpen = true
+  /**
+   * Route conflict resolution to the file panel: enable the tree's Conflicts
+   * filter and open the requested (or first) conflicted file, which the viewer
+   * renders as the per-hunk resolution editor.
+   */
+  function routeConflictResolution(initial?: string): void {
+    gitState.conflictsMode = true
+    contextSidebarState.openFiles(projectId, threadId)
+    const path = initial ?? gitState.conflicted[0]
+    if (path) void projectFilesWorkspace.openFile(projectId, path)
   }
 
   async function openInEditor(path: string): Promise<void> {
@@ -1859,7 +1860,7 @@
                     type="button"
                     class="flex shrink-0 items-center gap-1.5 rounded-md bg-primary px-2.5 py-1 text-[10px] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:cursor-default disabled:opacity-40"
                     title="Open the conflict resolution panel for every conflicted file"
-                    onclick={() => openConflictResolver(conflicted.map((change) => change.path))}
+                    onclick={() => routeConflictResolution()}
                   >
                     <GitMerge size={11} />
                     Resolve all
@@ -2035,11 +2036,7 @@
                         onOpenInEditor={(path) => void openInEditor(path)}
                         onIgnorePaths={(paths) => void ignorePathsAction(paths)}
                         onDiscardPaths={(paths) => requestDiscard(paths)}
-                        onResolveConflict={(path) =>
-                          openConflictResolver(
-                            conflicted.map((change) => change.path),
-                            path
-                          )}
+                        onResolveConflict={(path) => routeConflictResolution(path)}
                       />
                     {:else}
                       <div class="overflow-hidden rounded-lg border border-warning/25 bg-surface">
@@ -2059,11 +2056,7 @@
                               type="button"
                               class="rounded px-1.5 py-0.5 text-[9px] font-medium text-warning transition-colors hover:bg-warning/10"
                               title="Open the conflict resolution panel"
-                              onclick={() =>
-                                openConflictResolver(
-                                  conflicted.map((change) => change.path),
-                                  section.files[0]?.path
-                                )}
+                              onclick={() => routeConflictResolution(section.files[0]?.path)}
                             >
                               Resolve all
                             </button>
@@ -2078,11 +2071,7 @@
                               onToggleDiff={() => void toggleDiff(change)}
                               onToggleStage={() => void toggleStage(change)}
                               onOpenInEditor={(path) => void openInEditor(path)}
-                              onResolveConflict={(path) =>
-                                openConflictResolver(
-                                  conflicted.map((change) => change.path),
-                                  path
-                                )}
+                              onResolveConflict={(path) => routeConflictResolution(path)}
                             />
                           {/each}
                         {/each}
@@ -3498,17 +3487,4 @@
       </AlertDialog.Content>
     </AlertDialog.Portal>
   </AlertDialog.Root>
-{/if}
-
-{#if conflictResolverOpen}
-  <GitConflictResolver
-    {projectId}
-    paths={conflicted.map((change) => change.path)}
-    initialPath={conflictResolverInitial}
-    onClose={() => {
-      conflictResolverOpen = false
-      conflictResolverInitial = undefined
-      void refreshStatus()
-    }}
-  />
 {/if}

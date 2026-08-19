@@ -16,11 +16,13 @@
     X
   } from '@lucide/svelte'
   import { invoke, subscribe } from '$lib/ipc.svelte'
+  import ConflictResolutionView from './ConflictResolutionView.svelte'
   import { motionDuration } from '$lib/motion'
   import { isAudioMime, isImageMime, isSvgMime, isVideoMime, mimeFromPath } from '$lib/mime'
   import { projectFilePreviewUrl } from '$lib/file-preview'
   import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
   import { projectFilesWorkspace } from '$lib/stores/project-files.svelte'
+  import { gitState } from '$lib/stores/git.svelte'
   import { findNavState } from '$lib/stores/find-nav.svelte'
   import { trafficLightInsetStyle } from '$lib/stores/traffic-light.svelte'
   import MarkdownView from '../markdown/MarkdownView.svelte'
@@ -75,6 +77,17 @@
       : null
   )
   let deletedAtCheckpoint = $derived(checkpointDiff?.kind === 'deleted')
+  /** Paths still carrying merge/rebase conflicts, straight from the git store. */
+  let conflictedPaths = $derived([...gitState.conflicted])
+  /**
+   * Whether the "Conflicts" file-tree filter is active. Mirrors the git panel's
+   * Resolve flow: resolving from Git routes here with the filter on, and the
+   * explorer's Conflicts button toggles it directly.
+   */
+  let conflictsOnly = $derived(gitState.conflictsMode)
+  let activePathIsConflicted = $derived(
+    activeTab?.origin === 'working' && conflictedPaths.includes(activeTab.path)
+  )
   let markdown = $derived(activeTab ? /\.(?:md|mdown|markdown)$/iu.test(activeTab.path) : false)
   let pdf = $derived(activeTab ? /\.pdf$/iu.test(activeTab.path) : false)
   let image = $derived(activeTab ? isImageMime(mimeFromPath(activeTab.path)) : false)
@@ -698,6 +711,8 @@
             </button>
           </div>
         {/if}
+      {:else if activePathIsConflicted && activeTab}
+        <ConflictResolutionView {projectId} path={activeTab.path} />
       {:else if activeSession || deletedAtCheckpoint}
         {#key activeTab.id}
           <ProjectTextEditor
@@ -734,6 +749,9 @@
           {lastTurnPaths}
           {activeCheckpointPaths}
           activeCheckpointId={activeTab?.checkpointId ?? null}
+          conflictPaths={conflictedPaths}
+          {conflictsOnly}
+          onToggleConflicts={() => (gitState.conflictsMode = !gitState.conflictsMode)}
         />
       </div>
     {/if}
@@ -970,6 +988,8 @@
                 alt={activeTab.path}
                 kind={video ? 'video' : 'audio'}
               />
+            {:else if activePathIsConflicted && activeTab}
+              <ConflictResolutionView {projectId} path={activeTab.path} />
             {:else}
               <ProjectTextEditor
                 value={visibleContent}
@@ -1000,10 +1020,13 @@
               {projectState}
               onWidthChange={(width, persist) =>
                 projectFilesWorkspace.setExplorerWidth(projectId, width, persist)}
-              selectedPath={activeTab.path}
+              selectedPath={activeTab?.path ?? null}
               {lastTurnPaths}
               {activeCheckpointPaths}
-              activeCheckpointId={activeTab.checkpointId}
+              activeCheckpointId={activeTab?.checkpointId ?? null}
+              conflictPaths={conflictedPaths}
+              {conflictsOnly}
+              onToggleConflicts={() => (gitState.conflictsMode = !gitState.conflictsMode)}
               onFileSelect={fullscreenOpenFile}
             />
           </div>

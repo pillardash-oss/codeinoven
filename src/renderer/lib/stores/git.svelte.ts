@@ -145,6 +145,12 @@ export class GitState {
   busy: Record<string, boolean> = $state({})
   error: string | null = $state(null)
   githubPermission: GitHubPermissionRequired | null = $state(null)
+  /**
+   * When true, the file explorer reveals only conflicted files (a mode like the
+   * "Last turn" filter, driven from the git panel's Resolve flow and the file
+   * tree's Conflicts toggle). Cleared when no conflicts remain.
+   */
+  conflictsMode = $state(false)
 
   /**
    * Open PRs that need conflict resolution, keyed by `owner/repo`. This is the
@@ -312,6 +318,7 @@ export class GitState {
     this.stashes = []
     this.error = null
     this.githubPermission = null
+    this.conflictsMode = false
   }
 
   /**
@@ -534,6 +541,9 @@ export class GitState {
       this.remotes = remotes
       this.credentialStatus = credentialStatus
       this.stashes = stashes
+      // Conflicts mode is only meaningful while actual conflicts exist — once
+      // they are all resolved the filter auto-closes, like the last-turn one.
+      if (status.conflicted.length === 0) this.conflictsMode = false
       // Refresh the open-PR conflict indicator (cooldown-gated) so the header
       // badge stays current without a GitHub round trip on every mutation.
       void this.refreshPrConflictIndicators(projectId)
