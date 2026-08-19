@@ -196,8 +196,15 @@ function decodeSegments(pathname: string): string[] {
  *   project root through {@link ProjectFilesService#resolveForExternalEditor}
  * - `appfile://attachment/<projectId>/<attachmentId>?name=<label>` — an
  *   out-of-project attachment copied into CodeInOven storage
+ *
+ * The handler is installed via a lazy {@link ProjectFilesService} resolver so
+ * it can be registered before the main window loads (the packaged renderer
+ * requests `appfile://` previews as soon as it hydrates; installing the handler
+ * any later makes those requests fail with `ERR_UNKNOWN_URL_SCHEME`).
  */
-export function installFilePreviewProtocol(projectFiles: ProjectFilesService): void {
+export function installFilePreviewProtocol(
+  getProjectFiles: () => ProjectFilesService | null
+): void {
   protocol.handle(SCHEME, async (request) => {
     try {
       const url = new URL(request.url)
@@ -210,7 +217,12 @@ export function installFilePreviewProtocol(projectFiles: ProjectFilesService): v
         if (!relativePath) return notFound()
         const type = typeFromPath(relativePath)
         if (!type) return notFound()
-        const absolutePath = await projectFiles.resolveForExternalEditor(projectId, relativePath)
+        const projectFiles = getProjectFiles()
+        if (!projectFiles) return notFound()
+        const absolutePath = await projectFiles.resolveForExternalEditor(
+          projectId,
+          relativePath
+        )
         return serveFile(absolutePath, type, request)
       }
 

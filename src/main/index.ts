@@ -351,6 +351,13 @@ let retryScheduler: RetrySchedulerService | null = null
 let remoteCredentials: DeviceCredentialService | null = null
 let remoteMode: RemoteModeController | null = null
 let modelPricingService: ModelPricingService | null = null
+/**
+ * Resolved lazily so the `appfile://` preview protocol can be installed before
+ * the main window loads (its renderer requests previews as soon as it hydrates).
+ * Populated in {@link bootPostPaintServices} once the file service exists.
+ */
+let appfileProjectFiles: import('./editor/project-files-service').ProjectFilesService | null =
+  null
 const threadCreation = new ThreadCreationCoordinator()
 
 /** Resolve the app icon — static dir in dev, bundled renderer assets in production. */
@@ -496,7 +503,7 @@ async function bootPostPaintServices(): Promise<void> {
 
   const projectManager = new ProjectManager(database)
   const projectFilesService = new ProjectFilesService(projectManager)
-  installFilePreviewProtocol(projectFilesService)
+  appfileProjectFiles = projectFilesService
   computerUsePipService = new ComputerUsePipService(storage)
   harnessManifestService = new HarnessManifestService(storage)
   modelPricingService = new ModelPricingService(storage)
@@ -988,6 +995,13 @@ void app
     session.defaultSession.on('will-download', (event) => {
       event.preventDefault()
     })
+
+    // Install the `appfile://` preview protocol before the renderer loads: the
+    // packaged renderer requests preview images as soon as it hydrates, and if
+    // the handler is not yet registered Chromium rejects those early requests
+    // with `net::ERR_UNKNOWN_URL_SCHEME`, leaving file-tree images permanently
+    // broken. The file service is resolved lazily from bootPostPaintServices.
+    installFilePreviewProtocol(() => appfileProjectFiles)
 
     const window = createWindow()
     startupTelemetry.mark('window:created')
