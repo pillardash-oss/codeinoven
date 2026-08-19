@@ -14,8 +14,10 @@
   import { invoke } from '$lib/ipc.svelte'
   import { getProjectIcon, loadProjectIcons } from '$lib/project-icons'
   import { pickColorForSeed } from '$lib/project-colors'
+  import { providerCatalog } from '$lib/stores/provider-catalog.svelte'
   import { providerStore } from '$lib/stores/providers.svelte'
   import type { ScopeProject } from '$lib/stores/scope.svelte'
+  import { workspaceState } from '$lib/stores/workspace.svelte'
   import ProjectSelect from '../shared/ProjectSelect.svelte'
   import RichMarkdownEditor from '../shared/RichMarkdownEditor.svelte'
   import ThreadSelect from '../shared/ThreadSelect.svelte'
@@ -252,11 +254,24 @@ Write the skill…`
   let editingRegistry = $derived(target?.kind === 'registry' ? target.utility : null)
   let isAppOwned = $derived(target?.kind === 'registry' && target.utility?.appOwned === true)
 
-  let availableHarnesses = $derived(
-    providerStore.providers
-      .filter((provider) => provider.integration === 'ready' && provider.status === 'available')
+  /** Installed, supported harnesses the editor may bind a capability to.
+   *  Follows the model picker's protocol: the provider catalog (persisted
+   *  snapshot + background refresh, never a cold Harnesses-page probe) decides
+   *  which harnesses exist, while `providerStore` supplies canonical names and
+   *  drops harnesses whose installed version is unsupported. Probing status is
+   *  only ever additive — a confirmed `available` harness stays listed. */
+  let availableHarnesses = $derived.by((): Array<{ id: string; name: string }> => {
+    const catalogIds = new Set(providerCatalog.allCached().map((catalog) => catalog.harnessId))
+    return providerStore.providers
+      .filter((provider) => !providerStore.isUnsupported(provider.id))
+      .filter(
+        (provider) =>
+          provider.status === 'available' ||
+          provider.status === 'checking' ||
+          catalogIds.has(provider.id)
+      )
       .map((provider) => ({ id: provider.id, name: provider.name }))
-  )
+  })
   let scopedThreads = $derived(
     threads.filter(
       (thread) =>
@@ -999,6 +1014,11 @@ Write the complete workflow, rules, and examples for this skill.`
     projects = context.projects
     threads = context.threads
     projectIconUrls = context.projectIconUrls
+    // Same protocol as the model picker: revalidate the provider catalog in the
+    // background so installed harnesses appear without opening the Harnesses
+    // page first. The catalog store short-circuits fresh copies (TTL-guarded).
+    const projectId = workspaceState.selectedThread?.projectId ?? context.projects[0]?.id
+    if (projectId) void providerCatalog.refresh(projectId)
   }
 
   $effect(() => {
