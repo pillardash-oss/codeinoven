@@ -60,7 +60,9 @@ export class PiRpcClient {
 
   constructor(options: PiRpcOptions) {
     this.onEvent = options.onEvent ?? (() => undefined)
-    this.onUiRequest = options.onUiRequest ?? ((record) => this.answerExtensionUiRequest(record))
+    // A dialog without a consumer must still be answered or pi stalls waiting
+    // for a human; the driver always supplies its own handler that surfaces it.
+    this.onUiRequest = options.onUiRequest ?? ((record) => this.dismissUiDialog(record))
     this.onExit = options.onExit ?? (() => undefined)
     this.child = spawn(options.executable, ['--mode', 'rpc', ...(options.args ?? [])], {
       cwd: options.cwd,
@@ -141,6 +143,38 @@ export class PiRpcClient {
     return this.send({ type: 'get_available_models' })
   }
 
+  /** Resolve the current session model, thinking level, and streaming state. */
+  async getState(): Promise<unknown> {
+    return this.send({ type: 'get_state' })
+  }
+
+  /** Resolve token usage, cost, and context-window statistics for this session. */
+  async getSessionStats(): Promise<unknown> {
+    return this.send({ type: 'get_session_stats' })
+  }
+
+  /** Manually compact the conversation context to reduce token usage. */
+  async compact(customInstructions?: string): Promise<unknown> {
+    return this.send(
+      customInstructions ? { type: 'compact', customInstructions } : { type: 'compact' }
+    )
+  }
+
+  /** Enable or disable automatic compaction when context is nearly full. */
+  async setAutoCompaction(enabled: boolean): Promise<void> {
+    await this.send({ type: 'set_auto_compaction', enabled })
+  }
+
+  /** Enable or disable automatic retry on transient provider errors. */
+  async setAutoRetry(enabled: boolean): Promise<void> {
+    await this.send({ type: 'set_auto_retry', enabled })
+  }
+
+  /** List slash commands / skills / prompt templates invokable via `/name`. */
+  async getCommands(): Promise<unknown> {
+    return this.send({ type: 'get_commands' })
+  }
+
   dispose(): void {
     if (this.disposed) return
     this.disposed = true
@@ -173,17 +207,10 @@ export class PiRpcClient {
       return
     }
     if (type === 'extension_ui_request') {
-      const method = record['method']
-      if (
-        method === 'select' ||
-        method === 'confirm' ||
-        method === 'input' ||
-        method === 'editor'
-      ) {
-        this.onUiRequest(record)
-      } else {
-        this.answerExtensionUiRequest(record)
-      }
+      // Only dialog methods block on a client response. Fire-and-forget methods
+      // (notify, setStatus, setWidget, setTitle, set_editor_text) never expect a
+      // reply, so answering them would be noise.
+      if (isExtensionUiDialogMethod(record['method'])) this.onUiRequest(record)
       return
     }
     this.onEvent(record)
@@ -205,22 +232,6 @@ export class PiRpcClient {
     }
   }
 
-  /**
-   * Pi emits extension UI dialogs (select/confirm/input) as requests. Without a
-   * reply the agent stalls waiting for a human. We auto-dismiss with the cancel
-   * semantics Pi expects so a turn-scoped extension never blocks the run.
-   */
-  private answerExtensionUiRequest(record: Record<string, unknown>): void {
-    const id = record['id']
-    if (typeof id !== 'string' && typeof id !== 'number') return
-    const response: Record<string, unknown> = {
-      type: 'extension_ui_response',
-      id,
-      cancelled: true
-    }
-    this.child.stdin?.write(`${JSON.stringify(response)}\n`)
-  }
-
   /** Resolve a dialog request using Pi's extension UI response protocol. */
   respondToExtensionUiRequest(
     requestId: string | number,
@@ -231,6 +242,13 @@ export class PiRpcClient {
     )
   }
 
+  /** Auto-dismiss a dialog when no consumer is attached so the agent never stalls. */
+  private dismissUiDialog(record: Record<string, unknown>): void {
+    const id = record['id']
+    if (typeof id !== 'string' && typeof id !== 'number') return
+    this.respondToExtensionUiRequest(id, { cancelled: true })
+  }
+
   private failAll(error: Error): void {
     for (const pending of this.pending.values()) {
       clearTimeout(pending.timer)
@@ -238,6 +256,11 @@ export class PiRpcClient {
     }
     this.pending.clear()
   }
+}
+
+/** Dialog extension UI methods that block until the client replies. */
+function isExtensionUiDialogMethod(method: unknown): boolean {
+  return method === 'select' || method === 'confirm' || method === 'input' || method === 'editor'
 }
 
 /** Resolve the `pi` executable on PATH; returns null when unavailable. */

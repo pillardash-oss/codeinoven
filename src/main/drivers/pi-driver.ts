@@ -28,6 +28,8 @@ import type {
   UtilityRuntimeOverlay,
   UtilityRuntimePreparationRequest
 } from './driver.interface'
+import type { HarnessCommand, ThreadSettings } from '../../lib/types'
+import { classifyProviderIssue } from '../../lib/provider-issue'
 import {
   PersistentCliDriver,
   type CliLineParseContext,
@@ -269,11 +271,6 @@ export function mapPiRecord(
   if (!entry) return null
   const type = stringValue(entry['type'])
 
-  if (type === 'session') {
-    const nativeSessionId = stringValue(entry['id'])
-    return nativeSessionId ? { nativeSessionId } : null
-  }
-
   if (type === 'turn_start') {
     turnState.turnIndex += 1
     turnState.assistantMessageId = null
@@ -489,6 +486,69 @@ export function mapPiRecord(
     }
   }
 
+  if (type === 'auto_retry_end') {
+    const success = entry['success'] === true
+    if (success) {
+      return {
+        events: [
+          {
+            type: 'session.status',
+            sessionId: context.sessionId,
+            status: { state: 'working' }
+          }
+        ]
+      }
+    }
+    return {
+      events: [
+        {
+          type: 'session.status',
+          sessionId: context.sessionId,
+          status: {
+            state: 'error',
+            issue: {
+              kind: 'provider_unavailable',
+              message:
+                stringValue(entry['finalError']) ??
+                stringValue(entry['errorMessage']) ??
+                'Pi retries failed',
+              harnessId: 'pi',
+              retryable: false,
+              ...(numberValue(entry['attempt']) ? { attempt: numberValue(entry['attempt']) } : {})
+            }
+          }
+        }
+      ]
+    }
+  }
+
+  if (type === 'agent_settled') {
+    const session = context.session
+    const lastAssistant = [...session.messages].reverse().find((message) => {
+      return message.role === 'assistant'
+    })
+    if (lastAssistant?.error) {
+      return {
+        events: [
+          {
+            type: 'session.status',
+            sessionId: context.sessionId,
+            status: {
+              state: 'error',
+              issue: {
+                kind: classifyProviderIssue(lastAssistant.error),
+                message: lastAssistant.error,
+                harnessId: 'pi',
+                retryable: false
+              }
+            }
+          }
+        ]
+      }
+    }
+    return { events: [] }
+  }
+
   if (type === 'extension_error') {
     return {
       events: [
@@ -502,18 +562,8 @@ export function mapPiRecord(
   }
 
   if (type === 'agent_end') {
-    const messages = Array.isArray(entry['messages']) ? entry['messages'] : []
-    const lastAssistant = [...messages].reverse().find((m) => {
-      const message = record(m)
-      return message?.['role'] === 'assistant'
-    })
-    const message = record(lastAssistant)
-    const willRetry = entry['willRetry'] === true
-    if (message && !willRetry && message['stopReason'] === 'error') {
-      return {
-        events: [{ type: 'session.error', sessionId: context.sessionId, error: errorText(message) }]
-      }
-    }
+    // Never finalize here: a transient failure is followed by `auto_retry_start`.
+    // Only `agent_settled` signals that no retry or queued continuation remains.
     return { events: [] }
   }
 
@@ -592,12 +642,13 @@ export class PiDriver extends PersistentCliDriver {
     messageHistory: 'mirrored',
     interactivePermissions: true,
     attachments: true,
-    commands: false,
+    commands: true,
     providerCatalog: true,
-    sessionStatus: false,
-    contextUsage: false,
-    compaction: false,
+    sessionStatus: true,
+    contextUsage: true,
+    compaction: true,
     subagents: false,
+    scheduledRetry: true,
     nativeUtilities: []
   }
 
@@ -607,6 +658,7 @@ export class PiDriver extends PersistentCliDriver {
   private activeTurns = new Set<string>()
   private pendingUiRequests = new Map<string, PiUiRequest>()
   private piExecutable: Promise<string | null> | null = null
+  private nativeMcpConfigSupport: Promise<boolean> | null = null
 
   constructor(
     storage: StorageEngine,
@@ -695,6 +747,111 @@ export class PiDriver extends PersistentCliDriver {
       (entry): entry is Record<string, unknown> =>
         typeof entry === 'object' && entry !== null && !Array.isArray(entry)
     )
+  }
+
+  /** Whether the user's pi runtime exposes the `--mcp-config` adapter flag. */
+  private supportsNativeMcpConfig(): Promise<boolean> {
+    this.nativeMcpConfigSupport ??= this.probeNativeMcpConfig()
+    return this.nativeMcpConfigSupport
+  }
+
+  private async probeNativeMcpConfig(): Promise<boolean> {
+    const executable = await this.resolvePiExecutable()
+    if (!executable) return false
+    const { execFile } = await import('node:child_process')
+    const help = await new Promise<string>((resolve) => {
+      execFile(
+        executable,
+        ['--help'],
+        {
+          env: buildHarnessEnvironment(),
+          timeout: 10_000
+        },
+        (error, stdout) => {
+          resolve(error ? '' : stdout)
+        }
+      )
+    })
+    // The flag is registered by the pi-mcp-adapter extension; absent the
+    // adapter, pi rejects `--mcp-config` as an unknown flag.
+    return /\bmcp-config\b/u.test(help) || /--mcp-config/u.test(help)
+  }
+
+  override async listCommands(projectPath?: string): Promise<HarnessCommand[]> {
+    const executable = await this.resolvePiExecutable()
+    if (!executable) return []
+    // Commands are project-scoped in pi; probe them in a disposable session so
+    // the running turn is untouched. Fall back to the last seen project when the
+    // caller omits the path (the base class declares a no-arg signature).
+    const cwd = projectPath ?? [...this.sessionProjects.values()][0] ?? process.cwd()
+    const client = new PiRpcClient({
+      executable,
+      cwd,
+      env: buildHarnessEnvironment()
+    })
+    try {
+      await client.newSession()
+      const payload = record(await client.getCommands())
+      const commands = Array.isArray(payload?.['commands']) ? payload['commands'] : []
+      const result: HarnessCommand[] = []
+      for (const raw of commands) {
+        const command = record(raw)
+        const name = stringValue(command?.['name'])
+        if (!name) continue
+        const source = stringValue(command?.['source'])
+        const description = stringValue(command?.['description'])
+        result.push({
+          name,
+          ...(description ? { description } : {}),
+          ...(source === 'skill' ? { source: 'skill' as const } : {})
+        })
+      }
+      return result
+    } catch (error) {
+      Logger.dev('Pi command discovery failed:', error)
+      return []
+    } finally {
+      client.dispose()
+    }
+  }
+
+  override async runCommand(
+    projectPath: string,
+    sessionId: string,
+    command: string,
+    args: string
+  ): Promise<void> {
+    const session = await this.requireSession(projectPath, sessionId)
+    if (this.activeTurns.has(session.id)) {
+      throw new Error(`A turn is already active for session ${session.id}`)
+    }
+    const client = await this.ensureRpcClient(projectPath, session.id)
+    const commandText = (args.trim() ? `${command} ${args}` : command).trim()
+    this.activeTurns.add(session.id)
+    try {
+      await client.prompt(commandText)
+    } catch (error) {
+      this.activeTurns.delete(session.id)
+      const message = error instanceof Error ? error.message : 'Pi command failed to start'
+      this.emit({ type: 'session.error', sessionId: session.id, error: message })
+      throw error
+    }
+  }
+
+  async compactSession(
+    projectPath: string,
+    sessionId: string,
+    _settings: ThreadSettings
+  ): Promise<void> {
+    void _settings
+    await this.requireSession(projectPath, sessionId)
+    const client = this.rpcClients.get(sessionId)
+    if (!client || !this.activeTurns.has(sessionId)) {
+      throw new Error(`No active Pi turn is available to compact for session ${sessionId}`)
+    }
+    // pi emits compaction_start/compaction_end events as it summarizes; awaiting
+    // here keeps the compaction handoff deterministic from the caller's view.
+    await client.compact()
   }
 
   override async sendPrompt(projectPath: string, options: SendPromptOptions): Promise<void> {
@@ -825,7 +982,7 @@ export class PiDriver extends PersistentCliDriver {
   ): Promise<UtilityRuntimeOverlay> {
     const mcpServers: Record<
       string,
-      { command: string; args: string[]; env: Record<string, string> }
+      { command?: string; args?: string[]; env?: Record<string, string>; url?: string }
     > = {}
     const keys = new Set<string>()
     for (const { utility, binding } of request.resolvedUtilities) {
@@ -836,7 +993,14 @@ export class PiDriver extends PersistentCliDriver {
       keys.add(key)
 
       const config = utility.config
-      if (config.transport !== 'stdio' || !config.command) {
+      if (config.transport === 'http' || config.transport === 'sse') {
+        if (!config.url) {
+          throw new TypeError(`Pi MCP utility "${utility.name}" requires a URL`)
+        }
+        mcpServers[key] = { url: config.url }
+        continue
+      }
+      if (!config.command) {
         throw new TypeError(`Pi MCP utility "${utility.name}" requires a stdio command`)
       }
       mcpServers[key] = {
@@ -851,12 +1015,39 @@ export class PiDriver extends PersistentCliDriver {
     const env: Record<string, string> = {}
 
     if (Object.keys(mcpServers).length > 0) {
-      args.push('--extension', '{{config:pi-mcp-extension}}')
-      configFiles.push({
-        id: 'pi-mcp-extension',
-        relativePath: 'pi/codeinoven-mcp-extension.ts',
-        content: piMcpExtension(mcpServers)
-      })
+      const native = await this.supportsNativeMcpConfig()
+      if (native) {
+        // pi-mcp-adapter (an extension the user may install) registers the
+        // `--mcp-config` flag and reads a standard `{ mcpServers }` file. Using
+        // it avoids maintaining a bespoke in-extension MCP client.
+        args.push('--mcp-config', '{{config:pi-mcp}}')
+        configFiles.push({
+          id: 'pi-mcp',
+          relativePath: 'pi/mcp-config.json',
+          content: JSON.stringify({ mcpServers }, null, 2)
+        })
+      } else {
+        // The app-owned bridge extension can only host stdio servers, so remote
+        // http/sse utilities require the pi-mcp-adapter native path.
+        const remoteNames = Object.entries(mcpServers).filter(
+          ([, server]) => typeof server['url'] === 'string'
+        )
+        if (remoteNames.length > 0) {
+          throw new TypeError(
+            `Pi MCP utility "${remoteNames[0]?.[0]}" requires the pi-mcp-adapter extension. Install it with: pi install npm:pi-mcp-adapter`
+          )
+        }
+        const stdioServers = mcpServers as Record<
+          string,
+          { command: string; args: string[]; env: Record<string, string> }
+        >
+        args.push('--extension', '{{config:pi-mcp-extension}}')
+        configFiles.push({
+          id: 'pi-mcp-extension',
+          relativePath: 'pi/codeinoven-mcp-extension.ts',
+          content: piMcpExtension(stdioServers)
+        })
+      }
     }
 
     if (this.baseUrlProviders && this.secretVault && !hasNativeProviderCatalog(this.id)) {
@@ -944,6 +1135,12 @@ export class PiDriver extends PersistentCliDriver {
     this.sessionProjects.set(sessionId, projectPath)
     try {
       await client.newSession()
+      // Best-effort tuning: a transient failure here must never block the turn.
+      await Promise.allSettled([
+        client.setAutoRetry(true),
+        client.setAutoCompaction(true),
+        this.syncNativeSessionId(projectPath, sessionId)
+      ])
     } catch (error) {
       client.dispose()
       this.rpcClients.delete(sessionId)
@@ -959,6 +1156,17 @@ export class PiDriver extends PersistentCliDriver {
   private resolvePiExecutable(): Promise<string | null> {
     this.piExecutable ??= resolvePiExecutable()
     return this.piExecutable
+  }
+
+  /** Mirror the native pi session id so driver records stay addressable. */
+  private async syncNativeSessionId(projectPath: string, sessionId: string): Promise<void> {
+    const client = this.rpcClients.get(sessionId)
+    if (!client) return
+    const state = record(await client.getState())
+    const nativeId = stringValue(state?.['sessionId'])
+    if (!nativeId) return
+    const session = await this.requireSession(projectPath, sessionId)
+    session.nativeSessionId = nativeId
   }
 
   private handleRpcEvent(
@@ -977,10 +1185,15 @@ export class PiDriver extends PersistentCliDriver {
           this.emit({ ...event, sessionId: session.id })
         }
         session.updatedAt = Date.now()
-        const terminalError = (result.events ?? []).some((event) => event.type === 'session.error')
-        if (terminalError || (record['type'] === 'agent_end' && record['willRetry'] !== true)) {
+        // pi auto-retries transient failures, emitting `agent_end` for every
+        // attempt, before `auto_retry_end` and finally `agent_settled`. Only
+        // `agent_settled` is a stable signal that no retry or queued
+        // continuation remains, so never finalize a turn on `agent_end`.
+        if (record['type'] === 'agent_settled') {
           this.activeTurns.delete(session.id)
-          void this.finishTurn(session)
+          void this.refreshSessionUsage(session).finally(() => {
+            void this.finishTurn(session)
+          })
         }
       })
       .catch((error) => {
@@ -992,6 +1205,14 @@ export class PiDriver extends PersistentCliDriver {
     void code
     if (this.activeTurns.has(sessionId)) {
       this.activeTurns.delete(sessionId)
+      // The pi process died mid-turn; persist whatever was mirrored and
+      // surface the idle state so the thread does not stay "working".
+      const projectPath = this.sessionProjects.get(sessionId)
+      if (projectPath) {
+        this.requireSession(projectPath, sessionId)
+          .then((session) => void this.finishTurn(session))
+          .catch((error) => Logger.dev('Pi exit finalization failed:', error))
+      }
     }
   }
 
@@ -1058,6 +1279,46 @@ export class PiDriver extends PersistentCliDriver {
     }
     request.client.respondToExtensionUiRequest(rawId, { cancelled: true })
     this.pendingUiRequests.delete(requestId)
+  }
+
+  /** Attach the final session-stats context usage to the last assistant message. */
+  private async refreshSessionUsage(session: PersistentCliSession): Promise<void> {
+    const client = this.rpcClients.get(session.id)
+    if (!client) return
+    const lastAssistant = [...session.messages].reverse().find((message) => {
+      return message.role === 'assistant'
+    })
+    if (!lastAssistant) return
+    try {
+      const stats = record(await client.getSessionStats())
+      const contextUsage = record(stats?.['contextUsage'])
+      const tokens = mapPiUsage(stats?.['tokens'])
+      const cost =
+        typeof stats?.['cost'] === 'number' ? (stats['cost'] as number) : mapPiCost(stats)
+      const contextWindow = numberValue(contextUsage?.['contextWindow'])
+      const contextUsed = numberValue(contextUsage?.['tokens'])
+      if (
+        tokens === undefined &&
+        cost === undefined &&
+        contextWindow === undefined &&
+        contextUsed === undefined
+      ) {
+        return
+      }
+      const event: SessionAgentEvent = {
+        type: 'usage.updated',
+        sessionId: session.id,
+        messageId: lastAssistant.id,
+        ...(tokens ? { tokens } : {}),
+        ...(cost !== undefined ? { cost } : {}),
+        ...(contextWindow !== undefined ? { contextWindow } : {}),
+        ...(contextUsed !== undefined ? { contextUsed } : {})
+      }
+      this.applyEventToSession(session, event)
+      this.emit(event)
+    } catch (error) {
+      Logger.dev('Pi session stats refresh failed:', error)
+    }
   }
 
   private async finishTurn(session: PersistentCliSession): Promise<void> {
