@@ -49,6 +49,29 @@
     storageKey?: string
   }
 
+  interface StoredComposeSelection {
+    harnessId: string
+    providerId: string
+    modelId: string
+    thinkingLevel: ThinkingLevel
+  }
+
+  interface PrCreationPreferences {
+    head?: string
+    base?: string
+    compose?: StoredComposeSelection
+  }
+
+  const THINKING_LEVELS = new Set<ThinkingLevel>([
+    'minimal',
+    'low',
+    'medium',
+    'high',
+    'xhigh',
+    'max',
+    'ultra'
+  ])
+
   let {
     projectId,
     onClose,
@@ -60,11 +83,72 @@
     storageKey: storageKeyProp
   }: Props = $props()
 
+  function preferencesStorageKey(): string {
+    return `${APP_SLUG}.pullRequestPreferences.${projectId}.v1`
+  }
+
+  function loadPrCreationPreferences(): PrCreationPreferences {
+    if (typeof window === 'undefined') return {}
+    try {
+      const raw = window.localStorage.getItem(preferencesStorageKey())
+      if (!raw) return {}
+      const parsed: unknown = JSON.parse(raw)
+      if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return {}
+      const record = parsed as Record<string, unknown>
+      const composeValue = record['compose']
+      let compose: StoredComposeSelection | undefined
+      if (
+        typeof composeValue === 'object' &&
+        composeValue !== null &&
+        !Array.isArray(composeValue)
+      ) {
+        const selection = composeValue as Record<string, unknown>
+        const thinkingLevel = selection['thinkingLevel']
+        if (
+          typeof selection['harnessId'] === 'string' &&
+          typeof selection['providerId'] === 'string' &&
+          typeof selection['modelId'] === 'string' &&
+          typeof thinkingLevel === 'string' &&
+          THINKING_LEVELS.has(thinkingLevel as ThinkingLevel)
+        ) {
+          compose = {
+            harnessId: selection['harnessId'],
+            providerId: selection['providerId'],
+            modelId: selection['modelId'],
+            thinkingLevel: thinkingLevel as ThinkingLevel
+          }
+        }
+      }
+      return {
+        ...(typeof record['head'] === 'string' ? { head: record['head'] } : {}),
+        ...(typeof record['base'] === 'string' ? { base: record['base'] } : {}),
+        ...(compose ? { compose } : {})
+      }
+    } catch {
+      return {}
+    }
+  }
+
+  function persistPrCreationPreferences(update: PrCreationPreferences): void {
+    if (typeof window === 'undefined') return
+    try {
+      const current = loadPrCreationPreferences()
+      window.localStorage.setItem(
+        preferencesStorageKey(),
+        JSON.stringify({ ...current, ...update })
+      )
+    } catch {
+      // Preference storage is a convenience; unavailable storage must not block PR creation.
+    }
+  }
+
+  const initialPreferences = loadPrCreationPreferences()
+
   let originIdentity = $state<{ owner: string; repo: string } | null>(null)
   let title = $state('')
   let body = $state('')
-  let head = $state('')
-  let base = $state('')
+  let head = $state(initialPreferences.head ?? '')
+  let base = $state(initialPreferences.base ?? '')
   let draft = $state(false)
   /** Push committed local changes to the head branch so they land in the PR. */
   let pushLocal = $state(true)
@@ -108,8 +192,11 @@
   let composeOpen = $state(false)
   /** Phase of the compose flow, drives the dropdown's button label. */
   let composePhase = $state<'idle' | 'working' | 'complete' | 'recompose'>('idle')
-  /** Model used for the compose agent — seeded from the last thread model. */
-  let composeSettings = $state<ThreadSettings>({ ...threadSettings.lastUsed })
+  /** Project-specific PR model when available; otherwise the user's last project model. */
+  let composeSettings = $state<ThreadSettings>({
+    ...threadSettings.lastUsed,
+    ...(initialPreferences.compose ?? {})
+  })
   /** Branch selection from the last virtual compose — detects changes on recompose. */
   let composeHead = $state('')
   let composeBase = $state('')
@@ -137,6 +224,13 @@
   const headInfo = $derived(gitState.branches.find((candidate) => candidate.name === head) ?? null)
   /** An open PR for the exact head→base pair — GitHub rejects a duplicate with a 422. */
   const existingPr = $derived(compare?.existing ?? null)
+  const composeWorking = $derived(composePhase === 'working')
+  const composeSucceeded = $derived(composePhase === 'complete' || composePhase === 'recompose')
+  const dockHasIssue = $derived(
+    Boolean(
+      originError || compareError || composeError || gitState.error || pushRejected || existingPr
+    )
+  )
 
   /**
    * Whether the local head has commits the remote lacks — a push is only
@@ -284,6 +378,7 @@
       draft
     })
     if (reference) {
+      persistPrCreationPreferences({ head, base })
       result = reference
       onCreated?.()
     }
@@ -484,6 +579,17 @@
     }
   }
 
+  function persistComposeSelection(settings: ThreadSettings): void {
+    persistPrCreationPreferences({
+      compose: {
+        harnessId: settings.harnessId,
+        providerId: settings.providerId,
+        modelId: settings.modelId,
+        thinkingLevel: settings.thinkingLevel
+      }
+    })
+  }
+
   /** Kick off a fresh disposable compose or recompose task. */
   async function runCompose(): Promise<void> {
     if (!originIdentity || !head || !base || composePhase === 'working') return
@@ -493,6 +599,7 @@
     composePhase = 'working'
     try {
       const settings = composeVirtualTaskSettings()
+      persistComposeSelection(settings)
       const virtualTaskId = crypto.randomUUID()
       const directory = `.cio/git/compose/${virtualTaskId}`
       const report = await gitState.composeWithAgent(
@@ -522,7 +629,7 @@
       providerId,
       modelId
     }
-    threadSettings.commit(composeSettings)
+    persistComposeSelection(composeSettings)
   }
 
   function chooseComposeThinking(level: ThinkingLevel): void {
@@ -530,7 +637,7 @@
       ...composeSettings,
       thinkingLevel: level
     }
-    threadSettings.commit(composeSettings)
+    persistComposeSelection(composeSettings)
   }
 
   onDestroy(clearComposeTimers)
@@ -541,8 +648,12 @@
 
   $effect(() => {
     if (originIdentity && branches.length > 0) {
-      if (!head) head = branch ?? branches[0]
-      if (!base) base = branches.includes('main') ? 'main' : branches[0]
+      if (!head || !branches.includes(head)) {
+        head = branch && branches.includes(branch) ? branch : branches[0]
+      }
+      if (!base || !branches.includes(base)) {
+        base = branches.includes('main') ? 'main' : branches[0]
+      }
     }
   })
 
@@ -577,11 +688,34 @@
       onclick={handleExpand}
     >
       {#if result}
-        <CheckCircle2 size={14} class="shrink-0 text-success" />
-        <span class="text-[11px] font-medium">PR #{result.number} created</span>
-      {:else if submitting}
+        <span
+          class="flex items-center gap-1 rounded-full bg-success/15 px-1.5 py-0.5 text-[9px] font-semibold text-success"
+        >
+          <CheckCircle2 size={10} aria-hidden="true" />
+          Created
+        </span>
+        <span class="text-[11px] font-medium">PR #{result.number}</span>
+      {:else if composeWorking || creating || submitting}
         <Loader2 size={14} class="shrink-0 animate-spin text-info" />
-        <span class="text-[11px] font-medium">Creating pull request…</span>
+        <span class="text-[11px] font-medium">
+          {composeWorking ? 'Composing pull request…' : 'Creating pull request…'}
+        </span>
+      {:else if dockHasIssue}
+        <span
+          class="flex items-center gap-1 rounded-full bg-warning/15 px-1.5 py-0.5 text-[9px] font-semibold text-warning"
+        >
+          <TriangleAlert size={10} aria-hidden="true" />
+          Needs attention
+        </span>
+        <span class="text-[11px] font-medium">New pull request</span>
+      {:else if composeSucceeded}
+        <span
+          class="flex items-center gap-1 rounded-full bg-success/15 px-1.5 py-0.5 text-[9px] font-semibold text-success"
+        >
+          <CircleCheck size={10} aria-hidden="true" />
+          Composed
+        </span>
+        <span class="text-[11px] font-medium">New pull request</span>
       {:else}
         <GitPullRequest size={14} class="shrink-0 text-dimmed" />
         <span class="text-[11px] font-medium">New pull request</span>
@@ -607,88 +741,92 @@
       {/if}
 
       {#if originIdentity && !sameBranch && head && base}
-        <div class="flex items-center justify-between gap-2">
-          <p class="text-[10px] text-muted">Let the agent draft the PR for you.</p>
-          <DropdownMenu.Root bind:open={composeOpen}>
-            <DropdownMenu.Trigger
-              class="flex h-7 cursor-pointer items-center gap-1.5 rounded-lg border border-border px-2.5 text-[10px] font-medium text-foreground transition-colors hover:bg-elevated disabled:cursor-default disabled:opacity-50"
-              aria-label="Compose with agent"
-              title="Compose the title and description with an agent"
-              disabled={composePhase === 'working'}
+        <div class="space-y-1.5">
+          {#if composeError}
+            <p
+              class="flex items-start gap-1.5 rounded-lg border border-warning/30 bg-warning/10 px-2.5 py-1.5 text-[9px] leading-relaxed text-warning"
+              role="alert"
             >
-              {#if composePhase === 'working'}
-                <Loader2 size={11} class="animate-spin" />
-                <span>Composing…</span>
-              {:else if composePhase === 'complete'}
-                <CircleCheck size={11} class="text-success" />
-                <span>Complete</span>
-              {:else}
-                <Sparkles size={11} />
-                <span>{composePhase === 'recompose' ? 'Recompose' : 'Compose with agent'}</span>
-              {/if}
-            </DropdownMenu.Trigger>
-            <DropdownMenu.Portal>
-              <DropdownMenu.Content
-                side="bottom"
-                align="end"
-                sideOffset={6}
-                collisionPadding={8}
-                class="z-50 w-72 rounded-xl border border-border bg-surface p-2 shadow-xl"
+              <TriangleAlert size={11} class="mt-0.5 shrink-0" aria-hidden="true" />
+              <span>{composeError}</span>
+            </p>
+          {/if}
+          <div class="flex items-center justify-between gap-2">
+            <p class="text-[10px] text-muted">Let the agent draft the PR for you.</p>
+            <DropdownMenu.Root bind:open={composeOpen}>
+              <DropdownMenu.Trigger
+                class="flex h-7 cursor-pointer items-center gap-1.5 rounded-lg border border-border px-2.5 text-[10px] font-medium text-foreground transition-colors hover:bg-elevated disabled:cursor-default disabled:opacity-50"
+                aria-label="Compose with agent"
+                title="Compose the title and description with an agent"
+                disabled={composePhase === 'working'}
               >
-                <div class="space-y-1.5">
-                  <div>
-                    <p
-                      class="mb-1 px-0.5 text-[9px] font-semibold uppercase tracking-wide text-muted"
+                {#if composePhase === 'working'}
+                  <Loader2 size={11} class="animate-spin" />
+                  <span>Composing…</span>
+                {:else if composePhase === 'complete'}
+                  <CircleCheck size={11} class="text-success" />
+                  <span>Complete</span>
+                {:else}
+                  <Sparkles size={11} />
+                  <span>{composePhase === 'recompose' ? 'Recompose' : 'Compose with agent'}</span>
+                {/if}
+              </DropdownMenu.Trigger>
+              <DropdownMenu.Portal>
+                <DropdownMenu.Content
+                  side="bottom"
+                  align="end"
+                  sideOffset={6}
+                  collisionPadding={8}
+                  class="z-50 w-72 rounded-xl border border-border bg-surface p-2 shadow-xl"
+                >
+                  <div class="space-y-1.5">
+                    <div>
+                      <p
+                        class="mb-1 px-0.5 text-[9px] font-semibold uppercase tracking-wide text-muted"
+                      >
+                        Compose model
+                      </p>
+                      <ModelPicker
+                        providers={composeProviders}
+                        {projectId}
+                        harnessId={composeSettings.harnessId}
+                        providerId={composeSettings.providerId}
+                        modelId={composeSettings.modelId}
+                        favoriteModels={rendererRecovery.favoriteModels}
+                        recentModels={rendererRecovery.recentModels}
+                        side="top"
+                        variant="action"
+                        onSelect={chooseComposeModel}
+                        thinkingLevel={composeSettings.thinkingLevel}
+                        onSelectThinking={chooseComposeThinking}
+                        onToggleFavorite={(providerId, modelId, harnessId) =>
+                          rendererRecovery.toggleFavorite(modelKey(harnessId, providerId, modelId))}
+                        onReorderFavorite={(draggedKey, targetKey, position) =>
+                          rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
+                      />
+                    </div>
+                    <button
+                      type="button"
+                      class="flex h-8 w-full cursor-pointer items-center justify-center gap-1.5 rounded-lg bg-primary px-3 text-[11px] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:cursor-default disabled:opacity-50"
+                      disabled={composePhase === 'working'}
+                      onclick={() => void runCompose()}
                     >
-                      Compose model
-                    </p>
-                    <ModelPicker
-                      providers={composeProviders}
-                      {projectId}
-                      harnessId={composeSettings.harnessId}
-                      providerId={composeSettings.providerId}
-                      modelId={composeSettings.modelId}
-                      favoriteModels={rendererRecovery.favoriteModels}
-                      recentModels={rendererRecovery.recentModels}
-                      side="top"
-                      variant="action"
-                      onSelect={chooseComposeModel}
-                      thinkingLevel={composeSettings.thinkingLevel}
-                      onSelectThinking={chooseComposeThinking}
-                      onToggleFavorite={(providerId, modelId, harnessId) =>
-                        rendererRecovery.toggleFavorite(modelKey(harnessId, providerId, modelId))}
-                      onReorderFavorite={(draggedKey, targetKey, position) =>
-                        rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
-                    />
+                      {#if composePhase === 'working'}
+                        <Loader2 size={12} class="animate-spin" />
+                        <span>Composing…</span>
+                      {:else if composePhase === 'complete'}
+                        <CircleCheck size={12} />
+                        <span>Complete</span>
+                      {:else}
+                        <Sparkles size={12} />
+                        <span>{composePhase === 'recompose' ? 'Recompose' : 'Compose'}</span>
+                      {/if}
+                    </button>
                   </div>
-                  {#if composeError}
-                    <p
-                      class="rounded-lg border border-danger/20 bg-danger/10 px-2 py-1 text-[9px] leading-relaxed text-danger"
-                    >
-                      {composeError}
-                    </p>
-                  {/if}
-                  <button
-                    type="button"
-                    class="flex h-8 w-full cursor-pointer items-center justify-center gap-1.5 rounded-lg bg-primary px-3 text-[11px] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:cursor-default disabled:opacity-50"
-                    disabled={composePhase === 'working'}
-                    onclick={() => void runCompose()}
-                  >
-                    {#if composePhase === 'working'}
-                      <Loader2 size={12} class="animate-spin" />
-                      <span>Composing…</span>
-                    {:else if composePhase === 'complete'}
-                      <CircleCheck size={12} />
-                      <span>Complete</span>
-                    {:else}
-                      <Sparkles size={12} />
-                      <span>{composePhase === 'recompose' ? 'Recompose' : 'Compose'}</span>
-                    {/if}
-                  </button>
-                </div>
-              </DropdownMenu.Content>
-            </DropdownMenu.Portal>
-          </DropdownMenu.Root>
+                </DropdownMenu.Content>
+              </DropdownMenu.Portal>
+            </DropdownMenu.Root>
+          </div>
         </div>
       {/if}
     {/if}
@@ -993,7 +1131,7 @@
       </div>
     {/if}
 
-    {#if gitState.error && !result}
+    {#if gitState.error && !result && !composeError}
       <p
         class="rounded-lg border border-danger/20 bg-danger/10 px-3 py-1.5 text-[10px] leading-relaxed text-danger"
       >
