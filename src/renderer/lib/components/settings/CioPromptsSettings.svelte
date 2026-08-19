@@ -18,6 +18,7 @@
     type CioPromptMode,
     type CioPromptSetting
   } from '$shared/cio-prompts'
+  import MarkdownView from '../markdown/MarkdownView.svelte'
   import Modal from '../ui/Modal.svelte'
 
   interface ModeFilter {
@@ -341,8 +342,9 @@
                   </div>
                 {:else if expandedId === prompt.id}
                   <div class="border-t px-4 py-3">
-                    <pre
-                      class="max-h-72 overflow-auto whitespace-pre-wrap font-mono text-[11px] leading-relaxed text-muted">{prompt.template}</pre>
+                    <div class="max-h-72 overflow-auto pr-1">
+                      <MarkdownView text={prompt.template} class="text-xs" />
+                    </div>
                     {#if savedId === prompt.id}
                       <p
                         class="mt-2 flex items-center gap-1 text-[11px] text-success"
