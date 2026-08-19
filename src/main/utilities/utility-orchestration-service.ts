@@ -253,6 +253,7 @@ export class UtilityOrchestrationService {
     this.turnIdsByToken.set(token, id)
 
     const gateway = gatewayUtility(request, this.storage.resolve(scriptPath), bridgeUrl, token)
+    const recoveryInstruction = `The always-active ${RETRIEVE_MCP_HOST_TOOL_NAME} utility is independent of MCP. If the advertised app gateway is unreachable, call it through the shell with \`bun ${shellQuote(this.storage.resolve(retrieverPath))}\`. It discovers the owning live CodeInOven instance and returns the current \`mcpHost\`. Retry the original route against that host with the current turn's authorization header. Never print or persist the bearer token.`
     await this.audit(state, 'turn.started', {
       eligibleUtilityIds: eligible.map(({ utility }) => utility.id),
       alwaysUtilityIds: always.map(({ utility }) => utility.id)
@@ -267,13 +268,13 @@ export class UtilityOrchestrationService {
       id,
       resolvedUtilities: [...always, gateway],
       instructions: hasOnDemand
-        ? `A minimal app gateway is available. When you need a skill, MCP, utility, or other capability that is not directly available in this session, use ${UTILITY_SEARCH_TOOL_NAME} to discover it. If you already know an eligible utility, activate it directly with ${UTILITY_ACTIVATE_TOOL_NAME}, then use ${UTILITY_INVOKE_TOOL_NAME}. When you search, the result reports an explicit \`notFound\` boolean: only when it is true may you conclude that the capability does not exist in this session. Activated utilities exist only for this turn.`
+        ? `A minimal app gateway is available. When you need a skill, MCP, utility, or other capability that is not directly available in this session, use ${UTILITY_SEARCH_TOOL_NAME} to discover it. If you already know an eligible utility, activate it directly with ${UTILITY_ACTIVATE_TOOL_NAME}, then use ${UTILITY_INVOKE_TOOL_NAME}. When you search, the result reports an explicit \`notFound\` boolean: only when it is true may you conclude that the capability does not exist in this session. Activated utilities exist only for this turn. ${recoveryInstruction}`
         : '',
       directInstructions: [
         'App-managed utilities are available through a turn-scoped loopback gateway. Use the shell to POST JSON with curl, setting Content-Type: application/json and the authorization header below; never print or persist the bearer token.',
         `Gateway: ${bridgeUrl}`,
         `Authorization header: Bearer ${token}`,
-        `Recovery tool: if that gateway is unreachable, call ${RETRIEVE_MCP_HOST_TOOL_NAME} through the shell with \`bun ${shellQuote(this.storage.resolve(retrieverPath))}\`. It discovers the owning live CodeInOven instance without MCP and returns the current \`mcpHost\`. Retry the original route against that host with the current turn's authorization header. Never print or persist the bearer token.`,
+        recoveryInstruction,
         'Search when you need to discover a capability: POST /search with {"query":"capability","kinds":["mcp","skill","computer_use","image_descriptor"]}; the response includes a `notFound` boolean indicating no eligible match.',
         'Activate: POST /activate with {"utility_id":"id-from-search"}; if you already know an eligible utility id, activate it directly without searching first.',
         'Invoke: POST /invoke with {"utility_id":"id","operation":"tool-or-operation","input":{}}.',

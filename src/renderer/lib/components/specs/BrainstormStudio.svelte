@@ -117,13 +117,13 @@
   }: Props = $props()
 
   const canonicalSections: Array<{ id: BrainstormSectionId; title: string }> = [
-    { id: 'context', title: 'Context' },
-    { id: 'goals', title: 'Goals' },
-    { id: 'decisions', title: 'Decisions' },
-    { id: 'open_questions', title: 'Open Questions' },
-    { id: 'constraints', title: 'Constraints' },
-    { id: 'proposed_direction', title: 'Proposed Direction' },
-    { id: 'additional_info', title: 'Additional Info' }
+    { id: 'context', title: 'What We Learned' },
+    { id: 'goals', title: 'What We Are Building' },
+    { id: 'decisions', title: 'Aligned Decisions' },
+    { id: 'open_questions', title: 'Still to Decide' },
+    { id: 'constraints', title: 'Boundaries' },
+    { id: 'proposed_direction', title: 'Agreed Direction' },
+    { id: 'additional_info', title: 'Additional Notes' }
   ]
 
   // This component is keyed by document identity in ThreadView. The effect below only reconciles
@@ -265,6 +265,8 @@
   function exportMarkdown(): string {
     return [
       `# ${draft.content.title}`,
+      '',
+      '## Session Snapshot',
       '',
       draft.content.summary,
       ...draft.content.sections.flatMap((section) => [
@@ -653,20 +655,20 @@
           <button
             class="rounded-lg border bg-elevated px-3 py-1.5 text-xs font-semibold hover:bg-overlay disabled:opacity-50"
             disabled={busy}
-            title="Review this brainstorm with the Sr. Engineer"
+            title="Discuss changes to this session report with the Sr. Engineer"
             onclick={() => {
               pendingAction = 'review'
               additionalNotes = ''
-            }}>Review</button
+            }}>Discuss changes</button
           >
           <button
             class="flex items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-on-primary hover:bg-primary-hover disabled:opacity-50"
             disabled={busy}
-            title="Finalize this brainstorm and prepare the specification"
+            title="Use this session report to prepare the specification"
             onclick={() => {
               pendingAction = 'finalize'
               additionalNotes = ''
-            }}>Finalize <ArrowRight size={13} /></button
+            }}>Prepare spec <ArrowRight size={13} /></button
           >
         {/if}
       </div>
@@ -680,7 +682,7 @@
             class="mt-1 min-h-14 w-full resize-y rounded-lg border bg-elevated px-3 py-2 text-xs text-foreground outline-none focus:border-primary"
             bind:value={additionalNotes}
             placeholder={pendingAction === 'review'
-              ? 'Tell the Sr. Engineer what to revise…'
+              ? 'Explain what should change or what still feels misaligned…'
               : 'Add final context for the specification…'}
             ariaLabel="Brainstorm decision notes"
             onSubmit={() => void submitAction(pendingAction!)}
@@ -694,9 +696,9 @@
         <button
           class="rounded-lg bg-primary px-3 py-2 text-xs font-semibold text-on-primary disabled:opacity-50"
           disabled={busy}
-          title={pendingAction === 'review' ? 'Send review' : 'Finalize brainstorm'}
+          title={pendingAction === 'review' ? 'Discuss report changes' : 'Prepare specification'}
           onclick={() => void submitAction(pendingAction!)}
-          >{pendingAction === 'review' ? 'Review' : 'Finalize'}</button
+          >{pendingAction === 'review' ? 'Discuss' : 'Prepare spec'}</button
         >
       </div>
     {/if}
@@ -842,12 +844,12 @@
             }}
           />
           <section id="brainstorm-section-tldr" class="space-y-2 scroll-mt-5">
-            <h2 class="text-xl font-semibold tracking-tight">TL;DR</h2>
+            <h2 class="text-xl font-semibold tracking-tight">Session Snapshot</h2>
             <EditableMarkdown
               text={draft.content.summary}
               readOnly={!canEdit}
               class="brainstorm-markdown max-w-3xl whitespace-pre-wrap rounded-lg px-2 py-1 text-base text-muted outline-none focus:bg-surface focus:text-foreground"
-              ariaLabel="Brainstorm TL;DR"
+              ariaLabel="Brainstorm session snapshot"
               onChange={(value) => {
                 draft.content.summary = value
                 markDirty()

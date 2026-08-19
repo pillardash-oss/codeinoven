@@ -35,7 +35,7 @@ import type {
 } from '../../lib/types'
 import { createKeepAliveSession, type KeepAliveSession } from '../../renderer/lib/remote/keep-alive'
 import { handshakeTranscript } from '../../renderer/lib/remote/device-identity'
-import { PAIRING_TTL_MS, loadOrCreatePeerSecret, writePairingExpiry } from './peer-secret'
+import { PAIRING_TTL_MS, loadOrCreatePeerSecret, rotatePeerSecret, writePairingExpiry } from './peer-secret'
 import { RemoteRpcDispatcher } from './remote-rpc'
 import { DeviceCredentialService, type EnrolledDevice } from './device-credential-service'
 import { AccountProfileRepo } from '../database/repositories/account-profile-repo'
@@ -649,6 +649,27 @@ export class RemoteModeController {
     if (this.credentials) {
       await this.credentials.registerPairingValue(secret, { expiresAt })
     }
+  }
+
+  /** Rotate the pairing bootstrap after relay enrollment (see cloud-rotation contract test). */
+  async rotatePairingBootstrap(): Promise<void> {
+    if (this.peerSecret) return
+    const directory = join(app.getPath('userData'), 'remote-gateway')
+    const newSecret = await rotatePeerSecret(directory)
+    this.resolvedPeerSecret = newSecret
+    if (this.credentials) {
+      await this.credentials.registerPairingValue(newSecret, { expiresAt: Date.now() + PAIRING_TTL_MS })
+    }
+    if (this.gateway) {
+      try {
+        await this.gateway.stop()
+      } catch (error) {
+        Logger.dev('Gateway stop during rotation failed:', error)
+      }
+      this.gateway = null
+      await this.startGateway()
+    }
+    this.broadcast()
   }
 
   get status(): RemoteModeStatus {

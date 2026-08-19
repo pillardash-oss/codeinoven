@@ -19,6 +19,7 @@
     ArrowLeft,
     Bell,
     BrainCircuit,
+    MessageSquareCode,
     CheckCircle2,
     Clock,
     Cloud,
@@ -48,6 +49,7 @@
   import RemoteSettingsTab from './RemoteSettingsTab.svelte'
   import ProfileSettingsTab from './ProfileSettingsTab.svelte'
   import CloudDeploymentsSettingsTab from './CloudDeploymentsSettingsTab.svelte'
+  import CioPromptsSettings from './CioPromptsSettings.svelte'
 
   type SelectChangeEvent = Event & { currentTarget: HTMLSelectElement }
   interface Props {
@@ -99,6 +101,7 @@
     { id: 'general', label: 'General', icon: SlidersHorizontal },
     { id: 'memory', label: 'Memory', icon: BrainCircuit },
     { id: 'audits', label: 'Agents', icon: UsersRound },
+    { id: 'cio-prompts', label: 'CIO Prompts', icon: MessageSquareCode },
     { id: 'harnesses', label: 'Harnesses', icon: Plug },
     { id: 'utilities', label: 'Utilities', icon: Puzzle },
     { id: 'keymap', label: 'Keymap', icon: Keyboard },
@@ -110,7 +113,11 @@
 
   // The header mirrors the section on screen — cleared when Settings closes.
   $effect(() => {
-    settingsUiState.activeTabLabel = tabs.find((tab) => tab.id === section)?.label ?? null
+    let activeLabel: string | null = null
+    for (const tab of tabs) {
+      if (tab.id === section) activeLabel = tab.label
+    }
+    settingsUiState.activeTabLabel = activeLabel
     return () => {
       settingsUiState.activeTabLabel = null
     }
@@ -631,6 +638,8 @@
       </div>
     {:else if section === 'audits'}
       <AuditSettingsTab {config} {settingsReady} {updateConfig} />
+    {:else if section === 'cio-prompts'}
+      <CioPromptsSettings />
     {:else if section === 'memory'}
       <SettingsMemoryTab
         variant="settings"

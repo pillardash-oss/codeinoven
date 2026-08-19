@@ -15,6 +15,7 @@ export type SettingsSection =
   | 'general'
   | 'memory'
   | 'audits'
+  | 'cio-prompts'
   | 'harnesses'
   | 'utilities'
   | 'keymap'
@@ -31,6 +32,7 @@ export type MainView =
   | 'settings-profile'
   | 'settings-memory'
   | 'settings-audits'
+  | 'settings-cio-prompts'
   | 'settings-harnesses'
   | 'settings-utilities'
   | 'settings-keymap'
@@ -128,6 +130,7 @@ const MAIN_VIEWS: readonly MainView[] = [
   'settings-profile',
   'settings-memory',
   'settings-audits',
+  'settings-cio-prompts',
   'settings-harnesses',
   'settings-utilities',
   'settings-keymap',
@@ -139,6 +142,7 @@ const SETTINGS_SECTIONS: readonly SettingsSection[] = [
   'general',
   'memory',
   'audits',
+  'cio-prompts',
   'harnesses',
   'utilities',
   'keymap',

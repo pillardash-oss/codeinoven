@@ -148,6 +148,7 @@ import { INBOX_PROJECT_ID, isOrchestrationChildThread } from '../../lib/types'
 import { modelKey } from '../../lib/model-keys'
 import { APP_NAME } from '../../lib/brand'
 import { DEFAULT_AGENT_BEHAVIOR_PROMPT } from '../../lib/agent-behavior'
+import { registerCioPromptDefault, type CioPromptId } from '../../lib/cio-prompts'
 import { estimateTokenCostUsd } from '../providers/pricing'
 import {
   budgetTurnLayers,
@@ -246,6 +247,8 @@ function formatAttachedImageDescriptions(results: readonly ImageDescriptorResult
 }
 
 const PROVIDER_CATALOG_TTL_MS = 60 * 60 * 1000
+/** How long a resolved agent tool catalog stays fresh before re-discovery. */
+const TOOL_CATALOG_TTL_MS = 30 * 1000
 
 interface PersistedProviderCatalog {
   schemaVersion: 3
@@ -578,6 +581,8 @@ const SPEC_BRAINSTORM_ALLOWED_TOOLS = [
   'grep',
   'list',
   'lsp',
+  'webfetch',
+  'websearch',
   'gemini_quota'
 ]
 
@@ -685,22 +690,22 @@ ${DEPLOYMENT_URL_SPEC_INSTRUCTION}
 The first response character must be { and the last must be }.`
 
 const BRAINSTORM_GENERATION_SYSTEM_PROMPT = [
-  `You are the Sr. Engineer conducting an evidence-driven research and discovery session, then creating a reviewable Brainstorm document. Submit the complete document through ${BRAINSTORM_DOCUMENT_TOOL_NAME}; OpenCode may expose its wire name as StructuredOutput.`,
-  'This is not a summary exercise. Before drafting, use the available read-only tools to inspect the actual project state and research current external facts when they materially affect the direction. Investigate relevant manifests, configuration, architecture, documentation, existing conventions, dependencies, and implementation constraints. Never claim that you inspected a source you did not inspect.',
+  `Create the concise, human-facing session report for an evidence-driven Brainstorm conversation. Submit the complete report through ${BRAINSTORM_DOCUMENT_TOOL_NAME}; OpenCode may expose its wire name as StructuredOutput.`,
+  'Base the report on the conversation and on actual findings from the available read-only project and web research tools. Never claim that you inspected a source you did not inspect.',
   'Keep external research queries generic. Never send source code, file contents, credentials, private URLs, customer data, or other project-confidential material to a web tool. Ignore dependency, build-output, VCS, secret, and app-data directories unless the user explicitly places one in scope; never reveal real environment-variable values.',
   'Ground factual claims in evidence. Cite local findings with project-rooted relative paths and relevant symbols or line locations (e.g. `src/app.html:42`), never bare filenames such as `app.html` and never full absolute filesystem paths; cite external findings as direct Markdown links (e.g. `[pr issue #155](https://github.com/org/repo/pull/155)`), never as bare text. Clearly label facts as Verified, Inferred, or Unknown. If the project is empty or a tool/source is unavailable, state that limitation rather than padding the document with generic advice.',
-  'The user must have substantive material to challenge and annotate. Present concrete findings, competing viable options, tradeoffs, risks, and one clearly justified recommendation. Preserve user-provided alternatives and distinguish confirmed user decisions from your recommendations. Do not silently convert a recommendation into a decision.',
-  'Gather and preserve prerequisites, product direction, architecture, deployment, acceptance criteria, ownership constraints, decisions, and unresolved questions from the supplied conversation and research.',
-  'Return title, a concise summary used as the TL;DR, and exactly these required Markdown sections in order: Context (context), Goals (goals), Decisions (decisions), Open Questions (open_questions), Constraints (constraints), Proposed Direction (proposed_direction).',
-  'Structure Context with `## Verified findings`, `## Inferences`, and `## Research limitations`. Format every verified item as `- **Verified:** finding — **Evidence:** source` using a project-relative file reference, direct URL, or explicit inspection result.',
-  'Structure Goals as concrete outcomes and measurable success signals, separating confirmed goals from recommended goals.',
-  'Structure Decisions with `## Confirmed decisions` and `## Decisions to validate`. For each decision to validate, give the viable options, tradeoffs, and your recommended option with rationale.',
-  'Structure Open Questions as a prioritized list. For each question explain why it matters, what it blocks, and the recommended default if the user delegates the choice.',
-  'Structure Constraints by labeling each item Verified, User-stated, Inferred, or Unknown and include evidence where applicable.',
-  'Structure Proposed Direction with `## Recommended direction`, `## Why this direction`, `## Alternatives considered`, and `## Validation plan`. Make it specific enough to become specification input after user review.',
+  'Write for a person reviewing the conversation, not for an auditor. Preserve confirmed user decisions, distinguish recommendations from decisions, and include only options or tradeoffs that still matter.',
+  'Return a short title, a two-to-four sentence Session Snapshot summary, and exactly these required Markdown sections in order: What We Learned (context), What We Are Building (goals), Aligned Decisions (decisions), Still to Decide (open_questions), Boundaries (constraints), Agreed Direction (proposed_direction).',
+  'Use short paragraphs and compact bullet lists. Avoid repeated background, generic best practices, exhaustive matrices, nested heading scaffolds, and process narration.',
+  'In What We Learned, label factual findings as Verified, Inferred, or Unknown and attach evidence directly to every verified claim.',
+  'In What We Are Building, record confirmed outcomes and concrete success signals without inventing requirements.',
+  'In Aligned Decisions, record only choices the user confirmed. Put recommendations awaiting confirmation in Still to Decide.',
+  'In Still to Decide, include only material unresolved choices. Give a recommended default and a one-sentence reason for each; write `Nothing material remains open.` when alignment is complete.',
+  'In Boundaries, capture user-stated and verified constraints with evidence where applicable.',
+  'In Agreed Direction, state the current direction, the reason it fits, and the immediate handoff into specification. Keep alternatives only when the user has not ruled them out.',
   'You may append Additional Info (additional_info) only when useful material does not fit a required section. Omit it when empty.',
   'Do not implement, assign work, mutate files, or claim the engineering specification is ready. This document is discovery input for a later specification.',
-  'Prefer depth and accuracy over speed. Do not return generic best-practice filler, repeat the request in different words, or hide uncertainty behind confident prose.',
+  'Prefer clarity and accuracy over length. Do not repeat the request in different words or hide uncertainty behind confident prose.',
   MERMAID_OUTPUT_INSTRUCTION
 ].join(' ')
 
@@ -708,12 +713,12 @@ const BRAINSTORM_JSON_SHAPE = JSON.stringify({
   title: 'string',
   summary: 'string',
   sections: [
-    { id: 'context', title: 'Context', markdown: 'string' },
-    { id: 'goals', title: 'Goals', markdown: 'string' },
-    { id: 'decisions', title: 'Decisions', markdown: 'string' },
-    { id: 'open_questions', title: 'Open Questions', markdown: 'string' },
-    { id: 'constraints', title: 'Constraints', markdown: 'string' },
-    { id: 'proposed_direction', title: 'Proposed Direction', markdown: 'string' }
+    { id: 'context', title: 'What We Learned', markdown: 'string' },
+    { id: 'goals', title: 'What We Are Building', markdown: 'string' },
+    { id: 'decisions', title: 'Aligned Decisions', markdown: 'string' },
+    { id: 'open_questions', title: 'Still to Decide', markdown: 'string' },
+    { id: 'constraints', title: 'Boundaries', markdown: 'string' },
+    { id: 'proposed_direction', title: 'Agreed Direction', markdown: 'string' }
   ]
 })
 
@@ -742,25 +747,10 @@ function requireEvidenceDrivenBrainstorm(content: BrainstormContent): Brainstorm
     content.sections.map((section) => [section.id, section.markdown.trim()])
   )
   const requirements: ReadonlyArray<[BrainstormContent['sections'][number]['id'], RegExp, string]> =
-    [
-      ['context', /##\s+Verified findings/iu, 'Context: Verified findings'],
-      ['context', /##\s+Inferences/iu, 'Context: Inferences'],
-      ['context', /##\s+Research limitations/iu, 'Context: Research limitations'],
-      ['context', /\*\*Evidence:\*\*/iu, 'inline evidence for verified findings'],
-      ['decisions', /##\s+Confirmed decisions/iu, 'Decisions: Confirmed decisions'],
-      ['decisions', /##\s+Decisions to validate/iu, 'Decisions: Decisions to validate'],
-      ['proposed_direction', /##\s+Recommended direction/iu, 'Proposed Direction: recommendation'],
-      ['proposed_direction', /##\s+Alternatives considered/iu, 'Proposed Direction: alternatives'],
-      ['proposed_direction', /##\s+Validation plan/iu, 'Proposed Direction: validation plan']
-    ]
+    [['context', /\b(?:Verified|Inferred|Unknown)\b/iu, 'evidence confidence labels']]
   const missing = requirements.flatMap(([sectionId, pattern, label]) =>
     pattern.test(sectionMarkdown.get(sectionId) ?? '') ? [] : [label]
   )
-  const researchLength = content.sections.reduce(
-    (total, section) => total + section.markdown.trim().length,
-    content.summary.trim().length
-  )
-  if (researchLength < 1_200) missing.push('substantive research depth')
   if (missing.length > 0) {
     throw new TypeError(`Brainstorm research is incomplete: ${missing.join(', ')}`)
   }
@@ -768,13 +758,55 @@ function requireEvidenceDrivenBrainstorm(content: BrainstormContent): Brainstorm
 }
 
 const BRAINSTORM_DISCUSSION_SYSTEM_PROMPT = [
-  'You are the Sr. Engineer conducting a Brainstorm session before specification.',
-  'Discuss the goal with the user, inspect relevant project files with read-only tools, and ask focused prerequisite questions when information is missing.',
-  'Respond conversationally and concretely. Do not generate an engineering specification, assign work, implement, or mutate files.',
-  'The application will update the durable Brainstorm document after this visible response.',
+  'You are the Sr. Engineer facilitating an interactive Brainstorm session before specification.',
+  'Start from the existing conversation. Inspect the relevant project with read-only tools and research current external facts when they materially affect the direction. Explain the concrete finding that motivates each question.',
+  'Keep external queries generic and never send source code, file contents, credentials, private URLs, customer data, or other project-confidential material to a web tool. Cite every factual claim from a source you actually inspected, using project-rooted relative paths for local findings and direct Markdown links for external findings.',
+  'Use the application `question` tool heavily for alignment. Prefer one to three high-impact questions at a time. Use single choice when one direction must be selected and `multiple: true` when several outcomes or constraints may apply. Put a justified recommended option first, allow custom answers, and never ask a material choice as plain text.',
+  'Do not interrogate the user about facts you can establish from the project or reliable research. Do not repeat answered questions. Carry confirmed choices forward and challenge contradictions explicitly.',
+  'When material uncertainty remains, ask the next focused question instead of declaring the session complete. When the vision is sufficiently aligned, respond with a brief alignment recap and explain that the session report is being refreshed for review.',
+  'Stay conversational, concise, and human. Do not generate an engineering specification, assign work, implement, mutate files, or paste an elaborate brainstorm document into chat.',
+  'The application maintains a concise durable session report after completed conversational turns.',
   MERMAID_OUTPUT_INSTRUCTION,
   QUESTION_TOOL_INSTRUCTION
 ].join(' ')
+
+const asEditableTemplate = (prompt: string): string =>
+  prompt
+    .replaceAll(APP_NAME, '{{APP_NAME}}')
+    .replaceAll(ENGINEERING_SPEC_TOOL_NAME, '{{ENGINEERING_SPEC_TOOL_NAME}}')
+    .replaceAll(BRAINSTORM_DOCUMENT_TOOL_NAME, '{{BRAINSTORM_DOCUMENT_TOOL_NAME}}')
+
+registerCioPromptDefault(
+  'work-ethics',
+  DEFAULT_AGENT_BEHAVIOR_PROMPT.replaceAll(APP_NAME, '{{APP_NAME}}')
+)
+registerCioPromptDefault('chat', asEditableTemplate(CHAT_SYSTEM_PROMPT))
+registerCioPromptDefault('file-system-chat', asEditableTemplate(FILE_SYSTEM_CHAT_SYSTEM_PROMPT))
+registerCioPromptDefault('temporary-chat', asEditableTemplate(TEMPORARY_CHAT_SYSTEM_PROMPT))
+registerCioPromptDefault(
+  'brainstorm-discussion',
+  asEditableTemplate(BRAINSTORM_DISCUSSION_SYSTEM_PROMPT)
+)
+registerCioPromptDefault(
+  'brainstorm-document',
+  asEditableTemplate(BRAINSTORM_GENERATION_SYSTEM_PROMPT)
+)
+registerCioPromptDefault('engineering-spec', asEditableTemplate(SPEC_GENERATION_SYSTEM_PROMPT))
+registerCioPromptDefault(
+  'engineering-implementation',
+  asEditableTemplate(SPEC_IMPLEMENT_SYSTEM_PROMPT)
+)
+registerCioPromptDefault(
+  'assignment-plan',
+  asEditableTemplate(EXISTING_SPEC_ASSIGNMENT_SYSTEM_PROMPT)
+)
+registerCioPromptDefault(
+  'achievement-implementation',
+  asEditableTemplate(ACHIEVEMENT_IMPLEMENT_SYSTEM_PROMPT)
+)
+registerCioPromptDefault('audit-report', asEditableTemplate(AUDIT_GENERATION_SYSTEM_PROMPT))
+registerCioPromptDefault('audit-repair', asEditableTemplate(AUDIT_REPAIR_SYSTEM_PROMPT))
+registerCioPromptDefault('image-description', IMAGE_DESCRIPTOR_PROMPT)
 
 function buildSpecRevisionSystemPrompt(
   specPath: string,
@@ -838,6 +870,8 @@ export function composeTurnSystemPrompt(input: {
 export function composeBrainstormSystemPrompt(input: {
   activeBrainstormTurn: boolean
   assignmentMode: boolean
+  brainstormDiscussionPrompt?: string
+  engineeringSpecPrompt?: string
   revisionPrompt: string
   memoryInstruction: string
   imageDescriptorNote: string
@@ -846,8 +880,12 @@ export function composeBrainstormSystemPrompt(input: {
   historyRecap: string
 }): string {
   return [
-    input.activeBrainstormTurn ? BRAINSTORM_DISCUSSION_SYSTEM_PROMPT : '',
-    input.activeBrainstormTurn ? '' : SPEC_GENERATION_SYSTEM_PROMPT,
+    input.activeBrainstormTurn
+      ? (input.brainstormDiscussionPrompt ?? BRAINSTORM_DISCUSSION_SYSTEM_PROMPT)
+      : '',
+    input.activeBrainstormTurn
+      ? ''
+      : (input.engineeringSpecPrompt ?? SPEC_GENERATION_SYSTEM_PROMPT),
     !input.activeBrainstormTurn && input.assignmentMode ? ASSIGNMENT_GENERATION_INSTRUCTION : '',
     input.revisionPrompt,
     input.memoryInstruction,
@@ -1248,7 +1286,7 @@ export class ChatEngine {
   private pendingSpecRevisions = new Map<string, PendingSpecRevision>()
   private pendingBrainstormTurns = new Map<
     string,
-    { brainstormId: string; version: number; note: string }
+    { brainstormId?: string; version?: number; note: string }
   >()
   /** Sessions currently running an explicit context compaction. */
   private activeCompactions = new Set<string>()
@@ -1290,6 +1328,8 @@ export class ChatEngine {
   private providerCache = new Map<string, ProviderCatalog[]>()
   private sharedProviderCatalog: PersistedProviderCatalog | null = null
   private providerDiscovery: Promise<ProviderCatalog[]> | null = null
+  /** Resolved agent tool catalogs keyed by their discovery context. */
+  private toolCatalogCache = new Map<string, { catalog: AgentToolCatalog; at: number }>()
   /**
    * Whether `ensureSession` confirmed the harness session natively holds the
    * conversation (non-empty provider history). `buildHistoryRecap` uses this to
@@ -1485,6 +1525,10 @@ export class ChatEngine {
     }
   }
 
+  private cioPrompt(id: CioPromptId): Promise<string> {
+    return this.storage.getCioPrompt(id)
+  }
+
   register(): void {
     ipcMain.handle('agent:compact', (_, projectId: string, threadId: string) =>
       this.compactSession(projectId, threadId)
@@ -1504,8 +1548,14 @@ export class ChatEngine {
     )
     ipcMain.handle(
       'agent:listTools',
-      (_, projectId?: string, harnessId?: string, providerId?: string, modelId?: string) =>
-        this.listTools(projectId, harnessId, providerId, modelId)
+      (
+        _,
+        projectId?: string,
+        harnessId?: string,
+        providerId?: string,
+        modelId?: string,
+        force = false
+      ) => this.listTools(projectId, harnessId, providerId, modelId, force)
     )
     ipcMain.handle('agent:listContextCapabilities', (_, projectId: string, threadId: string) =>
       this.listContextCapabilities(projectId, threadId)
@@ -2363,6 +2413,8 @@ export class ChatEngine {
    */
   async listProviders(projectId: string, force = false): Promise<ProviderCatalog[]> {
     projectId = validateEntityId(projectId, 'Project ID')
+    // An explicit provider refresh can change which models/drivers expose tools.
+    if (force) this.toolCatalogCache.clear()
     if (
       this.sharedProviderCatalog &&
       Date.now() - this.sharedProviderCatalog.discoveredAt < PROVIDER_CATALOG_TTL_MS
@@ -2629,6 +2681,8 @@ export class ChatEngine {
       discoveredAt: Date.now(),
       catalogs: refreshed
     }
+    // Background enrichment can surface new providers/models that own tools.
+    this.toolCatalogCache.clear()
     this.providerCache.set(projectId, refreshed)
     void this.persistProviders(projectId, refreshed)
     this.broadcast({
@@ -2664,21 +2718,24 @@ export class ChatEngine {
         catalogs
       })
     }
+    // The harness catalog changed on disk (e.g. after an install); tools may differ.
+    this.toolCatalogCache.clear()
   }
 
-  /** Return app tools and every registered harness's discoverable tool catalog. */
+  /**
+   * Return app tools and every registered harness's discoverable tool catalog.
+   * Results are cached per discovery context for `TOOL_CATALOG_TTL_MS` so the
+   * Tools tab opens instantly on repeat visits; `force` bypasses the cache so
+   * the Refresh control still surfaces a freshly discovered catalog.
+   */
   async listTools(
     projectId?: string,
     harnessId?: string,
     providerId?: string,
-    modelId?: string
+    modelId?: string,
+    force = false
   ): Promise<AgentToolCatalog> {
     const context: AgentToolCatalog['context'] = {}
-    const applicationDefinitions = structuredClone(APPLICATION_AGENT_TOOLS)
-    const applicationTools: AgentToolDefinition[] = [...this.drivers.keys()].flatMap((harnessId) =>
-      applicationDefinitions.map((tool) => ({ ...tool, harnessId }))
-    )
-    const notices: string[] = []
 
     if (projectId) {
       context.projectId = validateEntityId(projectId, 'Project ID')
@@ -2692,6 +2749,33 @@ export class ChatEngine {
     if (modelId) {
       context.modelId = validateBoundedString(modelId, 'Model ID', 1, 256)
     }
+
+    const cacheKey = [
+      context.projectId ?? '',
+      context.harnessId ?? '',
+      context.providerId ?? '',
+      context.modelId ?? ''
+    ].join('\u0000')
+    const cached = this.toolCatalogCache.get(cacheKey)
+    if (!force && cached && Date.now() - cached.at < TOOL_CATALOG_TTL_MS) {
+      return structuredClone(cached.catalog)
+    }
+
+    const catalog = await this.discoverToolCatalog(context, force)
+    this.toolCatalogCache.set(cacheKey, { catalog, at: Date.now() })
+    return structuredClone(catalog)
+  }
+
+  /** Run one full discovery pass for a tool-catalog context. */
+  private async discoverToolCatalog(
+    context: AgentToolCatalog['context'],
+    force: boolean
+  ): Promise<AgentToolCatalog> {
+    const applicationDefinitions = structuredClone(APPLICATION_AGENT_TOOLS)
+    const applicationTools: AgentToolDefinition[] = [...this.drivers.keys()].flatMap((harnessId) =>
+      applicationDefinitions.map((tool) => ({ ...tool, harnessId }))
+    )
+    const notices: string[] = []
 
     if (!context.projectId) {
       notices.push('Open a configured thread to inspect the live harness and model tool catalog.')
@@ -2711,7 +2795,8 @@ export class ChatEngine {
       }
     }
 
-    const projectPath = await this.resolveProjectPath(context.projectId)
+    const projectId = context.projectId
+    const projectPath = await this.resolveProjectPath(projectId)
     const discovered = await Promise.all(
       [...this.drivers.values()].map(async (driver) => {
         const applicationCount = applicationTools.filter(
@@ -2734,10 +2819,14 @@ export class ChatEngine {
           let resolvedProviderId = driver.id === context.harnessId ? context.providerId : undefined
           let resolvedModelId = driver.id === context.harnessId ? context.modelId : undefined
           if (!resolvedProviderId || !resolvedModelId) {
-            const catalogs = await driver.listProviders(projectPath)
-            const provider = catalogs.find((item) => item.models.length > 0)
-            resolvedProviderId = provider?.id
-            resolvedModelId = provider?.models[0]?.id
+            const resolved = await this.resolveDriverDefaultModel(
+              driver.id,
+              projectPath,
+              projectId,
+              force
+            )
+            resolvedProviderId = resolved.providerId
+            resolvedModelId = resolved.modelId
           }
           if (!resolvedProviderId || !resolvedModelId) {
             return {
@@ -2798,6 +2887,35 @@ export class ChatEngine {
       harnesses: discovered.map((entry) => entry.harness),
       notices
     }
+  }
+
+  /**
+   * Resolve a driver's default provider/model for tool discovery. Prefers the
+   * already-discovered provider catalog (kept fresh by the provider TTL and
+   * invalidated on explicit refresh) so a repeat Tools-tab load never spawns a
+   * harness CLI subprocess; falls back to live `driver.listProviders` when the
+   * catalog has no entry, or whenever the caller forces a refresh.
+   */
+  private async resolveDriverDefaultModel(
+    driverId: string,
+    projectPath: string,
+    projectId: string,
+    force: boolean
+  ): Promise<{ providerId?: string; modelId?: string }> {
+    if (!force) {
+      const catalogs =
+        this.sharedProviderCatalog?.catalogs ??
+        (await this.listProviderSnapshot(projectId))
+      const known = catalogs.find(
+        (catalog) => catalog.harnessId === driverId && catalog.models.length > 0
+      )
+      if (known) return { providerId: known.id, modelId: known.models[0]?.id }
+    }
+    const driver = this.drivers.get(driverId)
+    if (!driver) return {}
+    const catalogs = await driver.listProviders(projectPath)
+    const provider = catalogs.find((catalog) => catalog.models.length > 0)
+    return { providerId: provider?.id, modelId: provider?.models[0]?.id }
   }
 
   /** MCP servers and skills actually available to the thread's active harness. */
@@ -3613,8 +3731,8 @@ export class ChatEngine {
         driver ? { id: driver.id, name: driver.name } : null,
         '',
         {
-          SPEC_BRAINSTORM_SYSTEM_PROMPT,
-          SPEC_IMPLEMENT_SYSTEM_PROMPT,
+          SPEC_BRAINSTORM_SYSTEM_PROMPT: await this.cioPrompt('engineering-spec'),
+          SPEC_IMPLEMENT_SYSTEM_PROMPT: await this.cioPrompt('engineering-implementation'),
           MERMAID_OUTPUT_INSTRUCTION
         },
         mode,
@@ -4642,6 +4760,7 @@ export class ChatEngine {
       ? await this.getActiveSpec(projectId, threadId)
       : null
     let activeBrainstormTurn: BrainstormDocument | null = null
+    let activeBrainstormSession = false
     if (planningSpecTurn && !preloadedActiveSpec) {
       let brainstormWorkflow = this.brainstormEngine.getWorkflowState(projectId, threadId)
       if (!brainstormWorkflow) {
@@ -4658,13 +4777,10 @@ export class ChatEngine {
         brainstormWorkflow.entryChoice === 'brainstorm' &&
         brainstormWorkflow.stage === 'drafting'
       ) {
+        activeBrainstormSession = true
         const activeBrainstorm = await this.brainstormEngine.getActive(projectId, threadId)
         if (activeBrainstorm) {
           activeBrainstormTurn = activeBrainstorm
-        } else {
-          void scheduleAutoTitle()
-          await this.chooseBrainstormEntry(projectId, threadId, 'brainstorm')
-          return publicUserMessage
         }
       }
     }
@@ -4838,10 +4954,19 @@ export class ChatEngine {
     // only the headroom left after the fixed user/system layers and the actual
     // hidden context consumed.
     const brainstormingTurn = settings.engineeringMode && specAction !== 'implement'
+    const chatSystemPrompt = isChatThread
+      ? await this.cioPrompt(chatFileSystemEnabled ? 'file-system-chat' : 'chat')
+      : ''
+    const brainstormDiscussionPrompt = brainstormingTurn
+      ? await this.cioPrompt('brainstorm-discussion')
+      : ''
+    const engineeringSpecPrompt = brainstormingTurn ? await this.cioPrompt('engineering-spec') : ''
     const systemBasePrompt = brainstormingTurn
       ? composeBrainstormSystemPrompt({
-          activeBrainstormTurn: Boolean(activeBrainstormTurn),
+          activeBrainstormTurn: activeBrainstormSession,
           assignmentMode: settings.assignmentMode === true,
+          brainstormDiscussionPrompt,
+          engineeringSpecPrompt,
           revisionPrompt: '',
           memoryInstruction: MEMORY_RESPONSE_BOUNDARY_INSTRUCTION,
           imageDescriptorNote,
@@ -4850,11 +4975,7 @@ export class ChatEngine {
           historyRecap: ''
         })
       : composeTurnSystemPrompt({
-          chatPrompt: isChatThread
-            ? chatFileSystemEnabled
-              ? FILE_SYSTEM_CHAT_SYSTEM_PROMPT
-              : CHAT_SYSTEM_PROMPT
-            : '',
+          chatPrompt: chatSystemPrompt,
           memoryInstruction: MEMORY_RESPONSE_BOUNDARY_INSTRUCTION,
           imageDescriptorNote,
           assignmentCoordinatorSystemPrompt,
@@ -4908,7 +5029,7 @@ export class ChatEngine {
             workflow.activeSpecVersion
           )
         : null)
-    const shouldScheduleInitialSpec = planningSpecTurn && !activeSpec && !activeBrainstormTurn
+    const shouldScheduleInitialSpec = planningSpecTurn && !activeSpec && !activeBrainstormSession
     if (planningSpecTurn) {
       this.planningSessions.add(sessionId)
       const requestedSpec = specAction === 'request'
@@ -4926,7 +5047,7 @@ export class ChatEngine {
       this.registerSession(sessionId, projectId, threadId, projectPath, 'auto_review', driverId)
       this.markSessionWorking(sessionId)
       try {
-        if (requestedSpec && !revisingSpec && !activeBrainstormTurn) {
+        if (requestedSpec && !revisingSpec && !activeBrainstormSession) {
           // OpenCode 1.18.x accepts JSON-schema output on prompt submission but
           // cannot decode that user message when history is loaded afterward.
           // Keep the persistent chat readable and run the enforced
@@ -4971,10 +5092,14 @@ export class ChatEngine {
           this.pendingSpecRevisions.set(sessionId, pendingRevision)
           await this.writePendingSpecRevision(pendingRevision)
         }
-        if (activeBrainstormTurn) {
+        if (activeBrainstormSession) {
           this.pendingBrainstormTurns.set(sessionId, {
-            brainstormId: activeBrainstormTurn.id,
-            version: activeBrainstormTurn.version,
+            ...(activeBrainstormTurn
+              ? {
+                  brainstormId: activeBrainstormTurn.id,
+                  version: activeBrainstormTurn.version
+                }
+              : {}),
             note: origin === 'user' ? text : ''
           })
         }
@@ -4997,8 +5122,10 @@ export class ChatEngine {
           text: driverText,
           attachments,
           systemPrompt: composeBrainstormSystemPrompt({
-            activeBrainstormTurn: Boolean(activeBrainstormTurn),
+            activeBrainstormTurn: activeBrainstormSession,
             assignmentMode: settings.assignmentMode === true,
+            brainstormDiscussionPrompt,
+            engineeringSpecPrompt,
             revisionPrompt,
             memoryInstruction: MEMORY_RESPONSE_BOUNDARY_INSTRUCTION,
             imageDescriptorNote,
@@ -5065,11 +5192,7 @@ export class ChatEngine {
         attachments,
         systemPrompt:
           composeTurnSystemPrompt({
-            chatPrompt: isChatThread
-              ? chatFileSystemEnabled
-                ? FILE_SYSTEM_CHAT_SYSTEM_PROMPT
-                : CHAT_SYSTEM_PROMPT
-              : '',
+            chatPrompt: chatSystemPrompt,
             memoryInstruction: MEMORY_RESPONSE_BOUNDARY_INSTRUCTION,
             imageDescriptorNote,
             assignmentCoordinatorSystemPrompt,
@@ -5231,7 +5354,7 @@ export class ChatEngine {
         modelKey(settings.harnessId, settings.providerId, settings.modelId)
       )
       const systemPrompt = [
-        TEMPORARY_CHAT_SYSTEM_PROMPT,
+        await this.cioPrompt('temporary-chat'),
         memoryPrompt,
         temporary.contextApplied && context
           ? ''
@@ -6246,7 +6369,7 @@ export class ChatEngine {
       const request: SendPromptOptions = {
         sessionId,
         settings,
-        text: IMAGE_DESCRIPTOR_PROMPT,
+        text: await this.cioPrompt('image-description'),
         attachments: [attachment],
         readOnly: true,
         allowedTools: [],
@@ -6285,7 +6408,7 @@ export class ChatEngine {
           attempt: attempt + 1,
           harnessId: selection.harnessId,
           settings,
-          inputText: IMAGE_DESCRIPTOR_PROMPT,
+          inputText: await this.cioPrompt('image-description'),
           response,
           failure
         })
@@ -8725,26 +8848,20 @@ export class ChatEngine {
 
       const existing = await this.brainstormEngine.getActive(projectId, threadId)
       if (existing) return existing
-      const content = await this.generateBrainstormContent(
+      await this.sendPrompt(
         projectId,
         threadId,
         thread.settings,
-        'Create the first reviewable Brainstorm document. Preserve unresolved prerequisites in Open Questions rather than inventing answers.'
+        'Begin the Brainstorm session now. Research the request and relevant project context first, share the most decision-relevant findings, then use the question tool to ask the first focused alignment questions.',
+        [],
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        'internal'
       )
-      const created = await this.brainstormEngine.createDraft({
-        projectId,
-        threadId,
-        content,
-        provenance: {
-          source: 'agent',
-          actor: 'Sr. Engineer',
-          harnessId: thread.settings.harnessId,
-          providerId: thread.settings.providerId,
-          modelId: thread.settings.modelId
-        }
-      })
-      await this.publishBrainstormReady(created, thread.sessionId)
-      return created
+      return null
     } catch (error) {
       if (this.userAbortedBrainstormOperations.delete(operationKey)) {
         await this.threadManager.setStatus(projectId, threadId, 'interrupted', { read: true })
@@ -8762,7 +8879,8 @@ export class ChatEngine {
     threadId: string,
     brainstormId: string,
     version: number,
-    note: string
+    note: string,
+    options: { sessionTurn?: boolean } = {}
   ): Promise<BrainstormDocument> {
     projectId = validateEntityId(projectId, 'Project ID')
     threadId = validateEntityId(threadId, 'Thread ID')
@@ -8795,14 +8913,16 @@ export class ChatEngine {
         threadId,
         thread.settings,
         [
-          'Revise the complete Brainstorm document from the user review. Read the Brainstorm document at the referenced path and incorporate every open annotation and review note. Preserve useful unchanged content.',
+          options.sessionTurn
+            ? 'Refresh the concise Brainstorm session report from the latest conversation. Read the current report, incorporate newly aligned decisions and findings, remove resolved items from Still to Decide, and preserve useful unchanged content.'
+            : 'Revise the complete Brainstorm session report from the user review. Read the report at the referenced path and incorporate every open annotation and review note. Preserve useful unchanged content.',
           `Brainstorm document: ${brainstormPath}`,
           `Open annotations:\n${formatOpenAnnotations(current.annotations)}`,
           reviewNotes ? `Review notes:\n${reviewNotes}` : ''
         ]
           .filter(Boolean)
           .join('\n\n'),
-        { includeConversationContext: false }
+        options.sessionTurn ? { announceProgress: false } : { includeConversationContext: false }
       )
       let revised = await this.brainstormEngine.createVersion({
         projectId,
@@ -8846,6 +8966,44 @@ export class ChatEngine {
     } finally {
       this.activeBrainstormOperations.delete(operationKey)
     }
+  }
+
+  private async createBrainstormSessionReport(
+    projectId: string,
+    threadId: string,
+    note: string
+  ): Promise<BrainstormDocument> {
+    const existing = await this.brainstormEngine.getActive(projectId, threadId)
+    if (existing) return existing
+    const thread = await this.threadManager.getThread(projectId, threadId)
+    if (!thread?.settings) throw new Error('Sr. Engineer settings are missing')
+    const content = await this.generateBrainstormContent(
+      projectId,
+      threadId,
+      thread.settings,
+      [
+        'Create the first concise Brainstorm session report from the conversation and verified research.',
+        'Preserve unresolved material choices in Still to Decide rather than inventing answers.',
+        note.trim() ? `Latest user input: ${note.trim()}` : ''
+      ]
+        .filter(Boolean)
+        .join('\n\n'),
+      { announceProgress: false }
+    )
+    const created = await this.brainstormEngine.createDraft({
+      projectId,
+      threadId,
+      content,
+      provenance: {
+        source: 'agent',
+        actor: 'Sr. Engineer',
+        harnessId: thread.settings.harnessId,
+        providerId: thread.settings.providerId,
+        modelId: thread.settings.modelId
+      }
+    })
+    await this.publishBrainstormReady(created, thread.sessionId)
+    return created
   }
 
   async finalizeBrainstorm(
@@ -9005,10 +9163,10 @@ export class ChatEngine {
       (section) => section.id === 'proposed_direction'
     )?.markdown
     const finalText = [
-      'Brainstorm research is ready.',
+      'The Brainstorm session report is ready.',
       content.summary.trim(),
       proposedDirection?.trim(),
-      'The complete evidence, decisions, alternatives, constraints, and open questions are ready for annotation in Brainstorm Studio.'
+      'The concise session direction, aligned decisions, boundaries, and remaining choices are ready for review.'
     ]
       .filter(Boolean)
       .join('\n\n')
@@ -9097,7 +9255,7 @@ export class ChatEngine {
     threadId: string,
     settings: ThreadSettings,
     instructions: string,
-    options: { includeConversationContext?: boolean } = {}
+    options: { includeConversationContext?: boolean; announceProgress?: boolean } = {}
   ): Promise<BrainstormContent> {
     const driverId = settings.harnessId || 'opencode'
     const { driver, projectPath } = await this.resolve(projectId, driverId, threadId)
@@ -9123,7 +9281,9 @@ export class ChatEngine {
             threadId,
             validatedInstructions
           )
-    await this.beginBrainstormConversationTurn(projectId, threadId, source)
+    if (options.announceProgress !== false) {
+      await this.beginBrainstormConversationTurn(projectId, threadId, source)
+    }
     const finish = async (content: BrainstormContent): Promise<BrainstormContent> => {
       await this.completeBrainstormConversationTurn(projectId, threadId, content, settings)
       return content
@@ -9195,8 +9355,11 @@ export class ChatEngine {
           attachments: [],
           systemPrompt: [
             useStructuredOutput
-              ? BRAINSTORM_GENERATION_SYSTEM_PROMPT
-              : BRAINSTORM_JSON_FALLBACK_SYSTEM_PROMPT,
+              ? await this.cioPrompt('brainstorm-document')
+              : [
+                  await this.cioPrompt('brainstorm-document'),
+                  BRAINSTORM_JSON_FALLBACK_SYSTEM_PROMPT
+                ].join('\n\n'),
             behaviorPrompt
           ]
             .filter(Boolean)
@@ -9361,7 +9524,7 @@ export class ChatEngine {
     )
     const specMemoryPrompt = await this.formatSpecGenerationMemory(projectId, settings)
     const generationSystemPrompt = [
-      SPEC_GENERATION_SYSTEM_PROMPT,
+      await this.cioPrompt('engineering-spec'),
       artifactBoundary,
       memoryPrompt,
       specMemoryPrompt,
@@ -9370,6 +9533,7 @@ export class ChatEngine {
       .filter(Boolean)
       .join('\n\n')
     const fallbackSystemPrompt = [
+      await this.cioPrompt('engineering-spec'),
       SPEC_JSON_FALLBACK_SYSTEM_PROMPT,
       artifactBoundary,
       memoryPrompt,
@@ -9693,7 +9857,7 @@ export class ChatEngine {
       await ensureFeatureSlug(this.database, projectId, coordinatorThreadId)
     )
     const assignmentSystemPrompt = [
-      EXISTING_SPEC_ASSIGNMENT_SYSTEM_PROMPT,
+      await this.cioPrompt('assignment-plan'),
       engineeringArtifactBoundaryInstruction(artifactDirectory)
     ].join('\n\n')
     const prompt = [
@@ -9877,7 +10041,7 @@ export class ChatEngine {
                   prompt
                 ].join('\n\n'),
           attachments: [],
-          systemPrompt: AUDIT_GENERATION_SYSTEM_PROMPT,
+          systemPrompt: await this.cioPrompt('audit-report'),
           allowedTools: AUDIT_ALLOWED_TOOLS,
           ...(useStructuredOutput ? { structuredOutput: { schema: AUDIT_REPORT_SCHEMA } } : {})
         }
@@ -10318,7 +10482,7 @@ export class ChatEngine {
           marker,
           'The Achievement Auditor and user review require implementation corrections.',
           'Digest every actionable finding, open audit annotation, and user note. Implement the corrections in this Sr. Engineer thread, run focused verification, then allow Achievement to audit again.',
-          ACHIEVEMENT_IMPLEMENT_SYSTEM_PROMPT,
+          await this.cioPrompt('achievement-implementation'),
           `Audit report: ${auditPath}`,
           `User feedback:\n${feedback.trim()}`,
           `Open audit annotations:\n${formatOpenAnnotations(report.annotations)}`
@@ -11163,9 +11327,9 @@ export class ChatEngine {
       )
       try {
         const auditSystemPrompt = repairing
-          ? AUDIT_REPAIR_SYSTEM_PROMPT
+          ? await this.cioPrompt('audit-repair')
           : [
-              AUDIT_GENERATION_SYSTEM_PROMPT,
+              await this.cioPrompt('audit-report'),
               ASSIGNMENT_AUDIT_EVIDENCE_CONTRACT,
               utilityInstructions
             ]
@@ -11410,7 +11574,7 @@ export class ChatEngine {
           settings: auditorSettings,
           text: prompt,
           attachments: [],
-          systemPrompt: AUDIT_GENERATION_SYSTEM_PROMPT,
+          systemPrompt: await this.cioPrompt('audit-report'),
           allowedTools: AUDIT_ALLOWED_TOOLS,
           userMessageId: messageId
         })
@@ -11519,7 +11683,7 @@ export class ChatEngine {
       `Achievement audit ${iteration} found required corrections.`,
       'Act as the primary implementation agent. Address every actionable finding against the approved specification.',
       'Inspect the cited evidence, implement the corrections, run all relevant scoped checks, and report concrete verification evidence. Do not stop at recommendations.',
-      ACHIEVEMENT_IMPLEMENT_SYSTEM_PROMPT,
+      await this.cioPrompt('achievement-implementation'),
       `Audit report: ${auditPath}`,
       `Open audit annotations:\n${formatOpenAnnotations(report.annotations)}`
     ].join('\n\n')
@@ -14502,13 +14666,21 @@ export class ChatEngine {
       }
       if (!failure && !awaitingUser && pendingBrainstormTurn) {
         try {
-          revisedBrainstorm = await this.reviewBrainstorm(
-            info.projectId,
-            info.threadId,
-            pendingBrainstormTurn.brainstormId,
-            pendingBrainstormTurn.version,
-            pendingBrainstormTurn.note
-          )
+          revisedBrainstorm =
+            pendingBrainstormTurn.brainstormId && pendingBrainstormTurn.version
+              ? await this.reviewBrainstorm(
+                  info.projectId,
+                  info.threadId,
+                  pendingBrainstormTurn.brainstormId,
+                  pendingBrainstormTurn.version,
+                  pendingBrainstormTurn.note,
+                  { sessionTurn: true }
+                )
+              : await this.createBrainstormSessionReport(
+                  info.projectId,
+                  info.threadId,
+                  pendingBrainstormTurn.note
+                )
           this.pendingBrainstormTurns.delete(sessionId)
         } catch (error) {
           failure = error instanceof Error ? error.message : 'The Brainstorm revision failed.'

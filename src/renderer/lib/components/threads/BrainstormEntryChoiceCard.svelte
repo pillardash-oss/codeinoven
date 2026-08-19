@@ -71,7 +71,7 @@
     <p class="text-xs leading-relaxed text-muted">
       {retryChoice
         ? 'The saved planning choice is safe. Retry generation without choosing the path again.'
-        : 'Brainstorm with the Sr. Engineer to gather prerequisites, or move directly to a specification.'}
+        : 'Work through an evidence-led conversation with the Sr. Engineer, or move directly to a specification.'}
     </p>
   </div>
 
@@ -138,7 +138,8 @@
         <span class="min-w-0">
           <span class="block text-xs font-semibold text-foreground">Start brainstorm</span>
           <span class="mt-0.5 block text-[11px] leading-relaxed text-muted">
-            Gather context, decisions, constraints, and open questions before the spec.
+            Research the real context, answer focused questions, and align the direction before the
+            spec.
           </span>
         </span>
       </button>

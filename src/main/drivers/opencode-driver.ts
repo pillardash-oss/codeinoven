@@ -1277,20 +1277,30 @@ export class OpenCodeDriver implements HarnessDriver {
    */
   async createIsolatedSession(projectPath: string, title: string): Promise<IsolatedHandle> {
     const handle = await this.startIsolatedServer(projectPath)
-    const sessionId = await this.createSessionOnHandle(handle, title)
-    const isolated: IsolatedHandle = { ...handle, sessionId }
-    this.isolatedServers.add(isolated)
-    isolated.process.on('exit', () => {
-      this.isolatedServers.delete(isolated)
-    })
-    return isolated
+    try {
+      const sessionId = await this.createSessionOnHandle(handle, title)
+      const isolated: IsolatedHandle = { ...handle, sessionId }
+      this.isolatedServers.add(isolated)
+      isolated.process.on('exit', () => {
+        this.isolatedServers.delete(isolated)
+      })
+      return isolated
+    } catch (error) {
+      handle.abortController.abort()
+      handle.process.kill()
+      throw error
+    }
   }
 
-  /** Tear down an isolated server created by `createIsolatedSession`. */
+  /** Delete the disposable session, then tear down its isolated server. */
   disposeIsolatedSession(handle: IsolatedHandle): void {
     this.isolatedServers.delete(handle)
-    handle.abortController.abort()
-    handle.process.kill()
+    void this.deleteSessionOnHandle(handle, handle.sessionId)
+      .catch((error) => Logger.dev('Isolated opencode session cleanup was incomplete:', error))
+      .finally(() => {
+        handle.abortController.abort()
+        handle.process.kill()
+      })
   }
 
   private async createSessionOnHandle(handle: ServerHandle, title: string): Promise<string> {

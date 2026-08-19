@@ -438,6 +438,63 @@ describe('CodexDriver', () => {
     )
   })
 
+  it('surfaces a Codex usage-limit failure as a quota issue with a retry time', async () => {
+    const driver = new CodexDriver(await storage())
+    const events: AgentEvent[] = []
+    driver.onEvent((event) => events.push(event))
+    const child = new FakeChild()
+    spawnMock.mockReturnValue(child as unknown as ChildProcess)
+    const sessionId = await driver.createSession('/project', 'Codex')
+    await driver.sendPrompt('/project', { sessionId, settings, text: 'go', attachments: [] })
+    child.emitPayload({
+      method: 'error',
+      params: {
+        threadId: 'native-1',
+        turnId: 'turn-1',
+        willRetry: false,
+        error: {
+          message:
+            "You've hit your usage limit. Visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again at Aug 20th, 2026 7:30 AM.",
+          codexErrorInfo: 'usageLimitExceeded'
+        }
+      }
+    })
+    child.emitPayload({
+      method: 'turn/completed',
+      params: {
+        threadId: 'native-1',
+        turn: {
+          id: 'turn-1',
+          status: 'failed',
+          error: {
+            message:
+              "You've hit your usage limit. Visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again at Aug 20th, 2026 7:30 AM."
+          }
+        }
+      }
+    })
+    await vi.waitFor(() => {
+      expect(events).toContainEqual(
+        expect.objectContaining({
+          type: 'session.error',
+          sessionId,
+          error: expect.stringContaining("You've hit your usage limit"),
+          issue: expect.objectContaining({
+            kind: 'quota',
+            harnessId: 'codex',
+            retryable: true
+          })
+        })
+      )
+    })
+    const errorEvent = events.find(
+      (event) => event.type === 'session.error' && event.sessionId === sessionId
+    )
+    expect(errorEvent && 'issue' in errorEvent ? errorEvent.issue?.retryAt : undefined).toEqual(
+      new Date(2026, 7, 20, 7, 30, 0, 0).getTime()
+    )
+  })
+
   it('maps Codex tool and assistant items to render events', async () => {
     const driver = new CodexDriver(await storage())
     const events: AgentEvent[] = []

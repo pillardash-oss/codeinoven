@@ -19,6 +19,7 @@ export function classifyProviderIssue(
   }
   if (
     normalized.includes('quota') ||
+    normalized.includes('usage limit') ||
     normalized.includes('session limit') ||
     normalized.includes('exhausted') ||
     normalized.includes('window exceeded')

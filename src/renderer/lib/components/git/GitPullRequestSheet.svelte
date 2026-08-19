@@ -10,6 +10,7 @@
   import { threadSettings } from '$lib/stores/thread-settings.svelte'
   import { providerCatalog } from '$lib/stores/provider-catalog.svelte'
   import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
+  import { workspaceState } from '$lib/stores/workspace.svelte'
   import { modelKey } from '$lib/model-keys'
   import type {
     PullRequestCompare,
@@ -21,6 +22,7 @@
   } from '$shared/types'
   import {
     ArrowRight,
+    Bot,
     CheckCircle2,
     CircleCheck,
     CircleSlash,
@@ -47,6 +49,29 @@
     storageKey?: string
   }
 
+  interface StoredComposeSelection {
+    harnessId: string
+    providerId: string
+    modelId: string
+    thinkingLevel: ThinkingLevel
+  }
+
+  interface PrCreationPreferences {
+    head?: string
+    base?: string
+    compose?: StoredComposeSelection
+  }
+
+  const THINKING_LEVELS = new Set<ThinkingLevel>([
+    'minimal',
+    'low',
+    'medium',
+    'high',
+    'xhigh',
+    'max',
+    'ultra'
+  ])
+
   let {
     projectId,
     onClose,
@@ -58,11 +83,72 @@
     storageKey: storageKeyProp
   }: Props = $props()
 
+  function preferencesStorageKey(): string {
+    return `${APP_SLUG}.pullRequestPreferences.${projectId}.v1`
+  }
+
+  function loadPrCreationPreferences(): PrCreationPreferences {
+    if (typeof window === 'undefined') return {}
+    try {
+      const raw = window.localStorage.getItem(preferencesStorageKey())
+      if (!raw) return {}
+      const parsed: unknown = JSON.parse(raw)
+      if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return {}
+      const record = parsed as Record<string, unknown>
+      const composeValue = record['compose']
+      let compose: StoredComposeSelection | undefined
+      if (
+        typeof composeValue === 'object' &&
+        composeValue !== null &&
+        !Array.isArray(composeValue)
+      ) {
+        const selection = composeValue as Record<string, unknown>
+        const thinkingLevel = selection['thinkingLevel']
+        if (
+          typeof selection['harnessId'] === 'string' &&
+          typeof selection['providerId'] === 'string' &&
+          typeof selection['modelId'] === 'string' &&
+          typeof thinkingLevel === 'string' &&
+          THINKING_LEVELS.has(thinkingLevel as ThinkingLevel)
+        ) {
+          compose = {
+            harnessId: selection['harnessId'],
+            providerId: selection['providerId'],
+            modelId: selection['modelId'],
+            thinkingLevel: thinkingLevel as ThinkingLevel
+          }
+        }
+      }
+      return {
+        ...(typeof record['head'] === 'string' ? { head: record['head'] } : {}),
+        ...(typeof record['base'] === 'string' ? { base: record['base'] } : {}),
+        ...(compose ? { compose } : {})
+      }
+    } catch {
+      return {}
+    }
+  }
+
+  function persistPrCreationPreferences(update: PrCreationPreferences): void {
+    if (typeof window === 'undefined') return
+    try {
+      const current = loadPrCreationPreferences()
+      window.localStorage.setItem(
+        preferencesStorageKey(),
+        JSON.stringify({ ...current, ...update })
+      )
+    } catch {
+      // Preference storage is a convenience; unavailable storage must not block PR creation.
+    }
+  }
+
+  const initialPreferences = loadPrCreationPreferences()
+
   let originIdentity = $state<{ owner: string; repo: string } | null>(null)
   let title = $state('')
   let body = $state('')
-  let head = $state('')
-  let base = $state('')
+  let head = $state(initialPreferences.head ?? '')
+  let base = $state(initialPreferences.base ?? '')
   let draft = $state(false)
   /** Push committed local changes to the head branch so they land in the PR. */
   let pushLocal = $state(true)
@@ -80,6 +166,9 @@
   let pushRejected = $state(false)
   /** Which recovery action is running ('merge' | 'rebase'), to disable buttons. */
   let recoverMode = $state<'merge' | 'rebase' | null>(null)
+  /** True while a prepared divergence-resolution thread is being opened. */
+  let openingResolveThread = $state(false)
+  let resolveThreadError = $state('')
   /** True while the panel is collapsed into the bottom-right dock (local fallback). */
   let localMinimized = $state(false)
   const minimized = $derived(minimizedProp ?? localMinimized)
@@ -94,15 +183,20 @@
     else localMinimized = false
   }
 
-  const effectiveStorageKey = $derived(storageKeyProp ?? `${APP_SLUG}.pullRequestSheet.v1`)
+  const effectiveStorageKey = $derived(
+    storageKeyProp ? `${storageKeyProp}.tall-v2` : `${APP_SLUG}.pullRequestSheet.tall-v2`
+  )
 
   // ─── Compose with agent ────────────────────────────────────────────────────
   /** True while the compose dropdown is open. */
   let composeOpen = $state(false)
   /** Phase of the compose flow, drives the dropdown's button label. */
   let composePhase = $state<'idle' | 'working' | 'complete' | 'recompose'>('idle')
-  /** Model used for the compose agent — seeded from the last thread model. */
-  let composeSettings = $state<ThreadSettings>({ ...threadSettings.lastUsed })
+  /** Project-specific PR model when available; otherwise the user's last project model. */
+  let composeSettings = $state<ThreadSettings>({
+    ...threadSettings.lastUsed,
+    ...(initialPreferences.compose ?? {})
+  })
   /** Branch selection from the last virtual compose — detects changes on recompose. */
   let composeHead = $state('')
   let composeBase = $state('')
@@ -130,6 +224,13 @@
   const headInfo = $derived(gitState.branches.find((candidate) => candidate.name === head) ?? null)
   /** An open PR for the exact head→base pair — GitHub rejects a duplicate with a 422. */
   const existingPr = $derived(compare?.existing ?? null)
+  const composeWorking = $derived(composePhase === 'working')
+  const composeSucceeded = $derived(composePhase === 'complete' || composePhase === 'recompose')
+  const dockHasIssue = $derived(
+    Boolean(
+      originError || compareError || composeError || gitState.error || pushRejected || existingPr
+    )
+  )
 
   /**
    * Whether the local head has commits the remote lacks — a push is only
@@ -277,6 +378,7 @@
       draft
     })
     if (reference) {
+      persistPrCreationPreferences({ head, base })
       result = reference
       onCreated?.()
     }
@@ -305,6 +407,51 @@
       await finishCreate()
     } finally {
       recoverMode = null
+    }
+  }
+
+  function divergenceResolutionPrompt(): string {
+    return [
+      `Resolve the blocked pull request push for branch \`${head}\` into \`${base}\`.`,
+      '',
+      `The app reported that \`origin/${head}\` has commits missing from the local \`${head}\` branch, so a normal push was rejected.`,
+      '',
+      'Inspect the repository state and resolve the divergence safely:',
+      `1. Check out \`${head}\` if it is not already active.`,
+      `2. Fetch \`origin\` and compare \`${head}\` with \`origin/${head}\`.`,
+      '3. Reconcile both histories without discarding local or remote commits and without force-pushing.',
+      '4. Resolve any conflicts, run the relevant checks, and push the branch normally.',
+      '',
+      'Do not create the pull request. The draft remains open in the Git panel so the user can finish it there after the branch is synchronized.',
+      'Explain what caused the divergence and what you changed.'
+    ].join('\n')
+  }
+
+  /** Open a normal project thread with the blocked-push evidence prefilled. */
+  async function resolveDivergenceWithAgent(): Promise<void> {
+    if (!head || !base || openingResolveThread) return
+    openingResolveThread = true
+    resolveThreadError = ''
+    try {
+      const project = await invoke('project:get', projectId).catch(() => null)
+      if (!project) throw new Error('Could not open this project for the agent')
+      const settings = { ...threadSettings.lastUsed }
+      const thread = await invoke('thread:create', {
+        projectId,
+        providerId: settings.harnessId,
+        title: `Resolve diverged branch ${head}`,
+        workingDirectory: project.path,
+        settings
+      }).catch(() => null)
+      if (!thread) throw new Error('Could not create the resolution thread')
+      rendererRecovery.setDraft(projectId, thread.id, divergenceResolutionPrompt(), [], [])
+      workspaceState.openThread(thread, project)
+      handleMinimize()
+    } catch (reason) {
+      resolveThreadError =
+        reason instanceof Error ? reason.message : 'Could not open the resolution thread'
+    } finally {
+      openingResolveThread = false
     }
   }
 
@@ -432,6 +579,17 @@
     }
   }
 
+  function persistComposeSelection(settings: ThreadSettings): void {
+    persistPrCreationPreferences({
+      compose: {
+        harnessId: settings.harnessId,
+        providerId: settings.providerId,
+        modelId: settings.modelId,
+        thinkingLevel: settings.thinkingLevel
+      }
+    })
+  }
+
   /** Kick off a fresh disposable compose or recompose task. */
   async function runCompose(): Promise<void> {
     if (!originIdentity || !head || !base || composePhase === 'working') return
@@ -441,6 +599,7 @@
     composePhase = 'working'
     try {
       const settings = composeVirtualTaskSettings()
+      persistComposeSelection(settings)
       const virtualTaskId = crypto.randomUUID()
       const directory = `.cio/git/compose/${virtualTaskId}`
       const report = await gitState.composeWithAgent(
@@ -470,7 +629,7 @@
       providerId,
       modelId
     }
-    threadSettings.commit(composeSettings)
+    persistComposeSelection(composeSettings)
   }
 
   function chooseComposeThinking(level: ThinkingLevel): void {
@@ -478,7 +637,7 @@
       ...composeSettings,
       thinkingLevel: level
     }
-    threadSettings.commit(composeSettings)
+    persistComposeSelection(composeSettings)
   }
 
   onDestroy(clearComposeTimers)
@@ -489,8 +648,12 @@
 
   $effect(() => {
     if (originIdentity && branches.length > 0) {
-      if (!head) head = branch ?? branches[0]
-      if (!base) base = branches.includes('main') ? 'main' : branches[0]
+      if (!head || !branches.includes(head)) {
+        head = branch && branches.includes(branch) ? branch : branches[0]
+      }
+      if (!base || !branches.includes(base)) {
+        base = branches.includes('main') ? 'main' : branches[0]
+      }
     }
   })
 
@@ -515,6 +678,7 @@
   onExpand={handleExpand}
   dragLabel="Drag to move the pull request panel"
   storageKey={effectiveStorageKey}
+  defaultHeight={680}
 >
   {#snippet dock()}
     <button
@@ -524,11 +688,34 @@
       onclick={handleExpand}
     >
       {#if result}
-        <CheckCircle2 size={14} class="shrink-0 text-success" />
-        <span class="text-[11px] font-medium">PR #{result.number} created</span>
-      {:else if submitting}
+        <span
+          class="flex items-center gap-1 rounded-full bg-success/15 px-1.5 py-0.5 text-[9px] font-semibold text-success"
+        >
+          <CheckCircle2 size={10} aria-hidden="true" />
+          Created
+        </span>
+        <span class="text-[11px] font-medium">PR #{result.number}</span>
+      {:else if composeWorking || creating || submitting}
         <Loader2 size={14} class="shrink-0 animate-spin text-info" />
-        <span class="text-[11px] font-medium">Creating pull request…</span>
+        <span class="text-[11px] font-medium">
+          {composeWorking ? 'Composing pull request…' : 'Creating pull request…'}
+        </span>
+      {:else if dockHasIssue}
+        <span
+          class="flex items-center gap-1 rounded-full bg-warning/15 px-1.5 py-0.5 text-[9px] font-semibold text-warning"
+        >
+          <TriangleAlert size={10} aria-hidden="true" />
+          Needs attention
+        </span>
+        <span class="text-[11px] font-medium">New pull request</span>
+      {:else if composeSucceeded}
+        <span
+          class="flex items-center gap-1 rounded-full bg-success/15 px-1.5 py-0.5 text-[9px] font-semibold text-success"
+        >
+          <CircleCheck size={10} aria-hidden="true" />
+          Composed
+        </span>
+        <span class="text-[11px] font-medium">New pull request</span>
       {:else}
         <GitPullRequest size={14} class="shrink-0 text-dimmed" />
         <span class="text-[11px] font-medium">New pull request</span>
@@ -536,117 +723,130 @@
     </button>
   {/snippet}
 
-  <div class="space-y-3">
-    {#if originError}
-      <p
-        class="rounded-lg border border-danger/20 bg-danger/10 px-3 py-1.5 text-[10px] leading-relaxed text-danger"
-      >
-        {originError}
-      </p>
-    {:else if !originIdentity}
-      <p
-        class="rounded-lg border border-warning/30 bg-warning/10 px-3 py-1.5 text-[10px] leading-relaxed text-warning"
-      >
-        No GitHub remote (origin) is configured for this project. Add the repository remote in the
-        app's project settings first.
-      </p>
-    {/if}
+  <div class={result ? 'flex min-h-full items-center justify-center' : 'space-y-3'}>
+    {#if !result}
+      {#if originError}
+        <p
+          class="rounded-lg border border-danger/20 bg-danger/10 px-3 py-1.5 text-[10px] leading-relaxed text-danger"
+        >
+          {originError}
+        </p>
+      {:else if !originIdentity}
+        <p
+          class="rounded-lg border border-warning/30 bg-warning/10 px-3 py-1.5 text-[10px] leading-relaxed text-warning"
+        >
+          No GitHub remote (origin) is configured for this project. Add the repository remote in the
+          app's project settings first.
+        </p>
+      {/if}
 
-    {#if originIdentity && !sameBranch && head && base}
-      <div class="flex items-center justify-between gap-2">
-        <p class="text-[10px] text-muted">Let the agent draft the PR for you.</p>
-        <DropdownMenu.Root bind:open={composeOpen}>
-          <DropdownMenu.Trigger
-            class="flex h-7 cursor-pointer items-center gap-1.5 rounded-lg border border-border px-2.5 text-[10px] font-medium text-foreground transition-colors hover:bg-elevated disabled:cursor-default disabled:opacity-50"
-            aria-label="Compose with agent"
-            title="Compose the title and description with an agent"
-            disabled={composePhase === 'working'}
-          >
-            {#if composePhase === 'working'}
-              <Loader2 size={11} class="animate-spin" />
-              <span>Composing…</span>
-            {:else if composePhase === 'complete'}
-              <CircleCheck size={11} class="text-success" />
-              <span>Complete</span>
-            {:else}
-              <Sparkles size={11} />
-              <span>{composePhase === 'recompose' ? 'Recompose' : 'Compose with agent'}</span>
-            {/if}
-          </DropdownMenu.Trigger>
-          <DropdownMenu.Portal>
-            <DropdownMenu.Content
-              side="bottom"
-              align="end"
-              sideOffset={6}
-              collisionPadding={8}
-              class="z-50 w-72 rounded-xl border border-border bg-surface p-2 shadow-xl"
+      {#if originIdentity && !sameBranch && head && base}
+        <div class="space-y-1.5">
+          {#if composeError}
+            <p
+              class="flex items-start gap-1.5 rounded-lg border border-warning/30 bg-warning/10 px-2.5 py-1.5 text-[9px] leading-relaxed text-warning"
+              role="alert"
             >
-              <div class="space-y-1.5">
-                <div>
-                  <p
-                    class="mb-1 px-0.5 text-[9px] font-semibold uppercase tracking-wide text-muted"
-                  >
-                    Compose model
-                  </p>
-                  <ModelPicker
-                    providers={composeProviders}
-                    {projectId}
-                    harnessId={composeSettings.harnessId}
-                    providerId={composeSettings.providerId}
-                    modelId={composeSettings.modelId}
-                    favoriteModels={rendererRecovery.favoriteModels}
-                    recentModels={rendererRecovery.recentModels}
-                    side="top"
-                    variant="action"
-                    onSelect={chooseComposeModel}
-                    thinkingLevel={composeSettings.thinkingLevel}
-                    onSelectThinking={chooseComposeThinking}
-                    onToggleFavorite={(providerId, modelId, harnessId) =>
-                      rendererRecovery.toggleFavorite(modelKey(harnessId, providerId, modelId))}
-                    onReorderFavorite={(draggedKey, targetKey, position) =>
-                      rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
-                  />
-                </div>
-                {#if composeError}
-                  <p
-                    class="rounded-lg border border-danger/20 bg-danger/10 px-2 py-1 text-[9px] leading-relaxed text-danger"
-                  >
-                    {composeError}
-                  </p>
+              <TriangleAlert size={11} class="mt-0.5 shrink-0" aria-hidden="true" />
+              <span>{composeError}</span>
+            </p>
+          {/if}
+          <div class="flex items-center justify-between gap-2">
+            <p class="text-[10px] text-muted">Let the agent draft the PR for you.</p>
+            <DropdownMenu.Root bind:open={composeOpen}>
+              <DropdownMenu.Trigger
+                class="flex h-7 cursor-pointer items-center gap-1.5 rounded-lg border border-border px-2.5 text-[10px] font-medium text-foreground transition-colors hover:bg-elevated disabled:cursor-default disabled:opacity-50"
+                aria-label="Compose with agent"
+                title="Compose the title and description with an agent"
+                disabled={composePhase === 'working'}
+              >
+                {#if composePhase === 'working'}
+                  <Loader2 size={11} class="animate-spin" />
+                  <span>Composing…</span>
+                {:else if composePhase === 'complete'}
+                  <CircleCheck size={11} class="text-success" />
+                  <span>Complete</span>
+                {:else}
+                  <Sparkles size={11} />
+                  <span>{composePhase === 'recompose' ? 'Recompose' : 'Compose with agent'}</span>
                 {/if}
-                <button
-                  type="button"
-                  class="flex h-8 w-full cursor-pointer items-center justify-center gap-1.5 rounded-lg bg-primary px-3 text-[11px] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:cursor-default disabled:opacity-50"
-                  disabled={composePhase === 'working'}
-                  onclick={() => void runCompose()}
+              </DropdownMenu.Trigger>
+              <DropdownMenu.Portal>
+                <DropdownMenu.Content
+                  side="bottom"
+                  align="end"
+                  sideOffset={6}
+                  collisionPadding={8}
+                  class="z-50 w-72 rounded-xl border border-border bg-surface p-2 shadow-xl"
                 >
-                  {#if composePhase === 'working'}
-                    <Loader2 size={12} class="animate-spin" />
-                    <span>Composing…</span>
-                  {:else if composePhase === 'complete'}
-                    <CircleCheck size={12} />
-                    <span>Complete</span>
-                  {:else}
-                    <Sparkles size={12} />
-                    <span>{composePhase === 'recompose' ? 'Recompose' : 'Compose'}</span>
-                  {/if}
-                </button>
-              </div>
-            </DropdownMenu.Content>
-          </DropdownMenu.Portal>
-        </DropdownMenu.Root>
-      </div>
+                  <div class="space-y-1.5">
+                    <div>
+                      <p
+                        class="mb-1 px-0.5 text-[9px] font-semibold uppercase tracking-wide text-muted"
+                      >
+                        Compose model
+                      </p>
+                      <ModelPicker
+                        providers={composeProviders}
+                        {projectId}
+                        harnessId={composeSettings.harnessId}
+                        providerId={composeSettings.providerId}
+                        modelId={composeSettings.modelId}
+                        favoriteModels={rendererRecovery.favoriteModels}
+                        recentModels={rendererRecovery.recentModels}
+                        side="top"
+                        variant="action"
+                        onSelect={chooseComposeModel}
+                        thinkingLevel={composeSettings.thinkingLevel}
+                        onSelectThinking={chooseComposeThinking}
+                        onToggleFavorite={(providerId, modelId, harnessId) =>
+                          rendererRecovery.toggleFavorite(modelKey(harnessId, providerId, modelId))}
+                        onReorderFavorite={(draggedKey, targetKey, position) =>
+                          rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
+                      />
+                    </div>
+                    <button
+                      type="button"
+                      class="flex h-8 w-full cursor-pointer items-center justify-center gap-1.5 rounded-lg bg-primary px-3 text-[11px] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:cursor-default disabled:opacity-50"
+                      disabled={composePhase === 'working'}
+                      onclick={() => void runCompose()}
+                    >
+                      {#if composePhase === 'working'}
+                        <Loader2 size={12} class="animate-spin" />
+                        <span>Composing…</span>
+                      {:else if composePhase === 'complete'}
+                        <CircleCheck size={12} />
+                        <span>Complete</span>
+                      {:else}
+                        <Sparkles size={12} />
+                        <span>{composePhase === 'recompose' ? 'Recompose' : 'Compose'}</span>
+                      {/if}
+                    </button>
+                  </div>
+                </DropdownMenu.Content>
+              </DropdownMenu.Portal>
+            </DropdownMenu.Root>
+          </div>
+        </div>
+      {/if}
     {/if}
 
     {#if result}
       {@const pr = result}
-      <div class="rounded-lg border border-success/30 bg-success/10 px-3 py-2">
-        <p class="text-[11px] font-medium text-success">Pull request #{pr.number} created</p>
-        <p class="mt-0.5 truncate text-[10px] text-muted">{pr.title}</p>
-        <div class="mt-2 flex items-center gap-1.5">
+      <div
+        class="w-full max-w-sm rounded-xl border border-success/30 bg-success/10 px-6 py-7 text-center"
+      >
+        <div
+          class="mx-auto flex h-11 w-11 items-center justify-center rounded-full bg-success/15 text-success"
+        >
+          <CheckCircle2 size={24} aria-hidden="true" />
+        </div>
+        <p class="mt-3 text-sm font-semibold text-success">Pull request #{pr.number} created</p>
+        <p class="mt-1 truncate text-[11px] text-muted">{pr.title}</p>
+        <div class="mt-5 flex items-center justify-center gap-2">
           <button
             type="button"
-            class="flex h-7 cursor-pointer items-center gap-1.5 rounded-lg bg-primary px-2.5 text-[10px] font-medium text-on-primary hover:bg-primary-hover"
+            class="flex h-8 cursor-pointer items-center gap-1.5 rounded-lg bg-primary px-3 text-[11px] font-medium text-on-primary transition-colors hover:bg-primary-hover"
             title="Open this pull request in the Git panel"
             onclick={() => {
               onClose()
@@ -658,7 +858,7 @@
           </button>
           <button
             type="button"
-            class="flex h-7 cursor-pointer items-center gap-1.5 rounded-lg border border-border px-2.5 text-[10px] font-medium text-foreground transition-colors hover:bg-elevated"
+            class="flex h-8 cursor-pointer items-center gap-1.5 rounded-lg border border-border bg-surface px-3 text-[11px] font-medium text-foreground transition-colors hover:bg-elevated"
             title="Open this pull request on GitHub"
             onclick={() => void openInBrowser(pr.url)}
           >
@@ -769,6 +969,75 @@
         {/if}
       </div>
 
+      {#if pushRejected}
+        <div class="rounded-lg border border-warning/30 bg-warning/10 px-3 py-2.5">
+          <div class="flex items-start gap-2">
+            <TriangleAlert size={14} class="mt-0.5 shrink-0 text-warning" />
+            <div class="min-w-0 flex-1">
+              <p class="text-[10px] font-semibold text-warning">
+                Push blocked — branch has diverged
+              </p>
+              <p class="mt-0.5 text-[9px] leading-relaxed text-dimmed">
+                The remote branch
+                <span class="font-mono text-foreground">{head}</span> has commits you don't have locally,
+                so Git won't let you push over them. Pull the remote changes in first — the pull request
+                is created automatically afterwards.
+              </p>
+              {#if headIsCurrent}
+                <div class="mt-2 flex items-center gap-1.5">
+                  <button
+                    type="button"
+                    class="flex h-7 cursor-pointer items-center gap-1.5 rounded-lg border border-border px-2.5 text-[10px] font-medium text-foreground transition-colors hover:bg-elevated disabled:cursor-default disabled:opacity-50"
+                    disabled={recoverMode !== null}
+                    onclick={() => void recoverPush('rebase')}
+                  >
+                    {#if recoverMode === 'rebase'}
+                      <Loader2 size={11} class="animate-spin" />
+                    {/if}
+                    Rebase &amp; push
+                  </button>
+                  <button
+                    type="button"
+                    class="flex h-7 cursor-pointer items-center gap-1.5 rounded-lg bg-primary px-2.5 text-[10px] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:cursor-default disabled:opacity-50"
+                    disabled={recoverMode !== null}
+                    onclick={() => void recoverPush('merge')}
+                  >
+                    {#if recoverMode === 'merge'}
+                      <Loader2 size={11} class="animate-spin" />
+                    {/if}
+                    Pull &amp; push
+                  </button>
+                </div>
+              {:else}
+                <p class="mt-1 text-[9px] leading-relaxed text-dimmed">
+                  Check out <span class="font-mono text-foreground">{head}</span> first, then use Pull
+                  &amp; push to resolve this here.
+                </p>
+              {/if}
+            </div>
+          </div>
+          <div class="mt-2 border-t border-warning/20 pt-2">
+            {#if resolveThreadError}
+              <p class="mb-2 text-[9px] leading-relaxed text-danger">{resolveThreadError}</p>
+            {/if}
+            <button
+              type="button"
+              class="flex h-8 w-full cursor-pointer items-center justify-center gap-1.5 rounded-lg border border-warning/40 bg-surface px-3 text-[10px] font-medium text-foreground transition-colors hover:bg-elevated disabled:cursor-default disabled:opacity-50"
+              title="Open a new thread with this branch-divergence issue prefilled"
+              disabled={openingResolveThread}
+              onclick={() => void resolveDivergenceWithAgent()}
+            >
+              {#if openingResolveThread}
+                <Loader2 size={12} class="animate-spin" />
+              {:else}
+                <Bot size={12} />
+              {/if}
+              Resolve with agent
+            </button>
+          </div>
+        </div>
+      {/if}
+
       <div>
         <label
           class="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-muted"
@@ -862,55 +1131,7 @@
       </div>
     {/if}
 
-    {#if pushRejected && !result}
-      <div class="rounded-lg border border-warning/30 bg-warning/10 px-3 py-2">
-        <div class="flex items-start gap-2">
-          <TriangleAlert size={13} class="mt-0.5 shrink-0 text-warning" />
-          <div class="min-w-0 flex-1">
-            <p class="text-[10px] font-medium text-warning">Push blocked — branch has diverged</p>
-            <p class="mt-0.5 text-[9px] leading-relaxed text-dimmed">
-              The remote branch
-              <span class="font-mono text-foreground">{head}</span> has commits you don't have locally,
-              so Git won't let you push over them. Pull the remote changes in first — the pull request
-              is created automatically afterwards.
-            </p>
-            {#if headIsCurrent}
-              <div class="mt-2 flex items-center gap-1.5">
-                <button
-                  type="button"
-                  class="flex h-7 cursor-pointer items-center gap-1.5 rounded-lg border border-border px-2.5 text-[10px] font-medium text-foreground transition-colors hover:bg-elevated disabled:cursor-default disabled:opacity-50"
-                  disabled={recoverMode !== null}
-                  onclick={() => void recoverPush('rebase')}
-                >
-                  {#if recoverMode === 'rebase'}
-                    <Loader2 size={11} class="animate-spin" />
-                  {/if}
-                  Rebase &amp; push
-                </button>
-                <button
-                  type="button"
-                  class="flex h-7 cursor-pointer items-center gap-1.5 rounded-lg bg-primary px-2.5 text-[10px] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:cursor-default disabled:opacity-50"
-                  disabled={recoverMode !== null}
-                  onclick={() => void recoverPush('merge')}
-                >
-                  {#if recoverMode === 'merge'}
-                    <Loader2 size={11} class="animate-spin" />
-                  {/if}
-                  Pull &amp; push
-                </button>
-              </div>
-            {:else}
-              <p class="mt-1 text-[9px] leading-relaxed text-dimmed">
-                Check out <span class="font-mono text-foreground">{head}</span> first, then use Pull &amp;
-                push to resolve this here.
-              </p>
-            {/if}
-          </div>
-        </div>
-      </div>
-    {/if}
-
-    {#if gitState.error}
+    {#if gitState.error && !result && !composeError}
       <p
         class="rounded-lg border border-danger/20 bg-danger/10 px-3 py-1.5 text-[10px] leading-relaxed text-danger"
       >

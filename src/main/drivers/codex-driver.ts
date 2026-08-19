@@ -98,6 +98,10 @@ interface CodexAppServerTurn {
   nativeThreadId?: string
   turnId?: string
   failure?: string
+  /** Structured failure captured before `turn/completed` so terminal errors
+   *  such as usage limits keep their retry scheduling even when the completing
+   *  event only echoes the raw message. */
+  failureIssue?: AgentProviderIssue
   summaryFallbackAttempted?: boolean
   waitingForRetry?: boolean
   finished: boolean
@@ -919,6 +923,7 @@ export class CodexDriver extends PersistentCliDriver {
       } else {
         active.waitingForRetry = false
         active.failure = message
+        active.failureIssue = codexUsageLimitIssue(error, message)
       }
       return
     }
@@ -937,7 +942,8 @@ export class CodexDriver extends PersistentCliDriver {
       void this.retryWithoutReasoningSummary(active)
       return
     }
-    void this.completeAppServerTurn(active, message)
+    const issue = status === 'failed' ? (codexUsageLimitIssue(error, message ?? '') ?? active.failureIssue) : undefined
+    void this.completeAppServerTurn(active, message, issue)
   }
 
   private handleServerRequest(
@@ -1133,7 +1139,11 @@ export class CodexDriver extends PersistentCliDriver {
     )
   }
 
-  private async completeAppServerTurn(active: CodexAppServerTurn, error?: string): Promise<void> {
+  private async completeAppServerTurn(
+    active: CodexAppServerTurn,
+    error?: string,
+    issue?: AgentProviderIssue
+  ): Promise<void> {
     if (!error) {
       try {
         const result = await this.appServerRequest(active.host, 'account/rateLimits/read')
@@ -1156,7 +1166,7 @@ export class CodexDriver extends PersistentCliDriver {
         Logger.dev('Codex account rate-limit refresh unavailable:', refreshError)
       }
     }
-    await this.finishAppServerTurn(active, error)
+    await this.finishAppServerTurn(active, error, issue)
   }
 
   private async finishAppServerTurn(
@@ -1621,12 +1631,15 @@ export class CodexDriver extends PersistentCliDriver {
       return threadId ? { nativeSessionId: threadId } : null
     }
     if (type === 'turn.failed' || type === 'error') {
+      const error = errorText(value)
+      const issue = codexUsageLimitIssue(value, error)
       return {
         events: [
           {
             type: 'session.error',
             sessionId: context.sessionId,
-            error: errorText(value)
+            error,
+            ...(issue ? { issue } : {})
           }
         ]
       }
@@ -1792,6 +1805,68 @@ function codexRetryIssue(
     harnessId: 'codex',
     retryable: true,
     ...(statusCode === undefined ? {} : { statusCode })
+  }
+}
+
+/** Parse the concrete reset time Codex embeds in its usage-limit message,
+ *  e.g. "…or try again at Aug 20th, 2026 7:30 AM." */
+function codexUsageLimitResetAt(message: string, now = Date.now()): number | undefined {
+  const match = message.match(
+    /\btry again at\s+([a-z]+)\s+(\d{1,2})(?:st|nd|rd|th)?,\s*(\d{4})\s+(\d{1,2}):(\d{2})\s*(am|pm)\b/iu
+  )
+  if (!match) return undefined
+  let month: number | undefined
+  for (let index = 0; index < 12; index += 1) {
+    if (codexMonthName(index).startsWith(match[1].toLowerCase())) {
+      month = index
+      break
+    }
+  }
+  if (month === undefined) return undefined
+  const day = Number(match[2])
+  const year = Number(match[3])
+  if (day < 1 || day > 31 || year < 2000 || year > 2100) return undefined
+  const hour12 = Number(match[4])
+  const minute = Number(match[5])
+  if (hour12 < 1 || hour12 > 12 || minute < 0 || minute > 59) return undefined
+  const hour = (hour12 % 12) + (match[6].toLowerCase() === 'pm' ? 12 : 0)
+  const reset = new Date(year, month, day, hour, minute, 0, 0)
+  if (!Number.isFinite(reset.getTime()) || reset.getTime() <= now) return undefined
+  return reset.getTime()
+}
+
+function codexMonthName(index: number): string {
+  const names = [
+    'january',
+    'february',
+    'march',
+    'april',
+    'may',
+    'june',
+    'july',
+    'august',
+    'september',
+    'october',
+    'november',
+    'december'
+  ]
+  return names[index]
+}
+
+/** Build the structured `quota` issue for a Codex usage-limit failure so the
+ *  shared usage-limit card renders with a countdown and the retry scheduler can
+ *  auto-resume the thread at the reported reset time. */
+function codexUsageLimitIssue(error: Record<string, unknown> | null, message: string): AgentProviderIssue | undefined {
+  const errorInfo = stringValue(error?.['codexErrorInfo'])
+  if (errorInfo !== 'usageLimitExceeded' && !/usage limit/iu.test(message)) return undefined
+  const retryAt = codexUsageLimitResetAt(message)
+  return {
+    kind: 'quota',
+    message,
+    rawError: message,
+    harnessId: 'codex',
+    retryable: true,
+    ...(retryAt === undefined ? {} : { retryAt })
   }
 }
 

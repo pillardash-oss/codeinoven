@@ -1513,6 +1513,7 @@ export class GitState {
     title: string,
     prompt: string
   ): Promise<PrComposeReport | null> {
+    this.error = null
     try {
       return await invoke('pr:composeWithAgent', projectId, virtualTaskId, settings, title, prompt)
     } catch (reason) {

@@ -38,6 +38,7 @@ import { SpecContextService } from '../chat/spec-context-service'
 import type { UpdaterService } from '../notifications/updater-service'
 import type { ChatEngine } from '../chat/chat-engine'
 import { AGENT_BEHAVIOR_PROMPT_MAX_LENGTH } from '../../lib/agent-behavior'
+import { CIO_PROMPT_MAX_LENGTH, isCioPromptId } from '../../lib/cio-prompts'
 import type { PowerWakeService } from '../system/power-wake-service'
 import type { RetrySchedulerService } from '../system/retry-scheduler-service'
 import {
@@ -1519,6 +1520,9 @@ export function registerIpcHandlers(
   }
   ipcMain.handle('config:update', async (_, input: unknown) => {
     const patch = validateAppConfigPatch(input)
+    if (patch.agentBehaviorPrompt) {
+      await storage.saveCioPrompt('work-ethics', patch.agentBehaviorPrompt)
+    }
     const config = { ...(await storage.getConfig()), ...patch }
     await storage.saveConfig(config)
     options.powerWakeService?.setEnabled(config.keepAwakeWhileWorking)
@@ -1542,6 +1546,18 @@ export function registerIpcHandlers(
     }
     await storage.saveConfig(updated)
     return updated
+  })
+  ipcMain.handle('cioPrompts:list', () => storage.getCioPromptSettings())
+  ipcMain.handle('cioPrompts:save', async (_, id: unknown, template: unknown) => {
+    if (typeof id !== 'string' || !isCioPromptId(id)) throw new TypeError('Invalid CIO prompt ID')
+    const safeTemplate = validateBoundedString(template, 'CIO prompt', 1, CIO_PROMPT_MAX_LENGTH)
+    await storage.saveCioPrompt(id, safeTemplate)
+    return storage.getCioPromptSettings()
+  })
+  ipcMain.handle('cioPrompts:reset', async (_, id: unknown) => {
+    if (typeof id !== 'string' || !isCioPromptId(id)) throw new TypeError('Invalid CIO prompt ID')
+    await storage.resetCioPrompt(id)
+    return storage.getCioPromptSettings()
   })
   ipcMain.handle('workerNames:getSettings', () => storage.getWorkerNameSettings())
   ipcMain.handle('workerNames:saveCustom', async (_, input: unknown) => {
