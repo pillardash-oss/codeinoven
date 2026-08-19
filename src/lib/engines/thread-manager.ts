@@ -633,7 +633,7 @@ export class ThreadManager {
       updatedAt: Date.now()
     }
 
-    this.threadRepo.upsert(updated)
+    await this.threadRepo.upsertViaWorker(updated)
     this.onChange?.(updated)
     return updated
   }
@@ -648,7 +648,7 @@ export class ThreadManager {
       updatedAt: Date.now()
     }
 
-    this.threadRepo.upsert(updated)
+    await this.threadRepo.upsertViaWorker(updated)
     this.onChange?.(updated)
     return updated
   }
@@ -741,7 +741,7 @@ export class ThreadManager {
       lastActivity: Date.now()
     }
 
-    this.threadRepo.upsert(updated)
+    await this.threadRepo.upsertViaWorker(updated)
     this.onChange?.(updated)
     return updated
   }
@@ -767,7 +767,7 @@ export class ThreadManager {
       lastActivity: now
     }
 
-    this.threadRepo.upsert(updated)
+    await this.threadRepo.upsertViaWorker(updated)
     this.onChange?.(updated)
     return updated
   }
@@ -807,7 +807,7 @@ export class ThreadManager {
       updatedAt: now,
       lastActivity: now
     }
-    this.threadRepo.upsert(updated)
+    await this.threadRepo.upsertViaWorker(updated)
     this.onChange?.(updated)
     return updated
   }
@@ -854,7 +854,7 @@ export class ThreadManager {
       updatedAt: Date.now()
     }
 
-    this.threadRepo.upsert(updated)
+    await this.threadRepo.upsertViaWorker(updated)
     this.onChange?.(updated)
     return updated
   }
@@ -884,7 +884,7 @@ export class ThreadManager {
   ): Promise<Thread> {
     const existing = this.requireOwnedThread(projectId, threadId)
     const updated: Thread = { ...existing, loopIteration, updatedAt: Date.now() }
-    this.threadRepo.upsert(updated)
+    await this.threadRepo.upsertViaWorker(updated)
     this.onChange?.(updated)
     return updated
   }
@@ -905,7 +905,7 @@ export class ThreadManager {
       updatedAt: Date.now()
     }
 
-    this.threadRepo.upsert(updated)
+    await this.threadRepo.upsertViaWorker(updated)
     return updated
   }
 
@@ -917,7 +917,7 @@ export class ThreadManager {
     delete updated.sessionId
     delete updated.sessionHarnessId
 
-    this.threadRepo.upsert(updated)
+    await this.threadRepo.upsertViaWorker(updated)
     return updated
   }
 

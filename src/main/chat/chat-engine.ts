@@ -2912,8 +2912,7 @@ export class ChatEngine {
   ): Promise<{ providerId?: string; modelId?: string }> {
     if (!force) {
       const catalogs =
-        this.sharedProviderCatalog?.catalogs ??
-        (await this.listProviderSnapshot(projectId))
+        this.sharedProviderCatalog?.catalogs ?? (await this.listProviderSnapshot(projectId))
       const known = catalogs.find(
         (catalog) => catalog.harnessId === driverId && catalog.models.length > 0
       )
@@ -12977,11 +12976,7 @@ export class ChatEngine {
       return
     }
 
-    const contextWindow = this.modelContextWindow(
-      projectId,
-      settings.providerId,
-      settings.modelId
-    )
+    const contextWindow = this.modelContextWindow(projectId, settings.providerId, settings.modelId)
     if (contextWindow === undefined) return
     const contextUsed = await this.lastSessionContextUsed(
       projectId,
@@ -14732,7 +14727,7 @@ export class ChatEngine {
         this.recordToolUsageEvents(info.threadId, parentTurnId, turnAssistant)
       }
       if (parentTurnId && turnAssistant && !failure && !turnAssistant.error) {
-        this.openTurnOutcome(
+        await this.openTurnOutcome(
           sessionId,
           thread,
           info.threadId,
@@ -15188,7 +15183,7 @@ export class ChatEngine {
    * thread, or leaves the thread until cleanup. Internal orchestration turns
    * (spec generation, repairs, hidden recaps) never open a record.
    */
-  private openTurnOutcome(
+  private async openTurnOutcome(
     sessionId: string,
     thread: Thread | null,
     threadId: string,
@@ -15196,7 +15191,7 @@ export class ChatEngine {
     parentTurnId: string,
     turnAssistant: AgentMessage,
     awaitingUser: boolean
-  ): void {
+  ): Promise<void> {
     if (awaitingUser) return
     if (!thread?.settings) return
     const parentOrigin = mirror.find((message) => message.id === parentTurnId)?.origin
@@ -15209,7 +15204,7 @@ export class ChatEngine {
           ? 'assignment'
           : 'main'
     const { costUsd, costStatus } = this.assistantTurnCostAccounting(turnAssistant)
-    this.turnFeedbackRepo.openPending({
+    await this.turnFeedbackRepo.openPendingViaWorker({
       id: `outcome:${parentTurnId}`,
       threadId,
       parentTurnId,
