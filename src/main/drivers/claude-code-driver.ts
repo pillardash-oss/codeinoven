@@ -24,6 +24,10 @@ import { fastSelectionModelId, resolveFastModelId } from '../../lib/fast-inferen
 import { classifyProviderIssue } from '../../lib/provider-issue'
 import type { StorageEngine } from '../storage/storage-engine'
 import { BaseUrlProviderService } from '../providers/base-url-provider-service'
+import {
+  CLAUDE_CREDENTIAL_LOCK_NAME,
+  CrossProcessMutex
+} from '../system/cross-process-mutex'
 import { Logger } from '../system/logger'
 import { SecretVault } from '../storage/secret-vault'
 import type {
@@ -1337,6 +1341,13 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
   /** Bounds concurrent one-shot claude spawns to keep the fd table stable. */
   private readonly oneShotSpawnGate = new OneShotSpawnGate(ONE_SHOT_SPAWN_LIMIT)
   /**
+   * Cross-process credential-refresh mutex. Multiple app instances each hold
+   * their own in-memory auth slot, so they cannot serialize each other's claude
+   * spawns; this shared atomic lock closes that gap and is also respected by an
+   * externally-launched CLI sharing the same config root.
+   */
+  private readonly crossProcessAuthLock = new CrossProcessMutex(CLAUDE_CREDENTIAL_LOCK_NAME)
+  /**
    * Sessions whose live process proved authentication this run, with the time
    * it was proven. A session only counts while its proof is fresh (within
    * ACCESS_TOKEN_FRESH_MS): once that window passes, the shared access token
@@ -1869,7 +1880,9 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
     }
     let release: (() => void) | undefined
     this.authSlot = new Promise<void>((resolve) => (release = resolve))
+    const releaseCrossProcess = await this.crossProcessAuthLock.acquire()
     return () => {
+      releaseCrossProcess()
       release?.()
       this.authSlotHeld = false
     }
