@@ -616,10 +616,16 @@
     }, 2000)
   }
 
-  /** PR copy is a direct virtual task and must never enter an Engineering lifecycle. */
+  /**
+   * PR copy is a direct virtual task and must never enter an Engineering
+   * lifecycle. It is an ephemeral one-shot session, so it always runs in the
+   * low-exposure `auto_review` permission mode regardless of what the last-used
+   * or persisted thread-level permission was — never `full_access`.
+   */
   function composeVirtualTaskSettings(): ThreadSettings {
     return {
       ...composeSettings,
+      permissionLevel: 'auto_review',
       engineeringMode: false,
       assignmentMode: false,
       loopMode: false
