@@ -35,6 +35,8 @@ const WEB_TOOL_PROVIDERS = new Set<WebToolProviderId>(['exa', 'firecrawl', 'brav
 
 /** Stable id of the app-seeded image-descriptor utility. */
 export const APP_IMAGE_DESCRIPTOR_UTILITY_ID = 'codeinoven:image-descriptor'
+/** Stable id of the app-owned, always-active MCP host recovery utility. */
+export const APP_RETRIEVE_MCP_HOST_UTILITY_ID = 'codeinoven:retrieve-mcp-host'
 
 interface UtilityRegistryFile {
   version: number
@@ -68,35 +70,62 @@ export class UtilityRegistryService {
     await this.seeding
   }
 
-  /** Idempotently seed the app-owned image-descriptor utility when missing. */
+  /** Idempotently seed every app-owned utility when missing. */
   private async performSeed(): Promise<void> {
     const registry = await this.loadRaw()
-    if (registry.utilities.some((utility) => utility.id === APP_IMAGE_DESCRIPTOR_UTILITY_ID)) {
-      this.appDefaultsSeeded = true
-      return
-    }
     const now = Date.now()
-    registry.utilities.push({
-      id: APP_IMAGE_DESCRIPTOR_UTILITY_ID,
-      kind: 'image_descriptor',
-      name: 'Image descriptor',
-      description:
-        'Describes images with a vision-capable model so text-only agents can reason about screenshots, video frames, and other media. Pick a vision model to pin it; otherwise the app chooses one automatically.',
-      enabled: true,
-      activation: 'on_demand',
-      scope: { level: 'global' },
-      config: { harnessId: '', providerId: '', modelId: '' },
-      credentials: [],
-      harnessBindings: listHarnesses().map((harness) => ({
-        harnessId: harness.id,
-        strategy: 'native',
-        nativeCapability: 'image_descriptor'
-      })),
-      appOwned: true,
-      createdAt: now,
-      updatedAt: now
-    } satisfies UtilityDefinition)
-    await this.storage.write(REGISTRY_PATH, registry)
+    const harnesses = listHarnesses()
+    const defaults: UtilityDefinition[] = [
+      {
+        id: APP_IMAGE_DESCRIPTOR_UTILITY_ID,
+        kind: 'image_descriptor',
+        name: 'Image descriptor',
+        description:
+          'Describes images with a vision-capable model so text-only agents can reason about screenshots, video frames, and other media. Pick a vision model to pin it; otherwise the app chooses one automatically.',
+        enabled: true,
+        activation: 'on_demand',
+        scope: { level: 'global' },
+        config: { harnessId: '', providerId: '', modelId: '' },
+        credentials: [],
+        harnessBindings: harnesses.map((harness) => ({
+          harnessId: harness.id,
+          strategy: 'native',
+          nativeCapability: 'image_descriptor'
+        })),
+        appOwned: true,
+        createdAt: now,
+        updatedAt: now
+      },
+      {
+        id: APP_RETRIEVE_MCP_HOST_UTILITY_ID,
+        kind: 'skill',
+        name: 'retrieve_mcp_host',
+        description:
+          'Recovers the live app-managed MCP/utility gateway host when the previously advertised loopback port belongs to another or stopped CodeInOven instance.',
+        enabled: true,
+        activation: 'always',
+        scope: { level: 'global' },
+        config: {
+          instructions:
+            'This app-owned utility is always active. If the app-managed gateway is unreachable, use the exact retrieve_mcp_host shell command supplied in the current turn instructions. Do not search for or activate this utility first; its shell transport is intentionally independent of MCP.'
+        },
+        credentials: [],
+        harnessBindings: harnesses.map((harness) => ({
+          harnessId: harness.id,
+          strategy: 'skill',
+          transportName: 'retrieve_mcp_host'
+        })),
+        appOwned: true,
+        createdAt: now,
+        updatedAt: now
+      }
+    ]
+    const existingIds = new Set(registry.utilities.map((utility) => utility.id))
+    const missing = defaults.filter((utility) => !existingIds.has(utility.id))
+    if (missing.length > 0) {
+      registry.utilities.push(...missing)
+      await this.storage.write(REGISTRY_PATH, registry)
+    }
     this.appDefaultsSeeded = true
   }
 
@@ -178,8 +207,11 @@ export class UtilityRegistryService {
           patch.harnessBindings) !== undefined
       ) {
         throw new Error(
-          'The app-owned image descriptor utility only allows picking a vision model; everything else is locked'
+          'App-owned utility identity, availability, scope, credentials, and bindings are locked'
         )
+      }
+      if (current.id === APP_RETRIEVE_MCP_HOST_UTILITY_ID && patch.config !== undefined) {
+        throw new Error('The app-owned retrieve_mcp_host utility is fully managed')
       }
 
       const normalized = normalizeInput({
@@ -212,7 +244,7 @@ export class UtilityRegistryService {
       const index = registry.utilities.findIndex((candidate) => candidate.id === id)
       if (index === -1) return false
       if (registry.utilities[index].appOwned) {
-        throw new Error('The app-owned image descriptor utility cannot be deleted')
+        throw new Error('App-owned utilities cannot be deleted')
       }
       registry.utilities.splice(index, 1)
       return true
