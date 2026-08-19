@@ -1344,6 +1344,16 @@ class ContextSidebarState {
       this.focusInContext(thread, thread.activeTabIds[kind] ?? existing.id)
       return
     }
+    // Panels bound to live thread-scoped sessions/content (temporary chat,
+    // sub-agents, coordinator) cannot be produced with meaningful data for a
+    // thread that never opened them, so there is no tab to focus here. Instead
+    // of leaving an empty-looking panel open, hide the sidebar in the new
+    // thread; returning to a thread that does own one restores it via the
+    // `existing` branch above.
+    if (kind === 'coordinator' || kind === 'temporary-chat' || kind === 'subagent') {
+      project.visible = false
+      return
+    }
     if (kind === 'diff') this.openDiff(projectId, threadId)
     else if (kind === 'sources') this.openSources(projectId, threadId)
     else if (kind === 'debugger') this.openDebugger(projectId, threadId)
