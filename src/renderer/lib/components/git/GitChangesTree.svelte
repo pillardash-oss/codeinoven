@@ -286,9 +286,18 @@
             onToggleSelect(change, true)
             return
           }
+          if (change.status === 'conflicted') {
+            onResolveConflict?.(change.path)
+            return
+          }
           onToggleDiff(change)
         }}
-        onkeydown={(e: KeyboardEvent) => e.key === 'Enter' && onToggleDiff(change)}
+        onkeydown={(e: KeyboardEvent) => {
+          if (e.key === 'Enter') {
+            if (change.status === 'conflicted') onResolveConflict?.(change.path)
+            else onToggleDiff(change)
+          }
+        }}
       >
         {#if change.status !== 'conflicted'}
           <span

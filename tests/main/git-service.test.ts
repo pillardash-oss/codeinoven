@@ -336,15 +336,23 @@ describe('GitService', () => {
 
     // Leftover markers must refuse to save.
     await expect(
-      service.saveConflictResolution(directory, 'conflict.txt', '<<<<<<< HEAD\nmain\n=======\nfeature\n>>>>>>> feature\n')
+      service.saveConflictResolution(
+        directory,
+        'conflict.txt',
+        '<<<<<<< HEAD\nmain\n=======\nfeature\n>>>>>>> feature\n'
+      )
     ).rejects.toThrow('unresolved conflict markers')
 
     // A clean merged resolution writes, stages, and clears the conflicted set.
-    const resolved = await service.saveConflictResolution(directory, 'conflict.txt', 'main + feature\n')
+    const resolved = await service.saveConflictResolution(
+      directory,
+      'conflict.txt',
+      'main + feature\n'
+    )
     expect(resolved.conflicted).not.toContain('conflict.txt')
-    expect(
-      resolved.changes.some((change) => change.path === 'conflict.txt' && change.staged)
-    ).toBe(true)
+    expect(resolved.changes.some((change) => change.path === 'conflict.txt' && change.staged)).toBe(
+      true
+    )
     const onDisk = await readFile(join(directory, 'conflict.txt'), 'utf-8')
     expect(onDisk).toBe('main + feature\n')
   })

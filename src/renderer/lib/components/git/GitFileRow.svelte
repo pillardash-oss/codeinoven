@@ -113,13 +113,21 @@
             'flex min-h-9 min-w-0 flex-1 items-center gap-2 px-3 text-left transition-colors',
             selected ? 'bg-primary/10' : 'hover:bg-elevated/50'
           ]}
-          title={expanded ? `Collapse diff for ${change.path}` : `Show diff for ${change.path}`}
+          title={change.status === 'conflicted' && onResolveConflict
+            ? `Resolve conflict in ${change.path}`
+            : expanded
+              ? `Collapse diff for ${change.path}`
+              : `Show diff for ${change.path}`}
           aria-expanded={expanded}
           aria-pressed={selectable ? selected : undefined}
           onclick={(event: MouseEvent) => {
             if (selectable && onToggleSelect && (event.metaKey || event.ctrlKey)) {
               event.preventDefault()
               onToggleSelect(change, true)
+              return
+            }
+            if (change.status === 'conflicted' && onResolveConflict) {
+              onResolveConflict(change.path)
               return
             }
             onToggleDiff()
