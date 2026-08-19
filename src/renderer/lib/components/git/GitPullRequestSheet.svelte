@@ -12,7 +12,11 @@
   import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
   import { modelKey } from '$lib/model-keys'
-  import { prLifecycleStore, type PrDockStatus } from '$lib/stores/pr-lifecycle.svelte'
+  import {
+    prLifecycleStore,
+    type PrDockDescriptor,
+    type PrDockStatus
+  } from '$lib/stores/pr-lifecycle.svelte'
   import { getProjectIcon } from '$lib/project-icons'
   import type {
     Project,
@@ -264,14 +268,29 @@
   const dockTitle = $derived(prDockTitle(result, title))
   const dockProjectName = $derived(projectMeta?.name ?? '')
 
+  // The sheet lives inside `PrDockHost`'s `{#each store.drafts}`, so writing the
+  // store from a bare effect would re-render the host, re-run this effect and
+  // write again — a read/write cycle. Reading back the current descriptor and
+  // writing only when a field actually changed makes the sync idempotent.
   $effect(() => {
     if (!draftId) return
-    prLifecycleStore.updateDock(draftId, {
+    const next: PrDockDescriptor = {
       projectName: dockProjectName,
       iconUrl: resolvedProjectIcon,
       status: dockStatus,
       title: dockTitle
-    })
+    }
+    const current = prLifecycleStore.dockFor(draftId)
+    if (!current) return
+    if (
+      current.projectName === next.projectName &&
+      current.iconUrl === next.iconUrl &&
+      current.status === next.status &&
+      current.title === next.title
+    ) {
+      return
+    }
+    prLifecycleStore.updateDock(draftId, next)
   })
 
   /**
@@ -734,13 +753,17 @@
   defaultHeight={680}
 >
   {#snippet headerPrefix()}
-    {#if resolvedProjectIcon}
-      <img src={resolvedProjectIcon} alt="" class="h-4 w-4 shrink-0 rounded" />
-    {:else}
-      <GitPullRequest size={13} class="shrink-0 text-dimmed" aria-hidden="true" />
-    {/if}
     {#if dockProjectName}
-      <span class="max-w-28 truncate text-[10px] font-medium text-muted">{dockProjectName}</span>
+      <span
+        class="flex min-w-0 max-w-48 shrink-0 items-center gap-1.5 rounded-full border border-border bg-elevated py-0.5 pr-2.5 pl-1"
+      >
+        {#if resolvedProjectIcon}
+          <img src={resolvedProjectIcon} alt="" class="h-4 w-4 shrink-0 rounded" />
+        {:else}
+          <GitPullRequest size={13} class="shrink-0 text-dimmed" aria-hidden="true" />
+        {/if}
+        <span class="truncate text-[10px] font-semibold text-foreground">{dockProjectName}</span>
+      </span>
     {/if}
   {/snippet}
 

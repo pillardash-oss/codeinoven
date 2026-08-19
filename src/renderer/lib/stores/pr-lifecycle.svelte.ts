@@ -104,11 +104,29 @@ class PrLifecycleStore {
     this.expand(id)
   }
 
-  /** Update the live dock descriptor a minimized sheet reports to the host dock. */
+  /** Current dock descriptor for a draft, or null when the draft is gone. */
+  dockFor(id: string): PrDockDescriptor | null {
+    return this.drafts.find((draft) => draft.id === id)?.dock ?? null
+  }
+
+  /**
+   * Update the live dock descriptor a sheet reports to the host dock. The write
+   * is idempotent: when every field is unchanged the drafts array is left
+   * untouched so no re-render cascades back into the sheet's reporting effect.
+   */
   updateDock = (id: string, patch: Partial<PrDockDescriptor>): void => {
-    this.drafts = this.drafts.map((draft) =>
-      draft.id === id ? { ...draft, dock: { ...draft.dock, ...patch } } : draft
-    )
+    const current = this.drafts.find((draft) => draft.id === id)?.dock
+    if (!current) return
+    const merged = { ...current, ...patch }
+    if (
+      merged.projectName === current.projectName &&
+      merged.iconUrl === current.iconUrl &&
+      merged.status === current.status &&
+      merged.title === current.title
+    ) {
+      return
+    }
+    this.drafts = this.drafts.map((draft) => (draft.id === id ? { ...draft, dock: merged } : draft))
   }
 
   close = (id: string): void => {
