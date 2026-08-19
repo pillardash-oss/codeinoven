@@ -553,7 +553,7 @@ export class RemoteRpcDispatcher {
           args[2] as ThreadSettings
         )
       case 'thread:setContextUsage':
-        this.threadManager.setContextUsage(
+        await this.threadManager.setContextUsage(
           this.string(args[0]),
           this.string(args[1]),
           args[2] as ThreadContextUsage

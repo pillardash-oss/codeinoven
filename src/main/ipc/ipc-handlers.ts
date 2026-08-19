@@ -5029,10 +5029,10 @@ export function registerIpcHandlers(
   )
   ipcMain.handle(
     'thread:setContextUsage',
-    (_, projectId: unknown, threadId: unknown, usage: unknown) => {
+    async (_, projectId: unknown, threadId: unknown, usage: unknown) => {
       const parsed = parseThreadContextUsage(usage)
       if (!parsed) throw new TypeError('Thread context usage is malformed')
-      threadManager.setContextUsage(
+      await threadManager.setContextUsage(
         validateEntityId(projectId, 'Project ID'),
         validateEntityId(threadId, 'Thread ID'),
         parsed

@@ -864,10 +864,17 @@ export class ThreadManager {
    * meter commits too often (every quiet second of a long turn) for every write
    * to re-render the sidebar, and the snapshot is only needed to seed the next
    * mount. The row is deleted with the thread, so no orphan cleanup is needed.
+   *
+   * The write runs on the database worker with ownership inlined into the SQL
+   * guard, so this hot path never reads a full thread row (or its harness_usage
+   * GROUP BY) on the main thread just to decide whether to persist.
    */
-  setContextUsage(projectId: string, threadId: string, contextUsage: ThreadContextUsage): void {
-    this.requireOwnedThread(projectId, threadId)
-    this.threadRepo.updateContextUsage(threadId, contextUsage)
+  async setContextUsage(
+    projectId: string,
+    threadId: string,
+    contextUsage: ThreadContextUsage
+  ): Promise<void> {
+    await this.threadRepo.updateContextUsageViaWorker(projectId, threadId, contextUsage)
   }
 
   async setLoopIteration(
