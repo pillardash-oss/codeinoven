@@ -33,7 +33,17 @@ import {
 } from './thread-events'
 import { updateRetryWakeWindow } from './thread-events'
 import { MemoryService, estimateTokens } from './memory-service'
-import { PromptAssembler, type BehaviorExecutionScope, type BehaviorMode } from './prompt-assembler'
+import {
+  PromptAssembler,
+  type BehaviorExecutionScope,
+  type BehaviorMode,
+  type WorkspaceScopeMode
+} from './prompt-assembler'
+import {
+  episodeFromPieces,
+  tokenUsageAttribution,
+  type AttributionMode
+} from './token-usage-attribution'
 import { PermissionPolicy, type PermissionDecisionResult } from '../permissions/permission-policy'
 import {
   validateBoundedString,
@@ -597,6 +607,17 @@ const AUDIT_ALLOWED_TOOLS = [
 
 /** Read-only research tools for disposable generation sessions that read artifact files. */
 const PROMPT_READ_ONLY_TOOLS = ['read', 'glob', 'grep', 'list']
+
+/** Map a turn's behavior mode/scope into the dev-only attribution mode label. */
+function attributionModeFor(
+  mode: BehaviorMode,
+  executionScope: BehaviorExecutionScope,
+  fileSystemMode: boolean
+): AttributionMode {
+  if (executionScope === 'project-thread') return 'engineering'
+  if (executionScope === 'ephemeral') return 'ephemeral'
+  return fileSystemMode ? 'file-system-chat' : 'inbox-chat'
+}
 
 function engineeringArtifactBoundaryInstruction(artifactDirectory: string): string {
   const normalizedDirectory = artifactDirectory.replace(/\\/gu, '/')
@@ -3742,7 +3763,8 @@ export class ChatEngine {
     projectPath: string,
     mode: BehaviorMode,
     settings?: ThreadSettings,
-    executionScope: BehaviorExecutionScope = 'project-thread'
+    executionScope: BehaviorExecutionScope = 'project-thread',
+    attributionKey?: string
   ): Promise<string> {
     try {
       const threadSettings =
@@ -3750,7 +3772,15 @@ export class ChatEngine {
       const harnessId = threadSettings?.harnessId ?? 'opencode'
       const driver = this.drivers.get(harnessId)
       const config = await this.storage.getConfig()
-      return await this.promptAssembler.getAssembledPrompt(
+      // Trimmed modes get a compact scope guard instead of the full workspace
+      // block; pure inbox chat and image description (no project scope) omit it.
+      const workspaceScope: WorkspaceScopeMode =
+        executionScope === 'project-thread'
+          ? 'full'
+          : executionScope === 'ephemeral' || threadSettings?.fileSystemMode === true
+            ? 'abbreviated'
+            : 'omitted'
+      const assembled = await this.promptAssembler.getAssembledPromptWithLayers(
         projectId,
         threadId,
         projectPath,
@@ -3766,8 +3796,21 @@ export class ChatEngine {
         threadSettings?.providerId && threadSettings.modelId
           ? modelKey(harnessId, threadSettings.providerId, threadSettings.modelId)
           : undefined,
-        executionScope
+        executionScope,
+        workspaceScope
       )
+      tokenUsageAttribution.recordPromptAttribution(
+        episodeFromPieces({
+          key: attributionKey ?? `${harnessId}:${threadId}`,
+          mode: attributionModeFor(mode, executionScope, threadSettings?.fileSystemMode === true),
+          driverId: harnessId,
+          pieces: assembled.layers.map((layer) => ({
+            title: layer.title,
+            content: layer.content
+          }))
+        })
+      )
+      return assembled.prompt
     } catch (error) {
       Logger.error('Behavior prompt assembly failed', {
         projectId,
@@ -4962,7 +5005,8 @@ export class ChatEngine {
         projectPath,
         behaviorMode,
         settings,
-        isChatThread ? 'standalone-chat' : 'project-thread'
+        isChatThread ? 'standalone-chat' : 'project-thread',
+        messageId
       ),
       this.buildHistoryRecap(projectId, threadId, driverId),
       transportPromise
@@ -5401,6 +5445,7 @@ export class ChatEngine {
       ]
         .filter(Boolean)
         .join('\n\n')
+      const userMessageId = createMessageId()
       const request: SendPromptOptions = {
         sessionId: temporary.sessionId,
         settings: {
@@ -5413,8 +5458,19 @@ export class ChatEngine {
         systemPrompt,
         allowedTools: TEMPORARY_CHAT_ALLOWED_TOOLS,
         readOnly: true,
-        userMessageId: createMessageId()
+        userMessageId
       }
+      tokenUsageAttribution.recordPromptAttribution(
+        episodeFromPieces({
+          key: `eph:${temporary.sessionId}`,
+          mode: 'ephemeral',
+          driverId: temporary.driverId,
+          pieces: [
+            { title: 'System prompt', content: systemPrompt },
+            { title: 'User text', content: promptText }
+          ]
+        })
+      )
       if (temporary.isolated && driver instanceof OpenCodeDriver) {
         await driver.sendPrompt(temporary.projectPath, request, temporary.isolated)
       } else {
@@ -5433,6 +5489,13 @@ export class ChatEngine {
       const response = [...messages].reverse().find((message) => message.role === 'assistant')
       if (!response) throw new Error('The temporary chat returned no response')
       if (response.error) throw new Error(response.error)
+      tokenUsageAttribution.recordTurnTotals({
+        key: `eph:${temporary.sessionId}`,
+        providerId: response.providerId ?? settings.providerId ?? null,
+        modelId: response.modelId ?? settings.modelId ?? null,
+        reportedInputTokens: response.normalizedUsage?.uncachedInput ?? null,
+        reportedTotalTokens: response.normalizedUsage?.rawTotal ?? null
+      })
       this.refreshTemporaryChatExpiry(temporary)
       await this.notifyTemporaryChatCompletion(projectId, threadId, temporary.id, 'completed')
       return response
@@ -5500,6 +5563,14 @@ export class ChatEngine {
         readOnly: false,
         userMessageId: turnId
       }
+      tokenUsageAttribution.recordPromptAttribution(
+        episodeFromPieces({
+          key: `pr:${sessionId}`,
+          mode: 'pr-compose',
+          driverId,
+          pieces: [{ title: 'Virtual task prompt', content: text }]
+        })
+      )
       if (isolated && driver instanceof OpenCodeDriver) {
         await driver.sendPrompt(projectPath, request, isolated)
       } else {
@@ -5513,6 +5584,13 @@ export class ChatEngine {
       const response = [...messages].reverse().find((message) => message.role === 'assistant')
       if (!response) throw new Error(`${title} returned no response`)
       if (response.error) throw new Error(response.error)
+      tokenUsageAttribution.recordTurnTotals({
+        key: `pr:${sessionId}`,
+        providerId: response.providerId ?? settings.providerId ?? null,
+        modelId: response.modelId ?? settings.modelId ?? null,
+        reportedInputTokens: response.normalizedUsage?.uncachedInput ?? null,
+        reportedTotalTokens: response.normalizedUsage?.rawTotal ?? null
+      })
       return response
     } catch (error) {
       if (isolated && driver instanceof OpenCodeDriver) {
@@ -6403,15 +6481,24 @@ export class ChatEngine {
         'Image upload or vision-model response',
         () => new ImageDescriptorInactivityError(timeoutMs, attempt, nextTimeoutMs)
       )
+      const imageDescriptionPrompt = await this.cioPrompt('image-description')
       const request: SendPromptOptions = {
         sessionId,
         settings,
-        text: await this.cioPrompt('image-description'),
+        text: imageDescriptionPrompt,
         attachments: [attachment],
         readOnly: true,
         allowedTools: [],
         userMessageId: createMessageId()
       }
+      tokenUsageAttribution.recordPromptAttribution(
+        episodeFromPieces({
+          key: `img:${sessionId}`,
+          mode: 'image-description',
+          driverId: selection.harnessId,
+          pieces: [{ title: 'Image descriptor prompt', content: imageDescriptionPrompt }]
+        })
+      )
       if (isolated && driver instanceof OpenCodeDriver) {
         await driver.sendPrompt(projectPath, request, isolated)
       } else {
@@ -6425,6 +6512,13 @@ export class ChatEngine {
       response = [...messages].reverse().find((message) => message.role === 'assistant')
       if (!response) throw new Error('The vision model returned no description')
       if (response.error) throw new Error(response.error)
+      tokenUsageAttribution.recordTurnTotals({
+        key: `img:${sessionId}`,
+        providerId: response.providerId ?? settings.providerId ?? null,
+        modelId: response.modelId ?? settings.modelId ?? null,
+        reportedInputTokens: response.normalizedUsage?.uncachedInput ?? null,
+        reportedTotalTokens: response.normalizedUsage?.rawTotal ?? null
+      })
       const text = response.parts
         .filter((part): part is Extract<AgentPart, { type: 'text' }> => part.type === 'text')
         .map((part) => part.text)
@@ -9377,6 +9471,17 @@ export class ChatEngine {
         'Brainstorm generation'
       )
       try {
+        const brainstormSystemPrompt = [
+          useStructuredOutput
+            ? await this.cioPrompt('brainstorm-document')
+            : [
+                await this.cioPrompt('brainstorm-document'),
+                BRAINSTORM_JSON_FALLBACK_SYSTEM_PROMPT
+              ].join('\n\n'),
+          behaviorPrompt
+        ]
+          .filter(Boolean)
+          .join('\n\n')
         const prompt: SendPromptOptions = {
           sessionId,
           settings: {
@@ -9390,17 +9495,7 @@ export class ChatEngine {
             .filter(Boolean)
             .join('\n\n'),
           attachments: [],
-          systemPrompt: [
-            useStructuredOutput
-              ? await this.cioPrompt('brainstorm-document')
-              : [
-                  await this.cioPrompt('brainstorm-document'),
-                  BRAINSTORM_JSON_FALLBACK_SYSTEM_PROMPT
-                ].join('\n\n'),
-            behaviorPrompt
-          ]
-            .filter(Boolean)
-            .join('\n\n'),
+          systemPrompt: brainstormSystemPrompt,
           allowedTools: BRAINSTORM_RESEARCH_ALLOWED_TOOLS,
           readOnly: true,
           ...(useStructuredOutput
@@ -9412,6 +9507,17 @@ export class ChatEngine {
               }
             : {})
         }
+        tokenUsageAttribution.recordPromptAttribution(
+          episodeFromPieces({
+            key: `brainstorm:${sessionId}`,
+            mode: 'brainstorm',
+            driverId,
+            pieces: [
+              { title: 'Brainstorm system prompt', content: brainstormSystemPrompt },
+              { title: 'Brainstorm source', content: prompt.text }
+            ]
+          })
+        )
         if (isolated && driver instanceof OpenCodeDriver) {
           await driver.sendPrompt(projectPath, prompt, isolated)
         } else {
@@ -9428,6 +9534,13 @@ export class ChatEngine {
         const response = [...generated].reverse().find((message) => message.role === 'assistant')
         if (!response) throw new Error('The Brainstorm agent returned no response')
         if (response.error) throw new Error(response.error)
+        tokenUsageAttribution.recordTurnTotals({
+          key: `brainstorm:${sessionId}`,
+          providerId: response.providerId ?? settings.providerId ?? null,
+          modelId: response.modelId ?? settings.modelId ?? null,
+          reportedInputTokens: response.normalizedUsage?.uncachedInput ?? null,
+          reportedTotalTokens: response.normalizedUsage?.rawTotal ?? null
+        })
         if (response.structuredOutput !== undefined) {
           return finish(
             this.parseBrainstormGeneratedOutput(response.structuredOutput, useStructuredOutput)
@@ -15142,6 +15255,13 @@ export class ChatEngine {
           ? 'assignment'
           : 'main'
     const normalizedUsage = message.normalizedUsage
+    tokenUsageAttribution.recordTurnTotals({
+      key: parentTurnId,
+      providerId: message.providerId ?? thread?.settings?.providerId ?? null,
+      modelId: message.modelId ?? thread?.settings?.modelId ?? null,
+      reportedInputTokens: normalizedUsage?.uncachedInput ?? null,
+      reportedTotalTokens: normalizedUsage?.rawTotal ?? null
+    })
     const { costUsd: knownCost, costStatus } = this.assistantTurnCostAccounting(message)
     const estimated = costStatus === 'estimated'
     const details: UsageEventDetails = {
