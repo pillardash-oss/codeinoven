@@ -1,4 +1,5 @@
 <script lang="ts">
+  import type { Attachment } from 'svelte/attachments'
   import { terminalSessions, type TerminalSession } from '$lib/terminal/sessions'
 
   interface Props {
@@ -8,7 +9,6 @@
 
   let { terminalId, projectId }: Props = $props()
 
-  let container: HTMLDivElement | undefined = $state(undefined)
   let terminalError: string | undefined = $state(undefined)
   let loading = $state(true)
   let retrySequence = $state(0)
@@ -17,39 +17,47 @@
     retrySequence += 1
   }
 
-  // Re-bind whenever the thread (and therefore the session) changes.
-  // On cleanup we only disconnect the observer — the terminal and PTY are
-  // owned by the session manager and tied to the thread, so state survives
-  // closing the panel, dock changes, and navigation.
-  $effect(() => {
-    if (!container) return
-    void retrySequence
+  function attachTerminal(
+    currentTerminalId: string,
+    currentProjectId: string,
+    retry: number
+  ): Attachment<HTMLDivElement> {
+    void retry
+    return (container) => {
+      let cancelled = false
+      loading = true
+      terminalError = undefined
 
-    let cancelled = false
-    loading = true
-    terminalError = undefined
+      void terminalSessions
+        .getOrCreate(currentTerminalId)
+        .then(async (session: TerminalSession) => {
+          if (cancelled) return
+          await terminalSessions.attach(session, container, currentProjectId)
+          if (!cancelled) loading = false
+        })
+        .catch((error: unknown) => {
+          if (cancelled) return
+          loading = false
+          terminalError = error instanceof Error ? error.message : String(error)
+        })
 
-    void terminalSessions
-      .getOrCreate(terminalId)
-      .then(async (session: TerminalSession) => {
-        if (cancelled || !container) return
-        await terminalSessions.attach(session, container, projectId)
-        if (!cancelled) loading = false
-      })
-      .catch((error: unknown) => {
-        if (cancelled) return
-        loading = false
-        terminalError = error instanceof Error ? error.message : String(error)
-      })
-
-    return () => {
-      cancelled = true
+      // The terminal and PTY belong to the session manager, so detaching this
+      // panel only cancels its pending UI work. Scrollback survives dock moves.
+      return () => {
+        cancelled = true
+      }
     }
-  })
+  }
 </script>
 
-<div tabindex="-1" class="terminal-wrap relative h-full w-full overflow-hidden bg-app">
-  <div bind:this={container} class="h-full w-full px-2 py-1"></div>
+<div
+  tabindex="-1"
+  class="terminal-wrap relative h-full w-full overflow-hidden bg-terminal-background"
+>
+  <div
+    class="h-full w-full overflow-hidden py-1 pl-2"
+    {@attach attachTerminal(terminalId, projectId, retrySequence)}
+  ></div>
   {#if loading}
     <div class="absolute inset-0 flex items-center justify-center bg-app text-xs text-muted">
       Loading terminal…
@@ -74,7 +82,11 @@
 <style>
   .terminal-wrap :global(.terminal-host) {
     height: 100%;
-    width: 100%;
+    /* FitAddon reserves 15px for a DOM scrollbar, but ghostty-web paints its
+       scrollbar inside the canvas. Give that reservation back to the fitter so
+       the final terminal column reaches the panel edge instead of leaving a
+       permanent gutter. The wrapper clips the intentionally oversized host. */
+    width: calc(100% + 15px);
     overflow: hidden;
     outline: none;
     padding: 4px 0;

@@ -29,6 +29,7 @@ interface ThreadRow {
   settings: string | null
   context_usage: string | null
   session_id: string | null
+  session_harness_id: string | null
   dismissed_spec_id: string | null
   dismissed_spec_version: number | null
   audit_state: string | null
@@ -59,7 +60,7 @@ function parseStoredJson(raw: string): unknown {
 
 /**
  * Validate a raw context-usage snapshot with integrity checks so a corrupt or
- * legacy blob can never crash a thread list or render a bogus meter. Returns
+ * corrupt blob can never crash a thread list or render a bogus meter. Returns
  * null when the shape is unusable.
  */
 export function parseThreadContextUsage(value: unknown): ThreadContextUsage | null {
@@ -136,6 +137,7 @@ function rowToThread(row: ThreadRow): Thread {
       ? (parseThreadContextUsage(parseStoredJson(row.context_usage)) ?? undefined)
       : undefined,
     sessionId: row.session_id ?? undefined,
+    sessionHarnessId: row.session_harness_id ?? undefined,
     dismissedSpecId: row.dismissed_spec_id ?? undefined,
     dismissedSpecVersion: row.dismissed_spec_version ?? undefined,
     auditState: (row.audit_state as Thread['auditState']) ?? undefined,
@@ -207,7 +209,7 @@ export interface ThreadListOptions {
   limit?: number
   /** Rows to skip before returning (offset paging). */
   offset?: number
-  /** Exclude legacy rows pending startup deletion when false. */
+  /** Exclude archived rows when false. */
   includeArchived?: boolean
   /**
    * Ordering for the returned rows.
@@ -250,91 +252,105 @@ interface MessageMatchRow {
   snippet_timestamp: number
 }
 
+const THREAD_UPSERT_SQL = `INSERT INTO threads(
+  id, project_id, provider_id, title, title_source, status,
+  pinned, pinned_at, sort_order, scope_sort_order, archived, read,
+  branch, feature_slug, scope_bucket_id, settings, context_usage,
+  session_id, session_harness_id, dismissed_spec_id, dismissed_spec_version,
+  audit_state, loop_iteration, active_audit_id, active_audit_version,
+  assignment_id, assignment_role, assignment_task_id,
+  coordinator_thread_id, achievement_role, auditor_thread_id, user_input_locked,
+  created_at, updated_at, last_activity, working_directory
+) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+ON CONFLICT(id) DO UPDATE SET
+  project_id=excluded.project_id,
+  provider_id=excluded.provider_id,
+  title=excluded.title,
+  title_source=excluded.title_source,
+  status=excluded.status,
+  pinned=excluded.pinned,
+  sort_order=excluded.sort_order,
+  scope_sort_order=excluded.scope_sort_order,
+  archived=excluded.archived,
+  read=excluded.read,
+  branch=excluded.branch,
+  feature_slug=excluded.feature_slug,
+  scope_bucket_id=excluded.scope_bucket_id,
+  settings=excluded.settings,
+  context_usage=excluded.context_usage,
+  session_id=excluded.session_id,
+  session_harness_id=excluded.session_harness_id,
+  dismissed_spec_id=excluded.dismissed_spec_id,
+  dismissed_spec_version=excluded.dismissed_spec_version,
+  audit_state=excluded.audit_state,
+  loop_iteration=excluded.loop_iteration,
+  active_audit_id=excluded.active_audit_id,
+  active_audit_version=excluded.active_audit_version,
+  assignment_id=excluded.assignment_id,
+  assignment_role=excluded.assignment_role,
+  assignment_task_id=excluded.assignment_task_id,
+  coordinator_thread_id=excluded.coordinator_thread_id,
+  achievement_role=excluded.achievement_role,
+  auditor_thread_id=excluded.auditor_thread_id,
+  user_input_locked=excluded.user_input_locked,
+  created_at=excluded.created_at,
+  updated_at=excluded.updated_at,
+  last_activity=excluded.last_activity,
+  working_directory=excluded.working_directory`
+
+function threadUpsertParams(thread: Thread): unknown[] {
+  return [
+    thread.id,
+    thread.projectId,
+    thread.providerId,
+    thread.title,
+    thread.titleSource ?? 'default',
+    thread.status,
+    thread.pinned ? 1 : 0,
+    thread.pinnedAt ?? null,
+    thread.sortOrder ?? null,
+    thread.scopeSortOrder ?? null,
+    thread.archived ? 1 : 0,
+    thread.read ? 1 : 0,
+    thread.branch ?? null,
+    thread.featureSlug ?? null,
+    thread.scopeBucketId ?? null,
+    thread.settings ? JSON.stringify(thread.settings) : null,
+    thread.contextUsage ? JSON.stringify(thread.contextUsage) : null,
+    thread.sessionId ?? null,
+    thread.sessionHarnessId ?? null,
+    thread.dismissedSpecId ?? null,
+    thread.dismissedSpecVersion ?? null,
+    thread.auditState ?? null,
+    thread.loopIteration ?? null,
+    thread.activeAuditId ?? null,
+    thread.activeAuditVersion ?? null,
+    thread.assignmentId ?? null,
+    thread.assignmentRole ?? null,
+    thread.assignmentTaskId ?? null,
+    thread.coordinatorThreadId ?? null,
+    thread.achievementRole ?? null,
+    thread.auditorThreadId ?? null,
+    thread.userInputLocked ? 1 : 0,
+    thread.createdAt,
+    thread.updatedAt,
+    thread.lastActivity,
+    thread.workingDirectory
+  ]
+}
+
 export class ThreadRepo {
   constructor(private db: Database) {}
 
   upsert(thread: Thread): void {
-    this.db.run(
-      `INSERT INTO threads(
-        id, project_id, provider_id, title, title_source, status,
-        pinned, pinned_at, sort_order, scope_sort_order, archived, read,
-        branch, feature_slug, scope_bucket_id, settings, context_usage,
-        session_id, dismissed_spec_id, dismissed_spec_version,
-        audit_state, loop_iteration, active_audit_id, active_audit_version,
-        assignment_id, assignment_role, assignment_task_id,
-        coordinator_thread_id, achievement_role, auditor_thread_id, user_input_locked,
-        created_at, updated_at, last_activity, working_directory
-      ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-      ON CONFLICT(id) DO UPDATE SET
-        project_id=excluded.project_id,
-        provider_id=excluded.provider_id,
-        title=excluded.title,
-        title_source=excluded.title_source,
-        status=excluded.status,
-        pinned=excluded.pinned,
-        sort_order=excluded.sort_order,
-        scope_sort_order=excluded.scope_sort_order,
-        archived=excluded.archived,
-        read=excluded.read,
-        branch=excluded.branch,
-        feature_slug=excluded.feature_slug,
-        scope_bucket_id=excluded.scope_bucket_id,
-        settings=excluded.settings,
-        context_usage=excluded.context_usage,
-        session_id=excluded.session_id,
-        dismissed_spec_id=excluded.dismissed_spec_id,
-        dismissed_spec_version=excluded.dismissed_spec_version,
-        audit_state=excluded.audit_state,
-        loop_iteration=excluded.loop_iteration,
-        active_audit_id=excluded.active_audit_id,
-        active_audit_version=excluded.active_audit_version,
-        assignment_id=excluded.assignment_id,
-        assignment_role=excluded.assignment_role,
-        assignment_task_id=excluded.assignment_task_id,
-        coordinator_thread_id=excluded.coordinator_thread_id,
-        achievement_role=excluded.achievement_role,
-        auditor_thread_id=excluded.auditor_thread_id,
-        user_input_locked=excluded.user_input_locked,
-        created_at=excluded.created_at,
-        updated_at=excluded.updated_at,
-        last_activity=excluded.last_activity,
-        working_directory=excluded.working_directory`,
-      thread.id,
-      thread.projectId,
-      thread.providerId,
-      thread.title,
-      thread.titleSource ?? 'default',
-      thread.status,
-      thread.pinned ? 1 : 0,
-      thread.pinnedAt ?? null,
-      thread.sortOrder ?? null,
-      thread.scopeSortOrder ?? null,
-      thread.archived ? 1 : 0,
-      thread.read ? 1 : 0,
-      thread.branch ?? null,
-      thread.featureSlug ?? null,
-      thread.scopeBucketId ?? null,
-      thread.settings ? JSON.stringify(thread.settings) : null,
-      thread.contextUsage ? JSON.stringify(thread.contextUsage) : null,
-      thread.sessionId ?? null,
-      thread.dismissedSpecId ?? null,
-      thread.dismissedSpecVersion ?? null,
-      thread.auditState ?? null,
-      thread.loopIteration ?? null,
-      thread.activeAuditId ?? null,
-      thread.activeAuditVersion ?? null,
-      thread.assignmentId ?? null,
-      thread.assignmentRole ?? null,
-      thread.assignmentTaskId ?? null,
-      thread.coordinatorThreadId ?? null,
-      thread.achievementRole ?? null,
-      thread.auditorThreadId ?? null,
-      thread.userInputLocked ? 1 : 0,
-      thread.createdAt,
-      thread.updatedAt,
-      thread.lastActivity,
-      thread.workingDirectory
-    )
+    this.db.run(THREAD_UPSERT_SQL, ...threadUpsertParams(thread))
+  }
+
+  async upsertViaWorker(thread: Thread): Promise<void> {
+    const result = await this.db.executeViaWorker(THREAD_UPSERT_SQL, threadUpsertParams(thread))
+    if (!result.ok) {
+      throw new Error(result.error ?? 'Thread upsert failed')
+    }
   }
 
   get(id: string): Thread | null {
@@ -373,6 +389,15 @@ export class ThreadRepo {
     return result
   }
 
+  private hydrateThreads(rows: ThreadRow[]): Thread[] {
+    const threads = rows.map(rowToThread)
+    const used = this.usedHarnessesFor(threads.map((t) => t.id))
+    for (const thread of threads) {
+      thread.usedHarnessIds = used.get(thread.id)
+    }
+    return threads
+  }
+
   listByProject(projectId: string, options: ThreadListOptions = {}): Thread[] {
     const { where, params, limit } = buildListClauses(['project_id = ?'], [projectId], options)
     const rows = this.db.all<ThreadRow>(
@@ -380,12 +405,7 @@ export class ThreadRepo {
        ${buildOrderBy(options)}${limit}`,
       ...params
     )
-    const threads = rows.map(rowToThread)
-    const used = this.usedHarnessesFor(threads.map((t) => t.id))
-    for (const thread of threads) {
-      thread.usedHarnessIds = used.get(thread.id)
-    }
-    return threads
+    return this.hydrateThreads(rows)
   }
 
   listAll(options: ThreadListOptions = {}): Thread[] {
@@ -395,12 +415,47 @@ export class ThreadRepo {
        ${buildOrderBy(options)}${limit}`,
       ...params
     )
-    const threads = rows.map(rowToThread)
-    const used = this.usedHarnessesFor(threads.map((t) => t.id))
-    for (const thread of threads) {
-      thread.usedHarnessIds = used.get(thread.id)
-    }
-    return threads
+    return this.hydrateThreads(rows)
+  }
+
+  /** Load every thread on the database worker so unbounded hydration does not block Electron. */
+  async listAllViaWorker(options: ThreadListOptions = {}): Promise<Thread[]> {
+    const { where, params, limit } = buildListClauses([], [], options)
+    const result = await this.db.queryViaWorker(
+      `SELECT * FROM threads ${where}
+       ${buildOrderBy(options)}${limit}`,
+      params,
+      0
+    )
+    if (!result.ok) return this.listAll(options)
+    return this.hydrateThreads(result.rows as unknown as ThreadRow[])
+  }
+
+  /** Load only non-archived threads that currently hold active agent work. */
+  listActive(): Array<Thread & { status: 'planning' | 'executing' }> {
+    const rows = this.db.all<ThreadRow>(
+      `SELECT * FROM threads
+       WHERE archived = 0 AND status IN ('planning', 'executing')
+       ORDER BY last_activity DESC, id ASC`
+    )
+    return rows
+      .map(rowToThread)
+      .filter(
+        (thread): thread is Thread & { status: 'planning' | 'executing' } =>
+          thread.status === 'planning' || thread.status === 'executing'
+      )
+  }
+
+  /** Check for active work without hydrating every thread row or usage metadata. */
+  hasActive(): boolean {
+    return (
+      this.db.get<{ active: number }>(
+        `SELECT 1 AS active
+         FROM threads
+         WHERE archived = 0 AND status IN ('planning', 'executing')
+         LIMIT 1`
+      ) !== undefined
+    )
   }
 
   delete(id: string): void {

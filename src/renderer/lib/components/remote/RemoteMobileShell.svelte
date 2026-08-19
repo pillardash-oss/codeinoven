@@ -1,6 +1,5 @@
 <script lang="ts">
   import { onMount } from 'svelte'
-  import type { Component } from 'svelte'
   import { DropdownMenu, AlertDialog, Dialog } from 'bits-ui'
   import {
     Bell,
@@ -8,11 +7,14 @@
     Check,
     ChevronDown,
     Download,
+    FolderKanban,
     GitBranch,
     History,
+    Library,
     Loader2,
     MessageSquare,
     MoreVertical,
+    NotebookPen,
     PanelLeft,
     Pencil,
     Pin,
@@ -20,30 +22,26 @@
     GitFork,
     Power,
     Share,
+    Timeline,
     Trash2,
     X
   } from '@lucide/svelte'
   import Switch from '$lib/components/ui/Switch.svelte'
+  import BottomSheet from '$lib/components/ui/BottomSheet.svelte'
+  import ThreadDropdown, { type MenuItem } from '$lib/components/shared/ThreadDropdown.svelte'
   import { mobileNotifications } from '$lib/remote/mobile-notifications.svelte'
   import { pwaInstall } from '$lib/remote/pwa-install.svelte'
   import { subscribe } from '$lib/ipc.svelte'
   import { getProjectIcon } from '$lib/project-icons'
   import { mobileState } from '$lib/remote/mobile-state.svelte'
+  import { threadMessages } from '$lib/stores/thread-messages.svelte'
+  import { gitState } from '$lib/stores/git.svelte'
   import type { Thread } from '$shared/types'
 
-  interface RowAction {
-    label: string
-    icon?: Component
-    onClick?: () => void
-    danger?: boolean
-    divider?: boolean
-    disabled?: boolean
-  }
-
   const SIDEBAR_MODES = [
-    { id: 'projects', label: 'Projects' },
-    { id: 'threads', label: 'Threads' },
-    { id: 'chats', label: 'Chats' }
+    { id: 'projects', label: 'Projects', icon: FolderKanban },
+    { id: 'threads', label: 'Threads', icon: Timeline },
+    { id: 'chats', label: 'Chats', icon: MessageSquare }
   ] as const
 
   interface Props {
@@ -82,6 +80,7 @@
   let renameError = $state('')
   let deleteTarget = $state<Thread | null>(null)
   let deleteBusy = $state(false)
+  let deleteError = $state('')
 
   async function confirmRename(): Promise<void> {
     const target = renameTarget
@@ -103,11 +102,12 @@
     const target = deleteTarget
     if (!target || deleteBusy) return
     deleteBusy = true
+    deleteError = ''
     try {
       await mobileState.handleDelete(target)
       deleteTarget = null
-    } catch {
-      deleteTarget = null
+    } catch (error) {
+      deleteError = error instanceof Error ? error.message : 'Could not delete the thread.'
     } finally {
       deleteBusy = false
     }
@@ -118,8 +118,13 @@
     renameTarget = thread
   }
 
+  function openDelete(thread: Thread): void {
+    deleteError = ''
+    deleteTarget = thread
+  }
+
   // ─── Row action menus ───────────────────────────────────────────────────
-  function threadMenuItems(thread: Thread): RowAction[] {
+  function threadMenuItems(thread: Thread): MenuItem[] {
     return [
       {
         label: 'Rename',
@@ -141,7 +146,7 @@
         label: 'Delete',
         icon: Trash2,
         danger: true,
-        onClick: () => (deleteTarget = thread)
+        onClick: () => openDelete(thread)
       }
     ]
   }
@@ -157,6 +162,8 @@
   function threadDot(thread: Thread): string {
     if (thread.status === 'failed') return 'bg-thread-error'
     if (thread.status === 'awaiting_approval') return 'bg-thread-pinned'
+    if (thread.status === 'working-paused') return 'bg-warning'
+    if (thread.status === 'spec') return 'bg-thread-spec'
     if (mobileState.isWorking(thread)) return 'bg-thread-working'
     if (!thread.read) return 'bg-thread-unread'
     if (thread.status === 'completed') return 'bg-thread-done'
@@ -209,6 +216,13 @@
     }
   })
 
+  let activeSidebarMode = $derived(SIDEBAR_MODES.find((m) => m.id === mobileState.sidebarMode))
+
+  // Keep the git branch indicator current for whichever project is open.
+  $effect(() => {
+    gitState.notifyThreadOpened(mobileState.selectedProject)
+  })
+
   let showInstall = $derived(!pwaInstall.installed)
 
   /** Touch/phone browsers install from the browser menu rather than the address bar. */
@@ -226,6 +240,24 @@
   class="mobile-shell flex w-full flex-col overflow-hidden bg-app text-foreground"
   style="height: {shellHeight}"
 >
+  {#if deleteError}
+    <div
+      class="fixed left-1/2 top-[max(1rem,env(safe-area-inset-top))] z-60 flex w-[min(26rem,calc(100vw-2rem))] -translate-x-1/2 items-start gap-3 rounded-xl border border-danger/30 bg-surface px-4 py-3 text-sm text-danger shadow-xl"
+      role="alert"
+    >
+      <p class="min-w-0 flex-1 leading-5">{deleteError}</p>
+      <button
+        type="button"
+        class="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-danger hover:bg-danger/10"
+        title="Dismiss delete error"
+        aria-label="Dismiss delete error"
+        onclick={() => (deleteError = '')}
+      >
+        <X size={15} />
+      </button>
+    </div>
+  {/if}
+
   <!-- Header: menu · centred thread title · overflow menu -->
   <div class="shrink-0 border-b border-border bg-surface pt-[env(safe-area-inset-top)]">
     <header class="grid h-14 grid-cols-[2.75rem_1fr_2.75rem] items-center gap-1 px-2">
@@ -244,7 +276,16 @@
           {mobileState.selectedThread?.title ?? 'CodeInOven'}
         </p>
         {#if mobileState.selectedProject && mobileState.selectedThread && !mobileState.chatMode}
-          <p class="truncate text-[11px] text-dimmed">{mobileState.selectedProject.name}</p>
+          <p class="flex items-center justify-center gap-1 truncate text-[11px] text-dimmed">
+            <span class="truncate">{mobileState.selectedProject.name}</span>
+            {#if gitState.branch}
+              <span class="shrink-0">·</span>
+              <span class="flex shrink-0 items-center gap-0.5">
+                <GitBranch size={10} />
+                <span class="max-w-24 truncate">{gitState.branch}</span>
+              </span>
+            {/if}
+          </p>
         {/if}
       </div>
 
@@ -296,6 +337,24 @@
               </DropdownMenu.Item>
             {/if}
 
+            {#if mobileState.selectedThread}
+              <DropdownMenu.Item
+                class="flex w-full cursor-pointer items-center gap-2.5 rounded-lg px-3 py-2.5 text-[14px] text-muted outline-none transition-colors hover:bg-elevated focus:bg-elevated hover:text-foreground"
+                onSelect={() => (mobileState.sourcesOpen = true)}
+              >
+                <Library size={16} />
+                <span class="flex-1 text-left">Sources</span>
+              </DropdownMenu.Item>
+
+              <DropdownMenu.Item
+                class="flex w-full cursor-pointer items-center gap-2.5 rounded-lg px-3 py-2.5 text-[14px] text-muted outline-none transition-colors hover:bg-elevated focus:bg-elevated hover:text-foreground"
+                onSelect={() => (mobileState.notesOpen = true)}
+              >
+                <NotebookPen size={16} />
+                <span class="flex-1 text-left">Notes</span>
+              </DropdownMenu.Item>
+            {/if}
+
             <DropdownMenu.Item
               class="flex w-full cursor-pointer items-center gap-2.5 rounded-lg px-3 py-2.5 text-[14px] text-muted outline-none transition-colors hover:bg-elevated focus:bg-elevated hover:text-foreground"
               onSelect={() => (mobileState.notificationsOpen = true)}
@@ -343,184 +402,142 @@
   </main>
 
   <!-- History jump sheet. -->
-  {#if mobileState.historyOpen}
-    <div
-      class="fixed inset-0 z-40 cursor-pointer bg-black/50"
-      role="presentation"
-      onclick={() => (mobileState.historyOpen = false)}
-    ></div>
-    <aside
-      class="fixed right-0 bottom-0 left-0 z-50 flex max-h-[72dvh] flex-col overflow-hidden rounded-t-2xl border-t border-border bg-surface pb-[env(safe-area-inset-bottom)] shadow-2xl"
-      aria-label="Jump to message"
-    >
-      <div class="flex h-12 shrink-0 items-center justify-between border-b border-border px-4">
-        <p class="text-[10px] font-semibold uppercase tracking-[0.16em] text-dimmed">
-          Your messages
-        </p>
+  <BottomSheet
+    open={mobileState.historyOpen}
+    title="Your messages"
+    onClose={() => (mobileState.historyOpen = false)}
+    maxHeight="max-h-[72dvh]"
+  >
+    <div class="p-1.5">
+      {#each mobileState.userMessages as message, index (message.id)}
         <button
           type="button"
-          class="flex h-9 w-9 cursor-pointer items-center justify-center rounded-lg text-muted transition-colors active:bg-elevated"
-          aria-label="Close history"
-          title="Close history"
-          onclick={() => (mobileState.historyOpen = false)}
+          class="block w-full cursor-pointer truncate rounded-lg px-3 py-3 text-left text-[14px] text-muted transition-colors active:bg-elevated"
+          title={message.content}
+          onclick={() => historyJump(message.id, message.content)}
         >
-          <X size={16} />
+          <span class="mr-1.5 tabular-nums text-dimmed">{index + 1}.</span>
+          {message.content}
         </button>
-      </div>
-      <div class="min-h-0 flex-1 overflow-y-auto overscroll-contain p-1.5">
-        {#each mobileState.userMessages as message, index (message.id)}
-          <button
-            type="button"
-            class="block w-full cursor-pointer truncate rounded-lg px-3 py-3 text-left text-[14px] text-muted transition-colors active:bg-elevated"
-            title={message.content}
-            onclick={() => historyJump(message.id, message.content)}
-          >
-            <span class="mr-1.5 tabular-nums text-dimmed">{index + 1}.</span>
-            {message.content}
-          </button>
-        {:else}
-          <p class="px-3 py-8 text-center text-[13px] text-dimmed">No messages yet</p>
-        {/each}
-      </div>
-    </aside>
-  {/if}
+      {:else}
+        <p class="px-3 py-8 text-center text-[13px] text-dimmed">No messages yet</p>
+      {/each}
+    </div>
+  </BottomSheet>
 
   <!-- Notifications sheet — the panel lazy-loads at open time. -->
-  {#if mobileState.notificationsOpen}
-    <div
-      class="fixed inset-0 z-40 cursor-pointer bg-black/50"
-      role="presentation"
-      onclick={() => (mobileState.notificationsOpen = false)}
-    ></div>
-    <aside
-      class="fixed right-0 bottom-0 left-0 z-50 flex max-h-[82dvh] flex-col overflow-hidden rounded-t-2xl border-t border-border bg-surface pb-[env(safe-area-inset-bottom)] shadow-2xl"
-      aria-label="Notifications"
-    >
-      <div class="flex h-12 shrink-0 items-center justify-between border-b border-border px-4">
-        <p class="text-[10px] font-semibold uppercase tracking-[0.16em] text-dimmed">
-          Notifications
+  <BottomSheet
+    open={mobileState.notificationsOpen}
+    title="Notifications"
+    onClose={() => (mobileState.notificationsOpen = false)}
+  >
+    <div class="border-b border-border/60 px-4 py-3">
+      <Switch
+        checked={mobileNotifications.enabled}
+        disabled={mobileNotifications.permission === 'unsupported'}
+        onchange={(enabled) => {
+          if (enabled) {
+            void mobileNotifications.enable()
+          } else {
+            mobileNotifications.disable()
+          }
+        }}
+        label="System notifications"
+        aria-label="System notifications"
+      />
+      {#if mobileNotifications.permission === 'denied'}
+        <p class="mt-1.5 text-[11px] leading-relaxed text-dimmed">
+          Notifications are blocked for this site. Allow them in your browser's site settings.
         </p>
-        <button
-          type="button"
-          class="flex h-9 w-9 cursor-pointer items-center justify-center rounded-lg text-muted transition-colors active:bg-elevated"
-          aria-label="Close notifications"
-          title="Close notifications"
-          onclick={() => (mobileState.notificationsOpen = false)}
-        >
-          <X size={16} />
-        </button>
-      </div>
-      <div class="min-h-0 flex-1 overflow-y-auto overscroll-contain">
-        <div class="border-b border-border/60 px-4 py-3">
-          <Switch
-            checked={mobileNotifications.enabled}
-            disabled={mobileNotifications.permission === 'unsupported'}
-            onchange={(enabled) => {
-              if (enabled) {
-                void mobileNotifications.enable()
-              } else {
-                mobileNotifications.disable()
-              }
-            }}
-            label="System notifications"
-            aria-label="System notifications"
-          />
-          {#if mobileNotifications.permission === 'denied'}
-            <p class="mt-1.5 text-[11px] leading-relaxed text-dimmed">
-              Notifications are blocked for this site. Allow them in your browser's site settings.
-            </p>
-          {:else if mobileNotifications.permission === 'unsupported'}
-            <p class="mt-1.5 text-[11px] leading-relaxed text-dimmed">
-              System notifications are not supported on this browser.
-            </p>
-          {:else}
-            <p class="mt-1.5 text-[11px] leading-relaxed text-dimmed">
-              Get a system alert when a thread wants your attention, even when the app is in the
-              background.
-            </p>
-          {/if}
-        </div>
-        {#await import('$lib/components/notifications/NotificationPanel.svelte') then { default: NotificationPanel }}
-          <NotificationPanel />
-        {/await}
-      </div>
-    </aside>
-  {/if}
+      {:else if mobileNotifications.permission === 'unsupported'}
+        <p class="mt-1.5 text-[11px] leading-relaxed text-dimmed">
+          System notifications are not supported on this browser.
+        </p>
+      {:else}
+        <p class="mt-1.5 text-[11px] leading-relaxed text-dimmed">
+          Get a system alert when a thread wants your attention, even when the app is in the
+          background.
+        </p>
+      {/if}
+    </div>
+    {#await import('$lib/components/notifications/NotificationPanel.svelte') then { default: NotificationPanel }}
+      <NotificationPanel />
+    {/await}
+  </BottomSheet>
 
   <!-- Memory sheet — the desktop panel lazy-loads at open time. -->
-  {#if mobileState.memoryOpen}
-    <div
-      class="fixed inset-0 z-40 cursor-pointer bg-black/50"
-      role="presentation"
-      onclick={() => (mobileState.memoryOpen = false)}
-    ></div>
-    <aside
-      class="fixed right-0 bottom-0 left-0 z-50 flex max-h-[82dvh] flex-col overflow-hidden rounded-t-2xl border-t border-border bg-surface pb-[env(safe-area-inset-bottom)] shadow-2xl"
-      aria-label="Memory"
+  <BottomSheet
+    open={mobileState.memoryOpen}
+    title="Memory"
+    onClose={() => (mobileState.memoryOpen = false)}
+  >
+    <div class="p-3">
+      {#await import('$lib/components/memory/MemoryPanel.svelte') then { default: MemoryPanel }}
+        <MemoryPanel
+          variant="sidebar"
+          projectId={mobileState.selectedThread?.projectId ?? mobileState.selectedProject?.id}
+          threadId={mobileState.selectedThread?.id}
+          allowTransfer={false}
+        />
+      {/await}
+    </div>
+  </BottomSheet>
+
+  <!-- Git sheet — the desktop panel lazy-loads at open time. -->
+  {#if mobileState.selectedThread && !mobileState.chatMode}
+    <BottomSheet
+      open={mobileState.gitOpen}
+      title="Git"
+      onClose={() => (mobileState.gitOpen = false)}
+      maxHeight="max-h-[85dvh]"
+      fixedHeight
     >
-      <div class="flex h-12 shrink-0 items-center justify-between border-b border-border px-4">
-        <p class="text-[10px] font-semibold uppercase tracking-[0.16em] text-dimmed">Memory</p>
-        <button
-          type="button"
-          class="flex h-9 w-9 cursor-pointer items-center justify-center rounded-lg text-muted transition-colors active:bg-elevated"
-          aria-label="Close memory"
-          title="Close memory"
-          onclick={() => (mobileState.memoryOpen = false)}
-        >
-          <X size={16} />
-        </button>
-      </div>
-      <div class="min-h-0 flex-1 overflow-y-auto overscroll-contain p-3">
-        {#await import('$lib/components/memory/MemoryPanel.svelte') then { default: MemoryPanel }}
-          <MemoryPanel
-            variant="sidebar"
-            projectId={mobileState.selectedThread?.projectId ?? mobileState.selectedProject?.id}
+      {#await import('$lib/components/git/GitStatusPanel.svelte') then { default: GitStatusPanel }}
+        <GitStatusPanel
+          projectId={mobileState.selectedThread?.projectId ?? ''}
+          threadId={mobileState.selectedThread?.id ?? ''}
+        />
+      {/await}
+    </BottomSheet>
+  {/if}
+
+  <!-- Sources sheet — files, processes, artifacts, and context this thread has touched. -->
+  {#if mobileState.selectedThread}
+    <BottomSheet
+      open={mobileState.sourcesOpen}
+      title="Sources"
+      onClose={() => (mobileState.sourcesOpen = false)}
+      maxHeight="max-h-[85dvh]"
+      fixedHeight
+    >
+      {#await import('$lib/components/threads/SourcesPanel.svelte') then { default: SourcesPanel }}
+        {#await import('$lib/agent-sources') then { collectAgentSources }}
+          <SourcesPanel
+            sources={collectAgentSources(
+              threadMessages.messages(
+                mobileState.selectedThread?.projectId ?? '',
+                mobileState.selectedThread?.id ?? ''
+              )
+            )}
+            projectId={mobileState.selectedThread?.projectId}
             threadId={mobileState.selectedThread?.id}
           />
         {/await}
-      </div>
-    </aside>
+      {/await}
+    </BottomSheet>
   {/if}
 
-  <!-- Git sheet — the desktop panel lazy-loads at open time. -->
-  {#if mobileState.gitOpen && mobileState.selectedThread && !mobileState.chatMode}
-    <div
-      class="fixed inset-0 z-40 cursor-pointer bg-black/50"
-      role="presentation"
-      onclick={() => (mobileState.gitOpen = false)}
-    ></div>
-    <aside
-      class="fixed right-0 bottom-0 left-0 z-50 flex h-[85dvh] flex-col overflow-hidden rounded-t-2xl border-t border-border bg-app pb-[env(safe-area-inset-bottom)] shadow-2xl"
-      aria-label="Git"
-    >
-      <div
-        class="flex h-12 shrink-0 items-center justify-between border-b border-border bg-surface px-4"
-      >
-        <p
-          class="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.16em] text-dimmed"
-        >
-          <GitBranch size={13} />
-          Git
-        </p>
-        <button
-          type="button"
-          class="flex h-9 w-9 cursor-pointer items-center justify-center rounded-lg text-muted transition-colors active:bg-elevated"
-          aria-label="Close git"
-          title="Close git"
-          onclick={() => (mobileState.gitOpen = false)}
-        >
-          <X size={16} />
-        </button>
-      </div>
-      <div class="min-h-0 flex-1 overflow-hidden">
-        {#await import('$lib/components/git/GitStatusPanel.svelte') then { default: GitStatusPanel }}
-          <GitStatusPanel
-            projectId={mobileState.selectedThread.projectId}
-            threadId={mobileState.selectedThread.id}
-          />
-        {/await}
-      </div>
-    </aside>
+  <!-- Notes sheet — the self-contained desktop notes dialog. -->
+  {#if mobileState.selectedThread}
+    {#await import('$lib/components/threads/ThreadNoteModal.svelte') then { default: ThreadNoteModal }}
+      <ThreadNoteModal
+        open={mobileState.notesOpen}
+        projectId={mobileState.selectedThread?.projectId ?? ''}
+        threadId={mobileState.selectedThread?.id ?? ''}
+        threadTitle={mobileState.selectedThread?.title}
+        onClose={() => (mobileState.notesOpen = false)}
+      />
+    {/await}
   {/if}
 
   <!-- Sidebar drawer. -->
@@ -541,12 +558,12 @@
             aria-label="Switch sidebar view"
             title="Switch sidebar view"
           >
+            {#if activeSidebarMode}
+              {@const ActiveIcon = activeSidebarMode.icon}
+              <ActiveIcon size={16} class="shrink-0 text-muted" />
+            {/if}
             <span class="truncate text-[15px] font-semibold tracking-tight">
-              {mobileState.sidebarMode === 'projects'
-                ? 'Projects'
-                : mobileState.sidebarMode === 'threads'
-                  ? 'Threads'
-                  : 'Chats'}
+              {activeSidebarMode?.label ?? 'Projects'}
             </span>
             <ChevronDown size={15} class="shrink-0 text-dimmed" />
           </DropdownMenu.Trigger>
@@ -559,6 +576,7 @@
               class="z-50 w-48 overflow-hidden rounded-xl border border-border bg-surface p-1 shadow-xl"
             >
               {#each SIDEBAR_MODES as entry (entry.id)}
+                {@const Icon = entry.icon}
                 <DropdownMenu.Item
                   class="flex w-full cursor-pointer items-center gap-2 rounded-lg px-3 py-2.5 text-[14px] outline-none transition-colors hover:bg-elevated focus:bg-elevated {mobileState.sidebarMode ===
                   entry.id
@@ -566,6 +584,7 @@
                     : 'text-muted'}"
                   onSelect={() => (mobileState.sidebarMode = entry.id)}
                 >
+                  <Icon size={15} class="shrink-0 text-muted" />
                   <span class="flex-1 text-left">{entry.label}</span>
                   {#if mobileState.sidebarMode === entry.id}
                     <Check size={15} class="text-primary" />
@@ -621,6 +640,8 @@
                     class="flex min-w-0 flex-1 cursor-pointer items-center gap-2 rounded-lg px-2 py-2 text-left transition-colors active:bg-elevated {mobileState
                       .selectedThread?.id === thread.id
                       ? 'bg-elevated'
+                      : ''} {mobileState.isWorking(thread)
+                      ? 'animate-pulse bg-thread-working/5'
                       : ''}"
                     title={thread.title}
                     onclick={() => void mobileState.openThread(thread)}
@@ -633,47 +654,11 @@
                       >{relativeTime(thread.createdAt)}</span
                     >
                   </button>
-                  <DropdownMenu.Root>
-                    <DropdownMenu.Trigger
-                      class="flex h-8 w-8 shrink-0 cursor-pointer items-center justify-center rounded-lg text-dimmed transition-colors active:bg-elevated"
-                      aria-label={`Actions for ${thread.title}`}
-                      title={`Actions for ${thread.title}`}
-                    >
-                      <MoreVertical size={15} />
-                    </DropdownMenu.Trigger>
-                    <DropdownMenu.Portal>
-                      <DropdownMenu.Content
-                        side="bottom"
-                        align="end"
-                        sideOffset={4}
-                        collisionPadding={8}
-                        class="z-50 w-44 overflow-hidden rounded-xl border border-border bg-surface p-1 shadow-lg"
-                      >
-                        {#each threadMenuItems(thread) as item (item.label)}
-                          {#if item.divider}
-                            <DropdownMenu.Separator class="mx-2 my-1 h-px bg-border" />
-                          {:else}
-                            <DropdownMenu.Item
-                              disabled={item.disabled}
-                              class={[
-                                'flex w-full cursor-pointer items-center gap-2 rounded-lg px-2.5 py-2 text-sm outline-none transition-colors max-md:py-2.5',
-                                item.danger
-                                  ? 'text-danger hover:bg-danger/10 focus:bg-danger/10'
-                                  : 'text-foreground hover:bg-elevated focus:bg-elevated'
-                              ]}
-                              onSelect={item.onClick}
-                            >
-                              {#if item.icon}
-                                {@const Icon = item.icon}
-                                <Icon size={13} class={item.danger ? '' : 'text-muted'} />
-                              {/if}
-                              {item.label}
-                            </DropdownMenu.Item>
-                          {/if}
-                        {/each}
-                      </DropdownMenu.Content>
-                    </DropdownMenu.Portal>
-                  </DropdownMenu.Root>
+                  <ThreadDropdown
+                    items={threadMenuItems(thread)}
+                    ariaLabel={`Actions for ${thread.title}`}
+                    vertical
+                  />
                 </div>
               {/each}
             </div>
@@ -715,6 +700,8 @@
                         class="flex min-w-0 flex-1 cursor-pointer items-center gap-2 rounded-lg px-2 py-2 text-left transition-colors active:bg-elevated {mobileState
                           .selectedThread?.id === thread.id
                           ? 'bg-elevated'
+                          : ''} {mobileState.isWorking(thread)
+                          ? 'animate-pulse bg-thread-working/5'
                           : ''}"
                         title={thread.title}
                         onclick={() => void mobileState.openThread(thread)}
@@ -727,47 +714,11 @@
                           >{relativeTime(thread.createdAt)}</span
                         >
                       </button>
-                      <DropdownMenu.Root>
-                        <DropdownMenu.Trigger
-                          class="flex h-8 w-8 shrink-0 cursor-pointer items-center justify-center rounded-lg text-dimmed transition-colors active:bg-elevated"
-                          aria-label={`Actions for ${thread.title}`}
-                          title={`Actions for ${thread.title}`}
-                        >
-                          <MoreVertical size={15} />
-                        </DropdownMenu.Trigger>
-                        <DropdownMenu.Portal>
-                          <DropdownMenu.Content
-                            side="bottom"
-                            align="end"
-                            sideOffset={4}
-                            collisionPadding={8}
-                            class="z-50 w-44 overflow-hidden rounded-xl border border-border bg-surface p-1 shadow-lg"
-                          >
-                            {#each threadMenuItems(thread) as item (item.label)}
-                              {#if item.divider}
-                                <DropdownMenu.Separator class="mx-2 my-1 h-px bg-border" />
-                              {:else}
-                                <DropdownMenu.Item
-                                  disabled={item.disabled}
-                                  class={[
-                                    'flex w-full cursor-pointer items-center gap-2 rounded-lg px-2.5 py-2 text-sm outline-none transition-colors max-md:py-2.5',
-                                    item.danger
-                                      ? 'text-danger hover:bg-danger/10 focus:bg-danger/10'
-                                      : 'text-foreground hover:bg-elevated focus:bg-elevated'
-                                  ]}
-                                  onSelect={item.onClick}
-                                >
-                                  {#if item.icon}
-                                    {@const Icon = item.icon}
-                                    <Icon size={13} class={item.danger ? '' : 'text-muted'} />
-                                  {/if}
-                                  {item.label}
-                                </DropdownMenu.Item>
-                              {/if}
-                            {/each}
-                          </DropdownMenu.Content>
-                        </DropdownMenu.Portal>
-                      </DropdownMenu.Root>
+                      <ThreadDropdown
+                        items={threadMenuItems(thread)}
+                        ariaLabel={`Actions for ${thread.title}`}
+                        vertical
+                      />
                     </div>
                   {:else}
                     <p class="px-2 py-1.5 text-[12px] text-dimmed">No threads yet</p>
@@ -794,6 +745,8 @@
                   class="flex min-w-0 flex-1 cursor-pointer items-center gap-2 rounded-lg px-2 py-2 text-left transition-colors active:bg-elevated {mobileState
                     .selectedThread?.id === thread.id
                     ? 'bg-elevated'
+                    : ''} {mobileState.isWorking(thread)
+                    ? 'animate-pulse bg-thread-working/5'
                     : ''}"
                   title={thread.title}
                   onclick={() => void mobileState.openThread(thread)}
@@ -809,47 +762,11 @@
                     >{relativeTime(thread.createdAt)}</span
                   >
                 </button>
-                <DropdownMenu.Root>
-                  <DropdownMenu.Trigger
-                    class="flex h-8 w-8 shrink-0 cursor-pointer items-center justify-center rounded-lg text-dimmed transition-colors active:bg-elevated"
-                    aria-label={`Actions for ${thread.title}`}
-                    title={`Actions for ${thread.title}`}
-                  >
-                    <MoreVertical size={15} />
-                  </DropdownMenu.Trigger>
-                  <DropdownMenu.Portal>
-                    <DropdownMenu.Content
-                      side="bottom"
-                      align="end"
-                      sideOffset={4}
-                      collisionPadding={8}
-                      class="z-50 w-44 overflow-hidden rounded-xl border border-border bg-surface p-1 shadow-lg"
-                    >
-                      {#each threadMenuItems(thread) as item (item.label)}
-                        {#if item.divider}
-                          <DropdownMenu.Separator class="mx-2 my-1 h-px bg-border" />
-                        {:else}
-                          <DropdownMenu.Item
-                            disabled={item.disabled}
-                            class={[
-                              'flex w-full cursor-pointer items-center gap-2 rounded-lg px-2.5 py-2 text-sm outline-none transition-colors max-md:py-2.5',
-                              item.danger
-                                ? 'text-danger hover:bg-danger/10 focus:bg-danger/10'
-                                : 'text-foreground hover:bg-elevated focus:bg-elevated'
-                            ]}
-                            onSelect={item.onClick}
-                          >
-                            {#if item.icon}
-                              {@const Icon = item.icon}
-                              <Icon size={13} class={item.danger ? '' : 'text-muted'} />
-                            {/if}
-                            {item.label}
-                          </DropdownMenu.Item>
-                        {/if}
-                      {/each}
-                    </DropdownMenu.Content>
-                  </DropdownMenu.Portal>
-                </DropdownMenu.Root>
+                <ThreadDropdown
+                  items={threadMenuItems(thread)}
+                  ariaLabel={`Actions for ${thread.title}`}
+                  vertical
+                />
               </div>
             {:else}
               <p class="px-2 py-12 text-center text-[13px] text-dimmed">No threads yet</p>
@@ -865,6 +782,8 @@
                   class="flex min-w-0 flex-1 cursor-pointer items-center gap-2 rounded-lg px-2 py-2 text-left transition-colors active:bg-elevated {mobileState
                     .selectedThread?.id === thread.id
                     ? 'bg-elevated'
+                    : ''} {mobileState.isWorking(thread)
+                    ? 'animate-pulse bg-thread-working/5'
                     : ''}"
                   title={thread.title}
                   onclick={() => void mobileState.openThread(thread)}
@@ -877,47 +796,11 @@
                     >{relativeTime(thread.createdAt)}</span
                   >
                 </button>
-                <DropdownMenu.Root>
-                  <DropdownMenu.Trigger
-                    class="flex h-8 w-8 shrink-0 cursor-pointer items-center justify-center rounded-lg text-dimmed transition-colors active:bg-elevated"
-                    aria-label={`Actions for ${thread.title}`}
-                    title={`Actions for ${thread.title}`}
-                  >
-                    <MoreVertical size={15} />
-                  </DropdownMenu.Trigger>
-                  <DropdownMenu.Portal>
-                    <DropdownMenu.Content
-                      side="bottom"
-                      align="end"
-                      sideOffset={4}
-                      collisionPadding={8}
-                      class="z-50 w-44 overflow-hidden rounded-xl border border-border bg-surface p-1 shadow-lg"
-                    >
-                      {#each threadMenuItems(thread) as item (item.label)}
-                        {#if item.divider}
-                          <DropdownMenu.Separator class="mx-2 my-1 h-px bg-border" />
-                        {:else}
-                          <DropdownMenu.Item
-                            disabled={item.disabled}
-                            class={[
-                              'flex w-full cursor-pointer items-center gap-2 rounded-lg px-2.5 py-2 text-sm outline-none transition-colors max-md:py-2.5',
-                              item.danger
-                                ? 'text-danger hover:bg-danger/10 focus:bg-danger/10'
-                                : 'text-foreground hover:bg-elevated focus:bg-elevated'
-                            ]}
-                            onSelect={item.onClick}
-                          >
-                            {#if item.icon}
-                              {@const Icon = item.icon}
-                              <Icon size={13} class={item.danger ? '' : 'text-muted'} />
-                            {/if}
-                            {item.label}
-                          </DropdownMenu.Item>
-                        {/if}
-                      {/each}
-                    </DropdownMenu.Content>
-                  </DropdownMenu.Portal>
-                </DropdownMenu.Root>
+                <ThreadDropdown
+                  items={threadMenuItems(thread)}
+                  ariaLabel={`Actions for ${thread.title}`}
+                  vertical
+                />
               </div>
             {:else}
               <div class="flex flex-col items-center gap-2 px-2 py-12 text-center">
@@ -1155,7 +1038,7 @@
   <AlertDialog.Root
     open={deleteTarget !== null}
     onOpenChange={(open) => {
-      if (!open) deleteTarget = null
+      if (!open && !deleteBusy) deleteTarget = null
     }}
   >
     <AlertDialog.Portal>

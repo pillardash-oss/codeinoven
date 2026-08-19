@@ -35,18 +35,14 @@ import { createHash, randomBytes } from 'node:crypto'
 import { brotliCompress, gzip } from 'node:zlib'
 import { promisify } from 'node:util'
 import type { Duplex } from 'node:stream'
-import { Logger } from '../logger'
+import { Logger } from '../system/logger'
 import {
   buildUpgradeResponse,
   decodeWsFrames,
   encodeCloseFrame,
   encodeTextFrame
 } from './ws-frames'
-import {
-  authenticateHandshake,
-  decryptPayload,
-  encryptPayload
-} from '../../renderer/lib/remote/session-security'
+import { decryptPayload, encryptPayload } from '../../renderer/lib/remote/session-security'
 import type { RemoteRpcDeviceContext, RemoteScope } from '../../lib/remote-rpc'
 import { loadOrCreateSelfSignedCertificate } from './self-signed-cert'
 import { computePwaAssetGraph } from './pwa-asset-graph'
@@ -63,16 +59,9 @@ export interface GatewayHandlers {
     args: unknown[],
     device?: RemoteRpcDeviceContext
   ) => Promise<{ ok: true; result: unknown } | { ok: false; message: string }>
-  /**
-   * Authenticates a device handshake against the device credential service.
-   * Proof-of-possession: the hello carries an ECDSA signature over the
-   * challenge transcript (plus a single-use pairing bootstrap + public keys
-   * for first-time enrollment). When absent the gateway falls back to the
-   * shared-secret handshake so the desktop renderer loopback keeps working.
-   */
+  /** Authenticates a device handshake against the device credential service. */
   authenticateDevice?: (input: {
     nonce: string
-    token?: string
     signature?: string
     transcript?: string
     bootstrap?: string
@@ -844,7 +833,6 @@ export class RemoteGateway {
         return
       }
       const nonce = typeof record.nonce === 'string' ? record.nonce : ''
-      const token = typeof record.token === 'string' ? record.token : ''
       const signature = typeof record.signature === 'string' ? record.signature : ''
       const transcript = typeof record.transcript === 'string' ? record.transcript : ''
       const bootstrap = typeof record.bootstrap === 'string' ? record.bootstrap : ''
@@ -864,7 +852,6 @@ export class RemoteGateway {
       const verify = this.options.handlers.authenticateDevice
         ? this.options.handlers.authenticateDevice({
             nonce,
-            token: token || undefined,
             signature: signature || undefined,
             transcript: transcript || undefined,
             bootstrap: bootstrap || undefined,
@@ -876,10 +863,7 @@ export class RemoteGateway {
             originPolicy: peer.originPolicy,
             transport: 'lan'
           })
-        : authenticateHandshake(this.options.peerSecret, nonce, token).then((verified) => ({
-            accepted: challengeAccepted && verified,
-            device: undefined
-          }))
+        : Promise.resolve({ accepted: false as const, device: undefined })
       void verify.then((result) => {
         const accepted = challengeAccepted && result.accepted
         if (this.stopped || !this.peers.has(peer)) return

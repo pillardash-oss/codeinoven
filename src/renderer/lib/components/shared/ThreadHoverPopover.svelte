@@ -1,10 +1,12 @@
 <script lang="ts">
+  import { StickyNote } from '@lucide/svelte'
   import StatusBadge from '$lib/components/shared/StatusBadge.svelte'
   import { generateInitialsIconSvg, getIconSvgDataUrl } from '$lib/project-svg-icons'
   import { pickColorForSeed } from '$lib/project-colors'
   import { remoteOriginLabel } from '$lib/project-location'
   import { projectRemotes } from '$lib/stores/project-remotes.svelte'
   import { scopeState } from '$lib/stores/scope.svelte'
+  import { threadNotesState } from '$lib/stores/thread-notes.svelte'
   import { DEFAULT_SCOPE_BUCKET_ID, type ScopeBucket, type Thread } from '$shared/types'
 
   interface Props {
@@ -13,11 +15,28 @@
     isWorking?: boolean
     /** Human-readable current-stage label shown next to the working badge. */
     stageLabel?: string
+    /** Whether the provider is waiting for an automatic retry. */
+    isRetryPaused?: boolean
     /** Overall thread state used to render the approval stage row. */
-    threadState?: 'unread' | 'read' | 'todo' | 'completed' | 'working' | 'approval' | 'error'
+    threadState?:
+      | 'unread'
+      | 'read'
+      | 'todo'
+      | 'completed'
+      | 'working'
+      | 'working-paused'
+      | 'spec'
+      | 'approval'
+      | 'error'
   }
 
-  let { thread, isWorking = false, stageLabel = '', threadState = 'read' }: Props = $props()
+  let {
+    thread,
+    isWorking = false,
+    isRetryPaused = false,
+    stageLabel = '',
+    threadState = 'read'
+  }: Props = $props()
 
   /** Project (repo) that owns this thread, resolved for the hover popover. */
   let project = $derived(
@@ -108,12 +127,39 @@
       </dd>
     </div>
   {/if}
+  {#if isRetryPaused}
+    <div class="flex gap-2">
+      <dt class="w-16 shrink-0 text-dimmed">Stage</dt>
+      <dd class="flex items-center gap-1 text-warning">
+        <StatusBadge tone="working-paused" variant="spinner" size="sm" title="Waiting to retry" />
+        Waiting to retry
+      </dd>
+    </div>
+  {/if}
   {#if threadState === 'approval'}
     <div class="flex gap-2">
       <dt class="w-16 shrink-0 text-dimmed">Stage</dt>
       <dd class="flex items-center gap-1 text-warning">
         <StatusBadge kind="attention" animated size="sm" title="Needs Attention" />
         Needs Attention
+      </dd>
+    </div>
+  {/if}
+  {#if threadState === 'spec'}
+    <div class="flex gap-2">
+      <dt class="w-16 shrink-0 text-dimmed">Stage</dt>
+      <dd class="flex items-center gap-1" style="color: var(--color-thread-spec)">
+        <StatusBadge stage="spec" size="sm" title="Spec ready" />
+        Spec ready
+      </dd>
+    </div>
+  {/if}
+  {#if threadNotesState.has(thread.id)}
+    <div class="flex gap-2">
+      <dt class="w-16 shrink-0 text-dimmed">Note</dt>
+      <dd class="flex items-center gap-1 text-warning" title="This thread has a user note">
+        <StickyNote size={12} />
+        Note available
       </dd>
     </div>
   {/if}

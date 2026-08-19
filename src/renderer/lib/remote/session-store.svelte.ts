@@ -19,6 +19,7 @@ import { remoteLog } from './logger'
 import type { PeerRef } from './routes'
 import {
   handshakeTranscript,
+  clearAssignedDesktop,
   loadOrCreateDeviceKeyMaterial,
   saveAssignedDeviceId,
   saveDeviceAuthVersion,
@@ -46,6 +47,8 @@ interface AccountDesktopRoute {
 
 export class RemoteSessionStore {
   snapshot = $state<SessionSnapshot>(initialSession())
+  /** Keeps the mounted workspace visible while a suspended relay reconnects. */
+  recovering = $state(false)
 
   private secret = ''
   private lanTransport: LanTransport | null = null
@@ -57,24 +60,29 @@ export class RemoteSessionStore {
   private messageListeners = new SvelteSet<(plaintext: string) => void>()
   private stateListeners = new SvelteSet<(snapshot: SessionSnapshot) => void>()
   private keyMaterial: DeviceKeyMaterial | null = null
+  private keyMaterialDesktopId: string | null = null
   /** Resolves once the phone has authenticated as a device over the relay. */
   private relayDeviceAuth: Promise<void> | null = null
   private relayChallengeReceived = false
+  private relayBootstrapFallbackAttempted = false
+  /** Unique identity for the current browser relay WebSocket connection. */
+  private relayConnectionId = ''
 
-  private async ensureKeyMaterial(): Promise<DeviceKeyMaterial> {
-    if (this.keyMaterial) return this.keyMaterial
-    this.keyMaterial = await loadOrCreateDeviceKeyMaterial()
+  private async ensureKeyMaterial(desktopId: string | null = null): Promise<DeviceKeyMaterial> {
+    if (this.keyMaterial && this.keyMaterialDesktopId === desktopId) return this.keyMaterial
+    this.keyMaterial = await loadOrCreateDeviceKeyMaterial({ desktopId: desktopId ?? undefined })
+    this.keyMaterialDesktopId = desktopId
     return this.keyMaterial
   }
 
   /** Persist the desktop-assigned device id from the enrollment handshake. */
   private async applyAssignedDevice(deviceId: string, authVersion?: number): Promise<void> {
-    await saveAssignedDeviceId(deviceId)
+    await saveAssignedDeviceId(deviceId, undefined, this.keyMaterialDesktopId ?? undefined)
     if (this.keyMaterial) {
       this.keyMaterial.deviceId = deviceId
       if (typeof authVersion === 'number') {
         this.keyMaterial.authVersion = authVersion
-        await saveDeviceAuthVersion(authVersion)
+        await saveDeviceAuthVersion(authVersion, undefined, this.keyMaterialDesktopId ?? undefined)
       }
     }
   }
@@ -88,6 +96,7 @@ export class RemoteSessionStore {
    * session.
    */
   private beginRelayDeviceAuth(): Promise<void> {
+    this.relayBootstrapFallbackAttempted = false
     return new Promise<void>((resolve, reject) => {
       const timer = setTimeout(() => {
         off()
@@ -114,18 +123,35 @@ export class RemoteSessionStore {
         }
         if (record['type'] === 'remote:device:ok') {
           const assigned = record['device'] as { id?: unknown; authVersion?: unknown } | undefined
-          if (assigned && typeof assigned.id === 'string') {
-            void this.applyAssignedDevice(
-              assigned.id,
-              typeof assigned.authVersion === 'number' ? assigned.authVersion : undefined
-            )
-          }
           clearTimeout(timer)
           off()
-          resolve()
+          if (!assigned || typeof assigned.id !== 'string') {
+            resolve()
+            return
+          }
+          void this.applyAssignedDevice(
+            assigned.id,
+            typeof assigned.authVersion === 'number' ? assigned.authVersion : undefined
+          ).then(resolve, (error: unknown) => {
+            reject(error instanceof Error ? error : new Error(String(error)))
+          })
           return
         }
         if (record['type'] === 'remote:device:error') {
+          if (this.keyMaterial?.deviceId && !this.relayBootstrapFallbackAttempted) {
+            this.relayBootstrapFallbackAttempted = true
+            this.keyMaterial.deviceId = null
+            this.keyMaterial.authVersion = 1
+            const desktopId = this.keyMaterialDesktopId
+            void (desktopId ? clearAssignedDesktop(desktopId) : Promise.resolve())
+              .then(() => this.sendRaw({ type: 'remote:device:challenge-request' }))
+              .catch((error) => {
+                clearTimeout(timer)
+                off()
+                reject(error instanceof Error ? error : new Error(String(error)))
+              })
+            return
+          }
           clearTimeout(timer)
           off()
           reject(new Error(`Relay device authentication failed: ${String(record['reason'] ?? '')}`))
@@ -136,7 +162,7 @@ export class RemoteSessionStore {
 
   /** Sign the desktop-issued relay challenge nonce and prove possession. */
   private async respondToRelayChallenge(nonce: string): Promise<void> {
-    const keyMaterial = await this.ensureKeyMaterial()
+    const keyMaterial = await this.ensureKeyMaterial(this.keyMaterialDesktopId)
     const transcript = handshakeTranscript({
       nonce,
       deviceId: keyMaterial.deviceId,
@@ -149,7 +175,8 @@ export class RemoteSessionStore {
       type: 'remote:device:auth',
       nonce,
       signature,
-      deviceName: keyMaterial.deviceName
+      deviceName: keyMaterial.deviceName,
+      connectionId: this.relayConnectionId
     }
     if (keyMaterial.deviceId) {
       authFrame['deviceId'] = keyMaterial.deviceId
@@ -203,7 +230,7 @@ export class RemoteSessionStore {
       } catch (error) {
         const message = error instanceof Error ? error.message : 'device not authenticated'
         remoteLog.error(`Remote session RPC blocked: ${message}`)
-        return
+        throw error
       }
     }
     await this.sendRaw(payload)
@@ -218,16 +245,13 @@ export class RemoteSessionStore {
   }): Promise<void> {
     this.secret = input.controlSecret
     this.closeChannels()
+    await this.ensureKeyMaterial(input.desktopId)
     this.dispatch({ type: 'relayProbeStart' })
     this.relayChallengeReceived = false
+    this.relayConnectionId = globalThis.crypto.randomUUID()
     // Install the first listener before opening the socket so a challenge
     // replayed from the relay buffer cannot arrive before the phone is ready.
     this.relayDeviceAuth = this.beginRelayDeviceAuth()
-    this.relayDeviceAuth.catch(() => {
-      if (this.snapshot.route.kind === 'RELAY_CONNECTED') {
-        this.dispatch({ type: 'disconnected', reason: 'device-auth-failed' })
-      }
-    })
     let awaitingInitialConnection = true
     // The account-relay client owns reconnection (full-jitter backoff that
     // preserves its bounded queue across socket drops), so the store never
@@ -248,45 +272,75 @@ export class RemoteSessionStore {
         }
         if (event.kind === 'connected' && this.accountRelayClient === client) {
           this.accountReconnectAttempt = 0
-          this.dispatch({ type: 'relayConnected', relay: { url: window.location.origin } })
           if (awaitingInitialConnection) {
             awaitingInitialConnection = false
           } else {
             this.relayChallengeReceived = false
-            this.relayDeviceAuth = this.beginRelayDeviceAuth()
-            this.relayDeviceAuth.catch(() => {
-              if (this.snapshot.route.kind === 'RELAY_CONNECTED') {
-                this.dispatch({ type: 'disconnected', reason: 'device-auth-failed' })
-              }
-            })
+            this.relayConnectionId = globalThis.crypto.randomUUID()
+            const deviceAuth = this.beginRelayDeviceAuth()
+            this.relayDeviceAuth = deviceAuth
+            void deviceAuth
+              .then(() => {
+                if (this.accountRelayClient !== client) return
+                this.recovering = false
+                this.dispatch({ type: 'relayConnected', relay: { url: window.location.origin } })
+                this.scheduleLanUpgrade()
+              })
+              .catch(() => {
+                if (this.accountRelayClient === client) {
+                  this.recovering = false
+                  this.dispatch({ type: 'disconnected', reason: 'device-auth-failed' })
+                }
+              })
           }
           // The desktop relay socket may outlive many mobile reconnects, so a
           // new mobile connection explicitly requests its own one-time device
           // challenge after its listener is installed.
           if (!this.relayChallengeReceived) {
-            void this.sendRaw({ type: 'remote:device:challenge-request' })
+            void this.sendRaw({
+              type: 'remote:device:challenge-request',
+              connectionId: this.relayConnectionId
+            })
           }
-          this.scheduleLanUpgrade()
           return
         }
         if (event.kind === 'offline' && this.accountRelayClient === client) {
+          this.recovering = this.recovering || this.snapshot.route.kind === 'RELAY_CONNECTED'
           this.dispatch({ type: 'disconnected', reason: 'desktop-offline' })
           return
         }
         if (event.kind === 'disconnected' && this.accountRelayClient === client) {
           // The client keeps retrying on its own; surface the state only.
+          this.recovering = this.recovering || this.snapshot.route.kind === 'RELAY_CONNECTED'
           this.dispatch({ type: 'disconnected', reason: event.reason })
         }
       }
     })
     this.accountRelayClient = client
     const outcome = await client.connect()
+    awaitingInitialConnection = false
     if (outcome === 'open') {
       this.accountReconnectAttempt = 0
+      try {
+        const deviceAuth = this.relayDeviceAuth
+        if (!deviceAuth) throw new Error('Relay device authentication did not start')
+        await deviceAuth
+      } catch (error) {
+        if (this.accountRelayClient === client) {
+          this.dispatch({ type: 'disconnected', reason: 'device-auth-failed' })
+        }
+        throw error
+      }
+      if (this.accountRelayClient !== client) return
+      this.recovering = false
       this.dispatch({ type: 'relayConnected', relay: { url: window.location.origin } })
       this.scheduleLanUpgrade()
       return
     }
+    // The first socket can legitimately report the desktop offline. Mark the
+    // current authentication waiter as observed; the reconnect event replaces
+    // it with a fresh challenge and timeout when the desktop appears.
+    void this.relayDeviceAuth?.catch(() => undefined)
     // The client self-reconnects; reflect the transient failure only.
     this.dispatch({
       type: 'disconnected',
@@ -295,11 +349,15 @@ export class RemoteSessionStore {
   }
 
   /** Prefer the authenticated account LAN route, then use the account relay. */
-  async connectAccountDesktop(input: AccountDesktopRoute): Promise<void> {
+  async connectAccountDesktop(
+    input: AccountDesktopRoute,
+    preserveWorkspace = false
+  ): Promise<void> {
+    if (!preserveWorkspace) this.recovering = false
     this.accountRoute = input
     if (input.lanTarget) {
       try {
-        await this.connectLan(input.controlSecret, input.lanTarget)
+        await this.connectLan(input.controlSecret, input.lanTarget, input.desktopId)
         this.accountRoute = input
         if (this.snapshot.route.kind === 'LAN_CONNECTED') return
       } catch (error) {
@@ -316,10 +374,14 @@ export class RemoteSessionStore {
   }
 
   /** Try the exact LAN endpoint supplied by the account connection response. */
-  private async connectLan(secret: string, target: RemoteConnectionTarget): Promise<void> {
+  private async connectLan(
+    secret: string,
+    target: RemoteConnectionTarget,
+    desktopId: string | null = null
+  ): Promise<void> {
     this.secret = secret
     this.closeChannels()
-    const keyMaterial = await this.ensureKeyMaterial()
+    const keyMaterial = await this.ensureKeyMaterial(desktopId)
     const device = {
       deviceId: keyMaterial.deviceId,
       deviceName: keyMaterial.deviceName,
@@ -339,6 +401,7 @@ export class RemoteSessionStore {
     )
     if (accepted) {
       remoteLog.info(`Remote session connected over LAN to ${peer.host}:${peer.port}`)
+      this.recovering = false
       this.dispatch({ type: 'lanConnected', peer })
       this.dispatch({ type: 'peerReachableChanged', reachable: true })
       return
@@ -371,6 +434,7 @@ export class RemoteSessionStore {
           return
         }
         if (event.kind === 'disconnected' && this.lanTransport === session) {
+          this.recovering = this.snapshot.route.kind === 'LAN_CONNECTED'
           this.dispatch({ type: 'disconnected', reason: 'lan-lost' })
           this.lanTransport = null
           if (this.accountRoute) void this.connectCloud(this.accountRoute)
@@ -389,12 +453,14 @@ export class RemoteSessionStore {
   /** Tear down any open channel and return to DISCONNECTED. */
   disconnect(): void {
     this.accountRoute = null
+    this.recovering = false
     this.closeChannels()
     this.dispatch({ type: 'disconnected' })
   }
 
   private closeChannels(): void {
     this.relayDeviceAuth = null
+    this.relayConnectionId = ''
     if (this.lanUpgradeTimer !== null) window.clearTimeout(this.lanUpgradeTimer)
     this.lanUpgradeTimer = null
     if (this.accountReconnectTimer !== null) window.clearTimeout(this.accountReconnectTimer)
@@ -403,6 +469,29 @@ export class RemoteSessionStore {
     this.lanTransport = null
     this.accountRelayClient?.close()
     this.accountRelayClient = null
+  }
+
+  /**
+   * Re-establish a selected desktop after a phone browser resumes from
+   * suspension. Mobile operating systems may silently discard the WebSocket
+   * while the page is frozen, so waiting only for its close callback can leave
+   * the installed PWA stranded indefinitely.
+   */
+  async resume(): Promise<void> {
+    const route = this.accountRoute
+    if (!route || !this.recovering) return
+    await this.connectAccountDesktop(route, true)
+  }
+
+  /** Mark an account route for verification when the browser is foregrounded. */
+  suspend(): void {
+    if (!this.accountRoute) return
+    if (
+      this.snapshot.route.kind === 'LAN_CONNECTED' ||
+      this.snapshot.route.kind === 'RELAY_CONNECTED'
+    ) {
+      this.recovering = true
+    }
   }
 
   private scheduleLanUpgrade(): void {
@@ -417,7 +506,7 @@ export class RemoteSessionStore {
     const route = this.accountRoute
     const target = route?.lanTarget
     if (!route || !target || this.snapshot.route.kind !== 'RELAY_CONNECTED') return
-    const keyMaterial = await this.ensureKeyMaterial()
+    const keyMaterial = await this.ensureKeyMaterial(route.desktopId)
     const peer: PeerRef = { host: target.host, port: target.port }
     const device = {
       deviceId: keyMaterial.deviceId,

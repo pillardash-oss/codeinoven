@@ -10,8 +10,8 @@ import { contextSidebarState } from './context-sidebar.svelte'
 import { rendererRecovery } from './renderer-recovery.svelte'
 import { notificationPanelState } from './notification-panel.svelte'
 import { gitState } from './git.svelte'
+import { threadMessages } from './thread-messages.svelte'
 import { APP_SLUG } from '$shared/brand'
-import { invoke } from '$lib/ipc.svelte'
 
 const RECENT_THREAD_VISITS_KEY = `${APP_SLUG}.recent-thread-visits.v1`
 const RECENT_THREAD_VISITS_LIMIT = 50
@@ -55,6 +55,7 @@ export interface SpecAgentResponse {
 export interface ProjectFileOpenRequest {
   projectId: string
   path: string
+  kind: 'file' | 'directory'
 }
 
 export type StudioDocument = 'brainstorm' | 'spec' | 'assignment' | 'audit'
@@ -93,6 +94,8 @@ class WorkspaceState {
   specStudioBusy = $state(false)
   specStudioFormulating = $state(false)
   specStudioError = $state('')
+  /** True when the header action is an eligible final-response retry. */
+  specStudioRetryable = $state(false)
   specAgentSidebarOpen = $state(false)
   toggleSpecStudio: (() => void) | null = null
   /** Assistant responses shown in the sidebar while reviewing a specification. */
@@ -118,6 +121,10 @@ class WorkspaceState {
   jumpToMessage: ((id: string) => void) | null = null
 
   openThread(thread: Thread, project: Project | null, iconUrl?: string | null): void {
+    // Start the bounded history warmup before publishing the new selection so
+    // every entry point (row click, scope board, notification, command palette,
+    // and Cmd/Ctrl navigation) shares the same preload path.
+    void threadMessages.preload(thread.projectId, thread.id)
     const visitKey = threadVisitKey(thread)
     this.recentThreadVisits = [
       visitKey,
@@ -127,7 +134,7 @@ class WorkspaceState {
     this.selectedThread = thread
     this.activeProject = project
     this.activeProjectIconUrl = iconUrl ?? null
-    contextSidebarState.activateThread(thread.projectId, thread.id)
+    contextSidebarState.activateThread(thread.projectId, thread.id, thread.title)
     rendererRecovery.setSelectedThread(thread.projectId, thread.id)
     // Event-driven git refresh: every thread open (creation, switch, restore)
     // tells the git store the project is in use, so it can refresh status and
@@ -235,8 +242,8 @@ class WorkspaceState {
   requestProjectFileOpenCount = $state(0)
   private consumedProjectFileOpenCount = 0
 
-  requestProjectFileOpen(projectId: string, path: string): void {
-    this.pendingProjectFileOpen = { projectId, path }
+  requestProjectFileOpen(projectId: string, path: string, kind: 'file' | 'directory'): void {
+    this.pendingProjectFileOpen = { projectId, path, kind }
     this.requestProjectFileOpenCount++
   }
 
@@ -275,12 +282,6 @@ class WorkspaceState {
   pendingAddedProject: Project | null = $state(null)
 
   clearThread(): void {
-    const closingThread = this.selectedThread
-    if (closingThread) {
-      void invoke('agent:killThreadProcesses', closingThread.projectId, closingThread.id).catch(
-        () => undefined
-      )
-    }
     this.selectedThread = null
     this.activeProject = null
     this.activeProjectIconUrl = null
@@ -295,6 +296,7 @@ class WorkspaceState {
     this.specStudioBusy = false
     this.specStudioFormulating = false
     this.specStudioError = ''
+    this.specStudioRetryable = false
     this.specAgentSidebarOpen = false
     this.toggleSpecStudio = null
     this.specAgentResponses = []
@@ -370,11 +372,12 @@ export function threadStatusSortKey(
   draftThreadKeys?: ReadonlySet<string> | null
 ): number {
   if (draftThreadKeys?.has(threadVisitKey(t))) return -1
-  // Todo first, then unread, then anything that still needs attention, then done.
+  // Todo first, then unread, then spec-ready artifacts, then other attention, then done.
   if (t.status === 'created') return 0
   if (!t.read) return 1
-  if (t.status !== 'completed') return 2
-  return 3
+  if (t.status === 'spec') return 2
+  if (t.status !== 'completed') return 3
+  return 4
 }
 
 /** Threads view sort grouped by attention status, most recent activity first within each group. */

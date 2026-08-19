@@ -1,25 +1,37 @@
 <script lang="ts">
   import type { MemoryCategory, MemoryEntry, MemoryPriority, MemoryScope } from '$shared/types'
+  import { parseModelKey } from '$lib/model-keys'
+  import { providerCatalog } from '$lib/stores/provider-catalog.svelte'
   import RichMarkdownEditor from '../shared/RichMarkdownEditor.svelte'
+  import ModelPicker from '../shared/ModelPicker.svelte'
   import MemoryToggle from './MemoryToggle.svelte'
   import { Trash2, ChevronDown, ChevronUp, Zap, Clock } from '@lucide/svelte'
 
   interface Props {
     entry: MemoryEntry
     index: number
+    projectId?: string
     scopeOptions: Array<{ value: MemoryScope; label: string }>
-    onUpdate: (index: number, field: keyof MemoryEntry, value: string | boolean | number) => void
+    onUpdate: (
+      index: number,
+      field: keyof MemoryEntry,
+      value: string | boolean | number | string[] | undefined
+    ) => void
     onRemove: (index: number) => void
   }
 
-  let { entry, index, scopeOptions, onUpdate, onRemove }: Props = $props()
+  let { entry, index, projectId, scopeOptions, onUpdate, onRemove }: Props = $props()
   let expanded = $state(false)
+  let selectedModel = $derived(
+    (entry.modelKeys ?? []).map((key) => parseModelKey(key)).find((model) => model !== null)
+  )
 
   const categoryOptions: { value: MemoryCategory; label: string }[] = [
     { value: 'behavioral', label: 'Behavioral' },
     { value: 'project-rule', label: 'Project Rule' },
     { value: 'identity', label: 'Identity' },
-    { value: 'preference', label: 'Preference' }
+    { value: 'preference', label: 'Preference' },
+    { value: 'models', label: 'Models' }
   ]
 
   const priorityOptions: { value: MemoryPriority; label: string; color: string }[] = [
@@ -52,6 +64,8 @@
         return 'I'
       case 'preference':
         return 'P'
+      case 'models':
+        return 'M'
     }
   }
 </script>
@@ -214,6 +228,34 @@
           </select>
         </div>
       </div>
+
+      {#if entry.category === 'models'}
+        <div class="rounded-lg border border-primary/20 bg-primary/5 p-3">
+          <div class="mb-2">
+            <p class="text-xs font-medium text-foreground">Models this memory applies to</p>
+            <p class="mt-0.5 text-[11px] text-muted">
+              Select one or more models. This memory is injected only when one of them is active.
+            </p>
+          </div>
+          <ModelPicker
+            providers={providerCatalog.allCached()}
+            {projectId}
+            harnessId={selectedModel?.harnessId ?? 'opencode'}
+            providerId={selectedModel?.providerId ?? ''}
+            modelId={selectedModel?.modelId ?? ''}
+            variant="field"
+            multiSelect
+            selectedModelKeys={entry.modelKeys ?? []}
+            onSelect={() => undefined}
+            onSelectMultiple={(modelKeys) => onUpdate(index, 'modelKeys', modelKeys)}
+          />
+          {#if (entry.modelKeys?.length ?? 0) === 0}
+            <p class="mt-2 text-[11px] text-danger" role="alert">
+              Choose at least one model before saving this entry.
+            </p>
+          {/if}
+        </div>
+      {/if}
 
       <div class="flex items-center gap-4 text-[11px] text-dimmed">
         <span class="flex items-center gap-1">

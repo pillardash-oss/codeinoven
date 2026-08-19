@@ -234,6 +234,11 @@
     )
   }
 
+  function findingNumber(findingId: string): number {
+    const index = draft.content.findings.findIndex((finding) => finding.id === findingId)
+    return index < 0 ? 0 : index + 1
+  }
+
   function addFinding(): void {
     draft.content.findings.push({
       id: crypto.randomUUID(),
@@ -832,11 +837,14 @@
                     </div>
                     {#each severityFindings as finding (finding.id)}
                       <button
-                        class="block w-full truncate rounded-md px-2 py-1 text-left text-[10px] text-muted hover:bg-elevated hover:text-foreground"
+                        class="flex w-full items-baseline gap-1.5 rounded-md px-2 py-1 text-left text-[10px] text-muted hover:bg-elevated hover:text-foreground"
                         title={finding.title}
                         onclick={() => void scrollToFinding(finding.id)}
                       >
-                        {finding.title}
+                        <span class="shrink-0 tabular-nums text-dimmed">
+                          {findingNumber(finding.id)}.
+                        </span>
+                        <span class="min-w-0 truncate">{finding.title}</span>
                       </button>
                     {/each}
                   </div>

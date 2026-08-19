@@ -33,15 +33,25 @@ export const LAST_USE_WRITE_THROTTLE_MS = 15 * 60 * 1_000
 export const STEP_UP_TTL_MS = 60 * 1_000
 export const MAX_PENDING_APPROVALS_PER_DEVICE = 5
 export const MAX_PENDING_APPROVALS_GLOBAL = 20
-export const MIGRATION_WINDOW_MS = 7 * 24 * 60 * 60 * 1_000
 export const TOMBSTONE_RETENTION_MS = Math.max(
   365 * 24 * 60 * 60 * 1_000,
   DEVICE_EXPIRY_MS + 7 * 24 * 60 * 60 * 1_000
 )
 
-/** The default low-risk scope profile granted to a freshly enrolled device. */
+const LEGACY_READ_ONLY_DEVICE_SCOPES: readonly RemoteScope[] = [
+  'workspace.read',
+  'conversation.read',
+  'conversation.control',
+  'workflow.read',
+  'git.read',
+  'memory.read'
+]
+
+/** Workspace capabilities expected from the paired remote application. */
 export const DEFAULT_DEVICE_SCOPES: readonly RemoteScope[] = [
   'workspace.read',
+  'workspace.write',
+  'workspace.delete',
   'conversation.read',
   'conversation.control',
   'workflow.read',
@@ -169,7 +179,7 @@ async function verifyEcdsaSignature(
   }
 }
 
-/** Generate an exportable ECDSA P-256 key pair (used for tests and migration). */
+/** Generate an exportable ECDSA P-256 key pair for enrollment tooling. */
 export async function generateSigningKeyPair(): Promise<{
   privateJwk: JsonWebKey
   publicJwk: JsonWebKey
@@ -201,6 +211,21 @@ export class DeviceCredentialService {
   constructor(db: Database, options: { now?: () => number } = {}) {
     this.repo = new RemoteDeviceRepo(db)
     this.now = options.now ?? (() => Date.now())
+    this.upgradeLegacyWorkspaceScopes()
+  }
+
+  /**
+   * The first scoped-credential release enrolled the PWA as read-only even
+   * though its shipped UI exposed rename, pin, fork, and delete actions. Add
+   * only the missing workspace scopes to that exact legacy profile, preserving
+   * authVersion so an already paired phone does not get signed out.
+   */
+  private upgradeLegacyWorkspaceScopes(): void {
+    const legacy = [...LEGACY_READ_ONLY_DEVICE_SCOPES].sort().join(',')
+    for (const device of this.repo.listActive()) {
+      if ([...device.scopes].sort().join(',') !== legacy) continue
+      this.repo.updateScopes(device.deviceId, [...DEFAULT_DEVICE_SCOPES], device.authVersion)
+    }
   }
 
   // ── Periodic maintenance ─────────────────────────────────────────────
@@ -902,10 +927,5 @@ export class DeviceCredentialService {
 
   pruneAudit(): number {
     return this.repo.pruneAudit(this.now())
-  }
-
-  /** Whether the migration window from the shared peer secret is still open. */
-  static migrationOpen(legacyExpiresAt: number | null, now: number): boolean {
-    return legacyExpiresAt !== null && legacyExpiresAt > now
   }
 }

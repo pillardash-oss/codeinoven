@@ -1,25 +1,31 @@
-import { spawn } from 'child_process'
+import { execFile, spawn, type ChildProcess } from 'child_process'
 import { readFile } from 'node:fs/promises'
 import { basename } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { ModelInfo, SDKUserMessage } from '@anthropic-ai/claude-agent-sdk'
 import type {
+  AgentQuestion,
   AgentMessage,
   AgentPart,
   AgentProviderIssue,
+  AgentProviderIssueKind,
   AgentRateLimitWindow,
   AgentTokenUsage,
   AgentUsageCredits,
   ProviderCatalog,
   ProviderModel,
   PromptAttachment,
+  PermissionReply,
+  SessionAgentEvent,
   ThinkingPreset
 } from '../../lib/types'
+import { normalizeAgentQuestions, permissionPatterns } from '../../lib/agent-interactions'
 import { fastSelectionModelId, resolveFastModelId } from '../../lib/fast-inference'
-import type { StorageEngine } from '../storage-engine'
-import { BaseUrlProviderService } from '../base-url-provider-service'
-import { Logger } from '../logger'
-import { SecretVault } from '../secret-vault'
+import { classifyProviderIssue } from '../../lib/provider-issue'
+import type { StorageEngine } from '../storage/storage-engine'
+import { BaseUrlProviderService } from '../providers/base-url-provider-service'
+import { Logger } from '../system/logger'
+import { SecretVault } from '../storage/secret-vault'
 import type {
   CliLineParseContext,
   CliLineParseResult,
@@ -29,6 +35,7 @@ import type {
 import { PersistentCliDriver } from './persistent-cli-driver'
 import type {
   GenerateTitleOptions,
+  HarnessAuthStatus,
   HarnessCapabilities,
   SendPromptOptions,
   SteerPromptOptions,
@@ -56,6 +63,91 @@ const THINKING_PRESETS: ThinkingPreset[] = [
 
 const CLAUDE_MODEL_DISCOVERY_TIMEOUT_MS = 15_000
 const CLAUDE_USAGE_TIMEOUT_MS = 12_000
+/** How long a successful `claude auth status` pre-flight verdict is trusted. */
+const PRE_FLIGHT_AUTH_PROBE_TTL_MS = 30_000
+/** Bounded wait for the `claude auth status` pre-flight probe. */
+const PRE_FLIGHT_AUTH_PROBE_TIMEOUT_MS = 8_000
+/**
+ * How long a proven authentication keeps the shared credential trusted for
+ * concurrent spawns. The bypass must expire with the access token itself;
+ * otherwise an idle "authenticated" session would let fresh spawns skip the
+ * gate while the token is already expired, reopening the refresh race
+ * (anthropics/claude-code#76905). Conservative vs the ~5h access-token TTL.
+ */
+const ACCESS_TOKEN_FRESH_MS = 4 * 60 * 60 * 1_000
+/**
+ * How long a first-party session spawn may hold the credential-refresh gate
+ * while it resolves authentication. The gate exists because Claude Code's
+ * macOS keychain OAuth store races when two processes refresh a single-use
+ * token concurrently (anthropics/claude-code#76905); the loser wipes the
+ * shared credential. The gate must stay held until authentication is PROVEN
+ * (message_start), not a short timer: a fast cap re-opens the race window
+ * whenever the first refresh takes longer than the cap (the CLI retries a
+ * failing refresh for ~45s, so a 1.5s cap let concurrent spawns through).
+ * This bound is only a safety valve so a pathological CLI cannot stall other
+ * threads/projects indefinitely; normal auth confirms in ~1-3s and releases
+ * the gate immediately.
+ */
+const AUTH_CONFIRM_TIMEOUT_MS = 60_000
+/** Poll interval while waiting for a spawned session to prove authentication. */
+const AUTH_CONFIRM_POLL_MS = 200
+/**
+ * Cap on concurrent one-shot `claude` spawns (auth probe, on-demand usage
+ * refresh, version probe, model discovery). Every one-shot spawn holds several
+ * file descriptors (stdio pipes) for its lifetime, so a burst of threads or
+ * projects refreshing simultaneously can exhaust the process fd table and
+ * fail later spawns with `EBADF`. Bounding the one-shots keeps the fd table
+ * stable without touching long-lived session processes, which are gated
+ * separately by the credential-refresh slot.
+ */
+const ONE_SHOT_SPAWN_LIMIT = 4
+
+/** Keep Claude Code's native per-repository memory from crossing app threads. */
+function buildClaudeEnvironment(): NodeJS.ProcessEnv {
+  return {
+    ...buildHarnessEnvironment(),
+    CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1',
+    CLAUDE_CODE_ENABLE_TODO_TOOLS: '1'
+  }
+}
+
+const CLAUDE_TOOL_NAMES: Record<string, string> = {
+  question: 'AskUserQuestion',
+  read: 'Read',
+  glob: 'Glob',
+  grep: 'Grep',
+  list: 'Glob',
+  lsp: 'LSP',
+  bash: 'Bash',
+  webfetch: 'WebFetch',
+  websearch: 'WebSearch'
+}
+
+function claudeToolName(value: string): string {
+  return CLAUDE_TOOL_NAMES[value.toLowerCase()] ?? value
+}
+
+/** A tiny FIFO semaphore used to bound concurrent one-shot claude spawns. */
+class OneShotSpawnGate {
+  private readonly queue: (() => void)[] = []
+  private active = 0
+
+  constructor(private readonly limit: number) {}
+
+  async acquire(): Promise<() => void> {
+    while (this.active >= this.limit) {
+      await new Promise<void>((resolve) => this.queue.push(resolve))
+    }
+    this.active += 1
+    let released = false
+    return () => {
+      if (released) return
+      released = true
+      this.active -= 1
+      this.queue.shift()?.()
+    }
+  }
+}
 const CLAUDE_IMAGE_MIMES = new Set(['image/jpeg', 'image/png', 'image/gif', 'image/webp'])
 const CLAUDE_TEXT_MIMES = new Set([
   'application/json',
@@ -93,6 +185,34 @@ interface ClaudeAuthenticationReadiness {
   resolve: (authenticated: boolean) => void
   settled: boolean
 }
+
+type ClaudeQuestionRequest =
+  | {
+      sessionId: string
+      questions: AgentQuestion[]
+      transport: 'control'
+      input: Record<string, unknown>
+      controlRequestId: string
+    }
+  | {
+      sessionId: string
+      questions: AgentQuestion[]
+      transport: 'tool_result'
+      callId: string
+    }
+
+interface ClaudePermissionRequest {
+  sessionId: string
+  input: Record<string, unknown>
+}
+
+function sameClaudeQuestions(left: AgentQuestion[], right: AgentQuestion[]): boolean {
+  return (
+    left.length === right.length &&
+    left.every((question, index) => question.prompt === right[index]?.prompt)
+  )
+}
+
 type ClaudeInputBlock =
   | { type: 'text'; text: string }
   | {
@@ -138,7 +258,7 @@ function claudeAuthenticationResult(value: unknown): boolean | undefined {
 function claudeModelName(model: ModelInfo): string {
   const resolvedName = model.description.split(' · ', 1)[0]?.trim()
   if (!resolvedName) return model.displayName
-  if (model.value === 'default') return `${model.displayName} · ${resolvedName}`
+  if (model.value === 'default') return model.displayName
   return model.resolvedModel && model.resolvedModel !== model.value
     ? `${resolvedName} (latest)`
     : resolvedName
@@ -176,7 +296,7 @@ async function discoverClaudeModels(projectPath: string): Promise<ProviderModel[
     prompt: keepClaudeDiscoveryOpen(),
     options: {
       cwd: projectPath,
-      env: buildHarnessEnvironment(),
+      env: buildClaudeEnvironment(),
       pathToClaudeCodeExecutable: 'claude',
       tools: []
     }
@@ -473,6 +593,39 @@ function toolPart(
   }
 }
 
+function isClaudeSubagentTool(name: string): boolean {
+  return name === 'Agent' || name === 'Task'
+}
+
+function claudeSubagentPart(
+  messageId: string,
+  callId: string,
+  name: string,
+  input: Record<string, unknown>,
+  status: 'pending' | 'running' | 'completed' | 'error',
+  output?: string
+): AgentPart {
+  const description =
+    string(input['description']) ?? string(input['name']) ?? string(input['subagent_type']) ?? name
+  return {
+    type: 'subagent',
+    id: `claude-subagent-${callId}`,
+    messageID: messageId,
+    callID: callId,
+    activity: {
+      status,
+      agent: string(input['subagent_type']) ?? string(input['agent']) ?? name,
+      description,
+      prompt: string(input['prompt']),
+      providerTaskId: callId,
+      modelId: string(input['model']),
+      background: input['run_in_background'] === true || input['background'] === true,
+      ...(output ? { output } : {}),
+      ...(status === 'error' ? { error: output ?? 'Claude sub-agent task failed' } : {})
+    }
+  }
+}
+
 function summaryText(value: unknown): string | undefined {
   if (typeof value === 'string') return value
   if (!Array.isArray(value)) return undefined
@@ -617,13 +770,12 @@ function partFromBlock(
   }
   if (type === 'tool_use') {
     const callId = string(block['id']) ?? `claude-call-${messageId}-${index}`
-    return toolPart(
-      messageId,
-      callId,
-      string(block['name']) ?? 'unknown',
-      record(block['input']) ?? {},
-      'pending'
-    )
+    const name = string(block['name']) ?? 'unknown'
+    const input = record(block['input']) ?? {}
+    if (isClaudeSubagentTool(name)) {
+      return claudeSubagentPart(messageId, callId, name, input, 'pending')
+    }
+    return toolPart(messageId, callId, name, input, 'pending')
   }
   return null
 }
@@ -636,6 +788,20 @@ function findToolPart(
     const part = message.parts.find(
       (candidate): candidate is Extract<AgentPart, { type: 'tool' }> =>
         candidate.type === 'tool' && candidate.callID === callId
+    )
+    if (part) return part
+  }
+  return undefined
+}
+
+function findSubagentPart(
+  context: CliLineParseContext,
+  callId: string
+): Extract<AgentPart, { type: 'subagent' }> | undefined {
+  for (const message of [...context.session.messages].reverse()) {
+    const part = message.parts.find(
+      (candidate): candidate is Extract<AgentPart, { type: 'subagent' }> =>
+        candidate.type === 'subagent' && candidate.callID === callId
     )
     if (part) return part
   }
@@ -672,6 +838,37 @@ function mergeAssistantRecord(existing: AgentMessage, incoming: AgentMessage): A
   }
 }
 
+/**
+ * Classify a Claude Code `system`/`api_retry` stream event. The SDK emits this
+ * for ANY retryable provider failure — connection errors (no HTTP status),
+ * overloaded servers (529), 5xx responses, and 429 rate limiting — so the issue
+ * kind must come from the event's `error`/`error_status` rather than treating
+ * every retry as an exhausted usage limit.
+ */
+function claudeApiRetryKind(
+  error: string | undefined,
+  statusCode: number | undefined
+): AgentProviderIssueKind {
+  switch (error) {
+    case 'rate_limit':
+      return 'rate_limit'
+    case 'overloaded':
+    case 'server_error':
+      return 'provider_unavailable'
+    case 'billing_error':
+      return 'billing'
+    case 'authentication_failed':
+    case 'oauth_org_not_allowed':
+      return 'authentication'
+    default:
+      break
+  }
+  if (statusCode === undefined) return 'network'
+  if (statusCode === 429) return 'rate_limit'
+  if (statusCode >= 500) return 'provider_unavailable'
+  return classifyProviderIssue('', statusCode)
+}
+
 /** Map one documented Claude Code stream-json record to CodeInOven's stable shapes. */
 export function mapClaudeCodeRecord(
   value: unknown,
@@ -683,10 +880,90 @@ export function mapClaudeCodeRecord(
   const nativeSessionId = string(entry['session_id'])
   if (type === 'system' && entry['subtype'] === 'init') return { nativeSessionId }
 
+  if (type === 'system' && entry['subtype'] === 'compact_boundary') {
+    const metadata = record(entry['compact_metadata']) ?? record(entry['compactMetadata'])
+    const trigger = string(metadata?.['trigger'])
+    const messageId =
+      string(entry['uuid']) ??
+      `claude-compaction-${context.sessionId}-${number(metadata?.['pre_tokens']) ?? Date.now()}`
+    const part = {
+      type: 'compaction' as const,
+      id: `${messageId}:compaction`,
+      messageID: messageId,
+      auto: trigger !== 'manual',
+      overflow: trigger === 'auto'
+    }
+    return {
+      nativeSessionId,
+      messages: [
+        {
+          id: messageId,
+          role: 'assistant',
+          origin: 'compaction',
+          visibility: 'working_trace',
+          parts: [part],
+          createdAt: Date.now(),
+          completedAt: Date.now()
+        }
+      ],
+      events: [
+        { type: 'message.part.updated', sessionId: context.sessionId, part },
+        {
+          type: 'message.completed',
+          sessionId: context.sessionId,
+          messageId,
+          compaction: true
+        }
+      ]
+    }
+  }
+
+  if (type === 'control_request') {
+    const request = record(entry['request'])
+    const requestId = string(entry['request_id'])
+    if (request?.['subtype'] !== 'can_use_tool' || !requestId) {
+      return nativeSessionId ? { nativeSessionId } : null
+    }
+    const input = record(request['input']) ?? {}
+    const toolName = string(request['tool_name']) ?? 'tool'
+    if (toolName === 'AskUserQuestion') {
+      return {
+        nativeSessionId,
+        events: [
+          {
+            type: 'question.asked',
+            sessionId: context.sessionId,
+            requestId,
+            questions: normalizeAgentQuestions(input),
+            metadata: { transport: 'control', input, controlRequestId: requestId }
+          }
+        ]
+      }
+    }
+    return {
+      nativeSessionId,
+      events: [
+        {
+          type: 'permission.asked',
+          sessionId: context.sessionId,
+          permission: {
+            id: requestId,
+            sessionId: context.sessionId,
+            permission: toolName,
+            patterns: permissionPatterns(input),
+            metadata: { subtype: 'can_use_tool', toolName, input, request }
+          }
+        }
+      ]
+    }
+  }
+
   if (type === 'system' && entry['subtype'] === 'api_retry') {
     const delayMs = numberProperty(entry, 'retry_delay_ms', 'retryDelayMs') ?? 0
     const rawError =
       serializeContent(entry['error']) ?? 'Claude Code is retrying the provider request'
+    const statusCode = numberProperty(entry, 'error_status', 'errorStatus')
+    const kind = claudeApiRetryKind(string(entry['error']), statusCode)
     return {
       nativeSessionId,
       events: [
@@ -696,11 +973,12 @@ export function mapClaudeCodeRecord(
           status: {
             state: 'waiting',
             issue: {
-              kind: 'rate_limit',
+              kind,
               message: 'Claude Code is waiting before retrying the provider request.',
               rawError,
               harnessId: 'claude-code',
               retryable: true,
+              ...(statusCode === undefined ? {} : { statusCode }),
               ...(delayMs > 0 ? { retryAt: Date.now() + delayMs } : {})
             }
           }
@@ -712,6 +990,29 @@ export function mapClaudeCodeRecord(
   if (type === 'assistant') {
     const rawMessage = record(entry['message'])
     if (!rawMessage) return nativeSessionId ? { nativeSessionId } : null
+    const parentCallId = string(entry['parent_tool_use_id'])
+    if (parentCallId) {
+      const existing = findSubagentPart(context, parentCallId)
+      if (!existing) return nativeSessionId ? { nativeSessionId } : null
+      const output = Array.isArray(rawMessage['content'])
+        ? rawMessage['content']
+            .map((block) => serializeContent(record(block)?.['text']))
+            .filter((text): text is string => Boolean(text))
+            .join('\n')
+        : undefined
+      const part: Extract<AgentPart, { type: 'subagent' }> = {
+        ...existing,
+        activity: {
+          ...existing.activity,
+          status: 'running',
+          ...(output ? { output } : {})
+        }
+      }
+      return {
+        nativeSessionId,
+        events: [{ type: 'message.part.updated', sessionId: context.sessionId, part }]
+      }
+    }
     const incoming = messageFromAssistant(rawMessage)
     const existing = context.session.messages.find((message) => message.id === incoming.id)
     const mapped = existing ? mergeAssistantRecord(existing, incoming) : incoming
@@ -772,6 +1073,21 @@ export function mapClaudeCodeRecord(
       if (!block || block['type'] !== 'tool_result') continue
       const callId = string(block['tool_use_id'])
       if (!callId) continue
+      const existingSubagent = findSubagentPart(context, callId)
+      if (existingSubagent) {
+        const output = serializeContent(block['content'])
+        const failed = block['is_error'] === true
+        parts.push({
+          ...existingSubagent,
+          activity: {
+            ...existingSubagent.activity,
+            status: failed ? 'error' : 'completed',
+            ...(output ? { output } : {}),
+            ...(failed ? { error: output ?? 'Claude sub-agent task failed' } : {})
+          }
+        })
+        continue
+      }
       const existing = findToolPart(context, callId)
       if (!existing) continue
       const output = serializeContent(block['content'])
@@ -812,6 +1128,13 @@ export function mapClaudeCodeRecord(
     const current = latestAssistant(context)
     if (eventType === 'content_block_start' && current) {
       const block = record(event?.['content_block'])
+      // Claude streams tool blocks before their JSON input. Promoting an empty
+      // AskUserQuestion block creates a fallback question that races the
+      // completed assistant record and native can_use_tool request. Wait for
+      // either complete record, both of which carry the real question input.
+      if (block?.['type'] === 'tool_use' && string(block['name']) === 'AskUserQuestion') {
+        return nativeSessionId ? { nativeSessionId } : null
+      }
       const index = number(event?.['index']) ?? current.parts.length
       const part = block ? partFromBlock(current.id, block, index) : null
       return part
@@ -994,20 +1317,40 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
     steering: true,
     nativeResume: true,
     messageHistory: 'mirrored',
-    interactivePermissions: false,
+    interactivePermissions: true,
     attachments: true,
     commands: false,
     providerCatalog: true,
     sessionStatus: true,
     contextUsage: true,
     compaction: false,
-    subagents: false,
+    subagents: true,
     structuredOutput: true,
     nativeUtilities: ['web_search', 'web_fetch']
   }
   private readonly pendingRateLimits = new Map<string, AgentRateLimitWindow[]>()
   private readonly activeUsageProbes = new Map<string, ClaudeUsageProbe>()
   private readonly authenticationReadiness = new Map<string, ClaudeAuthenticationReadiness>()
+  /** Cached `claude auth status` verdict per project, so a fresh thread never
+   *  re-spawns the CLI for auth on every message. */
+  private readonly authProbeCache = new Map<string, { authenticated: boolean; at: number }>()
+  /** Bounds concurrent one-shot claude spawns to keep the fd table stable. */
+  private readonly oneShotSpawnGate = new OneShotSpawnGate(ONE_SHOT_SPAWN_LIMIT)
+  /**
+   * Sessions whose live process proved authentication this run, with the time
+   * it was proven. A session only counts while its proof is fresh (within
+   * ACCESS_TOKEN_FRESH_MS): once that window passes, the shared access token
+   * may have expired, so concurrent spawns must go through the gate again.
+   */
+  private readonly authenticatedSessions = new Map<string, number>()
+  /** First-party sessions (shared Anthropic OAuth credential) spawned this run. */
+  private readonly firstPartySessions = new Set<string>()
+  private readonly pendingClaudeQuestions = new Map<string, ClaudeQuestionRequest>()
+  private readonly pendingClaudePermissions = new Map<string, ClaudePermissionRequest>()
+  /** Held while a first-party session spawn may be refreshing the credential. */
+  private authSlotHeld = false
+  /** Resolved when the current credential-refresh window closes. */
+  private authSlot: Promise<void> = Promise.resolve()
   private usageProbeSequence = 0
 
   constructor(
@@ -1021,7 +1364,7 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
   async listProviders(projectPath: string): Promise<ProviderCatalog[]> {
     let anthropicCatalog: ProviderCatalog
     try {
-      const models = await discoverClaudeModels(projectPath)
+      const models = await this.runAuthSerialized(() => discoverClaudeModels(projectPath))
       if (models.length === 0) throw new Error('Claude Code returned no account-selectable models')
       anthropicCatalog = {
         id: 'anthropic',
@@ -1098,6 +1441,174 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
     await this.persistSession(session)
   }
 
+  override async replyPermission(
+    _projectPath: string,
+    requestId: string,
+    reply: PermissionReply,
+    message?: string,
+    sessionId?: string
+  ): Promise<void> {
+    const pending = this.pendingClaudePermissions.get(requestId)
+    const targetSessionId = sessionId ?? pending?.sessionId
+    if (!targetSessionId || !pending)
+      throw new Error(`Claude permission request is no longer pending: ${requestId}`)
+    const response = {
+      type: 'control_response',
+      response: {
+        subtype: 'success',
+        request_id: requestId,
+        response: {
+          behavior: reply === 'reject' ? 'deny' : 'allow',
+          ...(reply === 'reject' ? {} : { updatedInput: pending.input }),
+          ...(message ? { message } : {})
+        }
+      }
+    }
+    this.writeActiveInput(targetSessionId, `${JSON.stringify(response)}\n`)
+    this.pendingClaudePermissions.delete(requestId)
+  }
+
+  override async replyToQuestion(
+    _projectPath: string,
+    sessionId: string,
+    requestId: string,
+    answers: string[][]
+  ): Promise<void> {
+    const request = this.pendingClaudeQuestions.get(requestId)
+    if (!request || request.sessionId !== sessionId) {
+      throw new Error(`Claude question request is no longer pending: ${requestId}`)
+    }
+    const answersByPrompt = Object.fromEntries(
+      request.questions.map((question, index) => [
+        question.prompt,
+        (answers[index] ?? []).join(', ')
+      ])
+    )
+    if (request.transport === 'control') {
+      this.writeActiveInput(
+        request.sessionId,
+        `${JSON.stringify({
+          type: 'control_response',
+          response: {
+            subtype: 'success',
+            request_id: request.controlRequestId,
+            response: {
+              behavior: 'allow',
+              updatedInput: { ...request.input, answers: answersByPrompt }
+            }
+          }
+        })}\n`
+      )
+    } else {
+      this.writeClaudeToolResult(
+        request.sessionId,
+        request.callId,
+        JSON.stringify({ answers: answersByPrompt })
+      )
+    }
+    this.pendingClaudeQuestions.delete(requestId)
+  }
+
+  override async rejectQuestion(
+    _projectPath: string,
+    sessionId: string,
+    requestId: string
+  ): Promise<void> {
+    const request = this.pendingClaudeQuestions.get(requestId)
+    if (!request || request.sessionId !== sessionId) {
+      throw new Error(`Claude question request is no longer pending: ${requestId}`)
+    }
+    if (request.transport === 'control') {
+      this.writeActiveInput(
+        request.sessionId,
+        `${JSON.stringify({
+          type: 'control_response',
+          response: {
+            subtype: 'success',
+            request_id: request.controlRequestId,
+            response: { behavior: 'deny', message: 'The user dismissed this question.' }
+          }
+        })}\n`
+      )
+    } else {
+      this.writeClaudeToolResult(
+        request.sessionId,
+        request.callId,
+        'The user dismissed this question.',
+        true
+      )
+    }
+    this.pendingClaudeQuestions.delete(requestId)
+  }
+
+  private writeClaudeToolResult(
+    sessionId: string,
+    callId: string,
+    content: string,
+    isError = false
+  ): void {
+    const message = {
+      type: 'user',
+      message: {
+        role: 'user',
+        content: [
+          {
+            type: 'tool_result',
+            tool_use_id: callId,
+            content,
+            ...(isError ? { is_error: true } : {})
+          }
+        ]
+      },
+      parent_tool_use_id: null
+    }
+    this.writeActiveInput(sessionId, `${JSON.stringify(message)}\n`)
+  }
+
+  protected override normalizeInteractionEvents(
+    sessionId: string,
+    events: SessionAgentEvent[]
+  ): SessionAgentEvent[] {
+    const normalized = super.normalizeInteractionEvents(sessionId, events).map((event) => {
+      if (event.type !== 'question.asked' || event.metadata?.['transport'] !== 'control') {
+        return event
+      }
+      const fallback = [...this.pendingClaudeQuestions.entries()].find(
+        ([, request]) =>
+          request.sessionId === sessionId &&
+          request.transport === 'tool_result' &&
+          sameClaudeQuestions(request.questions, event.questions)
+      )
+      return fallback ? { ...event, requestId: fallback[0] } : event
+    })
+    for (const event of normalized) {
+      if (event.type === 'permission.asked' && event.permission.id) {
+        const input = record(event.permission.metadata['input']) ?? {}
+        this.pendingClaudePermissions.set(event.permission.id, { sessionId, input })
+      }
+      if (event.type === 'question.asked') {
+        const input = record(event.metadata?.['input'])
+        if (event.metadata?.['transport'] === 'control' && input) {
+          this.pendingClaudeQuestions.set(event.requestId, {
+            sessionId,
+            questions: event.questions,
+            transport: 'control',
+            input,
+            controlRequestId: string(event.metadata['controlRequestId']) ?? event.requestId
+          })
+        } else if (event.tool) {
+          this.pendingClaudeQuestions.set(event.requestId, {
+            sessionId,
+            questions: event.questions,
+            transport: 'tool_result',
+            callId: event.tool.callID
+          })
+        }
+      }
+    }
+    return normalized
+  }
+
   async prepareUtilityRuntime(
     request: UtilityRuntimePreparationRequest
   ): Promise<UtilityRuntimeOverlay> {
@@ -1146,27 +1657,44 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
   }
 
   protected async ensureCliReady(projectPath: string): Promise<void> {
-    await new Promise<void>((resolve, reject) => {
-      const child = spawn('claude', ['--version'], {
-        cwd: projectPath,
-        env: buildHarnessEnvironment(),
-        stdio: ['ignore', 'ignore', 'pipe']
-      })
-      let stderr = ''
-      child.stderr?.on('data', (chunk: Buffer) => {
-        stderr += chunk.toString()
-      })
-      child.on('error', (error) =>
-        reject(new Error(`Claude Code CLI is unavailable: ${error.message}`))
-      )
-      child.on('exit', (code) =>
-        code === 0
-          ? resolve()
-          : reject(
-              new Error(`Claude Code CLI version probe failed${stderr ? `: ${stderr.trim()}` : ''}`)
+    const release = await this.oneShotSpawnGate.acquire()
+    try {
+      await new Promise<void>((resolve, reject) => {
+        let child: ChildProcess
+        try {
+          child = spawn('claude', ['--version'], {
+            cwd: projectPath,
+            env: buildClaudeEnvironment(),
+            stdio: ['ignore', 'ignore', 'pipe']
+          })
+        } catch (error) {
+          reject(
+            new Error(
+              `Claude Code CLI is unavailable: ${error instanceof Error ? error.message : String(error)}`
             )
-      )
-    })
+          )
+          return
+        }
+        let stderr = ''
+        child.stderr?.on('data', (chunk: Buffer) => {
+          stderr += chunk.toString()
+        })
+        child.on('error', (error) =>
+          reject(new Error(`Claude Code CLI is unavailable: ${error.message}`))
+        )
+        child.on('exit', (code) =>
+          code === 0
+            ? resolve()
+            : reject(
+                new Error(
+                  `Claude Code CLI version probe failed${stderr ? `: ${stderr.trim()}` : ''}`
+                )
+              )
+        )
+      })
+    } finally {
+      release()
+    }
   }
 
   /** Claude Code accepts ephemeral settings JSON, avoiding global or project config writes. */
@@ -1175,14 +1703,34 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
     session: PersistentCliSession,
     options: SendPromptOptions
   ): Promise<CliTurnCommand> {
+    // Pre-flight auth gate at message-send time (buildTurnCommand runs per turn,
+    // never on thread open). For first-party Anthropic turns, probe the CLI's
+    // stored credential so the CLI's own silent OAuth refresh is triggered up
+    // front; if it genuinely cannot authenticate, fail with a clean early
+    // authentication issue instead of a confusing mid-turn authentication_failed.
+    const firstParty = !options.settings.providerId || options.settings.providerId === 'anthropic'
+    if (firstParty && !this.isTitleSession(session.id)) {
+      const releaseSpawn = await this.oneShotSpawnGate.acquire()
+      try {
+        const authenticated = await this.probeFirstPartyAuthentication(_projectPath)
+        if (!authenticated) {
+          throw new Error('Claude Code sign-in required. Sign in, then retry this message.')
+        }
+      } finally {
+        releaseSpawn()
+      }
+    }
     const args = [
       '-p',
       '--output-format',
       'stream-json',
       '--input-format',
       'stream-json',
+      '--permission-prompt-tool',
+      'stdio',
       '--verbose',
       '--include-partial-messages',
+      '--forward-subagent-text',
       '--thinking-display',
       'summarized'
     ]
@@ -1199,15 +1747,14 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
       JSON.stringify({ showThinkingSummaries: true, ...(fastInference ? { fastMode: true } : {}) })
     )
     if (options.systemPrompt) args.push('--append-system-prompt', options.systemPrompt)
-    if (options.allowedTools !== undefined) args.push('--tools', options.allowedTools.join(','))
+    if (options.allowedTools !== undefined)
+      args.push('--tools', options.allowedTools.map(claudeToolName).join(','))
     else if (options.readOnly) args.push('--tools', 'Read,Glob,Grep,WebFetch,WebSearch')
     if (options.structuredOutput)
       args.push('--json-schema', JSON.stringify(options.structuredOutput.schema))
     if (options.settings.permissionLevel === 'full_access')
       args.push('--permission-mode', 'bypassPermissions')
-    else if (options.settings.permissionLevel === 'auto_review')
-      args.push('--permission-mode', 'dontAsk')
-    else args.push('--permission-mode', 'dontAsk')
+    else args.push('--permission-mode', 'manual')
     const env = await this.customProviderEnv(options.settings.providerId)
     const input = await claudeStreamInput(options.text, options.attachments)
     const trackAuthentication =
@@ -1263,12 +1810,191 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
   }
 
   /**
+   * Serialize the credential-refresh window for first-party session spawns.
+   * Claude Code's macOS keychain OAuth store races when two processes refresh
+   * a single-use token concurrently and the loser wipes the shared credential
+   * (anthropics/claude-code#76905), forcing repeated re-logins. Only the first
+   * spawn that has not yet authenticated may touch the credential; every other
+   * thread/project waits only until that session proves authentication, then
+   * spawns freely. Custom base-URL providers never share the Anthropic OAuth
+   * credential, so they bypass the gate entirely.
+   */
+  override async sendPrompt(projectPath: string, opts: SendPromptOptions): Promise<void> {
+    const firstParty = !opts.settings.providerId || opts.settings.providerId === 'anthropic'
+    if (firstParty) this.firstPartySessions.add(opts.sessionId)
+    if (firstParty && !this.hasLiveAuthenticatedSession()) {
+      const release = await this.acquireAuthSlot()
+      try {
+        if (this.hasLiveAuthenticatedSession()) {
+          await super.sendPrompt(projectPath, opts)
+          return
+        }
+        await super.sendPrompt(projectPath, opts)
+        await this.waitForAuthConfirmation(opts.sessionId)
+      } finally {
+        release()
+      }
+      return
+    }
+    await super.sendPrompt(projectPath, opts)
+  }
+
+  /**
+   * Whether any live session has already authenticated this run. The shared
+   * credential is considered fresh in that case, so no serialization is needed.
+   */
+  private hasLiveAuthenticatedSession(): boolean {
+    const now = Date.now()
+    const live = this.activeSessionIds()
+    return live.some((sessionId) => {
+      if (!this.firstPartySessions.has(sessionId)) return false
+      const authenticatedAt = this.authenticatedSessions.get(sessionId)
+      return authenticatedAt !== undefined && now - authenticatedAt < ACCESS_TOKEN_FRESH_MS
+    })
+  }
+
+  /**
+   * Claim the credential-refresh window, waiting for any in-flight window to
+   * close first. The window covers the CLI's silent OAuth refresh at process
+   * startup — only one first-party spawn may be inside it at a time.
+   */
+  private async acquireAuthSlot(): Promise<() => void> {
+    for (;;) {
+      if (this.authSlotHeld) {
+        await this.authSlot
+        continue
+      }
+      this.authSlotHeld = true
+      break
+    }
+    let release: (() => void) | undefined
+    this.authSlot = new Promise<void>((resolve) => (release = resolve))
+    return () => {
+      release?.()
+      this.authSlotHeld = false
+    }
+  }
+
+  /**
+   * Run an auth-touching CLI operation under the credential-refresh gate. The
+   * gate is engaged only while no live session has authenticated; once one has,
+   * the credential is fresh and the operation runs with full concurrency. The
+   * one-shot spawn gate then bounds concurrent short-lived claude spawns (auth
+   * probe, usage refresh, model discovery) so they cannot exhaust the process
+   * file-descriptor table and fail later spawns with `EBADF`.
+   *
+   * Lock ordering: the auth slot is always acquired before the spawn gate
+   * (sendPrompt → buildTurnCommand probe follows the same order), so no path
+   * ever holds the gate while waiting for the auth slot.
+   */
+  private async runAuthSerialized<T>(operation: () => Promise<T>): Promise<T> {
+    const releaseAuth = this.hasLiveAuthenticatedSession() ? null : await this.acquireAuthSlot()
+    try {
+      const releaseSpawn = await this.oneShotSpawnGate.acquire()
+      try {
+        return await operation()
+      } finally {
+        releaseSpawn()
+      }
+    } finally {
+      releaseAuth?.()
+    }
+  }
+
+  /**
+   * Hold the credential-refresh window until the guarded session proves
+   * authentication, exits, or the bound expires — the window in which the CLI
+   * may refresh the shared keychain credential. Resolving early on
+   * authentication lets the next concurrent spawn proceed without a refresh.
+   */
+  private async waitForAuthConfirmation(sessionId: string): Promise<void> {
+    const deadline = Date.now() + AUTH_CONFIRM_TIMEOUT_MS
+    while (Date.now() < deadline) {
+      if (this.authenticatedSessions.has(sessionId)) return
+      if (!this.activeSessionIds().includes(sessionId)) return
+      await new Promise<void>((resolve) => setTimeout(resolve, AUTH_CONFIRM_POLL_MS))
+    }
+  }
+
+  /**
+   * Pre-flight probe of the first-party Anthropic credential. Shells
+   * `claude auth status --json` and trusts its `loggedIn` verdict, letting the
+   * CLI's own silent OAuth refresh run before a turn is dispatched. The result
+   * is cached per project for a short window so a session's consecutive
+   * messages do not each re-spawn the CLI. On any probe failure (CLI missing,
+   * timeout, unparseable output) we assume authenticated so the turn still has
+   * a chance to report the real error mid-stream rather than being silently
+   * blocked by an unreliable pre-check.
+   */
+  private async probeFirstPartyAuthentication(projectPath: string): Promise<boolean> {
+    const now = Date.now()
+    const cached = this.authProbeCache.get(projectPath)
+    if (cached && now - cached.at < PRE_FLIGHT_AUTH_PROBE_TTL_MS) return cached.authenticated
+    const authenticated = await new Promise<boolean>((resolve) => {
+      try {
+        execFile(
+          'claude',
+          ['auth', 'status', '--json'],
+          {
+            cwd: projectPath,
+            env: buildClaudeEnvironment(),
+            timeout: PRE_FLIGHT_AUTH_PROBE_TIMEOUT_MS,
+            maxBuffer: 1024 * 1024
+          },
+          (error, stdout) => {
+            if (error) {
+              resolve(true)
+              return
+            }
+            try {
+              const parsed = JSON.parse(stdout) as { loggedIn?: unknown }
+              resolve(parsed['loggedIn'] === true)
+            } catch {
+              resolve(true)
+            }
+          }
+        )
+      } catch {
+        // Spawn itself threw synchronously (e.g. EBADF when the process is low
+        // on file descriptors). Fail open so the turn still has a chance.
+        resolve(true)
+      }
+    })
+    this.authProbeCache.delete(projectPath)
+    if (authenticated) this.authProbeCache.set(projectPath, { authenticated, at: now })
+    return authenticated
+  }
+
+  /**
+   * Current authentication state of the shared first-party credential, probed
+   * through the credential-refresh gate so a thread-open check can never race
+   * a concurrent refresh (anthropics/claude-code#76905). Probe failures are
+   * reported as authenticated so real errors still surface at message time.
+   */
+  async getAuthStatus(projectPath: string): Promise<HarnessAuthStatus> {
+    const authenticated = await this.runAuthSerialized(() =>
+      this.probeFirstPartyAuthentication(projectPath)
+    )
+    if (!authenticated) {
+      return {
+        state: 'unauthenticated',
+        accounts: [],
+        detail: 'Claude Code could not authenticate with the stored credential.'
+      }
+    }
+    return {
+      state: 'authenticated',
+      accounts: [{ id: 'anthropic', label: 'Anthropic', method: 'oauth', active: true }]
+    }
+  }
+
+  /**
    * Route a custom base-URL provider into Claude Code's env when the selected
    * provider is one of our custom endpoints. Claude Code supports a single
    * active endpoint per process, so only the selected provider is applied.
    */
   private async customProviderEnv(providerId: string): Promise<NodeJS.ProcessEnv> {
-    const env = buildHarnessEnvironment()
+    const env = buildClaudeEnvironment()
     if (!this.baseUrlProviders || !this.secretVault || !providerId) return env
     const provider = await this.baseUrlProviders.getProvider(this.id, providerId)
     if (!provider || provider.harnessId !== this.id || !provider.enabled) return env
@@ -1402,101 +2128,114 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
       return this.mapAccountUsage(await this.readUsageFromActiveSession(activeSessionId))
     }
     try {
-      const telemetry = await new Promise<Record<string, unknown> | null>((resolve) => {
-        const child = spawn(
-          'claude',
-          [
-            '--print',
-            '--output-format',
-            'stream-json',
-            '--input-format',
-            'stream-json',
-            '--verbose'
-          ],
-          {
-            cwd: projectPath,
-            env: buildHarnessEnvironment(),
-            stdio: ['pipe', 'pipe', 'pipe']
-          }
-        )
-        let buffer = ''
-        let settled = false
-        const timer = setTimeout(() => finish(null), CLAUDE_USAGE_TIMEOUT_MS)
-        const finish = (value: Record<string, unknown> | null): void => {
-          if (settled) return
-          settled = true
-          clearTimeout(timer)
-          if (!child.killed) child.kill()
-          resolve(value)
-        }
-        let rateLimitsPayload: Record<string, unknown> | null = null
-        let rateLimitsResponded = false
-        let contextPayload: Record<string, unknown> | null = null
-        let contextResponded = false
-        const attemptFinish = (): void => {
-          if (settled) return
-          // If the session has no plan rate limits, stop waiting for context and
-          // report nothing. Otherwise wait for both responses so quota and
-          // context are reported together; the timeout covers a missing response.
-          if (rateLimitsResponded && rateLimitsPayload === null) {
-            finish({ rateLimits: null, context: contextPayload })
-            return
-          }
-          if (rateLimitsResponded && contextResponded) {
-            finish({ rateLimits: rateLimitsPayload, context: contextPayload })
-          }
-        }
-        const consume = (line: string): void => {
-          if (!line.trim()) return
-          const payload = record(JSON.parse(line) as unknown)
-          if (!payload) return
-          if (payload['type'] !== 'control_response') return
-          const response = record(payload['response'])
-          const inner = record(response?.['response'])
-          const requestId = string(response?.['request_id'])
-          if (requestId === 'usage') {
-            rateLimitsResponded = true
-            const rateLimits = record(inner?.['rate_limits'])
-            rateLimitsPayload =
-              inner?.['rate_limits_available'] === true && rateLimits ? inner : null
-          } else if (requestId === 'context') {
-            contextResponded = true
-            contextPayload = inner
-          }
-          attemptFinish()
-        }
-        child.stdout?.on('data', (chunk: Buffer) => {
-          buffer += chunk.toString()
-          const lines = buffer.split(/\r?\n/u)
-          buffer = lines.pop() ?? ''
-          for (const line of lines) {
+      const telemetry = await this.runAuthSerialized(
+        () =>
+          new Promise<Record<string, unknown> | null>((resolve) => {
+            let child: ChildProcess
             try {
-              consume(line)
+              child = spawn(
+                'claude',
+                [
+                  '--print',
+                  '--output-format',
+                  'stream-json',
+                  '--input-format',
+                  'stream-json',
+                  '--verbose'
+                ],
+                {
+                  cwd: projectPath,
+                  env: buildClaudeEnvironment(),
+                  // Usage telemetry is a side channel; do not leave a piped
+                  // stderr buffer undrained while the probe waits for JSON.
+                  stdio: ['pipe', 'pipe', 'ignore']
+                }
+              )
             } catch {
-              // Ignore malformed side-channel output.
+              // Spawn itself threw synchronously (e.g. EBADF when the process is
+              // low on file descriptors). Report no usage rather than rejecting.
+              resolve(null)
+              return
             }
-          }
-        })
-        child.on('error', () => finish(null))
-        child.on('exit', () => {
-          if (!settled) finish(null)
-        })
-        // Send both control requests immediately; `--print` waits on stdin.
-        child.stdin?.write(
-          `${JSON.stringify({
-            type: 'control_request',
-            request_id: 'usage',
-            request: { subtype: 'get_usage' }
-          })}\n`
-        )
-        child.stdin?.write(
-          `${JSON.stringify({
-            type: 'control_request',
-            request_id: 'context',
-            request: { subtype: 'get_context_usage' }
-          })}\n`
-        )
-      })
+            let buffer = ''
+            let settled = false
+            const timer = setTimeout(() => finish(null), CLAUDE_USAGE_TIMEOUT_MS)
+            const finish = (value: Record<string, unknown> | null): void => {
+              if (settled) return
+              settled = true
+              clearTimeout(timer)
+              if (!child.killed) child.kill()
+              resolve(value)
+            }
+            let rateLimitsPayload: Record<string, unknown> | null = null
+            let rateLimitsResponded = false
+            let contextPayload: Record<string, unknown> | null = null
+            let contextResponded = false
+            const attemptFinish = (): void => {
+              if (settled) return
+              // If the session has no plan rate limits, stop waiting for context and
+              // report nothing. Otherwise wait for both responses so quota and
+              // context are reported together; the timeout covers a missing response.
+              if (rateLimitsResponded && rateLimitsPayload === null) {
+                finish({ rateLimits: null, context: contextPayload })
+                return
+              }
+              if (rateLimitsResponded && contextResponded) {
+                finish({ rateLimits: rateLimitsPayload, context: contextPayload })
+              }
+            }
+            const consume = (line: string): void => {
+              if (!line.trim()) return
+              const payload = record(JSON.parse(line) as unknown)
+              if (!payload) return
+              if (payload['type'] !== 'control_response') return
+              const response = record(payload['response'])
+              const inner = record(response?.['response'])
+              const requestId = string(response?.['request_id'])
+              if (requestId === 'usage') {
+                rateLimitsResponded = true
+                const rateLimits = record(inner?.['rate_limits'])
+                rateLimitsPayload =
+                  inner?.['rate_limits_available'] === true && rateLimits ? inner : null
+              } else if (requestId === 'context') {
+                contextResponded = true
+                contextPayload = inner
+              }
+              attemptFinish()
+            }
+            child.stdout?.on('data', (chunk: Buffer) => {
+              buffer += chunk.toString()
+              const lines = buffer.split(/\r?\n/u)
+              buffer = lines.pop() ?? ''
+              for (const line of lines) {
+                try {
+                  consume(line)
+                } catch {
+                  // Ignore malformed side-channel output.
+                }
+              }
+            })
+            child.on('error', () => finish(null))
+            child.on('exit', () => {
+              if (!settled) finish(null)
+            })
+            // Send both control requests immediately; `--print` waits on stdin.
+            child.stdin?.write(
+              `${JSON.stringify({
+                type: 'control_request',
+                request_id: 'usage',
+                request: { subtype: 'get_usage' }
+              })}\n`
+            )
+            child.stdin?.write(
+              `${JSON.stringify({
+                type: 'control_request',
+                request_id: 'context',
+                request: { subtype: 'get_context_usage' }
+              })}\n`
+            )
+          })
+      )
       return this.mapAccountUsage(telemetry)
     } catch (error) {
       Logger.dev('Claude on-demand account usage refresh unavailable:', error)
@@ -1505,6 +2244,9 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
   }
 
   override dispose(): void {
+    this.authProbeCache.clear()
+    this.authenticatedSessions.clear()
+    this.firstPartySessions.clear()
     for (const sessionId of this.activeUsageProbes.keys()) {
       this.finishActiveUsageProbe(sessionId, null)
     }
@@ -1512,11 +2254,16 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
       if (!readiness.settled) readiness.resolve(false)
       this.authenticationReadiness.delete(sessionId)
     }
+    this.pendingClaudeQuestions.clear()
+    this.pendingClaudePermissions.clear()
     super.dispose()
   }
 
   protected parseJsonLine(value: unknown, context: CliLineParseContext): CliLineParseResult | null {
     const entry = record(value)
+    if (claudeAuthenticationResult(entry) === true) {
+      this.authenticatedSessions.set(context.sessionId, Date.now())
+    }
     this.captureActiveUsageResponse(context.sessionId, entry)
     const type = string(entry?.['type'])
     if (type === 'rate_limit_event' && !latestAssistant(context)) {

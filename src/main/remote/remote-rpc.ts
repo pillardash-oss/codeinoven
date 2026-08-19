@@ -15,9 +15,9 @@
 import type { Database } from '../database/database'
 import { ThreadManager } from '../../lib/engines/thread-manager'
 import { ProjectManager } from '../../lib/engines/project-manager'
-import { ProjectFilesService } from '../project-files-service'
-import type { ChatEngine } from '../chat-engine'
-import { broadcastThreadDeleted, broadcastThreadUpdate } from '../thread-events'
+import { ProjectFilesService } from '../editor/project-files-service'
+import type { ChatEngine } from '../chat/chat-engine'
+import { broadcastThreadDeleted, broadcastThreadUpdate } from '../chat/thread-events'
 import { REMOTE_ALLOWED_CHANNELS } from '../../lib/remote-rpc'
 import {
   authorizationForChannel,
@@ -41,16 +41,16 @@ import {
   AssignmentEngine,
   type AddAssignmentAnnotationInput
 } from '../../lib/engines/assignment-engine'
-import { SpecContextService } from '../spec-context-service'
-import { CheckpointManager } from '../checkpoint-manager'
-import { MemoryService } from '../memory-service'
-import { RepositoryService } from '../repository-service'
-import { GitService } from '../git-service'
-import { SecretVault } from '../secret-vault'
-import { GitHubAuthService } from '../github-auth-service'
+import { SpecContextService } from '../chat/spec-context-service'
+import { CheckpointManager } from '../storage/checkpoint-manager'
+import { MemoryService } from '../chat/memory-service'
+import { RepositoryService } from '../git/repository-service'
+import { GitService } from '../git/git-service'
+import { SecretVault } from '../storage/secret-vault'
+import { GitHubAuthService } from '../git/github-auth-service'
 import { validateEngineeringSpec } from '../../lib/spec/spec-validation'
-import { StorageEngine } from '../storage-engine'
-import { validateScopeBoard, validateScopeSlice } from '../ipc-validation'
+import { StorageEngine } from '../storage/storage-engine'
+import { validateScopeBoard, validateScopeSlice } from '../ipc/ipc-validation'
 import type {
   AssignmentModelSelection,
   AssignmentPlanContent,
@@ -72,7 +72,7 @@ import type {
   ThreadSettings,
   UserMessagePresentation
 } from '../../lib/types'
-import { Logger } from '../logger'
+import { Logger } from '../system/logger'
 
 export interface RemoteRpcServices {
   database: Database
@@ -82,6 +82,7 @@ export interface RemoteRpcServices {
     | 'deleteThreadSession'
     | 'listProviderSnapshot'
     | 'getSessionStatus'
+    | 'getHarnessAuthStatus'
     | 'ensureSession'
     | 'sendPrompt'
     | 'steerPrompt'
@@ -131,7 +132,7 @@ export interface RemoteRpcServices {
   /**
    * Device credential service used to enforce per-device scopes and local
    * step-up approval for remote invocations. Optional so the desktop-reuse
-   * dispatcher and legacy tests can construct it without device state.
+   * dispatcher and isolated tests can construct it without device state.
    */
   credentials?: DeviceCredentialService
 }
@@ -649,6 +650,8 @@ export class RemoteRpcDispatcher {
         return chatEngine.listProviders(this.string(args[0]), true)
       case 'agent:refreshAccountUsage':
         return chatEngine.refreshAccountUsage(this.string(args[0]), this.string(args[1]))
+      case 'agent:getHarnessAuthStatus':
+        return chatEngine.getHarnessAuthStatus(this.string(args[0]), this.string(args[1]))
       case 'agent:getSessionStatus':
         return chatEngine.getSessionStatus(this.string(args[0]), this.string(args[1]))
       case 'agent:ensureSession':
@@ -1104,7 +1107,7 @@ export class RemoteRpcDispatcher {
         const projectId = this.string(args[0])
         const threadId = this.string(args[1])
         const assignment = await this.assignmentEngine.makeAuditAvailable(projectId, threadId)
-        await this.threadManager.setStatus(projectId, threadId, 'awaiting_approval')
+        await this.threadManager.setStatus(projectId, threadId, 'spec')
         return assignment
       }
 
@@ -1214,6 +1217,8 @@ export class RemoteRpcDispatcher {
           this.string(args[0]),
           (args[1] ?? []) as string[]
         )
+      case 'projectFiles:resolveExternalCitationPaths':
+        return this.projectFilesService.resolveExternalCitationPaths((args[0] ?? []) as string[])
 
       // ─── Repo metadata ──────────────────────────────────────────────────
       case 'repository:remoteOrigin':
@@ -1284,7 +1289,8 @@ export class RemoteRpcDispatcher {
       case 'git:deleteBranch':
         return this.gitService.deleteBranch(
           await this.resolveProjectPath(this.string(args[0])),
-          this.string(args[1])
+          this.string(args[1]),
+          this.optionalBoolean(args[2]) ?? false
         )
       case 'git:log':
         return this.gitService.log(
@@ -1441,6 +1447,8 @@ export class RemoteRpcDispatcher {
       case 'dialog:pickFile':
       case 'clipboard:saveImage':
         return null
+      case 'dialog:pickFiles':
+        return []
       case 'shell:revealPath':
       case 'shell:openExternal':
         return undefined
@@ -1479,6 +1487,12 @@ export class RemoteRpcDispatcher {
 
   private optionalString(value: unknown): string | undefined {
     return typeof value === 'string' ? value : undefined
+  }
+
+  private optionalBoolean(value: unknown): boolean | undefined {
+    if (value === undefined) return undefined
+    if (typeof value !== 'boolean') throw new TypeError('Expected a boolean argument')
+    return value
   }
 
   private stringArray(value: unknown, label: string): string[] {

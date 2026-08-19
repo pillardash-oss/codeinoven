@@ -1,9 +1,11 @@
 <script lang="ts">
-  import { STAGE_COLORS, type ThreadStage } from '$lib/stores/scope.svelte'
+  import { STAGE_COLORS, STATUS_TONE_COLORS, type ThreadStage } from '$lib/stores/scope.svelte'
+  import type { ThreadStatusTone } from '$shared/thread-status-policy'
 
   type Props = {
     stage?: ThreadStage
-    kind?: 'completed' | 'attention' | 'error'
+    tone?: ThreadStatusTone
+    kind?: 'completed' | 'chat-completed' | 'attention' | 'spec' | 'error'
     color?: string
     variant?: 'dot' | 'spinner'
     size?: 'sm' | 'md' | 'lg'
@@ -14,6 +16,7 @@
 
   let {
     stage,
+    tone,
     kind,
     color,
     variant = 'dot',
@@ -25,13 +28,18 @@
 
   let resolvedColor = $derived.by((): string => {
     if (color) return color
+    if (tone) return STATUS_TONE_COLORS[tone]
     if (stage) return STAGE_COLORS[stage]
     if (kind) {
       switch (kind) {
         case 'completed':
           return 'var(--color-thread-done)'
+        case 'chat-completed':
+          return 'var(--color-chat-success)'
         case 'attention':
           return 'var(--color-warning)'
+        case 'spec':
+          return 'var(--color-thread-spec)'
         case 'error':
           return 'var(--color-danger)'
       }

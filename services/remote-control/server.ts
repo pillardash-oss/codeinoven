@@ -1,29 +1,31 @@
 import { serve, type Server, type ServerWebSocket } from 'bun'
 import { isIP } from 'node:net'
-import { auth, authDatabasePath, closeAuthDatabase, remoteAuthSession } from './auth'
 import { EnrollmentClaimConflictError, RemoteControlDatabase } from './database'
 import { createEnrollmentCode, normalizeLabel, randomToken, tokenHash } from './security'
 import { RelayHub } from './relay-hub'
-import { remoteBrowserOrigin, trustRemoteProxy } from './runtime-config'
-import type {
-  AuthenticatedSession,
-  DesktopRecord,
-  EnrollmentRecord,
-  RelaySocketData
-} from './types'
+import {
+  convexSiteUrl,
+  remoteAuthOrigin,
+  remoteBrowserOrigin,
+  remoteDatabasePath,
+  remotePublicOrigin,
+  trustRemoteProxy
+} from './runtime-config'
+import type { AuthenticatedSession, EnrollmentRecord, RelaySocketData } from './types'
 
 const ENROLLMENT_TTL_MS = 10 * 60 * 1_000
 const MAX_JSON_BYTES = 16 * 1_024
 const MAX_RELAY_BYTES = 1024 * 1_024
 const RATE_WINDOW_MS = 60_000
 const RATE_LIMIT = 120
-const MAX_MEMORY_CLOCK_SKEW_MS = 5 * 60_000
 const SESSION_PERSIST_INTERVAL_MS = 5 * 60_000
+const CONVEX_SESSION_TTL_MS = 24 * 60 * 60_000
+const CONVEX_REQUEST_TIMEOUT_MS = 10_000
 
 const port = positiveInteger(process.env['PORT'], 8877)
-const allowedOrigins = new Set([remoteBrowserOrigin])
+const allowedOrigins = new Set([remoteBrowserOrigin, remotePublicOrigin, remoteAuthOrigin])
 
-const database = new RemoteControlDatabase(authDatabasePath)
+const database = new RemoteControlDatabase(remoteDatabasePath)
 const relayHub = new RelayHub({
   bufferLimit: positiveInteger(process.env['RELAY_BUFFER_LIMIT'], 256),
   bufferTtlMs: positiveInteger(process.env['RELAY_BUFFER_TTL_MS'], 60_000)
@@ -93,183 +95,97 @@ async function readJsonObject(
   }
 }
 
-async function sessionFromRequest(request: Request): Promise<AuthenticatedSession | null> {
-  const remoteSession = await remoteAuthSession(request)
-  if (!remoteSession) return null
-  const session: AuthenticatedSession = {
-    id: remoteSession.id,
-    userId: remoteSession.userId,
-    expiresAt: remoteSession.expiresAt
+interface AccountIdentity {
+  id: string
+  email: string
+  displayName: string
+  image: string | null
+}
+
+function parseAccountIdentity(value: unknown): AccountIdentity | null {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return null
+  const profile = (value as Record<string, unknown>)['profile']
+  if (typeof profile !== 'object' || profile === null || Array.isArray(profile)) return null
+  const record = profile as Record<string, unknown>
+  if (
+    typeof record['id'] !== 'string' ||
+    typeof record['email'] !== 'string' ||
+    typeof record['displayName'] !== 'string' ||
+    (record['image'] !== null && typeof record['image'] !== 'string')
+  ) {
+    return null
   }
+  return {
+    id: record['id'],
+    email: record['email'],
+    displayName: record['displayName'],
+    image: record['image']
+  }
+}
+
+async function accountIdentityFromRequest(request: Request): Promise<AccountIdentity | null> {
+  const authorization = request.headers.get('authorization')
+  const cookie = request.headers.get('cookie')
+  if (!authorization && !cookie) return null
+  const headers = new Headers({ Origin: remotePublicOrigin })
+  if (authorization) headers.set('Authorization', authorization)
+  if (cookie) headers.set('Cookie', cookie)
+  try {
+    const response = await fetch(new URL('/v1/profile', convexSiteUrl), {
+      headers,
+      signal: AbortSignal.timeout(CONVEX_REQUEST_TIMEOUT_MS)
+    })
+    if (!response.ok) return null
+    return parseAccountIdentity(await response.json())
+  } catch {
+    return null
+  }
+}
+
+async function sessionFromRequest(request: Request): Promise<AuthenticatedSession | null> {
+  const account = await accountIdentityFromRequest(request)
+  if (!account) return null
+  const credential =
+    request.headers.get('authorization') ?? request.headers.get('cookie') ?? account.id
   const now = Date.now()
-  const identity = JSON.stringify([
-    remoteSession.userId,
-    remoteSession.email,
-    remoteSession.displayName,
-    remoteSession.image,
-    remoteSession.expiresAt
+  const sessionId = `convex:${tokenHash(credential)}`
+  const identitySnapshot = JSON.stringify([
+    account.id,
+    account.email,
+    account.displayName,
+    account.image
   ])
-  const persisted = persistedSessions.get(session.id)
+  const persisted = persistedSessions.get(sessionId)
+  let userId = database.resolveOAuthUserId(account.id, account.email)
   if (
     !persisted ||
-    persisted.identity !== identity ||
+    persisted.identity !== identitySnapshot ||
+    now - persisted.persistedAt >= SESSION_PERSIST_INTERVAL_MS ||
+    !userId
+  ) {
+    userId = database.upsertOAuthUser({
+      id: account.id,
+      email: account.email,
+      displayName: account.displayName,
+      image: account.image
+    })
+  }
+  if (!userId) return null
+  const session: AuthenticatedSession = {
+    id: sessionId,
+    userId,
+    expiresAt: now + CONVEX_SESSION_TTL_MS
+  }
+  if (
+    !persisted ||
+    persisted.identity !== identitySnapshot ||
     now - persisted.persistedAt >= SESSION_PERSIST_INTERVAL_MS
   ) {
-    database.upsertOAuthUser({
-      id: remoteSession.userId,
-      email: remoteSession.email,
-      displayName: remoteSession.displayName,
-      image: remoteSession.image
-    })
     database.rememberOAuthSession(session)
     if (persistedSessions.size >= 10_000) persistedSessions.clear()
-    persistedSessions.set(session.id, { identity, persistedAt: now })
+    persistedSessions.set(session.id, { identity: identitySnapshot, persistedAt: now })
   }
   return session
-}
-
-function profileDesktopFromRequest(request: Request): DesktopRecord | null {
-  const token = bearerToken(request)
-  if (!token) return null
-  return database.findDesktopByProfileTokenHash(tokenHash(token))
-}
-
-function emptyUsageSummary(): Record<string, unknown> {
-  return {
-    messageCount: 0,
-    costUsd: 0,
-    tokens: 0,
-    durationMs: 0,
-    topHarnessId: null,
-    topModelId: null,
-    harnesses: [],
-    models: [],
-    activityDays: [],
-    generatedAt: Date.now()
-  }
-}
-
-function parseStoredJson(value: string, fallback: unknown): unknown {
-  try {
-    return JSON.parse(value) as unknown
-  } catch {
-    return fallback
-  }
-}
-
-function nonnegativeNumber(value: unknown): value is number {
-  return typeof value === 'number' && Number.isFinite(value) && value >= 0
-}
-
-function validUsageSummary(value: unknown): value is Record<string, unknown> {
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false
-  const usage = value as Record<string, unknown>
-  const validRows = (rows: unknown): boolean =>
-    Array.isArray(rows) &&
-    rows.length <= 100 &&
-    rows.every(
-      (row) =>
-        typeof row === 'object' &&
-        row !== null &&
-        !Array.isArray(row) &&
-        typeof (row as Record<string, unknown>)['id'] === 'string' &&
-        nonnegativeNumber((row as Record<string, unknown>)['messageCount']) &&
-        nonnegativeNumber((row as Record<string, unknown>)['costUsd']) &&
-        nonnegativeNumber((row as Record<string, unknown>)['tokens'])
-    )
-  return (
-    nonnegativeNumber(usage['messageCount']) &&
-    nonnegativeNumber(usage['costUsd']) &&
-    nonnegativeNumber(usage['tokens']) &&
-    nonnegativeNumber(usage['durationMs']) &&
-    nonnegativeNumber(usage['generatedAt']) &&
-    validRows(usage['harnesses']) &&
-    validRows(usage['models']) &&
-    Array.isArray(usage['activityDays']) &&
-    usage['activityDays'].length <= 3_660
-  )
-}
-
-interface ValidGlobalMemory extends Record<string, unknown> {
-  id: string
-  updatedAt: number
-}
-
-function validGlobalMemory(value: unknown, now = Date.now()): value is ValidGlobalMemory {
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false
-  const entry = value as Record<string, unknown>
-  return (
-    typeof entry['id'] === 'string' &&
-    typeof entry['label'] === 'string' &&
-    typeof entry['content'] === 'string' &&
-    typeof entry['enabled'] === 'boolean' &&
-    nonnegativeNumber(entry['updatedAt']) &&
-    entry['updatedAt'] <= now + MAX_MEMORY_CLOCK_SKEW_MS &&
-    typeof entry['category'] === 'string' &&
-    typeof entry['priority'] === 'string' &&
-    entry['scope'] === 'global' &&
-    typeof entry['source'] === 'string' &&
-    nonnegativeNumber(entry['frequency']) &&
-    nonnegativeNumber(entry['lastReinforced'])
-  )
-}
-
-function mergeGlobalMemories(storedJson: string | null, incoming: unknown[]): unknown[] {
-  const now = Date.now()
-  const stored = storedJson ? parseStoredJson(storedJson, []) : []
-  const merged = new Map<string, Record<string, unknown>>()
-  for (const item of [...(Array.isArray(stored) ? stored : []), ...incoming]) {
-    if (!validGlobalMemory(item, now)) continue
-    const entry = item
-    const previous = merged.get(entry['id'])
-    if (!previous || Number(previous['updatedAt'] ?? 0) <= entry['updatedAt']) {
-      merged.set(entry['id'], entry)
-    }
-  }
-  return [...merged.values()].sort(
-    (left, right) => Number(right['updatedAt'] ?? 0) - Number(left['updatedAt'] ?? 0)
-  )
-}
-
-function accountProfile(userId: string): Response {
-  const user = database.findUserById(userId)
-  if (!user) return json({ error: 'unauthorized' }, 401)
-  const stored = database.accountProfile(userId)
-  return json({
-    profile: {
-      id: user.id,
-      email: user.email,
-      displayName: user.display_name,
-      image: user.image_url,
-      usage: stored ? parseStoredJson(stored.usage_json, emptyUsageSummary()) : emptyUsageSummary(),
-      globalMemories: stored ? mergeGlobalMemories(stored.global_memories_json, []) : [],
-      updatedAt: stored?.updated_at ?? user.created_at
-    }
-  })
-}
-
-async function saveAccountProfile(request: Request, userId: string): Promise<Response> {
-  const body = await readJsonObject(request, 512 * 1_024)
-  const usage = body?.['usage']
-  const memories = body?.['globalMemories']
-  const now = Date.now()
-  if (
-    !validUsageSummary(usage) ||
-    !Array.isArray(memories) ||
-    !memories.every((memory) => validGlobalMemory(memory, now))
-  ) {
-    return json({ error: 'invalid-profile' }, 400)
-  }
-  const usageJson = JSON.stringify(usage)
-  const existing = database.accountProfile(userId)
-  const memoriesJson = JSON.stringify(
-    mergeGlobalMemories(existing?.global_memories_json ?? null, memories)
-  )
-  if (usageJson.length > 128 * 1_024 || memoriesJson.length > 384 * 1_024) {
-    return json({ error: 'profile-too-large' }, 413)
-  }
-  database.saveAccountProfile(userId, usageJson, memoriesJson)
-  return accountProfile(userId)
 }
 
 function bearerToken(request: Request): string | null {
@@ -322,6 +238,15 @@ function closeSessionSockets(sessionId: string, code: number, reason: string): v
 }
 
 async function handleEnrollmentRequest(request: Request): Promise<Response> {
+  try {
+    return await handleEnrollmentRequestInner(request)
+  } catch (error) {
+    process.stderr.write(`desktop enrollment failed: ${String(error)}\n`)
+    return json({ error: 'enrollment-failed' }, 500)
+  }
+}
+
+async function handleEnrollmentRequestInner(request: Request): Promise<Response> {
   const body = await readJsonObject(request)
   const name = normalizeLabel(body?.['name'])
   const platform = normalizeLabel(body?.['platform'], 50)
@@ -332,28 +257,43 @@ async function handleEnrollmentRequest(request: Request): Promise<Response> {
   if (!withinRateLimit(request, 'enrollment', 10)) return json({ error: 'rate-limited' }, 429)
 
   const presentedToken = bearerToken(request)
-  const existing = presentedToken
-    ? database.findDesktopByTokenHash(tokenHash(presentedToken))
+  const presentedHash = presentedToken ? tokenHash(presentedToken) : null
+  const desktopTokenHeader = request.headers.get('x-codeinoven-desktop-token')?.trim() ?? ''
+  const desktopToken = desktopTokenHeader.length <= 256 ? desktopTokenHeader : ''
+  const headerDesktop = desktopToken
+    ? database.findDesktopByTokenHash(tokenHash(desktopToken))
     : null
-  if (presentedToken && !existing) return json({ error: 'unauthorized' }, 401)
+  const legacyDesktop = presentedHash ? database.findDesktopByTokenHash(presentedHash) : null
+  const existing = headerDesktop ?? legacyDesktop
+  const accountIdentity = presentedToken ? await accountIdentityFromRequest(request) : null
+  const accountUserId = accountIdentity
+    ? database.upsertOAuthUser({
+        id: accountIdentity.id,
+        email: accountIdentity.email,
+        displayName: accountIdentity.displayName,
+        image: accountIdentity.image
+      })
+    : null
+  if ((!existing && !accountUserId) || (desktopToken && !accountUserId)) {
+    return json({ error: 'unauthorized' }, 401)
+  }
+  if (existing?.user_id && accountUserId && existing.user_id !== accountUserId) {
+    return json({ error: 'enrollment-conflict' }, 403)
+  }
   const desktopId = existing?.id ?? crypto.randomUUID()
   const deviceToken = existing ? null : randomToken()
-  const profileToken = randomToken()
+  const profileToken = accountUserId && presentedToken ? presentedToken : randomToken()
+  const desktopProfileTokenHash = tokenHash(accountUserId ? randomToken() : profileToken)
   const now = Date.now()
-  if (existing) {
-    database.deleteEnrollmentForDesktop(existing.id)
-    if (!database.rotateDesktopProfileToken(existing.id, tokenHash(profileToken))) {
-      return json({ error: 'unauthorized' }, 401)
-    }
-  } else if (deviceToken) {
+  if (!existing && deviceToken) {
     database.createDesktop({
       id: desktopId,
-      user_id: null,
+      user_id: accountUserId,
       name,
       platform,
       lan_endpoint: lanEndpoint,
       token_hash: tokenHash(deviceToken),
-      profile_token_hash: tokenHash(profileToken),
+      profile_token_hash: desktopProfileTokenHash,
       control_secret_cipher: '',
       created_at: now,
       last_seen_at: null,
@@ -373,8 +313,21 @@ async function handleEnrollmentRequest(request: Request): Promise<Response> {
     grant_ciphertext: null,
     desktop_public_key: null
   }
-  database.createEnrollment(enrollment, now)
-  database.audit('desktop.enrollment-created', existing?.user_id ?? null, desktopId)
+  if (existing) {
+    if (
+      !database.replaceDesktopEnrollment({
+        desktopId: existing.id,
+        profileTokenHash: desktopProfileTokenHash,
+        enrollment,
+        createdAt: now
+      })
+    ) {
+      return json({ error: 'unauthorized' }, 401)
+    }
+  } else {
+    database.createEnrollment(enrollment, now)
+  }
+  database.audit('desktop.enrollment-created', existing?.user_id ?? accountUserId, desktopId)
   return json(
     {
       enrollmentId: enrollment.id,
@@ -404,7 +357,7 @@ async function handleEnrollmentClaim(
   if (!withinRateLimit(request, `claim:${session.userId}`, 20)) {
     return json({ error: 'rate-limited' }, 429)
   }
-  let claimed: { desktopId: string } | null
+  let claimed: { desktopId: string; newlyClaimed: boolean } | null
   try {
     claimed = database.claimEnrollment({
       codeHash: tokenHash(rawCode),
@@ -418,8 +371,27 @@ async function handleEnrollmentClaim(
     database.audit('desktop.enrollment-conflict', session.userId, error.desktopId)
     return json({ error: 'enrollment-conflict' }, 409)
   }
-  if (!claimed) return json({ error: 'invalid-enrollment-code' }, 400)
-  database.audit('desktop.claimed', session.userId, claimed.desktopId)
+  if (!claimed) {
+    const failure = database.enrollmentClaimFailure({
+      codeHash: tokenHash(rawCode),
+      userId: session.userId,
+      mobileDeviceId,
+      mobilePublicKey
+    })
+    if (failure === 'account-mismatch') {
+      return json({ error: 'enrollment-account-mismatch' }, 403)
+    }
+    if (failure === 'already-claimed') {
+      return json({ error: 'enrollment-already-claimed' }, 409)
+    }
+    if (failure === 'mobile-device-mismatch') {
+      return json({ error: 'mobile-device-mismatch' }, 409)
+    }
+    return json({ error: 'invalid-enrollment-code' }, 400)
+  }
+  if (claimed.newlyClaimed) {
+    database.audit('desktop.claimed', session.userId, claimed.desktopId)
+  }
   return json({ desktopId: claimed.desktopId })
 }
 
@@ -517,9 +489,11 @@ async function mutateDesktop(
   desktopId: string
 ): Promise<Response> {
   if (request.method === 'DELETE') {
-    if (!database.revokeDesktop(desktopId, session.userId)) return json({ error: 'not-found' }, 404)
-    closeDesktop(desktopId, 4003, 'revoked')
-    database.audit('desktop.revoked', session.userId, desktopId)
+    const revoked = database.revokeDesktop(desktopId, session.userId)
+    if (revoked) {
+      closeDesktop(desktopId, 4003, 'revoked')
+      database.audit('desktop.revoked', session.userId, desktopId)
+    }
     return new Response(null, { status: 204 })
   }
   const body = await readJsonObject(request)
@@ -596,15 +570,6 @@ async function routeHttp(request: Request): Promise<Response | undefined> {
   ) {
     return websocketUpgrade(request, url)
   }
-  if (url.pathname.startsWith('/api/auth/')) {
-    const endingSession =
-      url.pathname === '/api/auth/sign-out' ? await sessionFromRequest(request) : null
-    const response = await auth.handler(request)
-    if (endingSession && response.ok) {
-      closeSessionSockets(endingSession.id, 4003, 'session-ended')
-    }
-    return response
-  }
   if (url.pathname === '/v1/device-enrollments' && request.method === 'POST') {
     return handleEnrollmentRequest(request)
   }
@@ -619,25 +584,6 @@ async function routeHttp(request: Request): Promise<Response | undefined> {
   const deviceEnrollment = url.pathname.match(/^\/v1\/device-enrollments\/([^/]+)$/)
   if (deviceEnrollment && request.method === 'DELETE') {
     return revokeFromDesktop(request, deviceEnrollment[1] ?? '')
-  }
-
-  if (url.pathname === '/v1/profile') {
-    const session = await sessionFromRequest(request)
-    const profileDesktop = session ? null : profileDesktopFromRequest(request)
-    const userId = session?.userId ?? profileDesktop?.user_id ?? null
-    if (!userId) return json({ error: 'unauthorized' }, 401)
-    if (request.method === 'GET') return accountProfile(userId)
-    if (request.method === 'PUT') {
-      if (profileDesktop && !withinRateLimit(request, `profile:${profileDesktop.id}`, 12)) {
-        return json({ error: 'rate-limited' }, 429)
-      }
-      const response = await saveAccountProfile(request, userId)
-      if (profileDesktop && response.ok) {
-        database.audit('desktop.profile-synced', userId, profileDesktop.id)
-      }
-      return response
-    }
-    return json({ error: 'method-not-allowed' }, 405)
   }
 
   const session = await sessionFromRequest(request)
@@ -758,11 +704,12 @@ const server: Server<RelaySocketData> = serve<RelaySocketData>({
     maxPayloadLength: MAX_RELAY_BYTES,
     open(socket) {
       if (socket.data.role === 'mobile' && socket.data.desktopId && socket.data.sessionId) {
-        // The hub delivers any replayed buffered frames itself (single path).
-        relayHub.connectMobile(socket.data.desktopId, socket)
         const sockets = sessionSockets.get(socket.data.sessionId) ?? new Set()
         sockets.add(socket)
         sessionSockets.set(socket.data.sessionId, sockets)
+        // Establish the protocol state before the hub replays retained data.
+        // Sending ciphertext first makes a reconnect process data while it
+        // still considers the socket unauthenticated and can lose its ACK.
         socket.send(
           JSON.stringify({
             type: 'relay:authenticated',
@@ -770,6 +717,8 @@ const server: Server<RelaySocketData> = serve<RelaySocketData>({
             online: relayHub.desktopOnline(socket.data.desktopId)
           })
         )
+        // The hub delivers any replayed buffered frames itself (single path).
+        relayHub.connectMobile(socket.data.desktopId, socket)
       } else {
         socket.send(JSON.stringify({ type: 'relay:authentication-required' }))
       }
@@ -815,7 +764,6 @@ function shutdown(): void {
   clearInterval(cleanupTimer)
   server.stop(true)
   database.close()
-  closeAuthDatabase()
 }
 
 process.once('SIGINT', shutdown)

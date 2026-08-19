@@ -1,5 +1,7 @@
 <script lang="ts">
   import { onMount, tick } from 'svelte'
+  import { slide } from 'svelte/transition'
+  import { cubicOut } from 'svelte/easing'
   import { AlertDialog, Dialog } from 'bits-ui'
   import { toast } from 'svelte-sonner'
   import {
@@ -7,13 +9,14 @@
     Code2,
     Eye,
     FileDiff,
+    FolderTree,
     FolderOpen,
     Loader2,
-    PanelRight,
     Save,
     X
   } from '@lucide/svelte'
   import { invoke, subscribe } from '$lib/ipc.svelte'
+  import { motionDuration } from '$lib/motion'
   import { isAudioMime, isImageMime, isSvgMime, isVideoMime, mimeFromPath } from '$lib/mime'
   import { projectFilePreviewUrl } from '$lib/file-preview'
   import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
@@ -26,6 +29,7 @@
   import { diffDetails } from './file-diff'
   import DiffLayoutToggle from '../ui/DiffLayoutToggle.svelte'
   import { diffLayoutState, diffLayoutToggleLabel } from '$lib/stores/diff-layout.svelte'
+  import { wrapTextState } from '$lib/stores/wrap-text.svelte'
   import FileImagePreview from './FileImagePreview.svelte'
   import FileMediaPreview from './FileMediaPreview.svelte'
   import FindInBar from './FindInBar.svelte'
@@ -126,7 +130,7 @@
   let breadcrumbParts = $derived(activeTab?.path.split('/') ?? [])
   let visibleLineCount = $derived(visibleContent.split('\n').length)
   let showLineNumbers = $state(true)
-  let wrapLines = $state(false)
+  const wrapLines = $derived(wrapTextState.wrapped)
   let fullscreenOpen = $state(false)
   let fullscreenExplorerOpen = $state(false)
   let fullscreenPendingPath = $state<string | null>(null)
@@ -215,37 +219,11 @@
     }
   }
 
-  function handleEditorKeydown(event: KeyboardEvent): void {
-    if (
-      event.key !== 'Tab' ||
-      event.metaKey ||
-      event.ctrlKey ||
-      event.altKey ||
-      !activeTab ||
-      !activeSession ||
-      !(event.currentTarget instanceof HTMLTextAreaElement)
-    ) {
+  function handleEditorInput(input: { currentTarget: { value: string } }): void {
+    if (deletedAtCheckpoint || !activeTab || projectState.loadingPaths[activeTab.path]) {
       return
     }
-    event.preventDefault()
-    const editor = event.currentTarget
-    const start = editor.selectionStart
-    const end = editor.selectionEnd
-    const next = activeSession.draft.slice(0, start) + '  ' + activeSession.draft.slice(end)
-    projectFilesWorkspace.updateDraft(projectId, activeTab.path, next)
-    requestAnimationFrame(() => editor.setSelectionRange(start + 2, start + 2))
-  }
-
-  function handleEditorInput(event: Event): void {
-    if (
-      deletedAtCheckpoint ||
-      !activeTab ||
-      projectState.loadingPaths[activeTab.path] ||
-      !(event.currentTarget instanceof HTMLTextAreaElement)
-    ) {
-      return
-    }
-    projectFilesWorkspace.updateDraft(projectId, activeTab.path, event.currentTarget.value)
+    projectFilesWorkspace.updateDraft(projectId, activeTab.path, input.currentTarget.value)
   }
 
   function reloadSelected(): void {
@@ -467,7 +445,7 @@
           title={projectState.explorerVisible ? 'Hide file explorer' : 'Show file explorer'}
           onclick={() => projectFilesWorkspace.toggleExplorer(projectId)}
         >
-          <PanelRight size={15} />
+          <FolderTree size={15} />
         </button>
       </div>
 
@@ -567,7 +545,7 @@
             mutationDisabled={deletedAtCheckpoint || mutationPending}
             onReload={reloadSelected}
             onToggleLineNumbers={() => (showLineNumbers = !showLineNumbers)}
-            onToggleWrap={() => (wrapLines = !wrapLines)}
+            onToggleWrap={() => wrapTextState.toggle()}
             onFullscreen={() => (fullscreenOpen = true)}
             onRename={startRename}
             onDelete={() => (deleteTargetPath = activeTab.path)}
@@ -736,22 +714,28 @@
             focusLineRequest={activeTab.focusLineRequest}
             onFindMatches={fullscreenOpen ? undefined : handleEditorFindMatches}
             onInput={handleEditorInput}
-            onKeydown={handleEditorKeydown}
           />
         {/key}
       {/if}
     </section>
 
     {#if projectState.explorerVisible}
-      <ProjectFileExplorer
-        {projectId}
-        {projectName}
-        {projectState}
-        selectedPath={activeTab?.path ?? null}
-        {lastTurnPaths}
-        {activeCheckpointPaths}
-        activeCheckpointId={activeTab?.checkpointId ?? null}
-      />
+      <div
+        class="min-h-0"
+        transition:slide={{ axis: 'x', duration: motionDuration(180), easing: cubicOut }}
+      >
+        <ProjectFileExplorer
+          {projectId}
+          {projectName}
+          {projectState}
+          onWidthChange={(width, persist) =>
+            projectFilesWorkspace.setExplorerWidth(projectId, width, persist)}
+          selectedPath={activeTab?.path ?? null}
+          {lastTurnPaths}
+          {activeCheckpointPaths}
+          activeCheckpointId={activeTab?.checkpointId ?? null}
+        />
+      </div>
     {/if}
   </div>
 </div>
@@ -801,7 +785,7 @@
           title={fullscreenExplorerOpen ? 'Hide file tree' : 'Show file tree'}
           onclick={() => (fullscreenExplorerOpen = !fullscreenExplorerOpen)}
         >
-          <PanelRight size={15} />
+          <FolderTree size={15} />
         </button>
         <Dialog.Close
           class="titlebar-no-drag flex h-7 w-7 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
@@ -910,7 +894,7 @@
             hideFullscreen
             onReload={reloadSelected}
             onToggleLineNumbers={() => (showLineNumbers = !showLineNumbers)}
-            onToggleWrap={() => (wrapLines = !wrapLines)}
+            onToggleWrap={() => wrapTextState.toggle()}
             onFullscreen={() => (fullscreenOpen = true)}
             onRename={startRename}
             onDelete={() => (deleteTargetPath = activeTab.path)}
@@ -1001,22 +985,28 @@
                 focusLineRequest={activeTab.focusLineRequest}
                 onFindMatches={handleEditorFindMatches}
                 onInput={handleEditorInput}
-                onKeydown={handleEditorKeydown}
               />
             {/if}
           {/if}
         </div>
         {#if fullscreenExplorerOpen && activeTab}
-          <ProjectFileExplorer
-            {projectId}
-            {projectName}
-            {projectState}
-            selectedPath={activeTab.path}
-            {lastTurnPaths}
-            {activeCheckpointPaths}
-            activeCheckpointId={activeTab.checkpointId}
-            onFileSelect={fullscreenOpenFile}
-          />
+          <div
+            class="min-h-0"
+            transition:slide={{ axis: 'x', duration: motionDuration(180), easing: cubicOut }}
+          >
+            <ProjectFileExplorer
+              {projectId}
+              {projectName}
+              {projectState}
+              onWidthChange={(width, persist) =>
+                projectFilesWorkspace.setExplorerWidth(projectId, width, persist)}
+              selectedPath={activeTab.path}
+              {lastTurnPaths}
+              {activeCheckpointPaths}
+              activeCheckpointId={activeTab.checkpointId}
+              onFileSelect={fullscreenOpenFile}
+            />
+          </div>
         {/if}
       </div>
     </Dialog.Content>

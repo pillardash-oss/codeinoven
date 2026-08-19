@@ -1,10 +1,11 @@
-import { IMAGE_DESCRIPTOR_INPUT_SCHEMA, IMAGE_DESCRIPTOR_TOOL_NAME } from './image-descriptor'
 import { UTILITY_KIND_VALUES } from './types'
 
 /** Stable app-owned gateway tool names. */
 export const UTILITY_SEARCH_TOOL_NAME = 'utility_search'
 export const UTILITY_ACTIVATE_TOOL_NAME = 'utility_activate'
 export const UTILITY_INVOKE_TOOL_NAME = 'utility_invoke'
+/** Shell-callable recovery tool; intentionally never transported through MCP. */
+export const RETRIEVE_MCP_HOST_TOOL_NAME = 'retrieve_mcp_host'
 
 /** One tool the utility gateway MCP exposes to agents. */
 export interface GatewayToolDefinition {
@@ -31,7 +32,7 @@ export const GATEWAY_TOOLS: GatewayToolDefinition[] = [
   {
     name: UTILITY_SEARCH_TOOL_NAME,
     description:
-      'Search app-managed MCP servers, skills, web services, and computer-use capabilities when a skill or MCP is not directly available. Only conclude something does not exist after a search returns no relevant result.',
+      'Search app-managed MCP servers, skills, utilities, web services, and computer-use capabilities when a needed capability is not directly available. If you already know an eligible utility, you may activate it directly. The result carries an explicit `notFound` boolean: when it is true, no eligible utility matched, so you may confidently conclude the capability does not exist in this session. Only conclude something does not exist after a search where notFound is true.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -45,7 +46,7 @@ export const GATEWAY_TOOLS: GatewayToolDefinition[] = [
       additionalProperties: false
     },
     route: '/search',
-    sentWhen: 'Every agent turn; search first when a needed skill or MCP is not directly available'
+    sentWhen: 'Every agent turn; search when a needed skill or MCP is not directly available'
   },
   {
     name: UTILITY_ACTIVATE_TOOL_NAME,
@@ -77,15 +78,6 @@ export const GATEWAY_TOOLS: GatewayToolDefinition[] = [
     },
     route: '/invoke',
     sentWhen: 'After a utility has been activated for the current turn'
-  },
-  {
-    name: IMAGE_DESCRIPTOR_TOOL_NAME,
-    description:
-      'Describe one or more images with a vision-capable model so a text-only model (one without vision) can reason about their contents. Provide each image as an entry with a unique id, a source, and a type: "path" when the source is a file path or URL the model can read, or "binary" when the source is base64 image data. The tool accepts up to 8 images per call, so batch several frames at once; call it again for more. If the media is a video the model cannot read, extract frames with ffmpeg first and pass them as separate image entries. The description runs the thread\u2019s (or the app\u2019s configured) image descriptor vision model. Returns a text description per image, tagged with its id.',
-    inputSchema: IMAGE_DESCRIPTOR_INPUT_SCHEMA,
-    route: '/image_descriptor',
-    sentWhen:
-      'Whenever a model receives an image it cannot see directly and needs to reason about its contents'
   }
 ]
 

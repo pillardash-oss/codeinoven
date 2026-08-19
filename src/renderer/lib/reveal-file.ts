@@ -1,9 +1,11 @@
 import { invoke } from '$lib/ipc.svelte'
-import { normalizeCitationPath } from '$lib/agent-source-citations'
+import { isAbsoluteCitationPath, normalizeCitationPath } from '$lib/agent-source-citations'
 import { projectFilesWorkspace } from '$lib/stores/project-files.svelte'
 import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
 import { workspaceState } from '$lib/stores/workspace.svelte'
+import { toast } from 'svelte-sonner'
 import type { ProjectFileEntry } from '$shared/types'
+import { fileUrlToPath } from '$lib/mime'
 
 async function ensureProjectFilesReady(projectId: string): Promise<void> {
   const activeThreadId = contextSidebarState.threadIdForProject(projectId)
@@ -61,6 +63,30 @@ export async function revealFileInAppTree(projectId: string, path: string): Prom
   if (entry) await revealEntry(projectId, entry)
 }
 
+/** Route an explicit local file URL to the in-app tree or the OS file manager. */
+export async function revealLocalFile(projectId: string | undefined, url: string): Promise<void> {
+  if (!projectId || !url.startsWith('file://')) return
+
+  const projectPath = workspaceState.activeProject?.path
+  if (!projectPath) return
+
+  const absolutePath = fileUrlToPath(url)
+  const normalizedProjectPath = normalizeCitationPath(projectPath)
+  const normalizedFilePath = normalizeCitationPath(absolutePath)
+  if (
+    normalizedFilePath === normalizedProjectPath ||
+    normalizedFilePath.startsWith(`${normalizedProjectPath}/`)
+  ) {
+    await revealFileInAppTree(projectId, absolutePath)
+    return
+  }
+
+  const revealed = await invoke('shell:revealExternalPath', absolutePath).catch(() => false)
+  if (!revealed) {
+    toast.error('This local file is outside the active project or no longer exists.')
+  }
+}
+
 /**
  * Open a file citation in the app's file viewer. Citations are only rendered as
  * links once they are confirmed to exist on disk, so resolution is exact —
@@ -91,5 +117,16 @@ export async function revealCitationFile(
   const exact = await exactEntry(projectId, relativePath)
   if (exact) {
     await revealEntry(projectId, exact, focusLine)
+    return
+  }
+  // Absolute citation outside the project root (e.g. Codex citations to files
+  // the user supplied) — reveal in the OS file manager. `shell:revealExternalPath`
+  // is a reveal-only probe: the path must exist and no content is read, so no
+  // scope grant is required.
+  if (isAbsoluteCitationPath(targetPath)) {
+    const revealed = await invoke('shell:revealExternalPath', targetPath).catch(() => false)
+    if (!revealed) {
+      toast.error('This local file is outside the active project or no longer exists.')
+    }
   }
 }

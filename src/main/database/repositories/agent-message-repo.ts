@@ -5,6 +5,7 @@ import type {
   AgentMessageOrigin,
   AgentMessageVisibility,
   AgentPart,
+  ThinkingLevel,
   ThreadMessageCursor,
   ThreadMessagePage,
   UserMessageSummary
@@ -65,6 +66,7 @@ export interface PersistedMessageRow {
   model_id: string | null
   provider_id: string | null
   harness_id: string | null
+  thinking_level: string | null
   references_json: string | null
   project_references_json: string | null
   created_at: number
@@ -97,6 +99,7 @@ export function hashPersistedRow(row: PersistedMessageRow): string {
     row.model_id ?? '',
     row.provider_id ?? '',
     row.harness_id ?? '',
+    row.thinking_level ?? '',
     row.references_json ?? '',
     row.project_references_json ?? '',
     String(row.created_at),
@@ -128,6 +131,7 @@ export interface AgentMessageRow {
   model_id: string | null
   provider_id: string | null
   harness_id: string | null
+  thinking_level: string | null
   references_json: string | null
   project_references_json: string | null
   created_at: number
@@ -170,7 +174,7 @@ function rowToMessage(row: AgentMessageRow, includeTransport = false): AgentMess
   return {
     id: row.id,
     role: row.role as 'user' | 'assistant',
-    ...(row.origin !== 'legacy' ? { origin: row.origin as AgentMessageOrigin } : {}),
+    origin: row.origin as AgentMessageOrigin,
     ...(row.visibility !== 'conversation'
       ? { visibility: row.visibility as AgentMessageVisibility }
       : {}),
@@ -184,6 +188,7 @@ function rowToMessage(row: AgentMessageRow, includeTransport = false): AgentMess
     modelId: row.model_id ?? undefined,
     providerId: row.provider_id ?? undefined,
     harnessId: row.harness_id ?? undefined,
+    thinkingLevel: row.thinking_level ? (row.thinking_level as ThinkingLevel) : undefined,
     references: row.references_json ? JSON.parse(row.references_json) : undefined,
     projectReferences: row.project_references_json
       ? JSON.parse(row.project_references_json)
@@ -228,12 +233,14 @@ export interface EncodedAgentMessage {
   modelId: string | null
   providerId: string | null
   harnessId: string | null
+  thinkingLevel: string | null
   referencesJson: string | null
   projectReferencesJson: string | null
   createdAt: number
   completedAt: number | null
   cost: number | null
   tokensJson: string | null
+  tokensTotal: number | null
   rateLimitsJson: string | null
   creditsJson: string | null
   contextWindow: number | null
@@ -253,7 +260,7 @@ export function encodeAgentMessage(
   sessionId?: string
 ): EncodedAgentMessage {
   const targetSessionId = sessionId ?? null
-  const origin = message.origin ?? (sessionId ? 'subagent' : 'legacy')
+  const origin = message.origin ?? (sessionId ? 'subagent' : 'provider')
   const visibility = message.visibility ?? (sessionId ? 'subagent_trace' : 'conversation')
   const partsJson = JSON.stringify(message.parts)
   const searchText = partsToSearchText(message.parts)
@@ -262,6 +269,7 @@ export function encodeAgentMessage(
   const modelId = message.modelId ?? null
   const providerId = message.providerId ?? null
   const harnessId = message.harnessId ?? null
+  const thinkingLevel = message.thinkingLevel ?? null
   const referencesJson = message.references ? JSON.stringify(message.references) : null
   const projectReferencesJson = message.projectReferences
     ? JSON.stringify(message.projectReferences)
@@ -270,6 +278,7 @@ export function encodeAgentMessage(
   const completedAt = message.completedAt ?? null
   const cost = message.cost ?? null
   const tokensJson = message.tokens ? JSON.stringify(message.tokens) : null
+  const tokensTotal = message.tokens?.total ?? null
   const rateLimitsJson = message.rateLimits ? JSON.stringify(message.rateLimits) : null
   const creditsJson = message.credits ? JSON.stringify(message.credits) : null
   const contextWindow = message.contextWindow ?? null
@@ -288,6 +297,7 @@ export function encodeAgentMessage(
     model_id: modelId,
     provider_id: providerId,
     harness_id: harnessId,
+    thinking_level: thinkingLevel,
     references_json: referencesJson,
     project_references_json: projectReferencesJson,
     created_at: createdAt,
@@ -316,12 +326,14 @@ export function encodeAgentMessage(
     modelId,
     providerId,
     harnessId,
+    thinkingLevel,
     referencesJson,
     projectReferencesJson,
     createdAt,
     completedAt,
     cost,
     tokensJson,
+    tokensTotal,
     rateLimitsJson,
     creditsJson,
     contextWindow,
@@ -340,12 +352,12 @@ export function encodeWriteStatement(encoded: EncodedAgentMessage): {
     sql: `INSERT INTO agent_messages(
       id, thread_id, session_id, role, origin, visibility, parts, search_text, content_hash,
       transport_parts, transport_origin,
-      model_id, provider_id, harness_id,
+      model_id, provider_id, harness_id, thinking_level,
       references_json, project_references_json,
       created_at, completed_at, cost,
-      tokens_json, rate_limits_json, usage_credits_json,
+      tokens_json, tokens_total, rate_limits_json, usage_credits_json,
       context_window, context_used, error, structured_output
-    ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+    ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
     ON CONFLICT(id) DO UPDATE SET
       role = excluded.role,
       origin = excluded.origin,
@@ -358,12 +370,14 @@ export function encodeWriteStatement(encoded: EncodedAgentMessage): {
       model_id = excluded.model_id,
       provider_id = excluded.provider_id,
       harness_id = excluded.harness_id,
+      thinking_level = excluded.thinking_level,
       references_json = excluded.references_json,
       project_references_json = excluded.project_references_json,
       created_at = excluded.created_at,
       completed_at = excluded.completed_at,
       cost = excluded.cost,
       tokens_json = excluded.tokens_json,
+      tokens_total = excluded.tokens_total,
       rate_limits_json = excluded.rate_limits_json,
       usage_credits_json = excluded.usage_credits_json,
       context_window = excluded.context_window,
@@ -385,12 +399,14 @@ export function encodeWriteStatement(encoded: EncodedAgentMessage): {
       encoded.modelId,
       encoded.providerId,
       encoded.harnessId,
+      encoded.thinkingLevel,
       encoded.referencesJson,
       encoded.projectReferencesJson,
       encoded.createdAt,
       encoded.completedAt,
       encoded.cost,
       encoded.tokensJson,
+      encoded.tokensTotal,
       encoded.rateLimitsJson,
       encoded.creditsJson,
       encoded.contextWindow,

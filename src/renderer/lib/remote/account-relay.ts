@@ -256,8 +256,24 @@ export function createAccountRelayClient(options: AccountRelayOptions): AccountR
             }
             options.onEvent({ kind: 'message', data })
           })
-          .catch(() => {
+          .catch((error: unknown) => {
             if (wireId !== undefined) inboundProcessing.delete(wireId)
+            // The relay retains a frame until it receives the receiver ACK. If
+            // the socket drops after decryption but before that ACK reaches the
+            // service, the same authenticated ciphertext is replayed on the
+            // next connection. The session-security replay cache proves that
+            // this process already accepted it, so acknowledge the duplicate
+            // instead of treating it as a corrupt payload and killing the new
+            // socket.
+            if (
+              wireId !== undefined &&
+              error instanceof Error &&
+              error.message === 'replayed-encrypted-payload'
+            ) {
+              seenInboundIds.add(wireId)
+              sendAck(wireId)
+              return
+            }
             if (closing || payloadAuthenticationFailed) return
             payloadAuthenticationFailed = true
             remoteLog.error('Cloud relay payload authentication failed; automatic reconnect paused')

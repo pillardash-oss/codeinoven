@@ -1,12 +1,11 @@
 /**
  * Persistent phone device identity.
  *
- * Every phone installs a stable identity (a random `deviceId` plus a
- * human-readable `deviceName`) so the desktop gateway can tell devices apart,
- * remember renames across reconnects, and let the user disconnect or rename a
- * specific phone. The identity is generated once and kept in storage; the
- * device name can be changed from the desktop (renames are persisted
- * desktop-side too) or locally by the user.
+ * Every phone installs stable proof keys and a human-readable `deviceName`.
+ * Each desktop assigns its own credential id to those keys, so one phone can
+ * connect to multiple desktops without presenting desktop A's id to desktop B.
+ * Assignments and names survive reconnects and let each desktop disconnect or
+ * rename that phone independently.
  *
  * Since the 2026-08-08 remediation (A-04) the phone also owns two
  * NON-EXPORTABLE Web Crypto key pairs — an ECDSA P-256 signing key and an
@@ -21,10 +20,17 @@ const DEVICE_AUTH_VERSION_KEY = 'authVersion'
 const SIGNING_PUBLIC_JWK_KEY = 'signingPublicJwk'
 const AGREEMENT_PUBLIC_JWK_KEY = 'agreementPublicJwk'
 
+function desktopMetadataKey(key: string, desktopId?: string): string {
+  return desktopId ? `${key}:desktop:${desktopId}` : key
+}
+
 export interface DeviceIdentity {
   id: string
   name: string
 }
+
+/** Stable fallback for browsers that deny localStorage for the current page. */
+let volatileIdentity: DeviceIdentity | null = null
 
 /**
  * Per-device proof-of-possession key material (A-04). The private signing and
@@ -176,10 +182,11 @@ export async function loadDeviceIdentity(
     id = storage.getItem(DEVICE_ID_KEY) ?? ''
     name = storage.getItem(DEVICE_NAME_KEY) ?? ''
   } catch {
-    // storage unavailable — fall through to a fresh ephemeral identity
+    // Storage unavailable — fall through to the page-lifetime identity.
   }
+  const fallback = id ? null : volatileIdentity
   if (!id) {
-    id = randomId()
+    id = fallback?.id ?? randomId()
     try {
       storage.setItem(DEVICE_ID_KEY, id)
     } catch {
@@ -187,14 +194,35 @@ export async function loadDeviceIdentity(
     }
   }
   if (!name) {
-    name = defaultDeviceName()
+    name = fallback?.name ?? defaultDeviceName()
     try {
       storage.setItem(DEVICE_NAME_KEY, name)
     } catch {
       // ephemeral name is fine if storage cannot persist
     }
   }
-  return { id, name }
+  volatileIdentity = { id, name }
+  return volatileIdentity
+}
+
+/**
+ * Replace a stale browser identity after the service confirms that its id is
+ * owned by another account. The existing name is preserved; grant keys are
+ * namespaced by device id, so the next load creates fresh non-extractable keys.
+ */
+export async function rotateDeviceIdentity(
+  storage: Storage = globalThis.localStorage
+): Promise<DeviceIdentity> {
+  const id = randomId()
+  let name = volatileIdentity?.name ?? defaultDeviceName()
+  try {
+    name = storage.getItem(DEVICE_NAME_KEY) || name
+    storage.setItem(DEVICE_ID_KEY, id)
+  } catch {
+    // An ephemeral identity still lets this claim proceed for the current page.
+  }
+  volatileIdentity = { id, name }
+  return volatileIdentity
 }
 
 /** Persist a local device name override (used when the phone sets its own). */
@@ -256,12 +284,20 @@ function parsePublicJwk(value: string | null): JsonWebKey | null {
 export async function loadOrCreateDeviceKeyMaterial(
   options: {
     store?: DeviceKeyStore
+    /** Desktop-specific credential assignment. The proof keys remain phone-wide. */
+    desktopId?: string
   } = {}
 ): Promise<DeviceKeyMaterial> {
   const store = options.store ?? defaultStore()
   const deviceName = (await store.getString(DEVICE_NAME_KEY)) || defaultDeviceName()
   await store.setString(DEVICE_NAME_KEY, deviceName)
-  const rawId = await store.getString(DEVICE_ID_KEY)
+  const deviceIdKey = desktopMetadataKey(DEVICE_ID_KEY, options.desktopId)
+  const authVersionKey = desktopMetadataKey(DEVICE_AUTH_VERSION_KEY, options.desktopId)
+  const scopedId = await store.getString(deviceIdKey)
+  // Existing installations have one unscoped assignment. Use it once as a
+  // migration candidate; if it belongs to another desktop, relay auth falls
+  // back to the freshly approved pairing bootstrap and saves the right scope.
+  const rawId = scopedId ?? (options.desktopId ? await store.getString(DEVICE_ID_KEY) : null)
   let deviceId = rawId && rawId.length > 0 ? rawId : null
 
   const signingKey = await store.getSigningKey()
@@ -270,7 +306,9 @@ export async function loadOrCreateDeviceKeyMaterial(
     const signingPublicJwk = parsePublicJwk(await store.getString(SIGNING_PUBLIC_JWK_KEY))
     const agreementPublicJwk = parsePublicJwk(await store.getString(AGREEMENT_PUBLIC_JWK_KEY))
     if (signingKey && agreementKey && signingPublicJwk && agreementPublicJwk) {
-      const authVersionRaw = await store.getString(DEVICE_AUTH_VERSION_KEY)
+      const authVersionRaw =
+        (await store.getString(authVersionKey)) ??
+        (options.desktopId ? await store.getString(DEVICE_AUTH_VERSION_KEY) : null)
       const parsedVersion = Number.parseInt(authVersionRaw ?? '', 10)
       return {
         deviceId,
@@ -286,9 +324,9 @@ export async function loadOrCreateDeviceKeyMaterial(
     // Older builds stored only non-exportable private keys, so their public
     // halves cannot be recovered. Replace that incomplete identity atomically
     // and require a fresh enrollment instead of weakening key exportability.
-    await store.removeString(DEVICE_ID_KEY)
-    const authVersionRaw = await store.getString(DEVICE_AUTH_VERSION_KEY)
-    if (authVersionRaw !== null) await store.removeString(DEVICE_AUTH_VERSION_KEY)
+    await store.removeString(deviceIdKey)
+    const authVersionRaw = await store.getString(authVersionKey)
+    if (authVersionRaw !== null) await store.removeString(authVersionKey)
     await store.removeKeys()
     deviceId = null
   }
@@ -299,7 +337,7 @@ export async function loadOrCreateDeviceKeyMaterial(
   await store.setAgreementKey(agreement.privateKey)
   await store.setString(SIGNING_PUBLIC_JWK_KEY, JSON.stringify(signing.publicJwk))
   await store.setString(AGREEMENT_PUBLIC_JWK_KEY, JSON.stringify(agreement.publicJwk))
-  await store.setString(DEVICE_AUTH_VERSION_KEY, '1')
+  await store.setString(authVersionKey, '1')
   return {
     deviceId,
     deviceName,
@@ -314,17 +352,28 @@ export async function loadOrCreateDeviceKeyMaterial(
 /** Persist the desktop-assigned device id after the enrollment handshake. */
 export async function saveAssignedDeviceId(
   deviceId: string,
-  store: DeviceKeyStore = defaultStore()
+  store: DeviceKeyStore = defaultStore(),
+  desktopId?: string
 ): Promise<void> {
-  await store.setString(DEVICE_ID_KEY, deviceId)
+  await store.setString(desktopMetadataKey(DEVICE_ID_KEY, desktopId), deviceId)
 }
 
 /** Persist a bumped authVersion (after a desktop-issued rotation). */
 export async function saveDeviceAuthVersion(
   authVersion: number,
+  store: DeviceKeyStore = defaultStore(),
+  desktopId?: string
+): Promise<void> {
+  await store.setString(desktopMetadataKey(DEVICE_AUTH_VERSION_KEY, desktopId), String(authVersion))
+}
+
+/** Forget one desktop's assignment without deleting the phone's proof keys. */
+export async function clearAssignedDesktop(
+  desktopId: string,
   store: DeviceKeyStore = defaultStore()
 ): Promise<void> {
-  await store.setString(DEVICE_AUTH_VERSION_KEY, String(authVersion))
+  await store.removeString(desktopMetadataKey(DEVICE_ID_KEY, desktopId))
+  await store.removeString(desktopMetadataKey(DEVICE_AUTH_VERSION_KEY, desktopId))
 }
 
 /** Clear the phone's device identity + keys (used by "forget device data"). */

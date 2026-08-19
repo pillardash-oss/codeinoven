@@ -4,6 +4,8 @@
   import type { Attachment } from 'svelte/attachments'
   import StatusBadge from '$lib/components/shared/StatusBadge.svelte'
   import ThreadHoverPopover from '$lib/components/shared/ThreadHoverPopover.svelte'
+  import { agentRuns } from '$lib/stores/agent-runs.svelte'
+  import { statusBadgeForThread } from '$lib/thread-status-badge'
   import { isThreadWorking, type Thread, type ThreadSearchResult } from '$shared/types'
 
   interface Props {
@@ -16,12 +18,26 @@
 
   let thread = $derived(result.thread)
 
+  /** Live-settled run state wins over the persisted status, matching ThreadRow. */
+  let isWorking = $derived(
+    agentRuns.hasSettled(thread.projectId, thread.id)
+      ? agentRuns.isBusy(thread.projectId, thread.id)
+      : Boolean(thread.sessionId) && isThreadWorking(thread)
+  )
+  let isRetryPaused = $derived(thread.status === 'working-paused')
+
   let badgeProps = $derived.by(() => {
-    if (thread.status === 'planning' || thread.status === 'executing') {
+    if (isRetryPaused) {
+      return { tone: 'working-paused' as const, variant: 'spinner' as const }
+    }
+    if (isWorking) {
       return { stage: 'working' as const, variant: 'spinner' as const }
     }
     if (thread.status === 'awaiting_approval') {
       return { kind: 'attention' as const, animated: true }
+    }
+    if (thread.status === 'spec') {
+      return { stage: 'spec' as const }
     }
     if (thread.status === 'failed') {
       return { kind: 'error' as const }
@@ -31,9 +47,16 @@
     return null
   })
 
-  type ThreadState = 'unread' | 'read' | 'todo' | 'completed' | 'working' | 'approval' | 'error'
-
-  let isWorking = $derived(isThreadWorking(thread))
+  type ThreadState =
+    | 'unread'
+    | 'read'
+    | 'todo'
+    | 'completed'
+    | 'working'
+    | 'working-paused'
+    | 'spec'
+    | 'approval'
+    | 'error'
 
   let stageLabel = $derived.by((): string => {
     switch (thread.status) {
@@ -41,6 +64,8 @@
         return 'Planning'
       case 'executing':
         return 'Working'
+      case 'working-paused':
+        return 'Waiting to retry'
       default:
         return ''
     }
@@ -48,7 +73,9 @@
 
   let threadState = $derived.by((): ThreadState => {
     if (thread.status === 'failed') return 'error'
+    if (thread.status === 'working-paused') return 'working-paused'
     if (thread.status === 'awaiting_approval') return 'approval'
+    if (thread.status === 'spec') return 'spec'
     if (isWorking) return 'working'
     if (!thread.read) return 'unread'
     if (thread.status === 'created') return 'todo'
@@ -166,11 +193,12 @@
       {#if badgeProps}
         <StatusBadge
           stage={badgeProps.stage}
+          tone={badgeProps.tone}
           kind={badgeProps.kind}
           variant={badgeProps.variant ?? 'dot'}
           animated={badgeProps.animated}
           size="sm"
-          title={thread.status.replace('_', ' ')}
+          title={statusBadgeForThread(thread, isWorking)?.label}
         />
       {:else}
         <span class="h-2 w-2 rounded-full border border-border-strong bg-transparent"></span>
@@ -199,7 +227,7 @@
       class="fixed z-60 max-h-[calc(100vh-1rem)] w-64 max-w-[calc(100vw-1rem)] overflow-y-auto rounded-xl border bg-surface p-3 shadow-lg"
       style="left: {popoverPos.x}px; top: {popoverPos.y}px"
     >
-      <ThreadHoverPopover {thread} {isWorking} {stageLabel} {threadState} />
+      <ThreadHoverPopover {thread} {isWorking} {isRetryPaused} {stageLabel} {threadState} />
     </div>
   </Portal>
 {/if}

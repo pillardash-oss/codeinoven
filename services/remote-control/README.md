@@ -44,14 +44,18 @@ metadata field is currently an empty JSON object reserved for a future versioned
 
 Configure a Google OAuth web client with:
 
-- Authorized redirect URI: `https://mobile.codeinoven.com/api/auth/callback/google`
+- Authorized redirect URIs:
+  - `https://mobile.codeinoven.com/api/auth/callback/google`
+  - `https://auth.codeinoven.com/api/auth/callback/google`
 
 Configure Sign in with Apple with:
 
 - A primary App ID with the **Sign in with Apple** capability.
 - A Service ID used as `APPLE_OAUTH_CLIENT_ID`.
-- Domain: `mobile.codeinoven.com`.
-- Return URL: `https://mobile.codeinoven.com/api/auth/callback/apple`.
+- Domains: `mobile.codeinoven.com` and `auth.codeinoven.com`.
+- Return URLs:
+  - `https://mobile.codeinoven.com/api/auth/callback/apple`
+  - `https://auth.codeinoven.com/api/auth/callback/apple`
 - A Sign in with Apple key, its Team ID and Key ID, and the downloaded `.p8` private key.
 
 Store `APPLE_PRIVATE_KEY` as one line with PEM newlines escaped as `\n`; the service restores the
@@ -71,17 +75,19 @@ Required production variables:
 - `APPLE_OAUTH_CLIENT_ID`, `APPLE_TEAM_ID`, `APPLE_KEY_ID`, and `APPLE_PRIVATE_KEY` — Apple Service
   ID and Sign in with Apple key credentials.
 
-The production service has one canonical public origin: `https://mobile.codeinoven.com`. Better
-Auth callbacks, browser-origin validation, and secure cookies are derived from the production
-deployment mode. Proxy-header trust is explicitly enabled with `TRUST_PROXY=1`; leave it disabled
-when the service can be reached directly. SQLite is stored at `/data/remote-control.sqlite` on the
-named `remote-data` volume. Do not put OAuth client secrets, the Better Auth secret, or the Apple
-private key in the PWA container.
+The production service has two explicit public origins. `https://mobile.codeinoven.com` serves the
+PWA and remote API; `https://auth.codeinoven.com` is the desktop sign-in entry. Better Auth resolves
+only those two approved hosts, so each OAuth flow returns to the host where it started. Proxy-header
+trust is explicitly enabled with `TRUST_PROXY=1`; leave it disabled when the service can be reached
+directly. SQLite is stored at `/data/remote-control.sqlite` on the named `remote-data` volume. Do not
+put OAuth client secrets, the Better Auth secret, or the Apple private key in the PWA container.
 
 - Deploy `compose.example.yml` as a Docker Compose resource.
-- Assign `https://mobile.codeinoven.com` to the `mobile-pwa` service on port `80`. Do not expose
-  the `remote-control` service publicly; the PWA container proxies `/api/auth/*`, `/v1/*`, and
-  `/healthz` over the private Compose network. Coolify terminates public TLS.
+- Assign both `https://mobile.codeinoven.com` and `https://auth.codeinoven.com` to the `mobile-pwa`
+  service on port `80`. Create DNS records for both names before requesting certificates. Do not
+  expose the `remote-control` service publicly; the PWA container proxies `/api/auth/*`,
+  `/desktop/*`, `/v1/*`, and `/healthz` over the private Compose network. Coolify terminates public
+  TLS.
 - Set `TRUST_PROXY=1`, `BETTER_AUTH_SECRET`, `GOOGLE_OAUTH_CLIENT_ID`, `GOOGLE_OAUTH_CLIENT_SECRET`,
   `APPLE_OAUTH_CLIENT_ID`, `APPLE_TEAM_ID`, `APPLE_KEY_ID`, and `APPLE_PRIVATE_KEY` in Coolify.
   Generate `BETTER_AUTH_SECRET` with `openssl rand -base64 32`.
@@ -92,6 +98,20 @@ private key in the PWA container.
 - Enrollment-code consumption, account ownership, and mobile-device registration execute in one
   `BEGIN IMMEDIATE` transaction. Concurrent claims for the same one-time code serialize, and only
   one can commit.
+
+## Desktop OAuth bridge
+
+The desktop opens `https://auth.codeinoven.com/desktop/sign-in` with an OAuth state value, a
+localhost callback, and an S256 PKCE challenge. The service validates the callback as an exact
+`http://127.0.0.1:<ephemeral-port>/account/callback` URL before starting Google or Apple sign-in.
+After Better Auth establishes the account session, the service issues a two-minute, single-use
+authorization code. `/v1/desktop-auth/exchange` accepts that code only with the original callback
+and matching PKCE verifier, then returns a random 90-day profile token. Raw authorization codes and
+profile tokens are never stored; SQLite contains SHA-256 hashes only.
+
+The desktop profile token authenticates `/v1/profile` and can create an account-owned remote
+desktop. The phone still claims the QR or one-time code, proving that its non-extractable device key
+belongs to the same account before remote control is granted.
 
 `Dockerfile.pwa` builds the renderer inside the image, so deployment never depends on the ignored
 local `out/renderer` directory. The internal Caddy server handles SPA fallback, security headers,

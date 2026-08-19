@@ -1,0 +1,193 @@
+import { afterEach, describe, expect, it } from 'vitest'
+import { mkdtemp, rm } from 'fs/promises'
+import { tmpdir } from 'os'
+import { join } from 'path'
+import { ThreadManager } from '../../src/lib/engines/thread-manager'
+import type { ThreadStatus } from '../../src/lib/types'
+import type { Database } from '../../src/main/database/database'
+import { createTestDb, destroyTestDb } from './database/test-helper'
+import { ProjectRepo } from '../../src/main/database/repositories/project-repo'
+import { CheckpointManager } from '../../src/main/storage/checkpoint-manager'
+import { RestartRecoveryService } from '../../src/main/system/restart-recovery-service'
+
+const temporaryPaths: string[] = []
+const testDatabases: Database[] = []
+
+async function temporaryDirectory(prefix: string): Promise<string> {
+  const path = await mkdtemp(join(tmpdir(), prefix))
+  temporaryPaths.push(path)
+  return path
+}
+
+async function createDatabase(projectRoot: string): Promise<Database> {
+  const database = await createTestDb()
+  testDatabases.push(database)
+  for (const id of ['project1', 'project2']) {
+    new ProjectRepo(database).upsert({
+      id,
+      name: `Project ${id}`,
+      path: projectRoot,
+      source: 'local',
+      providerId: 'provider1',
+      workflowId: 'default',
+      threadLimit: 70,
+      changeTrackingMode: 'manual',
+      createdAt: Date.now(),
+      updatedAt: Date.now()
+    })
+  }
+  return database
+}
+
+afterEach(async () => {
+  await Promise.all(
+    temporaryPaths.splice(0).map((path) => rm(path, { recursive: true, force: true }))
+  )
+  for (const database of testDatabases.splice(0)) destroyTestDb(database)
+})
+
+describe('RestartRecoveryService', () => {
+  it('interrupts active checkpoints and threads while leaving inactive threads unchanged', async () => {
+    const projectRoot = await temporaryDirectory('codeinoven-recovery-project-')
+    const database = await createDatabase(projectRoot)
+    const threads = new ThreadManager(database)
+    const checkpoints = new CheckpointManager(database)
+
+    const planning = await threads.createThread({
+      projectId: 'project1',
+      providerId: 'provider1',
+      title: 'Planning',
+      workingDirectory: projectRoot
+    })
+    const completed = await threads.createThread({
+      projectId: 'project1',
+      providerId: 'provider1',
+      title: 'Completed',
+      workingDirectory: projectRoot
+    })
+    await threads.setStatus('project1', planning.id, 'planning')
+    await threads.setStatus('project1', completed.id, 'completed')
+    const activeCheckpoint = await checkpoints.beginTurn(
+      'project1',
+      planning.id,
+      projectRoot,
+      'Active planning turn',
+      false
+    )
+
+    const result = await new RestartRecoveryService(database, checkpoints).recover()
+
+    expect(result).toMatchObject({
+      inspected: 2,
+      failures: []
+    })
+    expect(result.recovered.map((thread) => thread.id)).toEqual([planning.id])
+    expect((await threads.getThread('project1', planning.id))?.status).toBe('interrupted')
+    expect((await threads.getThread('project1', completed.id))?.status).toBe('completed')
+    expect((await checkpoints.get('project1', planning.id, activeCheckpoint.id))?.status).toBe(
+      'interrupted'
+    )
+  })
+
+  it('recovers an executing thread even when it has no active checkpoint', async () => {
+    const projectRoot = await temporaryDirectory('codeinoven-recovery-project-')
+    const database = await createDatabase(projectRoot)
+    const threads = new ThreadManager(database)
+    const thread = await threads.createThread({
+      projectId: 'project2',
+      providerId: 'provider1',
+      title: 'Executing'
+    })
+    await threads.setStatus('project2', thread.id, 'executing')
+
+    const result = await new RestartRecoveryService(database).recover()
+    const persisted = await threads.getThread('project2', thread.id)
+
+    expect(result.failures).toEqual([])
+    expect(result.recovered).toHaveLength(1)
+    expect(result.completed).toHaveLength(0)
+    expect(persisted?.status as ThreadStatus | 'interrupted').toBe('interrupted')
+  })
+
+  it('finalizes a demonstrably completed turn as completed and never resumes it', async () => {
+    const projectRoot = await temporaryDirectory('codeinoven-recovery-project-')
+    const database = await createDatabase(projectRoot)
+    const threads = new ThreadManager(database)
+    const checkpoints = new CheckpointManager(database)
+
+    const thread = await threads.createThread({
+      projectId: 'project2',
+      providerId: 'provider1',
+      title: 'Done before stop'
+    })
+    await threads.setStatus('project2', thread.id, 'executing')
+    const active = await checkpoints.beginTurn(
+      'project2',
+      thread.id,
+      projectRoot,
+      'Active completed turn',
+      false
+    )
+    database.run(
+      `INSERT INTO agent_messages (id, thread_id, role, parts, created_at) VALUES (?, ?, 'user', ?, ?)`,
+      `${thread.id}-u`,
+      thread.id,
+      JSON.stringify([{ type: 'text', text: 'Build the feature' }]),
+      Date.now()
+    )
+    database.run(
+      `INSERT INTO agent_messages (id, thread_id, role, parts, created_at) VALUES (?, ?, 'assistant', ?, ?)`,
+      `${thread.id}-a`,
+      thread.id,
+      JSON.stringify([{ type: 'text', text: 'Done. Feature implemented.' }]),
+      Date.now() + 1
+    )
+
+    const result = await new RestartRecoveryService(database, checkpoints).recover()
+    const persisted = await threads.getThread('project2', thread.id)
+
+    expect(result.failures).toEqual([])
+    expect(result.recovered).toHaveLength(0)
+    expect(result.completed.map((entry) => entry.id)).toEqual([thread.id])
+    expect(persisted?.status).toBe('completed')
+    expect((await checkpoints.get('project2', thread.id, active.id))?.status).toBe('completed')
+  })
+
+  it('keeps a turn interrupted when the latest assistant answer ended in an error', async () => {
+    const projectRoot = await temporaryDirectory('codeinoven-recovery-project-')
+    const database = await createDatabase(projectRoot)
+    const threads = new ThreadManager(database)
+    const checkpoints = new CheckpointManager(database)
+
+    const thread = await threads.createThread({
+      projectId: 'project2',
+      providerId: 'provider1',
+      title: 'Errored before stop'
+    })
+    await threads.setStatus('project2', thread.id, 'executing')
+    const active = await checkpoints.beginTurn(
+      'project2',
+      thread.id,
+      projectRoot,
+      'Active errored turn',
+      false
+    )
+    database.run(
+      `INSERT INTO agent_messages (id, thread_id, role, parts, error, created_at) VALUES (?, ?, 'assistant', ?, ?, ?)`,
+      `${thread.id}-a`,
+      thread.id,
+      JSON.stringify([{ type: 'text', text: 'Partial output' }]),
+      'Provider rate limited',
+      Date.now()
+    )
+
+    const result = await new RestartRecoveryService(database, checkpoints).recover()
+    const persisted = await threads.getThread('project2', thread.id)
+
+    expect(result.failures).toEqual([])
+    expect(result.recovered.map((entry) => entry.id)).toEqual([thread.id])
+    expect(result.completed).toHaveLength(0)
+    expect(persisted?.status).toBe('interrupted')
+    expect((await checkpoints.get('project2', thread.id, active.id))?.status).toBe('interrupted')
+  })
+})

@@ -4,44 +4,58 @@ import { existsSync, mkdirSync } from 'fs'
 import { fileURLToPath } from 'url'
 import { is } from '@electron-toolkit/utils'
 import { APP_ID, APP_NAME } from '../lib/brand'
-import { Logger } from './logger'
+import { Logger } from './system/logger'
 import { Database } from './database/database'
 import { ThreadRepo } from './database/repositories/thread-repo'
 import { ProjectRepo } from './database/repositories/project-repo'
-import { StorageEngine } from './storage-engine'
-import { registerHydrationIpcHandlers } from './hydration-ipc'
-import { installFilePreviewProtocol, registerFilePreviewScheme } from './file-preview-protocol'
-import { WindowStateService } from './window-state'
-import { setNotificationService, setPowerWakeService, broadcastThreadUpdate } from './thread-events'
+import { AccountProfileRepo } from './database/repositories/account-profile-repo'
+import { loadDeviceIdentity } from './account/device-identity'
+import { readMemorySyncState } from './remote/memory-sync-state'
+import { StorageEngine } from './storage/storage-engine'
+import { registerHydrationIpcHandlers } from './ipc/hydration-ipc'
+import {
+  installFilePreviewProtocol,
+  registerFilePreviewScheme
+} from './editor/file-preview-protocol'
+import { WindowStateService } from './system/window-state'
+import {
+  setNotificationService,
+  setPowerWakeService,
+  broadcastThreadUpdate
+} from './chat/thread-events'
 import {
   installProductionApplicationMenu,
   lockDownProductionWindow
-} from './production-housekeeping'
-import { getTrafficLightArg, warmTrafficLightDetection } from './titlebar'
-import { PrivilegedIpcValidator } from './ipc-validation'
+} from './system/production-housekeeping'
+import { getTrafficLightArg, warmTrafficLightDetection } from './system/titlebar'
+import { PrivilegedIpcValidator } from './ipc/ipc-validation'
 import type { CloseConfirmationProject, ThreadClickedPayload } from '../lib/ipc-contract'
-import type { Thread } from '../lib/types'
-import { startupTelemetry } from './startup-telemetry'
-import { handleFatalStartupFailure, installProcessCrashDiagnostics } from './lifecycle-diagnostics'
-import type { ChatEngine } from './chat-engine'
-import type { HarnessManifestService } from './harness-manifest-service'
-import type { ComputerUsePipService } from './computer-use-pip-service'
-import type { UpdaterService } from './updater-service'
-import type { PowerWakeService } from './power-wake-service'
-import type { RetrySchedulerService } from './retry-scheduler-service'
-import { ModelPricingService } from './model-pricing-service'
-import { ThreadCreationCoordinator } from './thread-creation-coordinator'
-import type { PtyService } from './pty-service'
-import type { ProviderConnectionService } from './provider-connection'
-import type { HarnessUpdateService } from './harness-update-service'
-import type { HarnessInstallService } from './harness-install-service'
-import type { NotificationService } from './notification-service'
+import { startupTelemetry } from './system/startup-telemetry'
+import {
+  handleFatalStartupFailure,
+  installProcessCrashDiagnostics
+} from './system/lifecycle-diagnostics'
+import type { ChatEngine } from './chat/chat-engine'
+import type { HarnessManifestService } from './agents/harness-manifest-service'
+import type { ComputerUsePipService } from './utilities/computer-use-pip-service'
+import type { UpdaterService } from './notifications/updater-service'
+import type { PowerWakeService } from './system/power-wake-service'
+import type { RetrySchedulerService } from './system/retry-scheduler-service'
+import { ModelPricingService } from './providers/model-pricing-service'
+import { ThreadCreationCoordinator } from './chat/thread-creation-coordinator'
+import type { PtyService } from './system/pty-service'
+import type { ProviderConnectionService } from './providers/provider-connection'
+import type { HarnessUpdateService } from './agents/harness-update-service'
+import type { HarnessAutoUpdateService } from './agents/harness-auto-update-service'
+import type { HarnessInstallService } from './agents/harness-install-service'
+import type { NotificationService } from './notifications/notification-service'
 import type { RemoteModeController } from './remote/remote-mode'
 import type { DeviceCredentialService } from './remote/device-credential-service'
-import { appRendererNavigationTargets, trustedIpcMain as ipcMain } from './trusted-ipc-main'
-import { PACKAGED_SMOKE_OUTPUT_ENV, writePackagedSmokeProof } from './packaged-smoke'
-import { sendToRenderer } from './renderer-delivery'
-import { hasNativeSplashHandoff, signalNativeSplashReady } from './native-splash-handoff'
+import { appRendererNavigationTargets, trustedIpcMain as ipcMain } from './ipc/trusted-ipc-main'
+import { PACKAGED_SMOKE_OUTPUT_ENV, writePackagedSmokeProof } from './system/packaged-smoke'
+import { sendToRenderer } from './ipc/renderer-delivery'
+import { hasNativeSplashHandoff, signalNativeSplashReady } from './system/native-splash-handoff'
+import { instanceRegistry } from './system/instance-registry'
 
 const mainBundleDirectory = dirname(fileURLToPath(import.meta.url))
 
@@ -95,24 +109,6 @@ let splashWindow: BrowserWindow | null = null
 let quitCleanupStarted = false
 let shutdownFailsafe: ReturnType<typeof setTimeout> | null = null
 
-// The database, IPC handlers, and remote gateway are process-wide resources.
-// Running two app instances against them causes duplicate startup work and port
-// collisions, so subsequent launches focus the existing window and exit.
-// Packaged startup smoke runs use isolated Chromium and application data roots,
-// so they must not be redirected to a developer instance that happens to be
-// running on the same machine. Normal launches retain single-instance behavior.
-const isPackagedSmoke = app.isPackaged && Boolean(process.env[PACKAGED_SMOKE_OUTPUT_ENV])
-const hasSingleInstanceLock = isPackagedSmoke || app.requestSingleInstanceLock()
-if (!hasSingleInstanceLock) app.quit()
-
-app.on('second-instance', () => {
-  const window = mainWindow
-  if (!window || window.isDestroyed()) return
-  if (window.isMinimized()) window.restore()
-  if (!window.isVisible()) window.show()
-  window.focus()
-})
-
 /**
  * Close-confirmation gate. When the user closes the window (traffic-light
  * button) or quits (Cmd+Q / Dock) while threads are still working, the close
@@ -127,14 +123,7 @@ function getActiveThreadProjects(): CloseConfirmationProject[] {
   try {
     const threadRepo = new ThreadRepo(database)
     const projectRepo = new ProjectRepo(database)
-    type ActiveThread = Thread & { status: 'planning' | 'executing' }
-    const active: ActiveThread[] = threadRepo
-      .listAll()
-      .filter(
-        (t): t is ActiveThread =>
-          !t.archived && (t.status === 'planning' || t.status === 'executing')
-      )
-      .sort((a, b) => b.lastActivity - a.lastActivity)
+    const active = threadRepo.listActive()
     if (active.length === 0) return []
     const byProject = new Map<string, CloseConfirmationProject>()
     for (const thread of active) {
@@ -180,17 +169,23 @@ function requestCloseConfirmation(): void {
     app.quit()
     return
   }
-  const working = getActiveThreadProjects()
+  // When another live instance can keep a project's threads running, working
+  // threads don't need to gate this instance's close — a surviving instance can
+  // continue them. The renderer still owns the unsaved-file gate, which is
+  // reported separately, so closing never silently drops unsaved editor state.
+  const working = instanceRegistry.hasOtherLiveInstance() ? [] : getActiveThreadProjects()
   sendToRenderer(window.webContents, 'window:confirmClose', { projects: working, files: [] })
 }
 
 ipcMain.handle('app:confirmClose', async () => {
-  // The user approved the forced close while threads are working. Terminate
-  // every still-streaming harness connection (SIGTERM to local harness
-  // processes) so no agent keeps working after the app exits, then proceed.
+  // The user approved the forced close while threads are working. When another
+  // live instance exists it can continue those threads, so this instance just
+  // walks away without SIGTERM'ing the shared harness processes. Otherwise
+  // terminate every still-streaming harness connection so no agent keeps
+  // working after the app exits, then proceed.
   quitConfirmed = true
   try {
-    if (chatEngine) {
+    if (chatEngine && !instanceRegistry.hasOtherLiveInstance()) {
       await chatEngine.terminateActiveConnections()
     }
   } catch (error) {
@@ -285,9 +280,9 @@ ipcMain.handle('app:rendererReady', async () => {
 })
 
 /**
- * Whether a terminal in the renderer currently holds focus (Windows-only
- * concern). While true, Ctrl+W is left to the shell's delete-word binding
- * instead of closing the active surface.
+ * Whether a terminal in the renderer currently holds focus. While true, the
+ * shell owns keys that would otherwise be app shortcuts: Ctrl+W is left to
+ * the shell's delete-word binding, and Cmd/Ctrl+T opens a new terminal tab.
  */
 let terminalFocused = false
 
@@ -302,6 +297,20 @@ function isCloseShortcut(input: Electron.Input): boolean {
     (process.platform === 'darwin' ? input.meta : input.control) &&
     !input.alt &&
     input.key.toLowerCase() === 'w'
+  )
+}
+
+/**
+ * Whether the shortcut opens a new terminal tab while a terminal is focused.
+ * macOS uses Cmd+T; other platforms use Ctrl+T.
+ */
+function isNewTerminalShortcut(input: Electron.Input): boolean {
+  return (
+    input.type === 'keyDown' &&
+    !input.isAutoRepeat &&
+    (process.platform === 'darwin' ? input.meta : input.control) &&
+    !input.alt &&
+    input.key.toLowerCase() === 't'
   )
 }
 const isProduction = app.isPackaged || process.env['NODE_ENV'] === 'production'
@@ -331,6 +340,7 @@ let chatEngine: ChatEngine | null = null
 let ptyService: PtyService | null = null
 let providerConnection: ProviderConnectionService | null = null
 let harnessUpdateService: HarnessUpdateService | null = null
+let harnessAutoUpdateService: HarnessAutoUpdateService | null = null
 let harnessInstallService: HarnessInstallService | null = null
 let harnessManifestService: HarnessManifestService | null = null
 let computerUsePipService: ComputerUsePipService | null = null
@@ -473,15 +483,15 @@ async function bootPostPaintServices(): Promise<void> {
     { PowerWakeService },
     { RetrySchedulerService }
   ] = await Promise.all([
-    import('./ipc-handlers'),
+    import('./ipc/ipc-handlers'),
     import('../lib/engines/project-manager'),
-    import('./project-files-service'),
-    import('./chat-engine'),
-    import('./harness-manifest-service'),
-    import('./computer-use-pip-service'),
-    import('./updater-service'),
-    import('./power-wake-service'),
-    import('./retry-scheduler-service')
+    import('./editor/project-files-service'),
+    import('./chat/chat-engine'),
+    import('./agents/harness-manifest-service'),
+    import('./utilities/computer-use-pip-service'),
+    import('./notifications/updater-service'),
+    import('./system/power-wake-service'),
+    import('./system/retry-scheduler-service')
   ])
 
   const projectManager = new ProjectManager(database)
@@ -495,12 +505,31 @@ async function bootPostPaintServices(): Promise<void> {
     database,
     computerUsePipService,
     harnessManifestService,
-    threadCreation
+    threadCreation,
+    join(app.getPath('userData'), 'owned-processes.json')
   )
   updaterService = new UpdaterService(storage)
   powerWakeService = new PowerWakeService(storage, database)
   retryScheduler = new RetrySchedulerService(storage)
+  // Keep the device awake while a scheduled auto-retry is due within the wake
+  // window, so a usage-limit reset fires even when the user is away.
+  powerWakeService.attachRetryScheduler(retryScheduler)
+  retryScheduler.attachChangeListener(() => powerWakeService?.onRetryScheduleChanged())
   updaterService.setChatEngine(chatEngine)
+  // Reap any harness processes orphaned by an unclean previous run before the
+  // first session can spawn fresh servers, so leftover dev servers/ports are
+  // reclaimed without ever touching a harness the user runs outside the app.
+  try {
+    const reaped = await chatEngine.reapOrphanProcesses()
+    if (reaped.killed.length > 0 || reaped.skipped.length > 0) {
+      Logger.info('Reaped orphaned harness processes from an unclean shutdown', {
+        killed: reaped.killed,
+        skipped: reaped.skipped
+      })
+    }
+  } catch (error) {
+    Logger.error('Orphaned harness process reaping failed at startup:', error)
+  }
   registerIpcHandlers(storage, database, updaterService, chatEngine, {
     projectManager,
     projectFilesService,
@@ -528,6 +557,7 @@ async function bootPostPaintServices(): Promise<void> {
       { ProviderConnectionService },
       { HarnessUpdateService },
       { HarnessInstallService },
+      { HarnessAutoUpdateService },
       { RemoteModeController, DEFAULT_LAN_PORT, remoteEnvInt, remotePeerSecret },
       { RemoteRpcDispatcher },
       { DeviceCredentialService },
@@ -536,27 +566,30 @@ async function bootPostPaintServices(): Promise<void> {
       { NotificationService },
       { RestartRecoveryService }
     ] = await Promise.all([
-      import('./pty-service'),
-      import('./provider-connection'),
-      import('./harness-update-service'),
-      import('./harness-install-service'),
+      import('./system/pty-service'),
+      import('./providers/provider-connection'),
+      import('./agents/harness-update-service'),
+      import('./agents/harness-install-service'),
+      import('./agents/harness-auto-update-service'),
       import('./remote/remote-mode'),
       import('./remote/remote-rpc'),
       import('./remote/device-credential-service'),
       import('./database/repositories/harness-usage-repo'),
-      import('./memory-service'),
-      import('./notification-service'),
-      import('./restart-recovery-service')
+      import('./chat/memory-service'),
+      import('./notifications/notification-service'),
+      import('./system/restart-recovery-service')
     ])
 
     ptyService = new PtyService(storage, database)
     providerConnection = new ProviderConnectionService()
     harnessUpdateService = new HarnessUpdateService(providerConnection)
+    harnessAutoUpdateService = new HarnessAutoUpdateService(storage)
     harnessInstallService = new HarnessInstallService(providerConnection)
     notificationService = new NotificationService(storage, database, openThreadFromNotification)
 
     /** Keep-alive remote mode: Tray + LAN gateway + quit interception. */
     remoteCredentials = new DeviceCredentialService(database)
+    const accountProfileRepo = new AccountProfileRepo(database)
     const accountUsage = new HarnessUsageRepo(database)
     const accountMemory = new MemoryService(storage)
     remoteMode = new RemoteModeController({
@@ -573,13 +606,37 @@ async function bootPostPaintServices(): Promise<void> {
       }),
       storage,
       credentials: remoteCredentials,
-      loadAccountProfileData: async () => ({
-        usage: accountUsage.profileSummary(),
-        globalMemories: (await accountMemory.getEntries()).filter(
+      accountProfileRepo,
+      loadAccountProfileData: async () => {
+        const identity = await loadDeviceIdentity(storage)
+        const analytics = await accountUsage.profileSummary()
+        const globalMemories = (await accountMemory.getEntries()).filter(
           (entry) => entry.scope === 'global'
         )
-      }),
+        const syncState = await readMemorySyncState(storage)
+        return {
+          deviceId: identity.deviceId,
+          deviceLabel: identity.deviceLabel,
+          platform: identity.platform,
+          usage: {
+            deviceId: identity.deviceId,
+            deviceLabel: identity.deviceLabel,
+            platform: identity.platform,
+            messageCount: analytics.messageCount,
+            costUsd: analytics.costUsd,
+            tokens: analytics.tokens,
+            durationMs: analytics.durationMs,
+            activeDays: analytics.activityDays.length,
+            projects: await accountUsage.projectUsageSummary(),
+            updatedAt: Date.now()
+          },
+          globalMemories,
+          globalMemoryTombstones: syncState?.tombstones ?? []
+        }
+      },
       applyGlobalMemories: async (entries) => {
+        // The server returns the tombstone-filtered union of every device's
+        // memories, so replacing the local list is what propagates deletions.
         await accountMemory.saveEntries(entries.filter((entry) => entry.scope === 'global'))
       },
       onSessionActiveChange: (active) => powerWakeService?.setRemoteSessionActive(active)
@@ -598,11 +655,12 @@ async function bootPostPaintServices(): Promise<void> {
     ptyService.register()
     providerConnection.register()
     harnessUpdateService.register()
+    harnessAutoUpdateService.register()
     harnessInstallService.register()
 
-    const { registerProviderAccountIpc } = await import('./provider-account-ipc')
-    const { registerBaseUrlProviderIpc } = await import('./base-url-provider-ipc')
-    const { registerUtilityIpc } = await import('./utility-ipc')
+    const { registerProviderAccountIpc } = await import('./ipc/provider-account-ipc')
+    const { registerBaseUrlProviderIpc } = await import('./providers/base-url-provider-ipc')
+    const { registerUtilityIpc } = await import('./ipc/utility-ipc')
     registerProviderAccountIpc()
     registerBaseUrlProviderIpc(storage)
     registerUtilityIpc(storage, undefined, undefined, undefined, computerUsePipService ?? undefined)
@@ -610,15 +668,6 @@ async function bootPostPaintServices(): Promise<void> {
     // Wire PTY to the window now that it exists.
     if (mainWindow && !mainWindow.isDestroyed()) {
       ptyService.attach(mainWindow.webContents)
-    }
-
-    try {
-      const deleted = await chatEngine?.purgeArchivedThreads()
-      if (deleted && (deleted.tasks > 0 || deleted.rows > 0 || deleted.directories > 0)) {
-        Logger.info('Permanently deleted legacy task residue', deleted)
-      }
-    } catch (error) {
-      Logger.error('Legacy archived task deletion failed (non-fatal):', error)
     }
 
     try {
@@ -657,6 +706,21 @@ async function bootPostPaintServices(): Promise<void> {
         // reopened. `interrupted` is not a notifiable status, so this cannot
         // fire spurious OS notifications.
         for (const thread of recovery.recovered) {
+          broadcastThreadUpdate(thread)
+        }
+      }
+      // Threads whose turns demonstrably completed before the stop are finalized
+      // as `completed`, never resumed. Broadcast their corrected status too so the
+      // sidebar doesn't linger on the stale "working" indicator.
+      if (recovery.completed.length > 0) {
+        Logger.info('Finalized completed interrupted threads', {
+          inspected: recovery.inspected,
+          completed: recovery.completed.map((thread) => ({
+            projectId: thread.projectId,
+            threadId: thread.id
+          }))
+        })
+        for (const thread of recovery.completed) {
           broadcastThreadUpdate(thread)
         }
       }
@@ -776,6 +840,13 @@ function createWindow(): BrowserWindow {
       event.preventDefault()
       sendToRenderer(window.webContents, 'window:closeShortcut')
     }
+    // Cmd/Ctrl+T while a terminal is focused opens a new terminal tab in the
+    // renderer. Intercept here so ghostty-web never swallows the key and feeds
+    // its WASM-encoded sequence to the shell.
+    if (isNewTerminalShortcut(input) && terminalFocused) {
+      event.preventDefault()
+      sendToRenderer(window.webContents, 'window:newTerminalShortcut')
+    }
   })
 
   // External links leave the app through the default browser only when they
@@ -832,8 +903,11 @@ function openThreadFromNotification(payload: ThreadClickedPayload): void {
 void app
   .whenReady()
   .then(async () => {
-    if (!hasSingleInstanceLock) return
     startupTelemetry.mark('electron:ready')
+    // Register this process in the instance registry before any window exists so
+    // the close gate can later tell whether other live instances can keep a
+    // project's threads running.
+    instanceRegistry.start()
     // This is the first post-ready action. Construct and show the native splash
     // immediately, then yield the main event loop until Chromium presents its
     // first frame. Synchronous SQLite/schema work cannot begin before this
@@ -1108,10 +1182,17 @@ async function runShutdownPipeline(): Promise<void> {
     Logger.error('Window state flush failed during shutdown:', error)
   }
 
-  try {
-    await chatEngine?.dispose()
-  } catch (error) {
-    Logger.error('Chat engine disposal failed during shutdown:', error)
+  // When another live instance can continue the project's threads, this
+  // instance exits without disposing the chat engine — disposal kills every
+  // agent-owned harness process, which would destroy threads the surviving
+  // instance is still working on. The threads' durable state lives in the
+  // shared DB, so the other instance resumes them seamlessly.
+  if (!instanceRegistry.hasOtherLiveInstance()) {
+    try {
+      await chatEngine?.dispose()
+    } catch (error) {
+      Logger.error('Chat engine disposal failed during shutdown:', error)
+    }
   }
 
   try {
@@ -1127,6 +1208,8 @@ async function runShutdownPipeline(): Promise<void> {
   } catch (error) {
     Logger.error('Database close failed during shutdown:', error)
   }
+
+  instanceRegistry.stop()
 
   app.quit()
 }

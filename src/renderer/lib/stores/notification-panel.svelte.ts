@@ -2,11 +2,12 @@ import { APP_SLUG } from '$shared/brand'
 import type { AgentNotificationPayload } from '$shared/ipc-contract'
 import { isOrchestrationChildThread, type Thread } from '$shared/types'
 
-export type NotificationFilter = 'all' | 'completed' | 'attention' | 'error' | 'app-errors'
+export type NotificationFilter =
+  'all' | 'completed' | 'chat-completed' | 'attention' | 'spec' | 'error' | 'app-errors'
 
 export interface InAppNotification {
   id: string
-  kind: 'completed' | 'attention' | 'error'
+  kind: 'completed' | 'chat-completed' | 'attention' | 'spec' | 'error'
   title: string
   body: string
   projectId: string
@@ -35,8 +36,16 @@ class NotificationPanelState {
     return this._notifications.some((n) => n.kind === 'error')
   }
 
+  get hasSpec(): boolean {
+    return this._notifications.some((n) => n.kind === 'spec')
+  }
+
   get completedCount(): number {
     return this._notifications.filter((n) => n.kind === 'completed').length
+  }
+
+  get chatCompletedCount(): number {
+    return this._notifications.filter((n) => n.kind === 'chat-completed').length
   }
 
   get attentionCount(): number {
@@ -45,6 +54,10 @@ class NotificationPanelState {
 
   get errorCount(): number {
     return this._notifications.filter((n) => n.kind === 'error').length
+  }
+
+  get specCount(): number {
+    return this._notifications.filter((n) => n.kind === 'spec').length
   }
 
   get totalCount(): number {
@@ -78,15 +91,21 @@ class NotificationPanelState {
   hydrateFromThreads(threads: Thread[]): void {
     for (const thread of threads) {
       if (
-        thread.status === 'awaiting_approval' &&
+        (thread.status === 'awaiting_approval' || thread.status === 'spec') &&
         !thread.read &&
         !isOrchestrationChildThread(thread)
       ) {
         this.add({
           id: `${APP_SLUG}-${thread.projectId}-${thread.id}-${thread.status}-${thread.updatedAt}`,
-          kind: 'attention',
-          title: 'Agent needs your attention',
-          body: `${thread.title} is waiting for your input.`,
+          kind: thread.status === 'spec' ? 'spec' : 'attention',
+          title:
+            thread.status === 'spec'
+              ? 'Specification ready for review'
+              : 'Agent needs your attention',
+          body:
+            thread.status === 'spec'
+              ? `${thread.title} has a reviewable engineering artifact ready.`
+              : `${thread.title} is waiting for your input.`,
           projectId: thread.projectId,
           threadId: thread.id
         })

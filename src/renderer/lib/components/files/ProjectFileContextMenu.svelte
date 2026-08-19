@@ -1,7 +1,17 @@
 <script lang="ts">
   import type { Snippet } from 'svelte'
   import { ContextMenu } from 'bits-ui'
-  import { ClipboardPaste, Copy, FilePlus2, Info, Pencil, Scissors, Trash2 } from '@lucide/svelte'
+  import {
+    ClipboardPaste,
+    Copy,
+    FilePlus2,
+    FolderOpen,
+    FolderPlus,
+    Info,
+    Pencil,
+    Scissors,
+    Trash2
+  } from '@lucide/svelte'
   import type { ProjectFileEntry } from '$shared/types'
 
   interface Props {
@@ -10,6 +20,7 @@
     canPaste: boolean
     children: Snippet
     onCreateFile: () => void
+    onCreateFolder: () => void
     onCopy: () => void
     onCopyPath: () => void
     onCut: () => void
@@ -17,6 +28,7 @@
     onRename: () => void
     onDelete: () => void
     onInfo: () => void
+    onReveal: () => void
   }
 
   let {
@@ -25,13 +37,15 @@
     canPaste,
     children,
     onCreateFile,
+    onCreateFolder,
     onCopy,
     onCopyPath,
     onCut,
     onPaste,
     onRename,
     onDelete,
-    onInfo
+    onInfo,
+    onReveal
   }: Props = $props()
 
   let selectedCount = $derived(
@@ -61,6 +75,10 @@
           <FilePlus2 size={13} class="text-muted" />
           New file
         </ContextMenu.Item>
+        <ContextMenu.Item class={itemClass} onSelect={onCreateFolder}>
+          <FolderPlus size={13} class="text-muted" />
+          New folder
+        </ContextMenu.Item>
       {/if}
 
       {#if entry}
@@ -79,6 +97,10 @@
         <ContextMenu.Item class={itemClass} onSelect={onCopyPath}>
           <Copy size={13} class="text-muted" />
           {selectedCount > 1 ? `Copy ${selectedCount} paths` : 'Copy path'}
+        </ContextMenu.Item>
+        <ContextMenu.Item class={itemClass} onSelect={onReveal}>
+          <FolderOpen size={13} class="text-muted" />
+          Show in File Manager
         </ContextMenu.Item>
         <ContextMenu.Separator class="my-1 h-px bg-border" />
         {#if isSingle}

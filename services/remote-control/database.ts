@@ -3,7 +3,7 @@
 import { Database } from 'bun:sqlite'
 import type {
   AuthenticatedSession,
-  AccountProfileRecord,
+  DesktopGrantRecord,
   DesktopRecord,
   EnrollmentRecord,
   MobileDeviceRecord,
@@ -23,63 +23,6 @@ export type AuditEventKind =
   | 'relay.desktop-disconnected'
 
 const SCHEMA = `
--- Better Auth schema generated from the current auth configuration.
-CREATE TABLE IF NOT EXISTS "user" (
-  "id" TEXT NOT NULL PRIMARY KEY,
-  "name" TEXT NOT NULL,
-  "email" TEXT NOT NULL UNIQUE,
-  "emailVerified" INTEGER NOT NULL,
-  "image" TEXT,
-  "createdAt" DATE NOT NULL,
-  "updatedAt" DATE NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS "session" (
-  "id" TEXT NOT NULL PRIMARY KEY,
-  "expiresAt" DATE NOT NULL,
-  "token" TEXT NOT NULL UNIQUE,
-  "createdAt" DATE NOT NULL,
-  "updatedAt" DATE NOT NULL,
-  "ipAddress" TEXT,
-  "userAgent" TEXT,
-  "userId" TEXT NOT NULL REFERENCES "user"("id") ON DELETE CASCADE
-);
-CREATE INDEX IF NOT EXISTS "session_userId_idx" ON "session"("userId");
-
-CREATE TABLE IF NOT EXISTS "account" (
-  "id" TEXT NOT NULL PRIMARY KEY,
-  "accountId" TEXT NOT NULL,
-  "providerId" TEXT NOT NULL,
-  "userId" TEXT NOT NULL REFERENCES "user"("id") ON DELETE CASCADE,
-  "accessToken" TEXT,
-  "refreshToken" TEXT,
-  "idToken" TEXT,
-  "accessTokenExpiresAt" DATE,
-  "refreshTokenExpiresAt" DATE,
-  "scope" TEXT,
-  "password" TEXT,
-  "createdAt" DATE NOT NULL,
-  "updatedAt" DATE NOT NULL
-);
-CREATE INDEX IF NOT EXISTS "account_userId_idx" ON "account"("userId");
-
-CREATE TABLE IF NOT EXISTS "verification" (
-  "id" TEXT NOT NULL PRIMARY KEY,
-  "identifier" TEXT NOT NULL,
-  "value" TEXT NOT NULL,
-  "expiresAt" DATE NOT NULL,
-  "createdAt" DATE NOT NULL,
-  "updatedAt" DATE NOT NULL
-);
-CREATE INDEX IF NOT EXISTS "verification_identifier_idx" ON "verification"("identifier");
-
-CREATE TABLE IF NOT EXISTS "rateLimit" (
-  "id" TEXT NOT NULL PRIMARY KEY,
-  "key" TEXT NOT NULL UNIQUE,
-  "count" INTEGER NOT NULL,
-  "lastRequest" BIGINT NOT NULL
-);
-
 CREATE TABLE IF NOT EXISTS users (
   id TEXT PRIMARY KEY,
   email TEXT NOT NULL UNIQUE,
@@ -87,13 +30,6 @@ CREATE TABLE IF NOT EXISTS users (
   image_url TEXT,
   password_hash TEXT NOT NULL,
   created_at INTEGER NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS account_profiles (
-  user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
-  usage_json TEXT NOT NULL DEFAULT '{}',
-  global_memories_json TEXT NOT NULL DEFAULT '[]',
-  updated_at INTEGER NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS sessions (
@@ -147,6 +83,15 @@ CREATE TABLE IF NOT EXISTS mobile_devices (
 );
 CREATE INDEX IF NOT EXISTS mobile_devices_user_idx ON mobile_devices(user_id, revoked_at);
 
+CREATE TABLE IF NOT EXISTS desktop_grants (
+  desktop_id TEXT NOT NULL REFERENCES desktops(id) ON DELETE CASCADE,
+  mobile_device_id TEXT NOT NULL REFERENCES mobile_devices(id) ON DELETE CASCADE,
+  grant_ciphertext TEXT NOT NULL,
+  desktop_public_key TEXT NOT NULL,
+  PRIMARY KEY(desktop_id, mobile_device_id)
+);
+CREATE INDEX IF NOT EXISTS desktop_grants_mobile_idx ON desktop_grants(mobile_device_id);
+
 CREATE TABLE IF NOT EXISTS audit_events (
   id TEXT PRIMARY KEY,
   user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
@@ -166,6 +111,9 @@ export class EnrollmentClaimConflictError extends Error {
   }
 }
 
+export type EnrollmentClaimFailure =
+  'not-found' | 'account-mismatch' | 'already-claimed' | 'mobile-device-mismatch'
+
 export class RemoteControlDatabase {
   private readonly db: Database
 
@@ -183,9 +131,23 @@ export class RemoteControlDatabase {
       PRAGMA journal_size_limit = 33554432;
     `)
     this.db.transaction(() => this.db.exec(SCHEMA))()
+    this.migrateEnrollmentGrants()
     this.ensureUserImageColumn()
     this.ensureDesktopProfileTokenColumn()
     this.db.exec('PRAGMA optimize = 0x10002;')
+  }
+
+  private migrateEnrollmentGrants(): void {
+    this.db.exec(`
+      INSERT OR IGNORE INTO desktop_grants(
+        desktop_id, mobile_device_id, grant_ciphertext, desktop_public_key
+      )
+      SELECT desktop_id, mobile_device_id, grant_ciphertext, desktop_public_key
+      FROM enrollments
+      WHERE mobile_device_id IS NOT NULL
+        AND grant_ciphertext IS NOT NULL
+        AND desktop_public_key IS NOT NULL
+    `)
   }
 
   private ensureUserImageColumn(): void {
@@ -217,7 +179,36 @@ export class RemoteControlDatabase {
     )
   }
 
+  resolveOAuthUserId(id: string, email: string): string | null {
+    const existing = this.db
+      .prepare('SELECT id FROM users WHERE email = ? OR id = ? ORDER BY email = ? DESC LIMIT 1')
+      .get(email, id, email) as { id: string } | undefined
+    return existing?.id ?? null
+  }
+
   upsertOAuthUser(input: {
+    id: string
+    email: string
+    displayName: string
+    image: string | null
+  }): string {
+    const upsert = this.db.transaction((upsertInput: typeof input) => {
+      const canonical = this.db
+        .prepare('SELECT id FROM users WHERE email = ? LIMIT 1')
+        .get(upsertInput.email) as { id: string } | undefined
+      if (canonical && canonical.id !== upsertInput.id) {
+        this.db
+          .prepare('UPDATE users SET display_name = ?, image_url = ? WHERE id = ?')
+          .run(upsertInput.displayName, upsertInput.image, canonical.id)
+        return canonical.id
+      }
+      this.insertOrUpdateOAuthUser(upsertInput)
+      return upsertInput.id
+    })
+    return upsert.immediate(input)
+  }
+
+  private insertOrUpdateOAuthUser(input: {
     id: string
     email: string
     displayName: string
@@ -236,28 +227,6 @@ export class RemoteControlDatabase {
       .run(input.id, input.email, input.displayName, input.image, now)
   }
 
-  accountProfile(userId: string): AccountProfileRecord | null {
-    return (
-      (this.db.prepare('SELECT * FROM account_profiles WHERE user_id = ?').get(userId) as
-        AccountProfileRecord | undefined) ?? null
-    )
-  }
-
-  saveAccountProfile(userId: string, usageJson: string, globalMemoriesJson: string): number {
-    const updatedAt = Date.now()
-    this.db
-      .prepare(
-        `INSERT INTO account_profiles(user_id, usage_json, global_memories_json, updated_at)
-         VALUES(?, ?, ?, ?)
-         ON CONFLICT(user_id) DO UPDATE SET
-           usage_json = excluded.usage_json,
-           global_memories_json = excluded.global_memories_json,
-           updated_at = excluded.updated_at`
-      )
-      .run(userId, usageJson, globalMemoriesJson, updatedAt)
-    return updatedAt
-  }
-
   rememberOAuthSession(session: AuthenticatedSession): void {
     const now = Date.now()
     this.db
@@ -268,7 +237,7 @@ export class RemoteControlDatabase {
            expires_at = excluded.expires_at,
            last_seen_at = excluded.last_seen_at`
       )
-      .run(session.id, session.userId, `better-auth:${session.id}`, now, session.expiresAt, now)
+      .run(session.id, session.userId, `relay:${session.id}`, now, session.expiresAt, now)
   }
 
   activeSessionById(id: string): AuthenticatedSession | null {
@@ -329,22 +298,6 @@ export class RemoteControlDatabase {
     )
   }
 
-  findDesktopByProfileTokenHash(hash: string): DesktopRecord | null {
-    return (
-      (this.db
-        .prepare('SELECT * FROM desktops WHERE profile_token_hash = ? AND revoked_at IS NULL')
-        .get(hash) as DesktopRecord | undefined) ?? null
-    )
-  }
-
-  rotateDesktopProfileToken(id: string, hash: string): boolean {
-    return (
-      this.db
-        .prepare('UPDATE desktops SET profile_token_hash = ? WHERE id = ? AND revoked_at IS NULL')
-        .run(hash, id).changes === 1
-    )
-  }
-
   listDesktops(userId: string): DesktopRecord[] {
     return this.db
       .prepare(
@@ -382,11 +335,29 @@ export class RemoteControlDatabase {
     return desktop
   }
 
-  deleteEnrollmentForDesktop(desktopId: string): void {
-    this.db.prepare('DELETE FROM enrollments WHERE desktop_id = ?').run(desktopId)
+  createEnrollment(enrollment: EnrollmentRecord, createdAt: number): void {
+    this.insertEnrollment(enrollment, createdAt)
   }
 
-  createEnrollment(enrollment: EnrollmentRecord, createdAt: number): void {
+  replaceDesktopEnrollment(input: {
+    desktopId: string
+    profileTokenHash: string
+    enrollment: EnrollmentRecord
+    createdAt: number
+  }): boolean {
+    const replace = this.db.transaction((replaceInput: typeof input) => {
+      const rotated = this.db
+        .prepare('UPDATE desktops SET profile_token_hash = ? WHERE id = ? AND revoked_at IS NULL')
+        .run(replaceInput.profileTokenHash, replaceInput.desktopId)
+      if (rotated.changes !== 1) return false
+      this.db.prepare('DELETE FROM enrollments WHERE desktop_id = ?').run(replaceInput.desktopId)
+      this.insertEnrollment(replaceInput.enrollment, replaceInput.createdAt)
+      return true
+    })
+    return replace.immediate(input)
+  }
+
+  private insertEnrollment(enrollment: EnrollmentRecord, createdAt: number): void {
     this.db
       .prepare(
         `INSERT INTO enrollments(
@@ -434,21 +405,36 @@ export class RemoteControlDatabase {
     mobileDeviceId: string
     mobileName: string
     mobilePublicKey: string
-  }): { desktopId: string } | null {
+  }): { desktopId: string; newlyClaimed: boolean } | null {
     const claim = this.db.transaction((claimInput: typeof input) => {
       const now = Date.now()
       const enrollment = this.db
         .prepare(
-          `SELECT e.id, e.desktop_id, d.user_id
+          `SELECT e.id, e.desktop_id, e.claimed_at, e.mobile_device_id,
+                  e.mobile_public_key, d.user_id
            FROM enrollments e
            JOIN desktops d ON d.id = e.desktop_id
-           WHERE e.code_hash = ? AND e.expires_at > ? AND e.claimed_at IS NULL
-             AND d.revoked_at IS NULL`
+           WHERE e.code_hash = ? AND e.expires_at > ? AND d.revoked_at IS NULL`
         )
         .get(claimInput.codeHash, now) as
-        { id: string; desktop_id: string; user_id: string | null } | undefined
+        | {
+            id: string
+            desktop_id: string
+            claimed_at: number | null
+            mobile_device_id: string | null
+            mobile_public_key: string | null
+            user_id: string | null
+          }
+        | undefined
       if (!enrollment || (enrollment.user_id && enrollment.user_id !== claimInput.userId)) {
         return null
+      }
+
+      if (enrollment.claimed_at !== null) {
+        return enrollment.mobile_device_id === claimInput.mobileDeviceId &&
+          enrollment.mobile_public_key === claimInput.mobilePublicKey
+          ? { desktopId: enrollment.desktop_id, newlyClaimed: false }
+          : null
       }
 
       const existingDevice = this.findMobileDevice(claimInput.mobileDeviceId)
@@ -493,10 +479,39 @@ export class RemoteControlDatabase {
           now
         )
 
-      return { desktopId: enrollment.desktop_id }
+      return { desktopId: enrollment.desktop_id, newlyClaimed: true }
     })
 
     return claim.immediate(input)
+  }
+
+  enrollmentClaimFailure(input: {
+    codeHash: string
+    userId: string
+    mobileDeviceId: string
+    mobilePublicKey: string
+  }): EnrollmentClaimFailure {
+    const enrollment = this.db
+      .prepare(
+        `SELECT e.claimed_at, e.mobile_device_id, e.mobile_public_key, d.user_id
+         FROM enrollments e
+         JOIN desktops d ON d.id = e.desktop_id
+         WHERE e.code_hash = ? AND e.expires_at > ? AND d.revoked_at IS NULL`
+      )
+      .get(input.codeHash, Date.now()) as
+      | {
+          claimed_at: number | null
+          mobile_device_id: string | null
+          mobile_public_key: string | null
+          user_id: string | null
+        }
+      | undefined
+    if (!enrollment) return 'not-found'
+    if (enrollment.user_id && enrollment.user_id !== input.userId) return 'account-mismatch'
+    if (enrollment.claimed_at !== null) return 'already-claimed'
+    const mobileDevice = this.findMobileDevice(input.mobileDeviceId)
+    if (mobileDevice && mobileDevice.user_id !== input.userId) return 'mobile-device-mismatch'
+    return 'not-found'
   }
 
   saveDesktopGrant(
@@ -505,31 +520,44 @@ export class RemoteControlDatabase {
     desktopPublicKey: string,
     grantCiphertext: string
   ): boolean {
-    return (
-      this.db
+    const save = this.db.transaction(() => {
+      const enrollmentUpdated = this.db
         .prepare(
           `UPDATE enrollments SET desktop_public_key = ?, grant_ciphertext = ?
            WHERE desktop_id = ? AND mobile_device_id = ? AND claimed_at IS NOT NULL`
         )
-        .run(desktopPublicKey, grantCiphertext, desktopId, mobileDeviceId).changes === 1
-    )
+        .run(desktopPublicKey, grantCiphertext, desktopId, mobileDeviceId).changes
+      if (enrollmentUpdated !== 1) return false
+      this.db
+        .prepare(
+          `INSERT INTO desktop_grants(
+             desktop_id, mobile_device_id, desktop_public_key, grant_ciphertext
+           ) VALUES(?, ?, ?, ?)
+           ON CONFLICT(desktop_id, mobile_device_id) DO UPDATE SET
+             desktop_public_key = excluded.desktop_public_key,
+             grant_ciphertext = excluded.grant_ciphertext`
+        )
+        .run(desktopId, mobileDeviceId, desktopPublicKey, grantCiphertext)
+      return true
+    })
+    return save.immediate()
   }
 
   enrollmentGrant(
     desktopId: string,
     userId: string,
     mobileDeviceId: string
-  ): EnrollmentRecord | null {
+  ): DesktopGrantRecord | null {
     return (
       (this.db
         .prepare(
-          `SELECT e.* FROM enrollments e
-           JOIN desktops d ON d.id = e.desktop_id
-           JOIN mobile_devices m ON m.id = e.mobile_device_id
-           WHERE e.desktop_id = ? AND d.user_id = ? AND e.mobile_device_id = ?
+          `SELECT g.* FROM desktop_grants g
+           JOIN desktops d ON d.id = g.desktop_id
+           JOIN mobile_devices m ON m.id = g.mobile_device_id
+           WHERE g.desktop_id = ? AND d.user_id = ? AND g.mobile_device_id = ?
              AND d.revoked_at IS NULL AND m.revoked_at IS NULL`
         )
-        .get(desktopId, userId, mobileDeviceId) as EnrollmentRecord | undefined) ?? null
+        .get(desktopId, userId, mobileDeviceId) as DesktopGrantRecord | undefined) ?? null
     )
   }
 

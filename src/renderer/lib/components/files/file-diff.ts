@@ -34,6 +34,16 @@ export interface SplitRow {
 /** Number of context lines shown around a change block before expanding. */
 export const DEFAULT_CONTEXT_LINES = 3
 
+/**
+ * The exact LCS DP table is used only while it fits this many cells; larger
+ * files switch to the bounded Myers diff so line-shifted edits stay exact.
+ */
+const LCS_CELL_LIMIT = 500_000
+/** Hard cap on the Myers trace snapshots so pathological diffs stay bounded. */
+const MAX_MYERS_TRACE_BYTES = 32 * 1024 * 1024
+/** Absolute cap on the Myers edit-distance budget before the naive fallback. */
+const MAX_MYERS_DISTANCE = 2_000
+
 function sourceLines(source: string | undefined): string[] {
   if (source === undefined) return []
   const lines = source.split('\n')
@@ -83,15 +93,24 @@ function fallbackDiff(before: string[], after: string[]): DiffLine[] {
 /**
  * Line-by-line diff (longest common subsequence) computed entirely in-house.
  * Tracks before/after line numbers so hunks can be rendered with accurate
- * headers and expandable context.
+ * headers and expandable context. Small inputs use the exact LCS table; large
+ * inputs use a bounded Myers diff so a small edit in a big file does not render
+ * as a whole-file rewrite (the naive prefix/suffix fallback cannot handle line
+ * shifts). The naive fallback only survives for genuine large rewrites.
  */
-function lineDiff(before: string | undefined, after: string | undefined): DiffLine[] {
+export function computeDiffLines(
+  before: string | undefined,
+  after: string | undefined
+): DiffLine[] {
   const beforeLines = sourceLines(before)
   const afterLines = sourceLines(after)
-  if (beforeLines.length * afterLines.length > 500_000) {
-    return fallbackDiff(beforeLines, afterLines)
+  if (beforeLines.length * afterLines.length <= LCS_CELL_LIMIT) {
+    return exactLineDiff(beforeLines, afterLines)
   }
+  return largeLineDiff(beforeLines, afterLines)
+}
 
+function exactLineDiff(beforeLines: string[], afterLines: string[]): DiffLine[] {
   const lengths = Array.from(
     { length: beforeLines.length + 1 },
     () => new Uint32Array(afterLines.length + 1)
@@ -127,14 +146,104 @@ function lineDiff(before: string | undefined, after: string | undefined): DiffLi
       (beforeIndex >= beforeLines.length ||
         lengths[beforeIndex][afterIndex + 1] >= lengths[beforeIndex + 1][afterIndex])
     ) {
-      lines.push({ kind: 'added', text: afterLines[afterIndex], afterLine: afterIndex + 1 })
+      lines.push({
+        kind: 'added',
+        text: afterLines[afterIndex],
+        afterLine: afterIndex + 1
+      })
       afterIndex += 1
     } else {
-      lines.push({ kind: 'deleted', text: beforeLines[beforeIndex], beforeLine: beforeIndex + 1 })
+      lines.push({
+        kind: 'deleted',
+        text: beforeLines[beforeIndex],
+        beforeLine: beforeIndex + 1
+      })
       beforeIndex += 1
     }
   }
   return lines
+}
+
+function largeLineDiff(beforeLines: string[], afterLines: string[]): DiffLine[] {
+  const trace = myersTrace(beforeLines, afterLines)
+  if (trace) return myersBacktrack(beforeLines, afterLines, trace)
+  return fallbackDiff(beforeLines, afterLines)
+}
+
+/**
+ * Myers O(ND) forward pass. Returns the per-distance V snapshots needed to
+ * backtrack the exact edit script, or null when the edit is too large for the
+ * trace memory budget (a genuine rewrite — the caller falls back to the naive
+ * diff then).
+ */
+function myersTrace(beforeLines: string[], afterLines: string[]): Int32Array[] | null {
+  const n = beforeLines.length
+  const m = afterLines.length
+  const size = 2 * (n + m) + 3
+  const offset = n + m + 1
+  const maxSnapshots = Math.max(1, Math.floor(MAX_MYERS_TRACE_BYTES / (4 * size)))
+  const budget = Math.min(n + m, MAX_MYERS_DISTANCE, maxSnapshots)
+  const v = new Int32Array(size)
+  v[offset + 1] = 0
+  const trace: Int32Array[] = []
+  for (let distance = 0; distance <= budget; distance += 1) {
+    trace.push(v.slice())
+    for (let k = -distance; k <= distance; k += 2) {
+      const index = offset + k
+      let x =
+        k === -distance || (k !== distance && v[index - 1] < v[index + 1])
+          ? v[index + 1]
+          : v[index - 1] + 1
+      let y = x - k
+      while (x < n && y < m && beforeLines[x] === afterLines[y]) {
+        x += 1
+        y += 1
+      }
+      v[index] = x
+      if (x >= n && y >= m) return trace
+    }
+  }
+  return null
+}
+
+/** Reconstruct the edit script (as DiffLine[]) from Myers trace snapshots. */
+function myersBacktrack(
+  beforeLines: string[],
+  afterLines: string[],
+  trace: Int32Array[]
+): DiffLine[] {
+  const offset = beforeLines.length + afterLines.length + 1
+  const lines: DiffLine[] = []
+  let x = beforeLines.length
+  let y = afterLines.length
+  for (let distance = trace.length - 1; distance >= 0; distance -= 1) {
+    const v = trace[distance]
+    const k = x - y
+    const previousK =
+      k === -distance || (k !== distance && v[offset + k - 1] < v[offset + k + 1]) ? k + 1 : k - 1
+    const previousX = v[offset + previousK]
+    const previousY = previousX - previousK
+    while (x > previousX && y > previousY) {
+      lines.push({
+        kind: 'context',
+        text: beforeLines[x - 1],
+        beforeLine: x,
+        afterLine: y
+      })
+      x -= 1
+      y -= 1
+    }
+    if (distance > 0) {
+      if (x === previousX) {
+        y -= 1
+        lines.push({ kind: 'added', text: afterLines[y], afterLine: y + 1 })
+      } else {
+        x -= 1
+        lines.push({ kind: 'deleted', text: beforeLines[x], beforeLine: x + 1 })
+      }
+    }
+  }
+  return lines.reverse()
 }
 
 /** Group contiguous changed lines into change blocks with available context. */
@@ -166,7 +275,7 @@ function diffHunks(lines: DiffLine[]): DiffHunk[] {
 }
 
 export function diffDetails(before: string | undefined, after: string | undefined): DiffDetails {
-  const lines = lineDiff(before, after)
+  const lines = computeDiffLines(before, after)
   return {
     lines,
     hunks: diffHunks(lines),

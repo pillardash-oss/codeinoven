@@ -1,15 +1,18 @@
 <script lang="ts">
   import { tick } from 'svelte'
   import type { Attachment } from 'svelte/attachments'
-  import { Check, Pin, PinOff, Pencil, Trash2, GitFork, Kanban } from '@lucide/svelte'
+  import { Check, Pin, PinOff, Pencil, Trash2, GitFork, Kanban, StickyNote } from '@lucide/svelte'
   import { Portal } from 'bits-ui'
   import Modal from '$lib/components/ui/Modal.svelte'
   import ChangeScopeModal from '$lib/components/threads/ChangeScopeModal.svelte'
+  import ThreadNoteModal from '$lib/components/threads/ThreadNoteModal.svelte'
   import ThreadDropdown from '$lib/components/shared/ThreadDropdown.svelte'
   import type { MenuItem } from '$lib/components/shared/ThreadDropdown.svelte'
   import ThreadHoverPopover from '$lib/components/shared/ThreadHoverPopover.svelte'
   import StatusBadge from '$lib/components/shared/StatusBadge.svelte'
   import { scopeState } from '$lib/stores/scope.svelte'
+  import { threadNotesState } from '$lib/stores/thread-notes.svelte'
+  import { threadMessages } from '$lib/stores/thread-messages.svelte'
   import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
   import { effectiveThreadTitle } from '$lib/stores/draft-label'
   import { agentRuns } from '$lib/stores/agent-runs.svelte'
@@ -24,11 +27,13 @@
   import {
     coordinatorHasActiveDelegates,
     DEFAULT_SCOPE_BUCKET_ID,
+    isThreadBusy,
     isThreadWorking,
     isOrchestrationChildThread,
     type ScopeBucket
   } from '$shared/types'
   import type { Thread } from '$shared/types'
+  import { threadStatusPolicy } from '$shared/thread-status-policy'
 
   interface Props {
     thread: Thread
@@ -131,11 +136,24 @@
   let popoverEl = $state<HTMLDivElement>()
   let popoverPos = $state({ x: 0, y: 0 })
   let popoverTimer: ReturnType<typeof setTimeout> | undefined
+  /** Debounces the message warmup so a fast mouse pass never fires an IPC call. */
+  let preloadTimer: ReturnType<typeof setTimeout> | undefined
+  const PRELOAD_DEBOUNCE_MS = 200
+
+  /** Warm the thread's message cache so a click opens without the "Loading
+   *  conversation…" spinner. The bounded load is non-destructive and skipped
+   *  once the thread has messages (the currently selected row is already
+   *  loading through the open view, so it never needs this). */
+  function preloadMessages(): void {
+    if (picker || selected) return
+    if (threadMessages.loaded(thread.projectId, thread.id)) return
+    void threadMessages.preload(thread.projectId, thread.id)
+  }
 
   /** Distinct harnesses used in this thread's session, newest first. */
   let harnessIds = $derived.by((): string[] => {
     // Defensive dedupe: a harness may appear more than once in the source data
-    // (legacy rows before the usage table grouped by harness), and a keyed each
+    // (rows without usage-table entries), and a keyed each
     // block over it must never see the same key twice.
     const ids = Array.from(new Set(thread.usedHarnessIds ?? []))
     if (thread.settings?.harnessId && !ids.includes(thread.settings.harnessId)) {
@@ -223,6 +241,7 @@
   let renameValue = $state('')
   let showDeleteModal = $state(false)
   let showChangeScopeModal = $state(false)
+  let showNoteModal = $state(false)
   let actionError = $state<string | null>(null)
 
   let menuItems = $derived<MenuItem[]>([
@@ -256,6 +275,13 @@
           }
         ]
       : []),
+    {
+      label: 'Notes',
+      icon: StickyNote,
+      onClick: () => {
+        showNoteModal = true
+      }
+    },
     { label: '', divider: true },
     {
       label: 'Delete',
@@ -275,14 +301,23 @@
   // ─── Status vs Stage ──────────────────────────────────────────────────────
   //
   //   Status  = overall thread state for the dot indicator
-  //             working | unread | error | completed | approval | read
+  //             working | spec | unread | error | completed | approval | read
   //   Stage   = what the agent is currently DOING (only when working)
   //             planning | executing
   //   Stage appears only in the hover popover, never on the row itself.
   //
   //   Badge dot conventions: todo = filled gray, done/read = transparent ring.
 
-  type ThreadState = 'unread' | 'read' | 'todo' | 'completed' | 'working' | 'approval' | 'error'
+  type ThreadState =
+    | 'unread'
+    | 'read'
+    | 'todo'
+    | 'completed'
+    | 'working'
+    | 'working-paused'
+    | 'spec'
+    | 'approval'
+    | 'error'
 
   /** Threads with any unsent composer content read as "todo" (filled gray dot). */
   let isDraft = $derived(rendererRecovery.hasDraftContent(thread.projectId, thread.id))
@@ -290,15 +325,26 @@
   /** Orchestration worker/auditor threads stay silent: never presented as unread. */
   let effectiveRead = $derived(isOrchestrationChildThread(thread) || thread.read)
 
-  /** Whether the harness is processing a turn for this thread right now. */
-  let isBusy = $derived(agentRuns.isBusy(thread.projectId, thread.id))
-
   /** Aggregate child activity onto the Sr. Engineer row — the public source of truth. */
   let delegatedWorkActive = $derived(
     coordinatorHasActiveDelegates(thread, scopeState.allScopeThreads)
   )
 
-  let isWorking = $derived(isThreadWorking(thread) || delegatedWorkActive)
+  /** Once the run state has been settled by a live session check (a ThreadView
+   *  mounted for this thread, or its session streamed activity), the live busy
+   *  flag is authoritative — a stale persisted `planning`/`executing` status
+   *  must not keep the spinner alive after the turn actually finished. Before
+   *  anything settles (fresh app start), the persisted status is the only
+   *  signal and stands in for genuinely in-flight work. */
+  let isWorking = $derived(
+    (agentRuns.hasSettled(thread.projectId, thread.id)
+      ? agentRuns.isBusy(thread.projectId, thread.id)
+      : Boolean(thread.sessionId) && isThreadWorking(thread)) || delegatedWorkActive
+  )
+  let isRetryPaused = $derived(thread.status === 'working-paused')
+  let isBusyIndicator = $derived(
+    isWorking || isRetryPaused || (Boolean(thread.sessionId) && isThreadBusy(thread) && !isDraft)
+  )
 
   /**
    * Sending clears the draft, which would otherwise flash the badge back to the
@@ -328,7 +374,9 @@
 
   let threadState = $derived.by((): ThreadState => {
     if (thread.status === 'failed') return 'error'
+    if (thread.status === 'working-paused') return 'working-paused'
     if (thread.status === 'awaiting_approval') return 'approval'
+    if (thread.status === 'spec') return 'spec'
     // Drafting (or the brief post-send grace) shows the todo dot.
     if (holdingDraft) return 'todo'
     if (isDraft) return 'todo'
@@ -337,7 +385,7 @@
     // flips straight to done/unread instead of lingering on the spinner.
     if (!effectiveRead) return 'unread'
     if (thread.status === 'completed') return 'completed'
-    if (isBusy) return 'working'
+    if (isBusyIndicator) return 'working'
     if (thread.status === 'created') return 'todo'
     return 'read'
   })
@@ -349,6 +397,8 @@
         return 'Planning'
       case 'executing':
         return 'Working'
+      case 'working-paused':
+        return threadStatusPolicy(thread.status).label
       default:
         return delegatedWorkActive ? 'Coordinating delegated work' : ''
     }
@@ -360,9 +410,11 @@
     return scopeState.bucketFor(thread.projectId, bucketId)
   })
 
+  let hasNote = $derived(threadNotesState.has(thread.id))
+
   /** Whether the bottom line (scope/harness/time) is shown. Single harness on
    *  the default scope collapses to a one-line row with the time on the top. */
-  let showBottomRow = $derived(scopeBucket !== null || harnessIds.length > 1)
+  let showBottomRow = $derived(scopeBucket !== null || harnessIds.length > 1 || hasNote)
 
   let scopeColor = $derived(
     scopeBucket ? (scopeBucket.color ?? pickColorForSeed(scopeBucket.id)) : ''
@@ -382,7 +434,8 @@
    *  canonical StatusBadge component so every indicator stays consistent. */
   let badgeProps = $derived.by(
     (): {
-      stage?: 'todo' | 'working' | 'issue' | 'unread' | 'done' | 'pinned'
+      stage?: 'todo' | 'working' | 'spec' | 'issue' | 'unread' | 'done' | 'pinned'
+      tone?: 'todo' | 'working' | 'working-paused' | 'attention' | 'spec' | 'done' | 'error'
       kind?: 'completed' | 'attention' | 'error'
       variant?: 'dot' | 'spinner'
       animated?: boolean
@@ -394,6 +447,10 @@
           return { stage: 'todo' }
         case 'working':
           return { variant: 'spinner', stage: 'working' }
+        case 'working-paused':
+          return { variant: 'spinner', tone: 'working-paused' }
+        case 'spec':
+          return { stage: 'spec' }
         case 'approval':
           return { kind: 'attention', animated: true }
         case 'error':
@@ -467,6 +524,10 @@
   function onRowEnter(): void {
     hovered = true
     clearTimeout(popoverTimer)
+    // Warm the cache early — before the popover (550ms) — so the click path
+    // into the thread is already fast by the time the user acts.
+    clearTimeout(preloadTimer)
+    preloadTimer = setTimeout(preloadMessages, PRELOAD_DEBOUNCE_MS)
     popoverTimer = setTimeout(() => {
       void revealPopover()
     }, 550)
@@ -475,6 +536,7 @@
   function onRowLeave(): void {
     hovered = false
     clearTimeout(popoverTimer)
+    clearTimeout(preloadTimer)
     showPopover = false
   }
 
@@ -532,8 +594,10 @@
   <div
     class="flex min-h-11 w-full flex-col gap-1 border-l-2 px-2.5 py-1.5 text-left transition-colors {selected
       ? 'border-foreground bg-selected'
-      : isWorking
-        ? 'border-thread-working bg-thread-working/5'
+      : isBusyIndicator
+        ? isRetryPaused
+          ? 'border-warning bg-warning/5'
+          : 'border-thread-working bg-thread-working/5'
         : 'border-transparent'}"
     title={displayTitle}
   >
@@ -545,11 +609,18 @@
         {#if badgeProps}
           <StatusBadge
             stage={badgeProps.stage}
+            tone={badgeProps.tone}
             kind={badgeProps.kind}
             variant={badgeProps.variant ?? 'dot'}
             animated={badgeProps.animated}
             size="md"
-            title={isWorking ? stageLabel : threadState}
+            title={isRetryPaused
+              ? stageLabel
+              : isWorking
+                ? stageLabel
+                : thread.status === 'spec'
+                  ? 'Spec ready'
+                  : threadState}
           />
         {:else}
           <span
@@ -615,7 +686,12 @@
           </span>
         {/if}
 
-        <span class="flex min-w-0 justify-end">
+        <span class="flex min-w-0 items-center justify-end gap-1">
+          {#if hasNote}
+            <span class="flex shrink-0 items-center text-warning" title="Note attached">
+              <StickyNote size={11} />
+            </span>
+          {/if}
           <span class="whitespace-nowrap text-[10px] text-dimmed">
             {relativeTime(thread.createdAt)}
           </span>
@@ -658,8 +734,10 @@
       ? 'px-2 py-1'
       : 'px-2 py-1.5'} {selected
       ? 'border-foreground bg-selected'
-      : isWorking
-        ? 'animate-pulse border-thread-working bg-thread-working/5 hover:bg-elevated'
+      : isBusyIndicator
+        ? isRetryPaused
+          ? 'border-warning bg-warning/5 hover:bg-elevated'
+          : 'animate-pulse border-thread-working bg-thread-working/5 hover:bg-elevated'
         : 'border-transparent hover:border-border-strong hover:bg-elevated'}"
     title={displayTitle}
     onclick={() => {
@@ -692,11 +770,18 @@
           {#if badgeProps}
             <StatusBadge
               stage={badgeProps.stage}
+              tone={badgeProps.tone}
               kind={badgeProps.kind}
               variant={badgeProps.variant ?? 'dot'}
               animated={badgeProps.animated}
               size="md"
-              title={isWorking ? stageLabel : threadState}
+              title={isRetryPaused
+                ? stageLabel
+                : isWorking
+                  ? stageLabel
+                  : thread.status === 'spec'
+                    ? 'Spec ready'
+                    : threadState}
             />
           {:else}
             <span
@@ -808,7 +893,12 @@
           </span>
         {/if}
 
-        <span class="col-start-3 flex min-w-0 justify-end">
+        <span class="col-start-3 flex min-w-0 items-center justify-end gap-1">
+          {#if hasNote}
+            <span class="flex shrink-0 items-center text-warning" title="Note attached">
+              <StickyNote size={11} />
+            </span>
+          {/if}
           <span
             class="whitespace-nowrap text-[10px] text-dimmed transition-opacity duration-150 {hovered
               ? 'opacity-0'
@@ -853,7 +943,7 @@
         class="fixed z-60 max-h-[calc(100vh-1rem)] w-64 max-w-[calc(100vw-1rem)] overflow-y-auto rounded-xl border bg-surface p-3 shadow-lg"
         style="left: {popoverPos.x}px; top: {popoverPos.y}px"
       >
-        <ThreadHoverPopover {thread} {isWorking} {stageLabel} {threadState} />
+        <ThreadHoverPopover {thread} {isWorking} {isRetryPaused} {stageLabel} {threadState} />
       </div>
     </Portal>
   {/if}
@@ -941,5 +1031,15 @@
     threadId={thread.id}
     projectId={thread.projectId}
     currentBucketId={thread.scopeBucketId ?? DEFAULT_SCOPE_BUCKET_ID}
+  />
+{/if}
+
+{#if showNoteModal && !picker}
+  <ThreadNoteModal
+    open={showNoteModal}
+    projectId={thread.projectId}
+    threadId={thread.id}
+    threadTitle={thread.title}
+    onClose={() => (showNoteModal = false)}
   />
 {/if}

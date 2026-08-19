@@ -1,0 +1,19 @@
+{
+  "name": "@codeinoven/convex-backend",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "bun node_modules/convex/bin/main.js dev",
+    "deploy": "bun node_modules/convex/bin/main.js deploy",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@convex-dev/better-auth": "latest",
+    "better-auth": "~1.6.15",
+    "convex": "latest",
+    "convex-svelte": "latest"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.3"
+  }
+}

@@ -48,8 +48,22 @@
     'flex h-6 w-6 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground'
 
   let open = $state(false)
+
+  const wrapTitle = $derived(wrap ? 'Unwrap text' : 'Wrap text')
 </script>
 
+{#if !diffView}
+  <button
+    type="button"
+    class={btnClass}
+    aria-label={wrapTitle}
+    title={wrapTitle}
+    aria-pressed={wrap}
+    onclick={onToggleWrap}
+  >
+    <WrapText size={13} class={wrap ? 'text-primary' : ''} />
+  </button>
+{/if}
 {#if !hideFullscreen}
   <button
     type="button"

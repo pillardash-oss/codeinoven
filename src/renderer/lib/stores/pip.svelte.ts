@@ -14,6 +14,9 @@ class PipState {
   frameDataUrl: string | null = $state(null)
   frameWidth = $state(0)
   frameHeight = $state(0)
+  cursorVisible = $state(false)
+  cursorX = $state(0)
+  cursorY = $state(0)
   timestamp = $state(0)
 
   private cleanups: Array<() => void> = []
@@ -72,6 +75,9 @@ class PipState {
     this.frameDataUrl = frame.dataUrl
     this.frameWidth = frame.width
     this.frameHeight = frame.height
+    this.cursorVisible = frame.cursor?.visible ?? false
+    this.cursorX = frame.cursor?.x ?? this.cursorX
+    this.cursorY = frame.cursor?.y ?? this.cursorY
     this.timestamp = frame.timestamp
   }
 
@@ -88,6 +94,9 @@ class PipState {
       this.frameDataUrl = null
       this.frameWidth = 0
       this.frameHeight = 0
+      this.cursorVisible = false
+      this.cursorX = 0
+      this.cursorY = 0
     }
   }
 }

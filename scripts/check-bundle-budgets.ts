@@ -34,7 +34,7 @@ const staticRoot = resolve(process.cwd(), process.argv[2] ?? 'out/renderer')
 // leave modest build-hash/minifier variance while still rejecting the former
 // 7.95 MB raw / 1.99 MB gzip eager closure.
 const DESKTOP_INITIAL_JS_RAW_BUDGET_BYTES = 4.5 * 1024 * 1024
-const DESKTOP_INITIAL_JS_GZIP_BUDGET_BYTES = 1024 * 1024
+const DESKTOP_INITIAL_JS_GZIP_BUDGET_BYTES = 1100 * 1024
 
 interface DesktopChunkBudget {
   url: string

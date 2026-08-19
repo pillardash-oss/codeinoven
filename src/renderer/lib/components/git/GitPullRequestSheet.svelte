@@ -1,10 +1,24 @@
 <script lang="ts">
+  import { onDestroy } from 'svelte'
+  import { DropdownMenu } from 'bits-ui'
   import { gitState } from '$lib/stores/git.svelte'
   import { invoke } from '$lib/ipc.svelte'
   import DockableModal from '../ui/DockableModal.svelte'
   import Switch from '../ui/Switch.svelte'
+  import ModelPicker from '../shared/ModelPicker.svelte'
   import { APP_SLUG } from '$shared/brand'
-  import type { PullRequestCompare, PullRequestReference } from '$shared/types'
+  import { threadSettings } from '$lib/stores/thread-settings.svelte'
+  import { providerCatalog } from '$lib/stores/provider-catalog.svelte'
+  import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
+  import { modelKey } from '$lib/model-keys'
+  import type {
+    PullRequestCompare,
+    PullRequestReference,
+    PullRequestSummary,
+    ProviderCatalog,
+    ThinkingLevel,
+    ThreadSettings
+  } from '$shared/types'
   import {
     ArrowRight,
     CheckCircle2,
@@ -14,6 +28,7 @@
     Eye,
     GitPullRequest,
     Loader2,
+    Sparkles,
     TriangleAlert
   } from '@lucide/svelte'
 
@@ -23,15 +38,25 @@
     /** Fired once a pull request is actually created, so the list can refresh. */
     onCreated?: () => void
     /** Fired from the success screen to open the created PR inside the git panel. */
-    onView?: (created: {
-      reference: PullRequestReference
-      head: string
-      base: string
-      draft: boolean
-    }) => void
+    onView?: (pullRequest: PullRequestSummary) => void
+    /** When provided, the docked state is owned by the global pr lifecycle store. */
+    minimized?: boolean
+    onMinimize?: () => void
+    onExpand?: () => void
+    /** Override the default localStorage key so multiple docked drafts don't collide. */
+    storageKey?: string
   }
 
-  let { projectId, onClose, onCreated, onView }: Props = $props()
+  let {
+    projectId,
+    onClose,
+    onCreated,
+    onView,
+    minimized: minimizedProp,
+    onMinimize: onMinimizeProp,
+    onExpand: onExpandProp,
+    storageKey: storageKeyProp
+  }: Props = $props()
 
   let originIdentity = $state<{ owner: string; repo: string } | null>(null)
   let title = $state('')
@@ -51,8 +76,44 @@
   let compareSequence = 0
   /** True while the commit → push → create sequence runs. */
   let submitting = $state(false)
-  /** True while the panel is collapsed into the bottom-right dock. */
-  let minimized = $state(false)
+  /** Set when the push was rejected: shows the pull/rebase recovery panel. */
+  let pushRejected = $state(false)
+  /** Which recovery action is running ('merge' | 'rebase'), to disable buttons. */
+  let recoverMode = $state<'merge' | 'rebase' | null>(null)
+  /** True while the panel is collapsed into the bottom-right dock (local fallback). */
+  let localMinimized = $state(false)
+  const minimized = $derived(minimizedProp ?? localMinimized)
+
+  function handleMinimize(): void {
+    if (onMinimizeProp) onMinimizeProp()
+    else localMinimized = true
+  }
+
+  function handleExpand(): void {
+    if (onExpandProp) onExpandProp()
+    else localMinimized = false
+  }
+
+  const effectiveStorageKey = $derived(storageKeyProp ?? `${APP_SLUG}.pullRequestSheet.v1`)
+
+  // ─── Compose with agent ────────────────────────────────────────────────────
+  /** True while the compose dropdown is open. */
+  let composeOpen = $state(false)
+  /** Phase of the compose flow, drives the dropdown's button label. */
+  let composePhase = $state<'idle' | 'working' | 'complete' | 'recompose'>('idle')
+  /** Model used for the compose agent — seeded from the last thread model. */
+  let composeSettings = $state<ThreadSettings>({ ...threadSettings.lastUsed })
+  /** Branch selection from the last virtual compose — detects changes on recompose. */
+  let composeHead = $state('')
+  let composeBase = $state('')
+  /** Latest compose error, shown inline in the dropdown. */
+  let composeError = $state('')
+  /** Timer that flips "Complete" → "Recompose" after a short pause. */
+  let composeCompleteTimer: ReturnType<typeof setTimeout> | null = null
+
+  const composeProviders = $derived<ProviderCatalog[]>(
+    providerCatalog.cached(projectId) ?? providerCatalog.allCached()
+  )
 
   const branch = $derived(gitState.status?.branch ?? null)
   const branches = $derived(gitState.branches.map((b) => b.name))
@@ -66,6 +127,19 @@
   const headIsCurrent = $derived(canonicalBranch(head) === canonicalBranch(branch ?? ''))
   const willCreateCommit = $derived(commitLocal && hasStagedChanges && headIsCurrent)
   const hasChangesToPublish = $derived(compare?.hasChanges === true || willCreateCommit)
+  const headInfo = $derived(gitState.branches.find((candidate) => candidate.name === head) ?? null)
+  /** An open PR for the exact head→base pair — GitHub rejects a duplicate with a 422. */
+  const existingPr = $derived(compare?.existing ?? null)
+
+  /**
+   * Whether the local head has commits the remote lacks — a push is only
+   * meaningful (and only possible) when this is true. When the head already
+   * exists on GitHub and the local copy is up to date (or behind it), pushing
+   * would be a pointless non-fast-forward rejection, so creation skips it.
+   */
+  const hasUnpushedHeadCommits = $derived(
+    willCreateCommit || headInfo === null || headInfo.remote === null || headInfo.ahead > 0
+  )
 
   /** Local-only commits must be pushed before GitHub can create the PR. */
   const canCreate = $derived(
@@ -76,8 +150,10 @@
       Boolean(title.trim()) &&
       hasChangesToPublish &&
       (compare?.source !== 'local' || pushLocal) &&
+      existingPr === null &&
       !creating &&
-      !submitting
+      !submitting &&
+      recoverMode === null
   )
 
   function canonicalBranch(value: string): string {
@@ -85,6 +161,21 @@
       .replace(/^refs\/remotes\/origin\//u, '')
       .replace(/^refs\/heads\//u, '')
       .replace(/^origin\//u, '')
+  }
+
+  function createdPullRequestSummary(reference: PullRequestReference): PullRequestSummary {
+    const now = new Date().toISOString()
+    return {
+      ...reference,
+      state: 'open',
+      draft,
+      authorLogin: '',
+      headRef: head,
+      baseRef: base,
+      createdAt: now,
+      updatedAt: now,
+      comments: 0
+    }
   }
 
   async function loadOrigin(): Promise<void> {
@@ -113,6 +204,7 @@
     const sequence = ++compareSequence
     comparing = true
     compareError = ''
+    pushRejected = false
     try {
       const snapshot = await gitState.comparePullRequests(
         projectId,
@@ -124,7 +216,9 @@
       if (sequence !== compareSequence) return
       if (snapshot) {
         compare = snapshot
-        if (snapshot.source === 'local') pushLocal = true
+        // Local-only heads must be pushed (GitHub can't see them yet); remote
+        // heads only need a push when the local copy is ahead of the remote.
+        pushLocal = snapshot.source === 'local' || hasUnpushedHeadCommits
       } else {
         compare = null
         compareError = 'Could not compare these branches.'
@@ -142,37 +236,75 @@
     if (!originIdentity || !head || !base || !canCreate || submitting) return
     submitting = true
     try {
+      // Decided up front: after the commit below, the refreshed status clears
+      // staged changes, which would make hasUnpushedHeadCommits flip to false.
+      const commitMade = willCreateCommit
+      const shouldPush = pushLocal && (commitMade || hasUnpushedHeadCommits)
       // 1. Commit staged files first, using the PR title as the message.
-      if (commitLocal && hasStagedChanges) {
+      if (commitMade) {
         await gitState.commit(projectId, `commit: ${title.trim()}`)
         if (gitState.error) return
       }
-      // 2. Push committed local changes so they land in the pull request.
-      if (pushLocal) {
+      // 2. Push local commits only when the head actually has something the
+      //    remote doesn't — when the branch already exists on GitHub (and the
+      //    local copy is behind it, e.g. a remote-to-remote PR), there is
+      //    nothing to push and GitHub builds the PR from the remote refs, so
+      //    skipping the push avoids a spurious non-fast-forward rejection.
+      if (shouldPush) {
         const hasUpstream =
           gitState.branches.find((candidate) => candidate.name === head)?.remote != null
         const pushed = await gitState.push(projectId, !hasUpstream, 'origin', head)
         if (pushed === 'rejected') {
-          gitState.error =
-            'Push was rejected — the remote branch has commits that are not in your branch. Pull or rebase first, then try again.'
+          pushRejected = true
           return
         }
         if (pushed === 'failed') return
       }
       // 3. Create the pull request.
-      const reference = await gitState.createPullRequest(projectId, {
-        title: title.trim(),
-        body: body.trim() || undefined,
-        head,
-        base,
-        draft
-      })
-      if (reference) {
-        result = reference
-        onCreated?.()
-      }
+      await finishCreate()
     } finally {
       submitting = false
+    }
+  }
+
+  async function finishCreate(): Promise<void> {
+    if (!originIdentity || !head || !base) return
+    const reference = await gitState.createPullRequest(projectId, {
+      title: title.trim(),
+      body: body.trim() || undefined,
+      head,
+      base,
+      draft
+    })
+    if (reference) {
+      result = reference
+      onCreated?.()
+    }
+  }
+
+  /**
+   * Pull the remote into the local head (merge or rebase), then retry the push
+   * and finish creating the PR once integration is clean. Conflicts hand over
+   * to the conflict UI; the half-merged tree is never auto-pushed.
+   */
+  async function recoverPush(mode: 'merge' | 'rebase'): Promise<void> {
+    if (!originIdentity || !head || !base || recoverMode) return
+    pushRejected = false
+    recoverMode = mode
+    try {
+      await gitState.pullIntegrate(projectId, 'origin', head, mode === 'rebase')
+      if (gitState.error || gitState.conflicted.length > 0) return
+      const hasUpstream =
+        gitState.branches.find((candidate) => candidate.name === head)?.remote != null
+      const pushed = await gitState.push(projectId, !hasUpstream, 'origin', head)
+      if (pushed === 'rejected') {
+        pushRejected = true
+        return
+      }
+      if (pushed === 'failed') return
+      await finishCreate()
+    } finally {
+      recoverMode = null
     }
   }
 
@@ -182,6 +314,174 @@
     await invoke('shell:openExternal', url)
     onClose()
   }
+
+  // ─── Compose with agent ────────────────────────────────────────────────────
+
+  /** Extra context about local changes that will be pushed with the PR. */
+  function localChangesContext(): string {
+    const parts: string[] = []
+    if (commitLocal && hasStagedChanges) {
+      parts.push(
+        'Staged local changes will be committed and pushed with this pull request, so include them in your summary.'
+      )
+    }
+    if (pushLocal && hasUnpushedHeadCommits) {
+      const ahead = headInfo?.ahead ?? 0
+      parts.push(
+        `The local \`${head}\` branch is ${ahead} commit${ahead === 1 ? '' : 's'} ahead of its remote and will be pushed with the PR, so cover those changes too.`
+      )
+    }
+    return parts.join('\n')
+  }
+
+  function composePrompt(directory: string): string {
+    const localChanges = localChangesContext()
+    return [
+      `Compose a pull request title and description for merging \`${head}\` into \`${base}\` in this repository.`,
+      '',
+      'Find the last set of commits on the head branch that are not yet part of the base branch:',
+      `1. \`git fetch origin\``,
+      `2. \`git log --oneline origin/${base}..origin/${head}\` (fall back to \`${base}..${head}\` if the refs are local-only).`,
+      '',
+      ...(localChanges ? [localChanges, ''] : []),
+      'Then write a concise, human-readable pull request title (one line, imperative mood) and a',
+      'description that summarizes what changed, why, and anything a reviewer should know. Do not',
+      'overstate scope — only cover the changes in those commits.',
+      '',
+      `Write the result as JSON to \`${directory}/compose.json\` with exactly this shape:`,
+      '{',
+      '  "title": "The pull request title",',
+      '  "description": "The pull request description"',
+      '}',
+      '',
+      'Only write that file. Do not create the pull request, do not commit, and do not push.'
+    ].join('\n')
+  }
+
+  function recomposePrompt(directory: string): string {
+    const branchChanged = Boolean(
+      composeHead && composeBase && (composeHead !== head || composeBase !== base)
+    )
+    const localChanges = localChangesContext()
+    return [
+      `The user is not satisfied with the composed title and description for merging \`${head}\` into \`${base}\`.`,
+      ...(branchChanged
+        ? [
+            '',
+            `The branch selection has changed since the previous compose — it was \`${composeHead}\` into \`${composeBase}\`.`,
+            'Re-run the commit-range commands with the new branches so the summary matches them.'
+          ]
+        : []),
+      ...(localChanges ? ['', localChanges] : []),
+      '',
+      `Current title: ${JSON.stringify(title)}`,
+      'Current description:',
+      body.trim() || '(empty)',
+      '',
+      'Improve on it: re-read the commit range, make the title sharper and the description',
+      'clearer and more complete, then overwrite the JSON at',
+      `\`${directory}/compose.json\` with the same shape.`,
+      'Only write that file — do not create the pull request, commit, or push.'
+    ].join('\n')
+  }
+
+  function clearComposeTimers(): void {
+    if (composeCompleteTimer !== null) {
+      clearTimeout(composeCompleteTimer)
+      composeCompleteTimer = null
+    }
+  }
+
+  /** Apply a fresh compose report to the form (and, if the PR already exists, to GitHub). */
+  async function applyComposeReport(report: { title: string; description: string }): Promise<void> {
+    title = report.title
+    body = report.description
+    composeError = ''
+    composePhase = 'complete'
+    // If the PR was already created, push the improved title/description to
+    // GitHub so the PR row and detail view reflect the recomposed content.
+    if (result && originIdentity) {
+      const updated = await gitState.updatePullRequest(
+        projectId,
+        originIdentity.owner,
+        originIdentity.repo,
+        result.number,
+        report.title,
+        report.description
+      )
+      if (updated) {
+        result = { ...result, title: updated.title }
+        onCreated?.()
+      } else if (gitState.error) {
+        composeError = gitState.error
+      }
+    }
+    composeCompleteTimer = setTimeout(() => {
+      composePhase = 'recompose'
+      composeCompleteTimer = null
+    }, 2000)
+  }
+
+  /** PR copy is a direct virtual task and must never enter an Engineering lifecycle. */
+  function composeVirtualTaskSettings(): ThreadSettings {
+    return {
+      ...composeSettings,
+      engineeringMode: false,
+      assignmentMode: false,
+      loopMode: false
+    }
+  }
+
+  /** Kick off a fresh disposable compose or recompose task. */
+  async function runCompose(): Promise<void> {
+    if (!originIdentity || !head || !base || composePhase === 'working') return
+    const recomposing = composePhase === 'recompose'
+    clearComposeTimers()
+    composeError = ''
+    composePhase = 'working'
+    try {
+      const settings = composeVirtualTaskSettings()
+      const virtualTaskId = crypto.randomUUID()
+      const directory = `.cio/git/compose/${virtualTaskId}`
+      const report = await gitState.composeWithAgent(
+        projectId,
+        virtualTaskId,
+        settings,
+        `Compose PR: ${head} → ${base}`,
+        recomposing ? recomposePrompt(directory) : composePrompt(directory)
+      )
+      if (!report) {
+        throw new Error(gitState.error ?? 'The PR compose agent did not return a result')
+      }
+      composeHead = head
+      composeBase = base
+      await applyComposeReport(report)
+    } catch (reason) {
+      composeError =
+        reason instanceof Error ? reason.message : 'The compose agent could not be started'
+      composePhase = 'idle'
+    }
+  }
+
+  function chooseComposeModel(providerId: string, modelId: string, harnessId: string): void {
+    composeSettings = {
+      ...composeSettings,
+      harnessId,
+      providerId,
+      modelId
+    }
+    threadSettings.commit(composeSettings)
+  }
+
+  function chooseComposeThinking(level: ThinkingLevel): void {
+    composeSettings = {
+      ...composeSettings,
+      thinkingLevel: level
+    }
+    threadSettings.commit(composeSettings)
+  }
+
+  onDestroy(clearComposeTimers)
 
   $effect(() => {
     void loadOrigin()
@@ -210,18 +510,18 @@
   title="New pull request"
   {minimized}
   closable={Boolean(result)}
-  onMinimize={() => (minimized = true)}
+  onMinimize={handleMinimize}
   {onClose}
-  onExpand={() => (minimized = false)}
+  onExpand={handleExpand}
   dragLabel="Drag to move the pull request panel"
-  storageKey={`${APP_SLUG}.pullRequestSheet.v1`}
+  storageKey={effectiveStorageKey}
 >
   {#snippet dock()}
     <button
       class="flex cursor-pointer items-center gap-1.5 rounded-xl border bg-surface px-3 py-2 shadow-xl transition-colors hover:bg-elevated"
       title="Show pull request creation"
       aria-label="Show pull request creation"
-      onclick={() => (minimized = false)}
+      onclick={handleExpand}
     >
       {#if result}
         <CheckCircle2 size={14} class="shrink-0 text-success" />
@@ -252,6 +552,92 @@
       </p>
     {/if}
 
+    {#if originIdentity && !sameBranch && head && base}
+      <div class="flex items-center justify-between gap-2">
+        <p class="text-[10px] text-muted">Let the agent draft the PR for you.</p>
+        <DropdownMenu.Root bind:open={composeOpen}>
+          <DropdownMenu.Trigger
+            class="flex h-7 cursor-pointer items-center gap-1.5 rounded-lg border border-border px-2.5 text-[10px] font-medium text-foreground transition-colors hover:bg-elevated disabled:cursor-default disabled:opacity-50"
+            aria-label="Compose with agent"
+            title="Compose the title and description with an agent"
+            disabled={composePhase === 'working'}
+          >
+            {#if composePhase === 'working'}
+              <Loader2 size={11} class="animate-spin" />
+              <span>Composing…</span>
+            {:else if composePhase === 'complete'}
+              <CircleCheck size={11} class="text-success" />
+              <span>Complete</span>
+            {:else}
+              <Sparkles size={11} />
+              <span>{composePhase === 'recompose' ? 'Recompose' : 'Compose with agent'}</span>
+            {/if}
+          </DropdownMenu.Trigger>
+          <DropdownMenu.Portal>
+            <DropdownMenu.Content
+              side="bottom"
+              align="end"
+              sideOffset={6}
+              collisionPadding={8}
+              class="z-50 w-72 rounded-xl border border-border bg-surface p-2 shadow-xl"
+            >
+              <div class="space-y-1.5">
+                <div>
+                  <p
+                    class="mb-1 px-0.5 text-[9px] font-semibold uppercase tracking-wide text-muted"
+                  >
+                    Compose model
+                  </p>
+                  <ModelPicker
+                    providers={composeProviders}
+                    {projectId}
+                    harnessId={composeSettings.harnessId}
+                    providerId={composeSettings.providerId}
+                    modelId={composeSettings.modelId}
+                    favoriteModels={rendererRecovery.favoriteModels}
+                    recentModels={rendererRecovery.recentModels}
+                    side="top"
+                    variant="action"
+                    onSelect={chooseComposeModel}
+                    thinkingLevel={composeSettings.thinkingLevel}
+                    onSelectThinking={chooseComposeThinking}
+                    onToggleFavorite={(providerId, modelId, harnessId) =>
+                      rendererRecovery.toggleFavorite(modelKey(harnessId, providerId, modelId))}
+                    onReorderFavorite={(draggedKey, targetKey, position) =>
+                      rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
+                  />
+                </div>
+                {#if composeError}
+                  <p
+                    class="rounded-lg border border-danger/20 bg-danger/10 px-2 py-1 text-[9px] leading-relaxed text-danger"
+                  >
+                    {composeError}
+                  </p>
+                {/if}
+                <button
+                  type="button"
+                  class="flex h-8 w-full cursor-pointer items-center justify-center gap-1.5 rounded-lg bg-primary px-3 text-[11px] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:cursor-default disabled:opacity-50"
+                  disabled={composePhase === 'working'}
+                  onclick={() => void runCompose()}
+                >
+                  {#if composePhase === 'working'}
+                    <Loader2 size={12} class="animate-spin" />
+                    <span>Composing…</span>
+                  {:else if composePhase === 'complete'}
+                    <CircleCheck size={12} />
+                    <span>Complete</span>
+                  {:else}
+                    <Sparkles size={12} />
+                    <span>{composePhase === 'recompose' ? 'Recompose' : 'Compose'}</span>
+                  {/if}
+                </button>
+              </div>
+            </DropdownMenu.Content>
+          </DropdownMenu.Portal>
+        </DropdownMenu.Root>
+      </div>
+    {/if}
+
     {#if result}
       {@const pr = result}
       <div class="rounded-lg border border-success/30 bg-success/10 px-3 py-2">
@@ -264,7 +650,7 @@
             title="Open this pull request in the Git panel"
             onclick={() => {
               onClose()
-              onView?.({ reference: pr, head, base, draft })
+              onView?.(createdPullRequestSummary(pr))
             }}
           >
             <Eye size={12} />
@@ -353,6 +739,34 @@
             </span>
           {/if}
         </div>
+        {#if existingPr}
+          <div class="mt-2 rounded-lg border border-warning/30 bg-warning/10 px-3 py-2">
+            <div class="flex items-start gap-2">
+              <TriangleAlert size={13} class="mt-0.5 shrink-0 text-warning" />
+              <div class="min-w-0 flex-1">
+                <p class="text-[10px] font-medium text-warning">
+                  A pull request already exists for {head} into {base}
+                </p>
+                <p class="mt-0.5 text-[9px] leading-relaxed text-dimmed">
+                  #{existingPr.number} — {existingPr.title} GitHub won't allow a second open PR for the
+                  same branches, so creation is disabled.
+                </p>
+                <button
+                  type="button"
+                  class="mt-2 flex h-7 cursor-pointer items-center gap-1.5 rounded-lg border border-border px-2.5 text-[10px] font-medium text-foreground transition-colors hover:bg-elevated"
+                  title="Open the existing pull request in the Git panel"
+                  onclick={() => {
+                    onClose()
+                    onView?.(existingPr)
+                  }}
+                >
+                  <Eye size={11} />
+                  View PR #{existingPr.number}
+                </button>
+              </div>
+            </div>
+          </div>
+        {/if}
       </div>
 
       <div>
@@ -367,9 +781,14 @@
           class="h-8 w-full rounded-lg border border-border bg-elevated px-2.5 font-mono text-[11px] text-foreground outline-none placeholder:text-dimmed focus:border-primary"
           placeholder="Summary of the change"
           bind:value={title}
+          onkeydown={(event: KeyboardEvent) => {
+            if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
+              event.preventDefault()
+              void createPullRequest()
+            }
+          }}
         />
       </div>
-
       <div>
         <label
           class="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-muted"
@@ -381,7 +800,13 @@
           id="pr-body"
           class="min-h-20 w-full resize-y rounded-lg border border-border bg-elevated px-2.5 py-2 font-mono text-[11px] leading-relaxed text-foreground outline-none placeholder:text-dimmed focus:border-primary"
           placeholder="What does this change do?"
-          bind:value={body}></textarea>
+          bind:value={body}
+          onkeydown={(event: KeyboardEvent) => {
+            if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
+              event.preventDefault()
+              void createPullRequest()
+            }
+          }}></textarea>
       </div>
 
       <div class="space-y-3 rounded-lg border border-border bg-surface p-2.5">
@@ -437,6 +862,54 @@
       </div>
     {/if}
 
+    {#if pushRejected && !result}
+      <div class="rounded-lg border border-warning/30 bg-warning/10 px-3 py-2">
+        <div class="flex items-start gap-2">
+          <TriangleAlert size={13} class="mt-0.5 shrink-0 text-warning" />
+          <div class="min-w-0 flex-1">
+            <p class="text-[10px] font-medium text-warning">Push blocked — branch has diverged</p>
+            <p class="mt-0.5 text-[9px] leading-relaxed text-dimmed">
+              The remote branch
+              <span class="font-mono text-foreground">{head}</span> has commits you don't have locally,
+              so Git won't let you push over them. Pull the remote changes in first — the pull request
+              is created automatically afterwards.
+            </p>
+            {#if headIsCurrent}
+              <div class="mt-2 flex items-center gap-1.5">
+                <button
+                  type="button"
+                  class="flex h-7 cursor-pointer items-center gap-1.5 rounded-lg border border-border px-2.5 text-[10px] font-medium text-foreground transition-colors hover:bg-elevated disabled:cursor-default disabled:opacity-50"
+                  disabled={recoverMode !== null}
+                  onclick={() => void recoverPush('rebase')}
+                >
+                  {#if recoverMode === 'rebase'}
+                    <Loader2 size={11} class="animate-spin" />
+                  {/if}
+                  Rebase &amp; push
+                </button>
+                <button
+                  type="button"
+                  class="flex h-7 cursor-pointer items-center gap-1.5 rounded-lg bg-primary px-2.5 text-[10px] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:cursor-default disabled:opacity-50"
+                  disabled={recoverMode !== null}
+                  onclick={() => void recoverPush('merge')}
+                >
+                  {#if recoverMode === 'merge'}
+                    <Loader2 size={11} class="animate-spin" />
+                  {/if}
+                  Pull &amp; push
+                </button>
+              </div>
+            {:else}
+              <p class="mt-1 text-[9px] leading-relaxed text-dimmed">
+                Check out <span class="font-mono text-foreground">{head}</span> first, then use Pull &amp;
+                push to resolve this here.
+              </p>
+            {/if}
+          </div>
+        </div>
+      </div>
+    {/if}
+
     {#if gitState.error}
       <p
         class="rounded-lg border border-danger/20 bg-danger/10 px-3 py-1.5 text-[10px] leading-relaxed text-danger"
@@ -459,11 +932,13 @@
         type="button"
         class="flex h-8 cursor-pointer items-center gap-1.5 rounded-lg bg-primary px-3 text-[11px] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:cursor-default disabled:opacity-50"
         disabled={!canCreate}
-        title={!canCreate && compare?.source === 'local' && !pushLocal
-          ? 'Push local changes to create this pull request'
-          : !canCreate && compare !== null && !hasChangesToPublish
-            ? 'There isn\u2019t anything to compare'
-            : undefined}
+        title={!canCreate && existingPr
+          ? 'A pull request already exists for these branches'
+          : !canCreate && compare?.source === 'local' && !pushLocal
+            ? 'Push local changes to create this pull request'
+            : !canCreate && compare !== null && !hasChangesToPublish
+              ? 'There isn\u2019t anything to compare'
+              : undefined}
         onclick={() => void createPullRequest()}
       >
         {#if creating || submitting}

@@ -1,6 +1,8 @@
 <script lang="ts">
-  import { ChevronDown, Check, GitBranch, Plus, Search, Trash2, GitFork } from '@lucide/svelte'
+  import { ChevronDown, Check, GitBranch, Plus, Search, Trash2 } from '@lucide/svelte'
   import { AlertDialog, DropdownMenu } from 'bits-ui'
+  import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
+  import { parseRemoteIdentity } from '$lib/git-remote-identity'
   import type { GitBranchInfo } from '$shared/types'
 
   interface Props {
@@ -31,6 +33,7 @@
 
   const localBranches = $derived(filtered.filter((b) => !b.remote))
   const remoteBranches = $derived(filtered.filter((b) => b.remote))
+  const remoteIdentity = $derived(parseRemoteIdentity(primaryRemote?.url))
 
   function handleSelect(branch: string): void {
     if (branch === currentBranch) return
@@ -107,9 +110,13 @@
       <!-- Origin -->
       {#if primaryRemote}
         <div class="flex items-center gap-2 border-b border-border px-3 py-1.5">
-          <GitFork size={11} class="shrink-0 text-dimmed" />
+          <VendorIcon
+            name={remoteIdentity?.platform === 'gitlab' ? 'GitLab' : 'GitHub'}
+            size={12}
+            class="shrink-0 text-dimmed"
+          />
           <span class="min-w-0 flex-1 truncate font-mono text-[9px] text-dimmed">
-            {primaryRemote.name}: {primaryRemote.url}
+            {remoteIdentity?.path ?? primaryRemote.url}
           </span>
         </div>
       {/if}

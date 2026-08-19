@@ -1,4 +1,4 @@
-import { Logger } from '../logger'
+import { Logger } from '../system/logger'
 import { randomBytes } from 'node:crypto'
 import { decryptPayload, encryptPayload } from '../../renderer/lib/remote/session-security'
 import { handshakeTranscript } from '../../renderer/lib/remote/device-identity'
@@ -29,6 +29,8 @@ export interface CloudRelayClientOptions {
     args: unknown[],
     device?: RemoteRpcDeviceContext
   ) => Promise<{ ok: boolean; result?: unknown; message?: string }>
+  /** Called whenever a phone proves its persisted or newly enrolled identity. */
+  onDeviceAuthenticated?: (deviceId: string) => void
   /**
    * Device credential service used to authenticate the phone over the relay.
    * Every RPC invoke is bound to the device that authenticated this relay
@@ -131,6 +133,8 @@ export class CloudRelayClient {
   private boundDevice: RemoteRpcDeviceContext | null = null
   /** The unspent desktop-issued relay device challenge (single-use). */
   private pendingDeviceChallenge = ''
+  /** Browser WebSocket instance currently bound to `boundDevice`. */
+  private mobileConnectionId = ''
 
   constructor(private readonly options: CloudRelayClientOptions) {
     this.connectTimeoutMs = options.connectTimeoutMs ?? DEFAULT_CONNECT_TIMEOUT_MS
@@ -167,6 +171,7 @@ export class CloudRelayClient {
     this.authenticated = false
     this.boundDevice = null
     this.pendingDeviceChallenge = ''
+    this.mobileConnectionId = ''
     this.clearTimers()
     this.options.signal?.removeEventListener('abort', this.onAbort)
     this.queue.length = 0
@@ -182,6 +187,7 @@ export class CloudRelayClient {
     this.authenticated = false
     this.boundDevice = null
     this.pendingDeviceChallenge = ''
+    this.mobileConnectionId = ''
     this.clearTimers()
     this.options.signal?.removeEventListener('abort', this.onAbort)
     this.socket?.close()
@@ -233,7 +239,9 @@ export class CloudRelayClient {
       }
       if (this.closing || this.closed) return
       this.authenticated = false
-      this.dropAndRetry(event.reason || `relay-closed-${event.code}`)
+      const reason = event.reason || `relay-closed-${event.code}`
+      Logger.dev(`Remote cloud relay socket closed (${event.code}: ${reason})`)
+      this.dropAndRetry(reason)
     }
   }
 
@@ -245,6 +253,7 @@ export class CloudRelayClient {
     this.authenticated = false
     this.boundDevice = null
     this.pendingDeviceChallenge = ''
+    this.mobileConnectionId = ''
     this.requeueInFlight()
     this.socket?.close()
     this.socket = null
@@ -263,6 +272,7 @@ export class CloudRelayClient {
     this.authenticated = false
     this.boundDevice = null
     this.pendingDeviceChallenge = ''
+    this.mobileConnectionId = ''
     this.clearTimers()
     this.queue.length = 0
     this.inFlight.clear()
@@ -444,8 +454,35 @@ export class CloudRelayClient {
     }
     if (record['type'] === 'remote:device:challenge-request') {
       // Mobile relay sockets can reconnect independently of this long-lived
-      // desktop socket. Issue a challenge for every mobile connection instead
-      // of only once when the desktop authenticates with the relay.
+      // desktop socket. A connection id distinguishes a real replacement from
+      // the startup request racing the desktop's automatic challenge. Never
+      // clear a device that already authenticated on this exact phone socket.
+      const requestedConnectionId =
+        typeof record['connectionId'] === 'string' ? record['connectionId'].slice(0, 128) : ''
+      if (
+        requestedConnectionId &&
+        requestedConnectionId === this.mobileConnectionId &&
+        this.boundDevice
+      ) {
+        this.sendDeviceOk()
+        return
+      }
+      if (requestedConnectionId && !this.mobileConnectionId) {
+        // The automatic startup challenge is deliberately emitted before the
+        // phone socket has identified itself. Tag that existing challenge with
+        // the first connection id instead of replacing the nonce while the
+        // phone may already be signing it.
+        this.mobileConnectionId = requestedConnectionId
+        if (this.boundDevice) {
+          this.sendDeviceOk()
+          return
+        }
+      } else if (requestedConnectionId && requestedConnectionId !== this.mobileConnectionId) {
+        // A genuinely different phone socket must authenticate against a new
+        // nonce and must never inherit the previous socket's device binding.
+        this.mobileConnectionId = requestedConnectionId
+        this.pendingDeviceChallenge = ''
+      }
       this.boundDevice = null
       this.issueDeviceChallenge()
       return
@@ -508,8 +545,19 @@ export class CloudRelayClient {
    */
   private issueDeviceChallenge(): void {
     if (!this.credentials) return
-    this.pendingDeviceChallenge = randomBytes(32).toString('base64url')
-    void this.send({ type: 'remote:device:challenge', nonce: this.pendingDeviceChallenge })
+    // The desktop authenticates independently of the mobile socket, so its
+    // automatic challenge can race the mobile's explicit challenge request.
+    // Keep one unspent challenge stable and resend it; replacing it here would
+    // invalidate a proof the phone is already computing and create an endless
+    // challenge/auth mismatch loop.
+    if (!this.pendingDeviceChallenge) {
+      this.pendingDeviceChallenge = randomBytes(32).toString('base64url')
+    }
+    void this.send({
+      type: 'remote:device:challenge',
+      nonce: this.pendingDeviceChallenge,
+      connectionId: this.mobileConnectionId || undefined
+    })
   }
 
   /**
@@ -524,6 +572,8 @@ export class CloudRelayClient {
   private async handleDeviceAuth(record: Record<string, unknown>): Promise<void> {
     const signature = typeof record['signature'] === 'string' ? record['signature'] : ''
     const presentedNonce = typeof record['nonce'] === 'string' ? record['nonce'] : ''
+    const presentedConnectionId =
+      typeof record['connectionId'] === 'string' ? record['connectionId'].slice(0, 128) : ''
     const bootstrap = typeof record['bootstrap'] === 'string' ? record['bootstrap'] : ''
     const deviceName = typeof record['deviceName'] === 'string' ? record['deviceName'].trim() : ''
     const deviceId = typeof record['deviceId'] === 'string' ? record['deviceId'].trim() : ''
@@ -558,6 +608,17 @@ export class CloudRelayClient {
     if (!signature || !this.credentials) {
       fail('malformed')
       return
+    }
+    if (
+      presentedConnectionId &&
+      this.mobileConnectionId &&
+      presentedConnectionId !== this.mobileConnectionId
+    ) {
+      fail('mismatch')
+      return
+    }
+    if (presentedConnectionId && !this.mobileConnectionId) {
+      this.mobileConnectionId = presentedConnectionId
     }
     // Unsolicited or replayed proof: the nonce must be the exact unspent
     // challenge issued for THIS connection. Re-challenge instead of binding so
@@ -650,8 +711,17 @@ export class CloudRelayClient {
       allProjects: device.allProjects,
       projectIds: device.projectIds
     }
+    this.options.onDeviceAuthenticated?.(device.deviceId)
+    this.sendDeviceOk()
+  }
+
+  /** Confirm (or re-confirm after a duplicate request) the bound phone. */
+  private sendDeviceOk(): void {
+    const device = this.boundDevice
+    if (!device) return
     void this.send({
       type: 'remote:device:ok',
+      connectionId: this.mobileConnectionId || undefined,
       device: { id: device.deviceId, authVersion: device.authVersion }
     })
   }

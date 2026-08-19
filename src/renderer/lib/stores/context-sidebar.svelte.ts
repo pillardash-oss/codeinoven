@@ -1,5 +1,6 @@
 import { invoke } from '$lib/ipc.svelte'
 import { gitState } from './git.svelte'
+import { APP_SLUG } from '$shared/brand'
 import type { AgentMessage, AgentSubagentActivity, ThreadSettings } from '$shared/types'
 
 const TEMPORARY_CHAT_INACTIVITY_MS = 3 * 60 * 60 * 1000
@@ -8,8 +9,19 @@ const CONTEXT_SIDEBAR_MIN_WIDTH = 340
 const CONTEXT_SIDEBAR_MAX_WIDTH = 1600
 const TERMINAL_DOCK_MIN_HEIGHT = 180
 const TERMINAL_DOCK_MAX_HEIGHT = 560
+const TERMINAL_PLACEMENT_STORAGE_KEY = `${APP_SLUG}.terminal-placement.v1`
 
 export type TerminalPlacement = 'right' | 'bottom'
+
+function loadTerminalPlacement(): TerminalPlacement {
+  if (typeof window === 'undefined') return 'right'
+  try {
+    const raw = window.localStorage.getItem(TERMINAL_PLACEMENT_STORAGE_KEY)
+    return raw === 'bottom' ? 'bottom' : 'right'
+  } catch {
+    return 'right'
+  }
+}
 
 export interface TerminalContextTab {
   id: string
@@ -38,6 +50,10 @@ export interface DiffContextTab {
   projectId: string
   threadId: string
   checkpointId: string | null
+  /** When set, the Changes panel scrolls to this file's diff. */
+  revealPath: string | null
+  /** Bumped on every reveal request so re-clicking the same file re-triggers. */
+  revealNonce: number
 }
 
 export interface SubagentContextTab {
@@ -74,6 +90,26 @@ export interface GitContextTab {
   threadId: string
 }
 
+export interface ThreadNoteContextTab {
+  id: string
+  kind: 'thread-note'
+  title: string
+  projectId: string
+  threadId: string
+  /** Display name of the owning thread, used in the delete confirmation. */
+  threadTitle: string
+  /** The last-saved body, or null before the first save. Diffing against
+   *  this (rather than a separate `dirty` flag) is what lets the panel
+   *  survive a hide/show without losing an unsaved draft — both fields
+   *  live on the tab itself, not in the component that gets unmounted. */
+  savedBody: string | null
+  draftBody: string
+  mode: 'edit' | 'read'
+  loading: boolean
+  saving: boolean
+  error: string | null
+}
+
 export interface CloudDeploymentContextTab {
   id: string
   kind: 'cloud-deployment'
@@ -99,6 +135,19 @@ export interface MemoryContextTab {
   memorySection: MemorySection
 }
 
+/**
+ * The Assignment / Achievement coordinator, docked into the sidebar. The tab
+ * carries no data of its own: the panel is a snippet published by the thread
+ * that owns the coordination, registered on `coordinatorDockState`.
+ */
+export interface CoordinatorContextTab {
+  id: string
+  kind: 'coordinator'
+  title: string
+  projectId: string
+  threadId: string
+}
+
 export type TemporaryChatMode = 'audit' | 'elaborate' | 'quick'
 
 export interface TemporaryChatContextTab {
@@ -120,6 +169,10 @@ export interface TemporaryChatContextTab {
   selectionAttached: boolean
   selectionMessageId: string | null
   autoPromptSent: boolean
+  /** Override for the auto-sent explain prompt, when the tab was opened to
+   *  explain a specific selection (e.g. an agent question) rather than the
+   *  generic "explain this selection" elaboration. */
+  autoPrompt?: string
   sessionStarted: boolean
   expired: boolean
   expiresAt: number
@@ -133,21 +186,25 @@ export type ContextSidebarTab =
   | DebuggerContextTab
   | SourcesContextTab
   | GitContextTab
+  | ThreadNoteContextTab
   | CloudDeploymentContextTab
   | TemporaryChatContextTab
   | NotificationContextTab
   | MemoryContextTab
+  | CoordinatorContextTab
 
 interface ThreadSidebarContext {
   projectId: string
   threadId: string
   tabs: ContextSidebarTab[]
-  activeTabId: string | null
-  /** Last active non-terminal tab — kept so the sidebar keeps a focused tab
-   * while a terminal (docked at the bottom) holds the global active tab. */
-  sidebarActiveTabId: string | null
-  /** Last active terminal tab — kept so the bottom dock keeps a focused tab
-   * while a sidebar tab holds the global active tab. */
+  activeTabIds: Partial<Record<ContextSidebarTab['kind'], string>>
+}
+
+interface ProjectSidebarContext {
+  projectId: string
+  tabs: ContextSidebarTab[]
+  activeKind: ContextSidebarTab['kind'] | null
+  activeTabIds: Partial<Record<ContextSidebarTab['kind'], string>>
   terminalActiveTabId: string | null
   visible: boolean
   /** Whether the bottom terminal dock is open. Only meaningful while
@@ -158,6 +215,25 @@ interface ThreadSidebarContext {
 }
 
 const EMPTY_TABS: ContextSidebarTab[] = []
+const NOTIFICATIONS_TAB: NotificationContextTab = {
+  id: 'notifications',
+  kind: 'notifications',
+  title: 'Notifications'
+}
+
+/** Tabs whose component/session state belongs to a project. Every other tab
+ * remains in its owning thread context and is swapped when the thread changes. */
+const PROJECT_TAB_KINDS = new Set<ContextSidebarTab['kind']>([
+  'files',
+  'terminal',
+  'git',
+  'cloud-deployment',
+  'memory'
+])
+
+function isProjectTab(tab: ContextSidebarTab): boolean {
+  return PROJECT_TAB_KINDS.has(tab.kind)
+}
 
 function contextKey(projectId: string, threadId: string): string {
   return `${projectId}:${threadId}`
@@ -186,26 +262,43 @@ function sameSubagentActivity(
 
 class ContextSidebarState {
   private contexts: Record<string, ThreadSidebarContext> = $state({})
-  private activeKey: string | null = $state(null)
+  private projectContexts: Record<string, ProjectSidebarContext> = $state({})
+  private activeProjectId: string | null = $state(null)
+  private activeThreadId: string | null = $state(null)
+  private notificationsVisible = $state(false)
   private temporaryChatExpiryTimers = new Map<string, ReturnType<typeof setTimeout>>()
   width = $state(480)
   terminalHeight = $state(320)
-  terminalPlacement = $state<TerminalPlacement>('right')
+  terminalPlacement = $state<TerminalPlacement>(loadTerminalPlacement())
+  /** Monotonic trigger: each `requestCloseActiveTab()` call bumps this so a
+   *  consumer (Workspace) can run the close-through-confirmation flow. */
+  closeActiveTabRequest = $state(0)
 
   get tabs(): ContextSidebarTab[] {
-    return this.activeContext?.tabs ?? EMPTY_TABS
+    return [
+      ...(this.activeProjectContext?.tabs ?? EMPTY_TABS),
+      ...(this.activeContext?.tabs.filter((tab) => !isProjectTab(tab)) ?? EMPTY_TABS),
+      ...(this.notificationsVisible ? [NOTIFICATIONS_TAB] : [])
+    ]
+  }
+
+  /** Resolve a live temporary-chat tab without passing its mutable proxy
+   *  through a component prop. The sidebar store remains the sole owner. */
+  temporaryChatTab(tabId: string): TemporaryChatContextTab | null {
+    const tab = this.activeContext?.tabs.find((candidate) => candidate.id === tabId)
+    return tab?.kind === 'temporary-chat' ? tab : null
   }
 
   get activeTabId(): string | null {
-    return this.activeContext?.activeTabId ?? null
+    return this.sidebarActiveTabId
   }
 
   get visible(): boolean {
-    return this.activeContext?.visible ?? false
+    return this.sidebarVisible
   }
 
   get activeTab(): ContextSidebarTab | null {
-    return this.tabs.find((tab) => tab.id === this.activeTabId) ?? null
+    return this.sidebarActiveTab
   }
 
   /**
@@ -214,16 +307,19 @@ class ContextSidebarState {
    * every tab (including terminals) renders in the sidebar.
    */
   get sidebarTabs(): ContextSidebarTab[] {
-    const tabs = this.activeContext?.tabs ?? EMPTY_TABS
-    return this.terminalPlacement === 'bottom'
-      ? tabs.filter((tab) => tab.kind !== 'terminal')
-      : tabs
+    const tabs = [
+      ...(this.activeProjectContext?.tabs ?? EMPTY_TABS),
+      ...(this.activeContext?.tabs.filter((tab) => !isProjectTab(tab)) ?? EMPTY_TABS)
+    ]
+    const positionedTabs =
+      this.terminalPlacement === 'bottom' ? tabs.filter((tab) => tab.kind !== 'terminal') : tabs
+    return this.notificationsVisible ? [...positionedTabs, NOTIFICATIONS_TAB] : positionedTabs
   }
 
   /** Tabs shown in the bottom terminal dock. Empty while docked to the right. */
   get terminalTabs(): TerminalContextTab[] {
     if (this.terminalPlacement !== 'bottom') return EMPTY_TABS as TerminalContextTab[]
-    return (this.activeContext?.tabs ?? EMPTY_TABS).filter(
+    return (this.activeProjectContext?.tabs ?? EMPTY_TABS).filter(
       (tab): tab is TerminalContextTab => tab.kind === 'terminal'
     )
   }
@@ -234,7 +330,8 @@ class ContextSidebarState {
    * its empty/actions state so the user can add files, git, sources, etc.
    */
   get sidebarVisible(): boolean {
-    return this.visible
+    if (this.notificationsVisible) return true
+    return this.activeThreadId !== null && (this.activeProjectContext?.visible ?? false)
   }
 
   /**
@@ -244,14 +341,29 @@ class ContextSidebarState {
   get terminalDockVisible(): boolean {
     return (
       this.terminalPlacement === 'bottom' &&
-      this.activeContext?.terminalDockOpen !== false &&
+      this.activeThreadId !== null &&
+      this.activeProjectContext?.terminalDockOpen !== false &&
+      this.terminalTabs.length > 0
+    )
+  }
+
+  /**
+   * Whether the bottom terminal dock is folded into its thin restore bar.
+   * True while the dock is closed but terminal tabs still exist, so a user can
+   * expand the shell back to its previous height from the chevron bar.
+   */
+  get terminalDockCollapsed(): boolean {
+    return (
+      this.terminalPlacement === 'bottom' &&
+      this.activeThreadId !== null &&
+      this.activeProjectContext?.terminalDockOpen === false &&
       this.terminalTabs.length > 0
     )
   }
 
   /** Toggle the bottom terminal dock without touching the sidebar. */
   toggleTerminalDock(): void {
-    const context = this.activeContext
+    const context = this.activeProjectContext
     if (!context || this.terminalPlacement !== 'bottom') return
     context.terminalDockOpen = !context.terminalDockOpen
   }
@@ -259,51 +371,59 @@ class ContextSidebarState {
   /** Move terminals between the sidebar and the bottom dock. */
   setTerminalPlacement(placement: TerminalPlacement): void {
     this.terminalPlacement = placement
-    const context = this.activeContext
+    if (typeof window !== 'undefined') {
+      try {
+        window.localStorage.setItem(TERMINAL_PLACEMENT_STORAGE_KEY, placement)
+      } catch {
+        // Terminal placement is cosmetic; unavailable storage must not break the app.
+      }
+    }
+    const context = this.activeProjectContext
     if (!context) return
+    const terminalTabs = context.tabs.filter(
+      (tab): tab is TerminalContextTab => tab.kind === 'terminal'
+    )
+    const rememberedTerminalId = context.terminalActiveTabId ?? context.activeTabIds.terminal
+    const activeTerminalId =
+      rememberedTerminalId && terminalTabs.some((tab) => tab.id === rememberedTerminalId)
+        ? rememberedTerminalId
+        : (terminalTabs.at(-1)?.id ?? null)
+
+    this.notificationsVisible = false
     if (placement === 'bottom') {
       context.terminalDockOpen = true
-      const sidebarTabs = context.tabs.filter((tab) => tab.kind !== 'terminal')
-      if (sidebarTabs.length === 0) {
-        // Nothing else lives in the sidebar — close it; only the dock stays.
-        context.visible = false
-      } else {
-        // Bring the remaining (last active non-terminal) tab into focus.
-        const focusId =
-          context.sidebarActiveTabId &&
-          sidebarTabs.some((tab) => tab.id === context.sidebarActiveTabId)
-            ? context.sidebarActiveTabId
-            : (sidebarTabs.at(-1)?.id ?? null)
-        if (focusId) {
-          context.activeTabId = focusId
-          context.sidebarActiveTabId = focusId
-        }
+      context.terminalActiveTabId = activeTerminalId
+      // Moving the terminal out of the sidebar also closes that region. The
+      // bottom dock is the only panel the placement action should reveal.
+      context.visible = false
+    } else {
+      // Terminals rejoin the sidebar as the active tool, rather than revealing
+      // whichever non-terminal panel happened to be active before docking.
+      if (activeTerminalId) {
+        context.activeKind = 'terminal'
+        context.activeTabIds.terminal = activeTerminalId
         context.visible = true
       }
-    } else {
-      // Terminals rejoin the sidebar — reveal it so the shell stays visible.
-      context.visible = true
     }
   }
 
   /** Active tab id for the right sidebar (ignores terminal tabs). */
   get sidebarActiveTabId(): string | null {
-    if (this.terminalPlacement === 'right') return this.activeTabId
-    const context = this.activeContext
-    if (!context) return null
-    if (
-      context.sidebarActiveTabId &&
-      this.sidebarTabs.some((tab) => tab.id === context.sidebarActiveTabId)
-    ) {
-      return context.sidebarActiveTabId
-    }
-    return this.sidebarTabs.at(-1)?.id ?? null
+    if (this.notificationsVisible) return NOTIFICATIONS_TAB.id
+    const project = this.activeProjectContext
+    const kind = project?.activeKind
+    if (!project || !kind) return null
+    const tabs = this.sidebarTabs.filter((tab) => tab.kind === kind)
+    const activeId = this.activeTabIdsForKind(kind)?.[kind]
+    return activeId && tabs.some((tab) => tab.id === activeId)
+      ? activeId
+      : (tabs.at(-1)?.id ?? null)
   }
 
   /** Active tab id for the bottom terminal dock. */
   get terminalActiveTabId(): string | null {
     if (this.terminalPlacement !== 'bottom') return null
-    const context = this.activeContext
+    const context = this.activeProjectContext
     if (!context) return null
     if (
       context.terminalActiveTabId &&
@@ -316,6 +436,7 @@ class ContextSidebarState {
 
   /** The tab the sidebar content should render for. */
   get sidebarActiveTab(): ContextSidebarTab | null {
+    if (this.notificationsVisible) return NOTIFICATIONS_TAB
     return this.sidebarTabs.find((tab) => tab.id === this.sidebarActiveTabId) ?? null
   }
 
@@ -325,43 +446,61 @@ class ContextSidebarState {
   }
 
   threadIdForProject(projectId: string): string | null {
-    const context = this.activeContext
-    return context?.projectId === projectId ? context.threadId : null
+    return this.activeProjectId === projectId ? this.activeThreadId : null
   }
 
-  activateThread(projectId: string, threadId: string): void {
-    this.activeKey = contextKey(projectId, threadId)
+  activateThread(projectId: string, threadId: string, threadTitle?: string): void {
+    const keepNotificationsVisible = this.notificationsVisible
+    this.activeProjectId = projectId
+    this.activeThreadId = threadId
+    this.ensureProjectContext(projectId)
+    this.ensureContext(projectId, threadId)
+    this.rebindProjectTabs(projectId, threadId)
+    this.ensureActiveThreadPanel(projectId, threadId, threadTitle)
+    this.notificationsVisible = keepNotificationsVisible
   }
 
   deactivateThread(): void {
-    this.activeKey = null
+    this.activeProjectId = null
+    this.activeThreadId = null
   }
 
   toggle(): void {
-    const context = this.ensureActiveContext()
+    const context = this.activeProjectId ? this.ensureProjectContext(this.activeProjectId) : null
     if (!context) return
     context.visible = !context.visible
   }
 
   show(): void {
-    const context = this.ensureActiveContext()
+    const context = this.activeProjectId ? this.ensureProjectContext(this.activeProjectId) : null
     if (context) context.visible = true
   }
 
   hide(): void {
-    const context = this.activeContext
+    if (this.notificationsVisible) {
+      this.notificationsVisible = false
+      return
+    }
+    const context = this.activeProjectContext
     if (context) context.visible = false
   }
 
+  /** Opened from the dock rail's Files icon. Reveals whatever file panel was
+   *  last in focus instead of always jumping to the empty "Open file"
+   *  browser tab — hiding the sidebar must not lose the file the user was
+   *  looking at. The browser tab only ever appears when no file has been
+   *  opened yet. */
   openFiles(projectId: string, threadId: string): void {
-    const context = this.ensureContext(projectId, threadId)
-    const id = `files:${projectId}:${threadId}:browser`
-    const existing = context.tabs.find((tab) => tab.id === id)
-    if (existing) {
-      this.focusInContext(context, id)
+    const context = this.ensureProjectContext(projectId)
+    const filesTabs = context.tabs.filter((tab) => tab.kind === 'files')
+    if (filesTabs.length > 0) {
+      const activeTab = context.tabs.find((tab) => tab.id === context.activeTabIds.files)
+      const target = activeTab?.kind === 'files' ? activeTab.id : filesTabs.at(-1)!.id
+      this.focusInProjectContext(context, target)
       return
     }
-    this.open(context, {
+    const id = `files:${projectId}:browser`
+    this.openProject(context, {
       id,
       kind: 'files',
       title: 'Open file',
@@ -380,18 +519,18 @@ class ContextSidebarState {
     path: string,
     preview = false
   ): void {
-    const context = this.ensureContext(projectId, threadId)
-    const id = `files:${projectId}:${threadId}:${fileTabId}`
+    const context = this.ensureProjectContext(projectId)
+    const id = `files:${projectId}:${fileTabId}`
     const existing = context.tabs.find((tab) => tab.id === id)
     if (existing) {
       if (existing.kind === 'files') existing.preview = preview
-      this.focusInContext(context, id)
+      this.focusInProjectContext(context, id)
       return
     }
     const browserIndex = context.tabs.findIndex(
       (tab) => tab.kind === 'files' && tab.fileTabId === null
     )
-    if (browserIndex >= 0 && context.activeTabId === context.tabs[browserIndex]?.id) {
+    if (browserIndex >= 0 && context.activeTabIds.files === context.tabs[browserIndex]?.id) {
       context.tabs[browserIndex] = {
         id,
         kind: 'files',
@@ -402,10 +541,13 @@ class ContextSidebarState {
         path,
         preview
       }
-      context.activeTabId = id
+      context.activeTabIds.files = id
+      context.activeKind = 'files'
+      context.visible = true
+      this.notificationsVisible = false
       return
     }
-    this.open(context, {
+    this.openProject(context, {
       id,
       kind: 'files',
       title: path.split('/').at(-1) ?? path,
@@ -423,7 +565,7 @@ class ContextSidebarState {
     nextFileTabId: string,
     nextPath: string
   ): void {
-    for (const context of Object.values(this.contexts)) {
+    for (const context of Object.values(this.projectContexts)) {
       const tab = context.tabs.find(
         (t) => t.kind === 'files' && t.projectId === projectId && t.fileTabId === previousFileTabId
       )
@@ -441,9 +583,15 @@ class ContextSidebarState {
     projectId: string,
     previousFileTabId: string,
     nextFileTabId: string,
-    nextPath: string
+    nextPath: string,
+    preview: boolean,
+    /** False for bulk remaps (e.g. a directory rename touching many open
+     *  tabs at once) — those shouldn't fight over which tab ends up
+     *  focused. True for a remap that represents the user looking at this
+     *  file right now (a preview replacing another preview). */
+    focus: boolean
   ): boolean {
-    for (const context of Object.values(this.contexts)) {
+    for (const context of Object.values(this.projectContexts)) {
       const index = context.tabs.findIndex(
         (tab) =>
           tab.kind === 'files' && tab.projectId === projectId && tab.fileTabId === previousFileTabId
@@ -451,15 +599,23 @@ class ContextSidebarState {
       if (index < 0) continue
       const previous = context.tabs[index]
       if (previous.kind !== 'files') continue
-      const nextId = `files:${projectId}:${previous.threadId}:${nextFileTabId}`
+      const nextId = `files:${projectId}:${nextFileTabId}`
       context.tabs[index] = {
         ...previous,
         id: nextId,
         title: nextPath.split('/').at(-1) ?? nextPath,
         fileTabId: nextFileTabId,
-        path: nextPath
+        path: nextPath,
+        preview
       }
-      if (context.activeTabId === previous.id) context.activeTabId = nextId
+      if (focus) {
+        context.activeTabIds.files = nextId
+        context.activeKind = 'files'
+        context.visible = true
+        this.notificationsVisible = false
+      } else if (context.activeTabIds.files === previous.id) {
+        context.activeTabIds.files = nextId
+      }
       return true
     }
     return false
@@ -468,7 +624,7 @@ class ContextSidebarState {
   /** Stop rendering a file tab as a preview (italicised) — used when the user
    *  starts editing it, which pins the tab. */
   pinProjectFile(projectId: string, fileTabId: string): void {
-    for (const context of Object.values(this.contexts)) {
+    for (const context of Object.values(this.projectContexts)) {
       for (const tab of context.tabs) {
         if (
           tab.kind === 'files' &&
@@ -483,7 +639,7 @@ class ContextSidebarState {
   }
 
   closeProjectFile(projectId: string, fileTabIds: ReadonlySet<string>): void {
-    for (const context of Object.values(this.contexts)) {
+    for (const context of Object.values(this.projectContexts)) {
       const closingIds = new Set(
         context.tabs
           .filter(
@@ -497,32 +653,47 @@ class ContextSidebarState {
       )
       if (closingIds.size === 0) continue
       context.tabs = context.tabs.filter((tab) => !closingIds.has(tab.id))
-      if (context.tabs.length === 0) {
-        context.tabs = [
-          {
-            id: `files:${context.projectId}:${context.threadId}:browser`,
-            kind: 'files',
-            title: 'Open file',
-            projectId: context.projectId,
-            threadId: context.threadId,
-            fileTabId: null,
-            path: null,
-            preview: false
-          }
-        ]
+      if (!context.tabs.some((tab) => tab.kind === 'files')) {
+        const browser: FilesContextTab = {
+          id: `files:${context.projectId}:browser`,
+          kind: 'files',
+          title: 'Open file',
+          projectId: context.projectId,
+          threadId: this.activeProjectId === context.projectId ? (this.activeThreadId ?? '') : '',
+          fileTabId: null,
+          path: null,
+          preview: false
+        }
+        context.tabs = [...context.tabs, browser]
       }
-      if (context.activeTabId && closingIds.has(context.activeTabId)) {
-        context.activeTabId = context.tabs.at(-1)?.id ?? null
+      if (context.activeTabIds.files && closingIds.has(context.activeTabIds.files)) {
+        context.activeTabIds.files = context.tabs.filter((tab) => tab.kind === 'files').at(-1)?.id
       }
     }
   }
 
-  openDiff(projectId: string, threadId: string, checkpointId: string | null = null): void {
+  /** `checkpointId`/`revealPath` are `undefined` (omitted) for a plain
+   *  reopen — the dock rail's toggle calls this with no reveal target and
+   *  must not clobber whatever checkpoint the user already had selected.
+   *  `null` is only meaningful when explicitly passed, e.g. to clear a
+   *  reveal. Without this distinction every dock-icon toggle reset the tab
+   *  back to its defaults, which is what made the panel look like it never
+   *  remembered anything and re-fetched from scratch every time. */
+  openDiff(
+    projectId: string,
+    threadId: string,
+    checkpointId?: string | null,
+    revealPath?: string | null
+  ): void {
     const context = this.ensureContext(projectId, threadId)
     const id = `diff:${projectId}:${threadId}`
     const existing = context.tabs.find((tab) => tab.id === id)
     if (existing?.kind === 'diff') {
-      existing.checkpointId = checkpointId
+      if (checkpointId !== undefined) existing.checkpointId = checkpointId
+      if (revealPath !== undefined) {
+        existing.revealPath = revealPath
+        existing.revealNonce += 1
+      }
       this.focusInContext(context, id)
       return
     }
@@ -532,7 +703,9 @@ class ContextSidebarState {
       title: 'Changes',
       projectId,
       threadId,
-      checkpointId
+      checkpointId: checkpointId ?? null,
+      revealPath: revealPath ?? null,
+      revealNonce: 1
     })
   }
 
@@ -554,13 +727,14 @@ class ContextSidebarState {
   }
 
   openGit(projectId: string, threadId: string): void {
-    const context = this.ensureContext(projectId, threadId)
-    const id = `git:${projectId}:${threadId}`
+    const context = this.ensureProjectContext(projectId)
+    const id = `git:${projectId}`
     const existing = context.tabs.find((tab) => tab.id === id)
     if (existing) {
-      this.focusInContext(context, id)
+      if (existing.kind === 'git') existing.threadId = threadId
+      this.focusInProjectContext(context, id)
     } else {
-      this.open(context, {
+      this.openProject(context, {
         id,
         kind: 'git',
         title: 'Git',
@@ -574,15 +748,69 @@ class ContextSidebarState {
     gitState.notifyGitPanelOpened(projectId)
   }
 
-  openCloudDeployments(projectId: string, threadId: string): void {
+  /** Opens the thread's note as a sidebar panel, creating one the first time
+   *  it's visited so the panel is ready to write into even before a note
+   *  exists. The body loads asynchronously onto the tab itself (not local
+   *  component state) so an in-progress draft survives the panel being
+   *  hidden and shown again. */
+  openThreadNote(projectId: string, threadId: string, threadTitle: string): void {
     const context = this.ensureContext(projectId, threadId)
-    const id = `cloud-deployment:${projectId}:${threadId}`
+    const id = `note:${projectId}:${threadId}`
     const existing = context.tabs.find((tab) => tab.id === id)
     if (existing) {
       this.focusInContext(context, id)
       return
     }
     this.open(context, {
+      id,
+      kind: 'thread-note',
+      title: 'Notes',
+      projectId,
+      threadId,
+      threadTitle,
+      savedBody: null,
+      draftBody: '',
+      mode: 'edit',
+      loading: true,
+      saving: false,
+      error: null
+    })
+    void this.loadThreadNote(context, id, projectId, threadId)
+  }
+
+  private async loadThreadNote(
+    context: ThreadSidebarContext,
+    tabId: string,
+    projectId: string,
+    threadId: string
+  ): Promise<void> {
+    try {
+      const note = await invoke('note:get', projectId, threadId)
+      const tab = context.tabs.find((candidate) => candidate.id === tabId)
+      if (!tab || tab.kind !== 'thread-note') return
+      tab.savedBody = note?.body ?? null
+      tab.draftBody = note?.body ?? ''
+      // A saved note opens in read mode so the user reads it, not its source.
+      tab.mode = note ? 'read' : 'edit'
+      tab.loading = false
+    } catch (err) {
+      const tab = context.tabs.find((candidate) => candidate.id === tabId)
+      if (!tab || tab.kind !== 'thread-note') return
+      tab.error = err instanceof Error ? err.message : 'Could not load the note'
+      tab.loading = false
+    }
+  }
+
+  openCloudDeployments(projectId: string, threadId: string): void {
+    const context = this.ensureProjectContext(projectId)
+    const id = `cloud-deployment:${projectId}`
+    const existing = context.tabs.find((tab) => tab.id === id)
+    if (existing) {
+      if (existing.kind === 'cloud-deployment') existing.threadId = threadId
+      this.focusInProjectContext(context, id)
+      return
+    }
+    this.openProject(context, {
       id,
       kind: 'cloud-deployment',
       title: 'Cloud Deployments',
@@ -591,16 +819,48 @@ class ContextSidebarState {
     })
   }
 
-  openMemory(projectId: string, threadId: string, section?: MemorySection): void {
+  /**
+   * Dock the coordinator for a thread. The title tracks the coordination kind
+   * (Assignment vs Achievement), so an existing tab is re-titled rather than
+   * duplicated when a thread switches modes.
+   */
+  openCoordinator(projectId: string, threadId: string, title: string): void {
     const context = this.ensureContext(projectId, threadId)
-    const id = `memory:${projectId}:${threadId}`
+    const id = `coordinator:${projectId}:${threadId}`
     const existing = context.tabs.find((tab) => tab.id === id)
     if (existing) {
-      if (existing.kind === 'memory' && section) existing.memorySection = section
+      existing.title = title
       this.focusInContext(context, id)
       return
     }
     this.open(context, {
+      id,
+      kind: 'coordinator',
+      title,
+      projectId,
+      threadId
+    })
+  }
+
+  /** Whether the coordinator tab is already docked for a thread. */
+  hasCoordinator(projectId: string, threadId: string): boolean {
+    const context = this.contexts[contextKey(projectId, threadId)]
+    return context?.tabs.some((tab) => tab.kind === 'coordinator') ?? false
+  }
+
+  openMemory(projectId: string, threadId: string, section?: MemorySection): void {
+    const context = this.ensureProjectContext(projectId)
+    const id = `memory:${projectId}`
+    const existing = context.tabs.find((tab) => tab.id === id)
+    if (existing) {
+      if (existing.kind === 'memory') {
+        existing.threadId = threadId
+        if (section) existing.memorySection = section
+      }
+      this.focusInProjectContext(context, id)
+      return
+    }
+    this.openProject(context, {
       id,
       kind: 'memory',
       title: 'Memory',
@@ -611,55 +871,7 @@ class ContextSidebarState {
   }
 
   toggleNotifications(): void {
-    const id = 'notifications'
-    const context = this.ensureActiveContext()
-    if (context) {
-      const existing = context.tabs.find((tab) => tab.id === id)
-      if (existing && context.visible && context.activeTabId === id) {
-        context.visible = false
-        return
-      }
-      if (existing) {
-        this.focusInContext(context, id)
-        return
-      }
-      this.open(context, {
-        id,
-        kind: 'notifications',
-        title: 'Notifications'
-      })
-      return
-    }
-    // No active thread context — use a pseudo-global entry so the
-    // notification panel can be toggled from any view.
-    const globalKey = '__notifications_global__'
-    let global = this.contexts[globalKey]
-    if (!global) {
-      global = {
-        projectId: '',
-        threadId: '',
-        tabs: [],
-        activeTabId: null,
-        sidebarActiveTabId: null,
-        terminalActiveTabId: null,
-        visible: false,
-        terminalDockOpen: false,
-        terminalSequence: 0
-      }
-      this.contexts[globalKey] = global
-    }
-    const existing = global.tabs.find((tab) => tab.id === id)
-    if (existing && global.visible && global.activeTabId === id) {
-      global.visible = false
-      return
-    }
-    if (existing) {
-      this.activeKey = globalKey
-      this.focusInContext(global, id)
-      return
-    }
-    this.activeKey = globalKey
-    this.open(global, { id, kind: 'notifications', title: 'Notifications' })
+    this.notificationsVisible = !this.notificationsVisible
   }
 
   openTemporaryChat(
@@ -669,7 +881,8 @@ class ContextSidebarState {
     selection: string,
     initialContext: string,
     settings: ThreadSettings,
-    selectionAttached = true
+    selectionAttached = true,
+    autoPrompt?: string
   ): TemporaryChatContextTab {
     const context = this.ensureContext(projectId, threadId)
 
@@ -714,6 +927,7 @@ class ContextSidebarState {
       selectionAttached,
       selectionMessageId: null,
       autoPromptSent: false,
+      autoPrompt,
       sessionStarted: false,
       expired: false,
       expiresAt: Date.now() + TEMPORARY_CHAT_INACTIVITY_MS
@@ -815,27 +1029,28 @@ class ContextSidebarState {
   }
 
   openPrimaryTerminal(projectId: string, threadId: string): void {
-    const context = this.ensureContext(projectId, threadId)
+    const context = this.ensureProjectContext(projectId)
     const existing = context.tabs.find(
-      (tab) => tab.kind === 'terminal' && tab.projectId === projectId && tab.threadId === threadId
+      (tab) => tab.kind === 'terminal' && tab.projectId === projectId
     )
-    if (existing) {
-      this.focusInContext(context, existing.id)
+    if (existing?.kind === 'terminal') {
+      existing.threadId = threadId
+      this.focusInProjectContext(context, existing.id)
       return
     }
     this.openNewTerminal(projectId, threadId)
   }
 
   openNewTerminal(projectId: string, threadId: string): void {
-    const context = this.ensureContext(projectId, threadId)
+    const context = this.ensureProjectContext(projectId)
     context.terminalSequence += 1
     const sequence = context.terminalSequence
-    const id = `terminal:${projectId}:${threadId}:${sequence}`
-    this.open(context, {
+    const id = `terminal:${projectId}:${sequence}`
+    this.openProject(context, {
       id,
       kind: 'terminal',
       title: sequence === 1 ? 'Terminal' : `Terminal ${sequence}`,
-      terminalId: `workbench-${projectId}-${threadId}-${sequence}`,
+      terminalId: `workbench-${projectId}-${sequence}`,
       projectId,
       threadId
     })
@@ -889,7 +1104,7 @@ class ContextSidebarState {
       const previousId = context.tabs[existingIndex].id
       context.tabs[existingIndex] = next
       context.tabs = [...context.tabs]
-      if (context.activeTabId === previousId) context.activeTabId = id
+      if (context.activeTabIds.subagent === previousId) context.activeTabIds.subagent = id
       this.focusInContext(context, id)
       return
     }
@@ -930,19 +1145,30 @@ class ContextSidebarState {
       title: nextTitle,
       activity
     }
-    if (context.activeTabId === current.id) {
-      context.activeTabId = context.tabs[index].id
+    if (context.activeTabIds.subagent === current.id) {
+      context.activeTabIds.subagent = context.tabs[index].id
     }
     context.tabs = [...context.tabs]
   }
 
   focus(id: string): void {
-    const context = this.activeContext
-    if (context) this.focusInContext(context, id)
+    const project = this.activeProjectContext
+    if (project?.tabs.some((tab) => tab.id === id)) {
+      this.focusInProjectContext(project, id)
+      return
+    }
+    const thread = this.activeContext
+    if (thread) this.focusInContext(thread, id)
   }
 
   close(id: string): void {
-    const context = this.activeContext
+    if (id === NOTIFICATIONS_TAB.id) {
+      this.notificationsVisible = false
+      return
+    }
+    const project = this.activeProjectContext
+    const thread = this.activeContext
+    const context = project?.tabs.some((tab) => tab.id === id) ? project : thread
     if (!context) return
     const index = context.tabs.findIndex((tab) => tab.id === id)
     if (index < 0) return
@@ -952,26 +1178,28 @@ class ContextSidebarState {
     }
     const closedKind = tab.kind
     context.tabs = context.tabs.filter((tab) => tab.id !== id)
-    if (context.activeTabId === id) {
-      const replacement = context.tabs[Math.min(index, context.tabs.length - 1)]
-      context.activeTabId = replacement?.id ?? null
+    const replacement = context.tabs.filter((candidate) => candidate.kind === closedKind).at(-1)
+    context.activeTabIds[closedKind] = replacement?.id
+    if ('terminalActiveTabId' in context && closedKind === 'terminal') {
+      context.terminalActiveTabId = replacement?.id ?? null
     }
-    if (closedKind === 'terminal') {
-      if (context.terminalActiveTabId === id) {
-        const replacement = context.tabs.filter((t) => t.kind === 'terminal').at(-1)
-        context.terminalActiveTabId = replacement?.id ?? null
-      }
-    } else if (context.sidebarActiveTabId === id) {
-      const replacement = context.tabs.filter((t) => t.kind !== 'terminal').at(-1)
-      context.sidebarActiveTabId = replacement?.id ?? null
-    }
-    if (context.tabs.length === 0) {
-      context.visible = false
+    if (project?.activeKind === closedKind && !replacement) {
+      project.visible = false
     }
   }
 
+  /** Signal Workspace to close the active tab through its confirmation flow
+   *  (unsaved-file dialog). The tab is not closed here — Workspace decides. */
+  requestCloseActiveTab(): void {
+    this.closeActiveTabRequest += 1
+  }
+
   reorder(id: string, targetId: string, position: 'before' | 'after'): void {
-    const context = this.activeContext
+    const project = this.activeProjectContext
+    const thread = this.activeContext
+    const context = project?.tabs.some((tab) => tab.id === id && tab.kind !== 'notifications')
+      ? project
+      : thread
     if (!context) return
     const fromIndex = context.tabs.findIndex((tab) => tab.id === id)
     const toIndex = context.tabs.findIndex((tab) => tab.id === targetId)
@@ -995,19 +1223,12 @@ class ContextSidebarState {
   }
 
   private get activeContext(): ThreadSidebarContext | null {
-    return this.activeKey ? (this.contexts[this.activeKey] ?? null) : null
+    if (!this.activeProjectId || this.activeThreadId === null) return null
+    return this.contexts[contextKey(this.activeProjectId, this.activeThreadId)] ?? null
   }
 
-  private ensureActiveContext(): ThreadSidebarContext | null {
-    if (!this.activeKey) return null
-    const existing = this.contexts[this.activeKey]
-    if (existing) return existing
-    const separator = this.activeKey.indexOf(':')
-    if (separator < 0) return null
-    return this.ensureContext(
-      this.activeKey.slice(0, separator),
-      this.activeKey.slice(separator + 1)
-    )
+  private get activeProjectContext(): ProjectSidebarContext | null {
+    return this.activeProjectId ? (this.projectContexts[this.activeProjectId] ?? null) : null
   }
 
   private ensureContext(projectId: string, threadId: string): ThreadSidebarContext {
@@ -1018,22 +1239,37 @@ class ContextSidebarState {
       projectId,
       threadId,
       tabs: [],
-      activeTabId: null,
-      sidebarActiveTabId: null,
+      activeTabIds: {}
+    }
+    this.contexts[key] = context
+    return this.contexts[key]
+  }
+
+  private ensureProjectContext(projectId: string): ProjectSidebarContext {
+    const existing = this.projectContexts[projectId]
+    if (existing) return existing
+    const context: ProjectSidebarContext = {
+      projectId,
+      tabs: [],
+      activeKind: null,
+      activeTabIds: {},
       terminalActiveTabId: null,
       visible: false,
       terminalDockOpen: false,
       terminalSequence: 0
     }
-    this.contexts[key] = context
-    return context
+    this.projectContexts[projectId] = context
+    return this.projectContexts[projectId]
   }
 
   private focusInContext(context: ThreadSidebarContext, id: string): void {
-    if (!context.tabs.some((tab) => tab.id === id)) return
-    context.activeTabId = id
-    this.trackRegionActiveTab(context, id)
-    this.revealRegion(context, id, false)
+    const tab = context.tabs.find((candidate) => candidate.id === id)
+    if (!tab) return
+    context.activeTabIds[tab.kind] = id
+    const project = this.ensureProjectContext(context.projectId)
+    project.activeKind = tab.kind
+    project.visible = true
+    this.notificationsVisible = false
   }
 
   private open(context: ThreadSidebarContext, tab: ContextSidebarTab): void {
@@ -1044,38 +1280,75 @@ class ContextSidebarState {
     } else {
       context.tabs = [...context.tabs, tab]
     }
-    context.activeTabId = tab.id
-    this.trackRegionActiveTab(context, tab.id)
-    this.revealRegion(context, tab.id, true)
+    this.focusInContext(context, tab.id)
   }
 
-  /** Remember which area (sidebar vs bottom dock) owns the focused tab. */
-  private trackRegionActiveTab(context: ThreadSidebarContext, id: string): void {
+  private focusInProjectContext(context: ProjectSidebarContext, id: string): void {
     const tab = context.tabs.find((candidate) => candidate.id === id)
     if (!tab) return
-    if (tab.kind === 'terminal') {
-      context.terminalActiveTabId = id
-    } else {
-      context.sidebarActiveTabId = id
-    }
-  }
-
-  /**
-   * Reveal only the region the tab belongs to, keeping the two regions
-   * independent:
-   * - Terminal tabs docked at the bottom open the dock; on a brand-new open
-   *   the sidebar is revealed too so its add-actions stay reachable.
-   * - Everything else reveals the sidebar. The dock is never touched.
-   */
-  private revealRegion(context: ThreadSidebarContext, id: string, opening: boolean): void {
-    const tab = context.tabs.find((candidate) => candidate.id === id)
-    if (!tab) return
+    context.activeTabIds[tab.kind] = id
+    this.notificationsVisible = false
     if (tab.kind === 'terminal' && this.terminalPlacement === 'bottom') {
+      context.terminalActiveTabId = id
       context.terminalDockOpen = true
-      if (opening) context.visible = true
     } else {
+      context.activeKind = tab.kind
       context.visible = true
     }
+  }
+
+  private openProject(context: ProjectSidebarContext, tab: ContextSidebarTab): void {
+    const index = context.tabs.findIndex((existing) => existing.id === tab.id)
+    if (index >= 0) {
+      context.tabs[index] = tab
+      context.tabs = [...context.tabs]
+    } else {
+      context.tabs = [...context.tabs, tab]
+    }
+    this.focusInProjectContext(context, tab.id)
+  }
+
+  private activeTabIdsFor(
+    tab: ContextSidebarTab
+  ): Partial<Record<ContextSidebarTab['kind'], string>> {
+    if (isProjectTab(tab) && 'projectId' in tab) {
+      return this.ensureProjectContext(tab.projectId).activeTabIds
+    }
+    if ('projectId' in tab && 'threadId' in tab) {
+      return this.ensureContext(tab.projectId, tab.threadId).activeTabIds
+    }
+    return {}
+  }
+
+  private activeTabIdsForKind(
+    kind: ContextSidebarTab['kind']
+  ): Partial<Record<ContextSidebarTab['kind'], string>> | null {
+    if (PROJECT_TAB_KINDS.has(kind)) return this.activeProjectContext?.activeTabIds ?? null
+    return this.activeContext?.activeTabIds ?? null
+  }
+
+  private rebindProjectTabs(projectId: string, threadId: string): void {
+    const context = this.ensureProjectContext(projectId)
+    for (const tab of context.tabs) {
+      if ('threadId' in tab) tab.threadId = threadId
+    }
+  }
+
+  private ensureActiveThreadPanel(projectId: string, threadId: string, threadTitle?: string): void {
+    const project = this.ensureProjectContext(projectId)
+    const kind = project.activeKind
+    if (!project.visible || !kind || PROJECT_TAB_KINDS.has(kind)) return
+    const thread = this.ensureContext(projectId, threadId)
+    const existing = thread.tabs.filter((tab) => tab.kind === kind).at(-1)
+    if (existing) {
+      this.focusInContext(thread, thread.activeTabIds[kind] ?? existing.id)
+      return
+    }
+    if (kind === 'diff') this.openDiff(projectId, threadId)
+    else if (kind === 'sources') this.openSources(projectId, threadId)
+    else if (kind === 'debugger') this.openDebugger(projectId, threadId)
+    else if (kind === 'thread-note' && threadTitle)
+      this.openThreadNote(projectId, threadId, threadTitle)
   }
 
   private scheduleTemporaryChatExpiry(tab: TemporaryChatContextTab): void {

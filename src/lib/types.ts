@@ -69,7 +69,7 @@ export interface AttachmentStorageScope {
 
 export const DEFAULT_SCOPE_BUCKET_ID = 'default'
 
-export type ScopeSlice = 'todo' | 'working' | 'issue' | 'unread' | 'done' | 'pinned'
+export type ScopeSlice = 'todo' | 'working' | 'spec' | 'issue' | 'unread' | 'done' | 'pinned'
 
 export interface ScopeBucket {
   id: string
@@ -104,6 +104,12 @@ export interface ProjectFileInfo extends ProjectFileEntry {
 
 export type ProjectFileTransferMode = 'copy' | 'move'
 
+export interface ProjectFileDropResult {
+  entry: ProjectFileEntry
+  /** Previous project-relative path when the drop moved an existing project entry. */
+  movedFrom?: string
+}
+
 export interface ProjectTextFile {
   path: string
   content: string
@@ -121,26 +127,22 @@ export type ThreadStatus =
   | 'created'
   | 'planning'
   | 'awaiting_approval'
+  | 'spec'
   | 'executing'
+  | 'working-paused'
   | 'interrupted'
   | 'completed'
   | 'failed'
 
+import {
+  isThreadBusyStatus,
+  isThreadExecutionActiveStatus,
+  isThreadRetryPausedStatus,
+  threadStatusPolicy
+} from './thread-status-policy'
+
 export function scopeSliceForStatus(status: ThreadStatus): ScopeSlice {
-  switch (status) {
-    case 'created':
-      return 'todo'
-    case 'planning':
-    case 'executing':
-    case 'awaiting_approval':
-      return 'working'
-    case 'interrupted':
-      return 'done'
-    case 'failed':
-      return 'issue'
-    case 'completed':
-      return 'done'
-  }
+  return threadStatusPolicy(status).scopeSlice
 }
 
 export type ThreadTitleSource = 'default' | 'auto' | 'manual'
@@ -177,6 +179,11 @@ export interface Thread {
   contextUsage?: ThreadContextUsage
   /** Harness session id bound to this thread, once a conversation has started. */
   sessionId?: string
+  /** Harness that created the bound session. A session never moves across
+   *  harnesses: even when `settings.harnessId` changes (mid-run switch), this
+   *  field keeps identifying the driver that owns `sessionId` so the old
+   *  session is read/synced through the correct driver. */
+  sessionHarnessId?: string
   /** Last specification card explicitly dismissed by the user. */
   dismissedSpecId?: string
   dismissedSpecVersion?: number
@@ -209,6 +216,20 @@ export interface Thread {
 }
 
 /**
+ * A private, user-only note attached to a thread. Notes are never included in
+ * agent context or prompts — they exist so the user can remind themselves what
+ * they intended to do on a thread and return to it later. Deleting the thread
+ * deletes its note (ON DELETE CASCADE).
+ */
+export interface ThreadNote {
+  threadId: string
+  /** Markdown body of the note. */
+  body: string
+  createdAt: number
+  updatedAt: number
+}
+
+/**
  * A worker or auditor thread owned by an Achievement/Assignment coordinator
  * (the Sr. Engineer). These threads are orchestration internals: they never
  * notify on their own, are hidden from the regular projects/threads surfaces,
@@ -230,7 +251,17 @@ export function isOrchestrationChildThread(thread: Thread): boolean {
 
 /** A harness is actively producing work for this persisted thread. */
 export function isThreadWorking(thread: Thread): boolean {
-  return thread.status === 'planning' || thread.status === 'executing'
+  return isThreadExecutionActiveStatus(thread.status)
+}
+
+/** True while the row should continue presenting an in-progress indicator. */
+export function isThreadBusy(thread: Thread): boolean {
+  return isThreadBusyStatus(thread.status)
+}
+
+/** True when the provider is paused until an automatic retry deadline. */
+export function isThreadRetryPaused(thread: Thread): boolean {
+  return isThreadRetryPausedStatus(thread.status)
 }
 
 /**
@@ -386,6 +417,12 @@ export interface ProviderConnectionInfo {
   version?: string
   /** Human-readable detail for error/not_found states. */
   detail?: string
+  /**
+   * When set, the harness is installed but its detected version is not yet
+   * supported by CodeInOven (e.g. OpenCode V2). The harness is treated as not
+   * installed everywhere except the Harnesses page, which surfaces a notice.
+   */
+  unsupportedReason?: 'opencode-v2'
 }
 
 /** Where a confirmed harness-manifest behavior override came from. */
@@ -682,6 +719,13 @@ export interface CuaBridgeStatus {
   detail?: string
 }
 
+/** Cursor position projected into the dimensions of a computer-use PiP frame. */
+export interface ComputerUsePipCursor {
+  visible: boolean
+  x: number
+  y: number
+}
+
 /** One rendered frame of the app an agent is driving, pushed to the renderer. */
 export interface ComputerUsePipFrame {
   pid: number
@@ -691,6 +735,7 @@ export interface ComputerUsePipFrame {
   width: number
   height: number
   timestamp: number
+  cursor?: ComputerUsePipCursor
 }
 
 /** Live state of the computer-use PiP monitor. */
@@ -744,6 +789,8 @@ export interface AgentModelSelection {
   harnessId: string
   providerId: string
   modelId: string
+  /** Reasoning effort for the role. When absent, the thread's own level is used. */
+  thinkingLevel?: ThinkingLevel
 }
 
 export type AgentRole = 'seniorEngineer' | 'worker' | 'auditor'
@@ -759,7 +806,7 @@ export interface AgentDefaultsConfig {
   syncFromThreadChanges: boolean
 }
 
-/** Per-thread agent configuration. The last-used settings seed new threads. */
+/** Per-thread agent configuration. Active-thread settings seed siblings; last-used is the fallback. */
 export interface ThreadSettings {
   /** Agent harness responsible for the session, e.g. opencode or codex. */
   harnessId: string
@@ -772,7 +819,7 @@ export interface ThreadSettings {
   /** Fast inference for this thread's turns; `fast` requests the harness fast tier. */
   inferenceMode?: InferenceMode
   permissionLevel: PermissionLevel
-  /** When true (default), the engineering spec/plan workflow is injected into prompts. */
+  /** When true, the engineering spec/plan workflow is injected into prompts. */
   engineeringMode: boolean
   /** Optional multi-agent planning workflow layered on Engineering mode. */
   assignmentMode?: boolean
@@ -808,6 +855,8 @@ export interface ProviderCatalog {
   name: string
   harnessId: string
   models: ProviderModel[]
+  /** True when the owning harness accepts prompt attachments at all. */
+  supportsAttachments?: boolean
   /** Explicit discovery state when a harness cannot report account-selectable models. */
   catalogStatus?: 'available' | 'unavailable'
   /** Operator-facing reason for an unavailable authoritative catalog. */
@@ -1090,6 +1139,8 @@ export interface UtilityDefinitionFor<Kind extends UtilityKind = UtilityKind> {
   config: UtilityConfigMap[Kind]
   credentials: UtilityCredentialMetadata[]
   harnessBindings: HarnessUtilityBinding[]
+  /** App-seeded utility: cannot be deleted and only its config may change. */
+  appOwned: boolean
   createdAt: number
   updatedAt: number
 }
@@ -1247,12 +1298,20 @@ export interface AgentToolState {
   time?: { start: number; end?: number }
 }
 
-/** A live operating-system process started beneath one task's agent harness. */
+/**
+ * A live operating-system process started beneath one task's agent harness.
+ *
+ * `scope` distinguishes processes started beneath a thread's own per-session
+ * harness (`'thread'`) from processes started beneath a shared, app-wide
+ * harness that is not tied to a single thread (e.g. the pooled opencode server),
+ * so callers can show the right context and warn the user before killing it.
+ */
 export interface AgentRunningProcess {
   pid: number
   parentPid: number
   command: string
   startedAt: number
+  scope: 'thread' | 'app'
 }
 
 /** Provider-neutral lifecycle state for one delegated child-agent task. */
@@ -1279,14 +1338,7 @@ export interface UserMessagePresentation {
 
 /** Durable source identity for a persisted conversation record. */
 export type AgentMessageOrigin =
-  | 'user'
-  | 'assistant'
-  | 'harness'
-  | 'orchestrator'
-  | 'subagent'
-  | 'compaction'
-  | 'provider'
-  | 'legacy'
+  'user' | 'assistant' | 'harness' | 'orchestrator' | 'subagent' | 'compaction' | 'provider'
 
 /** Durable UI channel for a persisted conversation record. */
 export type AgentMessageVisibility = 'conversation' | 'working_trace' | 'subagent_trace' | 'hidden'
@@ -1304,7 +1356,15 @@ export interface AgentTokenUsage {
 
 /** Model or utility operation responsible for one persisted usage event. */
 export type UsageEventFeature =
-  'main' | 'title' | 'memory' | 'image_descriptor' | 'computer_use' | 'web' | 'audit' | 'assignment'
+  | 'main'
+  | 'title'
+  | 'memory'
+  | 'image_descriptor'
+  | 'search_nudge'
+  | 'computer_use'
+  | 'web'
+  | 'audit'
+  | 'assignment'
 
 /** Whether and how a provider-reported total can be interpreted. */
 export type UsageTotalSemantics =
@@ -1363,6 +1423,8 @@ export interface UsageEventDetails {
   harnessId: string | null
   providerId: string | null
   modelId: string | null
+  /** Reasoning effort in effect when the attempt ran, when known. */
+  thinkingLevel: ThinkingLevel | null
   utilityId: string | null
   rawProviderUsage: Record<string, unknown>
   tokens: NormalizedUsageTokens
@@ -1519,6 +1581,8 @@ export interface HarnessUsage {
   providerId: string
   /** Last model observed for this harness on the thread. */
   modelId?: string
+  /** Last thinking level observed for this harness on the thread. */
+  thinkingLevel?: ThinkingLevel
   /** Number of assistant messages attributed to this harness on the thread. */
   messageCount: number
   /** Cumulative USD cost, when the harness reports cost. */
@@ -1539,6 +1603,8 @@ export interface HarnessModelUsage {
   harnessId: string
   providerId: string
   modelId: string
+  /** Reasoning effort of the turns attributed to this model, when known. */
+  thinkingLevel?: ThinkingLevel
   /** Number of assistant messages attributed to this model on the thread. */
   messageCount: number
   /** Cumulative USD cost attributed to this model, when the harness reports cost. */
@@ -1589,6 +1655,8 @@ export interface LocalProfileAnalyticsRange {
 export interface LocalProfileUsageBreakdown extends AccountUsageBreakdown {
   harnessId?: string
   providerId?: string
+  /** Reasoning effort of the turns this row aggregates, when the data is recorded. */
+  thinkingLevel?: ThinkingLevel
   durationMs: number
 }
 
@@ -1621,7 +1689,58 @@ export interface LocalProfileAnalytics {
   utilities: LocalProfileUsageBreakdown[]
   projects: LocalProfileProjectBreakdown[]
   activityDays: AccountActivityDay[]
+  /** Harness/provider/model/thinking-level performance scored on session outcomes. */
+  modelPerformance: LocalProfileModelPerformance[]
+  /** What the scored sessions cost to gather in this period. */
+  feedbackCost: LocalProfileFeedbackCost
   generatedAt: number
+}
+
+/** Lifecycle of one scored user session awaiting a positive/negative signal. */
+export type TurnOutcomeStatus = 'pending' | 'success' | 'corrected'
+
+/** What resolved a pending turn outcome into its final status. */
+export type TurnOutcomeSignal = 'continued' | 'switched' | 'cleaned_up' | 'corrective_feedback'
+
+/** Task kind recorded with a turn outcome, mirroring usage_events.feature. */
+export type TurnOutcomeTaskType = 'main' | 'audit' | 'assignment'
+
+/** Aggregated feedback performance for one (harness, provider, model, thinking level). */
+export interface LocalProfileModelPerformance {
+  harnessId: string
+  providerId: string
+  modelId: string
+  thinkingLevel: ThinkingLevel | null
+  taskType: TurnOutcomeTaskType
+  /** Number of resolved session outcomes for this combination. */
+  outcomes: number
+  /** Sessions that ended successfully (continued, switched away, or left until cleanup). */
+  successes: number
+  /** Sessions the user corrected with a follow-up message. */
+  corrected: number
+  /** successes / outcomes, or null before any outcome is resolved. */
+  successRate: number | null
+  /** Average of the 0/1 per-outcome scores. */
+  averageScore: number
+  /** Outcomes whose provider cost was known or estimated (priced). */
+  pricedOutcomes: number
+  /** Sum of priced outcome cost in USD for this combination. */
+  costUsd: number
+  /** Sum of reported tokens across the outcomes. */
+  tokensTotal: number
+  lastUsedAt: number
+}
+
+/** What a resolved feedback session cost to gather (scoped to a period). */
+export interface LocalProfileFeedbackCost {
+  /** Resolved session outcomes in the period. */
+  outcomes: number
+  /** Outcomes whose provider cost was known or estimated (priced). */
+  pricedOutcomes: number
+  costUsd: number
+  knownCostUsd: number
+  estimatedCostUsd: number
+  tokensTotal: number
 }
 
 /** Account identity plus the cloud-backed workstation profile data. */
@@ -1630,14 +1749,18 @@ export interface AccountProfile {
   email: string
   displayName: string
   image: string | null
-  usage: AccountUsageSummary
+  /** Per-device usage snapshots keyed by the desktop device id. */
+  usageByDevice: Record<string, SyncedDeviceUsage>
   globalMemories: MemoryEntry[]
+  /** Deleted global memory ids; deletions propagate to every device. */
+  globalMemoryTombstones: MemoryTombstone[]
   updatedAt: number
 }
 
 export type AccountProfileState =
   | { status: 'signed-out'; profile: null }
   | { status: 'pending'; profile: null }
+  | { status: 'error'; profile: null; message: string }
   | { status: 'signed-in'; profile: AccountProfile }
 
 export type AccountAuthProvider = 'google' | 'apple'
@@ -1646,9 +1769,44 @@ export interface AccountSignInStart {
   url: string
 }
 
+/** A memory entry this device deleted; newer than the entry's `updatedAt` it wins. */
+export interface MemoryTombstone {
+  id: string
+  deletedAt: number
+}
+
+/** Compact per-project usage row synced inside a device usage snapshot. */
+export interface SyncedDeviceProject {
+  id: string
+  name: string
+  messageCount: number
+  costUsd: number
+  tokens: number
+  durationMs: number
+  threadCount: number
+}
+
+/** Compact per-device usage snapshot synced to the account profile. */
+export interface SyncedDeviceUsage {
+  deviceId: string
+  deviceLabel: string
+  platform: string
+  messageCount: number
+  costUsd: number
+  tokens: number
+  durationMs: number
+  activeDays: number
+  projects: SyncedDeviceProject[]
+  updatedAt: number
+}
+
 export interface AccountProfileSyncPayload {
-  usage: AccountUsageSummary
+  deviceId: string
+  deviceLabel: string
+  platform: string
+  usage: SyncedDeviceUsage
   globalMemories: MemoryEntry[]
+  globalMemoryTombstones: MemoryTombstone[]
 }
 
 /** A selectable option within an agent question. */
@@ -1689,6 +1847,8 @@ export interface AgentQuestionRequest {
   sessionId: string
   questions: AgentQuestion[]
   tool?: { messageID: string; callID: string }
+  /** Provider transport details needed to answer the blocked native request. */
+  metadata?: Record<string, unknown>
 }
 
 /** Authoritative pending request metadata owned by the main process. */
@@ -1785,6 +1945,21 @@ export type AgentPart =
       presentation: UserMessagePresentation
     }
 
+/** A generated image that can be previewed from a conversation or its context sidebar. */
+export interface AgentArtifact {
+  id: string
+  kind: 'image'
+  filename: string
+  mime: string
+  path: string
+  url: string
+  messageId: string
+  createdAt: number
+  scope: 'chat' | 'project'
+  /** Project-relative path when the artifact lives inside the active project. */
+  relativePath?: string
+}
+
 /** A message in the agent conversation. */
 export interface AgentMessage {
   id: string
@@ -1806,6 +1981,8 @@ export interface AgentMessage {
   providerId?: string
   /** Agent harness that produced this message, e.g. opencode or claude-code. */
   harnessId?: string
+  /** Reasoning effort in effect when this message's turn ran, when known. */
+  thinkingLevel?: ThinkingLevel
   createdAt: number
   completedAt?: number
   /** Cost and token accounting reported for this assistant message. */
@@ -1849,6 +2026,20 @@ export interface UserMessageSummary {
   id: string
   content: string
   createdAt: number
+}
+
+/** Options controlling how a conversation transcript is serialized. */
+export interface TranscriptExportOptions {
+  /** Whether the working trace (reasoning, tool calls, sub-agents) is included. */
+  includeTrace: boolean
+}
+
+/** Absolute location of a written transcript and where it was stored. */
+export interface TranscriptExportResult {
+  /** Absolute path of the written Markdown file. */
+  path: string
+  /** Where the transcript was stored — project scratch vs. chat temp dir. */
+  location: 'project' | 'chat'
 }
 
 // ─── Agent streaming events (forwarded main → renderer) ────────────────────
@@ -1995,6 +2186,7 @@ export type AgentEvent =
       requestId: string
       questions: AgentQuestion[]
       tool?: { messageID: string; callID: string }
+      metadata?: Record<string, unknown>
     }
   | {
       type: 'question.updated'
@@ -2123,6 +2315,8 @@ export interface TurnCheckpointSummary {
   label: string
   status: TurnCheckpointStatus
   changes: TurnCheckpointChangeSummary[]
+  /** Paths too large to be captured by the checkpoint (no rollback coverage). */
+  skippedFiles?: string[]
   createdAt: number
   completedAt?: number
   rolledBackAt?: number
@@ -2665,9 +2859,9 @@ export interface AuditReportContent {
   findings: AuditFinding[]
   resolutionRecommendation: string
   conclusion: string
-  /** Required for newly generated Assignment audits; optional for legacy persisted reports. */
+  /** Required for Assignment audits; omitted when file evidence is unavailable. */
   auditedFiles?: AuditedFileEvidence[]
-  /** Required for newly generated Assignment audits; optional for legacy persisted reports. */
+  /** Required for Assignment audits; omitted when verification evidence is unavailable. */
   verification?: AuditVerificationEvidence
 }
 
@@ -2782,7 +2976,7 @@ export interface EditorInfo {
 export type ThemePreference = 'light' | 'dark' | 'system'
 export type SlashCommandMode = 'app' | 'passthrough'
 
-export type MemoryCategory = 'behavioral' | 'project-rule' | 'identity' | 'preference'
+export type MemoryCategory = 'behavioral' | 'project-rule' | 'identity' | 'preference' | 'models'
 export type MemoryPriority = 'critical' | 'high' | 'medium' | 'low'
 export type MemoryScope = 'global' | 'projects' | 'project' | 'thread' | 'chat'
 export type MemorySource = 'manual' | 'auto-detected'
@@ -2801,6 +2995,8 @@ export interface MemoryEntry {
   lastReinforced: number
   projectId?: string
   threadId?: string
+  /** Harness-scoped model keys for model-specific memories. */
+  modelKeys?: string[]
 }
 
 export interface MemoryConfig {
@@ -2820,9 +3016,35 @@ export interface MemoryProposal {
   scope: MemoryScope
   projectId?: string
   threadId?: string
+  /** Harness-scoped model keys for model-specific proposals. */
+  modelKeys?: string[]
   createdAt: number
   expiresAt: number
   status: 'pending' | 'approved' | 'rejected'
+}
+
+/** Which bucket of memory an export/import targets. */
+export type MemoryExportKind = 'projects' | 'chats' | 'both' | 'project'
+
+/** The on-disk JSON shape written by a memory export and read by an import. */
+export interface MemoryExportFile {
+  format: 'codeinoven-memory'
+  version: 1
+  exportedAt: number
+  kind: MemoryExportKind
+  /** Present only when `kind === 'project'` (the sidebar project export). */
+  projectId?: string
+  entries: MemoryEntry[]
+}
+
+/** Preview of an imported memory file, returned before anything is applied. */
+export interface MemoryImportPreview {
+  format: string
+  version: number
+  kind: MemoryExportKind
+  projectId?: string
+  entryCount: number
+  entries: MemoryEntry[]
 }
 
 export interface AppConfig {
@@ -2843,13 +3065,15 @@ export interface AppConfig {
   memory: MemoryConfig
   /** User-selected defaults for Engineering agent roles. Roles remain unset after installation. */
   agentDefaults: AgentDefaultsConfig
+  /** Editable default behavior prompt for project Engineering implementation turns. */
+  agentBehaviorPrompt: string
   /** Automatically download available updates in the background. */
   autoDownloadUpdates: boolean
   /** Automatically quit and install after an update is downloaded. */
   autoInstallUpdates: boolean
   /** Update channel to receive over-the-air updates from. `stable` is the default; `nightly` opts into prerelease builds. */
   updateChannel: 'stable' | 'nightly'
-  /** Prevent the display and system from sleeping while any agent is working. */
+  /** Prevent sleep while a harness is actively working; review-ready spec threads stay idle. */
   keepAwakeWhileWorking: boolean
   /** When true, sending an image to a text-only model auto-uses the configured
    *  image descriptor model instead of showing the vision-model picker card. */
@@ -2861,6 +3085,11 @@ export interface AppConfig {
   /** Resume regular and Sr. Engineer threads that were interrupted by an app
    *  closure or unknown issue when the app restarts. */
   resumeWorkOnRestart: boolean
+  /** Default PR merge method used by the Git panel, pre-selected when merging. */
+  defaultMergeMethod: PrMergeMethod
+  /** Hunks whose changed lines exceed this are collapsed with a notice so huge
+   *  diffs do not hurt diff-view performance. */
+  maxDiffLines: number
 }
 
 /** A single layer of the assembled prompt/behavior display. */
@@ -2882,6 +3111,7 @@ export type AppConfigPatch = Partial<
     | 'preferredEditor'
     | 'memory'
     | 'agentDefaults'
+    | 'agentBehaviorPrompt'
     | 'autoDownloadUpdates'
     | 'autoInstallUpdates'
     | 'updateChannel'
@@ -2889,6 +3119,8 @@ export type AppConfigPatch = Partial<
     | 'imageDescriptorAskAgain'
     | 'autoRetryAfterReset'
     | 'resumeWorkOnRestart'
+    | 'defaultMergeMethod'
+    | 'maxDiffLines'
   >
 >
 
@@ -3130,6 +3362,12 @@ export interface PullRequestCompare {
   filesChanged: number
   /** Whether creating a pull request makes sense at all (head is ahead/diverged). */
   hasChanges: boolean
+  /**
+   * An already-open pull request for the exact head→base pair, when one exists.
+   * GitHub rejects a second open PR for the same pair with a 422, so the form
+   * can warn and offer to open the existing PR instead of hitting that error.
+   */
+  existing?: PullRequestSummary | null
 }
 
 /** Full pull request view, loaded when one is opened in the sidebar. */
@@ -3213,6 +3451,8 @@ export interface PullRequestCheck {
     | null
   /** Provider page for the run, when one exists. */
   url: string | null
+  /** GitHub Actions workflow-run id, when this check belongs to an Actions run. */
+  workflowRunId: number | null
 }
 
 /** Rolled-up CI state for a pull request head. */
@@ -3248,6 +3488,14 @@ export interface PrAgentReport {
   updatedAt: number | null
   /** Thread the review was handed to, so the UI can jump back into it. */
   threadId: string | null
+}
+
+/** An agent-composed PR title/description produced by a disposable virtual task. */
+export interface PrComposeReport {
+  title: string
+  description: string
+  /** Disposable task that produced the report; it is not a persisted Thread id. */
+  taskId: string
 }
 
 /** Repository identity resolved from a remote URL (e.g. `owner/repo`). */

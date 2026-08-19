@@ -10,7 +10,11 @@
     GitCommitInfo,
     GitDiff,
     GitFileChange,
+    GitHubDeployment,
+    GitHubDeploymentJob,
+    GitHubDeploymentJobLog,
     GitHubUser,
+    GitHubWorkflowRun,
     GitResetMode,
     GitStashEntry,
     ThreadStatus
@@ -58,14 +62,15 @@
   import GitChangesTree from './GitChangesTree.svelte'
   import GitFileRow from './GitFileRow.svelte'
   import GitHubSignInModal from './GitHubSignInModal.svelte'
-  import GitPullRequestSheet from './GitPullRequestSheet.svelte'
   import GitPullRequestList from './GitPullRequestList.svelte'
   import GitPullRequestDetail from './GitPullRequestDetail.svelte'
   import GitDeploymentsMonitor from './GitDeploymentsMonitor.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
   import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
   import { threadSettings } from '$lib/stores/thread-settings.svelte'
-  import type { PullRequestReference, PullRequestSummary } from '$shared/types'
+  import { prLifecycleStore } from '$lib/stores/pr-lifecycle.svelte'
+  import { gitPanelView } from '$lib/stores/git-panel-view.svelte'
+  import type { PullRequestSummary } from '$shared/types'
 
   interface Props {
     projectId: string
@@ -77,13 +82,21 @@
   type RepoState = 'loading' | 'git_unavailable' | 'not_git' | 'git'
   type TabId = 'changes' | 'history' | 'branches' | 'pulls' | 'deployments' | 'stashes'
 
+  // Hiding the sidebar destroys and recreates this component, so the tab/
+  // selection state is seeded from (and mirrored back into) a persisted
+  // view-state store keyed by project+thread to survive that remount.
+  function initialViewState(): ReturnType<typeof gitPanelView.get> {
+    return gitPanelView.get(projectId, threadId)
+  }
+
+  const savedView = initialViewState()
+
   let repoState = $state<RepoState>('loading')
   let preflightDetail = $state('')
   let diffs = $state<Record<string, GitDiff>>({})
   let expanded = $state<Record<string, boolean>>({})
   let loadingDiff = $state<Record<string, boolean>>({})
   let diffErrors = $state<Record<string, string | null>>({})
-  let showPullRequestSheet = $state(false)
   /** Bumped after a PR is created so the open-PR list refetches. */
   let prListRefresh = $state(0)
   let showIdentityForm = $state(false)
@@ -103,12 +116,13 @@
   let pendingOperation = $state<{ kind: 'merge' | 'rebase'; target: string } | null>(null)
   let checkoutConfirm = $state<string | null>(null)
   let deleteBranchConfirm = $state<string | null>(null)
+  let forceDeleteBranchConfirm = $state<string | null>(null)
   let creatingBranch = $state(false)
   let newBranchName = $state('')
   let acknowledgeActiveTurn = $state(false)
   let agentTurnActive = $state(false)
-  let activeTab = $state<TabId>('changes')
-  let changesView = $state<'list' | 'tree'>('list')
+  let activeTab = $state<TabId>(savedView.activeTab)
+  let changesView = $state<'list' | 'tree'>(savedView.changesView)
   let selectedPaths = $state<Record<string, boolean>>({})
   let discardConfirm = $state<string[] | null>(null)
   let commitSelection = $state(false)
@@ -121,16 +135,18 @@
   let historyHasMore = $state(true)
   const HISTORY_PAGE_SIZE = 30
   let commitMessage = $state('')
-  let selectedCommit = $state<GitCommitInfo | null>(null)
+  let selectedCommit = $state<GitCommitInfo | null>(savedView.selectedCommit)
   let commitDiffChanges = $state<GitFileChange[]>([])
   let deleteCommitTarget = $state<GitCommitInfo | null>(null)
   let showGitHubSignIn = $state(false)
-  let selectedPullRequest = $state<PullRequestSummary | null>(null)
+  let selectedPullRequest = $state<PullRequestSummary | null>(savedView.selectedPullRequest)
   let githubConnected = $state(false)
   let githubConfigured = $state(false)
   let githubUser = $state<GitHubUser | null>(null)
   /** Whether the repo is known to have GitHub deployments — gates the Deployments tab. */
   let hasDeployments = $state(false)
+  /** One PR check-directed workflow run to reveal in the Deployments tab. */
+  let requestedWorkflowRunId = $state<number | null>(null)
   /** Re-entrancy guard for the background deployment probe (not rendered). */
   let detectingDeployments = false
   let loadingCommitDiff = $state(false)
@@ -142,13 +158,23 @@
   let commitTreeCollapsedDirs = $state<Record<string, boolean>>({})
   let amendMode = $state(false)
   let resetConfirm = $state<{ mode: GitResetMode; target: string } | null>(null)
-  let selectedStash = $state<GitStashEntry | null>(null)
+  let selectedStash = $state<GitStashEntry | null>(savedView.selectedStash)
   let loadingStashDiff = $state(false)
   let stashDiffChanges = $state<GitFileChange[]>([])
   let stashDiffs = $state<Record<string, GitDiff>>({})
   let stashExpanded = $state<Record<string, boolean>>({})
   let loadingStashDiffFile = $state<Record<string, boolean>>({})
   let stashDiffErrors = $state<Record<string, string | null>>({})
+
+  $effect(() => {
+    gitPanelView.set(projectId, threadId, {
+      activeTab,
+      changesView,
+      selectedCommit,
+      selectedPullRequest,
+      selectedStash
+    })
+  })
 
   const resetOptions: Array<{ mode: GitResetMode; label: string; hint: string }> = [
     { mode: 'soft', label: 'Soft', hint: 'keep index + worktree' },
@@ -263,6 +289,14 @@
     await gitState.stage(projectId, allPaths)
   }
 
+  async function unstageAll(): Promise<void> {
+    const allPaths = [...new Set(staged.map((change) => change.path))].filter(
+      (path) => !(gitState.status?.conflicted ?? []).includes(path)
+    )
+    if (allPaths.length === 0) return
+    await gitState.unstage(projectId, allPaths)
+  }
+
   async function checkoutBranch(branch: string): Promise<void> {
     if (!branch || branch === status?.branch) return
     await gitState.checkout(projectId, branch)
@@ -272,8 +306,9 @@
     await gitState.createBranch(projectId, name)
   }
 
-  async function deleteBranchAction(name: string): Promise<void> {
-    await gitState.deleteBranch(projectId, name)
+  async function deleteBranchAction(name: string, force = false): Promise<void> {
+    const result = await gitState.deleteBranch(projectId, name, force)
+    if (result === 'requires-force') forceDeleteBranchConfirm = name
   }
 
   /** Checking out switches the working tree, so it always confirms first from the Branches tab. */
@@ -298,6 +333,13 @@
     if (!target) return
     deleteBranchConfirm = null
     await deleteBranchAction(target)
+  }
+
+  async function confirmForceDeleteBranch(): Promise<void> {
+    const target = forceDeleteBranchConfirm
+    if (!target) return
+    forceDeleteBranchConfirm = null
+    await deleteBranchAction(target, true)
   }
 
   /** `git fetch <remote> <name>` — updates that branch's tracking ref without touching HEAD. */
@@ -347,6 +389,119 @@
     } finally {
       detectingDeployments = false
     }
+  }
+
+  /** Route a GitHub Actions PR check into the matching in-app workflow detail. */
+  function openWorkflowRunFromCheck(runId: number): void {
+    selectedPullRequest = null
+    requestedWorkflowRunId = runId
+    hasDeployments = true
+    cacheHasDeployments(projectId, true)
+    activeTab = 'deployments'
+  }
+
+  /** Open a new agent thread with bounded deployment evidence prefilled. */
+  async function createDeploymentDiagnosisThread(title: string, prompt: string): Promise<void> {
+    const project = await invoke('project:get', projectId).catch(() => null)
+    if (!project) return
+    const thread = await invoke('thread:create', {
+      projectId,
+      providerId: 'opencode',
+      title,
+      workingDirectory: project.path,
+      settings: { ...threadSettings.lastUsed }
+    }).catch(() => null)
+    if (!thread) return
+    rendererRecovery.setDraft(projectId, thread.id, prompt, [], [])
+    workspaceState.openThread(thread, project)
+  }
+
+  /** Keep one failed job's evidence useful without overfilling the composer. */
+  function failedJobEvidence(
+    job: GitHubDeploymentJob,
+    log: GitHubDeploymentJobLog | null
+  ): string[] {
+    const failedSteps = job.steps
+      .filter(
+        (step) =>
+          step.status === 'completed' &&
+          step.conclusion !== 'success' &&
+          step.conclusion !== 'neutral' &&
+          step.conclusion !== 'skipped' &&
+          step.conclusion !== 'cancelled'
+      )
+      .map((step) => step.name)
+    const lines = [
+      `Failed job: ${job.name}`,
+      `Job ID: ${job.id}`,
+      `Job status: ${job.status}${job.conclusion ? ` / ${job.conclusion}` : ''}`,
+      `Failed steps: ${failedSteps.length > 0 ? failedSteps.join(', ') : '(not reported)'}`,
+      ...(job.url ? [`Job URL: ${job.url}`] : [])
+    ]
+    if (!log) {
+      return [
+        ...lines,
+        'Job log: unavailable; diagnose from the supplied metadata and local files.'
+      ]
+    }
+    const maxChars = 24_000
+    const excerpt =
+      log.log.length > maxChars ? `[earlier output omitted]\n${log.log.slice(-maxChars)}` : log.log
+    return [...lines, '', 'Failed job log excerpt:', '```text', excerpt, '```']
+  }
+
+  function startWorkflowDiagnosis(
+    run: GitHubWorkflowRun,
+    job: GitHubDeploymentJob,
+    log: GitHubDeploymentJobLog | null
+  ): void {
+    const prompt = [
+      `Review and resolve the failed GitHub Actions job "${job.name}" only.`,
+      `Workflow: ${run.name} #${run.runNumber}`,
+      `Run ID: ${run.id}`,
+      `Status: ${run.status}${run.conclusion ? ` / ${run.conclusion}` : ''}`,
+      `Branch: ${run.branch || '(unknown)'}`,
+      `Commit: ${run.headSha || '(unknown)'}`,
+      ...(run.url ? [`Workflow URL: ${run.url}`] : []),
+      '',
+      ...failedJobEvidence(job, log),
+      '',
+      'Use the supplied job metadata and log as the primary evidence. Do not assume GitHub or the remote repository is accessible.',
+      'If local repository files are available, inspect only what is relevant to this failed job and reproduce the failure where practical.',
+      'If the cause is in this repository, implement the smallest correct fix, run the relevant checks/tests, and commit the completed change.',
+      'If repository access is unavailable, diagnose from the evidence and give the exact file/configuration change or operator action required.',
+      'If the cause is external infrastructure, permissions, or secrets, do not guess or expose credentials.',
+      'Do not push, rerun workflows, or deploy.'
+    ].join('\n')
+    void createDeploymentDiagnosisThread(`Review failed job: ${job.name}`, prompt)
+  }
+
+  function startDeploymentDiagnosis(
+    deployment: GitHubDeployment,
+    run: GitHubWorkflowRun | null,
+    job: GitHubDeploymentJob,
+    log: GitHubDeploymentJobLog | null
+  ): void {
+    const deploymentUrl = `https://github.com/${encodeURIComponent(githubIdentity?.owner ?? '')}/${encodeURIComponent(githubIdentity?.repo ?? '')}/deployments/${deployment.id}`
+    const prompt = [
+      `Review and resolve the failed deployment job "${job.name}" only.`,
+      `Deployment ID: ${deployment.id}`,
+      `Status: ${deployment.latestStatus?.state ?? 'unknown'}`,
+      `Ref: ${deployment.ref || '(unknown)'}`,
+      `Commit: ${deployment.sha || '(unknown)'}`,
+      `Deployment URL: ${deploymentUrl}`,
+      ...(run ? [`Linked workflow run: ${run.name} #${run.runNumber} (ID ${run.id})`] : []),
+      '',
+      ...failedJobEvidence(job, log),
+      '',
+      'Use the supplied job metadata and log as the primary evidence. Do not assume GitHub or the remote repository is accessible.',
+      'If local repository files are available, inspect only what is relevant to this failed job and reproduce the failure where practical.',
+      'If the cause is in this repository, implement the smallest correct fix, run the relevant checks/tests, and commit the completed change.',
+      'If repository access is unavailable, diagnose from the evidence and give the exact file/configuration change or operator action required.',
+      'If the cause is external infrastructure, permissions, or secrets, do not guess or expose credentials.',
+      'Do not push, rerun workflows, or deploy.'
+    ].join('\n')
+    void createDeploymentDiagnosisThread(`Review failed job: ${job.name}`, prompt)
   }
 
   /**
@@ -484,32 +639,6 @@
       '',
       'Do NOT push — finish in the Git panel with the app push, which uses your stored GitHub credentials.'
     ].join('\n')
-  }
-
-  /** Open a just-created PR inside the git panel's PR detail view. */
-  function viewCreatedPullRequest(created: {
-    reference: PullRequestReference
-    head: string
-    base: string
-    draft: boolean
-  }): void {
-    showPullRequestSheet = false
-    // The sheet can be opened from the header dropdown on any tab — make sure the
-    // PR detail view is actually on screen before selecting the new PR.
-    activeTab = 'pulls'
-    selectedPullRequest = {
-      number: created.reference.number,
-      title: created.reference.title,
-      url: created.reference.url,
-      state: 'open',
-      draft: created.draft,
-      authorLogin: '',
-      headRef: created.head,
-      baseRef: created.base,
-      createdAt: '',
-      updatedAt: '',
-      comments: 0
-    }
   }
 
   async function signOutGitHub(): Promise<void> {
@@ -774,9 +903,20 @@
     if (!gitState.error) {
       commitMessage = ''
       amendMode = false
+      // The committed files have left the panel — drop their selection so the
+      // "N selected" counter next to "Stage all" doesn't point at ghosts.
+      clearSelection()
       void refreshStatus()
       void reloadHistory()
     }
+  }
+
+  function onCommitMessageKeydown(event: KeyboardEvent): void {
+    // Enter never commits by itself — only Cmd/Ctrl+Enter does, so writing a
+    // multi-line message can never fire the commit early.
+    if (event.key !== 'Enter' || !(event.metaKey || event.ctrlKey)) return
+    event.preventDefault()
+    void commitInline()
   }
 
   async function reloadHistory(): Promise<void> {
@@ -861,17 +1001,28 @@
 
   onMount(() => {
     gitState.ensureProjectEvents(projectId)
+    const unsubscribePullRequestOpen = gitPanelView.onPullRequestOpen(
+      (requestedProjectId, requestedThreadId, pullRequest) => {
+        if (requestedProjectId !== projectId || requestedThreadId !== threadId) return
+        selectedPullRequest = pullRequest
+        activeTab = 'pulls'
+      }
+    )
     // Agent-turn state is event-driven: main broadcasts `thread:updated` on
     // every status transition (planning/executing/completed/failed), so the
     // panel reacts to those instead of polling. The one-shot fetch of the
     // current status lives in the `refreshAgentTurnState` $effect above.
-    return subscribe('thread:updated', (...args: unknown[]) => {
+    const unsubscribeThreadUpdates = subscribe('thread:updated', (...args: unknown[]) => {
       const thread = args[0] as
         { projectId?: string; id?: string; status?: ThreadStatus } | undefined
       if (thread && thread.projectId === projectId && thread.id === threadId) {
         agentTurnActive = thread.status === 'executing' || thread.status === 'planning'
       }
     })
+    return () => {
+      unsubscribePullRequestOpen()
+      unsubscribeThreadUpdates()
+    }
   })
 
   const identityNeeded = $derived(
@@ -1310,7 +1461,7 @@
             >
               <DropdownMenu.Item
                 class="flex cursor-pointer items-center gap-2 px-3 py-1.5 text-[11px] text-foreground outline-none data-highlighted:bg-elevated"
-                onSelect={() => (showPullRequestSheet = true)}
+                onSelect={() => prLifecycleStore.open(projectId, threadId)}
               >
                 <GitPullRequest size={12} class="shrink-0 text-dimmed" />
                 Create pull request…
@@ -1730,6 +1881,15 @@
                     onclick={() => void stageAll()}
                   >
                     Stage all
+                  </button>
+                {:else if staged.length > 0}
+                  <button
+                    type="button"
+                    class="shrink-0 rounded-md border border-danger/30 px-2 py-1 text-[10px] font-medium text-danger transition-colors hover:bg-danger/10 disabled:cursor-default disabled:opacity-40"
+                    disabled={gitState.isBusy('unstage')}
+                    onclick={() => void unstageAll()}
+                  >
+                    Unstage all
                   </button>
                 {/if}
                 {#if changes.length > 0 && selectedPathList.length > 0}
@@ -2332,6 +2492,7 @@
               onBack={() => (selectedPullRequest = null)}
               onAgentReview={(pr) => void startAgentReview(pr)}
               onOpenThread={(threadId) => void openReviewThread(threadId)}
+              onOpenWorkflowRun={openWorkflowRunFromCheck}
               onResolveLocally={(pr) => void resolveConflictsLocally(pr)}
               onResolveWithAgent={(pr) => void startConflictResolution(pr)}
             />
@@ -2342,7 +2503,7 @@
               {githubConnected}
               onOpen={(pr) => (selectedPullRequest = pr)}
               onSignIn={() => (showGitHubSignIn = true)}
-              onCreate={() => (showPullRequestSheet = true)}
+              onCreate={() => prLifecycleStore.open(projectId, threadId)}
               refreshSignal={prListRefresh}
             />
           {/if}
@@ -2353,6 +2514,10 @@
           identity={githubIdentity}
           {githubConnected}
           onSignIn={() => (showGitHubSignIn = true)}
+          requestedRunId={requestedWorkflowRunId}
+          onRequestedRunOpened={() => (requestedWorkflowRunId = null)}
+          onAgentDiagnoseRun={startWorkflowDiagnosis}
+          onAgentDiagnoseDeployment={startDeploymentDiagnosis}
         />
       {:else if activeTab === 'stashes'}
         <div class="p-2">
@@ -2505,7 +2670,8 @@
           bind:this={commitTextarea}
           class="min-h-11 w-full resize-none rounded-md border border-border bg-elevated px-2.5 py-2 font-mono text-[11px] leading-relaxed text-foreground outline-none placeholder:text-dimmed focus:border-primary"
           placeholder={amendMode ? 'Amended commit message…' : 'Commit message…'}
-          bind:value={commitMessage}></textarea>
+          bind:value={commitMessage}
+          onkeydown={onCommitMessageKeydown}></textarea>
       </div>
       <div class="flex items-center gap-1.5 px-2 py-2">
         <span class="flex-1"></span>
@@ -2676,15 +2842,6 @@
         // instead of leaving a stale "Sign in" button behind.
         void loadGitHubAuth()
       }}
-    />
-  {/if}
-
-  {#if showPullRequestSheet}
-    <GitPullRequestSheet
-      {projectId}
-      onClose={() => (showPullRequestSheet = false)}
-      onCreated={() => (prListRefresh += 1)}
-      onView={viewCreatedPullRequest}
     />
   {/if}
 
@@ -3096,6 +3253,42 @@
               class="flex h-8 items-center gap-1.5 rounded-lg bg-danger px-3 text-xs font-medium text-on-primary hover:opacity-90 disabled:opacity-50"
               disabled={gitState.isBusy('checkout')}
               onclick={() => void confirmDeleteBranch()}
+            >
+              {#if gitState.isBusy('checkout')}
+                <Loader2 size={12} class="animate-spin" />
+              {/if}
+              Delete branch
+            </AlertDialog.Action>
+          </div>
+        </AlertDialog.Content>
+      </AlertDialog.Portal>
+    </AlertDialog.Root>
+  {/if}
+
+  {#if forceDeleteBranchConfirm}
+    {@const target = forceDeleteBranchConfirm}
+    <AlertDialog.Root open onOpenChange={() => (forceDeleteBranchConfirm = null)}>
+      <AlertDialog.Portal>
+        <AlertDialog.Content
+          class="fixed left-1/2 top-1/2 z-50 w-[min(28rem,calc(100vw-2rem))] -translate-x-1/2 -translate-y-1/2 rounded-xl border border-border bg-surface p-5 shadow-xl"
+        >
+          <AlertDialog.Title class="text-sm font-semibold text-foreground">
+            Force delete branch “{target}”?
+          </AlertDialog.Title>
+          <AlertDialog.Description class="mt-2 text-xs leading-5 text-muted">
+            Branch <strong class="font-medium text-foreground">{target}</strong> is not fully merged.
+            Are you sure you want to delete it? Unmerged commits may become unreachable.
+          </AlertDialog.Description>
+          <div class="mt-5 flex justify-end gap-2">
+            <AlertDialog.Cancel
+              class="h-8 rounded-lg border border-border px-3 text-xs text-foreground hover:bg-elevated"
+            >
+              Cancel
+            </AlertDialog.Cancel>
+            <AlertDialog.Action
+              class="flex h-8 items-center gap-1.5 rounded-lg bg-danger px-3 text-xs font-medium text-on-primary hover:opacity-90 disabled:opacity-50"
+              disabled={gitState.isBusy('checkout')}
+              onclick={() => void confirmForceDeleteBranch()}
             >
               {#if gitState.isBusy('checkout')}
                 <Loader2 size={12} class="animate-spin" />

@@ -17,6 +17,7 @@ export type SettingsSection =
   | 'audits'
   | 'harnesses'
   | 'utilities'
+  | 'keymap'
   | 'remote'
   | 'cloud-deployments'
   | 'about'
@@ -32,6 +33,7 @@ export type MainView =
   | 'settings-audits'
   | 'settings-harnesses'
   | 'settings-utilities'
+  | 'settings-keymap'
   | 'settings-remote'
   | 'settings-cloud-deployments'
   | 'settings-about'
@@ -39,6 +41,11 @@ export type MainView =
 export interface SelectedThreadReference {
   projectId: string
   threadId: string
+}
+
+export interface StartAfterThreadReference {
+  id: string
+  title: string
 }
 
 /** A single saved composer draft — text plus any file attachments. */
@@ -49,6 +56,8 @@ export interface ComposerDraftEntry {
   taskReferences: PromptAssignmentTaskReference[]
   /** Response-selection annotations attached to the composer (agent-output excerpts + comments). */
   promptReferences: QueuedResponseReference[]
+  /** Source threads the next message waits for before it starts. */
+  startAfterThreads: StartAfterThreadReference[]
 }
 
 /** A selected assistant-response excerpt anchored to a message range. */
@@ -71,6 +80,8 @@ export interface QueuedMessageEntry {
   projectReferences: PromptProjectReference[]
   presentation?: UserMessagePresentation
   taskReferences: PromptAssignmentTaskReference[]
+  /** Source threads that must all reach a terminal state before delivery. */
+  startAfterThreads: StartAfterThreadReference[]
 }
 
 export interface RendererRecoverySnapshot {
@@ -119,6 +130,7 @@ const MAIN_VIEWS: readonly MainView[] = [
   'settings-audits',
   'settings-harnesses',
   'settings-utilities',
+  'settings-keymap',
   'settings-remote',
   'settings-about'
 ]
@@ -129,6 +141,7 @@ const SETTINGS_SECTIONS: readonly SettingsSection[] = [
   'audits',
   'harnesses',
   'utilities',
+  'keymap',
   'remote',
   'cloud-deployments',
   'about'
@@ -261,21 +274,15 @@ export function settingsSectionForView(view: MainView): SettingsSection | null {
   return null
 }
 
-/** Migrate legacy standalone 'providers'/'remote' views into their settings pages. */
 function normalizeMainView(value: unknown): MainView | null {
-  if (value === 'providers') return settingsViewForSection('harnesses')
-  if (value === 'settings-providers') return 'settings-harnesses'
-  if (value === 'remote') return settingsViewForSection('remote')
   return typeof value === 'string' && MAIN_VIEWS.some((view) => view === value)
     ? (value as MainView)
     : null
 }
 
-function parseContentView(value: unknown, activeView: MainView): 'projects' | 'chats' | 'threads' {
+function parseContentView(value: unknown): 'projects' | 'chats' | 'threads' {
   if (value === 'projects' || value === 'chats' || value === 'threads') return value
-  // Legacy snapshots don't carry a content view — fall back to the active view
-  // so an app closed directly on Threads/Chats still returns there.
-  return activeView === 'chats' || activeView === 'threads' ? activeView : 'projects'
+  return 'projects'
 }
 
 function parseNonSettingsView(value: unknown, fallback: MainView): MainView {
@@ -309,6 +316,26 @@ function parseSelectedThread(value: unknown): SelectedThreadReference | null {
   return { projectId: value.projectId, threadId: value.threadId }
 }
 
+function parseStartAfterThread(value: unknown): StartAfterThreadReference | null {
+  if (!isRecord(value) || !isRecoveryIdentifier(value.id)) return null
+  return {
+    id: value.id,
+    title: typeof value.title === 'string' && value.title.length > 0 ? value.title : 'Thread'
+  }
+}
+
+function parseStartAfterThreads(value: unknown): StartAfterThreadReference[] {
+  if (!Array.isArray(value)) return []
+  const references: StartAfterThreadReference[] = []
+  for (const item of value) {
+    const reference = parseStartAfterThread(item)
+    if (reference && !references.some((existing) => existing.id === reference.id)) {
+      references.push(reference)
+    }
+  }
+  return references
+}
+
 function parseFavoriteModels(value: unknown): string[] {
   if (!Array.isArray(value)) return []
   return value.filter((s): s is string => typeof s === 'string' && s.length > 0)
@@ -328,19 +355,6 @@ function parseDrafts(value: unknown): Record<string, ComposerDraftEntry> {
     if (count >= MAX_RECOVERY_DRAFTS) break
     if (!isDraftKey(key)) continue
 
-    // Backwards compatibility: old snapshots stored a plain string.
-    if (typeof raw === 'string' && raw.length <= MAX_DRAFT_LENGTH) {
-      drafts[key] = {
-        text: raw,
-        attachments: [],
-        projectReferences: [],
-        taskReferences: [],
-        promptReferences: []
-      }
-      count += 1
-      continue
-    }
-
     if (!isRecord(raw)) continue
     const text = typeof raw.text === 'string' ? raw.text : ''
     if (text.length > MAX_DRAFT_LENGTH) continue
@@ -357,7 +371,15 @@ function parseDrafts(value: unknown): Record<string, ComposerDraftEntry> {
     const promptReferences = Array.isArray(raw.promptReferences)
       ? raw.promptReferences.filter(isQueuedResponseReference).slice(0, 20)
       : []
-    drafts[key] = { text, attachments, projectReferences, taskReferences, promptReferences }
+    const startAfterThreads = parseStartAfterThreads(raw.startAfterThreads)
+    drafts[key] = {
+      text,
+      attachments,
+      projectReferences,
+      taskReferences,
+      promptReferences,
+      startAfterThreads
+    }
     count += 1
   }
   return drafts
@@ -395,7 +417,8 @@ function parseQueuedMessages(value: unknown): Record<string, QueuedMessageEntry>
       promptReferences,
       projectReferences,
       presentation: isUserMessagePresentation(raw.presentation) ? raw.presentation : undefined,
-      taskReferences
+      taskReferences,
+      startAfterThreads: parseStartAfterThreads(raw.startAfterThreads)
     }
     count += 1
   }
@@ -418,7 +441,7 @@ export function parseRendererRecoveryState(raw: string | null): RendererRecovery
       selectedThread?.projectId ??
       (isRecoveryIdentifier(parsed.selectedProjectId) ? parsed.selectedProjectId : null)
     const activeView = normalizeMainView(parsed.activeView) ?? 'projects'
-    const lastContentView = parseContentView(parsed.lastContentView, activeView)
+    const lastContentView = parseContentView(parsed.lastContentView)
     const lastViewBeforeSettings = parseNonSettingsView(
       parsed.lastViewBeforeSettings,
       lastContentView

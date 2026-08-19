@@ -1,5 +1,8 @@
 <script lang="ts">
   import { tick } from 'svelte'
+  import { fly } from 'svelte/transition'
+  import { cubicOut } from 'svelte/easing'
+  import { motionDuration } from '$lib/motion'
   import { SvelteMap, SvelteSet } from 'svelte/reactivity'
   import {
     Plus,
@@ -17,7 +20,18 @@
     Copy,
     FolderKanban,
     ArrowUpDown,
-    Check
+    Bot,
+    Check,
+    BrainCircuit,
+    Bug,
+    Cloud,
+    FileDiff,
+    FolderTree,
+    History,
+    Info,
+    MessageCircleDashed,
+    SquareTerminal,
+    StickyNote
   } from '@lucide/svelte'
   import { Dialog, DropdownMenu } from 'bits-ui'
   import ProjectSwitch from '../shared/ProjectSwitch.svelte'
@@ -28,6 +42,7 @@
   import SidebarSearchControl from './SidebarSearchControl.svelte'
   import PinnedSection from '../threads/PinnedSection.svelte'
   import ThreadRow from '../threads/ThreadRow.svelte'
+  import ThreadNotePanel from '../threads/ThreadNotePanel.svelte'
   import ThreadSearchResultRow from '../shared/ThreadSearchResultRow.svelte'
   import ThreadSwitcher from '../threads/ThreadSwitcher.svelte'
   import ThreadView from '../threads/ThreadView.svelte'
@@ -36,6 +51,8 @@
   import ProjectFilesPanel from '../files/ProjectFilesPanel.svelte'
   import DiffSidebarPanel from '../files/DiffSidebarPanel.svelte'
   import ContextSidebar from '../layout/ContextSidebar.svelte'
+  import ContextDock, { type ContextDockItem } from '../layout/ContextDock.svelte'
+  import { coordinatorDockState } from '$lib/stores/coordinator-dock.svelte'
   import SubagentSessionView from '../threads/SubagentSessionView.svelte'
   import SourcesPanel from '../threads/SourcesPanel.svelte'
   import TemporaryChatView from '../chats/TemporaryChatView.svelte'
@@ -63,6 +80,11 @@
     chatSettings,
     chatEffectiveSettings
   } from '$lib/stores/thread-settings.svelte'
+  import {
+    persistInheritedThreadSettings,
+    settingsForNewThread,
+    threadWithInheritedSettings
+  } from '$lib/thread-settings-inheritance'
   import { providerCatalog } from '$lib/stores/provider-catalog.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
   import { gitState } from '$lib/stores/git.svelte'
@@ -75,6 +97,8 @@
   import { trafficLightInsetStyle } from '$lib/stores/traffic-light.svelte'
   import AgentDebugPanel from '$lib/components/debug/AgentDebugPanel.svelte'
   import { notificationPanelState } from '$lib/stores/notification-panel.svelte'
+  import { threadNotesState } from '$lib/stores/thread-notes.svelte'
+  import { memoryProposalState } from '$lib/stores/memory-proposals.svelte'
   import { rendererRecovery, type MainView } from '$lib/stores/renderer-recovery.svelte'
   import { modelKey } from '$lib/model-keys'
   import { reportError } from '$lib/stores/app-errors.svelte'
@@ -87,6 +111,8 @@
   } from '$lib/stores/workspace.svelte'
   import type { ThreadSortMode } from '$lib/stores/workspace.svelte'
   import { threadSortState } from '$lib/stores/thread-sort.svelte'
+  import { agentRuns } from '$lib/stores/agent-runs.svelte'
+  import { threadMessages } from '$lib/stores/thread-messages.svelte'
   import { scopeState, STAGE_LABELS, STAGE_COLORS, STAGE_ORDER } from '$lib/stores/scope.svelte'
   import {
     coordinatorHasActiveDelegates,
@@ -96,7 +122,7 @@
     isThreadWorking,
     isOrchestrationChildThread
   } from '$shared/types'
-  import { APP_NAME, APP_SLUG } from '$shared/brand'
+  import { APP_NAME } from '$shared/brand'
   import type {
     AgentPart,
     AppConfig,
@@ -437,7 +463,7 @@
     if (current !== prevProjectFileOpenCount && !loading) {
       prevProjectFileOpenCount = current
       const request = workspaceState.consumeProjectFileOpenRequest()
-      if (request) void openProjectFileFromCommand(request.projectId, request.path)
+      if (request) void openProjectFileFromCommand(request.projectId, request.path, request.kind)
     }
   })
 
@@ -528,9 +554,10 @@
   }
 
   function threadHasVisibleWork(thread: Thread): boolean {
-    return (
-      isThreadWorking(thread) || coordinatorHasActiveDelegates(thread, scopeState.allScopeThreads)
-    )
+    const settledWorking = agentRuns.hasSettled(thread.projectId, thread.id)
+      ? agentRuns.isBusy(thread.projectId, thread.id)
+      : Boolean(thread.sessionId) && isThreadWorking(thread)
+    return settledWorking || coordinatorHasActiveDelegates(thread, scopeState.allScopeThreads)
   }
 
   // Threads-view global search (activation + query), mirroring the per-project
@@ -654,53 +681,300 @@
     contextSidebarState.openCloudDeployments(selectedThread.projectId, selectedThread.id)
   }
 
-  let sidebarActions = $derived.by(() => {
+  // ─── Context dock (right rail) ───────────────────────────────────────────
+
+  /** Whether `kind` is the panel currently on screen in the right sidebar. */
+  function dockKindActive(kind: ContextSidebarTab['kind']): boolean {
+    return contextSidebarState.sidebarVisible && contextSidebarState.sidebarActiveTab?.kind === kind
+  }
+
+  /**
+   * The dock's toggle contract: clicking the active tool collapses the panel,
+   * clicking any other tool swaps the panel content without closing it.
+   */
+  function toggleDockPanel(kind: ContextSidebarTab['kind'], open: () => void): void {
+    if (dockKindActive(kind)) {
+      contextSidebarState.hide()
+      return
+    }
+    open()
+  }
+
+  /** Quick chats, explains and audits open from inside a thread and live in the
+   *  sidebar as tabs. The rail only mirrors them so they can be toggled away
+   *  and back without losing the conversation. */
+  let temporaryChatTabs = $derived(
+    contextSidebarState.sidebarTabs.filter((tab) => tab.kind === 'temporary-chat')
+  )
+
+  function focusTemporaryChat(): void {
+    const tab = temporaryChatTabs.at(-1)
+    if (tab) contextSidebarState.focus(tab.id)
+  }
+
+  let subagentTabs = $derived(
+    contextSidebarState.sidebarTabs.filter((tab) => tab.kind === 'subagent')
+  )
+
+  function focusSubagent(): void {
+    const tab = subagentTabs.at(-1)
+    if (tab) contextSidebarState.focus(tab.id)
+  }
+
+  function openMemoryTab(): void {
+    if (!selectedThread) return
+    contextSidebarState.openMemory(selectedThread.projectId, selectedThread.id)
+  }
+
+  /** The coordinator published by the thread on screen, if it coordinates work. */
+  let coordinator = $derived(
+    coordinatorDockState.forThread(selectedThread?.projectId, selectedThread?.id)
+  )
+
+  function openCoordinatorTab(): void {
+    if (!coordinator) return
+    coordinatorDockState.setAutoOpen(true)
+    contextSidebarState.openCoordinator(
+      coordinator.projectId,
+      coordinator.threadId,
+      coordinator.label
+    )
+  }
+
+  /** Terminals toggle their own region: the bottom dock when docked there,
+   *  otherwise the right sidebar like every other tool. */
+  function toggleTerminal(): void {
+    if (!selectedThread) return
+
+    if (contextSidebarState.terminalPlacement === 'bottom') {
+      // The bottom dock is an independent region, so the rail toggles the dock
+      // itself — never the focused tab. Whether a terminal happens to hold the
+      // global focus is irrelevant: if the dock exists in any form it folds
+      // away, and only a dock with no terminals at all opens a fresh shell.
+      if (contextSidebarState.terminalDockVisible || contextSidebarState.terminalDockCollapsed) {
+        contextSidebarState.toggleTerminalDock()
+        return
+      }
+      contextSidebarState.openPrimaryTerminal(selectedThread.projectId, selectedThread.id)
+      return
+    }
+
+    // Docked to the right, the terminal is just another sidebar panel.
+    const sidebarTab = contextSidebarState.sidebarActiveTab
+    const terminalFocused =
+      sidebarTab?.kind === 'terminal' &&
+      sidebarTab.projectId === selectedThread.projectId &&
+      sidebarTab.threadId === selectedThread.id
+
+    if (contextSidebarState.sidebarVisible && terminalFocused) {
+      contextSidebarState.hide()
+    } else {
+      contextSidebarState.openPrimaryTerminal(selectedThread.projectId, selectedThread.id)
+    }
+  }
+
+  /** True while a terminal is on screen in whichever region hosts terminals. */
+  let terminalOpen = $derived(
+    contextSidebarState.terminalPlacement === 'bottom'
+      ? contextSidebarState.terminalDockVisible
+      : Boolean(
+          contextSidebarState.sidebarVisible && contextSidebarState.activeTab?.kind === 'terminal'
+        )
+  )
+
+  /** Project files and diffs only exist for local projects with a real path. */
+  let projectToolsAvailable = $derived(
+    Boolean(activeProject?.source === 'local' && activeProject.path)
+  )
+
+  /** Whether the message-history jump menu (first item on the context dock) is open. */
+  let showHistoryMenu = $state(false)
+
+  function jumpToHistoryMessage(id: string): void {
+    showHistoryMenu = false
+    workspaceState.jumpToMessage?.(id)
+  }
+
+  /**
+   * Dock contents, grouped: history, then workspace tools, then session tools.
+   * Every entry is a toggle — the rail itself is always visible, only the
+   * panel (or, for history, the floating jump menu) comes and goes.
+   */
+  let dockGroups = $derived.by((): ContextDockItem[][] => {
     if (!selectedThread) return []
-    const actions = [
+
+    // Chats are pure conversations: their rail only carries session tools
+    // (sources, memory, debugger in dev) — never project, terminal or cloud tools.
+    const isChatThread = selectedThread.projectId === INBOX_PROJECT_ID
+
+    // The message-history counter leads the rail so it reads first, like a
+    // running tally of the conversation — click to jump to any past message.
+    // Before the first message it falls back to a plain history icon: there's
+    // no count worth showing yet, and "0" reads as a stuck/broken badge.
+    const hasMessages = workspaceState.messageCount > 0
+    const history: ContextDockItem[] = [
+      {
+        id: 'history',
+        label: hasMessages
+          ? `Message history (${workspaceState.messageCount} messages you sent)`
+          : 'Message history',
+        icon: hasMessages ? undefined : History,
+        countLabel: hasMessages ? String(workspaceState.messageCount) : undefined,
+        active: showHistoryMenu,
+        menu: showHistoryMenu ? historyMenu : undefined,
+        onSelect: () => (showHistoryMenu = !showHistoryMenu)
+      }
+    ]
+
+    const workspaceTools: ContextDockItem[] = []
+    if (!isChatThread && projectToolsAvailable) {
+      workspaceTools.push(
+        {
+          id: 'files',
+          label: 'Files',
+          icon: FolderTree,
+          active: dockKindActive('files'),
+          onSelect: () => toggleDockPanel('files', () => void openFiles())
+        },
+        {
+          id: 'diff',
+          label: 'Changes',
+          icon: FileDiff,
+          active: dockKindActive('diff'),
+          onSelect: () => toggleDockPanel('diff', openDiff)
+        }
+      )
+    }
+    if (!isChatThread && workspaceState.terminalAvailable) {
+      workspaceTools.push({
+        id: 'terminal',
+        label: terminalOpen ? 'Hide terminal' : 'Show terminal',
+        icon: SquareTerminal,
+        active: terminalOpen,
+        onSelect: toggleTerminal
+      })
+    }
+
+    const sessionTools: ContextDockItem[] = [
       {
         id: 'sources',
         label: 'Sources',
-        description: 'View sources attached to this conversation',
-        onSelect: openSourcesTab
-      },
-      ...(activeProject?.source === 'local' && activeProject.path
-        ? [
-            {
-              id: 'files',
-              label: 'Files',
-              description: 'Browse and edit project files',
-              onSelect: () => void openFiles()
-            },
-            {
-              id: 'diff',
-              label: 'Changes',
-              description: 'Review changes from completed runs',
-              onSelect: openDiff
-            }
-          ]
-        : []),
-      {
-        id: 'cloud-deployments',
-        label: 'Cloud Deployments',
-        description: 'Monitor your cloud deployments',
-        onSelect: openCloudDeploymentsTab
+        icon: Info,
+        active: dockKindActive('sources'),
+        onSelect: () => toggleDockPanel('sources', openSourcesTab)
       },
       {
-        id: 'terminal',
-        label: 'Terminal',
-        description: 'Open a shell',
-        onSelect: openNewTerminal
+        id: 'memory',
+        label: 'Memory',
+        icon: BrainCircuit,
+        active: dockKindActive('memory'),
+        badge: memoryProposalState.hasPending ? 'attention' : undefined,
+        badgeTitle: `${memoryProposalState.pendingCount} memory proposals need attention`,
+        onSelect: () => toggleDockPanel('memory', openMemoryTab)
       }
     ]
-    if (import.meta.env.DEV) {
-      actions.push({
-        id: 'debugger',
-        label: 'Debugger',
-        description: 'Inspect agent requests',
-        onSelect: openDebugger
+    if (!isChatThread) {
+      sessionTools.push({
+        id: 'cloud-deployment',
+        label: 'Cloud deployments',
+        icon: Cloud,
+        active: dockKindActive('cloud-deployment'),
+        onSelect: () => toggleDockPanel('cloud-deployment', openCloudDeploymentsTab)
       })
     }
-    return actions
+    if (import.meta.env.DEV) {
+      sessionTools.push({
+        id: 'debugger',
+        label: 'Debugger',
+        icon: Bug,
+        active: dockKindActive('debugger'),
+        onSelect: () => toggleDockPanel('debugger', openDebugger)
+      })
+    }
+
+    // Temporary chats get their own hairline-separated slot: they are ephemeral
+    // side conversations, not standing tools, and one button toggles the whole
+    // set because the panel tabs them.
+    const temporaryChats: ContextDockItem[] = []
+    if (temporaryChatTabs.length > 0) {
+      const name =
+        temporaryChatTabs.length === 1
+          ? (temporaryChatTabs.at(-1)?.title ?? 'Quick chat')
+          : `${temporaryChatTabs.length} quick chats`
+      temporaryChats.push({
+        id: 'temporary-chat',
+        label: dockKindActive('temporary-chat') ? `Hide ${name}` : `Show ${name}`,
+        icon: MessageCircleDashed,
+        active: dockKindActive('temporary-chat'),
+        tone: 'info',
+        onSelect: () => toggleDockPanel('temporary-chat', focusTemporaryChat)
+      })
+    }
+
+    // The coordinator sits alone at the bottom, below its own hairline: it is
+    // the thread's own supervision surface, not a general workspace tool.
+    const coordination: ContextDockItem[] = coordinator
+      ? [
+          {
+            id: 'coordinator',
+            label: coordinator.label,
+            icon: coordinator.icon,
+            active: dockKindActive('coordinator'),
+            onSelect: () => toggleDockPanel('coordinator', openCoordinatorTab)
+          }
+        ]
+      : []
+
+    // The thread-note indicator sits below its own hairline. It's always
+    // present — not just once a note exists — so it also doubles as the "add a
+    // note" entry point; the amber tone only kicks in once there's something
+    // written to draw attention to.
+    const hasThreadNote = threadNotesState.has(selectedThread.id)
+    const threadNote: ContextDockItem[] = [
+      {
+        id: 'note',
+        label: hasThreadNote ? 'Note available' : 'Add note',
+        icon: StickyNote,
+        active: dockKindActive('thread-note'),
+        tone: hasThreadNote ? 'warning' : undefined,
+        onSelect: () =>
+          toggleDockPanel('thread-note', () =>
+            contextSidebarState.openThreadNote(
+              selectedThread.projectId,
+              selectedThread.id,
+              selectedThread.title
+            )
+          )
+      }
+    ]
+
+    // Sub-agents appear only after the first one is opened. The group shares
+    // one toggle, while the sidebar keeps each sub-agent in its own tab.
+    const subagents: ContextDockItem[] = []
+    if (subagentTabs.length > 0) {
+      const name =
+        subagentTabs.length === 1
+          ? (subagentTabs.at(-1)?.title ?? 'Sub-agent')
+          : `${subagentTabs.length} sub-agents`
+      subagents.push({
+        id: 'subagent',
+        label: dockKindActive('subagent') ? `Hide ${name}` : `Show ${name}`,
+        icon: Bot,
+        active: dockKindActive('subagent'),
+        tone: 'info',
+        onSelect: () => toggleDockPanel('subagent', focusSubagent)
+      })
+    }
+
+    return [
+      history,
+      workspaceTools,
+      sessionTools,
+      temporaryChats,
+      coordination,
+      threadNote,
+      subagents
+    ]
   })
 
   function openNestedSubagent(part: Extract<AgentPart, { type: 'subagent' }>): void {
@@ -713,29 +987,65 @@
     )
   }
 
-  /** Actions offered inside the bottom terminal dock — only new shells belong there. */
-  let terminalDockActions = $derived.by(() => {
-    if (!selectedThread) return []
-    return [
-      {
-        id: 'terminal',
-        label: 'Terminal',
-        description: 'Open a shell',
-        onSelect: openNewTerminal
-      }
-    ]
-  })
-
   let terminalFullscreenTabId = $state<string | null>(null)
   let sidebarVisible = $derived(contextSidebarState.sidebarVisible)
   let terminalDockVisible = $derived(contextSidebarState.terminalDockVisible)
+
+  // The grid column/row that hosts each panel collapses the instant
+  // `sidebarVisible`/`terminalDockVisible` flips, but the panel itself keeps
+  // playing its out:fly for PANEL_EXIT_MS. Without this, the closing panel is
+  // orphaned outside the (now single-track) grid for that whole window —
+  // a stray gap opens up where its column used to be. Reserving the track
+  // until the outro actually finishes keeps the panel inside its cell for
+  // the whole animation.
+  const PANEL_EXIT_MS = 160
+  let sidebarTrackReserved = $state(false)
+  let sidebarWasVisible = false
+  $effect(() => {
+    if (sidebarVisible) {
+      sidebarWasVisible = true
+      sidebarTrackReserved = true
+      return
+    }
+    if (!sidebarWasVisible) return
+    sidebarWasVisible = false
+    const timer = setTimeout(
+      () => {
+        sidebarTrackReserved = false
+      },
+      motionDuration(PANEL_EXIT_MS + 40)
+    )
+    return () => clearTimeout(timer)
+  })
+  let terminalTrackReserved = $state(false)
+  let terminalWasVisible = false
+  $effect(() => {
+    if (terminalDockVisible) {
+      terminalWasVisible = true
+      terminalTrackReserved = true
+      return
+    }
+    if (!terminalWasVisible) return
+    terminalWasVisible = false
+    const timer = setTimeout(
+      () => {
+        terminalTrackReserved = false
+      },
+      motionDuration(PANEL_EXIT_MS + 40)
+    )
+    return () => clearTimeout(timer)
+  })
+
   let contextPanelColumns = $derived(
-    sidebarVisible
+    sidebarTrackReserved
       ? `minmax(360px, 1fr) minmax(0, min(${contextSidebarState.width}px, calc(100% - 360px)))`
       : 'minmax(0, 1fr)'
   )
+  // A folded dock leaves no restore strip behind: the context dock's terminal
+  // icon is always on screen and is the way back, so hiding the terminal really
+  // does give the full height back to the thread.
   let contextPanelRows = $derived(
-    terminalDockVisible
+    terminalTrackReserved
       ? `minmax(240px, 1fr) minmax(0, min(${contextSidebarState.terminalHeight}px, calc(100% - 240px)))`
       : 'minmax(0, 1fr)'
   )
@@ -789,6 +1099,9 @@
     if (tab.kind === 'files' && tab.fileTabId) {
       projectFilesWorkspace.closeTab(tab.projectId, tab.fileTabId)
     }
+    // Closing the coordinator is a dismissal: it stays undocked until the user
+    // brings it back from the rail, otherwise it would reappear immediately.
+    if (tab.kind === 'coordinator') coordinatorDockState.setAutoOpen(false)
     contextSidebarState.close(id)
     if (tab.kind === 'temporary-chat') {
       void invoke('agent:closeTemporaryChat', tab.temporaryChatId)
@@ -908,9 +1221,15 @@
   }
 
   $effect(() => {
+    // Load scope boards for every project that has threads in the sidebar, not
+    // just the top-10 recent ones. Scope tags and the two-row layout resolve per
+    // thread through the project's own board, so after a refresh (when the boards
+    // map starts empty) every visible project's board must be loaded or the tags
+    // disappear until a project switch forces them in. ensureBoardLoaded is cached,
+    // so this stays cheap after the first pass.
     const projectIds = [
       ...new Set(
-        recentThreads
+        allThreads
           .filter((thread) => thread.projectId !== INBOX_PROJECT_ID)
           .map((thread) => thread.projectId)
       )
@@ -920,32 +1239,6 @@
 
   let pinnedTimelineThreads = $derived(allThreadsFlat.filter((thread) => thread.pinned))
   let unpinnedTimelineThreads = $derived(allThreadsFlat.filter((thread) => !thread.pinned))
-
-  async function migrateTimelinePins(): Promise<void> {
-    const key = `${APP_SLUG}.timelinePins.v1`
-    const raw = window.localStorage.getItem(key)
-    if (!raw) return
-    try {
-      const parsed: unknown = JSON.parse(raw)
-      if (!Array.isArray(parsed)) {
-        window.localStorage.removeItem(key)
-        return
-      }
-      const ids = new Set(parsed.filter((id): id is string => typeof id === 'string'))
-      const persistedThreads = await invoke('thread:listAll')
-      for (const thread of persistedThreads) {
-        if (!ids.has(thread.id) || thread.pinned || thread.archived) continue
-        const updated = await invoke('thread:setPinned', thread.projectId, thread.id, true)
-        upsertThreadInList(updated)
-        scopeState.updateThread(updated)
-        if (workspaceState.selectedThread?.id === updated.id) workspaceState.updateThread(updated)
-      }
-      window.localStorage.removeItem(key)
-    } catch {
-      // Keep the legacy IDs so a transient IPC/storage failure cannot remove
-      // cleanup protection before the persisted-pin migration succeeds.
-    }
-  }
 
   function getThreadIcon(thread: Thread): string | null {
     const project = projects.find((p) => p.id === thread.projectId)
@@ -1026,6 +1319,18 @@
     if (selected && !isOrchestrationChildThread(selected)) upsertThreadInList(selected)
   })
 
+  // Warm the message cache the moment a thread is selected (including the
+  // view-switch restores between Chats and Projects) so the keyed ThreadView
+  // mounts straight onto its history instead of flashing "Loading
+  // conversation…" while `loadLocal` fetches the page. Non-destructive —
+  // ThreadView merges the same bounded window and never reloads a warm cache.
+  $effect(() => {
+    const selected = workspaceState.selectedThread
+    if (!selected) return
+    if (threadMessages.loaded(selected.projectId, selected.id)) return
+    void threadMessages.preload(selected.projectId, selected.id)
+  })
+
   // Live thread updates pushed from the main process (status/read changes
   // during agent runs) — keeps the sidebar indicators in sync without polling.
   // Updates are applied immediately so a finished turn flips the status badge
@@ -1053,6 +1358,11 @@
     })
   })
 
+  /** The last (thread, draft-state) pair the draft→todo nudge ran for, so the
+   *  effect below only fires when the draft state actually transitions — never
+   *  clobbering a manual slice switch while a draft stays unchanged. */
+  let draftStageSyncKey: string | null = null
+
   // Sync the selected thread's draft state to scope so draft-aware slicing works.
   // This MUST run before the pending-updates effect so scope's draftThreadId is
   // always current when stageForThread is evaluated.
@@ -1061,15 +1371,20 @@
     const hasDraft = selectedThreadHasDraft
     scopeState.setSelectedThreadDraftState(id, hasDraft)
     // Immediately switch the scope sidebar to 'todo' when draft promotion kicks in
-    // for the thread the sidebar is currently showing.
+    // for the thread the sidebar is currently showing — but only when the draft
+    // state changes. Reading sidebarContext here would otherwise make this effect
+    // re-run on every manual stage change and undo the user's slice switch.
+    const key = `${id}:${hasDraft}`
     if (
       id &&
       hasDraft &&
       scopeState.sidebarContext?.threadId === id &&
-      scopeState.sidebarContext.stage !== 'todo'
+      scopeState.sidebarContext.stage !== 'todo' &&
+      draftStageSyncKey !== key
     ) {
       scopeState.sidebarContext = { ...scopeState.sidebarContext, stage: 'todo' }
     }
+    draftStageSyncKey = key
   })
 
   // Detect user-initiated scrolling of the sidebar so focus-follow doesn't
@@ -1090,6 +1405,20 @@
    *  its own per-stage lists and inner scrolling; the focus-follow reveal below
    *  is only for the regular Projects/Threads/Chats views. */
   let isScopeBoardView = $derived(mode === 'projects' && Boolean(scopeState.sidebarContext))
+
+  // The scope-state sidebar board reads its data from the active project's board
+  // and thread list (`scopeState.board` / `currentProjectThreads`, keyed off
+  // `activeProjectId`). The sidebar context is set with a fire-and-forget
+  // `activateProject`, so `sidebarContext.projectId` and `activeProjectId` can be
+  // out of sync on first entry — which would render stale/empty stage slices until
+  // a project switch realigned them. Keep them aligned reactively so the board
+  // hydrates immediately (mirrors ScopeView's own activeProjectId reload effect).
+  $effect(() => {
+    const context = scopeState.sidebarContext
+    if (context && context.projectId !== scopeState.activeProjectId) {
+      void scopeState.activateProject(context.projectId)
+    }
+  })
 
   // While a thread is selected, keep its row (and project) in focus in the
   // sidebar. Selection changes expand the owning folder and reset any scroll
@@ -1202,7 +1531,6 @@
       allThreads = uniqueThreads.filter((t) => !isOrchestrationChildThread(t))
       historyOffset = threadList.length
       hasMoreHistory = threadList.length === INITIAL_THREAD_LIMIT
-      await migrateTimelinePins()
       notificationPanelState.hydrateFromThreads(uniqueThreads)
       projectIcons.clear()
       for (const [projectId, iconUrl] of await loadProjectIcons(projectList)) {
@@ -1305,6 +1633,21 @@
     wasActive = nowActive
   })
 
+  /** Cmd/Ctrl+W while the context sidebar has focus closes its active tab
+   *  (through the unsaved-changes confirmation) rather than the thread. */
+  $effect(() => {
+    const request = contextSidebarState.closeActiveTabRequest
+    if (request === 0) return
+    const focused = document.activeElement instanceof Element ? document.activeElement : null
+    const region = focused?.closest<HTMLElement>('[data-region="context-sidebar"]')
+    const placement = region?.dataset.placement
+    const tabId =
+      placement === 'bottom'
+        ? contextSidebarState.terminalActiveTabId
+        : contextSidebarState.sidebarActiveTabId
+    if (tabId) closeContextTab(tabId)
+  })
+
   /** Explicit timeline expansion. The initial shell intentionally carries
    * only a bounded recent slice; older tasks remain paged and deduped. */
   async function loadHistoryPage(): Promise<void> {
@@ -1396,7 +1739,7 @@
     projects = projects.map((p) => (p.id === updated.id ? updated : p))
   }
 
-  async function revealProjectInFinder(projectId: string): Promise<void> {
+  async function revealProjectInFileManager(projectId: string): Promise<void> {
     const project = projects.find((p) => p.id === projectId)
     if (!project || !project.path) return
     await invoke('shell:revealPath', project.path)
@@ -1709,28 +2052,43 @@
 
   // ─── Thread actions ──────────────────────────────────────────────────────
 
-  /** Create a project task using the user's last mode; fresh installs default to engineering. */
+  /** Create a project task by cloning the active thread; fresh installs use the saved defaults. */
   async function createThreadInProject(project: Project, scopeBucketId?: string): Promise<void> {
+    const activeThread = workspaceState.selectedThread
+    const inheritedSettings = settingsForNewThread(activeThread, threadSettings.lastUsed)
     const existing = findEmptyNewThread(allThreads, project.id, scopeBucketId)
     if (existing) {
       if (workspaceState.selectedThread?.id === existing.id) {
         workspaceState.requestFocusComposer()
       } else {
-        workspaceState.openThread(existing, project)
+        const thread = activeThread?.settings
+          ? await invoke(
+              'thread:updateSettings',
+              existing.projectId,
+              existing.id,
+              inheritedSettings
+            )
+          : existing
+        upsertThreadInList(thread)
+        workspaceState.openThread(thread, project)
         if (scopeBucketId) {
-          scopeState.showSidebarForThread(existing, scopeBucketId)
+          scopeState.updateThread(thread)
+          scopeState.showSidebarForThread(thread, scopeBucketId)
         }
       }
       return
     }
-    const thread = await invoke('thread:create', {
+    const created = await invoke('thread:create', {
       projectId: project.id,
       providerId: 'opencode',
       title: DEFAULT_THREAD_TITLE,
       workingDirectory: project.path,
-      settings: { ...threadSettings.lastUsed },
+      settings: inheritedSettings,
       ...(scopeBucketId ? { scopeBucketId } : {})
     })
+    const thread = activeThread?.settings
+      ? threadWithInheritedSettings(created, inheritedSettings)
+      : created
     upsertThreadInList(thread)
     expandedFolders.add(project.id)
     if (scopeBucketId) {
@@ -1738,6 +2096,11 @@
       scopeState.showSidebarForThread(thread, scopeBucketId)
     }
     workspaceState.openThread(thread, project)
+    if (activeThread?.settings) {
+      void persistInheritedThreadSettings(thread, inheritedSettings).catch((error) => {
+        reportError(error, 'The inherited thread settings could not be saved.')
+      })
+    }
   }
 
   /** Start a fresh standalone chat — shows the composer immediately. */
@@ -1803,12 +2166,23 @@
     void tick().then(() => revealThreadInSidebar(thread.id))
   }
 
-  async function openProjectFileFromCommand(projectId: string, path: string): Promise<void> {
+  async function openProjectFileFromCommand(
+    projectId: string,
+    path: string,
+    kind: 'file' | 'directory'
+  ): Promise<void> {
     const project = projects.find((candidate) => candidate.id === projectId)
     if (!project || project.source !== 'local' || !project.path) return
 
-    navigate('projects')
-    const projectThread =
+    // Preserve the current content view (remember the project sidebar state)
+    // instead of forcing the Projects view. Chats cannot host a project file.
+    if (mode === 'chats') {
+      navigate('projects')
+    } else if (!active) {
+      navigate(mode)
+    }
+
+    let projectThread: Thread | null =
       selectedThread?.projectId === projectId
         ? selectedThread
         : allThreads
@@ -1818,16 +2192,31 @@
     if (projectThread) {
       await openThread(projectThread)
     } else {
-      workspaceState.clearThread()
-      workspaceState.activeProject = project
-      workspaceState.activeProjectIconUrl = getProjectIcon(project, projectIcons.get(project.id))
-      rendererRecovery.setSelectedProject(project.id)
-      contextSidebarState.activateThread(project.id, '')
+      // No thread yet — create one so the file opens inside a real thread context.
+      await createThreadInProject(project)
+      projectThread =
+        workspaceState.selectedThread?.projectId === projectId
+          ? workspaceState.selectedThread
+          : null
+      if (!projectThread) {
+        workspaceState.clearThread()
+        workspaceState.activeProject = project
+        workspaceState.activeProjectIconUrl = getProjectIcon(project, projectIcons.get(project.id))
+        rendererRecovery.setSelectedProject(project.id)
+        contextSidebarState.activateThread(project.id, '')
+      }
     }
 
     await projectFilesWorkspace.loadDirectory(project.id, '')
     contextSidebarState.openFiles(project.id, projectThread?.id ?? '')
-    await projectFilesWorkspace.openFile(project.id, path)
+    if (kind === 'directory') {
+      await projectFilesWorkspace.revealFile(project.id, path)
+      projectFilesWorkspace.markDirectoryExpanded(project.id, path)
+      await projectFilesWorkspace.loadDirectory(project.id, path, true)
+    } else {
+      await projectFilesWorkspace.openFile(project.id, path)
+      await projectFilesWorkspace.revealFile(project.id, path)
+    }
   }
 
   async function openScopedThread(thread: Thread): Promise<void> {
@@ -2621,11 +3010,11 @@
                         </DropdownMenu.Item>
                         <DropdownMenu.Item
                           class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-sm text-foreground outline-none transition-colors hover:bg-elevated focus:bg-elevated"
-                          onSelect={() => revealProjectInFinder(project.id)}
+                          onSelect={() => revealProjectInFileManager(project.id)}
                         >
                           <FolderOpen size={14} class="text-muted" />
                           {navigator.platform.toUpperCase().indexOf('MAC') >= 0
-                            ? 'Reveal in Finder'
+                            ? 'Reveal in File Manager'
                             : 'Show in Explorer'}
                         </DropdownMenu.Item>
                         <DropdownMenu.Item
@@ -2823,11 +3212,11 @@
                       </DropdownMenu.Item>
                       <DropdownMenu.Item
                         class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-sm text-foreground outline-none transition-colors hover:bg-elevated focus:bg-elevated"
-                        onSelect={() => revealProjectInFinder(project.id)}
+                        onSelect={() => revealProjectInFileManager(project.id)}
                       >
                         <FolderOpen size={14} class="text-muted" />
                         {navigator.platform.toUpperCase().indexOf('MAC') >= 0
-                          ? 'Reveal in Finder'
+                          ? 'Reveal in File Manager'
                           : 'Show in Explorer'}
                       </DropdownMenu.Item>
                       <DropdownMenu.Item
@@ -2862,9 +3251,9 @@
   {/if}
 
   <!-- Main Content -->
-  <section class="min-w-0 flex-1 overflow-hidden">
+  <section class="flex min-w-0 flex-1 overflow-hidden">
     <div
-      class="grid h-full min-h-0 min-w-0"
+      class="grid h-full min-h-0 min-w-0 flex-1"
       style:grid-template-columns={contextPanelColumns}
       style:grid-template-rows={contextPanelRows}
     >
@@ -2978,6 +3367,8 @@
                   projectId={activeContextTab.projectId}
                   threadId={activeContextTab.threadId}
                   checkpointId={activeContextTab.checkpointId}
+                  revealPath={activeContextTab.revealPath}
+                  revealNonce={activeContextTab.revealNonce}
                 />
               {:else if activeContextTab.kind === 'terminal'}
                 {#if terminalFullscreenTabId === activeContextTab.id}
@@ -3014,11 +3405,15 @@
                 {/await}
               {:else if activeContextTab.kind === 'temporary-chat'}
                 <TemporaryChatView
-                  tab={activeContextTab}
+                  tabId={activeContextTab.id}
                   onContinueInThread={handleContinueInThread}
                 />
               {:else if activeContextTab.kind === 'notifications'}
                 <NotificationPanel />
+              {:else if activeContextTab.kind === 'coordinator'}
+                {#if coordinator}
+                  {@render coordinator.panel()}
+                {/if}
               {:else if activeContextTab.kind === 'memory'}
                 <MemoryPanel
                   variant="sidebar"
@@ -3026,13 +3421,25 @@
                   threadId={activeContextTab.threadId}
                   bind:activeSection={activeContextTab.memorySection}
                 />
+              {:else if activeContextTab.kind === 'thread-note'}
+                <ThreadNotePanel tab={activeContextTab} />
               {:else}
                 <SubagentSessionView tab={activeContextTab} onOpenSubagent={openNestedSubagent} />
               {/if}
             {/key}
           {/if}
         {/snippet}
-        <div class="min-h-0 min-w-0" style:grid-column="2" style:grid-row="1">
+        <div
+          class="min-h-0 min-w-0"
+          style:grid-column="2"
+          style:grid-row="1"
+          in:fly={{ x: contextSidebarState.width, duration: motionDuration(200), easing: cubicOut }}
+          out:fly={{
+            x: contextSidebarState.width,
+            duration: motionDuration(PANEL_EXIT_MS),
+            easing: cubicOut
+          }}
+        >
           <ContextSidebar
             tabs={contextSidebarState.sidebarTabs}
             activeTabId={contextSidebarState.sidebarActiveTabId}
@@ -3040,8 +3447,6 @@
             height={contextSidebarState.terminalHeight}
             placement="right"
             content={contextSidebarContent}
-            actions={sidebarActions}
-            hideAddButton={mode === 'chats'}
             onSelect={(id) => contextSidebarState.focus(id)}
             onClose={closeContextTab}
             onFullscreenTab={openTabFullscreen}
@@ -3051,6 +3456,7 @@
             onHeightChange={(height) => contextSidebarState.setTerminalHeight(height)}
             onTerminalPlacementChange={(placement) =>
               contextSidebarState.setTerminalPlacement(placement)}
+            onNewTerminal={openNewTerminal}
           />
         </div>
       {/if}
@@ -3058,15 +3464,35 @@
         {#snippet terminalDockContent()}
           {@const activeDockTab = contextSidebarState.terminalActiveTab}
           {#if activeDockTab}
-            {#key activeDockTab.id}
-              <TerminalPanel
-                terminalId={activeDockTab.terminalId}
-                projectId={activeDockTab.projectId}
-              />
-            {/key}
+            {#if terminalFullscreenTabId === activeDockTab.id}
+              <div class="flex h-full items-center justify-center text-xs text-muted">
+                Terminal is open in fullscreen
+              </div>
+            {:else}
+              {#key activeDockTab.id}
+                <TerminalPanel
+                  terminalId={activeDockTab.terminalId}
+                  projectId={activeDockTab.projectId}
+                />
+              {/key}
+            {/if}
           {/if}
         {/snippet}
-        <div class="min-h-0 min-w-0" style:grid-column="1 / -1" style:grid-row="2">
+        <div
+          class="min-h-0 min-w-0"
+          style:grid-column="1 / -1"
+          style:grid-row="2"
+          in:fly={{
+            y: contextSidebarState.terminalHeight,
+            duration: motionDuration(200),
+            easing: cubicOut
+          }}
+          out:fly={{
+            y: contextSidebarState.terminalHeight,
+            duration: motionDuration(PANEL_EXIT_MS),
+            easing: cubicOut
+          }}
+        >
           <ContextSidebar
             tabs={contextSidebarState.terminalTabs}
             activeTabId={contextSidebarState.terminalActiveTabId}
@@ -3074,7 +3500,6 @@
             height={contextSidebarState.terminalHeight}
             placement="bottom"
             content={terminalDockContent}
-            actions={terminalDockActions}
             onSelect={(id) => contextSidebarState.focus(id)}
             onClose={closeContextTab}
             onFullscreenTab={openTabFullscreen}
@@ -3084,12 +3509,49 @@
             onHeightChange={(height) => contextSidebarState.setTerminalHeight(height)}
             onTerminalPlacementChange={(placement) =>
               contextSidebarState.setTerminalPlacement(placement)}
+            onTerminalDockToggle={() => contextSidebarState.toggleTerminalDock()}
+            onNewTerminal={openNewTerminal}
           />
         </div>
       {/if}
     </div>
+    {#if dockGroups.some((group) => group.length > 0)}
+      <ContextDock groups={dockGroups} />
+    {/if}
   </section>
 </div>
+
+{#snippet historyMenu()}
+  <button
+    class="fixed inset-0 z-30 cursor-default"
+    aria-label="Close history"
+    title="Close history"
+    onclick={() => (showHistoryMenu = false)}
+  ></button>
+  <div
+    class="absolute right-full top-0 z-40 mr-2 w-72 overflow-hidden border bg-surface shadow-lg"
+    role="menu"
+    aria-label="Jump to message"
+  >
+    <p class="border-b px-3 py-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-dimmed">
+      Your messages
+    </p>
+    <div class="max-h-72 overflow-y-auto p-1">
+      {#each workspaceState.userMessages as message, index (message.id)}
+        <button
+          class="block w-full truncate px-2.5 py-1.5 text-left text-xs text-muted transition-colors hover:bg-elevated hover:text-foreground"
+          role="menuitem"
+          title={message.content}
+          onclick={() => jumpToHistoryMessage(message.id)}
+        >
+          {index + 1}. {message.content}
+        </button>
+      {:else}
+        <p class="px-2.5 py-2 text-xs text-dimmed">No messages yet</p>
+      {/each}
+    </div>
+  </div>
+{/snippet}
 
 <!-- Remove Project Confirmation -->
 <Modal open={showRemoveModal} title="Remove Project" onClose={() => (showRemoveModal = false)}>

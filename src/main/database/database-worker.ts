@@ -19,7 +19,7 @@
 import createDatabaseWorkerThread from './database-worker-thread.ts?nodeWorker'
 import type { Worker, WorkerOptions } from 'worker_threads'
 import { dirname, join } from 'path'
-import { Logger } from '../logger'
+import { Logger } from '../system/logger'
 import type { AgentMessage } from '../../lib/types'
 import type { ProviderDeltaSyncResult } from './repositories/agent-message-repo'
 
@@ -71,6 +71,12 @@ export type DatabaseWorkerRequest =
     }
   | { kind: 'stats' }
   | { kind: 'sync-provider-deltas'; threadId: string; sessionId: string; messages: AgentMessage[] }
+  | {
+      kind: 'export-transcript'
+      threadId: string
+      includeTrace: boolean
+      destinationPath: string
+    }
   | { kind: 'shutdown' }
   | { kind: 'ping' }
 
@@ -184,6 +190,12 @@ export type DatabaseWorkerResult =
       error?: string
     }
   | { kind: 'sync-provider-deltas'; ok: boolean; result?: ProviderDeltaSyncResult; error?: string }
+  | {
+      kind: 'export-transcript'
+      ok: boolean
+      path?: string
+      error?: string
+    }
   | ({ kind: 'shutdown' } & { ok: boolean })
   | ({ kind: 'ping' } & { ok: boolean })
 
@@ -357,9 +369,10 @@ export class DatabaseWorker {
   }
 
   /**
-   * Bounded read on the worker's connection. `sql` must not contain LIMIT;
-   * `maxRows` (>0) bounds the response and reports truncation. Serialized with
-   * every other request and the maintenance loop.
+   * Bounded read on the worker's connection. `maxRows` (>0) bounds the
+   * response and reports truncation; caller-owned LIMIT clauses are preserved
+   * inside an outer safety bound. Serialized with every other request and the
+   * maintenance loop.
    */
   async query(sql: string, params: unknown[], maxRows: number): Promise<ResultForRequest<'query'>> {
     return this.request({ kind: 'query', sql, params, maxRows })
@@ -417,6 +430,19 @@ export class DatabaseWorker {
     messages: AgentMessage[]
   ): Promise<ResultForRequest<'sync-provider-deltas'>> {
     return this.request({ kind: 'sync-provider-deltas', threadId, sessionId, messages })
+  }
+
+  /**
+   * Serialize a thread's conversation into a Markdown transcript on the worker
+   * thread and write it atomically to `destinationPath` — the heavy read/build
+   * never touches the main process. Returns the written path on success.
+   */
+  async exportTranscript(
+    threadId: string,
+    includeTrace: boolean,
+    destinationPath: string
+  ): Promise<ResultForRequest<'export-transcript'>> {
+    return this.request({ kind: 'export-transcript', threadId, includeTrace, destinationPath })
   }
 
   async ping(): Promise<ResultForRequest<'ping'>> {

@@ -31,8 +31,8 @@ import type {
   ListPullRequestsInput,
   MergePullRequestInput,
   PullRequestTarget
-} from '../git-provider.interface'
-import { Logger } from '../logger'
+} from '../git/git-provider.interface'
+import { Logger } from '../system/logger'
 
 /** Default provider base URL — the public GitHub.com REST API the app already calls. */
 export const GITHUB_API_BASE_URL = 'https://api.github.com'
@@ -111,6 +111,61 @@ export class GitHubProvider implements GitProvider {
   }
 
   /**
+   * Promote a draft pull request to ready-for-review.
+   *
+   * GitHub exposes this lifecycle transition through GraphQL rather than the
+   * REST update endpoint. Resolve the PR's global node ID first, then return the
+   * same renderer-safe reference shape as every other PR mutation.
+   */
+  async markPullRequestReadyForReview(input: PullRequestTarget): Promise<PullRequestReference> {
+    const detail = await this.request(this.pullPath(input), { method: 'GET' })
+    const detailRecord = Array.isArray(detail) ? {} : detail
+    if (detailRecord['draft'] !== true) return this.toReference(detailRecord)
+    const pullRequestId = this.readString(detailRecord, 'node_id')
+    if (!pullRequestId) {
+      throw new Error(`Pull request #${input.pullNumber} has no provider node ID`)
+    }
+
+    const response = await this.request('/graphql', {
+      method: 'POST',
+      body: JSON.stringify({
+        query:
+          'mutation MarkPullRequestReadyForReview($pullRequestId: ID!) { markPullRequestReadyForReview(input: { pullRequestId: $pullRequestId }) { pullRequest { number title url } } }',
+        variables: { pullRequestId }
+      })
+    })
+    const responseRecord = Array.isArray(response) ? {} : response
+    const errors = responseRecord['errors']
+    if (Array.isArray(errors)) {
+      const first = errors.find(
+        (entry): entry is Record<string, unknown> =>
+          typeof entry === 'object' && entry !== null && !Array.isArray(entry)
+      )
+      const message = first ? this.readString(first, 'message') : null
+      throw new Error(
+        message?.slice(0, 500) ?? 'Provider could not mark this pull request ready for review'
+      )
+    }
+    const data = this.readRecord(responseRecord, 'data')
+    const mutation = data ? this.readRecord(data, 'markPullRequestReadyForReview') : null
+    const pullRequest = mutation ? this.readRecord(mutation, 'pullRequest') : null
+    if (!pullRequest) {
+      throw new Error(`Pull request #${input.pullNumber} was not marked ready for review`)
+    }
+    return {
+      number: this.readNumber(pullRequest, 'number') || input.pullNumber,
+      title:
+        this.readString(pullRequest, 'title') ??
+        this.readString(detailRecord, 'title') ??
+        `Pull request #${input.pullNumber}`,
+      url:
+        this.readString(pullRequest, 'url') ??
+        this.readString(detailRecord, 'html_url') ??
+        `https://github.com/${input.owner}/${input.repo}/pull/${input.pullNumber}`
+    }
+  }
+
+  /**
    * Compare two refs so the create-PR form can tell the user whether there is
    * anything to compare (GitHub's own "There isn't anything to compare" state).
    * A PR only makes sense when the head has commits the base lacks.
@@ -159,6 +214,23 @@ export class GitHubProvider implements GitProvider {
     const response = await this.request(`${this.pullPath(input)}`, {
       method: 'PATCH',
       body: JSON.stringify({ state: 'closed' })
+    })
+    return this.toReference(response)
+  }
+
+  /** Update an open pull request's title and/or description, mirroring GitHub's edit. */
+  async updatePullRequest(
+    input: PullRequestTarget & {
+      title?: string
+      body?: string
+    }
+  ): Promise<PullRequestReference> {
+    const patch: Record<string, unknown> = {}
+    if (input.title !== undefined) patch['title'] = input.title
+    if (input.body !== undefined) patch['body'] = input.body
+    const response = await this.request(`${this.pullPath(input)}`, {
+      method: 'PATCH',
+      body: JSON.stringify(patch)
     })
     return this.toReference(response)
   }
@@ -340,7 +412,7 @@ export class GitHubProvider implements GitProvider {
   /**
    * CI state for the PR head.
    *
-   * GitHub exposes two independent systems — modern check runs and legacy commit
+   * GitHub exposes two independent systems — modern check runs and classic commit
    * statuses — and a repository can use either, so both are merged here.
    */
   async getPullRequestChecks(input: PullRequestTarget): Promise<PullRequestChecks> {
@@ -365,11 +437,14 @@ export class GitHubProvider implements GitProvider {
       for (const run of runs) {
         if (typeof run !== 'object' || run === null) continue
         const record = run as Record<string, unknown>
+        const detailsUrl = this.readString(record, 'details_url')
+        const htmlUrl = this.readString(record, 'html_url')
         checks.push({
           name: this.readString(record, 'name') ?? 'check',
           status: this.toCheckStatus(this.readString(record, 'status')),
           conclusion: this.toCheckConclusion(this.readString(record, 'conclusion')),
-          url: this.readString(record, 'html_url')
+          url: htmlUrl ?? detailsUrl,
+          workflowRunId: this.workflowRunIdFromUrls(detailsUrl, htmlUrl)
         })
       }
     }
@@ -381,12 +456,14 @@ export class GitHubProvider implements GitProvider {
         if (typeof status !== 'object' || status === null) continue
         const record = status as Record<string, unknown>
         const state = this.readString(record, 'state')
+        const targetUrl = this.readString(record, 'target_url')
         checks.push({
           name: this.readString(record, 'context') ?? 'status',
           status: state === 'pending' ? 'in_progress' : 'completed',
           conclusion:
             state === 'success' ? 'success' : state === 'pending' ? null : ('failure' as const),
-          url: this.readString(record, 'target_url')
+          url: targetUrl,
+          workflowRunId: this.workflowRunIdFromUrls(targetUrl)
         })
       }
     }
@@ -570,15 +647,22 @@ export class GitHubProvider implements GitProvider {
   /** Deployment statuses created by Actions carry the run id in their log/env URLs. */
   private runIdFromDeploymentStatuses(statuses: GitHubDeploymentStatus[]): number {
     for (const status of statuses) {
-      for (const url of [status.logUrl, status.environmentUrl]) {
-        if (!url) continue
-        const match = /\/actions\/runs\/(\d+)/u.exec(url)
-        if (!match) continue
-        const id = Number.parseInt(match[1] ?? '', 10)
-        if (Number.isSafeInteger(id) && id > 0) return id
-      }
+      const id = this.workflowRunIdFromUrls(status.logUrl, status.environmentUrl)
+      if (id !== null) return id
     }
     return 0
+  }
+
+  /** Extract an Actions workflow-run id without adding another provider request. */
+  private workflowRunIdFromUrls(...urls: Array<string | null>): number | null {
+    for (const url of urls) {
+      if (!url) continue
+      const match = /\/actions\/runs\/(\d+)/u.exec(url)
+      if (!match) continue
+      const id = Number.parseInt(match[1] ?? '', 10)
+      if (Number.isSafeInteger(id) && id > 0) return id
+    }
+    return null
   }
 
   private async getRunJobs(
@@ -597,11 +681,11 @@ export class GitHubProvider implements GitProvider {
     })
   }
 
-  /** Perform a text/plain fetch (e.g. raw job logs), mirroring `request` auth/refresh. */
+  /** Download redirected raw content while using GitHub's required JSON media type. */
   private async requestText(path: string): Promise<string> {
     const controller = new AbortController()
     const timer = setTimeout(() => controller.abort(), PROVIDER_FETCH_TIMEOUT_MS)
-    const init: RequestInit = { method: 'GET', headers: { Accept: 'text/plain' } }
+    const init: RequestInit = { method: 'GET' }
     try {
       let token = this.token
       let response = await this.fetch(path, init, token, controller.signal)
@@ -708,10 +792,22 @@ export class GitHubProvider implements GitProvider {
     })
   }
 
-  /** Read a provider error body's `message` field without touching headers. */
+  /**
+   * Read a provider error body's message without touching headers. GitHub wraps
+   * the actionable reason in `errors[0].message` (e.g. "A pull request already
+   * exists for …") while the top-level `message` stays the generic
+   * "Validation Failed", so the specific reason is preferred when present.
+   */
   private async readErrorMessage(response: Response): Promise<string> {
     try {
       const body = (await response.json()) as Record<string, unknown>
+      if (Array.isArray(body['errors'])) {
+        for (const entry of body['errors']) {
+          if (typeof entry !== 'object' || entry === null) continue
+          const detail = (entry as Record<string, unknown>)['message']
+          if (typeof detail === 'string' && detail.trim()) return detail.slice(0, 500)
+        }
+      }
       if (typeof body['message'] === 'string') return body['message'].slice(0, 500)
     } catch {
       // Non-JSON error body — fall through to the status-only message.

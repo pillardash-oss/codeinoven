@@ -21,6 +21,7 @@ const INVOKE_CHANNELS = [
   'account:getProfile',
   'account:beginSignIn',
   'account:syncProfile',
+  'account:signOut',
   'brainstorm:ensureWorkflow',
   'brainstorm:getWorkflow',
   'brainstorm:chooseEntry',
@@ -84,8 +85,10 @@ const INVOKE_CHANNELS = [
   'agent:listProviderSnapshot',
   'agent:refreshProviderCatalog',
   'agent:refreshAccountUsage',
+  'agent:getHarnessAuthStatus',
   'agent:listTools',
   'agent:listContextCapabilities',
+  'agent:listArtifacts',
   'agent:listProcesses',
   'agent:killProcess',
   'agent:killThreadProcesses',
@@ -107,6 +110,8 @@ const INVOKE_CHANNELS = [
   'agent:sendPrompt',
   'agent:steerPrompt',
   'agent:sendTemporaryPrompt',
+  'agent:steerTemporaryPrompt',
+  'agent:abortTemporaryChat',
   'agent:touchTemporaryChat',
   'agent:closeTemporaryChat',
   'agent:truncateMessages',
@@ -129,10 +134,12 @@ const INVOKE_CHANNELS = [
   'workerNames:getSettings',
   'workerNames:saveCustom',
   'dialog:pickFolder',
+  'attachment:saveText',
   'clipboard:saveImage',
   'clipboard:writeText',
   'clipboard:readText',
   'dialog:pickFile',
+  'dialog:pickFiles',
   'dialog:pickImage',
   'diagnostics:export',
   'file:read',
@@ -186,6 +193,7 @@ const INVOKE_CHANNELS = [
   'pr:create',
   'pr:list',
   'pr:merge',
+  'pr:ready',
   'pr:compare',
   'pr:reopen',
   'pr:close',
@@ -219,6 +227,8 @@ const INVOKE_CHANNELS = [
   'pr:comment',
   'pr:review',
   'pr:reviewWorkspace',
+  'pr:update',
+  'pr:composeWithAgent',
   'github:authStatus',
   'github:startDeviceFlow',
   'github:poll',
@@ -238,8 +248,12 @@ const INVOKE_CHANNELS = [
   'memory:approveProposal',
   'memory:rejectProposal',
   'memory:createProposal',
+  'memory:export',
+  'memory:import',
+  'memory:importApply',
   'notification:test',
   'notification:getPermissionStatus',
+  'notification:openSettings',
   'scope:get',
   'scope:save',
   'plan:approve',
@@ -261,7 +275,9 @@ const INVOKE_CHANNELS = [
   'projectFiles:list',
   'projectFiles:search',
   'projectFiles:resolveCitationPaths',
+  'projectFiles:resolveExternalCitationPaths',
   'projectFiles:create',
+  'projectFiles:createDirectory',
   'projectFiles:delete',
   'projectFiles:info',
   'projectFiles:openInEditor',
@@ -269,6 +285,7 @@ const INVOKE_CHANNELS = [
   'projectFiles:saveAs',
   'projectFiles:paste',
   'projectFiles:importPaths',
+  'projectFiles:dropPaths',
   'projectFiles:read',
   'projectFiles:rename',
   'projectFiles:save',
@@ -283,6 +300,8 @@ const INVOKE_CHANNELS = [
   'harnessManifest:list',
   'harnessManifest:confirm',
   'harnessManifest:reset',
+  'harnessAutoUpdate:list',
+  'harnessAutoUpdate:set',
   'providerAccounts:getAuthStatus',
   'providerAccounts:beginLogin',
   'providerAccounts:listOffered',
@@ -311,6 +330,7 @@ const INVOKE_CHANNELS = [
   'repository:remoteOrigin',
   'shell:openExternal',
   'shell:revealPath',
+  'shell:revealExternalPath',
   'web:favicon',
   'spec:addAnnotation',
   'spec:addDecisionComment',
@@ -357,6 +377,7 @@ const INVOKE_CHANNELS = [
   'threads:search',
   'thread:loadMessages',
   'thread:loadMessagesAround',
+  'thread:exportTranscript',
   'thread:loadUserMessages',
   'thread:reorder',
   'thread:setSortOrder',
@@ -371,6 +392,10 @@ const INVOKE_CHANNELS = [
   'thread:setStatus',
   'thread:update',
   'thread:updateSettings',
+  'note:get',
+  'note:save',
+  'note:delete',
+  'note:list',
   'updater:check',
   'updater:getStatus',
   'updater:download',
@@ -401,6 +426,7 @@ void allInvokeChannelsRegistered
 const SEND_CHANNELS = ['pty:resize', 'pty:write', 'terminal:focusState'] as const
 const EVENT_CHANNELS = [
   'app:featuresReady',
+  'account:profileChanged',
   'agent:event',
   'agent:processesChanged',
   'agent:temporaryChatExpired',
@@ -408,12 +434,15 @@ const EVENT_CHANNELS = [
   'notification:playSound',
   'notification:show',
   'notification:threadClicked',
+  'notification:permissionStatus',
   'providers:status',
   'thread:deleted',
   'thread:updated',
+  'note:changed',
   'window:beforeQuit',
   'window:confirmClose',
   'window:closeShortcut',
+  'window:newTerminalShortcut',
   'updater:status',
   'updater:waiting-for-threads',
   'computerUse:pipFrame',
@@ -475,13 +504,17 @@ export interface AppBridge {
    *  performed by the validated main-process `file:read` channel so the preload
    *  never touches the filesystem directly and only scoped paths can be read. */
   readFile: (path: string) => Promise<Uint8Array<ArrayBuffer>>
-  /** Resolve, retain when ephemeral, and register a native File from a drop/paste gesture. */
+  /** Resolve and register a File from a drop/paste gesture. Pathless browser
+   *  files are persisted into the supplied attachment scope. */
   registerFileSelection: (file: File, scope?: AttachmentStorageScope) => Promise<string>
   /** Resolve the absolute path of a native File from a drop/paste gesture ('' when unavailable). */
   getPathForFile: (file: File) => string
+  /** Resolve and begin a native filesystem drag during the active drag gesture. */
+  startFileDrag: (projectId: string, relativePaths: string[]) => void
 }
 
 const trafficLightArg = process.argv.find((arg) => arg.startsWith(TRAFFIC_LIGHT_ARG_PREFIX))
+const MAX_PATHLESS_ATTACHMENT_BYTES = 32 * 1024 * 1024
 
 /**
  * Platform truth the flag is only an enhancement for. macOS always draws its
@@ -538,11 +571,31 @@ const bridge: AppBridge = {
   },
   registerFileSelection: async (file: File, scope?: AttachmentStorageScope): Promise<string> => {
     const path = webUtils.getPathForFile(file)
-    if (!path) return ''
-    const registered = await ipcRenderer.invoke('file:registerSelection', path, scope)
+    if (path) {
+      const registered = await ipcRenderer.invoke('file:registerSelection', path, scope)
+      return typeof registered === 'string' ? registered : ''
+    }
+    if (!scope) return ''
+    if (file.size === 0) throw new TypeError('Dropped attachment is empty')
+    if (file.size > MAX_PATHLESS_ATTACHMENT_BYTES) {
+      throw new TypeError('Dropped browser attachment must be at most 32 MB')
+    }
+
+    const bytes = new Uint8Array(await file.arrayBuffer())
+    const registered = await ipcRenderer.invoke(
+      'file:registerSelection',
+      { filename: file.name, bytes },
+      scope
+    )
     return typeof registered === 'string' ? registered : ''
   },
-  getPathForFile: (file: File): string => webUtils.getPathForFile(file)
+  getPathForFile: (file: File): string => webUtils.getPathForFile(file),
+  startFileDrag: (projectId: string, relativePaths: string[]): void =>
+    ipcRenderer.send(
+      'projectFiles:startDrag',
+      projectId,
+      Array.from(relativePaths ?? []).map(String)
+    )
 }
 
 contextBridge.exposeInMainWorld('api', bridge)

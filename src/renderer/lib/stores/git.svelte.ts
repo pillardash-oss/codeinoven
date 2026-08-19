@@ -23,10 +23,12 @@ import type {
   MergeSummary,
   PrCreateInput,
   PrAgentReport,
+  PrComposeReport,
   PrMergeMethod,
   PrReviewEvent,
   PrState,
   Project,
+  ThreadSettings,
   PullRequestBundle,
   PullRequestComment,
   PullRequestCompare,
@@ -62,12 +64,14 @@ export type GitOperation =
   | 'abortRebase'
   | 'pr-create'
   | 'pr-merge'
+  | 'pr-ready'
   | 'pr-comment'
   | 'pr-review'
   | 'pr-list'
   | 'pr-detail'
   | 'pr-reopen'
   | 'pr-close'
+  | 'pr-update'
   | 'deployments'
   | 'deployment-detail'
   | 'deployment-run-detail'
@@ -119,6 +123,13 @@ export function isPushRejected(message: string): boolean {
   )
 }
 
+export type DeleteBranchResult = 'deleted' | 'requires-force' | 'failed'
+
+/** Git refuses `branch -d` when commits would become unreachable. */
+export function isBranchNotFullyMerged(message: string): boolean {
+  return /branch ['“"]?[^\n]+['”"]? is not fully merged/iu.test(message)
+}
+
 /**
  * Per-project git runtime state, refreshed on panel activation, after every
  * app-driven mutation, and after agent turns land (`checkpoint.updated`).
@@ -155,11 +166,6 @@ export class GitState {
   githubConnection: 'unknown' | 'connecting' | 'connected' | 'disconnected' = $state('unknown')
   private githubProbe: Promise<boolean> | null = null
   private lastGithubProbeAt = 0
-
-  /** Compatibility alias for the PR-detail notice; all mutations now share the same state. */
-  get reviewPermission(): GitHubPermissionRequired | null {
-    return this.githubPermission
-  }
 
   private resolveGitHubMutation<T>(result: GitHubMutationResult<T>): T | null {
     if (result.status === 'permission_required') {
@@ -630,14 +636,18 @@ export class GitState {
     }
   }
 
-  async deleteBranch(projectId: string, name: string): Promise<void> {
+  async deleteBranch(projectId: string, name: string, force = false): Promise<DeleteBranchResult> {
     this.markBusy('checkout', true)
     this.error = null
     try {
-      this.status = await invoke('git:deleteBranch', projectId, name)
+      this.status = await invoke('git:deleteBranch', projectId, name, force)
       await this.refresh(projectId)
+      return 'deleted'
     } catch (reason) {
-      this.error = errorMessage(reason, 'Branch deletion failed')
+      const message = errorMessage(reason, 'Branch deletion failed')
+      if (!force && isBranchNotFullyMerged(message)) return 'requires-force'
+      this.error = message
+      return 'failed'
     } finally {
       this.markBusy('checkout', false)
     }
@@ -661,6 +671,10 @@ export class GitState {
     this.error = null
     try {
       this.status = await invoke('git:fetch', projectId)
+      // Branch tracking (ahead/behind) changes with every fetch — refresh it so
+      // push decisions (like the PR sheet's "is there anything to push?") are
+      // made against freshly fetched remote refs, not the last panel refresh.
+      await this.refresh(projectId)
     } catch (reason) {
       this.error = errorMessage(reason, 'Fetch failed')
     } finally {
@@ -974,6 +988,30 @@ export class GitState {
     }
   }
 
+  /** Promote a draft pull request to ready-for-review before merge. */
+  async markPullRequestReadyForReview(
+    projectId: string,
+    owner: string,
+    repo: string,
+    pullNumber: number
+  ): Promise<PullRequestReference | null> {
+    this.markBusy('pr-ready', true)
+    this.error = null
+    this.githubPermission = null
+    try {
+      const reference = this.resolveGitHubMutation(
+        await invoke('pr:ready', projectId, owner, repo, pullNumber)
+      )
+      if (reference) this.updatePrDraftState(owner, repo, pullNumber, false)
+      return reference
+    } catch (reason) {
+      this.error = errorMessage(reason, 'Pull request could not be marked ready for review')
+      return null
+    } finally {
+      this.markBusy('pr-ready', false)
+    }
+  }
+
   async listPullRequests(
     projectId: string,
     owner: string,
@@ -1052,6 +1090,30 @@ export class GitState {
       return null
     } finally {
       this.markBusy('pr-close', false)
+    }
+  }
+
+  /** Update an open pull request's title and/or description, mirroring GitHub's edit. */
+  async updatePullRequest(
+    projectId: string,
+    owner: string,
+    repo: string,
+    pullNumber: number,
+    title: string | undefined,
+    body: string | undefined
+  ): Promise<PullRequestReference | null> {
+    this.markBusy('pr-update', true)
+    this.error = null
+    this.githubPermission = null
+    try {
+      return this.resolveGitHubMutation(
+        await invoke('pr:update', projectId, owner, repo, pullNumber, title, body)
+      )
+    } catch (reason) {
+      this.error = errorMessage(reason, 'Pull request could not be updated')
+      return null
+    } finally {
+      this.markBusy('pr-update', false)
     }
   }
 
@@ -1138,6 +1200,40 @@ export class GitState {
 
   static bundleKey(owner: string, repo: string, pullNumber: number): string {
     return `${owner}/${repo}#${pullNumber}`
+  }
+
+  /** Keep list/detail caches coherent after a PR lifecycle mutation. */
+  private updatePrDraftState(
+    owner: string,
+    repo: string,
+    pullNumber: number,
+    draft: boolean
+  ): void {
+    const pagePrefix = `${owner}/${repo}:`
+    this.prPages = Object.fromEntries(
+      Object.entries(this.prPages).map(([key, cached]) => [
+        key,
+        key.startsWith(pagePrefix)
+          ? {
+              ...cached,
+              page: {
+                ...cached.page,
+                items: cached.page.items.map((item) =>
+                  item.number === pullNumber ? { ...item, draft } : item
+                )
+              }
+            }
+          : cached
+      ])
+    )
+    const bundleKey = GitState.bundleKey(owner, repo, pullNumber)
+    const bundle = this.prBundles[bundleKey]
+    if (bundle) {
+      this.prBundles = {
+        ...this.prBundles,
+        [bundleKey]: { ...bundle, detail: { ...bundle.detail, draft } }
+      }
+    }
   }
 
   static deploymentKey(owner: string, repo: string): string {
@@ -1405,6 +1501,22 @@ export class GitState {
       this.prAgentReports = { ...this.prAgentReports, [String(pullNumber)]: report }
       return report
     } catch {
+      return null
+    }
+  }
+
+  /** Run PR composition as a one-shot virtual agent task with no persisted thread. */
+  async composeWithAgent(
+    projectId: string,
+    virtualTaskId: string,
+    settings: ThreadSettings,
+    title: string,
+    prompt: string
+  ): Promise<PrComposeReport | null> {
+    try {
+      return await invoke('pr:composeWithAgent', projectId, virtualTaskId, settings, title, prompt)
+    } catch (reason) {
+      this.error = errorMessage(reason, 'The PR compose agent could not complete its task')
       return null
     }
   }

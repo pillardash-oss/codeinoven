@@ -29,9 +29,9 @@ import type {
 } from './driver.interface'
 import { buildHarnessEnvironment } from './cli-environment'
 import { attachmentReferences } from './attachment-reference'
-import type { BaseUrlProviderService } from '../base-url-provider-service'
-import type { SecretVault } from '../secret-vault'
-import type { StorageEngine } from '../storage-engine'
+import type { BaseUrlProviderService } from '../providers/base-url-provider-service'
+import type { SecretVault } from '../storage/secret-vault'
+import type { StorageEngine } from '../storage/storage-engine'
 
 const CLINE_THINKING_LEVELS: Record<string, string> = {
   minimal: 'low',
@@ -694,6 +694,29 @@ function mapClineRecordToEvents(
     const partId = `${messageId}:ask`
     const questionType = ask ?? 'tool'
     const questionText = text || `Allow ${questionType}?`
+
+    if (questionType === 'tool') {
+      return {
+        events: [
+          {
+            type: 'message.part.updated',
+            sessionId,
+            part: {
+              type: 'tool',
+              id: partId,
+              messageID: messageId,
+              callID: partId,
+              tool: 'permission',
+              state: {
+                status: 'running',
+                input: { prompt: questionText, ask: questionType },
+                title: questionText
+              }
+            }
+          }
+        ]
+      }
+    }
 
     return {
       events: [

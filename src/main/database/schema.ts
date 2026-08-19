@@ -78,15 +78,14 @@ WHEN new.name != old.name BEGIN
   INSERT INTO project_fts(rowid, name) VALUES (new.rowid, new.name);
 END;`
 
-export const THREADS_SQL = `
--- ─── Threads ────────────────────────────────────────────────────────────
-CREATE TABLE IF NOT EXISTS threads (
+export function threadsTableSql(tableName: 'threads' | 'threads_new'): string {
+  return `CREATE TABLE IF NOT EXISTS ${tableName} (
   id                   TEXT PRIMARY KEY NOT NULL,
   project_id           TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
   provider_id          TEXT NOT NULL DEFAULT '',
   title                TEXT NOT NULL DEFAULT 'New Thread',
   title_source         TEXT NOT NULL DEFAULT 'default' CHECK(title_source IN ('default','auto','manual')),
-  status               TEXT NOT NULL DEFAULT 'created' CHECK(status IN ('created','planning','awaiting_approval','executing','interrupted','completed','failed')),
+  status               TEXT NOT NULL DEFAULT 'created' CHECK(status IN ('created','planning','awaiting_approval','spec','executing','working-paused','interrupted','completed','failed')),
   pinned               INTEGER NOT NULL DEFAULT 0,
   pinned_at            INTEGER,
   sort_order           INTEGER,
@@ -99,6 +98,7 @@ CREATE TABLE IF NOT EXISTS threads (
   settings             TEXT,
   context_usage        TEXT,
   session_id           TEXT,
+  session_harness_id   TEXT,
   dismissed_spec_id    TEXT,
   dismissed_spec_version INTEGER,
   audit_state          TEXT CHECK(audit_state IN ('offered','running','report_ready','reworking')),
@@ -116,15 +116,26 @@ CREATE TABLE IF NOT EXISTS threads (
   updated_at           INTEGER NOT NULL,
   last_activity        INTEGER NOT NULL,
   working_directory    TEXT NOT NULL DEFAULT ''
-);
+);`
+}
 
+export const THREAD_INDEXES_SQL = `
 CREATE INDEX IF NOT EXISTS idx_threads_status ON threads(status);
 CREATE INDEX IF NOT EXISTS idx_threads_project_listing
   ON threads(project_id, archived, pinned DESC, pinned_at DESC, sort_order, last_activity DESC);
 CREATE INDEX IF NOT EXISTS idx_threads_activity_listing
   ON threads(pinned DESC, pinned_at DESC, last_activity DESC);
 CREATE INDEX IF NOT EXISTS idx_threads_default_listing
-  ON threads(pinned DESC, pinned_at DESC, sort_order, last_activity DESC);`
+  ON threads(pinned DESC, pinned_at DESC, sort_order, last_activity DESC);
+CREATE INDEX IF NOT EXISTS idx_threads_active_listing
+  ON threads(last_activity DESC, id ASC)
+  WHERE archived = 0 AND status IN ('planning', 'executing');`
+
+export const THREADS_SQL = `
+-- ─── Threads ────────────────────────────────────────────────────────────
+${threadsTableSql('threads')}
+
+${THREAD_INDEXES_SQL}`
 
 export const HISTORY_SQL = `
 -- ─── History Entries ────────────────────────────────────────────────────
@@ -173,22 +184,24 @@ CREATE TABLE IF NOT EXISTS agent_messages (
   thread_id       TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
   session_id      TEXT,
   role            TEXT NOT NULL CHECK(role IN ('user','assistant')),
-  origin          TEXT NOT NULL DEFAULT 'legacy' CHECK(origin IN ('user','assistant','harness','orchestrator','subagent','compaction','provider','legacy')),
+  origin          TEXT NOT NULL DEFAULT 'provider' CHECK(origin IN ('user','assistant','harness','orchestrator','subagent','compaction','provider')),
   visibility      TEXT NOT NULL DEFAULT 'conversation' CHECK(visibility IN ('conversation','working_trace','subagent_trace','hidden')),
   parts           TEXT NOT NULL DEFAULT '[]',
   search_text     TEXT NOT NULL DEFAULT '',
   content_hash    TEXT,
   transport_parts TEXT,
-  transport_origin TEXT CHECK(transport_origin IS NULL OR transport_origin IN ('user','assistant','harness','orchestrator','subagent','compaction','provider','legacy')),
+  transport_origin TEXT CHECK(transport_origin IS NULL OR transport_origin IN ('user','assistant','harness','orchestrator','subagent','compaction','provider')),
   model_id        TEXT,
   provider_id     TEXT,
   harness_id      TEXT,
+  thinking_level  TEXT,
   references_json TEXT,
   project_references_json TEXT,
   created_at      INTEGER NOT NULL,
   completed_at    INTEGER,
   cost            REAL,
   tokens_json     TEXT,
+  tokens_total    INTEGER,
   rate_limits_json TEXT,
   usage_credits_json TEXT,
   context_window  INTEGER,
@@ -198,7 +211,64 @@ CREATE TABLE IF NOT EXISTS agent_messages (
 );
 
 CREATE INDEX IF NOT EXISTS idx_agent_messages_thread_timeline
-  ON agent_messages(thread_id, session_id, created_at, id);`
+  ON agent_messages(thread_id, session_id, created_at, id);
+
+-- Analytics range scans (Profile): role/harness_id are low-cardinality
+-- filters over a created_at window, so leading with created_at bounds the scan.
+CREATE INDEX IF NOT EXISTS idx_agent_messages_analytics
+  ON agent_messages(created_at, role, harness_id);`
+
+/**
+ * Column definitions for the canonical `harness_usage_models` table.
+ * thinking_level is NOT NULL with an empty-string "unknown" sentinel because
+ * SQLite treats NULLs as distinct inside a composite PRIMARY KEY — NULL levels
+ * would fragment one model's usage into a row per message instead of
+ * accumulating it.
+ */
+export const HARNESS_USAGE_MODELS_COLUMNS_SQL = `
+  thread_id            TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
+  harness_id           TEXT NOT NULL,
+  provider_id          TEXT NOT NULL,
+  model_id             TEXT NOT NULL,
+  thinking_level       TEXT NOT NULL DEFAULT '',
+  message_count        INTEGER NOT NULL DEFAULT 0,
+  cost_usd             REAL NOT NULL DEFAULT 0,
+  tokens_in            INTEGER NOT NULL DEFAULT 0,
+  tokens_out           INTEGER NOT NULL DEFAULT 0,
+  tokens_reasoning     INTEGER NOT NULL DEFAULT 0,
+  tokens_cache_read    INTEGER NOT NULL DEFAULT 0,
+  tokens_cache_write   INTEGER NOT NULL DEFAULT 0,
+  tokens_total         INTEGER NOT NULL DEFAULT 0,
+  duration_ms          INTEGER NOT NULL DEFAULT 0,
+  first_used_at        INTEGER NOT NULL,
+  last_used_at         INTEGER NOT NULL,
+  PRIMARY KEY (thread_id, harness_id, provider_id, model_id, thinking_level)`
+
+/**
+ * Column definitions for the canonical `turn_feedback` table. thread_id
+ * deliberately does NOT cascade-delete: resolved outcomes are the long-term
+ * analytics record for "best model by feedback", so rows keep their own
+ * attribution when the owning thread is deleted.
+ */
+export const TURN_FEEDBACK_COLUMNS_SQL = `
+  id             TEXT PRIMARY KEY NOT NULL,
+  thread_id      TEXT REFERENCES threads(id) ON DELETE SET NULL,
+  parent_turn_id TEXT NOT NULL UNIQUE,
+  session_id     TEXT,
+  created_at     INTEGER NOT NULL,
+  resolved_at    INTEGER,
+  status         TEXT NOT NULL CHECK(status IN ('pending','success','corrected')),
+  signal         TEXT CHECK(signal IN ('continued','switched','cleaned_up','corrective_feedback')),
+  score          REAL NOT NULL DEFAULT 0,
+  feature        TEXT CHECK(feature IN ('main','audit','assignment')),
+  task_slug      TEXT,
+  harness_id     TEXT,
+  provider_id    TEXT,
+  model_id       TEXT,
+  thinking_level TEXT,
+  cost_usd       REAL,
+  cost_status    TEXT CHECK(cost_status IN ('known','estimated','unavailable')),
+  tokens_total   INTEGER`
 
 export const ATTACHMENT_GRANTS_SQL = `
 -- ─── Durable attachment grants ──────────────────────────────────────────
@@ -324,6 +394,21 @@ CREATE TABLE IF NOT EXISTS remote_pairing_bootstraps (
 );
 
 CREATE INDEX IF NOT EXISTS idx_remote_bootstraps_state ON remote_pairing_bootstraps(state);`
+
+/**
+ * Desktop account profile cache. Mirrors the last validated remote account
+ * profile (id, avatar, name, email, usage, global memories) so an app restart
+ * or an offline window never loses the signed-in identity. The row is replaced
+ * only when a fresh profile is fetched and removed only when the user
+ * explicitly signs out.
+ */
+export const ACCOUNT_PROFILE_SQL = `
+-- ─── Account profile cache (desktop) ────────────────────────────────────
+CREATE TABLE IF NOT EXISTS account_profile (
+  id           TEXT PRIMARY KEY NOT NULL,
+  profile_json TEXT NOT NULL,
+  cached_at    INTEGER NOT NULL
+);`
 
 export const MISC_TABLES_SQL =
   `
@@ -505,7 +590,9 @@ CREATE TABLE IF NOT EXISTS assignment_api_capabilities (
 CREATE INDEX IF NOT EXISTS idx_assignment_capabilities_assignment
   ON assignment_api_capabilities(assignment_id);
 CREATE INDEX IF NOT EXISTS idx_assignment_capabilities_thread
-  ON assignment_api_capabilities(thread_id);` + REMOTE_DEVICE_SQL
+  ON assignment_api_capabilities(thread_id);` +
+  REMOTE_DEVICE_SQL +
+  ACCOUNT_PROFILE_SQL
 
 export const PERSISTENCE_SQL = `
 -- ─── Provider sync cursors ────────────────────────────────────────────────
@@ -540,6 +627,7 @@ CREATE TABLE IF NOT EXISTS harness_usage (
   harness_id           TEXT NOT NULL,
   provider_id          TEXT NOT NULL,
   model_id             TEXT,
+  thinking_level       TEXT,
   message_count        INTEGER NOT NULL DEFAULT 0,
   cost_usd             REAL NOT NULL DEFAULT 0,
   tokens_in            INTEGER NOT NULL DEFAULT 0,
@@ -572,28 +660,12 @@ CREATE TABLE IF NOT EXISTS harness_usage_messages (
 CREATE INDEX IF NOT EXISTS idx_harness_usage_messages_thread
   ON harness_usage_messages(thread_id);
 
--- Per-model cost breakdown for each (thread, harness, provider). One row per
--- model a harness used on a thread, with cumulative cost/tokens/duration so the
--- battery popover (and a future usage settings page) can show what each model
--- consumed. Rows cascade-delete with their thread.
-CREATE TABLE IF NOT EXISTS harness_usage_models (
-  thread_id            TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
-  harness_id           TEXT NOT NULL,
-  provider_id          TEXT NOT NULL,
-  model_id             TEXT NOT NULL,
-  message_count        INTEGER NOT NULL DEFAULT 0,
-  cost_usd             REAL NOT NULL DEFAULT 0,
-  tokens_in            INTEGER NOT NULL DEFAULT 0,
-  tokens_out           INTEGER NOT NULL DEFAULT 0,
-  tokens_reasoning     INTEGER NOT NULL DEFAULT 0,
-  tokens_cache_read    INTEGER NOT NULL DEFAULT 0,
-  tokens_cache_write   INTEGER NOT NULL DEFAULT 0,
-  tokens_total         INTEGER NOT NULL DEFAULT 0,
-  duration_ms          INTEGER NOT NULL DEFAULT 0,
-  first_used_at        INTEGER NOT NULL,
-  last_used_at         INTEGER NOT NULL,
-  PRIMARY KEY (thread_id, harness_id, provider_id, model_id)
-);
+-- Per-model cost breakdown for each (thread, harness, provider, thinking level).
+-- One row per model+thinking-level a harness used on a thread, with cumulative
+-- cost/tokens/duration so the battery popover (and the usage settings page) can
+-- show what each model consumed at each reasoning effort. Rows cascade-delete
+-- with their thread.
+CREATE TABLE IF NOT EXISTS harness_usage_models (${HARNESS_USAGE_MODELS_COLUMNS_SQL});
 
 CREATE INDEX IF NOT EXISTS idx_harness_usage_models_thread
   ON harness_usage_models(thread_id);
@@ -615,6 +687,7 @@ CREATE TABLE IF NOT EXISTS usage_events (
   harness_id            TEXT,
   provider_id           TEXT,
   model_id              TEXT,
+  thinking_level        TEXT,
   utility_id            TEXT,
   raw_provider_usage_json TEXT NOT NULL DEFAULT '{}',
   tokens_uncached_input INTEGER CHECK(tokens_uncached_input IS NULL OR tokens_uncached_input >= 0),
@@ -643,9 +716,45 @@ CREATE INDEX IF NOT EXISTS idx_usage_events_thread
   ON usage_events(thread_id, created_at, id);
 
 CREATE INDEX IF NOT EXISTS idx_usage_events_parent_turn
-  ON usage_events(parent_turn_id, feature, created_at);`
+  ON usage_events(parent_turn_id, feature, created_at);
 
-/** Canonical fresh-install schema. There are no historical migrations. */
+-- Profile utility-usage and efficiency-KPI scans filter feature + created_at.
+CREATE INDEX IF NOT EXISTS idx_usage_events_feature_timestamp
+  ON usage_events(feature, created_at);
+
+-- ─── Turn outcome feedback (session scoring) ─────────────────────────────
+-- One row per completed user turn, opened "pending" when a successful turn
+-- finishes and resolved when the user signals the outcome: they continued
+-- positively, corrected the answer, switched away to another thread, or left
+-- the thread idle until cleanup. Scores (0/1) feed the "best model by
+-- feedback" profile section, keyed by harness/provider/model/thinking level
+-- and the task kind (main/audit/assignment).
+CREATE TABLE IF NOT EXISTS turn_feedback (${TURN_FEEDBACK_COLUMNS_SQL});
+
+CREATE INDEX IF NOT EXISTS idx_turn_feedback_thread
+  ON turn_feedback(thread_id, created_at);
+
+CREATE INDEX IF NOT EXISTS idx_turn_feedback_pending
+  ON turn_feedback(status, created_at);
+
+CREATE INDEX IF NOT EXISTS idx_turn_feedback_attribution
+  ON turn_feedback(harness_id, provider_id, model_id, thinking_level, feature);`
+
+/**
+ * Private user-only notes attached to threads. The row cascade-deletes with
+ * its thread, so deleting a thread always removes its note. Notes are never
+ * read by the chat engine or any harness — they are purely user scratch space.
+ */
+export const THREAD_NOTES_SQL = `
+-- ─── Thread notes (user-only scratch space) ──────────────────────────────
+CREATE TABLE IF NOT EXISTS thread_notes (
+  thread_id  TEXT PRIMARY KEY NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
+  body       TEXT NOT NULL DEFAULT '',
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);`
+
+/** Canonical fresh-install schema. */
 export const DATABASE_SCHEMA_SQL = [
   SCHEMA_SQL,
   PROJECT_FTS_SQL,
@@ -658,5 +767,6 @@ export const DATABASE_SCHEMA_SQL = [
   AGENT_MESSAGES_FTS_TRIGGERS_SQL,
   MISC_TABLES_SQL,
   PERSISTENCE_SQL,
-  HARNESS_USAGE_SQL
+  HARNESS_USAGE_SQL,
+  THREAD_NOTES_SQL
 ].join('\n')

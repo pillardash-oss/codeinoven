@@ -7,7 +7,7 @@
   import { blockHtml, fileCitationTarget, lexMarkdown } from './markdown'
   import { openInBrowser } from '$lib/open-in-browser'
   import { extractCitationCandidates } from '$lib/agent-source-citations'
-  import { revealCitationFile } from '$lib/reveal-file'
+  import { revealCitationFile, revealLocalFile } from '$lib/reveal-file'
   import { citationPathsState } from '$lib/stores/citation-paths.svelte'
   import { faviconState } from '$lib/stores/favicons.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
@@ -173,7 +173,11 @@
     if (href.startsWith('file://')) {
       event.preventDefault()
       clearTooltip()
-      onOpenLocalFile?.(href)
+      if (onOpenLocalFile) {
+        onOpenLocalFile(href)
+      } else {
+        void revealLocalFile(workspaceState.activeProject?.id, href)
+      }
       return
     }
     if (href.startsWith('http://') || href.startsWith('https://')) {

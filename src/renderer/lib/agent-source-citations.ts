@@ -35,6 +35,22 @@ const URL_PATTERN = /https?:\/\/[^\s<>"'`)\]}]+/gu
 const MARKDOWN_LINK_PATTERN = /(?<!!)\[([^\]]+)\]\((?:<([^>\n]+)>|([^) \t\n]+))\)/gu
 const MARKDOWN_WEB_LINK_PATTERN = /\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/gu
 
+// Codex CLI / ChatGPT agent file citations, e.g.
+//   :codex-file-citation{path="/abs/file.pdf" purpose="source"}.
+// Prefix may be `:`, `::` or `:::`. Only `path` is required; values are
+// double-quoted (may escape `\"` and `\\`), and braces inside quotes are
+// content. Optional unquoted `line_range_start`/`line_range_end` carry the
+// line span. Sentence punctuation follows the closing `}` in prose.
+const CODEX_CITATION_PATTERN = /:{1,3}codex-file-citation\{((?:[^"{}]|"(?:[^"\\]|\\.)*")*)\}/gu
+const CODEX_PATH_ATTRIBUTE = /(?:^|\s)path="((?:[^"\\]|\\.)*)"/u
+const CODEX_LINE_START_ATTRIBUTE = /(?:^|\s)line_range_start=(\d+)/u
+const CODEX_LINE_END_ATTRIBUTE = /(?:^|\s)line_range_end=(\d+)/u
+
+/** True for absolute filesystem paths (POSIX `/…`, Windows `C:/…`, UNC). */
+export function isAbsoluteCitationPath(value: string): boolean {
+  return /^(\/|[a-zA-Z]:[\\/]|\/\/)/u.test(value)
+}
+
 function cleanUrl(value: string): string {
   return value.replace(/[.,;:!?]+$/gu, '')
 }
@@ -172,6 +188,28 @@ export function normalizeCitationPath(value: string): string {
   return path
 }
 
+/** Decode a Codex attribute value: only `\"` and `\\` are escapes. A leading
+ *  double backslash (UNC path) is preserved verbatim. */
+function decodeCodexAttribute(value: string): string {
+  const isUnc = value.startsWith('\\\\')
+  const decoded = value.replace(/\\(["\\])/gu, '$1')
+  return isUnc ? `\\${decoded}` : decoded
+}
+
+/** Parse the attribute block of a `:codex-file-citation{...}` token. */
+function parseCodexCitation(attributes: string): ParsedFileCitation | null {
+  const pathMatch = CODEX_PATH_ATTRIBUTE.exec(attributes)
+  if (!pathMatch) return null
+  const path = decodeCodexAttribute(pathMatch[1] ?? '')
+  if (!path) return null
+  const result: ParsedFileCitation = { path }
+  const lineStart = CODEX_LINE_START_ATTRIBUTE.exec(attributes)
+  const lineEnd = CODEX_LINE_END_ATTRIBUTE.exec(attributes)
+  if (lineStart) result.line = Number(lineStart[1])
+  if (lineEnd) result.lineEnd = Number(lineEnd[1])
+  return result
+}
+
 function parseFileCitation(value: string, explicitLink = false): ParsedFileCitation | null {
   let target = value.trim()
   if (target.startsWith('<') && target.endsWith('>')) target = target.slice(1, -1)
@@ -179,7 +217,10 @@ function parseFileCitation(value: string, explicitLink = false): ParsedFileCitat
   if (
     !target ||
     /^(?:https?:|mailto:|data:|#(?!L\d))/iu.test(target) ||
-    target.startsWith('opencode-source:')
+    target.startsWith('opencode-source:') ||
+    // Reject `:name{...}` directive tokens (e.g. backticked codex citations)
+    // — they are markup, not file paths.
+    /^:{1,3}[a-z0-9-]+\{/iu.test(target)
   ) {
     return null
   }
@@ -209,6 +250,19 @@ function parseFileCitation(value: string, explicitLink = false): ParsedFileCitat
     new RegExp(`\\.${FILE_EXT_PATTERN}$`, 'iu').test(pathTail)
   if (!path || !recognizablePath) return null
   return { path, line, lineEnd }
+}
+
+/** Parse an absolute filesystem path before asynchronous existence checks finish. */
+export function parseAbsoluteFileCitationTarget(
+  value: string
+): { path: string; line?: number } | null {
+  if (value.startsWith('file://')) return null
+  const parsed = parseFileCitation(value, true)
+  if (!parsed || !isAbsoluteCitationPath(parsed.path)) return null
+  return {
+    path: parsed.path,
+    ...(parsed.line === undefined ? {} : { line: parsed.line })
+  }
 }
 
 function citationHref(citation: ParsedFileCitation): string {
@@ -266,6 +320,21 @@ export function extractCitations(text: string): SourceCitation[] {
     add({ kind: 'file', ...parsed, raw: match[0] })
   }
 
+  // Codex file citations are skipped inside fenced code blocks and inline code.
+  scanMarkdownLines(normalizedText, (line, inFence) => {
+    if (inFence) return
+    const segments = line.split('`')
+    for (let segmentIndex = 0; segmentIndex < segments.length; segmentIndex += 2) {
+      const segment = segments[segmentIndex]
+      if (!segment) continue
+      for (const match of segment.matchAll(CODEX_CITATION_PATTERN)) {
+        const parsed = parseCodexCitation(match[1] ?? '')
+        if (!parsed) continue
+        add({ kind: 'file', ...parsed, raw: match[0] })
+      }
+    }
+  })
+
   for (const match of normalizedText.matchAll(MARKDOWN_WEB_LINK_PATTERN)) {
     add({
       kind: 'web',
@@ -284,22 +353,35 @@ export function extractCitations(text: string): SourceCitation[] {
 
 export function linkifyFileCitations(
   text: string,
-  isValidPath?: (path: string) => boolean
+  isValidPath?: (path: string) => boolean,
+  isExternalPath?: (path: string) => boolean
 ): string {
   let result = normalizeEscapedSlashes(text)
+
+  // A candidate becomes a link when it is confirmed either inside the active
+  // project (`isValidPath`) or, for absolute paths, as an existing external
+  // entry (`isExternalPath`). Both are verified asynchronously by main before
+  // they ever return true, so every link target is known to exist on disk.
+  const isClickable = (path: string): boolean =>
+    isKnownCitation(path, isValidPath) || (isExternalPath?.(path) ?? false)
+
+  // Codex `:codex-file-citation{path="..."}` tokens — fence- and inline-code
+  // aware — become links only when the cited path is known (in the project or
+  // an existing external absolute path).
+  result = linkifyCodexCitations(result, isClickable)
 
   result = result.replace(
     MARKDOWN_LINK_PATTERN,
     (match, label: string, angleTarget?: string, plainTarget?: string) => {
       const parsed = parseFileCitation(angleTarget ?? plainTarget ?? '', true)
-      if (!parsed || !isKnownCitation(parsed.path, isValidPath)) return match
+      if (!parsed || !isClickable(parsed.path)) return match
       return `[${label}](${citationHref(parsed)})`
     }
   )
 
   result = result.replace(BACKTICK_CANDIDATE, (match, value: string) => {
     const parsed = parseFileCitation(value)
-    if (!parsed || !isKnownCitation(parsed.path, isValidPath)) return match
+    if (!parsed || !isClickable(parsed.path)) return match
     return `[\`${value}\`](${citationHref(parsed)})`
   })
 
@@ -307,7 +389,7 @@ export function linkifyFileCitations(
     PLAIN_WITH_LINE,
     (match, path: string, line: string, lineEnd?: string) => {
       const parsed = parseFileCitation(`${path}:${line}${lineEnd ? `-${lineEnd}` : ''}`)
-      if (!parsed || !isKnownCitation(parsed.path, isValidPath)) return match
+      if (!parsed || !isClickable(parsed.path)) return match
       return `[\`${match}\`](${citationHref(parsed)})`
     }
   )
@@ -319,6 +401,32 @@ export function linkifyFileCitations(
  *  without a validator (no project context) it is never linked. */
 function isKnownCitation(path: string, isValidPath?: (path: string) => boolean): boolean {
   return isValidPath ? isValidPath(path) : false
+}
+
+/** Rewrite `:codex-file-citation{...}` tokens to citation links. Skips fenced
+ *  code blocks and inline code spans; only known paths become links. */
+function linkifyCodexCitations(text: string, isKnown: (path: string) => boolean): string {
+  const out: string[] = []
+  scanMarkdownLines(text, (line, inFence) => {
+    if (inFence) {
+      out.push(line)
+      return
+    }
+    const segments = line.split('`')
+    const linked = segments
+      .map((segment, index) => {
+        if (index % 2 === 1) return segment
+        return segment.replace(CODEX_CITATION_PATTERN, (match, attributes: string) => {
+          const parsed = parseCodexCitation(attributes ?? '')
+          if (!parsed || !isKnown(parsed.path)) return match
+          const name = parsed.path.split(/[\\/]/u).at(-1) || parsed.path
+          return `[\`${name}\`](${citationHref(parsed)})`
+        })
+      })
+      .join('`')
+    out.push(linked)
+  })
+  return out.join('\n')
 }
 
 /** Extract the normalized file-citation paths a renderer should verify on disk. */

@@ -1,4 +1,5 @@
 import type {
+  ProjectFileDropResult,
   ProjectFileEntry,
   ProjectFileInfo,
   ProjectFileTransferMode,
@@ -7,10 +8,18 @@ import type {
 } from '$shared/types'
 import type { CloseConfirmationFile } from '$shared/ipc-contract'
 import { invoke } from '$lib/ipc.svelte'
-import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
-import { fileExplorerStore } from '$lib/stores/file-explorer.svelte'
+import { contextSidebarState, type FilesContextTab } from '$lib/stores/context-sidebar.svelte'
+import { clampFileExplorerWidth, fileExplorerStore } from '$lib/stores/file-explorer.svelte'
 import { gitState } from '$lib/stores/git.svelte'
 import { isImageMime, isPdfMime, mimeFromPath } from '$lib/mime'
+
+/** How many levels of subfolders "Expand all" reveals below the project root,
+ *  so the operation stays cheap even on very large trees. */
+const EXPAND_ALL_MAX_DEPTH = 4
+
+/** Upper bound on how deep the cheap first-open reveal will walk to land on the
+ *  last-viewed path. Keeps the open cheap even for very deep repos. */
+const RESTORE_MAX_DEPTH = 12
 
 export type ProjectFileView = 'diff' | 'preview' | 'source'
 
@@ -44,7 +53,9 @@ export interface ProjectFilesState {
   tabs: ProjectFileTab[]
   activeTabId: string | null
   explorerVisible: boolean
+  explorerWidth: number
   revealedPath: string | null
+  focusRequest: number
   selectedPaths: string[]
   selectionAnchor: string | null
   loadingPaths: Record<string, boolean>
@@ -63,11 +74,18 @@ export function createProjectFilesState(projectId: string): ProjectFilesState {
     entriesByDirectory: {},
     loadingDirectories: {},
     directoryErrors: {},
-    expandedDirectories: { ...explorer.expandedDirectories },
+    // Start collapsed at the root. The persisted expansion set is NOT seeded
+    // here so a large/poisoned snapshot can't render a huge tree on open; the
+    // cheap first-open reveal (`restoreRevealedPath`) expands only the ancestor
+    // chain of the last-viewed path. `revealedPath`/`selectedPaths` are kept so
+    // that reveal can still land where the user left off.
+    expandedDirectories: {},
     tabs: [],
     activeTabId: null,
     explorerVisible: explorer.explorerVisible,
+    explorerWidth: explorer.width,
     revealedPath: explorer.revealedPath,
+    focusRequest: 0,
     selectedPaths: [...explorer.selectedPaths],
     selectionAnchor: null,
     loadingPaths: {},
@@ -85,6 +103,7 @@ function errorMessage(error: unknown): string {
 class ProjectFilesWorkspace {
   private projects: Record<string, ProjectFilesState> = $state({})
   private directoryLoads = new Map<string, Promise<void>>()
+  private focusGenerations = new Map<string, number>()
   /** Fresh project states whose persisted expansion still needs to be populated. */
   private pendingRestores = new Set<string>()
   clipboard: ProjectFileClipboard | null = $state(null)
@@ -121,11 +140,13 @@ class ProjectFilesWorkspace {
           directory
         )
         // The first time the root is listed for a freshly hydrated project,
-        // populate the previously expanded directories so the restored tree is
-        // actually visible (and the reveal/scroll logic can land on the path).
+        // cheaply restore the last-viewed position: only the ancestor chain of
+        // the revealed/selected path is loaded, never the whole saved set of
+        // expanded folders. Loading hundreds of persisted folders at once was
+        // what ballooned the renderer heap and OOM'd the app on open.
         if (directory === '' && this.pendingRestores.has(projectId)) {
           this.pendingRestores.delete(projectId)
-          await this.restoreExpandedDirectories(projectId, state)
+          await this.restoreRevealedPath(projectId, state)
         }
       } catch (error) {
         state.directoryErrors[directory] = errorMessage(error)
@@ -141,15 +162,21 @@ class ProjectFilesWorkspace {
     }
   }
 
-  /** Load the persisted expanded directories so the restored tree is populated. */
-  private async restoreExpandedDirectories(
-    projectId: string,
-    state: ProjectFilesState
-  ): Promise<void> {
-    const expanded = Object.keys(state.expandedDirectories)
-      .filter((candidate) => candidate && !state.entriesByDirectory[candidate])
-      .sort((left, right) => left.split('/').length - right.split('/').length)
-    for (const directory of expanded) {
+  /** Restore the tree's position cheaply on first open. Only the ancestor
+   *  folders of the last-viewed path are expanded and loaded (bounded by the
+   *  path's own depth), so the tree opens plainly at the root while still
+   *  landing where the user left off — without re-hydrating the entire saved
+   *  expansion set, which is what caused the V8 OOM. */
+  private async restoreRevealedPath(projectId: string, state: ProjectFilesState): Promise<void> {
+    const target = state.revealedPath ?? state.selectedPaths.at(-1) ?? null
+    if (!target) return
+    const segments = target.split('/')
+    segments.pop()
+    const ancestors = segments.slice(0, RESTORE_MAX_DEPTH)
+    let directory = ''
+    for (const segment of ancestors) {
+      directory = directory ? `${directory}/${segment}` : segment
+      state.expandedDirectories[directory] = true
       await this.loadDirectory(projectId, directory)
     }
   }
@@ -162,7 +189,8 @@ class ProjectFilesWorkspace {
       expandedDirectories: { ...state.expandedDirectories },
       revealedPath: state.revealedPath,
       selectedPaths: [...state.selectedPaths],
-      explorerVisible: state.explorerVisible
+      explorerVisible: state.explorerVisible,
+      width: state.explorerWidth
     })
   }
 
@@ -176,6 +204,74 @@ class ProjectFilesWorkspace {
     state.expandedDirectories[directory] = true
     this.persistExplorer(projectId)
     await this.loadDirectory(projectId, directory)
+  }
+
+  /** Collapse every expanded folder in the tree. */
+  collapseAllDirectories(projectId: string): void {
+    const state = this.ensureState(projectId)
+    state.expandedDirectories = {}
+    this.persistExplorer(projectId)
+  }
+
+  /** Expand a batch of directories (e.g. every ancestor of search results) and
+   *  load their contents in parallel. The explorer snapshot is persisted once
+   *  after the whole batch instead of once per directory — persisting per
+   *  expansion serialized the full snapshot to localStorage on every folder and
+   *  froze the renderer during searches on large trees.
+   *
+   *  `persist` is false for search-driven expansions: they are transient view
+   *  state, and persisting them would leave huge subtrees (e.g. `.cio`) marked
+   *  expanded across sessions, which slows every later tree render. */
+  async expandAndLoadDirectories(
+    projectId: string,
+    directories: string[],
+    persist = true
+  ): Promise<void> {
+    const state = this.ensureState(projectId)
+    for (const directory of directories) {
+      state.expandedDirectories[directory] = true
+    }
+    if (persist) this.persistExplorer(projectId)
+    await Promise.all(directories.map((directory) => this.loadDirectory(projectId, directory)))
+  }
+
+  /** Collapse a batch of directories without loading anything (used to revert
+   *  transient search-driven expansions when the filter closes). */
+  collapseDirectories(projectId: string, directories: string[], persist = true): void {
+    const state = this.ensureState(projectId)
+    for (const directory of directories) {
+      delete state.expandedDirectories[directory]
+    }
+    if (persist) this.persistExplorer(projectId)
+  }
+
+  /** Expand every folder in the tree, loading their contents recursively. */
+  async expandAllDirectories(projectId: string): Promise<void> {
+    const state = this.ensureState(projectId)
+    state.expandedDirectories = {}
+    await this.expandDirectoryTree(projectId, state, '')
+    this.persistExplorer(projectId)
+  }
+
+  /** Expand folders recursively up to a bounded depth, so we don't enumerate an
+   *  entire repository's subtree at once. */
+  private async expandDirectoryTree(
+    projectId: string,
+    state: ProjectFilesState,
+    directory: string,
+    depth = 0
+  ): Promise<void> {
+    if (!state.entriesByDirectory[directory]) {
+      await this.loadDirectory(projectId, directory)
+    }
+    state.expandedDirectories[directory] = true
+    if (depth >= EXPAND_ALL_MAX_DEPTH) return
+    const entries = state.entriesByDirectory[directory] ?? []
+    for (const entry of entries) {
+      if (entry.kind === 'directory') {
+        await this.expandDirectoryTree(projectId, state, entry.path, depth + 1)
+      }
+    }
   }
 
   setClipboard(projectId: string, paths: string[], mode: ProjectFileTransferMode): void {
@@ -212,6 +308,13 @@ class ProjectFilesWorkspace {
     )
     await this.loadDirectory(projectId, directory, true)
     await this.openFile(projectId, entry.path)
+  }
+
+  async createDirectory(projectId: string, directory: string, name: string): Promise<void> {
+    await this.runFileOperation(() =>
+      invoke('projectFiles:createDirectory', projectId, directory, name)
+    )
+    await this.loadDirectory(projectId, directory, true)
   }
 
   async renameFile(projectId: string, path: string, name: string): Promise<void> {
@@ -306,6 +409,22 @@ class ProjectFilesWorkspace {
     return entries
   }
 
+  async dropExternalPaths(
+    projectId: string,
+    sourcePaths: string[],
+    destinationDirectory: string
+  ): Promise<ProjectFileDropResult[]> {
+    if (sourcePaths.length === 0) return []
+    const results = await this.runFileOperation(() =>
+      invoke('projectFiles:dropPaths', projectId, sourcePaths, destinationDirectory)
+    )
+    for (const result of results) {
+      if (result.movedFrom) this.remapMovedFile(projectId, result.movedFrom, result.entry.path)
+    }
+    await this.refresh(projectId)
+    return results
+  }
+
   async fileInfo(projectId: string, path: string): Promise<ProjectFileInfo> {
     return this.runFileOperation(() => invoke('projectFiles:info', projectId, path))
   }
@@ -316,6 +435,7 @@ class ProjectFilesWorkspace {
     preferredView: ProjectFileView = 'source',
     focusLine?: number
   ): Promise<void> {
+    if (this.focusOpenFileTab(projectId, path, focusLine)) return
     await this.openWorkingTab(projectId, path, preferredView, false, focusLine)
   }
 
@@ -324,13 +444,7 @@ class ProjectFilesWorkspace {
    *  (or opening it again in normal mode) pins it as a permanent tab. */
   async openFilePreview(projectId: string, path: string): Promise<void> {
     const state = this.ensureState(projectId)
-    const tabId = `working:${path}`
-    if (state.tabs.some((candidate) => candidate.id === tabId)) {
-      state.activeTabId = tabId
-      const threadId = contextSidebarState.threadIdForProject(projectId)
-      if (threadId) contextSidebarState.openProjectFile(projectId, threadId, tabId, path, true)
-      return
-    }
+    if (this.focusOpenFileTab(projectId, path)) return
     const previewTab = state.tabs.find(
       (candidate) => candidate.origin === 'working' && candidate.preview
     )
@@ -339,6 +453,39 @@ class ProjectFilesWorkspace {
       return
     }
     await this.openWorkingTab(projectId, path, 'source', true)
+  }
+
+  /** Focus an existing sidebar file tab by path before any caller creates a
+   *  working-file tab. This also reuses checkpoint tabs, while preferring the
+   *  currently active match and then the ordinary working-file tab. */
+  private focusOpenFileTab(projectId: string, path: string, focusLine?: number): boolean {
+    const matchingTabs = contextSidebarState.tabs.filter(
+      (tab): tab is FilesContextTab =>
+        tab.kind === 'files' &&
+        tab.projectId === projectId &&
+        tab.path === path &&
+        tab.fileTabId !== null
+    )
+    if (matchingTabs.length === 0) return false
+
+    const activeTab = contextSidebarState.activeTab
+    const target =
+      (activeTab?.kind === 'files' && matchingTabs.find((tab) => tab.id === activeTab.id)) ||
+      matchingTabs.find((tab) => tab.fileTabId === `working:${path}`) ||
+      matchingTabs.at(-1)
+    if (!target?.fileTabId) return false
+
+    const state = this.ensureState(projectId)
+    const fileTab = state.tabs.find((tab) => tab.id === target.fileTabId)
+    if (!fileTab) return false
+    state.activeTabId = fileTab.id
+    if (focusLine !== undefined && fileTab.origin === 'working') {
+      fileTab.view = 'source'
+      fileTab.focusLine = Math.max(1, Math.floor(focusLine))
+      fileTab.focusLineRequest += 1
+    }
+    contextSidebarState.focus(target.id)
+    return true
   }
 
   async openCheckpointFile(
@@ -500,26 +647,74 @@ class ProjectFilesWorkspace {
     this.persistExplorer(projectId)
   }
 
+  setExplorerWidth(projectId: string, width: number, persist = true): void {
+    const state = this.ensureState(projectId)
+    state.explorerWidth = clampFileExplorerWidth(width)
+    if (persist) this.persistExplorer(projectId)
+  }
+
   async revealDirectory(projectId: string, directory: string): Promise<void> {
     const state = this.ensureState(projectId)
+    const generation = this.beginFocus(projectId)
     state.explorerVisible = true
+    await this.expandDirectoryPath(projectId, state, directory)
+    if (!this.isCurrentFocus(projectId, generation)) return
     state.revealedPath = directory || null
+    state.selectedPaths = directory ? [directory] : []
+    state.selectionAnchor = directory || null
+    state.focusRequest += 1
+    this.persistExplorer(projectId)
+  }
+
+  private beginFocus(projectId: string): number {
+    const generation = (this.focusGenerations.get(projectId) ?? 0) + 1
+    this.focusGenerations.set(projectId, generation)
+    return generation
+  }
+
+  private isCurrentFocus(projectId: string, generation: number): boolean {
+    return this.focusGenerations.get(projectId) === generation
+  }
+
+  private async expandDirectoryPath(
+    projectId: string,
+    state: ProjectFilesState,
+    directory: string
+  ): Promise<void> {
     const segments = directory.split('/').filter(Boolean)
     const ancestors = segments.map((_, index) => segments.slice(0, index + 1).join('/'))
     for (const ancestor of ancestors) {
       state.expandedDirectories[ancestor] = true
       await this.loadDirectory(projectId, ancestor)
     }
-    this.persistExplorer(projectId)
   }
 
   async revealFile(projectId: string, path: string): Promise<void> {
     const state = this.ensureState(projectId)
+    const generation = this.beginFocus(projectId)
     state.explorerVisible = true
     await this.loadDirectory(projectId, '')
-    await this.revealDirectory(projectId, this.parentDirectory(path))
+    await this.expandDirectoryPath(projectId, state, this.parentDirectory(path))
+    if (!this.isCurrentFocus(projectId, generation)) return
     state.revealedPath = path
     state.selectedPaths = [path]
+    state.selectionAnchor = path
+    state.focusRequest += 1
+    this.persistExplorer(projectId)
+  }
+
+  /** Keep a mounted explorer aligned with the active file tab without opening
+   *  an explorer that the user chose to hide. */
+  async focusFileInExplorer(projectId: string, path: string): Promise<void> {
+    const state = this.ensureState(projectId)
+    const generation = this.beginFocus(projectId)
+    await this.loadDirectory(projectId, '')
+    await this.expandDirectoryPath(projectId, state, this.parentDirectory(path))
+    if (!this.isCurrentFocus(projectId, generation)) return
+    state.revealedPath = path
+    state.selectedPaths = [path]
+    state.selectionAnchor = path
+    state.focusRequest += 1
     this.persistExplorer(projectId)
   }
 
@@ -763,7 +958,9 @@ class ProjectFilesWorkspace {
       projectId,
       previousTabId,
       nextTabId,
-      nextPath
+      nextPath,
+      preview,
+      true
     )
     if (remapped) return
     const threadId = contextSidebarState.threadIdForProject(projectId)
@@ -904,7 +1101,15 @@ class ProjectFilesWorkspace {
     }
     for (const previousId of Object.keys(remapped)) {
       const next = remapped[previousId]
-      contextSidebarState.remapProjectFile(projectId, previousId, next.id, next.path)
+      const tab = state.tabs.find((candidate) => candidate.id === next.id)
+      contextSidebarState.remapProjectFile(
+        projectId,
+        previousId,
+        next.id,
+        next.path,
+        tab?.preview ?? false,
+        false
+      )
     }
 
     for (const path of Object.keys(state.expandedDirectories).filter(isWithin)) {

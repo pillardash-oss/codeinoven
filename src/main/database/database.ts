@@ -4,7 +4,7 @@ import { performance } from 'node:perf_hooks'
 import DatabaseConstructor from 'better-sqlite3'
 import type { Database as DatabaseType, Statement } from 'better-sqlite3'
 import { getConfigRoot } from '../../lib/utils'
-import { Logger } from '../logger'
+import { Logger } from '../system/logger'
 import { DATABASE_SCHEMA_SQL } from './schema'
 import {
   DatabaseWorker,
@@ -27,6 +27,7 @@ import {
 } from './repositories/agent-message-repo'
 import { runHistoryAppend } from './repositories/history-repo'
 import type { AgentMessage } from '../../lib/types'
+import { buildBoundedQuery } from './bounded-query'
 
 /** Main-thread SQLite work above one 60 Hz frame is diagnostic-worthy. */
 export const MAIN_THREAD_DATABASE_WARNING_MS = 16.7
@@ -371,13 +372,33 @@ export class Database {
     return runProviderDeltaSync(this, threadId, sessionId, messages)
   }
 
+  /**
+   * Serialize a thread's mirrored conversation into a Markdown transcript on
+   * the maintenance worker's thread and write it atomically. Returns the
+   * written path, or a typed error when the worker is unavailable or fails.
+   */
+  async exportTranscriptViaWorker(
+    threadId: string,
+    includeTrace: boolean,
+    destinationPath: string
+  ): Promise<{ ok: boolean; path?: string; error?: string }> {
+    const worker = this.maintenanceWorker
+    if (!worker?.isRunning()) {
+      return { ok: false, error: 'no maintenance worker' }
+    }
+    const response = await worker.exportTranscript(threadId, includeTrace, destinationPath)
+    if (response.ok) return { ok: true, path: response.path }
+    return { ok: false, error: response.error ?? 'transcript export failed' }
+  }
+
   // ── Serialized worker CRUD (bounded/paged reads, batched writes) ────────
 
   /**
    * Bounded read executed on the worker's connection (serialized with every
-   * other worker request and the maintenance loop). `sql` must not contain
-   * LIMIT; `maxRows` (>0) bounds the response. Falls back to the primary
-   * connection when no worker is available or the worker fails.
+   * other worker request and the maintenance loop). `maxRows` (>0) bounds the
+   * response; caller-owned LIMIT clauses are preserved inside an outer bound.
+   * Falls back to the primary connection when no worker is available or the
+   * worker fails.
    */
   async queryViaWorker(
     sql: string,
@@ -629,8 +650,8 @@ function truncateSqlForLog(sql: string): string {
 }
 
 /**
- * Local fallback for the worker's bounded query: applies the same LIMIT +
- * truncation semantics against a primary connection.
+ * Local fallback for the worker's bounded query: applies the same outer-limit
+ * and truncation semantics against a primary connection.
  */
 function runLocalBoundedQuery(
   db: Database,
@@ -639,14 +660,13 @@ function runLocalBoundedQuery(
   maxRows: number
 ): { ok: boolean; rows: Record<string, unknown>[]; truncated: boolean; error?: string } {
   try {
-    const bounded = Math.max(0, Math.floor(maxRows))
-    let statementSql = sql.replace(/;\s*$/u, '')
+    const boundedQuery = buildBoundedQuery(sql, maxRows)
     const boundParams = [...params]
-    if (bounded > 0) {
-      statementSql = `${statementSql} LIMIT ?`
-      boundParams.push(bounded + 1)
+    if (boundedQuery.limitParam !== undefined) {
+      boundParams.push(boundedQuery.limitParam)
     }
-    const rows = db.all<Record<string, unknown>>(statementSql, ...boundParams)
+    const rows = db.all<Record<string, unknown>>(boundedQuery.sql, ...boundParams)
+    const bounded = Math.max(0, Math.floor(maxRows))
     const truncated = bounded > 0 && rows.length > bounded
     return { ok: true, rows: truncated ? rows.slice(0, bounded) : rows, truncated }
   } catch (error) {

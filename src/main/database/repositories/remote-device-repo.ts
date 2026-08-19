@@ -65,7 +65,6 @@ export type RemoteAuditDecision =
   | 'step_up_approved'
   | 'step_up_rejected'
   | 'step_up_timeout'
-  | 'migration'
 
 export type RemoteAuditReasonCode =
   | 'missing_record'

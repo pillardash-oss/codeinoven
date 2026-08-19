@@ -1,4 +1,5 @@
 import type {
+  AgentArtifact,
   AgentMessage,
   AgentModelSelection,
   AgentRole,
@@ -51,6 +52,7 @@ import type {
   Plan,
   Project,
   ProjectFileEntry,
+  ProjectFileDropResult,
   ProjectFileInfo,
   ProjectFileTransferMode,
   ProjectTextFile,
@@ -76,6 +78,7 @@ import type {
   MergeSummary,
   PrCreateInput,
   PrAgentReport,
+  PrComposeReport,
   PrMergeMethod,
   PrReviewEvent,
   PrResolveOptions,
@@ -122,6 +125,7 @@ import type {
   ThreadMessageCursor,
   ThreadMessagePage,
   UserMessageSummary,
+  ThreadNote,
   ThreadSettings,
   ThreadStatus,
   UsageEfficiencyKpis,
@@ -175,6 +179,7 @@ export interface IpcInvokeContract {
     import('./types').AccountSignInStart
   >
   'account:syncProfile': Contract<[], import('./types').AccountProfileState>
+  'account:signOut': Contract<[], void>
   'brainstorm:ensureWorkflow': Contract<
     [projectId: string, threadId: string],
     BrainstormWorkflowState
@@ -389,6 +394,7 @@ export interface IpcInvokeContract {
         priority?: import('./types').MemoryPriority
         scope?: import('./types').MemoryScope
         source?: import('./types').MemorySource
+        modelKeys?: string[]
         projectId?: string
         threadId?: string
       }
@@ -421,11 +427,25 @@ export interface IpcInvokeContract {
         category?: import('./types').MemoryCategory
         priority?: import('./types').MemoryPriority
         scope?: import('./types').MemoryScope
+        modelKeys?: string[]
         projectId?: string
         threadId?: string
       }
     ],
     import('./types').MemoryProposal
+  >
+  'memory:export': Contract<
+    [kind: import('./types').MemoryExportKind, projectId?: string],
+    string | null
+  >
+  'memory:import': Contract<[], import('./types').MemoryImportPreview | null>
+  'memory:importApply': Contract<
+    [
+      preview: import('./types').MemoryImportPreview,
+      kind: import('./types').MemoryExportKind,
+      projectId?: string
+    ],
+    { added: number; skipped: number }
   >
   'agent:compact': Contract<[projectId: string, threadId: string], void>
   'agent:answerQuestion': Contract<
@@ -549,6 +569,7 @@ export interface IpcInvokeContract {
   'agent:listProviderSnapshot': Contract<[projectId: string], ProviderCatalog[]>
   'agent:refreshProviderCatalog': Contract<[projectId: string], ProviderCatalog[]>
   'agent:refreshAccountUsage': Contract<[projectId: string, threadId: string], AgentAccountUsage[]>
+  'agent:getHarnessAuthStatus': Contract<[projectId: string, harnessId: string], boolean | null>
   'agent:listTools': Contract<
     [projectId?: string, harnessId?: string, providerId?: string, modelId?: string],
     AgentToolCatalog
@@ -557,6 +578,7 @@ export interface IpcInvokeContract {
     [projectId: string, threadId: string],
     AgentContextCapabilities
   >
+  'agent:listArtifacts': Contract<[projectId: string, threadId: string], AgentArtifact[]>
   'agent:listProcesses': Contract<[projectId: string, threadId: string], AgentRunningProcess[]>
   'agent:killProcess': Contract<[projectId: string, threadId: string, pid: number], void>
   'agent:killThreadProcesses': Contract<[projectId: string, threadId: string], void>
@@ -648,7 +670,23 @@ export interface IpcInvokeContract {
     ],
     AgentMessage
   >
+  'agent:steerTemporaryPrompt': Contract<
+    [
+      projectId: string,
+      threadId: string,
+      temporaryChatId: string,
+      settings: ThreadSettings,
+      text: string,
+      attachments: PromptAttachment[],
+      selections: string[]
+    ],
+    void
+  >
   'agent:closeTemporaryChat': Contract<[temporaryChatId: string], void>
+  'agent:abortTemporaryChat': Contract<
+    [projectId: string, threadId: string, temporaryChatId: string],
+    void
+  >
   'agent:getTemporaryChatStatus': Contract<
     [temporaryChatId: string],
     { active: boolean; expiresAt?: number }
@@ -710,9 +748,14 @@ export interface IpcInvokeContract {
   'workerNames:saveCustom': Contract<[names: string[]], void>
   'dialog:pickFolder': Contract<[], string | null>
   'clipboard:saveImage': Contract<[scope: AttachmentStorageScope], string | null>
+  'attachment:saveText': Contract<
+    [scope: AttachmentStorageScope, text: string, existingPath?: string],
+    string
+  >
   'clipboard:writeText': Contract<[text: string], void>
   'clipboard:readText': Contract<[], string>
   'dialog:pickFile': Contract<[scope?: AttachmentStorageScope], string | null>
+  'dialog:pickFiles': Contract<[scope?: AttachmentStorageScope], string[]>
   'dialog:pickImage': Contract<[], string | null>
   'diagnostics:export': Contract<[], string | null>
   'file:read': Contract<[filePath: string], Uint8Array<ArrayBuffer> | null>
@@ -730,7 +773,7 @@ export interface IpcInvokeContract {
   'git:branches': Contract<[projectId: string], GitBranchInfo[]>
   'git:checkout': Contract<[projectId: string, branch: string], GitStatus>
   'git:createBranch': Contract<[projectId: string, name: string], GitStatus>
-  'git:deleteBranch': Contract<[projectId: string, name: string], GitStatus>
+  'git:deleteBranch': Contract<[projectId: string, name: string, force?: boolean], GitStatus>
   'git:log': Contract<[projectId: string, limit?: number, offset?: number], GitCommitInfo[]>
   'git:commitDiff': Contract<[projectId: string, hash: string], GitFileChange[]>
   'git:commitFileDiff': Contract<[projectId: string, hash: string, path: string], GitDiff>
@@ -793,6 +836,10 @@ export interface IpcInvokeContract {
     ],
     GitHubMutationResult<PullRequestReference>
   >
+  'pr:ready': Contract<
+    [projectId: string, owner: string, repo: string, pullNumber: number],
+    GitHubMutationResult<PullRequestReference>
+  >
   'pr:compare': Contract<
     [projectId: string, owner: string, repo: string, base: string, head: string],
     PullRequestCompare
@@ -803,6 +850,17 @@ export interface IpcInvokeContract {
   >
   'pr:close': Contract<
     [projectId: string, owner: string, repo: string, pullNumber: number],
+    GitHubMutationResult<PullRequestReference>
+  >
+  'pr:update': Contract<
+    [
+      projectId: string,
+      owner: string,
+      repo: string,
+      pullNumber: number,
+      title: string | undefined,
+      body: string | undefined
+    ],
     GitHubMutationResult<PullRequestReference>
   >
   'pr:page': Contract<
@@ -1021,6 +1079,17 @@ export interface IpcInvokeContract {
   >
   /** Create `.cio/git/pr/<number>/` for an agent review and return its absolute path. */
   'pr:reviewWorkspace': Contract<[projectId: string, pullNumber: number, threadId?: string], string>
+  /** Run the PR-compose agent virtually and consume its temporary report. */
+  'pr:composeWithAgent': Contract<
+    [
+      projectId: string,
+      virtualTaskId: string,
+      settings: ThreadSettings,
+      title: string,
+      prompt: string
+    ],
+    PrComposeReport
+  >
   'github:authStatus': Contract<[], GitHubAuthStatus>
   'github:startDeviceFlow': Contract<[], GitHubDeviceCode>
   'github:poll': Contract<[deviceCode: string], GitHubPollResult>
@@ -1046,6 +1115,14 @@ export interface IpcInvokeContract {
   'history:load': Contract<[projectId: string, threadId: string, limit?: number], HistoryEntry[]>
   'notification:test': Contract<[], SystemNotificationTestResult>
   'notification:getPermissionStatus': Contract<[], SystemNotificationPermissionStatus>
+  /**
+   * Open the OS notification-settings pane (System Settings on macOS, Settings
+   * on Windows). The target URL is a hard-coded, platform-specific allow-list
+   * constant resolved in the main process — never renderer-supplied — so it is
+   * safe to bypass the web-only external-URL validator. Returns false when the
+   * platform has no notification-settings deep link.
+   */
+  'notification:openSettings': Contract<[], boolean>
   'plan:approve': Contract<[projectId: string, threadId: string], Plan | null>
   'plan:get': Contract<[projectId: string, threadId: string], Plan | null>
   'plan:save': Contract<[projectId: string, threadId: string, content: string], Plan>
@@ -1070,7 +1147,15 @@ export interface IpcInvokeContract {
     [projectId: string, candidates: string[]],
     Record<string, string | null>
   >
+  'projectFiles:resolveExternalCitationPaths': Contract<
+    [absolutePaths: string[]],
+    Record<string, boolean>
+  >
   'projectFiles:create': Contract<
+    [projectId: string, relativeDirectory: string, name: string],
+    ProjectFileEntry
+  >
+  'projectFiles:createDirectory': Contract<
     [projectId: string, relativeDirectory: string, name: string],
     ProjectFileEntry
   >
@@ -1096,6 +1181,10 @@ export interface IpcInvokeContract {
     [projectId: string, sourcePaths: string[], destinationDirectory: string],
     ProjectFileEntry[]
   >
+  'projectFiles:dropPaths': Contract<
+    [projectId: string, sourcePaths: string[], destinationDirectory: string],
+    ProjectFileDropResult[]
+  >
   'projectFiles:read': Contract<[projectId: string, relativePath: string], ProjectTextFile>
   'projectFiles:rename': Contract<
     [projectId: string, relativePath: string, name: string],
@@ -1119,6 +1208,8 @@ export interface IpcInvokeContract {
     void
   >
   'harnessManifest:reset': Contract<[input: { harnessId: string; behavior: string }], void>
+  'harnessAutoUpdate:list': Contract<[], Record<string, boolean>>
+  'harnessAutoUpdate:set': Contract<[input: { harnessId: string; value: boolean }], void>
   'providerAccounts:getAuthStatus': Contract<
     [harnessId: string, projectPath?: string],
     ProviderAccountAuthStatus
@@ -1179,6 +1270,10 @@ export interface IpcInvokeContract {
   'repository:remoteOrigin': Contract<[projectPath: string], string | null>
   'shell:openExternal': Contract<[url: string], void>
   'shell:revealPath': Contract<[path: string], boolean>
+  /** Reveal an existing absolute path (e.g. an agent-cited file outside the
+   *  project root) in the OS file manager. Existence is checked; no content is
+   *  read or opened. Returns false when the path does not exist. */
+  'shell:revealExternalPath': Contract<[path: string], boolean>
   /** Resolve website favicons for a list of hostnames. Returns a data URL per host, or null when none exists. */
   'web:favicon': Contract<[hostnames: string[]], Record<string, string | null>>
   'spec:addAnnotation': Contract<
@@ -1391,8 +1486,8 @@ export interface IpcInvokeContract {
   'thread:list': Contract<[projectId: string], Thread[]>
   'thread:listAll': Contract<[], Thread[]>
   /**
-   * Bounded task listing for startup hydration. Never returns legacy rows
-   * pending deletion and never crosses the full task history over IPC.
+   * Bounded task listing for startup hydration. Never crosses the full task
+   * history over IPC.
    * `projectId` (when given) is ordered first so the selected project's recent
    * active threads render before anything else.
    */
@@ -1417,6 +1512,10 @@ export interface IpcInvokeContract {
     [projectId: string, threadId: string, before?: ThreadMessageCursor, limit?: number],
     ThreadMessagePage
   >
+  'thread:exportTranscript': Contract<
+    [projectId: string, threadId: string, options: import('./types').TranscriptExportOptions],
+    import('./types').TranscriptExportResult | null
+  >
   'thread:loadMessagesAround': Contract<
     [projectId: string, threadId: string, anchorId: string, limit: number],
     ThreadMessagePage
@@ -1431,6 +1530,11 @@ export interface IpcInvokeContract {
   'thread:harnessUsage': Contract<[projectId: string, threadId: string], HarnessUsage[]>
   'thread:efficiencyKpis': Contract<[projectId: string, threadId: string], UsageEfficiencyKpis>
   'thread:setStatus': Contract<[projectId: string, threadId: string, status: ThreadStatus], Thread>
+  'note:get': Contract<[projectId: string, threadId: string], ThreadNote | null>
+  'note:save': Contract<[projectId: string, threadId: string, body: string], ThreadNote>
+  'note:delete': Contract<[projectId: string, threadId: string], void>
+  /** Thread ids that currently have a note (renderer presence sync). */
+  'note:list': Contract<[], string[]>
   'thread:update': Contract<
     [
       projectId: string,
@@ -1522,7 +1626,7 @@ export interface CloseConfirmationPayload {
   files: CloseConfirmationFile[]
 }
 
-export type AgentNotificationKind = 'completed' | 'attention' | 'error'
+export type AgentNotificationKind = 'completed' | 'chat-completed' | 'attention' | 'spec' | 'error'
 
 export interface AgentNotificationPayload extends ThreadClickedPayload {
   id: string
@@ -1573,14 +1677,14 @@ export interface RemoteDeviceInfo {
   transport: 'lan' | 'relay'
   /** Whether the device currently holds a live session. */
   connected: boolean
-  /** Granted scope identifiers (absent for legacy ephemeral devices). */
+  /** Granted scope identifiers. */
   scopes: string[]
   /** SHA-256 fingerprint prefix of the device signing key. */
   fingerprint: string | null
   lastUsedAt: number | null
-  /** Device authorization expiry (epoch ms); `null` for legacy devices. */
+  /** Device authorization expiry (epoch ms). */
   expiresAt: number | null
-  /** Signed credential lifetime expiry (epoch ms); `null` for legacy devices. */
+  /** Signed credential lifetime expiry (epoch ms). */
   credentialExpiresAt: number | null
   revokedAt: number | null
   authVersion: number
@@ -1629,12 +1733,18 @@ export interface RemoteAuditEventInfo {
 export interface IpcEventContract {
   /** Post-paint feature IPC, chat, and harness registration completed. */
   'app:featuresReady': []
+  /** Emitted after browser sign-in changes the shared desktop account. */
+  'account:profileChanged': [state: import('./types').AccountProfileState]
   'agent:processesChanged': [projectId: string, threadId: string]
   'agent:temporaryChatExpired': [temporaryChatId: string]
   'thread:deleted': [projectId: string, threadId: string]
+  /** Note presence changed for a thread (saved or deleted). */
+  'note:changed': [projectId: string, threadId: string, hasNote: boolean]
   'notification:playSound': []
   'notification:show': [payload: AgentNotificationPayload]
   'notification:threadClicked': [payload: ThreadClickedPayload]
+  /** macOS notification authorization changed (delivery outcome or re-verification). */
+  'notification:permissionStatus': [status: SystemNotificationPermissionStatus]
   /** Emitted before the main process begins its shutdown disposal chain.
    *  The renderer should unsubscribe from IPC events and release resources. */
   'window:beforeQuit': []
@@ -1649,6 +1759,13 @@ export interface IpcEventContract {
    * and only fall back to closing the window when nothing is active.
    */
   'window:closeShortcut': []
+  /**
+   * Emitted when the user presses Cmd/Ctrl+T while a terminal holds focus. The
+   * main process intercepts the key (so ghostty-web never feeds it to the
+   * shell) and asks the renderer to open a new terminal tab in the terminal
+   * panel — right sidebar or bottom dock, whichever is active.
+   */
+  'window:newTerminalShortcut': []
   'updater:status': [status: UpdaterStatus]
   'updater:waiting-for-threads': [activeCount: number]
   'computerUse:pipFrame': [frame: ComputerUsePipFrame]

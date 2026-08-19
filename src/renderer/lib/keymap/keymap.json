@@ -1,0 +1,513 @@
+{
+  "version": 1,
+  "categories": [
+    {
+      "id": "navigation",
+      "label": "Navigation & Views",
+      "shortcuts": [
+        {
+          "id": "nav-projects",
+          "keys": ["mod", "1"],
+          "label": "Projects view",
+          "description": "Opens the Projects view with the project thread list.",
+          "scenario": "Anywhere in the app."
+        },
+        {
+          "id": "nav-threads",
+          "keys": ["mod", "2"],
+          "label": "Threads view",
+          "description": "Opens the Threads view.",
+          "scenario": "Anywhere in the app."
+        },
+        {
+          "id": "nav-projects-with-scope",
+          "keys": ["mod", "3"],
+          "label": "Projects with scope state",
+          "description": "Opens the Projects view with the scope sidebar active for the current thread.",
+          "scenario": "Anywhere in the app."
+        },
+        {
+          "id": "nav-scope",
+          "keys": ["mod", "4"],
+          "label": "Scope view",
+          "description": "Opens the Scope board for the active project.",
+          "scenario": "Anywhere in the app."
+        },
+        {
+          "id": "nav-chats",
+          "keys": ["mod", "0"],
+          "label": "Chats view",
+          "description": "Opens the Chats view.",
+          "scenario": "Anywhere in the app."
+        },
+        {
+          "id": "nav-settings",
+          "keys": ["mod", ","],
+          "label": "Settings",
+          "description": "Opens the Settings page.",
+          "scenario": "Anywhere in the app."
+        },
+        {
+          "id": "nav-command-palette",
+          "keys": ["mod", "k"],
+          "label": "Command palette",
+          "description": "Toggles the command palette.",
+          "scenario": "Anywhere in the app."
+        },
+        {
+          "id": "nav-new-project",
+          "keys": ["mod", "shift", "n"],
+          "label": "New project",
+          "description": "Starts the new-project flow with local or SSH options.",
+          "scenario": "Anywhere in the app."
+        },
+        {
+          "id": "nav-new-thread",
+          "keys": ["mod", "n"],
+          "label": "New thread / chat / file",
+          "description": "Creates a new thread, chat, or scoped thread depending on the current view; creates a file when the file tree is focused.",
+          "scenario": "Projects, Chats, Threads, or Scope view."
+        },
+        {
+          "id": "nav-close-surface",
+          "keys": ["mod", "w"],
+          "label": "Close active surface",
+          "description": "Closes palettes, the command palette, modals, Settings, an open thread, then finally the window (with a working-threads gate).",
+          "scenario": "Anywhere in the app."
+        },
+        {
+          "id": "nav-delete-thread",
+          "keys": ["mod", "d"],
+          "label": "Delete active thread",
+          "description": "Opens the delete confirmation for the open thread; Enter on the focused Delete button confirms, Escape cancels.",
+          "scenario": "When a thread is open."
+        }
+      ]
+    },
+    {
+      "id": "chat",
+      "label": "Chat & Messages",
+      "shortcuts": [
+        {
+          "id": "chat-send",
+          "keys": ["mod", "enter"],
+          "label": "Send message",
+          "description": "Sends the message, or queues it while the agent is busy. Enter is never a send key — plain Enter always makes a new line or list item.",
+          "scenario": "Chat composer, message editing, and remote conversation composer."
+        },
+        {
+          "id": "chat-steer",
+          "keys": ["mod", "shift", "enter"],
+          "label": "Steer into the running turn",
+          "description": "Force-sends the message into the live turn mid-turn, skipping the queue.",
+          "scenario": "Chat composer while the agent is working."
+        },
+        {
+          "id": "chat-soft-break",
+          "keys": ["shift", "enter"],
+          "label": "Soft line break",
+          "description": "Inserts a new line without starting a new list item and never sends.",
+          "scenario": "Rich text editor / chat composer."
+        },
+        {
+          "id": "chat-stop",
+          "keys": ["escape", "escape"],
+          "label": "Stop agent (double Escape)",
+          "description": "Presses Escape twice within 800ms to hard-stop the running agent turn; a single Escape cancels a pending stop.",
+          "scenario": "Composer focused while the agent is working."
+        },
+        {
+          "id": "chat-history-previous",
+          "keys": ["arrowup"],
+          "label": "Recall previous message",
+          "description": "Steps back through previously sent messages.",
+          "scenario": "Empty composer or already browsing history."
+        },
+        {
+          "id": "chat-history-next",
+          "keys": ["arrowdown"],
+          "label": "Recall next message",
+          "description": "Moves forward through history, returning to the saved draft at the end.",
+          "scenario": "While browsing composer history."
+        },
+        {
+          "id": "chat-engineering-mode",
+          "keys": ["shift", "tab"],
+          "label": "Toggle engineering mode",
+          "description": "Toggles the agent engineering (thinking) controls.",
+          "scenario": "Composer focused with engineering mode available."
+        },
+        {
+          "id": "chat-mention-nav",
+          "keys": ["arrowup", "arrowdown"],
+          "label": "Navigate mentions",
+          "description": "Cycles through @ file/task mention candidates.",
+          "scenario": "While the mention menu is open."
+        },
+        {
+          "id": "chat-mention-accept",
+          "keys": ["tab"],
+          "label": "Accept mention",
+          "description": "Inserts the highlighted mention.",
+          "scenario": "While the mention menu is open."
+        },
+        {
+          "id": "chat-slash-nav",
+          "keys": ["arrowup", "arrowdown"],
+          "label": "Navigate slash commands",
+          "description": "Cycles through slash-command candidates.",
+          "scenario": "While the slash menu is open."
+        },
+        {
+          "id": "chat-slash-accept",
+          "keys": ["tab", "enter"],
+          "label": "Accept slash command",
+          "description": "Runs the highlighted slash action.",
+          "scenario": "While the slash menu is open."
+        },
+        {
+          "id": "chat-annotation-comment",
+          "keys": ["mod", "enter"],
+          "label": "Submit annotation comment",
+          "description": "Posts the comment on a response selection; Escape closes the editor.",
+          "scenario": "Editing a comment on a response selection."
+        },
+        {
+          "id": "chat-notification-open",
+          "keys": ["enter"],
+          "label": "Open notification thread",
+          "description": "Navigates to the thread for the highlighted notification.",
+          "scenario": "Notifications panel, row focused."
+        }
+      ]
+    },
+    {
+      "id": "editor",
+      "label": "Rich Text Editor",
+      "shortcuts": [
+        {
+          "id": "editor-undo",
+          "keys": ["mod", "z"],
+          "label": "Undo",
+          "description": "Undoes the last edit.",
+          "scenario": "Any rich text editor."
+        },
+        {
+          "id": "editor-redo",
+          "keys": ["mod", "shift", "z"],
+          "label": "Redo",
+          "description": "Redoes the last undone edit. Ctrl+Y also works on Windows/Linux.",
+          "scenario": "Any rich text editor."
+        },
+        {
+          "id": "editor-bold",
+          "keys": ["mod", "b"],
+          "label": "Bold",
+          "description": "Wraps the selection in bold.",
+          "scenario": "Any rich text editor with a selection."
+        },
+        {
+          "id": "editor-italic",
+          "keys": ["mod", "i"],
+          "label": "Italic",
+          "description": "Wraps the selection in italics.",
+          "scenario": "Any rich text editor with a selection."
+        },
+        {
+          "id": "editor-code",
+          "keys": ["mod", "e"],
+          "label": "Inline code",
+          "description": "Wraps the selection as inline code.",
+          "scenario": "Any rich text editor with a selection."
+        },
+        {
+          "id": "editor-codeblock-newline",
+          "keys": ["enter"],
+          "label": "New line in code block",
+          "description": "Inserts a new line inside a code block; Enter on the language label focuses the code body.",
+          "scenario": "Caret inside a code block."
+        },
+        {
+          "id": "editor-exit-codeblock",
+          "keys": ["arrowup", "arrowdown"],
+          "label": "Exit code block",
+          "description": "Creates a paragraph above or below the block when the caret is at its edge.",
+          "scenario": "Caret at the top or bottom of a code block."
+        },
+        {
+          "id": "editor-unlist",
+          "keys": ["backspace"],
+          "label": "Unlist list item",
+          "description": "Turns the list item back into a paragraph when the caret is at its very start.",
+          "scenario": "Caret at the start of a list item."
+        }
+      ]
+    },
+    {
+      "id": "git",
+      "label": "Git",
+      "shortcuts": [
+        {
+          "id": "git-commit",
+          "keys": ["mod", "enter"],
+          "label": "Commit staged changes",
+          "description": "Commits the staged files from the message box. Enter never commits — multi-line messages are safe.",
+          "scenario": "Git status panel composer or the Commit dialog."
+        },
+        {
+          "id": "git-create-pr",
+          "keys": ["mod", "enter"],
+          "label": "Create pull request",
+          "description": "Creates the pull request from the title or description field.",
+          "scenario": "Pull Request sheet."
+        },
+        {
+          "id": "git-new-branch",
+          "keys": ["enter"],
+          "label": "Create branch",
+          "description": "Creates the new branch; Escape cancels.",
+          "scenario": "New-branch input in the Git panel."
+        },
+        {
+          "id": "git-toggle-diff",
+          "keys": ["enter"],
+          "label": "Toggle file diff",
+          "description": "Opens or closes the diff for the highlighted change.",
+          "scenario": "Changes tree, row focused."
+        },
+        {
+          "id": "git-toggle-select",
+          "keys": ["mod", "click"],
+          "label": "Toggle file selection",
+          "description": "Toggles the file's staged selection instead of opening its diff.",
+          "scenario": "File row in the changes tree."
+        },
+        {
+          "id": "git-select-checkbox",
+          "keys": ["space"],
+          "label": "Toggle selection checkbox",
+          "description": "Toggles selection for the focused checkbox (files, directories, or select-all sections).",
+          "scenario": "Git changes tree / status panel, checkbox focused."
+        }
+      ]
+    },
+    {
+      "id": "studios",
+      "label": "Studios & Specs",
+      "shortcuts": [
+        {
+          "id": "studio-save",
+          "keys": ["mod", "s"],
+          "label": "Save draft",
+          "description": "Saves the current spec, assignment, or brainstorm draft.",
+          "scenario": "Spec, Assignment, or Brainstorm studio."
+        },
+        {
+          "id": "studio-edit-field",
+          "keys": ["enter"],
+          "label": "Edit text field",
+          "description": "Enters inline edit mode on a markdown field; Escape cancels the edit.",
+          "scenario": "Studio markdown field, not already editing."
+        },
+        {
+          "id": "studio-section-nav",
+          "keys": ["arrowup", "arrowdown", "home", "end"],
+          "label": "Navigate spec sections",
+          "description": "Moves through the spec section list.",
+          "scenario": "Spec studio section dropdown."
+        },
+        {
+          "id": "studio-resize-sidebar",
+          "keys": ["arrowleft", "arrowright"],
+          "label": "Resize sidebar",
+          "description": "Resizes the panel by 16px (48px with Shift).",
+          "scenario": "Studio sidebar or coordinator panel resize handle focused."
+        }
+      ]
+    },
+    {
+      "id": "terminal",
+      "label": "Terminal",
+      "shortcuts": [
+        {
+          "id": "terminal-new-tab",
+          "keys": ["mod", "t"],
+          "label": "New terminal tab",
+          "description": "Opens a new terminal tab for the active thread.",
+          "scenario": "A terminal is focused."
+        },
+        {
+          "id": "terminal-word-hop",
+          "keys": ["alt", "arrowleft", "arrowright"],
+          "label": "Word backward / forward",
+          "description": "Moves the cursor by whole words in plain shells.",
+          "scenario": "Terminal focused in a shell prompt (not on the alternate screen)."
+        },
+        {
+          "id": "terminal-reveal-path",
+          "keys": ["mod", "click"],
+          "label": "Reveal file in explorer",
+          "description": "Reveals the clicked file path in the OS file manager.",
+          "scenario": "Clicking a path link in the terminal."
+        }
+      ]
+    },
+    {
+      "id": "files",
+      "label": "Files & Find",
+      "shortcuts": [
+        {
+          "id": "files-save",
+          "keys": ["mod", "s"],
+          "label": "Save file",
+          "description": "Saves the active file tab.",
+          "scenario": "A file tab is open and has unsaved changes."
+        },
+        {
+          "id": "files-goto-line",
+          "keys": ["mod", "g"],
+          "label": "Go to line",
+          "description": "Opens the go-to-line bar; Enter jumps to the line, Escape closes.",
+          "scenario": "A file tab is open."
+        },
+        {
+          "id": "files-indent",
+          "keys": ["tab"],
+          "label": "Insert indentation",
+          "description": "Inserts two spaces instead of moving focus.",
+          "scenario": "File editor textarea."
+        },
+        {
+          "id": "files-find-next",
+          "keys": ["enter"],
+          "label": "Find next match",
+          "description": "Moves to the next match in the find bar.",
+          "scenario": "Find bar focused."
+        },
+        {
+          "id": "files-find-previous",
+          "keys": ["shift", "enter"],
+          "label": "Find previous match",
+          "description": "Moves to the previous match in the find bar.",
+          "scenario": "Find bar focused."
+        },
+        {
+          "id": "files-tree-nav",
+          "keys": ["arrowup", "arrowdown", "arrowleft", "arrowright"],
+          "label": "Navigate file tree",
+          "description": "Moves selection; ArrowRight expands or descends, ArrowLeft collapses or ascends. Shift+Arrow extends the range.",
+          "scenario": "File tree focused."
+        },
+        {
+          "id": "files-rename",
+          "keys": ["enter"],
+          "label": "Commit rename / create",
+          "description": "Confirms an inline create or rename; Escape cancels.",
+          "scenario": "File tree inline input."
+        },
+        {
+          "id": "files-deployment-find",
+          "keys": ["mod", "f"],
+          "label": "Search deployment logs",
+          "description": "Opens log search; Escape closes it.",
+          "scenario": "Cloud deployment detail view."
+        }
+      ]
+    },
+    {
+      "id": "palettes",
+      "label": "Palettes, Menus & Pickers",
+      "shortcuts": [
+        {
+          "id": "palette-model-nav",
+          "keys": ["arrowup", "arrowdown"],
+          "label": "Navigate model list",
+          "description": "Moves between model rows.",
+          "scenario": "Model picker open."
+        },
+        {
+          "id": "palette-model-select",
+          "keys": ["enter"],
+          "label": "Select model",
+          "description": "Activates the highlighted model.",
+          "scenario": "Model picker open."
+        },
+        {
+          "id": "palette-model-favorite",
+          "keys": ["enter"],
+          "label": "Toggle model favorite",
+          "description": "Favorites or unfavorites the highlighted model.",
+          "scenario": "Favorite star focused in the model picker."
+        },
+        {
+          "id": "palette-close",
+          "keys": ["escape"],
+          "label": "Close overlay",
+          "description": "Closes the command palette, model picker, appearance picker, and similar overlays.",
+          "scenario": "A palette, menu, or picker is open."
+        }
+      ]
+    },
+    {
+      "id": "threads",
+      "label": "Threads & Conversation",
+      "shortcuts": [
+        {
+          "id": "thread-switcher",
+          "keys": ["ctrl", "tab"],
+          "label": "Open thread switcher",
+          "description": "Opens the thread switcher; Ctrl+Shift+Tab cycles backward. Releasing Ctrl selects the highlighted thread, Escape cancels.",
+          "scenario": "A project with at least one thread."
+        },
+        {
+          "id": "thread-pin",
+          "keys": ["enter"],
+          "label": "Toggle thread pin",
+          "description": "Pins or unpins the thread.",
+          "scenario": "Thread row pin button focused."
+        },
+        {
+          "id": "thread-find",
+          "keys": ["mod", "f"],
+          "label": "Find in conversation",
+          "description": "Opens the in-conversation find bar.",
+          "scenario": "Conversation area focused."
+        },
+        {
+          "id": "thread-rename-device",
+          "keys": ["enter"],
+          "label": "Commit device rename",
+          "description": "Commits the device name edit; Escape cancels.",
+          "scenario": "Remote connected-devices rename input."
+        }
+      ]
+    },
+    {
+      "id": "accessibility",
+      "label": "Buttons & Dialogs",
+      "shortcuts": [
+        {
+          "id": "ui-activate",
+          "keys": ["enter", "space"],
+          "label": "Activate focused control",
+          "description": "Activates the focused button, menu item, or row (native behavior).",
+          "scenario": "Any focusable control."
+        },
+        {
+          "id": "ui-close-modal",
+          "keys": ["escape"],
+          "label": "Close modal / sheet",
+          "description": "Closes the top modal, side sheet, or dockable panel.",
+          "scenario": "A modal overlay is open."
+        },
+        {
+          "id": "ui-media-close",
+          "keys": ["escape"],
+          "label": "Close media preview",
+          "description": "Closes the attachment or media preview.",
+          "scenario": "A media preview is open."
+        }
+      ]
+    }
+  ]
+}

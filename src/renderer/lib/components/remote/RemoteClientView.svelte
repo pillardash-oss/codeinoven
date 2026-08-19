@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte'
-  import { Check, Copy, ExternalLink, Globe2, RefreshCw } from '@lucide/svelte'
+  import { Check, CheckCircle2, Copy, ExternalLink, Globe2, RefreshCw } from '@lucide/svelte'
   import ConnectedDevices from '$lib/components/remote/ConnectedDevices.svelte'
   import EnrollmentQr from '$lib/components/remote/EnrollmentQr.svelte'
   import StepUpApproval from '$lib/components/remote/StepUpApproval.svelte'
@@ -13,12 +13,56 @@
 
   let remoteStatus = $state<RemoteModeStatus | null>(null)
   let pendingApprovals = $state<RemotePendingStepUpApproval[]>([])
-  let loading = $state(true)
+  let remoteLoading = $state(true)
+  let accountLoading = $state(true)
   let busy = $state(false)
   let copied = $state<'code' | 'link' | null>(null)
-  let accountState = $state<AccountProfileState>({ status: 'signed-out', profile: null })
+  let accountState = $state<AccountProfileState>({ status: 'pending', profile: null })
   let activeProvider = $state<AccountAuthProvider | null>(null)
   let accountError = $state('')
+  let enrollmentError = $state('')
+
+  const initializing = $derived(remoteLoading || accountLoading)
+  const accountProfile = $derived(accountState.profile)
+  const pairedDevices = $derived(
+    remoteStatus?.devices.filter((device) => device.revokedAt === null) ?? []
+  )
+  const cloudConnectionNotice = $derived.by(() => {
+    const cloud = remoteStatus?.cloud
+    if (!cloud?.desktopId || cloud.state === 'enrollment-pending') return null
+    if (cloud.state === 'connecting') {
+      return {
+        tone: 'connecting' as const,
+        title: 'Connecting to the cloud relay',
+        detail: 'Your phone approved this desktop. CodeInOven is finishing the secure connection.'
+      }
+    }
+    if (cloud.state === 'online') {
+      return {
+        tone: 'online' as const,
+        title: 'Cloud relay connected',
+        detail: 'This desktop is online and ready for remote connections.'
+      }
+    }
+    return {
+      tone: 'offline' as const,
+      title: cloud.state === 'disabled' ? 'Remote access is paused' : 'Cloud relay is offline',
+      detail:
+        cloud.lastError ??
+        (cloud.state === 'disabled'
+          ? 'Enable Remote mode to bring this desktop online.'
+          : 'CodeInOven is trying to reconnect automatically.')
+    }
+  })
+  const accountInitials = $derived.by(() => {
+    const source = accountProfile?.displayName || accountProfile?.email || ''
+    return source
+      .split(/\s+/)
+      .filter(Boolean)
+      .slice(0, 2)
+      .map((part) => part[0]?.toUpperCase() ?? '')
+      .join('')
+  })
 
   let mobileAppUrl = $derived.by(() => {
     const apiOrigin = remoteStatus?.cloud.apiOrigin
@@ -76,12 +120,12 @@
   async function beginCloudEnrollment(): Promise<void> {
     if (busy) return
     busy = true
-    accountError = ''
+    enrollmentError = ''
     try {
       remoteStatus = await invoke('remote:beginCloudEnrollment')
     } catch {
-      accountError =
-        'Desktop enrollment could not be started. Check the remote service and try again.'
+      enrollmentError =
+        'A pairing code could not be created. Check the remote service and try again.'
     } finally {
       busy = false
     }
@@ -104,12 +148,19 @@
     }
   }
 
-  async function syncAccountState(): Promise<void> {
-    try {
-      accountState = await invoke('account:getProfile')
-    } catch {
-      accountState = { status: 'signed-out', profile: null }
-    }
+  async function initializeRemoteAccess(): Promise<void> {
+    const [remoteResult, accountResult] = await Promise.allSettled([
+      invoke('remote:ensureGateway'),
+      invoke('account:getProfile')
+    ])
+
+    remoteStatus = remoteResult.status === 'fulfilled' ? remoteResult.value : null
+    accountState =
+      accountResult.status === 'fulfilled'
+        ? accountResult.value
+        : { status: 'signed-out', profile: null }
+    remoteLoading = false
+    accountLoading = false
   }
 
   async function resetCloudEnrollment(): Promise<void> {
@@ -122,35 +173,26 @@
     }
   }
 
-  async function syncRemoteStatus(): Promise<void> {
-    try {
-      remoteStatus = await invoke('remote:getStatus')
-    } catch {
-      remoteStatus = null
-    } finally {
-      loading = false
-    }
-  }
-
   onMount(() => {
-    // The gateway provides the LAN route for the same account-backed session.
-    // It is transport infrastructure, not a separate setup or pairing flow.
-    void invoke('remote:ensureGateway')
-      .then((status) => {
-        remoteStatus = status
-        loading = false
-      })
-      .catch(() => void syncRemoteStatus())
-    void syncAccountState()
     const unsubStatus = subscribe('remote:status', (status) => {
       remoteStatus = status
-      loading = false
+      remoteLoading = false
+    })
+    const unsubAccount = subscribe('account:profileChanged', (state) => {
+      accountState = state
+      accountLoading = false
+      accountError = state.status === 'error' ? state.message : ''
     })
     const unsubStepUp = subscribe('remote:stepUpPending', (approvals) => {
       pendingApprovals = approvals
     })
+    // Restored account sessions do not emit a fresh profile-change event. Load
+    // account and remote state together, but keep enrollment behind the explicit
+    // “Create pairing code” action.
+    void initializeRemoteAccess()
     return () => {
       unsubStatus()
+      unsubAccount()
       unsubStepUp()
     }
   })
@@ -174,8 +216,39 @@
       are on the same network and falls back to the cloud relay everywhere else.
     </p>
 
-    {#if loading}
-      <p class="mt-3 text-xs text-muted" aria-live="polite">Loading remote access…</p>
+    {#if accountProfile}
+      <div class="mt-4 flex items-center gap-3 border-y py-3">
+        <span
+          class="flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-full bg-primary text-xs font-bold text-on-primary ring-1 ring-border"
+        >
+          {#if accountProfile.image}
+            <img class="h-full w-full object-cover" src={accountProfile.image} alt="" />
+          {:else}
+            <span aria-hidden="true">{accountInitials}</span>
+          {/if}
+        </span>
+        <div class="min-w-0 flex-1">
+          <p class="truncate text-xs font-semibold text-foreground">
+            {accountProfile.displayName || accountProfile.email}
+          </p>
+          <p class="truncate text-[11px] text-muted">{accountProfile.email}</p>
+        </div>
+        <span class="flex shrink-0 items-center gap-1 text-[11px] font-medium text-success">
+          <CheckCircle2 size={13} /> Signed in
+        </span>
+      </div>
+    {/if}
+
+    {#if initializing}
+      <div class="mt-4 flex items-start gap-2 rounded-lg bg-raised p-3" aria-live="polite">
+        <RefreshCw size={14} class="mt-0.5 shrink-0 text-primary" />
+        <div>
+          <p class="text-xs font-semibold text-foreground">Restoring your account</p>
+          <p class="mt-1 text-xs leading-relaxed text-muted">
+            Checking your saved sign-in and remote access status…
+          </p>
+        </div>
+      </div>
     {:else if !remoteStatus}
       <p class="mt-3 text-xs text-danger" aria-live="polite">
         Remote access status could not be loaded.
@@ -196,64 +269,53 @@
 
         <h3 class="mt-4 text-sm font-semibold text-foreground">Continue on your phone</h3>
         <p class="mt-1 text-xs leading-relaxed text-muted">
-          The QR opens the mobile PWA and carries this one-time code. It does not contain your
-          desktop control secret.
+          First open the mobile website. Then pair this desktop by scanning the second QR or typing
+          the code below.
         </p>
 
-        <div class="mt-4 flex flex-col gap-4 sm:flex-row">
-          {#if enrollmentLink}
-            <EnrollmentQr value={enrollmentLink} />
-          {/if}
-
-          <ol class="min-w-0 flex-1 space-y-3 text-xs text-muted">
-            <li class="flex gap-2.5">
-              <span
-                class="grid h-5 w-5 shrink-0 place-items-center rounded-full bg-primary text-[10px] font-bold text-on-primary"
-                >1</span
-              >
-              <span>Scan the QR code with your phone, or copy the mobile-app link below.</span>
-            </li>
-            <li class="flex gap-2.5">
-              <span
-                class="grid h-5 w-5 shrink-0 place-items-center rounded-full bg-primary text-[10px] font-bold text-on-primary"
-                >2</span
-              >
-              <span> Sign in with the same Google or Apple account if your phone asks. </span>
-            </li>
-            <li class="flex gap-2.5">
-              <span
-                class="grid h-5 w-5 shrink-0 place-items-center rounded-full bg-primary text-[10px] font-bold text-on-primary"
-                >3</span
-              >
-              <span>The signed-in account adds this desktop automatically.</span>
-            </li>
-          </ol>
-        </div>
-
         {#if mobileAppUrl && enrollmentLink}
-          <div class="mt-4 rounded-lg bg-raised p-3">
-            <p class="text-[10px] font-semibold uppercase tracking-wide text-dimmed">Mobile app</p>
-            <p class="mt-1 truncate text-xs text-foreground" title={mobileAppUrl}>{mobileAppUrl}</p>
-            <div class="mt-2 flex flex-wrap gap-2">
-              <button
-                type="button"
-                class="flex h-8 cursor-pointer items-center gap-1.5 rounded-lg border px-2.5 text-[11px] font-medium text-muted transition hover:bg-elevated hover:text-foreground"
-                title="Copy mobile app link"
-                aria-label="Copy mobile app link"
-                onclick={() => void copyEnrollmentValue('link', enrollmentLink)}
-              >
-                {#if copied === 'link'}<Check size={13} />{:else}<Copy size={13} />{/if}
-                {copied === 'link' ? 'Copied link' : 'Copy link'}
-              </button>
-              <button
-                type="button"
-                class="flex h-8 cursor-pointer items-center gap-1.5 rounded-lg border px-2.5 text-[11px] font-medium text-muted transition hover:bg-elevated hover:text-foreground"
-                title="Open mobile app in browser"
-                aria-label="Open mobile app in browser"
-                onclick={() => void openInBrowser(enrollmentLink)}
-              >
-                <ExternalLink size={13} /> Open link
-              </button>
+          <div class="mt-4 grid gap-4 sm:grid-cols-2">
+            <div class="border-y py-3">
+              <p class="text-xs font-semibold text-foreground">1. Open the mobile website</p>
+              <p class="mt-1 min-h-10 text-[11px] leading-relaxed text-muted">
+                Scan this QR only to open the PWA, then sign in with the same account.
+              </p>
+              <div class="mt-3"><EnrollmentQr value={mobileAppUrl} /></div>
+              <p class="mt-3 truncate text-[11px] text-dimmed" title={mobileAppUrl}>
+                {mobileAppUrl}
+              </p>
+              <div class="mt-2 flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  class="flex h-8 cursor-pointer items-center gap-1.5 rounded-lg border px-2.5 text-[11px] font-medium text-muted transition hover:bg-elevated hover:text-foreground"
+                  title="Copy mobile website link"
+                  aria-label="Copy mobile website link"
+                  onclick={() => void copyEnrollmentValue('link', mobileAppUrl)}
+                >
+                  {#if copied === 'link'}<Check size={13} />{:else}<Copy size={13} />{/if}
+                  {copied === 'link' ? 'Copied link' : 'Copy link'}
+                </button>
+                <button
+                  type="button"
+                  class="flex h-8 cursor-pointer items-center gap-1.5 rounded-lg border px-2.5 text-[11px] font-medium text-muted transition hover:bg-elevated hover:text-foreground"
+                  title="Open mobile website in browser"
+                  aria-label="Open mobile website in browser"
+                  onclick={() => void openInBrowser(mobileAppUrl)}
+                >
+                  <ExternalLink size={13} /> Open website
+                </button>
+              </div>
+            </div>
+
+            <div class="border-y py-3">
+              <p class="text-xs font-semibold text-foreground">2. Pair this desktop</p>
+              <p class="mt-1 min-h-10 text-[11px] leading-relaxed text-muted">
+                After signing in, scan this QR to fill and submit the one-time code automatically.
+              </p>
+              <div class="mt-3"><EnrollmentQr value={enrollmentLink} /></div>
+              <p class="mt-3 text-[11px] leading-relaxed text-dimmed">
+                This QR contains the temporary pairing link, not your desktop control secret.
+              </p>
             </div>
           </div>
         {/if}
@@ -284,13 +346,18 @@
           </div>
         {/if}
       </div>
-    {:else if !remoteStatus.cloud.desktopId && accountState.status === 'signed-out'}
+    {:else if !remoteStatus.cloud.desktopId && (accountState.status === 'signed-out' || accountState.status === 'error')}
       <div class="mt-4 rounded-lg border border-primary/20 bg-primary/5 p-3">
         <p class="text-xs font-semibold text-foreground">Sign in before enrolling this desktop</p>
         <p class="mt-1 text-xs leading-relaxed text-muted">
           Continue with Google or Apple. If the account does not exist, it is created automatically.
           GitHub sidebar access remains separate.
         </p>
+        {#if accountError}
+          <p class="mt-3 rounded-lg bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">
+            {accountError}
+          </p>
+        {/if}
         <div class="mt-3 flex flex-col gap-2 sm:flex-row">
           <button
             type="button"
@@ -319,8 +386,8 @@
           <div>
             <p class="text-xs font-semibold text-foreground">Finish signing in in your browser</p>
             <p class="mt-1 text-xs leading-relaxed text-muted">
-              After Google or Apple returns you to the remote page, come back here and continue to
-              desktop enrollment.
+              CodeInOven will detect the secure callback and create your desktop connection code
+              automatically.
             </p>
           </div>
         </div>
@@ -330,36 +397,104 @@
           disabled={busy}
           onclick={() => void beginCloudEnrollment()}
         >
-          I’ve signed in — enroll desktop
+          Check sign-in and enroll desktop
         </button>
       </div>
-    {:else}
-      {#if !remoteStatus.cloud.desktopId}
+    {:else if accountState.status === 'signed-in'}
+      {#if !remoteStatus.cloud.desktopId && remoteStatus.cloud.state === 'connecting'}
+        <div
+          class="mt-3 flex items-start gap-2 rounded-lg border border-primary/20 bg-primary/5 p-3"
+        >
+          <RefreshCw size={14} class="mt-0.5 shrink-0 text-primary" />
+          <div>
+            <p class="text-xs font-semibold text-foreground">Creating your pairing code</p>
+            <p class="mt-1 text-xs leading-relaxed text-muted">
+              Your account is connected. CodeInOven is preparing the QR code for your phone.
+            </p>
+          </div>
+        </div>
+      {:else if !remoteStatus.cloud.desktopId}
         <div class="mt-3 rounded-lg border border-primary/20 bg-primary/5 p-3">
-          <p class="text-xs font-semibold text-foreground">
-            You need a CodeInOven account before enrolling this desktop.
-          </p>
+          <p class="text-xs font-semibold text-foreground">Pair your phone</p>
           <p class="mt-1 text-xs leading-relaxed text-muted">
-            Create it automatically by continuing with Google or Apple. GitHub sidebar access is
-            connected separately.
+            You are signed in. Create a temporary QR code to add your phone to this desktop.
           </p>
         </div>
+        {#if enrollmentError}
+          <p class="mt-3 rounded-lg bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">
+            {enrollmentError}
+          </p>
+        {/if}
+      {:else}
+        {#if cloudConnectionNotice}
+          <div
+            class={cloudConnectionNotice.tone === 'online'
+              ? 'mt-4 flex items-start gap-2 rounded-lg border border-success/20 bg-success/5 p-3'
+              : cloudConnectionNotice.tone === 'connecting'
+                ? 'mt-4 flex items-start gap-2 rounded-lg border border-primary/20 bg-primary/5 p-3'
+                : 'mt-4 flex items-start gap-2 rounded-lg border border-danger/20 bg-danger/5 p-3'}
+            role="status"
+          >
+            {#if cloudConnectionNotice.tone === 'connecting'}
+              <RefreshCw size={14} class="mt-0.5 shrink-0 animate-spin text-primary" />
+            {:else if cloudConnectionNotice.tone === 'online'}
+              <CheckCircle2 size={14} class="mt-0.5 shrink-0 text-success" />
+            {:else}
+              <Globe2 size={14} class="mt-0.5 shrink-0 text-danger" />
+            {/if}
+            <div>
+              <p class="text-xs font-semibold text-foreground">{cloudConnectionNotice.title}</p>
+              <p class="mt-1 text-xs leading-relaxed text-muted">
+                {cloudConnectionNotice.detail}
+              </p>
+            </div>
+          </div>
+        {/if}
+
+        <div class="mt-4 border-y py-4">
+          <h3 class="text-sm font-semibold text-foreground">Open the mobile app</h3>
+          <p class="mt-1 text-xs leading-relaxed text-muted">
+            {pairedDevices.length > 0
+              ? `${pairedDevices.length} ${pairedDevices.length === 1 ? 'phone is' : 'phones are'} paired. Scan to open the PWA and connect.`
+              : 'No phone has completed pairing yet. Scan to open the PWA and finish connecting this desktop.'}
+          </p>
+
+          {#if mobileAppUrl}
+            <div class="mt-4 flex flex-col gap-4 sm:flex-row sm:items-center">
+              <EnrollmentQr value={mobileAppUrl} />
+              <div class="min-w-0 flex-1">
+                <p class="truncate text-xs text-foreground" title={mobileAppUrl}>{mobileAppUrl}</p>
+                <div class="mt-3 flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    class="flex h-8 cursor-pointer items-center gap-1.5 rounded-lg border px-2.5 text-[11px] font-medium text-muted transition hover:bg-elevated hover:text-foreground"
+                    title="Copy mobile app link"
+                    aria-label="Copy mobile app link"
+                    onclick={() => void copyEnrollmentValue('link', mobileAppUrl)}
+                  >
+                    {#if copied === 'link'}<Check size={13} />{:else}<Copy size={13} />{/if}
+                    {copied === 'link' ? 'Copied link' : 'Copy link'}
+                  </button>
+                  <button
+                    type="button"
+                    class="flex h-8 cursor-pointer items-center gap-1.5 rounded-lg border px-2.5 text-[11px] font-medium text-muted transition hover:bg-elevated hover:text-foreground"
+                    title="Open mobile app in browser"
+                    aria-label="Open mobile app in browser"
+                    onclick={() => void openInBrowser(mobileAppUrl)}
+                  >
+                    <ExternalLink size={13} /> Open link
+                  </button>
+                </div>
+              </div>
+            </div>
+          {/if}
+        </div>
+        {#if remoteStatus.cloud.lastError}
+          <p class="mt-2 text-[11px] text-danger">{remoteStatus.cloud.lastError}</p>
+        {/if}
       {/if}
-      <div class="mt-3 flex items-center justify-between gap-3 text-xs">
-        <span class="text-muted">Connection</span>
-        <span class="font-medium text-foreground">
-          {remoteStatus.cloud.state === 'online'
-            ? 'Ready'
-            : remoteStatus.cloud.state === 'connecting'
-              ? 'Connecting…'
-              : remoteStatus.cloud.desktopId
-                ? 'Offline'
-                : 'Not enrolled'}
-        </span>
-      </div>
-      {#if remoteStatus.cloud.lastError}
-        <p class="mt-2 text-[11px] text-danger">{remoteStatus.cloud.lastError}</p>
-      {/if}
+    {:else}
+      <p class="mt-3 text-xs text-muted">Account status is unavailable. Refresh and try again.</p>
     {/if}
 
     {#if accountError}
@@ -376,7 +511,11 @@
           disabled={busy || !remoteStatus.cloud.configured}
           onclick={() => void beginCloudEnrollment()}
         >
-          {remoteStatus.cloud.desktopId ? 'Create new code' : 'Enroll desktop'}
+          {remoteStatus.cloud.desktopId
+            ? 'Pair another phone'
+            : busy
+              ? 'Creating pairing code…'
+              : 'Create pairing code'}
         </button>
         {#if remoteStatus.cloud.desktopId}
           <button
@@ -393,7 +532,7 @@
   </section>
 
   <ConnectedDevices
-    devices={remoteStatus?.devices ?? []}
+    devices={pairedDevices}
     {busy}
     onRename={(deviceId, name) => void handleRenameDevice(deviceId, name)}
     onDisconnect={(deviceId) => void handleDisconnectDevice(deviceId)}

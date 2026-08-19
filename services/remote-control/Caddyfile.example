@@ -1,34 +1,42 @@
 {
-  servers {
-    trusted_proxies static private_ranges
-    client_ip_headers X-Forwarded-For
-  }
+	servers {
+		trusted_proxies static private_ranges
+		client_ip_headers X-Forwarded-For
+	}
 }
 
 :80 {
-  encode zstd gzip
+	encode zstd gzip
 
-  header {
-    Content-Security-Policy "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self' wss: ws:; media-src 'self' blob:; frame-ancestors 'none'; base-uri 'none'; form-action 'self'"
-    Referrer-Policy no-referrer
-    X-Content-Type-Options nosniff
-    X-Frame-Options DENY
-    Permissions-Policy "camera=(), microphone=(), geolocation=()"
-  }
+	header {
+		Content-Security-Policy "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self' wss: ws:; media-src 'self' blob:; frame-ancestors 'none'; base-uri 'none'; form-action 'self'"
+		Referrer-Policy no-referrer
+		X-Content-Type-Options nosniff
+		X-Frame-Options DENY
+		Permissions-Policy "camera=(self), microphone=(), geolocation=()"
+	}
 
-  @backend path /api/auth/* /v1/* /healthz
-  handle @backend {
-    reverse_proxy remote-control:8877 {
-      header_up X-Client-IP {client_ip}
-    }
-  }
+	@account path /api/auth /api/auth/* /desktop/* /v1/desktop-auth/* /v1/profile
+	handle @account {
+		reverse_proxy {$CONVEX_SITE_URL} {
+			header_up Host {upstream_hostport}
+			header_up X-Client-IP {client_ip}
+		}
+	}
 
-  @pwaRoot path /
-  rewrite @pwaRoot /remote.html
+	@relay path /v1/* /healthz
+	handle @relay {
+		reverse_proxy remote-control:8877 {
+			header_up X-Client-IP {client_ip}
+		}
+	}
 
-  handle {
-    root * /srv/codeinoven/renderer
-    try_files {path} /remote.html
-    file_server
-  }
+	@pwaRoot path /
+	rewrite @pwaRoot /remote.html
+
+	handle {
+		root * /srv/codeinoven/renderer
+		try_files {path} /remote.html
+		file_server
+	}
 }

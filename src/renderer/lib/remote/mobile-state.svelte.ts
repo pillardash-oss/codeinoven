@@ -16,11 +16,13 @@ import { SvelteMap, SvelteSet } from 'svelte/reactivity'
 import { invoke, subscribe } from '$lib/ipc.svelte'
 import { loadProjectIcons } from '$lib/project-icons'
 import { hasProjectNameCollision } from '$lib/project-location'
+import { agentRuns } from '$lib/stores/agent-runs.svelte'
 import { threadMessages } from '$lib/stores/thread-messages.svelte'
 import {
   coordinatorHasActiveDelegates,
   INBOX_PROJECT_ID,
   isOrchestrationChildThread,
+  isThreadWorking,
   type Project,
   type Thread
 } from '$shared/types'
@@ -34,7 +36,9 @@ function threadSortKey(thread: Thread): number {
   if (
     thread.status === 'planning' ||
     thread.status === 'executing' ||
+    thread.status === 'working-paused' ||
     thread.status === 'awaiting_approval' ||
+    thread.status === 'spec' ||
     thread.status === 'failed' ||
     thread.status === 'interrupted'
   ) {
@@ -90,6 +94,8 @@ class MobileState {
   memoryOpen = $state(false)
   historyOpen = $state(false)
   gitOpen = $state(false)
+  sourcesOpen = $state(false)
+  notesOpen = $state(false)
   settingsOpen = $state(false)
   installGuideOpen = $state(false)
 
@@ -312,11 +318,10 @@ class MobileState {
   }
 
   isWorking(thread: Thread): boolean {
-    return (
-      thread.status === 'planning' ||
-      thread.status === 'executing' ||
-      coordinatorHasActiveDelegates(thread, this.orchestrationThreads)
-    )
+    const liveWorking = agentRuns.hasSettled(thread.projectId, thread.id)
+      ? agentRuns.isBusy(thread.projectId, thread.id)
+      : Boolean(thread.sessionId) && isThreadWorking(thread)
+    return liveWorking || coordinatorHasActiveDelegates(thread, this.orchestrationThreads)
   }
 }
 

@@ -15,11 +15,12 @@ import type {
   PermissionReply,
   ProviderCatalog,
   SessionAgentEvent,
+  ThinkingLevel,
   UsagePricingProvenance
 } from '../../lib/types'
-import { Logger } from '../logger'
-import { estimateTokenCostUsd } from '../pricing'
-import type { StorageEngine } from '../storage-engine'
+import { Logger } from '../system/logger'
+import { estimateTokenCostUsd } from '../providers/pricing'
+import type { StorageEngine } from '../storage/storage-engine'
 import { buildHarnessEnvironment } from './cli-environment'
 import type {
   AgentEventCallback,
@@ -30,7 +31,13 @@ import type {
   PreparedUtilityRuntime,
   SendPromptOptions
 } from './driver.interface'
-import { buildTitlePrompt, sanitizeGeneratedTitle } from '../title-generator'
+import { buildTitlePrompt, sanitizeGeneratedTitle } from '../chat/title-generator'
+import {
+  isPermissionToolName,
+  isQuestionToolName,
+  normalizeAgentQuestions,
+  permissionPatterns
+} from '../../lib/agent-interactions'
 
 export interface TitleModelCandidate {
   providerId: string
@@ -97,6 +104,15 @@ export interface CliTurnCommand {
   provenanceModelId?: string
   /** Called for each parsed provider record before provider-specific mapping. */
   onJsonRecord?: (value: unknown) => void
+  /**
+   * Load provider records that only become available after the process exits
+   * (for example, interaction details from a retained session export).
+   */
+  loadTrailingRecords?: () => Promise<unknown[]>
+  /** Keep the logical turn paused when trailing records surfaced a blocking interaction. */
+  suppressIdle?: () => boolean
+  /** Treat a provider-specific, deliberately requested process stop as a successful exit. */
+  isExpectedExit?: (code: number | null, signal: NodeJS.Signals | null) => boolean
   /** Called when spawning fails or the child exits. Must be safe to call more than once. */
   onProcessExit?: () => void
 }
@@ -135,13 +151,18 @@ export abstract class PersistentCliDriver implements HarnessDriver {
   private deletedSessions = new Set<string>()
   /** Sessions whose provider stream already supplied a structured terminal issue. */
   private structuredProcessIssues = new Set<string>()
-  /** Model/provider of the running turn — CLIs do not echo them back per message. */
-  private turnProvenance = new Map<string, { providerId?: string; modelId?: string }>()
+  /** Model/provider/thinking level of the running turn — CLIs do not echo them back per message. */
+  private turnProvenance = new Map<
+    string,
+    { providerId?: string; modelId?: string; thinkingLevel?: ThinkingLevel }
+  >()
   private titleSessions = new Set<string>()
   private titleTurnWaiters = new Map<string, TitleTurnWaiter>()
   /** Outcomes of the most recent title-candidate run, for ledger integration. */
   private lastTitleAttempts: TitleAttemptAccounting[] = []
   private processObserver: AgentProcessObserver | null = null
+  /** Provider-neutral interaction cards already surfaced for this driver instance. */
+  private interactionRequests = new Set<string>()
 
   constructor(protected readonly storage: StorageEngine) {}
 
@@ -348,7 +369,8 @@ export abstract class PersistentCliDriver implements HarnessDriver {
     this.setTurnProvenance(
       session.id,
       opts.settings.providerId,
-      invocation.provenanceModelId ?? opts.settings.modelId
+      invocation.provenanceModelId ?? opts.settings.modelId,
+      opts.settings.thinkingLevel
     )
     this.appendUserMessage(session, opts)
     let child: ChildProcess
@@ -374,6 +396,16 @@ export abstract class PersistentCliDriver implements HarnessDriver {
       completed = true
       invocation.onProcessExit?.()
       this.activeProcesses.delete(session.id)
+      if (invocation.loadTrailingRecords && !this.deletedSessions.has(session.id)) {
+        try {
+          const records = await invocation.loadTrailingRecords()
+          for (const record of records) {
+            this.consumeJsonValue(record, session, projectPath)
+          }
+        } catch (trailingError) {
+          Logger.dev(`${this.name} trailing interaction records were unavailable:`, trailingError)
+        }
+      }
       if (!this.deletedSessions.has(session.id)) {
         try {
           await this.persistSession(session)
@@ -405,7 +437,9 @@ export abstract class PersistentCliDriver implements HarnessDriver {
         })
       }
       this.structuredProcessIssues.delete(session.id)
-      this.emit({ type: 'session.idle', sessionId: session.id })
+      if (!invocation.suppressIdle?.()) {
+        this.emit({ type: 'session.idle', sessionId: session.id })
+      }
     }
 
     child.stdout?.on('data', (chunk: Buffer) => {
@@ -420,7 +454,7 @@ export abstract class PersistentCliDriver implements HarnessDriver {
       if (stdoutBuffer.trim())
         this.consumeJsonLine(stdoutBuffer.trim(), session, projectPath, invocation)
       const failure =
-        code === 0 || signal === 'SIGTERM'
+        code === 0 || signal === 'SIGTERM' || invocation.isExpectedExit?.(code, signal)
           ? undefined
           : `Harness process exited with code ${code ?? 'unknown'}${
               stderrBuffer.trim() ? `: ${stderrBuffer.trim()}` : ''
@@ -435,6 +469,16 @@ export abstract class PersistentCliDriver implements HarnessDriver {
   async loadMessages(projectPath: string, sessionId: string): Promise<AgentMessage[]> {
     const session = await this.requireSession(projectPath, sessionId)
     return session.messages
+  }
+
+  async loadMessagesSince(
+    projectPath: string,
+    sessionId: string,
+    messageId: string
+  ): Promise<AgentMessage[]> {
+    const session = await this.requireSession(projectPath, sessionId)
+    const startIndex = session.messages.findLastIndex((message) => message.id === messageId)
+    return startIndex >= 0 ? session.messages.slice(startIndex) : session.messages
   }
 
   /** Resolve the provider-native session id needed by provider maintenance APIs. */
@@ -539,6 +583,7 @@ export abstract class PersistentCliDriver implements HarnessDriver {
     }
     this.titleTurnWaiters.clear()
     this.titleSessions.clear()
+    this.interactionRequests.clear()
     this.eventCallback = null
   }
 
@@ -571,6 +616,12 @@ export abstract class PersistentCliDriver implements HarnessDriver {
     child.stdin.write(input)
   }
 
+  /** Stop a turn synchronously at a provider record boundary. */
+  protected stopActiveProcess(sessionId: string): void {
+    const child = this.activeProcesses.get(sessionId)
+    if (child && !child.killed) child.kill()
+  }
+
   /** Close a streaming-input turn after its final provider result arrives. */
   protected closeActiveInput(sessionId: string): void {
     this.activeProcesses.get(sessionId)?.stdin?.end()
@@ -587,7 +638,7 @@ export abstract class PersistentCliDriver implements HarnessDriver {
   }
 
   protected observeHarnessProcess(
-    sessionId: string,
+    sessionId: string | undefined,
     child: ChildProcess,
     command: string,
     cwd: string
@@ -595,10 +646,16 @@ export abstract class PersistentCliDriver implements HarnessDriver {
     this.processObserver?.watchProcess(sessionId, child.pid, command, cwd)
   }
 
-  protected setTurnProvenance(sessionId: string, providerId?: string, modelId?: string): void {
+  protected setTurnProvenance(
+    sessionId: string,
+    providerId?: string,
+    modelId?: string,
+    thinkingLevel?: ThinkingLevel
+  ): void {
     this.turnProvenance.set(sessionId, {
       providerId: providerId || undefined,
-      modelId: modelId || undefined
+      modelId: modelId || undefined,
+      thinkingLevel: thinkingLevel || undefined
     })
   }
 
@@ -681,6 +738,14 @@ export abstract class PersistentCliDriver implements HarnessDriver {
       value = recovered
     }
     invocation.onJsonRecord?.(value)
+    this.consumeJsonValue(value, session, projectPath)
+  }
+
+  private consumeJsonValue(
+    value: unknown,
+    session: PersistentCliSession,
+    projectPath: string
+  ): void {
     const result = this.parseJsonLine(value, {
       session,
       sessionId: session.id,
@@ -689,7 +754,7 @@ export abstract class PersistentCliDriver implements HarnessDriver {
     if (!result) return
     if (result.nativeSessionId) session.nativeSessionId = result.nativeSessionId
     if (result.messages) this.mergeMessages(session, result.messages)
-    for (const event of result.events ?? []) {
+    for (const event of this.normalizeInteractionEvents(session.id, result.events ?? [])) {
       if (event.type === 'session.error' || (event.type === 'message.completed' && event.issue)) {
         this.structuredProcessIssues.add(session.id)
       } else if (event.type === 'session.status') {
@@ -732,6 +797,7 @@ export abstract class PersistentCliDriver implements HarnessDriver {
         ...raw,
         providerId: raw.providerId ?? provenance?.providerId,
         modelId: raw.modelId ?? provenance?.modelId,
+        thinkingLevel: raw.thinkingLevel ?? provenance?.thinkingLevel,
         harnessId: raw.harnessId ?? this.id
       }
       const index = session.messages.findIndex((current) => current.id === message.id)
@@ -743,23 +809,25 @@ export abstract class PersistentCliDriver implements HarnessDriver {
 
   protected applyEventToSession(session: PersistentCliSession, event: AgentEvent): void {
     if (event.type === 'message.part.updated') {
-      const message = session.messages.find((candidate) => candidate.id === event.part.messageID)
+      const message = session.messages.findLast(
+        (candidate) => candidate.id === event.part.messageID
+      )
       if (!message) return
-      const index = message.parts.findIndex((part) => part.id === event.part.id)
+      const index = message.parts.findLastIndex((part) => part.id === event.part.id)
       if (index === -1) message.parts.push(event.part)
       else message.parts[index] = event.part
       return
     }
     if (event.type === 'message.part.delta') {
-      const message = session.messages.find((candidate) => candidate.id === event.messageId)
-      const part = message?.parts.find((candidate) => candidate.id === event.partId)
+      const message = session.messages.findLast((candidate) => candidate.id === event.messageId)
+      const part = message?.parts.findLast((candidate) => candidate.id === event.partId)
       if (part && (part.type === 'text' || part.type === 'reasoning') && event.field === 'text') {
         part.text += event.delta
       }
       return
     }
     if (event.type === 'message.completed') {
-      const message = session.messages.find((candidate) => candidate.id === event.messageId)
+      const message = session.messages.findLast((candidate) => candidate.id === event.messageId)
       if (message) {
         message.completedAt = Date.now()
         message.error = event.error
@@ -773,7 +841,7 @@ export abstract class PersistentCliDriver implements HarnessDriver {
       }
     }
     if (event.type === 'usage.updated') {
-      const message = session.messages.find((candidate) => candidate.id === event.messageId)
+      const message = session.messages.findLast((candidate) => candidate.id === event.messageId)
       if (message) {
         if (event.tokens) message.tokens = event.tokens
         if (event.normalizedUsage) message.normalizedUsage = event.normalizedUsage
@@ -785,6 +853,80 @@ export abstract class PersistentCliDriver implements HarnessDriver {
         this.estimateMissingCost(message)
       }
     }
+  }
+
+  /** Promote JSONL question/approval tool parts into the shared interaction stream. */
+  protected normalizeInteractionEvents(
+    sessionId: string,
+    events: SessionAgentEvent[]
+  ): SessionAgentEvent[] {
+    const normalized: SessionAgentEvent[] = []
+    for (const event of events) {
+      normalized.push(event)
+      if (event.type === 'question.asked') {
+        this.interactionRequests.add(this.interactionKey('question', sessionId, event.requestId))
+        continue
+      }
+      if (event.type !== 'message.part.updated') continue
+      const part = event.part
+      if (part.type === 'question') {
+        const requestId = this.interactionRequestId('question', sessionId, part.callID ?? part.id)
+        const key = this.interactionKey('question', sessionId, requestId)
+        if (this.interactionRequests.has(key)) continue
+        this.interactionRequests.add(key)
+        normalized.push({
+          type: 'question.asked',
+          sessionId,
+          requestId,
+          questions: [{ ...part.question, requestId }],
+          tool: { messageID: part.messageID, callID: part.callID ?? part.id }
+        })
+        continue
+      }
+      if (part.type !== 'tool') continue
+      const active = part.state.status === 'pending' || part.state.status === 'running'
+      if (!active) continue
+      const requestId = this.interactionRequestId('interaction', sessionId, part.callID || part.id)
+      if (isQuestionToolName(part.tool)) {
+        const key = this.interactionKey('question', sessionId, requestId)
+        if (this.interactionRequests.has(key)) continue
+        this.interactionRequests.add(key)
+        normalized.push({
+          type: 'question.asked',
+          sessionId,
+          requestId,
+          questions: normalizeAgentQuestions(part.state.input),
+          tool: { messageID: part.messageID, callID: part.callID }
+        })
+        continue
+      }
+      if (!isPermissionToolName(part.tool)) continue
+      const key = this.interactionKey('permission', sessionId, requestId)
+      if (this.interactionRequests.has(key)) continue
+      this.interactionRequests.add(key)
+      normalized.push({
+        type: 'permission.asked',
+        sessionId,
+        permission: {
+          id: requestId,
+          sessionId,
+          permission: part.tool,
+          patterns: permissionPatterns(part.state.input),
+          metadata: { tool: part.tool, input: part.state.input }
+        }
+      })
+    }
+    return normalized
+  }
+
+  private interactionRequestId(kind: string, sessionId: string, providerId: string): string {
+    return `${this.id}-${kind}-${sessionId}-${providerId}`
+      .replace(/[^a-zA-Z0-9._-]/gu, '-')
+      .slice(0, 256)
+  }
+
+  private interactionKey(kind: string, sessionId: string, requestId: string): string {
+    return `${kind}:${sessionId}:${requestId}`
   }
 
   /**

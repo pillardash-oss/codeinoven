@@ -1,8 +1,10 @@
 <script lang="ts">
   import { tick } from 'svelte'
   import { SvelteSet } from 'svelte/reactivity'
-  import { Popover } from 'bits-ui'
+  import { DropdownMenu, Popover } from 'bits-ui'
   import {
+    Brain,
+    Check,
     ChevronRight,
     Clock,
     Cpu,
@@ -15,13 +17,15 @@
     Zap,
     X
   } from '@lucide/svelte'
+  import { resolveDefaultThinkingLevel } from '$shared/thinking-presets'
   import { getAgentIcon } from '$lib/agent-icons/registry'
   import { modelKey, parseModelKey } from '$lib/model-keys'
+  import { baseUrlProviderStore } from '$lib/stores/base-url-providers.svelte'
   import { providerCatalog } from '$lib/stores/provider-catalog.svelte'
   import { providerStore } from '$lib/stores/providers.svelte'
   import { getVendorSlug } from '$lib/vendor-icons/registry'
   import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
-  import type { ProviderCatalog, ProviderModel } from '$shared/types'
+  import type { ProviderCatalog, ProviderModel, ThinkingLevel, ThinkingPreset } from '$shared/types'
 
   interface Props {
     providers: ProviderCatalog[]
@@ -32,6 +36,9 @@
     recentModels?: string[]
     /** True while the picker is open — opening it refreshes the catalog. */
     open?: boolean
+    /** True while the thinking-level dropdown is open. Lets a parent open the
+     *  thinking selector directly (e.g. from the `/thinking` slash action). */
+    thinkingMenuOpen?: boolean
     /** Project whose harness catalog this picker displays. When provided, opening
      *  the picker lazily fetches that project's catalog (network only when stale). */
     projectId?: string | null
@@ -39,11 +46,27 @@
     disabled?: boolean
     variant?: 'compact' | 'field' | 'action'
     label?: string
+    /** Keep the catalog open while toggling several models. */
+    multiSelect?: boolean
+    /** Harness-scoped model keys selected by a multi-select caller. */
+    selectedModelKeys?: string[]
     /** Shows that the selected model is using its fast inference tier. */
     fast?: boolean
     /** When true, only models that report vision capability are shown. */
     visionOnly?: boolean
+    /** Current thinking level. Whenever the selected model declares thinking
+     *  presets, the trigger shows the level badge and the popover exposes the
+     *  presets — no opt-in beyond passing the current value is needed. */
+    thinkingLevel?: ThinkingLevel | null
+    /** Thinking presets to display. Defaults to the selected model's declared
+     *  presets — when the model declares none, thinking controls stay hidden. */
+    thinkingPresets?: ThinkingPreset[]
     onSelect: (providerId: string, modelId: string, harnessId: string) => void
+    onSelectMultiple?: (modelKeys: string[]) => void
+    /** Fired when the thinking level changes — either from an explicit preset
+     *  click, or automatically when a newly selected model no longer supports
+     *  the previous level. */
+    onSelectThinking?: (level: ThinkingLevel) => void
     onToggleFavorite?: (providerId: string, modelId: string, harnessId: string) => void
     /** Reorders a favorite relative to another favorite; position in display order. */
     onReorderFavorite?: (
@@ -61,14 +84,21 @@
     favoriteModels = [],
     recentModels = [],
     open = $bindable(false),
+    thinkingMenuOpen = $bindable(false),
     projectId = null,
     side = 'top',
     disabled = false,
     variant = 'compact',
     label,
+    multiSelect = false,
+    selectedModelKeys = [],
     fast = false,
     visionOnly = false,
+    thinkingLevel = null,
+    thinkingPresets,
     onSelect,
+    onSelectMultiple,
+    onSelectThinking,
     onToggleFavorite,
     onReorderFavorite
   }: Props = $props()
@@ -77,10 +107,11 @@
   const searchId = `model-search-${pickerId}`
   const listId = `model-list-${pickerId}`
   let search = $state('')
-  let searchInput: HTMLInputElement
-  let modelList: HTMLDivElement
+  let searchInput: HTMLInputElement | undefined
+  let modelList: HTMLDivElement | undefined
   const collapsedGroups = new SvelteSet<string>()
   let favoriteModelsSet = $derived(new Set(favoriteModels))
+  let selectedModelKeysSet = $derived(new Set(selectedModelKeys))
   /** Harness catalogs are app-wide. Keep the union available while a newly
    * opened project's time-budgeted refresh is still returning partial results. */
   let cachedProviders = $derived(providerCatalog.allCached())
@@ -88,9 +119,13 @@
     projectId ? (providerCatalog.cached(projectId) ?? providers) : providers
   )
   /** Current-project entries win when present without dropping harnesses that
-   * are still pending from its background catalog enrichment. */
+   * are still pending from its background catalog enrichment. Harnesses whose
+   * installed version is unsupported (e.g. OpenCode V2) are dropped so they
+   * behave exactly as if not installed. */
   let displayProviders = $derived(
-    mergeProviderEntries([...cachedProviders, ...providers, ...currentProviders])
+    mergeProviderEntries([...cachedProviders, ...providers, ...currentProviders]).filter(
+      (provider) => !providerStore.isUnsupported(provider.harnessId)
+    )
   )
   const selectedHarnesses = new SvelteSet<string>()
   let showAllHarnesses = $state(true)
@@ -107,13 +142,52 @@
       displayProviders.flatMap((provider) => provider.models).find((model) => model.id === modelId)
   )
   /**
+   * Thinking presets offered by the selected model. Callers may override them
+   * (e.g. the composer falls back to the standard presets while the catalog is
+   * still cold); otherwise the model's declared presets decide — none declared
+   * means the model does not reason and the thinking controls stay hidden.
+   */
+  let effectiveThinkingPresets = $derived(thinkingPresets ?? selectedModel?.thinkingPresets ?? [])
+  /** Thinking controls appear whenever the selected model declares presets —
+   *  the thinking level depends on the model, not on the caller's opt-in. */
+  let supportsThinking = $derived(effectiveThinkingPresets.length > 0)
+  /**
+   * Fallback "current" level for the trigger when the caller does not track a
+   * thinking level yet: the model's declared default (custom providers) or its
+   * lowest preset, mirroring what selecting the model would apply.
+   */
+  let fallbackThinkingLevel = $derived(
+    baseUrlProviderStore.defaultThinkingLevel(
+      selectedProvider?.harnessId ?? harnessId,
+      providerId,
+      modelId
+    ) ?? resolveDefaultThinkingLevel(effectiveThinkingPresets, undefined, undefined)
+  )
+  let currentThinkingLabel = $derived(
+    effectiveThinkingPresets.find((preset) => preset.id === thinkingLevel)?.label ??
+      thinkingLevel ??
+      effectiveThinkingPresets.find((preset) => preset.id === fallbackThinkingLevel)?.label ??
+      effectiveThinkingPresets[0]?.label ??
+      ''
+  )
+  /**
    * Snapshot fallback so the trigger renders instantly, before any harness
    * catalog resolves: the thread's stored harness icon is always available, and
    * the label degrades from the catalog's display name to the raw model id.
    * The catalog enriches these optimistically once it lands.
    */
   let selectedHarnessIcon = $derived(getAgentIcon(harnessId))
-  let selectedLabel = $derived(label ?? selectedModel?.name ?? (modelId || 'Model'))
+  let selectedLabel = $derived(
+    multiSelect
+      ? (label ??
+          (selectedModelKeys.length === 0
+            ? 'Select models'
+            : `${selectedModelKeys.length} model${selectedModelKeys.length === 1 ? '' : 's'} selected`))
+      : (label ?? selectedModel?.name ?? (modelId || 'Model'))
+  )
+  /** Keep the trigger readable — long names (e.g. Claude Code's default-model
+   *  description) would otherwise swallow the composer's bottom bar. */
+  let selectedLabelDisplay = $derived(truncateLabel(selectedLabel))
   let availableModelKeys = $derived(
     new Set(
       [...displayProviders, ...cachedProviders].flatMap((provider) =>
@@ -151,8 +225,9 @@
       .filter((key) => !availableModelKeys.has(key))
       .map((key) => {
         const parsed = parseModelKey(key)
-        return { modelKey: key, ...parsed }
+        return parsed ? { modelKey: key, ...parsed } : null
       })
+      .filter((favorite): favorite is NonNullable<typeof favorite> => favorite !== null)
   )
   let favoriteModelsList = $derived(
     filterEntries(
@@ -162,7 +237,7 @@
           .reverse()
           .map((key) => {
             const parsed = parseModelKey(key)
-            if (!parsed.providerId) return null
+            if (!parsed) return null
             const entry = resolveModel(parsed.providerId, parsed.modelId, parsed.harnessId)
             return entry && passesVisionFilter(entry.model) ? entry : null
           })
@@ -177,7 +252,7 @@
         recentModels
           .map((key) => {
             const parsed = parseModelKey(key)
-            if (!parsed.providerId) return null
+            if (!parsed) return null
             const entry = resolveModel(parsed.providerId, parsed.modelId, parsed.harnessId)
             return entry &&
               passesHarnessFilter(entry.provider.harnessId) &&
@@ -211,15 +286,32 @@
           (words.length === 0 && provider.catalogStatus === 'unavailable')
       )
   })
+  /** Visual shell of the trigger — it hosts the model button and, when the
+   *  selected model reasons, the thinking-level badge as a split control. */
   let triggerClasses = $derived(
     variant === 'field'
-      ? 'flex w-full items-center justify-between gap-1 rounded-lg border bg-elevated px-3 py-2 text-sm text-muted transition-colors hover:bg-overlay hover:text-foreground disabled:opacity-50'
+      ? 'flex w-full items-center rounded-lg border bg-elevated transition-colors hover:bg-overlay'
       : variant === 'action'
-        ? 'flex items-center gap-1 rounded-lg border bg-elevated px-3 py-2 text-xs font-semibold text-muted transition-colors hover:bg-overlay hover:text-foreground disabled:opacity-50'
-        : 'flex items-center gap-1 rounded-lg px-2 py-1.5 text-[11px] text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-50'
+        ? 'flex items-center rounded-lg border bg-elevated transition-colors hover:bg-overlay'
+        : 'flex items-center rounded-lg transition-colors hover:bg-elevated'
+  )
+  let modelButtonClasses = $derived(
+    variant === 'field'
+      ? 'flex min-w-0 flex-1 items-center gap-1 px-3 py-2 text-sm text-muted transition-colors hover:text-foreground'
+      : variant === 'action'
+        ? 'flex min-w-0 flex-1 items-center gap-1 px-3 py-2 text-xs font-semibold text-muted transition-colors hover:text-foreground'
+        : 'flex min-w-0 flex-1 items-center gap-1 px-2 py-1.5 text-[11px] text-muted transition-colors hover:text-foreground'
   )
 
   type ModelEntry = { provider: ProviderCatalog; model: ProviderModel }
+
+  /** Cap the trigger label at this length, suffixing an ellipsis when exceeded. */
+  const MODEL_LABEL_MAX_LENGTH = 40
+
+  function truncateLabel(value: string): string {
+    if (value.length <= MODEL_LABEL_MAX_LENGTH) return value
+    return `${value.slice(0, MODEL_LABEL_MAX_LENGTH - 1).trimEnd()}…`
+  }
 
   function mergeProviderEntries(catalogs: ProviderCatalog[]): ProviderCatalog[] {
     const merged: ProviderCatalog[] = []
@@ -240,6 +332,7 @@
    * models sharing the same id.
    */
   function isSelectedModel(entry: ModelEntry): boolean {
+    if (multiSelect) return selectedModelKeysSet.has(modelEntryKey(entry))
     return (
       entry.model.id === modelId &&
       entry.provider.id === providerId &&
@@ -321,10 +414,9 @@
   }
 
   /**
-   * Collapse duplicate resolved model entries. A legacy 2-segment key and a
-   * harness-scoped 3-segment key can both resolve to the same catalog entry
-   * (e.g. during the key-format migration), which would otherwise render as
-   * duplicate `each` keys. Keeps the first occurrence, preserving display order.
+   * Collapse duplicate resolved model entries so duplicate catalog entries do
+   * not render duplicate `each` keys. Keeps the first occurrence, preserving
+   * display order.
    */
   function dedupeModelEntries(entries: ModelEntry[]): ModelEntry[] {
     const seen: Record<string, true> = {}
@@ -338,9 +430,7 @@
     return deduped
   }
 
-  /** Resolve a model key against the current catalog first, then cached catalogs.
-   *  When the key is harness-scoped, only the matching harness is considered;
-   *  legacy keys fall back to the current harness, then any harness. */
+  /** Resolve a model key against the current catalog first, then cached catalogs. */
   function resolveModel(
     providerId: string,
     modelId: string,
@@ -592,8 +682,31 @@
     if (modelList) modelList.scrollTop = pickerListScrollTop
   }
 
+  /** True for a plain printable character key (not a modifier/control combo). */
+  function isTypeableKey(event: KeyboardEvent): boolean {
+    return event.key.length === 1 && !event.ctrlKey && !event.metaKey && !event.altKey
+  }
+
+  /** Return focus to the search box and place the caret near its end (a negative
+   *  `offset` steps the caret back) so the user can keep editing the query while
+   *  navigating the list. */
+  function focusSearchInput(offset = 0): void {
+    if (!searchInput) return
+    searchInput.focus()
+    const len = searchInput.value.length
+    const target = Math.max(0, Math.min(len, len + offset))
+    searchInput.setSelectionRange(target, target)
+  }
+
+  function attachSearchInput(node: HTMLInputElement): () => void {
+    searchInput = node
+    return () => {
+      if (searchInput === node) searchInput = undefined
+    }
+  }
+
   /** Keep the viewport height and scroll position in sync for the virtual list. */
-  function measurePickerList(node: HTMLDivElement): { destroy(): void } {
+  function measurePickerList(node: HTMLDivElement): () => void {
     pickerViewport = node.clientHeight
     const resizeObserver = new ResizeObserver(() => {
       pickerViewport = node.clientHeight
@@ -603,11 +716,9 @@
       pickerListScrollTop = node.scrollTop
     }
     node.addEventListener('scroll', onScroll, { passive: true })
-    return {
-      destroy() {
-        resizeObserver.disconnect()
-        node.removeEventListener('scroll', onScroll)
-      }
+    return () => {
+      resizeObserver.disconnect()
+      node.removeEventListener('scroll', onScroll)
     }
   }
 
@@ -621,8 +732,35 @@
   }
 
   function choose(nextProviderId: string, nextModelId: string, nextHarnessId: string): void {
+    if (multiSelect) {
+      const nextKey = modelKey(nextHarnessId, nextProviderId, nextModelId)
+      const nextKeys = selectedModelKeysSet.has(nextKey)
+        ? selectedModelKeys.filter((key) => key !== nextKey)
+        : [...selectedModelKeys, nextKey]
+      onSelectMultiple?.(nextKeys)
+      return
+    }
+    const entry =
+      findModelEntry(displayProviders, nextProviderId, nextModelId, nextHarnessId) ??
+      findModelEntry(cachedProviders, nextProviderId, nextModelId, nextHarnessId)
     close()
     onSelect(nextProviderId, nextModelId, nextHarnessId)
+    // Thinking level depends on the model: resolve a level the new model
+    // actually offers and surface it right after the model change, so parents
+    // never keep a stale level the model no longer supports.
+    if (thinkingLevel && entry?.model.thinkingPresets?.length) {
+      const defaultLevel = baseUrlProviderStore.defaultThinkingLevel(
+        nextHarnessId,
+        nextProviderId,
+        nextModelId
+      )
+      const resolved = resolveDefaultThinkingLevel(
+        entry.model.thinkingPresets,
+        defaultLevel,
+        thinkingLevel
+      )
+      if (resolved && resolved !== thinkingLevel) onSelectThinking?.(resolved)
+    }
   }
 
   function toggleGroup(id: string): void {
@@ -680,32 +818,81 @@
 
 <div>
   <Popover.Root bind:open onOpenChange={handleOpenChange}>
-    <Popover.Trigger
-      type="button"
-      class={triggerClasses}
-      aria-label={`Select model, currently ${selectedLabel}`}
-      title={`Select model — ${selectedLabel}`}
-      {disabled}
-    >
-      {#if selectedProvider}
-        <span class="flex shrink-0 items-center gap-0.5">
-          {@render modelVendorIcons(selectedProvider.harnessId, selectedProvider.name)}
-        </span>
-      {:else if selectedHarnessIcon}
-        {@render harnessIcon(harnessId)}
-      {:else}
-        <Cpu size={12} />
+    <div class={triggerClasses} class:pointer-events-none={disabled} class:opacity-50={disabled}>
+      <Popover.Trigger
+        class={modelButtonClasses}
+        aria-label={`${multiSelect ? 'Select models' : 'Select model'}, currently ${selectedLabel}`}
+        title={`${multiSelect ? 'Select models' : 'Select model'} — ${selectedLabel}`}
+        {disabled}
+      >
+        {#if selectedProvider}
+          <span class="flex shrink-0 items-center gap-0.5">
+            {@render modelVendorIcons(selectedProvider.harnessId, selectedProvider.name)}
+          </span>
+        {:else if selectedHarnessIcon}
+          {@render harnessIcon(harnessId)}
+        {:else}
+          <Cpu size={12} />
+        {/if}
+        <span class="min-w-0 flex-1 truncate text-left">{selectedLabelDisplay}</span>
+        {#if fast}
+          <Zap
+            size={11}
+            class="shrink-0 text-accent"
+            fill="currentColor"
+            aria-label="Fast inference"
+          />
+        {/if}
+      </Popover.Trigger>
+      {#if supportsThinking}
+        <DropdownMenu.Root bind:open={thinkingMenuOpen}>
+          <DropdownMenu.Trigger
+            class="ml-0.5 mr-1.5 flex shrink-0 items-center gap-1 rounded-md bg-elevated px-1.5 py-0.5 text-[10px] text-dimmed transition-colors hover:bg-overlay hover:text-foreground disabled:cursor-default disabled:opacity-50"
+            aria-label={`Thinking level: ${currentThinkingLabel}`}
+            title="Thinking level"
+            {disabled}
+          >
+            <Brain size={10} />
+            <span class="capitalize">{currentThinkingLabel}</span>
+          </DropdownMenu.Trigger>
+          <DropdownMenu.Portal>
+            <DropdownMenu.Content
+              side="bottom"
+              align="start"
+              sideOffset={4}
+              collisionPadding={12}
+              onCloseAutoFocus={(event) => event.preventDefault()}
+              class="z-50 w-52 rounded-xl border border-border bg-surface p-1 shadow-xl"
+            >
+              {#each effectiveThinkingPresets as preset (preset.id)}
+                {@const active = thinkingLevel === preset.id}
+                <DropdownMenu.Item
+                  class="flex w-full cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 text-left text-xs text-foreground outline-none transition-colors hover:bg-elevated focus:bg-elevated {active
+                    ? 'text-primary'
+                    : ''}"
+                  title={preset.description ?? `Set thinking to ${preset.label}`}
+                  onSelect={() => {
+                    if (!active) onSelectThinking?.(preset.id as ThinkingLevel)
+                  }}
+                >
+                  {#if active}
+                    <Check size={11} class="shrink-0 text-primary" />
+                  {:else}
+                    <span class="w-[11px] shrink-0" aria-hidden="true"></span>
+                  {/if}
+                  <span class="flex flex-col">
+                    <span class="capitalize">{preset.label}</span>
+                    {#if preset.description}
+                      <span class="text-[10px] font-normal text-muted">{preset.description}</span>
+                    {/if}
+                  </span>
+                </DropdownMenu.Item>
+              {/each}
+            </DropdownMenu.Content>
+          </DropdownMenu.Portal>
+        </DropdownMenu.Root>
       {/if}
-      <span class="min-w-0 flex-1 truncate text-left">{selectedLabel}</span>
-      {#if fast}
-        <Zap
-          size={11}
-          class="shrink-0 text-accent"
-          fill="currentColor"
-          aria-label="Fast inference"
-        />
-      {/if}
-    </Popover.Trigger>
+    </div>
 
     <Popover.Portal>
       <Popover.Content
@@ -715,7 +902,7 @@
         collisionPadding={12}
         class="z-50 flex w-64 flex-col overflow-hidden rounded-xl border bg-surface shadow-lg"
         role="dialog"
-        aria-label="Select model"
+        aria-label={multiSelect ? 'Select models' : 'Select model'}
         tabindex={-1}
         onCloseAutoFocus={(event) => event.preventDefault()}
         onkeydown={(event: KeyboardEvent) => {
@@ -726,7 +913,7 @@
           <Search size={12} class="shrink-0 text-dimmed" />
           <input
             id={searchId}
-            bind:this={searchInput}
+            {@attach attachSearchInput}
             bind:value={search}
             oninput={() => scrollPickerListTo(0)}
             type="text"
@@ -842,8 +1029,14 @@
 
         <div
           id={listId}
-          bind:this={modelList}
-          use:measurePickerList
+          {@attach (node) => {
+            modelList = node
+            const cleanup = measurePickerList(node)
+            return () => {
+              cleanup()
+              if (modelList === node) modelList = undefined
+            }
+          }}
           class="max-h-60 overflow-y-auto p-1"
         >
           {#if displayProviders.length === 0 && unavailableFavoriteModels.length === 0}
@@ -873,6 +1066,21 @@
             </div>
           {/if}
         </div>
+        {#if multiSelect}
+          <div class="flex items-center justify-between gap-2 border-t px-2.5 py-1.5">
+            <span class="text-[10px] text-dimmed">
+              {selectedModelKeys.length} selected · choose one or more
+            </span>
+            <button
+              type="button"
+              class="rounded-md bg-primary px-2.5 py-1 text-[10px] font-medium text-on-primary transition-colors hover:bg-primary-hover"
+              title="Finish selecting models"
+              onclick={close}
+            >
+              Done
+            </button>
+          </div>
+        {/if}
       </Popover.Content>
     </Popover.Portal>
   </Popover.Root>
@@ -1030,7 +1238,7 @@
 {#snippet modelRow(entry: ModelEntry, rowKey: string)}
   {@const key = modelKey(entry.provider.harnessId, entry.provider.id, entry.model.id)}
   <button
-    class={`model-row-btn flex w-full flex-col rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-elevated ${isSelectedModel(entry) ? 'bg-elevated' : ''}`}
+    class={`model-row-btn flex w-full flex-col rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-elevated focus:bg-elevated focus:outline-none ${isSelectedModel(entry) ? 'bg-elevated' : ''}`}
     title={`Use ${entry.model.name}`}
     data-model-id={entry.model.id}
     data-model-key={rowKey}
@@ -1067,6 +1275,34 @@
         choose(entry.provider.id, entry.model.id, entry.provider.harnessId)
         return
       }
+      // Editing intent: left/right moves the caret and characters/backspace edit
+      // the query. Return focus to the search box so typing continues naturally.
+      if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
+        event.preventDefault()
+        focusSearchInput(event.key === 'ArrowLeft' ? -1 : 0)
+        return
+      }
+      if (event.key === 'Backspace') {
+        event.preventDefault()
+        focusSearchInput(0)
+        if (search) {
+          search = search.slice(0, -1)
+          scrollPickerListTo(0)
+        }
+        return
+      }
+      if (event.key === 'Delete') {
+        event.preventDefault()
+        focusSearchInput(0)
+        return
+      }
+      if (isTypeableKey(event)) {
+        event.preventDefault()
+        focusSearchInput(0)
+        search += event.key
+        scrollPickerListTo(0)
+        return
+      }
     }}
   >
     <span class="flex w-full items-center gap-2">
@@ -1076,6 +1312,9 @@
         {entry.model.name}
       </span>
       <span class="ml-auto flex shrink-0 items-center gap-1 text-[9px] text-dimmed">
+        {#if multiSelect && isSelectedModel(entry)}
+          <Check size={11} class="text-primary" aria-label="Selected" />
+        {/if}
         {#if onToggleFavorite}
           <span
             role="button"

@@ -7,7 +7,13 @@ import ts from 'typescript-eslint'
 import svelteConfig from './svelte.config.js'
 
 export default defineConfig(
-  globalIgnores(['agent-out/**', 'dist/**', 'node_modules/**', 'out/**']),
+  globalIgnores([
+    'agent-out/**',
+    'dist/**',
+    'node_modules/**',
+    'out/**',
+    'services/**'
+  ]),
   js.configs.recommended,
   ts.configs.recommended,
   svelte.configs.recommended,

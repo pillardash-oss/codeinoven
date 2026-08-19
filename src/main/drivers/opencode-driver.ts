@@ -1,7 +1,10 @@
 import { execFile, spawn } from 'child_process'
 import type { ChildProcess } from 'child_process'
+import { readFile } from 'node:fs/promises'
+import { homedir } from 'node:os'
+import { join } from 'node:path'
 import { promisify } from 'util'
-import { Logger } from '../logger'
+import { Logger } from '../system/logger'
 import type {
   AgentEvent,
   AgentMessage,
@@ -9,6 +12,7 @@ import type {
   AgentProviderIssue,
   AgentQuestion,
   AgentQuestionRequest,
+  AgentRateLimitWindow,
   AgentSubagentActivity,
   AgentTokenUsage,
   AgentToolState,
@@ -34,19 +38,33 @@ import type {
   UtilityRuntimePreparationRequest
 } from './driver.interface'
 import { buildHarnessEnvironment } from './cli-environment'
-import { BaseUrlProviderService } from '../base-url-provider-service'
-import { hasNativeProviderCatalog } from '../native-provider-config-service'
-import { SecretVault } from '../secret-vault'
+import { BaseUrlProviderService } from '../providers/base-url-provider-service'
+import { hasNativeProviderCatalog } from '../agents/native-provider-config-service'
+import { SecretVault } from '../storage/secret-vault'
 import { resolveFastModelId } from '../../lib/fast-inference'
 import { classifyProviderIssue } from '../../lib/provider-issue'
 import { isSvgAttachment, readSvgAttachmentText, formatSvgAsText } from './svg-attachment'
 import { isTextAttachment, readTextAttachment, formatTextAsText } from './text-attachment'
-import { buildTitlePrompt, sanitizeGeneratedTitle } from '../title-generator'
+import { buildTitlePrompt, sanitizeGeneratedTitle } from '../chat/title-generator'
 
 /** Time allowed for an opencode server to announce its port before giving up. */
 const SERVER_START_TIMEOUT_MS = 25000
 const MODEL_DISCOVERY_TIMEOUT_MS = 20_000
+const ACCOUNT_USAGE_TIMEOUT_MS = 10_000
+const ACCOUNT_USAGE_ENDPOINT = 'https://opencode.ai/zen/go/v1/usage'
 const execFileAsync = promisify(execFile)
+
+const OPENCODE_ACCOUNT_PROVIDER_IDS = ['opencode-go', 'opencode'] as const
+const OPENCODE_USAGE_WINDOWS: ReadonlyArray<{
+  id: string
+  key: string
+  label: string
+  windowMinutes?: number
+}> = [
+  { id: 'rolling', key: 'rolling', label: '5-hour limit', windowMinutes: 300 },
+  { id: 'weekly', key: 'weekly', label: 'Weekly limit', windowMinutes: 10_080 },
+  { id: 'monthly', key: 'monthly', label: 'Monthly limit' }
+]
 
 /** Reasoning-effort variants offered for custom reasoning models. */
 const STANDARD_THINKING_VARIANTS: ReadonlyArray<{ id: string; label: string }> = [
@@ -93,6 +111,62 @@ function stringValue(value: unknown): string | undefined {
 
 function numberValue(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isFinite(value) ? value : undefined
+}
+
+function timestampValue(value: unknown): number | undefined {
+  const parsed = typeof value === 'string' ? Date.parse(value) : Number.NaN
+  return Number.isFinite(parsed) ? parsed : undefined
+}
+
+function apiKeyFromOpenCodeAuth(value: unknown): string | undefined {
+  const auth = recordValue(value)
+  if (!auth) return undefined
+  for (const providerId of OPENCODE_ACCOUNT_PROVIDER_IDS) {
+    const entry = recordValue(auth[providerId])
+    const key = stringValue(entry?.['key'])
+    if (key) return key
+  }
+  return undefined
+}
+
+/** Normalize OpenCode Go's account-wide quota windows for the battery popover. */
+export function mapOpenCodeAccountUsage(value: unknown): AgentRateLimitWindow[] {
+  const usage = recordValue(recordValue(value)?.['usage'])
+  if (!usage) return []
+  return OPENCODE_USAGE_WINDOWS.flatMap((definition) => {
+    const window = recordValue(usage[definition.key])
+    if (!window) return []
+    const percent = numberValue(window['percent'])
+    const resetsAt = timestampValue(window['resetsAt'])
+    if (percent === undefined && resetsAt === undefined) return []
+    const status = stringValue(window['status'])
+    return [
+      {
+        id: `opencode-go:${definition.id}`,
+        label: definition.label,
+        ...(status ? { status } : {}),
+        ...(percent === undefined ? {} : { usedPercent: Math.max(0, Math.min(100, percent)) }),
+        ...(resetsAt === undefined ? {} : { resetsAt }),
+        ...(definition.windowMinutes === undefined
+          ? {}
+          : { windowMinutes: definition.windowMinutes })
+      }
+    ]
+  })
+}
+
+function openCodeAuthPaths(environment: NodeJS.ProcessEnv): string[] {
+  const home = homedir()
+  return [
+    ...(environment['XDG_DATA_HOME']
+      ? [join(environment['XDG_DATA_HOME'], 'opencode', 'auth.json')]
+      : []),
+    ...(environment['LOCALAPPDATA']
+      ? [join(environment['LOCALAPPDATA'], 'opencode', 'auth.json')]
+      : []),
+    join(home, '.local', 'share', 'opencode', 'auth.json'),
+    join(home, '.opencode', 'data', 'auth.json')
+  ].filter((path, index, paths) => paths.indexOf(path) === index)
 }
 
 function textValue(value: unknown): string | undefined {
@@ -350,9 +424,9 @@ function mapOpenCodeQuestion(raw: unknown): AgentQuestion | null {
   }
 }
 
-/** Normalize the current ordered `questions` array and legacy single input. */
+/** Normalize the current ordered `questions` array. */
 function mapOpenCodeQuestions(input: Record<string, unknown>): AgentQuestion[] {
-  const values = Array.isArray(input['questions']) ? input['questions'] : [input]
+  const values = Array.isArray(input['questions']) ? input['questions'] : []
   return values
     .map((value) => mapOpenCodeQuestion(value))
     .filter((value): value is AgentQuestion => value !== null)
@@ -914,7 +988,10 @@ export class OpenCodeDriver implements HarnessDriver {
     compaction: true,
     subagents: true,
     // OpenCode 1.18.10 accepts structured prompts but its history endpoint can
-    // fail to decode their stored format. Use deterministic JSON-only output.
+    // fail to decode their stored format, and structured output returns no
+    // visible text into the conversation (the spec/assignment only appears in
+    // the studio/panel). Keep deterministic JSON-only output so the generated
+    // spec is written as a visible message the renderer reliably surfaces.
     structuredOutput: false,
     nativeUtilities: ['web_fetch'],
     // OpenCode schedules and performs its own provider retries (`session.status`
@@ -934,6 +1011,8 @@ export class OpenCodeDriver implements HarnessDriver {
   private isolatedServers = new Set<IsolatedHandle>()
   private titleSessions = new Set<string>()
   private processObserver: AgentProcessObserver | null = null
+  /** Coalesce concurrent battery hovers across threads into one account request. */
+  private accountUsageRequest: Promise<{ rateLimits: AgentRateLimitWindow[] } | null> | null = null
 
   /**
    * Optional collaborators for custom base-URL providers. When supplied, the
@@ -1555,6 +1634,67 @@ export class OpenCodeDriver implements HarnessDriver {
       .filter((tool) => tool.name)
   }
 
+  /** Fetch OpenCode Go's account-wide quota windows without starting a model turn. */
+  async readAccountUsage(
+    _projectPath: string
+  ): Promise<{ rateLimits: AgentRateLimitWindow[] } | null> {
+    void _projectPath
+    if (this.accountUsageRequest) return this.accountUsageRequest
+    const request = this.fetchAccountUsage()
+    this.accountUsageRequest = request
+    try {
+      return await request
+    } finally {
+      if (this.accountUsageRequest === request) this.accountUsageRequest = null
+    }
+  }
+
+  private async fetchAccountUsage(): Promise<{ rateLimits: AgentRateLimitWindow[] } | null> {
+    try {
+      const apiKey = await this.readOpenCodeApiKey()
+      if (!apiKey) return null
+      const response = await fetch(ACCOUNT_USAGE_ENDPOINT, {
+        headers: { Authorization: `Bearer ${apiKey}` },
+        signal: AbortSignal.timeout(ACCOUNT_USAGE_TIMEOUT_MS)
+      })
+      // A valid Zen key may not belong to an OpenCode Go subscription. Treat
+      // both missing access and missing entitlement as unsupported telemetry.
+      if (response.status === 401 || response.status === 403) return null
+      if (!response.ok) throw new Error(`OpenCode usage request failed (${response.status})`)
+      const rateLimits = mapOpenCodeAccountUsage((await response.json()) as unknown)
+      return rateLimits.length > 0 ? { rateLimits } : null
+    } catch (error) {
+      Logger.dev('OpenCode on-demand account usage refresh unavailable:', error)
+      return null
+    }
+  }
+
+  private async readOpenCodeApiKey(): Promise<string | undefined> {
+    const environment = this.buildEnv()
+    const environmentKey = stringValue(environment['OPENCODE_API_KEY'])
+    if (environmentKey) return environmentKey
+
+    const authContent = stringValue(environment['OPENCODE_AUTH_CONTENT'])
+    if (authContent) {
+      try {
+        const key = apiKeyFromOpenCodeAuth(JSON.parse(authContent) as unknown)
+        if (key) return key
+      } catch {
+        // Fall back to OpenCode's persisted auth file.
+      }
+    }
+
+    for (const path of openCodeAuthPaths(environment)) {
+      try {
+        const key = apiKeyFromOpenCodeAuth(JSON.parse(await readFile(path, 'utf8')) as unknown)
+        if (key) return key
+      } catch {
+        // OpenCode may not use this platform-specific data path.
+      }
+    }
+    return undefined
+  }
+
   async runCommand(
     projectPath: string,
     sessionId: string,
@@ -1575,17 +1715,26 @@ export class OpenCodeDriver implements HarnessDriver {
     sessionId: string,
     settings: ThreadSettings
   ): Promise<void> {
-    const handle = this.turnServers.get(sessionId) ?? (await this.ensureServer(projectPath))
+    // Manual compaction is available only after the turn becomes idle. At that
+    // boundary the per-turn server is being torn down, so reusing it races the
+    // cleanup that follows OpenCode's idle event. Use the stable project server
+    // for maintenance requests instead of sending them to a dying process.
+    const handle = await this.ensureServer(projectPath)
     const res = await fetch(`${handle.baseUrl}/session/${sessionId}/summarize`, {
       method: 'POST',
       headers: this.headersFor(handle, { 'Content-Type': 'application/json' }),
       body: JSON.stringify({
         providerID: settings.providerId,
-        modelID: settings.modelId
+        modelID: settings.modelId,
+        auto: false
       })
     })
     if (!res.ok) {
       throw await errorFromResponse(res, 'Failed to compact session')
+    }
+    const accepted = (await res.json()) as unknown
+    if (accepted !== true) {
+      throw new Error('OpenCode did not accept the manual compaction request')
     }
   }
 
@@ -1959,6 +2108,7 @@ export class OpenCodeDriver implements HarnessDriver {
             abortController: new AbortController()
           }
           Logger.dev(`shared opencode server up on :${port}`)
+          this.processObserver?.watchProcess(undefined, child.pid, 'opencode serve', projectPath)
           resolve(handle)
         }
       })

@@ -1,4 +1,9 @@
-import { decryptDesktopGrant, mobileGrantIdentity } from './mobile-control-key'
+import {
+  decryptDesktopGrant,
+  mobileGrantIdentity,
+  rotateMobileGrantIdentity,
+  type MobileGrantIdentity
+} from './mobile-control-key'
 
 export interface CloudUser {
   id: string
@@ -22,6 +27,11 @@ export interface CloudDesktopConnection {
   mobileDeviceId: string
   lanEndpoint: string | null
   relayPath: string
+}
+
+export interface CloudEnrollmentClaim {
+  desktopId: string
+  mobileDeviceId: string
 }
 
 interface EncryptedDesktopConnection {
@@ -77,8 +87,10 @@ export async function listCloudDesktops(): Promise<CloudDesktop[]> {
   return response.desktops
 }
 
-export async function claimCloudDesktop(code: string): Promise<string> {
-  const identity = await mobileGrantIdentity()
+async function claimCloudDesktopWithIdentity(
+  code: string,
+  identity: MobileGrantIdentity
+): Promise<CloudEnrollmentClaim> {
   const response = await apiRequest<{ desktopId: string }>('/v1/device-enrollments/claim', {
     method: 'POST',
     body: JSON.stringify({
@@ -88,24 +100,39 @@ export async function claimCloudDesktop(code: string): Promise<string> {
       mobilePublicKey: identity.publicKey
     })
   })
-  return response.desktopId
+  return { desktopId: response.desktopId, mobileDeviceId: identity.id }
 }
 
-export async function cloudDesktopConnection(desktopId: string): Promise<CloudDesktopConnection> {
-  const identity = await mobileGrantIdentity()
+export async function claimCloudDesktop(code: string): Promise<CloudEnrollmentClaim> {
+  try {
+    return await claimCloudDesktopWithIdentity(code, await mobileGrantIdentity())
+  } catch (error) {
+    if (!(error instanceof CloudApiError) || error.code !== 'mobile-device-mismatch') throw error
+    return claimCloudDesktopWithIdentity(code, await rotateMobileGrantIdentity())
+  }
+}
+
+export async function cloudDesktopConnection(
+  desktopId: string,
+  claimedMobileDeviceId?: string
+): Promise<CloudDesktopConnection> {
+  // A fresh claim must request the grant with the exact identity that consumed
+  // its one-time code. Android can change storage availability while moving
+  // between the QR scanner, browser, and installed PWA.
+  const mobileDeviceId = claimedMobileDeviceId ?? (await mobileGrantIdentity()).id
   const response = await apiRequest<EncryptedDesktopConnection>(
-    `/v1/desktops/${encodeURIComponent(desktopId)}/connection?mobileDeviceId=${encodeURIComponent(identity.id)}`
+    `/v1/desktops/${encodeURIComponent(desktopId)}/connection?mobileDeviceId=${encodeURIComponent(mobileDeviceId)}`
   )
-  if (response.grant.mobileDeviceId !== identity.id) throw new Error('device-not-approved')
+  if (response.grant.mobileDeviceId !== mobileDeviceId) throw new Error('device-not-approved')
   return {
     desktop: response.desktop,
     controlSecret: await decryptDesktopGrant({
       desktopId,
-      mobileDeviceId: identity.id,
+      mobileDeviceId,
       desktopPublicKey: response.grant.desktopPublicKey,
       ciphertext: response.grant.ciphertext
     }),
-    mobileDeviceId: identity.id,
+    mobileDeviceId,
     lanEndpoint: response.lanEndpoint,
     relayPath: response.relayPath
   }
@@ -119,5 +146,12 @@ export async function renameCloudDesktop(desktopId: string, name: string): Promi
 }
 
 export async function revokeCloudDesktop(desktopId: string): Promise<void> {
-  await apiRequest(`/v1/desktops/${encodeURIComponent(desktopId)}`, { method: 'DELETE' })
+  try {
+    await apiRequest(`/v1/desktops/${encodeURIComponent(desktopId)}`, { method: 'DELETE' })
+  } catch (error) {
+    // A stale client can still list a desktop that another client already revoked.
+    // DELETE remains successful when the requested access is already absent.
+    if (error instanceof CloudApiError && error.status === 404) return
+    throw error
+  }
 }

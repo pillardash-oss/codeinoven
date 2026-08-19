@@ -200,7 +200,7 @@
     }
   }
 
-  async function revealInFinder(): Promise<void> {
+  async function revealInFileManager(): Promise<void> {
     if (!resolved) return
     await invoke('shell:revealPath', resolved.absolutePath)
   }
@@ -295,10 +295,14 @@
           </ContextMenu.Item>
         {/if}
         <ContextMenu.Separator class="my-1 h-px bg-border" />
-        <ContextMenu.Item class={dangerItemClass} disabled={!resolved} onSelect={revealInFinder}>
+        <ContextMenu.Item
+          class={dangerItemClass}
+          disabled={!resolved}
+          onSelect={revealInFileManager}
+        >
           <FolderOpen size={13} />
           {navigator.platform.toUpperCase().indexOf('MAC') >= 0
-            ? 'Reveal in Finder'
+            ? 'Reveal in File Manager'
             : 'Show in Explorer'}
         </ContextMenu.Item>
       {/if}

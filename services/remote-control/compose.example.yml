@@ -7,15 +7,7 @@ services:
     environment:
       NODE_ENV: production
       TRUST_PROXY: '1'
-      BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET:?set BETTER_AUTH_SECRET}
-      GOOGLE_OAUTH_CLIENT_ID: ${GOOGLE_OAUTH_CLIENT_ID:?set GOOGLE_OAUTH_CLIENT_ID}
-      GOOGLE_OAUTH_CLIENT_SECRET: ${GOOGLE_OAUTH_CLIENT_SECRET:?set GOOGLE_OAUTH_CLIENT_SECRET}
-      APPLE_OAUTH_CLIENT_ID: ${APPLE_OAUTH_CLIENT_ID:?set APPLE_OAUTH_CLIENT_ID}
-      APPLE_TEAM_ID: ${APPLE_TEAM_ID:?set APPLE_TEAM_ID}
-      APPLE_KEY_ID: ${APPLE_KEY_ID:?set APPLE_KEY_ID}
-      APPLE_PRIVATE_KEY: ${APPLE_PRIVATE_KEY:?set APPLE_PRIVATE_KEY}
-    expose:
-      - '8877'
+      CONVEX_SITE_URL: ${CONVEX_SITE_URL:?set CONVEX_SITE_URL}
     volumes:
       - remote-data:/data
     healthcheck:
@@ -37,6 +29,8 @@ services:
     depends_on:
       remote-control:
         condition: service_healthy
+    environment:
+      CONVEX_SITE_URL: ${CONVEX_SITE_URL:?set CONVEX_SITE_URL}
     expose:
       - '80'
     healthcheck:

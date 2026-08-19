@@ -5,6 +5,8 @@ import { fileURLToPath } from 'url'
 import { promisify } from 'util'
 import type {
   AgentEvent,
+  AgentQuestion,
+  AgentProviderIssue,
   AgentRateLimitWindow,
   AgentUsageCredits,
   AgentMessage,
@@ -12,6 +14,7 @@ import type {
   AgentTokenUsage,
   NormalizedUsage,
   PermissionLevel,
+  PermissionReply,
   PromptAttachment,
   ProviderCatalog,
   SessionAgentEvent,
@@ -19,11 +22,13 @@ import type {
   ThreadSettings,
   ThinkingPreset
 } from '../../lib/types'
+import { normalizeAgentQuestions, permissionPatterns } from '../../lib/agent-interactions'
+import { classifyProviderIssue } from '../../lib/provider-issue'
 import { resolveFastModelId } from '../../lib/fast-inference'
-import { BaseUrlProviderService } from '../base-url-provider-service'
-import { Logger } from '../logger'
-import { SecretVault } from '../secret-vault'
-import type { StorageEngine } from '../storage-engine'
+import { BaseUrlProviderService } from '../providers/base-url-provider-service'
+import { Logger } from '../system/logger'
+import { SecretVault } from '../storage/secret-vault'
+import type { StorageEngine } from '../storage/storage-engine'
 import { buildHarnessEnvironment } from './cli-environment'
 import { attachmentReference } from './attachment-reference'
 import type {
@@ -68,6 +73,7 @@ const CODEX_FALLBACK_MODELS = ['gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna']
 const CODEX_COMPACTION_TIMEOUT_MS = 180_000
 const CODEX_USAGE_TIMEOUT_MS = 15_000
 const CODEX_APP_SERVER_REQUEST_TIMEOUT_MS = 30_000
+const CODEX_APP_SERVER_FEATURES = ['default_mode_request_user_input'] as const
 
 interface CodexAppServerHost {
   child: ChildProcess
@@ -88,13 +94,17 @@ interface CodexAppServerHost {
 interface CodexAppServerTurn {
   host: CodexAppServerHost
   session: PersistentCliSession
+  startParams?: Record<string, unknown>
   nativeThreadId?: string
   turnId?: string
   failure?: string
+  summaryFallbackAttempted?: boolean
+  waitingForRetry?: boolean
   finished: boolean
 }
 
 interface CodexCompactionRun {
+  host: CodexAppServerHost
   session: PersistentCliSession
   messageId: string
   basePart: Extract<AgentPart, { type: 'compaction' }>
@@ -104,8 +114,18 @@ interface CodexCompactionRun {
 }
 
 interface CodexContextUsageWaiter {
+  host: CodexAppServerHost
   resolve: (usage: ReturnType<typeof mapCodexUsage>) => void
   timer: ReturnType<typeof setTimeout>
+}
+
+interface CodexServerRequest {
+  id: string | number
+  host: CodexAppServerHost
+  sessionId: string
+  method: string
+  params: Record<string, unknown>
+  questions?: AgentQuestion[]
 }
 
 function record(value: unknown): Record<string, unknown> | null {
@@ -124,22 +144,48 @@ function notificationThreadId(params: Record<string, unknown>): string | undefin
 
 function codexThinkingPresets(value: unknown): ThinkingPreset[] | undefined {
   if (!Array.isArray(value) || value.length === 0) return undefined
-  const descriptions = new Map<string, string>()
+  const presets: ThinkingPreset[] = []
   for (const option of value) {
     const entry = record(option)
-    const effort = stringValue(entry?.['reasoningEffort'])
+    const effort =
+      stringValue(entry?.['reasoningEffort']) ?? stringValue(entry?.['reasoning_effort'])
     if (!effort) continue
-    descriptions.set(effort, stringValue(entry?.['description']) ?? `${effort} reasoning effort`)
+    const knownPreset = THINKING_PRESETS.find((preset) => preset.id === effort)
+    presets.push({
+      id: effort,
+      label: knownPreset?.label ?? humanizeCodexLabel(effort),
+      ...((stringValue(entry?.['description']) ?? knownPreset?.description)
+        ? { description: stringValue(entry?.['description']) ?? knownPreset?.description }
+        : {})
+    })
   }
-  const presets = THINKING_PRESETS.filter((preset) => descriptions.has(preset.id)).map(
-    (preset) => ({ ...preset, description: descriptions.get(preset.id) })
-  )
   return presets.length > 0 ? presets : undefined
+}
+
+function humanizeCodexLabel(value: string): string {
+  return value.replace(/[-_]+/gu, ' ').replace(/\b\w/gu, (character) => character.toUpperCase())
+}
+
+function codexInputModalities(model: Record<string, unknown>): string[] | undefined {
+  const raw = model['inputModalities'] ?? model['input_modalities']
+  if (!Array.isArray(raw)) return undefined
+  return raw.filter((value): value is string => typeof value === 'string')
+}
+
+function codexModelSupportsAttachments(model: Record<string, unknown>): boolean {
+  const inputModalities = codexInputModalities(model)
+  if (inputModalities !== undefined) {
+    return inputModalities.some((modality) => modality.toLowerCase() === 'image')
+  }
+  const capabilities = record(model['capabilities'])
+  const explicitVision = capabilities?.['vision'] ?? capabilities?.['attachment']
+  return typeof explicitVision === 'boolean' ? explicitVision : true
 }
 
 function mapCodexModel(value: unknown): ProviderModel | null {
   const model = record(value)
-  const id = stringValue(model?.['id'])
+  if (!model) return null
+  const id = stringValue(model?.['id']) ?? stringValue(model?.['model'])
   if (!id || model?.['hidden'] === true) return null
   const serviceTiers = Array.isArray(model?.['serviceTiers']) ? model['serviceTiers'] : []
   const additionalSpeedTiers = Array.isArray(model?.['additionalSpeedTiers'])
@@ -150,17 +196,13 @@ function mapCodexModel(value: unknown): ProviderModel | null {
     numberValue(model?.['contextWindow']) ??
     numberValue(model?.['context_window']) ??
     numberValue(model?.['modelContextWindow'])
-  // Read a structured vision capability when the codex catalog reports one;
-  // unknown state defaults to vision-capable.
-  const capabilities = record(model?.['capabilities'])
-  const explicitVision = capabilities?.['vision'] ?? capabilities?.['attachment']
   return {
     id,
     providerId: 'openai',
-    name: stringValue(model?.['displayName']) ?? id,
+    name: stringValue(model?.['displayName']) ?? stringValue(model?.['model']) ?? id,
     reasoning: thinkingPresets !== undefined,
     thinkingPresets,
-    attachment: explicitVision === undefined ? true : explicitVision !== false,
+    attachment: codexModelSupportsAttachments(model),
     toolcall: true,
     ...(contextWindow === undefined ? {} : { contextWindow }),
     fastSupported:
@@ -218,21 +260,25 @@ export class CodexDriver extends PersistentCliDriver {
     steering: true,
     nativeResume: true,
     messageHistory: 'mirrored',
-    interactivePermissions: false,
+    interactivePermissions: true,
     attachments: true,
     commands: false,
     providerCatalog: true,
-    sessionStatus: false,
+    sessionStatus: true,
     contextUsage: true,
     compaction: true,
-    subagents: false,
+    subagents: true,
     nativeUtilities: ['web_search', 'web_fetch']
   }
   private activeTurns = new Map<string, CodexAppServerTurn>()
+  private modelsWithoutReasoningSummaries = new Set<string>()
   private compactionsByThreadId = new Map<string, CodexCompactionRun>()
   private contextUsageByThreadId = new Map<string, CodexContextUsageWaiter>()
-  private host: CodexAppServerHost | null = null
-  private hostStarting: Promise<CodexAppServerHost> | null = null
+  /** Resident app-server hosts keyed by project working directory so the
+   *  chats inbox (`chats-cwd`) runs on its own isolated app-server. */
+  private hostsByProjectPath = new Map<string, CodexAppServerHost>()
+  private hostsStartingByProjectPath = new Map<string, Promise<CodexAppServerHost>>()
+  private serverRequests = new Map<string, CodexServerRequest>()
 
   protected async ensureCliReady(): Promise<void> {
     try {
@@ -319,7 +365,7 @@ export class CodexDriver extends PersistentCliDriver {
     }
     const fastInference =
       options.settings.inferenceMode === 'fast' && options.settings.providerId === 'openai'
-    const host = await this.ensureAppServerHost(projectPath, session.id)
+    const host = await this.ensureAppServerHost(projectPath)
     const active: CodexAppServerTurn = {
       host,
       session,
@@ -329,19 +375,29 @@ export class CodexDriver extends PersistentCliDriver {
     this.setTurnProvenance(
       session.id,
       options.settings.providerId,
-      resolveFastModelId(options.settings.modelId, fastInference ? 'fast' : 'normal')
+      resolveFastModelId(options.settings.modelId, fastInference ? 'fast' : 'normal'),
+      options.settings.thinkingLevel
     )
     this.appendUserMessage(session, options)
 
     try {
       const threadResult = session.nativeSessionId
         ? await this.appServerRequest(host, 'thread/resume', {
-            threadId: session.nativeSessionId
+            threadId: session.nativeSessionId,
+            developerInstructions: options.systemPrompt ?? null
           })
         : await this.appServerRequest(host, 'thread/start', {
             cwd: projectPath,
+            developerInstructions: options.systemPrompt ?? null,
             model: options.settings.modelId,
-            approvalPolicy: 'never',
+            approvalPolicy: codexApprovalPolicy(
+              options.readOnly === true,
+              options.settings.permissionLevel
+            ),
+            ...(codexApprovalPolicy(options.readOnly === true, options.settings.permissionLevel) ===
+            'on-request'
+              ? { approvalsReviewer: 'user' }
+              : {}),
             sandbox: sandboxFor(options.readOnly === true, options.settings.permissionLevel),
             serviceName: 'codeinoven'
           })
@@ -352,12 +408,19 @@ export class CodexDriver extends PersistentCliDriver {
       session.nativeSessionId = nativeThreadId
       await this.persistSession(session)
 
-      const turnResult = await this.appServerRequest(host, 'turn/start', {
+      const turnParams: Record<string, unknown> = {
         threadId: nativeThreadId,
         clientUserMessageId: options.userMessageId,
-        input: await this.codexInput(options.text, options.systemPrompt, options.attachments),
+        input: await this.codexInput(options.text, options.attachments),
         cwd: projectPath,
-        approvalPolicy: 'never',
+        approvalPolicy: codexApprovalPolicy(
+          options.readOnly === true,
+          options.settings.permissionLevel
+        ),
+        ...(codexApprovalPolicy(options.readOnly === true, options.settings.permissionLevel) ===
+        'on-request'
+          ? { approvalsReviewer: 'user' }
+          : {}),
         sandboxPolicy: codexSandboxPolicy(
           projectPath,
           options.readOnly === true,
@@ -366,8 +429,13 @@ export class CodexDriver extends PersistentCliDriver {
         model: options.settings.modelId,
         ...(fastInference ? { serviceTier: 'fast' } : {}),
         effort: codexEffort(options.settings.thinkingLevel),
+        ...(this.modelsWithoutReasoningSummaries.has(options.settings.modelId)
+          ? { summary: 'none' }
+          : {}),
         ...(options.structuredOutput ? { outputSchema: options.structuredOutput.schema } : {})
-      })
+      }
+      active.startParams = turnParams
+      const turnResult = await this.appServerRequest(host, 'turn/start', turnParams)
       const turn = recordValue(turnResult['turn'])
       const turnId = stringValue(turn?.['id'])
       if (!turnId) throw new Error('Codex app-server did not return an active turn ID')
@@ -392,10 +460,68 @@ export class CodexDriver extends PersistentCliDriver {
     await this.appServerRequest(active.host, 'turn/steer', {
       threadId: active.nativeThreadId,
       clientUserMessageId: options.userMessageId,
-      input: await this.codexInput(options.text, undefined, options.attachments),
+      input: await this.codexInput(options.text, options.attachments),
       expectedTurnId: active.turnId
     })
     await this.persistSession(session)
+  }
+
+  override async replyPermission(
+    _projectPath: string,
+    requestId: string,
+    reply: PermissionReply,
+    message?: string,
+    _sessionId?: string
+  ): Promise<void> {
+    const request = this.serverRequests.get(requestId)
+    if (!request || !isCodexPermissionRequest(request.method)) {
+      throw new Error(`Codex permission request is no longer pending: ${requestId}`)
+    }
+    const decision =
+      reply === 'reject' ? 'decline' : reply === 'always' ? 'acceptForSession' : 'accept'
+    const result: Record<string, unknown> =
+      request.method === 'item/permissions/requestApproval'
+        ? {
+            permissions: reply === 'reject' ? {} : (request.params['permissions'] ?? {}),
+            scope: reply === 'always' ? 'session' : 'turn'
+          }
+        : { decision, ...(message ? { message } : {}) }
+    this.writeServerResponse(request, result)
+    this.serverRequests.delete(requestId)
+  }
+
+  override async replyToQuestion(
+    _projectPath: string,
+    _sessionId: string,
+    requestId: string,
+    answers: string[][]
+  ): Promise<void> {
+    const request = this.serverRequests.get(requestId)
+    if (!request || !isCodexQuestionRequest(request.method)) {
+      throw new Error(`Codex question request is no longer pending: ${requestId}`)
+    }
+    const questionIds = codexQuestionIds(request.params)
+    const mappedAnswers: Record<string, { answers: string[] }> = {}
+    questionIds.forEach((id, index) => {
+      mappedAnswers[id] = { answers: answers[index] ?? [] }
+    })
+    this.writeServerResponse(request, { answers: mappedAnswers })
+    this.serverRequests.delete(requestId)
+  }
+
+  override async rejectQuestion(
+    _projectPath: string,
+    _sessionId: string,
+    requestId: string
+  ): Promise<void> {
+    const request = this.serverRequests.get(requestId)
+    if (!request || !isCodexQuestionRequest(request.method)) {
+      throw new Error(`Codex question request is no longer pending: ${requestId}`)
+    }
+    const answers: Record<string, { answers: string[] }> = {}
+    for (const id of codexQuestionIds(request.params)) answers[id] = { answers: [] }
+    this.writeServerResponse(request, { answers })
+    this.serverRequests.delete(requestId)
   }
 
   override async abort(projectPath: string, sessionId: string): Promise<void> {
@@ -420,12 +546,12 @@ export class CodexDriver extends PersistentCliDriver {
     const active = this.activeTurns.get(sessionId)
     if (active) await this.finishAppServerTurn(active)
     await super.deleteSession(projectPath, sessionId)
-    this.stopResidentHostIfIdle()
+    this.stopResidentHostForPathIfIdle(projectPath)
   }
 
   override releaseProjectResources(projectPath: string): void {
     super.releaseProjectResources(projectPath)
-    this.stopResidentHostIfIdle()
+    this.stopResidentHostForPathIfIdle(projectPath)
   }
 
   override dispose(): void {
@@ -443,10 +569,12 @@ export class CodexDriver extends PersistentCliDriver {
       waiter.resolve(undefined)
     }
     this.contextUsageByThreadId.clear()
-    const host = this.host
-    this.host = null
-    this.hostStarting = null
-    if (host) this.stopAppServerHost(host, 'Codex driver disposed')
+    for (const host of this.hostsByProjectPath.values()) {
+      this.stopAppServerHost(host, 'Codex driver disposed')
+    }
+    this.hostsByProjectPath.clear()
+    this.hostsStartingByProjectPath.clear()
+    this.serverRequests.clear()
     super.dispose()
   }
 
@@ -461,31 +589,31 @@ export class CodexDriver extends PersistentCliDriver {
     if (!host.child.killed) host.child.kill()
   }
 
-  private stopResidentHostIfIdle(): void {
-    const host = this.host
-    if (!host || this.hostStarting) return
-    if (
-      this.activeTurns.size > 0 ||
-      this.compactionsByThreadId.size > 0 ||
-      this.contextUsageByThreadId.size > 0 ||
+  private stopResidentHostForPathIfIdle(projectPath: string): void {
+    const host = this.hostsByProjectPath.get(projectPath)
+    if (!host || this.hostsStartingByProjectPath.has(projectPath)) return
+    const busy =
+      [...this.activeTurns.values()].some((active) => active.host === host) ||
+      [...this.compactionsByThreadId.values()].some((compaction) => compaction.host === host) ||
+      [...this.contextUsageByThreadId.values()].some((waiter) => waiter.host === host) ||
       host.pending.size > 0
-    ) {
-      return
-    }
-    this.host = null
+    if (busy) return
+    this.hostsByProjectPath.delete(projectPath)
     this.stopAppServerHost(host, 'Codex app-server stopped after genuine inactivity')
   }
 
-  private async createAppServerHost(
-    projectPath: string,
-    observerSessionId?: string
-  ): Promise<CodexAppServerHost> {
+  private async createAppServerHost(projectPath: string): Promise<CodexAppServerHost> {
     const { env: providerEnv, args: providerArgs } = await this.customProviderOverlay()
-    const child = spawn('codex', [...providerArgs, 'app-server', '--listen', 'stdio://'], {
-      cwd: projectPath,
-      env: { ...buildHarnessEnvironment(), ...providerEnv },
-      stdio: ['pipe', 'pipe', 'pipe']
-    })
+    const featureArgs = CODEX_APP_SERVER_FEATURES.flatMap((feature) => ['--enable', feature])
+    const child = spawn(
+      'codex',
+      [...providerArgs, 'app-server', ...featureArgs, '--listen', 'stdio://'],
+      {
+        cwd: projectPath,
+        env: { ...buildHarnessEnvironment(), ...providerEnv },
+        stdio: ['pipe', 'pipe', 'pipe']
+      }
+    )
     const host: CodexAppServerHost = {
       child,
       nextRequestId: 0,
@@ -495,9 +623,10 @@ export class CodexDriver extends PersistentCliDriver {
       pending: new Map()
     }
     this.bindAppServer(host)
-    if (observerSessionId) {
-      this.observeHarnessProcess(observerSessionId, child, 'codex app-server', projectPath)
-    }
+    // The shared app-server is app-scoped: register it under APP_SCOPE (undefined
+    // session) so thread-scoped process kills (thread deletion, SourcesPanel
+    // "kill thread processes") never SIGTERM the universal session.
+    this.observeHarnessProcess(undefined, child, 'codex app-server', projectPath)
     try {
       await this.appServerRequest(host, 'initialize', {
         clientInfo: { name: 'codeinoven', title: 'CodeInOven', version: '1' },
@@ -511,36 +640,30 @@ export class CodexDriver extends PersistentCliDriver {
     }
   }
 
-  private async ensureAppServerHost(
-    projectPath: string,
-    observerSessionId?: string
-  ): Promise<CodexAppServerHost> {
-    if (this.host && !this.host.stopped) {
-      if (observerSessionId) {
-        this.observeHarnessProcess(
-          observerSessionId,
-          this.host.child,
-          'codex app-server',
-          projectPath
-        )
-      }
-      return this.host
+  private async ensureAppServerHost(projectPath: string): Promise<CodexAppServerHost> {
+    const existing = this.hostsByProjectPath.get(projectPath)
+    if (existing && !existing.stopped) {
+      return existing
     }
-    if (this.hostStarting) return this.hostStarting
-    const starting = (async (): Promise<CodexAppServerHost> => {
-      const host = await this.createAppServerHost(projectPath, observerSessionId)
-      this.host = host
+    const starting = this.hostsStartingByProjectPath.get(projectPath)
+    if (starting) return starting
+    const promise = (async (): Promise<CodexAppServerHost> => {
+      const host = await this.createAppServerHost(projectPath)
+      this.hostsByProjectPath.set(projectPath, host)
       return host
     })()
-    this.hostStarting = starting
+    this.hostsStartingByProjectPath.set(projectPath, promise)
     try {
-      return await starting
+      return await promise
     } catch (error) {
-      if (this.host && !this.host.child.killed) this.host.child.kill()
-      this.host = null
+      const host = this.hostsByProjectPath.get(projectPath)
+      if (host && !host.child.killed) host.child.kill()
+      this.hostsByProjectPath.delete(projectPath)
       throw error
     } finally {
-      if (this.hostStarting === starting) this.hostStarting = null
+      if (this.hostsStartingByProjectPath.get(projectPath) === promise) {
+        this.hostsStartingByProjectPath.delete(projectPath)
+      }
     }
   }
 
@@ -548,7 +671,7 @@ export class CodexDriver extends PersistentCliDriver {
     let temporaryHost: CodexAppServerHost | null = null
     try {
       const host =
-        this.host || this.hostStarting
+        this.hostsByProjectPath.has(projectPath) || this.hostsStartingByProjectPath.has(projectPath)
           ? await this.ensureAppServerHost(projectPath)
           : (temporaryHost = await this.createAppServerHost(projectPath))
       const discovered: ProviderModel[] = []
@@ -625,7 +748,7 @@ export class CodexDriver extends PersistentCliDriver {
       return
     }
     if (responseId !== undefined && method) {
-      this.respondToUnsupportedAppServerRequest(host, responseId, method)
+      this.handleServerRequest(host, responseId, method, recordValue(payload['params']) ?? {})
       return
     }
     if (method) this.handleAppServerNotification(host, method, recordValue(payload['params']) ?? {})
@@ -637,6 +760,22 @@ export class CodexDriver extends PersistentCliDriver {
     params: Record<string, unknown>
   ): void {
     void _host
+    if (method === 'serverRequest/resolved') {
+      const requestId = appServerRequestId(params['requestId'] ?? params['request_id'])
+      if (requestId === undefined) return
+      const request = this.serverRequests.get(String(requestId))
+      if (!request) return
+      this.serverRequests.delete(String(requestId))
+      if (isCodexQuestionRequest(request.method)) {
+        this.emit({
+          type: 'question.resolved',
+          sessionId: request.sessionId,
+          requestId: String(requestId),
+          resolution: 'answered'
+        })
+      }
+      return
+    }
     const threadId = notificationThreadId(params)
     if (threadId && method === 'thread/tokenUsage/updated') {
       const waiter = this.contextUsageByThreadId.get(threadId)
@@ -690,6 +829,14 @@ export class CodexDriver extends PersistentCliDriver {
     }
     const active = this.activeTurnForNotification(params)
     if (!active) return
+    if (active.waitingForRetry && isCodexRetryRecoveryActivity(method)) {
+      active.waitingForRetry = false
+      this.emit({
+        type: 'session.status',
+        sessionId: active.session.id,
+        status: { state: 'working' }
+      })
+    }
     if (method === 'turn/started') {
       const turn = recordValue(params['turn'])
       active.turnId = stringValue(turn?.['id']) ?? active.turnId
@@ -705,10 +852,34 @@ export class CodexDriver extends PersistentCliDriver {
     }
     if (method === 'item/started' || method === 'item/completed') {
       const item = normalizeAppServerItem(recordValue(params['item']))
-      if (item) {
+      // app-server echoes the submitted top-level input as a userMessage item.
+      // The app already owns a presentation-safe user bubble, so broadcasting
+      // this transport echo would expose developer instructions in the trace.
+      if (item && stringValue(item['type']) !== 'user_message') {
         this.applyCodexResult(
           active,
           parseItem(item, method === 'item/completed', active.session.id)
+        )
+      }
+      return
+    }
+    if (method === 'turn/plan/updated') {
+      const turnId = stringValue(params['turnId']) ?? active.turnId
+      const plan = params['plan']
+      if (turnId && Array.isArray(plan)) {
+        this.applyCodexResult(
+          active,
+          parseItem(
+            {
+              id: `${turnId}:plan`,
+              type: 'plan_update',
+              plan,
+              explanation: params['explanation'],
+              output: params['explanation']
+            },
+            true,
+            active.session.id
+          )
         )
       }
       return
@@ -736,7 +907,19 @@ export class CodexDriver extends PersistentCliDriver {
     }
     if (method === 'error') {
       const error = recordValue(params['error'])
-      active.failure = stringValue(error?.['message']) ?? 'Codex turn failed'
+      const message = stringValue(error?.['message']) ?? 'Codex turn failed'
+      if (params['willRetry'] === true) {
+        active.failure = undefined
+        active.waitingForRetry = true
+        this.emit({
+          type: 'session.status',
+          sessionId: active.session.id,
+          status: { state: 'waiting', issue: codexRetryIssue(error, message) }
+        })
+      } else {
+        active.waitingForRetry = false
+        active.failure = message
+      }
       return
     }
     if (method !== 'turn/completed') return
@@ -747,7 +930,112 @@ export class CodexDriver extends PersistentCliDriver {
       status === 'failed'
         ? (stringValue(error?.['message']) ?? active.failure ?? 'Codex turn failed')
         : undefined
+    const unsupportedSummary = [message, active.failure].some(
+      (candidate) => candidate !== undefined && isUnsupportedReasoningSummary(candidate)
+    )
+    if (unsupportedSummary && !active.summaryFallbackAttempted) {
+      void this.retryWithoutReasoningSummary(active)
+      return
+    }
     void this.completeAppServerTurn(active, message)
+  }
+
+  private handleServerRequest(
+    host: CodexAppServerHost,
+    id: string | number,
+    method: string,
+    params: Record<string, unknown>
+  ): void {
+    const active = this.activeTurnForNotification(params)
+    if (!active) {
+      this.respondToUnsupportedAppServerRequest(host, id, method)
+      return
+    }
+    if (isCodexPermissionRequest(method)) {
+      const request: CodexServerRequest = {
+        id,
+        host,
+        sessionId: active.session.id,
+        method,
+        params
+      }
+      this.serverRequests.set(String(id), request)
+      this.emit({
+        type: 'permission.asked',
+        sessionId: active.session.id,
+        permission: {
+          id: String(id),
+          sessionId: active.session.id,
+          permission:
+            method === 'item/fileChange/requestApproval'
+              ? 'edit'
+              : method === 'item/commandExecution/requestApproval'
+                ? 'command'
+                : 'permissions',
+          patterns: permissionPatterns(params),
+          metadata: { method, ...params }
+        }
+      })
+      return
+    }
+    if (isCodexQuestionRequest(method)) {
+      const questions = normalizeAgentQuestions(
+        params,
+        stringValue(params['message']) ?? stringValue(params['prompt'])
+      )
+      const request: CodexServerRequest = {
+        id,
+        host,
+        sessionId: active.session.id,
+        method,
+        params,
+        questions
+      }
+      this.serverRequests.set(String(id), request)
+      this.emit({
+        type: 'question.asked',
+        sessionId: active.session.id,
+        requestId: String(id),
+        questions
+      })
+      return
+    }
+    this.respondToUnsupportedAppServerRequest(host, id, method)
+  }
+
+  private writeServerResponse(request: CodexServerRequest, result: Record<string, unknown>): void {
+    request.host.child.stdin?.write(`${JSON.stringify({ id: request.id, result })}\n`)
+  }
+
+  private async retryWithoutReasoningSummary(active: CodexAppServerTurn): Promise<void> {
+    const startParams = active.startParams
+    if (!startParams) {
+      await this.completeAppServerTurn(active, active.failure ?? 'Codex turn failed')
+      return
+    }
+    active.summaryFallbackAttempted = true
+    active.failure = undefined
+    const model = stringValue(startParams['model'])
+    if (model) this.modelsWithoutReasoningSummaries.add(model)
+    const clientUserMessageId = stringValue(startParams['clientUserMessageId'])
+    try {
+      const result = await this.appServerRequest(active.host, 'turn/start', {
+        ...startParams,
+        ...(clientUserMessageId
+          ? { clientUserMessageId: `${clientUserMessageId}:summary-fallback` }
+          : {}),
+        summary: 'none'
+      })
+      const turn = recordValue(result['turn'])
+      const turnId = stringValue(turn?.['id'])
+      if (!turnId) throw new Error('Codex app-server did not return an active fallback turn ID')
+      active.turnId = turnId
+    } catch (error) {
+      await this.completeAppServerTurn(
+        active,
+        error instanceof Error ? error.message : 'Codex fallback turn could not start'
+      )
+    }
   }
 
   private activeTurnForNotification(
@@ -871,7 +1159,11 @@ export class CodexDriver extends PersistentCliDriver {
     await this.finishAppServerTurn(active, error)
   }
 
-  private async finishAppServerTurn(active: CodexAppServerTurn, error?: string): Promise<void> {
+  private async finishAppServerTurn(
+    active: CodexAppServerTurn,
+    error?: string,
+    issue?: AgentProviderIssue
+  ): Promise<void> {
     if (active.finished) return
     active.finished = true
     if (this.activeTurns.get(active.session.id) === active) {
@@ -883,44 +1175,66 @@ export class CodexDriver extends PersistentCliDriver {
       Logger.error('Codex app-server session persistence failed:', persistError)
       error ??= 'Codex session could not be persisted'
     }
-    if (error) this.emit({ type: 'session.error', sessionId: active.session.id, error })
+    if (error) {
+      this.emit({
+        type: 'session.error',
+        sessionId: active.session.id,
+        error,
+        ...(issue ? { issue } : {})
+      })
+    }
     this.emit({ type: 'session.idle', sessionId: active.session.id })
+  }
+
+  /** A graceful harness failure for a dead Codex app-server: the user-facing
+   *  message is a retryable harness error, and the raw detail stays scoped to
+   *  the raw-error modal instead of splashing on the status card. */
+  private gracefulAppServerIssue(error: string): AgentProviderIssue {
+    return {
+      kind: classifyProviderIssue(error),
+      message:
+        'The Codex app-server stopped unexpectedly. Retry the message to continue your work.',
+      rawError: error,
+      harnessId: this.id,
+      retryable: true
+    }
   }
 
   private async failAppServerHost(host: CodexAppServerHost, error: string): Promise<void> {
     if (host.stopped) return
     host.stopped = true
-    const resident = this.host === host
-    if (resident) this.host = null
+    for (const [projectPath, candidate] of this.hostsByProjectPath) {
+      if (candidate !== host) continue
+      this.hostsByProjectPath.delete(projectPath)
+      break
+    }
     for (const pending of host.pending.values()) {
       clearTimeout(pending.timer)
       pending.reject(new Error(error))
     }
     host.pending.clear()
-    if (resident) {
-      for (const compaction of this.compactionsByThreadId.values()) {
-        clearTimeout(compaction.timer)
-        compaction.reject(new Error(error))
-      }
-      this.compactionsByThreadId.clear()
-      for (const waiter of this.contextUsageByThreadId.values()) {
-        clearTimeout(waiter.timer)
-        waiter.resolve(undefined)
-      }
-      this.contextUsageByThreadId.clear()
+    for (const [threadId, compaction] of this.compactionsByThreadId) {
+      if (compaction.host !== host) continue
+      clearTimeout(compaction.timer)
+      this.compactionsByThreadId.delete(threadId)
+      compaction.reject(new Error(error))
+    }
+    for (const [threadId, waiter] of this.contextUsageByThreadId) {
+      if (waiter.host !== host) continue
+      clearTimeout(waiter.timer)
+      this.contextUsageByThreadId.delete(threadId)
+      waiter.resolve(undefined)
     }
     const affected = [...this.activeTurns.values()].filter((active) => active.host === host)
-    await Promise.all(affected.map((active) => this.finishAppServerTurn(active, error)))
+    const issue = this.gracefulAppServerIssue(error)
+    await Promise.all(affected.map((active) => this.finishAppServerTurn(active, error, issue)))
   }
 
   private async codexInput(
     text: string,
-    systemPrompt: string | undefined,
     attachments: PromptAttachment[]
   ): Promise<Array<Record<string, unknown>>> {
-    const input: Array<Record<string, unknown>> = [
-      { type: 'text', text: composePrompt(systemPrompt, text), text_elements: [] }
-    ]
+    const input: Array<Record<string, unknown>> = [{ type: 'text', text, text_elements: [] }]
     const references: string[] = []
     for (const attachment of attachments) {
       if (isSvgAttachment(attachment)) continue
@@ -983,12 +1297,69 @@ export class CodexDriver extends PersistentCliDriver {
 
   /**
    * Codex item ids are only unique within a Codex thread, so every id is
-   * namespaced with the CodeInOven session when parsed. Session records written
-   * by older builds still hold raw item ids; normalize those on read (and
-   * collapse the raw + namespaced duplicates a resumed thread can produce).
+   * namespaced with the CodeInOven session when parsed. Normalize native item
+   * ids on read and collapse duplicate ids a resumed thread can produce.
    */
   async loadMessages(projectPath: string, sessionId: string): Promise<AgentMessage[]> {
-    const messages = await super.loadMessages(projectPath, sessionId)
+    try {
+      const messages = await super.loadMessages(projectPath, sessionId)
+      return this.normalizeSessionMessages(messages, sessionId)
+    } catch (error) {
+      if (!(error instanceof Error) || !error.message.startsWith('CLI session is unavailable:')) {
+        throw error
+      }
+      return this.loadNativeThreadMessages(projectPath, sessionId)
+    }
+  }
+
+  async loadMessagesSince(
+    projectPath: string,
+    sessionId: string,
+    messageId: string
+  ): Promise<AgentMessage[]> {
+    try {
+      const messages = await super.loadMessagesSince(projectPath, sessionId, messageId)
+      return this.normalizeSessionMessages(messages, sessionId)
+    } catch (error) {
+      if (!(error instanceof Error) || !error.message.startsWith('CLI session is unavailable:')) {
+        throw error
+      }
+      const messages = await this.loadNativeThreadMessages(projectPath, sessionId)
+      const startIndex = messages.findLastIndex((message) => message.id === messageId)
+      return startIndex >= 0 ? messages.slice(startIndex) : messages
+    }
+  }
+
+  private async loadNativeThreadMessages(
+    projectPath: string,
+    nativeThreadId: string
+  ): Promise<AgentMessage[]> {
+    const host = await this.ensureAppServerHost(projectPath)
+    const result = await this.appServerRequest(host, 'thread/read', {
+      threadId: nativeThreadId,
+      includeTurns: true
+    })
+    const thread = recordValue(result['thread']) ?? result
+    const turns = Array.isArray(thread['turns']) ? thread['turns'] : []
+    const messages: AgentMessage[] = []
+    for (const turnValue of turns) {
+      const turn = recordValue(turnValue)
+      const items = turn && Array.isArray(turn['items']) ? turn['items'] : []
+      for (const itemValue of items) {
+        const item = normalizeAppServerItem(recordValue(itemValue))
+        if (!item) continue
+        const parsed = parseItem(item, true, nativeThreadId)
+        if (parsed?.messages) messages.push(...parsed.messages)
+      }
+    }
+    return this.normalizeSessionMessages(messages, nativeThreadId).map((message) => ({
+      ...message,
+      origin: 'subagent',
+      visibility: 'subagent_trace'
+    }))
+  }
+
+  private normalizeSessionMessages(messages: AgentMessage[], sessionId: string): AgentMessage[] {
     const byId = new Map<string, AgentMessage>()
     for (const message of messages) {
       const renamed = namespacedMessage(message, sessionId)
@@ -1079,13 +1450,14 @@ export class CodexDriver extends PersistentCliDriver {
     this.applyEventToSession(session, { type: 'message.part.updated', sessionId, part: basePart })
     this.emit({ type: 'message.part.updated', sessionId, part: basePart })
 
-    const host = await this.ensureAppServerHost(projectPath, sessionId)
+    const host = await this.ensureAppServerHost(projectPath)
     await new Promise<void>((resolve, reject) => {
       const timer = setTimeout(() => {
         this.compactionsByThreadId.delete(nativeThreadId)
         reject(new Error('Codex compaction timed out'))
       }, CODEX_COMPACTION_TIMEOUT_MS)
       this.compactionsByThreadId.set(nativeThreadId, {
+        host,
         session,
         messageId,
         basePart,
@@ -1150,7 +1522,7 @@ export class CodexDriver extends PersistentCliDriver {
     session: PersistentCliSession,
     messageId: string
   ): Promise<void> {
-    const host = await this.ensureAppServerHost(projectPath, session.id)
+    const host = await this.ensureAppServerHost(projectPath)
     const telemetry = mapCodexRateLimits(
       await this.appServerRequest(host, 'account/rateLimits/read')
     )
@@ -1178,7 +1550,7 @@ export class CodexDriver extends PersistentCliDriver {
     let temporaryHost: CodexAppServerHost | null = null
     try {
       const host =
-        this.host || this.hostStarting
+        this.hostsByProjectPath.has(projectPath) || this.hostsStartingByProjectPath.has(projectPath)
           ? await this.ensureAppServerHost(projectPath)
           : (temporaryHost = await this.createAppServerHost(projectPath))
       const telemetry = mapCodexRateLimits(
@@ -1203,13 +1575,13 @@ export class CodexDriver extends PersistentCliDriver {
     messageId: string,
     nativeThreadId: string
   ): Promise<void> {
-    const host = await this.ensureAppServerHost(projectPath, session.id)
+    const host = await this.ensureAppServerHost(projectPath)
     const usagePromise = new Promise<ReturnType<typeof mapCodexUsage>>((resolve) => {
       const timer = setTimeout(() => {
         this.contextUsageByThreadId.delete(nativeThreadId)
         resolve(undefined)
       }, CODEX_USAGE_TIMEOUT_MS)
-      this.contextUsageByThreadId.set(nativeThreadId, { resolve, timer })
+      this.contextUsageByThreadId.set(nativeThreadId, { host, resolve, timer })
     })
     try {
       await this.appServerRequest(host, 'thread/resume', { threadId: nativeThreadId })
@@ -1369,6 +1741,104 @@ function sandboxFor(readOnly: boolean, permissionLevel: PermissionLevel): string
   return permissionLevel === 'full_access' ? 'danger-full-access' : 'workspace-write'
 }
 
+function codexApprovalPolicy(
+  readOnly: boolean,
+  permissionLevel: PermissionLevel
+): 'never' | 'on-request' {
+  return readOnly || permissionLevel === 'full_access' ? 'never' : 'on-request'
+}
+
+function isCodexPermissionRequest(method: string): boolean {
+  return (
+    method === 'item/commandExecution/requestApproval' ||
+    method === 'item/fileChange/requestApproval' ||
+    method === 'item/permissions/requestApproval'
+  )
+}
+
+function isCodexQuestionRequest(method: string): boolean {
+  return method === 'item/tool/requestUserInput'
+}
+
+function isCodexRetryRecoveryActivity(method: string): boolean {
+  return (
+    method === 'turn/started' ||
+    method === 'item/agentMessage/delta' ||
+    method === 'item/reasoning/textDelta' ||
+    method === 'item/reasoning/summaryTextDelta' ||
+    method === 'item/started' ||
+    method === 'item/completed' ||
+    method === 'turn/plan/updated'
+  )
+}
+
+function codexRetryIssue(
+  error: Record<string, unknown> | null,
+  rawError: string
+): AgentProviderIssue {
+  const errorInfo = error?.['codexErrorInfo']
+  const statusCode = codexErrorStatusCode(errorInfo)
+  const kind = codexRetryIssueKind(errorInfo, rawError, statusCode)
+  const messages: Partial<Record<AgentProviderIssue['kind'], string>> = {
+    network: 'The Codex connection was interrupted. Codex is retrying automatically.',
+    provider_unavailable: 'Codex is temporarily unavailable and is retrying automatically.',
+    rate_limit: 'Codex is waiting before retrying the provider request.',
+    quota: 'Codex is waiting before retrying the provider request.'
+  }
+  return {
+    kind,
+    message: messages[kind] ?? 'Codex is retrying the provider request.',
+    rawError,
+    harnessId: 'codex',
+    retryable: true,
+    ...(statusCode === undefined ? {} : { statusCode })
+  }
+}
+
+function codexRetryIssueKind(
+  errorInfo: unknown,
+  message: string,
+  statusCode: number | undefined
+): AgentProviderIssue['kind'] {
+  if (typeof errorInfo === 'string') {
+    if (errorInfo === 'usageLimitExceeded') return 'quota'
+    if (errorInfo === 'serverOverloaded' || errorInfo === 'internalServerError') {
+      return 'provider_unavailable'
+    }
+    if (errorInfo === 'unauthorized') return 'authentication'
+  }
+  const classified = classifyProviderIssue(message, statusCode)
+  if (classified !== 'unknown' && classified !== 'network') return classified
+  const info = recordValue(errorInfo)
+  if (
+    info?.['httpConnectionFailed'] !== undefined ||
+    info?.['responseStreamConnectionFailed'] !== undefined ||
+    info?.['responseStreamDisconnected'] !== undefined ||
+    info?.['responseTooManyFailedAttempts'] !== undefined
+  ) {
+    return 'network'
+  }
+  return classified
+}
+
+function codexErrorStatusCode(errorInfo: unknown): number | undefined {
+  const info = recordValue(errorInfo)
+  if (!info) return undefined
+  for (const value of Object.values(info)) {
+    const statusCode = numberValue(recordValue(value)?.['httpStatusCode'])
+    if (statusCode !== undefined) return statusCode
+  }
+  return undefined
+}
+
+function codexQuestionIds(params: Record<string, unknown>): string[] {
+  const questions = Array.isArray(params['questions']) ? params['questions'] : []
+  return questions.map((question, index) => {
+    const entry = recordValue(question)
+    return stringValue(entry?.['id']) ?? `question-${index}`
+  })
+}
+
 function codexSandboxPolicy(
   projectPath: string,
   readOnly: boolean,
@@ -1392,6 +1862,14 @@ function codexEffort(value: ThreadSettings['thinkingLevel']): string {
   return value
 }
 
+function isUnsupportedReasoningSummary(message: string): boolean {
+  const normalized = message.toLowerCase()
+  return (
+    normalized.includes('reasoning.summary') &&
+    (normalized.includes('unsupported parameter') || normalized.includes('unsupported_parameter'))
+  )
+}
+
 function normalizeAppServerItem(
   item: Record<string, unknown> | null
 ): Record<string, unknown> | null {
@@ -1399,10 +1877,14 @@ function normalizeAppServerItem(
   const rawType = stringValue(item['type'])
   const types: Record<string, string> = {
     agentMessage: 'agent_message',
+    userMessage: 'user_message',
     commandExecution: 'command_execution',
     fileChange: 'file_change',
     mcpToolCall: 'mcp_tool_call',
-    dynamicToolCall: 'function_call'
+    dynamicToolCall: 'function_call',
+    collabToolCall: 'collab_tool_call',
+    planUpdate: 'plan_update',
+    todoList: 'todo_list'
   }
   return {
     ...item,
@@ -1449,12 +1931,17 @@ function parseItem(
   // key never collides across threads or freshly recreated sessions.
   const messageId = `${sessionId}:${itemId}`
   if (itemType === 'agent_message') return parseAgentMessage(item, messageId, completed, sessionId)
+  if (itemType === 'user_message') return parseUserMessage(item, messageId, completed, sessionId)
   if (itemType === 'reasoning') return parseReasoning(item, messageId, completed, sessionId)
   if (itemType === 'command_execution') return parseCommand(item, messageId, completed, sessionId)
   if (itemType === 'file_change')
     return parseTool(item, messageId, completed, sessionId, 'file_change')
   if (itemType === 'contextCompaction')
     return parseCompaction(item, messageId, completed, sessionId)
+  if (itemType === 'collab_tool_call')
+    return parseCollaboration(item, messageId, completed, sessionId)
+  if (itemType === 'plan_update' || itemType === 'todo_list' || itemType === 'plan')
+    return parseTool(item, messageId, completed, sessionId, itemType)
   if (itemType === 'mcp_tool_call' || itemType === 'function_call')
     return parseTool(
       item,
@@ -1464,6 +1951,114 @@ function parseItem(
       stringValue(item['tool']) ?? stringValue(item['name']) ?? 'mcp_tool_call'
     )
   return null
+}
+
+function codexUserMessageText(item: Record<string, unknown>): string {
+  const direct = stringValue(item['text'])
+  if (direct) return direct
+  const content = item['content']
+  if (!Array.isArray(content)) return ''
+  return content
+    .map((value) => {
+      if (typeof value === 'string') return value
+      const entry = recordValue(value)
+      if (!entry) return ''
+      return (
+        stringValue(entry['text']) ??
+        stringValue(entry['url']) ??
+        stringValue(entry['path']) ??
+        stringValue(entry['name']) ??
+        ''
+      )
+    })
+    .filter(Boolean)
+    .join('\n')
+}
+
+function parseUserMessage(
+  item: Record<string, unknown>,
+  itemId: string,
+  completed: boolean,
+  sessionId: string
+): CliLineParseResult {
+  const part = {
+    type: 'text' as const,
+    id: `${itemId}:text`,
+    messageID: itemId,
+    text: codexUserMessageText(item)
+  }
+  const events: SessionAgentEvent[] = [{ type: 'message.part.updated', sessionId, part }]
+  if (completed) events.push({ type: 'message.completed', sessionId, messageId: itemId })
+  const message: AgentMessage = {
+    id: itemId,
+    role: 'user',
+    origin: 'subagent',
+    visibility: 'subagent_trace',
+    parts: [part],
+    createdAt: Date.now(),
+    ...(completed ? { completedAt: Date.now() } : {})
+  }
+  return { events, messages: [message] }
+}
+
+function parseCollaboration(
+  item: Record<string, unknown>,
+  itemId: string,
+  completed: boolean,
+  sessionId: string
+): CliLineParseResult {
+  const providerStatus = stringValue(item['status'])
+  const failed =
+    providerStatus === 'failed' || providerStatus === 'error' || providerStatus === 'declined'
+  const tool = stringValue(item['tool']) ?? 'collaboration'
+  const prompt = stringValue(item['prompt'])
+  const childSessionId =
+    stringValue(item['newThreadId']) ??
+    stringValue(item['new_thread_id']) ??
+    stringValue(item['receiverThreadId']) ??
+    stringValue(item['receiver_thread_id'])
+  const agentStatus = recordValue(item['agentStatus'] ?? item['agent_status'])
+  const agent =
+    stringValue(agentStatus?.['name']) ??
+    stringValue(agentStatus?.['agent']) ??
+    stringValue(item['agent']) ??
+    'Codex'
+  const output =
+    stringValue(item['output']) ?? stringValue(item['result']) ?? stringValue(item['message'])
+  const status = !completed
+    ? ('running' as const)
+    : failed
+      ? ('error' as const)
+      : ('completed' as const)
+  const part = {
+    type: 'subagent' as const,
+    id: `${itemId}:subagent`,
+    messageID: itemId,
+    callID: itemId,
+    activity: {
+      status,
+      agent,
+      description: stringValue(item['description']) ?? prompt ?? tool,
+      ...(prompt ? { prompt } : {}),
+      ...(childSessionId ? { childSessionId } : {}),
+      providerTaskId: itemId,
+      background: item['background'] === true,
+      ...(output ? { output } : {}),
+      ...(failed ? { error: output ?? `Codex ${tool} failed` } : {})
+    }
+  }
+  const events: SessionAgentEvent[] = [{ type: 'message.part.updated', sessionId, part }]
+  if (completed) events.push({ type: 'message.completed', sessionId, messageId: itemId })
+  const message: AgentMessage = {
+    id: itemId,
+    role: 'assistant',
+    origin: 'subagent',
+    visibility: 'working_trace',
+    parts: [part],
+    createdAt: Date.now(),
+    ...(completed ? { completedAt: Date.now() } : {})
+  }
+  return { events, messages: [message] }
 }
 
 function parseAgentMessage(
@@ -1610,6 +2205,9 @@ function toolInput(item: Record<string, unknown>): Record<string, unknown> {
     } catch {
       // Preserve schema tolerance for non-JSON provider payloads.
     }
+  }
+  for (const key of ['plan', 'steps', 'tasks', 'todos', 'todoList', 'todo_list', 'checklist']) {
+    if (Array.isArray(item[key])) return { [key]: item[key] }
   }
   if (Array.isArray(item['changes'])) return { changes: item['changes'] }
   return {}
@@ -1894,7 +2492,7 @@ export function mapCodexRateLimits(value: unknown): {
 }
 
 /**
- * Rewrite a legacy codex message id into its session-namespaced form. Only
+ * Rewrite a native Codex message id into its session-namespaced form. Only
  * assistant messages carry raw codex item ids; user messages keep the
  * generated id CodeInOven assigned at send time.
  */

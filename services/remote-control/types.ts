@@ -39,13 +39,6 @@ export interface UserRecord {
   created_at: number
 }
 
-export interface AccountProfileRecord {
-  user_id: string
-  usage_json: string
-  global_memories_json: string
-  updated_at: number
-}
-
 export interface EnrollmentRecord {
   id: string
   desktop_id: string
@@ -66,4 +59,11 @@ export interface MobileDeviceRecord {
   created_at: number
   last_seen_at: number
   revoked_at: number | null
+}
+
+export interface DesktopGrantRecord {
+  desktop_id: string
+  mobile_device_id: string
+  grant_ciphertext: string
+  desktop_public_key: string
 }

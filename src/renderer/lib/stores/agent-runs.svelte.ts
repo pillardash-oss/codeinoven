@@ -8,6 +8,11 @@
 interface AgentRunEntry {
   /** True while the agent is processing the current turn. */
   busy: boolean
+  /** True once live session activity has confirmed the run (vs an optimistic
+   *  restore from a persisted in-flight status). The working trace is only ever
+   *  expanded from a live-confirmed run so a stale DB status can't flash it
+   *  open before the live session settles. */
+  live: boolean
   /** When the current busy run started, used for the live working timer. */
   busySince: number | null
   /** User message ID that started the current turn; used as the trace key. */
@@ -34,6 +39,7 @@ class AgentRunsStore {
     if (!entry) {
       entry = {
         busy: false,
+        live: false,
         busySince: null,
         currentTurnUserMessageId: null,
         traceOpen: false,
@@ -50,9 +56,23 @@ class AgentRunsStore {
     return this.runs.get(threadKey(projectId, threadId))?.busy ?? false
   }
 
+  /** Whether this thread's run state has been settled by a live session check
+   *  (a ThreadView mounted for it and its live status was observed, or its
+   *  session streamed activity). Once settled, `isBusy` is authoritative and a
+   *  stale persisted `planning`/`executing` status must not keep the working
+   *  UI (row spinner, header indicator) alive. */
+  hasSettled(projectId: string, threadId: string): boolean {
+    return this.runs.has(threadKey(projectId, threadId))
+  }
+
   /** ID of the user message that started the current turn, if any. */
   currentTurnUserMessageId(projectId: string, threadId: string): string | null {
     return this.runs.get(threadKey(projectId, threadId))?.currentTurnUserMessageId ?? null
+  }
+
+  /** Whether the current run has been confirmed by live session activity. */
+  isLiveBusy(projectId: string, threadId: string): boolean {
+    return this.runs.get(threadKey(projectId, threadId))?.live ?? false
   }
 
   /** When the current busy run started, or undefined when idle. */
@@ -73,15 +93,29 @@ class AgentRunsStore {
   /**
    * Mark a run as active. If a new turn is starting, resets trace state and
    * records the user message ID that owns the turn.
+   *
+   * `live` distinguishes a run confirmed by live session activity from an
+   * optimistic restore off a persisted in-flight status; only live runs may
+   * expand the working trace. `openTrace` controls whether becoming busy
+   * auto-opens the trace (optimistic restores keep it closed until live
+   * activity confirms the run).
    */
   setBusy(
     projectId: string,
     threadId: string,
     busy: boolean,
     turnUserMessageId?: string,
-    startedAt?: number
+    startedAt?: number,
+    live = true,
+    openTrace = true
   ): void {
     const entry = this.entry(projectId, threadId)
+    const previousBusy = entry.busy
+    const previousLive = entry.live
+    const previousBusySince = entry.busySince
+    const previousTurnUserMessageId = entry.currentTurnUserMessageId
+    const previousTraceOpen = entry.traceOpen
+    const previousTraceUserOpened = entry.traceUserOpened
     const wasBusy = entry.busy
     const isNewTurn =
       busy &&
@@ -95,6 +129,7 @@ class AgentRunsStore {
       }
     }
     entry.busy = busy
+    if (busy) entry.live = live
 
     if (isNewTurn && turnUserMessageId) {
       entry.currentTurnUserMessageId = turnUserMessageId
@@ -105,12 +140,21 @@ class AgentRunsStore {
     // Auto-open the trace when a new turn starts; auto-close when it ends
     // unless the user explicitly opened it.
     if (busy && (!wasBusy || isNewTurn)) {
-      entry.traceOpen = true
+      if (openTrace) entry.traceOpen = true
     } else if (!busy && !entry.traceUserOpened) {
       entry.traceOpen = false
     }
 
-    this.#notify()
+    if (
+      entry.busy !== previousBusy ||
+      entry.live !== previousLive ||
+      entry.busySince !== previousBusySince ||
+      entry.currentTurnUserMessageId !== previousTurnUserMessageId ||
+      entry.traceOpen !== previousTraceOpen ||
+      entry.traceUserOpened !== previousTraceUserOpened
+    ) {
+      this.#notify()
+    }
   }
 
   /** Toggle the working trace open/closed state, recording user intent. */
@@ -124,13 +168,27 @@ class AgentRunsStore {
   /** Mark the run idle and close the trace unless the user opened it. */
   setIdle(projectId: string, threadId: string): void {
     const entry = this.entry(projectId, threadId)
+    const previousBusy = entry.busy
+    const previousLive = entry.live
+    const previousBusySince = entry.busySince
+    const previousTurnUserMessageId = entry.currentTurnUserMessageId
+    const previousTraceOpen = entry.traceOpen
     entry.busy = false
+    entry.live = false
     entry.busySince = null
     entry.currentTurnUserMessageId = null
     if (!entry.traceUserOpened) {
       entry.traceOpen = false
     }
-    this.#notify()
+    if (
+      entry.busy !== previousBusy ||
+      entry.live !== previousLive ||
+      entry.busySince !== previousBusySince ||
+      entry.currentTurnUserMessageId !== previousTurnUserMessageId ||
+      entry.traceOpen !== previousTraceOpen
+    ) {
+      this.#notify()
+    }
   }
 
   /** Clear the run state for a thread (e.g. on deletion). */

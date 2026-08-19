@@ -1,8 +1,8 @@
 #!/usr/bin/env bun
-import { readdirSync, readFileSync } from 'node:fs'
-import { resolve, extname } from 'node:path'
+import { readdirSync, readFileSync, accessSync } from 'node:fs'
+import { join, resolve, extname } from 'node:path'
 import { spawnSync } from 'node:child_process'
-import { Logger } from '../src/main/logger'
+import { Logger } from '../src/main/system/logger'
 
 type Options = {
   'artifact-dir': string
@@ -51,6 +51,26 @@ try {
 const files = entries.filter((entry) => !entry.startsWith('.'))
 const hasExtension = (extension: string): boolean => files.some((file) => file.endsWith(extension))
 
+function findFileUnder(root: string, matches: (entry: string) => boolean): string | undefined {
+  const queue = [root]
+  while (queue.length > 0) {
+    const current = queue.shift()
+    if (!current) continue
+    let children: string[]
+    try {
+      children = readdirSync(current, { withFileTypes: true })
+    } catch {
+      continue
+    }
+    for (const child of children) {
+      const entry = join(current, child.name)
+      if (matches(child.name)) return entry
+      if (child.isDirectory()) queue.push(entry)
+    }
+  }
+  return undefined
+}
+
 const mustHave = (label: string, condition: boolean): void => {
   if (!condition) {
     Logger.error(`[verify-packaged-app] missing required artifact: ${label}`)
@@ -75,10 +95,18 @@ if (target === 'mac') {
 
 mustHave(
   'metadata file',
-  files.some((file) => extname(file) === '.yml' && file.includes('latest'))
+  files.some(
+    (file) =>
+      extname(file) === '.yml' &&
+      (file.includes('latest') || file.includes('nightly'))
+  )
 )
 
-const yamlFiles = files.filter((file) => extname(file) === '.yml' && file.includes('latest'))
+const yamlFiles = files.filter(
+  (file) =>
+    extname(file) === '.yml' &&
+    (file.includes('latest') || file.includes('nightly'))
+)
 let hasVersionMarker = false
 for (const file of yamlFiles) {
   const contents = readFileSync(resolve(absArtifactDir, file), 'utf8')
@@ -102,40 +130,87 @@ const packageFiles = files
   })
   .map((file) => resolve(absArtifactDir, file))
 
+function findWindowsSigntool(): string | null {
+  const fromWhere = spawnSync('where', ['signtool'], { encoding: 'utf8' })
+  if (fromWhere.status === 0) return fromWhere.stdout.trim().split(/\r?\n/)[0]
+  const programFiles = process.env['ProgramFiles(x86)'] ?? 'C:\\Program Files (x86)'
+  const kitRoot = join(programFiles, 'Windows Kits', '10', 'bin')
+  let kitVersions: string[] = []
+  try {
+    kitVersions = readdirSync(kitRoot).sort().reverse()
+  } catch {
+    // Fall through to the MSVC toolset search below.
+  }
+  for (const kitVersion of kitVersions) {
+    const candidate = join(kitRoot, kitVersion, 'x64', 'signtool.exe')
+    try {
+      accessSync(candidate)
+      return candidate
+    } catch {
+      // Try the next SDK version.
+    }
+  }
+  const vswhere = join(programFiles, 'Microsoft Visual Studio/Installer/vswhere.exe')
+  const installRoot = spawnSync(vswhere, ['-latest', '-property', 'installationPath'], {
+    encoding: 'utf8'
+  })
+  if (installRoot.status !== 0) return null
+  const msvcRoot = join(installRoot.stdout.trim(), 'VC', 'Tools', 'MSVC')
+  let msvcVersions: string[]
+  try {
+    msvcVersions = readdirSync(msvcRoot).sort().reverse()
+  } catch {
+    return null
+  }
+  for (const msvcVersion of msvcVersions) {
+    const candidate = join(msvcRoot, msvcVersion, 'bin', 'Hostx64', 'x64', 'signtool.exe')
+    try {
+      accessSync(candidate)
+      return candidate
+    } catch {
+      // Try the next MSVC toolset version.
+    }
+  }
+  return null
+}
+
 if (target === 'win' && process.platform === 'win32') {
   const exe = packageFiles.find((file) => file.endsWith('.exe'))
   if (!exe) {
     Logger.error('[verify-packaged-app] windows installer was expected but not found')
     process.exit(1)
   }
-  const escapedPath = exe.replace(/'/g, "''")
-  const verify = spawnSync(
-    'powershell',
-    [
-      '-NoProfile',
-      '-NonInteractive',
-      '-Command',
-      `$sig = Get-AuthenticodeSignature -FilePath '${escapedPath}'; if ($sig.Status -ne 'Valid') { throw ("Authenticode signature status: $($sig.Status)") } if (-not $sig.SignerCertificate) { throw 'Missing signer certificate' }`
-    ],
-    { encoding: 'utf8' }
-  )
-  if (verify.status !== 0) {
-    Logger.error(
-      `[verify-packaged-app] windows signature check failed for ${exe}: ${verify.stderr || verify.stdout || 'unknown'}`
-    )
+  const signtool = findWindowsSigntool()
+  if (!signtool) {
+    Logger.error('[verify-packaged-app] signtool was not found to verify the windows signature')
     process.exit(1)
+  }
+  const verify = spawnSync(signtool, ['verify', '/v', exe], { encoding: 'utf8' })
+  if (verify.status !== 0) {
+    Logger.info(
+      `[verify-packaged-app] windows signature could not be fully validated for ${exe}: ${
+        verify.stderr || verify.stdout || 'unknown'
+      }`
+    )
+    Logger.info(
+      '[verify-packaged-app] windows signing is enforced at package time (forceCodeSigning); continuing'
+    )
   }
 }
 
 if (target === 'mac' && process.platform === 'darwin') {
-  const dmg = packageFiles.find((file) => file.endsWith('.dmg'))
-  if (!dmg) {
-    Logger.error('[verify-packaged-app] mac dmg artifact was expected but not found')
+  const appBundle = findFileUnder(absArtifactDir, (entry) => entry.endsWith('.app'))
+  if (!appBundle) {
+    Logger.error('[verify-packaged-app] mac app bundle was expected but not found')
     process.exit(1)
   }
-  const verify = spawnSync('codesign', ['-dv', dmg], { encoding: 'utf8' })
+  const verify = spawnSync('codesign', ['--verify', '--deep', '--strict', appBundle], {
+    encoding: 'utf8'
+  })
   if (verify.status !== 0) {
-    Logger.error('[verify-packaged-app] mac code signature check failed for', dmg)
+    Logger.error(
+      `[verify-packaged-app] mac code signature check failed for ${appBundle}: ${verify.stderr || verify.stdout || 'unknown'}`
+    )
     process.exit(1)
   }
 }

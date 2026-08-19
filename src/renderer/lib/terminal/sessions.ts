@@ -1,6 +1,8 @@
 import { FitAddon, Ghostty, Terminal, type ITheme } from 'ghostty-web'
 import { CursorShapeDecoder } from './cursor-shape'
+import { TerminalCursorController } from './cursor-visibility'
 import { setTerminalFocused } from './focus'
+import { patchSelectionCopy } from './selection-copy'
 import { attachTerminalInputCompat } from './input-compat'
 import { attachMouseTracking } from './mouse-tracking'
 import { FileLinkProvider } from './path-links'
@@ -21,6 +23,27 @@ export interface TerminalSession {
 
 const MAX_RESPAWNS = 5
 const RESPAWN_BACKOFF_RESET_MS = 2000
+const RESIZE_SETTLE_MS = 100
+
+/**
+ * Keep the terminal grid fitted to its host, including the final frame of a
+ * sidebar resize. ghostty-web's observer drops resize notifications while its
+ * previous fit is still settling, which can leave the canvas at an older width
+ * when the last notification arrives inside that window.
+ */
+function observeTerminalResize(host: HTMLDivElement, fitAddon: FitAddon): () => void {
+  let settleTimer: ReturnType<typeof setTimeout> | undefined
+  const observer = new ResizeObserver(() => {
+    if (settleTimer) clearTimeout(settleTimer)
+    settleTimer = setTimeout(() => fitAddon.fit(), RESIZE_SETTLE_MS)
+  })
+  observer.observe(host)
+
+  return () => {
+    observer.disconnect()
+    if (settleTimer) clearTimeout(settleTimer)
+  }
+}
 
 function readThemeColor(styles: CSSStyleDeclaration, token: string): string {
   return styles.getPropertyValue(token).trim()
@@ -130,6 +153,7 @@ class TerminalSessionManager {
 
   private async create(id: string): Promise<TerminalSession> {
     const ghostty = await this.getRuntime()
+    patchSelectionCopy()
     const term = new Terminal({
       ghostty,
       cursorBlink: true,
@@ -147,13 +171,21 @@ class TerminalSessionManager {
     const host = document.createElement('div')
     host.className = 'terminal-host'
     term.open(host)
-    fitAddon.observeResize()
 
     // Reflect terminal focus to the app's shortcut routing. On non-mac platforms
     // Ctrl+W must keep its shell delete-word behavior while the terminal is
     // focused, so both the main process and the renderer fallback need to know.
-    const onFocusIn = (): void => setTerminalFocused(true)
-    const onFocusOut = (): void => setTerminalFocused(false)
+    // Focus also drives the caret: it only renders while the terminal is focused,
+    // and DECSCUSR blink state is re-applied on focus regain.
+    const cursorVisibility = new TerminalCursorController(term)
+    const onFocusIn = (): void => {
+      cursorVisibility.focus()
+      setTerminalFocused(true)
+    }
+    const onFocusOut = (): void => {
+      cursorVisibility.blur()
+      setTerminalFocused(false)
+    }
     host.addEventListener('focusin', onFocusIn)
     host.addEventListener('focusout', onFocusOut)
     const cleanupFocus = (): void => {
@@ -180,7 +212,7 @@ class TerminalSessionManager {
 
     const subs: Array<() => void> = []
     const cursorShape = new CursorShapeDecoder()
-    subs.push(cleanupFocus)
+    subs.push(cleanupFocus, observeTerminalResize(host, fitAddon))
 
     // PTY output → terminal buffer. Always active so the buffer stays current
     // even while the panel is hidden or the component is unmounted. DECSCUSR
@@ -193,7 +225,7 @@ class TerminalSessionManager {
         const shape = cursorShape.push(text)
         if (shape && term.renderer) {
           term.renderer.setCursorStyle(shape.style)
-          term.renderer.setCursorBlink(shape.blinking)
+          cursorVisibility.updateBlink(shape.blinking)
         }
       })
     )

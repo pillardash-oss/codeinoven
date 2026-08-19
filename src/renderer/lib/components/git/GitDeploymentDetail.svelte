@@ -1,6 +1,7 @@
 <script lang="ts">
   import {
     ArrowLeft,
+    Bot,
     CircleDot,
     CircleX,
     ExternalLink,
@@ -11,6 +12,7 @@
     Rocket,
     Terminal
   } from '@lucide/svelte'
+  import { onMount } from 'svelte'
   import { relativeTime } from '$lib/format/relative-time'
   import { openInBrowser } from '$lib/open-in-browser'
   import { gitState, GitState } from '$lib/stores/git.svelte'
@@ -18,7 +20,8 @@
     GitHubDeployment,
     GitHubDeploymentJob,
     GitHubDeploymentJobLog,
-    GitHubDeploymentStatus
+    GitHubDeploymentStatus,
+    GitHubWorkflowRun
   } from '$shared/types'
 
   interface Props {
@@ -26,14 +29,21 @@
     identity: { owner: string; repo: string }
     deployment: GitHubDeployment
     onBack: () => void
+    onAgentDiagnose: (
+      deployment: GitHubDeployment,
+      run: GitHubWorkflowRun | null,
+      job: GitHubDeploymentJob,
+      log: GitHubDeploymentJobLog | null
+    ) => void
   }
 
-  let { projectId, identity, deployment, onBack }: Props = $props()
+  let { projectId, identity, deployment, onBack, onAgentDiagnose }: Props = $props()
 
   let error = $state('')
   let expandedLog = $state<Record<number, boolean>>({})
   let loadingLog = $state<Record<number, boolean>>({})
   let logErrors = $state<Record<number, string>>({})
+  let preparingAgent = $state(false)
 
   const htmlUrl = $derived(
     `https://github.com/${encodeURIComponent(identity.owner)}/${encodeURIComponent(identity.repo)}/deployments/${deployment.id}`
@@ -51,6 +61,18 @@
   const latestStatus = $derived(detail?.deployment.latestStatus ?? deployment.latestStatus)
   /** GitHub returns newest-first; the current status is the first entry. */
   const statusHistory = $derived(detail?.statuses ?? [])
+
+  function isFailedJob(job: GitHubDeploymentJob): boolean {
+    return (
+      job.status === 'completed' &&
+      job.conclusion !== 'success' &&
+      job.conclusion !== 'neutral' &&
+      job.conclusion !== 'skipped' &&
+      job.conclusion !== 'cancelled'
+    )
+  }
+
+  const failedJob = $derived((detail?.jobs ?? []).find(isFailedJob) ?? null)
 
   function cachedLog(jobId: number): GitHubDeploymentJobLog | null {
     return (
@@ -80,41 +102,62 @@
   async function loadDetail(force = false): Promise<void> {
     error = ''
     try {
-      await gitState.ensureDeploymentDetail(
+      const loaded = await gitState.ensureDeploymentDetail(
         projectId,
         identity.owner,
         identity.repo,
         deployment.id,
         force
       )
+      for (const job of loaded?.jobs ?? []) {
+        if (expandedLog[job.id] && job.status === 'completed' && !cachedLog(job.id)) {
+          void loadJobLog(job)
+        }
+      }
     } catch (reason) {
       error = message(reason)
     }
   }
 
-  async function loadJobLog(jobId: number, force = false): Promise<void> {
-    if (loadingLog[jobId]) return
-    loadingLog = { ...loadingLog, [jobId]: true }
-    logErrors = { ...logErrors, [jobId]: '' }
+  async function loadJobLog(job: GitHubDeploymentJob, force = false): Promise<void> {
+    if (job.status !== 'completed' || loadingLog[job.id]) return
+    loadingLog = { ...loadingLog, [job.id]: true }
+    logErrors = { ...logErrors, [job.id]: '' }
     try {
-      await gitState.ensureDeploymentJobLog(projectId, identity.owner, identity.repo, jobId, force)
+      await gitState.ensureDeploymentJobLog(projectId, identity.owner, identity.repo, job.id, force)
     } catch (reason) {
       logErrors = {
         ...logErrors,
-        [jobId]: reason instanceof Error ? reason.message : 'The log could not be loaded.'
+        [job.id]: reason instanceof Error ? reason.message : 'The log could not be loaded.'
       }
     } finally {
-      loadingLog = { ...loadingLog, [jobId]: false }
+      loadingLog = { ...loadingLog, [job.id]: false }
     }
   }
 
-  function toggleJobLog(jobId: number): void {
-    const open = !expandedLog[jobId]
-    expandedLog = { ...expandedLog, [jobId]: open }
-    if (open && !cachedLog(jobId) && !loadingLog[jobId]) void loadJobLog(jobId)
+  function toggleJobLog(job: GitHubDeploymentJob): void {
+    const open = !expandedLog[job.id]
+    expandedLog = { ...expandedLog, [job.id]: open }
+    if (open && job.status === 'completed' && !cachedLog(job.id) && !loadingLog[job.id]) {
+      void loadJobLog(job)
+    }
   }
 
-  $effect(() => {
+  /** Load one failed job's evidence before opening its agent review thread. */
+  async function reviewWithAgent(job: GitHubDeploymentJob): Promise<void> {
+    if (preparingAgent || !isFailedJob(job)) return
+    preparingAgent = true
+    try {
+      await gitState
+        .ensureDeploymentJobLog(projectId, identity.owner, identity.repo, job.id)
+        .catch(() => null)
+      onAgentDiagnose(deployment, detail?.workflowRun ?? null, job, cachedLog(job.id))
+    } finally {
+      preparingAgent = false
+    }
+  }
+
+  onMount(() => {
     void loadDetail()
   })
 
@@ -240,12 +283,28 @@
         <ExternalLink size={13} />
       </button>
     </div>
-    <div class="mt-1 flex items-center gap-1.5 text-[9px] text-dimmed">
+    <div class="mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-[9px] text-dimmed">
       <span class="max-w-32 truncate font-mono">{deployment.ref}</span>
       <span>·</span>
       <span class="font-mono">{deployment.sha.slice(0, 7)}</span>
       <span>·</span>
       <span>{relativeTime(deployment.updatedAt)}</span>
+      {#if failedJob}
+        <button
+          type="button"
+          class="ml-auto flex h-6 cursor-pointer items-center gap-1 rounded-md border border-border px-2 text-[9px] font-medium text-foreground transition-colors hover:bg-elevated disabled:cursor-default disabled:opacity-40"
+          title={`Review failed job ${failedJob.name} with an agent`}
+          disabled={preparingAgent || loading}
+          onclick={() => void reviewWithAgent(failedJob)}
+        >
+          {#if preparingAgent}
+            <Loader2 size={11} class="animate-spin" />
+          {:else}
+            <Bot size={11} />
+          {/if}
+          Review
+        </button>
+      {/if}
     </div>
     {#if deployment.description}
       <p class="mt-1 truncate text-[10px] text-muted">{deployment.description}</p>
@@ -378,7 +437,7 @@
                 <button
                   type="button"
                   class="flex w-full cursor-pointer items-center gap-2 text-left"
-                  onclick={() => toggleJobLog(job.id)}
+                  onclick={() => toggleJobLog(job)}
                 >
                   <span
                     class="shrink-0 text-[9px] font-bold leading-none {stepTone(job)}"
@@ -427,7 +486,24 @@
 
                 {#if expandedLog[job.id]}
                   <div class="mt-2">
-                    {#if loadingLog[job.id]}
+                    {#if job.status !== 'completed'}
+                      <div
+                        class="rounded-md bg-elevated px-2 py-2 text-[10px] leading-relaxed text-dimmed"
+                      >
+                        <p>Logs become available here after this job finishes.</p>
+                        {#if job.url}
+                          <button
+                            type="button"
+                            class="mt-1.5 flex h-6 cursor-pointer items-center gap-1 text-[9px] font-medium text-foreground hover:text-primary"
+                            title="Follow this running job on GitHub"
+                            onclick={() => void openInBrowser(job.url)}
+                          >
+                            <ExternalLink size={10} />
+                            Follow live on GitHub
+                          </button>
+                        {/if}
+                      </div>
+                    {:else if loadingLog[job.id]}
                       <div class="flex items-center gap-2 py-2 text-[10px] text-dimmed">
                         <Loader2 size={11} class="animate-spin" />
                         Loading log…

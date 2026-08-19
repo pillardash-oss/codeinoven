@@ -65,6 +65,7 @@ export const REMOTE_ALLOWED_CHANNELS: readonly string[] = [
   'thread:harnessUsage',
   'thread:efficiencyKpis',
   'thread:loadMessages',
+  'thread:exportTranscript',
   'thread:update',
   'thread:delete',
   'thread:fork',
@@ -82,6 +83,7 @@ export const REMOTE_ALLOWED_CHANNELS: readonly string[] = [
   'agent:listProviderSnapshot',
   'agent:refreshProviderCatalog',
   'agent:refreshAccountUsage',
+  'agent:getHarnessAuthStatus',
   'agent:getSessionStatus',
   'agent:ensureSession',
   'agent:sendPrompt',
@@ -171,6 +173,7 @@ export const REMOTE_ALLOWED_CHANNELS: readonly string[] = [
   'memory:saveEntries',
   // Files (composer @-file tags + citation paths)
   'projectFiles:resolveCitationPaths',
+  'projectFiles:resolveExternalCitationPaths',
   'projectFiles:search',
   // Repo metadata (thread hover popover)
   'repository:remoteOrigin',
@@ -221,6 +224,7 @@ export const REMOTE_ALLOWED_CHANNELS: readonly string[] = [
   // Electron-only helpers — allowed so the shared components never error,
   // but dispatched to no-op handlers on the phone.
   'dialog:pickFile',
+  'dialog:pickFiles',
   'clipboard:saveImage',
   'shell:revealPath',
   'shell:openExternal'
@@ -338,6 +342,7 @@ export const REMOTE_CHANNEL_AUTHORIZATION: Readonly<Record<string, RemoteChannel
   'scope:get': { scope: 'workspace.read', stepUp: 'none' },
 
   // workspace.write — default-No, no step-up
+  'thread:exportTranscript': { scope: 'workspace.write', stepUp: 'none' },
   'thread:create': { scope: 'workspace.write', stepUp: 'none' },
   'thread:markRead': { scope: 'workspace.write', stepUp: 'none' },
   'thread:setPinned': { scope: 'workspace.write', stepUp: 'none' },
@@ -349,8 +354,12 @@ export const REMOTE_CHANNEL_AUTHORIZATION: Readonly<Record<string, RemoteChannel
   'thread:reorderScope': { scope: 'workspace.write', stepUp: 'none' },
   'scope:save': { scope: 'workspace.write', stepUp: 'none' },
 
-  // workspace.delete — default-No, always step-up
-  'thread:delete': { scope: 'workspace.delete', stepUp: 'always' },
+  // workspace.delete — explicitly scoped and confirmed in the mobile UI.
+  // Requiring a second desktop-local approval made a remote-only delete
+  // impossible: the phone request had already failed before approval and its
+  // retry received a different request id. The authenticated device scope plus
+  // the destructive-action confirmation remains the authorization boundary.
+  'thread:delete': { scope: 'workspace.delete', stepUp: 'none' },
 
   // config.* — workstation-level, always step-up
   'config:get': { scope: 'config.read', stepUp: 'always' },
@@ -363,6 +372,7 @@ export const REMOTE_CHANNEL_AUTHORIZATION: Readonly<Record<string, RemoteChannel
   'agent:listProviderSnapshot': { scope: 'conversation.read', stepUp: 'none' },
   'agent:refreshProviderCatalog': { scope: 'conversation.read', stepUp: 'none' },
   'agent:refreshAccountUsage': { scope: 'conversation.read', stepUp: 'none' },
+  'agent:getHarnessAuthStatus': { scope: 'conversation.read', stepUp: 'none' },
   'agent:getSessionStatus': { scope: 'conversation.read', stepUp: 'none' },
   'agent:listPermissions': { scope: 'conversation.read', stepUp: 'none' },
   'agent:listQuestions': { scope: 'conversation.read', stepUp: 'none' },
@@ -504,6 +514,7 @@ export const REMOTE_CHANNEL_AUTHORIZATION: Readonly<Record<string, RemoteChannel
 
   // filesystem.read — default-No, always step-up
   'projectFiles:resolveCitationPaths': { scope: 'filesystem.read', stepUp: 'always' },
+  'projectFiles:resolveExternalCitationPaths': { scope: 'filesystem.read', stepUp: 'always' },
   'projectFiles:search': { scope: 'filesystem.read', stepUp: 'always' },
   'repository:remoteOrigin': { scope: 'filesystem.read', stepUp: 'always' },
   'repository:preflight': { scope: 'filesystem.read', stepUp: 'always' },
@@ -551,6 +562,7 @@ export const REMOTE_CHANNEL_AUTHORIZATION: Readonly<Record<string, RemoteChannel
 
   // local.system — default-No, always step-up
   'dialog:pickFile': { scope: 'local.system', stepUp: 'always' },
+  'dialog:pickFiles': { scope: 'local.system', stepUp: 'always' },
   'clipboard:saveImage': { scope: 'local.system', stepUp: 'always' },
   'shell:revealPath': { scope: 'local.system', stepUp: 'always' },
   'shell:openExternal': { scope: 'local.system', stepUp: 'always' }
