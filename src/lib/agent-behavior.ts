@@ -2,10 +2,10 @@
  * Default operational behavior for implementation turns.
  *
  * The application uses this value whenever there is no user override. A custom
- * override is written to behavior.md in the app config directory; this source
+ * override is written to prompts/work-ethics.md in the app config directory; this source
  * value remains the reset-to-default contract.
  */
-export const AGENT_BEHAVIOR_FILENAME = 'behavior.md'
+export const AGENT_BEHAVIOR_FILENAME = 'prompts/work-ethics.md'
 
 export const DEFAULT_AGENT_BEHAVIOR_PROMPT = `Agent behavior for implementation work:
 

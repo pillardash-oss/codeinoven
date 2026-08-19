@@ -148,6 +148,7 @@ import { INBOX_PROJECT_ID, isOrchestrationChildThread } from '../../lib/types'
 import { modelKey } from '../../lib/model-keys'
 import { APP_NAME } from '../../lib/brand'
 import { DEFAULT_AGENT_BEHAVIOR_PROMPT } from '../../lib/agent-behavior'
+import { registerCioPromptDefault, type CioPromptId } from '../../lib/cio-prompts'
 import { estimateTokenCostUsd } from '../providers/pricing'
 import {
   budgetTurnLayers,
@@ -776,6 +777,44 @@ const BRAINSTORM_DISCUSSION_SYSTEM_PROMPT = [
   QUESTION_TOOL_INSTRUCTION
 ].join(' ')
 
+const asEditableTemplate = (prompt: string): string =>
+  prompt
+    .replaceAll(APP_NAME, '{{APP_NAME}}')
+    .replaceAll(ENGINEERING_SPEC_TOOL_NAME, '{{ENGINEERING_SPEC_TOOL_NAME}}')
+    .replaceAll(BRAINSTORM_DOCUMENT_TOOL_NAME, '{{BRAINSTORM_DOCUMENT_TOOL_NAME}}')
+
+registerCioPromptDefault(
+  'work-ethics',
+  DEFAULT_AGENT_BEHAVIOR_PROMPT.replaceAll(APP_NAME, '{{APP_NAME}}')
+)
+registerCioPromptDefault('chat', asEditableTemplate(CHAT_SYSTEM_PROMPT))
+registerCioPromptDefault('file-system-chat', asEditableTemplate(FILE_SYSTEM_CHAT_SYSTEM_PROMPT))
+registerCioPromptDefault('temporary-chat', asEditableTemplate(TEMPORARY_CHAT_SYSTEM_PROMPT))
+registerCioPromptDefault(
+  'brainstorm-discussion',
+  asEditableTemplate(BRAINSTORM_DISCUSSION_SYSTEM_PROMPT)
+)
+registerCioPromptDefault(
+  'brainstorm-document',
+  asEditableTemplate(BRAINSTORM_GENERATION_SYSTEM_PROMPT)
+)
+registerCioPromptDefault('engineering-spec', asEditableTemplate(SPEC_GENERATION_SYSTEM_PROMPT))
+registerCioPromptDefault(
+  'engineering-implementation',
+  asEditableTemplate(SPEC_IMPLEMENT_SYSTEM_PROMPT)
+)
+registerCioPromptDefault(
+  'assignment-plan',
+  asEditableTemplate(EXISTING_SPEC_ASSIGNMENT_SYSTEM_PROMPT)
+)
+registerCioPromptDefault(
+  'achievement-implementation',
+  asEditableTemplate(ACHIEVEMENT_IMPLEMENT_SYSTEM_PROMPT)
+)
+registerCioPromptDefault('audit-report', asEditableTemplate(AUDIT_GENERATION_SYSTEM_PROMPT))
+registerCioPromptDefault('audit-repair', asEditableTemplate(AUDIT_REPAIR_SYSTEM_PROMPT))
+registerCioPromptDefault('image-description', IMAGE_DESCRIPTOR_PROMPT)
+
 function buildSpecRevisionSystemPrompt(
   specPath: string,
   annotations: ReadonlyArray<{ section: string; body: string; quote?: string; status: string }>
@@ -838,6 +877,8 @@ export function composeTurnSystemPrompt(input: {
 export function composeBrainstormSystemPrompt(input: {
   activeBrainstormTurn: boolean
   assignmentMode: boolean
+  brainstormDiscussionPrompt?: string
+  engineeringSpecPrompt?: string
   revisionPrompt: string
   memoryInstruction: string
   imageDescriptorNote: string
@@ -846,8 +887,12 @@ export function composeBrainstormSystemPrompt(input: {
   historyRecap: string
 }): string {
   return [
-    input.activeBrainstormTurn ? BRAINSTORM_DISCUSSION_SYSTEM_PROMPT : '',
-    input.activeBrainstormTurn ? '' : SPEC_GENERATION_SYSTEM_PROMPT,
+    input.activeBrainstormTurn
+      ? (input.brainstormDiscussionPrompt ?? BRAINSTORM_DISCUSSION_SYSTEM_PROMPT)
+      : '',
+    input.activeBrainstormTurn
+      ? ''
+      : (input.engineeringSpecPrompt ?? SPEC_GENERATION_SYSTEM_PROMPT),
     !input.activeBrainstormTurn && input.assignmentMode ? ASSIGNMENT_GENERATION_INSTRUCTION : '',
     input.revisionPrompt,
     input.memoryInstruction,
@@ -1483,6 +1528,10 @@ export class ChatEngine {
       driver.setProcessObserver?.(this.agentProcesses)
       driver.onEvent((event) => this.handleDriverEvent(driver.id, event))
     }
+  }
+
+  private cioPrompt(id: CioPromptId): Promise<string> {
+    return this.storage.getCioPrompt(id)
   }
 
   register(): void {
@@ -3613,8 +3662,8 @@ export class ChatEngine {
         driver ? { id: driver.id, name: driver.name } : null,
         '',
         {
-          SPEC_BRAINSTORM_SYSTEM_PROMPT,
-          SPEC_IMPLEMENT_SYSTEM_PROMPT,
+          SPEC_BRAINSTORM_SYSTEM_PROMPT: await this.cioPrompt('engineering-spec'),
+          SPEC_IMPLEMENT_SYSTEM_PROMPT: await this.cioPrompt('engineering-implementation'),
           MERMAID_OUTPUT_INSTRUCTION
         },
         mode,
@@ -4838,10 +4887,19 @@ export class ChatEngine {
     // only the headroom left after the fixed user/system layers and the actual
     // hidden context consumed.
     const brainstormingTurn = settings.engineeringMode && specAction !== 'implement'
+    const chatSystemPrompt = isChatThread
+      ? await this.cioPrompt(chatFileSystemEnabled ? 'file-system-chat' : 'chat')
+      : ''
+    const brainstormDiscussionPrompt = brainstormingTurn
+      ? await this.cioPrompt('brainstorm-discussion')
+      : ''
+    const engineeringSpecPrompt = brainstormingTurn ? await this.cioPrompt('engineering-spec') : ''
     const systemBasePrompt = brainstormingTurn
       ? composeBrainstormSystemPrompt({
           activeBrainstormTurn: Boolean(activeBrainstormTurn),
           assignmentMode: settings.assignmentMode === true,
+          brainstormDiscussionPrompt,
+          engineeringSpecPrompt,
           revisionPrompt: '',
           memoryInstruction: MEMORY_RESPONSE_BOUNDARY_INSTRUCTION,
           imageDescriptorNote,
@@ -4850,11 +4908,7 @@ export class ChatEngine {
           historyRecap: ''
         })
       : composeTurnSystemPrompt({
-          chatPrompt: isChatThread
-            ? chatFileSystemEnabled
-              ? FILE_SYSTEM_CHAT_SYSTEM_PROMPT
-              : CHAT_SYSTEM_PROMPT
-            : '',
+          chatPrompt: chatSystemPrompt,
           memoryInstruction: MEMORY_RESPONSE_BOUNDARY_INSTRUCTION,
           imageDescriptorNote,
           assignmentCoordinatorSystemPrompt,
@@ -4999,6 +5053,8 @@ export class ChatEngine {
           systemPrompt: composeBrainstormSystemPrompt({
             activeBrainstormTurn: Boolean(activeBrainstormTurn),
             assignmentMode: settings.assignmentMode === true,
+            brainstormDiscussionPrompt,
+            engineeringSpecPrompt,
             revisionPrompt,
             memoryInstruction: MEMORY_RESPONSE_BOUNDARY_INSTRUCTION,
             imageDescriptorNote,
@@ -5065,11 +5121,7 @@ export class ChatEngine {
         attachments,
         systemPrompt:
           composeTurnSystemPrompt({
-            chatPrompt: isChatThread
-              ? chatFileSystemEnabled
-                ? FILE_SYSTEM_CHAT_SYSTEM_PROMPT
-                : CHAT_SYSTEM_PROMPT
-              : '',
+            chatPrompt: chatSystemPrompt,
             memoryInstruction: MEMORY_RESPONSE_BOUNDARY_INSTRUCTION,
             imageDescriptorNote,
             assignmentCoordinatorSystemPrompt,
@@ -5231,7 +5283,7 @@ export class ChatEngine {
         modelKey(settings.harnessId, settings.providerId, settings.modelId)
       )
       const systemPrompt = [
-        TEMPORARY_CHAT_SYSTEM_PROMPT,
+        await this.cioPrompt('temporary-chat'),
         memoryPrompt,
         temporary.contextApplied && context
           ? ''
@@ -6246,7 +6298,7 @@ export class ChatEngine {
       const request: SendPromptOptions = {
         sessionId,
         settings,
-        text: IMAGE_DESCRIPTOR_PROMPT,
+        text: await this.cioPrompt('image-description'),
         attachments: [attachment],
         readOnly: true,
         allowedTools: [],
@@ -6285,7 +6337,7 @@ export class ChatEngine {
           attempt: attempt + 1,
           harnessId: selection.harnessId,
           settings,
-          inputText: IMAGE_DESCRIPTOR_PROMPT,
+          inputText: await this.cioPrompt('image-description'),
           response,
           failure
         })
@@ -9195,8 +9247,11 @@ export class ChatEngine {
           attachments: [],
           systemPrompt: [
             useStructuredOutput
-              ? BRAINSTORM_GENERATION_SYSTEM_PROMPT
-              : BRAINSTORM_JSON_FALLBACK_SYSTEM_PROMPT,
+              ? await this.cioPrompt('brainstorm-document')
+              : [
+                  await this.cioPrompt('brainstorm-document'),
+                  BRAINSTORM_JSON_FALLBACK_SYSTEM_PROMPT
+                ].join('\n\n'),
             behaviorPrompt
           ]
             .filter(Boolean)
@@ -9361,7 +9416,7 @@ export class ChatEngine {
     )
     const specMemoryPrompt = await this.formatSpecGenerationMemory(projectId, settings)
     const generationSystemPrompt = [
-      SPEC_GENERATION_SYSTEM_PROMPT,
+      await this.cioPrompt('engineering-spec'),
       artifactBoundary,
       memoryPrompt,
       specMemoryPrompt,
@@ -9370,6 +9425,7 @@ export class ChatEngine {
       .filter(Boolean)
       .join('\n\n')
     const fallbackSystemPrompt = [
+      await this.cioPrompt('engineering-spec'),
       SPEC_JSON_FALLBACK_SYSTEM_PROMPT,
       artifactBoundary,
       memoryPrompt,
@@ -9693,7 +9749,7 @@ export class ChatEngine {
       await ensureFeatureSlug(this.database, projectId, coordinatorThreadId)
     )
     const assignmentSystemPrompt = [
-      EXISTING_SPEC_ASSIGNMENT_SYSTEM_PROMPT,
+      await this.cioPrompt('assignment-plan'),
       engineeringArtifactBoundaryInstruction(artifactDirectory)
     ].join('\n\n')
     const prompt = [
@@ -9877,7 +9933,7 @@ export class ChatEngine {
                   prompt
                 ].join('\n\n'),
           attachments: [],
-          systemPrompt: AUDIT_GENERATION_SYSTEM_PROMPT,
+          systemPrompt: await this.cioPrompt('audit-report'),
           allowedTools: AUDIT_ALLOWED_TOOLS,
           ...(useStructuredOutput ? { structuredOutput: { schema: AUDIT_REPORT_SCHEMA } } : {})
         }
@@ -10318,7 +10374,7 @@ export class ChatEngine {
           marker,
           'The Achievement Auditor and user review require implementation corrections.',
           'Digest every actionable finding, open audit annotation, and user note. Implement the corrections in this Sr. Engineer thread, run focused verification, then allow Achievement to audit again.',
-          ACHIEVEMENT_IMPLEMENT_SYSTEM_PROMPT,
+          await this.cioPrompt('achievement-implementation'),
           `Audit report: ${auditPath}`,
           `User feedback:\n${feedback.trim()}`,
           `Open audit annotations:\n${formatOpenAnnotations(report.annotations)}`
@@ -11163,9 +11219,9 @@ export class ChatEngine {
       )
       try {
         const auditSystemPrompt = repairing
-          ? AUDIT_REPAIR_SYSTEM_PROMPT
+          ? await this.cioPrompt('audit-repair')
           : [
-              AUDIT_GENERATION_SYSTEM_PROMPT,
+              await this.cioPrompt('audit-report'),
               ASSIGNMENT_AUDIT_EVIDENCE_CONTRACT,
               utilityInstructions
             ]
@@ -11410,7 +11466,7 @@ export class ChatEngine {
           settings: auditorSettings,
           text: prompt,
           attachments: [],
-          systemPrompt: AUDIT_GENERATION_SYSTEM_PROMPT,
+          systemPrompt: await this.cioPrompt('audit-report'),
           allowedTools: AUDIT_ALLOWED_TOOLS,
           userMessageId: messageId
         })
@@ -11519,7 +11575,7 @@ export class ChatEngine {
       `Achievement audit ${iteration} found required corrections.`,
       'Act as the primary implementation agent. Address every actionable finding against the approved specification.',
       'Inspect the cited evidence, implement the corrections, run all relevant scoped checks, and report concrete verification evidence. Do not stop at recommendations.',
-      ACHIEVEMENT_IMPLEMENT_SYSTEM_PROMPT,
+      await this.cioPrompt('achievement-implementation'),
       `Audit report: ${auditPath}`,
       `Open audit annotations:\n${formatOpenAnnotations(report.annotations)}`
     ].join('\n\n')

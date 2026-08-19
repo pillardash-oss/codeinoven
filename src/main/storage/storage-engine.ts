@@ -14,6 +14,16 @@ import {
 } from '../../lib/utils'
 import type { AppConfig } from '../../lib/types'
 import { AGENT_BEHAVIOR_FILENAME, DEFAULT_AGENT_BEHAVIOR_PROMPT } from '../../lib/agent-behavior'
+import {
+  CIO_PROMPT_DEFINITIONS,
+  CIO_PROMPT_MAX_LENGTH,
+  CIO_PROMPTS_DIRECTORY,
+  defaultCioPrompt,
+  getCioPromptDefinition,
+  renderCioPromptTemplate,
+  type CioPromptId,
+  type CioPromptSetting
+} from '../../lib/cio-prompts'
 import type { CloudDeploymentAccountRegistry, CloudDeploymentConfig } from '../../lib/types'
 import type { Project } from '../../lib/types'
 import { featureArtifactDirectory, featureSlugFromTitle } from '../../lib/project-artifacts'
@@ -71,6 +81,8 @@ export class StorageEngine {
     await ensureDir(this.resolve('logs'))
     await ensureDir(this.resolve('chats-cwd'))
 
+    await this.migrateLegacyBehaviorPrompt()
+
     // Create default config if missing
     const configPath = this.resolve('config.json')
     const existing = await readJson<AppConfig>(configPath)
@@ -112,19 +124,69 @@ export class StorageEngine {
 
   /** Write the global config */
   async saveConfig(config: AppConfig): Promise<void> {
-    const { agentBehaviorPrompt, ...persistedConfig } = config
+    const { agentBehaviorPrompt: _agentBehaviorPrompt, ...persistedConfig } = config
     await writeJson(this.resolve('config.json'), persistedConfig)
-    if (agentBehaviorPrompt === DEFAULT_AGENT_BEHAVIOR_PROMPT) {
-      await this.removeRaw(AGENT_BEHAVIOR_FILENAME)
-    } else {
-      await this.writeRaw(AGENT_BEHAVIOR_FILENAME, agentBehaviorPrompt)
-    }
   }
 
   private async readBehaviorPrompt(): Promise<string> {
-    const behaviorFile = await this.readRaw(AGENT_BEHAVIOR_FILENAME)
-    if (behaviorFile?.trim()) return behaviorFile
-    return DEFAULT_AGENT_BEHAVIOR_PROMPT
+    return this.getCioPrompt('work-ethics')
+  }
+
+  /** Return every shipped template with an optional user-owned file override. */
+  async getCioPromptSettings(): Promise<CioPromptSetting[]> {
+    return Promise.all(
+      CIO_PROMPT_DEFINITIONS.map(async (definition) => {
+        const currentDefinition = getCioPromptDefinition(definition.id)
+        const override = await this.readRaw(
+          `${CIO_PROMPTS_DIRECTORY}/${currentDefinition.filename}`
+        )
+        return {
+          ...currentDefinition,
+          template: override?.trim() ? override : currentDefinition.defaultTemplate,
+          customized: Boolean(override?.trim())
+        }
+      })
+    )
+  }
+
+  /** Resolve one prompt for runtime use, replacing stable template tags. */
+  async getCioPrompt(id: CioPromptId): Promise<string> {
+    const definition = getCioPromptDefinition(id)
+    const override = await this.readRaw(`${CIO_PROMPTS_DIRECTORY}/${definition.filename}`)
+    return override?.trim() ? renderCioPromptTemplate(override) : defaultCioPrompt(id)
+  }
+
+  /** Persist only genuine overrides; saving the shipped template removes the file. */
+  async saveCioPrompt(id: CioPromptId, template: string): Promise<void> {
+    const definition = getCioPromptDefinition(id)
+    const normalized = template.trim()
+    if (!normalized) throw new TypeError('CIO prompt cannot be empty')
+    if (normalized.length > CIO_PROMPT_MAX_LENGTH) {
+      throw new TypeError(`CIO prompt cannot exceed ${CIO_PROMPT_MAX_LENGTH} characters`)
+    }
+    const path = `${CIO_PROMPTS_DIRECTORY}/${definition.filename}`
+    if (
+      normalized === definition.defaultTemplate.trim() ||
+      renderCioPromptTemplate(normalized) ===
+        renderCioPromptTemplate(definition.defaultTemplate.trim())
+    ) {
+      await this.removeRaw(path)
+      return
+    }
+    await this.writeRaw(path, normalized)
+  }
+
+  async resetCioPrompt(id: CioPromptId): Promise<void> {
+    const definition = getCioPromptDefinition(id)
+    await this.removeRaw(`${CIO_PROMPTS_DIRECTORY}/${definition.filename}`)
+  }
+
+  /** Carry forward the original special-case override without creating files for defaults. */
+  private async migrateLegacyBehaviorPrompt(): Promise<void> {
+    const legacy = await this.readRaw('behavior.md')
+    if (!legacy?.trim() || (await this.readRaw(AGENT_BEHAVIOR_FILENAME))?.trim()) return
+    await this.writeRaw(AGENT_BEHAVIOR_FILENAME, legacy)
+    await this.removeRaw('behavior.md')
   }
 
   /**

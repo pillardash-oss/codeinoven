@@ -145,6 +145,7 @@ import type {
   ComputerUsePipState
 } from './types'
 import type { WorkerNameSettings } from './assignment/worker-names'
+import type { CioPromptId, CioPromptSetting } from './cio-prompts'
 
 type Contract<Args extends unknown[], Result> = {
   args: Args
@@ -744,6 +745,9 @@ export interface IpcInvokeContract {
   'config:get': Contract<[], AppConfig>
   'config:update': Contract<[patch: AppConfigPatch], AppConfig>
   'config:syncAgentRole': Contract<[role: AgentRole, selection: AgentModelSelection], AppConfig>
+  'cioPrompts:list': Contract<[], CioPromptSetting[]>
+  'cioPrompts:save': Contract<[id: CioPromptId, template: string], CioPromptSetting[]>
+  'cioPrompts:reset': Contract<[id: CioPromptId], CioPromptSetting[]>
   'workerNames:getSettings': Contract<[], WorkerNameSettings>
   'workerNames:saveCustom': Contract<[names: string[]], void>
   'dialog:pickFolder': Contract<[], string | null>
