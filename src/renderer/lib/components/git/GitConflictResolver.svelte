@@ -92,7 +92,9 @@
     const state = states[path]
     const analysis = state?.analysis
     if (!analysis || analysis.binary || analysis.truncated) return false
-    if (state.resolutions.length === 0) return false
+    // A conflicted entry with no remaining conflict blocks only needs staging —
+    // the markers were removed on disk (e.g. in the editor), so it is saveable.
+    if (state.resolutions.length === 0) return analysis.hunks.length === 0
     return state.resolutions.every((resolution) => typeof resolution === 'string')
   }
 
