@@ -26,6 +26,8 @@
     footer?: Snippet
     /** LocalStorage key used to persist the panel's position/size. */
     storageKey?: string
+    /** Initial panel height before viewport clamping. */
+    defaultHeight?: number
     /** Tooltip/aria label shown on the draggable header. */
     dragLabel?: string
   }
@@ -42,13 +44,13 @@
     children,
     footer,
     storageKey = `${APP_SLUG}.harnessTasksPanel.v1`,
+    defaultHeight = 560,
     dragLabel = 'Drag to move the task panel'
   }: Props = $props()
 
   const PANEL_MARGIN = 12
   const MIN_PANEL_WIDTH = 360
   const MAX_PANEL_WIDTH = 640
-  const DEFAULT_PANEL_HEIGHT = 560
   const MIN_PANEL_HEIGHT = 240
   /** The chat composer's `max-w-2xl` — the panel must never cover it by default. */
   const CHAT_MAX_WIDTH = 672
@@ -63,6 +65,14 @@
   function availableWidth(): number {
     const sidebar = sidebarState.docked ? sidebarState.width : 0
     return Math.max(0, window.innerWidth - sidebar - PANEL_MARGIN * 2)
+  }
+
+  function availableHeight(): number {
+    return Math.max(MIN_PANEL_HEIGHT, window.innerHeight - PANEL_MARGIN * 2)
+  }
+
+  function preferredHeight(): number {
+    return Math.max(MIN_PANEL_HEIGHT, defaultHeight)
   }
 
   /**
@@ -124,9 +134,10 @@
   const initialWidth = saved
     ? Math.min(MAX_PANEL_WIDTH, Math.max(MIN_PANEL_WIDTH, Math.min(saved.width, availableWidth())))
     : preferredWidth()
-  const initialHeight = saved
-    ? Math.min(DEFAULT_PANEL_HEIGHT, Math.max(MIN_PANEL_HEIGHT, saved.height))
-    : DEFAULT_PANEL_HEIGHT
+  const initialHeight = Math.min(
+    availableHeight(),
+    saved ? Math.max(MIN_PANEL_HEIGHT, saved.height) : preferredHeight()
+  )
 
   let width = $state(initialWidth)
   let height = $state(initialHeight)
@@ -146,7 +157,7 @@
     if (!open) return
     const onResize = (): void => {
       width = Math.min(width, availableWidth())
-      height = Math.min(height, window.innerHeight - PANEL_MARGIN * 2)
+      height = Math.min(height, availableHeight())
       position = { x: clampX(position.x, width), y: clampY(position.y, height) }
     }
     window.addEventListener('resize', onResize)
