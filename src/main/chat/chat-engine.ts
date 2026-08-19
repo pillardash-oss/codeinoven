@@ -4886,15 +4886,14 @@ export class ChatEngine {
       const outboundIds = this.outboundMessageIdsBySession.get(sessionId) ?? new Set<string>()
       outboundIds.add(messageId)
       this.outboundMessageIdsBySession.set(sessionId, outboundIds)
+      // Note: steering appends to the LIVE native turn, which still runs under
+      // the model that started it. Do not record the new settings model here —
+      // that would mask a pending model switch until the following resume.
       await driver.steerPrompt(projectPath, {
         sessionId,
         text: driverText,
         attachments,
         userMessageId: messageId
-      })
-      this.sessionModelIds.set(sessionId, {
-        providerId: settings.providerId,
-        modelId: settings.modelId
       })
       this.markSessionWorking(sessionId)
       return publicUserMessage
