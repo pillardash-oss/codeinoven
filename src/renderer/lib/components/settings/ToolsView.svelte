@@ -108,7 +108,7 @@
     return (await invoke('thread:get', reference.projectId, reference.threadId)) ?? selected ?? null
   }
 
-  async function loadTools(): Promise<void> {
+  async function loadTools(force = false): Promise<void> {
     loading = true
     error = ''
     try {
@@ -120,9 +120,10 @@
             thread.projectId,
             settings.harnessId,
             settings.providerId,
-            settings.modelId
+            settings.modelId,
+            force
           )
-        : invoke('agent:listTools'))
+        : invoke('agent:listTools', undefined, undefined, undefined, undefined, force))
       if (
         selectedHarness !== null &&
         !catalog.tools.some((tool) => tool.harnessId === selectedHarness)
@@ -150,7 +151,7 @@
       class="flex h-8 shrink-0 items-center gap-1.5 rounded-lg border bg-elevated px-2.5 text-xs font-medium hover:bg-overlay disabled:opacity-50"
       disabled={loading}
       title="Refresh agent tool catalog"
-      onclick={() => void loadTools()}
+      onclick={() => void loadTools(true)}
     >
       <RefreshCw size={13} class={loading ? 'animate-spin' : ''} />
       Refresh

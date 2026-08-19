@@ -572,7 +572,13 @@ export interface IpcInvokeContract {
   'agent:refreshAccountUsage': Contract<[projectId: string, threadId: string], AgentAccountUsage[]>
   'agent:getHarnessAuthStatus': Contract<[projectId: string, harnessId: string], boolean | null>
   'agent:listTools': Contract<
-    [projectId?: string, harnessId?: string, providerId?: string, modelId?: string],
+    [
+      projectId?: string,
+      harnessId?: string,
+      providerId?: string,
+      modelId?: string,
+      force?: boolean
+    ],
     AgentToolCatalog
   >
   'agent:listContextCapabilities': Contract<

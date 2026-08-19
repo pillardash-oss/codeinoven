@@ -247,6 +247,8 @@ function formatAttachedImageDescriptions(results: readonly ImageDescriptorResult
 }
 
 const PROVIDER_CATALOG_TTL_MS = 60 * 60 * 1000
+/** How long a resolved agent tool catalog stays fresh before re-discovery. */
+const TOOL_CATALOG_TTL_MS = 30 * 1000
 
 interface PersistedProviderCatalog {
   schemaVersion: 3
@@ -1326,6 +1328,8 @@ export class ChatEngine {
   private providerCache = new Map<string, ProviderCatalog[]>()
   private sharedProviderCatalog: PersistedProviderCatalog | null = null
   private providerDiscovery: Promise<ProviderCatalog[]> | null = null
+  /** Resolved agent tool catalogs keyed by their discovery context. */
+  private toolCatalogCache = new Map<string, { catalog: AgentToolCatalog; at: number }>()
   /**
    * Whether `ensureSession` confirmed the harness session natively holds the
    * conversation (non-empty provider history). `buildHistoryRecap` uses this to
@@ -1544,8 +1548,14 @@ export class ChatEngine {
     )
     ipcMain.handle(
       'agent:listTools',
-      (_, projectId?: string, harnessId?: string, providerId?: string, modelId?: string) =>
-        this.listTools(projectId, harnessId, providerId, modelId)
+      (
+        _,
+        projectId?: string,
+        harnessId?: string,
+        providerId?: string,
+        modelId?: string,
+        force = false
+      ) => this.listTools(projectId, harnessId, providerId, modelId, force)
     )
     ipcMain.handle('agent:listContextCapabilities', (_, projectId: string, threadId: string) =>
       this.listContextCapabilities(projectId, threadId)
@@ -2403,6 +2413,8 @@ export class ChatEngine {
    */
   async listProviders(projectId: string, force = false): Promise<ProviderCatalog[]> {
     projectId = validateEntityId(projectId, 'Project ID')
+    // An explicit provider refresh can change which models/drivers expose tools.
+    if (force) this.toolCatalogCache.clear()
     if (
       this.sharedProviderCatalog &&
       Date.now() - this.sharedProviderCatalog.discoveredAt < PROVIDER_CATALOG_TTL_MS
@@ -2669,6 +2681,8 @@ export class ChatEngine {
       discoveredAt: Date.now(),
       catalogs: refreshed
     }
+    // Background enrichment can surface new providers/models that own tools.
+    this.toolCatalogCache.clear()
     this.providerCache.set(projectId, refreshed)
     void this.persistProviders(projectId, refreshed)
     this.broadcast({
@@ -2704,21 +2718,24 @@ export class ChatEngine {
         catalogs
       })
     }
+    // The harness catalog changed on disk (e.g. after an install); tools may differ.
+    this.toolCatalogCache.clear()
   }
 
-  /** Return app tools and every registered harness's discoverable tool catalog. */
+  /**
+   * Return app tools and every registered harness's discoverable tool catalog.
+   * Results are cached per discovery context for `TOOL_CATALOG_TTL_MS` so the
+   * Tools tab opens instantly on repeat visits; `force` bypasses the cache so
+   * the Refresh control still surfaces a freshly discovered catalog.
+   */
   async listTools(
     projectId?: string,
     harnessId?: string,
     providerId?: string,
-    modelId?: string
+    modelId?: string,
+    force = false
   ): Promise<AgentToolCatalog> {
     const context: AgentToolCatalog['context'] = {}
-    const applicationDefinitions = structuredClone(APPLICATION_AGENT_TOOLS)
-    const applicationTools: AgentToolDefinition[] = [...this.drivers.keys()].flatMap((harnessId) =>
-      applicationDefinitions.map((tool) => ({ ...tool, harnessId }))
-    )
-    const notices: string[] = []
 
     if (projectId) {
       context.projectId = validateEntityId(projectId, 'Project ID')
@@ -2732,6 +2749,33 @@ export class ChatEngine {
     if (modelId) {
       context.modelId = validateBoundedString(modelId, 'Model ID', 1, 256)
     }
+
+    const cacheKey = [
+      context.projectId ?? '',
+      context.harnessId ?? '',
+      context.providerId ?? '',
+      context.modelId ?? ''
+    ].join('\u0000')
+    const cached = this.toolCatalogCache.get(cacheKey)
+    if (!force && cached && Date.now() - cached.at < TOOL_CATALOG_TTL_MS) {
+      return structuredClone(cached.catalog)
+    }
+
+    const catalog = await this.discoverToolCatalog(context, force)
+    this.toolCatalogCache.set(cacheKey, { catalog, at: Date.now() })
+    return structuredClone(catalog)
+  }
+
+  /** Run one full discovery pass for a tool-catalog context. */
+  private async discoverToolCatalog(
+    context: AgentToolCatalog['context'],
+    force: boolean
+  ): Promise<AgentToolCatalog> {
+    const applicationDefinitions = structuredClone(APPLICATION_AGENT_TOOLS)
+    const applicationTools: AgentToolDefinition[] = [...this.drivers.keys()].flatMap((harnessId) =>
+      applicationDefinitions.map((tool) => ({ ...tool, harnessId }))
+    )
+    const notices: string[] = []
 
     if (!context.projectId) {
       notices.push('Open a configured thread to inspect the live harness and model tool catalog.')
@@ -2751,7 +2795,8 @@ export class ChatEngine {
       }
     }
 
-    const projectPath = await this.resolveProjectPath(context.projectId)
+    const projectId = context.projectId
+    const projectPath = await this.resolveProjectPath(projectId)
     const discovered = await Promise.all(
       [...this.drivers.values()].map(async (driver) => {
         const applicationCount = applicationTools.filter(
@@ -2774,10 +2819,14 @@ export class ChatEngine {
           let resolvedProviderId = driver.id === context.harnessId ? context.providerId : undefined
           let resolvedModelId = driver.id === context.harnessId ? context.modelId : undefined
           if (!resolvedProviderId || !resolvedModelId) {
-            const catalogs = await driver.listProviders(projectPath)
-            const provider = catalogs.find((item) => item.models.length > 0)
-            resolvedProviderId = provider?.id
-            resolvedModelId = provider?.models[0]?.id
+            const resolved = await this.resolveDriverDefaultModel(
+              driver.id,
+              projectPath,
+              projectId,
+              force
+            )
+            resolvedProviderId = resolved.providerId
+            resolvedModelId = resolved.modelId
           }
           if (!resolvedProviderId || !resolvedModelId) {
             return {
@@ -2838,6 +2887,35 @@ export class ChatEngine {
       harnesses: discovered.map((entry) => entry.harness),
       notices
     }
+  }
+
+  /**
+   * Resolve a driver's default provider/model for tool discovery. Prefers the
+   * already-discovered provider catalog (kept fresh by the provider TTL and
+   * invalidated on explicit refresh) so a repeat Tools-tab load never spawns a
+   * harness CLI subprocess; falls back to live `driver.listProviders` when the
+   * catalog has no entry, or whenever the caller forces a refresh.
+   */
+  private async resolveDriverDefaultModel(
+    driverId: string,
+    projectPath: string,
+    projectId: string,
+    force: boolean
+  ): Promise<{ providerId?: string; modelId?: string }> {
+    if (!force) {
+      const catalogs =
+        this.sharedProviderCatalog?.catalogs ??
+        (await this.listProviderSnapshot(projectId))
+      const known = catalogs.find(
+        (catalog) => catalog.harnessId === driverId && catalog.models.length > 0
+      )
+      if (known) return { providerId: known.id, modelId: known.models[0]?.id }
+    }
+    const driver = this.drivers.get(driverId)
+    if (!driver) return {}
+    const catalogs = await driver.listProviders(projectPath)
+    const provider = catalogs.find((catalog) => catalog.models.length > 0)
+    return { providerId: provider?.id, modelId: provider?.models[0]?.id }
   }
 
   /** MCP servers and skills actually available to the thread's active harness. */

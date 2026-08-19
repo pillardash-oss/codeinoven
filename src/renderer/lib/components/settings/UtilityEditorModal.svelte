@@ -223,6 +223,30 @@ Write the skill…`
   let loadingNative = $state(false)
   let utilities = $state<UtilityDefinition[]>([])
 
+  /** How long the editor's project/thread/icon context stays reusable across opens. */
+  const EDITOR_CONTEXT_TTL_MS = 15_000
+  interface EditorContextCache {
+    projects: Project[]
+    threads: Thread[]
+    projectIconUrls: Record<string, string>
+    fetchedAt: number
+  }
+  let editorContextCache: EditorContextCache | null = null
+
+  async function cachedEditorContext(): Promise<EditorContextCache> {
+    const cached = editorContextCache
+    if (cached && Date.now() - cached.fetchedAt < EDITOR_CONTEXT_TTL_MS) return cached
+    const [nextProjects, nextThreads] = await Promise.all([
+      invoke('project:list'),
+      invoke('thread:listAll')
+    ])
+    const projects = nextProjects.filter((project) => !project.hidden)
+    const threads = nextThreads
+    const projectIconUrls = Object.fromEntries(await loadProjectIcons(projects))
+    editorContextCache = { projects, threads, projectIconUrls, fetchedAt: Date.now() }
+    return editorContextCache
+  }
+
   let isNative = $derived(target?.kind === 'native')
   let nativeEntry = $derived(target?.kind === 'native' ? target.entry : null)
   let editingRegistry = $derived(target?.kind === 'registry' ? target.utility : null)
@@ -968,16 +992,13 @@ Write the complete workflow, rules, and examples for this skill.`
   }
 
   async function loadContext(): Promise<void> {
-    const [catalog, nextProjects, nextThreads] = await Promise.all([
-      invoke('utilities:list'),
-      invoke('project:list'),
-      invoke('thread:listAll')
-    ])
+    const catalog = await invoke('utilities:list')
     utilities = catalog.utilities
     secureStorageAvailable = catalog.secureStorageAvailable
-    projects = nextProjects.filter((project) => !project.hidden)
-    threads = nextThreads
-    projectIconUrls = Object.fromEntries(await loadProjectIcons(projects))
+    const context = await cachedEditorContext()
+    projects = context.projects
+    threads = context.threads
+    projectIconUrls = context.projectIconUrls
   }
 
   $effect(() => {
