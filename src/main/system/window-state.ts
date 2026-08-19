@@ -2,7 +2,7 @@ import { screen, type BrowserWindow } from 'electron'
 import { Logger } from './logger'
 import type { StorageEngine } from '../storage/storage-engine'
 
-const WINDOW_STATE_FILE = 'window-state.json'
+const WINDOW_STATE_FILE = 'window-state/window-state.json'
 
 const DEFAULT_WIDTH = 1440
 const DEFAULT_HEIGHT = 900
