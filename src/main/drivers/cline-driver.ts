@@ -1,6 +1,6 @@
 import { execFile, spawn } from 'child_process'
 import { createHash } from 'crypto'
-import { mkdir, readFile, writeFile } from 'fs/promises'
+import { mkdir, readFile, readdir, rm, unlink, writeFile } from 'fs/promises'
 import { homedir } from 'os'
 import { join } from 'path'
 import type {
@@ -13,6 +13,7 @@ import type {
   ProviderModel,
   ThinkingPreset
 } from '../../lib/types'
+import { permissionPatterns } from '../../lib/agent-interactions'
 import type {
   CliLineParseContext,
   CliLineParseResult,
@@ -27,6 +28,8 @@ import type {
   UtilityRuntimeOverlay,
   UtilityRuntimePreparationRequest
 } from './driver.interface'
+import { PermissionPolicy, type PermissionRequest } from '../permissions/permission-policy'
+import { Logger } from '../system/logger'
 import { buildHarnessEnvironment } from './cli-environment'
 import { attachmentReferences } from './attachment-reference'
 import type { BaseUrlProviderService } from '../providers/base-url-provider-service'
@@ -410,6 +413,62 @@ interface ClineTurnState {
   parts: AgentPart[]
 }
 
+/**
+ * Desktop-approval bridge for Cline's headless `--json` runs. Cline denies
+ * every tool call when stdin/stdout are not a TTY unless it runs in desktop
+ * approval mode, where it writes a `<sessionId>.request.<requestId>.json` file
+ * into `CLINE_TOOL_APPROVAL_DIR` and waits for the matching
+ * `<sessionId>.decision.<requestId>.json`. The app evaluates each request with
+ * its own `PermissionPolicy` so `auto_review` turns can actually run tools
+ * (e.g. `git fetch`/file writes for PR compose) without handing Cline blanket
+ * auto-approval.
+ */
+interface ClineApprovalBridge {
+  directory: string
+  timer: ReturnType<typeof setInterval>
+  handled: Set<string>
+}
+
+/** Map Cline's tool names onto the app's provider-neutral permission names. */
+function clineToolPermission(toolName: string): string {
+  const normalized = toolName.toLowerCase()
+  if (/command|run_commands|terminal|bash|shell/iu.test(normalized)) return 'bash'
+  if (/write|edit|create|apply|delete|rename|move|filesystem|file-change/iu.test(normalized)) {
+    return 'write'
+  }
+  if (/read|list|search|grep|context/iu.test(normalized)) return 'read'
+  if (/fetch|web|http|request/iu.test(normalized)) return 'network'
+  if (/mcp|tool/iu.test(normalized)) return 'mcp'
+  return normalized.replace(/[^a-z0-9_-]+/gu, '-') || 'tool'
+}
+
+/** Extract the command strings Cline passes for shell/command tools. */
+function clineApprovalCommands(input: Record<string, unknown>): string[] {
+  const commands: string[] = []
+  const append = (value: unknown): void => {
+    if (typeof value === 'string' && value.trim()) commands.push(value.trim())
+    if (Array.isArray(value)) {
+      for (const entry of value) {
+        if (typeof entry === 'string' && entry.trim()) commands.push(entry.trim())
+      }
+    }
+  }
+  append(input['commands'])
+  append(input['command'])
+  return commands
+}
+
+function clineApprovalRequest(payload: Record<string, unknown>): PermissionRequest {
+  const toolInput = record(payload['input']) ?? {}
+  const paths = permissionPatterns(toolInput)
+  const commands = clineApprovalCommands(toolInput)
+  return {
+    permission: clineToolPermission(stringValue(payload['toolName']) ?? 'tool'),
+    ...(paths.length > 0 ? { paths } : {}),
+    ...(commands.length > 0 ? { commands } : {})
+  }
+}
+
 function clineMessage(state: ClineTurnState): AgentMessage {
   return {
     id: state.messageId,
@@ -791,11 +850,7 @@ export class ClineDriver extends PersistentCliDriver {
   readonly id = 'cline'
   readonly name = 'Cline'
   readonly capabilities: HarnessCapabilities = {
-    runtimeTopology: {
-      kind: 'shared_daemon',
-      scope: 'application',
-      sessionWorkers: true
-    },
+    runtimeTopology: { kind: 'turn_process', scope: 'session' },
     streaming: true,
     steering: false,
     nativeResume: true,
@@ -813,7 +868,8 @@ export class ClineDriver extends PersistentCliDriver {
 
   private turnStates = new Map<string, ClineTurnState>()
   private turnCounts = new Map<string, number>()
-  private hubReady: Promise<void> | null = null
+  /** Approval bridges keyed by CodeInOven session id; cleaned up on turn end. */
+  private approvalBridges = new Map<string, ClineApprovalBridge>()
 
   constructor(
     storage: StorageEngine,
@@ -853,30 +909,6 @@ export class ClineDriver extends PersistentCliDriver {
         }
       })
     })
-  }
-
-  /** Start or reuse Cline's singleton hub only when a turn is actually sent. */
-  private async ensureHubReady(projectPath: string): Promise<void> {
-    this.hubReady ??= new Promise<void>((resolve, reject) => {
-      const child = spawn('cline', ['hub', 'ensure'], {
-        cwd: projectPath,
-        env: buildHarnessEnvironment(),
-        stdio: ['ignore', 'ignore', 'pipe']
-      })
-      let stderr = ''
-      child.stderr?.on('data', (chunk: Buffer) => {
-        stderr += chunk.toString()
-      })
-      child.on('error', (error) => reject(new Error(`Cline hub is unavailable: ${error.message}`)))
-      child.on('exit', (code) => {
-        if (code === 0) resolve()
-        else reject(new Error(`Cline hub startup failed${stderr ? `: ${stderr.trim()}` : ''}`))
-      })
-    }).catch((error: unknown) => {
-      this.hubReady = null
-      throw error
-    })
-    await this.hubReady
   }
 
   async listProviders(): Promise<ProviderCatalog[]> {
@@ -1075,15 +1107,119 @@ export class ClineDriver extends PersistentCliDriver {
     const env = buildHarnessEnvironment()
     if (customProvider) {
       await this.seedCustomProvider(customProvider, modelId, session, env)
-    } else {
-      await this.ensureHubReady(projectPath)
-      // The CLI remains a stream client, while Cline's singleton hub owns the
-      // session and its spoke. Never silently fall back to a private local
-      // backend for an ordinary CodeInOven turn.
-      env['CLINE_SESSION_BACKEND_MODE'] = 'hub'
+    }
+    // Run Cline in-process (per-turn CLI process) instead of delegating to the
+    // background hub daemon. When the hub owns the session, the CLI child is
+    // only a stream client, so aborting the thread cannot stop the in-flight
+    // run and headless tool approvals never reach an interactive session. A
+    // local backend keeps the session in this process: killing it aborts the
+    // turn, and the desktop approval bridge below can answer tool requests.
+    env['CLINE_SESSION_BACKEND_MODE'] = 'local'
+
+    let onProcessExit: (() => void) | undefined
+    if (options.settings.permissionLevel !== 'full_access') {
+      const bridge = await this.startApprovalBridge(
+        session.id,
+        projectPath,
+        options.readOnly === true ? 'read_only' : 'auto_review'
+      )
+      env['CLINE_TOOL_APPROVAL_MODE'] = 'desktop'
+      env['CLINE_TOOL_APPROVAL_DIR'] = bridge.directory
+      onProcessExit = () => this.stopApprovalBridge(session.id)
     }
 
-    return { command: 'cline', args, env }
+    return { command: 'cline', args, env, ...(onProcessExit ? { onProcessExit } : {}) }
+  }
+
+  private async startApprovalBridge(
+    sessionId: string,
+    projectPath: string,
+    mode: 'read_only' | 'auto_review'
+  ): Promise<ClineApprovalBridge> {
+    const directory = join(this.storage.resolve('drivers/cline'), 'approvals', sessionId)
+    await mkdir(directory, { recursive: true })
+    const policy = new PermissionPolicy({ projectRoot: projectPath, mode: 'auto_review' })
+    const handled = new Set<string>()
+    const pending = new Map<string, Promise<void>>()
+    const sweep = (): void => {
+      void this.sweepApprovalRequests(directory, projectPath, policy, mode === 'read_only', handled, pending)
+    }
+    const timer = setInterval(sweep, 250)
+    timer.unref()
+    const bridge: ClineApprovalBridge = { directory, timer, handled }
+    this.approvalBridges.set(sessionId, bridge)
+    sweep()
+    return bridge
+  }
+
+  private async sweepApprovalRequests(
+    directory: string,
+    projectPath: string,
+    policy: PermissionPolicy,
+    readOnly: boolean,
+    handled: Set<string>,
+    pending: Map<string, Promise<void>>
+  ): Promise<void> {
+    let entries: string[]
+    try {
+      // Cline names request files `<sessionId>.request.<requestId>.json` and
+      // waits for `<sessionId>.decision.<requestId>.json`.
+      entries = (await readdir(directory)).filter((entry) => /\.request\.[^.]+\.json$/u.test(entry))
+    } catch {
+      return
+    }
+    for (const entry of entries) {
+      if (handled.has(entry) || pending.has(entry)) continue
+      const requestPath = join(directory, entry)
+      const decisionPath = join(directory, entry.replace(/\.request\./u, '.decision.'))
+      pending.set(
+        entry,
+        (async () => {
+          try {
+            const raw = await readFile(requestPath, 'utf8')
+            const payload: unknown = JSON.parse(raw)
+            const request = clineApprovalRequest((payload as Record<string, unknown>) ?? {})
+            // Read-only turns only permit read tools; everything else is denied
+            // outright because the CLI can never surface an interactive prompt.
+            const decision =
+              readOnly && request.permission !== 'read'
+                ? {
+                    approved: false,
+                    reason: 'This prompt is read-only; only read tools are allowed.'
+                  }
+                : policy.evaluate(request)
+            await writeFile(
+              decisionPath,
+              `${JSON.stringify({
+                approved: decision.approved,
+                ...(decision.reason ? { reason: decision.reason } : {})
+              })}\n`,
+              'utf8'
+            )
+            await unlink(requestPath).catch(() => undefined)
+            handled.add(entry)
+          } catch {
+            // Cline may still be streaming the request file (or the JSON is
+            // malformed) — leave the request in place so the next sweep can
+            // revisit it instead of silently denying the tool.
+            Logger.dev('Cline approval request could not be evaluated yet:', {
+              projectPath,
+              entry
+            })
+          } finally {
+            pending.delete(entry)
+          }
+        })()
+      )
+    }
+  }
+
+  private stopApprovalBridge(sessionId: string): void {
+    const bridge = this.approvalBridges.get(sessionId)
+    if (!bridge) return
+    clearInterval(bridge.timer)
+    this.approvalBridges.delete(sessionId)
+    void rm(bridge.directory, { recursive: true, force: true }).catch(() => undefined)
   }
 
   /**
@@ -1140,7 +1276,15 @@ export class ClineDriver extends PersistentCliDriver {
     return mapClineRecord(value, context)
   }
 
-  dispose(): void {
+  override async deleteSession(projectPath: string, sessionId: string): Promise<void> {
+    this.stopApprovalBridge(sessionId)
+    await super.deleteSession(projectPath, sessionId)
+  }
+
+  override dispose(): void {
+    for (const sessionId of [...this.approvalBridges.keys()]) {
+      this.stopApprovalBridge(sessionId)
+    }
     this.turnStates.clear()
     this.turnCounts.clear()
     super.dispose()
