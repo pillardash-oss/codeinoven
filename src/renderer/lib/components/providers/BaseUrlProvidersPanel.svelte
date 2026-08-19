@@ -36,16 +36,18 @@
     )
   )
 
-  /** Harnesses selectable in the filter — every base-URL harness plus any harness
-   *  that already has custom providers. */
+  /** Harnesses selectable in the filter — only harnesses that already have at
+   *  least one custom base-URL provider. */
   let filterHarnesses = $derived.by(() => {
-    const entries = baseUrlHarnesses.map((harness) => ({ id: harness.id, name: harness.name }))
-    for (const custom of baseUrlProviderStore.providers) {
-      if (!entries.some((entry) => entry.id === custom.harnessId)) {
-        entries.push({ id: custom.harnessId, name: providerName(custom.harnessId) })
+    const seen: Record<string, true> = {}
+    const byId: Array<{ id: string; name: string }> = []
+    for (const provider of baseUrlProviderStore.providers) {
+      if (!seen[provider.harnessId]) {
+        seen[provider.harnessId] = true
+        byId.push({ id: provider.harnessId, name: providerName(provider.harnessId) })
       }
     }
-    return entries.sort((left, right) => left.name.localeCompare(right.name))
+    return byId.sort((left, right) => left.name.localeCompare(right.name))
   })
 
   /** Multi-select harness filter; empty selection means "all harnesses". */
@@ -119,11 +121,10 @@
   })
 </script>
 
-<section class="mt-6 space-y-4 border-t pt-6">
+<section class="space-y-4">
   <div class="flex items-start justify-between">
     <div>
-      <h2 class="text-base font-semibold">Base URL providers</h2>
-      <p class="mt-0.5 text-xs text-muted">
+      <p class="text-xs text-muted">
         Add custom OpenAI-compatible providers by base URL. Models appear in the picker after the
         next agent turn.
       </p>

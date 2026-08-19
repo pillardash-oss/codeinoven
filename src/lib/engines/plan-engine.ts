@@ -1,7 +1,7 @@
 import { generateId } from '../utils'
 import { ensureFeatureSlug, requireLocalProject } from '../project-artifacts'
 import type { Database } from '../../main/database/database'
-import type { StorageEngine } from '../../main/storage-engine'
+import type { StorageEngine } from '../../main/storage/storage-engine'
 import type { Plan, Checklist, ChecklistItem } from '../types'
 
 export class PlanEngine {

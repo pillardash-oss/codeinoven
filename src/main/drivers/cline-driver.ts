@@ -1,5 +1,7 @@
 import { execFile, spawn } from 'child_process'
-import { mkdir, writeFile } from 'fs/promises'
+import { createHash } from 'crypto'
+import { mkdir, readFile, writeFile } from 'fs/promises'
+import { homedir } from 'os'
 import { join } from 'path'
 import type {
   AgentMessage,
@@ -26,9 +28,10 @@ import type {
   UtilityRuntimePreparationRequest
 } from './driver.interface'
 import { buildHarnessEnvironment } from './cli-environment'
-import type { BaseUrlProviderService } from '../base-url-provider-service'
-import type { SecretVault } from '../secret-vault'
-import type { StorageEngine } from '../storage-engine'
+import { attachmentReferences } from './attachment-reference'
+import type { BaseUrlProviderService } from '../providers/base-url-provider-service'
+import type { SecretVault } from '../storage/secret-vault'
+import type { StorageEngine } from '../storage/storage-engine'
 
 const CLINE_THINKING_LEVELS: Record<string, string> = {
   minimal: 'low',
@@ -41,7 +44,7 @@ const CLINE_THINKING_LEVELS: Record<string, string> = {
 }
 
 const CLINE_CATALOG_URL = 'https://api.cline.bot/api/v1/ai/cline/recommended-models'
-const CLINE_CATALOG_CACHE_TTL_MS = 24 * 60 * 60 * 1000
+const CLINE_CATALOG_CACHE_TTL_MS = 60 * 60 * 1000
 const CLINE_PASS_PROVIDER_ID = 'cline-pass'
 
 const CLINE_THINKING_PRESETS: ThinkingPreset[] = [
@@ -124,7 +127,7 @@ const CLINE_FALLBACK_CATALOG: ProviderCatalog[] = [
         name: 'DeepSeek V4 Flash',
         reasoning: true,
         thinkingPresets: CLINE_THINKING_PRESETS,
-        attachment: true,
+        attachment: false,
         toolcall: true
       }
     ]
@@ -133,6 +136,11 @@ const CLINE_FALLBACK_CATALOG: ProviderCatalog[] = [
 
 let clineCatalogCache: { cachedAt: number; catalogs: ProviderCatalog[] } | null = null
 let clineFreeModelIds: string[] = []
+let clinePassEntitlementCache: {
+  checkedAt: number
+  tokenFingerprint: string
+  subscribed: boolean
+} | null = null
 
 function cloneCatalogs(catalogs: ProviderCatalog[]): ProviderCatalog[] {
   return catalogs.map((catalog) => ({ ...catalog, models: [...catalog.models] }))
@@ -144,15 +152,25 @@ function mapRemoteClineModel(value: unknown, providerId: string): ProviderModel 
   if (!id) return null
   const name = stringValue(raw?.['name']) ?? id
   const reasoning = /reason|opus|sonnet|gemini|qwen|deepseek|kimi|mimo/iu.test(`${id} ${name}`)
+  // Prefer a structured vision capability when the catalog reports one;
+  // otherwise default to vision-capable except for known text-only families.
+  const capabilities = record(raw?.['capabilities'])
+  const explicitVision = capabilities?.['vision'] ?? capabilities?.['attachment']
+  const attachment = explicitVision === undefined ? !isTextOnlyModel(id) : explicitVision !== false
   return {
     id,
     providerId,
     name,
     reasoning,
     ...(reasoning ? { thinkingPresets: CLINE_THINKING_PRESETS } : {}),
-    attachment: /gemini|gpt-4o|kimi|qwen|mimo/iu.test(`${id} ${name}`),
+    attachment,
     toolcall: true
   }
+}
+
+/** Known text-only model families that cannot see images. */
+function isTextOnlyModel(modelId: string): boolean {
+  return /deepseek/iu.test(modelId)
 }
 
 function uniqueModels(models: ProviderModel[]): ProviderModel[] {
@@ -192,6 +210,82 @@ function mapRemoteClineCatalog(value: unknown): ProviderCatalog[] {
     })
   }
   return catalogs
+}
+
+/** Read the OAuth access token Cline itself owns without copying or mutating it. */
+async function readClineAccessToken(): Promise<string | undefined> {
+  try {
+    const content = await readFile(
+      join(homedir(), '.cline', 'data', 'settings', 'providers.json'),
+      'utf8'
+    )
+    const store = record(JSON.parse(content) as unknown)
+    const providers = record(store?.['providers'])
+    const cline = record(providers?.['cline'])
+    const settings = record(cline?.['settings'])
+    const auth = record(settings?.['auth'])
+    return stringValue(auth?.['accessToken'])
+  } catch {
+    return undefined
+  }
+}
+
+/** Only expose subscription-gated models when Cline confirms an active plan. */
+async function hasClinePassSubscription(): Promise<boolean> {
+  const accessToken = await readClineAccessToken()
+  if (!accessToken) return false
+  const tokenFingerprint = createHash('sha256').update(accessToken).digest('hex')
+  if (
+    clinePassEntitlementCache?.tokenFingerprint === tokenFingerprint &&
+    Date.now() - clinePassEntitlementCache.checkedAt < 5 * 60 * 1000
+  ) {
+    return clinePassEntitlementCache.subscribed
+  }
+  let subscribed = false
+  try {
+    const response = await fetch('https://api.cline.bot/api/v1/users/me/plan', {
+      headers: { Authorization: `Bearer ${accessToken}` },
+      signal: AbortSignal.timeout(5_000)
+    })
+    if (response.ok) {
+      const envelope = record(await response.json())
+      const currentPlan = record(envelope?.['data'])
+      subscribed = record(currentPlan?.['plan']) !== null
+    }
+  } catch {
+    // A plan that cannot be confirmed must not expose subscription-only models.
+  }
+  clinePassEntitlementCache = { checkedAt: Date.now(), tokenFingerprint, subscribed }
+  return subscribed
+}
+
+/**
+ * Cline allows its free models through both the Cline and ClinePass providers.
+ * Keep those visible for every signed-in account, while filtering the paid
+ * ClinePass set unless the account API confirms an active subscription.
+ */
+function filterClineCatalogForAccount(
+  catalogs: ProviderCatalog[],
+  hasClinePass: boolean
+): ProviderCatalog[] {
+  const cline = catalogs.find((catalog) => catalog.id === 'cline')
+  const clinePass = catalogs.find((catalog) => catalog.id === CLINE_PASS_PROVIDER_ID)
+  const freeIds = new Set(clineFreeModelIds)
+  const freeModels = (cline?.models ?? [])
+    .filter((model) => freeIds.has(model.id))
+    .map((model) => ({ ...model, providerId: CLINE_PASS_PROVIDER_ID }))
+  const subscriptionModels = hasClinePass ? (clinePass?.models ?? []) : []
+  const availableClinePassModels = uniqueModels([...freeModels, ...subscriptionModels])
+  const available = catalogs.filter((catalog) => catalog.id !== CLINE_PASS_PROVIDER_ID)
+  if (availableClinePassModels.length > 0) {
+    available.push({
+      id: CLINE_PASS_PROVIDER_ID,
+      name: 'ClinePass',
+      harnessId: 'cline',
+      models: availableClinePassModels
+    })
+  }
+  return available
 }
 
 async function fetchClineCatalog(): Promise<ProviderCatalog[]> {
@@ -601,6 +695,29 @@ function mapClineRecordToEvents(
     const questionType = ask ?? 'tool'
     const questionText = text || `Allow ${questionType}?`
 
+    if (questionType === 'tool') {
+      return {
+        events: [
+          {
+            type: 'message.part.updated',
+            sessionId,
+            part: {
+              type: 'tool',
+              id: partId,
+              messageID: messageId,
+              callID: partId,
+              tool: 'permission',
+              state: {
+                status: 'running',
+                input: { prompt: questionText, ask: questionType },
+                title: questionText
+              }
+            }
+          }
+        ]
+      }
+    }
+
     return {
       events: [
         {
@@ -674,12 +791,17 @@ export class ClineDriver extends PersistentCliDriver {
   readonly id = 'cline'
   readonly name = 'Cline'
   readonly capabilities: HarnessCapabilities = {
+    runtimeTopology: {
+      kind: 'shared_daemon',
+      scope: 'application',
+      sessionWorkers: true
+    },
     streaming: true,
     steering: false,
-    nativeResume: false,
+    nativeResume: true,
     messageHistory: 'mirrored',
     interactivePermissions: false,
-    attachments: false,
+    attachments: true,
     commands: false,
     providerCatalog: true,
     sessionStatus: false,
@@ -691,6 +813,7 @@ export class ClineDriver extends PersistentCliDriver {
 
   private turnStates = new Map<string, ClineTurnState>()
   private turnCounts = new Map<string, number>()
+  private hubReady: Promise<void> | null = null
 
   constructor(
     storage: StorageEngine,
@@ -732,6 +855,30 @@ export class ClineDriver extends PersistentCliDriver {
     })
   }
 
+  /** Start or reuse Cline's singleton hub only when a turn is actually sent. */
+  private async ensureHubReady(projectPath: string): Promise<void> {
+    this.hubReady ??= new Promise<void>((resolve, reject) => {
+      const child = spawn('cline', ['hub', 'ensure'], {
+        cwd: projectPath,
+        env: buildHarnessEnvironment(),
+        stdio: ['ignore', 'ignore', 'pipe']
+      })
+      let stderr = ''
+      child.stderr?.on('data', (chunk: Buffer) => {
+        stderr += chunk.toString()
+      })
+      child.on('error', (error) => reject(new Error(`Cline hub is unavailable: ${error.message}`)))
+      child.on('exit', (code) => {
+        if (code === 0) resolve()
+        else reject(new Error(`Cline hub startup failed${stderr ? `: ${stderr.trim()}` : ''}`))
+      })
+    }).catch((error: unknown) => {
+      this.hubReady = null
+      throw error
+    })
+    await this.hubReady
+  }
+
   async listProviders(): Promise<ProviderCatalog[]> {
     const customProviders = this.baseUrlProviders
       ? await this.baseUrlProviders.listEnabled(this.id)
@@ -748,7 +895,7 @@ export class ClineDriver extends PersistentCliDriver {
             name: model.name || model.id,
             reasoning: model.reasoning,
             thinkingPresets: model.reasoning ? CLINE_THINKING_PRESETS : undefined,
-            attachment: false,
+            attachment: true,
             toolcall: true,
             ...(model.contextWindow ? { contextWindow: model.contextWindow } : {})
           }))
@@ -762,18 +909,15 @@ export class ClineDriver extends PersistentCliDriver {
     if (!(await isClineAvailable())) {
       return appendCustom(cloneCatalogs(CLINE_FALLBACK_CATALOG))
     }
-    // A cached remote catalog (fetched on a previous open) is returned as-is.
-    if (clineCatalogCache && Date.now() - clineCatalogCache.cachedAt < CLINE_CATALOG_CACHE_TTL_MS) {
-      return appendCustom(cloneCatalogs(clineCatalogCache.catalogs))
-    }
-    // Otherwise never block the caller on the network: hand back the fallback
-    // immediately and enrich the cache in the background. When the remote list
-    // lands, a `catalog.updated` event lets the chat engine re-merge and push
-    // the fresher catalog to open pickers.
-    void refreshClineCatalogOnce().then((remote) => {
-      if (remote.length > 0) this.emit({ type: 'catalog.updated', harnessId: 'cline' })
-    })
-    return appendCustom(cloneCatalogs(CLINE_FALLBACK_CATALOG))
+    // The chat engine already gives slow driver probes a background enrichment
+    // path. Await Cline's live feed here so that enrichment persists the real
+    // free-model list instead of persisting the baked-in fallback for a day.
+    const [remote, hasClinePass] = await Promise.all([
+      refreshClineCatalogOnce(),
+      hasClinePassSubscription()
+    ])
+    const discovered = remote.length > 0 ? remote : cloneCatalogs(CLINE_FALLBACK_CATALOG)
+    return appendCustom(filterClineCatalogForAccount(discovered, hasClinePass))
   }
 
   async generateTitle(projectPath: string, options: GenerateTitleOptions): Promise<string | null> {
@@ -831,12 +975,22 @@ export class ClineDriver extends PersistentCliDriver {
     }
 
     if (Object.keys(mcpServers).length === 0) return {}
+    const customProvider = await this.resolveCustomProvider(request.providerId)
+    if (!customProvider) {
+      // Cline stores its account access and refresh tokens inside the active
+      // data directory. Pointing an authenticated Cline/ClinePass turn at an
+      // ephemeral utility directory hides those tokens and makes every request
+      // fail as unauthorized. Cline has no per-turn MCP config flag, so keep the
+      // user's real profile authoritative and do not advertise an unreachable
+      // gateway. App-owned custom providers remain isolated below.
+      return { gatewayAvailable: false }
+    }
     return {
-      args: ['--data-dir', '{{runtime-directory}}/cline-data'],
+      args: ['--data-dir', '{{runtime-directory}}/config/cline-data'],
       configFiles: [
         {
           id: 'cline-mcp',
-          relativePath: 'cline-data/data/settings/cline_mcp_settings.json',
+          relativePath: 'cline-data/settings/cline_mcp_settings.json',
           content: JSON.stringify({ mcpServers }, null, 2)
         }
       ]
@@ -848,11 +1002,8 @@ export class ClineDriver extends PersistentCliDriver {
     session: PersistentCliSession,
     options: SendPromptOptions
   ): Promise<CliTurnCommand> {
-    if (options.attachments.length) {
-      throw new Error('Cline CLI driver does not support prompt attachments')
-    }
-
     const args: string[] = ['--json']
+    if (session.nativeSessionId) args.push('--id', session.nativeSessionId)
     const previousTurnCount = Math.max(
       this.turnCounts.get(session.id) ?? 0,
       session.messages.filter((message) => message.role === 'assistant').length
@@ -868,10 +1019,26 @@ export class ClineDriver extends PersistentCliDriver {
     })
 
     const customProvider = await this.resolveCustomProvider(options.settings.providerId)
-    const modelId =
+    let modelId =
       options.settings.modelId && options.settings.modelId !== 'default'
         ? options.settings.modelId
         : (customProvider?.models[0]?.id ?? options.settings.modelId)
+
+    if (
+      !customProvider &&
+      options.settings.providerId === CLINE_PASS_PROVIDER_ID &&
+      modelId?.startsWith(`${CLINE_PASS_PROVIDER_ID}/`) &&
+      !(await hasClinePassSubscription())
+    ) {
+      // Existing threads may still point at a subscription model saved before
+      // account-aware discovery was introduced. Route those turns to a live
+      // free model so retry works immediately without another setup step.
+      await fetchClineCatalog()
+      modelId =
+        clineFreeModelIds.find((id) => /deepseek.*flash/iu.test(id)) ??
+        clineFreeModelIds[0] ??
+        modelId
+    }
 
     if (customProvider) {
       // Cline keeps a single `openai-compatible` slot, so a custom endpoint is
@@ -900,12 +1067,20 @@ export class ClineDriver extends PersistentCliDriver {
 
     // Cline 3 treats a single-word positional prompt as an unquoted command.
     // A trailing newline preserves the prompt while selecting headless prompt mode.
-    const prompt = /\s/u.test(options.text) ? options.text : `${options.text}\n`
+    const attached = await attachmentReferences(options.attachments)
+    const promptBody = [attached, options.text].filter(Boolean).join('\n\n')
+    const prompt = /\s/u.test(promptBody) ? promptBody : `${promptBody}\n`
     args.push(prompt)
 
     const env = buildHarnessEnvironment()
     if (customProvider) {
       await this.seedCustomProvider(customProvider, modelId, session, env)
+    } else {
+      await this.ensureHubReady(projectPath)
+      // The CLI remains a stream client, while Cline's singleton hub owns the
+      // session and its spoke. Never silently fall back to a private local
+      // backend for an ordinary CodeInOven turn.
+      env['CLINE_SESSION_BACKEND_MODE'] = 'hub'
     }
 
     return { command: 'cline', args, env }
@@ -926,7 +1101,7 @@ export class ClineDriver extends PersistentCliDriver {
   ): Promise<void> {
     const runtime = this.utilityRuntime(session.id)
     const dataDir = runtime
-      ? join(runtime.directory, 'cline-data')
+      ? join(runtime.directory, 'config', 'cline-data')
       : join(this.storage.resolve('drivers/cline'), 'isolated')
     const apiKey = provider.apiKeyRef
       ? await this.secretVault?.resolve(provider.apiKeyRef)

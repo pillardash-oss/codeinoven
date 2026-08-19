@@ -10,7 +10,8 @@
     renderRichMarkdown,
     selectedBlockTag,
     serializeRichMarkdown,
-    syncCodeBlockLanguages
+    syncCodeBlockLanguages,
+    unlistListItem
   } from './rich-markdown'
   import type { RichInlineBadge } from './rich-markdown'
 
@@ -23,8 +24,10 @@
     containerClass?: string
     autofocus?: boolean
     disabled?: boolean
-    submitOnEnter?: boolean
     onValueChange?: (value: string) => void
+    /** Fired only by Cmd/Ctrl+Enter (send) or Cmd/Ctrl+Shift+Enter (steer).
+     *  `direct` is true for the steer combo, false/undefined for plain send —
+     *  busy callers queue on send and force-deliver on steer. */
     onSubmit?: (direct?: boolean) => void
     onPaste?: (event: ClipboardEvent) => void
     inlineBadges?: readonly RichInlineBadge[]
@@ -41,7 +44,6 @@
     containerClass = '',
     autofocus = false,
     disabled = false,
-    submitOnEnter = false,
     onValueChange,
     onSubmit,
     onPaste,
@@ -73,11 +75,21 @@
   let lastHistoryInputType: string | null = null
   let lastHistoryAt = 0
 
+  /** Length a non-editable inline token occupies in serialized markdown — inline
+   *  badges keep their stored value, footnote superscripts their `[^label]`. */
+  function inlineTokenLength(node: HTMLElement): number | null {
+    if (node.dataset.editorInlineBadge === 'true') return node.dataset.editorValue?.length ?? 0
+    const footnote = node.dataset.editorFootnoteRef
+    if (footnote !== undefined) return footnote.length + 3
+    return null
+  }
+
   function nodeLength(node: Node): number {
     if (node.nodeType === Node.TEXT_NODE) return node.textContent?.length ?? 0
     if (node instanceof HTMLBRElement) return 1
-    if (node instanceof HTMLElement && node.dataset.editorInlineBadge === 'true') {
-      return node.dataset.editorValue?.length ?? 0
+    if (node instanceof HTMLElement) {
+      const tokenLength = inlineTokenLength(node)
+      if (tokenLength !== null) return tokenLength
     }
     return Array.from(node.childNodes).reduce((total, child) => total + nodeLength(child), 0)
   }
@@ -132,10 +144,10 @@
         remaining = Math.max(0, remaining - 1)
         return null
       }
-      if (node instanceof HTMLElement && node.dataset.editorInlineBadge === 'true') {
+      if (node instanceof HTMLElement && inlineTokenLength(node) !== null) {
         const parent = node.parentNode
         const index = parent ? Array.from(parent.childNodes).indexOf(node) : -1
-        const length = node.dataset.editorValue?.length ?? 0
+        const length = inlineTokenLength(node) ?? 0
         if (parent && index >= 0 && remaining <= length) {
           return { node: parent, offset: index + (remaining === 0 ? 0 : 1) }
         }
@@ -175,6 +187,84 @@
     const anchor = pointAtOffset(editor, bookmark.anchor)
     const focus = pointAtOffset(editor, bookmark.focus)
     selection.setBaseAndExtent(anchor.node, anchor.offset, focus.node, focus.offset)
+  }
+
+  /** Visible characters in a text node — zero-width caret anchors are stripped by
+   *  serialization, so they must never shift a bookmark across a serialize → re-render
+   *  round trip (which always drops them from the DOM). */
+  function visibleTextLength(text: string | null | undefined): number {
+    return (text ?? '').replace(/\u200b/g, '').length
+  }
+
+  /** Characters of a node up to an offset, ignoring zero-width anchors. */
+  function visibleCharsBefore(text: string, offset: number): number {
+    let count = 0
+    const length = Math.min(offset, text.length)
+    for (let index = 0; index < length; index += 1) {
+      if (text.charCodeAt(index) !== 0x200b) count += 1
+    }
+    return count
+  }
+
+  function nodeVisibleLength(node: Node): number {
+    if (node.nodeType === Node.TEXT_NODE) return visibleTextLength(node.textContent)
+    if (node instanceof HTMLBRElement) return 1
+    if (node instanceof HTMLElement) {
+      const tokenLength = inlineTokenLength(node)
+      if (tokenLength !== null) return tokenLength
+    }
+    return Array.from(node.childNodes).reduce((total, child) => total + nodeVisibleLength(child), 0)
+  }
+
+  /** Caret position measured in the same coordinates a freshly re-rendered editor
+   *  will use (zero-width anchors are absent there), so a bookmark taken on the old
+   *  DOM lands exactly where the caret belongs after `replaceEditorContent`. */
+  function pointVisibleOffset(root: Node, target: Node, targetOffset: number): number | null {
+    let offset = 0
+
+    function visit(node: Node): boolean {
+      if (node === target) {
+        if (node.nodeType === Node.TEXT_NODE) {
+          offset += visibleCharsBefore(node.textContent ?? '', targetOffset)
+        } else {
+          const children = Array.from(node.childNodes).slice(0, targetOffset)
+          offset += children.reduce((total, child) => total + nodeVisibleLength(child), 0)
+        }
+        return true
+      }
+      if (node.nodeType === Node.TEXT_NODE) {
+        offset += visibleTextLength(node.textContent)
+        return false
+      }
+      if (node instanceof HTMLBRElement) {
+        offset += 1
+        return false
+      }
+      for (const child of Array.from(node.childNodes)) {
+        if (visit(child)) return true
+      }
+      return false
+    }
+
+    return visit(root) ? offset : null
+  }
+
+  /** Bookmarks the current caret in visible coordinates so it survives a full
+   *  re-render of the editor content. */
+  function captureVisibleSelection(): SelectionBookmark | null {
+    if (!editor) return null
+    const selection = window.getSelection()
+    if (
+      !selection?.anchorNode ||
+      !selection.focusNode ||
+      !editor.contains(selection.anchorNode) ||
+      !editor.contains(selection.focusNode)
+    ) {
+      return null
+    }
+    const anchor = pointVisibleOffset(editor, selection.anchorNode, selection.anchorOffset)
+    const focus = pointVisibleOffset(editor, selection.focusNode, selection.focusOffset)
+    return anchor === null || focus === null ? null : { anchor, focus }
   }
 
   function captureHistoryEntry(): HistoryEntry | null {
@@ -298,7 +388,7 @@
         ? selection.anchorNode
         : selection.anchorNode.parentElement
     const supportsCommands = !anchorElement?.closest(
-      '[data-editor-codeblock], [data-editor-inline-badge], [data-editor-special], table, pre, code'
+      '[data-editor-codeblock], [data-editor-inline-badge], [data-editor-footnote-ref], [data-editor-special], table, pre, code'
     )
     const range = document.createRange()
     range.selectNodeContents(editor)
@@ -474,22 +564,40 @@
 
     if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
       const selection = window.getSelection()
-      const codeBlock = selection?.anchorNode?.parentElement?.closest?.(
+      let codeBlock = selection?.anchorNode?.parentElement?.closest?.(
         '[data-editor-codeblock]'
       ) as HTMLElement | null
+      // A collapsed caret can also sit at the editor level, stranded right after a
+      // trailing code block (or before a leading one) — e.g. after pasting text
+      // that ends in a code block, or when autofocus lands on a draft that ends in
+      // one. ArrowDown/ArrowUp must still be able to exit the block then.
+      const stranded =
+        selection?.isCollapsed &&
+        selection.anchorNode === editor &&
+        ((event.key === 'ArrowDown' &&
+          selection.anchorOffset === editor.childNodes.length &&
+          editor.lastElementChild?.matches('[data-editor-codeblock]')) ||
+          (event.key === 'ArrowUp' &&
+            selection.anchorOffset === 0 &&
+            editor.firstElementChild?.matches('[data-editor-codeblock]')))
+      if (!codeBlock && stranded) {
+        codeBlock = (
+          event.key === 'ArrowDown' ? editor.lastElementChild : editor.firstElementChild
+        ) as HTMLElement | null
+      }
       if (codeBlock) {
         const codeEl = codeBlock.querySelector('code')
         if (!codeEl) return
-        const atEnd = event.key === 'ArrowDown' && isCursorAtBoundary(codeEl, false)
-        const atStart = event.key === 'ArrowUp' && isCursorAtBoundary(codeEl, true)
+        const atEnd = event.key === 'ArrowDown' && (stranded || isCursorAtBoundary(codeEl, false))
+        const atStart = event.key === 'ArrowUp' && (stranded || isCursorAtBoundary(codeEl, true))
         if (atEnd || atStart) {
           event.preventDefault()
           const p = document.createElement('p')
           p.innerHTML = '<br>'
-          if (atEnd) {
-            codeBlock.parentNode?.insertBefore(p, codeBlock.nextSibling)
-          } else {
+          if (atStart) {
             codeBlock.parentNode?.insertBefore(p, codeBlock)
+          } else {
+            codeBlock.parentNode?.insertBefore(p, codeBlock.nextSibling)
           }
           emitEditorValue()
           placeCaretAtEnd(p)
@@ -510,6 +618,15 @@
         event.preventDefault()
         deleteCodeBlock(prevSibling)
         return
+      }
+      if (paragraph.tagName === 'LI' && isCursorAtBoundary(paragraph, true)) {
+        const historyEntry = captureHistoryEntry()
+        if (unlistListItem(editor, paragraph)) {
+          event.preventDefault()
+          emitEditorValue()
+          commitHistory(historyEntry)
+          publishCaretText()
+        }
       }
     }
 
@@ -548,14 +665,27 @@
         return
       }
 
+      // Cmd/Ctrl+Enter sends; Cmd/Ctrl+Shift+Enter force-sends (steers) the
+      // message into the live turn mid-turn. Checked before the Shift+Enter
+      // soft-break branch so the modifier combos always submit instead of
+      // inserting a newline. A bare Enter never submits.
+      if (modifier && onSubmit) {
+        event.preventDefault()
+        onSubmit(event.shiftKey)
+        return
+      }
+
       const blockTag = selectedBlockTag(editor)
 
-      if (event.shiftKey && submitOnEnter) {
+      // Shift+Enter always inserts a soft line break (never a new list item,
+      // never a submit) — regardless of whether this editor can submit.
+      if (event.shiftKey) {
         const historyEntry = captureHistoryEntry()
         if (insertMarkdownLineBreak(editor)) {
           event.preventDefault()
           emitEditorValue()
           commitHistory(historyEntry)
+          publishCaretText()
         }
         return
       }
@@ -565,16 +695,6 @@
         return
       }
     }
-    if (event.key !== 'Enter' || !onSubmit) return
-    if (modifier) {
-      event.preventDefault()
-      onSubmit(true)
-      return
-    }
-    const blockTag = selectedBlockTag(editor)
-    if (!submitOnEnter || (blockTag !== 'P' && blockTag !== 'DIV')) return
-    event.preventDefault()
-    onSubmit()
   }
 
   function nodeHasText(node: Node): boolean {
@@ -648,15 +768,21 @@
     if (!editor) return
     const target = event.target as HTMLElement | null
     const deleteButton = target?.closest<HTMLElement>('[data-editor-codeblock-delete]')
-    if (!deleteButton) {
+    if (deleteButton) {
+      event.preventDefault()
+      event.stopPropagation()
+      const codeBlock = deleteButton.closest<HTMLElement>('[data-editor-codeblock]')
+      if (!codeBlock || !editor.contains(codeBlock)) return
+      deleteCodeBlock(codeBlock)
       publishCaretText()
       return
     }
-    event.preventDefault()
-    event.stopPropagation()
-    const codeBlock = deleteButton.closest<HTMLElement>('[data-editor-codeblock]')
-    if (!codeBlock || !editor.contains(codeBlock)) return
-    deleteCodeBlock(codeBlock)
+    // Links render for recognition but must never navigate while editing.
+    if (target?.closest('a[data-editor-link]')) {
+      event.preventDefault()
+      publishCaretText()
+      return
+    }
     publishCaretText()
   }
 
@@ -682,8 +808,31 @@
       return
     }
     const markdown = serializeRichMarkdown(editor)
+    // `insertPlainText` leaves the caret right after the pasted text. Re-rendering
+    // the whole editor would otherwise drop that caret to the end of the document,
+    // so bookmark it first and restore it onto the freshly rendered content.
+    const bookmark = captureVisibleSelection()
     replaceEditorContent(markdown)
-    placeCaretAtEnd(editor)
+    if (bookmark) restoreSelection(bookmark)
+    else placeCaretAtEnd(editor)
+    // The bookmark is measured on the pre-render DOM, which can be much longer than
+    // the re-rendered markdown (fence markers, soft breaks and code headers collapse
+    // away), so it overshoots and strands the caret at the editor level — typically
+    // right after a trailing code block, where typing is impossible and ArrowDown
+    // cannot leave the block. Snap a stranded caret to the end of the last block
+    // (inside a trailing code block's <code> element), which is where the caret
+    // belongs after a paste that ends in a code block.
+    const selection = window.getSelection()
+    if (selection?.anchorNode === editor && editor.lastElementChild) {
+      const lastBlock = editor.lastElementChild as HTMLElement
+      if (lastBlock.matches('[data-editor-codeblock]')) {
+        const code = lastBlock.querySelector('code')
+        if (code) placeCaretAtEnd(code)
+        else placeCaretAtEnd(lastBlock)
+      } else {
+        placeCaretAtEnd(lastBlock)
+      }
+    }
     if (markdown !== value) {
       value = markdown
       onValueChange?.(markdown)

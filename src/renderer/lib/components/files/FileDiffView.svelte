@@ -1,219 +1,163 @@
 <script lang="ts">
+  import { ChevronDown, ChevronRight } from '@lucide/svelte'
   import type { TurnCheckpointFileDiff } from '$shared/types'
+  import DiffRows from './DiffRows.svelte'
+  import { DEFAULT_CONTEXT_LINES, diffDetails, type DiffHunk, type DiffLine } from './file-diff'
+  import { appConfigState } from '$lib/stores/app-config.svelte'
 
   interface Props {
     diff: TurnCheckpointFileDiff
+    /** Caps the height of the scrollable diff area (e.g. "24rem"). */
+    maxHeight?: string
   }
 
-  interface DiffLine {
-    kind: 'context' | 'added' | 'deleted'
-    text: string
-    beforeLine?: number
-    afterLine?: number
+  let { diff, maxHeight = undefined }: Props = $props()
+  let details = $derived(diffDetails(diff.before, diff.after))
+  /** Hunks with more changed lines than this render a notice instead of lines. */
+  let maxDiffLines = $derived(appConfigState.maxDiffLines)
+
+  const REVEAL_STEP = 10
+
+  interface RevealState {
+    above: number
+    below: number
   }
 
-  interface DiffHunk {
-    startIndex: number
+  let reveal = $state<Record<string, RevealState>>({})
+  /** Folds a single hunk (its changed block), not the whole file. */
+  let foldedHunks = $state<Record<string, boolean>>({})
+
+  interface HunkWindow {
     lines: DiffLine[]
+    aboveHidden: number
+    belowHidden: number
     beforeStart: number
     beforeCount: number
     afterStart: number
     afterCount: number
   }
 
-  let { diff }: Props = $props()
-  const CONTEXT_LINES = 3
-
-  function sourceLines(source: string | undefined): string[] {
-    if (source === undefined) return []
-    const lines = source.split('\n')
-    if (lines.at(-1) === '') lines.pop()
-    return lines
-  }
-
-  function fallbackDiff(before: string[], after: string[]): DiffLine[] {
-    let prefix = 0
-    while (prefix < before.length && prefix < after.length && before[prefix] === after[prefix]) {
-      prefix += 1
-    }
-    let suffix = 0
-    while (
-      suffix < before.length - prefix &&
-      suffix < after.length - prefix &&
-      before[before.length - suffix - 1] === after[after.length - suffix - 1]
-    ) {
-      suffix += 1
-    }
-    return [
-      ...before.slice(0, prefix).map((text, index): DiffLine => ({
-        kind: 'context',
-        text,
-        beforeLine: index + 1,
-        afterLine: index + 1
-      })),
-      ...before.slice(prefix, before.length - suffix).map((text, index): DiffLine => ({
-        kind: 'deleted',
-        text,
-        beforeLine: prefix + index + 1
-      })),
-      ...after.slice(prefix, after.length - suffix).map((text, index): DiffLine => ({
-        kind: 'added',
-        text,
-        afterLine: prefix + index + 1
-      })),
-      ...before.slice(before.length - suffix).map((text, index): DiffLine => ({
-        kind: 'context',
-        text,
-        beforeLine: before.length - suffix + index + 1,
-        afterLine: after.length - suffix + index + 1
-      }))
-    ]
-  }
-
-  function lineDiff(before: string | undefined, after: string | undefined): DiffLine[] {
-    const beforeLines = sourceLines(before)
-    const afterLines = sourceLines(after)
-    if (beforeLines.length * afterLines.length > 500_000) {
-      return fallbackDiff(beforeLines, afterLines)
-    }
-
-    const lengths = Array.from(
-      { length: beforeLines.length + 1 },
-      () => new Uint32Array(afterLines.length + 1)
+  function hunkWindow(hunk: DiffHunk): HunkWindow {
+    const state = reveal[hunk.id] ?? { above: 0, below: 0 }
+    const above = Math.min(DEFAULT_CONTEXT_LINES + state.above, hunk.contextBefore)
+    const below = Math.min(DEFAULT_CONTEXT_LINES + state.below, hunk.contextAfter)
+    const start = hunk.changeStart - above
+    const end = hunk.changeEnd + below
+    const lines = details.lines.slice(start, end + 1)
+    const beforeLines = lines.flatMap((line) =>
+      line.beforeLine === undefined ? [] : [line.beforeLine]
     )
-    for (let beforeIndex = beforeLines.length - 1; beforeIndex >= 0; beforeIndex -= 1) {
-      for (let afterIndex = afterLines.length - 1; afterIndex >= 0; afterIndex -= 1) {
-        lengths[beforeIndex][afterIndex] =
-          beforeLines[beforeIndex] === afterLines[afterIndex]
-            ? lengths[beforeIndex + 1][afterIndex + 1] + 1
-            : Math.max(lengths[beforeIndex + 1][afterIndex], lengths[beforeIndex][afterIndex + 1])
-      }
+    const afterLines = lines.flatMap((line) =>
+      line.afterLine === undefined ? [] : [line.afterLine]
+    )
+    return {
+      lines,
+      aboveHidden: hunk.contextBefore - above,
+      belowHidden: hunk.contextAfter - below,
+      beforeStart: beforeLines[0] ?? 0,
+      beforeCount: beforeLines.length,
+      afterStart: afterLines[0] ?? 0,
+      afterCount: afterLines.length
     }
-
-    const lines: DiffLine[] = []
-    let beforeIndex = 0
-    let afterIndex = 0
-    while (beforeIndex < beforeLines.length || afterIndex < afterLines.length) {
-      if (
-        beforeIndex < beforeLines.length &&
-        afterIndex < afterLines.length &&
-        beforeLines[beforeIndex] === afterLines[afterIndex]
-      ) {
-        lines.push({
-          kind: 'context',
-          text: beforeLines[beforeIndex],
-          beforeLine: beforeIndex + 1,
-          afterLine: afterIndex + 1
-        })
-        beforeIndex += 1
-        afterIndex += 1
-      } else if (
-        afterIndex < afterLines.length &&
-        (beforeIndex >= beforeLines.length ||
-          lengths[beforeIndex][afterIndex + 1] >= lengths[beforeIndex + 1][afterIndex])
-      ) {
-        lines.push({ kind: 'added', text: afterLines[afterIndex], afterLine: afterIndex + 1 })
-        afterIndex += 1
-      } else {
-        lines.push({ kind: 'deleted', text: beforeLines[beforeIndex], beforeLine: beforeIndex + 1 })
-        beforeIndex += 1
-      }
-    }
-    return lines
   }
 
-  function diffHunks(lines: DiffLine[]): DiffHunk[] {
-    const changedIndexes = lines
-      .map((line, index) => (line.kind === 'context' ? -1 : index))
-      .filter((index) => index >= 0)
-    if (changedIndexes.length === 0) return []
-
-    const ranges: Array<{ start: number; end: number }> = []
-    for (const changedIndex of changedIndexes) {
-      const start = Math.max(0, changedIndex - CONTEXT_LINES)
-      const end = Math.min(lines.length - 1, changedIndex + CONTEXT_LINES)
-      const previous = ranges.at(-1)
-      if (previous && start <= previous.end + 1) {
-        previous.end = Math.max(previous.end, end)
-      } else {
-        ranges.push({ start, end })
-      }
-    }
-
-    return ranges.map(({ start, end }) => {
-      const hunkLines = lines.slice(start, end + 1)
-      const beforeLines = hunkLines.flatMap((line) =>
-        line.beforeLine === undefined ? [] : [line.beforeLine]
-      )
-      const afterLines = hunkLines.flatMap((line) =>
-        line.afterLine === undefined ? [] : [line.afterLine]
-      )
-      return {
-        startIndex: start,
-        lines: hunkLines,
-        beforeStart: beforeLines[0] ?? 0,
-        beforeCount: beforeLines.length,
-        afterStart: afterLines[0] ?? 0,
-        afterCount: afterLines.length
-      }
-    })
+  function expand(hunk: DiffHunk, direction: 'above' | 'below'): void {
+    const state = reveal[hunk.id] ?? { above: 0, below: 0 }
+    const amount = state[direction] + REVEAL_STEP
+    const next = { ...state }
+    if (direction === 'above') next.above = amount
+    else next.below = amount
+    reveal = { ...reveal, [hunk.id]: next }
   }
 
-  let lines = $derived(lineDiff(diff.before, diff.after))
-  let hunks = $derived(diffHunks(lines))
-  let additions = $derived(lines.filter((line) => line.kind === 'added').length)
-  let deletions = $derived(lines.filter((line) => line.kind === 'deleted').length)
+  function toggleHunkFold(hunkId: string): void {
+    foldedHunks = { ...foldedHunks, [hunkId]: !(foldedHunks[hunkId] ?? false) }
+  }
 </script>
+
+{#snippet foldBar(
+  hunk: DiffHunk,
+  additions: number,
+  deletions: number,
+  hidden: number,
+  direction: 'above' | 'below'
+)}
+  {@const isFolded = foldedHunks[hunk.id] ?? false}
+  <div
+    role="button"
+    tabindex="0"
+    aria-expanded={!isFolded}
+    title={isFolded ? 'Show this hunk' : 'Fold this hunk'}
+    class="flex h-8 cursor-pointer items-center gap-2 bg-elevated px-3 text-[10px]"
+    onclick={() => toggleHunkFold(hunk.id)}
+    onkeydown={(e: KeyboardEvent) => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault()
+        toggleHunkFold(hunk.id)
+      }
+    }}
+  >
+    <span class="shrink-0 font-mono tabular-nums text-success">+{additions}</span>
+    <span class="shrink-0 font-mono tabular-nums text-danger">−{deletions}</span>
+    <span class="flex-1"></span>
+    {#if !isFolded && hidden > 0}
+      <button
+        type="button"
+        class="shrink-0 rounded px-1.5 py-0.5 text-[9px] font-medium text-muted transition-colors hover:bg-overlay hover:text-foreground"
+        title={`Reveal ${Math.min(REVEAL_STEP, hidden)} more ${direction === 'above' ? 'lines above' : 'lines below'}`}
+        onclick={(e: MouseEvent) => {
+          e.stopPropagation()
+          expand(hunk, direction)
+        }}
+      >
+        Show {Math.min(REVEAL_STEP, hidden)} more {direction}
+      </button>
+    {/if}
+    {#if isFolded}
+      <ChevronRight size={12} class="shrink-0 text-dimmed" />
+    {:else}
+      <ChevronDown size={12} class="shrink-0 text-dimmed" />
+    {/if}
+  </div>
+{/snippet}
 
 {#if diff.binary}
   <div class="flex h-full items-center justify-center px-6 text-center">
     <p class="text-xs text-dimmed">Binary file · content preview unavailable.</p>
   </div>
 {:else}
-  <div class="flex h-full min-h-0 flex-col bg-app">
+  <div
+    class="flex h-full min-h-0 min-w-0 flex-col bg-app"
+    style={maxHeight ? `max-height:${maxHeight}` : undefined}
+  >
     <div
-      class="flex h-8 shrink-0 items-center gap-2 border-b border-border px-3 font-mono text-[10px]"
+      class="min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto py-1 font-mono text-[11px] leading-5"
     >
-      <span class="text-success">+{additions}</span>
-      <span class="text-danger">−{deletions}</span>
-      {#if diff.truncated}
-        <span class="ml-auto text-warning">Preview truncated at 64 KiB</span>
-      {/if}
-    </div>
-    <div class="min-h-0 flex-1 overflow-auto py-1 font-mono text-[11px] leading-5">
-      {#if hunks.length === 0}
+      {#if details.hunks.length === 0}
         <p class="px-3 py-4 text-center text-dimmed">No textual changes.</p>
       {:else}
-        {#each hunks as hunk (hunk.startIndex)}
+        {#each details.hunks as hunk (hunk.id)}
+          {@const w = hunkWindow(hunk)}
+          {@const hunkAdditions = w.lines.filter((line) => line.kind === 'added').length}
+          {@const hunkDeletions = w.lines.filter((line) => line.kind === 'deleted').length}
+          {@const hunkChanged = hunkAdditions + hunkDeletions}
+          {@const isFolded = foldedHunks[hunk.id] ?? false}
+          {@const limitExceeded = hunkChanged > maxDiffLines}
           <section class="not-first:mt-1 border-y border-border first:border-t-0">
-            <div class="bg-elevated px-3 py-0.5 text-[10px] text-info">
-              @@ -{hunk.beforeStart},{hunk.beforeCount} +{hunk.afterStart},{hunk.afterCount} @@
-            </div>
-            {#each hunk.lines as line, index (`${line.kind}:${line.beforeLine ?? 0}:${line.afterLine ?? 0}:${index}`)}
-              <div
-                class={[
-                  'grid min-w-max grid-cols-[3rem_3rem_1rem_minmax(0,1fr)] px-2',
-                  line.kind === 'added'
-                    ? 'bg-success/10 text-foreground'
-                    : line.kind === 'deleted'
-                      ? 'bg-danger/10 text-foreground'
-                      : 'text-muted'
-                ]}
-              >
-                <span class="select-none pr-2 text-right text-dimmed">{line.beforeLine ?? ''}</span>
-                <span class="select-none pr-2 text-right text-dimmed">{line.afterLine ?? ''}</span>
-                <span
-                  class={line.kind === 'added'
-                    ? 'text-success'
-                    : line.kind === 'deleted'
-                      ? 'text-danger'
-                      : 'text-dimmed'}
-                >
-                  {line.kind === 'added' ? '+' : line.kind === 'deleted' ? '−' : ' '}
-                </span>
-                <span class="whitespace-pre pr-4">{line.text || ' '}</span>
-              </div>
-            {/each}
+            {@render foldBar(hunk, hunkAdditions, hunkDeletions, w.aboveHidden, 'above')}
+            {#if !isFolded}
+              {#if limitExceeded}
+                <div class="px-3 py-3 text-center font-sans text-[11px] text-muted" role="note">
+                  Maximum diff exceeded — this hunk changes {hunkChanged} lines (limit {maxDiffLines}).
+                  The lines are hidden to keep the diff responsive.
+                </div>
+              {:else}
+                <DiffRows lines={w.lines} paneLabels />
+                {#if w.belowHidden > 0}
+                  {@render foldBar(hunk, hunkAdditions, hunkDeletions, w.belowHidden, 'below')}
+                {/if}
+              {/if}
+            {/if}
           </section>
         {/each}
       {/if}

@@ -1,17 +1,23 @@
 <script lang="ts">
-  import { ArrowUpRight, Network, Play, Rows3 } from '@lucide/svelte'
+  import { ArrowUpRight, Loader2, Network, Play, Rows3, Square } from '@lucide/svelte'
+  import Modal from '$lib/components/ui/Modal.svelte'
   import ThreadRow from './ThreadRow.svelte'
-  import type { AssignmentPlan, AssignmentTask, AssignmentTaskStatus, Thread } from '$shared/types'
+  import {
+    isThreadRetryPaused,
+    type AssignmentPlan,
+    type AssignmentTask,
+    type AssignmentTaskStatus,
+    type Thread
+  } from '$shared/types'
 
   interface Props {
     assignment: AssignmentPlan
     threads: Thread[]
     auditThread?: Thread
-    auditState?: Thread['auditState']
+    auditState?: Thread['auditState'] | 'failed'
     finalComplete?: boolean
     reportAvailable?: boolean
     selectedThreadId: string
-    width: number
     coordinatorWorking: boolean
     onOpenAssignment: () => void
     onOpenAuditWork?: () => void
@@ -19,7 +25,8 @@
     onOpenThread: (thread: Thread) => void
     onOpenTask: (task: AssignmentTask) => void
     onResume: () => void
-    onWidthChange: (width: number) => void
+    onStop: () => Promise<void>
+    onResumeAssignment: () => Promise<void>
   }
 
   let {
@@ -30,7 +37,6 @@
     finalComplete = false,
     reportAvailable = false,
     selectedThreadId,
-    width,
     coordinatorWorking,
     onOpenAssignment,
     onOpenAuditWork,
@@ -38,18 +44,15 @@
     onOpenThread,
     onOpenTask,
     onResume,
-    onWidthChange
+    onStop,
+    onResumeAssignment
   }: Props = $props()
 
-  const WIDTH_STORAGE_KEY = 'codeinoven:assignment-coordinator-width'
-  const MIN_WIDTH = 280
-  const MAX_WIDTH = 560
-
-  let resizing = $state(false)
-  let resizePointerId = 0
-  let resizeStartX = 0
-  let resizeStartWidth = 0
-  let resizeCurrentWidth = 0
+  let showStopConfirmation = $state(false)
+  let stopBusy = $state(false)
+  let stopError = $state('')
+  let resumeBusy = $state(false)
+  let resumeError = $state('')
 
   const completed = $derived(
     assignment.content.tasks.filter((task) => task.status === 'completed').length
@@ -66,7 +69,9 @@
     assignment.content.tasks.filter((task) => ['planned', 'ready'].includes(task.status)).length
   )
   const attention = $derived(
-    assignment.content.tasks.filter((task) => ['attention', 'failed'].includes(task.status)).length
+    assignment.content.tasks.filter((task) =>
+      ['attention', 'failed', 'stopped'].includes(task.status)
+    ).length
   )
   const progress = $derived(
     assignment.content.tasks.length === 0
@@ -76,52 +81,17 @@
   const workersWorking = $derived(
     threads.some((worker) => worker.status === 'planning' || worker.status === 'executing')
   )
+  const workersRetryPaused = $derived(threads.some((worker) => isThreadRetryPaused(worker)))
   const stalled = $derived(
-    completed < assignment.content.tasks.length && !coordinatorWorking && !workersWorking
+    assignment.status !== 'stopped' &&
+      completed < assignment.content.tasks.length &&
+      !coordinatorWorking &&
+      !workersWorking &&
+      !workersRetryPaused
   )
-  const auditWorkAvailable = $derived(auditState === 'offered' && !finalComplete)
-
-  function clampWidth(nextWidth: number): number {
-    const viewportMaximum = Math.max(MIN_WIDTH, window.innerWidth - 480)
-    return Math.min(Math.max(nextWidth, MIN_WIDTH), Math.min(MAX_WIDTH, viewportMaximum))
-  }
-
-  function restoreWidth(): void {
-    const stored = Number.parseInt(localStorage.getItem(WIDTH_STORAGE_KEY) ?? '', 10)
-    if (Number.isFinite(stored)) onWidthChange(clampWidth(stored))
-  }
-
-  function startResize(event: PointerEvent & { currentTarget: HTMLButtonElement }): void {
-    resizing = true
-    resizePointerId = event.pointerId
-    resizeStartX = event.clientX
-    resizeStartWidth = width
-    resizeCurrentWidth = width
-    event.currentTarget.setPointerCapture(event.pointerId)
-  }
-
-  function resize(event: PointerEvent): void {
-    if (!resizing || event.pointerId !== resizePointerId) return
-    resizeCurrentWidth = clampWidth(resizeStartWidth + resizeStartX - event.clientX)
-    onWidthChange(resizeCurrentWidth)
-  }
-
-  function finishResize(event: PointerEvent): void {
-    if (!resizing || event.pointerId !== resizePointerId) return
-    resizing = false
-    localStorage.setItem(WIDTH_STORAGE_KEY, String(resizeCurrentWidth))
-  }
-
-  function resizeWithKeyboard(event: KeyboardEvent): void {
-    const step = event.shiftKey ? 48 : 16
-    const nextWidth =
-      event.key === 'ArrowLeft' ? width + step : event.key === 'ArrowRight' ? width - step : null
-    if (nextWidth === null) return
-    event.preventDefault()
-    resizeCurrentWidth = clampWidth(nextWidth)
-    onWidthChange(resizeCurrentWidth)
-    localStorage.setItem(WIDTH_STORAGE_KEY, String(resizeCurrentWidth))
-  }
+  const auditWorkAvailable = $derived(
+    (auditState === 'offered' || auditState === 'failed') && !finalComplete
+  )
 
   function linkedThread(taskThreadId: string | undefined): Thread | undefined {
     return taskThreadId ? threads.find((thread) => thread.id === taskThreadId) : undefined
@@ -133,7 +103,9 @@
 
   function statusClass(status: AssignmentTaskStatus): string {
     if (status === 'completed') return 'bg-success/10 text-success'
-    if (status === 'failed' || status === 'attention') return 'bg-danger/10 text-danger'
+    if (status === 'failed' || status === 'attention' || status === 'stopped') {
+      return 'bg-danger/10 text-danger'
+    }
     if (status === 'blocked') return 'bg-warning/10 text-warning'
     if (['running', 'reported', 'auditing', 'rework'].includes(status)) {
       return 'bg-info/10 text-info'
@@ -145,36 +117,65 @@
     return task.workerName ?? (task.owner === 'senior' ? 'Sr. Engineer' : 'Unassigned')
   }
 
+  function taskReworkCycle(task: AssignmentTask): number | undefined {
+    if (task.workKind === 'rework') return task.reworkCycle ?? 1
+    if (assignment.auditCycle?.reworkAssignmentVersion === assignment.version) {
+      return assignment.auditCycle.reworkCycle ?? 1
+    }
+    return undefined
+  }
+
   function taskTooltip(task: AssignmentTask, linkedWorker: Thread | undefined): string {
     const worker = workerLabel(task)
-    const destination = task.threadId
-      ? `Open ${linkedWorker?.title ?? worker}`
-      : 'Open this task in Assignment Studio'
+    const destination =
+      task.owner === 'senior'
+        ? 'Open the Sr. Engineer thread'
+        : task.threadId
+          ? `Open ${linkedWorker?.title ?? worker}`
+          : 'Open this task in Assignment Studio'
     return `${task.title} · ${worker} · ${statusLabel(task.status)}. ${destination}`
+  }
+
+  async function confirmStop(): Promise<void> {
+    if (stopBusy) return
+    stopBusy = true
+    stopError = ''
+    try {
+      await onStop()
+      showStopConfirmation = false
+    } catch (error) {
+      stopError = error instanceof Error ? error.message : 'The Assignment could not be stopped.'
+    } finally {
+      stopBusy = false
+    }
+  }
+
+  async function resumeStoppedAssignment(): Promise<void> {
+    if (resumeBusy) return
+    resumeBusy = true
+    resumeError = ''
+    try {
+      await onResumeAssignment()
+    } catch (error) {
+      resumeError = error instanceof Error ? error.message : 'The Assignment could not be resumed.'
+    } finally {
+      resumeBusy = false
+    }
   }
 </script>
 
-<aside
-  {@attach restoreWidth}
-  class="assignment-coordinator-panel absolute inset-y-0 right-0 z-10 flex min-h-0 flex-col border-l border-border bg-surface"
-  class:select-none={resizing}
-  style:width={`${width}px`}
+<!--
+  Docked into the context sidebar: the sidebar owns the width, the visibility,
+  and the tab chrome, so this panel is just a column that fills whatever space
+  it is given.
+-->
+<div
+  class="assignment-coordinator-panel flex h-full min-h-0 flex-col"
   aria-label="Assignment coordinator"
 >
-  <button
-    type="button"
-    class="absolute inset-y-0 left-0 z-20 w-1.5 -translate-x-1/2 cursor-col-resize touch-none bg-transparent transition-colors hover:bg-primary/30 focus:bg-primary/30 focus:outline-none"
-    title="Resize Assignment coordinator"
-    aria-label="Resize Assignment coordinator"
-    onpointerdown={startResize}
-    onpointermove={resize}
-    onpointerup={finishResize}
-    onpointercancel={finishResize}
-    onkeydown={resizeWithKeyboard}
-  ></button>
   <header class="shrink-0 border-b border-border p-4">
-    <div class="flex items-center gap-2 text-primary">
-      <Network size={15} />
+    <div class="flex min-w-0 items-center gap-2 text-primary">
+      <Network size={15} class="shrink-0" />
       <h2 class="text-xs font-semibold uppercase tracking-wide">Assignment coordinator</h2>
     </div>
     <h3 class="mt-3 text-sm font-semibold text-foreground">{assignment.content.title}</h3>
@@ -196,6 +197,33 @@
         {/if}
         <ArrowUpRight size={13} />
       </button>
+      {#if assignment.status === 'stopped'}
+        <button
+          type="button"
+          class="flex items-center justify-center gap-1.5 rounded-lg border border-border bg-elevated px-3 py-2 text-xs font-semibold text-foreground hover:bg-overlay disabled:cursor-not-allowed disabled:opacity-60"
+          title="Resume this Assignment"
+          disabled={resumeBusy}
+          onclick={() => void resumeStoppedAssignment()}
+        >
+          {#if resumeBusy}
+            <Loader2 size={13} class="animate-spin" />
+          {:else}
+            <Play size={12} fill="currentColor" />
+          {/if}
+          {resumeBusy ? 'Resuming…' : 'Resume'}
+        </button>
+      {:else if !finalComplete}
+        <button
+          type="button"
+          class="flex items-center justify-center gap-1.5 rounded-lg border border-danger/40 bg-danger/10 px-3 py-2 text-xs font-semibold text-danger hover:bg-danger/20"
+          title="Stop the Sr. Engineer, workers, and auditor"
+          aria-label="Stop the Sr. Engineer, workers, and auditor"
+          onclick={() => (showStopConfirmation = true)}
+        >
+          <Square size={12} fill="currentColor" />
+          Stop
+        </button>
+      {/if}
       {#if auditWorkAvailable && onOpenAuditWork}
         <button
           type="button"
@@ -203,7 +231,7 @@
           title="Open the Assignment audit work"
           onclick={onOpenAuditWork}
         >
-          Audit Work
+          {auditState === 'failed' ? 'Audit Failed' : 'Audit Work'}
         </button>
       {/if}
       {#if reportAvailable && !finalComplete && onViewReport}
@@ -217,6 +245,9 @@
         </button>
       {/if}
     </div>
+    {#if resumeError}
+      <p class="mt-2 text-xs text-danger" role="alert">{resumeError}</p>
+    {/if}
   </header>
 
   <div class="min-h-0 flex-1 overflow-y-auto">
@@ -301,43 +332,47 @@
       </section>
     {/if}
 
-    <section class="border-b border-border py-3" aria-label="Worker threads">
-      <h3 class="px-4 pb-2 text-[10px] font-semibold uppercase tracking-wide text-dimmed">
-        Worker threads
-      </h3>
-      <div class="max-h-[clamp(10rem,22dvh,24rem)] overflow-y-auto px-2">
-        {#each threads as worker (worker.id)}
-          <ThreadRow
-            thread={worker}
-            compact
-            selected={worker.id === selectedThreadId}
-            showChangeScope={false}
-            onOpen={onOpenThread}
-          />
-        {:else}
-          <p class="px-2 py-3 text-xs leading-relaxed text-muted">
-            Workers appear here as the Sr. Engineer assigns approved tasks.
-          </p>
-        {/each}
-      </div>
-    </section>
-
     <section class="p-4" aria-label="Assignment tasks">
       <h3 class="pb-2 text-[10px] font-semibold uppercase tracking-wide text-dimmed">Tasks</h3>
       <div class="space-y-1">
-        {#each assignment.content.tasks as task (task.id)}
+        {#each assignment.content.tasks as task, taskIndex (task.id)}
           {@const linkedWorker = linkedThread(task.threadId)}
+          {@const active = task.threadId === selectedThreadId}
+          {@const reworkCycle = taskReworkCycle(task)}
+          {@const taskNumber = taskIndex + 1}
           <button
             type="button"
-            class="flex w-full items-start justify-between gap-2 rounded-md border-b border-border/70 px-1 py-1.5 text-left transition-colors hover:bg-elevated last:border-0"
+            class="flex w-full items-start justify-between gap-2 rounded-md border-l-2 px-1 py-1.5 text-left transition-colors hover:bg-elevated {active
+              ? 'border-primary bg-elevated'
+              : ['attention', 'failed', 'stopped'].includes(task.status)
+                ? 'border-danger bg-danger/5'
+                : 'border-transparent'}"
             title={taskTooltip(task, linkedWorker)}
             aria-label={taskTooltip(task, linkedWorker)}
+            aria-current={active ? 'true' : undefined}
             onclick={() => onOpenTask(task)}
           >
-            <span class="min-w-0">
-              <span class="block truncate text-xs font-medium text-foreground">{task.title}</span>
-              <span class="mt-0.5 block truncate text-[10px] text-dimmed">
-                {workerLabel(task)}
+            <span class="min-w-0 flex-1">
+              <span class="flex min-w-0 items-center gap-1.5">
+                <span class="min-w-0 truncate text-xs font-medium text-foreground"
+                  >{task.title}</span
+                >
+                {#if reworkCycle}
+                  <span
+                    class="shrink-0 rounded bg-warning/10 px-1.5 py-0.5 text-[9px] font-semibold text-warning"
+                  >
+                    Rework {reworkCycle}
+                  </span>
+                {/if}
+              </span>
+              <span class="mt-0.5 flex items-center gap-1.5">
+                <span
+                  class="shrink-0 text-[10px] font-medium tabular-nums text-dimmed"
+                  aria-hidden="true">{taskNumber}.</span
+                >
+                <span class="min-w-0 truncate text-[10px] text-dimmed">
+                  {workerLabel(task)}
+                </span>
               </span>
             </span>
             <span
@@ -352,7 +387,43 @@
       </div>
     </section>
   </div>
-</aside>
+</div>
+
+<Modal
+  open={showStopConfirmation}
+  title="Stop Assignment?"
+  onClose={() => {
+    if (!stopBusy) showStopConfirmation = false
+  }}
+>
+  <p class="text-sm leading-relaxed text-muted">
+    Stop all work on this Assignment? Current agent runs and processes will be stopped. You can
+    resume it later.
+  </p>
+  {#if stopError}
+    <p class="mt-3 text-sm text-danger" role="alert">{stopError}</p>
+  {/if}
+
+  {#snippet footer()}
+    <button
+      type="button"
+      class="rounded-lg px-3 py-2 text-sm text-muted transition-colors hover:bg-elevated"
+      disabled={stopBusy}
+      onclick={() => (showStopConfirmation = false)}
+    >
+      Cancel
+    </button>
+    <button
+      type="button"
+      class="flex items-center gap-2 rounded-lg bg-danger px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-danger/90 disabled:cursor-not-allowed disabled:opacity-60"
+      disabled={stopBusy}
+      onclick={() => void confirmStop()}
+    >
+      {#if stopBusy}<Loader2 size={14} class="animate-spin" />{/if}
+      {stopBusy ? 'Stopping…' : 'Stop Assignment'}
+    </button>
+  {/snippet}
+</Modal>
 
 <style>
   .assignment-coordinator-panel {

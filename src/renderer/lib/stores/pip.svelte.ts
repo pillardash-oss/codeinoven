@@ -10,9 +10,13 @@ class PipState {
   active = $state(false)
   pid: number | null = $state(null)
   appName = $state('')
+  threadId: string | null = $state(null)
   frameDataUrl: string | null = $state(null)
   frameWidth = $state(0)
   frameHeight = $state(0)
+  cursorVisible = $state(false)
+  cursorX = $state(0)
+  cursorY = $state(0)
   timestamp = $state(0)
 
   private cleanups: Array<() => void> = []
@@ -63,12 +67,17 @@ class PipState {
   }
 
   private applyFrame(frame: ComputerUsePipFrame): void {
-    this.active = true
+    // A frame already in flight when the overlay was dismissed must not
+    // resurrect it — only apply frames while the main process is tracking.
+    if (!this.active) return
     this.pid = frame.pid
     this.appName = frame.appName
     this.frameDataUrl = frame.dataUrl
     this.frameWidth = frame.width
     this.frameHeight = frame.height
+    this.cursorVisible = frame.cursor?.visible ?? false
+    this.cursorX = frame.cursor?.x ?? this.cursorX
+    this.cursorY = frame.cursor?.y ?? this.cursorY
     this.timestamp = frame.timestamp
   }
 
@@ -77,12 +86,17 @@ class PipState {
     if (state.active) {
       this.pid = state.pid ?? null
       this.appName = state.appName ?? this.appName
+      this.threadId = state.threadId ?? this.threadId
     } else {
       this.pid = null
       this.appName = ''
+      this.threadId = null
       this.frameDataUrl = null
       this.frameWidth = 0
       this.frameHeight = 0
+      this.cursorVisible = false
+      this.cursorX = 0
+      this.cursorY = 0
     }
   }
 }

@@ -1,19 +1,32 @@
 <script lang="ts">
-  import { invoke } from '$lib/ipc.svelte'
+  import { onMount } from 'svelte'
+  import { invoke, subscribe } from '$lib/ipc.svelte'
   import { settingsUiState } from '$lib/stores/settings-ui.svelte'
   import type { SettingsSection } from '$lib/stores/renderer-recovery.svelte'
   import { updaterState } from '$lib/stores/updater.svelte'
-  import type { AppConfig, AppConfigPatch, SlashCommandMode, ThemePreference } from '$shared/types'
+  import type {
+    AppConfig,
+    AppConfigPatch,
+    PrMergeMethod,
+    SlashCommandMode,
+    ThemePreference
+  } from '$shared/types'
+  import type { SystemNotificationPermissionStatus } from '$shared/ipc-contract'
   import { APP_NAME, APP_SLUG, ORG_SLUG } from '$shared/brand'
   import {
+    AlertCircle,
+    AlertTriangle,
     ArrowLeft,
     Bell,
     BrainCircuit,
+    MessageSquareCode,
     CheckCircle2,
     Clock,
+    Cloud,
     Download,
     Globe,
     Info,
+    Keyboard,
     Loader2,
     Monitor,
     Moon,
@@ -23,14 +36,20 @@
     SlidersHorizontal,
     Sun,
     UsersRound,
-    AlertCircle
+    UserRound
   } from '@lucide/svelte'
   import CollapsibleSidebar from '../layout/CollapsibleSidebar.svelte'
   import Switch from '../ui/Switch.svelte'
+  import Modal from '../ui/Modal.svelte'
   import ProvidersView from '../providers/ProvidersView.svelte'
   import UtilitiesView from './UtilitiesView.svelte'
+  import KeymapSettingsTab from './KeymapSettingsTab.svelte'
   import SettingsMemoryTab from '../memory/MemoryPanel.svelte'
   import AuditSettingsTab from './AuditSettingsTab.svelte'
+  import RemoteSettingsTab from './RemoteSettingsTab.svelte'
+  import ProfileSettingsTab from './ProfileSettingsTab.svelte'
+  import CloudDeploymentsSettingsTab from './CloudDeploymentsSettingsTab.svelte'
+  import CioPromptsSettings from './CioPromptsSettings.svelte'
 
   type SelectChangeEvent = Event & { currentTarget: HTMLSelectElement }
   interface Props {
@@ -63,6 +82,9 @@
   let notificationTestBusy = $state(false)
   let notificationTestResult = $state('')
   let notificationTestFailed = $state(false)
+  let notificationPermission = $state<SystemNotificationPermissionStatus | null>(null)
+  let nightlyModalOpen = $state(false)
+  let channelBusy = $state(false)
 
   const escHandler = (e: KeyboardEvent) => {
     if (e.key === 'Escape') {
@@ -77,18 +99,25 @@
     icon: typeof SlidersHorizontal
   }> = [
     { id: 'general', label: 'General', icon: SlidersHorizontal },
-
     { id: 'memory', label: 'Memory', icon: BrainCircuit },
     { id: 'audits', label: 'Agents', icon: UsersRound },
+    { id: 'cio-prompts', label: 'CIO Prompts', icon: MessageSquareCode },
     { id: 'harnesses', label: 'Harnesses', icon: Plug },
     { id: 'utilities', label: 'Utilities', icon: Puzzle },
+    { id: 'keymap', label: 'Keymap', icon: Keyboard },
     { id: 'remote', label: 'Remote', icon: Globe },
+    { id: 'cloud-deployments', label: 'Cloud Deployments', icon: Cloud },
+    { id: 'profile', label: 'Profile', icon: UserRound },
     { id: 'about', label: 'About', icon: Info }
   ]
 
   // The header mirrors the section on screen — cleared when Settings closes.
   $effect(() => {
-    settingsUiState.activeTabLabel = tabs.find((tab) => tab.id === section)?.label ?? null
+    let activeLabel: string | null = null
+    for (const tab of tabs) {
+      if (tab.id === section) activeLabel = tab.label
+    }
+    settingsUiState.activeTabLabel = activeLabel
     return () => {
       settingsUiState.activeTabLabel = null
     }
@@ -117,6 +146,15 @@
     }
   ]
 
+  const mergeMethodOptions: Array<{
+    id: PrMergeMethod
+    label: string
+  }> = [
+    { id: 'squash', label: 'Squash' },
+    { id: 'merge', label: 'Merge' },
+    { id: 'rebase', label: 'Rebase' }
+  ]
+
   function saveThreadLimit(event: Event): void {
     const input = event.currentTarget
     if (!(input instanceof HTMLInputElement)) return
@@ -143,6 +181,19 @@
     void updateConfig({ questionTimeoutMs: seconds * 1_000 })
   }
 
+  function saveMaxDiffLines(event: Event): void {
+    const input = event.currentTarget
+    if (!(input instanceof HTMLInputElement)) return
+
+    const value = Number(input.value)
+    if (!Number.isInteger(value) || value < 10 || value > 5000) {
+      input.value = String(config.maxDiffLines)
+      return
+    }
+
+    void updateConfig({ maxDiffLines: value })
+  }
+
   async function exportDiagnostics(): Promise<void> {
     diagnosticsBusy = true
     diagnosticsResult = ''
@@ -165,6 +216,7 @@
       const result = await invoke('notification:test')
       notificationTestResult = result.message
       notificationTestFailed = result.status !== 'shown'
+      await refreshNotificationPermission()
     } catch (notificationError) {
       notificationTestFailed = true
       notificationTestResult =
@@ -173,6 +225,63 @@
           : 'The system notification test failed.'
     } finally {
       notificationTestBusy = false
+    }
+  }
+
+  async function refreshNotificationPermission(): Promise<void> {
+    try {
+      notificationPermission = await invoke('notification:getPermissionStatus')
+    } catch {
+      notificationPermission = null
+    }
+  }
+
+  function openNotificationSettings(): void {
+    void invoke('notification:openSettings')
+  }
+
+  onMount(() => {
+    void refreshNotificationPermission()
+    // The main process re-verifies a 'denied' state on every permission query
+    // and pushes the outcome; keep the panel in sync without a remount.
+    const unsubscribePermissionStatus = subscribe('notification:permissionStatus', (status) => {
+      notificationPermission = status
+    })
+    // The user may have just toggled notifications in System Settings —
+    // returning to the app must re-derive the state instead of showing a
+    // stale warning.
+    const onWindowFocus = (): void => {
+      void refreshNotificationPermission()
+    }
+    window.addEventListener('focus', onWindowFocus)
+    return () => {
+      unsubscribePermissionStatus()
+      window.removeEventListener('focus', onWindowFocus)
+    }
+  })
+
+  const isNightlyChannel = $derived(config.updateChannel === 'nightly')
+
+  /** Toggle ON opens the confirmation modal; only a confirmed choice persists. */
+  function onNightlyToggleRequested(enabled: boolean): void {
+    if (enabled) {
+      nightlyModalOpen = true
+    } else {
+      void setChannel('stable')
+    }
+  }
+
+  async function setChannel(channel: 'stable' | 'nightly'): Promise<void> {
+    if (channelBusy) return
+    channelBusy = true
+    nightlyModalOpen = false
+    try {
+      await updateConfig({ updateChannel: channel })
+      await updaterState.checkForUpdates()
+    } catch {
+      // updateConfig surfaces errors in the general settings header.
+    } finally {
+      channelBusy = false
     }
   }
 </script>
@@ -225,7 +334,9 @@
 
   <!-- Tab content -->
   <div class="min-w-0 flex-1 overflow-y-auto">
-    {#if section === 'general'}
+    {#if section === 'profile'}
+      <ProfileSettingsTab />
+    {:else if section === 'general'}
       <div class="mx-auto max-w-2xl p-6 pb-24">
         <div class="mb-6">
           <h1 class="text-xl font-bold tracking-tight">General</h1>
@@ -286,6 +397,37 @@
                   On macOS, the first test requests permission. Native delivery requires a signed
                   app.
                 </p>
+                {#if notificationPermission?.platform === 'darwin' && notificationPermission.status === 'granted'}
+                  <p class="mt-2 flex items-center gap-1.5 text-xs text-primary">
+                    <CheckCircle2 size={13} />
+                    Notifications are allowed
+                  </p>
+                {/if}
+                {#if notificationPermission?.platform === 'darwin' && notificationPermission.status === 'denied'}
+                  <div
+                    class="mt-3 flex items-start justify-between gap-3 rounded-lg border border-warning/30 bg-warning/10 px-3 py-2"
+                    role="alert"
+                  >
+                    <div class="flex items-start gap-2">
+                      <AlertTriangle size={14} class="mt-0.5 shrink-0 text-warning" />
+                      <div>
+                        <p class="text-xs font-medium text-warning">Notifications are blocked</p>
+                        <p class="mt-0.5 text-[11px] leading-relaxed text-muted">
+                          macOS is not showing {APP_NAME} notification cards because notifications are
+                          disabled in System Settings. This is why you may hear the alert or see the badge
+                          without a card.
+                        </p>
+                      </div>
+                    </div>
+                    <button
+                      class="flex shrink-0 items-center gap-1.5 rounded-lg border border-warning/30 bg-warning/10 px-2.5 py-1.5 text-xs font-medium text-warning transition-colors hover:bg-warning/15"
+                      title="Open System Settings to allow notifications for {APP_NAME}"
+                      onclick={openNotificationSettings}
+                    >
+                      Open settings
+                    </button>
+                  </div>
+                {/if}
                 {#if notificationTestResult}
                   <p
                     class={[
@@ -321,7 +463,7 @@
               <div>
                 <p class="text-sm font-medium">Keep device on while work is in progress</p>
                 <p class="text-xs text-dimmed">
-                  Prevent the display and system from sleeping while any agent is working
+                  Prevent sleep while an agent is actively working; spec-ready threads stay idle
                 </p>
               </div>
               <Switch
@@ -331,6 +473,96 @@
                 aria-label="Toggle keeping the device awake while work is in progress"
                 disabled={!settingsReady}
               />
+            </div>
+          </div>
+
+          <!-- Recovery -->
+          <div class="rounded-xl border bg-surface p-4">
+            <h3 class="mb-3 text-xs font-semibold uppercase tracking-wide text-muted">Recovery</h3>
+            <div class="space-y-4">
+              <div class="flex items-center justify-between gap-4">
+                <div>
+                  <p class="text-sm font-medium">Resume work on restart</p>
+                  <p class="text-xs text-dimmed">
+                    Threads will be resumed if they were interrupted due to an app closure or
+                    unknown issues
+                  </p>
+                </div>
+                <Switch
+                  checked={config.resumeWorkOnRestart}
+                  onchange={() =>
+                    void updateConfig({ resumeWorkOnRestart: !config.resumeWorkOnRestart })}
+                  aria-label="Toggle resuming interrupted threads after the app restarts"
+                  disabled={!settingsReady}
+                />
+              </div>
+              <div class="flex items-center justify-between gap-4">
+                <div>
+                  <p class="text-sm font-medium">Auto-resume after usage resets</p>
+                  <p class="text-xs text-dimmed">
+                    Automatically continue threads whose agent hit a usage or rate limit once its
+                    reset time passes
+                  </p>
+                </div>
+                <Switch
+                  checked={config.autoRetryAfterReset}
+                  onchange={() =>
+                    void updateConfig({ autoRetryAfterReset: !config.autoRetryAfterReset })}
+                  aria-label="Toggle auto-resuming threads after a usage reset"
+                  disabled={!settingsReady}
+                />
+              </div>
+            </div>
+          </div>
+
+          <!-- Git -->
+          <div class="rounded-xl border bg-surface p-4">
+            <h3 class="mb-3 text-xs font-semibold uppercase tracking-wide text-muted">Git</h3>
+            <div class="space-y-3">
+              <div class="flex items-center justify-between">
+                <div>
+                  <p class="text-sm font-medium">Default merge method</p>
+                  <p class="text-xs text-dimmed">
+                    Pre-selected when merging a pull request from the Git panel
+                  </p>
+                </div>
+                <select
+                  class="rounded-lg border bg-elevated px-2.5 py-1.5 text-xs font-medium outline-none focus:border-primary disabled:opacity-50"
+                  value={config.defaultMergeMethod}
+                  disabled={!settingsReady}
+                  aria-label="Default merge method"
+                  onchange={(event: SelectChangeEvent) =>
+                    void updateConfig({
+                      defaultMergeMethod: event.currentTarget.value as PrMergeMethod
+                    })}
+                >
+                  {#each mergeMethodOptions as option (option.id)}
+                    <option value={option.id}>{option.label}</option>
+                  {/each}
+                </select>
+              </div>
+              <div class="flex items-center justify-between gap-4">
+                <div>
+                  <p class="text-sm font-medium">Maximum diff lines</p>
+                  <p class="text-xs text-dimmed">
+                    Hunks larger than this are collapsed with a notice so huge diffs stay responsive
+                  </p>
+                </div>
+                <label class="flex shrink-0 items-center gap-2 text-xs text-muted">
+                  <input
+                    class="w-20 rounded-lg border bg-elevated px-2.5 py-1 text-right text-sm font-medium tabular-nums outline-none focus:border-primary disabled:opacity-50"
+                    type="number"
+                    min="10"
+                    max="5000"
+                    step="1"
+                    value={config.maxDiffLines}
+                    disabled={!settingsReady}
+                    aria-label="Maximum diff lines per hunk"
+                    onchange={saveMaxDiffLines}
+                  />
+                  lines
+                </label>
+              </div>
             </div>
           </div>
 
@@ -406,30 +638,32 @@
       </div>
     {:else if section === 'audits'}
       <AuditSettingsTab {config} {settingsReady} {updateConfig} />
+    {:else if section === 'cio-prompts'}
+      <CioPromptsSettings />
     {:else if section === 'memory'}
       <SettingsMemoryTab
         variant="settings"
         memoryEnabled={config.memory.enabled}
-        onMemoryEnabledChange={(enabled) => updateConfig({ memory: { enabled, entries: [] } })}
+        chatMemoryEnabled={config.memory.chatEnabled}
+        onMemoryEnabledChange={(enabled) =>
+          updateConfig({
+            memory: { enabled, chatEnabled: config.memory.chatEnabled, entries: [] }
+          })}
+        onChatMemoryEnabledChange={(enabled) =>
+          updateConfig({
+            memory: { enabled: config.memory.enabled, chatEnabled: enabled, entries: [] }
+          })}
       />
     {:else if section === 'harnesses'}
       <ProvidersView />
     {:else if section === 'utilities'}
       <UtilitiesView />
+    {:else if section === 'keymap'}
+      <KeymapSettingsTab />
     {:else if section === 'remote'}
-      <div class="mx-auto max-w-2xl p-6 pb-24">
-        <div class="mb-6">
-          <h1 class="text-xl font-bold tracking-tight">Remote</h1>
-          <p class="mt-0.5 text-sm text-muted">Manage remote connections and SSH workspaces.</p>
-        </div>
-        <div class="rounded-xl border border-dashed p-6 text-center">
-          <Globe size={18} class="mx-auto mb-1 text-dimmed" />
-          <p class="text-xs text-dimmed">
-            Remote configuration is coming soon. SSH projects can already be added from the Projects
-            sidebar.
-          </p>
-        </div>
-      </div>
+      <RemoteSettingsTab />
+    {:else if section === 'cloud-deployments'}
+      <CloudDeploymentsSettingsTab />
     {:else if section === 'about'}
       <div class="mx-auto max-w-2xl p-6 pb-24">
         <div class="mb-6">
@@ -567,6 +801,23 @@
           {/if}
 
           <div class="space-y-3">
+            <!-- Nightly builds enrollment -->
+            <div class="flex items-center justify-between gap-4">
+              <div>
+                <p class="text-sm font-medium">Nightly builds</p>
+                <p class="text-xs text-dimmed">
+                  Receive over-the-air updates from the nightly channel
+                </p>
+              </div>
+              <Switch
+                checked={isNightlyChannel}
+                onchange={onNightlyToggleRequested}
+                aria-label="Toggle nightly builds"
+                disabled={!settingsReady || channelBusy}
+                title="Opt into nightly prerelease builds"
+              />
+            </div>
+
             <!-- Auto-download toggle -->
             <div class="flex items-center justify-between">
               <div>
@@ -640,3 +891,60 @@
     {/if}
   </div>
 </div>
+
+{#if nightlyModalOpen}
+  <Modal
+    title="Enable nightly builds?"
+    size="md"
+    open={nightlyModalOpen}
+    onClose={() => {
+      nightlyModalOpen = false
+    }}
+  >
+    <div class="space-y-3 text-sm text-muted">
+      <p>
+        Nightly builds are bleeding-edge prereleases generated from the
+        <code class="rounded bg-elevated px-1.5 py-0.5 font-mono text-xs text-foreground"
+          >nightly</code
+        >
+        branch. They ship continuously so you can try the latest changes early.
+      </p>
+      <ul class="list-disc space-y-1 pl-5">
+        <li>You may hit <strong class="text-foreground">unfinished features and bugs</strong>.</li>
+        <li>
+          Updates arrive <strong class="text-foreground">more frequently</strong> than stable releases.
+        </li>
+        <li>Downgrading to stable later is supported by the updater.</li>
+        <li>Opt out any time from this same setting.</li>
+      </ul>
+      <p class="text-xs text-dimmed">
+        Enabling this switches your over-the-air update feed to the nightly channel and checks for
+        updates immediately.
+      </p>
+    </div>
+    {#snippet footer()}
+      <button
+        class="rounded-lg border bg-elevated px-3 py-1.5 text-xs font-medium hover:bg-overlay disabled:opacity-50"
+        title="Keep receiving stable updates"
+        onclick={() => {
+          nightlyModalOpen = false
+        }}
+      >
+        Cancel
+      </button>
+      <button
+        class="flex items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-medium text-on-primary hover:opacity-90 disabled:opacity-50"
+        title="Enroll in nightly builds"
+        disabled={channelBusy}
+        onclick={() => void setChannel('nightly')}
+      >
+        {#if channelBusy}
+          <Loader2 size={13} class="animate-spin" />
+        {:else}
+          <Download size={13} />
+        {/if}
+        Enable nightly builds
+      </button>
+    {/snippet}
+  </Modal>
+{/if}

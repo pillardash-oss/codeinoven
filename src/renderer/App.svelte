@@ -1,18 +1,37 @@
 <script lang="ts">
+  import { onMount } from 'svelte'
+  import type { Component } from 'svelte'
+  import {
+    Bell,
+    Blocks,
+    BookOpen,
+    Brain,
+    FileSearch,
+    FolderOpen,
+    FolderPlus,
+    GitBranch,
+    Info,
+    Keyboard,
+    LayoutDashboard,
+    ListTree,
+    MessageSquarePlus,
+    MessagesSquare,
+    Server,
+    SlidersHorizontal,
+    SquarePen,
+    Terminal,
+    User,
+    Users,
+    Wrench
+  } from '@lucide/svelte'
   import AppHeader from '$lib/components/layout/AppHeader.svelte'
   import Workspace from '$lib/components/workspace/Workspace.svelte'
-  import ScopeView from '$lib/components/scope/ScopeView.svelte'
-  import SettingsView from '$lib/components/settings/SettingsView.svelte'
-  import NotificationPanel from '$lib/components/notifications/NotificationPanel.svelte'
-  import PipOverlay from '$lib/components/pip/PipOverlay.svelte'
-  import HarnessRunModal from '$lib/components/providers/HarnessRunModal.svelte'
-  import CloseConfirmationModal from '$lib/components/layout/CloseConfirmationModal.svelte'
-  import { CommandPalette } from '$lib/components/actions'
   import Toaster from '$lib/components/ui/Toaster.svelte'
   import TooltipHost from '$lib/components/ui/TooltipHost.svelte'
   import { toast } from 'svelte-sonner'
   import { SvelteMap } from 'svelte/reactivity'
   import { invoke, subscribe } from '$lib/ipc.svelte'
+  import { closeTopVisibleDialog, requestCloseTopOverlay } from '$lib/overlay-close.svelte'
   import {
     rendererRecovery,
     isSettingsSection,
@@ -22,22 +41,34 @@
     type MainView,
     type SettingsSection
   } from '$lib/stores/renderer-recovery.svelte'
-  import { workspaceState } from '$lib/stores/workspace.svelte'
+  import { workspaceState, threadVisitKey } from '$lib/stores/workspace.svelte'
   import {
     navigationHistoryState,
     type NavigationLocation
   } from '$lib/stores/navigation-history.svelte'
   import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
+  import { projectFilesWorkspace } from '$lib/stores/project-files.svelte'
   import { findNavState } from '$lib/stores/find-nav.svelte'
   import { notificationPanelState } from '$lib/stores/notification-panel.svelte'
+  import { pipState } from '$lib/stores/pip.svelte'
   import { updaterState } from '$lib/stores/updater.svelte'
+  import { threadNotesState } from '$lib/stores/thread-notes.svelte'
+  import { appConfigState } from '$lib/stores/app-config.svelte'
+  import { isTerminalFocused } from '$lib/terminal/focus'
   import { scopeState } from '$lib/stores/scope.svelte'
+  import { clearDraftLabelCookie } from '$lib/stores/draft-label'
   import { providerCatalog } from '$lib/stores/provider-catalog.svelte'
   import { providerStore } from '$lib/stores/providers.svelte'
   import { harnessLifecycleStore } from '$lib/stores/harness-lifecycle.svelte'
-  import { loadProjectIcons } from '$lib/project-icons'
+  import { prLifecycleStore } from '$lib/stores/pr-lifecycle.svelte'
+  import { loadProjectIcons, getProjectIcon } from '$lib/project-icons'
+  import { preloadScopeChunk, preloadSettingsChunk } from '$lib/page-preload'
   import { APP_NAME } from '$shared/brand'
   import type { ActionDefinition, ActionSelection, ActionSource } from '$lib/actions'
+  import {
+    getInlineFileTypeIconDataUri,
+    getInlineFolderTypeIconDataUri
+  } from '$lib/components/files/file-type-icons'
   import { actionContext } from '$lib/stores/action-context.svelte'
   import {
     captureElementSelection,
@@ -46,18 +77,25 @@
   } from '$lib/selection-bookmark'
   import {
     DEFAULT_SCOPE_BUCKET_ID,
+    DEFAULT_THREAD_TITLE,
     INBOX_PROJECT_ID,
+    isOrchestrationChildThread,
+    isThreadWorking,
     type AppConfig,
     type AppConfigPatch,
     type Project,
     type ThemePreference,
-    type Thread
+    type Thread,
+    type ThreadSearchResult
   } from '$shared/types'
+  import { DEFAULT_AGENT_BEHAVIOR_PROMPT } from '$shared/agent-behavior'
   import type {
     AgentNotificationPayload,
     CloseConfirmationPayload,
     ThreadClickedPayload
   } from '$shared/ipc-contract'
+  import { agentRuns } from '$lib/stores/agent-runs.svelte'
+  import { statusBadgeForThread } from '$lib/thread-status-badge'
 
   type View = MainView
 
@@ -68,10 +106,18 @@
     keybindings: {},
     slashCommandMode: 'app',
     preferredEditor: 'system',
-    memory: { enabled: true, entries: [] },
+    memory: { enabled: true, chatEnabled: true, entries: [] },
     agentDefaults: { syncFromThreadChanges: false },
+    agentBehaviorPrompt: DEFAULT_AGENT_BEHAVIOR_PROMPT,
     autoDownloadUpdates: true,
-    autoInstallUpdates: true
+    autoInstallUpdates: true,
+    updateChannel: 'stable',
+    keepAwakeWhileWorking: false,
+    imageDescriptorAskAgain: false,
+    autoRetryAfterReset: true,
+    resumeWorkOnRestart: true,
+    defaultMergeMethod: 'squash',
+    maxDiffLines: 100
   }
 
   let config = $state<AppConfig>(defaultConfig)
@@ -86,14 +132,28 @@
   let fileSearchLoading = $state(false)
   let fileSearchTimer: number | null = null
   let fileSearchRequest = 0
+  let threadSearchPaletteOpen = $state(false)
+  let threadSearchActions = $state<ActionDefinition[]>([])
+  let threadSearchLoading = $state(false)
+  let threadSearchTimer: number | null = null
+  let threadSearchRequest = 0
+  let newProjectSpotlightOpen = $state(false)
+  /** Stored custom project icon data-URLs (project.id → url), for palette badges. */
+  let projectIconUrls = $state(new Map<string, string>())
   let paletteFocusBookmark: ElementSelectionBookmark | null = null
 
   interface FileSearchTarget {
     projectId: string
     path: string
+    kind: 'file' | 'directory'
+  }
+
+  interface ThreadSearchTarget {
+    thread: Thread
   }
 
   const fileSearchTargets = new SvelteMap<ActionDefinition['id'], FileSearchTarget>()
+  const threadSearchTargets = new SvelteMap<ActionDefinition['id'], ThreadSearchTarget>()
 
   const applicationSource = {
     id: 'application',
@@ -108,6 +168,7 @@
       description: 'Browse projects and engineering threads',
       category: 'navigation',
       source: applicationSource,
+      icon: FolderOpen,
       keywords: ['workspace', 'threads']
     },
     {
@@ -116,6 +177,7 @@
       description: 'Browse standalone conversations',
       category: 'navigation',
       source: applicationSource,
+      icon: MessagesSquare,
       keywords: ['conversations', 'messages']
     },
     {
@@ -124,6 +186,7 @@
       description: 'Review work across projects',
       category: 'navigation',
       source: applicationSource,
+      icon: LayoutDashboard,
       keywords: ['board', 'overview']
     },
     {
@@ -132,6 +195,7 @@
       description: 'Browse threads across all projects',
       category: 'navigation',
       source: applicationSource,
+      icon: ListTree,
       keywords: ['timeline', 'all']
     }
   ] satisfies ActionDefinition[]
@@ -140,25 +204,56 @@
     id: SettingsSection
     label: string
     keywords: string[]
+    icon: Component
   }> = [
-    { id: 'general', label: 'General', keywords: ['appearance', 'theme', 'preferences'] },
-    { id: 'memory', label: 'Memory', keywords: ['instructions', 'knowledge'] },
+    {
+      id: 'general',
+      label: 'General',
+      keywords: ['appearance', 'theme', 'preferences'],
+      icon: SlidersHorizontal
+    },
+    {
+      id: 'memory',
+      label: 'Memory',
+      keywords: ['instructions', 'knowledge'],
+      icon: Brain
+    },
     {
       id: 'audits',
       label: 'Agents',
-      keywords: ['senior engineer', 'worker', 'auditor', 'achievement', 'review']
+      keywords: ['senior engineer', 'worker', 'auditor', 'achievement', 'review'],
+      icon: Users
     },
-    { id: 'harnesses', label: 'Harnesses', keywords: ['models', 'providers', 'harnesses'] },
+    {
+      id: 'harnesses',
+      label: 'Harnesses',
+      keywords: ['models', 'providers', 'harnesses'],
+      icon: Blocks
+    },
     {
       id: 'utilities',
       label: 'Utilities',
-      keywords: ['mcp', 'skills', 'capabilities', 'computer use', 'tools']
+      keywords: ['mcp', 'skills', 'capabilities', 'computer use', 'tools'],
+      icon: Wrench
     },
-    { id: 'remote', label: 'Remote', keywords: ['ssh', 'host'] },
+    {
+      id: 'keymap',
+      label: 'Keymap',
+      keywords: ['shortcuts', 'keyboard', 'keys', 'hotkeys', 'bindings'],
+      icon: Keyboard
+    },
+    { id: 'remote', label: 'Remote', keywords: ['ssh', 'host'], icon: Server },
+    {
+      id: 'profile',
+      label: 'Profile',
+      keywords: ['account', 'usage', 'activity', 'cloud'],
+      icon: User
+    },
     {
       id: 'about',
       label: 'About',
-      keywords: ['version', 'updates', 'storage', 'data', 'diagnostics', 'logs', 'debug']
+      keywords: ['version', 'updates', 'storage', 'data', 'diagnostics', 'logs', 'debug'],
+      icon: Info
     }
   ]
 
@@ -172,6 +267,7 @@
     description: `Open the ${tab.label} settings tab`,
     category: 'navigation',
     source: applicationSource,
+    icon: tab.icon,
     keywords: ['settings', 'preferences', ...tab.keywords],
     ...(tab.id === 'general' ? { shortcut: ['Ctrl', ','] } : {})
   }))
@@ -179,14 +275,19 @@
   let paletteContextActions = $derived.by((): ActionDefinition[] => {
     const workspaceVisible =
       activeView === 'projects' || activeView === 'chats' || activeView === 'threads'
+    const hasLocalProjects = scopeState.projectRecords.some(
+      (project) => !project.hidden && project.source === 'local' && project.path
+    )
     const actions: ActionDefinition[] = [
       {
         id: 'app:new-project',
         title: 'Create new project',
-        description: 'Add a local or remote project',
+        description: 'Choose how to add a project — local folder or SSH',
         category: 'command',
         source: applicationSource,
-        keywords: ['add', 'folder', 'repository']
+        icon: FolderPlus,
+        shortcut: ['Ctrl', 'Shift', 'N'],
+        keywords: ['add', 'folder', 'repository', 'ssh', 'remote']
       },
       {
         id: 'app:notifications',
@@ -194,21 +295,19 @@
         description: 'Open or close the notifications sidebar',
         category: 'navigation',
         source: applicationSource,
+        icon: Bell,
         keywords: ['alerts', 'completed', 'attention']
       }
     ]
 
-    if (
-      scopeState.projectRecords.some(
-        (project) => !project.hidden && project.source === 'local' && project.path
-      )
-    ) {
+    if (hasLocalProjects) {
       actions.push({
         id: 'app:file-search',
         title: 'Search files across projects',
         description: 'Find and open a file from any local project',
         category: 'file',
         source: applicationSource,
+        icon: FileSearch,
         keywords: ['quick open', 'find', 'workspace']
       })
     }
@@ -220,6 +319,7 @@
         description: 'Start a standalone conversation',
         category: 'command',
         source: applicationSource,
+        icon: MessageSquarePlus,
         shortcut: ['Ctrl', 'N'],
         keywords: ['conversation', 'message']
       })
@@ -233,6 +333,7 @@
         description: project ? `Create a thread in ${project.name}` : 'Create a project thread',
         category: 'command',
         source: applicationSource,
+        icon: SquarePen,
         shortcut: ['Ctrl', 'N'],
         keywords: ['task', 'conversation', 'project']
       })
@@ -247,6 +348,7 @@
         description: `Create a thread in ${workspaceState.activeProject.name}`,
         category: 'command',
         source: applicationSource,
+        icon: SquarePen,
         shortcut: ['Ctrl', 'N'],
         keywords: ['task', 'conversation', 'project']
       })
@@ -254,13 +356,38 @@
 
     const thread = workspaceVisible ? workspaceState.selectedThread : null
     if (thread) {
+      const threadProject = scopeState.projectRecords.find(
+        (candidate) => candidate.id === thread.projectId
+      )
       actions.push(
+        {
+          id: 'app:terminal',
+          title: 'Open terminal',
+          description: 'Open a terminal for this thread',
+          category: 'navigation',
+          source: applicationSource,
+          icon: Terminal,
+          keywords: ['shell', 'console', 'command line', 'run']
+        },
+        {
+          id: 'app:git',
+          title: 'Open git panel',
+          description: 'View changes, commits and branches for this project',
+          category: 'navigation',
+          source: applicationSource,
+          icon: GitBranch,
+          keywords: ['changes', 'commits', 'branches', 'status', 'diff'],
+          ...(threadProject?.changeTrackingMode !== 'git'
+            ? { disabledReason: 'This project does not use Git tracking' }
+            : {})
+        },
         {
           id: 'app:memory',
           title: 'Toggle memory sidebar',
           description: 'View the memory context available to this thread',
           category: 'navigation',
           source: applicationSource,
+          icon: Brain,
           keywords: ['prompt', 'instructions', 'context']
         },
         {
@@ -269,9 +396,23 @@
           description: 'View sources attached to this conversation',
           category: 'navigation',
           source: applicationSource,
+          icon: BookOpen,
           keywords: ['citations', 'references', 'attachments']
         }
       )
+    }
+
+    if (hasLocalProjects) {
+      // Unshifted last so it always lands first in the palette.
+      actions.unshift({
+        id: 'app:thread-search',
+        title: 'Search threads across projects',
+        description: 'Find a conversation by title or message content in any project',
+        category: 'thread',
+        source: applicationSource,
+        icon: MessagesSquare,
+        keywords: ['quick open', 'find', 'conversation', 'messages', 'timeline']
+      })
     }
 
     return actions
@@ -281,44 +422,32 @@
     ...paletteContextActions,
     ...navigationActions,
     ...settingsActions,
-    ...actionContext.actions
+    // Harness-bound actions (model pickers, slash commands) belong to the inline
+    // menus — the global Cmd+K surface keeps app-level and cross-harness actions.
+    ...actionContext.actions.filter((action) => action.source.kind !== 'harness')
   ])
 
-  /** Content view to return to when leaving Settings or Scope. */
-  let lastContentView = $state<'projects' | 'chats' | 'threads'>(
-    rendererRecovery.activeView === 'chats'
-      ? 'chats'
-      : rendererRecovery.activeView === 'threads'
-        ? 'threads'
-        : 'projects'
-  )
+  /** Content view to return to when leaving Settings or Scope — persisted in the
+   *  recovery snapshot so a restart made while on a Settings page or the Scope
+   *  view still returns to the previous content view instead of resetting to Projects. */
+  let lastContentView = $derived(rendererRecovery.lastContentView)
 
   /** The view the user was on before opening Settings — the Settings back button returns here. */
-  let lastViewBeforeSettings = $state<View>(
-    isSettingsView(rendererRecovery.activeView) ? 'projects' : rendererRecovery.activeView
-  )
+  let lastViewBeforeSettings = $derived(rendererRecovery.lastViewBeforeSettings)
 
   let effectiveTheme = $derived(
     config.theme === 'system' ? (systemDark ? 'dark' : 'light') : config.theme
   )
 
-  $effect(() => {
-    const mq = window.matchMedia('(prefers-color-scheme: dark)')
-    systemDark = mq.matches
-    const onChange = (e: MediaQueryListEvent): void => {
-      systemDark = e.matches
-    }
-    mq.addEventListener('change', onChange)
-    return () => mq.removeEventListener('change', onChange)
-  })
-
-  $effect(() => {
+  function applyTheme(): void {
     document.documentElement.classList.toggle('dark', effectiveTheme === 'dark')
-  })
+  }
 
   async function loadConfig(): Promise<void> {
     try {
       config = await invoke('config:get')
+      appConfigState.sync(config)
+      applyTheme()
       settingsError = undefined
     } catch {
       settingsError = 'Settings could not be loaded. Defaults are being used.'
@@ -330,11 +459,15 @@
   async function updateConfig(patch: AppConfigPatch): Promise<void> {
     const previous = config
     config = { ...config, ...patch }
+    applyTheme()
     try {
       config = await invoke('config:update', patch)
+      appConfigState.sync(config)
+      applyTheme()
       settingsError = undefined
     } catch {
       config = previous
+      applyTheme()
       settingsError = 'Your settings change could not be saved.'
     }
   }
@@ -353,6 +486,15 @@
   }
 
   function navigate(view: View): void {
+    // Warm the lazy page chunks so the view swap resolves instantly — the
+    // sidebar/header hover preloads cover the mouse path; this covers every
+    // other entry point (shortcuts, palette, programmatic navigation). The
+    // imports are memoized, so repeated calls are no-ops.
+    if (view === 'scope') {
+      preloadScopeChunk()
+    } else if (isSettingsView(view)) {
+      preloadSettingsChunk()
+    }
     if (view === 'scope') {
       const projectId = workspaceState.selectedThread?.projectId ?? workspaceState.activeProject?.id
       if (projectId) void scopeState.activateProject(projectId)
@@ -362,15 +504,75 @@
     } else if (view === 'threads') {
       scopeState.clearSidebarContext()
     }
-    if (view === 'projects' || view === 'chats' || view === 'threads') {
-      lastContentView = view
-    }
-    // Remember the last non-settings view so the Settings back button can return to it.
-    if (!isSettingsView(view)) {
-      lastViewBeforeSettings = view
-    }
+    const previousContentView = rendererRecovery.lastContentView
     activeView = view
+    // Persists the view and tracks the last content / non-settings views, so
+    // returning from Settings (even across a restart) lands back where the user
+    // was instead of resetting to Projects.
     rendererRecovery.setActiveView(view)
+    reconcileThreadForContentView(view, previousContentView)
+    observeNavigationLocation()
+  }
+
+  function observeNavigationLocation(): void {
+    navigationHistoryState.observe(currentLocation())
+  }
+
+  /** The most recently opened thread of the given kind that still exists. */
+  function lastThreadOfKind(isChat: boolean): Thread | null {
+    for (const key of workspaceState.recentThreadVisits) {
+      const thread = scopeState.allScopeThreads.find(
+        (candidate) => threadVisitKey(candidate) === key
+      )
+      if (!thread || thread.archived) continue
+      if ((thread.projectId === INBOX_PROJECT_ID) === isChat) return thread
+    }
+    return null
+  }
+
+  /**
+   * Switching between Chats and the project views must never leave a thread of
+   * the wrong kind selected (a chat shown as a project thread, or vice versa).
+   * Restores the last opened thread of the target view, or falls back to the
+   * empty state when nothing of that kind exists. Covers every navigation path
+   * (nav buttons, command palette, programmatic navigation like "continue in a
+   * project"), not just the header buttons.
+   */
+  function reconcileThreadForContentView(
+    view: View,
+    previousContentView: 'projects' | 'chats' | 'threads'
+  ): void {
+    if (view !== 'chats' && view !== 'projects' && view !== 'threads') return
+    if (view === previousContentView) return
+    const goingToChats = view === 'chats'
+    const leavingChats = previousContentView === 'chats'
+    if (goingToChats === leavingChats) return
+
+    const thread = workspaceState.selectedThread
+    const threadIsChat = thread ? thread.projectId === INBOX_PROJECT_ID : false
+
+    if (goingToChats) {
+      // Entering chats: keep a chat selected, otherwise restore the last chat.
+      if (thread && threadIsChat) return
+      const lastChat = lastThreadOfKind(true)
+      if (!lastChat) return
+      const project =
+        scopeState.projectRecords.find((candidate) => candidate.id === lastChat.projectId) ?? null
+      workspaceState.openThread(lastChat, project)
+      return
+    }
+
+    // Leaving chats for a project view: never keep the chat selected.
+    if (!thread || !threadIsChat) return
+    const lastProjectThread = lastThreadOfKind(false)
+    if (!lastProjectThread) {
+      workspaceState.clearThread()
+      return
+    }
+    const project =
+      scopeState.projectRecords.find((candidate) => candidate.id === lastProjectThread.projectId) ??
+      null
+    workspaceState.openThread(lastProjectThread, project)
   }
 
   /** Re-open the thread captured in a history entry, if it still exists. */
@@ -386,11 +588,11 @@
       void scopeState.ensureBoardLoaded(cached.projectId)
       return
     }
-    const allThreads: Thread[] = await invoke('thread:listAll')
-    const thread = allThreads.find((candidate) => candidate.id === entry.thread?.threadId)
+    const [thread, project] = await Promise.all([
+      invoke('thread:get', entry.thread.projectId, entry.thread.threadId),
+      invoke('project:get', entry.thread.projectId)
+    ])
     if (!thread) return
-    const projects: Project[] = await invoke('project:list')
-    const project = projects.find((candidate) => candidate.id === thread.projectId) ?? null
     workspaceState.openThread(thread, project)
     void scopeState.ensureBoardLoaded(thread.projectId)
   }
@@ -421,14 +623,19 @@
     }
   }
 
-  $effect(() => {
+  function installWorkspaceCallbacks(): () => void {
     workspaceState.navigateToSettings = (tab?: string) => {
       navigate(isSettingsSection(tab) ? settingsViewForSection(tab) : 'settings')
     }
     workspaceState.navigateToContent = () => navigate(lastContentView)
     workspaceState.openThreadFromNotification = (thread, project) =>
       openThreadFromNotification(thread, project)
-  })
+    return () => {
+      workspaceState.navigateToSettings = null
+      workspaceState.navigateToContent = null
+      workspaceState.openThreadFromNotification = null
+    }
+  }
 
   async function handlePaletteSelection(selection: ActionSelection): Promise<void> {
     const settingsTab = settingsTabs.find(
@@ -441,8 +648,7 @@
 
     switch (selection.action.id) {
       case 'app:new-project':
-        navigate('projects')
-        workspaceState.requestAddProject()
+        openNewProjectSpotlight()
         return
       case 'app:new-chat':
         navigate('chats')
@@ -462,13 +668,31 @@
       case 'app:file-search':
         openFileSearchPalette()
         return
+      case 'app:thread-search':
+        openThreadSearchPalette()
+        return
       case 'app:notifications':
         contextSidebarState.toggleNotifications()
         return
+      case 'app:terminal': {
+        const thread = workspaceState.selectedThread
+        if (!thread) return
+        contextSidebarState.openPrimaryTerminal(thread.projectId, thread.id)
+        return
+      }
+      case 'app:git': {
+        const thread = workspaceState.selectedThread
+        if (!thread) return
+        contextSidebarState.openGit(thread.projectId, thread.id)
+        return
+      }
       case 'app:memory': {
         const thread = workspaceState.selectedThread
         if (!thread) return
-        if (contextSidebarState.visible && contextSidebarState.activeTab?.kind === 'memory') {
+        if (
+          contextSidebarState.sidebarVisible &&
+          contextSidebarState.sidebarActiveTab?.kind === 'memory'
+        ) {
           contextSidebarState.hide()
         } else {
           contextSidebarState.openMemory(thread.projectId, thread.id)
@@ -478,7 +702,10 @@
       case 'app:sources': {
         const thread = workspaceState.selectedThread
         if (!thread) return
-        if (contextSidebarState.visible && contextSidebarState.activeTab?.kind === 'sources') {
+        if (
+          contextSidebarState.sidebarVisible &&
+          contextSidebarState.sidebarActiveTab?.kind === 'sources'
+        ) {
           contextSidebarState.hide()
         } else {
           contextSidebarState.openSources(thread.projectId, thread.id)
@@ -534,6 +761,10 @@
       fileSearchPaletteOpen = false
       resetFileSearch()
     }
+    if (threadSearchPaletteOpen) {
+      threadSearchPaletteOpen = false
+      resetThreadSearch()
+    }
     if (commandPaletteOpen) {
       commandPaletteOpen = false
       return
@@ -566,10 +797,7 @@
       projects.map(async (project) => {
         try {
           const entries = await invoke('projectFiles:search', project.id, query, 'all')
-          return {
-            project,
-            entries: entries.filter((entry) => entry.kind === 'file').slice(0, 12)
-          }
+          return { project, entries: entries.slice(0, 12) }
         } catch {
           return { project, entries: [] }
         }
@@ -577,25 +805,39 @@
     )
     if (request !== fileSearchRequest || !fileSearchPaletteOpen) return
 
+    const resolved = await Promise.all(
+      projectResults.flatMap(({ project, entries }) =>
+        entries.map(async (entry) => ({
+          project,
+          entry,
+          iconUri:
+            entry.kind === 'directory'
+              ? await getInlineFolderTypeIconDataUri(entry.name)
+              : await getInlineFileTypeIconDataUri(entry.path)
+        }))
+      )
+    )
+    if (request !== fileSearchRequest || !fileSearchPaletteOpen) return
+
     const targets = new SvelteMap<ActionDefinition['id'], FileSearchTarget>()
     const actions: ActionDefinition[] = []
-    for (const { project, entries } of projectResults) {
-      for (const entry of entries) {
-        const id = actionId(`file:${project.id}:${entry.path}`)
-        targets.set(id, { projectId: project.id, path: entry.path })
-        actions.push({
-          id,
-          title: entry.name,
-          description: `${project.name} · ${entry.path}`,
-          category: 'file',
-          source: {
-            id: `project:${project.id}`,
-            label: project.name,
-            kind: 'app'
-          },
-          keywords: [project.name, entry.path]
-        })
-      }
+    for (const { project, entry, iconUri } of resolved) {
+      const id = actionId(`file:${project.id}:${entry.path}`)
+      targets.set(id, { projectId: project.id, path: entry.path, kind: entry.kind })
+      actions.push({
+        id,
+        title: entry.name,
+        description: `${project.name} · ${entry.path}`,
+        category: 'file',
+        source: {
+          id: `project:${project.id}`,
+          label: project.name,
+          kind: 'app',
+          ...(project.color ? { color: project.color } : {})
+        },
+        iconUri,
+        keywords: [project.name, entry.path, entry.name]
+      })
     }
     fileSearchTargets.clear()
     for (const [id, target] of targets) fileSearchTargets.set(id, target)
@@ -625,28 +867,174 @@
     const target = fileSearchTargets.get(selection.action.id)
     if (!target) return
     fileSearchPaletteOpen = false
-    navigate('projects')
-    workspaceState.requestProjectFileOpen(target.projectId, target.path)
+    resetFileSearch()
+    workspaceState.requestProjectFileOpen(target.projectId, target.path, target.kind)
+  }
+
+  function backToCommandPaletteFromFileSearch(): void {
+    fileSearchPaletteOpen = false
+    resetFileSearch()
+    commandPaletteOpen = true
+  }
+
+  function resetThreadSearch(): void {
+    if (threadSearchTimer !== null) {
+      window.clearTimeout(threadSearchTimer)
+      threadSearchTimer = null
+    }
+    threadSearchRequest++
+    threadSearchLoading = false
+    threadSearchActions = []
+    threadSearchTargets.clear()
+  }
+
+  function openThreadSearchPalette(): void {
+    resetThreadSearch()
+    threadSearchPaletteOpen = true
+  }
+
+  async function searchThreadsAcrossProjects(query: string, request: number): Promise<void> {
+    let results: ThreadSearchResult[]
+    try {
+      results = await invoke('threads:search', query, { limit: 50 })
+    } catch {
+      results = []
+    }
+    if (request !== threadSearchRequest || !threadSearchPaletteOpen) return
+
+    const targets = new SvelteMap<ActionDefinition['id'], ThreadSearchTarget>()
+    const actions: ActionDefinition[] = []
+    for (const result of results) {
+      const thread = result.thread
+      if (thread.archived || isOrchestrationChildThread(thread)) continue
+      const project = scopeState.projectRecords.find(
+        (candidate) => candidate.id === thread.projectId
+      )
+      const id = actionId(`thread:${thread.projectId}:${thread.id}`)
+      targets.set(id, { thread })
+      const snippet = result.kind === 'message' && result.snippet ? result.snippet : undefined
+      // Threads carry their project's icon and color, not a generic thread icon.
+      const projectIconUri = project
+        ? (getProjectIcon(project, projectIconUrls.get(project.id)) ?? undefined)
+        : undefined
+      const isLiveWorking = agentRuns.hasSettled(thread.projectId, thread.id)
+        ? agentRuns.isBusy(thread.projectId, thread.id)
+        : Boolean(thread.sessionId) && isThreadWorking(thread)
+      const status = statusBadgeForThread(thread, isLiveWorking)
+      actions.push({
+        id,
+        title: thread.title,
+        description: snippet
+          ? `${project?.name ?? thread.projectId} · ${snippet}`
+          : (project?.name ?? thread.projectId),
+        category: 'thread',
+        source: {
+          id: `project:${thread.projectId}`,
+          label: project?.name ?? thread.projectId,
+          kind: 'app',
+          ...(project?.color ? { color: project.color } : {})
+        },
+        ...(projectIconUri ? { iconUri: projectIconUri } : { icon: MessagesSquare }),
+        ...(status ? { status } : {}),
+        keywords: [project?.name ?? thread.projectId, thread.title, ...(snippet ? [snippet] : [])]
+      })
+    }
+    threadSearchTargets.clear()
+    for (const [id, target] of targets) threadSearchTargets.set(id, target)
+    threadSearchActions = actions.slice(0, 60)
+    threadSearchLoading = false
+  }
+
+  function handleThreadSearchQuery(query: string): void {
+    if (threadSearchTimer !== null) window.clearTimeout(threadSearchTimer)
+    const request = ++threadSearchRequest
+    const normalized = query.trim()
+    if (normalized.length < 2) {
+      threadSearchLoading = false
+      threadSearchActions = []
+      threadSearchTargets.clear()
+      return
+    }
+
+    threadSearchLoading = true
+    threadSearchTimer = window.setTimeout(() => {
+      threadSearchTimer = null
+      void searchThreadsAcrossProjects(normalized, request)
+    }, 160)
+  }
+
+  /** Preserve the current content view / project sidebar state when opening a
+   *  searched thread — never force the Projects view. Reuses the notification
+   *  open logic, which handles scope state, the threads view and chats. */
+  async function openThreadFromSearch(thread: Thread): Promise<void> {
+    const project =
+      scopeState.projectRecords.find((candidate) => candidate.id === thread.projectId) ?? null
+    await openThreadFromNotification(thread, project)
+  }
+
+  function handleThreadSearchSelection(selection: ActionSelection): void {
+    const target = threadSearchTargets.get(selection.action.id)
+    if (!target) return
+    threadSearchPaletteOpen = false
+    resetThreadSearch()
+    void openThreadFromSearch(target.thread)
+  }
+
+  function backToCommandPaletteFromThreadSearch(): void {
+    threadSearchPaletteOpen = false
+    resetThreadSearch()
+    commandPaletteOpen = true
   }
 
   async function loadScopeData(preferredProjectId?: string): Promise<void> {
     try {
-      const [projectList, threadList] = await Promise.all([
-        invoke('project:list'),
-        invoke('thread:listAll')
-      ])
+      // 1. Projects first — the header and project list render immediately
+      //    without waiting for the (larger) thread payload.
+      const projectList = await invoke('project:list')
       const icons = await loadProjectIcons(projectList)
+      projectIconUrls = icons
       scopeState.setScopesFromProjects(projectList, icons, preferredProjectId)
-      scopeState.setThreads(threadList)
-      notificationPanelState.hydrateFromThreads(threadList)
-      await scopeState.loadBoard()
-      // Seed model pickers from persisted snapshots. Harness discovery remains
-      // lazy and never starts project runtimes during application startup.
-      void providerCatalog.init([...projectList.map((project) => project.id), INBOX_PROJECT_ID])
-      // Canonical-ordered harness list (registry order) — the model picker's
-      // harness filter sorts against this so its chip order never depends on
-      // catalog insertion order.
-      void providerStore.init()
+
+      // 2. Tasks — recent rows only, via the bounded hydration query. The full
+      //    task history never crosses IPC at startup; older rows page in on
+      //    demand through the workspace/scope views. The selected project is
+      //    ordered first so its visible threads render immediately.
+      const threadList = await invoke('thread:listRecent', {
+        projectId: scopeState.activeProjectId ?? undefined,
+        limit: 200
+      })
+      const visibleThreads = threadList.filter((thread) => !thread.archived)
+      scopeState.setThreads(visibleThreads)
+      notificationPanelState.hydrateFromThreads(visibleThreads)
+
+      // 3. The selected project's scope board is the visible surface — load it
+      //    before warming any provider data.
+      if (scopeState.activeProjectId) {
+        scopeState.ensureBoardLoaded(scopeState.activeProjectId)
+      }
+
+      // 4. Warm only the selected project's provider catalog (plus inbox for
+      //    chats), after the post-paint feature IPC contract is available.
+      //    `app:waitForFeatures` is sticky, so this remains safe when the
+      //    feature-ready event arrived before the renderer mounted.
+      void invoke('app:waitForFeatures').then(() => {
+        window.requestAnimationFrame(() => {
+          const targets = scopeState.activeProjectId
+            ? [scopeState.activeProjectId, INBOX_PROJECT_ID]
+            : [INBOX_PROJECT_ID]
+          // Seed model pickers from local snapshots without triggering harness probes.
+          // Live discovery is deferred until the model picker opens or the user
+          // explicitly refreshes, so startup can focus on first paint.
+          void providerCatalog.init(targets, { refresh: false })
+          // Canonical-ordered harness list (registry order) — the model picker's
+          // harness filter sorts against this so its chip order never depends on
+          // catalog insertion order.
+          void providerStore.init()
+          if (scopeState.activeProjectId) {
+            void providerCatalog.refresh(scopeState.activeProjectId, true)
+          }
+        })
+      })
     } catch {
       scopeState.setScopesFromProjects([], new Map())
       scopeState.setThreads([])
@@ -661,6 +1049,32 @@
   async function handleProjectCreated(project: Project): Promise<void> {
     await loadScopeData(project.id)
     workspaceState.pendingAddedProject = project
+  }
+
+  function openNewProjectSpotlight(): void {
+    newProjectSpotlightOpen = true
+  }
+
+  /** Spotlight flow: land on the new project (Projects view) with its fresh thread focused. */
+  async function handleSpotlightProjectCreated(project: Project): Promise<void> {
+    newProjectSpotlightOpen = false
+    navigate('projects')
+    await handleProjectCreated(project)
+  }
+
+  /** Spotlight flow: a picked folder already exists as a project — focus it. */
+  function handleSpotlightExistingProject(project: Project): void {
+    newProjectSpotlightOpen = false
+    navigate('projects')
+    const thread = scopeState.allScopeThreads
+      .filter((candidate) => candidate.projectId === project.id && !candidate.archived)
+      .sort((left, right) => right.lastActivity - left.lastActivity)[0]
+    if (thread) {
+      workspaceState.openThread(thread, project)
+    } else {
+      workspaceState.clearThread()
+      workspaceState.activeProject = project
+    }
   }
 
   async function openScopeThread(thread: Thread): Promise<void> {
@@ -681,7 +1095,10 @@
    * - Threads view → stay there (no scope sidebar).
    * - Chat notification → switch to the chats view.
    */
-  async function openThreadFromNotification(thread: Thread, project: Project): Promise<void> {
+  async function openThreadFromNotification(
+    thread: Thread,
+    project: Project | null
+  ): Promise<void> {
     const isChat = thread.projectId === INBOX_PROJECT_ID
     const inScopeState =
       activeView === 'scope' || (activeView === 'projects' && Boolean(scopeState.sidebarContext))
@@ -751,10 +1168,19 @@
       }
     }
 
+    const chatResponseToastStyle =
+      '--success-bg: color-mix(in srgb, var(--color-chat-success) 12%, var(--color-surface));' +
+      ' --success-border: var(--color-chat-success);' +
+      ' --success-text: var(--color-chat-success);'
+
     if (payload.kind === 'completed') {
       toast.success(payload.title, options)
+    } else if (payload.kind === 'chat-completed') {
+      toast.success(payload.title, { ...options, style: chatResponseToastStyle })
     } else if (payload.kind === 'attention') {
       toast.warning(payload.title, options)
+    } else if (payload.kind === 'spec') {
+      toast.info(payload.title, options)
     } else {
       toast.error(payload.title, options)
     }
@@ -765,40 +1191,147 @@
     await invoke('app:confirmClose')
   }
 
-  /** Notification click navigates to the thread. */
-  $effect(() => {
+  /** Save every unsaved file, then close the app. Stays open if a save fails. */
+  async function confirmForceCloseSaving(): Promise<void> {
+    if (await projectFilesWorkspace.saveAllUnsaved()) {
+      await invoke('app:confirmClose')
+    } else {
+      toast.error('Some files could not be saved', {
+        description: 'The application stayed open so you can review them.'
+      })
+    }
+  }
+
+  function installIpcSubscriptions(): () => void {
     const unsubscribeClick = subscribe('notification:threadClicked', (payload) => {
       void openNotificationThread(payload)
     })
     const unsubscribeShow = subscribe('notification:show', showAgentNotification)
     const unsubscribeConfirmClose = subscribe('window:confirmClose', (payload) => {
-      closeConfirmation = payload
+      // The renderer owns the unsaved-file editor state, so it computes the
+      // pending files here. With nothing pending the close proceeds right away.
+      const files = projectFilesWorkspace.getUnsavedFiles()
+      if (payload.projects.length === 0 && files.length === 0) {
+        void confirmForceClose()
+        return
+      }
+      closeConfirmation = { projects: payload.projects, files }
     })
     const unsubscribeThreadUpdated = subscribe('thread:updated', (...args: unknown[]) => {
       const thread = args[0] as Thread
+      // Once a real title exists the draft-derived label is no longer needed.
+      if (thread.title !== DEFAULT_THREAD_TITLE) {
+        clearDraftLabelCookie(thread.id)
+      }
+      scopeState.updateThread(thread)
+      if (workspaceState.selectedThread?.id === thread.id) {
+        workspaceState.updateThread(thread)
+      }
       if (thread.read) {
         notificationPanelState.dismissForThread(thread.projectId, thread.id)
       }
     })
+    const unsubscribeThreadDeleted = subscribe('thread:deleted', (projectId, threadId) => {
+      scopeState.removeThread(threadId)
+      notificationPanelState.dismissForThread(projectId, threadId)
+      if (workspaceState.selectedThread?.id === threadId) workspaceState.clearThread()
+    })
+    const unsubscribeCloseShortcut = subscribe('window:closeShortcut', () => {
+      handleCloseShortcut()
+    })
+    const unsubscribeNewTerminalShortcut = subscribe('window:newTerminalShortcut', () => {
+      handleNewTerminalShortcut()
+    })
     updaterState.init()
+    // The PiP overlay subscribes to `computerUse:pipFrame`/`pipState` events;
+    // initialise the store here so the overlay's dynamic import can be gated on
+    // `pipState.active` without ever missing a frame.
+    pipState.init()
+    // Load which threads carry a user note so sidebar rows and the right-dock
+    // indicator can react; the store keeps itself in sync via `note:changed`.
+    threadNotesState.init()
     return () => {
       unsubscribeClick()
       unsubscribeShow()
       unsubscribeConfirmClose()
       unsubscribeThreadUpdated()
+      unsubscribeThreadDeleted()
+      unsubscribeCloseShortcut()
+      unsubscribeNewTerminalShortcut()
       updaterState.destroy()
     }
-  })
+  }
 
   /** Clean up renderer resources when the main process signals shutdown. */
-  $effect(() => {
-    const unsubscribe = subscribe('window:beforeQuit', () => {
+  function installShutdownSubscription(): () => void {
+    return subscribe('window:beforeQuit', () => {
       // Renderer should release event subscriptions — the main process
       // will dispose services and flush logs 500ms after this signal.
       // The component tree unmounts naturally as the window closes.
     })
-    return unsubscribe
-  })
+  }
+
+  /**
+   * Cmd/Ctrl+W closes the active surface: the topmost modal, the Settings page,
+   * or the open thread. Only when nothing is active does it close the window
+   * (through the working-threads confirmation gate in the main process).
+   */
+  function handleCloseShortcut(): void {
+    // App-managed palettes first — they float above every view.
+    if (fileSearchPaletteOpen) {
+      fileSearchPaletteOpen = false
+      resetFileSearch()
+      return
+    }
+    if (threadSearchPaletteOpen) {
+      threadSearchPaletteOpen = false
+      resetThreadSearch()
+      return
+    }
+    if (commandPaletteOpen) {
+      commandPaletteOpen = false
+      return
+    }
+    // Reusable modals (Modal / DockableModal) register their close behavior.
+    if (requestCloseTopOverlay()) return
+    // Bits-ui dialogs and element-level overlay Escape handlers.
+    if (closeTopVisibleDialog()) return
+    // On a Settings page: leave back to the previous view.
+    if (isSettingsView(activeView)) {
+      navigate(lastViewBeforeSettings)
+      return
+    }
+    // Focus inside the context sidebar: close its active tab (through Workspace's
+    // unsaved-changes confirmation) instead of clearing the thread.
+    const active = document.activeElement instanceof Element ? document.activeElement : null
+    if (active?.closest('[data-region="context-sidebar"]')) {
+      contextSidebarState.requestCloseActiveTab()
+      return
+    }
+    // An open thread: deselect it back to the thread list.
+    if (
+      (activeView === 'projects' || activeView === 'chats' || activeView === 'threads') &&
+      workspaceState.selectedThread
+    ) {
+      workspaceState.clearThread()
+      return
+    }
+    // Nothing active — close the window through the confirmation gate.
+    void invoke('app:requestClose')
+  }
+
+  /**
+   * Cmd/Ctrl+T while a terminal is focused opens a new terminal tab in the
+   * terminal panel (right sidebar or bottom dock). The main process only emits
+   * this event when it intercepted the key with a terminal focused, but the
+   * renderer's own focus flag is the source of truth — re-check it defensively.
+   */
+  function handleNewTerminalShortcut(): void {
+    if (!isTerminalFocused()) return
+    const thread = workspaceState.selectedThread
+    if (!thread) return
+    contextSidebarState.openNewTerminal(thread.projectId, thread.id)
+  }
 
   function handleFind(): void {
     const active = document.activeElement instanceof Element ? document.activeElement : null
@@ -808,6 +1341,10 @@
     }
     if (active?.closest('[data-region="editor"]')) {
       findNavState.openEditorFind()
+      return
+    }
+    if (active?.closest('[data-region="spec-studio"]')) {
+      findNavState.openStudioFind()
       return
     }
     if (active?.closest('[data-region="conversation"]')) {
@@ -820,6 +1357,10 @@
       findNavState.openEditorFind()
       return
     }
+    if (document.querySelector('[data-region="spec-studio"]')) {
+      findNavState.openStudioFind()
+      return
+    }
     if (
       (activeView === 'projects' || activeView === 'chats' || activeView === 'threads') &&
       document.querySelector('[data-region="conversation"]')
@@ -830,65 +1371,129 @@
   }
 
   /** Global application shortcuts. */
-  $effect(() => {
-    const onKeydown = (e: KeyboardEvent): void => {
-      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'f') {
-        e.preventDefault()
-        if (e.repeat) return
-        handleFind()
+  function onKeydown(e: KeyboardEvent): void {
+    const isMac = window.api?.windowInfo?.platform === 'darwin'
+    if (e.key.toLowerCase() === 'w' && (isMac ? e.metaKey : e.ctrlKey)) {
+      // Primary path is the main process `before-input-event` → the
+      // `window:closeShortcut` event. This is a fallback for platforms where
+      // the key still reaches the renderer (the main process preventDefaults
+      // the page keydown, so this normally never fires twice).
+      //
+      // On non-mac platforms Ctrl+W is the shell's delete-word binding while a
+      // terminal is focused — leave it alone so it reaches the shell.
+      if (!isMac && isTerminalFocused()) return
+      e.preventDefault()
+      if (e.repeat) return
+      handleCloseShortcut()
+      return
+    }
+    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'f') {
+      e.preventDefault()
+      if (e.repeat) return
+      handleFind()
+      return
+    }
+    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+      e.preventDefault()
+      if (e.repeat) return
+      toggleCommandPalette()
+      return
+    }
+    if ((e.metaKey || e.ctrlKey) && e.key === ',') {
+      e.preventDefault()
+      navigate('settings')
+    }
+    if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === 'n') {
+      e.preventDefault()
+      if (e.repeat) return
+      // Cmd/Ctrl+Shift+N → new-project spotlight from any view except chats (inbox).
+      if (activeView === 'chats') return
+      if (commandPaletteOpen) commandPaletteOpen = false
+      openNewProjectSpotlight()
+      return
+    }
+    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'n') {
+      e.preventDefault()
+      if (e.repeat) return
+
+      // When the file tree has focus, Cmd/Ctrl+N creates a new file there
+      // instead of starting a new thread. The tree's own handler manages it.
+      const active = document.activeElement instanceof Element ? document.activeElement : null
+      if (active?.closest('[data-region="file-tree"]')) return
+
+      if (activeView === 'scope') {
+        if (scopeState.activeProjectId) {
+          const bucketId =
+            scopeState.sidebarContext?.bucketId ??
+            scopeState.buckets[0]?.id ??
+            DEFAULT_SCOPE_BUCKET_ID
+          scopeState.requestCreateScopedThread(bucketId)
+        }
         return
       }
-      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
-        e.preventDefault()
-        if (e.repeat) return
-        toggleCommandPalette()
-        return
-      }
-      if ((e.metaKey || e.ctrlKey) && e.key === ',') {
-        e.preventDefault()
-        navigate('settings')
-      }
-      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'n') {
-        e.preventDefault()
-        if (e.repeat) return
 
-        if (activeView === 'scope') {
-          if (scopeState.activeProjectId) {
-            const bucketId =
-              scopeState.sidebarContext?.bucketId ??
-              scopeState.buckets[0]?.id ??
-              DEFAULT_SCOPE_BUCKET_ID
-            scopeState.requestCreateScopedThread(bucketId)
-          }
-          return
-        }
-
-        if (activeView !== 'projects' && activeView !== 'chats' && activeView !== 'threads') return
-        if (activeView === 'chats') {
-          workspaceState.requestNewChat()
-        } else if (
-          workspaceState.activeProject &&
-          workspaceState.activeProject.id !== INBOX_PROJECT_ID
-        ) {
-          const bucketId = scopeState.sidebarContext?.bucketId
-          workspaceState.requestCreateThread(bucketId)
-        } else {
-          workspaceState.requestAddProject()
-        }
+      if (activeView !== 'projects' && activeView !== 'chats' && activeView !== 'threads') return
+      if (activeView === 'chats') {
+        workspaceState.requestNewChat()
+      } else if (
+        workspaceState.activeProject &&
+        workspaceState.activeProject.id !== INBOX_PROJECT_ID
+      ) {
+        const bucketId = scopeState.sidebarContext?.bucketId
+        workspaceState.requestCreateThread(bucketId)
+      } else {
+        workspaceState.requestAddProject()
       }
     }
-    window.addEventListener('keydown', onKeydown)
-    return () => window.removeEventListener('keydown', onKeydown)
-  })
-
-  void loadConfig()
-  void loadScopeData()
+  }
 
   navigationHistoryState.init(rendererRecovery.activeView, rendererRecovery.selectedThread)
 
-  /** Record every view/thread location change in the global navigation history. */
-  $effect(() => {
-    navigationHistoryState.observe(currentLocation())
+  onMount(() => {
+    const mq = window.matchMedia('(prefers-color-scheme: dark)')
+    systemDark = mq.matches
+    applyTheme()
+    const onColorSchemeChange = (event: MediaQueryListEvent): void => {
+      systemDark = event.matches
+      applyTheme()
+    }
+    mq.addEventListener('change', onColorSchemeChange)
+    window.addEventListener('keydown', onKeydown)
+
+    const restoreWorkspaceCallbacks = installWorkspaceCallbacks()
+    const unsubscribeIpc = installIpcSubscriptions()
+    const unsubscribeShutdown = installShutdownSubscription()
+    const originalOpenThread = workspaceState.openThread.bind(workspaceState)
+    const originalClearThread = workspaceState.clearThread.bind(workspaceState)
+    workspaceState.openThread = (thread, project, iconUrl) => {
+      originalOpenThread(thread, project, iconUrl)
+      observeNavigationLocation()
+    }
+    workspaceState.clearThread = () => {
+      originalClearThread()
+      observeNavigationLocation()
+    }
+    observeNavigationLocation()
+    void loadConfig()
+    void harnessLifecycleStore.autoUpdateOnStartup()
+    const hydrationTimer = window.setTimeout(() => {
+      void loadScopeData().finally(() => {
+        // Signal the main process that the renderer finished its initial
+        // hydration so it can timestamp the final startup phases.
+        void invoke('app:rendererReady').catch(() => undefined)
+      })
+    }, 0)
+
+    return () => {
+      mq.removeEventListener('change', onColorSchemeChange)
+      window.removeEventListener('keydown', onKeydown)
+      restoreWorkspaceCallbacks()
+      unsubscribeIpc()
+      unsubscribeShutdown()
+      window.clearTimeout(hydrationTimer)
+      workspaceState.openThread = originalOpenThread
+      workspaceState.clearThread = originalClearThread
+    }
   })
 </script>
 
@@ -898,7 +1503,6 @@
     {navigate}
     {goBack}
     {goForward}
-    onCommandPaletteOpen={toggleCommandPalette}
     onProjectCreated={handleProjectCreated}
     onScopeThreadOpen={openScopeThread}
   />
@@ -916,13 +1520,19 @@
         mode={lastContentView}
         active={activeView === 'projects' || activeView === 'chats' || activeView === 'threads'}
         {navigate}
+        {config}
+        {updateConfig}
       />
     </div>
     {#if activeView === 'scope'}
-      <ScopeView {navigateToProjects} />
+      {#await import('$lib/components/scope/ScopeView.svelte') then { default: ScopeView }}
+        <ScopeView {navigateToProjects} />
+      {/await}
     {:else if isSettingsView(activeView)}
-      <!-- Each settings section is its own dedicated page. -->
-      {#key activeView}
+      <!-- Each settings section is its own dedicated page in the navigation model.
+           The view stays mounted and SettingsView swaps its content on the section
+           prop — a keyed remount here would flash the screen on every tab switch. -->
+      {#await import('$lib/components/settings/SettingsView.svelte') then { default: SettingsView }}
         <SettingsView
           {config}
           {settingsReady}
@@ -933,57 +1543,128 @@
           onNavigateSection={(section) => navigate(settingsViewForSection(section))}
           onBack={() => navigate(lastViewBeforeSettings)}
         />
-      {/key}
+      {/await}
     {:else if !(activeView === 'projects' || activeView === 'chats' || activeView === 'threads')}
       <div class="flex h-full items-center justify-center">
         <p class="text-sm text-dimmed">Coming soon</p>
       </div>
     {/if}
   </main>
-  <CommandPalette
-    open={commandPaletteOpen}
-    actions={paletteActions}
-    title="Search actions"
-    placeholder="Search models, modes, skills, MCP, and commands…"
-    emptyLabel="No matching actions"
-    onSelect={handlePaletteSelection}
-    onClose={() => (commandPaletteOpen = false)}
-    onRestoreFocus={restorePaletteFocus}
-    shortcutLabel="Ctrl K"
-  />
-  <CommandPalette
-    open={fileSearchPaletteOpen}
-    actions={fileSearchActions}
-    title="Search files across projects"
-    placeholder="Type at least two characters…"
-    emptyLabel={fileSearchLoading ? 'Searching project files…' : 'No matching files'}
-    onQueryChange={handleFileSearchQuery}
-    onSelect={handleFileSearchSelection}
-    onClose={() => {
-      fileSearchPaletteOpen = false
-      resetFileSearch()
-    }}
-  />
+  {#if commandPaletteOpen}
+    {#await import('$lib/components/actions/CommandPalette.svelte') then { default: CommandPalette }}
+      <CommandPalette
+        open={commandPaletteOpen}
+        actions={paletteActions}
+        title="Search actions"
+        placeholder="Search actions, threads, and files…"
+        emptyLabel="No matching actions"
+        onSelect={handlePaletteSelection}
+        onClose={() => (commandPaletteOpen = false)}
+        onRestoreFocus={restorePaletteFocus}
+        shortcutLabel="Ctrl K"
+      />
+    {/await}
+  {/if}
+  {#if fileSearchPaletteOpen}
+    {#await import('$lib/components/actions/CommandPalette.svelte') then { default: FileSearchPalette }}
+      <FileSearchPalette
+        open={fileSearchPaletteOpen}
+        actions={fileSearchActions}
+        title="Search files across projects"
+        placeholder="Type at least two characters…"
+        emptyLabel={fileSearchLoading ? 'Searching project files…' : 'No matching files'}
+        headerIcon={FileSearch}
+        headerIconBadge
+        headerIconBadgeClass="border-warning/25 bg-warning/10 text-warning"
+        serverFiltered
+        onBack={backToCommandPaletteFromFileSearch}
+        onQueryChange={handleFileSearchQuery}
+        onSelect={handleFileSearchSelection}
+        closeOnSelect={false}
+        onClose={() => {
+          fileSearchPaletteOpen = false
+          resetFileSearch()
+        }}
+      />
+    {/await}
+  {/if}
+  {#if threadSearchPaletteOpen}
+    {#await import('$lib/components/actions/CommandPalette.svelte') then { default: ThreadSearchPalette }}
+      <ThreadSearchPalette
+        open={threadSearchPaletteOpen}
+        actions={threadSearchActions}
+        title="Search threads across projects"
+        placeholder="Search thread titles and messages across all projects…"
+        emptyLabel={threadSearchLoading
+          ? 'Searching threads…'
+          : 'Type at least two characters to search all projects'}
+        headerIcon={MessagesSquare}
+        headerIconBadge
+        headerIconBadgeClass="border-info/25 bg-info/10 text-info"
+        serverFiltered
+        onBack={backToCommandPaletteFromThreadSearch}
+        onQueryChange={handleThreadSearchQuery}
+        onSelect={handleThreadSearchSelection}
+        closeOnSelect={false}
+        onClose={() => {
+          threadSearchPaletteOpen = false
+          resetThreadSearch()
+        }}
+      />
+    {/await}
+  {/if}
+  {#if newProjectSpotlightOpen}
+    {#await import('$lib/components/shared/ProjectCreateControl.svelte') then { default: ProjectCreateControl }}
+      <ProjectCreateControl
+        mode="spotlight"
+        open={newProjectSpotlightOpen}
+        onClose={() => (newProjectSpotlightOpen = false)}
+        projects={scopeState.projectRecords}
+        onProjectCreated={handleSpotlightProjectCreated}
+        onExisting={handleSpotlightExistingProject}
+      />
+    {/await}
+  {/if}
   <Toaster />
   <TooltipHost />
-  <PipOverlay />
+  {#if pipState.active && pipState.frameDataUrl !== null}
+    {#await import('$lib/components/pip/PipOverlay.svelte') then { default: PipOverlay }}
+      <PipOverlay />
+    {/await}
+  {/if}
 
-  <CloseConfirmationModal
-    payload={closeConfirmation}
-    onDismiss={() => (closeConfirmation = null)}
-    onConfirm={confirmForceClose}
-  />
+  {#if closeConfirmation}
+    {#await import('$lib/components/layout/CloseConfirmationModal.svelte') then { default: CloseConfirmationModal }}
+      <CloseConfirmationModal
+        payload={closeConfirmation}
+        onDismiss={() => (closeConfirmation = null)}
+        onConfirm={confirmForceClose}
+        onConfirmSave={confirmForceCloseSaving}
+      />
+    {/await}
+  {/if}
 
   {#if harnessLifecycleStore.runs.length}
     <!-- Floats above every view — survives navigation while tasks keep running. -->
-    <HarnessRunModal />
+    {#await import('$lib/components/providers/HarnessRunModal.svelte') then { default: HarnessRunModal }}
+      <HarnessRunModal />
+    {/await}
   {/if}
 
-  {#if (activeView === 'scope' || isSettingsView(activeView)) && contextSidebarState.activeTab?.kind === 'notifications' && contextSidebarState.visible}
+  {#if prLifecycleStore.drafts.length}
+    <!-- Floats above every view — survives thread/project/view and sidebar visibility. -->
+    {#await import('$lib/components/git/PrDockHost.svelte') then { default: PrDockHost }}
+      <PrDockHost />
+    {/await}
+  {/if}
+
+  {#if (activeView === 'scope' || isSettingsView(activeView)) && contextSidebarState.sidebarVisible && contextSidebarState.sidebarActiveTab?.kind === 'notifications'}
     <div
       class="fixed bottom-0 right-0 top-12 z-40 w-[480px] border-l border-border bg-surface shadow-xl"
     >
-      <NotificationPanel />
+      {#await import('$lib/components/notifications/NotificationPanel.svelte') then { default: NotificationPanel }}
+        <NotificationPanel />
+      {/await}
     </div>
   {/if}
 </div>

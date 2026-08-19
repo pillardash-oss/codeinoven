@@ -1,7 +1,7 @@
 import { createHash } from 'crypto'
 import { join } from 'path'
 import type { Database } from '../../main/database/database'
-import type { StorageEngine } from '../../main/storage-engine'
+import type { StorageEngine } from '../../main/storage/storage-engine'
 import { exportBrainstormMarkdown } from '../brainstorm/brainstorm-markdown'
 import { parseGeneratedBrainstormContent } from '../brainstorm/brainstorm-validation'
 import { ensureFeatureSlug, requireLocalProject } from '../project-artifacts'
@@ -120,6 +120,21 @@ export class BrainstormEngine {
       threadId
     )
     return { ...workflow, entryChoice: choice, stage, updatedAt: now }
+  }
+
+  /**
+   * Remove the workflow row entirely, returning the thread to a state with no
+   * planning choice recorded. Used to abandon a failed planning attempt (e.g.
+   * the retry card's Cancel action) so reconcile no longer shows a retry prompt
+   * and no skipped/finalized stage triggers automatic generation resume.
+   */
+  resetWorkflow(projectId: string, threadId: string): void {
+    this.assertScope(projectId, threadId)
+    this.db.run(
+      'DELETE FROM brainstorm_workflow WHERE project_id=? AND thread_id=?',
+      projectId,
+      threadId
+    )
   }
 
   getWorkflowState(projectId: string, threadId: string): BrainstormWorkflowState | null {

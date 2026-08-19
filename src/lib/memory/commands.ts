@@ -42,9 +42,11 @@ const PRIORITY_KEYWORDS: Record<string, MemoryPriority> = {
 
 const SCOPE_KEYWORDS: Record<string, MemoryScope> = {
   global: 'global',
+  projects: 'projects',
   project: 'project',
   thread: 'thread',
-  chat: 'chat'
+  chat: 'chat',
+  chats: 'chat'
 }
 
 /**
@@ -217,7 +219,7 @@ export function getMemoryHelpText(): string {
     '**Memory Commands:**',
     '',
     '`/memory add <label> <content>` — Add a new memory entry',
-    '  Options: `--category behavioral|project-rule|identity|preference`',
+    '  Options: `--category behavioral|project-rule|identity|preference|models`',
     '           `--priority critical|high|medium|low`',
     '           `--scope global|project`',
     '',

@@ -1,6 +1,7 @@
 import type { EngineeringSpec, EngineeringSpecContent, SpecPhase } from '../types'
 
 const SECTION_ORDER = [
+  'TL;DR',
   'Problem',
   'Resolution',
   'Success Criteria',
@@ -28,11 +29,15 @@ function block(value: unknown): string {
   return `\`\`\`json\n${JSON.stringify(value, null, 2)}\n\`\`\``
 }
 
-/** Exports seven required sections plus optional Additional Info in canonical order. */
+/** Exports the TL;DR plus seven required sections and optional Additional Info in canonical order. */
 export function exportEngineeringSpecMarkdown(spec: EngineeringSpec): string {
   const { content } = spec
   return [
     `# ${spec.id} — Specification v${spec.version}`,
+    '',
+    '## TL;DR',
+    '',
+    content.resolutionSummary,
     '',
     '## Problem',
     '',
@@ -41,7 +46,6 @@ export function exportEngineeringSpecMarkdown(spec: EngineeringSpec): string {
     '## Resolution',
     '',
     block({
-      summary: content.resolutionSummary,
       phases: content.phases
     }),
     '',
@@ -77,15 +81,13 @@ export function exportEngineeringSpecMarkdown(spec: EngineeringSpec): string {
 function extractSections(markdown: string): Map<MarkdownSectionName, string> {
   const sections = new Map<MarkdownSectionName, string>()
   const headingPattern = /^## (.+?)\s*$/gm
-  const matches = [...markdown.matchAll(headingPattern)]
+  const matches = [...markdown.matchAll(headingPattern)].filter((match) =>
+    SECTION_ORDER.includes(match[1] as MarkdownSectionName)
+  )
 
   for (let index = 0; index < matches.length; index += 1) {
     const match = matches[index]
     const name = match[1]
-    if (!SECTION_ORDER.includes(name as MarkdownSectionName)) {
-      continue
-    }
-
     const sectionName = name as MarkdownSectionName
     if (sections.has(sectionName)) {
       throw new SpecMarkdownError(`Section "${sectionName}" appears more than once.`)
@@ -96,7 +98,9 @@ function extractSections(markdown: string): Map<MarkdownSectionName, string> {
     sections.set(sectionName, markdown.slice(start, end).trim())
   }
 
-  for (const sectionName of SECTION_ORDER.filter((name) => name !== 'Additional Info')) {
+  for (const sectionName of SECTION_ORDER.filter(
+    (name) => name !== 'TL;DR' && name !== 'Additional Info'
+  )) {
     if (!sections.has(sectionName)) {
       throw new SpecMarkdownError(`Missing required heading "## ${sectionName}".`)
     }
@@ -199,6 +203,9 @@ export function importEngineeringSpecMarkdown(markdown: string): EngineeringSpec
     parseBlock('Resolution', sections.get('Resolution') ?? ''),
     'Resolution'
   )
+  const resolutionSummary = sections.has('TL;DR')
+    ? requireString(sections.get('TL;DR'), 'TL;DR')
+    : requireString(resolution.summary, 'Resolution.summary')
   const constraints = requireRecord(
     parseBlock('Constraints & Risks', sections.get('Constraints & Risks') ?? ''),
     'Constraints & Risks'
@@ -207,7 +214,7 @@ export function importEngineeringSpecMarkdown(markdown: string): EngineeringSpec
   return {
     content: {
       problem,
-      resolutionSummary: requireString(resolution.summary, 'Resolution.summary'),
+      resolutionSummary,
       phases: requirePhases(resolution.phases),
       successCriteria: requireStringArray(
         parseBlock('Success Criteria', sections.get('Success Criteria') ?? ''),

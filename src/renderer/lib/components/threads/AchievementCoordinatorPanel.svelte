@@ -2,7 +2,7 @@
   import { ArrowUpRight, Play, ShieldCheck, Target } from '@lucide/svelte'
   import ModelPicker from '../shared/ModelPicker.svelte'
   import ThreadRow from './ThreadRow.svelte'
-  import type { ProviderCatalog, Thread, ThreadSettings } from '$shared/types'
+  import type { ProviderCatalog, Thread, ThreadSettings, ThinkingLevel } from '$shared/types'
 
   interface Props {
     specTitle: string
@@ -11,7 +11,6 @@
     auditState?: Thread['auditState']
     reportAvailable?: boolean
     selectedThreadId: string
-    width: number
     auditorSettings: ThreadSettings
     providers: ProviderCatalog[]
     projectId?: string | null
@@ -23,8 +22,12 @@
     onOpenThread: (thread: Thread) => void
     onResume: () => void
     onModelChange: (settings: ThreadSettings) => void
-    onToggleFavorite?: (providerId: string, modelId: string) => void
-    onWidthChange: (width: number) => void
+    onToggleFavorite?: (providerId: string, modelId: string, harnessId: string) => void
+    onReorderFavorite?: (
+      draggedKey: string,
+      targetKey: string,
+      position: 'before' | 'after'
+    ) => void
   }
 
   let {
@@ -34,7 +37,6 @@
     auditState,
     reportAvailable = false,
     selectedThreadId,
-    width,
     auditorSettings,
     providers,
     projectId = null,
@@ -47,18 +49,8 @@
     onResume,
     onModelChange,
     onToggleFavorite,
-    onWidthChange
+    onReorderFavorite
   }: Props = $props()
-
-  const WIDTH_STORAGE_KEY = 'codeinoven:achievement-coordinator-width'
-  const MIN_WIDTH = 280
-  const MAX_WIDTH = 560
-
-  let resizing = $state(false)
-  let resizePointerId = 0
-  let resizeStartX = 0
-  let resizeStartWidth = 0
-  let resizeCurrentWidth = 0
 
   let selectedAuditor = $derived.by(() => {
     const provider =
@@ -116,75 +108,27 @@
     }
   })
 
-  function clampWidth(nextWidth: number): number {
-    const viewportMaximum = Math.max(MIN_WIDTH, window.innerWidth - 480)
-    return Math.min(Math.max(nextWidth, MIN_WIDTH), Math.min(MAX_WIDTH, viewportMaximum))
-  }
-
-  function restoreWidth(): void {
-    const stored = Number.parseInt(localStorage.getItem(WIDTH_STORAGE_KEY) ?? '', 10)
-    if (Number.isFinite(stored)) onWidthChange(clampWidth(stored))
-  }
-
-  function startResize(event: PointerEvent & { currentTarget: HTMLButtonElement }): void {
-    resizing = true
-    resizePointerId = event.pointerId
-    resizeStartX = event.clientX
-    resizeStartWidth = width
-    resizeCurrentWidth = width
-    event.currentTarget.setPointerCapture(event.pointerId)
-  }
-
-  function resize(event: PointerEvent): void {
-    if (!resizing || event.pointerId !== resizePointerId) return
-    resizeCurrentWidth = clampWidth(resizeStartWidth + resizeStartX - event.clientX)
-    onWidthChange(resizeCurrentWidth)
-  }
-
-  function finishResize(event: PointerEvent): void {
-    if (!resizing || event.pointerId !== resizePointerId) return
-    resizing = false
-    localStorage.setItem(WIDTH_STORAGE_KEY, String(resizeCurrentWidth))
-  }
-
-  function resizeWithKeyboard(event: KeyboardEvent): void {
-    const step = event.shiftKey ? 48 : 16
-    const nextWidth =
-      event.key === 'ArrowLeft' ? width + step : event.key === 'ArrowRight' ? width - step : null
-    if (nextWidth === null) return
-    event.preventDefault()
-    resizeCurrentWidth = clampWidth(nextWidth)
-    onWidthChange(resizeCurrentWidth)
-    localStorage.setItem(WIDTH_STORAGE_KEY, String(resizeCurrentWidth))
-  }
-
   function chooseModel(providerId: string, modelId: string, harnessId: string): void {
     onModelChange({ ...auditorSettings, harnessId, providerId, modelId })
   }
+
+  function chooseThinking(level: ThinkingLevel): void {
+    onModelChange({ ...auditorSettings, thinkingLevel: level })
+  }
 </script>
 
-<aside
-  {@attach restoreWidth}
-  class="achievement-coordinator-panel absolute inset-y-0 right-0 z-10 flex min-h-0 flex-col border-l border-border bg-surface"
-  class:select-none={resizing}
-  style:width={`${width}px`}
+<!--
+  Docked into the context sidebar: the sidebar owns the width, the visibility,
+  and the tab chrome, so this panel is just a column that fills whatever space
+  it is given.
+-->
+<div
+  class="achievement-coordinator-panel flex h-full min-h-0 flex-col"
   aria-label="Achievement coordinator"
 >
-  <button
-    type="button"
-    class="absolute inset-y-0 left-0 z-20 w-1.5 -translate-x-1/2 cursor-col-resize touch-none bg-transparent transition-colors hover:bg-primary/30 focus:bg-primary/30 focus:outline-none"
-    title="Resize Achievement coordinator"
-    aria-label="Resize Achievement coordinator"
-    onpointerdown={startResize}
-    onpointermove={resize}
-    onpointerup={finishResize}
-    onpointercancel={finishResize}
-    onkeydown={resizeWithKeyboard}
-  ></button>
-
   <header class="shrink-0 border-b border-border p-4">
-    <div class="flex items-center gap-2 text-primary">
-      <Target size={15} />
+    <div class="flex min-w-0 items-center gap-2 text-primary">
+      <Target size={15} class="shrink-0" />
       <h2 class="text-xs font-semibold uppercase tracking-wide">Achievement coordinator</h2>
     </div>
     <h3 class="mt-3 text-sm font-semibold text-foreground">{specTitle}</h3>
@@ -270,7 +214,10 @@
           label="Change model"
           variant="action"
           onSelect={chooseModel}
+          thinkingLevel={auditorSettings.thinkingLevel}
+          onSelectThinking={chooseThinking}
           {onToggleFavorite}
+          {onReorderFavorite}
         />
       </div>
       {#if modelLocked}
@@ -301,7 +248,7 @@
       {/if}
     </section>
   </div>
-</aside>
+</div>
 
 <style>
   .achievement-coordinator-panel {

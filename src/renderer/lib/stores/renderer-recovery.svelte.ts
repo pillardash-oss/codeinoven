@@ -3,12 +3,15 @@ import type {
   PromptAttachment,
   PromptProjectReference
 } from '$shared/types'
+import { parseModelKey } from '$lib/model-keys'
+import { setDraftLabelCookie } from './draft-label'
 import {
   MAX_DRAFT_LENGTH,
   MAX_RECOVERY_DRAFTS,
   browserRecoveryStorage,
   emptyRendererRecoverySnapshot,
   isRecoveryIdentifier,
+  isSettingsView,
   loadRendererRecoveryState,
   persistRendererRecoveryState,
   recoveryDraftKey,
@@ -16,9 +19,11 @@ import {
   type ComposerDraftEntry,
   type MainView,
   type QueuedMessageEntry,
+  type QueuedResponseReference,
   type RecoveryStorage,
   type RendererRecoverySnapshot,
-  type SelectedThreadReference
+  type SelectedThreadReference,
+  type StartAfterThreadReference
 } from './renderer-recovery'
 
 export type {
@@ -28,6 +33,7 @@ export type {
   RecoveryStorage,
   RendererRecoverySnapshot,
   SelectedThreadReference,
+  StartAfterThreadReference,
   SettingsSection
 } from './renderer-recovery'
 export {
@@ -36,7 +42,6 @@ export {
   settingsSectionForView,
   settingsViewForSection
 } from './renderer-recovery'
-
 /**
  * Restart-safe renderer navigation and composer state.
  *
@@ -45,11 +50,15 @@ export {
  */
 export class RendererRecoveryStore {
   activeView = $state<MainView>('projects')
+  lastContentView = $state<'projects' | 'chats' | 'threads'>('projects')
+  lastViewBeforeSettings = $state<MainView>('projects')
   selectedProjectId = $state<string | null>(null)
   selectedThread = $state<SelectedThreadReference | null>(null)
   collapsedFolders = $state<string[]>([])
   favoriteModels = $state<string[]>([])
   recentModels = $state<string[]>([])
+  chatFavoriteModels = $state<string[]>([])
+  chatRecentModels = $state<string[]>([])
   auditModelKey = $state<string | undefined>(undefined)
   private composerDrafts = $state<Record<string, ComposerDraftEntry>>({})
   private queuedMessages = $state<Record<string, QueuedMessageEntry>>({})
@@ -57,11 +66,15 @@ export class RendererRecoveryStore {
   constructor(private readonly storage: RecoveryStorage | undefined = browserRecoveryStorage()) {
     const saved = loadRendererRecoveryState(this.storage)
     this.activeView = saved.activeView
+    this.lastContentView = saved.lastContentView
+    this.lastViewBeforeSettings = saved.lastViewBeforeSettings
     this.selectedProjectId = saved.selectedProjectId
     this.selectedThread = saved.selectedThread
     this.collapsedFolders = saved.collapsedFolders
     this.favoriteModels = saved.favoriteModels
     this.recentModels = saved.recentModels
+    this.chatFavoriteModels = saved.chatFavoriteModels
+    this.chatRecentModels = saved.chatRecentModels
     this.auditModelKey = saved.auditModelKey
     this.composerDrafts = saved.composerDrafts
     this.queuedMessages = saved.queuedMessages
@@ -69,13 +82,22 @@ export class RendererRecoveryStore {
 
   private entryFor(projectId: string, threadId: string): ComposerDraftEntry {
     if (!isRecoveryIdentifier(projectId) || !isRecoveryIdentifier(threadId))
-      return { text: '', attachments: [], projectReferences: [], taskReferences: [] }
+      return {
+        text: '',
+        attachments: [],
+        projectReferences: [],
+        taskReferences: [],
+        promptReferences: [],
+        startAfterThreads: []
+      }
     return (
       this.composerDrafts[recoveryDraftKey(projectId, threadId)] ?? {
         text: '',
         attachments: [],
         projectReferences: [],
-        taskReferences: []
+        taskReferences: [],
+        promptReferences: [],
+        startAfterThreads: []
       }
     )
   }
@@ -84,6 +106,8 @@ export class RendererRecoveryStore {
     return {
       version: 1,
       activeView: this.activeView,
+      lastContentView: this.lastContentView,
+      lastViewBeforeSettings: this.lastViewBeforeSettings,
       selectedProjectId: this.selectedProjectId,
       selectedThread: this.selectedThread ? { ...this.selectedThread } : null,
       composerDrafts: { ...this.composerDrafts },
@@ -91,6 +115,8 @@ export class RendererRecoveryStore {
       collapsedFolders: [...this.collapsedFolders],
       favoriteModels: [...this.favoriteModels],
       recentModels: [...this.recentModels],
+      chatFavoriteModels: [...this.chatFavoriteModels],
+      chatRecentModels: [...this.chatRecentModels],
       auditModelKey: this.auditModelKey
     }
   }
@@ -111,6 +137,15 @@ export class RendererRecoveryStore {
 
   setActiveView(view: MainView): void {
     this.activeView = view
+    // Track the last content view so returning from Settings/Scope — even
+    // across a restart made on a Settings page — lands back on the same view.
+    if (view === 'projects' || view === 'chats' || view === 'threads') {
+      this.lastContentView = view
+    }
+    // Remember the last non-settings view for the Settings back button.
+    if (!isSettingsView(view)) {
+      this.lastViewBeforeSettings = view
+    }
     this.persist()
   }
 
@@ -145,6 +180,8 @@ export class RendererRecoveryStore {
       entry.attachments.length > 0 ||
       entry.projectReferences.length > 0 ||
       entry.taskReferences.length > 0 ||
+      entry.promptReferences.length > 0 ||
+      entry.startAfterThreads.length > 0 ||
       this.queuedMessageFor(projectId, threadId) !== null
     )
   }
@@ -161,13 +198,18 @@ export class RendererRecoveryStore {
     return this.entryFor(projectId, threadId).taskReferences
   }
 
+  startAfterThreadsFor(projectId: string, threadId: string): StartAfterThreadReference[] {
+    return this.entryFor(projectId, threadId).startAfterThreads
+  }
+
   setDraft(
     projectId: string,
     threadId: string,
     draft: string,
     attachments?: PromptAttachment[],
     projectReferences?: PromptProjectReference[],
-    taskReferences?: PromptAssignmentTaskReference[]
+    taskReferences?: PromptAssignmentTaskReference[],
+    promptReferences?: QueuedResponseReference[]
   ): void {
     if (
       !isRecoveryIdentifier(projectId) ||
@@ -183,17 +225,21 @@ export class RendererRecoveryStore {
       text: '',
       attachments: [],
       projectReferences: [],
-      taskReferences: []
+      taskReferences: [],
+      promptReferences: [],
+      startAfterThreads: []
     }
     const nextAttachments = attachments ?? current.attachments
     const nextProjectReferences = projectReferences ?? current.projectReferences
     const nextTaskReferences = taskReferences ?? current.taskReferences
+    const nextPromptReferences = promptReferences ?? current.promptReferences
     // No-op writes must not reassign state — callers may run inside effects.
     if (
       current.text === draft &&
       current.attachments === nextAttachments &&
       current.projectReferences === nextProjectReferences &&
-      current.taskReferences === nextTaskReferences
+      current.taskReferences === nextTaskReferences &&
+      current.promptReferences === nextPromptReferences
     )
       return
 
@@ -202,7 +248,9 @@ export class RendererRecoveryStore {
       draft.length === 0 &&
       nextAttachments.length === 0 &&
       nextProjectReferences.length === 0 &&
-      nextTaskReferences.length === 0
+      nextTaskReferences.length === 0 &&
+      nextPromptReferences.length === 0 &&
+      current.startAfterThreads.length === 0
     ) {
       delete next[key]
     } else {
@@ -214,15 +262,103 @@ export class RendererRecoveryStore {
         text: draft,
         attachments: nextAttachments,
         projectReferences: nextProjectReferences,
-        taskReferences: nextTaskReferences
+        taskReferences: nextTaskReferences,
+        promptReferences: nextPromptReferences,
+        startAfterThreads: current.startAfterThreads
+      }
+    }
+    this.composerDrafts = next
+    // Mirror the draft-derived label into its 24h cookie so the sidebar/header
+    // can show what the user is typing instead of the "New Thread" placeholder.
+    setDraftLabelCookie(threadId, draft)
+    this.persist()
+  }
+
+  clearDraft(projectId: string, threadId: string): void {
+    this.clearStartAfterThreads(projectId, threadId)
+    this.setDraft(projectId, threadId, '', [], [], [], [])
+  }
+
+  /** Persist the source threads the next message waits for before it starts. */
+  setStartAfterThreads(
+    projectId: string,
+    threadId: string,
+    references: StartAfterThreadReference[]
+  ): void {
+    if (!isRecoveryIdentifier(projectId) || !isRecoveryIdentifier(threadId)) return
+
+    const unique = references.filter(
+      (reference, index) =>
+        isRecoveryIdentifier(reference.id) &&
+        reference.title.length > 0 &&
+        references.findIndex((existing) => existing.id === reference.id) === index
+    )
+    if (unique.length !== references.length) return
+
+    const key = recoveryDraftKey(projectId, threadId)
+    const current = this.entryFor(projectId, threadId)
+    if (current.startAfterThreads.length === unique.length) {
+      const same =
+        current.startAfterThreads.length === unique.length &&
+        current.startAfterThreads.every(
+          (reference, index) =>
+            reference.id === unique[index]?.id && reference.title === unique[index]?.title
+        )
+      if (same) return
+    }
+    const next = { ...this.composerDrafts }
+    if (unique.length === 0) {
+      if (!(key in next)) return
+      if (
+        current.text.length === 0 &&
+        current.attachments.length === 0 &&
+        current.projectReferences.length === 0 &&
+        current.taskReferences.length === 0 &&
+        current.promptReferences.length === 0
+      ) {
+        delete next[key]
+      } else {
+        next[key] = {
+          ...current,
+          startAfterThreads: []
+        }
+      }
+    } else {
+      next[key] = {
+        ...current,
+        startAfterThreads: unique
       }
     }
     this.composerDrafts = next
     this.persist()
   }
 
-  clearDraft(projectId: string, threadId: string): void {
-    this.setDraft(projectId, threadId, '', [], [], [])
+  clearStartAfterThreads(projectId: string, threadId: string): void {
+    this.setStartAfterThreads(projectId, threadId, [])
+  }
+
+  /** The persisted response-selection annotations attached to a thread's composer draft. */
+  draftPromptReferences(projectId: string, threadId: string): QueuedResponseReference[] {
+    return this.entryFor(projectId, threadId).promptReferences
+  }
+
+  /** Persist a thread's response-selection annotations, preserving any existing
+   *  composer text/attachments so annotations never clobber the draft. */
+  setPromptReferences(
+    projectId: string,
+    threadId: string,
+    references: QueuedResponseReference[]
+  ): void {
+    const entry = this.entryFor(projectId, threadId)
+    this.setDraft(
+      projectId,
+      threadId,
+      entry.text,
+      entry.attachments,
+      entry.projectReferences,
+      entry.taskReferences,
+      references
+    )
   }
 
   /** The persisted queued message for a thread, if any. */
@@ -231,14 +367,43 @@ export class RendererRecoveryStore {
     return this.queuedMessages[recoveryDraftKey(projectId, threadId)] ?? null
   }
 
+  /** Enumerate every thread that currently has a persisted queued message. */
+  queuedMessageThreads(): Array<{ projectId: string; threadId: string }> {
+    const threads: Array<{ projectId: string; threadId: string }> = []
+    for (const key of Object.keys(this.queuedMessages)) {
+      let parsed: unknown
+      try {
+        parsed = JSON.parse(key)
+      } catch {
+        continue
+      }
+      if (
+        Array.isArray(parsed) &&
+        parsed.length === 2 &&
+        isRecoveryIdentifier(parsed[0]) &&
+        isRecoveryIdentifier(parsed[1])
+      ) {
+        threads.push({ projectId: parsed[0], threadId: parsed[1] })
+      }
+    }
+    return threads
+  }
+
   /** Persist a message queued while the agent was busy. */
   setQueuedMessage(projectId: string, threadId: string, entry: QueuedMessageEntry): void {
+    const hasContext =
+      entry.text.length > 0 ||
+      entry.attachments.length > 0 ||
+      Boolean(entry.promptContext) ||
+      entry.promptReferences.length > 0 ||
+      entry.projectReferences.length > 0 ||
+      entry.taskReferences.length > 0
     if (
       !isRecoveryIdentifier(projectId) ||
       !isRecoveryIdentifier(threadId) ||
       typeof entry.text !== 'string' ||
-      entry.text.length === 0 ||
-      entry.text.length > MAX_DRAFT_LENGTH
+      entry.text.length > MAX_DRAFT_LENGTH ||
+      !hasContext
     ) {
       return
     }
@@ -258,7 +423,8 @@ export class RendererRecoveryStore {
       promptReferences: entry.promptReferences,
       projectReferences: entry.projectReferences,
       presentation: entry.presentation,
-      taskReferences: entry.taskReferences
+      taskReferences: entry.taskReferences,
+      startAfterThreads: entry.startAfterThreads
     }
     this.queuedMessages = next
     this.persist()
@@ -278,6 +444,8 @@ export class RendererRecoveryStore {
   reset(): void {
     const initial = emptyRendererRecoverySnapshot()
     this.activeView = initial.activeView
+    this.lastContentView = initial.lastContentView
+    this.lastViewBeforeSettings = initial.lastViewBeforeSettings
     this.selectedProjectId = initial.selectedProjectId
     this.selectedThread = initial.selectedThread
     this.composerDrafts = initial.composerDrafts
@@ -290,7 +458,7 @@ export class RendererRecoveryStore {
     if (idx === -1) {
       this.favoriteModels = [...this.favoriteModels, modelKey]
     } else {
-      this.favoriteModels = this.favoriteModels.filter((k) => k !== modelKey)
+      this.favoriteModels = this.favoriteModels.filter((k) => k !== this.favoriteModels[idx])
     }
     this.persist()
   }
@@ -299,16 +467,76 @@ export class RendererRecoveryStore {
     return this.favoriteModels.includes(modelKey)
   }
 
+  /**
+   * Move a favorite to a new position relative to another favorite. The array
+   * is stored oldest-first; the picker displays it reversed, so callers should
+   * pass the position in storage order (the picker flips before forwarding).
+   */
+  reorderFavorite(draggedKey: string, targetKey: string, position: 'before' | 'after'): void {
+    if (draggedKey === targetKey) return
+    const favorites = [...this.favoriteModels]
+    const draggedIndex = favorites.indexOf(draggedKey)
+    if (draggedIndex === -1) return
+    favorites.splice(draggedIndex, 1)
+    const targetIndex = favorites.indexOf(targetKey)
+    if (targetIndex === -1) return
+    favorites.splice(position === 'before' ? targetIndex : targetIndex + 1, 0, draggedKey)
+    this.favoriteModels = favorites
+    this.persist()
+  }
+
   addRecentModel(modelKey: string): void {
     this.recentModels = [modelKey, ...this.recentModels.filter((k) => k !== modelKey)].slice(0, 10)
     this.persist()
   }
 
+  toggleChatFavorite(modelKey: string): void {
+    const idx = this.chatFavoriteModels.indexOf(modelKey)
+    if (idx === -1) {
+      this.chatFavoriteModels = [...this.chatFavoriteModels, modelKey]
+    } else {
+      this.chatFavoriteModels = this.chatFavoriteModels.filter(
+        (k) => k !== this.chatFavoriteModels[idx]
+      )
+    }
+    this.persist()
+  }
+
+  isChatFavorite(modelKey: string): boolean {
+    return this.chatFavoriteModels.includes(modelKey)
+  }
+
+  /**
+   * Move a chat favorite to a new position relative to another chat favorite.
+   * The array is stored oldest-first; the picker displays it reversed, so
+   * callers should pass the position in storage order.
+   */
+  reorderChatFavorite(draggedKey: string, targetKey: string, position: 'before' | 'after'): void {
+    if (draggedKey === targetKey) return
+    const favorites = [...this.chatFavoriteModels]
+    const draggedIndex = favorites.indexOf(draggedKey)
+    if (draggedIndex === -1) return
+    favorites.splice(draggedIndex, 1)
+    const targetIndex = favorites.indexOf(targetKey)
+    if (targetIndex === -1) return
+    favorites.splice(position === 'before' ? targetIndex : targetIndex + 1, 0, draggedKey)
+    this.chatFavoriteModels = favorites
+    this.persist()
+  }
+
+  addChatRecentModel(modelKey: string): void {
+    this.chatRecentModels = [
+      modelKey,
+      ...this.chatRecentModels.filter((k) => k !== modelKey)
+    ].slice(0, 10)
+    this.persist()
+  }
+
   setAuditModel(modelKey: string): void {
     this.auditModelKey = modelKey
-    const [, providerId, modelId] = modelKey.split(':')
-    if (providerId && modelId && !this.isFavorite(`${providerId}:${modelId}`)) {
-      this.addRecentModel(`${providerId}:${modelId}`)
+    const parsed = parseModelKey(modelKey)
+    if (parsed && !this.isFavorite(modelKey)) {
+      this.addRecentModel(modelKey)
       return
     }
     this.persist()

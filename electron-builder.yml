@@ -8,15 +8,27 @@ publish:
   owner: pillardash-oss
   repo: codeinoven
   releaseType: release
+afterPack: scripts/native-splash/after-pack.js
 files:
   - out/**/*
+  - '!out/**/.DS_Store'
   - '!node_modules/better-sqlite3/deps/**'
   - '!node_modules/better-sqlite3/src/**'
   - '!node_modules/better-sqlite3/binding.gyp'
+  # The Claude Agent SDK ships a large (~267MB) per-platform native `claude`
+  # binary via optional dependencies. It is never used at runtime: every call
+  # site passes `pathToClaudeCodeExecutable: 'claude'`, which makes the SDK skip
+  # bundled-binary resolution and shell out to a `claude` CLI on PATH instead.
+  # Excluding these packages keeps the app lean without affecting Claude Code.
+  - '!node_modules/@anthropic-ai/claude-agent-sdk-*/**'
 # Signing is driven by CI environment variables (CSC_LINK, CSC_KEY_PASSWORD,
 # APPLE_ID, APPLE_APP_SPECIFIC_PASSWORD, APPLE_TEAM_ID). When unset, builds
-# produce unsigned artifacts so contributors can package locally.
+# produce unsigned artifacts. Local macOS package scripts opt into ad-hoc
+# signing after fuses are applied so integrity-protected builds remain runnable.
 forceCodeSigning: false
+# The native Stage 0 hook applies these same security fuses directly to the
+# renamed Electron child before electron-builder signs it. Declaring them here
+# would make electron-builder target the public native launcher instead.
 mac:
   hardenedRuntime: true
   notarize: true
@@ -26,6 +38,28 @@ mac:
     - dmg
     - zip
   artifactName: ${name}-${version}-${arch}.${ext}
+  # The native-splash launcher is the main executable (bundle id
+  # `com.pillardash.codeinoven`); it `execv`s into the renamed Electron binary
+  # `CodeInOven-electron`. Squirrel.Mac validates every update against the
+  # RUNNING process's designated requirement (`identifier "CodeInOven-electron"`),
+  # so the top-level bundle sign must carry that same identifier or every update
+  # fails with "code failed to satisfy specified code requirement(s)".
+  # `mac-sign.js` wraps the default signer and overrides the identifier for the
+  # bundle sign only (helpers/frameworks keep their own identifiers).
+  sign: scripts/native-splash/mac-sign.js
+  # Platform-level `files` replaces the top-level list, so the base set is
+  # repeated here. better-sqlite3 ships prebuilds for every platform; this app
+  # targets Apple Silicon only, so only the darwin-arm64 binary is kept.
+  files:
+    - out/**/*
+    - '!out/**/.DS_Store'
+    - '!node_modules/better-sqlite3/deps/**'
+    - '!node_modules/better-sqlite3/src/**'
+    - '!node_modules/better-sqlite3/binding.gyp'
+    - '!node_modules/@anthropic-ai/claude-agent-sdk-*/**'
+    - '!node_modules/better-sqlite3/prebuilds/darwin-x64.node'
+    - '!node_modules/better-sqlite3/prebuilds/linux*'
+    - '!node_modules/better-sqlite3/prebuilds/win32*'
 win:
   icon: src/renderer/static/icon.png
   target:

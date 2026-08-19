@@ -48,7 +48,8 @@
       { id: 'web_search', label: 'Web search' },
       { id: 'web_fetch', label: 'Web fetch' },
       { id: 'computer_use', label: 'Computer use' },
-      { id: 'provider', label: 'Provider' }
+      { id: 'provider', label: 'Provider' },
+      { id: 'image_descriptor', label: 'Image descriptor' }
     ]
     return kinds.find((item) => item.id === kind)?.label ?? kind
   }
@@ -279,6 +280,7 @@
         <option value="web_fetch">Web fetch</option>
         <option value="computer_use">Computer use</option>
         <option value="provider">Provider</option>
+        <option value="image_descriptor">Image descriptor</option>
       </select>
     </div>
 
@@ -352,6 +354,14 @@
                 >
                   {kindLabel(utility.kind)}
                 </span>
+                {#if utility.appOwned}
+                  <span
+                    class="rounded-md border border-primary/30 bg-primary/10 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-primary"
+                    title="Built into the app and always available; it cannot be deleted"
+                  >
+                    Built-in
+                  </span>
+                {/if}
                 <span class="text-[11px] text-dimmed">
                   {utility.activation === 'always' ? 'Always available' : 'On demand'}
                 </span>
@@ -384,15 +394,27 @@
                     {utility.credentials.length === 1 ? 'credential' : 'credentials'}
                   </span>
                 {/if}
+                {#if utility.kind === 'image_descriptor'}
+                  {#if utility.config.harnessId || utility.config.providerId || utility.config.modelId}
+                    <span class="flex items-center gap-1">
+                      Vision model: {utility.config.harnessId} / {utility.config.providerId} /
+                      {utility.config.modelId}
+                    </span>
+                  {:else}
+                    <span class="flex items-center gap-1">Vision model: auto (app picks)</span>
+                  {/if}
+                {/if}
               </div>
             </div>
             <div class="flex shrink-0 items-center gap-1">
-              <Switch
-                checked={utility.enabled}
-                onchange={() => void toggleEnabled(utility)}
-                aria-label="{utility.enabled ? 'Disable' : 'Enable'} {utility.name}"
-                title="{utility.enabled ? 'Disable' : 'Enable'} {utility.name}"
-              />
+              {#if !utility.appOwned}
+                <Switch
+                  checked={utility.enabled}
+                  onchange={() => void toggleEnabled(utility)}
+                  aria-label="{utility.enabled ? 'Disable' : 'Enable'} {utility.name}"
+                  title="{utility.enabled ? 'Disable' : 'Enable'} {utility.name}"
+                />
+              {/if}
               <button
                 class="flex h-8 w-8 items-center justify-center rounded-lg text-muted hover:bg-elevated hover:text-foreground"
                 aria-label="Edit {utility.name}"
@@ -401,14 +423,16 @@
               >
                 <Pencil size={14} />
               </button>
-              <button
-                class="flex h-8 w-8 items-center justify-center rounded-lg text-muted hover:bg-danger/10 hover:text-danger"
-                aria-label="Delete {utility.name}"
-                title="Delete {utility.name}"
-                onclick={() => (deleteTarget = utility)}
-              >
-                <Trash2 size={14} />
-              </button>
+              {#if !utility.appOwned}
+                <button
+                  class="flex h-8 w-8 items-center justify-center rounded-lg text-muted hover:bg-danger/10 hover:text-danger"
+                  aria-label="Delete {utility.name}"
+                  title="Delete {utility.name}"
+                  onclick={() => (deleteTarget = utility)}
+                >
+                  <Trash2 size={14} />
+                </button>
+              {/if}
             </div>
           </div>
         {/each}

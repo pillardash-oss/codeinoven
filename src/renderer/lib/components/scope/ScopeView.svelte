@@ -5,6 +5,11 @@
   import { invoke, subscribe } from '$lib/ipc.svelte'
   import { scopeState, type ThreadStage } from '$lib/stores/scope.svelte'
   import { threadSettings } from '$lib/stores/thread-settings.svelte'
+  import {
+    persistInheritedThreadSettings,
+    settingsForNewThread,
+    threadWithInheritedSettings
+  } from '$lib/thread-settings-inheritance'
   import { workspaceState, findEmptyNewThread } from '$lib/stores/workspace.svelte'
   import {
     DEFAULT_SCOPE_BUCKET_ID,
@@ -181,30 +186,53 @@
 
   async function createThread(bucketId: string): Promise<void> {
     if (!activeProject) return
+    const activeThread = workspaceState.selectedThread
+    const inheritedSettings = settingsForNewThread(activeThread, threadSettings.lastUsed)
     const existing = findEmptyNewThread(scopeState.allScopeThreads, activeProject.id, bucketId)
     if (existing) {
       if (workspaceState.selectedThread?.id === existing.id) {
         workspaceState.requestFocusComposer()
       } else {
-        scopeState.showSidebarForThread(existing, bucketId)
-        navigateToProjects?.()
-        workspaceState.openThread(existing, activeProject)
+        try {
+          const thread = activeThread?.settings
+            ? await invoke(
+                'thread:updateSettings',
+                existing.projectId,
+                existing.id,
+                inheritedSettings
+              )
+            : existing
+          scopeState.updateThread(thread)
+          scopeState.showSidebarForThread(thread, bucketId)
+          navigateToProjects?.()
+          workspaceState.openThread(thread, activeProject)
+        } catch (error) {
+          actionError = errorMessage(error, 'The thread could not be opened.')
+        }
       }
       return
     }
     try {
-      const thread = await invoke('thread:create', {
+      const created = await invoke('thread:create', {
         projectId: activeProject.id,
         providerId: 'opencode',
         title: DEFAULT_THREAD_TITLE,
         workingDirectory: activeProject.path,
-        settings: { ...threadSettings.lastUsed },
+        settings: inheritedSettings,
         scopeBucketId: bucketId
       })
+      const thread = activeThread?.settings
+        ? threadWithInheritedSettings(created, inheritedSettings)
+        : created
       scopeState.updateThread(thread)
       scopeState.showSidebarForThread(thread, bucketId)
       navigateToProjects?.()
       workspaceState.openThread(thread, activeProject)
+      if (activeThread?.settings) {
+        void persistInheritedThreadSettings(thread, inheritedSettings).catch((error) => {
+          actionError = errorMessage(error, 'The inherited thread settings could not be saved.')
+        })
+      }
     } catch (error) {
       actionError = errorMessage(error, 'The thread could not be created.')
     }

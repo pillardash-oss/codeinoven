@@ -1,6 +1,8 @@
-import { execFile } from 'child_process'
+import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'os'
+import { join } from 'path'
+import { readFile } from 'node:fs/promises'
 import { fileURLToPath } from 'url'
-import { promisify } from 'util'
 import type {
   AgentMessage,
   AgentPart,
@@ -11,11 +13,18 @@ import type {
   SessionAgentEvent,
   ThinkingPreset
 } from '../../lib/types'
+import { normalizeAgentQuestions } from '../../lib/agent-interactions'
 import { buildHarnessEnvironment } from './cli-environment'
-import { hasNativeProviderCatalog } from '../native-provider-config-service'
+import { hasNativeProviderCatalog } from '../agents/native-provider-config-service'
+import type { BaseUrlProviderService } from '../providers/base-url-provider-service'
+import type { SecretVault } from '../storage/secret-vault'
+import type { StorageEngine } from '../storage/storage-engine'
+import { Logger } from '../system/logger'
 import type {
   GenerateTitleOptions,
   HarnessCapabilities,
+  SendPromptOptions,
+  SteerPromptOptions,
   UtilityRuntimeOverlay,
   UtilityRuntimePreparationRequest
 } from './driver.interface'
@@ -29,11 +38,7 @@ import {
 import { inlineSvgAttachments, isSvgAttachment } from './svg-attachment'
 import { piMcpExtension } from './pi-mcp-extension'
 import { piCustomProvidersExtension } from './pi-providers-extension'
-import type { BaseUrlProviderService } from '../base-url-provider-service'
-import type { SecretVault } from '../secret-vault'
-import type { StorageEngine } from '../storage-engine'
-
-const execFileAsync = promisify(execFile)
+import { PiRpcClient, resolvePiExecutable } from './pi-rpc-client'
 
 const THINKING_PRESETS: ThinkingPreset[] = [
   { id: 'minimal', label: 'Minimal', description: 'Minimum reasoning effort' },
@@ -43,7 +48,7 @@ const THINKING_PRESETS: ThinkingPreset[] = [
   { id: 'xhigh', label: 'Extra high', description: 'Extra-high reasoning effort' }
 ]
 
-/** Pi thinking levels accepted by `--thinking` (off, minimal, low, medium, high, xhigh). */
+/** Pi thinking levels accepted by `set_thinking_level`. */
 const PI_THINKING_LEVELS: Record<string, string> = {
   minimal: 'minimal',
   low: 'low',
@@ -54,10 +59,27 @@ const PI_THINKING_LEVELS: Record<string, string> = {
   ultra: 'xhigh'
 }
 
-/** Read-only Pi built-in tools used for temporary inspection chats. */
-const READ_ONLY_TOOLS = ['read', 'grep', 'find', 'ls']
+function piThinkingLevel(value: string): 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' {
+  const resolved = PI_THINKING_LEVELS[value]
+  if (
+    resolved === 'minimal' ||
+    resolved === 'low' ||
+    resolved === 'medium' ||
+    resolved === 'high' ||
+    resolved === 'xhigh'
+  ) {
+    return resolved
+  }
+  return 'medium'
+}
 
-/** Fallback catalog used when `pi --list-models` cannot be parsed. */
+interface PiImageContent {
+  type: 'image'
+  data: string
+  mimeType: string
+}
+
+/** Fallback catalog used when the pi runtime reports no models. */
 const PI_FALLBACK_CATALOG: ProviderCatalog[] = [
   {
     id: 'pi',
@@ -70,7 +92,7 @@ const PI_FALLBACK_CATALOG: ProviderCatalog[] = [
         name: 'Default',
         reasoning: true,
         thinkingPresets: THINKING_PRESETS,
-        attachment: false,
+        attachment: true,
         toolcall: true
       }
     ]
@@ -228,6 +250,13 @@ function findToolPart(
 interface PiTurnState {
   assistantMessageId: string | null
   turnIndex: number
+}
+
+interface PiUiRequest {
+  sessionId: string
+  method: string
+  client: PiRpcClient
+  request: Record<string, unknown>
 }
 
 /** Map one documented Pi JSON print-mode record into CodeInOven's stable shapes. */
@@ -527,59 +556,6 @@ function buildAssistantMessage(
   return { events, messages: [completed] }
 }
 
-/** Parse a human-readable `pi --list-models` table into provider catalogs. */
-function parsePiModelTable(output: string): ProviderCatalog[] {
-  const lines = output.split(/\r?\n/u).filter((line) => line.trim().length > 0)
-  if (lines.length === 0) return []
-  const header = lines[0] ?? ''
-  if (!header.includes('provider')) return []
-
-  const byProvider = new Map<string, ProviderModel[]>()
-  for (const line of lines.slice(1)) {
-    const columns = line.trim().split(/\s{2,}/u)
-    if (columns.length < 2) continue
-    const provider = columns[0]?.trim()
-    const model = columns[1]?.trim()
-    if (!provider || !model) continue
-    const context = columns[2]?.trim()
-    const thinking = (columns[4]?.trim() ?? 'no') === 'yes'
-    const images = (columns[5]?.trim() ?? 'no') === 'yes'
-    const contextWindow = parseSize(context)
-    const models = byProvider.get(provider) ?? []
-    models.push({
-      id: model,
-      providerId: provider,
-      name: model,
-      reasoning: thinking,
-      ...(thinking ? { thinkingPresets: THINKING_PRESETS } : {}),
-      attachment: images,
-      toolcall: true,
-      ...(contextWindow ? { contextWindow } : {})
-    })
-    byProvider.set(provider, models)
-  }
-  const catalogs = [...byProvider.entries()].map(([provider, models]) => ({
-    id: provider,
-    name: provider,
-    harnessId: 'pi',
-    models
-  }))
-  return catalogs
-}
-
-/** Parse sizes like `128K` or `16.4K` into an approximate token count. */
-function parseSize(value: string | undefined): number | undefined {
-  if (!value) return undefined
-  const match = value.trim().match(/^([\d.]+)\s*([KM])?$/u)
-  if (!match) return undefined
-  const magnitude = Number.parseFloat(match[1] ?? '')
-  if (!Number.isFinite(magnitude)) return undefined
-  const unit = match[2]
-  if (unit === 'K') return Math.round(magnitude * 1024)
-  if (unit === 'M') return Math.round(magnitude * 1024 * 1024)
-  return Math.round(magnitude)
-}
-
 async function localAttachmentPath(attachment: PromptAttachment): Promise<string> {
   let path: string
   try {
@@ -592,16 +568,29 @@ async function localAttachmentPath(attachment: PromptAttachment): Promise<string
   return path
 }
 
-/** Process-per-turn bridge for Pi's `--mode json` print protocol. */
+/** Materialized provider-only extension overlay used for model discovery. */
+interface ProviderOverlay {
+  args: string[]
+  env: Record<string, string>
+  cleanup(): Promise<void>
+}
+
+/**
+ * Driver for Pi's headless agent. Unlike the former in-process SDK path, this
+ * shells out to the `pi` CLI the user installs on PATH (like Claude Code), so
+ * the heavy Pi runtime is never bundled. It drives `pi --mode rpc` over stdio
+ * and keeps one persistent Pi process per active CodeInOven session.
+ */
 export class PiDriver extends PersistentCliDriver {
   readonly id = 'pi'
   readonly name = 'Pi'
   readonly capabilities: HarnessCapabilities = {
+    runtimeTopology: { kind: 'shared_daemon', scope: 'application', sessionWorkers: true },
     streaming: true,
-    steering: false,
-    nativeResume: true,
+    steering: true,
+    nativeResume: false,
     messageHistory: 'mirrored',
-    interactivePermissions: false,
+    interactivePermissions: true,
     attachments: true,
     commands: false,
     providerCatalog: true,
@@ -613,6 +602,11 @@ export class PiDriver extends PersistentCliDriver {
   }
 
   private turnStates = new Map<string, PiTurnState>()
+  private rpcClients = new Map<string, PiRpcClient>()
+  private sessionProjects = new Map<string, string>()
+  private activeTurns = new Set<string>()
+  private pendingUiRequests = new Map<string, PiUiRequest>()
+  private piExecutable: Promise<string | null> | null = null
 
   constructor(
     storage: StorageEngine,
@@ -627,50 +621,203 @@ export class PiDriver extends PersistentCliDriver {
   }
 
   protected async ensureCliReady(): Promise<void> {
-    try {
-      await execFileAsync('pi', ['--version'], {
-        env: buildHarnessEnvironment(),
-        timeout: 15_000
-      })
-    } catch (error) {
-      const detail = error instanceof Error ? error.message : 'unknown error'
-      throw new Error(`Pi CLI is unavailable: ${detail}`, { cause: error })
+    const executable = await this.resolvePiExecutable()
+    if (!executable) {
+      throw new Error(
+        'Pi is not installed. Install the Pi CLI globally, then retry. (npm i -g @earendil-works/pi-coding-agent)'
+      )
     }
   }
 
-  async listProviders(): Promise<ProviderCatalog[]> {
-    let catalogs: ProviderCatalog[]
+  async listProviders(projectPath: string): Promise<ProviderCatalog[]> {
+    const executable = await this.resolvePiExecutable()
+    if (!executable) return structuredClone(PI_FALLBACK_CATALOG)
     try {
-      const { stdout } = await execFileAsync('pi', ['--list-models'], {
-        env: buildHarnessEnvironment(),
-        timeout: 15_000
-      })
-      catalogs = parsePiModelTable(stdout)
-      if (catalogs.length === 0) catalogs = structuredClone(PI_FALLBACK_CATALOG)
-    } catch {
-      catalogs = structuredClone(PI_FALLBACK_CATALOG)
-    }
-    if (this.baseUrlProviders) {
-      const customProviders = await this.baseUrlProviders.listEnabled(this.id)
-      for (const custom of customProviders) {
-        catalogs.push({
-          id: custom.id,
-          name: custom.name,
-          harnessId: 'pi',
-          models: custom.models.map((model) => ({
-            id: model.id,
-            providerId: custom.id,
-            name: model.name || model.id,
-            reasoning: model.reasoning,
-            thinkingPresets: model.reasoning ? THINKING_PRESETS : undefined,
-            attachment: false,
-            toolcall: true,
-            ...(model.contextWindow ? { contextWindow: model.contextWindow } : {})
-          }))
+      const overlay = await this.buildProviderOverlay(projectPath)
+      const models = await this.discoverModels(projectPath, overlay, executable)
+      await overlay.cleanup()
+      if (models.length === 0) return structuredClone(PI_FALLBACK_CATALOG)
+      const byProvider = new Map<string, ProviderModel[]>()
+      for (const model of models) {
+        const providerId = stringValue(model['provider'])
+        const modelId = stringValue(model['id'])
+        if (!providerId || !modelId) continue
+        const reasoning = model['reasoning'] === true
+        const list = byProvider.get(providerId) ?? []
+        list.push({
+          id: modelId,
+          providerId,
+          name: stringValue(model['name']) ?? modelId,
+          reasoning,
+          ...(reasoning ? { thinkingPresets: THINKING_PRESETS } : {}),
+          attachment: Array.isArray(model['input']) ? model['input'].includes('image') : true,
+          toolcall: true,
+          ...(numberValue(model['contextWindow'])
+            ? { contextWindow: numberValue(model['contextWindow']) }
+            : {})
         })
+        byProvider.set(providerId, list)
+      }
+      const catalogs = [...byProvider.entries()].map(([id, models]) => ({
+        id,
+        name: id,
+        harnessId: 'pi',
+        models
+      }))
+      return catalogs.length > 0 ? catalogs : structuredClone(PI_FALLBACK_CATALOG)
+    } catch (error) {
+      Logger.dev('Pi provider discovery failed, using fallback catalog', error)
+      return structuredClone(PI_FALLBACK_CATALOG)
+    }
+  }
+
+  private async discoverModels(
+    projectPath: string,
+    overlay: ProviderOverlay,
+    executable: string
+  ): Promise<Array<Record<string, unknown>>> {
+    let models: unknown
+    const client = new PiRpcClient({
+      executable,
+      cwd: projectPath,
+      env: { ...buildHarnessEnvironment(), ...overlay.env },
+      args: overlay.args
+    })
+    try {
+      await client.newSession()
+      models = await client.getAvailableModels()
+    } finally {
+      client.dispose()
+    }
+    const payload = record(models)
+    const list = Array.isArray(payload?.['models']) ? (payload['models'] as unknown[]) : []
+    return list.filter(
+      (entry): entry is Record<string, unknown> =>
+        typeof entry === 'object' && entry !== null && !Array.isArray(entry)
+    )
+  }
+
+  override async sendPrompt(projectPath: string, options: SendPromptOptions): Promise<void> {
+    const session = await this.requireSession(projectPath, options.sessionId)
+    if (this.activeTurns.has(session.id)) {
+      throw new Error(`A turn is already active for session ${session.id}`)
+    }
+    const client = await this.ensureRpcClient(projectPath, session.id)
+    const model = this.resolveModel(options.settings.providerId, options.settings.modelId)
+    if (!model) {
+      throw new Error(
+        `Pi model is unavailable: ${options.settings.providerId}/${options.settings.modelId}`
+      )
+    }
+    await client.setModel(model.provider, model.modelId)
+    await client.setThinkingLevel(piThinkingLevel(options.settings.thinkingLevel))
+
+    this.setTurnProvenance(
+      session.id,
+      options.settings.providerId,
+      options.settings.modelId,
+      options.settings.thinkingLevel
+    )
+    this.appendUserMessage(session, options)
+    this.activeTurns.add(session.id)
+
+    const inlineSvg = await inlineSvgAttachments(options.attachments)
+    const images: PiImageContent[] = []
+    const references: string[] = []
+    for (const attachment of options.attachments) {
+      if (isSvgAttachment(attachment)) continue
+      const path = await localAttachmentPath(attachment)
+      if (attachment.mime.toLowerCase().startsWith('image/')) {
+        images.push({
+          type: 'image',
+          data: (await readFile(path)).toString('base64'),
+          mimeType: attachment.mime
+        })
+      } else {
+        references.push(`Attached file: ${path}`)
       }
     }
-    return catalogs
+    const prompt = [
+      options.systemPrompt ? options.systemPrompt : '',
+      inlineSvg,
+      ...references,
+      options.text
+    ]
+      .filter(Boolean)
+      .join('\n\n')
+
+    try {
+      await client.prompt(prompt, images)
+    } catch (error) {
+      this.activeTurns.delete(session.id)
+      const message = error instanceof Error ? error.message : 'Pi turn failed to start'
+      this.emit({ type: 'session.error', sessionId: session.id, error: message })
+      await this.finishTurn(session)
+      throw error
+    }
+  }
+
+  private resolveModel(
+    providerId: string,
+    modelId: string
+  ): { provider: string; modelId: string } | null {
+    if (!providerId || !modelId) return null
+    return { provider: providerId, modelId }
+  }
+
+  async steerPrompt(projectPath: string, options: SteerPromptOptions): Promise<void> {
+    await this.requireSession(projectPath, options.sessionId)
+    const client = this.rpcClients.get(options.sessionId)
+    if (!client || !this.activeTurns.has(options.sessionId)) {
+      throw new Error(`No active Pi turn is available to steer for session ${options.sessionId}`)
+    }
+    const inlineSvg = await inlineSvgAttachments(options.attachments)
+    const images: PiImageContent[] = []
+    const references: string[] = []
+    for (const attachment of options.attachments) {
+      if (isSvgAttachment(attachment)) continue
+      const path = await localAttachmentPath(attachment)
+      if (attachment.mime.toLowerCase().startsWith('image/')) {
+        images.push({
+          type: 'image',
+          data: (await readFile(path)).toString('base64'),
+          mimeType: attachment.mime
+        })
+      } else {
+        references.push(`Attached file: ${path}`)
+      }
+    }
+    const message = [inlineSvg, ...references, options.text].filter(Boolean).join('\n\n')
+    await client.steer(message, images)
+  }
+
+  override async abort(projectPath: string, sessionId: string): Promise<void> {
+    await this.requireSession(projectPath, sessionId)
+    const client = this.rpcClients.get(sessionId)
+    if (!client) return
+    try {
+      await client.abort()
+    } catch {
+      // The turn may have already ended.
+    } finally {
+      this.activeTurns.delete(sessionId)
+    }
+  }
+
+  override async deleteSession(projectPath: string, sessionId: string): Promise<void> {
+    this.disposeRpcClient(sessionId)
+    this.activeTurns.delete(sessionId)
+    this.turnStates.delete(sessionId)
+    await super.deleteSession(projectPath, sessionId)
+  }
+
+  override releaseProjectResources(projectPath: string): void {
+    for (const [sessionId, clientProject] of this.sessionProjects) {
+      if (clientProject !== projectPath) continue
+      if (this.activeTurns.has(sessionId)) continue
+      this.disposeRpcClient(sessionId)
+    }
+    super.releaseProjectResources(projectPath)
   }
 
   async prepareUtilityRuntime(
@@ -732,36 +879,8 @@ export class PiDriver extends PersistentCliDriver {
     return { args, configFiles, env }
   }
 
-  protected async buildTurnCommand(
-    _projectPath: string,
-    session: PersistentCliSession,
-    options: Parameters<PersistentCliDriver['sendPrompt']>[1]
-  ): Promise<CliTurnCommand> {
-    const args: string[] = ['--mode', 'json', '-p']
-    if (session.nativeSessionId) args.push('--session-id', session.nativeSessionId)
-    if (options.settings.providerId) args.push('--provider', options.settings.providerId)
-    if (options.settings.modelId) args.push('--model', options.settings.modelId)
-
-    const thinking = PI_THINKING_LEVELS[options.settings.thinkingLevel]
-    if (thinking) args.push('--thinking', thinking)
-
-    if (options.systemPrompt) {
-      args.push('--append-system-prompt', options.systemPrompt)
-    }
-
-    if (options.readOnly) {
-      args.push('--tools', READ_ONLY_TOOLS.join(','))
-    }
-
-    const inlineSvg = await inlineSvgAttachments(options.attachments)
-    for (const attachment of options.attachments) {
-      if (isSvgAttachment(attachment)) continue
-      const path = await localAttachmentPath(attachment)
-      args.push(`@${path}`)
-    }
-
-    args.push([inlineSvg, options.text].filter(Boolean).join('\n\n'))
-    return { command: 'pi', args, env: buildHarnessEnvironment() }
+  protected async buildTurnCommand(): Promise<CliTurnCommand> {
+    throw new Error('PiDriver drives pi over RPC; buildTurnCommand is not used')
   }
 
   protected parseJsonLine(value: unknown, context: CliLineParseContext): CliLineParseResult | null {
@@ -774,7 +893,214 @@ export class PiDriver extends PersistentCliDriver {
   }
 
   dispose(): void {
+    for (const client of this.rpcClients.values()) client.dispose()
+    this.rpcClients.clear()
+    this.activeTurns.clear()
     this.turnStates.clear()
+    this.pendingUiRequests.clear()
     super.dispose()
+  }
+
+  private async ensureRpcClient(projectPath: string, sessionId: string): Promise<PiRpcClient> {
+    const existing = this.rpcClients.get(sessionId)
+    if (existing) return existing
+    const runtime = this.utilityRuntime(sessionId)
+    const args = runtime
+      ? runtime.args.map((arg) => this.resolveRuntimePlaceholders(arg, runtime))
+      : []
+    const runtimeEnv = runtime
+      ? Object.fromEntries(
+          Object.entries(runtime.env).map(([key, value]) => [
+            key,
+            this.resolveRuntimePlaceholders(value, runtime)
+          ])
+        )
+      : {}
+    const executable = await this.resolvePiExecutable()
+    if (!executable) {
+      throw new Error(
+        'Pi is not installed. Install the Pi CLI globally, then retry. (npm i -g @earendil-works/pi-coding-agent)'
+      )
+    }
+    const client = new PiRpcClient({
+      executable,
+      cwd: projectPath,
+      env: {
+        ...buildHarnessEnvironment(),
+        ...runtimeEnv
+      },
+      args,
+      onEvent: (record) => {
+        void this.handleRpcEvent(record, sessionId, projectPath)
+      },
+      onUiRequest: (record) => {
+        this.handleUiRequest(record, sessionId)
+      },
+      onExit: (code) => {
+        this.handleRpcExit(code, sessionId)
+      }
+    })
+    this.rpcClients.set(sessionId, client)
+    this.sessionProjects.set(sessionId, projectPath)
+    try {
+      await client.newSession()
+    } catch (error) {
+      client.dispose()
+      this.rpcClients.delete(sessionId)
+      this.sessionProjects.delete(sessionId)
+      throw new Error(
+        `Failed to start a Pi session: ${error instanceof Error ? error.message : String(error)}`,
+        { cause: error }
+      )
+    }
+    return client
+  }
+
+  private resolvePiExecutable(): Promise<string | null> {
+    this.piExecutable ??= resolvePiExecutable()
+    return this.piExecutable
+  }
+
+  private handleRpcEvent(
+    record: Record<string, unknown>,
+    sessionId: string,
+    projectPath: string
+  ): void {
+    this.requireSession(projectPath, sessionId)
+      .then((session) => {
+        const result = this.parseJsonLine(record, { session, sessionId, projectPath })
+        if (!result) return
+        if (result.nativeSessionId) session.nativeSessionId = result.nativeSessionId
+        if (result.messages) this.mergeMessages(session, result.messages)
+        for (const event of this.normalizeInteractionEvents(session.id, result.events ?? [])) {
+          this.applyEventToSession(session, event)
+          this.emit({ ...event, sessionId: session.id })
+        }
+        session.updatedAt = Date.now()
+        const terminalError = (result.events ?? []).some((event) => event.type === 'session.error')
+        if (terminalError || (record['type'] === 'agent_end' && record['willRetry'] !== true)) {
+          this.activeTurns.delete(session.id)
+          void this.finishTurn(session)
+        }
+      })
+      .catch((error) => {
+        Logger.dev('Pi event handler dropped', error)
+      })
+  }
+
+  private handleRpcExit(code: number | null, sessionId: string): void {
+    void code
+    if (this.activeTurns.has(sessionId)) {
+      this.activeTurns.delete(sessionId)
+    }
+  }
+
+  private handleUiRequest(record: Record<string, unknown>, sessionId: string): void {
+    const rawId = record['id']
+    const method = stringValue(record['method'])
+    const client = this.rpcClients.get(sessionId)
+    if ((typeof rawId !== 'string' && typeof rawId !== 'number') || !method || !client) return
+    const requestId = `pi-ui-${sessionId}-${String(rawId)}`.replace(/[^a-zA-Z0-9._-]/gu, '-')
+    const prompt =
+      stringValue(record['title']) ?? stringValue(record['message']) ?? 'Pi needs your input.'
+    const questions = normalizeAgentQuestions({
+      questions: [
+        {
+          prompt,
+          header: stringValue(record['title']),
+          description: stringValue(record['message']),
+          options: Array.isArray(record['options']) ? record['options'] : undefined,
+          custom: method !== 'confirm'
+        }
+      ]
+    })
+    this.pendingUiRequests.set(requestId, { sessionId, method, client, request: record })
+    this.emit({ type: 'question.asked', sessionId, requestId, questions })
+  }
+
+  override async replyToQuestion(
+    _projectPath: string,
+    sessionId: string,
+    requestId: string,
+    answers: string[][]
+  ): Promise<void> {
+    const request = this.pendingUiRequests.get(requestId)
+    if (!request || request.sessionId !== sessionId) {
+      throw new Error(`Pi question request is no longer pending: ${requestId}`)
+    }
+    const answer = answers[0]?.[0] ?? ''
+    const rawId = request.request['id']
+    if (typeof rawId !== 'string' && typeof rawId !== 'number') {
+      throw new Error(`Pi question request has an invalid id: ${requestId}`)
+    }
+    if (request.method === 'confirm') {
+      request.client.respondToExtensionUiRequest(rawId, {
+        confirmed: /^(true|yes|y|allow|ok)$/iu.test(answer)
+      })
+    } else {
+      request.client.respondToExtensionUiRequest(rawId, { value: answer })
+    }
+    this.pendingUiRequests.delete(requestId)
+  }
+
+  override async rejectQuestion(
+    _projectPath: string,
+    sessionId: string,
+    requestId: string
+  ): Promise<void> {
+    const request = this.pendingUiRequests.get(requestId)
+    if (!request || request.sessionId !== sessionId) {
+      throw new Error(`Pi question request is no longer pending: ${requestId}`)
+    }
+    const rawId = request.request['id']
+    if (typeof rawId !== 'string' && typeof rawId !== 'number') {
+      throw new Error(`Pi question request has an invalid id: ${requestId}`)
+    }
+    request.client.respondToExtensionUiRequest(rawId, { cancelled: true })
+    this.pendingUiRequests.delete(requestId)
+  }
+
+  private async finishTurn(session: PersistentCliSession): Promise<void> {
+    try {
+      await this.persistSession(session)
+    } catch (error) {
+      Logger.error('Pi session persistence failed:', error)
+    }
+    this.emit({ type: 'session.idle', sessionId: session.id })
+  }
+
+  private disposeRpcClient(sessionId: string): void {
+    const client = this.rpcClients.get(sessionId)
+    if (client) {
+      client.dispose()
+      this.rpcClients.delete(sessionId)
+    }
+  }
+
+  private async buildProviderOverlay(projectPath: string): Promise<ProviderOverlay> {
+    const args: string[] = []
+    const env: Record<string, string> = {}
+    let directory: string | null = null
+    const providers = this.baseUrlProviders
+      ? await this.baseUrlProviders.listEnabled(this.id).catch(() => [])
+      : []
+    if (providers.length > 0 && this.secretVault) {
+      for (const provider of providers) {
+        if (!provider.apiKeyRef || !provider.apiKeyEnvVar) continue
+        env[provider.apiKeyEnvVar] = await this.secretVault.resolve(provider.apiKeyRef)
+      }
+      directory = await mkdtemp(join(tmpdir(), 'codeinoven-pi-providers-'))
+      const extensionPath = join(directory, 'codeinoven-providers.ts')
+      await writeFile(extensionPath, piCustomProvidersExtension(providers), 'utf8')
+      args.push('--extension', extensionPath)
+    }
+    void projectPath
+    return {
+      args,
+      env,
+      cleanup: async () => {
+        if (directory) await rm(directory, { recursive: true, force: true }).catch(() => undefined)
+      }
+    }
   }
 }

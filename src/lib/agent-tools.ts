@@ -1,6 +1,7 @@
 import type { ApplicationAgentToolDefinition } from './types'
 import { APP_NAME } from './brand'
 import { BRAINSTORM_DOCUMENT_JSON_SCHEMA } from './brainstorm/brainstorm-validation'
+import { GATEWAY_TOOLS } from './gateway-tools'
 
 /** Stable application-facing name for the canonical specification contract. */
 export const ENGINEERING_SPEC_TOOL_NAME = 'engineering_spec'
@@ -19,7 +20,11 @@ export const ASSIGNMENT_PLAN_SCHEMA: Record<string, unknown> = {
   additionalProperties: false,
   properties: {
     title: { type: 'string', minLength: 1 },
-    summary: { type: 'string', minLength: 1 },
+    summary: {
+      type: 'string',
+      minLength: 1,
+      description: 'Concise TL;DR of the Assignment execution plan.'
+    },
     phases: {
       type: 'array',
       minItems: 1,
@@ -89,7 +94,7 @@ export const SPEC_GENERATION_SCHEMA: Record<string, unknown> = {
       type: 'string',
       minLength: 1,
       description:
-        'Implementation-ready summary written as readable Markdown. Use newline-delimited Markdown lists when enumerating multiple steps or recommendations; never use inline parenthesized numbering.'
+        'Concise TL;DR of the implementation-ready resolution, written as readable Markdown. Use newline-delimited Markdown lists when enumerating multiple steps or recommendations; never use inline parenthesized numbering.'
     },
     phases: {
       type: 'array',
@@ -209,6 +214,65 @@ export const AUDIT_REPORT_SCHEMA: Record<string, unknown> = {
         required: ['id', 'title', 'severity', 'description', 'evidence']
       }
     },
+    auditedFiles: {
+      type: 'array',
+      minItems: 1,
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          path: { type: 'string', minLength: 1 },
+          reason: { type: 'string', minLength: 1 }
+        },
+        required: ['path', 'reason']
+      }
+    },
+    verification: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        repositoryRevision: { type: 'string', minLength: 1 },
+        scope: { type: 'string', minLength: 1 },
+        checks: {
+          type: 'array',
+          minItems: 4,
+          items: {
+            type: 'object',
+            additionalProperties: false,
+            properties: {
+              id: { type: 'string', minLength: 1 },
+              kind: {
+                type: 'string',
+                enum: ['format', 'lint', 'typecheck', 'test', 'build', 'other']
+              },
+              command: { type: 'string' },
+              files: { type: 'array', items: { type: 'string', minLength: 1 } },
+              status: { type: 'string', enum: ['passed', 'failed', 'not_applicable'] },
+              exitCode: { type: 'number' },
+              evidence: { type: 'string', minLength: 1 },
+              findingIds: { type: 'array', items: { type: 'string', minLength: 1 } }
+            },
+            required: ['id', 'kind', 'command', 'files', 'status', 'evidence', 'findingIds']
+          }
+        },
+        utilities: {
+          type: 'array',
+          minItems: 1,
+          items: {
+            type: 'object',
+            additionalProperties: false,
+            properties: {
+              name: { type: 'string', minLength: 1 },
+              status: { type: 'string', enum: ['used', 'unavailable', 'not_applicable'] },
+              evidence: { type: 'string', minLength: 1 }
+            },
+            required: ['name', 'status', 'evidence']
+          }
+        },
+        limitations: { type: 'array', items: { type: 'string', minLength: 1 } }
+      },
+      required: ['repositoryRevision', 'scope', 'checks', 'utilities', 'limitations']
+    },
     resolutionRecommendation: { type: 'string', minLength: 1 },
     conclusion: { type: 'string', minLength: 1 }
   },
@@ -249,7 +313,7 @@ export const PROPOSE_MEMORY_SCHEMA: Record<string, unknown> = {
     },
     category: {
       type: 'string',
-      enum: ['behavioral', 'project-rule', 'identity', 'preference'],
+      enum: ['behavioral', 'project-rule', 'identity', 'preference', 'models'],
       description: 'The semantic kind of durable information.'
     },
     priority: {
@@ -259,7 +323,7 @@ export const PROPOSE_MEMORY_SCHEMA: Record<string, unknown> = {
     },
     scope: {
       type: 'string',
-      enum: ['global', 'project', 'thread', 'chat'],
+      enum: ['global', 'projects', 'project', 'thread', 'chat'],
       description: 'Where the memory should apply. The extraction prompt supplies valid scopes.'
     }
   },
@@ -271,68 +335,22 @@ export const APPLICATION_AGENT_TOOLS: ApplicationAgentToolDefinition[] = [
   {
     name: PROPOSE_MEMORY_TOOL_NAME,
     transportName: 'StructuredOutput',
-    description: `Decide whether a user message warrants a durable ${APP_NAME} memory proposal. Propose only recurring standing preferences, reusable rules, or stable facts that remain useful after the current task—not concrete implementation requests, conversational continuations, confirmations, questions, or other one-off work. When uncertain, do not propose. The application validates affirmative proposals and requires explicit user approval before persistence.`,
+    description: `Decide whether a user message warrants a durable ${APP_NAME} memory proposal. Propose only recurring standing preferences, reusable rules, or stable facts that remain useful after the current task—not concrete implementation requests, conversational continuations, confirmations, questions, or other one-off work. When uncertain, do not propose. This is an isolated application workflow: never announce or discuss it in the task agent's user-facing response. The application validates affirmative proposals and requests approval separately before persistence.`,
     inputSchema: PROPOSE_MEMORY_SCHEMA,
     source: 'application',
     sentWhen: 'An isolated agent decision after each completed user-and-assistant turn'
   },
-  {
-    name: 'utility_search',
-    description:
-      'Search app-managed MCP servers, skills, web services, and computer-use capabilities when the current toolset is insufficient.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        query: { type: 'string', description: 'Capability or task to search for.' },
-        kinds: {
-          type: 'array',
-          items: {
-            type: 'string',
-            enum: ['mcp', 'skill', 'web_search', 'web_fetch', 'computer_use', 'provider']
-          }
-        },
-        limit: { type: 'number', minimum: 1, maximum: 20 }
-      },
-      additionalProperties: false
-    },
-    source: 'application',
-    sentWhen: 'Every agent turn; used only when current tools are insufficient'
-  },
-  {
-    name: 'utility_activate',
-    description:
-      'Activate one installed utility for the current turn and inspect the operations it exposes.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        utility_id: { type: 'string', description: 'Installed utility identifier.' }
-      },
-      required: ['utility_id'],
-      additionalProperties: false
-    },
-    source: 'application',
-    sentWhen: 'After utility_search selects an installed capability'
-  },
-  {
-    name: 'utility_invoke',
-    description: 'Invoke an operation on a utility activated for the current turn.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        utility_id: { type: 'string' },
-        operation: { type: 'string' },
-        input: { type: 'object', additionalProperties: true }
-      },
-      required: ['utility_id', 'operation'],
-      additionalProperties: false
-    },
-    source: 'application',
-    sentWhen: 'After a utility has been activated for the current turn'
-  },
+  ...GATEWAY_TOOLS.map(({ name, description, inputSchema, sentWhen }) => ({
+    name,
+    description,
+    inputSchema,
+    source: 'application' as const,
+    sentWhen
+  })),
   {
     name: BRAINSTORM_DOCUMENT_TOOL_NAME,
     transportName: 'StructuredOutput',
-    description: `Submit a complete structured Brainstorm document for ${APP_NAME}. Every revision replaces the complete document; Additional Info is optional and used only when the core sections do not fit useful context.`,
+    description: `Submit the concise, human-facing Brainstorm session report for ${APP_NAME}. Every revision replaces the complete report; Additional Notes is optional and used only when important context does not fit the core sections.`,
     inputSchema: BRAINSTORM_DOCUMENT_JSON_SCHEMA,
     source: 'application',
     sentWhen: 'Initial Brainstorm generation and every Brainstorm review turn before finalization'

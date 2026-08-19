@@ -30,7 +30,12 @@ interface ThreadMessagesEntry {
   error: string
 }
 
+/** Bounded window warmed on hover, matching the ThreadView history window so a
+ *  preloaded thread opens to the same recent-message tail it would load live. */
+export const THREAD_MESSAGE_PRELOAD_WINDOW = 40
+
 const EMPTY_MESSAGES: AgentMessage[] = []
+const STREAM_NOTIFICATION_DELAY_MS = 50
 
 function threadKey(projectId: string, threadId: string): string {
   return `${projectId}:${threadId}`
@@ -75,9 +80,11 @@ function mergeMessageSnapshot(cached: AgentMessage, incoming: AgentMessage): Age
 
 class ThreadMessagesStore {
   #threads = new Map<string, ThreadMessagesEntry>()
+  #streamNotifyTimer: ReturnType<typeof setTimeout> | undefined
+  #streamDirtyKeys = new Set<string>()
 
   /** Reactive cache keyed by `projectId:threadId`. */
-  threads = $state(new Map<string, ThreadMessagesEntry>())
+  threads = new SvelteMap<string, ThreadMessagesEntry>()
 
   /** Active session IDs per thread, used to filter streaming events. */
   #sessionIds = new Map<string, string>()
@@ -98,7 +105,7 @@ class ThreadMessagesStore {
     if (!entry) {
       entry = { messages: [], loaded: false, loading: false, error: '' }
       this.#threads.set(key, entry)
-      this.threads = new Map(this.#threads)
+      this.threads.set(key, { ...entry })
     }
     return entry
   }
@@ -139,23 +146,38 @@ class ThreadMessagesStore {
   }
 
   /** Load the authoritative mirror and merge it with local optimistic state. */
-  async load(projectId: string, threadId: string): Promise<void> {
+  async load(projectId: string, threadId: string, recentLimit?: number): Promise<void> {
     const entry = this.entry(projectId, threadId)
     if (entry.loading) return
     entry.loading = true
     entry.error = ''
-    this.#notify()
+    this.#notify(projectId, threadId)
 
     try {
-      const serverMessages = await invoke('agent:loadMessages', projectId, threadId)
+      const serverMessages =
+        recentLimit === undefined
+          ? await invoke('agent:loadMessages', projectId, threadId)
+          : (await invoke('thread:loadMessages', projectId, threadId, undefined, recentLimit))
+              .messages
       this.reconcile(projectId, threadId, serverMessages)
       entry.loaded = true
     } catch (err) {
       entry.error = err instanceof Error ? err.message : 'Could not load messages.'
     } finally {
       entry.loading = false
-      this.#notify()
+      this.#notify(projectId, threadId)
     }
+  }
+
+  /** Bounded warmup for the message cache so opening the thread (sidebar
+   *  click, Ctrl+Tab) renders instantly instead of showing the loading
+   *  spinner. Non-destructive: merges into the cache, never marks read, and
+   *  never clobbers newer live data. Skipped when the thread already has
+   *  messages or a load is in flight. */
+  async preload(projectId: string, threadId: string): Promise<void> {
+    const entry = this.entry(projectId, threadId)
+    if (entry.loaded || entry.loading) return
+    await this.load(projectId, threadId, THREAD_MESSAGE_PRELOAD_WINDOW)
   }
 
   /** Non-destructively merge server messages with the local cache. */
@@ -197,7 +219,7 @@ class ThreadMessagesStore {
 
     entry.messages = merged
     entry.loaded = true
-    this.#notify()
+    this.#notify(projectId, threadId)
   }
 
   /** Merge a bounded history page without discarding pages already loaded for the thread. */
@@ -214,7 +236,7 @@ class ThreadMessagesStore {
       return a.id.localeCompare(b.id)
     })
     entry.loaded = true
-    this.#notify()
+    this.#notify(projectId, threadId)
   }
 
   private appendOptimistic(
@@ -270,11 +292,13 @@ class ThreadMessagesStore {
       completedAt: Date.now()
     }
     entry.messages = [...entry.messages, optimistic]
-    this.#notify()
+    this.#notify(projectId, threadId)
     return { entry, messageId }
   }
 
   private confirmOptimistic(
+    projectId: string,
+    threadId: string,
     entry: ThreadMessagesEntry,
     messageId: string,
     confirmed: AgentMessage
@@ -286,13 +310,19 @@ class ThreadMessagesStore {
       confirmed,
       ...entry.messages.slice(index + 1)
     ]
-    this.#notify()
+    this.#notify(projectId, threadId)
   }
 
-  private rejectOptimistic(entry: ThreadMessagesEntry, messageId: string, error: unknown): void {
+  private rejectOptimistic(
+    projectId: string,
+    threadId: string,
+    entry: ThreadMessagesEntry,
+    messageId: string,
+    error: unknown
+  ): void {
     entry.error = error instanceof Error ? error.message : 'Message failed to send.'
     entry.messages = entry.messages.filter((message) => message.id !== messageId)
-    this.#notify()
+    this.#notify(projectId, threadId)
   }
 
   /**
@@ -344,9 +374,9 @@ class ThreadMessagesStore {
         presentation,
         taskReferences
       )
-      this.confirmOptimistic(entry, messageId, confirmed)
+      this.confirmOptimistic(projectId, threadId, entry, messageId, confirmed)
     } catch (err) {
-      this.rejectOptimistic(entry, messageId, err)
+      this.rejectOptimistic(projectId, threadId, entry, messageId, err)
       throw err
     }
     return messageId
@@ -389,9 +419,9 @@ class ThreadMessagesStore {
         presentation,
         taskReferences
       )
-      this.confirmOptimistic(entry, messageId, confirmed)
+      this.confirmOptimistic(projectId, threadId, entry, messageId, confirmed)
     } catch (error) {
-      this.rejectOptimistic(entry, messageId, error)
+      this.rejectOptimistic(projectId, threadId, entry, messageId, error)
       throw error
     }
     return messageId
@@ -402,7 +432,7 @@ class ThreadMessagesStore {
     if (!this.#matchesSession(projectId, threadId, sessionId)) return
     const entry = this.entry(projectId, threadId)
     const msgId = part.messageID
-    const msgIndex = entry.messages.findIndex((m) => m.id === msgId)
+    const msgIndex = entry.messages.findLastIndex((message) => message.id === msgId)
 
     if (msgIndex === -1) {
       // If the part's text matches the last user's message, it's an echo from
@@ -420,7 +450,9 @@ class ThreadMessagesStore {
       entry.messages = [...entry.messages, newMsg]
     } else {
       const msg = entry.messages[msgIndex]
-      const partIndex = msg.parts.findIndex((p) => p.id === part.id)
+      // Providers overwhelmingly update the active tail part. Search backward
+      // so a long-running trace stays constant-time in the common case.
+      const partIndex = msg.parts.findLastIndex((candidate) => candidate.id === part.id)
       if (partIndex === -1) {
         msg.parts = [...msg.parts, part]
       } else {
@@ -428,7 +460,7 @@ class ThreadMessagesStore {
       }
       entry.messages = [...entry.messages]
     }
-    this.#notify()
+    this.#notifyStreaming(projectId, threadId)
   }
 
   /** Append streaming text to a specific part field. */
@@ -443,14 +475,14 @@ class ThreadMessagesStore {
   ): void {
     if (!this.#matchesSession(projectId, threadId, sessionId)) return
     const entry = this.entry(projectId, threadId)
-    const msg = entry.messages.find((m) => m.id === messageId)
+    const msg = entry.messages.findLast((message) => message.id === messageId)
     if (!msg) return
-    const part = msg.parts.find((p) => p.id === partId)
+    const part = msg.parts.findLast((candidate) => candidate.id === partId)
     if (!part) return
     if (field === 'text' && (part.type === 'text' || part.type === 'reasoning')) {
       part.text += delta
       entry.messages = [...entry.messages]
-      this.#notify()
+      this.#notifyStreaming(projectId, threadId)
     }
   }
 
@@ -464,7 +496,9 @@ class ThreadMessagesStore {
     compaction = false,
     tokens?: AgentMessage['tokens'],
     contextWindow?: number,
-    contextUsed?: number
+    contextUsed?: number,
+    rateLimits?: AgentMessage['rateLimits'],
+    credits?: AgentMessage['credits']
   ): void {
     if (!this.#matchesSession(projectId, threadId, sessionId)) return
     const entry = this.entry(projectId, threadId)
@@ -476,6 +510,8 @@ class ThreadMessagesStore {
     if (tokens) doneMsg.tokens = tokens
     if (contextWindow !== undefined) doneMsg.contextWindow = contextWindow
     if (contextUsed !== undefined) doneMsg.contextUsed = contextUsed
+    if (rateLimits) doneMsg.rateLimits = rateLimits
+    if (credits) doneMsg.credits = credits
     if (compaction) {
       doneMsg.parts = doneMsg.parts.map((part): AgentPart =>
         part.type === 'text'
@@ -494,7 +530,7 @@ class ThreadMessagesStore {
       }
     }
     entry.messages = [...entry.messages]
-    this.#notify()
+    this.#notifyStreaming(projectId, threadId)
   }
 
   /** Apply provider account telemetry without creating a duplicate answer. */
@@ -507,7 +543,8 @@ class ThreadMessagesStore {
     contextWindow?: number,
     contextUsed?: number,
     cost?: number,
-    rateLimits?: AgentMessage['rateLimits']
+    rateLimits?: AgentMessage['rateLimits'],
+    credits?: AgentMessage['credits']
   ): void {
     if (!this.#matchesSession(projectId, threadId, sessionId)) return
     const entry = this.entry(projectId, threadId)
@@ -518,8 +555,9 @@ class ThreadMessagesStore {
     if (contextUsed !== undefined) message.contextUsed = contextUsed
     if (cost !== undefined) message.cost = cost
     if (rateLimits) message.rateLimits = rateLimits
+    if (credits) message.credits = credits
     entry.messages = [...entry.messages]
-    this.#notify()
+    this.#notifyStreaming(projectId, threadId)
   }
 
   /** Drop a message and everything after it from the cache. */
@@ -531,7 +569,7 @@ class ThreadMessagesStore {
     entry.loaded = true
     entry.error = ''
     this.#sessionIds.delete(key)
-    this.#notify()
+    this.#notify(projectId, threadId)
     return kept
   }
 
@@ -542,7 +580,8 @@ class ThreadMessagesStore {
     if (sessionId) this.#threadsBySession.delete(sessionId)
     this.#threads.delete(key)
     this.#sessionIds.delete(key)
-    this.threads = new Map(this.#threads)
+    this.#streamDirtyKeys.delete(key)
+    this.threads.delete(key)
   }
 
   #matchesSession(projectId: string, threadId: string, sessionId: string): boolean {
@@ -554,6 +593,14 @@ class ThreadMessagesStore {
     const target = this.#threadsBySession.get(event.sessionId)
     if (!target) return
     const { projectId, threadId } = target
+
+    // Live streaming activity is authoritative evidence the agent is still
+    // working. A stray idle/status snapshot between activity blips must never
+    // leave the thread idle — and fold its working trace — while parts keep
+    // streaming (the definitive session.idle that ends the turn clears it).
+    if (event.type === 'message.part.updated' || event.type === 'message.part.delta') {
+      agentRuns.setBusy(projectId, threadId, true, this.#latestUserMessageId(projectId, threadId))
+    }
 
     switch (event.type) {
       case 'message.part.updated':
@@ -580,7 +627,9 @@ class ThreadMessagesStore {
           event.compaction,
           event.tokens,
           event.contextWindow,
-          event.contextUsed
+          event.contextUsed,
+          event.rateLimits,
+          event.credits
         )
         break
       case 'usage.updated':
@@ -593,7 +642,8 @@ class ThreadMessagesStore {
           event.contextWindow,
           event.contextUsed,
           event.cost,
-          event.rateLimits
+          event.rateLimits,
+          event.credits
         )
         break
       case 'session.status':
@@ -623,9 +673,26 @@ class ThreadMessagesStore {
     return undefined
   }
 
-  #notify(): void {
-    // Reassign the reactive map so Svelte subscribers see the change.
-    this.threads = new Map(this.#threads)
+  #notifyStreaming(projectId: string, threadId: string): void {
+    this.#streamDirtyKeys.add(threadKey(projectId, threadId))
+    if (this.#streamNotifyTimer !== undefined) return
+    this.#streamNotifyTimer = setTimeout(() => {
+      this.#streamNotifyTimer = undefined
+      const dirtyKeys = [...this.#streamDirtyKeys]
+      this.#streamDirtyKeys.clear()
+      for (const key of dirtyKeys) this.#publish(key)
+    }, STREAM_NOTIFICATION_DELAY_MS)
+  }
+
+  #notify(projectId: string, threadId: string): void {
+    const key = threadKey(projectId, threadId)
+    this.#streamDirtyKeys.delete(key)
+    this.#publish(key)
+  }
+
+  #publish(key: string): void {
+    const entry = this.#threads.get(key)
+    if (entry) this.threads.set(key, { ...entry })
   }
 }
 

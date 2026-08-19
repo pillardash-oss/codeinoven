@@ -18,14 +18,15 @@
   <div class="flex items-center gap-2 border-b px-4 py-2.5">
     <Lightbulb size={15} class="shrink-0 text-accent" />
     <p class="truncate text-xs font-semibold uppercase tracking-wide text-muted">
-      Brainstorm ready · Version {version}
+      Session report · Version {version}
     </p>
   </div>
 
   <div class="space-y-1.5 p-4">
-    <p class="text-sm font-semibold text-foreground">The brainstorm document is ready.</p>
+    <p class="text-sm font-semibold text-foreground">Your current alignment is captured.</p>
     <p class="text-xs leading-relaxed text-muted">
-      Review and annotate it, or finalize this version and move to specification.
+      Keep talking to refine the direction, review the concise report, or use it to prepare the
+      specification.
     </p>
   </div>
 
@@ -35,14 +36,14 @@
       disabled={busy}
       onclick={onReview}
     >
-      Review
+      Review report
     </button>
     <button
       class="flex min-h-8 items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-40"
       disabled={busy}
       onclick={onFinalize}
     >
-      Finalize
+      Prepare spec
       <ArrowRight size={13} />
     </button>
   </div>

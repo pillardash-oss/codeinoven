@@ -7,6 +7,8 @@ class FindNavState {
   focusFileTreeFilter = $state(0)
   conversationFindOpen = $state(false)
   conversationFindFocusTrigger = $state(0)
+  studioFindOpen = $state(false)
+  studioFindFocusTrigger = $state(0)
 
   openEditorFind(): void {
     if (!this.editorFindOpen) {
@@ -32,6 +34,15 @@ class FindNavState {
 
   closeConversationFind(): void {
     this.conversationFindOpen = false
+  }
+
+  openStudioFind(): void {
+    this.studioFindOpen = true
+    this.studioFindFocusTrigger++
+  }
+
+  closeStudioFind(): void {
+    this.studioFindOpen = false
   }
 }
 

@@ -2,12 +2,12 @@
   import { tick, onDestroy, onMount } from 'svelte'
   import {
     ArrowUp,
+    AudioLines,
     Clock,
     Plus,
     Paperclip,
     Square,
     Wrench,
-    Brain,
     X,
     Folder,
     GitBranch,
@@ -22,7 +22,11 @@
     Network,
     HardDrive,
     Zap,
-    ShieldAlert
+    ShieldAlert,
+    Eye,
+    Image as ImageIcon,
+    Video,
+    Check
   } from '@lucide/svelte'
   import { threadSettings as threadSettingsStore } from '$lib/stores/thread-settings.svelte'
   import { baseUrlProviderStore } from '$lib/stores/base-url-providers.svelte'
@@ -31,8 +35,9 @@
     fastSelectionModelId,
     supportsFastInference
   } from '$shared/fast-inference'
-  import { STANDARD_THINKING_PRESETS } from '$shared/thinking-presets'
+  import { STANDARD_THINKING_PRESETS, resolveDefaultThinkingLevel } from '$shared/thinking-presets'
   import { invoke } from '$lib/ipc.svelte'
+  import { modelKey } from '$lib/model-keys'
   import ProjectSwitch from '$lib/components/shared/ProjectSwitch.svelte'
   import ProjectIdentity from '$lib/components/shared/ProjectIdentity.svelte'
   import { hasProjectNameCollision, projectIdentityTitle } from '$lib/project-location'
@@ -42,10 +47,11 @@
     getInlineFolderTypeIconDataUri
   } from '../files/file-type-icons'
   import { scopeState } from '$lib/stores/scope.svelte'
-  import { mimeFromPath, isImageMime, pathToFileUrl, fileUrlToPath } from '$lib/mime'
+  import { attachmentPreviewKind, fileUrlToPath, mimeFromPath, pathToFileUrl } from '$lib/mime'
   import { placeCaretAtEnd } from '../shared/rich-markdown'
-  import ImagePreview from './ImagePreview.svelte'
+  import AttachmentPreview from './AttachmentPreview.svelte'
   import SelectionListPopover from './SelectionListPopover.svelte'
+  import StartAfterThreadPicker from './StartAfterThreadPicker.svelte'
   import Switch from '../ui/Switch.svelte'
   import ContextUsageIndicator from './ContextUsageIndicator.svelte'
   import ProjectFileMentionMenu from './ProjectFileMentionMenu.svelte'
@@ -69,18 +75,30 @@
     PromptProjectReference,
     ComposerProject,
     AgentContextUsage,
+    AgentHarnessUsage,
     PromptReference,
-    AssignmentTask
+    AssignmentTask,
+    AgentModelSelection,
+    AttachmentStorageScope,
+    UsageEfficiencyKpis,
+    Thread
   } from '$shared/types'
 
+  type StartAfterSelection = Pick<Thread, 'id' | 'title'>
+  const MAX_PROMPT_CHARACTERS = 200_000
+  const LONG_PASTE_ATTACHMENT_CHARACTERS = 100_000
+
   interface Props {
-    /** Called with the trimmed message and attachments when the user sends. */
+    /** Called with the trimmed message and attachments when the user sends.
+     *  `direct` is true when the message must be force-delivered as a steer
+     *  into a live turn (Cmd/Ctrl+Shift+Enter); busy parents queue otherwise. */
     onSend: (
       message: string,
       attachments: PromptAttachment[],
       direct?: boolean,
       projectReferences?: PromptProjectReference[],
-      taskReferences?: PromptAssignmentTaskReference[]
+      taskReferences?: PromptAssignmentTaskReference[],
+      startAfterThreads?: StartAfterSelection[]
     ) => void
     disabled?: boolean
     /** True while the agent is running — turns the send button into a stop button. */
@@ -107,6 +125,10 @@
     projectContext?: ComposerProject
     /** Active project ID for the project switcher dropdown. */
     projectId?: string | null
+    /** Active thread ID used to prevent selecting the current thread as a dependency. */
+    threadId?: string
+    /** Project or app scratch destination for pasted/ephemeral attachment files. */
+    attachmentStorage?: AttachmentStorageScope
     /** Called when the user selects a different project from the switcher. */
     onSwitchProject?: (projectId: string) => void
     /** Local project whose files can be referenced with bare @ tags. */
@@ -126,6 +148,12 @@
     /** Restart-safe Assignment task references tagged for the next prompt. */
     initialTaskReferences?: PromptAssignmentTaskReference[]
     onTaskReferencesChange?: (references: PromptAssignmentTaskReference[]) => void
+    /** Restart-safe source threads the next prompt waits for before it starts. */
+    initialStartAfterThreads?: StartAfterSelection[]
+    /** Persists or clears the source threads selected for the next prompt. */
+    onStartAfterThreadsChange?: (threads: StartAfterSelection[]) => void
+    /** Opens a selected source thread from the composer badge popover. */
+    onOpenStartAfterThread?: (threadId: string) => void | Promise<void>
     /** Assistant-response excerpts referenced by the next message. */
     references?: readonly PromptReference[]
     onRemoveReference?: (id: string) => void
@@ -137,6 +165,9 @@
     showEngineeringMode?: boolean
     /** True on the Chats tab — surfaces the chat-only Engineering and File System toggles. */
     showChatModes?: boolean
+    /** Hides the permission level selector and forces auto review — chats are
+     *  for questions and research, so they always run with auto permissions. */
+    hidePermissionSelector?: boolean
     /** Hides mutating controls and file attachment entry points. */
     readOnlyMode?: boolean
     /** Lets read-only composers still attach media files for context.
@@ -145,21 +176,45 @@
     /** Model keys (providerId:modelId) the user has favorited. */
     favoriteModels?: string[]
     /** Called when the user toggles a model as favorite. */
-    onToggleFavorite?: (providerId: string, modelId: string) => void
+    onToggleFavorite?: (providerId: string, modelId: string, harnessId: string) => void
+    /** Called when the user reorders a favorite relative to another favorite. */
+    onReorderFavorite?: (
+      draggedKey: string,
+      targetKey: string,
+      position: 'before' | 'after'
+    ) => void
     /** Model keys (providerId:modelId) the user has recently used, most recent first. */
     recentModels?: string[]
     /** Called when the user selects a model — for tracking recently used. */
     onModelUsed?: (modelKey: string) => void
     /** Current provider-reported context and account usage. */
     contextUsage?: AgentContextUsage
+    /** Normalized per-turn efficiency and cost-coverage KPIs for this thread. */
+    efficiencyKpis?: UsageEfficiencyKpis
+    /** Per-harness quota telemetry when a thread used more than one harness. */
+    harnessUsage?: AgentHarnessUsage[]
     /** Flushes the rendered usage snapshot to the latest value (e.g. on hover). */
     onRevealUsage?: () => void
+    /** Called when the user stops hovering the usage indicator. */
+    onHideUsage?: () => void
+    /** Whether live account usage is currently being fetched from the harness. */
+    usageRefreshing?: boolean
     /** Whether this harness can explicitly compact conversation context. */
     canCompact?: boolean
     compacting?: boolean
     onCompact?: () => void
     /** Previous user messages for terminal-like up-arrow history recall. */
     historyMessages?: string[]
+    /** Global default vision model used to describe images for text-only models. */
+    imageDescriptorDefault?: AgentModelSelection
+    /** When true, the vision-model picker card is skipped on image sends. */
+    imageDescriptorAskAgain?: boolean
+    /** Persists a new global image-descriptor default (Agents settings). */
+    onImageDescriptorDefaultChange?: (selection: AgentModelSelection) => void
+    /** Persists the "don't ask again" flag for image-descriptor picks. */
+    onImageDescriptorAskAgainChange?: (value: boolean) => void
+    /** Enables the image-to-text-only-model gate card. Off in side-chats. */
+    enableImageDescriptorGate?: boolean
   }
 
   let {
@@ -178,6 +233,8 @@
     harnessId = 'opencode',
     projectContext,
     projectId = null,
+    threadId = '',
+    attachmentStorage,
     onSwitchProject,
     fileTagProjectId,
     assignmentId,
@@ -190,28 +247,48 @@
     onProjectReferencesChange,
     initialTaskReferences = [],
     onTaskReferencesChange,
+    initialStartAfterThreads = [],
+    onStartAfterThreadsChange,
+    onOpenStartAfterThread,
     references = [],
     onRemoveReference,
     onRemoveAllReferences,
     onEditReference,
     showEngineeringMode = true,
     showChatModes = false,
+    hidePermissionSelector = false,
     readOnlyMode = false,
     allowAttachments = false,
     favoriteModels = [],
     onToggleFavorite,
+    onReorderFavorite,
     recentModels = [],
     onModelUsed,
     contextUsage,
+    efficiencyKpis,
+    harnessUsage = [],
     onRevealUsage,
+    onHideUsage,
+    usageRefreshing = false,
     canCompact = false,
     compacting = false,
     onCompact,
-    historyMessages = []
+    historyMessages = [],
+    imageDescriptorDefault,
+    imageDescriptorAskAgain = false,
+    onImageDescriptorDefaultChange,
+    onImageDescriptorAskAgainChange,
+    enableImageDescriptorGate = true
   }: Props = $props()
 
-  /** Resolved settings — uses the prop if provided, else the global last-used. */
-  let resolved = $derived(settings ?? threadSettingsStore.lastUsed)
+  /** Resolved settings — uses the prop if provided, else the global last-used.
+   *  Chats always run with auto permission review, so when the permission
+   *  selector is hidden the level is pinned to `auto_review`. */
+  let resolved = $derived<ThreadSettings>(
+    hidePermissionSelector
+      ? { ...(settings ?? threadSettingsStore.lastUsed), permissionLevel: 'auto_review' as const }
+      : (settings ?? threadSettingsStore.lastUsed)
+  )
 
   function projectReferenceToken(reference: Pick<PromptProjectReference, 'path'>): string {
     return `@${reference.path}`
@@ -244,12 +321,32 @@
   let projectReferences = $state<PromptProjectReference[]>([...initialProjectReferences])
   // svelte-ignore state_referenced_locally
   let taskReferences = $state<PromptAssignmentTaskReference[]>([...initialTaskReferences])
+  let projectReferenceIcons = $state<Record<string, string>>({})
+
+  $effect(() => {
+    const references = projectReferences.map((reference) => ({ ...reference }))
+    let current = true
+    void Promise.all(
+      references.map(
+        async (reference) =>
+          [
+            projectReferenceToken(reference),
+            reference.kind === 'directory'
+              ? await getInlineFolderTypeIconDataUri(reference.name)
+              : await getInlineFileTypeIconDataUri(reference.path)
+          ] as const
+      )
+    ).then((entries) => {
+      if (current) projectReferenceIcons = Object.fromEntries(entries)
+    })
+    return () => {
+      current = false
+    }
+  })
+
   let projectReferenceBadges = $derived<RichInlineBadge[]>([
     ...projectReferences.map((reference) => ({
-      iconSrc:
-        reference.kind === 'directory'
-          ? getInlineFolderTypeIconDataUri(reference.name)
-          : getInlineFileTypeIconDataUri(reference.path),
+      iconSrc: projectReferenceIcons[projectReferenceToken(reference)],
       label: reference.name,
       title: `${reference.kind === 'directory' ? 'Directory' : 'File'}: ${reference.path}`,
       value: projectReferenceToken(reference)
@@ -275,9 +372,18 @@
   })
   let isDragging = $state(false)
   let previewFile = $state<PromptAttachment | null>(null)
-  /** Object URLs for image previews, keyed by attachment file:// URL. */
+  /** Object URLs for image/pdf previews, keyed by attachment file:// URL. */
   let previewUrls = $state<Record<string, string>>({})
+  /** Decoded text content for markdown/plain-text previews, keyed by url. */
+  let previewTexts = $state<Record<string, string>>({})
+  /** Image-descriptor gate state: intercepts sending an image to a text-only model. */
+  let imageDescriptorGateOpen = $state(false)
+  let gateVisionSelection = $state<AgentModelSelection | null>(null)
+  let gateDonotAsk = $state(false)
+  let gateDirect = $state<boolean | undefined>(undefined)
   const composerEditorId = `chat-composer-${crypto.randomUUID()}`
+  /** macOS shows ⌘; Windows/Linux show Ctrl — matches the global send shortcut. */
+  const sendModifierLabel = navigator.platform.toUpperCase().indexOf('MAC') >= 0 ? '⌘' : 'Ctrl+'
   let mentionEntries = $state<ComposerMentionEntry[]>([])
   let mentionQuery = $state('')
   let mentionOpen = $state(false)
@@ -294,14 +400,26 @@
   // Dropdown open state
   let plusMenuOpen = $state(false)
   let modelMenuOpen = $state(false)
-  let thinkingMenuOpen = $state(false)
   let inferenceMenuOpen = $state(false)
   let permissionMenuOpen = $state(false)
+  /** Open state of the thinking-level dropdown inside the shared model picker. */
+  let thinkingMenuOpen = $state(false)
+  let startAfterPickerOpen = $state(false)
+  // The composer is remounted by the parent when a restore is required, so
+  // capture the persisted dependencies exactly once at construction.
+  // svelte-ignore state_referenced_locally
+  let startAfterThreads = $state<StartAfterSelection[]>(
+    initialStartAfterThreads.map((t) => ({ ...t }))
+  )
+  // svelte-ignore state_referenced_locally
+  let startAfterEnabled = $state(initialStartAfterThreads.length > 0)
 
   // Selection slot hover popover — a short grace period keeps it open while the
   // pointer travels from the chip across any gap to the popover itself.
   let selectionPopoverOpen = $state(false)
   let selectionPopoverTimer: ReturnType<typeof setTimeout> | undefined
+  let startAfterPopoverOpen = $state(false)
+  let startAfterPopoverTimer: ReturnType<typeof setTimeout> | undefined
 
   function openSelectionPopover(): void {
     clearTimeout(selectionPopoverTimer)
@@ -326,6 +444,23 @@
     selectionPopoverOpen = false
   }
 
+  function openStartAfterPopover(): void {
+    clearTimeout(startAfterPopoverTimer)
+    startAfterPopoverOpen = true
+  }
+
+  function scheduleStartAfterPopoverClose(): void {
+    clearTimeout(startAfterPopoverTimer)
+    startAfterPopoverTimer = setTimeout(() => {
+      startAfterPopoverOpen = false
+    }, 220)
+  }
+
+  function closeStartAfterPopover(): void {
+    clearTimeout(startAfterPopoverTimer)
+    startAfterPopoverOpen = false
+  }
+
   const permissionLabels: Record<PermissionLevel, string> = {
     auto_review: 'Auto Review',
     full_access: 'Full Access'
@@ -341,16 +476,57 @@
   function closeAllMenus(): void {
     plusMenuOpen = false
     modelMenuOpen = false
-    thinkingMenuOpen = false
     inferenceMenuOpen = false
     permissionMenuOpen = false
+    thinkingMenuOpen = false
+  }
+
+  function openStartAfterPicker(): void {
+    if (!projectId || readOnlyMode) return
+    closeAllMenus()
+    startAfterPickerOpen = true
+  }
+
+  function toggleStartAfter(enabled: boolean): void {
+    if (!enabled) {
+      startAfterEnabled = false
+      startAfterThreads = []
+      closeStartAfterPopover()
+      onStartAfterThreadsChange?.([])
+      return
+    }
+    if (!projectId || readOnlyMode) return
+    startAfterEnabled = true
+    openStartAfterPicker()
+  }
+
+  function selectStartAfterThread(thread: Thread): void {
+    if (thread.id === threadId) return
+    if (startAfterThreads.some((existing) => existing.id === thread.id)) return
+    startAfterThreads = [...startAfterThreads, { id: thread.id, title: thread.title }]
+    startAfterEnabled = true
+    onStartAfterThreadsChange?.(startAfterThreads)
+    focusComposerAtEnd()
+  }
+
+  function removeStartAfterThread(threadId: string): void {
+    startAfterThreads = startAfterThreads.filter((existing) => existing.id !== threadId)
+    if (startAfterThreads.length === 0) startAfterEnabled = false
+    onStartAfterThreadsChange?.(startAfterThreads)
+  }
+
+  function clearStartAfterThreads(): void {
+    startAfterEnabled = false
+    startAfterThreads = []
+    closeStartAfterPopover()
+    onStartAfterThreadsChange?.([])
   }
 
   function showModelMenu(): void {
     modelMenuOpen = true
     plusMenuOpen = false
-    thinkingMenuOpen = false
     inferenceMenuOpen = false
+    thinkingMenuOpen = false
   }
 
   function showThinkingMenu(): void {
@@ -369,7 +545,11 @@
     thinkingMenuOpen = false
   }
 
-  let modelWasOpen = $state(false)
+  // Prior-open tracking for the focus-on-close edge detection below. This is a
+  // non-reactive scratch value read/written only inside the effect — the effect
+  // re-runs because it also reads the reactive menu state, so keeping the
+  // previous value in a plain variable (rather than $state) is correct.
+  let modelWasOpen = false
   $effect(() => {
     if (modelWasOpen && !modelMenuOpen) {
       focusComposerAtEnd()
@@ -377,29 +557,13 @@
     modelWasOpen = modelMenuOpen
   })
 
-  let thinkingWasOpen = $state(false)
+  let thinkingWasOpen = false
   $effect(() => {
-    if (thinkingWasOpen && !thinkingMenuOpen && !modelMenuOpen) {
+    if (thinkingWasOpen && !thinkingMenuOpen) {
       focusComposerAtEnd()
     }
     thinkingWasOpen = thinkingMenuOpen
   })
-
-  $effect(() => {
-    if (thinkingMenuOpen) {
-      void tick().then(() => {
-        const firstItem = document.querySelector('[data-thinking-index="0"]')
-        if (firstItem instanceof HTMLElement) {
-          firstItem.focus()
-        }
-      })
-    }
-  })
-
-  function toggleThinkingMenu(): void {
-    if (thinkingMenuOpen) closeAllMenus()
-    else showThinkingMenu()
-  }
 
   function toggleInferenceMenu(): void {
     if (inferenceMenuOpen) closeAllMenus()
@@ -415,6 +579,59 @@
   let selectedModel = $derived(
     selectedProvider?.models.find((model) => model.id === resolved.modelId)
   )
+
+  /** True when the selected harness cannot accept any prompt attachments. */
+  let selectedHarnessLacksAttachments = $derived(selectedProvider?.supportsAttachments === false)
+  /** True when the catalog reports this model cannot see images. */
+  let selectedModelLacksVision = $derived(selectedModel?.attachment === false)
+  let hasImageAttachments = $derived(attachments.some(isImageAttachment))
+  let attachmentBlockedNotice = $state(false)
+  let textAttachmentError = $state('')
+
+  function isImageAttachment(file: PromptAttachment): boolean {
+    if (file.mime.startsWith('image/')) return true
+    return /\.(png|jpe?g|gif|webp|bmp|avif|svg|ico)$/iu.test(file.filename ?? '')
+  }
+
+  /**
+   * Whether sending the draft should be intercepted by the vision-model gate:
+   * an image is attached, the active model cannot see it, and the user has not
+   * opted into "don't ask again". The card is shown on every such send; the
+   * thread or global default merely pre-fills the picker.
+   */
+  function shouldInterceptImageGate(): boolean {
+    return (
+      enableImageDescriptorGate &&
+      hasImageAttachments &&
+      selectedModelLacksVision &&
+      !imageDescriptorAskAgain
+    )
+  }
+
+  function openImageDescriptorGate(direct?: boolean): void {
+    gateVisionSelection = resolved.imageDescriptor ?? imageDescriptorDefault ?? null
+    gateDonotAsk = false
+    gateDirect = direct
+    imageDescriptorGateOpen = true
+  }
+
+  function cancelImageDescriptorGate(): void {
+    imageDescriptorGateOpen = false
+  }
+
+  /** Persist the chosen vision model (thread + optional global default) and send. */
+  function confirmImageDescriptorGate(): void {
+    const selection = gateVisionSelection
+    if (!selection) return
+    if (onSettingsChange) onSettingsChange({ ...resolved, imageDescriptor: selection })
+    else threadSettingsStore.commit({ ...resolved, imageDescriptor: selection })
+    if (gateDonotAsk) {
+      onImageDescriptorDefaultChange?.(selection)
+      onImageDescriptorAskAgainChange?.(true)
+    }
+    imageDescriptorGateOpen = false
+    performSend(gateDirect)
+  }
 
   /**
    * Thinking presets declared by the selected model. While the catalog is cold
@@ -477,8 +694,15 @@
   let savedValue = $state('')
   let hasText = $derived(value.trim().length > 0)
 
-  /** Whether the button should show the stop icon (agent working, no text typed). */
-  let canStop = $derived(working && !hasText)
+  /** True when an attached selection carries a user comment, so an otherwise
+   *  empty message can still be sent (the comment is the payload). */
+  let hasCommentReference = $derived(references.some((reference) => Boolean(reference.comment)))
+
+  /** Whether there is anything to send: text, an attachment, or a commented selection. */
+  let hasSendableContent = $derived(hasText || attachments.length > 0 || hasCommentReference)
+
+  /** Whether the button should show the stop icon (agent working, nothing to send). */
+  let canStop = $derived(working && !hasSendableContent)
 
   // Cancel pending stop when the agent stops working on its own.
   $effect(() => {
@@ -513,7 +737,8 @@
     )
   }
 
-  function focusComposerAtEnd(): void {
+  /** Focus the composer editor and place the caret at the end, in place. */
+  export function focusComposerAtEnd(): void {
     void tick().then(() => {
       const editor = document.getElementById(composerEditorId)
       if (!(editor instanceof HTMLDivElement)) return
@@ -540,6 +765,7 @@
     }
 
     if (action.id === 'selector:thinking') {
+      // Thinking level lives in the shared model picker's dropdown — open it directly.
       showThinkingMenu()
       return
     }
@@ -562,13 +788,13 @@
       return
     }
     if (disabled) return
-    if (working && !hasText) {
+    if (working && !hasSendableContent) {
       confirmStop()
       return
     }
     cancelStop()
     const msg = value.trim()
-    if (!msg) return
+    if (!msg && attachments.length === 0 && !hasCommentReference) return
     historyIndex = -1
     savedValue = ''
     const slashCommand = /^\/([^\s]+)(?:\s+([\s\S]*))?$/u.exec(msg)
@@ -586,8 +812,25 @@
         return
       }
     }
+    if (selectedHarnessLacksAttachments && attachments.length > 0) {
+      attachmentBlockedNotice = true
+      return
+    }
     // When working and not direct, the parent (ThreadView) queues the message instead of sending it.
     // We still clear the input so the user can type their next message.
+    if (shouldInterceptImageGate()) {
+      openImageDescriptorGate(direct)
+      return
+    }
+    performSend(direct)
+  }
+
+  function performSend(direct?: boolean): void {
+    if (selectedHarnessLacksAttachments && attachments.length > 0) {
+      attachmentBlockedNotice = true
+      return
+    }
+    const msg = value.trim()
     value = ''
     onValueChange?.('')
     const files = [...attachments]
@@ -600,10 +843,13 @@
     projectReferences = []
     taskReferences = []
     previewUrls = {}
+    previewTexts = {}
     onAttachmentsChange?.([])
     onProjectReferencesChange?.([])
     onTaskReferencesChange?.([])
-    onSend(msg, files, direct, taggedPaths, taggedTasks)
+    const selectedStartAfterThreads = startAfterEnabled ? startAfterThreads : []
+    clearStartAfterThreads()
+    onSend(msg, files, direct, taggedPaths, taggedTasks, selectedStartAfterThreads)
   }
 
   async function updateFileMention(nextValue: string): Promise<void> {
@@ -685,6 +931,12 @@
     slashOpen = Boolean(slashMatch)
     slashQuery = slashMatch?.[2] ?? ''
     slashIndex = 0
+    // A query that matches no actions is almost certainly a path being typed
+    // (e.g. `cd /usr/local/bin`), not a command — close the menu so Enter and
+    // the rest of the text behave normally.
+    if (slashOpen && slashActions.length === 0) {
+      slashOpen = false
+    }
   }
 
   function selectMention(mention: ComposerMentionEntry): void {
@@ -801,24 +1053,29 @@
 
   function selectModel(providerId: string, modelId: string, nextHarnessId?: string): void {
     modelMenuOpen = false
-    onModelUsed?.(`${providerId}:${modelId}`)
     const nextHarness = nextHarnessId ?? resolved.harnessId
+    onModelUsed?.(modelKey(nextHarness, providerId, modelId))
+    const provider = providers.find(
+      (candidate) => candidate.harnessId === nextHarness && candidate.id === providerId
+    )
+    const model = provider?.models.find((candidate) => candidate.id === modelId)
     const defaultThinkingLevel = baseUrlProviderStore.defaultThinkingLevel(
       nextHarness,
       providerId,
       modelId
     )
-    const provider = providers.find(
-      (candidate) => candidate.harnessId === nextHarness && candidate.id === providerId
+    const thinkingLevel = resolveDefaultThinkingLevel(
+      model?.thinkingPresets,
+      defaultThinkingLevel,
+      resolved.thinkingLevel
     )
-    const model = provider?.models.find((candidate) => candidate.id === modelId)
     const fastSupported = supportsFastInference(nextHarness, providerId, model?.fastSupported)
     const updated: ThreadSettings = {
       ...resolved,
       harnessId: nextHarnessId ?? resolved.harnessId,
       providerId,
       modelId,
-      ...(defaultThinkingLevel ? { thinkingLevel: defaultThinkingLevel } : {}),
+      ...(thinkingLevel ? { thinkingLevel } : {}),
       ...(fastSupported ? {} : { inferenceMode: 'normal' })
     }
     if (onSettingsChange) onSettingsChange(updated)
@@ -826,8 +1083,11 @@
   }
 
   function selectThinking(preset: ThinkingPreset): void {
-    thinkingMenuOpen = false
-    const updated = { ...resolved, thinkingLevel: preset.id as ThinkingLevel }
+    const level = preset.id as ThinkingLevel
+    // The picker may re-emit the level it already applied during a model
+    // change — skip the redundant commit.
+    if (resolved.thinkingLevel === level) return
+    const updated = { ...resolved, thinkingLevel: level }
     if (onSettingsChange) onSettingsChange(updated)
     else threadSettingsStore.commit(updated)
   }
@@ -846,18 +1106,31 @@
     else threadSettingsStore.commit(updated)
   }
 
+  /** Loads the preview payload for one attachment: blob URLs for images/pdfs,
+   *  decoded text for markdown/plain-text. Missing/undecodable files silently
+   *  yield no preview so the chip falls back to the file:// URL or the modal
+   *  shows its unavailable state. */
+  async function loadAttachmentPreview(file: PromptAttachment): Promise<void> {
+    const kind = attachmentPreviewKind(file.mime, file.filename ?? '')
+    if (!kind) return
+    try {
+      const bytes = await window.api.readFile(fileUrlToPath(file.url))
+      if (kind === 'markdown' || kind === 'text') {
+        if (previewTexts[file.url] !== undefined) return
+        previewTexts = { ...previewTexts, [file.url]: new TextDecoder().decode(bytes) }
+        return
+      }
+      if (previewUrls[file.url]) return
+      const objectUrl = URL.createObjectURL(new Blob([bytes], { type: file.mime }))
+      previewUrls = { ...previewUrls, [file.url]: objectUrl }
+    } catch {
+      // Preview unavailable; the chip/modal will fall back to the file:// URL.
+    }
+  }
+
   async function loadAttachmentPreviews(files: PromptAttachment[]): Promise<void> {
     for (const file of files) {
-      if (!isImageMime(file.mime)) continue
-      try {
-        const path = fileUrlToPath(file.url)
-        const objectUrl = URL.createObjectURL(
-          new Blob([await window.api.readFile(path)], { type: file.mime })
-        )
-        previewUrls = { ...previewUrls, [file.url]: objectUrl }
-      } catch {
-        // Preview unavailable; the chip/modal will fall back to the file:// URL.
-      }
+      await loadAttachmentPreview(file)
     }
   }
 
@@ -865,24 +1138,65 @@
     void loadAttachmentPreviews(attachments)
   })
 
-  async function addFileAttachment(filePath: string, file?: File): Promise<void> {
+  async function addFileAttachments(
+    selections: ReadonlyArray<{ path: string; file?: File }>
+  ): Promise<void> {
     if (readOnlyMode && !allowAttachments) return
-    const filename =
-      file?.name ??
-      (filePath.split('/').pop() ?? filePath.split('\\').pop() ?? 'file').split('?')[0]
-    const mime = file?.type || mimeFromPath(filePath)
-    const url = pathToFileUrl(filePath)
-    attachments = [...attachments, { mime, url, filename }]
-    onAttachmentsChange?.(attachments)
-    if (!isImageMime(mime)) return
-    try {
-      const objectUrl = file
-        ? URL.createObjectURL(file)
-        : URL.createObjectURL(new Blob([await window.api.readFile(filePath)], { type: mime }))
-      previewUrls = { ...previewUrls, [url]: objectUrl }
-    } catch {
-      // Preview unavailable; the chip/modal will fall back to the file:// URL.
+    if (selectedHarnessLacksAttachments) {
+      attachmentBlockedNotice = true
+      return
     }
+    const addedAttachments = selections.map(({ path, file }) => {
+      const filename =
+        file?.name ?? (path.split('/').pop() ?? path.split('\\').pop() ?? 'file').split('?')[0]
+      const mime = file?.type || mimeFromPath(path)
+      return { mime, url: pathToFileUrl(path), filename }
+    })
+    if (addedAttachments.length === 0) return
+
+    attachments = [...attachments, ...addedAttachments]
+    onAttachmentsChange?.([...attachments])
+    await Promise.all(addedAttachments.map((attachment) => loadAttachmentPreview(attachment)))
+  }
+
+  async function addFileAttachment(filePath: string, file?: File): Promise<void> {
+    await addFileAttachments([{ path: filePath, file }])
+  }
+
+  function isEditablePastedTextAttachment(file: PromptAttachment): boolean {
+    if (file.mime !== 'text/plain') return false
+    const path = fileUrlToPath(file.url)
+    return /^pasted-[0-9a-f-]+\.txt$/u.test(path.split(/[/\\]/u).pop() ?? '')
+  }
+
+  async function addPastedTextAttachment(text: string): Promise<void> {
+    if (!attachmentStorage) throw new Error('Attachment storage is unavailable for this chat.')
+    const path = await invoke('attachment:saveText', attachmentStorage, text)
+    const attachment: PromptAttachment = {
+      mime: 'text/plain',
+      url: pathToFileUrl(path),
+      filename: 'Pasted text.txt'
+    }
+    attachments = [...attachments, attachment]
+    previewTexts = { ...previewTexts, [attachment.url]: text }
+    onAttachmentsChange?.([...attachments])
+  }
+
+  async function savePastedTextAttachment(
+    attachment: PromptAttachment,
+    text: string
+  ): Promise<void> {
+    if (!attachmentStorage || !isEditablePastedTextAttachment(attachment)) {
+      throw new Error('This attachment is not editable here.')
+    }
+    await invoke('attachment:saveText', attachmentStorage, text, fileUrlToPath(attachment.url))
+    previewTexts = { ...previewTexts, [attachment.url]: text }
+  }
+
+  async function savePreviewText(text: string): Promise<void> {
+    const attachment = previewFile
+    if (!attachment) throw new Error('The attachment preview is no longer open.')
+    await savePastedTextAttachment(attachment, text)
   }
 
   function removeAttachment(index: number): void {
@@ -895,6 +1209,9 @@
         delete rest[removed.url]
         previewUrls = rest
       }
+      const restTexts = { ...previewTexts }
+      delete restTexts[removed.url]
+      previewTexts = restTexts
     }
     attachments = attachments.filter((_, i) => i !== index)
     onAttachmentsChange?.(attachments)
@@ -903,6 +1220,7 @@
   onDestroy(() => {
     clearTimeout(mentionSearchTimer)
     clearTimeout(selectionPopoverTimer)
+    clearTimeout(startAfterPopoverTimer)
     for (const objectUrl of Object.values(previewUrls)) {
       URL.revokeObjectURL(objectUrl)
     }
@@ -910,9 +1228,12 @@
 
   async function pickAttachment(): Promise<void> {
     if (readOnlyMode && !allowAttachments) return
-    const path = await invoke('dialog:pickFile')
-    if (!path) return
-    await addFileAttachment(path)
+    if (selectedHarnessLacksAttachments) {
+      attachmentBlockedNotice = true
+      return
+    }
+    const paths = await invoke('dialog:pickFiles', attachmentStorage)
+    await addFileAttachments(paths.map((path) => ({ path })))
   }
 
   // ─── Global file drop (full viewport) ─────────────────────────────────────
@@ -944,24 +1265,34 @@
     return false
   }
 
-  function handleDropFiles(dt: DataTransfer | null): void {
+  async function handleDropFiles(dt: DataTransfer | null): Promise<void> {
     if (readOnlyMode && !allowAttachments) return
+    if (selectedHarnessLacksAttachments) {
+      attachmentBlockedNotice = true
+      return
+    }
     if (!dt) return
     const files = dt.files
     if (!files || files.length === 0) return
     for (const file of Array.from(files)) {
       try {
-        const filePath = window.api.getPathForFile(file)
-        if (filePath) addFileAttachment(filePath, file)
+        const filePath = await window.api.registerFileSelection(file, attachmentStorage)
+        if (filePath) await addFileAttachment(filePath, file)
       } catch {
         // Not a local file (e.g., image dragged from a web page); skip.
       }
     }
   }
 
-  $effect(() => {
-    if (readOnlyMode && !allowAttachments) return
+  // Register the document-level drag listeners once on mount and gate each
+  // handler on the current mode flags. The previous $effect re-subscribed on
+  // every change of readOnlyMode/allowAttachments; with the handlers gating on
+  // those values at event time the behavior is identical while keeping the
+  // listener lifecycle (and the isDragging mutations) out of a reactive effect.
+  onMount(() => {
     function onDragOver(e: DragEvent): void {
+      if (readOnlyMode && !allowAttachments) return
+      if (selectedHarnessLacksAttachments) return
       if (overFileTree(e)) {
         // The file tree owns the drop in its region; hide the composer overlay.
         if (isDragging) isDragging = false
@@ -974,6 +1305,8 @@
     }
 
     function onDragLeave(e: DragEvent): void {
+      if (readOnlyMode && !allowAttachments) return
+      if (selectedHarnessLacksAttachments) return
       if (
         e.clientX <= 0 ||
         e.clientY <= 0 ||
@@ -985,10 +1318,18 @@
     }
 
     function onDrop(e: DragEvent): void {
+      if (readOnlyMode && !allowAttachments) return
+      if (selectedHarnessLacksAttachments) {
+        if (hasFiles(e.dataTransfer)) {
+          e.preventDefault()
+          attachmentBlockedNotice = true
+        }
+        return
+      }
       if (overFileTree(e)) return
       e.preventDefault()
       isDragging = false
-      handleDropFiles(e.dataTransfer)
+      void handleDropFiles(e.dataTransfer)
     }
 
     document.addEventListener('dragover', onDragOver)
@@ -1004,8 +1345,38 @@
 
   async function handlePaste(e: ClipboardEvent): Promise<void> {
     if (readOnlyMode && !allowAttachments) return
+    const pastedText = e.clipboardData?.getData('text/plain') ?? ''
+    const shouldAttachText =
+      pastedText.length >= LONG_PASTE_ATTACHMENT_CHARACTERS ||
+      value.length + pastedText.length > MAX_PROMPT_CHARACTERS
+    if (
+      shouldAttachText &&
+      pastedText.length > 0 &&
+      attachmentStorage &&
+      !selectedHarnessLacksAttachments
+    ) {
+      e.preventDefault()
+      textAttachmentError = ''
+      try {
+        await addPastedTextAttachment(pastedText)
+      } catch (error) {
+        textAttachmentError =
+          error instanceof Error ? error.message : 'The pasted text could not be attached.'
+      }
+      return
+    }
     const items = e.clipboardData?.items
     if (!items) return
+    if (selectedHarnessLacksAttachments) {
+      const hasFile = Array.from(items).some(
+        (item) => item.kind === 'file' || item.type.startsWith('image/')
+      )
+      if (hasFile) {
+        e.preventDefault()
+        attachmentBlockedNotice = true
+      }
+      return
+    }
     let hasFileAttachment = false
 
     for (const item of Array.from(items)) {
@@ -1013,9 +1384,9 @@
         const file = item.getAsFile()
         if (file) {
           try {
-            const filePath = window.api.getPathForFile(file)
+            const filePath = await window.api.registerFileSelection(file, attachmentStorage)
             if (filePath) {
-              addFileAttachment(filePath, file)
+              await addFileAttachment(filePath, file)
               hasFileAttachment = true
             }
           } catch {
@@ -1034,7 +1405,9 @@
       }
       if (hasFileAttachment) {
         try {
-          const path = await invoke('clipboard:saveImage')
+          const path = attachmentStorage
+            ? await invoke('clipboard:saveImage', attachmentStorage)
+            : null
           if (path) await addFileAttachment(path)
           else hasFileAttachment = false
         } catch {
@@ -1085,6 +1458,18 @@
         selectSlashAction(slashActions[slashIndex], 'keyboard')
         return
       }
+      if (e.key === 'Enter' && slashActions[slashIndex]) {
+        // The rich editor only submits when the caret sits in a plain paragraph
+        // (P/DIV). When the slash is typed after text that renders as a heading,
+        // list, code block, etc. the editor's own Enter handler would let the
+        // browser insert a newline instead of running the command — so the slash
+        // menu claims Enter here, in the bubbling phase, before the default
+        // action fires. For plain paragraphs the editor already submitted and
+        // closed the menu, making this branch a no-op.
+        e.preventDefault()
+        selectSlashAction(slashActions[slashIndex], 'keyboard')
+        return
+      }
       if (e.key === 'Escape') {
         e.preventDefault()
         slashOpen = false
@@ -1094,6 +1479,11 @@
     if (selectionPopoverOpen && e.key === 'Escape') {
       e.preventDefault()
       selectionPopoverOpen = false
+      return
+    }
+    if (startAfterPopoverOpen && e.key === 'Escape') {
+      e.preventDefault()
+      closeStartAfterPopover()
       return
     }
     const editorEl = document.getElementById(composerEditorId)
@@ -1158,9 +1548,11 @@
 <svelte:window onkeydown={onWindowKeydown} />
 
 {#if previewFile}
-  <ImagePreview
-    src={previewUrls[previewFile.url] ?? previewFile.url}
-    filename={previewFile.filename ?? 'file'}
+  <AttachmentPreview
+    attachment={previewFile}
+    src={previewUrls[previewFile.url]}
+    text={previewTexts[previewFile.url]}
+    onSaveText={isEditablePastedTextAttachment(previewFile) ? savePreviewText : undefined}
     onClose={() => (previewFile = null)}
   />
 {/if}
@@ -1194,8 +1586,106 @@
     </div>
   {/if}
 
+  {#if imageDescriptorGateOpen}
+    <div
+      class="mx-3 mt-2.5 rounded-xl border border-primary/30 bg-primary/5 p-4"
+      role="dialog"
+      aria-label="Pick a vision model to describe this image"
+    >
+      <div class="flex items-start gap-2.5">
+        <div class="mt-0.5 shrink-0 rounded-lg bg-primary/10 p-1.5 text-primary">
+          <Eye size={15} />
+        </div>
+        <div class="min-w-0 flex-1">
+          <p class="text-sm font-semibold text-foreground">This model can't see images</p>
+          <p class="mt-1 text-xs leading-relaxed text-muted">
+            You're about to send an image to a model without vision capability. Image Descriptor is
+            a tool the model can call to describe the image for it — but you need to pick the vision
+            model that does the describing.
+          </p>
+        </div>
+      </div>
+      <div class="mt-3 flex flex-wrap items-center gap-2">
+        <button
+          type="button"
+          class="flex h-9 items-center gap-1.5 rounded-lg border bg-elevated px-3 text-xs font-medium hover:bg-overlay"
+          title="Cancel and keep your message and attachment"
+          onclick={cancelImageDescriptorGate}
+        >
+          Cancel
+        </button>
+        <div class="min-w-0 flex-1">
+          <ModelPicker
+            {providers}
+            {projectId}
+            harnessId={gateVisionSelection?.harnessId ??
+              providers[0]?.harnessId ??
+              resolved.harnessId}
+            providerId={gateVisionSelection?.providerId ?? ''}
+            modelId={gateVisionSelection?.modelId ?? ''}
+            {favoriteModels}
+            {recentModels}
+            visionOnly
+            side="top"
+            variant="field"
+            label={gateVisionSelection ? undefined : 'Choose a vision model'}
+            onSelect={(providerId, modelId, harnessId) => {
+              gateVisionSelection = { harnessId, providerId, modelId }
+            }}
+            thinkingLevel={gateVisionSelection?.thinkingLevel}
+            onSelectThinking={(level) => {
+              if (!gateVisionSelection) return
+              gateVisionSelection = { ...gateVisionSelection, thinkingLevel: level }
+            }}
+            {onToggleFavorite}
+            {onReorderFavorite}
+          />
+        </div>
+        <button
+          type="button"
+          class="flex h-9 items-center gap-1.5 rounded-lg bg-primary px-3 text-xs font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
+          title="Send the image and describe it with the selected vision model"
+          disabled={!gateVisionSelection}
+          onclick={() => confirmImageDescriptorGate()}
+        >
+          <Check size={13} /> Continue
+        </button>
+      </div>
+      {#if !gateVisionSelection}
+        <p class="mt-1.5 text-[11px] text-dimmed">
+          No vision model selected — Continue is disabled until you pick one.
+        </p>
+      {/if}
+      <div class="mt-3 flex justify-start">
+        <Switch
+          bind:checked={gateDonotAsk}
+          label="Don't ask again"
+          aria-label="Don't ask again for this vision model"
+        />
+      </div>
+    </div>
+  {/if}
+
+  {#if selectedHarnessLacksAttachments && (attachmentBlockedNotice || attachments.length > 0)}
+    <div
+      class="mx-3 mt-2.5 rounded-lg border border-danger/30 bg-danger/5 px-3 py-2 text-xs text-danger"
+      role="status"
+    >
+      This model cannot accept file attachments. Choose another model before sending this file.
+    </div>
+  {/if}
+
+  {#if textAttachmentError}
+    <div
+      class="mx-3 mt-2.5 rounded-lg border border-danger/30 bg-danger/5 px-3 py-2 text-xs text-danger"
+      role="status"
+    >
+      {textAttachmentError}
+    </div>
+  {/if}
+
   <!-- Project context + attachment chips -->
-  {#if projectContext || attachments.length > 0 || references.length > 0 || (showEngineeringMode && (resolved.engineeringMode || resolved.assignmentMode || resolved.loopMode)) || (showChatModes && resolved.fileSystemMode)}
+  {#if projectContext || attachments.length > 0 || references.length > 0 || startAfterThreads.length > 0 || (showEngineeringMode && (resolved.engineeringMode || resolved.assignmentMode || resolved.loopMode)) || (showChatModes && resolved.fileSystemMode)}
     <div class="flex flex-col gap-1.5 px-3 pt-2.5">
       <div class="flex flex-wrap items-center gap-1.5">
         {#if projectContext}
@@ -1313,6 +1803,88 @@
             {/if}
           </div>
         {/if}
+        {#if startAfterThreads.length > 0}
+          <div
+            class="relative inline-flex"
+            role="group"
+            aria-label="Start after dependencies"
+            onmouseenter={openStartAfterPopover}
+            onmouseleave={scheduleStartAfterPopoverClose}
+          >
+            <div
+              class="flex items-center rounded-lg border border-info/30 bg-info/10 text-[10px] font-medium text-info transition-colors hover:bg-info/15"
+            >
+              <button
+                type="button"
+                class="flex items-center gap-1.5 rounded-l-lg px-2 py-1"
+                title={`Starts after ${startAfterThreads.length} ${startAfterThreads.length === 1 ? 'thread' : 'threads'} — hover to manage`}
+                aria-label={`Starts after ${startAfterThreads.length} ${startAfterThreads.length === 1 ? 'thread' : 'threads'}`}
+                aria-expanded={startAfterPopoverOpen}
+                onclick={() => {
+                  if (startAfterPopoverOpen) closeStartAfterPopover()
+                  else openStartAfterPopover()
+                }}
+              >
+                <Clock size={10} class="shrink-0" />
+                <span
+                  >Start after{startAfterThreads.length > 1
+                    ? ` · ${startAfterThreads.length}`
+                    : ''}</span
+                >
+              </button>
+              <button
+                type="button"
+                class="flex h-full items-center rounded-r-lg pl-0.5 pr-1.5 text-info/70 transition-colors hover:text-danger"
+                title="Remove all Start after threads"
+                aria-label="Remove all Start after threads"
+                onclick={clearStartAfterThreads}
+              >
+                <X size={10} />
+              </button>
+            </div>
+            {#if startAfterPopoverOpen}
+              <div
+                class="absolute bottom-full left-0 z-50 mb-1.5 w-72 rounded-xl border border-border bg-surface p-2 shadow-lg"
+                role="dialog"
+                aria-label="Start after details"
+                tabindex="0"
+                onmouseenter={openStartAfterPopover}
+                onmouseleave={scheduleStartAfterPopoverClose}
+              >
+                <div
+                  class="px-2 pb-1 text-[10px] font-semibold uppercase tracking-wide text-dimmed"
+                >
+                  Starts after thread{startAfterThreads.length === 1 ? '' : 's'}
+                </div>
+                {#each startAfterThreads as selectedStartAfterThread (selectedStartAfterThread.id)}
+                  <div class="flex items-center gap-1">
+                    <button
+                      type="button"
+                      class="flex min-w-0 flex-1 items-center gap-2 rounded-lg px-2 py-1.5 text-left text-xs text-foreground transition-colors hover:bg-elevated"
+                      title={'Open ' + selectedStartAfterThread.title}
+                      aria-label={'Open ' + selectedStartAfterThread.title}
+                      onclick={() => void onOpenStartAfterThread?.(selectedStartAfterThread.id)}
+                    >
+                      <Clock size={12} class="shrink-0 text-info" />
+                      <span class="min-w-0 flex-1 truncate">
+                        {selectedStartAfterThread.title}
+                      </span>
+                    </button>
+                    <button
+                      type="button"
+                      class="flex h-6 shrink-0 items-center rounded-md px-1 text-dimmed transition-colors hover:bg-elevated hover:text-danger"
+                      title={`Remove ${selectedStartAfterThread.title} from Start after`}
+                      aria-label={`Remove ${selectedStartAfterThread.title} from Start after`}
+                      onclick={() => removeStartAfterThread(selectedStartAfterThread.id)}
+                    >
+                      <X size={11} />
+                    </button>
+                  </div>
+                {/each}
+              </div>
+            {/if}
+          </div>
+        {/if}
       </div>
       {#if references.length > 0}
         <div
@@ -1369,56 +1941,53 @@
       {#if attachments.length > 0}
         <div class="flex flex-wrap gap-1.5">
           {#each attachments as file, i (file.url)}
-            {@const isImage = isImageMime(file.mime)}
-            {#if isImage}
-              {@const previewSrc = previewUrls[file.url] ?? file.url}
-              <button
-                type="button"
-                class="flex items-center gap-1.5 rounded-lg bg-elevated px-2 py-1 text-[11px] text-muted transition-colors hover:bg-overlay"
-                title="Click to preview"
-                onclick={() => (previewFile = file)}
-              >
-                <img
-                  src={previewSrc}
-                  alt={file.filename ?? 'file'}
-                  class="h-5 w-5 shrink-0 rounded object-cover"
-                />
-                <span class="max-w-28 truncate">{file.filename ?? 'file'}</span>
-                <span
-                  class="ml-0.5 shrink-0 text-dimmed transition-colors hover:text-danger"
-                  role="button"
-                  tabindex="0"
-                  aria-label="Remove attachment"
-                  onclick={(e: MouseEvent) => {
-                    e.stopPropagation()
-                    removeAttachment(i)
-                  }}
-                  onkeydown={(e: KeyboardEvent) => {
-                    if (e.key === 'Enter' || e.key === ' ') {
-                      e.stopPropagation()
-                      removeAttachment(i)
-                    }
-                  }}
-                >
-                  <X size={10} />
-                </span>
-              </button>
-            {:else}
-              <span
-                class="flex items-center gap-1.5 rounded-lg bg-elevated px-2 py-1 text-[11px] text-muted"
-              >
-                <FileText size={11} class="shrink-0" />
-                <span class="max-w-28 truncate">{file.filename ?? 'file'}</span>
+            {@const previewKind = attachmentPreviewKind(file.mime, file.filename ?? '')}
+            <div
+              class="flex items-stretch overflow-hidden rounded-lg border border-border bg-elevated text-[11px] text-muted transition-colors"
+            >
+              {#if previewKind}
                 <button
                   type="button"
-                  class="ml-0.5 shrink-0 text-dimmed transition-colors hover:text-danger"
-                  title="Remove attachment"
-                  onclick={() => removeAttachment(i)}
+                  class="flex min-w-0 items-center gap-1.5 py-1 pr-1 pl-2 text-left transition-colors hover:text-foreground"
+                  title="Click to preview"
+                  aria-label="Preview {file.filename ?? 'file'}"
+                  onclick={() => (previewFile = file)}
                 >
-                  <X size={10} />
+                  {#if previewKind === 'image'}
+                    {#if previewUrls[file.url]}
+                      <img
+                        src={previewUrls[file.url]}
+                        alt={file.filename ?? 'file'}
+                        class="h-5 w-5 shrink-0 rounded object-cover"
+                      />
+                    {:else}
+                      <ImageIcon size={11} class="shrink-0" />
+                    {/if}
+                  {:else if previewKind === 'video'}
+                    <Video size={11} class="shrink-0" />
+                  {:else if previewKind === 'audio'}
+                    <AudioLines size={11} class="shrink-0" />
+                  {:else}
+                    <FileText size={11} class="shrink-0" />
+                  {/if}
+                  <span class="max-w-32 truncate">{file.filename ?? 'file'}</span>
                 </button>
-              </span>
-            {/if}
+              {:else}
+                <span class="flex min-w-0 items-center gap-1.5 py-1 pr-1 pl-2">
+                  <FileText size={11} class="shrink-0" />
+                  <span class="max-w-32 truncate">{file.filename ?? 'file'}</span>
+                </span>
+              {/if}
+              <button
+                type="button"
+                class="flex shrink-0 items-center justify-center border-l border-border px-2.5 text-dimmed transition-colors hover:bg-danger/10 hover:text-danger"
+                title="Remove attachment"
+                aria-label="Remove attachment"
+                onclick={() => removeAttachment(i)}
+              >
+                <X size={11} />
+              </button>
+            </div>
           {/each}
         </div>
       {/if}
@@ -1450,7 +2019,6 @@
       {autofocus}
       {disabled}
       ariaLabel="Message"
-      submitOnEnter
       onValueChange={handleComposerValueChange}
       onSubmit={submit}
       onPaste={handlePaste}
@@ -1579,6 +2147,60 @@
                 </Switch>
               {/if}
 
+              {#if showEngineeringMode && projectId && !readOnlyMode}
+                <!-- Start-after dependency -->
+                <Switch
+                  checked={startAfterEnabled}
+                  onchange={toggleStartAfter}
+                  title={startAfterThreads.length > 0
+                    ? `Start after ${startAfterThreads.length} ${startAfterThreads.length === 1 ? 'thread' : 'threads'}`
+                    : 'Start this thread after other active threads finish'}
+                  aria-label="Start after other threads"
+                  activeClass="bg-info"
+                  class="w-full justify-between rounded-lg px-2.5 py-2 transition-colors hover:bg-elevated"
+                >
+                  <span
+                    class="flex min-w-0 items-center gap-2 {startAfterEnabled
+                      ? 'text-foreground'
+                      : 'text-muted'}"
+                  >
+                    <Clock size={13} class={startAfterEnabled ? 'text-info' : 'text-dimmed'} />
+                    <span class="min-w-0 truncate">
+                      {startAfterEnabled && startAfterThreads.length > 0
+                        ? `Start after · ${startAfterThreads.length} ${startAfterThreads.length === 1 ? 'thread' : 'threads'}`
+                        : 'Start after'}
+                    </span>
+                  </span>
+                </Switch>
+                {#if startAfterEnabled}
+                  {#each startAfterThreads as startAfterThread (startAfterThread.id)}
+                    <div class="flex items-center gap-1 px-1">
+                      <span class="min-w-0 flex-1 truncate px-1.5 py-0.5 text-[11px] text-info">
+                        {startAfterThread.title}
+                      </span>
+                      <button
+                        type="button"
+                        class="flex h-6 shrink-0 items-center rounded-md px-1 text-dimmed transition-colors hover:bg-elevated hover:text-danger"
+                        title={`Remove ${startAfterThread.title} from Start after`}
+                        aria-label={`Remove ${startAfterThread.title} from Start after`}
+                        onclick={() => removeStartAfterThread(startAfterThread.id)}
+                      >
+                        <X size={11} />
+                      </button>
+                    </div>
+                  {/each}
+                  <button
+                    type="button"
+                    class="flex w-full items-center rounded-lg px-2.5 py-1 text-left text-[11px] text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+                    role="menuitem"
+                    title="Add another thread to Start after"
+                    onclick={openStartAfterPicker}
+                  >
+                    Add thread
+                  </button>
+                {/if}
+              {/if}
+
               <div class="mx-2 my-1 border-t"></div>
             {/if}
 
@@ -1586,16 +2208,19 @@
               <!-- Attach file -->
               <button
                 type="button"
-                class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-xs text-foreground transition-colors hover:bg-elevated"
+                class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-xs text-foreground transition-colors hover:bg-elevated disabled:cursor-not-allowed disabled:opacity-50"
                 role="menuitem"
-                title="Attach a file to this message"
+                title={selectedHarnessLacksAttachments
+                  ? 'Attachments are unavailable for this model'
+                  : 'Attach files to this message'}
+                disabled={selectedHarnessLacksAttachments}
                 onclick={() => {
                   plusMenuOpen = false
                   void pickAttachment()
                 }}
               >
                 <Paperclip size={13} class="text-dimmed" />
-                Attach File
+                Attach Files
               </button>
             {/if}
           </div>
@@ -1612,7 +2237,7 @@
         <Shield size={12} />
         <span class="composer-control-label">Read only</span>
       </span>
-    {:else}
+    {:else if !hidePermissionSelector}
       <div class="relative">
         <button
           type="button"
@@ -1677,7 +2302,7 @@
       </div>
     {/if}
 
-    <!-- Shared model selector -->
+    <!-- Shared model selector — model + thinking level in one control -->
     <ModelPicker
       {providers}
       {projectId}
@@ -1687,88 +2312,15 @@
       {favoriteModels}
       {recentModels}
       bind:open={modelMenuOpen}
+      bind:thinkingMenuOpen
       onSelect={selectModel}
       {onToggleFavorite}
+      {onReorderFavorite}
       fast={inferenceMode === 'fast'}
-      responsiveLabel
+      thinkingLevel={resolved.thinkingLevel}
+      {thinkingPresets}
+      onSelectThinking={(level) => selectThinking({ id: level, label: level })}
     />
-
-    <!-- Thinking level — only for models that support reasoning -->
-    {#if supportsThinking}
-      <div class="relative">
-        <button
-          type="button"
-          class="flex items-center gap-1 rounded-lg px-2 py-1.5 text-[11px] text-muted transition-colors hover:bg-elevated hover:text-foreground"
-          aria-label={`Thinking strategy: ${thinkingPresets.find((preset) => preset.id === resolved.thinkingLevel)?.label ?? resolved.thinkingLevel}`}
-          title="Thinking strategy"
-          onclick={toggleThinkingMenu}
-        >
-          <Brain size={12} />
-          <span class="composer-control-label capitalize"
-            >{thinkingPresets.find((p) => p.id === resolved.thinkingLevel)?.label ??
-              resolved.thinkingLevel}</span
-          >
-        </button>
-
-        {#if thinkingMenuOpen}
-          <button
-            class="fixed inset-0 z-30 cursor-default"
-            aria-label="Close menu"
-            onclick={closeAllMenus}
-          ></button>
-          <div
-            class="absolute bottom-9 left-0 z-40 w-44 overflow-hidden rounded-xl border bg-surface shadow-lg"
-          >
-            <div class="p-1">
-              {#each thinkingPresets as preset, i (preset.id)}
-                <button
-                  data-thinking-index={i}
-                  class="flex w-full items-center rounded-lg px-2 py-1.5 text-left text-xs transition-colors hover:bg-elevated {resolved.thinkingLevel ===
-                  preset.id
-                    ? 'text-primary'
-                    : 'text-foreground'}"
-                  title={preset.description ?? `Set thinking to ${preset.label}`}
-                  onclick={() => selectThinking(preset)}
-                  onkeydown={(event: KeyboardEvent) => {
-                    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
-                      event.preventDefault()
-                      const buttons = document.querySelectorAll('[data-thinking-index]')
-                      const currentIndex = Array.from(buttons).indexOf(
-                        event.currentTarget as HTMLElement
-                      )
-                      const nextIndex =
-                        event.key === 'ArrowDown'
-                          ? Math.min(currentIndex + 1, buttons.length - 1)
-                          : Math.max(currentIndex - 1, 0)
-                      const next = buttons[nextIndex] as HTMLElement
-                      if (next) next.focus()
-                      return
-                    }
-                    if (event.key === 'Escape') {
-                      event.preventDefault()
-                      closeAllMenus()
-                      return
-                    }
-                    if (event.key === 'Enter') {
-                      event.preventDefault()
-                      selectThinking(preset)
-                      return
-                    }
-                  }}
-                >
-                  <span class="flex flex-col">
-                    <span class="capitalize">{preset.label}</span>
-                    {#if preset.description}
-                      <span class="text-[10px] text-muted">{preset.description}</span>
-                    {/if}
-                  </span>
-                </button>
-              {/each}
-            </div>
-          </div>
-        {/if}
-      </div>
-    {/if}
 
     <!-- Fast inference — native harness tier or catalog-provided fast variant -->
     {#if fastVariant}
@@ -1831,15 +2383,17 @@
 
     <span class="flex-1"></span>
 
-    {#if contextUsage || canCompact}
-      <ContextUsageIndicator
-        usage={contextUsage}
-        {canCompact}
-        {compacting}
-        {onCompact}
-        onReveal={onRevealUsage}
-      />
-    {/if}
+    <ContextUsageIndicator
+      usage={contextUsage}
+      {efficiencyKpis}
+      {harnessUsage}
+      {canCompact}
+      {compacting}
+      {onCompact}
+      onReveal={onRevealUsage}
+      onHide={onHideUsage}
+      refreshing={usageRefreshing}
+    />
 
     <!-- Send / Queue / Stop button.
          - Agent idle:       ArrowUp (send) — primary, disabled when empty
@@ -1865,9 +2419,9 @@
         : canStop
           ? 'Stop the running agent'
           : working
-            ? 'Queue — message sends when the agent finishes'
-            : 'Send'}
-      disabled={disabled || (!working && !hasText)}
+            ? `Queue — ${sendModifierLabel}Enter · Steer — ${sendModifierLabel}⇧Enter`
+            : `Send — ${sendModifierLabel}Enter`}
+      disabled={disabled || (!working && !hasSendableContent)}
       onclick={() => submit()}
     >
       {#if pendingStop}
@@ -1885,6 +2439,18 @@
     </button>
   </div>
 </div>
+
+<StartAfterThreadPicker
+  open={startAfterPickerOpen}
+  {projectId}
+  currentThreadId={threadId}
+  selectedIds={startAfterThreads.map((t) => t.id)}
+  onSelect={selectStartAfterThread}
+  onClose={() => {
+    startAfterPickerOpen = false
+    if (startAfterThreads.length === 0) startAfterEnabled = false
+  }}
+/>
 
 <style>
   .chat-composer {

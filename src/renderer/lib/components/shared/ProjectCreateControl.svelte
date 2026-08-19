@@ -8,6 +8,7 @@
     Loader2,
     Plus
   } from '@lucide/svelte'
+  import { DropdownMenu } from 'bits-ui'
   import Modal from '../ui/Modal.svelte'
   import { invoke } from '$lib/ipc.svelte'
   import { APP_NAME } from '$shared/brand'
@@ -19,6 +20,11 @@
     onExisting?: (project: Project) => void | Promise<void>
     title?: string
     triggerAddProject?: number
+    /** Spotlight mode renders the creation options as a centered dialog instead of the plus dropdown. */
+    mode?: 'dropdown' | 'spotlight'
+    /** Spotlight mode: controlled visibility. */
+    open?: boolean
+    onClose?: () => void
   }
 
   let {
@@ -26,13 +32,14 @@
     onProjectCreated,
     onExisting,
     title = 'Add project',
-    triggerAddProject = 0
+    triggerAddProject = 0,
+    mode = 'dropdown',
+    open = false,
+    onClose = () => {}
   }: Props = $props()
 
   const componentId = $props.id()
   const sshProjectFormId = `${componentId}-ssh-project-form`
-
-  let showMenu = $state(false)
 
   /** React to external trigger (e.g. keyboard shortcut) to start the add-project flow. */
   $effect(() => {
@@ -51,7 +58,6 @@
   let trackingSetupError = $state('')
 
   async function addLocalFolder(): Promise<void> {
-    showMenu = false
     const folder = await invoke('dialog:pickFolder')
     if (!folder) return
 
@@ -132,7 +138,6 @@
   }
 
   function addSshProject(): void {
-    showMenu = false
     showSshModal = true
   }
 
@@ -153,49 +158,73 @@
   }
 </script>
 
-<div class="relative">
-  <button
-    class="flex h-7 w-7 items-center justify-center rounded-md text-muted transition-colors hover:bg-elevated hover:text-foreground"
-    aria-label={title}
-    {title}
-    aria-haspopup="menu"
-    aria-expanded={showMenu}
-    onclick={() => (showMenu = !showMenu)}
-  >
-    <Plus size={15} strokeWidth={1.8} />
-  </button>
-
-  {#if showMenu}
-    <button
-      class="fixed inset-0 z-30 cursor-default"
-      aria-label="Close menu"
-      onclick={() => (showMenu = false)}
-    ></button>
-    <div
-      class="absolute right-0 top-8 z-40 w-44 overflow-hidden rounded-xl border bg-surface p-1 shadow-lg"
-      role="menu"
+{#if mode === 'dropdown'}
+  <DropdownMenu.Root>
+    <DropdownMenu.Trigger
+      class="flex h-7 w-7 items-center justify-center rounded-md text-muted transition-colors hover:bg-elevated hover:text-foreground"
+      aria-label={title}
+      {title}
     >
+      <Plus size={15} strokeWidth={1.8} />
+    </DropdownMenu.Trigger>
+    <DropdownMenu.Portal>
+      <DropdownMenu.Content
+        side="bottom"
+        align="end"
+        sideOffset={6}
+        collisionPadding={8}
+        class="z-60 w-44 overflow-hidden rounded-xl border bg-surface p-1 shadow-lg"
+      >
+        <DropdownMenu.Item
+          class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-sm text-foreground outline-none transition-colors hover:bg-elevated focus:bg-elevated"
+          title="Add a folder from this device"
+          onSelect={() => void addLocalFolder()}
+        >
+          <FolderInput size={14} class="shrink-0 text-muted" />
+          Local Folder
+        </DropdownMenu.Item>
+        <DropdownMenu.Item
+          class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-sm text-foreground outline-none transition-colors hover:bg-elevated focus:bg-elevated"
+          title="Connect a project over SSH"
+          onSelect={addSshProject}
+        >
+          <Globe size={14} class="shrink-0 text-muted" />
+          SSH / Remote
+        </DropdownMenu.Item>
+      </DropdownMenu.Content>
+    </DropdownMenu.Portal>
+  </DropdownMenu.Root>
+{:else if open}
+  <!-- Spotlight dialog: reachable from any view via Cmd/Ctrl+Shift+N. -->
+  <Modal open {onClose} title="Add Project">
+    <div class="grid gap-2">
       <button
-        class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-sm text-foreground transition-colors hover:bg-elevated"
-        role="menuitem"
+        type="button"
+        class="flex items-center gap-3 rounded-xl border p-3 text-left transition-colors hover:bg-elevated"
         title="Add a folder from this device"
         onclick={() => void addLocalFolder()}
       >
-        <FolderInput size={14} class="text-muted" />
-        Local Folder
+        <FolderInput size={16} class="shrink-0 text-muted" />
+        <span>
+          <span class="block text-sm font-medium">Local Folder</span>
+          <span class="mt-0.5 block text-xs text-dimmed">Add a folder from this device.</span>
+        </span>
       </button>
       <button
-        class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-sm text-foreground transition-colors hover:bg-elevated"
-        role="menuitem"
+        type="button"
+        class="flex items-center gap-3 rounded-xl border p-3 text-left transition-colors hover:bg-elevated"
         title="Connect a project over SSH"
         onclick={addSshProject}
       >
-        <Globe size={14} class="text-muted" />
-        SSH / Remote
+        <Globe size={16} class="shrink-0 text-muted" />
+        <span>
+          <span class="block text-sm font-medium">SSH / Remote</span>
+          <span class="mt-0.5 block text-xs text-dimmed">Connect a project over SSH.</span>
+        </span>
       </button>
     </div>
-  {/if}
-</div>
+  </Modal>
+{/if}
 
 <Modal open={showSshModal} title="Connect SSH Project" onClose={() => (showSshModal = false)}>
   <form

@@ -1,0 +1,44 @@
+services:
+  remote-control:
+    build:
+      context: .
+      dockerfile: services/remote-control/Dockerfile
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      TRUST_PROXY: '1'
+      CONVEX_SITE_URL: ${CONVEX_SITE_URL:?set CONVEX_SITE_URL}
+    volumes:
+      - remote-data:/data
+    healthcheck:
+      test:
+        - CMD
+        - bun
+        - -e
+        - "const response = await fetch('http://127.0.0.1:8877/healthz'); if (!response.ok) process.exit(1)"
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
+
+  mobile-pwa:
+    build:
+      context: .
+      dockerfile: services/remote-control/Dockerfile.pwa
+    restart: unless-stopped
+    depends_on:
+      remote-control:
+        condition: service_healthy
+    environment:
+      CONVEX_SITE_URL: ${CONVEX_SITE_URL:?set CONVEX_SITE_URL}
+    expose:
+      - '80'
+    healthcheck:
+      test: ['CMD', 'wget', '--quiet', '--spider', 'http://127.0.0.1/']
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
+
+volumes:
+  remote-data:

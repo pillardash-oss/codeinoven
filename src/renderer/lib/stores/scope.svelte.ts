@@ -4,6 +4,7 @@ import { getProjectIcon } from '$lib/project-icons'
 import { APP_SLUG } from '$shared/brand'
 import {
   DEFAULT_SCOPE_BUCKET_ID,
+  isOrchestrationChildThread,
   type Project,
   type ScopeBoard,
   type ScopeBucket,
@@ -11,6 +12,7 @@ import {
   type Thread,
   scopeSliceForStatus
 } from '$shared/types'
+import type { ThreadStatusTone } from '$shared/thread-status-policy'
 
 export type ThreadStage = ScopeSlice
 
@@ -48,6 +50,7 @@ export const STAGE_LABELS: Record<ThreadStage, string> = {
   pinned: 'Pinned',
   todo: 'Todo',
   working: 'Working',
+  spec: 'Spec',
   issue: 'Issue',
   unread: 'Unread',
   done: 'Done'
@@ -57,12 +60,31 @@ export const STAGE_COLORS: Record<ThreadStage, string> = {
   pinned: 'var(--color-thread-pinned)',
   todo: 'var(--color-dimmed)',
   working: 'var(--color-thread-working)',
+  spec: 'var(--color-thread-spec)',
   issue: 'var(--color-warning)',
   unread: 'var(--color-thread-unread)',
   done: 'var(--color-thread-done)'
 }
 
-export const STAGE_ORDER: ThreadStage[] = ['pinned', 'todo', 'working', 'issue', 'unread', 'done']
+export const STATUS_TONE_COLORS: Record<ThreadStatusTone, string> = {
+  todo: 'var(--color-dimmed)',
+  working: 'var(--color-thread-working)',
+  'working-paused': 'var(--color-thread-working-paused)',
+  attention: 'var(--color-warning)',
+  spec: 'var(--color-thread-spec)',
+  done: 'var(--color-thread-done)',
+  error: 'var(--color-thread-error)'
+}
+
+export const STAGE_ORDER: ThreadStage[] = [
+  'pinned',
+  'todo',
+  'working',
+  'spec',
+  'issue',
+  'unread',
+  'done'
+]
 
 const EMPTY_BOARD: ScopeBoard = {
   version: 1,
@@ -140,7 +162,9 @@ export function clearScopeSnapshot(): void {
 export function threadStage(thread: Thread, draftThreadId?: string | null): ThreadStage {
   if (draftThreadId && thread.id === draftThreadId) return 'todo'
   if (thread.pinned) return 'pinned'
-  if (thread.status === 'completed' && !thread.read) return 'unread'
+  if (thread.status === 'completed' && !thread.read && !isOrchestrationChildThread(thread)) {
+    return 'unread'
+  }
   return scopeSliceForStatus(thread.status)
 }
 
@@ -187,26 +211,18 @@ class ScopeState {
   private loadSequence = 0
   private saveSequence = 0
 
-  /** Compatibility aliases while the shell migrates from project-as-scope naming. */
-  get scopes(): ScopeProject[] {
-    return this.projects
-  }
-
-  get activeScopeId(): string | null {
-    return this.activeProjectId
-  }
-
   get projectBadges(): SvelteMap<string, ProjectBadge> {
     const badges = new SvelteMap<string, ProjectBadge>()
     for (const project of this.projects) {
       const projectThreads = this.allScopeThreads.filter(
         (t) => t.projectId === project.id && !t.archived
       )
+      const userThreads = projectThreads.filter((t) => !isOrchestrationChildThread(t))
       badges.set(project.id, {
         hasWorking: projectThreads.some((t) => t.status === 'planning' || t.status === 'executing'),
-        hasUnread: projectThreads.some((t) => t.status === 'completed' && !t.read),
-        hasAttention: projectThreads.some((t) => t.status === 'awaiting_approval' && !t.read),
-        hasError: projectThreads.some((t) => t.status === 'failed')
+        hasUnread: userThreads.some((t) => t.status === 'completed' && !t.read),
+        hasAttention: userThreads.some((t) => t.status === 'awaiting_approval' && !t.read),
+        hasError: userThreads.some((t) => t.status === 'failed')
       })
     }
     return badges
@@ -369,6 +385,31 @@ class ScopeState {
     return bucket
   }
 
+  /** Create a scope bucket on a specific project's board (used when the
+   *  targeted project is not the active one, e.g. the change-scope modal). */
+  async createBucketForProject(projectId: string, name: string): Promise<ScopeBucket | null> {
+    const trimmedName = name.trim()
+    if (!trimmedName) return null
+
+    await this.ensureBoardLoaded(projectId)
+    const current = this.boards.get(projectId) ?? cloneBoard(EMPTY_BOARD)
+    const bucket: ScopeBucket = {
+      id: crypto.randomUUID(),
+      name: trimmedName,
+      sortOrder: current.buckets.length,
+      collapsed: false,
+      collapsedSlices: []
+    }
+    const nextBoard: ScopeBoard = { version: 1, buckets: [...current.buckets, bucket] }
+    const saved = await invoke('scope:save', projectId, cloneBoard(nextBoard))
+    const cloned = cloneBoard(saved)
+    this.boards.set(projectId, cloned)
+    if (projectId === this.activeProjectId) {
+      this.board = cloned
+    }
+    return cloned.buckets.find((candidate) => candidate.id === bucket.id) ?? bucket
+  }
+
   async editBucket(bucketId: string, edit: ScopeBucketEdit): Promise<void> {
     const trimmedName = edit.name.trim()
     if (!trimmedName) return
@@ -439,7 +480,13 @@ class ScopeState {
 
   bucketForThread(thread: Thread): string {
     const bucketId = thread.scopeBucketId ?? DEFAULT_SCOPE_BUCKET_ID
-    return this.board.buckets.some((bucket) => bucket.id === bucketId)
+    // Resolve against the thread's OWN project board, not the active project's.
+    // The regular thread list spans many projects; validating against `this.board`
+    // (the active project) would misclassify every non-active thread as default
+    // whenever its bucket isn't on the active board. Fall back to the active board
+    // only when the thread's project board hasn't been loaded yet.
+    const board = this.boards.get(thread.projectId) ?? this.board
+    return board.buckets.some((bucket) => bucket.id === bucketId)
       ? bucketId
       : DEFAULT_SCOPE_BUCKET_ID
   }
@@ -449,9 +496,17 @@ class ScopeState {
       (thread) => this.bucketForThread(thread) === bucketId && this.stageForThread(thread) === slice
     )
     return threads.sort((a, b) => {
-      const aPosition = a.scopeSortOrder ?? Number.MAX_SAFE_INTEGER
-      const bPosition = b.scopeSortOrder ?? Number.MAX_SAFE_INTEGER
-      if (aPosition !== bPosition) return aPosition - bPosition
+      // Pinned threads share one pin-time order across every surface; manual
+      // reorder (pinned_at) is the only override. Other slices use scope order.
+      if (slice === 'pinned') {
+        const aAt = a.pinnedAt ?? -1
+        const bAt = b.pinnedAt ?? -1
+        if (aAt !== bAt) return bAt - aAt
+      } else {
+        const aPosition = a.scopeSortOrder ?? Number.MAX_SAFE_INTEGER
+        const bPosition = b.scopeSortOrder ?? Number.MAX_SAFE_INTEGER
+        if (aPosition !== bPosition) return aPosition - bPosition
+      }
       if (a.lastActivity !== b.lastActivity) return b.lastActivity - a.lastActivity
       return a.id.localeCompare(b.id)
     })
@@ -610,7 +665,12 @@ class ScopeState {
   }
 
   removeThread(threadId: string): void {
-    this.allScopeThreads = this.allScopeThreads.filter((thread) => thread.id !== threadId)
+    const removedIds = new Set(
+      this.allScopeThreads
+        .filter((thread) => thread.id === threadId || thread.coordinatorThreadId === threadId)
+        .map((thread) => thread.id)
+    )
+    this.allScopeThreads = this.allScopeThreads.filter((thread) => !removedIds.has(thread.id))
   }
 }
 

@@ -10,7 +10,19 @@
 
   let { path, size = 13, class: className = '' }: Props = $props()
 
-  let dataUri = $derived(getFileTypeIconDataUri(path))
+  let dataUri = $state<string | null>(null)
+
+  $effect(() => {
+    const requestedPath = path
+    let current = true
+    dataUri = null
+    void getFileTypeIconDataUri(requestedPath).then((resolved) => {
+      if (current && path === requestedPath) dataUri = resolved
+    })
+    return () => {
+      current = false
+    }
+  })
 
   let extension = $derived(path.split('.').at(-1)?.toLocaleLowerCase() ?? '')
   let kind = $derived.by(() => {

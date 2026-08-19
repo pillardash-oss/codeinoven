@@ -1,20 +1,31 @@
-import { spawn } from 'child_process'
+import { execFile, spawn, type ChildProcess } from 'child_process'
+import { readFile } from 'node:fs/promises'
+import { basename } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import type { ModelInfo, SDKUserMessage } from '@anthropic-ai/claude-agent-sdk'
 import type {
+  AgentQuestion,
   AgentMessage,
   AgentPart,
   AgentProviderIssue,
+  AgentProviderIssueKind,
   AgentRateLimitWindow,
   AgentTokenUsage,
+  AgentUsageCredits,
   ProviderCatalog,
   ProviderModel,
+  PromptAttachment,
+  PermissionReply,
+  SessionAgentEvent,
   ThinkingPreset
 } from '../../lib/types'
+import { normalizeAgentQuestions, permissionPatterns } from '../../lib/agent-interactions'
 import { fastSelectionModelId, resolveFastModelId } from '../../lib/fast-inference'
-import type { StorageEngine } from '../storage-engine'
-import { BaseUrlProviderService } from '../base-url-provider-service'
-import { Logger } from '../logger'
-import { SecretVault } from '../secret-vault'
+import { classifyProviderIssue } from '../../lib/provider-issue'
+import type { StorageEngine } from '../storage/storage-engine'
+import { BaseUrlProviderService } from '../providers/base-url-provider-service'
+import { Logger } from '../system/logger'
+import { SecretVault } from '../storage/secret-vault'
 import type {
   CliLineParseContext,
   CliLineParseResult,
@@ -24,6 +35,7 @@ import type {
 import { PersistentCliDriver } from './persistent-cli-driver'
 import type {
   GenerateTitleOptions,
+  HarnessAuthStatus,
   HarnessCapabilities,
   SendPromptOptions,
   SteerPromptOptions,
@@ -31,6 +43,7 @@ import type {
   UtilityRuntimePreparationRequest
 } from './driver.interface'
 import { buildHarnessEnvironment } from './cli-environment'
+import { attachmentReference } from './attachment-reference'
 
 const THINKING_PRESETS: ThinkingPreset[] = [
   { id: 'low', label: 'Low', description: 'Low reasoning effort' },
@@ -49,6 +62,172 @@ const THINKING_PRESETS: ThinkingPreset[] = [
 ]
 
 const CLAUDE_MODEL_DISCOVERY_TIMEOUT_MS = 15_000
+const CLAUDE_USAGE_TIMEOUT_MS = 12_000
+/** How long a successful `claude auth status` pre-flight verdict is trusted. */
+const PRE_FLIGHT_AUTH_PROBE_TTL_MS = 30_000
+/** Bounded wait for the `claude auth status` pre-flight probe. */
+const PRE_FLIGHT_AUTH_PROBE_TIMEOUT_MS = 8_000
+/**
+ * How long a proven authentication keeps the shared credential trusted for
+ * concurrent spawns. The bypass must expire with the access token itself;
+ * otherwise an idle "authenticated" session would let fresh spawns skip the
+ * gate while the token is already expired, reopening the refresh race
+ * (anthropics/claude-code#76905). Conservative vs the ~5h access-token TTL.
+ */
+const ACCESS_TOKEN_FRESH_MS = 4 * 60 * 60 * 1_000
+/**
+ * How long a first-party session spawn may hold the credential-refresh gate
+ * while it resolves authentication. The gate exists because Claude Code's
+ * macOS keychain OAuth store races when two processes refresh a single-use
+ * token concurrently (anthropics/claude-code#76905); the loser wipes the
+ * shared credential. The gate must stay held until authentication is PROVEN
+ * (message_start), not a short timer: a fast cap re-opens the race window
+ * whenever the first refresh takes longer than the cap (the CLI retries a
+ * failing refresh for ~45s, so a 1.5s cap let concurrent spawns through).
+ * This bound is only a safety valve so a pathological CLI cannot stall other
+ * threads/projects indefinitely; normal auth confirms in ~1-3s and releases
+ * the gate immediately.
+ */
+const AUTH_CONFIRM_TIMEOUT_MS = 60_000
+/** Poll interval while waiting for a spawned session to prove authentication. */
+const AUTH_CONFIRM_POLL_MS = 200
+/**
+ * Cap on concurrent one-shot `claude` spawns (auth probe, on-demand usage
+ * refresh, version probe, model discovery). Every one-shot spawn holds several
+ * file descriptors (stdio pipes) for its lifetime, so a burst of threads or
+ * projects refreshing simultaneously can exhaust the process fd table and
+ * fail later spawns with `EBADF`. Bounding the one-shots keeps the fd table
+ * stable without touching long-lived session processes, which are gated
+ * separately by the credential-refresh slot.
+ */
+const ONE_SHOT_SPAWN_LIMIT = 4
+
+/** Keep Claude Code's native per-repository memory from crossing app threads. */
+function buildClaudeEnvironment(): NodeJS.ProcessEnv {
+  return {
+    ...buildHarnessEnvironment(),
+    CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1',
+    CLAUDE_CODE_ENABLE_TODO_TOOLS: '1'
+  }
+}
+
+const CLAUDE_TOOL_NAMES: Record<string, string> = {
+  question: 'AskUserQuestion',
+  read: 'Read',
+  glob: 'Glob',
+  grep: 'Grep',
+  list: 'Glob',
+  lsp: 'LSP',
+  bash: 'Bash',
+  webfetch: 'WebFetch',
+  websearch: 'WebSearch'
+}
+
+function claudeToolName(value: string): string {
+  return CLAUDE_TOOL_NAMES[value.toLowerCase()] ?? value
+}
+
+/** A tiny FIFO semaphore used to bound concurrent one-shot claude spawns. */
+class OneShotSpawnGate {
+  private readonly queue: (() => void)[] = []
+  private active = 0
+
+  constructor(private readonly limit: number) {}
+
+  async acquire(): Promise<() => void> {
+    while (this.active >= this.limit) {
+      await new Promise<void>((resolve) => this.queue.push(resolve))
+    }
+    this.active += 1
+    let released = false
+    return () => {
+      if (released) return
+      released = true
+      this.active -= 1
+      this.queue.shift()?.()
+    }
+  }
+}
+const CLAUDE_IMAGE_MIMES = new Set(['image/jpeg', 'image/png', 'image/gif', 'image/webp'])
+const CLAUDE_TEXT_MIMES = new Set([
+  'application/json',
+  'application/ld+json',
+  'application/sql',
+  'application/xml',
+  'application/x-httpd-php',
+  'application/x-javascript',
+  'application/x-sh',
+  'application/x-typescript'
+])
+
+type ClaudeImageMime = 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp'
+type ClaudeAccountUsage = {
+  rateLimits: AgentRateLimitWindow[]
+  credits?: AgentUsageCredits
+  contextWindow?: number
+  contextUsed?: number
+}
+
+interface ClaudeUsageProbe {
+  usageRequestId: string
+  contextRequestId: string
+  rateLimitsPayload: Record<string, unknown> | null
+  rateLimitsResponded: boolean
+  contextPayload: Record<string, unknown> | null
+  contextResponded: boolean
+  timer: ReturnType<typeof setTimeout>
+  promise: Promise<Record<string, unknown> | null>
+  resolve: (value: Record<string, unknown> | null) => void
+}
+
+interface ClaudeAuthenticationReadiness {
+  promise: Promise<boolean>
+  resolve: (authenticated: boolean) => void
+  settled: boolean
+}
+
+type ClaudeQuestionRequest =
+  | {
+      sessionId: string
+      questions: AgentQuestion[]
+      transport: 'control'
+      input: Record<string, unknown>
+      controlRequestId: string
+    }
+  | {
+      sessionId: string
+      questions: AgentQuestion[]
+      transport: 'tool_result'
+      callId: string
+    }
+
+interface ClaudePermissionRequest {
+  sessionId: string
+  input: Record<string, unknown>
+}
+
+function sameClaudeQuestions(left: AgentQuestion[], right: AgentQuestion[]): boolean {
+  return (
+    left.length === right.length &&
+    left.every((question, index) => question.prompt === right[index]?.prompt)
+  )
+}
+
+type ClaudeInputBlock =
+  | { type: 'text'; text: string }
+  | {
+      type: 'image'
+      source:
+        { type: 'base64'; media_type: ClaudeImageMime; data: string } | { type: 'url'; url: string }
+    }
+  | {
+      type: 'document'
+      source:
+        | { type: 'base64'; media_type: 'application/pdf'; data: string }
+        | { type: 'text'; media_type: 'text/plain'; data: string }
+        | { type: 'url'; url: string }
+      title?: string
+    }
 
 function fallbackClaudeModel(): ProviderModel {
   return {
@@ -57,16 +236,29 @@ function fallbackClaudeModel(): ProviderModel {
     name: 'Default (recommended)',
     reasoning: true,
     thinkingPresets: THINKING_PRESETS,
-    attachment: false,
+    attachment: true,
     toolcall: true,
     fastSupported: false
   }
 }
 
+function claudeAuthenticationResult(value: unknown): boolean | undefined {
+  const entry = record(value)
+  const type = string(entry?.['type'])
+  if (type === 'assistant') {
+    return entry?.['error'] === 'authentication_failed' ||
+      entry?.['error'] === 'oauth_org_not_allowed'
+      ? false
+      : true
+  }
+  if (type !== 'stream_event') return undefined
+  return string(record(entry?.['event'])?.['type']) === 'message_start' ? true : undefined
+}
+
 function claudeModelName(model: ModelInfo): string {
   const resolvedName = model.description.split(' · ', 1)[0]?.trim()
   if (!resolvedName) return model.displayName
-  if (model.value === 'default') return `${model.displayName} · ${resolvedName}`
+  if (model.value === 'default') return model.displayName
   return model.resolvedModel && model.resolvedModel !== model.value
     ? `${resolvedName} (latest)`
     : resolvedName
@@ -82,7 +274,7 @@ function mapClaudeModel(model: ModelInfo): ProviderModel {
     name: claudeModelName(model),
     reasoning,
     thinkingPresets: reasoning ? thinkingPresets : undefined,
-    attachment: false,
+    attachment: true,
     toolcall: true,
     fastSupported: model.supportsFastMode ?? false
   }
@@ -104,7 +296,7 @@ async function discoverClaudeModels(projectPath: string): Promise<ProviderModel[
     prompt: keepClaudeDiscoveryOpen(),
     options: {
       cwd: projectPath,
-      env: buildHarnessEnvironment(),
+      env: buildClaudeEnvironment(),
       pathToClaudeCodeExecutable: 'claude',
       tools: []
     }
@@ -248,23 +440,53 @@ function rateLimitWindow(
   const usedPercent =
     utilization === undefined ? undefined : utilization <= 1 ? utilization * 100 : utilization
   const resetsAt = epochMilliseconds(limit['resetsAt'] ?? limit['resets_at'])
+  const windowMinutes = numberProperty(limit, 'window_duration_mins', 'windowDurationMins')
   const overageStatus = string(limit['overageStatus']) ?? string(limit['overage_status'])
   const overageDisabledReason =
     string(limit['overageDisabledReason']) ?? string(limit['overage_disabled_reason'])
   const isUsingOverageValue = limit['isUsingOverage'] ?? limit['is_using_overage']
   const isUsingOverage = typeof isUsingOverageValue === 'boolean' ? isUsingOverageValue : undefined
-  const id = string(limit['id']) ?? limitType ?? status ?? fallbackId
-  const windowLabel = limitType ? limitType.replaceAll('_', ' ') : 'usage limit'
+  const id = string(limit['id']) ?? limitType ?? fallbackId ?? status ?? 'claude-rate-limit'
+  const label = windowLabel(limitType, windowMinutes, fallbackId)
+  // The `get_usage` rate_limits object mixes real windows (five_hour, seven_day,
+  // per-model windows) with account-state payloads (extra_usage, limits, spend,
+  // member_dashboard_available) that carry no window utilization or reset. Only
+  // surface entries that represent an actual quota window so the battery never
+  // renders meaningless "usage limit" rows.
+  if (usedPercent === undefined && resetsAt === undefined && windowMinutes === undefined) {
+    return null
+  }
   return {
     id,
-    label: `Claude ${windowLabel}`,
+    label,
     ...(status === undefined ? {} : { status }),
     ...(usedPercent === undefined ? {} : { usedPercent: Math.min(100, usedPercent) }),
     ...(resetsAt === undefined ? {} : { resetsAt }),
+    ...(windowMinutes === undefined ? {} : { windowMinutes }),
     ...(overageStatus === undefined ? {} : { overageStatus }),
     ...(overageDisabledReason === undefined ? {} : { overageDisabledReason }),
     ...(isUsingOverage === undefined ? {} : { isUsingOverage })
   }
+}
+
+/** Human label for a Claude rate-limit type, e.g. `five_hour` → `5-hour`. */
+function windowLabel(
+  limitType: string | undefined,
+  windowMinutes: number | undefined,
+  fallbackId?: string
+): string {
+  if (windowMinutes !== undefined) {
+    if (windowMinutes === 300) return '5-hour limit'
+    if (windowMinutes === 10_080) return 'Weekly limit'
+    if (windowMinutes % 1_440 === 0) return `${windowMinutes / 1_440}-day limit`
+    if (windowMinutes % 60 === 0) return `${windowMinutes / 60}-hour limit`
+    return `${windowMinutes}-minute limit`
+  }
+  const type = (limitType ?? fallbackId)?.toLowerCase()
+  if (type === 'five_hour' || type === '5h' || type === '5hour') return '5-hour limit'
+  if (type === 'seven_day' || type === '7day' || type === 'weekly') return 'Weekly limit'
+  if (limitType) return limitType.replaceAll('_', ' ')
+  return 'usage limit'
 }
 
 function rateLimitWindows(value: unknown): AgentRateLimitWindow[] {
@@ -371,6 +593,39 @@ function toolPart(
   }
 }
 
+function isClaudeSubagentTool(name: string): boolean {
+  return name === 'Agent' || name === 'Task'
+}
+
+function claudeSubagentPart(
+  messageId: string,
+  callId: string,
+  name: string,
+  input: Record<string, unknown>,
+  status: 'pending' | 'running' | 'completed' | 'error',
+  output?: string
+): AgentPart {
+  const description =
+    string(input['description']) ?? string(input['name']) ?? string(input['subagent_type']) ?? name
+  return {
+    type: 'subagent',
+    id: `claude-subagent-${callId}`,
+    messageID: messageId,
+    callID: callId,
+    activity: {
+      status,
+      agent: string(input['subagent_type']) ?? string(input['agent']) ?? name,
+      description,
+      prompt: string(input['prompt']),
+      providerTaskId: callId,
+      modelId: string(input['model']),
+      background: input['run_in_background'] === true || input['background'] === true,
+      ...(output ? { output } : {}),
+      ...(status === 'error' ? { error: output ?? 'Claude sub-agent task failed' } : {})
+    }
+  }
+}
+
 function summaryText(value: unknown): string | undefined {
   if (typeof value === 'string') return value
   if (!Array.isArray(value)) return undefined
@@ -381,10 +636,108 @@ function summaryText(value: unknown): string | undefined {
   return summary || undefined
 }
 
-function claudeStreamInput(text: string, priority?: 'now'): string {
+function attachmentLabel(attachment: PromptAttachment): string {
+  if (attachment.filename) return attachment.filename
+  try {
+    return basename(
+      attachment.url.startsWith('file:') ? fileURLToPath(attachment.url) : attachment.url
+    )
+  } catch {
+    return attachment.url
+  }
+}
+
+async function attachmentBytes(attachment: PromptAttachment): Promise<Buffer> {
+  if (attachment.url.startsWith('data:')) {
+    const separator = attachment.url.indexOf(',')
+    if (separator < 0)
+      throw new Error(`Claude attachment is invalid: ${attachmentLabel(attachment)}`)
+    const metadata = attachment.url.slice(0, separator)
+    const payload = attachment.url.slice(separator + 1)
+    return metadata.endsWith(';base64')
+      ? Buffer.from(payload, 'base64')
+      : Buffer.from(decodeURIComponent(payload), 'utf8')
+  }
+  let path: string
+  try {
+    path = attachment.url.startsWith('file:') ? fileURLToPath(attachment.url) : attachment.url
+  } catch {
+    throw new Error(`Claude attachment path is invalid: ${attachmentLabel(attachment)}`)
+  }
+  try {
+    return await readFile(path)
+  } catch {
+    throw new Error(`Claude attachment is not readable: ${attachmentLabel(attachment)}`)
+  }
+}
+
+async function claudeInputBlocks(
+  text: string,
+  attachments: PromptAttachment[]
+): Promise<ClaudeInputBlock[]> {
+  const content: ClaudeInputBlock[] = [{ type: 'text', text }]
+  for (const attachment of attachments) {
+    const mime = attachment.mime.toLowerCase().split(';', 1)[0] ?? ''
+    const title = attachmentLabel(attachment)
+    const remote = /^https?:\/\//u.test(attachment.url)
+    if (CLAUDE_IMAGE_MIMES.has(mime)) {
+      content.push({
+        type: 'image',
+        source: remote
+          ? { type: 'url', url: attachment.url }
+          : {
+              type: 'base64',
+              media_type: mime as ClaudeImageMime,
+              data: (await attachmentBytes(attachment)).toString('base64')
+            }
+      })
+      continue
+    }
+    if (mime === 'application/pdf') {
+      content.push({
+        type: 'document',
+        source: remote
+          ? { type: 'url', url: attachment.url }
+          : {
+              type: 'base64',
+              media_type: 'application/pdf',
+              data: (await attachmentBytes(attachment)).toString('base64')
+            },
+        title
+      })
+      continue
+    }
+    if (mime.startsWith('text/') || CLAUDE_TEXT_MIMES.has(mime)) {
+      if (remote) {
+        throw new Error(`Claude cannot attach remote text files directly: ${title}`)
+      }
+      content.push({
+        type: 'document',
+        source: {
+          type: 'text',
+          media_type: 'text/plain',
+          data: (await attachmentBytes(attachment)).toString('utf8')
+        },
+        title
+      })
+      continue
+    }
+    content.push({ type: 'text', text: await attachmentReference(attachment) })
+  }
+  return content
+}
+
+async function claudeStreamInput(
+  text: string,
+  attachments: PromptAttachment[],
+  priority?: 'now'
+): Promise<string> {
   const message: SDKUserMessage = {
     type: 'user',
-    message: { role: 'user', content: text },
+    message: {
+      role: 'user',
+      content: attachments.length > 0 ? await claudeInputBlocks(text, attachments) : text
+    },
     parent_tool_use_id: null,
     ...(priority ? { priority } : {})
   }
@@ -417,13 +770,12 @@ function partFromBlock(
   }
   if (type === 'tool_use') {
     const callId = string(block['id']) ?? `claude-call-${messageId}-${index}`
-    return toolPart(
-      messageId,
-      callId,
-      string(block['name']) ?? 'unknown',
-      record(block['input']) ?? {},
-      'pending'
-    )
+    const name = string(block['name']) ?? 'unknown'
+    const input = record(block['input']) ?? {}
+    if (isClaudeSubagentTool(name)) {
+      return claudeSubagentPart(messageId, callId, name, input, 'pending')
+    }
+    return toolPart(messageId, callId, name, input, 'pending')
   }
   return null
 }
@@ -436,6 +788,20 @@ function findToolPart(
     const part = message.parts.find(
       (candidate): candidate is Extract<AgentPart, { type: 'tool' }> =>
         candidate.type === 'tool' && candidate.callID === callId
+    )
+    if (part) return part
+  }
+  return undefined
+}
+
+function findSubagentPart(
+  context: CliLineParseContext,
+  callId: string
+): Extract<AgentPart, { type: 'subagent' }> | undefined {
+  for (const message of [...context.session.messages].reverse()) {
+    const part = message.parts.find(
+      (candidate): candidate is Extract<AgentPart, { type: 'subagent' }> =>
+        candidate.type === 'subagent' && candidate.callID === callId
     )
     if (part) return part
   }
@@ -472,6 +838,37 @@ function mergeAssistantRecord(existing: AgentMessage, incoming: AgentMessage): A
   }
 }
 
+/**
+ * Classify a Claude Code `system`/`api_retry` stream event. The SDK emits this
+ * for ANY retryable provider failure — connection errors (no HTTP status),
+ * overloaded servers (529), 5xx responses, and 429 rate limiting — so the issue
+ * kind must come from the event's `error`/`error_status` rather than treating
+ * every retry as an exhausted usage limit.
+ */
+function claudeApiRetryKind(
+  error: string | undefined,
+  statusCode: number | undefined
+): AgentProviderIssueKind {
+  switch (error) {
+    case 'rate_limit':
+      return 'rate_limit'
+    case 'overloaded':
+    case 'server_error':
+      return 'provider_unavailable'
+    case 'billing_error':
+      return 'billing'
+    case 'authentication_failed':
+    case 'oauth_org_not_allowed':
+      return 'authentication'
+    default:
+      break
+  }
+  if (statusCode === undefined) return 'network'
+  if (statusCode === 429) return 'rate_limit'
+  if (statusCode >= 500) return 'provider_unavailable'
+  return classifyProviderIssue('', statusCode)
+}
+
 /** Map one documented Claude Code stream-json record to CodeInOven's stable shapes. */
 export function mapClaudeCodeRecord(
   value: unknown,
@@ -483,10 +880,90 @@ export function mapClaudeCodeRecord(
   const nativeSessionId = string(entry['session_id'])
   if (type === 'system' && entry['subtype'] === 'init') return { nativeSessionId }
 
+  if (type === 'system' && entry['subtype'] === 'compact_boundary') {
+    const metadata = record(entry['compact_metadata']) ?? record(entry['compactMetadata'])
+    const trigger = string(metadata?.['trigger'])
+    const messageId =
+      string(entry['uuid']) ??
+      `claude-compaction-${context.sessionId}-${number(metadata?.['pre_tokens']) ?? Date.now()}`
+    const part = {
+      type: 'compaction' as const,
+      id: `${messageId}:compaction`,
+      messageID: messageId,
+      auto: trigger !== 'manual',
+      overflow: trigger === 'auto'
+    }
+    return {
+      nativeSessionId,
+      messages: [
+        {
+          id: messageId,
+          role: 'assistant',
+          origin: 'compaction',
+          visibility: 'working_trace',
+          parts: [part],
+          createdAt: Date.now(),
+          completedAt: Date.now()
+        }
+      ],
+      events: [
+        { type: 'message.part.updated', sessionId: context.sessionId, part },
+        {
+          type: 'message.completed',
+          sessionId: context.sessionId,
+          messageId,
+          compaction: true
+        }
+      ]
+    }
+  }
+
+  if (type === 'control_request') {
+    const request = record(entry['request'])
+    const requestId = string(entry['request_id'])
+    if (request?.['subtype'] !== 'can_use_tool' || !requestId) {
+      return nativeSessionId ? { nativeSessionId } : null
+    }
+    const input = record(request['input']) ?? {}
+    const toolName = string(request['tool_name']) ?? 'tool'
+    if (toolName === 'AskUserQuestion') {
+      return {
+        nativeSessionId,
+        events: [
+          {
+            type: 'question.asked',
+            sessionId: context.sessionId,
+            requestId,
+            questions: normalizeAgentQuestions(input),
+            metadata: { transport: 'control', input, controlRequestId: requestId }
+          }
+        ]
+      }
+    }
+    return {
+      nativeSessionId,
+      events: [
+        {
+          type: 'permission.asked',
+          sessionId: context.sessionId,
+          permission: {
+            id: requestId,
+            sessionId: context.sessionId,
+            permission: toolName,
+            patterns: permissionPatterns(input),
+            metadata: { subtype: 'can_use_tool', toolName, input, request }
+          }
+        }
+      ]
+    }
+  }
+
   if (type === 'system' && entry['subtype'] === 'api_retry') {
     const delayMs = numberProperty(entry, 'retry_delay_ms', 'retryDelayMs') ?? 0
     const rawError =
       serializeContent(entry['error']) ?? 'Claude Code is retrying the provider request'
+    const statusCode = numberProperty(entry, 'error_status', 'errorStatus')
+    const kind = claudeApiRetryKind(string(entry['error']), statusCode)
     return {
       nativeSessionId,
       events: [
@@ -496,11 +973,12 @@ export function mapClaudeCodeRecord(
           status: {
             state: 'waiting',
             issue: {
-              kind: 'rate_limit',
+              kind,
               message: 'Claude Code is waiting before retrying the provider request.',
               rawError,
               harnessId: 'claude-code',
               retryable: true,
+              ...(statusCode === undefined ? {} : { statusCode }),
               ...(delayMs > 0 ? { retryAt: Date.now() + delayMs } : {})
             }
           }
@@ -512,9 +990,38 @@ export function mapClaudeCodeRecord(
   if (type === 'assistant') {
     const rawMessage = record(entry['message'])
     if (!rawMessage) return nativeSessionId ? { nativeSessionId } : null
+    const parentCallId = string(entry['parent_tool_use_id'])
+    if (parentCallId) {
+      const existing = findSubagentPart(context, parentCallId)
+      if (!existing) return nativeSessionId ? { nativeSessionId } : null
+      const output = Array.isArray(rawMessage['content'])
+        ? rawMessage['content']
+            .map((block) => serializeContent(record(block)?.['text']))
+            .filter((text): text is string => Boolean(text))
+            .join('\n')
+        : undefined
+      const part: Extract<AgentPart, { type: 'subagent' }> = {
+        ...existing,
+        activity: {
+          ...existing.activity,
+          status: 'running',
+          ...(output ? { output } : {})
+        }
+      }
+      return {
+        nativeSessionId,
+        events: [{ type: 'message.part.updated', sessionId: context.sessionId, part }]
+      }
+    }
     const incoming = messageFromAssistant(rawMessage)
     const existing = context.session.messages.find((message) => message.id === incoming.id)
     const mapped = existing ? mergeAssistantRecord(existing, incoming) : incoming
+    const rawError = mapped.parts
+      .filter((part): part is Extract<AgentPart, { type: 'text' }> => part.type === 'text')
+      .map((part) => part.text)
+      .join('\n')
+      .trim()
+    const authenticationFailure = entry['error'] === 'authentication_failed'
     const usageEvent = mapped.tokens
       ? [
           {
@@ -535,7 +1042,24 @@ export function mapClaudeCodeRecord(
           sessionId: context.sessionId,
           part
         })),
-        ...usageEvent
+        ...usageEvent,
+        ...(authenticationFailure
+          ? [
+              {
+                type: 'message.completed' as const,
+                sessionId: context.sessionId,
+                messageId: mapped.id,
+                error: rawError || 'Claude Code authentication failed.',
+                issue: {
+                  kind: 'authentication' as const,
+                  message: 'Claude Code sign-in expired. Sign in again, then retry this message.',
+                  rawError: rawError || 'Claude Code authentication failed.',
+                  harnessId: 'claude-code',
+                  retryable: true
+                }
+              }
+            ]
+          : [])
       ]
     }
   }
@@ -549,6 +1073,21 @@ export function mapClaudeCodeRecord(
       if (!block || block['type'] !== 'tool_result') continue
       const callId = string(block['tool_use_id'])
       if (!callId) continue
+      const existingSubagent = findSubagentPart(context, callId)
+      if (existingSubagent) {
+        const output = serializeContent(block['content'])
+        const failed = block['is_error'] === true
+        parts.push({
+          ...existingSubagent,
+          activity: {
+            ...existingSubagent.activity,
+            status: failed ? 'error' : 'completed',
+            ...(output ? { output } : {}),
+            ...(failed ? { error: output ?? 'Claude sub-agent task failed' } : {})
+          }
+        })
+        continue
+      }
       const existing = findToolPart(context, callId)
       if (!existing) continue
       const output = serializeContent(block['content'])
@@ -589,6 +1128,13 @@ export function mapClaudeCodeRecord(
     const current = latestAssistant(context)
     if (eventType === 'content_block_start' && current) {
       const block = record(event?.['content_block'])
+      // Claude streams tool blocks before their JSON input. Promoting an empty
+      // AskUserQuestion block creates a fallback question that races the
+      // completed assistant record and native can_use_tool request. Wait for
+      // either complete record, both of which carry the real question input.
+      if (block?.['type'] === 'tool_use' && string(block['name']) === 'AskUserQuestion') {
+        return nativeSessionId ? { nativeSessionId } : null
+      }
       const index = number(event?.['index']) ?? current.parts.length
       const part = block ? partFromBlock(current.id, block, index) : null
       return part
@@ -766,22 +1312,46 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
   readonly id = 'claude-code'
   readonly name = 'Claude Code'
   readonly capabilities: HarnessCapabilities = {
+    runtimeTopology: { kind: 'turn_process', scope: 'session' },
     streaming: true,
     steering: true,
     nativeResume: true,
     messageHistory: 'mirrored',
-    interactivePermissions: false,
-    attachments: false,
+    interactivePermissions: true,
+    attachments: true,
     commands: false,
     providerCatalog: true,
     sessionStatus: true,
     contextUsage: true,
     compaction: false,
-    subagents: false,
+    subagents: true,
     structuredOutput: true,
     nativeUtilities: ['web_search', 'web_fetch']
   }
   private readonly pendingRateLimits = new Map<string, AgentRateLimitWindow[]>()
+  private readonly activeUsageProbes = new Map<string, ClaudeUsageProbe>()
+  private readonly authenticationReadiness = new Map<string, ClaudeAuthenticationReadiness>()
+  /** Cached `claude auth status` verdict per project, so a fresh thread never
+   *  re-spawns the CLI for auth on every message. */
+  private readonly authProbeCache = new Map<string, { authenticated: boolean; at: number }>()
+  /** Bounds concurrent one-shot claude spawns to keep the fd table stable. */
+  private readonly oneShotSpawnGate = new OneShotSpawnGate(ONE_SHOT_SPAWN_LIMIT)
+  /**
+   * Sessions whose live process proved authentication this run, with the time
+   * it was proven. A session only counts while its proof is fresh (within
+   * ACCESS_TOKEN_FRESH_MS): once that window passes, the shared access token
+   * may have expired, so concurrent spawns must go through the gate again.
+   */
+  private readonly authenticatedSessions = new Map<string, number>()
+  /** First-party sessions (shared Anthropic OAuth credential) spawned this run. */
+  private readonly firstPartySessions = new Set<string>()
+  private readonly pendingClaudeQuestions = new Map<string, ClaudeQuestionRequest>()
+  private readonly pendingClaudePermissions = new Map<string, ClaudePermissionRequest>()
+  /** Held while a first-party session spawn may be refreshing the credential. */
+  private authSlotHeld = false
+  /** Resolved when the current credential-refresh window closes. */
+  private authSlot: Promise<void> = Promise.resolve()
+  private usageProbeSequence = 0
 
   constructor(
     storage: StorageEngine,
@@ -794,7 +1364,7 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
   async listProviders(projectPath: string): Promise<ProviderCatalog[]> {
     let anthropicCatalog: ProviderCatalog
     try {
-      const models = await discoverClaudeModels(projectPath)
+      const models = await this.runAuthSerialized(() => discoverClaudeModels(projectPath))
       if (models.length === 0) throw new Error('Claude Code returned no account-selectable models')
       anthropicCatalog = {
         id: 'anthropic',
@@ -832,7 +1402,7 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
           thinkingPresets: model.reasoning
             ? (model.thinkingPresets ?? THINKING_PRESETS)
             : undefined,
-          attachment: false,
+          attachment: true,
           toolcall: true,
           ...(model.contextWindow ? { contextWindow: model.contextWindow } : {})
         }))
@@ -841,6 +1411,14 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
   }
 
   async generateTitle(projectPath: string, options: GenerateTitleOptions): Promise<string | null> {
+    const firstParty = !options.settings.providerId || options.settings.providerId === 'anthropic'
+    if (
+      firstParty &&
+      (!options.parentSessionId ||
+        !(await this.waitForParentAuthentication(options.parentSessionId)))
+    ) {
+      return null
+    }
     const anthropic = (await this.listProviders(projectPath)).find(
       (catalog) => catalog.id === 'anthropic'
     )
@@ -855,12 +1433,180 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
   /** Append user input to Claude's realtime stream while its turn is active. */
   async steerPrompt(projectPath: string, options: SteerPromptOptions): Promise<void> {
     const session = await this.requireSession(projectPath, options.sessionId)
-    if (options.attachments.length) {
-      throw new Error('Claude Code CLI driver does not support prompt attachments')
-    }
-    this.writeActiveInput(session.id, claudeStreamInput(options.text, 'now'))
+    this.writeActiveInput(
+      session.id,
+      await claudeStreamInput(options.text, options.attachments, 'now')
+    )
     this.appendUserMessage(session, options)
     await this.persistSession(session)
+  }
+
+  override async replyPermission(
+    _projectPath: string,
+    requestId: string,
+    reply: PermissionReply,
+    message?: string,
+    sessionId?: string
+  ): Promise<void> {
+    const pending = this.pendingClaudePermissions.get(requestId)
+    const targetSessionId = sessionId ?? pending?.sessionId
+    if (!targetSessionId || !pending)
+      throw new Error(`Claude permission request is no longer pending: ${requestId}`)
+    const response = {
+      type: 'control_response',
+      response: {
+        subtype: 'success',
+        request_id: requestId,
+        response: {
+          behavior: reply === 'reject' ? 'deny' : 'allow',
+          ...(reply === 'reject' ? {} : { updatedInput: pending.input }),
+          ...(message ? { message } : {})
+        }
+      }
+    }
+    this.writeActiveInput(targetSessionId, `${JSON.stringify(response)}\n`)
+    this.pendingClaudePermissions.delete(requestId)
+  }
+
+  override async replyToQuestion(
+    _projectPath: string,
+    sessionId: string,
+    requestId: string,
+    answers: string[][]
+  ): Promise<void> {
+    const request = this.pendingClaudeQuestions.get(requestId)
+    if (!request || request.sessionId !== sessionId) {
+      throw new Error(`Claude question request is no longer pending: ${requestId}`)
+    }
+    const answersByPrompt = Object.fromEntries(
+      request.questions.map((question, index) => [
+        question.prompt,
+        (answers[index] ?? []).join(', ')
+      ])
+    )
+    if (request.transport === 'control') {
+      this.writeActiveInput(
+        request.sessionId,
+        `${JSON.stringify({
+          type: 'control_response',
+          response: {
+            subtype: 'success',
+            request_id: request.controlRequestId,
+            response: {
+              behavior: 'allow',
+              updatedInput: { ...request.input, answers: answersByPrompt }
+            }
+          }
+        })}\n`
+      )
+    } else {
+      this.writeClaudeToolResult(
+        request.sessionId,
+        request.callId,
+        JSON.stringify({ answers: answersByPrompt })
+      )
+    }
+    this.pendingClaudeQuestions.delete(requestId)
+  }
+
+  override async rejectQuestion(
+    _projectPath: string,
+    sessionId: string,
+    requestId: string
+  ): Promise<void> {
+    const request = this.pendingClaudeQuestions.get(requestId)
+    if (!request || request.sessionId !== sessionId) {
+      throw new Error(`Claude question request is no longer pending: ${requestId}`)
+    }
+    if (request.transport === 'control') {
+      this.writeActiveInput(
+        request.sessionId,
+        `${JSON.stringify({
+          type: 'control_response',
+          response: {
+            subtype: 'success',
+            request_id: request.controlRequestId,
+            response: { behavior: 'deny', message: 'The user dismissed this question.' }
+          }
+        })}\n`
+      )
+    } else {
+      this.writeClaudeToolResult(
+        request.sessionId,
+        request.callId,
+        'The user dismissed this question.',
+        true
+      )
+    }
+    this.pendingClaudeQuestions.delete(requestId)
+  }
+
+  private writeClaudeToolResult(
+    sessionId: string,
+    callId: string,
+    content: string,
+    isError = false
+  ): void {
+    const message = {
+      type: 'user',
+      message: {
+        role: 'user',
+        content: [
+          {
+            type: 'tool_result',
+            tool_use_id: callId,
+            content,
+            ...(isError ? { is_error: true } : {})
+          }
+        ]
+      },
+      parent_tool_use_id: null
+    }
+    this.writeActiveInput(sessionId, `${JSON.stringify(message)}\n`)
+  }
+
+  protected override normalizeInteractionEvents(
+    sessionId: string,
+    events: SessionAgentEvent[]
+  ): SessionAgentEvent[] {
+    const normalized = super.normalizeInteractionEvents(sessionId, events).map((event) => {
+      if (event.type !== 'question.asked' || event.metadata?.['transport'] !== 'control') {
+        return event
+      }
+      const fallback = [...this.pendingClaudeQuestions.entries()].find(
+        ([, request]) =>
+          request.sessionId === sessionId &&
+          request.transport === 'tool_result' &&
+          sameClaudeQuestions(request.questions, event.questions)
+      )
+      return fallback ? { ...event, requestId: fallback[0] } : event
+    })
+    for (const event of normalized) {
+      if (event.type === 'permission.asked' && event.permission.id) {
+        const input = record(event.permission.metadata['input']) ?? {}
+        this.pendingClaudePermissions.set(event.permission.id, { sessionId, input })
+      }
+      if (event.type === 'question.asked') {
+        const input = record(event.metadata?.['input'])
+        if (event.metadata?.['transport'] === 'control' && input) {
+          this.pendingClaudeQuestions.set(event.requestId, {
+            sessionId,
+            questions: event.questions,
+            transport: 'control',
+            input,
+            controlRequestId: string(event.metadata['controlRequestId']) ?? event.requestId
+          })
+        } else if (event.tool) {
+          this.pendingClaudeQuestions.set(event.requestId, {
+            sessionId,
+            questions: event.questions,
+            transport: 'tool_result',
+            callId: event.tool.callID
+          })
+        }
+      }
+    }
+    return normalized
   }
 
   async prepareUtilityRuntime(
@@ -911,27 +1657,44 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
   }
 
   protected async ensureCliReady(projectPath: string): Promise<void> {
-    await new Promise<void>((resolve, reject) => {
-      const child = spawn('claude', ['--version'], {
-        cwd: projectPath,
-        env: buildHarnessEnvironment(),
-        stdio: ['ignore', 'ignore', 'pipe']
-      })
-      let stderr = ''
-      child.stderr?.on('data', (chunk: Buffer) => {
-        stderr += chunk.toString()
-      })
-      child.on('error', (error) =>
-        reject(new Error(`Claude Code CLI is unavailable: ${error.message}`))
-      )
-      child.on('exit', (code) =>
-        code === 0
-          ? resolve()
-          : reject(
-              new Error(`Claude Code CLI version probe failed${stderr ? `: ${stderr.trim()}` : ''}`)
+    const release = await this.oneShotSpawnGate.acquire()
+    try {
+      await new Promise<void>((resolve, reject) => {
+        let child: ChildProcess
+        try {
+          child = spawn('claude', ['--version'], {
+            cwd: projectPath,
+            env: buildClaudeEnvironment(),
+            stdio: ['ignore', 'ignore', 'pipe']
+          })
+        } catch (error) {
+          reject(
+            new Error(
+              `Claude Code CLI is unavailable: ${error instanceof Error ? error.message : String(error)}`
             )
-      )
-    })
+          )
+          return
+        }
+        let stderr = ''
+        child.stderr?.on('data', (chunk: Buffer) => {
+          stderr += chunk.toString()
+        })
+        child.on('error', (error) =>
+          reject(new Error(`Claude Code CLI is unavailable: ${error.message}`))
+        )
+        child.on('exit', (code) =>
+          code === 0
+            ? resolve()
+            : reject(
+                new Error(
+                  `Claude Code CLI version probe failed${stderr ? `: ${stderr.trim()}` : ''}`
+                )
+              )
+        )
+      })
+    } finally {
+      release()
+    }
   }
 
   /** Claude Code accepts ephemeral settings JSON, avoiding global or project config writes. */
@@ -940,16 +1703,34 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
     session: PersistentCliSession,
     options: SendPromptOptions
   ): Promise<CliTurnCommand> {
-    if (options.attachments.length)
-      throw new Error('Claude Code CLI driver does not support prompt attachments')
+    // Pre-flight auth gate at message-send time (buildTurnCommand runs per turn,
+    // never on thread open). For first-party Anthropic turns, probe the CLI's
+    // stored credential so the CLI's own silent OAuth refresh is triggered up
+    // front; if it genuinely cannot authenticate, fail with a clean early
+    // authentication issue instead of a confusing mid-turn authentication_failed.
+    const firstParty = !options.settings.providerId || options.settings.providerId === 'anthropic'
+    if (firstParty && !this.isTitleSession(session.id)) {
+      const releaseSpawn = await this.oneShotSpawnGate.acquire()
+      try {
+        const authenticated = await this.probeFirstPartyAuthentication(_projectPath)
+        if (!authenticated) {
+          throw new Error('Claude Code sign-in required. Sign in, then retry this message.')
+        }
+      } finally {
+        releaseSpawn()
+      }
+    }
     const args = [
       '-p',
       '--output-format',
       'stream-json',
       '--input-format',
       'stream-json',
+      '--permission-prompt-tool',
+      'stdio',
       '--verbose',
       '--include-partial-messages',
+      '--forward-subagent-text',
       '--thinking-display',
       'summarized'
     ]
@@ -966,23 +1747,244 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
       JSON.stringify({ showThinkingSummaries: true, ...(fastInference ? { fastMode: true } : {}) })
     )
     if (options.systemPrompt) args.push('--append-system-prompt', options.systemPrompt)
-    if (options.allowedTools !== undefined) args.push('--tools', options.allowedTools.join(','))
+    if (options.allowedTools !== undefined)
+      args.push('--tools', options.allowedTools.map(claudeToolName).join(','))
     else if (options.readOnly) args.push('--tools', 'Read,Glob,Grep,WebFetch,WebSearch')
     if (options.structuredOutput)
       args.push('--json-schema', JSON.stringify(options.structuredOutput.schema))
     if (options.settings.permissionLevel === 'full_access')
       args.push('--permission-mode', 'bypassPermissions')
-    else if (options.settings.permissionLevel === 'auto_review')
-      args.push('--permission-mode', 'dontAsk')
-    else args.push('--permission-mode', 'dontAsk')
+    else args.push('--permission-mode', 'manual')
     const env = await this.customProviderEnv(options.settings.providerId)
+    const input = await claudeStreamInput(options.text, options.attachments)
+    const trackAuthentication =
+      !this.isTitleSession(session.id) &&
+      (!options.settings.providerId || options.settings.providerId === 'anthropic')
+    if (trackAuthentication) this.beginAuthenticationReadiness(session.id)
     return {
       command: 'claude',
       args,
-      input: claudeStreamInput(options.text),
+      input,
       keepInputOpen: true,
       env,
-      provenanceModelId: resolveFastModelId(modelId, fastInference ? 'fast' : 'normal')
+      provenanceModelId: resolveFastModelId(modelId, fastInference ? 'fast' : 'normal'),
+      ...(trackAuthentication
+        ? {
+            onJsonRecord: (value: unknown) => {
+              const result = claudeAuthenticationResult(value)
+              if (result !== undefined) this.settleAuthenticationReadiness(session.id, result)
+            },
+            onProcessExit: () => this.settleAuthenticationReadiness(session.id, false)
+          }
+        : {})
+    }
+  }
+
+  private beginAuthenticationReadiness(sessionId: string): void {
+    let resolveReadiness: (authenticated: boolean) => void = () => undefined
+    const promise = new Promise<boolean>((resolve) => {
+      resolveReadiness = resolve
+    })
+    this.authenticationReadiness.set(sessionId, {
+      promise,
+      resolve: resolveReadiness,
+      settled: false
+    })
+  }
+
+  private settleAuthenticationReadiness(sessionId: string, authenticated: boolean): void {
+    const readiness = this.authenticationReadiness.get(sessionId)
+    if (!readiness || readiness.settled) return
+    readiness.settled = true
+    readiness.resolve(authenticated)
+  }
+
+  private async waitForParentAuthentication(sessionId: string): Promise<boolean> {
+    const readiness = this.authenticationReadiness.get(sessionId)
+    if (!readiness) return false
+    const authenticated = await readiness.promise
+    if (this.authenticationReadiness.get(sessionId) === readiness) {
+      this.authenticationReadiness.delete(sessionId)
+    }
+    return authenticated
+  }
+
+  /**
+   * Serialize the credential-refresh window for first-party session spawns.
+   * Claude Code's macOS keychain OAuth store races when two processes refresh
+   * a single-use token concurrently and the loser wipes the shared credential
+   * (anthropics/claude-code#76905), forcing repeated re-logins. Only the first
+   * spawn that has not yet authenticated may touch the credential; every other
+   * thread/project waits only until that session proves authentication, then
+   * spawns freely. Custom base-URL providers never share the Anthropic OAuth
+   * credential, so they bypass the gate entirely.
+   */
+  override async sendPrompt(projectPath: string, opts: SendPromptOptions): Promise<void> {
+    const firstParty = !opts.settings.providerId || opts.settings.providerId === 'anthropic'
+    if (firstParty) this.firstPartySessions.add(opts.sessionId)
+    if (firstParty && !this.hasLiveAuthenticatedSession()) {
+      const release = await this.acquireAuthSlot()
+      try {
+        if (this.hasLiveAuthenticatedSession()) {
+          await super.sendPrompt(projectPath, opts)
+          return
+        }
+        await super.sendPrompt(projectPath, opts)
+        await this.waitForAuthConfirmation(opts.sessionId)
+      } finally {
+        release()
+      }
+      return
+    }
+    await super.sendPrompt(projectPath, opts)
+  }
+
+  /**
+   * Whether any live session has already authenticated this run. The shared
+   * credential is considered fresh in that case, so no serialization is needed.
+   */
+  private hasLiveAuthenticatedSession(): boolean {
+    const now = Date.now()
+    const live = this.activeSessionIds()
+    return live.some((sessionId) => {
+      if (!this.firstPartySessions.has(sessionId)) return false
+      const authenticatedAt = this.authenticatedSessions.get(sessionId)
+      return authenticatedAt !== undefined && now - authenticatedAt < ACCESS_TOKEN_FRESH_MS
+    })
+  }
+
+  /**
+   * Claim the credential-refresh window, waiting for any in-flight window to
+   * close first. The window covers the CLI's silent OAuth refresh at process
+   * startup — only one first-party spawn may be inside it at a time.
+   */
+  private async acquireAuthSlot(): Promise<() => void> {
+    for (;;) {
+      if (this.authSlotHeld) {
+        await this.authSlot
+        continue
+      }
+      this.authSlotHeld = true
+      break
+    }
+    let release: (() => void) | undefined
+    this.authSlot = new Promise<void>((resolve) => (release = resolve))
+    return () => {
+      release?.()
+      this.authSlotHeld = false
+    }
+  }
+
+  /**
+   * Run an auth-touching CLI operation under the credential-refresh gate. The
+   * gate is engaged only while no live session has authenticated; once one has,
+   * the credential is fresh and the operation runs with full concurrency. The
+   * one-shot spawn gate then bounds concurrent short-lived claude spawns (auth
+   * probe, usage refresh, model discovery) so they cannot exhaust the process
+   * file-descriptor table and fail later spawns with `EBADF`.
+   *
+   * Lock ordering: the auth slot is always acquired before the spawn gate
+   * (sendPrompt → buildTurnCommand probe follows the same order), so no path
+   * ever holds the gate while waiting for the auth slot.
+   */
+  private async runAuthSerialized<T>(operation: () => Promise<T>): Promise<T> {
+    const releaseAuth = this.hasLiveAuthenticatedSession() ? null : await this.acquireAuthSlot()
+    try {
+      const releaseSpawn = await this.oneShotSpawnGate.acquire()
+      try {
+        return await operation()
+      } finally {
+        releaseSpawn()
+      }
+    } finally {
+      releaseAuth?.()
+    }
+  }
+
+  /**
+   * Hold the credential-refresh window until the guarded session proves
+   * authentication, exits, or the bound expires — the window in which the CLI
+   * may refresh the shared keychain credential. Resolving early on
+   * authentication lets the next concurrent spawn proceed without a refresh.
+   */
+  private async waitForAuthConfirmation(sessionId: string): Promise<void> {
+    const deadline = Date.now() + AUTH_CONFIRM_TIMEOUT_MS
+    while (Date.now() < deadline) {
+      if (this.authenticatedSessions.has(sessionId)) return
+      if (!this.activeSessionIds().includes(sessionId)) return
+      await new Promise<void>((resolve) => setTimeout(resolve, AUTH_CONFIRM_POLL_MS))
+    }
+  }
+
+  /**
+   * Pre-flight probe of the first-party Anthropic credential. Shells
+   * `claude auth status --json` and trusts its `loggedIn` verdict, letting the
+   * CLI's own silent OAuth refresh run before a turn is dispatched. The result
+   * is cached per project for a short window so a session's consecutive
+   * messages do not each re-spawn the CLI. On any probe failure (CLI missing,
+   * timeout, unparseable output) we assume authenticated so the turn still has
+   * a chance to report the real error mid-stream rather than being silently
+   * blocked by an unreliable pre-check.
+   */
+  private async probeFirstPartyAuthentication(projectPath: string): Promise<boolean> {
+    const now = Date.now()
+    const cached = this.authProbeCache.get(projectPath)
+    if (cached && now - cached.at < PRE_FLIGHT_AUTH_PROBE_TTL_MS) return cached.authenticated
+    const authenticated = await new Promise<boolean>((resolve) => {
+      try {
+        execFile(
+          'claude',
+          ['auth', 'status', '--json'],
+          {
+            cwd: projectPath,
+            env: buildClaudeEnvironment(),
+            timeout: PRE_FLIGHT_AUTH_PROBE_TIMEOUT_MS,
+            maxBuffer: 1024 * 1024
+          },
+          (error, stdout) => {
+            if (error) {
+              resolve(true)
+              return
+            }
+            try {
+              const parsed = JSON.parse(stdout) as { loggedIn?: unknown }
+              resolve(parsed['loggedIn'] === true)
+            } catch {
+              resolve(true)
+            }
+          }
+        )
+      } catch {
+        // Spawn itself threw synchronously (e.g. EBADF when the process is low
+        // on file descriptors). Fail open so the turn still has a chance.
+        resolve(true)
+      }
+    })
+    this.authProbeCache.delete(projectPath)
+    if (authenticated) this.authProbeCache.set(projectPath, { authenticated, at: now })
+    return authenticated
+  }
+
+  /**
+   * Current authentication state of the shared first-party credential, probed
+   * through the credential-refresh gate so a thread-open check can never race
+   * a concurrent refresh (anthropics/claude-code#76905). Probe failures are
+   * reported as authenticated so real errors still surface at message time.
+   */
+  async getAuthStatus(projectPath: string): Promise<HarnessAuthStatus> {
+    const authenticated = await this.runAuthSerialized(() =>
+      this.probeFirstPartyAuthentication(projectPath)
+    )
+    if (!authenticated) {
+      return {
+        state: 'unauthenticated',
+        accounts: [],
+        detail: 'Claude Code could not authenticate with the stored credential.'
+      }
+    }
+    return {
+      state: 'authenticated',
+      accounts: [{ id: 'anthropic', label: 'Anthropic', method: 'oauth', active: true }]
     }
   }
 
@@ -992,7 +1994,7 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
    * active endpoint per process, so only the selected provider is applied.
    */
   private async customProviderEnv(providerId: string): Promise<NodeJS.ProcessEnv> {
-    const env = buildHarnessEnvironment()
+    const env = buildClaudeEnvironment()
     if (!this.baseUrlProviders || !this.secretVault || !providerId) return env
     const provider = await this.baseUrlProviders.getProvider(this.id, providerId)
     if (!provider || provider.harnessId !== this.id || !provider.enabled) return env
@@ -1004,8 +2006,265 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
     return env
   }
 
+  private readUsageFromActiveSession(sessionId: string): Promise<Record<string, unknown> | null> {
+    const existing = this.activeUsageProbes.get(sessionId)
+    if (existing) return existing.promise
+
+    const sequence = ++this.usageProbeSequence
+    const usageRequestId = `codeinoven-usage-${sequence}`
+    const contextRequestId = `codeinoven-context-${sequence}`
+    let resolveProbe: (value: Record<string, unknown> | null) => void = () => undefined
+    const promise = new Promise<Record<string, unknown> | null>((resolve) => {
+      resolveProbe = resolve
+    })
+    const probe: ClaudeUsageProbe = {
+      usageRequestId,
+      contextRequestId,
+      rateLimitsPayload: null,
+      rateLimitsResponded: false,
+      contextPayload: null,
+      contextResponded: false,
+      timer: setTimeout(
+        () => this.finishActiveUsageProbe(sessionId, null),
+        CLAUDE_USAGE_TIMEOUT_MS
+      ),
+      promise,
+      resolve: resolveProbe
+    }
+    this.activeUsageProbes.set(sessionId, probe)
+    try {
+      this.writeActiveInput(
+        sessionId,
+        `${JSON.stringify({
+          type: 'control_request',
+          request_id: usageRequestId,
+          request: { subtype: 'get_usage' }
+        })}\n`
+      )
+      this.writeActiveInput(
+        sessionId,
+        `${JSON.stringify({
+          type: 'control_request',
+          request_id: contextRequestId,
+          request: { subtype: 'get_context_usage' }
+        })}\n`
+      )
+    } catch {
+      this.finishActiveUsageProbe(sessionId, null)
+    }
+    return promise
+  }
+
+  private finishActiveUsageProbe(sessionId: string, value: Record<string, unknown> | null): void {
+    const probe = this.activeUsageProbes.get(sessionId)
+    if (!probe) return
+    this.activeUsageProbes.delete(sessionId)
+    clearTimeout(probe.timer)
+    probe.resolve(value)
+  }
+
+  private captureActiveUsageResponse(
+    sessionId: string,
+    entry: Record<string, unknown> | null
+  ): void {
+    const probe = this.activeUsageProbes.get(sessionId)
+    if (!probe || entry?.['type'] !== 'control_response') return
+    const response = record(entry['response'])
+    const inner = record(response?.['response'])
+    const requestId = string(response?.['request_id'])
+    if (requestId === probe.usageRequestId) {
+      probe.rateLimitsResponded = true
+      const rateLimits = record(inner?.['rate_limits'])
+      probe.rateLimitsPayload =
+        inner?.['rate_limits_available'] === true && rateLimits ? inner : null
+    } else if (requestId === probe.contextRequestId) {
+      probe.contextResponded = true
+      probe.contextPayload = inner
+    } else {
+      return
+    }
+
+    if (probe.rateLimitsResponded && probe.rateLimitsPayload === null) {
+      this.finishActiveUsageProbe(sessionId, {
+        rateLimits: null,
+        context: probe.contextPayload
+      })
+    } else if (probe.rateLimitsResponded && probe.contextResponded) {
+      this.finishActiveUsageProbe(sessionId, {
+        rateLimits: probe.rateLimitsPayload,
+        context: probe.contextPayload
+      })
+    }
+  }
+
+  private mapAccountUsage(telemetry: Record<string, unknown> | null): ClaudeAccountUsage | null {
+    if (!telemetry) return null
+    const usage = record(telemetry['rateLimits'])
+    const context = record(telemetry['context'])
+    const rateLimits = usage ? rateLimitWindows(usage['rate_limits']) : []
+    if (rateLimits.length === 0 && !context) return null
+    const contextWindow =
+      context === null ? undefined : numberProperty(context, 'maxTokens', 'max_tokens')
+    const contextUsed =
+      context === null ? undefined : numberProperty(context, 'totalTokens', 'total_tokens')
+    return {
+      rateLimits,
+      ...(contextWindow === undefined ? {} : { contextWindow }),
+      ...(contextUsed === undefined ? {} : { contextUsed })
+    }
+  }
+
+  /**
+   * Fetch the account's current plan rate-limit windows and live context-window
+   * usage on demand via the `get_usage` + `get_context_usage` control requests.
+   * These run WITHOUT a model turn (`total_api_duration_ms` stays 0), so the
+   * battery can show live quota and the context percent for old threads whose
+   * turns predate capture. Returns null when the session has no plan limits
+   * (API key, Bedrock, Vertex) or on any failure.
+   */
+  async readAccountUsage(projectPath: string): Promise<ClaudeAccountUsage | null> {
+    const activeSessionId = this.activeSessionIds()[0]
+    if (activeSessionId) {
+      return this.mapAccountUsage(await this.readUsageFromActiveSession(activeSessionId))
+    }
+    try {
+      const telemetry = await this.runAuthSerialized(
+        () =>
+          new Promise<Record<string, unknown> | null>((resolve) => {
+            let child: ChildProcess
+            try {
+              child = spawn(
+                'claude',
+                [
+                  '--print',
+                  '--output-format',
+                  'stream-json',
+                  '--input-format',
+                  'stream-json',
+                  '--verbose'
+                ],
+                {
+                  cwd: projectPath,
+                  env: buildClaudeEnvironment(),
+                  // Usage telemetry is a side channel; do not leave a piped
+                  // stderr buffer undrained while the probe waits for JSON.
+                  stdio: ['pipe', 'pipe', 'ignore']
+                }
+              )
+            } catch {
+              // Spawn itself threw synchronously (e.g. EBADF when the process is
+              // low on file descriptors). Report no usage rather than rejecting.
+              resolve(null)
+              return
+            }
+            let buffer = ''
+            let settled = false
+            const timer = setTimeout(() => finish(null), CLAUDE_USAGE_TIMEOUT_MS)
+            const finish = (value: Record<string, unknown> | null): void => {
+              if (settled) return
+              settled = true
+              clearTimeout(timer)
+              if (!child.killed) child.kill()
+              resolve(value)
+            }
+            let rateLimitsPayload: Record<string, unknown> | null = null
+            let rateLimitsResponded = false
+            let contextPayload: Record<string, unknown> | null = null
+            let contextResponded = false
+            const attemptFinish = (): void => {
+              if (settled) return
+              // If the session has no plan rate limits, stop waiting for context and
+              // report nothing. Otherwise wait for both responses so quota and
+              // context are reported together; the timeout covers a missing response.
+              if (rateLimitsResponded && rateLimitsPayload === null) {
+                finish({ rateLimits: null, context: contextPayload })
+                return
+              }
+              if (rateLimitsResponded && contextResponded) {
+                finish({ rateLimits: rateLimitsPayload, context: contextPayload })
+              }
+            }
+            const consume = (line: string): void => {
+              if (!line.trim()) return
+              const payload = record(JSON.parse(line) as unknown)
+              if (!payload) return
+              if (payload['type'] !== 'control_response') return
+              const response = record(payload['response'])
+              const inner = record(response?.['response'])
+              const requestId = string(response?.['request_id'])
+              if (requestId === 'usage') {
+                rateLimitsResponded = true
+                const rateLimits = record(inner?.['rate_limits'])
+                rateLimitsPayload =
+                  inner?.['rate_limits_available'] === true && rateLimits ? inner : null
+              } else if (requestId === 'context') {
+                contextResponded = true
+                contextPayload = inner
+              }
+              attemptFinish()
+            }
+            child.stdout?.on('data', (chunk: Buffer) => {
+              buffer += chunk.toString()
+              const lines = buffer.split(/\r?\n/u)
+              buffer = lines.pop() ?? ''
+              for (const line of lines) {
+                try {
+                  consume(line)
+                } catch {
+                  // Ignore malformed side-channel output.
+                }
+              }
+            })
+            child.on('error', () => finish(null))
+            child.on('exit', () => {
+              if (!settled) finish(null)
+            })
+            // Send both control requests immediately; `--print` waits on stdin.
+            child.stdin?.write(
+              `${JSON.stringify({
+                type: 'control_request',
+                request_id: 'usage',
+                request: { subtype: 'get_usage' }
+              })}\n`
+            )
+            child.stdin?.write(
+              `${JSON.stringify({
+                type: 'control_request',
+                request_id: 'context',
+                request: { subtype: 'get_context_usage' }
+              })}\n`
+            )
+          })
+      )
+      return this.mapAccountUsage(telemetry)
+    } catch (error) {
+      Logger.dev('Claude on-demand account usage refresh unavailable:', error)
+      return null
+    }
+  }
+
+  override dispose(): void {
+    this.authProbeCache.clear()
+    this.authenticatedSessions.clear()
+    this.firstPartySessions.clear()
+    for (const sessionId of this.activeUsageProbes.keys()) {
+      this.finishActiveUsageProbe(sessionId, null)
+    }
+    for (const [sessionId, readiness] of this.authenticationReadiness) {
+      if (!readiness.settled) readiness.resolve(false)
+      this.authenticationReadiness.delete(sessionId)
+    }
+    this.pendingClaudeQuestions.clear()
+    this.pendingClaudePermissions.clear()
+    super.dispose()
+  }
+
   protected parseJsonLine(value: unknown, context: CliLineParseContext): CliLineParseResult | null {
     const entry = record(value)
+    if (claudeAuthenticationResult(entry) === true) {
+      this.authenticatedSessions.set(context.sessionId, Date.now())
+    }
+    this.captureActiveUsageResponse(context.sessionId, entry)
     const type = string(entry?.['type'])
     if (type === 'rate_limit_event' && !latestAssistant(context)) {
       const limits = rateLimitWindows(entry?.['rate_limit_info'] ?? entry?.['rateLimitInfo'])
@@ -1013,7 +2272,10 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
     }
 
     const result = mapClaudeCodeRecord(value, context)
-    if (type === 'result') this.closeActiveInput(context.sessionId)
+    if (type === 'result') {
+      this.finishActiveUsageProbe(context.sessionId, null)
+      this.closeActiveInput(context.sessionId)
+    }
     if (!result) return null
     const assistant = result.messages?.find((message) => message.role === 'assistant')
     const pending = this.pendingRateLimits.get(context.sessionId)

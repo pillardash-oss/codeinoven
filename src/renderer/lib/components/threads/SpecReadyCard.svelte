@@ -1,7 +1,7 @@
 <script lang="ts">
   import { FileText, Play, X } from '@lucide/svelte'
   import ModelPicker from '../shared/ModelPicker.svelte'
-  import type { ProviderCatalog, ThreadSettings } from '$shared/types'
+  import type { ProviderCatalog, ThreadSettings, ThinkingLevel } from '$shared/types'
 
   interface Props {
     providers?: ProviderCatalog[]
@@ -18,7 +18,12 @@
     onGenerateAssignment?: () => void
     onOpenAssignment?: () => void
     onModelChange?: (settings: ThreadSettings) => void
-    onToggleFavorite?: (providerId: string, modelId: string) => void
+    onToggleFavorite?: (providerId: string, modelId: string, harnessId: string) => void
+    onReorderFavorite?: (
+      draggedKey: string,
+      targetKey: string,
+      position: 'before' | 'after'
+    ) => void
   }
 
   let {
@@ -36,7 +41,8 @@
     onGenerateAssignment,
     onOpenAssignment,
     onModelChange,
-    onToggleFavorite
+    onToggleFavorite,
+    onReorderFavorite
   }: Props = $props()
 
   function chooseModel(providerId: string, modelId: string, nextHarnessId?: string): void {
@@ -47,6 +53,11 @@
       providerId,
       modelId
     })
+  }
+
+  function chooseThinking(level: ThinkingLevel): void {
+    if (!settings) return
+    onModelChange?.({ ...settings, thinkingLevel: level })
   }
 </script>
 
@@ -103,7 +114,10 @@
           label="Change"
           variant="action"
           onSelect={chooseModel}
+          thinkingLevel={settings.thinkingLevel}
+          onSelectThinking={chooseThinking}
           {onToggleFavorite}
+          {onReorderFavorite}
         />
       {:else}
         <button

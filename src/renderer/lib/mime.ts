@@ -72,6 +72,13 @@ export function isImageMime(mime: string): boolean {
   return mime.startsWith('image/')
 }
 
+/** SVG is `image/svg+xml` but it must NOT be served through the privileged
+ *  `appfile://` scheme (project-controlled active XML). It is rendered natively
+ *  in the renderer via a blob URL instead. */
+export function isSvgMime(mime: string): boolean {
+  return mime === 'image/svg+xml'
+}
+
 /** Convert an absolute local file path into a `file://` URL for renderer use. */
 export function pathToFileUrl(path: string): string {
   const normalized = path.replace(/\\/g, '/')
@@ -81,9 +88,16 @@ export function pathToFileUrl(path: string): string {
 
 /** Convert a `file://` URL back into an absolute local file path. */
 export function fileUrlToPath(url: string): string {
-  if (url.startsWith('file:///')) return url.slice('file:///'.length)
-  if (url.startsWith('file://')) return url.slice('file://'.length)
-  return url
+  // `file:///Users/…` is `file://` + `/Users/…` — the path's leading slash
+  // starts at index 7, so slice(7) keeps it. Slicing 8 (`file:///`) would
+  // drop the leading slash and turn the absolute path into a broken relative
+  // path that readFile() cannot resolve.
+  const encodedPath = url.startsWith('file://') ? url.slice('file://'.length) : url
+  try {
+    return decodeURIComponent(encodedPath)
+  } catch {
+    return encodedPath
+  }
 }
 
 export function isVideoMime(mime: string): boolean {
@@ -96,6 +110,38 @@ export function isAudioMime(mime: string): boolean {
 
 export function isPdfMime(mime: string): boolean {
   return mime === 'application/pdf'
+}
+
+export function isMarkdownMime(mime: string): boolean {
+  return mime === 'text/markdown' || mime === 'text/x-markdown'
+}
+
+export function isPlainTextMime(mime: string): boolean {
+  return mime === 'text/plain'
+}
+
+const VIDEO_EXTENSION_PATTERN = /\.(?:mp4|m4v|webm|mov|avi|mkv|mpeg|mpg|ogv)$/iu
+const AUDIO_EXTENSION_PATTERN = /\.(?:mp3|wav|ogg|oga|m4a|flac|aac|opus)$/iu
+
+/** The kind of inline preview a chat attachment supports, or `null` when the
+ *  file type has no renderer (images render as `<img>`, pdf as an iframe via
+ *  the Chromium PDF viewer, video/audio via the native media elements,
+ *  markdown via `MarkdownView`, plain text raw). Filename extensions provide a
+ *  fallback for files whose reported mime is `application/octet-stream` or
+ *  empty. */
+export type AttachmentPreviewKind = 'image' | 'pdf' | 'video' | 'audio' | 'markdown' | 'text'
+
+export function attachmentPreviewKind(
+  mime: string,
+  filename: string
+): AttachmentPreviewKind | null {
+  if (isImageMime(mime)) return 'image'
+  if (isVideoMime(mime) || VIDEO_EXTENSION_PATTERN.test(filename)) return 'video'
+  if (isAudioMime(mime) || AUDIO_EXTENSION_PATTERN.test(filename)) return 'audio'
+  if (isPdfMime(mime) || /\.pdf$/iu.test(filename)) return 'pdf'
+  if (isMarkdownMime(mime) || /\.(?:md|mdown|markdown)$/iu.test(filename)) return 'markdown'
+  if (isPlainTextMime(mime) || /\.(?:txt|text)$/iu.test(filename)) return 'text'
+  return null
 }
 
 export function isDocMime(mime: string): boolean {

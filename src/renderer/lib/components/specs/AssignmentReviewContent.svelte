@@ -18,17 +18,27 @@
     projectId?: string | null
     harnessId: string
     fallbackModel: AssignmentModelSelection
+    seniorModel: AssignmentModelSelection
     favoriteModels?: string[]
     recentModels?: string[]
     compact?: boolean
     readOnly?: boolean
+    reworkCycle?: number
+    forceRework?: boolean
+    assignmentVersion?: number
     onChange: (content: AssignmentPlanContent) => void
     onWorkerModelChange?: (selection: AssignmentModelSelection) => void
+    onSeniorModelChange?: (selection: AssignmentModelSelection) => void
     onTaskModelChange?: (
       taskId: string,
       selection: AssignmentModelSelection
     ) => void | Promise<void>
-    onToggleFavorite?: (providerId: string, modelId: string) => void
+    onToggleFavorite?: (providerId: string, modelId: string, harnessId: string) => void
+    onReorderFavorite?: (
+      draggedKey: string,
+      targetKey: string,
+      position: 'before' | 'after'
+    ) => void
     annotations?: AssignmentAnnotation[]
     onOpenAnnotation?: (annotation: AssignmentAnnotation) => void
     onAnnotateSection?: (section: string, title: string, event: MouseEvent) => void
@@ -40,28 +50,24 @@
     projectId = null,
     harnessId,
     fallbackModel,
+    seniorModel,
     favoriteModels = [],
     recentModels = [],
     compact = false,
     readOnly = false,
+    reworkCycle,
+    forceRework = false,
+    assignmentVersion,
     onChange,
     onWorkerModelChange,
+    onSeniorModelChange,
     onTaskModelChange,
     onToggleFavorite,
+    onReorderFavorite,
     annotations = [],
     onOpenAnnotation,
     onAnnotateSection
   }: Props = $props()
-
-  const thinkingLevels: ThinkingLevel[] = [
-    'minimal',
-    'low',
-    'medium',
-    'high',
-    'xhigh',
-    'max',
-    'ultra'
-  ]
 
   function graphMarkdown(): string {
     const lines = ['```mermaid', 'flowchart LR']
@@ -83,7 +89,8 @@
   }
 
   function resolvedTaskModel(task: AssignmentTask): AssignmentModelSelection {
-    return task.model ?? phaseModel(task.phaseId)
+    if (task.model) return task.model
+    return task.owner === 'senior' ? seniorModel : phaseModel(task.phaseId)
   }
 
   function canUpdateTaskModel(task: AssignmentTask): boolean {
@@ -92,8 +99,14 @@
       onTaskModelChange !== undefined &&
       task.owner === 'worker' &&
       !task.threadId &&
-      task.status !== 'completed'
+      task.status !== 'completed' &&
+      task.status !== 'stopped'
     )
+  }
+
+  function taskReworkCycle(task: AssignmentTask): number | undefined {
+    if (task.workKind === 'rework') return task.reworkCycle ?? reworkCycle ?? 1
+    return forceRework ? (reworkCycle ?? 1) : undefined
   }
 
   function updatePhaseModel(
@@ -157,7 +170,8 @@
         }
       })
     })
-    onWorkerModelChange?.(selection)
+    if (current.owner === 'senior') onSeniorModelChange?.(selection)
+    else onWorkerModelChange?.(selection)
   }
 
   function updateTaskText(
@@ -235,12 +249,13 @@
       ariaLabel="Assignment title"
       onChange={(value) => update({ ...content, title: value })}
     />
+    <h3 class="text-sm font-semibold uppercase tracking-wide text-dimmed">TL;DR</h3>
     <EditableMarkdown
       {readOnly}
       class="rounded-lg px-2 py-1 text-sm leading-7 text-muted outline-none focus:bg-surface focus:text-foreground"
       text={content.summary}
-      fallback="No assignment summary."
-      ariaLabel="Assignment summary"
+      fallback="No assignment TL;DR."
+      ariaLabel="Assignment TL;DR"
       onChange={(value) => update({ ...content, summary: value })}
     />
     {@render AnnotationBubbles('overview')}
@@ -340,24 +355,17 @@
               onSelect={(providerId, modelId, harnessId) =>
                 updatePhaseModel(phase.id, providerId, modelId, harnessId)}
               {onToggleFavorite}
-            />
-            <select
-              class="rounded-lg border bg-surface px-2 py-2 text-[11px] text-muted"
-              aria-label={`Thinking level for ${phase.title}`}
-              value={selectedPhaseModel.thinkingLevel}
-              onchange={(event: Event & { currentTarget: HTMLSelectElement }) =>
+              {onReorderFavorite}
+              thinkingLevel={selectedPhaseModel.thinkingLevel}
+              onSelectThinking={(level) =>
                 updatePhaseModel(
                   phase.id,
                   selectedPhaseModel.providerId,
                   selectedPhaseModel.modelId,
                   selectedPhaseModel.harnessId,
-                  event.currentTarget.value as ThinkingLevel
+                  level
                 )}
-            >
-              {#each thinkingLevels as level (level)}
-                <option value={level}>{level}</option>
-              {/each}
-            </select>
+            />
           </div>
         {/if}
       </div>
@@ -365,6 +373,7 @@
       <div class="space-y-3">
         {#each content.tasks.filter((task) => task.phaseId === phase.id) as task (task.id)}
           {@const selectedTaskModel = resolvedTaskModel(task)}
+          {@const displayedReworkCycle = taskReworkCycle(task)}
           <article
             id={`assignment-task-${task.id}`}
             data-assignment-section={`task:${task.id}`}
@@ -403,6 +412,15 @@
               <span class="rounded bg-overlay px-1.5 py-0.5 text-[10px] text-muted">
                 {task.owner === 'senior' ? 'Sr. Engineer' : 'Worker'}
               </span>
+              {#if displayedReworkCycle}
+                <span
+                  class="rounded bg-warning/10 px-1.5 py-0.5 text-[10px] font-semibold text-warning"
+                >
+                  Rework {displayedReworkCycle} · Assignment v{task.workAssignmentVersion ??
+                    assignmentVersion ??
+                    '?'}
+                </span>
+              {/if}
             </div>
             <EditableMarkdown
               {readOnly}
@@ -445,24 +463,17 @@
                     onSelect={(providerId, modelId, harnessId) =>
                       updateTaskModel(task.id, providerId, modelId, harnessId)}
                     {onToggleFavorite}
-                  />
-                  <select
-                    class="rounded-lg border bg-elevated px-2 py-2 text-[11px] text-muted"
-                    aria-label={`Thinking level for ${task.title}`}
-                    value={selectedTaskModel.thinkingLevel}
-                    onchange={(event: Event & { currentTarget: HTMLSelectElement }) =>
+                    {onReorderFavorite}
+                    thinkingLevel={selectedTaskModel.thinkingLevel}
+                    onSelectThinking={(level) =>
                       updateTaskModel(
                         task.id,
                         selectedTaskModel.providerId,
                         selectedTaskModel.modelId,
                         selectedTaskModel.harnessId,
-                        event.currentTarget.value as ThinkingLevel
+                        level
                       )}
-                  >
-                    {#each thinkingLevels as level (level)}
-                      <option value={level}>{level}</option>
-                    {/each}
-                  </select>
+                  />
                 </div>
               {/if}
             </div>

@@ -1,7 +1,7 @@
 <script lang="ts">
   import { ShieldCheck } from '@lucide/svelte'
   import ModelPicker from '../shared/ModelPicker.svelte'
-  import type { AuditReport, ProviderCatalog, ThreadSettings } from '$shared/types'
+  import type { AuditReport, ProviderCatalog, ThreadSettings, ThinkingLevel } from '$shared/types'
 
   interface Props {
     report: AuditReport
@@ -17,7 +17,12 @@
     onCancel?: () => void
     onReaudit?: (settings: ThreadSettings) => void
     onModelChange?: (settings: ThreadSettings) => void
-    onToggleFavorite?: (providerId: string, modelId: string) => void
+    onToggleFavorite?: (providerId: string, modelId: string, harnessId: string) => void
+    onReorderFavorite?: (
+      draggedKey: string,
+      targetKey: string,
+      position: 'before' | 'after'
+    ) => void
   }
 
   let {
@@ -34,7 +39,8 @@
     onCancel,
     onReaudit,
     onModelChange,
-    onToggleFavorite
+    onToggleFavorite,
+    onReorderFavorite
   }: Props = $props()
 
   function chooseModel(providerId: string, modelId: string, nextHarnessId?: string): void {
@@ -45,6 +51,11 @@
       providerId,
       modelId
     })
+  }
+
+  function chooseThinking(level: ThinkingLevel): void {
+    if (!settings) return
+    onModelChange?.({ ...settings, thinkingLevel: level })
   }
 
   function viewReport(): void {
@@ -73,6 +84,13 @@
         Audited by {report.provenance.providerId ?? 'provider'} /
         {report.provenance.modelId ?? 'model'}
       </p>
+      {#if report.assignmentVersion !== undefined}
+        <p class="mt-1 text-[11px] font-medium text-muted">
+          Assignment v{report.assignmentVersion} · {report.reworkCycle
+            ? `Rework ${report.reworkCycle}`
+            : 'Initial implementation'}
+        </p>
+      {/if}
     </div>
   </div>
   <div class="mt-4 flex flex-wrap items-center justify-between gap-2">
@@ -98,7 +116,10 @@
           label="Change"
           variant="action"
           onSelect={chooseModel}
+          thinkingLevel={settings.thinkingLevel}
+          onSelectThinking={chooseThinking}
           {onToggleFavorite}
+          {onReorderFavorite}
         />
       {:else}
         <button

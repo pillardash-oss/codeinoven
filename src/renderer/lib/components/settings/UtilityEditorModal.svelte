@@ -38,6 +38,7 @@
     UtilityScope,
     WebToolProviderId
   } from '$shared/types'
+  import { isOrchestrationChildThread } from '$shared/types'
 
   type ScopeLevel = UtilityScope['level']
   type BindingStrategy = HarnessUtilityBinding['strategy']
@@ -77,6 +78,9 @@
     backend: string
     providerId: string
     defaultModel: string
+    descriptorHarnessId: string
+    descriptorProviderId: string
+    descriptorModelId: string
     bindings: BindingDraft[]
   }
 
@@ -139,19 +143,12 @@
       badge: 'Web fetch'
     },
     {
-      id: 'firecrawl-search',
-      title: 'Firecrawl search',
-      description: 'Search the web with Firecrawl. You only need to provide an API key.',
-      group: 'Ready to use',
-      badge: 'Web search'
-    },
-    {
-      id: 'firecrawl-fetch',
-      title: 'Firecrawl scrape',
+      id: 'firecrawl-skill',
+      title: 'Firecrawl',
       description:
-        'Retrieve clean page contents through Firecrawl for agents without native web fetch.',
+        'Add Firecrawl web context skills for agents: search, scrape, interact, parse, research, and monitoring. The CLI installs during the session.',
       group: 'Ready to use',
-      badge: 'Web fetch'
+      badge: 'Skill'
     },
     {
       id: 'brave-search',
@@ -180,6 +177,14 @@
       description: 'Connect a search or fetch API while keeping its key in secure storage.',
       group: 'Build your own',
       badge: 'Web'
+    },
+    {
+      id: 'image-descriptor',
+      title: 'Image descriptor',
+      description:
+        'Let text-only models describe attached images using a vision-capable model from the catalog.',
+      group: 'Build your own',
+      badge: 'Vision'
     },
     {
       id: 'plugin-bundle',
@@ -218,9 +223,34 @@ Write the skill…`
   let loadingNative = $state(false)
   let utilities = $state<UtilityDefinition[]>([])
 
+  /** How long the editor's project/thread/icon context stays reusable across opens. */
+  const EDITOR_CONTEXT_TTL_MS = 15_000
+  interface EditorContextCache {
+    projects: Project[]
+    threads: Thread[]
+    projectIconUrls: Record<string, string>
+    fetchedAt: number
+  }
+  let editorContextCache: EditorContextCache | null = null
+
+  async function cachedEditorContext(): Promise<EditorContextCache> {
+    const cached = editorContextCache
+    if (cached && Date.now() - cached.fetchedAt < EDITOR_CONTEXT_TTL_MS) return cached
+    const [nextProjects, nextThreads] = await Promise.all([
+      invoke('project:list'),
+      invoke('thread:listAll')
+    ])
+    const projects = nextProjects.filter((project) => !project.hidden)
+    const threads = nextThreads
+    const projectIconUrls = Object.fromEntries(await loadProjectIcons(projects))
+    editorContextCache = { projects, threads, projectIconUrls, fetchedAt: Date.now() }
+    return editorContextCache
+  }
+
   let isNative = $derived(target?.kind === 'native')
   let nativeEntry = $derived(target?.kind === 'native' ? target.entry : null)
   let editingRegistry = $derived(target?.kind === 'registry' ? target.utility : null)
+  let isAppOwned = $derived(target?.kind === 'registry' && target.utility?.appOwned === true)
 
   let availableHarnesses = $derived(
     providerStore.providers
@@ -228,7 +258,12 @@ Write the skill…`
       .map((provider) => ({ id: provider.id, name: provider.name }))
   )
   let scopedThreads = $derived(
-    threads.filter((thread) => thread.projectId === draft.projectId && !thread.archived)
+    threads.filter(
+      (thread) =>
+        thread.projectId === draft.projectId &&
+        !thread.archived &&
+        !isOrchestrationChildThread(thread)
+    )
   )
   let projectOptions = $derived.by((): ScopeProject[] => {
     const options = projects.map((project) => ({
@@ -285,6 +320,9 @@ Write the skill…`
       backend: '',
       providerId: '',
       defaultModel: '',
+      descriptorHarnessId: '',
+      descriptorProviderId: '',
+      descriptorModelId: '',
       bindings: []
     }
   }
@@ -344,14 +382,19 @@ ${instructions}`
       draft.bindings = draft.bindings.filter((binding) => binding.harnessId !== harnessId)
       return
     }
-    const strategy: BindingStrategy = draft.kind === 'skill' ? 'skill' : 'mcp'
+    const strategy: BindingStrategy =
+      draft.kind === 'skill' ? 'skill' : draft.kind === 'image_descriptor' ? 'native' : 'mcp'
     draft.bindings = [
       ...draft.bindings,
       {
         harnessId,
         strategy,
         nativeCapability:
-          draft.kind === 'web_search' || draft.kind === 'web_fetch' ? draft.kind : '',
+          draft.kind === 'web_search' || draft.kind === 'web_fetch'
+            ? draft.kind
+            : draft.kind === 'image_descriptor'
+              ? 'image_descriptor'
+              : '',
         transportName:
           draft.name
             .toLowerCase()
@@ -436,27 +479,249 @@ Use current Convex conventions when working in a Convex project.
       credentialLabel = 'Exa API key'
       credentialEnvironmentVariable = 'EXA_API_KEY'
       credentialRequired = true
-    } else if (id === 'firecrawl-search' || id === 'firecrawl-fetch') {
-      const search = id === 'firecrawl-search'
-      draft.kind = search ? 'web_search' : 'web_fetch'
-      draft.provider = 'firecrawl'
-      draft.name = search ? 'Firecrawl Search' : 'Firecrawl Scrape'
-      draft.description = search
-        ? 'Search the web with Firecrawl.'
-        : 'Retrieve clean page contents through Firecrawl.'
-      draft.endpoint = search
-        ? 'https://api.firecrawl.dev/v1/search'
-        : 'https://api.firecrawl.dev/v1/scrape'
-      draft.headers = JSON.stringify({ Authorization: 'Bearer {env:FIRECRAWL_API_KEY}' }, null, 2)
-      draft.bindings = bindings(
-        'mcp',
-        search ? 'web_search' : 'web_fetch',
-        search ? 'firecrawl-search' : 'firecrawl-fetch'
-      )
-      credentialId = 'api-key'
-      credentialLabel = 'Firecrawl API key'
-      credentialEnvironmentVariable = 'FIRECRAWL_API_KEY'
-      credentialRequired = true
+    } else if (id === 'firecrawl-skill') {
+      draft.kind = 'skill'
+      draft.name = 'Firecrawl'
+      draft.description =
+        'Firecrawl web context skills for agents: search, scrape, interact, parse, research, and monitoring.'
+      draft.instructions = `---
+name: firecrawl
+description: |
+  Firecrawl gives AI agents and apps fast, reliable web context with
+  strong search, scraping, interaction, document parsing, research,
+  and monitoring tools. One install command sets up three skill
+  segments: live CLI tools, app-integration build skills, and
+  outcome-focused workflow skills. Route the reader to the right
+  usage path after install.
+---
+
+# Firecrawl
+
+Firecrawl helps agents search first, scrape clean content, interact
+with live pages when plain extraction is not enough, parse local
+documents into markdown, search scientific papers and GitHub history
+through the research index, monitor pages for changes, and produce
+finished deliverables from web data.
+
+## Install
+
+One command installs everything — the Firecrawl CLI for live web work,
+the build skills for integrating Firecrawl into application code, **and**
+the workflow skills for producing repeatable deliverables. It also opens
+browser auth so the human can sign in or create an account.
+
+\`\`\`bash
+npx -y firecrawl-cli@latest init --all --browser
+\`\`\`
+
+This gives you:
+
+- **CLI tools** — \`firecrawl search\`, \`firecrawl scrape\`, \`firecrawl interact\`, \`firecrawl parse\`, \`firecrawl monitor\`, \`firecrawl research\`, \`firecrawl ask\`, \`firecrawl docs-search\`, and more
+- **CLI skills** — teach the agent how to drive the Firecrawl CLI during its own session: which command to run, when to scrape vs search vs interact, how to chain results, and how to recover when a job fails. Use these when the agent itself needs web data right now.
+- **Build skills** — teach the agent how to add Firecrawl to a product's codebase: pick the right API endpoint, install the matching SDK, store \`FIRECRAWL_API_KEY\` safely, write the call site to match the project's conventions, and ship a smoke-tested integration. Use these when the agent is shipping code that other people will run, not running the agent's own web tools.
+- **Workflow skills** — turn Firecrawl web data into finished deliverables such as research briefs, SEO audits, lead lists, QA reports, knowledge bases, and design clones. Use these when the agent's job is to produce a finished artifact, not raw extraction or product code.
+- **Browser auth** — walks the human through sign-in or account creation
+
+Before doing real work, verify the install:
+
+\`\`\`bash
+mkdir -p .firecrawl
+firecrawl --status
+firecrawl scrape "https://firecrawl.dev" -o .firecrawl/install-check.md
+\`\`\`
+
+## Get Credentials
+
+Firecrawl users can get an API key in two ways:
+
+- **Dashboard or CLI (default)** — browser sign-in, CLI \`--browser\` auth,
+  install skills/MCP, or create an API key in the dashboard. Continue
+  with Path D below, or run the install command first.
+- **WorkOS ID-JAG (supported agent platforms only)** — if your platform
+  can mint a WorkOS ID-JAG identity assertion, fetch
+  \`https://www.firecrawl.dev/auth.md\` and follow it end-to-end. Do not
+  run the browser or CLI auth flow in Path D.
+
+Human-readable overview:
+https://docs.firecrawl.dev/ai-onboarding#get-credentials
+
+## Choose Your Path
+
+All paths use the same install above. The difference is what you do
+next.
+
+- **Need web data during this session** -> Path A (live tools)
+- **Need to add Firecrawl to app code** -> Path B (app integration)
+- **Need a finished deliverable from web data** -> Path C (workflow skills)
+- **Need more than one of the above** -> do them in sequence; the install already covers everything
+- **Agent platform with WorkOS ID-JAG** -> see Get Credentials above (not Path D)
+- **Need an account or API key (browser or CLI)** -> Path D
+- **Don't want to install anything** -> Path E (REST API directly)
+- **No API key and the human cannot sign up right now** -> Path F (keyless free tier, fallback)
+
+---
+
+## Path A: Live Web Tools
+
+Use this when you need web data during your work: searching the web,
+scraping known URLs, interacting with live pages, crawling docs,
+mapping a site, parsing local documents, searching research papers,
+or monitoring pages for changes.
+
+After install, hand off to the CLI skill. Default flow for live web work:
+
+1. start with search when you need discovery
+2. move to scrape when you have a URL
+3. use interact only when the page needs clicks, forms, or login
+4. use parse when the source is a local file instead of a URL
+5. use monitor when the request implies recurrence or notifications ("alert me when", "track this page") rather than a one-time read
+6. if any step fails or returns unexpected output, run \`firecrawl ask\` with the failing \`jobId\` instead of guessing
+
+If the task becomes "wire Firecrawl into product code," switch to Path B.
+
+---
+
+## Path B: Integrate Firecrawl Into an App
+
+Use this when you're building an application, agent, or workflow that
+calls the Firecrawl API **from code** — meaning the integration will run
+inside the user's product (a web app, backend service, script, agent
+loop, or pipeline) rather than from the agent's own terminal session.
+
+Save the key to the project's environment:
+
+\`\`\`dotenv
+FIRECRAWL_API_KEY=fc-...
+\`\`\`
+
+The required question in the build path is:
+
+- **What should Firecrawl do in the product?**
+
+Use the answer to route to \`/search\`, \`/scrape\`, \`/interact\`, \`/parse\`, \`/crawl\`, \`/map\`, \`/monitor\`, or the research index, then run one real Firecrawl request as a smoke test.
+
+If you do not have a key yet, do Path D first.
+
+---
+
+## Path C: Repeatable Deliverables
+
+Use this when the goal is a finished artifact powered by Firecrawl web
+data — a research brief, SEO audit, QA report, lead list, knowledge
+base, competitive intel digest, or a cloned design system — not raw web
+extraction and not product-code integration.
+
+Workflow skills infer from context first and only ask short clarifying
+questions when an input would block the work.
+
+Default flow for workflow deliverables:
+
+1. confirm the workflow and final artifact with the user
+2. collect web evidence with Firecrawl through the CLI or equivalent tool surface
+3. save or cite source evidence so claims are traceable
+4. run independent research units in parallel when available
+5. synthesize findings into the requested deliverable
+6. include a short "rerun inputs" block when the workflow could be automated
+
+If the underlying web work fails or the request shifts to "wire Firecrawl into product code," switch to Path A or Path B.
+
+---
+
+## Path D: Account Authorization Or API Key
+
+Use this when the human still needs to sign up, sign in, authorize
+access, or obtain an API key.
+
+If you already have a valid \`FIRECRAWL_API_KEY\`, skip this path.
+
+If you're the human reading this in the browser, create an account or
+sign in at:
+
+- https://www.firecrawl.dev/signin?view=signup&source=agent-suggested
+
+If you're an agent and need the human to authorize an API key, use this
+flow:
+
+**Step 1 — Generate auth parameters:**
+
+\`\`\`bash
+SESSION_ID=$(openssl rand -hex 32)
+CODE_VERIFIER=$(openssl rand -base64 32 | tr '+/' '-_' | tr -d '=\\n' | head -c 43)
+CODE_CHALLENGE=$(printf '%s' "$CODE_VERIFIER" | openssl dgst -sha256 -binary | openssl base64 -A | tr '+/' '-_' | tr -d '=')
+\`\`\`
+
+**Step 2 — Ask the human to open this URL:**
+
+\`\`\`
+https://www.firecrawl.dev/cli-auth?code_challenge=$CODE_CHALLENGE&source=coding-agent#session_id=$SESSION_ID
+\`\`\`
+
+**Step 3 — Poll for the API key:**
+
+\`\`\`bash
+POST https://www.firecrawl.dev/api/auth/cli/status
+Content-Type: application/json
+
+{"session_id": "$SESSION_ID", "code_verifier": "$CODE_VERIFIER"}
+\`\`\`
+
+Poll every 3 seconds. Responses:
+
+- \`{"status": "pending"}\` — keep polling
+- \`{"status": "complete", "apiKey": "fc-...", "teamName": "..."}\` — done
+
+**Step 4 — Save the key and continue:**
+
+\`\`\`bash
+echo "FIRECRAWL_API_KEY=fc-..." >> .env
+\`\`\`
+
+---
+
+## Path E: Use Firecrawl Without Installing Anything
+
+Use this when you don't want to install a CLI or skills package.
+
+**Base URL:** \`https://api.firecrawl.dev/v2\`
+
+**Auth header:** \`Authorization: Bearer fc-YOUR_API_KEY\`
+
+### Available endpoints
+
+- \`POST /search\` — discover pages by query
+- \`POST /scrape\` — extract clean markdown from a single URL
+- \`POST /interact\` — browser actions on live pages (clicks, forms, navigation)
+- \`POST /parse\` — upload a local or non-public document as \`multipart/form-data\` and get back markdown, JSON, HTML, links, images, or a summary. Use \`/scrape\` when the document has a public URL
+- \`POST /monitor\` — create a recurring check that watches pages, diffs each check against the last snapshot, optionally judges changes against a plain-language \`goal\`, and notifies by webhook, email, or Slack
+- \`GET /search/research/papers\` — search a scientific paper index by natural-language query; \`GET /search/research/github\` searches GitHub issues, PRs, discussions, and READMEs
+- \`POST /support/ask\` — diagnose a failing Firecrawl call
+- \`POST /support/docs-search\` — answer "how do I…" questions from Firecrawl's official docs
+
+### Documentation and references
+
+- **API reference:** https://docs.firecrawl.dev
+- **Skills repo:** https://github.com/firecrawl/skills
+
+---
+
+## Path F: Keyless Free Tier (Fallback)
+
+Use this when you need Firecrawl right now and cannot obtain an API key,
+for example when the human is not available to sign up.
+
+- **MCP**: point any MCP-compatible client at \`https://mcp.firecrawl.dev/v2/mcp\`
+- **CLI**: run \`npx -y firecrawl-cli@latest\` and use \`scrape\`, \`search\`, \`interact\`, or \`parse\` with no login
+- **API**: the research index endpoints (\`/search/research/*\`) can be called without an \`Authorization\` header
+
+Search, scrape, interact, parse, and the research index are available
+keyless. Crawl, map, monitor, extract, batch scrape, agent, and other
+endpoints still require an API key.
+
+Prefer a free account when the human can sign up: do Path D to get an
+account or API key, which unlocks higher limits and the full set of
+endpoints. If you hit rate limits on the keyless free tier, ask the human
+to sign up at https://www.firecrawl.dev/signin.`
+      draft.bindings = bindings('skill', 'firecrawl', 'firecrawl')
     } else if (id === 'brave-search') {
       draft.kind = 'web_search'
       draft.provider = 'brave'
@@ -472,6 +737,13 @@ Use current Convex conventions when working in a Convex project.
     } else if (id === 'custom-mcp') {
       draft.kind = 'mcp'
       draft.bindings = bindings('mcp', '', 'custom-mcp')
+    } else if (id === 'image-descriptor') {
+      draft.kind = 'image_descriptor'
+      draft.name = 'Image descriptor'
+      draft.description =
+        'Describes attached images with a vision model so text-only models can reason about them.'
+      draft.descriptorHarnessId = 'opencode'
+      draft.bindings = bindings('native', 'image_descriptor', 'image-descriptor')
     } else if (id === 'custom-skill') {
       draft.kind = 'skill'
       draft.instructions = `---
@@ -565,6 +837,12 @@ Write the complete workflow, rules, and examples for this skill.`
           ...(draft.endpoint.trim() ? { endpoint: draft.endpoint.trim() } : {}),
           ...(draft.defaultModel.trim() ? { defaultModel: draft.defaultModel.trim() } : {})
         }
+      case 'image_descriptor':
+        return {
+          harnessId: draft.descriptorHarnessId.trim(),
+          providerId: draft.descriptorProviderId.trim(),
+          modelId: draft.descriptorModelId.trim()
+        }
     }
   }
 
@@ -657,6 +935,11 @@ Write the complete workflow, rules, and examples for this skill.`
         next.endpoint = utility.config.endpoint ?? ''
         next.defaultModel = utility.config.defaultModel ?? ''
         break
+      case 'image_descriptor':
+        next.descriptorHarnessId = utility.config.harnessId
+        next.descriptorProviderId = utility.config.providerId
+        next.descriptorModelId = utility.config.modelId
+        break
     }
     draft = next
     resetCredential()
@@ -709,16 +992,13 @@ Write the complete workflow, rules, and examples for this skill.`
   }
 
   async function loadContext(): Promise<void> {
-    const [catalog, nextProjects, nextThreads] = await Promise.all([
-      invoke('utilities:list'),
-      invoke('project:list'),
-      invoke('thread:listAll')
-    ])
+    const catalog = await invoke('utilities:list')
     utilities = catalog.utilities
     secureStorageAvailable = catalog.secureStorageAvailable
-    projects = nextProjects.filter((project) => !project.hidden)
-    threads = nextThreads
-    projectIconUrls = Object.fromEntries(await loadProjectIcons(projects))
+    const context = await cachedEditorContext()
+    projects = context.projects
+    threads = context.threads
+    projectIconUrls = context.projectIconUrls
   }
 
   $effect(() => {
@@ -745,7 +1025,7 @@ Write the complete workflow, rules, and examples for this skill.`
       draft.kind === 'skill'
         ? skillMetadata(draft.instructions)
         : { name: draft.name.trim(), description: draft.description.trim() }
-    if (!metadata.name) throw new Error('Name is required.')
+    if (!isAppOwned && !metadata.name) throw new Error('Name is required.')
     if (draft.id === null && buildBindings().length === 0) {
       throw new Error('Select at least one installed harness.')
     }
@@ -760,10 +1040,12 @@ Write the complete workflow, rules, and examples for this skill.`
     }
     let saved: UtilityDefinition
     if (draft.id) {
-      const patch: UtilityDefinitionPatch = common
+      // The app-owned image descriptor is locked except for the vision model.
+      const patch: UtilityDefinitionPatch = isAppOwned ? { config: buildConfig() } : common
       saved = await invoke('utilities:update', draft.id, patch)
       const credential = buildCredential()
-      if (credential) saved = await invoke('utilities:setCredential', saved.id, credential)
+      if (credential && !isAppOwned)
+        saved = await invoke('utilities:setCredential', saved.id, credential)
     } else {
       const input: UtilityDefinitionInput = { kind: draft.kind, ...common }
       const credential = buildCredential()
@@ -1026,8 +1308,16 @@ Write the complete workflow, rules, and examples for this skill.`
             </span>.
           </p>
         {/if}
+        {#if isAppOwned}
+          <p
+            class="rounded-lg border border-primary/30 bg-primary/10 px-3 py-2 text-[11px] text-primary"
+          >
+            This is a built-in utility: only the vision model can be changed. Everything else is
+            managed by the app.
+          </p>
+        {/if}
 
-        {#if !isNative}
+        {#if !isNative && !isAppOwned}
           {@render harnessSelector()}
         {/if}
 
@@ -1036,22 +1326,24 @@ Write the complete workflow, rules, and examples for this skill.`
             <label class="space-y-1 text-xs font-medium">
               <span>Name</span>
               <input
-                class="h-9 w-full rounded-lg border bg-elevated px-3 text-sm outline-none focus:border-primary"
+                class="h-9 w-full rounded-lg border bg-elevated px-3 text-sm outline-none focus:border-primary disabled:opacity-50"
                 required
+                disabled={isAppOwned}
                 bind:value={draft.name}
               />
             </label>
             <label class="space-y-1 text-xs font-medium">
               <span>Description</span>
               <input
-                class="h-9 w-full rounded-lg border bg-elevated px-3 text-sm outline-none focus:border-primary"
+                class="h-9 w-full rounded-lg border bg-elevated px-3 text-sm outline-none focus:border-primary disabled:opacity-50"
+                disabled={isAppOwned}
                 bind:value={draft.description}
               />
             </label>
           </div>
         {/if}
 
-        {#if !isNative}
+        {#if !isNative && !isAppOwned}
           <div class="grid grid-cols-2 gap-3">
             <label class="space-y-1 text-xs font-medium">
               <span>Activation</span>
@@ -1123,7 +1415,9 @@ Write the complete workflow, rules, and examples for this skill.`
                   ? 'Web connection'
                   : draft.kind === 'computer_use'
                     ? 'Computer-use backend'
-                    : 'Provider connection'}
+                    : draft.kind === 'image_descriptor'
+                      ? 'Image descriptor model'
+                      : 'Provider connection'}
           </legend>
           {#if draft.kind === 'mcp'}
             <label class="block space-y-1 text-xs font-medium">
@@ -1225,6 +1519,38 @@ Write the complete workflow, rules, and examples for this skill.`
                 bind:value={draft.endpoint}
               />
             </label>
+          {:else if draft.kind === 'image_descriptor'}
+            <label class="block space-y-1 text-xs font-medium">
+              <span>Harness ID</span>
+              <input
+                class="h-9 w-full rounded-lg border bg-elevated px-3 font-mono text-xs outline-none focus:border-primary"
+                placeholder="opencode"
+                bind:value={draft.descriptorHarnessId}
+              />
+            </label>
+            <div class="grid grid-cols-2 gap-3">
+              <label class="space-y-1 text-xs font-medium">
+                <span>Provider ID</span>
+                <input
+                  class="h-9 w-full rounded-lg border bg-elevated px-3 font-mono text-xs outline-none focus:border-primary"
+                  placeholder="anthropic"
+                  bind:value={draft.descriptorProviderId}
+                />
+              </label>
+              <label class="space-y-1 text-xs font-medium">
+                <span>Model ID (vision)</span>
+                <input
+                  class="h-9 w-full rounded-lg border bg-elevated px-3 font-mono text-xs outline-none focus:border-primary"
+                  placeholder="claude-sonnet-4-5"
+                  bind:value={draft.descriptorModelId}
+                />
+              </label>
+            </div>
+            <p class="text-[11px] text-dimmed">
+              A model from the harness catalog that can see images. Text-only models call this
+              utility to describe attached images. Leave the fields empty to let the app pick a
+              vision model automatically.
+            </p>
           {:else}
             <label class="block space-y-1 text-xs font-medium">
               <span>Provider ID</span>
@@ -1254,7 +1580,7 @@ Write the complete workflow, rules, and examples for this skill.`
           {/if}
         </fieldset>
 
-        {#if !isNative && (draft.kind === 'web_search' || draft.kind === 'web_fetch' || (draft.kind === 'mcp' && (editedUtility?.credentials.length ?? 0) > 0))}
+        {#if !isNative && !isAppOwned && (draft.kind === 'web_search' || draft.kind === 'web_fetch' || (draft.kind === 'mcp' && (editedUtility?.credentials.length ?? 0) > 0))}
           <fieldset class="space-y-3 rounded-xl border p-3">
             <legend class="px-1 text-xs font-semibold">
               {draft.kind === 'mcp' ? 'MCP secret' : 'API key'}
@@ -1308,7 +1634,9 @@ Write the complete workflow, rules, and examples for this skill.`
           </fieldset>
         {/if}
 
-        <Switch bind:checked={draft.enabled} label="Enabled" class="font-medium" />
+        {#if !isAppOwned}
+          <Switch bind:checked={draft.enabled} label="Enabled" class="font-medium" />
+        {/if}
       </form>
     {/if}
 
@@ -1338,7 +1666,7 @@ Write the complete workflow, rules, and examples for this skill.`
         >
           {draft.id !== null || isNative || setupPreset !== null ? 'Cancel' : 'Close'}
         </button>
-        {#if draft.id !== null || isNative}
+        {#if (draft.id !== null || isNative) && !isAppOwned}
           <button
             class="flex h-9 items-center gap-1.5 rounded-lg bg-danger px-3 text-xs font-medium text-on-primary hover:opacity-90 disabled:opacity-50"
             type="button"
@@ -1395,17 +1723,11 @@ Write the complete workflow, rules, and examples for this skill.`
         {/each}
       </div>
     {:else}
-      <div class="flex items-center justify-between gap-3 rounded-lg bg-raised px-3 py-2">
-        <p class="text-xs text-muted">No installed, supported harnesses were detected.</p>
-        <button
-          type="button"
-          class="flex h-8 shrink-0 items-center gap-1.5 rounded-lg border bg-elevated px-2.5 text-xs font-medium hover:bg-overlay disabled:opacity-50"
-          disabled={providerStore.checkingCount > 0}
-          onclick={() => void providerStore.checkAll()}
-        >
-          <Loader2 size={12} class={providerStore.checkingCount > 0 ? 'animate-spin' : ''} />
-          Re-check
-        </button>
+      <div class="rounded-lg bg-raised px-3 py-2">
+        <p class="text-xs text-muted">
+          No installed, supported harnesses were detected. Open Settings → Harnesses to check
+          installations.
+        </p>
       </div>
     {/if}
   </fieldset>

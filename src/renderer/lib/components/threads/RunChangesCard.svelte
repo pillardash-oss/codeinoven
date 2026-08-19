@@ -1,16 +1,23 @@
 <script lang="ts">
-  import { ChevronDown, ChevronRight, FileDiff, RotateCcw } from '@lucide/svelte'
+  import { ChevronDown, ChevronRight, Eye, FileDiff, RotateCcw } from '@lucide/svelte'
   import FileTypeIcon from '../files/FileTypeIcon.svelte'
+  import HoverDiffPopover from '../files/HoverDiffPopover.svelte'
   import type { TurnCheckpointChangeSummary, TurnCheckpointSummary } from '$shared/types'
 
   interface Props {
     checkpoint: TurnCheckpointSummary
+    projectId: string
+    threadId: string
+    /** Reveals the file's diff on the Changes tab (not opening the file directly). */
+    onRevealFile: (path: string) => void
+    /** Opens the original file in the file viewer. */
     onOpenFile: (path: string) => void
     onReview: () => void
     onUndo: () => Promise<void>
   }
 
-  let { checkpoint, onOpenFile, onReview, onUndo }: Props = $props()
+  let { checkpoint, projectId, threadId, onRevealFile, onOpenFile, onReview, onUndo }: Props =
+    $props()
 
   let open = $state(true)
   let showAll = $state(false)
@@ -128,6 +135,17 @@
         </p>
       {/if}
 
+      {#if checkpoint.skippedFiles && checkpoint.skippedFiles.length > 0}
+        <p
+          class="border-b border-border px-4 py-2 text-[10px] leading-relaxed text-dimmed"
+          title={checkpoint.skippedFiles.join('\n')}
+        >
+          {checkpoint.skippedFiles.length}
+          {checkpoint.skippedFiles.length === 1 ? 'file is' : 'files are'} too large to checkpoint, so
+          changes to {checkpoint.skippedFiles.length === 1 ? 'it' : 'them'} cannot be undone.
+        </p>
+      {/if}
+
       {#if checkpoint.changes.length === 0}
         <p class="px-4 py-3 text-[11px] text-dimmed">No file changes detected.</p>
       {:else}
@@ -136,37 +154,61 @@
             {@const added = additions(change)}
             {@const removed = deletions(change)}
             {@const changeRolledBack = checkpoint.rolledBackPaths?.includes(change.path)}
-            <button
-              type="button"
-              class="flex min-h-9 w-full min-w-0 items-center gap-2 border-b border-border px-4 text-left font-mono text-[11px] transition-colors last:border-b-0 hover:bg-elevated focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary"
-              title={`Open ${change.path}`}
-              onclick={() => onOpenFile(change.path)}
+            <div
+              class="group flex min-h-9 w-full items-center gap-1 border-b border-border px-4 transition-colors last:border-b-0 hover:bg-elevated"
             >
-              <span
-                class="w-3 shrink-0 text-center font-semibold text-warning"
-                class:text-success={change.kind === 'created'}
-                class:text-danger={change.kind === 'deleted'}
+              <HoverDiffPopover
+                {projectId}
+                {threadId}
+                checkpointId={checkpoint.id}
+                path={change.path}
+                class="min-w-0 flex-1"
+                maxHeight="18rem"
               >
-                {statusLabel(change.kind)}
-              </span>
-              <FileTypeIcon path={change.path} size={14} />
-              <span
-                class="min-w-0 flex-1 truncate text-muted"
-                class:line-through={changeRolledBack}
+                {#snippet trigger()}
+                  <button
+                    type="button"
+                    class="flex min-h-9 min-w-0 flex-1 items-center gap-2 text-left font-mono text-[11px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary"
+                    title={`Reveal ${change.path} on the Changes tab`}
+                    onclick={() => onRevealFile(change.path)}
+                  >
+                    <span
+                      class="w-3 shrink-0 text-center font-semibold text-warning"
+                      class:text-success={change.kind === 'created'}
+                      class:text-danger={change.kind === 'deleted'}
+                    >
+                      {statusLabel(change.kind)}
+                    </span>
+                    <FileTypeIcon path={change.path} size={14} />
+                    <span
+                      class="min-w-0 flex-1 truncate text-muted"
+                      class:line-through={changeRolledBack}
+                    >
+                      {change.path}
+                    </span>
+                    {#if changeRolledBack}
+                      <span class="shrink-0 font-sans text-[9px] text-dimmed">restored</span>
+                    {:else if change.binary}
+                      <span class="shrink-0 font-sans text-[9px] text-dimmed">binary</span>
+                    {:else if added !== null || removed !== null}
+                      <span class="flex shrink-0 gap-1 tabular-nums">
+                        <span class="text-success">+{added ?? 0}</span>
+                        <span class="text-danger">−{removed ?? 0}</span>
+                      </span>
+                    {/if}
+                  </button>
+                {/snippet}
+              </HoverDiffPopover>
+              <button
+                type="button"
+                class="flex h-6 w-6 shrink-0 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+                aria-label={`Open ${change.path} in the file viewer`}
+                title={`Open ${change.path} in the file viewer`}
+                onclick={() => onOpenFile(change.path)}
               >
-                {change.path}
-              </span>
-              {#if changeRolledBack}
-                <span class="shrink-0 font-sans text-[9px] text-dimmed">restored</span>
-              {:else if change.binary}
-                <span class="shrink-0 font-sans text-[9px] text-dimmed">binary</span>
-              {:else if added !== null || removed !== null}
-                <span class="flex shrink-0 gap-1 tabular-nums">
-                  <span class="text-success">+{added ?? 0}</span>
-                  <span class="text-danger">−{removed ?? 0}</span>
-                </span>
-              {/if}
-            </button>
+                <Eye size={13} />
+              </button>
+            </div>
           {/each}
         </div>
 

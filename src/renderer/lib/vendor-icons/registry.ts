@@ -27,8 +27,12 @@ const vendorAliases: Record<string, string> = {
   alibaba: 'qwen',
   amazon: 'aws',
   amazonbedrock: 'bedrock',
+  // Anthropic and OpenAI render their harness marks (Claude Code / Codex) as
+  // the canonical provider icons, so they inherit the surrounding text color.
+  anthropic: 'claudecode',
   bytedance: 'doubao',
   chatgpt: 'openai',
+  openai: 'codex',
   githubcopilot: 'githubcopilot',
   githubmodels: 'github',
   glm: 'zhipu',

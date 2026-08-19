@@ -7,7 +7,15 @@ import ts from 'typescript-eslint'
 import svelteConfig from './svelte.config.js'
 
 export default defineConfig(
-  globalIgnores(['agent-out/**', 'dist/**', 'node_modules/**', 'out/**']),
+  globalIgnores([
+    '.cio/**',
+    '.svelte-check/**',
+    'agent-out/**',
+    'dist/**',
+    'node_modules/**',
+    'out/**',
+    'services/**'
+  ]),
   js.configs.recommended,
   ts.configs.recommended,
   svelte.configs.recommended,
@@ -15,7 +23,8 @@ export default defineConfig(
     languageOptions: {
       globals: {
         ...globals.browser,
-        ...globals.node
+        ...globals.node,
+        __CODEINOVEN_APP_VERSION__: 'readonly'
       }
     }
   },

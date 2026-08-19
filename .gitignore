@@ -13,6 +13,14 @@ Thumbs.db
 # Agents
 /agent-out
 /.qoder
-/.cio/brainstorm/spec-studio
 /.cio
 /.opencode
+
+# Generated TypeScript transpile artifacts — the .ts files are the source of
+# truth; these .js copies are emitted next to their sources by a tsc transpile
+# run and must never be tracked or shadow the real sources.
+/src/main/**/*.js
+/src/lib/**/*.js
+/src/preload/**/*.js
+/.svelte-check/
+.claude/

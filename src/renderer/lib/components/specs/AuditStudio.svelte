@@ -1,5 +1,17 @@
 <script lang="ts">
-  import { Check, MessageSquare, MessageSquarePlus, Pencil, Plus, Save, X } from '@lucide/svelte'
+  import {
+    AppWindow,
+    Check,
+    FileText,
+    MessageSquare,
+    MessageSquarePlus,
+    Pencil,
+    Plus,
+    Save,
+    X
+  } from '@lucide/svelte'
+  import { compactViewport } from '$lib/compact-viewport.svelte'
+  import { editorPreference } from '$lib/stores/editor-preference.svelte'
   import type {
     AuditAnnotation,
     AuditFindingSeverity,
@@ -9,8 +21,11 @@
   import { exportAuditReportMarkdown } from '$shared/audit/audit-markdown'
   import RichMarkdownEditor from '../shared/RichMarkdownEditor.svelte'
   import EditableMarkdown from './EditableMarkdown.svelte'
+  import StudioSelectionActions from './StudioSelectionActions.svelte'
   import StudioDocumentNavigation from './StudioDocumentNavigation.svelte'
+  import StudioHistoryControls from './StudioHistoryControls.svelte'
   import StudioSidebarResizeHandle from './StudioSidebarResizeHandle.svelte'
+  import type { StudioDocumentHistory } from './studio-document-history.svelte'
   import { onDestroy, onMount, tick } from 'svelte'
 
   type CallbackResult = void | Promise<void>
@@ -32,6 +47,7 @@
   interface Props {
     report: AuditReport
     versions: AuditReport[]
+    history: StudioDocumentHistory<AuditReport>
     busy?: boolean
     error?: string
     brainstormAvailable?: boolean
@@ -52,13 +68,18 @@
     ) => Promise<AuditReport | null>
     onUpdateAnnotation: (annotationId: string, body: string) => Promise<AuditReport | null>
     onResolveAnnotation: (annotationId: string) => Promise<AuditReport | null>
+    onExplainSelection?: (selection: string, documentContext: string) => void
+    onQuickChatSelection?: (selection: string, documentContext: string) => void
     onReview: (report: AuditReport, notes: string) => Promise<boolean>
     onComplete: () => CallbackResult
+    onOpenInEditor?: (report: AuditReport) => CallbackResult
+    onRevealInAppFile?: (report: AuditReport) => CallbackResult
   }
 
   let {
     report,
     versions,
+    history,
     busy = false,
     error,
     brainstormAvailable = false,
@@ -75,15 +96,22 @@
     onAddAnnotation,
     onUpdateAnnotation,
     onResolveAnnotation,
+    onExplainSelection,
+    onQuickChatSelection,
     onReview,
-    onComplete
+    onComplete,
+    onOpenInEditor,
+    onRevealInAppFile
   }: Props = $props()
   // svelte-ignore state_referenced_locally
-  let draft = $state<AuditReport>($state.snapshot(report))
-  let dirty = $state(false)
+  let draft = $state<AuditReport>(history.attach($state.snapshot(report)))
+  // svelte-ignore state_referenced_locally
+  let dirty = $state(history.dirty)
   let reviewOpen = $state(false)
   let reviewNotes = $state('')
   let reviewSubmitting = $state(false)
+  let preferredIcon = $derived(editorPreference.preferredInfo?.iconDataUrl)
+  let preferredName = $derived(editorPreference.preferredInfo?.name ?? 'System Default')
   let annotationBody = $state('')
   let pendingAnnotation = $state<PendingAnnotation | null>(null)
   let editingAnnotation = $state<AuditAnnotation | null>(null)
@@ -93,8 +121,12 @@
   let annotationMarkers = $state<Array<{ annotation: AuditAnnotation; x: number; y: number }>>([])
   let severityEditingId = $state<string | null>(null)
   let selectedSection = $state<AuditSectionId>('executive_summary')
+  /** Phone only: the section rail is a bottom drawer instead of a column. */
+  let sectionsOpen = $state(false)
   let documentScroller = $state<HTMLElement | null>(null)
   let syncedReportUpdatedAt = $state(0)
+  // svelte-ignore state_referenced_locally
+  let syncedReportKey = $state(`${report.id}:${report.version}`)
   let markerResizeObserver: ResizeObserver | null = null
 
   const findingSeverities: AuditFindingSeverity[] = ['critical', 'high', 'medium', 'low', 'info']
@@ -104,6 +136,7 @@
     { id: 'resolution_recommendation', label: 'Resolution' },
     { id: 'conclusion', label: 'Conclusion' }
   ]
+
   const auditMarkdownHeadings: Record<AuditSectionId, string> = {
     executive_summary: 'Executive Summary',
     findings: 'Findings',
@@ -129,9 +162,21 @@
   }
 
   $effect(() => {
+    const reportKey = `${report.id}:${report.version}`
+    if (reportKey !== syncedReportKey) {
+      syncedReportKey = reportKey
+      syncedReportUpdatedAt = report.updatedAt
+      draft = history.attach($state.snapshot(report))
+      dirty = history.dirty
+      return
+    }
     if (report.updatedAt === syncedReportUpdatedAt) return
     syncedReportUpdatedAt = report.updatedAt
-    if (!dirty) draft = $state.snapshot(report)
+    if (!dirty) {
+      history.markSaved($state.snapshot(report))
+      draft = $state.snapshot(report)
+      dirty = history.dirty
+    }
   })
 
   $effect(() => {
@@ -143,14 +188,38 @@
   })
 
   function changed(): void {
-    dirty = true
     draft.updatedAt = Date.now()
+    history.record($state.snapshot(draft))
+    dirty = history.dirty
   }
 
   function applyReport(updated: AuditReport): void {
+    history.markSaved($state.snapshot(updated))
     draft = $state.snapshot(updated)
     syncedReportUpdatedAt = updated.updatedAt
     dirty = false
+  }
+
+  function undoEdit(): void {
+    const previous = history.undo($state.snapshot(draft))
+    if (!previous) return
+    draft = previous
+    dirty = history.dirty
+    closePendingAnnotation()
+    closeAnnotation()
+    severityEditingId = null
+    void refreshAnnotationMarkers()
+  }
+
+  function redoEdit(): void {
+    const next = history.redo($state.snapshot(draft))
+    if (!next) return
+    draft = next
+    dirty = history.dirty
+    closePendingAnnotation()
+    closeAnnotation()
+    severityEditingId = null
+    void refreshAnnotationMarkers()
   }
 
   async function save(): Promise<AuditReport | null> {
@@ -165,6 +234,11 @@
     )
   }
 
+  function findingNumber(findingId: string): number {
+    const index = draft.content.findings.findIndex((finding) => finding.id === findingId)
+    return index < 0 ? 0 : index + 1
+  }
+
   function addFinding(): void {
     draft.content.findings.push({
       id: crypto.randomUUID(),
@@ -177,6 +251,7 @@
   }
 
   async function selectAndScroll(section: AuditSectionId): Promise<void> {
+    sectionsOpen = false
     selectedSection = section
     await tick()
     const target = document.getElementById(`audit-section-${section}`)
@@ -281,7 +356,7 @@
   }
 
   function captureDocumentSelection(): void {
-    if (!workflowActionsVisible) return
+    if (!workflowActionsVisible && (!onExplainSelection || !onQuickChatSelection)) return
     const selection = window.getSelection()
     if (!selection || selection.isCollapsed || selection.rangeCount === 0) return
     const range = selection.getRangeAt(0)
@@ -300,8 +375,8 @@
       quote,
       ...markdownLineForQuote(quote, section, selectionOccurrence(sectionElement, range, quote)),
       ...offsetsForRange(sectionElement, range),
-      x: Math.max(12, Math.min(rect.left, window.innerWidth - 304)),
-      y: Math.max(12, Math.min(rect.bottom + 8, window.innerHeight - 224)),
+      x: Math.max(12, Math.min(rect.left, window.innerWidth - 396)),
+      y: Math.max(12, Math.min(rect.bottom + 8, window.innerHeight - 272)),
       sectionLevel: false
     }
     annotationBody = ''
@@ -321,8 +396,8 @@
       quote: title,
       ...markdownLineForQuote(title, section),
       ...offsetsForQuote(section, title),
-      x: Math.max(12, Math.min(rect.left, window.innerWidth - 304)),
-      y: Math.max(12, Math.min(rect.bottom + 8, window.innerHeight - 224)),
+      x: Math.max(12, Math.min(rect.left, window.innerWidth - 396)),
+      y: Math.max(12, Math.min(rect.bottom + 8, window.innerHeight - 272)),
       sectionLevel: true
     }
     annotationBody = ''
@@ -358,6 +433,15 @@
     window.getSelection()?.removeAllRanges()
     pendingAnnotation = null
     annotationBody = ''
+  }
+
+  function openSelectionChat(mode: 'explain' | 'quick'): void {
+    const selection = pendingAnnotation
+    if (!selection || selection.sectionLevel) return
+    const documentContext = exportAuditReportMarkdown(draft)
+    if (mode === 'explain') onExplainSelection?.(selection.quote, documentContext)
+    else onQuickChatSelection?.(selection.quote, documentContext)
+    closePendingAnnotation()
   }
 
   function textNodesWithin(root: HTMLElement): Text[] {
@@ -581,20 +665,27 @@
 
 <section class="flex h-full min-h-0 flex-col bg-app" aria-label="Audit studio">
   <header class="shrink-0 border-b bg-surface">
-    <div class="grid min-h-12 grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-3 px-3">
-      <StudioDocumentNavigation
-        active="audit"
-        {brainstormAvailable}
-        {assignmentAvailable}
-        auditAvailable
-        {agentMessagesOpen}
-        {onBack}
-        {onToggleAgentMessages}
-        {onOpenBrainstorm}
-        {onOpenSpec}
-        {onOpenAssignment}
-      />
-      <div class="flex items-center gap-2">
+    <div
+      class="flex flex-col gap-2 px-2 py-2 md:grid md:min-h-12 md:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] md:items-center md:gap-3 md:px-3 md:py-0"
+    >
+      <div class="flex min-w-0 items-center gap-2">
+        <StudioDocumentNavigation
+          active="audit"
+          {brainstormAvailable}
+          {assignmentAvailable}
+          auditAvailable
+          {agentMessagesOpen}
+          {onBack}
+          {onToggleAgentMessages}
+          {sectionsOpen}
+          sectionsLabel="audit sections"
+          onToggleSections={() => (sectionsOpen = !sectionsOpen)}
+          {onOpenBrainstorm}
+          {onOpenSpec}
+          {onOpenAssignment}
+        />
+      </div>
+      <div class="flex items-center gap-2 max-md:flex-wrap">
         <label class="sr-only" for="audit-version">Audit report version</label>
         <select
           id="audit-version"
@@ -607,6 +698,12 @@
             <option value={version.version}>Version {version.version}</option>
           {/each}
         </select>
+        <StudioHistoryControls
+          canUndo={history.canUndo}
+          canRedo={history.canRedo}
+          onUndo={undoEdit}
+          onRedo={redoEdit}
+        />
         {#if dirty && workflowActionsVisible}
           <button
             class="flex items-center gap-1 rounded-md border bg-elevated px-2 py-1 text-xs"
@@ -617,7 +714,7 @@
           </button>
         {/if}
       </div>
-      <div class="flex justify-end gap-2">
+      <div class="flex items-center gap-2 max-md:*:h-10 max-md:*:flex-1 md:justify-end">
         {#if workflowActionsVisible}
           <button
             class="rounded-lg border bg-elevated px-3 py-1.5 text-xs font-semibold hover:bg-overlay"
@@ -639,7 +736,7 @@
       </div>
     </div>
     {#if reviewOpen && workflowActionsVisible}
-      <div class="flex items-end gap-2 border-t px-4 py-2.5">
+      <div class="flex flex-col gap-2 border-t px-3 py-2.5 md:flex-row md:items-end md:px-4">
         <label class="min-w-0 flex-1 text-[11px] font-medium text-muted">
           Additional instructions for the primary agent
           <RichMarkdownEditor
@@ -668,14 +765,41 @@
     {#if error}<p class="border-t bg-danger/10 px-4 py-2 text-xs text-danger">{error}</p>{/if}
   </header>
 
-  <div class="grid min-h-0 flex-1 grid-cols-[13rem_minmax(0,1fr)] overflow-hidden">
-    <aside class="relative flex min-h-0 flex-col border-r bg-surface" aria-label="Audit sections">
+  <div
+    class="flex min-h-0 flex-1 flex-col overflow-hidden md:grid md:grid-cols-[13rem_minmax(0,1fr)]"
+  >
+    {#if sectionsOpen}
+      <div
+        class="fixed inset-0 z-40 bg-black/50 md:hidden"
+        role="presentation"
+        onclick={() => (sectionsOpen = false)}
+      ></div>
+    {/if}
+    <aside
+      class="relative flex min-h-0 flex-col border-r bg-surface max-md:fixed max-md:inset-x-0 max-md:bottom-0 max-md:z-50 max-md:max-h-[80dvh] max-md:rounded-t-2xl max-md:border-r-0 max-md:border-t max-md:pb-[env(safe-area-inset-bottom)] max-md:shadow-2xl {sectionsOpen
+        ? ''
+        : 'max-md:hidden'}"
+      aria-label="Audit sections"
+    >
       <StudioSidebarResizeHandle sidebarLabel="Audit sections" />
-      <div class="min-h-0 flex-1 space-y-0.5 overflow-y-auto p-2">
+      <div class="flex h-12 shrink-0 items-center justify-between border-b px-3 md:hidden">
+        <p class="text-[10px] font-semibold uppercase tracking-[0.16em] text-dimmed">
+          Audit report
+        </p>
+        <button
+          class="flex h-9 w-9 items-center justify-center rounded-lg text-muted"
+          aria-label="Close sections"
+          title="Close sections"
+          onclick={() => (sectionsOpen = false)}
+        >
+          <X size={16} />
+        </button>
+      </div>
+      <div class="min-h-0 flex-1 space-y-0.5 overflow-y-auto overscroll-contain p-2">
         {#each auditSections as section (section.id)}
           {@const annotationCount = annotations(section.id).length}
           <button
-            class="flex w-full items-center justify-between gap-2 rounded-md px-2.5 py-2 text-left text-xs transition-colors {selectedSection ===
+            class="flex w-full items-center justify-between gap-2 rounded-md px-2.5 py-2 text-left text-xs transition-colors max-md:py-3 {selectedSection ===
             section.id
               ? 'bg-elevated font-semibold text-foreground'
               : 'text-muted hover:bg-elevated/60 hover:text-foreground'}"
@@ -713,11 +837,14 @@
                     </div>
                     {#each severityFindings as finding (finding.id)}
                       <button
-                        class="block w-full truncate rounded-md px-2 py-1 text-left text-[10px] text-muted hover:bg-elevated hover:text-foreground"
+                        class="flex w-full items-baseline gap-1.5 rounded-md px-2 py-1 text-left text-[10px] text-muted hover:bg-elevated hover:text-foreground"
                         title={finding.title}
                         onclick={() => void scrollToFinding(finding.id)}
                       >
-                        {finding.title}
+                        <span class="shrink-0 tabular-nums text-dimmed">
+                          {findingNumber(finding.id)}.
+                        </span>
+                        <span class="min-w-0 truncate">{finding.title}</span>
                       </button>
                     {/each}
                   </div>
@@ -760,6 +887,37 @@
           </div>
         </div>
       </div>
+
+      {#if onRevealInAppFile || onOpenInEditor}
+        <div class="flex shrink-0 items-center gap-1 border-t p-2">
+          {#if onRevealInAppFile}
+            <button
+              class="flex h-8 flex-1 items-center justify-center gap-2 rounded-lg px-2.5 text-xs font-medium text-muted hover:bg-elevated hover:text-foreground disabled:opacity-50"
+              disabled={busy}
+              title="Reveal this audit report as Markdown in the file tree"
+              onclick={() => void onRevealInAppFile?.(draft)}
+            >
+              <FileText size={13} />
+              View
+            </button>
+          {/if}
+          {#if onOpenInEditor}
+            <button
+              class="flex h-8 flex-1 items-center justify-center gap-2 rounded-lg px-2.5 text-xs font-medium text-muted hover:bg-elevated hover:text-foreground disabled:opacity-50"
+              disabled={busy}
+              title={`Open this audit report as Markdown in ${preferredName}`}
+              onclick={() => void onOpenInEditor?.(draft)}
+            >
+              {#if preferredIcon}
+                <img src={preferredIcon} alt="" class="h-3.5 w-3.5 shrink-0" />
+              {:else}
+                <AppWindow size={14} class="shrink-0" />
+              {/if}
+              Open
+            </button>
+          {/if}
+        </div>
+      {/if}
     </aside>
     <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
     <main
@@ -768,7 +926,7 @@
       aria-label="Audit report"
       onmouseup={captureDocumentSelection}
     >
-      <article class="mx-auto max-w-4xl space-y-12 px-8 py-8 text-sm leading-7">
+      <article class="mx-auto max-w-4xl space-y-12 px-4 py-6 text-sm leading-7 md:px-8 md:py-8">
         {@render textSection('executive_summary', 'Executive summary', 'executiveSummary')}
 
         <section id="audit-section-findings" data-audit-section="findings" class="scroll-mt-5">
@@ -877,6 +1035,111 @@
           })}
         </section>
 
+        {#if draft.content.auditedFiles?.length || draft.content.verification}
+          <section class="scroll-mt-5" aria-labelledby="audit-verification-heading">
+            <h2 id="audit-verification-heading" class="text-xl font-semibold tracking-tight">
+              Verification evidence
+            </h2>
+
+            {#if draft.content.auditedFiles?.length}
+              <div class="mt-4">
+                <h3 class="text-xs font-semibold uppercase tracking-wide text-dimmed">
+                  Audited files
+                </h3>
+                <ul class="mt-2 divide-y divide-border border-y">
+                  {#each draft.content.auditedFiles as file (file.path)}
+                    <li class="grid gap-1 py-2.5 md:grid-cols-[minmax(0,2fr)_minmax(0,3fr)]">
+                      <code class="break-all text-xs text-foreground">{file.path}</code>
+                      <span class="text-xs leading-5 text-muted">{file.reason}</span>
+                    </li>
+                  {/each}
+                </ul>
+              </div>
+            {/if}
+
+            {#if draft.content.verification}
+              <div class="mt-5 space-y-5">
+                <div class="grid gap-1 text-xs md:grid-cols-[8rem_minmax(0,1fr)]">
+                  <span class="font-semibold text-dimmed">Repository state</span>
+                  <code class="break-all text-foreground">
+                    {draft.content.verification.repositoryRevision}
+                  </code>
+                  <span class="font-semibold text-dimmed">Audit scope</span>
+                  <span class="text-muted">{draft.content.verification.scope}</span>
+                </div>
+
+                <div>
+                  <h3 class="text-xs font-semibold uppercase tracking-wide text-dimmed">
+                    Scoped checks
+                  </h3>
+                  <div class="mt-2 divide-y divide-border border-y">
+                    {#each draft.content.verification.checks as check (check.id)}
+                      <div class="space-y-1.5 py-3">
+                        <div class="flex flex-wrap items-center gap-2">
+                          <span class="text-xs font-semibold capitalize text-foreground">
+                            {check.kind}
+                          </span>
+                          <span
+                            class="rounded-md bg-raised px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-muted"
+                          >
+                            {check.status.replace('_', ' ')}
+                          </span>
+                          {#if check.exitCode !== undefined}
+                            <span class="text-[10px] tabular-nums text-dimmed">
+                              Exit {check.exitCode}
+                            </span>
+                          {/if}
+                        </div>
+                        {#if check.command}
+                          <code
+                            class="block overflow-x-auto whitespace-pre text-xs text-foreground"
+                          >
+                            {check.command}
+                          </code>
+                        {/if}
+                        <p class="text-xs leading-5 text-muted">{check.evidence}</p>
+                        {#if check.files.length}
+                          <p class="break-all text-[10px] leading-4 text-dimmed">
+                            {check.files.join(', ')}
+                          </p>
+                        {/if}
+                      </div>
+                    {/each}
+                  </div>
+                </div>
+
+                <div>
+                  <h3 class="text-xs font-semibold uppercase tracking-wide text-dimmed">
+                    Utilities and MCPs
+                  </h3>
+                  <ul class="mt-2 space-y-2">
+                    {#each draft.content.verification.utilities as utility (utility.name)}
+                      <li class="text-xs leading-5 text-muted">
+                        <span class="font-semibold text-foreground">{utility.name}</span>
+                        <span class="text-dimmed"> · {utility.status.replace('_', ' ')}</span>
+                        — {utility.evidence}
+                      </li>
+                    {/each}
+                  </ul>
+                </div>
+
+                {#if draft.content.verification.limitations.length}
+                  <div>
+                    <h3 class="text-xs font-semibold uppercase tracking-wide text-dimmed">
+                      Limitations
+                    </h3>
+                    <ul class="mt-2 list-disc space-y-1 pl-5 text-xs leading-5 text-muted">
+                      {#each draft.content.verification.limitations as limitation (limitation)}
+                        <li>{limitation}</li>
+                      {/each}
+                    </ul>
+                  </div>
+                {/if}
+              </div>
+            {/if}
+          </section>
+        {/if}
+
         {@render textSection(
           'resolution_recommendation',
           'Resolution & recommendation',
@@ -888,7 +1151,9 @@
         <button
           data-audit-annotation-marker={marker.annotation.id}
           class="absolute z-10 grid h-7 w-7 place-items-center rounded-full border bg-surface text-info shadow-sm hover:bg-elevated"
-          style:left={`${Math.min(marker.x, (documentScroller?.scrollWidth ?? marker.x + 32) - 32)}px`}
+          style:left={compactViewport.matches
+            ? undefined
+            : `${Math.min(marker.x, (documentScroller?.scrollWidth ?? marker.x + 32) - 32)}px`}
           style:top={`${marker.y}px`}
           title={`Open annotation: ${marker.annotation.body}`}
           aria-label={`Open annotation: ${marker.annotation.body}`}
@@ -903,48 +1168,68 @@
 
 {#if pendingAnnotation}
   <div
-    class="fixed z-50 w-72 rounded-xl border bg-surface p-3 shadow-xl"
-    style:left={`${pendingAnnotation.x}px`}
-    style:top={`${pendingAnnotation.y}px`}
+    class="fixed z-50 w-96 rounded-xl border bg-surface p-3 shadow-xl max-md:inset-x-0 max-md:bottom-0 max-md:w-auto max-md:rounded-b-none max-md:pb-[calc(0.75rem+env(safe-area-inset-bottom))]"
+    style:left={compactViewport.matches ? undefined : `${pendingAnnotation.x}px`}
+    style:top={compactViewport.matches ? undefined : `${pendingAnnotation.y}px`}
     role="dialog"
-    aria-label={pendingAnnotation.sectionLevel ? 'Annotate section' : 'Comment on selection'}
+    aria-label={pendingAnnotation.sectionLevel
+      ? 'Annotate section'
+      : workflowActionsVisible
+        ? 'Comment on selection'
+        : 'Actions for selection'}
   >
     <p class="text-[10px] font-semibold uppercase tracking-wide text-muted">
-      {pendingAnnotation.sectionLevel ? 'Annotate section' : 'Comment on selection'}
+      {pendingAnnotation.sectionLevel
+        ? 'Annotate section'
+        : workflowActionsVisible
+          ? 'Comment on selection'
+          : 'Selection'}
     </p>
     <blockquote
       class="mt-2 line-clamp-3 border-l-2 border-accent pl-2 text-[11px] leading-relaxed text-muted"
     >
       “{pendingAnnotation.quote}”
     </blockquote>
-    <RichMarkdownEditor
-      class="mt-2 min-h-16 w-full resize-y rounded-lg border bg-elevated px-2.5 py-2 text-xs outline-none focus:border-primary"
-      bind:value={annotationBody}
-      placeholder="Leave your review note…"
-      ariaLabel="Audit annotation"
-      onSubmit={() => void submitAnnotation()}
-    />
-    <div class="mt-2 flex justify-end gap-1.5">
-      <button
-        class="rounded-lg px-2.5 py-1.5 text-xs text-muted hover:bg-overlay"
-        title="Cancel annotation"
-        onclick={closePendingAnnotation}>Cancel</button
-      >
-      <button
-        class="rounded-lg bg-primary px-2.5 py-1.5 text-xs font-semibold text-on-primary disabled:opacity-50"
-        disabled={busy || !annotationBody.trim()}
-        title="Add annotation"
-        onclick={() => void submitAnnotation()}>Comment</button
-      >
+    {#if workflowActionsVisible}
+      <RichMarkdownEditor
+        class="mt-2 min-h-16 w-full resize-y rounded-lg border bg-elevated px-2.5 py-2 text-xs outline-none focus:border-primary"
+        bind:value={annotationBody}
+        placeholder="Leave your review note…"
+        ariaLabel="Audit annotation"
+        onSubmit={() => void submitAnnotation()}
+      />
+    {/if}
+    <div class="mt-2 flex flex-wrap items-center justify-between gap-2">
+      {#if !pendingAnnotation.sectionLevel && onExplainSelection && onQuickChatSelection}
+        <StudioSelectionActions
+          onExplain={() => openSelectionChat('explain')}
+          onQuickChat={() => openSelectionChat('quick')}
+        />
+      {/if}
+      <div class="ml-auto flex items-center gap-1.5">
+        <button
+          class="rounded-lg px-2.5 py-1.5 text-xs text-muted hover:bg-overlay"
+          title="Cancel annotation"
+          onclick={closePendingAnnotation}>Cancel</button
+        >
+        {#if workflowActionsVisible}
+          <button
+            class="rounded-lg bg-primary px-2.5 py-1.5 text-xs font-semibold text-on-primary disabled:opacity-50"
+            disabled={busy || !annotationBody.trim()}
+            title="Add annotation"
+            onclick={() => void submitAnnotation()}>Comment</button
+          >
+        {/if}
+      </div>
     </div>
   </div>
 {/if}
 
 {#if editingAnnotation && editingAnnotationPosition}
   <div
-    class="fixed z-50 w-80 rounded-xl border bg-surface p-4 shadow-xl"
-    style:left={`${editingAnnotationPosition.x}px`}
-    style:top={`${editingAnnotationPosition.y}px`}
+    class="fixed z-50 w-80 rounded-xl border bg-surface p-4 shadow-xl max-md:inset-x-0 max-md:bottom-0 max-md:w-auto max-md:rounded-b-none max-md:pb-[calc(1rem+env(safe-area-inset-bottom))]"
+    style:left={compactViewport.matches ? undefined : `${editingAnnotationPosition.x}px`}
+    style:top={compactViewport.matches ? undefined : `${editingAnnotationPosition.y}px`}
     role="dialog"
     aria-label="Audit annotation"
   >
@@ -1028,7 +1313,7 @@
       <span class="text-xl font-semibold tracking-tight">{title}</span>
       <MessageSquarePlus
         size={14}
-        class="text-dimmed opacity-0 transition-opacity group-hover:opacity-100"
+        class="text-dimmed opacity-0 transition-opacity max-md:opacity-100 group-hover:opacity-100"
       />
     </button>
   {:else}
