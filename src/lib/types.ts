@@ -1225,6 +1225,16 @@ export interface AgentCapabilityEntry {
   /** Transport + command/URL for MCP servers, or the skill's folder path. */
   detail?: string
   source: AgentCapabilitySource
+  /** Harness that owns/loads this capability (harness-origin entries only). */
+  harnessId?: string
+  /** Project the capability is declared in (project-scoped entries only). */
+  projectId?: string
+}
+
+/** Settings-level view of every MCP server and skill the app can see. */
+export interface AgentCapabilityCatalog {
+  mcp: AgentCapabilityEntry[]
+  skill: AgentCapabilityEntry[]
 }
 
 /** MCP servers and skills actually available to one project's active harness. */

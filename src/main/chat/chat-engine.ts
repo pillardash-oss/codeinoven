@@ -45,6 +45,7 @@ import {
   type AttributionMode
 } from './token-usage-attribution'
 import { leanAgentNameForMode } from '../opencode/opencode-agent-definitions'
+import type { LeanAgentMode } from '../opencode/opencode-agent-definitions'
 import { PermissionPolicy, type PermissionDecisionResult } from '../permissions/permission-policy'
 import {
   validateBoundedString,
@@ -76,7 +77,6 @@ import {
 import {
   IMAGE_DESCRIPTOR_PROMPT,
   imageDescriptorInactivityTimeoutMs,
-  readablePartPath,
   resolveSelfContainedAttachment,
   type ImageDescriptorExecutorRequest,
   type ImageDescriptorResult,
@@ -107,6 +107,7 @@ import type {
   AgentToolDefinition,
   AgentToolHarness,
   AgentContextCapabilities,
+  AgentCapabilityCatalog,
   AgentCapabilityEntry,
   AgentCapabilitySource,
   NativeMcpContent,
@@ -188,10 +189,7 @@ import {
 import { deriveTitleFromText } from './title-generator'
 import { createAutoTitleLauncher } from './title-generation-policy'
 import { artifactInstruction, GeneratedArtifactService } from './generated-artifact-service'
-import {
-  classifyProviderIssue,
-  isUsageResetWaitIssue
-} from '../../lib/provider-issue'
+import { classifyProviderIssue, isUsageResetWaitIssue } from '../../lib/provider-issue'
 import { generateId } from '../../lib/utils'
 import {
   ensureFeatureSlug,
@@ -609,6 +607,17 @@ const AUDIT_ALLOWED_TOOLS = [
 
 /** Read-only research tools for disposable generation sessions that read artifact files. */
 const PROMPT_READ_ONLY_TOOLS = ['read', 'glob', 'grep', 'list']
+
+/** Dev-only trace of the lean opencode agent selected for a trimmed mode. */
+function traceLeanAgent(mode: LeanAgentMode, sessionId: string, driverId: string): void {
+  if (driverId === 'opencode') {
+    Logger.dev('trimmed mode selected lean opencode agent', {
+      mode,
+      agent: leanAgentNameForMode(mode),
+      sessionId
+    })
+  }
+}
 
 /** Map a turn's behavior mode/scope into the dev-only attribution mode label. */
 function attributionModeFor(
@@ -1644,6 +1653,7 @@ export class ChatEngine {
     ipcMain.handle('capabilities:deleteMcp', (_, source: AgentCapabilitySource) =>
       this.capabilityDiscovery.deleteMcp(source)
     )
+    ipcMain.handle('capabilities:listAll', () => this.listAllCapabilities())
     ipcMain.handle(
       'agent:ensureSession',
       (_, projectId: string, threadId: string, requestedDriverId?: string) =>
@@ -2995,6 +3005,19 @@ export class ChatEngine {
       mcp: dedupeCapabilities(mcp),
       skill: dedupeCapabilities(skill)
     }
+  }
+
+  /**
+   * Settings-level catalog of every MCP server and skill the app can see across
+   * all harnesses, the shared global layer, and registered local projects.
+   */
+  async listAllCapabilities(): Promise<AgentCapabilityCatalog> {
+    const projects = (await this.projectManager.listProjects()).filter(
+      (project) => project.source !== 'ssh'
+    )
+    return this.capabilityDiscovery.discoverAll(
+      projects.map((project) => ({ id: project.id, path: project.path }))
+    )
   }
 
   /** Return the thread's harness session, creating and persisting one if needed. */
@@ -5289,6 +5312,13 @@ export class ChatEngine {
           : undefined,
         userMessageId: messageId
       })
+      if (isChatThread) {
+        traceLeanAgent(
+          chatFileSystemEnabled ? 'file-system-chat' : 'inbox-chat',
+          sessionId,
+          driverId
+        )
+      }
       this.sessionModelIds.set(sessionId, {
         providerId: settings.providerId,
         modelId: settings.modelId
@@ -5466,6 +5496,7 @@ export class ChatEngine {
         agent: leanAgentNameForMode('ephemeral'),
         userMessageId
       }
+      traceLeanAgent('ephemeral', temporary.sessionId, temporary.driverId)
       tokenUsageAttribution.recordPromptAttribution(
         episodeFromPieces({
           key: `eph:${temporary.sessionId}`,
@@ -5570,6 +5601,7 @@ export class ChatEngine {
         agent: leanAgentNameForMode('pr-compose'),
         userMessageId: turnId
       }
+      traceLeanAgent('pr-compose', sessionId, driverId)
       tokenUsageAttribution.recordPromptAttribution(
         episodeFromPieces({
           key: `pr:${sessionId}`,
@@ -6489,20 +6521,17 @@ export class ChatEngine {
         () => new ImageDescriptorInactivityError(timeoutMs, attempt, nextTimeoutMs)
       )
       const imageDescriptionPrompt = await this.cioPrompt('image-description')
-      const readablePath = await readablePartPath(image)
-      const promptText = readablePath
-        ? `${imageDescriptionPrompt}\n\nIf you cannot decode the inline image attached to this message, read the image from this path with your file-reading tools instead:\n${readablePath}`
-        : imageDescriptionPrompt
       const request: SendPromptOptions = {
         sessionId,
         settings,
-        text: promptText,
+        text: imageDescriptionPrompt,
         attachments: [attachment],
         readOnly: true,
         allowedTools: [],
         agent: leanAgentNameForMode('image-description'),
         userMessageId: createMessageId()
       }
+      traceLeanAgent('image-description', sessionId, selection.harnessId)
       tokenUsageAttribution.recordPromptAttribution(
         episodeFromPieces({
           key: `img:${sessionId}`,
@@ -9531,6 +9560,7 @@ export class ChatEngine {
             ]
           })
         )
+        traceLeanAgent('brainstorm', sessionId, driverId)
         if (isolated && driver instanceof OpenCodeDriver) {
           await driver.sendPrompt(projectPath, prompt, isolated)
         } else {

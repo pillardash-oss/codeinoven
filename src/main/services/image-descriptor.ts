@@ -13,7 +13,6 @@
  * exactly one implementation.
  */
 
-import { fileURLToPath } from 'node:url'
 import {
   IMAGE_DESCRIPTOR_MAX_IMAGES,
   IMAGE_DESCRIPTOR_PROMPT,
@@ -80,42 +79,19 @@ export const IMAGE_DESCRIPTOR_BATCH_OUTPUT_SCHEMA: Record<string, unknown> = {
  * Build the prompt for a batched vision turn. It lists every image by its exact
  * id and position so the model can tag each description correctly and the caller
  * can map the single structured response back to ordered per-image results.
- * Local `file://` sources are shown as readable absolute paths so a model that
- * cannot decode inline image data can read the file with its own tools; raw
- * `data:` payloads are hidden behind a short label so they cannot bloat the
- * prompt.
  */
 export function imageDescriptorBatchPrompt(entries: readonly ImageDescriptorEntry[]): string {
   const listing = entries
     .map(
-      (entry, index) =>
-        `${index + 1}. id=${entry.id}${entry.source ? ` (${descriptorSourceLabel(entry.source)})` : ''}`
+      (entry, index) => `${index + 1}. id=${entry.id}${entry.source ? ` (${entry.source})` : ''}`
     )
     .join('\n')
   return (
     `${IMAGE_DESCRIPTOR_PROMPT}\n\n` +
     `This message contains ${entries.length} image(s), presented in the numbered order below. ` +
-    `Every image is attached inline to this message; when a readable path is printed for an image, ` +
-    `it is also available on disk, so if you cannot decode the inline attachment you may read the image ` +
-    `from that path with your file-reading tools instead. ` +
     `Describe each image separately and tag every description with its exact id. ` +
     `Return exactly one result per id, in this order:\n${listing}`
   )
-}
-
-/** Render a descriptor source for the vision prompt: readable path for local
- *  files, a short label for embedded base64, and the URL verbatim for remote
- *  sources. */
-function descriptorSourceLabel(source: string): string {
-  if (source.startsWith('data:')) return '[attached inline image]'
-  if (source.startsWith('file://')) {
-    try {
-      return fileURLToPath(source)
-    } catch {
-      return source
-    }
-  }
-  return source
 }
 
 /**

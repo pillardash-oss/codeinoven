@@ -16,6 +16,7 @@ import type {
   AuditSectionId,
   AgentToolCatalog,
   AgentContextCapabilities,
+  AgentCapabilityCatalog,
   AgentCapabilitySource,
   NativeMcpContent,
   NativeSkillContent,
@@ -602,6 +603,7 @@ export interface IpcInvokeContract {
     boolean
   >
   'capabilities:deleteMcp': Contract<[source: AgentCapabilitySource], boolean>
+  'capabilities:listAll': Contract<[], AgentCapabilityCatalog>
   'agent:loadMessages': Contract<
     [projectId: string, threadId: string, limit?: number],
     AgentMessage[]

@@ -98,6 +98,7 @@ const INVOKE_CHANNELS = [
   'capabilities:readMcp',
   'capabilities:updateMcp',
   'capabilities:deleteMcp',
+  'capabilities:listAll',
   'agent:listQuestions',
   'agent:updateQuestion',
   'agent:loadMessages',
