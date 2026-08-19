@@ -1260,6 +1260,12 @@ export class RemoteRpcDispatcher {
           this.string(args[1]),
           this.string(args[2])
         )
+      case 'git:writeConflictWorkFile':
+        return this.gitService.writeConflictWorkFile(
+          await this.resolveProjectPath(this.string(args[0])),
+          this.string(args[1]),
+          this.string(args[2])
+        )
       case 'git:stage':
         return this.gitService.stage(
           await this.resolveProjectPath(this.string(args[0])),

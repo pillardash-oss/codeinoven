@@ -1,5 +1,5 @@
-import { stat, open, access, readFile, writeFile, rename, rm, unlink } from 'fs/promises'
-import { resolve, relative, isAbsolute, sep } from 'path'
+import { stat, open, access, readFile, writeFile, rename, mkdir, rm, unlink } from 'fs/promises'
+import { resolve, relative, isAbsolute, sep, dirname } from 'path'
 import { simpleGit } from 'simple-git'
 import type { LogOptions, SimpleGit, StatusResult } from 'simple-git'
 import type {
@@ -308,6 +308,47 @@ export class GitService {
         await this.client(directory).add([safePath])
       })
       return this.readStatus(directory)
+    })
+  }
+
+  /**
+   * Mirror the in-progress conflict work file into
+   * `.cio/git/merge-conflict/<branch>/<path>`, so the resolution editor is
+   * editing a real scratch file (like the `.cio/git/compose` convention) and the
+   * work survives even before the final save. The branch-specific folder keeps
+   * each merge isolated. Writing is atomic (tmp + rename), same as the final
+   * save path.
+   */
+  async writeConflictWorkFile(
+    projectPath: string,
+    relativePath: string,
+    content: string
+  ): Promise<void> {
+    return this.enqueue(projectPath, async () => {
+      const directory = await this.repo(projectPath)
+      const safePath = this.assertRelativePath(directory, relativePath)
+      await this.wrapError(directory, 'mutation', async () => {
+        const git = this.client(directory)
+        let branch = 'HEAD'
+        try {
+          branch = (await git.raw(['rev-parse', '--abbrev-ref', 'HEAD'])).trim() || 'HEAD'
+        } catch {
+          // Detached or unborn HEAD — fall back to a generic folder.
+        }
+        const safeBranch = branch.replace(/[^A-Za-z0-9._-]+/gu, '-').replace(/^-+|-+$/gu, '')
+        const target = resolve(
+          directory,
+          '.cio',
+          'git',
+          'merge-conflict',
+          safeBranch || 'HEAD',
+          ...safePath.split('/')
+        )
+        await mkdir(dirname(target), { recursive: true })
+        const temp = `${target}.resolve-tmp`
+        await writeFile(temp, content, 'utf-8')
+        await rename(temp, target)
+      })
     })
   }
 

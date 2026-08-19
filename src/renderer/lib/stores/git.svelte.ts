@@ -595,6 +595,11 @@ export class GitState {
     }
   }
 
+  /** Mirror the in-progress resolution into the `.cio/git/merge-conflict` scratch file. */
+  async writeConflictWorkFile(projectId: string, path: string, content: string): Promise<void> {
+    await invoke('git:writeConflictWorkFile', projectId, path, content)
+  }
+
   /**
    * Mark a single conflicted path resolved once its conflict markers are gone.
    * Staging it tells git the unmerged entry is resolved, which clears it from

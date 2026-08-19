@@ -787,6 +787,10 @@ export interface IpcInvokeContract {
     [projectId: string, relativePath: string, content: string],
     GitStatus
   >
+  'git:writeConflictWorkFile': Contract<
+    [projectId: string, relativePath: string, content: string],
+    void
+  >
   'git:stage': Contract<[projectId: string, paths: string[]], GitStatus>
   'git:resolveConflicted': Contract<[projectId: string, path: string], GitStatus>
   'git:unstage': Contract<[projectId: string, paths: string[]], GitStatus>
