@@ -4703,6 +4703,20 @@ export function registerIpcHandlers(
       return checkpointManager.listSummaries(safeProjectId, safeThreadId)
     }
   )
+  ipcMain.handle(
+    'checkpoint:redoPaths',
+    async (_, projectId: unknown, threadId: unknown, checkpointId: unknown, paths: unknown) => {
+      const safeProjectId = validateEntityId(projectId, 'Project ID')
+      const safeThreadId = validateEntityId(threadId, 'Thread ID')
+      await checkpointManager.redoPaths(
+        safeProjectId,
+        safeThreadId,
+        validateEntityId(checkpointId, 'Checkpoint ID'),
+        validateStringArray(paths, 'Checkpoint paths')
+      )
+      return checkpointManager.listSummaries(safeProjectId, safeThreadId)
+    }
+  )
   privileged('project:openInEditor', async (_event, projectId: string) => {
     const project = await projectManager.getProject(projectId)
     if (!project?.path) return

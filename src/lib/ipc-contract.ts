@@ -748,6 +748,10 @@ export interface IpcInvokeContract {
     [projectId: string, threadId: string, checkpointId: string, paths: string[]],
     TurnCheckpointSummary[]
   >
+  'checkpoint:redoPaths': Contract<
+    [projectId: string, threadId: string, checkpointId: string, paths: string[]],
+    TurnCheckpointSummary[]
+  >
   'config:get': Contract<[], AppConfig>
   'config:update': Contract<[patch: AppConfigPatch], AppConfig>
   'config:syncAgentRole': Contract<[role: AgentRole, selection: AgentModelSelection], AppConfig>

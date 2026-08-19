@@ -544,6 +544,50 @@ export class CheckpointManager {
     return updated
   }
 
+  /** Re-applies the captured `after`-state for previously undone paths, so a
+   *  rolled-back turn (or selection) can be redone from its snapshot. Only
+   *  paths recorded in `rolledBackPaths` may be redone, and only when the
+   *  working tree still matches the checkpoint's `before`-state for them. */
+  async redoPaths(
+    projectId: string,
+    threadId: string,
+    turnId: string,
+    paths: string[]
+  ): Promise<TurnCheckpoint> {
+    const checkpoint = await this.get(projectId, threadId, turnId)
+    if (!checkpoint) throw new Error(`Turn checkpoint not found: ${turnId}`)
+    if (!checkpoint.after) throw new Error('Checkpoint has no completed after-state')
+    const selected = new Set(paths)
+    if (selected.size === 0) throw new Error('Select at least one checkpoint path to redo')
+    const recordedPaths = new Set(checkpoint.changes.map((change) => change.path))
+    const rolledBackPaths = new Set(checkpoint.rolledBackPaths ?? [])
+    for (const path of selected) {
+      if (!recordedPaths.has(path)) throw new Error(`Path is not part of this checkpoint: ${path}`)
+      if (!rolledBackPaths.has(path)) throw new Error(`Path has not been undone: ${path}`)
+    }
+
+    const tracker = this.tracker(projectId)
+    const current = await tracker.snapshot(checkpoint.before.projectRoot, {
+      includeGitMetadata: checkpoint.before.git !== undefined
+    })
+    for (const path of selected) {
+      const expected = checkpoint.before.files[path]
+      const actual = current.files[path]
+      if (expected?.hash !== actual?.hash) {
+        throw new Error(`Refusing to redo ${path}: it changed after it was undone`)
+      }
+    }
+    await tracker.restoreAfter(checkpoint.before, checkpoint.after, selected)
+    const remainingRolledBack = [...rolledBackPaths].filter((path) => !selected.has(path))
+    const updated: TurnCheckpoint = {
+      ...checkpoint,
+      status: remainingRolledBack.length === 0 ? 'completed' : 'rolled_back',
+      rolledBackPaths: remainingRolledBack
+    }
+    await this.save(updated)
+    return updated
+  }
+
   private async save(checkpoint: TurnCheckpoint): Promise<void> {
     const stored = this.compactCheckpoint(checkpoint)
     await this.writeRow(

@@ -1176,6 +1176,14 @@ export class RemoteRpcDispatcher {
           this.stringArray(args[3], 'Checkpoint paths')
         )
         return this.checkpointManager.listSummaries(this.string(args[0]), this.string(args[1]))
+      case 'checkpoint:redoPaths':
+        await this.checkpointManager.redoPaths(
+          this.string(args[0]),
+          this.string(args[1]),
+          this.string(args[2]),
+          this.stringArray(args[3], 'Checkpoint paths')
+        )
+        return this.checkpointManager.listSummaries(this.string(args[0]), this.string(args[1]))
 
       // ─── Memory ─────────────────────────────────────────────────────────
       case 'memory:getPendingProposals':

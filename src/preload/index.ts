@@ -128,6 +128,7 @@ const INVOKE_CHANNELS = [
   'checkpoint:list',
   'checkpoint:rollback',
   'checkpoint:rollbackPaths',
+  'checkpoint:redoPaths',
   'config:get',
   'config:update',
   'config:syncAgentRole',

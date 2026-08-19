@@ -3976,6 +3976,26 @@
     }
   }
 
+  async function redoCheckpoint(checkpoint: TurnCheckpointSummary): Promise<void> {
+    const paths = checkpoint.rolledBackPaths ?? []
+    if (paths.length === 0) return
+    try {
+      checkpoints = await invoke(
+        'checkpoint:redoPaths',
+        thread.projectId,
+        thread.id,
+        checkpoint.id,
+        paths
+      )
+      toast.success(`Re-applied ${paths.length} ${paths.length === 1 ? 'file' : 'files'} from this turn`)
+    } catch (error) {
+      reportError(error, 'This turn could not be redone.', {
+        projectId: thread.projectId,
+        threadId: thread.id
+      })
+    }
+  }
+
   async function reconcileReadySpec(): Promise<void> {
     const { projectId, id } = thread
     const workflowThreadId = isAssignmentAuditorThread ? (thread.coordinatorThreadId ?? id) : id
@@ -7161,6 +7181,7 @@
                             onOpenFile={(path) => void openCheckpointFile(turnCheckpoint.id, path)}
                             onReview={() => reviewCheckpoint(turnCheckpoint.id)}
                             onUndo={() => undoCheckpoint(turnCheckpoint)}
+                            onRedo={() => redoCheckpoint(turnCheckpoint)}
                           />
                         </div>
                       {/if}
