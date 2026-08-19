@@ -27,6 +27,25 @@ export function incrementVersion(version: string): string {
   return `${major}.${minor}.${patch}`
 }
 
+async function writeJsonVersion(fileUrl: URL, nextVersion: string): Promise<void> {
+  const temporaryUrl = new URL(`${fileUrl.pathname}.version-tmp`, import.meta.url)
+  const text = await readFile(fileUrl, 'utf8')
+  let data: Record<string, unknown>
+  try {
+    data = JSON.parse(text) as Record<string, unknown>
+  } catch {
+    throw new Error(`Expected ${fileUrl.pathname} to contain valid JSON.`)
+  }
+  data.version = nextVersion
+  const updated = `${JSON.stringify(data, null, 2)}\n`
+  try {
+    await writeFile(temporaryUrl, updated, 'utf8')
+    await rename(temporaryUrl, fileUrl)
+  } finally {
+    await rm(temporaryUrl, { force: true })
+  }
+}
+
 async function bumpPackageVersion(): Promise<void> {
   const packageUrl = new URL('../package.json', import.meta.url)
   const temporaryUrl = new URL('../package.json.version-tmp', import.meta.url)
@@ -50,6 +69,14 @@ async function bumpPackageVersion(): Promise<void> {
   } finally {
     await rm(temporaryUrl, { force: true })
   }
+
+  // Keep PWA manifest and remote-control package versions in sync
+  // with the desktop app version so all deployable units share one version.
+  const manifestUrl = new URL('../src/renderer/static/manifest.webmanifest', import.meta.url)
+  await writeJsonVersion(manifestUrl, nextVersion)
+
+  const remotePackageUrl = new URL('../services/remote-control/package.json', import.meta.url)
+  await writeJsonVersion(remotePackageUrl, nextVersion)
 
   process.stdout.write(`${currentVersion} → ${nextVersion}\n`)
 }
