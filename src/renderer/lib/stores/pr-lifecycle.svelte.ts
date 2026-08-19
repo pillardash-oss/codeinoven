@@ -1,11 +1,24 @@
 import { APP_SLUG } from '$shared/brand'
 
+/** Live status a minimized PR draft reports to its dock chip. */
+export type PrDockStatus = 'draft' | 'working' | 'attention' | 'composed' | 'created'
+
+/** What a PR modal shows for itself while docked (project identity + state). */
+export interface PrDockDescriptor {
+  projectName: string
+  iconUrl: string | null
+  status: PrDockStatus
+  title: string
+}
+
 export interface PrDraft {
   id: string
   projectId: string
   threadId: string
   minimized: boolean
   createdAt: number
+  /** Live dock descriptor reported by the sheet; rendered by the host dock. */
+  dock: PrDockDescriptor
 }
 
 /**
@@ -46,7 +59,8 @@ class PrLifecycleStore {
       projectId,
       threadId,
       minimized: false,
-      createdAt: Date.now()
+      createdAt: Date.now(),
+      dock: { projectName: '', iconUrl: null, status: 'draft', title: 'New pull request' }
     }
     this.drafts = [...this.drafts, draft]
     this.focusedId = draft.id
@@ -60,7 +74,8 @@ class PrLifecycleStore {
       projectId,
       threadId,
       minimized: false,
-      createdAt: Date.now()
+      createdAt: Date.now(),
+      dock: { projectName: '', iconUrl: null, status: 'draft', title: 'New pull request' }
     }
     this.drafts = [...this.drafts, draft]
     this.focusedId = draft.id
@@ -87,6 +102,13 @@ class PrLifecycleStore {
 
   focus = (id: string): void => {
     this.expand(id)
+  }
+
+  /** Update the live dock descriptor a minimized sheet reports to the host dock. */
+  updateDock = (id: string, patch: Partial<PrDockDescriptor>): void => {
+    this.drafts = this.drafts.map((draft) =>
+      draft.id === id ? { ...draft, dock: { ...draft.dock, ...patch } } : draft
+    )
   }
 
   close = (id: string): void => {
