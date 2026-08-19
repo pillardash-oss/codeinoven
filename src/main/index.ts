@@ -508,6 +508,13 @@ async function bootPostPaintServices(): Promise<void> {
     threadCreation,
     join(app.getPath('userData'), 'owned-processes.json')
   )
+  // Merge the app-managed lean opencode agents into the machine-wide global
+  // config. Idempotent, additive-only and non-fatal; runs after first paint
+  // so it never blocks the workspace, and logs a dev-only summary.
+  const { syncOpenCodeLeanAgents } = await import('./opencode/opencode-agent-service')
+  await syncOpenCodeLeanAgents().catch((error) =>
+    Logger.dev('opencode lean-agent sync failed (non-fatal):', error)
+  )
   updaterService = new UpdaterService(storage)
   powerWakeService = new PowerWakeService(storage, database)
   retryScheduler = new RetrySchedulerService(storage)
