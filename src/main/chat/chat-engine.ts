@@ -157,6 +157,7 @@ import {
   estimateTextTokens,
   truncateToTokenBudget
 } from '../../lib/prompt-budget'
+import { decideModelSwitchCompaction } from '../../lib/model-switch-compaction'
 import {
   AUDIT_REPORT_SCHEMA,
   ASSIGNMENT_PLAN_SCHEMA,
@@ -1290,6 +1291,13 @@ export class ChatEngine {
   >()
   /** Sessions currently running an explicit context compaction. */
   private activeCompactions = new Set<string>()
+  /**
+   * Last provider/model each harness session was successfully dispatched
+   * under. A later model switch on a reused native session is detectable
+   * without a per-turn mirror read; the mirror backfills the first turn after
+   * an app restart.
+   */
+  private readonly sessionModelIds = new Map<string, { providerId: string; modelId: string }>()
   private specRevisionTasks = new Map<string, Promise<EngineeringSpec | null>>()
   /** Fresh sessions prepared for the approved-spec implementation handoff.
    * The renderer and send path both call ensureSession; retain the new id so
@@ -3048,6 +3056,22 @@ export class ChatEngine {
     // Record whether the harness natively holds the conversation so the recap
     // path can skip a second provider history load.
     this.sessionNativeHistory.set(sessionId, storedSessionMessages.length > 0)
+
+    // A reused native session is replayed in full under whichever model the
+    // next turn selects. When that model changed and its context window is much
+    // smaller than the thread's last-known native usage, compact the native
+    // session before it resumes so the new model never hits Codex's "ran out of
+    // room in the model's context window" boundary.
+    if (!switchedHarness && storedSessionMessages.length > 0 && thread.settings) {
+      await this.maybeAutoCompactOnModelSwitch(
+        projectId,
+        threadId,
+        sessionId,
+        driver,
+        projectPath,
+        thread.settings
+      )
+    }
 
     // The switch succeeded (a replacement session is bound). Best-effort release
     // the old harness's session so its native context, prompt cache, and storage
@@ -4868,6 +4892,10 @@ export class ChatEngine {
         attachments,
         userMessageId: messageId
       })
+      this.sessionModelIds.set(sessionId, {
+        providerId: settings.providerId,
+        modelId: settings.modelId
+      })
       this.markSessionWorking(sessionId)
       return publicUserMessage
     }
@@ -5137,6 +5165,10 @@ export class ChatEngine {
           userMessageId: messageId
         }
         await driver.sendPrompt(projectPath, prompt)
+        this.sessionModelIds.set(sessionId, {
+          providerId: settings.providerId,
+          modelId: settings.modelId
+        })
         void scheduleAutoTitle()
         promptDispatched = true
       } catch (error) {
@@ -5206,6 +5238,10 @@ export class ChatEngine {
             ? CHAT_WEB_ONLY_TOOLS
             : undefined,
         userMessageId: messageId
+      })
+      this.sessionModelIds.set(sessionId, {
+        providerId: settings.providerId,
+        modelId: settings.modelId
       })
       void scheduleAutoTitle()
       if (origin === 'internal' && this.isCoordinatorThread(targetThread)) {
@@ -12915,6 +12951,148 @@ export class ChatEngine {
     } finally {
       this.activeCompactions.delete(thread.sessionId)
     }
+  }
+
+  /**
+   * Compact a reused native session before it resumes under a newly selected
+   * model whose context window is much smaller than the thread's last-known
+   * native usage. Best-effort maintenance: a failed compaction never blocks the
+   * turn — the harness trims its own history when the window is genuinely over.
+   */
+  private async maybeAutoCompactOnModelSwitch(
+    projectId: string,
+    threadId: string,
+    sessionId: string,
+    driver: HarnessDriver,
+    projectPath: string,
+    settings: ThreadSettings
+  ): Promise<void> {
+    if (driver.capabilities?.compaction !== true || !driver.compactSession) return
+    if (this.activeCompactions.has(sessionId)) return
+    const state = this.sessionStatuses.get(sessionId)?.state
+    if (state === 'working' || state === 'waiting') return
+
+    const lastModel = await this.lastSessionModel(projectId, threadId, sessionId)
+    if (!lastModel) return
+    if (lastModel.providerId === settings.providerId && lastModel.modelId === settings.modelId) {
+      return
+    }
+
+    const contextWindow = this.modelContextWindow(
+      projectId,
+      settings.providerId,
+      settings.modelId
+    )
+    if (contextWindow === undefined) return
+    const contextUsed = await this.lastSessionContextUsed(
+      projectId,
+      threadId,
+      driver.id,
+      lastModel.providerId
+    )
+    if (contextUsed === undefined) return
+
+    if (!decideModelSwitchCompaction({ contextWindow, contextUsed }).shouldCompact) return
+
+    try {
+      this.activeCompactions.add(sessionId)
+      await driver.compactSession(projectPath, sessionId, settings)
+      this.broadcastToast(
+        `Auto-compacted the thread's context before switching to ${settings.modelId}.`,
+        'info'
+      )
+      Logger.dev('Auto-compacted native session on model switch', {
+        projectId,
+        threadId,
+        sessionId,
+        from: `${lastModel.providerId}/${lastModel.modelId}`,
+        to: `${settings.providerId}/${settings.modelId}`,
+        contextUsed,
+        contextWindow
+      })
+    } catch (error) {
+      Logger.error('Auto-compaction on model switch failed (resuming without it):', {
+        projectId,
+        threadId,
+        sessionId,
+        error: rawErrorMessage(error)
+      })
+    } finally {
+      this.activeCompactions.delete(sessionId)
+    }
+  }
+
+  /** Last provider/model a session ran under, from this run's dispatches or
+   *  the mirrored transcript (the map backfills the first turn after restart). */
+  private async lastSessionModel(
+    projectId: string,
+    threadId: string,
+    sessionId: string
+  ): Promise<{ providerId: string; modelId: string } | null> {
+    const recorded = this.sessionModelIds.get(sessionId)
+    if (recorded?.providerId && recorded.modelId) return recorded
+    try {
+      const records = await this.threadManager.loadMessageRecords(projectId, threadId)
+      for (const message of [...records].reverse()) {
+        if (message.role !== 'assistant') continue
+        if (message.providerId && message.modelId) {
+          const backfilled = { providerId: message.providerId, modelId: message.modelId }
+          this.sessionModelIds.set(sessionId, backfilled)
+          return backfilled
+        }
+      }
+    } catch {
+      // Mirror unavailable — the model switch is treated as undetectable.
+    }
+    return null
+  }
+
+  /** Last-known native context usage (tokens) for the thread's session.
+   *  Prefers the renderer-committed thread snapshot for the same harness and
+   *  provider, then falls back to the latest mirrored assistant message. */
+  private async lastSessionContextUsed(
+    projectId: string,
+    threadId: string,
+    harnessId: string,
+    providerId: string
+  ): Promise<number | undefined> {
+    try {
+      const thread = await this.threadManager.getThread(projectId, threadId)
+      const stored = thread?.contextUsage
+      if (stored?.harnessId === harnessId && stored.providerId === providerId) {
+        if (typeof stored.contextUsed === 'number' && stored.contextUsed > 0) {
+          return stored.contextUsed
+        }
+      }
+    } catch {
+      // Fall through to the mirrored transcript.
+    }
+    try {
+      const records = await this.threadManager.loadMessageRecords(projectId, threadId)
+      for (const message of [...records].reverse()) {
+        if (message.role !== 'assistant') continue
+        if (message.providerId && message.providerId !== providerId) continue
+        if (typeof message.contextUsed === 'number' && message.contextUsed > 0) {
+          return message.contextUsed
+        }
+      }
+    } catch {
+      // No usable usage signal — compaction cannot be judged.
+    }
+    return undefined
+  }
+
+  /** Context window of a provider/model from the cached provider catalog. */
+  private modelContextWindow(
+    projectId: string,
+    providerId: string | undefined,
+    modelId: string | undefined
+  ): number | undefined {
+    if (!providerId || !modelId) return undefined
+    return this.providerCache
+      .get(projectId)
+      ?.flatMap((catalog) => catalog.models)
+      .find((model) => model.providerId === providerId && model.id === modelId)?.contextWindow
   }
 
   // ─── Driver resolution ────────────────────────────────────────────────────
