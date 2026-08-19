@@ -44,6 +44,7 @@ import {
   tokenUsageAttribution,
   type AttributionMode
 } from './token-usage-attribution'
+import { leanAgentNameForMode } from '../opencode/opencode-agent-definitions'
 import { PermissionPolicy, type PermissionDecisionResult } from '../permissions/permission-policy'
 import {
   validateBoundedString,
@@ -75,6 +76,7 @@ import {
 import {
   IMAGE_DESCRIPTOR_PROMPT,
   imageDescriptorInactivityTimeoutMs,
+  readablePartPath,
   resolveSelfContainedAttachment,
   type ImageDescriptorExecutorRequest,
   type ImageDescriptorResult,
@@ -5282,6 +5284,9 @@ export class ChatEngine {
           isChatThread && !chatFileSystemEnabled && settings.providerId && settings.modelId
             ? CHAT_WEB_ONLY_TOOLS
             : undefined,
+        agent: isChatThread
+          ? leanAgentNameForMode(chatFileSystemEnabled ? 'file-system-chat' : 'inbox-chat')
+          : undefined,
         userMessageId: messageId
       })
       this.sessionModelIds.set(sessionId, {
@@ -5458,6 +5463,7 @@ export class ChatEngine {
         systemPrompt,
         allowedTools: TEMPORARY_CHAT_ALLOWED_TOOLS,
         readOnly: true,
+        agent: leanAgentNameForMode('ephemeral'),
         userMessageId
       }
       tokenUsageAttribution.recordPromptAttribution(
@@ -5561,6 +5567,7 @@ export class ChatEngine {
         text,
         attachments: [],
         readOnly: false,
+        agent: leanAgentNameForMode('pr-compose'),
         userMessageId: turnId
       }
       tokenUsageAttribution.recordPromptAttribution(
@@ -6482,13 +6489,18 @@ export class ChatEngine {
         () => new ImageDescriptorInactivityError(timeoutMs, attempt, nextTimeoutMs)
       )
       const imageDescriptionPrompt = await this.cioPrompt('image-description')
+      const readablePath = await readablePartPath(image)
+      const promptText = readablePath
+        ? `${imageDescriptionPrompt}\n\nIf you cannot decode the inline image attached to this message, read the image from this path with your file-reading tools instead:\n${readablePath}`
+        : imageDescriptionPrompt
       const request: SendPromptOptions = {
         sessionId,
         settings,
-        text: imageDescriptionPrompt,
+        text: promptText,
         attachments: [attachment],
         readOnly: true,
         allowedTools: [],
+        agent: leanAgentNameForMode('image-description'),
         userMessageId: createMessageId()
       }
       tokenUsageAttribution.recordPromptAttribution(
@@ -9498,6 +9510,7 @@ export class ChatEngine {
           systemPrompt: brainstormSystemPrompt,
           allowedTools: BRAINSTORM_RESEARCH_ALLOWED_TOOLS,
           readOnly: true,
+          agent: leanAgentNameForMode('brainstorm'),
           ...(useStructuredOutput
             ? {
                 structuredOutput: {

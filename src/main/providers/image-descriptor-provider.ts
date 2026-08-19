@@ -427,6 +427,18 @@ export async function readPartSourceBytes(entry: ResolvedImageEntry): Promise<Bu
 }
 
 /**
+ * The real absolute path behind a local `path` source, or `null` when the
+ * source is embedded (`data:`), remote (`http(s)://`), or unresolvable. The
+ * descriptor prompt uses this so a model that cannot decode inline image data
+ * can still read the retained file with its own tools.
+ */
+export async function readablePartPath(entry: ResolvedImageEntry): Promise<string | null> {
+  if (entry.type !== 'path' || entry.attachment.url.startsWith('data:')) return null
+  if (/^https?:\/\//u.test(entry.attachment.url)) return null
+  return resolveReadablePartPath(entry)
+}
+
+/**
  * Resolve a local `path` source into a self-contained data-URL attachment by
  * reading its bytes in the main process. This keeps the vision session from
  * re-reading the original file path — essential for transient sources (temp
