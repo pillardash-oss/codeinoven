@@ -346,6 +346,11 @@ async function setLanguage(
   view: EditorView
 ): Promise<void> {
   try {
+    if (path.toLowerCase().endsWith('.svelte')) {
+      const { svelte } = await import('@replit/codemirror-lang-svelte')
+      view.dispatch({ effects: compartment.reconfigure(svelte()) })
+      return
+    }
     const { languages } = await import('@codemirror/language-data')
     const description = findLanguage(
       languages as ReadonlyArray<{
