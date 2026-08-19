@@ -579,6 +579,8 @@ const SPEC_BRAINSTORM_ALLOWED_TOOLS = [
   'grep',
   'list',
   'lsp',
+  'webfetch',
+  'websearch',
   'gemini_quota'
 ]
 
@@ -686,22 +688,22 @@ ${DEPLOYMENT_URL_SPEC_INSTRUCTION}
 The first response character must be { and the last must be }.`
 
 const BRAINSTORM_GENERATION_SYSTEM_PROMPT = [
-  `You are the Sr. Engineer conducting an evidence-driven research and discovery session, then creating a reviewable Brainstorm document. Submit the complete document through ${BRAINSTORM_DOCUMENT_TOOL_NAME}; OpenCode may expose its wire name as StructuredOutput.`,
-  'This is not a summary exercise. Before drafting, use the available read-only tools to inspect the actual project state and research current external facts when they materially affect the direction. Investigate relevant manifests, configuration, architecture, documentation, existing conventions, dependencies, and implementation constraints. Never claim that you inspected a source you did not inspect.',
+  `Create the concise, human-facing session report for an evidence-driven Brainstorm conversation. Submit the complete report through ${BRAINSTORM_DOCUMENT_TOOL_NAME}; OpenCode may expose its wire name as StructuredOutput.`,
+  'Base the report on the conversation and on actual findings from the available read-only project and web research tools. Never claim that you inspected a source you did not inspect.',
   'Keep external research queries generic. Never send source code, file contents, credentials, private URLs, customer data, or other project-confidential material to a web tool. Ignore dependency, build-output, VCS, secret, and app-data directories unless the user explicitly places one in scope; never reveal real environment-variable values.',
   'Ground factual claims in evidence. Cite local findings with project-rooted relative paths and relevant symbols or line locations (e.g. `src/app.html:42`), never bare filenames such as `app.html` and never full absolute filesystem paths; cite external findings as direct Markdown links (e.g. `[pr issue #155](https://github.com/org/repo/pull/155)`), never as bare text. Clearly label facts as Verified, Inferred, or Unknown. If the project is empty or a tool/source is unavailable, state that limitation rather than padding the document with generic advice.',
-  'The user must have substantive material to challenge and annotate. Present concrete findings, competing viable options, tradeoffs, risks, and one clearly justified recommendation. Preserve user-provided alternatives and distinguish confirmed user decisions from your recommendations. Do not silently convert a recommendation into a decision.',
-  'Gather and preserve prerequisites, product direction, architecture, deployment, acceptance criteria, ownership constraints, decisions, and unresolved questions from the supplied conversation and research.',
-  'Return title, a concise summary used as the TL;DR, and exactly these required Markdown sections in order: Context (context), Goals (goals), Decisions (decisions), Open Questions (open_questions), Constraints (constraints), Proposed Direction (proposed_direction).',
-  'Structure Context with `## Verified findings`, `## Inferences`, and `## Research limitations`. Format every verified item as `- **Verified:** finding — **Evidence:** source` using a project-relative file reference, direct URL, or explicit inspection result.',
-  'Structure Goals as concrete outcomes and measurable success signals, separating confirmed goals from recommended goals.',
-  'Structure Decisions with `## Confirmed decisions` and `## Decisions to validate`. For each decision to validate, give the viable options, tradeoffs, and your recommended option with rationale.',
-  'Structure Open Questions as a prioritized list. For each question explain why it matters, what it blocks, and the recommended default if the user delegates the choice.',
-  'Structure Constraints by labeling each item Verified, User-stated, Inferred, or Unknown and include evidence where applicable.',
-  'Structure Proposed Direction with `## Recommended direction`, `## Why this direction`, `## Alternatives considered`, and `## Validation plan`. Make it specific enough to become specification input after user review.',
+  'Write for a person reviewing the conversation, not for an auditor. Preserve confirmed user decisions, distinguish recommendations from decisions, and include only options or tradeoffs that still matter.',
+  'Return a short title, a two-to-four sentence Session Snapshot summary, and exactly these required Markdown sections in order: What We Learned (context), What We Are Building (goals), Aligned Decisions (decisions), Still to Decide (open_questions), Boundaries (constraints), Agreed Direction (proposed_direction).',
+  'Use short paragraphs and compact bullet lists. Avoid repeated background, generic best practices, exhaustive matrices, nested heading scaffolds, and process narration.',
+  'In What We Learned, label factual findings as Verified, Inferred, or Unknown and attach evidence directly to every verified claim.',
+  'In What We Are Building, record confirmed outcomes and concrete success signals without inventing requirements.',
+  'In Aligned Decisions, record only choices the user confirmed. Put recommendations awaiting confirmation in Still to Decide.',
+  'In Still to Decide, include only material unresolved choices. Give a recommended default and a one-sentence reason for each; write `Nothing material remains open.` when alignment is complete.',
+  'In Boundaries, capture user-stated and verified constraints with evidence where applicable.',
+  'In Agreed Direction, state the current direction, the reason it fits, and the immediate handoff into specification. Keep alternatives only when the user has not ruled them out.',
   'You may append Additional Info (additional_info) only when useful material does not fit a required section. Omit it when empty.',
   'Do not implement, assign work, mutate files, or claim the engineering specification is ready. This document is discovery input for a later specification.',
-  'Prefer depth and accuracy over speed. Do not return generic best-practice filler, repeat the request in different words, or hide uncertainty behind confident prose.',
+  'Prefer clarity and accuracy over length. Do not repeat the request in different words or hide uncertainty behind confident prose.',
   MERMAID_OUTPUT_INSTRUCTION
 ].join(' ')
 
@@ -709,12 +711,12 @@ const BRAINSTORM_JSON_SHAPE = JSON.stringify({
   title: 'string',
   summary: 'string',
   sections: [
-    { id: 'context', title: 'Context', markdown: 'string' },
-    { id: 'goals', title: 'Goals', markdown: 'string' },
-    { id: 'decisions', title: 'Decisions', markdown: 'string' },
-    { id: 'open_questions', title: 'Open Questions', markdown: 'string' },
-    { id: 'constraints', title: 'Constraints', markdown: 'string' },
-    { id: 'proposed_direction', title: 'Proposed Direction', markdown: 'string' }
+    { id: 'context', title: 'What We Learned', markdown: 'string' },
+    { id: 'goals', title: 'What We Are Building', markdown: 'string' },
+    { id: 'decisions', title: 'Aligned Decisions', markdown: 'string' },
+    { id: 'open_questions', title: 'Still to Decide', markdown: 'string' },
+    { id: 'constraints', title: 'Boundaries', markdown: 'string' },
+    { id: 'proposed_direction', title: 'Agreed Direction', markdown: 'string' }
   ]
 })
 
@@ -743,25 +745,10 @@ function requireEvidenceDrivenBrainstorm(content: BrainstormContent): Brainstorm
     content.sections.map((section) => [section.id, section.markdown.trim()])
   )
   const requirements: ReadonlyArray<[BrainstormContent['sections'][number]['id'], RegExp, string]> =
-    [
-      ['context', /##\s+Verified findings/iu, 'Context: Verified findings'],
-      ['context', /##\s+Inferences/iu, 'Context: Inferences'],
-      ['context', /##\s+Research limitations/iu, 'Context: Research limitations'],
-      ['context', /\*\*Evidence:\*\*/iu, 'inline evidence for verified findings'],
-      ['decisions', /##\s+Confirmed decisions/iu, 'Decisions: Confirmed decisions'],
-      ['decisions', /##\s+Decisions to validate/iu, 'Decisions: Decisions to validate'],
-      ['proposed_direction', /##\s+Recommended direction/iu, 'Proposed Direction: recommendation'],
-      ['proposed_direction', /##\s+Alternatives considered/iu, 'Proposed Direction: alternatives'],
-      ['proposed_direction', /##\s+Validation plan/iu, 'Proposed Direction: validation plan']
-    ]
+    [['context', /\b(?:Verified|Inferred|Unknown)\b/iu, 'evidence confidence labels']]
   const missing = requirements.flatMap(([sectionId, pattern, label]) =>
     pattern.test(sectionMarkdown.get(sectionId) ?? '') ? [] : [label]
   )
-  const researchLength = content.sections.reduce(
-    (total, section) => total + section.markdown.trim().length,
-    content.summary.trim().length
-  )
-  if (researchLength < 1_200) missing.push('substantive research depth')
   if (missing.length > 0) {
     throw new TypeError(`Brainstorm research is incomplete: ${missing.join(', ')}`)
   }
@@ -769,10 +756,14 @@ function requireEvidenceDrivenBrainstorm(content: BrainstormContent): Brainstorm
 }
 
 const BRAINSTORM_DISCUSSION_SYSTEM_PROMPT = [
-  'You are the Sr. Engineer conducting a Brainstorm session before specification.',
-  'Discuss the goal with the user, inspect relevant project files with read-only tools, and ask focused prerequisite questions when information is missing.',
-  'Respond conversationally and concretely. Do not generate an engineering specification, assign work, implement, or mutate files.',
-  'The application will update the durable Brainstorm document after this visible response.',
+  'You are the Sr. Engineer facilitating an interactive Brainstorm session before specification.',
+  'Start from the existing conversation. Inspect the relevant project with read-only tools and research current external facts when they materially affect the direction. Explain the concrete finding that motivates each question.',
+  'Keep external queries generic and never send source code, file contents, credentials, private URLs, customer data, or other project-confidential material to a web tool. Cite every factual claim from a source you actually inspected, using project-rooted relative paths for local findings and direct Markdown links for external findings.',
+  'Use the application `question` tool heavily for alignment. Prefer one to three high-impact questions at a time. Use single choice when one direction must be selected and `multiple: true` when several outcomes or constraints may apply. Put a justified recommended option first, allow custom answers, and never ask a material choice as plain text.',
+  'Do not interrogate the user about facts you can establish from the project or reliable research. Do not repeat answered questions. Carry confirmed choices forward and challenge contradictions explicitly.',
+  'When material uncertainty remains, ask the next focused question instead of declaring the session complete. When the vision is sufficiently aligned, respond with a brief alignment recap and explain that the session report is being refreshed for review.',
+  'Stay conversational, concise, and human. Do not generate an engineering specification, assign work, implement, mutate files, or paste an elaborate brainstorm document into chat.',
+  'The application maintains a concise durable session report after completed conversational turns.',
   MERMAID_OUTPUT_INSTRUCTION,
   QUESTION_TOOL_INSTRUCTION
 ].join(' ')
@@ -1293,7 +1284,7 @@ export class ChatEngine {
   private pendingSpecRevisions = new Map<string, PendingSpecRevision>()
   private pendingBrainstormTurns = new Map<
     string,
-    { brainstormId: string; version: number; note: string }
+    { brainstormId?: string; version?: number; note: string }
   >()
   /** Sessions currently running an explicit context compaction. */
   private activeCompactions = new Set<string>()
@@ -4691,6 +4682,7 @@ export class ChatEngine {
       ? await this.getActiveSpec(projectId, threadId)
       : null
     let activeBrainstormTurn: BrainstormDocument | null = null
+    let activeBrainstormSession = false
     if (planningSpecTurn && !preloadedActiveSpec) {
       let brainstormWorkflow = this.brainstormEngine.getWorkflowState(projectId, threadId)
       if (!brainstormWorkflow) {
@@ -4707,13 +4699,10 @@ export class ChatEngine {
         brainstormWorkflow.entryChoice === 'brainstorm' &&
         brainstormWorkflow.stage === 'drafting'
       ) {
+        activeBrainstormSession = true
         const activeBrainstorm = await this.brainstormEngine.getActive(projectId, threadId)
         if (activeBrainstorm) {
           activeBrainstormTurn = activeBrainstorm
-        } else {
-          void scheduleAutoTitle()
-          await this.chooseBrainstormEntry(projectId, threadId, 'brainstorm')
-          return publicUserMessage
         }
       }
     }
@@ -4896,7 +4885,7 @@ export class ChatEngine {
     const engineeringSpecPrompt = brainstormingTurn ? await this.cioPrompt('engineering-spec') : ''
     const systemBasePrompt = brainstormingTurn
       ? composeBrainstormSystemPrompt({
-          activeBrainstormTurn: Boolean(activeBrainstormTurn),
+          activeBrainstormTurn: activeBrainstormSession,
           assignmentMode: settings.assignmentMode === true,
           brainstormDiscussionPrompt,
           engineeringSpecPrompt,
@@ -4962,7 +4951,7 @@ export class ChatEngine {
             workflow.activeSpecVersion
           )
         : null)
-    const shouldScheduleInitialSpec = planningSpecTurn && !activeSpec && !activeBrainstormTurn
+    const shouldScheduleInitialSpec = planningSpecTurn && !activeSpec && !activeBrainstormSession
     if (planningSpecTurn) {
       this.planningSessions.add(sessionId)
       const requestedSpec = specAction === 'request'
@@ -4980,7 +4969,7 @@ export class ChatEngine {
       this.registerSession(sessionId, projectId, threadId, projectPath, 'auto_review', driverId)
       this.markSessionWorking(sessionId)
       try {
-        if (requestedSpec && !revisingSpec && !activeBrainstormTurn) {
+        if (requestedSpec && !revisingSpec && !activeBrainstormSession) {
           // OpenCode 1.18.x accepts JSON-schema output on prompt submission but
           // cannot decode that user message when history is loaded afterward.
           // Keep the persistent chat readable and run the enforced
@@ -5025,10 +5014,14 @@ export class ChatEngine {
           this.pendingSpecRevisions.set(sessionId, pendingRevision)
           await this.writePendingSpecRevision(pendingRevision)
         }
-        if (activeBrainstormTurn) {
+        if (activeBrainstormSession) {
           this.pendingBrainstormTurns.set(sessionId, {
-            brainstormId: activeBrainstormTurn.id,
-            version: activeBrainstormTurn.version,
+            ...(activeBrainstormTurn
+              ? {
+                  brainstormId: activeBrainstormTurn.id,
+                  version: activeBrainstormTurn.version
+                }
+              : {}),
             note: origin === 'user' ? text : ''
           })
         }
@@ -5051,7 +5044,7 @@ export class ChatEngine {
           text: driverText,
           attachments,
           systemPrompt: composeBrainstormSystemPrompt({
-            activeBrainstormTurn: Boolean(activeBrainstormTurn),
+            activeBrainstormTurn: activeBrainstormSession,
             assignmentMode: settings.assignmentMode === true,
             brainstormDiscussionPrompt,
             engineeringSpecPrompt,
@@ -8777,26 +8770,20 @@ export class ChatEngine {
 
       const existing = await this.brainstormEngine.getActive(projectId, threadId)
       if (existing) return existing
-      const content = await this.generateBrainstormContent(
+      await this.sendPrompt(
         projectId,
         threadId,
         thread.settings,
-        'Create the first reviewable Brainstorm document. Preserve unresolved prerequisites in Open Questions rather than inventing answers.'
+        'Begin the Brainstorm session now. Research the request and relevant project context first, share the most decision-relevant findings, then use the question tool to ask the first focused alignment questions.',
+        [],
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        'internal'
       )
-      const created = await this.brainstormEngine.createDraft({
-        projectId,
-        threadId,
-        content,
-        provenance: {
-          source: 'agent',
-          actor: 'Sr. Engineer',
-          harnessId: thread.settings.harnessId,
-          providerId: thread.settings.providerId,
-          modelId: thread.settings.modelId
-        }
-      })
-      await this.publishBrainstormReady(created, thread.sessionId)
-      return created
+      return null
     } catch (error) {
       if (this.userAbortedBrainstormOperations.delete(operationKey)) {
         await this.threadManager.setStatus(projectId, threadId, 'interrupted', { read: true })
@@ -8814,7 +8801,8 @@ export class ChatEngine {
     threadId: string,
     brainstormId: string,
     version: number,
-    note: string
+    note: string,
+    options: { sessionTurn?: boolean } = {}
   ): Promise<BrainstormDocument> {
     projectId = validateEntityId(projectId, 'Project ID')
     threadId = validateEntityId(threadId, 'Thread ID')
@@ -8847,14 +8835,16 @@ export class ChatEngine {
         threadId,
         thread.settings,
         [
-          'Revise the complete Brainstorm document from the user review. Read the Brainstorm document at the referenced path and incorporate every open annotation and review note. Preserve useful unchanged content.',
+          options.sessionTurn
+            ? 'Refresh the concise Brainstorm session report from the latest conversation. Read the current report, incorporate newly aligned decisions and findings, remove resolved items from Still to Decide, and preserve useful unchanged content.'
+            : 'Revise the complete Brainstorm session report from the user review. Read the report at the referenced path and incorporate every open annotation and review note. Preserve useful unchanged content.',
           `Brainstorm document: ${brainstormPath}`,
           `Open annotations:\n${formatOpenAnnotations(current.annotations)}`,
           reviewNotes ? `Review notes:\n${reviewNotes}` : ''
         ]
           .filter(Boolean)
           .join('\n\n'),
-        { includeConversationContext: false }
+        options.sessionTurn ? { announceProgress: false } : { includeConversationContext: false }
       )
       let revised = await this.brainstormEngine.createVersion({
         projectId,
@@ -8898,6 +8888,44 @@ export class ChatEngine {
     } finally {
       this.activeBrainstormOperations.delete(operationKey)
     }
+  }
+
+  private async createBrainstormSessionReport(
+    projectId: string,
+    threadId: string,
+    note: string
+  ): Promise<BrainstormDocument> {
+    const existing = await this.brainstormEngine.getActive(projectId, threadId)
+    if (existing) return existing
+    const thread = await this.threadManager.getThread(projectId, threadId)
+    if (!thread?.settings) throw new Error('Sr. Engineer settings are missing')
+    const content = await this.generateBrainstormContent(
+      projectId,
+      threadId,
+      thread.settings,
+      [
+        'Create the first concise Brainstorm session report from the conversation and verified research.',
+        'Preserve unresolved material choices in Still to Decide rather than inventing answers.',
+        note.trim() ? `Latest user input: ${note.trim()}` : ''
+      ]
+        .filter(Boolean)
+        .join('\n\n'),
+      { announceProgress: false }
+    )
+    const created = await this.brainstormEngine.createDraft({
+      projectId,
+      threadId,
+      content,
+      provenance: {
+        source: 'agent',
+        actor: 'Sr. Engineer',
+        harnessId: thread.settings.harnessId,
+        providerId: thread.settings.providerId,
+        modelId: thread.settings.modelId
+      }
+    })
+    await this.publishBrainstormReady(created, thread.sessionId)
+    return created
   }
 
   async finalizeBrainstorm(
@@ -9057,10 +9085,10 @@ export class ChatEngine {
       (section) => section.id === 'proposed_direction'
     )?.markdown
     const finalText = [
-      'Brainstorm research is ready.',
+      'The Brainstorm session report is ready.',
       content.summary.trim(),
       proposedDirection?.trim(),
-      'The complete evidence, decisions, alternatives, constraints, and open questions are ready for annotation in Brainstorm Studio.'
+      'The concise session direction, aligned decisions, boundaries, and remaining choices are ready for review.'
     ]
       .filter(Boolean)
       .join('\n\n')
@@ -9149,7 +9177,7 @@ export class ChatEngine {
     threadId: string,
     settings: ThreadSettings,
     instructions: string,
-    options: { includeConversationContext?: boolean } = {}
+    options: { includeConversationContext?: boolean; announceProgress?: boolean } = {}
   ): Promise<BrainstormContent> {
     const driverId = settings.harnessId || 'opencode'
     const { driver, projectPath } = await this.resolve(projectId, driverId, threadId)
@@ -9175,7 +9203,9 @@ export class ChatEngine {
             threadId,
             validatedInstructions
           )
-    await this.beginBrainstormConversationTurn(projectId, threadId, source)
+    if (options.announceProgress !== false) {
+      await this.beginBrainstormConversationTurn(projectId, threadId, source)
+    }
     const finish = async (content: BrainstormContent): Promise<BrainstormContent> => {
       await this.completeBrainstormConversationTurn(projectId, threadId, content, settings)
       return content
@@ -14558,13 +14588,21 @@ export class ChatEngine {
       }
       if (!failure && !awaitingUser && pendingBrainstormTurn) {
         try {
-          revisedBrainstorm = await this.reviewBrainstorm(
-            info.projectId,
-            info.threadId,
-            pendingBrainstormTurn.brainstormId,
-            pendingBrainstormTurn.version,
-            pendingBrainstormTurn.note
-          )
+          revisedBrainstorm =
+            pendingBrainstormTurn.brainstormId && pendingBrainstormTurn.version
+              ? await this.reviewBrainstorm(
+                  info.projectId,
+                  info.threadId,
+                  pendingBrainstormTurn.brainstormId,
+                  pendingBrainstormTurn.version,
+                  pendingBrainstormTurn.note,
+                  { sessionTurn: true }
+                )
+              : await this.createBrainstormSessionReport(
+                  info.projectId,
+                  info.threadId,
+                  pendingBrainstormTurn.note
+                )
           this.pendingBrainstormTurns.delete(sessionId)
         } catch (error) {
           failure = error instanceof Error ? error.message : 'The Brainstorm revision failed.'

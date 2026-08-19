@@ -4,7 +4,7 @@ export function exportBrainstormMarkdown(document: BrainstormDocument): string {
   return [
     `# ${document.content.title}`,
     '',
-    '## TL;DR',
+    '## Session Snapshot',
     '',
     document.content.summary,
     '',

@@ -359,7 +359,7 @@ export const APPLICATION_AGENT_TOOLS: ApplicationAgentToolDefinition[] = [
   {
     name: BRAINSTORM_DOCUMENT_TOOL_NAME,
     transportName: 'StructuredOutput',
-    description: `Submit a complete structured Brainstorm document for ${APP_NAME}. Every revision replaces the complete document; Additional Info is optional and used only when the core sections do not fit useful context.`,
+    description: `Submit the concise, human-facing Brainstorm session report for ${APP_NAME}. Every revision replaces the complete report; Additional Notes is optional and used only when important context does not fit the core sections.`,
     inputSchema: BRAINSTORM_DOCUMENT_JSON_SCHEMA,
     source: 'application',
     sentWhen: 'Initial Brainstorm generation and every Brainstorm review turn before finalization'

@@ -1,16 +1,32 @@
 import type { BrainstormContent, BrainstormSection, BrainstormSectionId } from '../types'
 
 export const BRAINSTORM_SECTION_DEFINITIONS = [
-  { id: 'context', title: 'Context', required: true },
-  { id: 'goals', title: 'Goals', required: true },
-  { id: 'decisions', title: 'Decisions', required: true },
-  { id: 'open_questions', title: 'Open Questions', required: true },
-  { id: 'constraints', title: 'Constraints', required: true },
-  { id: 'proposed_direction', title: 'Proposed Direction', required: true },
-  { id: 'additional_info', title: 'Additional Info', required: false }
+  { id: 'context', title: 'What We Learned', legacyTitle: 'Context', required: true },
+  { id: 'goals', title: 'What We Are Building', legacyTitle: 'Goals', required: true },
+  { id: 'decisions', title: 'Aligned Decisions', legacyTitle: 'Decisions', required: true },
+  {
+    id: 'open_questions',
+    title: 'Still to Decide',
+    legacyTitle: 'Open Questions',
+    required: true
+  },
+  { id: 'constraints', title: 'Boundaries', legacyTitle: 'Constraints', required: true },
+  {
+    id: 'proposed_direction',
+    title: 'Agreed Direction',
+    legacyTitle: 'Proposed Direction',
+    required: true
+  },
+  {
+    id: 'additional_info',
+    title: 'Additional Notes',
+    legacyTitle: 'Additional Info',
+    required: false
+  }
 ] as const satisfies ReadonlyArray<{
   id: BrainstormSectionId
   title: string
+  legacyTitle: string
   required: boolean
 }>
 
@@ -28,7 +44,7 @@ export const BRAINSTORM_DOCUMENT_JSON_SCHEMA = {
     summary: {
       type: 'string',
       minLength: 1,
-      description: 'Concise TL;DR of the brainstorm document.'
+      description: 'Two-to-four sentence snapshot of the Brainstorm session.'
     },
     sections: {
       type: 'array',
@@ -68,8 +84,10 @@ function parseSection(value: unknown, index: number): BrainstormSection {
   const definition = DEFINITION_BY_ID.get(id)
   if (!definition) throw new TypeError(`Unsupported brainstorm section: ${id}`)
   const title = requireString(value.title, `Brainstorm section ${id} title`)
-  if (title !== definition.title) {
-    throw new TypeError(`Brainstorm section ${id} title must be "${definition.title}"`)
+  if (title !== definition.title && title !== definition.legacyTitle) {
+    throw new TypeError(
+      `Brainstorm section ${id} title must be "${definition.title}" or "${definition.legacyTitle}"`
+    )
   }
   return {
     id,
