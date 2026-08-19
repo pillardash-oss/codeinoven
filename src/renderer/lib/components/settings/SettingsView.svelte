@@ -29,6 +29,7 @@
     Keyboard,
     Loader2,
     Monitor,
+    MonitorUp,
     Moon,
     Puzzle,
     Plug,
@@ -50,6 +51,7 @@
   import ProfileSettingsTab from './ProfileSettingsTab.svelte'
   import CloudDeploymentsSettingsTab from './CloudDeploymentsSettingsTab.svelte'
   import CioPromptsSettings from './CioPromptsSettings.svelte'
+  import CuaBridgeSettings from './CuaBridgeSettings.svelte'
 
   type SelectChangeEvent = Event & { currentTarget: HTMLSelectElement }
   interface Props {
@@ -104,6 +106,7 @@
     { id: 'cio-prompts', label: 'CIO Prompts', icon: MessageSquareCode },
     { id: 'harnesses', label: 'Harnesses', icon: Plug },
     { id: 'utilities', label: 'Utilities', icon: Puzzle },
+    { id: 'computer-use', label: 'Computer use', icon: MonitorUp },
     { id: 'keymap', label: 'Keymap', icon: Keyboard },
     { id: 'remote', label: 'Remote', icon: Globe },
     { id: 'cloud-deployments', label: 'Cloud Deployments', icon: Cloud },
@@ -658,6 +661,8 @@
       <ProvidersView />
     {:else if section === 'utilities'}
       <UtilitiesView />
+    {:else if section === 'computer-use'}
+      <CuaBridgeSettings />
     {:else if section === 'keymap'}
       <KeymapSettingsTab />
     {:else if section === 'remote'}
