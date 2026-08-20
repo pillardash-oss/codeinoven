@@ -493,6 +493,8 @@ class ContextSidebarState {
   toggle(): void {
     if (this.browserVisible) {
       this.browserVisible = false
+      const context = this.activeProjectContext
+      if (context) context.visible = false
       return
     }
     const context = this.activeProjectId ? this.ensureProjectContext(this.activeProjectId) : null
@@ -512,6 +514,8 @@ class ContextSidebarState {
     }
     if (this.browserVisible) {
       this.browserVisible = false
+      const context = this.activeProjectContext
+      if (context) context.visible = false
       return
     }
     const context = this.activeProjectContext

@@ -8,7 +8,6 @@
     LoaderCircle,
     RotateCw,
     SquareTerminal,
-    Trash2,
     X
   } from '@lucide/svelte'
   import { invoke, subscribe } from '$lib/ipc.svelte'
@@ -23,9 +22,10 @@
 
   interface Props {
     tab: BrowserContextTab
+    fullscreen?: boolean
   }
 
-  let { tab }: Props = $props()
+  let { tab, fullscreen = false }: Props = $props()
 
   function initialPageState(): BrowserPageState {
     return {
@@ -46,6 +46,9 @@
   let consoleEntries = $state<BrowserConsoleEntry[]>([])
   let consoleElement = $state<HTMLDivElement>()
   let errorCount = $derived(consoleEntries.filter((entry) => entry.level === 'error').length)
+  let consoleToggleLabel = $derived(
+    activeSurface === 'console' ? 'Show browser page' : 'Show browser console'
+  )
 
   const attachContentElement: Attachment<HTMLDivElement> = (element) => {
     contentElement = element
@@ -130,11 +133,6 @@
     }
     await tick()
     await showAtCurrentBounds()
-  }
-
-  async function clearConsole(): Promise<void> {
-    await invoke('browser:clearConsole', tab.id)
-    consoleEntries = []
   }
 
   function levelClass(level: BrowserConsoleLevel): string {
@@ -258,6 +256,33 @@
         />
       {/if}
     </label>
+    <button
+      type="button"
+      class={[
+        'relative flex h-7 shrink-0 items-center justify-center rounded-md transition-colors',
+        fullscreen ? 'gap-1.5 px-2 text-[11px] font-medium' : 'w-7',
+        activeSurface === 'console'
+          ? 'bg-elevated text-foreground'
+          : 'text-dimmed hover:bg-elevated hover:text-foreground'
+      ]}
+      aria-label={consoleToggleLabel}
+      aria-pressed={activeSurface === 'console'}
+      title={consoleToggleLabel}
+      onclick={() => void selectSurface(activeSurface === 'console' ? 'page' : 'console')}
+    >
+      <SquareTerminal size={13} />
+      {#if fullscreen}
+        <span>Console</span>
+        {#if errorCount > 0}
+          <span class="rounded-full bg-danger/15 px-1.5 text-[9px] font-semibold text-danger">
+            {errorCount}
+          </span>
+        {/if}
+      {:else if errorCount > 0}
+        <span class="absolute right-1 top-1 h-1.5 w-1.5 rounded-full bg-danger" aria-hidden="true"
+        ></span>
+      {/if}
+    </button>
   </form>
   {#if addressError}
     <p
@@ -267,60 +292,6 @@
       {addressError}
     </p>
   {/if}
-  <div
-    class="flex h-9 shrink-0 items-end justify-between border-b border-border bg-surface px-2"
-    role="tablist"
-    aria-label="Browser surfaces"
-  >
-    <div class="flex h-full items-end gap-1">
-      <button
-        type="button"
-        role="tab"
-        aria-selected={activeSurface === 'page'}
-        class={[
-          'flex h-8 items-center gap-1.5 border-b-2 px-2.5 text-[11px] font-medium transition-colors',
-          activeSurface === 'page'
-            ? 'border-primary text-foreground'
-            : 'border-transparent text-dimmed hover:text-foreground'
-        ]}
-        onclick={() => void selectSurface('page')}
-      >
-        <Globe2 size={12} />
-        Page
-      </button>
-      <button
-        type="button"
-        role="tab"
-        aria-selected={activeSurface === 'console'}
-        class={[
-          'flex h-8 items-center gap-1.5 border-b-2 px-2.5 text-[11px] font-medium transition-colors',
-          activeSurface === 'console'
-            ? 'border-primary text-foreground'
-            : 'border-transparent text-dimmed hover:text-foreground'
-        ]}
-        onclick={() => void selectSurface('console')}
-      >
-        <SquareTerminal size={12} />
-        Console
-        {#if errorCount > 0}
-          <span class="rounded-full bg-danger/15 px-1.5 text-[9px] font-semibold text-danger">
-            {errorCount}
-          </span>
-        {/if}
-      </button>
-    </div>
-    {#if activeSurface === 'console' && consoleEntries.length > 0}
-      <button
-        type="button"
-        class="mb-1 flex h-7 w-7 items-center justify-center rounded-md text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
-        aria-label="Clear browser console"
-        title="Clear browser console"
-        onclick={() => void clearConsole()}
-      >
-        <Trash2 size={12} />
-      </button>
-    {/if}
-  </div>
   <div
     {@attach attachContentElement}
     class={['min-h-0 flex-1 bg-surface', activeSurface !== 'page' && 'hidden']}
@@ -333,7 +304,7 @@
       'min-h-0 flex-1 overflow-auto bg-app font-mono text-[11px]',
       activeSurface !== 'console' && 'hidden'
     ]}
-    role="tabpanel"
+    role="region"
     aria-label="Browser console"
   >
     {#each consoleEntries as entry (entry.id)}

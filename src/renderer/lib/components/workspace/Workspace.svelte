@@ -3915,7 +3915,7 @@
               <Minimize2 size={14} />
             </Dialog.Close>
           </div>
-          <BrowserPanel tab={browserTab} />
+          <BrowserPanel tab={browserTab} fullscreen />
         </Dialog.Content>
       </Dialog.Portal>
     </Dialog.Root>
