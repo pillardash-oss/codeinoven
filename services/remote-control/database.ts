@@ -324,6 +324,12 @@ export class RemoteControlDatabase {
     this.db.prepare('UPDATE desktops SET last_seen_at = ? WHERE id = ?').run(Date.now(), id)
   }
 
+  updateDesktopLanEndpoints(id: string, serializedEndpoints: string | null): void {
+    this.db
+      .prepare('UPDATE desktops SET lan_endpoint = ? WHERE id = ? AND revoked_at IS NULL')
+      .run(serializedEndpoints, id)
+  }
+
   renameDesktop(id: string, userId: string, name: string): boolean {
     return (
       this.db

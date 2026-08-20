@@ -42,7 +42,22 @@ interface AccountDesktopRoute {
   mobileDeviceId: string
   controlSecret: string
   relayPath?: string
+  lanTargets?: RemoteConnectionTarget[]
+  /** Legacy single-candidate route retained for restored clients during rollout. */
   lanTarget?: RemoteConnectionTarget
+}
+
+function lanTargets(route: AccountDesktopRoute): RemoteConnectionTarget[] {
+  const candidates = [...(route.lanTargets ?? []), ...(route.lanTarget ? [route.lanTarget] : [])]
+  return candidates.filter(
+    (candidate, index) =>
+      candidates.findIndex(
+        (entry) =>
+          entry.scheme === candidate.scheme &&
+          entry.host === candidate.host &&
+          entry.port === candidate.port
+      ) === index
+  )
 }
 
 export class RemoteSessionStore {
@@ -367,13 +382,15 @@ export class RemoteSessionStore {
   ): Promise<void> {
     if (!preserveWorkspace) this.recovering = false
     this.accountRoute = input
-    if (input.lanTarget) {
+    for (const target of lanTargets(input)) {
       try {
-        await this.connectLan(input.controlSecret, input.lanTarget, input.desktopId)
+        await this.connectLan(input.controlSecret, target, input.desktopId)
         this.accountRoute = input
         if (this.snapshot.route.kind === 'LAN_CONNECTED') return
       } catch (error) {
-        remoteLog.info(`Account LAN route unavailable; using cloud relay: ${String(error)}`)
+        remoteLog.info(
+          `Account LAN route ${target.host}:${target.port} unavailable: ${String(error)}`
+        )
       }
     }
     await this.connectCloud(input)
@@ -511,7 +528,8 @@ export class RemoteSessionStore {
   }
 
   private scheduleLanUpgrade(): void {
-    if (!this.accountRoute?.lanTarget || this.lanUpgradeTimer !== null) return
+    if (!this.accountRoute || lanTargets(this.accountRoute).length === 0) return
+    if (this.lanUpgradeTimer !== null) return
     this.lanUpgradeTimer = window.setTimeout(() => {
       this.lanUpgradeTimer = null
       void this.tryLanUpgrade()
@@ -520,10 +538,8 @@ export class RemoteSessionStore {
 
   private async tryLanUpgrade(): Promise<void> {
     const route = this.accountRoute
-    const target = route?.lanTarget
-    if (!route || !target || this.snapshot.route.kind !== 'RELAY_CONNECTED') return
+    if (!route || this.snapshot.route.kind !== 'RELAY_CONNECTED') return
     const keyMaterial = await this.ensureKeyMaterial(route.desktopId)
-    const peer: PeerRef = { host: target.host, port: target.port }
     const device = {
       deviceId: keyMaterial.deviceId,
       deviceName: keyMaterial.deviceName,
@@ -532,22 +548,26 @@ export class RemoteSessionStore {
       signingPublicJwk: keyMaterial.signingPublicJwk,
       agreementPublicJwk: keyMaterial.agreementPublicJwk
     }
-    const connected = await this.openLanSession(
-      peer,
-      route.controlSecret,
-      target.scheme,
-      device,
-      keyMaterial.deviceId ? null : route.controlSecret
-    )
-    if (!connected) {
-      this.scheduleLanUpgrade()
+    for (const target of lanTargets(route)) {
+      const peer: PeerRef = { host: target.host, port: target.port }
+      const connected = await this.openLanSession(
+        peer,
+        route.controlSecret,
+        target.scheme,
+        device,
+        keyMaterial.deviceId ? null : route.controlSecret
+      )
+      if (!connected) continue
+      this.accountRelayClient?.close()
+      this.accountRelayClient = null
+      this.dispatch({ type: 'lanConnected', peer })
+      this.dispatch({ type: 'peerReachableChanged', reachable: true })
+      remoteLog.info(
+        `Remote session upgraded from cloud relay to LAN via ${peer.host}:${peer.port}`
+      )
       return
     }
-    this.accountRelayClient?.close()
-    this.accountRelayClient = null
-    this.dispatch({ type: 'lanConnected', peer })
-    this.dispatch({ type: 'peerReachableChanged', reachable: true })
-    remoteLog.info('Remote session upgraded from cloud relay to LAN')
+    this.scheduleLanUpgrade()
   }
 
   /** Update the desktop keep-alive phase surfaced to the phone client. */

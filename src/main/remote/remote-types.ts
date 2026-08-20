@@ -12,6 +12,8 @@ export interface RemoteGatewayInfo {
   port: number
   /** The URL a phone can open to reach the installable PWA. */
   url: string | null
+  /** Ordered Wi-Fi/Ethernet endpoint candidates for multi-homed desktops. */
+  urls: string[]
 }
 
 export interface RemoteCloudStatus {

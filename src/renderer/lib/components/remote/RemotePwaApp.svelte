@@ -79,6 +79,7 @@
     document.addEventListener('visibilitychange', syncVisibility)
     window.addEventListener('pagehide', suspend)
     window.addEventListener('pageshow', resume)
+    syncVisibility()
     return () => {
       stopWatching()
       document.removeEventListener('visibilitychange', syncVisibility)

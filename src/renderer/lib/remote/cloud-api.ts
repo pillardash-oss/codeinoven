@@ -26,6 +26,7 @@ export interface CloudDesktopConnection {
   controlSecret: string
   mobileDeviceId: string
   lanEndpoint: string | null
+  lanEndpoints: string[]
   relayPath: string
 }
 
@@ -42,6 +43,7 @@ interface EncryptedDesktopConnection {
     ciphertext: string
   }
   lanEndpoint: string | null
+  lanEndpoints?: string[]
   relayPath: string
 }
 
@@ -127,6 +129,12 @@ export async function cloudDesktopConnection(
     `/v1/desktops/${encodeURIComponent(desktopId)}/connection?mobileDeviceId=${encodeURIComponent(mobileDeviceId)}`
   )
   if (response.grant.mobileDeviceId !== mobileDeviceId) throw new Error('device-not-approved')
+  const lanEndpoints = [
+    ...(Array.isArray(response.lanEndpoints) ? response.lanEndpoints : []),
+    ...(response.lanEndpoint ? [response.lanEndpoint] : [])
+  ]
+    .filter((endpoint): endpoint is string => typeof endpoint === 'string')
+    .filter((endpoint, index, endpoints) => endpoints.indexOf(endpoint) === index)
   return {
     desktop: response.desktop,
     controlSecret: await decryptDesktopGrant({
@@ -136,7 +144,8 @@ export async function cloudDesktopConnection(
       ciphertext: response.grant.ciphertext
     }),
     mobileDeviceId,
-    lanEndpoint: response.lanEndpoint,
+    lanEndpoint: lanEndpoints[0] ?? null,
+    lanEndpoints,
     relayPath: response.relayPath
   }
 }

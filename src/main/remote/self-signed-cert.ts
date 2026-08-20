@@ -11,7 +11,7 @@
  */
 
 import { generate } from 'selfsigned'
-import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { networkInterfaces } from 'node:os'
 import { isIP } from 'node:net'
@@ -21,6 +21,43 @@ export interface SelfSignedCertificate {
   key: string
   cert: string
   hosts: string[]
+}
+
+const VIRTUAL_INTERFACE_PATTERN =
+  /^(?:lo|utun|tun|tap|awdl|llw|anpi|gif|stf|docker|veth|br-|bridge|vmnet|vbox|tailscale|zt)/i
+
+function usableLanAddress(address: string): boolean {
+  if (address.startsWith('127.') || address.startsWith('169.254.')) return false
+  const normalized = address.toLowerCase()
+  return normalized !== '::' && normalized !== '::1' && !normalized.startsWith('fe80:')
+}
+
+function lanAddressPriority(address: string): number {
+  if (address.startsWith('192.168.')) return 0
+  if (address.startsWith('10.')) return 1
+  const secondOctet = Number(address.split('.')[1])
+  if (address.startsWith('172.') && secondOctet >= 16 && secondOctet <= 31) return 2
+  return address.includes(':') ? 4 : 3
+}
+
+export function detectPreferredLanIps(): string[] {
+  const physical: string[] = []
+  const fallback: string[] = []
+  for (const [name, entries] of Object.entries(networkInterfaces())) {
+    for (const info of entries ?? []) {
+      if (info.internal || (info.family !== 'IPv4' && info.family !== 'IPv6')) continue
+      if (isIP(info.address) === 0) continue
+      const normalized = info.address.includes('%') ? info.address.split('%')[0] : info.address
+      if (!usableLanAddress(normalized)) continue
+      fallback.push(normalized)
+      if (!VIRTUAL_INTERFACE_PATTERN.test(name)) physical.push(normalized)
+    }
+  }
+  const candidates = physical.length > 0 ? physical : fallback
+  return [...new Set(candidates)].sort(
+    (left, right) =>
+      lanAddressPriority(left) - lanAddressPriority(right) || left.localeCompare(right)
+  )
 }
 
 export function detectLanIps(): string[] {
@@ -46,6 +83,24 @@ function sameHosts(a: string[], b: string[]): boolean {
   return a.every((host, index) => normalizeHost(host) === normalizeHost(b[index]))
 }
 
+async function writeCertificateMetadata(
+  directory: string,
+  hosts: string[],
+  preferredHosts: string[]
+): Promise<void> {
+  const target = join(directory, 'meta.json')
+  const temporary = `${target}.tmp`
+  await writeFile(
+    temporary,
+    JSON.stringify({
+      hosts: hosts.map(normalizeHost),
+      preferredHosts: preferredHosts.map(normalizeHost)
+    }),
+    { encoding: 'utf8' }
+  )
+  await rename(temporary, target)
+}
+
 async function readStored(dir: string, hosts: string[]): Promise<SelfSignedCertificate | null> {
   try {
     const meta = JSON.parse(await readFile(join(dir, 'meta.json'), 'utf8')) as {
@@ -67,8 +122,12 @@ export async function loadOrCreateSelfSignedCertificate(
   directory: string
 ): Promise<SelfSignedCertificate> {
   const hosts = detectLanIps()
+  const preferredHosts = detectPreferredLanIps()
   const existing = await readStored(directory, hosts)
-  if (existing) return existing
+  if (existing) {
+    await writeCertificateMetadata(directory, hosts, preferredHosts)
+    return existing
+  }
 
   const result = await generate([{ name: 'commonName', value: 'CodeInOven Remote Gateway' }], {
     algorithm: 'sha256',
@@ -94,9 +153,7 @@ export async function loadOrCreateSelfSignedCertificate(
   await Promise.all([
     writeFile(join(directory, 'key.pem'), result.private, { encoding: 'utf8', mode: 0o600 }),
     writeFile(join(directory, 'cert.pem'), result.cert, { encoding: 'utf8' }),
-    writeFile(join(directory, 'meta.json'), JSON.stringify({ hosts: hosts.map(normalizeHost) }), {
-      encoding: 'utf8'
-    })
+    writeCertificateMetadata(directory, hosts, preferredHosts)
   ])
   Logger.info('Generated self-signed certificate for the remote gateway', {
     hosts,
