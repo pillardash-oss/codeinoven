@@ -556,7 +556,6 @@
     open={mobileState.historyOpen}
     title="Your messages"
     onClose={() => (mobileState.historyOpen = false)}
-    maxHeight="max-h-[72dvh]"
   >
     <div class="p-1.5">
       {#each mobileState.userMessages as message, index (message.id)}
@@ -683,7 +682,7 @@
       open={mobileState.notesOpen}
       title="Notes"
       onClose={() => (mobileState.notesOpen = false)}
-      maxHeight="max-h-[85dvh]"
+      maxHeight="h-[calc(100dvh-0.75rem)]"
       fixedHeight
     >
       {#if mobileNoteTab}

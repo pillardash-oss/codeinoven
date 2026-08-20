@@ -45,11 +45,11 @@ import { CIO_PROMPT_MAX_LENGTH, isCioPromptId } from '../../lib/cio-prompts'
 import type { PowerWakeService } from '../system/power-wake-service'
 import type { RetrySchedulerService } from '../system/retry-scheduler-service'
 import {
+  broadcastNoteChanged,
   broadcastThreadDeleted,
   broadcastThreadUpdate,
   dismissThreadNotifications
 } from '../chat/thread-events'
-import { sendToRenderer } from './renderer-delivery'
 import { parseThreadContextUsage } from '../database/repositories/thread-repo'
 import { AttachmentGrantRepo } from '../database/repositories/attachment-grant-repo'
 import { HarnessUsageRepo } from '../database/repositories/harness-usage-repo'
@@ -5502,12 +5502,6 @@ export function registerIpcHandlers(
   })
   // ─── Thread notes (user-only scratch space) ─────────────────────────────
   const NOTE_BODY_MAX = 100_000
-
-  function broadcastNoteChanged(projectId: string, threadId: string, hasNote: boolean): void {
-    for (const win of BrowserWindow.getAllWindows()) {
-      sendToRenderer(win.webContents, 'note:changed', projectId, threadId, hasNote)
-    }
-  }
 
   ipcMain.handle('note:save', async (_, projectId: unknown, threadId: unknown, body: unknown) => {
     const validProjectId = validateEntityId(projectId, 'Project ID')

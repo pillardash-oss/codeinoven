@@ -17,10 +17,15 @@ import { appendFile, mkdir, rename, rm, writeFile } from 'node:fs/promises'
 import { randomUUID } from 'node:crypto'
 import { extname, join } from 'node:path'
 import { ThreadManager } from '../../lib/engines/thread-manager'
+import { NoteRepo } from '../database/repositories/note-repo'
 import { ProjectManager } from '../../lib/engines/project-manager'
 import { ProjectFilesService } from '../editor/project-files-service'
 import type { ChatEngine } from '../chat/chat-engine'
-import { broadcastThreadDeleted, broadcastThreadUpdate } from '../chat/thread-events'
+import {
+  broadcastNoteChanged,
+  broadcastThreadDeleted,
+  broadcastThreadUpdate
+} from '../chat/thread-events'
 import { REMOTE_ALLOWED_CHANNELS } from '../../lib/remote-rpc'
 import {
   authorizationForChannel,
@@ -53,7 +58,12 @@ import { SecretVault } from '../storage/secret-vault'
 import { GitHubAuthService } from '../git/github-auth-service'
 import { validateEngineeringSpec } from '../../lib/spec/spec-validation'
 import { StorageEngine } from '../storage/storage-engine'
-import { validateScopeBoard, validateScopeSlice } from '../ipc/ipc-validation'
+import {
+  validateBoundedString,
+  validateEntityId,
+  validateScopeBoard,
+  validateScopeSlice
+} from '../ipc/ipc-validation'
 import type {
   AssignmentModelSelection,
   AssignmentPlanContent,
@@ -84,6 +94,7 @@ import type { AttachmentStorageScope } from '../../lib/types'
 const MAX_REMOTE_ATTACHMENT_BYTES = 32 * 1024 * 1024
 const MAX_REMOTE_ATTACHMENT_CHUNK_BYTES = 256 * 1024
 const MAX_CONCURRENT_REMOTE_UPLOADS = 16
+const NOTE_BODY_MAX = 100_000
 const REMOTE_UPLOAD_TTL_MS = 10 * 60 * 1_000
 
 interface RemoteAttachmentUpload {
@@ -171,6 +182,7 @@ export type RemoteRpcResult = { ok: true; result: unknown } | { ok: false; messa
 
 export class RemoteRpcDispatcher {
   private readonly threadManager: ThreadManager
+  private readonly noteRepo: NoteRepo
   private readonly projectManager: ProjectManager
   private readonly projectFilesService: ProjectFilesService
   private readonly scopeManager: ScopeManager
@@ -207,6 +219,7 @@ export class RemoteRpcDispatcher {
         }
       }
     )
+    this.noteRepo = new NoteRepo(services.database)
     this.projectManager = services.projectManager ?? new ProjectManager(services.database)
     this.projectFilesService = new ProjectFilesService(this.projectManager)
     this.scopeManager = new ScopeManager(services.database)
@@ -637,6 +650,41 @@ export class RemoteRpcDispatcher {
           this.string(args[0]),
           (args[1] ?? {}) as { projectId?: string; limit?: number }
         )
+      case 'note:get': {
+        const projectId = validateEntityId(args[0], 'Project ID')
+        const threadId = validateEntityId(args[1], 'Thread ID')
+        const thread = await this.threadManager.getThread(projectId, threadId)
+        return thread ? this.noteRepo.get(threadId) : null
+      }
+      case 'note:list':
+        return this.noteRepo.listThreadIds()
+      case 'note:save': {
+        const projectId = validateEntityId(args[0], 'Project ID')
+        const threadId = validateEntityId(args[1], 'Thread ID')
+        const body = validateBoundedString(args[2], 'Note body', 0, NOTE_BODY_MAX)
+        const thread = await this.threadManager.getThread(projectId, threadId)
+        if (!thread) throw new Error('Thread not found')
+        const previous = this.noteRepo.get(threadId)
+        const now = Date.now()
+        const note = {
+          threadId,
+          body,
+          createdAt: previous?.createdAt ?? now,
+          updatedAt: now
+        }
+        this.noteRepo.upsert(note)
+        broadcastNoteChanged(projectId, threadId, true)
+        return note
+      }
+      case 'note:delete': {
+        const projectId = validateEntityId(args[0], 'Project ID')
+        const threadId = validateEntityId(args[1], 'Thread ID')
+        const thread = await this.threadManager.getThread(projectId, threadId)
+        if (!thread) throw new Error('Thread not found')
+        this.noteRepo.delete(threadId)
+        broadcastNoteChanged(projectId, threadId, false)
+        return undefined
+      }
       case 'attachment:beginRemoteUpload':
         return this.beginRemoteUpload(
           device,
