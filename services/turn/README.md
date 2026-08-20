@@ -12,6 +12,24 @@ denial, rejects multicast peers, and exposes a STUN-based container health check
 [official Coturn Docker guidance](https://github.com/coturn/coturn/blob/master/docker/coturn/README.md)
 for the underlying image and network requirements.
 
+Public-edge hardening is enabled by default:
+
+- Unauthorized UDP authentication responses are limited to 10 per source IP per second.
+- Each short-lived credential can hold 4 allocations and the server can hold 40 allocations.
+- Each allocation is limited to 2,000,000 bytes/second and the server to 50,000,000 bytes/second.
+- Allocation handshakes must finish within 10 seconds.
+- Loopback, private, carrier-grade NAT, link-local, benchmark, multicast, and reserved peer
+  destinations are denied to prevent the relay from reaching internal services.
+- Unused dynamic authorization, dynamic realm, dynamic peer-list, and TCP-relay features are
+  disabled; browser TURN-over-TCP remains enabled and still relays WebRTC's UDP peer traffic.
+- The container is read-only with all Linux capabilities dropped, a 256 PID ceiling, a 65,536 file
+  descriptor ceiling, and default limits of 2 CPUs and 512 MiB of memory.
+
+These defaults are defined in `services/turn/.env.example`. Coturn's allocation and bandwidth
+controls protect capacity after authentication; its unauthorized-response limiter reduces UDP 401
+reflection traffic before authentication. They supplement rather than replace provider firewall,
+DDoS protection, traffic monitoring, and billing alerts.
+
 ## Coolify deployment
 
 Create this as a **separate Docker Compose resource** in Coolify:
@@ -35,7 +53,9 @@ IP. Leave `TURN_RELAY_IP` empty when host networking exposes the server's public
 
 The default `49160-49200` relay range supports a modest initial deployment. Increase the range in
 both the Coolify variables and firewall as concurrent relay demand grows. `TURN_MIN_PORT` and
-`TURN_MAX_PORT` must always describe the same range allowed by the firewall.
+`TURN_MAX_PORT` must always describe the same range allowed by the firewall. Raise
+`TURN_TOTAL_QUOTA`, `TURN_BPS_CAPACITY`, `TURN_CPU_LIMIT`, and `TURN_MEMORY_LIMIT` deliberately as
+measured concurrency grows; do not remove the limits merely to clear an unexplained capacity error.
 
 ## Connect the remote-control service
 
