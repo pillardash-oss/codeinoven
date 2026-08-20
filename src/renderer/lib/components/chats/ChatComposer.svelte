@@ -215,6 +215,9 @@
     onImageDescriptorAskAgainChange?: (value: boolean) => void
     /** Enables the image-to-text-only-model gate card. Off in side-chats. */
     enableImageDescriptorGate?: boolean
+    /** Hides the inline context-usage indicator — for hosts that surface the
+     *  same detail elsewhere (e.g. the mobile header). */
+    hideUsageIndicator?: boolean
   }
 
   let {
@@ -278,7 +281,8 @@
     imageDescriptorAskAgain = false,
     onImageDescriptorDefaultChange,
     onImageDescriptorAskAgainChange,
-    enableImageDescriptorGate = true
+    enableImageDescriptorGate = true,
+    hideUsageIndicator = false
   }: Props = $props()
 
   /** Resolved settings — uses the prop if provided, else the global last-used.
@@ -2415,17 +2419,19 @@
 
     <span class="flex-1"></span>
 
-    <ContextUsageIndicator
-      usage={contextUsage}
-      {efficiencyKpis}
-      {harnessUsage}
-      {canCompact}
-      {compacting}
-      {onCompact}
-      onReveal={onRevealUsage}
-      onHide={onHideUsage}
-      refreshing={usageRefreshing}
-    />
+    {#if !hideUsageIndicator}
+      <ContextUsageIndicator
+        usage={contextUsage}
+        {efficiencyKpis}
+        {harnessUsage}
+        {canCompact}
+        {compacting}
+        {onCompact}
+        onReveal={onRevealUsage}
+        onHide={onHideUsage}
+        refreshing={usageRefreshing}
+      />
+    {/if}
 
     <!-- Send / Queue / Stop button.
          - Agent idle:       ArrowUp (send) — primary, disabled when empty
@@ -2434,7 +2440,7 @@
          - Stop confirmation pending:   "Stop?" danger label -->
     <button
       type="button"
-      class="flex h-8 w-8 items-center justify-center rounded-lg transition-colors {pendingStop
+      class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg transition-colors {pendingStop
         ? 'bg-danger text-on-danger hover:bg-danger-hover'
         : canStop
           ? 'bg-danger/10 text-danger hover:bg-danger/20'

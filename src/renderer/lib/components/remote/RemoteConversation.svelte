@@ -459,6 +459,7 @@
         threadId: thread.id
       }}
       contextUsage={thread.contextUsage}
+      hideUsageIndicator
       hidePermissionSelector={chatMode}
       showEngineeringMode={false}
       showChatModes={false}

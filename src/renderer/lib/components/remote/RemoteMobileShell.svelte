@@ -260,7 +260,7 @@
 
   <!-- Header: menu · centred thread title · overflow menu -->
   <div class="shrink-0 border-b border-border bg-surface pt-[env(safe-area-inset-top)]">
-    <header class="grid h-14 grid-cols-[2.75rem_1fr_2.75rem] items-center gap-1 px-2">
+    <header class="grid h-14 grid-cols-[2.75rem_1fr_auto] items-center gap-1 px-2">
       <button
         type="button"
         class="flex h-11 w-11 cursor-pointer items-center justify-center rounded-xl text-muted transition-colors active:bg-elevated"
@@ -289,82 +289,114 @@
         {/if}
       </div>
 
-      <DropdownMenu.Root>
-        <DropdownMenu.Trigger
-          class="relative flex h-11 w-11 cursor-pointer items-center justify-center rounded-xl text-muted transition-colors active:bg-elevated"
-          aria-label="More options"
-          title="More options"
-        >
-          <MoreVertical size={19} />
-          {#if mobileState.hasOverflowAttention}
-            <span class="absolute top-1.5 right-1.5 flex items-start">
-              <span class="h-2 w-2 rounded-full bg-thread-pinned"></span>
-            </span>
-          {/if}
-        </DropdownMenu.Trigger>
-        <DropdownMenu.Portal>
-          <DropdownMenu.Content
-            side="bottom"
-            align="end"
-            sideOffset={6}
-            collisionPadding={8}
-            class="z-50 w-56 overflow-hidden rounded-xl border border-border bg-surface p-1 shadow-xl"
+      <div class="flex items-center">
+        {#if mobileState.selectedThread}
+          {@const usagePercent = mobileState.selectedThread.contextUsage?.contextPercent}
+          <button
+            type="button"
+            class="flex h-11 w-9 cursor-pointer items-center justify-center rounded-xl text-muted transition-colors active:bg-elevated"
+            aria-label={usagePercent === undefined
+              ? 'Context usage unavailable'
+              : `Context usage — ${Math.round(usagePercent)}% used`}
+            title="Context usage"
+            onclick={() => (mobileState.usageOpen = true)}
           >
-            <DropdownMenu.Item
-              class="flex w-full cursor-pointer items-center gap-2.5 rounded-lg px-3 py-2.5 text-[14px] text-muted outline-none transition-colors hover:bg-elevated focus:bg-elevated hover:text-foreground"
-              disabled={mobileState.userMessages.length === 0}
-              onSelect={() => (mobileState.historyOpen = true)}
+            <span
+              class="relative h-3 w-6 rounded-sm border border-current p-0.5"
+              aria-hidden="true"
             >
-              <History size={16} />
-              <span class="flex-1 text-left">Message history</span>
-            </DropdownMenu.Item>
+              <span
+                class="block h-full rounded-[1px] {usagePercent === undefined
+                  ? 'bg-overlay'
+                  : usagePercent >= 90
+                    ? 'bg-danger'
+                    : usagePercent >= 70
+                      ? 'bg-warning'
+                      : 'bg-success'}"
+                style="width: {usagePercent ?? 0}%"
+              ></span>
+              <span class="absolute -right-1 top-[3px] h-1.5 w-0.5 rounded-r bg-current"></span>
+            </span>
+          </button>
+        {/if}
 
-            <DropdownMenu.Item
-              class="flex w-full cursor-pointer items-center gap-2.5 rounded-lg px-3 py-2.5 text-[14px] text-muted outline-none transition-colors hover:bg-elevated focus:bg-elevated hover:text-foreground"
-              onSelect={() => (mobileState.memoryOpen = true)}
-            >
-              <BrainCircuit size={16} />
-              <span class="flex-1 text-left">Memory</span>
-            </DropdownMenu.Item>
-
-            {#if mobileState.selectedThread && !mobileState.chatMode}
-              <DropdownMenu.Item
-                class="flex w-full cursor-pointer items-center gap-2.5 rounded-lg px-3 py-2.5 text-[14px] text-muted outline-none transition-colors hover:bg-elevated focus:bg-elevated hover:text-foreground"
-                onSelect={() => (mobileState.gitOpen = true)}
-              >
-                <GitBranch size={16} />
-                <span class="flex-1 text-left">Git</span>
-              </DropdownMenu.Item>
+        <DropdownMenu.Root>
+          <DropdownMenu.Trigger
+            class="relative flex h-11 w-11 cursor-pointer items-center justify-center rounded-xl text-muted transition-colors active:bg-elevated"
+            aria-label="More options"
+            title="More options"
+          >
+            <MoreVertical size={19} />
+            {#if mobileState.hasOverflowAttention}
+              <span class="absolute top-1.5 right-1.5 flex items-start">
+                <span class="h-2 w-2 rounded-full bg-thread-pinned"></span>
+              </span>
             {/if}
-
-            {#if mobileState.selectedThread}
-              <DropdownMenu.Item
-                class="flex w-full cursor-pointer items-center gap-2.5 rounded-lg px-3 py-2.5 text-[14px] text-muted outline-none transition-colors hover:bg-elevated focus:bg-elevated hover:text-foreground"
-                onSelect={() => (mobileState.sourcesOpen = true)}
-              >
-                <Library size={16} />
-                <span class="flex-1 text-left">Sources</span>
-              </DropdownMenu.Item>
-
-              <DropdownMenu.Item
-                class="flex w-full cursor-pointer items-center gap-2.5 rounded-lg px-3 py-2.5 text-[14px] text-muted outline-none transition-colors hover:bg-elevated focus:bg-elevated hover:text-foreground"
-                onSelect={() => (mobileState.notesOpen = true)}
-              >
-                <NotebookPen size={16} />
-                <span class="flex-1 text-left">Notes</span>
-              </DropdownMenu.Item>
-            {/if}
-
-            <DropdownMenu.Item
-              class="flex w-full cursor-pointer items-center gap-2.5 rounded-lg px-3 py-2.5 text-[14px] text-muted outline-none transition-colors hover:bg-elevated focus:bg-elevated hover:text-foreground"
-              onSelect={() => (mobileState.notificationsOpen = true)}
+          </DropdownMenu.Trigger>
+          <DropdownMenu.Portal>
+            <DropdownMenu.Content
+              side="bottom"
+              align="end"
+              sideOffset={6}
+              collisionPadding={8}
+              class="z-50 w-56 overflow-hidden rounded-xl border border-border bg-surface p-1 shadow-xl"
             >
-              <Bell size={16} />
-              <span class="flex-1 text-left">Notifications</span>
-            </DropdownMenu.Item>
-          </DropdownMenu.Content>
-        </DropdownMenu.Portal>
-      </DropdownMenu.Root>
+              <DropdownMenu.Item
+                class="flex w-full cursor-pointer items-center gap-2.5 rounded-lg px-3 py-2.5 text-[14px] text-muted outline-none transition-colors hover:bg-elevated focus:bg-elevated hover:text-foreground"
+                disabled={mobileState.userMessages.length === 0}
+                onSelect={() => (mobileState.historyOpen = true)}
+              >
+                <History size={16} />
+                <span class="flex-1 text-left">Message history</span>
+              </DropdownMenu.Item>
+
+              <DropdownMenu.Item
+                class="flex w-full cursor-pointer items-center gap-2.5 rounded-lg px-3 py-2.5 text-[14px] text-muted outline-none transition-colors hover:bg-elevated focus:bg-elevated hover:text-foreground"
+                onSelect={() => (mobileState.memoryOpen = true)}
+              >
+                <BrainCircuit size={16} />
+                <span class="flex-1 text-left">Memory</span>
+              </DropdownMenu.Item>
+
+              {#if mobileState.selectedThread && !mobileState.chatMode}
+                <DropdownMenu.Item
+                  class="flex w-full cursor-pointer items-center gap-2.5 rounded-lg px-3 py-2.5 text-[14px] text-muted outline-none transition-colors hover:bg-elevated focus:bg-elevated hover:text-foreground"
+                  onSelect={() => (mobileState.gitOpen = true)}
+                >
+                  <GitBranch size={16} />
+                  <span class="flex-1 text-left">Git</span>
+                </DropdownMenu.Item>
+              {/if}
+
+              {#if mobileState.selectedThread}
+                <DropdownMenu.Item
+                  class="flex w-full cursor-pointer items-center gap-2.5 rounded-lg px-3 py-2.5 text-[14px] text-muted outline-none transition-colors hover:bg-elevated focus:bg-elevated hover:text-foreground"
+                  onSelect={() => (mobileState.sourcesOpen = true)}
+                >
+                  <Library size={16} />
+                  <span class="flex-1 text-left">Sources</span>
+                </DropdownMenu.Item>
+
+                <DropdownMenu.Item
+                  class="flex w-full cursor-pointer items-center gap-2.5 rounded-lg px-3 py-2.5 text-[14px] text-muted outline-none transition-colors hover:bg-elevated focus:bg-elevated hover:text-foreground"
+                  onSelect={() => (mobileState.notesOpen = true)}
+                >
+                  <NotebookPen size={16} />
+                  <span class="flex-1 text-left">Notes</span>
+                </DropdownMenu.Item>
+              {/if}
+
+              <DropdownMenu.Item
+                class="flex w-full cursor-pointer items-center gap-2.5 rounded-lg px-3 py-2.5 text-[14px] text-muted outline-none transition-colors hover:bg-elevated focus:bg-elevated hover:text-foreground"
+                onSelect={() => (mobileState.notificationsOpen = true)}
+              >
+                <Bell size={16} />
+                <span class="flex-1 text-left">Notifications</span>
+              </DropdownMenu.Item>
+            </DropdownMenu.Content>
+          </DropdownMenu.Portal>
+        </DropdownMenu.Root>
+      </div>
     </header>
   </div>
 
@@ -538,6 +570,21 @@
         onClose={() => (mobileState.notesOpen = false)}
       />
     {/await}
+  {/if}
+
+  <!-- Context usage sheet — same detail the desktop composer's battery icon shows. -->
+  {#if mobileState.selectedThread}
+    <BottomSheet
+      open={mobileState.usageOpen}
+      title="Context usage"
+      onClose={() => (mobileState.usageOpen = false)}
+    >
+      <div class="p-3">
+        {#await import('$lib/components/chats/ContextUsageIndicator.svelte') then { default: ContextUsageIndicator }}
+          <ContextUsageIndicator layout="panel" usage={mobileState.selectedThread?.contextUsage} />
+        {/await}
+      </div>
+    </BottomSheet>
   {/if}
 
   <!-- Sidebar drawer. -->

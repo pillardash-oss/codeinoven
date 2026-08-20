@@ -96,6 +96,7 @@ class MobileState {
   gitOpen = $state(false)
   sourcesOpen = $state(false)
   notesOpen = $state(false)
+  usageOpen = $state(false)
   settingsOpen = $state(false)
   installGuideOpen = $state(false)
 
