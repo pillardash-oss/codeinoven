@@ -42,12 +42,12 @@
 
 {#if open}
   <div
-    class="fixed inset-0 z-40 cursor-pointer bg-black/50"
+    class="fixed inset-0 z-60 cursor-pointer bg-black/50"
     role="presentation"
     onclick={onClose}
   ></div>
   <aside
-    class="fixed right-0 bottom-0 left-0 z-50 flex {fixedHeight
+    class="fixed right-0 bottom-0 left-0 z-70 flex {fixedHeight
       ? maxHeight.replace('max-h-', 'h-')
       : maxHeight} flex-col overflow-hidden rounded-t-2xl border-t border-border bg-surface pb-[env(safe-area-inset-bottom)] shadow-2xl"
     aria-label={title}

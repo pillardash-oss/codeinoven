@@ -196,6 +196,7 @@
     if (!project) return
     try {
       await mobileState.createProjectThread(project)
+      mobileState.sidebarOpen = false
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'The thread could not be created.')
     }
@@ -204,9 +205,21 @@
   async function createChat(): Promise<void> {
     try {
       await mobileState.createChat()
+      mobileState.sidebarOpen = false
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'The chat could not be created.')
     }
+  }
+
+  /** Open the sidebar, defaulting to the view that matches the open thread
+   *  (chats for a chat, threads for a project thread) so the last state we
+   *  left the switcher in never gets lost across opens. */
+  function openSidebar(): void {
+    const thread = mobileState.selectedThread
+    if (thread) {
+      mobileState.sidebarMode = thread.projectId === INBOX_PROJECT_ID ? 'chats' : 'threads'
+    }
+    mobileState.sidebarOpen = true
   }
 
   // ─── Row action menus ───────────────────────────────────────────────────
@@ -415,7 +428,7 @@
         class="flex h-11 w-11 cursor-pointer items-center justify-center rounded-xl text-muted transition-colors active:bg-elevated"
         aria-label="Open the sidebar"
         title="Open the sidebar"
-        onclick={() => (mobileState.sidebarOpen = true)}
+        onclick={openSidebar}
       >
         <PanelLeft size={19} />
       </button>
@@ -529,7 +542,7 @@
         <button
           type="button"
           class="mt-1 flex h-11 cursor-pointer items-center gap-2 rounded-xl bg-primary px-5 text-[14px] font-medium text-on-primary transition-colors active:bg-primary-hover"
-          onclick={() => (mobileState.sidebarOpen = true)}
+          onclick={openSidebar}
         >
           <PanelLeft size={15} />
           Open sidebar
