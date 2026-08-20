@@ -10,6 +10,7 @@ import { sendToRenderer } from '../ipc/renderer-delivery'
 import { ProjectManager } from '../../lib/engines/project-manager'
 import type { Database } from '../database/database'
 import type { StorageEngine } from '../storage/storage-engine'
+import { buildHarnessEnvironment } from '../drivers/cli-environment'
 
 interface PtySession {
   id: string
@@ -20,29 +21,13 @@ interface PtySession {
   createdAt: number
 }
 
-/** Common tool paths missing from GUI-launched processes on macOS/Linux. */
-const EXTRA_PATHS = [
-  '/opt/homebrew/bin',
-  '/usr/local/bin',
-  '/usr/bin',
-  '/bin',
-  '/usr/sbin',
-  '/sbin'
-]
-
 function buildShellEnv(): Record<string, string> {
-  const home = homedir()
-  const userPaths = [
-    `${home}/.local/bin`,
-    `${home}/.bun/bin`,
-    `${home}/.cargo/bin`,
-    `${home}/.npm-global/bin`,
-    `${home}/.nvm/current/bin`
-  ]
-  const path = [process.env['PATH'] ?? '', ...EXTRA_PATHS, ...userPaths].join(':')
+  const harnessEnv = buildHarnessEnvironment()
+  const env = Object.fromEntries(
+    Object.entries(harnessEnv).filter((entry): entry is [string, string] => entry[1] !== undefined)
+  )
   return {
-    ...(process.env as Record<string, string>),
-    PATH: path,
+    ...env,
     COLORTERM: 'truecolor',
     TERM_PROGRAM: APP_NAME
   }

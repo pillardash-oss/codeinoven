@@ -22,7 +22,8 @@ import { AntigravityDriver } from '../drivers/antigravity-driver'
 import { MuseDriver } from '../drivers/muse-driver'
 import { PiDriver } from '../drivers/pi-driver'
 import { CheckpointManager } from '../storage/checkpoint-manager'
-import { listHarnesses } from '../agents/harness-registry'
+import { findHarness, listHarnesses } from '../agents/harness-registry'
+import { buildHarnessEnvironment, resolveExecutablePath } from '../drivers/cli-environment'
 import { CheckpointLimitError, type ProjectFingerprint } from '../git/change-tracking-service'
 import {
   broadcastThreadDeleted,
@@ -2571,11 +2572,13 @@ export class ChatEngine {
     // An explicit provider refresh can change which models/drivers expose tools.
     if (force) this.toolCatalogCache.clear()
     if (
+      !force &&
       this.sharedProviderCatalog &&
       Date.now() - this.sharedProviderCatalog.discoveredAt < PROVIDER_CATALOG_TTL_MS
     ) {
-      this.providerCache.set(projectId, this.sharedProviderCatalog.catalogs)
-      return this.sharedProviderCatalog.catalogs
+      const catalogs = this.filterInstalledProviderCatalogs(this.sharedProviderCatalog.catalogs)
+      this.providerCache.set(projectId, catalogs)
+      return catalogs
     }
     if (!force) {
       // Cold start: reuse the persisted snapshot so the model picker is
@@ -2665,7 +2668,11 @@ export class ChatEngine {
   /** One app-wide discovery pass; all projects share installed harness models. */
   private async discoverProviders(projectId: string): Promise<ProviderCatalog[]> {
     const projectPath = await this.resolveProjectPath(projectId)
-    const drivers = [...this.drivers.values()]
+    const harnessEnv = buildHarnessEnvironment()
+    const drivers = [...this.drivers.values()].filter((driver) => {
+      const command = findHarness(driver.id)?.command
+      return command !== undefined && resolveExecutablePath(command, harnessEnv) !== undefined
+    })
     const results = await Promise.all(
       drivers.map(async (driver): Promise<DriverDiscovery> => {
         try {
@@ -2715,20 +2722,22 @@ export class ChatEngine {
         return null
       }
       if (Array.isArray(stored)) {
+        const catalogs = this.filterInstalledProviderCatalogs(stored)
         this.sharedProviderCatalog = {
           schemaVersion: 3,
           discoveredAt: Date.now(),
-          catalogs: stored
+          catalogs
         }
-        return stored
+        return catalogs
       }
       if (
         stored?.schemaVersion === 3 &&
         Array.isArray(stored.catalogs) &&
         Date.now() - stored.discoveredAt < PROVIDER_CATALOG_TTL_MS
       ) {
-        this.sharedProviderCatalog = stored
-        return stored.catalogs
+        const catalogs = this.filterInstalledProviderCatalogs(stored.catalogs)
+        this.sharedProviderCatalog = { ...stored, catalogs }
+        return catalogs
       }
       return null
     } catch {
@@ -2749,12 +2758,24 @@ export class ChatEngine {
       this.sharedProviderCatalog &&
       Date.now() - this.sharedProviderCatalog.discoveredAt < PROVIDER_CATALOG_TTL_MS
     ) {
-      this.providerCache.set(projectId, this.sharedProviderCatalog.catalogs)
-      return this.sharedProviderCatalog.catalogs
+      const catalogs = this.filterInstalledProviderCatalogs(this.sharedProviderCatalog.catalogs)
+      this.providerCache.set(projectId, catalogs)
+      return catalogs
     }
     const persisted = await this.loadPersistedProviders()
     if (persisted) this.providerCache.set(projectId, persisted)
     return persisted ?? []
+  }
+
+  /** Keep cached/fallback catalogs scoped to harness executables installed on this machine. */
+  private filterInstalledProviderCatalogs(catalogs: ProviderCatalog[]): ProviderCatalog[] {
+    const env = buildHarnessEnvironment()
+    const installed = new Set(
+      listHarnesses()
+        .filter((harness) => resolveExecutablePath(harness.command, env) !== undefined)
+        .map((harness) => harness.id)
+    )
+    return catalogs.filter((catalog) => installed.has(catalog.harnessId))
   }
 
   /** Persist a merged catalog snapshot so the next launch is instantly populated. */

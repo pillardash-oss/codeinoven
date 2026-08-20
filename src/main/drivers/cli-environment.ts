@@ -1,6 +1,6 @@
-import { existsSync, readdirSync, readFileSync } from 'fs'
+import { accessSync, constants, existsSync, readdirSync, readFileSync } from 'fs'
 import { homedir } from 'os'
-import { join } from 'path'
+import { isAbsolute, join } from 'path'
 
 /** Parse a versioned nvm dir name like `v24.18.0` into `[major, minor, patch]`. */
 function parseVersion(name: string): [number, number, number] | null {
@@ -159,9 +159,12 @@ export function buildHarnessEnvironment(
           '/usr/bin',
           '/bin',
           `${home}/.local/bin`,
+          `${home}/.opencode/bin`,
           `${home}/.bun/bin`,
           `${home}/.cargo/bin`,
-          `${home}/.npm-global/bin`
+          `${home}/.npm-global/bin`,
+          `${home}/.local/share/pnpm`,
+          `${home}/.yarn/bin`
         ]
 
   // All installed nvm bins, newest-first, excluding the already-preferred one.
@@ -184,4 +187,45 @@ export function buildHarnessEnvironment(
     PATH: pathEntries.filter(Boolean).join(sep),
     [OWNED_PROCESS_MARKER]: '1'
   }
+}
+
+/**
+ * Resolve a command against the exact PATH supplied to harness processes.
+ * Keeping this lookup in-process avoids depending on `which`/`where` being
+ * present inside a packaged desktop environment and lets callers spawn the
+ * resolved executable rather than asking `execvp(3)` to repeat the lookup.
+ */
+export function resolveExecutablePath(
+  command: string,
+  env: NodeJS.ProcessEnv = buildHarnessEnvironment(),
+  platform: NodeJS.Platform = process.platform
+): string | undefined {
+  const canExecute = (candidate: string): boolean => {
+    try {
+      accessSync(candidate, platform === 'win32' ? constants.F_OK : constants.X_OK)
+      return true
+    } catch {
+      return false
+    }
+  }
+
+  if (isAbsolute(command)) return canExecute(command) ? command : undefined
+
+  const extensions =
+    platform === 'win32'
+      ? (env['PATHEXT'] ?? '.COM;.EXE;.BAT;.CMD')
+          .split(';')
+          .filter(Boolean)
+          .map((extension) => extension.toLowerCase())
+      : ['']
+  const hasWindowsExtension = platform === 'win32' && /\.[^\\/]+$/u.test(command)
+  const candidates = hasWindowsExtension ? [''] : extensions
+
+  for (const directory of (env['PATH'] ?? '').split(pathSeparator(platform)).filter(Boolean)) {
+    for (const extension of candidates) {
+      const candidate = join(directory, `${command}${extension}`)
+      if (canExecute(candidate)) return candidate
+    }
+  }
+  return undefined
 }
