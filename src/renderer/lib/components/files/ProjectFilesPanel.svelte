@@ -616,7 +616,7 @@
               {:else}
                 <Save size={11} />
               {/if}
-              Save
+              {activePathIsConflicted ? 'Mark as resolved' : 'Save'}
             </button>
           {/if}
         </div>
@@ -840,7 +840,7 @@
             {:else}
               <Save size={11} />
             {/if}
-            Save
+            {activePathIsConflicted ? 'Mark as resolved' : 'Save'}
           </button>
         {/if}
         <button

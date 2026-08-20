@@ -825,6 +825,10 @@ export interface IpcInvokeContract {
     [projectId: string, relativePath: string],
     GitConflictWorkFile
   >
+  'git:saveConflictDraft': Contract<
+    [projectId: string, relativePath: string, content: string, stateJson: string],
+    void
+  >
   'git:saveConflictResolution': Contract<
     [projectId: string, relativePath: string, content: string],
     GitStatus

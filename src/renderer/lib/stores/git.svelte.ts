@@ -5,6 +5,7 @@ import type {
   GitCommitInfo,
   GitConflictAnalysis,
   GitConflictWorkFile,
+  GitConflictWorkHunkState,
   GitCredentialStatus,
   GitDiff,
   GitFileChange,
@@ -579,6 +580,23 @@ export class GitState {
 
   async prepareConflictWorkFile(projectId: string, path: string): Promise<GitConflictWorkFile> {
     return invoke('git:prepareConflictWorkFile', projectId, path)
+  }
+
+  /** Persist partial resolution progress in the conflict scratch file only. */
+  async saveConflictDraft(
+    projectId: string,
+    path: string,
+    content: string,
+    hunks: GitConflictWorkHunkState[]
+  ): Promise<boolean> {
+    this.error = null
+    try {
+      await invoke('git:saveConflictDraft', projectId, path, content, JSON.stringify(hunks))
+      return true
+    } catch (reason) {
+      this.error = errorMessage(reason, 'Conflict draft could not be saved')
+      return false
+    }
   }
 
   /**

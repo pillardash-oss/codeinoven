@@ -9,6 +9,7 @@
     GitMerge,
     Loader2,
     Redo2,
+    Save,
     Undo2,
     WrapText
   } from '@lucide/svelte'
@@ -55,6 +56,7 @@
   let activeHunk = $state(0)
   let loading = $state(false)
   let saving = $state(false)
+  let draftSaving = $state(false)
   let dirty = $state(false)
   let error = $state<string | null>(null)
   let mergeRoot = $state<HTMLDivElement | null>(null)
@@ -74,6 +76,7 @@
   const activeState = $derived(hunkStates[activeHunk] ?? null)
   const resolvedCount = $derived(hunkStates.filter(isResolved).length)
   const allResolved = $derived(hunkStates.length > 0 && resolvedCount === hunkStates.length)
+  const canSaveDraft = $derived(resolvedCount > 0 && dirty)
 
   function isResolved(state: GitConflictWorkHunkState): boolean {
     return state.acceptedIncoming || state.acceptedCurrent || state.edited
@@ -107,7 +110,7 @@
   }
 
   function notifyStatus(): void {
-    onStatusChange({ canSave: allResolved, dirty, saving })
+    onStatusChange({ canSave: allResolved, dirty, saving: saving || draftSaving })
   }
 
   function handleConflictRangesChange(ranges: FileEditorConflictRange[]): void {
@@ -252,8 +255,25 @@
     notifyStatus()
   }
 
+  async function saveDraft(): Promise<void> {
+    if (!canSaveDraft || draftSaving || saving) return
+    const controller = centerController
+    if (!controller) return
+    handleConflictRangesChange(controller.getConflictRanges())
+    draftSaving = true
+    notifyStatus()
+    try {
+      const saved = await gitState.saveConflictDraft(projectId, path, scratchContent, hunkStates)
+      if (!saved) return
+      dirty = false
+    } finally {
+      draftSaving = false
+      notifyStatus()
+    }
+  }
+
   async function save(): Promise<boolean> {
-    if (!allResolved || saving) return false
+    if (!allResolved || saving || draftSaving) return false
     saving = true
     notifyStatus()
     try {
@@ -495,6 +515,16 @@
         onclick={onToggleWrap}><WrapText size={11} />Wrap</button
       >
       <span class="flex-1"></span>
+      <button
+        type="button"
+        class="flex h-6 items-center gap-1 rounded bg-primary px-2 text-[9px] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-30"
+        disabled={!canSaveDraft || draftSaving || saving}
+        title="Save resolved conflict progress to the scratch file"
+        onclick={() => void saveDraft()}
+      >
+        {#if draftSaving}<Loader2 size={11} class="animate-spin" />{:else}<Save size={11} />{/if}
+        Save draft
+      </button>
       <button
         type="button"
         class="flex h-6 w-6 items-center justify-center rounded text-muted hover:bg-elevated hover:text-foreground"

@@ -3398,7 +3398,7 @@ export interface GitConflictWorkFile {
   analysis: GitConflictAnalysis
   /** Relative path under the repository, retaining the original extension. */
   scratchPath: string
-  /** Marker-free scratch content, initially populated with every current block. */
+  /** Marker-free content from the current blocks or the last explicitly saved draft. */
   content: string
   hunks: GitConflictWorkHunkState[]
 }

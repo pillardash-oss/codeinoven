@@ -188,6 +188,7 @@ export const REMOTE_ALLOWED_CHANNELS: readonly string[] = [
   'git:diff',
   'git:analyzeConflict',
   'git:prepareConflictWorkFile',
+  'git:saveConflictDraft',
   'git:saveConflictResolution',
   'git:stage',
   'git:resolveConflicted',
@@ -541,6 +542,7 @@ export const REMOTE_CHANNEL_AUTHORIZATION: Readonly<Record<string, RemoteChannel
 
   // git.write — default-No, always step-up
   'git:stage': { scope: 'git.write', stepUp: 'always' },
+  'git:saveConflictDraft': { scope: 'git.write', stepUp: 'always' },
   'git:saveConflictResolution': { scope: 'git.write', stepUp: 'always' },
   'git:resolveConflicted': { scope: 'git.write', stepUp: 'always' },
   'git:unstage': { scope: 'git.write', stepUp: 'always' },
