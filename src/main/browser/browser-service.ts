@@ -18,13 +18,9 @@ const PROJECT_ID_PATTERN = /^[a-zA-Z0-9:._-]{1,240}$/u
 interface BrowserTab {
   view: WebContentsView
   projectId: string
+  threadId: string
   initialNavigationStarted: boolean
   consoleEntries: BrowserConsoleEntry[]
-}
-
-interface PendingBrowserTab {
-  resolve: (tab: BrowserTab) => void
-  timer: ReturnType<typeof setTimeout>
 }
 
 function validateTabId(value: unknown): string {
@@ -39,6 +35,17 @@ function validateProjectId(value: unknown): string {
     throw new TypeError('Browser project ID is invalid')
   }
   return value
+}
+
+function validateThreadId(value: unknown): string {
+  if (typeof value !== 'string' || !PROJECT_ID_PATTERN.test(value)) {
+    throw new TypeError('Browser thread ID is invalid')
+  }
+  return value
+}
+
+function browserContextKey(projectId: string, threadId: string): string {
+  return `${projectId}:${threadId}`
 }
 
 function validateBrowserUrl(value: unknown): string {
@@ -82,7 +89,6 @@ function validateBounds(value: unknown): BrowserViewBounds {
 /** Owns sandboxed page content while the renderer owns the browser chrome. */
 export class BrowserService {
   private readonly tabs = new Map<string, BrowserTab>()
-  private readonly pendingTabs = new Map<string, PendingBrowserTab>()
   private readonly agentTabIds = new Map<string, string>()
   private readonly configuredSessions = new Set<string>()
   private activeTabId: string | null = null
@@ -91,25 +97,29 @@ export class BrowserService {
   constructor(private readonly window: BrowserWindow) {}
 
   register(): void {
-    ipcMain.handle('browser:show', (_event, rawTabId, rawProjectId, rawInitialUrl, rawBounds) => {
-      const tabId = validateTabId(rawTabId)
-      const projectId = validateProjectId(rawProjectId)
-      const initialUrl = validateBrowserUrl(rawInitialUrl)
-      const bounds = validateBounds(rawBounds)
-      const tab = this.ensureTab(tabId, projectId)
+    ipcMain.handle(
+      'browser:show',
+      (_event, rawTabId, rawProjectId, rawThreadId, rawInitialUrl, rawBounds) => {
+        const tabId = validateTabId(rawTabId)
+        const projectId = validateProjectId(rawProjectId)
+        const threadId = validateThreadId(rawThreadId)
+        const initialUrl = validateBrowserUrl(rawInitialUrl)
+        const bounds = validateBounds(rawBounds)
+        const tab = this.ensureTab(tabId, projectId, threadId)
 
-      if (this.activeTabId && this.activeTabId !== tabId) this.detachActiveView()
-      if (this.activeTabId !== tabId) {
-        this.window.contentView.addChildView(tab.view)
-        this.activeTabId = tabId
+        if (this.activeTabId && this.activeTabId !== tabId) this.detachActiveView()
+        if (this.activeTabId !== tabId) {
+          this.window.contentView.addChildView(tab.view)
+          this.activeTabId = tabId
+        }
+        tab.view.setBounds(bounds)
+        if (!tab.initialNavigationStarted) {
+          tab.initialNavigationStarted = true
+          this.load(tabId, initialUrl)
+        }
+        return this.stateFor(tabId, tab)
       }
-      tab.view.setBounds(bounds)
-      if (!tab.initialNavigationStarted) {
-        tab.initialNavigationStarted = true
-        this.load(tabId, initialUrl)
-      }
-      return this.stateFor(tabId, tab)
-    })
+    )
 
     ipcMain.handle('browser:hide', (_event, rawTabId) => {
       const tabId = validateTabId(rawTabId)
@@ -145,6 +155,13 @@ export class BrowserService {
     ipcMain.handle('browser:destroy', (_event, rawTabId) => {
       this.destroy(validateTabId(rawTabId))
     })
+    ipcMain.handle('browser:destroyThread', (_event, rawProjectId, rawThreadId) => {
+      const projectId = validateProjectId(rawProjectId)
+      const threadId = validateThreadId(rawThreadId)
+      for (const [tabId, tab] of this.tabs) {
+        if (tab.projectId === projectId && tab.threadId === threadId) this.destroy(tabId)
+      }
+    })
     ipcMain.handle('browser:destroyProject', (_event, rawProjectId) => {
       const projectId = validateProjectId(rawProjectId)
       for (const [tabId, tab] of this.tabs) {
@@ -159,8 +176,6 @@ export class BrowserService {
       if (!tab.view.webContents.isDestroyed()) tab.view.webContents.close()
     }
     this.tabs.clear()
-    for (const pending of this.pendingTabs.values()) clearTimeout(pending.timer)
-    this.pendingTabs.clear()
     this.agentTabIds.clear()
     this.configuredSessions.clear()
   }
@@ -170,29 +185,43 @@ export class BrowserService {
     input: Record<string, unknown>,
     context: { projectId: string; threadId: string }
   ): Promise<unknown> {
+    const projectId = validateProjectId(context.projectId)
+    const threadId = validateThreadId(context.threadId)
+    const contextKey = browserContextKey(projectId, threadId)
     if (operation === 'open') {
       const url = validateBrowserUrl(this.requiredInputString(input, 'url'))
       const tabId = `browser:agent:${crypto.randomUUID()}`
-      this.agentTabIds.set(context.threadId, tabId)
-      sendToRenderer(this.window.webContents, 'browser:openRequested', url, tabId)
-      const tab = await this.waitForTab(tabId)
-      return this.stateFor(tabId, tab)
+      const tab = this.ensureTab(tabId, projectId, threadId)
+      tab.initialNavigationStarted = true
+      this.agentTabIds.set(contextKey, tabId)
+      this.load(tabId, url)
+      sendToRenderer(this.window.webContents, 'browser:openRequested', url, {
+        projectId,
+        threadId,
+        requestedTabId: tabId,
+        reveal: true
+      })
+      return { ...this.utilityTabContext(tabId, tab), page: this.stateFor(tabId, tab) }
     }
 
-    const tabId = this.agentTabIds.get(context.threadId)
+    const tabId = this.agentTabIds.get(contextKey)
     if (!tabId) throw new Error('Open a browser page before using this operation')
     const tab = this.requireTab(tabId)
+    if (tab.projectId !== projectId || tab.threadId !== threadId) {
+      throw new Error('The current browser tab belongs to a different project or thread')
+    }
+    const utilityContext = this.utilityTabContext(tabId, tab)
     if (operation === 'navigate') {
       const url = validateBrowserUrl(this.requiredInputString(input, 'url'))
       this.load(tabId, url)
-      return { tabId, url }
+      return { ...utilityContext, url }
     }
     if (operation === 'reload') {
       tab.view.webContents.reload()
-      return { tabId, reloading: true }
+      return { ...utilityContext, reloading: true }
     }
     if (operation === 'snapshot') {
-      return tab.view.webContents.executeJavaScript(`(() => ({
+      const snapshot: unknown = await tab.view.webContents.executeJavaScript(`(() => ({
         url: location.href,
         title: document.title,
         text: (document.body?.innerText ?? '').slice(0, 30000),
@@ -207,21 +236,23 @@ export class BrowserService {
             text: (element.innerText || element.getAttribute('aria-label') || element.getAttribute('placeholder') || '').trim().slice(0, 300)
           }))
       }))()`)
+      return { ...utilityContext, snapshot }
     }
     if (operation === 'click') {
       const selector = this.requiredInputString(input, 'selector')
-      return tab.view.webContents.executeJavaScript(`(() => {
+      const result: unknown = await tab.view.webContents.executeJavaScript(`(() => {
         const element = document.querySelector(${JSON.stringify(selector)});
         if (!(element instanceof HTMLElement)) return { clicked: false, reason: 'not found' };
         element.scrollIntoView({ block: 'center', inline: 'center' });
         element.click();
         return { clicked: true };
       })()`)
+      return { ...utilityContext, result }
     }
     if (operation === 'type') {
       const selector = this.requiredInputString(input, 'selector')
       const text = this.requiredInputString(input, 'text', true)
-      return tab.view.webContents.executeJavaScript(`(() => {
+      const result: unknown = await tab.view.webContents.executeJavaScript(`(() => {
         const element = document.querySelector(${JSON.stringify(selector)});
         if (!(element instanceof HTMLElement)) return { typed: false, reason: 'not found' };
         element.focus();
@@ -236,22 +267,26 @@ export class BrowserService {
         element.dispatchEvent(new Event('change', { bubbles: true }));
         return { typed: true };
       })()`)
+      return { ...utilityContext, result }
     }
     if (operation === 'screenshot') {
       const image = await tab.view.webContents.capturePage()
-      return { tabId, dataUrl: `data:image/png;base64,${image.toPNG().toString('base64')}` }
+      return {
+        ...utilityContext,
+        dataUrl: `data:image/png;base64,${image.toPNG().toString('base64')}`
+      }
     }
     if (operation === 'console') {
-      return { tabId, entries: [...tab.consoleEntries] }
+      return { ...utilityContext, entries: [...tab.consoleEntries] }
     }
     throw new Error(`In-app browser does not expose the operation "${operation}"`)
   }
 
-  private ensureTab(tabId: string, projectId: string): BrowserTab {
+  private ensureTab(tabId: string, projectId: string, threadId: string): BrowserTab {
     const existing = this.tabs.get(tabId)
     if (existing) {
-      if (existing.projectId !== projectId) {
-        throw new Error('Browser tab belongs to a different project')
+      if (existing.projectId !== projectId || existing.threadId !== threadId) {
+        throw new Error('Browser tab belongs to a different project or thread')
       }
       return existing
     }
@@ -272,16 +307,11 @@ export class BrowserService {
     const tab: BrowserTab = {
       view,
       projectId,
+      threadId,
       initialNavigationStarted: false,
       consoleEntries: []
     }
     this.tabs.set(tabId, tab)
-    const pending = this.pendingTabs.get(tabId)
-    if (pending) {
-      clearTimeout(pending.timer)
-      this.pendingTabs.delete(tabId)
-      pending.resolve(tab)
-    }
 
     const publish = (): void => this.publishState(tabId)
     view.webContents.on('did-start-loading', publish)
@@ -326,7 +356,17 @@ export class BrowserService {
     })
     view.webContents.setWindowOpenHandler(({ url }) => {
       try {
-        sendToRenderer(this.window.webContents, 'browser:openRequested', validateBrowserUrl(url))
+        const safeUrl = validateBrowserUrl(url)
+        const popupTabId = `browser:${crypto.randomUUID()}`
+        const popupTab = this.ensureTab(popupTabId, tab.projectId, tab.threadId)
+        popupTab.initialNavigationStarted = true
+        this.load(popupTabId, safeUrl)
+        sendToRenderer(this.window.webContents, 'browser:openRequested', safeUrl, {
+          projectId: tab.projectId,
+          threadId: tab.threadId,
+          requestedTabId: popupTabId,
+          reveal: true
+        })
       } catch (error) {
         Logger.error('Browser popup rejected unsafe URL:', error)
       }
@@ -371,6 +411,17 @@ export class BrowserService {
       canGoBack: contents.navigationHistory.canGoBack(),
       canGoForward: contents.navigationHistory.canGoForward()
     }
+  }
+
+  private utilityTabContext(
+    tabId: string,
+    tab: BrowserTab
+  ): {
+    tabId: string
+    projectId: string
+    threadId: string
+  } {
+    return { tabId, projectId: tab.projectId, threadId: tab.threadId }
   }
 
   private publishState(tabId: string): void {
@@ -418,21 +469,9 @@ export class BrowserService {
     if (this.activeTabId === tabId) this.detachActiveView()
     if (!tab.view.webContents.isDestroyed()) tab.view.webContents.close()
     this.tabs.delete(tabId)
-    for (const [threadId, agentTabId] of this.agentTabIds) {
-      if (agentTabId === tabId) this.agentTabIds.delete(threadId)
+    for (const [contextKey, agentTabId] of this.agentTabIds) {
+      if (agentTabId === tabId) this.agentTabIds.delete(contextKey)
     }
-  }
-
-  private waitForTab(tabId: string): Promise<BrowserTab> {
-    const existing = this.tabs.get(tabId)
-    if (existing) return Promise.resolve(existing)
-    return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
-        this.pendingTabs.delete(tabId)
-        reject(new Error('The in-app browser tab did not become visible'))
-      }, 10_000)
-      this.pendingTabs.set(tabId, { resolve, timer })
-    })
   }
 
   private requiredInputString(

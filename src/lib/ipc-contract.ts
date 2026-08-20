@@ -196,6 +196,14 @@ export interface BrowserPageState {
   canGoForward: boolean
 }
 
+/** Ownership metadata for a browser tab requested by the main process. */
+export interface BrowserOpenRequestContext {
+  projectId: string
+  threadId: string
+  requestedTabId?: string
+  reveal: boolean
+}
+
 export type BrowserConsoleLevel = 'debug' | 'info' | 'warning' | 'error'
 
 /** A console or runtime diagnostic emitted by one app-scoped browser tab. */
@@ -1355,7 +1363,13 @@ export interface IpcInvokeContract {
   /** Resolve website favicons for a list of hostnames. Returns a data URL per host, or null when none exists. */
   'web:favicon': Contract<[hostnames: string[]], Record<string, string | null>>
   'browser:show': Contract<
-    [tabId: string, projectId: string, initialUrl: string, bounds: BrowserViewBounds],
+    [
+      tabId: string,
+      projectId: string,
+      threadId: string,
+      initialUrl: string,
+      bounds: BrowserViewBounds
+    ],
     BrowserPageState
   >
   'browser:hide': Contract<[tabId: string], void>
@@ -1367,6 +1381,7 @@ export interface IpcInvokeContract {
   'browser:getConsole': Contract<[tabId: string], BrowserConsoleEntry[]>
   'browser:clearConsole': Contract<[tabId: string], void>
   'browser:destroy': Contract<[tabId: string], void>
+  'browser:destroyThread': Contract<[projectId: string, threadId: string], void>
   'browser:destroyProject': Contract<[projectId: string], void>
   'spec:addAnnotation': Contract<
     [
@@ -1859,7 +1874,7 @@ export interface IpcEventContract {
   'computerUse:pipState': [state: ComputerUsePipState]
   'browser:state': [state: BrowserPageState]
   'browser:console': [entry: BrowserConsoleEntry]
-  'browser:openRequested': [url: string, requestedTabId?: string]
+  'browser:openRequested': [url: string, context?: BrowserOpenRequestContext]
   /** Remote-mode status changes from the main process. */
   'remote:status': [status: RemoteModeStatus]
   /**

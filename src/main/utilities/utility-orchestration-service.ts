@@ -120,7 +120,8 @@ export type BrowserUtilityExecutor = (
 const BROWSER_UTILITY_TOOLS: McpTool[] = [
   {
     name: 'open',
-    description: 'Open an http(s) URL in a visible in-app browser tab.',
+    description:
+      'Open an http(s) URL in a browser tab owned by this project and thread. The page keeps running when the user views another project.',
     inputSchema: {
       type: 'object',
       properties: { url: { type: 'string' } },
@@ -130,7 +131,8 @@ const BROWSER_UTILITY_TOOLS: McpTool[] = [
   },
   {
     name: 'snapshot',
-    description: 'Read the current page title, URL, visible text, and interactive elements.',
+    description:
+      'Read the current thread browser page title, URL, visible text, and interactive elements.',
     inputSchema: { type: 'object', properties: {}, additionalProperties: false }
   },
   {
@@ -175,7 +177,8 @@ const BROWSER_UTILITY_TOOLS: McpTool[] = [
   },
   {
     name: 'console',
-    description: 'Read console messages and browser runtime errors from the current tab.',
+    description:
+      'Read console messages and browser runtime errors from the current project and thread tab.',
     inputSchema: { type: 'object', properties: {}, additionalProperties: false }
   }
 ]

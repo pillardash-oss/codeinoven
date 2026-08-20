@@ -80,7 +80,7 @@
     if (activeSurface !== 'page') return
     const bounds = contentBounds()
     if (!bounds) return
-    pageState = await invoke('browser:show', tab.id, tab.projectId, tab.url, bounds)
+    pageState = await invoke('browser:show', tab.id, tab.projectId, tab.threadId, tab.url, bounds)
   }
 
   function navigate(): void {

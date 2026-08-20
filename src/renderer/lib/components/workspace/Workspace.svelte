@@ -1397,9 +1397,14 @@
   })
 
   $effect(() => {
-    return subscribe('thread:deleted', (_projectId, threadId) => {
+    return subscribe('thread:deleted', (projectId, threadId) => {
       allThreads = allThreads.filter((thread) => thread.id !== threadId)
       scopeState.removeThread(threadId)
+      const browserTabIds = contextSidebarState.removeThreadBrowsers(projectId, threadId)
+      if (browserFullscreenTabId && browserTabIds.includes(browserFullscreenTabId)) {
+        browserFullscreenTabId = null
+      }
+      void invoke('browser:destroyThread', projectId, threadId)
       if (workspaceState.selectedThread?.id === threadId) workspaceState.clearThread()
     })
   })
@@ -1416,10 +1421,18 @@
   })
 
   $effect(() => {
-    return subscribe('browser:openRequested', (url, requestedTabId) => {
-      if (contextSidebarState.openBrowser(url, requestedTabId) === null) {
-        void invoke('shell:openExternal', url)
+    return subscribe('browser:openRequested', (url, context) => {
+      if (context) {
+        contextSidebarState.openBrowserForContext(
+          url,
+          context.projectId,
+          context.threadId,
+          context.requestedTabId,
+          context.reveal
+        )
+        return
       }
+      if (contextSidebarState.openBrowser(url) === null) void invoke('shell:openExternal', url)
     })
   })
 

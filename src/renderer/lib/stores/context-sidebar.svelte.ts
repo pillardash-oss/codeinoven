@@ -855,14 +855,31 @@ class ContextSidebarState {
 
   openBrowser(url: string, requestedTabId?: string): string | null {
     if (!this.activeProjectId || !this.activeThreadId) return null
-    const projectId = this.activeProjectId
-    const threadId = this.activeThreadId
+    return this.openBrowserForContext(
+      url,
+      this.activeProjectId,
+      this.activeThreadId,
+      requestedTabId,
+      true
+    )
+  }
+
+  openBrowserForContext(
+    url: string,
+    projectId: string,
+    threadId: string,
+    requestedTabId?: string,
+    reveal = false
+  ): string {
     const id = requestedTabId ?? `browser:${crypto.randomUUID()}`
     const existing = this.browserTabs.find((tab) => tab.id === id && tab.projectId === projectId)
     if (existing) {
       existing.url = url
+      existing.threadId = threadId
       this.persistBrowserTabs()
-      this.focusBrowser(id)
+      if (reveal && this.activeProjectId === projectId && this.activeThreadId === threadId) {
+        this.focusBrowser(id)
+      }
       return id
     }
     let title = 'Browser'
@@ -877,7 +894,9 @@ class ContextSidebarState {
       { id, kind: 'browser', title, projectId, threadId, url, surface: 'page' }
     ]
     this.persistBrowserTabs()
-    this.focusBrowser(id)
+    if (reveal && this.activeProjectId === projectId && this.activeThreadId === threadId) {
+      this.focusBrowser(id)
+    }
     return id
   }
 
@@ -907,6 +926,22 @@ class ContextSidebarState {
       this.browserActiveTabId = null
     }
     if (this.activeProjectId === projectId) this.browserVisible = false
+    this.persistBrowserTabs()
+    return removedIds
+  }
+
+  removeThreadBrowsers(projectId: string, threadId: string): string[] {
+    const removedIds = this.browserTabs
+      .filter((tab) => tab.projectId === projectId && tab.threadId === threadId)
+      .map((tab) => tab.id)
+    if (removedIds.length === 0) return []
+    this.browserTabs = this.browserTabs.filter(
+      (tab) => tab.projectId !== projectId || tab.threadId !== threadId
+    )
+    if (this.browserActiveTabId && removedIds.includes(this.browserActiveTabId)) {
+      this.browserActiveTabId = this.activeBrowserTabs.at(-1)?.id ?? null
+    }
+    if (this.activeBrowserTabs.length === 0) this.browserVisible = false
     this.persistBrowserTabs()
     return removedIds
   }
