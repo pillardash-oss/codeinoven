@@ -21,7 +21,7 @@
     "nanoid": "3.3.18"
   },
   "scripts": {
-    "postinstall": "electron-builder install-app-deps",
+    "postinstall": "bun scripts/patch-binary-data.ts && electron-builder install-app-deps",
     "predev": "bun scripts/brand-electron.ts",
     "dev": "electron-vite dev",
     "build": "electron-vite build",
