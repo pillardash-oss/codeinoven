@@ -1,7 +1,8 @@
 services:
   turn:
     build:
-      context: ../..
+      # Coolify runs Compose with the cloned repository as --project-directory.
+      context: .
       dockerfile: services/turn/Dockerfile
     restart: unless-stopped
     network_mode: host
