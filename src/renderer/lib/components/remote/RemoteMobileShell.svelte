@@ -350,6 +350,12 @@
   let selectedThreadWorking = $derived(
     mobileState.selectedThread ? mobileState.isWorking(mobileState.selectedThread) : false
   )
+  /** The real project whose thread is currently open — used to scope a new thread. */
+  let activeThreadProject = $derived(
+    mobileState.selectedProject && mobileState.selectedProject.id !== INBOX_PROJECT_ID
+      ? mobileState.selectedProject
+      : null
+  )
   const modeMenuItems = $derived(
     SIDEBAR_MODES.map((entry) => ({
       label: entry.label,
@@ -703,28 +709,32 @@
       class="fixed top-0 bottom-0 left-0 z-50 flex w-[86vw] max-w-88 flex-col border-r border-border bg-surface pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)] shadow-2xl"
       aria-label="Sidebar"
     >
-      <div class="flex h-14 shrink-0 items-center gap-0.5 border-b border-border px-2">
+      <div class="flex h-14 shrink-0 items-center gap-1 border-b border-border px-2">
+        {#if showInstall}
+          <button
+            type="button"
+            class="flex h-10 flex-1 cursor-pointer items-center justify-center gap-1.5 rounded-xl bg-primary text-[13px] font-medium text-on-primary transition-colors active:bg-primary-hover"
+            title="Install CodeInOven on this device"
+            onclick={() => void handleInstall()}
+          >
+            <Download size={14} />
+            Install
+          </button>
+        {/if}
         <button
           type="button"
-          class="flex h-11 min-w-0 flex-1 cursor-pointer items-center gap-1.5 rounded-xl px-2.5 text-left transition-colors active:bg-elevated"
-          title="Switch sidebar view"
-          aria-label="Switch sidebar view"
-          onclick={() => (modeMenuOpen = true)}
+          class="flex h-10 flex-1 cursor-pointer items-center justify-center gap-1.5 rounded-xl bg-elevated text-[13px] font-medium text-muted transition-colors active:bg-danger/10 active:text-danger"
+          title="Disconnect from the desktop"
+          onclick={onDisconnect}
         >
-          {#if activeSidebarMode}
-            {@const ActiveIcon = activeSidebarMode.icon}
-            <ActiveIcon size={16} class="shrink-0 text-muted" />
-          {/if}
-          <span class="truncate text-[15px] font-semibold tracking-tight">
-            {activeSidebarMode?.label ?? 'Projects'}
-          </span>
-          <ChevronDown size={15} class="shrink-0 text-dimmed" />
+          <Power size={14} />
+          Disconnect
         </button>
 
         {#if mobileState.sidebarMode === 'chats'}
           <button
             type="button"
-            class="flex h-11 w-11 shrink-0 cursor-pointer items-center justify-center rounded-xl text-muted transition-colors active:bg-elevated"
+            class="flex h-10 w-10 shrink-0 cursor-pointer items-center justify-center rounded-xl text-muted transition-colors active:bg-elevated"
             aria-label="New chat"
             title="New chat"
             onclick={() => void createChat()}
@@ -735,7 +745,7 @@
 
         <button
           type="button"
-          class="flex h-11 w-11 shrink-0 cursor-pointer items-center justify-center rounded-xl text-muted transition-colors active:bg-elevated"
+          class="flex h-10 w-10 shrink-0 cursor-pointer items-center justify-center rounded-xl text-muted transition-colors active:bg-elevated"
           aria-label="Close the sidebar"
           title="Close the sidebar"
           onclick={() => (mobileState.sidebarOpen = false)}
@@ -941,6 +951,35 @@
             </div>
           {/each}
         {:else if mobileState.sidebarMode === 'threads'}
+          {#if activeThreadProject}
+            {@const scopedIconUrl = getProjectIcon(
+              activeThreadProject,
+              mobileState.projectIcons.get(activeThreadProject.id)
+            )}
+            <div
+              class="mb-1 flex min-h-10 items-center justify-between gap-2 rounded-lg bg-elevated/60 px-1.5"
+            >
+              <span class="flex min-w-0 items-center gap-1.5 px-1">
+                {#if scopedIconUrl}
+                  <img src={scopedIconUrl} alt="" class="h-4 w-4 shrink-0 rounded object-contain" />
+                {:else}
+                  <span class="h-4 w-4 shrink-0 rounded bg-elevated"></span>
+                {/if}
+                <span class="truncate text-[12px] font-medium text-muted">
+                  {activeThreadProject.name}
+                </span>
+              </span>
+              <button
+                type="button"
+                class="flex h-10 w-10 shrink-0 cursor-pointer items-center justify-center rounded-lg text-muted transition-colors active:bg-elevated active:text-foreground"
+                title={`New thread in ${activeThreadProject.name}`}
+                aria-label={`New thread in ${activeThreadProject.name}`}
+                onclick={() => void createProjectThread(activeThreadProject.id)}
+              >
+                <Plus size={17} />
+              </button>
+            </div>
+          {/if}
           <div class="space-y-px">
             {#each mobileState.flatThreads as thread (thread.id)}
               {@const project = mobileState.projects.find((p) => p.id === thread.projectId)}
@@ -1029,30 +1068,26 @@
         {/if}
       </div>
 
-      <!-- Sidebar footer: install (until added to the home screen) + disconnect. -->
+      <!-- Sidebar footer: view switcher — Projects / Threads / Chats. -->
       <div class="shrink-0 border-t border-border p-2">
-        <div class="flex gap-2">
-          {#if showInstall}
-            <button
-              type="button"
-              class="flex h-11 flex-1 cursor-pointer items-center justify-center gap-2 rounded-xl bg-primary text-[14px] font-medium text-on-primary transition-colors active:bg-primary-hover"
-              title="Install CodeInOven on this device"
-              onclick={() => void handleInstall()}
-            >
-              <Download size={15} />
-              Install
-            </button>
-          {/if}
-          <button
-            type="button"
-            class="flex h-11 flex-1 cursor-pointer items-center justify-center gap-2 rounded-xl bg-elevated text-[14px] font-medium text-muted transition-colors active:bg-danger/10 active:text-danger"
-            title="Disconnect from the desktop"
-            onclick={onDisconnect}
-          >
-            <Power size={15} />
-            Disconnect
-          </button>
-        </div>
+        <button
+          type="button"
+          class="flex h-11 w-full cursor-pointer items-center justify-between gap-2 rounded-xl bg-elevated px-3 text-left transition-colors active:bg-elevated"
+          title="Switch sidebar view"
+          aria-label="Switch sidebar view"
+          onclick={() => (modeMenuOpen = true)}
+        >
+          <span class="flex min-w-0 items-center gap-2">
+            {#if activeSidebarMode}
+              {@const ActiveIcon = activeSidebarMode.icon}
+              <ActiveIcon size={15} class="shrink-0 text-muted" />
+            {/if}
+            <span class="truncate text-[13px] font-medium text-foreground">
+              {activeSidebarMode?.label ?? 'Projects'}
+            </span>
+          </span>
+          <ChevronDown size={15} class="shrink-0 text-dimmed" />
+        </button>
       </div>
     </aside>
   {/if}
