@@ -139,6 +139,7 @@ import type {
   AppConfigPatch,
   AttachmentStorageScope,
   AgentDefaultsConfig,
+  AgentMessage,
   AgentModelSelection,
   AgentRole,
   AssignmentModelSelection,
@@ -187,6 +188,46 @@ const GITHUB_REPOSITORY_ACCESS_MESSAGE =
   'GitHub cannot access this repository. Install the CodeInOven GitHub App on it and grant the requested repository permissions.'
 const GITHUB_APP_INSTALL_URL = 'https://github.com/apps/codeinoven/installations/new'
 const SLASH_COMMAND_MODES = new Set(['app', 'passthrough'])
+
+function prComposePayload(value: unknown): { title: string; description: string } | null {
+  if (!isRecord(value) || typeof value['title'] !== 'string') return null
+  return {
+    title: value['title'],
+    description: typeof value['description'] === 'string' ? value['description'] : ''
+  }
+}
+
+/** Read the compose result from a harness response without requiring the agent
+ *  to write into the project. JSON-only prompts should parse directly, while
+ *  fences and a short explanatory wrapper are tolerated across CLI providers. */
+function prComposeResponse(response: AgentMessage): { title: string; description: string } {
+  const structured = prComposePayload(response.structuredOutput)
+  if (structured) return structured
+
+  const text = response.parts
+    .flatMap((part) => (part.type === 'text' && part.phase !== 'commentary' ? [part.text] : []))
+    .join('\n')
+    .trim()
+  const candidates = [text]
+  for (const match of text.matchAll(/```(?:json)?\s*([\s\S]*?)```/giu)) {
+    if (match[1]) candidates.push(match[1].trim())
+  }
+  const objectStart = text.indexOf('{')
+  const objectEnd = text.lastIndexOf('}')
+  if (objectStart >= 0 && objectEnd > objectStart) {
+    candidates.push(text.slice(objectStart, objectEnd + 1))
+  }
+
+  for (const candidate of candidates) {
+    try {
+      const payload = prComposePayload(JSON.parse(candidate) as unknown)
+      if (payload) return payload
+    } catch {
+      // Try the next provider-compatible response shape.
+    }
+  }
+  throw new Error('The PR compose agent returned invalid JSON')
+}
 
 /** Reduce local/tracking ref spellings to the branch name GitHub expects. */
 function canonicalGitHubBranch(branch: string): string {
@@ -4970,27 +5011,18 @@ export function registerIpcHandlers(
     const settings = validateThreadSettings(args[2])
     const title = validateBoundedString(args[3], 'Virtual task title', 1, 512)
     const prompt = validateBoundedString(args[4], 'Virtual task prompt', 1, 200_000)
-    const projectPath = await resolveProjectPath(safeProjectId)
-    const directory = join(projectPath, '.cio', 'git', 'compose', virtualTaskId)
-    const reportPath = join(directory, 'compose.json')
-    await mkdir(directory, { recursive: true })
-    try {
-      await chatEngine.runVirtualTask(safeProjectId, virtualTaskId, settings, title, prompt)
-      const raw = await readFile(reportPath, 'utf-8')
-      const parsed: unknown = JSON.parse(raw)
-      const record = isRecord(parsed) ? parsed : {}
-      const reportTitle = typeof record['title'] === 'string' ? record['title'] : ''
-      const description = typeof record['description'] === 'string' ? record['description'] : ''
-      if (!reportTitle.trim()) throw new Error('The PR compose agent returned no title')
-      return {
-        title: reportTitle,
-        description,
-        taskId: virtualTaskId
-      }
-    } finally {
-      await rm(directory, { recursive: true, force: true }).catch((error) =>
-        Logger.dev('PR compose workspace cleanup was incomplete:', error)
-      )
+    const response = await chatEngine.runVirtualTask(
+      safeProjectId,
+      virtualTaskId,
+      settings,
+      title,
+      prompt
+    )
+    const report = prComposeResponse(response)
+    if (!report.title.trim()) throw new Error('The PR compose agent returned no title')
+    return {
+      ...report,
+      taskId: virtualTaskId
     }
   })
 

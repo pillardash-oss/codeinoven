@@ -22,13 +22,13 @@ attributable to denied tool schemas and the pruned skills/instruction block.
 
 ## Trimmed modes and agents
 
-| Mode | Agent | Allowed tools | Scoped write/bash |
-|---|---|---|---|
-| Inbox chat | `cio-chat` | webfetch, websearch, question | none |
-| File-system chat | `cio-chat-fs` | read, glob, grep, list, webfetch, websearch, question | none |
-| Ephemeral session | `cio-eph` | read, glob, grep, list, webfetch, websearch, question | none |
-| Image description | `cio-img-desc` | read | none |
-| PR compose | `cio-pr-compose` | read, glob, grep, list | edit `.cio/git/compose/**`; bash read-only `git *` |
+| Mode                        | Agent            | Allowed tools                                         | Scoped write/bash               |
+| --------------------------- | ---------------- | ----------------------------------------------------- | ------------------------------- |
+| Inbox chat                  | `cio-chat`       | webfetch, websearch, question                         | none                            |
+| File-system chat            | `cio-chat-fs`    | read, glob, grep, list, webfetch, websearch, question | none                            |
+| Ephemeral session           | `cio-eph`        | read, glob, grep, list, webfetch, websearch, question | none                            |
+| Image description           | `cio-img-desc`   | read                                                  | none                            |
+| PR compose                  | `cio-pr-compose` | read, glob, grep, list                                | bash read-only `git *`          |
 | Brainstorm (session report) | `cio-brainstorm` | read, glob, grep, list, webfetch, websearch, question | edit `.cio/specs/*/versions/**` |
 
 Every lean agent sets an explicit `"*": "deny"` catch-all first, then
@@ -42,8 +42,8 @@ permission defaults.
 
 - Allowed tools are `allow`; everything not listed is `deny`.
 - `edit: { "*": "deny", "<scope>": "allow" }` grants a write only under an
-  exact `.cio/` path. PR compose writes only `.cio/git/compose/`; brainstorm
-  writes session-report revisions only `.cio/specs/*/versions/`.
+  exact `.cio/` path. Brainstorm writes session-report revisions only under
+  `.cio/specs/*/versions/`; PR compose returns its JSON result without writing.
 - `bash: { "*": "deny", "git *": "allow" }` grants only read-only `git`
   commands for PR compose.
 - The `@sveltejs/opencode` plugin weight is deliberately kept as-is; per-agent

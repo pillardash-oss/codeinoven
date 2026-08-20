@@ -83,15 +83,14 @@ const imageDescriptionPermission: Record<string, AgentPermissionValue> = {
   read: ALLOW
 }
 
-/** PR compose: read/search + read-only git, with write scoped to the compose temp dir. */
+/** PR compose: read/search + read-only git; the final response carries the result. */
 const prComposePermission: Record<string, AgentPermissionValue> = {
   ...baseDeny,
   read: ALLOW,
   glob: ALLOW,
   grep: ALLOW,
   list: ALLOW,
-  bash: { '*': DENY, 'git *': ALLOW },
-  edit: { '*': DENY, '.cio/git/compose/**': ALLOW }
+  bash: { '*': DENY, 'git *': ALLOW }
 }
 
 /** Explicit utility setup: research plus the turn-scoped loopback API, no file writes. */
@@ -169,7 +168,7 @@ const leanAgents: readonly LeanOpenCodeAgent[] = [
     prompt: [
       `You compose the title and description of a pull request for the user's ${APP_NAME} project.`,
       'Inspect the relevant repository state with read/search tools and read-only git commands.',
-      'Write the result only under `.cio/git/compose/` (the app reads `compose.json` there).',
+      'Return the result as the JSON object requested by the user prompt.',
       'Never modify project source files, never push, and never touch Engineering lifecycle artifacts.'
     ].join(' '),
     permission: prComposePermission
