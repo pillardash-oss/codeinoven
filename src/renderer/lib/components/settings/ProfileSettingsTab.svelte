@@ -38,6 +38,8 @@
     days: CalendarDay[]
     monthLabel: string
     selected: boolean
+    rangeStart: boolean
+    rangeEnd: boolean
   }
 
   const RANGE_PRESETS: ReadonlyArray<{
@@ -190,8 +192,20 @@
           selected: date.getTime() >= usage.range.startAt && date.getTime() < usage.range.endAt
         })
       }
-      weeks.push({ days, monthLabel, selected: days.some((day) => day.selected) })
+      weeks.push({
+        days,
+        monthLabel,
+        selected: days.some((day) => day.selected),
+        rangeStart: false,
+        rangeEnd: false
+      })
     }
+    const firstSelectedWeek = weeks.findIndex((week) => week.selected)
+    const lastSelectedWeek = weeks.findLastIndex((week) => week.selected)
+    const rangeStartWeek = weeks[firstSelectedWeek]
+    const rangeEndWeek = weeks[lastSelectedWeek]
+    if (rangeStartWeek) rangeStartWeek.rangeStart = true
+    if (rangeEndWeek) rangeEndWeek.rangeEnd = true
     return weeks
   })
   const calendarResponseCount = $derived(
@@ -907,9 +921,17 @@
             {#each calendarWeeks as week, weekIndex (`week-${weekIndex}`)}
               <div
                 class="relative flex min-w-0 flex-col gap-1 rounded-sm {week.selected
-                  ? 'bg-thread-working/10 ring-1 ring-inset ring-thread-working/60'
+                  ? 'bg-thread-working/5'
                   : ''}"
               >
+                {#if week.selected}
+                  <span
+                    class="pointer-events-none absolute inset-0 z-10 border-y border-dashed border-thread-working/35 {week.rangeStart
+                      ? 'rounded-l-sm border-l'
+                      : ''} {week.rangeEnd ? 'rounded-r-sm border-r' : ''}"
+                    aria-hidden="true"
+                  ></span>
+                {/if}
                 {#each week.days as day (day.date)}
                   <span
                     class="aspect-square w-full min-w-2 rounded-sm {activityClass(day)}"
