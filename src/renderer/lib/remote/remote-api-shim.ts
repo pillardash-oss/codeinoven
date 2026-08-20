@@ -10,7 +10,57 @@
  */
 
 import type { AppBridge } from '../../../preload/index'
+import type { AttachmentStorageScope } from '$shared/types'
 import { remoteBridge } from './remote-bridge'
+
+const REMOTE_UPLOAD_CHUNK_BYTES = 192 * 1024
+const MAX_REMOTE_ATTACHMENT_BYTES = 32 * 1024 * 1024
+
+function bytesToBase64(bytes: Uint8Array): string {
+  let binary = ''
+  for (let offset = 0; offset < bytes.length; offset += 32_768) {
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + 32_768))
+  }
+  return btoa(binary)
+}
+
+async function registerRemoteFile(file: File, scope?: AttachmentStorageScope): Promise<string> {
+  if (!scope) return ''
+  if (file.size === 0) throw new TypeError('Dropped attachment is empty')
+  if (file.size > MAX_REMOTE_ATTACHMENT_BYTES) {
+    throw new TypeError('Dropped browser attachment must be at most 32 MB')
+  }
+  const uploadId = await remoteBridge.invoke(
+    'attachment:beginRemoteUpload',
+    scope,
+    file.name,
+    file.size
+  )
+  if (typeof uploadId !== 'string') throw new Error('The desktop did not start the upload')
+  let offset = 0
+  try {
+    while (offset < file.size) {
+      const bytes = new Uint8Array(
+        await file.slice(offset, offset + REMOTE_UPLOAD_CHUNK_BYTES).arrayBuffer()
+      )
+      const received = await remoteBridge.invoke(
+        'attachment:appendRemoteUpload',
+        uploadId,
+        offset,
+        bytesToBase64(bytes)
+      )
+      if (typeof received !== 'number' || received <= offset) {
+        throw new Error('The desktop rejected an attachment chunk')
+      }
+      offset = received
+    }
+    const path = await remoteBridge.invoke('attachment:finishRemoteUpload', uploadId)
+    return typeof path === 'string' ? path : ''
+  } catch (error) {
+    await remoteBridge.invoke('attachment:cancelRemoteUpload', uploadId).catch(() => undefined)
+    throw error
+  }
+}
 
 declare global {
   interface Window {
@@ -37,7 +87,7 @@ export function installRemoteApiShim(): void {
       trafficLight: { present: false, side: null, offset: 0 }
     },
     readFile: async () => new Uint8Array(0),
-    registerFileSelection: async () => '',
+    registerFileSelection: registerRemoteFile,
     getPathForFile: () => '',
     startFileDrag: () => {}
   }

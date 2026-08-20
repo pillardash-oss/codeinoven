@@ -6,6 +6,7 @@
   import { clearPreferredDesktop } from '$lib/remote/preferred-desktop'
   import { invoke } from '$lib/ipc.svelte'
   import { applyTheme, resolveTheme, watchSystemDark } from '$lib/theme'
+  import Toaster from '$lib/components/ui/Toaster.svelte'
 
   let connected = $derived(
     remoteSession.snapshot.route.kind === 'LAN_CONNECTED' ||
@@ -82,3 +83,5 @@
 {:else}
   <CloudRemoteAccess onOpenWorkspace={openWorkspace} />
 {/if}
+
+<Toaster />

@@ -105,6 +105,8 @@ interface PeerConnection {
   device?: RemoteDeviceInfo
   sessionId: string
   originPolicy: 'strict' | 'local'
+  /** Per-device send chain: encrypted event deltas must reach the browser in source order. */
+  sendQueue: Promise<void>
 }
 
 /** An on-disk file with its raw bytes, ETag, and lazily-compressed variants. */
@@ -142,6 +144,10 @@ const ALLOWED_STATIC: ReadonlySet<string> = new Set([
   '/precache-manifest.json',
   '/apple-touch-icon.png',
   '/icon.png',
+  '/icon-192.png',
+  '/icon-512.png',
+  '/icon-maskable-512.png',
+  '/notification-badge.png',
   '/logo.png',
   '/favicon.ico'
 ])
@@ -724,7 +730,8 @@ export class RemoteGateway {
       connectedAt: 0,
       authChallenge: randomBytes(32).toString('base64url'),
       sessionId: randomBytes(16).toString('base64url'),
-      originPolicy
+      originPolicy,
+      sendQueue: Promise.resolve()
     }
     this.peers.add(peer)
     socketSend(peer, { type: 'remote:challenge', nonce: peer.authChallenge })
@@ -989,13 +996,7 @@ export class RemoteGateway {
    * events to the phones.
    */
   sendToPeer(payload: unknown): void {
-    const secret = this.options.peerSecret ?? ''
-    void encryptPayload(secret, JSON.stringify(payload)).then((encrypted) => {
-      for (const peer of this.livePeers.values()) {
-        if (peer.closing || peer.socket.destroyed) continue
-        socketSend(peer, { type: 'remote:data', payload: encrypted })
-      }
-    })
+    for (const peer of this.livePeers.values()) this.queuePeerSend(peer, payload)
   }
 
   private handleData(peer: PeerConnection, plaintext: string): void {
@@ -1008,9 +1009,7 @@ export class RemoteGateway {
     if (typeof message !== 'object' || message === null) return
     const record = message as Record<string, unknown>
     if (record.type === 'ping') {
-      void encryptPayload(this.options.peerSecret ?? '', JSON.stringify({ type: 'pong' })).then(
-        (payload) => socketSend(peer, { type: 'remote:data', payload })
-      )
+      this.queuePeerSend(peer, { type: 'pong' })
       return
     }
     if (record.rpc === 'invoke') {
@@ -1049,10 +1048,19 @@ export class RemoteGateway {
 
   /** Send a JSON payload to a single peer (RPC results must not broadcast). */
   private sendToPeerOnly(peer: PeerConnection, payload: unknown): void {
+    this.queuePeerSend(peer, payload)
+  }
+
+  private queuePeerSend(peer: PeerConnection, payload: unknown): void {
     if (peer.closing || peer.socket.destroyed) return
-    void encryptPayload(this.options.peerSecret ?? '', JSON.stringify(payload)).then((encrypted) =>
-      socketSend(peer, { type: 'remote:data', payload: encrypted })
-    )
+    const plaintext = JSON.stringify(payload)
+    peer.sendQueue = peer.sendQueue
+      .then(async () => {
+        if (peer.closing || peer.socket.destroyed) return
+        const encrypted = await encryptPayload(this.options.peerSecret ?? '', plaintext)
+        socketSend(peer, { type: 'remote:data', payload: encrypted })
+      })
+      .catch(() => undefined)
   }
 }
 

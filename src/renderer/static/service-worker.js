@@ -130,9 +130,7 @@ async function activateShell() {
   }
   if (previousGood) keep.add(previousGood)
 
-  await Promise.all(
-    keys.filter((key) => !keep.has(key)).map((key) => caches.delete(key))
-  )
+  await Promise.all(keys.filter((key) => !keep.has(key)).map((key) => caches.delete(key)))
   await self.clients.claim()
 }
 
@@ -161,8 +159,43 @@ self.addEventListener('notificationclick', (event) => {
           return
         }
       }
-      return self.clients.openWindow('/')
+      return self.clients.openWindow('/').then((client) => {
+        if (client && data.projectId && data.threadId) {
+          client.postMessage({
+            type: 'notification:open',
+            projectId: data.projectId,
+            threadId: data.threadId
+          })
+        }
+      })
     })
+  )
+})
+
+/**
+ * True background delivery. Unlike the page's encrypted socket, the browser's
+ * Push service can wake this worker after the installed PWA has been minimized
+ * or terminated.
+ */
+self.addEventListener('push', (event) => {
+  if (!event.data) return
+  event.waitUntil(
+    Promise.resolve()
+      .then(() => event.data.json())
+      .then((payload) => {
+        if (!payload || typeof payload !== 'object' || !payload.title) return
+        return self.registration.showNotification(payload.title, {
+          body: payload.body,
+          tag: `codeinoven-${payload.projectId}-${payload.threadId}`,
+          renotify: true,
+          requireInteraction: payload.kind === 'attention' || payload.kind === 'error',
+          silent: false,
+          data: { projectId: payload.projectId, threadId: payload.threadId },
+          icon: './icon-192.png',
+          badge: './notification-badge.png'
+        })
+      })
+      .catch(() => undefined)
   )
 })
 

@@ -20,6 +20,7 @@ import { SecretVault } from '../storage/secret-vault'
 import { CloudRelayClient } from './cloud-relay-client'
 import { createDesktopControlGrant } from './control-grant'
 import { RemoteGateway } from './remote-gateway'
+import { remoteWebPush } from './web-push-service'
 import { createRemoteTray, type RemoteTray } from './remote-tray'
 import type { RemoteCloudStatus, RemoteDeviceInfo, RemoteModeStatus } from './remote-types'
 import type {
@@ -517,6 +518,7 @@ export class RemoteModeController {
   private accountProfileGeneration = 0
   private cloudConfig: CloudAccessConfig | null = null
   private cloudRelay: CloudRelayClient | null = null
+  private cloudEventSendQueue: Promise<void> = Promise.resolve()
   private cloudPollTimer: ReturnType<typeof setTimeout> | null = null
   private cloudProfileSyncTimer: ReturnType<typeof setTimeout> | null = null
   private cloudAbortController: AbortController | null = null
@@ -815,6 +817,7 @@ export class RemoteModeController {
     if (!this.credentials) throw new Error('Device credential service is unavailable')
     const revoked = this.credentials.revokeDevice(deviceId, reason || 'operator')
     if (!revoked) throw new Error('Device not found')
+    await remoteWebPush.removeDevice(deviceId)
     this.gateway?.disconnectDevice(deviceId)
     // Terminate any bound cloud relay session for this device immediately;
     // per-invoke revalidation also rejects it if a socket survives.
@@ -934,7 +937,11 @@ export class RemoteModeController {
   private installEventForwarder(): void {
     setRemoteEventForwarder((channel, payload) => {
       this.gateway?.sendToPeer({ rpc: 'event', channel, payload })
-      void this.cloudRelay?.send({ rpc: 'event', channel, payload })
+      this.cloudEventSendQueue = this.cloudEventSendQueue
+        .then(async () => {
+          await this.cloudRelay?.send({ rpc: 'event', channel, payload })
+        })
+        .catch(() => undefined)
     })
   }
 

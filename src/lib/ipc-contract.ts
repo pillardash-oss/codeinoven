@@ -825,6 +825,28 @@ export interface IpcInvokeContract {
     [scope: AttachmentStorageScope, text: string, existingPath?: string],
     string
   >
+  'attachment:beginRemoteUpload': Contract<
+    [scope: AttachmentStorageScope, filename: string, size: number],
+    string
+  >
+  'attachment:appendRemoteUpload': Contract<
+    [uploadId: string, offset: number, base64Chunk: string],
+    number
+  >
+  'attachment:finishRemoteUpload': Contract<[uploadId: string], string>
+  'attachment:cancelRemoteUpload': Contract<[uploadId: string], void>
+  'remotePush:getPublicKey': Contract<[], string>
+  'remotePush:subscribe': Contract<
+    [
+      subscription: {
+        endpoint: string
+        expirationTime: number | null
+        keys: { p256dh: string; auth: string }
+      }
+    ],
+    void
+  >
+  'remotePush:unsubscribe': Contract<[endpoint: string], void>
   'clipboard:writeText': Contract<[text: string], void>
   'clipboard:readText': Contract<[], string>
   'dialog:pickFile': Contract<[scope?: AttachmentStorageScope], string | null>

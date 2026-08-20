@@ -18,8 +18,10 @@ import { loadProjectIcons } from '$lib/project-icons'
 import { hasProjectNameCollision } from '$lib/project-location'
 import { agentRuns } from '$lib/stores/agent-runs.svelte'
 import { threadMessages } from '$lib/stores/thread-messages.svelte'
+import { chatEffectiveSettings, threadSettings } from '$lib/stores/thread-settings.svelte'
 import {
   coordinatorHasActiveDelegates,
+  DEFAULT_THREAD_TITLE,
   INBOX_PROJECT_ID,
   isOrchestrationChildThread,
   isThreadWorking,
@@ -279,6 +281,39 @@ class MobileState {
     await this.openThread(forked)
   }
 
+  async createProjectThread(project: Project): Promise<void> {
+    const inherited =
+      this.selectedThread?.projectId === project.id && this.selectedThread.settings
+        ? this.selectedThread.settings
+        : threadSettings.lastUsed
+    const created = await invoke('thread:create', {
+      projectId: project.id,
+      providerId: 'opencode',
+      title: DEFAULT_THREAD_TITLE,
+      workingDirectory: project.path,
+      settings: inherited
+    })
+    this.allThreads = [created, ...this.allThreads.filter((thread) => thread.id !== created.id)]
+    this.expandedFolders.add(project.id)
+    await this.openThread(created)
+  }
+
+  async createChat(): Promise<void> {
+    const inbox = await invoke('project:ensureInbox')
+    if (!this.projects.some((project) => project.id === inbox.id)) {
+      this.projects = [...this.projects, inbox]
+    }
+    const created = await invoke('thread:create', {
+      projectId: inbox.id,
+      providerId: 'opencode',
+      title: DEFAULT_THREAD_TITLE,
+      workingDirectory: '',
+      settings: chatEffectiveSettings()
+    })
+    this.allThreads = [created, ...this.allThreads.filter((thread) => thread.id !== created.id)]
+    await this.openThread(created)
+  }
+
   toggleFolder(projectId: string): void {
     if (this.expandedFolders.has(projectId)) this.expandedFolders.delete(projectId)
     else this.expandedFolders.add(projectId)
@@ -299,7 +334,10 @@ class MobileState {
         : [updated, ...this.orchestrationThreads]
       return
     }
-    this.allThreads = this.allThreads.map((t) => (t.id === updated.id ? updated : t))
+    const exists = this.allThreads.some((thread) => thread.id === updated.id)
+    this.allThreads = exists
+      ? this.allThreads.map((thread) => (thread.id === updated.id ? updated : thread))
+      : [updated, ...this.allThreads]
     this.refreshAttention()
     if (this.selectedThread?.id === updated.id) {
       this.selectedThread = updated

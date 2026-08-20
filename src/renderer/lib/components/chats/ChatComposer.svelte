@@ -61,6 +61,7 @@
   import ModelPicker from '../shared/ModelPicker.svelte'
   import { filterActions } from '$lib/actions'
   import { APP_NAME } from '$shared/brand'
+  import { isRemotePwaRuntime } from '$lib/runtime-context'
   import type { ActionDefinition, ActionSelection, ActionSource } from '$lib/actions'
   import type { RichInlineBadge } from '../shared/rich-markdown'
   import type {
@@ -321,6 +322,7 @@
   // intentionally capture only the initial attachments passed at creation time.
   // svelte-ignore state_referenced_locally
   let attachments = $state<PromptAttachment[]>([...initialAttachments])
+  let remoteFileInput = $state<HTMLInputElement>()
   // svelte-ignore state_referenced_locally
   let projectReferences = $state<PromptProjectReference[]>([...initialProjectReferences])
   // svelte-ignore state_referenced_locally
@@ -1263,8 +1265,27 @@
       attachmentBlockedNotice = true
       return
     }
+    if (isRemotePwaRuntime()) {
+      remoteFileInput?.click()
+      return
+    }
     const paths = await invoke('dialog:pickFiles', attachmentStorage)
     await addFileAttachments(paths.map((path) => ({ path })))
+  }
+
+  async function handleRemoteFileSelection(event: Event): Promise<void> {
+    const input = event.currentTarget
+    if (!(input instanceof HTMLInputElement) || !input.files) return
+    for (const file of Array.from(input.files)) {
+      try {
+        const filePath = await window.api.registerFileSelection(file, attachmentStorage)
+        if (filePath) await addFileAttachment(filePath, file)
+      } catch (error) {
+        textAttachmentError =
+          error instanceof Error ? error.message : 'The attachment could not be added.'
+      }
+    }
+    input.value = ''
   }
 
   // ─── Global file drop (full viewport) ─────────────────────────────────────
@@ -1309,8 +1330,12 @@
       try {
         const filePath = await window.api.registerFileSelection(file, attachmentStorage)
         if (filePath) await addFileAttachment(filePath, file)
-      } catch {
+      } catch (error) {
         // Not a local file (e.g., image dragged from a web page); skip.
+        if (isRemotePwaRuntime()) {
+          textAttachmentError =
+            error instanceof Error ? error.message : 'The attachment could not be added.'
+        }
       }
     }
   }
@@ -1582,6 +1607,16 @@
 </script>
 
 <svelte:window onkeydown={onWindowKeydown} />
+
+<input
+  bind:this={remoteFileInput}
+  type="file"
+  multiple
+  class="sr-only"
+  tabindex="-1"
+  aria-hidden="true"
+  onchange={(event) => void handleRemoteFileSelection(event)}
+/>
 
 {#if previewFile}
   <AttachmentPreview

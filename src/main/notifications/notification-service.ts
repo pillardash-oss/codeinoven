@@ -4,6 +4,7 @@ import { APP_NAME, APP_SLUG } from '../../lib/brand'
 import { Logger } from '../system/logger'
 import { sendToRenderer } from '../ipc/renderer-delivery'
 import { forwardRemoteEvent } from '../remote/remote-event-forwarder'
+import { remoteWebPush } from '../remote/web-push-service'
 import type { StorageEngine } from '../storage/storage-engine'
 import type { Database } from '../database/database'
 import { ProjectRepo } from '../database/repositories/project-repo'
@@ -482,6 +483,9 @@ export class NotificationService {
       }
     }
     forwardRemoteEvent('notification:show', payload)
+    void remoteWebPush
+      .send(payload)
+      .catch((error) => Logger.dev('Remote Web Push notification failed:', error))
 
     if (windows.some((window) => window.isFocused())) return
     this.dispatchNotificationSound(windows)
@@ -571,6 +575,9 @@ export class NotificationService {
       }
     }
     forwardRemoteEvent('notification:show', payload)
+    void remoteWebPush
+      .send(payload)
+      .catch((error) => Logger.dev('Remote Web Push notification failed:', error))
 
     if (windows.some((window) => window.isFocused())) return
     this.dispatchNotificationSound(windows)

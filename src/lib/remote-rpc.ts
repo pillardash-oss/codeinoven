@@ -53,6 +53,7 @@ export const REMOTE_ALLOWED_CHANNELS: readonly string[] = [
   'project:list',
   'project:get',
   'project:getIcon',
+  'project:ensureInbox',
   'thread:listAll',
   'thread:list',
   'thread:get',
@@ -71,6 +72,13 @@ export const REMOTE_ALLOWED_CHANNELS: readonly string[] = [
   'thread:fork',
   'thread:reorderScope',
   'threads:search',
+  'attachment:beginRemoteUpload',
+  'attachment:appendRemoteUpload',
+  'attachment:finishRemoteUpload',
+  'attachment:cancelRemoteUpload',
+  'remotePush:getPublicKey',
+  'remotePush:subscribe',
+  'remotePush:unsubscribe',
   // Config + scope board ("charts")
   'config:get',
   'config:update',
@@ -238,6 +246,8 @@ export const REMOTE_ALLOWED_CHANNELS: readonly string[] = [
 export const REMOTE_FORWARDED_EVENTS: readonly string[] = [
   'agent:event',
   'thread:updated',
+  'thread:deleted',
+  'notification:show',
   'providers:status'
 ] as const
 
@@ -336,6 +346,7 @@ export const REMOTE_CHANNEL_AUTHORIZATION: Readonly<Record<string, RemoteChannel
   'project:list': { scope: 'workspace.read', stepUp: 'none' },
   'project:get': { scope: 'workspace.read', stepUp: 'none' },
   'project:getIcon': { scope: 'workspace.read', stepUp: 'none' },
+  'project:ensureInbox': { scope: 'workspace.read', stepUp: 'none' },
   'thread:listAll': { scope: 'workspace.read', stepUp: 'none' },
   'thread:list': { scope: 'workspace.read', stepUp: 'none' },
   'thread:get': { scope: 'workspace.read', stepUp: 'none' },
@@ -343,11 +354,18 @@ export const REMOTE_CHANNEL_AUTHORIZATION: Readonly<Record<string, RemoteChannel
   'thread:efficiencyKpis': { scope: 'workspace.read', stepUp: 'none' },
   'thread:loadMessages': { scope: 'workspace.read', stepUp: 'none' },
   'threads:search': { scope: 'workspace.read', stepUp: 'none' },
+  'remotePush:getPublicKey': { scope: 'workspace.read', stepUp: 'none' },
   'scope:get': { scope: 'workspace.read', stepUp: 'none' },
 
   // workspace.write — default-No, no step-up
   'thread:exportTranscript': { scope: 'workspace.write', stepUp: 'none' },
   'thread:create': { scope: 'workspace.write', stepUp: 'none' },
+  'attachment:beginRemoteUpload': { scope: 'workspace.write', stepUp: 'none' },
+  'attachment:appendRemoteUpload': { scope: 'workspace.write', stepUp: 'none' },
+  'attachment:finishRemoteUpload': { scope: 'workspace.write', stepUp: 'none' },
+  'attachment:cancelRemoteUpload': { scope: 'workspace.write', stepUp: 'none' },
+  'remotePush:subscribe': { scope: 'workspace.write', stepUp: 'none' },
+  'remotePush:unsubscribe': { scope: 'workspace.write', stepUp: 'none' },
   'thread:markRead': { scope: 'workspace.write', stepUp: 'none' },
   'thread:setPinned': { scope: 'workspace.write', stepUp: 'none' },
   'thread:setStatus': { scope: 'workspace.write', stepUp: 'none' },
