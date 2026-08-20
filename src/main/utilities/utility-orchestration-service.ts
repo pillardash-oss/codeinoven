@@ -45,7 +45,7 @@ import { instanceRegistry } from '../system/instance-registry'
 
 const BRIDGE_SCRIPT_PATH = 'runtime/utility-gateway/bridge.mjs'
 const RETRIEVE_MCP_HOST_ROUTE = '/retrieve-mcp-host'
-const RETRIEVE_MCP_HOST_SCRIPT_PATH = `runtime/utility-gateway/${RETRIEVE_MCP_HOST_TOOL_NAME}`
+const RETRIEVE_MCP_HOST_SCRIPT_PATH = `runtime/utility-gateway/${RETRIEVE_MCP_HOST_TOOL_NAME}.mjs`
 const MAX_REQUEST_BYTES = 1_000_000
 const CUA_UTILITY_ID = 'codeinoven:cua-driver'
 const UTILITY_SEARCH_STOP_WORDS = new Set([
@@ -132,7 +132,7 @@ export class UtilityOrchestrationService {
   private readonly vault: SecretVault
   private readonly turns = new Map<
     string,
-    { state: TurnState; scriptPath: string; retrieverPath: string; token: string }
+    { state: TurnState; scriptPath: string; token: string }
   >()
   private readonly turnIdsByToken = new Map<string, string>()
   private gatewayServer: Server | null = null
@@ -243,17 +243,13 @@ export class UtilityOrchestrationService {
     const bridgeUrl = await this.ensureGatewayServer()
     const token = randomBytes(32).toString('hex')
     const scriptPath = `${BRIDGE_SCRIPT_PATH}.${id}.mjs`
-    const retrieverPath = `${RETRIEVE_MCP_HOST_SCRIPT_PATH}.${id}.mjs`
     await this.storage.writeRaw(scriptPath, buildUtilityGatewayScript(gatewayTools))
-    await this.storage.writeRaw(
-      retrieverPath,
-      buildMcpHostRetrieverScript(this.storage.resolve('instances'), request.sessionId)
-    )
-    this.turns.set(id, { state, scriptPath, retrieverPath, token })
+    const retrieverPath = await this.ensureMcpHostRetriever()
+    this.turns.set(id, { state, scriptPath, token })
     this.turnIdsByToken.set(token, id)
 
     const gateway = gatewayUtility(request, this.storage.resolve(scriptPath), bridgeUrl, token)
-    const recoveryInstruction = `The always-active ${RETRIEVE_MCP_HOST_TOOL_NAME} utility is independent of MCP. If the advertised app gateway is unreachable, call it through the shell with \`bun ${shellQuote(this.storage.resolve(retrieverPath))}\`. It discovers the owning live CodeInOven instance and returns the current \`mcpHost\`. Retry the original route against that host with the current turn's authorization header. Never print or persist the bearer token.`
+    const recoveryInstruction = `The always-active ${RETRIEVE_MCP_HOST_TOOL_NAME} utility is independent of MCP. If the advertised app gateway is unreachable, call it through the shell with \`bun ${shellQuote(retrieverPath)} ${shellQuote(request.sessionId)}\`. It discovers the owning live CodeInOven instance and returns the current \`mcpHost\`. Retry the original route against that host with the current turn's authorization header. Never print or persist the bearer token.`
     await this.audit(state, 'turn.started', {
       eligibleUtilityIds: eligible.map(({ utility }) => utility.id),
       alwaysUtilityIds: always.map(({ utility }) => utility.id)
@@ -317,7 +313,6 @@ export class UtilityOrchestrationService {
     await this.endComputerUseSessions(turn.state)
     await Promise.allSettled([...turn.state.clients.values()].map((client) => client.close()))
     await this.storage.remove(turn.scriptPath)
-    await this.storage.remove(turn.retrieverPath)
     await this.audit(turn.state, 'turn.cleaned', {
       activatedUtilityIds: [...turn.state.activated.keys()]
     })
@@ -396,6 +391,19 @@ export class UtilityOrchestrationService {
     } finally {
       if (this.gatewayStarting === starting) this.gatewayStarting = null
     }
+  }
+
+  /**
+   * Materialize one durable app-owned recovery module. Turn instructions pass
+   * their session id as data, so cleanup can retire turn state without leaving
+   * a command in persistent agent context that points at a deleted module.
+   */
+  private async ensureMcpHostRetriever(): Promise<string> {
+    const script = buildMcpHostRetrieverScript(this.storage.resolve('instances'))
+    if ((await this.storage.readRaw(RETRIEVE_MCP_HOST_SCRIPT_PATH)) !== script) {
+      await this.storage.writeRaw(RETRIEVE_MCP_HOST_SCRIPT_PATH, script)
+    }
+    return this.storage.resolve(RETRIEVE_MCP_HOST_SCRIPT_PATH)
   }
 
   private async search(state: TurnState, input: Record<string, unknown>): Promise<unknown> {
@@ -1116,16 +1124,21 @@ for await (const line of lines) {
 }
 
 /**
- * Build a turn-scoped, shell-callable host resolver. It reads only public
- * process metadata and probes every loopback gateway in parallel; bearer
- * credentials never enter the registry, command arguments, or tool output.
+ * Build the durable, shell-callable host resolver. It reads only public process
+ * metadata and probes every loopback gateway in parallel; bearer credentials
+ * never enter the registry, command arguments, or tool output.
  */
-function buildMcpHostRetrieverScript(instanceDirectory: string, sessionId: string): string {
+function buildMcpHostRetrieverScript(instanceDirectory: string): string {
   return String.raw`import { promises as fs } from 'node:fs'
 import { join } from 'node:path'
 
 const instanceDirectory = ${JSON.stringify(instanceDirectory)}
-const sessionId = ${JSON.stringify(sessionId)}
+const sessionId = process.argv[2]?.trim()
+
+if (!sessionId || sessionId.length > 128) {
+  process.stderr.write('retrieve_mcp_host requires the current utility session id.\n')
+  process.exit(1)
+}
 
 function validLoopbackHost(value) {
   if (typeof value !== 'string') return null
