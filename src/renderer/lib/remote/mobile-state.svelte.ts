@@ -397,11 +397,11 @@ class MobileState {
         undefined,
         status.state === 'working' ? status.startedAt : undefined
       )
-      threadMessages.setRunError(selected.projectId, selected.threadId, '')
+      threadMessages.setRunIssue(selected.projectId, selected.threadId, null)
     } else {
       agentRuns.setIdle(selected.projectId, selected.threadId)
       if (status?.state === 'error') {
-        threadMessages.setRunError(selected.projectId, selected.threadId, status.issue.message)
+        threadMessages.setRunIssue(selected.projectId, selected.threadId, status.issue)
       }
     }
     await threadMessages.load(selected.projectId, selected.threadId)

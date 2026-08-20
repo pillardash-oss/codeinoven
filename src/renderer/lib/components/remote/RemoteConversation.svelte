@@ -2,7 +2,7 @@
   import { onDestroy, onMount } from 'svelte'
   import type { Attachment } from 'svelte/attachments'
   import { SvelteMap } from 'svelte/reactivity'
-  import { Check, ChevronDown, Copy, FileText, GitFork, Loader2, RefreshCw } from '@lucide/svelte'
+  import { Check, ChevronDown, Copy, FileText, GitFork, Loader2 } from '@lucide/svelte'
   import { threadMessages } from '$lib/stores/thread-messages.svelte'
   import { agentRuns } from '$lib/stores/agent-runs.svelte'
   import {
@@ -18,6 +18,7 @@
   import { getAgentIcon } from '$lib/agent-icons/registry'
   import { mobileState } from '$lib/remote/mobile-state.svelte'
   import ChatComposer from '../chats/ChatComposer.svelte'
+  import AgentProviderStatusCard from '../threads/AgentProviderStatusCard.svelte'
   import WorkingTrace from '../threads/WorkingTrace.svelte'
   import MarkdownView from '../markdown/MarkdownView.svelte'
   import BottomSheet from '../ui/BottomSheet.svelte'
@@ -25,6 +26,8 @@
   import type {
     AgentMessage,
     AgentPart,
+    AgentProviderIssue,
+    AgentSessionStatus,
     PromptAttachment,
     Thread,
     ThreadSettings
@@ -44,10 +47,12 @@
   let loaded = $derived(threadMessages.loaded(thread.projectId, thread.id))
   let loading = $derived(threadMessages.loading(thread.projectId, thread.id))
   let loadError = $derived(threadMessages.error(thread.projectId, thread.id))
-  let runError = $derived(threadMessages.runError(thread.projectId, thread.id))
+  let runIssue = $derived(threadMessages.runIssue(thread.projectId, thread.id))
   let busy = $derived(agentRuns.isBusy(thread.projectId, thread.id))
 
   let sendError = $state('')
+  let failedDelivery = $state<{ text: string; attachments: PromptAttachment[] } | null>(null)
+  let errorRetrying = $state(false)
   let scrollEl = $state<HTMLDivElement>()
   /** Whether the user has scrolled away from the live tail. While away, the
    *  auto-follow must stay released until they scroll back to the bottom. */
@@ -238,15 +243,6 @@
     return files
   }
 
-  function turnError(startIndex: number): string {
-    const endIndex = turnEndIndex(startIndex)
-    for (let index = endIndex; index >= startIndex; index -= 1) {
-      const error = messages[index]?.error
-      if (error) return error
-    }
-    return ''
-  }
-
   function turnStartTime(startIndex: number): number | undefined {
     const preceding = messages[startIndex - 1]
     return preceding?.role === 'user' ? preceding.createdAt : messages[startIndex]?.createdAt
@@ -285,6 +281,33 @@
     return getAgentIcon(id)?.name ?? id
   }
 
+  function localIssue(message: string, retryable: boolean): AgentProviderIssue {
+    return {
+      kind: 'unknown',
+      message,
+      rawError: message,
+      harnessId: settings.harnessId,
+      retryable
+    }
+  }
+
+  let visibleErrorStatus = $derived.by<Extract<AgentSessionStatus, { state: 'error' }> | null>(
+    () => {
+      if (runIssue) return { state: 'error', issue: runIssue }
+      if (sendError) {
+        return { state: 'error', issue: localIssue(sendError, failedDelivery !== null) }
+      }
+      if (loadError) return { state: 'error', issue: localIssue(loadError, true) }
+      return null
+    }
+  )
+  let errorProviderName = $derived(
+    visibleErrorStatus
+      ? (getAgentIcon(visibleErrorStatus.issue.harnessId)?.name ??
+          visibleErrorStatus.issue.harnessId)
+      : settings.harnessId
+  )
+
   function formatDuration(milliseconds: number): string {
     const seconds = Math.max(0, Math.round(milliseconds / 1000))
     if (seconds < 60) return `${seconds}s`
@@ -307,6 +330,7 @@
       clearTimeout(copyResetTimer)
       copyResetTimer = setTimeout(() => (copiedMessageId = null), 1_500)
     } catch {
+      failedDelivery = null
       sendError = 'The response could not be copied to the clipboard.'
     }
   }
@@ -325,6 +349,7 @@
       )
       await mobileState.openThread(forked)
     } catch (error) {
+      failedDelivery = null
       sendError = error instanceof Error ? error.message : 'The thread could not be forked.'
     } finally {
       forkingMessageId = null
@@ -362,10 +387,54 @@
         undefined,
         userMessageId
       )
+      failedDelivery = null
     } catch (error) {
       agentRuns.setIdle(thread.projectId, thread.id)
+      failedDelivery = { text, attachments }
       sendError = error instanceof Error ? error.message : 'The message could not be sent.'
     }
+  }
+
+  async function retryVisibleError(): Promise<void> {
+    if (errorRetrying) return
+    errorRetrying = true
+    try {
+      if (loadError && !runIssue && !sendError) {
+        await threadMessages.load(thread.projectId, thread.id)
+        return
+      }
+      if (sendError && failedDelivery) {
+        const failed = failedDelivery
+        await deliver(failed.text, failed.attachments)
+        return
+      }
+      await deliver('Continue', [])
+    } finally {
+      errorRetrying = false
+    }
+  }
+
+  async function dismissVisibleError(): Promise<void> {
+    if (runIssue) {
+      try {
+        await invoke(
+          'agent:dismissSessionError',
+          thread.projectId,
+          thread.id,
+          thread.sessionId ?? ''
+        )
+        threadMessages.setRunIssue(thread.projectId, thread.id, null)
+      } catch {
+        // Keep the actionable card visible when the desktop cannot dismiss it.
+      }
+      return
+    }
+    if (sendError) {
+      sendError = ''
+      failedDelivery = null
+      return
+    }
+    threadMessages.clearLoadError(thread.projectId, thread.id)
   }
 
   /** Once every dependency thread this message waits on goes idle, deliver it. */
@@ -406,6 +475,7 @@
       await invoke('agent:abort', thread.projectId, thread.id)
       agentRuns.setIdle(thread.projectId, thread.id)
     } catch (error) {
+      failedDelivery = null
       sendError = error instanceof Error ? error.message : 'The request could not be stopped.'
     }
   }
@@ -486,20 +556,12 @@
               {@const turnBusy = busy && endIndex === messages.length - 1}
               {@const trace = turnTraceParts(index, turnBusy)}
               {@const assistantFiles = turnFiles(index)}
-              {@const error = turnError(index)}
               {@const attribution = turnAttribution(index)}
               {@const isLatestAssistantTurn = messages
                 .slice(endIndex + 1)
                 .every((candidate) => candidate.role === 'user')}
               {@const turnDone = endMessage.completedAt !== undefined || !turnBusy}
               <div class="flex flex-col gap-1.5">
-                {#if error}
-                  <p
-                    class="rounded-xl border border-danger/30 bg-danger/10 px-3 py-2 text-[13px] text-danger"
-                  >
-                    {error}
-                  </p>
-                {/if}
                 {#if trace.length > 0}
                   <WorkingTrace
                     parts={trace}
@@ -544,7 +606,7 @@
                     Working…
                   </div>
                 {/if}
-                {#if turnDone && !turnBusy && (final || error)}
+                {#if turnDone && !turnBusy && final}
                   <div class="mt-1 flex min-h-8 items-center gap-1 text-dimmed">
                     {#if final}
                       <button
@@ -597,41 +659,6 @@
         </div>
       {/if}
 
-      {#if loadError}
-        <div
-          class="flex items-center justify-between gap-2 rounded-xl border border-danger/30 bg-danger/10 px-3 py-2 text-[13px] text-danger"
-        >
-          <span>{loadError}</span>
-          <button
-            type="button"
-            class="flex h-8 shrink-0 cursor-pointer items-center gap-1.5 rounded-lg px-2 text-xs text-danger transition-colors hover:bg-danger/10"
-            title="Retry loading the conversation"
-            aria-label="Retry loading the conversation"
-            onclick={() => void threadMessages.load(thread.projectId, thread.id)}
-          >
-            <RefreshCw size={13} />
-            Retry
-          </button>
-        </div>
-      {/if}
-
-      {#if sendError}
-        <p
-          class="rounded-xl border border-danger/30 bg-danger/10 px-3 py-2 text-[13px] text-danger"
-        >
-          {sendError}
-        </p>
-      {/if}
-
-      {#if runError && !sendError && !messages.some((message) => message.error === runError)}
-        <p
-          class="rounded-xl border border-danger/30 bg-danger/10 px-3 py-2 text-[13px] text-danger"
-          role="alert"
-        >
-          {runError}
-        </p>
-      {/if}
-
       {#if queuedMessage}
         <p class="rounded-xl border border-border bg-elevated px-3 py-2 text-[12px] text-dimmed">
           Queued — will send once {queuedMessage.startAfterThreads.length === 1
@@ -655,6 +682,18 @@
       >
         <ChevronDown size={19} />
       </button>
+    {/if}
+    {#if visibleErrorStatus}
+      <div class="mb-2">
+        <AgentProviderStatusCard
+          status={visibleErrorStatus}
+          providerName={errorProviderName}
+          retrying={errorRetrying}
+          retryLabel={loadError && !runIssue && !sendError ? 'Retry loading' : 'Retry'}
+          onRetry={visibleErrorStatus.issue.retryable ? retryVisibleError : undefined}
+          onDismiss={dismissVisibleError}
+        />
+      </div>
     {/if}
     <ChatComposer
       onSend={handleSend}
