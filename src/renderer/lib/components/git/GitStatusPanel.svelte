@@ -1856,18 +1856,9 @@
                 </p>
               </div>
             {:else if status}
-              <!-- Stable header: conflict controls (when merging) or stage all + selection + view toggle -->
+              <!-- Stable header: abort control (when merging) or stage all + selection + view toggle -->
               <div class="flex shrink-0 items-center gap-2 border-b border-border px-3 py-1.5">
                 {#if conflicted.length > 0}
-                  <button
-                    type="button"
-                    class="flex shrink-0 items-center gap-1.5 rounded-md bg-primary px-2.5 py-1 text-[10px] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:cursor-default disabled:opacity-40"
-                    title="Open the conflict resolution panel for every conflicted file"
-                    onclick={() => routeConflictResolution()}
-                  >
-                    <GitMerge size={11} />
-                    Resolve all
-                  </button>
                   <button
                     type="button"
                     class="flex shrink-0 items-center gap-1.5 rounded-md border border-danger/40 px-2.5 py-1 text-[10px] font-medium text-danger transition-colors hover:bg-danger/10 disabled:cursor-default disabled:opacity-40"
