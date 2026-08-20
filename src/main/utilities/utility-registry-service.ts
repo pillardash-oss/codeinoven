@@ -39,7 +39,8 @@ export const APP_IMAGE_DESCRIPTOR_UTILITY_ID = 'codeinoven:image-descriptor'
 /** Stable id of the app-owned, always-active MCP host recovery utility. */
 export const APP_RETRIEVE_MCP_HOST_UTILITY_ID = 'codeinoven:retrieve-mcp-host'
 /** Stable id of the browser control utility backed by the in-app browser. */
-export const APP_BROWSER_UTILITY_ID = 'codeinoven:browser'
+export const APP_BROWSER_UTILITY_ID = 'cio:browser'
+const LEGACY_APP_BROWSER_UTILITY_ID = 'codeinoven:browser'
 
 interface UtilityRegistryFile {
   version: number
@@ -125,9 +126,9 @@ export class UtilityRegistryService {
       {
         id: APP_BROWSER_UTILITY_ID,
         kind: 'computer_use',
-        name: 'In-app browser',
+        name: 'cio:browser',
         description:
-          'Opens and controls the app-scoped browser for localhost and web application testing, including navigation, DOM snapshots, clicks, typing, and screenshots.',
+          'Runs project- and thread-scoped browsers for localhost and web application testing, including navigation, DOM snapshots, clicks, typing, screenshots, and browser console diagnostics.',
         enabled: true,
         activation: 'on_demand',
         scope: { level: 'global' },
@@ -143,10 +144,55 @@ export class UtilityRegistryService {
         updatedAt: now
       }
     ]
+    let registryChanged = false
+    const browserDefault = defaults.find((utility) => utility.id === APP_BROWSER_UTILITY_ID)
+    if (!browserDefault) throw new Error('The app-owned browser utility default is missing')
+    const legacyBrowserIndex = registry.utilities.findIndex(
+      (utility) => utility.id === LEGACY_APP_BROWSER_UTILITY_ID
+    )
+    const browserIndex = registry.utilities.findIndex(
+      (utility) => utility.id === APP_BROWSER_UTILITY_ID
+    )
+    if (browserIndex >= 0) {
+      const existing = registry.utilities[browserIndex]
+      const needsRefresh =
+        existing.kind !== browserDefault.kind ||
+        existing.name !== browserDefault.name ||
+        existing.description !== browserDefault.description ||
+        existing.enabled !== browserDefault.enabled ||
+        existing.activation !== browserDefault.activation ||
+        JSON.stringify(existing.scope) !== JSON.stringify(browserDefault.scope) ||
+        JSON.stringify(existing.config) !== JSON.stringify(browserDefault.config) ||
+        JSON.stringify(existing.harnessBindings) !== JSON.stringify(browserDefault.harnessBindings)
+      if (needsRefresh) {
+        registry.utilities[browserIndex] = {
+          ...browserDefault,
+          createdAt: existing.createdAt,
+          updatedAt: now
+        }
+        registryChanged = true
+      }
+      if (legacyBrowserIndex >= 0) {
+        registry.utilities.splice(legacyBrowserIndex, 1)
+        registryChanged = true
+      }
+    } else if (legacyBrowserIndex >= 0) {
+      const legacy = registry.utilities[legacyBrowserIndex]
+      registry.utilities[legacyBrowserIndex] = {
+        ...browserDefault,
+        createdAt: legacy.createdAt,
+        updatedAt: now
+      }
+      registryChanged = true
+    }
+
     const existingIds = new Set(registry.utilities.map((utility) => utility.id))
     const missing = defaults.filter((utility) => !existingIds.has(utility.id))
     if (missing.length > 0) {
       registry.utilities.push(...missing)
+      registryChanged = true
+    }
+    if (registryChanged) {
       await this.storage.write(REGISTRY_PATH, registry)
     }
     this.appDefaultsSeeded = true

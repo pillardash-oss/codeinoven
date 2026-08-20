@@ -67,6 +67,7 @@ export class RemoteSessionStore {
   private relayBootstrapFallbackAttempted = false
   /** Unique identity for the current browser relay WebSocket connection. */
   private relayConnectionId = ''
+  private resumeTask: Promise<void> | null = null
 
   private async ensureKeyMaterial(desktopId: string | null = null): Promise<DeviceKeyMaterial> {
     if (this.keyMaterial && this.keyMaterialDesktopId === desktopId) return this.keyMaterial
@@ -163,6 +164,7 @@ export class RemoteSessionStore {
   /** Sign the desktop-issued relay challenge nonce and prove possession. */
   private async respondToRelayChallenge(nonce: string): Promise<void> {
     const keyMaterial = await this.ensureKeyMaterial(this.keyMaterialDesktopId)
+    const cloudMobileDeviceId = this.accountRoute?.mobileDeviceId ?? null
     const transcript = handshakeTranscript({
       nonce,
       deviceId: keyMaterial.deviceId,
@@ -178,6 +180,10 @@ export class RemoteSessionStore {
       deviceName: keyMaterial.deviceName,
       connectionId: this.relayConnectionId
     }
+    // The cloud grant installation id is distinct from the credential id the
+    // desktop assigns below. Return it over this encrypted authenticated frame
+    // so the desktop can finish only the pairing code this installation claimed.
+    if (cloudMobileDeviceId) authFrame['cloudMobileDeviceId'] = cloudMobileDeviceId
     if (keyMaterial.deviceId) {
       authFrame['deviceId'] = keyMaterial.deviceId
       authFrame['authVersion'] = keyMaterial.authVersion
@@ -234,6 +240,12 @@ export class RemoteSessionStore {
       }
     }
     await this.sendRaw(payload)
+  }
+
+  /** Tell the desktop whether the user opened or left its remote workspace. */
+  async setWorkspaceActive(active: boolean): Promise<void> {
+    if (this.relayDeviceAuth) await this.relayDeviceAuth
+    await this.sendRaw({ type: 'remote:workspace:active', active })
   }
 
   /** Connect to one account-owned desktop through the hosted same-origin relay. */
@@ -478,9 +490,13 @@ export class RemoteSessionStore {
    * the installed PWA stranded indefinitely.
    */
   async resume(): Promise<void> {
+    if (this.resumeTask) return this.resumeTask
     const route = this.accountRoute
     if (!route || !this.recovering) return
-    await this.connectAccountDesktop(route, true)
+    this.resumeTask = this.connectAccountDesktop(route, true).finally(() => {
+      this.resumeTask = null
+    })
+    await this.resumeTask
   }
 
   /** Mark an account route for verification when the browser is foregrounded. */

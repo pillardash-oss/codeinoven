@@ -113,6 +113,7 @@
     autoInstallUpdates: true,
     updateChannel: 'stable',
     keepAwakeWhileWorking: false,
+    keepAwakeWhileRemoteConnected: true,
     imageDescriptorAskAgain: false,
     autoRetryAfterReset: true,
     resumeWorkOnRestart: true,

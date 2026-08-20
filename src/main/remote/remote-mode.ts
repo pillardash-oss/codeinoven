@@ -20,6 +20,7 @@ import { SecretVault } from '../storage/secret-vault'
 import { CloudRelayClient } from './cloud-relay-client'
 import { createDesktopControlGrant } from './control-grant'
 import { RemoteGateway } from './remote-gateway'
+import { remoteWebPush } from './web-push-service'
 import { createRemoteTray, type RemoteTray } from './remote-tray'
 import type { RemoteCloudStatus, RemoteDeviceInfo, RemoteModeStatus } from './remote-types'
 import type {
@@ -35,7 +36,12 @@ import type {
 } from '../../lib/types'
 import { createKeepAliveSession, type KeepAliveSession } from '../../renderer/lib/remote/keep-alive'
 import { handshakeTranscript } from '../../renderer/lib/remote/device-identity'
-import { PAIRING_TTL_MS, loadOrCreatePeerSecret, rotatePeerSecret, writePairingExpiry } from './peer-secret'
+import {
+  PAIRING_TTL_MS,
+  loadOrCreatePeerSecret,
+  rotatePeerSecret,
+  writePairingExpiry
+} from './peer-secret'
 import { RemoteRpcDispatcher } from './remote-rpc'
 import { DeviceCredentialService, type EnrolledDevice } from './device-credential-service'
 import { AccountProfileRepo } from '../database/repositories/account-profile-repo'
@@ -512,6 +518,7 @@ export class RemoteModeController {
   private accountProfileGeneration = 0
   private cloudConfig: CloudAccessConfig | null = null
   private cloudRelay: CloudRelayClient | null = null
+  private cloudEventSendQueue: Promise<void> = Promise.resolve()
   private cloudPollTimer: ReturnType<typeof setTimeout> | null = null
   private cloudProfileSyncTimer: ReturnType<typeof setTimeout> | null = null
   private cloudAbortController: AbortController | null = null
@@ -519,6 +526,12 @@ export class RemoteModeController {
   private cloudPollRunningGeneration: number | null = null
   private cloudPollFailureCount = 0
   private cloudStatus: RemoteCloudStatus
+  /** Phone whose claimed code is still completing grant delivery + relay device auth. */
+  private pendingCloudDeviceId: string | null = null
+  /** Desktop credential currently authenticated through the cloud relay. */
+  private cloudConnectedDeviceId: string | null = null
+  /** Phones that explicitly opened the remote workspace, not merely paired. */
+  private readonly activeWorkspaceDeviceIds = new Set<string>()
   /** Connected devices, newest first (source of truth = the gateway). */
   private devices: RemoteDeviceInfo[] = []
 
@@ -565,11 +578,11 @@ export class RemoteModeController {
     }
     this.keepAlive.dispatch({ type: 'arm' })
     this.credentials?.startPeriodicMaintenance()
-    if (restoreLan) await this.startGateway(false)
     if (restoreCloud) {
       await this.resolvePeerSecret()
       await this.restoreCloudAccess()
     }
+    if (restoreLan) await this.startGateway(false)
     if (!this.remoteModeActive) return
     this.ensureTray()
     this.syncTray()
@@ -658,7 +671,9 @@ export class RemoteModeController {
     const newSecret = await rotatePeerSecret(directory)
     this.resolvedPeerSecret = newSecret
     if (this.credentials) {
-      await this.credentials.registerPairingValue(newSecret, { expiresAt: Date.now() + PAIRING_TTL_MS })
+      await this.credentials.registerPairingValue(newSecret, {
+        expiresAt: Date.now() + PAIRING_TTL_MS
+      })
     }
     if (this.gateway) {
       try {
@@ -697,7 +712,10 @@ export class RemoteModeController {
     if (enabled && !this.remoteModeActive) {
       this.keepAlive.dispatch({ type: 'arm' })
       this.credentials?.startPeriodicMaintenance()
-      void this.startGateway().then(() => this.restoreCloudAccess())
+      // Cloud is the primary route. An occupied/blocked optional LAN port must
+      // never delay desktop relay restoration or first-time remote access.
+      void this.restoreCloudAccess()
+      void this.startGateway()
       this.ensureTray()
       void this.persistEnabled(true)
       Logger.info('Remote mode enabled')
@@ -707,6 +725,7 @@ export class RemoteModeController {
       this.gateway = null
       this.tray?.destroy()
       this.tray = null
+      this.activeWorkspaceDeviceIds.clear()
       this.onSessionActiveChange?.(false)
       this.stopCloudAccess()
       this.credentials?.stopPeriodicMaintenance()
@@ -729,21 +748,35 @@ export class RemoteModeController {
   onDevicesChange(devices: RemoteDeviceInfo[]): void {
     const wasLive = this.devices.some((device) => device.connected)
     const connectedIds = new Set(devices.map((device) => device.id))
+    if (this.cloudConnectedDeviceId) connectedIds.add(this.cloudConnectedDeviceId)
     this.refreshDevices(connectedIds)
+    this.reconcileSessionActivity(wasLive)
+    this.syncTray()
+    this.broadcast()
+  }
+
+  /** Reconcile keep-alive, power, tray notifications, and event forwarding. */
+  private reconcileSessionActivity(wasLive: boolean): void {
     const isLive = this.devices.some((device) => device.connected)
     if (isLive && !wasLive) {
       this.keepAlive.dispatch({ type: 'sessionStart' })
       this.tray?.notify('Remote session started', 'Your phone is connected to this desktop.')
       this.installEventForwarder()
-      this.onSessionActiveChange?.(true)
     } else if (!isLive && wasLive) {
       this.keepAlive.dispatch({ type: 'sessionEnd' })
       this.tray?.notify('Remote session ended', 'The phone disconnected from this desktop.')
       if (this.cloudStatus.state !== 'online') setRemoteEventForwarder(null)
-      this.onSessionActiveChange?.(false)
     }
-    this.syncTray()
-    this.broadcast()
+  }
+
+  /** Keep power awake only after a connected phone explicitly opens the workspace. */
+  private updateWorkspaceActivity(deviceId: string, active: boolean): void {
+    if (active && this.devices.some((device) => device.id === deviceId && device.connected)) {
+      this.activeWorkspaceDeviceIds.add(deviceId)
+    } else {
+      this.activeWorkspaceDeviceIds.delete(deviceId)
+    }
+    this.onSessionActiveChange?.(this.activeWorkspaceDeviceIds.size > 0)
   }
 
   /** Rebuild the device list from the enrolled device records. */
@@ -755,6 +788,15 @@ export class RemoteModeController {
     this.devices = this.credentials
       .listDevices()
       .map((device) => this.toDeviceInfo(device, connectedIds.has(device.deviceId)))
+    let workspaceSetChanged = false
+    for (const deviceId of this.activeWorkspaceDeviceIds) {
+      if (connectedIds.has(deviceId)) continue
+      this.activeWorkspaceDeviceIds.delete(deviceId)
+      workspaceSetChanged = true
+    }
+    if (workspaceSetChanged) {
+      this.onSessionActiveChange?.(this.activeWorkspaceDeviceIds.size > 0)
+    }
   }
 
   /** Enrolled-device record → display-facing `RemoteDeviceInfo`. */
@@ -803,15 +845,19 @@ export class RemoteModeController {
     if (!this.credentials) throw new Error('Device credential service is unavailable')
     const revoked = this.credentials.revokeDevice(deviceId, reason || 'operator')
     if (!revoked) throw new Error('Device not found')
+    await remoteWebPush.removeDevice(deviceId)
     this.gateway?.disconnectDevice(deviceId)
     // Terminate any bound cloud relay session for this device immediately;
     // per-invoke revalidation also rejects it if a socket survives.
     if (this.cloudRelay?.boundDeviceId() === deviceId) {
+      this.cloudConnectedDeviceId = null
       this.cloudRelay.close()
       this.cloudRelay = null
       this.cloudStatus = { ...this.cloudStatus, state: 'offline', lastError: 'device revoked' }
     }
+    const wasLive = this.devices.some((device) => device.connected)
     this.refreshDevices(new Set(this.gateway?.listDevices().map((d) => d.id) ?? []))
+    this.reconcileSessionActivity(wasLive)
     this.syncTray()
     this.broadcast()
     return this.status
@@ -821,6 +867,7 @@ export class RemoteModeController {
   listEnrolledDevices(): RemoteDeviceInfo[] {
     if (!this.credentials) return []
     const connectedIds = new Set(this.gateway?.listDevices().map((d) => d.id) ?? [])
+    if (this.cloudConnectedDeviceId) connectedIds.add(this.cloudConnectedDeviceId)
     return this.credentials
       .listDevices()
       .map((device) => this.toDeviceInfo(device, connectedIds.has(device.deviceId)))
@@ -922,7 +969,11 @@ export class RemoteModeController {
   private installEventForwarder(): void {
     setRemoteEventForwarder((channel, payload) => {
       this.gateway?.sendToPeer({ rpc: 'event', channel, payload })
-      void this.cloudRelay?.send({ rpc: 'event', channel, payload })
+      this.cloudEventSendQueue = this.cloudEventSendQueue
+        .then(async () => {
+          await this.cloudRelay?.send({ rpc: 'event', channel, payload })
+        })
+        .catch(() => undefined)
     })
   }
 
@@ -939,6 +990,7 @@ export class RemoteModeController {
     setRemoteEventForwarder(null)
     this.stopCloudAccess()
     this.credentials?.stopPeriodicMaintenance()
+    this.activeWorkspaceDeviceIds.clear()
     this.onSessionActiveChange?.(false)
     if (this.gateway) {
       const gateway = this.gateway
@@ -1519,8 +1571,15 @@ export class RemoteModeController {
     const authorizationToken = accountToken ?? existingDeviceToken
     if (!authorizationToken) throw new Error('Sign in before pairing this desktop')
 
-    this.stopCloudAccess()
-    this.cloudAbortController = new AbortController()
+    // Opening another pairing window must not stop the desktop relay or any
+    // already authenticated phone. Invalidate only the previous enrollment poll.
+    this.cloudPollGeneration += 1
+    this.cloudPollRunningGeneration = null
+    this.cloudPollFailureCount = 0
+    this.pendingCloudDeviceId = null
+    if (this.cloudPollTimer) clearTimeout(this.cloudPollTimer)
+    this.cloudPollTimer = null
+    if (!this.cloudAbortController) this.cloudAbortController = new AbortController()
     this.cloudStatus = {
       ...this.cloudStatus,
       state: 'connecting',
@@ -1604,34 +1663,30 @@ export class RemoteModeController {
       const response = await fetchWithDeadline(
         new URL(`/v1/device-enrollments/${encodeURIComponent(config.desktopId)}`, config.apiOrigin),
         { method: 'DELETE', headers: { Authorization: `Bearer ${token}` } },
-        CLOUD_REQUEST_TIMEOUT_MS,
-        this.cloudAbortController?.signal
+        CLOUD_REQUEST_TIMEOUT_MS
       )
       if (!response.ok && response.status !== 404) {
-        throw new Error('Could not revoke desktop access from the remote service')
+        throw new Error('Could not cancel the pairing window')
       }
     }
-    this.stopCloudAccess()
-    if (config?.tokenRef && this.vault) {
-      await this.vault.remove(config.tokenRef)
-      // Account authentication is independent of remote-device enrollment.
-    }
-    if (this.storage) await this.storage.remove(CLOUD_CONFIG_PATH)
-    this.cloudConfig = null
+    this.cloudPollGeneration += 1
+    this.cloudPollRunningGeneration = null
+    this.cloudPollFailureCount = 0
+    this.pendingCloudDeviceId = null
+    if (this.cloudPollTimer) clearTimeout(this.cloudPollTimer)
+    this.cloudPollTimer = null
     this.cloudStatus = {
-      configured: this.cloudApiOrigin !== null,
-      state: 'disabled',
-      apiOrigin: this.cloudApiOrigin,
-      desktopId: null,
+      ...this.cloudStatus,
+      state: this.cloudRelay ? 'online' : 'connecting',
       enrollmentCode: null,
       enrollmentExpiresAt: null,
       lastError: null
     }
-    if (!this.hasRestorableLanEnrollment() && this.remoteModeActive) {
-      this.toggleRemoteMode(false)
-    } else {
-      this.broadcast()
+    if (!this.cloudRelay && config && this.vault) {
+      const token = await this.vault.resolve(config.tokenRef)
+      if (token) this.connectCloudRelay(token)
     }
+    this.broadcast()
     return this.status
   }
 
@@ -1754,12 +1809,33 @@ export class RemoteModeController {
         await this.discardCloudEnrollment('Desktop revoked. Sign in again.')
         return
       }
-      if (payload['claimed'] === true) {
-        Logger.info('Remote cloud enrollment claimed; preparing the encrypted control grant')
+      if (payload['exists'] === false) {
         this.cloudStatus = {
           ...this.cloudStatus,
           state: 'connecting',
           enrollmentCode: null,
+          enrollmentExpiresAt: null,
+          lastError: null
+        }
+        this.broadcast()
+        this.connectCloudRelay(token)
+        return
+      }
+      if (payload['claimed'] === true) {
+        Logger.info('Remote cloud enrollment claimed; preparing the encrypted control grant')
+        const mobileDeviceId = payload['mobileDeviceId']
+        const mobilePublicKey = payload['mobilePublicKey']
+        if (
+          typeof mobileDeviceId !== 'string' ||
+          typeof mobilePublicKey !== 'object' ||
+          mobilePublicKey === null
+        ) {
+          throw new Error('Enrollment grant request is invalid')
+        }
+        this.pendingCloudDeviceId = mobileDeviceId
+        this.cloudStatus = {
+          ...this.cloudStatus,
+          state: 'connecting',
           lastError: null
         }
         // The peer secret is also the transport encryption key. It can rotate
@@ -1767,15 +1843,8 @@ export class RemoteModeController {
         // uploaded grant may be cryptographically stale even though the server
         // reports it as present. Refresh it before every relay startup; the
         // service invalidates sockets and buffered ciphertext from the old key.
-        const mobileDeviceId = payload['mobileDeviceId']
-        const mobilePublicKey = payload['mobilePublicKey']
         const controlSecret = this.resolvedPeerSecret ?? (await this.resolvePeerSecret())
-        if (
-          typeof mobileDeviceId !== 'string' ||
-          typeof mobilePublicKey !== 'object' ||
-          mobilePublicKey === null ||
-          !controlSecret
-        ) {
+        if (!controlSecret) {
           throw new Error('Enrollment grant request is invalid')
         }
         const grant = await createDesktopControlGrant({
@@ -1885,20 +1954,51 @@ export class RemoteModeController {
         maxDelayMs: remoteEnvInt('RELAY_RECONNECT_MAX_MS', 30_000)
       },
       onAuthenticated: () => {
-        Logger.info('Remote cloud relay authenticated; desktop is online')
-        this.cloudStatus = { ...this.cloudStatus, state: 'online', lastError: null }
+        Logger.info('Remote cloud relay authenticated; waiting for phone authentication')
+        this.cloudStatus = {
+          ...this.cloudStatus,
+          state: this.pendingCloudDeviceId ? 'connecting' : 'online',
+          lastError: null
+        }
         this.installEventForwarder()
         this.scheduleAccountProfileSync(0)
         this.broadcast()
       },
-      onDeviceAuthenticated: (deviceId) => {
+      onDeviceAuthenticated: (deviceId, cloudMobileDeviceId) => {
+        const wasLive = this.devices.some((device) => device.connected)
+        this.cloudConnectedDeviceId = deviceId
         const connectedIds = new Set(this.gateway?.listDevices().map((device) => device.id) ?? [])
         connectedIds.add(deviceId)
         this.refreshDevices(connectedIds)
+        this.reconcileSessionActivity(wasLive)
+        if (cloudMobileDeviceId === this.pendingCloudDeviceId) {
+          this.pendingCloudDeviceId = null
+          this.cloudStatus = {
+            ...this.cloudStatus,
+            state: 'online',
+            enrollmentCode: null,
+            enrollmentExpiresAt: null,
+            lastError: null
+          }
+        }
         this.broadcast()
+      },
+      onWorkspaceActiveChange: (deviceId, active) => {
+        this.updateWorkspaceActivity(deviceId, active)
       },
       onDisconnected: (reason) => {
         if (this.cloudRelay !== relay) return
+        if (reason === 'remote-host-active') {
+          Logger.dev('Another CodeInOven instance owns the shared remote transport')
+          this.cloudStatus = { ...this.cloudStatus, state: 'online', lastError: null }
+          this.broadcast()
+          return
+        }
+        if (reason === 'revoked' || reason === 'relay-closed-4003') {
+          Logger.info('Remote cloud relay credential was revoked; local enrollment cleared')
+          void this.discardCloudEnrollment('Desktop access was revoked. Create a new pairing code.')
+          return
+        }
         if (reason === 'authentication-failed' || reason === 'relay-closed-4001') {
           Logger.error('Remote cloud relay rejected the saved desktop credential')
           void this.discardCloudEnrollment(
@@ -1908,7 +2008,10 @@ export class RemoteModeController {
         }
         Logger.dev(`Remote cloud relay disconnected (${reason}); reconnecting automatically`)
         this.cloudStatus = { ...this.cloudStatus, state: 'offline', lastError: reason }
+        const wasLive = this.devices.some((device) => device.connected)
+        this.cloudConnectedDeviceId = null
         this.refreshDevices(new Set(this.gateway?.listDevices().map((device) => device.id) ?? []))
+        this.reconcileSessionActivity(wasLive)
         this.broadcast()
       },
       onRpc: async (channel, args, device) => {
@@ -1928,6 +2031,7 @@ export class RemoteModeController {
     this.cloudPollGeneration += 1
     this.cloudPollRunningGeneration = null
     this.cloudPollFailureCount = 0
+    this.pendingCloudDeviceId = null
     if (this.cloudPollTimer) clearTimeout(this.cloudPollTimer)
     this.cloudPollTimer = null
     if (this.cloudProfileSyncTimer) clearTimeout(this.cloudProfileSyncTimer)
@@ -1938,7 +2042,10 @@ export class RemoteModeController {
     this.cloudAbortController = null
     this.cloudRelay?.close()
     this.cloudRelay = null
+    const wasLive = this.devices.some((device) => device.connected)
+    this.cloudConnectedDeviceId = null
     this.refreshDevices(new Set(this.gateway?.listDevices().map((device) => device.id) ?? []))
+    this.reconcileSessionActivity(wasLive)
     if (!this.devices.some((device) => device.connected)) setRemoteEventForwarder(null)
     if (this.cloudStatus.state !== 'disabled') {
       this.cloudStatus = { ...this.cloudStatus, state: 'offline' }
@@ -1963,6 +2070,9 @@ export class RemoteModeController {
       allowedOrigins: this.cloudApiOrigin ? [new URL(this.cloudApiOrigin).origin] : [],
       handlers: {
         onDevicesChange: (devices) => this.onDevicesChange(devices),
+        onWorkspaceActiveChange: (deviceId, active) => {
+          this.updateWorkspaceActivity(deviceId, active)
+        },
         authenticateDevice: this.makeAuthenticateDevice(),
         onRpc: this.rpc
           ? async (channel, args, device) => {

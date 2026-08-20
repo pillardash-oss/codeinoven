@@ -53,6 +53,7 @@ export const REMOTE_ALLOWED_CHANNELS: readonly string[] = [
   'project:list',
   'project:get',
   'project:getIcon',
+  'project:ensureInbox',
   'thread:listAll',
   'thread:list',
   'thread:get',
@@ -71,6 +72,17 @@ export const REMOTE_ALLOWED_CHANNELS: readonly string[] = [
   'thread:fork',
   'thread:reorderScope',
   'threads:search',
+  'note:get',
+  'note:list',
+  'note:save',
+  'note:delete',
+  'attachment:beginRemoteUpload',
+  'attachment:appendRemoteUpload',
+  'attachment:finishRemoteUpload',
+  'attachment:cancelRemoteUpload',
+  'remotePush:getPublicKey',
+  'remotePush:subscribe',
+  'remotePush:unsubscribe',
   // Config + scope board ("charts")
   'config:get',
   'config:update',
@@ -100,6 +112,12 @@ export const REMOTE_ALLOWED_CHANNELS: readonly string[] = [
   'agent:compact',
   'agent:truncateMessages',
   'agent:listContextCapabilities',
+  'agent:listProcesses',
+  'agent:listArtifacts',
+  'agent:killProcess',
+  'agent:killThreadProcesses',
+  'capabilities:deleteSkill',
+  'capabilities:deleteMcp',
   'agent:closeTemporaryChat',
   'agent:getChildSessionStatus',
   'agent:dismissSessionError',
@@ -237,7 +255,10 @@ export const REMOTE_ALLOWED_CHANNELS: readonly string[] = [
 /** Channels the desktop pushes to the phone as live events. */
 export const REMOTE_FORWARDED_EVENTS: readonly string[] = [
   'agent:event',
+  'agent:processesChanged',
   'thread:updated',
+  'thread:deleted',
+  'notification:show',
   'providers:status'
 ] as const
 
@@ -336,6 +357,7 @@ export const REMOTE_CHANNEL_AUTHORIZATION: Readonly<Record<string, RemoteChannel
   'project:list': { scope: 'workspace.read', stepUp: 'none' },
   'project:get': { scope: 'workspace.read', stepUp: 'none' },
   'project:getIcon': { scope: 'workspace.read', stepUp: 'none' },
+  'project:ensureInbox': { scope: 'workspace.read', stepUp: 'none' },
   'thread:listAll': { scope: 'workspace.read', stepUp: 'none' },
   'thread:list': { scope: 'workspace.read', stepUp: 'none' },
   'thread:get': { scope: 'workspace.read', stepUp: 'none' },
@@ -343,11 +365,20 @@ export const REMOTE_CHANNEL_AUTHORIZATION: Readonly<Record<string, RemoteChannel
   'thread:efficiencyKpis': { scope: 'workspace.read', stepUp: 'none' },
   'thread:loadMessages': { scope: 'workspace.read', stepUp: 'none' },
   'threads:search': { scope: 'workspace.read', stepUp: 'none' },
+  'remotePush:getPublicKey': { scope: 'workspace.read', stepUp: 'none' },
   'scope:get': { scope: 'workspace.read', stepUp: 'none' },
+  'note:get': { scope: 'workspace.read', stepUp: 'none' },
+  'note:list': { scope: 'workspace.read', stepUp: 'none' },
 
   // workspace.write — default-No, no step-up
   'thread:exportTranscript': { scope: 'workspace.write', stepUp: 'none' },
   'thread:create': { scope: 'workspace.write', stepUp: 'none' },
+  'attachment:beginRemoteUpload': { scope: 'workspace.write', stepUp: 'none' },
+  'attachment:appendRemoteUpload': { scope: 'workspace.write', stepUp: 'none' },
+  'attachment:finishRemoteUpload': { scope: 'workspace.write', stepUp: 'none' },
+  'attachment:cancelRemoteUpload': { scope: 'workspace.write', stepUp: 'none' },
+  'remotePush:subscribe': { scope: 'workspace.write', stepUp: 'none' },
+  'remotePush:unsubscribe': { scope: 'workspace.write', stepUp: 'none' },
   'thread:markRead': { scope: 'workspace.write', stepUp: 'none' },
   'thread:setPinned': { scope: 'workspace.write', stepUp: 'none' },
   'thread:setStatus': { scope: 'workspace.write', stepUp: 'none' },
@@ -357,6 +388,7 @@ export const REMOTE_CHANNEL_AUTHORIZATION: Readonly<Record<string, RemoteChannel
   'thread:fork': { scope: 'workspace.write', stepUp: 'none' },
   'thread:reorderScope': { scope: 'workspace.write', stepUp: 'none' },
   'scope:save': { scope: 'workspace.write', stepUp: 'none' },
+  'note:save': { scope: 'workspace.write', stepUp: 'none' },
 
   // workspace.delete — explicitly scoped and confirmed in the mobile UI.
   // Requiring a second desktop-local approval made a remote-only delete
@@ -364,6 +396,7 @@ export const REMOTE_CHANNEL_AUTHORIZATION: Readonly<Record<string, RemoteChannel
   // retry received a different request id. The authenticated device scope plus
   // the destructive-action confirmation remains the authorization boundary.
   'thread:delete': { scope: 'workspace.delete', stepUp: 'none' },
+  'note:delete': { scope: 'workspace.delete', stepUp: 'none' },
 
   // config.* — workstation-level, always step-up
   'config:get': { scope: 'config.read', stepUp: 'always' },
@@ -382,6 +415,8 @@ export const REMOTE_CHANNEL_AUTHORIZATION: Readonly<Record<string, RemoteChannel
   'agent:listQuestions': { scope: 'conversation.read', stepUp: 'none' },
   'agent:listCommands': { scope: 'conversation.read', stepUp: 'none' },
   'agent:listContextCapabilities': { scope: 'conversation.read', stepUp: 'none' },
+  'agent:listProcesses': { scope: 'conversation.read', stepUp: 'none' },
+  'agent:listArtifacts': { scope: 'conversation.read', stepUp: 'none' },
   'agent:getChildSessionStatus': { scope: 'conversation.read', stepUp: 'none' },
 
   // conversation.control — default, no step-up
@@ -393,6 +428,9 @@ export const REMOTE_CHANNEL_AUTHORIZATION: Readonly<Record<string, RemoteChannel
   'agent:dismissQuestion': { scope: 'conversation.control', stepUp: 'none' },
   'agent:updateQuestion': { scope: 'conversation.control', stepUp: 'none' },
   'agent:compact': { scope: 'conversation.control', stepUp: 'none' },
+  // Destructive process control — always step-up on a remote device.
+  'agent:killProcess': { scope: 'conversation.control', stepUp: 'always' },
+  'agent:killThreadProcesses': { scope: 'conversation.control', stepUp: 'always' },
   'agent:closeTemporaryChat': { scope: 'conversation.control', stepUp: 'none' },
   'agent:retryChildSession': { scope: 'conversation.control', stepUp: 'none' },
   'agent:dismissSessionError': { scope: 'conversation.control', stepUp: 'none' },
@@ -573,7 +611,9 @@ export const REMOTE_CHANNEL_AUTHORIZATION: Readonly<Record<string, RemoteChannel
   'dialog:pickFiles': { scope: 'local.system', stepUp: 'always' },
   'clipboard:saveImage': { scope: 'local.system', stepUp: 'always' },
   'shell:revealPath': { scope: 'local.system', stepUp: 'always' },
-  'shell:openExternal': { scope: 'local.system', stepUp: 'always' }
+  'shell:openExternal': { scope: 'local.system', stepUp: 'always' },
+  'capabilities:deleteSkill': { scope: 'local.system', stepUp: 'always' },
+  'capabilities:deleteMcp': { scope: 'local.system', stepUp: 'always' }
 }
 
 /** Return the typed authorization entry for a channel, or `null` if unmapped. */

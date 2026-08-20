@@ -1,5 +1,7 @@
 import { randomBytes, randomUUID } from 'crypto'
+import { access, readFile } from 'fs/promises'
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'http'
+import { join } from 'path'
 import type {
   HarnessUtilityBinding,
   ResolvedUtility,
@@ -68,6 +70,21 @@ const UTILITY_SEARCH_STOP_WORDS = new Set([
   'utility',
   'with'
 ])
+const PROJECT_TECH_MARKERS: ReadonlyArray<readonly [string, readonly string[]]> = [
+  ['svelte.config.js', ['svelte', 'sveltekit']],
+  ['svelte.config.ts', ['svelte', 'sveltekit']],
+  ['next.config.js', ['next', 'nextjs', 'react']],
+  ['next.config.mjs', ['next', 'nextjs', 'react']],
+  ['nuxt.config.js', ['nuxt', 'vue']],
+  ['nuxt.config.ts', ['nuxt', 'vue']],
+  ['angular.json', ['angular']],
+  ['Cargo.toml', ['cargo', 'rust']],
+  ['go.mod', ['go', 'golang']],
+  ['pyproject.toml', ['python']],
+  ['requirements.txt', ['python']],
+  ['Gemfile', ['ruby']],
+  ['composer.json', ['php']]
+]
 
 export interface UtilityTurnRequest {
   harnessId: string
@@ -120,7 +137,8 @@ export type BrowserUtilityExecutor = (
 const BROWSER_UTILITY_TOOLS: McpTool[] = [
   {
     name: 'open',
-    description: 'Open an http(s) URL in a visible in-app browser tab.',
+    description:
+      'Open an http(s) URL in a browser tab owned by this project and thread. The page keeps running when the user views another project.',
     inputSchema: {
       type: 'object',
       properties: { url: { type: 'string' } },
@@ -130,7 +148,8 @@ const BROWSER_UTILITY_TOOLS: McpTool[] = [
   },
   {
     name: 'snapshot',
-    description: 'Read the current page title, URL, visible text, and interactive elements.',
+    description:
+      'Read the current thread browser page title, URL, visible text, and interactive elements.',
     inputSchema: { type: 'object', properties: {}, additionalProperties: false }
   },
   {
@@ -175,7 +194,8 @@ const BROWSER_UTILITY_TOOLS: McpTool[] = [
   },
   {
     name: 'console',
-    description: 'Read console messages and browser runtime errors from the current tab.',
+    description:
+      'Read console messages and browser runtime errors from the current project and thread tab.',
     inputSchema: { type: 'object', properties: {}, additionalProperties: false }
   }
 ]
@@ -193,6 +213,8 @@ interface TurnState {
   cuaSessionIds: Map<string, string>
   /** Utilities created through the explicit setup-only management capability. */
   managedUtilities: UtilityDefinition[]
+  /** Lazily derived once because a turn may issue several refined searches. */
+  projectSearchTerms: Promise<Set<string>> | null
 }
 
 /** Bridge handler for one gateway route: receives state plus the parsed body. */
@@ -325,7 +347,8 @@ export class UtilityOrchestrationService {
       attributionSequence: 0,
       searched: false,
       cuaSessionIds: new Map(),
-      managedUtilities: []
+      managedUtilities: [],
+      projectSearchTerms: null
     }
     const bridgeUrl = await this.ensureGatewayServer()
     const token = randomBytes(32).toString('hex')
@@ -358,7 +381,7 @@ export class UtilityOrchestrationService {
         `Gateway: ${bridgeUrl}`,
         `Authorization header: Bearer ${token}`,
         recoveryInstruction,
-        'Search when you need to discover a capability: POST /search with {"query":"capability","kinds":["mcp","skill","computer_use","image_descriptor"]}; the response includes a `notFound` boolean indicating no eligible match.',
+        'Search by capability name or task intent: POST /search with {"query":"capability or task","kinds":["mcp","skill","computer_use","image_descriptor"]}. A `matchType` of `candidates` means you must inspect the project-aware candidates semantically; `notFound` is true only when no eligible utility exists for the requested kinds.',
         'Activate: POST /activate with {"utility_id":"id-from-search"}; if you already know an eligible utility id, activate it directly without searching first.',
         'Invoke: POST /invoke with {"utility_id":"id","operation":"tool-or-operation","input":{}}.',
         ...(request.allowManagement
@@ -551,11 +574,20 @@ export class UtilityOrchestrationService {
     const kinds = optionalKinds(input['kinds'])
     const requestedLimit = optionalNumber(input['limit'])
     const limit = Math.min(Math.max(requestedLimit ?? 8, 1), 20)
+    state.projectSearchTerms ??= projectTechnologyTerms(state.request.projectPath)
+    const projectTerms = await state.projectSearchTerms
     const ranked = [...state.eligible.values()]
       .filter((resolved) => matchesUtilityKinds(resolved, kinds))
-      .map((resolved) => ({ resolved, score: utilitySearchScore(resolved, query) }))
-      .sort((left, right) => right.score - left.score)
-    const matches = query ? ranked.filter(({ score }) => score > 0) : ranked
+      .map((resolved) => ({
+        resolved,
+        lexicalScore: utilitySearchScore(resolved, query),
+        projectScore: utilityProjectAffinityScore(resolved, projectTerms)
+      }))
+      .sort(
+        (left, right) =>
+          right.lexicalScore - left.lexicalScore || right.projectScore - left.projectScore
+      )
+    const matches = query ? ranked.filter(({ lexicalScore }) => lexicalScore > 0) : ranked
     const fallback = Boolean(query) && matches.length === 0 && ranked.length > 0
     const utilities = (fallback ? ranked : matches)
       .slice(0, limit)
@@ -566,26 +598,28 @@ export class UtilityOrchestrationService {
         description: utility.description,
         active: state.activated.has(utility.id)
       }))
-    // An explicit, unambiguous verdict the agent must honor: `true` means no
-    // eligible utility matched the query (or none is eligible at all), so it can
-    // confidently conclude the capability is not available in this session.
-    // This must be distinguished from an ambiguous empty array.
-    const notFound = query ? matches.length === 0 : ranked.length === 0
+    // Lexical mismatch is not proof of semantic irrelevance. Candidate results
+    // are intentionally left for the calling agent to evaluate against the
+    // user's task; only an empty eligible set is an unambiguous absence verdict.
+    const notFound = ranked.length === 0
+    const matchType = notFound ? 'none' : fallback ? 'candidates' : 'direct'
     state.searched = true
     await this.audit(state, 'utility.searched', {
       query,
       fallback,
       notFound,
+      matchType,
       resultIds: utilities.map(({ id }) => id)
     })
     return {
       utilities,
       fallback,
       notFound,
+      matchType,
       ...(fallback
         ? {
             message:
-              'No direct match was found. These available utilities may still help; inspect or search again with shorter capability terms.'
+              'No direct lexical match was found. Review these project-aware candidates against the task intent, then activate a relevant result or refine the search.'
           }
         : {})
     }
@@ -1062,6 +1096,7 @@ function utilitySearchScore({ utility, binding }: ResolvedUtility, query: string
       utility.kind,
       binding.nativeCapability,
       binding.transportName,
+      utilitySearchConfiguration(utility),
       utilitySearchAliases(utility.kind, binding.nativeCapability)
     ]
       .filter((value): value is string => Boolean(value))
@@ -1079,6 +1114,58 @@ function utilitySearchScore({ utility, binding }: ResolvedUtility, query: string
     if (metadata.includes(token)) score += 3
   }
   return score
+}
+
+/** Prefer utilities whose identity is already present in the current project's
+ *  root manifests. This is a deterministic tie-breaker for intent queries, not
+ *  a replacement for explicit query matches. */
+function utilityProjectAffinityScore(
+  { utility, binding }: ResolvedUtility,
+  projectTerms: ReadonlySet<string>
+): number {
+  if (projectTerms.size === 0) return 0
+  const identity = searchTokens(
+    normalizeSearchText(
+      [
+        utility.name,
+        utility.id,
+        binding.nativeCapability,
+        binding.transportName,
+        utilitySearchConfiguration(utility)
+      ]
+        .filter((value): value is string => Boolean(value))
+        .join(' ')
+    )
+  )
+  return identity.reduce((score, token) => score + (projectTerms.has(token) ? 10 : 0), 0)
+}
+
+/** Non-secret identifiers that often carry the strongest MCP/provider name
+ *  even when a utility's human-authored description is sparse. */
+function utilitySearchConfiguration(utility: UtilityDefinition): string {
+  switch (utility.kind) {
+    case 'mcp':
+      return [utility.config.command, ...(utility.config.args ?? []), utility.config.url]
+        .filter((value): value is string => Boolean(value))
+        .join(' ')
+    case 'skill':
+      return utility.config.supportingFiles?.join(' ') ?? ''
+    case 'web_search':
+    case 'web_fetch':
+      return [utility.config.provider, utility.config.endpoint]
+        .filter((value): value is string => Boolean(value))
+        .join(' ')
+    case 'computer_use':
+      return [utility.config.backend, utility.config.endpoint]
+        .filter((value): value is string => Boolean(value))
+        .join(' ')
+    case 'provider':
+      return [utility.config.providerId, utility.config.defaultModel, utility.config.endpoint]
+        .filter((value): value is string => Boolean(value))
+        .join(' ')
+    case 'image_descriptor':
+      return [utility.config.harnessId, utility.config.providerId, utility.config.modelId].join(' ')
+  }
 }
 
 function utilitySearchAliases(kind: UtilityKind, nativeCapability?: string): string {
@@ -1118,6 +1205,58 @@ function searchTokens(value: string): string[] {
         ?.filter((token) => token.length > 2 && !UTILITY_SEARCH_STOP_WORDS.has(token)) ?? []
     )
   ]
+}
+
+/** Read only bounded root-level technology signals. Search stays local and
+ *  deterministic, while package names let an intent-only query favor the MCP
+ *  that matches the project stack. */
+async function projectTechnologyTerms(projectPath: string): Promise<Set<string>> {
+  const terms = new Set<string>()
+  const packageJsonPath = join(projectPath, 'package.json')
+  try {
+    const raw = await readFile(packageJsonPath, 'utf8')
+    if (raw.length <= 1_000_000) {
+      const parsed: unknown = JSON.parse(raw)
+      if (isRecord(parsed)) {
+        addProjectPackageTerms(terms, parsed['name'])
+        for (const field of [
+          'dependencies',
+          'devDependencies',
+          'peerDependencies',
+          'optionalDependencies'
+        ]) {
+          const dependencies = parsed[field]
+          if (!isRecord(dependencies)) continue
+          for (const packageName of Object.keys(dependencies)) {
+            addProjectPackageTerms(terms, packageName)
+          }
+        }
+      }
+    }
+  } catch {
+    // A missing or malformed package manifest simply contributes no signals.
+  }
+
+  await Promise.all(
+    PROJECT_TECH_MARKERS.map(async ([filename, markerTerms]) => {
+      try {
+        await access(join(projectPath, filename))
+        for (const term of markerTerms) terms.add(term)
+      } catch {
+        // Most projects have only one or two of these markers.
+      }
+    })
+  )
+  return terms
+}
+
+function addProjectPackageTerms(terms: Set<string>, value: unknown): void {
+  if (typeof value !== 'string') return
+  for (const token of value.toLocaleLowerCase().match(/[\p{L}\p{N}]+/gu) ?? []) {
+    if (token.length <= 2) continue
+    terms.add(token)
+    if (token.endsWith('js') && token.length > 4) terms.add(token.slice(0, -2))
+  }
 }
 
 function resolveEnvironmentReferences(

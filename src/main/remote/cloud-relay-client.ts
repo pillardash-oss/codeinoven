@@ -31,8 +31,10 @@ export interface CloudRelayClientOptions {
     args: unknown[],
     device?: RemoteRpcDeviceContext
   ) => Promise<{ ok: boolean; result?: unknown; message?: string }>
-  /** Called whenever a phone proves its persisted or newly enrolled identity. */
-  onDeviceAuthenticated?: (deviceId: string) => void
+  /** Reports both the desktop credential and cloud installation identities after proof. */
+  onDeviceAuthenticated?: (deviceId: string, cloudMobileDeviceId: string | null) => void
+  /** Reports whether the authenticated phone opened or left the remote workspace. */
+  onWorkspaceActiveChange?: (deviceId: string, active: boolean) => void
   /**
    * Device credential service used to authenticate the phone over the relay.
    * Every RPC invoke is bound to the device that authenticated this relay
@@ -257,8 +259,27 @@ export class CloudRelayClient {
       this.authenticated = false
       const reason = event.reason || `relay-closed-${event.code}`
       Logger.dev(`Remote cloud relay socket closed (${event.code}: ${reason})`)
+      if (event.code === 4003 || reason === 'revoked') {
+        this.stopAfterTerminalClose(reason)
+        return
+      }
       this.dropAndRetry(reason)
     }
+  }
+
+  /** A revoked desktop credential cannot recover by reconnecting the same socket. */
+  private stopAfterTerminalClose(reason: string): void {
+    if (this.closing || this.closed) return
+    this.closed = true
+    this.clearTimers()
+    this.boundDevice = null
+    this.pendingDeviceChallenge = ''
+    this.mobileConnectionId = ''
+    this.queue.length = 0
+    this.inFlight.clear()
+    void this.webrtc.close()
+    this.socket = null
+    this.options.onDisconnected(reason)
   }
 
   /** Terminal socket loss: requeue unacked work and schedule a reconnect. */
@@ -572,6 +593,14 @@ export class CloudRelayClient {
       void this.handleDeviceAuth(record)
       return
     }
+    if (
+      record['type'] === 'remote:workspace:active' &&
+      typeof record['active'] === 'boolean' &&
+      this.boundDevice
+    ) {
+      this.options.onWorkspaceActiveChange?.(this.boundDevice.deviceId, record['active'])
+      return
+    }
     if (record['rpc'] !== 'invoke' || typeof record['id'] !== 'number') return
     const id = record['id']
     // Deduplicate and replay by the sender's wire id (epoch-scoped), so a
@@ -658,6 +687,10 @@ export class CloudRelayClient {
     const bootstrap = typeof record['bootstrap'] === 'string' ? record['bootstrap'] : ''
     const deviceName = typeof record['deviceName'] === 'string' ? record['deviceName'].trim() : ''
     const deviceId = typeof record['deviceId'] === 'string' ? record['deviceId'].trim() : ''
+    const cloudMobileDeviceId =
+      typeof record['cloudMobileDeviceId'] === 'string'
+        ? record['cloudMobileDeviceId'].trim().slice(0, 128)
+        : ''
     const authVersion =
       typeof record['authVersion'] === 'number' ? record['authVersion'] : undefined
     const signingJwk =
@@ -792,7 +825,7 @@ export class CloudRelayClient {
       allProjects: device.allProjects,
       projectIds: device.projectIds
     }
-    this.options.onDeviceAuthenticated?.(device.deviceId)
+    this.options.onDeviceAuthenticated?.(device.deviceId, cloudMobileDeviceId || null)
     this.sendDeviceOk()
   }
 

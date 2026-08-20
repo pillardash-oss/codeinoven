@@ -9,6 +9,7 @@
     Square,
     X
   } from '@lucide/svelte'
+  import { createSubscriber } from 'svelte/reactivity'
   import ModelPicker from '../shared/ModelPicker.svelte'
   import type {
     AgentProviderIssueKind,
@@ -72,13 +73,20 @@
     retrying = false,
     autoRetryEnabled = true
   }: Props = $props()
-  let now = $state(Date.now())
   let showRawError = $state(false)
   let loginOpen = $state(false)
   let loginHandoff = $state<ProviderAccountLoginHandoff | null>(null)
   let loginError = $state('')
   let loginTerminalId = $state('')
+  const subscribeToClock = createSubscriber((update) => {
+    const timer = window.setInterval(update, 1_000)
+    return () => window.clearInterval(timer)
+  })
   const issue = $derived(status.issue)
+  const now = $derived.by(() => {
+    if (issue.retryAt) subscribeToClock()
+    return Date.now()
+  })
   const rawError = $derived(issue.rawError?.trim() || issue.message.trim())
   const waiting = $derived(status.state === 'waiting')
   /**
@@ -94,15 +102,6 @@
         issue.kind === 'rate_limit' ||
         issue.kind === 'provider_unavailable')
   )
-
-  $effect(() => {
-    if (!issue.retryAt) return
-    now = Date.now()
-    const timer = window.setInterval(() => {
-      now = Date.now()
-    }, 1_000)
-    return () => window.clearInterval(timer)
-  })
 
   function issueTitle(kind: AgentProviderIssueKind): string {
     switch (kind) {
@@ -260,7 +259,7 @@
       {/if}
 
       <div class="mt-3 flex flex-wrap items-center gap-2">
-        {#if !waiting && issue.kind === 'authentication'}
+        {#if issue.kind === 'authentication'}
           <button
             class="inline-flex h-8 items-center gap-1.5 rounded-lg bg-primary px-3 text-xs font-medium text-on-primary transition-colors hover:bg-primary-hover"
             onclick={() => void beginSignIn()}
@@ -269,7 +268,7 @@
             Sign in
           </button>
         {/if}
-        {#if waiting && onRetry}
+        {#if waiting && issue.kind !== 'authentication' && onRetry}
           <button
             class="inline-flex h-8 items-center gap-1.5 rounded-lg bg-primary px-3 text-xs font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-60"
             disabled={retrying}

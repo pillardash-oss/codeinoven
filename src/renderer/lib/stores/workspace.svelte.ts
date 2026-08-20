@@ -12,6 +12,7 @@ import { notificationPanelState } from './notification-panel.svelte'
 import { gitState } from './git.svelte'
 import { threadMessages } from './thread-messages.svelte'
 import { APP_SLUG } from '$shared/brand'
+import { invoke } from '$lib/ipc.svelte'
 
 const RECENT_THREAD_VISITS_KEY = `${APP_SLUG}.recent-thread-visits.v1`
 const RECENT_THREAD_VISITS_LIMIT = 50
@@ -114,6 +115,24 @@ class WorkspaceState {
 
   // ─── Sources (fed by ThreadView) ───────────────────────────────────────
   sources: AgentSource[] = $state([])
+  sourceProcessCount = $state(0)
+  private sourceProcessCountRequestId = 0
+
+  async refreshSourceProcessCount(projectId: string, threadId: string): Promise<void> {
+    const requestId = ++this.sourceProcessCountRequestId
+    try {
+      const processes = await invoke('agent:listProcesses', projectId, threadId)
+      if (
+        requestId === this.sourceProcessCountRequestId &&
+        this.selectedThread?.projectId === projectId &&
+        this.selectedThread.id === threadId
+      ) {
+        this.sourceProcessCount = processes.length
+      }
+    } catch {
+      if (requestId === this.sourceProcessCountRequestId) this.sourceProcessCount = 0
+    }
+  }
 
   // ─── History (fed by ThreadView) ───────────────────────────────────────
   messageCount = $state(0)
@@ -134,6 +153,8 @@ class WorkspaceState {
     this.selectedThread = thread
     this.activeProject = project
     this.activeProjectIconUrl = iconUrl ?? null
+    this.sourceProcessCount = 0
+    void this.refreshSourceProcessCount(thread.projectId, thread.id)
     contextSidebarState.activateThread(thread.projectId, thread.id, thread.title)
     rendererRecovery.setSelectedThread(thread.projectId, thread.id)
     // Event-driven git refresh: every thread open (creation, switch, restore)
@@ -282,11 +303,13 @@ class WorkspaceState {
   pendingAddedProject: Project | null = $state(null)
 
   clearThread(): void {
+    this.sourceProcessCountRequestId += 1
     this.selectedThread = null
     this.activeProject = null
     this.activeProjectIconUrl = null
     contextSidebarState.deactivateThread()
     this.sources = []
+    this.sourceProcessCount = 0
     this.messageCount = 0
     this.userMessages = []
     this.jumpToMessage = null

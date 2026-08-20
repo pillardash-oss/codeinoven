@@ -37,6 +37,7 @@
   const editableText = $derived(
     (kind === 'markdown' || kind === 'text') && onSaveText !== undefined
   )
+  const csvRows = $derived(kind === 'csv' && text !== undefined ? parseCsv(text) : [])
   // The preview is created anew for each selected attachment, so this is the
   // editor's intentional local draft rather than a live mirror of the prop.
   // svelte-ignore state_referenced_locally
@@ -68,7 +69,7 @@
   }
 
   function handleDownload(): void {
-    if (kind === 'markdown' || kind === 'text') {
+    if (kind === 'markdown' || kind === 'text' || kind === 'csv') {
       if (text === undefined) return
       const blob = new Blob([text], { type: 'text/plain;charset=utf-8' })
       triggerDownload(URL.createObjectURL(blob), filename)
@@ -106,6 +107,46 @@
     } finally {
       saving = false
     }
+  }
+
+  /** Parse delimited text (CSV or TSV) into rows of cells, honouring quoted
+   *  fields with escaped quotes and discarding blank rows. */
+  function parseCsv(raw: string, delimiter = ','): string[][] {
+    const rows: string[][] = []
+    let row: string[] = []
+    let field = ''
+    let inQuotes = false
+    for (let i = 0; i < raw.length; i++) {
+      const char = raw[i]
+      if (inQuotes) {
+        if (char === '"') {
+          if (raw[i + 1] === '"') {
+            field += '"'
+            i++
+          } else {
+            inQuotes = false
+          }
+        } else {
+          field += char
+        }
+      } else if (char === '"') {
+        inQuotes = true
+      } else if (char === delimiter) {
+        row.push(field)
+        field = ''
+      } else if (char === '\n' || char === '\r') {
+        if (char === '\r' && raw[i + 1] === '\n') i++
+        row.push(field)
+        field = ''
+        if (row.some((cell) => cell.trim() !== '')) rows.push(row)
+        row = []
+      } else {
+        field += char
+      }
+    }
+    row.push(field)
+    if (row.some((cell) => cell.trim() !== '')) rows.push(row)
+    return rows
   }
 </script>
 
@@ -290,6 +331,39 @@
       {:else if kind === 'text' && text !== undefined}
         <pre
           class="min-h-0 w-full flex-1 overflow-auto whitespace-pre-wrap rounded-lg bg-surface p-4 font-mono text-xs leading-relaxed text-foreground shadow-2xl break-words">{text}</pre>
+      {:else if kind === 'csv' && csvRows.length > 0}
+        <div
+          class="flex min-h-0 w-full flex-1 flex-col overflow-auto rounded-lg bg-surface shadow-2xl"
+        >
+          <table
+            class="w-full border-collapse text-xs"
+            aria-label={`${filename} data table`}
+          >
+            <thead>
+              <tr class="bg-elevated">
+                {#each csvRows[0] as cell, c (c)}
+                  <th
+                    scope="col"
+                    class="border-r border-border px-3 py-1.5 text-left align-top font-semibold break-words whitespace-pre-wrap"
+                  >
+                    {cell}
+                  </th>
+                {/each}
+              </tr>
+            </thead>
+            <tbody>
+              {#each csvRows.slice(1) as cells, r (r)}
+                <tr class="border-t border-border">
+                  {#each cells as cell, c (c)}
+                    <td class="border-r border-border px-3 py-1.5 align-top break-words whitespace-pre-wrap">
+                      {cell}
+                    </td>
+                  {/each}
+                </tr>
+              {/each}
+            </tbody>
+          </table>
+        </div>
       {:else}
         <div
           class="flex h-full w-full flex-col items-center justify-center gap-2 rounded-lg bg-surface text-muted shadow-2xl"

@@ -94,6 +94,7 @@ const defaultConfig: AppConfig = {
   autoInstallUpdates: true,
   updateChannel: 'stable',
   keepAwakeWhileWorking: false,
+  keepAwakeWhileRemoteConnected: true,
   imageDescriptorAskAgain: false,
   autoRetryAfterReset: false,
   resumeWorkOnRestart: true,

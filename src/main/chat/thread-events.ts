@@ -63,11 +63,20 @@ export function broadcastThreadDeleted(thread: Thread): void {
   dismissThreadNotifications(thread.projectId, thread.id)
 }
 
+/** Keep note-presence indicators synchronized across desktop and remote renderers. */
+export function broadcastNoteChanged(projectId: string, threadId: string, hasNote: boolean): void {
+  for (const win of BrowserWindow.getAllWindows()) {
+    sendToRenderer(win.webContents, 'note:changed', projectId, threadId, hasNote)
+  }
+  forwardRemoteEvent('note:changed', [projectId, threadId, hasNote])
+}
+
 /** Notify renderers that one task's live process list changed. */
 export function broadcastAgentProcessesChanged(projectId: string, threadId: string): void {
   for (const win of BrowserWindow.getAllWindows()) {
     sendToRenderer(win.webContents, 'agent:processesChanged', projectId, threadId)
   }
+  forwardRemoteEvent('agent:processesChanged', [projectId, threadId])
 }
 
 /** Deliver another process's persisted checkpoint invalidation locally. */

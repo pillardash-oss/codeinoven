@@ -23,10 +23,9 @@ const SCHEDULED_RETRY_WAKE_WINDOW_MS = 6 * 60 * 60 * 1_000
 /**
  * PowerWakeService — prevents the system and display from sleeping while
  * work is in progress, while a scheduled auto-retry (usage/rate-limit reset) is
- * due within six hours, or while a live remote (phone) session is using the
- * desktop. The thread and retry sides are gated by the General settings toggle
- * ("Keep device on while work is in progress"); the remote side is always on
- * so a connected phone session never gets dropped by the display sleeping.
+ * due within six hours, or while a remote phone has opened the desktop
+ * workspace. Thread/retry work and remote sessions have independent persisted
+ * preferences so either source can keep the workstation available.
  */
 export class PowerWakeService {
   /** Blocker that keeps the whole system (CPU) from sleeping. */
@@ -35,6 +34,7 @@ export class PowerWakeService {
   private displayBlockerId: number | null = null
   private releaseTimer: ReturnType<typeof setTimeout> | null = null
   private enabled = false
+  private remoteEnabled = true
   private remoteSessionActive = false
   private retryScheduler: RetrySchedulerService | null = null
   private readonly retryWakeWindows = new Map<string, number>()
@@ -48,12 +48,19 @@ export class PowerWakeService {
   async start(): Promise<void> {
     const config = await this.storage.getConfig()
     this.enabled = config.keepAwakeWhileWorking === true
+    this.remoteEnabled = config.keepAwakeWhileRemoteConnected !== false
     this.refresh()
   }
 
   /** Apply a config change without re-reading storage. */
   setEnabled(enabled: boolean): void {
     this.enabled = enabled
+    this.refresh(!enabled)
+  }
+
+  /** Apply the Remote-page keep-awake preference without re-reading storage. */
+  setRemoteEnabled(enabled: boolean): void {
+    this.remoteEnabled = enabled
     this.refresh(!enabled)
   }
 
@@ -82,7 +89,7 @@ export class PowerWakeService {
     this.retryScheduler = scheduler
   }
 
-  /** Keep the display awake while a remote phone session is live. */
+  /** Keep the desktop awake while a phone is actively using its workspace. */
   setRemoteSessionActive(active: boolean): void {
     this.remoteSessionActive = active
     this.refresh()
@@ -113,7 +120,7 @@ export class PowerWakeService {
 
   private shouldKeepAwake(): boolean {
     return (
-      this.remoteSessionActive ||
+      (this.remoteEnabled && this.remoteSessionActive) ||
       (this.enabled && (this.hasActiveThread() || this.hasScheduledRetry()))
     )
   }

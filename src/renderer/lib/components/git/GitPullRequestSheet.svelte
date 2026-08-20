@@ -547,7 +547,7 @@
     return parts.join('\n')
   }
 
-  function composePrompt(directory: string): string {
+  function composePrompt(): string {
     const localChanges = localChangesContext()
     return [
       `Compose a pull request title and description for merging \`${head}\` into \`${base}\` in this repository.`,
@@ -561,17 +561,17 @@
       'description that summarizes what changed, why, and anything a reviewer should know. Do not',
       'overstate scope — only cover the changes in those commits.',
       '',
-      `Write the result as JSON to \`${directory}/compose.json\` with exactly this shape:`,
+      'Return only JSON with exactly this shape:',
       '{',
       '  "title": "The pull request title",',
       '  "description": "The pull request description"',
       '}',
       '',
-      'Only write that file. Do not create the pull request, do not commit, and do not push.'
+      'Do not write any files, create the pull request, commit, or push.'
     ].join('\n')
   }
 
-  function recomposePrompt(directory: string): string {
+  function recomposePrompt(): string {
     const branchChanged = Boolean(
       composeHead && composeBase && (composeHead !== head || composeBase !== base)
     )
@@ -592,9 +592,8 @@
       body.trim() || '(empty)',
       '',
       'Improve on it: re-read the commit range, make the title sharper and the description',
-      'clearer and more complete, then overwrite the JSON at',
-      `\`${directory}/compose.json\` with the same shape.`,
-      'Only write that file — do not create the pull request, commit, or push.'
+      'clearer and more complete, then return only JSON with the same shape.',
+      'Do not write any files, create the pull request, commit, or push.'
     ].join('\n')
   }
 
@@ -673,13 +672,12 @@
       const settings = composeVirtualTaskSettings()
       persistComposeSelection(settings)
       const virtualTaskId = crypto.randomUUID()
-      const directory = `.cio/git/compose/${virtualTaskId}`
       const report = await gitState.composeWithAgent(
         projectId,
         virtualTaskId,
         settings,
         `Compose PR: ${head} → ${base}`,
-        recomposing ? recomposePrompt(directory) : composePrompt(directory)
+        recomposing ? recomposePrompt() : composePrompt()
       )
       if (!report) {
         throw new Error(gitState.error ?? 'The PR compose agent did not return a result')

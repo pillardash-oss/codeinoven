@@ -61,6 +61,7 @@
   import ModelPicker from '../shared/ModelPicker.svelte'
   import { filterActions } from '$lib/actions'
   import { APP_NAME } from '$shared/brand'
+  import { isRemotePwaRuntime } from '$lib/runtime-context'
   import type { ActionDefinition, ActionSelection, ActionSource } from '$lib/actions'
   import type { RichInlineBadge } from '../shared/rich-markdown'
   import type {
@@ -215,6 +216,9 @@
     onImageDescriptorAskAgainChange?: (value: boolean) => void
     /** Enables the image-to-text-only-model gate card. Off in side-chats. */
     enableImageDescriptorGate?: boolean
+    /** Hides the inline context-usage indicator — for hosts that surface the
+     *  same detail elsewhere (e.g. the mobile header). */
+    hideUsageIndicator?: boolean
   }
 
   let {
@@ -278,7 +282,8 @@
     imageDescriptorAskAgain = false,
     onImageDescriptorDefaultChange,
     onImageDescriptorAskAgainChange,
-    enableImageDescriptorGate = true
+    enableImageDescriptorGate = true,
+    hideUsageIndicator = false
   }: Props = $props()
 
   /** Resolved settings — uses the prop if provided, else the global last-used.
@@ -317,6 +322,7 @@
   // intentionally capture only the initial attachments passed at creation time.
   // svelte-ignore state_referenced_locally
   let attachments = $state<PromptAttachment[]>([...initialAttachments])
+  let remoteFileInput = $state<HTMLInputElement>()
   // svelte-ignore state_referenced_locally
   let projectReferences = $state<PromptProjectReference[]>([...initialProjectReferences])
   // svelte-ignore state_referenced_locally
@@ -1142,7 +1148,7 @@
     if (!kind) return
     try {
       const bytes = await window.api.readFile(fileUrlToPath(file.url))
-      if (kind === 'markdown' || kind === 'text') {
+      if (kind === 'markdown' || kind === 'text' || kind === 'csv') {
         if (previewTexts[file.url] !== undefined) return
         previewTexts = { ...previewTexts, [file.url]: new TextDecoder().decode(bytes) }
         return
@@ -1259,8 +1265,27 @@
       attachmentBlockedNotice = true
       return
     }
+    if (isRemotePwaRuntime()) {
+      remoteFileInput?.click()
+      return
+    }
     const paths = await invoke('dialog:pickFiles', attachmentStorage)
     await addFileAttachments(paths.map((path) => ({ path })))
+  }
+
+  async function handleRemoteFileSelection(event: Event): Promise<void> {
+    const input = event.currentTarget
+    if (!(input instanceof HTMLInputElement) || !input.files) return
+    for (const file of Array.from(input.files)) {
+      try {
+        const filePath = await window.api.registerFileSelection(file, attachmentStorage)
+        if (filePath) await addFileAttachment(filePath, file)
+      } catch (error) {
+        textAttachmentError =
+          error instanceof Error ? error.message : 'The attachment could not be added.'
+      }
+    }
+    input.value = ''
   }
 
   // ─── Global file drop (full viewport) ─────────────────────────────────────
@@ -1305,8 +1330,12 @@
       try {
         const filePath = await window.api.registerFileSelection(file, attachmentStorage)
         if (filePath) await addFileAttachment(filePath, file)
-      } catch {
+      } catch (error) {
         // Not a local file (e.g., image dragged from a web page); skip.
+        if (isRemotePwaRuntime()) {
+          textAttachmentError =
+            error instanceof Error ? error.message : 'The attachment could not be added.'
+        }
       }
     }
   }
@@ -1578,6 +1607,16 @@
 </script>
 
 <svelte:window onkeydown={onWindowKeydown} />
+
+<input
+  bind:this={remoteFileInput}
+  type="file"
+  multiple
+  class="sr-only"
+  tabindex="-1"
+  aria-hidden="true"
+  onchange={(event) => void handleRemoteFileSelection(event)}
+/>
 
 {#if previewFile}
   <AttachmentPreview
@@ -2415,17 +2454,19 @@
 
     <span class="flex-1"></span>
 
-    <ContextUsageIndicator
-      usage={contextUsage}
-      {efficiencyKpis}
-      {harnessUsage}
-      {canCompact}
-      {compacting}
-      {onCompact}
-      onReveal={onRevealUsage}
-      onHide={onHideUsage}
-      refreshing={usageRefreshing}
-    />
+    {#if !hideUsageIndicator}
+      <ContextUsageIndicator
+        usage={contextUsage}
+        {efficiencyKpis}
+        {harnessUsage}
+        {canCompact}
+        {compacting}
+        {onCompact}
+        onReveal={onRevealUsage}
+        onHide={onHideUsage}
+        refreshing={usageRefreshing}
+      />
+    {/if}
 
     <!-- Send / Queue / Stop button.
          - Agent idle:       ArrowUp (send) — primary, disabled when empty
@@ -2434,7 +2475,7 @@
          - Stop confirmation pending:   "Stop?" danger label -->
     <button
       type="button"
-      class="flex h-8 w-8 items-center justify-center rounded-lg transition-colors {pendingStop
+      class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg transition-colors {pendingStop
         ? 'bg-danger text-on-danger hover:bg-danger-hover'
         : canStop
           ? 'bg-danger/10 text-danger hover:bg-danger/20'

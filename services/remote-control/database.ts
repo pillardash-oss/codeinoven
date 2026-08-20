@@ -12,6 +12,7 @@ import type {
 
 export type AuditEventKind =
   | 'desktop.enrollment-created'
+  | 'desktop.enrollment-cancelled'
   | 'desktop.enrollment-conflict'
   | 'desktop.profile-synced'
   | 'desktop.claimed'
@@ -306,6 +307,19 @@ export class RemoteControlDatabase {
       .all(userId) as DesktopRecord[]
   }
 
+  listDesktopsForMobile(userId: string, mobileDeviceId: string): DesktopRecord[] {
+    return this.db
+      .prepare(
+        `SELECT d.* FROM desktops d
+         JOIN desktop_grants g ON g.desktop_id = d.id
+         JOIN mobile_devices m ON m.id = g.mobile_device_id
+         WHERE d.user_id = ? AND g.mobile_device_id = ?
+           AND d.revoked_at IS NULL AND m.revoked_at IS NULL
+         ORDER BY d.name COLLATE NOCASE`
+      )
+      .all(userId, mobileDeviceId) as DesktopRecord[]
+  }
+
   touchDesktop(id: string): void {
     this.db.prepare('UPDATE desktops SET last_seen_at = ? WHERE id = ?').run(Date.now(), id)
   }
@@ -383,6 +397,12 @@ export class RemoteControlDatabase {
     return (
       (this.db.prepare('SELECT * FROM enrollments WHERE desktop_id = ?').get(desktopId) as
         EnrollmentRecord | undefined) ?? null
+    )
+  }
+
+  cancelDesktopEnrollment(desktopId: string): boolean {
+    return (
+      this.db.prepare('DELETE FROM enrollments WHERE desktop_id = ?').run(desktopId).changes > 0
     )
   }
 

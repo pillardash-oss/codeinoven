@@ -193,6 +193,10 @@ const ROOT_SHELL_FILES = [
   '/manifest.webmanifest',
   '/apple-touch-icon.png',
   '/icon.png',
+  '/icon-192.png',
+  '/icon-512.png',
+  '/icon-maskable-512.png',
+  '/notification-badge.png',
   '/logo.png',
   '/favicon.ico'
 ]

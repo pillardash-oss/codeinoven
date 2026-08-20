@@ -819,9 +819,13 @@
   }
 </script>
 
-<div>
+<div class="min-w-0">
   <Popover.Root bind:open onOpenChange={handleOpenChange}>
-    <div class={triggerClasses} class:pointer-events-none={disabled} class:opacity-50={disabled}>
+    <div
+      class="min-w-0 {triggerClasses}"
+      class:pointer-events-none={disabled}
+      class:opacity-50={disabled}
+    >
       <Popover.Trigger
         class={modelButtonClasses}
         aria-label={`${multiSelect ? 'Select models' : 'Select model'}, currently ${selectedLabel}`}

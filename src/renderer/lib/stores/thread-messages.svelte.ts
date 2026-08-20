@@ -28,6 +28,7 @@ interface ThreadMessagesEntry {
   loaded: boolean
   loading: boolean
   error: string
+  runError: string
 }
 
 /** Bounded window warmed on hover, matching the ThreadView history window so a
@@ -103,7 +104,7 @@ class ThreadMessagesStore {
     const key = threadKey(projectId, threadId)
     let entry = this.#threads.get(key)
     if (!entry) {
-      entry = { messages: [], loaded: false, loading: false, error: '' }
+      entry = { messages: [], loaded: false, loading: false, error: '', runError: '' }
       this.#threads.set(key, entry)
       this.threads.set(key, { ...entry })
     }
@@ -128,6 +129,18 @@ class ThreadMessagesStore {
   /** Last load error for the thread, if any. */
   error(projectId: string, threadId: string): string {
     return this.threads.get(threadKey(projectId, threadId))?.error ?? ''
+  }
+
+  /** Terminal agent/session failure, kept separate from transcript-loading errors. */
+  runError(projectId: string, threadId: string): string {
+    return this.threads.get(threadKey(projectId, threadId))?.runError ?? ''
+  }
+
+  setRunError(projectId: string, threadId: string, error: string): void {
+    const entry = this.entry(projectId, threadId)
+    if (entry.runError === error) return
+    entry.runError = error
+    this.#notify(projectId, threadId)
   }
 
   /** Bind a session ID to a thread so streaming events are routed correctly. */
@@ -346,6 +359,7 @@ class ThreadMessagesStore {
     presentation?: UserMessagePresentation,
     taskReferences?: PromptAssignmentTaskReference[]
   ): Promise<string> {
+    this.setRunError(projectId, threadId, '')
     const { entry, messageId } = this.appendOptimistic(
       projectId,
       threadId,
@@ -395,6 +409,7 @@ class ThreadMessagesStore {
     presentation?: UserMessagePresentation,
     taskReferences?: PromptAssignmentTaskReference[]
   ): Promise<string> {
+    this.setRunError(projectId, threadId, '')
     const { entry, messageId } = this.appendOptimistic(
       projectId,
       threadId,
@@ -599,6 +614,7 @@ class ThreadMessagesStore {
     // leave the thread idle — and fold its working trace — while parts keep
     // streaming (the definitive session.idle that ends the turn clears it).
     if (event.type === 'message.part.updated' || event.type === 'message.part.delta') {
+      this.setRunError(projectId, threadId, '')
       agentRuns.setBusy(projectId, threadId, true, this.#latestUserMessageId(projectId, threadId))
     }
 
@@ -648,6 +664,7 @@ class ThreadMessagesStore {
         break
       case 'session.status':
         if (event.status.state === 'working' || event.status.state === 'waiting') {
+          this.setRunError(projectId, threadId, '')
           agentRuns.setBusy(
             projectId,
             threadId,
@@ -659,8 +676,15 @@ class ThreadMessagesStore {
         }
         break
       case 'session.idle':
+        agentRuns.setIdle(projectId, threadId)
+        break
       case 'session.error':
         agentRuns.setIdle(projectId, threadId)
+        this.setRunError(
+          projectId,
+          threadId,
+          event.issue?.message ?? event.error ?? 'The agent stopped with an unknown error.'
+        )
         break
     }
   }

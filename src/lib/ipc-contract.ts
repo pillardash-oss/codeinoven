@@ -196,6 +196,24 @@ export interface BrowserPageState {
   canGoForward: boolean
 }
 
+/** Ownership metadata for a browser tab requested by the main process. */
+export interface BrowserOpenRequestContext {
+  projectId: string
+  threadId: string
+  requestedTabId?: string
+  reveal: boolean
+}
+
+/** A permission requested by a page inside the project-scoped browser session. */
+export interface BrowserPermissionRequest {
+  id: string
+  tabId: string
+  projectId: string
+  origin: string
+  permission: string
+  mediaTypes: string[]
+}
+
 export type BrowserConsoleLevel = 'debug' | 'info' | 'warning' | 'error'
 
 /** A console or runtime diagnostic emitted by one app-scoped browser tab. */
@@ -807,6 +825,28 @@ export interface IpcInvokeContract {
     [scope: AttachmentStorageScope, text: string, existingPath?: string],
     string
   >
+  'attachment:beginRemoteUpload': Contract<
+    [scope: AttachmentStorageScope, filename: string, size: number],
+    string
+  >
+  'attachment:appendRemoteUpload': Contract<
+    [uploadId: string, offset: number, base64Chunk: string],
+    number
+  >
+  'attachment:finishRemoteUpload': Contract<[uploadId: string], string>
+  'attachment:cancelRemoteUpload': Contract<[uploadId: string], void>
+  'remotePush:getPublicKey': Contract<[], string>
+  'remotePush:subscribe': Contract<
+    [
+      subscription: {
+        endpoint: string
+        expirationTime: number | null
+        keys: { p256dh: string; auth: string }
+      }
+    ],
+    void
+  >
+  'remotePush:unsubscribe': Contract<[endpoint: string], void>
   'clipboard:writeText': Contract<[text: string], void>
   'clipboard:readText': Contract<[], string>
   'dialog:pickFile': Contract<[scope?: AttachmentStorageScope], string | null>
@@ -1355,7 +1395,13 @@ export interface IpcInvokeContract {
   /** Resolve website favicons for a list of hostnames. Returns a data URL per host, or null when none exists. */
   'web:favicon': Contract<[hostnames: string[]], Record<string, string | null>>
   'browser:show': Contract<
-    [tabId: string, projectId: string, initialUrl: string, bounds: BrowserViewBounds],
+    [
+      tabId: string,
+      projectId: string,
+      threadId: string,
+      initialUrl: string,
+      bounds: BrowserViewBounds
+    ],
     BrowserPageState
   >
   'browser:hide': Contract<[tabId: string], void>
@@ -1366,7 +1412,10 @@ export interface IpcInvokeContract {
   'browser:stop': Contract<[tabId: string], void>
   'browser:getConsole': Contract<[tabId: string], BrowserConsoleEntry[]>
   'browser:clearConsole': Contract<[tabId: string], void>
+  'browser:clearData': Contract<[projectId: string], void>
+  'browser:resolvePermission': Contract<[requestId: string, granted: boolean], void>
   'browser:destroy': Contract<[tabId: string], void>
+  'browser:destroyThread': Contract<[projectId: string, threadId: string], void>
   'browser:destroyProject': Contract<[projectId: string], void>
   'spec:addAnnotation': Contract<
     [
@@ -1859,7 +1908,9 @@ export interface IpcEventContract {
   'computerUse:pipState': [state: ComputerUsePipState]
   'browser:state': [state: BrowserPageState]
   'browser:console': [entry: BrowserConsoleEntry]
-  'browser:openRequested': [url: string, requestedTabId?: string]
+  'browser:openRequested': [url: string, context?: BrowserOpenRequestContext]
+  'browser:permissionRequested': [request: BrowserPermissionRequest]
+  'browser:permissionResolved': [requestId: string]
   /** Remote-mode status changes from the main process. */
   'remote:status': [status: RemoteModeStatus]
   /**
