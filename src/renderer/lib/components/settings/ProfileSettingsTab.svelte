@@ -77,7 +77,7 @@
     return localDateKey(date) === value ? date : null
   }
 
-  const DEFAULT_RANGE = analyticsRange(7)
+  const DEFAULT_RANGE = analyticsRange(365)
 
   const EMPTY_USAGE: LocalProfileAnalytics = {
     range: DEFAULT_RANGE,
@@ -120,7 +120,7 @@
   let activeProvider = $state<AccountAuthProvider | null>(null)
   let signInError = $state('')
   let selectedRange = $state<LocalProfileAnalyticsRange>(DEFAULT_RANGE)
-  let rangePreset = $state<RangePreset>('7d')
+  let rangePreset = $state<RangePreset>('year')
   let customStartDate = $state(dateInputValue(DEFAULT_RANGE.startAt))
   let customEndDate = $state(dateInputValue(DEFAULT_RANGE.endAt - 1))
   let projectIconUrls = $state<Record<string, string>>({})
