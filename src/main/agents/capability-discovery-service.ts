@@ -344,7 +344,7 @@ export class CapabilityDiscoveryService {
           serverName: server.name
         }
         return {
-          id: `${origin}:mcp:${server.name}`,
+          id: `${origin}:mcp:${absolutePath}:${server.name}`,
           name: server.name,
           kind: 'mcp' as const,
           origin,

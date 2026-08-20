@@ -113,7 +113,7 @@
   })
 </script>
 
-<div class="space-y-5">
+<div class="mx-auto max-w-2xl space-y-5 p-6 pb-24">
   {#if error}
     <p class="rounded-lg bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">{error}</p>
   {/if}
@@ -122,10 +122,10 @@
     <div class="flex flex-col gap-5 sm:flex-row sm:items-start sm:justify-between">
       <div class="flex min-w-0 items-start gap-4">
         <div
-          class="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-elevated"
+          class="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-[#2f80ed]"
           aria-hidden="true"
         >
-          <img src={cuaLogoUrl} alt="" class="h-7 w-7" />
+          <img src={cuaLogoUrl} alt="" class="h-9 w-9" />
         </div>
         <div class="min-w-0">
           <div class="flex flex-wrap items-center gap-2">
