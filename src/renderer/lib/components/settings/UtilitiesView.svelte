@@ -6,6 +6,7 @@
     Boxes,
     Globe2,
     KeyRound,
+    LayoutGrid,
     Loader2,
     Pencil,
     Plus,
@@ -31,7 +32,7 @@
     UtilityKind
   } from '$shared/types'
 
-  type Tab = 'skills' | 'mcp' | 'plugins' | 'web' | 'tools'
+  type Tab = 'all' | 'skills' | 'mcp' | 'plugins' | 'web' | 'tools'
 
   type RowItem =
     | {
@@ -63,13 +64,14 @@
   let loading = $state(true)
   let error = $state('')
   let query = $state('')
-  let activeTab = $state<Tab>('skills')
+  let activeTab = $state<Tab>('all')
   let scopeFilter = $state('all')
   let editorOpen = $state(false)
   let editorTarget = $state<UtilityEditorTarget | null>(null)
   let pluginManifest = $state('')
 
   let tabs: Array<{ id: Tab; label: string }> = [
+    { id: 'all', label: 'All' },
     { id: 'skills', label: 'Skills' },
     { id: 'mcp', label: 'MCP' },
     { id: 'plugins', label: 'Plugins' },
@@ -78,6 +80,7 @@
   ]
 
   const TAB_BLURB: Record<Tab, string> = {
+    all: 'Every skill, MCP server, and web utility installed in CodeInOven.',
     skills: 'Skills for every harness plus the shared global layer.',
     mcp: 'MCP servers for every harness plus the shared global layer.',
     plugins: 'Install a plugin bundle that adds capabilities together.',
@@ -148,6 +151,17 @@
   const WEB_KINDS: Array<UtilityKind> = ['web_search', 'web_fetch', 'provider', 'image_descriptor']
 
   function tabRows(): RowItem[] {
+    if (activeTab === 'all') {
+      return [
+        ...registryRows(
+          utilities.filter(
+            (utility) => utility.kind === 'skill' || WEB_KINDS.includes(utility.kind)
+          )
+        ),
+        ...registryRows(utilities.filter((utility) => utility.kind === 'mcp')),
+        ...(capabilities ? [...nativeRows(capabilities.skill), ...nativeRows(capabilities.mcp)] : [])
+      ]
+    }
     if (activeTab === 'skills') {
       return [
         ...registryRows(utilities.filter((utility) => utility.kind === 'skill')),
@@ -164,6 +178,22 @@
       return registryRows(utilities.filter((utility) => WEB_KINDS.includes(utility.kind)))
     }
     return []
+  }
+
+  function rowIcon(row: RowItem): typeof BookOpen {
+    const kind = row.src === 'registry' ? row.utility.kind : row.entry.kind
+    if (kind === 'skill') return BookOpen
+    if (kind === 'mcp') return Server
+    return Globe2
+  }
+
+  function rowKindBadge(row: RowItem): string {
+    if (row.src === 'registry') {
+      if (row.utility.kind === 'skill') return 'Skill'
+      if (row.utility.kind === 'mcp') return 'MCP'
+      return kindLabel(row.utility.kind)
+    }
+    return row.entry.origin === 'global' ? 'Global' : 'Harness'
   }
 
   let availableTags = $derived(
@@ -323,24 +353,13 @@
           <RefreshCw size={13} class={loading ? 'animate-spin' : ''} /> Refresh
         </button>
       {/if}
-      {#if activeTab === 'skills' || activeTab === 'mcp' || activeTab === 'web'}
-        <button
-          class="flex h-8 items-center gap-1.5 rounded-lg bg-primary px-2.5 text-xs font-medium text-on-primary hover:bg-primary-hover"
-          title="Add a utility of this type"
-          onclick={openCreate}
-        >
-          <Plus size={13} />
-          {activeTab === 'mcp' ? 'Add MCP' : activeTab === 'web' ? 'Add utility' : 'Add skill'}
-        </button>
-      {:else if activeTab === 'plugins'}
-        <button
-          class="flex h-8 items-center gap-1.5 rounded-lg border bg-elevated px-2.5 text-xs font-medium hover:bg-overlay"
-          title="Import a plugin manifest"
-          onclick={() => (pluginManifest = '')}
-        >
-          <Boxes size={13} /> Import plugin bundle
-        </button>
-      {/if}
+      <button
+        class="flex h-8 items-center gap-1.5 rounded-lg bg-primary px-2.5 text-xs font-medium text-on-primary hover:bg-primary-hover"
+        title="Add a skill, MCP server, or other utility"
+        onclick={openCreate}
+      >
+        <Plus size={13} /> Add utility
+      </button>
       <div
         class="flex flex-wrap items-center gap-0.5 rounded-lg border bg-elevated p-0.5"
         role="tablist"
@@ -357,7 +376,9 @@
             title="{tab.label} utilities"
             onclick={() => (activeTab = tab.id)}
           >
-            {#if tab.id === 'skills'}
+            {#if tab.id === 'all'}
+              <LayoutGrid size={13} />
+            {:else if tab.id === 'skills'}
               <BookOpen size={13} />
             {:else if tab.id === 'mcp'}
               <Server size={13} />
@@ -375,8 +396,8 @@
     </div>
   </div>
 
-  {#if activeTab === 'skills' || activeTab === 'mcp'}
-    {#if !secureStorageAvailable}
+  {#if activeTab === 'all' || activeTab === 'skills' || activeTab === 'mcp' || activeTab === 'web'}
+    {#if (activeTab === 'all' || activeTab === 'skills' || activeTab === 'mcp') && !secureStorageAvailable}
       <div
         class="mb-4 flex items-start gap-2 rounded-lg border border-warning/30 bg-warning/10 px-3 py-2 text-xs text-warning"
       >
@@ -394,11 +415,17 @@
           size={14}
           class="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-dimmed"
         />
-        <span class="sr-only">Search capabilities</span>
+        <span class="sr-only">Search utilities</span>
         <input
           class="h-9 w-full rounded-lg border bg-surface pl-9 pr-3 text-sm outline-none focus:border-primary"
           type="search"
-          placeholder="Search {activeTab === 'skills' ? 'skills' : 'MCP servers'}"
+          placeholder="Search {activeTab === 'skills'
+            ? 'skills'
+            : activeTab === 'mcp'
+              ? 'MCP servers'
+              : activeTab === 'web'
+                ? 'web & vision utilities'
+                : 'all utilities'}"
           bind:value={query}
         />
       </label>
@@ -451,45 +478,26 @@
       <div class="rounded-xl border border-dashed p-8 text-center">
         <Puzzle size={18} class="mx-auto mb-2 text-dimmed" />
         <p class="text-sm font-medium">No matching entries</p>
-        <p class="mt-1 text-xs text-dimmed">Add a capability or change the filters.</p>
+        <p class="mt-1 text-xs text-dimmed">Add a utility or change the filters.</p>
       </div>
     {:else}
       <div class="divide-y rounded-xl border bg-surface">
         {#each filteredRows as row (row.id)}
+          {@const Icon = rowIcon(row)}
           <div class="flex items-start gap-3 p-4">
             <div
               class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-elevated text-muted"
             >
-              {#if row.src === 'registry'}
-                {#if row.utility.kind === 'skill'}
-                  <BookOpen size={15} />
-                {:else}
-                  <Server size={15} />
-                {/if}
-              {:else}
-                {#if row.entry.kind === 'skill'}
-                  <BookOpen size={15} />
-                {:else}
-                  <Server size={15} />
-                {/if}
-              {/if}
+              <Icon size={15} />
             </div>
             <div class="min-w-0 flex-1">
               <div class="flex flex-wrap items-center gap-2">
                 <p class="text-sm font-semibold">{row.name}</p>
-                {#if row.src === 'registry'}
-                  <span
-                    class="rounded-md bg-elevated px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-muted"
-                  >
-                    {row.utility.kind === 'skill' ? 'Skill' : 'MCP'}
-                  </span>
-                {:else}
-                  <span
-                    class="rounded-md bg-elevated px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-muted"
-                  >
-                    {row.entry.origin === 'global' ? 'Global' : 'Harness'}
-                  </span>
-                {/if}
+                <span
+                  class="rounded-md bg-elevated px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-muted"
+                >
+                  {rowKindBadge(row)}
+                </span>
                 {#if row.appOwned}
                   <span
                     class="rounded-md border border-primary/30 bg-primary/10 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-primary"
@@ -549,14 +557,16 @@
               >
                 <Pencil size={14} />
               </button>
-              <button
-                class="flex h-8 w-8 items-center justify-center rounded-lg text-muted hover:bg-danger/10 hover:text-danger"
-                aria-label="Delete {row.name}"
-                title="Delete {row.name}"
-                onclick={() => (deleteTarget = row)}
-              >
-                <Trash2 size={14} />
-              </button>
+              {#if !row.appOwned}
+                <button
+                  class="flex h-8 w-8 items-center justify-center rounded-lg text-muted hover:bg-danger/10 hover:text-danger"
+                  aria-label="Delete {row.name}"
+                  title="Delete {row.name}"
+                  onclick={() => (deleteTarget = row)}
+                >
+                  <Trash2 size={14} />
+                </button>
+              {/if}
             </div>
           </div>
         {/each}
@@ -605,93 +615,6 @@
         <Upload size={13} /> Install bundle
       </button>
     </div>
-  {:else if activeTab === 'web'}
-    {#if error}
-      <p class="mb-4 rounded-lg bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">{error}</p>
-    {/if}
-    <div class="mb-3 grid gap-2 sm:grid-cols-[minmax(0,1fr)_10rem]">
-      <label class="relative block">
-        <Search
-          size={14}
-          class="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-dimmed"
-        />
-        <span class="sr-only">Search utilities</span>
-        <input
-          class="h-9 w-full rounded-lg border bg-surface pl-9 pr-3 text-sm outline-none focus:border-primary"
-          type="search"
-          placeholder="Search utilities"
-          bind:value={query}
-        />
-      </label>
-      <span class="flex items-center justify-end text-xs text-muted">
-        {filteredRows.length}
-        {filteredRows.length === 1 ? 'entry' : 'entries'}
-      </span>
-    </div>
-    {#if filteredRows.length === 0}
-      <div class="rounded-xl border border-dashed p-8 text-center">
-        <Globe2 size={18} class="mx-auto mb-2 text-dimmed" />
-        <p class="text-sm font-medium">No utilities yet</p>
-        <p class="mt-1 text-xs text-dimmed">
-          Add a web search, web fetch, provider, or vision utility.
-        </p>
-      </div>
-    {:else}
-      <div class="divide-y rounded-xl border bg-surface">
-        {#each filteredRows as row (row.id)}
-          <div class="flex items-start gap-3 p-4">
-            <div
-              class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-elevated text-muted"
-            >
-              <Globe2 size={15} />
-            </div>
-            <div class="min-w-0 flex-1">
-              <div class="flex flex-wrap items-center gap-2">
-                <p class="text-sm font-semibold">{row.name}</p>
-                {#if row.src === 'registry'}
-                  <span
-                    class="rounded-md bg-elevated px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-muted"
-                  >
-                    {kindLabel(row.utility.kind)}
-                  </span>
-                {/if}
-              </div>
-              {#if row.description}
-                <p class="mt-1 text-xs leading-relaxed text-muted">{row.description}</p>
-              {/if}
-            </div>
-            <div class="flex shrink-0 items-center gap-1">
-              {#if row.src === 'registry' && !row.appOwned}
-                <Switch
-                  checked={row.enabled}
-                  onchange={() => void toggleEnabled(row)}
-                  aria-label="{row.enabled ? 'Disable' : 'Enable'} {row.name}"
-                  title="{row.enabled ? 'Disable' : 'Enable'} {row.name}"
-                />
-              {/if}
-              <button
-                class="flex h-8 w-8 items-center justify-center rounded-lg text-muted hover:bg-elevated hover:text-foreground"
-                aria-label="Edit {row.name}"
-                title="Edit {row.name}"
-                onclick={() => openEdit(row)}
-              >
-                <Pencil size={14} />
-              </button>
-              {#if row.src === 'registry' && !row.appOwned}
-                <button
-                  class="flex h-8 w-8 items-center justify-center rounded-lg text-muted hover:bg-danger/10 hover:text-danger"
-                  aria-label="Delete {row.name}"
-                  title="Delete {row.name}"
-                  onclick={() => (deleteTarget = row)}
-                >
-                  <Trash2 size={14} />
-                </button>
-              {/if}
-            </div>
-          </div>
-        {/each}
-      </div>
-    {/if}
   {:else}
     <ToolsView embedded />
   {/if}

@@ -122,10 +122,10 @@
     <div class="flex flex-col gap-5 sm:flex-row sm:items-start sm:justify-between">
       <div class="flex min-w-0 items-start gap-4">
         <div
-          class="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-[#2f80ed]"
+          class="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-elevated"
           aria-hidden="true"
         >
-          <img src={cuaLogoUrl} alt="" class="h-9 w-9" />
+          <img src={cuaLogoUrl} alt="" class="h-7 w-7" />
         </div>
         <div class="min-w-0">
           <div class="flex flex-wrap items-center gap-2">

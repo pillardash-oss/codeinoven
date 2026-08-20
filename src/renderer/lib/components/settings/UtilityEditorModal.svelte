@@ -840,13 +840,6 @@ ${instructions}`
       </div>
     {:else if !isNative && draft.id === null && setupPreset === 'plugin-bundle'}
       <div>
-        <button
-          type="button"
-          class="mb-4 flex h-8 items-center gap-1.5 rounded-lg text-xs font-medium text-muted hover:text-foreground"
-          onclick={() => (setupPreset = null)}
-        >
-          <ChevronLeft size={14} /> Choose another capability
-        </button>
         {#if editorError}
           <p class="mb-4 rounded-lg bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">
             {editorError}
@@ -1248,58 +1241,78 @@ ${instructions}`
     {/if}
 
     {#snippet footer()}
-      {#if setupPreset === 'plugin-bundle'}
-        <button
-          class="h-9 rounded-lg border bg-elevated px-3 text-xs font-medium hover:bg-overlay"
-          type="button"
-          onclick={onClose}
-        >
-          Cancel
-        </button>
-        <button
-          class="flex h-9 items-center gap-1.5 rounded-lg bg-primary px-4 text-xs font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
-          type="button"
-          disabled={saving || !pluginManifest.trim()}
-          onclick={() => void importPluginBundle()}
-        >
-          {#if saving}<Loader2 size={13} class="animate-spin" />{/if}
-          Install plugin
-        </button>
-      {:else}
-        <button
-          class="h-9 rounded-lg border bg-elevated px-3 text-xs font-medium hover:bg-overlay"
-          type="button"
-          onclick={onClose}
-        >
-          {draft.id !== null || isNative || setupPreset !== null ? 'Cancel' : 'Close'}
-        </button>
-        {#if (draft.id !== null || isNative) && !isAppOwned}
-          <button
-            class="flex h-9 items-center gap-1.5 rounded-lg bg-danger px-3 text-xs font-medium text-on-primary hover:opacity-90 disabled:opacity-50"
-            type="button"
-            disabled={saving}
-            onclick={() => {
-              if (isNative && nativeEntry) deleteTarget = { kind: 'native', entry: nativeEntry }
-              else if (editingRegistry)
-                deleteTarget = { kind: 'registry', utility: editingRegistry }
-            }}
-          >
-            {#if saving}<Loader2 size={13} class="animate-spin" />{/if}
-            Delete
-          </button>
-        {/if}
-        {#if draft.id !== null || isNative || setupPreset !== null}
-          <button
-            class="flex h-9 items-center gap-1.5 rounded-lg bg-primary px-4 text-xs font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
-            type="submit"
-            form="utility-editor-form"
-            disabled={saving}
-          >
-            {#if saving}<Loader2 size={13} class="animate-spin" />{/if}
-            {isNative ? 'Save changes' : draft.id ? 'Save utility' : 'Save utility'}
-          </button>
-        {/if}
-      {/if}
+      <div class="flex w-full items-center justify-between gap-2">
+        <div>
+          {#if !isNative && draft.id === null && setupPreset !== null}
+            <button
+              class="flex h-9 items-center gap-1.5 rounded-lg px-2.5 text-xs font-medium text-muted hover:bg-elevated hover:text-foreground"
+              type="button"
+              onclick={() => {
+                setupPreset = null
+                draft = emptyDraft()
+                pluginManifest = ''
+                editorError = ''
+              }}
+            >
+              <ChevronLeft size={14} /> Back
+            </button>
+          {/if}
+        </div>
+        <div class="flex items-center gap-2">
+          {#if setupPreset === 'plugin-bundle'}
+            <button
+              class="h-9 rounded-lg border bg-elevated px-3 text-xs font-medium hover:bg-overlay"
+              type="button"
+              onclick={onClose}
+            >
+              Cancel
+            </button>
+            <button
+              class="flex h-9 items-center gap-1.5 rounded-lg bg-primary px-4 text-xs font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
+              type="button"
+              disabled={saving || !pluginManifest.trim()}
+              onclick={() => void importPluginBundle()}
+            >
+              {#if saving}<Loader2 size={13} class="animate-spin" />{/if}
+              Install plugin
+            </button>
+          {:else}
+            <button
+              class="h-9 rounded-lg border bg-elevated px-3 text-xs font-medium hover:bg-overlay"
+              type="button"
+              onclick={onClose}
+            >
+              {draft.id !== null || isNative || setupPreset !== null ? 'Cancel' : 'Close'}
+            </button>
+            {#if (draft.id !== null || isNative) && !isAppOwned}
+              <button
+                class="flex h-9 items-center gap-1.5 rounded-lg bg-danger px-3 text-xs font-medium text-on-primary hover:opacity-90 disabled:opacity-50"
+                type="button"
+                disabled={saving}
+                onclick={() => {
+                  if (isNative && nativeEntry) deleteTarget = { kind: 'native', entry: nativeEntry }
+                  else if (editingRegistry)
+                    deleteTarget = { kind: 'registry', utility: editingRegistry }
+                }}
+              >
+                {#if saving}<Loader2 size={13} class="animate-spin" />{/if}
+                Delete
+              </button>
+            {/if}
+            {#if draft.id !== null || isNative || setupPreset !== null}
+              <button
+                class="flex h-9 items-center gap-1.5 rounded-lg bg-primary px-4 text-xs font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
+                type="submit"
+                form="utility-editor-form"
+                disabled={saving}
+              >
+                {#if saving}<Loader2 size={13} class="animate-spin" />{/if}
+                {isNative ? 'Save changes' : 'Save utility'}
+              </button>
+            {/if}
+          {/if}
+        </div>
+      </div>
     {/snippet}
   </Modal>
 {/if}
