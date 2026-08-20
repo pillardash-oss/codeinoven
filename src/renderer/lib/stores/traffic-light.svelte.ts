@@ -10,9 +10,9 @@ import {
  * The app header and every fullscreen dialog double as a draggable title bar;
  * all of them must reserve the same horizontal space for the window controls
  * so headings and buttons never sit underneath them. macOS draws its traffic
- * lights on the left, Windows uses its native frame, and Linux lets the user
- * pick a side — the layout is resolved in the main process at startup and
- * handed over through the preload bridge, so there is never a visual flash.
+ * lights on the left, while Windows and Linux use native frames whose controls
+ * do not overlap renderer content. The layout is resolved in the main process
+ * at startup and handed over through the preload bridge.
  */
 class TrafficLightState {
   /** Horizontal padding to reserve for the window controls, in px. */
@@ -29,6 +29,7 @@ class TrafficLightState {
       api?: { windowInfo?: { platform?: string; trafficLight?: TrafficLightInfo } }
     } | null
     const info = bridge?.api?.windowInfo?.trafficLight ?? null
+    const hasDesktopBridge = bridge?.api?.windowInfo !== undefined
     const onMac = bridge?.api?.windowInfo?.platform === 'darwin'
     // macOS always draws its traffic lights — never render with a zero inset,
     // even if a stale bridge reports none.
@@ -37,9 +38,9 @@ class TrafficLightState {
       this.offset = info.offset
       this.side = info.side
       this.present = info.present
-    } else {
-      // No bridge (plain browser / phone client) — fall back to the historical
-      // macOS-like layout so nothing regresses outside the desktop shell.
+    } else if (!hasDesktopBridge) {
+      // No bridge (plain browser / phone client) — preserve the historical
+      // browser-shell layout. A desktop bridge with absent controls stays at 0.
       this.offset = TRAFFIC_LIGHT_OFFSET
       this.side = 'left'
       this.present = true

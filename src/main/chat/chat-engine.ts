@@ -22,7 +22,8 @@ import { AntigravityDriver } from '../drivers/antigravity-driver'
 import { MuseDriver } from '../drivers/muse-driver'
 import { PiDriver } from '../drivers/pi-driver'
 import { CheckpointManager } from '../storage/checkpoint-manager'
-import { listHarnesses } from '../agents/harness-registry'
+import { findHarness, listHarnesses } from '../agents/harness-registry'
+import { buildHarnessEnvironment, resolveExecutablePath } from '../drivers/cli-environment'
 import { CheckpointLimitError, type ProjectFingerprint } from '../git/change-tracking-service'
 import {
   broadcastThreadDeleted,
@@ -33,7 +34,19 @@ import {
 } from './thread-events'
 import { updateRetryWakeWindow } from './thread-events'
 import { MemoryService, estimateTokens } from './memory-service'
-import { PromptAssembler, type BehaviorExecutionScope, type BehaviorMode } from './prompt-assembler'
+import {
+  PromptAssembler,
+  type BehaviorExecutionScope,
+  type BehaviorMode,
+  type WorkspaceScopeMode
+} from './prompt-assembler'
+import {
+  episodeFromPieces,
+  tokenUsageAttribution,
+  type AttributionMode
+} from './token-usage-attribution'
+import { leanAgentNameForMode } from '../opencode/opencode-agent-definitions'
+import type { LeanAgentMode } from '../opencode/opencode-agent-definitions'
 import { PermissionPolicy, type PermissionDecisionResult } from '../permissions/permission-policy'
 import {
   validateBoundedString,
@@ -41,7 +54,11 @@ import {
   validateThreadSettings
 } from '../ipc/ipc-validation'
 import { forwardRemoteEvent } from '../remote/remote-event-forwarder'
-import type { HarnessDriver, SendPromptOptions } from '../drivers/driver.interface'
+import {
+  InactiveQuestionTurnError,
+  type HarnessDriver,
+  type SendPromptOptions
+} from '../drivers/driver.interface'
 import type { TitleAttemptAccounting } from '../drivers/persistent-cli-driver'
 import type { PreparedUtilityRuntime } from '../drivers/driver.interface'
 import type { Database } from '../database/database'
@@ -53,11 +70,13 @@ import { instanceRegistry } from '../system/instance-registry'
 import { SecretVault } from '../storage/secret-vault'
 import { UtilityRuntimeService } from '../utilities/utility-runtime-service'
 import { UtilityRegistryService } from '../utilities/utility-registry-service'
+import { CIO_UTILITY_SETUP_PROMPT, isCioUtilityRequest } from '../utilities/cio-utility-prompt'
 import { CapabilityDiscoveryService } from '../agents/capability-discovery-service'
 import { BaseUrlProviderService } from '../providers/base-url-provider-service'
 import { AgentProcessService } from '../agents/agent-process-service'
 import {
   UtilityOrchestrationService,
+  type BrowserUtilityExecutor,
   type UtilityResultAttribution,
   type UtilityTurnBudgetContext,
   type UtilityTurnGateway
@@ -95,6 +114,7 @@ import type {
   AgentToolDefinition,
   AgentToolHarness,
   AgentContextCapabilities,
+  AgentCapabilityCatalog,
   AgentCapabilityEntry,
   AgentCapabilitySource,
   NativeMcpContent,
@@ -157,6 +177,7 @@ import {
   estimateTextTokens,
   truncateToTokenBudget
 } from '../../lib/prompt-budget'
+import { decideModelSwitchCompaction } from '../../lib/model-switch-compaction'
 import {
   AUDIT_REPORT_SCHEMA,
   ASSIGNMENT_PLAN_SCHEMA,
@@ -175,7 +196,7 @@ import {
 import { deriveTitleFromText } from './title-generator'
 import { createAutoTitleLauncher } from './title-generation-policy'
 import { artifactInstruction, GeneratedArtifactService } from './generated-artifact-service'
-import { classifyProviderIssue } from '../../lib/provider-issue'
+import { classifyProviderIssue, isUsageResetWaitIssue } from '../../lib/provider-issue'
 import { generateId } from '../../lib/utils'
 import {
   ensureFeatureSlug,
@@ -593,6 +614,28 @@ const AUDIT_ALLOWED_TOOLS = [
 
 /** Read-only research tools for disposable generation sessions that read artifact files. */
 const PROMPT_READ_ONLY_TOOLS = ['read', 'glob', 'grep', 'list']
+
+/** Dev-only trace of the lean opencode agent selected for a trimmed mode. */
+function traceLeanAgent(mode: LeanAgentMode, sessionId: string, driverId: string): void {
+  if (driverId === 'opencode') {
+    Logger.dev('trimmed mode selected lean opencode agent', {
+      mode,
+      agent: leanAgentNameForMode(mode),
+      sessionId
+    })
+  }
+}
+
+/** Map a turn's behavior mode/scope into the dev-only attribution mode label. */
+function attributionModeFor(
+  mode: BehaviorMode,
+  executionScope: BehaviorExecutionScope,
+  fileSystemMode: boolean
+): AttributionMode {
+  if (executionScope === 'project-thread') return 'engineering'
+  if (executionScope === 'ephemeral') return 'ephemeral'
+  return fileSystemMode ? 'file-system-chat' : 'inbox-chat'
+}
 
 function engineeringArtifactBoundaryInstruction(artifactDirectory: string): string {
   const normalizedDirectory = artifactDirectory.replace(/\\/gu, '/')
@@ -1039,7 +1082,7 @@ interface SessionCompletionWaiter {
   structuredOutput?: unknown
   resolve: (structuredOutput: unknown | undefined) => void
   reject: (error: Error) => void
-  timer: ReturnType<typeof setTimeout>
+  timer?: ReturnType<typeof setTimeout>
   /** Re-arm the inactivity deadline so slow-but-active sessions are not killed. */
   refresh: () => void
 }
@@ -1290,6 +1333,13 @@ export class ChatEngine {
   >()
   /** Sessions currently running an explicit context compaction. */
   private activeCompactions = new Set<string>()
+  /**
+   * Last provider/model each harness session was successfully dispatched
+   * under. A later model switch on a reused native session is detectable
+   * without a per-turn mirror read; the mirror backfills the first turn after
+   * an app restart.
+   */
+  private readonly sessionModelIds = new Map<string, { providerId: string; modelId: string }>()
   private specRevisionTasks = new Map<string, Promise<EngineeringSpec | null>>()
   /** Fresh sessions prepared for the approved-spec implementation handoff.
    * The renderer and send path both call ensureSession; retain the new id so
@@ -1299,6 +1349,11 @@ export class ChatEngine {
    * They must not cross the approval boundary into implementation. */
   private planningSessions = new Set<string>()
   private handledIdleSessions = new Set<string>()
+  private sessionIdleFinalizations = new Map<string, Promise<void>>()
+  private sessionIdleFinalizationWaiters = new Map<
+    string,
+    { resolve: () => void; reject: (error: unknown) => void }[]
+  >()
   /** Sessions the user intentionally stopped (esc+esc / cancel / permission
    * reject). Their turns must finalize as `interrupted`, never as `failed`, so
    * the sidebar never shows an error badge for a deliberate stop. */
@@ -1525,6 +1580,10 @@ export class ChatEngine {
     }
   }
 
+  setBrowserUtilityExecutor(executor: BrowserUtilityExecutor | null): void {
+    this.utilityOrchestration.setBrowserExecutor(executor)
+  }
+
   private cioPrompt(id: CioPromptId): Promise<string> {
     return this.storage.getCioPrompt(id)
   }
@@ -1610,6 +1669,7 @@ export class ChatEngine {
     ipcMain.handle('capabilities:deleteMcp', (_, source: AgentCapabilitySource) =>
       this.capabilityDiscovery.deleteMcp(source)
     )
+    ipcMain.handle('capabilities:listAll', () => this.listAllCapabilities())
     ipcMain.handle(
       'agent:ensureSession',
       (_, projectId: string, threadId: string, requestedDriverId?: string) =>
@@ -1991,8 +2051,8 @@ export class ChatEngine {
     )
     ipcMain.handle(
       'agent:runCommand',
-      (_, projectId: string, threadId: string, command: string, args: string) =>
-        this.runCommand(projectId, threadId, command, args)
+      (_, projectId: string, threadId: string, commandId: string, args: string) =>
+        this.runCommand(projectId, threadId, commandId, args)
     )
     this.idleReaperTimer = setInterval(
       () => void this.reapIdleResources(),
@@ -2024,9 +2084,19 @@ export class ChatEngine {
     if (!driver) {
       throw new Error(`Harness driver is unavailable: ${pending.driverId}`)
     }
-    await this.resolvePendingQuestion(pending, 'answered', safeAnswers, () =>
-      driver.replyToQuestion(pending.projectPath, pending.request.sessionId, requestId, safeAnswers)
-    )
+    try {
+      await this.resolvePendingQuestion(pending, 'answered', safeAnswers, () =>
+        driver.replyToQuestion(
+          pending.projectPath,
+          pending.request.sessionId,
+          requestId,
+          safeAnswers
+        )
+      )
+    } catch (error) {
+      if (!(error instanceof InactiveQuestionTurnError)) throw error
+      await this.resumeAfterInactiveQuestion(pending, 'answered', safeAnswers)
+    }
   }
 
   /** Reject a pending question and let the provider continue the active turn. */
@@ -2040,9 +2110,79 @@ export class ChatEngine {
     if (!driver) {
       throw new Error(`Harness driver is unavailable: ${pending.driverId}`)
     }
-    await this.resolvePendingQuestion(pending, 'dismissed', undefined, () =>
-      driver.rejectQuestion(pending.projectPath, pending.request.sessionId, requestId)
+    try {
+      await this.resolvePendingQuestion(pending, 'dismissed', undefined, () =>
+        driver.rejectQuestion(pending.projectPath, pending.request.sessionId, requestId)
+      )
+    } catch (error) {
+      if (!(error instanceof InactiveQuestionTurnError)) throw error
+      await this.resumeAfterInactiveQuestion(pending, 'dismissed')
+    }
+  }
+
+  /** Resume a persisted session when its provider process exited while waiting for a question. */
+  private async resumeAfterInactiveQuestion(
+    pending: PendingQuestionInfo,
+    resolution: Extract<AgentQuestionResolution, 'answered' | 'dismissed'>,
+    answers?: string[][]
+  ): Promise<void> {
+    await this.awaitSessionIdleFinalization(pending.request.sessionId)
+    await this.resolvePendingQuestion(pending, resolution, answers, async () => undefined)
+
+    const thread = await this.threadManager.getThread(
+      pending.request.projectId,
+      pending.request.threadId
     )
+    if (!thread?.settings) {
+      throw new Error(`Thread settings are unavailable: ${pending.request.threadId}`)
+    }
+    const decision = this.inactiveQuestionDecision(pending.request.questions, resolution, answers)
+    await this.sendPrompt(
+      pending.request.projectId,
+      pending.request.threadId,
+      thread.settings,
+      decision.prompt,
+      [],
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      'internal',
+      decision.presentation
+    )
+  }
+
+  private inactiveQuestionDecision(
+    questions: AgentQuestion[],
+    resolution: Extract<AgentQuestionResolution, 'answered' | 'dismissed'>,
+    answers?: string[][]
+  ): { prompt: string; presentation: UserMessagePresentation } {
+    if (resolution === 'dismissed') {
+      return {
+        prompt: [
+          'Your previous turn ended while waiting for the user to answer a question.',
+          'The user dismissed that question. Continue the original task without an answer, using the persisted conversation context. Do not ask the same question again unless continuing is genuinely impossible.'
+        ].join('\n\n'),
+        presentation: { action: 'Dismissed agent question' }
+      }
+    }
+
+    const decisions = questions.map((question, index) => ({
+      question: question.prompt,
+      answers: answers?.[index] ?? []
+    }))
+    const body = decisions
+      .map((decision) => `${decision.question}: ${decision.answers.join(', ')}`)
+      .join('\n')
+    return {
+      prompt: [
+        'Your previous turn ended while waiting for the user to answer a question.',
+        'Continue the original task using the persisted conversation context and the user decisions below.',
+        JSON.stringify(decisions)
+      ].join('\n\n'),
+      presentation: { action: 'Answered agent question', body }
+    }
   }
 
   private async achievementOwnsDecisions(thread: Thread | null): Promise<boolean> {
@@ -2243,7 +2383,7 @@ export class ChatEngine {
     }
     this.pendingImageDescriptorDecisions.clear()
     for (const waiter of this.completionWaiters.values()) {
-      clearTimeout(waiter.timer)
+      if (waiter.timer !== undefined) clearTimeout(waiter.timer)
       waiter.reject(new Error(`${APP_NAME} is shutting down`))
     }
     this.completionWaiters.clear()
@@ -2289,7 +2429,8 @@ export class ChatEngine {
     settings: ThreadSettings,
     budgetContext: UtilityTurnBudgetContext,
     skipRuntime = false,
-    directGateway = false
+    directGateway = false,
+    allowManagement = false
   ): Promise<string> {
     // A new agent turn begins here — re-enable a user-dismissed PiP so it may
     // show again if CUA is used, and cancel any auto-dismiss from the last turn.
@@ -2317,6 +2458,7 @@ export class ChatEngine {
         projectPath,
         nativeCapabilities,
         permissionLevel: settings.permissionLevel,
+        allowManagement,
         budgetContext,
         attributeReinjectedResult: (attribution) =>
           this.recordReinjectedUtilityResult(threadId, settings, budgetContext, attribution)
@@ -2331,7 +2473,13 @@ export class ChatEngine {
       )
       if (directGateway) {
         this.utilityTurns.set(sessionId, { driver, projectPath, gateway, threadId })
-        return [gateway.directInstructions, ...skillInstructions].filter(Boolean).join('\n\n')
+        return [
+          gateway.directInstructions,
+          allowManagement ? CIO_UTILITY_SETUP_PROMPT : '',
+          ...skillInstructions
+        ]
+          .filter(Boolean)
+          .join('\n\n')
       }
       const request = {
         projectPath,
@@ -2345,7 +2493,9 @@ export class ChatEngine {
         await applyRuntime(projectPath, null, sessionId)
         await gateway.cleanup()
         gateway = undefined
-        return skillInstructions.join('\n\n')
+        return [allowManagement ? CIO_UTILITY_SETUP_PROMPT : '', ...skillInstructions]
+          .filter(Boolean)
+          .join('\n\n')
       }
       const environment = { ...(overlay.env ?? {}) }
       for (const { utility } of resolvedUtilities) {
@@ -2372,7 +2522,13 @@ export class ChatEngine {
         gateway,
         threadId
       })
-      return [gateway.instructions, ...skillInstructions].filter(Boolean).join('\n\n')
+      return [
+        gateway.instructions,
+        allowManagement ? CIO_UTILITY_SETUP_PROMPT : '',
+        ...skillInstructions
+      ]
+        .filter(Boolean)
+        .join('\n\n')
     } catch (error) {
       const cleanups: Array<Promise<unknown>> = []
       if (gateway) cleanups.push(gateway.cleanup())
@@ -2416,11 +2572,13 @@ export class ChatEngine {
     // An explicit provider refresh can change which models/drivers expose tools.
     if (force) this.toolCatalogCache.clear()
     if (
+      !force &&
       this.sharedProviderCatalog &&
       Date.now() - this.sharedProviderCatalog.discoveredAt < PROVIDER_CATALOG_TTL_MS
     ) {
-      this.providerCache.set(projectId, this.sharedProviderCatalog.catalogs)
-      return this.sharedProviderCatalog.catalogs
+      const catalogs = this.filterInstalledProviderCatalogs(this.sharedProviderCatalog.catalogs)
+      this.providerCache.set(projectId, catalogs)
+      return catalogs
     }
     if (!force) {
       // Cold start: reuse the persisted snapshot so the model picker is
@@ -2510,7 +2668,11 @@ export class ChatEngine {
   /** One app-wide discovery pass; all projects share installed harness models. */
   private async discoverProviders(projectId: string): Promise<ProviderCatalog[]> {
     const projectPath = await this.resolveProjectPath(projectId)
-    const drivers = [...this.drivers.values()]
+    const harnessEnv = buildHarnessEnvironment()
+    const drivers = [...this.drivers.values()].filter((driver) => {
+      const command = findHarness(driver.id)?.command
+      return command !== undefined && resolveExecutablePath(command, harnessEnv) !== undefined
+    })
     const results = await Promise.all(
       drivers.map(async (driver): Promise<DriverDiscovery> => {
         try {
@@ -2560,20 +2722,22 @@ export class ChatEngine {
         return null
       }
       if (Array.isArray(stored)) {
+        const catalogs = this.filterInstalledProviderCatalogs(stored)
         this.sharedProviderCatalog = {
           schemaVersion: 3,
           discoveredAt: Date.now(),
-          catalogs: stored
+          catalogs
         }
-        return stored
+        return catalogs
       }
       if (
         stored?.schemaVersion === 3 &&
         Array.isArray(stored.catalogs) &&
         Date.now() - stored.discoveredAt < PROVIDER_CATALOG_TTL_MS
       ) {
-        this.sharedProviderCatalog = stored
-        return stored.catalogs
+        const catalogs = this.filterInstalledProviderCatalogs(stored.catalogs)
+        this.sharedProviderCatalog = { ...stored, catalogs }
+        return catalogs
       }
       return null
     } catch {
@@ -2594,12 +2758,24 @@ export class ChatEngine {
       this.sharedProviderCatalog &&
       Date.now() - this.sharedProviderCatalog.discoveredAt < PROVIDER_CATALOG_TTL_MS
     ) {
-      this.providerCache.set(projectId, this.sharedProviderCatalog.catalogs)
-      return this.sharedProviderCatalog.catalogs
+      const catalogs = this.filterInstalledProviderCatalogs(this.sharedProviderCatalog.catalogs)
+      this.providerCache.set(projectId, catalogs)
+      return catalogs
     }
     const persisted = await this.loadPersistedProviders()
     if (persisted) this.providerCache.set(projectId, persisted)
     return persisted ?? []
+  }
+
+  /** Keep cached/fallback catalogs scoped to harness executables installed on this machine. */
+  private filterInstalledProviderCatalogs(catalogs: ProviderCatalog[]): ProviderCatalog[] {
+    const env = buildHarnessEnvironment()
+    const installed = new Set(
+      listHarnesses()
+        .filter((harness) => resolveExecutablePath(harness.command, env) !== undefined)
+        .map((harness) => harness.id)
+    )
+    return catalogs.filter((catalog) => installed.has(catalog.harnessId))
   }
 
   /** Persist a merged catalog snapshot so the next launch is instantly populated. */
@@ -2904,8 +3080,7 @@ export class ChatEngine {
   ): Promise<{ providerId?: string; modelId?: string }> {
     if (!force) {
       const catalogs =
-        this.sharedProviderCatalog?.catalogs ??
-        (await this.listProviderSnapshot(projectId))
+        this.sharedProviderCatalog?.catalogs ?? (await this.listProviderSnapshot(projectId))
       const known = catalogs.find(
         (catalog) => catalog.harnessId === driverId && catalog.models.length > 0
       )
@@ -2962,6 +3137,19 @@ export class ChatEngine {
       mcp: dedupeCapabilities(mcp),
       skill: dedupeCapabilities(skill)
     }
+  }
+
+  /**
+   * Settings-level catalog of every MCP server and skill the app can see across
+   * all harnesses, the shared global layer, and registered local projects.
+   */
+  async listAllCapabilities(): Promise<AgentCapabilityCatalog> {
+    const projects = (await this.projectManager.listProjects()).filter(
+      (project) => project.source !== 'ssh'
+    )
+    return this.capabilityDiscovery.discoverAll(
+      projects.map((project) => ({ id: project.id, path: project.path }))
+    )
   }
 
   /** Return the thread's harness session, creating and persisting one if needed. */
@@ -3048,6 +3236,22 @@ export class ChatEngine {
     // Record whether the harness natively holds the conversation so the recap
     // path can skip a second provider history load.
     this.sessionNativeHistory.set(sessionId, storedSessionMessages.length > 0)
+
+    // A reused native session is replayed in full under whichever model the
+    // next turn selects. When that model changed and its context window is much
+    // smaller than the thread's last-known native usage, compact the native
+    // session before it resumes so the new model never hits Codex's "ran out of
+    // room in the model's context window" boundary.
+    if (!switchedHarness && storedSessionMessages.length > 0 && thread.settings) {
+      await this.maybeAutoCompactOnModelSwitch(
+        projectId,
+        threadId,
+        sessionId,
+        driver,
+        projectPath,
+        thread.settings
+      )
+    }
 
     // The switch succeeded (a replacement session is bound). Best-effort release
     // the old harness's session so its native context, prompt cache, and storage
@@ -3716,7 +3920,8 @@ export class ChatEngine {
     projectPath: string,
     mode: BehaviorMode,
     settings?: ThreadSettings,
-    executionScope: BehaviorExecutionScope = 'project-thread'
+    executionScope: BehaviorExecutionScope = 'project-thread',
+    attributionKey?: string
   ): Promise<string> {
     try {
       const threadSettings =
@@ -3724,7 +3929,15 @@ export class ChatEngine {
       const harnessId = threadSettings?.harnessId ?? 'opencode'
       const driver = this.drivers.get(harnessId)
       const config = await this.storage.getConfig()
-      return await this.promptAssembler.getAssembledPrompt(
+      // Trimmed modes get a compact scope guard instead of the full workspace
+      // block; pure inbox chat and image description (no project scope) omit it.
+      const workspaceScope: WorkspaceScopeMode =
+        executionScope === 'project-thread'
+          ? 'full'
+          : executionScope === 'ephemeral' || threadSettings?.fileSystemMode === true
+            ? 'abbreviated'
+            : 'omitted'
+      const assembled = await this.promptAssembler.getAssembledPromptWithLayers(
         projectId,
         threadId,
         projectPath,
@@ -3740,8 +3953,21 @@ export class ChatEngine {
         threadSettings?.providerId && threadSettings.modelId
           ? modelKey(harnessId, threadSettings.providerId, threadSettings.modelId)
           : undefined,
-        executionScope
+        executionScope,
+        workspaceScope
       )
+      tokenUsageAttribution.recordPromptAttribution(
+        episodeFromPieces({
+          key: attributionKey ?? `${harnessId}:${threadId}`,
+          mode: attributionModeFor(mode, executionScope, threadSettings?.fileSystemMode === true),
+          driverId: harnessId,
+          pieces: assembled.layers.map((layer) => ({
+            title: layer.title,
+            content: layer.content
+          }))
+        })
+      )
+      return assembled.prompt
     } catch (error) {
       Logger.error('Behavior prompt assembly failed', {
         projectId,
@@ -3789,12 +4015,12 @@ export class ChatEngine {
     const live = this.sessionStatuses.get(thread.sessionId)
     if (live) return live
     // After an app restart the in-memory status is gone, but a persisted
-    // auto-resume record is authoritative: reconstruct the warning card so the
+    // auto-resume record is authoritative: reconstruct the waiting card so the
     // thread still shows its reset countdown and proves it will auto-run.
     const pending = this.retryScheduler?.getPendingRetry(thread.sessionId)
     if (!pending) return null
     return {
-      state: 'error',
+      state: 'waiting',
       issue: {
         kind: pending.issueKind,
         message: pending.issueMessage,
@@ -4862,6 +5088,9 @@ export class ChatEngine {
       const outboundIds = this.outboundMessageIdsBySession.get(sessionId) ?? new Set<string>()
       outboundIds.add(messageId)
       this.outboundMessageIdsBySession.set(sessionId, outboundIds)
+      // Note: steering appends to the LIVE native turn, which still runs under
+      // the model that started it. Do not record the new settings model here —
+      // that would mask a pending model switch until the following resume.
       await driver.steerPrompt(projectPath, {
         sessionId,
         text: driverText,
@@ -4901,6 +5130,7 @@ export class ChatEngine {
       composedTurnTokens: earlyLayers.totalTokens,
       parentTurnId: messageId
     }
+    const utilitySetupRequested = origin === 'user' && isCioUtilityRequest(text)
     const utilityInstructionsPromise = this.prepareTurnUtilities(
       driver,
       projectId,
@@ -4910,11 +5140,12 @@ export class ChatEngine {
       settings,
       utilityBudgetContext,
       // Web-only chat deliberately has no app gateway.
-      isChatThread && !chatFileSystemEnabled,
+      isChatThread && !chatFileSystemEnabled && !utilitySetupRequested,
       // OpenCode sessions use the shared project server. The app gateway is
       // session-scoped by its capability token, so utilities do not justify a
       // second `opencode serve` process or listening port for any normal turn.
-      driver instanceof OpenCodeDriver || ['codex', 'cline', 'pi'].includes(driver.id)
+      driver instanceof OpenCodeDriver || ['codex', 'cline', 'pi'].includes(driver.id),
+      utilitySetupRequested
     )
     const transportPromise = utilityInstructionsPromise.then(() =>
       driver.preparePromptTransport?.(projectPath, sessionId, settings)
@@ -4933,7 +5164,8 @@ export class ChatEngine {
         projectPath,
         behaviorMode,
         settings,
-        isChatThread ? 'standalone-chat' : 'project-thread'
+        isChatThread ? 'standalone-chat' : 'project-thread',
+        messageId
       ),
       this.buildHistoryRecap(projectId, threadId, driverId),
       transportPromise
@@ -5137,6 +5369,10 @@ export class ChatEngine {
           userMessageId: messageId
         }
         await driver.sendPrompt(projectPath, prompt)
+        this.sessionModelIds.set(sessionId, {
+          providerId: settings.providerId,
+          modelId: settings.modelId
+        })
         void scheduleAutoTitle()
         promptDispatched = true
       } catch (error) {
@@ -5202,10 +5438,34 @@ export class ChatEngine {
             historyRecap
           }) || undefined,
         allowedTools:
-          isChatThread && !chatFileSystemEnabled && settings.providerId && settings.modelId
+          isChatThread &&
+          !chatFileSystemEnabled &&
+          !utilitySetupRequested &&
+          settings.providerId &&
+          settings.modelId
             ? CHAT_WEB_ONLY_TOOLS
             : undefined,
+        agent: utilitySetupRequested
+          ? leanAgentNameForMode('utility-setup')
+          : isChatThread
+            ? leanAgentNameForMode(chatFileSystemEnabled ? 'file-system-chat' : 'inbox-chat')
+            : undefined,
         userMessageId: messageId
+      })
+      if (utilitySetupRequested || isChatThread) {
+        traceLeanAgent(
+          utilitySetupRequested
+            ? 'utility-setup'
+            : chatFileSystemEnabled
+              ? 'file-system-chat'
+              : 'inbox-chat',
+          sessionId,
+          driverId
+        )
+      }
+      this.sessionModelIds.set(sessionId, {
+        providerId: settings.providerId,
+        modelId: settings.modelId
       })
       void scheduleAutoTitle()
       if (origin === 'internal' && this.isCoordinatorThread(targetThread)) {
@@ -5346,7 +5606,7 @@ export class ChatEngine {
           .map((selection, index) => `<selection ${index + 1}>\n${selection}\n</selection>`)
           .join('\n\n')}\n\nUser request:\n${text}`
       : text
-    const completion = this.waitForSessionCompletion(temporary.sessionId, 180_000, 'Temporary chat')
+    const completion = this.waitForSessionCompletion(temporary.sessionId, null, 'Temporary chat')
     try {
       const memoryPrompt = await this.memoryService.formatCurrent(
         projectId,
@@ -5364,6 +5624,7 @@ export class ChatEngine {
       ]
         .filter(Boolean)
         .join('\n\n')
+      const userMessageId = createMessageId()
       const request: SendPromptOptions = {
         sessionId: temporary.sessionId,
         settings: {
@@ -5376,8 +5637,21 @@ export class ChatEngine {
         systemPrompt,
         allowedTools: TEMPORARY_CHAT_ALLOWED_TOOLS,
         readOnly: true,
-        userMessageId: createMessageId()
+        agent: leanAgentNameForMode('ephemeral'),
+        userMessageId
       }
+      traceLeanAgent('ephemeral', temporary.sessionId, temporary.driverId)
+      tokenUsageAttribution.recordPromptAttribution(
+        episodeFromPieces({
+          key: `eph:${temporary.sessionId}`,
+          mode: 'ephemeral',
+          driverId: temporary.driverId,
+          pieces: [
+            { title: 'System prompt', content: systemPrompt },
+            { title: 'User text', content: promptText }
+          ]
+        })
+      )
       if (temporary.isolated && driver instanceof OpenCodeDriver) {
         await driver.sendPrompt(temporary.projectPath, request, temporary.isolated)
       } else {
@@ -5396,6 +5670,13 @@ export class ChatEngine {
       const response = [...messages].reverse().find((message) => message.role === 'assistant')
       if (!response) throw new Error('The temporary chat returned no response')
       if (response.error) throw new Error(response.error)
+      tokenUsageAttribution.recordTurnTotals({
+        key: `eph:${temporary.sessionId}`,
+        providerId: response.providerId ?? settings.providerId ?? null,
+        modelId: response.modelId ?? settings.modelId ?? null,
+        reportedInputTokens: response.normalizedUsage?.uncachedInput ?? null,
+        reportedTotalTokens: response.normalizedUsage?.rawTotal ?? null
+      })
       this.refreshTemporaryChatExpiry(temporary)
       await this.notifyTemporaryChatCompletion(projectId, threadId, temporary.id, 'completed')
       return response
@@ -5419,7 +5700,8 @@ export class ChatEngine {
     virtualTaskId: string,
     settings: ThreadSettings,
     title: string,
-    text: string
+    text: string,
+    options: { utilityManagement?: boolean } = {}
   ): Promise<AgentMessage> {
     projectId = validateEntityId(projectId, 'Project ID')
     virtualTaskId = validateEntityId(virtualTaskId, 'Virtual task ID')
@@ -5455,14 +5737,43 @@ export class ChatEngine {
     const completion = this.waitForSessionCompletion(sessionId, 180_000, title)
 
     try {
+      const utilityInstructions = options.utilityManagement
+        ? await this.prepareTurnUtilities(
+            driver,
+            projectId,
+            virtualTaskId,
+            sessionId,
+            projectPath,
+            settings,
+            {
+              selectedModelInputTokens: 200_000,
+              composedTurnTokens: 0,
+              parentTurnId: turnId
+            },
+            false,
+            true,
+            true
+          )
+        : ''
       const request: SendPromptOptions = {
         sessionId,
         settings,
         text,
         attachments: [],
+        systemPrompt: utilityInstructions || undefined,
         readOnly: false,
+        agent: leanAgentNameForMode(options.utilityManagement ? 'utility-setup' : 'pr-compose'),
         userMessageId: turnId
       }
+      traceLeanAgent('pr-compose', sessionId, driverId)
+      tokenUsageAttribution.recordPromptAttribution(
+        episodeFromPieces({
+          key: `pr:${sessionId}`,
+          mode: 'pr-compose',
+          driverId,
+          pieces: [{ title: 'Virtual task prompt', content: text }]
+        })
+      )
       if (isolated && driver instanceof OpenCodeDriver) {
         await driver.sendPrompt(projectPath, request, isolated)
       } else {
@@ -5476,6 +5787,13 @@ export class ChatEngine {
       const response = [...messages].reverse().find((message) => message.role === 'assistant')
       if (!response) throw new Error(`${title} returned no response`)
       if (response.error) throw new Error(response.error)
+      tokenUsageAttribution.recordTurnTotals({
+        key: `pr:${sessionId}`,
+        providerId: response.providerId ?? settings.providerId ?? null,
+        modelId: response.modelId ?? settings.modelId ?? null,
+        reportedInputTokens: response.normalizedUsage?.uncachedInput ?? null,
+        reportedTotalTokens: response.normalizedUsage?.rawTotal ?? null
+      })
       return response
     } catch (error) {
       if (isolated && driver instanceof OpenCodeDriver) {
@@ -6366,15 +6684,26 @@ export class ChatEngine {
         'Image upload or vision-model response',
         () => new ImageDescriptorInactivityError(timeoutMs, attempt, nextTimeoutMs)
       )
+      const imageDescriptionPrompt = await this.cioPrompt('image-description')
       const request: SendPromptOptions = {
         sessionId,
         settings,
-        text: await this.cioPrompt('image-description'),
+        text: imageDescriptionPrompt,
         attachments: [attachment],
         readOnly: true,
         allowedTools: [],
+        agent: leanAgentNameForMode('image-description'),
         userMessageId: createMessageId()
       }
+      traceLeanAgent('image-description', sessionId, selection.harnessId)
+      tokenUsageAttribution.recordPromptAttribution(
+        episodeFromPieces({
+          key: `img:${sessionId}`,
+          mode: 'image-description',
+          driverId: selection.harnessId,
+          pieces: [{ title: 'Image descriptor prompt', content: imageDescriptionPrompt }]
+        })
+      )
       if (isolated && driver instanceof OpenCodeDriver) {
         await driver.sendPrompt(projectPath, request, isolated)
       } else {
@@ -6388,6 +6717,13 @@ export class ChatEngine {
       response = [...messages].reverse().find((message) => message.role === 'assistant')
       if (!response) throw new Error('The vision model returned no description')
       if (response.error) throw new Error(response.error)
+      tokenUsageAttribution.recordTurnTotals({
+        key: `img:${sessionId}`,
+        providerId: response.providerId ?? settings.providerId ?? null,
+        modelId: response.modelId ?? settings.modelId ?? null,
+        reportedInputTokens: response.normalizedUsage?.uncachedInput ?? null,
+        reportedTotalTokens: response.normalizedUsage?.rawTotal ?? null
+      })
       const text = response.parts
         .filter((part): part is Extract<AgentPart, { type: 'text' }> => part.type === 'text')
         .map((part) => part.text)
@@ -7307,7 +7643,10 @@ export class ChatEngine {
     if (!driver.capabilities?.commands) return []
 
     try {
-      return this.scopeHarnessCommands(driver.id, await driver.listCommands(projectPath))
+      return this.scopeHarnessCommands(
+        driver.id,
+        await this.discoverHarnessCommands(driver, projectPath)
+      )
     } catch (error) {
       Logger.info('Harness command discovery skipped', {
         driverId: driver.id,
@@ -9340,6 +9679,17 @@ export class ChatEngine {
         'Brainstorm generation'
       )
       try {
+        const brainstormSystemPrompt = [
+          useStructuredOutput
+            ? await this.cioPrompt('brainstorm-document')
+            : [
+                await this.cioPrompt('brainstorm-document'),
+                BRAINSTORM_JSON_FALLBACK_SYSTEM_PROMPT
+              ].join('\n\n'),
+          behaviorPrompt
+        ]
+          .filter(Boolean)
+          .join('\n\n')
         const prompt: SendPromptOptions = {
           sessionId,
           settings: {
@@ -9353,19 +9703,10 @@ export class ChatEngine {
             .filter(Boolean)
             .join('\n\n'),
           attachments: [],
-          systemPrompt: [
-            useStructuredOutput
-              ? await this.cioPrompt('brainstorm-document')
-              : [
-                  await this.cioPrompt('brainstorm-document'),
-                  BRAINSTORM_JSON_FALLBACK_SYSTEM_PROMPT
-                ].join('\n\n'),
-            behaviorPrompt
-          ]
-            .filter(Boolean)
-            .join('\n\n'),
+          systemPrompt: brainstormSystemPrompt,
           allowedTools: BRAINSTORM_RESEARCH_ALLOWED_TOOLS,
           readOnly: true,
+          agent: leanAgentNameForMode('brainstorm'),
           ...(useStructuredOutput
             ? {
                 structuredOutput: {
@@ -9375,6 +9716,18 @@ export class ChatEngine {
               }
             : {})
         }
+        tokenUsageAttribution.recordPromptAttribution(
+          episodeFromPieces({
+            key: `brainstorm:${sessionId}`,
+            mode: 'brainstorm',
+            driverId,
+            pieces: [
+              { title: 'Brainstorm system prompt', content: brainstormSystemPrompt },
+              { title: 'Brainstorm source', content: prompt.text }
+            ]
+          })
+        )
+        traceLeanAgent('brainstorm', sessionId, driverId)
         if (isolated && driver instanceof OpenCodeDriver) {
           await driver.sendPrompt(projectPath, prompt, isolated)
         } else {
@@ -9391,6 +9744,13 @@ export class ChatEngine {
         const response = [...generated].reverse().find((message) => message.role === 'assistant')
         if (!response) throw new Error('The Brainstorm agent returned no response')
         if (response.error) throw new Error(response.error)
+        tokenUsageAttribution.recordTurnTotals({
+          key: `brainstorm:${sessionId}`,
+          providerId: response.providerId ?? settings.providerId ?? null,
+          modelId: response.modelId ?? settings.modelId ?? null,
+          reportedInputTokens: response.normalizedUsage?.uncachedInput ?? null,
+          reportedTotalTokens: response.normalizedUsage?.rawTotal ?? null
+        })
         if (response.structuredOutput !== undefined) {
           return finish(
             this.parseBrainstormGeneratedOutput(response.structuredOutput, useStructuredOutput)
@@ -12844,26 +13204,54 @@ export class ChatEngine {
   async runCommand(
     projectId: string,
     threadId: string,
-    command: string,
+    commandId: string,
     args: string
   ): Promise<void> {
     this.touchUserActivity()
     projectId = validateEntityId(projectId, 'Project ID')
     threadId = validateEntityId(threadId, 'Thread ID')
-    command = validateBoundedString(command, 'Command', 1, 256)
+    commandId = validateBoundedString(commandId, 'Command ID', 1, 768)
     args = validateBoundedString(args, 'Command arguments', 0, 16_384)
     const thread = await this.threadManager.getThread(projectId, threadId)
     if (!thread?.sessionId) throw new Error('No active session for this thread')
+    if (!thread.settings) throw new Error('Select a model before running a command')
     const driverId = thread.settings?.harnessId ?? 'opencode'
     const { driver, projectPath } = await this.resolve(projectId, driverId, threadId)
     if (!driver.capabilities?.commands) {
       throw new Error(`${driver.name} does not support slash commands`)
     }
-    const exposed = this.scopeHarnessCommands(driver.id, await driver.listCommands(projectPath))
-    if (!exposed.some((candidate) => candidate.name === command)) {
-      throw new Error(`Command is not available in ${driver.name}: ${command}`)
+    const exposed = this.scopeHarnessCommands(
+      driver.id,
+      await this.discoverHarnessCommands(driver, projectPath)
+    )
+    const command = exposed.find((candidate) => candidate.id === commandId)
+    if (!command) throw new Error(`Command is not available in ${driver.name}`)
+    await driver.runCommand(projectPath, thread.sessionId, command, args, thread.settings)
+  }
+
+  /** Merge driver-native commands with skills the active headless harness can invoke. */
+  private async discoverHarnessCommands(
+    driver: HarnessDriver,
+    projectPath: string
+  ): Promise<HarnessCommand[]> {
+    const commands = await driver.listCommands(projectPath)
+    const discovered = [...commands]
+    if (driver.id === 'claude-code') {
+      const capabilities = await this.capabilityDiscovery.discover(projectPath, driver.id)
+      discovered.push(
+        ...capabilities.skill
+          .filter((skill) => skill.enabled)
+          .map((skill): HarnessCommand => ({
+            name: skill.name,
+            description: skill.description || 'Invoke this skill in the active session',
+            source: 'skill'
+          }))
+      )
     }
-    await driver.runCommand(projectPath, thread.sessionId, command, args)
+    return discovered.filter(
+      (command) =>
+        command.source === 'skill' || command.name === 'config' || command.name === 'settings'
+    )
   }
 
   private scopeHarnessCommands(
@@ -12873,7 +13261,7 @@ export class ChatEngine {
     const scoped = new Map<string, ScopedHarnessCommand>()
     for (const command of commands) {
       const name = typeof command.name === 'string' ? command.name.trim() : ''
-      if (!name || name.length > 256) continue
+      if (!name || name.length > 256 || /[\s/]/u.test(name)) continue
       const source: HarnessCommandSource =
         command.source === 'mcp' || command.source === 'skill' ? command.source : 'command'
       const description =
@@ -12915,6 +13303,144 @@ export class ChatEngine {
     } finally {
       this.activeCompactions.delete(thread.sessionId)
     }
+  }
+
+  /**
+   * Compact a reused native session before it resumes under a newly selected
+   * model whose context window is much smaller than the thread's last-known
+   * native usage. Best-effort maintenance: a failed compaction never blocks the
+   * turn — the harness trims its own history when the window is genuinely over.
+   */
+  private async maybeAutoCompactOnModelSwitch(
+    projectId: string,
+    threadId: string,
+    sessionId: string,
+    driver: HarnessDriver,
+    projectPath: string,
+    settings: ThreadSettings
+  ): Promise<void> {
+    if (driver.capabilities?.compaction !== true || !driver.compactSession) return
+    if (this.activeCompactions.has(sessionId)) return
+    const state = this.sessionStatuses.get(sessionId)?.state
+    if (state === 'working' || state === 'waiting') return
+
+    const lastModel = await this.lastSessionModel(projectId, threadId, sessionId)
+    if (!lastModel) return
+    if (lastModel.providerId === settings.providerId && lastModel.modelId === settings.modelId) {
+      return
+    }
+
+    const contextWindow = this.modelContextWindow(projectId, settings.providerId, settings.modelId)
+    if (contextWindow === undefined) return
+    const contextUsed = await this.lastSessionContextUsed(
+      projectId,
+      threadId,
+      driver.id,
+      lastModel.providerId
+    )
+    if (contextUsed === undefined) return
+
+    if (!decideModelSwitchCompaction({ contextWindow, contextUsed }).shouldCompact) return
+
+    try {
+      this.activeCompactions.add(sessionId)
+      await driver.compactSession(projectPath, sessionId, settings)
+      this.broadcastToast(
+        `Auto-compacted the thread's context before switching to ${settings.modelId}.`,
+        'info'
+      )
+      Logger.dev('Auto-compacted native session on model switch', {
+        projectId,
+        threadId,
+        sessionId,
+        from: `${lastModel.providerId}/${lastModel.modelId}`,
+        to: `${settings.providerId}/${settings.modelId}`,
+        contextUsed,
+        contextWindow
+      })
+    } catch (error) {
+      Logger.error('Auto-compaction on model switch failed (resuming without it):', {
+        projectId,
+        threadId,
+        sessionId,
+        error: rawErrorMessage(error)
+      })
+    } finally {
+      this.activeCompactions.delete(sessionId)
+    }
+  }
+
+  /** Last provider/model a session ran under, from this run's dispatches or
+   *  the mirrored transcript (the map backfills the first turn after restart). */
+  private async lastSessionModel(
+    projectId: string,
+    threadId: string,
+    sessionId: string
+  ): Promise<{ providerId: string; modelId: string } | null> {
+    const recorded = this.sessionModelIds.get(sessionId)
+    if (recorded?.providerId && recorded.modelId) return recorded
+    try {
+      const records = await this.threadManager.loadMessageRecords(projectId, threadId)
+      for (const message of [...records].reverse()) {
+        if (message.role !== 'assistant') continue
+        if (message.providerId && message.modelId) {
+          const backfilled = { providerId: message.providerId, modelId: message.modelId }
+          this.sessionModelIds.set(sessionId, backfilled)
+          return backfilled
+        }
+      }
+    } catch {
+      // Mirror unavailable — the model switch is treated as undetectable.
+    }
+    return null
+  }
+
+  /** Last-known native context usage (tokens) for the thread's session.
+   *  Prefers the renderer-committed thread snapshot for the same harness and
+   *  provider, then falls back to the latest mirrored assistant message. */
+  private async lastSessionContextUsed(
+    projectId: string,
+    threadId: string,
+    harnessId: string,
+    providerId: string
+  ): Promise<number | undefined> {
+    try {
+      const thread = await this.threadManager.getThread(projectId, threadId)
+      const stored = thread?.contextUsage
+      if (stored?.harnessId === harnessId && stored.providerId === providerId) {
+        if (typeof stored.contextUsed === 'number' && stored.contextUsed > 0) {
+          return stored.contextUsed
+        }
+      }
+    } catch {
+      // Fall through to the mirrored transcript.
+    }
+    try {
+      const records = await this.threadManager.loadMessageRecords(projectId, threadId)
+      for (const message of [...records].reverse()) {
+        if (message.role !== 'assistant') continue
+        if (message.providerId && message.providerId !== providerId) continue
+        if (typeof message.contextUsed === 'number' && message.contextUsed > 0) {
+          return message.contextUsed
+        }
+      }
+    } catch {
+      // No usable usage signal — compaction cannot be judged.
+    }
+    return undefined
+  }
+
+  /** Context window of a provider/model from the cached provider catalog. */
+  private modelContextWindow(
+    projectId: string,
+    providerId: string | undefined,
+    modelId: string | undefined
+  ): number | undefined {
+    if (!providerId || !modelId) return undefined
+    return this.providerCache
+      .get(projectId)
+      ?.flatMap((catalog) => catalog.models)
+      .find((model) => model.providerId === providerId && model.id === modelId)?.contextWindow
   }
 
   // ─── Driver resolution ────────────────────────────────────────────────────
@@ -13396,14 +13922,24 @@ export class ChatEngine {
         event.status.state === 'waiting' &&
         eventOwner &&
         !eventOwner.ephemeral &&
-        event.status.issue.retryable &&
-        typeof event.status.issue.retryAt === 'number' &&
-        Number.isFinite(event.status.issue.retryAt)
+        event.status.issue.retryable
       ) {
-        updateRetryWakeWindow(event.sessionId, event.status.issue.retryAt)
-        void this.threadManager
-          .setStatus(eventOwner.projectId, eventOwner.threadId, 'working-paused', { read: false })
-          .catch((error) => Logger.error('Retry-paused status update failed:', error))
+        if (
+          typeof event.status.issue.retryAt === 'number' &&
+          Number.isFinite(event.status.issue.retryAt)
+        ) {
+          updateRetryWakeWindow(event.sessionId, event.status.issue.retryAt)
+          void this.threadManager
+            .setStatus(eventOwner.projectId, eventOwner.threadId, 'working-paused', { read: false })
+            .catch((error) => Logger.error('Retry-paused status update failed:', error))
+        }
+        // Record the wait in the retry scheduler for every harness — including
+        // harnesses that schedule their own retry (OpenCode). Their native
+        // resume emits `working` and clears the record; the recorded wait keeps
+        // the thread retryable after an app restart.
+        void this.scheduleAutomaticRetry(event.sessionId, event.status.issue).catch((error) =>
+          Logger.dev('Retry scheduling failed for waiting session:', error)
+        )
       }
       if (event.status.state === 'working' || event.status.state === 'idle') {
         updateRetryWakeWindow(event.sessionId, null)
@@ -13556,16 +14092,30 @@ export class ChatEngine {
       event.type === 'session.idle' ||
       (event.type === 'session.status' && event.status.state === 'idle')
     ) {
-      if (this.sessionStatuses.get(event.sessionId)?.state !== 'error') {
+      const currentStatus = this.sessionStatuses.get(event.sessionId)
+      // A usage-limit reset wait is not really idle: keep the waiting card and
+      // suppress this trailing idle broadcast so the card survives until the
+      // auto-resume (or native harness retry) drives the session again.
+      const resetWaitIdle =
+        currentStatus?.state === 'waiting' && isUsageResetWaitIssue(currentStatus.issue)
+      if (currentStatus?.state !== 'error' && !resetWaitIdle) {
         this.sessionStatuses.set(event.sessionId, { state: 'idle' })
       }
       this.handleSessionIdleSignal(event.sessionId)
+      if (resetWaitIdle) return
     }
     if (event.type === 'session.error') {
       // A deliberate user stop must never surface as a session error.
       if (!this.userAbortedSessions.has(event.sessionId)) {
         const issue: AgentProviderIssue =
           event.issue ?? this.fallbackProviderIssue(driverId, event.error ?? 'Agent session failed')
+        if (isUsageResetWaitIssue(issue)) {
+          // Unified contract: a usage/rate-limit reset is a scheduled wait, not
+          // a failure. Re-surface the reset-wait as a `waiting` card and let
+          // the scheduler resume the thread once the reset passes.
+          this.enterRetryWait(event.sessionId, issue, event.error)
+          return
+        }
         this.sessionStatuses.set(event.sessionId, { state: 'error', issue })
         updateRetryWakeWindow(event.sessionId, null)
         this.clearSessionWatchdog(event.sessionId)
@@ -13583,10 +14133,16 @@ export class ChatEngine {
       } else if (!this.userAbortedSessions.has(event.sessionId)) {
         const issue: AgentProviderIssue =
           event.issue ?? this.fallbackProviderIssue(driverId, event.error)
-        this.sessionStatuses.set(event.sessionId, { state: 'error', issue })
-        updateRetryWakeWindow(event.sessionId, null)
-        this.clearSessionWatchdog(event.sessionId)
-        void this.handleProviderFailure(event.sessionId, issue, event.error)
+        if (isUsageResetWaitIssue(issue)) {
+          // The failed message still broadcasts below; the provider card is
+          // replaced by the unified waiting state instead of an error.
+          this.enterRetryWait(event.sessionId, issue, event.error)
+        } else {
+          this.sessionStatuses.set(event.sessionId, { state: 'error', issue })
+          updateRetryWakeWindow(event.sessionId, null)
+          this.clearSessionWatchdog(event.sessionId)
+          void this.handleProviderFailure(event.sessionId, issue, event.error)
+        }
       }
     }
     // Everything else broadcasts directly to renderers.
@@ -13846,7 +14402,51 @@ export class ChatEngine {
   private handleSessionIdleSignal(sessionId: string): void {
     if (this.handledIdleSessions.has(sessionId)) return
     this.handledIdleSessions.add(sessionId)
-    void this.onSessionIdle(sessionId)
+    const finalization = this.onSessionIdle(sessionId).finally(() => {
+      if (this.sessionIdleFinalizations.get(sessionId) === finalization) {
+        this.sessionIdleFinalizations.delete(sessionId)
+      }
+    })
+    this.sessionIdleFinalizations.set(sessionId, finalization)
+    void finalization.then(
+      () => this.settleSessionIdleFinalizationWaiters(sessionId),
+      (error) => this.settleSessionIdleFinalizationWaiters(sessionId, error)
+    )
+  }
+
+  /** Wait through the narrow gap between a CLI process exiting and its history mirror starting. */
+  private awaitSessionIdleFinalization(sessionId: string): Promise<void> {
+    const finalization = this.sessionIdleFinalizations.get(sessionId)
+    if (finalization) return finalization
+    if (this.handledIdleSessions.has(sessionId)) return Promise.resolve()
+
+    return new Promise<void>((resolve, reject) => {
+      const waiters = this.sessionIdleFinalizationWaiters.get(sessionId) ?? []
+      waiters.push({ resolve, reject })
+      this.sessionIdleFinalizationWaiters.set(sessionId, waiters)
+
+      const racedFinalization = this.sessionIdleFinalizations.get(sessionId)
+      if (racedFinalization) {
+        void racedFinalization.then(resolve, reject)
+      } else if (this.handledIdleSessions.has(sessionId)) {
+        resolve()
+      } else {
+        return
+      }
+      this.sessionIdleFinalizationWaiters.set(
+        sessionId,
+        waiters.filter((waiter) => waiter.resolve !== resolve)
+      )
+    })
+  }
+
+  private settleSessionIdleFinalizationWaiters(sessionId: string, error?: unknown): void {
+    const waiters = this.sessionIdleFinalizationWaiters.get(sessionId) ?? []
+    this.sessionIdleFinalizationWaiters.delete(sessionId)
+    for (const waiter of waiters) {
+      if (error === undefined) waiter.resolve()
+      else waiter.reject(error)
+    }
   }
 
   private fallbackProviderIssue(harnessId: string, message: string): AgentProviderIssue {
@@ -14034,9 +14634,11 @@ export class ChatEngine {
 
   /**
    * Record a thread whose turn ended in a usage/rate-limit reset so the
-   * scheduler resumes it once the reset time passes. Skips harnesses that
-   * schedule their own provider retries (OpenCode), internal/child sessions,
-   * and issues without a usable reset time.
+   * scheduler resumes it once the reset time passes. Every harness is tracked —
+   * including harnesses that schedule their own provider retries (OpenCode): a
+   * native resume emits `working` and clears the record, while the persisted
+   * record keeps the wait alive (and re-runs the thread) across app restarts.
+   * Internal/child sessions and issues without a usable reset time are skipped.
    */
   private async scheduleAutomaticRetry(
     sessionId: string,
@@ -14057,7 +14659,7 @@ export class ChatEngine {
     const info = this.sessionRegistry.get(sessionId)
     if (!info || info.ephemeral === true || this.childSessionOwners.has(sessionId)) return false
     const driver = this.drivers.get(info.driverId)
-    if (!driver || driver.capabilities?.scheduledRetry === true) return false
+    if (!driver) return false
     let retryAt = issue.retryAt
     if (retryAt === undefined && driver.readAccountUsage) {
       // Some harnesses surface a usage reset without attaching it to the error
@@ -14105,6 +14707,23 @@ export class ChatEngine {
   ): Promise<void> {
     const retryScheduled = await this.scheduleAutomaticRetry(sessionId, issue)
     await this.onSessionError(sessionId, error, retryScheduled)
+  }
+
+  /**
+   * Re-surface a terminal usage/rate-limit outcome as the unified waiting card
+   * with a retry time. Also schedules the auto-resume for every harness (native
+   * retry harnesses included) so the wait survives an app restart, and routes
+   * the failed-turn finalization (thread status, checkpoint, assignment reports)
+   * through the same provider-failure path used for errors.
+   */
+  private enterRetryWait(sessionId: string, issue: AgentProviderIssue, error?: string): void {
+    this.sessionStatuses.set(sessionId, { state: 'waiting', issue })
+    updateRetryWakeWindow(sessionId, issue.retryAt ?? null)
+    this.clearSessionWatchdog(sessionId)
+    this.clearPendingQuestionsForSession(sessionId)
+    this.clearPendingPermissionsForSession(sessionId)
+    this.broadcast({ type: 'session.status', sessionId, status: { state: 'waiting', issue } })
+    void this.handleProviderFailure(sessionId, issue, error)
   }
 
   /**
@@ -14555,7 +15174,7 @@ export class ChatEngine {
         this.recordToolUsageEvents(info.threadId, parentTurnId, turnAssistant)
       }
       if (parentTurnId && turnAssistant && !failure && !turnAssistant.error) {
-        this.openTurnOutcome(
+        await this.openTurnOutcome(
           sessionId,
           thread,
           info.threadId,
@@ -14918,6 +15537,13 @@ export class ChatEngine {
           ? 'assignment'
           : 'main'
     const normalizedUsage = message.normalizedUsage
+    tokenUsageAttribution.recordTurnTotals({
+      key: parentTurnId,
+      providerId: message.providerId ?? thread?.settings?.providerId ?? null,
+      modelId: message.modelId ?? thread?.settings?.modelId ?? null,
+      reportedInputTokens: normalizedUsage?.uncachedInput ?? null,
+      reportedTotalTokens: normalizedUsage?.rawTotal ?? null
+    })
     const { costUsd: knownCost, costStatus } = this.assistantTurnCostAccounting(message)
     const estimated = costStatus === 'estimated'
     const details: UsageEventDetails = {
@@ -15011,7 +15637,7 @@ export class ChatEngine {
    * thread, or leaves the thread until cleanup. Internal orchestration turns
    * (spec generation, repairs, hidden recaps) never open a record.
    */
-  private openTurnOutcome(
+  private async openTurnOutcome(
     sessionId: string,
     thread: Thread | null,
     threadId: string,
@@ -15019,7 +15645,7 @@ export class ChatEngine {
     parentTurnId: string,
     turnAssistant: AgentMessage,
     awaitingUser: boolean
-  ): void {
+  ): Promise<void> {
     if (awaitingUser) return
     if (!thread?.settings) return
     const parentOrigin = mirror.find((message) => message.id === parentTurnId)?.origin
@@ -15032,7 +15658,7 @@ export class ChatEngine {
           ? 'assignment'
           : 'main'
     const { costUsd, costStatus } = this.assistantTurnCostAccounting(turnAssistant)
-    this.turnFeedbackRepo.openPending({
+    await this.turnFeedbackRepo.openPendingViaWorker({
       id: `outcome:${parentTurnId}`,
       threadId,
       parentTurnId,
@@ -15774,26 +16400,28 @@ export class ChatEngine {
 
   private waitForSessionCompletion(
     sessionId: string,
-    timeoutMs = 180_000,
+    timeoutMs: number | null = 180_000,
     label = 'Agent session',
     timeoutError?: () => Error
   ): Promise<unknown | undefined> {
     const labelForMessage = label
     return new Promise((resolve, reject) => {
-      const armTimer = (): ReturnType<typeof setTimeout> =>
-        setTimeout(() => {
+      const armTimer = (): ReturnType<typeof setTimeout> | undefined => {
+        if (timeoutMs === null) return undefined
+        return setTimeout(() => {
           this.completionWaiters.delete(sessionId)
           reject(
             timeoutError?.() ?? new Error(`${labelForMessage} timed out after ${timeoutMs / 1000}s`)
           )
         }, timeoutMs)
+      }
       const waiter: SessionCompletionWaiter = {
         active: false,
         resolve,
         reject,
         timer: armTimer(),
         refresh: () => {
-          clearTimeout(waiter.timer)
+          if (waiter.timer !== undefined) clearTimeout(waiter.timer)
           waiter.timer = armTimer()
         }
       }
@@ -15843,7 +16471,7 @@ export class ChatEngine {
   private clearCompletionWaiter(sessionId: string): void {
     const waiter = this.completionWaiters.get(sessionId)
     if (!waiter) return
-    clearTimeout(waiter.timer)
+    if (waiter.timer !== undefined) clearTimeout(waiter.timer)
     this.completionWaiters.delete(sessionId)
   }
 

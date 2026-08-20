@@ -1270,6 +1270,10 @@
     commentEditorReferenceId = null
   }
 
+  function persistResponseReferenceCommentDraft(id: string, comment: string): void {
+    responseReferencesState.updateCommentDraft(thread.projectId, thread.id, id, comment)
+  }
+
   function removeResponseReferenceComment(id: string): void {
     responseReferencesState.updateComment(thread.projectId, thread.id, id, '')
     commentEditorReferenceId = null
@@ -3650,17 +3654,23 @@
     }
   }
 
-  async function executeHarnessCommand(name: string, args: string): Promise<void> {
+  async function executeHarnessCommand(commandId: string, args: string): Promise<void> {
     if (busy || commandExecuting) return
     const { projectId, id } = thread
+    const command = commands.find((candidate) => actionId(candidate.id) === commandId)
+    if (!command) return
     errorMessage = ''
     providerStatus = null
     commandExecuting = true
     try {
       await ensureSessionReady()
-      await invoke('agent:runCommand', projectId, id, name, args)
+      await invoke('agent:runCommand', projectId, id, command.id, args)
+      if (command.name === 'config' || command.name === 'settings') {
+        toast.success(`${providerName} settings updated`)
+      }
     } catch (error) {
-      errorMessage = error instanceof Error ? error.message : `/${name} could not be started.`
+      errorMessage =
+        error instanceof Error ? error.message : `/${command.name} could not be started.`
     } finally {
       commandExecuting = false
     }
@@ -3751,7 +3761,7 @@
     }
 
     const command = commands.find((candidate) => actionId(candidate.id) === action.id)
-    if (command) await executeHarnessCommand(command.name, '')
+    if (command) await executeHarnessCommand(command.id, '')
   }
 
   /** Steer — send the queued message immediately as an intervention while the agent is working. */
@@ -3970,6 +3980,26 @@
       )
     } catch (error) {
       reportError(error, 'This turn could not be undone safely.', {
+        projectId: thread.projectId,
+        threadId: thread.id
+      })
+    }
+  }
+
+  async function redoCheckpoint(checkpoint: TurnCheckpointSummary): Promise<void> {
+    const paths = checkpoint.rolledBackPaths ?? []
+    if (paths.length === 0) return
+    try {
+      checkpoints = await invoke(
+        'checkpoint:redoPaths',
+        thread.projectId,
+        thread.id,
+        checkpoint.id,
+        paths
+      )
+      toast.success(`Re-applied ${paths.length} ${paths.length === 1 ? 'file' : 'files'} from this turn`)
+    } catch (error) {
+      reportError(error, 'This turn could not be redone.', {
         projectId: thread.projectId,
         threadId: thread.id
       })
@@ -6548,6 +6578,7 @@
       x={editorPosition.x + RESPONSE_BUBBLE_SIZE / 2}
       y={editorPosition.y}
       initialComment={editorReference.comment ?? ''}
+      onDraftChange={(comment) => persistResponseReferenceCommentDraft(editorReference.id, comment)}
       onDone={(comment) => saveResponseReferenceComment(editorReference.id, comment)}
       onRemoveComment={() => removeResponseReferenceComment(editorReference.id)}
       onClose={() => (commentEditorReferenceId = null)}
@@ -7161,6 +7192,7 @@
                             onOpenFile={(path) => void openCheckpointFile(turnCheckpoint.id, path)}
                             onReview={() => reviewCheckpoint(turnCheckpoint.id)}
                             onUndo={() => undoCheckpoint(turnCheckpoint)}
+                            onRedo={() => redoCheckpoint(turnCheckpoint)}
                           />
                         </div>
                       {/if}

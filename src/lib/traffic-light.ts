@@ -4,12 +4,11 @@
  *
  * Surfaces that double as a draggable title bar (the app header and the
  * fullscreen file/terminal dialogs) must reserve horizontal space for the OS
- * window controls so headings and buttons never sit underneath them.
+ * in-content window controls so headings and buttons never sit underneath them.
  *
  * macOS always draws its traffic lights inset on the left. Windows draws a
- * native frame with its own controls — nothing to reserve. Linux lets the user
- * configure the side, so the layout is detected at startup and handed to the
- * renderer process through the preload bridge.
+ * native frame with its own controls — nothing to reserve. Linux also uses its
+ * native frame; GTK's button layout does not imply renderer-owned controls.
  */
 
 export type TrafficLightSide = 'left' | 'right' | null

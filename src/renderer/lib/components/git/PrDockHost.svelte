@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { CircleCheck, GitPullRequest, Loader2, TriangleAlert } from '@lucide/svelte'
   import { invoke } from '$lib/ipc.svelte'
   import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
   import { gitPanelView } from '$lib/stores/git-panel-view.svelte'
@@ -51,5 +52,61 @@
       // the panel refetches on next open. Global drafts still create the PR
       // via `gitState.createPullRequest`.
     }}
+    draftId={draft.id}
   />
 {/each}
+
+<!--
+  Unified dock: each minimized draft's sheet suppresses its own dock
+  (passes an empty snippet when `draftId` is set), so this single row is
+  the only one. Chips sit side by side, one per minimized draft, showing
+  the project icon, project name, live status, and PR title reported by
+  each sheet's `updateDock`.
+-->
+{#if store.drafts.some((draft) => draft.minimized)}
+  <div
+    class="fixed right-4 bottom-4 z-50 flex max-w-[calc(100vw-2rem)] items-stretch gap-1 overflow-x-auto rounded-xl border bg-surface p-1.5 shadow-xl"
+    role="group"
+    aria-label="Docked pull request drafts"
+  >
+    {#each store.drafts as draft (draft.id)}
+      {@const dock = draft.dock}
+      {#if draft.minimized}
+        <button
+          class="flex min-w-0 cursor-pointer items-center gap-2 rounded-lg px-2.5 py-1.5 text-left transition-colors hover:bg-elevated"
+          title={`${dock.projectName || 'Project'} — ${dock.title}`}
+          aria-label={`Expand ${dock.projectName ? `${dock.projectName} ` : ''}${dock.title}`}
+          onclick={() => store.expand(draft.id)}
+        >
+          {#if dock.iconUrl}
+            <img src={dock.iconUrl} alt="" class="h-4 w-4 shrink-0 rounded" />
+          {:else}
+            <GitPullRequest size={14} class="shrink-0 text-dimmed" aria-hidden="true" />
+          {/if}
+          <span class="flex min-w-0 flex-col">
+            {#if dock.projectName}
+              <span class="max-w-36 truncate text-[9px] font-medium leading-tight text-muted">
+                {dock.projectName}
+              </span>
+            {/if}
+            <span class="max-w-36 truncate text-[10px] font-medium leading-tight text-foreground"
+              >{dock.title}</span
+            >
+          </span>
+          {#if dock.status === 'working'}
+            <Loader2 size={12} class="shrink-0 animate-spin text-info" aria-hidden="true" />
+          {:else if dock.status === 'attention'}
+            <TriangleAlert
+              size={12}
+              class="shrink-0 text-warning"
+              title="Needs attention"
+              aria-hidden="true"
+            />
+          {:else if dock.status === 'composed' || dock.status === 'created'}
+            <CircleCheck size={12} class="shrink-0 text-success" aria-hidden="true" />
+          {/if}
+        </button>
+      {/if}
+    {/each}
+  </div>
+{/if}

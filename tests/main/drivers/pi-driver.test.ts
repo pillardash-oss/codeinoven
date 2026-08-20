@@ -18,6 +18,12 @@ const rpcMock = vi.hoisted(() => {
     setModel: ReturnType<typeof vi.fn>
     setThinkingLevel: ReturnType<typeof vi.fn>
     getAvailableModels: ReturnType<typeof vi.fn>
+    getState: ReturnType<typeof vi.fn>
+    getSessionStats: ReturnType<typeof vi.fn>
+    getCommands: ReturnType<typeof vi.fn>
+    compact: ReturnType<typeof vi.fn>
+    setAutoRetry: ReturnType<typeof vi.fn>
+    setAutoCompaction: ReturnType<typeof vi.fn>
     dispose: ReturnType<typeof vi.fn>
     emit: (record: Record<string, unknown>) => void
   }> = []
@@ -31,6 +37,12 @@ const rpcMock = vi.hoisted(() => {
       setModel: ReturnType<typeof vi.fn>
       setThinkingLevel: ReturnType<typeof vi.fn>
       getAvailableModels: ReturnType<typeof vi.fn>
+      getState: ReturnType<typeof vi.fn>
+      getSessionStats: ReturnType<typeof vi.fn>
+      getCommands: ReturnType<typeof vi.fn>
+      compact: ReturnType<typeof vi.fn>
+      setAutoRetry: ReturnType<typeof vi.fn>
+      setAutoCompaction: ReturnType<typeof vi.fn>
       dispose: ReturnType<typeof vi.fn>
       constructor(options: { onEvent?: (record: Record<string, unknown>) => void }) {
         this.newSession = vi.fn(async () => undefined)
@@ -40,6 +52,25 @@ const rpcMock = vi.hoisted(() => {
         this.setModel = vi.fn(async () => undefined)
         this.setThinkingLevel = vi.fn(async () => undefined)
         this.getAvailableModels = vi.fn(async () => ({ models: [] }))
+        this.getState = vi.fn(async () => ({
+          sessionId: 'native-1',
+          model: null,
+          thinkingLevel: 'medium'
+        }))
+        this.getSessionStats = vi.fn(async () => ({
+          tokens: { input: 20, output: 5, total: 25 },
+          cost: 0.001,
+          contextUsage: { tokens: 25, contextWindow: 128000, percent: 0.02 }
+        }))
+        this.getCommands = vi.fn(async () => ({
+          commands: [
+            { name: 'session-name', description: 'Set session name', source: 'extension' },
+            { name: 'skill:docs', description: 'Docs skill', source: 'skill' }
+          ]
+        }))
+        this.compact = vi.fn(async () => undefined)
+        this.setAutoRetry = vi.fn(async () => undefined)
+        this.setAutoCompaction = vi.fn(async () => undefined)
         this.dispose = vi.fn()
         this.onEvent = options.onEvent ?? (() => undefined)
         clients.push(this)
@@ -135,26 +166,43 @@ describe('PiDriver', () => {
     expect(promptText).toContain('inspect')
   })
 
-  it('reports a failed turn as a session error from agent_end', () => {
+  it('surfaces a permanently failed run from agent_settled', () => {
+    const context = sessionContext('s-1', [
+      {
+        id: 'assistant-1',
+        role: 'assistant',
+        parts: [{ type: 'text', id: 'assistant-1:text', messageID: 'assistant-1', text: '' }],
+        createdAt: Date.now(),
+        harnessId: 'pi',
+        error: 'rate limit exceeded'
+      }
+    ])
+    const state = { assistantMessageId: null, turnIndex: 1 }
+    const result = mapPiRecord({ type: 'agent_settled' }, context, state)
+    expect(result?.events).toContainEqual(
+      expect.objectContaining({
+        type: 'session.status',
+        status: expect.objectContaining({ state: 'error' })
+      })
+    )
+    const issue = result?.events?.find((event) => event.type === 'session.status')?.status
+    expect(issue && issue.state === 'error' ? issue.issue?.message : undefined).toBe(
+      'rate limit exceeded'
+    )
+  })
+
+  it('is neutral to agent_end while an auto-retry may still follow', () => {
     const state = { assistantMessageId: null, turnIndex: 1 }
     const result = mapPiRecord(
       {
         type: 'agent_end',
-        willRetry: false,
-        messages: [
-          {
-            role: 'assistant',
-            stopReason: 'error',
-            errorMessage: 'rate limit exceeded'
-          }
-        ]
+        willRetry: true,
+        messages: [{ role: 'assistant', stopReason: 'error', errorMessage: 'overloaded' }]
       },
       sessionContext('s-1'),
       state
     )
-    expect(result?.events).toContainEqual(
-      expect.objectContaining({ type: 'session.error', error: 'rate limit exceeded' })
-    )
+    expect(result?.events ?? []).toHaveLength(0)
   })
 
   it('falls back to the bundled catalog when model discovery is empty', async () => {
@@ -162,5 +210,52 @@ describe('PiDriver', () => {
     const catalogs = await driver.listProviders('/project')
     expect(catalogs.length).toBeGreaterThan(0)
     expect(catalogs[0]?.harnessId).toBe('pi')
+  })
+
+  it('discovers slash commands and skills from a disposable session', async () => {
+    const driver = new PiDriver(await storage())
+    await driver.createSession('/project', 'Pi')
+    const commands = await driver.listCommands('/project')
+    expect(commands).toEqual([
+      { name: 'session-name', description: 'Set session name' },
+      { name: 'skill:docs', description: 'Docs skill', source: 'skill' }
+    ])
+  })
+
+  it('finalizes a running turn when agent_settled arrives after streaming', async () => {
+    const driver = new PiDriver(await storage())
+    const sessionId = await driver.createSession('/project', 'Pi')
+    const events: string[] = []
+    const ready = new Promise<void>((resolve) => {
+      driver.onEvent((event) => {
+        events.push(event.type)
+        if (event.type === 'session.idle') resolve()
+      })
+    })
+    await driver.sendPrompt('/project', { sessionId, settings, text: 'go', attachments: [] })
+    const client = rpcMock.client
+    expect(client).toBeDefined()
+    client.emit({
+      type: 'message_start',
+      message: { role: 'assistant', content: [], timestamp: Date.now() }
+    })
+    client.emit({
+      type: 'message_end',
+      message: {
+        role: 'assistant',
+        content: [{ type: 'text', text: 'hello' }],
+        timestamp: Date.now()
+      }
+    })
+    client.emit({
+      type: 'turn_end',
+      message: { role: 'assistant', content: [], usage: { input: 10, output: 5 } },
+      toolResults: []
+    })
+    client.emit({ type: 'agent_end', willRetry: false, messages: [] })
+    client.emit({ type: 'agent_settled' })
+    await ready
+    expect(events).toContain('session.idle')
+    expect(rpcMock.client.getSessionStats).toHaveBeenCalled()
   })
 })

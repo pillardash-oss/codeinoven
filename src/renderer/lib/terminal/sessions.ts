@@ -1,4 +1,4 @@
-import { FitAddon, Ghostty, Terminal, type ITheme } from 'ghostty-web'
+import { FitAddon, Ghostty, Terminal, UrlRegexProvider, type ITheme } from 'ghostty-web'
 import { CursorShapeDecoder } from './cursor-shape'
 import { TerminalCursorController } from './cursor-visibility'
 import { setTerminalFocused } from './focus'
@@ -204,6 +204,11 @@ class TerminalSessionManager {
       respawnCount: 0
     }
     this.sessions.set(id, session)
+
+    // Plain-text web URLs use Ghostty's modifier-click provider. The provider
+    // delegates to window.open; the main process routes that popup through the
+    // validated external-browser boundary in both dev and packaged builds.
+    term.registerLinkProvider(new UrlRegexProvider(term))
 
     // File/directory paths echoed by tooling are clickable links only once they
     // are confirmed to exist in the owning project; cmd/ctrl+click reveals them

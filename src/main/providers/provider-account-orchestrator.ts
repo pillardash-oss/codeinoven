@@ -1,8 +1,10 @@
+import { randomUUID } from 'crypto'
 import { execFile, spawn } from 'child_process'
 import { readFileSync } from 'fs'
-import { mkdir, readFile, writeFile } from 'fs/promises'
+import { mkdir, readFile, rename, rm, writeFile } from 'fs/promises'
 import { homedir } from 'os'
 import { dirname, join } from 'path'
+import { applyEdits, modify, parse, type ParseError } from 'jsonc-parser'
 import type { OfferedProvider } from '../../lib/types'
 import type {
   HarnessAuthAccount,
@@ -20,8 +22,9 @@ const ANSI_PATTERN = new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*m`, 'gu')
 const CLINE_SETTINGS_DIR = join(homedir(), '.cline', 'data', 'settings')
 /** Pi keeps configured providers in models.json; the CLI has no status subcommand. */
 const PI_AGENT_DIR = join(homedir(), '.pi', 'agent')
-/** OpenCode's global config file — hiding providers writes disabled_providers here. */
+/** OpenCode's global config file — hiding providers edits disabled_providers here. */
 const OPENCODE_CONFIG_PATH = join(homedir(), '.config', 'opencode', 'opencode.json')
+const OPENCODE_CONFIG_FORMAT = { tabSize: 2, insertSpaces: true, eol: '\n' }
 /** Muse Code stores OAuth credentials here (or $XDG_CONFIG_HOME/muse/auth.json). */
 const MUSE_AUTH_PATH = join(homedir(), '.config', 'muse', 'auth.json')
 
@@ -371,11 +374,14 @@ async function readMuseStatus(): Promise<HarnessAuthStatus> {
 function readHiddenProviders(): string[] {
   try {
     const raw = readFileSync(OPENCODE_CONFIG_PATH, 'utf8')
-    const parsed = JSON.parse(raw) as Record<string, unknown>
-    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-      const list = parsed['disabled_providers']
+    const errors: ParseError[] = []
+    const parsed = parse(raw, errors, { allowTrailingComma: true })
+    if (errors.length === 0 && parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      const list = (parsed as Record<string, unknown>)['disabled_providers']
       if (Array.isArray(list)) {
-        return list.filter((entry): entry is string => typeof entry === 'string')
+        return Array.from(
+          new Set(list.filter((entry): entry is string => typeof entry === 'string'))
+        )
       }
     }
     return []
@@ -385,36 +391,42 @@ function readHiddenProviders(): string[] {
 }
 
 /**
- * Merge `disabled_providers` into OpenCode's global config. Plain JSON configs
- * are edited in place; JSONC configs (with comments) are never overwritten.
+ * Merge `disabled_providers` into OpenCode's global config with a targeted text
+ * edit, so the rest of the file (comments, trailing commas, other keys)
+ * round-trips untouched. Written atomically so a harness config is never left
+ * half-written.
  */
 async function writeHiddenProviders(providers: string[]): Promise<void> {
   const configDir = dirname(OPENCODE_CONFIG_PATH)
   await mkdir(configDir, { recursive: true })
-  let config: Record<string, unknown> = {}
+  const raw = await readConfigOrEmpty(OPENCODE_CONFIG_PATH)
+  const edited = applyEdits(
+    raw,
+    modify(raw, ['disabled_providers'], providers, {
+      formattingOptions: OPENCODE_CONFIG_FORMAT
+    })
+  )
+  const temporaryPath = `${OPENCODE_CONFIG_PATH}.${process.pid}.${randomUUID()}.tmp`
   try {
-    const raw = await readFile(OPENCODE_CONFIG_PATH, 'utf8')
-    let parsed: unknown
-    try {
-      parsed = JSON.parse(raw)
-    } catch {
-      throw new Error(
-        `Cannot edit ${OPENCODE_CONFIG_PATH}: it is not plain JSON. Add "disabled_providers": [...] manually to hide providers.`
-      )
-    }
-    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-      config = parsed as Record<string, unknown>
-    }
+    await writeFile(temporaryPath, edited.endsWith('\n') ? edited : `${edited}\n`, {
+      encoding: 'utf8',
+      flag: 'wx',
+      mode: 0o600
+    })
+    await rename(temporaryPath, OPENCODE_CONFIG_PATH)
   } catch (error) {
-    const code = (error as NodeJS.ErrnoException | null)?.code
-    if (code === 'ENOENT') {
-      config = {}
-    } else {
-      throw error
-    }
+    await rm(temporaryPath, { force: true }).catch(() => undefined)
+    throw error
   }
-  config['disabled_providers'] = providers
-  await writeFile(OPENCODE_CONFIG_PATH, `${JSON.stringify(config, null, 2)}\n`, 'utf8')
+}
+
+async function readConfigOrEmpty(filePath: string): Promise<string> {
+  try {
+    return await readFile(filePath, 'utf8')
+  } catch (error) {
+    if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return '{}\n'
+    throw error
+  }
 }
 
 const AUTH_DEFINITIONS: AuthDefinition[] = [

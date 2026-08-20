@@ -79,7 +79,8 @@ export default defineConfig(({ mode }) => {
             'node-pty',
             'better-sqlite3',
             'electron-updater',
-            '@anthropic-ai/claude-agent-sdk'
+            '@anthropic-ai/claude-agent-sdk',
+            'werift'
           ],
           input: {
             index: resolve(__dirname, 'src/main/index.ts')

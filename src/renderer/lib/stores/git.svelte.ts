@@ -3,6 +3,9 @@ import { APP_SLUG } from '$shared/brand'
 import type {
   GitBranchInfo,
   GitCommitInfo,
+  GitConflictAnalysis,
+  GitConflictWorkFile,
+  GitConflictWorkHunkState,
   GitCredentialStatus,
   GitDiff,
   GitFileChange,
@@ -144,6 +147,12 @@ export class GitState {
   busy: Record<string, boolean> = $state({})
   error: string | null = $state(null)
   githubPermission: GitHubPermissionRequired | null = $state(null)
+  /**
+   * When true, the file explorer reveals only conflicted files (a mode like the
+   * "Last turn" filter, driven from the git panel's Resolve flow and the file
+   * tree's Conflicts toggle). Cleared when no conflicts remain.
+   */
+  conflictsMode = $state(false)
 
   /**
    * Open PRs that need conflict resolution, keyed by `owner/repo`. This is the
@@ -311,6 +320,7 @@ export class GitState {
     this.stashes = []
     this.error = null
     this.githubPermission = null
+    this.conflictsMode = false
   }
 
   /**
@@ -533,6 +543,9 @@ export class GitState {
       this.remotes = remotes
       this.credentialStatus = credentialStatus
       this.stashes = stashes
+      // Conflicts mode is only meaningful while actual conflicts exist — once
+      // they are all resolved the filter auto-closes, like the last-turn one.
+      if (status.conflicted.length === 0) this.conflictsMode = false
       // Refresh the open-PR conflict indicator (cooldown-gated) so the header
       // badge stays current without a GitHub round trip on every mutation.
       void this.refreshPrConflictIndicators(projectId)
@@ -552,6 +565,54 @@ export class GitState {
       this.status = await invoke('git:stage', projectId, paths)
     } catch (reason) {
       this.error = errorMessage(reason, 'Files could not be staged')
+    } finally {
+      this.markBusy('stage', false)
+    }
+  }
+
+  /**
+   * Fetch the parsed conflict hunks of one conflicted file for the resolution
+   * panel (ours/theirs sides plus their line spans).
+   */
+  async analyzeConflict(projectId: string, path: string): Promise<GitConflictAnalysis> {
+    return invoke('git:analyzeConflict', projectId, path)
+  }
+
+  async prepareConflictWorkFile(projectId: string, path: string): Promise<GitConflictWorkFile> {
+    return invoke('git:prepareConflictWorkFile', projectId, path)
+  }
+
+  /** Persist partial resolution progress in the conflict scratch file only. */
+  async saveConflictDraft(
+    projectId: string,
+    path: string,
+    content: string,
+    hunks: GitConflictWorkHunkState[]
+  ): Promise<boolean> {
+    this.error = null
+    try {
+      await invoke('git:saveConflictDraft', projectId, path, content, JSON.stringify(hunks))
+      return true
+    } catch (reason) {
+      this.error = errorMessage(reason, 'Conflict draft could not be saved')
+      return false
+    }
+  }
+
+  /**
+   * Persist a fully-resolved conflict file. Writes the assembled content and
+   * stages it so git clears the unmerged entry; refreshes the stored status.
+   * Returns true when saved, false when rejected (leftover markers, busy, etc).
+   */
+  async saveConflictResolution(projectId: string, path: string, content: string): Promise<boolean> {
+    this.markBusy('stage', true)
+    this.error = null
+    try {
+      this.status = await invoke('git:saveConflictResolution', projectId, path, content)
+      return true
+    } catch (reason) {
+      this.error = errorMessage(reason, 'Conflict could not be saved')
+      return false
     } finally {
       this.markBusy('stage', false)
     }

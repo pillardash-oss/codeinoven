@@ -471,6 +471,28 @@ export class ThreadRepo {
     )
   }
 
+  /**
+   * Off-main, ownership-guarded usage snapshot write. When the project still
+   * owns the thread the single statement writes the snapshot; when it does not
+   * (thread moved, deleted, or foreign) the guarded WHERE matches no row and
+   * the write is a silent no-op. Ownership is validated by SQL, so the caller
+   * needs no separate main-thread existence read and the worker stays the only
+   * connection touched.
+   */
+  async updateContextUsageViaWorker(
+    projectId: string,
+    threadId: string,
+    contextUsage: ThreadContextUsage
+  ): Promise<boolean> {
+    return this.db
+      .executeViaWorker('UPDATE threads SET context_usage = ? WHERE id = ? AND project_id = ?', [
+        JSON.stringify(contextUsage),
+        threadId,
+        projectId
+      ])
+      .then((result) => result.ok)
+  }
+
   updateField(id: string, field: string, value: unknown): void {
     this.db.run(
       `UPDATE threads SET ${field} = ?, updated_at = ? WHERE id = ?`,

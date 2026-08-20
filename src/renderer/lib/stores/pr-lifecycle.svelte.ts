@@ -1,11 +1,24 @@
 import { APP_SLUG } from '$shared/brand'
 
+/** Live status a minimized PR draft reports to its dock chip. */
+export type PrDockStatus = 'draft' | 'working' | 'attention' | 'composed' | 'created'
+
+/** What a PR modal shows for itself while docked (project identity + state). */
+export interface PrDockDescriptor {
+  projectName: string
+  iconUrl: string | null
+  status: PrDockStatus
+  title: string
+}
+
 export interface PrDraft {
   id: string
   projectId: string
   threadId: string
   minimized: boolean
   createdAt: number
+  /** Live dock descriptor reported by the sheet; rendered by the host dock. */
+  dock: PrDockDescriptor
 }
 
 /**
@@ -46,7 +59,8 @@ class PrLifecycleStore {
       projectId,
       threadId,
       minimized: false,
-      createdAt: Date.now()
+      createdAt: Date.now(),
+      dock: { projectName: '', iconUrl: null, status: 'draft', title: 'New pull request' }
     }
     this.drafts = [...this.drafts, draft]
     this.focusedId = draft.id
@@ -60,7 +74,8 @@ class PrLifecycleStore {
       projectId,
       threadId,
       minimized: false,
-      createdAt: Date.now()
+      createdAt: Date.now(),
+      dock: { projectName: '', iconUrl: null, status: 'draft', title: 'New pull request' }
     }
     this.drafts = [...this.drafts, draft]
     this.focusedId = draft.id
@@ -87,6 +102,31 @@ class PrLifecycleStore {
 
   focus = (id: string): void => {
     this.expand(id)
+  }
+
+  /** Current dock descriptor for a draft, or null when the draft is gone. */
+  dockFor(id: string): PrDockDescriptor | null {
+    return this.drafts.find((draft) => draft.id === id)?.dock ?? null
+  }
+
+  /**
+   * Update the live dock descriptor a sheet reports to the host dock. The write
+   * is idempotent: when every field is unchanged the drafts array is left
+   * untouched so no re-render cascades back into the sheet's reporting effect.
+   */
+  updateDock = (id: string, patch: Partial<PrDockDescriptor>): void => {
+    const current = this.drafts.find((draft) => draft.id === id)?.dock
+    if (!current) return
+    const merged = { ...current, ...patch }
+    if (
+      merged.projectName === current.projectName &&
+      merged.iconUrl === current.iconUrl &&
+      merged.status === current.status &&
+      merged.title === current.title
+    ) {
+      return
+    }
+    this.drafts = this.drafts.map((draft) => (draft.id === id ? { ...draft, dock: merged } : draft))
   }
 
   close = (id: string): void => {

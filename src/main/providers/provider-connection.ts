@@ -1,8 +1,8 @@
 import { BrowserWindow } from 'electron'
 import { trustedIpcMain as ipcMain } from '../ipc/trusted-ipc-main'
-import { execFile, spawn } from 'child_process'
+import { spawn } from 'child_process'
 import type { ProviderConnectionInfo } from '../../lib/types'
-import { buildHarnessEnvironment } from '../drivers/cli-environment'
+import { buildHarnessEnvironment, resolveExecutablePath } from '../drivers/cli-environment'
 import { findHarness, listHarnesses, type HarnessDescriptor } from '../agents/harness-registry'
 import { forwardRemoteEvent } from '../remote/remote-event-forwarder'
 import { sendToRenderer } from '../ipc/renderer-delivery'
@@ -124,7 +124,7 @@ export class ProviderConnectionService {
       return { ...base, status: 'not_found', detail: `"${def.command}" not found on PATH` }
     }
 
-    const versionResult = await this.probeVersion(def)
+    const versionResult = await this.probeVersion(def, located.path)
     if (versionResult.ok) {
       // OpenCode V2 is not yet supported: report it as installed-but-unsupported
       // so the Harnesses page can surface a notice while every availability
@@ -161,25 +161,17 @@ export class ProviderConnectionService {
   }
 
   private locateBinary(command: string): Promise<{ found: boolean; path?: string }> {
-    const probe = process.platform === 'win32' ? 'where' : 'which'
-    return new Promise((resolve) => {
-      execFile(probe, [command], { env: this.buildEnv(), timeout: 5000 }, (error, stdout) => {
-        if (error) {
-          resolve({ found: false })
-          return
-        }
-        const resolved = stdout.split('\n')[0]?.trim() ?? ''
-        resolve({ found: true, path: resolved || undefined })
-      })
-    })
+    const path = resolveExecutablePath(command, this.buildEnv())
+    return Promise.resolve(path ? { found: true, path } : { found: false })
   }
 
   /** Execute `<command> --version` with a timeout to prove the harness responds. */
   private probeVersion(
-    def: HarnessDescriptor
+    def: HarnessDescriptor,
+    resolvedPath: string | undefined
   ): Promise<{ ok: true; version: string } | { ok: false; reason: string }> {
     return new Promise((resolve) => {
-      const child = spawn(def.command, def.versionArgs, {
+      const child = spawn(resolvedPath ?? def.command, def.versionArgs, {
         env: this.buildEnv(),
         stdio: ['ignore', 'pipe', 'pipe']
       })

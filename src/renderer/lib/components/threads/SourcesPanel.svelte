@@ -10,6 +10,7 @@
     Image as ImageIcon,
     Loader2,
     Pencil,
+    RefreshCw,
     Search,
     Server,
     SquareTerminal,
@@ -498,7 +499,8 @@
         onclick={() => (section = 'processes')}
       >
         Processes
-        {#if processes.length > 0}<span class="text-[10px] tabular-nums">{processes.length}</span>{/if}
+        {#if processes.length > 0}<span class="text-[10px] tabular-nums">{processes.length}</span
+          >{/if}
       </button>
       <button
         type="button"
@@ -734,21 +736,35 @@
       </div>
     {/if}
 
-    {#if section === 'processes' && processes.length > 0}
-      <button
-        type="button"
-        class="mt-3 inline-flex h-8 items-center gap-1.5 rounded-lg border border-danger/30 bg-danger/10 px-2.5 text-xs font-medium text-danger transition-colors hover:bg-danger/15 disabled:opacity-50"
-        disabled={stoppingAll}
-        title="Stop all processes running for this task"
-        onclick={stopAllProcesses}
-      >
-        {#if stoppingAll}
-          <Loader2 size={13} class="animate-spin" />
-        {:else}
-          <SquareTerminal size={13} />
+    {#if section === 'processes'}
+      <div class="mt-3 flex items-center gap-2">
+        <button
+          type="button"
+          class="inline-flex h-8 items-center gap-1.5 rounded-lg border border-border bg-elevated px-2.5 text-xs font-medium text-muted transition-colors hover:bg-overlay hover:text-foreground disabled:opacity-50"
+          disabled={processesLoading}
+          title="Refresh running processes"
+          onclick={loadProcesses}
+        >
+          <RefreshCw size={13} class={processesLoading ? 'animate-spin' : undefined} />
+          Refresh
+        </button>
+        {#if processes.length > 0}
+          <button
+            type="button"
+            class="inline-flex h-8 items-center gap-1.5 rounded-lg border border-danger/30 bg-danger/10 px-2.5 text-xs font-medium text-danger transition-colors hover:bg-danger/15 disabled:opacity-50"
+            disabled={stoppingAll}
+            title="Stop all processes running for this task"
+            onclick={stopAllProcesses}
+          >
+            {#if stoppingAll}
+              <Loader2 size={13} class="animate-spin" />
+            {:else}
+              <SquareTerminal size={13} />
+            {/if}
+            Stop all
+          </button>
         {/if}
-        Stop all
-      </button>
+      </div>
     {/if}
   </header>
 
@@ -1373,7 +1389,9 @@
                     >
                       App
                     </span>
-                    <span class="shrink-0 rounded-md bg-raised px-1.5 py-0.5 text-[10px] text-muted">
+                    <span
+                      class="shrink-0 rounded-md bg-raised px-1.5 py-0.5 text-[10px] text-muted"
+                    >
                       Running
                     </span>
                   </div>
@@ -1409,12 +1427,14 @@
   </div>
 </div>
 
-<UtilityEditorModal
-  open={editorOpen}
-  target={editorTarget}
-  onClose={() => (editorOpen = false)}
-  onChanged={() => void loadCapabilities()}
-/>
+{#if editorOpen}
+  <UtilityEditorModal
+    open
+    target={editorTarget}
+    onClose={() => (editorOpen = false)}
+    onChanged={() => void loadCapabilities()}
+  />
+{/if}
 
 {#if deleteTarget}
   <Modal open onClose={() => (deleteTarget = null)} title="Delete capability">

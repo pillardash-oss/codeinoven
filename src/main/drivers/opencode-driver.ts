@@ -995,7 +995,9 @@ export class OpenCodeDriver implements HarnessDriver {
     structuredOutput: false,
     nativeUtilities: ['web_fetch'],
     // OpenCode schedules and performs its own provider retries (`session.status`
-    // `retry` with a `next` timestamp) — the app must not auto-resume for it.
+    // `retry` with a `next` timestamp). The app still records the wait in the
+    // retry scheduler so a restart can resume the thread while it is awaiting a
+    // reset; OpenCode's own resume clears that record.
     scheduledRetry: true
   }
 
@@ -1374,6 +1376,9 @@ export class OpenCodeDriver implements HarnessDriver {
     if (tools !== undefined) {
       body['tools'] = tools
     }
+    if (opts.agent) {
+      body['agent'] = opts.agent
+    }
     if (opts.structuredOutput) {
       body['format'] = {
         type: 'json_schema',
@@ -1708,14 +1713,16 @@ export class OpenCodeDriver implements HarnessDriver {
   async runCommand(
     projectPath: string,
     sessionId: string,
-    command: string,
-    args: string
+    command: HarnessCommand,
+    args: string,
+    _settings: ThreadSettings
   ): Promise<void> {
+    void _settings
     const handle = this.turnServers.get(sessionId) ?? (await this.ensureServer(projectPath))
     const res = await fetch(`${handle.baseUrl}/session/${sessionId}/command`, {
       method: 'POST',
       headers: this.headersFor(handle, { 'Content-Type': 'application/json' }),
-      body: JSON.stringify({ command, arguments: args })
+      body: JSON.stringify({ command: command.name, arguments: args })
     })
     if (!res.ok) throw await errorFromResponse(res, 'Failed to run command')
   }

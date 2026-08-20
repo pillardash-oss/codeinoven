@@ -20,7 +20,7 @@
     SlidersHorizontal,
     SquarePen,
     Terminal,
-    User,
+    ChartColumn,
     Users,
     Wrench
   } from '@lucide/svelte'
@@ -117,7 +117,8 @@
     autoRetryAfterReset: true,
     resumeWorkOnRestart: true,
     defaultMergeMethod: 'squash',
-    maxDiffLines: 100
+    maxDiffLines: 100,
+    openLocalhostInCioBrowser: true
   }
 
   let config = $state<AppConfig>(defaultConfig)
@@ -245,9 +246,9 @@
     { id: 'remote', label: 'Remote', keywords: ['ssh', 'host'], icon: Server },
     {
       id: 'profile',
-      label: 'Profile',
-      keywords: ['account', 'usage', 'activity', 'cloud'],
-      icon: User
+      label: 'Usage',
+      keywords: ['account', 'usage', 'activity', 'tokens', 'cost', 'cloud'],
+      icon: ChartColumn
     },
     {
       id: 'about',
@@ -893,6 +894,21 @@
     threadSearchPaletteOpen = true
   }
 
+  function relativeThreadTime(timestamp: number): string {
+    const minutes = Math.floor((Date.now() - timestamp) / 60_000)
+    if (minutes < 1) return 'Now'
+    if (minutes < 60) return `${minutes}m`
+    const hours = Math.floor(minutes / 60)
+    if (hours < 24) return `${hours}h`
+    const days = Math.floor(hours / 24)
+    if (days < 7) return `${days}d`
+    const weeks = Math.floor(days / 7)
+    if (weeks < 5) return `${weeks}w`
+    const months = Math.floor(days / 30)
+    if (months < 12) return `${months}mo`
+    return `${Math.floor(days / 365)}y`
+  }
+
   async function searchThreadsAcrossProjects(query: string, request: number): Promise<void> {
     let results: ThreadSearchResult[]
     try {
@@ -921,19 +937,22 @@
         ? agentRuns.isBusy(thread.projectId, thread.id)
         : Boolean(thread.sessionId) && isThreadWorking(thread)
       const status = statusBadgeForThread(thread, isLiveWorking)
+      const projectLabel = project?.name ?? thread.projectId
+      const createdLabel = relativeThreadTime(thread.createdAt)
       actions.push({
         id,
         title: thread.title,
         description: snippet
-          ? `${project?.name ?? thread.projectId} · ${snippet}`
-          : (project?.name ?? thread.projectId),
+          ? `${projectLabel} · ${createdLabel} · ${snippet}`
+          : `${projectLabel} · ${createdLabel}`,
         category: 'thread',
         source: {
           id: `project:${thread.projectId}`,
-          label: project?.name ?? thread.projectId,
+          label: projectLabel,
           kind: 'app',
           ...(project?.color ? { color: project.color } : {})
         },
+        showSourceBadge: false,
         ...(projectIconUri ? { iconUri: projectIconUri } : { icon: MessagesSquare }),
         ...(status ? { status } : {}),
         keywords: [project?.name ?? thread.projectId, thread.title, ...(snippet ? [snippet] : [])]
@@ -1273,8 +1292,9 @@
 
   /**
    * Cmd/Ctrl+W closes the active surface: the topmost modal, the Settings page,
-   * or the open thread. Only when nothing is active does it close the window
-   * (through the working-threads confirmation gate in the main process).
+   * a sidebar panel, or the open thread. When nothing is active the shortcut is
+   * intentionally a no-op; application shutdown is reserved for explicit quit
+   * actions and the native window close control.
    */
   function handleCloseShortcut(): void {
     // App-managed palettes first — they float above every view.
@@ -1316,8 +1336,7 @@
       workspaceState.clearThread()
       return
     }
-    // Nothing active — close the window through the confirmation gate.
-    void invoke('app:requestClose')
+    // Nothing active — keep the application open.
   }
 
   /**
@@ -1637,6 +1656,7 @@
     {#await import('$lib/components/layout/CloseConfirmationModal.svelte') then { default: CloseConfirmationModal }}
       <CloseConfirmationModal
         payload={closeConfirmation}
+        projects={scopeState.projectRecords}
         onDismiss={() => (closeConfirmation = null)}
         onConfirm={confirmForceClose}
         onConfirmSave={confirmForceCloseSaving}

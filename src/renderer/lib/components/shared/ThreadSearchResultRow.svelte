@@ -206,7 +206,7 @@
     </span>
     <span class="min-w-0 flex-1 truncate text-[13px] text-foreground">{thread.title}</span>
     <span class="shrink-0 whitespace-nowrap text-[10px] text-dimmed">
-      {relativeTime(thread.lastActivity)}
+      {relativeTime(thread.createdAt)}
     </span>
   </span>
   {#if result.kind === 'message' && result.snippet}

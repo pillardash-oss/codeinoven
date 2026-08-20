@@ -31,6 +31,8 @@ export interface ActionDefinition {
   description?: string
   category: ActionCategory
   source: ActionSource
+  /** Set false when the source is already presented in the action's supporting metadata. */
+  showSourceBadge?: boolean
   keywords?: readonly string[]
   shortcut?: readonly string[]
   disabledReason?: string

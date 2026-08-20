@@ -14,6 +14,23 @@ export const remoteDatabasePath = resolve(
 )
 export const trustRemoteProxy = process.env['TRUST_PROXY'] === '1'
 
+function csv(value: string | undefined): string[] {
+  return (value ?? '')
+    .split(',')
+    .map((entry) => entry.trim())
+    .filter(Boolean)
+}
+
+const configuredStunUrls = csv(process.env['REMOTE_STUN_URLS'])
+export const remoteStunUrls =
+  configuredStunUrls.length > 0 ? configuredStunUrls : ['stun:stun.cloudflare.com:3478']
+export const remoteTurnUrls = csv(process.env['REMOTE_TURN_URLS'])
+export const remoteTurnSharedSecret = process.env['REMOTE_TURN_SHARED_SECRET']?.trim() ?? ''
+export const remoteTurnCredentialTtlSeconds = Math.max(
+  300,
+  Number.parseInt(process.env['REMOTE_TURN_CREDENTIAL_TTL_SECONDS'] ?? '3600', 10) || 3600
+)
+
 const configuredConvexSiteUrl = process.env['CONVEX_SITE_URL']?.trim()
 export const convexSiteUrl = configuredConvexSiteUrl
   ? new URL(configuredConvexSiteUrl).origin

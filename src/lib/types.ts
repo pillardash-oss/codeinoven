@@ -1118,8 +1118,12 @@ export interface UtilityConfigMap {
   image_descriptor: ImageDescriptorUtilityConfig
 }
 
+/** Binding target that keeps a utility available to every current and future harness. */
+export const ALL_HARNESSES_BINDING_ID = '*'
+
 /** How one harness receives a resolved utility without writing into the project. */
 export interface HarnessUtilityBinding {
+  /** A literal `*` applies this binding to every current and future harness. */
   harnessId: string
   strategy: 'native' | 'mcp' | 'skill' | 'environment' | 'provider'
   /** Harness-native capability that makes this binding unnecessary when already present. */
@@ -1198,6 +1202,62 @@ export interface UtilityCatalog {
   secureStorageAvailable: boolean
 }
 
+/** Result of an explicit utility-setup turn run in a disposable agent session. */
+export interface UtilitySetupReport {
+  taskId: string
+  summary: string
+  installed: UtilityDefinition[]
+}
+
+/** Public skills.sh search result displayed in the Utilities marketplace. */
+export interface SkillMarketEntry {
+  id: string
+  skillId: string
+  name: string
+  source: string
+  installs: number
+  url: string
+  weeklyInstalls?: number[]
+  installsYesterday?: number
+  change?: number
+  isOfficial?: boolean
+}
+
+export type SkillMarketView = 'all-time' | 'trending' | 'hot'
+
+export interface SkillMarketLeaderboard {
+  view: SkillMarketView
+  entries: SkillMarketEntry[]
+}
+
+export interface SkillMarketSearchResult {
+  query: string
+  entries: SkillMarketEntry[]
+}
+
+export interface SkillMarketAudit {
+  name: string
+  status: 'pass' | 'warn' | 'fail' | 'unknown'
+}
+
+export interface SkillMarketDetail extends SkillMarketEntry {
+  description: string
+  repositoryUrl: string | null
+  githubStars: number | null
+  firstSeen: string | null
+  audits: SkillMarketAudit[]
+  skillMarkdown: string
+}
+
+export interface SkillMarketInstallRequest {
+  source: string
+  skillId: string
+  manager: 'cio' | 'native'
+  scope: { kind: 'global' } | { kind: 'projects'; projectIds: string[] }
+  activation?: UtilityActivation
+  nativeTarget?: { kind: 'shared' } | { kind: 'harnesses'; harnessIds: string[] }
+}
+
 // ─── Harness-native capability discovery ───────────────────────────────────
 
 /** Where a discovered MCP server or skill came from. */
@@ -1225,6 +1285,16 @@ export interface AgentCapabilityEntry {
   /** Transport + command/URL for MCP servers, or the skill's folder path. */
   detail?: string
   source: AgentCapabilitySource
+  /** Harness that owns/loads this capability (harness-origin entries only). */
+  harnessId?: string
+  /** Project the capability is declared in (project-scoped entries only). */
+  projectId?: string
+}
+
+/** Settings-level view of every MCP server and skill the app can see. */
+export interface AgentCapabilityCatalog {
+  mcp: AgentCapabilityEntry[]
+  skill: AgentCapabilityEntry[]
 }
 
 /** MCP servers and skills actually available to one project's active harness. */
@@ -1660,6 +1730,20 @@ export interface LocalProfileUsageBreakdown extends AccountUsageBreakdown {
   durationMs: number
 }
 
+/** Consumption recorded on one local calendar day in the selected usage range. */
+export interface LocalProfileUsageDay extends AccountUsageBreakdown {
+  /** Local date in YYYY-MM-DD form. */
+  date: string
+  durationMs: number
+}
+
+/** Consumption grouped by local hour of day across the selected usage range. */
+export interface LocalProfileUsageHour extends AccountUsageBreakdown {
+  /** Local hour from 0 through 23. */
+  hour: number
+  durationMs: number
+}
+
 /** Date-range project activity shown on the local Profile page. */
 export interface LocalProfileProjectBreakdown extends AccountUsageBreakdown {
   name: string
@@ -1675,6 +1759,8 @@ export interface LocalProfileProjectBreakdown extends AccountUsageBreakdown {
 /** Fully local, range-aware analytics. This is never required for account authentication. */
 export interface LocalProfileAnalytics {
   range: LocalProfileAnalyticsRange
+  /** Rolling 12-month window represented by the activity calendar. */
+  activityRange: LocalProfileAnalyticsRange
   messageCount: number
   costUsd: number
   tokens: number
@@ -1685,10 +1771,16 @@ export interface LocalProfileAnalytics {
   harnesses: LocalProfileUsageBreakdown[]
   providers: LocalProfileUsageBreakdown[]
   models: LocalProfileUsageBreakdown[]
+  /** Standalone reasoning-effort rollup across every model in the period. */
+  thinkingLevels: LocalProfileUsageBreakdown[]
   /** Auxiliary utility calls (image descriptor, memory, title) with their cost. */
   utilities: LocalProfileUsageBreakdown[]
   projects: LocalProfileProjectBreakdown[]
   activityDays: AccountActivityDay[]
+  /** Total model and utility consumption for each active local day. */
+  dailyUsage: LocalProfileUsageDay[]
+  /** Total model and utility consumption by local hour of day. */
+  hourlyUsage: LocalProfileUsageHour[]
   /** Harness/provider/model/thinking-level performance scored on session outcomes. */
   modelPerformance: LocalProfileModelPerformance[]
   /** What the scored sessions cost to gather in this period. */
@@ -3090,6 +3182,8 @@ export interface AppConfig {
   /** Hunks whose changed lines exceed this are collapsed with a notice so huge
    *  diffs do not hurt diff-view performance. */
   maxDiffLines: number
+  /** Route loopback development links into the app-scoped test browser. */
+  openLocalhostInCioBrowser: boolean
 }
 
 /** A single layer of the assembled prompt/behavior display. */
@@ -3121,6 +3215,7 @@ export type AppConfigPatch = Partial<
     | 'resumeWorkOnRestart'
     | 'defaultMergeMethod'
     | 'maxDiffLines'
+    | 'openLocalhostInCioBrowser'
   >
 >
 
@@ -3250,6 +3345,64 @@ export interface MergeSummary {
   result: string
   /** True when the operation was aborted (merge --abort / rebase --abort). */
   aborted: boolean
+}
+
+/**
+ * One conflict block parsed from a conflicted working file: the full span from
+ * the `<<<<<<<` marker through the `>>>>>>>` marker (inclusive), plus the two
+ * sides. `ours` is the top side (the current branch/HEAD), `theirs` is the
+ * bottom side (the incoming branch). `base` is only present with
+ * `merge.conflictStyle=diff3`.
+ */
+export interface GitConflictHunk {
+  /** 1-based inclusive line range covering the whole block including markers. */
+  startLine: number
+  endLine: number
+  /** Label from the `<<<<<<<` marker (e.g. `HEAD` or a branch name). */
+  oursLabel: string
+  /** Label from the `>>>>>>>` marker (e.g. the incoming branch name). */
+  theirsLabel: string
+  /** Our/current side (lines joined), whatever was already there. */
+  ours: string
+  /** Their/incoming side (lines joined). */
+  theirs: string
+  /** Common ancestor content for diff3 conflicts, when git provides it. */
+  base: string | null
+}
+
+/** Parsed conflict file for the resolution UI, bounded to protect the IPC. */
+export interface GitConflictAnalysis {
+  path: string
+  /** True when the file has binary content and cannot be resolved in the panel. */
+  binary: boolean
+  /** True when the file is too large to safely reassemble — resolve in the editor. */
+  truncated: boolean
+  /** The raw working-tree content (may still contain conflict markers). */
+  content: string
+  hunks: GitConflictHunk[]
+}
+
+/** Persisted state for one conflict range inside the scratch merge document. */
+export interface GitConflictWorkHunkState {
+  /** Stable index matching the corresponding entry in `analysis.hunks`. */
+  index: number
+  /** UTF-16 offsets in the scratch document, compatible with CodeMirror. */
+  from: number
+  to: number
+  acceptedIncoming: boolean
+  acceptedCurrent: boolean
+  /** True when the user edited the range directly instead of accepting a side. */
+  edited: boolean
+}
+
+/** Scratch document prepared for conflict resolution without touching the original file. */
+export interface GitConflictWorkFile {
+  analysis: GitConflictAnalysis
+  /** Relative path under the repository, retaining the original extension. */
+  scratchPath: string
+  /** Marker-free content from the current blocks or the last explicitly saved draft. */
+  content: string
+  hunks: GitConflictWorkHunkState[]
 }
 
 /** Request to prepare a local merge to resolve a PR's online conflicts. */

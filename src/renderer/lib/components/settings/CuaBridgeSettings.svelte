@@ -113,7 +113,7 @@
   })
 </script>
 
-<div class="space-y-5">
+<div class="mx-auto max-w-2xl space-y-5 p-6 pb-24">
   {#if error}
     <p class="rounded-lg bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">{error}</p>
   {/if}

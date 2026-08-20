@@ -1,5 +1,27 @@
-import type { Extension } from '@codemirror/state'
-import type { EditorView } from '@codemirror/view'
+import type { Extension, Range } from '@codemirror/state'
+import type { Decoration as ViewDecoration, EditorView } from '@codemirror/view'
+
+export interface FileEditorConflictRange {
+  id: string
+  from: number
+  to: number
+  resolved: boolean
+  active: boolean
+  acceptedIncoming: boolean
+  acceptedCurrent: boolean
+  edited: boolean
+}
+
+export interface FileEditorDocumentChange {
+  from: number
+  to: number
+  insertedLength: number
+}
+
+export interface FileEditorRangeViewportRect {
+  top: number
+  bottom: number
+}
 
 /**
  * The file editor is backed by CodeMirror 6 so selection, scrolling (including
@@ -23,6 +45,21 @@ export interface FileEditorController {
   setShowLineNumbers(show: boolean): void
   setSpellcheck(enabled: boolean): void
   setFind(query: string, activeIndex: number): void
+  getValue(): string
+  replaceRange(from: number, to: number, text: string, userEvent?: string): void
+  resolveConflictRange(
+    id: string,
+    text: string,
+    resolution: Pick<FileEditorConflictRange, 'acceptedIncoming' | 'acceptedCurrent' | 'edited'>,
+    userEvent?: string
+  ): boolean
+  setConflictRanges(ranges: FileEditorConflictRange[]): void
+  getConflictRanges(): FileEditorConflictRange[]
+  getRangeViewportRect(id: string): FileEditorRangeViewportRect | null
+  scrollToOffset(offset: number): void
+  scrollToConflictRange(id: string): void
+  undo(): boolean
+  redo(): boolean
   scrollToLine(line: number): void
   focus(): void
   destroy(): void
@@ -37,8 +74,11 @@ export interface CreateFileEditorOptions {
   showLineNumbers?: boolean
   spellcheck?: boolean
   ariaLabel?: string
-  onDocChange: (text: string) => void
+  conflictRanges?: FileEditorConflictRange[]
+  onDocChange: (text: string, changes: FileEditorDocumentChange[], userEvent: string | null) => void
+  onConflictRangesChange?: (ranges: FileEditorConflictRange[]) => void
   onFindMatches?: (count: number) => void
+  onScroll?: () => void
 }
 
 export const TAB_INSERT = '  '
@@ -49,6 +89,7 @@ interface CodeMirrorApi {
   Compartment: (typeof import('@codemirror/state'))['Compartment']
   StateEffect: (typeof import('@codemirror/state'))['StateEffect']
   StateField: (typeof import('@codemirror/state'))['StateField']
+  Transaction: (typeof import('@codemirror/state'))['Transaction']
   EditorView: (typeof import('@codemirror/view'))['EditorView']
   lineNumbers: (typeof import('@codemirror/view'))['lineNumbers']
   highlightActiveLineGutter: (typeof import('@codemirror/view'))['highlightActiveLineGutter']
@@ -57,6 +98,10 @@ interface CodeMirrorApi {
   defaultKeymap: (typeof import('@codemirror/commands'))['defaultKeymap']
   history: (typeof import('@codemirror/commands'))['history']
   historyKeymap: (typeof import('@codemirror/commands'))['historyKeymap']
+  undo: (typeof import('@codemirror/commands'))['undo']
+  redo: (typeof import('@codemirror/commands'))['redo']
+  invertedEffects: (typeof import('@codemirror/commands'))['invertedEffects']
+  isolateHistory: (typeof import('@codemirror/commands'))['isolateHistory']
   indentUnit: (typeof import('@codemirror/language'))['indentUnit']
   syntaxHighlighting: (typeof import('@codemirror/language'))['syntaxHighlighting']
   HighlightStyle: (typeof import('@codemirror/language'))['HighlightStyle']
@@ -76,8 +121,11 @@ export async function createFileEditor(
     showLineNumbers = true,
     spellcheck = false,
     ariaLabel = 'File editor',
+    conflictRanges = [],
     onDocChange,
-    onFindMatches
+    onConflictRangesChange,
+    onFindMatches,
+    onScroll
   } = options
 
   const wrapCompartment = new api.Compartment()
@@ -117,6 +165,92 @@ export async function createFileEditor(
     provide: (field) => api.EditorView.decorations.from(field)
   })
 
+  interface ConflictDecorationState {
+    ranges: FileEditorConflictRange[]
+    decorations: ReturnType<typeof api.Decoration.set>
+  }
+  const setConflictRanges = api.StateEffect.define<FileEditorConflictRange[]>({
+    map(ranges, changes) {
+      return ranges.map((range) => ({
+        ...range,
+        from: changes.mapPos(range.from, -1),
+        to: changes.mapPos(range.to, 1)
+      }))
+    }
+  })
+  const buildConflictDecorations = (
+    doc: { length: number; lineAt(position: number): { from: number; to: number } },
+    ranges: FileEditorConflictRange[]
+  ): ReturnType<typeof api.Decoration.set> => {
+    const decorations: Range<ViewDecoration>[] = []
+    for (const range of ranges) {
+      if (!range.active) continue
+      const from = Math.max(0, Math.min(range.from, doc.length))
+      const to = Math.max(from, Math.min(range.to, doc.length))
+      const firstLine = doc.lineAt(from)
+      const lastLine = doc.lineAt(Math.max(from, to > from ? to - 1 : to))
+      let lineFrom = firstLine.from
+      while (lineFrom <= lastLine.from) {
+        const line = doc.lineAt(lineFrom)
+        const classes = [
+          'cm-merge-conflict-line',
+          range.resolved ? 'cm-merge-conflict-resolved' : 'cm-merge-conflict-unresolved',
+          'cm-merge-conflict-active',
+          line.from === firstLine.from ? 'cm-merge-conflict-first' : '',
+          line.from === lastLine.from ? 'cm-merge-conflict-last' : ''
+        ]
+          .filter(Boolean)
+          .join(' ')
+        decorations.push(api.Decoration.line({ class: classes }).range(line.from))
+        if (line.to >= doc.length) break
+        lineFrom = line.to + 1
+      }
+    }
+    return api.Decoration.set(decorations, true)
+  }
+  const conflictField = api.StateField.define<ConflictDecorationState>({
+    create: (state) => ({
+      ranges: conflictRanges.map((range) => ({ ...range })),
+      decorations: buildConflictDecorations(state.doc, conflictRanges)
+    }),
+    update(value, transaction) {
+      const changedIds = new Set<string>()
+      if (transaction.docChanged) {
+        transaction.changes.iterChangedRanges((from, to) => {
+          for (const range of value.ranges) {
+            if (from <= range.to && to >= range.from) changedIds.add(range.id)
+          }
+        })
+      }
+      let ranges = value.ranges.map((range) => ({
+        ...range,
+        from: transaction.changes.mapPos(range.from, -1),
+        to: transaction.changes.mapPos(range.to, 1)
+      }))
+      let explicitRanges = false
+      for (const effect of transaction.effects) {
+        if (!effect.is(setConflictRanges)) continue
+        ranges = effect.value.map((range) => ({ ...range }))
+        explicitRanges = true
+      }
+      if (transaction.docChanged && !explicitRanges) {
+        ranges = ranges.map((range) =>
+          changedIds.has(range.id)
+            ? {
+                ...range,
+                resolved: true,
+                acceptedIncoming: false,
+                acceptedCurrent: false,
+                edited: true
+              }
+            : range
+        )
+      }
+      return { ranges, decorations: buildConflictDecorations(transaction.newDoc, ranges) }
+    },
+    provide: (field) => api.EditorView.decorations.from(field, (value) => value.decorations)
+  })
+
   const extensions: Extension[] = [
     buildEditorTheme(api.EditorView),
     api.syntaxHighlighting(buildHighlightStyle(api.HighlightStyle, api.tags), { fallback: true }),
@@ -133,11 +267,42 @@ export async function createFileEditor(
     ),
     api.EditorView.contentAttributes.of({ 'aria-label': ariaLabel, 'data-region': 'editor' }),
     findField,
+    conflictField,
+    api.invertedEffects.of((transaction) => {
+      const changesConflictState =
+        transaction.docChanged || transaction.effects.some((effect) => effect.is(setConflictRanges))
+      if (!changesConflictState) return []
+      const previous = transaction.startState.field(conflictField).ranges
+      return [setConflictRanges.of(previous.map((range) => ({ ...range })))]
+    }),
     api.history(),
     api.keymap.of([tabBinding, ...api.defaultKeymap, ...api.historyKeymap]),
     api.EditorView.updateListener.of((update) => {
-      if (update.docChanged) onDocChange(update.state.doc.toString())
-    })
+      const conflictRangesChanged = update.transactions.some(
+        (transaction) =>
+          transaction.docChanged ||
+          transaction.effects.some((effect) => effect.is(setConflictRanges))
+      )
+      if (conflictRangesChanged) {
+        onConflictRangesChange?.(
+          update.state.field(conflictField).ranges.map((range) => ({ ...range }))
+        )
+      }
+      if (!update.docChanged) return
+      const changes: FileEditorDocumentChange[] = []
+      update.changes.iterChanges((from, to, _fromB, _toB, inserted) => {
+        changes.push({ from, to, insertedLength: inserted.length })
+      })
+      let userEvent: string | null = null
+      for (const transaction of update.transactions) {
+        const annotation = transaction.annotation(api.Transaction.userEvent)
+        if (!annotation) continue
+        userEvent = annotation
+        break
+      }
+      onDocChange(update.state.doc.toString(), changes, userEvent)
+    }),
+    api.EditorView.domEventHandlers({ scroll: () => onScroll?.() })
   ]
 
   const state = api.EditorState.create({ doc: value, extensions })
@@ -195,6 +360,104 @@ export async function createFileEditor(
       })
     },
     setFind,
+    getValue(): string {
+      return view.state.doc.toString()
+    },
+    replaceRange(from: number, to: number, text: string, userEvent = 'merge.accept'): void {
+      view.dispatch({
+        changes: {
+          from: Math.max(0, Math.min(from, view.state.doc.length)),
+          to: Math.max(0, Math.min(to, view.state.doc.length)),
+          insert: text
+        },
+        userEvent
+      })
+    },
+    resolveConflictRange(
+      id: string,
+      text: string,
+      resolution: Pick<FileEditorConflictRange, 'acceptedIncoming' | 'acceptedCurrent' | 'edited'>,
+      userEvent = 'merge.accept'
+    ): boolean {
+      const ranges = view.state.field(conflictField).ranges
+      const target = ranges.find((range) => range.id === id)
+      if (!target) return false
+      const changes = view.state.changes({ from: target.from, to: target.to, insert: text })
+      const nextRanges = ranges.map((range) => {
+        if (range.id === id) {
+          return {
+            ...range,
+            from: target.from,
+            to: target.from + text.length,
+            resolved: true,
+            ...resolution
+          }
+        }
+        return {
+          ...range,
+          from: changes.mapPos(range.from, -1),
+          to: changes.mapPos(range.to, 1)
+        }
+      })
+      view.dispatch({
+        changes,
+        effects: setConflictRanges.of(nextRanges),
+        annotations: api.isolateHistory.of('full'),
+        userEvent
+      })
+      return true
+    },
+    setConflictRanges(ranges: FileEditorConflictRange[]): void {
+      view.dispatch({
+        effects: setConflictRanges.of(ranges.map((range) => ({ ...range }))),
+        annotations: api.Transaction.addToHistory.of(false)
+      })
+    },
+    getConflictRanges(): FileEditorConflictRange[] {
+      return view.state.field(conflictField).ranges.map((range) => ({ ...range }))
+    },
+    getRangeViewportRect(id: string): FileEditorRangeViewportRect | null {
+      const range = view.state.field(conflictField).ranges.find((candidate) => candidate.id === id)
+      if (!range) return null
+      const start = view.coordsAtPos(range.from, 1)
+      const end = view.coordsAtPos(Math.max(range.from, range.to), -1)
+      if (!start || !end) return null
+      const hostRect = host.getBoundingClientRect()
+      return { top: start.top - hostRect.top, bottom: end.bottom - hostRect.top }
+    },
+    scrollToOffset(offset: number): void {
+      const position = Math.max(0, Math.min(offset, view.state.doc.length))
+      view.dispatch({ effects: api.EditorView.scrollIntoView(position, { y: 'center' }) })
+    },
+    scrollToConflictRange(id: string): void {
+      const range = view.state.field(conflictField).ranges.find((candidate) => candidate.id === id)
+      if (!range) return
+      view.dispatch({ selection: { anchor: range.from } })
+      view.requestMeasure({
+        read(editor) {
+          const current = editor.state
+            .field(conflictField)
+            .ranges.find((candidate) => candidate.id === id)
+          if (!current) return null
+          const block = editor.lineBlockAt(current.from)
+          const viewportHeight = editor.scrollDOM.clientHeight
+          const targetCenter = editor.documentPadding.top + block.top + block.height / 2
+          const desired = targetCenter - viewportHeight / 2
+          return Math.max(0, Math.min(desired, editor.contentHeight - viewportHeight))
+        },
+        write(scrollTop, editor) {
+          if (scrollTop === null) return
+          editor.scrollDOM.scrollTop = scrollTop
+          onScroll?.()
+        }
+      })
+    },
+    undo(): boolean {
+      return api.undo(view)
+    },
+    redo(): boolean {
+      return api.redo(view)
+    },
     scrollToLine(line: number): void {
       const requested = Math.max(1, Math.floor(line))
       const doc = view.state.doc
@@ -226,6 +489,7 @@ async function loadCodeMirrorApi(): Promise<CodeMirrorApi> {
     Compartment: stateModule.Compartment,
     StateEffect: stateModule.StateEffect,
     StateField: stateModule.StateField,
+    Transaction: stateModule.Transaction,
     EditorView: viewModule.EditorView,
     lineNumbers: viewModule.lineNumbers,
     highlightActiveLineGutter: viewModule.highlightActiveLineGutter,
@@ -234,6 +498,10 @@ async function loadCodeMirrorApi(): Promise<CodeMirrorApi> {
     defaultKeymap: commandModule.defaultKeymap,
     history: commandModule.history,
     historyKeymap: commandModule.historyKeymap,
+    undo: commandModule.undo,
+    redo: commandModule.redo,
+    invertedEffects: commandModule.invertedEffects,
+    isolateHistory: commandModule.isolateHistory,
     indentUnit: languageModule.indentUnit,
     syntaxHighlighting: languageModule.syntaxHighlighting,
     HighlightStyle: languageModule.HighlightStyle,
@@ -319,6 +587,27 @@ function buildEditorTheme(EditorView: CodeMirrorApi['EditorView']): Extension {
       '.cm-file-find-match': {
         backgroundColor: 'color-mix(in srgb, var(--color-accent) 30%, transparent)',
         borderRadius: '2px'
+      },
+      '.cm-merge-conflict-line': {
+        borderLeft: '2px solid var(--color-warning)',
+        borderRight: '2px solid var(--color-warning)'
+      },
+      '.cm-merge-conflict-first': {
+        borderTop: '2px solid var(--color-warning)',
+        borderTopLeftRadius: '4px',
+        borderTopRightRadius: '4px'
+      },
+      '.cm-merge-conflict-last': {
+        borderBottom: '2px solid var(--color-warning)',
+        borderBottomLeftRadius: '4px',
+        borderBottomRightRadius: '4px'
+      },
+      '.cm-merge-conflict-resolved': {
+        borderColor: 'var(--color-success)',
+        backgroundColor: 'color-mix(in srgb, var(--color-success) 8%, transparent)'
+      },
+      '.cm-merge-conflict-active': {
+        backgroundColor: 'color-mix(in srgb, var(--color-warning) 13%, transparent)'
       }
     },
     { dark: false }
@@ -346,6 +635,11 @@ async function setLanguage(
   view: EditorView
 ): Promise<void> {
   try {
+    if (path.toLowerCase().endsWith('.svelte')) {
+      const { svelte } = await import('@replit/codemirror-lang-svelte')
+      view.dispatch({ effects: compartment.reconfigure(svelte()) })
+      return
+    }
     const { languages } = await import('@codemirror/language-data')
     const description = findLanguage(
       languages as ReadonlyArray<{

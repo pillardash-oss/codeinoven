@@ -52,6 +52,7 @@
   import { onMount } from 'svelte'
   import FileTypeIcon from '../files/FileTypeIcon.svelte'
   import { projectFilesWorkspace } from '$lib/stores/project-files.svelte'
+  import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
   import BranchActionsMenu from './BranchActionsMenu.svelte'
   import DiffLayoutToggle from '../ui/DiffLayoutToggle.svelte'
   import Modal from '../ui/Modal.svelte'
@@ -1129,12 +1130,35 @@
     }
   }
 
-  async function abortConflict(): Promise<void> {
+  /** Abort is destructive — always ask before discarding the whole merge/rebase. */
+  let abortConfirmOpen = $state(false)
+
+  function requestAbortConflict(): void {
+    abortConfirmOpen = true
+  }
+
+  async function confirmAbortConflict(): Promise<void> {
+    abortConfirmOpen = false
     if (conflictState === 'merge') {
       await gitState.abortMerge(projectId)
     } else if (conflictState === 'rebase') {
       await gitState.abortRebase(projectId)
     }
+  }
+
+  /**
+   * Route conflict resolution to the file panel: enable the tree's Conflicts
+   * filter and open the requested (or first) conflicted file, which the viewer
+   * renders as the per-hunk resolution editor.
+   */
+  function routeConflictResolution(initial?: string): void {
+    gitState.conflictsMode = true
+    contextSidebarState.openFiles(projectId, threadId)
+    const path = initial ?? gitState.conflicted[0]
+    if (!path) return
+    void projectFilesWorkspace.openFile(projectId, path).then(() => {
+      projectFilesWorkspace.requestFullscreen(projectId)
+    })
   }
 
   async function openInEditor(path: string): Promise<void> {
@@ -1314,19 +1338,23 @@
 
   const fileSections: Array<{ title: string; files: GitFileChange[] }> = $derived.by(() => {
     const sections: Array<{ title: string; files: GitFileChange[] }> = []
+    if (conflicted.length > 0) sections.push({ title: 'Conflicts', files: conflicted })
     if (staged.length > 0) sections.push({ title: 'Staged', files: staged })
     if (unstaged.length > 0) sections.push({ title: 'Unstaged', files: unstaged })
     if (untracked.length > 0) sections.push({ title: 'Untracked', files: untracked })
     return sections
   })
 
+  const conflictSections = $derived(fileSections.filter((section) => section.title === 'Conflicts'))
   const stagedSections = $derived(fileSections.filter((section) => section.title === 'Staged'))
-  const workingSections = $derived(fileSections.filter((section) => section.title !== 'Staged'))
-  /** When both panes exist they split 50/50; a lone pane fills the whole height. */
-  const splitPanes = $derived(stagedSections.length > 0 && workingSections.length > 0)
-  const paneClass = $derived(
-    splitPanes ? 'min-h-0 max-h-[50%] overflow-y-auto' : 'min-h-0 flex-1 overflow-y-auto'
+  const workingSections = $derived(
+    fileSections.filter((section) => section.title !== 'Staged' && section.title !== 'Conflicts')
   )
+  /**
+   * Panes: Conflicts (if any) shares the stack with Staged/Unstaged/Untracked.
+   * Each pane gets equal flex space when several exist; a lone pane fills it all.
+   */
+  const paneClass = 'min-h-0 flex-1 overflow-y-auto'
 </script>
 
 {#snippet commitTreeNode(node: CommitTreeNode, depth: number)}
@@ -1815,49 +1843,6 @@
           </div>
         {:else}
           <div class="flex h-full min-h-0 flex-col">
-            <!-- Conflicts -->
-            {#if conflicted.length > 0}
-              <div
-                class="mb-2 shrink-0 overflow-hidden rounded-lg border border-warning/30 bg-warning/10"
-              >
-                <div class="flex items-center gap-2 px-3 py-2">
-                  <p class="text-[10px] font-semibold text-warning">
-                    {conflicted.length} conflicted {conflicted.length === 1 ? 'file' : 'files'}
-                  </p>
-                  <span class="flex-1"></span>
-                  <button
-                    type="button"
-                    class="shrink-0 rounded-md border border-warning/40 px-2 py-1 text-[10px] font-medium text-warning hover:bg-warning/10 disabled:opacity-40"
-                    disabled={integrateBusy || conflictState === 'none'}
-                    onclick={() => void abortConflict()}
-                  >
-                    {#if gitState.isBusy('abortMerge') || gitState.isBusy('abortRebase')}
-                      Aborting…
-                    {:else}
-                      Abort {conflictState === 'merge' ? 'merge' : 'rebase'}
-                    {/if}
-                  </button>
-                </div>
-                <div class="border-t border-warning/20">
-                  {#each conflicted as change (change.path)}
-                    <div class="flex h-8 items-center gap-2 px-3">
-                      <FileTypeIcon path={change.path} size={13} class="shrink-0" />
-                      <span class="min-w-0 flex-1 truncate font-mono text-[10px] text-muted">
-                        {change.path}
-                      </span>
-                      <button
-                        type="button"
-                        class="shrink-0 rounded-md border border-border px-2 py-1 text-[10px] font-medium text-muted hover:bg-elevated hover:text-foreground"
-                        onclick={() => void openInEditor(change.path)}
-                      >
-                        Resolve
-                      </button>
-                    </div>
-                  {/each}
-                </div>
-              </div>
-            {/if}
-
             {#if status && changes.length === 0 && status.clean}
               <div class="flex flex-1 flex-col items-center justify-center py-12 text-center">
                 <div
@@ -1871,9 +1856,29 @@
                 </p>
               </div>
             {:else if status}
-              <!-- Stable header: stage all + selection + view toggle -->
+              <!-- Stable header: abort control (when merging) or stage all + selection + view toggle -->
               <div class="flex shrink-0 items-center gap-2 border-b border-border px-3 py-1.5">
-                {#if unstaged.length + untracked.length > 0}
+                {#if conflicted.length > 0}
+                  <button
+                    type="button"
+                    class="flex shrink-0 items-center gap-1.5 rounded-md border border-danger/40 px-2.5 py-1 text-[10px] font-medium text-danger transition-colors hover:bg-danger/10 disabled:cursor-default disabled:opacity-40"
+                    disabled={integrateBusy || conflictState === 'none'}
+                    onclick={requestAbortConflict}
+                  >
+                    {#if gitState.isBusy('abortMerge') || gitState.isBusy('abortRebase')}
+                      <Loader2 size={11} class="animate-spin" />
+                    {:else}
+                      <Trash2 size={11} />
+                    {/if}
+                    Abort {conflictState === 'merge' ? 'merge' : 'rebase'}
+                  </button>
+                  <span
+                    class="shrink-0 rounded bg-warning/10 px-1.5 py-0.5 text-[9px] font-semibold tabular-nums text-warning"
+                  >
+                    {conflicted.length}
+                    {conflicted.length === 1 ? 'conflict' : 'conflicts'}
+                  </span>
+                {:else if unstaged.length + untracked.length > 0}
                   <button
                     type="button"
                     class="shrink-0 rounded-md border border-border px-2 py-1 text-[10px] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-default disabled:opacity-40"
@@ -2005,8 +2010,70 @@
                 {/if}
               </div>
 
-              <!-- Staged / working panes — a lone pane fills the height; both split 50/50 -->
+              <!-- Staged / working panes — conflicts sit on top; each pane shares the height -->
               <div class="flex h-full min-h-0 flex-col gap-2 px-2 pb-2">
+                {#if conflictSections.length > 0}
+                  <div class={paneClass}>
+                    {#if changesView === 'tree'}
+                      <GitChangesTree
+                        sections={conflictSections}
+                        {diffs}
+                        {expanded}
+                        {loadingDiff}
+                        {diffErrors}
+                        bind:selectedPaths
+                        onToggleDiff={(change) => void toggleDiff(change)}
+                        onToggleStage={(change) => void toggleStage(change)}
+                        onToggleSelect={(change, additive) => toggleSelection(change, additive)}
+                        onStagePaths={(paths, staged) => void stagePathsAction(paths, staged)}
+                        onStashPaths={(paths) => requestStashFor(paths)}
+                        onOpenInEditor={(path) => void openInEditor(path)}
+                        onIgnorePaths={(paths) => void ignorePathsAction(paths)}
+                        onDiscardPaths={(paths) => requestDiscard(paths)}
+                        onResolveConflict={(path) => routeConflictResolution(path)}
+                      />
+                    {:else}
+                      <div class="overflow-hidden rounded-lg border border-warning/25 bg-surface">
+                        {#each conflictSections as section, si (section.title)}
+                          {#if si > 0}<div class="border-t border-border"></div>{/if}
+                          <div class="flex items-center gap-2 bg-warning/10 px-3 py-1.5">
+                            <span
+                              class="text-[9px] font-semibold uppercase tracking-wide text-muted"
+                            >
+                              {section.title}
+                            </span>
+                            <span class="text-[8px] tabular-nums text-dimmed">
+                              {section.files.length}
+                            </span>
+                            <span class="flex-1"></span>
+                            <button
+                              type="button"
+                              class="rounded px-1.5 py-0.5 text-[9px] font-medium text-warning transition-colors hover:bg-warning/10"
+                              title="Open the conflict resolution panel"
+                              onclick={() => routeConflictResolution(section.files[0]?.path)}
+                            >
+                              Resolve all
+                            </button>
+                          </div>
+                          {#each section.files as change (change.path)}
+                            <GitFileRow
+                              {change}
+                              diff={diffs[fileDiffKey(change)] ?? null}
+                              loadingDiff={loadingDiff[fileDiffKey(change)] ?? false}
+                              error={diffErrors[fileDiffKey(change)] ?? null}
+                              expanded={expanded[fileDiffKey(change)] ?? false}
+                              onToggleDiff={() => void toggleDiff(change)}
+                              onToggleStage={() => void toggleStage(change)}
+                              onOpenInEditor={(path) => void openInEditor(path)}
+                              onResolveConflict={(path) => routeConflictResolution(path)}
+                            />
+                          {/each}
+                        {/each}
+                      </div>
+                    {/if}
+                  </div>
+                {/if}
+
                 {#if stagedSections.length > 0}
                   <div class={paneClass}>
                     {#if changesView === 'tree'}
@@ -3372,6 +3439,43 @@
             onclick={() => void confirmDiscard()}
           >
             Discard changes
+          </AlertDialog.Action>
+        </div>
+      </AlertDialog.Content>
+    </AlertDialog.Portal>
+  </AlertDialog.Root>
+{/if}
+
+{#if abortConfirmOpen}
+  <AlertDialog.Root open onOpenChange={() => (abortConfirmOpen = false)}>
+    <AlertDialog.Portal>
+      <AlertDialog.Content
+        class="fixed left-1/2 top-1/2 z-50 w-[min(28rem,calc(100vw-2rem))] -translate-x-1/2 -translate-y-1/2 rounded-xl border border-border bg-surface p-5 shadow-xl"
+      >
+        <AlertDialog.Title class="text-sm font-semibold text-foreground">
+          Abort {conflictState === 'merge' ? 'merge' : 'rebase'}?
+        </AlertDialog.Title>
+        <AlertDialog.Description class="mt-2 text-xs leading-5 text-muted">
+          This cancels the in-progress
+          <strong class="font-medium text-foreground">{conflictState}</strong> operation and restores
+          the working tree to how it was before it started. Any partially resolved files will be lost.
+          This cannot be undone.
+        </AlertDialog.Description>
+        <div class="mt-5 flex justify-end gap-2">
+          <AlertDialog.Cancel
+            class="h-8 rounded-lg border border-border px-3 text-xs text-foreground hover:bg-elevated"
+          >
+            Cancel
+          </AlertDialog.Cancel>
+          <AlertDialog.Action
+            class="flex h-8 items-center gap-1.5 rounded-lg bg-danger px-3 text-xs font-medium text-on-primary hover:opacity-90 disabled:opacity-50"
+            disabled={gitState.isBusy('abortMerge') || gitState.isBusy('abortRebase')}
+            onclick={() => void confirmAbortConflict()}
+          >
+            {#if gitState.isBusy('abortMerge') || gitState.isBusy('abortRebase')}
+              <Loader2 size={12} class="animate-spin" />
+            {/if}
+            Abort {conflictState === 'merge' ? 'merge' : 'rebase'}
           </AlertDialog.Action>
         </div>
       </AlertDialog.Content>

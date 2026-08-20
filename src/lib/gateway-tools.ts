@@ -4,6 +4,8 @@ import { UTILITY_KIND_VALUES } from './types'
 export const UTILITY_SEARCH_TOOL_NAME = 'utility_search'
 export const UTILITY_ACTIVATE_TOOL_NAME = 'utility_activate'
 export const UTILITY_INVOKE_TOOL_NAME = 'utility_invoke'
+/** Explicit-setup-only operation for installing validated utility definitions. */
+export const UTILITY_MANAGE_TOOL_NAME = 'utility_manage'
 /** Shell-callable recovery tool; intentionally never transported through MCP. */
 export const RETRIEVE_MCP_HOST_TOOL_NAME = 'retrieve_mcp_host'
 
@@ -78,6 +80,27 @@ export const GATEWAY_TOOLS: GatewayToolDefinition[] = [
     },
     route: '/invoke',
     sentWhen: 'After a utility has been activated for the current turn'
+  },
+  {
+    name: UTILITY_MANAGE_TOOL_NAME,
+    description:
+      'Install a secret-free skill, MCP server, or plugin bundle in CodeInOven. This capability is available only when the user explicitly starts utility setup with @cio-utility or Setup with agent. Credential values are forbidden; tell the user to add them through Utilities after installation.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        action: { type: 'string', enum: ['install_bundle'] },
+        bundle: {
+          type: 'object',
+          description:
+            'A UtilityBundleInstallRequest-shaped object with name and one or more secret-free definition entries.',
+          additionalProperties: true
+        }
+      },
+      required: ['action', 'bundle'],
+      additionalProperties: false
+    },
+    route: '/manage',
+    sentWhen: 'Only an explicit @cio-utility or Setup with agent turn'
   }
 ]
 

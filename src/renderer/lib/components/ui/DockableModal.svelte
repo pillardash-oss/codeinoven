@@ -30,6 +30,11 @@
     defaultHeight?: number
     /** Tooltip/aria label shown on the draggable header. */
     dragLabel?: string
+    /**
+     * Optional content rendered before the title in the header (e.g. a project
+     * icon and name), so the panel states which project it belongs to.
+     */
+    headerPrefix?: Snippet
   }
 
   let {
@@ -45,7 +50,8 @@
     footer,
     storageKey = `${APP_SLUG}.harnessTasksPanel.v1`,
     defaultHeight = 560,
-    dragLabel = 'Drag to move the task panel'
+    dragLabel = 'Drag to move the task panel',
+    headerPrefix
   }: Props = $props()
 
   const PANEL_MARGIN = 12
@@ -250,6 +256,9 @@
     >
       <span class="flex min-w-0 items-center gap-2">
         <GripVertical size={13} class="shrink-0 text-dimmed" aria-hidden="true" />
+        {#if headerPrefix}
+          <span class="flex min-w-0 items-center gap-1.5">{@render headerPrefix()}</span>
+        {/if}
         <h2 class="truncate text-xs font-semibold">{title}</h2>
       </span>
       <span class="flex shrink-0 items-center gap-1">

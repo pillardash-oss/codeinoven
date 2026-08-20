@@ -1,8 +1,8 @@
 <script lang="ts">
   import { onMount } from 'svelte'
-  import { SvelteDate } from 'svelte/reactivity'
-  import { Brain, Check, ChevronLeft, ChevronRight, LogIn, LogOut, RefreshCw } from '@lucide/svelte'
-  import { AlertDialog, Popover } from 'bits-ui'
+  import { SvelteDate, SvelteMap } from 'svelte/reactivity'
+  import { Brain, Check, ChevronDown, LogIn, LogOut, RefreshCw } from '@lucide/svelte'
+  import { AlertDialog, DropdownMenu, Popover } from 'bits-ui'
   import type {
     AccountAuthProvider,
     AccountProfileState,
@@ -12,6 +12,7 @@
     LocalProfileModelPerformance,
     LocalProfileProjectBreakdown,
     LocalProfileUsageBreakdown,
+    LocalProfileUsageHour,
     ThinkingLevel,
     TurnOutcomeTaskType
   } from '$shared/types'
@@ -23,31 +24,66 @@
 
   type ThinkingFilter = 'all' | ThinkingLevel | 'unknown'
   type TaskFilter = 'all' | TurnOutcomeTaskType
+  type RangePreset = 'today' | 'yesterday' | '7d' | '30d' | 'year' | 'custom'
+  type ModelRankMetric = 'cost' | 'tokens' | 'runtime'
 
   interface CalendarDay {
     date: string
     count: number
     outsideRange: boolean
+    selected: boolean
   }
 
   interface CalendarWeek {
     days: CalendarDay[]
     monthLabel: string
+    selected: boolean
+    rangeStart: boolean
+    rangeEnd: boolean
   }
 
-  const PROFILE_RANGE_DAYS = 365
+  const RANGE_PRESETS: ReadonlyArray<{
+    id: Exclude<RangePreset, 'custom'>
+    label: string
+    days: number
+    endOffsetDays?: number
+  }> = [
+    { id: 'today', label: 'Today', days: 1 },
+    { id: 'yesterday', label: 'Yesterday', days: 1, endOffsetDays: 0 },
+    { id: '7d', label: '7 days', days: 7 },
+    { id: '30d', label: '30 days', days: 30 },
+    { id: 'year', label: '12 months', days: 365 }
+  ]
+  const MODEL_RANK_METRICS: readonly ModelRankMetric[] = ['cost', 'tokens', 'runtime']
 
-  function analyticsRange(offset: number): LocalProfileAnalyticsRange {
+  function analyticsRange(days: number, endOffsetDays = 1): LocalProfileAnalyticsRange {
     const end = new SvelteDate()
     end.setHours(0, 0, 0, 0)
-    end.setDate(end.getDate() + 1 + offset * PROFILE_RANGE_DAYS)
+    end.setDate(end.getDate() + endOffsetDays)
     const start = new SvelteDate(end)
-    start.setDate(end.getDate() - PROFILE_RANGE_DAYS)
+    start.setDate(end.getDate() - days)
     return { startAt: start.getTime(), endAt: end.getTime() }
   }
 
+  function dateInputValue(value: number): string {
+    return localDateKey(new SvelteDate(value))
+  }
+
+  function localDateFromInput(value: string): SvelteDate | null {
+    const parts = value.split('-').map(Number)
+    if (parts.length !== 3 || parts.some((part) => !Number.isInteger(part))) return null
+    const [year, month, day] = parts
+    if (year === undefined || month === undefined || day === undefined) return null
+    const date = new SvelteDate(year, month - 1, day)
+    date.setHours(0, 0, 0, 0)
+    return localDateKey(date) === value ? date : null
+  }
+
+  const DEFAULT_RANGE = analyticsRange(365)
+
   const EMPTY_USAGE: LocalProfileAnalytics = {
-    range: analyticsRange(0),
+    range: DEFAULT_RANGE,
+    activityRange: analyticsRange(365),
     messageCount: 0,
     costUsd: 0,
     tokens: 0,
@@ -58,9 +94,12 @@
     harnesses: [],
     providers: [],
     models: [],
+    thinkingLevels: [],
     utilities: [],
     projects: [],
     activityDays: [],
+    dailyUsage: [],
+    hourlyUsage: [],
     modelPerformance: [],
     feedbackCost: {
       outcomes: 0,
@@ -82,9 +121,13 @@
   let accountBusy = $state(false)
   let activeProvider = $state<AccountAuthProvider | null>(null)
   let signInError = $state('')
-  let rangeOffset = $state(0)
+  let selectedRange = $state<LocalProfileAnalyticsRange>(DEFAULT_RANGE)
+  let rangePreset = $state<RangePreset>('year')
+  let customStartDate = $state(dateInputValue(DEFAULT_RANGE.startAt))
+  let customEndDate = $state(dateInputValue(DEFAULT_RANGE.endAt - 1))
   let projectIconUrls = $state<Record<string, string>>({})
   let usageRequestGeneration = 0
+  let modelRankMetric = $state<ModelRankMetric>('tokens')
 
   const accountProfile = $derived(accountState.profile)
   const syncedDevices = $derived(
@@ -92,8 +135,12 @@
       ? Object.values(accountProfile.usageByDevice).sort((a, b) => b.durationMs - a.durationMs)
       : []
   )
-  const selectedRange = $derived(analyticsRange(rangeOffset))
-  const rangeLabel = $derived(formatDateRange(selectedRange))
+  const rangeLabel = $derived(formatDateRange(usage.range))
+  const rangePresetLabel = $derived(
+    rangePreset === 'custom'
+      ? 'Custom range'
+      : (RANGE_PRESETS.find((preset) => preset.id === rangePreset)?.label ?? 'Select range')
+  )
   const accountInitials = $derived.by(() => {
     const source = accountProfile?.displayName || accountProfile?.email || ''
     return source
@@ -111,8 +158,8 @@
     usage.activityDays.reduce((maximum, day) => Math.max(maximum, day.messageCount), 0)
   )
   const calendarWeeks = $derived.by(() => {
-    const rangeStart = new SvelteDate(usage.range.startAt)
-    const rangeEndDay = new SvelteDate(usage.range.endAt - 1)
+    const rangeStart = new SvelteDate(usage.activityRange.startAt)
+    const rangeEndDay = new SvelteDate(usage.activityRange.endAt - 1)
     const start = new SvelteDate(rangeStart)
     start.setDate(rangeStart.getDate() - rangeStart.getDay())
     start.setHours(12, 0, 0, 0)
@@ -139,11 +186,26 @@
         days.push({
           date: key,
           count: activityByDate.get(key) ?? 0,
-          outsideRange: date.getTime() < usage.range.startAt || date.getTime() >= usage.range.endAt
+          outsideRange:
+            date.getTime() < usage.activityRange.startAt ||
+            date.getTime() >= usage.activityRange.endAt,
+          selected: date.getTime() >= usage.range.startAt && date.getTime() < usage.range.endAt
         })
       }
-      weeks.push({ days, monthLabel })
+      weeks.push({
+        days,
+        monthLabel,
+        selected: days.some((day) => day.selected),
+        rangeStart: false,
+        rangeEnd: false
+      })
     }
+    const firstSelectedWeek = weeks.findIndex((week) => week.selected)
+    const lastSelectedWeek = weeks.findLastIndex((week) => week.selected)
+    const rangeStartWeek = weeks[firstSelectedWeek]
+    const rangeEndWeek = weeks[lastSelectedWeek]
+    if (rangeStartWeek) rangeStartWeek.rangeStart = true
+    if (rangeEndWeek) rangeEndWeek.rangeEnd = true
     return weeks
   })
   const calendarResponseCount = $derived(
@@ -154,6 +216,12 @@
       0
     )
   )
+  const selectedActiveDays = $derived(
+    usage.activityDays.filter((day) => {
+      const date = localDateFromInput(day.date)
+      return date && date.getTime() >= usage.range.startAt && date.getTime() < usage.range.endAt
+    }).length
+  )
   const maxHarnessTokens = $derived(
     usage.harnesses.reduce((maximum, item) => Math.max(maximum, item.tokens), 0)
   )
@@ -163,11 +231,83 @@
   const maxProviderTokens = $derived(
     usage.providers.reduce((maximum, item) => Math.max(maximum, item.tokens), 0)
   )
+  const maxThinkingTokens = $derived(
+    usage.thinkingLevels.reduce((maximum, item) => Math.max(maximum, item.tokens), 0)
+  )
+  const maxDailyTokens = $derived(
+    usage.dailyUsage.reduce((maximum, item) => Math.max(maximum, item.tokens), 0)
+  )
+  const hourlyTimeline = $derived.by(() => {
+    const byHour = new Map(usage.hourlyUsage.map((item) => [item.hour, item]))
+    return Array.from({ length: 24 }, (_, hour): LocalProfileUsageHour => {
+      return (
+        byHour.get(hour) ?? {
+          id: String(hour),
+          hour,
+          messageCount: 0,
+          costUsd: 0,
+          tokens: 0,
+          durationMs: 0
+        }
+      )
+    })
+  })
+  const maxHourlyTokens = $derived(
+    hourlyTimeline.reduce((maximum, item) => Math.max(maximum, item.tokens), 0)
+  )
+  const peakHour = $derived(
+    usage.hourlyUsage.reduce<LocalProfileUsageHour | null>(
+      (peak, item) => (!peak || item.tokens > peak.tokens ? item : peak),
+      null
+    )
+  )
+  const peakDay = $derived(
+    usage.dailyUsage.reduce<(typeof usage.dailyUsage)[number] | null>(
+      (peak, item) => (!peak || item.tokens > peak.tokens ? item : peak),
+      null
+    )
+  )
 
   let thinkingFilter = $state<ThinkingFilter>('all')
   let taskFilter = $state<TaskFilter>('all')
 
-  const mostUsedModel = $derived<LocalProfileUsageBreakdown | null>(usage.models[0] ?? null)
+  const topModels = $derived.by(() => {
+    const grouped = new SvelteMap<string, LocalProfileUsageBreakdown>()
+    for (const model of usage.models) {
+      const key = `${model.harnessId ?? ''}:${model.providerId ?? ''}:${model.id}`
+      const existing = grouped.get(key)
+      if (existing) {
+        existing.messageCount += model.messageCount
+        existing.costUsd += model.costUsd
+        existing.tokens += model.tokens
+        existing.durationMs += model.durationMs
+        continue
+      }
+      grouped.set(key, {
+        id: model.id,
+        ...(model.harnessId ? { harnessId: model.harnessId } : {}),
+        ...(model.providerId ? { providerId: model.providerId } : {}),
+        messageCount: model.messageCount,
+        costUsd: model.costUsd,
+        tokens: model.tokens,
+        durationMs: model.durationMs
+      })
+    }
+    return [...grouped.values()]
+      .sort((left, right) => {
+        const difference =
+          modelRankMetric === 'cost'
+            ? right.costUsd - left.costUsd
+            : modelRankMetric === 'runtime'
+              ? right.durationMs - left.durationMs
+              : right.tokens - left.tokens
+        return difference || right.tokens - left.tokens || right.messageCount - left.messageCount
+      })
+      .slice(0, 3)
+  })
+  const modelRankMetricLabel = $derived(
+    modelRankMetric === 'cost' ? 'cost' : modelRankMetric === 'runtime' ? 'runtime' : 'tokens'
+  )
   const availableThinkingLevels = $derived(
     usage.models
       .map((model) => model.thinkingLevel ?? 'unknown')
@@ -238,6 +378,7 @@
   }
 
   function formatDuration(value: number): string {
+    if (value > 0 && value < 60_000) return '<1m'
     const totalMinutes = Math.round(value / 60_000)
     if (totalMinutes < 60) return `${totalMinutes}m`
     const hours = Math.floor(totalMinutes / 60)
@@ -288,6 +429,17 @@
     }).format(value)
   }
 
+  function formatUsageDate(value: string): string {
+    const date = localDateFromInput(value)
+    if (!date) return value
+    return new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric' }).format(date)
+  }
+
+  function formatHour(hour: number): string {
+    const date = new SvelteDate(2000, 0, 1, hour)
+    return new Intl.DateTimeFormat(undefined, { hour: 'numeric' }).format(date)
+  }
+
   function formatDateTime(value: number): string {
     return new Intl.DateTimeFormat(undefined, {
       day: 'numeric',
@@ -319,6 +471,11 @@
   function usageWidth(item: AccountUsageBreakdown, maximum: number): string {
     if (maximum <= 0) return '0%'
     return `${Math.max(4, (item.tokens / maximum) * 100)}%`
+  }
+
+  function usageHeight(item: AccountUsageBreakdown, maximum: number): string {
+    if (maximum <= 0 || item.tokens <= 0) return '2px'
+    return `${Math.max(8, (item.tokens / maximum) * 100)}%`
   }
 
   async function loadProjectIconUrls(projects: LocalProfileProjectBreakdown[]): Promise<void> {
@@ -355,11 +512,39 @@
     }
   }
 
-  function navigateRange(direction: -1 | 1): void {
-    const nextOffset = Math.min(0, rangeOffset + direction)
-    if (nextOffset === rangeOffset) return
-    rangeOffset = nextOffset
-    void loadUsage(analyticsRange(nextOffset))
+  function selectRangePreset(
+    preset: Exclude<RangePreset, 'custom'>,
+    days: number,
+    endOffsetDays?: number
+  ): void {
+    rangePreset = preset
+    selectedRange = analyticsRange(days, endOffsetDays)
+    customStartDate = dateInputValue(selectedRange.startAt)
+    customEndDate = dateInputValue(selectedRange.endAt - 1)
+    void loadUsage(selectedRange)
+  }
+
+  function showCustomRange(): void {
+    rangePreset = 'custom'
+    errorMessage = ''
+  }
+
+  function applyCustomRange(): void {
+    const start = localDateFromInput(customStartDate)
+    const inclusiveEnd = localDateFromInput(customEndDate)
+    if (!start || !inclusiveEnd) {
+      errorMessage = 'Choose a valid start and end date.'
+      return
+    }
+    const end = new SvelteDate(inclusiveEnd)
+    end.setDate(end.getDate() + 1)
+    const duration = end.getTime() - start.getTime()
+    if (duration <= 0 || duration > 371 * 24 * 60 * 60 * 1_000) {
+      errorMessage = 'Choose a range of up to 12 months with the start before the end.'
+      return
+    }
+    selectedRange = { startAt: start.getTime(), endAt: end.getTime() }
+    void loadUsage(selectedRange)
   }
 
   async function refreshAccount(showError = false): Promise<void> {
@@ -443,15 +628,17 @@
 <div class="w-full p-6 pb-24">
   <div class="mb-6 flex items-start justify-between gap-4">
     <div>
-      <h1 class="text-xl font-bold tracking-tight">Profile</h1>
-      <p class="mt-0.5 text-sm text-muted">Your local activity and agent usage at a glance.</p>
+      <h1 class="text-xl font-bold tracking-tight">Usage</h1>
+      <p class="mt-0.5 text-sm text-muted">
+        Track total consumption, peak periods, and what drove them.
+      </p>
     </div>
     <div class="flex items-center gap-2">
       <button
         type="button"
         class="flex h-9 items-center gap-2 rounded-lg border px-3 text-xs font-semibold hover:bg-elevated disabled:opacity-50"
-        title="Refresh local profile analytics"
-        aria-label="Refresh local profile analytics"
+        title="Refresh usage analytics"
+        aria-label="Refresh usage analytics"
         disabled={loading}
         onclick={() => void loadUsage()}
       >
@@ -596,26 +783,179 @@
     </p>
   {/if}
 
-  <section class="grid grid-cols-2 gap-3 xl:grid-cols-4" aria-label="Local usage totals">
+  <section class="mb-4 grid grid-cols-2 gap-3 xl:grid-cols-4" aria-label="Local usage totals">
     <div class="rounded-xl border p-4">
       <p class="text-xs font-semibold uppercase tracking-wide text-muted">Agent responses</p>
       <p class="mt-2 text-2xl font-bold tabular-nums">{formatNumber(usage.messageCount)}</p>
-      <p class="mt-1 text-xs text-dimmed">Across projects in this period</p>
+      <p class="mt-1 text-xs text-dimmed">Total in the selected period</p>
     </div>
     <div class="rounded-xl border p-4">
       <p class="text-xs font-semibold uppercase tracking-wide text-muted">Tokens</p>
       <p class="mt-2 text-2xl font-bold tabular-nums">{formatNumber(usage.tokens)}</p>
-      <p class="mt-1 text-xs text-dimmed">Reported input and output</p>
+      <p class="mt-1 text-xs text-dimmed">Models and tracked utilities</p>
     </div>
     <div class="rounded-xl border p-4">
       <p class="text-xs font-semibold uppercase tracking-wide text-muted">Estimated cost</p>
       <p class="mt-2 text-2xl font-bold tabular-nums">{formatCost(usage.costUsd)}</p>
-      <p class="mt-1 text-xs text-dimmed">From available usage reports</p>
+      <p class="mt-1 text-xs text-dimmed">From available pricing reports</p>
     </div>
     <div class="rounded-xl border p-4">
       <p class="text-xs font-semibold uppercase tracking-wide text-muted">Active days</p>
-      <p class="mt-2 text-2xl font-bold tabular-nums">{usage.activityDays.length}</p>
+      <p class="mt-2 text-2xl font-bold tabular-nums">{selectedActiveDays}</p>
       <p class="mt-1 text-xs text-dimmed">{formatDuration(usage.durationMs)} of agent runtime</p>
+    </div>
+  </section>
+
+  <section class="mb-4 overflow-hidden rounded-xl border p-4" aria-labelledby="activity-heading">
+    <div class="flex flex-wrap items-start justify-between gap-3">
+      <div>
+        <h2 id="activity-heading" class="text-sm font-semibold">Active days</h2>
+        <p class="mt-0.5 text-xs text-muted">
+          {formatNumber(calendarResponseCount)} agent responses over 12 months · Selected {rangeLabel}
+        </p>
+      </div>
+      <DropdownMenu.Root>
+        <DropdownMenu.Trigger
+          class="flex h-8 min-w-32 items-center justify-between gap-2 rounded-lg border bg-surface px-2.5 text-xs font-medium text-foreground hover:bg-elevated disabled:opacity-50"
+          title="Choose usage range"
+          aria-label={`Choose usage range. Current range: ${rangePresetLabel}`}
+          disabled={loading}
+        >
+          <span>{rangePresetLabel}</span>
+          <ChevronDown size={13} class="text-dimmed" />
+        </DropdownMenu.Trigger>
+        <DropdownMenu.Portal>
+          <DropdownMenu.Content
+            side="bottom"
+            align="end"
+            sideOffset={6}
+            collisionPadding={8}
+            class="z-50 w-44 overflow-hidden rounded-lg border bg-surface p-1 shadow-lg"
+          >
+            {#each RANGE_PRESETS as preset (preset.id)}
+              <DropdownMenu.Item
+                class="flex cursor-default items-center justify-between gap-3 rounded-md px-2.5 py-2 text-xs text-muted outline-none data-[highlighted]:bg-elevated data-[highlighted]:text-foreground"
+                textValue={preset.label}
+                onSelect={() => selectRangePreset(preset.id, preset.days, preset.endOffsetDays)}
+              >
+                <span>{preset.label}</span>
+                {#if rangePreset === preset.id}
+                  <Check size={13} class="text-primary" />
+                {/if}
+              </DropdownMenu.Item>
+            {/each}
+            <DropdownMenu.Separator class="my-1 h-px bg-border" />
+            <DropdownMenu.Item
+              class="flex cursor-default items-center justify-between gap-3 rounded-md px-2.5 py-2 text-xs text-muted outline-none data-[highlighted]:bg-elevated data-[highlighted]:text-foreground"
+              textValue="Custom range"
+              onSelect={showCustomRange}
+            >
+              <span>Custom range</span>
+              {#if rangePreset === 'custom'}
+                <Check size={13} class="text-primary" />
+              {/if}
+            </DropdownMenu.Item>
+          </DropdownMenu.Content>
+        </DropdownMenu.Portal>
+      </DropdownMenu.Root>
+    </div>
+    {#if rangePreset === 'custom'}
+      <div class="mt-3 flex flex-wrap items-end gap-2 border-t pt-3">
+        <label class="grid gap-1 text-[11px] font-medium text-muted">
+          Start date
+          <input
+            type="date"
+            class="h-9 rounded-lg border bg-elevated px-2.5 text-xs tabular-nums text-foreground outline-none focus:border-primary"
+            max={customEndDate}
+            bind:value={customStartDate}
+          />
+        </label>
+        <label class="grid gap-1 text-[11px] font-medium text-muted">
+          End date
+          <input
+            type="date"
+            class="h-9 rounded-lg border bg-elevated px-2.5 text-xs tabular-nums text-foreground outline-none focus:border-primary"
+            min={customStartDate}
+            max={dateInputValue(Date.now())}
+            bind:value={customEndDate}
+          />
+        </label>
+        <button
+          type="button"
+          class="h-9 rounded-lg bg-primary px-4 text-xs font-semibold text-on-primary hover:bg-primary-hover disabled:opacity-50"
+          disabled={loading}
+          onclick={applyCustomRange}
+        >
+          Apply range
+        </button>
+      </div>
+    {/if}
+
+    <div class="mt-5 overflow-x-auto pb-2">
+      <div class="activity-calendar w-full px-1">
+        <div class="grid grid-cols-[1.5rem_minmax(0,1fr)] gap-2">
+          <span aria-hidden="true"></span>
+          <div
+            class="activity-columns gap-1"
+            style:--calendar-weeks={calendarWeeks.length}
+            aria-hidden="true"
+          >
+            {#each calendarWeeks as week, index (`month-${index}`)}
+              <span class="min-w-0 overflow-visible whitespace-nowrap text-[10px] text-dimmed">
+                {week.monthLabel}
+              </span>
+            {/each}
+          </div>
+          <div
+            class="grid w-6 shrink-0 grid-rows-7 gap-1 text-[10px] leading-3 text-dimmed"
+            aria-hidden="true"
+          >
+            <span></span><span>Mon</span><span></span><span>Wed</span><span></span><span>Fri</span
+            ><span></span>
+          </div>
+          <div
+            class="activity-columns gap-1"
+            style:--calendar-weeks={calendarWeeks.length}
+            aria-label="Local activity calendar"
+          >
+            {#each calendarWeeks as week, weekIndex (`week-${weekIndex}`)}
+              <div
+                class="relative flex min-w-0 flex-col gap-1 rounded-sm {week.selected
+                  ? 'bg-thread-working/5'
+                  : ''}"
+              >
+                {#if week.selected}
+                  <span
+                    class="pointer-events-none absolute inset-0 z-10 border-y border-dashed border-thread-working/35 {week.rangeStart
+                      ? 'rounded-l-sm border-l'
+                      : ''} {week.rangeEnd ? 'rounded-r-sm border-r' : ''}"
+                    aria-hidden="true"
+                  ></span>
+                {/if}
+                {#each week.days as day (day.date)}
+                  <span
+                    class="aspect-square w-full min-w-2 rounded-sm {activityClass(day)}"
+                    title={`${day.date}: ${day.count} agent responses${day.selected ? ' · selected range' : ''}`}
+                    aria-label={`${day.date}: ${day.count} agent responses${day.selected ? ', selected range' : ''}`}
+                  ></span>
+                {/each}
+              </div>
+            {/each}
+          </div>
+        </div>
+        <div
+          class="mt-3 flex items-center justify-end gap-1 text-[10px] text-dimmed"
+          aria-hidden="true"
+        >
+          <span class="mr-1">Less</span>
+          <span class="h-2.5 w-2.5 rounded-sm bg-raised"></span>
+          <span class="h-2.5 w-2.5 rounded-sm bg-primary/25"></span>
+          <span class="h-2.5 w-2.5 rounded-sm bg-primary/50"></span>
+          <span class="h-2.5 w-2.5 rounded-sm bg-primary/75"></span>
+          <span class="h-2.5 w-2.5 rounded-sm bg-primary"></span>
+          <span class="ml-1">More</span>
+        </div>
+      </div>
     </div>
   </section>
 
@@ -697,169 +1037,178 @@
     </section>
   {/if}
 
-  {#if mostUsedModel}
+  {#if topModels.length > 0}
     <section class="mt-4 rounded-xl border" aria-labelledby="most-used-heading">
-      <div class="border-b px-4 py-3">
-        <h2 id="most-used-heading" class="text-sm font-semibold">Most used model</h2>
-        <p class="mt-0.5 text-xs text-muted">Your top model across projects in this period.</p>
+      <div class="flex flex-wrap items-center justify-between gap-3 border-b px-4 py-3">
+        <div>
+          <h2 id="most-used-heading" class="text-sm font-semibold">Most used models</h2>
+          <p class="mt-0.5 text-xs text-muted">Ranked by {modelRankMetricLabel} in this period.</p>
+        </div>
+        <div
+          class="flex rounded-lg border bg-surface p-0.5"
+          role="group"
+          aria-label="Rank models by"
+        >
+          {#each MODEL_RANK_METRICS as metric (metric)}
+            <button
+              type="button"
+              class="h-7 rounded-md px-2.5 text-[11px] font-semibold capitalize transition-colors {modelRankMetric ===
+              metric
+                ? 'bg-thread-working text-on-primary'
+                : 'text-muted hover:bg-elevated hover:text-foreground'}"
+              aria-pressed={modelRankMetric === metric}
+              onclick={() => (modelRankMetric = metric)}
+            >
+              {metric}
+            </button>
+          {/each}
+        </div>
       </div>
-      <div class="flex flex-wrap items-center gap-x-6 gap-y-4 px-4 py-4">
-        <div class="flex min-w-0 items-center gap-3">
-          {#if getAgentIcon(mostUsedModel.harnessId)}
-            <img
-              class="h-10 w-10 shrink-0 rounded-lg object-contain"
-              src={getAgentIcon(mostUsedModel.harnessId)?.iconUrl}
-              alt=""
-            />
-          {:else}
-            <span class="grid h-10 w-10 shrink-0 place-items-center rounded-lg bg-elevated">
-              <VendorIcon name={mostUsedModel.providerId ?? mostUsedModel.id} size={18} />
+      <div class="divide-y">
+        {#each topModels as model, index (`${model.harnessId}:${model.providerId}:${model.id}`)}
+          <div class="flex flex-wrap items-center gap-x-5 gap-y-3 px-4 py-3">
+            <span
+              class="w-7 shrink-0 text-center text-lg font-bold tabular-nums {index === 0
+                ? 'text-accent'
+                : 'text-dimmed'}"
+              aria-label={`Rank ${index + 1}`}
+            >
+              {index + 1}
             </span>
-          {/if}
-          <div class="min-w-0">
-            <p class="flex items-center gap-2 truncate text-base font-semibold">
-              <span class="truncate">{mostUsedModel.id}</span>
-              {#if mostUsedModel.thinkingLevel}
-                <span
-                  class="flex shrink-0 items-center gap-1 rounded-md bg-elevated px-1.5 py-0.5 text-[10px] capitalize text-muted"
-                  title={`Thinking level: ${mostUsedModel.thinkingLevel}`}
-                  aria-label={`Thinking level: ${mostUsedModel.thinkingLevel}`}
-                >
-                  <Brain size={10} />
-                  {thinkingLevelLabel(mostUsedModel.thinkingLevel)}
+            <div class="flex min-w-48 flex-1 items-center gap-3">
+              {#if getAgentIcon(model.harnessId)}
+                <img
+                  class="h-9 w-9 shrink-0 rounded-lg object-contain"
+                  src={getAgentIcon(model.harnessId)?.iconUrl}
+                  alt=""
+                />
+              {:else}
+                <span class="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-elevated">
+                  <VendorIcon name={model.providerId ?? model.id} size={17} />
                 </span>
               {/if}
-            </p>
-            <p class="mt-0.5 flex items-center gap-1.5 text-xs text-muted">
-              <VendorIcon name={mostUsedModel.providerId ?? mostUsedModel.id} size={13} />
-              <span class="truncate">
-                {formatIdentifier(mostUsedModel.providerId ?? '')} · {formatIdentifier(
-                  mostUsedModel.harnessId ?? ''
-                )}
-              </span>
-            </p>
+              <div class="min-w-0">
+                <p class="truncate text-sm font-semibold">{model.id}</p>
+                <p class="mt-0.5 flex items-center gap-1.5 text-[11px] text-muted">
+                  <VendorIcon name={model.providerId ?? model.id} size={12} />
+                  <span class="truncate">
+                    {formatIdentifier(model.providerId ?? '')} · {formatIdentifier(
+                      model.harnessId ?? ''
+                    )}
+                  </span>
+                </p>
+              </div>
+            </div>
+            <dl class="grid min-w-80 flex-1 grid-cols-4 gap-x-5">
+              <div>
+                <dt class="text-[10px] text-dimmed">Responses</dt>
+                <dd class="mt-0.5 text-xs font-semibold tabular-nums">
+                  {formatNumber(model.messageCount)}
+                </dd>
+              </div>
+              <div>
+                <dt class="text-[10px] text-dimmed">Tokens</dt>
+                <dd class="mt-0.5 text-xs font-semibold tabular-nums">
+                  {formatNumber(model.tokens)}
+                </dd>
+              </div>
+              <div>
+                <dt class="text-[10px] text-dimmed">Cost</dt>
+                <dd class="mt-0.5 text-xs font-semibold tabular-nums">
+                  {formatCost(model.costUsd)}
+                </dd>
+              </div>
+              <div>
+                <dt class="text-[10px] text-dimmed">Runtime</dt>
+                <dd class="mt-0.5 text-xs font-semibold tabular-nums">
+                  {formatDuration(model.durationMs)}
+                </dd>
+              </div>
+            </dl>
           </div>
-        </div>
-        <dl class="ml-auto grid flex-1 grid-cols-2 gap-x-8 gap-y-3 sm:grid-cols-4">
-          <div>
-            <dt class="text-[11px] text-dimmed">Responses</dt>
-            <dd class="mt-0.5 text-sm font-semibold tabular-nums">
-              {formatNumber(mostUsedModel.messageCount)}
-            </dd>
-          </div>
-          <div>
-            <dt class="text-[11px] text-dimmed">Tokens</dt>
-            <dd class="mt-0.5 text-sm font-semibold tabular-nums">
-              {formatNumber(mostUsedModel.tokens)}
-            </dd>
-          </div>
-          <div>
-            <dt class="text-[11px] text-dimmed">Estimated cost</dt>
-            <dd class="mt-0.5 text-sm font-semibold tabular-nums">
-              {formatCost(mostUsedModel.costUsd)}
-            </dd>
-          </div>
-          <div>
-            <dt class="text-[11px] text-dimmed">Runtime</dt>
-            <dd class="mt-0.5 text-sm font-semibold tabular-nums">
-              {formatDuration(mostUsedModel.durationMs)}
-            </dd>
-          </div>
-        </dl>
+        {/each}
       </div>
     </section>
   {/if}
 
-  <section class="mt-4 overflow-hidden rounded-xl border p-4" aria-labelledby="activity-heading">
-    <div class="flex flex-wrap items-start justify-between gap-3">
-      <div>
-        <h2 id="activity-heading" class="text-sm font-semibold">Activity</h2>
-        <p class="mt-0.5 text-xs text-muted">
-          {formatNumber(calendarResponseCount)} responses during the selected year.
-        </p>
-      </div>
-      <div class="flex items-center rounded-lg border bg-surface p-0.5">
-        <button
-          type="button"
-          class="grid h-7 w-7 place-items-center rounded-md text-muted hover:bg-elevated hover:text-foreground"
-          title="Show previous 12 months"
-          aria-label="Show previous 12 months"
-          disabled={loading}
-          onclick={() => navigateRange(-1)}
-        >
-          <ChevronLeft size={14} />
-        </button>
-        <span class="min-w-48 px-2 text-center text-[11px] font-medium tabular-nums text-muted">
-          {rangeLabel}
-        </span>
-        <button
-          type="button"
-          class="grid h-7 w-7 place-items-center rounded-md text-muted hover:bg-elevated hover:text-foreground disabled:opacity-30"
-          title="Show next 12 months"
-          aria-label="Show next 12 months"
-          disabled={loading || rangeOffset === 0}
-          onclick={() => navigateRange(1)}
-        >
-          <ChevronRight size={14} />
-        </button>
-      </div>
-    </div>
-
-    <div class="mt-5 overflow-x-auto pb-2">
-      <div class="min-w-[46rem]">
-        <div class="grid grid-cols-[1.5rem_minmax(0,1fr)] gap-2">
-          <span aria-hidden="true"></span>
-          <div
-            class="activity-columns gap-1"
-            style:--calendar-weeks={calendarWeeks.length}
-            aria-hidden="true"
-          >
-            {#each calendarWeeks as week, index (`month-${index}`)}
-              <span class="min-w-0 overflow-visible whitespace-nowrap text-[10px] text-dimmed">
-                {week.monthLabel}
-              </span>
-            {/each}
+  <div class="mt-4 grid gap-4 xl:grid-cols-[minmax(0,1.35fr)_minmax(0,1fr)]">
+    <section class="rounded-xl border p-4" aria-labelledby="daily-consumption-heading">
+      <div class="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h2 id="daily-consumption-heading" class="text-sm font-semibold">Consumption by day</h2>
+          <p class="mt-0.5 text-xs text-muted">Total tokens for each active day in this period.</p>
+        </div>
+        {#if peakDay}
+          <div class="text-right">
+            <p class="text-[10px] font-semibold uppercase tracking-wide text-dimmed">Peak day</p>
+            <p class="mt-0.5 text-xs font-semibold tabular-nums">
+              {formatUsageDate(peakDay.date)} · {formatNumber(peakDay.tokens)}
+            </p>
           </div>
-          <div
-            class="grid w-6 shrink-0 grid-rows-7 gap-1 text-[10px] leading-2.5 text-dimmed"
-            aria-hidden="true"
-          >
-            <span></span><span>Mon</span><span></span><span>Wed</span><span></span><span>Fri</span
-            ><span></span>
-          </div>
-          <div
-            class="activity-columns gap-1"
-            style:--calendar-weeks={calendarWeeks.length}
-            aria-label="Local activity calendar"
-          >
-            {#each calendarWeeks as week, weekIndex (`week-${weekIndex}`)}
-              <div class="flex min-w-0 flex-col gap-1">
-                {#each week.days as day (day.date)}
-                  <span
-                    class="aspect-square w-full rounded-sm {activityClass(day)}"
-                    title={`${day.date}: ${day.count} agent responses`}
-                    aria-label={`${day.date}: ${day.count} agent responses`}
-                  ></span>
-                {/each}
+        {/if}
+      </div>
+      {#if usage.dailyUsage.length > 0}
+        <div class="mt-5 max-h-72 space-y-2 overflow-y-auto pr-1">
+          {#each usage.dailyUsage.toReversed() as day (day.date)}
+            <div class="grid grid-cols-[4.5rem_minmax(0,1fr)_5.5rem] items-center gap-3 text-xs">
+              <span class="tabular-nums text-muted">{formatUsageDate(day.date)}</span>
+              <div class="h-2 overflow-hidden rounded-full bg-raised">
+                <div
+                  class="h-full rounded-full {day.date === peakDay?.date
+                    ? 'bg-accent'
+                    : 'bg-primary'}"
+                  style:width={usageWidth(day, maxDailyTokens)}
+                ></div>
               </div>
-            {/each}
+              <span class="text-right font-medium tabular-nums">{formatNumber(day.tokens)}</span>
+            </div>
+          {/each}
+        </div>
+      {:else}
+        <p class="py-12 text-center text-xs text-muted">
+          No consumption was recorded in this period.
+        </p>
+      {/if}
+    </section>
+
+    <section class="rounded-xl border p-4" aria-labelledby="hourly-consumption-heading">
+      <div class="flex items-start justify-between gap-3">
+        <div>
+          <h2 id="hourly-consumption-heading" class="text-sm font-semibold">Peak hours</h2>
+          <p class="mt-0.5 text-xs text-muted">Usage by local time across the selected period.</p>
+        </div>
+        {#if peakHour}
+          <div class="text-right">
+            <p class="text-[10px] font-semibold uppercase tracking-wide text-dimmed">Peak</p>
+            <p class="mt-0.5 text-xs font-semibold tabular-nums">
+              {formatHour(peakHour.hour)} · {formatNumber(peakHour.tokens)}
+            </p>
           </div>
-        </div>
-        <div
-          class="mt-3 flex items-center justify-end gap-1 text-[10px] text-dimmed"
-          aria-hidden="true"
-        >
-          <span class="mr-1">Less</span>
-          <span class="h-2.5 w-2.5 rounded-sm bg-raised"></span>
-          <span class="h-2.5 w-2.5 rounded-sm bg-primary/25"></span>
-          <span class="h-2.5 w-2.5 rounded-sm bg-primary/50"></span>
-          <span class="h-2.5 w-2.5 rounded-sm bg-primary/75"></span>
-          <span class="h-2.5 w-2.5 rounded-sm bg-primary"></span>
-          <span class="ml-1">More</span>
-        </div>
+        {/if}
       </div>
-    </div>
-  </section>
+      <div class="hourly-columns mt-5 h-40 items-end gap-1" aria-label="Usage by hour of day">
+        {#each hourlyTimeline as hour (hour.hour)}
+          <div class="flex h-full min-w-0 items-end">
+            <span
+              class="w-full rounded-t-sm {hour.hour === peakHour?.hour
+                ? 'bg-accent'
+                : 'bg-primary'} {hour.tokens === 0 ? 'opacity-15' : ''}"
+              style:height={usageHeight(hour, maxHourlyTokens)}
+              title={`${formatHour(hour.hour)}: ${formatNumber(hour.tokens)} tokens, ${formatCost(hour.costUsd)}`}
+              aria-label={`${formatHour(hour.hour)}: ${formatNumber(hour.tokens)} tokens, ${formatCost(hour.costUsd)}`}
+            ></span>
+          </div>
+        {/each}
+      </div>
+      <div class="mt-2 grid grid-cols-4 text-[10px] tabular-nums text-dimmed" aria-hidden="true">
+        <span>12 AM</span><span class="text-center">6 AM</span><span class="text-center">12 PM</span
+        ><span class="text-right">6 PM</span>
+      </div>
+      <p class="mt-3 border-t pt-3 text-[11px] text-dimmed">
+        Gold marks the busiest hour; shorter bars show non-peak consumption.
+      </p>
+    </section>
+  </div>
 
   <section class="mt-4 rounded-xl border" aria-labelledby="project-usage-heading">
     <div class="flex items-center justify-between border-b px-4 py-3">
@@ -919,7 +1268,7 @@
     </div>
   </section>
 
-  <div class="mt-4 grid gap-4 xl:grid-cols-3">
+  <div class="mt-4 grid gap-4 xl:grid-cols-2">
     <section class="rounded-xl border" aria-labelledby="harness-usage-heading">
       <div class="border-b px-4 py-3">
         <h2 id="harness-usage-heading" class="text-sm font-semibold">Harnesses</h2>
@@ -997,6 +1346,41 @@
         {:else}
           <p class="px-4 py-8 text-center text-xs text-muted">
             Provider usage appears after a harness reports it.
+          </p>
+        {/each}
+      </div>
+    </section>
+
+    <section class="rounded-xl border" aria-labelledby="thinking-usage-heading">
+      <div class="border-b px-4 py-3">
+        <h2 id="thinking-usage-heading" class="text-sm font-semibold">Thinking levels</h2>
+        <p class="mt-0.5 text-xs text-muted">Reasoning effort across every model in this period.</p>
+      </div>
+      <div class="divide-y">
+        {#each usage.thinkingLevels as level (level.id)}
+          <div class="px-4 py-3">
+            <div class="flex items-center justify-between gap-4 text-xs">
+              <span class="flex min-w-0 items-center gap-2 truncate font-semibold">
+                <Brain size={15} class="text-muted" />
+                {thinkingLevelLabel(level.thinkingLevel ?? 'unknown')}
+              </span>
+              <span class="shrink-0 tabular-nums text-muted">
+                {formatNumber(level.tokens)} tokens · {formatCost(level.costUsd)}
+              </span>
+            </div>
+            <div class="mt-2 h-1 overflow-hidden rounded-full bg-raised">
+              <div
+                class="h-full rounded-full bg-primary"
+                style:width={usageWidth(level, maxThinkingTokens)}
+              ></div>
+            </div>
+            <p class="mt-1.5 text-[11px] tabular-nums text-dimmed">
+              {formatNumber(level.messageCount)} responses · {formatDuration(level.durationMs)}
+            </p>
+          </div>
+        {:else}
+          <p class="px-4 py-8 text-center text-xs text-muted">
+            Thinking-level usage appears after a harness reports reasoning effort.
           </p>
         {/each}
       </div>
@@ -1261,8 +1645,17 @@
 </AlertDialog.Root>
 
 <style>
+  .hourly-columns {
+    display: grid;
+    grid-template-columns: repeat(24, minmax(0, 1fr));
+  }
+
   .activity-columns {
     display: grid;
     grid-template-columns: repeat(var(--calendar-weeks), minmax(0, 1fr));
+  }
+
+  .activity-calendar {
+    min-width: 42rem;
   }
 </style>

@@ -109,6 +109,43 @@ export class TurnFeedbackRepo {
     )
   }
 
+  /**
+   * Open a pending outcome on the database worker so a completed turn's first
+   * feedback record never synchronously touches SQLite on the main thread.
+   * Replays remain no-ops (INSERT OR IGNORE). Falls back to the primary
+   * connection when no worker is available.
+   */
+  async openPendingViaWorker(input: OpenTurnFeedbackInput): Promise<void> {
+    const result = await this.db.executeViaWorker(
+      `INSERT OR IGNORE INTO turn_feedback(
+        id, thread_id, parent_turn_id, session_id, created_at, resolved_at,
+        status, signal, score, feature, task_slug,
+        harness_id, provider_id, model_id, thinking_level,
+        cost_usd, cost_status, tokens_total
+      ) VALUES(?,?,?,?,?,NULL,'pending',NULL,0,?,?,?,?,?,?,?,?,?)`,
+      [
+        input.id,
+        input.threadId,
+        input.parentTurnId,
+        input.sessionId ?? null,
+        input.createdAt,
+        input.feature,
+        input.taskSlug,
+        input.harnessId,
+        input.providerId,
+        input.modelId,
+        input.thinkingLevel,
+        input.costUsd,
+        input.costStatus,
+        input.tokensTotal
+      ]
+    )
+    if (!result.ok) {
+      // The primary path is the offline-safe fallback and surfaces the error.
+      this.openPending(input)
+    }
+  }
+
   /** Most recent pending outcome for a thread, or null. */
   latestPendingForThread(threadId: string): TurnFeedbackRow | null {
     const row = this.db.get<TurnFeedbackRow>(

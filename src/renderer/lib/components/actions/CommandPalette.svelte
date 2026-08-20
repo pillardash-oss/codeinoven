@@ -233,25 +233,27 @@
               >
                 {categoryLabel(action)}
               </span>
-              {#if action.source.color}
-                <span
-                  class="inline-flex min-w-0 shrink-0 items-center gap-1 truncate rounded-md border px-1.5 py-0.5 text-[9px] font-medium"
-                  style="color: {action.source.color}; border-color: color-mix(in srgb, {action
-                    .source.color} 35%, transparent); background-color: color-mix(in srgb, {action
-                    .source.color} 12%, transparent)"
-                >
+              {#if action.showSourceBadge !== false}
+                {#if action.source.color}
                   <span
-                    class="h-1.5 w-1.5 shrink-0 rounded-full"
-                    style="background: {action.source.color}"
-                  ></span>
-                  <span class="truncate">{action.source.label}</span>
-                </span>
-              {:else}
-                <span
-                  class="min-w-0 truncate rounded-md border border-border px-1.5 py-0.5 text-[9px] font-medium text-dimmed"
-                >
-                  {action.source.label}
-                </span>
+                    class="inline-flex min-w-0 shrink-0 items-center gap-1 truncate rounded-md border px-1.5 py-0.5 text-[9px] font-medium"
+                    style="color: {action.source.color}; border-color: color-mix(in srgb, {action
+                      .source.color} 35%, transparent); background-color: color-mix(in srgb, {action
+                      .source.color} 12%, transparent)"
+                  >
+                    <span
+                      class="h-1.5 w-1.5 shrink-0 rounded-full"
+                      style="background: {action.source.color}"
+                    ></span>
+                    <span class="truncate">{action.source.label}</span>
+                  </span>
+                {:else}
+                  <span
+                    class="min-w-0 truncate rounded-md border border-border px-1.5 py-0.5 text-[9px] font-medium text-dimmed"
+                  >
+                    {action.source.label}
+                  </span>
+                {/if}
               {/if}
               {#if action.status}
                 <span

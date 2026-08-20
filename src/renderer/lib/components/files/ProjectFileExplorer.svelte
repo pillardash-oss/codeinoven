@@ -10,6 +10,7 @@
     ChevronsUp,
     FileDiff,
     FolderOpen,
+    GitMerge,
     Loader2,
     RefreshCw,
     Search,
@@ -35,6 +36,15 @@
     activeCheckpointId: string | null
     /** Paths changed by the active checkpoint tab, used to keep browsing in diff view. */
     activeCheckpointPaths?: string[]
+    /**
+     * Paths currently in a merge/rebase conflict. When non-empty, a "Conflicts"
+     * filter button appears below "Last turn"; toggling it reveals only the
+     * conflicted files so the user can resolve them one by one.
+     */
+    conflictPaths?: string[]
+    /** Whether the Conflicts filter is active (shared with the git panel routing). */
+    conflictsOnly?: boolean
+    onToggleConflicts?: () => void
     onFileSelect?: (path: string) => void
   }
 
@@ -80,6 +90,9 @@
     lastTurnPaths,
     activeCheckpointId,
     activeCheckpointPaths = [],
+    conflictPaths = [],
+    conflictsOnly = false,
+    onToggleConflicts,
     onFileSelect = undefined
   }: Props = $props()
   let filterQuery = $state('')
@@ -127,6 +140,7 @@
    *  cleared on a macrotask so external reveals still auto-scroll. */
   let suppressRevealScroll = false
   const lastTurnPathSet = $derived(new Set(lastTurnPaths))
+  const conflictPathSet = $derived(new Set(conflictPaths))
 
   /** Flatten the expanded tree into fixed-height display rows. Keeping the full
    *  model in memory is cheap; the virtual slice below limits component and DOM
@@ -270,6 +284,11 @@
   function toggleLastTurnFilter(): void {
     lastTurnOnly = !lastTurnOnly
     autoFiltered = false
+    clearCollapsedOverrides()
+  }
+
+  function toggleConflictsFilter(): void {
+    onToggleConflicts?.()
     clearCollapsedOverrides()
   }
 
@@ -1074,6 +1093,37 @@
     return lastTurnPaths.some((changedPath) => changedPath.startsWith(prefix))
   }
 
+  function directoryContainsConflictFile(path: string): boolean {
+    const prefix = path ? `${path}/` : ''
+    return conflictPaths.some((conflictedPath) => conflictedPath.startsWith(prefix))
+  }
+
+  /** Whether an entry survives the active filter session (search + last turn +
+   *  conflicts). Directories survive when any descendant matches. */
+  function matchesActiveFilter(
+    entry: ProjectFileEntry,
+    query: string,
+    queryMatches: Record<string, boolean>
+  ): boolean {
+    const matchesLastTurn =
+      !lastTurnOnly ||
+      (entry.kind === 'file'
+        ? lastTurnPathSet.has(entry.path)
+        : directoryContainsLastTurnFile(entry.path))
+    if (!matchesLastTurn) return false
+    const matchesConflicts =
+      !conflictsOnly ||
+      (entry.kind === 'file'
+        ? conflictPathSet.has(entry.path)
+        : directoryContainsConflictFile(entry.path))
+    if (!matchesConflicts) return false
+    if (!query) return true
+    return (
+      entry.name.toLocaleLowerCase().includes(query) ||
+      (entry.kind === 'directory' && (queryMatches[entry.path] ?? false))
+    )
+  }
+
   /** For every loaded directory, whether any entry in its subtree matches the
    *  active filter. Computed once bottom-up (deepest folders first, so a
    *  parent's result reuses its children's) per filter change instead of being
@@ -1090,43 +1140,15 @@
     )
     for (const directory of directories) {
       const children = loaded[directory] ?? []
-      const anyMatch = children.some((entry) => {
-        const matchesTurn =
-          !lastTurnOnly ||
-          (entry.kind === 'file'
-            ? lastTurnPathSet.has(entry.path)
-            : directoryContainsLastTurnFile(entry.path))
-        if (!matchesTurn) return false
-        return (
-          entry.name.toLocaleLowerCase().includes(query) ||
-          (entry.kind === 'directory' && (matches[entry.path] ?? false))
-        )
-      })
-      matches[directory] = anyMatch
+      matches[directory] = children.some((entry) => matchesActiveFilter(entry, query, matches))
     }
     return matches
   })
 
-  function directoryMatchesQuery(path: string): boolean {
-    return filterMatchesByDirectory[path] ?? false
-  }
-
   function visibleEntries(directory: string): ProjectFileEntry[] {
     const query = filterQuery.trim().toLocaleLowerCase()
     const entries = projectState.entriesByDirectory[directory] ?? []
-    return entries.filter((entry) => {
-      const matchesTurn =
-        !lastTurnOnly ||
-        (entry.kind === 'file'
-          ? lastTurnPathSet.has(entry.path)
-          : directoryContainsLastTurnFile(entry.path))
-      if (!matchesTurn) return false
-      if (!query) return true
-      return (
-        entry.name.toLocaleLowerCase().includes(query) ||
-        (entry.kind === 'directory' && directoryMatchesQuery(entry.path))
-      )
-    })
+    return entries.filter((entry) => matchesActiveFilter(entry, query, filterMatchesByDirectory))
   }
 
   function shouldRenderDirectory(path: string): boolean {
@@ -1135,16 +1157,17 @@
     if (collapsedOverrides.has(path)) return false
     if (projectState.expandedDirectories[path]) return true
     if (lastTurnOnly && directoryContainsLastTurnFile(path)) return true
+    if (conflictsOnly && directoryContainsConflictFile(path)) return true
     // Search matching controls which directory rows are visible. The search
     // effect already expands and loads every ancestor of each result, so a
     // matching but collapsed directory must not render its descendants.
     return false
   }
 
-  async function loadLastTurnDirectories(paths: string[]): Promise<void> {
+  async function loadAncestorDirectories(paths: string[]): Promise<void> {
     const directories = new SvelteSet<string>()
-    for (const path of paths) {
-      const segments = path.split('/')
+    for (const entry of paths) {
+      const segments = entry.split('/')
       segments.pop()
       for (let index = 0; index < segments.length; index += 1) {
         directories.add(segments.slice(0, index + 1).join('/'))
@@ -1159,7 +1182,12 @@
 
   $effect(() => {
     if (!lastTurnOnly) return
-    void loadLastTurnDirectories([...lastTurnPaths])
+    void loadAncestorDirectories([...lastTurnPaths])
+  })
+
+  $effect(() => {
+    if (!conflictsOnly || conflictPaths.length === 0) return
+    void loadAncestorDirectories([...conflictPaths])
   })
 
   $effect(() => {
@@ -1448,6 +1476,25 @@
       <span class="flex-1 text-left">Last turn</span>
       <span class="tabular-nums text-dimmed">{lastTurnPaths.length}</span>
     </button>
+    {#if conflictPaths.length > 0 || conflictsOnly}
+      <button
+        type="button"
+        class={[
+          'mt-1.5 flex h-7 w-full items-center gap-1.5 rounded border px-2 text-[10px] font-medium transition-colors',
+          conflictsOnly
+            ? 'border-warning/40 bg-warning/10 text-warning'
+            : 'border-border text-muted hover:bg-elevated hover:text-foreground'
+        ]}
+        aria-label="Filter files that need conflict resolution"
+        aria-pressed={conflictsOnly}
+        title="Show only files that still need conflict resolution"
+        onclick={toggleConflictsFilter}
+      >
+        <GitMerge size={12} />
+        <span class="flex-1 text-left">Conflicts</span>
+        <span class="tabular-nums text-dimmed">{conflictPaths.length}</span>
+      </button>
+    {/if}
   </div>
 
   <ProjectFileContextMenu
@@ -1490,7 +1537,11 @@
         <p class="px-3 py-3 text-[11px] text-dimmed">This project directory is empty.</p>
       {:else if visibleEntries('').length === 0 && !inlineEdit}
         <p class="px-3 py-3 text-[11px] text-dimmed">
-          {lastTurnOnly ? 'No changed files match this filter.' : 'No files match this filter.'}
+          {conflictsOnly
+            ? 'No conflicted files match this filter.'
+            : lastTurnOnly
+              ? 'No changed files match this filter.'
+              : 'No files match this filter.'}
         </p>
       {:else}
         <div class="relative w-full" style:height={`${virtualTree.total}px`}>

@@ -16,6 +16,22 @@ import type {
 /** Callback invoked whenever the harness emits a streaming event. */
 export type AgentEventCallback = (event: AgentEvent) => void
 
+/**
+ * A provider kept an interactive question after the turn process that owned it
+ * exited. The chat engine can recover by resuming the persisted session with
+ * the user's decision instead of trying to write to a closed input stream.
+ */
+export class InactiveQuestionTurnError extends Error {
+  constructor(
+    readonly sessionId: string,
+    readonly requestId: string,
+    harnessName: string
+  ) {
+    super(`The ${harnessName} turn ended while question ${requestId} was awaiting a response`)
+    this.name = 'InactiveQuestionTurnError'
+  }
+}
+
 /** Features a harness can reliably provide to CodeInOven. */
 export interface HarnessCapabilities {
   /** Truthful process topology used for app-wide host and RAM policy. */
@@ -49,8 +65,9 @@ export interface HarnessCapabilities {
   /**
    * The harness schedules and performs its own provider retry after a reset
    * (it emits a `waiting` session status with `retryAt` and resumes the turn
-   * itself). Harnesses without this need the app to auto-resume threads whose
-   * turn ended in a quota/rate-limit error with a reset time.
+   * itself). The app records every harness's reset wait in the retry scheduler
+   * so it survives an app restart; harnesses that resume their own turns simply
+   * clear that record when they resume (`session.status` `working`).
    */
   scheduledRetry?: boolean
 }
@@ -171,6 +188,14 @@ export interface SendPromptOptions {
   attachments: PromptAttachment[]
   /** Enforce a non-mutating harness sandbox for temporary inspection chats. */
   readOnly?: boolean
+  /**
+   * Lean app-managed opencode agent name (e.g. `cio-chat`) for trimmed
+   * lightweight modes. Non-opencode drivers ignore it; the opencode driver
+   * emits it in the prompt body so the harness prunes denied tool/skill
+   * schemas server-side. Omitted for engineering/implement modes, which keep
+   * the full built-in opencode experience.
+   */
+  agent?: string
   /** Injected system prompt when Engineering is enabled. */
   systemPrompt?: string
   /** Exact harness tool IDs allowed for this turn; omitted to use harness defaults. */
@@ -335,7 +360,13 @@ export interface HarnessDriver {
   activateAccount?(projectPath: string, accountId: string): Promise<void>
 
   /** Execute a slash command within a session. */
-  runCommand(projectPath: string, sessionId: string, command: string, args: string): Promise<void>
+  runCommand(
+    projectPath: string,
+    sessionId: string,
+    command: HarnessCommand,
+    args: string,
+    settings: ThreadSettings
+  ): Promise<void>
 
   /** Compact the conversation context when supported by the harness. */
   compactSession?(projectPath: string, sessionId: string, settings: ThreadSettings): Promise<void>

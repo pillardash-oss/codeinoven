@@ -56,6 +56,7 @@ export interface ProjectFilesState {
   explorerWidth: number
   revealedPath: string | null
   focusRequest: number
+  fullscreenRequest: number
   selectedPaths: string[]
   selectionAnchor: string | null
   loadingPaths: Record<string, boolean>
@@ -86,6 +87,7 @@ export function createProjectFilesState(projectId: string): ProjectFilesState {
     explorerWidth: explorer.width,
     revealedPath: explorer.revealedPath,
     focusRequest: 0,
+    fullscreenRequest: 0,
     selectedPaths: [...explorer.selectedPaths],
     selectionAnchor: null,
     loadingPaths: {},
@@ -734,6 +736,10 @@ class ProjectFilesWorkspace {
     const state = this.ensureState(projectId)
     const tab = state.tabs.find((candidate) => candidate.id === tabId)
     if (tab) tab.view = view
+  }
+
+  requestFullscreen(projectId: string): void {
+    this.ensureState(projectId).fullscreenRequest += 1
   }
 
   updateDraft(projectId: string, path: string, content: string): void {

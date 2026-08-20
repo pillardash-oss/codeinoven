@@ -5,6 +5,7 @@ import { existsSync, readFileSync } from 'node:fs'
 import { lstat, readFile, writeFile, mkdir, rename, rm, stat } from 'fs/promises'
 import { release } from 'os'
 import { randomUUID } from 'node:crypto'
+import { spawn } from 'node:child_process'
 import { basename, dirname, extname, isAbsolute, join, resolve } from 'path'
 import { APP_NAME, APP_SLUG } from '../../lib/brand'
 import { modelKey } from '../../lib/model-keys'
@@ -15,6 +16,7 @@ import { EditorService } from '../editor/editor-service'
 import { RepositoryService } from '../git/repository-service'
 import { GitService } from '../git/git-service'
 import { SecretVault } from '../storage/secret-vault'
+import { UtilityRegistryService } from '../utilities/utility-registry-service'
 import { GitHubAuthService } from '../git/github-auth-service'
 import { GitHubProvider, ProviderHttpError } from '../providers/github-provider'
 import { isDevelopmentEnvironment, validateBaseUrl } from '../providers/base-url'
@@ -34,6 +36,7 @@ import {
   validateMemoryExportKind
 } from '../chat/memory-service'
 import type { HarnessManifestService } from '../agents/harness-manifest-service'
+import { listHarnesses } from '../agents/harness-registry'
 import { SpecContextService } from '../chat/spec-context-service'
 import type { UpdaterService } from '../notifications/updater-service'
 import type { ChatEngine } from '../chat/chat-engine'
@@ -59,6 +62,7 @@ import {
   validateBranchName,
   validateChecklistItemStatus,
   validateCommitMessage,
+  validateConflictResolutionContent,
   validateCreateProjectInput,
   validateCreateThreadInput,
   validateEntityId,
@@ -156,6 +160,7 @@ import type {
   EditorId,
   LocalProfileAnalyticsRange,
   MemoryEntry,
+  SkillMarketDetail,
   SpecContextReference,
   SpecSectionId,
   SpecValidationCode,
@@ -167,7 +172,8 @@ import type {
   CloudDeploymentProjectProviderAccounts,
   CloudDeploymentProviderAccount,
   CloudDeploymentProviderKind,
-  CloudDeploymentStatus
+  CloudDeploymentStatus,
+  UtilityDefinitionInput
 } from '../../lib/types'
 import { CLOUD_DEPLOYMENT_PROVIDER_KIND_VALUES, INBOX_PROJECT_ID } from '../../lib/types'
 
@@ -209,6 +215,286 @@ function githubPermissionRequired(
       'Install the GitHub App on this repository or approve its pending permission update.',
     settingsUrl: GITHUB_APP_INSTALL_URL
   }
+}
+
+/** Run the industry-standard Skills CLI through Bun without a shell. */
+function installSkillWithBun(args: string[], cwd: string): Promise<string> {
+  return new Promise((resolveInstall, rejectInstall) => {
+    const child = spawn('bun', ['x', '--bun', 'skills', ...args], {
+      cwd,
+      env: { ...process.env, DISABLE_TELEMETRY: '1', DO_NOT_TRACK: '1' },
+      stdio: ['ignore', 'pipe', 'pipe']
+    })
+    let output = ''
+    const append = (chunk: Buffer): void => {
+      output = `${output}${chunk.toString('utf-8')}`.slice(-200_000)
+    }
+    child.stdout.on('data', append)
+    child.stderr.on('data', append)
+    const timeout = setTimeout(() => child.kill('SIGTERM'), 180_000)
+    child.once('error', (error) => {
+      clearTimeout(timeout)
+      rejectInstall(error)
+    })
+    child.once('close', (code) => {
+      clearTimeout(timeout)
+      if (code === 0) resolveInstall(output.trim())
+      else rejectInstall(new Error(output.trim() || `Skills CLI exited with code ${code ?? -1}`))
+    })
+  })
+}
+
+const SKILL_MARKET_VIEWS = new Set(['all-time', 'trending', 'hot'])
+
+interface EmbeddedSkillMarketEntry {
+  source: string
+  skillId: string
+  name: string
+  installs: number
+  weeklyInstalls?: number[]
+  installsYesterday?: number
+  change?: number
+  isOfficial?: boolean
+}
+
+function marketEntry(rawEntry: unknown): EmbeddedSkillMarketEntry | null {
+  if (!isRecord(rawEntry)) return null
+  const source = rawEntry['source']
+  const skillId = rawEntry['skillId']
+  const name = rawEntry['name']
+  const installs = rawEntry['installs']
+  if (
+    typeof source !== 'string' ||
+    typeof skillId !== 'string' ||
+    typeof name !== 'string' ||
+    typeof installs !== 'number'
+  ) {
+    return null
+  }
+  const weeklyInstalls = Array.isArray(rawEntry['weeklyInstalls'])
+    ? rawEntry['weeklyInstalls'].filter((value): value is number => typeof value === 'number')
+    : undefined
+  return {
+    source,
+    skillId,
+    name,
+    installs,
+    ...(weeklyInstalls?.length ? { weeklyInstalls } : {}),
+    ...(typeof rawEntry['installsYesterday'] === 'number'
+      ? { installsYesterday: rawEntry['installsYesterday'] }
+      : {}),
+    ...(typeof rawEntry['change'] === 'number' ? { change: rawEntry['change'] } : {}),
+    ...(rawEntry['isOfficial'] === true ? { isOfficial: true } : {})
+  }
+}
+
+function publicMarketEntry(entry: EmbeddedSkillMarketEntry) {
+  const id = `${entry.source}/${entry.skillId}`
+  return { id, ...entry, url: `https://www.skills.sh/${id}` }
+}
+
+async function fetchSkillMarketPage(pathname: string): Promise<string> {
+  const response = await fetch(`https://www.skills.sh${pathname}`, {
+    headers: { Accept: 'text/html', 'User-Agent': `${APP_NAME}/desktop` },
+    signal: AbortSignal.timeout(20_000)
+  })
+  if (!response.ok) throw new Error(`Skills market request failed (${response.status})`)
+  return response.text()
+}
+
+function embeddedLeaderboard(html: string): EmbeddedSkillMarketEntry[] {
+  const marker = 'initialSkills\\":'
+  const start = html.indexOf(marker)
+  const end = html.indexOf('],\\"totalSkills', start)
+  if (start < 0 || end < 0) throw new Error('Skills market returned an invalid leaderboard')
+  const encoded = html.slice(start + marker.length, end + 1)
+  const parsed: unknown = JSON.parse(encoded.replaceAll('\\"', '"').replaceAll('\\\\', '\\'))
+  if (!Array.isArray(parsed)) throw new Error('Skills market returned an invalid leaderboard')
+  return parsed.flatMap((entry) => {
+    const parsedEntry = marketEntry(entry)
+    return parsedEntry ? [parsedEntry] : []
+  })
+}
+
+function jsonLdSkill(html: string): { description: string; installs: number } | null {
+  for (const match of html.matchAll(/<script type="application\/ld\+json">([^<]+)<\/script>/gu)) {
+    try {
+      const value: unknown = JSON.parse(match[1] ?? '')
+      if (
+        isRecord(value) &&
+        value['@type'] === 'SoftwareApplication' &&
+        typeof value['description'] === 'string' &&
+        isRecord(value['interactionStatistic']) &&
+        typeof value['interactionStatistic']['userInteractionCount'] === 'number'
+      ) {
+        return {
+          description: value['description'],
+          installs: value['interactionStatistic']['userInteractionCount']
+        }
+      }
+    } catch {
+      // Ignore unrelated malformed structured data and continue looking.
+    }
+  }
+  return null
+}
+
+function skillDetailMetadata(html: string): {
+  firstSeen: string | null
+  audits: Array<{ name: string; status: 'pass' | 'warn' | 'fail' | 'unknown' }>
+} {
+  const firstSeen =
+    html.match(/children\\":\\"First Seen\\"[\s\S]{0,600}?children\\":\\"([^"\\]+)\\"/u)?.[1] ??
+    null
+  const auditStart = html.indexOf('Security Audits')
+  const auditText = auditStart >= 0 ? html.slice(auditStart, auditStart + 12_000) : ''
+  const audits: Array<{ name: string; status: 'pass' | 'warn' | 'fail' | 'unknown' }> = []
+  for (const match of auditText.matchAll(
+    /text-foreground truncate">([^<]+)<\/span>[\s\S]{0,600}?>(Pass|Warn|Fail)<\/span>/gu
+  )) {
+    const name = match[1]
+    const rawStatus = match[2]?.toLowerCase()
+    if (!name || (rawStatus !== 'pass' && rawStatus !== 'warn' && rawStatus !== 'fail')) continue
+    if (!audits.some((audit) => audit.name === name)) audits.push({ name, status: rawStatus })
+  }
+  for (const match of auditText.matchAll(
+    /children\\":\\"([^"\\]+)\\"[\s\S]{0,500}?children\\":\\"(Pass|Warn|Fail)\\"/gu
+  )) {
+    const name = match[1]
+    const rawStatus = match[2]?.toLowerCase()
+    if (!name || (rawStatus !== 'pass' && rawStatus !== 'warn' && rawStatus !== 'fail')) continue
+    if (!audits.some((audit) => audit.name === name)) audits.push({ name, status: rawStatus })
+  }
+  return { firstSeen, audits }
+}
+
+async function githubSkillMetadata(
+  source: string,
+  skillId: string
+): Promise<{ repositoryUrl: string; stars: number | null; markdown: string }> {
+  const repositoryUrl = `https://github.com/${source}`
+  const headers = { Accept: 'application/vnd.github+json', 'User-Agent': `${APP_NAME}/desktop` }
+  try {
+    const [repositoryResponse, treeResponse] = await Promise.all([
+      fetch(`https://api.github.com/repos/${source}`, {
+        headers,
+        signal: AbortSignal.timeout(20_000)
+      }),
+      fetch(`https://api.github.com/repos/${source}/git/trees/HEAD?recursive=1`, {
+        headers,
+        signal: AbortSignal.timeout(20_000)
+      })
+    ])
+    const repositoryPayload: unknown = repositoryResponse.ok
+      ? await repositoryResponse.json()
+      : null
+    const treePayload: unknown = treeResponse.ok ? await treeResponse.json() : null
+    const stars =
+      isRecord(repositoryPayload) && typeof repositoryPayload['stargazers_count'] === 'number'
+        ? repositoryPayload['stargazers_count']
+        : null
+    const defaultBranch =
+      isRecord(repositoryPayload) && typeof repositoryPayload['default_branch'] === 'string'
+        ? repositoryPayload['default_branch']
+        : 'HEAD'
+    const tree =
+      isRecord(treePayload) && Array.isArray(treePayload['tree']) ? treePayload['tree'] : []
+    const skillPath = tree
+      .flatMap((entry) =>
+        isRecord(entry) && typeof entry['path'] === 'string' ? [entry['path']] : []
+      )
+      .find((path) => path === `${skillId}/SKILL.md` || path.endsWith(`/${skillId}/SKILL.md`))
+    let markdown = ''
+    if (skillPath) {
+      const rawResponse = await fetch(
+        `https://raw.githubusercontent.com/${source}/${defaultBranch}/${skillPath}`,
+        { headers: { 'User-Agent': `${APP_NAME}/desktop` }, signal: AbortSignal.timeout(20_000) }
+      )
+      if (rawResponse.ok) markdown = await rawResponse.text()
+    }
+    return { repositoryUrl, stars, markdown }
+  } catch {
+    return { repositoryUrl, stars: null, markdown: '' }
+  }
+}
+
+const SKILL_MARKET_DETAIL_TTL_MS = 15 * 60 * 1_000
+const SKILL_MARKET_DETAIL_CACHE_LIMIT = 100
+const skillMarketDetailCache = new Map<string, { detail: SkillMarketDetail; fetchedAt: number }>()
+const pendingSkillMarketDetails = new Map<string, Promise<SkillMarketDetail>>()
+
+function skillMarketIdentity(rawId: unknown): {
+  id: string
+  source: string
+  skillId: string
+  segments: string[]
+} {
+  const id = validateBoundedString(rawId, 'Skill market ID', 3, 500)
+  const segments = id.split('/').filter(Boolean)
+  if (segments.length < 2 || segments.some((segment) => !/^[A-Za-z0-9_.-]+$/u.test(segment))) {
+    throw new TypeError('Skill market ID is invalid')
+  }
+  return {
+    id,
+    source: segments.slice(0, -1).join('/'),
+    skillId: segments.at(-1)!,
+    segments
+  }
+}
+
+async function loadSkillMarketDetail(rawId: unknown): Promise<SkillMarketDetail> {
+  const identity = skillMarketIdentity(rawId)
+  const cached = skillMarketDetailCache.get(identity.id)
+  if (cached && Date.now() - cached.fetchedAt < SKILL_MARKET_DETAIL_TTL_MS) {
+    return structuredClone(cached.detail)
+  }
+  const pending = pendingSkillMarketDetails.get(identity.id)
+  if (pending) return structuredClone(await pending)
+
+  const request = (async (): Promise<SkillMarketDetail> => {
+    const githubSource = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/u.test(identity.source)
+    const [html, github] = await Promise.all([
+      fetchSkillMarketPage(`/${identity.segments.map(encodeURIComponent).join('/')}`),
+      githubSource
+        ? githubSkillMetadata(identity.source, identity.skillId)
+        : Promise.resolve({ repositoryUrl: null, stars: null, markdown: '' })
+    ])
+    const structured = jsonLdSkill(html)
+    if (!structured) throw new Error('Skills market returned an invalid skill page')
+    const metadata = skillDetailMetadata(html)
+    const detail: SkillMarketDetail = {
+      ...publicMarketEntry({
+        source: identity.source,
+        skillId: identity.skillId,
+        name: identity.skillId,
+        installs: structured.installs
+      }),
+      description: structured.description,
+      repositoryUrl: github.repositoryUrl,
+      githubStars: github.stars,
+      firstSeen: metadata.firstSeen,
+      audits: metadata.audits,
+      skillMarkdown: github.markdown
+    }
+    if (
+      !skillMarketDetailCache.has(identity.id) &&
+      skillMarketDetailCache.size >= SKILL_MARKET_DETAIL_CACHE_LIMIT
+    ) {
+      const oldestId = skillMarketDetailCache.keys().next().value
+      if (oldestId) skillMarketDetailCache.delete(oldestId)
+    }
+    skillMarketDetailCache.set(identity.id, { detail, fetchedAt: Date.now() })
+    return detail
+  })().finally(() => pendingSkillMarketDetails.delete(identity.id))
+  pendingSkillMarketDetails.set(identity.id, request)
+  return structuredClone(await request)
+}
+
+function selectedIds(value: unknown, label: string): string[] {
+  if (!Array.isArray(value) || value.length === 0 || value.length > 50) {
+    throw new TypeError(`${label} must contain between 1 and 50 selections`)
+  }
+  return [...new Set(value.map((item) => validateEntityId(item, label.replace(/s$/u, ''), 256)))]
 }
 
 /** Resolve the native drag icon. Prefer the dragged file's own Finder icon so
@@ -305,7 +591,8 @@ const CONFIG_PATCH_FIELDS = new Set([
   'autoRetryAfterReset',
   'resumeWorkOnRestart',
   'defaultMergeMethod',
-  'maxDiffLines'
+  'maxDiffLines',
+  'openLocalhostInCioBrowser'
 ])
 const SPEC_SECTIONS = new Set<SpecSectionId>([
   'problem',
@@ -1017,6 +1304,13 @@ export function validateAppConfigPatch(value: unknown): AppConfigPatch {
       throw new TypeError('Max diff lines must be an integer between 10 and 5000')
     }
     patch.maxDiffLines = value.maxDiffLines
+  }
+
+  if ('openLocalhostInCioBrowser' in value) {
+    if (typeof value.openLocalhostInCioBrowser !== 'boolean') {
+      throw new TypeError('Open localhost in CIO browser must be a boolean')
+    }
+    patch.openLocalhostInCioBrowser = value.openLocalhostInCioBrowser
   }
 
   if ('slashCommandMode' in value) {
@@ -3033,6 +3327,14 @@ export function registerIpcHandlers(
     }
   })
 
+  privileged('storage:openDataDirectory', async () => {
+    const error = await shell.openPath(storage.resolve(''))
+    if (!error) return true
+
+    Logger.error('Failed to open the data directory:', error)
+    return false
+  })
+
   // Read a file from disk and return it as a data URL — used for local previews
   // without persisting anything to project storage. Only scoped paths are read.
   const MIME_MAP: Record<string, string> = {
@@ -3404,6 +3706,39 @@ export function registerIpcHandlers(
         await resolveProjectPath(validateEntityId(projectId, 'Project ID')),
         validateGitRelativePath(relativePath),
         validateBoolean(staged, 'Staged')
+      )
+  )
+  ipcMain.handle('git:analyzeConflict', async (_, projectId: unknown, relativePath: unknown) =>
+    gitService.analyzeConflict(
+      await resolveProjectPath(validateEntityId(projectId, 'Project ID')),
+      validateGitRelativePath(relativePath)
+    )
+  )
+  ipcMain.handle(
+    'git:prepareConflictWorkFile',
+    async (_, projectId: unknown, relativePath: unknown) =>
+      gitService.prepareConflictWorkFile(
+        await resolveProjectPath(validateEntityId(projectId, 'Project ID')),
+        validateGitRelativePath(relativePath)
+      )
+  )
+  ipcMain.handle(
+    'git:saveConflictDraft',
+    async (_, projectId: unknown, relativePath: unknown, content: unknown, stateJson: unknown) =>
+      gitService.saveConflictDraft(
+        await resolveProjectPath(validateEntityId(projectId, 'Project ID')),
+        validateGitRelativePath(relativePath),
+        validateConflictResolutionContent(content),
+        validateConflictResolutionContent(stateJson)
+      )
+  )
+  ipcMain.handle(
+    'git:saveConflictResolution',
+    async (_, projectId: unknown, relativePath: unknown, content: unknown) =>
+      gitService.saveConflictResolution(
+        await resolveProjectPath(validateEntityId(projectId, 'Project ID')),
+        validateGitRelativePath(relativePath),
+        validateConflictResolutionContent(content)
       )
   )
   ipcMain.handle('git:stage', async (_, projectId: unknown, paths: unknown) =>
@@ -4659,6 +4994,200 @@ export function registerIpcHandlers(
     }
   })
 
+  ipcMain.handle('utilities:setupWithAgent', async (_, ...args: unknown[]) => {
+    if (!chatEngine?.runVirtualTask) throw new Error('The utility setup agent is unavailable')
+    const projectId = validateEntityId(args[0], 'Project ID')
+    const taskId = validateEntityId(args[1], 'Virtual task ID')
+    const settings = validateThreadSettings({
+      ...validateThreadSettings(args[2]),
+      permissionLevel: 'auto_review',
+      engineeringMode: false,
+      assignmentMode: false,
+      loopMode: false
+    })
+    const request = validateBoundedString(args[3], 'Utility setup request', 1, 100_000)
+    await resolveProjectPath(projectId)
+    const registry = new UtilityRegistryService(storage)
+    const beforeIds = new Set((await registry.list()).map((utility) => utility.id))
+    const response = await chatEngine.runVirtualTask(
+      projectId,
+      taskId,
+      settings,
+      'Set up utility',
+      request,
+      { utilityManagement: true }
+    )
+    const installed = (await registry.list()).filter((utility) => !beforeIds.has(utility.id))
+    const summary = response.parts
+      .flatMap((part) => (part.type === 'text' && part.phase !== 'commentary' ? [part.text] : []))
+      .join('\n\n')
+      .trim()
+    if (installed.length === 0) {
+      throw new Error(summary || 'The setup agent did not install a utility')
+    }
+    return { taskId, summary, installed }
+  })
+
+  ipcMain.handle('utilities:searchSkillMarket', async (_, rawQuery: unknown) => {
+    const query = validateBoundedString(rawQuery, 'Skill search query', 2, 200)
+    const url = new URL('https://www.skills.sh/api/search')
+    url.searchParams.set('q', query)
+    url.searchParams.set('limit', '50')
+    const response = await fetch(url, {
+      headers: { Accept: 'application/json', 'User-Agent': `${APP_NAME}/desktop` },
+      signal: AbortSignal.timeout(20_000)
+    })
+    if (!response.ok) throw new Error(`Skills market search failed (${response.status})`)
+    const payload: unknown = await response.json()
+    if (!isRecord(payload) || !Array.isArray(payload['skills'])) {
+      throw new Error('Skills market returned an invalid response')
+    }
+    const entries = payload['skills'].flatMap((rawEntry) => {
+      if (!isRecord(rawEntry)) return []
+      const id = rawEntry['id']
+      const skillId = rawEntry['skillId']
+      const name = rawEntry['name']
+      const source = rawEntry['source']
+      const installs = rawEntry['installs']
+      if (
+        typeof id !== 'string' ||
+        typeof skillId !== 'string' ||
+        typeof name !== 'string' ||
+        typeof source !== 'string' ||
+        typeof installs !== 'number'
+      ) {
+        return []
+      }
+      return [
+        {
+          id,
+          skillId,
+          name,
+          source,
+          installs,
+          url: `https://www.skills.sh/${id}`
+        }
+      ]
+    })
+    return { query, entries }
+  })
+
+  ipcMain.handle('utilities:listSkillMarket', async (_, rawView: unknown) => {
+    if (typeof rawView !== 'string' || !SKILL_MARKET_VIEWS.has(rawView)) {
+      throw new TypeError('Skill market view is invalid')
+    }
+    const pathname = rawView === 'all-time' ? '/' : `/${rawView}`
+    const entries = embeddedLeaderboard(await fetchSkillMarketPage(pathname))
+      .slice(0, 100)
+      .map(publicMarketEntry)
+    return { view: rawView as 'all-time' | 'trending' | 'hot', entries }
+  })
+
+  ipcMain.handle('utilities:getSkillMarketDetail', (_, rawId: unknown) =>
+    loadSkillMarketDetail(rawId)
+  )
+
+  ipcMain.handle('utilities:installMarketSkill', async (_, rawRequest: unknown) => {
+    if (!isRecord(rawRequest)) throw new TypeError('Skill install request must be an object')
+    const source = validateBoundedString(rawRequest['source'], 'Skill source', 3, 300)
+    const skillId = validateEntityId(rawRequest['skillId'], 'Skill ID', 200)
+    const githubSource = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/u.test(source)
+    const wellKnownSource = /^(?:[A-Za-z0-9-]+\.)+[A-Za-z]{2,}$/u.test(source)
+    if (!githubSource && !wellKnownSource) throw new TypeError('Skill source is invalid')
+    const installSource = githubSource ? `https://github.com/${source}` : `https://${source}`
+    const manager = rawRequest['manager']
+    if (manager !== 'cio' && manager !== 'native') {
+      throw new TypeError('Select who should manage this skill')
+    }
+    const scope = rawRequest['scope']
+    if (!isRecord(scope)) throw new TypeError('Skill install scope must be an object')
+    const scopeKind = scope['kind']
+    if (scopeKind !== 'global' && scopeKind !== 'projects') {
+      throw new TypeError('Select global or project installation')
+    }
+    const projectIds =
+      scopeKind === 'projects' ? selectedIds(scope['projectIds'], 'Project IDs') : []
+    const projectPaths = new Map<string, string>()
+    for (const projectId of projectIds) {
+      projectPaths.set(projectId, await resolveProjectPath(projectId))
+    }
+
+    if (manager === 'cio') {
+      const activation = rawRequest['activation']
+      if (activation !== 'always' && activation !== 'on_demand') {
+        throw new TypeError('Select always available or on-demand activation')
+      }
+      const detail = await loadSkillMarketDetail(`${source}/${skillId}`)
+      if (!detail.skillMarkdown.trim()) {
+        throw new Error('This source does not expose a readable SKILL.md for CodeInOven to manage')
+      }
+      const scopes =
+        scopeKind === 'global'
+          ? [{ level: 'global' } as const]
+          : projectIds.map((projectId) => ({ level: 'project' as const, projectId }))
+      const definitions: UtilityDefinitionInput<'skill'>[] = scopes.map((utilityScope) => ({
+        kind: 'skill',
+        name: detail.name,
+        description: detail.description,
+        enabled: true,
+        activation,
+        scope: utilityScope,
+        config: { instructions: detail.skillMarkdown },
+        harnessBindings: [
+          {
+            harnessId: '*',
+            strategy: 'skill',
+            transportName: skillId
+          }
+        ]
+      }))
+      const registry = new UtilityRegistryService(storage)
+      await registry.createMany(definitions)
+      return `Added ${definitions.length} CodeInOven-managed skill${definitions.length === 1 ? '' : 's'}`
+    }
+
+    const nativeTarget = rawRequest['nativeTarget']
+    if (!isRecord(nativeTarget)) throw new TypeError('Select a native skill directory')
+    const knownHarnesses = new Set(listHarnesses().map((harness) => harness.id))
+    const targetKind = nativeTarget['kind']
+    let agentTargets: string[]
+    if (targetKind === 'shared') {
+      agentTargets = ['*']
+    } else if (targetKind === 'harnesses') {
+      agentTargets = selectedIds(nativeTarget['harnessIds'], 'Harness IDs')
+      if (agentTargets.some((harnessId) => !knownHarnesses.has(harnessId))) {
+        throw new TypeError('Select only supported harnesses')
+      }
+    } else {
+      throw new TypeError('Native skill directory is invalid')
+    }
+    const destinations =
+      scopeKind === 'global'
+        ? [app.getPath('home')]
+        : projectIds.map((projectId) => projectPaths.get(projectId)!)
+    const outputs: string[] = []
+    for (const directory of destinations) {
+      for (const agentTarget of agentTargets) {
+        outputs.push(
+          await installSkillWithBun(
+            [
+              'add',
+              installSource,
+              '--skill',
+              skillId,
+              '--agent',
+              agentTarget,
+              '-y',
+              ...(scopeKind === 'global' ? ['--global'] : [])
+            ],
+            directory
+          )
+        )
+      }
+    }
+    return outputs.filter(Boolean).at(-1) ?? `Installed to ${destinations.length} destination(s)`
+  })
+
   ipcMain.handle('github:authStatus', () => githubAuthService.status())
   ipcMain.handle('github:startDeviceFlow', () => githubAuthService.startDeviceFlow())
   ipcMain.handle('github:poll', async (_, deviceCode: unknown) =>
@@ -4695,6 +5224,20 @@ export function registerIpcHandlers(
       const safeProjectId = validateEntityId(projectId, 'Project ID')
       const safeThreadId = validateEntityId(threadId, 'Thread ID')
       await checkpointManager.rollbackPaths(
+        safeProjectId,
+        safeThreadId,
+        validateEntityId(checkpointId, 'Checkpoint ID'),
+        validateStringArray(paths, 'Checkpoint paths')
+      )
+      return checkpointManager.listSummaries(safeProjectId, safeThreadId)
+    }
+  )
+  ipcMain.handle(
+    'checkpoint:redoPaths',
+    async (_, projectId: unknown, threadId: unknown, checkpointId: unknown, paths: unknown) => {
+      const safeProjectId = validateEntityId(projectId, 'Project ID')
+      const safeThreadId = validateEntityId(threadId, 'Thread ID')
+      await checkpointManager.redoPaths(
         safeProjectId,
         safeThreadId,
         validateEntityId(checkpointId, 'Checkpoint ID'),
@@ -4999,10 +5542,10 @@ export function registerIpcHandlers(
   )
   ipcMain.handle(
     'thread:setContextUsage',
-    (_, projectId: unknown, threadId: unknown, usage: unknown) => {
+    async (_, projectId: unknown, threadId: unknown, usage: unknown) => {
       const parsed = parseThreadContextUsage(usage)
       if (!parsed) throw new TypeError('Thread context usage is malformed')
-      threadManager.setContextUsage(
+      await threadManager.setContextUsage(
         validateEntityId(projectId, 'Project ID'),
         validateEntityId(threadId, 'Thread ID'),
         parsed

@@ -53,6 +53,7 @@
   let hiddenIds = $state<string[]>([])
   let togglingHide = $state(false)
   let notice = $state('')
+  let actionWarning = $state('')
   let actionError = $state('')
 
   let customCount = $derived(
@@ -135,6 +136,7 @@
 
   function openPicker(): void {
     actionError = ''
+    actionWarning = ''
     notice = ''
     step = 'picking'
     if (offered.length === 0) void loadOffered()
@@ -152,6 +154,7 @@
    */
   async function startConnect(provider: OfferedProvider | null): Promise<void> {
     actionError = ''
+    actionWarning = ''
     notice = ''
     try {
       loginHandoff = await invoke('providerAccounts:beginLogin', harness.id, {
@@ -179,12 +182,13 @@
     loginHandoff = null
     selectedProvider = null
     step = pickerLogin ? 'idle' : 'picking'
-    notice =
-      exitCode === 0
-        ? pickerLogin
-          ? 'Sign-in complete. Newly connected providers appear above and their models show up in the model picker.'
-          : `${providerName} connected. Its models will appear in the picker.`
-        : `${providerName} sign-in exited with code ${exitCode}.`
+    if (exitCode === 0) {
+      notice = pickerLogin
+        ? 'Sign-in complete. Newly connected providers appear above and their models show up in the model picker.'
+        : `${providerName} connected. Its models will appear in the picker.`
+    } else {
+      actionWarning = `${providerName} sign-in exited with code ${exitCode}.`
+    }
     await checkAuth()
     await loadOffered()
     // A new connection means new models — drop the stale model-picker cache so
@@ -196,6 +200,7 @@
     if (!disconnectTarget) return
     disconnecting = true
     actionError = ''
+    actionWarning = ''
     try {
       const targetId = disconnectTarget.id
       await invoke('providerAccounts:logout', harness.id, targetId)
@@ -218,6 +223,7 @@
     if (!supportsHide) return
     togglingHide = true
     actionError = ''
+    actionWarning = ''
     try {
       hiddenIds = await invoke('providerAccounts:setHidden', harness.id, providerId, hidden)
     } catch (hideError) {
@@ -401,6 +407,14 @@
       {#if actionError}
         <p class="rounded-lg bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">
           {actionError}
+        </p>
+      {/if}
+      {#if actionWarning}
+        <p
+          class="rounded-lg border border-warning/30 bg-warning/10 px-3 py-2 text-xs text-warning"
+          role="alert"
+        >
+          {actionWarning}
         </p>
       {/if}
       {#if notice}

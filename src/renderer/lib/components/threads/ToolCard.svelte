@@ -153,7 +153,7 @@
 <div class="overflow-hidden rounded-lg border bg-surface">
   <button
     type="button"
-    class="flex w-full items-center gap-2 px-3 py-2 text-left transition-colors hover:bg-elevated"
+    class="flex w-full items-center gap-2 overflow-x-auto overflow-y-hidden px-3 py-2 text-left transition-colors hover:bg-elevated"
     aria-expanded={open}
     title={open ? 'Hide tool details' : 'Show tool details'}
     onclick={() => {

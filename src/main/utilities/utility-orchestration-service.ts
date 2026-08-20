@@ -4,6 +4,7 @@ import type {
   HarnessUtilityBinding,
   ResolvedUtility,
   UtilityDefinition,
+  UtilityDefinitionInput,
   UtilityDefinitionFor,
   UtilityKind,
   PermissionLevel
@@ -11,14 +12,15 @@ import type {
 import { UTILITY_KIND_VALUES } from '../../lib/types'
 import { StorageEngine } from '../storage/storage-engine'
 import { SecretVault } from '../storage/secret-vault'
-import { UtilityRegistryService } from './utility-registry-service'
+import { APP_BROWSER_UTILITY_ID, UtilityRegistryService } from './utility-registry-service'
 import { CuaBridgeService } from './cua-bridge-service'
 import {
   GATEWAY_TOOLS,
   RETRIEVE_MCP_HOST_TOOL_NAME,
   UTILITY_SEARCH_TOOL_NAME,
   UTILITY_ACTIVATE_TOOL_NAME,
-  UTILITY_INVOKE_TOOL_NAME
+  UTILITY_INVOKE_TOOL_NAME,
+  UTILITY_MANAGE_TOOL_NAME
 } from '../../lib/gateway-tools'
 import {
   StdioMcpClient,
@@ -45,7 +47,7 @@ import { instanceRegistry } from '../system/instance-registry'
 
 const BRIDGE_SCRIPT_PATH = 'runtime/utility-gateway/bridge.mjs'
 const RETRIEVE_MCP_HOST_ROUTE = '/retrieve-mcp-host'
-const RETRIEVE_MCP_HOST_SCRIPT_PATH = `runtime/utility-gateway/${RETRIEVE_MCP_HOST_TOOL_NAME}`
+const RETRIEVE_MCP_HOST_SCRIPT_PATH = `runtime/utility-gateway/${RETRIEVE_MCP_HOST_TOOL_NAME}.mjs`
 const MAX_REQUEST_BYTES = 1_000_000
 const CUA_UTILITY_ID = 'codeinoven:cua-driver'
 const UTILITY_SEARCH_STOP_WORDS = new Set([
@@ -76,6 +78,8 @@ export interface UtilityTurnRequest {
   sessionId: string
   nativeCapabilities: string[]
   permissionLevel: PermissionLevel
+  /** Explicit user intent grants the setup-only utility management operation. */
+  allowManagement?: boolean
   budgetContext: UtilityTurnBudgetContext
   attributeReinjectedResult: (attribution: UtilityResultAttribution) => void
 }
@@ -107,6 +111,75 @@ export interface UtilityTurnGateway {
   cleanup(): Promise<void>
 }
 
+export type BrowserUtilityExecutor = (
+  operation: string,
+  input: Record<string, unknown>,
+  context: { projectId: string; threadId: string }
+) => Promise<unknown>
+
+const BROWSER_UTILITY_TOOLS: McpTool[] = [
+  {
+    name: 'open',
+    description: 'Open an http(s) URL in a visible in-app browser tab.',
+    inputSchema: {
+      type: 'object',
+      properties: { url: { type: 'string' } },
+      required: ['url'],
+      additionalProperties: false
+    }
+  },
+  {
+    name: 'snapshot',
+    description: 'Read the current page title, URL, visible text, and interactive elements.',
+    inputSchema: { type: 'object', properties: {}, additionalProperties: false }
+  },
+  {
+    name: 'click',
+    description: 'Click the first page element matching a CSS selector.',
+    inputSchema: {
+      type: 'object',
+      properties: { selector: { type: 'string' } },
+      required: ['selector'],
+      additionalProperties: false
+    }
+  },
+  {
+    name: 'type',
+    description: 'Replace an input, textarea, or editable element value and emit input/change.',
+    inputSchema: {
+      type: 'object',
+      properties: { selector: { type: 'string' }, text: { type: 'string' } },
+      required: ['selector', 'text'],
+      additionalProperties: false
+    }
+  },
+  {
+    name: 'navigate',
+    description: 'Navigate the current in-app browser tab to an http(s) URL.',
+    inputSchema: {
+      type: 'object',
+      properties: { url: { type: 'string' } },
+      required: ['url'],
+      additionalProperties: false
+    }
+  },
+  {
+    name: 'screenshot',
+    description: 'Capture the visible browser page as a PNG data URL.',
+    inputSchema: { type: 'object', properties: {}, additionalProperties: false }
+  },
+  {
+    name: 'reload',
+    description: 'Reload the current page.',
+    inputSchema: { type: 'object', properties: {}, additionalProperties: false }
+  },
+  {
+    name: 'console',
+    description: 'Read console messages and browser runtime errors from the current tab.',
+    inputSchema: { type: 'object', properties: {}, additionalProperties: false }
+  }
+]
+
 interface TurnState {
   id: string
   request: UtilityTurnRequest
@@ -118,6 +191,8 @@ interface TurnState {
   searched: boolean
   /** Session ids created for Cua utilities so cursor state is turn-scoped. */
   cuaSessionIds: Map<string, string>
+  /** Utilities created through the explicit setup-only management capability. */
+  managedUtilities: UtilityDefinition[]
 }
 
 /** Bridge handler for one gateway route: receives state plus the parsed body. */
@@ -132,7 +207,7 @@ export class UtilityOrchestrationService {
   private readonly vault: SecretVault
   private readonly turns = new Map<
     string,
-    { state: TurnState; scriptPath: string; retrieverPath: string; token: string }
+    { state: TurnState; scriptPath: string; token: string }
   >()
   private readonly turnIdsByToken = new Map<string, string>()
   private gatewayServer: Server | null = null
@@ -142,6 +217,7 @@ export class UtilityOrchestrationService {
   private cuaActivityListener:
     ((pid: number, threadId: string, sessionId?: string) => void) | null = null
   private imageDescriptorExecutor: ImageDescriptorExecutor | null = null
+  private browserExecutor: BrowserUtilityExecutor | null = null
   constructor(
     private readonly storage: StorageEngine,
     private readonly cuaBridge = new CuaBridgeService(storage)
@@ -174,6 +250,8 @@ export class UtilityOrchestrationService {
         return (state, input) => this.activate(state, input)
       case UTILITY_INVOKE_TOOL_NAME:
         return (state, input) => this.invoke(state, input)
+      case UTILITY_MANAGE_TOOL_NAME:
+        return (state, input) => this.manage(state, input)
       default:
         return null
     }
@@ -186,6 +264,10 @@ export class UtilityOrchestrationService {
    */
   setImageDescriptorExecutor(executor: ImageDescriptorExecutor | null): void {
     this.imageDescriptorExecutor = executor
+  }
+
+  setBrowserExecutor(executor: BrowserUtilityExecutor | null): void {
+    this.browserExecutor = executor
   }
 
   /**
@@ -220,7 +302,11 @@ export class UtilityOrchestrationService {
       ({ utility }) => utility.activation === 'always' && utility.kind !== 'mcp'
     )
     const hasOnDemand = eligible.some(({ utility }) => utility.activation === 'on_demand')
-    const gatewayTools = hasOnDemand ? GATEWAY_TOOLS : []
+    const gatewayTools = GATEWAY_TOOLS.filter(
+      ({ name }) =>
+        (name !== UTILITY_MANAGE_TOOL_NAME && hasOnDemand) ||
+        (name === UTILITY_MANAGE_TOOL_NAME && request.allowManagement === true)
+    )
     if (gatewayTools.length === 0) {
       return {
         id,
@@ -238,22 +324,19 @@ export class UtilityOrchestrationService {
       clients: new Map(),
       attributionSequence: 0,
       searched: false,
-      cuaSessionIds: new Map()
+      cuaSessionIds: new Map(),
+      managedUtilities: []
     }
     const bridgeUrl = await this.ensureGatewayServer()
     const token = randomBytes(32).toString('hex')
     const scriptPath = `${BRIDGE_SCRIPT_PATH}.${id}.mjs`
-    const retrieverPath = `${RETRIEVE_MCP_HOST_SCRIPT_PATH}.${id}.mjs`
     await this.storage.writeRaw(scriptPath, buildUtilityGatewayScript(gatewayTools))
-    await this.storage.writeRaw(
-      retrieverPath,
-      buildMcpHostRetrieverScript(this.storage.resolve('instances'), request.sessionId)
-    )
-    this.turns.set(id, { state, scriptPath, retrieverPath, token })
+    const retrieverPath = await this.ensureMcpHostRetriever()
+    this.turns.set(id, { state, scriptPath, token })
     this.turnIdsByToken.set(token, id)
 
     const gateway = gatewayUtility(request, this.storage.resolve(scriptPath), bridgeUrl, token)
-    const recoveryInstruction = `The always-active ${RETRIEVE_MCP_HOST_TOOL_NAME} utility is independent of MCP. If the advertised app gateway is unreachable, call it through the shell with \`bun ${shellQuote(this.storage.resolve(retrieverPath))}\`. It discovers the owning live CodeInOven instance and returns the current \`mcpHost\`. Retry the original route against that host with the current turn's authorization header. Never print or persist the bearer token.`
+    const recoveryInstruction = `The always-active ${RETRIEVE_MCP_HOST_TOOL_NAME} utility is independent of MCP. If the advertised app gateway is unreachable, call it through the shell with \`bun ${shellQuote(retrieverPath)} ${shellQuote(request.sessionId)}\`. It discovers the owning live CodeInOven instance and returns the current \`mcpHost\`. Retry the original route against that host with the current turn's authorization header. Never print or persist the bearer token.`
     await this.audit(state, 'turn.started', {
       eligibleUtilityIds: eligible.map(({ utility }) => utility.id),
       alwaysUtilityIds: always.map(({ utility }) => utility.id)
@@ -278,6 +361,11 @@ export class UtilityOrchestrationService {
         'Search when you need to discover a capability: POST /search with {"query":"capability","kinds":["mcp","skill","computer_use","image_descriptor"]}; the response includes a `notFound` boolean indicating no eligible match.',
         'Activate: POST /activate with {"utility_id":"id-from-search"}; if you already know an eligible utility id, activate it directly without searching first.',
         'Invoke: POST /invoke with {"utility_id":"id","operation":"tool-or-operation","input":{}}.',
+        ...(request.allowManagement
+          ? [
+              'Install a validated utility bundle: POST /manage with {"action":"install_bundle","bundle":{"name":"...","utilities":[{"definition":{...}}]}}. Never include credential or secret values; the user adds those through Utilities.'
+            ]
+          : []),
         'Describe images: search for the image descriptor utility with {"query":"describe image","kinds":["image_descriptor"]}, activate its id, then POST /invoke with {"utility_id":"id","operation":"describe","input":{"images":[{"id":"image-1","source":"path-or-url","type":"path"}]}}.',
         'Treat these endpoints exactly like utility_search, utility_activate, and utility_invoke tool calls.'
       ].join('\n'),
@@ -309,6 +397,54 @@ export class UtilityOrchestrationService {
     )
   }
 
+  /** Snapshot of utilities installed by an explicit setup turn. */
+  managedUtilities(gatewayId: string): UtilityDefinition[] {
+    return structuredClone(this.turns.get(gatewayId)?.state.managedUtilities ?? [])
+  }
+
+  private async manage(state: TurnState, input: Record<string, unknown>): Promise<unknown> {
+    if (state.request.allowManagement !== true) {
+      throw new Error('Utility management is not enabled for this turn')
+    }
+    if (input['action'] !== 'install_bundle') {
+      throw new TypeError('Utility management action is invalid')
+    }
+    const bundle = recordValue(input['bundle'])
+    requiredString(bundle['name'], 'Utility bundle name', 120)
+    const entries = bundle['utilities']
+    if (!Array.isArray(entries) || entries.length === 0 || entries.length > 20) {
+      throw new TypeError('Utility bundle must contain between 1 and 20 utilities')
+    }
+    const definitions = entries.map((rawEntry, index) => {
+      const entry = recordValue(rawEntry)
+      if (entry['credentials'] !== undefined) {
+        throw new TypeError(`Utility bundle entry ${index} cannot contain credentials`)
+      }
+      const definition = recordValue(entry['definition'])
+      if (definition['kind'] !== 'skill' && definition['kind'] !== 'mcp') {
+        throw new TypeError(`Utility bundle entry ${index} must be a skill or MCP server`)
+      }
+      const credentials = definition['credentials']
+      if (credentials !== undefined && (!Array.isArray(credentials) || credentials.length > 0)) {
+        throw new TypeError(`Utility bundle entry ${index} cannot contain credentials`)
+      }
+      return { ...definition, credentials: [] } as unknown as UtilityDefinitionInput
+    })
+    const installed = await this.registry.createMany(definitions)
+    state.managedUtilities.push(...installed)
+    await this.audit(state, 'utility.managed', {
+      action: 'install_bundle',
+      utilityIds: installed.map((utility) => utility.id)
+    })
+    return {
+      installed: installed.map((utility) => ({
+        id: utility.id,
+        kind: utility.kind,
+        name: utility.name
+      }))
+    }
+  }
+
   private async cleanupTurn(id: string): Promise<void> {
     const turn = this.turns.get(id)
     if (!turn) return
@@ -317,7 +453,6 @@ export class UtilityOrchestrationService {
     await this.endComputerUseSessions(turn.state)
     await Promise.allSettled([...turn.state.clients.values()].map((client) => client.close()))
     await this.storage.remove(turn.scriptPath)
-    await this.storage.remove(turn.retrieverPath)
     await this.audit(turn.state, 'turn.cleaned', {
       activatedUtilityIds: [...turn.state.activated.keys()]
     })
@@ -398,6 +533,19 @@ export class UtilityOrchestrationService {
     }
   }
 
+  /**
+   * Materialize one durable app-owned recovery module. Turn instructions pass
+   * their session id as data, so cleanup can retire turn state without leaving
+   * a command in persistent agent context that points at a deleted module.
+   */
+  private async ensureMcpHostRetriever(): Promise<string> {
+    const script = buildMcpHostRetrieverScript(this.storage.resolve('instances'))
+    if ((await this.storage.readRaw(RETRIEVE_MCP_HOST_SCRIPT_PATH)) !== script) {
+      await this.storage.writeRaw(RETRIEVE_MCP_HOST_SCRIPT_PATH, script)
+    }
+    return this.storage.resolve(RETRIEVE_MCP_HOST_SCRIPT_PATH)
+  }
+
   private async search(state: TurnState, input: Record<string, unknown>): Promise<unknown> {
     const query = optionalString(input['query'], 500)
     const kinds = optionalKinds(input['kinds'])
@@ -450,7 +598,10 @@ export class UtilityOrchestrationService {
     state.activated.set(utilityId, resolved)
 
     let capability: unknown
-    if (resolved.utility.kind === 'mcp' || resolved.utility.kind === 'computer_use') {
+    if (resolved.utility.id === APP_BROWSER_UTILITY_ID) {
+      if (!this.browserExecutor) throw new Error('The in-app browser is unavailable')
+      capability = { tools: BROWSER_UTILITY_TOOLS }
+    } else if (resolved.utility.kind === 'mcp' || resolved.utility.kind === 'computer_use') {
       const previousClient = state.clients.get(utilityId)
       const previousSessionId = state.cuaSessionIds.get(utilityId)
       if (previousClient && previousSessionId) {
@@ -507,7 +658,14 @@ export class UtilityOrchestrationService {
     if (!resolved) throw new Error('Activate this utility before invoking it')
 
     let result: unknown
-    if (resolved.utility.kind === 'mcp' || resolved.utility.kind === 'computer_use') {
+    if (resolved.utility.id === APP_BROWSER_UTILITY_ID) {
+      const executor = this.browserExecutor
+      if (!executor) throw new Error('The in-app browser is unavailable')
+      result = await executor(operation, operationInput, {
+        projectId: state.request.projectId,
+        threadId: state.request.threadId
+      })
+    } else if (resolved.utility.kind === 'mcp' || resolved.utility.kind === 'computer_use') {
       const client = state.clients.get(utilityId)
       if (!client) throw new Error('Activated MCP client is unavailable')
       const routedInput = this.routeComputerUseInput(state, utilityId, operationInput)
@@ -1116,16 +1274,21 @@ for await (const line of lines) {
 }
 
 /**
- * Build a turn-scoped, shell-callable host resolver. It reads only public
- * process metadata and probes every loopback gateway in parallel; bearer
- * credentials never enter the registry, command arguments, or tool output.
+ * Build the durable, shell-callable host resolver. It reads only public process
+ * metadata and probes every loopback gateway in parallel; bearer credentials
+ * never enter the registry, command arguments, or tool output.
  */
-function buildMcpHostRetrieverScript(instanceDirectory: string, sessionId: string): string {
+function buildMcpHostRetrieverScript(instanceDirectory: string): string {
   return String.raw`import { promises as fs } from 'node:fs'
 import { join } from 'node:path'
 
 const instanceDirectory = ${JSON.stringify(instanceDirectory)}
-const sessionId = ${JSON.stringify(sessionId)}
+const sessionId = process.argv[2]?.trim()
+
+if (!sessionId || sessionId.length > 128) {
+  process.stderr.write('retrieve_mcp_host requires the current utility session id.\n')
+  process.exit(1)
+}
 
 function validLoopbackHost(value) {
   if (typeof value !== 'string') return null

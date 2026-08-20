@@ -1,8 +1,8 @@
 import { execFile, spawn } from 'child_process'
 import { createHash } from 'crypto'
 import { existsSync, realpathSync } from 'fs'
-import { stat, unlink, writeFile } from 'fs/promises'
-import { dirname, join } from 'path'
+import { readFile, readdir, stat, unlink, writeFile } from 'fs/promises'
+import { basename, dirname, extname, isAbsolute, join } from 'path'
 import { app, shell } from 'electron'
 import { APP_SLUG } from '../../lib/brand'
 import { Logger } from '../system/logger'
@@ -17,6 +17,13 @@ interface EditorDefinition {
   cli?: string
   /** macOS application bundle names to probe in /Applications and ~/Applications. */
   macApps?: string[]
+}
+
+interface LinuxDesktopEntry {
+  path: string
+  name?: string
+  icon?: string
+  exec?: string
 }
 
 /** Known editors / terminals, in the order they appear in the picker. */
@@ -117,9 +124,10 @@ export class EditorService {
   /** PNG data-URLs keyed by app/binary path; `has()` marks paths already probed. */
   private iconCache = new Map<string, string | undefined>()
   /** OS folder handler: undefined = not probed yet, null = resolution failed. */
-  private defaultHandler: { path: string; iconDataUrl?: string } | null | undefined
+  private defaultHandler: { path: string; name?: string; iconDataUrl?: string } | null | undefined
   private harvesterScriptPath: string | null = null
   private detectInFlight: Promise<EditorInfo[]> | null = null
+  private linuxDesktopEntriesPromise: Promise<LinuxDesktopEntry[]> | null = null
 
   /** Pre-compile the Swift harvester and fill the icon cache (fire-and-forget). */
   warmUp(): void {
@@ -501,6 +509,13 @@ export class EditorService {
 
   /** Extract the native application icon as a PNG data-URL via Electron. */
   private async getElectronIcon(targetPath: string): Promise<string | undefined> {
+    if (process.platform === 'linux') {
+      const desktopEntry = await this.findLinuxDesktopEntryForExecutable(targetPath)
+      const desktopIcon = desktopEntry?.icon
+        ? await this.readLinuxIcon(desktopEntry.icon)
+        : undefined
+      if (desktopIcon) return desktopIcon
+    }
     try {
       const icon = await app.getFileIcon(targetPath, { size: 'normal' })
       return icon.toDataURL()
@@ -518,7 +533,7 @@ export class EditorService {
     if (this.defaultHandler) {
       return {
         id: 'system',
-        name: this.appNameFromPath(this.defaultHandler.path),
+        name: this.defaultHandler.name ?? this.appNameFromPath(this.defaultHandler.path),
         available: true,
         iconDataUrl: this.defaultHandler.iconDataUrl
       }
@@ -593,7 +608,10 @@ export class EditorService {
   /** Batch-render icons for every uncached path in a single Swift spawn. */
   private async harvestIcons(paths: string[]): Promise<void> {
     if (process.platform !== 'darwin') {
-      if (this.defaultHandler === undefined) this.defaultHandler = null
+      if (this.defaultHandler === undefined) {
+        this.defaultHandler =
+          process.platform === 'linux' ? await this.resolveLinuxDefaultHandler() : null
+      }
       await this.harvestFallback(paths.filter((p) => !this.iconCache.has(p)))
       return
     }
@@ -622,6 +640,149 @@ export class EditorService {
         this.iconCache.set(p, await this.getElectronIcon(p))
       })
     )
+  }
+
+  /** Resolve Linux's directory handler and its desktop-file icon. */
+  private async resolveLinuxDefaultHandler(): Promise<{
+    path: string
+    name?: string
+    iconDataUrl?: string
+  } | null> {
+    const desktopId = await new Promise<string>((resolve) => {
+      execFile(
+        'xdg-mime',
+        ['query', 'default', 'inode/directory'],
+        { env: this.buildEnv(), timeout: 5000 },
+        (error, stdout) => resolve(error ? '' : stdout.trim())
+      )
+    })
+    if (!desktopId) return null
+    const entry = await this.readLinuxDesktopEntryById(desktopId)
+    if (!entry) return null
+    return {
+      path: entry.path,
+      name: entry.name,
+      iconDataUrl: entry.icon ? await this.readLinuxIcon(entry.icon) : undefined
+    }
+  }
+
+  private linuxDesktopDirectories(): string[] {
+    const home = process.env['HOME'] ?? ''
+    return [
+      join(home, '.local', 'share', 'applications'),
+      '/usr/local/share/applications',
+      '/usr/share/applications'
+    ]
+  }
+
+  private async readLinuxDesktopEntryById(desktopId: string): Promise<LinuxDesktopEntry | null> {
+    for (const directory of this.linuxDesktopDirectories()) {
+      const entry = await this.readLinuxDesktopEntry(join(directory, desktopId))
+      if (entry) return entry
+    }
+    return null
+  }
+
+  private async readLinuxDesktopEntry(path: string): Promise<LinuxDesktopEntry | null> {
+    try {
+      const text = await readFile(path, 'utf8')
+      const value = (key: string): string | undefined =>
+        new RegExp(`^${key}=(.+)$`, 'mu').exec(text)?.[1]?.trim()
+      return { path, name: value('Name'), icon: value('Icon'), exec: value('Exec') }
+    } catch {
+      return null
+    }
+  }
+
+  /** Match an executable to its freedesktop launcher, whose Icon entry is authoritative. */
+  private async findLinuxDesktopEntryForExecutable(
+    executablePath: string
+  ): Promise<LinuxDesktopEntry | null> {
+    const executableName = basename(executablePath)
+    const entries = await this.linuxDesktopEntries()
+    for (const entry of entries) {
+      if (!entry.exec) continue
+      const commandTokens = entry.exec.match(/(?:[^\s"']+|"[^"]*"|'[^']*')+/gu) ?? []
+      const matches = commandTokens.some((token) => {
+        const clean = token.replace(/^['"]|['"]$/gu, '')
+        return !clean.startsWith('%') && basename(clean) === executableName
+      })
+      if (matches) return entry
+    }
+    return null
+  }
+
+  private linuxDesktopEntries(): Promise<LinuxDesktopEntry[]> {
+    this.linuxDesktopEntriesPromise ??= this.loadLinuxDesktopEntries()
+    return this.linuxDesktopEntriesPromise
+  }
+
+  private async loadLinuxDesktopEntries(): Promise<LinuxDesktopEntry[]> {
+    const entries: LinuxDesktopEntry[] = []
+    for (const directory of this.linuxDesktopDirectories()) {
+      let names: string[]
+      try {
+        names = await readdir(directory)
+      } catch {
+        continue
+      }
+      for (const name of names) {
+        if (!name.endsWith('.desktop')) continue
+        const entry = await this.readLinuxDesktopEntry(join(directory, name))
+        if (entry) entries.push(entry)
+      }
+    }
+    return entries
+  }
+
+  /** Resolve a freedesktop Icon value to SVG/PNG bytes suitable for renderer `<img>`. */
+  private async readLinuxIcon(icon: string): Promise<string | undefined> {
+    const direct = isAbsolute(icon) ? icon : null
+    if (direct) return this.fileAsDataUrl(direct)
+
+    const home = process.env['HOME'] ?? ''
+    const roots = [
+      join(home, '.local', 'share', 'icons', 'hicolor'),
+      '/usr/local/share/icons/hicolor',
+      '/usr/share/icons/hicolor'
+    ]
+    const filenames = extname(icon) ? [icon] : [`${icon}.svg`, `${icon}.png`]
+    for (const root of roots) {
+      let sizes: string[]
+      try {
+        sizes = await readdir(root)
+      } catch {
+        continue
+      }
+      const preferredSizes = sizes.sort((left, right) => {
+        if (left === 'scalable') return -1
+        if (right === 'scalable') return 1
+        return right.localeCompare(left, undefined, { numeric: true })
+      })
+      for (const size of preferredSizes) {
+        for (const filename of filenames) {
+          const dataUrl = await this.fileAsDataUrl(join(root, size, 'apps', filename))
+          if (dataUrl) return dataUrl
+        }
+      }
+    }
+    for (const filename of filenames) {
+      const dataUrl = await this.fileAsDataUrl(join('/usr/share/pixmaps', filename))
+      if (dataUrl) return dataUrl
+    }
+    return undefined
+  }
+
+  private async fileAsDataUrl(path: string): Promise<string | undefined> {
+    const extension = extname(path).toLowerCase()
+    if (extension !== '.svg' && extension !== '.png') return undefined
+    try {
+      const bytes = await readFile(path)
+      const mime = extension === '.svg' ? 'image/svg+xml' : 'image/png'
+      return `data:${mime};base64,${bytes.toString('base64')}`
+    } catch {
+      return undefined
+    }
   }
 
   /** Parse the harvester's KIND<TAB>path<TAB>base64png protocol into the caches. */
@@ -704,6 +865,7 @@ export class EditorService {
       '/usr/bin',
       '/bin',
       `${home}/.local/bin`,
+      `${home}/.opencode/bin`,
       `${home}/.bun/bin`,
       `${home}/.cargo/bin`,
       `${home}/.npm-global/bin`,

@@ -14,6 +14,7 @@ import type {
   WebToolProviderId
 } from '../../lib/types'
 import { UTILITY_KIND_VALUES } from '../../lib/types'
+import { ALL_HARNESSES_BINDING_ID } from '../../lib/types'
 import { generateId } from '../../lib/utils'
 import { listHarnesses } from '../agents/harness-registry'
 import type { StorageEngine } from '../storage/storage-engine'
@@ -37,6 +38,8 @@ const WEB_TOOL_PROVIDERS = new Set<WebToolProviderId>(['exa', 'firecrawl', 'brav
 export const APP_IMAGE_DESCRIPTOR_UTILITY_ID = 'codeinoven:image-descriptor'
 /** Stable id of the app-owned, always-active MCP host recovery utility. */
 export const APP_RETRIEVE_MCP_HOST_UTILITY_ID = 'codeinoven:retrieve-mcp-host'
+/** Stable id of the browser control utility backed by the in-app browser. */
+export const APP_BROWSER_UTILITY_ID = 'codeinoven:browser'
 
 interface UtilityRegistryFile {
   version: number
@@ -114,6 +117,26 @@ export class UtilityRegistryService {
           harnessId: harness.id,
           strategy: 'skill',
           transportName: 'retrieve_mcp_host'
+        })),
+        appOwned: true,
+        createdAt: now,
+        updatedAt: now
+      },
+      {
+        id: APP_BROWSER_UTILITY_ID,
+        kind: 'computer_use',
+        name: 'In-app browser',
+        description:
+          'Opens and controls the app-scoped browser for localhost and web application testing, including navigation, DOM snapshots, clicks, typing, and screenshots.',
+        enabled: true,
+        activation: 'on_demand',
+        scope: { level: 'global' },
+        config: { backend: 'codeinoven-browser' },
+        credentials: [],
+        harnessBindings: harnesses.map((harness) => ({
+          harnessId: harness.id,
+          strategy: 'native',
+          nativeCapability: 'browser'
         })),
         appOwned: true,
         createdAt: now,
@@ -290,9 +313,11 @@ export class UtilityRegistryService {
       )
 
     for (const utility of candidates) {
-      const binding = utility.harnessBindings.find(
-        (candidate) => candidate.harnessId === context.harnessId
-      )
+      const binding =
+        utility.harnessBindings.find((candidate) => candidate.harnessId === context.harnessId) ??
+        utility.harnessBindings.find(
+          (candidate) => candidate.harnessId === ALL_HARNESSES_BINDING_ID
+        )
       if (!binding) continue
 
       const implicitCapability =
@@ -547,7 +572,10 @@ function parseBindings(value: unknown): HarnessUtilityBinding[] {
       throw new TypeError(`Harness binding ${index} strategy is invalid`)
     }
     const binding: HarnessUtilityBinding = {
-      harnessId: identifier(entry['harnessId'], `Harness binding ${index} harness ID`),
+      harnessId:
+        entry['harnessId'] === ALL_HARNESSES_BINDING_ID
+          ? ALL_HARNESSES_BINDING_ID
+          : identifier(entry['harnessId'], `Harness binding ${index} harness ID`),
       strategy: strategy as HarnessUtilityBinding['strategy'],
       ...(optionalString(entry['nativeCapability'], 'Native capability', 120)
         ? { nativeCapability: optionalString(entry['nativeCapability'], 'Native capability', 120) }

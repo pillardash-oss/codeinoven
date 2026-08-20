@@ -12,11 +12,13 @@ import type {
   AgentRateLimitWindow,
   AgentTokenUsage,
   AgentUsageCredits,
+  HarnessCommand,
   ProviderCatalog,
   ProviderModel,
   PromptAttachment,
   PermissionReply,
   SessionAgentEvent,
+  ThreadSettings,
   ThinkingPreset
 } from '../../lib/types'
 import { normalizeAgentQuestions, permissionPatterns } from '../../lib/agent-interactions'
@@ -24,6 +26,7 @@ import { fastSelectionModelId, resolveFastModelId } from '../../lib/fast-inferen
 import { classifyProviderIssue } from '../../lib/provider-issue'
 import type { StorageEngine } from '../storage/storage-engine'
 import { BaseUrlProviderService } from '../providers/base-url-provider-service'
+import { CLAUDE_CREDENTIAL_LOCK_NAME, CrossProcessMutex } from '../system/cross-process-mutex'
 import { Logger } from '../system/logger'
 import { SecretVault } from '../storage/secret-vault'
 import type {
@@ -42,6 +45,7 @@ import type {
   UtilityRuntimeOverlay,
   UtilityRuntimePreparationRequest
 } from './driver.interface'
+import { InactiveQuestionTurnError } from './driver.interface'
 import { buildHarnessEnvironment } from './cli-environment'
 import { attachmentReference } from './attachment-reference'
 
@@ -101,6 +105,14 @@ const AUTH_CONFIRM_POLL_MS = 200
  * separately by the credential-refresh slot.
  */
 const ONE_SHOT_SPAWN_LIMIT = 4
+
+/** Commands Claude Code documents as usable without its interactive TUI. */
+const CLAUDE_NON_INTERACTIVE_COMMANDS: readonly HarnessCommand[] = [
+  { name: 'config', description: 'Set Claude Code preferences with key=value arguments' },
+  { name: 'settings', description: 'Set Claude Code preferences with key=value arguments' }
+]
+
+const CLAUDE_COMMANDS_REQUIRING_ARGUMENTS = new Set(['config', 'settings'])
 
 /** Keep Claude Code's native per-repository memory from crossing app threads. */
 function buildClaudeEnvironment(): NodeJS.ProcessEnv {
@@ -808,6 +820,20 @@ function findSubagentPart(
   return undefined
 }
 
+function activeClaudeSubagentParts(
+  context: CliLineParseContext,
+  background: boolean
+): Extract<AgentPart, { type: 'subagent' }>[] {
+  return context.session.messages.flatMap((message) =>
+    message.parts.filter(
+      (part): part is Extract<AgentPart, { type: 'subagent' }> =>
+        part.type === 'subagent' &&
+        part.activity.background === background &&
+        (part.activity.status === 'pending' || part.activity.status === 'running')
+    )
+  )
+}
+
 function messageFromAssistant(message: Record<string, unknown>): AgentMessage {
   const messageId = string(message['id']) ?? `claude-assistant-${Date.now()}`
   const content = Array.isArray(message['content']) ? message['content'] : []
@@ -994,6 +1020,7 @@ export function mapClaudeCodeRecord(
     if (parentCallId) {
       const existing = findSubagentPart(context, parentCallId)
       if (!existing) return nativeSessionId ? { nativeSessionId } : null
+      const resolvedModelId = string(rawMessage['model']) ?? string(entry['model'])
       const output = Array.isArray(rawMessage['content'])
         ? rawMessage['content']
             .map((block) => serializeContent(record(block)?.['text']))
@@ -1005,6 +1032,7 @@ export function mapClaudeCodeRecord(
         activity: {
           ...existing.activity,
           status: 'running',
+          modelId: resolvedModelId ?? existing.activity.modelId,
           ...(output ? { output } : {})
         }
       }
@@ -1257,10 +1285,28 @@ export function mapClaudeCodeRecord(
       : []
     const rateLimits = reportedRateLimits.length > 0 ? reportedRateLimits : inheritedRateLimits
     const issue = claudeSessionLimitIssue(error, rateLimits)
+    const completedAt = Date.now()
+    const terminalSubagentEvents: SessionAgentEvent[] = activeClaudeSubagentParts(
+      context,
+      false
+    ).map((part) => ({
+      type: 'message.part.updated',
+      sessionId: context.sessionId,
+      part: {
+        ...part,
+        activity: {
+          ...part.activity,
+          status: error ? 'error' : 'completed',
+          ...(error ? { error } : {}),
+          ...(part.activity.time ? { time: { ...part.activity.time, end: completedAt } } : {})
+        }
+      }
+    }))
     return {
       nativeSessionId,
       events: latest
         ? [
+            ...terminalSubagentEvents,
             ...(tokens ||
             cost !== undefined ||
             contextWindow !== undefined ||
@@ -1294,6 +1340,7 @@ export function mapClaudeCodeRecord(
           ]
         : error
           ? [
+              ...terminalSubagentEvents,
               {
                 type: 'session.error',
                 sessionId: context.sessionId,
@@ -1301,7 +1348,7 @@ export function mapClaudeCodeRecord(
                 ...(issue ? { issue } : {})
               }
             ]
-          : []
+          : terminalSubagentEvents
     }
   }
   return nativeSessionId ? { nativeSessionId } : null
@@ -1319,7 +1366,7 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
     messageHistory: 'mirrored',
     interactivePermissions: true,
     attachments: true,
-    commands: false,
+    commands: true,
     providerCatalog: true,
     sessionStatus: true,
     contextUsage: true,
@@ -1336,6 +1383,13 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
   private readonly authProbeCache = new Map<string, { authenticated: boolean; at: number }>()
   /** Bounds concurrent one-shot claude spawns to keep the fd table stable. */
   private readonly oneShotSpawnGate = new OneShotSpawnGate(ONE_SHOT_SPAWN_LIMIT)
+  /**
+   * Cross-process credential-refresh mutex. Multiple app instances each hold
+   * their own in-memory auth slot, so they cannot serialize each other's claude
+   * spawns; this shared atomic lock closes that gap and is also respected by an
+   * externally-launched CLI sharing the same config root.
+   */
+  private readonly crossProcessAuthLock = new CrossProcessMutex(CLAUDE_CREDENTIAL_LOCK_NAME)
   /**
    * Sessions whose live process proved authentication this run, with the time
    * it was proven. A session only counts while its proof is fresh (within
@@ -1408,6 +1462,32 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
         }))
       }))
     ]
+  }
+
+  override async listCommands(): Promise<HarnessCommand[]> {
+    return CLAUDE_NON_INTERACTIVE_COMMANDS.map((command) => ({ ...command }))
+  }
+
+  override async runCommand(
+    projectPath: string,
+    sessionId: string,
+    command: HarnessCommand,
+    args: string,
+    settings: ThreadSettings
+  ): Promise<void> {
+    const trimmedArgs = args.trim()
+    if (command.source !== 'skill' && CLAUDE_COMMANDS_REQUIRING_ARGUMENTS.has(command.name)) {
+      if (!trimmedArgs) {
+        throw new Error(`/${command.name} requires arguments in ${this.name}`)
+      }
+    }
+    const text = `/${command.name}${trimmedArgs ? ` ${trimmedArgs}` : ''}`
+    await this.sendPrompt(projectPath, {
+      sessionId,
+      settings,
+      text,
+      attachments: []
+    })
   }
 
   async generateTitle(projectPath: string, options: GenerateTitleOptions): Promise<string | null> {
@@ -1484,28 +1564,30 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
         (answers[index] ?? []).join(', ')
       ])
     )
-    if (request.transport === 'control') {
-      this.writeActiveInput(
-        request.sessionId,
-        `${JSON.stringify({
-          type: 'control_response',
-          response: {
-            subtype: 'success',
-            request_id: request.controlRequestId,
+    this.writeQuestionResponse(sessionId, requestId, () => {
+      if (request.transport === 'control') {
+        this.writeActiveInput(
+          request.sessionId,
+          `${JSON.stringify({
+            type: 'control_response',
             response: {
-              behavior: 'allow',
-              updatedInput: { ...request.input, answers: answersByPrompt }
+              subtype: 'success',
+              request_id: request.controlRequestId,
+              response: {
+                behavior: 'allow',
+                updatedInput: { ...request.input, answers: answersByPrompt }
+              }
             }
-          }
-        })}\n`
-      )
-    } else {
-      this.writeClaudeToolResult(
-        request.sessionId,
-        request.callId,
-        JSON.stringify({ answers: answersByPrompt })
-      )
-    }
+          })}\n`
+        )
+      } else {
+        this.writeClaudeToolResult(
+          request.sessionId,
+          request.callId,
+          JSON.stringify({ answers: answersByPrompt })
+        )
+      }
+    })
     this.pendingClaudeQuestions.delete(requestId)
   }
 
@@ -1518,27 +1600,43 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
     if (!request || request.sessionId !== sessionId) {
       throw new Error(`Claude question request is no longer pending: ${requestId}`)
     }
-    if (request.transport === 'control') {
-      this.writeActiveInput(
-        request.sessionId,
-        `${JSON.stringify({
-          type: 'control_response',
-          response: {
-            subtype: 'success',
-            request_id: request.controlRequestId,
-            response: { behavior: 'deny', message: 'The user dismissed this question.' }
-          }
-        })}\n`
-      )
-    } else {
-      this.writeClaudeToolResult(
-        request.sessionId,
-        request.callId,
-        'The user dismissed this question.',
-        true
-      )
-    }
+    this.writeQuestionResponse(sessionId, requestId, () => {
+      if (request.transport === 'control') {
+        this.writeActiveInput(
+          request.sessionId,
+          `${JSON.stringify({
+            type: 'control_response',
+            response: {
+              subtype: 'success',
+              request_id: request.controlRequestId,
+              response: { behavior: 'deny', message: 'The user dismissed this question.' }
+            }
+          })}\n`
+        )
+      } else {
+        this.writeClaudeToolResult(
+          request.sessionId,
+          request.callId,
+          'The user dismissed this question.',
+          true
+        )
+      }
+    })
     this.pendingClaudeQuestions.delete(requestId)
+  }
+
+  private writeQuestionResponse(sessionId: string, requestId: string, write: () => void): void {
+    if (!this.activeSessionIds().includes(sessionId)) {
+      this.pendingClaudeQuestions.delete(requestId)
+      throw new InactiveQuestionTurnError(sessionId, requestId, this.name)
+    }
+    try {
+      write()
+    } catch (error) {
+      if (this.activeSessionIds().includes(sessionId)) throw error
+      this.pendingClaudeQuestions.delete(requestId)
+      throw new InactiveQuestionTurnError(sessionId, requestId, this.name)
+    }
   }
 
   private writeClaudeToolResult(
@@ -1563,6 +1661,16 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
       parent_tool_use_id: null
     }
     this.writeActiveInput(sessionId, `${JSON.stringify(message)}\n`)
+  }
+
+  /** A result record must not close stdin while Claude still awaits host input. */
+  private hasPendingInteraction(sessionId: string): boolean {
+    return (
+      [...this.pendingClaudeQuestions.values()].some(
+        (request) => request.sessionId === sessionId
+      ) ||
+      [...this.pendingClaudePermissions.values()].some((request) => request.sessionId === sessionId)
+    )
   }
 
   protected override normalizeInteractionEvents(
@@ -1869,7 +1977,9 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
     }
     let release: (() => void) | undefined
     this.authSlot = new Promise<void>((resolve) => (release = resolve))
+    const releaseCrossProcess = await this.crossProcessAuthLock.acquire()
     return () => {
+      releaseCrossProcess()
       release?.()
       this.authSlotHeld = false
     }
@@ -2274,7 +2384,12 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
     const result = mapClaudeCodeRecord(value, context)
     if (type === 'result') {
       this.finishActiveUsageProbe(context.sessionId, null)
-      this.closeActiveInput(context.sessionId)
+      if (
+        !this.hasPendingInteraction(context.sessionId) &&
+        activeClaudeSubagentParts(context, true).length === 0
+      ) {
+        this.closeActiveInput(context.sessionId)
+      }
     }
     if (!result) return null
     const assistant = result.messages?.find((message) => message.role === 'assistant')
