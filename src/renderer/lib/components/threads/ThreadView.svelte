@@ -34,6 +34,7 @@
     MessageSquare,
     Network,
     Pencil,
+    Plus,
     Target,
     Trash2,
     Video,
@@ -41,6 +42,7 @@
     Zap
   } from '@lucide/svelte'
   import ChatComposer from '../chats/ChatComposer.svelte'
+  import StartAfterThreadPicker from '../chats/StartAfterThreadPicker.svelte'
   import ResponseSelectionPopover from '../chats/ResponseSelectionPopover.svelte'
   import ResponseAnnotationBubble from '../chats/ResponseAnnotationBubble.svelte'
   import ResponseAnnotationComment from '../chats/ResponseAnnotationComment.svelte'
@@ -3413,6 +3415,8 @@
   let queuedPresentation = $state<UserMessagePresentation | undefined>()
   let queuedTaskReferences = $state<PromptAssignmentTaskReference[]>([])
   let queuedStartAfterThreads = $state<StartAfterThreadReference[]>([])
+  let queuedStartAfterPickerOpen = $state(false)
+  let queuedStartAfterPendingRemoval = $state<StartAfterThreadReference | null>(null)
   /** True when a queued payload exists even though the message text is empty
    *  (e.g. a selection carrying only a user comment). */
   let queuedHasContent = $state(false)
@@ -4708,6 +4712,40 @@
     const linkedThread =
       threadId === thread.id ? thread : await invoke('thread:get', thread.projectId, threadId)
     if (linkedThread) workspaceState.openThread(linkedThread, project)
+  }
+
+  function persistQueuedStartAfterThreads(): void {
+    rendererRecovery.setQueuedMessage(thread.projectId, thread.id, {
+      text: queuedMessage,
+      attachments: queuedAttachments,
+      promptContext: queuedPromptContext,
+      promptReferences: queuedPromptReferences,
+      projectReferences: queuedProjectReferences,
+      presentation: queuedPresentation,
+      taskReferences: queuedTaskReferences,
+      startAfterThreads: queuedStartAfterThreads
+    })
+    idleAttentionHandled = false
+    void handleIdleAttention()
+  }
+
+  function addQueuedStartAfterThread(selectedThread: Thread): void {
+    if (queuedStartAfterThreads.some((reference) => reference.id === selectedThread.id)) return
+    queuedStartAfterThreads = [
+      ...queuedStartAfterThreads,
+      { id: selectedThread.id, title: selectedThread.title }
+    ]
+    persistQueuedStartAfterThreads()
+  }
+
+  function confirmRemoveQueuedStartAfterThread(): void {
+    const dependency = queuedStartAfterPendingRemoval
+    if (!dependency) return
+    queuedStartAfterPendingRemoval = null
+    queuedStartAfterThreads = queuedStartAfterThreads.filter(
+      (reference) => reference.id !== dependency.id
+    )
+    persistQueuedStartAfterThreads()
   }
 
   /** Debounces the dependency warmup so a fast mouse pass never fires an IPC call. */
@@ -7455,6 +7493,15 @@
                   >
                   <div class="flex items-center gap-1">
                     <button
+                      type="button"
+                      class="flex h-6 w-6 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+                      title="Add thread to Starts after"
+                      aria-label="Add thread to Starts after"
+                      onclick={() => (queuedStartAfterPickerOpen = true)}
+                    >
+                      <Plus size={13} />
+                    </button>
+                    <button
                       class="rounded-md px-2 py-0.5 text-[11px] font-medium text-foreground transition-colors hover:bg-elevated"
                       title={`Steer — ${steerModifierLabel}Enter — send this message to the agent now`}
                       onclick={() => void steerQueuedMessage()}
@@ -7531,20 +7578,39 @@
                 {#if queuedStartAfterThreads.length > 0}
                   <div class="flex flex-col gap-1 px-3 pb-2.5">
                     {#each queuedStartAfterThreads as dependency (dependency.id)}
-                      <button
-                        type="button"
-                        class="flex w-full items-center gap-2 rounded-lg px-1.5 py-1 text-left transition-colors hover:bg-elevated"
-                        title={`Open ${dependency.title}`}
-                        aria-label={`Open ${dependency.title}`}
+                      <div
+                        class="flex w-full items-center gap-1 rounded-lg px-1.5 py-1 transition-colors hover:bg-elevated"
                         onmouseenter={() => preloadStartAfterThread(dependency.id)}
-                        onclick={() => void openStartAfterThread(dependency.id)}
                       >
                         <Clock size={12} class="shrink-0 text-info" />
-                        <span class="min-w-0 flex-1 truncate text-[11px] text-info">
+                        <button
+                          type="button"
+                          class="min-w-0 flex-1 truncate text-left text-[11px] text-info"
+                          title={`Open ${dependency.title}`}
+                          aria-label={`Open ${dependency.title}`}
+                          onclick={() => void openStartAfterThread(dependency.id)}
+                        >
                           {dependency.title}
-                        </span>
-                        <ArrowUpRight size={12} class="shrink-0 text-dimmed" />
-                      </button>
+                        </button>
+                        <button
+                          type="button"
+                          class="flex h-5 w-5 shrink-0 items-center justify-center rounded text-dimmed transition-colors hover:bg-danger/10 hover:text-danger"
+                          title={`Remove ${dependency.title} from Starts after`}
+                          aria-label={`Remove ${dependency.title} from Starts after`}
+                          onclick={() => (queuedStartAfterPendingRemoval = dependency)}
+                        >
+                          <Trash2 size={12} />
+                        </button>
+                        <button
+                          type="button"
+                          class="flex h-5 w-5 shrink-0 items-center justify-center rounded text-dimmed transition-colors hover:bg-overlay hover:text-foreground"
+                          title={`Open ${dependency.title}`}
+                          aria-label={`Open ${dependency.title}`}
+                          onclick={() => void openStartAfterThread(dependency.id)}
+                        >
+                          <ArrowUpRight size={12} />
+                        </button>
+                      </div>
                     {/each}
                   </div>
                 {/if}
@@ -8012,6 +8078,40 @@
   onClose={() => (transcriptExportOpen = false)}
   onExport={(includeTrace) => exportTranscript(includeTrace)}
 />
+
+<StartAfterThreadPicker
+  open={queuedStartAfterPickerOpen}
+  projectId={thread.projectId}
+  currentThreadId={thread.id}
+  selectedIds={queuedStartAfterThreads.map((reference) => reference.id)}
+  onSelect={addQueuedStartAfterThread}
+  onClose={() => (queuedStartAfterPickerOpen = false)}
+/>
+
+<Modal
+  open={queuedStartAfterPendingRemoval !== null}
+  title="Remove wait dependency?"
+  onClose={() => (queuedStartAfterPendingRemoval = null)}
+>
+  <p class="text-sm text-muted">
+    The queued message will no longer wait for
+    <span class="font-medium text-foreground">{queuedStartAfterPendingRemoval?.title}</span>.
+  </p>
+  {#snippet footer()}
+    <button
+      class="rounded-lg border bg-elevated px-3 py-2 text-sm font-medium hover:bg-overlay"
+      onclick={() => (queuedStartAfterPendingRemoval = null)}
+    >
+      Cancel
+    </button>
+    <button
+      class="rounded-lg bg-danger px-3 py-2 text-sm font-semibold text-on-danger hover:opacity-90"
+      onclick={confirmRemoveQueuedStartAfterThread}
+    >
+      Remove dependency
+    </button>
+  {/snippet}
+</Modal>
 
 <Modal
   open={studioExitConfirmationOpen}
