@@ -1,16 +1,23 @@
 import { session, WebContentsView, type BrowserWindow } from 'electron'
-import type { BrowserPageState, BrowserViewBounds } from '../../lib/ipc-contract'
+import type {
+  BrowserConsoleEntry,
+  BrowserConsoleLevel,
+  BrowserPageState,
+  BrowserViewBounds
+} from '../../lib/ipc-contract'
 import { trustedIpcMain as ipcMain } from '../ipc/trusted-ipc-main'
 import { sendToRenderer } from '../ipc/renderer-delivery'
 import { Logger } from '../system/logger'
 
 const BROWSER_PARTITION = 'persist:codeinoven-browser'
 const MAX_BROWSER_URL_LENGTH = 8192
+const MAX_CONSOLE_ENTRIES = 500
 const TAB_ID_PATTERN = /^browser:[a-zA-Z0-9:_-]{1,240}$/u
 
 interface BrowserTab {
   view: WebContentsView
   initialNavigationStarted: boolean
+  consoleEntries: BrowserConsoleEntry[]
 }
 
 interface PendingBrowserTab {
@@ -69,6 +76,7 @@ export class BrowserService {
   private readonly pendingTabs = new Map<string, PendingBrowserTab>()
   private readonly agentTabIds = new Map<string, string>()
   private activeTabId: string | null = null
+  private consoleSequence = 0
 
   constructor(private readonly window: BrowserWindow) {
     const browserSession = session.fromPartition(BROWSER_PARTITION)
@@ -122,6 +130,12 @@ export class BrowserService {
     })
     ipcMain.handle('browser:stop', (_event, rawTabId) => {
       this.requireTab(validateTabId(rawTabId)).view.webContents.stop()
+    })
+    ipcMain.handle('browser:getConsole', (_event, rawTabId) => {
+      return [...this.requireTab(validateTabId(rawTabId)).consoleEntries]
+    })
+    ipcMain.handle('browser:clearConsole', (_event, rawTabId) => {
+      this.requireTab(validateTabId(rawTabId)).consoleEntries = []
     })
     ipcMain.handle('browser:destroy', (_event, rawTabId) => {
       this.destroy(validateTabId(rawTabId))
@@ -215,6 +229,9 @@ export class BrowserService {
       const image = await tab.view.webContents.capturePage()
       return { tabId, dataUrl: `data:image/png;base64,${image.toPNG().toString('base64')}` }
     }
+    if (operation === 'console') {
+      return { tabId, entries: [...tab.consoleEntries] }
+    }
     throw new Error(`In-app browser does not expose the operation "${operation}"`)
   }
 
@@ -233,7 +250,7 @@ export class BrowserService {
       }
     })
     view.setBackgroundColor('#00000000')
-    const tab: BrowserTab = { view, initialNavigationStarted: false }
+    const tab: BrowserTab = { view, initialNavigationStarted: false, consoleEntries: [] }
     this.tabs.set(tabId, tab)
     const pending = this.pendingTabs.get(tabId)
     if (pending) {
@@ -248,6 +265,34 @@ export class BrowserService {
     view.webContents.on('did-navigate', publish)
     view.webContents.on('did-navigate-in-page', publish)
     view.webContents.on('page-title-updated', publish)
+    view.webContents.on('console-message', (details) => {
+      this.appendConsoleEntry(tabId, {
+        level: details.level,
+        message: details.message,
+        sourceId: details.sourceId,
+        lineNumber: details.lineNumber
+      })
+    })
+    view.webContents.on(
+      'did-fail-load',
+      (_event, errorCode, errorDescription, validatedURL, isMainFrame) => {
+        if (!isMainFrame || errorCode === -3) return
+        this.appendConsoleEntry(tabId, {
+          level: 'error',
+          message: `Navigation failed (${errorCode}): ${errorDescription}`,
+          sourceId: validatedURL,
+          lineNumber: 0
+        })
+      }
+    )
+    view.webContents.on('render-process-gone', (_event, details) => {
+      this.appendConsoleEntry(tabId, {
+        level: 'error',
+        message: `Browser renderer stopped: ${details.reason} (exit ${details.exitCode})`,
+        sourceId: view.webContents.getURL(),
+        lineNumber: 0
+      })
+    })
     view.webContents.on('will-navigate', (event, url) => {
       try {
         validateBrowserUrl(url)
@@ -296,6 +341,32 @@ export class BrowserService {
     const tab = this.tabs.get(tabId)
     if (!tab || this.window.webContents.isDestroyed()) return
     sendToRenderer(this.window.webContents, 'browser:state', this.stateFor(tabId, tab))
+  }
+
+  private appendConsoleEntry(
+    tabId: string,
+    input: {
+      level: BrowserConsoleLevel
+      message: string
+      sourceId: string
+      lineNumber: number
+    }
+  ): void {
+    const tab = this.tabs.get(tabId)
+    if (!tab) return
+    const entry: BrowserConsoleEntry = {
+      id: `${Date.now()}:${this.consoleSequence++}`,
+      tabId,
+      level: input.level,
+      message: input.message.slice(0, 10_000),
+      sourceId: input.sourceId.slice(0, 2_048),
+      lineNumber: Math.max(0, input.lineNumber),
+      timestamp: Date.now()
+    }
+    tab.consoleEntries = [...tab.consoleEntries, entry].slice(-MAX_CONSOLE_ENTRIES)
+    if (!this.window.webContents.isDestroyed()) {
+      sendToRenderer(this.window.webContents, 'browser:console', entry)
+    }
   }
 
   private detachActiveView(): void {

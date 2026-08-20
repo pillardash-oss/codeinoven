@@ -27,8 +27,10 @@
     Cloud,
     FileDiff,
     FolderTree,
+    Globe2,
     History,
     Info,
+    Minimize2,
     MessageCircleDashed,
     SquareTerminal,
     StickyNote
@@ -724,6 +726,15 @@
     contextSidebarState.sidebarTabs.filter((tab) => tab.kind === 'subagent')
   )
 
+  let browserTabs = $derived(
+    contextSidebarState.sidebarTabs.filter((tab) => tab.kind === 'browser')
+  )
+
+  function focusBrowser(): void {
+    const tab = browserTabs.at(-1)
+    if (tab) contextSidebarState.focus(tab.id)
+  }
+
   function focusSubagent(): void {
     const tab = subagentTabs.at(-1)
     if (tab) contextSidebarState.focus(tab.id)
@@ -955,6 +966,19 @@
           )
       }
     ]
+    if (browserTabs.length > 0) {
+      const name =
+        browserTabs.length === 1
+          ? (browserTabs.at(-1)?.title ?? 'Browser')
+          : `${browserTabs.length} browser tabs`
+      threadNote.push({
+        id: 'browser',
+        label: dockKindActive('browser') ? `Hide ${name}` : `Show ${name}`,
+        icon: Globe2,
+        active: dockKindActive('browser'),
+        onSelect: () => toggleDockPanel('browser', focusBrowser)
+      })
+    }
 
     // Sub-agents appear only after the first one is opened. The group shares
     // one toggle, while the sidebar keeps each sub-agent in its own tab.
@@ -3885,10 +3909,10 @@
             <Dialog.Description class="sr-only">Fullscreen browser</Dialog.Description>
             <Dialog.Close
               class="titlebar-no-drag flex h-7 w-7 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
-              aria-label="Close fullscreen browser"
-              title="Close fullscreen browser"
+              aria-label="Minimize browser"
+              title="Minimize browser"
             >
-              <X size={14} />
+              <Minimize2 size={14} />
             </Dialog.Close>
           </div>
           <BrowserPanel tab={browserTab} />

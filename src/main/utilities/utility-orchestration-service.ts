@@ -168,6 +168,11 @@ const BROWSER_UTILITY_TOOLS: McpTool[] = [
     name: 'reload',
     description: 'Reload the current page.',
     inputSchema: { type: 'object', properties: {}, additionalProperties: false }
+  },
+  {
+    name: 'console',
+    description: 'Read console messages and browser runtime errors from the current tab.',
+    inputSchema: { type: 'object', properties: {}, additionalProperties: false }
   }
 ]
 

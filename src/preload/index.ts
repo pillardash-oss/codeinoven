@@ -347,6 +347,8 @@ const INVOKE_CHANNELS = [
   'browser:goForward',
   'browser:reload',
   'browser:stop',
+  'browser:getConsole',
+  'browser:clearConsole',
   'browser:destroy',
   'spec:addAnnotation',
   'spec:addDecisionComment',
@@ -464,6 +466,7 @@ const EVENT_CHANNELS = [
   'computerUse:pipFrame',
   'computerUse:pipState',
   'browser:state',
+  'browser:console',
   'browser:openRequested',
   'remote:status',
   'remote:stepUpPending'

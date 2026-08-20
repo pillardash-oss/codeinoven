@@ -86,6 +86,7 @@ const defaultConfig: AppConfig = {
   keybindings: {},
   slashCommandMode: 'app',
   preferredEditor: 'system',
+  openLocalhostInCioBrowser: true,
   memory: { enabled: true, chatEnabled: true, entries: [] },
   agentDefaults: { syncFromThreadChanges: false },
   agentBehaviorPrompt: DEFAULT_AGENT_BEHAVIOR_PROMPT,

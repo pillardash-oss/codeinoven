@@ -190,6 +190,19 @@ export interface BrowserPageState {
   canGoForward: boolean
 }
 
+export type BrowserConsoleLevel = 'debug' | 'info' | 'warning' | 'error'
+
+/** A console or runtime diagnostic emitted by one app-scoped browser tab. */
+export interface BrowserConsoleEntry {
+  id: string
+  tabId: string
+  level: BrowserConsoleLevel
+  message: string
+  sourceId: string
+  lineNumber: number
+  timestamp: number
+}
+
 export interface IpcInvokeContract {
   'account:getLocalUsage': Contract<
     [range: import('./types').LocalProfileAnalyticsRange],
@@ -1331,6 +1344,8 @@ export interface IpcInvokeContract {
   'browser:goForward': Contract<[tabId: string], void>
   'browser:reload': Contract<[tabId: string], void>
   'browser:stop': Contract<[tabId: string], void>
+  'browser:getConsole': Contract<[tabId: string], BrowserConsoleEntry[]>
+  'browser:clearConsole': Contract<[tabId: string], void>
   'browser:destroy': Contract<[tabId: string], void>
   'spec:addAnnotation': Contract<
     [
@@ -1827,6 +1842,7 @@ export interface IpcEventContract {
   'computerUse:pipFrame': [frame: ComputerUsePipFrame]
   'computerUse:pipState': [state: ComputerUsePipState]
   'browser:state': [state: BrowserPageState]
+  'browser:console': [entry: BrowserConsoleEntry]
   'browser:openRequested': [url: string, requestedTabId?: string]
   /** Remote-mode status changes from the main process. */
   'remote:status': [status: RemoteModeStatus]

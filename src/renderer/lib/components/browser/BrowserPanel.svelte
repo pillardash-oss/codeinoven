@@ -1,10 +1,25 @@
 <script lang="ts">
-  import { onMount } from 'svelte'
-  import { ArrowLeft, ArrowRight, Globe2, LoaderCircle, RotateCw, X } from '@lucide/svelte'
+  import { onMount, tick } from 'svelte'
+  import type { Attachment } from 'svelte/attachments'
+  import {
+    ArrowLeft,
+    ArrowRight,
+    Globe2,
+    LoaderCircle,
+    RotateCw,
+    SquareTerminal,
+    Trash2,
+    X
+  } from '@lucide/svelte'
   import { invoke, subscribe } from '$lib/ipc.svelte'
   import { normalizeBrowserUrl } from '$shared/local-development-url'
   import { contextSidebarState, type BrowserContextTab } from '$lib/stores/context-sidebar.svelte'
-  import type { BrowserPageState, BrowserViewBounds } from '$shared/ipc-contract'
+  import type {
+    BrowserConsoleEntry,
+    BrowserConsoleLevel,
+    BrowserPageState,
+    BrowserViewBounds
+  } from '$shared/ipc-contract'
 
   interface Props {
     tab: BrowserContextTab
@@ -27,6 +42,24 @@
   let address = $state(initialPageState().url)
   let addressError = $state('')
   let pageState = $state<BrowserPageState>(initialPageState())
+  let activeSurface = $derived(tab.surface)
+  let consoleEntries = $state<BrowserConsoleEntry[]>([])
+  let consoleElement = $state<HTMLDivElement>()
+  let errorCount = $derived(consoleEntries.filter((entry) => entry.level === 'error').length)
+
+  const attachContentElement: Attachment<HTMLDivElement> = (element) => {
+    contentElement = element
+    return () => {
+      if (contentElement === element) contentElement = undefined
+    }
+  }
+
+  const attachConsoleElement: Attachment<HTMLDivElement> = (element) => {
+    consoleElement = element
+    return () => {
+      if (consoleElement === element) consoleElement = undefined
+    }
+  }
 
   function contentBounds(): BrowserViewBounds | null {
     if (!contentElement) return null
@@ -41,6 +74,7 @@
   }
 
   async function showAtCurrentBounds(): Promise<void> {
+    if (activeSurface !== 'page') return
     const bounds = contentBounds()
     if (!bounds) return
     pageState = await invoke('browser:show', tab.id, tab.url, bounds)
@@ -65,8 +99,73 @@
     contextSidebarState.updateBrowserTab(tab.id, next.url || tab.url, next.title)
   }
 
+  function mergeConsoleEntries(entries: BrowserConsoleEntry[]): void {
+    const merged = [...consoleEntries]
+    for (const entry of entries) {
+      if (entry.tabId !== tab.id) continue
+      const index = merged.findIndex((candidate) => candidate.id === entry.id)
+      if (index >= 0) merged[index] = entry
+      else merged.push(entry)
+    }
+    consoleEntries = merged.sort((left, right) => left.timestamp - right.timestamp).slice(-500)
+  }
+
+  function applyConsoleEntry(entry: BrowserConsoleEntry): void {
+    if (entry.tabId !== tab.id) return
+    mergeConsoleEntries([entry])
+    if (activeSurface === 'console') {
+      requestAnimationFrame(() => {
+        const element = consoleElement
+        if (element) element.scrollTo({ top: element.scrollHeight })
+      })
+    }
+  }
+
+  async function selectSurface(surface: BrowserContextTab['surface']): Promise<void> {
+    if (activeSurface === surface) return
+    contextSidebarState.updateBrowserSurface(tab.id, surface)
+    if (surface === 'console') {
+      await invoke('browser:hide', tab.id)
+      return
+    }
+    await tick()
+    await showAtCurrentBounds()
+  }
+
+  async function clearConsole(): Promise<void> {
+    await invoke('browser:clearConsole', tab.id)
+    consoleEntries = []
+  }
+
+  function levelClass(level: BrowserConsoleLevel): string {
+    if (level === 'error') return 'border-danger/20 bg-danger/10 text-danger'
+    if (level === 'warning') return 'border-warning/20 bg-warning/10 text-warning'
+    if (level === 'debug') return 'border-border text-dimmed'
+    return 'border-border text-foreground'
+  }
+
+  function sourceLabel(entry: BrowserConsoleEntry): string {
+    if (!entry.sourceId) return ''
+    try {
+      const source = new URL(entry.sourceId)
+      const path = `${source.pathname}${source.search}`
+      return `${source.host}${path === '/' ? '' : path}${entry.lineNumber ? `:${entry.lineNumber}` : ''}`
+    } catch {
+      return `${entry.sourceId}${entry.lineNumber ? `:${entry.lineNumber}` : ''}`
+    }
+  }
+
+  function timeLabel(timestamp: number): string {
+    return new Date(timestamp).toLocaleTimeString([], {
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit'
+    })
+  }
+
   onMount(() => {
     const unsubscribeState = subscribe('browser:state', applyPageState)
+    const unsubscribeConsole = subscribe('browser:console', applyConsoleEntry)
     const observer = new ResizeObserver(() => void showAtCurrentBounds())
     if (contentElement) observer.observe(contentElement)
     const onWindowResize = (): void => void showAtCurrentBounds()
@@ -81,12 +180,16 @@
       if (now - startedAt < 260) animationFrame = requestAnimationFrame(followTransition)
     }
     animationFrame = requestAnimationFrame(followTransition)
+    void showAtCurrentBounds().then(async () => {
+      mergeConsoleEntries(await invoke('browser:getConsole', tab.id))
+    })
 
     return () => {
       cancelAnimationFrame(animationFrame)
       observer.disconnect()
       window.removeEventListener('resize', onWindowResize)
       unsubscribeState()
+      unsubscribeConsole()
       void invoke('browser:hide', tab.id)
     }
   })
@@ -165,9 +268,95 @@
     </p>
   {/if}
   <div
-    bind:this={contentElement}
-    class="min-h-0 flex-1 bg-surface"
+    class="flex h-9 shrink-0 items-end justify-between border-b border-border bg-surface px-2"
+    role="tablist"
+    aria-label="Browser surfaces"
+  >
+    <div class="flex h-full items-end gap-1">
+      <button
+        type="button"
+        role="tab"
+        aria-selected={activeSurface === 'page'}
+        class={[
+          'flex h-8 items-center gap-1.5 border-b-2 px-2.5 text-[11px] font-medium transition-colors',
+          activeSurface === 'page'
+            ? 'border-primary text-foreground'
+            : 'border-transparent text-dimmed hover:text-foreground'
+        ]}
+        onclick={() => void selectSurface('page')}
+      >
+        <Globe2 size={12} />
+        Page
+      </button>
+      <button
+        type="button"
+        role="tab"
+        aria-selected={activeSurface === 'console'}
+        class={[
+          'flex h-8 items-center gap-1.5 border-b-2 px-2.5 text-[11px] font-medium transition-colors',
+          activeSurface === 'console'
+            ? 'border-primary text-foreground'
+            : 'border-transparent text-dimmed hover:text-foreground'
+        ]}
+        onclick={() => void selectSurface('console')}
+      >
+        <SquareTerminal size={12} />
+        Console
+        {#if errorCount > 0}
+          <span class="rounded-full bg-danger/15 px-1.5 text-[9px] font-semibold text-danger">
+            {errorCount}
+          </span>
+        {/if}
+      </button>
+    </div>
+    {#if activeSurface === 'console' && consoleEntries.length > 0}
+      <button
+        type="button"
+        class="mb-1 flex h-7 w-7 items-center justify-center rounded-md text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+        aria-label="Clear browser console"
+        title="Clear browser console"
+        onclick={() => void clearConsole()}
+      >
+        <Trash2 size={12} />
+      </button>
+    {/if}
+  </div>
+  <div
+    {@attach attachContentElement}
+    class={['min-h-0 flex-1 bg-surface', activeSurface !== 'page' && 'hidden']}
     role="document"
     aria-label={`Browser content for ${pageState.title || address}`}
   ></div>
+  <div
+    {@attach attachConsoleElement}
+    class={[
+      'min-h-0 flex-1 overflow-auto bg-app font-mono text-[11px]',
+      activeSurface !== 'console' && 'hidden'
+    ]}
+    role="tabpanel"
+    aria-label="Browser console"
+  >
+    {#each consoleEntries as entry (entry.id)}
+      <div
+        class={['grid grid-cols-[auto_1fr] gap-x-2 border-b px-3 py-2', levelClass(entry.level)]}
+      >
+        <span class="select-none tabular-nums opacity-60">{timeLabel(entry.timestamp)}</span>
+        <div class="min-w-0">
+          <p class="whitespace-pre-wrap break-words">{entry.message}</p>
+          {#if sourceLabel(entry)}
+            <p class="mt-0.5 truncate text-[10px] opacity-55" title={sourceLabel(entry)}>
+              {sourceLabel(entry)}
+            </p>
+          {/if}
+        </div>
+      </div>
+    {:else}
+      <div
+        class="flex h-full min-h-32 flex-col items-center justify-center gap-2 px-6 text-center text-dimmed"
+      >
+        <SquareTerminal size={18} strokeWidth={1.5} />
+        <p class="font-sans text-xs">No messages from this browser tab.</p>
+      </div>
+    {/each}
+  </div>
 </div>
