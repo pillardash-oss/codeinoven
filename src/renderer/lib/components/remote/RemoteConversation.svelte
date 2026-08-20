@@ -1,8 +1,8 @@
 <script lang="ts">
-  import { onMount } from 'svelte'
+  import { onDestroy, onMount } from 'svelte'
   import type { Attachment } from 'svelte/attachments'
   import { SvelteMap } from 'svelte/reactivity'
-  import { Loader2, FileText, RefreshCw } from '@lucide/svelte'
+  import { Check, ChevronDown, Copy, FileText, GitFork, Loader2, RefreshCw } from '@lucide/svelte'
   import { threadMessages } from '$lib/stores/thread-messages.svelte'
   import { agentRuns } from '$lib/stores/agent-runs.svelte'
   import {
@@ -14,6 +14,9 @@
   import { invoke } from '$lib/ipc.svelte'
   import { messageId } from '$shared/id'
   import { isTodoToolPart } from '$lib/agent-todos'
+  import { copyText } from '$lib/copy-text'
+  import { getAgentIcon } from '$lib/agent-icons/registry'
+  import { mobileState } from '$lib/remote/mobile-state.svelte'
   import ChatComposer from '../chats/ChatComposer.svelte'
   import WorkingTrace from '../threads/WorkingTrace.svelte'
   import MarkdownView from '../markdown/MarkdownView.svelte'
@@ -41,6 +44,7 @@
   let loaded = $derived(threadMessages.loaded(thread.projectId, thread.id))
   let loading = $derived(threadMessages.loading(thread.projectId, thread.id))
   let loadError = $derived(threadMessages.error(thread.projectId, thread.id))
+  let runError = $derived(threadMessages.runError(thread.projectId, thread.id))
   let busy = $derived(agentRuns.isBusy(thread.projectId, thread.id))
 
   let sendError = $state('')
@@ -60,6 +64,12 @@
   function onScroll(): void {
     if (!scrollEl) return
     userScrolledAway = !isAtBottom(scrollEl)
+  }
+
+  function scrollToLatest(): void {
+    if (!scrollEl) return
+    userScrolledAway = false
+    scrollEl.scrollTo({ top: scrollEl.scrollHeight, behavior: 'smooth' })
   }
 
   const captureScrollElement: Attachment<HTMLDivElement> = (element) => {
@@ -83,6 +93,8 @@
    *  Held as local state (not a pure derive) so the composer's toolbar edits
    *  (model/permission/thinking) are reflected immediately without a round
    *  trip, matching desktop's ThreadView. */
+  // Intentional initial-value capture — this component is keyed per thread.
+  // svelte-ignore state_referenced_locally
   let settings = $state<ThreadSettings>(
     chatMode ? chatEffectiveSettings() : threadSettings.initialFor(thread)
   )
@@ -177,30 +189,149 @@
     )
   }
 
-  /** The message's own final answer — the last text part, shown as the
-   *  primary response outside the collapsible trace. Mirrors desktop's
-   *  ThreadView getTurnFinalText, simplified to a single message (mobile
-   *  doesn't merge multi-message turns into one trace). */
-  function finalTextPart(message: AgentMessage): Extract<AgentPart, { type: 'text' }> | undefined {
-    const textParts = message.parts.filter(
-      (part): part is Extract<AgentPart, { type: 'text' }> => part.type === 'text'
-    )
-    return textParts[textParts.length - 1]
+  function turnEndIndex(startIndex: number): number {
+    let endIndex = startIndex
+    while (endIndex + 1 < messages.length && messages[endIndex + 1]?.role === 'assistant') {
+      endIndex += 1
+    }
+    return endIndex
   }
 
-  /** Everything else — tool calls, reasoning, subagent activity — rendered
-   *  inside the collapsible WorkingTrace. Mirrors ThreadView's
-   *  getTurnWorkingParts filtering (final text, questions, and the todo tool
-   *  excluded). */
-  function traceParts(message: AgentMessage): AgentPart[] {
-    const final = finalTextPart(message)
-    return message.parts.filter((part) => {
-      if (part.type === 'question') return false
-      if (part.type === 'text' && part.id === final?.id) return false
-      if (isTodoToolPart(part)) return false
-      return true
-    })
+  function turnFinalText(startIndex: number): Extract<AgentPart, { type: 'text' }> | undefined {
+    let final: Extract<AgentPart, { type: 'text' }> | undefined
+    const endIndex = turnEndIndex(startIndex)
+    for (let index = startIndex; index <= endIndex; index += 1) {
+      for (const part of messages[index]?.parts ?? []) {
+        if (part.type === 'text') final = part
+      }
+    }
+    return final
   }
+
+  /** One ordered trace per user turn, matching the desktop grouping boundary. */
+  function turnTraceParts(startIndex: number, includeCurrentFinal = false): AgentPart[] {
+    const final = turnFinalText(startIndex)
+    const parts: AgentPart[] = []
+    const endIndex = turnEndIndex(startIndex)
+    for (let index = startIndex; index <= endIndex; index += 1) {
+      for (const part of messages[index]?.parts ?? []) {
+        if (part.type === 'question') continue
+        if (
+          part.type === 'text' &&
+          part.id === final?.id &&
+          (!includeCurrentFinal || part.phase === 'final_answer')
+        )
+          continue
+        if (isTodoToolPart(part)) continue
+        parts.push(part)
+      }
+    }
+    return parts
+  }
+
+  function turnFiles(startIndex: number): Extract<AgentPart, { type: 'file' }>[] {
+    const files: Extract<AgentPart, { type: 'file' }>[] = []
+    const endIndex = turnEndIndex(startIndex)
+    for (let index = startIndex; index <= endIndex; index += 1) {
+      files.push(...fileParts(messages[index]))
+    }
+    return files
+  }
+
+  function turnError(startIndex: number): string {
+    const endIndex = turnEndIndex(startIndex)
+    for (let index = endIndex; index >= startIndex; index -= 1) {
+      const error = messages[index]?.error
+      if (error) return error
+    }
+    return ''
+  }
+
+  function turnStartTime(startIndex: number): number | undefined {
+    const preceding = messages[startIndex - 1]
+    return preceding?.role === 'user' ? preceding.createdAt : messages[startIndex]?.createdAt
+  }
+
+  function turnAttribution(startIndex: number): AgentMessage {
+    const endIndex = turnEndIndex(startIndex)
+    for (let index = endIndex; index >= startIndex; index -= 1) {
+      const message = messages[index]
+      if (message?.modelId || message?.providerId || message?.harnessId) return message
+    }
+    return messages[startIndex]
+  }
+
+  function modelLabel(message: AgentMessage): string | null {
+    if (!message.modelId) return null
+    return (
+      providers.flatMap((provider) => provider.models).find((model) => model.id === message.modelId)
+        ?.name ?? message.modelId
+    )
+  }
+
+  function providerName(message: AgentMessage): string | null {
+    if (!message.providerId) return null
+    return (
+      providers.find((provider) => provider.id === message.providerId)?.name ?? message.providerId
+    )
+  }
+
+  function harnessId(message: AgentMessage): string {
+    return message.harnessId ?? settings.harnessId
+  }
+
+  function harnessName(message: AgentMessage): string {
+    const id = harnessId(message)
+    return getAgentIcon(id)?.name ?? id
+  }
+
+  function formatDuration(milliseconds: number): string {
+    const seconds = Math.max(0, Math.round(milliseconds / 1000))
+    if (seconds < 60) return `${seconds}s`
+    const minutes = Math.floor(seconds / 60)
+    const remainder = seconds % 60
+    return remainder > 0 ? `${minutes}m ${remainder}s` : `${minutes}m`
+  }
+
+  let copiedMessageId = $state<string | null>(null)
+  let copyResetTimer: ReturnType<typeof setTimeout> | undefined
+  let forkingMessageId = $state<string | null>(null)
+
+  async function copyTurn(
+    message: AgentMessage,
+    final: Extract<AgentPart, { type: 'text' }>
+  ): Promise<void> {
+    try {
+      await copyText(final.text)
+      copiedMessageId = message.id
+      clearTimeout(copyResetTimer)
+      copyResetTimer = setTimeout(() => (copiedMessageId = null), 1_500)
+    } catch {
+      sendError = 'The response could not be copied to the clipboard.'
+    }
+  }
+
+  async function forkFromMessage(message: AgentMessage): Promise<void> {
+    if (forkingMessageId) return
+    forkingMessageId = message.id
+    try {
+      const forked = await invoke(
+        'thread:fork',
+        thread.projectId,
+        thread.id,
+        `${thread.title} (fork)`,
+        undefined,
+        message.id
+      )
+      await mobileState.openThread(forked)
+    } catch (error) {
+      sendError = error instanceof Error ? error.message : 'The thread could not be forked.'
+    } finally {
+      forkingMessageId = null
+    }
+  }
+
+  onDestroy(() => clearTimeout(copyResetTimer))
 
   // ─── Sending, queued "start after" dependencies, and abort ──────────────
   let queuedMessage = $state<{
@@ -318,7 +449,6 @@
         {#each messages as message, index (message.id)}
           {@const text = textFor(message)}
           {@const files = fileParts(message)}
-          {@const isLatest = index === messages.length - 1}
           <div
             {@attach registerMessageElement}
             class="group flex flex-col gap-1.5"
@@ -349,36 +479,53 @@
                   {/if}
                 </div>
               </div>
-            {:else}
-              {@const trace = traceParts(message)}
+            {:else if index === 0 || messages[index - 1]?.role === 'user'}
+              {@const endIndex = turnEndIndex(index)}
+              {@const endMessage = messages[endIndex]}
+              {@const final = turnFinalText(index)}
+              {@const turnBusy = busy && endIndex === messages.length - 1}
+              {@const trace = turnTraceParts(index, turnBusy)}
+              {@const assistantFiles = turnFiles(index)}
+              {@const error = turnError(index)}
+              {@const attribution = turnAttribution(index)}
+              {@const isLatestAssistantTurn = messages
+                .slice(endIndex + 1)
+                .every((candidate) => candidate.role === 'user')}
+              {@const turnDone = endMessage.completedAt !== undefined || !turnBusy}
               <div class="flex flex-col gap-1.5">
-                {#if message.error}
+                {#if error}
                   <p
                     class="rounded-xl border border-danger/30 bg-danger/10 px-3 py-2 text-[13px] text-danger"
                   >
-                    {message.error}
+                    {error}
                   </p>
                 {/if}
                 {#if trace.length > 0}
                   <WorkingTrace
                     parts={trace}
-                    open={isLatest && busy}
-                    busy={isLatest && busy}
-                    latest={isLatest}
-                    done={!isLatest || !busy}
+                    open={turnBusy}
+                    busy={turnBusy}
+                    latest={isLatestAssistantTurn}
+                    done={turnDone}
+                    startTime={turnStartTime(index)}
+                    modelLabel={modelLabel(attribution)}
+                    thinkingLevel={attribution.thinkingLevel ?? settings.thinkingLevel}
+                    providerName={providerName(attribution)}
+                    harnessId={harnessId(attribution)}
+                    harnessName={harnessName(attribution)}
                     projectId={thread.projectId}
                     threadId={thread.id}
                     onOpenSubagent={openSubagent}
                   />
                 {/if}
-                {#if text}
+                {#if final && !turnBusy}
                   <div class="text-sm text-foreground">
-                    <MarkdownView {text} />
+                    <MarkdownView text={final.text} />
                   </div>
                 {/if}
-                {#if files.length > 0}
+                {#if assistantFiles.length > 0}
                   <div class="flex flex-wrap gap-1.5">
-                    {#each files as part (part.id)}
+                    {#each assistantFiles as part (part.id)}
                       <span
                         class="flex max-w-full items-center gap-1.5 rounded-lg bg-elevated px-2 py-1 text-[11px] text-muted"
                         title={part.filename ?? part.url}
@@ -391,16 +538,63 @@
                     {/each}
                   </div>
                 {/if}
-                {#if isLatest && busy && trace.length === 0 && !text}
+                {#if turnBusy && trace.length === 0}
                   <div class="flex items-center gap-2 text-xs text-dimmed">
                     <Loader2 size={13} class="animate-spin" />
                     Working…
+                  </div>
+                {/if}
+                {#if turnDone && !turnBusy && (final || error)}
+                  <div class="mt-1 flex min-h-8 items-center gap-1 text-dimmed">
+                    {#if final}
+                      <button
+                        type="button"
+                        class="flex h-8 w-8 cursor-pointer items-center justify-center rounded-lg transition-colors active:bg-elevated active:text-foreground"
+                        aria-label="Copy agent response"
+                        title="Copy"
+                        onclick={() => void copyTurn(endMessage, final)}
+                      >
+                        {#if copiedMessageId === endMessage.id}
+                          <Check size={14} class="text-success" />
+                        {:else}
+                          <Copy size={14} />
+                        {/if}
+                      </button>
+                    {/if}
+                    <button
+                      type="button"
+                      class="flex h-8 w-8 cursor-pointer items-center justify-center rounded-lg transition-colors active:bg-elevated active:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+                      aria-label="Fork thread from this response"
+                      title="Fork from here"
+                      disabled={forkingMessageId !== null}
+                      onclick={() => void forkFromMessage(endMessage)}
+                    >
+                      {#if forkingMessageId === endMessage.id}
+                        <Loader2 size={14} class="animate-spin" />
+                      {:else}
+                        <GitFork size={14} />
+                      {/if}
+                    </button>
+                    <span class="ml-1 min-w-0 truncate text-[10px]">
+                      {harnessName(attribution)}{#if modelLabel(attribution)}
+                        · {modelLabel(attribution)}{/if}
+                      {#if endMessage.completedAt && turnStartTime(index)}
+                        · {formatDuration(endMessage.completedAt - (turnStartTime(index) ?? 0))}
+                      {/if}
+                    </span>
                   </div>
                 {/if}
               </div>
             {/if}
           </div>
         {/each}
+      {/if}
+
+      {#if busy && messages[messages.length - 1]?.role === 'user'}
+        <div class="flex items-center gap-2 text-xs text-dimmed">
+          <Loader2 size={13} class="animate-spin" />
+          Working…
+        </div>
       {/if}
 
       {#if loadError}
@@ -429,6 +623,15 @@
         </p>
       {/if}
 
+      {#if runError && !sendError && !messages.some((message) => message.error === runError)}
+        <p
+          class="rounded-xl border border-danger/30 bg-danger/10 px-3 py-2 text-[13px] text-danger"
+          role="alert"
+        >
+          {runError}
+        </p>
+      {/if}
+
       {#if queuedMessage}
         <p class="rounded-xl border border-border bg-elevated px-3 py-2 text-[12px] text-dimmed">
           Queued — will send once {queuedMessage.startAfterThreads.length === 1
@@ -440,8 +643,19 @@
   </div>
 
   <div
-    class="shrink-0 border-t border-border bg-surface px-2 pb-[max(env(safe-area-inset-bottom),0.5rem)] pt-2"
+    class="relative shrink-0 border-t border-border bg-surface px-2 pb-[max(env(safe-area-inset-bottom),0.5rem)] pt-2"
   >
+    {#if userScrolledAway}
+      <button
+        type="button"
+        class="absolute -top-12 left-1/2 z-40 flex h-10 w-10 -translate-x-1/2 cursor-pointer items-center justify-center rounded-full border border-border bg-surface text-muted shadow-md transition-colors active:bg-elevated active:text-foreground"
+        title="Scroll to latest message"
+        aria-label="Scroll to latest message"
+        onclick={scrollToLatest}
+      >
+        <ChevronDown size={19} />
+      </button>
+    {/if}
     <ChatComposer
       onSend={handleSend}
       working={busy}

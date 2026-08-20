@@ -24,12 +24,17 @@ function bytesToBase64(bytes: Uint8Array): string {
   return btoa(binary)
 }
 
-async function registerRemoteFile(file: File, scope?: AttachmentStorageScope): Promise<string> {
-  if (!scope) return ''
-  if (file.size === 0) throw new TypeError('Dropped attachment is empty')
-  if (file.size > MAX_REMOTE_ATTACHMENT_BYTES) {
-    throw new TypeError('Dropped browser attachment must be at most 32 MB')
-  }
+function isConnectionInterruption(error: unknown): boolean {
+  if (!(error instanceof Error)) return false
+  const message = error.message.toLowerCase()
+  return (
+    message.includes('desktop connection changed') ||
+    message.includes('not connected to the desktop') ||
+    message.includes('socket')
+  )
+}
+
+async function uploadRemoteFile(file: File, scope: AttachmentStorageScope): Promise<string> {
   const uploadId = await remoteBridge.invoke(
     'attachment:beginRemoteUpload',
     scope,
@@ -59,6 +64,22 @@ async function registerRemoteFile(file: File, scope?: AttachmentStorageScope): P
   } catch (error) {
     await remoteBridge.invoke('attachment:cancelRemoteUpload', uploadId).catch(() => undefined)
     throw error
+  }
+}
+
+async function registerRemoteFile(file: File, scope?: AttachmentStorageScope): Promise<string> {
+  if (!scope) return ''
+  if (file.size === 0) throw new TypeError('Dropped attachment is empty')
+  if (file.size > MAX_REMOTE_ATTACHMENT_BYTES) {
+    throw new TypeError('Dropped browser attachment must be at most 32 MB')
+  }
+  try {
+    return await uploadRemoteFile(file, scope)
+  } catch (error) {
+    // Camera/gallery pickers suspend the PWA. Keep the returned File alive and
+    // retry the whole bounded upload after the desktop transport is restored.
+    if (!isConnectionInterruption(error)) throw error
+    return uploadRemoteFile(file, scope)
   }
 }
 

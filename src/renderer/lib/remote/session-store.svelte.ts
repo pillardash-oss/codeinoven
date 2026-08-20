@@ -67,6 +67,7 @@ export class RemoteSessionStore {
   private relayBootstrapFallbackAttempted = false
   /** Unique identity for the current browser relay WebSocket connection. */
   private relayConnectionId = ''
+  private resumeTask: Promise<void> | null = null
 
   private async ensureKeyMaterial(desktopId: string | null = null): Promise<DeviceKeyMaterial> {
     if (this.keyMaterial && this.keyMaterialDesktopId === desktopId) return this.keyMaterial
@@ -483,9 +484,13 @@ export class RemoteSessionStore {
    * the installed PWA stranded indefinitely.
    */
   async resume(): Promise<void> {
+    if (this.resumeTask) return this.resumeTask
     const route = this.accountRoute
     if (!route || !this.recovering) return
-    await this.connectAccountDesktop(route, true)
+    this.resumeTask = this.connectAccountDesktop(route, true).finally(() => {
+      this.resumeTask = null
+    })
+    await this.resumeTask
   }
 
   /** Mark an account route for verification when the browser is foregrounded. */

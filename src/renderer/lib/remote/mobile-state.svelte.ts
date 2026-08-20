@@ -189,6 +189,11 @@ class MobileState {
       this.projects = projectList
       this.allThreads = (threadList as Thread[]).filter((t) => !isOrchestrationChildThread(t))
       this.orchestrationThreads = (threadList as Thread[]).filter(isOrchestrationChildThread)
+      for (const thread of this.allThreads) {
+        if (agentRuns.hasSettled(thread.projectId, thread.id) && !isThreadWorking(thread)) {
+          agentRuns.setIdle(thread.projectId, thread.id)
+        }
+      }
       this.refreshAttention()
       this.projectIcons.clear()
       for (const [projectId, iconUrl] of await loadProjectIcons(this.projects)) {
@@ -339,6 +344,9 @@ class MobileState {
       ? this.allThreads.map((thread) => (thread.id === updated.id ? updated : thread))
       : [updated, ...this.allThreads]
     this.refreshAttention()
+    if (agentRuns.hasSettled(updated.projectId, updated.id) && !isThreadWorking(updated)) {
+      agentRuns.setIdle(updated.projectId, updated.id)
+    }
     if (this.selectedThread?.id === updated.id) {
       this.selectedThread = updated
       if (!updated.read) {
@@ -361,6 +369,42 @@ class MobileState {
       ? agentRuns.isBusy(thread.projectId, thread.id)
       : Boolean(thread.sessionId) && isThreadWorking(thread)
     return liveWorking || coordinatorHasActiveDelegates(thread, this.orchestrationThreads)
+  }
+
+  /** Reconcile state that may have changed while the mobile browser was frozen. */
+  async reconcileAfterReconnect(): Promise<void> {
+    const selected = this.selectedThread
+      ? { projectId: this.selectedThread.projectId, threadId: this.selectedThread.id }
+      : null
+    await this.loadData()
+    if (!selected) return
+    const refreshed = this.allThreads.find(
+      (thread) => thread.projectId === selected.projectId && thread.id === selected.threadId
+    )
+    this.selectedProject =
+      this.projects.find((project) => project.id === selected.projectId) ?? this.selectedProject
+    if (refreshed) this.selectedThread = refreshed
+    const status = await invoke(
+      'agent:getSessionStatus',
+      selected.projectId,
+      selected.threadId
+    ).catch(() => null)
+    if (status?.state === 'working' || status?.state === 'waiting') {
+      agentRuns.setBusy(
+        selected.projectId,
+        selected.threadId,
+        true,
+        undefined,
+        status.state === 'working' ? status.startedAt : undefined
+      )
+      threadMessages.setRunError(selected.projectId, selected.threadId, '')
+    } else {
+      agentRuns.setIdle(selected.projectId, selected.threadId)
+      if (status?.state === 'error') {
+        threadMessages.setRunError(selected.projectId, selected.threadId, status.issue.message)
+      }
+    }
+    await threadMessages.load(selected.projectId, selected.threadId)
   }
 }
 

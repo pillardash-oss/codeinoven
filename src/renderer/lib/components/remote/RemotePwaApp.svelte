@@ -7,6 +7,7 @@
   import { invoke } from '$lib/ipc.svelte'
   import { applyTheme, resolveTheme, watchSystemDark } from '$lib/theme'
   import Toaster from '$lib/components/ui/Toaster.svelte'
+  import { mobileState } from '$lib/remote/mobile-state.svelte'
 
   let connected = $derived(
     remoteSession.snapshot.route.kind === 'LAN_CONNECTED' ||
@@ -57,6 +58,15 @@
     }
     const suspend = (): void => remoteSession.suspend()
     const resume = (): void => void remoteSession.resume()
+    let wasConnected = connected
+    const stopStateWatch = remoteSession.onStateChange((snapshot) => {
+      const isConnectedNow =
+        snapshot.route.kind === 'LAN_CONNECTED' || snapshot.route.kind === 'RELAY_CONNECTED'
+      if (isConnectedNow && !wasConnected && workspaceOpened) {
+        void mobileState.reconcileAfterReconnect()
+      }
+      wasConnected = isConnectedNow
+    })
     document.addEventListener('visibilitychange', syncVisibility)
     window.addEventListener('pagehide', suspend)
     window.addEventListener('pageshow', resume)
@@ -65,6 +75,7 @@
       document.removeEventListener('visibilitychange', syncVisibility)
       window.removeEventListener('pagehide', suspend)
       window.removeEventListener('pageshow', resume)
+      stopStateWatch()
     }
   })
 </script>
