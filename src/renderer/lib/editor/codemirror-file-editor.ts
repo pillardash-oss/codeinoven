@@ -333,23 +333,18 @@ export async function createFileEditor(
     scrollToConflictRange(id: string): void {
       const range = view.state.field(conflictField).ranges.find((candidate) => candidate.id === id)
       if (!range) return
-      view.dispatch({
-        selection: { anchor: range.from },
-        effects: api.EditorView.scrollIntoView(range.from, { y: 'center' })
-      })
+      view.dispatch({ selection: { anchor: range.from } })
       view.requestMeasure({
         read(editor) {
           const current = editor.state
             .field(conflictField)
             .ranges.find((candidate) => candidate.id === id)
           if (!current) return null
-          const target = editor.coordsAtPos(current.from, 1)
-          if (!target) return null
-          const viewport = editor.scrollDOM.getBoundingClientRect()
-          const targetCenter = (target.top + target.bottom) / 2
-          const viewportCenter = (viewport.top + viewport.bottom) / 2
-          const desired = editor.scrollDOM.scrollTop + targetCenter - viewportCenter
-          return Math.max(0, Math.min(desired, editor.scrollDOM.scrollHeight - viewport.height))
+          const block = editor.lineBlockAt(current.from)
+          const viewportHeight = editor.scrollDOM.clientHeight
+          const targetCenter = editor.documentPadding.top + block.top + block.height / 2
+          const desired = targetCenter - viewportHeight / 2
+          return Math.max(0, Math.min(desired, editor.contentHeight - viewportHeight))
         },
         write(scrollTop, editor) {
           if (scrollTop === null) return
