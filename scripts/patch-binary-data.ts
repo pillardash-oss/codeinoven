@@ -23,7 +23,7 @@ const targets: Record<string, string> = {
 }
 
 function collectJsFiles(root: string, out: string[] = []): string[] {
-  let entries: string[] = []
+  let entries: string[]
   try {
     entries = readdirSync(root)
   } catch {
