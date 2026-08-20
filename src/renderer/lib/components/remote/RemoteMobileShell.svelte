@@ -740,18 +740,6 @@
           Disconnect
         </button>
 
-        {#if mobileState.sidebarMode === 'chats'}
-          <button
-            type="button"
-            class="flex h-10 w-10 shrink-0 cursor-pointer items-center justify-center rounded-xl text-muted transition-colors active:bg-elevated"
-            aria-label="New chat"
-            title="New chat"
-            onclick={() => void createChat()}
-          >
-            <Plus size={18} />
-          </button>
-        {/if}
-
         <button
           type="button"
           class="flex h-10 w-10 shrink-0 cursor-pointer items-center justify-center rounded-xl text-muted transition-colors active:bg-elevated"
@@ -1077,11 +1065,11 @@
         {/if}
       </div>
 
-      <!-- Sidebar footer: view switcher — Projects / Threads / Chats. -->
-      <div class="shrink-0 border-t border-border p-2">
+      <!-- Sidebar footer: view switcher + new thread/chat — share the same row. -->
+      <div class="shrink-0 border-t border-border p-2 flex items-center gap-2">
         <button
           type="button"
-          class="flex h-11 w-full cursor-pointer items-center justify-between gap-2 rounded-xl bg-elevated px-3 text-left transition-colors active:bg-elevated"
+          class="flex h-11 min-w-0 flex-1 cursor-pointer items-center justify-between gap-2 rounded-xl bg-elevated px-3 text-left transition-colors active:bg-elevated"
           title="Switch sidebar view"
           aria-label="Switch sidebar view"
           onclick={() => (modeMenuOpen = true)}
@@ -1097,6 +1085,30 @@
           </span>
           <ChevronDown size={15} class="shrink-0 text-dimmed" />
         </button>
+        {#if mobileState.sidebarMode === 'chats'}
+          <button
+            type="button"
+            class="flex h-11 w-11 shrink-0 cursor-pointer items-center justify-center rounded-xl bg-primary text-on-primary transition-colors active:bg-primary-hover"
+            aria-label="New chat"
+            title="New chat"
+            onclick={() => void createChat()}
+          >
+            <Plus size={18} />
+          </button>
+        {:else if mobileState.sidebarMode === 'threads'}
+          <button
+            type="button"
+            class="flex h-11 w-11 shrink-0 cursor-pointer items-center justify-center rounded-xl bg-primary text-on-primary transition-colors active:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-40"
+            aria-label={activeThreadProject ? `New thread in ${activeThreadProject.name}` : 'New thread'}
+            title={activeThreadProject ? `New thread in ${activeThreadProject.name}` : 'New thread'}
+            disabled={!activeThreadProject}
+            onclick={() => {
+              if (activeThreadProject) void createProjectThread(activeThreadProject.id)
+            }}
+          >
+            <Plus size={18} />
+          </button>
+        {/if}
       </div>
     </aside>
   {/if}

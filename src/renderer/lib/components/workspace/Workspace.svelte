@@ -2527,14 +2527,6 @@
           </span>
         {:else if mode === 'chats'}
           <div class="flex items-center gap-0.5">
-            <button
-              class="flex h-6 w-6 items-center justify-center rounded-md text-muted transition-colors hover:bg-elevated hover:text-foreground"
-              aria-label="New chat"
-              title="New chat"
-              onclick={startNewChat}
-            >
-              <SquarePen size={14} />
-            </button>
             <ThreadSearchControl
               threads={allThreads.filter((t) => t.projectId === INBOX_PROJECT_ID)}
               contextLabel="chats"
@@ -2584,16 +2576,6 @@
                 </DropdownMenu.Content>
               </DropdownMenu.Portal>
             </DropdownMenu.Root>
-            {#if activeProject}
-              <button
-                class="flex h-6 w-6 items-center justify-center rounded-md text-muted transition-colors hover:bg-elevated hover:text-foreground"
-                aria-label="New thread in {activeProject.name}"
-                title="New thread in {activeProject.name}"
-                onclick={() => createThreadInProject(activeProject)}
-              >
-                <Plus size={14} />
-              </button>
-            {/if}
             <SidebarSearchControl
               open={threadsSearchOpen}
               query={threadsSearchQuery}
@@ -2629,6 +2611,72 @@
 
       {#snippet footer()}
         {#if !workspaceState.specStudioOpen}
+          {#if mode === 'chats' || mode === 'threads'}
+            <div class="flex items-center justify-between gap-2 border-b px-2 py-1.5">
+              <div
+                class="flex items-center gap-0.5 rounded-md bg-elevated p-0.5"
+                role="tablist"
+                aria-label="Chats and threads view"
+              >
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={mode === 'chats'}
+                  aria-label="Chats view"
+                  title="Chats"
+                  class="rounded px-2.5 py-1 text-xs font-medium transition-colors {mode === 'chats'
+                    ? 'bg-surface text-foreground shadow-sm'
+                    : 'text-muted hover:text-foreground'}"
+                  onclick={() => {
+                    if (mode !== 'chats') navigate('chats')
+                  }}
+                >
+                  Chats
+                </button>
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={mode === 'threads'}
+                  aria-label="Threads view"
+                  title="Threads"
+                  class="rounded px-2.5 py-1 text-xs font-medium transition-colors {mode === 'threads'
+                    ? 'bg-surface text-foreground shadow-sm'
+                    : 'text-muted hover:text-foreground'}"
+                  onclick={() => {
+                    if (mode !== 'threads') navigate('threads')
+                  }}
+                >
+                  Threads
+                </button>
+              </div>
+              {#if mode === 'chats'}
+                <button
+                  type="button"
+                  class="flex h-7 w-7 items-center justify-center rounded-md bg-primary text-on-primary transition-colors hover:bg-primary-hover"
+                  aria-label="New chat"
+                  title="New chat"
+                  onclick={startNewChat}
+                >
+                  <SquarePen size={14} />
+                </button>
+              {:else}
+                <button
+                  type="button"
+                  class="flex h-7 w-7 items-center justify-center rounded-md bg-primary text-on-primary transition-colors hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-40"
+                  aria-label={activeProject
+                    ? `New thread in ${activeProject.name}`
+                    : 'New thread'}
+                  title={activeProject ? `New thread in ${activeProject.name}` : 'New thread'}
+                  disabled={!activeProject}
+                  onclick={() => {
+                    if (activeProject) createThreadInProject(activeProject)
+                  }}
+                >
+                  <Plus size={14} />
+                </button>
+              {/if}
+            </div>
+          {/if}
           <SidebarAccountControls {active} {navigate} />
         {/if}
       {/snippet}
