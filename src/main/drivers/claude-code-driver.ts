@@ -820,6 +820,20 @@ function findSubagentPart(
   return undefined
 }
 
+function activeClaudeSubagentParts(
+  context: CliLineParseContext,
+  background: boolean
+): Extract<AgentPart, { type: 'subagent' }>[] {
+  return context.session.messages.flatMap((message) =>
+    message.parts.filter(
+      (part): part is Extract<AgentPart, { type: 'subagent' }> =>
+        part.type === 'subagent' &&
+        part.activity.background === background &&
+        (part.activity.status === 'pending' || part.activity.status === 'running')
+    )
+  )
+}
+
 function messageFromAssistant(message: Record<string, unknown>): AgentMessage {
   const messageId = string(message['id']) ?? `claude-assistant-${Date.now()}`
   const content = Array.isArray(message['content']) ? message['content'] : []
@@ -1006,6 +1020,7 @@ export function mapClaudeCodeRecord(
     if (parentCallId) {
       const existing = findSubagentPart(context, parentCallId)
       if (!existing) return nativeSessionId ? { nativeSessionId } : null
+      const resolvedModelId = string(rawMessage['model']) ?? string(entry['model'])
       const output = Array.isArray(rawMessage['content'])
         ? rawMessage['content']
             .map((block) => serializeContent(record(block)?.['text']))
@@ -1017,6 +1032,7 @@ export function mapClaudeCodeRecord(
         activity: {
           ...existing.activity,
           status: 'running',
+          modelId: resolvedModelId ?? existing.activity.modelId,
           ...(output ? { output } : {})
         }
       }
@@ -1269,10 +1285,28 @@ export function mapClaudeCodeRecord(
       : []
     const rateLimits = reportedRateLimits.length > 0 ? reportedRateLimits : inheritedRateLimits
     const issue = claudeSessionLimitIssue(error, rateLimits)
+    const completedAt = Date.now()
+    const terminalSubagentEvents: SessionAgentEvent[] = activeClaudeSubagentParts(
+      context,
+      false
+    ).map((part) => ({
+      type: 'message.part.updated',
+      sessionId: context.sessionId,
+      part: {
+        ...part,
+        activity: {
+          ...part.activity,
+          status: error ? 'error' : 'completed',
+          ...(error ? { error } : {}),
+          ...(part.activity.time ? { time: { ...part.activity.time, end: completedAt } } : {})
+        }
+      }
+    }))
     return {
       nativeSessionId,
       events: latest
         ? [
+            ...terminalSubagentEvents,
             ...(tokens ||
             cost !== undefined ||
             contextWindow !== undefined ||
@@ -1306,6 +1340,7 @@ export function mapClaudeCodeRecord(
           ]
         : error
           ? [
+              ...terminalSubagentEvents,
               {
                 type: 'session.error',
                 sessionId: context.sessionId,
@@ -1313,7 +1348,7 @@ export function mapClaudeCodeRecord(
                 ...(issue ? { issue } : {})
               }
             ]
-          : []
+          : terminalSubagentEvents
     }
   }
   return nativeSessionId ? { nativeSessionId } : null
@@ -2349,7 +2384,10 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
     const result = mapClaudeCodeRecord(value, context)
     if (type === 'result') {
       this.finishActiveUsageProbe(context.sessionId, null)
-      if (!this.hasPendingInteraction(context.sessionId)) {
+      if (
+        !this.hasPendingInteraction(context.sessionId) &&
+        activeClaudeSubagentParts(context, true).length === 0
+      ) {
         this.closeActiveInput(context.sessionId)
       }
     }
