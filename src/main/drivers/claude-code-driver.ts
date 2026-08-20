@@ -1633,6 +1633,16 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
     this.writeActiveInput(sessionId, `${JSON.stringify(message)}\n`)
   }
 
+  /** A result record must not close stdin while Claude still awaits host input. */
+  private hasPendingInteraction(sessionId: string): boolean {
+    return (
+      [...this.pendingClaudeQuestions.values()].some(
+        (request) => request.sessionId === sessionId
+      ) ||
+      [...this.pendingClaudePermissions.values()].some((request) => request.sessionId === sessionId)
+    )
+  }
+
   protected override normalizeInteractionEvents(
     sessionId: string,
     events: SessionAgentEvent[]
@@ -2344,7 +2354,9 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
     const result = mapClaudeCodeRecord(value, context)
     if (type === 'result') {
       this.finishActiveUsageProbe(context.sessionId, null)
-      this.closeActiveInput(context.sessionId)
+      if (!this.hasPendingInteraction(context.sessionId)) {
+        this.closeActiveInput(context.sessionId)
+      }
     }
     if (!result) return null
     const assistant = result.messages?.find((message) => message.role === 'assistant')
