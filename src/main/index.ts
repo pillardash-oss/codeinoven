@@ -1,6 +1,6 @@
 import { app, BrowserWindow, dialog, nativeTheme, screen, session, shell } from 'electron'
 import { dirname, join } from 'path'
-import { existsSync, mkdirSync } from 'fs'
+import { existsSync, mkdirSync, renameSync } from 'fs'
 import { fileURLToPath } from 'url'
 import { is } from '@electron-toolkit/utils'
 import { APP_ID, APP_NAME } from '../lib/brand'
@@ -55,10 +55,37 @@ import { sendToRenderer } from './ipc/renderer-delivery'
 import { hasNativeSplashHandoff, signalNativeSplashReady } from './system/native-splash-handoff'
 import { instanceRegistry } from './system/instance-registry'
 import { BrowserService } from './browser/browser-service'
+import { getConfigRoot } from '../lib/utils'
 
 const mainBundleDirectory = dirname(fileURLToPath(import.meta.url))
 
 app.setName(APP_NAME)
+
+/**
+ * Electron otherwise derives Linux `userData` from the product name and creates
+ * `~/.config/CodeInOven` alongside CodeInOven's canonical Pillardash config
+ * root. Redirect Chromium before `ready` and move the legacy directory on the
+ * first upgraded launch so cookies, local storage, caches, the remote pairing
+ * secret, and the owned-process journal are preserved instead of orphaned.
+ */
+function configureLinuxElectronDataRoot(): void {
+  if (process.platform !== 'linux') return
+
+  const legacyRoot = app.getPath('userData')
+  const managedRoot = join(getConfigRoot(), 'electron')
+  mkdirSync(dirname(managedRoot), { recursive: true })
+
+  if (legacyRoot !== managedRoot && existsSync(legacyRoot) && !existsSync(managedRoot)) {
+    renameSync(legacyRoot, managedRoot)
+  } else {
+    mkdirSync(managedRoot, { recursive: true })
+  }
+
+  app.setPath('userData', managedRoot)
+  app.setPath('sessionData', managedRoot)
+}
+
+configureLinuxElectronDataRoot()
 // Enforce Chromium's OS-level renderer sandbox globally before `ready`; the
 // per-window preferences below remain explicit so future windows inherit the
 // secure expectation even when reviewed in isolation.
