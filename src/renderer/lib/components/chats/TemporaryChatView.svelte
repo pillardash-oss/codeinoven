@@ -41,6 +41,7 @@
   import { getAgentIcon } from '$lib/agent-icons/registry'
   import { INBOX_PROJECT_ID } from '$shared/types'
   import type {
+    AgentContextUsage,
     AgentMessage,
     AgentEvent,
     AgentPart,
@@ -104,14 +105,6 @@
       .filter((part): part is Extract<AgentPart, { type: 'text' }> => part.type === 'text')
       .map((part) => part.text)
       .join('\n')
-  }
-
-  function readableError(error: unknown, fallback: string): string {
-    const message = error instanceof Error ? error.message : fallback
-    const cleaned = message.replace(/^Error invoking remote method '[^']+': Error:\s*/u, '')
-    return cleaned === 'Temporary chat timed out after 180s'
-      ? 'The temporary chat stopped after 3 minutes without activity. Try sending the message again.'
-      : cleaned
   }
 
   function fileParts(message: AgentMessage): Extract<AgentPart, { type: 'file' }>[] {
@@ -231,6 +224,45 @@
     return getAgentIcon(messageHarnessId(message))?.name ?? messageHarnessId(message)
   }
 
+  const contextUsage = $derived.by((): AgentContextUsage | undefined => {
+    let latest: AgentMessage | undefined
+    let costUsd = 0
+    for (const message of tab.messages) {
+      if (message.role !== 'assistant') continue
+      costUsd += message.cost ?? 0
+      if (
+        message.tokens ||
+        message.contextUsed !== undefined ||
+        message.contextWindow !== undefined ||
+        message.rateLimits?.length ||
+        message.credits
+      ) {
+        latest = message
+      }
+    }
+    if (!latest) return undefined
+    const modelId = latest.modelId ?? tab.settings.modelId
+    const providerId = latest.providerId
+    const contextWindow =
+      latest.contextWindow ??
+      providers
+        .flatMap((provider) => provider.models)
+        .find((model) => model.id === modelId && (!providerId || model.providerId === providerId))
+        ?.contextWindow
+    const contextUsed = latest.contextUsed ?? latest.tokens?.total
+    return {
+      ...(contextWindow === undefined ? {} : { contextWindow }),
+      ...(contextUsed === undefined ? {} : { contextUsed }),
+      ...(contextWindow !== undefined && contextUsed !== undefined
+        ? { contextPercent: Math.min(100, (contextUsed / contextWindow) * 100) }
+        : {}),
+      costUsd,
+      ...(latest.tokens ? { tokens: latest.tokens } : {}),
+      rateLimits: latest.rateLimits ?? [],
+      ...(latest.credits ? { credits: latest.credits } : {})
+    }
+  })
+
   function formatTime(ts: number): string {
     if (!ts) return ''
     return new Date(ts).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
@@ -307,6 +339,16 @@
     })
   }
 
+  function mergeLoadedQuickChatMessages(messages: AgentMessage[]): void {
+    const assistants = messages.filter((message) => message.role === 'assistant')
+    const incomingById = new Map(assistants.map((message) => [message.id, message]))
+    const existingIds = new Set(tab.messages.map((message) => message.id))
+    tab.messages = [
+      ...tab.messages.map((message) => incomingById.get(message.id) ?? message),
+      ...assistants.filter((message) => !existingIds.has(message.id))
+    ]
+  }
+
   function handleEvent(event: AgentEvent): void {
     if (!('sessionId' in event)) return
     if (event.type === 'temporary-chat.started') {
@@ -324,7 +366,37 @@
       case 'message.completed':
         tab.messages = tab.messages.map((message) =>
           message.id === event.messageId
-            ? { ...message, completedAt: Date.now(), error: event.error }
+            ? {
+                ...message,
+                completedAt: Date.now(),
+                error: event.error,
+                ...(event.tokens ? { tokens: event.tokens } : {}),
+                ...(event.normalizedUsage ? { normalizedUsage: event.normalizedUsage } : {}),
+                ...(event.contextWindow === undefined
+                  ? {}
+                  : { contextWindow: event.contextWindow }),
+                ...(event.contextUsed === undefined ? {} : { contextUsed: event.contextUsed }),
+                ...(event.rateLimits ? { rateLimits: event.rateLimits } : {}),
+                ...(event.credits ? { credits: event.credits } : {})
+              }
+            : message
+        )
+        break
+      case 'usage.updated':
+        tab.messages = tab.messages.map((message) =>
+          message.id === event.messageId
+            ? {
+                ...message,
+                ...(event.tokens ? { tokens: event.tokens } : {}),
+                ...(event.normalizedUsage ? { normalizedUsage: event.normalizedUsage } : {}),
+                ...(event.contextWindow === undefined
+                  ? {}
+                  : { contextWindow: event.contextWindow }),
+                ...(event.contextUsed === undefined ? {} : { contextUsed: event.contextUsed }),
+                ...(event.cost === undefined ? {} : { cost: event.cost }),
+                ...(event.rateLimits ? { rateLimits: event.rateLimits } : {}),
+                ...(event.credits ? { credits: event.credits } : {})
+              }
             : message
         )
         break
@@ -496,9 +568,13 @@
         tab.messages.length === 1 ? tab.initialContext : undefined
       )
       if (tab.temporaryChatId !== temporaryChatId || tab.expired) return
-      if (!tab.messages.some((m) => m.id === response.id)) {
-        tab.messages = [...tab.messages, response]
-      }
+      const responseIndex = tab.messages.findIndex((message) => message.id === response.id)
+      tab.messages =
+        responseIndex < 0
+          ? [...tab.messages, response]
+          : tab.messages.map((message, index) =>
+              index === responseIndex ? { ...message, ...response } : message
+            )
       touch()
     } catch (error) {
       if (tab.temporaryChatId !== temporaryChatId || tab.expired) return
@@ -506,7 +582,7 @@
         aborting = false
         return
       }
-      tab.error = readableError(error, 'The temporary chat could not respond.')
+      tab.error = error instanceof Error ? error.message : 'The temporary chat could not respond.'
     } finally {
       aborting = false
       if (tab.temporaryChatId === temporaryChatId && !tab.expired) {
@@ -535,7 +611,7 @@
       await invoke('agent:abortTemporaryChat', tab.projectId, tab.threadId, tab.temporaryChatId)
     } catch (error) {
       aborting = false
-      tab.error = readableError(error, 'The request could not be stopped.')
+      tab.error = error instanceof Error ? error.message : 'The request could not be stopped.'
     }
   }
 
@@ -589,7 +665,8 @@
         queued = pending
         tab.messages = tab.messages.filter((message) => message.id !== outgoing.id)
       }
-      tab.error = readableError(error, 'The steer message could not be delivered.')
+      tab.error =
+        error instanceof Error ? error.message : 'The steer message could not be delivered.'
     }
   }
 
@@ -642,6 +719,16 @@
           contextSidebarState.touchTemporaryChat(tab, status.expiresAt)
         }
       })
+      if (tab.mode !== 'audit') {
+        void invoke('agent:loadTemporaryChatMessages', temporaryChatId)
+          .then((messages) => {
+            if (tab.temporaryChatId !== temporaryChatId || tab.expired) return
+            mergeLoadedQuickChatMessages(messages)
+          })
+          .catch(() => {
+            // Live events and the in-flight send still reconcile the response.
+          })
+      }
     }
     if (tab.mode === 'elaborate' && !tab.autoPromptSent) {
       tab.autoPromptSent = true
@@ -1044,6 +1131,7 @@
                 threadId: tab.threadId
               }}
               harnessId={tab.settings.harnessId}
+              {contextUsage}
               showEngineeringMode={false}
               readOnlyMode
               allowAttachments

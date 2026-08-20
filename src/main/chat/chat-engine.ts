@@ -1081,7 +1081,7 @@ interface SessionCompletionWaiter {
   structuredOutput?: unknown
   resolve: (structuredOutput: unknown | undefined) => void
   reject: (error: Error) => void
-  timer: ReturnType<typeof setTimeout>
+  timer?: ReturnType<typeof setTimeout>
   /** Re-arm the inactivity deadline so slow-but-active sessions are not killed. */
   refresh: () => void
 }
@@ -2382,7 +2382,7 @@ export class ChatEngine {
     }
     this.pendingImageDescriptorDecisions.clear()
     for (const waiter of this.completionWaiters.values()) {
-      clearTimeout(waiter.timer)
+      if (waiter.timer !== undefined) clearTimeout(waiter.timer)
       waiter.reject(new Error(`${APP_NAME} is shutting down`))
     }
     this.completionWaiters.clear()
@@ -5571,7 +5571,6 @@ export class ChatEngine {
       throw new Error('The temporary chat harness cannot be changed after its first message')
     }
     this.refreshTemporaryChatExpiry(temporary)
-    this.userAbortedSessions.delete(temporary.sessionId)
     this.broadcast({
       type: 'temporary-chat.started',
       sessionId: temporary.sessionId,
@@ -5586,7 +5585,7 @@ export class ChatEngine {
           .map((selection, index) => `<selection ${index + 1}>\n${selection}\n</selection>`)
           .join('\n\n')}\n\nUser request:\n${text}`
       : text
-    const completion = this.waitForSessionCompletion(temporary.sessionId, 180_000, 'Temporary chat')
+    const completion = this.waitForSessionCompletion(temporary.sessionId, null, 'Temporary chat')
     try {
       const memoryPrompt = await this.memoryService.formatCurrent(
         projectId,
@@ -5662,21 +5661,6 @@ export class ChatEngine {
       return response
     } catch (error) {
       this.clearCompletionWaiter(temporary.sessionId)
-      // A completion timeout only stops the IPC waiter. Explicitly stop the
-      // underlying harness turn as well so the reusable temporary session is
-      // not left working after the renderer has already received a failure.
-      this.userAbortedSessions.add(temporary.sessionId)
-      try {
-        if (temporary.isolated && driver instanceof OpenCodeDriver) {
-          await driver.abort(temporary.projectPath, temporary.sessionId, temporary.isolated)
-        } else {
-          await driver.abort(temporary.projectPath, temporary.sessionId)
-        }
-      } catch (abortError) {
-        Logger.dev('Temporary chat cleanup after failure was incomplete:', abortError)
-      } finally {
-        this.sessionStatuses.set(temporary.sessionId, { state: 'idle' })
-      }
       await this.notifyTemporaryChatCompletion(projectId, threadId, temporary.id, 'error')
       throw error
     }
@@ -16395,26 +16379,28 @@ export class ChatEngine {
 
   private waitForSessionCompletion(
     sessionId: string,
-    timeoutMs = 180_000,
+    timeoutMs: number | null = 180_000,
     label = 'Agent session',
     timeoutError?: () => Error
   ): Promise<unknown | undefined> {
     const labelForMessage = label
     return new Promise((resolve, reject) => {
-      const armTimer = (): ReturnType<typeof setTimeout> =>
-        setTimeout(() => {
+      const armTimer = (): ReturnType<typeof setTimeout> | undefined => {
+        if (timeoutMs === null) return undefined
+        return setTimeout(() => {
           this.completionWaiters.delete(sessionId)
           reject(
             timeoutError?.() ?? new Error(`${labelForMessage} timed out after ${timeoutMs / 1000}s`)
           )
         }, timeoutMs)
+      }
       const waiter: SessionCompletionWaiter = {
         active: false,
         resolve,
         reject,
         timer: armTimer(),
         refresh: () => {
-          clearTimeout(waiter.timer)
+          if (waiter.timer !== undefined) clearTimeout(waiter.timer)
           waiter.timer = armTimer()
         }
       }
@@ -16464,7 +16450,7 @@ export class ChatEngine {
   private clearCompletionWaiter(sessionId: string): void {
     const waiter = this.completionWaiters.get(sessionId)
     if (!waiter) return
-    clearTimeout(waiter.timer)
+    if (waiter.timer !== undefined) clearTimeout(waiter.timer)
     this.completionWaiters.delete(sessionId)
   }
 
