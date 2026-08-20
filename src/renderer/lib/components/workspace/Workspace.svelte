@@ -877,9 +877,16 @@
     const sessionTools: ContextDockItem[] = [
       {
         id: 'sources',
-        label: 'Sources',
+        label:
+          workspaceState.sourceProcessCount > 0
+            ? `Sources (${workspaceState.sourceProcessCount} ${workspaceState.sourceProcessCount === 1 ? 'process' : 'processes'} running)`
+            : 'Sources',
         icon: Info,
         active: dockKindActive('sources'),
+        countBadge:
+          workspaceState.sourceProcessCount > 0
+            ? String(workspaceState.sourceProcessCount)
+            : undefined,
         onSelect: () => toggleDockPanel('sources', openSourcesTab)
       },
       {
@@ -1394,6 +1401,17 @@
       allThreads = allThreads.filter((thread) => thread.id !== threadId)
       scopeState.removeThread(threadId)
       if (workspaceState.selectedThread?.id === threadId) workspaceState.clearThread()
+    })
+  })
+
+  $effect(() => {
+    return subscribe('agent:processesChanged', (projectId, threadId) => {
+      if (
+        workspaceState.selectedThread?.projectId === projectId &&
+        workspaceState.selectedThread.id === threadId
+      ) {
+        void workspaceState.refreshSourceProcessCount(projectId, threadId)
+      }
     })
   })
 

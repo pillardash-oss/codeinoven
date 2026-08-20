@@ -14,6 +14,8 @@
     badge?: 'completed' | 'attention' | 'error'
     /** Accessible description for the badge, required whenever `badge` is set. */
     badgeTitle?: string
+    /** Renders a compact neutral count badge above the tool icon. */
+    countBadge?: string
     /** Coloured emphasis: amber for attention-worthy tools (e.g. a thread note),
      *  info for ephemeral tools that match their in-panel icon colour. */
     tone?: 'warning' | 'info'
@@ -97,6 +99,14 @@
           {#if item.badge}
             <span class="absolute -top-0.5 -right-0.5 flex items-start">
               <StatusBadge kind={item.badge} title={item.badgeTitle ?? item.label} />
+            </span>
+          {/if}
+          {#if item.countBadge !== undefined}
+            <span
+              class="absolute -top-1 -right-1 flex h-3.5 min-w-3.5 items-center justify-center rounded-full bg-raised px-1 text-[9px] font-semibold leading-none tabular-nums text-muted ring-1 ring-border"
+              aria-hidden="true"
+            >
+              {item.countBadge}
             </span>
           {/if}
         </button>
