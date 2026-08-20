@@ -19,6 +19,7 @@
     ArrowLeft,
     Bell,
     BrainCircuit,
+    ChartColumn,
     MessageSquareCode,
     CheckCircle2,
     Clock,
@@ -36,8 +37,7 @@
     RefreshCw,
     SlidersHorizontal,
     Sun,
-    UsersRound,
-    UserRound
+    UsersRound
   } from '@lucide/svelte'
   import CollapsibleSidebar from '../layout/CollapsibleSidebar.svelte'
   import Switch from '../ui/Switch.svelte'
@@ -110,7 +110,7 @@
     { id: 'keymap', label: 'Keymap', icon: Keyboard },
     { id: 'remote', label: 'Remote', icon: Globe },
     { id: 'cloud-deployments', label: 'Cloud Deployments', icon: Cloud },
-    { id: 'profile', label: 'Profile', icon: UserRound },
+    { id: 'profile', label: 'Usage', icon: ChartColumn },
     { id: 'about', label: 'About', icon: Info }
   ]
 

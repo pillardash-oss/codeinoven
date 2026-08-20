@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte'
   import { SvelteDate } from 'svelte/reactivity'
-  import { Brain, Check, ChevronLeft, ChevronRight, LogIn, LogOut, RefreshCw } from '@lucide/svelte'
+  import { Brain, Check, LogIn, LogOut, RefreshCw } from '@lucide/svelte'
   import { AlertDialog, Popover } from 'bits-ui'
   import type {
     AccountAuthProvider,
@@ -12,6 +12,7 @@
     LocalProfileModelPerformance,
     LocalProfileProjectBreakdown,
     LocalProfileUsageBreakdown,
+    LocalProfileUsageHour,
     ThinkingLevel,
     TurnOutcomeTaskType
   } from '$shared/types'
@@ -23,6 +24,7 @@
 
   type ThinkingFilter = 'all' | ThinkingLevel | 'unknown'
   type TaskFilter = 'all' | TurnOutcomeTaskType
+  type RangePreset = 'today' | '7d' | '30d' | 'year' | 'custom'
 
   interface CalendarDay {
     date: string
@@ -35,19 +37,44 @@
     monthLabel: string
   }
 
-  const PROFILE_RANGE_DAYS = 365
+  const RANGE_PRESETS: ReadonlyArray<{
+    id: Exclude<RangePreset, 'custom'>
+    label: string
+    days: number
+  }> = [
+    { id: 'today', label: 'Today', days: 1 },
+    { id: '7d', label: '7 days', days: 7 },
+    { id: '30d', label: '30 days', days: 30 },
+    { id: 'year', label: '12 months', days: 365 }
+  ]
 
-  function analyticsRange(offset: number): LocalProfileAnalyticsRange {
+  function analyticsRange(days: number): LocalProfileAnalyticsRange {
     const end = new SvelteDate()
     end.setHours(0, 0, 0, 0)
-    end.setDate(end.getDate() + 1 + offset * PROFILE_RANGE_DAYS)
+    end.setDate(end.getDate() + 1)
     const start = new SvelteDate(end)
-    start.setDate(end.getDate() - PROFILE_RANGE_DAYS)
+    start.setDate(end.getDate() - days)
     return { startAt: start.getTime(), endAt: end.getTime() }
   }
 
+  function dateInputValue(value: number): string {
+    return localDateKey(new SvelteDate(value))
+  }
+
+  function localDateFromInput(value: string): SvelteDate | null {
+    const parts = value.split('-').map(Number)
+    if (parts.length !== 3 || parts.some((part) => !Number.isInteger(part))) return null
+    const [year, month, day] = parts
+    if (year === undefined || month === undefined || day === undefined) return null
+    const date = new SvelteDate(year, month - 1, day)
+    date.setHours(0, 0, 0, 0)
+    return localDateKey(date) === value ? date : null
+  }
+
+  const DEFAULT_RANGE = analyticsRange(7)
+
   const EMPTY_USAGE: LocalProfileAnalytics = {
-    range: analyticsRange(0),
+    range: DEFAULT_RANGE,
     messageCount: 0,
     costUsd: 0,
     tokens: 0,
@@ -58,9 +85,12 @@
     harnesses: [],
     providers: [],
     models: [],
+    thinkingLevels: [],
     utilities: [],
     projects: [],
     activityDays: [],
+    dailyUsage: [],
+    hourlyUsage: [],
     modelPerformance: [],
     feedbackCost: {
       outcomes: 0,
@@ -82,7 +112,10 @@
   let accountBusy = $state(false)
   let activeProvider = $state<AccountAuthProvider | null>(null)
   let signInError = $state('')
-  let rangeOffset = $state(0)
+  let selectedRange = $state<LocalProfileAnalyticsRange>(DEFAULT_RANGE)
+  let rangePreset = $state<RangePreset>('7d')
+  let customStartDate = $state(dateInputValue(DEFAULT_RANGE.startAt))
+  let customEndDate = $state(dateInputValue(DEFAULT_RANGE.endAt - 1))
   let projectIconUrls = $state<Record<string, string>>({})
   let usageRequestGeneration = 0
 
@@ -92,8 +125,7 @@
       ? Object.values(accountProfile.usageByDevice).sort((a, b) => b.durationMs - a.durationMs)
       : []
   )
-  const selectedRange = $derived(analyticsRange(rangeOffset))
-  const rangeLabel = $derived(formatDateRange(selectedRange))
+  const rangeLabel = $derived(formatDateRange(usage.range))
   const accountInitials = $derived.by(() => {
     const source = accountProfile?.displayName || accountProfile?.email || ''
     return source
@@ -162,6 +194,42 @@
   )
   const maxProviderTokens = $derived(
     usage.providers.reduce((maximum, item) => Math.max(maximum, item.tokens), 0)
+  )
+  const maxThinkingTokens = $derived(
+    usage.thinkingLevels.reduce((maximum, item) => Math.max(maximum, item.tokens), 0)
+  )
+  const maxDailyTokens = $derived(
+    usage.dailyUsage.reduce((maximum, item) => Math.max(maximum, item.tokens), 0)
+  )
+  const hourlyTimeline = $derived.by(() => {
+    const byHour = new Map(usage.hourlyUsage.map((item) => [item.hour, item]))
+    return Array.from({ length: 24 }, (_, hour): LocalProfileUsageHour => {
+      return (
+        byHour.get(hour) ?? {
+          id: String(hour),
+          hour,
+          messageCount: 0,
+          costUsd: 0,
+          tokens: 0,
+          durationMs: 0
+        }
+      )
+    })
+  })
+  const maxHourlyTokens = $derived(
+    hourlyTimeline.reduce((maximum, item) => Math.max(maximum, item.tokens), 0)
+  )
+  const peakHour = $derived(
+    usage.hourlyUsage.reduce<LocalProfileUsageHour | null>(
+      (peak, item) => (!peak || item.tokens > peak.tokens ? item : peak),
+      null
+    )
+  )
+  const peakDay = $derived(
+    usage.dailyUsage.reduce<(typeof usage.dailyUsage)[number] | null>(
+      (peak, item) => (!peak || item.tokens > peak.tokens ? item : peak),
+      null
+    )
   )
 
   let thinkingFilter = $state<ThinkingFilter>('all')
@@ -288,6 +356,17 @@
     }).format(value)
   }
 
+  function formatUsageDate(value: string): string {
+    const date = localDateFromInput(value)
+    if (!date) return value
+    return new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric' }).format(date)
+  }
+
+  function formatHour(hour: number): string {
+    const date = new SvelteDate(2000, 0, 1, hour)
+    return new Intl.DateTimeFormat(undefined, { hour: 'numeric' }).format(date)
+  }
+
   function formatDateTime(value: number): string {
     return new Intl.DateTimeFormat(undefined, {
       day: 'numeric',
@@ -319,6 +398,11 @@
   function usageWidth(item: AccountUsageBreakdown, maximum: number): string {
     if (maximum <= 0) return '0%'
     return `${Math.max(4, (item.tokens / maximum) * 100)}%`
+  }
+
+  function usageHeight(item: AccountUsageBreakdown, maximum: number): string {
+    if (maximum <= 0 || item.tokens <= 0) return '2px'
+    return `${Math.max(8, (item.tokens / maximum) * 100)}%`
   }
 
   async function loadProjectIconUrls(projects: LocalProfileProjectBreakdown[]): Promise<void> {
@@ -355,11 +439,35 @@
     }
   }
 
-  function navigateRange(direction: -1 | 1): void {
-    const nextOffset = Math.min(0, rangeOffset + direction)
-    if (nextOffset === rangeOffset) return
-    rangeOffset = nextOffset
-    void loadUsage(analyticsRange(nextOffset))
+  function selectRangePreset(preset: Exclude<RangePreset, 'custom'>, days: number): void {
+    rangePreset = preset
+    selectedRange = analyticsRange(days)
+    customStartDate = dateInputValue(selectedRange.startAt)
+    customEndDate = dateInputValue(selectedRange.endAt - 1)
+    void loadUsage(selectedRange)
+  }
+
+  function showCustomRange(): void {
+    rangePreset = 'custom'
+    errorMessage = ''
+  }
+
+  function applyCustomRange(): void {
+    const start = localDateFromInput(customStartDate)
+    const inclusiveEnd = localDateFromInput(customEndDate)
+    if (!start || !inclusiveEnd) {
+      errorMessage = 'Choose a valid start and end date.'
+      return
+    }
+    const end = new SvelteDate(inclusiveEnd)
+    end.setDate(end.getDate() + 1)
+    const duration = end.getTime() - start.getTime()
+    if (duration <= 0 || duration > 371 * 24 * 60 * 60 * 1_000) {
+      errorMessage = 'Choose a range of up to 12 months with the start before the end.'
+      return
+    }
+    selectedRange = { startAt: start.getTime(), endAt: end.getTime() }
+    void loadUsage(selectedRange)
   }
 
   async function refreshAccount(showError = false): Promise<void> {
@@ -443,15 +551,17 @@
 <div class="w-full p-6 pb-24">
   <div class="mb-6 flex items-start justify-between gap-4">
     <div>
-      <h1 class="text-xl font-bold tracking-tight">Profile</h1>
-      <p class="mt-0.5 text-sm text-muted">Your local activity and agent usage at a glance.</p>
+      <h1 class="text-xl font-bold tracking-tight">Usage</h1>
+      <p class="mt-0.5 text-sm text-muted">
+        Track total consumption, peak periods, and what drove them.
+      </p>
     </div>
     <div class="flex items-center gap-2">
       <button
         type="button"
         class="flex h-9 items-center gap-2 rounded-lg border px-3 text-xs font-semibold hover:bg-elevated disabled:opacity-50"
-        title="Refresh local profile analytics"
-        aria-label="Refresh local profile analytics"
+        title="Refresh usage analytics"
+        aria-label="Refresh usage analytics"
         disabled={loading}
         onclick={() => void loadUsage()}
       >
@@ -596,21 +706,92 @@
     </p>
   {/if}
 
+  <section class="mb-4 rounded-xl border bg-surface p-3" aria-labelledby="usage-range-heading">
+    <div class="flex flex-wrap items-center justify-between gap-3">
+      <div>
+        <h2
+          id="usage-range-heading"
+          class="text-xs font-semibold uppercase tracking-wide text-muted"
+        >
+          Reporting period
+        </h2>
+        <p class="mt-0.5 text-xs tabular-nums text-dimmed">{rangeLabel}</p>
+      </div>
+      <div class="flex flex-wrap items-center gap-1" role="group" aria-label="Usage date range">
+        {#each RANGE_PRESETS as preset (preset.id)}
+          <button
+            type="button"
+            class="h-8 rounded-lg px-3 text-xs font-medium transition-colors {rangePreset ===
+            preset.id
+              ? 'bg-overlay text-foreground'
+              : 'text-muted hover:bg-elevated hover:text-foreground'}"
+            aria-pressed={rangePreset === preset.id}
+            disabled={loading}
+            onclick={() => selectRangePreset(preset.id, preset.days)}
+          >
+            {preset.label}
+          </button>
+        {/each}
+        <button
+          type="button"
+          class="h-8 rounded-lg px-3 text-xs font-medium transition-colors {rangePreset === 'custom'
+            ? 'bg-overlay text-foreground'
+            : 'text-muted hover:bg-elevated hover:text-foreground'}"
+          aria-pressed={rangePreset === 'custom'}
+          onclick={showCustomRange}
+        >
+          Custom
+        </button>
+      </div>
+    </div>
+    {#if rangePreset === 'custom'}
+      <div class="mt-3 flex flex-wrap items-end gap-2 border-t pt-3">
+        <label class="grid gap-1 text-[11px] font-medium text-muted">
+          Start date
+          <input
+            type="date"
+            class="h-9 rounded-lg border bg-elevated px-2.5 text-xs tabular-nums text-foreground outline-none focus:border-primary"
+            max={customEndDate}
+            bind:value={customStartDate}
+          />
+        </label>
+        <label class="grid gap-1 text-[11px] font-medium text-muted">
+          End date
+          <input
+            type="date"
+            class="h-9 rounded-lg border bg-elevated px-2.5 text-xs tabular-nums text-foreground outline-none focus:border-primary"
+            min={customStartDate}
+            max={dateInputValue(Date.now())}
+            bind:value={customEndDate}
+          />
+        </label>
+        <button
+          type="button"
+          class="h-9 rounded-lg bg-primary px-4 text-xs font-semibold text-on-primary hover:bg-primary-hover disabled:opacity-50"
+          disabled={loading}
+          onclick={applyCustomRange}
+        >
+          Apply range
+        </button>
+      </div>
+    {/if}
+  </section>
+
   <section class="grid grid-cols-2 gap-3 xl:grid-cols-4" aria-label="Local usage totals">
     <div class="rounded-xl border p-4">
       <p class="text-xs font-semibold uppercase tracking-wide text-muted">Agent responses</p>
       <p class="mt-2 text-2xl font-bold tabular-nums">{formatNumber(usage.messageCount)}</p>
-      <p class="mt-1 text-xs text-dimmed">Across projects in this period</p>
+      <p class="mt-1 text-xs text-dimmed">Total in the selected period</p>
     </div>
     <div class="rounded-xl border p-4">
       <p class="text-xs font-semibold uppercase tracking-wide text-muted">Tokens</p>
       <p class="mt-2 text-2xl font-bold tabular-nums">{formatNumber(usage.tokens)}</p>
-      <p class="mt-1 text-xs text-dimmed">Reported input and output</p>
+      <p class="mt-1 text-xs text-dimmed">Models and tracked utilities</p>
     </div>
     <div class="rounded-xl border p-4">
       <p class="text-xs font-semibold uppercase tracking-wide text-muted">Estimated cost</p>
       <p class="mt-2 text-2xl font-bold tabular-nums">{formatCost(usage.costUsd)}</p>
-      <p class="mt-1 text-xs text-dimmed">From available usage reports</p>
+      <p class="mt-1 text-xs text-dimmed">From available pricing reports</p>
     </div>
     <div class="rounded-xl border p-4">
       <p class="text-xs font-semibold uppercase tracking-wide text-muted">Active days</p>
@@ -770,39 +951,98 @@
     </section>
   {/if}
 
+  <div class="mt-4 grid gap-4 xl:grid-cols-[minmax(0,1.35fr)_minmax(0,1fr)]">
+    <section class="rounded-xl border p-4" aria-labelledby="daily-consumption-heading">
+      <div class="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h2 id="daily-consumption-heading" class="text-sm font-semibold">Consumption by day</h2>
+          <p class="mt-0.5 text-xs text-muted">Total tokens for each active day in this period.</p>
+        </div>
+        {#if peakDay}
+          <div class="text-right">
+            <p class="text-[10px] font-semibold uppercase tracking-wide text-dimmed">Peak day</p>
+            <p class="mt-0.5 text-xs font-semibold tabular-nums">
+              {formatUsageDate(peakDay.date)} · {formatNumber(peakDay.tokens)}
+            </p>
+          </div>
+        {/if}
+      </div>
+      {#if usage.dailyUsage.length > 0}
+        <div class="mt-5 max-h-72 space-y-2 overflow-y-auto pr-1">
+          {#each usage.dailyUsage.toReversed() as day (day.date)}
+            <div class="grid grid-cols-[4.5rem_minmax(0,1fr)_5.5rem] items-center gap-3 text-xs">
+              <span class="tabular-nums text-muted">{formatUsageDate(day.date)}</span>
+              <div class="h-2 overflow-hidden rounded-full bg-raised">
+                <div
+                  class="h-full rounded-full {day.date === peakDay?.date
+                    ? 'bg-accent'
+                    : 'bg-primary'}"
+                  style:width={usageWidth(day, maxDailyTokens)}
+                ></div>
+              </div>
+              <span class="text-right font-medium tabular-nums">{formatNumber(day.tokens)}</span>
+            </div>
+          {/each}
+        </div>
+      {:else}
+        <p class="py-12 text-center text-xs text-muted">
+          No consumption was recorded in this period.
+        </p>
+      {/if}
+    </section>
+
+    <section class="rounded-xl border p-4" aria-labelledby="hourly-consumption-heading">
+      <div class="flex items-start justify-between gap-3">
+        <div>
+          <h2 id="hourly-consumption-heading" class="text-sm font-semibold">Peak hours</h2>
+          <p class="mt-0.5 text-xs text-muted">Usage by local time across the selected period.</p>
+        </div>
+        {#if peakHour}
+          <div class="text-right">
+            <p class="text-[10px] font-semibold uppercase tracking-wide text-dimmed">Peak</p>
+            <p class="mt-0.5 text-xs font-semibold tabular-nums">
+              {formatHour(peakHour.hour)} · {formatNumber(peakHour.tokens)}
+            </p>
+          </div>
+        {/if}
+      </div>
+      <div class="hourly-columns mt-5 h-40 items-end gap-1" aria-label="Usage by hour of day">
+        {#each hourlyTimeline as hour (hour.hour)}
+          <div class="flex h-full min-w-0 items-end">
+            <span
+              class="w-full rounded-t-sm {hour.hour === peakHour?.hour
+                ? 'bg-accent'
+                : 'bg-primary'} {hour.tokens === 0 ? 'opacity-15' : ''}"
+              style:height={usageHeight(hour, maxHourlyTokens)}
+              title={`${formatHour(hour.hour)}: ${formatNumber(hour.tokens)} tokens, ${formatCost(hour.costUsd)}`}
+              aria-label={`${formatHour(hour.hour)}: ${formatNumber(hour.tokens)} tokens, ${formatCost(hour.costUsd)}`}
+            ></span>
+          </div>
+        {/each}
+      </div>
+      <div class="mt-2 grid grid-cols-4 text-[10px] tabular-nums text-dimmed" aria-hidden="true">
+        <span>12 AM</span><span class="text-center">6 AM</span><span class="text-center">12 PM</span
+        ><span class="text-right">6 PM</span>
+      </div>
+      <p class="mt-3 border-t pt-3 text-[11px] text-dimmed">
+        Gold marks the busiest hour; shorter bars show non-peak consumption.
+      </p>
+    </section>
+  </div>
+
   <section class="mt-4 overflow-hidden rounded-xl border p-4" aria-labelledby="activity-heading">
     <div class="flex flex-wrap items-start justify-between gap-3">
       <div>
-        <h2 id="activity-heading" class="text-sm font-semibold">Activity</h2>
+        <h2 id="activity-heading" class="text-sm font-semibold">Active days</h2>
         <p class="mt-0.5 text-xs text-muted">
-          {formatNumber(calendarResponseCount)} responses during the selected year.
+          {formatNumber(calendarResponseCount)} agent responses during the selected period.
         </p>
       </div>
-      <div class="flex items-center rounded-lg border bg-surface p-0.5">
-        <button
-          type="button"
-          class="grid h-7 w-7 place-items-center rounded-md text-muted hover:bg-elevated hover:text-foreground"
-          title="Show previous 12 months"
-          aria-label="Show previous 12 months"
-          disabled={loading}
-          onclick={() => navigateRange(-1)}
-        >
-          <ChevronLeft size={14} />
-        </button>
-        <span class="min-w-48 px-2 text-center text-[11px] font-medium tabular-nums text-muted">
-          {rangeLabel}
-        </span>
-        <button
-          type="button"
-          class="grid h-7 w-7 place-items-center rounded-md text-muted hover:bg-elevated hover:text-foreground disabled:opacity-30"
-          title="Show next 12 months"
-          aria-label="Show next 12 months"
-          disabled={loading || rangeOffset === 0}
-          onclick={() => navigateRange(1)}
-        >
-          <ChevronRight size={14} />
-        </button>
-      </div>
+      <span
+        class="rounded-lg bg-raised px-2.5 py-1.5 text-[11px] font-medium tabular-nums text-muted"
+      >
+        {rangeLabel}
+      </span>
     </div>
 
     <div class="mt-5 overflow-x-auto pb-2">
@@ -919,7 +1159,7 @@
     </div>
   </section>
 
-  <div class="mt-4 grid gap-4 xl:grid-cols-3">
+  <div class="mt-4 grid gap-4 xl:grid-cols-2">
     <section class="rounded-xl border" aria-labelledby="harness-usage-heading">
       <div class="border-b px-4 py-3">
         <h2 id="harness-usage-heading" class="text-sm font-semibold">Harnesses</h2>
@@ -997,6 +1237,41 @@
         {:else}
           <p class="px-4 py-8 text-center text-xs text-muted">
             Provider usage appears after a harness reports it.
+          </p>
+        {/each}
+      </div>
+    </section>
+
+    <section class="rounded-xl border" aria-labelledby="thinking-usage-heading">
+      <div class="border-b px-4 py-3">
+        <h2 id="thinking-usage-heading" class="text-sm font-semibold">Thinking levels</h2>
+        <p class="mt-0.5 text-xs text-muted">Reasoning effort across every model in this period.</p>
+      </div>
+      <div class="divide-y">
+        {#each usage.thinkingLevels as level (level.id)}
+          <div class="px-4 py-3">
+            <div class="flex items-center justify-between gap-4 text-xs">
+              <span class="flex min-w-0 items-center gap-2 truncate font-semibold">
+                <Brain size={15} class="text-muted" />
+                {thinkingLevelLabel(level.thinkingLevel ?? 'unknown')}
+              </span>
+              <span class="shrink-0 tabular-nums text-muted">
+                {formatNumber(level.tokens)} tokens · {formatCost(level.costUsd)}
+              </span>
+            </div>
+            <div class="mt-2 h-1 overflow-hidden rounded-full bg-raised">
+              <div
+                class="h-full rounded-full bg-primary"
+                style:width={usageWidth(level, maxThinkingTokens)}
+              ></div>
+            </div>
+            <p class="mt-1.5 text-[11px] tabular-nums text-dimmed">
+              {formatNumber(level.messageCount)} responses · {formatDuration(level.durationMs)}
+            </p>
+          </div>
+        {:else}
+          <p class="px-4 py-8 text-center text-xs text-muted">
+            Thinking-level usage appears after a harness reports reasoning effort.
           </p>
         {/each}
       </div>
@@ -1261,6 +1536,11 @@
 </AlertDialog.Root>
 
 <style>
+  .hourly-columns {
+    display: grid;
+    grid-template-columns: repeat(24, minmax(0, 1fr));
+  }
+
   .activity-columns {
     display: grid;
     grid-template-columns: repeat(var(--calendar-weeks), minmax(0, 1fr));

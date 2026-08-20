@@ -10,7 +10,9 @@ import type {
   LocalProfileAnalytics,
   LocalProfileAnalyticsRange,
   LocalProfileProjectBreakdown,
+  LocalProfileUsageDay,
   LocalProfileUsageBreakdown,
+  LocalProfileUsageHour,
   SyncedDeviceProject,
   ThinkingLevel,
   UsageCacheHitBreakdown,
@@ -79,6 +81,14 @@ interface LocalProjectAggregateRow extends UsageAggregateRow {
   thread_count: number
   active_days: number
   last_active_at: number
+}
+
+interface LocalUsageDayRow extends UsageAggregateRow {
+  date: string
+}
+
+interface LocalUsageHourRow extends UsageAggregateRow {
+  hour: number
 }
 
 /**
@@ -619,10 +629,19 @@ export class HarnessUsageRepo {
        AND created_at < ?`
     const params = [range.startAt, range.endAt] as const
 
-    const [harnessRows, providerRows, modelRows, projectRows, utilityRows, activityRows] =
-      await Promise.all([
-        this.aggregate<LocalUsageAggregateRow>(
-          `SELECT harness_id AS id,
+    const [
+      harnessRows,
+      providerRows,
+      modelRows,
+      thinkingRows,
+      projectRows,
+      utilityRows,
+      activityRows,
+      dailyRows,
+      hourlyRows
+    ] = await Promise.all([
+      this.aggregate<LocalUsageAggregateRow>(
+        `SELECT harness_id AS id,
                   harness_id,
                   NULL AS provider_id,
                   ${aggregateSelect}
@@ -630,10 +649,10 @@ export class HarnessUsageRepo {
            WHERE ${messageRange}
            GROUP BY harness_id
            ORDER BY message_count DESC, MAX(created_at) DESC`,
-          [...params]
-        ),
-        this.aggregate<LocalUsageAggregateRow>(
-          `SELECT provider_id AS id,
+        [...params]
+      ),
+      this.aggregate<LocalUsageAggregateRow>(
+        `SELECT provider_id AS id,
                   NULL AS harness_id,
                   provider_id,
                   ${aggregateSelect}
@@ -641,10 +660,10 @@ export class HarnessUsageRepo {
            WHERE ${messageRange} AND provider_id IS NOT NULL
            GROUP BY provider_id
            ORDER BY message_count DESC, MAX(created_at) DESC`,
-          [...params]
-        ),
-        this.aggregate<LocalUsageAggregateRow>(
-          `SELECT model_id AS id,
+        [...params]
+      ),
+      this.aggregate<LocalUsageAggregateRow>(
+        `SELECT model_id AS id,
                   harness_id,
                   provider_id,
                   thinking_level,
@@ -653,10 +672,22 @@ export class HarnessUsageRepo {
            WHERE ${messageRange} AND model_id IS NOT NULL
            GROUP BY harness_id, provider_id, model_id, thinking_level
            ORDER BY message_count DESC, MAX(created_at) DESC`,
-          [...params]
-        ),
-        this.aggregate<LocalProjectAggregateRow>(
-          `SELECT p.id,
+        [...params]
+      ),
+      this.aggregate<LocalUsageAggregateRow>(
+        `SELECT COALESCE(thinking_level, 'unknown') AS id,
+                  NULL AS harness_id,
+                  NULL AS provider_id,
+                  thinking_level,
+                  ${aggregateSelect}
+           FROM agent_messages
+           WHERE ${messageRange}
+           GROUP BY thinking_level
+           ORDER BY tokens_total DESC, MAX(created_at) DESC`,
+        [...params]
+      ),
+      this.aggregate<LocalProjectAggregateRow>(
+        `SELECT p.id,
                   p.name,
                   p.color,
                   p.icon_type,
@@ -681,10 +712,10 @@ export class HarnessUsageRepo {
              AND m.created_at < ?
            GROUP BY p.id
            ORDER BY message_count DESC, last_active_at DESC`,
-          [...params]
-        ),
-        this.aggregate<LocalUsageAggregateRow>(
-          `SELECT feature AS id,
+        [...params]
+      ),
+      this.aggregate<LocalUsageAggregateRow>(
+        `SELECT feature AS id,
                   NULL AS harness_id,
                   NULL AS provider_id,
                   COUNT(*) AS message_count,
@@ -699,18 +730,94 @@ export class HarnessUsageRepo {
              AND created_at < ?
            GROUP BY feature
            ORDER BY message_count DESC, feature ASC`,
-          [...PROFILE_UTILITY_FEATURES, ...params]
-        ),
-        this.aggregate<{ date: string; message_count: number }>(
-          `SELECT strftime('%Y-%m-%d', created_at / 1000, 'unixepoch', 'localtime') AS date,
+        [...PROFILE_UTILITY_FEATURES, ...params]
+      ),
+      this.aggregate<{ date: string; message_count: number }>(
+        `SELECT strftime('%Y-%m-%d', created_at / 1000, 'unixepoch', 'localtime') AS date,
                   COUNT(*) AS message_count
            FROM agent_messages
            WHERE ${messageRange}
            GROUP BY date
            ORDER BY date ASC`,
-          [...params]
-        )
-      ])
+        [...params]
+      ),
+      this.aggregate<LocalUsageDayRow>(
+        `SELECT date AS id,
+                  date,
+                  SUM(message_count) AS message_count,
+                  SUM(cost_usd) AS cost_usd,
+                  SUM(tokens_total) AS tokens_total,
+                  SUM(duration_ms) AS duration_ms
+           FROM (
+             SELECT strftime('%Y-%m-%d', created_at / 1000, 'unixepoch', 'localtime') AS date,
+                    COUNT(*) AS message_count,
+                    SUM(COALESCE(cost, 0)) AS cost_usd,
+                    SUM(COALESCE(tokens_total, CAST(json_extract(tokens_json, '$.total') AS INTEGER), 0)) AS tokens_total,
+                    SUM(CASE
+                          WHEN completed_at IS NOT NULL AND completed_at > created_at
+                          THEN completed_at - created_at
+                          ELSE 0
+                        END) AS duration_ms
+             FROM agent_messages
+             WHERE ${messageRange}
+             GROUP BY date
+             UNION ALL
+             SELECT strftime('%Y-%m-%d', created_at / 1000, 'unixepoch', 'localtime') AS date,
+                    COUNT(*) AS message_count,
+                    SUM(COALESCE(cost_usd, 0)) AS cost_usd,
+                    SUM(COALESCE(tokens_uncached_input, 0) + COALESCE(tokens_cached_input, 0)
+                        + COALESCE(tokens_cache_write, 0) + COALESCE(tokens_output, 0)
+                        + COALESCE(tokens_reasoning, 0)) AS tokens_total,
+                    0 AS duration_ms
+             FROM usage_events
+             WHERE feature IN (${PROFILE_UTILITY_FEATURES.map(() => '?').join(',')})
+               AND created_at >= ?
+               AND created_at < ?
+             GROUP BY date
+           )
+           GROUP BY date
+           ORDER BY date ASC`,
+        [...params, ...PROFILE_UTILITY_FEATURES, ...params]
+      ),
+      this.aggregate<LocalUsageHourRow>(
+        `SELECT CAST(hour_key AS INTEGER) AS id,
+                  CAST(hour_key AS INTEGER) AS hour,
+                  SUM(message_count) AS message_count,
+                  SUM(cost_usd) AS cost_usd,
+                  SUM(tokens_total) AS tokens_total,
+                  SUM(duration_ms) AS duration_ms
+           FROM (
+             SELECT strftime('%H', created_at / 1000, 'unixepoch', 'localtime') AS hour_key,
+                    COUNT(*) AS message_count,
+                    SUM(COALESCE(cost, 0)) AS cost_usd,
+                    SUM(COALESCE(tokens_total, CAST(json_extract(tokens_json, '$.total') AS INTEGER), 0)) AS tokens_total,
+                    SUM(CASE
+                          WHEN completed_at IS NOT NULL AND completed_at > created_at
+                          THEN completed_at - created_at
+                          ELSE 0
+                        END) AS duration_ms
+             FROM agent_messages
+             WHERE ${messageRange}
+             GROUP BY hour_key
+             UNION ALL
+             SELECT strftime('%H', created_at / 1000, 'unixepoch', 'localtime') AS hour_key,
+                    COUNT(*) AS message_count,
+                    SUM(COALESCE(cost_usd, 0)) AS cost_usd,
+                    SUM(COALESCE(tokens_uncached_input, 0) + COALESCE(tokens_cached_input, 0)
+                        + COALESCE(tokens_cache_write, 0) + COALESCE(tokens_output, 0)
+                        + COALESCE(tokens_reasoning, 0)) AS tokens_total,
+                    0 AS duration_ms
+             FROM usage_events
+             WHERE feature IN (${PROFILE_UTILITY_FEATURES.map(() => '?').join(',')})
+               AND created_at >= ?
+               AND created_at < ?
+             GROUP BY hour_key
+           )
+           GROUP BY hour_key
+           ORDER BY hour ASC`,
+        [...params, ...PROFILE_UTILITY_FEATURES, ...params]
+      )
+    ])
     const toUsageBreakdown = (row: LocalUsageAggregateRow): LocalProfileUsageBreakdown => ({
       id: row.id,
       ...(row.harness_id ? { harnessId: row.harness_id } : {}),
@@ -724,6 +831,7 @@ export class HarnessUsageRepo {
     const harnesses = harnessRows.map(toUsageBreakdown)
     const providers = providerRows.map(toUsageBreakdown)
     const models = modelRows.map(toUsageBreakdown)
+    const thinkingLevels = thinkingRows.map(toUsageBreakdown)
     const utilities = utilityRows.map(toUsageBreakdown)
     const harnessCost = harnessRows.reduce((sum, row) => sum + row.cost_usd, 0)
     const harnessTokens = harnessRows.reduce((sum, row) => sum + row.tokens_total, 0)
@@ -747,6 +855,22 @@ export class HarnessUsageRepo {
       date: row.date,
       messageCount: row.message_count
     }))
+    const dailyUsage: LocalProfileUsageDay[] = dailyRows.map((row) => ({
+      id: row.date,
+      date: row.date,
+      messageCount: row.message_count,
+      costUsd: row.cost_usd,
+      tokens: row.tokens_total,
+      durationMs: row.duration_ms
+    }))
+    const hourlyUsage: LocalProfileUsageHour[] = hourlyRows.map((row) => ({
+      id: String(row.hour),
+      hour: row.hour,
+      messageCount: row.message_count,
+      costUsd: row.cost_usd,
+      tokens: row.tokens_total,
+      durationMs: row.duration_ms
+    }))
     return {
       range,
       messageCount: harnessRows.reduce((sum, row) => sum + row.message_count, 0),
@@ -759,9 +883,12 @@ export class HarnessUsageRepo {
       harnesses,
       providers,
       models,
+      thinkingLevels,
       utilities,
       projects,
       activityDays,
+      dailyUsage,
+      hourlyUsage,
       // Feedback scoring and its cost live in TurnFeedbackRepo; the IPC layer
       // overlays them.
       modelPerformance: [],

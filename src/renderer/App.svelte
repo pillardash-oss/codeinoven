@@ -20,7 +20,7 @@
     SlidersHorizontal,
     SquarePen,
     Terminal,
-    User,
+    ChartColumn,
     Users,
     Wrench
   } from '@lucide/svelte'
@@ -246,9 +246,9 @@
     { id: 'remote', label: 'Remote', keywords: ['ssh', 'host'], icon: Server },
     {
       id: 'profile',
-      label: 'Profile',
-      keywords: ['account', 'usage', 'activity', 'cloud'],
-      icon: User
+      label: 'Usage',
+      keywords: ['account', 'usage', 'activity', 'tokens', 'cost', 'cloud'],
+      icon: ChartColumn
     },
     {
       id: 'about',
