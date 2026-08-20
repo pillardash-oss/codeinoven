@@ -47,6 +47,10 @@ function record(value: unknown): Record<string, unknown> | null {
     : null
 }
 
+function isMissingProcessError(error: unknown): boolean {
+  return record(error)?.['code'] === 'ESRCH'
+}
+
 function windowsEntries(value: unknown): ProcessSnapshotEntry[] {
   const rows = Array.isArray(value) ? value : [value]
   return rows.flatMap((row) => {
@@ -194,11 +198,7 @@ export class AgentProcessService implements AgentProcessObserver {
   }
 
   async killProcess(projectId: string, threadId: string, pid: number): Promise<void> {
-    const owned = this.sessionsForThread(projectId, threadId).some((sessionId) =>
-      this.tracked.get(sessionId)?.has(pid)
-    )
-    const appScoped = this.tracked.get(APP_SCOPE)?.has(pid) ?? false
-    if (!owned && !appScoped) throw new Error(`Process ${pid} is not tracked by this task`)
+    if (!this.ownsProcess(pid)) throw new Error(`Process ${pid} is not owned by this app`)
     await this.killTree(pid)
     await this.scan()
   }
@@ -206,11 +206,16 @@ export class AgentProcessService implements AgentProcessObserver {
   async killThread(projectId: string, threadId: string): Promise<void> {
     const sessionIds = this.sessionsForThread(projectId, threadId)
     const pids = new Set<number>()
+    const appScopedPids = new Set<number>()
     for (const sessionId of sessionIds) {
       for (const process of this.tracked.get(sessionId)?.values() ?? []) pids.add(process.pid)
       for (const root of this.roots.get(sessionId)?.values() ?? []) pids.add(root.pid)
     }
-    await Promise.allSettled([...pids].map((pid) => this.killTree(pid)))
+    for (const process of this.tracked.get(APP_SCOPE)?.values() ?? []) {
+      appScopedPids.add(process.pid)
+      pids.add(process.pid)
+    }
+    await Promise.all([...pids].map((pid) => this.killTree(pid)))
     for (const sessionId of sessionIds) {
       this.tracked.delete(sessionId)
       for (const root of this.roots.get(sessionId)?.values() ?? []) {
@@ -218,7 +223,20 @@ export class AgentProcessService implements AgentProcessObserver {
       }
       this.roots.delete(sessionId)
     }
-    broadcastAgentProcessesChanged(projectId, threadId)
+    const appProcesses = this.tracked.get(APP_SCOPE)
+    for (const pid of appScopedPids) appProcesses?.delete(pid)
+    if (appProcesses?.size === 0) this.tracked.delete(APP_SCOPE)
+
+    const changedOwners = new Map<string, ProcessOwner>()
+    changedOwners.set(`${projectId}:${threadId}`, { projectId, threadId })
+    if (appScopedPids.size > 0) {
+      for (const owner of this.owners.values()) {
+        changedOwners.set(`${owner.projectId}:${owner.threadId}`, owner)
+      }
+    }
+    for (const owner of changedOwners.values()) {
+      broadcastAgentProcessesChanged(owner.projectId, owner.threadId)
+    }
     this.stopScannerWhenIdle()
   }
 
@@ -360,6 +378,16 @@ export class AgentProcessService implements AgentProcessObserver {
     )
   }
 
+  private ownsProcess(pid: number): boolean {
+    for (const processes of this.tracked.values()) {
+      if (processes.has(pid)) return true
+    }
+    for (const roots of this.roots.values()) {
+      if (roots.has(pid)) return true
+    }
+    return false
+  }
+
   private ensureScanner(): void {
     if (this.scanTimer) return
     this.scanTimer = setInterval(() => void this.scan(), PROCESS_SCAN_INTERVAL_MS)
@@ -461,8 +489,9 @@ export class AgentProcessService implements AgentProcessObserver {
         await execFileAsync('taskkill.exe', ['/PID', String(pid), '/T', '/F'], {
           windowsHide: true
         })
-      } catch {
-        // The process may have exited between the UI action and taskkill.
+      } catch (error) {
+        const snapshot = await this.snapshotter().catch(() => null)
+        if (!snapshot || snapshot.some((entry) => entry.pid === pid)) throw error
       }
       return
     }
@@ -475,7 +504,8 @@ export class AgentProcessService implements AgentProcessObserver {
       childrenByParent.set(entry.parentPid, children)
     }
     const tree = descendantsOf(pid, childrenByParent).reverse()
-    for (const process of [...tree, { pid }]) {
+    const targets = [...tree, { pid }]
+    for (const process of targets) {
       try {
         globalThis.process.kill(process.pid, 'SIGTERM')
       } catch {
@@ -483,13 +513,22 @@ export class AgentProcessService implements AgentProcessObserver {
       }
     }
     await new Promise<void>((resolve) => setTimeout(resolve, PROCESS_EXIT_GRACE_MS))
-    for (const process of [...tree, { pid }]) {
+    const failedPids: number[] = []
+    for (const process of targets) {
       try {
         globalThis.process.kill(process.pid, 0)
-        globalThis.process.kill(process.pid, 'SIGKILL')
-      } catch {
-        // The process exited after SIGTERM.
+      } catch (error) {
+        if (!isMissingProcessError(error)) failedPids.push(process.pid)
+        continue
       }
+      try {
+        globalThis.process.kill(process.pid, 'SIGKILL')
+      } catch (error) {
+        if (!isMissingProcessError(error)) failedPids.push(process.pid)
+      }
+    }
+    if (failedPids.length > 0) {
+      throw new Error(`Could not stop app-owned processes: ${failedPids.join(', ')}`)
     }
   }
 }
