@@ -909,7 +909,7 @@ export class MuseDriver extends PersistentCliDriver {
   readonly capabilities: HarnessCapabilities = {
     runtimeTopology: { kind: 'turn_process', scope: 'session' },
     streaming: true,
-    steering: false,
+    steering: true,
     nativeResume: true,
     messageHistory: 'native',
     interactivePermissions: true,

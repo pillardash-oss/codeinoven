@@ -564,7 +564,7 @@ export class AntigravityDriver extends PersistentCliDriver {
   readonly capabilities: HarnessCapabilities = {
     runtimeTopology: { kind: 'turn_process', scope: 'session' },
     streaming: true,
-    steering: false,
+    steering: true,
     nativeResume: true,
     messageHistory: 'mirrored',
     interactivePermissions: false,
