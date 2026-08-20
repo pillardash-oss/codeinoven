@@ -257,8 +257,27 @@ export class CloudRelayClient {
       this.authenticated = false
       const reason = event.reason || `relay-closed-${event.code}`
       Logger.dev(`Remote cloud relay socket closed (${event.code}: ${reason})`)
+      if (event.code === 4003 || reason === 'revoked') {
+        this.stopAfterTerminalClose(reason)
+        return
+      }
       this.dropAndRetry(reason)
     }
+  }
+
+  /** A revoked desktop credential cannot recover by reconnecting the same socket. */
+  private stopAfterTerminalClose(reason: string): void {
+    if (this.closing || this.closed) return
+    this.closed = true
+    this.clearTimers()
+    this.boundDevice = null
+    this.pendingDeviceChallenge = ''
+    this.mobileConnectionId = ''
+    this.queue.length = 0
+    this.inFlight.clear()
+    void this.webrtc.close()
+    this.socket = null
+    this.options.onDisconnected(reason)
   }
 
   /** Terminal socket loss: requeue unacked work and schedule a reconnect. */

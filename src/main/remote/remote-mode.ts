@@ -35,7 +35,12 @@ import type {
 } from '../../lib/types'
 import { createKeepAliveSession, type KeepAliveSession } from '../../renderer/lib/remote/keep-alive'
 import { handshakeTranscript } from '../../renderer/lib/remote/device-identity'
-import { PAIRING_TTL_MS, loadOrCreatePeerSecret, rotatePeerSecret, writePairingExpiry } from './peer-secret'
+import {
+  PAIRING_TTL_MS,
+  loadOrCreatePeerSecret,
+  rotatePeerSecret,
+  writePairingExpiry
+} from './peer-secret'
 import { RemoteRpcDispatcher } from './remote-rpc'
 import { DeviceCredentialService, type EnrolledDevice } from './device-credential-service'
 import { AccountProfileRepo } from '../database/repositories/account-profile-repo'
@@ -519,6 +524,8 @@ export class RemoteModeController {
   private cloudPollRunningGeneration: number | null = null
   private cloudPollFailureCount = 0
   private cloudStatus: RemoteCloudStatus
+  /** Phone whose claimed code is still completing grant delivery + relay device auth. */
+  private pendingCloudDeviceId: string | null = null
   /** Connected devices, newest first (source of truth = the gateway). */
   private devices: RemoteDeviceInfo[] = []
 
@@ -565,11 +572,11 @@ export class RemoteModeController {
     }
     this.keepAlive.dispatch({ type: 'arm' })
     this.credentials?.startPeriodicMaintenance()
-    if (restoreLan) await this.startGateway(false)
     if (restoreCloud) {
       await this.resolvePeerSecret()
       await this.restoreCloudAccess()
     }
+    if (restoreLan) await this.startGateway(false)
     if (!this.remoteModeActive) return
     this.ensureTray()
     this.syncTray()
@@ -658,7 +665,9 @@ export class RemoteModeController {
     const newSecret = await rotatePeerSecret(directory)
     this.resolvedPeerSecret = newSecret
     if (this.credentials) {
-      await this.credentials.registerPairingValue(newSecret, { expiresAt: Date.now() + PAIRING_TTL_MS })
+      await this.credentials.registerPairingValue(newSecret, {
+        expiresAt: Date.now() + PAIRING_TTL_MS
+      })
     }
     if (this.gateway) {
       try {
@@ -697,7 +706,10 @@ export class RemoteModeController {
     if (enabled && !this.remoteModeActive) {
       this.keepAlive.dispatch({ type: 'arm' })
       this.credentials?.startPeriodicMaintenance()
-      void this.startGateway().then(() => this.restoreCloudAccess())
+      // Cloud is the primary route. An occupied/blocked optional LAN port must
+      // never delay desktop relay restoration or first-time remote access.
+      void this.restoreCloudAccess()
+      void this.startGateway()
       this.ensureTray()
       void this.persistEnabled(true)
       Logger.info('Remote mode enabled')
@@ -1756,10 +1768,19 @@ export class RemoteModeController {
       }
       if (payload['claimed'] === true) {
         Logger.info('Remote cloud enrollment claimed; preparing the encrypted control grant')
+        const mobileDeviceId = payload['mobileDeviceId']
+        const mobilePublicKey = payload['mobilePublicKey']
+        if (
+          typeof mobileDeviceId !== 'string' ||
+          typeof mobilePublicKey !== 'object' ||
+          mobilePublicKey === null
+        ) {
+          throw new Error('Enrollment grant request is invalid')
+        }
+        this.pendingCloudDeviceId = mobileDeviceId
         this.cloudStatus = {
           ...this.cloudStatus,
           state: 'connecting',
-          enrollmentCode: null,
           lastError: null
         }
         // The peer secret is also the transport encryption key. It can rotate
@@ -1767,15 +1788,8 @@ export class RemoteModeController {
         // uploaded grant may be cryptographically stale even though the server
         // reports it as present. Refresh it before every relay startup; the
         // service invalidates sockets and buffered ciphertext from the old key.
-        const mobileDeviceId = payload['mobileDeviceId']
-        const mobilePublicKey = payload['mobilePublicKey']
         const controlSecret = this.resolvedPeerSecret ?? (await this.resolvePeerSecret())
-        if (
-          typeof mobileDeviceId !== 'string' ||
-          typeof mobilePublicKey !== 'object' ||
-          mobilePublicKey === null ||
-          !controlSecret
-        ) {
+        if (!controlSecret) {
           throw new Error('Enrollment grant request is invalid')
         }
         const grant = await createDesktopControlGrant({
@@ -1885,8 +1899,12 @@ export class RemoteModeController {
         maxDelayMs: remoteEnvInt('RELAY_RECONNECT_MAX_MS', 30_000)
       },
       onAuthenticated: () => {
-        Logger.info('Remote cloud relay authenticated; desktop is online')
-        this.cloudStatus = { ...this.cloudStatus, state: 'online', lastError: null }
+        Logger.info('Remote cloud relay authenticated; waiting for phone authentication')
+        this.cloudStatus = {
+          ...this.cloudStatus,
+          state: this.pendingCloudDeviceId ? 'connecting' : 'online',
+          lastError: null
+        }
         this.installEventForwarder()
         this.scheduleAccountProfileSync(0)
         this.broadcast()
@@ -1895,10 +1913,25 @@ export class RemoteModeController {
         const connectedIds = new Set(this.gateway?.listDevices().map((device) => device.id) ?? [])
         connectedIds.add(deviceId)
         this.refreshDevices(connectedIds)
+        if (deviceId === this.pendingCloudDeviceId) {
+          this.pendingCloudDeviceId = null
+          this.cloudStatus = {
+            ...this.cloudStatus,
+            state: 'online',
+            enrollmentCode: null,
+            enrollmentExpiresAt: null,
+            lastError: null
+          }
+        }
         this.broadcast()
       },
       onDisconnected: (reason) => {
         if (this.cloudRelay !== relay) return
+        if (reason === 'revoked' || reason === 'relay-closed-4003') {
+          Logger.info('Remote cloud relay credential was revoked; local enrollment cleared')
+          void this.discardCloudEnrollment('Desktop access was revoked. Create a new pairing code.')
+          return
+        }
         if (reason === 'authentication-failed' || reason === 'relay-closed-4001') {
           Logger.error('Remote cloud relay rejected the saved desktop credential')
           void this.discardCloudEnrollment(
@@ -1928,6 +1961,7 @@ export class RemoteModeController {
     this.cloudPollGeneration += 1
     this.cloudPollRunningGeneration = null
     this.cloudPollFailureCount = 0
+    this.pendingCloudDeviceId = null
     if (this.cloudPollTimer) clearTimeout(this.cloudPollTimer)
     this.cloudPollTimer = null
     if (this.cloudProfileSyncTimer) clearTimeout(this.cloudProfileSyncTimer)

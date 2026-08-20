@@ -83,7 +83,10 @@ async function apiRequest<T>(path: string, init: RequestInit = {}): Promise<T> {
 }
 
 export async function listCloudDesktops(): Promise<CloudDesktop[]> {
-  const response = await apiRequest<{ desktops: CloudDesktop[] }>('/v1/desktops')
+  const mobileDeviceId = (await mobileGrantIdentity()).id
+  const response = await apiRequest<{ desktops: CloudDesktop[] }>(
+    `/v1/desktops?mobileDeviceId=${encodeURIComponent(mobileDeviceId)}`
+  )
   return response.desktops
 }
 

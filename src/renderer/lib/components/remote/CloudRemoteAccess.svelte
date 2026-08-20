@@ -124,6 +124,7 @@
   let claimCode = $state(enrollmentCodeFromLink)
   let claimFromLink = $state(enrollmentCodeFromLink.length > 0)
   let scannerOpen = $state(false)
+  let pendingEnrollment = $state<CloudEnrollmentClaim | null>(null)
   let connectingDesktopId = $state<string | null>(null)
   let connectedDesktopId = $state<string | null>(null)
   let watchedDesktopId = $state<string | null>(null)
@@ -167,7 +168,7 @@
       'device-not-approved':
         'This PWA installation is not approved for that desktop. Add it again with a new code.',
       'desktop-approval-timeout':
-        'The desktop did not approve this phone within one minute. Keep the desktop open and create a new pairing code.',
+        'Cloud approval has not completed yet. Keep the desktop open, then retry this connection.',
       'desktop-connection-timeout':
         'The desktop approved this phone, but the secure connection did not finish within one minute. Try opening it again.',
       'rate-limited': 'Too many attempts. Wait a minute and try again.',
@@ -322,16 +323,11 @@
     claimError = ''
     try {
       claimedDesktop = await claimCloudDesktop(formattedCode)
+      pendingEnrollment = claimedDesktop
       connectingDesktopId = claimedDesktop.desktopId
-      savePreferredDesktop(claimedDesktop.desktopId)
       claimCode = ''
       claimFromLink = false
       clearPersistedEnrollmentCode()
-      try {
-        desktops = await listCloudDesktops()
-      } catch (error) {
-        errorMessage = readableError(error)
-      }
     } catch (error) {
       claimError = readableError(error)
     } finally {
@@ -454,7 +450,6 @@
     connectionAbortController?.abort()
     const controller = new AbortController()
     connectionAbortController = controller
-    savePreferredDesktop(desktopId)
     errorMessage = ''
     try {
       const connection = await waitForDesktopApproval(
@@ -462,8 +457,11 @@
         controller.signal,
         claimedMobileDeviceId
       )
+      // A new pairing must prove the complete internet path first. LAN is only
+      // eligible for later reconnects, after cloud grant delivery and relay
+      // device authentication have both completed successfully.
       let lanTarget
-      if (connection.lanEndpoint) {
+      if (!claimedMobileDeviceId && connection.lanEndpoint) {
         const lanUrl = new URL(connection.lanEndpoint)
         lanTarget = {
           host: lanUrl.hostname,
@@ -482,6 +480,13 @@
         controller.signal
       )
       connectedDesktopId = desktopId
+      pendingEnrollment = null
+      savePreferredDesktop(desktopId)
+      try {
+        desktops = await listCloudDesktops()
+      } catch {
+        // The authenticated session is authoritative; status refresh can retry later.
+      }
       stopDesktopStatusRefresh(false)
       connectingDesktopId = null
     } catch (error) {
@@ -556,6 +561,7 @@
       clearPreferredDesktop()
       await logoutCloudAccount()
       stopDesktopStatusRefresh()
+      pendingEnrollment = null
       user = null
       desktops = []
     } finally {
@@ -839,7 +845,24 @@
       class="fixed left-1/2 top-[max(1rem,env(safe-area-inset-top))] z-60 flex w-[min(26rem,calc(100vw-2rem))] -translate-x-1/2 items-start gap-3 rounded-xl border border-danger/30 bg-surface px-4 py-3 text-sm text-danger shadow-xl"
       role="alert"
     >
-      <p class="min-w-0 flex-1 leading-5">{errorMessage}</p>
+      <div class="min-w-0 flex-1">
+        <p class="leading-5">{errorMessage}</p>
+        {#if pendingEnrollment}
+          <button
+            type="button"
+            class="mt-2 h-8 rounded-lg bg-primary px-3 text-xs font-semibold text-on-primary hover:bg-primary-hover disabled:opacity-50"
+            disabled={busy}
+            onclick={() => {
+              const pending = pendingEnrollment
+              if (!pending) return
+              errorMessage = ''
+              void connectDesktop(pending.desktopId, pending.mobileDeviceId)
+            }}
+          >
+            Retry connection
+          </button>
+        {/if}
+      </div>
       <button
         type="button"
         class="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-danger hover:bg-danger/10"

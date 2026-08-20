@@ -27,14 +27,21 @@
   const pairedDevices = $derived(
     remoteStatus?.devices.filter((device) => device.revokedAt === null) ?? []
   )
+  const pairingFinishing = $derived(
+    remoteStatus?.cloud.desktopId !== null &&
+      remoteStatus?.cloud.state === 'connecting' &&
+      remoteStatus?.cloud.enrollmentCode !== null
+  )
+  const interactionsLocked = $derived(busy || pairingFinishing)
   const cloudConnectionNotice = $derived.by(() => {
     const cloud = remoteStatus?.cloud
     if (!cloud?.desktopId || cloud.state === 'enrollment-pending') return null
     if (cloud.state === 'connecting') {
       return {
         tone: 'connecting' as const,
-        title: 'Connecting to the cloud relay',
-        detail: 'Your phone approved this desktop. CodeInOven is finishing the secure connection.'
+        title: 'Finishing secure connection',
+        detail:
+          'The phone claimed this code. CodeInOven is delivering its cloud grant and authenticating the phone.'
       }
     }
     if (cloud.state === 'online') {
@@ -258,7 +265,7 @@
         Set <span class="font-mono text-foreground">REMOTE_API_ORIGIN</span> to your hosted mobile origin
         to enroll this desktop.
       </p>
-    {:else if remoteStatus.cloud.state === 'enrollment-pending'}
+    {:else if remoteStatus.cloud.state === 'enrollment-pending' || pairingFinishing}
       <div class="mt-4">
         <div class="rounded-lg border border-primary/20 bg-primary/5 p-3">
           <p class="text-xs font-semibold text-foreground">Your account is ready</p>
@@ -290,6 +297,7 @@
                   class="flex h-8 cursor-pointer items-center gap-1.5 rounded-lg border px-2.5 text-[11px] font-medium text-muted transition hover:bg-elevated hover:text-foreground"
                   title="Copy mobile website link"
                   aria-label="Copy mobile website link"
+                  disabled={interactionsLocked}
                   onclick={() => void copyEnrollmentValue('link', mobileAppUrl)}
                 >
                   {#if copied === 'link'}<Check size={13} />{:else}<Copy size={13} />{/if}
@@ -300,6 +308,7 @@
                   class="flex h-8 cursor-pointer items-center gap-1.5 rounded-lg border px-2.5 text-[11px] font-medium text-muted transition hover:bg-elevated hover:text-foreground"
                   title="Open mobile website in browser"
                   aria-label="Open mobile website in browser"
+                  disabled={interactionsLocked}
                   onclick={() => void openInBrowser(mobileAppUrl)}
                 >
                   <ExternalLink size={13} /> Open website
@@ -312,7 +321,22 @@
               <p class="mt-1 min-h-10 text-[11px] leading-relaxed text-muted">
                 After signing in, scan this QR to fill and submit the one-time code automatically.
               </p>
-              <div class="mt-3"><EnrollmentQr value={enrollmentLink} /></div>
+              <div class="relative mt-3 w-fit">
+                <EnrollmentQr value={enrollmentLink} />
+                {#if pairingFinishing}
+                  <div
+                    class="absolute inset-0 grid place-items-center rounded-xl bg-overlay/85 backdrop-blur-sm"
+                    role="status"
+                    aria-live="polite"
+                    aria-label="Finishing secure connection"
+                  >
+                    <div class="flex max-w-36 flex-col items-center gap-2 px-3 text-center">
+                      <RefreshCw size={22} class="animate-spin text-primary" />
+                      <p class="text-xs font-semibold text-foreground">Finishing connection…</p>
+                    </div>
+                  </div>
+                {/if}
+              </div>
               <p class="mt-3 text-[11px] leading-relaxed text-dimmed">
                 This QR contains the temporary pairing link, not your desktop control secret.
               </p>
@@ -337,6 +361,7 @@
               class="flex h-8 shrink-0 cursor-pointer items-center gap-1.5 rounded-lg border px-2.5 text-[11px] font-medium text-muted transition hover:bg-elevated hover:text-foreground"
               title="Copy one-time enrollment code"
               aria-label="Copy one-time enrollment code"
+              disabled={interactionsLocked}
               onclick={() =>
                 void copyEnrollmentValue('code', remoteStatus?.cloud.enrollmentCode ?? '')}
             >
@@ -508,11 +533,13 @@
         <button
           type="button"
           class="h-9 cursor-pointer rounded-lg bg-primary px-3 text-xs font-semibold text-on-primary transition hover:bg-primary-hover disabled:opacity-50"
-          disabled={busy || !remoteStatus.cloud.configured}
+          disabled={interactionsLocked || !remoteStatus.cloud.configured}
           onclick={() => void beginCloudEnrollment()}
         >
           {remoteStatus.cloud.desktopId
-            ? 'Pair another phone'
+            ? pairingFinishing
+              ? 'Finishing connection…'
+              : 'Pair another phone'
             : busy
               ? 'Creating pairing code…'
               : 'Create pairing code'}
@@ -521,7 +548,7 @@
           <button
             type="button"
             class="h-9 cursor-pointer rounded-lg border px-3 text-xs font-medium text-muted transition hover:bg-elevated hover:text-foreground disabled:opacity-50"
-            disabled={busy}
+            disabled={interactionsLocked}
             onclick={() => void resetCloudEnrollment()}
           >
             Remove enrollment
@@ -533,7 +560,7 @@
 
   <ConnectedDevices
     devices={pairedDevices}
-    {busy}
+    busy={interactionsLocked}
     onRename={(deviceId, name) => void handleRenameDevice(deviceId, name)}
     onDisconnect={(deviceId) => void handleDisconnectDevice(deviceId)}
     onRevoke={(deviceId) => void handleRevokeDevice(deviceId)}

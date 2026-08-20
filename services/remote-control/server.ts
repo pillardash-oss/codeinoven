@@ -463,9 +463,12 @@ async function handleGrantUpload(request: Request, desktopId: string): Promise<R
   return json({ ok: true })
 }
 
-function listDesktops(session: AuthenticatedSession): Response {
+function listDesktops(session: AuthenticatedSession, mobileDeviceId: string | null): Response {
+  const desktops = mobileDeviceId
+    ? database.listDesktopsForMobile(session.userId, mobileDeviceId)
+    : database.listDesktops(session.userId)
   return json({
-    desktops: database.listDesktops(session.userId).map((desktop) => ({
+    desktops: desktops.map((desktop) => ({
       id: desktop.id,
       name: desktop.name,
       platform: desktop.platform,
@@ -621,7 +624,13 @@ async function routeHttp(request: Request): Promise<Response | undefined> {
   if (url.pathname === '/v1/device-enrollments/claim' && request.method === 'POST') {
     return handleEnrollmentClaim(request, session)
   }
-  if (url.pathname === '/v1/desktops' && request.method === 'GET') return listDesktops(session)
+  if (url.pathname === '/v1/desktops' && request.method === 'GET') {
+    const mobileDeviceId = url.searchParams.get('mobileDeviceId')
+    if (mobileDeviceId !== null && !validId(mobileDeviceId)) {
+      return json({ error: 'invalid-mobile-device' }, 400)
+    }
+    return listDesktops(session, mobileDeviceId)
+  }
   const connection = url.pathname.match(/^\/v1\/desktops\/([^/]+)\/connection$/)
   if (connection && request.method === 'GET') {
     return desktopConnection(session, connection[1] ?? '', url.searchParams.get('mobileDeviceId'))
