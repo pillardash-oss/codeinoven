@@ -25,6 +25,11 @@ Public-edge hardening is enabled by default:
 - The container is read-only with all Linux capabilities dropped, a 256 PID ceiling, a 65,536 file
   descriptor ceiling, and default limits of 2 CPUs and 512 MiB of memory.
 
+The derived image removes upstream Coturn's `CAP_NET_BIND_SERVICE` file capability before running
+with all container capabilities dropped. Port 3478 is unprivileged, so Coturn does not need that
+capability; removing it also prevents Linux from rejecting `turnserver` execution when the runtime
+capability bounding set is empty.
+
 These defaults are defined in `services/turn/.env.example`. Coturn's allocation and bandwidth
 controls protect capacity after authentication; its unauthorized-response limiter reduces UDP 401
 reflection traffic before authentication. They supplement rather than replace provider firewall,
