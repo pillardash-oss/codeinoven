@@ -1,8 +1,8 @@
 <script lang="ts">
   import { onMount } from 'svelte'
-  import { SvelteDate } from 'svelte/reactivity'
-  import { Brain, Check, LogIn, LogOut, RefreshCw } from '@lucide/svelte'
-  import { AlertDialog, Popover } from 'bits-ui'
+  import { SvelteDate, SvelteMap } from 'svelte/reactivity'
+  import { Brain, Check, ChevronDown, LogIn, LogOut, RefreshCw } from '@lucide/svelte'
+  import { AlertDialog, DropdownMenu, Popover } from 'bits-ui'
   import type {
     AccountAuthProvider,
     AccountProfileState,
@@ -128,6 +128,11 @@
       : []
   )
   const rangeLabel = $derived(formatDateRange(usage.range))
+  const rangePresetLabel = $derived(
+    rangePreset === 'custom'
+      ? 'Custom range'
+      : (RANGE_PRESETS.find((preset) => preset.id === rangePreset)?.label ?? 'Select range')
+  )
   const accountInitials = $derived.by(() => {
     const source = accountProfile?.displayName || accountProfile?.email || ''
     return source
@@ -237,7 +242,32 @@
   let thinkingFilter = $state<ThinkingFilter>('all')
   let taskFilter = $state<TaskFilter>('all')
 
-  const mostUsedModel = $derived<LocalProfileUsageBreakdown | null>(usage.models[0] ?? null)
+  const topModels = $derived.by(() => {
+    const grouped = new SvelteMap<string, LocalProfileUsageBreakdown>()
+    for (const model of usage.models) {
+      const key = `${model.harnessId ?? ''}:${model.providerId ?? ''}:${model.id}`
+      const existing = grouped.get(key)
+      if (existing) {
+        existing.messageCount += model.messageCount
+        existing.costUsd += model.costUsd
+        existing.tokens += model.tokens
+        existing.durationMs += model.durationMs
+        continue
+      }
+      grouped.set(key, {
+        id: model.id,
+        ...(model.harnessId ? { harnessId: model.harnessId } : {}),
+        ...(model.providerId ? { providerId: model.providerId } : {}),
+        messageCount: model.messageCount,
+        costUsd: model.costUsd,
+        tokens: model.tokens,
+        durationMs: model.durationMs
+      })
+    }
+    return [...grouped.values()]
+      .sort((left, right) => right.messageCount - left.messageCount || right.tokens - left.tokens)
+      .slice(0, 3)
+  })
   const availableThinkingLevels = $derived(
     usage.models
       .map((model) => model.thinkingLevel ?? 'unknown')
@@ -712,43 +742,58 @@
     </p>
   {/if}
 
-  <section class="mb-4 rounded-xl border bg-surface p-3" aria-labelledby="usage-range-heading">
-    <div class="flex flex-wrap items-center justify-between gap-3">
+  <section class="mb-4 overflow-hidden rounded-xl border p-4" aria-labelledby="activity-heading">
+    <div class="flex flex-wrap items-start justify-between gap-3">
       <div>
-        <h2
-          id="usage-range-heading"
-          class="text-xs font-semibold uppercase tracking-wide text-muted"
-        >
-          Reporting period
-        </h2>
-        <p class="mt-0.5 text-xs tabular-nums text-dimmed">{rangeLabel}</p>
+        <h2 id="activity-heading" class="text-sm font-semibold">Active days</h2>
+        <p class="mt-0.5 text-xs text-muted">
+          {formatNumber(calendarResponseCount)} agent responses · {rangeLabel}
+        </p>
       </div>
-      <div class="flex flex-wrap items-center gap-1" role="group" aria-label="Usage date range">
-        {#each RANGE_PRESETS as preset (preset.id)}
-          <button
-            type="button"
-            class="h-8 rounded-lg px-3 text-xs font-medium transition-colors {rangePreset ===
-            preset.id
-              ? 'bg-overlay text-foreground'
-              : 'text-muted hover:bg-elevated hover:text-foreground'}"
-            aria-pressed={rangePreset === preset.id}
-            disabled={loading}
-            onclick={() => selectRangePreset(preset.id, preset.days, preset.endOffsetDays)}
+      <DropdownMenu.Root>
+        <DropdownMenu.Trigger
+          class="flex h-8 min-w-32 items-center justify-between gap-2 rounded-lg border bg-surface px-2.5 text-xs font-medium text-foreground hover:bg-elevated disabled:opacity-50"
+          title="Choose usage range"
+          aria-label={`Choose usage range. Current range: ${rangePresetLabel}`}
+          disabled={loading}
+        >
+          <span>{rangePresetLabel}</span>
+          <ChevronDown size={13} class="text-dimmed" />
+        </DropdownMenu.Trigger>
+        <DropdownMenu.Portal>
+          <DropdownMenu.Content
+            side="bottom"
+            align="end"
+            sideOffset={6}
+            collisionPadding={8}
+            class="z-50 w-44 overflow-hidden rounded-lg border bg-surface p-1 shadow-lg"
           >
-            {preset.label}
-          </button>
-        {/each}
-        <button
-          type="button"
-          class="h-8 rounded-lg px-3 text-xs font-medium transition-colors {rangePreset === 'custom'
-            ? 'bg-overlay text-foreground'
-            : 'text-muted hover:bg-elevated hover:text-foreground'}"
-          aria-pressed={rangePreset === 'custom'}
-          onclick={showCustomRange}
-        >
-          Custom
-        </button>
-      </div>
+            {#each RANGE_PRESETS as preset (preset.id)}
+              <DropdownMenu.Item
+                class="flex cursor-default items-center justify-between gap-3 rounded-md px-2.5 py-2 text-xs text-muted outline-none data-[highlighted]:bg-elevated data-[highlighted]:text-foreground"
+                textValue={preset.label}
+                onSelect={() => selectRangePreset(preset.id, preset.days, preset.endOffsetDays)}
+              >
+                <span>{preset.label}</span>
+                {#if rangePreset === preset.id}
+                  <Check size={13} class="text-primary" />
+                {/if}
+              </DropdownMenu.Item>
+            {/each}
+            <DropdownMenu.Separator class="my-1 h-px bg-border" />
+            <DropdownMenu.Item
+              class="flex cursor-default items-center justify-between gap-3 rounded-md px-2.5 py-2 text-xs text-muted outline-none data-[highlighted]:bg-elevated data-[highlighted]:text-foreground"
+              textValue="Custom range"
+              onSelect={showCustomRange}
+            >
+              <span>Custom range</span>
+              {#if rangePreset === 'custom'}
+                <Check size={13} class="text-primary" />
+              {/if}
+            </DropdownMenu.Item>
+          </DropdownMenu.Content>
+        </DropdownMenu.Portal>
+      </DropdownMenu.Root>
     </div>
     {#if rangePreset === 'custom'}
       <div class="mt-3 flex flex-wrap items-end gap-2 border-t pt-3">
@@ -781,6 +826,61 @@
         </button>
       </div>
     {/if}
+
+    <div class="mt-5 overflow-x-auto pb-2">
+      <div class="w-max min-w-full">
+        <div class="grid grid-cols-[1.5rem_max-content] gap-2">
+          <span aria-hidden="true"></span>
+          <div
+            class="activity-columns gap-1"
+            style:--calendar-weeks={calendarWeeks.length}
+            aria-hidden="true"
+          >
+            {#each calendarWeeks as week, index (`month-${index}`)}
+              <span class="min-w-0 overflow-visible whitespace-nowrap text-[10px] text-dimmed">
+                {week.monthLabel}
+              </span>
+            {/each}
+          </div>
+          <div
+            class="grid w-6 shrink-0 grid-rows-7 gap-1 text-[10px] leading-3 text-dimmed"
+            aria-hidden="true"
+          >
+            <span></span><span>Mon</span><span></span><span>Wed</span><span></span><span>Fri</span
+            ><span></span>
+          </div>
+          <div
+            class="activity-columns gap-1"
+            style:--calendar-weeks={calendarWeeks.length}
+            aria-label="Local activity calendar"
+          >
+            {#each calendarWeeks as week, weekIndex (`week-${weekIndex}`)}
+              <div class="flex flex-col gap-1">
+                {#each week.days as day (day.date)}
+                  <span
+                    class="h-3 w-3 rounded-sm {activityClass(day)}"
+                    title={`${day.date}: ${day.count} agent responses`}
+                    aria-label={`${day.date}: ${day.count} agent responses`}
+                  ></span>
+                {/each}
+              </div>
+            {/each}
+          </div>
+        </div>
+        <div
+          class="mt-3 flex items-center justify-end gap-1 text-[10px] text-dimmed"
+          aria-hidden="true"
+        >
+          <span class="mr-1">Less</span>
+          <span class="h-2.5 w-2.5 rounded-sm bg-raised"></span>
+          <span class="h-2.5 w-2.5 rounded-sm bg-primary/25"></span>
+          <span class="h-2.5 w-2.5 rounded-sm bg-primary/50"></span>
+          <span class="h-2.5 w-2.5 rounded-sm bg-primary/75"></span>
+          <span class="h-2.5 w-2.5 rounded-sm bg-primary"></span>
+          <span class="ml-1">More</span>
+        </div>
+      </div>
+    </div>
   </section>
 
   <section class="grid grid-cols-2 gap-3 xl:grid-cols-4" aria-label="Local usage totals">
@@ -884,75 +984,75 @@
     </section>
   {/if}
 
-  {#if mostUsedModel}
+  {#if topModels.length > 0}
     <section class="mt-4 rounded-xl border" aria-labelledby="most-used-heading">
       <div class="border-b px-4 py-3">
-        <h2 id="most-used-heading" class="text-sm font-semibold">Most used model</h2>
-        <p class="mt-0.5 text-xs text-muted">Your top model across projects in this period.</p>
+        <h2 id="most-used-heading" class="text-sm font-semibold">Most used models</h2>
+        <p class="mt-0.5 text-xs text-muted">Ranked by response volume in this period.</p>
       </div>
-      <div class="flex flex-wrap items-center gap-x-6 gap-y-4 px-4 py-4">
-        <div class="flex min-w-0 items-center gap-3">
-          {#if getAgentIcon(mostUsedModel.harnessId)}
-            <img
-              class="h-10 w-10 shrink-0 rounded-lg object-contain"
-              src={getAgentIcon(mostUsedModel.harnessId)?.iconUrl}
-              alt=""
-            />
-          {:else}
-            <span class="grid h-10 w-10 shrink-0 place-items-center rounded-lg bg-elevated">
-              <VendorIcon name={mostUsedModel.providerId ?? mostUsedModel.id} size={18} />
+      <div class="divide-y">
+        {#each topModels as model, index (`${model.harnessId}:${model.providerId}:${model.id}`)}
+          <div class="flex flex-wrap items-center gap-x-5 gap-y-3 px-4 py-3">
+            <span
+              class="w-7 shrink-0 text-center text-lg font-bold tabular-nums {index === 0
+                ? 'text-accent'
+                : 'text-dimmed'}"
+              aria-label={`Rank ${index + 1}`}
+            >
+              {index + 1}
             </span>
-          {/if}
-          <div class="min-w-0">
-            <p class="flex items-center gap-2 truncate text-base font-semibold">
-              <span class="truncate">{mostUsedModel.id}</span>
-              {#if mostUsedModel.thinkingLevel}
-                <span
-                  class="flex shrink-0 items-center gap-1 rounded-md bg-elevated px-1.5 py-0.5 text-[10px] capitalize text-muted"
-                  title={`Thinking level: ${mostUsedModel.thinkingLevel}`}
-                  aria-label={`Thinking level: ${mostUsedModel.thinkingLevel}`}
-                >
-                  <Brain size={10} />
-                  {thinkingLevelLabel(mostUsedModel.thinkingLevel)}
+            <div class="flex min-w-48 flex-1 items-center gap-3">
+              {#if getAgentIcon(model.harnessId)}
+                <img
+                  class="h-9 w-9 shrink-0 rounded-lg object-contain"
+                  src={getAgentIcon(model.harnessId)?.iconUrl}
+                  alt=""
+                />
+              {:else}
+                <span class="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-elevated">
+                  <VendorIcon name={model.providerId ?? model.id} size={17} />
                 </span>
               {/if}
-            </p>
-            <p class="mt-0.5 flex items-center gap-1.5 text-xs text-muted">
-              <VendorIcon name={mostUsedModel.providerId ?? mostUsedModel.id} size={13} />
-              <span class="truncate">
-                {formatIdentifier(mostUsedModel.providerId ?? '')} · {formatIdentifier(
-                  mostUsedModel.harnessId ?? ''
-                )}
-              </span>
-            </p>
+              <div class="min-w-0">
+                <p class="truncate text-sm font-semibold">{model.id}</p>
+                <p class="mt-0.5 flex items-center gap-1.5 text-[11px] text-muted">
+                  <VendorIcon name={model.providerId ?? model.id} size={12} />
+                  <span class="truncate">
+                    {formatIdentifier(model.providerId ?? '')} · {formatIdentifier(
+                      model.harnessId ?? ''
+                    )}
+                  </span>
+                </p>
+              </div>
+            </div>
+            <dl class="grid min-w-80 flex-1 grid-cols-4 gap-x-5">
+              <div>
+                <dt class="text-[10px] text-dimmed">Responses</dt>
+                <dd class="mt-0.5 text-xs font-semibold tabular-nums">
+                  {formatNumber(model.messageCount)}
+                </dd>
+              </div>
+              <div>
+                <dt class="text-[10px] text-dimmed">Tokens</dt>
+                <dd class="mt-0.5 text-xs font-semibold tabular-nums">
+                  {formatNumber(model.tokens)}
+                </dd>
+              </div>
+              <div>
+                <dt class="text-[10px] text-dimmed">Cost</dt>
+                <dd class="mt-0.5 text-xs font-semibold tabular-nums">
+                  {formatCost(model.costUsd)}
+                </dd>
+              </div>
+              <div>
+                <dt class="text-[10px] text-dimmed">Runtime</dt>
+                <dd class="mt-0.5 text-xs font-semibold tabular-nums">
+                  {formatDuration(model.durationMs)}
+                </dd>
+              </div>
+            </dl>
           </div>
-        </div>
-        <dl class="ml-auto grid flex-1 grid-cols-2 gap-x-8 gap-y-3 sm:grid-cols-4">
-          <div>
-            <dt class="text-[11px] text-dimmed">Responses</dt>
-            <dd class="mt-0.5 text-sm font-semibold tabular-nums">
-              {formatNumber(mostUsedModel.messageCount)}
-            </dd>
-          </div>
-          <div>
-            <dt class="text-[11px] text-dimmed">Tokens</dt>
-            <dd class="mt-0.5 text-sm font-semibold tabular-nums">
-              {formatNumber(mostUsedModel.tokens)}
-            </dd>
-          </div>
-          <div>
-            <dt class="text-[11px] text-dimmed">Estimated cost</dt>
-            <dd class="mt-0.5 text-sm font-semibold tabular-nums">
-              {formatCost(mostUsedModel.costUsd)}
-            </dd>
-          </div>
-          <div>
-            <dt class="text-[11px] text-dimmed">Runtime</dt>
-            <dd class="mt-0.5 text-sm font-semibold tabular-nums">
-              {formatDuration(mostUsedModel.durationMs)}
-            </dd>
-          </div>
-        </dl>
+        {/each}
       </div>
     </section>
   {/if}
@@ -1035,77 +1135,6 @@
       </p>
     </section>
   </div>
-
-  <section class="mt-4 overflow-hidden rounded-xl border p-4" aria-labelledby="activity-heading">
-    <div class="flex flex-wrap items-start justify-between gap-3">
-      <div>
-        <h2 id="activity-heading" class="text-sm font-semibold">Active days</h2>
-        <p class="mt-0.5 text-xs text-muted">
-          {formatNumber(calendarResponseCount)} agent responses during the selected period.
-        </p>
-      </div>
-      <span
-        class="rounded-lg bg-raised px-2.5 py-1.5 text-[11px] font-medium tabular-nums text-muted"
-      >
-        {rangeLabel}
-      </span>
-    </div>
-
-    <div class="mt-5 overflow-x-auto pb-2">
-      <div class="min-w-[46rem]">
-        <div class="grid grid-cols-[1.5rem_minmax(0,1fr)] gap-2">
-          <span aria-hidden="true"></span>
-          <div
-            class="activity-columns gap-1"
-            style:--calendar-weeks={calendarWeeks.length}
-            aria-hidden="true"
-          >
-            {#each calendarWeeks as week, index (`month-${index}`)}
-              <span class="min-w-0 overflow-visible whitespace-nowrap text-[10px] text-dimmed">
-                {week.monthLabel}
-              </span>
-            {/each}
-          </div>
-          <div
-            class="grid w-6 shrink-0 grid-rows-7 gap-1 text-[10px] leading-2.5 text-dimmed"
-            aria-hidden="true"
-          >
-            <span></span><span>Mon</span><span></span><span>Wed</span><span></span><span>Fri</span
-            ><span></span>
-          </div>
-          <div
-            class="activity-columns gap-1"
-            style:--calendar-weeks={calendarWeeks.length}
-            aria-label="Local activity calendar"
-          >
-            {#each calendarWeeks as week, weekIndex (`week-${weekIndex}`)}
-              <div class="flex min-w-0 flex-col gap-1">
-                {#each week.days as day (day.date)}
-                  <span
-                    class="aspect-square w-full rounded-sm {activityClass(day)}"
-                    title={`${day.date}: ${day.count} agent responses`}
-                    aria-label={`${day.date}: ${day.count} agent responses`}
-                  ></span>
-                {/each}
-              </div>
-            {/each}
-          </div>
-        </div>
-        <div
-          class="mt-3 flex items-center justify-end gap-1 text-[10px] text-dimmed"
-          aria-hidden="true"
-        >
-          <span class="mr-1">Less</span>
-          <span class="h-2.5 w-2.5 rounded-sm bg-raised"></span>
-          <span class="h-2.5 w-2.5 rounded-sm bg-primary/25"></span>
-          <span class="h-2.5 w-2.5 rounded-sm bg-primary/50"></span>
-          <span class="h-2.5 w-2.5 rounded-sm bg-primary/75"></span>
-          <span class="h-2.5 w-2.5 rounded-sm bg-primary"></span>
-          <span class="ml-1">More</span>
-        </div>
-      </div>
-    </div>
-  </section>
 
   <section class="mt-4 rounded-xl border" aria-labelledby="project-usage-heading">
     <div class="flex items-center justify-between border-b px-4 py-3">
@@ -1549,6 +1578,6 @@
 
   .activity-columns {
     display: grid;
-    grid-template-columns: repeat(var(--calendar-weeks), minmax(0, 1fr));
+    grid-template-columns: repeat(var(--calendar-weeks), 0.75rem);
   }
 </style>
