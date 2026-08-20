@@ -335,7 +335,27 @@ export async function createFileEditor(
       if (!range) return
       view.dispatch({
         selection: { anchor: range.from },
-        effects: api.EditorView.scrollIntoView(range.from, { y: 'center', yMargin: 80 })
+        effects: api.EditorView.scrollIntoView(range.from, { y: 'center' })
+      })
+      view.requestMeasure({
+        read(editor) {
+          const current = editor.state
+            .field(conflictField)
+            .ranges.find((candidate) => candidate.id === id)
+          if (!current) return null
+          const target = editor.coordsAtPos(current.from, 1)
+          if (!target) return null
+          const viewport = editor.scrollDOM.getBoundingClientRect()
+          const targetCenter = (target.top + target.bottom) / 2
+          const viewportCenter = (viewport.top + viewport.bottom) / 2
+          const desired = editor.scrollDOM.scrollTop + targetCenter - viewportCenter
+          return Math.max(0, Math.min(desired, editor.scrollDOM.scrollHeight - viewport.height))
+        },
+        write(scrollTop, editor) {
+          if (scrollTop === null) return
+          editor.scrollDOM.scrollTop = scrollTop
+          onScroll?.()
+        }
       })
     },
     undo(): boolean {
