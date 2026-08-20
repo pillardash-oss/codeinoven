@@ -1924,11 +1924,11 @@ export class RemoteModeController {
         this.scheduleAccountProfileSync(0)
         this.broadcast()
       },
-      onDeviceAuthenticated: (deviceId) => {
+      onDeviceAuthenticated: (deviceId, cloudMobileDeviceId) => {
         const connectedIds = new Set(this.gateway?.listDevices().map((device) => device.id) ?? [])
         connectedIds.add(deviceId)
         this.refreshDevices(connectedIds)
-        if (deviceId === this.pendingCloudDeviceId) {
+        if (cloudMobileDeviceId === this.pendingCloudDeviceId) {
           this.pendingCloudDeviceId = null
           this.cloudStatus = {
             ...this.cloudStatus,

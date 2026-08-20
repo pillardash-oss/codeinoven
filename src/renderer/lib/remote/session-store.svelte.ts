@@ -163,6 +163,7 @@ export class RemoteSessionStore {
   /** Sign the desktop-issued relay challenge nonce and prove possession. */
   private async respondToRelayChallenge(nonce: string): Promise<void> {
     const keyMaterial = await this.ensureKeyMaterial(this.keyMaterialDesktopId)
+    const cloudMobileDeviceId = this.accountRoute?.mobileDeviceId ?? null
     const transcript = handshakeTranscript({
       nonce,
       deviceId: keyMaterial.deviceId,
@@ -178,6 +179,10 @@ export class RemoteSessionStore {
       deviceName: keyMaterial.deviceName,
       connectionId: this.relayConnectionId
     }
+    // The cloud grant installation id is distinct from the credential id the
+    // desktop assigns below. Return it over this encrypted authenticated frame
+    // so the desktop can finish only the pairing code this installation claimed.
+    if (cloudMobileDeviceId) authFrame['cloudMobileDeviceId'] = cloudMobileDeviceId
     if (keyMaterial.deviceId) {
       authFrame['deviceId'] = keyMaterial.deviceId
       authFrame['authVersion'] = keyMaterial.authVersion

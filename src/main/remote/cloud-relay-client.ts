@@ -31,8 +31,8 @@ export interface CloudRelayClientOptions {
     args: unknown[],
     device?: RemoteRpcDeviceContext
   ) => Promise<{ ok: boolean; result?: unknown; message?: string }>
-  /** Called whenever a phone proves its persisted or newly enrolled identity. */
-  onDeviceAuthenticated?: (deviceId: string) => void
+  /** Reports both the desktop credential and cloud installation identities after proof. */
+  onDeviceAuthenticated?: (deviceId: string, cloudMobileDeviceId: string | null) => void
   /**
    * Device credential service used to authenticate the phone over the relay.
    * Every RPC invoke is bound to the device that authenticated this relay
@@ -677,6 +677,10 @@ export class CloudRelayClient {
     const bootstrap = typeof record['bootstrap'] === 'string' ? record['bootstrap'] : ''
     const deviceName = typeof record['deviceName'] === 'string' ? record['deviceName'].trim() : ''
     const deviceId = typeof record['deviceId'] === 'string' ? record['deviceId'].trim() : ''
+    const cloudMobileDeviceId =
+      typeof record['cloudMobileDeviceId'] === 'string'
+        ? record['cloudMobileDeviceId'].trim().slice(0, 128)
+        : ''
     const authVersion =
       typeof record['authVersion'] === 'number' ? record['authVersion'] : undefined
     const signingJwk =
@@ -811,7 +815,7 @@ export class CloudRelayClient {
       allProjects: device.allProjects,
       projectIds: device.projectIds
     }
-    this.options.onDeviceAuthenticated?.(device.deviceId)
+    this.options.onDeviceAuthenticated?.(device.deviceId, cloudMobileDeviceId || null)
     this.sendDeviceOk()
   }
 
