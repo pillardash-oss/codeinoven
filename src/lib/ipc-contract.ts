@@ -171,6 +171,24 @@ export interface UpdaterStatus {
   errorMessage?: string
 }
 
+/** Native browser content rectangle in BrowserWindow density-independent pixels. */
+export interface BrowserViewBounds {
+  x: number
+  y: number
+  width: number
+  height: number
+}
+
+/** Navigation state mirrored from an app-scoped browser WebContentsView. */
+export interface BrowserPageState {
+  tabId: string
+  url: string
+  title: string
+  loading: boolean
+  canGoBack: boolean
+  canGoForward: boolean
+}
+
 export interface IpcInvokeContract {
   'account:getLocalUsage': Contract<
     [range: import('./types').LocalProfileAnalyticsRange],
@@ -1302,6 +1320,17 @@ export interface IpcInvokeContract {
   'shell:revealExternalPath': Contract<[path: string], boolean>
   /** Resolve website favicons for a list of hostnames. Returns a data URL per host, or null when none exists. */
   'web:favicon': Contract<[hostnames: string[]], Record<string, string | null>>
+  'browser:show': Contract<
+    [tabId: string, initialUrl: string, bounds: BrowserViewBounds],
+    BrowserPageState
+  >
+  'browser:hide': Contract<[tabId: string], void>
+  'browser:navigate': Contract<[tabId: string, url: string], void>
+  'browser:goBack': Contract<[tabId: string], void>
+  'browser:goForward': Contract<[tabId: string], void>
+  'browser:reload': Contract<[tabId: string], void>
+  'browser:stop': Contract<[tabId: string], void>
+  'browser:destroy': Contract<[tabId: string], void>
   'spec:addAnnotation': Contract<
     [
       projectId: string,
@@ -1796,6 +1825,8 @@ export interface IpcEventContract {
   'updater:waiting-for-threads': [activeCount: number]
   'computerUse:pipFrame': [frame: ComputerUsePipFrame]
   'computerUse:pipState': [state: ComputerUsePipState]
+  'browser:state': [state: BrowserPageState]
+  'browser:openRequested': [url: string, requestedTabId?: string]
   /** Remote-mode status changes from the main process. */
   'remote:status': [status: RemoteModeStatus]
   /**

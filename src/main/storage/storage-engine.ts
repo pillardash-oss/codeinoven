@@ -55,7 +55,8 @@ const DEFAULT_CONFIG: AppConfig = {
   autoRetryAfterReset: true,
   resumeWorkOnRestart: true,
   defaultMergeMethod: 'squash',
-  maxDiffLines: 100
+  maxDiffLines: 100,
+  openLocalhostInCioBrowser: true
 }
 
 /**

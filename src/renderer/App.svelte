@@ -117,7 +117,8 @@
     autoRetryAfterReset: true,
     resumeWorkOnRestart: true,
     defaultMergeMethod: 'squash',
-    maxDiffLines: 100
+    maxDiffLines: 100,
+    openLocalhostInCioBrowser: true
   }
 
   let config = $state<AppConfig>(defaultConfig)

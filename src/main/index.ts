@@ -4,6 +4,7 @@ import { existsSync, mkdirSync } from 'fs'
 import { fileURLToPath } from 'url'
 import { is } from '@electron-toolkit/utils'
 import { APP_ID, APP_NAME } from '../lib/brand'
+import { isLocalDevelopmentUrl } from '../lib/local-development-url'
 import { Logger } from './system/logger'
 import { Database } from './database/database'
 import { ThreadRepo } from './database/repositories/thread-repo'
@@ -53,6 +54,7 @@ import { PACKAGED_SMOKE_OUTPUT_ENV, writePackagedSmokeProof } from './system/pac
 import { sendToRenderer } from './ipc/renderer-delivery'
 import { hasNativeSplashHandoff, signalNativeSplashReady } from './system/native-splash-handoff'
 import { instanceRegistry } from './system/instance-registry'
+import { BrowserService } from './browser/browser-service'
 
 const mainBundleDirectory = dirname(fileURLToPath(import.meta.url))
 
@@ -103,6 +105,7 @@ installProcessCrashDiagnostics()
 
 let mainWindow: BrowserWindow | null = null
 let splashWindow: BrowserWindow | null = null
+let browserService: BrowserService | null = null
 let quitCleanupStarted = false
 let shutdownFailsafe: ReturnType<typeof setTimeout> | null = null
 
@@ -353,8 +356,7 @@ let modelPricingService: ModelPricingService | null = null
  * the main window loads (its renderer requests previews as soon as it hydrates).
  * Populated in {@link bootPostPaintServices} once the file service exists.
  */
-let appfileProjectFiles: import('./editor/project-files-service').ProjectFilesService | null =
-  null
+let appfileProjectFiles: import('./editor/project-files-service').ProjectFilesService | null = null
 const threadCreation = new ThreadCreationCoordinator()
 
 /** Resolve the app icon — static dir in dev, bundled renderer assets in production. */
@@ -522,6 +524,14 @@ async function bootPostPaintServices(): Promise<void> {
   updaterService = new UpdaterService(storage)
   powerWakeService = new PowerWakeService(storage, database)
   retryScheduler = new RetrySchedulerService(storage)
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    const service = new BrowserService(mainWindow)
+    browserService = service
+    service.register()
+    chatEngine.setBrowserUtilityExecutor((operation, input, context) =>
+      service.executeUtility(operation, input, context)
+    )
+  }
   // Keep the device awake while a scheduled auto-retry is due within the wake
   // window, so a usage-limit reset fires even when the user is away.
   powerWakeService.attachRetryScheduler(retryScheduler)
@@ -862,7 +872,21 @@ function createWindow(): BrowserWindow {
   window.webContents.setWindowOpenHandler((details) => {
     try {
       const safeUrl = windowBoundaryValidator.validateExternalUrl(details.url)
-      void shell.openExternal(safeUrl)
+      if (isLocalDevelopmentUrl(safeUrl)) {
+        void storage
+          .getConfig()
+          .then((config) => {
+            if (window.isDestroyed() || window.webContents.isDestroyed()) return
+            if (config.openLocalhostInCioBrowser) {
+              sendToRenderer(window.webContents, 'browser:openRequested', safeUrl)
+            } else {
+              void shell.openExternal(safeUrl)
+            }
+          })
+          .catch((error: unknown) => Logger.error('Local link routing failed:', error))
+      } else {
+        void shell.openExternal(safeUrl)
+      }
     } catch (error) {
       Logger.error('Window open rejected unsafe URL:', error)
     }
@@ -1180,6 +1204,13 @@ async function runShutdownPipeline(): Promise<void> {
     modelPricingService?.stop()
   } catch (error) {
     Logger.error('Model pricing cleanup failed during shutdown:', error)
+  }
+
+  try {
+    browserService?.dispose()
+    browserService = null
+  } catch (error) {
+    Logger.error('Browser service cleanup failed during shutdown:', error)
   }
 
   try {

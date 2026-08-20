@@ -48,6 +48,7 @@
   import ThreadView from '../threads/ThreadView.svelte'
   import SpecConversationSidebar from '../specs/SpecConversationSidebar.svelte'
   import TerminalPanel from '../terminal/TerminalPanel.svelte'
+  import BrowserPanel from '../browser/BrowserPanel.svelte'
   import ProjectFilesPanel from '../files/ProjectFilesPanel.svelte'
   import DiffSidebarPanel from '../files/DiffSidebarPanel.svelte'
   import ContextSidebar from '../layout/ContextSidebar.svelte'
@@ -659,6 +660,13 @@
     contextSidebarState.openNewTerminal(selectedThread.projectId, selectedThread.id)
   }
 
+  function openNewBrowser(): void {
+    const activeTab = contextSidebarState.sidebarActiveTab
+    contextSidebarState.openBrowser(
+      activeTab?.kind === 'browser' ? activeTab.url : 'http://localhost:3000/'
+    )
+  }
+
   function openDebugger(): void {
     if (!selectedThread || !import.meta.env.DEV) return
     contextSidebarState.openDebugger(selectedThread.projectId, selectedThread.id)
@@ -988,6 +996,7 @@
   }
 
   let terminalFullscreenTabId = $state<string | null>(null)
+  let browserFullscreenTabId = $state<string | null>(null)
   let sidebarVisible = $derived(contextSidebarState.sidebarVisible)
   let terminalDockVisible = $derived(contextSidebarState.terminalDockVisible)
 
@@ -1051,7 +1060,9 @@
   )
 
   function openTabFullscreen(tabId: string): void {
-    terminalFullscreenTabId = tabId
+    const tab = contextSidebarState.tabs.find((candidate) => candidate.id === tabId)
+    if (tab?.kind === 'browser') browserFullscreenTabId = tabId
+    if (tab?.kind === 'terminal') terminalFullscreenTabId = tabId
   }
 
   /** A files tab with unsaved changes waiting on a save/discard decision. */
@@ -1102,6 +1113,10 @@
     // Closing the coordinator is a dismissal: it stays undocked until the user
     // brings it back from the rail, otherwise it would reappear immediately.
     if (tab.kind === 'coordinator') coordinatorDockState.setAutoOpen(false)
+    if (tab.kind === 'browser') {
+      if (browserFullscreenTabId === tab.id) browserFullscreenTabId = null
+      void invoke('browser:destroy', tab.id)
+    }
     contextSidebarState.close(id)
     if (tab.kind === 'temporary-chat') {
       void invoke('agent:closeTemporaryChat', tab.temporaryChatId)
@@ -1355,6 +1370,14 @@
       allThreads = allThreads.filter((thread) => thread.id !== threadId)
       scopeState.removeThread(threadId)
       if (workspaceState.selectedThread?.id === threadId) workspaceState.clearThread()
+    })
+  })
+
+  $effect(() => {
+    return subscribe('browser:openRequested', (url, requestedTabId) => {
+      if (contextSidebarState.openBrowser(url, requestedTabId) === null) {
+        void invoke('shell:openExternal', url)
+      }
     })
   })
 
@@ -3381,6 +3404,14 @@
                     projectId={activeContextTab.projectId}
                   />
                 {/if}
+              {:else if activeContextTab.kind === 'browser'}
+                {#if browserFullscreenTabId === activeContextTab.id}
+                  <div class="flex h-full items-center justify-center text-xs text-muted">
+                    Browser is open in fullscreen
+                  </div>
+                {:else}
+                  <BrowserPanel tab={activeContextTab} />
+                {/if}
               {:else if activeContextTab.kind === 'debugger'}
                 <AgentDebugPanel />
               {:else if activeContextTab.kind === 'sources'}
@@ -3457,6 +3488,7 @@
             onTerminalPlacementChange={(placement) =>
               contextSidebarState.setTerminalPlacement(placement)}
             onNewTerminal={openNewTerminal}
+            onNewBrowser={openNewBrowser}
           />
         </div>
       {/if}
@@ -3821,6 +3853,45 @@
             </Dialog.Close>
           </div>
           <TerminalPanel terminalId={terminalTab.terminalId} projectId={terminalTab.projectId} />
+        </Dialog.Content>
+      </Dialog.Portal>
+    </Dialog.Root>
+  {/if}
+{/if}
+
+<!-- Browser fullscreen dialog -->
+{#if browserFullscreenTabId}
+  {@const browserTab = contextSidebarState.tabs.find((tab) => tab.id === browserFullscreenTabId)}
+  {#if browserTab?.kind === 'browser'}
+    <Dialog.Root
+      open={true}
+      onOpenChange={(open) => {
+        if (!open) browserFullscreenTabId = null
+      }}
+    >
+      <Dialog.Portal>
+        <Dialog.Overlay class="fixed inset-0 z-50 bg-overlay/80 backdrop-blur-sm" />
+        <Dialog.Content
+          class="fixed inset-0 z-50 flex min-h-0 flex-col overflow-hidden bg-app shadow-xl"
+          onEscapeKeydown={(event) => event.preventDefault()}
+        >
+          <div
+            class="titlebar-drag flex h-10 shrink-0 items-center gap-2 border-b border-border pr-3"
+            style={trafficLightInsetStyle()}
+          >
+            <Dialog.Title class="min-w-0 flex-1 truncate text-xs font-semibold text-foreground">
+              {browserTab.title}
+            </Dialog.Title>
+            <Dialog.Description class="sr-only">Fullscreen browser</Dialog.Description>
+            <Dialog.Close
+              class="titlebar-no-drag flex h-7 w-7 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+              aria-label="Close fullscreen browser"
+              title="Close fullscreen browser"
+            >
+              <X size={14} />
+            </Dialog.Close>
+          </div>
+          <BrowserPanel tab={browserTab} />
         </Dialog.Content>
       </Dialog.Portal>
     </Dialog.Root>

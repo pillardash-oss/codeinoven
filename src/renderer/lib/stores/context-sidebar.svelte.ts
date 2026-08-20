@@ -90,6 +90,15 @@ export interface GitContextTab {
   threadId: string
 }
 
+export interface BrowserContextTab {
+  id: string
+  kind: 'browser'
+  title: string
+  projectId: string
+  threadId: string
+  url: string
+}
+
 export interface ThreadNoteContextTab {
   id: string
   kind: 'thread-note'
@@ -192,6 +201,7 @@ export type ContextSidebarTab =
   | NotificationContextTab
   | MemoryContextTab
   | CoordinatorContextTab
+  | BrowserContextTab
 
 interface ThreadSidebarContext {
   projectId: string
@@ -228,7 +238,8 @@ const PROJECT_TAB_KINDS = new Set<ContextSidebarTab['kind']>([
   'terminal',
   'git',
   'cloud-deployment',
-  'memory'
+  'memory',
+  'browser'
 ])
 
 function isProjectTab(tab: ContextSidebarTab): boolean {
@@ -746,6 +757,39 @@ class ContextSidebarState {
     // re-reads local status and the connection-gated PR indicators so the
     // panel never shows data older than the moment it was opened.
     gitState.notifyGitPanelOpened(projectId)
+  }
+
+  openBrowser(url: string, requestedTabId?: string): string | null {
+    if (!this.activeProjectId || !this.activeThreadId) return null
+    const projectId = this.activeProjectId
+    const threadId = this.activeThreadId
+    const context = this.ensureProjectContext(projectId)
+    const id = requestedTabId ?? `browser:${projectId}:${crypto.randomUUID()}`
+    const existing = context.tabs.find((tab) => tab.id === id)
+    if (existing?.kind === 'browser') {
+      existing.url = url
+      this.focusInProjectContext(context, id)
+      return id
+    }
+    let title = 'Browser'
+    try {
+      const parsed = new URL(url)
+      title = parsed.port ? `${parsed.hostname}:${parsed.port}` : parsed.hostname
+    } catch {
+      // The main-process browser boundary reports malformed custom URLs.
+    }
+    this.openProject(context, { id, kind: 'browser', title, projectId, threadId, url })
+    return id
+  }
+
+  updateBrowserTab(tabId: string, url: string, title?: string): void {
+    for (const context of Object.values(this.projectContexts)) {
+      const tab = context.tabs.find((candidate) => candidate.id === tabId)
+      if (tab?.kind !== 'browser') continue
+      tab.url = url
+      if (title?.trim()) tab.title = title.trim()
+      return
+    }
   }
 
   /** Opens the thread's note as a sidebar panel, creating one the first time

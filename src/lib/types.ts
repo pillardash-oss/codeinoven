@@ -3100,6 +3100,8 @@ export interface AppConfig {
   /** Hunks whose changed lines exceed this are collapsed with a notice so huge
    *  diffs do not hurt diff-view performance. */
   maxDiffLines: number
+  /** Route loopback development links into the app-scoped test browser. */
+  openLocalhostInCioBrowser: boolean
 }
 
 /** A single layer of the assembled prompt/behavior display. */
@@ -3131,6 +3133,7 @@ export type AppConfigPatch = Partial<
     | 'resumeWorkOnRestart'
     | 'defaultMergeMethod'
     | 'maxDiffLines'
+    | 'openLocalhostInCioBrowser'
   >
 >
 

@@ -11,7 +11,7 @@ import type {
 import { UTILITY_KIND_VALUES } from '../../lib/types'
 import { StorageEngine } from '../storage/storage-engine'
 import { SecretVault } from '../storage/secret-vault'
-import { UtilityRegistryService } from './utility-registry-service'
+import { APP_BROWSER_UTILITY_ID, UtilityRegistryService } from './utility-registry-service'
 import { CuaBridgeService } from './cua-bridge-service'
 import {
   GATEWAY_TOOLS,
@@ -107,6 +107,70 @@ export interface UtilityTurnGateway {
   cleanup(): Promise<void>
 }
 
+export type BrowserUtilityExecutor = (
+  operation: string,
+  input: Record<string, unknown>,
+  context: { projectId: string; threadId: string }
+) => Promise<unknown>
+
+const BROWSER_UTILITY_TOOLS: McpTool[] = [
+  {
+    name: 'open',
+    description: 'Open an http(s) URL in a visible in-app browser tab.',
+    inputSchema: {
+      type: 'object',
+      properties: { url: { type: 'string' } },
+      required: ['url'],
+      additionalProperties: false
+    }
+  },
+  {
+    name: 'snapshot',
+    description: 'Read the current page title, URL, visible text, and interactive elements.',
+    inputSchema: { type: 'object', properties: {}, additionalProperties: false }
+  },
+  {
+    name: 'click',
+    description: 'Click the first page element matching a CSS selector.',
+    inputSchema: {
+      type: 'object',
+      properties: { selector: { type: 'string' } },
+      required: ['selector'],
+      additionalProperties: false
+    }
+  },
+  {
+    name: 'type',
+    description: 'Replace an input, textarea, or editable element value and emit input/change.',
+    inputSchema: {
+      type: 'object',
+      properties: { selector: { type: 'string' }, text: { type: 'string' } },
+      required: ['selector', 'text'],
+      additionalProperties: false
+    }
+  },
+  {
+    name: 'navigate',
+    description: 'Navigate the current in-app browser tab to an http(s) URL.',
+    inputSchema: {
+      type: 'object',
+      properties: { url: { type: 'string' } },
+      required: ['url'],
+      additionalProperties: false
+    }
+  },
+  {
+    name: 'screenshot',
+    description: 'Capture the visible browser page as a PNG data URL.',
+    inputSchema: { type: 'object', properties: {}, additionalProperties: false }
+  },
+  {
+    name: 'reload',
+    description: 'Reload the current page.',
+    inputSchema: { type: 'object', properties: {}, additionalProperties: false }
+  }
+]
+
 interface TurnState {
   id: string
   request: UtilityTurnRequest
@@ -142,6 +206,7 @@ export class UtilityOrchestrationService {
   private cuaActivityListener:
     ((pid: number, threadId: string, sessionId?: string) => void) | null = null
   private imageDescriptorExecutor: ImageDescriptorExecutor | null = null
+  private browserExecutor: BrowserUtilityExecutor | null = null
   constructor(
     private readonly storage: StorageEngine,
     private readonly cuaBridge = new CuaBridgeService(storage)
@@ -186,6 +251,10 @@ export class UtilityOrchestrationService {
    */
   setImageDescriptorExecutor(executor: ImageDescriptorExecutor | null): void {
     this.imageDescriptorExecutor = executor
+  }
+
+  setBrowserExecutor(executor: BrowserUtilityExecutor | null): void {
+    this.browserExecutor = executor
   }
 
   /**
@@ -458,7 +527,10 @@ export class UtilityOrchestrationService {
     state.activated.set(utilityId, resolved)
 
     let capability: unknown
-    if (resolved.utility.kind === 'mcp' || resolved.utility.kind === 'computer_use') {
+    if (resolved.utility.id === APP_BROWSER_UTILITY_ID) {
+      if (!this.browserExecutor) throw new Error('The in-app browser is unavailable')
+      capability = { tools: BROWSER_UTILITY_TOOLS }
+    } else if (resolved.utility.kind === 'mcp' || resolved.utility.kind === 'computer_use') {
       const previousClient = state.clients.get(utilityId)
       const previousSessionId = state.cuaSessionIds.get(utilityId)
       if (previousClient && previousSessionId) {
@@ -515,7 +587,14 @@ export class UtilityOrchestrationService {
     if (!resolved) throw new Error('Activate this utility before invoking it')
 
     let result: unknown
-    if (resolved.utility.kind === 'mcp' || resolved.utility.kind === 'computer_use') {
+    if (resolved.utility.id === APP_BROWSER_UTILITY_ID) {
+      const executor = this.browserExecutor
+      if (!executor) throw new Error('The in-app browser is unavailable')
+      result = await executor(operation, operationInput, {
+        projectId: state.request.projectId,
+        threadId: state.request.threadId
+      })
+    } else if (resolved.utility.kind === 'mcp' || resolved.utility.kind === 'computer_use') {
       const client = state.clients.get(utilityId)
       if (!client) throw new Error('Activated MCP client is unavailable')
       const routedInput = this.routeComputerUseInput(state, utilityId, operationInput)

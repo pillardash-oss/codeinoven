@@ -306,7 +306,8 @@ const CONFIG_PATCH_FIELDS = new Set([
   'autoRetryAfterReset',
   'resumeWorkOnRestart',
   'defaultMergeMethod',
-  'maxDiffLines'
+  'maxDiffLines',
+  'openLocalhostInCioBrowser'
 ])
 const SPEC_SECTIONS = new Set<SpecSectionId>([
   'problem',
@@ -1018,6 +1019,13 @@ export function validateAppConfigPatch(value: unknown): AppConfigPatch {
       throw new TypeError('Max diff lines must be an integer between 10 and 5000')
     }
     patch.maxDiffLines = value.maxDiffLines
+  }
+
+  if ('openLocalhostInCioBrowser' in value) {
+    if (typeof value.openLocalhostInCioBrowser !== 'boolean') {
+      throw new TypeError('Open localhost in CIO browser must be a boolean')
+    }
+    patch.openLocalhostInCioBrowser = value.openLocalhostInCioBrowser
   }
 
   if ('slashCommandMode' in value) {

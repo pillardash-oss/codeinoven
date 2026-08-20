@@ -459,6 +459,28 @@
             </div>
           </div>
 
+          <!-- Browser -->
+          <div class="rounded-xl border bg-surface p-4">
+            <h3 class="mb-3 text-xs font-semibold uppercase tracking-wide text-muted">Browser</h3>
+            <div class="flex items-center justify-between gap-4">
+              <div>
+                <p class="text-sm font-medium">Open localhost on CIO's browser</p>
+                <p class="text-xs text-dimmed">
+                  Keep local development links inside the workspace for testing
+                </p>
+              </div>
+              <Switch
+                checked={config.openLocalhostInCioBrowser}
+                onchange={() =>
+                  void updateConfig({
+                    openLocalhostInCioBrowser: !config.openLocalhostInCioBrowser
+                  })}
+                aria-label="Toggle opening localhost links in CIO's browser"
+                disabled={!settingsReady}
+              />
+            </div>
+          </div>
+
           <!-- Power -->
           <div class="rounded-xl border bg-surface p-4">
             <h3 class="mb-3 text-xs font-semibold uppercase tracking-wide text-muted">Power</h3>

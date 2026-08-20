@@ -340,6 +340,14 @@ const INVOKE_CHANNELS = [
   'shell:revealPath',
   'shell:revealExternalPath',
   'web:favicon',
+  'browser:show',
+  'browser:hide',
+  'browser:navigate',
+  'browser:goBack',
+  'browser:goForward',
+  'browser:reload',
+  'browser:stop',
+  'browser:destroy',
   'spec:addAnnotation',
   'spec:addDecisionComment',
   'spec:approve',
@@ -455,6 +463,8 @@ const EVENT_CHANNELS = [
   'updater:waiting-for-threads',
   'computerUse:pipFrame',
   'computerUse:pipState',
+  'browser:state',
+  'browser:openRequested',
   'remote:status',
   'remote:stepUpPending'
 ] as const

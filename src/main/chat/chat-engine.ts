@@ -70,6 +70,7 @@ import { BaseUrlProviderService } from '../providers/base-url-provider-service'
 import { AgentProcessService } from '../agents/agent-process-service'
 import {
   UtilityOrchestrationService,
+  type BrowserUtilityExecutor,
   type UtilityResultAttribution,
   type UtilityTurnBudgetContext,
   type UtilityTurnGateway
@@ -1566,6 +1567,10 @@ export class ChatEngine {
       driver.setProcessObserver?.(this.agentProcesses)
       driver.onEvent((event) => this.handleDriverEvent(driver.id, event))
     }
+  }
+
+  setBrowserUtilityExecutor(executor: BrowserUtilityExecutor | null): void {
+    this.utilityOrchestration.setBrowserExecutor(executor)
   }
 
   private cioPrompt(id: CioPromptId): Promise<string> {
