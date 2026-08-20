@@ -24,7 +24,7 @@
         <span class="font-mono text-[10px] tabular-nums text-danger">−{deletions}</span>
         <DiffLayoutToggle title={diffLayoutToggleLabel(diffLayoutState.layout)} size={12} />
       </div>
-      <div class="max-h-72 overflow-x-hidden overflow-y-auto py-1 font-mono text-[11px] leading-5">
+      <div class="max-h-72 overflow-auto py-1 font-mono text-[11px] leading-5">
         <DiffRows lines={diff.lines} paneLabels />
       </div>
       {#if diff.truncated}
