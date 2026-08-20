@@ -1,8 +1,19 @@
 <script lang="ts">
   import { tick } from 'svelte'
   import type { Attachment } from 'svelte/attachments'
-  import { Check, Pin, PinOff, Pencil, Trash2, GitFork, Kanban, StickyNote } from '@lucide/svelte'
+  import {
+    Check,
+    Copy,
+    Pin,
+    PinOff,
+    Pencil,
+    Trash2,
+    GitFork,
+    Kanban,
+    StickyNote
+  } from '@lucide/svelte'
   import { Portal } from 'bits-ui'
+  import { toast } from 'svelte-sonner'
   import Modal from '$lib/components/ui/Modal.svelte'
   import ChangeScopeModal from '$lib/components/threads/ChangeScopeModal.svelte'
   import ThreadNoteModal from '$lib/components/threads/ThreadNoteModal.svelte'
@@ -34,6 +45,7 @@
   } from '$shared/types'
   import type { Thread } from '$shared/types'
   import { threadStatusPolicy } from '$shared/thread-status-policy'
+  import { copyText } from '$lib/copy-text'
 
   interface Props {
     thread: Thread
@@ -280,6 +292,13 @@
       icon: StickyNote,
       onClick: () => {
         showNoteModal = true
+      }
+    },
+    {
+      label: 'Copy thread id',
+      icon: Copy,
+      onClick: () => {
+        void copyThreadId()
       }
     },
     { label: '', divider: true },
@@ -563,6 +582,15 @@
 
   function errorMessage(error: unknown, fallback: string): string {
     return error instanceof Error ? error.message : fallback
+  }
+
+  async function copyThreadId(): Promise<void> {
+    try {
+      await copyText(thread.id)
+      toast.success('Thread ID copied.')
+    } catch {
+      toast.error('The thread ID could not be copied.')
+    }
   }
 
   async function confirmRename(): Promise<void> {
