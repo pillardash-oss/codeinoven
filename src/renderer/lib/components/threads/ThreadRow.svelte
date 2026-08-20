@@ -16,12 +16,12 @@
   import { toast } from 'svelte-sonner'
   import Modal from '$lib/components/ui/Modal.svelte'
   import ChangeScopeModal from '$lib/components/threads/ChangeScopeModal.svelte'
-  import ThreadNoteModal from '$lib/components/threads/ThreadNoteModal.svelte'
   import ThreadDropdown from '$lib/components/shared/ThreadDropdown.svelte'
   import type { MenuItem } from '$lib/components/shared/ThreadDropdown.svelte'
   import ThreadHoverPopover from '$lib/components/shared/ThreadHoverPopover.svelte'
   import StatusBadge from '$lib/components/shared/StatusBadge.svelte'
   import { scopeState } from '$lib/stores/scope.svelte'
+  import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
   import { threadNotesState } from '$lib/stores/thread-notes.svelte'
   import { threadMessages } from '$lib/stores/thread-messages.svelte'
   import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
@@ -253,7 +253,6 @@
   let renameValue = $state('')
   let showDeleteModal = $state(false)
   let showChangeScopeModal = $state(false)
-  let showNoteModal = $state(false)
   let actionError = $state<string | null>(null)
 
   let menuItems = $derived<MenuItem[]>([
@@ -291,7 +290,11 @@
       label: 'Notes',
       icon: StickyNote,
       onClick: () => {
-        showNoteModal = true
+        onOpen(thread)
+        contextSidebarState.openThreadNote(thread.projectId, thread.id, thread.title, {
+          edit: true,
+          focusEditor: true
+        })
       }
     },
     {
@@ -1059,15 +1062,5 @@
     threadId={thread.id}
     projectId={thread.projectId}
     currentBucketId={thread.scopeBucketId ?? DEFAULT_SCOPE_BUCKET_ID}
-  />
-{/if}
-
-{#if showNoteModal && !picker}
-  <ThreadNoteModal
-    open={showNoteModal}
-    projectId={thread.projectId}
-    threadId={thread.id}
-    threadTitle={thread.title}
-    onClose={() => (showNoteModal = false)}
   />
 {/if}

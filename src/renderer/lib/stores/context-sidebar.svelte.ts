@@ -118,6 +118,9 @@ export interface ThreadNoteContextTab {
   savedBody: string | null
   draftBody: string
   mode: 'edit' | 'read'
+  /** Monotonic request used to return keyboard focus to the editor when an
+   *  already-open note is explicitly opened for writing. */
+  focusRequest: number
   loading: boolean
   saving: boolean
   error: string | null
@@ -967,11 +970,20 @@ class ContextSidebarState {
    *  exists. The body loads asynchronously onto the tab itself (not local
    *  component state) so an in-progress draft survives the panel being
    *  hidden and shown again. */
-  openThreadNote(projectId: string, threadId: string, threadTitle: string): void {
+  openThreadNote(
+    projectId: string,
+    threadId: string,
+    threadTitle: string,
+    options: { edit?: boolean; focusEditor?: boolean } = {}
+  ): void {
     const context = this.ensureContext(projectId, threadId)
     const id = `note:${projectId}:${threadId}`
     const existing = context.tabs.find((tab) => tab.id === id)
     if (existing) {
+      if (existing.kind === 'thread-note') {
+        if (options.edit) existing.mode = 'edit'
+        if (options.focusEditor) existing.focusRequest += 1
+      }
       this.focusInContext(context, id)
       return
     }
@@ -985,6 +997,7 @@ class ContextSidebarState {
       savedBody: null,
       draftBody: '',
       mode: 'edit',
+      focusRequest: options.focusEditor ? 1 : 0,
       loading: true,
       saving: false,
       error: null
@@ -1004,8 +1017,9 @@ class ContextSidebarState {
       if (!tab || tab.kind !== 'thread-note') return
       tab.savedBody = note?.body ?? null
       tab.draftBody = note?.body ?? ''
-      // A saved note opens in read mode so the user reads it, not its source.
-      tab.mode = note ? 'read' : 'edit'
+      // Explicit write entry points keep saved notes editable; passive sidebar
+      // opens preserve the read-first behavior.
+      tab.mode = note && tab.focusRequest === 0 ? 'read' : 'edit'
       tab.loading = false
     } catch (err) {
       const tab = context.tabs.find((candidate) => candidate.id === tabId)

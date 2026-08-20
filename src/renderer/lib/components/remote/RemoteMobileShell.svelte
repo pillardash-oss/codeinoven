@@ -37,6 +37,7 @@
   import { getProjectIcon } from '$lib/project-icons'
   import { mobileState } from '$lib/remote/mobile-state.svelte'
   import { threadMessages } from '$lib/stores/thread-messages.svelte'
+  import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
   import { gitState } from '$lib/stores/git.svelte'
   import { toast } from 'svelte-sonner'
   import { INBOX_PROJECT_ID, type Thread, type ThreadSearchResult } from '$shared/types'
@@ -95,6 +96,25 @@
   let searching = $state(false)
   let searchTimer: ReturnType<typeof setTimeout> | undefined
   let searchRequest = 0
+
+  let mobileNoteTab = $derived.by(() => {
+    const thread = mobileState.selectedThread
+    if (!thread) return null
+    const id = `note:${thread.projectId}:${thread.id}`
+    const tab = contextSidebarState.tabs.find((candidate) => candidate.id === id)
+    return tab?.kind === 'thread-note' ? tab : null
+  })
+
+  function openNotes(): void {
+    const thread = mobileState.selectedThread
+    if (!thread) return
+    contextSidebarState.activateThread(thread.projectId, thread.id, thread.title)
+    contextSidebarState.openThreadNote(thread.projectId, thread.id, thread.title, {
+      edit: true,
+      focusEditor: true
+    })
+    mobileState.notesOpen = true
+  }
 
   async function confirmRename(): Promise<void> {
     const target = renameTarget
@@ -261,7 +281,7 @@
         {
           label: 'Notes',
           icon: NotebookPen,
-          onClick: () => (mobileState.notesOpen = true)
+          onClick: openNotes
         }
       )
     }
@@ -638,17 +658,23 @@
     </BottomSheet>
   {/if}
 
-  <!-- Notes sheet — the self-contained desktop notes dialog. -->
+  <!-- Notes drawer — shares the same editor panel as the desktop sidebar. -->
   {#if mobileState.selectedThread}
-    {#await import('$lib/components/threads/ThreadNoteModal.svelte') then { default: ThreadNoteModal }}
-      <ThreadNoteModal
-        open={mobileState.notesOpen}
-        projectId={mobileState.selectedThread?.projectId ?? ''}
-        threadId={mobileState.selectedThread?.id ?? ''}
-        threadTitle={mobileState.selectedThread?.title}
-        onClose={() => (mobileState.notesOpen = false)}
-      />
-    {/await}
+    <BottomSheet
+      open={mobileState.notesOpen}
+      title="Notes"
+      onClose={() => (mobileState.notesOpen = false)}
+      maxHeight="max-h-[85dvh]"
+      fixedHeight
+    >
+      {#if mobileNoteTab}
+        {#await import('$lib/components/threads/ThreadNotePanel.svelte') then { default: ThreadNotePanel }}
+          <ThreadNotePanel tab={mobileNoteTab} />
+        {/await}
+      {:else}
+        <p class="py-10 text-center text-sm text-dimmed">Loading note…</p>
+      {/if}
+    </BottomSheet>
   {/if}
 
   <!-- Context usage sheet — same detail the desktop composer's battery icon shows. -->
