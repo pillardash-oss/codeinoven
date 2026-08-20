@@ -48,6 +48,7 @@ export interface FileEditorController {
   getConflictRanges(): FileEditorConflictRange[]
   getRangeViewportRect(id: string): FileEditorRangeViewportRect | null
   scrollToOffset(offset: number): void
+  scrollToConflictRange(id: string): void
   undo(): boolean
   redo(): boolean
   scrollToLine(line: number): void
@@ -162,6 +163,7 @@ export async function createFileEditor(
   ): ReturnType<typeof api.Decoration.set> => {
     const decorations: Range<ViewDecoration>[] = []
     for (const range of ranges) {
+      if (!range.active) continue
       const from = Math.max(0, Math.min(range.from, doc.length))
       const to = Math.max(from, Math.min(range.to, doc.length))
       const firstLine = doc.lineAt(from)
@@ -172,7 +174,7 @@ export async function createFileEditor(
         const classes = [
           'cm-merge-conflict-line',
           range.resolved ? 'cm-merge-conflict-resolved' : 'cm-merge-conflict-unresolved',
-          range.active ? 'cm-merge-conflict-active' : '',
+          'cm-merge-conflict-active',
           line.from === firstLine.from ? 'cm-merge-conflict-first' : '',
           line.from === lastLine.from ? 'cm-merge-conflict-last' : ''
         ]
@@ -328,6 +330,14 @@ export async function createFileEditor(
       const position = Math.max(0, Math.min(offset, view.state.doc.length))
       view.dispatch({ effects: api.EditorView.scrollIntoView(position, { y: 'center' }) })
     },
+    scrollToConflictRange(id: string): void {
+      const range = view.state.field(conflictField).ranges.find((candidate) => candidate.id === id)
+      if (!range) return
+      view.dispatch({
+        selection: { anchor: range.from },
+        effects: api.EditorView.scrollIntoView(range.from, { y: 'center', yMargin: 80 })
+      })
+    },
     undo(): boolean {
       return api.undo(view)
     },
@@ -464,8 +474,7 @@ function buildEditorTheme(EditorView: CodeMirrorApi['EditorView']): Extension {
       },
       '.cm-merge-conflict-line': {
         borderLeft: '2px solid var(--color-warning)',
-        borderRight: '2px solid var(--color-warning)',
-        backgroundColor: 'color-mix(in srgb, var(--color-warning) 8%, transparent)'
+        borderRight: '2px solid var(--color-warning)'
       },
       '.cm-merge-conflict-first': {
         borderTop: '2px solid var(--color-warning)',

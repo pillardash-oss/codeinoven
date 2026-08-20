@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount, tick } from 'svelte'
+  import { onMount } from 'svelte'
   import {
     AlertTriangle,
     ArrowLeftToLine,
@@ -58,9 +58,9 @@
   let dirty = $state(false)
   let error = $state<string | null>(null)
   let mergeRoot = $state<HTMLDivElement | null>(null)
-  let incomingPane = $state<HTMLDivElement | null>(null)
+  let incomingPane = $state<HTMLElement | null>(null)
   let centerHost = $state<HTMLDivElement | null>(null)
-  let currentPane = $state<HTMLDivElement | null>(null)
+  let currentPane = $state<HTMLElement | null>(null)
   let incomingHost = $state<HTMLDivElement | null>(null)
   let currentHost = $state<HTMLDivElement | null>(null)
   let centerController = $state<FileEditorController | null>(null)
@@ -258,10 +258,14 @@
   function selectHunk(index: number): void {
     if (index < 0 || index >= hunkStates.length) return
     activeHunk = index
-    centerController?.setConflictRanges(editorRanges())
+    const controller = centerController
+    controller?.setConflictRanges(editorRanges())
     const state = hunkStates[index]
-    if (state) centerController?.scrollToOffset(state.from)
-    void tick().then(scheduleConnectors)
+    if (!state || !controller) return
+    requestAnimationFrame(() => {
+      controller.scrollToConflictRange(String(state.index))
+      scheduleConnectors()
+    })
   }
 
   function undo(): void {
@@ -358,7 +362,7 @@
       mounted = editor
       centerController = editor
       const first = prepared.hunks[0]
-      if (first) editor.scrollToOffset(first.from)
+      if (first) editor.scrollToConflictRange(String(first.index))
       scheduleConnectors()
     })
     return () => {
