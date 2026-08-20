@@ -439,7 +439,6 @@ const INVOKE_CHANNELS = [
   'remote:beginCloudEnrollment',
   'remote:resetCloudEnrollment',
   'app:confirmClose',
-  'app:requestClose',
   'app:waitForFeatures',
   'app:rendererReady'
 ] as const satisfies readonly InvokeChannel[]

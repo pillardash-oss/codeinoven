@@ -1274,8 +1274,9 @@
 
   /**
    * Cmd/Ctrl+W closes the active surface: the topmost modal, the Settings page,
-   * or the open thread. Only when nothing is active does it close the window
-   * (through the working-threads confirmation gate in the main process).
+   * a sidebar panel, or the open thread. When nothing is active the shortcut is
+   * intentionally a no-op; application shutdown is reserved for explicit quit
+   * actions and the native window close control.
    */
   function handleCloseShortcut(): void {
     // App-managed palettes first — they float above every view.
@@ -1317,8 +1318,7 @@
       workspaceState.clearThread()
       return
     }
-    // Nothing active — close the window through the confirmation gate.
-    void invoke('app:requestClose')
+    // Nothing active — keep the application open.
   }
 
   /**

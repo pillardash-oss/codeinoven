@@ -194,18 +194,6 @@ ipcMain.handle('app:confirmClose', async () => {
   app.quit()
 })
 
-/**
- * Close the main window on the renderer's request (Cmd/Ctrl+W with nothing
- * active). Goes through the same `close` gate as the traffic-light button, so
- * working threads still get the close-confirmation prompt.
- */
-ipcMain.handle('app:requestClose', () => {
-  const window = mainWindow
-  if (window && !window.isDestroyed()) {
-    window.close()
-  }
-})
-
 /** Track when a terminal in the renderer holds focus (Windows shortcut routing). */
 ipcMain.on('terminal:focusState', (_event, focused: unknown) => {
   terminalFocused = focused === true
