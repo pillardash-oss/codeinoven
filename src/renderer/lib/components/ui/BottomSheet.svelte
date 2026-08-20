@@ -10,22 +10,13 @@
     children: Snippet
     footer?: Snippet
     headerExtra?: Snippet
-    /** Tailwind max-height class for the sheet panel. */
-    maxHeight?: string
-    /** Use a fixed height instead of a max-height (e.g. for content that should always fill the sheet). */
+    /** Fill the drawer to 90dvh so an inner panel can lay out and scroll itself.
+     *  When false the drawer hugs its content but caps at 90dvh. Either way it
+     *  never covers the whole screen and overflow scrolls. */
     fixedHeight?: boolean
   }
 
-  let {
-    open,
-    title,
-    onClose,
-    children,
-    footer,
-    headerExtra,
-    maxHeight = 'max-h-[82dvh]',
-    fixedHeight = false
-  }: Props = $props()
+  let { open, title, onClose, children, footer, headerExtra, fixedHeight = false }: Props = $props()
 
   $effect(() => {
     if (!open) return
@@ -48,8 +39,8 @@
   ></div>
   <aside
     class="fixed right-0 bottom-0 left-0 z-70 flex {fixedHeight
-      ? maxHeight.replace('max-h-', 'h-')
-      : maxHeight} flex-col overflow-hidden rounded-t-2xl border-t border-border bg-surface pb-[env(safe-area-inset-bottom)] shadow-2xl"
+      ? 'h-[90dvh]'
+      : 'max-h-[90dvh]'} flex-col overflow-hidden rounded-t-2xl border-t border-border bg-surface pb-[env(safe-area-inset-bottom)] shadow-2xl"
     aria-label={title}
   >
     <div class="flex h-12 shrink-0 items-center justify-between border-b border-border px-4">

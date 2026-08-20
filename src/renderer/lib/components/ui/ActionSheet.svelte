@@ -18,7 +18,7 @@
   }
 </script>
 
-<BottomSheet {open} {title} {onClose} maxHeight="max-h-[70dvh]">
+<BottomSheet {open} {title} {onClose}>
   <div class="p-1.5">
     {#each items as item (item.label)}
       {#if item.divider}

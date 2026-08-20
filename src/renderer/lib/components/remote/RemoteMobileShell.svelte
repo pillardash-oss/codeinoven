@@ -638,7 +638,6 @@
       open={mobileState.gitOpen}
       title="Git"
       onClose={() => (mobileState.gitOpen = false)}
-      maxHeight="max-h-[85dvh]"
       fixedHeight
     >
       {#await import('$lib/components/git/GitStatusPanel.svelte') then { default: GitStatusPanel }}
@@ -656,7 +655,6 @@
       open={mobileState.sourcesOpen}
       title="Sources"
       onClose={() => (mobileState.sourcesOpen = false)}
-      maxHeight="max-h-[85dvh]"
       fixedHeight
     >
       {#await import('$lib/components/threads/SourcesPanel.svelte') then { default: SourcesPanel }}
@@ -682,7 +680,6 @@
       open={mobileState.notesOpen}
       title="Notes"
       onClose={() => (mobileState.notesOpen = false)}
-      maxHeight="h-[calc(100dvh-0.75rem)]"
       fixedHeight
     >
       {#if mobileNoteTab}

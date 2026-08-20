@@ -684,13 +684,7 @@
 
 {#if openSubagentTab}
   {@const tab = openSubagentTab}
-  <BottomSheet
-    open
-    title={tab.title}
-    onClose={() => (openSubagentTab = null)}
-    maxHeight="max-h-[88dvh]"
-    fixedHeight
-  >
+  <BottomSheet open title={tab.title} onClose={() => (openSubagentTab = null)} fixedHeight>
     {#await import('../threads/SubagentSessionView.svelte') then { default: SubagentSessionView }}
       <SubagentSessionView {tab} onOpenSubagent={openSubagent} />
     {/await}
