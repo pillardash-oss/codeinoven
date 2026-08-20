@@ -1,4 +1,4 @@
-import { RTCPeerConnection, type RTCDataChannel, type RTCIceServer } from 'werift'
+import type { RTCDataChannel, RTCIceServer, RTCPeerConnection } from 'werift'
 import { Logger } from '../system/logger'
 
 export interface WebRtcSessionDescription {
@@ -28,7 +28,8 @@ export class DesktopWebRtcChannel {
   ): Promise<WebRtcSessionDescription> {
     await this.close()
     this.options.onStateChange('connecting')
-    const peer = new RTCPeerConnection({ iceServers })
+    const { RTCPeerConnection: RTCPeerConnectionCtor } = await import('werift')
+    const peer = new RTCPeerConnectionCtor({ iceServers })
     this.peer = peer
     peer.connectionStateChange.subscribe((state) => {
       if (this.peer !== peer) return

@@ -2,6 +2,7 @@
   import { onMount } from 'svelte'
   import { BookOpen, Flame, Loader2, Search, Sparkles, TrendingUp } from '@lucide/svelte'
   import { invoke } from '$lib/ipc.svelte'
+  import { loadSkillMarketDetail, preloadSkillMarketDetails } from '$lib/skill-market-cache'
   import type { SkillMarketEntry, SkillMarketView } from '$shared/types'
 
   interface Props {
@@ -23,6 +24,14 @@
   let error = $state('')
   let searchMode = $state(false)
 
+  function warmDetails(nextEntries: readonly SkillMarketEntry[]): void {
+    void preloadSkillMarketDetails(nextEntries.slice(0, 6).map((entry) => entry.id))
+  }
+
+  function warmDetail(id: string): void {
+    void loadSkillMarketDetail(id).catch(() => undefined)
+  }
+
   async function loadLeaderboard(view: SkillMarketView): Promise<void> {
     activeView = view
     searchMode = false
@@ -30,6 +39,7 @@
     error = ''
     try {
       entries = (await invoke('utilities:listSkillMarket', view)).entries
+      warmDetails(entries)
     } catch (loadError) {
       error =
         loadError instanceof Error ? loadError.message : 'The skills leaderboard could not load.'
@@ -50,6 +60,7 @@
     error = ''
     try {
       entries = (await invoke('utilities:searchSkillMarket', searchQuery)).entries.slice(0, 100)
+      warmDetails(entries)
     } catch (searchError) {
       error =
         searchError instanceof Error ? searchError.message : 'The skills marketplace search failed.'
@@ -153,6 +164,8 @@
           class="grid w-full grid-cols-[2.5rem_minmax(0,1fr)_auto] items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-elevated focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary"
           type="button"
           title="Open {entry.name}"
+          onpointerenter={() => warmDetail(entry.id)}
+          onfocus={() => warmDetail(entry.id)}
           onclick={() => onOpenSkill(entry)}
         >
           <span class="text-center font-mono text-xs tabular-nums text-dimmed">
