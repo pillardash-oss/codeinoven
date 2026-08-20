@@ -93,7 +93,7 @@
   <RemoteMobileShell onDisconnect={disconnectDesktop} onConnected={syncDesktopTheme} />
   {#if remoteSession.recovering}
     <div
-      class="fixed left-1/2 top-[max(1rem,env(safe-area-inset-top))] z-60 -translate-x-1/2 rounded-full border border-border bg-surface px-4 py-2 text-xs font-medium text-muted shadow-xl"
+      class="fixed left-1/2 top-[calc(env(safe-area-inset-top)+3.5rem+0.5rem)] z-60 -translate-x-1/2 rounded-full border border-border bg-surface px-4 py-2 text-xs font-medium text-muted shadow-xl"
       role="status"
       aria-live="polite"
     >
