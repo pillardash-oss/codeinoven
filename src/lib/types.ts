@@ -1670,6 +1670,20 @@ export interface LocalProfileUsageBreakdown extends AccountUsageBreakdown {
   durationMs: number
 }
 
+/** Consumption recorded on one local calendar day in the selected usage range. */
+export interface LocalProfileUsageDay extends AccountUsageBreakdown {
+  /** Local date in YYYY-MM-DD form. */
+  date: string
+  durationMs: number
+}
+
+/** Consumption grouped by local hour of day across the selected usage range. */
+export interface LocalProfileUsageHour extends AccountUsageBreakdown {
+  /** Local hour from 0 through 23. */
+  hour: number
+  durationMs: number
+}
+
 /** Date-range project activity shown on the local Profile page. */
 export interface LocalProfileProjectBreakdown extends AccountUsageBreakdown {
   name: string
@@ -1695,10 +1709,16 @@ export interface LocalProfileAnalytics {
   harnesses: LocalProfileUsageBreakdown[]
   providers: LocalProfileUsageBreakdown[]
   models: LocalProfileUsageBreakdown[]
+  /** Standalone reasoning-effort rollup across every model in the period. */
+  thinkingLevels: LocalProfileUsageBreakdown[]
   /** Auxiliary utility calls (image descriptor, memory, title) with their cost. */
   utilities: LocalProfileUsageBreakdown[]
   projects: LocalProfileProjectBreakdown[]
   activityDays: AccountActivityDay[]
+  /** Total model and utility consumption for each active local day. */
+  dailyUsage: LocalProfileUsageDay[]
+  /** Total model and utility consumption by local hour of day. */
+  hourlyUsage: LocalProfileUsageHour[]
   /** Harness/provider/model/thinking-level performance scored on session outcomes. */
   modelPerformance: LocalProfileModelPerformance[]
   /** What the scored sessions cost to gather in this period. */
@@ -3298,6 +3318,29 @@ export interface GitConflictAnalysis {
   /** The raw working-tree content (may still contain conflict markers). */
   content: string
   hunks: GitConflictHunk[]
+}
+
+/** Persisted state for one conflict range inside the scratch merge document. */
+export interface GitConflictWorkHunkState {
+  /** Stable index matching the corresponding entry in `analysis.hunks`. */
+  index: number
+  /** UTF-16 offsets in the scratch document, compatible with CodeMirror. */
+  from: number
+  to: number
+  acceptedIncoming: boolean
+  acceptedCurrent: boolean
+  /** True when the user edited the range directly instead of accepting a side. */
+  edited: boolean
+}
+
+/** Scratch document prepared for conflict resolution without touching the original file. */
+export interface GitConflictWorkFile {
+  analysis: GitConflictAnalysis
+  /** Relative path under the repository, retaining the original extension. */
+  scratchPath: string
+  /** Marker-free scratch content, initially populated with every current block. */
+  content: string
+  hunks: GitConflictWorkHunkState[]
 }
 
 /** Request to prepare a local merge to resolve a PR's online conflicts. */

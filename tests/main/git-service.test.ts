@@ -379,19 +379,26 @@ describe('GitService', () => {
     await service.commit(directory, 'seed')
     const branch = (await simpleGit(directory).revparse(['--abbrev-ref', 'HEAD'])).trim()
 
-    await service.writeConflictWorkFile(directory, 'src/a.ts', '<<<<<<< HEAD\nleft\n=======\nright\n>>>>>>> x\n')
-
-    const scratch = join(
+    const scratchContent = 'left\n'
+    await service.writeConflictWorkFile(
       directory,
-      '.cio',
-      'git',
-      'merge-conflict',
-      branch,
-      'src',
-      'a.ts'
+      'src/a.ts',
+      scratchContent,
+      JSON.stringify([
+        {
+          index: 0,
+          from: 0,
+          to: 4,
+          acceptedIncoming: false,
+          acceptedCurrent: false,
+          edited: false
+        }
+      ])
     )
+
+    const scratch = join(directory, '.cio', 'git', 'merge-conflict', branch, 'src', 'a.ts')
     const content = await readFile(scratch, 'utf-8')
-    expect(content).toBe('<<<<<<< HEAD\nleft\n=======\nright\n>>>>>>> x\n')
+    expect(content).toBe(scratchContent)
   })
 
   it('leaves non-conflicted paths untouched during resolution', async () => {

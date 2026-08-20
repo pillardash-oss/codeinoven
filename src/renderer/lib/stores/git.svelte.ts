@@ -4,6 +4,8 @@ import type {
   GitBranchInfo,
   GitCommitInfo,
   GitConflictAnalysis,
+  GitConflictWorkFile,
+  GitConflictWorkHunkState,
   GitCredentialStatus,
   GitDiff,
   GitFileChange,
@@ -576,6 +578,10 @@ export class GitState {
     return invoke('git:analyzeConflict', projectId, path)
   }
 
+  async prepareConflictWorkFile(projectId: string, path: string): Promise<GitConflictWorkFile> {
+    return invoke('git:prepareConflictWorkFile', projectId, path)
+  }
+
   /**
    * Persist a fully-resolved conflict file. Writes the assembled content and
    * stages it so git clears the unmerged entry; refreshes the stored status.
@@ -596,8 +602,13 @@ export class GitState {
   }
 
   /** Mirror the in-progress resolution into the `.cio/git/merge-conflict` scratch file. */
-  async writeConflictWorkFile(projectId: string, path: string, content: string): Promise<void> {
-    await invoke('git:writeConflictWorkFile', projectId, path, content)
+  async writeConflictWorkFile(
+    projectId: string,
+    path: string,
+    content: string,
+    hunks: GitConflictWorkHunkState[]
+  ): Promise<void> {
+    await invoke('git:writeConflictWorkFile', projectId, path, content, JSON.stringify(hunks))
   }
 
   /**

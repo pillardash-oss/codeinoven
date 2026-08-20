@@ -1,5 +1,6 @@
 import { stat, open, access, readFile, writeFile, rename, mkdir, rm, unlink } from 'fs/promises'
 import { resolve, relative, isAbsolute, sep, dirname } from 'path'
+import { createHash } from 'node:crypto'
 import { simpleGit } from 'simple-git'
 import type { LogOptions, SimpleGit, StatusResult } from 'simple-git'
 import type {
@@ -7,6 +8,8 @@ import type {
   GitCommitInfo,
   GitConflictAnalysis,
   GitConflictHunk,
+  GitConflictWorkFile,
+  GitConflictWorkHunkState,
   GitDiff,
   GitFileChange,
   GitFileStatus,
@@ -35,6 +38,12 @@ interface GitCommandError extends Error {
   code?: number
   /** git's own error output. */
   gitError?: string
+}
+
+interface ConflictWorkMetadata {
+  version: 1
+  sourceHash: string
+  hunks: GitConflictWorkHunkState[]
 }
 
 const GIT_UNAVAILABLE_MESSAGE = 'Git is not available on this machine'
@@ -277,6 +286,74 @@ export class GitService {
   }
 
   /**
+   * Open (or initialize) the marker-free scratch document used by the merge
+   * editor. The original conflicted working-tree file is only read here. On the
+   * first open, every marker block is replaced with its current/HEAD side so
+   * the scratch file retains the original extension and parses normally for
+   * syntax highlighting.
+   */
+  async prepareConflictWorkFile(
+    projectPath: string,
+    relativePath: string
+  ): Promise<GitConflictWorkFile> {
+    return this.enqueue(projectPath, async () => {
+      const directory = await this.repo(projectPath)
+      const safePath = this.assertRelativePath(directory, relativePath)
+      return this.wrapError(directory, 'mutation', async () => {
+        const working = await this.workingFileContent(directory, safePath)
+        const analysis: GitConflictAnalysis = !working
+          ? { path: safePath, binary: false, truncated: true, content: '', hunks: [] }
+          : working.binary
+            ? { path: safePath, binary: true, truncated: false, content: '', hunks: [] }
+            : {
+                path: safePath,
+                binary: false,
+                truncated: working.truncated,
+                content: working.content,
+                hunks: parseConflictHunks(working.content)
+              }
+        const paths = await this.conflictWorkPaths(directory, safePath)
+        const sourceHash = conflictSourceHash(analysis.content)
+        try {
+          const [content, metadataText] = await Promise.all([
+            readFile(paths.document, 'utf-8'),
+            readFile(paths.metadata, 'utf-8')
+          ])
+          const metadata = parseConflictWorkMetadata(
+            metadataText,
+            sourceHash,
+            analysis.hunks.length,
+            content.length
+          )
+          if (metadata) {
+            return {
+              analysis,
+              scratchPath: relative(directory, paths.document).split(sep).join('/'),
+              content,
+              hunks: metadata.hunks
+            }
+          }
+        } catch {
+          // Missing or stale scratch state is initialized below.
+        }
+
+        const initial = buildInitialConflictWorkFile(analysis)
+        await this.writeConflictScratch(paths, initial.content, {
+          version: 1,
+          sourceHash,
+          hunks: initial.hunks
+        })
+        return {
+          analysis,
+          scratchPath: relative(directory, paths.document).split(sep).join('/'),
+          content: initial.content,
+          hunks: initial.hunks
+        }
+      })
+    })
+  }
+
+  /**
    * Persist a fully-resolved conflict file: replace the working copy with the
    * user's merged content and stage it so git clears the unmerged entry. The
    * content must contain no remaining conflict markers, otherwise resolution is
@@ -306,6 +383,11 @@ export class GitService {
         await writeFile(temp, content, 'utf-8')
         await rename(temp, target)
         await this.client(directory).add([safePath])
+        const scratch = await this.conflictWorkPaths(directory, safePath)
+        await Promise.all([
+          rm(scratch.document, { force: true }),
+          rm(scratch.metadata, { force: true })
+        ])
       })
       return this.readStatus(directory)
     })
@@ -322,34 +404,62 @@ export class GitService {
   async writeConflictWorkFile(
     projectPath: string,
     relativePath: string,
-    content: string
+    content: string,
+    stateJson: string
   ): Promise<void> {
     return this.enqueue(projectPath, async () => {
       const directory = await this.repo(projectPath)
       const safePath = this.assertRelativePath(directory, relativePath)
       await this.wrapError(directory, 'mutation', async () => {
-        const git = this.client(directory)
-        let branch = 'HEAD'
-        try {
-          branch = (await git.raw(['rev-parse', '--abbrev-ref', 'HEAD'])).trim() || 'HEAD'
-        } catch {
-          // Detached or unborn HEAD — fall back to a generic folder.
-        }
-        const safeBranch = branch.replace(/[^A-Za-z0-9._-]+/gu, '-').replace(/^-+|-+$/gu, '')
-        const target = resolve(
-          directory,
-          '.cio',
-          'git',
-          'merge-conflict',
-          safeBranch || 'HEAD',
-          ...safePath.split('/')
-        )
-        await mkdir(dirname(target), { recursive: true })
-        const temp = `${target}.resolve-tmp`
-        await writeFile(temp, content, 'utf-8')
-        await rename(temp, target)
+        const analysis = await this.workingFileContent(directory, safePath)
+        const source = analysis?.binary ? '' : (analysis?.content ?? '')
+        const hunks = parseConflictWorkState(stateJson, content.length)
+        const paths = await this.conflictWorkPaths(directory, safePath)
+        await this.writeConflictScratch(paths, content, {
+          version: 1,
+          sourceHash: conflictSourceHash(source),
+          hunks
+        })
       })
     })
+  }
+
+  private async conflictWorkPaths(
+    directory: string,
+    safePath: string
+  ): Promise<{ document: string; metadata: string }> {
+    let branch = 'HEAD'
+    try {
+      branch =
+        (await this.client(directory).raw(['rev-parse', '--abbrev-ref', 'HEAD'])).trim() || 'HEAD'
+    } catch {
+      // Detached or unborn HEAD — fall back to a generic folder.
+    }
+    const safeBranch = branch.replace(/[^A-Za-z0-9._-]+/gu, '-').replace(/^-+|-+$/gu, '')
+    const document = resolve(
+      directory,
+      '.cio',
+      'git',
+      'merge-conflict',
+      safeBranch || 'HEAD',
+      ...safePath.split('/')
+    )
+    return { document, metadata: `${document}.merge.json` }
+  }
+
+  private async writeConflictScratch(
+    paths: { document: string; metadata: string },
+    content: string,
+    metadata: ConflictWorkMetadata
+  ): Promise<void> {
+    await mkdir(dirname(paths.document), { recursive: true })
+    const documentTemp = `${paths.document}.resolve-tmp`
+    const metadataTemp = `${paths.metadata}.resolve-tmp`
+    await Promise.all([
+      writeFile(documentTemp, content, 'utf-8'),
+      writeFile(metadataTemp, JSON.stringify(metadata), 'utf-8')
+    ])
+    await Promise.all([rename(documentTemp, paths.document), rename(metadataTemp, paths.metadata)])
   }
 
   async unstage(projectPath: string, paths: string[]): Promise<GitStatus> {
@@ -1423,6 +1533,119 @@ export class GitService {
  * has none of the `<<<<<<<`, `=======`, or `>>>>>>>` marker lines, so presence
  * of any of them means resolution is not complete.
  */
+function conflictSourceHash(content: string): string {
+  return createHash('sha256').update(content).digest('hex')
+}
+
+function lineStartOffsets(content: string): number[] {
+  const offsets = [0]
+  for (let index = 0; index < content.length; index += 1) {
+    if (content[index] === '\n') offsets.push(index + 1)
+  }
+  return offsets
+}
+
+function buildInitialConflictWorkFile(analysis: GitConflictAnalysis): {
+  content: string
+  hunks: GitConflictWorkHunkState[]
+} {
+  const offsets = lineStartOffsets(analysis.content)
+  const parts: string[] = []
+  const hunks: GitConflictWorkHunkState[] = []
+  let sourceCursor = 0
+  let outputLength = 0
+  for (let index = 0; index < analysis.hunks.length; index += 1) {
+    const hunk = analysis.hunks[index]
+    if (!hunk) continue
+    const sourceFrom = offsets[hunk.startLine - 1] ?? analysis.content.length
+    const sourceTo = offsets[hunk.endLine] ?? analysis.content.length
+    const before = analysis.content.slice(sourceCursor, sourceFrom)
+    parts.push(before)
+    outputLength += before.length
+    const from = outputLength
+    parts.push(hunk.ours)
+    outputLength += hunk.ours.length
+    const to = outputLength
+    if (sourceTo < analysis.content.length && !hunk.ours.endsWith('\n')) {
+      parts.push('\n')
+      outputLength += 1
+    }
+    hunks.push({
+      index,
+      from,
+      to,
+      acceptedIncoming: false,
+      acceptedCurrent: false,
+      edited: false
+    })
+    sourceCursor = sourceTo
+  }
+  parts.push(analysis.content.slice(sourceCursor))
+  return { content: parts.join(''), hunks }
+}
+
+function isConflictWorkHunkState(
+  value: unknown,
+  contentLength: number
+): value is GitConflictWorkHunkState {
+  if (!value || typeof value !== 'object') return false
+  const state = value as Record<string, unknown>
+  return (
+    Number.isInteger(state.index) &&
+    typeof state.index === 'number' &&
+    state.index >= 0 &&
+    Number.isInteger(state.from) &&
+    typeof state.from === 'number' &&
+    state.from >= 0 &&
+    Number.isInteger(state.to) &&
+    typeof state.to === 'number' &&
+    state.to >= state.from &&
+    state.to <= contentLength &&
+    typeof state.acceptedIncoming === 'boolean' &&
+    typeof state.acceptedCurrent === 'boolean' &&
+    typeof state.edited === 'boolean'
+  )
+}
+
+function parseConflictWorkState(
+  stateJson: string,
+  contentLength: number
+): GitConflictWorkHunkState[] {
+  const parsed: unknown = JSON.parse(stateJson)
+  if (
+    !Array.isArray(parsed) ||
+    !parsed.every((item) => isConflictWorkHunkState(item, contentLength))
+  ) {
+    throw new TypeError('Conflict work state is invalid')
+  }
+  return parsed
+}
+
+function parseConflictWorkMetadata(
+  metadataText: string,
+  sourceHash: string,
+  hunkCount: number,
+  contentLength: number
+): ConflictWorkMetadata | null {
+  const parsed: unknown = JSON.parse(metadataText)
+  if (!parsed || typeof parsed !== 'object') return null
+  const metadata = parsed as Record<string, unknown>
+  if (
+    metadata.version !== 1 ||
+    metadata.sourceHash !== sourceHash ||
+    !Array.isArray(metadata.hunks) ||
+    metadata.hunks.length !== hunkCount ||
+    !metadata.hunks.every((item) => isConflictWorkHunkState(item, contentLength))
+  ) {
+    return null
+  }
+  return {
+    version: 1,
+    sourceHash,
+    hunks: metadata.hunks
+  }
+}
+
 function hasConflictMarkers(content: string): boolean {
   return /^(?:<<<<<<<[ \t].*|=======$|>>>>>>>[ \t].*)$/mu.test(content)
 }

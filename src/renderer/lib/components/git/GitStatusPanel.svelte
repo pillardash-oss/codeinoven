@@ -1155,7 +1155,10 @@
     gitState.conflictsMode = true
     contextSidebarState.openFiles(projectId, threadId)
     const path = initial ?? gitState.conflicted[0]
-    if (path) void projectFilesWorkspace.openFile(projectId, path)
+    if (!path) return
+    void projectFilesWorkspace.openFile(projectId, path).then(() => {
+      projectFilesWorkspace.requestFullscreen(projectId)
+    })
   }
 
   async function openInEditor(path: string): Promise<void> {

@@ -60,6 +60,7 @@ import type {
   GitBranchInfo,
   GitCommitInfo,
   GitConflictAnalysis,
+  GitConflictWorkFile,
   GitCredentialStatus,
   GitDiff,
   GitFileChange,
@@ -801,12 +802,16 @@ export interface IpcInvokeContract {
   'git:status': Contract<[projectId: string], GitStatus>
   'git:diff': Contract<[projectId: string, relativePath: string, staged: boolean], GitDiff>
   'git:analyzeConflict': Contract<[projectId: string, relativePath: string], GitConflictAnalysis>
+  'git:prepareConflictWorkFile': Contract<
+    [projectId: string, relativePath: string],
+    GitConflictWorkFile
+  >
   'git:saveConflictResolution': Contract<
     [projectId: string, relativePath: string, content: string],
     GitStatus
   >
   'git:writeConflictWorkFile': Contract<
-    [projectId: string, relativePath: string, content: string],
+    [projectId: string, relativePath: string, content: string, stateJson: string],
     void
   >
   'git:stage': Contract<[projectId: string, paths: string[]], GitStatus>

@@ -155,6 +155,7 @@ const INVOKE_CHANNELS = [
   'git:status',
   'git:diff',
   'git:analyzeConflict',
+  'git:prepareConflictWorkFile',
   'git:saveConflictResolution',
   'git:writeConflictWorkFile',
   'git:stage',

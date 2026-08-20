@@ -3422,6 +3422,14 @@ export function registerIpcHandlers(
     )
   )
   ipcMain.handle(
+    'git:prepareConflictWorkFile',
+    async (_, projectId: unknown, relativePath: unknown) =>
+      gitService.prepareConflictWorkFile(
+        await resolveProjectPath(validateEntityId(projectId, 'Project ID')),
+        validateGitRelativePath(relativePath)
+      )
+  )
+  ipcMain.handle(
     'git:saveConflictResolution',
     async (_, projectId: unknown, relativePath: unknown, content: unknown) =>
       gitService.saveConflictResolution(
@@ -3432,11 +3440,12 @@ export function registerIpcHandlers(
   )
   ipcMain.handle(
     'git:writeConflictWorkFile',
-    async (_, projectId: unknown, relativePath: unknown, content: unknown) =>
+    async (_, projectId: unknown, relativePath: unknown, content: unknown, stateJson: unknown) =>
       gitService.writeConflictWorkFile(
         await resolveProjectPath(validateEntityId(projectId, 'Project ID')),
         validateGitRelativePath(relativePath),
-        validateConflictResolutionContent(content)
+        validateConflictResolutionContent(content),
+        validateConflictResolutionContent(stateJson)
       )
   )
   ipcMain.handle('git:stage', async (_, projectId: unknown, paths: unknown) =>
