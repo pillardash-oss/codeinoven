@@ -16232,9 +16232,11 @@ export class ChatEngine {
         info.projectPath,
         status,
         failure,
-        // An empty set is a real answer — the agent touched nothing this turn —
-        // so it is passed through instead of falling back to the unfiltered diff.
-        info.changeFilterReliable !== false ? (info.changedPaths ?? new Set()) : undefined,
+        // Only apply a path filter when a mutating tool or bounded shell window
+        // actually produced one. No observed mutation event is not proof that
+        // the harness touched nothing: some providers omit or rename those
+        // events, so the authoritative before/after snapshot must remain visible.
+        info.changeFilterReliable !== false ? info.changedPaths : undefined,
         {
           precisePaths: new Set(info.preciseChangedPaths?.keys() ?? []),
           foreignClaimedPaths: this.liveForeignClaimedPaths(info)
@@ -16308,7 +16310,7 @@ export class ChatEngine {
       driverId: existing?.driverId ?? driverId,
       activeTurnId: activeTurnId ?? existing?.activeTurnId,
       activeTurnUserMessageId: existing?.activeTurnUserMessageId,
-      changedPaths: activeTurnId ? new Set() : existing?.changedPaths,
+      changedPaths: activeTurnId ? undefined : existing?.changedPaths,
       preciseChangedPaths: activeTurnId ? new Map() : existing?.preciseChangedPaths,
       changeFilterReliable: activeTurnId ? true : existing?.changeFilterReliable,
       openUnboundedTools: activeTurnId ? new Set() : existing?.openUnboundedTools,
