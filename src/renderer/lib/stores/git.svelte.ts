@@ -5,7 +5,6 @@ import type {
   GitCommitInfo,
   GitConflictAnalysis,
   GitConflictWorkFile,
-  GitConflictWorkHunkState,
   GitCredentialStatus,
   GitDiff,
   GitFileChange,
@@ -599,16 +598,6 @@ export class GitState {
     } finally {
       this.markBusy('stage', false)
     }
-  }
-
-  /** Mirror the in-progress resolution into the `.cio/git/merge-conflict` scratch file. */
-  async writeConflictWorkFile(
-    projectId: string,
-    path: string,
-    content: string,
-    hunks: GitConflictWorkHunkState[]
-  ): Promise<void> {
-    await invoke('git:writeConflictWorkFile', projectId, path, content, JSON.stringify(hunks))
   }
 
   /**

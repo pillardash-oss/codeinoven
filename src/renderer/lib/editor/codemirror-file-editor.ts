@@ -7,6 +7,9 @@ export interface FileEditorConflictRange {
   to: number
   resolved: boolean
   active: boolean
+  acceptedIncoming: boolean
+  acceptedCurrent: boolean
+  edited: boolean
 }
 
 export interface FileEditorDocumentChange {
@@ -44,6 +47,12 @@ export interface FileEditorController {
   setFind(query: string, activeIndex: number): void
   getValue(): string
   replaceRange(from: number, to: number, text: string, userEvent?: string): void
+  resolveConflictRange(
+    id: string,
+    text: string,
+    resolution: Pick<FileEditorConflictRange, 'acceptedIncoming' | 'acceptedCurrent' | 'edited'>,
+    userEvent?: string
+  ): boolean
   setConflictRanges(ranges: FileEditorConflictRange[]): void
   getConflictRanges(): FileEditorConflictRange[]
   getRangeViewportRect(id: string): FileEditorRangeViewportRect | null
@@ -67,6 +76,7 @@ export interface CreateFileEditorOptions {
   ariaLabel?: string
   conflictRanges?: FileEditorConflictRange[]
   onDocChange: (text: string, changes: FileEditorDocumentChange[], userEvent: string | null) => void
+  onConflictRangesChange?: (ranges: FileEditorConflictRange[]) => void
   onFindMatches?: (count: number) => void
   onScroll?: () => void
 }
@@ -90,6 +100,8 @@ interface CodeMirrorApi {
   historyKeymap: (typeof import('@codemirror/commands'))['historyKeymap']
   undo: (typeof import('@codemirror/commands'))['undo']
   redo: (typeof import('@codemirror/commands'))['redo']
+  invertedEffects: (typeof import('@codemirror/commands'))['invertedEffects']
+  isolateHistory: (typeof import('@codemirror/commands'))['isolateHistory']
   indentUnit: (typeof import('@codemirror/language'))['indentUnit']
   syntaxHighlighting: (typeof import('@codemirror/language'))['syntaxHighlighting']
   HighlightStyle: (typeof import('@codemirror/language'))['HighlightStyle']
@@ -111,6 +123,7 @@ export async function createFileEditor(
     ariaLabel = 'File editor',
     conflictRanges = [],
     onDocChange,
+    onConflictRangesChange,
     onFindMatches,
     onScroll
   } = options
@@ -156,7 +169,15 @@ export async function createFileEditor(
     ranges: FileEditorConflictRange[]
     decorations: ReturnType<typeof api.Decoration.set>
   }
-  const setConflictRanges = api.StateEffect.define<FileEditorConflictRange[]>()
+  const setConflictRanges = api.StateEffect.define<FileEditorConflictRange[]>({
+    map(ranges, changes) {
+      return ranges.map((range) => ({
+        ...range,
+        from: changes.mapPos(range.from, -1),
+        to: changes.mapPos(range.to, 1)
+      }))
+    }
+  })
   const buildConflictDecorations = (
     doc: { length: number; lineAt(position: number): { from: number; to: number } },
     ranges: FileEditorConflictRange[]
@@ -193,13 +214,37 @@ export async function createFileEditor(
       decorations: buildConflictDecorations(state.doc, conflictRanges)
     }),
     update(value, transaction) {
+      const changedIds = new Set<string>()
+      if (transaction.docChanged) {
+        transaction.changes.iterChangedRanges((from, to) => {
+          for (const range of value.ranges) {
+            if (from <= range.to && to >= range.from) changedIds.add(range.id)
+          }
+        })
+      }
       let ranges = value.ranges.map((range) => ({
         ...range,
         from: transaction.changes.mapPos(range.from, -1),
         to: transaction.changes.mapPos(range.to, 1)
       }))
+      let explicitRanges = false
       for (const effect of transaction.effects) {
-        if (effect.is(setConflictRanges)) ranges = effect.value.map((range) => ({ ...range }))
+        if (!effect.is(setConflictRanges)) continue
+        ranges = effect.value.map((range) => ({ ...range }))
+        explicitRanges = true
+      }
+      if (transaction.docChanged && !explicitRanges) {
+        ranges = ranges.map((range) =>
+          changedIds.has(range.id)
+            ? {
+                ...range,
+                resolved: true,
+                acceptedIncoming: false,
+                acceptedCurrent: false,
+                edited: true
+              }
+            : range
+        )
       }
       return { ranges, decorations: buildConflictDecorations(transaction.newDoc, ranges) }
     },
@@ -223,9 +268,26 @@ export async function createFileEditor(
     api.EditorView.contentAttributes.of({ 'aria-label': ariaLabel, 'data-region': 'editor' }),
     findField,
     conflictField,
+    api.invertedEffects.of((transaction) => {
+      const changesConflictState =
+        transaction.docChanged || transaction.effects.some((effect) => effect.is(setConflictRanges))
+      if (!changesConflictState) return []
+      const previous = transaction.startState.field(conflictField).ranges
+      return [setConflictRanges.of(previous.map((range) => ({ ...range })))]
+    }),
     api.history(),
     api.keymap.of([tabBinding, ...api.defaultKeymap, ...api.historyKeymap]),
     api.EditorView.updateListener.of((update) => {
+      const conflictRangesChanged = update.transactions.some(
+        (transaction) =>
+          transaction.docChanged ||
+          transaction.effects.some((effect) => effect.is(setConflictRanges))
+      )
+      if (conflictRangesChanged) {
+        onConflictRangesChange?.(
+          update.state.field(conflictField).ranges.map((range) => ({ ...range }))
+        )
+      }
       if (!update.docChanged) return
       const changes: FileEditorDocumentChange[] = []
       update.changes.iterChanges((from, to, _fromB, _toB, inserted) => {
@@ -311,8 +373,45 @@ export async function createFileEditor(
         userEvent
       })
     },
+    resolveConflictRange(
+      id: string,
+      text: string,
+      resolution: Pick<FileEditorConflictRange, 'acceptedIncoming' | 'acceptedCurrent' | 'edited'>,
+      userEvent = 'merge.accept'
+    ): boolean {
+      const ranges = view.state.field(conflictField).ranges
+      const target = ranges.find((range) => range.id === id)
+      if (!target) return false
+      const changes = view.state.changes({ from: target.from, to: target.to, insert: text })
+      const nextRanges = ranges.map((range) => {
+        if (range.id === id) {
+          return {
+            ...range,
+            from: target.from,
+            to: target.from + text.length,
+            resolved: true,
+            ...resolution
+          }
+        }
+        return {
+          ...range,
+          from: changes.mapPos(range.from, -1),
+          to: changes.mapPos(range.to, 1)
+        }
+      })
+      view.dispatch({
+        changes,
+        effects: setConflictRanges.of(nextRanges),
+        annotations: api.isolateHistory.of('full'),
+        userEvent
+      })
+      return true
+    },
     setConflictRanges(ranges: FileEditorConflictRange[]): void {
-      view.dispatch({ effects: setConflictRanges.of(ranges.map((range) => ({ ...range }))) })
+      view.dispatch({
+        effects: setConflictRanges.of(ranges.map((range) => ({ ...range }))),
+        annotations: api.Transaction.addToHistory.of(false)
+      })
     },
     getConflictRanges(): FileEditorConflictRange[] {
       return view.state.field(conflictField).ranges.map((range) => ({ ...range }))
@@ -401,6 +500,8 @@ async function loadCodeMirrorApi(): Promise<CodeMirrorApi> {
     historyKeymap: commandModule.historyKeymap,
     undo: commandModule.undo,
     redo: commandModule.redo,
+    invertedEffects: commandModule.invertedEffects,
+    isolateHistory: commandModule.isolateHistory,
     indentUnit: languageModule.indentUnit,
     syntaxHighlighting: languageModule.syntaxHighlighting,
     HighlightStyle: languageModule.HighlightStyle,

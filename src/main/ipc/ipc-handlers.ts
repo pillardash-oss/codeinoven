@@ -3438,16 +3438,6 @@ export function registerIpcHandlers(
         validateConflictResolutionContent(content)
       )
   )
-  ipcMain.handle(
-    'git:writeConflictWorkFile',
-    async (_, projectId: unknown, relativePath: unknown, content: unknown, stateJson: unknown) =>
-      gitService.writeConflictWorkFile(
-        await resolveProjectPath(validateEntityId(projectId, 'Project ID')),
-        validateGitRelativePath(relativePath),
-        validateConflictResolutionContent(content),
-        validateConflictResolutionContent(stateJson)
-      )
-  )
   ipcMain.handle('git:stage', async (_, projectId: unknown, paths: unknown) =>
     gitService.stage(
       await resolveProjectPath(validateEntityId(projectId, 'Project ID')),

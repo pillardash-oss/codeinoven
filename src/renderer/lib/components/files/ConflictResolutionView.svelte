@@ -67,7 +67,6 @@
   let incomingController = $state<FileEditorController | null>(null)
   let currentController = $state<FileEditorController | null>(null)
   let connectorGeometry = $state<ConnectorGeometry | null>(null)
-  let persistTimer: ReturnType<typeof setTimeout> | null = null
   let connectorFrame: number | null = null
 
   const analysis = $derived(workFile?.analysis ?? null)
@@ -86,7 +85,24 @@
       from: state.from,
       to: state.to,
       resolved: isResolved(state),
-      active: state.index === activeHunk
+      active: state.index === activeHunk,
+      acceptedIncoming: state.acceptedIncoming,
+      acceptedCurrent: state.acceptedCurrent,
+      edited: state.edited
+    }))
+  }
+
+  function initialEditorRanges(states: GitConflictWorkHunkState[]): FileEditorConflictRange[] {
+    const firstIndex = states[0]?.index
+    return states.map((state) => ({
+      id: String(state.index),
+      from: state.from,
+      to: state.to,
+      resolved: isResolved(state),
+      active: state.index === firstIndex,
+      acceptedIncoming: state.acceptedIncoming,
+      acceptedCurrent: state.acceptedCurrent,
+      edited: state.edited
     }))
   }
 
@@ -94,86 +110,53 @@
     onStatusChange({ canSave: allResolved, dirty, saving })
   }
 
-  async function persistScratch(): Promise<void> {
-    if (!workFile) return
-    if (persistTimer) {
-      clearTimeout(persistTimer)
-      persistTimer = null
-    }
-    await gitState.writeConflictWorkFile(projectId, path, scratchContent, hunkStates)
-  }
-
-  function schedulePersist(): void {
-    if (persistTimer) clearTimeout(persistTimer)
-    persistTimer = setTimeout(() => {
-      persistTimer = null
-      void persistScratch()
-    }, 220)
-  }
-
-  function syncRangesFromEditor(): void {
-    const ranges = centerController?.getConflictRanges()
-    if (!ranges) return
+  function handleConflictRangesChange(ranges: FileEditorConflictRange[]): void {
     hunkStates = hunkStates.map((state) => {
       const range = ranges.find((candidate) => candidate.id === String(state.index))
-      return range ? { ...state, from: range.from, to: range.to } : state
+      return range
+        ? {
+            ...state,
+            from: range.from,
+            to: range.to,
+            acceptedIncoming: range.acceptedIncoming,
+            acceptedCurrent: range.acceptedCurrent,
+            edited: range.edited
+          }
+        : state
     })
-  }
-
-  function intersects(change: FileEditorDocumentChange, state: GitConflictWorkHunkState): boolean {
-    return change.from <= state.to && change.to >= state.from
+    notifyStatus()
+    scheduleConnectors()
   }
 
   function handleCenterChange(
     text: string,
-    changes: FileEditorDocumentChange[],
-    userEvent: string | null
+    _changes: FileEditorDocumentChange[],
+    _userEvent: string | null
   ): void {
-    const before = hunkStates.map((state) => ({ ...state }))
     scratchContent = text
-    syncRangesFromEditor()
-    if (userEvent?.startsWith('input') || userEvent === 'undo' || userEvent === 'redo') {
-      hunkStates = hunkStates.map((state, index) =>
-        changes.some((change) => intersects(change, before[index] ?? state))
-          ? {
-              ...state,
-              acceptedIncoming:
-                userEvent === 'undo' || userEvent === 'redo' ? false : state.acceptedIncoming,
-              acceptedCurrent:
-                userEvent === 'undo' || userEvent === 'redo' ? false : state.acceptedCurrent,
-              edited: true
-            }
-          : state
-      )
-      centerController?.setConflictRanges(editorRanges())
-    }
     dirty = true
     notifyStatus()
-    schedulePersist()
     scheduleConnectors()
   }
 
   function replaceActiveRange(text: string, nextState: GitConflictWorkHunkState): void {
     const controller = centerController
-    const range = controller
-      ?.getConflictRanges()
-      .find((candidate) => candidate.id === String(nextState.index))
-    if (!controller || !range) return
-    controller.replaceRange(range.from, range.to, text, 'merge.accept')
-    const mapped = controller.getConflictRanges()
-    const next = hunkStates.map((state) => {
-      const mappedRange = mapped.find((candidate) => candidate.id === String(state.index))
-      if (state.index === nextState.index) {
-        return { ...nextState, from: range.from, to: range.from + text.length }
-      }
-      return mappedRange ? { ...state, from: mappedRange.from, to: mappedRange.to } : state
-    })
-    hunkStates = next
-    controller.setConflictRanges(editorRanges(next))
+    if (!controller) return
+    const replaced = controller.resolveConflictRange(
+      String(nextState.index),
+      text,
+      {
+        acceptedIncoming: nextState.acceptedIncoming,
+        acceptedCurrent: nextState.acceptedCurrent,
+        edited: nextState.edited
+      },
+      'merge.accept'
+    )
+    if (!replaced) return
+    handleConflictRangesChange(controller.getConflictRanges())
     scratchContent = controller.getValue()
     dirty = true
     notifyStatus()
-    schedulePersist()
     scheduleConnectors()
   }
 
@@ -212,46 +195,35 @@
     const currentAnalysis = analysis
     const controller = centerController
     if (!currentAnalysis || !controller) return
-    let next = hunkStates.map((state) => ({ ...state }))
     for (let index = 0; index < currentAnalysis.hunks.length; index += 1) {
       const hunk = currentAnalysis.hunks[index]
-      const state = next[index]
+      const state = hunkStates[index]
       if (!hunk || !state) continue
-      if (side === 'incoming' && state.acceptedIncoming) continue
-      if (side === 'current' && state.acceptedCurrent) continue
       const range = controller
         .getConflictRanges()
         .find((candidate) => candidate.id === String(state.index))
       if (!range) continue
+      if (side === 'incoming' && range.acceptedIncoming) continue
+      if (side === 'current' && range.acceptedCurrent) continue
       const existing = controller.getValue().slice(range.from, range.to)
-      const acceptedOther = side === 'incoming' ? state.acceptedCurrent : state.acceptedIncoming
+      const acceptedOther = side === 'incoming' ? range.acceptedCurrent : range.acceptedIncoming
       const block = side === 'incoming' ? hunk.theirs : hunk.ours
       const text = acceptedOther && existing.trim() ? `${existing}\n\n${block}` : block
-      controller.replaceRange(range.from, range.to, text, 'merge.accept-all')
-      const mapped = controller.getConflictRanges()
-      next = next.map((candidate) => {
-        const mappedRange = mapped.find((item) => item.id === String(candidate.index))
-        if (candidate.index === state.index) {
-          return {
-            ...candidate,
-            from: range.from,
-            to: range.from + text.length,
-            acceptedIncoming: candidate.acceptedIncoming || side === 'incoming',
-            acceptedCurrent: candidate.acceptedCurrent || side === 'current',
-            edited: false
-          }
-        }
-        return mappedRange
-          ? { ...candidate, from: mappedRange.from, to: mappedRange.to }
-          : candidate
-      })
-      controller.setConflictRanges(editorRanges(next))
+      controller.resolveConflictRange(
+        String(state.index),
+        text,
+        {
+          acceptedIncoming: range.acceptedIncoming || side === 'incoming',
+          acceptedCurrent: range.acceptedCurrent || side === 'current',
+          edited: false
+        },
+        'merge.accept-all'
+      )
     }
-    hunkStates = next
+    handleConflictRangesChange(controller.getConflictRanges())
     scratchContent = controller.getValue()
     dirty = true
     notifyStatus()
-    schedulePersist()
     scheduleConnectors()
   }
 
@@ -272,14 +244,12 @@
     if (!centerController?.undo()) return
     dirty = true
     notifyStatus()
-    schedulePersist()
   }
 
   function redo(): void {
     if (!centerController?.redo()) return
     dirty = true
     notifyStatus()
-    schedulePersist()
   }
 
   async function save(): Promise<boolean> {
@@ -287,7 +257,6 @@
     saving = true
     notifyStatus()
     try {
-      await persistScratch()
       const saved = await gitState.saveConflictResolution(projectId, path, scratchContent)
       if (!saved) return false
       dirty = false
@@ -304,7 +273,6 @@
   onMount(() => {
     onControllerChange(controller)
     return () => {
-      if (persistTimer) clearTimeout(persistTimer)
       if (connectorFrame !== null) cancelAnimationFrame(connectorFrame)
       onControllerChange(null)
     }
@@ -348,11 +316,12 @@
       host,
       value: prepared.content,
       path,
-      wrap,
+      wrap: false,
       showLineNumbers: true,
       ariaLabel: `Conflict scratch document for ${path}`,
-      conflictRanges: editorRanges(prepared.hunks),
+      conflictRanges: initialEditorRanges(prepared.hunks),
       onDocChange: handleCenterChange,
+      onConflictRangesChange: handleConflictRangesChange,
       onScroll: scheduleConnectors
     }).then((editor) => {
       if (cancelled) {
@@ -428,7 +397,7 @@
       value,
       path,
       readonly: true,
-      wrap,
+      wrap: false,
       showLineNumbers: true,
       ariaLabel,
       onDocChange: () => {},

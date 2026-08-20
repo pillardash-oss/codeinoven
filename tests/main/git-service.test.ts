@@ -370,37 +370,6 @@ describe('GitService', () => {
     expect(analysis.binary).toBe(false)
   })
 
-  it('mirrors in-progress conflict work into the merge-conflict scratch file', async () => {
-    const directory = await temporaryDirectory()
-    const service = new GitService()
-    await service.initialize(directory)
-    await writeFile(join(directory, 'seed.txt'), 'x\n', 'utf-8')
-    await service.stage(directory, ['seed.txt'])
-    await service.commit(directory, 'seed')
-    const branch = (await simpleGit(directory).revparse(['--abbrev-ref', 'HEAD'])).trim()
-
-    const scratchContent = 'left\n'
-    await service.writeConflictWorkFile(
-      directory,
-      'src/a.ts',
-      scratchContent,
-      JSON.stringify([
-        {
-          index: 0,
-          from: 0,
-          to: 4,
-          acceptedIncoming: false,
-          acceptedCurrent: false,
-          edited: false
-        }
-      ])
-    )
-
-    const scratch = join(directory, '.cio', 'git', 'merge-conflict', branch, 'src', 'a.ts')
-    const content = await readFile(scratch, 'utf-8')
-    expect(content).toBe(scratchContent)
-  })
-
   it('leaves non-conflicted paths untouched during resolution', async () => {
     const directory = await temporaryDirectory()
     const service = new GitService()
