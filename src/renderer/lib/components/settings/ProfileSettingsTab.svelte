@@ -878,7 +878,7 @@
     {/if}
 
     <div class="mt-5 overflow-x-auto pb-2">
-      <div class="activity-calendar w-full">
+      <div class="activity-calendar w-full px-1">
         <div class="grid grid-cols-[1.5rem_minmax(0,1fr)] gap-2">
           <span aria-hidden="true"></span>
           <div
@@ -907,7 +907,7 @@
             {#each calendarWeeks as week, weekIndex (`week-${weekIndex}`)}
               <div
                 class="relative flex min-w-0 flex-col gap-1 rounded-sm {week.selected
-                  ? 'bg-thread-working/10 ring-1 ring-thread-working/60'
+                  ? 'bg-thread-working/10 ring-1 ring-inset ring-thread-working/60'
                   : ''}"
               >
                 {#each week.days as day (day.date)}
