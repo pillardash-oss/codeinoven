@@ -65,6 +65,7 @@ import {
   validateScopeSlice
 } from '../ipc/ipc-validation'
 import type {
+  AgentCapabilitySource,
   AssignmentModelSelection,
   AssignmentPlanContent,
   AuditGenerationRequest,
@@ -132,6 +133,12 @@ export interface RemoteRpcServices {
     | 'dismissQuestion'
     | 'updateQuestion'
     | 'listContextCapabilities'
+    | 'listProcesses'
+    | 'killProcess'
+    | 'killThreadProcesses'
+    | 'listArtifacts'
+    | 'deleteSkill'
+    | 'deleteMcp'
     | 'listProviders'
     | 'refreshAccountUsage'
     | 'loadSessionMessages'
@@ -851,6 +858,18 @@ export class RemoteRpcDispatcher {
         )
       case 'agent:listContextCapabilities':
         return chatEngine.listContextCapabilities(this.string(args[0]), this.string(args[1]))
+      case 'agent:listProcesses':
+        return chatEngine.listProcesses(this.string(args[0]), this.string(args[1]))
+      case 'agent:listArtifacts':
+        return chatEngine.listArtifacts(this.string(args[0]), this.string(args[1]))
+      case 'agent:killProcess':
+        return chatEngine.killProcess(this.string(args[0]), this.string(args[1]), args[2] as number)
+      case 'agent:killThreadProcesses':
+        return chatEngine.killThreadProcesses(this.string(args[0]), this.string(args[1]))
+      case 'capabilities:deleteSkill':
+        return chatEngine.deleteSkill(args[0] as AgentCapabilitySource)
+      case 'capabilities:deleteMcp':
+        return chatEngine.deleteMcp(args[0] as AgentCapabilitySource)
       case 'agent:closeTemporaryChat':
         return chatEngine.closeTemporaryChat(this.string(args[0]))
       case 'agent:loadSessionMessages':

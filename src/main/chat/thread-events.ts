@@ -76,6 +76,7 @@ export function broadcastAgentProcessesChanged(projectId: string, threadId: stri
   for (const win of BrowserWindow.getAllWindows()) {
     sendToRenderer(win.webContents, 'agent:processesChanged', projectId, threadId)
   }
+  forwardRemoteEvent('agent:processesChanged', [projectId, threadId])
 }
 
 /** Deliver another process's persisted checkpoint invalidation locally. */

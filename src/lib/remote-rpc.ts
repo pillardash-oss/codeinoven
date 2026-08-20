@@ -112,6 +112,12 @@ export const REMOTE_ALLOWED_CHANNELS: readonly string[] = [
   'agent:compact',
   'agent:truncateMessages',
   'agent:listContextCapabilities',
+  'agent:listProcesses',
+  'agent:listArtifacts',
+  'agent:killProcess',
+  'agent:killThreadProcesses',
+  'capabilities:deleteSkill',
+  'capabilities:deleteMcp',
   'agent:closeTemporaryChat',
   'agent:getChildSessionStatus',
   'agent:dismissSessionError',
@@ -249,6 +255,7 @@ export const REMOTE_ALLOWED_CHANNELS: readonly string[] = [
 /** Channels the desktop pushes to the phone as live events. */
 export const REMOTE_FORWARDED_EVENTS: readonly string[] = [
   'agent:event',
+  'agent:processesChanged',
   'thread:updated',
   'thread:deleted',
   'notification:show',
@@ -408,6 +415,8 @@ export const REMOTE_CHANNEL_AUTHORIZATION: Readonly<Record<string, RemoteChannel
   'agent:listQuestions': { scope: 'conversation.read', stepUp: 'none' },
   'agent:listCommands': { scope: 'conversation.read', stepUp: 'none' },
   'agent:listContextCapabilities': { scope: 'conversation.read', stepUp: 'none' },
+  'agent:listProcesses': { scope: 'conversation.read', stepUp: 'none' },
+  'agent:listArtifacts': { scope: 'conversation.read', stepUp: 'none' },
   'agent:getChildSessionStatus': { scope: 'conversation.read', stepUp: 'none' },
 
   // conversation.control — default, no step-up
@@ -419,6 +428,9 @@ export const REMOTE_CHANNEL_AUTHORIZATION: Readonly<Record<string, RemoteChannel
   'agent:dismissQuestion': { scope: 'conversation.control', stepUp: 'none' },
   'agent:updateQuestion': { scope: 'conversation.control', stepUp: 'none' },
   'agent:compact': { scope: 'conversation.control', stepUp: 'none' },
+  // Destructive process control — always step-up on a remote device.
+  'agent:killProcess': { scope: 'conversation.control', stepUp: 'always' },
+  'agent:killThreadProcesses': { scope: 'conversation.control', stepUp: 'always' },
   'agent:closeTemporaryChat': { scope: 'conversation.control', stepUp: 'none' },
   'agent:retryChildSession': { scope: 'conversation.control', stepUp: 'none' },
   'agent:dismissSessionError': { scope: 'conversation.control', stepUp: 'none' },
@@ -599,7 +611,9 @@ export const REMOTE_CHANNEL_AUTHORIZATION: Readonly<Record<string, RemoteChannel
   'dialog:pickFiles': { scope: 'local.system', stepUp: 'always' },
   'clipboard:saveImage': { scope: 'local.system', stepUp: 'always' },
   'shell:revealPath': { scope: 'local.system', stepUp: 'always' },
-  'shell:openExternal': { scope: 'local.system', stepUp: 'always' }
+  'shell:openExternal': { scope: 'local.system', stepUp: 'always' },
+  'capabilities:deleteSkill': { scope: 'local.system', stepUp: 'always' },
+  'capabilities:deleteMcp': { scope: 'local.system', stepUp: 'always' }
 }
 
 /** Return the typed authorization entry for a channel, or `null` if unmapped. */
