@@ -378,21 +378,6 @@
         </button>
       {/each}
     </nav>
-
-    {#snippet footer()}
-      <div class="flex items-center px-2 py-1.5">
-        <button
-          type="button"
-          class="flex h-8 flex-1 items-center gap-2 rounded-lg px-2 text-sm text-muted transition-colors hover:bg-elevated hover:text-foreground"
-          title="Exit settings"
-          aria-label="Exit settings"
-          onclick={onBack}
-        >
-          <ArrowLeft size={14} />
-          Exit settings
-        </button>
-      </div>
-    {/snippet}
   </CollapsibleSidebar>
 
   <!-- Tab content -->

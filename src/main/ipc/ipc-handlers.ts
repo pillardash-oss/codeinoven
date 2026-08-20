@@ -2,12 +2,13 @@ import { app, dialog, shell, clipboard, BrowserWindow, nativeImage } from 'elect
 import type { IpcMainInvokeEvent } from 'electron'
 import { appRendererNavigationTargets, trustedIpcMain as ipcMain } from './trusted-ipc-main'
 import { existsSync, readFileSync } from 'node:fs'
-import { lstat, readFile, writeFile, mkdir, rename, rm, stat } from 'fs/promises'
+import { cp, lstat, readFile, writeFile, mkdir, rename, rm, stat } from 'fs/promises'
 import { release } from 'os'
 import { randomUUID } from 'node:crypto'
 import { spawn } from 'node:child_process'
 import { basename, dirname, extname, isAbsolute, join, resolve } from 'path'
 import { APP_NAME, APP_SLUG } from '../../lib/brand'
+import { harnessGlobalSkillPath, SHARED_GLOBAL_SKILL_PATH } from '../../lib/native-skill-paths'
 import { modelKey } from '../../lib/model-keys'
 import type { Database } from '../database/database'
 import { StorageEngine } from '../storage/storage-engine'
@@ -283,6 +284,30 @@ function installSkillWithBun(args: string[], cwd: string): Promise<string> {
       else rejectInstall(new Error(output.trim() || `Skills CLI exited with code ${code ?? -1}`))
     })
   })
+}
+
+const CANONICAL_ONLY_GLOBAL_SKILL_AGENTS = new Set(['opencode', 'codex', 'antigravity'])
+
+/**
+ * Skills CLI currently leaves universal agents in the canonical global folder
+ * even for a named `--agent` install. Materialize the harness-advertised path
+ * so OpenCode, Codex, and Antigravity can discover the selected skill there.
+ */
+async function materializeHarnessGlobalSkill(
+  home: string,
+  skillId: string,
+  harnessId: string
+): Promise<void> {
+  if (!CANONICAL_ONLY_GLOBAL_SKILL_AGENTS.has(harnessId)) return
+  const displayPath = harnessGlobalSkillPath(harnessId)
+  if (!displayPath || displayPath === SHARED_GLOBAL_SKILL_PATH || !displayPath.startsWith('~/')) {
+    return
+  }
+  const canonicalSkill = join(home, SHARED_GLOBAL_SKILL_PATH.slice(2), skillId)
+  if (!existsSync(canonicalSkill)) return
+  const harnessSkill = join(home, displayPath.slice(2), skillId)
+  await mkdir(dirname(harnessSkill), { recursive: true })
+  await cp(canonicalSkill, harnessSkill, { recursive: true, force: true, dereference: true })
 }
 
 const SKILL_MARKET_VIEWS = new Set(['all-time', 'trending', 'hot'])
@@ -5143,8 +5168,8 @@ export function registerIpcHandlers(
     const scope = rawRequest['scope']
     if (!isRecord(scope)) throw new TypeError('Skill install scope must be an object')
     const scopeKind = scope['kind']
-    if (scopeKind !== 'global' && scopeKind !== 'projects') {
-      throw new TypeError('Select global or project installation')
+    if (scopeKind !== 'global' && scopeKind !== 'projects' && scopeKind !== 'harnesses') {
+      throw new TypeError('Select global, project, or harness installation')
     }
     const projectIds =
       scopeKind === 'projects' ? selectedIds(scope['projectIds'], 'Project IDs') : []
@@ -5154,6 +5179,9 @@ export function registerIpcHandlers(
     }
 
     if (manager === 'cio') {
+      if (scopeKind === 'harnesses') {
+        throw new TypeError('CodeInOven-managed skills support global or project scope')
+      }
       const activation = rawRequest['activation']
       if (activation !== 'always' && activation !== 'on_demand') {
         throw new TypeError('Select always available or on-demand activation')
@@ -5187,25 +5215,18 @@ export function registerIpcHandlers(
       return `Added ${definitions.length} CodeInOven-managed skill${definitions.length === 1 ? '' : 's'}`
     }
 
-    const nativeTarget = rawRequest['nativeTarget']
-    if (!isRecord(nativeTarget)) throw new TypeError('Select a native skill directory')
     const knownHarnesses = new Set(listHarnesses().map((harness) => harness.id))
-    const targetKind = nativeTarget['kind']
-    let agentTargets: string[]
-    if (targetKind === 'shared') {
-      agentTargets = ['*']
-    } else if (targetKind === 'harnesses') {
-      agentTargets = selectedIds(nativeTarget['harnessIds'], 'Harness IDs')
+    let agentTargets = ['*']
+    if (scopeKind === 'harnesses') {
+      agentTargets = selectedIds(scope['harnessIds'], 'Harness IDs')
       if (agentTargets.some((harnessId) => !knownHarnesses.has(harnessId))) {
         throw new TypeError('Select only supported harnesses')
       }
-    } else {
-      throw new TypeError('Native skill directory is invalid')
     }
     const destinations =
-      scopeKind === 'global'
-        ? [app.getPath('home')]
-        : projectIds.map((projectId) => projectPaths.get(projectId)!)
+      scopeKind === 'projects'
+        ? projectIds.map((projectId) => projectPaths.get(projectId)!)
+        : [app.getPath('home')]
     const outputs: string[] = []
     for (const directory of destinations) {
       for (const agentTarget of agentTargets) {
@@ -5219,11 +5240,14 @@ export function registerIpcHandlers(
               '--agent',
               agentTarget,
               '-y',
-              ...(scopeKind === 'global' ? ['--global'] : [])
+              ...(scopeKind === 'projects' ? [] : ['--global'])
             ],
             directory
           )
         )
+        if (scopeKind === 'harnesses') {
+          await materializeHarnessGlobalSkill(directory, skillId, agentTarget)
+        }
       }
     }
     return outputs.filter(Boolean).at(-1) ?? `Installed to ${destinations.length} destination(s)`

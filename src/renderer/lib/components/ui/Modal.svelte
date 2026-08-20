@@ -11,6 +11,8 @@
     children: Snippet
     footer?: Snippet
     size?: 'md' | 'lg' | 'xl'
+    contentClass?: string
+    fill?: boolean
     /** Clicking the backdrop calls onClose. Off for surfaces that hold drafts. */
     closeOnBackdrop?: boolean
   }
@@ -22,6 +24,8 @@
     children,
     footer,
     size = 'md',
+    contentClass = 'overflow-y-auto p-6',
+    fill = false,
     closeOnBackdrop = true
   }: Props = $props()
 
@@ -105,9 +109,9 @@
 
       <!-- Panel -->
       <div
-        class="relative mx-6 flex max-h-[calc(100vh-3rem)] w-full flex-col overflow-hidden rounded-2xl border bg-surface shadow-xl {widths[
-          size
-        ]}"
+        class="relative mx-6 flex max-h-[calc(100vh-3rem)] w-full flex-col overflow-hidden rounded-2xl border bg-surface shadow-xl {fill
+          ? 'h-[calc(100vh-3rem)]'
+          : ''} {widths[size]}"
         {@attach setupModal}
       >
         <div class="flex shrink-0 items-center justify-between border-b px-6 py-4">
@@ -122,7 +126,7 @@
           </button>
         </div>
 
-        <div class="min-h-0 flex-1 overflow-y-auto p-6">
+        <div class="min-h-0 flex-1 {contentClass}">
           {@render children()}
         </div>
 

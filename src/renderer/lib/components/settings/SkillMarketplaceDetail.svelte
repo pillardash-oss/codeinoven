@@ -15,6 +15,11 @@
   import AgentIcon from '$lib/agent-icons/AgentIcon.svelte'
   import { getAgentIcon } from '$lib/agent-icons/registry'
   import { invoke } from '$lib/ipc.svelte'
+  import {
+    harnessGlobalSkillPath,
+    SHARED_GLOBAL_SKILL_PATH,
+    SHARED_PROJECT_SKILL_PATH
+  } from '$shared/native-skill-paths'
   import { openInBrowser } from '$lib/open-in-browser'
   import { getProjectIcon, loadProjectIcons } from '$lib/project-icons'
   import { cachedSkillMarketDetail, loadSkillMarketDetail } from '$lib/skill-market-cache'
@@ -39,11 +44,16 @@
 
   type InstallManager = SkillMarketInstallRequest['manager']
   type InstallScope = SkillMarketInstallRequest['scope']['kind']
-  type NativeDestination = NonNullable<SkillMarketInstallRequest['nativeTarget']>['kind']
 
   interface HarnessOption {
     id: string
     name: string
+  }
+
+  interface SkillPathOption {
+    id: string
+    label: string
+    path: string
   }
 
   const codeInOvenIconUrl = publicAssetUrl('macos/AppIcon64.png')
@@ -57,7 +67,6 @@
   let manager = $state<InstallManager>('native')
   let scope = $state<InstallScope>('global')
   let activation = $state<UtilityActivation>('on_demand')
-  let nativeDestination = $state<NativeDestination>('shared')
   let selectedProjectIds = $state<string[]>([])
   let selectedHarnessIds = $state<string[]>([])
   let projects = $state<ProjectMultiSelectOption[]>([])
@@ -77,6 +86,7 @@
     }
 
     return Object.entries(harnessNames)
+      .filter(([id]) => harnessGlobalSkillPath(id) !== undefined)
       .map(([id, name]) => ({ id, name }))
       .sort((left, right) => {
         const leftIndex = providerStore.providers.findIndex((provider) => provider.id === left.id)
@@ -91,8 +101,32 @@
   })
   let selectionIncomplete = $derived(
     (scope === 'projects' && selectedProjectIds.length === 0) ||
-      (manager === 'native' && nativeDestination === 'harnesses' && selectedHarnessIds.length === 0)
+      (scope === 'harnesses' && selectedHarnessIds.length === 0)
   )
+  let skillPaths = $derived.by((): SkillPathOption[] => {
+    if (manager !== 'native') return []
+    if (scope === 'global') {
+      return [{ id: 'global', label: 'All harnesses', path: SHARED_GLOBAL_SKILL_PATH }]
+    }
+    if (scope === 'projects') {
+      return selectedProjectIds.flatMap((projectId) => {
+        const project = projects.find((candidate) => candidate.id === projectId)
+        if (!project?.path) return []
+        return [
+          {
+            id: project.id,
+            label: project.name,
+            path: `${project.path.replace(/\/+$/u, '')}/${SHARED_PROJECT_SKILL_PATH}`
+          }
+        ]
+      })
+    }
+    return selectedHarnessIds.flatMap((harnessId) => {
+      const harness = availableHarnesses.find((candidate) => candidate.id === harnessId)
+      const path = harnessGlobalSkillPath(harnessId)
+      return harness && path ? [{ id: harness.id, label: harness.name, path }] : []
+    })
+  })
   let destinationSummary = $derived.by(() => {
     const projectCount = selectedProjectIds.length
     const harnessCount = selectedHarnessIds.length
@@ -102,16 +136,11 @@
         ? `${APP_NAME} utility · global · ${availability}`
         : `${APP_NAME} utility · ${projectCount || 'no'} project${projectCount === 1 ? '' : 's'} · ${availability}`
     }
-    if (scope === 'global' && nativeDestination === 'shared') {
-      return 'Global shared directory · ~/.agents/skills'
+    if (scope === 'global') return `All harnesses · ${SHARED_GLOBAL_SKILL_PATH}`
+    if (scope === 'projects') {
+      return `${projectCount || 'No'} project${projectCount === 1 ? '' : 's'} · ${SHARED_PROJECT_SKILL_PATH}`
     }
-    if (scope === 'global') {
-      return `${harnessCount || 'No'} harness global director${harnessCount === 1 ? 'y' : 'ies'}`
-    }
-    if (nativeDestination === 'shared') {
-      return `Shared .agents/skills directory in ${projectCount || 'no'} project${projectCount === 1 ? '' : 's'}`
-    }
-    return `${harnessCount || 'No'} harness director${harnessCount === 1 ? 'y' : 'ies'} in ${projectCount || 'no'} project${projectCount === 1 ? '' : 's'}`
+    return `${harnessCount || 'No'} harness${harnessCount === 1 ? '' : 'es'} selected`
   })
 
   function auditClass(status: SkillMarketDetail['audits'][number]['status']): string {
@@ -122,9 +151,28 @@
   }
 
   function toggleHarness(harnessId: string): void {
-    selectedHarnessIds = selectedHarnessIds.includes(harnessId)
+    const nextHarnessIds = selectedHarnessIds.includes(harnessId)
       ? selectedHarnessIds.filter((candidate) => candidate !== harnessId)
       : [...selectedHarnessIds, harnessId]
+    if (availableHarnesses.length > 0 && nextHarnessIds.length === availableHarnesses.length) {
+      selectedHarnessIds = []
+      scope = 'global'
+      return
+    }
+    selectedHarnessIds = nextHarnessIds
+  }
+
+  function selectManager(nextManager: InstallManager): void {
+    manager = nextManager
+    if (nextManager === 'cio' && scope === 'harnesses') {
+      scope = 'global'
+      selectedHarnessIds = []
+    }
+  }
+
+  function selectScope(nextScope: InstallScope): void {
+    scope = nextScope
+    if (nextScope !== 'harnesses') selectedHarnessIds = []
   }
 
   async function loadProjects(): Promise<void> {
@@ -155,15 +203,10 @@
         scope:
           scope === 'global'
             ? { kind: 'global' }
-            : { kind: 'projects', projectIds: selectedProjectIds },
-        ...(manager === 'cio'
-          ? { activation }
-          : {
-              nativeTarget:
-                nativeDestination === 'shared'
-                  ? { kind: 'shared' }
-                  : { kind: 'harnesses', harnessIds: selectedHarnessIds }
-            })
+            : scope === 'projects'
+              ? { kind: 'projects', projectIds: selectedProjectIds }
+              : { kind: 'harnesses', harnessIds: selectedHarnessIds },
+        ...(manager === 'cio' ? { activation } : {})
       }
       await invoke('utilities:installMarketSkill', request)
       installedMessage = `${entry.name} installed successfully · ${destinationSummary}`
@@ -269,7 +312,7 @@
               ? 'bg-surface text-foreground shadow-sm'
               : 'text-muted hover:text-foreground'}"
             aria-pressed={manager === 'cio'}
-            onclick={() => (manager = 'cio')}
+            onclick={() => selectManager('cio')}
           >
             <img src={codeInOvenIconUrl} alt="" class="h-4 w-4 shrink-0 object-contain" />
             {APP_NAME}
@@ -281,15 +324,46 @@
               ? 'bg-surface text-foreground shadow-sm'
               : 'text-muted hover:text-foreground'}"
             aria-pressed={manager === 'native'}
-            onclick={() => (manager = 'native')}
+            onclick={() => selectManager('native')}
           >
             <SquareTerminal size={12} /> Native harnesses
           </button>
         </div>
 
+        {#if manager === 'native'}
+          <div class="mt-4 min-w-0 space-y-2">
+            <p class="text-[10px] font-semibold uppercase tracking-wide text-muted">Skills path</p>
+            {#if skillPaths.length > 0}
+              <div
+                class="grid max-h-[4.25rem] grid-flow-col grid-rows-2 justify-start gap-1.5 overflow-x-auto pb-1"
+                aria-label="Selected skill installation paths"
+              >
+                {#each skillPaths as skillPath (skillPath.id)}
+                  <span
+                    class="flex h-8 max-w-72 shrink-0 items-center gap-2 rounded-lg bg-elevated px-2.5"
+                  >
+                    <span class="shrink-0 text-[10px] font-medium text-muted">
+                      {skillPath.label}
+                    </span>
+                    <span class="truncate font-mono text-[10px] text-foreground">
+                      {skillPath.path}
+                    </span>
+                  </span>
+                {/each}
+              </div>
+            {:else}
+              <p class="h-8 content-center text-[10px] text-dimmed">
+                {scope === 'projects'
+                  ? 'Select one or more projects.'
+                  : 'Select one or more harnesses.'}
+              </p>
+            {/if}
+          </div>
+        {/if}
+
         <div class="mt-4 space-y-2">
           <p class="text-[10px] font-semibold uppercase tracking-wide text-muted">Scope</p>
-          <div class="grid grid-cols-2 gap-2">
+          <div class="grid gap-2 {manager === 'native' ? 'grid-cols-3' : 'grid-cols-2'}">
             <button
               type="button"
               class="flex h-9 items-center justify-center gap-1.5 rounded-lg border text-xs font-medium transition-colors {scope ===
@@ -297,7 +371,7 @@
                 ? 'border-primary bg-primary/10 text-primary'
                 : 'bg-elevated text-muted hover:bg-overlay hover:text-foreground'}"
               aria-pressed={scope === 'global'}
-              onclick={() => (scope = 'global')}
+              onclick={() => selectScope('global')}
             >
               <Globe2 size={13} /> Global
             </button>
@@ -308,10 +382,23 @@
                 ? 'border-primary bg-primary/10 text-primary'
                 : 'bg-elevated text-muted hover:bg-overlay hover:text-foreground'}"
               aria-pressed={scope === 'projects'}
-              onclick={() => (scope = 'projects')}
+              onclick={() => selectScope('projects')}
             >
               <FolderKanban size={13} /> Projects
             </button>
+            {#if manager === 'native'}
+              <button
+                type="button"
+                class="flex h-9 items-center justify-center gap-1.5 rounded-lg border text-xs font-medium transition-colors {scope ===
+                'harnesses'
+                  ? 'border-primary bg-primary/10 text-primary'
+                  : 'bg-elevated text-muted hover:bg-overlay hover:text-foreground'}"
+                aria-pressed={scope === 'harnesses'}
+                onclick={() => selectScope('harnesses')}
+              >
+                <SquareTerminal size={13} /> Harnesses
+              </button>
+            {/if}
           </div>
           {#if scope === 'projects'}
             <ProjectMultiSelect
@@ -351,63 +438,46 @@
               <span class="ml-auto text-[10px] text-muted">Every turn</span>
             </button>
           </div>
-        {:else}
-          <div class="mt-4 space-y-2">
-            <p class="text-[10px] font-semibold uppercase tracking-wide text-muted">Directory</p>
-            <button
-              type="button"
-              class="w-full rounded-lg border p-2.5 text-left transition-colors {nativeDestination ===
-              'shared'
-                ? 'border-primary bg-primary/10'
-                : 'bg-elevated hover:bg-overlay'}"
-              aria-pressed={nativeDestination === 'shared'}
-              onclick={() => (nativeDestination = 'shared')}
+        {:else if scope === 'harnesses'}
+          <div class="mt-4 min-w-0 space-y-2">
+            <p class="text-[10px] font-semibold uppercase tracking-wide text-muted">
+              Select harnesses
+            </p>
+            <div
+              class="grid max-h-[4.25rem] grid-flow-col grid-rows-2 justify-start gap-1.5 overflow-x-auto pb-1"
             >
-              <span class="block text-xs font-medium">Shared agents directory</span>
-              <span class="mt-0.5 block font-mono text-[10px] text-muted">.agents/skills</span>
-            </button>
-            <button
-              type="button"
-              class="w-full rounded-lg border p-2.5 text-left transition-colors {nativeDestination ===
-              'harnesses'
-                ? 'border-primary bg-primary/10'
-                : 'bg-elevated hover:bg-overlay'}"
-              aria-pressed={nativeDestination === 'harnesses'}
-              onclick={() => (nativeDestination = 'harnesses')}
-            >
-              <span class="block text-xs font-medium">Harness directories</span>
-              <span class="mt-0.5 block text-[10px] text-muted">Pick one or more harnesses</span>
-            </button>
-            {#if nativeDestination === 'harnesses'}
-              <div class="flex flex-wrap gap-1.5 pt-1">
-                {#each availableHarnesses as harness (harness.id)}
-                  <button
-                    type="button"
-                    class="flex h-8 items-center gap-1.5 rounded-lg border px-2 text-[11px] font-medium transition-colors {selectedHarnessIds.includes(
-                      harness.id
-                    )
-                      ? 'border-primary bg-primary/10 text-primary'
-                      : 'bg-elevated text-muted hover:bg-overlay hover:text-foreground'}"
-                    aria-pressed={selectedHarnessIds.includes(harness.id)}
-                    onclick={() => toggleHarness(harness.id)}
-                  >
-                    <AgentIcon agentId={harness.id} label={harness.name} size={14} />
-                    {harness.name}
-                  </button>
-                {/each}
-                {#if availableHarnesses.length === 0}
-                  <p class="text-[10px] leading-relaxed text-dimmed">
-                    No installed harnesses are available.
-                  </p>
-                {/if}
-              </div>
-            {/if}
+              {#each availableHarnesses as harness (harness.id)}
+                <button
+                  type="button"
+                  class="flex h-8 items-center gap-1.5 rounded-lg border px-2 text-[11px] font-medium transition-colors {selectedHarnessIds.includes(
+                    harness.id
+                  )
+                    ? 'border-primary bg-primary/10 text-primary'
+                    : 'bg-elevated text-muted hover:bg-overlay hover:text-foreground'}"
+                  aria-pressed={selectedHarnessIds.includes(harness.id)}
+                  onclick={() => toggleHarness(harness.id)}
+                >
+                  <AgentIcon agentId={harness.id} label={harness.name} size={14} />
+                  {harness.name}
+                </button>
+              {/each}
+              {#if availableHarnesses.length === 0}
+                <p class="text-[10px] leading-relaxed text-dimmed">
+                  No installed harnesses are available.
+                </p>
+              {/if}
+            </div>
           </div>
         {/if}
 
-        <p class="mt-4 text-[10px] leading-relaxed text-dimmed">{destinationSummary}</p>
+        {#if manager === 'cio'}
+          <p class="mt-4 text-[10px] leading-relaxed text-dimmed">{destinationSummary}</p>
+        {/if}
         <button
-          class="mt-3 flex h-9 w-full items-center justify-center gap-1.5 rounded-lg bg-primary px-4 text-xs font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
+          class="flex h-9 w-full items-center justify-center gap-1.5 rounded-lg bg-primary px-4 text-xs font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50 {manager ===
+          'cio'
+            ? 'mt-3'
+            : 'mt-4'}"
           type="button"
           disabled={installing || selectionIncomplete}
           onclick={() => void installSkill()}
