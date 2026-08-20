@@ -873,8 +873,6 @@ export function validateFaviconHostnames(value: unknown): string[] {
 // ─── Privileged-IPC validation wrapper ──────────────────────────────────────
 
 const WEB_PROTOCOLS = new Set(['https:', 'http:'])
-/** Development-only origins that may be opened over plain http:. */
-const DEV_HTTP_HOSTNAMES = new Set(['localhost', '127.0.0.1', '::1'])
 const MAX_EXTERNAL_URL_LENGTH = 8192
 const MAX_SCOPED_PATH_LENGTH = 16_384
 
@@ -937,7 +935,7 @@ export interface PrivilegedIpcValidatorOptions {
   navigationTargets?: Iterable<string>
   /** Resolvers for the file scopes reveal/preview operations may target. */
   scopes?: PrivilegedScopeResolvers
-  /** Whether plain `http:` localhost URLs may be opened (development only). */
+  /** Retained for compatibility with callers; HTTP external links are supported in all builds. */
   allowDevelopmentHttp?: boolean
 }
 
@@ -959,7 +957,6 @@ export type TrustedFrameCandidate = FrameIdentity | WebFrameMain
 export class PrivilegedIpcValidator {
   readonly #navigationTargets: ReadonlySet<string>
   readonly #scopes: PrivilegedScopeResolvers | undefined
-  readonly #allowDevelopmentHttp: boolean
   readonly #userSelectedFiles = new Set<string>()
   readonly #userSelectedRoots = new Set<string>()
 
@@ -970,7 +967,6 @@ export class PrivilegedIpcValidator {
         .filter((url): url is string => url !== null)
     )
     this.#scopes = options.scopes
-    this.#allowDevelopmentHttp = options.allowDevelopmentHttp ?? false
   }
 
   /**
@@ -995,11 +991,10 @@ export class PrivilegedIpcValidator {
   }
 
   /**
-   * Validate a URL for `shell.openExternal` / window-open. Only parsed `https:`
-   * URLs are permitted; plain `http:` is permitted only for intentionally
-   * supported localhost development origins and only when development HTTP is
-   * enabled (never in production). Credentials, control characters, malformed
-   * input, and non-web schemes are rejected. Returns the normalized URL.
+   * Validate a URL for `shell.openExternal` / window-open. Parsed web URLs are
+   * permitted over either `https:` or `http:`; credentials, control characters,
+   * malformed input, and non-web schemes are rejected. Returns the normalized
+   * URL.
    */
   validateExternalUrl(value: unknown): string {
     if (typeof value !== 'string' || value.length === 0 || value.length > MAX_EXTERNAL_URL_LENGTH) {
@@ -1019,17 +1014,6 @@ export class PrivilegedIpcValidator {
     }
     if (parsed.username !== '' || parsed.password !== '') {
       throw new TypeError('External URL must not contain credentials')
-    }
-    if (parsed.protocol === 'http:') {
-      if (!this.#allowDevelopmentHttp) {
-        throw new TypeError('External http: URLs are only supported in development')
-      }
-      const hostname = parsed.hostname.replace(/^\[|\]$/gu, '')
-      if (!DEV_HTTP_HOSTNAMES.has(hostname)) {
-        throw new TypeError(
-          'External http: URLs are only supported for localhost development origins'
-        )
-      }
     }
     return parsed.toString()
   }
