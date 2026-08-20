@@ -59,6 +59,8 @@ export interface GatewayHandlers {
     args: unknown[],
     device?: RemoteRpcDeviceContext
   ) => Promise<{ ok: true; result: unknown } | { ok: false; message: string }>
+  /** Called when an authenticated phone opens or leaves the remote workspace. */
+  onWorkspaceActiveChange?: (deviceId: string, active: boolean) => void
   /** Authenticates a device handshake against the device credential service. */
   authenticateDevice?: (input: {
     nonce: string
@@ -1010,6 +1012,10 @@ export class RemoteGateway {
     const record = message as Record<string, unknown>
     if (record.type === 'ping') {
       this.queuePeerSend(peer, { type: 'pong' })
+      return
+    }
+    if (record.type === 'remote:workspace:active' && typeof record.active === 'boolean') {
+      this.options.handlers.onWorkspaceActiveChange?.(peer.deviceId, record.active)
       return
     }
     if (record.rpc === 'invoke') {

@@ -242,6 +242,12 @@ export class RemoteSessionStore {
     await this.sendRaw(payload)
   }
 
+  /** Tell the desktop whether the user opened or left its remote workspace. */
+  async setWorkspaceActive(active: boolean): Promise<void> {
+    if (this.relayDeviceAuth) await this.relayDeviceAuth
+    await this.sendRaw({ type: 'remote:workspace:active', active })
+  }
+
   /** Connect to one account-owned desktop through the hosted same-origin relay. */
   async connectCloud(input: {
     desktopId: string

@@ -36,14 +36,22 @@
       .catch(() => applyCurrentTheme())
   }
 
-  function disconnectDesktop(): void {
+  async function disconnectDesktop(): Promise<void> {
     workspaceOpened = false
-    clearPreferredDesktop()
-    remoteSession.disconnect()
+    try {
+      await remoteSession.setWorkspaceActive(false)
+    } catch {
+      // Disconnecting the transport below also clears desktop workspace activity.
+    } finally {
+      clearPreferredDesktop()
+      remoteSession.disconnect()
+    }
   }
 
   function openWorkspace(): void {
-    if (connected) workspaceOpened = true
+    if (!connected) return
+    workspaceOpened = true
+    void remoteSession.setWorkspaceActive(true).catch(() => undefined)
   }
 
   onMount(() => {
@@ -63,6 +71,7 @@
       const isConnectedNow =
         snapshot.route.kind === 'LAN_CONNECTED' || snapshot.route.kind === 'RELAY_CONNECTED'
       if (isConnectedNow && !wasConnected && workspaceOpened) {
+        void remoteSession.setWorkspaceActive(true).catch(() => undefined)
         void mobileState.reconcileAfterReconnect()
       }
       wasConnected = isConnectedNow

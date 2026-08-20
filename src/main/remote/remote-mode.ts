@@ -528,6 +528,10 @@ export class RemoteModeController {
   private cloudStatus: RemoteCloudStatus
   /** Phone whose claimed code is still completing grant delivery + relay device auth. */
   private pendingCloudDeviceId: string | null = null
+  /** Desktop credential currently authenticated through the cloud relay. */
+  private cloudConnectedDeviceId: string | null = null
+  /** Phones that explicitly opened the remote workspace, not merely paired. */
+  private readonly activeWorkspaceDeviceIds = new Set<string>()
   /** Connected devices, newest first (source of truth = the gateway). */
   private devices: RemoteDeviceInfo[] = []
 
@@ -721,6 +725,7 @@ export class RemoteModeController {
       this.gateway = null
       this.tray?.destroy()
       this.tray = null
+      this.activeWorkspaceDeviceIds.clear()
       this.onSessionActiveChange?.(false)
       this.stopCloudAccess()
       this.credentials?.stopPeriodicMaintenance()
@@ -743,21 +748,35 @@ export class RemoteModeController {
   onDevicesChange(devices: RemoteDeviceInfo[]): void {
     const wasLive = this.devices.some((device) => device.connected)
     const connectedIds = new Set(devices.map((device) => device.id))
+    if (this.cloudConnectedDeviceId) connectedIds.add(this.cloudConnectedDeviceId)
     this.refreshDevices(connectedIds)
+    this.reconcileSessionActivity(wasLive)
+    this.syncTray()
+    this.broadcast()
+  }
+
+  /** Reconcile keep-alive, power, tray notifications, and event forwarding. */
+  private reconcileSessionActivity(wasLive: boolean): void {
     const isLive = this.devices.some((device) => device.connected)
     if (isLive && !wasLive) {
       this.keepAlive.dispatch({ type: 'sessionStart' })
       this.tray?.notify('Remote session started', 'Your phone is connected to this desktop.')
       this.installEventForwarder()
-      this.onSessionActiveChange?.(true)
     } else if (!isLive && wasLive) {
       this.keepAlive.dispatch({ type: 'sessionEnd' })
       this.tray?.notify('Remote session ended', 'The phone disconnected from this desktop.')
       if (this.cloudStatus.state !== 'online') setRemoteEventForwarder(null)
-      this.onSessionActiveChange?.(false)
     }
-    this.syncTray()
-    this.broadcast()
+  }
+
+  /** Keep power awake only after a connected phone explicitly opens the workspace. */
+  private updateWorkspaceActivity(deviceId: string, active: boolean): void {
+    if (active && this.devices.some((device) => device.id === deviceId && device.connected)) {
+      this.activeWorkspaceDeviceIds.add(deviceId)
+    } else {
+      this.activeWorkspaceDeviceIds.delete(deviceId)
+    }
+    this.onSessionActiveChange?.(this.activeWorkspaceDeviceIds.size > 0)
   }
 
   /** Rebuild the device list from the enrolled device records. */
@@ -769,6 +788,15 @@ export class RemoteModeController {
     this.devices = this.credentials
       .listDevices()
       .map((device) => this.toDeviceInfo(device, connectedIds.has(device.deviceId)))
+    let workspaceSetChanged = false
+    for (const deviceId of this.activeWorkspaceDeviceIds) {
+      if (connectedIds.has(deviceId)) continue
+      this.activeWorkspaceDeviceIds.delete(deviceId)
+      workspaceSetChanged = true
+    }
+    if (workspaceSetChanged) {
+      this.onSessionActiveChange?.(this.activeWorkspaceDeviceIds.size > 0)
+    }
   }
 
   /** Enrolled-device record → display-facing `RemoteDeviceInfo`. */
@@ -822,11 +850,14 @@ export class RemoteModeController {
     // Terminate any bound cloud relay session for this device immediately;
     // per-invoke revalidation also rejects it if a socket survives.
     if (this.cloudRelay?.boundDeviceId() === deviceId) {
+      this.cloudConnectedDeviceId = null
       this.cloudRelay.close()
       this.cloudRelay = null
       this.cloudStatus = { ...this.cloudStatus, state: 'offline', lastError: 'device revoked' }
     }
+    const wasLive = this.devices.some((device) => device.connected)
     this.refreshDevices(new Set(this.gateway?.listDevices().map((d) => d.id) ?? []))
+    this.reconcileSessionActivity(wasLive)
     this.syncTray()
     this.broadcast()
     return this.status
@@ -836,6 +867,7 @@ export class RemoteModeController {
   listEnrolledDevices(): RemoteDeviceInfo[] {
     if (!this.credentials) return []
     const connectedIds = new Set(this.gateway?.listDevices().map((d) => d.id) ?? [])
+    if (this.cloudConnectedDeviceId) connectedIds.add(this.cloudConnectedDeviceId)
     return this.credentials
       .listDevices()
       .map((device) => this.toDeviceInfo(device, connectedIds.has(device.deviceId)))
@@ -958,6 +990,7 @@ export class RemoteModeController {
     setRemoteEventForwarder(null)
     this.stopCloudAccess()
     this.credentials?.stopPeriodicMaintenance()
+    this.activeWorkspaceDeviceIds.clear()
     this.onSessionActiveChange?.(false)
     if (this.gateway) {
       const gateway = this.gateway
@@ -1932,9 +1965,12 @@ export class RemoteModeController {
         this.broadcast()
       },
       onDeviceAuthenticated: (deviceId, cloudMobileDeviceId) => {
+        const wasLive = this.devices.some((device) => device.connected)
+        this.cloudConnectedDeviceId = deviceId
         const connectedIds = new Set(this.gateway?.listDevices().map((device) => device.id) ?? [])
         connectedIds.add(deviceId)
         this.refreshDevices(connectedIds)
+        this.reconcileSessionActivity(wasLive)
         if (cloudMobileDeviceId === this.pendingCloudDeviceId) {
           this.pendingCloudDeviceId = null
           this.cloudStatus = {
@@ -1946,6 +1982,9 @@ export class RemoteModeController {
           }
         }
         this.broadcast()
+      },
+      onWorkspaceActiveChange: (deviceId, active) => {
+        this.updateWorkspaceActivity(deviceId, active)
       },
       onDisconnected: (reason) => {
         if (this.cloudRelay !== relay) return
@@ -1969,7 +2008,10 @@ export class RemoteModeController {
         }
         Logger.dev(`Remote cloud relay disconnected (${reason}); reconnecting automatically`)
         this.cloudStatus = { ...this.cloudStatus, state: 'offline', lastError: reason }
+        const wasLive = this.devices.some((device) => device.connected)
+        this.cloudConnectedDeviceId = null
         this.refreshDevices(new Set(this.gateway?.listDevices().map((device) => device.id) ?? []))
+        this.reconcileSessionActivity(wasLive)
         this.broadcast()
       },
       onRpc: async (channel, args, device) => {
@@ -2000,7 +2042,10 @@ export class RemoteModeController {
     this.cloudAbortController = null
     this.cloudRelay?.close()
     this.cloudRelay = null
+    const wasLive = this.devices.some((device) => device.connected)
+    this.cloudConnectedDeviceId = null
     this.refreshDevices(new Set(this.gateway?.listDevices().map((device) => device.id) ?? []))
+    this.reconcileSessionActivity(wasLive)
     if (!this.devices.some((device) => device.connected)) setRemoteEventForwarder(null)
     if (this.cloudStatus.state !== 'disabled') {
       this.cloudStatus = { ...this.cloudStatus, state: 'offline' }
@@ -2025,6 +2070,9 @@ export class RemoteModeController {
       allowedOrigins: this.cloudApiOrigin ? [new URL(this.cloudApiOrigin).origin] : [],
       handlers: {
         onDevicesChange: (devices) => this.onDevicesChange(devices),
+        onWorkspaceActiveChange: (deviceId, active) => {
+          this.updateWorkspaceActivity(deviceId, active)
+        },
         authenticateDevice: this.makeAuthenticateDevice(),
         onRpc: this.rpc
           ? async (channel, args, device) => {

@@ -33,6 +33,8 @@ export interface CloudRelayClientOptions {
   ) => Promise<{ ok: boolean; result?: unknown; message?: string }>
   /** Reports both the desktop credential and cloud installation identities after proof. */
   onDeviceAuthenticated?: (deviceId: string, cloudMobileDeviceId: string | null) => void
+  /** Reports whether the authenticated phone opened or left the remote workspace. */
+  onWorkspaceActiveChange?: (deviceId: string, active: boolean) => void
   /**
    * Device credential service used to authenticate the phone over the relay.
    * Every RPC invoke is bound to the device that authenticated this relay
@@ -589,6 +591,14 @@ export class CloudRelayClient {
     }
     if (record['type'] === 'remote:device:auth') {
       void this.handleDeviceAuth(record)
+      return
+    }
+    if (
+      record['type'] === 'remote:workspace:active' &&
+      typeof record['active'] === 'boolean' &&
+      this.boundDevice
+    ) {
+      this.options.onWorkspaceActiveChange?.(this.boundDevice.deviceId, record['active'])
       return
     }
     if (record['rpc'] !== 'invoke' || typeof record['id'] !== 'number') return
