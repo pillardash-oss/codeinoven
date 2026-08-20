@@ -541,13 +541,15 @@
         /> Refresh
       </button>
     </div>
-    <button
-      class="flex h-8 items-center gap-1.5 rounded-lg border bg-elevated px-2.5 text-xs font-medium hover:bg-overlay"
-      title="Open the skills marketplace"
-      onclick={onOpenMarketplace}
-    >
-      <Search size={13} /> Skills marketplace
-    </button>
+    {#if activeTab === 'all' || activeTab === 'skills'}
+      <button
+        class="flex h-8 items-center gap-1.5 rounded-lg border bg-elevated px-2.5 text-xs font-medium hover:bg-overlay"
+        title="Open the skills marketplace"
+        onclick={onOpenMarketplace}
+      >
+        <Search size={13} /> Skills marketplace
+      </button>
+    {/if}
   </div>
 
   {#if isListTab(activeTab)}

@@ -245,6 +245,7 @@ Write the skill…`
   let title = $derived.by(() => {
     if (isNative) return `Edit ${nativeEntry?.name ?? 'capability'}`
     if (draft.id) return 'Edit utility'
+    if (setupPreset === 'agent') return 'Agent-assisted Utility Setup'
     if (setupPreset) return 'Configure capability'
     return 'Add capability'
   })
@@ -953,48 +954,24 @@ ${instructions}`
             {editorError}
           </p>
         {/if}
-        <div class="rounded-xl bg-raised p-4">
-          <div class="flex items-start gap-3">
-            <span
-              class="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-surface text-primary"
-            >
-              <Sparkles size={16} />
-            </span>
-            <div>
-              <p class="text-sm font-semibold">Describe the utility</p>
-              <p class="mt-1 text-xs leading-relaxed text-muted">
-                A disposable agent researches the configuration, installs it through the built-in
-                CodeInOven API, then reports any credential step. It cannot write secrets.
-              </p>
-            </div>
-          </div>
-        </div>
-        {#if agentSettings}
-          <div class="space-y-1">
-            <p class="text-xs font-medium">Setup model</p>
-            <ModelPicker
-              providers={agentProviders}
-              projectId={agentProjectId}
-              harnessId={agentSettings.harnessId}
-              providerId={agentSettings.providerId}
-              modelId={agentSettings.modelId}
-              thinkingLevel={agentSettings.thinkingLevel}
-              variant="field"
-              side="bottom"
-              disabled={saving || agentReport !== null}
-              onSelect={selectAgentModel}
-              onSelectThinking={selectAgentThinking}
-            />
-          </div>
-        {/if}
-        <label class="block space-y-1 text-xs font-medium">
-          <span>Setup request</span>
-          <textarea
-            class="min-h-36 w-full resize-y rounded-xl border bg-elevated px-3 py-2 text-sm leading-relaxed outline-none focus:border-primary"
+        <div class="space-y-2">
+          <label class="block text-xs font-medium" for="agent-utility-setup-request">
+            Setup request
+          </label>
+          <RichMarkdownEditor
+            id="agent-utility-setup-request"
+            bind:value={agentRequest}
             placeholder="Set up the official Svelte MCP for Codex and Claude Code globally, or create a deployment skill for this project…"
+            ariaLabel="Agent utility setup request"
             disabled={saving || agentReport !== null}
-            bind:value={agentRequest}></textarea>
-        </label>
+            containerClass="rounded-xl border bg-elevated focus-within:border-primary focus-within:ring-1 focus-within:ring-primary"
+            class="min-h-64 max-h-[28rem] w-full resize-y overflow-y-auto px-4 py-3 text-sm leading-6 text-foreground outline-none"
+          />
+          <p class="text-[11px] leading-relaxed text-dimmed">
+            Use Markdown to describe the capability, target harnesses, scope, and any setup
+            constraints. The agent can report credential steps but cannot write secrets.
+          </p>
+        </div>
         {#if agentReport}
           <div class="rounded-xl border bg-elevated p-4">
             <p class="text-sm font-semibold">Installed</p>
@@ -1447,6 +1424,21 @@ ${instructions}`
               {agentReport ? 'Done' : 'Cancel'}
             </button>
             {#if !agentReport}
+              {#if agentSettings}
+                <ModelPicker
+                  providers={agentProviders}
+                  projectId={agentProjectId}
+                  harnessId={agentSettings.harnessId}
+                  providerId={agentSettings.providerId}
+                  modelId={agentSettings.modelId}
+                  thinkingLevel={agentSettings.thinkingLevel}
+                  variant="action"
+                  side="top"
+                  disabled={saving}
+                  onSelect={selectAgentModel}
+                  onSelectThinking={selectAgentThinking}
+                />
+              {/if}
               <button
                 class="flex h-9 items-center gap-1.5 rounded-lg bg-primary px-4 text-xs font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
                 type="button"
