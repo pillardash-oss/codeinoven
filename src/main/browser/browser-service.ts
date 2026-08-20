@@ -3,6 +3,7 @@ import type {
   BrowserConsoleEntry,
   BrowserConsoleLevel,
   BrowserPageState,
+  BrowserPermissionRequest,
   BrowserViewBounds
 } from '../../lib/ipc-contract'
 import { trustedIpcMain as ipcMain } from '../ipc/trusted-ipc-main'
@@ -14,6 +15,8 @@ const MAX_BROWSER_URL_LENGTH = 8192
 const MAX_CONSOLE_ENTRIES = 500
 const TAB_ID_PATTERN = /^browser:[a-zA-Z0-9:_-]{1,240}$/u
 const PROJECT_ID_PATTERN = /^[a-zA-Z0-9:._-]{1,240}$/u
+const PERMISSION_REQUEST_ID_PATTERN = /^[a-f0-9-]{36}$/u
+const PERMISSION_TIMEOUT_MS = 60_000
 
 interface BrowserTab {
   view: WebContentsView
@@ -21,6 +24,12 @@ interface BrowserTab {
   threadId: string
   initialNavigationStarted: boolean
   consoleEntries: BrowserConsoleEntry[]
+}
+
+interface PendingBrowserPermission {
+  request: BrowserPermissionRequest
+  callback: (granted: boolean) => void
+  timer: ReturnType<typeof setTimeout>
 }
 
 function validateTabId(value: unknown): string {
@@ -46,6 +55,35 @@ function validateThreadId(value: unknown): string {
 
 function browserContextKey(projectId: string, threadId: string): string {
   return `${projectId}:${threadId}`
+}
+
+function validatePermissionRequestId(value: unknown): string {
+  if (typeof value !== 'string' || !PERMISSION_REQUEST_ID_PATTERN.test(value)) {
+    throw new TypeError('Browser permission request ID is invalid')
+  }
+  return value
+}
+
+function permissionOrigin(value: string): string | null {
+  try {
+    const parsed = new URL(value)
+    return parsed.protocol === 'http:' || parsed.protocol === 'https:' ? parsed.origin : null
+  } catch {
+    return null
+  }
+}
+
+function permissionKey(origin: string, permission: string, scope = ''): string {
+  return `${origin}\n${permission}\n${scope}`
+}
+
+function permissionGrantKeys(request: BrowserPermissionRequest): string[] {
+  if (request.permission === 'media' && request.mediaTypes.length > 0) {
+    return request.mediaTypes.map((mediaType) =>
+      permissionKey(request.origin, request.permission, mediaType)
+    )
+  }
+  return [permissionKey(request.origin, request.permission)]
 }
 
 function validateBrowserUrl(value: unknown): string {
@@ -91,6 +129,9 @@ export class BrowserService {
   private readonly tabs = new Map<string, BrowserTab>()
   private readonly agentTabIds = new Map<string, string>()
   private readonly configuredSessions = new Set<string>()
+  private readonly permissionGrants = new Map<string, Set<string>>()
+  private readonly pendingPermissions = new Map<string, PendingBrowserPermission>()
+  private readonly permissionSuspendedTabs = new Set<string>()
   private activeTabId: string | null = null
   private consoleSequence = 0
 
@@ -152,6 +193,16 @@ export class BrowserService {
     ipcMain.handle('browser:clearConsole', (_event, rawTabId) => {
       this.requireTab(validateTabId(rawTabId)).consoleEntries = []
     })
+    ipcMain.handle('browser:clearData', async (_event, rawProjectId) => {
+      await this.clearProjectData(validateProjectId(rawProjectId))
+    })
+    ipcMain.handle('browser:resolvePermission', (_event, rawRequestId, rawGranted) => {
+      const requestId = validatePermissionRequestId(rawRequestId)
+      if (typeof rawGranted !== 'boolean') {
+        throw new TypeError('Browser permission response must be a boolean')
+      }
+      this.resolvePermission(requestId, rawGranted)
+    })
     ipcMain.handle('browser:destroy', (_event, rawTabId) => {
       this.destroy(validateTabId(rawTabId))
     })
@@ -172,12 +223,16 @@ export class BrowserService {
 
   dispose(): void {
     this.detachActiveView()
+    for (const requestId of [...this.pendingPermissions.keys()]) {
+      this.resolvePermission(requestId, false, false)
+    }
     for (const tab of this.tabs.values()) {
       if (!tab.view.webContents.isDestroyed()) tab.view.webContents.close()
     }
     this.tabs.clear()
     this.agentTabIds.clear()
     this.configuredSessions.clear()
+    this.permissionGrants.clear()
   }
 
   async executeUtility(
@@ -385,12 +440,107 @@ export class BrowserService {
     const partition = `${BROWSER_PARTITION_PREFIX}${projectId}`
     const browserSession = session.fromPartition(partition)
     if (this.configuredSessions.has(partition)) return browserSession
-    browserSession.setPermissionRequestHandler((_contents, _permission, callback) => {
-      callback(false)
+    const grants = new Set<string>()
+    this.permissionGrants.set(partition, grants)
+    browserSession.setPermissionCheckHandler((_contents, permission, requestingOrigin, details) => {
+      const origin = permissionOrigin(requestingOrigin)
+      if (!origin) return false
+      const mediaType = Reflect.get(details, 'mediaType')
+      return grants.has(
+        permissionKey(origin, permission, typeof mediaType === 'string' ? mediaType : '')
+      )
+    })
+    browserSession.setPermissionRequestHandler((contents, permission, callback, details) => {
+      const tabEntry = [...this.tabs.entries()].find(
+        ([, tab]) => tab.projectId === projectId && tab.view.webContents.id === contents.id
+      )
+      const requestingUrl = Reflect.get(details, 'requestingUrl')
+      const securityOrigin = Reflect.get(details, 'securityOrigin')
+      const origin = permissionOrigin(
+        typeof requestingUrl === 'string' && requestingUrl.length > 0
+          ? requestingUrl
+          : typeof securityOrigin === 'string' && securityOrigin.length > 0
+            ? securityOrigin
+            : contents.getURL()
+      )
+      if (!tabEntry || !origin || this.window.webContents.isDestroyed()) {
+        callback(false)
+        return
+      }
+      const [tabId] = tabEntry
+      const id = crypto.randomUUID()
+      const rawMediaTypes: unknown = Reflect.get(details, 'mediaTypes')
+      const request: BrowserPermissionRequest = {
+        id,
+        tabId,
+        projectId,
+        origin,
+        permission,
+        mediaTypes: Array.isArray(rawMediaTypes)
+          ? rawMediaTypes.filter((value): value is string => typeof value === 'string')
+          : []
+      }
+      const timer = setTimeout(() => this.resolvePermission(id, false), PERMISSION_TIMEOUT_MS)
+      this.pendingPermissions.set(id, { request, callback, timer })
+      this.suspendTabForPermission(tabId)
+      sendToRenderer(this.window.webContents, 'browser:permissionRequested', request)
     })
     browserSession.on('will-download', (event) => event.preventDefault())
     this.configuredSessions.add(partition)
     return browserSession
+  }
+
+  private async clearProjectData(projectId: string): Promise<void> {
+    for (const [requestId, pending] of this.pendingPermissions) {
+      if (pending.request.projectId === projectId) this.resolvePermission(requestId, false, false)
+    }
+    const partition = `${BROWSER_PARTITION_PREFIX}${projectId}`
+    this.permissionGrants.get(partition)?.clear()
+    const browserSession = this.sessionForProject(projectId)
+    await Promise.all([browserSession.clearStorageData(), browserSession.clearCache()])
+    await browserSession.closeAllConnections()
+    for (const tab of this.tabs.values()) {
+      if (tab.projectId === projectId && tab.initialNavigationStarted) tab.view.webContents.reload()
+    }
+  }
+
+  private resolvePermission(requestId: string, granted: boolean, restoreView = true): void {
+    const pending = this.pendingPermissions.get(requestId)
+    if (!pending) return
+    clearTimeout(pending.timer)
+    this.pendingPermissions.delete(requestId)
+    if (granted) {
+      const partition = `${BROWSER_PARTITION_PREFIX}${pending.request.projectId}`
+      const grants = this.permissionGrants.get(partition)
+      for (const key of permissionGrantKeys(pending.request)) grants?.add(key)
+    }
+    pending.callback(granted)
+    if (!this.window.webContents.isDestroyed()) {
+      sendToRenderer(this.window.webContents, 'browser:permissionResolved', requestId)
+    }
+    if (restoreView) this.restoreTabAfterPermission(pending.request.tabId)
+  }
+
+  private suspendTabForPermission(tabId: string): void {
+    if (this.activeTabId !== tabId || this.permissionSuspendedTabs.has(tabId)) return
+    const tab = this.tabs.get(tabId)
+    if (!tab) return
+    this.window.contentView.removeChildView(tab.view)
+    this.permissionSuspendedTabs.add(tabId)
+  }
+
+  private restoreTabAfterPermission(tabId: string): void {
+    if (
+      this.activeTabId !== tabId ||
+      !this.permissionSuspendedTabs.has(tabId) ||
+      [...this.pendingPermissions.values()].some((pending) => pending.request.tabId === tabId)
+    ) {
+      return
+    }
+    const tab = this.tabs.get(tabId)
+    if (!tab) return
+    this.window.contentView.addChildView(tab.view)
+    this.permissionSuspendedTabs.delete(tabId)
   }
 
   private load(tabId: string, url: string): void {
@@ -459,13 +609,19 @@ export class BrowserService {
   private detachActiveView(): void {
     if (!this.activeTabId) return
     const tab = this.tabs.get(this.activeTabId)
-    if (tab) this.window.contentView.removeChildView(tab.view)
+    if (tab && !this.permissionSuspendedTabs.has(this.activeTabId)) {
+      this.window.contentView.removeChildView(tab.view)
+    }
+    this.permissionSuspendedTabs.delete(this.activeTabId)
     this.activeTabId = null
   }
 
   private destroy(tabId: string): void {
     const tab = this.tabs.get(tabId)
     if (!tab) return
+    for (const [requestId, pending] of this.pendingPermissions) {
+      if (pending.request.tabId === tabId) this.resolvePermission(requestId, false, false)
+    }
     if (this.activeTabId === tabId) this.detachActiveView()
     if (!tab.view.webContents.isDestroyed()) tab.view.webContents.close()
     this.tabs.delete(tabId)

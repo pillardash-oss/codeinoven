@@ -204,6 +204,16 @@ export interface BrowserOpenRequestContext {
   reveal: boolean
 }
 
+/** A permission requested by a page inside the project-scoped browser session. */
+export interface BrowserPermissionRequest {
+  id: string
+  tabId: string
+  projectId: string
+  origin: string
+  permission: string
+  mediaTypes: string[]
+}
+
 export type BrowserConsoleLevel = 'debug' | 'info' | 'warning' | 'error'
 
 /** A console or runtime diagnostic emitted by one app-scoped browser tab. */
@@ -1380,6 +1390,8 @@ export interface IpcInvokeContract {
   'browser:stop': Contract<[tabId: string], void>
   'browser:getConsole': Contract<[tabId: string], BrowserConsoleEntry[]>
   'browser:clearConsole': Contract<[tabId: string], void>
+  'browser:clearData': Contract<[projectId: string], void>
+  'browser:resolvePermission': Contract<[requestId: string, granted: boolean], void>
   'browser:destroy': Contract<[tabId: string], void>
   'browser:destroyThread': Contract<[projectId: string, threadId: string], void>
   'browser:destroyProject': Contract<[projectId: string], void>
@@ -1875,6 +1887,8 @@ export interface IpcEventContract {
   'browser:state': [state: BrowserPageState]
   'browser:console': [entry: BrowserConsoleEntry]
   'browser:openRequested': [url: string, context?: BrowserOpenRequestContext]
+  'browser:permissionRequested': [request: BrowserPermissionRequest]
+  'browser:permissionResolved': [requestId: string]
   /** Remote-mode status changes from the main process. */
   'remote:status': [status: RemoteModeStatus]
   /**

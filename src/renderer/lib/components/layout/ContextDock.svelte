@@ -28,6 +28,7 @@
      */
     menu?: Snippet
     onSelect: () => void
+    onContextMenu?: (event: MouseEvent) => void
   }
 </script>
 
@@ -84,6 +85,7 @@
           aria-current={item.active ? 'true' : undefined}
           title={item.label}
           onclick={item.onSelect}
+          oncontextmenu={item.onContextMenu}
         >
           <span
             class="absolute left-0 top-1.5 bottom-1.5 w-0.5 rounded-full bg-primary transition-opacity duration-150 {item.active

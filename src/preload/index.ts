@@ -356,6 +356,8 @@ const INVOKE_CHANNELS = [
   'browser:stop',
   'browser:getConsole',
   'browser:clearConsole',
+  'browser:clearData',
+  'browser:resolvePermission',
   'browser:destroy',
   'browser:destroyThread',
   'browser:destroyProject',
@@ -476,6 +478,8 @@ const EVENT_CHANNELS = [
   'browser:state',
   'browser:console',
   'browser:openRequested',
+  'browser:permissionRequested',
+  'browser:permissionResolved',
   'remote:status',
   'remote:stepUpPending'
 ] as const

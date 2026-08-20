@@ -25,6 +25,7 @@
     BrainCircuit,
     Bug,
     Cloud,
+    Cookie,
     FileDiff,
     FolderTree,
     Globe2,
@@ -32,6 +33,7 @@
     Info,
     Minimize2,
     MessageCircleDashed,
+    ShieldQuestion,
     SquareTerminal,
     StickyNote
   } from '@lucide/svelte'
@@ -136,6 +138,7 @@
     Thread,
     ThreadSearchResult
   } from '$shared/types'
+  import type { BrowserPermissionRequest } from '$shared/ipc-contract'
 
   interface Props {
     /** Which sidebar the shell shows — the main content stays mounted across modes. */
@@ -808,6 +811,64 @@
 
   /** Whether the message-history jump menu (first item on the context dock) is open. */
   let showHistoryMenu = $state(false)
+  let showBrowserMenu = $state(false)
+  let showClearBrowserDataConfirm = $state(false)
+  let browserDataClearProjectId = $state<string | null>(null)
+  let browserDataClearing = $state(false)
+  let browserPermissionRequests = $state<BrowserPermissionRequest[]>([])
+  let activeBrowserPermission = $derived(browserPermissionRequests[0] ?? null)
+
+  function permissionLabel(request: BrowserPermissionRequest): string {
+    if (request.permission === 'media' && request.mediaTypes.length > 0) {
+      return request.mediaTypes
+        .map((mediaType) =>
+          mediaType === 'video' ? 'camera' : mediaType === 'audio' ? 'microphone' : mediaType
+        )
+        .join(' and ')
+    }
+    return request.permission.replaceAll('-', ' ')
+  }
+
+  function openBrowserContextMenu(event: MouseEvent): void {
+    event.preventDefault()
+    showBrowserMenu = true
+  }
+
+  function requestBrowserDataClear(): void {
+    if (!selectedThread) return
+    showBrowserMenu = false
+    browserDataClearProjectId = selectedThread.projectId
+    showClearBrowserDataConfirm = true
+  }
+
+  async function clearBrowserData(): Promise<void> {
+    const projectId = browserDataClearProjectId
+    if (!projectId || browserDataClearing) return
+    browserDataClearing = true
+    try {
+      await invoke('browser:clearData', projectId)
+      browserPermissionRequests = browserPermissionRequests.filter(
+        (request) => request.projectId !== projectId
+      )
+      showClearBrowserDataConfirm = false
+      browserDataClearProjectId = null
+    } catch (error) {
+      reportError(error, 'Browser cookies and site data could not be cleared.')
+    } finally {
+      browserDataClearing = false
+    }
+  }
+
+  function resolveBrowserPermission(granted: boolean): void {
+    const request = activeBrowserPermission
+    if (!request) return
+    browserPermissionRequests = browserPermissionRequests.filter(
+      (candidate) => candidate.id !== request.id
+    )
+    void invoke('browser:resolvePermission', request.id, granted).catch((error: unknown) => {
+      reportError(error, 'The browser permission response could not be applied.')
+    })
+  }
 
   function jumpToHistoryMessage(id: string): void {
     showHistoryMenu = false
@@ -983,7 +1044,12 @@
         label: dockKindActive('browser') ? `Hide ${name}` : `Show ${name}`,
         icon: Globe2,
         active: dockKindActive('browser'),
-        onSelect: () => toggleDockPanel('browser', focusBrowser)
+        menu: showBrowserMenu ? browserMenu : undefined,
+        onSelect: () => {
+          showBrowserMenu = false
+          toggleDockPanel('browser', focusBrowser)
+        },
+        onContextMenu: openBrowserContextMenu
       })
     }
 
@@ -1433,6 +1499,21 @@
         return
       }
       if (contextSidebarState.openBrowser(url) === null) void invoke('shell:openExternal', url)
+    })
+  })
+
+  $effect(() => {
+    return subscribe('browser:permissionRequested', (request) => {
+      if (browserPermissionRequests.some((candidate) => candidate.id === request.id)) return
+      browserPermissionRequests = [...browserPermissionRequests, request]
+    })
+  })
+
+  $effect(() => {
+    return subscribe('browser:permissionResolved', (requestId) => {
+      browserPermissionRequests = browserPermissionRequests.filter(
+        (request) => request.id !== requestId
+      )
     })
   })
 
@@ -3469,6 +3550,8 @@
                   <div class="flex h-full items-center justify-center text-xs text-muted">
                     Browser is open in fullscreen
                   </div>
+                {:else if showClearBrowserDataConfirm && browserDataClearProjectId === activeContextTab.projectId}
+                  <div class="h-full bg-app" aria-hidden="true"></div>
                 {:else}
                   <BrowserPanel tab={activeContextTab} />
                 {/if}
@@ -3644,6 +3727,127 @@
     </div>
   </div>
 {/snippet}
+
+{#snippet browserMenu()}
+  <button
+    class="fixed inset-0 z-30 cursor-default"
+    aria-label="Close browser menu"
+    title="Close browser menu"
+    onclick={() => (showBrowserMenu = false)}
+    oncontextmenu={(event: MouseEvent) => {
+      event.preventDefault()
+      showBrowserMenu = false
+    }}
+  ></button>
+  <div
+    class="absolute right-full top-0 z-40 mr-2 w-56 overflow-hidden rounded-lg border bg-surface p-1 shadow-lg"
+    role="menu"
+    aria-label="Browser data"
+  >
+    <button
+      type="button"
+      class="flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-xs text-danger transition-colors hover:bg-danger/10"
+      role="menuitem"
+      title="Clear browser cookies and site data"
+      onclick={requestBrowserDataClear}
+    >
+      <Cookie size={14} />
+      <span>Clear cookies and site data</span>
+    </button>
+  </div>
+{/snippet}
+
+<Modal
+  open={showClearBrowserDataConfirm}
+  title="Clear browser data?"
+  onClose={() => {
+    if (!browserDataClearing) {
+      showClearBrowserDataConfirm = false
+      browserDataClearProjectId = null
+    }
+  }}
+  closeOnBackdrop={!browserDataClearing}
+>
+  <p class="text-sm leading-relaxed text-muted">
+    This clears cookies, local storage, service workers, caches, and other site data for
+    <span class="font-medium text-foreground"
+      >{projects.find((project) => project.id === browserDataClearProjectId)?.name ??
+        'this project'}</span
+    >. Browser tabs will reload and signed-in sessions may end.
+  </p>
+
+  {#snippet footer()}
+    <button
+      type="button"
+      class="rounded-lg px-3 py-2 text-sm text-muted transition-colors hover:bg-elevated disabled:opacity-50"
+      title="Keep browser data"
+      disabled={browserDataClearing}
+      onclick={() => {
+        showClearBrowserDataConfirm = false
+        browserDataClearProjectId = null
+      }}
+    >
+      Cancel
+    </button>
+    <button
+      type="button"
+      class="rounded-lg bg-danger px-4 py-2 text-sm font-medium text-on-danger transition-colors hover:bg-danger-hover disabled:opacity-50"
+      title="Clear browser cookies and site data"
+      disabled={browserDataClearing}
+      onclick={() => void clearBrowserData()}
+    >
+      {browserDataClearing ? 'Clearing…' : 'Clear data'}
+    </button>
+  {/snippet}
+</Modal>
+
+<Modal
+  open={activeBrowserPermission !== null}
+  title="Allow browser permission?"
+  onClose={() => resolveBrowserPermission(false)}
+  closeOnBackdrop={false}
+>
+  {#if activeBrowserPermission}
+    <div class="flex items-start gap-3">
+      <div
+        class="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-raised text-muted"
+      >
+        <ShieldQuestion size={16} />
+      </div>
+      <p class="min-w-0 text-sm leading-relaxed text-muted">
+        <span class="break-all font-mono text-xs text-foreground"
+          >{activeBrowserPermission.origin}</span
+        >
+        wants access to
+        <span class="font-medium text-foreground">{permissionLabel(activeBrowserPermission)}</span>
+        in the browser for
+        <span class="font-medium text-foreground"
+          >{projects.find((project) => project.id === activeBrowserPermission?.projectId)?.name ??
+            'this project'}</span
+        >.
+      </p>
+    </div>
+  {/if}
+
+  {#snippet footer()}
+    <button
+      type="button"
+      class="rounded-lg px-3 py-2 text-sm text-muted transition-colors hover:bg-elevated"
+      title="Deny browser permission"
+      onclick={() => resolveBrowserPermission(false)}
+    >
+      Deny
+    </button>
+    <button
+      type="button"
+      class="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-on-primary transition-colors hover:bg-primary-hover"
+      title="Allow browser permission for this app session"
+      onclick={() => resolveBrowserPermission(true)}
+    >
+      Allow
+    </button>
+  {/snippet}
+</Modal>
 
 <!-- Remove Project Confirmation -->
 <Modal open={showRemoveModal} title="Remove Project" onClose={() => (showRemoveModal = false)}>
