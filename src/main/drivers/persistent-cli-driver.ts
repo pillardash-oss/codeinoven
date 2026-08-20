@@ -155,6 +155,11 @@ export abstract class PersistentCliDriver implements HarnessDriver {
   private activeProcessSettlementResolvers = new Map<string, () => void>()
   /** Prevent an intermediate idle event while an emulated steer replaces the active process. */
   private steeringSessions = new Set<string>()
+  /** Public user payload retained when a stateless steer needs richer transport context. */
+  private outboundMessageOverrides = new Map<
+    string,
+    Pick<SendPromptOptions, 'text' | 'attachments'>
+  >()
   private utilityRuntimes = new Map<string, PreparedUtilityRuntime>()
   private sessionCache = new Map<string, PersistentCliSession>()
   private deletedSessions = new Set<string>()
@@ -513,18 +518,36 @@ export abstract class PersistentCliDriver implements HarnessDriver {
     this.steeringSessions.add(session.id)
     active.kill()
     await settlement
+    const usesNativeHistory = this.capabilities.nativeResume !== false
+    const transportText = usesNativeHistory
+      ? options.text
+      : [
+          'Continue the active task using the steering update below. CodeInOven restarted this stateless harness turn to deliver it.',
+          `Active user request:\n${previous.text}`,
+          `User steering update:\n${options.text}`
+        ].join('\n\n')
+    const transportAttachments = usesNativeHistory
+      ? options.attachments
+      : [...previous.attachments, ...options.attachments]
+    if (!usesNativeHistory && options.userMessageId) {
+      this.outboundMessageOverrides.set(options.userMessageId, {
+        text: options.text,
+        attachments: options.attachments
+      })
+    }
     try {
       await this.sendPrompt(projectPath, {
         ...previous,
         sessionId: session.id,
-        text: options.text,
-        attachments: options.attachments,
+        text: transportText,
+        attachments: transportAttachments,
         userMessageId: options.userMessageId
       })
     } catch (error) {
       this.emit({ type: 'session.idle', sessionId: session.id })
       throw error
     } finally {
+      if (options.userMessageId) this.outboundMessageOverrides.delete(options.userMessageId)
       this.steeringSessions.delete(session.id)
     }
   }
@@ -640,6 +663,7 @@ export abstract class PersistentCliDriver implements HarnessDriver {
     this.activeProcessSettlements.clear()
     this.activeProcessSettlementResolvers.clear()
     this.steeringSessions.clear()
+    this.outboundMessageOverrides.clear()
     for (const runtime of this.utilityRuntimes.values()) {
       void runtime.cleanup().catch((error) => {
         Logger.error(`${this.name} utility runtime cleanup failed:`, error)
@@ -735,14 +759,16 @@ export abstract class PersistentCliDriver implements HarnessDriver {
     opts: Pick<SendPromptOptions, 'text' | 'attachments' | 'userMessageId'>
   ): void {
     const userMessageId = opts.userMessageId ?? generateId()
+    const publicPayload = this.outboundMessageOverrides.get(userMessageId) ?? opts
+    this.outboundMessageOverrides.delete(userMessageId)
     const userParts: AgentPart[] = [
       {
         type: 'text',
         id: `${userMessageId}:text`,
         messageID: userMessageId,
-        text: opts.text
+        text: publicPayload.text
       },
-      ...opts.attachments.map((attachment, index): AgentPart => ({
+      ...publicPayload.attachments.map((attachment, index): AgentPart => ({
         type: 'file',
         id: `${userMessageId}:file:${index}`,
         messageID: userMessageId,

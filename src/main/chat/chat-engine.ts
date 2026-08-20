@@ -3238,7 +3238,10 @@ export class ChatEngine {
     }
     // Record whether the harness natively holds the conversation so the recap
     // path can skip a second provider history load.
-    this.sessionNativeHistory.set(sessionId, storedSessionMessages.length > 0)
+    this.sessionNativeHistory.set(
+      sessionId,
+      driver.capabilities.nativeResume !== false && storedSessionMessages.length > 0
+    )
 
     // A reused native session is replayed in full under whichever model the
     // next turn selects. When that model changed and its context window is much
