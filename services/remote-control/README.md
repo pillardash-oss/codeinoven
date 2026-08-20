@@ -151,6 +151,11 @@ your Coturn deployment. The service derives short-lived HMAC-SHA1 TURN REST cred
 authenticated desktop and phone sockets. If TURN is not configured, direct/STUN WebRTC is still
 attempted and the existing cloud WebSocket relay remains the guaranteed route.
 
+The repository includes a standalone Coolify-ready Coturn deployment in
+`services/turn/compose.coolify.yml`. Follow `services/turn/README.md` for DNS, raw port, firewall,
+shared-secret, and rollout requirements. TURN must be deployed as a raw UDP/TCP service rather than
+behind the PWA's HTTP reverse proxy.
+
 The public relay is the guaranteed cross-platform route. When a desktop reports a LAN endpoint,
 the PWA also tries the authenticated LAN route; direct LAN requires the desktop certificate to be
 trusted on that phone because standard mobile browsers reject self-signed certificates. If browser

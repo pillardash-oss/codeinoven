@@ -1,0 +1,22 @@
+services:
+  turn:
+    build:
+      context: ../..
+      dockerfile: services/turn/Dockerfile
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      TURN_SHARED_SECRET: ${TURN_SHARED_SECRET:?set TURN_SHARED_SECRET}
+      TURN_REALM: ${TURN_REALM:-turn.codeinoven.com}
+      TURN_EXTERNAL_IP: ${TURN_EXTERNAL_IP:-auto}
+      TURN_RELAY_IP: ${TURN_RELAY_IP:-}
+      TURN_PORT: ${TURN_PORT:-3478}
+      TURN_MIN_PORT: ${TURN_MIN_PORT:-49160}
+      TURN_MAX_PORT: ${TURN_MAX_PORT:-49200}
+    read_only: true
+    tmpfs:
+      - /tmp:size=1m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
