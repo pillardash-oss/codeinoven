@@ -1029,6 +1029,8 @@ export class MemoryService {
    */
   async evaluateMemoryExtraction(input: {
     userMessage: string
+    /** User-authored material used by the deterministic gate when context is also supplied. */
+    candidateUserMessage?: string
     assistantResponse: string
     projectId?: string
     threadId?: string
@@ -1047,7 +1049,7 @@ export class MemoryService {
       }
     }
     const candidates = detectMemoryCandidates({
-      userMessage: input.userMessage,
+      userMessage: input.candidateUserMessage ?? input.userMessage,
       assistantResponse: input.assistantResponse,
       existingEntries: current.entries,
       projectId: input.projectId,

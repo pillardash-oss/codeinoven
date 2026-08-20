@@ -232,6 +232,8 @@ const QUESTION_TOOL_INSTRUCTION = [
 
 const MEMORY_RESPONSE_BOUNDARY_INSTRUCTION = [
   'A request to remember a preference, rule, or fact does not authorize a project-file change.',
+  'Never call harness-native memory tools such as add_memory, edit_memory, read_memory, or delete_memory; CodeInOven exclusively owns persistent memory and its approval workflow.',
+  'Do not attempt to create, simulate, or announce a memory proposal during the user-facing turn. CodeInOven evaluates the completed turn separately and requests approval outside the conversation when warranted.',
   'Do not create or modify AGENTS.md, CLAUDE.md, README files, instruction files, configuration, or any other project file solely to remember information.',
   'Only modify a file when the user separately and explicitly asks you to edit that file or perform implementation work.',
   'Keep the user-facing response focused exclusively on the current request and its outcome.',
@@ -16561,6 +16563,7 @@ export class ChatEngine {
     // `generateMemoryProposal` (each structured/fallback attempt).
     const extraction = await this.memoryService.evaluateMemoryExtraction({
       userMessage: composeMemoryUserInput(userMessage, references),
+      candidateUserMessage: composeMemoryCandidateInput(userMessage, references),
       assistantResponse,
       projectId,
       threadId
@@ -16694,6 +16697,7 @@ export class ChatEngine {
             'A request to implement, edit, fix, review, investigate, or choose something for the current task is not memory, even when it names a project, repository, feature, file, platform, or preferred implementation.',
             'Concrete artifact instructions such as "use the icon we created for this shortcut instead of a generic icon" are current-task requirements and must return propose false.',
             'Set propose to true only when the message establishes information expected to govern future turns after the current task is complete: a recurring standing preference, reusable project rule, identity fact, or lasting behavioral instruction.',
+            'Treat user-authored comments on referenced responses as primary evidence. A comment that addresses the current model or harness and uses recurring language such as always, never, or "I do not like this" to prescribe future response behavior is durable model memory, even though the referenced response came from the current task.',
             'A complaint or correction can still be durable when it includes an explicit recurring rule, for example "I have told you before: never use outlines." Do not reject a durable rule merely because the user is frustrated.',
             'Scope words such as global, project, thread, chat, repository, or codebase never make a one-off request durable. If durability is ambiguous, set propose to false.',
             'When propose is false, return empty title and content strings. When true, preserve the user intent exactly without inventing details.',
@@ -17349,13 +17353,28 @@ function assistantMemoryDecisionContext(message: AgentMessage): string {
  */
 function composeMemoryUserInput(userMessage: string, references: PromptReference[]): string {
   if (references.length === 0) return userMessage
-  const selections = references
-    .map((reference, index) => {
-      const comment = reference.comment ? `\nUser comment: ${reference.comment}` : ''
-      return `<selection ${index + 1}>\n${reference.text}${comment}\n</selection>`
-    })
+  const userComments = references
+    .map((reference, index) =>
+      reference.comment ? `Selection ${index + 1} comment:\n${reference.comment}` : ''
+    )
+    .filter(Boolean)
     .join('\n\n')
-  return `Referenced response selections:\n${selections}\n\nUser message:\n${userMessage}`
+  const selections = references
+    .map((reference, index) => `<selection ${index + 1}>\n${reference.text}\n</selection>`)
+    .join('\n\n')
+  return [
+    `User message:\n${userMessage}`,
+    userComments ? `User-authored selection comments:\n${userComments}` : '',
+    `Referenced assistant response selections (context only):\n${selections}`
+  ]
+    .filter(Boolean)
+    .join('\n\n')
+}
+
+/** Keep deterministic gating limited to user-authored text, never selected assistant prose. */
+function composeMemoryCandidateInput(userMessage: string, references: PromptReference[]): string {
+  const comments = references.map((reference) => reference.comment?.trim() ?? '').filter(Boolean)
+  return [userMessage.trim(), ...comments].filter(Boolean).join('\n\n')
 }
 
 function parseStructuredMemoryProposal(
