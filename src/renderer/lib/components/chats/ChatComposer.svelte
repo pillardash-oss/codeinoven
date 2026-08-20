@@ -1466,6 +1466,11 @@
         selectMention(mentionEntries[mentionIndex])
         return
       }
+      if (e.key === 'Enter' && mentionEntries[mentionIndex]) {
+        e.preventDefault()
+        selectMention(mentionEntries[mentionIndex])
+        return
+      }
       if (e.key === 'Escape') {
         e.preventDefault()
         mentionOpen = false
