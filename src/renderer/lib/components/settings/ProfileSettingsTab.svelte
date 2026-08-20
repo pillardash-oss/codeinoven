@@ -24,7 +24,7 @@
 
   type ThinkingFilter = 'all' | ThinkingLevel | 'unknown'
   type TaskFilter = 'all' | TurnOutcomeTaskType
-  type RangePreset = 'today' | '7d' | '30d' | 'year' | 'custom'
+  type RangePreset = 'today' | 'yesterday' | '7d' | '30d' | 'year' | 'custom'
 
   interface CalendarDay {
     date: string
@@ -41,17 +41,19 @@
     id: Exclude<RangePreset, 'custom'>
     label: string
     days: number
+    endOffsetDays?: number
   }> = [
     { id: 'today', label: 'Today', days: 1 },
+    { id: 'yesterday', label: 'Yesterday', days: 1, endOffsetDays: 0 },
     { id: '7d', label: '7 days', days: 7 },
     { id: '30d', label: '30 days', days: 30 },
     { id: 'year', label: '12 months', days: 365 }
   ]
 
-  function analyticsRange(days: number): LocalProfileAnalyticsRange {
+  function analyticsRange(days: number, endOffsetDays = 1): LocalProfileAnalyticsRange {
     const end = new SvelteDate()
     end.setHours(0, 0, 0, 0)
-    end.setDate(end.getDate() + 1)
+    end.setDate(end.getDate() + endOffsetDays)
     const start = new SvelteDate(end)
     start.setDate(end.getDate() - days)
     return { startAt: start.getTime(), endAt: end.getTime() }
@@ -439,9 +441,13 @@
     }
   }
 
-  function selectRangePreset(preset: Exclude<RangePreset, 'custom'>, days: number): void {
+  function selectRangePreset(
+    preset: Exclude<RangePreset, 'custom'>,
+    days: number,
+    endOffsetDays?: number
+  ): void {
     rangePreset = preset
-    selectedRange = analyticsRange(days)
+    selectedRange = analyticsRange(days, endOffsetDays)
     customStartDate = dateInputValue(selectedRange.startAt)
     customEndDate = dateInputValue(selectedRange.endAt - 1)
     void loadUsage(selectedRange)
@@ -727,7 +733,7 @@
               : 'text-muted hover:bg-elevated hover:text-foreground'}"
             aria-pressed={rangePreset === preset.id}
             disabled={loading}
-            onclick={() => selectRangePreset(preset.id, preset.days)}
+            onclick={() => selectRangePreset(preset.id, preset.days, preset.endOffsetDays)}
           >
             {preset.label}
           </button>
