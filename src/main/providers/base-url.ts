@@ -131,6 +131,7 @@ export function validateBaseUrl(raw: string, options: BaseUrlValidationOptions):
 
 /** Whether the given environment is a development environment. */
 export function isDevelopmentEnvironment(env: NodeJS.ProcessEnv = process.env): boolean {
+  if (env['VITEST']) return true
   return env['NODE_ENV'] !== 'production'
 }
 

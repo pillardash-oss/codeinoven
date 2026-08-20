@@ -1,21 +1,31 @@
 <script lang="ts">
   import Modal from '$lib/components/ui/Modal.svelte'
+  import ProjectIdentity from '$lib/components/shared/ProjectIdentity.svelte'
   import StatusBadge from '$lib/components/shared/StatusBadge.svelte'
   import type {
     CloseConfirmationPayload,
     CloseConfirmationProject,
     CloseConfirmationThread
   } from '$shared/ipc-contract'
+  import type { Project } from '$shared/types'
+
+  type CloseConfirmationFileProject = Pick<Project, 'id' | 'name' | 'path' | 'source' | 'host'>
+
+  interface VisibleFileGroup {
+    project: CloseConfirmationFileProject
+    files: CloseConfirmationPayload['files']
+  }
 
   interface Props {
     payload: CloseConfirmationPayload | null
+    projects: readonly Project[]
     onDismiss: () => void
     onConfirm: () => void | Promise<void>
     /** Save every unsaved file, then close the app. */
     onConfirmSave?: () => void | Promise<void>
   }
 
-  let { payload, onDismiss, onConfirm, onConfirmSave = undefined }: Props = $props()
+  let { payload, projects, onDismiss, onConfirm, onConfirmSave = undefined }: Props = $props()
 
   const VISIBLE_PROJECTS = 2
   const VISIBLE_THREADS_PER_PROJECT = 3
@@ -26,6 +36,26 @@
     Math.max(0, (payload?.projects.length ?? 0) - VISIBLE_PROJECTS)
   )
   let visibleFiles = $derived((payload?.files ?? []).slice(0, VISIBLE_FILES))
+  let visibleFileGroups = $derived.by(() => {
+    const groups: VisibleFileGroup[] = []
+
+    for (const file of visibleFiles) {
+      const project = projects.find((candidate) => candidate.id === file.projectId) ?? {
+        id: file.projectId,
+        name: `Project ${file.projectId}`,
+        path: '',
+        source: 'local' as const
+      }
+      const group = groups.find((candidate) => candidate.project.id === file.projectId)
+      if (group) {
+        group.files.push(file)
+      } else {
+        groups.push({ project, files: [file] })
+      }
+    }
+
+    return groups
+  })
   let remainingFileCount = $derived(Math.max(0, (payload?.files.length ?? 0) - VISIBLE_FILES))
   let hasFiles = $derived((payload?.files.length ?? 0) > 0)
   let hasThreads = $derived((payload?.projects.length ?? 0) > 0)
@@ -81,11 +111,24 @@
       {#if hasFiles}
         <div class="space-y-2">
           <p class="text-sm text-muted">These files have unsaved changes:</p>
-          <ul class="space-y-0.5">
-            {#each visibleFiles as file (file.path)}
-              <li class="flex items-center gap-1.5 text-xs text-muted">
-                <span class="h-1.5 w-1.5 shrink-0 rounded-full bg-accent"></span>
-                <span class="min-w-0 truncate font-mono" title={file.path}>{file.path}</span>
+          <ul class="space-y-2.5">
+            {#each visibleFileGroups as group (group.project.id)}
+              <li class="space-y-1">
+                <ProjectIdentity
+                  project={group.project}
+                  class="pl-3"
+                  nameClass="text-xs font-medium text-foreground"
+                  locationClass="text-[10px] text-dimmed"
+                  showLocation
+                />
+                <ul class="space-y-0.5 border-l border-border pl-3">
+                  {#each group.files as file (`${file.projectId}:${file.path}`)}
+                    <li class="flex items-center gap-1.5 text-xs text-muted">
+                      <span class="h-1.5 w-1.5 shrink-0 rounded-full bg-accent"></span>
+                      <span class="min-w-0 truncate font-mono" title={file.path}>{file.path}</span>
+                    </li>
+                  {/each}
+                </ul>
               </li>
             {/each}
             {#if remainingFileCount > 0}

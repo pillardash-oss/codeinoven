@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { ChevronDown, ChevronRight, Eye, FileDiff, RotateCcw } from '@lucide/svelte'
+  import { ChevronDown, ChevronRight, Eye, FileDiff, RotateCcw, RotateCw } from '@lucide/svelte'
   import FileTypeIcon from '../files/FileTypeIcon.svelte'
   import HoverDiffPopover from '../files/HoverDiffPopover.svelte'
   import type { TurnCheckpointChangeSummary, TurnCheckpointSummary } from '$shared/types'
@@ -14,14 +14,24 @@
     onOpenFile: (path: string) => void
     onReview: () => void
     onUndo: () => Promise<void>
+    onRedo: () => Promise<void>
   }
 
-  let { checkpoint, projectId, threadId, onRevealFile, onOpenFile, onReview, onUndo }: Props =
-    $props()
+  let {
+    checkpoint,
+    projectId,
+    threadId,
+    onRevealFile,
+    onOpenFile,
+    onReview,
+    onUndo,
+    onRedo
+  }: Props = $props()
 
   let open = $state(true)
   let showAll = $state(false)
   let undoing = $state(false)
+  let redoing = $state(false)
 
   const additionsTotal = $derived(
     checkpoint.changes.reduce((total, change) => total + (change.additions ?? 0), 0)
@@ -39,6 +49,7 @@
       (checkpoint.changes.length > 0 && remainingChanges.length === 0)
   )
   const canUndo = $derived(checkpoint.changes.length > 0 && !rolledBack)
+  const canRedo = $derived(checkpoint.changes.length > 0 && rolledBack)
 
   function statusLabel(kind: TurnCheckpointChangeSummary['kind']): string {
     if (kind === 'created') return 'A'
@@ -61,6 +72,16 @@
       await onUndo()
     } finally {
       undoing = false
+    }
+  }
+
+  async function redo(): Promise<void> {
+    if (redoing || !canRedo) return
+    redoing = true
+    try {
+      await onRedo()
+    } finally {
+      redoing = false
     }
   }
 </script>
@@ -106,15 +127,22 @@
         type="button"
         class="flex h-8 items-center gap-1.5 rounded-lg px-2.5 text-xs font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
         title={rolledBack
-          ? 'This turn has already been undone'
+          ? canRedo
+            ? 'Redo this turn’s file changes'
+            : 'This turn did not change any files'
           : canUndo
             ? 'Undo this turn’s file changes'
             : 'This turn did not change any files'}
-        disabled={undoing || !canUndo}
-        onclick={() => void undo()}
+        disabled={undoing || redoing || (rolledBack ? !canRedo : !canUndo)}
+        onclick={() => void (rolledBack ? redo() : undo())}
       >
-        <RotateCcw size={13} class={undoing ? 'animate-spin' : ''} />
-        {undoing ? 'Undoing…' : rolledBack ? 'Undone' : 'Undo'}
+        {#if rolledBack}
+          <RotateCw size={13} class={redoing ? 'animate-spin' : ''} />
+          {redoing ? 'Redoing…' : 'Redo'}
+        {:else}
+          <RotateCcw size={13} class={undoing ? 'animate-spin' : ''} />
+          {undoing ? 'Undoing…' : 'Undo'}
+        {/if}
       </button>
       <button
         type="button"

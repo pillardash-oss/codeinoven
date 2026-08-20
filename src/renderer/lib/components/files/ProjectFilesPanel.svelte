@@ -12,15 +12,21 @@
     FolderTree,
     FolderOpen,
     Loader2,
-    Save,
-    X
+    Minimize2,
+    Save
   } from '@lucide/svelte'
   import { invoke, subscribe } from '$lib/ipc.svelte'
+  import ConflictResolutionView from './ConflictResolutionView.svelte'
+  import type {
+    ConflictResolutionController,
+    ConflictResolutionStatus
+  } from './conflict-resolution'
   import { motionDuration } from '$lib/motion'
   import { isAudioMime, isImageMime, isSvgMime, isVideoMime, mimeFromPath } from '$lib/mime'
   import { projectFilePreviewUrl } from '$lib/file-preview'
   import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
   import { projectFilesWorkspace } from '$lib/stores/project-files.svelte'
+  import { gitState } from '$lib/stores/git.svelte'
   import { findNavState } from '$lib/stores/find-nav.svelte'
   import { trafficLightInsetStyle } from '$lib/stores/traffic-light.svelte'
   import MarkdownView from '../markdown/MarkdownView.svelte'
@@ -75,6 +81,17 @@
       : null
   )
   let deletedAtCheckpoint = $derived(checkpointDiff?.kind === 'deleted')
+  /** Paths still carrying merge/rebase conflicts, straight from the git store. */
+  let conflictedPaths = $derived([...gitState.conflicted])
+  /**
+   * Whether the "Conflicts" file-tree filter is active. Mirrors the git panel's
+   * Resolve flow: resolving from Git routes here with the filter on, and the
+   * explorer's Conflicts button toggles it directly.
+   */
+  let conflictsOnly = $derived(gitState.conflictsMode)
+  let activePathIsConflicted = $derived(
+    activeTab?.origin === 'working' && conflictedPaths.includes(activeTab.path)
+  )
   let markdown = $derived(activeTab ? /\.(?:md|mdown|markdown)$/iu.test(activeTab.path) : false)
   let pdf = $derived(activeTab ? /\.pdf$/iu.test(activeTab.path) : false)
   let image = $derived(activeTab ? isImageMime(mimeFromPath(activeTab.path)) : false)
@@ -132,6 +149,13 @@
   let showLineNumbers = $state(true)
   const wrapLines = $derived(wrapTextState.wrapped)
   let fullscreenOpen = $state(false)
+  let handledFullscreenRequest = $state(0)
+  let conflictController = $state<ConflictResolutionController | null>(null)
+  let conflictStatus = $state<ConflictResolutionStatus>({
+    canSave: false,
+    dirty: false,
+    saving: false
+  })
   let fullscreenExplorerOpen = $state(false)
   let fullscreenPendingPath = $state<string | null>(null)
   let renameTarget = $state<{ path: string; name: string } | null>(null)
@@ -142,6 +166,31 @@
   let lastTurnPaths = $state<string[]>([])
   let activeCheckpointPaths = $state<string[]>([])
   let lastTurnRequest = 0
+
+  $effect(() => {
+    const request = projectState.fullscreenRequest
+    if (request <= handledFullscreenRequest) return
+    handledFullscreenRequest = request
+    fullscreenOpen = true
+    if (gitState.conflictsMode) fullscreenExplorerOpen = true
+  })
+
+  function handleConflictController(next: ConflictResolutionController | null): void {
+    conflictController = next
+  }
+
+  function handleConflictStatus(next: ConflictResolutionStatus): void {
+    conflictStatus = next
+  }
+
+  async function saveActiveFile(): Promise<void> {
+    if (!activeTab) return
+    if (activePathIsConflicted) {
+      await conflictController?.save()
+      return
+    }
+    await projectFilesWorkspace.save(projectId, activeTab.path)
+  }
 
   async function loadCheckpointPaths(
     threadId: string | null,
@@ -209,13 +258,13 @@
       event.key.toLowerCase() === 's' &&
       activeTab &&
       activeTab.view !== 'diff' &&
-      activeSession &&
-      dirty &&
+      (activePathIsConflicted || activeSession) &&
+      (activePathIsConflicted ? conflictStatus.canSave : dirty) &&
       !deletedAtCheckpoint &&
-      !activeSession.saving
+      !(activePathIsConflicted ? conflictStatus.saving : activeSession?.saving)
     ) {
       event.preventDefault()
-      void projectFilesWorkspace.save(projectId, activeTab.path)
+      void saveActiveFile()
     }
   }
 
@@ -554,16 +603,20 @@
             <button
               type="button"
               class="flex h-6 items-center gap-1 rounded bg-primary px-2 text-[10px] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-30"
-              disabled={deletedAtCheckpoint || !dirty || activeSession?.saving}
-              title="Save file (Cmd/Ctrl+S)"
-              onclick={() => void projectFilesWorkspace.save(projectId, activeTab.path)}
+              disabled={deletedAtCheckpoint ||
+                (activePathIsConflicted ? !conflictStatus.canSave : !dirty) ||
+                (activePathIsConflicted ? conflictStatus.saving : activeSession?.saving)}
+              title={activePathIsConflicted
+                ? 'Replace the original file and mark it resolved'
+                : 'Save file (Cmd/Ctrl+S)'}
+              onclick={() => void saveActiveFile()}
             >
-              {#if activeSession?.saving}
+              {#if activePathIsConflicted ? conflictStatus.saving : activeSession?.saving}
                 <Loader2 size={11} class="animate-spin" />
               {:else}
                 <Save size={11} />
               {/if}
-              Save
+              {activePathIsConflicted ? 'Mark as resolved' : 'Save'}
             </button>
           {/if}
         </div>
@@ -698,6 +751,17 @@
             </button>
           </div>
         {/if}
+      {:else if activePathIsConflicted && activeTab}
+        {#if !fullscreenOpen}
+          <ConflictResolutionView
+            {projectId}
+            path={activeTab.path}
+            wrap={wrapLines}
+            onToggleWrap={() => wrapTextState.toggle()}
+            onControllerChange={handleConflictController}
+            onStatusChange={handleConflictStatus}
+          />
+        {/if}
       {:else if activeSession || deletedAtCheckpoint}
         {#key activeTab.id}
           <ProjectTextEditor
@@ -734,6 +798,9 @@
           {lastTurnPaths}
           {activeCheckpointPaths}
           activeCheckpointId={activeTab?.checkpointId ?? null}
+          conflictPaths={conflictedPaths}
+          {conflictsOnly}
+          onToggleConflicts={() => (gitState.conflictsMode = !gitState.conflictsMode)}
         />
       </div>
     {/if}
@@ -760,16 +827,20 @@
           <button
             type="button"
             class="titlebar-no-drag flex h-7 items-center gap-1 rounded bg-primary px-2 text-[10px] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-30"
-            disabled={deletedAtCheckpoint || !dirty || activeSession?.saving}
-            title="Save file (Cmd/Ctrl+S)"
-            onclick={() => activeTab && void projectFilesWorkspace.save(projectId, activeTab.path)}
+            disabled={deletedAtCheckpoint ||
+              (activePathIsConflicted ? !conflictStatus.canSave : !dirty) ||
+              (activePathIsConflicted ? conflictStatus.saving : activeSession?.saving)}
+            title={activePathIsConflicted
+              ? 'Replace the original file and mark it resolved'
+              : 'Save file (Cmd/Ctrl+S)'}
+            onclick={() => void saveActiveFile()}
           >
-            {#if activeSession?.saving}
+            {#if activePathIsConflicted ? conflictStatus.saving : activeSession?.saving}
               <Loader2 size={11} class="animate-spin" />
             {:else}
               <Save size={11} />
             {/if}
-            Save
+            {activePathIsConflicted ? 'Mark as resolved' : 'Save'}
           </button>
         {/if}
         <button
@@ -789,15 +860,13 @@
         </button>
         <Dialog.Close
           class="titlebar-no-drag flex h-7 w-7 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
-          aria-label={activeTab?.view === 'diff'
-            ? 'Close fullscreen diff'
-            : 'Close fullscreen editor'}
-          title={activeTab?.view === 'diff' ? 'Close fullscreen diff' : 'Close fullscreen editor'}
+          aria-label="Minimize fullscreen file viewer"
+          title="Minimize fullscreen file viewer"
         >
-          <X size={14} />
+          <Minimize2 size={14} />
         </Dialog.Close>
       </div>
-      {#if activeTab}
+      {#if activeTab && !activePathIsConflicted}
         <div class="flex h-8 shrink-0 items-center gap-0.5 border-b border-border px-2">
           <button
             type="button"
@@ -970,6 +1039,15 @@
                 alt={activeTab.path}
                 kind={video ? 'video' : 'audio'}
               />
+            {:else if activePathIsConflicted && activeTab}
+              <ConflictResolutionView
+                {projectId}
+                path={activeTab.path}
+                wrap={wrapLines}
+                onToggleWrap={() => wrapTextState.toggle()}
+                onControllerChange={handleConflictController}
+                onStatusChange={handleConflictStatus}
+              />
             {:else}
               <ProjectTextEditor
                 value={visibleContent}
@@ -1000,10 +1078,13 @@
               {projectState}
               onWidthChange={(width, persist) =>
                 projectFilesWorkspace.setExplorerWidth(projectId, width, persist)}
-              selectedPath={activeTab.path}
+              selectedPath={activeTab?.path ?? null}
               {lastTurnPaths}
               {activeCheckpointPaths}
-              activeCheckpointId={activeTab.checkpointId}
+              activeCheckpointId={activeTab?.checkpointId ?? null}
+              conflictPaths={conflictedPaths}
+              {conflictsOnly}
+              onToggleConflicts={() => (gitState.conflictsMode = !gitState.conflictsMode)}
               onFileSelect={fullscreenOpenFile}
             />
           </div>

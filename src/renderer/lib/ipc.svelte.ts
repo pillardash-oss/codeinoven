@@ -21,7 +21,6 @@ declare global {
 const HYDRATION_CHANNELS = new Set<InvokeChannel>([
   'app:confirmClose',
   'app:rendererReady',
-  'app:requestClose',
   'app:waitForFeatures',
   'config:get',
   'project:ensureInbox',

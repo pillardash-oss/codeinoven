@@ -63,9 +63,9 @@ describe('MemoryService', () => {
     temporaryRoots.push(root)
     const storage = new StorageEngine(root)
     await storage.initialize()
-    // Write memory entries as Markdown to memory.md
+    // Write memory entries as Markdown to the global memory file
     await storage.writeRaw(
-      'memory.md',
+      join('memory', 'memory.md'),
       '<!-- codeinoven-memory-entry -->\n## Formatting\n\nUse the project formatter only on touched files.\n\n<!-- codeinoven-memory-entry -->\n## Another\n\nA second entry.'
     )
     const service = new MemoryService(storage)

@@ -1,9 +1,10 @@
 import { app, BrowserWindow, dialog, nativeTheme, screen, session, shell } from 'electron'
 import { dirname, join } from 'path'
-import { existsSync, mkdirSync } from 'fs'
+import { existsSync, mkdirSync, renameSync } from 'fs'
 import { fileURLToPath } from 'url'
 import { is } from '@electron-toolkit/utils'
 import { APP_ID, APP_NAME } from '../lib/brand'
+import { isLocalDevelopmentUrl } from '../lib/local-development-url'
 import { Logger } from './system/logger'
 import { Database } from './database/database'
 import { ThreadRepo } from './database/repositories/thread-repo'
@@ -23,10 +24,7 @@ import {
   setPowerWakeService,
   broadcastThreadUpdate
 } from './chat/thread-events'
-import {
-  installProductionApplicationMenu,
-  lockDownProductionWindow
-} from './system/production-housekeeping'
+import { installProductionApplicationMenu } from './system/production-housekeeping'
 import { getTrafficLightArg, warmTrafficLightDetection } from './system/titlebar'
 import { PrivilegedIpcValidator } from './ipc/ipc-validation'
 import type { CloseConfirmationProject, ThreadClickedPayload } from '../lib/ipc-contract'
@@ -56,10 +54,38 @@ import { PACKAGED_SMOKE_OUTPUT_ENV, writePackagedSmokeProof } from './system/pac
 import { sendToRenderer } from './ipc/renderer-delivery'
 import { hasNativeSplashHandoff, signalNativeSplashReady } from './system/native-splash-handoff'
 import { instanceRegistry } from './system/instance-registry'
+import { BrowserService } from './browser/browser-service'
+import { getConfigRoot } from '../lib/utils'
 
 const mainBundleDirectory = dirname(fileURLToPath(import.meta.url))
 
 app.setName(APP_NAME)
+
+/**
+ * Electron otherwise derives Linux `userData` from the product name and creates
+ * `~/.config/CodeInOven` alongside CodeInOven's canonical Pillardash config
+ * root. Redirect Chromium before `ready` and move the legacy directory on the
+ * first upgraded launch so cookies, local storage, caches, the remote pairing
+ * secret, and the owned-process journal are preserved instead of orphaned.
+ */
+function configureLinuxElectronDataRoot(): void {
+  if (process.platform !== 'linux') return
+
+  const legacyRoot = app.getPath('userData')
+  const managedRoot = join(getConfigRoot(), 'electron')
+  mkdirSync(dirname(managedRoot), { recursive: true })
+
+  if (legacyRoot !== managedRoot && existsSync(legacyRoot) && !existsSync(managedRoot)) {
+    renameSync(legacyRoot, managedRoot)
+  } else {
+    mkdirSync(managedRoot, { recursive: true })
+  }
+
+  app.setPath('userData', managedRoot)
+  app.setPath('sessionData', managedRoot)
+}
+
+configureLinuxElectronDataRoot()
 // Enforce Chromium's OS-level renderer sandbox globally before `ready`; the
 // per-window preferences below remain explicit so future windows inherit the
 // secure expectation even when reviewed in isolation.
@@ -106,6 +132,7 @@ installProcessCrashDiagnostics()
 
 let mainWindow: BrowserWindow | null = null
 let splashWindow: BrowserWindow | null = null
+let browserService: BrowserService | null = null
 let quitCleanupStarted = false
 let shutdownFailsafe: ReturnType<typeof setTimeout> | null = null
 
@@ -192,18 +219,6 @@ ipcMain.handle('app:confirmClose', async () => {
     Logger.error('Could not terminate active harness connections on close', error)
   }
   app.quit()
-})
-
-/**
- * Close the main window on the renderer's request (Cmd/Ctrl+W with nothing
- * active). Goes through the same `close` gate as the traffic-light button, so
- * working threads still get the close-confirmation prompt.
- */
-ipcMain.handle('app:requestClose', () => {
-  const window = mainWindow
-  if (window && !window.isDestroyed()) {
-    window.close()
-  }
 })
 
 /** Track when a terminal in the renderer holds focus (Windows shortcut routing). */
@@ -351,6 +366,12 @@ let retryScheduler: RetrySchedulerService | null = null
 let remoteCredentials: DeviceCredentialService | null = null
 let remoteMode: RemoteModeController | null = null
 let modelPricingService: ModelPricingService | null = null
+/**
+ * Resolved lazily so the `appfile://` preview protocol can be installed before
+ * the main window loads (its renderer requests previews as soon as it hydrates).
+ * Populated in {@link bootPostPaintServices} once the file service exists.
+ */
+let appfileProjectFiles: import('./editor/project-files-service').ProjectFilesService | null = null
 const threadCreation = new ThreadCreationCoordinator()
 
 /** Resolve the app icon — static dir in dev, bundled renderer assets in production. */
@@ -496,7 +517,7 @@ async function bootPostPaintServices(): Promise<void> {
 
   const projectManager = new ProjectManager(database)
   const projectFilesService = new ProjectFilesService(projectManager)
-  installFilePreviewProtocol(projectFilesService)
+  appfileProjectFiles = projectFilesService
   computerUsePipService = new ComputerUsePipService(storage)
   harnessManifestService = new HarnessManifestService(storage)
   modelPricingService = new ModelPricingService(storage)
@@ -508,9 +529,24 @@ async function bootPostPaintServices(): Promise<void> {
     threadCreation,
     join(app.getPath('userData'), 'owned-processes.json')
   )
+  // Merge the app-managed lean opencode agents into the machine-wide global
+  // config. Idempotent, additive-only and non-fatal; runs after first paint
+  // so it never blocks the workspace, and logs a dev-only summary.
+  const { syncOpenCodeLeanAgents } = await import('./opencode/opencode-agent-service')
+  await syncOpenCodeLeanAgents().catch((error) =>
+    Logger.dev('opencode lean-agent sync failed (non-fatal):', error)
+  )
   updaterService = new UpdaterService(storage)
   powerWakeService = new PowerWakeService(storage, database)
   retryScheduler = new RetrySchedulerService(storage)
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    const service = new BrowserService(mainWindow)
+    browserService = service
+    service.register()
+    chatEngine.setBrowserUtilityExecutor((operation, input, context) =>
+      service.executeUtility(operation, input, context)
+    )
+  }
   // Keep the device awake while a scheduled auto-retry is due within the wake
   // window, so a usage-limit reset fires even when the user is away.
   powerWakeService.attachRetryScheduler(retryScheduler)
@@ -785,7 +821,7 @@ function createWindow(): BrowserWindow {
       sandbox: true,
       contextIsolation: true,
       nodeIntegration: false,
-      devTools: !isProduction,
+      devTools: true,
       // The preload resolves the platform traffic-light layout from this flag
       // so the renderer never flashes a wrong inset on first paint.
       additionalArguments: [getTrafficLightArg()],
@@ -795,10 +831,6 @@ function createWindow(): BrowserWindow {
     }
   })
   mainWindow = window
-
-  if (isProduction) {
-    lockDownProductionWindow(window)
-  }
 
   window.once('ready-to-show', () => {
     // Restore the maximized state before revealing the first rendered frame so
@@ -855,7 +887,21 @@ function createWindow(): BrowserWindow {
   window.webContents.setWindowOpenHandler((details) => {
     try {
       const safeUrl = windowBoundaryValidator.validateExternalUrl(details.url)
-      void shell.openExternal(safeUrl)
+      if (isLocalDevelopmentUrl(safeUrl)) {
+        void storage
+          .getConfig()
+          .then((config) => {
+            if (window.isDestroyed() || window.webContents.isDestroyed()) return
+            if (config.openLocalhostInCioBrowser) {
+              sendToRenderer(window.webContents, 'browser:openRequested', safeUrl)
+            } else {
+              void shell.openExternal(safeUrl)
+            }
+          })
+          .catch((error: unknown) => Logger.error('Local link routing failed:', error))
+      } else {
+        void shell.openExternal(safeUrl)
+      }
     } catch (error) {
       Logger.error('Window open rejected unsafe URL:', error)
     }
@@ -981,6 +1027,13 @@ void app
     session.defaultSession.on('will-download', (event) => {
       event.preventDefault()
     })
+
+    // Install the `appfile://` preview protocol before the renderer loads: the
+    // packaged renderer requests preview images as soon as it hydrates, and if
+    // the handler is not yet registered Chromium rejects those early requests
+    // with `net::ERR_UNKNOWN_URL_SCHEME`, leaving file-tree images permanently
+    // broken. The file service is resolved lazily from bootPostPaintServices.
+    installFilePreviewProtocol(() => appfileProjectFiles)
 
     const window = createWindow()
     startupTelemetry.mark('window:created')
@@ -1166,6 +1219,13 @@ async function runShutdownPipeline(): Promise<void> {
     modelPricingService?.stop()
   } catch (error) {
     Logger.error('Model pricing cleanup failed during shutdown:', error)
+  }
+
+  try {
+    browserService?.dispose()
+    browserService = null
+  } catch (error) {
+    Logger.error('Browser service cleanup failed during shutdown:', error)
   }
 
   try {

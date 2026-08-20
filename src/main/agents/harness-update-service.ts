@@ -205,9 +205,10 @@ export class HarnessUpdateService {
     if (!args) {
       throw new Error(`No self-update command is configured for harness: ${harnessId}`)
     }
+    const installed = this.providers.getAll().find((candidate) => candidate.id === harnessId)
     return {
       kind: 'terminal',
-      command: definition.command,
+      command: installed?.resolvedPath ?? definition.command,
       args,
       title: `Update ${definition.name}`
     }

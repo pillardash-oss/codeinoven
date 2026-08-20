@@ -11,6 +11,7 @@
     FileDiff,
     Files,
     GitBranch,
+    Globe2,
     Info,
     Maximize2,
     MessageCircleDashed,
@@ -48,6 +49,7 @@
     /** Spawn another shell. The terminal is the only tool that still offers a
      *  "+"; temporary chats are tabbed but are only ever opened from a thread. */
     onNewTerminal?: () => void
+    onNewBrowser?: () => void
   }
 
   let {
@@ -65,7 +67,8 @@
     onHeightChange,
     onTerminalPlacementChange,
     onTerminalDockToggle,
-    onNewTerminal
+    onNewTerminal,
+    onNewBrowser
   }: Props = $props()
 
   let resizing = $state(false)
@@ -77,6 +80,7 @@
   // than competing with the other context tools.
   const TABBED_KINDS = new Set<ContextSidebarTab['kind']>([
     'terminal',
+    'browser',
     'temporary-chat',
     'subagent'
   ])
@@ -114,6 +118,7 @@
   )
   /** Terminals alone own the placement toggle, fullscreen and the "+". */
   let terminalMode = $derived(activeTab?.kind === 'terminal')
+  let browserMode = $derived(activeTab?.kind === 'browser')
   /** Other open panels of the active tool, e.g. several open files. Without a
    *  strip these would be unreachable, so the header offers them in a picker. */
   let siblingTabs = $derived(
@@ -121,7 +126,9 @@
   )
   /** Temporary chats close from their own tab, so they need no header cluster —
    *  rendering it anyway would leave a stray divider on the right edge. */
-  let showHeaderControls = $derived(terminalMode || (activeTab !== null && !tabbedMode))
+  let showHeaderControls = $derived(
+    terminalMode || browserMode || (activeTab !== null && !tabbedMode)
+  )
 
   let dragTabId = $state<string | null>(null)
   let dropTargetId = $state<string | null>(null)
@@ -226,6 +233,8 @@
       <FileDiff size={12} class="shrink-0" />
     {:else if tab.kind === 'terminal'}
       <SquareTerminal size={12} class="shrink-0" />
+    {:else if tab.kind === 'browser'}
+      <Globe2 size={12} class="shrink-0" />
     {:else if tab.kind === 'debugger'}
       <Bug size={12} class="shrink-0 text-accent" />
     {:else if tab.kind === 'sources'}
@@ -304,7 +313,7 @@
                     <StatusBadge stage="working" animated title="Working" />
                   {/if}
                 </button>
-                {#if tab.kind === 'terminal' && onFullscreenTab}
+                {#if (tab.kind === 'terminal' || tab.kind === 'browser') && onFullscreenTab}
                   <button
                     type="button"
                     class="flex h-6 w-6 shrink-0 items-center justify-center rounded text-dimmed opacity-70 transition-colors hover:bg-raised hover:text-foreground group-hover:opacity-100"
@@ -382,7 +391,19 @@
 
       {#if showHeaderControls}
         <div class="flex shrink-0 items-center border-l border-border px-1">
-          {#if terminalMode}
+          {#if browserMode}
+            {#if onNewBrowser}
+              <button
+                type="button"
+                class="flex h-7 w-7 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+                aria-label="Open another browser tab"
+                title="New browser tab"
+                onclick={onNewBrowser}
+              >
+                <Plus size={13} />
+              </button>
+            {/if}
+          {:else if terminalMode}
             {#if onNewTerminal}
               <button
                 type="button"

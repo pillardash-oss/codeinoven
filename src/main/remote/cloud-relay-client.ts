@@ -4,6 +4,8 @@ import { decryptPayload, encryptPayload } from '../../renderer/lib/remote/sessio
 import { handshakeTranscript } from '../../renderer/lib/remote/device-identity'
 import type { RemoteRpcDeviceContext } from '../../lib/remote-rpc'
 import type { DeviceCredentialService, EnrolledDevice } from './device-credential-service'
+import { DesktopWebRtcChannel, type WebRtcSessionDescription } from './webrtc-data-channel'
+import type { RTCIceServer } from 'werift'
 import {
   BoundedMap,
   BoundedSet,
@@ -69,6 +71,7 @@ export interface CloudRelayClientOptions {
 interface OutboundRecord {
   id: string
   payload: unknown
+  encrypted: string | null
 }
 
 export interface RpcOutcome {
@@ -135,6 +138,8 @@ export class CloudRelayClient {
   private pendingDeviceChallenge = ''
   /** Browser WebSocket instance currently bound to `boundDevice`. */
   private mobileConnectionId = ''
+  private readonly webrtc: DesktopWebRtcChannel
+  private iceServers: RTCIceServer[] = []
 
   constructor(private readonly options: CloudRelayClientOptions) {
     this.connectTimeoutMs = options.connectTimeoutMs ?? DEFAULT_CONNECT_TIMEOUT_MS
@@ -151,6 +156,15 @@ export class CloudRelayClient {
     this.nextMessageId = createEpochMessageIdAllocator()
     this.socketFactory =
       options.socketFactory ?? ((target: string): WebSocket => new WebSocket(target))
+    this.webrtc = new DesktopWebRtcChannel({
+      onMessage: (data) => this.handleMessage(data, 'webrtc'),
+      onStateChange: (state) => {
+        if (state === 'closed' || state === 'failed') {
+          this.requeueInFlight()
+          void this.flushQueue()
+        }
+      }
+    })
     this.onAbort = () => this.cancelConnection('cancelled')
     this.options.signal?.addEventListener('abort', this.onAbort, { once: true })
   }
@@ -176,6 +190,7 @@ export class CloudRelayClient {
     this.options.signal?.removeEventListener('abort', this.onAbort)
     this.queue.length = 0
     this.inFlight.clear()
+    void this.webrtc.close()
     this.socket?.close()
     this.socket = null
   }
@@ -188,6 +203,7 @@ export class CloudRelayClient {
     this.boundDevice = null
     this.pendingDeviceChallenge = ''
     this.mobileConnectionId = ''
+    void this.webrtc.close()
     this.clearTimers()
     this.options.signal?.removeEventListener('abort', this.onAbort)
     this.socket?.close()
@@ -226,7 +242,7 @@ export class CloudRelayClient {
     }
     socket.onmessage = (event) => {
       if (typeof event.data !== 'string') return
-      this.handleMessage(event.data)
+      this.handleMessage(event.data, 'relay')
     }
     socket.onerror = () => {
       if (this.closing || this.closed) return
@@ -254,6 +270,7 @@ export class CloudRelayClient {
     this.boundDevice = null
     this.pendingDeviceChallenge = ''
     this.mobileConnectionId = ''
+    void this.webrtc.close()
     this.requeueInFlight()
     this.socket?.close()
     this.socket = null
@@ -276,6 +293,7 @@ export class CloudRelayClient {
     this.clearTimers()
     this.queue.length = 0
     this.inFlight.clear()
+    void this.webrtc.close()
     this.socket?.close(PAYLOAD_AUTH_FAILURE_CLOSE_CODE, reason)
     this.socket = null
     this.options.onDisconnected(reason)
@@ -331,7 +349,7 @@ export class CloudRelayClient {
 
   async send(payload: unknown): Promise<void> {
     if (this.closed || this.closing) return
-    const record: OutboundRecord = { id: this.nextMessageId(), payload }
+    const record: OutboundRecord = { id: this.nextMessageId(), payload, encrypted: null }
     if (this.authenticated && this.socket && this.socket.readyState === WebSocket.OPEN) {
       await this.transmit(record)
       return
@@ -341,18 +359,40 @@ export class CloudRelayClient {
 
   private async transmit(record: OutboundRecord): Promise<void> {
     if (!this.socket) return
-    const encrypted = await encryptPayload(
-      this.options.controlSecret,
-      JSON.stringify(record.payload)
-    )
+    const encrypted =
+      record.encrypted ??
+      (await encryptPayload(this.options.controlSecret, JSON.stringify(record.payload)))
+    record.encrypted = encrypted
     // The socket may have closed (and been nulled) while encryption ran.
     if (this.socket && this.socket.readyState === WebSocket.OPEN) {
       this.inFlight.set(record.id, record)
-      this.socket.send(serializeRelayDataFrame(record.id, encrypted))
+      const frame = serializeRelayDataFrame(record.id, encrypted)
+      if (!this.webrtc.send(frame)) this.socket.send(frame)
     }
   }
 
-  private handleMessage(text: string): void {
+  private handleMessage(text: string, route: 'relay' | 'webrtc'): void {
+    const signal = this.parseSignal(text)
+    if (signal) {
+      const boundDeviceId = this.boundDeviceId()
+      if (!boundDeviceId || signal.mobileDeviceId !== boundDeviceId) return
+      void this.webrtc
+        .acceptOffer(signal.description, this.iceServers)
+        .then((description) => {
+          if (this.socket?.readyState !== WebSocket.OPEN) return
+          this.socket.send(
+            JSON.stringify({
+              type: 'relay:signal',
+              mobileDeviceId: boundDeviceId,
+              description
+            })
+          )
+        })
+        .catch(() => {
+          Logger.dev('Remote WebRTC negotiation failed; continuing over cloud relay')
+        })
+      return
+    }
     const ack = parseRelayAckFrame(text)
     if (ack) {
       this.inFlight.delete(ack.id)
@@ -382,6 +422,7 @@ export class CloudRelayClient {
         this.authTimer = null
       }
       this.authenticated = true
+      this.iceServers = this.parseIceServers(record['iceServers'])
       this.reconnecting = false
       this.reconnectAttempt = 0
       this.options.onAuthenticated()
@@ -396,7 +437,7 @@ export class CloudRelayClient {
         if (this.seenInboundIds.has(wireId)) {
           // Duplicate delivery of a successfully-decrypted frame: the receiver
           // already accepted it, so acknowledge without re-decrypting.
-          this.sendAck(wireId)
+          this.sendAck(wireId, route)
           return
         }
         if (this.inboundProcessing.has(wireId)) {
@@ -413,7 +454,7 @@ export class CloudRelayClient {
           // pending marker so a failed-decrypt frame can be replayed.
           if (wireId !== undefined) {
             this.seenInboundIds.add(wireId)
-            this.sendAck(wireId)
+            this.sendAck(wireId, route)
             this.inboundProcessing.delete(wireId)
           }
           this.handleEncryptedMessage(plaintext, wireId)
@@ -430,13 +471,53 @@ export class CloudRelayClient {
   }
 
   /** Send a receiver-generated `relay:ack` control frame on the open socket. */
-  private sendAck(id: string): void {
+  private sendAck(id: string, route: 'relay' | 'webrtc'): void {
+    const frame = serializeRelayAckFrame(id)
+    if (route === 'webrtc' && this.webrtc.send(frame)) return
     if (!this.socket || this.socket.readyState !== WebSocket.OPEN) return
-    this.socket.send(serializeRelayAckFrame(id))
+    this.socket.send(frame)
+  }
+
+  private parseIceServers(value: unknown): RTCIceServer[] {
+    if (!Array.isArray(value)) return []
+    return value.filter((entry): entry is RTCIceServer => {
+      if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) return false
+      const record = entry as Record<string, unknown>
+      return typeof record['urls'] === 'string' || Array.isArray(record['urls'])
+    })
+  }
+
+  private parseSignal(
+    value: string
+  ): { mobileDeviceId: string; description: WebRtcSessionDescription } | null {
+    try {
+      const parsed: unknown = JSON.parse(value)
+      if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return null
+      const record = parsed as Record<string, unknown>
+      const description = record['description']
+      if (
+        record['type'] !== 'relay:signal' ||
+        typeof record['mobileDeviceId'] !== 'string' ||
+        typeof description !== 'object' ||
+        description === null ||
+        Array.isArray(description)
+      ) {
+        return null
+      }
+      const candidate = description as Record<string, unknown>
+      if (candidate['type'] !== 'offer' || typeof candidate['sdp'] !== 'string') return null
+      return {
+        mobileDeviceId: record['mobileDeviceId'],
+        description: { type: 'offer', sdp: candidate['sdp'] }
+      }
+    } catch {
+      return null
+    }
   }
 
   private async flushQueue(): Promise<void> {
     while (this.queue.length > 0) {
+      if (!this.authenticated || !this.socket) return
       const record = this.queue.shift()
       if (!record) break
       await this.transmit(record)

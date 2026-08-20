@@ -16,6 +16,7 @@ import type {
   AuditSectionId,
   AgentToolCatalog,
   AgentContextCapabilities,
+  AgentCapabilityCatalog,
   AgentCapabilitySource,
   NativeMcpContent,
   NativeSkillContent,
@@ -58,6 +59,8 @@ import type {
   ProjectTextFile,
   GitBranchInfo,
   GitCommitInfo,
+  GitConflictAnalysis,
+  GitConflictWorkFile,
   GitCredentialStatus,
   GitDiff,
   GitFileChange,
@@ -137,9 +140,15 @@ import type {
   UtilityDefinition,
   UtilityDefinitionInput,
   UtilityDefinitionPatch,
+  UtilitySetupReport,
   UtilityResolutionContext,
   UtilitySearchOptions,
   ResolvedUtility,
+  SkillMarketDetail,
+  SkillMarketInstallRequest,
+  SkillMarketLeaderboard,
+  SkillMarketSearchResult,
+  SkillMarketView,
   CuaBridgeStatus,
   ComputerUsePipFrame,
   ComputerUsePipState
@@ -167,6 +176,37 @@ export interface UpdaterStatus {
   availableVersion?: string
   downloadProgress?: number
   errorMessage?: string
+}
+
+/** Native browser content rectangle in BrowserWindow density-independent pixels. */
+export interface BrowserViewBounds {
+  x: number
+  y: number
+  width: number
+  height: number
+}
+
+/** Navigation state mirrored from an app-scoped browser WebContentsView. */
+export interface BrowserPageState {
+  tabId: string
+  url: string
+  title: string
+  loading: boolean
+  canGoBack: boolean
+  canGoForward: boolean
+}
+
+export type BrowserConsoleLevel = 'debug' | 'info' | 'warning' | 'error'
+
+/** A console or runtime diagnostic emitted by one app-scoped browser tab. */
+export interface BrowserConsoleEntry {
+  id: string
+  tabId: string
+  level: BrowserConsoleLevel
+  message: string
+  sourceId: string
+  lineNumber: number
+  timestamp: number
 }
 
 export interface IpcInvokeContract {
@@ -601,6 +641,7 @@ export interface IpcInvokeContract {
     boolean
   >
   'capabilities:deleteMcp': Contract<[source: AgentCapabilitySource], boolean>
+  'capabilities:listAll': Contract<[], AgentCapabilityCatalog>
   'agent:loadMessages': Contract<
     [projectId: string, threadId: string, limit?: number],
     AgentMessage[]
@@ -629,7 +670,7 @@ export interface IpcInvokeContract {
     void
   >
   'agent:runCommand': Contract<
-    [projectId: string, threadId: string, command: string, args: string],
+    [projectId: string, threadId: string, commandId: string, args: string],
     void
   >
   'agent:sendPrompt': Contract<
@@ -748,6 +789,10 @@ export interface IpcInvokeContract {
     [projectId: string, threadId: string, checkpointId: string, paths: string[]],
     TurnCheckpointSummary[]
   >
+  'checkpoint:redoPaths': Contract<
+    [projectId: string, threadId: string, checkpointId: string, paths: string[]],
+    TurnCheckpointSummary[]
+  >
   'config:get': Contract<[], AppConfig>
   'config:update': Contract<[patch: AppConfigPatch], AppConfig>
   'config:syncAgentRole': Contract<[role: AgentRole, selection: AgentModelSelection], AppConfig>
@@ -768,6 +813,8 @@ export interface IpcInvokeContract {
   'dialog:pickFiles': Contract<[scope?: AttachmentStorageScope], string[]>
   'dialog:pickImage': Contract<[], string | null>
   'diagnostics:export': Contract<[], string | null>
+  /** Open the app-owned data directory in the operating system's file manager. */
+  'storage:openDataDirectory': Contract<[], boolean>
   'file:read': Contract<[filePath: string], Uint8Array<ArrayBuffer> | null>
   'file:readAsDataUrl': Contract<[filePath: string], string | null>
   'editors:detect': Contract<[], EditorInfo[]>
@@ -775,6 +822,19 @@ export interface IpcInvokeContract {
   'editors:setPreferred': Contract<[editorId: EditorId], void>
   'git:status': Contract<[projectId: string], GitStatus>
   'git:diff': Contract<[projectId: string, relativePath: string, staged: boolean], GitDiff>
+  'git:analyzeConflict': Contract<[projectId: string, relativePath: string], GitConflictAnalysis>
+  'git:prepareConflictWorkFile': Contract<
+    [projectId: string, relativePath: string],
+    GitConflictWorkFile
+  >
+  'git:saveConflictDraft': Contract<
+    [projectId: string, relativePath: string, content: string, stateJson: string],
+    void
+  >
+  'git:saveConflictResolution': Contract<
+    [projectId: string, relativePath: string, content: string],
+    GitStatus
+  >
   'git:stage': Contract<[projectId: string, paths: string[]], GitStatus>
   'git:resolveConflicted': Contract<[projectId: string, path: string], GitStatus>
   'git:unstage': Contract<[projectId: string, paths: string[]], GitStatus>
@@ -1250,6 +1310,14 @@ export interface IpcInvokeContract {
   'utilities:get': Contract<[id: string], UtilityDefinition | null>
   'utilities:create': Contract<[input: UtilityDefinitionInput], UtilityDefinition>
   'utilities:installBundle': Contract<[request: UtilityBundleInstallRequest], UtilityDefinition[]>
+  'utilities:setupWithAgent': Contract<
+    [projectId: string, taskId: string, settings: ThreadSettings, request: string],
+    UtilitySetupReport
+  >
+  'utilities:searchSkillMarket': Contract<[query: string], SkillMarketSearchResult>
+  'utilities:listSkillMarket': Contract<[view: SkillMarketView], SkillMarketLeaderboard>
+  'utilities:getSkillMarketDetail': Contract<[id: string], SkillMarketDetail>
+  'utilities:installMarketSkill': Contract<[request: SkillMarketInstallRequest], string>
   'utilities:update': Contract<[id: string, patch: UtilityDefinitionPatch], UtilityDefinition>
   'utilities:delete': Contract<[id: string], boolean>
   'utilities:setCredential': Contract<
@@ -1286,6 +1354,20 @@ export interface IpcInvokeContract {
   'shell:revealExternalPath': Contract<[path: string], boolean>
   /** Resolve website favicons for a list of hostnames. Returns a data URL per host, or null when none exists. */
   'web:favicon': Contract<[hostnames: string[]], Record<string, string | null>>
+  'browser:show': Contract<
+    [tabId: string, projectId: string, initialUrl: string, bounds: BrowserViewBounds],
+    BrowserPageState
+  >
+  'browser:hide': Contract<[tabId: string], void>
+  'browser:navigate': Contract<[tabId: string, url: string], void>
+  'browser:goBack': Contract<[tabId: string], void>
+  'browser:goForward': Contract<[tabId: string], void>
+  'browser:reload': Contract<[tabId: string], void>
+  'browser:stop': Contract<[tabId: string], void>
+  'browser:getConsole': Contract<[tabId: string], BrowserConsoleEntry[]>
+  'browser:clearConsole': Contract<[tabId: string], void>
+  'browser:destroy': Contract<[tabId: string], void>
+  'browser:destroyProject': Contract<[projectId: string], void>
   'spec:addAnnotation': Contract<
     [
       projectId: string,
@@ -1586,11 +1668,6 @@ export interface IpcInvokeContract {
   'remote:beginCloudEnrollment': Contract<[], RemoteModeStatus>
   'remote:resetCloudEnrollment': Contract<[], RemoteModeStatus>
   'app:confirmClose': Contract<[], void>
-  /**
-   * Asks the main process to close the main window — the same path as the
-   * traffic-light close button, so the working-threads confirmation gate applies.
-   */
-  'app:requestClose': Contract<[], void>
   /** Resolves after post-paint feature IPC and harness services are registered. */
   'app:waitForFeatures': Contract<[], void>
   /**
@@ -1765,8 +1842,8 @@ export interface IpcEventContract {
   /**
    * Emitted when the user presses Cmd/Ctrl+W. The main process intercepts the
    * key (so the macOS "Close Window" menu accelerator never fires) and asks the
-   * renderer to close the active surface — modal, settings page, or thread —
-   * and only fall back to closing the window when nothing is active.
+   * renderer to close the active in-app surface — modal, settings page, sidebar
+   * panel, or thread. The shortcut never closes the native application window.
    */
   'window:closeShortcut': []
   /**
@@ -1780,6 +1857,9 @@ export interface IpcEventContract {
   'updater:waiting-for-threads': [activeCount: number]
   'computerUse:pipFrame': [frame: ComputerUsePipFrame]
   'computerUse:pipState': [state: ComputerUsePipState]
+  'browser:state': [state: BrowserPageState]
+  'browser:console': [entry: BrowserConsoleEntry]
+  'browser:openRequested': [url: string, requestedTabId?: string]
   /** Remote-mode status changes from the main process. */
   'remote:status': [status: RemoteModeStatus]
   /**

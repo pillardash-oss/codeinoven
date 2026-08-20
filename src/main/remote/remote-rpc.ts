@@ -553,7 +553,7 @@ export class RemoteRpcDispatcher {
           args[2] as ThreadSettings
         )
       case 'thread:setContextUsage':
-        this.threadManager.setContextUsage(
+        await this.threadManager.setContextUsage(
           this.string(args[0]),
           this.string(args[1]),
           args[2] as ThreadContextUsage
@@ -1176,6 +1176,14 @@ export class RemoteRpcDispatcher {
           this.stringArray(args[3], 'Checkpoint paths')
         )
         return this.checkpointManager.listSummaries(this.string(args[0]), this.string(args[1]))
+      case 'checkpoint:redoPaths':
+        await this.checkpointManager.redoPaths(
+          this.string(args[0]),
+          this.string(args[1]),
+          this.string(args[2]),
+          this.stringArray(args[3], 'Checkpoint paths')
+        )
+        return this.checkpointManager.listSummaries(this.string(args[0]), this.string(args[1]))
 
       // ─── Memory ─────────────────────────────────────────────────────────
       case 'memory:getPendingProposals':
@@ -1240,6 +1248,29 @@ export class RemoteRpcDispatcher {
           await this.resolveProjectPath(this.string(args[0])),
           this.string(args[1]),
           Boolean(args[2])
+        )
+      case 'git:analyzeConflict':
+        return this.gitService.analyzeConflict(
+          await this.resolveProjectPath(this.string(args[0])),
+          this.string(args[1])
+        )
+      case 'git:prepareConflictWorkFile':
+        return this.gitService.prepareConflictWorkFile(
+          await this.resolveProjectPath(this.string(args[0])),
+          this.string(args[1])
+        )
+      case 'git:saveConflictDraft':
+        return this.gitService.saveConflictDraft(
+          await this.resolveProjectPath(this.string(args[0])),
+          this.string(args[1]),
+          this.string(args[2]),
+          this.string(args[3])
+        )
+      case 'git:saveConflictResolution':
+        return this.gitService.saveConflictResolution(
+          await this.resolveProjectPath(this.string(args[0])),
+          this.string(args[1]),
+          this.string(args[2])
         )
       case 'git:stage':
         return this.gitService.stage(

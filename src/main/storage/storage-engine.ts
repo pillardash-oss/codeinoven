@@ -55,7 +55,8 @@ const DEFAULT_CONFIG: AppConfig = {
   autoRetryAfterReset: true,
   resumeWorkOnRestart: true,
   defaultMergeMethod: 'squash',
-  maxDiffLines: 100
+  maxDiffLines: 100,
+  openLocalhostInCioBrowser: true
 }
 
 /**
@@ -80,8 +81,12 @@ export class StorageEngine {
     await ensureDir(this.resolve('remote'))
     await ensureDir(this.resolve('logs'))
     await ensureDir(this.resolve('chats-cwd'))
+    await ensureDir(this.resolve('window-state'))
+    await ensureDir(this.resolve('scheduler'))
+    await ensureDir(this.resolve('memory'))
 
     await this.migrateLegacyBehaviorPrompt()
+    await this.migrateLegacyLayout()
 
     // Create default config if missing
     const configPath = this.resolve('config.json')
@@ -187,6 +192,66 @@ export class StorageEngine {
     if (!legacy?.trim() || (await this.readRaw(AGENT_BEHAVIOR_FILENAME))?.trim()) return
     await this.writeRaw(AGENT_BEHAVIOR_FILENAME, legacy)
     await this.removeRaw('behavior.md')
+  }
+
+  /**
+   * One-time relocation of config-root state into its feature directory.
+   * Window state, scheduler records, and every memory artifact are moved from
+   * the flat root (and the old project/chat locations) into their dedicated
+   * directories so the config root stays clean and future files land in the
+   * right place. Only moves a source when the destination is empty, and always
+   * removes the source afterward to complete the cleanup.
+   */
+  private async migrateLegacyLayout(): Promise<void> {
+    await this.moveLegacyFile('window-state.json', 'window-state/window-state.json')
+    await this.moveLegacyFile('retry-scheduler.json', 'scheduler/retry-scheduler.json')
+
+    await this.moveLegacyFile('memory.md', 'memory/memory.md')
+    await this.moveLegacyFile('memory-proposals.json', 'memory/memory-proposals.json')
+    await this.moveLegacyFile('memory-frequency.json', 'memory/memory-frequency.json')
+
+    for (const projectId of await this.listDirectories('projects')) {
+      await this.moveLegacyFile(
+        join('projects', projectId, 'memory.md'),
+        join('memory', 'projects', projectId, 'memory.md')
+      )
+      await this.moveLegacyFile(
+        join('projects', projectId, 'memory-proposals.json'),
+        join('memory', 'projects', projectId, 'memory-proposals.json')
+      )
+      await this.moveLegacyFile(
+        join('projects', projectId, 'memory-frequency.json'),
+        join('memory', 'projects', projectId, 'memory-frequency.json')
+      )
+      for (const threadId of await this.listDirectories(join('projects', projectId, 'threads'))) {
+        await this.moveLegacyFile(
+          join('projects', projectId, 'threads', threadId, 'memory.md'),
+          join('memory', 'projects', projectId, 'threads', threadId, 'memory.md')
+        )
+      }
+    }
+
+    await this.moveLegacyFile('chats-cwd/memory.md', 'memory/chats/memory.md')
+    await this.moveLegacyFile(
+      'chats-cwd/memory-proposals.json',
+      'memory/chats/memory-proposals.json'
+    )
+    for (const threadId of await this.listDirectories('chats-cwd/threads')) {
+      await this.moveLegacyFile(
+        join('chats-cwd', 'threads', threadId, 'memory.md'),
+        join('memory', 'chats', 'threads', threadId, 'memory.md')
+      )
+    }
+  }
+
+  /** Move a legacy config file to its feature directory when present. */
+  private async moveLegacyFile(source: string, target: string): Promise<void> {
+    const content = await this.readRaw(source)
+    if (content === null) return
+    if ((await this.readRaw(target)) === null) {
+      await this.writeRaw(target, content)
+    }
+    await this.removeRaw(source)
   }
 
   /**

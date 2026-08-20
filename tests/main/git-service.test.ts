@@ -273,6 +273,103 @@ describe('GitService', () => {
     )
   })
 
+  it('parses conflict hunks with ours/theirs sides and exact line spans', async () => {
+    const directory = await temporaryDirectory()
+    const service = new GitService()
+    await service.initialize(directory)
+    await writeFile(join(directory, 'conflict.txt'), 'base\n', 'utf-8')
+    await service.stage(directory, ['conflict.txt'])
+    await service.commit(directory, 'base')
+
+    await simpleGit(directory).checkoutLocalBranch('feature')
+    await writeFile(join(directory, 'conflict.txt'), 'feature\n', 'utf-8')
+    await service.stage(directory, ['conflict.txt'])
+    await service.commit(directory, 'feature change')
+
+    await simpleGit(directory).checkout('main')
+    await writeFile(join(directory, 'conflict.txt'), 'main\n', 'utf-8')
+    await service.stage(directory, ['conflict.txt'])
+    await service.commit(directory, 'main change')
+
+    await service.merge(directory, 'feature')
+
+    const analysis = await service.analyzeConflict(directory, 'conflict.txt')
+    expect(analysis.path).toBe('conflict.txt')
+    expect(analysis.binary).toBe(false)
+    expect(analysis.truncated).toBe(false)
+    expect(analysis.content).toContain('<<<<<<<')
+    expect(analysis.hunks).toHaveLength(1)
+
+    const hunk = analysis.hunks[0]
+    expect(hunk?.oursLabel).toContain('HEAD')
+    expect(hunk?.theirsLabel).toContain('feature')
+    expect(hunk?.ours).toContain('main')
+    expect(hunk?.theirs).toContain('feature')
+    // The block must contain exactly one full conflict including its markers.
+    expect(hunk?.endLine).toBeGreaterThan(hunk?.startLine ?? 0)
+    const blockLines = analysis.content.split('\n').slice((hunk?.startLine ?? 0) - 1, hunk?.endLine)
+    expect(blockLines.join('\n')).toContain('=======')
+    expect(blockLines.join('\n')).toContain('>>>>>>>')
+  })
+
+  it('persists a resolved conflict file and stages it', async () => {
+    const directory = await temporaryDirectory()
+    const service = new GitService()
+    await service.initialize(directory)
+    await writeFile(join(directory, 'conflict.txt'), 'base\n', 'utf-8')
+    await service.stage(directory, ['conflict.txt'])
+    await service.commit(directory, 'base')
+
+    await simpleGit(directory).checkoutLocalBranch('feature')
+    await writeFile(join(directory, 'conflict.txt'), 'feature\n', 'utf-8')
+    await service.stage(directory, ['conflict.txt'])
+    await service.commit(directory, 'feature change')
+
+    await simpleGit(directory).checkout('main')
+    await writeFile(join(directory, 'conflict.txt'), 'main\n', 'utf-8')
+    await service.stage(directory, ['conflict.txt'])
+    await service.commit(directory, 'main change')
+
+    await service.merge(directory, 'feature')
+    const conflictStatus = await service.getStatus(directory)
+    expect(conflictStatus.conflicted).toContain('conflict.txt')
+
+    // Leftover markers must refuse to save.
+    await expect(
+      service.saveConflictResolution(
+        directory,
+        'conflict.txt',
+        '<<<<<<< HEAD\nmain\n=======\nfeature\n>>>>>>> feature\n'
+      )
+    ).rejects.toThrow('unresolved conflict markers')
+
+    // A clean merged resolution writes, stages, and clears the conflicted set.
+    const resolved = await service.saveConflictResolution(
+      directory,
+      'conflict.txt',
+      'main + feature\n'
+    )
+    expect(resolved.conflicted).not.toContain('conflict.txt')
+    expect(resolved.changes.some((change) => change.path === 'conflict.txt' && change.staged)).toBe(
+      true
+    )
+    const onDisk = await readFile(join(directory, 'conflict.txt'), 'utf-8')
+    expect(onDisk).toBe('main + feature\n')
+  })
+
+  it('reports binary and missing conflict files without parsing', async () => {
+    const directory = await temporaryDirectory()
+    const service = new GitService()
+    await service.initialize(directory)
+    await writeFile(join(directory, 'plain.txt'), 'plain\n', 'utf-8')
+    await service.stage(directory, ['plain.txt'])
+    await service.commit(directory, 'plain')
+
+    const analysis = await service.analyzeConflict(directory, 'plain.txt')
+    expect(analysis.hunks).toHaveLength(0)
+    expect(analysis.binary).toBe(false)
+  })
+
   it('leaves non-conflicted paths untouched during resolution', async () => {
     const directory = await temporaryDirectory()
     const service = new GitService()

@@ -56,6 +56,17 @@ export type BehaviorMode = 'brainstorm' | 'implement' | 'chat'
 export type BehaviorExecutionScope = 'project-thread' | 'standalone-chat' | 'ephemeral'
 
 /**
+ * How much workspace/scratch-scope guard ships in a turn's Harness layer.
+ * - `'full'`: the complete `buildWorkspaceContext` block (engineering modes).
+ * - `'abbreviated'`: a compact scope guard for trimmed modes that still run
+ *   inside a real project directory (file-system chat, ephemeral, brainstorm,
+ *   PR compose) — the control-plane guarantee is kept, not silently dropped.
+ * - `'omitted'`: no guard at all for pure inbox chat (no project scope) and
+ *   image description.
+ */
+export type WorkspaceScopeMode = 'full' | 'abbreviated' | 'omitted'
+
+/**
  * Collapse every whitespace run into a single space so structurally identical
  * instruction layers hash equally regardless of line wrapping or indentation.
  * Used only to derive normalized development hashes — the content itself is
@@ -100,19 +111,28 @@ export class PromptAssembler {
     mode: BehaviorMode = 'implement',
     agentBehaviorPrompt = DEFAULT_AGENT_BEHAVIOR_PROMPT,
     modelKey?: string,
-    executionScope: BehaviorExecutionScope = 'project-thread'
+    executionScope: BehaviorExecutionScope = 'project-thread',
+    workspaceScope: WorkspaceScopeMode = 'full'
   ): Promise<BehaviorLayer[]> {
     const layers: BehaviorLayer[] = []
 
-    const harnessContent = buildWorkspaceContext(driver, projectPath)
-    layers.push(
-      withLayerAccounting({
-        title: `Harness: ${driver?.name ?? 'Agent Harness'}`,
-        content: harnessContent,
-        editable: false,
-        defaultOpen: false
-      })
-    )
+    if (workspaceScope !== 'omitted') {
+      const harnessContent =
+        workspaceScope === 'abbreviated'
+          ? abbreviatedWorkspaceGuard(driver, projectPath)
+          : buildWorkspaceContext(driver, projectPath)
+      layers.push(
+        withLayerAccounting({
+          title:
+            workspaceScope === 'abbreviated'
+              ? `Harness: ${driver?.name ?? 'Agent Harness'} (scope guard)`
+              : `Harness: ${driver?.name ?? 'Agent Harness'}`,
+          content: harnessContent,
+          editable: false,
+          defaultOpen: false
+        })
+      )
+    }
 
     if (executionScope === 'project-thread') {
       layers.push(
@@ -185,8 +205,48 @@ export class PromptAssembler {
     mode: BehaviorMode = 'implement',
     agentBehaviorPrompt = DEFAULT_AGENT_BEHAVIOR_PROMPT,
     modelKey?: string,
-    executionScope: BehaviorExecutionScope = 'project-thread'
+    executionScope: BehaviorExecutionScope = 'project-thread',
+    workspaceScope: WorkspaceScopeMode = 'full'
   ): Promise<string> {
+    return (
+      await this.getAssembledPromptWithLayers(
+        projectId,
+        threadId,
+        projectPath,
+        driver,
+        extraContent,
+        systemPromptConstants,
+        mode,
+        agentBehaviorPrompt,
+        modelKey,
+        executionScope,
+        workspaceScope
+      )
+    ).prompt
+  }
+
+  /**
+   * Same assembly as `getAssembledPrompt` but also returns the accounting
+   * layers so dev-only per-mode attribution can pair `layerSize` estimates
+   * with provider totals without sending the parts through a second assembly.
+   */
+  async getAssembledPromptWithLayers(
+    projectId: string,
+    threadId: string,
+    projectPath: string,
+    driver: DriverInfo | null,
+    extraContent = '',
+    systemPromptConstants?: {
+      SPEC_BRAINSTORM_SYSTEM_PROMPT?: string
+      SPEC_IMPLEMENT_SYSTEM_PROMPT?: string
+      MERMAID_OUTPUT_INSTRUCTION?: string
+    },
+    mode: BehaviorMode = 'implement',
+    agentBehaviorPrompt = DEFAULT_AGENT_BEHAVIOR_PROMPT,
+    modelKey?: string,
+    executionScope: BehaviorExecutionScope = 'project-thread',
+    workspaceScope: WorkspaceScopeMode = 'full'
+  ): Promise<{ prompt: string; layers: BehaviorLayer[] }> {
     const layers = await this.getLayers(
       projectId,
       threadId,
@@ -196,7 +256,8 @@ export class PromptAssembler {
       mode,
       agentBehaviorPrompt,
       modelKey,
-      executionScope
+      executionScope,
+      workspaceScope
     )
     const parts = layers
       .filter((layer) => layer.skipInPrompt !== true)
@@ -207,7 +268,7 @@ export class PromptAssembler {
       })
       .filter(Boolean)
     if (extraContent.trim()) parts.push(extraContent)
-    return parts.join('\n\n')
+    return { prompt: parts.join('\n\n'), layers }
   }
 }
 
@@ -249,6 +310,32 @@ function buildWorkspaceContext(driver: DriverInfo | null, projectPath: string): 
     '2. External references must be Markdown links, e.g. `[pr issue #155](https://github.com/org/repo/pull/155)` — never bare text such as "pr issue #155".',
     '3. Never cite a source you did not inspect or retrieve; when a claim cannot be verified, state that limitation instead of padding the report with references.'
   ].join('\n')
+}
+
+/**
+ * Compact workspace/scratch-scope guard for trimmed modes that still run inside
+ * a real project directory. Preserves the same control-plane guarantees as the
+ * full block (project scope, the `.cio/` scratch space, `.cio/specs/` boundary)
+ * in a few lines instead of the full `buildWorkspaceContext`.
+ */
+export function abbreviatedWorkspaceGuard(
+  driver: DriverInfo | null,
+  projectPath: string
+): string {
+  const harnessLine = driver
+    ? `The active agent harness underneath is ${driver.name} (${driver.id}); it is only the execution engine that runs this session — it is NOT your project or the user's target.`
+    : 'No agent harness is selected; this session may be limited.'
+  const projectLine = projectPath.trim()
+    ? `The user's project is: ${projectPath} — work inside that project only.`
+    : 'Work only in the project the user has open.'
+  return [
+    `You are working inside ${APP_NAME}, a desktop control plane coordinating agentic software engineering on the user's project.`,
+    harnessLine,
+    projectLine,
+    "Unless the user explicitly names the agent harness or CodeInOven itself, every request refers to the current open project and nothing else.",
+    'Keep every non-source output inside the project\'s `.cio/` scratch space; under normal scoped chat, never create or modify `.cio/specs/` (Engineer-mode lifecycle files are platform-owned).',
+    'Cite local files with project-rooted relative paths (e.g. `src/app.html`) — never a bare filename or an absolute filesystem path.'
+  ].join(' ')
 }
 
 function normalizeAgentBehaviorPrompt(prompt: string): string {

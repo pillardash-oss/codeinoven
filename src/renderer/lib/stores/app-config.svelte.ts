@@ -4,6 +4,7 @@ import type { AppConfig } from '$shared/types'
 const DEFAULT_MAX_DIFF_LINES = 100
 
 let maxDiffLines = $state(DEFAULT_MAX_DIFF_LINES)
+let openLocalhostInCioBrowser = $state(true)
 
 /**
  * Reactive slice of the app config for deep components (diff viewers) that do
@@ -14,7 +15,11 @@ export const appConfigState = {
   get maxDiffLines(): number {
     return maxDiffLines
   },
+  get openLocalhostInCioBrowser(): boolean {
+    return openLocalhostInCioBrowser
+  },
   sync(config: AppConfig): void {
     maxDiffLines = config.maxDiffLines
+    openLocalhostInCioBrowser = config.openLocalhostInCioBrowser
   }
 }

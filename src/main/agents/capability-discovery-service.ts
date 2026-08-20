@@ -3,6 +3,7 @@ import type { Dirent } from 'node:fs'
 import { homedir } from 'node:os'
 import { basename, join } from 'node:path'
 import type {
+  AgentCapabilityCatalog,
   AgentCapabilityEntry,
   AgentCapabilityOrigin,
   AgentCapabilitySource,
@@ -116,6 +117,12 @@ interface SkillLocation {
   origin: AgentCapabilityOrigin
 }
 
+/** Optional ownership metadata attached to catalog entries surfaced by `discoverAll`. */
+interface CapabilityAttribution {
+  harnessId?: string
+  projectId?: string
+}
+
 /**
  * Reads the harness-native MCP servers and skills that are actually loaded for
  * one project (global config, harness skills folders, and the shared
@@ -159,6 +166,72 @@ export class CapabilityDiscoveryService {
     }
 
     return { mcp: dedupe(mcp), skill: dedupe(skill) }
+  }
+
+  /**
+   * Settings-level catalog: every skill and MCP server the app can see across
+   * all installed harnesses, the shared global layer, and every registered
+   * local project. Entries are attributed with the owning harness/project so
+   * the Utilities page can group by harness, global, or project — entries are
+   * intentionally NOT name-deduped here because the same capability may be
+   * installed for several harnesses at once.
+   */
+  async discoverAll(
+    projects: Array<{ id: string; path: string }>
+  ): Promise<AgentCapabilityCatalog> {
+    const home = homedir()
+    const mcp: AgentCapabilityEntry[] = []
+    const skill: AgentCapabilityEntry[] = []
+    const specs = Object.values(HARNESS_SPECS)
+
+    for (const spec of specs) {
+      const attribution: CapabilityAttribution = { harnessId: spec.id }
+      for (const configPath of spec.globalConfigPaths) {
+        mcp.push(
+          ...(await this.readMcpConfig(
+            join(home, configPath),
+            'harness',
+            spec.mcpFormat,
+            attribution
+          ))
+        )
+      }
+      for (const dir of spec.globalSkillDirs) {
+        skill.push(...(await this.scanSkillDir(join(home, dir), 'harness', attribution)))
+      }
+      for (const project of projects) {
+        const projectAttribution: CapabilityAttribution = {
+          harnessId: spec.id,
+          projectId: project.id
+        }
+        for (const configPath of spec.projectConfigPaths) {
+          mcp.push(
+            ...(await this.readMcpConfig(
+              join(project.path, configPath),
+              'harness',
+              spec.mcpFormat,
+              projectAttribution
+            ))
+          )
+        }
+        for (const dir of spec.projectSkillDirs) {
+          skill.push(
+            ...(await this.scanSkillDir(join(project.path, dir), 'harness', projectAttribution))
+          )
+        }
+      }
+    }
+
+    skill.push(...(await this.scanSkillDir(join(home, SHARED_GLOBAL_SKILL_DIR), 'global')))
+    for (const project of projects) {
+      skill.push(
+        ...(await this.scanSkillDir(join(project.path, SHARED_PROJECT_SKILL_DIR), 'global', {
+          projectId: project.id
+        }))
+      )
+    }
+
+    return { mcp, skill }
   }
 
   async readSkill(source: AgentCapabilitySource): Promise<NativeSkillContent | null> {
@@ -256,7 +329,8 @@ export class CapabilityDiscoveryService {
   private async readMcpConfig(
     absolutePath: string,
     origin: AgentCapabilityOrigin,
-    format: HarnessSpec['mcpFormat']
+    format: HarnessSpec['mcpFormat'],
+    attribution: CapabilityAttribution = {}
   ): Promise<AgentCapabilityEntry[]> {
     const raw = await readTextFile(absolutePath)
     if (!raw) return []
@@ -270,7 +344,7 @@ export class CapabilityDiscoveryService {
           serverName: server.name
         }
         return {
-          id: `${origin}:mcp:${server.name}`,
+          id: `${origin}:mcp:${absolutePath}:${server.name}`,
           name: server.name,
           kind: 'mcp' as const,
           origin,
@@ -279,7 +353,9 @@ export class CapabilityDiscoveryService {
             server.transport === 'stdio'
               ? `stdio · ${server.command ?? ''}`
               : `${server.transport} · ${server.url ?? ''}`,
-          source
+          source,
+          harnessId: attribution.harnessId,
+          projectId: attribution.projectId
         }
       })
     } catch {
@@ -290,7 +366,8 @@ export class CapabilityDiscoveryService {
 
   private async scanSkillDir(
     absolutePath: string,
-    origin: AgentCapabilityOrigin
+    origin: AgentCapabilityOrigin,
+    attribution: CapabilityAttribution = {}
   ): Promise<AgentCapabilityEntry[]> {
     let entries: Dirent[]
     try {
@@ -313,7 +390,9 @@ export class CapabilityDiscoveryService {
         enabled: true,
         description: parseSkillFrontmatter(markdown, entry.name).description,
         detail: skillPath,
-        source
+        source,
+        harnessId: attribution.harnessId,
+        projectId: attribution.projectId
       })
     }
     return skills

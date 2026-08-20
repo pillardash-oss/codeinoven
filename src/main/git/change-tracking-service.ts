@@ -329,6 +329,37 @@ export class ChangeTrackingService {
     return changes
   }
 
+  /** Re-applies the captured `after`-state (inverse of `restoreBefore`) for
+   *  the selected paths, so an undone turn can be redone from its snapshot. */
+  async restoreAfter(
+    before: ProjectCheckpoint,
+    after: ProjectCheckpoint,
+    selectedPaths?: ReadonlySet<string>
+  ): Promise<CheckpointChange[]> {
+    const projectRoot = await this.resolveProjectRoot(after.projectRoot)
+    if (projectRoot !== before.projectRoot || after.projectRoot !== before.projectRoot) {
+      throw new CheckpointSafetyError(
+        'Checkpoint project root does not match the current project root'
+      )
+    }
+    const changes = this.calculateChanges(before, after).filter(
+      (change) => !selectedPaths || selectedPaths.has(change.path)
+    )
+    for (const change of changes) {
+      const target = this.resolveTrackedPath(projectRoot, change.path)
+      if (change.kind === 'deleted') {
+        await this.removeCreatedFile(target)
+        continue
+      }
+      const source = change.after
+      if (!source) throw new CheckpointSafetyError(`Missing after-state for ${change.path}`)
+      const content = await this.blobs.get(source.hash)
+      if (!content) throw new Error(`Checkpoint blob is unavailable: ${source.hash}`)
+      await this.writeRestoredFile(projectRoot, target, content)
+    }
+    return changes
+  }
+
   private async resolveProjectRoot(projectPath: string): Promise<string> {
     if (!projectPath.trim()) throw new CheckpointSafetyError('Project path is required')
     const absolutePath = resolve(projectPath)

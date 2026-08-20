@@ -4,7 +4,8 @@ import { getConfigRoot, atomicWrite } from '../utils'
 import { createHash } from 'crypto'
 
 const FREQUENCY_FILE = 'memory-frequency.json'
-const PROJECTS_DIR = 'projects'
+const MEMORY_DIR = 'memory'
+const MEMORY_PROJECTS_DIR = join(MEMORY_DIR, 'projects')
 
 interface FrequencyRecord {
   contentHash: string
@@ -24,8 +25,8 @@ function hashContent(content: string): string {
 
 function getFrequencyPath(projectId?: string): string {
   const basePath = projectId
-    ? join(getConfigRoot(), PROJECTS_DIR, projectId)
-    : getConfigRoot()
+    ? join(getConfigRoot(), MEMORY_PROJECTS_DIR, projectId)
+    : join(getConfigRoot(), MEMORY_DIR)
   return join(basePath, FREQUENCY_FILE)
 }
 
@@ -45,7 +46,7 @@ async function readStore(projectId?: string): Promise<FrequencyStore> {
 async function writeStore(store: FrequencyStore, projectId?: string): Promise<void> {
   const path = getFrequencyPath(projectId)
   if (projectId) {
-    await mkdir(join(getConfigRoot(), PROJECTS_DIR, projectId), { recursive: true })
+    await mkdir(join(getConfigRoot(), MEMORY_PROJECTS_DIR, projectId), { recursive: true })
   }
   await atomicWrite(path, JSON.stringify(store, null, 2))
 }
@@ -89,10 +90,7 @@ export async function trackFrequency(
 }
 
 /** Get the frequency count for a specific content hash. */
-export async function getFrequency(
-  content: string,
-  projectId?: string
-): Promise<number> {
+export async function getFrequency(content: string, projectId?: string): Promise<number> {
   const store = await readStore(projectId)
   const hash = hashContent(content)
   return store.records.find((r) => r.contentHash === hash)?.count ?? 0
@@ -108,10 +106,7 @@ export async function getFrequentInstructions(
 }
 
 /** Decay old records by reducing their count. Records below 1 are removed. */
-export async function decayFrequencies(
-  projectId?: string,
-  decayFactor = 0.9
-): Promise<void> {
+export async function decayFrequencies(projectId?: string, decayFactor = 0.9): Promise<void> {
   const store = await readStore(projectId)
   store.records = store.records
     .map((r) => ({ ...r, count: Math.floor(r.count * decayFactor) }))

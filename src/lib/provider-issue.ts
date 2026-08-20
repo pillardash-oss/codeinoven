@@ -1,4 +1,19 @@
-import type { AgentProviderIssueKind } from './types'
+import type { AgentProviderIssue, AgentProviderIssueKind } from './types'
+
+/**
+ * True when a provider issue represents a usage/rate-limit reset wait rather
+ * than a terminal failure. This is the app-wide contract: such issues always
+ * surface as a `waiting` provider card with a retry time, and the retry
+ * scheduler resumes the thread once the reset passes — for every harness,
+ * whether or not the harness schedules its own provider retry.
+ */
+export function isUsageResetWaitIssue(
+  issue: Pick<AgentProviderIssue, 'kind' | 'retryable'> | undefined | null
+): boolean {
+  if (!issue) return false
+  if (issue.kind === 'quota' || issue.kind === 'rate_limit') return true
+  return issue.kind === 'provider_unavailable' && issue.retryable === true
+}
 
 /**
  * Classify a provider/harness failure message and optional HTTP status code into

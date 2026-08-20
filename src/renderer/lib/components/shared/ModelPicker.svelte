@@ -840,10 +840,11 @@
         <span class="min-w-0 flex-1 truncate text-left">{selectedLabelDisplay}</span>
         {#if selectedPeak}
           <span
-            class={`shrink-0 rounded-sm px-1 py-px text-[7px] font-semibold uppercase leading-none ${selectedPeak.state ===
-            'peak'
-              ? 'bg-amber-500/15 text-amber-500'
-              : 'bg-green-500/15 text-green-500'}`}
+            class={`shrink-0 rounded-sm px-1 py-px text-[7px] font-semibold uppercase leading-none ${
+              selectedPeak.state === 'peak'
+                ? 'bg-amber-500/15 text-amber-500'
+                : 'bg-green-500/15 text-green-500'
+            }`}
             title={selectedPeak.tooltip}
             aria-label={selectedPeak.tooltip}
           >
@@ -877,7 +878,7 @@
               sideOffset={4}
               collisionPadding={12}
               onCloseAutoFocus={(event) => event.preventDefault()}
-              class="z-50 w-52 rounded-xl border border-border bg-surface p-1 shadow-xl"
+              class="z-70 w-52 rounded-xl border border-border bg-surface p-1 shadow-xl"
             >
               {#each effectiveThinkingPresets as preset (preset.id)}
                 {@const active = thinkingLevel === preset.id}
@@ -915,7 +916,7 @@
         align="start"
         sideOffset={4}
         collisionPadding={12}
-        class="z-50 flex w-64 flex-col overflow-hidden rounded-xl border bg-surface shadow-lg"
+        class="z-70 flex w-64 flex-col overflow-hidden rounded-xl border bg-surface shadow-lg"
         role="dialog"
         aria-label={multiSelect ? 'Select models' : 'Select model'}
         tabindex={-1}
@@ -1329,10 +1330,11 @@
       </span>
       {#if peak}
         <span
-          class={`shrink-0 rounded-sm px-1 py-px text-[7px] font-semibold uppercase leading-none ${peak.state ===
-          'peak'
-            ? 'bg-amber-500/15 text-amber-500'
-            : 'bg-green-500/15 text-green-500'}`}
+          class={`shrink-0 rounded-sm px-1 py-px text-[7px] font-semibold uppercase leading-none ${
+            peak.state === 'peak'
+              ? 'bg-amber-500/15 text-amber-500'
+              : 'bg-green-500/15 text-green-500'
+          }`}
           title={peak.tooltip}
           aria-label={peak.tooltip}
         >

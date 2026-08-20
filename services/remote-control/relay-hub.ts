@@ -98,6 +98,11 @@ export class RelayHub {
     return this.mobileSockets.get(desktopId)
   }
 
+  /** The currently live desktop socket, used only for authenticated signaling. */
+  desktopSocket(desktopId: string): RelaySocket | undefined {
+    return this.desktopSockets.get(desktopId)
+  }
+
   /** Register a live desktop socket and deliver any buffered frames to it. */
   connectDesktop(desktopId: string, socket: RelaySocket): string[] {
     const previous = this.desktopSockets.get(desktopId)

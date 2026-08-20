@@ -15,6 +15,7 @@ import type {
   PermissionReply,
   ProviderCatalog,
   SessionAgentEvent,
+  ThreadSettings,
   ThinkingLevel,
   UsagePricingProvenance
 } from '../../lib/types'
@@ -501,20 +502,23 @@ export abstract class PersistentCliDriver implements HarnessDriver {
     return []
   }
 
-  async listCommands(): Promise<HarnessCommand[]> {
+  async listCommands(_projectPath: string): Promise<HarnessCommand[]> {
+    void _projectPath
     return []
   }
 
   async runCommand(
     _projectPath: string,
     _sessionId: string,
-    _command: string,
-    _args: string
+    _command: HarnessCommand,
+    _args: string,
+    _settings: ThreadSettings
   ): Promise<void> {
     void _projectPath
     void _sessionId
     void _command
     void _args
+    void _settings
     throw new Error(`${this.name} does not expose slash commands through ${APP_NAME}`)
   }
 

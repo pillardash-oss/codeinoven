@@ -384,11 +384,9 @@
           </span>
         </div>
         <div class="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 font-mono text-xs text-dimmed">
-          {#if tab.activity.modelId}
+          {#if modelLabel}
             <span>
-              {tab.activity.providerId
-                ? `${tab.activity.providerId}/${tab.activity.modelId}`
-                : tab.activity.modelId}
+              {providerName ? `${providerName} · ${modelLabel}` : modelLabel}
             </span>
           {/if}
           {#if tab.activity.providerTaskId && tab.activity.providerTaskId !== sessionId}
@@ -475,8 +473,9 @@
 
       {#if !sessionId}
         <div class="rounded-lg border border-border bg-elevated px-3 py-2.5 text-[11px] text-muted">
-          The provider has not exposed this child session yet. Its assignment and status will
-          continue updating here.
+          {effectiveStatus === 'running' || effectiveStatus === 'waiting'
+            ? 'This provider streams the sub-agent through the parent turn without a separate child transcript. Live output and status appear here.'
+            : 'This provider streamed the sub-agent through the parent turn without a separate child transcript. The captured activity above is the available record.'}
         </div>
       {:else if loading && messages.length === 0}
         <div

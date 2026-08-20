@@ -21,8 +21,9 @@ import { StorageEngine } from '../storage/storage-engine'
 const MEMORY_FILENAME = 'memory.md'
 const PROPOSALS_FILENAME = 'memory-proposals.json'
 const ENTRY_MARKER = '<!-- codeinoven-memory-entry -->'
-const PROJECTS_DIR = 'projects'
-const CHATS_CWD_DIR = 'chats-cwd'
+const MEMORY_DIR = 'memory'
+const MEMORY_PROJECTS_DIR = join(MEMORY_DIR, 'projects')
+const MEMORY_CHATS_DIR = join(MEMORY_DIR, 'chats')
 const THREADS_DIR = 'threads'
 
 export const MEMORY_LIMITS = {
@@ -439,17 +440,17 @@ export class MemoryService {
   private memoryDirectory(projectId?: string, threadId?: string): string {
     if (projectId === 'inbox') {
       const safeThreadId = optionalEntityId(threadId, 'Thread ID')
-      if (safeThreadId) return join(CHATS_CWD_DIR, THREADS_DIR, safeThreadId)
-      return CHATS_CWD_DIR
+      if (safeThreadId) return join(MEMORY_CHATS_DIR, THREADS_DIR, safeThreadId)
+      return MEMORY_CHATS_DIR
     }
     const safeProjectId = optionalEntityId(projectId, 'Project ID')
     const safeThreadId = optionalEntityId(threadId, 'Thread ID')
     if (safeThreadId && !safeProjectId) throw new TypeError('Thread memory requires a project ID')
     if (safeProjectId && safeThreadId) {
-      return join(PROJECTS_DIR, safeProjectId, THREADS_DIR, safeThreadId)
+      return join(MEMORY_PROJECTS_DIR, safeProjectId, THREADS_DIR, safeThreadId)
     }
-    if (safeProjectId) return join(PROJECTS_DIR, safeProjectId)
-    return ''
+    if (safeProjectId) return join(MEMORY_PROJECTS_DIR, safeProjectId)
+    return MEMORY_DIR
   }
 
   private async readMemoryMd(projectId?: string, threadId?: string): Promise<string> {
@@ -504,7 +505,7 @@ export class MemoryService {
 
     if (projectId === 'inbox') {
       entries.push(...(await this.getEntries('inbox')))
-      const threadDirectory = join(CHATS_CWD_DIR, THREADS_DIR)
+      const threadDirectory = join(MEMORY_CHATS_DIR, THREADS_DIR)
       try {
         const threadIds = await this.storage.listDirectories(threadDirectory)
         for (const threadId of threadIds) {
@@ -522,7 +523,7 @@ export class MemoryService {
     entries.push(...(await this.getEntries(projectId)))
 
     const threadDirectory = join(
-      PROJECTS_DIR,
+      MEMORY_PROJECTS_DIR,
       optionalEntityId(projectId, 'Project ID')!,
       THREADS_DIR
     )
@@ -575,7 +576,7 @@ export class MemoryService {
       }
       entries.push(...(await this.getEntries(safeProjectId)))
       const threadIds = await this.storage.listDirectories(
-        join(PROJECTS_DIR, safeProjectId, THREADS_DIR)
+        join(MEMORY_PROJECTS_DIR, safeProjectId, THREADS_DIR)
       )
       for (const threadId of threadIds) {
         entries.push(...(await this.getEntries(safeProjectId, threadId)))
@@ -586,9 +587,11 @@ export class MemoryService {
 
   private async collectProjectMemory(): Promise<MemoryEntry[]> {
     const entries: MemoryEntry[] = []
-    for (const pid of await this.storage.listDirectories(PROJECTS_DIR)) {
+    for (const pid of await this.storage.listDirectories(MEMORY_PROJECTS_DIR)) {
       entries.push(...(await this.getEntries(pid)))
-      const threadIds = await this.storage.listDirectories(join(PROJECTS_DIR, pid, THREADS_DIR))
+      const threadIds = await this.storage.listDirectories(
+        join(MEMORY_PROJECTS_DIR, pid, THREADS_DIR)
+      )
       for (const threadId of threadIds) {
         entries.push(...(await this.getEntries(pid, threadId)))
       }
@@ -599,7 +602,7 @@ export class MemoryService {
   private async collectChatMemory(): Promise<MemoryEntry[]> {
     const entries: MemoryEntry[] = []
     entries.push(...(await this.getEntries(INBOX_PROJECT_ID)))
-    const threadIds = await this.storage.listDirectories(join(CHATS_CWD_DIR, THREADS_DIR))
+    const threadIds = await this.storage.listDirectories(join(MEMORY_CHATS_DIR, THREADS_DIR))
     for (const threadId of threadIds) {
       entries.push(...(await this.getEntries(INBOX_PROJECT_ID, threadId)))
     }
@@ -734,8 +737,7 @@ export class MemoryService {
     if (!config.enabled) return []
     return config.entries
       .filter(
-        (entry) =>
-          entry.enabled && entryAppliesToContext(entry, projectId, threadId, modelKey)
+        (entry) => entry.enabled && entryAppliesToContext(entry, projectId, threadId, modelKey)
       )
       .map((entry): SpecContextReference => ({
         id: `memory-${entry.id}`,
@@ -855,9 +857,9 @@ export class MemoryService {
   }
 
   private proposalsDirectory(projectId?: string): string {
-    if (projectId === 'inbox') return CHATS_CWD_DIR
+    if (projectId === 'inbox') return MEMORY_CHATS_DIR
     const safeProjectId = optionalEntityId(projectId, 'Project ID')
-    return safeProjectId ? join(PROJECTS_DIR, safeProjectId) : ''
+    return safeProjectId ? join(MEMORY_PROJECTS_DIR, safeProjectId) : MEMORY_DIR
   }
 
   private async readProposals(projectId?: string): Promise<MemoryProposal[]> {

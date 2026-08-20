@@ -1,43 +1,45 @@
-import { Menu, type BrowserWindow, type MenuItemConstructorOptions } from 'electron'
+import { Menu, type MenuItemConstructorOptions } from 'electron'
 
-interface KeyboardShortcutInput {
-  type: string
-  key: string
-  code: string
-  shift: boolean
-  control: boolean
-  alt: boolean
-  meta: boolean
-}
-
-function isBlockedProductionShortcut(input: KeyboardShortcutInput): boolean {
-  if (input.type !== 'keyDown') return false
-
-  const key = input.key.toLowerCase()
-  const code = input.code.toLowerCase()
-  const primaryModifier = input.control || input.meta
-
-  const isReload =
-    key === 'f5' ||
-    code === 'f5' ||
-    (primaryModifier && key === 'r') ||
-    (primaryModifier && code === 'keyr')
-  const isDeveloperTools =
-    key === 'f12' ||
-    code === 'f12' ||
-    (input.control && input.shift && ['c', 'i', 'j'].includes(key)) ||
-    (input.meta && input.alt && ['c', 'i', 'j'].includes(key))
-
-  return isReload || isDeveloperTools
+/** The standard View menu restored in production so users can open developer
+ *  tools, reload, zoom, and toggle fullscreen from the application menu. */
+function viewMenuTemplate(): MenuItemConstructorOptions {
+  return {
+    label: 'View',
+    submenu: [
+      { role: 'reload' },
+      { role: 'forceReload' },
+      { type: 'separator' },
+      { role: 'toggleDevTools' },
+      { type: 'separator' },
+      { role: 'resetZoom' },
+      { role: 'zoomIn' },
+      { role: 'zoomOut' },
+      { type: 'separator' },
+      { role: 'togglefullscreen' }
+    ]
+  }
 }
 
 /**
- * Remove menu entries that can reload the renderer or open Chromium developer
- * tools. macOS requires an application menu, while Windows and Linux can omit it.
+ * Application menu for production. macOS keeps the required app menu while
+ * Windows/Linux regain a full menu bar; every platform gets the standard View
+ * menu (developer tools, reload, zoom, fullscreen) back so users can open the
+ * developer option and adjust the view.
  */
 export function installProductionApplicationMenu(appName: string): void {
+  const viewMenu = viewMenuTemplate()
+
   if (process.platform !== 'darwin') {
-    Menu.setApplicationMenu(null)
+    const template: MenuItemConstructorOptions[] = [
+      {
+        label: 'File',
+        submenu: [{ role: 'quit' }]
+      },
+      { role: 'editMenu' },
+      viewMenu,
+      { role: 'windowMenu' }
+    ]
+    Menu.setApplicationMenu(Menu.buildFromTemplate(template))
     return
   }
 
@@ -57,17 +59,9 @@ export function installProductionApplicationMenu(appName: string): void {
       ]
     },
     { role: 'editMenu' },
+    viewMenu,
     { role: 'windowMenu' }
   ]
 
   Menu.setApplicationMenu(Menu.buildFromTemplate(template))
-}
-
-/** Block renderer reload and developer-tool accelerators in production. */
-export function lockDownProductionWindow(window: BrowserWindow): void {
-  window.webContents.on('before-input-event', (event, input) => {
-    if (isBlockedProductionShortcut(input)) {
-      event.preventDefault()
-    }
-  })
 }

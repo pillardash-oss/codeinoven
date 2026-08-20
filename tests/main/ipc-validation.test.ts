@@ -376,8 +376,8 @@ describe('privileged-IPC external URL validation', () => {
     )
   })
 
-  it('permits intentionally supported development http: origins', () => {
-    const validator = createValidator({ allowDevelopmentHttp: true })
+  it('permits parsed http: URLs in development and production', () => {
+    const validator = createValidator()
     expect(validator.validateExternalUrl('http://localhost:5173')).toBe('http://localhost:5173/')
     expect(validator.validateExternalUrl('http://127.0.0.1:8877/api')).toBe(
       'http://127.0.0.1:8877/api'
@@ -385,19 +385,10 @@ describe('privileged-IPC external URL validation', () => {
     expect(validator.validateExternalUrl('http://[::1]:5173/')).toBe('http://[::1]:5173/')
   })
 
-  it('rejects plain http: URLs in production, including localhost', () => {
+  it('permits public plain http: URLs in production', () => {
     const validator = createValidator()
-    for (const url of ['http://example.com', 'http://localhost:5173', 'http://127.0.0.1:8877']) {
-      expect(() => validator.validateExternalUrl(url)).toThrow(/only supported in development/iu)
-    }
-  })
-
-  it('rejects non-localhost http: URLs even in development', () => {
-    const validator = createValidator({ allowDevelopmentHttp: true })
-    expect(() => validator.validateExternalUrl('http://example.com')).toThrow(
-      /localhost development/iu
-    )
-    expect(() => validator.validateExternalUrl('http://192.168.1.10')).toThrow(TypeError)
+    expect(validator.validateExternalUrl('http://example.com')).toBe('http://example.com/')
+    expect(validator.validateExternalUrl('http://localhost:5173')).toBe('http://localhost:5173/')
   })
 
   it('rejects non-web schemes, credentials, control characters, and malformed input', () => {

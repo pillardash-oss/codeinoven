@@ -3,9 +3,9 @@
   import {
     Boxes,
     ChevronLeft,
-    Globe2,
     Loader2,
     Server,
+    Sparkles,
     Trash2,
     Upload,
     BookOpen
@@ -14,9 +14,12 @@
   import { invoke } from '$lib/ipc.svelte'
   import { getProjectIcon, loadProjectIcons } from '$lib/project-icons'
   import { pickColorForSeed } from '$lib/project-colors'
+  import { providerCatalog } from '$lib/stores/provider-catalog.svelte'
   import { providerStore } from '$lib/stores/providers.svelte'
   import type { ScopeProject } from '$lib/stores/scope.svelte'
+  import { workspaceState } from '$lib/stores/workspace.svelte'
   import ProjectSelect from '../shared/ProjectSelect.svelte'
+  import ModelPicker from '../shared/ModelPicker.svelte'
   import RichMarkdownEditor from '../shared/RichMarkdownEditor.svelte'
   import ThreadSelect from '../shared/ThreadSelect.svelte'
   import Modal from '../ui/Modal.svelte'
@@ -27,6 +30,7 @@
     NativeMcpContent,
     Project,
     Thread,
+    ThreadSettings,
     UtilityActivation,
     UtilityConfigMap,
     UtilityCredentialInput,
@@ -35,10 +39,11 @@
     UtilityDefinitionInput,
     UtilityDefinitionPatch,
     UtilityKind,
+    UtilitySetupReport,
     UtilityScope,
     WebToolProviderId
   } from '$shared/types'
-  import { isOrchestrationChildThread } from '$shared/types'
+  import { ALL_HARNESSES_BINDING_ID, isOrchestrationChildThread } from '$shared/types'
 
   type ScopeLevel = UtilityScope['level']
   type BindingStrategy = HarnessUtilityBinding['strategy']
@@ -96,103 +101,29 @@
 
   let { open, target, onClose, onSaved, onChanged }: Props = $props()
 
-  interface SetupPreset {
-    id: string
+  const createChoices: Array<{
+    id: 'skill' | 'mcp' | 'plugin'
     title: string
     description: string
-    group: 'Ready to use' | 'Build your own'
-    badge: string
-  }
-
-  const registryPresets: SetupPreset[] = [
+    icon: typeof BookOpen
+  }> = [
     {
-      id: 'svelte-mcp',
-      title: 'Svelte MCP',
-      description:
-        'Official remote Svelte and SvelteKit documentation server. No command required.',
-      group: 'Ready to use',
-      badge: 'MCP'
+      id: 'skill',
+      title: 'Skill',
+      description: 'Paste SKILL.md instructions an agent can load on demand.',
+      icon: BookOpen
     },
     {
-      id: 'convex-mcp',
-      title: 'Convex MCP',
-      description:
-        'Run the official Convex MCP server through Bun for project-aware database tools.',
-      group: 'Ready to use',
-      badge: 'MCP'
+      id: 'mcp',
+      title: 'MCP server',
+      description: 'Connect an MCP server over stdio, HTTP, or SSE directly.',
+      icon: Server
     },
     {
-      id: 'convex-skill',
-      title: 'Convex skill',
-      description: 'Add focused Convex implementation guidance that agents load only when needed.',
-      group: 'Ready to use',
-      badge: 'Skill'
-    },
-    {
-      id: 'exa-search',
-      title: 'Exa search',
-      description: 'Search the web with Exa. You only need to provide an API key.',
-      group: 'Ready to use',
-      badge: 'Web search'
-    },
-    {
-      id: 'exa-fetch',
-      title: 'Exa contents',
-      description: 'Retrieve page contents through Exa for agents without native web fetch.',
-      group: 'Ready to use',
-      badge: 'Web fetch'
-    },
-    {
-      id: 'firecrawl-skill',
-      title: 'Firecrawl',
-      description:
-        'Add Firecrawl web context skills for agents: search, scrape, interact, parse, research, and monitoring. The CLI installs during the session.',
-      group: 'Ready to use',
-      badge: 'Skill'
-    },
-    {
-      id: 'brave-search',
-      title: 'Brave search',
-      description: 'Search the web with the Brave Search API. You only need to provide an API key.',
-      group: 'Ready to use',
-      badge: 'Web search'
-    },
-    {
-      id: 'custom-mcp',
-      title: 'Custom MCP server',
-      description: 'Paste a common MCP JSON configuration or enter a local command or remote URL.',
-      group: 'Build your own',
-      badge: 'MCP'
-    },
-    {
-      id: 'custom-skill',
-      title: 'Custom skill',
-      description: 'Paste SKILL.md instructions and decide which harnesses may load them.',
-      group: 'Build your own',
-      badge: 'Skill'
-    },
-    {
-      id: 'custom-web',
-      title: 'Custom web utility',
-      description: 'Connect a search or fetch API while keeping its key in secure storage.',
-      group: 'Build your own',
-      badge: 'Web'
-    },
-    {
-      id: 'image-descriptor',
-      title: 'Image descriptor',
-      description:
-        'Let text-only models describe attached images using a vision-capable model from the catalog.',
-      group: 'Build your own',
-      badge: 'Vision'
-    },
-    {
-      id: 'plugin-bundle',
-      title: 'Import plugin bundle',
-      description:
-        'Install a JSON manifest containing several MCP, skill, or web capabilities atomically.',
-      group: 'Build your own',
-      badge: 'Plugin'
+      id: 'plugin',
+      title: 'Plugin bundle',
+      description: 'Import a JSON manifest that installs several capabilities atomically.',
+      icon: Boxes
     }
   ]
 
@@ -222,6 +153,15 @@ Write the skill…`
   let secureStorageAvailable = $state(true)
   let loadingNative = $state(false)
   let utilities = $state<UtilityDefinition[]>([])
+  let agentRequest = $state('')
+  let agentReport = $state<UtilitySetupReport | null>(null)
+  let agentProjectId = $state('')
+  let agentSettings = $state<ThreadSettings | null>(null)
+  let agentProviders = $derived(
+    agentProjectId
+      ? (providerCatalog.cached(agentProjectId) ?? providerCatalog.allCached())
+      : providerCatalog.allCached()
+  )
 
   /** How long the editor's project/thread/icon context stays reusable across opens. */
   const EDITOR_CONTEXT_TTL_MS = 15_000
@@ -252,11 +192,24 @@ Write the skill…`
   let editingRegistry = $derived(target?.kind === 'registry' ? target.utility : null)
   let isAppOwned = $derived(target?.kind === 'registry' && target.utility?.appOwned === true)
 
-  let availableHarnesses = $derived(
-    providerStore.providers
-      .filter((provider) => provider.integration === 'ready' && provider.status === 'available')
+  /** Installed, supported harnesses the editor may bind a capability to.
+   *  Follows the model picker's protocol: the provider catalog (persisted
+   *  snapshot + background refresh, never a cold Harnesses-page probe) decides
+   *  which harnesses exist, while `providerStore` supplies canonical names and
+   *  drops harnesses whose installed version is unsupported. Probing status is
+   *  only ever additive — a confirmed `available` harness stays listed. */
+  let availableHarnesses = $derived.by((): Array<{ id: string; name: string }> => {
+    const catalogIds = new Set(providerCatalog.allCached().map((catalog) => catalog.harnessId))
+    return providerStore.providers
+      .filter((provider) => !providerStore.isUnsupported(provider.id))
+      .filter(
+        (provider) =>
+          provider.status === 'available' ||
+          provider.status === 'checking' ||
+          catalogIds.has(provider.id)
+      )
       .map((provider) => ({ id: provider.id, name: provider.name }))
-  )
+  })
   let scopedThreads = $derived(
     threads.filter(
       (thread) =>
@@ -292,6 +245,7 @@ Write the skill…`
   let title = $derived.by(() => {
     if (isNative) return `Edit ${nativeEntry?.name ?? 'capability'}`
     if (draft.id) return 'Edit utility'
+    if (setupPreset === 'agent') return 'Agent-assisted Utility Setup'
     if (setupPreset) return 'Configure capability'
     return 'Add capability'
   })
@@ -363,17 +317,42 @@ ${instructions}`
     return { name, description }
   }
 
-  function bindings(
+  function allHarnessBinding(
     strategy: BindingStrategy,
     nativeCapability: string,
     transportName: string
   ): BindingDraft[] {
-    return availableHarnesses.map((harness) => ({
-      harnessId: harness.id,
-      strategy,
-      nativeCapability,
-      transportName
-    }))
+    return [
+      {
+        harnessId: ALL_HARNESSES_BINDING_ID,
+        strategy,
+        nativeCapability,
+        transportName
+      }
+    ]
+  }
+
+  function newBinding(harnessId: string): BindingDraft {
+    return {
+      harnessId,
+      strategy:
+        draft.kind === 'skill' ? 'skill' : draft.kind === 'image_descriptor' ? 'native' : 'mcp',
+      nativeCapability:
+        draft.kind === 'web_search' || draft.kind === 'web_fetch'
+          ? draft.kind
+          : draft.kind === 'image_descriptor'
+            ? 'image_descriptor'
+            : '',
+      transportName:
+        draft.name
+          .toLowerCase()
+          .replace(/[^a-z0-9]+/gu, '-')
+          .replace(/^-|-$/gu, '') || 'utility'
+    }
+  }
+
+  function selectAllHarnesses(): void {
+    draft.bindings = [newBinding(ALL_HARNESSES_BINDING_ID)]
   }
 
   function toggleHarness(harnessId: string): void {
@@ -382,25 +361,9 @@ ${instructions}`
       draft.bindings = draft.bindings.filter((binding) => binding.harnessId !== harnessId)
       return
     }
-    const strategy: BindingStrategy =
-      draft.kind === 'skill' ? 'skill' : draft.kind === 'image_descriptor' ? 'native' : 'mcp'
     draft.bindings = [
-      ...draft.bindings,
-      {
-        harnessId,
-        strategy,
-        nativeCapability:
-          draft.kind === 'web_search' || draft.kind === 'web_fetch'
-            ? draft.kind
-            : draft.kind === 'image_descriptor'
-              ? 'image_descriptor'
-              : '',
-        transportName:
-          draft.name
-            .toLowerCase()
-            .replace(/[^a-z0-9]+/gu, '-')
-            .replace(/^-|-$/gu, '') || 'utility'
-      }
+      ...draft.bindings.filter((binding) => binding.harnessId !== ALL_HARNESSES_BINDING_ID),
+      newBinding(harnessId)
     ]
   }
 
@@ -419,350 +382,22 @@ ${instructions}`
     draft.threadId = ''
   }
 
-  function choosePreset(id: string): void {
+  function chooseCreate(id: 'skill' | 'mcp' | 'plugin'): void {
     setupPreset = id
     draft = emptyDraft()
     resetCredential()
     editorError = ''
-    if (id === 'plugin-bundle') return
-    if (id === 'svelte-mcp') {
-      draft.kind = 'mcp'
-      draft.name = 'Svelte MCP'
-      draft.description = 'Current Svelte and SvelteKit documentation and code assistance.'
-      draft.transport = 'http'
-      draft.url = 'https://mcp.svelte.dev/mcp'
-      draft.bindings = bindings('mcp', 'svelte_mcp', 'svelte')
-    } else if (id === 'convex-mcp') {
-      draft.kind = 'mcp'
-      draft.name = 'Convex MCP'
-      draft.description = 'Project-aware Convex deployment, schema, function, and data tools.'
-      draft.transport = 'stdio'
-      draft.command = 'bunx'
-      draft.args = ['convex@latest', 'mcp', 'start'].join('\n')
-      draft.bindings = bindings('mcp', 'convex_mcp', 'convex')
-    } else if (id === 'convex-skill') {
+    if (id === 'plugin') {
+      setupPreset = 'plugin-bundle'
+      return
+    }
+    if (id === 'skill') {
       draft.kind = 'skill'
-      draft.instructions = `---
-name: convex
-description: Convex implementation guidance and project conventions.
----
-
-# Convex
-
-Use current Convex conventions when working in a Convex project.
-
-## Workflow
-
-- Inspect the schema and generated API before editing functions.
-- Use explicit argument and return validators.
-- Enforce authorization in public functions.
-- Prefer indexed queries over filtering.
-- Keep Node-only work in actions.
-- Run the project's scoped Convex and TypeScript checks after changes.`
-      draft.bindings = bindings('skill', 'convex_skill', 'convex')
-    } else if (id === 'exa-search' || id === 'exa-fetch') {
-      const search = id === 'exa-search'
-      draft.kind = search ? 'web_search' : 'web_fetch'
-      draft.provider = 'exa'
-      draft.name = search ? 'Exa Search' : 'Exa Contents'
-      draft.description = search
-        ? 'Search the web with Exa.'
-        : 'Retrieve clean page contents through Exa.'
-      draft.endpoint = search ? 'https://api.exa.ai/search' : 'https://api.exa.ai/contents'
-      draft.headers = JSON.stringify({ 'x-api-key': '{env:EXA_API_KEY}' }, null, 2)
-      draft.bindings = bindings(
-        'mcp',
-        search ? 'web_search' : 'web_fetch',
-        search ? 'exa-search' : 'exa-fetch'
-      )
-      credentialId = 'api-key'
-      credentialLabel = 'Exa API key'
-      credentialEnvironmentVariable = 'EXA_API_KEY'
-      credentialRequired = true
-    } else if (id === 'firecrawl-skill') {
-      draft.kind = 'skill'
-      draft.name = 'Firecrawl'
-      draft.description =
-        'Firecrawl web context skills for agents: search, scrape, interact, parse, research, and monitoring.'
-      draft.instructions = `---
-name: firecrawl
-description: |
-  Firecrawl gives AI agents and apps fast, reliable web context with
-  strong search, scraping, interaction, document parsing, research,
-  and monitoring tools. One install command sets up three skill
-  segments: live CLI tools, app-integration build skills, and
-  outcome-focused workflow skills. Route the reader to the right
-  usage path after install.
----
-
-# Firecrawl
-
-Firecrawl helps agents search first, scrape clean content, interact
-with live pages when plain extraction is not enough, parse local
-documents into markdown, search scientific papers and GitHub history
-through the research index, monitor pages for changes, and produce
-finished deliverables from web data.
-
-## Install
-
-One command installs everything — the Firecrawl CLI for live web work,
-the build skills for integrating Firecrawl into application code, **and**
-the workflow skills for producing repeatable deliverables. It also opens
-browser auth so the human can sign in or create an account.
-
-\`\`\`bash
-npx -y firecrawl-cli@latest init --all --browser
-\`\`\`
-
-This gives you:
-
-- **CLI tools** — \`firecrawl search\`, \`firecrawl scrape\`, \`firecrawl interact\`, \`firecrawl parse\`, \`firecrawl monitor\`, \`firecrawl research\`, \`firecrawl ask\`, \`firecrawl docs-search\`, and more
-- **CLI skills** — teach the agent how to drive the Firecrawl CLI during its own session: which command to run, when to scrape vs search vs interact, how to chain results, and how to recover when a job fails. Use these when the agent itself needs web data right now.
-- **Build skills** — teach the agent how to add Firecrawl to a product's codebase: pick the right API endpoint, install the matching SDK, store \`FIRECRAWL_API_KEY\` safely, write the call site to match the project's conventions, and ship a smoke-tested integration. Use these when the agent is shipping code that other people will run, not running the agent's own web tools.
-- **Workflow skills** — turn Firecrawl web data into finished deliverables such as research briefs, SEO audits, lead lists, QA reports, knowledge bases, and design clones. Use these when the agent's job is to produce a finished artifact, not raw extraction or product code.
-- **Browser auth** — walks the human through sign-in or account creation
-
-Before doing real work, verify the install:
-
-\`\`\`bash
-mkdir -p .firecrawl
-firecrawl --status
-firecrawl scrape "https://firecrawl.dev" -o .firecrawl/install-check.md
-\`\`\`
-
-## Get Credentials
-
-Firecrawl users can get an API key in two ways:
-
-- **Dashboard or CLI (default)** — browser sign-in, CLI \`--browser\` auth,
-  install skills/MCP, or create an API key in the dashboard. Continue
-  with Path D below, or run the install command first.
-- **WorkOS ID-JAG (supported agent platforms only)** — if your platform
-  can mint a WorkOS ID-JAG identity assertion, fetch
-  \`https://www.firecrawl.dev/auth.md\` and follow it end-to-end. Do not
-  run the browser or CLI auth flow in Path D.
-
-Human-readable overview:
-https://docs.firecrawl.dev/ai-onboarding#get-credentials
-
-## Choose Your Path
-
-All paths use the same install above. The difference is what you do
-next.
-
-- **Need web data during this session** -> Path A (live tools)
-- **Need to add Firecrawl to app code** -> Path B (app integration)
-- **Need a finished deliverable from web data** -> Path C (workflow skills)
-- **Need more than one of the above** -> do them in sequence; the install already covers everything
-- **Agent platform with WorkOS ID-JAG** -> see Get Credentials above (not Path D)
-- **Need an account or API key (browser or CLI)** -> Path D
-- **Don't want to install anything** -> Path E (REST API directly)
-- **No API key and the human cannot sign up right now** -> Path F (keyless free tier, fallback)
-
----
-
-## Path A: Live Web Tools
-
-Use this when you need web data during your work: searching the web,
-scraping known URLs, interacting with live pages, crawling docs,
-mapping a site, parsing local documents, searching research papers,
-or monitoring pages for changes.
-
-After install, hand off to the CLI skill. Default flow for live web work:
-
-1. start with search when you need discovery
-2. move to scrape when you have a URL
-3. use interact only when the page needs clicks, forms, or login
-4. use parse when the source is a local file instead of a URL
-5. use monitor when the request implies recurrence or notifications ("alert me when", "track this page") rather than a one-time read
-6. if any step fails or returns unexpected output, run \`firecrawl ask\` with the failing \`jobId\` instead of guessing
-
-If the task becomes "wire Firecrawl into product code," switch to Path B.
-
----
-
-## Path B: Integrate Firecrawl Into an App
-
-Use this when you're building an application, agent, or workflow that
-calls the Firecrawl API **from code** — meaning the integration will run
-inside the user's product (a web app, backend service, script, agent
-loop, or pipeline) rather than from the agent's own terminal session.
-
-Save the key to the project's environment:
-
-\`\`\`dotenv
-FIRECRAWL_API_KEY=fc-...
-\`\`\`
-
-The required question in the build path is:
-
-- **What should Firecrawl do in the product?**
-
-Use the answer to route to \`/search\`, \`/scrape\`, \`/interact\`, \`/parse\`, \`/crawl\`, \`/map\`, \`/monitor\`, or the research index, then run one real Firecrawl request as a smoke test.
-
-If you do not have a key yet, do Path D first.
-
----
-
-## Path C: Repeatable Deliverables
-
-Use this when the goal is a finished artifact powered by Firecrawl web
-data — a research brief, SEO audit, QA report, lead list, knowledge
-base, competitive intel digest, or a cloned design system — not raw web
-extraction and not product-code integration.
-
-Workflow skills infer from context first and only ask short clarifying
-questions when an input would block the work.
-
-Default flow for workflow deliverables:
-
-1. confirm the workflow and final artifact with the user
-2. collect web evidence with Firecrawl through the CLI or equivalent tool surface
-3. save or cite source evidence so claims are traceable
-4. run independent research units in parallel when available
-5. synthesize findings into the requested deliverable
-6. include a short "rerun inputs" block when the workflow could be automated
-
-If the underlying web work fails or the request shifts to "wire Firecrawl into product code," switch to Path A or Path B.
-
----
-
-## Path D: Account Authorization Or API Key
-
-Use this when the human still needs to sign up, sign in, authorize
-access, or obtain an API key.
-
-If you already have a valid \`FIRECRAWL_API_KEY\`, skip this path.
-
-If you're the human reading this in the browser, create an account or
-sign in at:
-
-- https://www.firecrawl.dev/signin?view=signup&source=agent-suggested
-
-If you're an agent and need the human to authorize an API key, use this
-flow:
-
-**Step 1 — Generate auth parameters:**
-
-\`\`\`bash
-SESSION_ID=$(openssl rand -hex 32)
-CODE_VERIFIER=$(openssl rand -base64 32 | tr '+/' '-_' | tr -d '=\\n' | head -c 43)
-CODE_CHALLENGE=$(printf '%s' "$CODE_VERIFIER" | openssl dgst -sha256 -binary | openssl base64 -A | tr '+/' '-_' | tr -d '=')
-\`\`\`
-
-**Step 2 — Ask the human to open this URL:**
-
-\`\`\`
-https://www.firecrawl.dev/cli-auth?code_challenge=$CODE_CHALLENGE&source=coding-agent#session_id=$SESSION_ID
-\`\`\`
-
-**Step 3 — Poll for the API key:**
-
-\`\`\`bash
-POST https://www.firecrawl.dev/api/auth/cli/status
-Content-Type: application/json
-
-{"session_id": "$SESSION_ID", "code_verifier": "$CODE_VERIFIER"}
-\`\`\`
-
-Poll every 3 seconds. Responses:
-
-- \`{"status": "pending"}\` — keep polling
-- \`{"status": "complete", "apiKey": "fc-...", "teamName": "..."}\` — done
-
-**Step 4 — Save the key and continue:**
-
-\`\`\`bash
-echo "FIRECRAWL_API_KEY=fc-..." >> .env
-\`\`\`
-
----
-
-## Path E: Use Firecrawl Without Installing Anything
-
-Use this when you don't want to install a CLI or skills package.
-
-**Base URL:** \`https://api.firecrawl.dev/v2\`
-
-**Auth header:** \`Authorization: Bearer fc-YOUR_API_KEY\`
-
-### Available endpoints
-
-- \`POST /search\` — discover pages by query
-- \`POST /scrape\` — extract clean markdown from a single URL
-- \`POST /interact\` — browser actions on live pages (clicks, forms, navigation)
-- \`POST /parse\` — upload a local or non-public document as \`multipart/form-data\` and get back markdown, JSON, HTML, links, images, or a summary. Use \`/scrape\` when the document has a public URL
-- \`POST /monitor\` — create a recurring check that watches pages, diffs each check against the last snapshot, optionally judges changes against a plain-language \`goal\`, and notifies by webhook, email, or Slack
-- \`GET /search/research/papers\` — search a scientific paper index by natural-language query; \`GET /search/research/github\` searches GitHub issues, PRs, discussions, and READMEs
-- \`POST /support/ask\` — diagnose a failing Firecrawl call
-- \`POST /support/docs-search\` — answer "how do I…" questions from Firecrawl's official docs
-
-### Documentation and references
-
-- **API reference:** https://docs.firecrawl.dev
-- **Skills repo:** https://github.com/firecrawl/skills
-
----
-
-## Path F: Keyless Free Tier (Fallback)
-
-Use this when you need Firecrawl right now and cannot obtain an API key,
-for example when the human is not available to sign up.
-
-- **MCP**: point any MCP-compatible client at \`https://mcp.firecrawl.dev/v2/mcp\`
-- **CLI**: run \`npx -y firecrawl-cli@latest\` and use \`scrape\`, \`search\`, \`interact\`, or \`parse\` with no login
-- **API**: the research index endpoints (\`/search/research/*\`) can be called without an \`Authorization\` header
-
-Search, scrape, interact, parse, and the research index are available
-keyless. Crawl, map, monitor, extract, batch scrape, agent, and other
-endpoints still require an API key.
-
-Prefer a free account when the human can sign up: do Path D to get an
-account or API key, which unlocks higher limits and the full set of
-endpoints. If you hit rate limits on the keyless free tier, ask the human
-to sign up at https://www.firecrawl.dev/signin.`
-      draft.bindings = bindings('skill', 'firecrawl', 'firecrawl')
-    } else if (id === 'brave-search') {
-      draft.kind = 'web_search'
-      draft.provider = 'brave'
-      draft.name = 'Brave Search'
-      draft.description = 'Search the web with Brave Search.'
-      draft.endpoint = 'https://api.search.brave.com/res/v1/web/search'
-      draft.headers = JSON.stringify({ 'X-Subscription-Token': '{env:BRAVE_API_KEY}' }, null, 2)
-      draft.bindings = bindings('mcp', 'web_search', 'brave-search')
-      credentialId = 'api-key'
-      credentialLabel = 'Brave Search API key'
-      credentialEnvironmentVariable = 'BRAVE_API_KEY'
-      credentialRequired = true
-    } else if (id === 'custom-mcp') {
-      draft.kind = 'mcp'
-      draft.bindings = bindings('mcp', '', 'custom-mcp')
-    } else if (id === 'image-descriptor') {
-      draft.kind = 'image_descriptor'
-      draft.name = 'Image descriptor'
-      draft.description =
-        'Describes attached images with a vision model so text-only models can reason about them.'
-      draft.descriptorHarnessId = 'opencode'
-      draft.bindings = bindings('native', 'image_descriptor', 'image-descriptor')
-    } else if (id === 'custom-skill') {
-      draft.kind = 'skill'
-      draft.instructions = `---
-name: my-skill
-description: Explain when an agent should use this skill.
----
-
-# Instructions
-
-Write the complete workflow, rules, and examples for this skill.`
-      draft.bindings = bindings('skill', '', 'custom-skill')
+      draft.instructions = skillPlaceholder
+      draft.bindings = allHarnessBinding('skill', '', 'custom-skill')
     } else {
-      draft.kind = 'web_search'
-      draft.headers = JSON.stringify({ Authorization: 'Bearer {env:WEB_API_KEY}' }, null, 2)
-      draft.bindings = bindings('mcp', 'web_search', 'custom-web')
-      credentialId = 'api-key'
-      credentialLabel = 'Web API key'
-      credentialEnvironmentVariable = 'WEB_API_KEY'
-      credentialRequired = true
+      draft.kind = 'mcp'
+      draft.bindings = allHarnessBinding('mcp', '', 'custom-mcp')
     }
   }
 
@@ -850,7 +485,12 @@ Write the complete workflow, rules, and examples for this skill.`
     const installedIds = new Set(availableHarnesses.map((harness) => harness.id))
     return draft.bindings
       .filter((binding) => binding.harnessId.trim())
-      .filter((binding) => draft.id !== null || installedIds.has(binding.harnessId))
+      .filter(
+        (binding) =>
+          draft.id !== null ||
+          binding.harnessId === ALL_HARNESSES_BINDING_ID ||
+          installedIds.has(binding.harnessId)
+      )
       .map((binding) => ({
         harnessId: binding.harnessId.trim(),
         strategy: binding.strategy,
@@ -999,23 +639,32 @@ Write the complete workflow, rules, and examples for this skill.`
     projects = context.projects
     threads = context.threads
     projectIconUrls = context.projectIconUrls
+    // Same protocol as the model picker: revalidate the provider catalog in the
+    // background so installed harnesses appear without opening the Harnesses
+    // page first. The catalog store short-circuits fresh copies (TTL-guarded).
+    const projectId = workspaceState.selectedThread?.projectId ?? context.projects[0]?.id
+    if (projectId) void providerCatalog.refresh(projectId)
   }
 
-  $effect(() => {
-    if (!open) return
+  function initializeTarget(): void {
     if (target?.kind === 'registry') {
       draft = emptyDraft()
       resetCredential()
       setupPreset = null
       pluginManifest = ''
+      agentRequest = ''
+      agentReport = null
+      agentProjectId = ''
+      agentSettings = null
       editorError = ''
       if (target.utility) openRegistryEdit(target.utility)
     } else if (target?.kind === 'native') {
       void openNative()
     }
-  })
+  }
 
   onMount(() => {
+    initializeTarget()
     void loadContext()
     void providerStore.init()
   })
@@ -1174,6 +823,74 @@ Write the complete workflow, rules, and examples for this skill.`
       saving = false
     }
   }
+
+  function setupAgentThread(): Thread | null {
+    const selected = workspaceState.selectedThread
+    if (selected?.settings && projects.some((project) => project.id === selected.projectId)) {
+      return selected
+    }
+    return (
+      threads
+        .filter(
+          (thread) => thread.settings && projects.some((project) => project.id === thread.projectId)
+        )
+        .sort((left, right) => right.lastActivity - left.lastActivity)[0] ?? null
+    )
+  }
+
+  function beginAgentSetup(): void {
+    const thread = setupAgentThread()
+    setupPreset = 'agent'
+    editorError = ''
+    agentProjectId = thread?.projectId ?? ''
+    agentSettings = thread?.settings ? { ...thread.settings } : null
+    if (!agentSettings) {
+      editorError = 'Open a project thread and choose an agent model before starting agent setup.'
+    }
+  }
+
+  function selectAgentModel(providerId: string, modelId: string, harnessId: string): void {
+    if (!agentSettings) return
+    agentSettings = { ...agentSettings, harnessId, providerId, modelId }
+  }
+
+  function selectAgentThinking(thinkingLevel: ThreadSettings['thinkingLevel']): void {
+    if (!agentSettings) return
+    agentSettings = { ...agentSettings, thinkingLevel }
+  }
+
+  async function runAgentSetup(): Promise<void> {
+    const thread = setupAgentThread()
+    const settings = agentSettings
+    if (!thread || !settings) {
+      editorError = 'Open a project thread and choose an agent model before starting agent setup.'
+      return
+    }
+    saving = true
+    editorError = ''
+    agentReport = null
+    try {
+      const harnesses = availableHarnesses.map((harness) => harness.id).join(', ')
+      agentReport = await invoke(
+        'utilities:setupWithAgent',
+        thread.projectId,
+        crypto.randomUUID(),
+        settings,
+        [
+          agentRequest.trim(),
+          `CodeInOven setup context: current projectId=${thread.projectId}; installed harnesses=${harnesses || settings.harnessId}.`
+        ].join('\n\n')
+      )
+      onChanged?.()
+    } catch (setupError) {
+      editorError =
+        setupError instanceof Error
+          ? setupError.message
+          : 'The utility setup agent could not finish.'
+    } finally {
+      saving = false
+    }
+  }
 </script>
 
 {#if open}
@@ -1185,61 +902,96 @@ Write the complete workflow, rules, and examples for this skill.`
     {:else if !isNative && draft.id === null && setupPreset === null}
       <div>
         <div class="mb-5 rounded-xl bg-raised p-4">
-          <p class="text-sm font-semibold">What should agents be able to do?</p>
+          <p class="text-sm font-semibold">What do you want to set up?</p>
           <p class="mt-1 text-xs leading-relaxed text-muted">
-            Choose a ready-to-use connection or build your own. CodeInOven handles harness wiring,
-            secure credentials, and turn-scoped activation.
+            CodeInOven wires every harness. Paste a skill, connect an MCP server, or import a plugin
+            bundle.
           </p>
         </div>
-        {#each ['Ready to use', 'Build your own'] as group (group)}
-          <section class="mb-6">
-            <h3 class="mb-2 text-xs font-semibold uppercase tracking-wide text-muted">{group}</h3>
-            <div class="grid gap-2 md:grid-cols-2 xl:grid-cols-3">
-              {#each (target?.kind === 'registry' && target.utility === null ? registryPresets : []).filter((preset) => preset.group === group) as preset (preset.id)}
-                <button
-                  type="button"
-                  class="group min-h-28 rounded-xl border bg-elevated p-4 text-left transition-colors hover:border-primary hover:bg-overlay focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
-                  onclick={() => choosePreset(preset.id)}
-                >
-                  <span class="flex items-start justify-between gap-3">
-                    <span
-                      class="flex h-8 w-8 items-center justify-center rounded-lg bg-surface text-muted group-hover:text-foreground"
-                    >
-                      {#if preset.badge === 'MCP'}
-                        <Server size={16} />
-                      {:else if preset.badge === 'Skill'}
-                        <BookOpen size={16} />
-                      {:else if preset.badge === 'Plugin'}
-                        <Boxes size={16} />
-                      {:else}
-                        <Globe2 size={16} />
-                      {/if}
-                    </span>
-                    <span
-                      class="rounded-md bg-surface px-1.5 py-0.5 text-[10px] font-medium text-muted"
-                    >
-                      {preset.badge}
-                    </span>
-                  </span>
-                  <span class="mt-3 block text-sm font-semibold">{preset.title}</span>
-                  <span class="mt-1 block text-xs leading-relaxed text-muted">
-                    {preset.description}
-                  </span>
-                </button>
+        <div class="grid gap-2 md:grid-cols-3">
+          {#each createChoices as choice (choice.id)}
+            <button
+              type="button"
+              class="group min-h-28 rounded-xl border bg-elevated p-4 text-left transition-colors hover:border-primary hover:bg-overlay focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+              onclick={() => chooseCreate(choice.id)}
+            >
+              <span
+                class="flex h-8 w-8 items-center justify-center rounded-lg bg-surface text-muted group-hover:text-foreground"
+              >
+                <choice.icon size={16} />
+              </span>
+              <span class="mt-3 block text-sm font-semibold">{choice.title}</span>
+              <span class="mt-1 block text-xs leading-relaxed text-muted">
+                {choice.description}
+              </span>
+            </button>
+          {/each}
+        </div>
+        <div
+          class="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-dashed bg-elevated p-4"
+        >
+          <div>
+            <p class="text-sm font-semibold">Prefer setup by an agent?</p>
+            <p class="mt-1 text-xs leading-relaxed text-muted">
+              Let a CIO agent build the skill, MCP server, or plugin for the harnesses you use.
+            </p>
+          </div>
+          <button
+            type="button"
+            class="flex h-9 items-center gap-1.5 rounded-lg border bg-surface px-3 text-xs font-medium text-muted hover:bg-overlay hover:text-foreground"
+            title="Set up a utility with a disposable agent session"
+            onclick={beginAgentSetup}
+          >
+            <Sparkles size={14} />
+            Setup with agent
+          </button>
+        </div>
+      </div>
+    {:else if !isNative && draft.id === null && setupPreset === 'agent'}
+      <div class="space-y-4">
+        {#if editorError}
+          <p class="rounded-lg bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">
+            {editorError}
+          </p>
+        {/if}
+        <div class="space-y-2">
+          <label class="block text-xs font-medium" for="agent-utility-setup-request">
+            Setup request
+          </label>
+          <RichMarkdownEditor
+            id="agent-utility-setup-request"
+            bind:value={agentRequest}
+            placeholder="Set up the official Svelte MCP for Codex and Claude Code globally, or create a deployment skill for this project…"
+            ariaLabel="Agent utility setup request"
+            disabled={saving || agentReport !== null}
+            containerClass="rounded-xl border bg-elevated focus-within:border-primary focus-within:ring-1 focus-within:ring-primary"
+            class="min-h-64 max-h-[28rem] w-full resize-y overflow-y-auto px-4 py-3 text-sm leading-6 text-foreground outline-none"
+          />
+          <p class="text-[11px] leading-relaxed text-dimmed">
+            Use Markdown to describe the capability, target harnesses, scope, and any setup
+            constraints. The agent can report credential steps but cannot write secrets.
+          </p>
+        </div>
+        {#if agentReport}
+          <div class="rounded-xl border bg-elevated p-4">
+            <p class="text-sm font-semibold">Installed</p>
+            <div class="mt-2 flex flex-wrap gap-1.5">
+              {#each agentReport.installed as utility (utility.id)}
+                <span class="rounded-md bg-raised px-2 py-1 text-[11px] font-medium">
+                  {utility.name} · {utility.kind}
+                </span>
               {/each}
             </div>
-          </section>
-        {/each}
+            {#if agentReport.summary}
+              <p class="mt-3 whitespace-pre-wrap text-xs leading-relaxed text-muted">
+                {agentReport.summary}
+              </p>
+            {/if}
+          </div>
+        {/if}
       </div>
     {:else if !isNative && draft.id === null && setupPreset === 'plugin-bundle'}
       <div>
-        <button
-          type="button"
-          class="mb-4 flex h-8 items-center gap-1.5 rounded-lg text-xs font-medium text-muted hover:text-foreground"
-          onclick={() => (setupPreset = null)}
-        >
-          <ChevronLeft size={14} /> Choose another capability
-        </button>
         {#if editorError}
           <p class="mb-4 rounded-lg bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">
             {editorError}
@@ -1641,58 +1393,118 @@ Write the complete workflow, rules, and examples for this skill.`
     {/if}
 
     {#snippet footer()}
-      {#if setupPreset === 'plugin-bundle'}
-        <button
-          class="h-9 rounded-lg border bg-elevated px-3 text-xs font-medium hover:bg-overlay"
-          type="button"
-          onclick={onClose}
-        >
-          Cancel
-        </button>
-        <button
-          class="flex h-9 items-center gap-1.5 rounded-lg bg-primary px-4 text-xs font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
-          type="button"
-          disabled={saving || !pluginManifest.trim()}
-          onclick={() => void importPluginBundle()}
-        >
-          {#if saving}<Loader2 size={13} class="animate-spin" />{/if}
-          Install plugin
-        </button>
-      {:else}
-        <button
-          class="h-9 rounded-lg border bg-elevated px-3 text-xs font-medium hover:bg-overlay"
-          type="button"
-          onclick={onClose}
-        >
-          {draft.id !== null || isNative || setupPreset !== null ? 'Cancel' : 'Close'}
-        </button>
-        {#if (draft.id !== null || isNative) && !isAppOwned}
-          <button
-            class="flex h-9 items-center gap-1.5 rounded-lg bg-danger px-3 text-xs font-medium text-on-primary hover:opacity-90 disabled:opacity-50"
-            type="button"
-            disabled={saving}
-            onclick={() => {
-              if (isNative && nativeEntry) deleteTarget = { kind: 'native', entry: nativeEntry }
-              else if (editingRegistry)
-                deleteTarget = { kind: 'registry', utility: editingRegistry }
-            }}
-          >
-            {#if saving}<Loader2 size={13} class="animate-spin" />{/if}
-            Delete
-          </button>
-        {/if}
-        {#if draft.id !== null || isNative || setupPreset !== null}
-          <button
-            class="flex h-9 items-center gap-1.5 rounded-lg bg-primary px-4 text-xs font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
-            type="submit"
-            form="utility-editor-form"
-            disabled={saving}
-          >
-            {#if saving}<Loader2 size={13} class="animate-spin" />{/if}
-            {isNative ? 'Save changes' : draft.id ? 'Save utility' : 'Save utility'}
-          </button>
-        {/if}
-      {/if}
+      <div class="flex w-full items-center justify-between gap-2">
+        <div>
+          {#if !isNative && draft.id === null && setupPreset !== null}
+            <button
+              class="flex h-9 items-center gap-1.5 rounded-lg px-2.5 text-xs font-medium text-muted hover:bg-elevated hover:text-foreground"
+              type="button"
+              onclick={() => {
+                setupPreset = null
+                draft = emptyDraft()
+                pluginManifest = ''
+                agentRequest = ''
+                agentReport = null
+                agentProjectId = ''
+                agentSettings = null
+                editorError = ''
+              }}
+            >
+              <ChevronLeft size={14} /> Back
+            </button>
+          {/if}
+        </div>
+        <div class="flex items-center gap-2">
+          {#if setupPreset === 'agent'}
+            <button
+              class="h-9 rounded-lg border bg-elevated px-3 text-xs font-medium hover:bg-overlay"
+              type="button"
+              onclick={onClose}
+            >
+              {agentReport ? 'Done' : 'Cancel'}
+            </button>
+            {#if !agentReport}
+              {#if agentSettings}
+                <ModelPicker
+                  providers={agentProviders}
+                  projectId={agentProjectId}
+                  harnessId={agentSettings.harnessId}
+                  providerId={agentSettings.providerId}
+                  modelId={agentSettings.modelId}
+                  thinkingLevel={agentSettings.thinkingLevel}
+                  variant="action"
+                  side="top"
+                  disabled={saving}
+                  onSelect={selectAgentModel}
+                  onSelectThinking={selectAgentThinking}
+                />
+              {/if}
+              <button
+                class="flex h-9 items-center gap-1.5 rounded-lg bg-primary px-4 text-xs font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
+                type="button"
+                disabled={saving || !agentRequest.trim()}
+                onclick={() => void runAgentSetup()}
+              >
+                {#if saving}<Loader2 size={13} class="animate-spin" />{:else}<Sparkles
+                    size={13}
+                  />{/if}
+                {saving ? 'Setting up…' : 'Set up utility'}
+              </button>
+            {/if}
+          {:else if setupPreset === 'plugin-bundle'}
+            <button
+              class="h-9 rounded-lg border bg-elevated px-3 text-xs font-medium hover:bg-overlay"
+              type="button"
+              onclick={onClose}
+            >
+              Cancel
+            </button>
+            <button
+              class="flex h-9 items-center gap-1.5 rounded-lg bg-primary px-4 text-xs font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
+              type="button"
+              disabled={saving || !pluginManifest.trim()}
+              onclick={() => void importPluginBundle()}
+            >
+              {#if saving}<Loader2 size={13} class="animate-spin" />{/if}
+              Install plugin
+            </button>
+          {:else}
+            <button
+              class="h-9 rounded-lg border bg-elevated px-3 text-xs font-medium hover:bg-overlay"
+              type="button"
+              onclick={onClose}
+            >
+              {draft.id !== null || isNative || setupPreset !== null ? 'Cancel' : 'Close'}
+            </button>
+            {#if (draft.id !== null || isNative) && !isAppOwned}
+              <button
+                class="flex h-9 items-center gap-1.5 rounded-lg bg-danger px-3 text-xs font-medium text-on-primary hover:opacity-90 disabled:opacity-50"
+                type="button"
+                disabled={saving}
+                onclick={() => {
+                  if (isNative && nativeEntry) deleteTarget = { kind: 'native', entry: nativeEntry }
+                  else if (editingRegistry)
+                    deleteTarget = { kind: 'registry', utility: editingRegistry }
+                }}
+              >
+                {#if saving}<Loader2 size={13} class="animate-spin" />{/if}
+                Delete
+              </button>
+            {/if}
+            {#if draft.id !== null || isNative || setupPreset !== null}
+              <button
+                class="flex h-9 items-center gap-1.5 rounded-lg bg-primary px-4 text-xs font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
+                type="submit"
+                form="utility-editor-form"
+                disabled={saving}
+              >
+                {#if saving}<Loader2 size={13} class="animate-spin" />{/if}
+                {isNative ? 'Save changes' : 'Save utility'}
+              </button>
+            {/if}
+          {/if}
+        </div>
+      </div>
     {/snippet}
   </Modal>
 {/if}
@@ -1701,11 +1513,26 @@ Write the complete workflow, rules, and examples for this skill.`
   <fieldset class="space-y-3 rounded-xl border p-3">
     <legend class="px-1 text-xs font-semibold">Available to</legend>
     <p class="text-[11px] text-dimmed">
-      Every installed harness is selected by default. CodeInOven skips this capability when a
-      harness already provides an equivalent.
+      All is selected by default and automatically includes harnesses added later. Choose individual
+      harnesses only when this utility should have limited availability.
     </p>
-    {#if availableHarnesses.length}
-      <div class="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+    <div class="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+      <button
+        type="button"
+        class="flex h-10 items-center justify-center gap-2 rounded-lg border px-3 text-xs font-medium transition-colors {draft.bindings.some(
+          (binding) => binding.harnessId === ALL_HARNESSES_BINDING_ID
+        )
+          ? 'border-primary bg-primary text-on-primary'
+          : 'bg-elevated text-muted hover:bg-overlay hover:text-foreground'}"
+        aria-pressed={draft.bindings.some(
+          (binding) => binding.harnessId === ALL_HARNESSES_BINDING_ID
+        )}
+        title="Apply to all current and future harnesses"
+        onclick={selectAllHarnesses}
+      >
+        All
+      </button>
+      {#if availableHarnesses.length}
         {#each availableHarnesses as harness (harness.id)}
           <button
             type="button"
@@ -1721,12 +1548,13 @@ Write the complete workflow, rules, and examples for this skill.`
             {harness.name}
           </button>
         {/each}
-      </div>
-    {:else}
+      {/if}
+    </div>
+    {#if !availableHarnesses.length}
       <div class="rounded-lg bg-raised px-3 py-2">
         <p class="text-xs text-muted">
-          No installed, supported harnesses were detected. Open Settings → Harnesses to check
-          installations.
+          No installed, supported harnesses were detected. All harnesses will still apply when one
+          is added later.
         </p>
       </div>
     {/if}

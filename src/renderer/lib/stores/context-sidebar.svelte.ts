@@ -10,6 +10,9 @@ const CONTEXT_SIDEBAR_MAX_WIDTH = 1600
 const TERMINAL_DOCK_MIN_HEIGHT = 180
 const TERMINAL_DOCK_MAX_HEIGHT = 560
 const TERMINAL_PLACEMENT_STORAGE_KEY = `${APP_SLUG}.terminal-placement.v1`
+const BROWSER_TABS_STORAGE_KEY = `${APP_SLUG}.browser-tabs.v1`
+const MAX_PERSISTED_BROWSER_TABS = 50
+const BROWSER_TAB_ID_PATTERN = /^browser:[a-zA-Z0-9:_-]{1,240}$/u
 
 export type TerminalPlacement = 'right' | 'bottom'
 
@@ -88,6 +91,16 @@ export interface GitContextTab {
   title: string
   projectId: string
   threadId: string
+}
+
+export interface BrowserContextTab {
+  id: string
+  kind: 'browser'
+  title: string
+  projectId: string
+  threadId: string
+  url: string
+  surface: 'page' | 'console'
 }
 
 export interface ThreadNoteContextTab {
@@ -192,6 +205,7 @@ export type ContextSidebarTab =
   | NotificationContextTab
   | MemoryContextTab
   | CoordinatorContextTab
+  | BrowserContextTab
 
 interface ThreadSidebarContext {
   projectId: string
@@ -235,6 +249,70 @@ function isProjectTab(tab: ContextSidebarTab): boolean {
   return PROJECT_TAB_KINDS.has(tab.kind)
 }
 
+function loadBrowserTabs(): BrowserContextTab[] {
+  if (typeof window === 'undefined') return []
+  try {
+    const raw = window.localStorage.getItem(BROWSER_TABS_STORAGE_KEY)
+    if (!raw) return []
+    const snapshot: unknown = JSON.parse(raw)
+    if (!snapshot || typeof snapshot !== 'object' || Array.isArray(snapshot)) return []
+    const tabs = (snapshot as Record<string, unknown>)['tabs']
+    if (!Array.isArray(tabs)) return []
+    const restored: BrowserContextTab[] = []
+    for (const value of tabs.slice(-MAX_PERSISTED_BROWSER_TABS)) {
+      if (!value || typeof value !== 'object' || Array.isArray(value)) continue
+      const tab = value as Record<string, unknown>
+      const id = tab['id']
+      const projectId = tab['projectId']
+      const threadId = tab['threadId']
+      const title = tab['title']
+      const url = tab['url']
+      if (
+        typeof id !== 'string' ||
+        !BROWSER_TAB_ID_PATTERN.test(id) ||
+        restored.some((candidate) => candidate.id === id) ||
+        typeof projectId !== 'string' ||
+        projectId.length === 0 ||
+        projectId.length > 512 ||
+        typeof threadId !== 'string' ||
+        threadId.length > 512 ||
+        typeof title !== 'string' ||
+        title.length > 240 ||
+        typeof url !== 'string'
+      ) {
+        continue
+      }
+      let parsed: URL
+      try {
+        parsed = new URL(url)
+      } catch {
+        continue
+      }
+      if (
+        (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') ||
+        parsed.username !== '' ||
+        parsed.password !== ''
+      ) {
+        continue
+      }
+      restored.push({
+        id,
+        kind: 'browser',
+        title,
+        projectId,
+        threadId,
+        url: parsed.href,
+        // Restored tabs stay inert until the user opens the project's browser.
+        // Start on the page so that explicit action is the only load trigger.
+        surface: 'page'
+      })
+    }
+    return restored
+  } catch {
+    return []
+  }
+}
+
 function contextKey(projectId: string, threadId: string): string {
   return `${projectId}:${threadId}`
 }
@@ -263,6 +341,9 @@ function sameSubagentActivity(
 class ContextSidebarState {
   private contexts: Record<string, ThreadSidebarContext> = $state({})
   private projectContexts: Record<string, ProjectSidebarContext> = $state({})
+  private browserTabs: BrowserContextTab[] = $state(loadBrowserTabs())
+  private browserActiveTabId: string | null = $state(null)
+  private browserVisible = $state(false)
   private activeProjectId: string | null = $state(null)
   private activeThreadId: string | null = $state(null)
   private notificationsVisible = $state(false)
@@ -278,6 +359,7 @@ class ContextSidebarState {
     return [
       ...(this.activeProjectContext?.tabs ?? EMPTY_TABS),
       ...(this.activeContext?.tabs.filter((tab) => !isProjectTab(tab)) ?? EMPTY_TABS),
+      ...this.activeBrowserTabs,
       ...(this.notificationsVisible ? [NOTIFICATIONS_TAB] : [])
     ]
   }
@@ -309,7 +391,8 @@ class ContextSidebarState {
   get sidebarTabs(): ContextSidebarTab[] {
     const tabs = [
       ...(this.activeProjectContext?.tabs ?? EMPTY_TABS),
-      ...(this.activeContext?.tabs.filter((tab) => !isProjectTab(tab)) ?? EMPTY_TABS)
+      ...(this.activeContext?.tabs.filter((tab) => !isProjectTab(tab)) ?? EMPTY_TABS),
+      ...this.activeBrowserTabs
     ]
     const positionedTabs =
       this.terminalPlacement === 'bottom' ? tabs.filter((tab) => tab.kind !== 'terminal') : tabs
@@ -331,6 +414,7 @@ class ContextSidebarState {
    */
   get sidebarVisible(): boolean {
     if (this.notificationsVisible) return true
+    if (this.browserVisible && this.activeBrowserTabs.length > 0) return true
     return this.activeThreadId !== null && (this.activeProjectContext?.visible ?? false)
   }
 
@@ -410,6 +494,12 @@ class ContextSidebarState {
   /** Active tab id for the right sidebar (ignores terminal tabs). */
   get sidebarActiveTabId(): string | null {
     if (this.notificationsVisible) return NOTIFICATIONS_TAB.id
+    if (this.browserVisible) {
+      return this.browserActiveTabId &&
+        this.activeBrowserTabs.some((tab) => tab.id === this.browserActiveTabId)
+        ? this.browserActiveTabId
+        : (this.activeBrowserTabs.at(-1)?.id ?? null)
+    }
     const project = this.activeProjectContext
     const kind = project?.activeKind
     if (!project || !kind) return null
@@ -451,6 +541,7 @@ class ContextSidebarState {
 
   activateThread(projectId: string, threadId: string, threadTitle?: string): void {
     const keepNotificationsVisible = this.notificationsVisible
+    const keepBrowserVisible = this.browserVisible && this.activeProjectId === projectId
     this.activeProjectId = projectId
     this.activeThreadId = threadId
     this.ensureProjectContext(projectId)
@@ -458,14 +549,22 @@ class ContextSidebarState {
     this.rebindProjectTabs(projectId, threadId)
     this.ensureActiveThreadPanel(projectId, threadId, threadTitle)
     this.notificationsVisible = keepNotificationsVisible
+    this.browserVisible = keepBrowserVisible && this.activeBrowserTabs.length > 0
   }
 
   deactivateThread(): void {
+    this.browserVisible = false
     this.activeProjectId = null
     this.activeThreadId = null
   }
 
   toggle(): void {
+    if (this.browserVisible) {
+      this.browserVisible = false
+      const context = this.activeProjectContext
+      if (context) context.visible = false
+      return
+    }
     const context = this.activeProjectId ? this.ensureProjectContext(this.activeProjectId) : null
     if (!context) return
     context.visible = !context.visible
@@ -479,6 +578,12 @@ class ContextSidebarState {
   hide(): void {
     if (this.notificationsVisible) {
       this.notificationsVisible = false
+      return
+    }
+    if (this.browserVisible) {
+      this.browserVisible = false
+      const context = this.activeProjectContext
+      if (context) context.visible = false
       return
     }
     const context = this.activeProjectContext
@@ -748,6 +853,64 @@ class ContextSidebarState {
     gitState.notifyGitPanelOpened(projectId)
   }
 
+  openBrowser(url: string, requestedTabId?: string): string | null {
+    if (!this.activeProjectId || !this.activeThreadId) return null
+    const projectId = this.activeProjectId
+    const threadId = this.activeThreadId
+    const id = requestedTabId ?? `browser:${crypto.randomUUID()}`
+    const existing = this.browserTabs.find((tab) => tab.id === id && tab.projectId === projectId)
+    if (existing) {
+      existing.url = url
+      this.persistBrowserTabs()
+      this.focusBrowser(id)
+      return id
+    }
+    let title = 'Browser'
+    try {
+      const parsed = new URL(url)
+      title = parsed.port ? `${parsed.hostname}:${parsed.port}` : parsed.hostname
+    } catch {
+      // The main-process browser boundary reports malformed custom URLs.
+    }
+    this.browserTabs = [
+      ...this.browserTabs,
+      { id, kind: 'browser', title, projectId, threadId, url, surface: 'page' }
+    ]
+    this.persistBrowserTabs()
+    this.focusBrowser(id)
+    return id
+  }
+
+  updateBrowserTab(tabId: string, url: string, title?: string): void {
+    const tab = this.browserTabs.find((candidate) => candidate.id === tabId)
+    if (!tab) return
+    tab.url = url
+    if (title?.trim()) tab.title = title.trim()
+    this.persistBrowserTabs()
+  }
+
+  updateBrowserSurface(tabId: string, surface: BrowserContextTab['surface']): void {
+    const tab = this.browserTabs.find((candidate) => candidate.id === tabId)
+    if (tab) {
+      tab.surface = surface
+      this.persistBrowserTabs()
+    }
+  }
+
+  removeProjectBrowsers(projectId: string): string[] {
+    const removedIds = this.browserTabs
+      .filter((tab) => tab.projectId === projectId)
+      .map((tab) => tab.id)
+    if (removedIds.length === 0) return []
+    this.browserTabs = this.browserTabs.filter((tab) => tab.projectId !== projectId)
+    if (this.browserActiveTabId && removedIds.includes(this.browserActiveTabId)) {
+      this.browserActiveTabId = null
+    }
+    if (this.activeProjectId === projectId) this.browserVisible = false
+    this.persistBrowserTabs()
+    return removedIds
+  }
+
   /** Opens the thread's note as a sidebar panel, creating one the first time
    *  it's visited so the panel is ready to write into even before a note
    *  exists. The body loads asynchronously onto the tab itself (not local
@@ -872,6 +1035,7 @@ class ContextSidebarState {
 
   toggleNotifications(): void {
     this.notificationsVisible = !this.notificationsVisible
+    if (this.notificationsVisible) this.browserVisible = false
   }
 
   openTemporaryChat(
@@ -1152,6 +1316,10 @@ class ContextSidebarState {
   }
 
   focus(id: string): void {
+    if (this.browserTabs.some((tab) => tab.id === id)) {
+      this.focusBrowser(id)
+      return
+    }
     const project = this.activeProjectContext
     if (project?.tabs.some((tab) => tab.id === id)) {
       this.focusInProjectContext(project, id)
@@ -1164,6 +1332,18 @@ class ContextSidebarState {
   close(id: string): void {
     if (id === NOTIFICATIONS_TAB.id) {
       this.notificationsVisible = false
+      return
+    }
+    const browserIndex = this.browserTabs.findIndex((tab) => tab.id === id)
+    if (browserIndex >= 0) {
+      const closedProjectId = this.browserTabs[browserIndex].projectId
+      this.browserTabs = this.browserTabs.filter((tab) => tab.id !== id)
+      if (this.browserActiveTabId === id) {
+        this.browserActiveTabId =
+          this.browserTabs.filter((tab) => tab.projectId === closedProjectId).at(-1)?.id ?? null
+      }
+      if (this.activeBrowserTabs.length === 0) this.browserVisible = false
+      this.persistBrowserTabs()
       return
     }
     const project = this.activeProjectContext
@@ -1195,6 +1375,18 @@ class ContextSidebarState {
   }
 
   reorder(id: string, targetId: string, position: 'before' | 'after'): void {
+    if (this.browserTabs.some((tab) => tab.id === id)) {
+      const fromIndex = this.browserTabs.findIndex((tab) => tab.id === id)
+      const toIndex = this.browserTabs.findIndex((tab) => tab.id === targetId)
+      if (fromIndex < 0 || toIndex < 0 || fromIndex === toIndex) return
+      const ordered = [...this.browserTabs]
+      const [moved] = ordered.splice(fromIndex, 1)
+      const adjustedTarget = ordered.findIndex((tab) => tab.id === targetId)
+      ordered.splice(position === 'before' ? adjustedTarget : adjustedTarget + 1, 0, moved)
+      this.browserTabs = ordered
+      this.persistBrowserTabs()
+      return
+    }
     const project = this.activeProjectContext
     const thread = this.activeContext
     const context = project?.tabs.some((tab) => tab.id === id && tab.kind !== 'notifications')
@@ -1229,6 +1421,11 @@ class ContextSidebarState {
 
   private get activeProjectContext(): ProjectSidebarContext | null {
     return this.activeProjectId ? (this.projectContexts[this.activeProjectId] ?? null) : null
+  }
+
+  private get activeBrowserTabs(): BrowserContextTab[] {
+    if (!this.activeProjectId) return EMPTY_TABS as BrowserContextTab[]
+    return this.browserTabs.filter((tab) => tab.projectId === this.activeProjectId)
   }
 
   private ensureContext(projectId: string, threadId: string): ThreadSidebarContext {
@@ -1269,6 +1466,7 @@ class ContextSidebarState {
     const project = this.ensureProjectContext(context.projectId)
     project.activeKind = tab.kind
     project.visible = true
+    this.browserVisible = false
     this.notificationsVisible = false
   }
 
@@ -1287,6 +1485,7 @@ class ContextSidebarState {
     const tab = context.tabs.find((candidate) => candidate.id === id)
     if (!tab) return
     context.activeTabIds[tab.kind] = id
+    this.browserVisible = false
     this.notificationsVisible = false
     if (tab.kind === 'terminal' && this.terminalPlacement === 'bottom') {
       context.terminalActiveTabId = id
@@ -1306,6 +1505,26 @@ class ContextSidebarState {
       context.tabs = [...context.tabs, tab]
     }
     this.focusInProjectContext(context, tab.id)
+  }
+
+  private focusBrowser(id: string): void {
+    const tab = this.browserTabs.find((candidate) => candidate.id === id)
+    if (!tab || tab.projectId !== this.activeProjectId) return
+    this.browserActiveTabId = id
+    this.browserVisible = true
+    this.notificationsVisible = false
+  }
+
+  private persistBrowserTabs(): void {
+    if (typeof window === 'undefined') return
+    try {
+      window.localStorage.setItem(
+        BROWSER_TABS_STORAGE_KEY,
+        JSON.stringify({ version: 1, tabs: this.browserTabs.slice(-MAX_PERSISTED_BROWSER_TABS) })
+      )
+    } catch {
+      // Browser restoration is best-effort; blocked storage must not break the sidebar.
+    }
   }
 
   private activeTabIdsFor(
@@ -1342,6 +1561,16 @@ class ContextSidebarState {
     const existing = thread.tabs.filter((tab) => tab.kind === kind).at(-1)
     if (existing) {
       this.focusInContext(thread, thread.activeTabIds[kind] ?? existing.id)
+      return
+    }
+    // Panels bound to live thread-scoped sessions/content (temporary chat,
+    // sub-agents, coordinator) cannot be produced with meaningful data for a
+    // thread that never opened them, so there is no tab to focus here. Instead
+    // of leaving an empty-looking panel open, hide the sidebar in the new
+    // thread; returning to a thread that does own one restores it via the
+    // `existing` branch above.
+    if (kind === 'coordinator' || kind === 'temporary-chat' || kind === 'subagent') {
+      project.visible = false
       return
     }
     if (kind === 'diff') this.openDiff(projectId, threadId)

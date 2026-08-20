@@ -8,6 +8,7 @@
     AppConfig,
     AppConfigPatch,
     PrMergeMethod,
+    SkillMarketEntry,
     SlashCommandMode,
     ThemePreference
   } from '$shared/types'
@@ -19,30 +20,34 @@
     ArrowLeft,
     Bell,
     BrainCircuit,
+    ChartColumn,
     MessageSquareCode,
     CheckCircle2,
     Clock,
     Cloud,
     Download,
+    FolderOpen,
     Globe,
     Info,
     Keyboard,
     Loader2,
     Monitor,
+    MonitorUp,
     Moon,
     Puzzle,
     Plug,
     RefreshCw,
     SlidersHorizontal,
     Sun,
-    UsersRound,
-    UserRound
+    UsersRound
   } from '@lucide/svelte'
   import CollapsibleSidebar from '../layout/CollapsibleSidebar.svelte'
   import Switch from '../ui/Switch.svelte'
   import Modal from '../ui/Modal.svelte'
   import ProvidersView from '../providers/ProvidersView.svelte'
   import UtilitiesView from './UtilitiesView.svelte'
+  import SkillsMarketplaceView from './SkillsMarketplaceView.svelte'
+  import SkillMarketplaceDetail from './SkillMarketplaceDetail.svelte'
   import KeymapSettingsTab from './KeymapSettingsTab.svelte'
   import SettingsMemoryTab from '../memory/MemoryPanel.svelte'
   import AuditSettingsTab from './AuditSettingsTab.svelte'
@@ -50,6 +55,8 @@
   import ProfileSettingsTab from './ProfileSettingsTab.svelte'
   import CloudDeploymentsSettingsTab from './CloudDeploymentsSettingsTab.svelte'
   import CioPromptsSettings from './CioPromptsSettings.svelte'
+  import CuaBridgeSettings from './CuaBridgeSettings.svelte'
+  import { toast } from 'svelte-sonner'
 
   type SelectChangeEvent = Event & { currentTarget: HTMLSelectElement }
   interface Props {
@@ -62,7 +69,7 @@
     section: SettingsSection
     /** Navigate to another settings section page. */
     onNavigateSection: (section: SettingsSection) => void
-    /** Returns to the project page. */
+    /** Returns to the content view that opened Settings. */
     onBack: () => void
   }
 
@@ -86,10 +93,53 @@
   let nightlyModalOpen = $state(false)
   let channelBusy = $state(false)
 
+  type UtilitiesRoute =
+    { page: 'catalog' } | { page: 'marketplace' } | { page: 'skill'; entry: SkillMarketEntry }
+
+  interface SettingsHistoryEntry {
+    section: SettingsSection
+    utilitiesRoute: UtilitiesRoute
+  }
+
+  let utilitiesRoute = $state<UtilitiesRoute>({ page: 'catalog' })
+  let settingsHistory = $state<SettingsHistoryEntry[]>([])
+
+  function currentSettingsLocation(): SettingsHistoryEntry {
+    return { section, utilitiesRoute }
+  }
+
+  function navigateSection(nextSection: SettingsSection): void {
+    if (
+      nextSection === section &&
+      (nextSection !== 'utilities' || utilitiesRoute.page === 'catalog')
+    ) {
+      return
+    }
+    settingsHistory = [...settingsHistory, currentSettingsLocation()]
+    utilitiesRoute = { page: 'catalog' }
+    onNavigateSection(nextSection)
+  }
+
+  function navigateUtilities(nextRoute: UtilitiesRoute): void {
+    settingsHistory = [...settingsHistory, currentSettingsLocation()]
+    utilitiesRoute = nextRoute
+  }
+
+  function goBack(): void {
+    const previous = settingsHistory.at(-1)
+    if (!previous) {
+      onBack()
+      return
+    }
+    settingsHistory = settingsHistory.slice(0, -1)
+    utilitiesRoute = previous.utilitiesRoute
+    if (previous.section !== section) onNavigateSection(previous.section)
+  }
+
   const escHandler = (e: KeyboardEvent) => {
     if (e.key === 'Escape') {
       e.preventDefault()
-      onBack()
+      goBack()
     }
   }
 
@@ -104,10 +154,11 @@
     { id: 'cio-prompts', label: 'CIO Prompts', icon: MessageSquareCode },
     { id: 'harnesses', label: 'Harnesses', icon: Plug },
     { id: 'utilities', label: 'Utilities', icon: Puzzle },
+    { id: 'computer-use', label: 'Computer use', icon: MonitorUp },
     { id: 'keymap', label: 'Keymap', icon: Keyboard },
     { id: 'remote', label: 'Remote', icon: Globe },
     { id: 'cloud-deployments', label: 'Cloud Deployments', icon: Cloud },
-    { id: 'profile', label: 'Profile', icon: UserRound },
+    { id: 'profile', label: 'Usage', icon: ChartColumn },
     { id: 'about', label: 'About', icon: Info }
   ]
 
@@ -117,7 +168,10 @@
     for (const tab of tabs) {
       if (tab.id === section) activeLabel = tab.label
     }
-    settingsUiState.activeTabLabel = activeLabel
+    settingsUiState.activeTabLabel =
+      section === 'utilities' && utilitiesRoute.page !== 'catalog'
+        ? 'Skills Marketplace'
+        : activeLabel
     return () => {
       settingsUiState.activeTabLabel = null
     }
@@ -208,6 +262,11 @@
     }
   }
 
+  async function openDataDirectory(): Promise<void> {
+    const opened = await invoke('storage:openDataDirectory').catch(() => false)
+    if (!opened) toast.error('The data directory could not be opened in the file manager.')
+  }
+
   async function testSystemNotification(): Promise<void> {
     notificationTestBusy = true
     notificationTestResult = ''
@@ -294,22 +353,11 @@
     {#snippet titlePrefix()}
       <button
         class="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-muted transition-colors hover:bg-elevated hover:text-foreground"
-        title="Back to projects"
-        aria-label="Back to projects"
-        onclick={onBack}
+        title="Go back"
+        aria-label="Go back"
+        onclick={goBack}
       >
         <ArrowLeft size={14} />
-      </button>
-    {/snippet}
-
-    {#snippet footer()}
-      <button
-        class="flex w-full items-center gap-2 px-3 py-2.5 text-sm text-muted transition-colors hover:bg-elevated hover:text-foreground"
-        title="Back to projects"
-        onclick={onBack}
-      >
-        <ArrowLeft size={14} />
-        Back
       </button>
     {/snippet}
 
@@ -323,7 +371,7 @@
             : 'border-transparent text-muted hover:border-border-strong hover:bg-elevated hover:text-foreground'}"
           aria-current={isActive ? 'page' : undefined}
           title="{tab.label} settings"
-          onclick={() => onNavigateSection(tab.id)}
+          onclick={() => navigateSection(tab.id)}
         >
           <Icon size={14} class={isActive ? 'text-foreground' : 'text-dimmed'} />
           {tab.label}
@@ -453,6 +501,28 @@
                 {/if}
                 Test notification
               </button>
+            </div>
+          </div>
+
+          <!-- Browser -->
+          <div class="rounded-xl border bg-surface p-4">
+            <h3 class="mb-3 text-xs font-semibold uppercase tracking-wide text-muted">Browser</h3>
+            <div class="flex items-center justify-between gap-4">
+              <div>
+                <p class="text-sm font-medium">Open localhost on CIO's browser</p>
+                <p class="text-xs text-dimmed">
+                  Keep local development links inside the workspace for testing
+                </p>
+              </div>
+              <Switch
+                checked={config.openLocalhostInCioBrowser}
+                onchange={() =>
+                  void updateConfig({
+                    openLocalhostInCioBrowser: !config.openLocalhostInCioBrowser
+                  })}
+                aria-label="Toggle opening localhost links in CIO's browser"
+                disabled={!settingsReady}
+              />
             </div>
           </div>
 
@@ -657,7 +727,19 @@
     {:else if section === 'harnesses'}
       <ProvidersView />
     {:else if section === 'utilities'}
-      <UtilitiesView />
+      {#if utilitiesRoute.page === 'catalog'}
+        <UtilitiesView onOpenMarketplace={() => navigateUtilities({ page: 'marketplace' })} />
+      {:else if utilitiesRoute.page === 'marketplace'}
+        <SkillsMarketplaceView
+          onOpenSkill={(entry) => navigateUtilities({ page: 'skill', entry })}
+        />
+      {:else}
+        {#key utilitiesRoute.entry.id}
+          <SkillMarketplaceDetail entry={utilitiesRoute.entry} />
+        {/key}
+      {/if}
+    {:else if section === 'computer-use'}
+      <CuaBridgeSettings />
     {:else if section === 'keymap'}
       <KeymapSettingsTab />
     {:else if section === 'remote'}
@@ -694,14 +776,27 @@
         <!-- Storage -->
         <div class="mt-4 rounded-xl border bg-surface p-4">
           <h3 class="mb-3 text-xs font-semibold uppercase tracking-wide text-muted">Storage</h3>
-          <div class="flex items-center justify-between">
+          <div
+            class="flex flex-col items-start gap-3 sm:flex-row sm:items-center sm:justify-between"
+          >
             <div>
               <p class="text-sm font-medium">Data directory</p>
               <p class="text-xs text-dimmed">All projects, threads, and history stored here</p>
             </div>
-            <span class="rounded-lg bg-elevated px-2.5 py-1 font-mono text-xs text-muted">
-              ~/.config/{ORG_SLUG}/{APP_SLUG}
-            </span>
+            <div class="flex flex-wrap items-center gap-2 sm:justify-end">
+              <span class="rounded-lg bg-elevated px-2.5 py-1 font-mono text-xs text-muted">
+                ~/.config/{ORG_SLUG}/{APP_SLUG}
+              </span>
+              <button
+                type="button"
+                class="flex h-8 items-center gap-1.5 rounded-lg border bg-elevated px-3 text-xs font-medium hover:bg-overlay"
+                title="Open the data directory in the file manager"
+                onclick={() => void openDataDirectory()}
+              >
+                <FolderOpen size={13} />
+                Open in file manager
+              </button>
+            </div>
           </div>
         </div>
 

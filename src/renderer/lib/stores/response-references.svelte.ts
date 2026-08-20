@@ -50,15 +50,33 @@ class ResponseReferencesState {
 
   /** Attach or clear the user comment on a single reference anchor. */
   updateComment(projectId: string, threadId: string, referenceId: string, comment: string): void {
+    this.updateStoredComment(projectId, threadId, referenceId, comment.trim() || undefined)
+  }
+
+  /** Persist an in-progress comment exactly as typed so dismissing the editor
+   *  or restarting the app cannot discard the user's draft. */
+  updateCommentDraft(
+    projectId: string,
+    threadId: string,
+    referenceId: string,
+    comment: string
+  ): void {
+    this.updateStoredComment(projectId, threadId, referenceId, comment.trim() ? comment : undefined)
+  }
+
+  private updateStoredComment(
+    projectId: string,
+    threadId: string,
+    referenceId: string,
+    comment: string | undefined
+  ): void {
     const key = referenceKey(projectId, threadId)
     const current = this.references[key] ?? []
     this.setForThread(
       projectId,
       threadId,
       current.map((reference) =>
-        reference.id === referenceId
-          ? { ...reference, comment: comment.trim() || undefined }
-          : reference
+        reference.id === referenceId ? { ...reference, comment } : reference
       )
     )
   }

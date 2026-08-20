@@ -12,6 +12,7 @@ import type {
   AgentMessage,
   AgentPart,
   AgentTokenUsage,
+  HarnessCommand,
   NormalizedUsage,
   PermissionLevel,
   PermissionReply,
@@ -266,7 +267,7 @@ export class CodexDriver extends PersistentCliDriver {
     messageHistory: 'mirrored',
     interactivePermissions: true,
     attachments: true,
-    commands: false,
+    commands: true,
     providerCatalog: true,
     sessionStatus: true,
     contextUsage: true,
@@ -343,6 +344,85 @@ export class CodexDriver extends PersistentCliDriver {
       })
     }
     return catalogs
+  }
+
+  override async listCommands(projectPath: string): Promise<HarnessCommand[]> {
+    const commands: HarnessCommand[] = [
+      {
+        name: 'config',
+        description: 'Set Codex preferences with key=value arguments'
+      },
+      {
+        name: 'settings',
+        description: 'Set Codex preferences with key=value arguments'
+      }
+    ]
+    let temporaryHost: CodexAppServerHost | null = null
+    try {
+      const host =
+        this.hostsByProjectPath.has(projectPath) || this.hostsStartingByProjectPath.has(projectPath)
+          ? await this.ensureAppServerHost(projectPath)
+          : (temporaryHost = await this.createAppServerHost(projectPath))
+      const result = await this.appServerRequest(host, 'skills/list', {
+        cwds: [projectPath],
+        forceReload: true
+      })
+      const rows = Array.isArray(result['data']) ? result['data'] : []
+      const projectSkills = rows
+        .map(recordValue)
+        .find((row) => stringValue(row?.['cwd']) === projectPath)
+      const skills =
+        projectSkills && Array.isArray(projectSkills['skills']) ? projectSkills['skills'] : []
+      for (const value of skills) {
+        const skill = recordValue(value)
+        const name = stringValue(skill?.['name'])
+        if (!name || skill?.['enabled'] === false) continue
+        const interfaceInfo = recordValue(skill?.['interface'])
+        commands.push({
+          name,
+          description:
+            stringValue(interfaceInfo?.['shortDescription']) ??
+            stringValue(skill?.['description']) ??
+            'Invoke this Codex skill',
+          source: 'skill'
+        })
+      }
+    } catch (error) {
+      Logger.info('Codex skill command discovery skipped', {
+        error: error instanceof Error ? error.message : String(error)
+      })
+    } finally {
+      if (temporaryHost) {
+        this.stopAppServerHost(temporaryHost, 'Codex skill command discovery completed')
+      }
+    }
+    return commands
+  }
+
+  override async runCommand(
+    projectPath: string,
+    sessionId: string,
+    command: HarnessCommand,
+    args: string,
+    settings: ThreadSettings
+  ): Promise<void> {
+    if (command.source === 'skill') {
+      const trimmedArgs = args.trim()
+      await this.sendPrompt(projectPath, {
+        sessionId,
+        settings,
+        text: `$${command.name}${trimmedArgs ? ` ${trimmedArgs}` : ''}`,
+        attachments: []
+      })
+      return
+    }
+    if (command.name === 'config' || command.name === 'settings') {
+      const edits = parseCodexConfigEdits(args, command.name)
+      const host = await this.ensureAppServerHost(projectPath)
+      await this.appServerRequest(host, 'config/batchWrite', { edits })
+      return
+    }
+    throw new Error(`Command is not available in ${this.name}: ${command.name}`)
   }
 
   async generateTitle(projectPath: string, options: GenerateTitleOptions): Promise<string | null> {
@@ -815,7 +895,12 @@ export class CodexDriver extends PersistentCliDriver {
         clearTimeout(compaction.timer)
         this.compactionsByThreadId.delete(threadId)
         if (status === 'failed' || status === 'interrupted') {
-          compaction.reject(new Error(`Codex compaction ${status}`))
+          const failure = stringValue(recordValue(turn?.['error'])?.['message'])
+          compaction.reject(
+            new Error(
+              failure ? `Codex compaction failed: ${failure}` : `Codex compaction ${status}`
+            )
+          )
         } else {
           const completed: AgentEvent = {
             type: 'message.completed',
@@ -942,7 +1027,10 @@ export class CodexDriver extends PersistentCliDriver {
       void this.retryWithoutReasoningSummary(active)
       return
     }
-    const issue = status === 'failed' ? (codexUsageLimitIssue(error, message ?? '') ?? active.failureIssue) : undefined
+    const issue =
+      status === 'failed'
+        ? (codexUsageLimitIssue(error, message ?? '') ?? active.failureIssue)
+        : undefined
     void this.completeAppServerTurn(active, message, issue)
   }
 
@@ -1461,6 +1549,13 @@ export class CodexDriver extends PersistentCliDriver {
     this.emit({ type: 'message.part.updated', sessionId, part: basePart })
 
     const host = await this.ensureAppServerHost(projectPath)
+    // `thread/compact/start` only accepts threads the app-server has loaded.
+    // Loading (resuming) first is a no-op when the thread is already loaded, and
+    // it turns the "thread not found" rejection into a real compaction run.
+    await this.appServerRequest(host, 'thread/resume', {
+      threadId: nativeThreadId,
+      developerInstructions: null
+    })
     await new Promise<void>((resolve, reject) => {
       const timer = setTimeout(() => {
         this.compactionsByThreadId.delete(nativeThreadId)
@@ -1856,7 +1951,10 @@ function codexMonthName(index: number): string {
 /** Build the structured `quota` issue for a Codex usage-limit failure so the
  *  shared usage-limit card renders with a countdown and the retry scheduler can
  *  auto-resume the thread at the reported reset time. */
-function codexUsageLimitIssue(error: Record<string, unknown> | null, message: string): AgentProviderIssue | undefined {
+function codexUsageLimitIssue(
+  error: Record<string, unknown> | null,
+  message: string
+): AgentProviderIssue | undefined {
   const errorInfo = stringValue(error?.['codexErrorInfo'])
   if (errorInfo !== 'usageLimitExceeded' && !/usage limit/iu.test(message)) return undefined
   const retryAt = codexUsageLimitResetAt(message)
@@ -2328,6 +2426,39 @@ function recordValue(value: unknown): Record<string, unknown> | null {
 }
 function stringValue(value: unknown): string | undefined {
   return typeof value === 'string' ? value : undefined
+}
+
+interface CodexConfigEdit {
+  keyPath: string
+  value: unknown
+  mergeStrategy: 'upsert'
+}
+
+function parseCodexConfigEdits(
+  args: string,
+  commandName: 'config' | 'settings'
+): CodexConfigEdit[] {
+  const assignments = args.trim().split(/\s+/u).filter(Boolean)
+  if (assignments.length === 0) {
+    throw new Error(`/${commandName} requires one or more key=value arguments in Codex`)
+  }
+
+  return assignments.map((assignment) => {
+    const separator = assignment.indexOf('=')
+    const keyPath = separator > 0 ? assignment.slice(0, separator) : ''
+    const rawValue = separator >= 0 ? assignment.slice(separator + 1) : ''
+    if (!keyPath || !rawValue || !/^[a-zA-Z0-9_/-]+(?:\.[a-zA-Z0-9_/-]+)*$/u.test(keyPath)) {
+      throw new Error(`Invalid Codex config assignment: ${assignment}`)
+    }
+
+    let value: unknown = rawValue
+    try {
+      value = JSON.parse(rawValue) as unknown
+    } catch {
+      // Bare values are valid TOML strings; JSON literals keep their native type.
+    }
+    return { keyPath, value, mergeStrategy: 'upsert' }
+  })
 }
 
 function numberValue(value: unknown): number | undefined {

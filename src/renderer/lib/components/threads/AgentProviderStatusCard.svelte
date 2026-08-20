@@ -145,10 +145,6 @@
     })
   }
 
-  function retryCountdownLabel(retryAt: number): string {
-    return retryAt <= now ? 'Retry due now' : `Retry in ${relativeRetryTime(retryAt)}`
-  }
-
   async function beginSignIn(): Promise<void> {
     loginError = ''
     loginHandoff = null
@@ -230,10 +226,15 @@
 
       {#if waiting && issue.retryAt}
         <p class="mt-2 text-xs font-medium text-foreground tabular-nums">
-          <span aria-live="polite">{retryCountdownLabel(issue.retryAt)}</span>
-          <span class="font-normal text-dimmed"
-            >· scheduled for {absoluteRetryTime(issue.retryAt)}</span
-          >
+          <span aria-live="polite">
+            {#if autoRetryEnabled}
+              Auto-resume {absoluteRetryTime(issue.retryAt)} · in {relativeRetryTime(issue.retryAt)}
+            {:else}
+              Available again {absoluteRetryTime(issue.retryAt)} · in {relativeRetryTime(
+                issue.retryAt
+              )}
+            {/if}
+          </span>
           {#if issue.attempt}
             · attempt {issue.attempt}
           {/if}

@@ -12,7 +12,14 @@
   import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
   import { modelKey } from '$lib/model-keys'
+  import {
+    prLifecycleStore,
+    type PrDockDescriptor,
+    type PrDockStatus
+  } from '$lib/stores/pr-lifecycle.svelte'
+  import { getProjectIcon } from '$lib/project-icons'
   import type {
+    Project,
     PullRequestCompare,
     PullRequestReference,
     PullRequestSummary,
@@ -47,6 +54,8 @@
     onExpand?: () => void
     /** Override the default localStorage key so multiple docked drafts don't collide. */
     storageKey?: string
+    /** Set by the host (`PrDockHost`) so the sheet can drive its own dock chip. */
+    draftId?: string
   }
 
   interface StoredComposeSelection {
@@ -80,7 +89,8 @@
     minimized: minimizedProp,
     onMinimize: onMinimizeProp,
     onExpand: onExpandProp,
-    storageKey: storageKeyProp
+    storageKey: storageKeyProp,
+    draftId
   }: Props = $props()
 
   function preferencesStorageKey(): string {
@@ -144,6 +154,12 @@
 
   const initialPreferences = loadPrCreationPreferences()
 
+  /** Project identity used for the header chip and the dock chip. */
+  let projectMeta = $state<Project | null>(null)
+  let projectIconUrl = $state<string | null>(null)
+  const resolvedProjectIcon = $derived(
+    projectMeta ? getProjectIcon(projectMeta, projectIconUrl ?? undefined) : null
+  )
   let originIdentity = $state<{ owner: string; repo: string } | null>(null)
   let title = $state('')
   let body = $state('')
@@ -232,6 +248,51 @@
     )
   )
 
+  /** Live state reported to the host dock chip. */
+  const dockStatus = $derived<PrDockStatus>(
+    result
+      ? 'created'
+      : composeWorking || creating || submitting
+        ? 'working'
+        : dockHasIssue
+          ? 'attention'
+          : composeSucceeded
+            ? 'composed'
+            : 'draft'
+  )
+  function prDockTitle(pr: PullRequestReference | null, currentTitle: string): string {
+    if (pr) return `PR #${pr.number}`
+    const trimmed = currentTitle.trim()
+    return trimmed.length > 0 ? trimmed : 'New pull request'
+  }
+  const dockTitle = $derived(prDockTitle(result, title))
+  const dockProjectName = $derived(projectMeta?.name ?? '')
+
+  // The sheet lives inside `PrDockHost`'s `{#each store.drafts}`, so writing the
+  // store from a bare effect would re-render the host, re-run this effect and
+  // write again — a read/write cycle. Reading back the current descriptor and
+  // writing only when a field actually changed makes the sync idempotent.
+  $effect(() => {
+    if (!draftId) return
+    const next: PrDockDescriptor = {
+      projectName: dockProjectName,
+      iconUrl: resolvedProjectIcon,
+      status: dockStatus,
+      title: dockTitle
+    }
+    const current = prLifecycleStore.dockFor(draftId)
+    if (!current) return
+    if (
+      current.projectName === next.projectName &&
+      current.iconUrl === next.iconUrl &&
+      current.status === next.status &&
+      current.title === next.title
+    ) {
+      return
+    }
+    prLifecycleStore.updateDock(draftId, next)
+  })
+
   /**
    * Whether the local head has commits the remote lacks — a push is only
    * meaningful (and only possible) when this is true. When the head already
@@ -283,6 +344,11 @@
     try {
       const project = await invoke('project:get', projectId)
       if (!project?.path) return
+      projectMeta = project
+      if (project.icon) {
+        const url = await invoke('project:getIcon', projectId).catch(() => null)
+        projectIconUrl = url ?? null
+      }
       const url = await invoke('repository:remoteOrigin', project.path)
       const identity = parseRemoteIdentity(url ?? '')
       originIdentity = identity
@@ -569,10 +635,16 @@
     }, 2000)
   }
 
-  /** PR copy is a direct virtual task and must never enter an Engineering lifecycle. */
+  /**
+   * PR copy is a direct virtual task and must never enter an Engineering
+   * lifecycle. It is an ephemeral one-shot session, so it always runs in the
+   * low-exposure `auto_review` permission mode regardless of what the last-used
+   * or persisted thread-level permission was — never `full_access`.
+   */
   function composeVirtualTaskSettings(): ThreadSettings {
     return {
       ...composeSettings,
+      permissionLevel: 'auto_review',
       engineeringMode: false,
       assignmentMode: false,
       loopMode: false
@@ -680,47 +752,65 @@
   storageKey={effectiveStorageKey}
   defaultHeight={680}
 >
+  {#snippet headerPrefix()}
+    {#if dockProjectName}
+      <span
+        class="flex min-w-0 max-w-48 shrink-0 items-center gap-1.5 rounded-full border border-border bg-elevated py-0.5 pr-2.5 pl-1"
+      >
+        {#if resolvedProjectIcon}
+          <img src={resolvedProjectIcon} alt="" class="h-4 w-4 shrink-0 rounded" />
+        {:else}
+          <GitPullRequest size={13} class="shrink-0 text-dimmed" aria-hidden="true" />
+        {/if}
+        <span class="truncate text-[10px] font-semibold text-foreground">{dockProjectName}</span>
+      </span>
+    {/if}
+  {/snippet}
+
   {#snippet dock()}
-    <button
-      class="flex cursor-pointer items-center gap-1.5 rounded-xl border bg-surface px-3 py-2 shadow-xl transition-colors hover:bg-elevated"
-      title="Show pull request creation"
-      aria-label="Show pull request creation"
-      onclick={handleExpand}
-    >
-      {#if result}
-        <span
-          class="flex items-center gap-1 rounded-full bg-success/15 px-1.5 py-0.5 text-[9px] font-semibold text-success"
-        >
-          <CheckCircle2 size={10} aria-hidden="true" />
-          Created
-        </span>
-        <span class="text-[11px] font-medium">PR #{result.number}</span>
-      {:else if composeWorking || creating || submitting}
-        <Loader2 size={14} class="shrink-0 animate-spin text-info" />
-        <span class="text-[11px] font-medium">
-          {composeWorking ? 'Composing pull request…' : 'Creating pull request…'}
-        </span>
-      {:else if dockHasIssue}
-        <span
-          class="flex items-center gap-1 rounded-full bg-warning/15 px-1.5 py-0.5 text-[9px] font-semibold text-warning"
-        >
-          <TriangleAlert size={10} aria-hidden="true" />
-          Needs attention
-        </span>
-        <span class="text-[11px] font-medium">New pull request</span>
-      {:else if composeSucceeded}
-        <span
-          class="flex items-center gap-1 rounded-full bg-success/15 px-1.5 py-0.5 text-[9px] font-semibold text-success"
-        >
-          <CircleCheck size={10} aria-hidden="true" />
-          Composed
-        </span>
-        <span class="text-[11px] font-medium">New pull request</span>
-      {:else}
-        <GitPullRequest size={14} class="shrink-0 text-dimmed" />
-        <span class="text-[11px] font-medium">New pull request</span>
-      {/if}
-    </button>
+    {#if !draftId}
+      <!-- When the host drives the dock, PrDockHost renders the unified chip row. -->
+      <button
+        class="flex cursor-pointer items-center gap-1.5 rounded-xl border bg-surface px-3 py-2 shadow-xl transition-colors hover:bg-elevated"
+        title="Show pull request creation"
+        aria-label="Show pull request creation"
+        onclick={handleExpand}
+      >
+        {#if result}
+          <span
+            class="flex items-center gap-1 rounded-full bg-success/15 px-1.5 py-0.5 text-[9px] font-semibold text-success"
+          >
+            <CheckCircle2 size={10} aria-hidden="true" />
+            Created
+          </span>
+          <span class="text-[11px] font-medium">PR #{result.number}</span>
+        {:else if composeWorking || creating || submitting}
+          <Loader2 size={14} class="shrink-0 animate-spin text-info" />
+          <span class="text-[11px] font-medium">
+            {composeWorking ? 'Composing pull request…' : 'Creating pull request…'}
+          </span>
+        {:else if dockHasIssue}
+          <span
+            class="flex items-center gap-1 rounded-full bg-warning/15 px-1.5 py-0.5 text-[9px] font-semibold text-warning"
+          >
+            <TriangleAlert size={10} aria-hidden="true" />
+            Needs attention
+          </span>
+          <span class="text-[11px] font-medium">New pull request</span>
+        {:else if composeSucceeded}
+          <span
+            class="flex items-center gap-1 rounded-full bg-success/15 px-1.5 py-0.5 text-[9px] font-semibold text-success"
+          >
+            <CircleCheck size={10} aria-hidden="true" />
+            Composed
+          </span>
+          <span class="text-[11px] font-medium">New pull request</span>
+        {:else}
+          <GitPullRequest size={14} class="shrink-0 text-dimmed" />
+          <span class="text-[11px] font-medium">New pull request</span>
+        {/if}
+      </button>
+    {/if}
   {/snippet}
 
   <div class={result ? 'flex min-h-full items-center justify-center' : 'space-y-3'}>

@@ -35,7 +35,7 @@ const ISSUE_KINDS = new Set<AgentProviderIssueKind>([
 const RETRY_TICK_MS = 15_000
 
 /** Config-relative file holding pending retries so they survive app restarts. */
-const PERSISTENCE_FILE = 'retry-scheduler.json'
+const PERSISTENCE_FILE = 'scheduler/retry-scheduler.json'
 
 /**
  * RetrySchedulerService — remembers every thread whose turn ended in a
