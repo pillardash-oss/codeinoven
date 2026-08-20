@@ -10,6 +10,8 @@
     danger?: boolean
     divider?: boolean
     disabled?: boolean
+    /** When true, ActionSheet renders a check so the item reads as the current selection. */
+    selected?: boolean
   }
 
   interface Props {

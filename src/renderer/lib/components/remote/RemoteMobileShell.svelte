@@ -1,10 +1,9 @@
 <script lang="ts">
   import { onMount } from 'svelte'
-  import { DropdownMenu, AlertDialog, Dialog } from 'bits-ui'
+  import { AlertDialog, Dialog } from 'bits-ui'
   import {
     Bell,
     BrainCircuit,
-    Check,
     ChevronDown,
     Download,
     FolderKanban,
@@ -19,6 +18,8 @@
     Pencil,
     Pin,
     PinOff,
+    Plus,
+    Search,
     GitFork,
     Power,
     Share,
@@ -28,15 +29,17 @@
   } from '@lucide/svelte'
   import Switch from '$lib/components/ui/Switch.svelte'
   import BottomSheet from '$lib/components/ui/BottomSheet.svelte'
-  import ThreadDropdown, { type MenuItem } from '$lib/components/shared/ThreadDropdown.svelte'
+  import ActionSheet from '$lib/components/ui/ActionSheet.svelte'
+  import type { MenuItem } from '$lib/components/shared/ThreadDropdown.svelte'
   import { mobileNotifications } from '$lib/remote/mobile-notifications.svelte'
   import { pwaInstall } from '$lib/remote/pwa-install.svelte'
-  import { subscribe } from '$lib/ipc.svelte'
+  import { invoke, subscribe } from '$lib/ipc.svelte'
   import { getProjectIcon } from '$lib/project-icons'
   import { mobileState } from '$lib/remote/mobile-state.svelte'
   import { threadMessages } from '$lib/stores/thread-messages.svelte'
   import { gitState } from '$lib/stores/git.svelte'
-  import type { Thread } from '$shared/types'
+  import { toast } from 'svelte-sonner'
+  import { INBOX_PROJECT_ID, type Thread, type ThreadSearchResult } from '$shared/types'
 
   const SIDEBAR_MODES = [
     { id: 'projects', label: 'Projects', icon: FolderKanban },
@@ -81,6 +84,17 @@
   let deleteTarget = $state<Thread | null>(null)
   let deleteBusy = $state(false)
   let deleteError = $state('')
+  // Which thread's action menu is open — drives the shared bottom-sheet action menu.
+  let actionMenuThread = $state<Thread | null>(null)
+  // Sidebar Projects/Threads/Chats mode picker.
+  let modeMenuOpen = $state(false)
+  // Header overflow menu (history/memory/git/sources/notes/notifications).
+  let headerMenuOpen = $state(false)
+  let searchQuery = $state('')
+  let searchResults = $state<ThreadSearchResult[]>([])
+  let searching = $state(false)
+  let searchTimer: ReturnType<typeof setTimeout> | undefined
+  let searchRequest = 0
 
   async function confirmRename(): Promise<void> {
     const target = renameTarget
@@ -123,6 +137,58 @@
     deleteTarget = thread
   }
 
+  function searchThreads(query: string): void {
+    searchQuery = query
+    clearTimeout(searchTimer)
+    const request = ++searchRequest
+    const normalized = query.trim()
+    if (normalized.length < 2) {
+      searchResults = []
+      searching = false
+      return
+    }
+    searching = true
+    searchTimer = setTimeout(() => {
+      void invoke('threads:search', normalized, { limit: 50 })
+        .then((results) => {
+          if (request !== searchRequest) return
+          searchResults = results
+          searching = false
+        })
+        .catch(() => {
+          if (request !== searchRequest) return
+          searchResults = []
+          searching = false
+        })
+    }, 140)
+  }
+
+  let visibleSearchResults = $derived(
+    searchResults.filter(({ thread }) =>
+      mobileState.sidebarMode === 'chats'
+        ? thread.projectId === INBOX_PROJECT_ID
+        : thread.projectId !== INBOX_PROJECT_ID
+    )
+  )
+
+  async function createProjectThread(projectId: string): Promise<void> {
+    const project = mobileState.projects.find((candidate) => candidate.id === projectId)
+    if (!project) return
+    try {
+      await mobileState.createProjectThread(project)
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'The thread could not be created.')
+    }
+  }
+
+  async function createChat(): Promise<void> {
+    try {
+      await mobileState.createChat()
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'The chat could not be created.')
+    }
+  }
+
   // ─── Row action menus ───────────────────────────────────────────────────
   function threadMenuItems(thread: Thread): MenuItem[] {
     return [
@@ -157,6 +223,49 @@
 
   function folderWorking(projectId: string): boolean {
     return folderThreads(projectId).some((thread) => mobileState.isWorking(thread))
+  }
+
+  function headerMenuItems(): MenuItem[] {
+    const items: MenuItem[] = [
+      {
+        label: 'Message history',
+        icon: History,
+        disabled: mobileState.userMessages.length === 0,
+        onClick: () => (mobileState.historyOpen = true)
+      },
+      {
+        label: 'Memory',
+        icon: BrainCircuit,
+        onClick: () => (mobileState.memoryOpen = true)
+      },
+      {
+        label: 'Notifications',
+        icon: Bell,
+        onClick: () => (mobileState.notificationsOpen = true)
+      }
+    ]
+    if (mobileState.selectedThread) {
+      if (!mobileState.chatMode) {
+        items.push({
+          label: 'Git',
+          icon: GitBranch,
+          onClick: () => (mobileState.gitOpen = true)
+        })
+      }
+      items.push(
+        {
+          label: 'Sources',
+          icon: Library,
+          onClick: () => (mobileState.sourcesOpen = true)
+        },
+        {
+          label: 'Notes',
+          icon: NotebookPen,
+          onClick: () => (mobileState.notesOpen = true)
+        }
+      )
+    }
+    return items
   }
 
   function threadDot(thread: Thread): string {
@@ -213,10 +322,24 @@
       unsubscribeThreadDeleted()
       navigator.serviceWorker?.removeEventListener('message', onServiceWorkerMessage)
       mobileNotifications.setOpenHandler(null)
+      clearTimeout(searchTimer)
     }
   })
 
   let activeSidebarMode = $derived(SIDEBAR_MODES.find((m) => m.id === mobileState.sidebarMode))
+  let selectedThreadWorking = $derived(
+    mobileState.selectedThread ? mobileState.isWorking(mobileState.selectedThread) : false
+  )
+  const modeMenuItems = $derived(
+    SIDEBAR_MODES.map((entry) => ({
+      label: entry.label,
+      icon: entry.icon,
+      selected: mobileState.sidebarMode === entry.id,
+      onClick: () => {
+        mobileState.sidebarMode = entry.id
+      }
+    }))
+  )
 
   // Keep the git branch indicator current for whichever project is open.
   $effect(() => {
@@ -275,14 +398,32 @@
         <p class="truncate text-[14px] font-semibold tracking-tight">
           {mobileState.selectedThread?.title ?? 'CodeInOven'}
         </p>
-        {#if mobileState.selectedProject && mobileState.selectedThread && !mobileState.chatMode}
+        {#if mobileState.selectedThread && ((mobileState.selectedProject && !mobileState.chatMode) || selectedThreadWorking)}
           <p class="flex items-center justify-center gap-1 truncate text-[11px] text-dimmed">
-            <span class="truncate">{mobileState.selectedProject.name}</span>
-            {#if gitState.branch}
-              <span class="shrink-0">·</span>
-              <span class="flex shrink-0 items-center gap-0.5">
-                <GitBranch size={10} />
-                <span class="max-w-24 truncate">{gitState.branch}</span>
+            {#if mobileState.selectedProject && !mobileState.chatMode}
+              <span class="truncate">{mobileState.selectedProject.name}</span>
+              {#if gitState.branch}
+                <span class="shrink-0">·</span>
+                <span class="flex shrink-0 items-center gap-0.5">
+                  <GitBranch size={10} />
+                  <span class="max-w-24 truncate">{gitState.branch}</span>
+                </span>
+              {/if}
+            {/if}
+            {#if selectedThreadWorking}
+              {#if mobileState.selectedProject && !mobileState.chatMode}
+                <span class="shrink-0">·</span>
+              {/if}
+              <span
+                class="flex shrink-0 items-center gap-1 rounded-md px-1.5 py-0.5 {mobileState
+                  .selectedThread.status === 'working-paused'
+                  ? 'bg-warning/10 text-warning'
+                  : 'bg-info/10 text-info'}"
+              >
+                <Loader2 size={9} class="animate-spin" />
+                {mobileState.selectedThread.status === 'working-paused'
+                  ? 'Waiting to retry'
+                  : 'Working'}
               </span>
             {/if}
           </p>
@@ -320,82 +461,20 @@
           </button>
         {/if}
 
-        <DropdownMenu.Root>
-          <DropdownMenu.Trigger
-            class="relative flex h-11 w-11 cursor-pointer items-center justify-center rounded-xl text-muted transition-colors active:bg-elevated"
-            aria-label="More options"
-            title="More options"
-          >
-            <MoreVertical size={19} />
-            {#if mobileState.hasOverflowAttention}
-              <span class="absolute top-1.5 right-1.5 flex items-start">
-                <span class="h-2 w-2 rounded-full bg-thread-pinned"></span>
-              </span>
-            {/if}
-          </DropdownMenu.Trigger>
-          <DropdownMenu.Portal>
-            <DropdownMenu.Content
-              side="bottom"
-              align="end"
-              sideOffset={6}
-              collisionPadding={8}
-              class="z-50 w-56 overflow-hidden rounded-xl border border-border bg-surface p-1 shadow-xl"
-            >
-              <DropdownMenu.Item
-                class="flex w-full cursor-pointer items-center gap-2.5 rounded-lg px-3 py-2.5 text-[14px] text-muted outline-none transition-colors hover:bg-elevated focus:bg-elevated hover:text-foreground"
-                disabled={mobileState.userMessages.length === 0}
-                onSelect={() => (mobileState.historyOpen = true)}
-              >
-                <History size={16} />
-                <span class="flex-1 text-left">Message history</span>
-              </DropdownMenu.Item>
-
-              <DropdownMenu.Item
-                class="flex w-full cursor-pointer items-center gap-2.5 rounded-lg px-3 py-2.5 text-[14px] text-muted outline-none transition-colors hover:bg-elevated focus:bg-elevated hover:text-foreground"
-                onSelect={() => (mobileState.memoryOpen = true)}
-              >
-                <BrainCircuit size={16} />
-                <span class="flex-1 text-left">Memory</span>
-              </DropdownMenu.Item>
-
-              {#if mobileState.selectedThread && !mobileState.chatMode}
-                <DropdownMenu.Item
-                  class="flex w-full cursor-pointer items-center gap-2.5 rounded-lg px-3 py-2.5 text-[14px] text-muted outline-none transition-colors hover:bg-elevated focus:bg-elevated hover:text-foreground"
-                  onSelect={() => (mobileState.gitOpen = true)}
-                >
-                  <GitBranch size={16} />
-                  <span class="flex-1 text-left">Git</span>
-                </DropdownMenu.Item>
-              {/if}
-
-              {#if mobileState.selectedThread}
-                <DropdownMenu.Item
-                  class="flex w-full cursor-pointer items-center gap-2.5 rounded-lg px-3 py-2.5 text-[14px] text-muted outline-none transition-colors hover:bg-elevated focus:bg-elevated hover:text-foreground"
-                  onSelect={() => (mobileState.sourcesOpen = true)}
-                >
-                  <Library size={16} />
-                  <span class="flex-1 text-left">Sources</span>
-                </DropdownMenu.Item>
-
-                <DropdownMenu.Item
-                  class="flex w-full cursor-pointer items-center gap-2.5 rounded-lg px-3 py-2.5 text-[14px] text-muted outline-none transition-colors hover:bg-elevated focus:bg-elevated hover:text-foreground"
-                  onSelect={() => (mobileState.notesOpen = true)}
-                >
-                  <NotebookPen size={16} />
-                  <span class="flex-1 text-left">Notes</span>
-                </DropdownMenu.Item>
-              {/if}
-
-              <DropdownMenu.Item
-                class="flex w-full cursor-pointer items-center gap-2.5 rounded-lg px-3 py-2.5 text-[14px] text-muted outline-none transition-colors hover:bg-elevated focus:bg-elevated hover:text-foreground"
-                onSelect={() => (mobileState.notificationsOpen = true)}
-              >
-                <Bell size={16} />
-                <span class="flex-1 text-left">Notifications</span>
-              </DropdownMenu.Item>
-            </DropdownMenu.Content>
-          </DropdownMenu.Portal>
-        </DropdownMenu.Root>
+        <button
+          type="button"
+          class="relative flex h-11 w-11 shrink-0 cursor-pointer items-center justify-center rounded-xl text-muted transition-colors active:bg-elevated"
+          aria-label="More options"
+          title="More options"
+          onclick={() => (headerMenuOpen = true)}
+        >
+          <MoreVertical size={19} />
+          {#if mobileState.hasOverflowAttention}
+            <span class="absolute top-1.5 right-1.5 flex items-start">
+              <span class="h-2 w-2 rounded-full bg-thread-pinned"></span>
+            </span>
+          {/if}
+        </button>
       </div>
     </header>
   </div>
@@ -599,48 +678,34 @@
       aria-label="Sidebar"
     >
       <div class="flex h-14 shrink-0 items-center gap-0.5 border-b border-border px-2">
-        <DropdownMenu.Root>
-          <DropdownMenu.Trigger
-            class="flex h-11 min-w-0 flex-1 cursor-pointer items-center gap-1.5 rounded-xl px-2.5 text-left transition-colors active:bg-elevated"
-            aria-label="Switch sidebar view"
-            title="Switch sidebar view"
+        <button
+          type="button"
+          class="flex h-11 min-w-0 flex-1 cursor-pointer items-center gap-1.5 rounded-xl px-2.5 text-left transition-colors active:bg-elevated"
+          title="Switch sidebar view"
+          aria-label="Switch sidebar view"
+          onclick={() => (modeMenuOpen = true)}
+        >
+          {#if activeSidebarMode}
+            {@const ActiveIcon = activeSidebarMode.icon}
+            <ActiveIcon size={16} class="shrink-0 text-muted" />
+          {/if}
+          <span class="truncate text-[15px] font-semibold tracking-tight">
+            {activeSidebarMode?.label ?? 'Projects'}
+          </span>
+          <ChevronDown size={15} class="shrink-0 text-dimmed" />
+        </button>
+
+        {#if mobileState.sidebarMode === 'chats'}
+          <button
+            type="button"
+            class="flex h-11 w-11 shrink-0 cursor-pointer items-center justify-center rounded-xl text-muted transition-colors active:bg-elevated"
+            aria-label="New chat"
+            title="New chat"
+            onclick={() => void createChat()}
           >
-            {#if activeSidebarMode}
-              {@const ActiveIcon = activeSidebarMode.icon}
-              <ActiveIcon size={16} class="shrink-0 text-muted" />
-            {/if}
-            <span class="truncate text-[15px] font-semibold tracking-tight">
-              {activeSidebarMode?.label ?? 'Projects'}
-            </span>
-            <ChevronDown size={15} class="shrink-0 text-dimmed" />
-          </DropdownMenu.Trigger>
-          <DropdownMenu.Portal>
-            <DropdownMenu.Content
-              side="bottom"
-              align="start"
-              sideOffset={6}
-              collisionPadding={8}
-              class="z-50 w-48 overflow-hidden rounded-xl border border-border bg-surface p-1 shadow-xl"
-            >
-              {#each SIDEBAR_MODES as entry (entry.id)}
-                {@const Icon = entry.icon}
-                <DropdownMenu.Item
-                  class="flex w-full cursor-pointer items-center gap-2 rounded-lg px-3 py-2.5 text-[14px] outline-none transition-colors hover:bg-elevated focus:bg-elevated {mobileState.sidebarMode ===
-                  entry.id
-                    ? 'text-foreground'
-                    : 'text-muted'}"
-                  onSelect={() => (mobileState.sidebarMode = entry.id)}
-                >
-                  <Icon size={15} class="shrink-0 text-muted" />
-                  <span class="flex-1 text-left">{entry.label}</span>
-                  {#if mobileState.sidebarMode === entry.id}
-                    <Check size={15} class="text-primary" />
-                  {/if}
-                </DropdownMenu.Item>
-              {/each}
-            </DropdownMenu.Content>
-          </DropdownMenu.Portal>
-        </DropdownMenu.Root>
+            <Plus size={18} />
+          </button>
+        {/if}
 
         <button
           type="button"
@@ -653,9 +718,60 @@
         </button>
       </div>
 
+      <div class="shrink-0 border-b border-border px-3 py-2">
+        <label
+          class="flex h-10 items-center gap-2 rounded-xl bg-elevated px-3 text-muted focus-within:ring-1 focus-within:ring-primary"
+        >
+          <Search size={15} class="shrink-0 text-dimmed" />
+          <input
+            type="search"
+            value={searchQuery}
+            class="min-w-0 flex-1 bg-transparent text-[14px] text-foreground outline-none placeholder:text-dimmed"
+            placeholder={mobileState.sidebarMode === 'chats'
+              ? 'Search chats…'
+              : 'Search project threads…'}
+            aria-label={mobileState.sidebarMode === 'chats'
+              ? 'Search chat threads'
+              : 'Search project threads'}
+            oninput={(event) => searchThreads(event.currentTarget.value)}
+          />
+          {#if searching}
+            <Loader2 size={14} class="shrink-0 animate-spin text-dimmed" />
+          {/if}
+        </label>
+      </div>
+
       <!-- Sidebar content -->
       <div class="min-h-0 flex-1 overflow-y-auto overscroll-contain px-2 py-2">
-        {#if mobileState.loading}
+        {#if searchQuery.trim().length >= 2}
+          {#if !searching && visibleSearchResults.length === 0}
+            <p class="px-3 py-12 text-center text-[13px] text-dimmed">No matching threads</p>
+          {:else}
+            <div class="space-y-px">
+              {#each visibleSearchResults as result (result.thread.id)}
+                <button
+                  type="button"
+                  class="flex w-full flex-col gap-0.5 rounded-lg px-3 py-2.5 text-left transition-colors active:bg-elevated"
+                  title={result.thread.title}
+                  onclick={() => void mobileState.openThread(result.thread)}
+                >
+                  <span class="flex min-w-0 items-center gap-2">
+                    <span class={`h-2 w-2 shrink-0 rounded-full ${threadDot(result.thread)}`}
+                    ></span>
+                    <span class="min-w-0 flex-1 truncate text-[13px] text-foreground">
+                      {result.thread.title}
+                    </span>
+                  </span>
+                  {#if result.kind === 'message' && result.snippet}
+                    <span class="line-clamp-2 pl-4 text-[11px] leading-snug text-dimmed">
+                      {result.role === 'assistant' ? 'Agent' : 'You'} · {result.snippet}
+                    </span>
+                  {/if}
+                </button>
+              {/each}
+            </div>
+          {/if}
+        {:else if mobileState.loading}
           <div class="flex items-center gap-2 px-3 py-4 text-[14px] text-muted">
             <Loader2 size={15} class="animate-spin" />
             Loading…
@@ -701,11 +817,15 @@
                       >{relativeTime(thread.createdAt)}</span
                     >
                   </button>
-                  <ThreadDropdown
-                    items={threadMenuItems(thread)}
-                    ariaLabel={`Actions for ${thread.title}`}
-                    vertical
-                  />
+                  <button
+                    type="button"
+                    class="flex h-11 w-11 shrink-0 cursor-pointer items-center justify-center rounded-xl text-muted transition-colors active:bg-elevated active:text-foreground"
+                    title={`Actions for ${thread.title}`}
+                    aria-label={`Actions for ${thread.title}`}
+                    onclick={() => (actionMenuThread = thread)}
+                  >
+                    <MoreVertical size={20} />
+                  </button>
                 </div>
               {/each}
             </div>
@@ -716,28 +836,39 @@
             {@const expanded = mobileState.expandedFolders.has(project.id)}
             {@const working = folderWorking(project.id)}
             <div class="mb-0.5">
-              <button
-                type="button"
-                class="flex w-full cursor-pointer items-center gap-2 rounded-lg px-2 py-2 text-left transition-colors active:bg-elevated"
-                title={project.name}
-                onclick={() => mobileState.toggleFolder(project.id)}
-              >
-                {#if iconUrl}
-                  <img src={iconUrl} alt="" class="h-4 w-4 shrink-0 rounded object-contain" />
-                {:else}
-                  <span class="h-4 w-4 shrink-0 rounded bg-elevated"></span>
-                {/if}
-                <span class="min-w-0 flex-1 truncate text-[13px] text-foreground">
-                  {project.name}
-                </span>
-                {#if working}
-                  <span class="h-1.5 w-1.5 shrink-0 rounded-full bg-thread-working"></span>
-                {/if}
-                <ChevronDown
-                  size={14}
-                  class={`shrink-0 text-dimmed transition-transform ${expanded ? 'rotate-180' : ''}`}
-                />
-              </button>
+              <div class="flex items-center gap-0.5">
+                <button
+                  type="button"
+                  class="flex min-w-0 flex-1 cursor-pointer items-center gap-2 rounded-lg px-2 py-2 text-left transition-colors active:bg-elevated"
+                  title={project.name}
+                  onclick={() => mobileState.toggleFolder(project.id)}
+                >
+                  {#if iconUrl}
+                    <img src={iconUrl} alt="" class="h-4 w-4 shrink-0 rounded object-contain" />
+                  {:else}
+                    <span class="h-4 w-4 shrink-0 rounded bg-elevated"></span>
+                  {/if}
+                  <span class="min-w-0 flex-1 truncate text-[13px] text-foreground">
+                    {project.name}
+                  </span>
+                  {#if working}
+                    <span class="h-1.5 w-1.5 shrink-0 rounded-full bg-thread-working"></span>
+                  {/if}
+                  <ChevronDown
+                    size={14}
+                    class={`shrink-0 text-dimmed transition-transform ${expanded ? 'rotate-180' : ''}`}
+                  />
+                </button>
+                <button
+                  type="button"
+                  class="flex h-10 w-10 shrink-0 cursor-pointer items-center justify-center rounded-lg text-muted transition-colors active:bg-elevated active:text-foreground"
+                  title={`New thread in ${project.name}`}
+                  aria-label={`New thread in ${project.name}`}
+                  onclick={() => void createProjectThread(project.id)}
+                >
+                  <Plus size={16} />
+                </button>
+              </div>
               {#if expanded}
                 <div class="ml-2 space-y-px py-0.5">
                   {#each folderThreads(project.id) as thread (thread.id)}
@@ -761,11 +892,15 @@
                           >{relativeTime(thread.createdAt)}</span
                         >
                       </button>
-                      <ThreadDropdown
-                        items={threadMenuItems(thread)}
-                        ariaLabel={`Actions for ${thread.title}`}
-                        vertical
-                      />
+                      <button
+                        type="button"
+                        class="flex h-11 w-11 shrink-0 cursor-pointer items-center justify-center rounded-xl text-muted transition-colors active:bg-elevated active:text-foreground"
+                        title={`Actions for ${thread.title}`}
+                        aria-label={`Actions for ${thread.title}`}
+                        onclick={() => (actionMenuThread = thread)}
+                      >
+                        <MoreVertical size={20} />
+                      </button>
                     </div>
                   {:else}
                     <p class="px-2 py-1.5 text-[12px] text-dimmed">No threads yet</p>
@@ -809,11 +944,15 @@
                     >{relativeTime(thread.createdAt)}</span
                   >
                 </button>
-                <ThreadDropdown
-                  items={threadMenuItems(thread)}
-                  ariaLabel={`Actions for ${thread.title}`}
-                  vertical
-                />
+                <button
+                  type="button"
+                  class="flex h-11 w-11 shrink-0 cursor-pointer items-center justify-center rounded-xl text-muted transition-colors active:bg-elevated active:text-foreground"
+                  title={`Actions for ${thread.title}`}
+                  aria-label={`Actions for ${thread.title}`}
+                  onclick={() => (actionMenuThread = thread)}
+                >
+                  <MoreVertical size={20} />
+                </button>
               </div>
             {:else}
               <p class="px-2 py-12 text-center text-[13px] text-dimmed">No threads yet</p>
@@ -843,11 +982,15 @@
                     >{relativeTime(thread.createdAt)}</span
                   >
                 </button>
-                <ThreadDropdown
-                  items={threadMenuItems(thread)}
-                  ariaLabel={`Actions for ${thread.title}`}
-                  vertical
-                />
+                <button
+                  type="button"
+                  class="flex h-11 w-11 shrink-0 cursor-pointer items-center justify-center rounded-xl text-muted transition-colors active:bg-elevated active:text-foreground"
+                  title={`Actions for ${thread.title}`}
+                  aria-label={`Actions for ${thread.title}`}
+                  onclick={() => (actionMenuThread = thread)}
+                >
+                  <MoreVertical size={20} />
+                </button>
               </div>
             {:else}
               <div class="flex flex-col items-center gap-2 px-2 py-12 text-center">
@@ -1117,4 +1260,29 @@
       </AlertDialog.Content>
     </AlertDialog.Portal>
   </AlertDialog.Root>
+
+  <!-- Touch-friendly thread actions — bottom-sheet menu backed by the same
+       MenuItem shape the rest of the app uses. -->
+  <ActionSheet
+    open={actionMenuThread !== null}
+    title={actionMenuThread?.title ?? 'Thread actions'}
+    items={actionMenuThread ? threadMenuItems(actionMenuThread) : []}
+    onClose={() => (actionMenuThread = null)}
+  />
+
+  <!-- Sidebar view switcher — Projects / Threads / Chats. -->
+  <ActionSheet
+    open={modeMenuOpen}
+    title="View"
+    items={modeMenuItems}
+    onClose={() => (modeMenuOpen = false)}
+  />
+
+  <!-- App header overflow menu — history/memory/git/sources/notes/notifications. -->
+  <ActionSheet
+    open={headerMenuOpen}
+    title="Options"
+    items={headerMenuItems()}
+    onClose={() => (headerMenuOpen = false)}
+  />
 </div>
