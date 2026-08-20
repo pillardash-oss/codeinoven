@@ -18,8 +18,10 @@ import { loadProjectIcons } from '$lib/project-icons'
 import { hasProjectNameCollision } from '$lib/project-location'
 import { agentRuns } from '$lib/stores/agent-runs.svelte'
 import { threadMessages } from '$lib/stores/thread-messages.svelte'
+import { chatEffectiveSettings, threadSettings } from '$lib/stores/thread-settings.svelte'
 import {
   coordinatorHasActiveDelegates,
+  DEFAULT_THREAD_TITLE,
   INBOX_PROJECT_ID,
   isOrchestrationChildThread,
   isThreadWorking,
@@ -96,6 +98,7 @@ class MobileState {
   gitOpen = $state(false)
   sourcesOpen = $state(false)
   notesOpen = $state(false)
+  usageOpen = $state(false)
   settingsOpen = $state(false)
   installGuideOpen = $state(false)
 
@@ -186,6 +189,11 @@ class MobileState {
       this.projects = projectList
       this.allThreads = (threadList as Thread[]).filter((t) => !isOrchestrationChildThread(t))
       this.orchestrationThreads = (threadList as Thread[]).filter(isOrchestrationChildThread)
+      for (const thread of this.allThreads) {
+        if (agentRuns.hasSettled(thread.projectId, thread.id) && !isThreadWorking(thread)) {
+          agentRuns.setIdle(thread.projectId, thread.id)
+        }
+      }
       this.refreshAttention()
       this.projectIcons.clear()
       for (const [projectId, iconUrl] of await loadProjectIcons(this.projects)) {
@@ -278,6 +286,39 @@ class MobileState {
     await this.openThread(forked)
   }
 
+  async createProjectThread(project: Project): Promise<void> {
+    const inherited =
+      this.selectedThread?.projectId === project.id && this.selectedThread.settings
+        ? this.selectedThread.settings
+        : threadSettings.lastUsed
+    const created = await invoke('thread:create', {
+      projectId: project.id,
+      providerId: 'opencode',
+      title: DEFAULT_THREAD_TITLE,
+      workingDirectory: project.path,
+      settings: inherited
+    })
+    this.allThreads = [created, ...this.allThreads.filter((thread) => thread.id !== created.id)]
+    this.expandedFolders.add(project.id)
+    await this.openThread(created)
+  }
+
+  async createChat(): Promise<void> {
+    const inbox = await invoke('project:ensureInbox')
+    if (!this.projects.some((project) => project.id === inbox.id)) {
+      this.projects = [...this.projects, inbox]
+    }
+    const created = await invoke('thread:create', {
+      projectId: inbox.id,
+      providerId: 'opencode',
+      title: DEFAULT_THREAD_TITLE,
+      workingDirectory: '',
+      settings: chatEffectiveSettings()
+    })
+    this.allThreads = [created, ...this.allThreads.filter((thread) => thread.id !== created.id)]
+    await this.openThread(created)
+  }
+
   toggleFolder(projectId: string): void {
     if (this.expandedFolders.has(projectId)) this.expandedFolders.delete(projectId)
     else this.expandedFolders.add(projectId)
@@ -298,8 +339,14 @@ class MobileState {
         : [updated, ...this.orchestrationThreads]
       return
     }
-    this.allThreads = this.allThreads.map((t) => (t.id === updated.id ? updated : t))
+    const exists = this.allThreads.some((thread) => thread.id === updated.id)
+    this.allThreads = exists
+      ? this.allThreads.map((thread) => (thread.id === updated.id ? updated : thread))
+      : [updated, ...this.allThreads]
     this.refreshAttention()
+    if (agentRuns.hasSettled(updated.projectId, updated.id) && !isThreadWorking(updated)) {
+      agentRuns.setIdle(updated.projectId, updated.id)
+    }
     if (this.selectedThread?.id === updated.id) {
       this.selectedThread = updated
       if (!updated.read) {
@@ -322,6 +369,42 @@ class MobileState {
       ? agentRuns.isBusy(thread.projectId, thread.id)
       : Boolean(thread.sessionId) && isThreadWorking(thread)
     return liveWorking || coordinatorHasActiveDelegates(thread, this.orchestrationThreads)
+  }
+
+  /** Reconcile state that may have changed while the mobile browser was frozen. */
+  async reconcileAfterReconnect(): Promise<void> {
+    const selected = this.selectedThread
+      ? { projectId: this.selectedThread.projectId, threadId: this.selectedThread.id }
+      : null
+    await this.loadData()
+    if (!selected) return
+    const refreshed = this.allThreads.find(
+      (thread) => thread.projectId === selected.projectId && thread.id === selected.threadId
+    )
+    this.selectedProject =
+      this.projects.find((project) => project.id === selected.projectId) ?? this.selectedProject
+    if (refreshed) this.selectedThread = refreshed
+    const status = await invoke(
+      'agent:getSessionStatus',
+      selected.projectId,
+      selected.threadId
+    ).catch(() => null)
+    if (status?.state === 'working' || status?.state === 'waiting') {
+      agentRuns.setBusy(
+        selected.projectId,
+        selected.threadId,
+        true,
+        undefined,
+        status.state === 'working' ? status.startedAt : undefined
+      )
+      threadMessages.setRunError(selected.projectId, selected.threadId, '')
+    } else {
+      agentRuns.setIdle(selected.projectId, selected.threadId)
+      if (status?.state === 'error') {
+        threadMessages.setRunError(selected.projectId, selected.threadId, status.issue.message)
+      }
+    }
+    await threadMessages.load(selected.projectId, selected.threadId)
   }
 }
 

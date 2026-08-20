@@ -117,6 +117,7 @@ import type {
   AgentCapabilityCatalog,
   AgentCapabilityEntry,
   AgentCapabilitySource,
+  AgentRunningProcess,
   NativeMcpContent,
   AssignmentPlan,
   AssignmentPlanContent,
@@ -3555,6 +3556,44 @@ export class ChatEngine {
     const messages = await this.loadMessages(projectId, threadId)
     const projectPath = await this.resolveProjectPath(projectId)
     return this.generatedArtifactService.artifactsFor(thread, projectPath, messages)
+  }
+
+  /** Running processes owned by a thread (and app-scoped pooled harness shares). */
+  listProcesses(projectId: string, threadId: string): AgentRunningProcess[] {
+    return this.agentProcesses.list(
+      validateEntityId(projectId, 'Project ID'),
+      validateEntityId(threadId, 'Thread ID')
+    )
+  }
+
+  /** Kill one app-owned process by pid for a thread. */
+  killProcess(projectId: string, threadId: string, pid: number): Promise<void> {
+    if (!Number.isSafeInteger(pid) || pid <= 0) {
+      throw new TypeError('Process ID must be a positive integer')
+    }
+    return this.agentProcesses.killProcess(
+      validateEntityId(projectId, 'Project ID'),
+      validateEntityId(threadId, 'Thread ID'),
+      pid
+    )
+  }
+
+  /** Kill every process owned by a thread, including app-scoped pooled shares. */
+  killThreadProcesses(projectId: string, threadId: string): Promise<void> {
+    return this.agentProcesses.killThread(
+      validateEntityId(projectId, 'Project ID'),
+      validateEntityId(threadId, 'Thread ID')
+    )
+  }
+
+  /** Delete a harness-native or app-managed skill. */
+  deleteSkill(source: AgentCapabilitySource): Promise<boolean> {
+    return this.capabilityDiscovery.deleteSkill(source)
+  }
+
+  /** Delete an app-managed MCP server entry. */
+  deleteMcp(source: AgentCapabilitySource): Promise<boolean> {
+    return this.capabilityDiscovery.deleteMcp(source)
   }
 
   /**

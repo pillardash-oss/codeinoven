@@ -59,6 +59,8 @@ export interface GatewayHandlers {
     args: unknown[],
     device?: RemoteRpcDeviceContext
   ) => Promise<{ ok: true; result: unknown } | { ok: false; message: string }>
+  /** Called when an authenticated phone opens or leaves the remote workspace. */
+  onWorkspaceActiveChange?: (deviceId: string, active: boolean) => void
   /** Authenticates a device handshake against the device credential service. */
   authenticateDevice?: (input: {
     nonce: string
@@ -105,6 +107,8 @@ interface PeerConnection {
   device?: RemoteDeviceInfo
   sessionId: string
   originPolicy: 'strict' | 'local'
+  /** Per-device send chain: encrypted event deltas must reach the browser in source order. */
+  sendQueue: Promise<void>
 }
 
 /** An on-disk file with its raw bytes, ETag, and lazily-compressed variants. */
@@ -142,6 +146,10 @@ const ALLOWED_STATIC: ReadonlySet<string> = new Set([
   '/precache-manifest.json',
   '/apple-touch-icon.png',
   '/icon.png',
+  '/icon-192.png',
+  '/icon-512.png',
+  '/icon-maskable-512.png',
+  '/notification-badge.png',
   '/logo.png',
   '/favicon.ico'
 ])
@@ -295,8 +303,8 @@ export class RemoteGateway {
     try {
       // Bind sequentially so a LAN-port failure never leaves the loopback
       // listener alive, and clean up HTTPS if the loopback bind fails.
-      await this.listen(httpsServer, this.options.port, '0.0.0.0')
-      await this.listen(httpServer, this.options.localPort, '127.0.0.1')
+      await this.listenWithPortFallback(httpsServer, this.options.port, '0.0.0.0', 'LAN')
+      await this.listenWithPortFallback(httpServer, this.options.localPort, '127.0.0.1', 'loopback')
     } catch (error) {
       await this.closeServers()
       throw error
@@ -361,6 +369,23 @@ export class RemoteGateway {
       server.once('listening', onListening)
       server.listen(port, host)
     })
+  }
+
+  private async listenWithPortFallback(
+    server: Server | HttpsServer,
+    port: number,
+    host: string,
+    label: string
+  ): Promise<void> {
+    try {
+      await this.listen(server, port, host)
+    } catch (error) {
+      if (!(error instanceof Error) || !('code' in error) || error.code !== 'EADDRINUSE') {
+        throw error
+      }
+      Logger.info(`Remote ${label} port ${port} is already owned; using an available port`)
+      await this.listen(server, 0, host)
+    }
   }
 
   private handleLoopbackHttp(response: ServerResponse): void {
@@ -707,7 +732,8 @@ export class RemoteGateway {
       connectedAt: 0,
       authChallenge: randomBytes(32).toString('base64url'),
       sessionId: randomBytes(16).toString('base64url'),
-      originPolicy
+      originPolicy,
+      sendQueue: Promise.resolve()
     }
     this.peers.add(peer)
     socketSend(peer, { type: 'remote:challenge', nonce: peer.authChallenge })
@@ -972,13 +998,7 @@ export class RemoteGateway {
    * events to the phones.
    */
   sendToPeer(payload: unknown): void {
-    const secret = this.options.peerSecret ?? ''
-    void encryptPayload(secret, JSON.stringify(payload)).then((encrypted) => {
-      for (const peer of this.livePeers.values()) {
-        if (peer.closing || peer.socket.destroyed) continue
-        socketSend(peer, { type: 'remote:data', payload: encrypted })
-      }
-    })
+    for (const peer of this.livePeers.values()) this.queuePeerSend(peer, payload)
   }
 
   private handleData(peer: PeerConnection, plaintext: string): void {
@@ -991,9 +1011,11 @@ export class RemoteGateway {
     if (typeof message !== 'object' || message === null) return
     const record = message as Record<string, unknown>
     if (record.type === 'ping') {
-      void encryptPayload(this.options.peerSecret ?? '', JSON.stringify({ type: 'pong' })).then(
-        (payload) => socketSend(peer, { type: 'remote:data', payload })
-      )
+      this.queuePeerSend(peer, { type: 'pong' })
+      return
+    }
+    if (record.type === 'remote:workspace:active' && typeof record.active === 'boolean') {
+      this.options.handlers.onWorkspaceActiveChange?.(peer.deviceId, record.active)
       return
     }
     if (record.rpc === 'invoke') {
@@ -1032,10 +1054,19 @@ export class RemoteGateway {
 
   /** Send a JSON payload to a single peer (RPC results must not broadcast). */
   private sendToPeerOnly(peer: PeerConnection, payload: unknown): void {
+    this.queuePeerSend(peer, payload)
+  }
+
+  private queuePeerSend(peer: PeerConnection, payload: unknown): void {
     if (peer.closing || peer.socket.destroyed) return
-    void encryptPayload(this.options.peerSecret ?? '', JSON.stringify(payload)).then((encrypted) =>
-      socketSend(peer, { type: 'remote:data', payload: encrypted })
-    )
+    const plaintext = JSON.stringify(payload)
+    peer.sendQueue = peer.sendQueue
+      .then(async () => {
+        if (peer.closing || peer.socket.destroyed) return
+        const encrypted = await encryptPayload(this.options.peerSecret ?? '', plaintext)
+        socketSend(peer, { type: 'remote:data', payload: encrypted })
+      })
+      .catch(() => undefined)
   }
 }
 

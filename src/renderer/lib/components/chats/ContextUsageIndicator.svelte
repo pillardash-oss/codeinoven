@@ -27,6 +27,12 @@
     onHide?: () => void
     /** Whether live account usage is currently being fetched from the harness. */
     refreshing?: boolean
+    /** 'popover' (default) is the small battery trigger with a hover-revealed
+     *  detail panel, for desktop composer toolbars. 'panel' renders just the
+     *  detail content, always visible, filling its container — for hosts
+     *  (e.g. a mobile bottom sheet) that provide their own trigger and open
+     *  state since hover has no touch equivalent. */
+    layout?: 'popover' | 'panel'
   }
 
   let {
@@ -38,7 +44,8 @@
     onCompact,
     onReveal,
     onHide,
-    refreshing = false
+    refreshing = false,
+    layout = 'popover'
   }: Props = $props()
 
   const boundedPercent = $derived(
@@ -280,144 +287,150 @@
   </div>
 {/snippet}
 
-<div
-  class="group relative"
-  role="group"
-  aria-label="Context and provider usage"
-  onmouseleave={onHide}
->
-  <button
-    type="button"
-    class="flex h-8 items-center gap-1.5 rounded-lg px-1.5 text-dimmed hover:bg-elevated hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary"
-    onmouseenter={onReveal}
-    aria-label={boundedPercent === undefined
-      ? 'Context usage unavailable'
-      : `Context ${Math.round(boundedPercent)}% used`}
-    title="Context and usage"
-  >
-    <span class="relative h-3 w-7 rounded-sm border border-current p-0.5" aria-hidden="true">
-      <span
-        class={`block h-full rounded-[1px] ${fillClass}`}
-        style={`width: ${boundedPercent ?? 0}%`}
-      ></span>
-      <span class="absolute -right-1 top-[3px] h-1.5 w-0.5 rounded-r bg-current"></span>
-    </span>
-    <span class="context-usage-label tabular-nums text-[10px]">{percentLabel}</span>
-  </button>
-
-  <div
-    class="invisible absolute bottom-8 right-0 z-40 w-72 rounded-xl border border-border bg-surface p-3 opacity-0 shadow-lg group-hover:visible group-hover:opacity-100 group-focus-within:visible group-focus-within:opacity-100"
-    role="dialog"
-    aria-label="Context and provider usage"
-  >
-    {#if refreshing}
-      <div
-        class="mb-3 h-0.5 overflow-hidden rounded-full bg-overlay"
-        role="progressbar"
-        aria-label="Fetching live usage"
-        aria-valuetext="Fetching live usage"
-      >
-        <div class="usage-loading-bar h-full w-1/3 rounded-full bg-info"></div>
-      </div>
-    {/if}
-    <div class="flex items-start justify-between gap-3">
-      <div>
-        <p class="text-xs font-semibold text-foreground">Usage</p>
-        <p class="mt-0.5 text-[10px] text-dimmed">
-          {usage && usage.costUsd > 0 ? `${formatMoney(usage.costUsd)} spent` : 'Cost not reported'}
-        </p>
-      </div>
-      <div class="flex items-center gap-2">
-        {#if usage && creditsLine(usage)}
-          <span class="rounded-md bg-elevated px-1.5 py-0.5 text-[9px] font-medium text-muted">
-            {creditsLine(usage)}
-          </span>
-        {/if}
-        <BatteryMedium size={15} class={iconClass} />
-      </div>
+{#snippet usageDetail()}
+  {#if refreshing}
+    <div
+      class="mb-3 h-0.5 overflow-hidden rounded-full bg-overlay"
+      role="progressbar"
+      aria-label="Fetching live usage"
+      aria-valuetext="Fetching live usage"
+    >
+      <div class="usage-loading-bar h-full w-1/3 rounded-full bg-info"></div>
     </div>
-
-    {#if multiHarness}
-      <div
-        class="mt-3 max-h-64 space-y-2 overflow-y-auto border-t border-border pt-3"
-        aria-label="Per-harness quota"
-      >
-        {#each harnessUsage as entry (harnessKey(entry))}
-          {@render harnessSection(entry)}
-        {/each}
-      </div>
-    {:else if harnessUsage[0] && harnessUsage[0].rateLimits.length > 0}
-      <div class="mt-3 space-y-2.5 border-t border-border pt-3">
-        {#if harnessUsage[0]?.models?.length}
-          {@render modelRows(harnessUsage[0].models)}
-        {/if}
-        {@render limitRows(harnessUsage[0].rateLimits)}
-      </div>
-    {/if}
-
-    <div class="mt-3 border-t border-border pt-3">
-      <div class="mb-1 flex items-center justify-between gap-3 text-[10px]">
-        <span class="font-medium text-muted">Context (latest request)</span>
-        <span class="tabular-nums text-dimmed">
-          {usage?.contextUsed !== undefined ? compactNumber(usage.contextUsed) : 'Unavailable'}
-          {#if usage?.contextWindow}
-            / {compactNumber(usage.contextWindow)}
-          {/if}
+  {/if}
+  <div class="flex items-start justify-between gap-3">
+    <div>
+      <p class="text-xs font-semibold text-foreground">Usage</p>
+      <p class="mt-0.5 text-[10px] text-dimmed">
+        {usage && usage.costUsd > 0 ? `${formatMoney(usage.costUsd)} spent` : 'Cost not reported'}
+      </p>
+    </div>
+    <div class="flex items-center gap-2">
+      {#if usage && creditsLine(usage)}
+        <span class="rounded-md bg-elevated px-1.5 py-0.5 text-[9px] font-medium text-muted">
+          {creditsLine(usage)}
         </span>
-      </div>
-      <div
-        class="h-1.5 overflow-hidden rounded-full bg-overlay"
-        role="progressbar"
-        aria-label="Context used"
-        aria-valuemin="0"
-        aria-valuemax="100"
-        aria-valuenow={Math.round(boundedPercent ?? 0)}
-      >
-        <div class={`h-full rounded-full ${fillClass}`} style={`width: ${boundedPercent}%`}></div>
-      </div>
-      {#if usage?.contextWindow && usage.contextUsed !== undefined}
-        <div class="mt-2 grid grid-cols-3 gap-2 text-[9px] text-dimmed">
-          <span>Used {compactNumber(usage.contextUsed)}</span>
-          <span
-            >Available {compactNumber(Math.max(0, usage.contextWindow - usage.contextUsed))}</span
-          >
-          <span>Window {compactNumber(usage.contextWindow)}</span>
-        </div>
       {/if}
-      <div class="mt-2 grid grid-cols-2 gap-x-3 gap-y-1 text-[9px] text-dimmed">
-        <span>Input {usage?.tokens ? compactNumber(usage.tokens.input) : 'Unavailable'}</span>
-        <span>Output {usage?.tokens ? compactNumber(usage.tokens.output) : 'Unavailable'}</span>
-        <span
-          >Reasoning {usage?.tokens ? compactNumber(usage.tokens.reasoning) : 'Unavailable'}</span
-        >
-        <span
-          >Cache {usage?.tokens
-            ? compactNumber(usage.tokens.cacheRead + usage.tokens.cacheWrite)
-            : 'Unavailable'}{#if cacheHitLabel}
-            · {cacheHitLabel}{/if}</span
-        >
-      </div>
-
-      <button
-        type="button"
-        class="mt-3 flex h-8 w-full items-center justify-center gap-2 rounded-lg border border-border text-[11px] font-medium text-foreground hover:bg-elevated disabled:cursor-not-allowed disabled:text-dimmed"
-        disabled={!canCompact || compacting}
-        title={canCompact
-          ? 'Summarize older work to free context'
-          : 'This agent does not support manual compaction'}
-        onclick={onCompact}
-      >
-        {#if compacting}
-          <Loader2 size={12} class="animate-spin" />
-          Compacting…
-        {:else}
-          <Archive size={12} />
-          Compact Work
-        {/if}
-      </button>
+      <BatteryMedium size={15} class={iconClass} />
     </div>
   </div>
-</div>
+
+  {#if multiHarness}
+    <div
+      class="mt-3 max-h-64 space-y-2 overflow-y-auto border-t border-border pt-3"
+      aria-label="Per-harness quota"
+    >
+      {#each harnessUsage as entry (harnessKey(entry))}
+        {@render harnessSection(entry)}
+      {/each}
+    </div>
+  {:else if harnessUsage[0] && harnessUsage[0].rateLimits.length > 0}
+    <div class="mt-3 space-y-2.5 border-t border-border pt-3">
+      {#if harnessUsage[0]?.models?.length}
+        {@render modelRows(harnessUsage[0].models)}
+      {/if}
+      {@render limitRows(harnessUsage[0].rateLimits)}
+    </div>
+  {/if}
+
+  <div class="mt-3 border-t border-border pt-3">
+    <div class="mb-1 flex items-center justify-between gap-3 text-[10px]">
+      <span class="font-medium text-muted">Context (latest request)</span>
+      <span class="tabular-nums text-dimmed">
+        {usage?.contextUsed !== undefined ? compactNumber(usage.contextUsed) : 'Unavailable'}
+        {#if usage?.contextWindow}
+          / {compactNumber(usage.contextWindow)}
+        {/if}
+      </span>
+    </div>
+    <div
+      class="h-1.5 overflow-hidden rounded-full bg-overlay"
+      role="progressbar"
+      aria-label="Context used"
+      aria-valuemin="0"
+      aria-valuemax="100"
+      aria-valuenow={Math.round(boundedPercent ?? 0)}
+    >
+      <div class={`h-full rounded-full ${fillClass}`} style={`width: ${boundedPercent}%`}></div>
+    </div>
+    {#if usage?.contextWindow && usage.contextUsed !== undefined}
+      <div class="mt-2 grid grid-cols-3 gap-2 text-[9px] text-dimmed">
+        <span>Used {compactNumber(usage.contextUsed)}</span>
+        <span>Available {compactNumber(Math.max(0, usage.contextWindow - usage.contextUsed))}</span>
+        <span>Window {compactNumber(usage.contextWindow)}</span>
+      </div>
+    {/if}
+    <div class="mt-2 grid grid-cols-2 gap-x-3 gap-y-1 text-[9px] text-dimmed">
+      <span>Input {usage?.tokens ? compactNumber(usage.tokens.input) : 'Unavailable'}</span>
+      <span>Output {usage?.tokens ? compactNumber(usage.tokens.output) : 'Unavailable'}</span>
+      <span>Reasoning {usage?.tokens ? compactNumber(usage.tokens.reasoning) : 'Unavailable'}</span>
+      <span
+        >Cache {usage?.tokens
+          ? compactNumber(usage.tokens.cacheRead + usage.tokens.cacheWrite)
+          : 'Unavailable'}{#if cacheHitLabel}
+          · {cacheHitLabel}{/if}</span
+      >
+    </div>
+
+    <button
+      type="button"
+      class="mt-3 flex h-8 w-full items-center justify-center gap-2 rounded-lg border border-border text-[11px] font-medium text-foreground hover:bg-elevated disabled:cursor-not-allowed disabled:text-dimmed"
+      disabled={!canCompact || compacting}
+      title={canCompact
+        ? 'Summarize older work to free context'
+        : 'This agent does not support manual compaction'}
+      onclick={onCompact}
+    >
+      {#if compacting}
+        <Loader2 size={12} class="animate-spin" />
+        Compacting…
+      {:else}
+        <Archive size={12} />
+        Compact Work
+      {/if}
+    </button>
+  </div>
+{/snippet}
+
+{#if layout === 'panel'}
+  <div role="dialog" aria-label="Context and provider usage">
+    {@render usageDetail()}
+  </div>
+{:else}
+  <div
+    class="group relative"
+    role="group"
+    aria-label="Context and provider usage"
+    onmouseleave={onHide}
+  >
+    <button
+      type="button"
+      class="flex h-8 items-center gap-1.5 rounded-lg px-1.5 text-dimmed hover:bg-elevated hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary"
+      onmouseenter={onReveal}
+      aria-label={boundedPercent === undefined
+        ? 'Context usage unavailable'
+        : `Context ${Math.round(boundedPercent)}% used`}
+      title="Context and usage"
+    >
+      <span class="relative h-3 w-7 rounded-sm border border-current p-0.5" aria-hidden="true">
+        <span
+          class={`block h-full rounded-[1px] ${fillClass}`}
+          style={`width: ${boundedPercent ?? 0}%`}
+        ></span>
+        <span class="absolute -right-1 top-[3px] h-1.5 w-0.5 rounded-r bg-current"></span>
+      </span>
+      <span class="context-usage-label tabular-nums text-[10px]">{percentLabel}</span>
+    </button>
+
+    <div
+      class="invisible absolute bottom-8 right-0 z-40 w-72 rounded-xl border border-border bg-surface p-3 opacity-0 shadow-lg group-hover:visible group-hover:opacity-100 group-focus-within:visible group-focus-within:opacity-100"
+      role="dialog"
+      aria-label="Context and provider usage"
+    >
+      {@render usageDetail()}
+    </div>
+  </div>
+{/if}
 
 <style>
   .usage-loading-bar {

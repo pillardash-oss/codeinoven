@@ -1,7 +1,8 @@
 services:
   turn:
     build:
-      context: ../..
+      # Coolify runs Compose with the cloned repository as --project-directory.
+      context: .
       dockerfile: services/turn/Dockerfile
     restart: unless-stopped
     network_mode: host
@@ -13,10 +14,23 @@ services:
       TURN_PORT: ${TURN_PORT:-3478}
       TURN_MIN_PORT: ${TURN_MIN_PORT:-49160}
       TURN_MAX_PORT: ${TURN_MAX_PORT:-49200}
+      TURN_UNAUTHORIZED_RATELIMIT_RPS: ${TURN_UNAUTHORIZED_RATELIMIT_RPS:-10}
+      TURN_USER_QUOTA: ${TURN_USER_QUOTA:-4}
+      TURN_TOTAL_QUOTA: ${TURN_TOTAL_QUOTA:-40}
+      TURN_MAX_BPS: ${TURN_MAX_BPS:-2000000}
+      TURN_BPS_CAPACITY: ${TURN_BPS_CAPACITY:-50000000}
+      TURN_MAX_ALLOCATE_TIMEOUT: ${TURN_MAX_ALLOCATE_TIMEOUT:-10}
     read_only: true
     tmpfs:
       - /tmp:size=1m,mode=1777
     cap_drop:
       - ALL
+    cpus: ${TURN_CPU_LIMIT:-2.0}
+    mem_limit: ${TURN_MEMORY_LIMIT:-512m}
+    pids_limit: 256
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
     security_opt:
       - no-new-privileges:true

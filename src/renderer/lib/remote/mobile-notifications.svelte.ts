@@ -19,6 +19,7 @@
  */
 
 import type { AgentNotificationPayload } from '$shared/ipc-contract'
+import { toast } from 'svelte-sonner'
 import { remoteBridge } from './remote-bridge'
 import { remoteLog } from './logger'
 
@@ -42,6 +43,7 @@ class MobileNotifications {
   permission = $state<MobileNotificationPermission>('default')
   private openHandler: OpenNotificationHandler | null = null
   private unsub: (() => void) | null = null
+  private pushRegistered = false
 
   constructor() {
     this.enabled = this.readEnabled()
@@ -54,6 +56,7 @@ class MobileNotifications {
     this.unsub = remoteBridge.on('notification:show', (payload: unknown) => {
       this.handle(payload as AgentNotificationPayload)
     })
+    if (this.enabled && this.permission === 'granted') void this.syncPushSubscription()
   }
 
   /** The shell registers how a tapped notification should open a thread. */
@@ -77,6 +80,7 @@ class MobileNotifications {
     if (this.permission === 'granted') {
       this.enabled = true
       this.persist(true)
+      await this.syncPushSubscription()
     }
     return this.permission
   }
@@ -84,7 +88,9 @@ class MobileNotifications {
   /** Turn system notifications off without touching the browser permission. */
   disable(): void {
     this.enabled = false
+    this.pushRegistered = false
     this.persist(false)
+    void this.removePushSubscription()
   }
 
   /**
@@ -105,6 +111,7 @@ class MobileNotifications {
     if (result === 'granted') {
       this.enabled = true
       this.persist(true)
+      await this.syncPushSubscription()
     }
     return result
   }
@@ -117,8 +124,32 @@ class MobileNotifications {
     void import('$lib/stores/notification-panel.svelte').then(({ notificationPanelState }) => {
       notificationPanelState.add(payload)
     })
+    this.showToast(payload)
     if (!this.enabled || this.permission !== 'granted') return
+    if (document.visibilityState === 'visible') return
+    if (this.pushRegistered) return
     void this.showSystemNotification(payload)
+  }
+
+  private showToast(payload: AgentNotificationPayload): void {
+    const options = {
+      id: payload.id,
+      description: payload.body,
+      duration: 8_000,
+      action: {
+        label: 'Open thread',
+        onClick: (): void => this.openHandler?.(payload.projectId, payload.threadId)
+      }
+    }
+    if (payload.kind === 'completed' || payload.kind === 'chat-completed') {
+      toast.success(payload.title, options)
+    } else if (payload.kind === 'attention') {
+      toast.warning(payload.title, options)
+    } else if (payload.kind === 'spec') {
+      toast.info(payload.title, options)
+    } else {
+      toast.error(payload.title, options)
+    }
   }
 
   private async showSystemNotification(payload: AgentNotificationPayload): Promise<void> {
@@ -133,17 +164,88 @@ class MobileNotifications {
         // Attention and error demand action, so they stay until tapped.
         // Completion and spec-ready notices are informational and auto-dismiss quietly.
         requireInteraction: payload.kind === 'attention' || payload.kind === 'error',
-        silent:
-          payload.kind === 'completed' ||
-          payload.kind === 'chat-completed' ||
-          payload.kind === 'spec',
+        silent: false,
         data: { projectId: payload.projectId, threadId: payload.threadId },
         icon: './icon.png',
-        badge: './icon.png'
+        badge: './notification-badge.png'
       }
-      registration.showNotification(payload.title, options)
+      await registration.showNotification(payload.title, options)
     } catch (error) {
       remoteLog.error(`Phone system notification failed: ${String(error)}`)
+    }
+  }
+
+  private decodeApplicationServerKey(value: string): Uint8Array<ArrayBuffer> {
+    const normalized = value.replace(/-/gu, '+').replace(/_/gu, '/')
+    const padded = normalized.padEnd(Math.ceil(normalized.length / 4) * 4, '=')
+    const binary = atob(padded)
+    return Uint8Array.from(binary, (character) => character.charCodeAt(0))
+  }
+
+  private sameApplicationServerKey(
+    existing: ArrayBuffer | null,
+    expected: Uint8Array<ArrayBuffer>
+  ): boolean {
+    if (!existing) return false
+    const current = new Uint8Array(existing)
+    return (
+      current.length === expected.length && current.every((byte, index) => byte === expected[index])
+    )
+  }
+
+  private async syncPushSubscription(): Promise<void> {
+    if (!('serviceWorker' in navigator) || !('PushManager' in window)) return
+    try {
+      const publicKey = await remoteBridge.invoke('remotePush:getPublicKey')
+      if (typeof publicKey !== 'string') return
+      const applicationServerKey = this.decodeApplicationServerKey(publicKey)
+      const registration = await navigator.serviceWorker.ready
+      let subscription = await registration.pushManager.getSubscription()
+      if (
+        subscription &&
+        !this.sameApplicationServerKey(
+          subscription.options.applicationServerKey,
+          applicationServerKey
+        )
+      ) {
+        await remoteBridge
+          .invoke('remotePush:unsubscribe', subscription.endpoint)
+          .catch(() => undefined)
+        await subscription.unsubscribe()
+        subscription = null
+      }
+      subscription ??= await registration.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey
+      })
+      const json = subscription.toJSON()
+      if (!json.endpoint || !json.keys?.p256dh || !json.keys.auth) return
+      await remoteBridge.invoke('remotePush:subscribe', {
+        endpoint: json.endpoint,
+        expirationTime: subscription.expirationTime,
+        keys: { p256dh: json.keys.p256dh, auth: json.keys.auth }
+      })
+      this.pushRegistered = true
+    } catch (error) {
+      this.pushRegistered = false
+      remoteLog.error(`Phone Web Push subscription failed: ${String(error)}`)
+    }
+  }
+
+  private async removePushSubscription(): Promise<void> {
+    this.pushRegistered = false
+    if (!('serviceWorker' in navigator) || !('PushManager' in window)) return
+    try {
+      const registration = await navigator.serviceWorker.ready
+      const subscription = await registration.pushManager.getSubscription()
+      if (!subscription) return
+      await remoteBridge
+        .invoke('remotePush:unsubscribe', subscription.endpoint)
+        .catch(() => undefined)
+      await subscription.unsubscribe()
+      this.pushRegistered = false
+    } catch (error) {
+      remoteLog.error(`Phone Web Push unsubscribe failed: ${String(error)}`)
     }
   }
 

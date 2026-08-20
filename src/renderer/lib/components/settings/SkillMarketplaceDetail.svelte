@@ -1,7 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte'
   import {
-    AppWindow,
     CalendarDays,
     Download,
     ExternalLink,
@@ -14,10 +13,13 @@
     Star
   } from '@lucide/svelte'
   import AgentIcon from '$lib/agent-icons/AgentIcon.svelte'
+  import { getAgentIcon } from '$lib/agent-icons/registry'
   import { invoke } from '$lib/ipc.svelte'
   import { openInBrowser } from '$lib/open-in-browser'
   import { getProjectIcon, loadProjectIcons } from '$lib/project-icons'
   import { cachedSkillMarketDetail, loadSkillMarketDetail } from '$lib/skill-market-cache'
+  import { publicAssetUrl } from '$lib/static-assets'
+  import { providerCatalog } from '$lib/stores/provider-catalog.svelte'
   import { providerStore } from '$lib/stores/providers.svelte'
   import MarkdownView from '../markdown/MarkdownView.svelte'
   import ProjectMultiSelect from '../shared/ProjectMultiSelect.svelte'
@@ -39,6 +41,13 @@
   type InstallScope = SkillMarketInstallRequest['scope']['kind']
   type NativeDestination = NonNullable<SkillMarketInstallRequest['nativeTarget']>['kind']
 
+  interface HarnessOption {
+    id: string
+    name: string
+  }
+
+  const codeInOvenIconUrl = publicAssetUrl('macos/AppIcon64.png')
+
   let { entry }: Props = $props()
   let detail = $state<SkillMarketDetail | null>(null)
   let loading = $state(true)
@@ -52,9 +61,34 @@
   let selectedProjectIds = $state<string[]>([])
   let selectedHarnessIds = $state<string[]>([])
   let projects = $state<ProjectMultiSelectOption[]>([])
-  let availableHarnesses = $derived(
-    providerStore.providers.filter((provider) => provider.status === 'available')
-  )
+  let cachedProviders = $derived(providerCatalog.allCached())
+  let availableHarnesses = $derived.by((): HarnessOption[] => {
+    const harnessNames: Record<string, string> = {}
+
+    for (const provider of cachedProviders) {
+      if (!provider.harnessId || providerStore.isUnsupported(provider.harnessId)) continue
+      harnessNames[provider.harnessId] =
+        getAgentIcon(provider.harnessId)?.name ?? provider.harnessId
+    }
+
+    for (const provider of providerStore.providers) {
+      if (provider.status !== 'available' || providerStore.isUnsupported(provider.id)) continue
+      harnessNames[provider.id] = getAgentIcon(provider.id)?.name ?? provider.name
+    }
+
+    return Object.entries(harnessNames)
+      .map(([id, name]) => ({ id, name }))
+      .sort((left, right) => {
+        const leftIndex = providerStore.providers.findIndex((provider) => provider.id === left.id)
+        const rightIndex = providerStore.providers.findIndex((provider) => provider.id === right.id)
+        if (leftIndex !== rightIndex) {
+          if (leftIndex < 0) return 1
+          if (rightIndex < 0) return -1
+          return leftIndex - rightIndex
+        }
+        return left.name.localeCompare(right.name)
+      })
+  })
   let selectionIncomplete = $derived(
     (scope === 'projects' && selectedProjectIds.length === 0) ||
       (manager === 'native' && nativeDestination === 'harnesses' && selectedHarnessIds.length === 0)
@@ -217,7 +251,10 @@
       {/if}
     </section>
 
-    <aside class="order-first space-y-4 self-start lg:order-none" aria-label="Install skill and skill facts">
+    <aside
+      class="order-first space-y-4 self-start lg:order-none"
+      aria-label="Install skill and skill facts"
+    >
       <section class="rounded-xl border bg-surface p-4" aria-labelledby="install-skill-title">
         <h2 id="install-skill-title" class="text-sm font-semibold">Install skill</h2>
         <p class="mt-1 text-[11px] leading-relaxed text-muted">
@@ -234,7 +271,7 @@
             aria-pressed={manager === 'cio'}
             onclick={() => (manager = 'cio')}
           >
-            <AppWindow size={12} />
+            <img src={codeInOvenIconUrl} alt="" class="h-4 w-4 shrink-0 object-contain" />
             {APP_NAME}
           </button>
           <button

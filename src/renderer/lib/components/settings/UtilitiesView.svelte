@@ -8,6 +8,7 @@
     KeyRound,
     LayoutGrid,
     Loader2,
+    Monitor,
     Pencil,
     Plus,
     Puzzle,
@@ -26,6 +27,7 @@
   import { publicAssetUrl } from '$lib/static-assets'
   import Switch from '../ui/Switch.svelte'
   import UtilityEditorModal, { type UtilityEditorTarget } from './UtilityEditorModal.svelte'
+  import { APP_NAME } from '$shared/brand'
   import type {
     AgentCapabilityEntry,
     AgentToolDefinition,
@@ -93,16 +95,16 @@
     { id: 'skills', label: 'Skills' },
     { id: 'mcp', label: 'MCP' },
     { id: 'plugins', label: 'Plugins' },
-    { id: 'web', label: 'Web & vision' },
+    { id: 'web', label: 'Web & browser' },
     { id: 'tools', label: 'Tools' }
   ]
 
   const TAB_BLURB: Record<Tab, string> = {
-    all: 'Every skill, MCP server, and web utility installed in CodeInOven.',
+    all: `Every skill, MCP server, browser, and web utility installed in ${APP_NAME}.`,
     skills: 'Skills for every harness plus the shared global layer.',
     mcp: 'MCP servers for every harness plus the shared global layer.',
     plugins: 'Install a plugin bundle that adds capabilities together.',
-    web: 'Web search, web fetch, provider, and image-descriptor utilities.',
+    web: 'Browser control, web search, web fetch, provider, and image-description utilities.',
     tools: 'Inspect stable tool references and the exact schemas exposed to agent models.'
   }
 
@@ -122,7 +124,8 @@
       { id: 'web_search', label: 'Web search' },
       { id: 'web_fetch', label: 'Web fetch' },
       { id: 'provider', label: 'Provider' },
-      { id: 'image_descriptor', label: 'Image descriptor' }
+      { id: 'image_descriptor', label: 'Image descriptor' },
+      { id: 'computer_use', label: 'Browser control' }
     ]
     return kinds.find((item) => item.id === kind)?.label ?? kind
   }
@@ -171,7 +174,13 @@
     }))
   }
 
-  const WEB_KINDS: Array<UtilityKind> = ['web_search', 'web_fetch', 'provider', 'image_descriptor']
+  const WEB_KINDS: Array<UtilityKind> = [
+    'web_search',
+    'web_fetch',
+    'provider',
+    'image_descriptor',
+    'computer_use'
+  ]
 
   function tabRows(): RowItem[] {
     if (activeTab === 'all') {
@@ -209,6 +218,7 @@
     const kind = row.src === 'registry' ? row.utility.kind : row.entry.kind
     if (kind === 'skill') return BookOpen
     if (kind === 'mcp') return Server
+    if (kind === 'computer_use') return Monitor
     return Globe2
   }
 
@@ -458,7 +468,7 @@
   {#if tag === 'App'}
     <span
       class="inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-sm"
-      title="CodeInOven"
+      title={APP_NAME}
     >
       <img class="h-full w-full object-contain" src={cioIconUrl} alt="" />
     </span>
@@ -569,7 +579,7 @@
             : activeTab === 'mcp'
               ? 'MCP servers'
               : activeTab === 'web'
-                ? 'web & vision utilities'
+                ? 'web & browser utilities'
                 : activeTab === 'tools'
                   ? 'names, sources, and descriptions'
                   : 'all utilities'}"

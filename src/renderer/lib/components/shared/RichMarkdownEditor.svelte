@@ -15,6 +15,16 @@
   } from './rich-markdown'
   import type { RichInlineBadge } from './rich-markdown'
 
+  interface HistoryController {
+    undo: () => void
+    redo: () => void
+  }
+
+  interface HistoryState {
+    canUndo: boolean
+    canRedo: boolean
+  }
+
   interface Props {
     id?: string
     value?: string
@@ -32,6 +42,8 @@
     onPaste?: (event: ClipboardEvent) => void
     inlineBadges?: readonly RichInlineBadge[]
     onCaretTextChange?: (textBeforeCaret: string, supportsCommands: boolean) => void
+    onHistoryControllerChange?: (controller: HistoryController | null) => void
+    onHistoryStateChange?: (state: HistoryState) => void
   }
 
   let {
@@ -48,7 +60,9 @@
     onSubmit,
     onPaste,
     inlineBadges = [],
-    onCaretTextChange
+    onCaretTextChange,
+    onHistoryControllerChange,
+    onHistoryStateChange
   }: Props = $props()
 
   let editor: HTMLDivElement | undefined
@@ -281,6 +295,13 @@
     lastHistoryAt = 0
   }
 
+  function publishHistoryState(): void {
+    onHistoryStateChange?.({
+      canUndo: undoHistory.length > 0,
+      canRedo: redoHistory.length > 0
+    })
+  }
+
   function commitHistory(entry: HistoryEntry | null, inputType?: string): void {
     if (!editor || !entry) return
     const markdown = serializeRichMarkdown(editor)
@@ -304,6 +325,7 @@
     redoHistory = []
     lastHistoryInputType = mergeable ? inputType : null
     lastHistoryAt = mergeable ? now : 0
+    publishHistoryState()
   }
 
   function publishHistoryEntry(entry: HistoryEntry): void {
@@ -322,6 +344,7 @@
     redoHistory.push(current)
     resetHistoryGroup()
     publishHistoryEntry(entry)
+    publishHistoryState()
   }
 
   function redo(): void {
@@ -332,6 +355,7 @@
     if (undoHistory.length > HISTORY_LIMIT) undoHistory.shift()
     resetHistoryGroup()
     publishHistoryEntry(entry)
+    publishHistoryState()
   }
 
   function badgeSignature(): string {
@@ -843,10 +867,16 @@
 
   onMount(() => {
     replaceEditorContent(value)
+    onHistoryControllerChange?.({ undo, redo })
+    publishHistoryState()
     if (autofocus && editor) {
       editor.focus()
       placeCaretAtEnd(editor)
       publishCaretText()
+    }
+    return () => {
+      onHistoryControllerChange?.(null)
+      onHistoryStateChange?.({ canUndo: false, canRedo: false })
     }
   })
 
@@ -869,6 +899,7 @@
     redoHistory = []
     pendingHistory = null
     resetHistoryGroup()
+    publishHistoryState()
   })
 </script>
 

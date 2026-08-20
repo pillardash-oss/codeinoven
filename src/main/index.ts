@@ -24,7 +24,10 @@ import {
   setPowerWakeService,
   broadcastThreadUpdate
 } from './chat/thread-events'
-import { installProductionApplicationMenu } from './system/production-housekeeping'
+import {
+  installProductionApplicationMenu,
+  lockDownProductionWindow
+} from './system/production-housekeeping'
 import { getTrafficLightArg, warmTrafficLightDetection } from './system/titlebar'
 import { PrivilegedIpcValidator } from './ipc/ipc-validation'
 import type { CloseConfirmationProject, ThreadClickedPayload } from '../lib/ipc-contract'
@@ -831,6 +834,10 @@ function createWindow(): BrowserWindow {
     }
   })
   mainWindow = window
+
+  if (isProduction) {
+    lockDownProductionWindow(window)
+  }
 
   window.once('ready-to-show', () => {
     // Restore the maximized state before revealing the first rendered frame so

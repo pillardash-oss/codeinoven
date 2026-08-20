@@ -13,11 +13,19 @@
  */
 
 import type { Database } from '../database/database'
+import { appendFile, mkdir, rename, rm, writeFile } from 'node:fs/promises'
+import { randomUUID } from 'node:crypto'
+import { extname, join } from 'node:path'
 import { ThreadManager } from '../../lib/engines/thread-manager'
+import { NoteRepo } from '../database/repositories/note-repo'
 import { ProjectManager } from '../../lib/engines/project-manager'
 import { ProjectFilesService } from '../editor/project-files-service'
 import type { ChatEngine } from '../chat/chat-engine'
-import { broadcastThreadDeleted, broadcastThreadUpdate } from '../chat/thread-events'
+import {
+  broadcastNoteChanged,
+  broadcastThreadDeleted,
+  broadcastThreadUpdate
+} from '../chat/thread-events'
 import { REMOTE_ALLOWED_CHANNELS } from '../../lib/remote-rpc'
 import {
   authorizationForChannel,
@@ -50,8 +58,14 @@ import { SecretVault } from '../storage/secret-vault'
 import { GitHubAuthService } from '../git/github-auth-service'
 import { validateEngineeringSpec } from '../../lib/spec/spec-validation'
 import { StorageEngine } from '../storage/storage-engine'
-import { validateScopeBoard, validateScopeSlice } from '../ipc/ipc-validation'
+import {
+  validateBoundedString,
+  validateEntityId,
+  validateScopeBoard,
+  validateScopeSlice
+} from '../ipc/ipc-validation'
 import type {
+  AgentCapabilitySource,
   AssignmentModelSelection,
   AssignmentPlanContent,
   AuditGenerationRequest,
@@ -73,6 +87,25 @@ import type {
   UserMessagePresentation
 } from '../../lib/types'
 import { Logger } from '../system/logger'
+import { getConfigRoot } from '../../lib/utils'
+import { PROJECT_DATA_DIRECTORY } from '../../lib/project-artifacts'
+import { remoteWebPush, type RemotePushSubscription } from './web-push-service'
+import type { AttachmentStorageScope } from '../../lib/types'
+
+const MAX_REMOTE_ATTACHMENT_BYTES = 32 * 1024 * 1024
+const MAX_REMOTE_ATTACHMENT_CHUNK_BYTES = 256 * 1024
+const MAX_CONCURRENT_REMOTE_UPLOADS = 16
+const NOTE_BODY_MAX = 100_000
+const REMOTE_UPLOAD_TTL_MS = 10 * 60 * 1_000
+
+interface RemoteAttachmentUpload {
+  deviceId: string
+  stagingPath: string
+  targetPath: string
+  size: number
+  received: number
+  createdAt: number
+}
 
 export interface RemoteRpcServices {
   database: Database
@@ -100,6 +133,12 @@ export interface RemoteRpcServices {
     | 'dismissQuestion'
     | 'updateQuestion'
     | 'listContextCapabilities'
+    | 'listProcesses'
+    | 'killProcess'
+    | 'killThreadProcesses'
+    | 'listArtifacts'
+    | 'deleteSkill'
+    | 'deleteMcp'
     | 'listProviders'
     | 'refreshAccountUsage'
     | 'loadSessionMessages'
@@ -150,6 +189,7 @@ export type RemoteRpcResult = { ok: true; result: unknown } | { ok: false; messa
 
 export class RemoteRpcDispatcher {
   private readonly threadManager: ThreadManager
+  private readonly noteRepo: NoteRepo
   private readonly projectManager: ProjectManager
   private readonly projectFilesService: ProjectFilesService
   private readonly scopeManager: ScopeManager
@@ -166,6 +206,7 @@ export class RemoteRpcDispatcher {
   private readonly githubAuthService: GitHubAuthService
   private readonly storage: StorageEngine
   private readonly credentials: DeviceCredentialService | null
+  private readonly remoteUploads = new Map<string, RemoteAttachmentUpload>()
 
   constructor(private readonly services: RemoteRpcServices) {
     this.storage = services.storage ?? new StorageEngine()
@@ -185,6 +226,7 @@ export class RemoteRpcDispatcher {
         }
       }
     )
+    this.noteRepo = new NoteRepo(services.database)
     this.projectManager = services.projectManager ?? new ProjectManager(services.database)
     this.projectFilesService = new ProjectFilesService(this.projectManager)
     this.scopeManager = new ScopeManager(services.database)
@@ -247,7 +289,7 @@ export class RemoteRpcDispatcher {
       // `specAction`) arrives as `null`. Normalize so optional parameters
       // behave exactly as they do on the desktop IPC path.
       const args = invoke.args.map((arg) => (arg === null ? undefined : arg))
-      const result = await this.call(invoke.channel, args)
+      const result = await this.call(invoke.channel, args, invoke.device)
       const authMeta = authorizationForChannel(invoke.channel)
       this.credentials?.audit({
         decision: 'rpc_allowed',
@@ -511,7 +553,11 @@ export class RemoteRpcDispatcher {
     return this.credentials?.listAudit(limit) ?? []
   }
 
-  private async call(channel: string, args: unknown[]): Promise<unknown> {
+  private async call(
+    channel: string,
+    args: unknown[],
+    device?: RemoteRpcDeviceContext
+  ): Promise<unknown> {
     const { chatEngine } = this.services
     switch (channel) {
       // ─── Projects ────────────────────────────────────────────────────────
@@ -521,6 +567,8 @@ export class RemoteRpcDispatcher {
         return this.projectManager.getProject(this.string(args[0]))
       case 'project:getIcon':
         return this.projectManager.getIconDataUrl(this.string(args[0]))
+      case 'project:ensureInbox':
+        return this.projectManager.ensureInboxProject()
 
       // ─── Threads ─────────────────────────────────────────────────────────
       case 'thread:listAll':
@@ -609,6 +657,63 @@ export class RemoteRpcDispatcher {
           this.string(args[0]),
           (args[1] ?? {}) as { projectId?: string; limit?: number }
         )
+      case 'note:get': {
+        const projectId = validateEntityId(args[0], 'Project ID')
+        const threadId = validateEntityId(args[1], 'Thread ID')
+        const thread = await this.threadManager.getThread(projectId, threadId)
+        return thread ? this.noteRepo.get(threadId) : null
+      }
+      case 'note:list':
+        return this.noteRepo.listThreadIds()
+      case 'note:save': {
+        const projectId = validateEntityId(args[0], 'Project ID')
+        const threadId = validateEntityId(args[1], 'Thread ID')
+        const body = validateBoundedString(args[2], 'Note body', 0, NOTE_BODY_MAX)
+        const thread = await this.threadManager.getThread(projectId, threadId)
+        if (!thread) throw new Error('Thread not found')
+        const previous = this.noteRepo.get(threadId)
+        const now = Date.now()
+        const note = {
+          threadId,
+          body,
+          createdAt: previous?.createdAt ?? now,
+          updatedAt: now
+        }
+        this.noteRepo.upsert(note)
+        broadcastNoteChanged(projectId, threadId, true)
+        return note
+      }
+      case 'note:delete': {
+        const projectId = validateEntityId(args[0], 'Project ID')
+        const threadId = validateEntityId(args[1], 'Thread ID')
+        const thread = await this.threadManager.getThread(projectId, threadId)
+        if (!thread) throw new Error('Thread not found')
+        this.noteRepo.delete(threadId)
+        broadcastNoteChanged(projectId, threadId, false)
+        return undefined
+      }
+      case 'attachment:beginRemoteUpload':
+        return this.beginRemoteUpload(
+          device,
+          args[0] as AttachmentStorageScope,
+          this.string(args[1]),
+          args[2]
+        )
+      case 'attachment:appendRemoteUpload':
+        return this.appendRemoteUpload(device, this.string(args[0]), args[1], this.string(args[2]))
+      case 'attachment:finishRemoteUpload':
+        return this.finishRemoteUpload(device, this.string(args[0]))
+      case 'attachment:cancelRemoteUpload':
+        return this.cancelRemoteUpload(device, this.string(args[0]))
+      case 'remotePush:getPublicKey':
+        return remoteWebPush.publicKey()
+      case 'remotePush:subscribe':
+        return remoteWebPush.subscribe(
+          this.requiredDeviceId(device),
+          args[0] as RemotePushSubscription
+        )
+      case 'remotePush:unsubscribe':
+        return remoteWebPush.unsubscribe(this.string(args[0]))
 
       // ─── Config ─────────────────────────────────────────────────────────
       case 'config:get':
@@ -753,6 +858,18 @@ export class RemoteRpcDispatcher {
         )
       case 'agent:listContextCapabilities':
         return chatEngine.listContextCapabilities(this.string(args[0]), this.string(args[1]))
+      case 'agent:listProcesses':
+        return chatEngine.listProcesses(this.string(args[0]), this.string(args[1]))
+      case 'agent:listArtifacts':
+        return chatEngine.listArtifacts(this.string(args[0]), this.string(args[1]))
+      case 'agent:killProcess':
+        return chatEngine.killProcess(this.string(args[0]), this.string(args[1]), args[2] as number)
+      case 'agent:killThreadProcesses':
+        return chatEngine.killThreadProcesses(this.string(args[0]), this.string(args[1]))
+      case 'capabilities:deleteSkill':
+        return chatEngine.deleteSkill(args[0] as AgentCapabilitySource)
+      case 'capabilities:deleteMcp':
+        return chatEngine.deleteMcp(args[0] as AgentCapabilitySource)
       case 'agent:closeTemporaryChat':
         return chatEngine.closeTemporaryChat(this.string(args[0]))
       case 'agent:loadSessionMessages':
@@ -1487,6 +1604,136 @@ export class RemoteRpcDispatcher {
       default:
         throw new Error(`Unknown remote channel: ${channel}`)
     }
+  }
+
+  private requiredDeviceId(device?: RemoteRpcDeviceContext): string {
+    if (!device?.deviceId) throw new Error('Authenticated device identity is required')
+    return device.deviceId
+  }
+
+  private async remoteAttachmentDirectory(scope: AttachmentStorageScope): Promise<string> {
+    if (
+      !scope ||
+      (scope.kind !== 'project' && scope.kind !== 'chat') ||
+      typeof scope.projectId !== 'string' ||
+      typeof scope.threadId !== 'string' ||
+      scope.projectId.length === 0 ||
+      scope.threadId.length === 0 ||
+      scope.projectId.length > 256 ||
+      scope.threadId.length > 256 ||
+      /[/\\]/u.test(scope.projectId) ||
+      /[/\\]/u.test(scope.threadId)
+    ) {
+      throw new TypeError('Attachment storage scope is invalid')
+    }
+    const project = await this.projectManager.getProject(scope.projectId)
+    if (project?.source === 'local' && project.path) {
+      return join(project.path, PROJECT_DATA_DIRECTORY, 'tmp', 'attachments', scope.threadId)
+    }
+    return scope.kind === 'chat'
+      ? join(getConfigRoot(), 'chats', scope.threadId, 'tmp')
+      : join(getConfigRoot(), 'projects', scope.projectId, 'threads', scope.threadId, 'tmp')
+  }
+
+  private async pruneRemoteUploads(): Promise<void> {
+    const cutoff = Date.now() - REMOTE_UPLOAD_TTL_MS
+    for (const [uploadId, upload] of this.remoteUploads) {
+      if (upload.createdAt >= cutoff) continue
+      this.remoteUploads.delete(uploadId)
+      await rm(upload.stagingPath, { force: true }).catch(() => undefined)
+    }
+  }
+
+  private async beginRemoteUpload(
+    device: RemoteRpcDeviceContext | undefined,
+    scope: AttachmentStorageScope,
+    originalFilename: string,
+    rawSize: unknown
+  ): Promise<string> {
+    const deviceId = this.requiredDeviceId(device)
+    await this.pruneRemoteUploads()
+    if (this.remoteUploads.size >= MAX_CONCURRENT_REMOTE_UPLOADS) {
+      throw new Error('Too many attachment uploads are already in progress')
+    }
+    if (
+      typeof rawSize !== 'number' ||
+      !Number.isSafeInteger(rawSize) ||
+      rawSize < 1 ||
+      rawSize > MAX_REMOTE_ATTACHMENT_BYTES
+    ) {
+      throw new TypeError('Remote attachment must be between 1 byte and 32 MB')
+    }
+    if (originalFilename.length < 1 || originalFilename.length > 255) {
+      throw new TypeError('Attachment filename is invalid')
+    }
+    const extension = extname(originalFilename)
+    const safeExtension = /^\.[a-z0-9]{1,16}$/iu.test(extension) ? extension.toLowerCase() : ''
+    const directory = await this.remoteAttachmentDirectory(scope)
+    await mkdir(directory, { recursive: true })
+    const uploadId = randomUUID()
+    const filename = `dropped-${randomUUID()}${safeExtension}`
+    const targetPath = join(directory, filename)
+    const stagingPath = join(directory, `.${filename}.${process.pid}.${uploadId}.tmp`)
+    await writeFile(stagingPath, new Uint8Array(0), { flag: 'wx', mode: 0o600 })
+    this.remoteUploads.set(uploadId, {
+      deviceId,
+      stagingPath,
+      targetPath,
+      size: rawSize,
+      received: 0,
+      createdAt: Date.now()
+    })
+    return uploadId
+  }
+
+  private async appendRemoteUpload(
+    device: RemoteRpcDeviceContext | undefined,
+    uploadId: string,
+    rawOffset: unknown,
+    base64Chunk: string
+  ): Promise<number> {
+    const upload = this.remoteUploads.get(uploadId)
+    if (!upload || upload.deviceId !== this.requiredDeviceId(device)) {
+      throw new Error('Attachment upload was not found')
+    }
+    if (rawOffset !== upload.received) throw new Error('Attachment upload chunk is out of order')
+    if (!/^[A-Za-z0-9+/]+={0,2}$/u.test(base64Chunk)) {
+      throw new TypeError('Attachment upload chunk is invalid')
+    }
+    const bytes = Buffer.from(base64Chunk, 'base64')
+    if (bytes.byteLength < 1 || bytes.byteLength > MAX_REMOTE_ATTACHMENT_CHUNK_BYTES) {
+      throw new TypeError('Attachment upload chunk is too large')
+    }
+    if (upload.received + bytes.byteLength > upload.size) {
+      throw new TypeError('Attachment upload exceeds the declared file size')
+    }
+    await appendFile(upload.stagingPath, bytes)
+    upload.received += bytes.byteLength
+    return upload.received
+  }
+
+  private async finishRemoteUpload(
+    device: RemoteRpcDeviceContext | undefined,
+    uploadId: string
+  ): Promise<string> {
+    const upload = this.remoteUploads.get(uploadId)
+    if (!upload || upload.deviceId !== this.requiredDeviceId(device)) {
+      throw new Error('Attachment upload was not found')
+    }
+    if (upload.received !== upload.size) throw new Error('Attachment upload is incomplete')
+    await rename(upload.stagingPath, upload.targetPath)
+    this.remoteUploads.delete(uploadId)
+    return upload.targetPath
+  }
+
+  private async cancelRemoteUpload(
+    device: RemoteRpcDeviceContext | undefined,
+    uploadId: string
+  ): Promise<void> {
+    const upload = this.remoteUploads.get(uploadId)
+    if (!upload || upload.deviceId !== this.requiredDeviceId(device)) return
+    this.remoteUploads.delete(uploadId)
+    await rm(upload.stagingPath, { force: true }).catch(() => undefined)
   }
 
   /** Resolve a project id to its validated absolute path (git operates on paths). */

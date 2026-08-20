@@ -56,6 +56,7 @@
   type ContextSection = 'mcps' | 'skills' | 'memory'
   type OriginFilter = 'all' | AgentCapabilityOrigin
   type SourceFilter = 'all' | AgentSource['kind']
+  const MINIMUM_REFRESH_FEEDBACK_MS = 500
 
   let { sources, projectId, threadId }: Props = $props()
   let section = $state<SourcesSection>('sources')
@@ -75,6 +76,7 @@
   let deleteError = $state('')
   let processes = $state<AgentRunningProcess[]>([])
   let processesLoading = $state(false)
+  let processesRefreshing = $state(false)
   let processesError = $state('')
   let stoppingPids = $state(new Set<number>())
   let stoppingAll = $state(false)
@@ -196,6 +198,21 @@
         loadError instanceof Error ? loadError.message : 'Running processes could not be loaded.'
     } finally {
       processesLoading = false
+    }
+  }
+
+  async function refreshProcesses(): Promise<void> {
+    if (processesRefreshing || processesLoading) return
+    processesRefreshing = true
+    const startedAt = Date.now()
+    try {
+      await loadProcesses()
+    } finally {
+      const remainingFeedbackMs = MINIMUM_REFRESH_FEEDBACK_MS - (Date.now() - startedAt)
+      if (remainingFeedbackMs > 0) {
+        await new Promise<void>((resolve) => setTimeout(resolve, remainingFeedbackMs))
+      }
+      processesRefreshing = false
     }
   }
 
@@ -740,13 +757,17 @@
       <div class="mt-3 flex items-center gap-2">
         <button
           type="button"
-          class="inline-flex h-8 items-center gap-1.5 rounded-lg border border-border bg-elevated px-2.5 text-xs font-medium text-muted transition-colors hover:bg-overlay hover:text-foreground disabled:opacity-50"
-          disabled={processesLoading}
+          class="inline-flex h-8 w-28 items-center justify-center gap-1.5 rounded-lg border border-border bg-elevated px-2.5 text-xs font-medium text-muted transition-colors hover:bg-overlay hover:text-foreground disabled:opacity-50"
+          disabled={processesRefreshing || processesLoading}
           title="Refresh running processes"
-          onclick={loadProcesses}
+          onclick={refreshProcesses}
         >
-          <RefreshCw size={13} class={processesLoading ? 'animate-spin' : undefined} />
-          Refresh
+          {#if processesRefreshing}
+            <Loader2 size={13} class="animate-spin" />
+          {:else}
+            <RefreshCw size={13} />
+          {/if}
+          <span aria-live="polite">{processesRefreshing ? 'Refreshing…' : 'Refresh'}</span>
         </button>
         {#if processes.length > 0}
           <button

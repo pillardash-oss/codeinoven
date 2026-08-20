@@ -28,7 +28,6 @@ const DOCUMENTED_ALLOW: Record<LeanAgentMode, string[]> = {
 
 /** Scoped `edit` patterns per write-capable mode. */
 const DOCUMENTED_EDIT_SCOPE: Partial<Record<LeanAgentMode, string>> = {
-  'pr-compose': '.cio/git/compose/**',
   brainstorm: '.cio/specs/*/versions/**'
 }
 

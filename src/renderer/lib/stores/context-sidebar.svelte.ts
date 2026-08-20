@@ -118,6 +118,9 @@ export interface ThreadNoteContextTab {
   savedBody: string | null
   draftBody: string
   mode: 'edit' | 'read'
+  /** Monotonic request used to return keyboard focus to the editor when an
+   *  already-open note is explicitly opened for writing. */
+  focusRequest: number
   loading: boolean
   saving: boolean
   error: string | null
@@ -344,6 +347,7 @@ class ContextSidebarState {
   private browserTabs: BrowserContextTab[] = $state(loadBrowserTabs())
   private browserActiveTabId: string | null = $state(null)
   private browserVisible = $state(false)
+  private browserRestoreByProject: Record<string, boolean> = $state({})
   private activeProjectId: string | null = $state(null)
   private activeThreadId: string | null = $state(null)
   private notificationsVisible = $state(false)
@@ -541,18 +545,30 @@ class ContextSidebarState {
 
   activateThread(projectId: string, threadId: string, threadTitle?: string): void {
     const keepNotificationsVisible = this.notificationsVisible
-    const keepBrowserVisible = this.browserVisible && this.activeProjectId === projectId
+    const previousProjectId = this.activeProjectId
+    const returningToProject = previousProjectId !== projectId
+    if (previousProjectId && previousProjectId !== projectId) {
+      this.browserRestoreByProject[previousProjectId] = this.browserVisible
+    }
     this.activeProjectId = projectId
     this.activeThreadId = threadId
-    this.ensureProjectContext(projectId)
-    this.ensureContext(projectId, threadId)
+    const project = this.ensureProjectContext(projectId)
+    const thread = this.ensureContext(projectId, threadId)
+    const destinationHasPanel = this.hasVisiblePanel(project, thread)
     this.rebindProjectTabs(projectId, threadId)
     this.ensureActiveThreadPanel(projectId, threadId, threadTitle)
     this.notificationsVisible = keepNotificationsVisible
-    this.browserVisible = keepBrowserVisible && this.activeBrowserTabs.length > 0
+    const restoreBrowser = returningToProject
+      ? this.browserRestoreByProject[projectId] === true && !destinationHasPanel
+      : this.browserVisible
+    this.browserVisible =
+      !keepNotificationsVisible && restoreBrowser && this.activeBrowserTabs.length > 0
   }
 
   deactivateThread(): void {
+    if (this.activeProjectId) {
+      this.browserRestoreByProject[this.activeProjectId] = this.browserVisible
+    }
     this.browserVisible = false
     this.activeProjectId = null
     this.activeThreadId = null
@@ -560,6 +576,7 @@ class ContextSidebarState {
 
   toggle(): void {
     if (this.browserVisible) {
+      if (this.activeProjectId) this.browserRestoreByProject[this.activeProjectId] = false
       this.browserVisible = false
       const context = this.activeProjectContext
       if (context) context.visible = false
@@ -581,6 +598,7 @@ class ContextSidebarState {
       return
     }
     if (this.browserVisible) {
+      if (this.activeProjectId) this.browserRestoreByProject[this.activeProjectId] = false
       this.browserVisible = false
       const context = this.activeProjectContext
       if (context) context.visible = false
@@ -855,14 +873,31 @@ class ContextSidebarState {
 
   openBrowser(url: string, requestedTabId?: string): string | null {
     if (!this.activeProjectId || !this.activeThreadId) return null
-    const projectId = this.activeProjectId
-    const threadId = this.activeThreadId
+    return this.openBrowserForContext(
+      url,
+      this.activeProjectId,
+      this.activeThreadId,
+      requestedTabId,
+      true
+    )
+  }
+
+  openBrowserForContext(
+    url: string,
+    projectId: string,
+    threadId: string,
+    requestedTabId?: string,
+    reveal = false
+  ): string {
     const id = requestedTabId ?? `browser:${crypto.randomUUID()}`
     const existing = this.browserTabs.find((tab) => tab.id === id && tab.projectId === projectId)
     if (existing) {
       existing.url = url
+      existing.threadId = threadId
       this.persistBrowserTabs()
-      this.focusBrowser(id)
+      if (reveal && this.activeProjectId === projectId && this.activeThreadId === threadId) {
+        this.focusBrowser(id)
+      }
       return id
     }
     let title = 'Browser'
@@ -877,7 +912,9 @@ class ContextSidebarState {
       { id, kind: 'browser', title, projectId, threadId, url, surface: 'page' }
     ]
     this.persistBrowserTabs()
-    this.focusBrowser(id)
+    if (reveal && this.activeProjectId === projectId && this.activeThreadId === threadId) {
+      this.focusBrowser(id)
+    }
     return id
   }
 
@@ -901,6 +938,7 @@ class ContextSidebarState {
     const removedIds = this.browserTabs
       .filter((tab) => tab.projectId === projectId)
       .map((tab) => tab.id)
+    delete this.browserRestoreByProject[projectId]
     if (removedIds.length === 0) return []
     this.browserTabs = this.browserTabs.filter((tab) => tab.projectId !== projectId)
     if (this.browserActiveTabId && removedIds.includes(this.browserActiveTabId)) {
@@ -911,16 +949,41 @@ class ContextSidebarState {
     return removedIds
   }
 
+  removeThreadBrowsers(projectId: string, threadId: string): string[] {
+    const removedIds = this.browserTabs
+      .filter((tab) => tab.projectId === projectId && tab.threadId === threadId)
+      .map((tab) => tab.id)
+    if (removedIds.length === 0) return []
+    this.browserTabs = this.browserTabs.filter(
+      (tab) => tab.projectId !== projectId || tab.threadId !== threadId
+    )
+    if (this.browserActiveTabId && removedIds.includes(this.browserActiveTabId)) {
+      this.browserActiveTabId = this.activeBrowserTabs.at(-1)?.id ?? null
+    }
+    if (this.activeBrowserTabs.length === 0) this.browserVisible = false
+    this.persistBrowserTabs()
+    return removedIds
+  }
+
   /** Opens the thread's note as a sidebar panel, creating one the first time
    *  it's visited so the panel is ready to write into even before a note
    *  exists. The body loads asynchronously onto the tab itself (not local
    *  component state) so an in-progress draft survives the panel being
    *  hidden and shown again. */
-  openThreadNote(projectId: string, threadId: string, threadTitle: string): void {
+  openThreadNote(
+    projectId: string,
+    threadId: string,
+    threadTitle: string,
+    options: { edit?: boolean; focusEditor?: boolean } = {}
+  ): void {
     const context = this.ensureContext(projectId, threadId)
     const id = `note:${projectId}:${threadId}`
     const existing = context.tabs.find((tab) => tab.id === id)
     if (existing) {
+      if (existing.kind === 'thread-note') {
+        if (options.edit) existing.mode = 'edit'
+        if (options.focusEditor) existing.focusRequest += 1
+      }
       this.focusInContext(context, id)
       return
     }
@@ -934,6 +997,7 @@ class ContextSidebarState {
       savedBody: null,
       draftBody: '',
       mode: 'edit',
+      focusRequest: options.focusEditor ? 1 : 0,
       loading: true,
       saving: false,
       error: null
@@ -953,8 +1017,9 @@ class ContextSidebarState {
       if (!tab || tab.kind !== 'thread-note') return
       tab.savedBody = note?.body ?? null
       tab.draftBody = note?.body ?? ''
-      // A saved note opens in read mode so the user reads it, not its source.
-      tab.mode = note ? 'read' : 'edit'
+      // Explicit write entry points keep saved notes editable; passive sidebar
+      // opens preserve the read-first behavior.
+      tab.mode = note && tab.focusRequest === 0 ? 'read' : 'edit'
       tab.loading = false
     } catch (err) {
       const tab = context.tabs.find((candidate) => candidate.id === tabId)
@@ -1035,7 +1100,10 @@ class ContextSidebarState {
 
   toggleNotifications(): void {
     this.notificationsVisible = !this.notificationsVisible
-    if (this.notificationsVisible) this.browserVisible = false
+    if (this.notificationsVisible) {
+      if (this.activeProjectId) this.browserRestoreByProject[this.activeProjectId] = false
+      this.browserVisible = false
+    }
   }
 
   openTemporaryChat(
@@ -1343,6 +1411,9 @@ class ContextSidebarState {
           this.browserTabs.filter((tab) => tab.projectId === closedProjectId).at(-1)?.id ?? null
       }
       if (this.activeBrowserTabs.length === 0) this.browserVisible = false
+      if (this.activeBrowserTabs.length === 0 && this.activeProjectId) {
+        this.browserRestoreByProject[this.activeProjectId] = false
+      }
       this.persistBrowserTabs()
       return
     }
@@ -1466,6 +1537,7 @@ class ContextSidebarState {
     const project = this.ensureProjectContext(context.projectId)
     project.activeKind = tab.kind
     project.visible = true
+    this.browserRestoreByProject[context.projectId] = false
     this.browserVisible = false
     this.notificationsVisible = false
   }
@@ -1485,6 +1557,7 @@ class ContextSidebarState {
     const tab = context.tabs.find((candidate) => candidate.id === id)
     if (!tab) return
     context.activeTabIds[tab.kind] = id
+    this.browserRestoreByProject[context.projectId] = false
     this.browserVisible = false
     this.notificationsVisible = false
     if (tab.kind === 'terminal' && this.terminalPlacement === 'bottom') {
@@ -1511,6 +1584,7 @@ class ContextSidebarState {
     const tab = this.browserTabs.find((candidate) => candidate.id === id)
     if (!tab || tab.projectId !== this.activeProjectId) return
     this.browserActiveTabId = id
+    this.browserRestoreByProject[tab.projectId] = true
     this.browserVisible = true
     this.notificationsVisible = false
   }
@@ -1544,6 +1618,13 @@ class ContextSidebarState {
   ): Partial<Record<ContextSidebarTab['kind'], string>> | null {
     if (PROJECT_TAB_KINDS.has(kind)) return this.activeProjectContext?.activeTabIds ?? null
     return this.activeContext?.activeTabIds ?? null
+  }
+
+  private hasVisiblePanel(project: ProjectSidebarContext, thread: ThreadSidebarContext): boolean {
+    const kind = project.activeKind
+    if (!project.visible || !kind) return false
+    const tabs = PROJECT_TAB_KINDS.has(kind) ? project.tabs : thread.tabs
+    return tabs.some((tab) => tab.kind === kind)
   }
 
   private rebindProjectTabs(projectId: string, threadId: string): void {

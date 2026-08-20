@@ -17,9 +17,11 @@ const EXTENSION_MIME_MAP: Record<string, string> = {
   ppt: 'application/vnd.ms-powerpoint',
   pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
   txt: 'text/plain',
+  text: 'text/plain',
+  log: 'text/plain',
   csv: 'text/csv',
+  tsv: 'text/tab-separated-values',
   md: 'text/markdown',
-  json: 'application/json',
   xml: 'application/xml',
   yaml: 'application/x-yaml',
   yml: 'application/x-yaml',
@@ -123,13 +125,27 @@ export function isPlainTextMime(mime: string): boolean {
 const VIDEO_EXTENSION_PATTERN = /\.(?:mp4|m4v|webm|mov|avi|mkv|mpeg|mpg|ogv)$/iu
 const AUDIO_EXTENSION_PATTERN = /\.(?:mp3|wav|ogg|oga|m4a|flac|aac|opus)$/iu
 
+/** Filename extensions treated as readable text/raw attachments. Mirrors the
+ *  extensions the harness drivers inline as text so the preview and the model
+ *  stay consistent. */
+const TEXT_EXTENSION_PATTERN =
+  /\.(?:txt|text|log|md|mdown|markdown|json|jsonc|jsonl|js|mjs|cjs|jsx|ts|tsx|css|scss|html|htm|py|rb|go|rs|java|sh|bash|zsh|yaml|yml|toml|xml|sql|ini|cfg|conf|properties|env|svelte|vue)$/iu
+const CSV_EXTENSION_PATTERN = /\.(?:csv|tsv)$/iu
+
 /** The kind of inline preview a chat attachment supports, or `null` when the
  *  file type has no renderer (images render as `<img>`, pdf as an iframe via
  *  the Chromium PDF viewer, video/audio via the native media elements,
- *  markdown via `MarkdownView`, plain text raw). Filename extensions provide a
- *  fallback for files whose reported mime is `application/octet-stream` or
- *  empty. */
-export type AttachmentPreviewKind = 'image' | 'pdf' | 'video' | 'audio' | 'markdown' | 'text'
+ *  markdown via `MarkdownView`, plain text raw, CSV as a table). Filename
+ *  extensions provide a fallback for files whose reported mime is
+ *  `application/octet-stream` or empty. */
+export type AttachmentPreviewKind =
+  | 'image'
+  | 'pdf'
+  | 'video'
+  | 'audio'
+  | 'markdown'
+  | 'text'
+  | 'csv'
 
 export function attachmentPreviewKind(
   mime: string,
@@ -139,8 +155,15 @@ export function attachmentPreviewKind(
   if (isVideoMime(mime) || VIDEO_EXTENSION_PATTERN.test(filename)) return 'video'
   if (isAudioMime(mime) || AUDIO_EXTENSION_PATTERN.test(filename)) return 'audio'
   if (isPdfMime(mime) || /\.pdf$/iu.test(filename)) return 'pdf'
+  if (
+    mime === 'text/csv' ||
+    mime === 'text/tab-separated-values' ||
+    CSV_EXTENSION_PATTERN.test(filename)
+  ) {
+    return 'csv'
+  }
   if (isMarkdownMime(mime) || /\.(?:md|mdown|markdown)$/iu.test(filename)) return 'markdown'
-  if (isPlainTextMime(mime) || /\.(?:txt|text)$/iu.test(filename)) return 'text'
+  if (isPlainTextMime(mime) || TEXT_EXTENSION_PATTERN.test(filename)) return 'text'
   return null
 }
 
