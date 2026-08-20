@@ -1252,8 +1252,10 @@ export interface SkillMarketDetail extends SkillMarketEntry {
 export interface SkillMarketInstallRequest {
   source: string
   skillId: string
-  projectId: string
-  target: { kind: 'global' } | { kind: 'project' } | { kind: 'harness'; harnessId: string }
+  manager: 'cio' | 'native'
+  scope: { kind: 'global' } | { kind: 'projects'; projectIds: string[] }
+  activation?: UtilityActivation
+  nativeTarget?: { kind: 'shared' } | { kind: 'harnesses'; harnessIds: string[] }
 }
 
 // ─── Harness-native capability discovery ───────────────────────────────────

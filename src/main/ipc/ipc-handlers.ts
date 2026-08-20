@@ -160,6 +160,7 @@ import type {
   EditorId,
   LocalProfileAnalyticsRange,
   MemoryEntry,
+  SkillMarketDetail,
   SpecContextReference,
   SpecSectionId,
   SpecValidationCode,
@@ -171,7 +172,8 @@ import type {
   CloudDeploymentProjectProviderAccounts,
   CloudDeploymentProviderAccount,
   CloudDeploymentProviderKind,
-  CloudDeploymentStatus
+  CloudDeploymentStatus,
+  UtilityDefinitionInput
 } from '../../lib/types'
 import { CLOUD_DEPLOYMENT_PROVIDER_KIND_VALUES, INBOX_PROJECT_ID } from '../../lib/types'
 
@@ -414,6 +416,85 @@ async function githubSkillMetadata(
   } catch {
     return { repositoryUrl, stars: null, markdown: '' }
   }
+}
+
+const SKILL_MARKET_DETAIL_TTL_MS = 15 * 60 * 1_000
+const SKILL_MARKET_DETAIL_CACHE_LIMIT = 100
+const skillMarketDetailCache = new Map<string, { detail: SkillMarketDetail; fetchedAt: number }>()
+const pendingSkillMarketDetails = new Map<string, Promise<SkillMarketDetail>>()
+
+function skillMarketIdentity(rawId: unknown): {
+  id: string
+  source: string
+  skillId: string
+  segments: string[]
+} {
+  const id = validateBoundedString(rawId, 'Skill market ID', 3, 500)
+  const segments = id.split('/').filter(Boolean)
+  if (segments.length < 2 || segments.some((segment) => !/^[A-Za-z0-9_.-]+$/u.test(segment))) {
+    throw new TypeError('Skill market ID is invalid')
+  }
+  return {
+    id,
+    source: segments.slice(0, -1).join('/'),
+    skillId: segments.at(-1)!,
+    segments
+  }
+}
+
+async function loadSkillMarketDetail(rawId: unknown): Promise<SkillMarketDetail> {
+  const identity = skillMarketIdentity(rawId)
+  const cached = skillMarketDetailCache.get(identity.id)
+  if (cached && Date.now() - cached.fetchedAt < SKILL_MARKET_DETAIL_TTL_MS) {
+    return structuredClone(cached.detail)
+  }
+  const pending = pendingSkillMarketDetails.get(identity.id)
+  if (pending) return structuredClone(await pending)
+
+  const request = (async (): Promise<SkillMarketDetail> => {
+    const githubSource = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/u.test(identity.source)
+    const [html, github] = await Promise.all([
+      fetchSkillMarketPage(`/${identity.segments.map(encodeURIComponent).join('/')}`),
+      githubSource
+        ? githubSkillMetadata(identity.source, identity.skillId)
+        : Promise.resolve({ repositoryUrl: null, stars: null, markdown: '' })
+    ])
+    const structured = jsonLdSkill(html)
+    if (!structured) throw new Error('Skills market returned an invalid skill page')
+    const metadata = skillDetailMetadata(html)
+    const detail: SkillMarketDetail = {
+      ...publicMarketEntry({
+        source: identity.source,
+        skillId: identity.skillId,
+        name: identity.skillId,
+        installs: structured.installs
+      }),
+      description: structured.description,
+      repositoryUrl: github.repositoryUrl,
+      githubStars: github.stars,
+      firstSeen: metadata.firstSeen,
+      audits: metadata.audits,
+      skillMarkdown: github.markdown
+    }
+    if (
+      !skillMarketDetailCache.has(identity.id) &&
+      skillMarketDetailCache.size >= SKILL_MARKET_DETAIL_CACHE_LIMIT
+    ) {
+      const oldestId = skillMarketDetailCache.keys().next().value
+      if (oldestId) skillMarketDetailCache.delete(oldestId)
+    }
+    skillMarketDetailCache.set(identity.id, { detail, fetchedAt: Date.now() })
+    return detail
+  })().finally(() => pendingSkillMarketDetails.delete(identity.id))
+  pendingSkillMarketDetails.set(identity.id, request)
+  return structuredClone(await request)
+}
+
+function selectedIds(value: unknown, label: string): string[] {
+  if (!Array.isArray(value) || value.length === 0 || value.length > 50) {
+    throw new TypeError(`${label} must contain between 1 and 50 selections`)
+  }
+  return [...new Set(value.map((item) => validateEntityId(item, label.replace(/s$/u, ''), 256)))]
 }
 
 /** Resolve the native drag icon. Prefer the dragged file's own Finder icon so
@@ -5002,38 +5083,9 @@ export function registerIpcHandlers(
     return { view: rawView as 'all-time' | 'trending' | 'hot', entries }
   })
 
-  ipcMain.handle('utilities:getSkillMarketDetail', async (_, rawId: unknown) => {
-    const id = validateBoundedString(rawId, 'Skill market ID', 3, 500)
-    const segments = id.split('/').filter(Boolean)
-    if (segments.length < 2 || segments.some((segment) => !/^[A-Za-z0-9_.-]+$/u.test(segment))) {
-      throw new TypeError('Skill market ID is invalid')
-    }
-    const skillId = segments.at(-1)!
-    const source = segments.slice(0, -1).join('/')
-    const html = await fetchSkillMarketPage(`/${segments.map(encodeURIComponent).join('/')}`)
-    const structured = jsonLdSkill(html)
-    if (!structured) throw new Error('Skills market returned an invalid skill page')
-    const embedded = publicMarketEntry({
-      source,
-      skillId,
-      name: skillId,
-      installs: structured.installs
-    })
-    const metadata = skillDetailMetadata(html)
-    const githubSource = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/u.test(source)
-    const github = githubSource
-      ? await githubSkillMetadata(source, skillId)
-      : { repositoryUrl: null, stars: null, markdown: '' }
-    return {
-      ...embedded,
-      description: structured.description,
-      repositoryUrl: github.repositoryUrl,
-      githubStars: github.stars,
-      firstSeen: metadata.firstSeen,
-      audits: metadata.audits,
-      skillMarkdown: github.markdown
-    }
-  })
+  ipcMain.handle('utilities:getSkillMarketDetail', (_, rawId: unknown) =>
+    loadSkillMarketDetail(rawId)
+  )
 
   ipcMain.handle('utilities:installMarketSkill', async (_, rawRequest: unknown) => {
     if (!isRecord(rawRequest)) throw new TypeError('Skill install request must be an object')
@@ -5043,37 +5095,97 @@ export function registerIpcHandlers(
     const wellKnownSource = /^(?:[A-Za-z0-9-]+\.)+[A-Za-z]{2,}$/u.test(source)
     if (!githubSource && !wellKnownSource) throw new TypeError('Skill source is invalid')
     const installSource = githubSource ? `https://github.com/${source}` : `https://${source}`
-    const projectId = validateEntityId(rawRequest['projectId'], 'Project ID')
-    const projectPath = await resolveProjectPath(projectId)
-    const target = rawRequest['target']
-    if (!isRecord(target)) throw new TypeError('Skill install target must be an object')
-    const knownHarnesses = new Set(listHarnesses().map((harness) => harness.id))
-    const targetKind = target['kind']
-    let agentTarget = '*'
-    let globalInstall: boolean
-    if (targetKind === 'global') {
-      globalInstall = true
-    } else if (targetKind === 'project') {
-      globalInstall = false
-    } else if (targetKind === 'harness') {
-      const harnessId = validateEntityId(target['harnessId'], 'Harness ID')
-      if (!knownHarnesses.has(harnessId)) throw new TypeError('Select a supported harness')
-      agentTarget = harnessId
-      globalInstall = true
-    } else {
-      throw new TypeError('Skill install target is invalid')
+    const manager = rawRequest['manager']
+    if (manager !== 'cio' && manager !== 'native') {
+      throw new TypeError('Select who should manage this skill')
     }
-    const args = [
-      'add',
-      installSource,
-      '--skill',
-      skillId,
-      '--agent',
-      agentTarget,
-      '-y',
-      ...(globalInstall ? ['--global'] : [])
-    ]
-    return installSkillWithBun(args, projectPath)
+    const scope = rawRequest['scope']
+    if (!isRecord(scope)) throw new TypeError('Skill install scope must be an object')
+    const scopeKind = scope['kind']
+    if (scopeKind !== 'global' && scopeKind !== 'projects') {
+      throw new TypeError('Select global or project installation')
+    }
+    const projectIds =
+      scopeKind === 'projects' ? selectedIds(scope['projectIds'], 'Project IDs') : []
+    const projectPaths = new Map<string, string>()
+    for (const projectId of projectIds) {
+      projectPaths.set(projectId, await resolveProjectPath(projectId))
+    }
+
+    if (manager === 'cio') {
+      const activation = rawRequest['activation']
+      if (activation !== 'always' && activation !== 'on_demand') {
+        throw new TypeError('Select always available or on-demand activation')
+      }
+      const detail = await loadSkillMarketDetail(`${source}/${skillId}`)
+      if (!detail.skillMarkdown.trim()) {
+        throw new Error('This source does not expose a readable SKILL.md for CodeInOven to manage')
+      }
+      const scopes =
+        scopeKind === 'global'
+          ? [{ level: 'global' } as const]
+          : projectIds.map((projectId) => ({ level: 'project' as const, projectId }))
+      const definitions: UtilityDefinitionInput<'skill'>[] = scopes.map((utilityScope) => ({
+        kind: 'skill',
+        name: detail.name,
+        description: detail.description,
+        enabled: true,
+        activation,
+        scope: utilityScope,
+        config: { instructions: detail.skillMarkdown },
+        harnessBindings: [
+          {
+            harnessId: '*',
+            strategy: 'skill',
+            transportName: skillId
+          }
+        ]
+      }))
+      const registry = new UtilityRegistryService(storage)
+      await registry.createMany(definitions)
+      return `Added ${definitions.length} CodeInOven-managed skill${definitions.length === 1 ? '' : 's'}`
+    }
+
+    const nativeTarget = rawRequest['nativeTarget']
+    if (!isRecord(nativeTarget)) throw new TypeError('Select a native skill directory')
+    const knownHarnesses = new Set(listHarnesses().map((harness) => harness.id))
+    const targetKind = nativeTarget['kind']
+    let agentTargets: string[]
+    if (targetKind === 'shared') {
+      agentTargets = ['*']
+    } else if (targetKind === 'harnesses') {
+      agentTargets = selectedIds(nativeTarget['harnessIds'], 'Harness IDs')
+      if (agentTargets.some((harnessId) => !knownHarnesses.has(harnessId))) {
+        throw new TypeError('Select only supported harnesses')
+      }
+    } else {
+      throw new TypeError('Native skill directory is invalid')
+    }
+    const destinations =
+      scopeKind === 'global'
+        ? [app.getPath('home')]
+        : projectIds.map((projectId) => projectPaths.get(projectId)!)
+    const outputs: string[] = []
+    for (const directory of destinations) {
+      for (const agentTarget of agentTargets) {
+        outputs.push(
+          await installSkillWithBun(
+            [
+              'add',
+              installSource,
+              '--skill',
+              skillId,
+              '--agent',
+              agentTarget,
+              '-y',
+              ...(scopeKind === 'global' ? ['--global'] : [])
+            ],
+            directory
+          )
+        )
+      }
+    }
+    return outputs.filter(Boolean).at(-1) ?? `Installed to ${destinations.length} destination(s)`
   })
 
   ipcMain.handle('github:authStatus', () => githubAuthService.status())
