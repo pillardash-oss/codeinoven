@@ -3665,6 +3665,9 @@
     try {
       await ensureSessionReady()
       await invoke('agent:runCommand', projectId, id, command.id, args)
+      if (command.name === 'config' || command.name === 'settings') {
+        toast.success(`${providerName} settings updated`)
+      }
     } catch (error) {
       errorMessage =
         error instanceof Error ? error.message : `/${command.name} could not be started.`

@@ -108,16 +108,11 @@ const ONE_SHOT_SPAWN_LIMIT = 4
 
 /** Commands Claude Code documents as usable without its interactive TUI. */
 const CLAUDE_NON_INTERACTIVE_COMMANDS: readonly HarnessCommand[] = [
-  { name: 'compact', description: 'Compact this conversation with optional focus instructions' },
   { name: 'config', description: 'Set Claude Code preferences with key=value arguments' },
-  { name: 'context', description: 'Show what is using the current context window' },
-  { name: 'effort', description: 'Set reasoning effort for this session' },
-  { name: 'mcp', description: 'Show or manage Claude Code MCP connections', source: 'mcp' },
-  { name: 'model', description: 'Switch the Claude model for this session' },
-  { name: 'rename', description: 'Rename this Claude Code session' }
+  { name: 'settings', description: 'Set Claude Code preferences with key=value arguments' }
 ]
 
-const CLAUDE_COMMANDS_REQUIRING_ARGUMENTS = new Set(['config', 'effort', 'model', 'rename'])
+const CLAUDE_COMMANDS_REQUIRING_ARGUMENTS = new Set(['config', 'settings'])
 
 /** Keep Claude Code's native per-repository memory from crossing app threads. */
 function buildClaudeEnvironment(): NodeJS.ProcessEnv {

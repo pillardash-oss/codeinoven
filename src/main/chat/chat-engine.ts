@@ -13165,18 +13165,23 @@ export class ChatEngine {
     projectPath: string
   ): Promise<HarnessCommand[]> {
     const commands = await driver.listCommands(projectPath)
-    if (driver.id !== 'claude-code') return commands
-    const capabilities = await this.capabilityDiscovery.discover(projectPath, driver.id)
-    return [
-      ...commands,
-      ...capabilities.skill
-        .filter((skill) => skill.enabled)
-        .map((skill): HarnessCommand => ({
-          name: skill.name,
-          description: skill.description || 'Invoke this skill in the active session',
-          source: 'skill'
-        }))
-    ]
+    const discovered = [...commands]
+    if (driver.id === 'claude-code') {
+      const capabilities = await this.capabilityDiscovery.discover(projectPath, driver.id)
+      discovered.push(
+        ...capabilities.skill
+          .filter((skill) => skill.enabled)
+          .map((skill): HarnessCommand => ({
+            name: skill.name,
+            description: skill.description || 'Invoke this skill in the active session',
+            source: 'skill'
+          }))
+      )
+    }
+    return discovered.filter(
+      (command) =>
+        command.source === 'skill' || command.name === 'config' || command.name === 'settings'
+    )
   }
 
   private scopeHarnessCommands(

@@ -502,7 +502,8 @@ export abstract class PersistentCliDriver implements HarnessDriver {
     return []
   }
 
-  async listCommands(): Promise<HarnessCommand[]> {
+  async listCommands(_projectPath: string): Promise<HarnessCommand[]> {
+    void _projectPath
     return []
   }
 

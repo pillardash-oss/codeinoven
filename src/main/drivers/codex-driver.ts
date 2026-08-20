@@ -349,8 +349,12 @@ export class CodexDriver extends PersistentCliDriver {
   override async listCommands(projectPath: string): Promise<HarnessCommand[]> {
     const commands: HarnessCommand[] = [
       {
-        name: 'compact',
-        description: 'Compact this Codex conversation to free context'
+        name: 'config',
+        description: 'Set Codex preferences with key=value arguments'
+      },
+      {
+        name: 'settings',
+        description: 'Set Codex preferences with key=value arguments'
       }
     ]
     let temporaryHost: CodexAppServerHost | null = null
@@ -412,8 +416,10 @@ export class CodexDriver extends PersistentCliDriver {
       })
       return
     }
-    if (command.name === 'compact') {
-      await this.compactSession(projectPath, sessionId, settings)
+    if (command.name === 'config' || command.name === 'settings') {
+      const edits = parseCodexConfigEdits(args, command.name)
+      const host = await this.ensureAppServerHost(projectPath)
+      await this.appServerRequest(host, 'config/batchWrite', { edits })
       return
     }
     throw new Error(`Command is not available in ${this.name}: ${command.name}`)
@@ -2420,6 +2426,39 @@ function recordValue(value: unknown): Record<string, unknown> | null {
 }
 function stringValue(value: unknown): string | undefined {
   return typeof value === 'string' ? value : undefined
+}
+
+interface CodexConfigEdit {
+  keyPath: string
+  value: unknown
+  mergeStrategy: 'upsert'
+}
+
+function parseCodexConfigEdits(
+  args: string,
+  commandName: 'config' | 'settings'
+): CodexConfigEdit[] {
+  const assignments = args.trim().split(/\s+/u).filter(Boolean)
+  if (assignments.length === 0) {
+    throw new Error(`/${commandName} requires one or more key=value arguments in Codex`)
+  }
+
+  return assignments.map((assignment) => {
+    const separator = assignment.indexOf('=')
+    const keyPath = separator > 0 ? assignment.slice(0, separator) : ''
+    const rawValue = separator >= 0 ? assignment.slice(separator + 1) : ''
+    if (!keyPath || !rawValue || !/^[a-zA-Z0-9_/-]+(?:\.[a-zA-Z0-9_/-]+)*$/u.test(keyPath)) {
+      throw new Error(`Invalid Codex config assignment: ${assignment}`)
+    }
+
+    let value: unknown = rawValue
+    try {
+      value = JSON.parse(rawValue) as unknown
+    } catch {
+      // Bare values are valid TOML strings; JSON literals keep their native type.
+    }
+    return { keyPath, value, mergeStrategy: 'upsert' }
+  })
 }
 
 function numberValue(value: unknown): number | undefined {
