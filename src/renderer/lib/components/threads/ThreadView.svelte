@@ -7451,7 +7451,7 @@
               <div class="rounded-t-xl border border-border bg-surface shadow-sm">
                 <div class="flex items-center justify-between gap-2 px-3 pt-2.5 pb-1">
                   <span class="text-[10px] font-semibold uppercase tracking-wide text-dimmed"
-                    >Queued</span
+                    >{queuedStartAfterThreads.length > 0 ? 'Starts after' : 'Queued'}</span
                   >
                   <div class="flex items-center gap-1">
                     <button
@@ -7530,9 +7530,6 @@
                 {/if}
                 {#if queuedStartAfterThreads.length > 0}
                   <div class="flex flex-col gap-1 px-3 pb-2.5">
-                    <div class="px-1 text-[10px] font-semibold uppercase tracking-wide text-dimmed">
-                      Starts after thread{queuedStartAfterThreads.length === 1 ? '' : 's'}
-                    </div>
                     {#each queuedStartAfterThreads as dependency (dependency.id)}
                       <button
                         type="button"
@@ -7544,7 +7541,7 @@
                       >
                         <Clock size={12} class="shrink-0 text-info" />
                         <span class="min-w-0 flex-1 truncate text-[11px] text-info">
-                          Starts after {dependency.title} finishes
+                          {dependency.title}
                         </span>
                         <ArrowUpRight size={12} class="shrink-0 text-dimmed" />
                       </button>
