@@ -1148,7 +1148,7 @@
     if (!kind) return
     try {
       const bytes = await window.api.readFile(fileUrlToPath(file.url))
-      if (kind === 'markdown' || kind === 'text') {
+      if (kind === 'markdown' || kind === 'text' || kind === 'csv') {
         if (previewTexts[file.url] !== undefined) return
         previewTexts = { ...previewTexts, [file.url]: new TextDecoder().decode(bytes) }
         return
