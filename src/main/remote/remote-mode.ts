@@ -1531,8 +1531,15 @@ export class RemoteModeController {
     const authorizationToken = accountToken ?? existingDeviceToken
     if (!authorizationToken) throw new Error('Sign in before pairing this desktop')
 
-    this.stopCloudAccess()
-    this.cloudAbortController = new AbortController()
+    // Opening another pairing window must not stop the desktop relay or any
+    // already authenticated phone. Invalidate only the previous enrollment poll.
+    this.cloudPollGeneration += 1
+    this.cloudPollRunningGeneration = null
+    this.cloudPollFailureCount = 0
+    this.pendingCloudDeviceId = null
+    if (this.cloudPollTimer) clearTimeout(this.cloudPollTimer)
+    this.cloudPollTimer = null
+    if (!this.cloudAbortController) this.cloudAbortController = new AbortController()
     this.cloudStatus = {
       ...this.cloudStatus,
       state: 'connecting',
@@ -1616,34 +1623,30 @@ export class RemoteModeController {
       const response = await fetchWithDeadline(
         new URL(`/v1/device-enrollments/${encodeURIComponent(config.desktopId)}`, config.apiOrigin),
         { method: 'DELETE', headers: { Authorization: `Bearer ${token}` } },
-        CLOUD_REQUEST_TIMEOUT_MS,
-        this.cloudAbortController?.signal
+        CLOUD_REQUEST_TIMEOUT_MS
       )
       if (!response.ok && response.status !== 404) {
-        throw new Error('Could not revoke desktop access from the remote service')
+        throw new Error('Could not cancel the pairing window')
       }
     }
-    this.stopCloudAccess()
-    if (config?.tokenRef && this.vault) {
-      await this.vault.remove(config.tokenRef)
-      // Account authentication is independent of remote-device enrollment.
-    }
-    if (this.storage) await this.storage.remove(CLOUD_CONFIG_PATH)
-    this.cloudConfig = null
+    this.cloudPollGeneration += 1
+    this.cloudPollRunningGeneration = null
+    this.cloudPollFailureCount = 0
+    this.pendingCloudDeviceId = null
+    if (this.cloudPollTimer) clearTimeout(this.cloudPollTimer)
+    this.cloudPollTimer = null
     this.cloudStatus = {
-      configured: this.cloudApiOrigin !== null,
-      state: 'disabled',
-      apiOrigin: this.cloudApiOrigin,
-      desktopId: null,
+      ...this.cloudStatus,
+      state: this.cloudRelay ? 'online' : 'connecting',
       enrollmentCode: null,
       enrollmentExpiresAt: null,
       lastError: null
     }
-    if (!this.hasRestorableLanEnrollment() && this.remoteModeActive) {
-      this.toggleRemoteMode(false)
-    } else {
-      this.broadcast()
+    if (!this.cloudRelay && config && this.vault) {
+      const token = await this.vault.resolve(config.tokenRef)
+      if (token) this.connectCloudRelay(token)
     }
+    this.broadcast()
     return this.status
   }
 
@@ -1764,6 +1767,18 @@ export class RemoteModeController {
       const payload = (await response.json()) as Record<string, unknown>
       if (payload['revoked'] === true) {
         await this.discardCloudEnrollment('Desktop revoked. Sign in again.')
+        return
+      }
+      if (payload['exists'] === false) {
+        this.cloudStatus = {
+          ...this.cloudStatus,
+          state: 'connecting',
+          enrollmentCode: null,
+          enrollmentExpiresAt: null,
+          lastError: null
+        }
+        this.broadcast()
+        this.connectCloudRelay(token)
         return
       }
       if (payload['claimed'] === true) {
@@ -1927,6 +1942,12 @@ export class RemoteModeController {
       },
       onDisconnected: (reason) => {
         if (this.cloudRelay !== relay) return
+        if (reason === 'remote-host-active') {
+          Logger.dev('Another CodeInOven instance owns the shared remote transport')
+          this.cloudStatus = { ...this.cloudStatus, state: 'online', lastError: null }
+          this.broadcast()
+          return
+        }
         if (reason === 'revoked' || reason === 'relay-closed-4003') {
           Logger.info('Remote cloud relay credential was revoked; local enrollment cleared')
           void this.discardCloudEnrollment('Desktop access was revoked. Create a new pairing code.')

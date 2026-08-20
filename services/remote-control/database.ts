@@ -12,6 +12,7 @@ import type {
 
 export type AuditEventKind =
   | 'desktop.enrollment-created'
+  | 'desktop.enrollment-cancelled'
   | 'desktop.enrollment-conflict'
   | 'desktop.profile-synced'
   | 'desktop.claimed'
@@ -396,6 +397,12 @@ export class RemoteControlDatabase {
     return (
       (this.db.prepare('SELECT * FROM enrollments WHERE desktop_id = ?').get(desktopId) as
         EnrollmentRecord | undefined) ?? null
+    )
+  }
+
+  cancelDesktopEnrollment(desktopId: string): boolean {
+    return (
+      this.db.prepare('DELETE FROM enrollments WHERE desktop_id = ?').run(desktopId).changes > 0
     )
   }
 

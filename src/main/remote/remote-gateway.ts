@@ -295,8 +295,8 @@ export class RemoteGateway {
     try {
       // Bind sequentially so a LAN-port failure never leaves the loopback
       // listener alive, and clean up HTTPS if the loopback bind fails.
-      await this.listen(httpsServer, this.options.port, '0.0.0.0')
-      await this.listen(httpServer, this.options.localPort, '127.0.0.1')
+      await this.listenWithPortFallback(httpsServer, this.options.port, '0.0.0.0', 'LAN')
+      await this.listenWithPortFallback(httpServer, this.options.localPort, '127.0.0.1', 'loopback')
     } catch (error) {
       await this.closeServers()
       throw error
@@ -361,6 +361,23 @@ export class RemoteGateway {
       server.once('listening', onListening)
       server.listen(port, host)
     })
+  }
+
+  private async listenWithPortFallback(
+    server: Server | HttpsServer,
+    port: number,
+    host: string,
+    label: string
+  ): Promise<void> {
+    try {
+      await this.listen(server, port, host)
+    } catch (error) {
+      if (!(error instanceof Error) || !('code' in error) || error.code !== 'EADDRINUSE') {
+        throw error
+      }
+      Logger.info(`Remote ${label} port ${port} is already owned; using an available port`)
+      await this.listen(server, 0, host)
+    }
   }
 
   private handleLoopbackHttp(response: ServerResponse): void {

@@ -424,6 +424,7 @@ function handleEnrollmentStatus(request: Request, desktopId: string): Response {
   const enrollment = database.enrollmentForDesktop(desktopId)
   return json({
     desktopId,
+    exists: enrollment !== null,
     claimed: enrollment?.claimed_at !== null && enrollment?.claimed_at !== undefined,
     expiresAt: enrollment?.expires_at ?? null,
     revoked: desktop.revoked_at !== null,
@@ -452,13 +453,17 @@ async function handleGrantUpload(request: Request, desktopId: string): Promise<R
   ) {
     return json({ error: 'invalid-control-grant' }, 400)
   }
+  const replacingGrant = Boolean(
+    desktop.user_id && database.enrollmentGrant(desktopId, desktop.user_id, mobileDeviceId)
+  )
   if (!database.saveDesktopGrant(desktopId, mobileDeviceId, desktopPublicKey, ciphertext)) {
     return json({ error: 'not-found' }, 404)
   }
-  // A refreshed grant can carry a rotated transport key. Close both peers and
-  // discard outstanding ciphertext before either side reconnects; replaying a
-  // frame encrypted with the previous key creates an unrecoverable loop.
-  closeDesktop(desktopId, 4004, 'control-key-rotated')
+  if (replacingGrant) {
+    // Replacing a grant can carry a rotated transport key. A brand-new phone
+    // grant uses the existing key and must not disconnect already paired phones.
+    closeDesktop(desktopId, 4004, 'control-key-rotated')
+  }
   database.audit('desktop.control-grant-created', desktop.user_id, desktopId)
   return json({ ok: true })
 }
@@ -530,14 +535,14 @@ async function mutateDesktop(
   return json({ desktopId, name })
 }
 
-function revokeFromDesktop(request: Request, desktopId: string): Response {
+function cancelEnrollmentFromDesktop(request: Request, desktopId: string): Response {
   const token = bearerToken(request)
   if (!token) return json({ error: 'not-found' }, 404)
   const desktop = database.findDesktopByTokenHash(tokenHash(token))
   if (!desktop || desktop.id !== desktopId) return json({ error: 'not-found' }, 404)
-  database.revokeDesktopByTokenHash(tokenHash(token))
-  closeDesktop(desktopId, 4003, 'revoked')
-  database.audit('desktop.revoked-by-device', desktop.user_id, desktopId)
+  if (database.cancelDesktopEnrollment(desktopId)) {
+    database.audit('desktop.enrollment-cancelled', desktop.user_id, desktopId)
+  }
   return new Response(null, { status: 204 })
 }
 
@@ -608,7 +613,7 @@ async function routeHttp(request: Request): Promise<Response | undefined> {
   }
   const deviceEnrollment = url.pathname.match(/^\/v1\/device-enrollments\/([^/]+)$/)
   if (deviceEnrollment && request.method === 'DELETE') {
-    return revokeFromDesktop(request, deviceEnrollment[1] ?? '')
+    return cancelEnrollmentFromDesktop(request, deviceEnrollment[1] ?? '')
   }
 
   const session = await sessionFromRequest(request)
@@ -666,6 +671,14 @@ function relayMessage(socket: ServerWebSocket<RelaySocketData>, message: string 
     const desktop = database.findDesktopByTokenHash(tokenHash(token))
     if (!desktop || !desktop.user_id) {
       socket.close(4001, 'authentication-failed')
+      return
+    }
+    const activeDesktop = relayHub.desktopSocket(desktop.id)
+    if (activeDesktop && activeDesktop !== socket) {
+      // Multiple app processes share this desktop identity and database, but
+      // exactly one process must execute each RPC. Keep the current owner and
+      // let this follower retry for automatic ownership handoff later.
+      socket.close(4000, 'remote-host-active')
       return
     }
     // The hub delivers any replayed buffered frames to the new socket itself;

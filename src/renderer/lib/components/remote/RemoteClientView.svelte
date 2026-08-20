@@ -219,8 +219,8 @@
       <h2 class="text-sm font-semibold text-foreground">Remote access</h2>
     </div>
     <p class="mt-2 text-xs leading-relaxed text-muted">
-      Connect through one account-backed workspace. The app uses LAN automatically when both devices
-      are on the same network and falls back to the cloud relay everywhere else.
+      Connect through one account-backed workspace. The cloud relay is primary; an authenticated
+      device may use the local network later when it is available.
     </p>
 
     {#if accountProfile}
@@ -544,14 +544,14 @@
               ? 'Creating pairing code…'
               : 'Create pairing code'}
         </button>
-        {#if remoteStatus.cloud.desktopId}
+        {#if remoteStatus.cloud.enrollmentCode}
           <button
             type="button"
             class="h-9 cursor-pointer rounded-lg border px-3 text-xs font-medium text-muted transition hover:bg-elevated hover:text-foreground disabled:opacity-50"
             disabled={interactionsLocked}
             onclick={() => void resetCloudEnrollment()}
           >
-            Remove enrollment
+            Cancel pairing
           </button>
         {/if}
       </div>
