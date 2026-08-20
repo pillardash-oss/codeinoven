@@ -12,6 +12,7 @@
 
 import { decryptPayload, encryptPayload } from './session-security'
 import { remoteLog } from './logger'
+import { BrowserWebRtcChannel, type WebRtcSessionDescription } from './webrtc-data-channel'
 import {
   BoundedMap,
   BoundedSet,
@@ -58,6 +59,7 @@ interface RelayFrame {
   type: string
   payload?: string
   online?: boolean
+  iceServers?: RTCIceServer[]
 }
 
 interface OutboundRecord {
@@ -82,10 +84,18 @@ function parseFrame(value: string): RelayFrame | null {
     const parsed: unknown = JSON.parse(value)
     if (typeof parsed !== 'object' || parsed === null) return null
     const record = parsed as Record<string, unknown>
+    const iceServers = Array.isArray(record.iceServers)
+      ? record.iceServers.filter((entry): entry is RTCIceServer => {
+          if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) return false
+          const candidate = entry as Record<string, unknown>
+          return typeof candidate.urls === 'string' || Array.isArray(candidate.urls)
+        })
+      : undefined
     return {
       type: typeof record.type === 'string' ? record.type : '',
       payload: typeof record.payload === 'string' ? record.payload : undefined,
-      online: typeof record.online === 'boolean' ? record.online : undefined
+      online: typeof record.online === 'boolean' ? record.online : undefined,
+      iceServers
     }
   } catch {
     return null
@@ -114,6 +124,8 @@ export function createAccountRelayClient(options: AccountRelayOptions): AccountR
   let settled = false
   let settle: (result: 'open' | 'offline' | 'failed') => void = () => undefined
   let timer: number | null = null
+  let iceServers: RTCIceServer[] = []
+  let rtc: BrowserWebRtcChannel | null = null
   const queue: OutboundRecord[] = []
   const inFlight = new BoundedMap<OutboundRecord>(queueLimit)
   const seenInboundIds = new BoundedSet(queueLimit)
@@ -146,11 +158,13 @@ export function createAccountRelayClient(options: AccountRelayOptions): AccountR
     }
     if (!socket || !open) return
     inFlight.set(record.id, record)
-    socket.send(serializeRelayDataFrame(record.id, payload))
+    const frame = serializeRelayDataFrame(record.id, payload)
+    if (!rtc?.send(frame)) socket.send(frame)
   }
 
   async function flushQueue(): Promise<void> {
     while (queue.length > 0) {
+      if (!socket || !open) return
       const record = queue.shift()
       if (!record) break
       await transmit(record)
@@ -158,9 +172,146 @@ export function createAccountRelayClient(options: AccountRelayOptions): AccountR
   }
 
   /** Send a receiver-generated `relay:ack` control frame on the open socket. */
-  function sendAck(id: string): void {
+  function sendAck(id: string, route: 'relay' | 'webrtc'): void {
+    const frame = serializeRelayAckFrame(id)
+    if (route === 'webrtc' && rtc?.send(frame)) return
     if (!socket || !open || socket.readyState !== WebSocket.OPEN) return
-    socket.send(serializeRelayAckFrame(id))
+    socket.send(frame)
+  }
+
+  function startWebRtc(): void {
+    if (rtc || typeof RTCPeerConnection === 'undefined') return
+    const channel = new BrowserWebRtcChannel({
+      iceServers,
+      onOffer: (description) => {
+        if (socket?.readyState === WebSocket.OPEN) {
+          socket.send(JSON.stringify({ type: 'relay:signal', description }))
+        }
+      },
+      onMessage: (data) => handleIncoming(data, 'webrtc'),
+      onStateChange: (state) => {
+        if (state === 'closed' || state === 'failed') {
+          if (rtc === channel) rtc = null
+          requeueInFlight()
+          void flushQueue()
+        }
+      }
+    })
+    rtc = channel
+    void channel.start().catch(() => {
+      if (rtc === channel) rtc = null
+      channel.close()
+      remoteLog.dev('WebRTC route unavailable; continuing over cloud relay')
+    })
+  }
+
+  function parseSignal(value: string): WebRtcSessionDescription | null {
+    try {
+      const parsed: unknown = JSON.parse(value)
+      if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return null
+      const record = parsed as Record<string, unknown>
+      const description = record.description
+      if (
+        record.type !== 'relay:signal' ||
+        typeof description !== 'object' ||
+        description === null ||
+        Array.isArray(description)
+      ) {
+        return null
+      }
+      const candidate = description as Record<string, unknown>
+      return candidate.type === 'answer' && typeof candidate.sdp === 'string'
+        ? { type: 'answer', sdp: candidate.sdp }
+        : null
+    } catch {
+      return null
+    }
+  }
+
+  function handleIncoming(value: string, route: 'relay' | 'webrtc'): void {
+    const signal = parseSignal(value)
+    if (signal) {
+      void rtc?.acceptAnswer(signal).catch(() => {
+        rtc?.close()
+        rtc = null
+      })
+      return
+    }
+    const ack = parseRelayAckFrame(value)
+    if (ack) {
+      inFlight.delete(ack.id)
+      return
+    }
+    const nack = parseRelayNackFrame(value)
+    if (nack) {
+      const record = inFlight.get(nack.id)
+      if (record) {
+        inFlight.delete(nack.id)
+        enqueue(record)
+      }
+      return
+    }
+    const frame = parseFrame(value)
+    if (!frame) return
+    if (frame.type === 'relay:authenticated') {
+      iceServers = frame.iceServers ?? []
+      if (timer !== null) window.clearTimeout(timer)
+      if (frame.online !== true) {
+        options.onEvent({ kind: 'offline' })
+        finish('offline')
+        socket?.close()
+        if (!closing) scheduleReconnect()
+        return
+      }
+      open = true
+      reconnectAttempt = 0
+      options.onEvent({ kind: 'connected', url })
+      finish('open')
+      void flushQueue()
+      return
+    }
+    if (frame.type !== 'relay:data' || !frame.payload) return
+    const dataFrame = parseRelayDataFrame(value)
+    const wireId = dataFrame && dataFrame.id ? dataFrame.id : undefined
+    if (wireId !== undefined) {
+      if (seenInboundIds.has(wireId)) {
+        sendAck(wireId, route)
+        return
+      }
+      if (inboundProcessing.has(wireId)) return
+      inboundProcessing.add(wireId)
+    }
+    void decryptPayload(options.controlSecret, frame.payload)
+      .then((data) => {
+        if (wireId !== undefined) {
+          seenInboundIds.add(wireId)
+          sendAck(wireId, route)
+          inboundProcessing.delete(wireId)
+        }
+        try {
+          const message = JSON.parse(data) as Record<string, unknown>
+          if (message.type === 'remote:device:ok') startWebRtc()
+        } catch {
+          // Non-object RPC payloads are still delivered to the existing bridge.
+        }
+        options.onEvent({ kind: 'message', data })
+      })
+      .catch((error: unknown) => {
+        if (wireId !== undefined) inboundProcessing.delete(wireId)
+        if (
+          wireId !== undefined &&
+          error instanceof Error &&
+          error.message === 'replayed-encrypted-payload'
+        ) {
+          seenInboundIds.add(wireId)
+          sendAck(wireId, route)
+          return
+        }
+        if (closing || payloadAuthenticationFailed) return
+        payloadAuthenticationFailed = true
+        remoteLog.error('Cloud relay payload authentication failed; automatic reconnect paused')
+        socket?.close(PAYLOAD_AUTH_FAILURE_CLOSE_CODE, 'payload-authentication-failed')
+      })
   }
 
   function scheduleReconnect(): void {
@@ -193,98 +344,14 @@ export function createAccountRelayClient(options: AccountRelayOptions): AccountR
     }, handshakeTimeoutMs)
 
     socket.onmessage = (event) => {
-      if (typeof event.data !== 'string') return
-      const ack = parseRelayAckFrame(event.data)
-      if (ack) {
-        inFlight.delete(ack.id)
-        return
-      }
-      const nack = parseRelayNackFrame(event.data)
-      if (nack) {
-        // Explicit retryable rejection: requeue the frame for retransmission.
-        const record = inFlight.get(nack.id)
-        if (record) {
-          inFlight.delete(nack.id)
-          enqueue(record)
-        }
-        return
-      }
-      const frame = parseFrame(event.data)
-      if (!frame) return
-      if (frame.type === 'relay:authenticated') {
-        if (timer !== null) window.clearTimeout(timer)
-        if (frame.online !== true) {
-          options.onEvent({ kind: 'offline' })
-          finish('offline')
-          socket?.close()
-          if (!closing) scheduleReconnect()
-          return
-        }
-        open = true
-        reconnectAttempt = 0
-        options.onEvent({ kind: 'connected', url })
-        finish('open')
-        void flushQueue()
-        return
-      }
-      if (frame.type === 'relay:data' && frame.payload) {
-        const dataFrame = parseRelayDataFrame(event.data)
-        const wireId = dataFrame && dataFrame.id ? dataFrame.id : undefined
-        if (wireId !== undefined) {
-          if (seenInboundIds.has(wireId)) {
-            // Duplicate delivery of a successfully-decrypted frame: the receiver
-            // already accepted it, so acknowledge without re-decrypting.
-            sendAck(wireId)
-            return
-          }
-          if (inboundProcessing.has(wireId)) {
-            // A concurrent duplicate of a frame being decrypted is
-            // coalesced/ignored — the single in-flight decrypt will emit exactly
-            // one ACK on success and none on failure so replay stays possible.
-            return
-          }
-          inboundProcessing.add(wireId)
-        }
-        void decryptPayload(options.controlSecret, frame.payload)
-          .then((data) => {
-            // Mark seen and acknowledge only after decryption succeeds; remove
-            // the pending marker so a failed-decrypt frame can be replayed.
-            if (wireId !== undefined) {
-              seenInboundIds.add(wireId)
-              sendAck(wireId)
-              inboundProcessing.delete(wireId)
-            }
-            options.onEvent({ kind: 'message', data })
-          })
-          .catch((error: unknown) => {
-            if (wireId !== undefined) inboundProcessing.delete(wireId)
-            // The relay retains a frame until it receives the receiver ACK. If
-            // the socket drops after decryption but before that ACK reaches the
-            // service, the same authenticated ciphertext is replayed on the
-            // next connection. The session-security replay cache proves that
-            // this process already accepted it, so acknowledge the duplicate
-            // instead of treating it as a corrupt payload and killing the new
-            // socket.
-            if (
-              wireId !== undefined &&
-              error instanceof Error &&
-              error.message === 'replayed-encrypted-payload'
-            ) {
-              seenInboundIds.add(wireId)
-              sendAck(wireId)
-              return
-            }
-            if (closing || payloadAuthenticationFailed) return
-            payloadAuthenticationFailed = true
-            remoteLog.error('Cloud relay payload authentication failed; automatic reconnect paused')
-            socket?.close(PAYLOAD_AUTH_FAILURE_CLOSE_CODE, 'payload-authentication-failed')
-          })
-      }
+      if (typeof event.data === 'string') handleIncoming(event.data, 'relay')
     }
     socket.onclose = (event) => {
       if (timer !== null) window.clearTimeout(timer)
       const wasOpen = open
       open = false
+      rtc?.close()
+      rtc = null
       if (closing) return
       const reason = event.reason || `relay-closed-${event.code}`
       const controlKeyRotated = event.reason === 'control-key-rotated'
@@ -338,6 +405,8 @@ export function createAccountRelayClient(options: AccountRelayOptions): AccountR
       if (reconnectTimer !== null) window.clearTimeout(reconnectTimer)
       reconnectTimer = null
       open = false
+      rtc?.close()
+      rtc = null
       socket?.close()
       socket = null
     }

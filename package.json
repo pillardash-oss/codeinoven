@@ -57,7 +57,8 @@
     "better-sqlite3": "^13.0.3",
     "chokidar": "^5.0.0",
     "electron-updater": "^6.8.9",
-    "node-pty": "1.1.0"
+    "node-pty": "1.1.0",
+    "werift": "^0.24.4"
   },
   "devDependencies": {
     "@baybreezy/file-extension-icon": "^0.0.5",

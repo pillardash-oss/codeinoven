@@ -139,8 +139,17 @@ runtime override for development or self-hosting; it is not a production setup v
    its device token in the OS-backed `SecretVault`, and opens the desktop relay connection.
 5. A signed-in PWA selects an account-owned desktop and opens
    `/v1/relay?role=mobile&desktopId=<id>&mobileDeviceId=<id>` using its HttpOnly session cookie.
-6. The service authorizes the ownership relationship and forwards only opaque `relay:data`
-   envelopes. Desktop RPC remains encrypted by the desktop control secret.
+6. The service authorizes the ownership relationship and forwards opaque `relay:data`
+   envelopes while the phone proves its desktop-issued device credential.
+7. After device authentication, the existing socket exchanges a WebRTC offer and answer. ICE
+   prefers a direct UDP route, uses STUN for NAT traversal, and uses TURN when direct traversal
+   fails. Encrypted RPC frames move to the reliable ordered data channel when it opens; the
+   authenticated WebSocket remains available as signaling and automatic data fallback.
+
+Set `REMOTE_TURN_URLS` and `REMOTE_TURN_SHARED_SECRET` to the URLs and `use-auth-secret` value of
+your Coturn deployment. The service derives short-lived HMAC-SHA1 TURN REST credentials only for
+authenticated desktop and phone sockets. If TURN is not configured, direct/STUN WebRTC is still
+attempted and the existing cloud WebSocket relay remains the guaranteed route.
 
 The public relay is the guaranteed cross-platform route. When a desktop reports a LAN endpoint,
 the PWA also tries the authenticated LAN route; direct LAN requires the desktop certificate to be

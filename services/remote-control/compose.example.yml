@@ -8,6 +8,10 @@ services:
       NODE_ENV: production
       TRUST_PROXY: '1'
       CONVEX_SITE_URL: ${CONVEX_SITE_URL:?set CONVEX_SITE_URL}
+      REMOTE_STUN_URLS: ${REMOTE_STUN_URLS:-stun:stun.cloudflare.com:3478}
+      REMOTE_TURN_URLS: ${REMOTE_TURN_URLS:-}
+      REMOTE_TURN_SHARED_SECRET: ${REMOTE_TURN_SHARED_SECRET:-}
+      REMOTE_TURN_CREDENTIAL_TTL_SECONDS: ${REMOTE_TURN_CREDENTIAL_TTL_SECONDS:-3600}
     volumes:
       - remote-data:/data
     healthcheck:

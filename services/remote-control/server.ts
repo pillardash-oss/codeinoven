@@ -1,4 +1,5 @@
 import { serve, type Server, type ServerWebSocket } from 'bun'
+import { createHmac, randomBytes } from 'node:crypto'
 import { isIP } from 'node:net'
 import { EnrollmentClaimConflictError, RemoteControlDatabase } from './database'
 import { createEnrollmentCode, normalizeLabel, randomToken, tokenHash } from './security'
@@ -9,6 +10,10 @@ import {
   remoteBrowserOrigin,
   remoteDatabasePath,
   remotePublicOrigin,
+  remoteStunUrls,
+  remoteTurnCredentialTtlSeconds,
+  remoteTurnSharedSecret,
+  remoteTurnUrls,
   trustRemoteProxy
 } from './runtime-config'
 import type { AuthenticatedSession, EnrollmentRecord, RelaySocketData } from './types'
@@ -16,6 +21,7 @@ import type { AuthenticatedSession, EnrollmentRecord, RelaySocketData } from './
 const ENROLLMENT_TTL_MS = 10 * 60 * 1_000
 const MAX_JSON_BYTES = 16 * 1_024
 const MAX_RELAY_BYTES = 1024 * 1_024
+const MAX_SIGNAL_BYTES = 128 * 1_024
 const RATE_WINDOW_MS = 60_000
 const RATE_LIMIT = 120
 const SESSION_PERSIST_INTERVAL_MS = 5 * 60_000
@@ -210,6 +216,22 @@ function normalizeLanEndpoint(value: unknown): string | null {
 
 function validId(value: unknown): value is string {
   return typeof value === 'string' && value.length >= 16 && value.length <= 100
+}
+
+interface PublicIceServer {
+  urls: string | string[]
+  username?: string
+  credential?: string
+}
+
+function iceServers(subject: string): PublicIceServer[] {
+  const servers: PublicIceServer[] = [{ urls: remoteStunUrls }]
+  if (remoteTurnUrls.length === 0 || !remoteTurnSharedSecret) return servers
+  const expiresAt = Math.floor(Date.now() / 1_000) + remoteTurnCredentialTtlSeconds
+  const username = `${expiresAt}:${subject}:${randomBytes(8).toString('hex')}`
+  const credential = createHmac('sha1', remoteTurnSharedSecret).update(username).digest('base64')
+  servers.push({ urls: remoteTurnUrls, username, credential })
+  return servers
 }
 
 function normalizedPublicKey(value: unknown): string | null {
@@ -645,10 +667,60 @@ function relayMessage(socket: ServerWebSocket<RelaySocketData>, message: string 
     socket.data.userId = desktop.user_id
     database.touchDesktop(desktop.id)
     database.audit('relay.desktop-connected', desktop.user_id, desktop.id)
-    socket.send(JSON.stringify({ type: 'relay:authenticated', desktopId: desktop.id }))
+    socket.send(
+      JSON.stringify({
+        type: 'relay:authenticated',
+        desktopId: desktop.id,
+        iceServers: iceServers(desktop.id)
+      })
+    )
     relayHub
       .mobileSocket(desktop.id)
       ?.send(JSON.stringify({ type: 'relay:presence', online: true }))
+    return
+  }
+
+  if (record['type'] === 'relay:signal') {
+    const desktopId = socket.data.desktopId
+    const description = record['description']
+    if (
+      !desktopId ||
+      typeof description !== 'object' ||
+      description === null ||
+      Array.isArray(description) ||
+      Buffer.byteLength(text) > MAX_SIGNAL_BYTES
+    ) {
+      return
+    }
+    const descriptionRecord = description as Record<string, unknown>
+    const signalType = descriptionRecord['type']
+    const sdp = descriptionRecord['sdp']
+    if ((signalType !== 'offer' && signalType !== 'answer') || typeof sdp !== 'string') return
+    if (socket.data.role === 'mobile') {
+      const mobileDeviceId = socket.data.mobileDeviceId
+      if (!mobileDeviceId || signalType !== 'offer') return
+      relayHub.desktopSocket(desktopId)?.send(
+        JSON.stringify({
+          type: 'relay:signal',
+          mobileDeviceId,
+          description: { type: signalType, sdp }
+        })
+      )
+      return
+    }
+    const mobileDeviceId = record['mobileDeviceId']
+    const mobileSocket = relayHub.mobileSocket(desktopId) as
+      ServerWebSocket<RelaySocketData> | undefined
+    if (
+      signalType !== 'answer' ||
+      typeof mobileDeviceId !== 'string' ||
+      mobileSocket?.data.mobileDeviceId !== mobileDeviceId
+    ) {
+      return
+    }
+    mobileSocket.send(
+      JSON.stringify({ type: 'relay:signal', description: { type: signalType, sdp } })
+    )
     return
   }
 
@@ -714,7 +786,8 @@ const server: Server<RelaySocketData> = serve<RelaySocketData>({
           JSON.stringify({
             type: 'relay:authenticated',
             desktopId: socket.data.desktopId,
-            online: relayHub.desktopOnline(socket.data.desktopId)
+            online: relayHub.desktopOnline(socket.data.desktopId),
+            iceServers: iceServers(socket.data.mobileDeviceId ?? socket.data.desktopId)
           })
         )
         // The hub delivers any replayed buffered frames itself (single path).
