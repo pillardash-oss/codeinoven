@@ -244,6 +244,9 @@ jobs:
       - name: Install locked dependencies
         run: bun install --frozen-lockfile
 
+      - name: Patch binary-data bare specifiers
+        run: bun scripts/patch-binary-data.ts
+
       - name: Production build and bundle budgets
         run: |
           bun run build:production
