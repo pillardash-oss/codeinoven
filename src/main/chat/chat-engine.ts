@@ -69,6 +69,7 @@ import { instanceRegistry } from '../system/instance-registry'
 import { SecretVault } from '../storage/secret-vault'
 import { UtilityRuntimeService } from '../utilities/utility-runtime-service'
 import { UtilityRegistryService } from '../utilities/utility-registry-service'
+import { CIO_UTILITY_SETUP_PROMPT, isCioUtilityRequest } from '../utilities/cio-utility-prompt'
 import { CapabilityDiscoveryService } from '../agents/capability-discovery-service'
 import { BaseUrlProviderService } from '../providers/base-url-provider-service'
 import { AgentProcessService } from '../agents/agent-process-service'
@@ -2427,7 +2428,8 @@ export class ChatEngine {
     settings: ThreadSettings,
     budgetContext: UtilityTurnBudgetContext,
     skipRuntime = false,
-    directGateway = false
+    directGateway = false,
+    allowManagement = false
   ): Promise<string> {
     // A new agent turn begins here — re-enable a user-dismissed PiP so it may
     // show again if CUA is used, and cancel any auto-dismiss from the last turn.
@@ -2455,6 +2457,7 @@ export class ChatEngine {
         projectPath,
         nativeCapabilities,
         permissionLevel: settings.permissionLevel,
+        allowManagement,
         budgetContext,
         attributeReinjectedResult: (attribution) =>
           this.recordReinjectedUtilityResult(threadId, settings, budgetContext, attribution)
@@ -2469,7 +2472,13 @@ export class ChatEngine {
       )
       if (directGateway) {
         this.utilityTurns.set(sessionId, { driver, projectPath, gateway, threadId })
-        return [gateway.directInstructions, ...skillInstructions].filter(Boolean).join('\n\n')
+        return [
+          gateway.directInstructions,
+          allowManagement ? CIO_UTILITY_SETUP_PROMPT : '',
+          ...skillInstructions
+        ]
+          .filter(Boolean)
+          .join('\n\n')
       }
       const request = {
         projectPath,
@@ -2483,7 +2492,9 @@ export class ChatEngine {
         await applyRuntime(projectPath, null, sessionId)
         await gateway.cleanup()
         gateway = undefined
-        return skillInstructions.join('\n\n')
+        return [allowManagement ? CIO_UTILITY_SETUP_PROMPT : '', ...skillInstructions]
+          .filter(Boolean)
+          .join('\n\n')
       }
       const environment = { ...(overlay.env ?? {}) }
       for (const { utility } of resolvedUtilities) {
@@ -2510,7 +2521,13 @@ export class ChatEngine {
         gateway,
         threadId
       })
-      return [gateway.instructions, ...skillInstructions].filter(Boolean).join('\n\n')
+      return [
+        gateway.instructions,
+        allowManagement ? CIO_UTILITY_SETUP_PROMPT : '',
+        ...skillInstructions
+      ]
+        .filter(Boolean)
+        .join('\n\n')
     } catch (error) {
       const cleanups: Array<Promise<unknown>> = []
       if (gateway) cleanups.push(gateway.cleanup())
@@ -5092,6 +5109,7 @@ export class ChatEngine {
       composedTurnTokens: earlyLayers.totalTokens,
       parentTurnId: messageId
     }
+    const utilitySetupRequested = origin === 'user' && isCioUtilityRequest(text)
     const utilityInstructionsPromise = this.prepareTurnUtilities(
       driver,
       projectId,
@@ -5101,11 +5119,12 @@ export class ChatEngine {
       settings,
       utilityBudgetContext,
       // Web-only chat deliberately has no app gateway.
-      isChatThread && !chatFileSystemEnabled,
+      isChatThread && !chatFileSystemEnabled && !utilitySetupRequested,
       // OpenCode sessions use the shared project server. The app gateway is
       // session-scoped by its capability token, so utilities do not justify a
       // second `opencode serve` process or listening port for any normal turn.
-      driver instanceof OpenCodeDriver || ['codex', 'cline', 'pi'].includes(driver.id)
+      driver instanceof OpenCodeDriver || ['codex', 'cline', 'pi'].includes(driver.id),
+      utilitySetupRequested
     )
     const transportPromise = utilityInstructionsPromise.then(() =>
       driver.preparePromptTransport?.(projectPath, sessionId, settings)
@@ -5398,17 +5417,27 @@ export class ChatEngine {
             historyRecap
           }) || undefined,
         allowedTools:
-          isChatThread && !chatFileSystemEnabled && settings.providerId && settings.modelId
+          isChatThread &&
+          !chatFileSystemEnabled &&
+          !utilitySetupRequested &&
+          settings.providerId &&
+          settings.modelId
             ? CHAT_WEB_ONLY_TOOLS
             : undefined,
-        agent: isChatThread
-          ? leanAgentNameForMode(chatFileSystemEnabled ? 'file-system-chat' : 'inbox-chat')
-          : undefined,
+        agent: utilitySetupRequested
+          ? leanAgentNameForMode('utility-setup')
+          : isChatThread
+            ? leanAgentNameForMode(chatFileSystemEnabled ? 'file-system-chat' : 'inbox-chat')
+            : undefined,
         userMessageId: messageId
       })
-      if (isChatThread) {
+      if (utilitySetupRequested || isChatThread) {
         traceLeanAgent(
-          chatFileSystemEnabled ? 'file-system-chat' : 'inbox-chat',
+          utilitySetupRequested
+            ? 'utility-setup'
+            : chatFileSystemEnabled
+              ? 'file-system-chat'
+              : 'inbox-chat',
           sessionId,
           driverId
         )
@@ -5666,7 +5695,8 @@ export class ChatEngine {
     virtualTaskId: string,
     settings: ThreadSettings,
     title: string,
-    text: string
+    text: string,
+    options: { utilityManagement?: boolean } = {}
   ): Promise<AgentMessage> {
     projectId = validateEntityId(projectId, 'Project ID')
     virtualTaskId = validateEntityId(virtualTaskId, 'Virtual task ID')
@@ -5702,13 +5732,32 @@ export class ChatEngine {
     const completion = this.waitForSessionCompletion(sessionId, 180_000, title)
 
     try {
+      const utilityInstructions = options.utilityManagement
+        ? await this.prepareTurnUtilities(
+            driver,
+            projectId,
+            virtualTaskId,
+            sessionId,
+            projectPath,
+            settings,
+            {
+              selectedModelInputTokens: 200_000,
+              composedTurnTokens: 0,
+              parentTurnId: turnId
+            },
+            false,
+            true,
+            true
+          )
+        : ''
       const request: SendPromptOptions = {
         sessionId,
         settings,
         text,
         attachments: [],
+        systemPrompt: utilityInstructions || undefined,
         readOnly: false,
-        agent: leanAgentNameForMode('pr-compose'),
+        agent: leanAgentNameForMode(options.utilityManagement ? 'utility-setup' : 'pr-compose'),
         userMessageId: turnId
       }
       traceLeanAgent('pr-compose', sessionId, driverId)

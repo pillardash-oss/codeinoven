@@ -5,6 +5,7 @@ import { existsSync, readFileSync } from 'node:fs'
 import { lstat, readFile, writeFile, mkdir, rename, rm, stat } from 'fs/promises'
 import { release } from 'os'
 import { randomUUID } from 'node:crypto'
+import { spawn } from 'node:child_process'
 import { basename, dirname, extname, isAbsolute, join, resolve } from 'path'
 import { APP_NAME, APP_SLUG } from '../../lib/brand'
 import { modelKey } from '../../lib/model-keys'
@@ -15,6 +16,7 @@ import { EditorService } from '../editor/editor-service'
 import { RepositoryService } from '../git/repository-service'
 import { GitService } from '../git/git-service'
 import { SecretVault } from '../storage/secret-vault'
+import { UtilityRegistryService } from '../utilities/utility-registry-service'
 import { GitHubAuthService } from '../git/github-auth-service'
 import { GitHubProvider, ProviderHttpError } from '../providers/github-provider'
 import { isDevelopmentEnvironment, validateBaseUrl } from '../providers/base-url'
@@ -34,6 +36,7 @@ import {
   validateMemoryExportKind
 } from '../chat/memory-service'
 import type { HarnessManifestService } from '../agents/harness-manifest-service'
+import { listHarnesses } from '../agents/harness-registry'
 import { SpecContextService } from '../chat/spec-context-service'
 import type { UpdaterService } from '../notifications/updater-service'
 import type { ChatEngine } from '../chat/chat-engine'
@@ -210,6 +213,33 @@ function githubPermissionRequired(
       'Install the GitHub App on this repository or approve its pending permission update.',
     settingsUrl: GITHUB_APP_INSTALL_URL
   }
+}
+
+/** Run the industry-standard Skills CLI through Bun without a shell. */
+function installSkillWithBun(args: string[], cwd: string): Promise<string> {
+  return new Promise((resolveInstall, rejectInstall) => {
+    const child = spawn('bun', ['x', '--bun', 'skills', ...args], {
+      cwd,
+      env: { ...process.env, DISABLE_TELEMETRY: '1', DO_NOT_TRACK: '1' },
+      stdio: ['ignore', 'pipe', 'pipe']
+    })
+    let output = ''
+    const append = (chunk: Buffer): void => {
+      output = `${output}${chunk.toString('utf-8')}`.slice(-200_000)
+    }
+    child.stdout.on('data', append)
+    child.stderr.on('data', append)
+    const timeout = setTimeout(() => child.kill('SIGTERM'), 180_000)
+    child.once('error', (error) => {
+      clearTimeout(timeout)
+      rejectInstall(error)
+    })
+    child.once('close', (code) => {
+      clearTimeout(timeout)
+      if (code === 0) resolveInstall(output.trim())
+      else rejectInstall(new Error(output.trim() || `Skills CLI exited with code ${code ?? -1}`))
+    })
+  })
 }
 
 /** Resolve the native drag icon. Prefer the dragged file's own Finder icon so
@@ -4689,6 +4719,124 @@ export function registerIpcHandlers(
         Logger.dev('PR compose workspace cleanup was incomplete:', error)
       )
     }
+  })
+
+  ipcMain.handle('utilities:setupWithAgent', async (_, ...args: unknown[]) => {
+    if (!chatEngine?.runVirtualTask) throw new Error('The utility setup agent is unavailable')
+    const projectId = validateEntityId(args[0], 'Project ID')
+    const taskId = validateEntityId(args[1], 'Virtual task ID')
+    const settings = validateThreadSettings({
+      ...validateThreadSettings(args[2]),
+      permissionLevel: 'auto_review',
+      engineeringMode: false,
+      assignmentMode: false,
+      loopMode: false
+    })
+    const request = validateBoundedString(args[3], 'Utility setup request', 1, 100_000)
+    await resolveProjectPath(projectId)
+    const registry = new UtilityRegistryService(storage)
+    const beforeIds = new Set((await registry.list()).map((utility) => utility.id))
+    const response = await chatEngine.runVirtualTask(
+      projectId,
+      taskId,
+      settings,
+      'Set up utility',
+      request,
+      { utilityManagement: true }
+    )
+    const installed = (await registry.list()).filter((utility) => !beforeIds.has(utility.id))
+    const summary = response.parts
+      .flatMap((part) => (part.type === 'text' && part.phase !== 'commentary' ? [part.text] : []))
+      .join('\n\n')
+      .trim()
+    if (installed.length === 0) {
+      throw new Error(summary || 'The setup agent did not install a utility')
+    }
+    return { taskId, summary, installed }
+  })
+
+  ipcMain.handle('utilities:searchSkillMarket', async (_, rawQuery: unknown) => {
+    const query = validateBoundedString(rawQuery, 'Skill search query', 2, 200)
+    const url = new URL('https://www.skills.sh/api/search')
+    url.searchParams.set('q', query)
+    url.searchParams.set('limit', '50')
+    const response = await fetch(url, {
+      headers: { Accept: 'application/json', 'User-Agent': `${APP_NAME}/desktop` },
+      signal: AbortSignal.timeout(20_000)
+    })
+    if (!response.ok) throw new Error(`Skills market search failed (${response.status})`)
+    const payload: unknown = await response.json()
+    if (!isRecord(payload) || !Array.isArray(payload['skills'])) {
+      throw new Error('Skills market returned an invalid response')
+    }
+    const entries = payload['skills'].flatMap((rawEntry) => {
+      if (!isRecord(rawEntry)) return []
+      const id = rawEntry['id']
+      const skillId = rawEntry['skillId']
+      const name = rawEntry['name']
+      const source = rawEntry['source']
+      const installs = rawEntry['installs']
+      if (
+        typeof id !== 'string' ||
+        typeof skillId !== 'string' ||
+        typeof name !== 'string' ||
+        typeof source !== 'string' ||
+        typeof installs !== 'number'
+      ) {
+        return []
+      }
+      return [
+        {
+          id,
+          skillId,
+          name,
+          source,
+          installs,
+          url: `https://www.skills.sh/${id}`
+        }
+      ]
+    })
+    return { query, entries }
+  })
+
+  ipcMain.handle('utilities:installMarketSkill', async (_, rawRequest: unknown) => {
+    if (!isRecord(rawRequest)) throw new TypeError('Skill install request must be an object')
+    const source = validateBoundedString(rawRequest['source'], 'Skill source', 3, 300)
+    const skillId = validateEntityId(rawRequest['skillId'], 'Skill ID', 200)
+    const githubSource = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/u.test(source)
+    const wellKnownSource = /^(?:[A-Za-z0-9-]+\.)+[A-Za-z]{2,}$/u.test(source)
+    if (!githubSource && !wellKnownSource) throw new TypeError('Skill source is invalid')
+    const installSource = githubSource ? `https://github.com/${source}` : `https://${source}`
+    if (rawRequest['scope'] !== 'global' && rawRequest['scope'] !== 'project') {
+      throw new TypeError('Skill install scope must be global or project')
+    }
+    const projectId = validateEntityId(rawRequest['projectId'], 'Project ID')
+    const projectPath = await resolveProjectPath(projectId)
+    const harnessIds = rawRequest['harnessIds']
+    const knownHarnesses = new Set(listHarnesses().map((harness) => harness.id))
+    const safeHarnessIds = Array.isArray(harnessIds)
+      ? harnessIds.filter((id): id is string => typeof id === 'string')
+      : []
+    if (
+      !Array.isArray(harnessIds) ||
+      harnessIds.length === 0 ||
+      harnessIds.length > 20 ||
+      safeHarnessIds.length !== harnessIds.length ||
+      safeHarnessIds.some((id) => !knownHarnesses.has(id))
+    ) {
+      throw new TypeError('Select at least one supported harness')
+    }
+    const args = [
+      'add',
+      installSource,
+      '--skill',
+      skillId,
+      '--agent',
+      ...safeHarnessIds,
+      '-y',
+      ...(rawRequest['scope'] === 'global' ? ['--global'] : [])
+    ]
+    return installSkillWithBun(args, projectPath)
   })
 
   ipcMain.handle('github:authStatus', () => githubAuthService.status())

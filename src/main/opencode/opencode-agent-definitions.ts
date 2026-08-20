@@ -32,6 +32,7 @@ export type LeanAgentMode =
   | 'ephemeral'
   | 'image-description'
   | 'pr-compose'
+  | 'utility-setup'
   | 'brainstorm'
 
 const DENY: PermissionAction = 'deny'
@@ -91,6 +92,12 @@ const prComposePermission: Record<string, AgentPermissionValue> = {
   list: ALLOW,
   bash: { '*': DENY, 'git *': ALLOW },
   edit: { '*': DENY, '.cio/git/compose/**': ALLOW }
+}
+
+/** Explicit utility setup: research plus the turn-scoped loopback API, no file writes. */
+const utilitySetupPermission: Record<string, AgentPermissionValue> = {
+  ...readResearchPermission,
+  bash: { '*': DENY, 'curl *': ALLOW }
 }
 
 /** Brainstorm: read research + web + questions, write scoped to feature versions dir. */
@@ -168,6 +175,16 @@ const leanAgents: readonly LeanOpenCodeAgent[] = [
     permission: prComposePermission
   },
   {
+    name: 'cio-utility-setup',
+    description: 'Installs validated utilities through the explicit CodeInOven setup API.',
+    mode: 'primary',
+    prompt: [
+      'Use the turn-scoped CodeInOven utility management API supplied in the system prompt.',
+      'Do not write project or harness configuration files directly.'
+    ].join(' '),
+    permission: utilitySetupPermission
+  },
+  {
     name: 'cio-brainstorm',
     description: `Evidence-driven brainstorm session reporter for ${APP_NAME}.`,
     mode: 'primary',
@@ -185,7 +202,9 @@ const leanAgents: readonly LeanOpenCodeAgent[] = [
 export const LEAN_AGENTS: readonly LeanOpenCodeAgent[] = leanAgents
 export const LEAN_AGENT_NAMES: Array<string> = leanAgents.map((agent) => agent.name)
 
-const agentByName = new Map<string, LeanOpenCodeAgent>(leanAgents.map((agent) => [agent.name, agent]))
+const agentByName = new Map<string, LeanOpenCodeAgent>(
+  leanAgents.map((agent) => [agent.name, agent])
+)
 
 /** Look up a lean agent definition by its opencode agent name. */
 export function leanAgentDefinition(name: string): LeanOpenCodeAgent | undefined {
@@ -198,6 +217,7 @@ const modeToAgentName: Record<LeanAgentMode, string> = {
   ephemeral: 'cio-eph',
   'image-description': 'cio-img-desc',
   'pr-compose': 'cio-pr-compose',
+  'utility-setup': 'cio-utility-setup',
   brainstorm: 'cio-brainstorm'
 }
 

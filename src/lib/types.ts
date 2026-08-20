@@ -1198,6 +1198,36 @@ export interface UtilityCatalog {
   secureStorageAvailable: boolean
 }
 
+/** Result of an explicit utility-setup turn run in a disposable agent session. */
+export interface UtilitySetupReport {
+  taskId: string
+  summary: string
+  installed: UtilityDefinition[]
+}
+
+/** Public skills.sh search result displayed in the Utilities marketplace. */
+export interface SkillMarketEntry {
+  id: string
+  skillId: string
+  name: string
+  source: string
+  installs: number
+  url: string
+}
+
+export interface SkillMarketSearchResult {
+  query: string
+  entries: SkillMarketEntry[]
+}
+
+export interface SkillMarketInstallRequest {
+  source: string
+  skillId: string
+  scope: 'global' | 'project'
+  projectId: string
+  harnessIds: string[]
+}
+
 // ─── Harness-native capability discovery ───────────────────────────────────
 
 /** Where a discovered MCP server or skill came from. */

@@ -4,6 +4,7 @@ import type {
   HarnessUtilityBinding,
   ResolvedUtility,
   UtilityDefinition,
+  UtilityDefinitionInput,
   UtilityDefinitionFor,
   UtilityKind,
   PermissionLevel
@@ -18,7 +19,8 @@ import {
   RETRIEVE_MCP_HOST_TOOL_NAME,
   UTILITY_SEARCH_TOOL_NAME,
   UTILITY_ACTIVATE_TOOL_NAME,
-  UTILITY_INVOKE_TOOL_NAME
+  UTILITY_INVOKE_TOOL_NAME,
+  UTILITY_MANAGE_TOOL_NAME
 } from '../../lib/gateway-tools'
 import {
   StdioMcpClient,
@@ -76,6 +78,8 @@ export interface UtilityTurnRequest {
   sessionId: string
   nativeCapabilities: string[]
   permissionLevel: PermissionLevel
+  /** Explicit user intent grants the setup-only utility management operation. */
+  allowManagement?: boolean
   budgetContext: UtilityTurnBudgetContext
   attributeReinjectedResult: (attribution: UtilityResultAttribution) => void
 }
@@ -187,6 +191,8 @@ interface TurnState {
   searched: boolean
   /** Session ids created for Cua utilities so cursor state is turn-scoped. */
   cuaSessionIds: Map<string, string>
+  /** Utilities created through the explicit setup-only management capability. */
+  managedUtilities: UtilityDefinition[]
 }
 
 /** Bridge handler for one gateway route: receives state plus the parsed body. */
@@ -244,6 +250,8 @@ export class UtilityOrchestrationService {
         return (state, input) => this.activate(state, input)
       case UTILITY_INVOKE_TOOL_NAME:
         return (state, input) => this.invoke(state, input)
+      case UTILITY_MANAGE_TOOL_NAME:
+        return (state, input) => this.manage(state, input)
       default:
         return null
     }
@@ -294,7 +302,11 @@ export class UtilityOrchestrationService {
       ({ utility }) => utility.activation === 'always' && utility.kind !== 'mcp'
     )
     const hasOnDemand = eligible.some(({ utility }) => utility.activation === 'on_demand')
-    const gatewayTools = hasOnDemand ? GATEWAY_TOOLS : []
+    const gatewayTools = GATEWAY_TOOLS.filter(
+      ({ name }) =>
+        (name !== UTILITY_MANAGE_TOOL_NAME && hasOnDemand) ||
+        (name === UTILITY_MANAGE_TOOL_NAME && request.allowManagement === true)
+    )
     if (gatewayTools.length === 0) {
       return {
         id,
@@ -312,7 +324,8 @@ export class UtilityOrchestrationService {
       clients: new Map(),
       attributionSequence: 0,
       searched: false,
-      cuaSessionIds: new Map()
+      cuaSessionIds: new Map(),
+      managedUtilities: []
     }
     const bridgeUrl = await this.ensureGatewayServer()
     const token = randomBytes(32).toString('hex')
@@ -348,6 +361,11 @@ export class UtilityOrchestrationService {
         'Search when you need to discover a capability: POST /search with {"query":"capability","kinds":["mcp","skill","computer_use","image_descriptor"]}; the response includes a `notFound` boolean indicating no eligible match.',
         'Activate: POST /activate with {"utility_id":"id-from-search"}; if you already know an eligible utility id, activate it directly without searching first.',
         'Invoke: POST /invoke with {"utility_id":"id","operation":"tool-or-operation","input":{}}.',
+        ...(request.allowManagement
+          ? [
+              'Install a validated utility bundle: POST /manage with {"action":"install_bundle","bundle":{"name":"...","utilities":[{"definition":{...}}]}}. Never include credential or secret values; the user adds those through Utilities.'
+            ]
+          : []),
         'Describe images: search for the image descriptor utility with {"query":"describe image","kinds":["image_descriptor"]}, activate its id, then POST /invoke with {"utility_id":"id","operation":"describe","input":{"images":[{"id":"image-1","source":"path-or-url","type":"path"}]}}.',
         'Treat these endpoints exactly like utility_search, utility_activate, and utility_invoke tool calls.'
       ].join('\n'),
@@ -377,6 +395,54 @@ export class UtilityOrchestrationService {
       state !== undefined &&
       [...state.activated.values()].some(({ utility }) => utility.activation === 'on_demand')
     )
+  }
+
+  /** Snapshot of utilities installed by an explicit setup turn. */
+  managedUtilities(gatewayId: string): UtilityDefinition[] {
+    return structuredClone(this.turns.get(gatewayId)?.state.managedUtilities ?? [])
+  }
+
+  private async manage(state: TurnState, input: Record<string, unknown>): Promise<unknown> {
+    if (state.request.allowManagement !== true) {
+      throw new Error('Utility management is not enabled for this turn')
+    }
+    if (input['action'] !== 'install_bundle') {
+      throw new TypeError('Utility management action is invalid')
+    }
+    const bundle = recordValue(input['bundle'])
+    requiredString(bundle['name'], 'Utility bundle name', 120)
+    const entries = bundle['utilities']
+    if (!Array.isArray(entries) || entries.length === 0 || entries.length > 20) {
+      throw new TypeError('Utility bundle must contain between 1 and 20 utilities')
+    }
+    const definitions = entries.map((rawEntry, index) => {
+      const entry = recordValue(rawEntry)
+      if (entry['credentials'] !== undefined) {
+        throw new TypeError(`Utility bundle entry ${index} cannot contain credentials`)
+      }
+      const definition = recordValue(entry['definition'])
+      if (definition['kind'] !== 'skill' && definition['kind'] !== 'mcp') {
+        throw new TypeError(`Utility bundle entry ${index} must be a skill or MCP server`)
+      }
+      const credentials = definition['credentials']
+      if (credentials !== undefined && (!Array.isArray(credentials) || credentials.length > 0)) {
+        throw new TypeError(`Utility bundle entry ${index} cannot contain credentials`)
+      }
+      return { ...definition, credentials: [] } as unknown as UtilityDefinitionInput
+    })
+    const installed = await this.registry.createMany(definitions)
+    state.managedUtilities.push(...installed)
+    await this.audit(state, 'utility.managed', {
+      action: 'install_bundle',
+      utilityIds: installed.map((utility) => utility.id)
+    })
+    return {
+      installed: installed.map((utility) => ({
+        id: utility.id,
+        kind: utility.kind,
+        name: utility.name
+      }))
+    }
   }
 
   private async cleanupTurn(id: string): Promise<void> {

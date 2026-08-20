@@ -140,9 +140,12 @@ import type {
   UtilityDefinition,
   UtilityDefinitionInput,
   UtilityDefinitionPatch,
+  UtilitySetupReport,
   UtilityResolutionContext,
   UtilitySearchOptions,
   ResolvedUtility,
+  SkillMarketInstallRequest,
+  SkillMarketSearchResult,
   CuaBridgeStatus,
   ComputerUsePipFrame,
   ComputerUsePipState
@@ -1298,6 +1301,12 @@ export interface IpcInvokeContract {
   'utilities:get': Contract<[id: string], UtilityDefinition | null>
   'utilities:create': Contract<[input: UtilityDefinitionInput], UtilityDefinition>
   'utilities:installBundle': Contract<[request: UtilityBundleInstallRequest], UtilityDefinition[]>
+  'utilities:setupWithAgent': Contract<
+    [projectId: string, taskId: string, settings: ThreadSettings, request: string],
+    UtilitySetupReport
+  >
+  'utilities:searchSkillMarket': Contract<[query: string], SkillMarketSearchResult>
+  'utilities:installMarketSkill': Contract<[request: SkillMarketInstallRequest], string>
   'utilities:update': Contract<[id: string, patch: UtilityDefinitionPatch], UtilityDefinition>
   'utilities:delete': Contract<[id: string], boolean>
   'utilities:setCredential': Contract<

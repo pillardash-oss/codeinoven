@@ -22,6 +22,7 @@ const DOCUMENTED_ALLOW: Record<LeanAgentMode, string[]> = {
   ephemeral: ['read', 'glob', 'grep', 'list', 'webfetch', 'websearch', 'question'],
   'image-description': ['read'],
   'pr-compose': ['read', 'glob', 'grep', 'list'],
+  'utility-setup': ['read', 'glob', 'grep', 'list', 'webfetch', 'websearch', 'question'],
   brainstorm: ['read', 'glob', 'grep', 'list', 'webfetch', 'websearch', 'question']
 }
 
@@ -33,7 +34,8 @@ const DOCUMENTED_EDIT_SCOPE: Partial<Record<LeanAgentMode, string>> = {
 
 /** Read-only git allowance for the PR compose agent. */
 const DOCUMENTED_BASH_SCOPE: Partial<Record<LeanAgentMode, string>> = {
-  'pr-compose': 'git *'
+  'pr-compose': 'git *',
+  'utility-setup': 'curl *'
 }
 
 const HEAVY_KEYS = [
@@ -65,6 +67,7 @@ describe('lean agent definitions', () => {
       'cio-eph',
       'cio-img-desc',
       'cio-pr-compose',
+      'cio-utility-setup',
       'cio-brainstorm'
     ])
     expect(new Set(LEAN_AGENT_NAMES).size).toBe(LEAN_AGENTS.length)
@@ -75,40 +78,41 @@ describe('lean agent definitions', () => {
     }
   })
 
-  it.each(
-    Object.entries(DOCUMENTED_ALLOW) as Array<[LeanAgentMode, string[]]>
-  )('pins the deny matrix for %s', (mode, documentedAllowed) => {
-    const name = agentName(mode)
-    const agent = leanAgentDefinition(name)
-    if (!agent) throw new Error(`missing agent ${name}`)
-    expect(agent.mode).toBe('primary')
-    // Every heavy permission key is set explicitly so the harness never falls
-    // through to global-config allowances for an unlisted tool.
-    for (const key of HEAVY_KEYS) {
-      expect(agent.permission[key], `${name}.${key}`).toBeDefined()
-    }
-    // Allowed keys resolve to 'allow' (shorthand) for exactly the documented
-    // set; everything else must be denied.
-    for (const key of HEAVY_KEYS) {
-      const value = agent.permission[key]
-      if (typeof value === 'string') {
-        if (documentedAllowed.includes(key)) expect(value).toBe('allow')
-        else expect(value).toBe('deny')
+  it.each(Object.entries(DOCUMENTED_ALLOW) as Array<[LeanAgentMode, string[]]>)(
+    'pins the deny matrix for %s',
+    (mode, documentedAllowed) => {
+      const name = agentName(mode)
+      const agent = leanAgentDefinition(name)
+      if (!agent) throw new Error(`missing agent ${name}`)
+      expect(agent.mode).toBe('primary')
+      // Every heavy permission key is set explicitly so the harness never falls
+      // through to global-config allowances for an unlisted tool.
+      for (const key of HEAVY_KEYS) {
+        expect(agent.permission[key], `${name}.${key}`).toBeDefined()
       }
+      // Allowed keys resolve to 'allow' (shorthand) for exactly the documented
+      // set; everything else must be denied.
+      for (const key of HEAVY_KEYS) {
+        const value = agent.permission[key]
+        if (typeof value === 'string') {
+          if (documentedAllowed.includes(key)) expect(value).toBe('allow')
+          else expect(value).toBe('deny')
+        }
+      }
+      // Object-shaped scoped permissions are pinned per mode.
+      const editScope = DOCUMENTED_EDIT_SCOPE[mode]
+      if (editScope !== undefined) {
+        expect(agent.permission['edit']).toMatchObject({ '*': 'deny', [editScope]: 'allow' })
+      }
+      const bashScope = DOCUMENTED_BASH_SCOPE[mode]
+      if (bashScope !== undefined) {
+        expect(agent.permission['bash']).toMatchObject({ '*': 'deny', [bashScope]: 'allow' })
+      }
+      // Nothing beyond the documented allow list leaks through as 'allow'.
+      const allowedKeys = HEAVY_KEYS.filter((key) => agent.permission[key] === 'allow')
+      expect([...allowedKeys].sort()).toEqual([...documentedAllowed].sort())
     }
-    // Object-shaped scoped permissions are pinned per mode.
-    const editScope = DOCUMENTED_EDIT_SCOPE[mode]
-    if (editScope !== undefined) {
-      expect(agent.permission['edit']).toMatchObject({ '*': 'deny', [editScope]: 'allow' })
-    }
-    const bashScope = DOCUMENTED_BASH_SCOPE[mode]
-    if (bashScope !== undefined) {
-      expect(agent.permission['bash']).toMatchObject({ '*': 'deny', [bashScope]: 'allow' })
-    }
-    // Nothing beyond the documented allow list leaks through as 'allow'.
-    const allowedKeys = HEAVY_KEYS.filter((key) => agent.permission[key] === 'allow')
-    expect([...allowedKeys].sort()).toEqual([...documentedAllowed].sort())
-  })
+  )
 
   it('maps every trimmed mode to exactly one lean agent', () => {
     const expected: Record<LeanAgentMode, string> = {
@@ -117,6 +121,7 @@ describe('lean agent definitions', () => {
       ephemeral: 'cio-eph',
       'image-description': 'cio-img-desc',
       'pr-compose': 'cio-pr-compose',
+      'utility-setup': 'cio-utility-setup',
       brainstorm: 'cio-brainstorm'
     }
     for (const [mode, name] of Object.entries(expected) as Array<[LeanAgentMode, string]>) {
@@ -130,9 +135,7 @@ describe('lean agent definitions', () => {
       for (const key of HEAVY_KEYS) {
         const value = agent.permission[key]
         if (typeof value === 'string' && value === 'allow') {
-          const inAnyMode = Object.values(DOCUMENTED_ALLOW).some((allowed) =>
-            allowed.includes(key)
-          )
+          const inAnyMode = Object.values(DOCUMENTED_ALLOW).some((allowed) => allowed.includes(key))
           expect(inAnyMode, `${agent.name} allows ${key}`).toBe(true)
         }
       }

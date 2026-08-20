@@ -1,6 +1,15 @@
 <script lang="ts">
   import { onMount } from 'svelte'
-  import { Boxes, ChevronLeft, Loader2, Server, Trash2, Upload, BookOpen } from '@lucide/svelte'
+  import {
+    Boxes,
+    ChevronLeft,
+    Loader2,
+    Server,
+    Sparkles,
+    Trash2,
+    Upload,
+    BookOpen
+  } from '@lucide/svelte'
   import AgentIcon from '$lib/agent-icons/AgentIcon.svelte'
   import { invoke } from '$lib/ipc.svelte'
   import { getProjectIcon, loadProjectIcons } from '$lib/project-icons'
@@ -10,6 +19,7 @@
   import type { ScopeProject } from '$lib/stores/scope.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
   import ProjectSelect from '../shared/ProjectSelect.svelte'
+  import ModelPicker from '../shared/ModelPicker.svelte'
   import RichMarkdownEditor from '../shared/RichMarkdownEditor.svelte'
   import ThreadSelect from '../shared/ThreadSelect.svelte'
   import Modal from '../ui/Modal.svelte'
@@ -20,6 +30,7 @@
     NativeMcpContent,
     Project,
     Thread,
+    ThreadSettings,
     UtilityActivation,
     UtilityConfigMap,
     UtilityCredentialInput,
@@ -28,6 +39,7 @@
     UtilityDefinitionInput,
     UtilityDefinitionPatch,
     UtilityKind,
+    UtilitySetupReport,
     UtilityScope,
     WebToolProviderId
   } from '$shared/types'
@@ -141,6 +153,15 @@ Write the skill…`
   let secureStorageAvailable = $state(true)
   let loadingNative = $state(false)
   let utilities = $state<UtilityDefinition[]>([])
+  let agentRequest = $state('')
+  let agentReport = $state<UtilitySetupReport | null>(null)
+  let agentProjectId = $state('')
+  let agentSettings = $state<ThreadSettings | null>(null)
+  let agentProviders = $derived(
+    agentProjectId
+      ? (providerCatalog.cached(agentProjectId) ?? providerCatalog.allCached())
+      : providerCatalog.allCached()
+  )
 
   /** How long the editor's project/thread/icon context stays reusable across opens. */
   const EDITOR_CONTEXT_TTL_MS = 15_000
@@ -617,6 +638,10 @@ ${instructions}`
       resetCredential()
       setupPreset = null
       pluginManifest = ''
+      agentRequest = ''
+      agentReport = null
+      agentProjectId = ''
+      agentSettings = null
       editorError = ''
       if (target.utility) openRegistryEdit(target.utility)
     } else if (target?.kind === 'native') {
@@ -783,6 +808,74 @@ ${instructions}`
       saving = false
     }
   }
+
+  function setupAgentThread(): Thread | null {
+    const selected = workspaceState.selectedThread
+    if (selected?.settings && projects.some((project) => project.id === selected.projectId)) {
+      return selected
+    }
+    return (
+      threads
+        .filter(
+          (thread) => thread.settings && projects.some((project) => project.id === thread.projectId)
+        )
+        .sort((left, right) => right.lastActivity - left.lastActivity)[0] ?? null
+    )
+  }
+
+  function beginAgentSetup(): void {
+    const thread = setupAgentThread()
+    setupPreset = 'agent'
+    editorError = ''
+    agentProjectId = thread?.projectId ?? ''
+    agentSettings = thread?.settings ? { ...thread.settings } : null
+    if (!agentSettings) {
+      editorError = 'Open a project thread and choose an agent model before starting agent setup.'
+    }
+  }
+
+  function selectAgentModel(providerId: string, modelId: string, harnessId: string): void {
+    if (!agentSettings) return
+    agentSettings = { ...agentSettings, harnessId, providerId, modelId }
+  }
+
+  function selectAgentThinking(thinkingLevel: ThreadSettings['thinkingLevel']): void {
+    if (!agentSettings) return
+    agentSettings = { ...agentSettings, thinkingLevel }
+  }
+
+  async function runAgentSetup(): Promise<void> {
+    const thread = setupAgentThread()
+    const settings = agentSettings
+    if (!thread || !settings) {
+      editorError = 'Open a project thread and choose an agent model before starting agent setup.'
+      return
+    }
+    saving = true
+    editorError = ''
+    agentReport = null
+    try {
+      const harnesses = availableHarnesses.map((harness) => harness.id).join(', ')
+      agentReport = await invoke(
+        'utilities:setupWithAgent',
+        thread.projectId,
+        crypto.randomUUID(),
+        settings,
+        [
+          agentRequest.trim(),
+          `CodeInOven setup context: current projectId=${thread.projectId}; installed harnesses=${harnesses || settings.harnessId}.`
+        ].join('\n\n')
+      )
+      onChanged?.()
+    } catch (setupError) {
+      editorError =
+        setupError instanceof Error
+          ? setupError.message
+          : 'The utility setup agent could not finish.'
+    } finally {
+      saving = false
+    }
+  }
 </script>
 
 {#if open}
@@ -830,13 +923,81 @@ ${instructions}`
           </div>
           <button
             type="button"
-            class="flex h-9 items-center gap-1.5 rounded-lg border bg-surface px-3 text-xs font-medium text-muted disabled:cursor-not-allowed disabled:opacity-50"
-            disabled
-            title="Agent-assisted setup is coming in a follow-up."
+            class="flex h-9 items-center gap-1.5 rounded-lg border bg-surface px-3 text-xs font-medium text-muted hover:bg-overlay hover:text-foreground"
+            title="Set up a utility with a disposable agent session"
+            onclick={beginAgentSetup}
           >
+            <Sparkles size={14} />
             Setup with agent
           </button>
         </div>
+      </div>
+    {:else if !isNative && draft.id === null && setupPreset === 'agent'}
+      <div class="space-y-4">
+        {#if editorError}
+          <p class="rounded-lg bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">
+            {editorError}
+          </p>
+        {/if}
+        <div class="rounded-xl bg-raised p-4">
+          <div class="flex items-start gap-3">
+            <span
+              class="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-surface text-primary"
+            >
+              <Sparkles size={16} />
+            </span>
+            <div>
+              <p class="text-sm font-semibold">Describe the utility</p>
+              <p class="mt-1 text-xs leading-relaxed text-muted">
+                A disposable agent researches the configuration, installs it through the built-in
+                CodeInOven API, then reports any credential step. It cannot write secrets.
+              </p>
+            </div>
+          </div>
+        </div>
+        {#if agentSettings}
+          <div class="space-y-1">
+            <p class="text-xs font-medium">Setup model</p>
+            <ModelPicker
+              providers={agentProviders}
+              projectId={agentProjectId}
+              harnessId={agentSettings.harnessId}
+              providerId={agentSettings.providerId}
+              modelId={agentSettings.modelId}
+              thinkingLevel={agentSettings.thinkingLevel}
+              variant="field"
+              side="bottom"
+              disabled={saving || agentReport !== null}
+              onSelect={selectAgentModel}
+              onSelectThinking={selectAgentThinking}
+            />
+          </div>
+        {/if}
+        <label class="block space-y-1 text-xs font-medium">
+          <span>Setup request</span>
+          <textarea
+            class="min-h-36 w-full resize-y rounded-xl border bg-elevated px-3 py-2 text-sm leading-relaxed outline-none focus:border-primary"
+            placeholder="Set up the official Svelte MCP for Codex and Claude Code globally, or create a deployment skill for this project…"
+            disabled={saving || agentReport !== null}
+            bind:value={agentRequest}></textarea>
+        </label>
+        {#if agentReport}
+          <div class="rounded-xl border bg-elevated p-4">
+            <p class="text-sm font-semibold">Installed</p>
+            <div class="mt-2 flex flex-wrap gap-1.5">
+              {#each agentReport.installed as utility (utility.id)}
+                <span class="rounded-md bg-raised px-2 py-1 text-[11px] font-medium">
+                  {utility.name} · {utility.kind}
+                </span>
+              {/each}
+            </div>
+            {#if agentReport.summary}
+              <p class="mt-3 whitespace-pre-wrap text-xs leading-relaxed text-muted">
+                {agentReport.summary}
+              </p>
+            {/if}
+          </div>
+        {/if}
       </div>
     {:else if !isNative && draft.id === null && setupPreset === 'plugin-bundle'}
       <div>
@@ -1251,6 +1412,10 @@ ${instructions}`
                 setupPreset = null
                 draft = emptyDraft()
                 pluginManifest = ''
+                agentRequest = ''
+                agentReport = null
+                agentProjectId = ''
+                agentSettings = null
                 editorError = ''
               }}
             >
@@ -1259,7 +1424,28 @@ ${instructions}`
           {/if}
         </div>
         <div class="flex items-center gap-2">
-          {#if setupPreset === 'plugin-bundle'}
+          {#if setupPreset === 'agent'}
+            <button
+              class="h-9 rounded-lg border bg-elevated px-3 text-xs font-medium hover:bg-overlay"
+              type="button"
+              onclick={onClose}
+            >
+              {agentReport ? 'Done' : 'Cancel'}
+            </button>
+            {#if !agentReport}
+              <button
+                class="flex h-9 items-center gap-1.5 rounded-lg bg-primary px-4 text-xs font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
+                type="button"
+                disabled={saving || !agentRequest.trim()}
+                onclick={() => void runAgentSetup()}
+              >
+                {#if saving}<Loader2 size={13} class="animate-spin" />{:else}<Sparkles
+                    size={13}
+                  />{/if}
+                {saving ? 'Setting up…' : 'Set up utility'}
+              </button>
+            {/if}
+          {:else if setupPreset === 'plugin-bundle'}
             <button
               class="h-9 rounded-lg border bg-elevated px-3 text-xs font-medium hover:bg-overlay"
               type="button"

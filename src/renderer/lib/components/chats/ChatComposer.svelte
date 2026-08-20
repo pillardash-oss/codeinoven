@@ -854,7 +854,7 @@
 
   async function updateFileMention(nextValue: string): Promise<void> {
     const match = /(^|\s)@([^\s@]*)$/u.exec(nextValue)
-    if ((!fileTagProjectId && assignmentTasks.length === 0) || !match) {
+    if (!match) {
       mentionOpen = false
       return
     }
@@ -862,6 +862,19 @@
     const requestId = ++mentionRequestId
     try {
       const normalizedQuery = query.trim().toLocaleLowerCase()
+      const utilityEntries: ComposerMentionEntry[] =
+        !normalizedQuery || 'cio-utility'.includes(normalizedQuery)
+          ? [
+              {
+                type: 'utility',
+                entry: {
+                  id: 'cio-utility',
+                  name: '@cio-utility',
+                  description: 'Set up a skill, MCP server, or plugin with a CodeInOven agent.'
+                }
+              }
+            ]
+          : []
       const taskEntries: ComposerMentionEntry[] = assignmentTasks
         .filter((task) => {
           if (!normalizedQuery) return true
@@ -874,6 +887,7 @@
         ? await invoke('projectFiles:search', fileTagProjectId, query, 'all')
         : []
       const entries: ComposerMentionEntry[] = [
+        ...utilityEntries,
         ...taskEntries,
         ...files.map((entry) => ({ type: 'project' as const, entry }))
       ]
@@ -890,7 +904,7 @@
   function scheduleFileMentionSearch(textBeforeCaret: string): void {
     clearTimeout(mentionSearchTimer)
     const match = /(^|\s)@([^\s@]*)$/u.exec(textBeforeCaret)
-    if ((!fileTagProjectId && assignmentTasks.length === 0) || !match) {
+    if (!match) {
       mentionRequestId += 1
       mentionOpen = false
       return
@@ -941,6 +955,19 @@
 
   function selectMention(mention: ComposerMentionEntry): void {
     mentionOpen = false
+    if (mention.type === 'utility') {
+      const inserted = richEditor.replaceTextBeforeCaret(
+        /(^|\s)@[^\s@]*$/u,
+        (_match, prefix) => `${prefix}@cio-utility `
+      )
+      if (!inserted) {
+        value = value.replace(/(^|\s)@[^\s@]*$/u, (_, prefix: string) => {
+          return `${prefix}@cio-utility `
+        })
+        onValueChange?.(value)
+      }
+      return
+    }
     if (mention.type === 'task') {
       selectTaskMention(mention.entry)
       return
