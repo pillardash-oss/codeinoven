@@ -7,8 +7,9 @@ to either client.
 
 The image is pinned to the official `coturn/coturn:4.17.2-r0-alpine` release. It runs as the
 unprivileged `nobody` user, writes its generated secret-bearing configuration only to `/tmp`,
-disables the administrative CLI and unused TLS/DTLS listeners, retains Coturn's default loopback
-denial, rejects multicast peers, and exposes a STUN-based container health check. See the
+leaves Coturn 4.17's opt-in administrative CLI and TLS/DTLS listeners disabled, retains Coturn's
+default loopback denial, rejects multicast peers, and exposes a STUN-based container health check.
+See the
 [official Coturn Docker guidance](https://github.com/coturn/coturn/blob/master/docker/coturn/README.md)
 for the underlying image and network requirements.
 
@@ -54,7 +55,10 @@ Create this as a **separate Docker Compose resource** in Coolify:
 Use a stable public IP for `TURN_EXTERNAL_IP`. `auto` uses Coturn's public-IP detector and is useful
 for initial setup, but an explicit stable IP makes restarts deterministic. If the service is moved
 behind a one-to-one NAT, set `TURN_EXTERNAL_IP` to the public IP and `TURN_RELAY_IP` to the private
-IP. Leave `TURN_RELAY_IP` empty when host networking exposes the server's public interface directly.
+IP. When `TURN_RELAY_IP` is set, Coturn listens on localhost for its health check and on that private
+address for clients, while relay allocations bind only to that private address. This prevents host
+networking from selecting Docker bridge interfaces. Leave `TURN_RELAY_IP` empty only when the host
+itself owns the public address directly.
 
 The default `49160-49200` relay range supports a modest initial deployment. Increase the range in
 both the Coolify variables and firewall as concurrent relay demand grows. `TURN_MIN_PORT` and

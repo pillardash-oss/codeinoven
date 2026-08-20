@@ -99,6 +99,11 @@ umask 077
   printf 'min-port=%s\n' "$turn_min_port"
   printf 'max-port=%s\n' "$turn_max_port"
   printf 'external-ip=%s\n' "$turn_external_mapping"
+  if [ -n "$turn_relay_ip" ]; then
+    printf '%s\n' 'listening-ip=127.0.0.1'
+    printf 'listening-ip=%s\n' "$turn_relay_ip"
+    printf 'relay-ip=%s\n' "$turn_relay_ip"
+  fi
   printf 'realm=%s\n' "$turn_realm"
   printf 'server-name=%s\n' "$turn_realm"
   printf 'static-auth-secret=%s\n' "$turn_shared_secret"
@@ -114,15 +119,14 @@ umask 077
     'unauthorized-ratelimit' \
     'stale-nonce=600' \
     'max-allocate-lifetime=3600' \
-    'no-cli' \
     'no-auth-pings' \
     'no-dynamic-ip-list' \
     'no-dynamic-realms' \
     'no-multicast-peers' \
     'no-tcp-relay' \
     'no-tls' \
-    'no-dtls' \
     'no-software-attribute' \
+    'pidfile=/tmp/turnserver.pid' \
     'simple-log' \
     'log-file=stdout' \
     'denied-peer-ip=0.0.0.0-0.255.255.255' \
