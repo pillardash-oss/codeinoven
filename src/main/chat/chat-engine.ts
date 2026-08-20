@@ -4108,6 +4108,10 @@ export class ChatEngine {
    * anything that would be interrupted by a forced restart: streaming turns,
    * permission/question decisions, in-flight shell tools, child sessions,
    * pending spec/brainstorm drafts, and in-progress compaction.
+   *
+   * Kept for power-management and diagnostics. The updater gate intentionally
+   * does NOT use this — see `workingSessionCount()` which mirrors the
+   * AppHeader pulse.
    */
   activeSessionCount(): number {
     const active = new Set<string>()
@@ -4139,6 +4143,21 @@ export class ChatEngine {
     for (const sessionId of this.pendingBrainstormTurns.keys()) add(sessionId)
     for (const sessionId of this.activeLoopRuns) add(sessionId)
     return active.size
+  }
+
+  /**
+   * Sessions actively producing work — mirrors `AppHeader`'s pulse
+   * (`agentRuns.isBusy` / `isThreadWorking`). Only `sessionStatuses === 'working'`
+   * counts; `waiting`, pending permissions/questions, compactions, brainstorm,
+   * loops, child sessions and idle PTYs do not pulse the header and must not
+   * block "Restart to update".
+   */
+  workingSessionCount(): number {
+    let count = 0
+    for (const status of this.sessionStatuses.values()) {
+      if (status.state === 'working') count++
+    }
+    return count
   }
 
   /** Publish one canonical working state to session and task consumers. */

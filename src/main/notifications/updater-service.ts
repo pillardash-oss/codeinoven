@@ -305,6 +305,13 @@ export class UpdaterService {
   }
 
   private activeSessionCount(): number {
+    // Mirrors AppHeader's pulse (anyProjectWorking / anyChatWorking):
+    // only sessions with `sessionStatuses === 'working'` count. Idle PTYs,
+    // `waiting` sessions, pending permissions/questions, compactions,
+    // brainstorm/loop runs and remote blockedQuit do not pulse the header
+    // and must not block "Restart to update".
+    const engine = this.chatEngine as unknown as { workingSessionCount?: () => number } | null
+    if (engine?.workingSessionCount) return engine.workingSessionCount()
     let count = this.chatEngine?.activeSessionCount() ?? 0
     for (const source of this.activitySources) {
       count += source.activeSessionCount()
