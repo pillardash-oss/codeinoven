@@ -2966,7 +2966,7 @@
       event.projectId === thread.projectId &&
       event.threadId === thread.id
     ) {
-      void refreshCheckpoints()
+      void refreshCompletedTurn()
       return
     }
     if (
@@ -3199,6 +3199,18 @@
     } catch {
       // Checkpoint history is supplementary; session recovery remains available.
     }
+  }
+
+  /**
+   * Checkpoint completion is also the durable transcript-reconciliation
+   * boundary. Refresh both halves so the checkpoint's source message id can
+   * attach to the final rendered turn without waiting for a later remount.
+   */
+  async function refreshCompletedTurn(): Promise<void> {
+    const staleMessageRefresh = refreshMessagesInFlight
+    const checkpointRefresh = refreshCheckpoints()
+    if (staleMessageRefresh) await staleMessageRefresh
+    await Promise.all([refreshMessages(), checkpointRefresh])
   }
 
   async function refreshCommands(): Promise<void> {
@@ -4001,7 +4013,9 @@
         checkpoint.id,
         paths
       )
-      toast.success(`Re-applied ${paths.length} ${paths.length === 1 ? 'file' : 'files'} from this turn`)
+      toast.success(
+        `Re-applied ${paths.length} ${paths.length === 1 ? 'file' : 'files'} from this turn`
+      )
     } catch (error) {
       reportError(error, 'This turn could not be redone.', {
         projectId: thread.projectId,
