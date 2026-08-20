@@ -103,6 +103,21 @@ const PROFILE_UTILITY_FEATURES = ['image_descriptor', 'memory', 'title', 'search
 /** Upper bound for profile analytics result sets (worker bounded reads). */
 const ANALYTICS_MAX_ROWS = 100_000
 
+function rollingActivityRange(
+  selectedRange: LocalProfileAnalyticsRange
+): LocalProfileAnalyticsRange {
+  const todayEnd = new Date()
+  todayEnd.setHours(0, 0, 0, 0)
+  todayEnd.setDate(todayEnd.getDate() + 1)
+  const rollingStart = new Date(todayEnd)
+  rollingStart.setDate(rollingStart.getDate() - 365)
+  const end =
+    selectedRange.endAt <= rollingStart.getTime() ? new Date(selectedRange.endAt) : todayEnd
+  const start = new Date(end)
+  start.setDate(start.getDate() - 365)
+  return { startAt: start.getTime(), endAt: end.getTime() }
+}
+
 function tokensFromRow(
   row: Pick<
     HarnessUsageRow | HarnessModelUsageRow,
@@ -615,12 +630,22 @@ export class HarnessUsageRepo {
 
   /** Range-aware local Profile analytics derived from persisted assistant messages. */
   async profileAnalytics(range: LocalProfileAnalyticsRange): Promise<LocalProfileAnalytics> {
+    const activityRange = rollingActivityRange(range)
     const aggregateSelect = `COUNT(*) AS message_count,
               SUM(COALESCE(cost, 0)) AS cost_usd,
               SUM(COALESCE(tokens_total, CAST(json_extract(tokens_json, '$.total') AS INTEGER), 0)) AS tokens_total,
               SUM(CASE
                     WHEN completed_at IS NOT NULL AND completed_at > created_at
                     THEN completed_at - created_at
+                    WHEN completed_at IS NOT NULL AND model_id IS NOT NULL
+                    THEN completed_at - COALESCE(
+                      (SELECT MAX(turn_start.created_at)
+                       FROM agent_messages turn_start
+                       WHERE turn_start.thread_id = agent_messages.thread_id
+                         AND turn_start.role = 'user'
+                         AND turn_start.created_at <= agent_messages.completed_at),
+                      completed_at
+                    )
                     ELSE 0
                   END) AS duration_ms`
     const messageRange = `role = 'assistant'
@@ -698,6 +723,15 @@ export class HarnessUsageRepo {
                   SUM(CASE
                         WHEN m.completed_at IS NOT NULL AND m.completed_at > m.created_at
                         THEN m.completed_at - m.created_at
+                        WHEN m.completed_at IS NOT NULL AND m.model_id IS NOT NULL
+                        THEN m.completed_at - COALESCE(
+                          (SELECT MAX(turn_start.created_at)
+                           FROM agent_messages turn_start
+                           WHERE turn_start.thread_id = m.thread_id
+                             AND turn_start.role = 'user'
+                             AND turn_start.created_at <= m.completed_at),
+                          m.completed_at
+                        )
                         ELSE 0
                       END) AS duration_ms,
                   COUNT(DISTINCT t.id) AS thread_count,
@@ -739,7 +773,7 @@ export class HarnessUsageRepo {
            WHERE ${messageRange}
            GROUP BY date
            ORDER BY date ASC`,
-        [...params]
+        [activityRange.startAt, activityRange.endAt]
       ),
       this.aggregate<LocalUsageDayRow>(
         `SELECT date AS id,
@@ -756,6 +790,15 @@ export class HarnessUsageRepo {
                     SUM(CASE
                           WHEN completed_at IS NOT NULL AND completed_at > created_at
                           THEN completed_at - created_at
+                          WHEN completed_at IS NOT NULL AND model_id IS NOT NULL
+                          THEN completed_at - COALESCE(
+                            (SELECT MAX(turn_start.created_at)
+                             FROM agent_messages turn_start
+                             WHERE turn_start.thread_id = agent_messages.thread_id
+                               AND turn_start.role = 'user'
+                               AND turn_start.created_at <= agent_messages.completed_at),
+                            completed_at
+                          )
                           ELSE 0
                         END) AS duration_ms
              FROM agent_messages
@@ -794,6 +837,15 @@ export class HarnessUsageRepo {
                     SUM(CASE
                           WHEN completed_at IS NOT NULL AND completed_at > created_at
                           THEN completed_at - created_at
+                          WHEN completed_at IS NOT NULL AND model_id IS NOT NULL
+                          THEN completed_at - COALESCE(
+                            (SELECT MAX(turn_start.created_at)
+                             FROM agent_messages turn_start
+                             WHERE turn_start.thread_id = agent_messages.thread_id
+                               AND turn_start.role = 'user'
+                               AND turn_start.created_at <= agent_messages.completed_at),
+                            completed_at
+                          )
                           ELSE 0
                         END) AS duration_ms
              FROM agent_messages
@@ -873,6 +925,7 @@ export class HarnessUsageRepo {
     }))
     return {
       range,
+      activityRange,
       messageCount: harnessRows.reduce((sum, row) => sum + row.message_count, 0),
       costUsd: harnessCost + utilityCost,
       tokens: harnessTokens + utilityTokens,

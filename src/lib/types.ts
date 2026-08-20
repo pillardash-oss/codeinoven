@@ -1699,6 +1699,8 @@ export interface LocalProfileProjectBreakdown extends AccountUsageBreakdown {
 /** Fully local, range-aware analytics. This is never required for account authentication. */
 export interface LocalProfileAnalytics {
   range: LocalProfileAnalyticsRange
+  /** Rolling 12-month window represented by the activity calendar. */
+  activityRange: LocalProfileAnalyticsRange
   messageCount: number
   costUsd: number
   tokens: number
