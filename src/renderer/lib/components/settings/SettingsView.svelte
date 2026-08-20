@@ -26,6 +26,7 @@
     Clock,
     Cloud,
     Download,
+    FolderOpen,
     Globe,
     Info,
     Keyboard,
@@ -55,6 +56,7 @@
   import CloudDeploymentsSettingsTab from './CloudDeploymentsSettingsTab.svelte'
   import CioPromptsSettings from './CioPromptsSettings.svelte'
   import CuaBridgeSettings from './CuaBridgeSettings.svelte'
+  import { toast } from 'svelte-sonner'
 
   type SelectChangeEvent = Event & { currentTarget: HTMLSelectElement }
   interface Props {
@@ -258,6 +260,11 @@
     } finally {
       diagnosticsBusy = false
     }
+  }
+
+  async function openDataDirectory(): Promise<void> {
+    const opened = await invoke('storage:openDataDirectory').catch(() => false)
+    if (!opened) toast.error('The data directory could not be opened in the file manager.')
   }
 
   async function testSystemNotification(): Promise<void> {
@@ -769,14 +776,27 @@
         <!-- Storage -->
         <div class="mt-4 rounded-xl border bg-surface p-4">
           <h3 class="mb-3 text-xs font-semibold uppercase tracking-wide text-muted">Storage</h3>
-          <div class="flex items-center justify-between">
+          <div
+            class="flex flex-col items-start gap-3 sm:flex-row sm:items-center sm:justify-between"
+          >
             <div>
               <p class="text-sm font-medium">Data directory</p>
               <p class="text-xs text-dimmed">All projects, threads, and history stored here</p>
             </div>
-            <span class="rounded-lg bg-elevated px-2.5 py-1 font-mono text-xs text-muted">
-              ~/.config/{ORG_SLUG}/{APP_SLUG}
-            </span>
+            <div class="flex flex-wrap items-center gap-2 sm:justify-end">
+              <span class="rounded-lg bg-elevated px-2.5 py-1 font-mono text-xs text-muted">
+                ~/.config/{ORG_SLUG}/{APP_SLUG}
+              </span>
+              <button
+                type="button"
+                class="flex h-8 items-center gap-1.5 rounded-lg border bg-elevated px-3 text-xs font-medium hover:bg-overlay"
+                title="Open the data directory in the file manager"
+                onclick={() => void openDataDirectory()}
+              >
+                <FolderOpen size={13} />
+                Open in file manager
+              </button>
+            </div>
           </div>
         </div>
 

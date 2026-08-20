@@ -3246,6 +3246,14 @@ export function registerIpcHandlers(
     }
   })
 
+  privileged('storage:openDataDirectory', async () => {
+    const error = await shell.openPath(storage.resolve(''))
+    if (!error) return true
+
+    Logger.error('Failed to open the data directory:', error)
+    return false
+  })
+
   // Read a file from disk and return it as a data URL — used for local previews
   // without persisting anything to project storage. Only scoped paths are read.
   const MIME_MAP: Record<string, string> = {

@@ -147,6 +147,7 @@ const INVOKE_CHANNELS = [
   'dialog:pickFiles',
   'dialog:pickImage',
   'diagnostics:export',
+  'storage:openDataDirectory',
   'file:read',
   'file:readAsDataUrl',
   'editors:detect',

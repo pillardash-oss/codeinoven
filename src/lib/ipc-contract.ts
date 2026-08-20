@@ -813,6 +813,8 @@ export interface IpcInvokeContract {
   'dialog:pickFiles': Contract<[scope?: AttachmentStorageScope], string[]>
   'dialog:pickImage': Contract<[], string | null>
   'diagnostics:export': Contract<[], string | null>
+  /** Open the app-owned data directory in the operating system's file manager. */
+  'storage:openDataDirectory': Contract<[], boolean>
   'file:read': Contract<[filePath: string], Uint8Array<ArrayBuffer> | null>
   'file:readAsDataUrl': Contract<[filePath: string], string | null>
   'editors:detect': Contract<[], EditorInfo[]>
