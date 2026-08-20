@@ -1757,6 +1757,11 @@
 
   async function deleteProject(projectId: string): Promise<void> {
     await invoke('project:delete', projectId)
+    const browserTabIds = contextSidebarState.removeProjectBrowsers(projectId)
+    if (browserFullscreenTabId && browserTabIds.includes(browserFullscreenTabId)) {
+      browserFullscreenTabId = null
+    }
+    await invoke('browser:destroyProject', projectId)
     projects = projects.filter((p) => p.id !== projectId)
     allThreads = allThreads.filter((t) => t.projectId !== projectId)
     projectIcons.delete(projectId)

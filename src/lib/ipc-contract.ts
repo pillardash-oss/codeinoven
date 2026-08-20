@@ -1353,7 +1353,7 @@ export interface IpcInvokeContract {
   /** Resolve website favicons for a list of hostnames. Returns a data URL per host, or null when none exists. */
   'web:favicon': Contract<[hostnames: string[]], Record<string, string | null>>
   'browser:show': Contract<
-    [tabId: string, initialUrl: string, bounds: BrowserViewBounds],
+    [tabId: string, projectId: string, initialUrl: string, bounds: BrowserViewBounds],
     BrowserPageState
   >
   'browser:hide': Contract<[tabId: string], void>
@@ -1365,6 +1365,7 @@ export interface IpcInvokeContract {
   'browser:getConsole': Contract<[tabId: string], BrowserConsoleEntry[]>
   'browser:clearConsole': Contract<[tabId: string], void>
   'browser:destroy': Contract<[tabId: string], void>
+  'browser:destroyProject': Contract<[projectId: string], void>
   'spec:addAnnotation': Contract<
     [
       projectId: string,

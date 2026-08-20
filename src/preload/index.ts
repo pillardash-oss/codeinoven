@@ -356,6 +356,7 @@ const INVOKE_CHANNELS = [
   'browser:getConsole',
   'browser:clearConsole',
   'browser:destroy',
+  'browser:destroyProject',
   'spec:addAnnotation',
   'spec:addDecisionComment',
   'spec:approve',

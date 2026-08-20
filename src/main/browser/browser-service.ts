@@ -1,4 +1,4 @@
-import { session, WebContentsView, type BrowserWindow } from 'electron'
+import { session, WebContentsView, type BrowserWindow, type Session } from 'electron'
 import type {
   BrowserConsoleEntry,
   BrowserConsoleLevel,
@@ -9,13 +9,15 @@ import { trustedIpcMain as ipcMain } from '../ipc/trusted-ipc-main'
 import { sendToRenderer } from '../ipc/renderer-delivery'
 import { Logger } from '../system/logger'
 
-const BROWSER_PARTITION = 'persist:codeinoven-browser'
+const BROWSER_PARTITION_PREFIX = 'persist:codeinoven-browser:'
 const MAX_BROWSER_URL_LENGTH = 8192
 const MAX_CONSOLE_ENTRIES = 500
 const TAB_ID_PATTERN = /^browser:[a-zA-Z0-9:_-]{1,240}$/u
+const PROJECT_ID_PATTERN = /^[a-zA-Z0-9:._-]{1,240}$/u
 
 interface BrowserTab {
   view: WebContentsView
+  projectId: string
   initialNavigationStarted: boolean
   consoleEntries: BrowserConsoleEntry[]
 }
@@ -28,6 +30,13 @@ interface PendingBrowserTab {
 function validateTabId(value: unknown): string {
   if (typeof value !== 'string' || !TAB_ID_PATTERN.test(value)) {
     throw new TypeError('Browser tab ID is invalid')
+  }
+  return value
+}
+
+function validateProjectId(value: unknown): string {
+  if (typeof value !== 'string' || !PROJECT_ID_PATTERN.test(value)) {
+    throw new TypeError('Browser project ID is invalid')
   }
   return value
 }
@@ -75,23 +84,19 @@ export class BrowserService {
   private readonly tabs = new Map<string, BrowserTab>()
   private readonly pendingTabs = new Map<string, PendingBrowserTab>()
   private readonly agentTabIds = new Map<string, string>()
+  private readonly configuredSessions = new Set<string>()
   private activeTabId: string | null = null
   private consoleSequence = 0
 
-  constructor(private readonly window: BrowserWindow) {
-    const browserSession = session.fromPartition(BROWSER_PARTITION)
-    browserSession.setPermissionRequestHandler((_contents, _permission, callback) => {
-      callback(false)
-    })
-    browserSession.on('will-download', (event) => event.preventDefault())
-  }
+  constructor(private readonly window: BrowserWindow) {}
 
   register(): void {
-    ipcMain.handle('browser:show', (_event, rawTabId, rawInitialUrl, rawBounds) => {
+    ipcMain.handle('browser:show', (_event, rawTabId, rawProjectId, rawInitialUrl, rawBounds) => {
       const tabId = validateTabId(rawTabId)
+      const projectId = validateProjectId(rawProjectId)
       const initialUrl = validateBrowserUrl(rawInitialUrl)
       const bounds = validateBounds(rawBounds)
-      const tab = this.ensureTab(tabId)
+      const tab = this.ensureTab(tabId, projectId)
 
       if (this.activeTabId && this.activeTabId !== tabId) this.detachActiveView()
       if (this.activeTabId !== tabId) {
@@ -140,6 +145,12 @@ export class BrowserService {
     ipcMain.handle('browser:destroy', (_event, rawTabId) => {
       this.destroy(validateTabId(rawTabId))
     })
+    ipcMain.handle('browser:destroyProject', (_event, rawProjectId) => {
+      const projectId = validateProjectId(rawProjectId)
+      for (const [tabId, tab] of this.tabs) {
+        if (tab.projectId === projectId) this.destroy(tabId)
+      }
+    })
   }
 
   dispose(): void {
@@ -151,6 +162,7 @@ export class BrowserService {
     for (const pending of this.pendingTabs.values()) clearTimeout(pending.timer)
     this.pendingTabs.clear()
     this.agentTabIds.clear()
+    this.configuredSessions.clear()
   }
 
   async executeUtility(
@@ -235,13 +247,20 @@ export class BrowserService {
     throw new Error(`In-app browser does not expose the operation "${operation}"`)
   }
 
-  private ensureTab(tabId: string): BrowserTab {
+  private ensureTab(tabId: string, projectId: string): BrowserTab {
     const existing = this.tabs.get(tabId)
-    if (existing) return existing
+    if (existing) {
+      if (existing.projectId !== projectId) {
+        throw new Error('Browser tab belongs to a different project')
+      }
+      return existing
+    }
+
+    const browserSession = this.sessionForProject(projectId)
 
     const view = new WebContentsView({
       webPreferences: {
-        partition: BROWSER_PARTITION,
+        session: browserSession,
         sandbox: true,
         contextIsolation: true,
         nodeIntegration: false,
@@ -250,7 +269,12 @@ export class BrowserService {
       }
     })
     view.setBackgroundColor('#00000000')
-    const tab: BrowserTab = { view, initialNavigationStarted: false, consoleEntries: [] }
+    const tab: BrowserTab = {
+      view,
+      projectId,
+      initialNavigationStarted: false,
+      consoleEntries: []
+    }
     this.tabs.set(tabId, tab)
     const pending = this.pendingTabs.get(tabId)
     if (pending) {
@@ -315,6 +339,18 @@ export class BrowserService {
     const tab = this.tabs.get(tabId)
     if (!tab) throw new Error('Browser tab does not exist')
     return tab
+  }
+
+  private sessionForProject(projectId: string): Session {
+    const partition = `${BROWSER_PARTITION_PREFIX}${projectId}`
+    const browserSession = session.fromPartition(partition)
+    if (this.configuredSessions.has(partition)) return browserSession
+    browserSession.setPermissionRequestHandler((_contents, _permission, callback) => {
+      callback(false)
+    })
+    browserSession.on('will-download', (event) => event.preventDefault())
+    this.configuredSessions.add(partition)
+    return browserSession
   }
 
   private load(tabId: string, url: string): void {
