@@ -12,11 +12,13 @@ import type {
   AgentRateLimitWindow,
   AgentTokenUsage,
   AgentUsageCredits,
+  HarnessCommand,
   ProviderCatalog,
   ProviderModel,
   PromptAttachment,
   PermissionReply,
   SessionAgentEvent,
+  ThreadSettings,
   ThinkingPreset
 } from '../../lib/types'
 import { normalizeAgentQuestions, permissionPatterns } from '../../lib/agent-interactions'
@@ -103,6 +105,19 @@ const AUTH_CONFIRM_POLL_MS = 200
  * separately by the credential-refresh slot.
  */
 const ONE_SHOT_SPAWN_LIMIT = 4
+
+/** Commands Claude Code documents as usable without its interactive TUI. */
+const CLAUDE_NON_INTERACTIVE_COMMANDS: readonly HarnessCommand[] = [
+  { name: 'compact', description: 'Compact this conversation with optional focus instructions' },
+  { name: 'config', description: 'Set Claude Code preferences with key=value arguments' },
+  { name: 'context', description: 'Show what is using the current context window' },
+  { name: 'effort', description: 'Set reasoning effort for this session' },
+  { name: 'mcp', description: 'Show or manage Claude Code MCP connections', source: 'mcp' },
+  { name: 'model', description: 'Switch the Claude model for this session' },
+  { name: 'rename', description: 'Rename this Claude Code session' }
+]
+
+const CLAUDE_COMMANDS_REQUIRING_ARGUMENTS = new Set(['config', 'effort', 'model', 'rename'])
 
 /** Keep Claude Code's native per-repository memory from crossing app threads. */
 function buildClaudeEnvironment(): NodeJS.ProcessEnv {
@@ -1321,7 +1336,7 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
     messageHistory: 'mirrored',
     interactivePermissions: true,
     attachments: true,
-    commands: false,
+    commands: true,
     providerCatalog: true,
     sessionStatus: true,
     contextUsage: true,
@@ -1417,6 +1432,32 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
         }))
       }))
     ]
+  }
+
+  override async listCommands(): Promise<HarnessCommand[]> {
+    return CLAUDE_NON_INTERACTIVE_COMMANDS.map((command) => ({ ...command }))
+  }
+
+  override async runCommand(
+    projectPath: string,
+    sessionId: string,
+    command: HarnessCommand,
+    args: string,
+    settings: ThreadSettings
+  ): Promise<void> {
+    const trimmedArgs = args.trim()
+    if (command.source !== 'skill' && CLAUDE_COMMANDS_REQUIRING_ARGUMENTS.has(command.name)) {
+      if (!trimmedArgs) {
+        throw new Error(`/${command.name} requires arguments in ${this.name}`)
+      }
+    }
+    const text = `/${command.name}${trimmedArgs ? ` ${trimmedArgs}` : ''}`
+    await this.sendPrompt(projectPath, {
+      sessionId,
+      settings,
+      text,
+      attachments: []
+    })
   }
 
   async generateTitle(projectPath: string, options: GenerateTitleOptions): Promise<string | null> {

@@ -818,15 +818,17 @@ export class PiDriver extends PersistentCliDriver {
   override async runCommand(
     projectPath: string,
     sessionId: string,
-    command: string,
-    args: string
+    command: HarnessCommand,
+    args: string,
+    _settings: ThreadSettings
   ): Promise<void> {
+    void _settings
     const session = await this.requireSession(projectPath, sessionId)
     if (this.activeTurns.has(session.id)) {
       throw new Error(`A turn is already active for session ${session.id}`)
     }
     const client = await this.ensureRpcClient(projectPath, session.id)
-    const commandText = (args.trim() ? `${command} ${args}` : command).trim()
+    const commandText = (args.trim() ? `${command.name} ${args}` : command.name).trim()
     this.activeTurns.add(session.id)
     try {
       await client.prompt(commandText)

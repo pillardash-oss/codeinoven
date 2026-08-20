@@ -116,7 +116,7 @@
     /** Executes a non-command action selected from the slash menu. */
     onActionSelect?: (selection: ActionSelection) => void | Promise<void>
     /** Executes an active-harness slash command with explicit arguments. */
-    onSlashCommand?: (name: string, args: string) => void | Promise<void>
+    onSlashCommand?: (commandId: string, args: string) => void | Promise<void>
     /** Available providers + models from the harness. */
     providers?: ProviderCatalog[]
     /** Id of the agent harness serving the models (shown on each model row). */
@@ -808,7 +808,7 @@
         value = ''
         slashOpen = false
         onValueChange?.('')
-        void onSlashCommand(name, slashCommand[2]?.trim() ?? '')
+        void onSlashCommand(action.id, slashCommand[2]?.trim() ?? '')
         return
       }
     }

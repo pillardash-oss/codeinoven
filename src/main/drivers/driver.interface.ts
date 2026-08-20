@@ -360,7 +360,13 @@ export interface HarnessDriver {
   activateAccount?(projectPath: string, accountId: string): Promise<void>
 
   /** Execute a slash command within a session. */
-  runCommand(projectPath: string, sessionId: string, command: string, args: string): Promise<void>
+  runCommand(
+    projectPath: string,
+    sessionId: string,
+    command: HarnessCommand,
+    args: string,
+    settings: ThreadSettings
+  ): Promise<void>
 
   /** Compact the conversation context when supported by the harness. */
   compactSession?(projectPath: string, sessionId: string, settings: ThreadSettings): Promise<void>

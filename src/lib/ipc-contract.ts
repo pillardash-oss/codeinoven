@@ -651,7 +651,7 @@ export interface IpcInvokeContract {
     void
   >
   'agent:runCommand': Contract<
-    [projectId: string, threadId: string, command: string, args: string],
+    [projectId: string, threadId: string, commandId: string, args: string],
     void
   >
   'agent:sendPrompt': Contract<

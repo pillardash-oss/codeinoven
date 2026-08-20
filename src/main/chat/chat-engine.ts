@@ -2049,8 +2049,8 @@ export class ChatEngine {
     )
     ipcMain.handle(
       'agent:runCommand',
-      (_, projectId: string, threadId: string, command: string, args: string) =>
-        this.runCommand(projectId, threadId, command, args)
+      (_, projectId: string, threadId: string, commandId: string, args: string) =>
+        this.runCommand(projectId, threadId, commandId, args)
     )
     this.idleReaperTimer = setInterval(
       () => void this.reapIdleResources(),
@@ -7573,7 +7573,10 @@ export class ChatEngine {
     if (!driver.capabilities?.commands) return []
 
     try {
-      return this.scopeHarnessCommands(driver.id, await driver.listCommands(projectPath))
+      return this.scopeHarnessCommands(
+        driver.id,
+        await this.discoverHarnessCommands(driver, projectPath)
+      )
     } catch (error) {
       Logger.info('Harness command discovery skipped', {
         driverId: driver.id,
@@ -13131,26 +13134,49 @@ export class ChatEngine {
   async runCommand(
     projectId: string,
     threadId: string,
-    command: string,
+    commandId: string,
     args: string
   ): Promise<void> {
     this.touchUserActivity()
     projectId = validateEntityId(projectId, 'Project ID')
     threadId = validateEntityId(threadId, 'Thread ID')
-    command = validateBoundedString(command, 'Command', 1, 256)
+    commandId = validateBoundedString(commandId, 'Command ID', 1, 768)
     args = validateBoundedString(args, 'Command arguments', 0, 16_384)
     const thread = await this.threadManager.getThread(projectId, threadId)
     if (!thread?.sessionId) throw new Error('No active session for this thread')
+    if (!thread.settings) throw new Error('Select a model before running a command')
     const driverId = thread.settings?.harnessId ?? 'opencode'
     const { driver, projectPath } = await this.resolve(projectId, driverId, threadId)
     if (!driver.capabilities?.commands) {
       throw new Error(`${driver.name} does not support slash commands`)
     }
-    const exposed = this.scopeHarnessCommands(driver.id, await driver.listCommands(projectPath))
-    if (!exposed.some((candidate) => candidate.name === command)) {
-      throw new Error(`Command is not available in ${driver.name}: ${command}`)
-    }
-    await driver.runCommand(projectPath, thread.sessionId, command, args)
+    const exposed = this.scopeHarnessCommands(
+      driver.id,
+      await this.discoverHarnessCommands(driver, projectPath)
+    )
+    const command = exposed.find((candidate) => candidate.id === commandId)
+    if (!command) throw new Error(`Command is not available in ${driver.name}`)
+    await driver.runCommand(projectPath, thread.sessionId, command, args, thread.settings)
+  }
+
+  /** Merge driver-native commands with skills the active headless harness can invoke. */
+  private async discoverHarnessCommands(
+    driver: HarnessDriver,
+    projectPath: string
+  ): Promise<HarnessCommand[]> {
+    const commands = await driver.listCommands(projectPath)
+    if (driver.id !== 'claude-code') return commands
+    const capabilities = await this.capabilityDiscovery.discover(projectPath, driver.id)
+    return [
+      ...commands,
+      ...capabilities.skill
+        .filter((skill) => skill.enabled)
+        .map((skill): HarnessCommand => ({
+          name: skill.name,
+          description: skill.description || 'Invoke this skill in the active session',
+          source: 'skill'
+        }))
+    ]
   }
 
   private scopeHarnessCommands(
@@ -13160,7 +13186,7 @@ export class ChatEngine {
     const scoped = new Map<string, ScopedHarnessCommand>()
     for (const command of commands) {
       const name = typeof command.name === 'string' ? command.name.trim() : ''
-      if (!name || name.length > 256) continue
+      if (!name || name.length > 256 || /[\s/]/u.test(name)) continue
       const source: HarnessCommandSource =
         command.source === 'mcp' || command.source === 'skill' ? command.source : 'command'
       const description =
