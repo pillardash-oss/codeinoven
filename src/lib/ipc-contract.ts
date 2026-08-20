@@ -144,8 +144,11 @@ import type {
   UtilityResolutionContext,
   UtilitySearchOptions,
   ResolvedUtility,
+  SkillMarketDetail,
   SkillMarketInstallRequest,
+  SkillMarketLeaderboard,
   SkillMarketSearchResult,
+  SkillMarketView,
   CuaBridgeStatus,
   ComputerUsePipFrame,
   ComputerUsePipState
@@ -1306,6 +1309,8 @@ export interface IpcInvokeContract {
     UtilitySetupReport
   >
   'utilities:searchSkillMarket': Contract<[query: string], SkillMarketSearchResult>
+  'utilities:listSkillMarket': Contract<[view: SkillMarketView], SkillMarketLeaderboard>
+  'utilities:getSkillMarketDetail': Contract<[id: string], SkillMarketDetail>
   'utilities:installMarketSkill': Contract<[request: SkillMarketInstallRequest], string>
   'utilities:update': Contract<[id: string, patch: UtilityDefinitionPatch], UtilityDefinition>
   'utilities:delete': Contract<[id: string], boolean>

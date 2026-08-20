@@ -8,6 +8,7 @@
     AppConfig,
     AppConfigPatch,
     PrMergeMethod,
+    SkillMarketEntry,
     SlashCommandMode,
     ThemePreference
   } from '$shared/types'
@@ -44,6 +45,8 @@
   import Modal from '../ui/Modal.svelte'
   import ProvidersView from '../providers/ProvidersView.svelte'
   import UtilitiesView from './UtilitiesView.svelte'
+  import SkillsMarketplaceView from './SkillsMarketplaceView.svelte'
+  import SkillMarketplaceDetail from './SkillMarketplaceDetail.svelte'
   import KeymapSettingsTab from './KeymapSettingsTab.svelte'
   import SettingsMemoryTab from '../memory/MemoryPanel.svelte'
   import AuditSettingsTab from './AuditSettingsTab.svelte'
@@ -64,7 +67,7 @@
     section: SettingsSection
     /** Navigate to another settings section page. */
     onNavigateSection: (section: SettingsSection) => void
-    /** Returns to the project page. */
+    /** Returns to the content view that opened Settings. */
     onBack: () => void
   }
 
@@ -88,10 +91,53 @@
   let nightlyModalOpen = $state(false)
   let channelBusy = $state(false)
 
+  type UtilitiesRoute =
+    { page: 'catalog' } | { page: 'marketplace' } | { page: 'skill'; entry: SkillMarketEntry }
+
+  interface SettingsHistoryEntry {
+    section: SettingsSection
+    utilitiesRoute: UtilitiesRoute
+  }
+
+  let utilitiesRoute = $state<UtilitiesRoute>({ page: 'catalog' })
+  let settingsHistory = $state<SettingsHistoryEntry[]>([])
+
+  function currentSettingsLocation(): SettingsHistoryEntry {
+    return { section, utilitiesRoute }
+  }
+
+  function navigateSection(nextSection: SettingsSection): void {
+    if (
+      nextSection === section &&
+      (nextSection !== 'utilities' || utilitiesRoute.page === 'catalog')
+    ) {
+      return
+    }
+    settingsHistory = [...settingsHistory, currentSettingsLocation()]
+    utilitiesRoute = { page: 'catalog' }
+    onNavigateSection(nextSection)
+  }
+
+  function navigateUtilities(nextRoute: UtilitiesRoute): void {
+    settingsHistory = [...settingsHistory, currentSettingsLocation()]
+    utilitiesRoute = nextRoute
+  }
+
+  function goBack(): void {
+    const previous = settingsHistory.at(-1)
+    if (!previous) {
+      onBack()
+      return
+    }
+    settingsHistory = settingsHistory.slice(0, -1)
+    utilitiesRoute = previous.utilitiesRoute
+    if (previous.section !== section) onNavigateSection(previous.section)
+  }
+
   const escHandler = (e: KeyboardEvent) => {
     if (e.key === 'Escape') {
       e.preventDefault()
-      onBack()
+      goBack()
     }
   }
 
@@ -120,7 +166,10 @@
     for (const tab of tabs) {
       if (tab.id === section) activeLabel = tab.label
     }
-    settingsUiState.activeTabLabel = activeLabel
+    settingsUiState.activeTabLabel =
+      section === 'utilities' && utilitiesRoute.page !== 'catalog'
+        ? 'Skills Marketplace'
+        : activeLabel
     return () => {
       settingsUiState.activeTabLabel = null
     }
@@ -297,22 +346,11 @@
     {#snippet titlePrefix()}
       <button
         class="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-muted transition-colors hover:bg-elevated hover:text-foreground"
-        title="Back to projects"
-        aria-label="Back to projects"
-        onclick={onBack}
+        title="Go back"
+        aria-label="Go back"
+        onclick={goBack}
       >
         <ArrowLeft size={14} />
-      </button>
-    {/snippet}
-
-    {#snippet footer()}
-      <button
-        class="flex w-full items-center gap-2 px-3 py-2.5 text-sm text-muted transition-colors hover:bg-elevated hover:text-foreground"
-        title="Back to projects"
-        onclick={onBack}
-      >
-        <ArrowLeft size={14} />
-        Back
       </button>
     {/snippet}
 
@@ -326,7 +364,7 @@
             : 'border-transparent text-muted hover:border-border-strong hover:bg-elevated hover:text-foreground'}"
           aria-current={isActive ? 'page' : undefined}
           title="{tab.label} settings"
-          onclick={() => onNavigateSection(tab.id)}
+          onclick={() => navigateSection(tab.id)}
         >
           <Icon size={14} class={isActive ? 'text-foreground' : 'text-dimmed'} />
           {tab.label}
@@ -682,7 +720,17 @@
     {:else if section === 'harnesses'}
       <ProvidersView />
     {:else if section === 'utilities'}
-      <UtilitiesView />
+      {#if utilitiesRoute.page === 'catalog'}
+        <UtilitiesView onOpenMarketplace={() => navigateUtilities({ page: 'marketplace' })} />
+      {:else if utilitiesRoute.page === 'marketplace'}
+        <SkillsMarketplaceView
+          onOpenSkill={(entry) => navigateUtilities({ page: 'skill', entry })}
+        />
+      {:else}
+        {#key utilitiesRoute.entry.id}
+          <SkillMarketplaceDetail entry={utilitiesRoute.entry} />
+        {/key}
+      {/if}
     {:else if section === 'computer-use'}
       <CuaBridgeSettings />
     {:else if section === 'keymap'}

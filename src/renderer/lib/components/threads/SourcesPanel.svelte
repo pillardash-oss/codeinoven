@@ -499,7 +499,8 @@
         onclick={() => (section = 'processes')}
       >
         Processes
-        {#if processes.length > 0}<span class="text-[10px] tabular-nums">{processes.length}</span>{/if}
+        {#if processes.length > 0}<span class="text-[10px] tabular-nums">{processes.length}</span
+          >{/if}
       </button>
       <button
         type="button"
@@ -1388,7 +1389,9 @@
                     >
                       App
                     </span>
-                    <span class="shrink-0 rounded-md bg-raised px-1.5 py-0.5 text-[10px] text-muted">
+                    <span
+                      class="shrink-0 rounded-md bg-raised px-1.5 py-0.5 text-[10px] text-muted"
+                    >
                       Running
                     </span>
                   </div>
@@ -1424,12 +1427,14 @@
   </div>
 </div>
 
-<UtilityEditorModal
-  open={editorOpen}
-  target={editorTarget}
-  onClose={() => (editorOpen = false)}
-  onChanged={() => void loadCapabilities()}
-/>
+{#if editorOpen}
+  <UtilityEditorModal
+    open
+    target={editorTarget}
+    onClose={() => (editorOpen = false)}
+    onChanged={() => void loadCapabilities()}
+  />
+{/if}
 
 {#if deleteTarget}
   <Modal open onClose={() => (deleteTarget = null)} title="Delete capability">

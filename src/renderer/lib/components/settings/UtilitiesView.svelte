@@ -4,8 +4,6 @@
     AlertTriangle,
     BookOpen,
     Boxes,
-    Download,
-    ExternalLink,
     Globe2,
     KeyRound,
     LayoutGrid,
@@ -23,21 +21,25 @@
   import AgentIcon from '$lib/agent-icons/AgentIcon.svelte'
   import { getAgentIcon } from '$lib/agent-icons/registry'
   import { invoke } from '$lib/ipc.svelte'
-  import { openInBrowser } from '$lib/open-in-browser'
   import { agentToolsStore } from '$lib/stores/agent-tools.svelte'
   import { providerStore } from '$lib/stores/providers.svelte'
-  import { workspaceState } from '$lib/stores/workspace.svelte'
   import { publicAssetUrl } from '$lib/static-assets'
   import Switch from '../ui/Switch.svelte'
   import UtilityEditorModal, { type UtilityEditorTarget } from './UtilityEditorModal.svelte'
   import type {
     AgentCapabilityEntry,
-    SkillMarketEntry,
     AgentToolDefinition,
     UtilityBundleInstallRequest,
     UtilityDefinition,
     UtilityKind
   } from '$shared/types'
+  import { ALL_HARNESSES_BINDING_ID } from '$shared/types'
+
+  interface Props {
+    onOpenMarketplace: () => void
+  }
+
+  let { onOpenMarketplace }: Props = $props()
 
   const cioIconUrl = publicAssetUrl('icon.svg')
 
@@ -85,17 +87,6 @@
   let editorOpen = $state(false)
   let editorTarget = $state<UtilityEditorTarget | null>(null)
   let pluginManifest = $state('')
-  let marketOpen = $state(false)
-  let marketQuery = $state('')
-  let marketEntries = $state<SkillMarketEntry[]>([])
-  let marketLoading = $state(false)
-  let marketError = $state('')
-  let installingSkillId = $state('')
-  let marketScope = $state<'global' | 'project'>('global')
-  let marketHarnessIds = $state<string[]>([])
-  let availableMarketHarnesses = $derived(
-    providerStore.providers.filter((provider) => provider.status === 'available')
-  )
 
   let tabs: Array<{ id: Tab; label: string }> = [
     { id: 'all', label: 'All' },
@@ -148,7 +139,9 @@
       'App',
       ...(utility.scope.level === 'global' ? ['Global'] : []),
       ...(utility.scope.level === 'project' ? ['Project'] : []),
-      ...utility.harnessBindings.map((binding) => binding.harnessId)
+      ...utility.harnessBindings.map((binding) =>
+        binding.harnessId === ALL_HARNESSES_BINDING_ID ? 'All harnesses' : binding.harnessId
+      )
     ]
   }
 
@@ -253,6 +246,7 @@
     if (tag === 'App') return 'CIO'
     if (tag === 'Global') return 'Global'
     if (tag === 'Project') return 'Project'
+    if (tag === 'All harnesses') return 'All harnesses'
     return harnessName(tag)
   }
 
@@ -453,81 +447,10 @@
     }
   }
 
-  function openSkillMarket(): void {
-    marketOpen = !marketOpen
-    if (marketHarnessIds.length === 0) {
-      marketHarnessIds = providerStore.providers
-        .filter((provider) => provider.status === 'available')
-        .map((provider) => provider.id)
-    }
-  }
-
-  function toggleMarketHarness(harnessId: string): void {
-    marketHarnessIds = marketHarnessIds.includes(harnessId)
-      ? marketHarnessIds.filter((id) => id !== harnessId)
-      : [...marketHarnessIds, harnessId]
-  }
-
-  async function searchSkillMarket(event: SubmitEvent): Promise<void> {
-    event.preventDefault()
-    if (marketQuery.trim().length < 2) return
-    marketLoading = true
-    marketError = ''
-    try {
-      marketEntries = (await invoke('utilities:searchSkillMarket', marketQuery.trim())).entries
-    } catch (searchError) {
-      marketError =
-        searchError instanceof Error
-          ? searchError.message
-          : 'The skills market could not be searched.'
-    } finally {
-      marketLoading = false
-    }
-  }
-
-  async function installMarketSkill(entry: SkillMarketEntry): Promise<void> {
-    let projectId = workspaceState.activeProject?.id ?? workspaceState.selectedThread?.projectId
-    if (!projectId) {
-      projectId = (await invoke('project:list')).find(
-        (project) => project.path && !project.hidden
-      )?.id
-    }
-    if (!projectId) {
-      marketError = 'Open a local project before installing a marketplace skill.'
-      return
-    }
-    if (marketHarnessIds.length === 0) {
-      marketError = 'Select at least one harness.'
-      return
-    }
-    installingSkillId = entry.id
-    marketError = ''
-    try {
-      await invoke('utilities:installMarketSkill', {
-        source: entry.source,
-        skillId: entry.skillId,
-        scope: marketScope,
-        projectId,
-        harnessIds: marketHarnessIds
-      })
-      await load()
-    } catch (installError) {
-      marketError =
-        installError instanceof Error ? installError.message : 'The skill could not be installed.'
-    } finally {
-      installingSkillId = ''
-    }
-  }
-
   onMount(() => {
     void load()
     void providerStore.init()
-  })
-
-  // Loads the agent tool catalog once the Tools tab is first visited; the
-  // store's own TTL cache makes every later visit (in this session) instant.
-  $effect(() => {
-    if (activeTab === 'tools') void agentToolsStore.load()
+    void agentToolsStore.load()
   })
 </script>
 
@@ -540,7 +463,7 @@
       <img class="h-full w-full object-contain" src={cioIconUrl} alt="" />
     </span>
     <span>{scopeTagLabel(tag)}</span>
-  {:else if tag === 'Global' || tag === 'Project'}
+  {:else if tag === 'Global' || tag === 'Project' || tag === 'All harnesses'}
     <span>{scopeTagLabel(tag)}</span>
   {:else}
     <AgentIcon agentId={tag} label={scopeTagLabel(tag)} size={14} />
@@ -590,30 +513,46 @@
   <!-- Row 2 — description, under the title/tabs row. -->
   <p class="mt-1 min-h-4 text-sm text-muted">{TAB_BLURB[activeTab]}</p>
 
-  <!-- Row 3 — Add utility, fixed position regardless of tab. -->
-  <div class="mt-4 flex flex-wrap gap-2">
-    <button
-      class="flex h-8 items-center gap-1.5 rounded-lg bg-primary px-2.5 text-xs font-medium text-on-primary hover:bg-primary-hover"
-      title="Add a skill, MCP server, or other utility"
-      onclick={openCreate}
-    >
-      <Plus size={13} /> Add utility
-    </button>
-    {#if activeTab === 'skills'}
+  <!-- Row 3 — catalog actions stay stable across every tab. -->
+  <div class="mt-4 flex flex-wrap items-center justify-between gap-2">
+    <div class="flex flex-wrap gap-2">
       <button
-        class="flex h-8 items-center gap-1.5 rounded-lg border bg-elevated px-2.5 text-xs font-medium hover:bg-overlay"
-        title="Search the skills.sh marketplace"
-        aria-expanded={marketOpen}
-        onclick={openSkillMarket}
+        class="flex h-8 items-center gap-1.5 rounded-lg bg-primary px-2.5 text-xs font-medium text-on-primary hover:bg-primary-hover"
+        title="Add a skill, MCP server, or other utility"
+        onclick={openCreate}
       >
-        <Search size={13} /> Discover skills
+        <Plus size={13} /> Add utility
       </button>
-    {/if}
+      <button
+        class="flex h-8 items-center gap-1.5 rounded-lg border bg-elevated px-2.5 text-xs font-medium hover:bg-overlay disabled:opacity-50"
+        disabled={activeTab === 'tools'
+          ? agentToolsStore.loading || agentToolsStore.refreshing
+          : loading}
+        title="Refresh utilities"
+        onclick={refreshActiveTab}
+      >
+        <RefreshCw
+          size={13}
+          class={(
+            activeTab === 'tools' ? agentToolsStore.loading || agentToolsStore.refreshing : loading
+          )
+            ? 'animate-spin'
+            : ''}
+        /> Refresh
+      </button>
+    </div>
+    <button
+      class="flex h-8 items-center gap-1.5 rounded-lg border bg-elevated px-2.5 text-xs font-medium hover:bg-overlay"
+      title="Open the skills marketplace"
+      onclick={onOpenMarketplace}
+    >
+      <Search size={13} /> Skills marketplace
+    </button>
   </div>
 
   {#if isListTab(activeTab)}
-    <!-- Row 4 — search, entry count, refresh: one row, same position for every list tab. -->
-    <div class="mt-4 grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto_auto]">
+    <!-- Row 4 — search and entry count: one row, same position for every list tab. -->
+    <div class="mt-4 grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto]">
       <label class="relative block">
         <Search
           size={14}
@@ -645,23 +584,6 @@
             ? 'tools'
             : 'entries'}
       </span>
-      <button
-        class="flex h-8 items-center gap-1.5 rounded-lg border bg-elevated px-2.5 text-xs font-medium hover:bg-overlay disabled:opacity-50"
-        disabled={activeTab === 'tools'
-          ? agentToolsStore.loading || agentToolsStore.refreshing
-          : loading}
-        title="Refresh"
-        onclick={refreshActiveTab}
-      >
-        <RefreshCw
-          size={13}
-          class={(
-            activeTab === 'tools' ? agentToolsStore.loading || agentToolsStore.refreshing : loading
-          )
-            ? 'animate-spin'
-            : ''}
-        /> Refresh
-      </button>
     </div>
 
     <!-- Row 5 — filter chips: scope/harness tags for utility tabs, source + harness for Tools. Same row for every list tab. -->
@@ -740,133 +662,6 @@
   <!-- Row 6 — tab content. -->
   <div class="mt-4">
     {#if activeTab === 'all' || activeTab === 'skills' || activeTab === 'mcp' || activeTab === 'web'}
-      {#if activeTab === 'skills' && marketOpen}
-        <section class="mb-5 rounded-xl border bg-surface p-4" aria-labelledby="skill-market-title">
-          <div class="flex flex-wrap items-start justify-between gap-3">
-            <div>
-              <h2 id="skill-market-title" class="text-sm font-semibold">Discover skills</h2>
-              <p class="mt-1 text-xs leading-relaxed text-muted">
-                Search skills.sh, review the source, then install through the standard Skills CLI.
-              </p>
-            </div>
-            <span class="rounded-md bg-raised px-2 py-1 text-[10px] font-medium text-muted">
-              Public catalog
-            </span>
-          </div>
-          <form class="mt-4 flex gap-2" onsubmit={searchSkillMarket}>
-            <label class="relative min-w-0 flex-1">
-              <span class="sr-only">Search the skills market</span>
-              <Search
-                size={14}
-                class="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-dimmed"
-              />
-              <input
-                class="h-9 w-full rounded-lg border bg-elevated pl-9 pr-3 text-sm outline-none focus:border-primary"
-                type="search"
-                minlength="2"
-                placeholder="Search by skill, repository, or use case"
-                bind:value={marketQuery}
-              />
-            </label>
-            <button
-              class="flex h-9 items-center gap-1.5 rounded-lg bg-primary px-3 text-xs font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
-              type="submit"
-              disabled={marketLoading || marketQuery.trim().length < 2}
-            >
-              {#if marketLoading}<Loader2 size={13} class="animate-spin" />{/if}
-              Search
-            </button>
-          </form>
-          <div class="mt-3 flex flex-wrap items-center gap-1.5">
-            <span class="mr-1 text-[11px] font-medium text-muted">Install scope</span>
-            <button
-              type="button"
-              class="h-7 rounded-lg border px-2.5 text-[11px] font-medium {marketScope === 'global'
-                ? 'border-primary bg-primary text-on-primary'
-                : 'bg-elevated text-muted hover:bg-overlay'}"
-              aria-pressed={marketScope === 'global'}
-              onclick={() => (marketScope = 'global')}
-            >
-              Global
-            </button>
-            <button
-              type="button"
-              class="h-7 rounded-lg border px-2.5 text-[11px] font-medium {marketScope === 'project'
-                ? 'border-primary bg-primary text-on-primary'
-                : 'bg-elevated text-muted hover:bg-overlay'}"
-              aria-pressed={marketScope === 'project'}
-              onclick={() => (marketScope = 'project')}
-            >
-              Current project
-            </button>
-            <span class="mx-1 text-dimmed">·</span>
-            {#each availableMarketHarnesses as provider (provider.id)}
-              <button
-                type="button"
-                class="flex h-7 items-center gap-1.5 rounded-lg border px-2 text-[11px] font-medium {marketHarnessIds.includes(
-                  provider.id
-                )
-                  ? 'border-primary bg-primary text-on-primary'
-                  : 'bg-elevated text-muted hover:bg-overlay'}"
-                aria-pressed={marketHarnessIds.includes(provider.id)}
-                onclick={() => toggleMarketHarness(provider.id)}
-              >
-                <AgentIcon agentId={provider.id} label={provider.name} size={14} />
-                {provider.name}
-              </button>
-            {/each}
-          </div>
-          {#if marketError}
-            <p class="mt-3 rounded-lg bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">
-              {marketError}
-            </p>
-          {/if}
-          {#if marketEntries.length > 0}
-            <div class="mt-4 divide-y rounded-lg border bg-elevated">
-              {#each marketEntries as entry (entry.id)}
-                <div class="flex items-center gap-3 p-3">
-                  <BookOpen size={15} class="shrink-0 text-muted" />
-                  <div class="min-w-0 flex-1">
-                    <p class="truncate text-xs font-semibold">{entry.name}</p>
-                    <p class="mt-0.5 truncate text-[10px] text-dimmed">
-                      {entry.source} · {entry.installs.toLocaleString()} installs
-                    </p>
-                  </div>
-                  <button
-                    type="button"
-                    class="flex h-8 w-8 items-center justify-center rounded-lg text-muted hover:bg-surface hover:text-foreground"
-                    title="Review {entry.name} on skills.sh"
-                    aria-label="Review {entry.name} on skills.sh"
-                    onclick={() => void openInBrowser(entry.url)}
-                  >
-                    <ExternalLink size={13} />
-                  </button>
-                  <button
-                    type="button"
-                    class="flex h-8 items-center gap-1.5 rounded-lg border bg-surface px-2.5 text-xs font-medium hover:bg-overlay disabled:opacity-50"
-                    disabled={Boolean(installingSkillId)}
-                    title="Install {entry.name} for the selected harnesses"
-                    onclick={() => void installMarketSkill(entry)}
-                  >
-                    {#if installingSkillId === entry.id}
-                      <Loader2 size={13} class="animate-spin" />
-                    {:else}
-                      <Download size={13} />
-                    {/if}
-                    Install
-                  </button>
-                </div>
-              {/each}
-            </div>
-          {:else if marketQuery.trim().length >= 2 && !marketLoading && !marketError}
-            <p class="mt-4 text-center text-xs text-dimmed">No marketplace skills matched.</p>
-          {/if}
-          <p class="mt-3 text-[10px] leading-relaxed text-dimmed">
-            Marketplace skills are third-party code and instructions. Review the repository before
-            granting an agent access. Anonymous install telemetry is disabled by CodeInOven.
-          </p>
-        </section>
-      {/if}
       {#if (activeTab === 'all' || activeTab === 'skills' || activeTab === 'mcp') && !secureStorageAvailable}
         <div
           class="mb-4 flex items-start gap-2 rounded-lg border border-warning/30 bg-warning/10 px-3 py-2 text-xs text-warning"
@@ -956,15 +751,15 @@
                     title="{row.enabled ? 'Disable' : 'Enable'} {row.name}"
                   />
                 {/if}
-                <button
-                  class="flex h-8 w-8 items-center justify-center rounded-lg text-muted hover:bg-elevated hover:text-foreground"
-                  aria-label="Edit {row.name}"
-                  title="Edit {row.name}"
-                  onclick={() => openEdit(row)}
-                >
-                  <Pencil size={14} />
-                </button>
                 {#if !row.appOwned}
+                  <button
+                    class="flex h-8 w-8 items-center justify-center rounded-lg text-muted hover:bg-elevated hover:text-foreground"
+                    aria-label="Edit {row.name}"
+                    title="Edit {row.name}"
+                    onclick={() => openEdit(row)}
+                  >
+                    <Pencil size={14} />
+                  </button>
                   <button
                     class="flex h-8 w-8 items-center justify-center rounded-lg text-muted hover:bg-danger/10 hover:text-danger"
                     aria-label="Delete {row.name}"
@@ -1121,13 +916,15 @@
   </div>
 </div>
 
-<UtilityEditorModal
-  open={editorOpen}
-  target={editorTarget}
-  onClose={() => (editorOpen = false)}
-  onSaved={replaceUtility}
-  onChanged={() => void load()}
-/>
+{#if editorOpen}
+  <UtilityEditorModal
+    open
+    target={editorTarget}
+    onClose={() => (editorOpen = false)}
+    onSaved={replaceUtility}
+    onChanged={() => void load()}
+  />
+{/if}
 
 {#if deleteTarget}
   <div class="fixed inset-0 z-50 flex items-center justify-center">

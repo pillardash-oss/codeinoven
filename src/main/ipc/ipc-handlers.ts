@@ -242,6 +242,180 @@ function installSkillWithBun(args: string[], cwd: string): Promise<string> {
   })
 }
 
+const SKILL_MARKET_VIEWS = new Set(['all-time', 'trending', 'hot'])
+
+interface EmbeddedSkillMarketEntry {
+  source: string
+  skillId: string
+  name: string
+  installs: number
+  weeklyInstalls?: number[]
+  installsYesterday?: number
+  change?: number
+  isOfficial?: boolean
+}
+
+function marketEntry(rawEntry: unknown): EmbeddedSkillMarketEntry | null {
+  if (!isRecord(rawEntry)) return null
+  const source = rawEntry['source']
+  const skillId = rawEntry['skillId']
+  const name = rawEntry['name']
+  const installs = rawEntry['installs']
+  if (
+    typeof source !== 'string' ||
+    typeof skillId !== 'string' ||
+    typeof name !== 'string' ||
+    typeof installs !== 'number'
+  ) {
+    return null
+  }
+  const weeklyInstalls = Array.isArray(rawEntry['weeklyInstalls'])
+    ? rawEntry['weeklyInstalls'].filter((value): value is number => typeof value === 'number')
+    : undefined
+  return {
+    source,
+    skillId,
+    name,
+    installs,
+    ...(weeklyInstalls?.length ? { weeklyInstalls } : {}),
+    ...(typeof rawEntry['installsYesterday'] === 'number'
+      ? { installsYesterday: rawEntry['installsYesterday'] }
+      : {}),
+    ...(typeof rawEntry['change'] === 'number' ? { change: rawEntry['change'] } : {}),
+    ...(rawEntry['isOfficial'] === true ? { isOfficial: true } : {})
+  }
+}
+
+function publicMarketEntry(entry: EmbeddedSkillMarketEntry) {
+  const id = `${entry.source}/${entry.skillId}`
+  return { id, ...entry, url: `https://www.skills.sh/${id}` }
+}
+
+async function fetchSkillMarketPage(pathname: string): Promise<string> {
+  const response = await fetch(`https://www.skills.sh${pathname}`, {
+    headers: { Accept: 'text/html', 'User-Agent': `${APP_NAME}/desktop` },
+    signal: AbortSignal.timeout(20_000)
+  })
+  if (!response.ok) throw new Error(`Skills market request failed (${response.status})`)
+  return response.text()
+}
+
+function embeddedLeaderboard(html: string): EmbeddedSkillMarketEntry[] {
+  const marker = 'initialSkills\\":'
+  const start = html.indexOf(marker)
+  const end = html.indexOf('],\\"totalSkills', start)
+  if (start < 0 || end < 0) throw new Error('Skills market returned an invalid leaderboard')
+  const encoded = html.slice(start + marker.length, end + 1)
+  const parsed: unknown = JSON.parse(encoded.replaceAll('\\"', '"').replaceAll('\\\\', '\\'))
+  if (!Array.isArray(parsed)) throw new Error('Skills market returned an invalid leaderboard')
+  return parsed.flatMap((entry) => {
+    const parsedEntry = marketEntry(entry)
+    return parsedEntry ? [parsedEntry] : []
+  })
+}
+
+function jsonLdSkill(html: string): { description: string; installs: number } | null {
+  for (const match of html.matchAll(/<script type="application\/ld\+json">([^<]+)<\/script>/gu)) {
+    try {
+      const value: unknown = JSON.parse(match[1] ?? '')
+      if (
+        isRecord(value) &&
+        value['@type'] === 'SoftwareApplication' &&
+        typeof value['description'] === 'string' &&
+        isRecord(value['interactionStatistic']) &&
+        typeof value['interactionStatistic']['userInteractionCount'] === 'number'
+      ) {
+        return {
+          description: value['description'],
+          installs: value['interactionStatistic']['userInteractionCount']
+        }
+      }
+    } catch {
+      // Ignore unrelated malformed structured data and continue looking.
+    }
+  }
+  return null
+}
+
+function skillDetailMetadata(html: string): {
+  firstSeen: string | null
+  audits: Array<{ name: string; status: 'pass' | 'warn' | 'fail' | 'unknown' }>
+} {
+  const firstSeen =
+    html.match(/children\\":\\"First Seen\\"[\s\S]{0,600}?children\\":\\"([^"\\]+)\\"/u)?.[1] ??
+    null
+  const auditStart = html.indexOf('Security Audits')
+  const auditText = auditStart >= 0 ? html.slice(auditStart, auditStart + 12_000) : ''
+  const audits: Array<{ name: string; status: 'pass' | 'warn' | 'fail' | 'unknown' }> = []
+  for (const match of auditText.matchAll(
+    /text-foreground truncate">([^<]+)<\/span>[\s\S]{0,600}?>(Pass|Warn|Fail)<\/span>/gu
+  )) {
+    const name = match[1]
+    const rawStatus = match[2]?.toLowerCase()
+    if (!name || (rawStatus !== 'pass' && rawStatus !== 'warn' && rawStatus !== 'fail')) continue
+    if (!audits.some((audit) => audit.name === name)) audits.push({ name, status: rawStatus })
+  }
+  for (const match of auditText.matchAll(
+    /children\\":\\"([^"\\]+)\\"[\s\S]{0,500}?children\\":\\"(Pass|Warn|Fail)\\"/gu
+  )) {
+    const name = match[1]
+    const rawStatus = match[2]?.toLowerCase()
+    if (!name || (rawStatus !== 'pass' && rawStatus !== 'warn' && rawStatus !== 'fail')) continue
+    if (!audits.some((audit) => audit.name === name)) audits.push({ name, status: rawStatus })
+  }
+  return { firstSeen, audits }
+}
+
+async function githubSkillMetadata(
+  source: string,
+  skillId: string
+): Promise<{ repositoryUrl: string; stars: number | null; markdown: string }> {
+  const repositoryUrl = `https://github.com/${source}`
+  const headers = { Accept: 'application/vnd.github+json', 'User-Agent': `${APP_NAME}/desktop` }
+  try {
+    const [repositoryResponse, treeResponse] = await Promise.all([
+      fetch(`https://api.github.com/repos/${source}`, {
+        headers,
+        signal: AbortSignal.timeout(20_000)
+      }),
+      fetch(`https://api.github.com/repos/${source}/git/trees/HEAD?recursive=1`, {
+        headers,
+        signal: AbortSignal.timeout(20_000)
+      })
+    ])
+    const repositoryPayload: unknown = repositoryResponse.ok
+      ? await repositoryResponse.json()
+      : null
+    const treePayload: unknown = treeResponse.ok ? await treeResponse.json() : null
+    const stars =
+      isRecord(repositoryPayload) && typeof repositoryPayload['stargazers_count'] === 'number'
+        ? repositoryPayload['stargazers_count']
+        : null
+    const defaultBranch =
+      isRecord(repositoryPayload) && typeof repositoryPayload['default_branch'] === 'string'
+        ? repositoryPayload['default_branch']
+        : 'HEAD'
+    const tree =
+      isRecord(treePayload) && Array.isArray(treePayload['tree']) ? treePayload['tree'] : []
+    const skillPath = tree
+      .flatMap((entry) =>
+        isRecord(entry) && typeof entry['path'] === 'string' ? [entry['path']] : []
+      )
+      .find((path) => path === `${skillId}/SKILL.md` || path.endsWith(`/${skillId}/SKILL.md`))
+    let markdown = ''
+    if (skillPath) {
+      const rawResponse = await fetch(
+        `https://raw.githubusercontent.com/${source}/${defaultBranch}/${skillPath}`,
+        { headers: { 'User-Agent': `${APP_NAME}/desktop` }, signal: AbortSignal.timeout(20_000) }
+      )
+      if (rawResponse.ok) markdown = await rawResponse.text()
+    }
+    return { repositoryUrl, stars, markdown }
+  } catch {
+    return { repositoryUrl, stars: null, markdown: '' }
+  }
+}
+
 /** Resolve the native drag icon. Prefer the dragged file's own Finder icon so
  *  the drag ghost keeps the file's look; fall back to the app icon. */
 async function resolveDragIcon(firstPath?: string): Promise<Electron.NativeImage> {
@@ -4799,6 +4973,50 @@ export function registerIpcHandlers(
     return { query, entries }
   })
 
+  ipcMain.handle('utilities:listSkillMarket', async (_, rawView: unknown) => {
+    if (typeof rawView !== 'string' || !SKILL_MARKET_VIEWS.has(rawView)) {
+      throw new TypeError('Skill market view is invalid')
+    }
+    const pathname = rawView === 'all-time' ? '/' : `/${rawView}`
+    const entries = embeddedLeaderboard(await fetchSkillMarketPage(pathname))
+      .slice(0, 100)
+      .map(publicMarketEntry)
+    return { view: rawView as 'all-time' | 'trending' | 'hot', entries }
+  })
+
+  ipcMain.handle('utilities:getSkillMarketDetail', async (_, rawId: unknown) => {
+    const id = validateBoundedString(rawId, 'Skill market ID', 3, 500)
+    const segments = id.split('/').filter(Boolean)
+    if (segments.length < 2 || segments.some((segment) => !/^[A-Za-z0-9_.-]+$/u.test(segment))) {
+      throw new TypeError('Skill market ID is invalid')
+    }
+    const skillId = segments.at(-1)!
+    const source = segments.slice(0, -1).join('/')
+    const html = await fetchSkillMarketPage(`/${segments.map(encodeURIComponent).join('/')}`)
+    const structured = jsonLdSkill(html)
+    if (!structured) throw new Error('Skills market returned an invalid skill page')
+    const embedded = publicMarketEntry({
+      source,
+      skillId,
+      name: skillId,
+      installs: structured.installs
+    })
+    const metadata = skillDetailMetadata(html)
+    const githubSource = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/u.test(source)
+    const github = githubSource
+      ? await githubSkillMetadata(source, skillId)
+      : { repositoryUrl: null, stars: null, markdown: '' }
+    return {
+      ...embedded,
+      description: structured.description,
+      repositoryUrl: github.repositoryUrl,
+      githubStars: github.stars,
+      firstSeen: metadata.firstSeen,
+      audits: metadata.audits,
+      skillMarkdown: github.markdown
+    }
+  })
+
   ipcMain.handle('utilities:installMarketSkill', async (_, rawRequest: unknown) => {
     if (!isRecord(rawRequest)) throw new TypeError('Skill install request must be an object')
     const source = validateBoundedString(rawRequest['source'], 'Skill source', 3, 300)
@@ -4807,24 +5025,25 @@ export function registerIpcHandlers(
     const wellKnownSource = /^(?:[A-Za-z0-9-]+\.)+[A-Za-z]{2,}$/u.test(source)
     if (!githubSource && !wellKnownSource) throw new TypeError('Skill source is invalid')
     const installSource = githubSource ? `https://github.com/${source}` : `https://${source}`
-    if (rawRequest['scope'] !== 'global' && rawRequest['scope'] !== 'project') {
-      throw new TypeError('Skill install scope must be global or project')
-    }
     const projectId = validateEntityId(rawRequest['projectId'], 'Project ID')
     const projectPath = await resolveProjectPath(projectId)
-    const harnessIds = rawRequest['harnessIds']
+    const target = rawRequest['target']
+    if (!isRecord(target)) throw new TypeError('Skill install target must be an object')
     const knownHarnesses = new Set(listHarnesses().map((harness) => harness.id))
-    const safeHarnessIds = Array.isArray(harnessIds)
-      ? harnessIds.filter((id): id is string => typeof id === 'string')
-      : []
-    if (
-      !Array.isArray(harnessIds) ||
-      harnessIds.length === 0 ||
-      harnessIds.length > 20 ||
-      safeHarnessIds.length !== harnessIds.length ||
-      safeHarnessIds.some((id) => !knownHarnesses.has(id))
-    ) {
-      throw new TypeError('Select at least one supported harness')
+    const targetKind = target['kind']
+    let agentTarget = '*'
+    let globalInstall: boolean
+    if (targetKind === 'global') {
+      globalInstall = true
+    } else if (targetKind === 'project') {
+      globalInstall = false
+    } else if (targetKind === 'harness') {
+      const harnessId = validateEntityId(target['harnessId'], 'Harness ID')
+      if (!knownHarnesses.has(harnessId)) throw new TypeError('Select a supported harness')
+      agentTarget = harnessId
+      globalInstall = true
+    } else {
+      throw new TypeError('Skill install target is invalid')
     }
     const args = [
       'add',
@@ -4832,9 +5051,9 @@ export function registerIpcHandlers(
       '--skill',
       skillId,
       '--agent',
-      ...safeHarnessIds,
+      agentTarget,
       '-y',
-      ...(rawRequest['scope'] === 'global' ? ['--global'] : [])
+      ...(globalInstall ? ['--global'] : [])
     ]
     return installSkillWithBun(args, projectPath)
   })

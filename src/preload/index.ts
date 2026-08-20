@@ -322,6 +322,8 @@ const INVOKE_CHANNELS = [
   'utilities:installBundle',
   'utilities:setupWithAgent',
   'utilities:searchSkillMarket',
+  'utilities:listSkillMarket',
+  'utilities:getSkillMarketDetail',
   'utilities:installMarketSkill',
   'utilities:update',
   'utilities:delete',

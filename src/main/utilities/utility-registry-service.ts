@@ -14,6 +14,7 @@ import type {
   WebToolProviderId
 } from '../../lib/types'
 import { UTILITY_KIND_VALUES } from '../../lib/types'
+import { ALL_HARNESSES_BINDING_ID } from '../../lib/types'
 import { generateId } from '../../lib/utils'
 import { listHarnesses } from '../agents/harness-registry'
 import type { StorageEngine } from '../storage/storage-engine'
@@ -312,9 +313,11 @@ export class UtilityRegistryService {
       )
 
     for (const utility of candidates) {
-      const binding = utility.harnessBindings.find(
-        (candidate) => candidate.harnessId === context.harnessId
-      )
+      const binding =
+        utility.harnessBindings.find((candidate) => candidate.harnessId === context.harnessId) ??
+        utility.harnessBindings.find(
+          (candidate) => candidate.harnessId === ALL_HARNESSES_BINDING_ID
+        )
       if (!binding) continue
 
       const implicitCapability =
@@ -569,7 +572,10 @@ function parseBindings(value: unknown): HarnessUtilityBinding[] {
       throw new TypeError(`Harness binding ${index} strategy is invalid`)
     }
     const binding: HarnessUtilityBinding = {
-      harnessId: identifier(entry['harnessId'], `Harness binding ${index} harness ID`),
+      harnessId:
+        entry['harnessId'] === ALL_HARNESSES_BINDING_ID
+          ? ALL_HARNESSES_BINDING_ID
+          : identifier(entry['harnessId'], `Harness binding ${index} harness ID`),
       strategy: strategy as HarnessUtilityBinding['strategy'],
       ...(optionalString(entry['nativeCapability'], 'Native capability', 120)
         ? { nativeCapability: optionalString(entry['nativeCapability'], 'Native capability', 120) }

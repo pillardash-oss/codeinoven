@@ -43,7 +43,7 @@
     UtilityScope,
     WebToolProviderId
   } from '$shared/types'
-  import { isOrchestrationChildThread } from '$shared/types'
+  import { ALL_HARNESSES_BINDING_ID, isOrchestrationChildThread } from '$shared/types'
 
   type ScopeLevel = UtilityScope['level']
   type BindingStrategy = HarnessUtilityBinding['strategy']
@@ -316,17 +316,42 @@ ${instructions}`
     return { name, description }
   }
 
-  function bindings(
+  function allHarnessBinding(
     strategy: BindingStrategy,
     nativeCapability: string,
     transportName: string
   ): BindingDraft[] {
-    return availableHarnesses.map((harness) => ({
-      harnessId: harness.id,
-      strategy,
-      nativeCapability,
-      transportName
-    }))
+    return [
+      {
+        harnessId: ALL_HARNESSES_BINDING_ID,
+        strategy,
+        nativeCapability,
+        transportName
+      }
+    ]
+  }
+
+  function newBinding(harnessId: string): BindingDraft {
+    return {
+      harnessId,
+      strategy:
+        draft.kind === 'skill' ? 'skill' : draft.kind === 'image_descriptor' ? 'native' : 'mcp',
+      nativeCapability:
+        draft.kind === 'web_search' || draft.kind === 'web_fetch'
+          ? draft.kind
+          : draft.kind === 'image_descriptor'
+            ? 'image_descriptor'
+            : '',
+      transportName:
+        draft.name
+          .toLowerCase()
+          .replace(/[^a-z0-9]+/gu, '-')
+          .replace(/^-|-$/gu, '') || 'utility'
+    }
+  }
+
+  function selectAllHarnesses(): void {
+    draft.bindings = [newBinding(ALL_HARNESSES_BINDING_ID)]
   }
 
   function toggleHarness(harnessId: string): void {
@@ -335,25 +360,9 @@ ${instructions}`
       draft.bindings = draft.bindings.filter((binding) => binding.harnessId !== harnessId)
       return
     }
-    const strategy: BindingStrategy =
-      draft.kind === 'skill' ? 'skill' : draft.kind === 'image_descriptor' ? 'native' : 'mcp'
     draft.bindings = [
-      ...draft.bindings,
-      {
-        harnessId,
-        strategy,
-        nativeCapability:
-          draft.kind === 'web_search' || draft.kind === 'web_fetch'
-            ? draft.kind
-            : draft.kind === 'image_descriptor'
-              ? 'image_descriptor'
-              : '',
-        transportName:
-          draft.name
-            .toLowerCase()
-            .replace(/[^a-z0-9]+/gu, '-')
-            .replace(/^-|-$/gu, '') || 'utility'
-      }
+      ...draft.bindings.filter((binding) => binding.harnessId !== ALL_HARNESSES_BINDING_ID),
+      newBinding(harnessId)
     ]
   }
 
@@ -384,10 +393,10 @@ ${instructions}`
     if (id === 'skill') {
       draft.kind = 'skill'
       draft.instructions = skillPlaceholder
-      draft.bindings = bindings('skill', '', 'custom-skill')
+      draft.bindings = allHarnessBinding('skill', '', 'custom-skill')
     } else {
       draft.kind = 'mcp'
-      draft.bindings = bindings('mcp', '', 'custom-mcp')
+      draft.bindings = allHarnessBinding('mcp', '', 'custom-mcp')
     }
   }
 
@@ -475,7 +484,12 @@ ${instructions}`
     const installedIds = new Set(availableHarnesses.map((harness) => harness.id))
     return draft.bindings
       .filter((binding) => binding.harnessId.trim())
-      .filter((binding) => draft.id !== null || installedIds.has(binding.harnessId))
+      .filter(
+        (binding) =>
+          draft.id !== null ||
+          binding.harnessId === ALL_HARNESSES_BINDING_ID ||
+          installedIds.has(binding.harnessId)
+      )
       .map((binding) => ({
         harnessId: binding.harnessId.trim(),
         strategy: binding.strategy,
@@ -631,8 +645,7 @@ ${instructions}`
     if (projectId) void providerCatalog.refresh(projectId)
   }
 
-  $effect(() => {
-    if (!open) return
+  function initializeTarget(): void {
     if (target?.kind === 'registry') {
       draft = emptyDraft()
       resetCredential()
@@ -647,9 +660,10 @@ ${instructions}`
     } else if (target?.kind === 'native') {
       void openNative()
     }
-  })
+  }
 
   onMount(() => {
+    initializeTarget()
     void loadContext()
     void providerStore.init()
   })
@@ -1507,11 +1521,26 @@ ${instructions}`
   <fieldset class="space-y-3 rounded-xl border p-3">
     <legend class="px-1 text-xs font-semibold">Available to</legend>
     <p class="text-[11px] text-dimmed">
-      Every installed harness is selected by default. CodeInOven skips this capability when a
-      harness already provides an equivalent.
+      All is selected by default and automatically includes harnesses added later. Choose individual
+      harnesses only when this utility should have limited availability.
     </p>
-    {#if availableHarnesses.length}
-      <div class="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+    <div class="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+      <button
+        type="button"
+        class="flex h-10 items-center justify-center gap-2 rounded-lg border px-3 text-xs font-medium transition-colors {draft.bindings.some(
+          (binding) => binding.harnessId === ALL_HARNESSES_BINDING_ID
+        )
+          ? 'border-primary bg-primary text-on-primary'
+          : 'bg-elevated text-muted hover:bg-overlay hover:text-foreground'}"
+        aria-pressed={draft.bindings.some(
+          (binding) => binding.harnessId === ALL_HARNESSES_BINDING_ID
+        )}
+        title="Apply to all current and future harnesses"
+        onclick={selectAllHarnesses}
+      >
+        All
+      </button>
+      {#if availableHarnesses.length}
         {#each availableHarnesses as harness (harness.id)}
           <button
             type="button"
@@ -1527,12 +1556,13 @@ ${instructions}`
             {harness.name}
           </button>
         {/each}
-      </div>
-    {:else}
+      {/if}
+    </div>
+    {#if !availableHarnesses.length}
       <div class="rounded-lg bg-raised px-3 py-2">
         <p class="text-xs text-muted">
-          No installed, supported harnesses were detected. Open Settings → Harnesses to check
-          installations.
+          No installed, supported harnesses were detected. All harnesses will still apply when one
+          is added later.
         </p>
       </div>
     {/if}

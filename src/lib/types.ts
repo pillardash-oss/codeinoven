@@ -1118,8 +1118,12 @@ export interface UtilityConfigMap {
   image_descriptor: ImageDescriptorUtilityConfig
 }
 
+/** Binding target that keeps a utility available to every current and future harness. */
+export const ALL_HARNESSES_BINDING_ID = '*'
+
 /** How one harness receives a resolved utility without writing into the project. */
 export interface HarnessUtilityBinding {
+  /** A literal `*` applies this binding to every current and future harness. */
   harnessId: string
   strategy: 'native' | 'mcp' | 'skill' | 'environment' | 'provider'
   /** Harness-native capability that makes this binding unnecessary when already present. */
@@ -1213,6 +1217,17 @@ export interface SkillMarketEntry {
   source: string
   installs: number
   url: string
+  weeklyInstalls?: number[]
+  installsYesterday?: number
+  change?: number
+  isOfficial?: boolean
+}
+
+export type SkillMarketView = 'all-time' | 'trending' | 'hot'
+
+export interface SkillMarketLeaderboard {
+  view: SkillMarketView
+  entries: SkillMarketEntry[]
 }
 
 export interface SkillMarketSearchResult {
@@ -1220,12 +1235,25 @@ export interface SkillMarketSearchResult {
   entries: SkillMarketEntry[]
 }
 
+export interface SkillMarketAudit {
+  name: string
+  status: 'pass' | 'warn' | 'fail' | 'unknown'
+}
+
+export interface SkillMarketDetail extends SkillMarketEntry {
+  description: string
+  repositoryUrl: string | null
+  githubStars: number | null
+  firstSeen: string | null
+  audits: SkillMarketAudit[]
+  skillMarkdown: string
+}
+
 export interface SkillMarketInstallRequest {
   source: string
   skillId: string
-  scope: 'global' | 'project'
   projectId: string
-  harnessIds: string[]
+  target: { kind: 'global' } | { kind: 'project' } | { kind: 'harness'; harnessId: string }
 }
 
 // ─── Harness-native capability discovery ───────────────────────────────────
