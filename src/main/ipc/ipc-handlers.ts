@@ -27,6 +27,7 @@ import type { GitProvider } from '../git/git-provider.interface'
 import { ProjectFilesService } from '../editor/project-files-service'
 import { CheckpointManager } from '../storage/checkpoint-manager'
 import { ThreadCreationCoordinator } from '../chat/thread-creation-coordinator'
+import { ThreadDeletionCoordinator } from '../chat/thread-deletion-coordinator'
 import { DiagnosticsService } from '../system/diagnostics-service'
 import { resolveFavicons } from '../editor/favicon-service'
 import {
@@ -48,6 +49,7 @@ import type { RetrySchedulerService } from '../system/retry-scheduler-service'
 import {
   broadcastNoteChanged,
   broadcastThreadDeleted,
+  broadcastThreadOperationError,
   broadcastThreadUpdate,
   dismissThreadNotifications
 } from '../chat/thread-events'
@@ -1721,6 +1723,8 @@ export interface RegisterIpcHandlersOptions {
   hydrationHandlersRegistered?: boolean
   /** Optimistic thread-create finalization coordinator shared with ChatEngine. */
   threadCreation?: ThreadCreationCoordinator
+  /** Optimistic thread-delete cleanup coordinator shared with remote RPC. */
+  threadDeletion?: ThreadDeletionCoordinator
 }
 
 export function registerIpcHandlers(
@@ -1734,6 +1738,7 @@ export function registerIpcHandlers(
   const projectManager = options.projectManager ?? new ProjectManager(database)
   const projectFilesService = options.projectFilesService ?? new ProjectFilesService(projectManager)
   const threadCreation = options.threadCreation ?? new ThreadCreationCoordinator()
+  const threadDeletion = options.threadDeletion ?? new ThreadDeletionCoordinator()
   const checkpointManager = new CheckpointManager(database)
   const threadManager = new ThreadManager(
     database,
@@ -5330,18 +5335,8 @@ export function registerIpcHandlers(
   })
 
   // ─── Threads ────────────────────────────────────────────────────────────
-  ipcMain.handle('thread:create', async (_, input: unknown) => {
+  ipcMain.handle('thread:create', (_, input: unknown) => {
     const validated = validateCreateThreadInput(input)
-    if (validated.settings?.engineeringMode) {
-      const baseSettings = { ...validated.settings }
-      delete baseSettings.loopAuditor
-      const defaults = (await storage.getConfig()).agentDefaults
-      validated.settings = {
-        ...baseSettings,
-        ...(defaults.seniorEngineer ?? {}),
-        ...(defaults.auditor ? { loopAuditor: defaults.auditor } : {})
-      }
-    }
     // Optimistic create: the thread object (with its stable id) is returned
     // immediately while persistence, lazy capacity eviction, and branch
     // detection finalize in the background. Session/message entry points await
@@ -5355,16 +5350,45 @@ export function registerIpcHandlers(
           error: String(error)
         })
     })
-    threadCreation.begin(thread.id, async () => {
-      await finalize()
-      if (thread.workingDirectory) {
-        const branch = await repositoryService.getCurrentBranch(thread.workingDirectory)
-        if (branch) {
-          await threadManager.setBranch(thread.projectId, thread.id, branch)
-          thread.branch = branch
+    threadCreation.begin(
+      thread.id,
+      async () => {
+        if (validated.settings?.engineeringMode) {
+          const baseSettings = { ...validated.settings }
+          delete baseSettings.loopAuditor
+          const defaults = (await storage.getConfig()).agentDefaults
+          thread.settings = {
+            ...baseSettings,
+            ...(defaults.seniorEngineer ?? {}),
+            ...(defaults.auditor ? { loopAuditor: defaults.auditor } : {})
+          }
         }
+        await finalize()
+        if (thread.workingDirectory) {
+          try {
+            const branch = await repositoryService.getCurrentBranch(thread.workingDirectory)
+            if (branch) {
+              await threadManager.setBranch(thread.projectId, thread.id, branch)
+              thread.branch = branch
+            }
+          } catch (error) {
+            Logger.error('New thread branch detection failed', {
+              threadId: thread.id,
+              error: String(error)
+            })
+          }
+        }
+        broadcastThreadUpdate(thread)
+      },
+      () => {
+        broadcastThreadDeleted(thread)
+        broadcastThreadOperationError(
+          'The new thread could not be saved and was removed.',
+          thread.projectId,
+          thread.id
+        )
       }
-    })
+    )
     return thread
   })
   if (!options.hydrationHandlersRegistered) {
@@ -5528,10 +5552,32 @@ export function registerIpcHandlers(
       validateThreadUpdateInput(input)
     )
   )
-  ipcMain.handle('thread:delete', async (_, projectId: unknown, threadId: unknown) => {
+  ipcMain.handle('thread:delete', (_, projectId: unknown, threadId: unknown) => {
     const validProjectId = validateEntityId(projectId, 'Project ID')
     const validThreadId = validateEntityId(threadId, 'Thread ID')
-    await threadManager.deleteThread(validProjectId, validThreadId)
+    threadDeletion.begin(
+      validProjectId,
+      validThreadId,
+      () => threadManager.deleteThread(validProjectId, validThreadId),
+      () => {
+        void threadManager.getThreadViaWorker(validProjectId, validThreadId).then((thread) => {
+          if (thread) {
+            broadcastThreadUpdate(thread)
+            broadcastThreadOperationError(
+              'The thread cleanup failed. The thread has been restored.',
+              validProjectId,
+              validThreadId
+            )
+            return
+          }
+          broadcastThreadOperationError(
+            'The thread was deleted, but some background cleanup did not finish.',
+            validProjectId,
+            validThreadId
+          )
+        })
+      }
+    )
   })
   // ─── Thread notes (user-only scratch space) ─────────────────────────────
   const NOTE_BODY_MAX = 100_000

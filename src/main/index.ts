@@ -44,6 +44,7 @@ import type { PowerWakeService } from './system/power-wake-service'
 import type { RetrySchedulerService } from './system/retry-scheduler-service'
 import { ModelPricingService } from './providers/model-pricing-service'
 import { ThreadCreationCoordinator } from './chat/thread-creation-coordinator'
+import { ThreadDeletionCoordinator } from './chat/thread-deletion-coordinator'
 import type { PtyService } from './system/pty-service'
 import type { ProviderConnectionService } from './providers/provider-connection'
 import type { HarnessUpdateService } from './agents/harness-update-service'
@@ -376,6 +377,7 @@ let modelPricingService: ModelPricingService | null = null
  */
 let appfileProjectFiles: import('./editor/project-files-service').ProjectFilesService | null = null
 const threadCreation = new ThreadCreationCoordinator()
+const threadDeletion = new ThreadDeletionCoordinator()
 
 /** Resolve the app icon — static dir in dev, bundled renderer assets in production. */
 function getAppIconPath(): string {
@@ -576,6 +578,7 @@ async function bootPostPaintServices(): Promise<void> {
     retryScheduler,
     harnessManifestService,
     threadCreation,
+    threadDeletion,
     hydrationHandlersRegistered: true
   })
   chatEngine.register()
@@ -641,7 +644,9 @@ async function bootPostPaintServices(): Promise<void> {
         database,
         chatEngine: chatEngine!,
         storage,
-        credentials: remoteCredentials
+        credentials: remoteCredentials,
+        threadCreation,
+        threadDeletion
       }),
       storage,
       credentials: remoteCredentials,

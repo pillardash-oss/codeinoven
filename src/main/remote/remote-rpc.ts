@@ -21,6 +21,8 @@ import { NoteRepo } from '../database/repositories/note-repo'
 import { ProjectManager } from '../../lib/engines/project-manager'
 import { ProjectFilesService } from '../editor/project-files-service'
 import type { ChatEngine } from '../chat/chat-engine'
+import { ThreadCreationCoordinator } from '../chat/thread-creation-coordinator'
+import { ThreadDeletionCoordinator } from '../chat/thread-deletion-coordinator'
 import {
   broadcastNoteChanged,
   broadcastThreadDeleted,
@@ -174,6 +176,8 @@ export interface RemoteRpcServices {
    * dispatcher and isolated tests can construct it without device state.
    */
   credentials?: DeviceCredentialService
+  threadCreation?: ThreadCreationCoordinator
+  threadDeletion?: ThreadDeletionCoordinator
 }
 
 /** A remote RPC invoke request that reached the main process. */
@@ -206,11 +210,15 @@ export class RemoteRpcDispatcher {
   private readonly githubAuthService: GitHubAuthService
   private readonly storage: StorageEngine
   private readonly credentials: DeviceCredentialService | null
+  private readonly threadCreation: ThreadCreationCoordinator
+  private readonly threadDeletion: ThreadDeletionCoordinator
   private readonly remoteUploads = new Map<string, RemoteAttachmentUpload>()
 
   constructor(private readonly services: RemoteRpcServices) {
     this.storage = services.storage ?? new StorageEngine()
     this.credentials = services.credentials ?? null
+    this.threadCreation = services.threadCreation ?? new ThreadCreationCoordinator()
+    this.threadDeletion = services.threadDeletion ?? new ThreadDeletionCoordinator()
     this.checkpointManager = new CheckpointManager(services.database)
     this.threadManager = new ThreadManager(
       services.database,
@@ -576,10 +584,24 @@ export class RemoteRpcDispatcher {
       case 'thread:list':
         return this.threadManager.listThreads(this.string(args[0]))
       case 'thread:get':
+        await this.threadCreation.awaitReady(this.string(args[1]))
         return this.threadManager.getThread(this.string(args[0]), this.string(args[1]))
-      case 'thread:create':
-        return this.threadManager.createThread(args[0] as CreateThreadInput)
+      case 'thread:create': {
+        const { thread, finalize } = this.threadManager.prepareCreateThread(
+          args[0] as CreateThreadInput
+        )
+        this.threadCreation.begin(
+          thread.id,
+          async () => {
+            await finalize()
+            broadcastThreadUpdate(thread)
+          },
+          () => broadcastThreadDeleted(thread)
+        )
+        return thread
+      }
       case 'thread:markRead':
+        await this.threadCreation.awaitReady(this.string(args[1]))
         return this.threadManager.markRead(this.string(args[0]), this.string(args[1]))
       case 'thread:setPinned':
         return this.threadManager.setPinned(
@@ -595,6 +617,7 @@ export class RemoteRpcDispatcher {
           args[3] as { read?: boolean } | undefined
         )
       case 'thread:updateSettings':
+        await this.threadCreation.awaitReady(this.string(args[1]))
         return this.threadManager.updateSettings(
           this.string(args[0]),
           this.string(args[1]),
@@ -632,7 +655,20 @@ export class RemoteRpcDispatcher {
           args[2] as Record<string, unknown>
         )
       case 'thread:delete':
-        await this.threadManager.deleteThread(this.string(args[0]), this.string(args[1]))
+        {
+          const projectId = this.string(args[0])
+          const threadId = this.string(args[1])
+          this.threadDeletion.begin(
+            projectId,
+            threadId,
+            () => this.threadManager.deleteThread(projectId, threadId),
+            () => {
+              void this.threadManager.getThreadViaWorker(projectId, threadId).then((thread) => {
+                if (thread) broadcastThreadUpdate(thread)
+              })
+            }
+          )
+        }
         return undefined
       case 'thread:fork': {
         await chatEngine.loadMessages(this.string(args[0]), this.string(args[1]))

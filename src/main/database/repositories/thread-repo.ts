@@ -223,6 +223,13 @@ export interface ThreadListOptions {
   order?: 'default' | 'activity'
 }
 
+export interface ThreadCapacityCandidate {
+  id: string
+  pinned: boolean
+  status: ThreadStatus
+  lastActivity: number
+}
+
 function buildOrderBy(options: ThreadListOptions): string {
   return options.order === 'activity'
     ? 'ORDER BY pinned DESC, pinned_at DESC, last_activity DESC'
@@ -362,6 +369,14 @@ export class ThreadRepo {
     return thread
   }
 
+  /** Read a cleanup/display snapshot without blocking main or hydrating usage metadata. */
+  async getViaWorker(id: string): Promise<Thread | null> {
+    const result = await this.db.queryViaWorker('SELECT * FROM threads WHERE id = ?', [id], 1)
+    if (!result.ok) return null
+    const row = (result.rows as unknown as ThreadRow[])[0]
+    return row ? rowToThread(row) : null
+  }
+
   /** Map of thread id → distinct harness ids used in its session, newest first. */
   private usedHarnessesFor(threadIds: string[]): Map<string, string[]> {
     const result = new Map<string, string[]>()
@@ -406,6 +421,47 @@ export class ThreadRepo {
       ...params
     )
     return this.hydrateThreads(rows)
+  }
+
+  /**
+   * Read only the fields needed to enforce per-project capacity on the worker.
+   * Orchestration children do not count toward the user-visible thread bound.
+   */
+  async listCapacityCandidatesViaWorker(projectId: string): Promise<ThreadCapacityCandidate[]> {
+    const result = await this.db.queryViaWorker(
+      `SELECT id, pinned, status, last_activity
+       FROM threads
+       WHERE project_id = ?
+         AND archived = 0
+         AND assignment_role IS NOT 'worker'
+         AND achievement_role IS NOT 'auditor'
+         AND coordinator_thread_id IS NULL
+       ORDER BY last_activity ASC, id ASC`,
+      [projectId],
+      0
+    )
+    if (!result.ok) return []
+    return result.rows.map((row) => ({
+      id: String(row['id']),
+      pinned: row['pinned'] === 1,
+      status: String(row['status']) as ThreadStatus,
+      lastActivity: Number(row['last_activity'])
+    }))
+  }
+
+  /**
+   * Load cleanup snapshots without harness-usage hydration. Deletion needs the
+   * thread tree and session metadata, while the extra usage query would be
+   * wasted work and would synchronously touch the primary connection.
+   */
+  async listForDeletionViaWorker(projectId: string): Promise<Thread[]> {
+    const result = await this.db.queryViaWorker(
+      'SELECT * FROM threads WHERE project_id = ? ORDER BY created_at ASC, id ASC',
+      [projectId],
+      0
+    )
+    if (!result.ok) return []
+    return (result.rows as unknown as ThreadRow[]).map(rowToThread)
   }
 
   listAll(options: ThreadListOptions = {}): Thread[] {

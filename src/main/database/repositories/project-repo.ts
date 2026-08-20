@@ -99,6 +99,14 @@ export class ProjectRepo {
     return row ? rowToProject(row) : null
   }
 
+  /** Read one project on the database worker so interaction paths never touch SQLite on main. */
+  async getViaWorker(id: string): Promise<Project | null> {
+    const result = await this.db.queryViaWorker('SELECT * FROM projects WHERE id = ?', [id], 1)
+    if (!result.ok) return null
+    const row = (result.rows as unknown as ProjectRow[])[0]
+    return row ? rowToProject(row) : null
+  }
+
   list(): Project[] {
     const rows = this.db.all<ProjectRow>(
       'SELECT * FROM projects ORDER BY sort_order ASC, updated_at DESC'

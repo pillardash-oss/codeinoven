@@ -2432,10 +2432,16 @@
   }
 
   async function handleDelete(thread: Thread): Promise<void> {
-    await invoke('thread:delete', thread.projectId, thread.id)
     allThreads = allThreads.filter((t) => t.id !== thread.id)
     scopeState.removeThread(thread.id)
     if (selectedThread?.id === thread.id) workspaceState.clearThread()
+    try {
+      await invoke('thread:delete', thread.projectId, thread.id)
+    } catch (error) {
+      upsertThreadInList(thread)
+      scopeState.updateThread(thread)
+      reportError(error, 'The thread could not be deleted.')
+    }
   }
 
   async function forkThread(thread: Thread): Promise<void> {
