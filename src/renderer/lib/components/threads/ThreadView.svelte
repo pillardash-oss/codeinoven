@@ -1270,6 +1270,10 @@
     commentEditorReferenceId = null
   }
 
+  function persistResponseReferenceCommentDraft(id: string, comment: string): void {
+    responseReferencesState.updateCommentDraft(thread.projectId, thread.id, id, comment)
+  }
+
   function removeResponseReferenceComment(id: string): void {
     responseReferencesState.updateComment(thread.projectId, thread.id, id, '')
     commentEditorReferenceId = null
@@ -6571,6 +6575,7 @@
       x={editorPosition.x + RESPONSE_BUBBLE_SIZE / 2}
       y={editorPosition.y}
       initialComment={editorReference.comment ?? ''}
+      onDraftChange={(comment) => persistResponseReferenceCommentDraft(editorReference.id, comment)}
       onDone={(comment) => saveResponseReferenceComment(editorReference.id, comment)}
       onRemoveComment={() => removeResponseReferenceComment(editorReference.id)}
       onClose={() => (commentEditorReferenceId = null)}

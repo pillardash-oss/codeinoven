@@ -1,6 +1,5 @@
 <script lang="ts">
   import { Check, Trash2, X } from '@lucide/svelte'
-  import { onMount } from 'svelte'
 
   interface Props {
     /** Horizontal center of the anchor bubble, viewport coordinates. */
@@ -8,12 +7,13 @@
     /** Top edge of the anchor bubble, viewport coordinates. */
     y: number
     initialComment: string
+    onDraftChange: (comment: string) => void
     onDone: (comment: string) => void
     onRemoveComment: () => void
     onClose: () => void
   }
 
-  let { x, y, initialComment, onDone, onRemoveComment, onClose }: Props = $props()
+  let { x, y, initialComment, onDraftChange, onDone, onRemoveComment, onClose }: Props = $props()
 
   const POPOVER_WIDTH = 400
   const POPOVER_HEIGHT = 240
@@ -22,20 +22,26 @@
   // read at creation and never change during the popover's lifetime.
   // svelte-ignore state_referenced_locally
   let comment = $state(initialComment)
-  let textarea: HTMLTextAreaElement
+  // svelte-ignore state_referenced_locally
+  const initialCursorPosition = initialComment.length
 
   let left = $derived(
     Math.max(12, Math.min(x - POPOVER_WIDTH / 2, window.innerWidth - POPOVER_WIDTH - 12))
   )
   let top = $derived(Math.max(12, Math.min(y + 41, window.innerHeight - POPOVER_HEIGHT - 12)))
 
-  onMount(() => {
+  function focusTextarea(textarea: HTMLTextAreaElement): void {
     textarea.focus()
-    textarea.setSelectionRange(comment.length, comment.length)
-  })
+    textarea.setSelectionRange(initialCursorPosition, initialCursorPosition)
+  }
 
   function submit(): void {
     onDone(comment)
+  }
+
+  function updateDraft(event: Event & { currentTarget: HTMLTextAreaElement }): void {
+    comment = event.currentTarget.value
+    onDraftChange(comment)
   }
 
   function onKeydown(event: KeyboardEvent): void {
@@ -78,10 +84,11 @@
     </button>
   </div>
   <textarea
-    bind:this={textarea}
-    bind:value={comment}
+    {@attach focusTextarea}
+    value={comment}
     class="h-20 w-full resize-none rounded-lg border border-border bg-elevated px-2.5 py-2 text-sm text-foreground outline-none placeholder:text-dimmed"
     placeholder="Add a comment for the agent…"
+    oninput={updateDraft}
     onkeydown={onKeydown}></textarea>
   <div class="mt-2 flex items-center justify-between gap-1.5">
     <button
