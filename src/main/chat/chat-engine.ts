@@ -53,7 +53,11 @@ import {
   validateThreadSettings
 } from '../ipc/ipc-validation'
 import { forwardRemoteEvent } from '../remote/remote-event-forwarder'
-import type { HarnessDriver, SendPromptOptions } from '../drivers/driver.interface'
+import {
+  InactiveQuestionTurnError,
+  type HarnessDriver,
+  type SendPromptOptions
+} from '../drivers/driver.interface'
 import type { TitleAttemptAccounting } from '../drivers/persistent-cli-driver'
 import type { PreparedUtilityRuntime } from '../drivers/driver.interface'
 import type { Database } from '../database/database'
@@ -1343,6 +1347,11 @@ export class ChatEngine {
    * They must not cross the approval boundary into implementation. */
   private planningSessions = new Set<string>()
   private handledIdleSessions = new Set<string>()
+  private sessionIdleFinalizations = new Map<string, Promise<void>>()
+  private sessionIdleFinalizationWaiters = new Map<
+    string,
+    { resolve: () => void; reject: (error: unknown) => void }[]
+  >()
   /** Sessions the user intentionally stopped (esc+esc / cancel / permission
    * reject). Their turns must finalize as `interrupted`, never as `failed`, so
    * the sidebar never shows an error badge for a deliberate stop. */
@@ -2073,9 +2082,19 @@ export class ChatEngine {
     if (!driver) {
       throw new Error(`Harness driver is unavailable: ${pending.driverId}`)
     }
-    await this.resolvePendingQuestion(pending, 'answered', safeAnswers, () =>
-      driver.replyToQuestion(pending.projectPath, pending.request.sessionId, requestId, safeAnswers)
-    )
+    try {
+      await this.resolvePendingQuestion(pending, 'answered', safeAnswers, () =>
+        driver.replyToQuestion(
+          pending.projectPath,
+          pending.request.sessionId,
+          requestId,
+          safeAnswers
+        )
+      )
+    } catch (error) {
+      if (!(error instanceof InactiveQuestionTurnError)) throw error
+      await this.resumeAfterInactiveQuestion(pending, 'answered', safeAnswers)
+    }
   }
 
   /** Reject a pending question and let the provider continue the active turn. */
@@ -2089,9 +2108,79 @@ export class ChatEngine {
     if (!driver) {
       throw new Error(`Harness driver is unavailable: ${pending.driverId}`)
     }
-    await this.resolvePendingQuestion(pending, 'dismissed', undefined, () =>
-      driver.rejectQuestion(pending.projectPath, pending.request.sessionId, requestId)
+    try {
+      await this.resolvePendingQuestion(pending, 'dismissed', undefined, () =>
+        driver.rejectQuestion(pending.projectPath, pending.request.sessionId, requestId)
+      )
+    } catch (error) {
+      if (!(error instanceof InactiveQuestionTurnError)) throw error
+      await this.resumeAfterInactiveQuestion(pending, 'dismissed')
+    }
+  }
+
+  /** Resume a persisted session when its provider process exited while waiting for a question. */
+  private async resumeAfterInactiveQuestion(
+    pending: PendingQuestionInfo,
+    resolution: Extract<AgentQuestionResolution, 'answered' | 'dismissed'>,
+    answers?: string[][]
+  ): Promise<void> {
+    await this.awaitSessionIdleFinalization(pending.request.sessionId)
+    await this.resolvePendingQuestion(pending, resolution, answers, async () => undefined)
+
+    const thread = await this.threadManager.getThread(
+      pending.request.projectId,
+      pending.request.threadId
     )
+    if (!thread?.settings) {
+      throw new Error(`Thread settings are unavailable: ${pending.request.threadId}`)
+    }
+    const decision = this.inactiveQuestionDecision(pending.request.questions, resolution, answers)
+    await this.sendPrompt(
+      pending.request.projectId,
+      pending.request.threadId,
+      thread.settings,
+      decision.prompt,
+      [],
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      'internal',
+      decision.presentation
+    )
+  }
+
+  private inactiveQuestionDecision(
+    questions: AgentQuestion[],
+    resolution: Extract<AgentQuestionResolution, 'answered' | 'dismissed'>,
+    answers?: string[][]
+  ): { prompt: string; presentation: UserMessagePresentation } {
+    if (resolution === 'dismissed') {
+      return {
+        prompt: [
+          'Your previous turn ended while waiting for the user to answer a question.',
+          'The user dismissed that question. Continue the original task without an answer, using the persisted conversation context. Do not ask the same question again unless continuing is genuinely impossible.'
+        ].join('\n\n'),
+        presentation: { action: 'Dismissed agent question' }
+      }
+    }
+
+    const decisions = questions.map((question, index) => ({
+      question: question.prompt,
+      answers: answers?.[index] ?? []
+    }))
+    const body = decisions
+      .map((decision) => `${decision.question}: ${decision.answers.join(', ')}`)
+      .join('\n')
+    return {
+      prompt: [
+        'Your previous turn ended while waiting for the user to answer a question.',
+        'Continue the original task using the persisted conversation context and the user decisions below.',
+        JSON.stringify(decisions)
+      ].join('\n\n'),
+      presentation: { action: 'Answered agent question', body }
+    }
   }
 
   private async achievementOwnsDecisions(thread: Thread | null): Promise<boolean> {
@@ -14212,7 +14301,51 @@ export class ChatEngine {
   private handleSessionIdleSignal(sessionId: string): void {
     if (this.handledIdleSessions.has(sessionId)) return
     this.handledIdleSessions.add(sessionId)
-    void this.onSessionIdle(sessionId)
+    const finalization = this.onSessionIdle(sessionId).finally(() => {
+      if (this.sessionIdleFinalizations.get(sessionId) === finalization) {
+        this.sessionIdleFinalizations.delete(sessionId)
+      }
+    })
+    this.sessionIdleFinalizations.set(sessionId, finalization)
+    void finalization.then(
+      () => this.settleSessionIdleFinalizationWaiters(sessionId),
+      (error) => this.settleSessionIdleFinalizationWaiters(sessionId, error)
+    )
+  }
+
+  /** Wait through the narrow gap between a CLI process exiting and its history mirror starting. */
+  private awaitSessionIdleFinalization(sessionId: string): Promise<void> {
+    const finalization = this.sessionIdleFinalizations.get(sessionId)
+    if (finalization) return finalization
+    if (this.handledIdleSessions.has(sessionId)) return Promise.resolve()
+
+    return new Promise<void>((resolve, reject) => {
+      const waiters = this.sessionIdleFinalizationWaiters.get(sessionId) ?? []
+      waiters.push({ resolve, reject })
+      this.sessionIdleFinalizationWaiters.set(sessionId, waiters)
+
+      const racedFinalization = this.sessionIdleFinalizations.get(sessionId)
+      if (racedFinalization) {
+        void racedFinalization.then(resolve, reject)
+      } else if (this.handledIdleSessions.has(sessionId)) {
+        resolve()
+      } else {
+        return
+      }
+      this.sessionIdleFinalizationWaiters.set(
+        sessionId,
+        waiters.filter((waiter) => waiter.resolve !== resolve)
+      )
+    })
+  }
+
+  private settleSessionIdleFinalizationWaiters(sessionId: string, error?: unknown): void {
+    const waiters = this.sessionIdleFinalizationWaiters.get(sessionId) ?? []
+    this.sessionIdleFinalizationWaiters.delete(sessionId)
+    for (const waiter of waiters) {
+      if (error === undefined) waiter.resolve()
+      else waiter.reject(error)
+    }
   }
 
   private fallbackProviderIssue(harnessId: string, message: string): AgentProviderIssue {

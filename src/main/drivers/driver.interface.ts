@@ -16,6 +16,22 @@ import type {
 /** Callback invoked whenever the harness emits a streaming event. */
 export type AgentEventCallback = (event: AgentEvent) => void
 
+/**
+ * A provider kept an interactive question after the turn process that owned it
+ * exited. The chat engine can recover by resuming the persisted session with
+ * the user's decision instead of trying to write to a closed input stream.
+ */
+export class InactiveQuestionTurnError extends Error {
+  constructor(
+    readonly sessionId: string,
+    readonly requestId: string,
+    harnessName: string
+  ) {
+    super(`The ${harnessName} turn ended while question ${requestId} was awaiting a response`)
+    this.name = 'InactiveQuestionTurnError'
+  }
+}
+
 /** Features a harness can reliably provide to CodeInOven. */
 export interface HarnessCapabilities {
   /** Truthful process topology used for app-wide host and RAM policy. */

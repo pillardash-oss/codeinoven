@@ -24,10 +24,7 @@ import { fastSelectionModelId, resolveFastModelId } from '../../lib/fast-inferen
 import { classifyProviderIssue } from '../../lib/provider-issue'
 import type { StorageEngine } from '../storage/storage-engine'
 import { BaseUrlProviderService } from '../providers/base-url-provider-service'
-import {
-  CLAUDE_CREDENTIAL_LOCK_NAME,
-  CrossProcessMutex
-} from '../system/cross-process-mutex'
+import { CLAUDE_CREDENTIAL_LOCK_NAME, CrossProcessMutex } from '../system/cross-process-mutex'
 import { Logger } from '../system/logger'
 import { SecretVault } from '../storage/secret-vault'
 import type {
@@ -46,6 +43,7 @@ import type {
   UtilityRuntimeOverlay,
   UtilityRuntimePreparationRequest
 } from './driver.interface'
+import { InactiveQuestionTurnError } from './driver.interface'
 import { buildHarnessEnvironment } from './cli-environment'
 import { attachmentReference } from './attachment-reference'
 
@@ -1495,28 +1493,30 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
         (answers[index] ?? []).join(', ')
       ])
     )
-    if (request.transport === 'control') {
-      this.writeActiveInput(
-        request.sessionId,
-        `${JSON.stringify({
-          type: 'control_response',
-          response: {
-            subtype: 'success',
-            request_id: request.controlRequestId,
+    this.writeQuestionResponse(sessionId, requestId, () => {
+      if (request.transport === 'control') {
+        this.writeActiveInput(
+          request.sessionId,
+          `${JSON.stringify({
+            type: 'control_response',
             response: {
-              behavior: 'allow',
-              updatedInput: { ...request.input, answers: answersByPrompt }
+              subtype: 'success',
+              request_id: request.controlRequestId,
+              response: {
+                behavior: 'allow',
+                updatedInput: { ...request.input, answers: answersByPrompt }
+              }
             }
-          }
-        })}\n`
-      )
-    } else {
-      this.writeClaudeToolResult(
-        request.sessionId,
-        request.callId,
-        JSON.stringify({ answers: answersByPrompt })
-      )
-    }
+          })}\n`
+        )
+      } else {
+        this.writeClaudeToolResult(
+          request.sessionId,
+          request.callId,
+          JSON.stringify({ answers: answersByPrompt })
+        )
+      }
+    })
     this.pendingClaudeQuestions.delete(requestId)
   }
 
@@ -1529,27 +1529,43 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
     if (!request || request.sessionId !== sessionId) {
       throw new Error(`Claude question request is no longer pending: ${requestId}`)
     }
-    if (request.transport === 'control') {
-      this.writeActiveInput(
-        request.sessionId,
-        `${JSON.stringify({
-          type: 'control_response',
-          response: {
-            subtype: 'success',
-            request_id: request.controlRequestId,
-            response: { behavior: 'deny', message: 'The user dismissed this question.' }
-          }
-        })}\n`
-      )
-    } else {
-      this.writeClaudeToolResult(
-        request.sessionId,
-        request.callId,
-        'The user dismissed this question.',
-        true
-      )
-    }
+    this.writeQuestionResponse(sessionId, requestId, () => {
+      if (request.transport === 'control') {
+        this.writeActiveInput(
+          request.sessionId,
+          `${JSON.stringify({
+            type: 'control_response',
+            response: {
+              subtype: 'success',
+              request_id: request.controlRequestId,
+              response: { behavior: 'deny', message: 'The user dismissed this question.' }
+            }
+          })}\n`
+        )
+      } else {
+        this.writeClaudeToolResult(
+          request.sessionId,
+          request.callId,
+          'The user dismissed this question.',
+          true
+        )
+      }
+    })
     this.pendingClaudeQuestions.delete(requestId)
+  }
+
+  private writeQuestionResponse(sessionId: string, requestId: string, write: () => void): void {
+    if (!this.activeSessionIds().includes(sessionId)) {
+      this.pendingClaudeQuestions.delete(requestId)
+      throw new InactiveQuestionTurnError(sessionId, requestId, this.name)
+    }
+    try {
+      write()
+    } catch (error) {
+      if (this.activeSessionIds().includes(sessionId)) throw error
+      this.pendingClaudeQuestions.delete(requestId)
+      throw new InactiveQuestionTurnError(sessionId, requestId, this.name)
+    }
   }
 
   private writeClaudeToolResult(
