@@ -1638,6 +1638,7 @@
     {#await import('$lib/components/layout/CloseConfirmationModal.svelte') then { default: CloseConfirmationModal }}
       <CloseConfirmationModal
         payload={closeConfirmation}
+        projects={scopeState.projectRecords}
         onDismiss={() => (closeConfirmation = null)}
         onConfirm={confirmForceClose}
         onConfirmSave={confirmForceCloseSaving}
