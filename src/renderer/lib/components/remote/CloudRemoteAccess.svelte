@@ -840,6 +840,14 @@
     </div>
   </main>
 
+  <!-- App version, pinned and subtle so an update is easy to spot on the landing page. -->
+  <p
+    class="pointer-events-none fixed bottom-[calc(0.5rem+env(safe-area-inset-bottom))] left-1/2 -translate-x-1/2 select-none rounded-full bg-app/80 px-2.5 py-0.5 text-[10px] text-dimmed backdrop-blur-sm"
+    title={`CodeInOven ${__CODEINOVEN_APP_VERSION__}`}
+  >
+    v{__CODEINOVEN_APP_VERSION__}
+  </p>
+
   {#if errorMessage}
     <div
       class="fixed left-1/2 top-[max(1rem,env(safe-area-inset-top))] z-60 flex w-[min(26rem,calc(100vw-2rem))] -translate-x-1/2 items-start gap-3 rounded-xl border border-danger/30 bg-surface px-4 py-3 text-sm text-danger shadow-xl"
