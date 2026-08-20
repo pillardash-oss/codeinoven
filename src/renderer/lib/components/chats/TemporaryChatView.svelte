@@ -106,6 +106,14 @@
       .join('\n')
   }
 
+  function readableError(error: unknown, fallback: string): string {
+    const message = error instanceof Error ? error.message : fallback
+    const cleaned = message.replace(/^Error invoking remote method '[^']+': Error:\s*/u, '')
+    return cleaned === 'Temporary chat timed out after 180s'
+      ? 'The temporary chat stopped after 3 minutes without activity. Try sending the message again.'
+      : cleaned
+  }
+
   function fileParts(message: AgentMessage): Extract<AgentPart, { type: 'file' }>[] {
     return message.parts.filter(
       (part): part is Extract<AgentPart, { type: 'file' }> => part.type === 'file'
@@ -498,7 +506,7 @@
         aborting = false
         return
       }
-      tab.error = error instanceof Error ? error.message : 'The temporary chat could not respond.'
+      tab.error = readableError(error, 'The temporary chat could not respond.')
     } finally {
       aborting = false
       if (tab.temporaryChatId === temporaryChatId && !tab.expired) {
@@ -527,7 +535,7 @@
       await invoke('agent:abortTemporaryChat', tab.projectId, tab.threadId, tab.temporaryChatId)
     } catch (error) {
       aborting = false
-      tab.error = error instanceof Error ? error.message : 'The request could not be stopped.'
+      tab.error = readableError(error, 'The request could not be stopped.')
     }
   }
 
@@ -581,8 +589,7 @@
         queued = pending
         tab.messages = tab.messages.filter((message) => message.id !== outgoing.id)
       }
-      tab.error =
-        error instanceof Error ? error.message : 'The steer message could not be delivered.'
+      tab.error = readableError(error, 'The steer message could not be delivered.')
     }
   }
 

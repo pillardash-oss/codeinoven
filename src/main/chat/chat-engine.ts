@@ -5542,6 +5542,7 @@ export class ChatEngine {
       throw new Error('The temporary chat harness cannot be changed after its first message')
     }
     this.refreshTemporaryChatExpiry(temporary)
+    this.userAbortedSessions.delete(temporary.sessionId)
     this.broadcast({
       type: 'temporary-chat.started',
       sessionId: temporary.sessionId,
@@ -5632,6 +5633,21 @@ export class ChatEngine {
       return response
     } catch (error) {
       this.clearCompletionWaiter(temporary.sessionId)
+      // A completion timeout only stops the IPC waiter. Explicitly stop the
+      // underlying harness turn as well so the reusable temporary session is
+      // not left working after the renderer has already received a failure.
+      this.userAbortedSessions.add(temporary.sessionId)
+      try {
+        if (temporary.isolated && driver instanceof OpenCodeDriver) {
+          await driver.abort(temporary.projectPath, temporary.sessionId, temporary.isolated)
+        } else {
+          await driver.abort(temporary.projectPath, temporary.sessionId)
+        }
+      } catch (abortError) {
+        Logger.dev('Temporary chat cleanup after failure was incomplete:', abortError)
+      } finally {
+        this.sessionStatuses.set(temporary.sessionId, { state: 'idle' })
+      }
       await this.notifyTemporaryChatCompletion(projectId, threadId, temporary.id, 'error')
       throw error
     }
