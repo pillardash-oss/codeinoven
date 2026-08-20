@@ -23,10 +23,7 @@ import {
   setPowerWakeService,
   broadcastThreadUpdate
 } from './chat/thread-events'
-import {
-  installProductionApplicationMenu,
-  lockDownProductionWindow
-} from './system/production-housekeeping'
+import { installProductionApplicationMenu } from './system/production-housekeeping'
 import { getTrafficLightArg, warmTrafficLightDetection } from './system/titlebar'
 import { PrivilegedIpcValidator } from './ipc/ipc-validation'
 import type { CloseConfirmationProject, ThreadClickedPayload } from '../lib/ipc-contract'
@@ -799,7 +796,7 @@ function createWindow(): BrowserWindow {
       sandbox: true,
       contextIsolation: true,
       nodeIntegration: false,
-      devTools: !isProduction,
+      devTools: true,
       // The preload resolves the platform traffic-light layout from this flag
       // so the renderer never flashes a wrong inset on first paint.
       additionalArguments: [getTrafficLightArg()],
@@ -809,10 +806,6 @@ function createWindow(): BrowserWindow {
     }
   })
   mainWindow = window
-
-  if (isProduction) {
-    lockDownProductionWindow(window)
-  }
 
   window.once('ready-to-show', () => {
     // Restore the maximized state before revealing the first rendered frame so
