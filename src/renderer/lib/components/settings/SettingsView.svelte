@@ -349,7 +349,7 @@
 
 <div class="flex h-full">
   <!-- Settings navigation — the shared sidebar, pinned so it can never be hidden here -->
-  <CollapsibleSidebar title="Settings" pinned>
+  <CollapsibleSidebar title="Back" pinned>
     {#snippet titlePrefix()}
       <button
         class="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-muted transition-colors hover:bg-elevated hover:text-foreground"
@@ -378,6 +378,21 @@
         </button>
       {/each}
     </nav>
+
+    {#snippet footer()}
+      <div class="flex items-center px-2 py-1.5">
+        <button
+          type="button"
+          class="flex h-8 flex-1 items-center gap-2 rounded-lg px-2 text-sm text-muted transition-colors hover:bg-elevated hover:text-foreground"
+          title="Exit settings"
+          aria-label="Exit settings"
+          onclick={onBack}
+        >
+          <ArrowLeft size={14} />
+          Exit settings
+        </button>
+      </div>
+    {/snippet}
   </CollapsibleSidebar>
 
   <!-- Tab content -->
