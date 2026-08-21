@@ -2,7 +2,7 @@ import { stat, open, access, readFile, writeFile, rename, mkdir, rm, unlink } fr
 import { resolve, relative, isAbsolute, sep, dirname } from 'path'
 import { createHash } from 'node:crypto'
 import { simpleGit } from 'simple-git'
-import type { LogOptions, SimpleGit, StatusResult } from 'simple-git'
+import type { DefaultLogFields, LogOptions, SimpleGit, StatusResult } from 'simple-git'
 import type {
   GitBranchInfo,
   GitCommitInfo,
@@ -544,15 +544,34 @@ export class GitService {
   }
 
   /** `offset` skips the N newest commits — pages in older history for infinite scroll. */
-  async log(projectPath: string, limit = DEFAULT_LOG_LIMIT, offset = 0): Promise<GitCommitInfo[]> {
+  async log(
+    projectPath: string,
+    limit = DEFAULT_LOG_LIMIT,
+    offset = 0,
+    query?: string
+  ): Promise<GitCommitInfo[]> {
     return this.enqueue(projectPath, async () => {
       const directory = await this.repo(projectPath)
       return this.wrapError(projectPath, 'read', async () => {
         const git = this.client(directory)
-        const options: LogOptions & { '--skip'?: number } = {
+        const normalizedQuery = query?.trim()
+        if (normalizedQuery && normalizedQuery.length > 256) {
+          throw new TypeError('Commit search query must be at most 256 characters')
+        }
+        const options: LogOptions & {
+          '--fixed-strings'?: null
+          '--grep'?: string
+          '--regexp-ignore-case'?: null
+          '--skip'?: number
+        } = {
           maxCount: Math.max(1, Math.min(limit, 200))
         }
         if (offset > 0) options['--skip'] = Math.max(0, offset)
+        if (normalizedQuery) {
+          options['--fixed-strings'] = null
+          options['--grep'] = normalizedQuery
+          options['--regexp-ignore-case'] = null
+        }
         let history
         try {
           history = await git.log(options)
@@ -560,15 +579,53 @@ export class GitService {
           if (isUnbornBranchLogError(failure)) return []
           throw failure
         }
-        return history.all.map((entry): GitCommitInfo => ({
-          hash: entry.hash,
-          shortHash: entry.hash.slice(0, 7),
-          author: entry.author_name ?? entry.author_email ?? 'unknown',
-          date: entry.date ? new Date(entry.date).getTime() : Date.now(),
-          message: entry.message
-        }))
+        const matches = history.all.map((entry) => this.mapCommit(entry))
+
+        // `--grep` searches commit messages, not object IDs. Resolve a hash-like
+        // query separately, then pin that exact match above any title matches.
+        if (normalizedQuery && /^[0-9a-f]{4,40}$/iu.test(normalizedQuery)) {
+          const hashMatch = await this.commitForHash(git, normalizedQuery)
+          if (hashMatch) {
+            return [hashMatch, ...matches.filter((commit) => commit.hash !== hashMatch.hash)].slice(
+              0,
+              Math.max(1, Math.min(limit, 200))
+            )
+          }
+        }
+        return matches
       })
     })
+  }
+
+  private mapCommit(entry: DefaultLogFields): GitCommitInfo {
+    return {
+      hash: entry.hash,
+      shortHash: entry.hash.slice(0, 7),
+      author: entry.author_name ?? entry.author_email ?? 'unknown',
+      date: entry.date ? new Date(entry.date).getTime() : Date.now(),
+      message: entry.message
+    }
+  }
+
+  private async commitForHash(git: SimpleGit, query: string): Promise<GitCommitInfo | null> {
+    try {
+      const output = await git.show([
+        '--no-patch',
+        '--format=%H%x00%aI%x00%aN%x00%s',
+        `${query}^{commit}`
+      ])
+      const [hash, date, author, message] = output.trim().split('\0')
+      if (!hash || !date || !message) return null
+      return {
+        hash,
+        shortHash: hash.slice(0, 7),
+        author: author || 'unknown',
+        date: new Date(date).getTime(),
+        message
+      }
+    } catch {
+      return null
+    }
   }
 
   async commitDiff(projectPath: string, hash: string): Promise<GitFileChange[]> {

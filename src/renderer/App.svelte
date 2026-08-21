@@ -1359,6 +1359,14 @@
       findNavState.focusFileTreeFilter++
       return
     }
+    if (
+      active?.closest('[data-region="git-panel"]') ||
+      (active?.closest('[data-region="context-sidebar"]') &&
+        document.querySelector('[data-region="git-panel"]'))
+    ) {
+      findNavState.openGitFind()
+      return
+    }
     if (active?.closest('[data-region="editor"]')) {
       findNavState.openEditorFind()
       return

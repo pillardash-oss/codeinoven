@@ -14,6 +14,7 @@
     onQueryChange: (query: string) => void | Promise<void>
     onNext: () => void
     onPrev: () => void
+    onSubmit?: () => void
     onClose: () => void
   }
 
@@ -29,6 +30,7 @@
     onQueryChange,
     onNext,
     onPrev,
+    onSubmit,
     onClose
   }: Props = $props()
 
@@ -72,6 +74,7 @@
       await tick()
     }
     if (event.shiftKey) onPrev()
+    else if (onSubmit) onSubmit()
     else onNext()
   }
 

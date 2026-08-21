@@ -45,6 +45,7 @@
     Plus,
     RefreshCw,
     RotateCcwClock,
+    Search,
     Trash2,
     Unplug
   } from '@lucide/svelte'
@@ -66,11 +67,13 @@
   import GitPullRequestList from './GitPullRequestList.svelte'
   import GitPullRequestDetail from './GitPullRequestDetail.svelte'
   import GitDeploymentsMonitor from './GitDeploymentsMonitor.svelte'
+  import FindInBar from '../files/FindInBar.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
   import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
   import { threadSettings } from '$lib/stores/thread-settings.svelte'
   import { prLifecycleStore } from '$lib/stores/pr-lifecycle.svelte'
   import { gitPanelView } from '$lib/stores/git-panel-view.svelte'
+  import { findNavState } from '$lib/stores/find-nav.svelte'
   import type { PullRequestSummary } from '$shared/types'
 
   interface Props {
@@ -132,6 +135,11 @@
   let commitHistory = $state<GitCommitInfo[]>([])
   let loadingHistory = $state(false)
   let loadingMoreHistory = $state(false)
+  let commitSearchQuery = $state('')
+  let commitSearchResults = $state.raw<GitCommitInfo[]>([])
+  let commitSearchLoading = $state(false)
+  let commitSearchActiveIndex = $state(0)
+  let commitSearchRequestId = 0
   /** False once a page comes back shorter than requested — there's nothing older left. */
   let historyHasMore = $state(true)
   const HISTORY_PAGE_SIZE = 30
@@ -686,6 +694,57 @@
     if (el.scrollHeight - el.scrollTop - el.clientHeight < 200) void loadMoreHistory()
   }
 
+  function openCommitSearch(): void {
+    findNavState.openGitFind()
+  }
+
+  function closeCommitSearch(): void {
+    commitSearchRequestId++
+    commitSearchQuery = ''
+    commitSearchResults = []
+    commitSearchLoading = false
+    commitSearchActiveIndex = 0
+    findNavState.closeGitFind()
+  }
+
+  async function searchCommits(rawQuery: string): Promise<void> {
+    const query = rawQuery.trim()
+    commitSearchQuery = query
+    commitSearchActiveIndex = 0
+    const requestId = ++commitSearchRequestId
+    if (!query) {
+      commitSearchResults = []
+      commitSearchLoading = false
+      return
+    }
+
+    commitSearchResults = []
+    commitSearchLoading = true
+    const results = await gitState.getLog(projectId, 50, 0, query)
+    if (requestId !== commitSearchRequestId) return
+    commitSearchResults = results
+    commitSearchLoading = false
+  }
+
+  function moveCommitSearch(direction: -1 | 1): void {
+    if (commitSearchResults.length === 0) return
+    commitSearchActiveIndex =
+      (commitSearchActiveIndex + direction + commitSearchResults.length) %
+      commitSearchResults.length
+  }
+
+  function openActiveCommitSearchResult(): void {
+    const commit = commitSearchResults[commitSearchActiveIndex]
+    if (!commit) return
+    closeCommitSearch()
+    void selectCommit(commit)
+  }
+
+  function selectCommitSearchResult(commit: GitCommitInfo): void {
+    closeCommitSearch()
+    void selectCommit(commit)
+  }
+
   async function selectCommit(commit: GitCommitInfo): Promise<void> {
     selectedCommit = commit
     activeTab = 'changes'
@@ -1023,6 +1082,7 @@
     return () => {
       unsubscribePullRequestOpen()
       unsubscribeThreadUpdates()
+      if (findNavState.gitFindOpen) closeCommitSearch()
     }
   })
 
@@ -1396,7 +1456,69 @@
   {/each}
 {/snippet}
 
-<div class="flex h-full min-h-0 flex-col bg-app">
+<div class="relative flex h-full min-h-0 flex-col bg-app" data-region="git-panel">
+  {#if findNavState.gitFindOpen}
+    <div data-find-exclude class="absolute right-3 top-3 z-30 w-[min(26rem,calc(100%-1.5rem))]">
+      <FindInBar
+        query={commitSearchQuery}
+        matches={commitSearchResults.length}
+        activeIndex={commitSearchActiveIndex}
+        placeholder="Search commit title or hash…"
+        label="Search commits"
+        focusTrigger={findNavState.gitFindFocusTrigger}
+        onQueryChange={searchCommits}
+        onNext={() => moveCommitSearch(1)}
+        onPrev={() => moveCommitSearch(-1)}
+        onSubmit={openActiveCommitSearchResult}
+        onClose={closeCommitSearch}
+      />
+      {#if commitSearchQuery}
+        <div
+          class="mt-1 max-h-80 overflow-y-auto rounded-xl border border-border bg-surface p-1 shadow-xl"
+          aria-live="polite"
+        >
+          {#if commitSearchLoading}
+            <div class="flex items-center justify-center gap-2 px-3 py-6 text-xs text-dimmed">
+              <Loader2 size={13} class="animate-spin" aria-hidden="true" />
+              Searching commits…
+            </div>
+          {:else if commitSearchResults.length === 0}
+            <p class="px-3 py-6 text-center text-xs text-dimmed">No matching commits</p>
+          {:else}
+            {#each commitSearchResults as commit, index (commit.hash)}
+              <button
+                type="button"
+                class={[
+                  'flex w-full items-start gap-2 rounded-lg px-2.5 py-2 text-left transition-colors',
+                  index === commitSearchActiveIndex
+                    ? 'bg-primary/10 text-foreground'
+                    : 'text-muted hover:bg-elevated'
+                ]}
+                aria-current={index === commitSearchActiveIndex ? 'true' : undefined}
+                onclick={() => selectCommitSearchResult(commit)}
+                onmouseenter={() => (commitSearchActiveIndex = index)}
+              >
+                <Search size={12} class="mt-0.5 shrink-0 text-dimmed" aria-hidden="true" />
+                <span class="min-w-0 flex-1">
+                  <span class="block truncate text-[11px] leading-snug">
+                    {commit.message.split('\n')[0]}
+                  </span>
+                  <span class="mt-0.5 flex items-center gap-1.5 text-[9px] text-dimmed">
+                    <span class="font-mono">{commit.shortHash}</span>
+                    <span>·</span>
+                    <span class="truncate">{commit.author}</span>
+                    <span>·</span>
+                    <span class="shrink-0">{relativeTime(commit.date)}</span>
+                  </span>
+                </span>
+              </button>
+            {/each}
+          {/if}
+        </div>
+      {/if}
+    </div>
+  {/if}
+
   <!-- Header: branch picker + tabs + actions -->
   <div class="flex shrink-0 flex-col border-b border-border">
     <!-- Top row: branch + tabs + actions -->
@@ -1459,6 +1581,23 @@
         </span>
       {/if}
       <DiffLayoutToggle title={diffLayoutToggleLabel('vertical')} size={12} />
+      {#if repoState === 'git'}
+        <button
+          type="button"
+          class={[
+            'flex h-6 w-6 items-center justify-center rounded transition-colors',
+            findNavState.gitFindOpen
+              ? 'bg-elevated text-foreground'
+              : 'text-dimmed hover:bg-elevated hover:text-foreground'
+          ]}
+          aria-label="Search commits"
+          title="Search commits"
+          aria-pressed={findNavState.gitFindOpen}
+          onclick={() => (findNavState.gitFindOpen ? closeCommitSearch() : openCommitSearch())}
+        >
+          <Search size={12} aria-hidden="true" />
+        </button>
+      {/if}
       <button
         type="button"
         class="flex h-6 w-6 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-50"
