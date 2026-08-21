@@ -353,12 +353,16 @@
   })
 
   let projectReferenceBadges = $derived<RichInlineBadge[]>([
-    {
-      iconSrc: codeInOvenIconUrl,
-      label: 'utility',
-      title: 'CodeInOven utility',
-      value: '@cio-utility'
-    },
+    ...(value.includes('@cio-utility')
+      ? [
+          {
+            iconSrc: codeInOvenIconUrl,
+            label: 'utility',
+            title: `${APP_NAME} utility`,
+            value: '@cio-utility'
+          }
+        ]
+      : []),
     ...projectReferences.map((reference) => ({
       iconSrc: projectReferenceIcons[projectReferenceToken(reference)],
       label: reference.name,
