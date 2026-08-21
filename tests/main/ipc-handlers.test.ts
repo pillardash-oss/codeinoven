@@ -81,6 +81,7 @@ function trustedEvent(): { senderFrame: { url: string; parent: null } } {
 
 const defaultConfig: AppConfig = {
   theme: 'system',
+  onboardingCompleted: false,
   threadLimit: 70,
   questionTimeoutMs: 300_000,
   keybindings: {},

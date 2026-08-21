@@ -7639,6 +7639,7 @@
                     {#each queuedStartAfterThreads as dependency (dependency.id)}
                       <div
                         class="flex w-full items-center gap-1 rounded-lg px-1.5 py-1 transition-colors hover:bg-elevated"
+                        role="group"
                         onmouseenter={() => preloadStartAfterThread(dependency.id)}
                       >
                         <Clock size={12} class="shrink-0 text-info" />

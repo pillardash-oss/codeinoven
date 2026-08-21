@@ -2304,45 +2304,27 @@
                           {@const sectionAllSelected =
                             section.files.length > 0 &&
                             section.files.every((f) => selectedPaths[f.path])}
-                          {@const sectionSomeSelected = section.files.some(
-                            (f) => selectedPaths[f.path]
-                          )}
                           <div class="flex items-center gap-2 bg-elevated/50 px-3 py-1.5">
                             <span
-                              role="checkbox"
-                              tabindex="0"
-                              aria-checked={sectionAllSelected
-                                ? 'true'
-                                : sectionSomeSelected
-                                  ? 'mixed'
-                                  : 'false'}
-                              aria-label={sectionAllSelected
-                                ? `Deselect all ${section.files.length} files in ${section.title}`
-                                : `Select all ${section.files.length} files in ${section.title}`}
-                              class={[
-                                'flex h-3.5 w-3.5 shrink-0 cursor-pointer items-center justify-center rounded-sm border transition-colors',
-                                sectionAllSelected
-                                  ? 'border-primary bg-primary'
-                                  : 'border-border bg-elevated'
-                              ]}
+                              class="shrink-0"
+                              role="presentation"
                               onclick={(event: MouseEvent) => {
                                 event.stopPropagation()
                                 event.preventDefault()
-                                toggleSectionSelection(section.files)
                               }}
-                              onkeydown={(event: KeyboardEvent) => {
-                                if (event.key === 'Enter' || event.key === ' ') {
-                                  event.stopPropagation()
-                                  event.preventDefault()
-                                  toggleSectionSelection(section.files)
-                                }
-                              }}
+                              onkeydown={(event: KeyboardEvent) => event.stopPropagation()}
                             >
-                              {#if sectionAllSelected}
-                                <Check size={9} class="text-on-primary" />
-                              {:else if sectionSomeSelected}
-                                <span class="h-0.5 w-1.5 rounded-full bg-primary"></span>
-                              {/if}
+                              <Switch
+                                checked={sectionAllSelected}
+                                onchange={() => toggleSectionSelection(section.files)}
+                                title={sectionAllSelected
+                                  ? `Deselect all ${section.files.length} files in ${section.title}`
+                                  : `Select all ${section.files.length} files in ${section.title}`}
+                                aria-label={sectionAllSelected
+                                  ? `Deselect all ${section.files.length} files in ${section.title}`
+                                  : `Select all ${section.files.length} files in ${section.title}`}
+                                activeClass="border-primary bg-primary"
+                              />
                             </span>
                             <span
                               class="text-[9px] font-semibold uppercase tracking-wide text-muted"
@@ -2403,45 +2385,27 @@
                           {@const sectionAllSelected =
                             section.files.length > 0 &&
                             section.files.every((f) => selectedPaths[f.path])}
-                          {@const sectionSomeSelected = section.files.some(
-                            (f) => selectedPaths[f.path]
-                          )}
                           <div class="flex items-center gap-2 bg-elevated/50 px-3 py-1.5">
                             <span
-                              role="checkbox"
-                              tabindex="0"
-                              aria-checked={sectionAllSelected
-                                ? 'true'
-                                : sectionSomeSelected
-                                  ? 'mixed'
-                                  : 'false'}
-                              aria-label={sectionAllSelected
-                                ? `Deselect all ${section.files.length} files in ${section.title}`
-                                : `Select all ${section.files.length} files in ${section.title}`}
-                              class={[
-                                'flex h-3.5 w-3.5 shrink-0 cursor-pointer items-center justify-center rounded-sm border transition-colors',
-                                sectionAllSelected
-                                  ? 'border-primary bg-primary'
-                                  : 'border-border bg-elevated'
-                              ]}
+                              class="shrink-0"
+                              role="presentation"
                               onclick={(event: MouseEvent) => {
                                 event.stopPropagation()
                                 event.preventDefault()
-                                toggleSectionSelection(section.files)
                               }}
-                              onkeydown={(event: KeyboardEvent) => {
-                                if (event.key === 'Enter' || event.key === ' ') {
-                                  event.stopPropagation()
-                                  event.preventDefault()
-                                  toggleSectionSelection(section.files)
-                                }
-                              }}
+                              onkeydown={(event: KeyboardEvent) => event.stopPropagation()}
                             >
-                              {#if sectionAllSelected}
-                                <Check size={9} class="text-on-primary" />
-                              {:else if sectionSomeSelected}
-                                <span class="h-0.5 w-1.5 rounded-full bg-primary"></span>
-                              {/if}
+                              <Switch
+                                checked={sectionAllSelected}
+                                onchange={() => toggleSectionSelection(section.files)}
+                                title={sectionAllSelected
+                                  ? `Deselect all ${section.files.length} files in ${section.title}`
+                                  : `Select all ${section.files.length} files in ${section.title}`}
+                                aria-label={sectionAllSelected
+                                  ? `Deselect all ${section.files.length} files in ${section.title}`
+                                  : `Select all ${section.files.length} files in ${section.title}`}
+                                activeClass="border-primary bg-primary"
+                              />
                             </span>
                             <span
                               class="text-[9px] font-semibold uppercase tracking-wide text-muted"

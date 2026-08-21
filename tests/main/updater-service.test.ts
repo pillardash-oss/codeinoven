@@ -52,6 +52,7 @@ const DEFERRED_POLL_MS = 5_000
 function defaultConfig(): AppConfig {
   return {
     theme: 'system',
+    onboardingCompleted: false,
     threadLimit: 70,
     questionTimeoutMs: 300_000,
     keybindings: {},

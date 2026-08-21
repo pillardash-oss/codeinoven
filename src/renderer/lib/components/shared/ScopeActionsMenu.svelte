@@ -49,12 +49,13 @@
 
   let showMenu = $state(false)
 
-  const isManaged = bucket.root.kind === 'worktree'
-  const isArchived = bucket.archivedAt !== undefined
-  const setupFailed =
+  const isManaged = $derived(bucket.root.kind === 'worktree')
+  const isArchived = $derived(bucket.archivedAt !== undefined)
+  const setupFailed = $derived(
     isManaged &&
-    bucket.root.kind === 'worktree' &&
-    (bucket.root.setup.state === 'failed' || bucket.root.setup.state === 'interrupted')
+      bucket.root.kind === 'worktree' &&
+      (bucket.root.setup.state === 'failed' || bucket.root.setup.state === 'interrupted')
+  )
 
   function closeMenu(): void {
     showMenu = false

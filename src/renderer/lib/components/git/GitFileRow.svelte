@@ -5,6 +5,7 @@
   import FileTypeIcon from '../files/FileTypeIcon.svelte'
   import FileDiffView from '../files/FileDiffView.svelte'
   import { ChevronDown, ChevronRight, GitMerge, Loader2 } from '@lucide/svelte'
+  import Switch from '../ui/Switch.svelte'
 
   interface Props {
     change: GitFileChange
@@ -135,30 +136,21 @@
         >
           {#if selectable}
             <span
-              role="checkbox"
-              tabindex="0"
-              aria-checked={selected}
-              aria-label={selected ? `Deselect ${change.path}` : `Select ${change.path}`}
-              class={[
-                'flex h-3.5 w-3.5 shrink-0 cursor-pointer items-center justify-center rounded-sm border transition-colors',
-                selected ? 'border-primary bg-primary' : 'border-border bg-elevated'
-              ]}
+              class="shrink-0"
+              role="presentation"
               onclick={(event: MouseEvent) => {
                 event.stopPropagation()
                 event.preventDefault()
-                onToggleSelect?.(change, true)
               }}
-              onkeydown={(event: KeyboardEvent) => {
-                if (event.key === 'Enter' || event.key === ' ') {
-                  event.stopPropagation()
-                  event.preventDefault()
-                  onToggleSelect?.(change, true)
-                }
-              }}
+              onkeydown={(event: KeyboardEvent) => event.stopPropagation()}
             >
-              {#if selected}
-                <Check size={9} class="text-on-primary" />
-              {/if}
+              <Switch
+                checked={selected}
+                onchange={() => onToggleSelect?.(change, true)}
+                title={selected ? `Deselect ${change.path}` : `Select ${change.path}`}
+                aria-label={selected ? `Deselect ${change.path}` : `Select ${change.path}`}
+                activeClass="border-primary bg-primary"
+              />
             </span>
           {/if}
           <span class={['w-4 shrink-0 text-center font-mono text-[10px] font-semibold', color]}>
