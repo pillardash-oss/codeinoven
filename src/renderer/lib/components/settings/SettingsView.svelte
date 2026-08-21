@@ -37,6 +37,7 @@
     Puzzle,
     Plug,
     RefreshCw,
+    Router,
     SlidersHorizontal,
     Sun,
     UsersRound
@@ -56,6 +57,7 @@
   import CloudDeploymentsSettingsTab from './CloudDeploymentsSettingsTab.svelte'
   import CioPromptsSettings from './CioPromptsSettings.svelte'
   import CuaBridgeSettings from './CuaBridgeSettings.svelte'
+  import GatewaySettingsTab from './GatewaySettingsTab.svelte'
   import { toast } from 'svelte-sonner'
 
   type SelectChangeEvent = Event & { currentTarget: HTMLSelectElement }
@@ -154,6 +156,7 @@
     { id: 'cio-prompts', label: 'CIO Prompts', icon: MessageSquareCode },
     { id: 'harnesses', label: 'Harnesses', icon: Plug },
     { id: 'utilities', label: 'Utilities', icon: Puzzle },
+    { id: 'gateways', label: 'Gateways', icon: Router },
     { id: 'computer-use', label: 'Computer use', icon: MonitorUp },
     { id: 'keymap', label: 'Keymap', icon: Keyboard },
     { id: 'remote', label: 'Remote', icon: Globe },
@@ -755,6 +758,8 @@
       {/if}
     {:else if section === 'computer-use'}
       <CuaBridgeSettings />
+    {:else if section === 'gateways'}
+      <GatewaySettingsTab />
     {:else if section === 'keymap'}
       <KeymapSettingsTab />
     {:else if section === 'remote'}

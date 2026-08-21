@@ -37,6 +37,7 @@ import {
   installProcessCrashDiagnostics
 } from './system/lifecycle-diagnostics'
 import type { ChatEngine } from './chat/chat-engine'
+import type { GatewaySupervisorService } from './gateway/gateway-supervisor-service'
 import type { HarnessManifestService } from './agents/harness-manifest-service'
 import type { ComputerUsePipService } from './utilities/computer-use-pip-service'
 import type { UpdaterService } from './notifications/updater-service'
@@ -137,6 +138,7 @@ installProcessCrashDiagnostics()
 let mainWindow: BrowserWindow | null = null
 let splashWindow: BrowserWindow | null = null
 let browserService: BrowserService | null = null
+let gatewaySupervisor: GatewaySupervisorService | null = null
 let quitCleanupStarted = false
 let shutdownFailsafe: ReturnType<typeof setTimeout> | null = null
 
@@ -705,9 +707,11 @@ async function bootPostPaintServices(): Promise<void> {
     const { registerProviderAccountIpc } = await import('./ipc/provider-account-ipc')
     const { registerBaseUrlProviderIpc } = await import('./providers/base-url-provider-ipc')
     const { registerUtilityIpc } = await import('./ipc/utility-ipc')
+    const { registerGatewayIpc } = await import('./ipc/gateway-ipc')
     registerProviderAccountIpc()
     registerBaseUrlProviderIpc(storage)
     registerUtilityIpc(storage, undefined, undefined, undefined, computerUsePipService ?? undefined)
+    gatewaySupervisor = registerGatewayIpc(storage, () => mainWindow?.webContents ?? null)
 
     // Wire PTY to the window now that it exists.
     if (mainWindow && !mainWindow.isDestroyed()) {
@@ -1238,6 +1242,12 @@ async function runShutdownPipeline(): Promise<void> {
     browserService = null
   } catch (error) {
     Logger.error('Browser service cleanup failed during shutdown:', error)
+  }
+
+  try {
+    await gatewaySupervisor?.dispose()
+  } catch (error) {
+    Logger.error('Gateway supervisor cleanup failed during shutdown:', error)
   }
 
   try {

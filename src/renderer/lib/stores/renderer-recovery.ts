@@ -18,6 +18,7 @@ export type SettingsSection =
   | 'cio-prompts'
   | 'harnesses'
   | 'utilities'
+  | 'gateways'
   | 'computer-use'
   | 'keymap'
   | 'remote'
@@ -36,6 +37,7 @@ export type MainView =
   | 'settings-cio-prompts'
   | 'settings-harnesses'
   | 'settings-utilities'
+  | 'settings-gateways'
   | 'settings-computer-use'
   | 'settings-keymap'
   | 'settings-remote'
@@ -147,6 +149,7 @@ const SETTINGS_SECTIONS: readonly SettingsSection[] = [
   'cio-prompts',
   'harnesses',
   'utilities',
+  'gateways',
   'computer-use',
   'keymap',
   'remote',

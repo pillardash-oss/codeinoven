@@ -1346,6 +1346,17 @@ export interface IpcInvokeContract {
     [input: BaseUrlProviderCopyClipboardRequest],
     void
   >
+  'gateway:list': Contract<[], import('./gateway-types').GatewayStatus[]>
+  'gateway:setEnabled': Contract<
+    [pluginId: string, enabled: boolean],
+    import('./gateway-types').GatewayStatus
+  >
+  'gateway:start': Contract<
+    [pluginId: string],
+    import('./gateway-types').GatewayStatus
+  >
+  'gateway:stop': Contract<[pluginId: string], import('./gateway-types').GatewayStatus>
+  'gateway:refreshCatalog': Contract<[pluginId: string], import('./gateway-types').GatewayModelInfo[]>
   'utilities:list': Contract<[options?: UtilitySearchOptions], UtilityCatalog>
   'utilities:get': Contract<[id: string], UtilityDefinition | null>
   'utilities:create': Contract<[input: UtilityDefinitionInput], UtilityDefinition>
@@ -1909,6 +1920,7 @@ export interface IpcEventContract {
   'computerUse:pipFrame': [frame: ComputerUsePipFrame]
   'computerUse:pipState': [state: ComputerUsePipState]
   'browser:state': [state: BrowserPageState]
+  'gateway:state': [status: import('./gateway-types').GatewayStatus]
   'browser:console': [entry: BrowserConsoleEntry]
   'browser:openRequested': [url: string, context?: BrowserOpenRequestContext]
   'browser:permissionRequested': [request: BrowserPermissionRequest]
