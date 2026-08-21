@@ -263,6 +263,20 @@ export class GitState {
     return this.activeProjectId === projectId ? (this.activeScopeBucketId ?? undefined) : undefined
   }
 
+  /**
+   * Append the active scope bucket id to a git:* local-repository invoke so the
+   * operation runs against the worktree (when one is active) instead of always
+   * reaching the project root. `undefined` is forwarded as-is for project-root
+   * callers, keeping backward compatibility.
+   */
+  private scopedGitArgs<Args extends unknown[]>(
+    projectId: string,
+    ...args: Args
+  ): [string, ...Args, string | undefined] {
+    const scope = this.scopeFor(projectId)
+    return [projectId, ...args, scope ?? undefined]
+  }
+
   private async readStatus(projectId: string): Promise<GitStatus> {
     const [id, scope] = this.statusTarget(projectId)
     const status = await invoke('git:status', id, scope ?? undefined)
@@ -574,12 +588,8 @@ export class GitState {
     const targetScope = this.activeScopeBucketId
     this.error = null
     try {
-      const branchesRequest = targetScope
-        ? invoke('git:branches', projectId, targetScope)
-        : invoke('git:branches', projectId)
-      const remotesRequest = targetScope
-        ? invoke('git:remotes', projectId, targetScope)
-        : invoke('git:remotes', projectId)
+      const branchesRequest = invoke('git:branches', projectId, targetScope ?? undefined)
+      const remotesRequest = invoke('git:remotes', projectId, targetScope ?? undefined)
       const [status, branches, identity, remotes, credentialStatus, stashes] = await Promise.all([
         this.readStatus(projectId),
         branchesRequest,
@@ -642,11 +652,11 @@ export class GitState {
    * panel (ours/theirs sides plus their line spans).
    */
   async analyzeConflict(projectId: string, path: string): Promise<GitConflictAnalysis> {
-    return invoke('git:analyzeConflict', projectId, path)
+    return invoke('git:analyzeConflict', ...this.scopedGitArgs(projectId, path))
   }
 
   async prepareConflictWorkFile(projectId: string, path: string): Promise<GitConflictWorkFile> {
-    return invoke('git:prepareConflictWorkFile', projectId, path)
+    return invoke('git:prepareConflictWorkFile', ...this.scopedGitArgs(projectId, path))
   }
 
   /** Persist partial resolution progress in the conflict scratch file only. */
@@ -658,7 +668,10 @@ export class GitState {
   ): Promise<boolean> {
     this.error = null
     try {
-      await invoke('git:saveConflictDraft', projectId, path, content, JSON.stringify(hunks))
+      await invoke(
+        'git:saveConflictDraft',
+        ...this.scopedGitArgs(projectId, path, content, JSON.stringify(hunks))
+      )
       return true
     } catch (reason) {
       this.error = errorMessage(reason, 'Conflict draft could not be saved')
@@ -675,7 +688,10 @@ export class GitState {
     this.markBusy('stage', true)
     this.error = null
     try {
-      this.status = await invoke('git:saveConflictResolution', projectId, path, content)
+      this.status = await invoke(
+        'git:saveConflictResolution',
+        ...this.scopedGitArgs(projectId, path, content)
+      )
       return true
     } catch (reason) {
       this.error = errorMessage(reason, 'Conflict could not be saved')
@@ -694,7 +710,7 @@ export class GitState {
     this.markBusy('stage', true)
     this.error = null
     try {
-      this.status = await invoke('git:resolveConflicted', projectId, path)
+      this.status = await invoke('git:resolveConflicted', ...this.scopedGitArgs(projectId, path))
     } catch (reason) {
       this.error = errorMessage(reason, 'Conflict could not be resolved')
     } finally {
@@ -706,7 +722,7 @@ export class GitState {
     this.markBusy('unstage', true)
     this.error = null
     try {
-      this.status = await invoke('git:unstage', projectId, paths)
+      this.status = await invoke('git:unstage', ...this.scopedGitArgs(projectId, paths))
     } catch (reason) {
       this.error = errorMessage(reason, 'Files could not be unstaged')
     } finally {
@@ -733,7 +749,7 @@ export class GitState {
     this.markBusy('init', true)
     this.error = null
     try {
-      this.status = await invoke('git:init', projectId)
+      this.status = await invoke('git:init', ...this.scopedGitArgs(projectId))
     } catch (reason) {
       this.error = errorMessage(reason, 'Repository could not be initialized')
     } finally {
@@ -745,7 +761,7 @@ export class GitState {
     this.markBusy('checkout', true)
     this.error = null
     try {
-      this.status = await invoke('git:checkout', projectId, branch)
+      this.status = await invoke('git:checkout', ...this.scopedGitArgs(projectId, branch))
       await this.refresh(projectId)
     } catch (reason) {
       this.error = errorMessage(reason, 'Checkout failed')
@@ -758,7 +774,7 @@ export class GitState {
     this.markBusy('checkout', true)
     this.error = null
     try {
-      this.status = await invoke('git:createBranch', projectId, name)
+      this.status = await invoke('git:createBranch', ...this.scopedGitArgs(projectId, name))
       await this.refresh(projectId)
     } catch (reason) {
       this.error = errorMessage(reason, 'Branch creation failed')
@@ -776,7 +792,10 @@ export class GitState {
     this.markBusy('checkout', true)
     this.error = null
     try {
-      this.status = await invoke('git:createTrackingBranch', projectId, remote, branch, localName)
+      this.status = await invoke(
+        'git:createTrackingBranch',
+        ...this.scopedGitArgs(projectId, remote, branch, localName)
+      )
       await this.refresh(projectId)
     } catch (reason) {
       this.error = errorMessage(reason, 'Remote branch checkout failed')
@@ -789,7 +808,7 @@ export class GitState {
     this.markBusy('checkout', true)
     this.error = null
     try {
-      this.status = await invoke('git:deleteBranch', projectId, name, force)
+      this.status = await invoke('git:deleteBranch', ...this.scopedGitArgs(projectId, name, force))
       await this.refresh(projectId)
       return 'deleted'
     } catch (reason) {
@@ -805,21 +824,24 @@ export class GitState {
   async setIdentity(projectId: string, name: string, email: string): Promise<void> {
     this.error = null
     try {
-      this.identity = await invoke('git:setIdentity', projectId, { name, email })
+      this.identity = await invoke(
+        'git:setIdentity',
+        ...this.scopedGitArgs(projectId, { name, email })
+      )
     } catch (reason) {
       this.error = errorMessage(reason, 'Identity could not be saved')
     }
   }
 
   async getDiff(projectId: string, path: string, staged: boolean): Promise<GitDiff> {
-    return invoke('git:diff', projectId, path, staged)
+    return invoke('git:diff', ...this.scopedGitArgs(projectId, path, staged))
   }
 
   async fetch(projectId: string): Promise<void> {
     this.markBusy('fetch', true)
     this.error = null
     try {
-      this.status = await invoke('git:fetch', projectId)
+      this.status = await invoke('git:fetch', ...this.scopedGitArgs(projectId))
       // Branch tracking (ahead/behind) changes with every fetch — refresh it so
       // push decisions (like the PR sheet's "is there anything to push?") are
       // made against freshly fetched remote refs, not the last panel refresh.
@@ -836,7 +858,10 @@ export class GitState {
     this.markBusy('fetch', true)
     this.error = null
     try {
-      this.status = await invoke('git:fetchBranch', projectId, remote, branch)
+      this.status = await invoke(
+        'git:fetchBranch',
+        ...this.scopedGitArgs(projectId, remote, branch)
+      )
       await this.refresh(projectId)
     } catch (reason) {
       this.error = errorMessage(reason, 'Fetch failed')
@@ -849,7 +874,7 @@ export class GitState {
     this.markBusy('pull', true)
     this.error = null
     try {
-      this.status = await invoke('git:pull', projectId)
+      this.status = await invoke('git:pull', ...this.scopedGitArgs(projectId))
     } catch (reason) {
       this.error = errorMessage(reason, 'Pull failed')
     } finally {
@@ -923,7 +948,7 @@ export class GitState {
   async addRemote(projectId: string, name: string, url: string): Promise<void> {
     this.error = null
     try {
-      this.remotes = await invoke('git:addRemote', projectId, name, url)
+      this.remotes = await invoke('git:addRemote', ...this.scopedGitArgs(projectId, name, url))
     } catch (reason) {
       this.error = errorMessage(reason, 'Remote could not be added')
     }
@@ -932,7 +957,7 @@ export class GitState {
   async removeRemote(projectId: string, name: string): Promise<void> {
     this.error = null
     try {
-      this.remotes = await invoke('git:removeRemote', projectId, name)
+      this.remotes = await invoke('git:removeRemote', ...this.scopedGitArgs(projectId, name))
     } catch (reason) {
       this.error = errorMessage(reason, 'Remote could not be removed')
     }
@@ -960,7 +985,7 @@ export class GitState {
     this.markBusy('merge', true)
     this.error = null
     try {
-      const summary = await invoke('git:merge', projectId, target)
+      const summary = await invoke('git:merge', ...this.scopedGitArgs(projectId, target))
       this.status = await this.readStatus(projectId)
       return summary
     } catch (reason) {
@@ -975,7 +1000,7 @@ export class GitState {
     this.markBusy('rebase', true)
     this.error = null
     try {
-      const summary = await invoke('git:rebase', projectId, target)
+      const summary = await invoke('git:rebase', ...this.scopedGitArgs(projectId, target))
       this.status = await this.readStatus(projectId)
       return summary
     } catch (reason) {
@@ -990,7 +1015,7 @@ export class GitState {
     this.markBusy('abortMerge', true)
     this.error = null
     try {
-      this.status = await invoke('git:abortMerge', projectId)
+      this.status = await invoke('git:abortMerge', ...this.scopedGitArgs(projectId))
     } catch (reason) {
       this.error = errorMessage(reason, 'Merge abort failed')
     } finally {
@@ -1002,7 +1027,7 @@ export class GitState {
     this.markBusy('abortRebase', true)
     this.error = null
     try {
-      this.status = await invoke('git:abortRebase', projectId)
+      this.status = await invoke('git:abortRebase', ...this.scopedGitArgs(projectId))
     } catch (reason) {
       this.error = errorMessage(reason, 'Rebase abort failed')
     } finally {
@@ -1023,7 +1048,7 @@ export class GitState {
     this.markBusy('merge', true)
     this.error = null
     try {
-      this.status = await invoke('git:preparePrResolve', projectId, options)
+      this.status = await invoke('git:preparePrResolve', ...this.scopedGitArgs(projectId, options))
       await this.refresh(projectId)
     } catch (reason) {
       this.error = errorMessage(reason, 'Could not prepare PR conflict resolution')
@@ -1036,8 +1061,8 @@ export class GitState {
     this.markBusy('stash', true)
     this.error = null
     try {
-      this.status = await invoke('git:stash', projectId, message, paths)
-      this.stashes = await invoke('git:stashList', projectId)
+      this.status = await invoke('git:stash', ...this.scopedGitArgs(projectId, message, paths))
+      this.stashes = await invoke('git:stashList', ...this.scopedGitArgs(projectId))
     } catch (reason) {
       this.error = errorMessage(reason, 'Stash failed')
     } finally {
@@ -1049,7 +1074,7 @@ export class GitState {
     this.markBusy('ignore', true)
     this.error = null
     try {
-      this.status = await invoke('git:ignore', projectId, paths)
+      this.status = await invoke('git:ignore', ...this.scopedGitArgs(projectId, paths))
     } catch (reason) {
       this.error = errorMessage(reason, 'Files could not be ignored')
     } finally {
@@ -1061,7 +1086,7 @@ export class GitState {
     this.markBusy('discard', true)
     this.error = null
     try {
-      this.status = await invoke('git:discard', projectId, paths)
+      this.status = await invoke('git:discard', ...this.scopedGitArgs(projectId, paths))
     } catch (reason) {
       this.error = errorMessage(reason, 'Changes could not be discarded')
     } finally {
@@ -1073,8 +1098,8 @@ export class GitState {
     this.markBusy('stash-pop', true)
     this.error = null
     try {
-      this.status = await invoke('git:stashPop', projectId, id)
-      this.stashes = await invoke('git:stashList', projectId)
+      this.status = await invoke('git:stashPop', ...this.scopedGitArgs(projectId, id))
+      this.stashes = await invoke('git:stashList', ...this.scopedGitArgs(projectId))
     } catch (reason) {
       this.error = errorMessage(reason, 'Stash pop failed')
     } finally {
@@ -1086,8 +1111,8 @@ export class GitState {
     this.markBusy('stash-drop', true)
     this.error = null
     try {
-      this.status = await invoke('git:stashDrop', projectId, id)
-      this.stashes = await invoke('git:stashList', projectId)
+      this.status = await invoke('git:stashDrop', ...this.scopedGitArgs(projectId, id))
+      this.stashes = await invoke('git:stashList', ...this.scopedGitArgs(projectId))
     } catch (reason) {
       this.error = errorMessage(reason, 'Stash drop failed')
     } finally {
@@ -1769,7 +1794,7 @@ export class GitState {
     query?: string
   ): Promise<GitCommitInfo[]> {
     try {
-      return await invoke('git:log', projectId, limit, offset, query)
+      return await invoke('git:log', ...this.scopedGitArgs(projectId, limit, offset, query))
     } catch {
       return []
     }
@@ -1777,33 +1802,33 @@ export class GitState {
 
   async getCommitDiff(projectId: string, hash: string): Promise<GitFileChange[]> {
     try {
-      return await invoke('git:commitDiff', projectId, hash)
+      return await invoke('git:commitDiff', ...this.scopedGitArgs(projectId, hash))
     } catch {
       return []
     }
   }
 
   async getCommitFileDiff(projectId: string, hash: string, path: string): Promise<GitDiff> {
-    return invoke('git:commitFileDiff', projectId, hash, path)
+    return invoke('git:commitFileDiff', ...this.scopedGitArgs(projectId, hash, path))
   }
 
   async getStashDiff(projectId: string, id: string): Promise<GitFileChange[]> {
     try {
-      return await invoke('git:stashDiff', projectId, id)
+      return await invoke('git:stashDiff', ...this.scopedGitArgs(projectId, id))
     } catch {
       return []
     }
   }
 
   async getStashFileDiff(projectId: string, id: string, path: string): Promise<GitDiff> {
-    return invoke('git:stashFileDiff', projectId, id, path)
+    return invoke('git:stashFileDiff', ...this.scopedGitArgs(projectId, id, path))
   }
 
   async amend(projectId: string, message: string): Promise<void> {
     this.markBusy('amend', true)
     this.error = null
     try {
-      this.status = await invoke('git:amend', projectId, message)
+      this.status = await invoke('git:amend', ...this.scopedGitArgs(projectId, message))
     } catch (reason) {
       this.error = errorMessage(reason, 'Amend failed')
     } finally {
@@ -1815,7 +1840,7 @@ export class GitState {
     this.markBusy('reset', true)
     this.error = null
     try {
-      this.status = await invoke('git:reset', projectId, mode, target)
+      this.status = await invoke('git:reset', ...this.scopedGitArgs(projectId, mode, target))
     } catch (reason) {
       this.error = errorMessage(reason, 'Reset failed')
     } finally {
@@ -1827,7 +1852,7 @@ export class GitState {
     this.markBusy('delete-commit', true)
     this.error = null
     try {
-      this.status = await invoke('git:deleteCommit', projectId, target)
+      this.status = await invoke('git:deleteCommit', ...this.scopedGitArgs(projectId, target))
     } catch (reason) {
       this.error = errorMessage(reason, 'Commit could not be deleted')
     } finally {

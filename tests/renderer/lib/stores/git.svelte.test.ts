@@ -174,3 +174,30 @@ describe('GitState scope-keyed status', () => {
     expect(gitState.activeScopeBucketId).toBe('feature-scope')
   })
 })
+
+describe('GitState scope-keyed operations', () => {
+  afterEach(() => {
+    invoke.mockReset()
+    gitState.activeScopeBucketId = null
+    gitState.deactivate()
+  })
+
+  it('routes git mutations through the active worktree scope', async () => {
+    invoke.mockResolvedValueOnce({ ...fixtureStatus }).mockResolvedValueOnce({ ...fixtureStatus })
+    gitState.activate('project-1')
+    await gitState.refresh('project-1')
+    invoke.mockReset()
+
+    invoke.mockResolvedValue({ ...fixtureStatus })
+    gitState.notifyScopeChanged('project-1', 'feature-scope')
+
+    await gitState.commit('project-1', 'scoped commit')
+    // The trailing argument is the active scope, proving the operation targets
+    // the worktree rather than the project root.
+    const callArgs = invoke.mock.calls.find(([channel]) => channel === 'git:commit')
+    expect(callArgs?.[0]).toBe('git:commit')
+    expect(callArgs?.[1]).toBe('project-1')
+    expect(callArgs?.[2]).toBe('scoped commit')
+    expect(callArgs?.[3]).toBe('feature-scope')
+  })
+})

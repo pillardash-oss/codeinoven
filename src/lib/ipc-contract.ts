@@ -877,54 +877,98 @@ export interface IpcInvokeContract {
   'editors:getPreferred': Contract<[], EditorId>
   'editors:setPreferred': Contract<[editorId: EditorId], void>
   'git:status': Contract<[projectId: string, scopeBucketId?: string], GitStatus>
-  'git:diff': Contract<[projectId: string, relativePath: string, staged: boolean], GitDiff>
-  'git:analyzeConflict': Contract<[projectId: string, relativePath: string], GitConflictAnalysis>
+  'git:diff': Contract<
+    [projectId: string, relativePath: string, staged: boolean, scopeBucketId?: string],
+    GitDiff
+  >
+  'git:analyzeConflict': Contract<
+    [projectId: string, relativePath: string, scopeBucketId?: string],
+    GitConflictAnalysis
+  >
   'git:prepareConflictWorkFile': Contract<
-    [projectId: string, relativePath: string],
+    [projectId: string, relativePath: string, scopeBucketId?: string],
     GitConflictWorkFile
   >
   'git:saveConflictDraft': Contract<
-    [projectId: string, relativePath: string, content: string, stateJson: string],
+    [
+      projectId: string,
+      relativePath: string,
+      content: string,
+      stateJson: string,
+      scopeBucketId?: string
+    ],
     void
   >
   'git:saveConflictResolution': Contract<
-    [projectId: string, relativePath: string, content: string],
+    [projectId: string, relativePath: string, content: string, scopeBucketId?: string],
     GitStatus
   >
   'git:stage': Contract<[projectId: string, paths: string[], scopeBucketId?: string], GitStatus>
-  'git:resolveConflicted': Contract<[projectId: string, path: string], GitStatus>
-  'git:unstage': Contract<[projectId: string, paths: string[]], GitStatus>
-  'git:commit': Contract<[projectId: string, message: string, scopeBucketId?: string], GitStatus>
-  'git:init': Contract<[projectId: string], GitStatus>
-  'git:branches': Contract<[projectId: string, scopeBucketId?: string], GitBranchInfo[]>
-  'git:checkout': Contract<[projectId: string, branch: string], GitStatus>
-  'git:createBranch': Contract<[projectId: string, name: string], GitStatus>
-  'git:createTrackingBranch': Contract<
-    [projectId: string, remote: string, branch: string, localName: string],
+  'git:resolveConflicted': Contract<
+    [projectId: string, path: string, scopeBucketId?: string],
     GitStatus
   >
-  'git:deleteBranch': Contract<[projectId: string, name: string, force?: boolean], GitStatus>
+  'git:unstage': Contract<[projectId: string, paths: string[], scopeBucketId?: string], GitStatus>
+  'git:commit': Contract<[projectId: string, message: string, scopeBucketId?: string], GitStatus>
+  'git:init': Contract<[projectId: string, scopeBucketId?: string], GitStatus>
+  'git:branches': Contract<[projectId: string, scopeBucketId?: string], GitBranchInfo[]>
+  'git:checkout': Contract<[projectId: string, branch: string, scopeBucketId?: string], GitStatus>
+  'git:createBranch': Contract<[projectId: string, name: string, scopeBucketId?: string], GitStatus>
+  'git:createTrackingBranch': Contract<
+    [projectId: string, remote: string, branch: string, localName: string, scopeBucketId?: string],
+    GitStatus
+  >
+  'git:deleteBranch': Contract<
+    [projectId: string, name: string, force?: boolean, scopeBucketId?: string],
+    GitStatus
+  >
   'git:log': Contract<
-    [projectId: string, limit?: number, offset?: number, query?: string],
+    [projectId: string, limit?: number, offset?: number, query?: string, scopeBucketId?: string],
     GitCommitInfo[]
   >
-  'git:commitDiff': Contract<[projectId: string, hash: string], GitFileChange[]>
-  'git:commitFileDiff': Contract<[projectId: string, hash: string, path: string], GitDiff>
-  'git:amend': Contract<[projectId: string, message: string], GitStatus>
+  'git:commitDiff': Contract<
+    [projectId: string, hash: string, scopeBucketId?: string],
+    GitFileChange[]
+  >
+  'git:commitFileDiff': Contract<
+    [projectId: string, hash: string, path: string, scopeBucketId?: string],
+    GitDiff
+  >
+  'git:amend': Contract<[projectId: string, message: string, scopeBucketId?: string], GitStatus>
   'git:reset': Contract<
-    [projectId: string, mode: import('./types').GitResetMode, target?: string],
+    [
+      projectId: string,
+      mode: import('./types').GitResetMode,
+      target?: string,
+      scopeBucketId?: string
+    ],
     GitStatus
   >
-  'git:deleteCommit': Contract<[projectId: string, target: string], GitStatus>
-  'git:getIdentity': Contract<[projectId: string], GitIdentity>
+  'git:deleteCommit': Contract<
+    [projectId: string, target: string, scopeBucketId?: string],
+    GitStatus
+  >
+  'git:getIdentity': Contract<[projectId: string, scopeBucketId?: string], GitIdentity>
 
-  'git:setIdentity': Contract<[projectId: string, identity: GitIdentityInput], GitIdentity>
+  'git:setIdentity': Contract<
+    [projectId: string, identity: GitIdentityInput, scopeBucketId?: string],
+    GitIdentity
+  >
   'git:remotes': Contract<[projectId: string, scopeBucketId?: string], GitRemoteInfo[]>
-  'git:addRemote': Contract<[projectId: string, name: string, url: string], GitRemoteInfo[]>
-  'git:removeRemote': Contract<[projectId: string, name: string], GitRemoteInfo[]>
-  'git:fetch': Contract<[projectId: string], GitStatus>
-  'git:fetchBranch': Contract<[projectId: string, remote: string, branch: string], GitStatus>
-  'git:pull': Contract<[projectId: string], GitStatus>
+  'git:addRemote': Contract<
+    [projectId: string, name: string, url: string, scopeBucketId?: string],
+    GitRemoteInfo[]
+  >
+  'git:removeRemote': Contract<
+    [projectId: string, name: string, scopeBucketId?: string],
+    GitRemoteInfo[]
+  >
+  'git:fetch': Contract<[projectId: string, scopeBucketId?: string], GitStatus>
+  'git:fetchBranch': Contract<
+    [projectId: string, remote: string, branch: string, scopeBucketId?: string],
+    GitStatus
+  >
+  'git:pull': Contract<[projectId: string, scopeBucketId?: string], GitStatus>
   'git:pullIntegrate': Contract<
     [
       projectId: string,
@@ -948,19 +992,31 @@ export interface IpcInvokeContract {
   'git:getCredentialStatus': Contract<[projectId: string], GitCredentialStatus>
   'git:setCredential': Contract<[projectId: string, token: string], GitCredentialStatus>
   'git:removeCredential': Contract<[projectId: string], GitCredentialStatus>
-  'git:merge': Contract<[projectId: string, target: string], MergeSummary>
-  'git:rebase': Contract<[projectId: string, target: string], MergeSummary>
-  'git:preparePrResolve': Contract<[projectId: string, options: PrResolveOptions], GitStatus>
-  'git:stash': Contract<[projectId: string, message?: string, paths?: string[]], GitStatus>
-  'git:ignore': Contract<[projectId: string, paths: string[]], GitStatus>
-  'git:discard': Contract<[projectId: string, paths: string[]], GitStatus>
-  'git:stashList': Contract<[projectId: string], GitStashEntry[]>
-  'git:stashPop': Contract<[projectId: string, id?: string], GitStatus>
-  'git:stashDrop': Contract<[projectId: string, id?: string], GitStatus>
-  'git:stashDiff': Contract<[projectId: string, id: string], GitFileChange[]>
-  'git:stashFileDiff': Contract<[projectId: string, id: string, path: string], GitDiff>
-  'git:abortMerge': Contract<[projectId: string], GitStatus>
-  'git:abortRebase': Contract<[projectId: string], GitStatus>
+  'git:merge': Contract<[projectId: string, target: string, scopeBucketId?: string], MergeSummary>
+  'git:rebase': Contract<[projectId: string, target: string, scopeBucketId?: string], MergeSummary>
+  'git:preparePrResolve': Contract<
+    [projectId: string, options: PrResolveOptions, scopeBucketId?: string],
+    GitStatus
+  >
+  'git:stash': Contract<
+    [projectId: string, message?: string, paths?: string[], scopeBucketId?: string],
+    GitStatus
+  >
+  'git:ignore': Contract<[projectId: string, paths: string[], scopeBucketId?: string], GitStatus>
+  'git:discard': Contract<[projectId: string, paths: string[], scopeBucketId?: string], GitStatus>
+  'git:stashList': Contract<[projectId: string, scopeBucketId?: string], GitStashEntry[]>
+  'git:stashPop': Contract<[projectId: string, id?: string, scopeBucketId?: string], GitStatus>
+  'git:stashDrop': Contract<[projectId: string, id?: string, scopeBucketId?: string], GitStatus>
+  'git:stashDiff': Contract<
+    [projectId: string, id: string, scopeBucketId?: string],
+    GitFileChange[]
+  >
+  'git:stashFileDiff': Contract<
+    [projectId: string, id: string, path: string, scopeBucketId?: string],
+    GitDiff
+  >
+  'git:abortMerge': Contract<[projectId: string, scopeBucketId?: string], GitStatus>
+  'git:abortRebase': Contract<[projectId: string, scopeBucketId?: string], GitStatus>
   'pr:create': Contract<
     [projectId: string, input: PrCreateInput, scopeBucketId?: string],
     GitHubMutationResult<PullRequestReference>

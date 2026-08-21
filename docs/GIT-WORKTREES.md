@@ -92,6 +92,27 @@ same-scope agents as isolated. The isolation boundary is the worktree: separate
 managed scopes get independent filesystems and independently keyed Git and file
 state.
 
+## 6a. Git panel is worktree-aware
+
+Every Git-panel operation — status, diff, stage, unst-age, commit, branch
+list/checkout/create/delete, fetch, pull, push, merge, rebase, stash,
+discard/ignore, reset, amend, log, and PR create/compare — resolves its
+repository root through the **active scope**. When the panel is attached to a
+managed worktree scope, these operations run against the worktree checkout and
+its `cio/` branch, not the project root:
+
+- `git:pull`, `git:push`, `git:fetch`, `git:merge`, `git:rebase`, `git:reset`,
+  `git:stash*`, `git:checkout`, and branch operations carry the active scope id
+  and resolve through `ScopeRootResolver`, failing closed if the managed scope
+  is unhealthy.
+- Creating a PR from a worktree uses the **worktree's `cio/` branch as the PR
+  head** and the chosen base (the checkout branch, a named branch, or a remote
+  tracked ref). Pushing to the remote publishes the `cio/<slug>` branch as a
+  new remote branch (`--set-upstream`), ready to be opened as a PR.
+- Credential and identity operations (`git:get/setCredential`,
+  `git:get/setIdentity`) stay project-scoped: worktrees share the repository's
+  `.git` config and credential vault anyway.
+
 ## 7. Health states
 
 Managed scopes expose a typed health result:
