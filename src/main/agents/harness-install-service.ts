@@ -19,9 +19,9 @@ type Platform = NodeJS.Platform
  */
 const INSTALL_PAGES: Record<string, Partial<Record<Platform, string>>> = {
   opencode: {
-    darwin: 'https://opencode.ai/docs/',
-    linux: 'https://opencode.ai/docs/',
-    win32: 'https://opencode.ai/docs/windows-wsl'
+    darwin: 'https://opencode.ai/download',
+    linux: 'https://opencode.ai/download',
+    win32: 'https://opencode.ai/download'
   },
   codex: {
     darwin: 'https://developers.openai.com/codex/cli/',
