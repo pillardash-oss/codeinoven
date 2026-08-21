@@ -1,8 +1,9 @@
-import { spawn, type ChildProcess } from 'node:child_process'
+import { execFile, spawn, type ChildProcess } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
 import { createServer } from 'node:net'
-import { access, mkdir, readdir, rm, writeFile } from 'node:fs/promises'
+import { access, mkdir, readdir, realpath, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
+import { promisify } from 'node:util'
 import type {
   GatewayAdapterDefinition,
   GatewayCatalogSnapshot,
@@ -156,10 +157,12 @@ export class GatewaySupervisorService {
 
   /**
    * Kill gateway processes left orphaned by a crash or force-quit, then clear
-   * the journal. A journaled PID is only killed when a live process with that
-   * PID is orphaned (dead parent) AND its command still matches the gateway
-   * package, so a recycled PID belonging to an unrelated process is never
-   * touched. Must run before any start on this launch.
+   * the journal. A journaled PID is only killed when every check passes: the
+   * live process is orphaned (dead parent), its command still matches the
+   * gateway package, AND its working directory resolves to the journaled cwd
+   * (the app-owned install directory). Any uncertainty — recycled PID running
+   * an unrelated copy, undeterminable cwd — skips the kill. Must run before
+   * any start on this launch.
    */
   async recoverOrphans(): Promise<{ killed: number[]; skipped: number[] }> {
     if (!this.journal) return { killed: [], skipped: [] }
@@ -182,13 +185,22 @@ export class GatewaySupervisorService {
         continue
       }
       const orphaned = entry.parentPid <= 1 || !alive.has(entry.parentPid)
-      const matchesGateway = GATEWAY_PROCESS_PATTERN.test(entry.command)
-      if (orphaned && matchesGateway) {
-        await killProcessTree(root.pid)
-        killed.push(root.pid)
-      } else {
+      if (!orphaned || !GATEWAY_PROCESS_PATTERN.test(entry.command)) {
         skipped.push(root.pid)
+        continue
       }
+      const liveCwd = await processWorkingDirectory(root.pid)
+      if (liveCwd === null || !(await sameDirectory(root.cwd, liveCwd))) {
+        Logger.dev('Gateway orphan recovery skipped a PID with a non-matching cwd', {
+          pid: root.pid,
+          journaledCwd: root.cwd,
+          liveCwd
+        })
+        skipped.push(root.pid)
+        continue
+      }
+      await killProcessTree(root.pid)
+      killed.push(root.pid)
     }
     this.journal.clear()
     await this.journal.flush()
@@ -333,6 +345,14 @@ export class GatewaySupervisorService {
     const store = await this.loadStore()
     const state = store.plugins[pluginId]
     if (!state || state.lifecycle === 'stopping' || state.lifecycle === 'stopped') return
+    // The endpoint died with the process: synced harness provider records must
+    // not survive a crash either, or harnesses keep offering dead models.
+    await removeGatewayProviders(this.providers, pluginId).catch((error) => {
+      Logger.error('Gateway provider removal failed after unexpected exit', {
+        pluginId,
+        error: error instanceof Error ? error.message : String(error)
+      })
+    })
     await this.mutateState(pluginId, (current) => ({
       ...current,
       lifecycle: 'error',
@@ -688,33 +708,69 @@ interface ProcessSnapshot {
   processes: Map<number, { parentPid: number; command: string }>
 }
 
+const execFileAsync = promisify(execFile)
+
 /**
- * Unix process snapshot for orphan verification. Returns null on platforms
- * where a reliable parentage view is unavailable, disabling recovery rather
- * than risking a recycled-PID kill.
+ * Run a read-only inspection binary through the app's process-resolution
+ * boundary (App-Bible rule for every PATH-based main-process command).
+ * Returns null when the binary is unavailable or fails — callers must treat
+ * that as "cannot verify" and never guess.
+ */
+async function runInspectionCommand(command: string, args: string[]): Promise<string | null> {
+  const resolved = resolveExecutablePath(command)
+  if (!resolved) return null
+  try {
+    const { stdout } = await execFileAsync(resolved, args, { env: buildProcessEnvironment() })
+    return stdout
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Unix process snapshot for orphan verification. Returns null on platforms or
+ * failures where a reliable parentage view is unavailable, disabling recovery
+ * rather than risking a recycled-PID kill.
  */
 async function processSnapshot(): Promise<ProcessSnapshot | null> {
   if (process.platform === 'win32') return null
-  const { execFile } = await import('node:child_process')
-  const { promisify } = await import('node:util')
-  try {
-    const { stdout } = await promisify(execFile)('ps', ['-axo', 'pid=,ppid=,command='])
-    const processes = new Map<number, { parentPid: number; command: string }>()
-    for (const line of stdout.split(/\r?\n/u)) {
-      const match = line.match(/^\s*(\d+)\s+(\d+)\s+(.+)$/u)
-      if (!match) continue
-      processes.set(Number(match[1]), {
-        parentPid: Number(match[2]),
-        command: match[3]?.trim() || ''
-      })
-    }
-    return { processes }
-  } catch (error) {
-    Logger.error('Gateway process snapshot failed', {
-      error: error instanceof Error ? error.message : String(error)
-    })
+  const stdout = await runInspectionCommand('ps', ['-axo', 'pid=,ppid=,command='])
+  if (stdout === null) {
+    Logger.error('Gateway process snapshot failed', { reason: 'ps unavailable or failed' })
     return null
   }
+  const processes = new Map<number, { parentPid: number; command: string }>()
+  for (const line of stdout.split(/\r?\n/u)) {
+    const match = line.match(/^\s*(\d+)\s+(\d+)\s+(.+)$/u)
+    if (!match) continue
+    processes.set(Number(match[1]), {
+      parentPid: Number(match[2]),
+      command: match[3]?.trim() || ''
+    })
+  }
+  return { processes }
+}
+
+/**
+ * Resolve the working directory of a live PID via lsof. Returns null when it
+ * cannot be determined — callers must skip rather than kill on uncertainty.
+ */
+async function processWorkingDirectory(pid: number): Promise<string | null> {
+  const stdout = await runInspectionCommand('lsof', ['-a', '-p', String(pid), '-d', 'cwd', '-Fn'])
+  if (stdout === null) return null
+  for (const line of stdout.split(/\r?\n/u)) {
+    // lsof -Fn prints the path on an `n` record: `n/path/to/cwd`.
+    if (line.startsWith('n/')) return line.slice(1)
+  }
+  return null
+}
+
+async function sameDirectory(left: string, right: string): Promise<boolean> {
+  if (left === right) return true
+  const [resolvedLeft, resolvedRight] = await Promise.all(
+    [left, right].map((candidate) => realpath(candidate).catch(() => candidate))
+  )
+  return resolvedLeft === resolvedRight
 }
 
 async function killProcessTree(pid: number): Promise<void> {
