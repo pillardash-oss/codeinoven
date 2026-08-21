@@ -2480,6 +2480,20 @@
     unsubscribeThreadUpdated = subscribe('thread:updated', (...args: unknown[]) => {
       const updatedThread = args[0] as Thread
       if (updatedThread.projectId === thread.projectId && updatedThread.id === thread.id) {
+        // Another renderer (notably the PWA) can create or resume the harness
+        // session while this desktop view stays mounted. Adopt that persisted
+        // binding before its stream arrives, then reconcile the user message
+        // that the remote renderer optimistically owns in its own cache.
+        if (updatedThread.sessionId && updatedThread.sessionId !== sessionId) {
+          sessionBindingVersion += 1
+          sessionId = updatedThread.sessionId
+          sessionReady = Promise.resolve(updatedThread.sessionId)
+          threadMessages.setSessionId(thread.projectId, thread.id, updatedThread.sessionId)
+        }
+        // Thread updates are deliberately low-frequency lifecycle boundaries.
+        // Reconcile on every one so early-return workflows (for example a
+        // planning turn awaiting a choice) cannot strand the remote prompt.
+        void refreshMessages()
         restoreWorkingState(updatedThread.status, updatedThread.auditState === 'running')
       }
       if (
