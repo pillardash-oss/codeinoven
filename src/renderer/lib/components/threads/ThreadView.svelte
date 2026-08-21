@@ -1617,6 +1617,25 @@
       thread.achievementRole === 'auditor'
   )
   let achievementOnly = $derived(settings.loopMode === true && settings.assignmentMode !== true)
+  let studioOnlyAuditWorkflow = $derived(
+    settings.assignmentMode !== true &&
+      settings.loopMode !== true &&
+      assignment === null &&
+      thread.assignmentId === undefined &&
+      thread.achievementRole === undefined
+  )
+  let plainEngineeringAuditAvailable = $derived(
+    settings.engineeringMode === true &&
+      studioOnlyAuditWorkflow &&
+      spec?.status === 'approved' &&
+      (auditState === 'offered' || (auditState === 'report_ready' && auditReport !== null))
+  )
+  let plainEngineeringAuditReady = $derived(
+    settings.engineeringMode === true &&
+      studioOnlyAuditWorkflow &&
+      auditState === 'report_ready' &&
+      auditReport !== null
+  )
 
   /** Which coordinator, if any, this thread publishes to the context dock. */
   let coordinatorKind = $derived.by((): 'assignment' | 'achievement' | null => {
@@ -5763,9 +5782,6 @@
           )
         }
         await setActiveSpec(active)
-        settings = { ...settings, engineeringMode: false }
-        commitSettings(settings)
-        await invoke('thread:updateSettings', thread.projectId, thread.id, settings)
         if (active.content.assignment && settings.assignmentMode) {
           await reconcileReadySpec()
           return
@@ -6810,6 +6826,8 @@
           assignmentAvailable={assignment !== null}
           assignmentMode={settings.assignmentMode === true}
           auditAvailable={auditReport !== null}
+          implementationAuditAvailable={plainEngineeringAuditAvailable}
+          implementationAuditReady={plainEngineeringAuditReady}
           brainstormAvailable={brainstorm !== null}
           onBack={closeSpecStudio}
           onOpenBrainstorm={openBrainstormStudio}
@@ -6820,6 +6838,9 @@
           onOpenAssignment={openAssignmentStudio}
           onGenerateAssignment={() => generateAssignmentDraft()}
           onOpenAudit={openAuditStudio}
+          onRunImplementationAudit={() =>
+            plainEngineeringAuditReady ? openAuditStudio() : generateAudit(auditSettings)}
+          onMarkImplementationComplete={completeAudit}
           onSave={saveSpec}
           onSelectVersion={selectSpecVersion}
           onAddAnnotation={addSpecAnnotation}
@@ -7808,7 +7829,7 @@
                   rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
                 onViewReport={openAuditStudio}
               />
-            {:else if assignmentAuditState === 'offered' && !busy && !achievementAutonomous}
+            {:else if assignmentAuditState === 'offered' && !busy && !achievementAutonomous && !studioOnlyAuditWorkflow}
               <AuditOfferCard
                 threadTitle={thread.title}
                 reworkCycle={assignmentReworkCycle}
@@ -7826,7 +7847,7 @@
                 onReorderFavorite={(draggedKey, targetKey, position) =>
                   rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
               />
-            {:else if assignmentAuditState === 'report_ready' && auditReport && !busy && !achievementAutonomous}
+            {:else if assignmentAuditState === 'report_ready' && auditReport && !busy && !achievementAutonomous && !studioOnlyAuditWorkflow}
               <AuditReadyCard
                 report={auditReport}
                 {providers}

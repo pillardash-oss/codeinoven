@@ -4922,9 +4922,6 @@ export class ChatEngine {
     ) {
       throw new TypeError('Invalid specification action')
     }
-    if (specAction === 'implement' && settings.engineeringMode) {
-      settings = { ...settings, engineeringMode: false }
-    }
     const messageId = validateEntityId(userMessageId ?? createMessageId(), 'Message ID', 256)
     const coordinatorHandoff = (createdAt: number): QueuedCoordinatorHandoff => ({
       schemaVersion: 1,
