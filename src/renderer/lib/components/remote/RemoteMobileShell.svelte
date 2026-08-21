@@ -1026,7 +1026,7 @@
               mobileState.projectIcons.get(activeThreadProject.id)
             )}
             <div
-              class="mb-1 flex min-h-10 items-center justify-between gap-2 rounded-lg bg-elevated/60 px-1.5"
+              class="sticky top-0 z-10 mb-1 flex min-h-10 items-center justify-between gap-2 border-b border-border bg-surface px-1.5"
             >
               <span class="flex min-w-0 items-center gap-1.5 px-1">
                 {#if scopedIconUrl}

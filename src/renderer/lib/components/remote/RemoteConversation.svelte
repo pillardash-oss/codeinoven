@@ -3,6 +3,7 @@
   import type { Attachment } from 'svelte/attachments'
   import { SvelteMap } from 'svelte/reactivity'
   import {
+    Brain,
     Check,
     ChevronDown,
     Copy,
@@ -27,6 +28,8 @@
   import { copyText } from '$lib/copy-text'
   import { attachmentPreviewKind, fileUrlToPath } from '$lib/mime'
   import { getAgentIcon } from '$lib/agent-icons/registry'
+  import { fastVariantForModelId } from '$shared/fast-inference'
+  import { resolveDefaultThinkingLevel } from '$shared/thinking-presets'
   import { mobileState } from '$lib/remote/mobile-state.svelte'
   import ChatComposer from '../chats/ChatComposer.svelte'
   import AttachmentPreview from '../chats/AttachmentPreview.svelte'
@@ -46,6 +49,7 @@
     Thread,
     ThreadSettings
   } from '$shared/types'
+  import type { ThinkingLevel } from '$shared/types'
 
   type StartAfterSelection = Pick<Thread, 'id' | 'title'>
 
@@ -280,10 +284,34 @@
 
   function modelLabel(message: AgentMessage): string | null {
     if (!message.modelId) return null
-    return (
-      providers.flatMap((provider) => provider.models).find((model) => model.id === message.modelId)
-        ?.name ?? message.modelId
-    )
+    const allModels = providers.flatMap((provider) => provider.models)
+    const model =
+      allModels.find(
+        (model) =>
+          model.id === message.modelId &&
+          (!message.providerId || model.providerId === message.providerId)
+      ) ?? allModels.find((model) => model.id === message.modelId)
+    if (model) return model.name
+    // Fast variants may be absent from harness catalogs — fall back to a derived label.
+    return fastVariantForModelId(message.modelId)?.label ?? message.modelId
+  }
+
+  /** Thinking level used for the turn, mirroring desktop's messageThinkingLevel. */
+  function turnThinkingLevel(message: AgentMessage): ThinkingLevel | null {
+    if (!message.modelId) return null
+    const allModels = providers.flatMap((provider) => provider.models)
+    const model =
+      allModels.find(
+        (candidate) =>
+          candidate.id === message.modelId &&
+          (!message.providerId || candidate.providerId === message.providerId)
+      ) ?? allModels.find((candidate) => candidate.id === message.modelId)
+    const presets = model?.thinkingPresets ?? []
+    // A model known not to reason never shows a thinking badge.
+    if (model && presets.length === 0) return null
+    if (message.thinkingLevel) return message.thinkingLevel
+    if (presets.length === 0) return null
+    return resolveDefaultThinkingLevel(presets, undefined, settings.thinkingLevel) ?? null
   }
 
   function providerName(message: AgentMessage): string | null {
@@ -734,12 +762,12 @@
         {#each messages as message, index (message.id)}
           {@const text = textFor(message)}
           {@const files = fileParts(message)}
-          <div
-            {@attach registerMessageElement}
-            class="group flex flex-col gap-1.5"
-            data-message-id={message.id}
-          >
-            {#if message.role === 'user'}
+          {#if message.role === 'user'}
+            <div
+              {@attach registerMessageElement}
+              class="group flex flex-col gap-1.5"
+              data-message-id={message.id}
+            >
               <div class="flex justify-end">
                 <div class="max-w-[85%] rounded-2xl bg-surface px-3.5 py-2.5">
                   {#if files.length > 0}
@@ -770,18 +798,26 @@
                   {/if}
                 </div>
               </div>
-            {:else if index === 0 || messages[index - 1]?.role === 'user'}
-              {@const endIndex = turnEndIndex(index)}
-              {@const endMessage = messages[endIndex]}
-              {@const final = turnFinalText(index)}
-              {@const turnBusy = busy && endIndex === messages.length - 1}
-              {@const trace = turnTraceParts(index, turnBusy)}
-              {@const assistantFiles = turnFiles(index)}
-              {@const attribution = turnAttribution(index)}
-              {@const isLatestAssistantTurn = messages
-                .slice(endIndex + 1)
-                .every((candidate) => candidate.role === 'user')}
-              {@const turnDone = endMessage.completedAt !== undefined || !turnBusy}
+            </div>
+          {:else if index === 0 || messages[index - 1]?.role === 'user'}
+            {@const endIndex = turnEndIndex(index)}
+            {@const endMessage = messages[endIndex]}
+            {@const final = turnFinalText(index)}
+            {@const turnBusy = busy && endIndex === messages.length - 1}
+            {@const trace = turnTraceParts(index, turnBusy)}
+            {@const assistantFiles = turnFiles(index)}
+            {@const attribution = turnAttribution(index)}
+            {@const isLatestAssistantTurn = messages
+              .slice(endIndex + 1)
+              .every((candidate) => candidate.role === 'user')}
+            {@const turnDone = endMessage.completedAt !== undefined || !turnBusy}
+            {@const model = modelLabel(attribution)}
+            {@const thinking = turnThinkingLevel(attribution)}
+            <div
+              {@attach registerMessageElement}
+              class="group flex flex-col gap-1.5"
+              data-message-id={message.id}
+            >
               <div class="flex flex-col gap-1.5">
                 {#if trace.length > 0}
                   <WorkingTrace
@@ -864,18 +900,33 @@
                         <GitFork size={14} />
                       {/if}
                     </button>
-                    <span class="ml-1 min-w-0 truncate text-[10px]">
-                      {harnessName(attribution)}{#if modelLabel(attribution)}
-                        · {modelLabel(attribution)}{/if}
+                    <span class="ml-1 flex min-w-0 items-center gap-1 truncate text-[10px]">
+                      <span class="truncate">
+                        {harnessName(attribution)}{#if providerName(attribution)}
+                          · {providerName(attribution)}{/if}{#if model}
+                          · {model}{/if}
+                      </span>
+                      {#if thinking}
+                        <span
+                          class="flex shrink-0 items-center gap-0.5 rounded-md bg-elevated px-1.5 py-0.5 text-[9px] capitalize text-muted"
+                          title={`Thinking level: ${thinking}`}
+                          aria-label={`Thinking level: ${thinking}`}
+                        >
+                          <Brain size={9} />
+                          {thinking}
+                        </span>
+                      {/if}
                       {#if endMessage.completedAt && turnStartTime(index)}
-                        · {formatDuration(endMessage.completedAt - (turnStartTime(index) ?? 0))}
+                        <span class="shrink-0 tabular-nums">
+                          · {formatDuration(endMessage.completedAt - (turnStartTime(index) ?? 0))}
+                        </span>
                       {/if}
                     </span>
                   </div>
                 {/if}
               </div>
-            {/if}
-          </div>
+            </div>
+          {/if}
         {/each}
       {/if}
 
