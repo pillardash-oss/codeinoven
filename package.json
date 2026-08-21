@@ -57,6 +57,7 @@
     "better-sqlite3": "^13.0.3",
     "chokidar": "^5.0.0",
     "electron-updater": "^6.8.9",
+    "mammoth": "1.12.1",
     "node-pty": "1.1.0",
     "web-push": "^3.6.7",
     "werift": "^0.24.4"

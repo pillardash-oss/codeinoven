@@ -45,6 +45,11 @@ import { resolveFastModelId } from '../../lib/fast-inference'
 import { classifyProviderIssue } from '../../lib/provider-issue'
 import { isSvgAttachment, readSvgAttachmentText, formatSvgAsText } from './svg-attachment'
 import { isTextAttachment, readTextAttachment, formatTextAsText } from './text-attachment'
+import {
+  formatWordDocumentAsText,
+  isWordDocumentAttachment,
+  readWordDocumentText
+} from './document-attachment'
 import { buildTitlePrompt, sanitizeGeneratedTitle } from '../chat/title-generator'
 import { leanAgentConfigMap } from '../opencode/opencode-agent-definitions'
 
@@ -1349,6 +1354,13 @@ export class OpenCodeDriver implements HarnessDriver {
           continue
         }
       }
+      if (isWordDocumentAttachment(attachment)) {
+        const content = await readWordDocumentText(attachment)
+        if (content !== null) {
+          parts.push({ type: 'text', text: formatWordDocumentAsText(attachment, content) })
+          continue
+        }
+      }
       parts.push({
         type: 'file',
         mime: attachment.mime,
@@ -1428,6 +1440,13 @@ export class OpenCodeDriver implements HarnessDriver {
         const content = await readTextAttachment(attachment)
         if (content !== null) {
           parts.push({ type: 'text', text: formatTextAsText(attachment, content) })
+          continue
+        }
+      }
+      if (isWordDocumentAttachment(attachment)) {
+        const content = await readWordDocumentText(attachment)
+        if (content !== null) {
+          parts.push({ type: 'text', text: formatWordDocumentAsText(attachment, content) })
           continue
         }
       }
