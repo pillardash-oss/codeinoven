@@ -2035,15 +2035,33 @@ export class OpenCodeDriver implements HarnessDriver {
   }
 
   /** Spawn a dedicated `opencode serve` process independent of the project pool. */
-  private startIsolatedServer(
+  private async startIsolatedServer(
     projectPath: string,
     runtime?: PreparedUtilityRuntime
   ): Promise<Omit<IsolatedHandle, 'sessionId'>> {
+    // Temporary chats, title generation, and other disposable work bypass the
+    // shared server. Give those fresh servers the same app-managed agent and
+    // provider overlay as the shared server, otherwise prompts that select a
+    // lean agent (for example `cio-eph`) fail before creating the user message.
+    const overlay = runtime
+      ? undefined
+      : await this.prepareUtilityRuntime({ projectPath, resolvedUtilities: [] })
+    const args = [
+      'serve',
+      '--port',
+      '0',
+      '--hostname',
+      '127.0.0.1',
+      ...(runtime?.args ?? overlay?.args ?? [])
+    ]
+    const env = runtime
+      ? this.buildEnv(runtime)
+      : buildProcessEnvironment({ ...process.env, ...(overlay?.env ?? {}) })
+
     return new Promise((resolve, reject) => {
-      const args = ['serve', '--port', '0', '--hostname', '127.0.0.1', ...(runtime?.args ?? [])]
       const child = spawn('opencode', args, {
         cwd: projectPath,
-        env: this.buildEnv(runtime),
+        env,
         stdio: ['ignore', 'pipe', 'pipe']
       })
 
