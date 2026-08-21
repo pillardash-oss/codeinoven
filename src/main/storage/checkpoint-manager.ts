@@ -9,6 +9,7 @@ import type {
   TurnCheckpointSummary
 } from '../../lib/types'
 import type { Database } from '../database/database'
+import { CrossProcessMutex } from '../system/cross-process-mutex'
 import {
   ChangeTrackingService,
   type CheckpointBlobStore,
@@ -93,6 +94,18 @@ class StorageCheckpointBlobStore implements CheckpointBlobStore {
       throw error
     }
   }
+
+  async revision(): Promise<string> {
+    try {
+      return await readFile(
+        join(getConfigRoot(), `projects/${this.projectId}/blob-revision`),
+        'utf-8'
+      )
+    } catch (error) {
+      if (isMissing(error)) return ''
+      throw error
+    }
+  }
 }
 
 /**
@@ -101,6 +114,7 @@ class StorageCheckpointBlobStore implements CheckpointBlobStore {
  */
 export class CheckpointManager {
   private readonly trackers = new Map<string, ChangeTrackingService>()
+  private readonly blobLocks = new Map<string, CrossProcessMutex>()
 
   constructor(private readonly db: Database) {}
 
@@ -110,6 +124,23 @@ export class CheckpointManager {
     const tracker = new ChangeTrackingService(new StorageCheckpointBlobStore(projectId))
     this.trackers.set(projectId, tracker)
     return tracker
+  }
+
+  private blobLock(projectId: string): CrossProcessMutex {
+    const existing = this.blobLocks.get(projectId)
+    if (existing) return existing
+    const lock = new CrossProcessMutex(`checkpoint-blobs-${projectId}`)
+    this.blobLocks.set(projectId, lock)
+    return lock
+  }
+
+  private async withBlobLock<T>(projectId: string, operation: () => Promise<T>): Promise<T> {
+    const release = await this.blobLock(projectId).acquire()
+    try {
+      return await operation()
+    } finally {
+      release()
+    }
   }
 
   async beginTurn(
@@ -122,25 +153,27 @@ export class CheckpointManager {
   ): Promise<TurnCheckpoint> {
     assertId(projectId)
     assertId(threadId)
-    const id = generateId()
-    const tracker = this.tracker(projectId)
-    const checkpoint: TurnCheckpoint = {
-      id,
-      projectId,
-      threadId,
-      ...(sourceMessageId ? { sourceMessageId } : {}),
-      label,
-      status: 'active',
-      before: await tracker.snapshot(projectPath, { includeGitMetadata }),
-      changes: [],
-      createdAt: Date.now()
-    }
-    await this.save(checkpoint)
-    await this.writeRow(
-      'INSERT OR REPLACE INTO active_turns(project_id, thread_id, turn_id) VALUES(?, ?, ?)',
-      [projectId, threadId, id]
-    )
-    return checkpoint
+    return this.withBlobLock(projectId, async () => {
+      const id = generateId()
+      const tracker = this.tracker(projectId)
+      const checkpoint: TurnCheckpoint = {
+        id,
+        projectId,
+        threadId,
+        ...(sourceMessageId ? { sourceMessageId } : {}),
+        label,
+        status: 'active',
+        before: await tracker.snapshot(projectPath, { includeGitMetadata }),
+        changes: [],
+        createdAt: Date.now()
+      }
+      await this.save(checkpoint)
+      await this.writeRow(
+        'INSERT OR REPLACE INTO active_turns(project_id, thread_id, turn_id) VALUES(?, ?, ?)',
+        [projectId, threadId, id]
+      )
+      return checkpoint
+    })
   }
 
   /** Stat-only project scan used to attribute shell-command mutations to their run window. */
@@ -169,39 +202,51 @@ export class CheckpointManager {
     changedPaths?: ReadonlySet<string>,
     options: TurnCompletionOptions = {}
   ): Promise<TurnCheckpoint> {
-    const checkpoint = await this.get(projectId, threadId, turnId)
-    if (!checkpoint) throw new Error(`Turn checkpoint not found: ${turnId}`)
-    if (checkpoint.status !== 'active' && checkpoint.status !== 'interrupted') return checkpoint
+    return this.withBlobLock(projectId, async () => {
+      const checkpoint = await this.get(projectId, threadId, turnId)
+      if (!checkpoint) throw new Error(`Turn checkpoint not found: ${turnId}`)
+      if (checkpoint.status !== 'active' && checkpoint.status !== 'interrupted') return checkpoint
 
-    const tracker = this.tracker(projectId)
-    const after = await tracker.snapshot(projectPath, {
-      includeGitMetadata: checkpoint.before.git !== undefined
+      const tracker = this.tracker(projectId)
+      const after = await tracker.snapshot(projectPath, {
+        includeGitMetadata: checkpoint.before.git !== undefined
+      })
+      const allChanges = tracker.calculateChanges(checkpoint.before, after)
+      const foreign =
+        allChanges.length > 0 ? await this.foreignClaimedPaths(checkpoint, options) : undefined
+      const precisePaths = options.precisePaths ?? new Set<string>()
+      const keepChange = (path: string): boolean =>
+        foreign === undefined || !foreign.has(path) || precisePaths.has(path)
+      const changes = changedPaths
+        ? allChanges.filter((change) => changedPaths.has(change.path) && keepChange(change.path))
+        : allChanges.filter((change) => keepChange(change.path))
+      const lineStats = await this.calculateLineStats(tracker, changes)
+      const contentUnavailable = new Set([
+        ...(checkpoint.before.unavailableFiles ?? []),
+        ...(after.unavailableFiles ?? []),
+        ...lineStats.unavailablePaths
+      ])
+      const captureWarning = this.captureWarning(
+        changes.filter((change) => contentUnavailable.has(change.path)).map((change) => change.path)
+      )
+      const completionFailure = [failure, captureWarning].filter(Boolean).join(' ')
+      const updated: TurnCheckpoint = {
+        ...checkpoint,
+        status,
+        after,
+        changes,
+        changeFilterApplied: changedPaths !== undefined,
+        lineStats: lineStats.stats,
+        completedAt: Date.now(),
+        ...(completionFailure ? { failure: completionFailure } : {})
+      }
+      await this.save(updated)
+      await this.writeRow('DELETE FROM active_turns WHERE project_id = ? AND thread_id = ?', [
+        projectId,
+        threadId
+      ])
+      return updated
     })
-    const allChanges = tracker.calculateChanges(checkpoint.before, after)
-    const foreign =
-      allChanges.length > 0 ? await this.foreignClaimedPaths(checkpoint, options) : undefined
-    const precisePaths = options.precisePaths ?? new Set<string>()
-    const keepChange = (path: string): boolean =>
-      foreign === undefined || !foreign.has(path) || precisePaths.has(path)
-    const changes = changedPaths
-      ? allChanges.filter((change) => changedPaths.has(change.path) && keepChange(change.path))
-      : allChanges.filter((change) => keepChange(change.path))
-    const updated: TurnCheckpoint = {
-      ...checkpoint,
-      status,
-      after,
-      changes,
-      changeFilterApplied: changedPaths !== undefined,
-      lineStats: await this.calculateLineStats(tracker, changes),
-      completedAt: Date.now(),
-      ...(failure ? { failure } : {})
-    }
-    await this.save(updated)
-    await this.writeRow('DELETE FROM active_turns WHERE project_id = ? AND thread_id = ?', [
-      projectId,
-      threadId
-    ])
-    return updated
   }
 
   /**
@@ -354,39 +399,50 @@ export class CheckpointManager {
   /** Remove project checkpoint blobs that no remaining thread references. */
   async pruneUnusedBlobs(projectId: string): Promise<number> {
     assertId(projectId)
-    const referenced = new Set<string>()
-    const rows = await this.queryDataRows(
-      'SELECT data FROM turn_checkpoints WHERE project_id = ?',
-      [projectId],
-      100_000
-    )
-    for (const row of rows) {
-      try {
-        const checkpoint = JSON.parse(row.data) as TurnCheckpoint
-        for (const file of Object.values(checkpoint.before.files)) referenced.add(file.hash)
-        for (const file of Object.values(checkpoint.after?.files ?? {})) referenced.add(file.hash)
-      } catch {
-        // A corrupt remaining checkpoint cannot safely identify its blobs, so
-        // preserve the project blob directory rather than risk data loss.
-        return 0
+    return this.withBlobLock(projectId, async () => {
+      // Invalidate every process's snapshot cache before deleting anything.
+      // Snapshot capture uses the same cross-process lock, so the new revision
+      // is observed before a later cache entry can be reused.
+      const projectStorage = join(getConfigRoot(), `projects/${projectId}`)
+      await mkdir(projectStorage, { recursive: true })
+      await writeFile(join(projectStorage, 'blob-revision'), generateId(), {
+        encoding: 'utf-8',
+        mode: 0o600
+      })
+      const referenced = new Set<string>()
+      const rows = await this.queryDataRows(
+        'SELECT data FROM turn_checkpoints WHERE project_id = ?',
+        [projectId],
+        100_000
+      )
+      for (const row of rows) {
+        try {
+          const checkpoint = JSON.parse(row.data) as TurnCheckpoint
+          for (const file of Object.values(checkpoint.before.files)) referenced.add(file.hash)
+          for (const file of Object.values(checkpoint.after?.files ?? {})) referenced.add(file.hash)
+        } catch {
+          // A corrupt remaining checkpoint cannot safely identify its blobs, so
+          // preserve the project blob directory rather than risk data loss.
+          return 0
+        }
       }
-    }
 
-    const directory = join(getConfigRoot(), `projects/${projectId}/blobs`)
-    let entries
-    try {
-      entries = await readdir(directory, { withFileTypes: true })
-    } catch (error) {
-      if (isMissing(error)) return 0
-      throw error
-    }
-    let deleted = 0
-    for (const entry of entries) {
-      if (!entry.isFile() || referenced.has(entry.name)) continue
-      await rm(join(directory, entry.name), { force: true })
-      deleted++
-    }
-    return deleted
+      const directory = join(getConfigRoot(), `projects/${projectId}/blobs`)
+      let entries
+      try {
+        entries = await readdir(directory, { withFileTypes: true })
+      } catch (error) {
+        if (isMissing(error)) return 0
+        throw error
+      }
+      let deleted = 0
+      for (const entry of entries) {
+        if (!entry.isFile() || referenced.has(entry.name)) continue
+        await rm(join(directory, entry.name), { force: true })
+        deleted++
+      }
+      return deleted
+    })
   }
 
   async listSummaries(projectId: string, threadId: string): Promise<TurnCheckpointSummary[]> {
@@ -650,22 +706,47 @@ export class CheckpointManager {
   private async calculateLineStats(
     tracker: ChangeTrackingService,
     changes: CheckpointChange[]
-  ): Promise<Record<string, CheckpointLineStats>> {
+  ): Promise<{
+    stats: Record<string, CheckpointLineStats>
+    unavailablePaths: string[]
+  }> {
     const stats: Record<string, CheckpointLineStats> = {}
+    const unavailablePaths: string[] = []
     for (const change of changes) {
       if (change.before?.binary ?? change.after?.binary ?? false) continue
-      const before = change.before ? await tracker.readBlob(change.before.hash) : new Uint8Array()
-      const after = change.after ? await tracker.readBlob(change.after.hash) : new Uint8Array()
-      if (change.before && !before)
-        throw new Error(`Checkpoint blob is unavailable for ${change.path}`)
-      if (change.after && !after)
-        throw new Error(`Checkpoint blob is unavailable for ${change.path}`)
+      let before: Uint8Array | null
+      let after: Uint8Array | null
+      try {
+        before = change.before ? await tracker.readBlob(change.before.hash) : new Uint8Array()
+        after = change.after ? await tracker.readBlob(change.after.hash) : new Uint8Array()
+      } catch {
+        stats[change.path] = { truncated: true }
+        unavailablePaths.push(change.path)
+        continue
+      }
+      if ((change.before && !before) || (change.after && !after)) {
+        stats[change.path] = { truncated: true }
+        unavailablePaths.push(change.path)
+        continue
+      }
       stats[change.path] = calculateBoundedLineStats(
         before ?? new Uint8Array(),
         after ?? new Uint8Array()
       )
     }
-    return stats
+    return { stats, unavailablePaths }
+  }
+
+  private captureWarning(paths: string[]): string | undefined {
+    const unique = [...new Set(paths)].sort()
+    if (unique.length === 0) return undefined
+    const visible = unique.slice(0, 5)
+    const remainder = unique.length - visible.length
+    return (
+      `File paths were recorded, but checkpoint content is unavailable for ${unique.length} ` +
+      `${unique.length === 1 ? 'file' : 'files'}; diffs, line counts, and undo may be incomplete: ` +
+      `${visible.join(', ')}${remainder > 0 ? ` (+${remainder} more)` : ''}.`
+    )
   }
 }
 
