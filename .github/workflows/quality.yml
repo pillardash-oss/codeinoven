@@ -209,6 +209,7 @@ jobs:
           bun run check:bundle
 
       - name: Package unpacked Windows application
+        shell: bash
         run: bunx electron-builder --win --x64 --dir -c.forceCodeSigning=false
 
       - name: Launch packaged application through workspace readiness
