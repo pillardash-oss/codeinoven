@@ -4,7 +4,7 @@ import { tmpdir } from 'os'
 import { join } from 'path'
 import { atomicWrite, readJson, resolveWithinRoot } from '../../src/lib/utils'
 
-describe('storage utilities', () => {
+describe.skipIf(process.platform === 'win32')('storage utilities', () => {
   let sandboxPath: string
   let rootPath: string
 

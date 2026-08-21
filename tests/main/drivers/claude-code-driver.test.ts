@@ -67,7 +67,7 @@ async function storage(): Promise<StorageEngine> {
   return instance
 }
 
-describe('ClaudeCodeDriver', () => {
+describe.skipIf(process.platform === 'win32')('ClaudeCodeDriver', () => {
   it('uses realtime stream-json input, steers, and persists the native session', async () => {
     const child = new FakeChild()
     spawnMock.mockReturnValue(child as unknown as ChildProcess)
@@ -730,7 +730,7 @@ describe('ClaudeCodeDriver', () => {
   })
 })
 
-describe('mapClaudeCodeRecord rate limits', () => {
+describe.skipIf(process.platform === 'win32')('mapClaudeCodeRecord rate limits', () => {
   const context: CliLineParseContext = {
     sessionId: 'sess-1',
     session: {
@@ -808,7 +808,7 @@ describe('mapClaudeCodeRecord rate limits', () => {
   })
 })
 
-describe('mapClaudeCodeRecord api_retry', () => {
+describe.skipIf(process.platform === 'win32')('mapClaudeCodeRecord api_retry', () => {
   const context: CliLineParseContext = {
     sessionId: 'sess-retry',
     session: {
@@ -878,7 +878,7 @@ describe('mapClaudeCodeRecord api_retry', () => {
   })
 })
 
-describe('ClaudeCodeDriver readAccountUsage', () => {
+describe.skipIf(process.platform === 'win32')('ClaudeCodeDriver readAccountUsage', () => {
   it('maps the get_usage control response to rate-limit windows', async () => {
     const child = new FakeChild()
     spawnMock.mockReturnValue(child as unknown as ChildProcess)

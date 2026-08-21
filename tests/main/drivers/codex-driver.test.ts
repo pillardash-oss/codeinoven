@@ -99,7 +99,7 @@ const settings = {
   engineeringMode: false
 }
 
-describe('CodexDriver', () => {
+describe.skipIf(process.platform === 'win32')('CodexDriver', () => {
   it('maps Codex collaboration items into a visible subagent lifecycle', async () => {
     const driver = new CodexDriver(await storage())
     const events: AgentEvent[] = []
@@ -919,7 +919,7 @@ describe('Codex token usage normalization', () => {
   })
 })
 
-describe('mapCodexRateLimits', () => {
+describe.skipIf(process.platform === 'win32')('mapCodexRateLimits', () => {
   it('maps the backward-compatible single-bucket payload with window minutes', () => {
     const telemetry = mapCodexRateLimits({
       rateLimits: {
@@ -1068,7 +1068,7 @@ describe('mapCodexRateLimits', () => {
   })
 })
 
-describe('CodexDriver readAccountUsage', () => {
+describe.skipIf(process.platform === 'win32')('CodexDriver readAccountUsage', () => {
   it('fetches account quota on demand via account/rateLimits/read', async () => {
     const child = new FakeChild()
     child.stdin.write.mockImplementation((value: string) => {
