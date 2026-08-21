@@ -233,9 +233,10 @@ export class GitState {
   /** Switch the panel to a project, dropping any leftover state from the
    *  previous one so stale data is never shown. */
   activate(projectId: string, scopeBucketId?: string): void {
-    if (this.activeProjectId === projectId && this.activeScopeBucketId === scopeBucketId) return
+    const nextScopeBucketId = scopeBucketId ?? null
+    if (this.activeProjectId === projectId && this.activeScopeBucketId === nextScopeBucketId) return
     this.activeProjectId = projectId
-    this.activeScopeBucketId = scopeBucketId ?? null
+    this.activeScopeBucketId = nextScopeBucketId
     this.clearProjectState()
   }
 
@@ -255,6 +256,10 @@ export class GitState {
   private statusTarget(projectId: string): [string, string | null] {
     const project = this.activeProjectId === projectId ? this.activeScopeBucketId : null
     return [projectId, project]
+  }
+
+  private scopeFor(projectId: string): string | undefined {
+    return this.activeProjectId === projectId ? (this.activeScopeBucketId ?? undefined) : undefined
   }
 
   private async readStatus(projectId: string): Promise<GitStatus> {
@@ -545,15 +550,17 @@ export class GitState {
 
   async refresh(projectId: string): Promise<void> {
     if (projectId === INBOX_PROJECT_ID || projectId !== this.activeProjectId) return
-    const inflight = this.refreshes.get(projectId)
+    const scopeBucketId = this.scopeFor(projectId)
+    const targetKey = `${projectId}:${scopeBucketId ?? ''}`
+    const inflight = this.refreshes.get(targetKey)
     if (inflight) return inflight
 
     const refresh = this.runRefresh(projectId)
-    this.refreshes.set(projectId, refresh)
+    this.refreshes.set(targetKey, refresh)
     try {
       await refresh
     } finally {
-      if (this.refreshes.get(projectId) === refresh) this.refreshes.delete(projectId)
+      if (this.refreshes.get(targetKey) === refresh) this.refreshes.delete(targetKey)
     }
   }
 
@@ -563,19 +570,31 @@ export class GitState {
     // has already switched to another project, the result is stale and must
     // never be written.
     const targetProject = this.activeProjectId
+    const targetScope = this.activeScopeBucketId
     this.error = null
     try {
+      const branchesRequest = targetScope
+        ? invoke('git:branches', projectId, targetScope)
+        : invoke('git:branches', projectId)
+      const remotesRequest = targetScope
+        ? invoke('git:remotes', projectId, targetScope)
+        : invoke('git:remotes', projectId)
       const [status, branches, identity, remotes, credentialStatus, stashes] = await Promise.all([
         this.readStatus(projectId),
-        invoke('git:branches', projectId),
+        branchesRequest,
         invoke('git:getIdentity', projectId),
-        invoke('git:remotes', projectId).catch(() => [] as GitRemoteInfo[]),
+        remotesRequest.catch(() => [] as GitRemoteInfo[]),
         invoke('git:getCredentialStatus', projectId).catch(
           () => null as GitCredentialStatus | null
         ),
         invoke('git:stashList', projectId).catch(() => [] as GitStashEntry[])
       ])
-      if (targetProject !== this.activeProjectId || projectId !== this.activeProjectId) return
+      if (
+        targetProject !== this.activeProjectId ||
+        targetScope !== this.activeScopeBucketId ||
+        projectId !== this.activeProjectId
+      )
+        return
       this.status = status
       this.branches = branches
       this.identity = identity
@@ -589,7 +608,12 @@ export class GitState {
       // badge stays current without a GitHub round trip on every mutation.
       void this.refreshPrConflictIndicators(projectId)
     } catch (reason) {
-      if (targetProject !== this.activeProjectId || projectId !== this.activeProjectId) return
+      if (
+        targetProject !== this.activeProjectId ||
+        targetScope !== this.activeScopeBucketId ||
+        projectId !== this.activeProjectId
+      )
+        return
       this.error = errorMessage(reason, 'Git status could not be loaded')
       this.status = null
     } finally {
@@ -690,7 +714,10 @@ export class GitState {
     this.markBusy('commit', true)
     this.error = null
     try {
-      this.status = await invoke('git:commit', projectId, message)
+      const scopeBucketId = this.scopeFor(projectId)
+      this.status = scopeBucketId
+        ? await invoke('git:commit', projectId, message, scopeBucketId)
+        : await invoke('git:commit', projectId, message)
     } catch (reason) {
       this.error = errorMessage(reason, 'Commit failed')
     } finally {
@@ -835,7 +862,11 @@ export class GitState {
     this.markBusy('push', true)
     this.error = null
     try {
-      this.status = await invoke('git:push', projectId, { setUpstream, remote, branch })
+      const options = { setUpstream, remote, branch }
+      const scopeBucketId = this.scopeFor(projectId)
+      this.status = scopeBucketId
+        ? await invoke('git:push', projectId, options, scopeBucketId)
+        : await invoke('git:push', projectId, options)
       await this.refresh(projectId)
       // Pushing changes what GitHub computes for the branch — force a fresh
       // conflict check instead of waiting for the next thread open.
@@ -867,7 +898,11 @@ export class GitState {
     this.markBusy('pull', true)
     this.error = null
     try {
-      this.status = await invoke('git:pullIntegrate', projectId, { remote, branch, strategy })
+      const options = { remote, branch, strategy }
+      const scopeBucketId = this.scopeFor(projectId)
+      this.status = scopeBucketId
+        ? await invoke('git:pullIntegrate', projectId, options, scopeBucketId)
+        : await invoke('git:pullIntegrate', projectId, options)
     } catch (reason) {
       const fallback =
         strategy === 'rebase'
@@ -1064,7 +1099,11 @@ export class GitState {
     this.error = null
     this.githubPermission = null
     try {
-      const reference = this.resolveGitHubMutation(await invoke('pr:create', projectId, input))
+      const scopeBucketId = this.scopeFor(projectId)
+      const result = scopeBucketId
+        ? await invoke('pr:create', projectId, input, scopeBucketId)
+        : await invoke('pr:create', projectId, input)
+      const reference = this.resolveGitHubMutation(result)
       // A new PR can already have conflicts — refresh the indicator immediately.
       void this.refreshPrConflictIndicators(projectId, true)
       return reference
@@ -1161,7 +1200,10 @@ export class GitState {
     head: string
   ): Promise<PullRequestCompare | null> {
     try {
-      return await invoke('pr:compare', projectId, owner, repo, base, head)
+      const scopeBucketId = this.scopeFor(projectId)
+      return scopeBucketId
+        ? await invoke('pr:compare', projectId, owner, repo, base, head, scopeBucketId)
+        : await invoke('pr:compare', projectId, owner, repo, base, head)
     } catch {
       return null
     }

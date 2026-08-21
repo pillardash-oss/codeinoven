@@ -1,4 +1,5 @@
 import { APP_SLUG } from '$shared/brand'
+import { DEFAULT_SCOPE_BUCKET_ID } from '$shared/types'
 
 /** Live status a minimized PR draft reports to its dock chip. */
 export type PrDockStatus = 'draft' | 'working' | 'attention' | 'composed' | 'created'
@@ -14,6 +15,7 @@ export interface PrDockDescriptor {
 export interface PrDraft {
   id: string
   projectId: string
+  scopeBucketId: string
   threadId: string
   minimized: boolean
   createdAt: number
@@ -24,7 +26,7 @@ export interface PrDraft {
 /**
  * App-wide PR compose lifecycle — mirrors `HarnessLifecycleStore` so the
  * "New pull request" panel survives thread / project / view navigation and
- * the git sidebar being hidden. One draft per `open()` call is mounted
+ * the git sidebar being hidden. One draft per project scope is mounted
  * globally by `PrDockHost` and rendered regardless of the active context tab.
  */
 class PrLifecycleStore {
@@ -40,13 +42,13 @@ class PrLifecycleStore {
   }
 
   /**
-   * Open (or focus) a PR draft for the project. If a draft for that
-   * project already exists it is expanded and focused instead of creating
-   * a duplicate — call `openNew` when a second draft for the same project
-   * is intentionally desired.
+   * Open (or focus) a PR draft for one project scope. Sibling scopes own
+   * separate drafts because they may point at different worktrees and branches.
    */
-  open(projectId: string, threadId: string): string {
-    const existing = this.drafts.find((draft) => draft.projectId === projectId)
+  open(projectId: string, threadId: string, scopeBucketId = DEFAULT_SCOPE_BUCKET_ID): string {
+    const existing = this.drafts.find(
+      (draft) => draft.projectId === projectId && draft.scopeBucketId === scopeBucketId
+    )
     if (existing) {
       this.drafts = this.drafts.map((draft) =>
         draft.id === existing.id ? { ...draft, threadId, minimized: false } : draft
@@ -57,6 +59,7 @@ class PrLifecycleStore {
     const draft: PrDraft = {
       id: crypto.randomUUID(),
       projectId,
+      scopeBucketId,
       threadId,
       minimized: false,
       createdAt: Date.now(),
@@ -68,10 +71,11 @@ class PrLifecycleStore {
   }
 
   /** Always create a new draft, even if one already exists for the project. */
-  openNew(projectId: string, threadId: string): string {
+  openNew(projectId: string, threadId: string, scopeBucketId = DEFAULT_SCOPE_BUCKET_ID): string {
     const draft: PrDraft = {
       id: crypto.randomUUID(),
       projectId,
+      scopeBucketId,
       threadId,
       minimized: false,
       createdAt: Date.now(),

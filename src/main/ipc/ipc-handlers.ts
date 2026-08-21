@@ -4047,17 +4047,29 @@ export function registerIpcHandlers(
       validateGitPathArray(paths)
     )
   )
-  ipcMain.handle('git:commit', async (_, projectId: unknown, message: unknown) =>
-    gitService.commit(
-      await resolveProjectPath(validateEntityId(projectId, 'Project ID')),
-      validateCommitMessage(message)
-    )
+  ipcMain.handle(
+    'git:commit',
+    async (_, projectId: unknown, message: unknown, scopeBucketId?: unknown) =>
+      gitService.commit(
+        await resolveProjectPath(
+          validateEntityId(projectId, 'Project ID'),
+          scopeBucketId === undefined
+            ? undefined
+            : validateEntityId(scopeBucketId, 'Scope bucket ID')
+        ),
+        validateCommitMessage(message)
+      )
   )
   ipcMain.handle('git:init', async (_, projectId: unknown) =>
     gitService.initialize(await resolveProjectPath(validateEntityId(projectId, 'Project ID')))
   )
-  ipcMain.handle('git:branches', async (_, projectId: unknown) =>
-    gitService.listBranches(await resolveProjectPath(validateEntityId(projectId, 'Project ID')))
+  ipcMain.handle('git:branches', async (_, projectId: unknown, scopeBucketId?: unknown) =>
+    gitService.listBranches(
+      await resolveProjectPath(
+        validateEntityId(projectId, 'Project ID'),
+        scopeBucketId === undefined ? undefined : validateEntityId(scopeBucketId, 'Scope bucket ID')
+      )
+    )
   )
   ipcMain.handle('git:checkout', async (_, projectId: unknown, branch: unknown) => {
     const safeProjectId = validateEntityId(projectId, 'Project ID')
@@ -4209,8 +4221,13 @@ export function registerIpcHandlers(
     configured: await vault.exists(gitCredentialRef(projectId)),
     secureStorageAvailable: vault.isAvailable()
   })
-  ipcMain.handle('git:remotes', async (_, projectId: unknown) =>
-    gitService.listRemotes(await resolveProjectPath(validateEntityId(projectId, 'Project ID')))
+  ipcMain.handle('git:remotes', async (_, projectId: unknown, scopeBucketId?: unknown) =>
+    gitService.listRemotes(
+      await resolveProjectPath(
+        validateEntityId(projectId, 'Project ID'),
+        scopeBucketId === undefined ? undefined : validateEntityId(scopeBucketId, 'Scope bucket ID')
+      )
+    )
   )
   ipcMain.handle('git:addRemote', async (_, projectId: unknown, name: unknown, url: unknown) =>
     gitService.addRemote(
@@ -4240,25 +4257,47 @@ export function registerIpcHandlers(
   ipcMain.handle('git:pull', async (_, projectId: unknown) =>
     gitService.pull(await resolveProjectPath(validateEntityId(projectId, 'Project ID')))
   )
-  ipcMain.handle('git:pullIntegrate', async (_, projectId: unknown, options: unknown) => {
-    const safeProjectId = validateEntityId(projectId, 'Project ID')
-    const safeOptions = validatePullIntegrateOptions(options)
-    // Resolve the vaulted PAT in main only; the token never crosses IPC.
-    const tokenRef = gitCredentialRef(safeProjectId)
-    const token = (await vault.exists(tokenRef)) ? await vault.resolve(tokenRef) : undefined
-    return gitService.pullIntegrate(await resolveProjectPath(safeProjectId), {
-      ...safeOptions,
-      token
-    })
-  })
-  ipcMain.handle('git:push', async (_, projectId: unknown, options: unknown) => {
-    const safeProjectId = validateEntityId(projectId, 'Project ID')
-    const safeOptions = validatePushOptions(options)
-    // Resolve the vaulted PAT in main only; the token never crosses IPC.
-    const tokenRef = gitCredentialRef(safeProjectId)
-    const token = (await vault.exists(tokenRef)) ? await vault.resolve(tokenRef) : undefined
-    return gitService.push(await resolveProjectPath(safeProjectId), { ...safeOptions, token })
-  })
+  ipcMain.handle(
+    'git:pullIntegrate',
+    async (_, projectId: unknown, options: unknown, scopeBucketId?: unknown) => {
+      const safeProjectId = validateEntityId(projectId, 'Project ID')
+      const safeOptions = validatePullIntegrateOptions(options)
+      // Resolve the vaulted PAT in main only; the token never crosses IPC.
+      const tokenRef = gitCredentialRef(safeProjectId)
+      const token = (await vault.exists(tokenRef)) ? await vault.resolve(tokenRef) : undefined
+      return gitService.pullIntegrate(
+        await resolveProjectPath(
+          safeProjectId,
+          scopeBucketId === undefined
+            ? undefined
+            : validateEntityId(scopeBucketId, 'Scope bucket ID')
+        ),
+        {
+          ...safeOptions,
+          token
+        }
+      )
+    }
+  )
+  ipcMain.handle(
+    'git:push',
+    async (_, projectId: unknown, options: unknown, scopeBucketId?: unknown) => {
+      const safeProjectId = validateEntityId(projectId, 'Project ID')
+      const safeOptions = validatePushOptions(options)
+      // Resolve the vaulted PAT in main only; the token never crosses IPC.
+      const tokenRef = gitCredentialRef(safeProjectId)
+      const token = (await vault.exists(tokenRef)) ? await vault.resolve(tokenRef) : undefined
+      return gitService.push(
+        await resolveProjectPath(
+          safeProjectId,
+          scopeBucketId === undefined
+            ? undefined
+            : validateEntityId(scopeBucketId, 'Scope bucket ID')
+        ),
+        { ...safeOptions, token }
+      )
+    }
+  )
   ipcMain.handle('git:getCredentialStatus', async (_, projectId: unknown) =>
     gitCredentialStatus(validateEntityId(projectId, 'Project ID'))
   )
@@ -4367,8 +4406,13 @@ export function registerIpcHandlers(
     const token = await vault.resolve(tokenRef)
     return new GitHubProvider(token)
   }
-  const remoteIdentity = async (projectId: string): Promise<{ owner: string; repo: string }> => {
-    const remoteUrl = await repositoryService.getRemoteOrigin(await resolveProjectPath(projectId))
+  const remoteIdentity = async (
+    projectId: string,
+    scopeBucketId?: string
+  ): Promise<{ owner: string; repo: string }> => {
+    const remoteUrl = await repositoryService.getRemoteOrigin(
+      await resolveProjectPath(projectId, scopeBucketId)
+    )
     const provider = new GitHubProvider('')
     const identity = provider.resolveRepositoryIdentity(remoteUrl ?? '')
     if (!identity) {
@@ -4376,24 +4420,29 @@ export function registerIpcHandlers(
     }
     return identity
   }
-  ipcMain.handle('pr:create', async (_, projectId: unknown, input: unknown) => {
-    const safeProjectId = validateEntityId(projectId, 'Project ID')
-    const provider = await providerForProject(safeProjectId)
-    if (!provider) throw new Error('Configure a GitHub token first (Git panel → Credentials)')
-    const identity = await remoteIdentity(safeProjectId)
-    const draft = validatePrCreateInput(input)
-    return runGitHubMutation(identity.owner, identity.repo, () =>
-      provider.createPullRequest({
-        owner: identity.owner,
-        repo: identity.repo,
-        title: draft.title,
-        body: draft.body,
-        head: draft.head,
-        base: draft.base,
-        draft: draft.draft
-      })
-    )
-  })
+  ipcMain.handle(
+    'pr:create',
+    async (_, projectId: unknown, input: unknown, scopeBucketId?: unknown) => {
+      const safeProjectId = validateEntityId(projectId, 'Project ID')
+      const provider = await providerForProject(safeProjectId)
+      if (!provider) throw new Error('Configure a GitHub token first (Git panel → Credentials)')
+      const safeScopeBucketId =
+        scopeBucketId === undefined ? undefined : validateEntityId(scopeBucketId, 'Scope bucket ID')
+      const identity = await remoteIdentity(safeProjectId, safeScopeBucketId)
+      const draft = validatePrCreateInput(input)
+      return runGitHubMutation(identity.owner, identity.repo, () =>
+        provider.createPullRequest({
+          owner: identity.owner,
+          repo: identity.repo,
+          title: draft.title,
+          body: draft.body,
+          head: draft.head,
+          base: draft.base,
+          draft: draft.draft
+        })
+      )
+    }
+  )
   ipcMain.handle(
     'pr:list',
     async (_, projectId: unknown, owner: unknown, repo: unknown, state?: unknown) => {
@@ -4441,7 +4490,15 @@ export function registerIpcHandlers(
 
   ipcMain.handle(
     'pr:compare',
-    async (_, projectId: unknown, owner: unknown, repo: unknown, base: unknown, head: unknown) => {
+    async (
+      _,
+      projectId: unknown,
+      owner: unknown,
+      repo: unknown,
+      base: unknown,
+      head: unknown,
+      scopeBucketId?: unknown
+    ) => {
       const safeProjectId = validateEntityId(projectId, 'Project ID')
       const provider = await providerForProject(safeProjectId)
       if (!provider) throw new Error('Sign in to GitHub to create pull requests')
@@ -4499,7 +4556,12 @@ export function registerIpcHandlers(
         missingRemoteHead = error
       }
       const localCompare = await gitService.comparePullRequestBranches(
-        await resolveProjectPath(safeProjectId),
+        await resolveProjectPath(
+          safeProjectId,
+          scopeBucketId === undefined
+            ? undefined
+            : validateEntityId(scopeBucketId, 'Scope bucket ID')
+        ),
         safeBase,
         safeHead
       )

@@ -894,9 +894,9 @@ export interface IpcInvokeContract {
   'git:stage': Contract<[projectId: string, paths: string[]], GitStatus>
   'git:resolveConflicted': Contract<[projectId: string, path: string], GitStatus>
   'git:unstage': Contract<[projectId: string, paths: string[]], GitStatus>
-  'git:commit': Contract<[projectId: string, message: string], GitStatus>
+  'git:commit': Contract<[projectId: string, message: string, scopeBucketId?: string], GitStatus>
   'git:init': Contract<[projectId: string], GitStatus>
-  'git:branches': Contract<[projectId: string], GitBranchInfo[]>
+  'git:branches': Contract<[projectId: string, scopeBucketId?: string], GitBranchInfo[]>
   'git:checkout': Contract<[projectId: string, branch: string], GitStatus>
   'git:createBranch': Contract<[projectId: string, name: string], GitStatus>
   'git:createTrackingBranch': Contract<
@@ -919,7 +919,7 @@ export interface IpcInvokeContract {
   'git:getIdentity': Contract<[projectId: string], GitIdentity>
 
   'git:setIdentity': Contract<[projectId: string, identity: GitIdentityInput], GitIdentity>
-  'git:remotes': Contract<[projectId: string], GitRemoteInfo[]>
+  'git:remotes': Contract<[projectId: string, scopeBucketId?: string], GitRemoteInfo[]>
   'git:addRemote': Contract<[projectId: string, name: string, url: string], GitRemoteInfo[]>
   'git:removeRemote': Contract<[projectId: string, name: string], GitRemoteInfo[]>
   'git:fetch': Contract<[projectId: string], GitStatus>
@@ -932,12 +932,17 @@ export interface IpcInvokeContract {
         remote?: string
         branch?: string
         strategy: import('./types').GitPullStrategy
-      }
+      },
+      scopeBucketId?: string
     ],
     GitStatus
   >
   'git:push': Contract<
-    [projectId: string, options: { setUpstream: boolean; remote?: string; branch?: string }],
+    [
+      projectId: string,
+      options: { setUpstream: boolean; remote?: string; branch?: string },
+      scopeBucketId?: string
+    ],
     GitStatus
   >
   'git:getCredentialStatus': Contract<[projectId: string], GitCredentialStatus>
@@ -957,7 +962,7 @@ export interface IpcInvokeContract {
   'git:abortMerge': Contract<[projectId: string], GitStatus>
   'git:abortRebase': Contract<[projectId: string], GitStatus>
   'pr:create': Contract<
-    [projectId: string, input: PrCreateInput],
+    [projectId: string, input: PrCreateInput, scopeBucketId?: string],
     GitHubMutationResult<PullRequestReference>
   >
   'pr:list': Contract<
@@ -981,7 +986,14 @@ export interface IpcInvokeContract {
     GitHubMutationResult<PullRequestReference>
   >
   'pr:compare': Contract<
-    [projectId: string, owner: string, repo: string, base: string, head: string],
+    [
+      projectId: string,
+      owner: string,
+      repo: string,
+      base: string,
+      head: string,
+      scopeBucketId?: string
+    ],
     PullRequestCompare
   >
   'pr:reopen': Contract<

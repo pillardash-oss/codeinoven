@@ -3580,6 +3580,11 @@
                   <GitStatusPanel
                     projectId={activeContextTab.projectId}
                     threadId={activeContextTab.threadId}
+                    scopeBucketId={allThreads.find(
+                      (thread) =>
+                        thread.projectId === activeContextTab.projectId &&
+                        thread.id === activeContextTab.threadId
+                    )?.scopeBucketId ?? DEFAULT_SCOPE_BUCKET_ID}
                   />
                 {/await}
               {:else if activeContextTab.kind === 'cloud-deployment'}

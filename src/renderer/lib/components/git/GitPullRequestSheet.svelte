@@ -1,7 +1,7 @@
 <script lang="ts">
-  import { onDestroy } from 'svelte'
+  import { onDestroy, onMount } from 'svelte'
   import { DropdownMenu } from 'bits-ui'
-  import { gitState } from '$lib/stores/git.svelte'
+  import { GitState } from '$lib/stores/git.svelte'
   import { invoke } from '$lib/ipc.svelte'
   import DockableModal from '../ui/DockableModal.svelte'
   import Switch from '../ui/Switch.svelte'
@@ -18,7 +18,7 @@
     type PrDockStatus
   } from '$lib/stores/pr-lifecycle.svelte'
   import { getProjectIcon } from '$lib/project-icons'
-  import { isOrchestrationChildThread } from '$shared/types'
+  import { DEFAULT_SCOPE_BUCKET_ID, isOrchestrationChildThread } from '$shared/types'
   import type {
     Project,
     PullRequestCompare,
@@ -45,6 +45,7 @@
 
   interface Props {
     projectId: string
+    scopeBucketId?: string
     onClose: () => void
     /** Fired once a pull request is actually created, so the list can refresh. */
     onCreated?: () => void
@@ -85,6 +86,7 @@
 
   let {
     projectId,
+    scopeBucketId = DEFAULT_SCOPE_BUCKET_ID,
     onClose,
     onCreated,
     onView,
@@ -95,8 +97,11 @@
     draftId
   }: Props = $props()
 
+  /** This draft owns its Git state; active-thread navigation cannot replace it. */
+  const gitState = new GitState()
+
   function preferencesStorageKey(): string {
-    return `${APP_SLUG}.pullRequestPreferences.${projectId}.v1`
+    return `${APP_SLUG}.pullRequestPreferences.${projectId}.${scopeBucketId}.v1`
   }
 
   function loadPrCreationPreferences(): PrCreationPreferences {
@@ -375,7 +380,8 @@
         const url = await invoke('project:getIcon', projectId).catch(() => null)
         projectIconUrl = url ?? null
       }
-      const url = await invoke('repository:remoteOrigin', project.path)
+      await gitState.refresh(projectId)
+      const url = gitState.remotes.find((remote) => remote.name === 'origin')?.url ?? null
       const identity = parseRemoteIdentity(url ?? '')
       originIdentity = identity
     } catch {
@@ -795,7 +801,8 @@
 
   onDestroy(clearComposeTimers)
 
-  $effect(() => {
+  onMount(() => {
+    gitState.activate(projectId, scopeBucketId)
     void loadOrigin()
   })
 

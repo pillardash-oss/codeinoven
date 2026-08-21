@@ -6,6 +6,7 @@
   import { appConfigState } from '$lib/stores/app-config.svelte'
   import { gitState } from '$lib/stores/git.svelte'
   import { cachedHasDeployments, cacheHasDeployments } from '$lib/git-deployments-cache'
+  import { DEFAULT_SCOPE_BUCKET_ID } from '$shared/types'
   import type {
     GitBranchInfo,
     GitCommitInfo,
@@ -81,9 +82,10 @@
   interface Props {
     projectId: string
     threadId: string
+    scopeBucketId?: string
   }
 
-  let { projectId, threadId }: Props = $props()
+  let { projectId, threadId, scopeBucketId = DEFAULT_SCOPE_BUCKET_ID }: Props = $props()
 
   type RepoState = 'loading' | 'git_unavailable' | 'not_git' | 'git'
   type TabId = 'changes' | 'history' | 'branches' | 'pulls' | 'deployments' | 'stashes'
@@ -1027,7 +1029,7 @@
   $effect(() => {
     // Claim this project before reading/writing shared state so a previous
     // project's data can never be shown or overwrite the current view.
-    gitState.activate(projectId)
+    gitState.activate(projectId, scopeBucketId)
     // Fast-render: show/hide the Deployments tab from the cache immediately,
     // long before the authoritative value comes back from the database.
     hasDeployments = cachedHasDeployments(projectId) ?? false
@@ -1693,7 +1695,7 @@
             >
               <DropdownMenu.Item
                 class="flex cursor-pointer items-center gap-2 px-3 py-1.5 text-[11px] text-foreground outline-none data-highlighted:bg-elevated"
-                onSelect={() => prLifecycleStore.open(projectId, threadId)}
+                onSelect={() => prLifecycleStore.open(projectId, threadId, scopeBucketId)}
               >
                 <GitPullRequest size={12} class="shrink-0 text-dimmed" />
                 Create pull request…
@@ -2769,7 +2771,7 @@
               {githubConnected}
               onOpen={(pr) => (selectedPullRequest = pr)}
               onSignIn={() => (showGitHubSignIn = true)}
-              onCreate={() => prLifecycleStore.open(projectId, threadId)}
+              onCreate={() => prLifecycleStore.open(projectId, threadId, scopeBucketId)}
               refreshSignal={prListRefresh}
             />
           {/if}

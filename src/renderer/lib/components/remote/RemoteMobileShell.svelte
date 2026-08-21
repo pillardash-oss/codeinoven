@@ -693,6 +693,7 @@
         <GitStatusPanel
           projectId={mobileState.selectedThread?.projectId ?? ''}
           threadId={mobileState.selectedThread?.id ?? ''}
+          scopeBucketId={mobileState.selectedThread?.scopeBucketId}
         />
       {/await}
     </BottomSheet>

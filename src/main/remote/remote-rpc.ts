@@ -38,6 +38,7 @@ import {
 import { DeviceCredentialService, sha256Hex } from './device-credential-service'
 import { ScopeManager } from '../../lib/engines/scope-manager'
 import { ScopeWorktreeService } from '../git/scope-worktree-service'
+import { ScopeRootResolver, scopeRootProvider } from '../workspaces/scope-root-resolver'
 import {
   SpecEngine,
   type NewSpecProvenance,
@@ -211,6 +212,7 @@ export class RemoteRpcDispatcher {
   private readonly projectFilesService: ProjectFilesService
   private readonly scopeManager: ScopeManager
   private readonly scopeWorktreeService: ScopeWorktreeService
+  private readonly scopeRoots: ReturnType<typeof scopeRootProvider>
   private readonly specEngine: SpecEngine
   private readonly brainstormEngine: BrainstormEngine
   private readonly auditEngine: AuditEngine
@@ -253,6 +255,9 @@ export class RemoteRpcDispatcher {
     this.projectFilesService = new ProjectFilesService(this.projectManager)
     this.scopeManager = new ScopeManager(services.database)
     this.scopeWorktreeService = new ScopeWorktreeService(this.scopeManager, this.projectManager)
+    this.scopeRoots = scopeRootProvider(
+      new ScopeRootResolver(this.projectManager, this.scopeManager, this.scopeWorktreeService)
+    )
     this.specEngine = new SpecEngine(this.storage, services.database, {
       validateForApproval: validateEngineeringSpec
     })
@@ -1477,7 +1482,12 @@ export class RemoteRpcDispatcher {
       // vault and never crosses the bridge (it is resolved here for push), and
       // GitHub device-flow sign-in + pull-request creation are desktop-only.
       case 'git:status':
-        return this.gitService.getStatus(await this.resolveProjectPath(this.string(args[0])))
+        return this.gitService.getStatus(
+          await this.resolveProjectPath(
+            this.string(args[0]),
+            args[1] === undefined ? undefined : this.string(args[1])
+          )
+        )
       case 'git:diff':
         return this.gitService.getDiff(
           await this.resolveProjectPath(this.string(args[0])),
@@ -1524,7 +1534,10 @@ export class RemoteRpcDispatcher {
         )
       case 'git:commit':
         return this.gitService.commit(
-          await this.resolveProjectPath(this.string(args[0])),
+          await this.resolveProjectPath(
+            this.string(args[0]),
+            args[2] === undefined ? undefined : this.string(args[2])
+          ),
           this.string(args[1])
         )
       case 'git:amend':
@@ -1535,7 +1548,12 @@ export class RemoteRpcDispatcher {
       case 'git:init':
         return this.gitService.initialize(await this.resolveProjectPath(this.string(args[0])))
       case 'git:branches':
-        return this.gitService.listBranches(await this.resolveProjectPath(this.string(args[0])))
+        return this.gitService.listBranches(
+          await this.resolveProjectPath(
+            this.string(args[0]),
+            args[1] === undefined ? undefined : this.string(args[1])
+          )
+        )
       case 'git:checkout':
         return this.syncBranchAfterCheckout(
           this.string(args[0]),
@@ -1618,7 +1636,12 @@ export class RemoteRpcDispatcher {
         )
       }
       case 'git:remotes':
-        return this.gitService.listRemotes(await this.resolveProjectPath(this.string(args[0])))
+        return this.gitService.listRemotes(
+          await this.resolveProjectPath(
+            this.string(args[0]),
+            args[1] === undefined ? undefined : this.string(args[1])
+          )
+        )
       case 'git:addRemote':
         return this.gitService.addRemote(
           await this.resolveProjectPath(this.string(args[0])),
@@ -1655,12 +1678,18 @@ export class RemoteRpcDispatcher {
         const token = (await this.vault.exists(tokenRef))
           ? await this.vault.resolve(tokenRef)
           : undefined
-        return this.gitService.pullIntegrate(await this.resolveProjectPath(projectId), {
-          remote: typeof options.remote === 'string' ? options.remote : undefined,
-          branch: typeof options.branch === 'string' ? options.branch : undefined,
-          strategy,
-          token
-        })
+        return this.gitService.pullIntegrate(
+          await this.resolveProjectPath(
+            projectId,
+            args[2] === undefined ? undefined : this.string(args[2])
+          ),
+          {
+            remote: typeof options.remote === 'string' ? options.remote : undefined,
+            branch: typeof options.branch === 'string' ? options.branch : undefined,
+            strategy,
+            token
+          }
+        )
       }
       case 'git:push': {
         const projectId = this.string(args[0])
@@ -1673,12 +1702,18 @@ export class RemoteRpcDispatcher {
         const token = (await this.vault.exists(tokenRef))
           ? await this.vault.resolve(tokenRef)
           : undefined
-        return this.gitService.push(await this.resolveProjectPath(projectId), {
-          setUpstream: Boolean(options.setUpstream),
-          remote: typeof options.remote === 'string' ? options.remote : undefined,
-          branch: typeof options.branch === 'string' ? options.branch : undefined,
-          token
-        })
+        return this.gitService.push(
+          await this.resolveProjectPath(
+            projectId,
+            args[2] === undefined ? undefined : this.string(args[2])
+          ),
+          {
+            setUpstream: Boolean(options.setUpstream),
+            remote: typeof options.remote === 'string' ? options.remote : undefined,
+            branch: typeof options.branch === 'string' ? options.branch : undefined,
+            token
+          }
+        )
       }
       case 'git:getCredentialStatus': {
         const projectId = this.string(args[0])
@@ -1937,7 +1972,12 @@ export class RemoteRpcDispatcher {
   }
 
   /** Resolve a project id to its validated absolute path (git operates on paths). */
-  private async resolveProjectPath(projectId: string): Promise<string> {
+  private async resolveProjectPath(projectId: string, scopeBucketId?: string): Promise<string> {
+    if (scopeBucketId) {
+      const scopeRoot = await this.scopeRoots.resolveCompatibilityRoot(projectId, scopeBucketId)
+      if (!scopeRoot) throw new Error(`Scope root unavailable: ${projectId}:${scopeBucketId}`)
+      return scopeRoot
+    }
     const project = await this.projectManager.getProject(projectId)
     if (!project?.path) throw new Error(`Project not found: ${projectId}`)
     return project.path
