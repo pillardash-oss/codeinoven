@@ -181,6 +181,7 @@ const INVOKE_CHANNELS = [
   'git:branches',
   'git:checkout',
   'git:createBranch',
+  'git:createTrackingBranch',
   'git:deleteBranch',
   'git:log',
   'git:commitDiff',

@@ -3458,11 +3458,19 @@ export interface GitStatus {
   behind: number
 }
 
-/** One local branch and its tracking relationship, when set. */
+/** One local or remote-tracking branch ref. */
 export interface GitBranchInfo {
+  /** Distinguishes writable local branches from read-only remote-tracking refs. */
+  kind: 'local' | 'remote'
+  /** Branch name without a remote prefix (e.g. `feature/auth`). */
   name: string
+  /** Unambiguous short ref used for display keys and git operations. */
+  ref: string
   current: boolean
+  /** Associated remote name (e.g. `origin`), when one exists. */
   remote: string | null
+  /** Full upstream ref for a tracked local branch (e.g. `origin/main`). */
+  upstream: string | null
   ahead: number
   behind: number
 }

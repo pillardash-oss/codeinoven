@@ -4,14 +4,27 @@
 
   interface Props {
     isCurrent: boolean
+    canCheckout?: boolean
+    canDelete?: boolean
     canFetch: boolean
+    checkoutLabel?: string
     busy?: boolean
     onCheckout: () => void
     onFetch: () => void
     onDelete: () => void
   }
 
-  let { isCurrent, canFetch, busy = false, onCheckout, onFetch, onDelete }: Props = $props()
+  let {
+    isCurrent,
+    canCheckout = true,
+    canDelete = true,
+    canFetch,
+    checkoutLabel = 'Check out',
+    busy = false,
+    onCheckout,
+    onFetch,
+    onDelete
+  }: Props = $props()
 
   const itemClass =
     'flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[11px] text-foreground outline-none data-highlighted:bg-elevated disabled:pointer-events-none disabled:opacity-40'
@@ -22,10 +35,10 @@
     <CircleCheck size={12} class="shrink-0 text-primary" />
     Current branch
   </DropdownMenu.Item>
-{:else}
+{:else if canCheckout}
   <DropdownMenu.Item class={itemClass} onSelect={onCheckout} disabled={busy}>
     <GitBranch size={12} class="shrink-0 text-dimmed" />
-    Check out
+    {checkoutLabel}
   </DropdownMenu.Item>
 {/if}
 
@@ -36,7 +49,7 @@
   </DropdownMenu.Item>
 {/if}
 
-{#if !isCurrent}
+{#if canDelete && !isCurrent}
   <DropdownMenu.Separator class="my-1 h-px bg-border" />
   <DropdownMenu.Item
     class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[11px] text-danger outline-none data-highlighted:bg-elevated disabled:pointer-events-none disabled:opacity-40"

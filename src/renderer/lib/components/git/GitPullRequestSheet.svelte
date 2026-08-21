@@ -232,7 +232,13 @@
   )
 
   const branch = $derived(gitState.status?.branch ?? null)
-  const branches = $derived(gitState.branches.map((b) => b.name))
+  const branches = $derived([
+    ...new Set(
+      gitState.branches
+        .filter((candidate) => candidate.kind === 'local' || candidate.remote === 'origin')
+        .map((candidate) => candidate.name)
+    )
+  ])
   const creating = $derived(gitState.isBusy('pr-create'))
   const hasStagedChanges = $derived(
     (gitState.status?.changes ?? []).some(
@@ -243,7 +249,13 @@
   const headIsCurrent = $derived(canonicalBranch(head) === canonicalBranch(branch ?? ''))
   const willCreateCommit = $derived(commitLocal && hasStagedChanges && headIsCurrent)
   const hasChangesToPublish = $derived(compare?.hasChanges === true || willCreateCommit)
-  const headInfo = $derived(gitState.branches.find((candidate) => candidate.name === head) ?? null)
+  const headInfo = $derived(
+    gitState.branches.find((candidate) => candidate.kind === 'local' && candidate.name === head) ??
+      gitState.branches.find(
+        (candidate) => candidate.kind === 'remote' && candidate.name === head
+      ) ??
+      null
+  )
   /** An open PR for the exact head→base pair — GitHub rejects a duplicate with a 422. */
   const existingPr = $derived(compare?.existing ?? null)
   const composeWorking = $derived(composePhase === 'working')
@@ -312,7 +324,8 @@
    * would be a pointless non-fast-forward rejection, so creation skips it.
    */
   const hasUnpushedHeadCommits = $derived(
-    willCreateCommit || headInfo === null || headInfo.remote === null || headInfo.ahead > 0
+    willCreateCommit ||
+      (headInfo?.kind === 'local' && (headInfo.remote === null || headInfo.ahead > 0))
   )
 
   /** Local-only commits must be pushed before GitHub can create the PR. */
@@ -427,7 +440,8 @@
       // Decided up front: after the commit below, the refreshed status clears
       // staged changes, which would make hasUnpushedHeadCommits flip to false.
       const commitMade = willCreateCommit
-      const shouldPush = pushLocal && (commitMade || hasUnpushedHeadCommits)
+      const shouldPush =
+        pushLocal && headInfo?.kind === 'local' && (commitMade || hasUnpushedHeadCommits)
       // 1. Commit staged files first, using the PR title as the message.
       if (commitMade) {
         await gitState.commit(projectId, `commit: ${title.trim()}`)
@@ -442,8 +456,7 @@
       //    nothing to push and GitHub builds the PR from the remote refs, so
       //    skipping the push avoids a spurious non-fast-forward rejection.
       if (shouldPush) {
-        const hasUpstream =
-          gitState.branches.find((candidate) => candidate.name === head)?.remote != null
+        const hasUpstream = headInfo?.kind === 'local' && headInfo.remote === 'origin'
         const pushed = await gitState.push(projectId, !hasUpstream, 'origin', head)
         if (pushed.status === 'rejected') {
           pushRejected = true
@@ -498,8 +511,7 @@
         return
       }
       if (gitState.conflicted.length > 0) return
-      const hasUpstream =
-        gitState.branches.find((candidate) => candidate.name === head)?.remote != null
+      const hasUpstream = headInfo?.kind === 'local' && headInfo.remote === 'origin'
       const pushed = await gitState.push(projectId, !hasUpstream, 'origin', head)
       if (pushed.status === 'rejected') {
         pushRejected = true

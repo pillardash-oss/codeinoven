@@ -123,7 +123,7 @@
   let stashDropTarget = $state<GitStashEntry | null>(null)
   let mergeTarget = $state('')
   let pendingOperation = $state<{ kind: 'merge' | 'rebase'; target: string } | null>(null)
-  let checkoutConfirm = $state<string | null>(null)
+  let checkoutConfirm = $state<GitBranchInfo | null>(null)
   let deleteBranchConfirm = $state<string | null>(null)
   let forceDeleteBranchConfirm = $state<string | null>(null)
   let creatingBranch = $state(false)
@@ -137,6 +137,7 @@
   let commitSelection = $state(false)
   let commitTextarea = $state<HTMLTextAreaElement | null>(null)
   let newBranchInput = $state<HTMLInputElement | null>(null)
+  let checkoutConfirmButton = $state<HTMLButtonElement | null>(null)
   let commitHistory = $state<GitCommitInfo[]>([])
   let loadingHistory = $state(false)
   let loadingMoreHistory = $state(false)
@@ -197,6 +198,8 @@
   ]
 
   const status = $derived(gitState.status)
+  const localBranches = $derived(gitState.branches.filter((branch) => branch.kind === 'local'))
+  const localBranchNames = $derived(new Set(localBranches.map((branch) => branch.name)))
   const isHeadCommit = $derived(
     selectedCommit !== null && commitHistory[0]?.hash === selectedCommit.hash
   )
@@ -311,9 +314,14 @@
     await gitState.unstage(projectId, allPaths)
   }
 
-  async function checkoutBranch(branch: string): Promise<void> {
-    if (!branch || branch === status?.branch) return
-    await gitState.checkout(projectId, branch)
+  async function checkoutBranch(branch: GitBranchInfo): Promise<void> {
+    if (branch.kind === 'local') {
+      if (branch.name === status?.branch) return
+      await gitState.checkout(projectId, branch.ref)
+      return
+    }
+    if (!branch.remote || localBranchNames.has(branch.name)) return
+    await gitState.createTrackingBranch(projectId, branch.remote, branch.name)
   }
 
   async function createBranchAction(name: string): Promise<void> {
@@ -326,9 +334,10 @@
   }
 
   /** Checking out switches the working tree, so it always confirms first from the Branches tab. */
-  function requestCheckout(name: string): void {
-    if (!name || name === status?.branch) return
-    checkoutConfirm = name
+  function requestCheckout(branch: GitBranchInfo): void {
+    if (branch.kind === 'local' && branch.name === status?.branch) return
+    if (branch.kind === 'remote' && localBranchNames.has(branch.name)) return
+    checkoutConfirm = branch
   }
 
   async function confirmCheckoutBranch(): Promise<void> {
@@ -358,7 +367,7 @@
 
   /** `git fetch <remote> <name>` — updates that branch's tracking ref without touching HEAD. */
   async function fetchBranchAction(branch: GitBranchInfo): Promise<void> {
-    const remote = branch.remote ?? primaryRemote?.name
+    const remote = branch.remote
     if (!remote) return
     await gitState.fetchBranch(projectId, remote, branch.name)
   }
@@ -1593,7 +1602,7 @@
           currentBranch={status?.branch ?? null}
           isBusy={gitState.isBusy('checkout')}
           {primaryRemote}
-          onSelect={(branch) => void checkoutBranch(branch)}
+          onSelect={requestCheckout}
           onCreate={(name) => void createBranchAction(name)}
           onDelete={(name) => void deleteBranchAction(name)}
         />
@@ -1691,7 +1700,7 @@
               </DropdownMenu.Item>
               <DropdownMenu.Item
                 class="flex cursor-pointer items-center gap-2 px-3 py-1.5 text-[11px] text-foreground outline-none data-highlighted:bg-elevated data-disabled:opacity-40"
-                disabled={gitState.branches.length < 2}
+                disabled={localBranches.length < 2}
                 onSelect={() => (showIntegrateModal = true)}
               >
                 <GitMerge size={12} class="shrink-0 text-dimmed" />
@@ -2634,16 +2643,27 @@
                 <p class="text-xs font-medium text-muted">No branches</p>
               </div>
             {:else}
-              {@const sortedBranches = [...gitState.branches].sort((a, b) =>
-                a.current === b.current ? a.name.localeCompare(b.name) : a.current ? -1 : 1
-              )}
+              {@const sortedBranches = [...gitState.branches].sort((a, b) => {
+                if (a.kind !== b.kind) return a.kind === 'local' ? -1 : 1
+                if (a.current !== b.current) return a.current ? -1 : 1
+                return a.ref.localeCompare(b.ref)
+              })}
               <div class="space-y-0.5">
-                {#each sortedBranches as branch (branch.name)}
-                  {@const canFetch = Boolean(branch.remote ?? primaryRemote?.name)}
+                {#each sortedBranches as branch, index (branch.ref)}
+                  {#if index === 0 || sortedBranches[index - 1]?.kind !== branch.kind}
+                    <p
+                      class="px-2 pb-1 pt-2 text-[9px] font-semibold uppercase tracking-wide text-dimmed first:pt-0"
+                    >
+                      {branch.kind === 'local' ? 'Local' : 'Remote'}
+                    </p>
+                  {/if}
+                  {@const canFetch = Boolean(branch.remote)}
+                  {@const hasLocalCounterpart =
+                    branch.kind === 'remote' && localBranchNames.has(branch.name)}
                   <ContextMenu.Root>
                     <ContextMenu.Trigger
                       class="block w-full"
-                      aria-label={`Actions for branch ${branch.name}`}
+                      aria-label={`Actions for branch ${branch.ref}`}
                     >
                       <div
                         class="group flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-elevated/50"
@@ -2651,7 +2671,7 @@
                         <span
                           class={[
                             'flex size-5 shrink-0 items-center justify-center rounded-full',
-                            branchAvatarClass(branch.name)
+                            branchAvatarClass(branch.ref)
                           ]}
                         >
                           <GitBranch size={11} />
@@ -2660,15 +2680,25 @@
                           <button
                             type="button"
                             class="block w-full cursor-pointer truncate text-left text-[11px] text-foreground disabled:cursor-default"
-                            disabled={branch.current}
-                            title={branch.current ? undefined : `Check out ${branch.name}`}
-                            onclick={() => requestCheckout(branch.name)}
+                            disabled={branch.current || hasLocalCounterpart}
+                            title={branch.current
+                              ? undefined
+                              : hasLocalCounterpart
+                                ? `${branch.ref} already has a local branch`
+                                : branch.kind === 'local'
+                                  ? `Check out ${branch.name}`
+                                  : `Create local branch ${branch.name} from ${branch.ref}`}
+                            onclick={() => requestCheckout(branch)}
                           >
-                            {branch.name}
+                            {branch.kind === 'local' ? branch.name : branch.ref}
                           </button>
-                          {#if branch.remote}
+                          {#if branch.kind === 'local' && branch.upstream}
                             <span class="block truncate text-[9px] text-dimmed">
-                              tracks {branch.remote}/{branch.name}
+                              tracks {branch.upstream}
+                            </span>
+                          {:else if branch.kind === 'remote'}
+                            <span class="block truncate text-[9px] text-dimmed">
+                              {hasLocalCounterpart ? 'local branch exists' : 'remote branch'}
                             </span>
                           {/if}
                         </span>
@@ -2686,8 +2716,8 @@
                           <DropdownMenu.Root>
                             <DropdownMenu.Trigger
                               class="peer absolute inset-y-0 right-0 flex h-6 w-6 cursor-pointer items-center justify-center rounded text-dimmed opacity-0 transition-opacity hover:bg-elevated hover:text-foreground focus-visible:opacity-100 group-hover:opacity-100 data-[state=open]:opacity-100"
-                              aria-label={`More actions for branch ${branch.name}`}
-                              title={`More actions for branch ${branch.name}`}
+                              aria-label={`More actions for branch ${branch.ref}`}
+                              title={`More actions for branch ${branch.ref}`}
                             >
                               <MoreHorizontal size={13} />
                             </DropdownMenu.Trigger>
@@ -2701,9 +2731,14 @@
                               >
                                 <BranchActionsMenu
                                   isCurrent={branch.current}
+                                  canCheckout={!hasLocalCounterpart}
+                                  canDelete={branch.kind === 'local'}
                                   {canFetch}
+                                  checkoutLabel={branch.kind === 'local'
+                                    ? 'Check out'
+                                    : 'Create local branch'}
                                   busy={gitState.isBusy('checkout') || gitState.isBusy('fetch')}
-                                  onCheckout={() => requestCheckout(branch.name)}
+                                  onCheckout={() => requestCheckout(branch)}
                                   onFetch={() => void fetchBranchAction(branch)}
                                   onDelete={() => requestDeleteBranch(branch.name)}
                                 />
@@ -2730,9 +2765,14 @@
                       >
                         <BranchActionsMenu
                           isCurrent={branch.current}
+                          canCheckout={!hasLocalCounterpart}
+                          canDelete={branch.kind === 'local'}
                           {canFetch}
+                          checkoutLabel={branch.kind === 'local'
+                            ? 'Check out'
+                            : 'Create local branch'}
                           busy={gitState.isBusy('checkout') || gitState.isBusy('fetch')}
-                          onCheckout={() => requestCheckout(branch.name)}
+                          onCheckout={() => requestCheckout(branch)}
                           onFetch={() => void fetchBranchAction(branch)}
                           onDelete={() => requestDeleteBranch(branch.name)}
                         />
@@ -3261,7 +3301,7 @@
           bind:value={mergeTarget}
         >
           <option value="" disabled>Select a branch…</option>
-          {#each gitState.branches as branch (branch.name)}
+          {#each localBranches as branch (branch.ref)}
             {#if branch.name !== status?.branch}
               <option value={branch.name}>{branch.name}</option>
             {/if}
@@ -3540,14 +3580,28 @@
       <AlertDialog.Portal>
         <AlertDialog.Content
           class="fixed left-1/2 top-1/2 z-50 w-[min(28rem,calc(100vw-2rem))] -translate-x-1/2 -translate-y-1/2 rounded-xl border border-border bg-surface p-5 shadow-xl"
+          onOpenAutoFocus={(event) => {
+            event.preventDefault()
+            checkoutConfirmButton?.focus()
+          }}
         >
           <AlertDialog.Title class="text-sm font-semibold text-foreground">
-            Check out “{target}”?
+            {target.kind === 'local'
+              ? `Check out “${target.name}”?`
+              : `Create local branch “${target.name}”?`}
           </AlertDialog.Title>
           <AlertDialog.Description class="mt-2 text-xs leading-5 text-muted">
-            This switches the working tree to <strong class="font-medium text-foreground"
-              >{target}</strong
-            >. Any uncommitted changes come with you if they don't conflict.
+            {#if target.kind === 'local'}
+              This switches the working tree to <strong class="font-medium text-foreground"
+                >{target.name}</strong
+              >. Any uncommitted changes come with you if they don't conflict.
+            {:else}
+              This creates and checks out <strong class="font-medium text-foreground"
+                >{target.name}</strong
+              >
+              as a local branch that tracks
+              <strong class="font-medium text-foreground">{target.ref}</strong>.
+            {/if}
           </AlertDialog.Description>
           <div class="mt-5 flex justify-end gap-2">
             <AlertDialog.Cancel
@@ -3556,6 +3610,7 @@
               Cancel
             </AlertDialog.Cancel>
             <AlertDialog.Action
+              bind:ref={checkoutConfirmButton}
               class="flex h-8 items-center gap-1.5 rounded-lg bg-primary px-3 text-xs font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
               disabled={gitState.isBusy('checkout')}
               onclick={() => void confirmCheckoutBranch()}
@@ -3563,7 +3618,7 @@
               {#if gitState.isBusy('checkout')}
                 <Loader2 size={12} class="animate-spin" />
               {/if}
-              Check out
+              {target.kind === 'local' ? 'Check out' : 'Create and check out'}
             </AlertDialog.Action>
           </div>
         </AlertDialog.Content>

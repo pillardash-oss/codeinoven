@@ -4075,6 +4075,26 @@ export function registerIpcHandlers(
     return status
   })
   ipcMain.handle(
+    'git:createTrackingBranch',
+    async (_, projectId: unknown, remote: unknown, branch: unknown, localName: unknown) => {
+      const safeProjectId = validateEntityId(projectId, 'Project ID')
+      const status = await gitService.createTrackingBranch(
+        await resolveProjectPath(safeProjectId),
+        validateRemoteName(remote),
+        validateBranchName(branch, 'Remote branch'),
+        validateBranchName(localName, 'Local branch')
+      )
+      const threads = await threadManager.listThreads(safeProjectId)
+      for (const thread of threads) {
+        if (thread.workingDirectory) {
+          const branchName = await repositoryService.getCurrentBranch(thread.workingDirectory)
+          if (branchName) await threadManager.setBranch(safeProjectId, thread.id, branchName)
+        }
+      }
+      return status
+    }
+  )
+  ipcMain.handle(
     'git:deleteBranch',
     async (_, projectId: unknown, name: unknown, force?: unknown) => {
       return gitService.deleteBranch(

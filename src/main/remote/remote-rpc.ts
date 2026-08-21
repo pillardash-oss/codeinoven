@@ -1552,6 +1552,16 @@ export class RemoteRpcDispatcher {
             this.string(args[1])
           )
         )
+      case 'git:createTrackingBranch':
+        return this.syncBranchAfterCheckout(
+          this.string(args[0]),
+          await this.gitService.createTrackingBranch(
+            await this.resolveProjectPath(this.string(args[0])),
+            this.string(args[1]),
+            this.string(args[2]),
+            this.string(args[3])
+          )
+        )
       case 'git:deleteBranch':
         return this.gitService.deleteBranch(
           await this.resolveProjectPath(this.string(args[0])),

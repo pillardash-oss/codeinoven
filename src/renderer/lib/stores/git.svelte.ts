@@ -703,6 +703,24 @@ export class GitState {
     }
   }
 
+  async createTrackingBranch(
+    projectId: string,
+    remote: string,
+    branch: string,
+    localName = branch
+  ): Promise<void> {
+    this.markBusy('checkout', true)
+    this.error = null
+    try {
+      this.status = await invoke('git:createTrackingBranch', projectId, remote, branch, localName)
+      await this.refresh(projectId)
+    } catch (reason) {
+      this.error = errorMessage(reason, 'Remote branch checkout failed')
+    } finally {
+      this.markBusy('checkout', false)
+    }
+  }
+
   async deleteBranch(projectId: string, name: string, force = false): Promise<DeleteBranchResult> {
     this.markBusy('checkout', true)
     this.error = null

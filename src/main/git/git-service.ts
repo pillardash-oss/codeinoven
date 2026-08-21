@@ -498,18 +498,19 @@ export class GitService {
       const directory = await this.repo(projectPath)
       return this.wrapError(projectPath, 'read', async () => {
         const git = this.client(directory)
-        const local = await git.branchLocal()
-        const tracking = await this.branchTracking(git)
-        return Object.values(local.branches).map((branch): GitBranchInfo => {
-          const track = tracking.get(branch.name)
-          return {
-            name: branch.name,
-            current: branch.current,
-            remote: track?.remote ?? null,
-            ahead: track?.ahead ?? 0,
-            behind: track?.behind ?? 0
-          }
-        })
+        const [output, remotes] = await Promise.all([
+          git.raw([
+            'for-each-ref',
+            '--format=%(refname)%09%(refname:short)%09%(HEAD)%09%(upstream:short)%09%(upstream:remotename)%09%(upstream:track)%09%(symref)',
+            'refs/heads',
+            'refs/remotes'
+          ]),
+          git.getRemotes()
+        ])
+        return this.parseBranchRefs(
+          Array.isArray(output) ? output.join('\n') : output,
+          remotes.map(({ name }) => name)
+        )
       })
     })
   }
@@ -529,6 +530,27 @@ export class GitService {
       const directory = await this.repo(projectPath)
       await this.wrapError(projectPath, 'mutation', async () => {
         await this.client(directory).checkoutLocalBranch(name)
+      })
+      return this.readStatus(directory)
+    })
+  }
+
+  async createTrackingBranch(
+    projectPath: string,
+    remote: string,
+    branch: string,
+    localName: string
+  ): Promise<GitStatus> {
+    return this.enqueue(projectPath, async () => {
+      const directory = await this.repo(projectPath)
+      await this.wrapError(projectPath, 'mutation', async () => {
+        await this.client(directory).raw([
+          'checkout',
+          '--track',
+          '-b',
+          localName,
+          `${remote}/${branch}`
+        ])
       })
       return this.readStatus(directory)
     })
@@ -1404,29 +1426,45 @@ export class GitService {
     }
   }
 
-  private async branchTracking(
-    git: SimpleGit
-  ): Promise<Map<string, { remote: string; ahead: number; behind: number }>> {
-    const output = await git.raw([
-      'for-each-ref',
-      '--format=%(refname:short)%09%(upstream:short)%09%(upstream:track)',
-      'refs/heads'
-    ])
-    const raw = Array.isArray(output) ? output.join('\n') : output
-    const tracking = new Map<string, { remote: string; ahead: number; behind: number }>()
+  private parseBranchRefs(raw: string, remoteNames: string[]): GitBranchInfo[] {
+    const namesBySpecificity = [...remoteNames].sort((left, right) => right.length - left.length)
+    const branches: GitBranchInfo[] = []
     for (const line of raw.split('\n')) {
       if (!line.trim()) continue
-      const [branch, upstream, drift] = line.split('\t')
-      if (!branch || !upstream) continue
-      const ahead = /ahead (\d+)/u.exec(drift ?? '')?.[1] ?? '0'
-      const behind = /behind (\d+)/u.exec(drift ?? '')?.[1] ?? '0'
-      tracking.set(branch, {
-        remote: upstream,
-        ahead: Number.parseInt(ahead, 10) || 0,
-        behind: Number.parseInt(behind, 10) || 0
+      const [fullRef, ref, head, upstream, remoteName, drift, symbolicTarget] = line.split('\t')
+      if (!fullRef || !ref) continue
+      if (fullRef.startsWith('refs/heads/')) {
+        const ahead = /ahead (\d+)/u.exec(drift ?? '')?.[1] ?? '0'
+        const behind = /behind (\d+)/u.exec(drift ?? '')?.[1] ?? '0'
+        branches.push({
+          kind: 'local',
+          name: ref,
+          ref,
+          current: head?.trim() === '*',
+          remote: remoteName || null,
+          upstream: upstream || null,
+          ahead: Number.parseInt(ahead, 10) || 0,
+          behind: Number.parseInt(behind, 10) || 0
+        })
+        continue
+      }
+      if (!fullRef.startsWith('refs/remotes/') || symbolicTarget) continue
+      const remote = namesBySpecificity.find((name) => ref.startsWith(`${name}/`))
+      if (!remote) continue
+      const name = ref.slice(remote.length + 1)
+      if (!name || name === 'HEAD') continue
+      branches.push({
+        kind: 'remote',
+        name,
+        ref,
+        current: false,
+        remote,
+        upstream: null,
+        ahead: 0,
+        behind: 0
       })
     }
-    return tracking
+    return branches
   }
 
   private emptyDiff(path: string, staged: boolean): GitDiff {
