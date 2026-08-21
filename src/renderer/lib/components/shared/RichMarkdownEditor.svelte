@@ -810,12 +810,29 @@
     publishCaretText()
   }
 
+  /** Put the caret inside the final editable block. Collapsing a range at the
+   *  editor root can strand it outside a trailing non-editable code wrapper. */
+  function placeCaretAtEditorEnd(): void {
+    if (!editor) return
+    const lastBlock = editor.lastElementChild as HTMLElement | null
+    if (!lastBlock) {
+      placeCaretAtEnd(editor)
+      return
+    }
+    if (lastBlock.matches('[data-editor-codeblock]')) {
+      placeCaretAtEnd(lastBlock.querySelector('code') ?? lastBlock)
+      return
+    }
+    placeCaretAtEnd(lastBlock)
+  }
+
   function handlePaste(event: ClipboardEvent): void {
     onPaste?.(event)
     if (event.defaultPrevented || !editor) return
     const text = event.clipboardData?.getData('text/plain')
     if (text === undefined) return
     const historyEntry = captureHistoryEntry()
+    const pasteEndsAtEditorEnd = isCursorAtBoundary(editor, false)
     event.preventDefault()
     insertPlainText(editor, text)
     const insideCodeBlock = Boolean(
@@ -837,8 +854,9 @@
     // so bookmark it first and restore it onto the freshly rendered content.
     const bookmark = captureVisibleSelection()
     replaceEditorContent(markdown)
-    if (bookmark) restoreSelection(bookmark)
-    else placeCaretAtEnd(editor)
+    if (pasteEndsAtEditorEnd) placeCaretAtEditorEnd()
+    else if (bookmark) restoreSelection(bookmark)
+    else placeCaretAtEditorEnd()
     // The bookmark is measured on the pre-render DOM, which can be much longer than
     // the re-rendered markdown (fence markers, soft breaks and code headers collapse
     // away), so it overshoots and strands the caret at the editor level — typically
@@ -848,14 +866,7 @@
     // belongs after a paste that ends in a code block.
     const selection = window.getSelection()
     if (selection?.anchorNode === editor && editor.lastElementChild) {
-      const lastBlock = editor.lastElementChild as HTMLElement
-      if (lastBlock.matches('[data-editor-codeblock]')) {
-        const code = lastBlock.querySelector('code')
-        if (code) placeCaretAtEnd(code)
-        else placeCaretAtEnd(lastBlock)
-      } else {
-        placeCaretAtEnd(lastBlock)
-      }
+      placeCaretAtEditorEnd()
     }
     if (markdown !== value) {
       value = markdown
