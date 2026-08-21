@@ -63,7 +63,10 @@ import { StorageEngine } from '../storage/storage-engine'
 import {
   validateBoundedString,
   validateEntityId,
-  validateScopeBoard,
+  validateScopeAppearancePatch,
+  validateScopeCollapsePatch,
+  validateScopeCreateInput,
+  validateScopeOrderIds,
   validateScopeSlice
 } from '../ipc/ipc-validation'
 import type {
@@ -788,8 +791,33 @@ export class RemoteRpcDispatcher {
       // ─── Scope board ("charts") ─────────────────────────────────────────
       case 'scope:get':
         return this.scopeManager.getBoard(this.string(args[0]))
-      case 'scope:save':
-        return this.scopeManager.saveBoard(this.string(args[0]), validateScopeBoard(args[1]))
+      case 'scope:updateLayout':
+        return this.scopeManager.updateLayout(this.string(args[0]), validateScopeOrderIds(args[1]))
+      case 'scope:updateAppearance':
+        return this.scopeManager.updateAppearance(
+          this.string(args[0]),
+          this.string(args[1]),
+          validateScopeAppearancePatch(args[2])
+        )
+      case 'scope:updateCollapse':
+        return this.scopeManager.updateCollapse(
+          this.string(args[0]),
+          this.string(args[1]),
+          validateScopeCollapsePatch(args[2])
+        )
+      case 'scope:create':
+        return this.scopeManager.createBucket(
+          this.string(args[0]),
+          validateScopeCreateInput(args[1])
+        )
+      case 'scope:setArchive':
+        return this.scopeManager.setArchive(
+          this.string(args[0]),
+          this.string(args[1]),
+          this.boolean(args[2])
+        )
+      case 'scope:delete':
+        return this.scopeManager.deleteBucket(this.string(args[0]), this.string(args[1]))
 
       // ─── Agent chat surface ─────────────────────────────────────────────
       case 'agent:loadMessages':
@@ -1915,6 +1943,11 @@ export class RemoteRpcDispatcher {
 
   private optionalBoolean(value: unknown): boolean | undefined {
     if (value === undefined) return undefined
+    if (typeof value !== 'boolean') throw new TypeError('Expected a boolean argument')
+    return value
+  }
+
+  private boolean(value: unknown): boolean {
     if (typeof value !== 'boolean') throw new TypeError('Expected a boolean argument')
     return value
   }

@@ -92,7 +92,10 @@ import {
   validateRemoteName,
   validateRemoteUrl,
   validateFaviconHostnames,
-  validateScopeBoard,
+  validateScopeAppearancePatch,
+  validateScopeCollapsePatch,
+  validateScopeCreateInput,
+  validateScopeOrderIds,
   validateScopeSlice,
   validateStashMessage,
   validateStashId,
@@ -3519,8 +3522,48 @@ export function registerIpcHandlers(
       scopeManager.getBoard(validateEntityId(projectId, 'Project ID'))
     )
   }
-  ipcMain.handle('scope:save', (_, projectId: unknown, board: unknown) =>
-    scopeManager.saveBoard(validateEntityId(projectId, 'Project ID'), validateScopeBoard(board))
+  ipcMain.handle('scope:updateLayout', (_, projectId: unknown, orderedIds: unknown) =>
+    scopeManager.updateLayout(
+      validateEntityId(projectId, 'Project ID'),
+      validateScopeOrderIds(orderedIds)
+    )
+  )
+  ipcMain.handle(
+    'scope:updateAppearance',
+    (_, projectId: unknown, bucketId: unknown, patch: unknown) =>
+      scopeManager.updateAppearance(
+        validateEntityId(projectId, 'Project ID'),
+        validateEntityId(bucketId, 'Scope bucket ID'),
+        validateScopeAppearancePatch(patch)
+      )
+  )
+  ipcMain.handle(
+    'scope:updateCollapse',
+    (_, projectId: unknown, bucketId: unknown, patch: unknown) =>
+      scopeManager.updateCollapse(
+        validateEntityId(projectId, 'Project ID'),
+        validateEntityId(bucketId, 'Scope bucket ID'),
+        validateScopeCollapsePatch(patch)
+      )
+  )
+  ipcMain.handle('scope:create', (_, projectId: unknown, input: unknown) => {
+    const validated = validateScopeCreateInput(input)
+    return scopeManager.createBucket(validateEntityId(projectId, 'Project ID'), validated)
+  })
+  ipcMain.handle(
+    'scope:setArchive',
+    (_, projectId: unknown, bucketId: unknown, archived: unknown) =>
+      scopeManager.setArchive(
+        validateEntityId(projectId, 'Project ID'),
+        validateEntityId(bucketId, 'Scope bucket ID'),
+        validateBoolean(archived, 'Archived')
+      )
+  )
+  ipcMain.handle('scope:delete', (_, projectId: unknown, bucketId: unknown) =>
+    scopeManager.deleteBucket(
+      validateEntityId(projectId, 'Project ID'),
+      validateEntityId(bucketId, 'Scope bucket ID')
+    )
   )
   ipcMain.handle(
     'project:update',

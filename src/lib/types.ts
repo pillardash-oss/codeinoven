@@ -81,11 +81,158 @@ export interface ScopeBucket {
   sortOrder: number
   collapsed: boolean
   collapsedSlices: ScopeSlice[]
+  /** Authoritative working-root descriptor owned by main; never renderer-edited. */
+  root: ScopeRootDescriptor
+  /** Present when the scope is archived; archival never mutates Git state. */
+  archivedAt?: number
+}
+
+/** Identifies the project + scope pair every scope-aware operation targets. */
+export interface ScopeTarget {
+  projectId: string
+  scopeBucketId: string
+}
+
+/** Environment-file propagation mode for a managed worktree. */
+export type ScopeEnvironmentMode = 'copy' | 'symlink'
+
+/** One structured setup command: an executable plus argument array (no shell). */
+export interface ScopeSetupCommandSpec {
+  executable: string
+  args: string[]
+}
+
+export type ScopeSetupCommandState =
+  'pending' | 'running' | 'succeeded' | 'failed' | 'skipped' | 'interrupted'
+
+/** Persisted per-command outcome. Output text is intentionally never persisted. */
+export interface ScopeSetupCommandRecord {
+  index: number
+  executable: string
+  args: string[]
+  state: ScopeSetupCommandState
+  exitCode?: number
+  startedAt?: number
+  finishedAt?: number
+}
+
+export type ScopeSetupStatusState = 'not_run' | 'running' | 'succeeded' | 'failed' | 'interrupted'
+
+export interface ScopeSetupStatus {
+  state: ScopeSetupStatusState
+  commands: ScopeSetupCommandRecord[]
+  startedAt?: number
+  finishedAt?: number
+}
+
+/** Root descriptor for scopes that resolve to the registered project directory. */
+export interface ProjectRootDescriptor {
+  kind: 'project'
+}
+
+/**
+ * Root descriptor for scopes backed by an app-managed Git worktree beneath the
+ * config root. `branch` and `directoryName` are stable for the lifetime of the
+ * scope even when its display name changes.
+ */
+export interface ManagedWorktreeDescriptor {
+  kind: 'worktree'
+  directoryName: string
+  branch: string
+  baseBranch: string
+  baseCommit: string
+  createdAt: number
+  environmentMode: ScopeEnvironmentMode
+  setup: ScopeSetupStatus
+}
+
+export type ScopeRootDescriptor = ProjectRootDescriptor | ManagedWorktreeDescriptor
+
+/** Project-level defaults applied to newly created managed worktrees. */
+export interface ScopeWorktreeDefaults {
+  setupCommands: ScopeSetupCommandSpec[]
+  runSetupByDefault: boolean
+  environmentMode: ScopeEnvironmentMode
+}
+
+export const DEFAULT_SCOPE_WORKTREE_DEFAULTS: ScopeWorktreeDefaults = {
+  setupCommands: [],
+  runSetupByDefault: true,
+  environmentMode: 'copy'
+}
+
+export function isManagedScopeRoot(
+  root: ScopeRootDescriptor | undefined
+): root is ManagedWorktreeDescriptor {
+  return root?.kind === 'worktree'
 }
 
 export interface ScopeBoard {
-  version: 1
+  version: 2
   buckets: ScopeBucket[]
+  worktreeDefaults: ScopeWorktreeDefaults
+}
+
+/** Renderer-supplied display-metadata patch; never touches lifecycle state. */
+export interface ScopeAppearancePatch {
+  name?: string
+  color?: string | null
+  iconType?: string | null
+}
+
+/** Renderer-supplied collapse-state patch for one bucket. */
+export interface ScopeCollapsePatch {
+  collapsed?: boolean
+  collapsedSlices?: ScopeSlice[]
+}
+
+/** Renderer input for creating a new project-rooted custom scope. */
+export interface ScopeCreateInput {
+  name: string
+  color?: string
+  iconType?: string
+}
+
+// ─── Managed worktree health & lifecycle ────────────────────────────────────
+
+export type ScopeWorktreeHealthCategory =
+  | 'healthy'
+  | 'missing'
+  | 'unregistered'
+  | 'locked'
+  | 'prunable'
+  | 'branch-mismatch'
+  | 'path-mismatch'
+  | 'repository-unavailable'
+
+export interface ScopeWorktreeHealth {
+  category: ScopeWorktreeHealthCategory
+  detail?: string
+  /** Expected absolute path of the managed worktree when derivable. */
+  expectedPath?: string
+  /** Actual registration path reported by Git when it differs. */
+  actualPath?: string
+  prunable?: boolean
+}
+
+/** Actions that require a state-bound, single-use confirmation ID. */
+export type ScopeLifecycleAction =
+  'detach' | 'remove-worktree' | 'delete-scope' | 'delete-branch' | 'delete-project-worktrees'
+
+export interface ScopeLifecyclePreflight {
+  action: ScopeLifecycleAction
+  projectId: string
+  scopeBucketId: string
+  /** Tracked files with uncommitted modifications (bounded list). */
+  dirtyFiles: string[]
+  /** Commits not reachable from any known remote-tracking ref. */
+  unpushedCommits: number
+  hasActiveProcesses: boolean
+  /** Whether the scope's branch is checked out by this worktree. */
+  branchOwnedByWorktree: boolean
+  /** Single-use token bound to this exact snapshot. */
+  confirmationId: string
+  createdAt: number
 }
 
 export interface ProjectFileEntry {

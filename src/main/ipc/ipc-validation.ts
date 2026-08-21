@@ -1,6 +1,6 @@
 import { fileURLToPath } from 'url'
 import { realpath } from 'fs/promises'
-import { isAbsolute, relative, resolve, sep } from 'path'
+import { isAbsolute, relative, resolve, sep, win32 } from 'path'
 import type { WebFrameMain } from 'electron'
 import type {
   ChecklistItemStatus,
@@ -109,6 +109,309 @@ const SCOPE_SLICES = new Set<ScopeSlice>([
   'done',
   'pinned'
 ])
+
+const SCOPE_DIRECTORY_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/
+const SCOPE_ENVIRONMENT_MODES = new Set<import('../../lib/types').ScopeEnvironmentMode>([
+  'copy',
+  'symlink'
+])
+const SCOPE_SETUP_STATES = new Set<import('../../lib/types').ScopeSetupStatusState>([
+  'not_run',
+  'running',
+  'succeeded',
+  'failed',
+  'interrupted'
+])
+const SCOPE_SETUP_COMMAND_STATES = new Set<import('../../lib/types').ScopeSetupCommandState>([
+  'pending',
+  'running',
+  'succeeded',
+  'failed',
+  'skipped',
+  'interrupted'
+])
+
+/** Validate a managed-scope directory name: one path-safe relative segment. */
+export function validateScopeDirectoryName(value: unknown): string {
+  const name = validateBoundedString(value, 'Scope directory name', 1, 128)
+  if (
+    isAbsolute(name) ||
+    win32.isAbsolute(name) ||
+    !SCOPE_DIRECTORY_PATTERN.test(name) ||
+    name.split(/[\\/]+/u).includes('..')
+  ) {
+    throw new TypeError('Scope directory name must be a single path-safe segment')
+  }
+  return name
+}
+
+/** Validate a scope target ({ projectId, scopeBucketId }). */
+export function validateScopeTarget(value: unknown): import('../../lib/types').ScopeTarget {
+  const input = assertRecord(value, 'Scope target')
+  rejectUnknownFields(input, new Set(['projectId', 'scopeBucketId']), 'scope target')
+  return {
+    projectId: validateEntityId(input.projectId, 'Project ID'),
+    scopeBucketId: validateEntityId(input.scopeBucketId, 'Scope bucket ID')
+  }
+}
+
+/** Validate one structured setup command (executable + argument array). */
+export function validateSetupCommandSpec(
+  value: unknown
+): import('../../lib/types').ScopeSetupCommandSpec {
+  const input = assertRecord(value, 'Setup command')
+  rejectUnknownFields(input, new Set(['executable', 'args']), 'setup command')
+  const executable = validateBoundedString(input.executable, 'Setup command executable', 1, 1024)
+  if (!Array.isArray(input.args) || input.args.length > 256) {
+    throw new TypeError('Setup command args must be an array of at most 256 strings')
+  }
+  const args = input.args.map((arg, index) =>
+    validateBoundedString(arg, `Setup command arg ${index}`, 0, 4096)
+  )
+  return { executable, args }
+}
+
+export function validateSetupCommandSpecs(
+  value: unknown
+): import('../../lib/types').ScopeSetupCommandSpec[] {
+  if (!Array.isArray(value) || value.length > 64) {
+    throw new TypeError('Setup commands must be an array of at most 64 entries')
+  }
+  return value.map((entry) => validateSetupCommandSpec(entry))
+}
+
+export function validateEnvironmentMode(
+  value: unknown
+): import('../../lib/types').ScopeEnvironmentMode {
+  return assertEnum(value, SCOPE_ENVIRONMENT_MODES, 'environment mode')
+}
+
+/** Validate a bounded array of plain string identifiers. */
+export function validateStringArray(
+  value: unknown,
+  label: string,
+  minimumLength: number,
+  maximumLength: number,
+  maximumEntries = 512
+): string[] {
+  if (!Array.isArray(value) || value.length < minimumLength || value.length > maximumEntries) {
+    throw new TypeError(`${label} must be an array of ${minimumLength}–${maximumEntries} entries`)
+  }
+  return value.map((entry, index) =>
+    validateBoundedString(entry, `${label}[${index}]`, 0, maximumLength)
+  )
+}
+
+/** Validate a full scope ordering for the layout operation. */
+export function validateScopeOrderIds(value: unknown): string[] {
+  return validateStringArray(value, 'Scope order', 1, 256, 256)
+}
+
+/** Validate a display-metadata patch for one scope bucket. */
+export function validateScopeAppearancePatch(
+  value: unknown
+): import('../../lib/types').ScopeAppearancePatch {
+  const input = assertRecord(value, 'Scope appearance patch')
+  rejectUnknownFields(input, new Set(['name', 'color', 'iconType']), 'scope appearance patch')
+  const patch: import('../../lib/types').ScopeAppearancePatch = {}
+  if (input.name !== undefined) {
+    patch.name = validateBoundedString(input.name, 'Scope name', 1, 120)
+  }
+  if (input.color === null) {
+    patch.color = null
+  } else if (input.color !== undefined) {
+    if (typeof input.color !== 'string' || !/^#[0-9a-fA-F]{6}$/.test(input.color)) {
+      throw new TypeError('Scope color must be a hex colour string (e.g. #ef4444)')
+    }
+    patch.color = input.color
+  }
+  if (input.iconType === null) {
+    patch.iconType = null
+  } else if (input.iconType !== undefined) {
+    patch.iconType = validateBoundedString(input.iconType, 'Scope icon type', 1, 50)
+  }
+  return patch
+}
+
+/** Validate a collapse-state patch for one scope bucket. */
+export function validateScopeCollapsePatch(
+  value: unknown
+): import('../../lib/types').ScopeCollapsePatch {
+  const input = assertRecord(value, 'Scope collapse patch')
+  rejectUnknownFields(input, new Set(['collapsed', 'collapsedSlices']), 'scope collapse patch')
+  const patch: import('../../lib/types').ScopeCollapsePatch = {}
+  if (input.collapsed !== undefined) {
+    patch.collapsed = validateBoolean(input.collapsed, 'Scope collapsed')
+  }
+  if (input.collapsedSlices !== undefined) {
+    if (!Array.isArray(input.collapsedSlices)) {
+      throw new TypeError('Collapsed scope slices must be an array')
+    }
+    const slices = input.collapsedSlices.flatMap((slice): ScopeSlice[] => {
+      if (slice === 'stale') return []
+      if (typeof slice !== 'string' || !SCOPE_SLICES.has(slice as ScopeSlice)) {
+        throw new TypeError(`Unsupported scope slice: ${String(slice)}`)
+      }
+      return [slice as ScopeSlice]
+    })
+    if (new Set(slices).size !== slices.length) {
+      throw new TypeError('Collapsed scope slices must be unique')
+    }
+    patch.collapsedSlices = slices
+  }
+  return patch
+}
+
+/** Validate renderer input for creating a project-rooted custom scope. */
+export function validateScopeCreateInput(
+  value: unknown
+): import('../../lib/types').ScopeCreateInput {
+  const input = assertRecord(value, 'Scope create input')
+  rejectUnknownFields(input, new Set(['name', 'color', 'iconType']), 'scope create input')
+  const sanitized: import('../../lib/types').ScopeCreateInput = {
+    name: validateBoundedString(input.name, 'Scope name', 1, 120)
+  }
+  if (input.color !== undefined) {
+    if (typeof input.color !== 'string' || !/^#[0-9a-fA-F]{6}$/.test(input.color)) {
+      throw new TypeError('Scope color must be a hex colour string (e.g. #ef4444)')
+    }
+    sanitized.color = input.color
+  }
+  if (input.iconType !== undefined) {
+    sanitized.iconType = validateBoundedString(input.iconType, 'Scope icon type', 1, 50)
+  }
+  return sanitized
+}
+
+export function validateWorktreeDefaults(
+  value: unknown
+): import('../../lib/types').ScopeWorktreeDefaults {
+  const input = assertRecord(value, 'Worktree defaults')
+  rejectUnknownFields(
+    input,
+    new Set(['setupCommands', 'runSetupByDefault', 'environmentMode']),
+    'worktree defaults'
+  )
+  return {
+    setupCommands: validateSetupCommandSpecs(input.setupCommands),
+    runSetupByDefault: validateBoolean(input.runSetupByDefault, 'Run setup by default'),
+    environmentMode: validateEnvironmentMode(input.environmentMode)
+  }
+}
+
+function validateSetupStatus(value: unknown): import('../../lib/types').ScopeSetupStatus {
+  const input = assertRecord(value, 'Setup status')
+  rejectUnknownFields(
+    input,
+    new Set(['state', 'commands', 'startedAt', 'finishedAt']),
+    'setup status'
+  )
+  const state = assertEnum(input.state, SCOPE_SETUP_STATES, 'setup state')
+  if (!Array.isArray(input.commands)) {
+    throw new TypeError('Setup status commands must be an array')
+  }
+  const commands = input.commands.map(
+    (entry, index): import('../../lib/types').ScopeSetupCommandRecord => {
+      const record = assertRecord(entry, `Setup command record ${index}`)
+      rejectUnknownFields(
+        record,
+        new Set(['index', 'executable', 'args', 'state', 'exitCode', 'startedAt', 'finishedAt']),
+        'setup command record'
+      )
+      const commandState = assertEnum(
+        record.state,
+        SCOPE_SETUP_COMMAND_STATES,
+        'setup command state'
+      )
+      const result: import('../../lib/types').ScopeSetupCommandRecord = {
+        index: validateBoundedInteger(record.index, 'Setup command index', 0, 4096),
+        executable: validateBoundedString(record.executable, 'Setup executable', 1, 1024),
+        args: (Array.isArray(record.args) ? record.args : []).map((arg, argIndex) =>
+          validateBoundedString(arg, `Setup arg ${argIndex}`, 0, 4096)
+        ),
+        state: commandState
+      }
+      if (record.exitCode !== undefined) {
+        result.exitCode = validateBoundedInteger(record.exitCode, 'Setup exit code', -1, 4096)
+      }
+      if (record.startedAt !== undefined) {
+        result.startedAt = validateBoundedInteger(
+          record.startedAt,
+          'Setup startedAt',
+          0,
+          Number.MAX_SAFE_INTEGER
+        )
+      }
+      if (record.finishedAt !== undefined) {
+        result.finishedAt = validateBoundedInteger(
+          record.finishedAt,
+          'Setup finishedAt',
+          0,
+          Number.MAX_SAFE_INTEGER
+        )
+      }
+      return result
+    }
+  )
+  const status: import('../../lib/types').ScopeSetupStatus = { state, commands }
+  if (input.startedAt !== undefined) {
+    status.startedAt = validateBoundedInteger(
+      input.startedAt,
+      'Setup startedAt',
+      0,
+      Number.MAX_SAFE_INTEGER
+    )
+  }
+  if (input.finishedAt !== undefined) {
+    status.finishedAt = validateBoundedInteger(
+      input.finishedAt,
+      'Setup finishedAt',
+      0,
+      Number.MAX_SAFE_INTEGER
+    )
+  }
+  return status
+}
+
+function validateRootDescriptor(value: unknown): import('../../lib/types').ScopeRootDescriptor {
+  const input = assertRecord(value, 'Scope root descriptor')
+  if (input.kind === 'project') {
+    rejectUnknownFields(input, new Set(['kind']), 'scope root descriptor')
+    return { kind: 'project' } satisfies import('../../lib/types').ProjectRootDescriptor
+  }
+  if (input.kind === 'worktree') {
+    rejectUnknownFields(
+      input,
+      new Set([
+        'kind',
+        'directoryName',
+        'branch',
+        'baseBranch',
+        'baseCommit',
+        'createdAt',
+        'environmentMode',
+        'setup'
+      ]),
+      'scope root descriptor'
+    )
+    return {
+      kind: 'worktree',
+      directoryName: validateScopeDirectoryName(input.directoryName),
+      branch: validateBranchName(input.branch, 'Managed branch'),
+      baseBranch: validateBranchName(input.baseBranch, 'Managed base branch'),
+      baseCommit: validateBoundedString(input.baseCommit, 'Managed base commit', 1, 64),
+      createdAt: validateBoundedInteger(
+        input.createdAt,
+        'Managed creation time',
+        0,
+        Number.MAX_SAFE_INTEGER
+      ),
+      environmentMode: validateEnvironmentMode(input.environmentMode),
+      setup: validateSetupStatus(input.setup)
+    } satisfies import('../../lib/types').ManagedWorktreeDescriptor
+  }
+  throw new TypeError(`Unsupported scope root kind: ${String(input.kind)}`)
+}
 
 export function validateScopeSlice(value: unknown): ScopeSlice {
   if (typeof value !== 'string' || !SCOPE_SLICES.has(value as ScopeSlice)) {
@@ -767,9 +1070,9 @@ export function validateThreadUpdateInput(
 
 export function validateScopeBoard(value: unknown): ScopeBoard {
   const board = assertRecord(value, 'Scope board')
-  rejectUnknownFields(board, new Set(['version', 'buckets']), 'scope board')
-  if (board.version !== 1) {
-    throw new TypeError('Scope board version must be 1')
+  rejectUnknownFields(board, new Set(['version', 'buckets', 'worktreeDefaults']), 'scope board')
+  if (board.version !== 2) {
+    throw new TypeError('Scope board version must be 2')
   }
   if (!Array.isArray(board.buckets)) {
     throw new TypeError('Scope board buckets must be an array')
@@ -780,7 +1083,17 @@ export function validateScopeBoard(value: unknown): ScopeBoard {
     const bucket = assertRecord(value, `Scope bucket ${index + 1}`)
     rejectUnknownFields(
       bucket,
-      new Set(['id', 'name', 'color', 'iconType', 'sortOrder', 'collapsed', 'collapsedSlices']),
+      new Set([
+        'id',
+        'name',
+        'color',
+        'iconType',
+        'sortOrder',
+        'collapsed',
+        'collapsedSlices',
+        'root',
+        'archivedAt'
+      ]),
       'scope bucket'
     )
     const id = validateEntityId(bucket.id, 'Scope bucket ID')
@@ -819,6 +1132,24 @@ export function validateScopeBoard(value: unknown): ScopeBoard {
     if (new Set(collapsedSlices).size !== collapsedSlices.length) {
       throw new TypeError('Collapsed scope slices must be unique')
     }
+    const root = validateRootDescriptor(bucket.root)
+    let archivedAt: number | undefined
+    if (bucket.archivedAt !== undefined) {
+      archivedAt = validateBoundedInteger(
+        bucket.archivedAt,
+        'Scope archived timestamp',
+        0,
+        Number.MAX_SAFE_INTEGER
+      )
+    }
+    if (id === 'default') {
+      if (root.kind !== 'project') {
+        throw new TypeError('The Default scope must remain project-rooted')
+      }
+      if (archivedAt !== undefined) {
+        throw new TypeError('The Default scope cannot be archived')
+      }
+    }
     return {
       id,
       name,
@@ -826,7 +1157,9 @@ export function validateScopeBoard(value: unknown): ScopeBoard {
       ...(iconType ? { iconType } : {}),
       sortOrder: bucket.sortOrder,
       collapsed,
-      collapsedSlices
+      collapsedSlices,
+      root,
+      ...(archivedAt === undefined ? {} : { archivedAt })
     }
   })
 
@@ -834,7 +1167,11 @@ export function validateScopeBoard(value: unknown): ScopeBoard {
     throw new TypeError('Scope board must contain the Default bucket')
   }
 
-  return { version: 1, buckets }
+  return {
+    version: 2,
+    buckets,
+    worktreeDefaults: validateWorktreeDefaults(board.worktreeDefaults)
+  }
 }
 
 const HOSTNAME_PATTERN =

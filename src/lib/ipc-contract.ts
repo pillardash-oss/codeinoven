@@ -111,6 +111,10 @@ import type {
   OfferedProvider,
   RepositoryPreflightResult,
   ScopeBoard,
+  ScopeBucket,
+  ScopeAppearancePatch,
+  ScopeCollapsePatch,
+  ScopeCreateInput,
   ScopeSlice,
   SpecContextReference,
   SpecDecisionAction,
@@ -1228,7 +1232,21 @@ export interface IpcInvokeContract {
     HistoryEntry
   >
   'scope:get': Contract<[projectId: string], ScopeBoard>
-  'scope:save': Contract<[projectId: string, board: ScopeBoard], ScopeBoard>
+  'scope:updateLayout': Contract<[projectId: string, orderedIds: string[]], ScopeBoard>
+  'scope:updateAppearance': Contract<
+    [projectId: string, bucketId: string, patch: ScopeAppearancePatch],
+    ScopeBoard
+  >
+  'scope:updateCollapse': Contract<
+    [projectId: string, bucketId: string, patch: ScopeCollapsePatch],
+    ScopeBoard
+  >
+  'scope:create': Contract<
+    [projectId: string, input: ScopeCreateInput],
+    { board: ScopeBoard; bucket: ScopeBucket }
+  >
+  'scope:setArchive': Contract<[projectId: string, bucketId: string, archived: boolean], ScopeBoard>
+  'scope:delete': Contract<[projectId: string, bucketId: string], ScopeBoard>
   'history:load': Contract<[projectId: string, threadId: string, limit?: number], HistoryEntry[]>
   'notification:test': Contract<[], SystemNotificationTestResult>
   'notification:getPermissionStatus': Contract<[], SystemNotificationPermissionStatus>

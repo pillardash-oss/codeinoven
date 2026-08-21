@@ -537,7 +537,8 @@
         name: 'Default',
         sortOrder: 0,
         collapsed: false,
-        collapsedSlices: []
+        collapsedSlices: [],
+        root: { kind: 'project' } as const
       }
     )
   })

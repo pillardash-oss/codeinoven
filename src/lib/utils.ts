@@ -142,6 +142,35 @@ export function getProjectPath(projectId: string): string {
   return join(getConfigRoot(), 'projects', projectId)
 }
 
+const SCOPE_DIRECTORY_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/
+
+/**
+ * Validate a managed-scope directory name: exactly one relative, path-safe
+ * segment with no traversal or absolute forms.
+ */
+export function validateScopeDirectoryName(directoryName: string): string {
+  if (
+    directoryName.length === 0 ||
+    directoryName.length > 128 ||
+    isAbsolute(directoryName) ||
+    win32.isAbsolute(directoryName) ||
+    !SCOPE_DIRECTORY_PATTERN.test(directoryName) ||
+    directoryName.split(/[\\/]+/u).includes('..')
+  ) {
+    throw new Error(`Managed scope directory name is not path-safe: "${directoryName}"`)
+  }
+  return directoryName
+}
+
+/**
+ * Canonical app-managed root for one scope worktree:
+ * `<config-root>/projects/<project-id>/scope/<directory-name>`.
+ * Deterministic for a given config root; never accepts absolute names.
+ */
+export function getScopeRootPath(projectId: string, directoryName: string): string {
+  return join(getProjectPath(projectId), 'scope', validateScopeDirectoryName(directoryName))
+}
+
 /** Get thread storage path */
 export function getThreadPath(projectId: string, threadId: string): string {
   return join(getProjectPath(projectId), 'threads', threadId)
