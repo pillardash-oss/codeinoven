@@ -19,6 +19,9 @@ export type GatewayLifecycleState =
 
 export type GatewayAuthMode = 'none' | 'bearer'
 
+/** Runtime used to execute the adapter's entrypoint. */
+export type GatewayRuntime = 'node' | 'bun'
+
 /** Declarative, app-reviewed adapter for one gateway distribution. */
 export interface GatewayAdapterDefinition {
   /** Stable adapter id, e.g. `omniroute`. */
@@ -29,9 +32,13 @@ export interface GatewayAdapterDefinition {
   npmPackage: string
   /** Pinned version — never a range, so installs are reproducible. */
   version: string
-  /** Package-relative path of the CLI entry runnable with Bun. */
+  /** Package-relative path of the server entrypoint. */
   binPath: string
-  /** Fixed CLI arguments; CodeInOven always appends `--port <port>`. */
+  runtime: GatewayRuntime
+  /**
+   * Fixed CLI arguments. The loopback port is always delivered via the PORT
+   * env var, never argv, so both CLI and bare-server entrypoints work.
+   */
   serveArgs: string[]
   /** Extra environment set on the child beyond the inherited environment. */
   env?: Record<string, string>

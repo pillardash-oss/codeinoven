@@ -1,8 +1,21 @@
 <script lang="ts">
   import { onMount } from 'svelte'
-  import { AlertTriangle, Loader2, Play, RefreshCw, Square } from '@lucide/svelte'
+  import {
+    AlertTriangle,
+    Copy,
+    ExternalLink,
+    Loader2,
+    Play,
+    RefreshCw,
+    Square,
+    Trash2,
+    Upload
+  } from '@lucide/svelte'
   import type { GatewayStatus } from '$shared/gateway-types'
   import { invoke, subscribe } from '$lib/ipc.svelte'
+  import { openInBrowser } from '$lib/open-in-browser'
+  import { toast } from 'svelte-sonner'
+  import Modal from '../ui/Modal.svelte'
   import Switch from '../ui/Switch.svelte'
 
   let gateways = $state<GatewayStatus[]>([])
@@ -10,6 +23,8 @@
   let busyPluginId = $state<string | null>(null)
   let error = $state('')
   let actionNotice = $state('')
+  let uninstallTarget = $state<GatewayStatus | null>(null)
+  let updateTarget = $state<GatewayStatus | null>(null)
 
   const lifecycleLabels: Record<GatewayStatus['lifecycle'], string> = {
     not_installed: 'Not installed',
@@ -93,6 +108,58 @@
     } finally {
       busyPluginId = null
     }
+  }
+
+  async function uninstallGateway(pluginId: string): Promise<void> {
+    uninstallTarget = null
+    busyPluginId = pluginId
+    error = ''
+    try {
+      applyStatus(await invoke('gateway:uninstall', pluginId))
+      toast.success('Gateway uninstalled')
+    } catch (uninstallError) {
+      error =
+        uninstallError instanceof Error ? uninstallError.message : 'The gateway could not be uninstalled.'
+    } finally {
+      busyPluginId = null
+    }
+  }
+
+  async function updateGateway(pluginId: string): Promise<void> {
+    updateTarget = null
+    busyPluginId = pluginId
+    error = ''
+    try {
+      applyStatus(await invoke('gateway:update', pluginId))
+      toast.success('Gateway updated')
+    } catch (updateError) {
+      error = updateError instanceof Error ? updateError.message : 'The gateway could not be updated.'
+    } finally {
+      busyPluginId = null
+    }
+  }
+
+  async function copyDashboardPassword(pluginId: string): Promise<void> {
+    try {
+      await invoke('gateway:copyDashboardPassword', pluginId)
+      toast.success('Dashboard password copied to the clipboard')
+    } catch (copyError) {
+      toast.error(
+        copyError instanceof Error ? copyError.message : 'The dashboard password could not be copied.'
+      )
+    }
+  }
+
+  function openDashboard(url: string): void {
+    void openInBrowser(url)
+  }
+
+  function hasUpdate(gateway: GatewayStatus): boolean {
+    return (
+      gateway.installedVersion !== undefined &&
+      gateway.availableVersion.length > 0 &&
+      gateway.installedVersion !== gateway.availableVersion
+    )
   }
 
   function applyStatus(status: GatewayStatus): void {
@@ -235,6 +302,55 @@
             <RefreshCw size={14} class={busy ? 'animate-spin' : ''} />
             Refresh models
           </button>
+          {#if gateway.dashboardUrl && gateway.lifecycle === 'ready'}
+            <button
+              type="button"
+              class="flex h-9 items-center gap-2 rounded-lg border bg-elevated px-3 text-xs font-medium hover:bg-overlay"
+              title="Open the {gateway.adapterName} dashboard"
+              onclick={() => openDashboard(gateway.dashboardUrl ?? '')}
+            >
+              <ExternalLink size={14} />
+              Open dashboard
+            </button>
+          {/if}
+          {#if gateway.installedVersion !== undefined}
+            <button
+              type="button"
+              class="flex h-9 items-center gap-2 rounded-lg border bg-elevated px-3 text-xs font-medium hover:bg-overlay disabled:opacity-50"
+              disabled={busy}
+              title="Copy the provisioned dashboard password"
+              onclick={() => void copyDashboardPassword(gateway.pluginId)}
+            >
+              <Copy size={14} />
+              Copy password
+            </button>
+          {/if}
+          {#if hasUpdate(gateway)}
+            <button
+              type="button"
+              class="flex h-9 items-center gap-2 rounded-lg border border-primary/40 bg-primary/10 px-3 text-xs font-medium text-primary hover:bg-primary/15 disabled:opacity-50"
+              disabled={busy}
+              title="Reinstall at version {gateway.availableVersion}"
+              onclick={() => (updateTarget = gateway)}
+            >
+              <Upload size={14} />
+              Update to {gateway.availableVersion}
+            </button>
+          {/if}
+          {#if gateway.lifecycle === 'stopped' || gateway.lifecycle === 'error' || gateway.lifecycle === 'not_installed'}
+            {#if gateway.lifecycle !== 'not_installed'}
+              <button
+                type="button"
+                class="ml-auto flex h-9 items-center gap-2 rounded-lg border border-danger/30 bg-danger/5 px-3 text-xs font-medium text-danger hover:bg-danger/10 disabled:opacity-50"
+                disabled={busy}
+                title="Uninstall the {gateway.adapterName} gateway and remove its data"
+                onclick={() => (uninstallTarget = gateway)}
+              >
+                <Trash2 size={14} />
+                Uninstall
+              </button>
+            {/if}
+          {/if}
         </div>
 
         {#if gateway.dashboardUrl}
@@ -244,3 +360,97 @@
     {/each}
   {/if}
 </div>
+
+{#if uninstallTarget}
+  <Modal
+    title="Uninstall {uninstallTarget.adapterName}?"
+    size="md"
+    open
+    onClose={() => (uninstallTarget = null)}
+  >
+    <div class="space-y-3 text-sm text-muted">
+      <p>
+        This stops the gateway, removes its app-owned installation and model catalog, and deletes
+        the provider entries it synced into every harness. Provider connections configured through
+        the gateway will stop working.
+      </p>
+      <p class="text-xs text-dimmed">
+        Your gateway configuration data (providers set up inside the dashboard) is also removed.
+        You can reinstall the gateway at any time.
+      </p>
+    </div>
+    {#snippet footer()}
+      <button
+        type="button"
+        class="rounded-lg border bg-elevated px-3 py-1.5 text-xs font-medium hover:bg-overlay"
+        title="Keep the gateway installed"
+        onclick={() => (uninstallTarget = null)}
+      >
+        Cancel
+      </button>
+      <button
+        type="button"
+        class="flex items-center gap-1.5 rounded-lg bg-danger px-3 py-1.5 text-xs font-medium text-on-primary hover:opacity-90 disabled:opacity-50"
+        title="Confirm uninstalling the gateway"
+        disabled={busyPluginId === uninstallTarget?.pluginId}
+        onclick={() => {
+          if (uninstallTarget) void uninstallGateway(uninstallTarget.pluginId)
+        }}
+      >
+        {#if busyPluginId === uninstallTarget?.pluginId}
+          <Loader2 size={13} class="animate-spin" />
+        {:else}
+          <Trash2 size={13} />
+        {/if}
+        Uninstall
+      </button>
+    {/snippet}
+  </Modal>
+{/if}
+
+{#if updateTarget}
+  <Modal
+    title="Update {updateTarget.adapterName} to {updateTarget.availableVersion}?"
+    size="md"
+    open
+    onClose={() => (updateTarget = null)}
+  >
+    <div class="space-y-3 text-sm text-muted">
+      <p>
+        The gateway is reinstalled at the pinned version
+        <strong class="text-foreground">{updateTarget.availableVersion}</strong> (currently
+        {updateTarget.installedVersion}). If it is running, it restarts automatically.
+      </p>
+      <p class="text-xs text-dimmed">
+        Model catalogs are re-discovered after the update and harness providers are refreshed with
+        the new catalog.
+      </p>
+    </div>
+    {#snippet footer()}
+      <button
+        type="button"
+        class="rounded-lg border bg-elevated px-3 py-1.5 text-xs font-medium hover:bg-overlay"
+        title="Skip this update"
+        onclick={() => (updateTarget = null)}
+      >
+        Cancel
+      </button>
+      <button
+        type="button"
+        class="flex items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-medium text-on-primary hover:opacity-90 disabled:opacity-50"
+        title="Confirm updating the gateway"
+        disabled={busyPluginId === updateTarget?.pluginId}
+        onclick={() => {
+          if (updateTarget) void updateGateway(updateTarget.pluginId)
+        }}
+      >
+        {#if busyPluginId === updateTarget?.pluginId}
+          <Loader2 size={13} class="animate-spin" />
+        {:else}
+          <Upload size={13} />
+        {/if}
+        Update
+      </button>
+    {/snippet}
+  </Modal>
+{/if}

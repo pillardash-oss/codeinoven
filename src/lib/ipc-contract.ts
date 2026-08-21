@@ -1355,12 +1355,15 @@ export interface IpcInvokeContract {
     [pluginId: string, enabled: boolean],
     import('./gateway-types').GatewayStatus
   >
-  'gateway:start': Contract<
-    [pluginId: string],
-    import('./gateway-types').GatewayStatus
-  >
+  'gateway:start': Contract<[pluginId: string], import('./gateway-types').GatewayStatus>
   'gateway:stop': Contract<[pluginId: string], import('./gateway-types').GatewayStatus>
-  'gateway:refreshCatalog': Contract<[pluginId: string], import('./gateway-types').GatewayModelInfo[]>
+  'gateway:uninstall': Contract<[pluginId: string], import('./gateway-types').GatewayStatus>
+  'gateway:update': Contract<[pluginId: string], import('./gateway-types').GatewayStatus>
+  'gateway:copyDashboardPassword': Contract<[pluginId: string], void>
+  'gateway:refreshCatalog': Contract<
+    [pluginId: string],
+    import('./gateway-types').GatewayModelInfo[]
+  >
   'utilities:list': Contract<[options?: UtilitySearchOptions], UtilityCatalog>
   'utilities:get': Contract<[id: string], UtilityDefinition | null>
   'utilities:create': Contract<[input: UtilityDefinitionInput], UtilityDefinition>

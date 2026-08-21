@@ -1,6 +1,7 @@
 import { spawn, type ChildProcess } from 'node:child_process'
+import { randomBytes } from 'node:crypto'
 import { createServer } from 'node:net'
-import { access, mkdir, writeFile } from 'node:fs/promises'
+import { access, mkdir, readdir, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import type {
   GatewayAdapterDefinition,
@@ -12,11 +13,12 @@ import type {
 } from '../../lib/gateway-types'
 import { getConfigRoot } from '../../lib/utils'
 import type { StorageEngine } from '../storage/storage-engine'
+import type { SecretVault } from '../storage/secret-vault'
 import type { BaseUrlProviderService } from '../providers/base-url-provider-service'
 import { Logger } from '../system/logger'
 import { OwnedProcessJournal } from '../system/owned-process-journal'
 import { getGatewayAdapter, DEFAULT_GATEWAY_ADAPTER_ID, DEFAULT_GATEWAY_PLUGIN_ID } from './gateway-adapters'
-import { syncGatewayProviders } from './gateway-provider-sync'
+import { removeGatewayProviders, syncGatewayProviders } from './gateway-provider-sync'
 
 const STATE_PATH = 'gateways/state.json'
 const STATE_VERSION = 1
@@ -27,6 +29,7 @@ const STOP_GRACE_MS = 5_000
 const CATALOG_TTL_MS = 60_000
 const PORT_PROBE_ATTEMPTS = 50
 const STDERR_TAIL_LINES = 40
+const DASHBOARD_PASSWORD_BYTES = 24
 
 interface GatewayStateStore {
   version: number
@@ -60,11 +63,16 @@ export class GatewaySupervisorService {
   private readonly journal: OwnedProcessJournal | undefined
   private catalogCache = new Map<string, GatewayCatalogSnapshot>()
   private bunVersionPromise: Promise<string> | null = null
+  private nodeVersionPromise: Promise<string> | null = null
 
   constructor(
     private readonly storage: StorageEngine,
-    private readonly providers: BaseUrlProviderService
-  ) {}
+    private readonly providers: BaseUrlProviderService,
+    private readonly vault?: SecretVault,
+    journal?: OwnedProcessJournal
+  ) {
+    this.journal = journal
+  }
 
   onStateChange(listener: GatewayStateListener): () => void {
     this.listeners.add(listener)
@@ -91,6 +99,30 @@ export class GatewaySupervisorService {
 
   stop(pluginId: string): Promise<GatewayStatus> {
     return this.serialize(pluginId, () => this.stopInner(pluginId))
+  }
+
+  /**
+   * Stop the gateway, remove every synced harness provider record, and delete
+   * the app-owned install directory and catalog. The plugin stays seeded and
+   * disabled so it can be installed again later.
+   */
+  uninstall(pluginId: string): Promise<GatewayStatus> {
+    return this.serialize(pluginId, () => this.uninstallInner(pluginId))
+  }
+
+  /**
+   * Reinstall at the adapter's pinned version (used when the pin moves). The
+   * gateway is restarted automatically when it was running before the update.
+   */
+  update(pluginId: string): Promise<GatewayStatus> {
+    return this.serialize(pluginId, () => this.updateInner(pluginId))
+  }
+
+  /** Resolve the provisioned dashboard password for clipboard copy. */
+  async dashboardPassword(pluginId: string): Promise<string> {
+    this.requireAdapter(pluginId)
+    if (!this.vault) throw new Error('Secure credential storage is unavailable')
+    return this.vault.resolve(dashboardPasswordRef(pluginId))
   }
 
   /** Force a fresh model-catalog fetch; requires a ready gateway. */
@@ -130,19 +162,23 @@ export class GatewaySupervisorService {
       const port = await this.allocatePort(preferred)
       const binPath = join(installDir, 'node_modules', adapter.npmPackage, adapter.binPath)
       await access(binPath)
+      if (adapter.runtime === 'node') await this.assertNodeRuntime()
+      const dashboardPassword = await this.ensureDashboardPassword(pluginId)
 
-      const child = spawn('bun', [binPath, ...adapter.serveArgs, '--port', String(port)], {
+      const child = spawn(this.runtimeCommand(adapter), [binPath, ...adapter.serveArgs], {
         cwd: installDir,
         env: {
           ...process.env,
           ...(adapter.env ?? {}),
-          PORT: String(port)
+          PORT: String(port),
+          DATA_DIR: this.dataDir(pluginId),
+          ...(dashboardPassword === undefined ? {} : { INITIAL_PASSWORD: dashboardPassword })
         },
         stdio: ['ignore', 'pipe', 'pipe']
       })
       const stderrTail = attachStderrTail(child)
 
-      this.journal?.register(child.pid ?? 0, `${adapter.npmPackage} serve --port ${port}`, installDir)
+      this.journal?.register(child.pid ?? 0, `node ${adapter.npmPackage} (PORT=${port})`, installDir)
       this.running.set(pluginId, { child, port, adapter })
 
       child.once('exit', () => {
@@ -226,10 +262,77 @@ export class GatewaySupervisorService {
     }))
   }
 
+  private async uninstallInner(pluginId: string): Promise<GatewayStatus> {
+    this.requireAdapter(pluginId)
+    await this.stopInner(pluginId)
+    await removeGatewayProviders(this.providers, pluginId)
+    const pluginDir = join(getConfigRoot(), 'gateways', pluginId)
+    await rm(join(pluginDir, 'install'), { recursive: true, force: true })
+    await rm(join(pluginDir, 'data'), { recursive: true, force: true })
+    await rm(join(pluginDir, 'catalog.json'), { force: true })
+    this.catalogCache.delete(pluginId)
+    return this.toStatus(
+      await this.mutateState(pluginId, (current) => ({
+        ...current,
+        lifecycle: 'not_installed',
+        detail: undefined,
+        boundPort: undefined,
+        installedVersion: undefined,
+        lastReadyAt: undefined
+      }))
+    )
+  }
+
+  private async updateInner(pluginId: string): Promise<GatewayStatus> {
+    const adapter = this.requireAdapter(pluginId)
+    const wasRunning = this.running.has(pluginId)
+    await this.stopInner(pluginId)
+    const dir = this.installDir(pluginId)
+    for (const entry of await readdir(dir).catch(() => [])) {
+      if (entry.startsWith('.codeinoven-installed-')) {
+        await rm(join(dir, entry), { force: true })
+      }
+    }
+    await this.ensureInstalled(pluginId, adapter)
+    if (wasRunning) return this.startInner(pluginId)
+    return this.toStatus((await this.loadStore()).plugins[pluginId])
+  }
+
+  /**
+   * Ensure a strong dashboard password exists in the vault. OmniRoute consumes
+   * it via the INITIAL_PASSWORD env var (headless deploy: skips the onboarding
+   * wizard and enables requireLogin).
+   */
+  private async ensureDashboardPassword(pluginId: string): Promise<string | undefined> {
+    if (!this.vault) return undefined
+    const ref = dashboardPasswordRef(pluginId)
+    if (!(await this.vault.exists(ref))) {
+      await this.vault.save(generatePassword(), ref)
+    }
+    try {
+      return await this.vault.resolve(ref)
+    } catch (error) {
+      Logger.error('Gateway dashboard password unavailable', {
+        pluginId,
+        error: error instanceof Error ? error.message : String(error)
+      })
+      return undefined
+    }
+  }
+
   // ─── Installation ───────────────────────────────────────────────────────────
 
   private installDir(pluginId: string): string {
     return join(getConfigRoot(), 'gateways', pluginId, 'install')
+  }
+
+  private dataDir(pluginId: string): string {
+    return join(getConfigRoot(), 'gateways', pluginId, 'data')
+  }
+
+  private runtimeCommand(adapter: GatewayAdapterDefinition): string {
+    if (adapter.runtime === 'bun') return 'bun'
+    return 'node'
   }
 
   private async ensureInstalled(
@@ -266,6 +369,25 @@ export class GatewaySupervisorService {
       this.bunVersionPromise = this.runCommand('bun', ['--version'], getConfigRoot(), 15_000)
     }
     return this.bunVersionPromise
+  }
+
+  /**
+   * Gateway servers run on the system Node, not Bun: OmniRoute's SQLite
+   * migrations fail under `bun:sqlite`, and Electron's embedded Node has a
+   * different native-module ABI than the prebuilt better-sqlite3 shipped in
+   * the package.
+   */
+  private async assertNodeRuntime(): Promise<void> {
+    if (!this.nodeVersionPromise) {
+      this.nodeVersionPromise = this.runCommand('node', ['--version'], getConfigRoot(), 15_000)
+    }
+    const version = await this.nodeVersionPromise
+    const major = Number.parseInt(version.replace(/^v/u, ''), 10)
+    if (!Number.isSafeInteger(major) || major < 22) {
+      throw new Error(
+        `The gateway requires Node.js 22 or newer on PATH (found ${version || 'none'})`
+      )
+    }
   }
 
   private runCommand(
@@ -467,6 +589,14 @@ function normalizeStopped(state: GatewayPluginState): GatewayLifecycleState {
   return state.lifecycle
 }
 
+function dashboardPasswordRef(pluginId: string): string {
+  return `gateway_${pluginId}_dashboard`
+}
+
+function generatePassword(): string {
+  return randomBytes(DASHBOARD_PASSWORD_BYTES).toString('base64url')
+}
+
 function isLoopbackPortFree(port: number): Promise<boolean> {
   return new Promise((resolve) => {
     const server = createServer()
@@ -510,9 +640,29 @@ function parseModelsPayload(payload: unknown): GatewayModelInfo[] {
   const models: GatewayModelInfo[] = []
   for (const entry of data) {
     if (typeof entry !== 'object' || entry === null) continue
-    const id = (entry as Record<string, unknown>)['id']
+    const raw = entry as Record<string, unknown>
+    const id = raw['id']
     if (typeof id !== 'string' || id.length === 0 || id.length > 256) continue
-    models.push({ id, name: id, reasoning: false })
+    const contextWindow = optionalPositiveInteger(raw['context_length'] ?? raw['contextWindow'])
+    const maxOutputTokens = optionalPositiveInteger(
+      raw['max_output_tokens'] ?? raw['maxOutputTokens']
+    )
+    const capabilities =
+      typeof raw['capabilities'] === 'object' && raw['capabilities'] !== null
+        ? (raw['capabilities'] as Record<string, unknown>)
+        : {}
+    models.push({
+      id,
+      name: id,
+      reasoning: capabilities['reasoning'] === true,
+      ...(contextWindow === undefined ? {} : { contextWindow }),
+      ...(maxOutputTokens === undefined ? {} : { maxOutputTokens })
+    })
   }
   return models
+}
+
+function optionalPositiveInteger(value: unknown): number | undefined {
+  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value <= 0) return undefined
+  return value
 }

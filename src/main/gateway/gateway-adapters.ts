@@ -16,13 +16,14 @@ export const GATEWAY_ADAPTERS: Record<string, GatewayAdapterDefinition> = {
       'Local AI router with an OpenAI/Anthropic-compatible API, provider fallbacks and a dashboard.',
     npmPackage: 'omniroute',
     version: '3.8.49',
-    binPath: 'bin/omniroute.mjs',
-    serveArgs: ['serve', '--no-open', '--no-tray', '--no-recovery'],
+    binPath: 'dist/server-ws.mjs',
+    runtime: 'node',
+    serveArgs: [],
     env: {
       NODE_ENV: 'production',
       OMNIROUTE_SERVER_HOST: '127.0.0.1'
     },
-    healthPaths: ['/api/health', '/api/monitoring/health'],
+    healthPaths: ['/api/monitoring/health', '/api/health'],
     modelsPath: '/v1/models',
     dashboardPath: '/',
     authMode: 'none',
