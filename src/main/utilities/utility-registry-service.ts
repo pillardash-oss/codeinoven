@@ -105,7 +105,7 @@ export class UtilityRegistryService {
         kind: 'skill',
         name: 'retrieve_mcp_host',
         description:
-          'Recovers the live app-managed MCP/utility gateway host when the previously advertised loopback port belongs to another or stopped CodeInOven instance.',
+          'Recovers the live app-managed MCP/utility gateway host from the CodeInOven instance that owns the exact current utility turn.',
         enabled: true,
         activation: 'always',
         scope: { level: 'global' },
