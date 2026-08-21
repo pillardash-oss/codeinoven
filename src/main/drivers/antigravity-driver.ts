@@ -654,7 +654,7 @@ export class AntigravityDriver extends PersistentCliDriver {
   }
 
   protected async buildTurnCommand(
-    _projectPath: string,
+    projectPath: string,
     session: PersistentCliSession,
     options: SendPromptOptions
   ): Promise<CliTurnCommand> {
@@ -664,7 +664,18 @@ export class AntigravityDriver extends PersistentCliDriver {
     // of the prompt unless the prompt directly follows `-p`. The prompt must
     // come immediately after `-p`, with every flag after it, or print mode
     // silently emits the model's plain-text response instead of NDJSON events.
-    const args: string[] = ['-p', prompt, '--output-format', 'stream-json']
+    // Antigravity keeps its model workspace separate from the process cwd.
+    // Register the resolved scope root explicitly or relative repository paths
+    // are rewritten beneath Antigravity's scratch directory and file writes are
+    // then rejected as invalid conversation-artifact paths.
+    const args: string[] = [
+      '-p',
+      prompt,
+      '--output-format',
+      'stream-json',
+      '--add-dir',
+      projectPath
+    ]
     if (session.nativeSessionId) args.push('--conversation', session.nativeSessionId)
     if (options.settings.modelId && options.settings.modelId !== 'default') {
       await this.ensureModelVariants()
