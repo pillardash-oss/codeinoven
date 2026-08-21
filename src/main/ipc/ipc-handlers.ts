@@ -667,6 +667,7 @@ function validateLocalProfileAnalyticsRange(value: unknown): LocalProfileAnalyti
 }
 const CONFIG_PATCH_FIELDS = new Set([
   'theme',
+  'onboardingCompleted',
   'threadLimit',
   'questionTimeoutMs',
   'slashCommandMode',
@@ -1359,6 +1360,13 @@ export function validateAppConfigPatch(value: unknown): AppConfigPatch {
       throw new TypeError('Invalid theme')
     }
     patch.theme = value.theme as AppConfigPatch['theme']
+  }
+
+  if ('onboardingCompleted' in value) {
+    if (typeof value.onboardingCompleted !== 'boolean') {
+      throw new TypeError('onboardingCompleted must be a boolean')
+    }
+    patch.onboardingCompleted = value.onboardingCompleted
   }
 
   if ('threadLimit' in value) {

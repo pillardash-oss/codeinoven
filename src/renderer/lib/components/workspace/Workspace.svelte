@@ -3476,7 +3476,12 @@
       style:grid-template-columns={contextPanelColumns}
       style:grid-template-rows={contextPanelRows}
     >
-      <div class="min-h-0 min-w-0 overflow-hidden" style:grid-column="1" style:grid-row="1">
+      <div
+        class="min-h-0 min-w-0 overflow-hidden"
+        style:grid-column="1"
+        style:grid-row="1"
+        data-onboarding="conversation"
+      >
         {#if selectedThread}
           <div class="relative flex h-full min-h-0 min-w-0 flex-col overflow-hidden">
             {#key selectedThread.id}

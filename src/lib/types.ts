@@ -3305,6 +3305,8 @@ export interface MemoryImportPreview {
 
 export interface AppConfig {
   theme: ThemePreference
+  /** True after the user finishes or dismisses the first-run setup guide. */
+  onboardingCompleted: boolean
   threadLimit: number
   /** Time before a pending agent question automatically selects its recommendation. */
   questionTimeoutMs: number
@@ -3367,6 +3369,7 @@ export type AppConfigPatch = Partial<
   Pick<
     AppConfig,
     | 'theme'
+    | 'onboardingCompleted'
     | 'threadLimit'
     | 'questionTimeoutMs'
     | 'slashCommandMode'

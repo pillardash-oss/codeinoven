@@ -1666,7 +1666,7 @@
   />
 {/if}
 
-<div class="chat-composer border bg-surface shadow-sm">
+<div class="chat-composer border bg-surface shadow-sm" data-onboarding="composer">
   {#if isDragging}
     <div
       role="region"
