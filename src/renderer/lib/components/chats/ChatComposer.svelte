@@ -61,6 +61,7 @@
   import ModelPicker from '../shared/ModelPicker.svelte'
   import { filterActions } from '$lib/actions'
   import { APP_NAME } from '$shared/brand'
+  import { publicAssetUrl } from '$lib/static-assets'
   import { isRemotePwaRuntime } from '$lib/runtime-context'
   import type { ActionDefinition, ActionSelection, ActionSource } from '$lib/actions'
   import type { RichInlineBadge } from '../shared/rich-markdown'
@@ -88,6 +89,7 @@
   type StartAfterSelection = Pick<Thread, 'id' | 'title'>
   const MAX_PROMPT_CHARACTERS = 200_000
   const LONG_PASTE_ATTACHMENT_CHARACTERS = 100_000
+  const codeInOvenIconUrl = publicAssetUrl('macos/AppIcon64.png')
 
   interface Props {
     /** Called with the trimmed message and attachments when the user sends.
@@ -351,6 +353,12 @@
   })
 
   let projectReferenceBadges = $derived<RichInlineBadge[]>([
+    {
+      iconSrc: codeInOvenIconUrl,
+      label: 'utility',
+      title: 'CodeInOven utility',
+      value: '@cio-utility'
+    },
     ...projectReferences.map((reference) => ({
       iconSrc: projectReferenceIcons[projectReferenceToken(reference)],
       label: reference.name,
