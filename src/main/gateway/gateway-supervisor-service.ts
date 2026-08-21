@@ -154,6 +154,66 @@ export class GatewaySupervisorService {
     await Promise.all([...this.running.keys()].map((pluginId) => this.stopInner(pluginId)))
   }
 
+  /**
+   * Kill gateway processes left orphaned by a crash or force-quit, then clear
+   * the journal. A journaled PID is only killed when a live process with that
+   * PID is orphaned (dead parent) AND its command still matches the gateway
+   * package, so a recycled PID belonging to an unrelated process is never
+   * touched. Must run before any start on this launch.
+   */
+  async recoverOrphans(): Promise<{ killed: number[]; skipped: number[] }> {
+    if (!this.journal) return { killed: [], skipped: [] }
+    const roots = await this.journal.load()
+    if (roots.length === 0) return { killed: [], skipped: [] }
+    const snapshot = await processSnapshot()
+    if (snapshot === null) {
+      Logger.error('Gateway orphan recovery is unsupported on this platform', {
+        platform: process.platform
+      })
+      return { killed: [], skipped: roots.map((root) => root.pid) }
+    }
+    const alive = new Set(snapshot.processes.keys())
+    const killed: number[] = []
+    const skipped: number[] = []
+    for (const root of roots) {
+      const entry = snapshot.processes.get(root.pid)
+      if (!entry) {
+        skipped.push(root.pid)
+        continue
+      }
+      const orphaned = entry.parentPid <= 1 || !alive.has(entry.parentPid)
+      const matchesGateway = GATEWAY_PROCESS_PATTERN.test(entry.command)
+      if (orphaned && matchesGateway) {
+        await killProcessTree(root.pid)
+        killed.push(root.pid)
+      } else {
+        skipped.push(root.pid)
+      }
+    }
+    this.journal.clear()
+    await this.journal.flush()
+    if (killed.length > 0) {
+      Logger.info('Reaped orphaned gateway processes', { killed })
+    }
+    return { killed, skipped }
+  }
+
+  /** Start every gateway whose plugin is enabled (used on app launch). */
+  async autoStartEnabled(): Promise<void> {
+    const store = await this.loadStore()
+    for (const state of Object.values(store.plugins)) {
+      if (!state.enabled || this.running.has(state.pluginId)) continue
+      try {
+        await this.start(state.pluginId)
+      } catch (error) {
+        Logger.error('Gateway auto-start failed', {
+          pluginId: state.pluginId,
+          error: error instanceof Error ? error.message : String(error)
+        })
+      }
+    }
+  }
+
   // ─── Lifecycle internals ────────────────────────────────────────────────────
 
   private async startInner(pluginId: string): Promise<GatewayStatus> {
@@ -188,7 +248,7 @@ export class GatewaySupervisorService {
 
       this.journal?.register(
         child.pid ?? 0,
-        `node ${adapter.npmPackage} (PORT=${port})`,
+        `codeinoven-gateway ${adapter.npmPackage} PORT=${port}`,
         installDir
       )
       this.running.set(pluginId, { child, port, adapter })
@@ -235,29 +295,35 @@ export class GatewaySupervisorService {
 
   private async stopInner(pluginId: string): Promise<GatewayStatus> {
     const instance = this.running.get(pluginId)
-    if (!instance) {
-      const state = (await this.loadStore()).plugins[pluginId]
-      if (!state) throw new Error(`Unknown gateway plugin: ${pluginId}`)
-      return this.toStatus({ ...state, lifecycle: 'stopped' })
-    }
-    this.setState(pluginId, { lifecycle: 'stopping' })
-    const child = instance.child
-    await new Promise<void>((resolve) => {
-      const killTimer = setTimeout(() => {
-        child.kill('SIGKILL')
-        resolve()
-      }, STOP_GRACE_MS)
-      child.once('exit', () => {
-        clearTimeout(killTimer)
-        resolve()
+    if (instance) {
+      this.setState(pluginId, { lifecycle: 'stopping' })
+      const child = instance.child
+      await new Promise<void>((resolve) => {
+        const killTimer = setTimeout(() => {
+          child.kill('SIGKILL')
+          resolve()
+        }, STOP_GRACE_MS)
+        child.once('exit', () => {
+          clearTimeout(killTimer)
+          resolve()
+        })
+        child.kill('SIGTERM')
       })
-      child.kill('SIGTERM')
+      this.running.delete(pluginId)
+      this.journal?.unregister(child.pid ?? 0)
+    }
+    // The endpoint is dead either way: synced harness provider records must not
+    // survive a stop, or harnesses keep offering models backed by a closed port.
+    await removeGatewayProviders(this.providers, pluginId).catch((error) => {
+      Logger.error('Gateway provider removal failed', {
+        pluginId,
+        error: error instanceof Error ? error.message : String(error)
+      })
     })
-    this.running.delete(pluginId)
-    this.journal?.unregister(child.pid ?? 0)
     const state = await this.mutateState(pluginId, (current) => ({
       ...current,
       lifecycle: 'stopped',
+      detail: undefined,
       boundPort: undefined
     }))
     return this.toStatus(state)
@@ -278,6 +344,7 @@ export class GatewaySupervisorService {
     this.requireAdapter(pluginId)
     await this.stopInner(pluginId)
     await removeGatewayProviders(this.providers, pluginId)
+    if (this.vault) await this.vault.remove(dashboardPasswordRef(pluginId))
     const pluginDir = join(getConfigRoot(), 'gateways', pluginId)
     await rm(join(pluginDir, 'install'), { recursive: true, force: true })
     await rm(join(pluginDir, 'data'), { recursive: true, force: true })
@@ -570,17 +637,18 @@ export class GatewaySupervisorService {
   private async toStatus(state: GatewayPluginState): Promise<GatewayStatus> {
     const adapter = getGatewayAdapter(state.adapterId)
     const snapshot = await this.cachedCatalog(state.pluginId)
-    const port =
-      state.lifecycle === 'ready' ? state.boundPort : this.running.get(state.pluginId)?.port
+    const running = this.running.get(state.pluginId)
+    const lifecycle = running ? state.lifecycle : normalizeStopped(state)
+    const port = running?.port
     return {
       pluginId: state.pluginId,
       adapterId: state.adapterId,
       adapterName: adapter?.name ?? state.adapterId,
       enabled: state.enabled,
-      lifecycle: this.running.has(state.pluginId) ? state.lifecycle : normalizeStopped(state),
+      lifecycle,
       ...(state.detail === undefined ? {} : { detail: state.detail }),
       ...(port === undefined ? {} : { port }),
-      ...(port === undefined
+      ...(port === undefined || lifecycle !== 'ready'
         ? {}
         : { dashboardUrl: `http://127.0.0.1:${port}${adapter?.dashboardPath ?? '/'}` }),
       ...(state.installedVersion === undefined ? {} : { installedVersion: state.installedVersion }),
@@ -611,6 +679,56 @@ function normalizeStopped(state: GatewayPluginState): GatewayLifecycleState {
 
 function dashboardPasswordRef(pluginId: string): string {
   return `gateway_${pluginId}_dashboard`
+}
+
+/** Live gateway server commands carry the package name (see journal entries). */
+const GATEWAY_PROCESS_PATTERN = /node_modules[/\\]omniroute|codeinoven-gateway/u
+
+interface ProcessSnapshot {
+  processes: Map<number, { parentPid: number; command: string }>
+}
+
+/**
+ * Unix process snapshot for orphan verification. Returns null on platforms
+ * where a reliable parentage view is unavailable, disabling recovery rather
+ * than risking a recycled-PID kill.
+ */
+async function processSnapshot(): Promise<ProcessSnapshot | null> {
+  if (process.platform === 'win32') return null
+  const { execFile } = await import('node:child_process')
+  const { promisify } = await import('node:util')
+  try {
+    const { stdout } = await promisify(execFile)('ps', ['-axo', 'pid=,ppid=,command='])
+    const processes = new Map<number, { parentPid: number; command: string }>()
+    for (const line of stdout.split(/\r?\n/u)) {
+      const match = line.match(/^\s*(\d+)\s+(\d+)\s+(.+)$/u)
+      if (!match) continue
+      processes.set(Number(match[1]), {
+        parentPid: Number(match[2]),
+        command: match[3]?.trim() || ''
+      })
+    }
+    return { processes }
+  } catch (error) {
+    Logger.error('Gateway process snapshot failed', {
+      error: error instanceof Error ? error.message : String(error)
+    })
+    return null
+  }
+}
+
+async function killProcessTree(pid: number): Promise<void> {
+  try {
+    process.kill(pid, 'SIGTERM')
+  } catch {
+    return
+  }
+  await sleep(STOP_GRACE_MS)
+  try {
+    process.kill(pid, 'SIGKILL')
+  } catch {
+    // Already gone.
+  }
 }
 
 function generatePassword(): string {

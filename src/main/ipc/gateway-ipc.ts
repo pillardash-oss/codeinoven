@@ -6,6 +6,7 @@ import { validateBoolean, validateEntityId } from './ipc-validation'
 import { BaseUrlProviderService } from '../providers/base-url-provider-service'
 import { GatewaySupervisorService } from '../gateway/gateway-supervisor-service'
 import { SecretVault } from '../storage/secret-vault'
+import type { OwnedProcessJournal } from '../system/owned-process-journal'
 import type { StorageEngine } from '../storage/storage-engine'
 
 /**
@@ -16,7 +17,8 @@ export function registerGatewayIpc(
   storage: StorageEngine,
   getWebContents: () => WebContents | null | undefined,
   providers = new BaseUrlProviderService(storage),
-  supervisor = new GatewaySupervisorService(storage, providers, new SecretVault(storage))
+  journal?: OwnedProcessJournal,
+  supervisor = new GatewaySupervisorService(storage, providers, new SecretVault(storage), journal)
 ): GatewaySupervisorService {
   supervisor.onStateChange((status) => {
     sendToRenderer(getWebContents(), 'gateway:state', status)

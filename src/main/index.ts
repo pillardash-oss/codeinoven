@@ -737,10 +737,24 @@ async function bootPostPaintServices(): Promise<void> {
     const { registerBaseUrlProviderIpc } = await import('./providers/base-url-provider-ipc')
     const { registerUtilityIpc } = await import('./ipc/utility-ipc')
     const { registerGatewayIpc } = await import('./ipc/gateway-ipc')
+    const { OwnedProcessJournal } = await import('./system/owned-process-journal')
     registerProviderAccountIpc()
     registerBaseUrlProviderIpc(storage)
     registerUtilityIpc(storage, undefined, undefined, undefined, computerUsePipService ?? undefined)
-    gatewaySupervisor = registerGatewayIpc(storage, () => mainWindow?.webContents ?? null)
+    gatewaySupervisor = registerGatewayIpc(
+      storage,
+      () => mainWindow?.webContents ?? null,
+      undefined,
+      new OwnedProcessJournal(join(getConfigRoot(), 'gateways', 'owned-processes.json'))
+    )
+    // Reap gateway processes orphaned by a previous crash before anything can
+    // bind their port again, then bring enabled gateways back up.
+    void gatewaySupervisor
+      .recoverOrphans()
+      .then(() => gatewaySupervisor?.autoStartEnabled())
+      .catch((error) => {
+        Logger.error('Gateway startup recovery failed (non-fatal):', error)
+      })
 
     // Wire PTY to the window now that it exists.
     if (mainWindow && !mainWindow.isDestroyed()) {

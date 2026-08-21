@@ -63,18 +63,24 @@ export async function syncGatewayProviders(
   for (const binding of HARNESS_BINDINGS) {
     const id = gatewayProviderId(pluginId, binding.harnessId)
     const current = await providers.getProvider(binding.harnessId, id)
-    const payload = {
-      harnessId: binding.harnessId,
-      npm: binding.npm,
-      name: `${adapterName} (gateway)`,
-      baseURL: `${rootUrl}${binding.pathSuffix}`,
-      models: toProviderModels(models),
-      enabled: true
-    }
     if (current) {
-      await providers.updateProvider(binding.harnessId, id, payload)
+      await providers.updateProvider(binding.harnessId, id, {
+        npm: binding.npm,
+        name: `${adapterName} (gateway)`,
+        baseURL: `${rootUrl}${binding.pathSuffix}`,
+        models: toProviderModels(models),
+        enabled: true
+      })
     } else {
-      await providers.createProvider(payload)
+      await providers.createProvider({
+        id,
+        harnessId: binding.harnessId,
+        npm: binding.npm,
+        name: `${adapterName} (gateway)`,
+        baseURL: `${rootUrl}${binding.pathSuffix}`,
+        models: toProviderModels(models),
+        enabled: true
+      })
     }
     synced.push(binding.harnessId)
   }
