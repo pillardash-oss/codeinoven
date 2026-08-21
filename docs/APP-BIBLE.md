@@ -236,6 +236,40 @@ Direct `spawn('bun', ...)`, `spawn('node', ...)`, `spawn('npm', ...)`, ad-hoc `P
 
 ---
 
+### 4.6 Scopes own workspace roots
+
+Scopes — not threads, renderer state, or individual services — are the single
+authority for a repository root.
+
+- Every scope persists a **root descriptor** on its version 2 board. The Default
+  scope and migrated custom scopes use `{ kind: 'project' }`; an explicitly
+  isolated scope uses a managed descriptor with `directoryName`, `branch`,
+  `baseBranch`, `baseCommit`, `createdAt`, `environmentMode`, and `setup` state.
+- Managed worktree paths are derived only beneath CodeInOven's per-project
+  config directory (`<config-root>/projects/<project-id>/scope/<directory-name>`).
+  The renderer never selects or supplies absolute worktree paths.
+- `ScopeRootResolver` in `src/main/workspaces/scope-root-resolver.ts` is the only
+  authority converting a `{ projectId, scopeBucketId }` target into a filesystem
+  root. Unhealthy managed scopes fail closed with a typed health category and
+  never fall back to the project directory.
+- `Thread.workingDirectory` is compatibility data, not authority. Creation,
+  movement, forks, and worker generation re-derive roots from the scope at
+  execution time.
+- Renderer layout saves cannot overwrite lifecycle metadata: boards are mutated
+  through validated main-owned operations (layout, appearance, create, archive,
+  worktree attach/detach, delete).
+- Same-scope threads and agents intentionally share one root; separate managed
+  worktree scopes are the isolation boundary.
+- Every destructive lifecycle action is guarded by a state-bound, single-use
+  confirmation preflight (dirty files, unpushed commits, active processes) and
+  a confirmation dialog.
+
+See `docs/GIT-WORKTREES.md` for the full operator-facing lifecycle, setup
+structure, environment modes, health categories, and confirmations.
+
+---
+
+
 ## 5. Agent Workflow Contract
 
 These rules bind every AI agent contributing to this repository. The operational work ethic is supplied by CodeInOven's application prompt layer and can be edited in Settings → Agents → Agent behavior:
