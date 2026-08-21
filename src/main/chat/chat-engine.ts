@@ -171,7 +171,7 @@ import { APP_NAME } from '../../lib/brand'
 import { DEFAULT_AGENT_BEHAVIOR_PROMPT } from '../../lib/agent-behavior'
 import { registerCioPromptDefault, type CioPromptId } from '../../lib/cio-prompts'
 import { estimateTokenCostUsd } from '../providers/pricing'
-import { ModelsDevContextService } from '../providers/models-dev-context-service'
+import { ModelPricingService } from '../providers/model-pricing-service'
 import { OpenUsageClient } from '../usage/openusage-client'
 import {
   budgetTurnLayers,
@@ -1283,7 +1283,6 @@ export class ChatEngine {
   private static readonly CATALOG_DRIVER_BUDGET_MS = 800
   private drivers = new Map<string, HarnessDriver>()
   private readonly openUsage = new OpenUsageClient()
-  private readonly modelsDevContext = new ModelsDevContextService()
   private sessionRegistry = new Map<string, SessionInfo>()
   private childSessionOwners = new Map<string, ChildSessionInfo>()
   private childCaptureTasks = new Map<string, Promise<AgentMessage[]>>()
@@ -1525,8 +1524,10 @@ export class ChatEngine {
     private harnessManifest?: import('../agents/harness-manifest-service').HarnessManifestService,
     private threadCreation?: ThreadCreationCoordinator,
     processJournalPath?: string,
-    private scopeRoots?: import('../../lib/engines/thread-manager').ThreadScopeRootProvider
+    private scopeRoots?: import('../../lib/engines/thread-manager').ThreadScopeRootProvider,
+    private modelPricing?: ModelPricingService
   ) {
+    this.modelPricing ??= new ModelPricingService(storage)
     this.agentProcesses.attachJournal(processJournalPath)
     this.threadCreation = threadCreation ?? new ThreadCreationCoordinator()
     this.usageRepo = new HarnessUsageRepo(database)
@@ -2866,7 +2867,7 @@ export class ChatEngine {
           supportsAttachments: driver.capabilities.attachments
         }))
       )
-      .then((catalogs) => this.modelsDevContext.enrichMissing(catalogs))
+      .then((catalogs) => this.modelPricing?.enrichMissingContext(catalogs) ?? catalogs)
     let timer: ReturnType<typeof setTimeout> | undefined
     try {
       const catalogs = await Promise.race([

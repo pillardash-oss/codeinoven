@@ -550,7 +550,8 @@ async function bootPostPaintServices(): Promise<void> {
     harnessManifestService,
     threadCreation,
     join(app.getPath('userData'), 'owned-processes.json'),
-    scopeRootProvider(scopeRootResolver)
+    scopeRootProvider(scopeRootResolver),
+    modelPricingService
   )
   // Merge the app-managed lean opencode agents into the machine-wide global
   // config. Idempotent, additive-only and non-fatal; runs after first paint
