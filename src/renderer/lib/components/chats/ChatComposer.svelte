@@ -55,7 +55,7 @@
   import Switch from '../ui/Switch.svelte'
   import ContextUsageIndicator from './ContextUsageIndicator.svelte'
   import ProjectFileMentionMenu from './ProjectFileMentionMenu.svelte'
-  import type { ComposerMentionEntry } from './composer-mentions'
+  import { composerMentionQuery, type ComposerMentionEntry } from './composer-mentions'
   import SlashActionMenu from '../actions/SlashActionMenu.svelte'
   import RichMarkdownEditor from '../shared/RichMarkdownEditor.svelte'
   import ModelPicker from '../shared/ModelPicker.svelte'
@@ -876,12 +876,11 @@
   }
 
   async function updateFileMention(nextValue: string): Promise<void> {
-    const match = /(^|\s)@([^\s@]*)$/u.exec(nextValue)
-    if (!match) {
+    const query = composerMentionQuery(nextValue)
+    if (query === null) {
       mentionOpen = false
       return
     }
-    const query = match[2] ?? ''
     const requestId = ++mentionRequestId
     try {
       const normalizedQuery = query.trim().toLocaleLowerCase()
@@ -926,8 +925,7 @@
 
   function scheduleFileMentionSearch(textBeforeCaret: string): void {
     clearTimeout(mentionSearchTimer)
-    const match = /(^|\s)@([^\s@]*)$/u.exec(textBeforeCaret)
-    if (!match) {
+    if (composerMentionQuery(textBeforeCaret) === null) {
       mentionRequestId += 1
       mentionOpen = false
       return

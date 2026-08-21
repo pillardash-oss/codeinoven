@@ -143,13 +143,14 @@ function renderInline(
     (left, right) => right.value.length - left.value.length
   )) {
     if (!badge.value) continue
-    prepared = prepared.replaceAll(badge.value, () => {
+    prepared = prepared.replaceAll(badge.value, (_match, offset: number, source: string) => {
       const icon = badge.iconSrc
         ? `<img src="${escapeHtml(badge.iconSrc)}" alt="" class="${INLINE_BADGE_ICON_CLASS}">`
         : ''
       const html = `<span contenteditable="false" data-editor-inline-badge="true" data-editor-value="${escapeHtml(badge.value)}" title="${escapeHtml(badge.title)}" class="${INLINE_BADGE_CLASS}">${icon}<span class="${INLINE_BADGE_LABEL_CLASS}">${escapeHtml(badge.label)}</span></span>`
       const index = badges.push(html)
-      return `\uE002${index - 1}\uE003`
+      const caretSeparator = offset + badge.value.length === source.length ? '\u00a0' : ''
+      return `\uE002${index - 1}\uE003${caretSeparator}`
     })
   }
 
