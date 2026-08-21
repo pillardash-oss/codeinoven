@@ -627,7 +627,10 @@ export class ScopeWorktreeService implements ManagedWorktreeInspector {
         timeoutMs: 60_000
       })
       return output.trim() ? output.split('\n').length : 0
-    } catch {
+    } catch (error) {
+      // A repo with no remote can legitimately produce no output; treat it as
+      // zero unpushed commits rather than surfacing a discovery failure.
+      if (error instanceof Error && error.message === 'git produced no output') return 0
       return 0
     }
   }

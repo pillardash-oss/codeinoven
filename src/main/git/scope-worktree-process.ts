@@ -51,7 +51,8 @@ export async function runGit(
     options.timeoutMs ?? 60_000
   )
   if (timedOut) throw new Error(`git command timed out: git ${args[0] ?? ''}`)
-  if (!stdout) throw new Error('git produced no output')
+  // Many git verbs (worktree remove, branch -D, fetch, …) legitimately emit no
+  // output; only callers that need discovery output guard for it themselves.
   return stdout
 }
 
