@@ -235,6 +235,21 @@ export interface ScopeLifecyclePreflight {
   createdAt: number
 }
 
+/** Bounded progress events for managed-worktree creation and setup. */
+export interface ScopeWorktreeProgress {
+  stage:
+    | 'none'
+    | 'naming'
+    | 'discovering-repository'
+    | 'creating-worktree'
+    | 'persisting-association'
+    | 'environment'
+    | 'setup'
+    | 'done'
+    | 'failed'
+  detail?: string
+}
+
 export interface ProjectFileEntry {
   name: string
   path: string

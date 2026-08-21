@@ -5,10 +5,18 @@ import { APP_SLUG } from '$shared/brand'
 import {
   DEFAULT_SCOPE_BUCKET_ID,
   isOrchestrationChildThread,
+  type ManagedWorktreeDescriptor,
   type Project,
   type ScopeBoard,
   type ScopeBucket,
+  type ScopeEnvironmentMode,
+  type ScopeLifecycleAction,
+  type ScopeLifecyclePreflight,
   type ScopeSlice,
+  type ScopeTarget,
+  type ScopeWorktreeDefaults,
+  type ScopeWorktreeHealth,
+  type ScopeWorktreeProgress,
   type Thread,
   scopeSliceForStatus
 } from '$shared/types'
@@ -224,6 +232,10 @@ class ScopeState {
   /** Signal for ScopeView to create a thread in a specific bucket (triggered by Cmd+N). */
   requestCreateScopedThreadCount = $state(0)
   pendingCreateBucketId: string | null = $state(null)
+  /** Target-keyed health of managed worktrees, refreshed on demand. */
+  healthByTarget: Map<string, ScopeWorktreeHealth> = $state(new SvelteMap())
+  /** Transient worktree creation/setup progress. */
+  worktreeProgress = $state<ScopeWorktreeProgress>({ stage: 'none' })
   private loadSequence = 0
   private saveSequence = 0
 
@@ -685,6 +697,99 @@ class ScopeState {
         .map((thread) => thread.id)
     )
     this.allScopeThreads = this.allScopeThreads.filter((thread) => !removedIds.has(thread.id))
+  }
+
+  // ─── Managed worktree lifecycle ─────────────────────────────────────────
+
+  /** Create an isolated managed worktree for an existing scope bucket. */
+  async createWorktree(
+    projectId: string,
+    bucketId: string,
+    input: {
+      title: string
+      runSetup: boolean
+      environmentMode: ScopeEnvironmentMode
+    }
+  ): Promise<ManagedWorktreeDescriptor | null> {
+    this.worktreeProgress = { stage: 'naming' }
+    try {
+      const descriptor = await invoke(
+        'scope:worktree:create',
+        { projectId, scopeBucketId: bucketId },
+        input
+      )
+      this.worktreeProgress = { stage: 'done' }
+      await this.reloadBoard(projectId)
+      return descriptor
+    } catch (error) {
+      this.worktreeProgress = { stage: 'failed' }
+      this.error = error instanceof Error ? error.message : 'The worktree could not be created.'
+      throw error
+    }
+  }
+
+  /** Read the typed health of a managed scope worktree. */
+  async worktreeHealth(target: ScopeTarget): Promise<ScopeWorktreeHealth> {
+    const health = await invoke('scope:worktree:health', target)
+    this.healthByTarget.set(`${target.projectId}:${target.scopeBucketId}`, health)
+    return health
+  }
+
+  /** Compute a state-bound preflight and mint a single-use confirmation token. */
+  preflightWorktree(
+    projectId: string,
+    bucketId: string,
+    action: ScopeLifecycleAction
+  ): Promise<ScopeLifecyclePreflight> {
+    return invoke('scope:worktree:preflight', action, { projectId, scopeBucketId: bucketId })
+  }
+
+  /** Consume a confirmation token to apply a guarded lifecycle action. */
+  confirmWorktreeLifecycle(
+    projectId: string,
+    bucketId: string,
+    action: ScopeLifecycleAction,
+    confirmationId: string,
+    options?: { force?: boolean }
+  ): Promise<void> {
+    const target = { projectId, scopeBucketId: bucketId }
+    switch (action) {
+      case 'detach':
+        return invoke('scope:worktree:confirmDetach', target, confirmationId)
+      case 'remove-worktree':
+        return invoke(
+          'scope:worktree:confirmRemove',
+          target,
+          confirmationId,
+          options?.force ?? false
+        )
+      case 'delete-branch':
+        return invoke('scope:worktree:confirmDeleteBranch', target, confirmationId)
+      default:
+        return Promise.reject(new Error(`Unsupported lifecycle action for this path: ${action}`))
+    }
+  }
+
+  /** Retry from a failed/interrupted setup, or continue without setup. */
+  async retryWorktreeSetup(projectId: string, bucketId: string, runSetup: boolean): Promise<void> {
+    await invoke('scope:worktree:retrySetup', { projectId, scopeBucketId: bucketId }, { runSetup })
+    await this.reloadBoard(projectId)
+  }
+
+  /** Persistent project-level managed-worktree defaults. */
+  async setWorktreeDefaults(projectId: string, defaults: ScopeWorktreeDefaults): Promise<void> {
+    const board = await invoke('scope:setWorktreeDefaults', projectId, defaults)
+    const cloned = cloneBoard(board)
+    this.boards.set(projectId, cloned)
+    if (projectId === this.activeProjectId) this.board = cloned
+  }
+
+  private async reloadBoard(projectId: string): Promise<void> {
+    if (!projectId) return
+    const board = await invoke('scope:get', projectId)
+    const cloned = cloneBoard(board)
+    this.boards.set(projectId, cloned)
+    if (projectId === this.activeProjectId) this.board = cloned
   }
 }
 
