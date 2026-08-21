@@ -372,7 +372,8 @@ let retryScheduler: RetrySchedulerService | null = null
 let remoteCredentials: DeviceCredentialService | null = null
 let remoteMode: RemoteModeController | null = null
 let stopRemoteOwnershipListener: (() => void) | null = null
-let remoteRestorePromise: Promise<void> | null = null
+let remoteOwnershipPromise: Promise<void> | null = null
+let remoteOwnershipReconcilePending = false
 let modelPricingService: ModelPricingService | null = null
 /**
  * Resolved lazily so the `appfile://` preview protocol can be installed before
@@ -707,16 +708,26 @@ async function bootPostPaintServices(): Promise<void> {
       onSessionActiveChange: (active) => powerWakeService?.setRemoteSessionActive(active)
     })
 
-    const restoreRemoteModeIfOwner = (): void => {
-      if (!remoteMode || !instanceRegistry.isPreferredRemoteOwner() || remoteRestorePromise) return
-      remoteRestorePromise = remoteMode
-        .restoreRemoteMode()
-        .catch((error) => Logger.error('Remote mode restore failed (non-fatal):', error))
+    const reconcileRemoteTransportOwnership = (): void => {
+      if (!remoteMode) return
+      if (remoteOwnershipPromise) {
+        remoteOwnershipReconcilePending = true
+        return
+      }
+      remoteOwnershipReconcilePending = false
+      const operation = instanceRegistry.isPreferredRemoteOwner()
+        ? remoteMode.restoreRemoteMode()
+        : remoteMode.relinquishTransportOwnership()
+      remoteOwnershipPromise = operation
+        .catch((error) => Logger.error('Remote transport ownership handoff failed:', error))
         .finally(() => {
-          remoteRestorePromise = null
+          remoteOwnershipPromise = null
+          if (remoteOwnershipReconcilePending) reconcileRemoteTransportOwnership()
         })
     }
-    stopRemoteOwnershipListener = instanceRegistry.onLiveInstancesChanged(restoreRemoteModeIfOwner)
+    stopRemoteOwnershipListener = instanceRegistry.onLiveInstancesChanged(
+      reconcileRemoteTransportOwnership
+    )
 
     // Optional IPC — registered only after the services exist.
     if (updaterService) {
@@ -832,7 +843,7 @@ async function bootPostPaintServices(): Promise<void> {
 
     // Restore remote mode after paint so users can see app UI while the LAN
     // stack spins up in the background.
-    restoreRemoteModeIfOwner()
+    reconcileRemoteTransportOwnership()
 
     try {
       notificationService.start()

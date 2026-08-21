@@ -717,9 +717,9 @@ function relayMessage(socket: ServerWebSocket<RelaySocketData>, message: string 
     const activeDesktop = relayHub.desktopSocket(desktop.id)
     if (activeDesktop && activeDesktop !== socket) {
       // Multiple app processes share this desktop identity and database, but
-      // exactly one process must execute each RPC. Keep the current owner and
-      // let this follower enter quiet standby. The local instance registry
-      // elects a replacement owner when the current process exits.
+      // exactly one process must execute each RPC. Keep the current socket
+      // until the local instance registry makes the older process relinquish
+      // it; the retrying newer process then takes over without duplicate RPCs.
       socket.close(4000, 'remote-host-active')
       return
     }

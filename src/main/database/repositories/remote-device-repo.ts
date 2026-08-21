@@ -478,7 +478,7 @@ export class RemoteDeviceRepo {
       expires_at: number
       state: string
     }>(
-      'SELECT * FROM remote_pairing_bootstraps WHERE hash = ? ORDER BY issued_at DESC LIMIT 1',
+      'SELECT * FROM remote_pairing_bootstraps WHERE hash = ? ORDER BY issued_at DESC, rowid DESC LIMIT 1',
       hash
     )
     if (!row) return null
