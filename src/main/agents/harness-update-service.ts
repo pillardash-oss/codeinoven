@@ -3,6 +3,10 @@ import type { HarnessUpdateHandoff, HarnessUpdateStatus } from '../../lib/types'
 import { findHarness, listHarnesses } from './harness-registry'
 import type { ProviderConnectionService } from '../providers/provider-connection'
 import { Logger } from '../system/logger'
+import {
+  prepareHarnessTerminalHandoff,
+  prepareWslTerminalHandoff
+} from '../drivers/harness-runtime'
 
 /** Network timeout for a registry/release lookup — a slow network must never hang the UI. */
 const FETCH_TIMEOUT_MS = 10_000
@@ -238,18 +242,26 @@ export class HarnessUpdateService {
   }
 
   /** Build, but do not execute, the update handoff for the embedded terminal. */
-  handoff(harnessId: string): HarnessUpdateHandoff {
+  async handoff(harnessId: string): Promise<HarnessUpdateHandoff> {
     const definition = findHarness(harnessId)
     if (!definition) throw new Error(`Unknown harness: ${harnessId}`)
     const args = UPDATE_ARGS[harnessId]
     if (!args) {
       throw new Error(`No self-update command is configured for harness: ${harnessId}`)
     }
-    const installed = this.providers.getAll().find((candidate) => candidate.id === harnessId)
+    const provider = this.providers.getAll().find((candidate) => candidate.id === harnessId)
+    const prepared =
+      provider?.executionTarget?.kind === 'wsl' && provider.resolvedPath
+        ? prepareWslTerminalHandoff(
+            provider.executionTarget.distribution,
+            provider.resolvedPath,
+            args
+          )
+        : await prepareHarnessTerminalHandoff(definition.command, args)
     return {
       kind: 'terminal',
-      command: installed?.resolvedPath ?? definition.command,
-      args,
+      command: prepared.command,
+      args: prepared.args,
       title: `Update ${definition.name}`
     }
   }

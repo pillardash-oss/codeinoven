@@ -1,4 +1,3 @@
-import { spawn } from 'child_process'
 import type {
   AgentMessage,
   AgentPart,
@@ -28,42 +27,30 @@ import type {
   SendPromptOptions
 } from './driver.interface'
 import type { StorageEngine } from '../storage/storage-engine'
+import { runHarnessCommand } from './harness-runtime'
 
 /**
  * Antigravity CLI reads its stdin and hangs when that pipe stays open without
  * EOF or a terminal. Every short-lived probe (version, model list) must spawn
  * with stdin ignored so it exits promptly in a desktop context.
  */
-function runAgy(
+async function runAgy(
   args: string[],
   timeoutMs: number
 ): Promise<{ succeeded: boolean; stdout: string; stderr: string }> {
-  return new Promise((resolve) => {
-    const child = spawn('agy', args, {
+  try {
+    const result = await runHarnessCommand('agy', args, {
       env: buildProcessEnvironment(),
-      stdio: ['ignore', 'pipe', 'pipe']
+      timeoutMs
     })
-    let stdout = ''
-    let stderr = ''
-    const timer = setTimeout(() => {
-      child.kill()
-      resolve({ succeeded: false, stdout, stderr })
-    }, timeoutMs)
-    child.stdout?.on('data', (chunk: Buffer) => {
-      stdout += chunk.toString()
-    })
-    child.stderr?.on('data', (chunk: Buffer) => {
-      stderr += chunk.toString()
-    })
-    child.on('error', (error) => {
-      clearTimeout(timer)
-      resolve({ succeeded: false, stdout, stderr: error.message })
-    })
-    child.on('exit', (code) => {
-      clearTimeout(timer)
-      resolve({ succeeded: code === 0, stdout, stderr })
-    })
-  })
+    return { succeeded: true, ...result }
+  } catch (error) {
+    return {
+      succeeded: false,
+      stdout: '',
+      stderr: error instanceof Error ? error.message : String(error)
+    }
+  }
 }
 
 const AGY_PROBE_TIMEOUT_MS = 15_000

@@ -1,9 +1,8 @@
-import { execFile, spawn } from 'child_process'
+import { spawn } from 'child_process'
 import type { ChildProcess } from 'child_process'
 import { readFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
-import { promisify } from 'util'
 import { Logger } from '../system/logger'
 import type {
   AgentEvent,
@@ -52,14 +51,13 @@ import {
 } from './document-attachment'
 import { buildTitlePrompt, sanitizeGeneratedTitle } from '../chat/title-generator'
 import { leanAgentConfigMap } from '../opencode/opencode-agent-definitions'
+import { prepareHarnessInvocation, runHarnessCommand } from './harness-runtime'
 
 /** Time allowed for an opencode server to announce its port before giving up. */
 const SERVER_START_TIMEOUT_MS = 25000
 const MODEL_DISCOVERY_TIMEOUT_MS = 20_000
 const ACCOUNT_USAGE_TIMEOUT_MS = 10_000
 const ACCOUNT_USAGE_ENDPOINT = 'https://opencode.ai/zen/go/v1/usage'
-const execFileAsync = promisify(execFile)
-
 const OPENCODE_ACCOUNT_PROVIDER_IDS = ['opencode-go', 'opencode'] as const
 const OPENCODE_USAGE_WINDOWS: ReadonlyArray<{
   id: string
@@ -1044,11 +1042,10 @@ export class OpenCodeDriver implements HarnessDriver {
   }
 
   async ensureReady(projectPath: string): Promise<void> {
-    await execFileAsync('opencode', ['--version'], {
+    await runHarnessCommand('opencode', ['--version'], {
       cwd: projectPath,
       env: this.buildEnv(),
-      timeout: 5_000,
-      windowsHide: true
+      timeoutMs: 5_000
     })
   }
 
@@ -1579,12 +1576,11 @@ export class OpenCodeDriver implements HarnessDriver {
   }
 
   async listProviders(projectPath: string): Promise<ProviderCatalog[]> {
-    const { stdout } = await execFileAsync('opencode', ['models', '--verbose'], {
+    const { stdout } = await runHarnessCommand('opencode', ['models', '--verbose'], {
       cwd: projectPath,
       env: this.buildEnv(),
-      timeout: MODEL_DISCOVERY_TIMEOUT_MS,
-      maxBuffer: 16 * 1024 * 1024,
-      windowsHide: true
+      timeoutMs: MODEL_DISCOVERY_TIMEOUT_MS,
+      maxOutputBytes: 16 * 1024 * 1024
     })
     const rawProviders = new Map<string, Record<string, unknown>>()
     for (const model of parseOpenCodeModels(stdout)) {
@@ -2057,11 +2053,13 @@ export class OpenCodeDriver implements HarnessDriver {
     const env = runtime
       ? this.buildEnv(runtime)
       : buildProcessEnvironment({ ...process.env, ...(overlay?.env ?? {}) })
+    const prepared = await prepareHarnessInvocation('opencode', args, { cwd: projectPath, env })
 
     return new Promise((resolve, reject) => {
-      const child = spawn('opencode', args, {
-        cwd: projectPath,
-        env,
+      const child = spawn(prepared.command, prepared.args, {
+        ...(prepared.cwd ? { cwd: prepared.cwd } : {}),
+        env: prepared.env,
+        shell: prepared.shell,
         stdio: ['ignore', 'pipe', 'pipe']
       })
 
@@ -2130,11 +2128,16 @@ export class OpenCodeDriver implements HarnessDriver {
       projectPath,
       resolvedUtilities: []
     })
+    const args = ['serve', '--port', '0', '--hostname', '127.0.0.1']
+    const prepared = await prepareHarnessInvocation('opencode', args, {
+      cwd: projectPath,
+      env: buildProcessEnvironment({ ...process.env, ...(providerOverlay.env ?? {}) })
+    })
     return new Promise((resolve, reject) => {
-      const args = ['serve', '--port', '0', '--hostname', '127.0.0.1']
-      const child = spawn('opencode', args, {
-        cwd: projectPath,
-        env: buildProcessEnvironment({ ...process.env, ...(providerOverlay.env ?? {}) }),
+      const child = spawn(prepared.command, prepared.args, {
+        ...(prepared.cwd ? { cwd: prepared.cwd } : {}),
+        env: prepared.env,
+        shell: prepared.shell,
         stdio: ['ignore', 'pipe', 'pipe']
       })
 

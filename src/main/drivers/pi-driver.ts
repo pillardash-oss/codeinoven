@@ -40,7 +40,12 @@ import {
 import { inlineSvgAttachments, isSvgAttachment } from './svg-attachment'
 import { piMcpExtension } from './pi-mcp-extension'
 import { piCustomProvidersExtension } from './pi-providers-extension'
-import { PiRpcClient, resolvePiExecutable } from './pi-rpc-client'
+import { PiRpcClient } from './pi-rpc-client'
+import {
+  prepareHarnessInvocation,
+  resolveHarnessRuntime,
+  runHarnessCommand
+} from './harness-runtime'
 
 const THINKING_PRESETS: ThinkingPreset[] = [
   { id: 'minimal', label: 'Minimal', description: 'Minimum reasoning effort' },
@@ -657,7 +662,6 @@ export class PiDriver extends PersistentCliDriver {
   private sessionProjects = new Map<string, string>()
   private activeTurns = new Set<string>()
   private pendingUiRequests = new Map<string, PiUiRequest>()
-  private piExecutable: Promise<string | null> | null = null
   private nativeMcpConfigSupport: Promise<boolean> | null = null
 
   constructor(
@@ -672,9 +676,14 @@ export class PiDriver extends PersistentCliDriver {
     return this.generateTitleWithCandidates(projectPath, options, [])
   }
 
-  protected async ensureCliReady(): Promise<void> {
-    const executable = await this.resolvePiExecutable()
-    if (!executable) {
+  protected async ensureCliReady(projectPath: string): Promise<void> {
+    try {
+      await runHarnessCommand('pi', ['--version'], {
+        cwd: projectPath,
+        env: buildProcessEnvironment(),
+        timeoutMs: 5_000
+      })
+    } catch {
       throw new Error(
         'Pi is not installed. Install the Pi CLI globally, then retry. (npm i -g @earendil-works/pi-coding-agent)'
       )
@@ -682,11 +691,12 @@ export class PiDriver extends PersistentCliDriver {
   }
 
   async listProviders(projectPath: string): Promise<ProviderCatalog[]> {
-    const executable = await this.resolvePiExecutable()
-    if (!executable) return structuredClone(PI_FALLBACK_CATALOG)
+    if (!(await resolveHarnessRuntime('pi', projectPath))) {
+      return structuredClone(PI_FALLBACK_CATALOG)
+    }
     try {
       const overlay = await this.buildProviderOverlay(projectPath)
-      const models = await this.discoverModels(projectPath, overlay, executable)
+      const models = await this.discoverModels(projectPath, overlay)
       await overlay.cleanup()
       if (models.length === 0) return structuredClone(PI_FALLBACK_CATALOG)
       const byProvider = new Map<string, ProviderModel[]>()
@@ -725,15 +735,15 @@ export class PiDriver extends PersistentCliDriver {
 
   private async discoverModels(
     projectPath: string,
-    overlay: ProviderOverlay,
-    executable: string
+    overlay: ProviderOverlay
   ): Promise<Array<Record<string, unknown>>> {
     let models: unknown
-    const client = new PiRpcClient({
-      executable,
+    const invocation = await prepareHarnessInvocation('pi', ['--mode', 'rpc', ...overlay.args], {
       cwd: projectPath,
-      env: { ...buildProcessEnvironment(), ...overlay.env },
-      args: overlay.args
+      env: { ...buildProcessEnvironment(), ...overlay.env }
+    })
+    const client = new PiRpcClient({
+      invocation
     })
     try {
       await client.newSession()
@@ -756,38 +766,34 @@ export class PiDriver extends PersistentCliDriver {
   }
 
   private async probeNativeMcpConfig(): Promise<boolean> {
-    const executable = await this.resolvePiExecutable()
-    if (!executable) return false
-    const { execFile } = await import('node:child_process')
-    const help = await new Promise<string>((resolve) => {
-      execFile(
-        executable,
-        ['--help'],
-        {
+    let help: string
+    try {
+      help = (
+        await runHarnessCommand('pi', ['--help'], {
           env: buildProcessEnvironment(),
-          timeout: 10_000
-        },
-        (error, stdout) => {
-          resolve(error ? '' : stdout)
-        }
-      )
-    })
+          timeoutMs: 10_000
+        })
+      ).stdout
+    } catch {
+      return false
+    }
     // The flag is registered by the pi-mcp-adapter extension; absent the
     // adapter, pi rejects `--mcp-config` as an unknown flag.
     return /\bmcp-config\b/u.test(help) || /--mcp-config/u.test(help)
   }
 
   override async listCommands(projectPath?: string): Promise<HarnessCommand[]> {
-    const executable = await this.resolvePiExecutable()
-    if (!executable) return []
     // Commands are project-scoped in pi; probe them in a disposable session so
     // the running turn is untouched. Fall back to the last seen project when the
     // caller omits the path (the base class declares a no-arg signature).
     const cwd = projectPath ?? [...this.sessionProjects.values()][0] ?? process.cwd()
-    const client = new PiRpcClient({
-      executable,
+    if (!(await resolveHarnessRuntime('pi', cwd))) return []
+    const invocation = await prepareHarnessInvocation('pi', ['--mode', 'rpc'], {
       cwd,
       env: buildProcessEnvironment()
+    })
+    const client = new PiRpcClient({
+      invocation
     })
     try {
       await client.newSession()
@@ -1109,20 +1115,20 @@ export class PiDriver extends PersistentCliDriver {
           ])
         )
       : {}
-    const executable = await this.resolvePiExecutable()
-    if (!executable) {
+    if (!(await resolveHarnessRuntime('pi', projectPath))) {
       throw new Error(
         'Pi is not installed. Install the Pi CLI globally, then retry. (npm i -g @earendil-works/pi-coding-agent)'
       )
     }
-    const client = new PiRpcClient({
-      executable,
+    const invocation = await prepareHarnessInvocation('pi', ['--mode', 'rpc', ...args], {
       cwd: projectPath,
       env: {
         ...buildProcessEnvironment(),
         ...runtimeEnv
-      },
-      args,
+      }
+    })
+    const client = new PiRpcClient({
+      invocation,
       onEvent: (record) => {
         void this.handleRpcEvent(record, sessionId, projectPath)
       },
@@ -1153,11 +1159,6 @@ export class PiDriver extends PersistentCliDriver {
       )
     }
     return client
-  }
-
-  private resolvePiExecutable(): Promise<string | null> {
-    this.piExecutable ??= resolvePiExecutable()
-    return this.piExecutable
   }
 
   /** Mirror the native pi session id so driver records stay addressable. */

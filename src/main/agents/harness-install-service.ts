@@ -7,6 +7,7 @@ import type {
 } from '../../lib/types'
 import { findHarness } from './harness-registry'
 import type { ProviderConnectionService } from '../providers/provider-connection'
+import { prepareWslTerminalHandoff } from '../drivers/harness-runtime'
 
 type Platform = NodeJS.Platform
 
@@ -170,6 +171,14 @@ function expandHome(args: string[]): string[] {
   return args.map((arg) => (arg === '~' ? home : arg.replace(/^~(?=\/|$)/u, home)))
 }
 
+function shellQuote(value: string): string {
+  return `'${value.replace(/'/gu, `'"'"'`)}'`
+}
+
+function wslShellArgument(value: string): string {
+  return value.startsWith('~/') ? `"$HOME"/${shellQuote(value.slice(2))}` : shellQuote(value)
+}
+
 /**
  * Provides install pages and uninstall handoffs for the coding harnesses.
  * Like the update flow, main never executes an install or uninstall on its
@@ -192,11 +201,12 @@ export class HarnessInstallService {
   getInfo(harnessId: string): HarnessInstallInfo {
     const definition = findHarness(harnessId)
     if (!definition) throw new Error(`Unknown harness: ${harnessId}`)
-    const platform = process.platform as Platform
+    const provider = this.providers.getAll().find((candidate) => candidate.id === harnessId)
+    const platform: Platform =
+      provider?.executionTarget?.kind === 'wsl' ? 'linux' : process.platform
     const pageUrl = INSTALL_PAGES[harnessId]?.[platform] ?? INSTALL_PAGES[harnessId]?.linux
     if (!pageUrl) throw new Error(`No install page is configured for harness: ${harnessId}`)
 
-    const provider = this.providers.getAll().find((candidate) => candidate.id === harnessId)
     const detectedMethod =
       provider?.status === 'available' ? detectMethod(harnessId, provider.resolvedPath) : undefined
 
@@ -209,7 +219,7 @@ export class HarnessInstallService {
   }
 
   /** Build, but do not execute, the uninstall handoff for the embedded terminal. */
-  uninstallHandoff(harnessId: string): HarnessUninstallHandoff {
+  async uninstallHandoff(harnessId: string): Promise<HarnessUninstallHandoff> {
     const definition = findHarness(harnessId)
     if (!definition) throw new Error(`Unknown harness: ${harnessId}`)
 
@@ -224,6 +234,23 @@ export class HarnessInstallService {
       throw new Error(
         `No documented uninstall command exists for ${definition.name} (${method} install).`
       )
+    }
+
+    if (provider.executionTarget?.kind === 'wsl') {
+      const script = [command.command, ...command.args]
+        .map((value) => wslShellArgument(value))
+        .join(' ')
+      const prepared = prepareWslTerminalHandoff(provider.executionTarget.distribution, 'sh', [
+        '-lc',
+        script
+      ])
+      return {
+        kind: 'terminal',
+        command: prepared.command,
+        args: prepared.args,
+        title: `Uninstall ${definition.name}`,
+        method
+      }
     }
 
     return {

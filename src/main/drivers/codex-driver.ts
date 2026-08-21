@@ -1,8 +1,7 @@
-import { execFile, spawn, type ChildProcess } from 'child_process'
+import { spawn, type ChildProcess } from 'child_process'
 import { promises as fs } from 'fs'
 import { basename } from 'path'
 import { fileURLToPath } from 'url'
-import { promisify } from 'util'
 import type {
   AgentEvent,
   AgentQuestion,
@@ -48,8 +47,7 @@ import {
   type PersistentCliSession
 } from './persistent-cli-driver'
 import { inlineSvgAttachments, isSvgAttachment } from './svg-attachment'
-
-const execFileAsync = promisify(execFile)
+import { prepareHarnessInvocation, runHarnessCommand } from './harness-runtime'
 
 const THINKING_PRESETS: ThinkingPreset[] = [
   { id: 'minimal', label: 'Minimal', description: 'Minimum reasoning effort' },
@@ -287,9 +285,9 @@ export class CodexDriver extends PersistentCliDriver {
 
   protected async ensureCliReady(): Promise<void> {
     try {
-      await execFileAsync('codex', ['--version'], {
+      await runHarnessCommand('codex', ['--version'], {
         env: buildProcessEnvironment(),
-        timeout: 10_000
+        timeoutMs: 10_000
       })
     } catch (error) {
       const detail = error instanceof Error ? error.message : 'unknown error'
@@ -689,15 +687,20 @@ export class CodexDriver extends PersistentCliDriver {
   private async createAppServerHost(projectPath: string): Promise<CodexAppServerHost> {
     const { env: providerEnv, args: providerArgs } = await this.customProviderOverlay()
     const featureArgs = CODEX_APP_SERVER_FEATURES.flatMap((feature) => ['--enable', feature])
-    const child = spawn(
+    const prepared = await prepareHarnessInvocation(
       'codex',
       [...providerArgs, 'app-server', ...featureArgs, '--listen', 'stdio://'],
       {
         cwd: projectPath,
-        env: { ...buildProcessEnvironment(), ...providerEnv },
-        stdio: ['pipe', 'pipe', 'pipe']
+        env: { ...buildProcessEnvironment(), ...providerEnv }
       }
     )
+    const child = spawn(prepared.command, prepared.args, {
+      ...(prepared.cwd ? { cwd: prepared.cwd } : {}),
+      env: prepared.env,
+      shell: prepared.shell,
+      stdio: ['pipe', 'pipe', 'pipe']
+    })
     const host: CodexAppServerHost = {
       child,
       nextRequestId: 0,

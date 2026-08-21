@@ -564,6 +564,8 @@ export type ProviderType = 'cli' | 'api' | 'hybrid'
 /** Live connection state of a provider harness on this machine. */
 export type ProviderConnectionStatus = 'idle' | 'checking' | 'available' | 'not_found' | 'error'
 
+export type HarnessExecutionTarget = { kind: 'native' } | { kind: 'wsl'; distribution: string }
+
 export interface ProviderConnectionInfo {
   id: string
   name: string
@@ -575,6 +577,8 @@ export interface ProviderConnectionInfo {
   status: ProviderConnectionStatus
   /** Absolute path to the resolved binary, when found. */
   resolvedPath?: string
+  /** Host runtime that owns the resolved binary. */
+  executionTarget?: HarnessExecutionTarget
   /** First line of `<command> --version` output, when the probe succeeds. */
   version?: string
   /** Human-readable detail for error/not_found states. */

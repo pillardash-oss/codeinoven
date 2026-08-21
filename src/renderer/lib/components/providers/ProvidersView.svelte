@@ -121,7 +121,9 @@
       (provider) =>
         provider.name.toLowerCase().includes(query) ||
         provider.command.toLowerCase().includes(query) ||
-        (provider.resolvedPath?.toLowerCase().includes(query) ?? false)
+        (provider.resolvedPath?.toLowerCase().includes(query) ?? false) ||
+        (provider.executionTarget?.kind === 'wsl' &&
+          provider.executionTarget.distribution.toLowerCase().includes(query))
     )
   })
 
@@ -196,7 +198,10 @@
     if (provider.status === 'available' && provider.integration === 'ready') {
       return {
         Icon: CheckCircle2,
-        label: 'Ready',
+        label:
+          provider.executionTarget?.kind === 'wsl'
+            ? `Ready · WSL ${provider.executionTarget.distribution}`
+            : 'Ready · Native',
         classes: 'border-success/30 bg-success/10 text-success'
       }
     }
@@ -710,7 +715,11 @@
             </div>
 
             <div class="min-w-0">
-              <p class="text-[10px] font-medium uppercase tracking-wide text-dimmed">Path</p>
+              <p class="text-[10px] font-medium uppercase tracking-wide text-dimmed">
+                {provider.executionTarget?.kind === 'wsl'
+                  ? `WSL path · ${provider.executionTarget.distribution}`
+                  : 'Path'}
+              </p>
               <div class="mt-0.5 flex items-center gap-1.5">
                 <span
                   class="min-w-0 truncate font-mono text-xs text-muted"
@@ -941,8 +950,8 @@
     <div class="mt-6 rounded-xl border border-dashed p-4 text-center">
       <Plug size={18} class="mx-auto mb-1 text-dimmed" />
       <p class="text-xs text-dimmed">
-        Harnesses are detected from your system PATH and verified with a version probe. Install the
-        CLI tool and click Check.
+        Harnesses are detected from your system PATH and Windows Subsystem for Linux distributions,
+        then verified with a version probe. Install the CLI tool and click Check.
       </p>
     </div>
 

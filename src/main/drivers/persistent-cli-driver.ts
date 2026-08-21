@@ -23,6 +23,7 @@ import { Logger } from '../system/logger'
 import { estimateTokenCostUsd } from '../providers/pricing'
 import type { StorageEngine } from '../storage/storage-engine'
 import { buildProcessEnvironment } from './cli-environment'
+import { prepareHarnessInvocation } from './harness-runtime'
 import type {
   AgentEventCallback,
   AgentProcessObserver,
@@ -389,9 +390,14 @@ export abstract class PersistentCliDriver implements HarnessDriver {
     this.appendUserMessage(session, opts)
     let child: ChildProcess
     try {
-      child = spawn(invocation.command, invocationArgs, {
+      const prepared = await prepareHarnessInvocation(invocation.command, invocationArgs, {
         cwd: projectPath,
-        env: invocationEnv,
+        env: invocationEnv
+      })
+      child = spawn(prepared.command, prepared.args, {
+        ...(prepared.cwd ? { cwd: prepared.cwd } : {}),
+        env: prepared.env,
+        shell: prepared.shell,
         stdio: ['pipe', 'pipe', 'pipe']
       })
     } catch (error) {

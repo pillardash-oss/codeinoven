@@ -1,4 +1,3 @@
-import { spawn } from 'child_process'
 import { readFile, readdir } from 'node:fs/promises'
 import { homedir } from 'os'
 import { join } from 'path'
@@ -36,6 +35,7 @@ import type {
   SendPromptOptions
 } from './driver.interface'
 import type { StorageEngine } from '../storage/storage-engine'
+import { runHarnessCommand } from './harness-runtime'
 
 /**
  * Muse Code (Meta) headless integration notes.
@@ -249,36 +249,23 @@ async function readMuseModelCatalog(capabilities: MuseCliCapabilities): Promise<
  * terminal. Every short-lived probe (version) must spawn with stdin ignored so
  * it exits promptly in a desktop context.
  */
-function runMuse(
+async function runMuse(
   args: string[],
   timeoutMs: number
 ): Promise<{ succeeded: boolean; stdout: string; stderr: string }> {
-  return new Promise((resolve) => {
-    const child = spawn('muse', args, {
+  try {
+    const result = await runHarnessCommand('muse', args, {
       env: buildProcessEnvironment(),
-      stdio: ['ignore', 'pipe', 'pipe']
+      timeoutMs
     })
-    let stdout = ''
-    let stderr = ''
-    const timer = setTimeout(() => {
-      child.kill()
-      resolve({ succeeded: false, stdout, stderr })
-    }, timeoutMs)
-    child.stdout?.on('data', (chunk: Buffer) => {
-      stdout += chunk.toString()
-    })
-    child.stderr?.on('data', (chunk: Buffer) => {
-      stderr += chunk.toString()
-    })
-    child.on('error', (error) => {
-      clearTimeout(timer)
-      resolve({ succeeded: false, stdout, stderr: error.message })
-    })
-    child.on('exit', (code) => {
-      clearTimeout(timer)
-      resolve({ succeeded: code === 0, stdout, stderr })
-    })
-  })
+    return { succeeded: true, ...result }
+  } catch (error) {
+    return {
+      succeeded: false,
+      stdout: '',
+      stderr: error instanceof Error ? error.message : String(error)
+    }
+  }
 }
 
 function record(value: unknown): Record<string, unknown> | null {

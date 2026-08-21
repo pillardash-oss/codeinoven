@@ -2,7 +2,7 @@ import { execFile, spawn, type ChildProcess } from 'child_process'
 import { readFile } from 'node:fs/promises'
 import { basename } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import type { ModelInfo, SDKUserMessage } from '@anthropic-ai/claude-agent-sdk'
+import type { ModelInfo, SDKUserMessage, SpawnOptions } from '@anthropic-ai/claude-agent-sdk'
 import type {
   AgentQuestion,
   AgentMessage,
@@ -48,6 +48,12 @@ import type {
 import { InactiveQuestionTurnError } from './driver.interface'
 import { buildProcessEnvironment } from './cli-environment'
 import { attachmentReference } from './attachment-reference'
+import {
+  buildWslProcessEnvironment,
+  prepareHarnessInvocation,
+  resolveHarnessRuntime,
+  runHarnessCommand
+} from './harness-runtime'
 
 const THINKING_PRESETS: ThinkingPreset[] = [
   { id: 'low', label: 'Low', description: 'Low reasoning effort' },
@@ -295,13 +301,30 @@ function keepClaudeDiscoveryOpen(): AsyncIterable<SDKUserMessage> {
 }
 
 async function discoverClaudeModels(projectPath: string): Promise<ProviderModel[]> {
+  const runtime = await resolveHarnessRuntime('claude', projectPath)
+  if (!runtime) throw new Error('Claude Code CLI is unavailable')
   const { query } = await import('@anthropic-ai/claude-agent-sdk')
+  const wslDistribution = runtime.target.kind === 'wsl' ? runtime.target.distribution : undefined
+  const spawnClaudeCodeProcess = wslDistribution
+    ? (options: SpawnOptions) =>
+        spawn(
+          runtime.executable,
+          ['--distribution', wslDistribution, '--', runtime.resolvedPath, ...options.args],
+          {
+            ...(options.cwd ? { cwd: options.cwd } : {}),
+            env: buildWslProcessEnvironment(options.env),
+            signal: options.signal,
+            stdio: ['pipe', 'pipe', 'ignore']
+          }
+        )
+    : undefined
   const handle = query({
     prompt: keepClaudeDiscoveryOpen(),
     options: {
       cwd: projectPath,
       env: buildClaudeEnvironment(),
-      pathToClaudeCodeExecutable: 'claude',
+      pathToClaudeCodeExecutable: runtime.resolvedPath,
+      ...(spawnClaudeCodeProcess ? { spawnClaudeCodeProcess } : {}),
       tools: []
     }
   })
@@ -1752,38 +1775,10 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
   protected async ensureCliReady(projectPath: string): Promise<void> {
     const release = await this.oneShotSpawnGate.acquire()
     try {
-      await new Promise<void>((resolve, reject) => {
-        let child: ChildProcess
-        try {
-          child = spawn('claude', ['--version'], {
-            cwd: projectPath,
-            env: buildClaudeEnvironment(),
-            stdio: ['ignore', 'ignore', 'pipe']
-          })
-        } catch (error) {
-          reject(
-            new Error(
-              `Claude Code CLI is unavailable: ${error instanceof Error ? error.message : String(error)}`
-            )
-          )
-          return
-        }
-        let stderr = ''
-        child.stderr?.on('data', (chunk: Buffer) => {
-          stderr += chunk.toString()
-        })
-        child.on('error', (error) =>
-          reject(new Error(`Claude Code CLI is unavailable: ${error.message}`))
-        )
-        child.on('exit', (code) =>
-          code === 0
-            ? resolve()
-            : reject(
-                new Error(
-                  `Claude Code CLI version probe failed${stderr ? `: ${stderr.trim()}` : ''}`
-                )
-              )
-        )
+      await runHarnessCommand('claude', ['--version'], {
+        cwd: projectPath,
+        env: buildClaudeEnvironment(),
+        timeoutMs: 10_000
       })
     } finally {
       release()
@@ -2007,36 +2002,51 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
     const now = Date.now()
     const cached = this.authProbeCache.get(projectPath)
     if (cached && now - cached.at < PRE_FLIGHT_AUTH_PROBE_TTL_MS) return cached.authenticated
-    const authenticated = await new Promise<boolean>((resolve) => {
+    let authenticated: boolean
+    if (process.platform !== 'win32') {
+      authenticated = await new Promise<boolean>((resolve) => {
+        try {
+          execFile(
+            'claude',
+            ['auth', 'status', '--json'],
+            {
+              cwd: projectPath,
+              env: buildClaudeEnvironment(),
+              timeout: PRE_FLIGHT_AUTH_PROBE_TIMEOUT_MS,
+              maxBuffer: 1024 * 1024
+            },
+            (error, stdout) => {
+              if (error) {
+                resolve(true)
+                return
+              }
+              try {
+                const parsed = JSON.parse(stdout) as { loggedIn?: unknown }
+                resolve(parsed['loggedIn'] === true)
+              } catch {
+                resolve(true)
+              }
+            }
+          )
+        } catch {
+          resolve(true)
+        }
+      })
+    } else {
       try {
-        execFile(
-          'claude',
-          ['auth', 'status', '--json'],
-          {
-            cwd: projectPath,
-            env: buildClaudeEnvironment(),
-            timeout: PRE_FLIGHT_AUTH_PROBE_TIMEOUT_MS,
-            maxBuffer: 1024 * 1024
-          },
-          (error, stdout) => {
-            if (error) {
-              resolve(true)
-              return
-            }
-            try {
-              const parsed = JSON.parse(stdout) as { loggedIn?: unknown }
-              resolve(parsed['loggedIn'] === true)
-            } catch {
-              resolve(true)
-            }
-          }
-        )
+        const { stdout } = await runHarnessCommand('claude', ['auth', 'status', '--json'], {
+          cwd: projectPath,
+          env: buildClaudeEnvironment(),
+          timeoutMs: PRE_FLIGHT_AUTH_PROBE_TIMEOUT_MS,
+          maxOutputBytes: 1024 * 1024
+        })
+        const parsed = JSON.parse(stdout) as { loggedIn?: unknown }
+        authenticated = parsed['loggedIn'] === true
       } catch {
-        // Spawn itself threw synchronously (e.g. EBADF when the process is low
-        // on file descriptors). Fail open so the turn still has a chance.
-        resolve(true)
+        // Fail open so the turn still has a chance to report the real error.
+        authenticated = true
       }
-    })
+    }
     this.authProbeCache.delete(projectPath)
     if (authenticated) this.authProbeCache.set(projectPath, { authenticated, at: now })
     return authenticated
@@ -2205,29 +2215,24 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
       return this.mapAccountUsage(await this.readUsageFromActiveSession(activeSessionId))
     }
     try {
+      const prepared = await prepareHarnessInvocation(
+        'claude',
+        ['--print', '--output-format', 'stream-json', '--input-format', 'stream-json', '--verbose'],
+        { cwd: projectPath, env: buildClaudeEnvironment() }
+      )
       const telemetry = await this.runAuthSerialized(
         () =>
           new Promise<Record<string, unknown> | null>((resolve) => {
             let child: ChildProcess
             try {
-              child = spawn(
-                'claude',
-                [
-                  '--print',
-                  '--output-format',
-                  'stream-json',
-                  '--input-format',
-                  'stream-json',
-                  '--verbose'
-                ],
-                {
-                  cwd: projectPath,
-                  env: buildClaudeEnvironment(),
-                  // Usage telemetry is a side channel; do not leave a piped
-                  // stderr buffer undrained while the probe waits for JSON.
-                  stdio: ['pipe', 'pipe', 'ignore']
-                }
-              )
+              child = spawn(prepared.command, prepared.args, {
+                ...(prepared.cwd ? { cwd: prepared.cwd } : {}),
+                env: prepared.env,
+                shell: prepared.shell,
+                // Usage telemetry is a side channel; do not leave a piped
+                // stderr buffer undrained while the probe waits for JSON.
+                stdio: ['pipe', 'pipe', 'ignore']
+              })
             } catch {
               // Spawn itself threw synchronously (e.g. EBADF when the process is
               // low on file descriptors). Report no usage rather than rejecting.

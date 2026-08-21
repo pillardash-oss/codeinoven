@@ -1,4 +1,3 @@
-import { spawn } from 'child_process'
 import { createHash } from 'crypto'
 import { mkdir, readFile, readdir, rm, unlink, writeFile } from 'fs/promises'
 import { homedir } from 'os'
@@ -30,7 +29,8 @@ import type {
 } from './driver.interface'
 import { PermissionPolicy, type PermissionRequest } from '../permissions/permission-policy'
 import { Logger } from '../system/logger'
-import { buildProcessEnvironment, resolveExecutablePath } from './cli-environment'
+import { buildProcessEnvironment } from './cli-environment'
+import { resolveHarnessRuntime, runHarnessCommand } from './harness-runtime'
 import { attachmentReferences } from './attachment-reference'
 import type { BaseUrlProviderService } from '../providers/base-url-provider-service'
 import type { SecretVault } from '../storage/secret-vault'
@@ -337,7 +337,7 @@ async function isClineAvailable(): Promise<boolean> {
   ) {
     return clineAvailabilityCache.available
   }
-  const available = resolveExecutablePath('cline', buildProcessEnvironment()) !== undefined
+  const available = (await resolveHarnessRuntime('cline')) !== null
   clineAvailabilityCache = { checkedAt: Date.now(), available }
   return available
 }
@@ -885,24 +885,10 @@ export class ClineDriver extends PersistentCliDriver {
   }
 
   protected async ensureCliReady(projectPath: string): Promise<void> {
-    await new Promise<void>((resolve, reject) => {
-      const child = spawn('cline', ['--version'], {
-        cwd: projectPath,
-        env: buildProcessEnvironment(),
-        stdio: ['ignore', 'ignore', 'pipe']
-      })
-      let stderr = ''
-      child.stderr?.on('data', (chunk: Buffer) => {
-        stderr += chunk.toString()
-      })
-      child.on('error', (error) => reject(new Error(`Cline CLI is unavailable: ${error.message}`)))
-      child.on('exit', (code) => {
-        if (code === 0) {
-          resolve()
-        } else {
-          reject(new Error(`Cline CLI version probe failed${stderr ? `: ${stderr.trim()}` : ''}`))
-        }
-      })
+    await runHarnessCommand('cline', ['--version'], {
+      cwd: projectPath,
+      env: buildProcessEnvironment(),
+      timeoutMs: 10_000
     })
   }
 

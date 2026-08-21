@@ -1,18 +1,17 @@
 import { BrowserWindow } from 'electron'
 import { trustedIpcMain as ipcMain } from '../ipc/trusted-ipc-main'
-import { spawn } from 'child_process'
 import type { ProviderConnectionInfo } from '../../lib/types'
-import { buildProcessEnvironment, resolveExecutablePath } from '../drivers/cli-environment'
 import { findHarness, listHarnesses, type HarnessDescriptor } from '../agents/harness-registry'
 import { forwardRemoteEvent } from '../remote/remote-event-forwarder'
 import { sendToRenderer } from '../ipc/renderer-delivery'
+import {
+  discoverHarnessRuntimes,
+  probeHarnessRuntime,
+  type HarnessRuntime
+} from '../drivers/harness-runtime'
 
-/** Probe timeout — harnesses that hang longer than this are marked as error. */
-const PROBE_TIMEOUT_MS = 8000
 /** Reopening Settings inside this window reuses the last completed probe pass. */
 const PROBE_CACHE_TTL_MS = 60_000
-/** A version command should emit one line. Cap broken CLIs before they consume RAM. */
-const MAX_PROBE_OUTPUT_BYTES = 64 * 1024
 /** Give Electron's main loop time between child processes on low-end machines. */
 const PROBE_YIELD_MS = 50
 /** Coalesce renderer work while still reporting progress during a full pass. */
@@ -100,7 +99,8 @@ export class ProviderConnectionService {
     }
 
     this.update({ ...current, status: 'checking', detail: undefined })
-    const result = await this.enqueueProbe(() => this.probe(def, this.buildEnv()))
+    const runtime = (await discoverHarnessRuntimes([def.command], { force: true })).get(def.command)
+    const result = await this.enqueueProbe(() => this.probe(def, runtime ?? null))
     this.update(result)
     return result
   }
@@ -109,7 +109,7 @@ export class ProviderConnectionService {
     if (!force && Date.now() - this.lastCheckedAt < PROBE_CACHE_TTL_MS) return this.getAll()
     if (this.checkAllInFlight) return this.checkAllInFlight
 
-    const check = this.runCheckAll()
+    const check = this.runCheckAll(force)
     this.checkAllInFlight = check
     try {
       return await check
@@ -118,10 +118,8 @@ export class ProviderConnectionService {
     }
   }
 
-  private async runCheckAll(): Promise<ProviderConnectionInfo[]> {
+  private async runCheckAll(force: boolean): Promise<ProviderConnectionInfo[]> {
     const harnesses = listHarnesses()
-    const env = this.buildEnv()
-
     for (const definition of harnesses) {
       const current = this.statuses.get(definition.id)
       if (current) {
@@ -133,9 +131,15 @@ export class ProviderConnectionService {
       }
     }
     this.broadcast()
+    const runtimes = await discoverHarnessRuntimes(
+      harnesses.map((harness) => harness.command),
+      { force }
+    )
 
     for (const [index, definition] of harnesses.entries()) {
-      const result = await this.enqueueProbe(() => this.probe(definition, env))
+      const result = await this.enqueueProbe(() =>
+        this.probe(definition, runtimes.get(definition.command) ?? null)
+      )
       this.statuses.set(result.id, result)
       if ((index + 1) % PROBE_BROADCAST_BATCH_SIZE === 0 || index === harnesses.length - 1) {
         this.broadcast()
@@ -165,7 +169,7 @@ export class ProviderConnectionService {
   /** Resolve the binary, then verify it actually responds to a version probe. */
   private async probe(
     def: HarnessDescriptor,
-    env: NodeJS.ProcessEnv
+    runtime: HarnessRuntime | null
   ): Promise<ProviderConnectionInfo> {
     const base: ProviderConnectionInfo = {
       id: def.id,
@@ -176,22 +180,31 @@ export class ProviderConnectionService {
       status: 'idle'
     }
 
-    const located = this.locateBinary(def.command, env)
-    if (!located.found) {
-      return { ...base, status: 'not_found', detail: `"${def.command}" not found on PATH` }
+    if (!runtime) {
+      return {
+        ...base,
+        status: 'not_found',
+        detail:
+          process.platform === 'win32'
+            ? `"${def.command}" not found on Windows PATH or in WSL`
+            : `"${def.command}" not found on PATH`
+      }
     }
 
-    const versionResult = await this.probeVersion(def, located.path, env)
+    const versionResult = await probeHarnessRuntime(runtime, def.versionArgs)
     if (versionResult.ok) {
+      const version =
+        (versionResult.stdout || versionResult.stderr).split(/\r?\n/u)[0]?.trim() ?? ''
       // OpenCode V2 is not yet supported: report it as installed-but-unsupported
       // so the Harnesses page can surface a notice while every availability
       // check treats it as not installed.
-      if (def.id === 'opencode' && isOpenCodeV2(versionResult.version)) {
+      if (def.id === 'opencode' && isOpenCodeV2(version)) {
         return {
           ...base,
           status: 'error',
-          resolvedPath: located.path,
-          version: versionResult.version,
+          resolvedPath: runtime.resolvedPath,
+          executionTarget: runtime.target,
+          version,
           unsupportedReason: 'opencode-v2',
           detail: OPENCODE_V2_UNSUPPORTED_DETAIL
         }
@@ -199,83 +212,19 @@ export class ProviderConnectionService {
       return {
         ...base,
         status: 'available',
-        resolvedPath: located.path,
-        version: versionResult.version
+        resolvedPath: runtime.resolvedPath,
+        executionTarget: runtime.target,
+        version
       }
     }
 
     return {
       ...base,
       status: 'error',
-      resolvedPath: located.path,
+      resolvedPath: runtime.resolvedPath,
+      executionTarget: runtime.target,
       detail: versionResult.reason
     }
-  }
-
-  /** GUI apps don't inherit the shell PATH — augment with common install locations. */
-  private buildEnv(): NodeJS.ProcessEnv {
-    return buildProcessEnvironment()
-  }
-
-  private locateBinary(command: string, env: NodeJS.ProcessEnv): { found: boolean; path?: string } {
-    const path = resolveExecutablePath(command, env)
-    return path ? { found: true, path } : { found: false }
-  }
-
-  /** Execute `<command> --version` with a timeout to prove the harness responds. */
-  private probeVersion(
-    def: HarnessDescriptor,
-    resolvedPath: string | undefined,
-    env: NodeJS.ProcessEnv
-  ): Promise<{ ok: true; version: string } | { ok: false; reason: string }> {
-    return new Promise((resolve) => {
-      const child = spawn(resolvedPath ?? def.command, def.versionArgs, {
-        env,
-        stdio: ['ignore', 'pipe', 'pipe']
-      })
-      let stdout = ''
-      let stderr = ''
-      let outputBytes = 0
-      let settled = false
-      const finish = (result: { ok: true; version: string } | { ok: false; reason: string }) => {
-        if (settled) return
-        settled = true
-        clearTimeout(timer)
-        resolve(result)
-      }
-      const append = (current: string, chunk: Buffer): string => {
-        outputBytes += chunk.byteLength
-        if (outputBytes > MAX_PROBE_OUTPUT_BYTES) {
-          child.kill()
-          finish({ ok: false, reason: 'Version probe produced too much output' })
-          return current
-        }
-        return current + chunk.toString()
-      }
-      const timer = setTimeout(() => {
-        child.kill()
-        finish({ ok: false, reason: `Timed out after ${PROBE_TIMEOUT_MS / 1000}s` })
-      }, PROBE_TIMEOUT_MS)
-      child.stdout?.on('data', (chunk: Buffer) => {
-        stdout = append(stdout, chunk)
-      })
-      child.stderr?.on('data', (chunk: Buffer) => {
-        stderr = append(stderr, chunk)
-      })
-      child.on('error', (error) => {
-        finish({ ok: false, reason: error.message.split('\n')[0]?.trim() || 'unknown error' })
-      })
-      child.on('exit', (code) => {
-        if (code !== 0) {
-          const reason =
-            (stderr || stdout).split('\n')[0]?.trim() || `Exited with code ${code ?? 'unknown'}`
-          finish({ ok: false, reason })
-          return
-        }
-        const version = (stdout || stderr).split('\n')[0]?.trim() ?? ''
-        finish({ ok: true, version })
-      })
-    })
   }
 
   private yieldToMainLoop(): Promise<void> {
