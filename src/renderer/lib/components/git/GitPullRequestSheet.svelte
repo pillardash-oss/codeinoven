@@ -18,12 +18,14 @@
     type PrDockStatus
   } from '$lib/stores/pr-lifecycle.svelte'
   import { getProjectIcon } from '$lib/project-icons'
+  import { isOrchestrationChildThread } from '$shared/types'
   import type {
     Project,
     PullRequestCompare,
     PullRequestReference,
     PullRequestSummary,
     ProviderCatalog,
+    Thread,
     ThinkingLevel,
     ThreadSettings
   } from '$shared/types'
@@ -528,6 +530,17 @@
     onClose()
   }
 
+  async function openProjectFirstThread(): Promise<void> {
+    if (!projectMeta) return
+    const allThreads: Thread[] = await invoke('thread:listAll').catch(() => [])
+    const firstThread = allThreads
+      .filter((thread) => thread.projectId === projectId && !thread.archived)
+      .filter((thread) => !isOrchestrationChildThread(thread))
+      .sort((a, b) => b.lastActivity - a.lastActivity)[0]
+    if (!firstThread) return
+    workspaceState.openThread(firstThread, projectMeta, projectIconUrl)
+  }
+
   // ─── Compose with agent ────────────────────────────────────────────────────
 
   /** Extra context about local changes that will be pushed with the PR. */
@@ -752,8 +765,11 @@
 >
   {#snippet headerPrefix()}
     {#if dockProjectName}
-      <span
-        class="flex min-w-0 max-w-48 shrink-0 items-center gap-1.5 rounded-full border border-border bg-elevated py-0.5 pr-2.5 pl-1"
+      <button
+        class="flex min-w-0 max-w-48 shrink-0 cursor-pointer items-center gap-1.5 rounded-full border border-border bg-elevated py-0.5 pr-2.5 pl-1 transition-colors hover:bg-overlay"
+        title={`Open first thread in ${dockProjectName}`}
+        aria-label={`Open first thread in ${dockProjectName}`}
+        onclick={() => void openProjectFirstThread()}
       >
         {#if resolvedProjectIcon}
           <img src={resolvedProjectIcon} alt="" class="h-4 w-4 shrink-0 rounded" />
@@ -761,7 +777,7 @@
           <GitPullRequest size={13} class="shrink-0 text-dimmed" aria-hidden="true" />
         {/if}
         <span class="truncate text-[10px] font-semibold text-foreground">{dockProjectName}</span>
-      </span>
+      </button>
     {/if}
   {/snippet}
 
