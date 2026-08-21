@@ -37,7 +37,7 @@ async function createRepo(): Promise<string> {
   const repo = mkdtempSync(join(tmpdir(), 'codeinoven-wt-repo-'))
   temporaryPaths.push(repo)
   const git = simpleGit(repo)
-  await git.init()
+  await git.init(['-b', 'main'])
   await git.addConfig('user.email', 'test@example.com')
   await git.addConfig('user.name', 'Test')
   writeFileSync(join(repo, 'README.md'), '# repo\n')
