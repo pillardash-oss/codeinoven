@@ -69,6 +69,7 @@ export function parseThreadContextUsage(value: unknown): ThreadContextUsage | nu
   if (typeof record.harnessId !== 'string' || typeof record.providerId !== 'string') return null
   if (typeof record.costUsd !== 'number') return null
   const contextUsed = typeof record.contextUsed === 'number' ? record.contextUsed : undefined
+  const contextEstimated = record.contextEstimated === true
   const tokenRecord = record.tokens
   if (tokenRecord !== undefined && (!tokenRecord || typeof tokenRecord !== 'object')) return null
   const tokenFields: Array<keyof AgentTokenUsage> = [
@@ -105,6 +106,7 @@ export function parseThreadContextUsage(value: unknown): ThreadContextUsage | nu
     harnessId: record.harnessId,
     providerId: record.providerId,
     ...(contextUsed === undefined ? {} : { contextUsed }),
+    ...(contextEstimated ? { contextEstimated: true } : {}),
     contextPercent: typeof record.contextPercent === 'number' ? record.contextPercent : undefined,
     contextWindow: typeof record.contextWindow === 'number' ? record.contextWindow : undefined,
     costUsd: record.costUsd,

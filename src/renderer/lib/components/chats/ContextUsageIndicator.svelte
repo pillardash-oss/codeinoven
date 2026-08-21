@@ -337,7 +337,9 @@
     <div class="mb-1 flex items-center justify-between gap-3 text-[10px]">
       <span class="font-medium text-muted">Context (latest request)</span>
       <span class="tabular-nums text-dimmed">
-        {usage?.contextUsed !== undefined ? compactNumber(usage.contextUsed) : 'Unavailable'}
+        {usage?.contextUsed !== undefined
+          ? `${usage.contextEstimated ? '≈' : ''}${compactNumber(usage.contextUsed)}`
+          : 'Unavailable'}
         {#if usage?.contextWindow}
           / {compactNumber(usage.contextWindow)}
         {/if}
@@ -346,7 +348,7 @@
     <div
       class="h-1.5 overflow-hidden rounded-full bg-overlay"
       role="progressbar"
-      aria-label="Context used"
+      aria-label={usage?.contextEstimated ? 'Estimated context used' : 'Context used'}
       aria-valuemin="0"
       aria-valuemax="100"
       aria-valuenow={Math.round(boundedPercent ?? 0)}
@@ -359,6 +361,11 @@
         <span>Available {compactNumber(Math.max(0, usage.contextWindow - usage.contextUsed))}</span>
         <span>Window {compactNumber(usage.contextWindow)}</span>
       </div>
+    {/if}
+    {#if usage?.contextEstimated}
+      <p class="mt-1.5 text-[9px] text-dimmed">
+        Estimated from the composed request because this harness does not report context telemetry.
+      </p>
     {/if}
     <div class="mt-2 grid grid-cols-2 gap-x-3 gap-y-1 text-[9px] text-dimmed">
       <span>Input {usage?.tokens ? compactNumber(usage.tokens.input) : 'Unavailable'}</span>

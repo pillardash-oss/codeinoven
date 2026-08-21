@@ -1756,6 +1756,8 @@ export interface AgentContextUsage {
   contextWindow?: number
   /** Tokens occupying the context when the harness reports that value. */
   contextUsed?: number
+  /** True when context occupancy was estimated from the composed request. */
+  contextEstimated?: boolean
   contextPercent?: number
   costUsd: number
   /** Per-turn token categories when the harness exposes token accounting. */
@@ -2253,6 +2255,8 @@ export interface AgentMessage {
   contextWindow?: number
   /** Cumulative tokens currently occupying the model context, when available. */
   contextUsed?: number
+  /** True when context occupancy was estimated from the composed request. */
+  contextEstimated?: boolean
   /** Optional account quota windows when the provider exposes them. */
   rateLimits?: AgentRateLimitWindow[]
   /** Prepaid-credit balance reported alongside quota windows. */
@@ -2398,6 +2402,8 @@ export type AgentEvent =
       contextWindow?: number
       /** Cumulative tokens currently occupying the model context, when available. */
       contextUsed?: number
+      /** True when context occupancy was estimated from the composed request. */
+      contextEstimated?: boolean
       /** Account quota windows reported after the harness refreshes usage. */
       rateLimits?: AgentRateLimitWindow[]
       /** Prepaid-credit balance reported alongside quota windows. */
@@ -2413,6 +2419,7 @@ export type AgentEvent =
       normalizedUsage?: NormalizedUsage
       contextWindow?: number
       contextUsed?: number
+      contextEstimated?: boolean
       cost?: number
       rateLimits?: AgentRateLimitWindow[]
       credits?: AgentUsageCredits

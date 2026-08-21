@@ -618,6 +618,7 @@
     let latestMessage: AgentMessage | undefined
     let latestTokens: NonNullable<AgentContextUsage['tokens']> | undefined
     let latestContextUsed: number | undefined
+    let latestContextEstimated = false
     let latestRateLimits: AgentContextUsage['rateLimits'] | undefined
     let latestCredits: AgentContextUsage['credits'] | undefined
     let costUsd = 0
@@ -678,7 +679,10 @@
         // Preserve each latest snapshot so a token-only update cannot erase a
         // previously reported quota status when the user reveals live usage.
         if (tokens) latestTokens = tokens
-        if (message.contextUsed !== undefined) latestContextUsed = message.contextUsed
+        if (message.contextUsed !== undefined) {
+          latestContextUsed = message.contextUsed
+          latestContextEstimated = message.contextEstimated === true
+        }
         if (message.rateLimits?.length) latestRateLimits = message.rateLimits
         if (message.credits) latestCredits = message.credits
       }
@@ -708,6 +712,7 @@
     return {
       ...(contextWindow === undefined ? {} : { contextWindow }),
       ...(contextUsed === undefined ? {} : { contextUsed }),
+      ...(contextUsed !== undefined && latestContextEstimated ? { contextEstimated: true } : {}),
       ...(contextWindow !== undefined && contextUsed !== undefined
         ? { contextPercent: Math.min(100, (contextUsed / contextWindow) * 100) }
         : {}),
@@ -911,6 +916,10 @@
       tokens: incoming.tokens ?? previous.tokens,
       costUsd: incoming.costUsd ?? previous.costUsd,
       contextUsed: incoming.contextUsed ?? previous.contextUsed,
+      contextEstimated:
+        incoming.contextUsed !== undefined
+          ? incoming.contextEstimated === true
+          : previous.contextEstimated === true,
       contextWindow: incoming.contextWindow ?? previous.contextWindow,
       contextPercent: incoming.contextPercent ?? previous.contextPercent,
       rateLimits: incoming.rateLimits?.length ? incoming.rateLimits : previous.rateLimits,

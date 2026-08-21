@@ -932,6 +932,7 @@ export abstract class PersistentCliDriver implements HarnessDriver {
         if (event.normalizedUsage) message.normalizedUsage = event.normalizedUsage
         if (event.contextWindow !== undefined) message.contextWindow = event.contextWindow
         if (event.contextUsed !== undefined) message.contextUsed = event.contextUsed
+        if (event.contextEstimated !== undefined) message.contextEstimated = event.contextEstimated
         if (event.rateLimits) message.rateLimits = event.rateLimits
         if (event.credits) message.credits = event.credits
         this.estimateMissingCost(message)
@@ -944,6 +945,7 @@ export abstract class PersistentCliDriver implements HarnessDriver {
         if (event.normalizedUsage) message.normalizedUsage = event.normalizedUsage
         if (event.contextWindow !== undefined) message.contextWindow = event.contextWindow
         if (event.contextUsed !== undefined) message.contextUsed = event.contextUsed
+        if (event.contextEstimated !== undefined) message.contextEstimated = event.contextEstimated
         if (event.cost !== undefined) message.cost = event.cost
         if (event.rateLimits) message.rateLimits = event.rateLimits
         if (event.credits) message.credits = event.credits

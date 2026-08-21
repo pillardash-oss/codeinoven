@@ -171,6 +171,8 @@ import { APP_NAME } from '../../lib/brand'
 import { DEFAULT_AGENT_BEHAVIOR_PROMPT } from '../../lib/agent-behavior'
 import { registerCioPromptDefault, type CioPromptId } from '../../lib/cio-prompts'
 import { estimateTokenCostUsd } from '../providers/pricing'
+import { OpenUsageClient } from '../usage/openusage-client'
+import { fallbackModelContextWindow } from '../../lib/model-context-window'
 import {
   budgetTurnLayers,
   composeBudgetedSend,
@@ -958,6 +960,8 @@ interface SessionInfo {
   activeTurnId?: string
   /** Stable user message that starts the active provider turn. */
   activeTurnUserMessageId?: string
+  /** Composed request occupancy used only when the harness emits no native context usage. */
+  estimatedContextUsed?: number
   changedPaths?: Set<string>
   /** Paths claimed by precise file-mutating tools this turn, path → last claimed ms. */
   preciseChangedPaths?: Map<string, number>
@@ -1278,6 +1282,7 @@ export class ChatEngine {
   private static readonly AUDIT_RUN_TIMEOUT_MS = 30 * 60 * 1000
   private static readonly CATALOG_DRIVER_BUDGET_MS = 800
   private drivers = new Map<string, HarnessDriver>()
+  private readonly openUsage = new OpenUsageClient()
   private sessionRegistry = new Map<string, SessionInfo>()
   private childSessionOwners = new Map<string, ChildSessionInfo>()
   private childCaptureTasks = new Map<string, Promise<AgentMessage[]>>()
@@ -2643,8 +2648,32 @@ export class ChatEngine {
       [...harnessIds].map(async (harnessId): Promise<AgentAccountUsage | null> => {
         try {
           const { driver, projectPath } = await this.resolve(projectIdSafe, harnessId, threadId)
-          if (!driver.readAccountUsage) return null
-          const telemetry = await driver.readAccountUsage(projectPath)
+          const nativeTelemetry = driver.readAccountUsage
+            ? await driver.readAccountUsage(projectPath)
+            : null
+          const openUsage =
+            !nativeTelemetry || nativeTelemetry.rateLimits.length === 0
+              ? await this.openUsage.readHarnessUsage(harnessId)
+              : null
+          const telemetry =
+            nativeTelemetry || openUsage
+              ? {
+                  rateLimits: nativeTelemetry?.rateLimits.length
+                    ? nativeTelemetry.rateLimits
+                    : (openUsage?.rateLimits ?? []),
+                  ...(nativeTelemetry?.credits
+                    ? { credits: nativeTelemetry.credits }
+                    : openUsage?.credits
+                      ? { credits: openUsage.credits }
+                      : {}),
+                  ...(nativeTelemetry?.contextWindow === undefined
+                    ? {}
+                    : { contextWindow: nativeTelemetry.contextWindow }),
+                  ...(nativeTelemetry?.contextUsed === undefined
+                    ? {}
+                    : { contextUsed: nativeTelemetry.contextUsed })
+                }
+              : null
           if (
             !telemetry ||
             (telemetry.rateLimits.length === 0 &&
@@ -2831,7 +2860,12 @@ export class ChatEngine {
     const probe = driver.listProviders(projectPath).then((catalogs) =>
       catalogs.map((catalog) => ({
         ...catalog,
-        supportsAttachments: driver.capabilities.attachments
+        supportsAttachments: driver.capabilities.attachments,
+        models: catalog.models.map((model) => {
+          if (model.contextWindow !== undefined) return model
+          const contextWindow = fallbackModelContextWindow(driver.id, model.id)
+          return contextWindow === undefined ? model : { ...model, contextWindow }
+        })
       }))
     )
     let timer: ReturnType<typeof setTimeout> | undefined
@@ -5365,6 +5399,8 @@ export class ChatEngine {
         })
       }
       this.registerSession(sessionId, projectId, threadId, projectPath, 'auto_review', driverId)
+      const planningSession = this.sessionRegistry.get(sessionId)
+      if (planningSession) planningSession.estimatedContextUsed = composition.totalTokens
       this.markSessionWorking(sessionId)
       try {
         if (requestedSpec && !revisingSpec && !activeBrainstormSession) {
@@ -5503,7 +5539,10 @@ export class ChatEngine {
         checkpointId
       )
       const activeSession = this.sessionRegistry.get(sessionId)
-      if (activeSession) activeSession.activeTurnUserMessageId = messageId
+      if (activeSession) {
+        activeSession.activeTurnUserMessageId = messageId
+        activeSession.estimatedContextUsed = composition.totalTokens
+      }
       this.markSessionWorking(sessionId)
       // Chat threads (standalone Chats-tab conversations) behave like a plain
       // browser chatbot: no file-system tools, internet-first answers. File
@@ -14026,6 +14065,27 @@ export class ChatEngine {
       this.forwardBrainstormTrace(eventOwner, event)
       this.forwardInitialSpecTrace(eventOwner, event)
     }
+    if (eventOwner && (event.type === 'message.completed' || event.type === 'usage.updated')) {
+      const selection = this.sessionModelIds.get(event.sessionId)
+      if (event.contextWindow === undefined && selection) {
+        const contextWindow = this.modelContextWindow(
+          eventOwner.projectId,
+          selection.providerId,
+          selection.modelId
+        )
+        if (contextWindow !== undefined) event.contextWindow = contextWindow
+      }
+      if (
+        event.type === 'message.completed' &&
+        !event.compaction &&
+        event.contextUsed === undefined &&
+        this.drivers.get(eventOwner.driverId)?.capabilities.contextUsage === false &&
+        eventOwner.estimatedContextUsed !== undefined
+      ) {
+        event.contextUsed = eventOwner.estimatedContextUsed
+        event.contextEstimated = true
+      }
+    }
     const streamedMessageId =
       event.type === 'message.part.updated'
         ? event.part.messageID
@@ -15661,6 +15721,7 @@ export class ChatEngine {
       await this.broadcastThreadSessionError(info.projectId, info.threadId, sessionId, issue)
     } finally {
       info.activeTurnUserMessageId = undefined
+      info.estimatedContextUsed = undefined
       if (!turnUtilitiesCleaned) await this.cleanupTurnUtilities(sessionId)
       // The abort marker only needs to survive until the session's idle
       // finalization has run; after that the session is on a fresh turn.
@@ -16476,6 +16537,7 @@ export class ChatEngine {
       driverId: existing?.driverId ?? driverId,
       activeTurnId: activeTurnId ?? existing?.activeTurnId,
       activeTurnUserMessageId: existing?.activeTurnUserMessageId,
+      estimatedContextUsed: activeTurnId ? undefined : existing?.estimatedContextUsed,
       changedPaths: activeTurnId ? undefined : existing?.changedPaths,
       preciseChangedPaths: activeTurnId ? new Map() : existing?.preciseChangedPaths,
       changeFilterReliable: activeTurnId ? true : existing?.changeFilterReliable,

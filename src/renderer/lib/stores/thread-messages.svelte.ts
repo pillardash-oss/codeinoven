@@ -520,6 +520,7 @@ class ThreadMessagesStore {
     tokens?: AgentMessage['tokens'],
     contextWindow?: number,
     contextUsed?: number,
+    contextEstimated?: boolean,
     rateLimits?: AgentMessage['rateLimits'],
     credits?: AgentMessage['credits']
   ): void {
@@ -533,6 +534,7 @@ class ThreadMessagesStore {
     if (tokens) doneMsg.tokens = tokens
     if (contextWindow !== undefined) doneMsg.contextWindow = contextWindow
     if (contextUsed !== undefined) doneMsg.contextUsed = contextUsed
+    if (contextEstimated !== undefined) doneMsg.contextEstimated = contextEstimated
     if (rateLimits) doneMsg.rateLimits = rateLimits
     if (credits) doneMsg.credits = credits
     if (compaction) {
@@ -565,6 +567,7 @@ class ThreadMessagesStore {
     tokens?: AgentMessage['tokens'],
     contextWindow?: number,
     contextUsed?: number,
+    contextEstimated?: boolean,
     cost?: number,
     rateLimits?: AgentMessage['rateLimits'],
     credits?: AgentMessage['credits']
@@ -576,6 +579,7 @@ class ThreadMessagesStore {
     if (tokens) message.tokens = tokens
     if (contextWindow !== undefined) message.contextWindow = contextWindow
     if (contextUsed !== undefined) message.contextUsed = contextUsed
+    if (contextEstimated !== undefined) message.contextEstimated = contextEstimated
     if (cost !== undefined) message.cost = cost
     if (rateLimits) message.rateLimits = rateLimits
     if (credits) message.credits = credits
@@ -652,6 +656,7 @@ class ThreadMessagesStore {
           event.tokens,
           event.contextWindow,
           event.contextUsed,
+          event.contextEstimated,
           event.rateLimits,
           event.credits
         )
@@ -665,6 +670,7 @@ class ThreadMessagesStore {
           event.tokens,
           event.contextWindow,
           event.contextUsed,
+          event.contextEstimated,
           event.cost,
           event.rateLimits,
           event.credits
