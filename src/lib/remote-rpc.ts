@@ -80,6 +80,7 @@ export const REMOTE_ALLOWED_CHANNELS: readonly string[] = [
   'attachment:appendRemoteUpload',
   'attachment:finishRemoteUpload',
   'attachment:cancelRemoteUpload',
+  'attachment:readRemoteChunk',
   'remotePush:getPublicKey',
   'remotePush:subscribe',
   'remotePush:unsubscribe',
@@ -369,6 +370,7 @@ export const REMOTE_CHANNEL_AUTHORIZATION: Readonly<Record<string, RemoteChannel
   'scope:get': { scope: 'workspace.read', stepUp: 'none' },
   'note:get': { scope: 'workspace.read', stepUp: 'none' },
   'note:list': { scope: 'workspace.read', stepUp: 'none' },
+  'attachment:readRemoteChunk': { scope: 'conversation.read', stepUp: 'none' },
 
   // workspace.write — default-No, no step-up
   'thread:exportTranscript': { scope: 'workspace.write', stepUp: 'none' },

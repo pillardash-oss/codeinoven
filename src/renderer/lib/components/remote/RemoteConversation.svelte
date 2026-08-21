@@ -15,9 +15,11 @@
   import { messageId } from '$shared/id'
   import { isTodoToolPart } from '$lib/agent-todos'
   import { copyText } from '$lib/copy-text'
+  import { attachmentPreviewKind, fileUrlToPath } from '$lib/mime'
   import { getAgentIcon } from '$lib/agent-icons/registry'
   import { mobileState } from '$lib/remote/mobile-state.svelte'
   import ChatComposer from '../chats/ChatComposer.svelte'
+  import AttachmentPreview from '../chats/AttachmentPreview.svelte'
   import AgentProviderStatusCard from '../threads/AgentProviderStatusCard.svelte'
   import WorkingTrace from '../threads/WorkingTrace.svelte'
   import MarkdownView from '../markdown/MarkdownView.svelte'
@@ -319,6 +321,45 @@
   let copiedMessageId = $state<string | null>(null)
   let copyResetTimer: ReturnType<typeof setTimeout> | undefined
   let forkingMessageId = $state<string | null>(null)
+  let openingAttachmentId = $state<string | null>(null)
+  let previewAttachment = $state<PromptAttachment | null>(null)
+  let previewSrc = $state<string>()
+  let previewText = $state<string>()
+
+  function attachmentName(part: Extract<AgentPart, { type: 'file' }>): string {
+    return part.filename ?? part.url.split(/[/\\]/u).pop() ?? 'file'
+  }
+
+  function closeAttachmentPreview(): void {
+    if (previewSrc) URL.revokeObjectURL(previewSrc)
+    previewAttachment = null
+    previewSrc = undefined
+    previewText = undefined
+  }
+
+  async function openAttachment(part: Extract<AgentPart, { type: 'file' }>): Promise<void> {
+    if (openingAttachmentId) return
+    openingAttachmentId = part.id
+    try {
+      const filename = attachmentName(part)
+      const bytes = await window.api.readFile(fileUrlToPath(part.url))
+      const kind = attachmentPreviewKind(part.mime, filename)
+      closeAttachmentPreview()
+      previewAttachment = { mime: part.mime, url: part.url, filename }
+      if (kind === 'markdown' || kind === 'text' || kind === 'csv') {
+        previewText = new TextDecoder().decode(bytes)
+      } else {
+        previewSrc = URL.createObjectURL(
+          new Blob([bytes], { type: part.mime || 'application/octet-stream' })
+        )
+      }
+    } catch (error) {
+      failedDelivery = null
+      sendError = error instanceof Error ? error.message : 'The attachment could not be opened.'
+    } finally {
+      openingAttachmentId = null
+    }
+  }
 
   async function copyTurn(
     message: AgentMessage,
@@ -356,7 +397,10 @@
     }
   }
 
-  onDestroy(() => clearTimeout(copyResetTimer))
+  onDestroy(() => {
+    clearTimeout(copyResetTimer)
+    if (previewSrc) URL.revokeObjectURL(previewSrc)
+  })
 
   // ─── Sending, queued "start after" dependencies, and abort ──────────────
   let queuedMessage = $state<{
@@ -530,15 +574,21 @@
                   {#if files.length > 0}
                     <div class="mb-1.5 flex flex-wrap justify-end gap-1.5">
                       {#each files as part (part.id)}
-                        <span
-                          class="flex max-w-full items-center gap-1.5 rounded-lg bg-elevated px-2 py-1 text-[11px] text-muted"
-                          title={part.filename ?? part.url}
+                        <button
+                          type="button"
+                          class="flex h-8 max-w-full cursor-pointer items-center gap-1.5 rounded-lg bg-elevated px-2 text-[11px] text-muted transition-colors active:bg-overlay active:text-foreground disabled:cursor-wait disabled:opacity-60"
+                          title={`Open ${attachmentName(part)}`}
+                          aria-label={`Open attachment ${attachmentName(part)}`}
+                          disabled={openingAttachmentId !== null}
+                          onclick={() => void openAttachment(part)}
                         >
-                          <FileText size={11} class="shrink-0" />
-                          <span class="max-w-40 truncate"
-                            >{part.filename ?? part.url.split('/').pop() ?? 'file'}</span
-                          >
-                        </span>
+                          {#if openingAttachmentId === part.id}
+                            <Loader2 size={11} class="shrink-0 animate-spin" />
+                          {:else}
+                            <FileText size={11} class="shrink-0" />
+                          {/if}
+                          <span class="max-w-40 truncate">{attachmentName(part)}</span>
+                        </button>
                       {/each}
                     </div>
                   {/if}
@@ -588,15 +638,21 @@
                 {#if assistantFiles.length > 0}
                   <div class="flex flex-wrap gap-1.5">
                     {#each assistantFiles as part (part.id)}
-                      <span
-                        class="flex max-w-full items-center gap-1.5 rounded-lg bg-elevated px-2 py-1 text-[11px] text-muted"
-                        title={part.filename ?? part.url}
+                      <button
+                        type="button"
+                        class="flex h-8 max-w-full cursor-pointer items-center gap-1.5 rounded-lg bg-elevated px-2 text-[11px] text-muted transition-colors active:bg-overlay active:text-foreground disabled:cursor-wait disabled:opacity-60"
+                        title={`Open ${attachmentName(part)}`}
+                        aria-label={`Open attachment ${attachmentName(part)}`}
+                        disabled={openingAttachmentId !== null}
+                        onclick={() => void openAttachment(part)}
                       >
-                        <FileText size={11} class="shrink-0" />
-                        <span class="max-w-40 truncate"
-                          >{part.filename ?? part.url.split('/').pop() ?? 'file'}</span
-                        >
-                      </span>
+                        {#if openingAttachmentId === part.id}
+                          <Loader2 size={11} class="shrink-0 animate-spin" />
+                        {:else}
+                          <FileText size={11} class="shrink-0" />
+                        {/if}
+                        <span class="max-w-40 truncate">{attachmentName(part)}</span>
+                      </button>
                     {/each}
                   </div>
                 {/if}
@@ -728,4 +784,13 @@
       <SubagentSessionView {tab} onOpenSubagent={openSubagent} />
     {/await}
   </BottomSheet>
+{/if}
+
+{#if previewAttachment}
+  <AttachmentPreview
+    attachment={previewAttachment}
+    src={previewSrc}
+    text={previewText}
+    onClose={closeAttachmentPreview}
+  />
 {/if}

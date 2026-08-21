@@ -835,6 +835,10 @@ export interface IpcInvokeContract {
   >
   'attachment:finishRemoteUpload': Contract<[uploadId: string], string>
   'attachment:cancelRemoteUpload': Contract<[uploadId: string], void>
+  'attachment:readRemoteChunk': Contract<
+    [path: string, offset: number],
+    { base64: string; nextOffset: number; size: number }
+  >
   'remotePush:getPublicKey': Contract<[], string>
   'remotePush:subscribe': Contract<
     [

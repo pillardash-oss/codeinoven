@@ -13,9 +13,9 @@
  */
 
 import type { Database } from '../database/database'
-import { appendFile, mkdir, rename, rm, writeFile } from 'node:fs/promises'
+import { appendFile, mkdir, open, realpath, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { randomUUID } from 'node:crypto'
-import { extname, join } from 'node:path'
+import { extname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { ThreadManager } from '../../lib/engines/thread-manager'
 import { NoteRepo } from '../database/repositories/note-repo'
 import { ProjectManager } from '../../lib/engines/project-manager'
@@ -96,6 +96,7 @@ import type { AttachmentStorageScope } from '../../lib/types'
 
 const MAX_REMOTE_ATTACHMENT_BYTES = 32 * 1024 * 1024
 const MAX_REMOTE_ATTACHMENT_CHUNK_BYTES = 256 * 1024
+const REMOTE_ATTACHMENT_READ_CHUNK_BYTES = 192 * 1024
 const MAX_CONCURRENT_REMOTE_UPLOADS = 16
 const NOTE_BODY_MAX = 100_000
 const REMOTE_UPLOAD_TTL_MS = 10 * 60 * 1_000
@@ -741,6 +742,8 @@ export class RemoteRpcDispatcher {
         return this.finishRemoteUpload(device, this.string(args[0]))
       case 'attachment:cancelRemoteUpload':
         return this.cancelRemoteUpload(device, this.string(args[0]))
+      case 'attachment:readRemoteChunk':
+        return this.readRemoteAttachmentChunk(this.string(args[0]), args[1])
       case 'remotePush:getPublicKey':
         return remoteWebPush.publicKey()
       case 'remotePush:subscribe':
@@ -1772,6 +1775,73 @@ export class RemoteRpcDispatcher {
     await rm(upload.stagingPath, { force: true }).catch(() => undefined)
   }
 
+  private async readRemoteAttachmentChunk(
+    requestedPath: string,
+    rawOffset: unknown
+  ): Promise<{ base64: string; nextOffset: number; size: number }> {
+    if (requestedPath.length < 1 || requestedPath.length > 4_096 || !isAbsolute(requestedPath)) {
+      throw new TypeError('Attachment path is invalid')
+    }
+    if (typeof rawOffset !== 'number' || !Number.isSafeInteger(rawOffset) || rawOffset < 0) {
+      throw new TypeError('Attachment read offset is invalid')
+    }
+
+    const canonicalPath = await realpath(resolve(requestedPath))
+    const fileInfo = await stat(canonicalPath)
+    if (!fileInfo.isFile()) throw new TypeError('Attachment source must be a file')
+    if (fileInfo.size < 1 || fileInfo.size > MAX_REMOTE_ATTACHMENT_BYTES) {
+      throw new TypeError('Remote attachment must be between 1 byte and 32 MB')
+    }
+    if (rawOffset > fileInfo.size) throw new RangeError('Attachment read offset exceeds file size')
+    if (!(await this.isAppOwnedAttachmentPath(canonicalPath))) {
+      throw new Error('Attachment path is outside app-owned temporary storage')
+    }
+
+    const byteLength = Math.min(REMOTE_ATTACHMENT_READ_CHUNK_BYTES, fileInfo.size - rawOffset)
+    if (byteLength === 0) return { base64: '', nextOffset: rawOffset, size: fileInfo.size }
+
+    const handle = await open(canonicalPath, 'r')
+    try {
+      const buffer = Buffer.allocUnsafe(byteLength)
+      const { bytesRead } = await handle.read(buffer, 0, byteLength, rawOffset)
+      if (bytesRead < 1) throw new Error('Attachment read ended unexpectedly')
+      return {
+        base64: buffer.subarray(0, bytesRead).toString('base64'),
+        nextOffset: rawOffset + bytesRead,
+        size: fileInfo.size
+      }
+    } finally {
+      await handle.close()
+    }
+  }
+
+  private async isAppOwnedAttachmentPath(canonicalPath: string): Promise<boolean> {
+    const configRoot = await realpath(getConfigRoot()).catch(() => resolve(getConfigRoot()))
+    const configRelative = relative(configRoot, canonicalPath)
+    if (isContainedRelativePath(configRelative)) {
+      const segments = configRelative.split(sep)
+      const chatAttachment =
+        segments[0] === 'chats' && segments.length >= 4 && segments[2] === 'tmp'
+      const projectAttachment =
+        segments[0] === 'projects' &&
+        segments.length >= 6 &&
+        segments[2] === 'threads' &&
+        segments[4] === 'tmp'
+      if (chatAttachment || projectAttachment) return true
+    }
+
+    const projects = await this.projectManager.listProjects()
+    for (const project of projects) {
+      if (project.source !== 'local' || !project.path) continue
+      const root = join(project.path, PROJECT_DATA_DIRECTORY, 'tmp', 'attachments')
+      const canonicalRoot = await realpath(root).catch(() => null)
+      if (canonicalRoot && isContainedRelativePath(relative(canonicalRoot, canonicalPath))) {
+        return true
+      }
+    }
+    return false
+  }
+
   /** Resolve a project id to its validated absolute path (git operates on paths). */
   private async resolveProjectPath(projectId: string): Promise<string> {
     const project = await this.projectManager.getProject(projectId)
@@ -1815,4 +1885,13 @@ export class RemoteRpcDispatcher {
     }
     return value
   }
+}
+
+function isContainedRelativePath(relativePath: string): boolean {
+  return (
+    relativePath.length > 0 &&
+    !isAbsolute(relativePath) &&
+    relativePath !== '..' &&
+    !relativePath.startsWith(`..${sep}`)
+  )
 }

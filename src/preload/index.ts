@@ -149,6 +149,7 @@ const INVOKE_CHANNELS = [
   'attachment:appendRemoteUpload',
   'attachment:finishRemoteUpload',
   'attachment:cancelRemoteUpload',
+  'attachment:readRemoteChunk',
   'clipboard:saveImage',
   'clipboard:writeText',
   'clipboard:readText',

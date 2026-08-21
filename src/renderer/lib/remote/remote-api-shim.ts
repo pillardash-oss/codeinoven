@@ -24,6 +24,15 @@ function bytesToBase64(bytes: Uint8Array): string {
   return btoa(binary)
 }
 
+function base64ToBytes(base64: string): Uint8Array<ArrayBuffer> {
+  const binary = atob(base64)
+  const bytes = new Uint8Array(binary.length)
+  for (let index = 0; index < binary.length; index += 1) {
+    bytes[index] = binary.charCodeAt(index)
+  }
+  return bytes
+}
+
 function isConnectionInterruption(error: unknown): boolean {
   if (!(error instanceof Error)) return false
   const message = error.message.toLowerCase()
@@ -83,6 +92,44 @@ async function registerRemoteFile(file: File, scope?: AttachmentStorageScope): P
   }
 }
 
+async function readRemoteFile(path: string): Promise<Uint8Array<ArrayBuffer>> {
+  let offset = 0
+  let bytes: Uint8Array<ArrayBuffer> | undefined
+
+  while (bytes === undefined || offset < bytes.byteLength) {
+    const result = await remoteBridge.invoke('attachment:readRemoteChunk', path, offset)
+    if (typeof result !== 'object' || result === null) {
+      throw new Error('The desktop returned an invalid attachment response')
+    }
+    const record = result as Record<string, unknown>
+    const { base64, nextOffset, size } = record
+    if (
+      typeof base64 !== 'string' ||
+      typeof nextOffset !== 'number' ||
+      !Number.isSafeInteger(nextOffset) ||
+      typeof size !== 'number' ||
+      !Number.isSafeInteger(size) ||
+      size < 1 ||
+      size > MAX_REMOTE_ATTACHMENT_BYTES
+    ) {
+      throw new Error('The desktop returned invalid attachment metadata')
+    }
+    if (bytes === undefined) bytes = new Uint8Array(size)
+    if (size !== bytes.byteLength || nextOffset <= offset || nextOffset > size) {
+      throw new Error('The desktop returned an out-of-order attachment chunk')
+    }
+
+    const chunk = base64ToBytes(base64)
+    if (chunk.byteLength !== nextOffset - offset) {
+      throw new Error('The desktop returned an incomplete attachment chunk')
+    }
+    bytes.set(chunk, offset)
+    offset = nextOffset
+  }
+
+  return bytes
+}
+
 declare global {
   interface Window {
     api: AppBridge
@@ -107,7 +154,7 @@ export function installRemoteApiShim(): void {
       platform: 'linux',
       trafficLight: { present: false, side: null, offset: 0 }
     },
-    readFile: async () => new Uint8Array(0),
+    readFile: readRemoteFile,
     registerFileSelection: registerRemoteFile,
     getPathForFile: () => '',
     startFileDrag: () => {}
