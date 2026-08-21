@@ -367,6 +367,9 @@ const INCOMPLETE_TURN_MESSAGE =
   'The harness ended the turn without returning a final response. The task may be incomplete.'
 const INCOMPLETE_TURN_CONTINUATION_PROMPT =
   'Your previous turn ended without a final response. Continue the same task from where you stopped, finish any remaining work, verify it, and return a complete final response to the user.'
+const SPEC_CONTRACT_COMPLETE_MARKER = 'SPEC CONTRACT COMPLETE'
+const SPEC_CONTRACT_BLOCKED_MARKER = 'SPEC CONTRACT BLOCKED'
+const SPEC_CONTRACT_CONTINUATION_PROMPT = 'COMPLETE THE TOTAL SPEC CONTRACT!'
 const HISTORY_MIRROR_ERROR_DETAIL_LIMIT = 240
 const SPEC_GENERATION_MAX_ATTEMPTS = 3
 const CURRENT_SPEC_GENERATION_VERSION = 1
@@ -701,6 +704,8 @@ export const SPEC_IMPLEMENT_SYSTEM_PROMPT = [
   DEPLOYMENT_URL_SYSTEM_INSTRUCTION,
   'Update the specification in your working plan to reflect the annotations, then implement it completely.',
   'Produce evidence, run the specified checks, update documentation, and make contextual commits.',
+  `A normal final response is not permission to stop. Before returning one, verify that every specification phase, success criterion, required check, evidence item, documentation requirement, and commit is complete. When the total specification contract is fulfilled, end the final response with the exact standalone line ${SPEC_CONTRACT_COMPLETE_MARKER}. Never emit that line while any contract work remains.`,
+  `If a hard external condition requires user intervention, explain the exact blocker and end with the exact standalone line ${SPEC_CONTRACT_BLOCKED_MARKER}. Do not use the blocked declaration for work you can continue yourself.`,
   'Stop and ask when the signed scope is ambiguous or insufficient.',
   CITATION_SYSTEM_INSTRUCTION,
   MERMAID_OUTPUT_INSTRUCTION,
@@ -1290,6 +1295,8 @@ export class ChatEngine {
   private streamBroadcastTimer: ReturnType<typeof setTimeout> | null = null
   /** Number of hidden continuations issued after a turn ended without a final response. */
   private incompleteTurnRecoveryAttempts = new Map<string, number>()
+  /** Harness sessions implementing an approved specification until its contract is fulfilled. */
+  private engineeringImplementationSessions = new Set<string>()
   private temporaryChats = new Map<string, TemporaryChatSession>()
   private initialSpecTasks = new Map<string, Promise<EngineeringSpec | null>>()
   private activeInitialSpecSessions = new Map<string, ActiveInitialSpecSession>()
@@ -2414,6 +2421,7 @@ export class ChatEngine {
     this.planningSessions.clear()
     this.handledIdleSessions.clear()
     this.userAbortedSessions.clear()
+    this.engineeringImplementationSessions.clear()
     this.providerCache.clear()
     this.assignmentApiCapabilities.clear()
     this.assignmentApiQueues.clear()
@@ -3349,6 +3357,7 @@ export class ChatEngine {
     this.outboundMessageIdsBySession.delete(sessionId)
     this.mermaidRepairAttempts.delete(sessionId)
     this.incompleteTurnRecoveryAttempts.delete(sessionId)
+    this.engineeringImplementationSessions.delete(sessionId)
     this.searchNudgeAttempts.delete(sessionId)
     this.sessionNativeHistory.delete(sessionId)
     this.clearSessionWatchdog(sessionId)
@@ -4872,6 +4881,13 @@ export class ChatEngine {
       targetThread = await this.threadManager.getThread(projectId, threadId)
     }
     if (
+      specAction === undefined &&
+      targetThread?.sessionId &&
+      this.engineeringImplementationSessions.has(targetThread.sessionId)
+    ) {
+      specAction = 'implement'
+    }
+    if (
       targetThread?.userInputLocked &&
       targetThread.assignmentRole !== 'coordinator' &&
       origin === 'user'
@@ -5093,6 +5109,10 @@ export class ChatEngine {
     try {
       sessionId = await this.ensureSession(projectId, threadId, driverId)
       titleParentSessionId = sessionId
+      if (specAction === 'implement') {
+        this.engineeringImplementationSessions.add(sessionId)
+        this.planningSessions.delete(sessionId)
+      }
     } catch (error) {
       await this.threadManager.setStatus(projectId, threadId, 'failed')
       throw error
@@ -12269,13 +12289,15 @@ export class ChatEngine {
         if (!thread.settings || !thread.sessionId) continue
         const current = this.sessionStatuses.get(thread.sessionId)
         if (current?.state === 'working' || current?.state === 'waiting') continue
+        const activeSpec = await this.getActiveSpec(thread.projectId, thread.id)
+        const resumesSpecContract = activeSpec?.status === 'approved' && !thread.auditState
         await this.sendPrompt(
           thread.projectId,
           thread.id,
           validateThreadSettings(thread.settings),
-          'Continue',
+          resumesSpecContract ? SPEC_CONTRACT_CONTINUATION_PROMPT : 'Continue',
           [],
-          undefined,
+          resumesSpecContract ? 'implement' : undefined,
           createMessageId(),
           undefined,
           undefined,
@@ -15278,12 +15300,29 @@ export class ChatEngine {
         [...this.pendingPermissions.values()].some(
           (pending) => pending.request.sessionId === sessionId
         )
+      const engineeringContractActive = this.engineeringImplementationSessions.has(sessionId)
+      const contractResponse = turnAssistant ? assistantText(turnAssistant).trim() : ''
+      const contractBlocked =
+        engineeringContractActive &&
+        hasTerminalSpecContractMarker(contractResponse, SPEC_CONTRACT_BLOCKED_MARKER)
+      const contractCompleted =
+        engineeringContractActive &&
+        hasTerminalSpecContractMarker(contractResponse, SPEC_CONTRACT_COMPLETE_MARKER) &&
+        !assistantAdmitsIncompleteSpec(contractResponse)
+      if (contractCompleted) this.engineeringImplementationSessions.delete(sessionId)
       const missingFinalResponse =
         !failure &&
         !awaitingUser &&
         !suppressTerminalAnswer &&
         (!turnAssistant ||
           (!assistantText(turnAssistant).trim() && turnAssistant.structuredOutput === undefined))
+      const contractContinuationRequired =
+        engineeringContractActive &&
+        !failure &&
+        !awaitingUser &&
+        !missingFinalResponse &&
+        !contractBlocked &&
+        !contractCompleted
       if (!missingFinalResponse) {
         this.incompleteTurnRecoveryAttempts.delete(sessionId)
       } else if (
@@ -15323,7 +15362,14 @@ export class ChatEngine {
         this.recordMessageUsageEvent(info.threadId, thread, parentTurnId, turnAssistant, failure)
         this.recordToolUsageEvents(info.threadId, parentTurnId, turnAssistant)
       }
-      if (parentTurnId && turnAssistant && !failure && !turnAssistant.error) {
+      if (
+        parentTurnId &&
+        turnAssistant &&
+        !failure &&
+        !turnAssistant.error &&
+        !contractContinuationRequired &&
+        !contractBlocked
+      ) {
         await this.openTurnOutcome(
           sessionId,
           thread,
@@ -15393,7 +15439,39 @@ export class ChatEngine {
             thread.settings,
             INCOMPLETE_TURN_CONTINUATION_PROMPT,
             [],
+            engineeringContractActive ? 'implement' : undefined,
             undefined,
+            undefined,
+            undefined,
+            undefined,
+            'internal'
+          )
+        } catch (error) {
+          this.pendingMemoryDecisions.delete(sessionId)
+          const issue = this.fallbackProviderIssue(info.driverId, rawErrorMessage(error))
+          await this.threadManager.setStatus(info.projectId, info.threadId, 'failed')
+          await this.broadcastThreadSessionError(info.projectId, info.threadId, sessionId, issue)
+        }
+        return
+      }
+      if (contractContinuationRequired && thread?.settings) {
+        await this.finishCheckpoint(
+          sessionId,
+          info,
+          'interrupted',
+          'The approved specification contract is incomplete; continuing implementation.'
+        )
+        await this.cleanupTurnUtilities(sessionId)
+        turnUtilitiesCleaned = true
+        if (pendingMemory) this.pendingMemoryDecisions.set(sessionId, pendingMemory)
+        try {
+          await this.sendPrompt(
+            info.projectId,
+            info.threadId,
+            thread.settings,
+            SPEC_CONTRACT_CONTINUATION_PROMPT,
+            [],
+            'implement',
             undefined,
             undefined,
             undefined,
@@ -15462,17 +15540,18 @@ export class ChatEngine {
       // otherwise claim success, keep it failed so a terminal "done"
       // notification can never shadow the real error.
       const threadBeforeFinalize = await this.threadManager.getThread(info.projectId, info.threadId)
-      const finalStatus = userAborted
-        ? 'interrupted'
-        : failure
-          ? 'failed'
-          : revisedSpec || revisedBrainstorm
-            ? 'spec'
-            : awaitingUser
-              ? 'awaiting_approval'
-              : threadBeforeFinalize?.status === 'failed'
-                ? 'failed'
-                : 'completed'
+      const finalStatus =
+        userAborted || contractBlocked
+          ? 'interrupted'
+          : failure
+            ? 'failed'
+            : revisedSpec || revisedBrainstorm
+              ? 'spec'
+              : awaitingUser
+                ? 'awaiting_approval'
+                : threadBeforeFinalize?.status === 'failed'
+                  ? 'failed'
+                  : 'completed'
       await this.threadManager.setStatus(info.projectId, info.threadId, finalStatus, {
         read: userAborted
       })
@@ -15485,7 +15564,7 @@ export class ChatEngine {
         )
       }
       const finishedThread = await this.threadManager.getThread(info.projectId, info.threadId)
-      if (!failure && !awaitingUser && finishedThread) {
+      if (!failure && !awaitingUser && !contractBlocked && finishedThread) {
         try {
           await this.notifyCoordinatorOfAssignmentAuditFeedback(finishedThread, lastAssistant)
         } catch (error) {
@@ -15511,7 +15590,7 @@ export class ChatEngine {
           }
         }
       }
-      if (!failure) {
+      if (!failure && !contractBlocked) {
         let assignment = this.assignmentEngine.getActive(info.projectId, info.threadId)
         const coordinatorSettings = finishedThread?.settings
         if (assignment && ['approved', 'running', 'attention'].includes(assignment.status)) {
@@ -15541,18 +15620,18 @@ export class ChatEngine {
         await this.finishCheckpoint(
           sessionId,
           info,
-          userAborted ? 'interrupted' : failure ? 'failed' : 'completed',
-          failure
+          userAborted || contractBlocked ? 'interrupted' : failure ? 'failed' : 'completed',
+          contractBlocked ? 'The specification contract requires user intervention.' : failure
         )
       }
-      if (!failure && !awaitingUser && !revisedSpec && !revisedBrainstorm) {
+      if (!failure && !awaitingUser && !contractBlocked && !revisedSpec && !revisedBrainstorm) {
         try {
           await this.runPendingInitialSpec(info.projectId, info.threadId)
         } catch (error) {
           Logger.error('Initial specification generation failed:', error)
         }
       }
-      if (!failure && !awaitingUser && !revisedSpec && !revisedBrainstorm) {
+      if (!failure && !awaitingUser && !contractBlocked && !revisedSpec && !revisedBrainstorm) {
         const [thread, activeSpec] = await Promise.all([
           this.threadManager.getThread(info.projectId, info.threadId),
           this.getActiveSpec(info.projectId, info.threadId)
@@ -15571,7 +15650,7 @@ export class ChatEngine {
           }
         }
       }
-      if (!failure && turnAssistant) {
+      if (!failure && !contractBlocked && turnAssistant) {
         assistantResponse = assistantMemoryDecisionContext(turnAssistant)
       }
     } catch (error) {
@@ -17372,6 +17451,24 @@ function assistantText(message: AgentMessage): string {
     .filter((part): part is Extract<AgentPart, { type: 'text' }> => part.type === 'text')
     .map((part) => part.text)
     .join('\n')
+}
+
+function hasTerminalSpecContractMarker(text: string, marker: string): boolean {
+  return text.trimEnd().split(/\r?\n/u).at(-1)?.trim() === marker
+}
+
+function assistantAdmitsIncompleteSpec(text: string): boolean {
+  const admissions = text.replace(
+    /\b(?:no|nothing)\b[^.!?\n]{0,120}\bremain(?:s|ing)?\b[^.!?\n]*/giu,
+    ''
+  )
+  return [
+    /\b(?:work|tasks?|phases?|requirements?|criteria|items?|implementation)\s+(?:still\s+)?remain(?:s)?\b/iu,
+    /\bremain(?:s|ing)?\s+(?:unfinished|incomplete|outstanding|unimplemented|on\s+legacy)\b/iu,
+    /\b(?:is|are)\s+(?:still\s+)?(?:unfinished|incomplete|outstanding|unimplemented)\b/iu,
+    /\bnot\s+(?:fully\s+)?(?:done|complete|completed|implemented|finished)\b/iu,
+    /\b(?:partial|partially)\s+(?:implementation|implemented|complete)\b/iu
+  ].some((pattern) => pattern.test(admissions))
 }
 
 function mermaidValidationFailureMessage(failures: MermaidValidationFailure[]): string {
