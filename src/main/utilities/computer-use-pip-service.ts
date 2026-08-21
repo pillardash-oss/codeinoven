@@ -16,6 +16,13 @@ const MAX_MISSES = TARGET_FRAME_RATE
 const AUTO_DISMISS_GRACE_MS = 3_000
 const MAX_FRAME_DIMENSION = 448
 const JPEG_QUALITY = 78
+const MAX_CURSOR_POINT_NODES = 32
+const CURSOR_POINT_CONTAINER_KEYS = [
+  'position',
+  'screen_position',
+  'screenPosition',
+  'coordinates'
+] as const
 
 interface WindowBounds {
   x: number
@@ -407,18 +414,31 @@ function firstPoint(values: unknown[]): { x: number; y: number } | null {
 }
 
 function pointValue(value: unknown): { x: number; y: number } | null {
-  if (Array.isArray(value) && value.length >= 2) {
-    const x = Number(value[0])
-    const y = Number(value[1])
-    return Number.isFinite(x) && Number.isFinite(y) ? { x, y } : null
-  }
-  const record = recordValue(value)
-  const x = Number(record['x'])
-  const y = Number(record['y'])
-  if (Number.isFinite(x) && Number.isFinite(y)) return { x, y }
-  for (const key of ['position', 'screen_position', 'screenPosition', 'coordinates']) {
-    const point = pointValue(record[key])
-    if (point) return point
+  const pending: unknown[] = [value]
+  const visited = new Set<object>()
+  let examined = 0
+
+  while (pending.length > 0 && examined < MAX_CURSOR_POINT_NODES) {
+    const current = pending.pop()
+    if (Array.isArray(current)) {
+      if (current.length < 2) continue
+      const x = Number(current[0])
+      const y = Number(current[1])
+      if (Number.isFinite(x) && Number.isFinite(y)) return { x, y }
+      continue
+    }
+    if (!isRecord(current) || visited.has(current)) continue
+    visited.add(current)
+    examined += 1
+
+    const x = Number(current['x'])
+    const y = Number(current['y'])
+    if (Number.isFinite(x) && Number.isFinite(y)) return { x, y }
+
+    for (let index = CURSOR_POINT_CONTAINER_KEYS.length - 1; index >= 0; index -= 1) {
+      const nested = current[CURSOR_POINT_CONTAINER_KEYS[index]]
+      if (nested !== undefined && nested !== null) pending.push(nested)
+    }
   }
   return null
 }
