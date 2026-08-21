@@ -178,6 +178,7 @@
   let comparing = $state(false)
   let compareError = $state('')
   let compareSequence = 0
+  let initialCompareStarted = false
   /** True while the commit → push → create sequence runs. */
   let submitting = $state(false)
   /** Set when the push was rejected: shows the pull/rebase recovery panel. */
@@ -392,13 +393,18 @@
 
   /** Compare head against base; a stale response from an earlier selection is dropped. */
   async function runCompare(): Promise<void> {
-    if (!originIdentity || !head || !base || sameBranch) return
+    if (!originIdentity || !head || !base) return
     const sequence = ++compareSequence
-    comparing = true
+    compare = null
     compareError = ''
     pushRejected = false
     pushErrorDetails = ''
     createError = ''
+    if (sameBranch) {
+      comparing = false
+      return
+    }
+    comparing = true
     try {
       const snapshot = await gitState.comparePullRequests(
         projectId,
@@ -424,6 +430,20 @@
     } finally {
       if (sequence === compareSequence) comparing = false
     }
+  }
+
+  function changeHead(event: Event): void {
+    const select = event.currentTarget
+    if (!(select instanceof HTMLSelectElement) || select.value === head) return
+    head = select.value
+    void runCompare()
+  }
+
+  function changeBase(event: Event): void {
+    const select = event.currentTarget
+    if (!(select instanceof HTMLSelectElement) || select.value === base) return
+    base = select.value
+    void runCompare()
   }
 
   async function createPullRequest(): Promise<void> {
@@ -781,23 +801,20 @@
 
   $effect(() => {
     if (originIdentity && branches.length > 0) {
+      let selectionChanged = false
       if (!head || !branches.includes(head)) {
         head = branch && branches.includes(branch) ? branch : branches[0]
+        selectionChanged = true
       }
       if (!base || !branches.includes(base)) {
         base = branches.includes('main') ? 'main' : branches[0]
+        selectionChanged = true
+      }
+      if (head && base && (selectionChanged || !initialCompareStarted)) {
+        initialCompareStarted = true
+        void runCompare()
       }
     }
-  })
-
-  $effect(() => {
-    if (sameBranch) {
-      compare = null
-      compareError = ''
-      compareSequence++
-      return
-    }
-    if (originIdentity && head && base) void runCompare()
   })
 </script>
 
@@ -1035,8 +1052,9 @@
             <select
               id="pr-head"
               class="h-8 w-full cursor-pointer rounded-lg border border-border bg-elevated px-2 font-mono text-[11px] text-foreground outline-none focus:border-primary disabled:opacity-50"
-              bind:value={head}
+              value={head}
               disabled={branches.length === 0}
+              onchange={changeHead}
             >
               {#each branches as name (name)}
                 <option value={name}>{name}</option>
@@ -1054,8 +1072,9 @@
             <select
               id="pr-base"
               class="h-8 w-full cursor-pointer rounded-lg border border-border bg-elevated px-2 font-mono text-[11px] text-foreground outline-none focus:border-primary disabled:opacity-50"
-              bind:value={base}
+              value={base}
               disabled={branches.length === 0}
+              onchange={changeBase}
             >
               {#each branches as name (name)}
                 <option value={name}>{name}</option>
