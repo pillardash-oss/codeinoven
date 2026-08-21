@@ -776,6 +776,14 @@ class ScopeState {
     await this.reloadBoard(projectId)
   }
 
+  /** Archive or restore a custom scope. Never touches its worktree. */
+  async setArchive(projectId: string, bucketId: string, archived: boolean): Promise<void> {
+    const board = await invoke('scope:setArchive', projectId, bucketId, archived)
+    const cloned = cloneBoard(board)
+    this.boards.set(projectId, cloned)
+    if (projectId === this.activeProjectId) this.board = cloned
+  }
+
   /** Persistent project-level managed-worktree defaults. */
   async setWorktreeDefaults(projectId: string, defaults: ScopeWorktreeDefaults): Promise<void> {
     const board = await invoke('scope:setWorktreeDefaults', projectId, defaults)

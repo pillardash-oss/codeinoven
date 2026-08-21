@@ -10,10 +10,12 @@
     open: boolean
     projectId: string
     onClose: () => void
+    /** Present when creating a worktree for an existing custom scope. */
+    existingBucketId?: string | null
     onCreated?: (bucketId: string) => void
   }
 
-  let { open, projectId, onClose, onCreated }: Props = $props()
+  let { open, projectId, onClose, existingBucketId = null, onCreated }: Props = $props()
 
   const componentId = $props.id()
   const formId = `${componentId}-create-scope-form`
@@ -58,10 +60,17 @@
     busy = true
     error = null
     try {
-      const bucket = await scopeState.createBucketForProject(projectId, trimmed)
-      if (!bucket) throw new Error('The scope could not be created')
+      // For an existing scope we only attach a worktree; otherwise the bucket
+      // is created first. Renaming on the migrate path keeps the stable
+      // branch/directory (main derives those from the feature title).
+      let bucketId = existingBucketId ?? null
+      if (!bucketId) {
+        const bucket = await scopeState.createBucketForProject(projectId, trimmed)
+        bucketId = bucket?.id ?? null
+        if (!bucketId) throw new Error('The scope could not be created')
+      }
       if (isolated) {
-        await scopeState.createWorktree(projectId, bucket.id, {
+        await scopeState.createWorktree(projectId, bucketId, {
           title: trimmed,
           runSetup,
           environmentMode
@@ -74,7 +83,7 @@
           environmentMode
         })
       }
-      onCreated?.(bucket.id)
+      onCreated?.(bucketId)
       onClose()
     } catch (cause) {
       error = cause instanceof Error ? cause.message : 'The scope could not be created.'

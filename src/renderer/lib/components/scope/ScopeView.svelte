@@ -18,6 +18,9 @@
     type Thread
   } from '$shared/types'
   import ScopeBucketView from './ScopeBucket.svelte'
+  import ScopeLifecycleModal from './ScopeLifecycleModal.svelte'
+  import ScopeCreateModal from './ScopeCreateModal.svelte'
+  import type { ScopeLifecycleAction } from '$shared/types'
 
   interface Props {
     navigateToProjects?: () => void
@@ -32,6 +35,8 @@
   let deleteBucketTarget = $state<ScopeBucket | null>(null)
   let deleteThreads = $state(false)
   let actionError = $state<string | null>(null)
+  let lifecycleAction = $state<{ action: ScopeLifecycleAction; bucket: ScopeBucket } | null>(null)
+  let createWorktreeTarget = $state<ScopeBucket | null>(null)
 
   let activeProject = $derived(
     scopeState.projectRecords.find((project) => project.id === scopeState.activeProjectId) ?? null
@@ -265,6 +270,31 @@
     })
   }
 
+  function openLifecycle(bucket: ScopeBucket, action: ScopeLifecycleAction): void {
+    if (bucket.root.kind !== 'worktree') {
+      return
+    }
+    lifecycleAction = { action, bucket }
+  }
+
+  async function toggleArchive(bucket: ScopeBucket, archived: boolean): Promise<void> {
+    if (!scopeState.activeProjectId) return
+    try {
+      await scopeState.setArchive(scopeState.activeProjectId, bucket.id, archived)
+    } catch (error) {
+      actionError = errorMessage(error, 'The scope could not be archived.')
+    }
+  }
+
+  async function retrySetup(bucket: ScopeBucket): Promise<void> {
+    if (!scopeState.activeProjectId || bucket.root.kind !== 'worktree') return
+    try {
+      await scopeState.retryWorktreeSetup(scopeState.activeProjectId, bucket.id, true)
+    } catch (error) {
+      actionError = errorMessage(error, 'Setup could not be retried.')
+    }
+  }
+
   async function confirmDeleteBucket(): Promise<void> {
     if (!deleteBucketTarget || deleteBucketTarget.id === DEFAULT_SCOPE_BUCKET_ID) return
     try {
@@ -359,6 +389,13 @@
               onToggleSlice={(stage) => toggleSlice(bucket.id, stage)}
               onEditBucket={() => askEditBucket(bucket)}
               onDeleteBucket={() => (deleteBucketTarget = bucket)}
+              onArchive={() => void toggleArchive(bucket, true)}
+              onRestore={() => void toggleArchive(bucket, false)}
+              onCreateWorktree={() => (createWorktreeTarget = bucket)}
+              onRetrySetup={() => void retrySetup(bucket)}
+              onDetach={() => openLifecycle(bucket, 'detach')}
+              onRemoveWorktree={() => openLifecycle(bucket, 'remove-worktree')}
+              onDeleteBranch={() => openLifecycle(bucket, 'delete-branch')}
               onMoveBucket={moveBucket}
               onCreateThread={() => void createThread(bucket.id)}
               onOpen={(thread) => void openThread(thread)}
@@ -471,3 +508,23 @@
     />
   </div>
 </Modal>
+
+{#if lifecycleAction && scopeState.activeProjectId}
+  <ScopeLifecycleModal
+    open={lifecycleAction !== null}
+    projectId={scopeState.activeProjectId}
+    bucketId={lifecycleAction.bucket.id}
+    action={lifecycleAction.action}
+    onClose={() => (lifecycleAction = null)}
+    onDone={() => (lifecycleAction = null)}
+  />
+{/if}
+
+{#if createWorktreeTarget && scopeState.activeProjectId}
+  <ScopeCreateModal
+    open={createWorktreeTarget !== null}
+    projectId={scopeState.activeProjectId}
+    existingBucketId={createWorktreeTarget.id}
+    onClose={() => (createWorktreeTarget = null)}
+  />
+{/if}
