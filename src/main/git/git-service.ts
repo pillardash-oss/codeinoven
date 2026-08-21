@@ -14,6 +14,7 @@ import type {
   GitFileChange,
   GitFileStatus,
   GitIdentity,
+  GitPullStrategy,
   GitRemoteInfo,
   GitResetMode,
   GitStashEntry,
@@ -806,8 +807,8 @@ export class GitService {
   }
 
   /**
-   * Pull a specific remote branch, merging or rebasing, and return the
-   * refreshed status even when the integration stops on conflicts.
+   * Pull a specific remote branch with an explicit reconciliation strategy and
+   * return the refreshed status even when the integration stops on conflicts.
    *
    * The push-recovery flow needs to distinguish "pulled cleanly, safe to push"
    * from "stopped on conflicts, hand over to the conflict UI". A conflicted
@@ -817,12 +818,19 @@ export class GitService {
    */
   async pullIntegrate(
     projectPath: string,
-    options: { remote?: string; branch?: string; rebase?: boolean; token?: string } = {}
+    options: {
+      remote?: string
+      branch?: string
+      strategy: GitPullStrategy
+      token?: string
+    }
   ): Promise<GitStatus> {
     return this.enqueue(projectPath, async () => {
       const directory = await this.repo(projectPath)
       const args: string[] = []
-      if (options.rebase) args.push('--rebase')
+      if (options.strategy === 'rebase') args.push('--rebase')
+      else if (options.strategy === 'ff-only') args.push('--ff-only')
+      else args.push('--no-rebase')
       if (options.remote) args.push(options.remote)
       if (options.branch) args.push(options.branch)
       const git = options.token

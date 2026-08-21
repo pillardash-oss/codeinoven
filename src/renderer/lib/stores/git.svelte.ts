@@ -19,6 +19,7 @@ import type {
   GitHubPermissionRequired,
   GitHubWorkflowRunDetail,
   GitIdentity,
+  GitPullStrategy,
   GitRemoteInfo,
   GitResetMode,
   GitStashEntry,
@@ -802,22 +803,28 @@ export class GitState {
   }
 
   /**
-   * Pull a specific remote branch (merge or rebase) for push recovery, then
-   * surface the refreshed status. A pull that stops on conflicts is a normal
-   * state — the panel hands over to the conflict UI and never auto-pushes.
+   * Pull a specific remote branch with an explicit strategy, then surface the
+   * refreshed status. A pull that stops on conflicts is a normal state; the
+   * panel hands over to the conflict UI and never auto-pushes.
    */
   async pullIntegrate(
     projectId: string,
     remote: string,
     branch: string,
-    rebase: boolean
+    strategy: GitPullStrategy
   ): Promise<void> {
     this.markBusy('pull', true)
     this.error = null
     try {
-      this.status = await invoke('git:pullIntegrate', projectId, { remote, branch, rebase })
+      this.status = await invoke('git:pullIntegrate', projectId, { remote, branch, strategy })
     } catch (reason) {
-      this.error = errorMessage(reason, rebase ? 'Pull with rebase failed' : 'Pull failed')
+      const fallback =
+        strategy === 'rebase'
+          ? 'Pull with rebase failed'
+          : strategy === 'ff-only'
+            ? 'Fast-forward pull failed'
+            : 'Pull with merge failed'
+      this.error = errorMessage(reason, fallback)
     } finally {
       this.markBusy('pull', false)
     }

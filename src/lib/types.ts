@@ -3330,6 +3330,8 @@ export interface AppConfig {
   resumeWorkOnRestart: boolean
   /** Default PR merge method used by the Git panel, pre-selected when merging. */
   defaultMergeMethod: PrMergeMethod
+  /** Pull strategy used by the Git panel. `ask` opens the strategy chooser. */
+  defaultPullStrategy: GitPullPreference
   /** Hunks whose changed lines exceed this are collapsed with a notice so huge
    *  diffs do not hurt diff-view performance. */
   maxDiffLines: number
@@ -3366,12 +3368,19 @@ export type AppConfigPatch = Partial<
     | 'autoRetryAfterReset'
     | 'resumeWorkOnRestart'
     | 'defaultMergeMethod'
+    | 'defaultPullStrategy'
     | 'maxDiffLines'
     | 'openLocalhostInCioBrowser'
   >
 >
 
 // ─── Git management ──────────────────────────────────────────────────────────
+
+/** Explicit reconciliation strategies supported by `git pull`. */
+export type GitPullStrategy = 'merge' | 'rebase' | 'ff-only'
+
+/** Persisted Pull-button behavior. */
+export type GitPullPreference = 'ask' | GitPullStrategy
 
 /** Status of one file in the working tree. */
 export type GitFileStatus =

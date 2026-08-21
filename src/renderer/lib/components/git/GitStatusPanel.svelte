@@ -3,6 +3,7 @@
   import { copyText } from '$lib/copy-text'
   import { openInBrowser } from '$lib/open-in-browser'
   import { diffLayoutToggleLabel } from '$lib/stores/diff-layout.svelte'
+  import { appConfigState } from '$lib/stores/app-config.svelte'
   import { gitState } from '$lib/stores/git.svelte'
   import { cachedHasDeployments, cacheHasDeployments } from '$lib/git-deployments-cache'
   import type {
@@ -10,6 +11,7 @@
     GitCommitInfo,
     GitDiff,
     GitFileChange,
+    GitPullStrategy,
     GitHubDeployment,
     GitHubDeploymentJob,
     GitHubDeploymentJobLog,
@@ -107,6 +109,9 @@
   let identityName = $state('')
   let identityEmail = $state('')
   let pushConfirm = $state(false)
+  /** Pull strategy chooser, opened by the default `ask` preference or a failed strategy. */
+  let pullStrategyOpen = $state(false)
+  let pullStrategyError = $state('')
   /** Divergence recovery dialog: the branch is behind the remote, push was rejected. */
   let pushDiverged = $state(false)
   /** Which recovery action is running ('merge' | 'rebase'), to disable the buttons. */
@@ -1114,6 +1119,57 @@
   )
   const syncBusy = $derived(gitState.isBusy(['fetch', 'pull', 'push']))
 
+  function closePullStrategy(): void {
+    if (gitState.isBusy('pull')) return
+    pullStrategyOpen = false
+    pullStrategyError = ''
+  }
+
+  function resolvePullTarget(): { remote: string; branch: string } | null {
+    const currentStatus = status
+    if (!currentStatus?.branch) return null
+    const upstream = currentStatus.upstream
+    if (upstream) {
+      const trackedRemote = remotes.find((remote) => upstream.startsWith(`${remote.name}/`))
+      if (trackedRemote) {
+        return {
+          remote: trackedRemote.name,
+          branch: upstream.slice(trackedRemote.name.length + 1)
+        }
+      }
+    }
+    if (!primaryRemote) return null
+    return { remote: primaryRemote.name, branch: currentStatus.branch }
+  }
+
+  async function performPull(strategy: GitPullStrategy): Promise<void> {
+    const target = resolvePullTarget()
+    if (!target) {
+      pullStrategyError = 'No tracked branch is available to pull'
+      pullStrategyOpen = true
+      return
+    }
+
+    pullStrategyError = ''
+    await gitState.pullIntegrate(projectId, target.remote, target.branch, strategy)
+    if (gitState.error) {
+      pullStrategyError = gitState.error
+      gitState.error = null
+      pullStrategyOpen = true
+      return
+    }
+    pullStrategyOpen = false
+  }
+
+  async function pullAction(): Promise<void> {
+    if (appConfigState.defaultPullStrategy === 'ask') {
+      pullStrategyError = ''
+      pullStrategyOpen = true
+      return
+    }
+    await performPull(appConfigState.defaultPullStrategy)
+  }
+
   async function performPush(remote: { name: string; url: string }): Promise<void> {
     if (!status?.branch) return
     const result = await gitState.push(projectId, false, remote.name)
@@ -1153,7 +1209,7 @@
     pushDiverged = false
     pushRecoverMode = mode
     try {
-      await gitState.pullIntegrate(projectId, remote.name, status.branch, mode === 'rebase')
+      await gitState.pullIntegrate(projectId, remote.name, status.branch, mode)
       // Conflicts hand over to the conflict UI; never auto-push a half-merged tree.
       if (!gitState.error && gitState.conflicted.length === 0) {
         await performPush(remote)
@@ -2983,6 +3039,86 @@
     </Modal>
   {/if}
 
+  {#if pullStrategyOpen}
+    <Modal open title="Choose pull strategy" onClose={closePullStrategy}>
+      <div class="space-y-3">
+        <div class="rounded-lg border border-border bg-elevated px-3 py-2">
+          <p class="text-[10px] font-medium text-foreground">
+            Pull into <span class="font-mono">{status?.branch ?? 'current branch'}</span>
+          </p>
+          <p class="mt-0.5 text-[9px] text-dimmed">
+            {status?.ahead ?? 0} ahead, {status?.behind ?? 0} behind
+            <span class="font-mono">{status?.upstream ?? 'its remote'}</span>
+          </p>
+        </div>
+        {#if pullStrategyError}
+          <div class="rounded-lg border border-danger/20 bg-danger/10 px-3 py-2" role="alert">
+            <p class="text-[10px] font-semibold text-danger">That pull strategy could not finish</p>
+            <p
+              class="mt-0.5 whitespace-pre-wrap break-words text-[9px] leading-relaxed text-danger"
+            >
+              {pullStrategyError}
+            </p>
+            <p class="mt-1 text-[9px] leading-relaxed text-dimmed">
+              Choose another strategy below, or cancel without changing the branch further.
+            </p>
+          </div>
+        {/if}
+        <div class="space-y-1 text-[9px] leading-relaxed text-dimmed">
+          <p>
+            <span class="font-medium text-foreground">Merge</span> keeps both histories and may create
+            a merge commit.
+          </p>
+          <p>
+            <span class="font-medium text-foreground">Rebase</span> replays local commits on top of the
+            remote branch.
+          </p>
+          <p>
+            <span class="font-medium text-foreground">Fast-forward only</span> pulls only when no reconciliation
+            is needed.
+          </p>
+        </div>
+      </div>
+      {#snippet footer()}
+        <div class="flex items-center justify-end gap-2">
+          <button
+            type="button"
+            class="cursor-pointer rounded-lg px-3 py-1.5 text-[11px] font-medium text-muted hover:bg-elevated hover:text-foreground disabled:cursor-default disabled:opacity-50"
+            disabled={gitState.isBusy('pull')}
+            onclick={closePullStrategy}
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            class="h-8 cursor-pointer rounded-lg border border-border px-3 text-[11px] font-medium text-foreground transition-colors hover:bg-elevated disabled:cursor-default disabled:opacity-50"
+            disabled={gitState.isBusy('pull')}
+            onclick={() => void performPull('ff-only')}
+          >
+            Fast-forward only
+          </button>
+          <button
+            type="button"
+            class="h-8 cursor-pointer rounded-lg border border-border px-3 text-[11px] font-medium text-foreground transition-colors hover:bg-elevated disabled:cursor-default disabled:opacity-50"
+            disabled={gitState.isBusy('pull')}
+            onclick={() => void performPull('rebase')}
+          >
+            Rebase
+          </button>
+          <button
+            type="button"
+            class="h-8 cursor-pointer rounded-lg bg-primary px-3 text-[11px] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:cursor-default disabled:opacity-50"
+            data-modal-primary
+            disabled={gitState.isBusy('pull')}
+            onclick={() => void performPull('merge')}
+          >
+            Merge
+          </button>
+        </div>
+      {/snippet}
+    </Modal>
+  {/if}
+
   <!--
     Fetch/pull/push act on the local working tree, so they only belong to the
     working-tree tabs. On the pull request tab they sat under a PR's own
@@ -3011,7 +3147,7 @@
           ? `Pull ${String(status.behind)} commit(s) from the remote`
           : 'Pull from the remote'}
         disabled={remotes.length === 0 || syncBusy}
-        onclick={() => void gitState.pull(projectId)}
+        onclick={() => void pullAction()}
       >
         {#if gitState.isBusy('pull')}
           <Loader2 size={11} class="animate-spin" />

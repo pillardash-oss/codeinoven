@@ -914,7 +914,14 @@ export interface IpcInvokeContract {
   'git:fetchBranch': Contract<[projectId: string, remote: string, branch: string], GitStatus>
   'git:pull': Contract<[projectId: string], GitStatus>
   'git:pullIntegrate': Contract<
-    [projectId: string, options: { remote?: string; branch?: string; rebase: boolean }],
+    [
+      projectId: string,
+      options: {
+        remote?: string
+        branch?: string
+        strategy: import('./types').GitPullStrategy
+      }
+    ],
     GitStatus
   >
   'git:push': Contract<

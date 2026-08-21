@@ -1623,7 +1623,11 @@ export class RemoteRpcDispatcher {
         const options = (args[1] ?? {}) as {
           remote?: string
           branch?: string
-          rebase?: boolean
+          strategy?: string
+        }
+        const strategy = options.strategy
+        if (strategy !== 'merge' && strategy !== 'rebase' && strategy !== 'ff-only') {
+          throw new TypeError('Invalid pull strategy')
         }
         const tokenRef = `git_pat_${projectId}`
         const token = (await this.vault.exists(tokenRef))
@@ -1632,7 +1636,7 @@ export class RemoteRpcDispatcher {
         return this.gitService.pullIntegrate(await this.resolveProjectPath(projectId), {
           remote: typeof options.remote === 'string' ? options.remote : undefined,
           branch: typeof options.branch === 'string' ? options.branch : undefined,
-          rebase: Boolean(options.rebase),
+          strategy,
           token
         })
       }

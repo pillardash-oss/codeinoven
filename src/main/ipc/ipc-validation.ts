@@ -537,6 +537,11 @@ const MERGE_METHODS = new Set<import('../../lib/types').PrMergeMethod>([
   'squash',
   'rebase'
 ])
+const PULL_STRATEGIES = new Set<import('../../lib/types').GitPullStrategy>([
+  'merge',
+  'rebase',
+  'ff-only'
+])
 const PR_STATES = new Set<import('../../lib/types').PrState>(['open', 'closed', 'all'])
 const PR_REVIEW_EVENTS = new Set<import('../../lib/types').PrReviewEvent>([
   'APPROVE',
@@ -631,16 +636,20 @@ export function validatePushOptions(value: unknown): {
   return options
 }
 
-/** Options for the conflict-aware pull used by push recovery. */
+/** Options for an explicit, conflict-aware pull. */
 export function validatePullIntegrateOptions(value: unknown): {
   remote?: string
   branch?: string
-  rebase: boolean
+  strategy: import('../../lib/types').GitPullStrategy
 } {
   const input = assertRecord(value, 'Pull integrate options')
-  rejectUnknownFields(input, new Set(['remote', 'branch', 'rebase']), 'pull integrate options')
-  const options: { remote?: string; branch?: string; rebase: boolean } = {
-    rebase: validateBoolean(input.rebase, 'Rebase')
+  rejectUnknownFields(input, new Set(['remote', 'branch', 'strategy']), 'pull integrate options')
+  const options: {
+    remote?: string
+    branch?: string
+    strategy: import('../../lib/types').GitPullStrategy
+  } = {
+    strategy: assertEnum(input.strategy, PULL_STRATEGIES, 'pull strategy')
   }
   if (input.remote !== undefined) {
     options.remote = validateRemoteName(input.remote)

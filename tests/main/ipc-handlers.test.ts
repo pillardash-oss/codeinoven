@@ -99,6 +99,7 @@ const defaultConfig: AppConfig = {
   autoRetryAfterReset: false,
   resumeWorkOnRestart: true,
   defaultMergeMethod: 'squash',
+  defaultPullStrategy: 'ask',
   maxDiffLines: 100
 }
 

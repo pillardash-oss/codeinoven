@@ -118,6 +118,7 @@
     autoRetryAfterReset: true,
     resumeWorkOnRestart: true,
     defaultMergeMethod: 'squash',
+    defaultPullStrategy: 'ask',
     maxDiffLines: 100,
     openLocalhostInCioBrowser: true
   }

@@ -7,6 +7,7 @@
   import type {
     AppConfig,
     AppConfigPatch,
+    GitPullPreference,
     PrMergeMethod,
     SkillMarketEntry,
     SlashCommandMode,
@@ -243,6 +244,16 @@
     { id: 'squash', label: 'Squash' },
     { id: 'merge', label: 'Merge' },
     { id: 'rebase', label: 'Rebase' }
+  ]
+
+  const pullStrategyOptions: Array<{
+    id: GitPullPreference
+    label: string
+  }> = [
+    { id: 'ask', label: 'Ask every time' },
+    { id: 'merge', label: 'Merge' },
+    { id: 'rebase', label: 'Rebase' },
+    { id: 'ff-only', label: 'Fast-forward only' }
   ]
 
   function saveThreadLimit(event: Event): void {
@@ -669,6 +680,28 @@
                     })}
                 >
                   {#each mergeMethodOptions as option (option.id)}
+                    <option value={option.id}>{option.label}</option>
+                  {/each}
+                </select>
+              </div>
+              <div class="flex items-center justify-between gap-4">
+                <div>
+                  <p class="text-sm font-medium">Default pull strategy</p>
+                  <p class="text-xs text-dimmed">
+                    Ask when pulling, or always use one reconciliation strategy
+                  </p>
+                </div>
+                <select
+                  class="rounded-lg border bg-elevated px-2.5 py-1.5 text-xs font-medium outline-none focus:border-primary disabled:opacity-50"
+                  value={config.defaultPullStrategy}
+                  disabled={!settingsReady}
+                  aria-label="Default pull strategy"
+                  onchange={(event: SelectChangeEvent) =>
+                    void updateConfig({
+                      defaultPullStrategy: event.currentTarget.value as GitPullPreference
+                    })}
+                >
+                  {#each pullStrategyOptions as option (option.id)}
                     <option value={option.id}>{option.label}</option>
                   {/each}
                 </select>

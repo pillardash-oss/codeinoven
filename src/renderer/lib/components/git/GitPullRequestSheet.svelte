@@ -492,7 +492,7 @@
     createError = ''
     recoverMode = mode
     try {
-      await gitState.pullIntegrate(projectId, 'origin', head, mode === 'rebase')
+      await gitState.pullIntegrate(projectId, 'origin', head, mode)
       if (gitState.error) {
         createError = gitState.error
         return
