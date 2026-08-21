@@ -83,14 +83,26 @@ const imageDescriptionPermission: Record<string, AgentPermissionValue> = {
   read: ALLOW
 }
 
-/** PR compose: read/search + read-only git; the final response carries the result. */
+/** PR compose: read/search + READ-ONLY git; mutating git commands are denied. */
 const prComposePermission: Record<string, AgentPermissionValue> = {
   ...baseDeny,
   read: ALLOW,
   glob: ALLOW,
   grep: ALLOW,
   list: ALLOW,
-  bash: { '*': DENY, 'git *': ALLOW }
+  bash: {
+    '*': 'deny',
+    'git status *': 'allow',
+    'git diff *': 'allow',
+    'git log *': 'allow',
+    'git show *': 'allow',
+    'git rev-parse *': 'allow',
+    'git ls-files *': 'allow',
+    'git ls-tree *': 'allow',
+    'git branch --show-current': 'allow',
+    'git remote -v': 'allow',
+    'git remote show *': 'allow'
+  }
 }
 
 /** Explicit utility setup: research plus the turn-scoped loopback API, no file writes. */

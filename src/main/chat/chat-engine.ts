@@ -41,6 +41,7 @@ import {
   type WorkspaceScopeMode
 } from './prompt-assembler'
 import {
+  currentHarnessVersion,
   episodeFromPieces,
   tokenUsageAttribution,
   type AttributionMode
@@ -4051,6 +4052,7 @@ export class ChatEngine {
           key: attributionKey ?? `${harnessId}:${threadId}`,
           mode: attributionModeFor(mode, executionScope, threadSettings?.fileSystemMode === true),
           driverId: harnessId,
+          harnessVersion: currentHarnessVersion() ?? undefined,
           pieces: assembled.layers.map((layer) => ({
             title: layer.title,
             content: layer.content
@@ -5799,6 +5801,9 @@ export class ChatEngine {
       if (response.error) throw new Error(response.error)
       tokenUsageAttribution.recordTurnTotals({
         key: `eph:${temporary.sessionId}`,
+        agent: leanAgentNameForMode('ephemeral'),
+        driverId: temporary.driverId,
+        harnessVersion: currentHarnessVersion(),
         providerId: response.providerId ?? settings.providerId ?? null,
         modelId: response.modelId ?? settings.modelId ?? null,
         reportedInputTokens: response.normalizedUsage?.uncachedInput ?? null,
@@ -5916,6 +5921,9 @@ export class ChatEngine {
       if (response.error) throw new Error(response.error)
       tokenUsageAttribution.recordTurnTotals({
         key: `pr:${sessionId}`,
+        agent: leanAgentNameForMode('pr-compose'),
+        driverId,
+        harnessVersion: currentHarnessVersion(),
         providerId: response.providerId ?? settings.providerId ?? null,
         modelId: response.modelId ?? settings.modelId ?? null,
         reportedInputTokens: response.normalizedUsage?.uncachedInput ?? null,
@@ -6846,6 +6854,9 @@ export class ChatEngine {
       if (response.error) throw new Error(response.error)
       tokenUsageAttribution.recordTurnTotals({
         key: `img:${sessionId}`,
+        agent: leanAgentNameForMode('image-description'),
+        driverId: selection.harnessId,
+        harnessVersion: currentHarnessVersion(),
         providerId: response.providerId ?? settings.providerId ?? null,
         modelId: response.modelId ?? settings.modelId ?? null,
         reportedInputTokens: response.normalizedUsage?.uncachedInput ?? null,
@@ -9873,6 +9884,9 @@ export class ChatEngine {
         if (response.error) throw new Error(response.error)
         tokenUsageAttribution.recordTurnTotals({
           key: `brainstorm:${sessionId}`,
+          agent: leanAgentNameForMode('brainstorm'),
+          driverId,
+          harnessVersion: currentHarnessVersion(),
           providerId: response.providerId ?? settings.providerId ?? null,
           modelId: response.modelId ?? settings.modelId ?? null,
           reportedInputTokens: response.normalizedUsage?.uncachedInput ?? null,
@@ -15829,6 +15843,9 @@ export class ChatEngine {
     const normalizedUsage = message.normalizedUsage
     tokenUsageAttribution.recordTurnTotals({
       key: parentTurnId,
+      agent: null,
+      driverId: message.harnessId ?? thread?.settings?.harnessId ?? null,
+      harnessVersion: currentHarnessVersion(),
       providerId: message.providerId ?? thread?.settings?.providerId ?? null,
       modelId: message.modelId ?? thread?.settings?.modelId ?? null,
       reportedInputTokens: normalizedUsage?.uncachedInput ?? null,

@@ -31,11 +31,19 @@ const DOCUMENTED_EDIT_SCOPE: Partial<Record<LeanAgentMode, string>> = {
   brainstorm: '.cio/specs/*/versions/**'
 }
 
-/** Read-only git allowance for the PR compose agent. */
-const DOCUMENTED_BASH_SCOPE: Partial<Record<LeanAgentMode, string>> = {
-  'pr-compose': 'git *',
-  'utility-setup': 'curl *'
-}
+/** Read-only git allowances for the PR compose agent (mutating git denied). */
+const DOCUMENTED_BASH_SCOPES: Array<string> = [
+  'git status *',
+  'git diff *',
+  'git log *',
+  'git show *',
+  'git rev-parse *',
+  'git ls-files *',
+  'git ls-tree *',
+  'git branch --show-current',
+  'git remote -v',
+  'git remote show *'
+]
 
 const HEAVY_KEYS = [
   'read',
@@ -103,9 +111,17 @@ describe('lean agent definitions', () => {
       if (editScope !== undefined) {
         expect(agent.permission['edit']).toMatchObject({ '*': 'deny', [editScope]: 'allow' })
       }
-      const bashScope = DOCUMENTED_BASH_SCOPE[mode]
-      if (bashScope !== undefined) {
-        expect(agent.permission['bash']).toMatchObject({ '*': 'deny', [bashScope]: 'allow' })
+      // Object-shaped bash scopes are pinned per mode: PR compose allows only
+      // read-only git commands; utility-setup allows only `curl` to the app API.
+      if (mode === 'pr-compose' || mode === 'utility-setup') {
+        const configured = agent.permission['bash']
+        expect(typeof configured === 'object' && configured !== null).toBe(true)
+        const mapping = configured as Record<string, 'allow' | 'deny'>
+        expect(mapping['*']).toBe('deny')
+        const expectedScopes = mode === 'utility-setup' ? ['curl *'] : DOCUMENTED_BASH_SCOPES
+        for (const scope of expectedScopes) expect(mapping[scope]).toBe('allow')
+      } else {
+        expect(agent.permission['bash']).toBe('deny')
       }
       // Nothing beyond the documented allow list leaks through as 'allow'.
       const allowedKeys = HEAVY_KEYS.filter((key) => agent.permission[key] === 'allow')

@@ -95,6 +95,37 @@ describe('mergeLeanAgentsGlobalConfig', () => {
     expect(await readFile(configPath, 'utf8')).toBe(first)
   })
 
+  it('keeps the ORIGINAL pre-merge backup when a later merge adds new agents', async () => {
+    const original = JSON.stringify(
+      { plugin: ['@sveltejs/opencode'], agent: { custom: { description: 'x', mode: 'primary' } } },
+      null,
+      2
+    )
+    await writeFile(configPath, original, 'utf8')
+    // First merge writes the original backup.
+    await mergeLeanAgentsGlobalConfig({ configPath, backupPath, agents: FIXTURE_AGENTS })
+    const backupAfterFirst = await readFile(backupPath, 'utf8')
+    expect(backupAfterFirst).toBe(original)
+    // A later release merges an additional managed agent.
+    const extraAgent: LeanOpenCodeAgent = {
+      name: 'cio-brainstorm',
+      description: 'Test brainstorm agent',
+      mode: 'primary',
+      prompt: 'You are a brainstorm reporter.',
+      permission: { read: 'allow', question: 'allow' }
+    }
+    await mergeLeanAgentsGlobalConfig({
+      configPath,
+      backupPath,
+      agents: [...FIXTURE_AGENTS, extraAgent]
+    })
+    // The backup must STILL hold the true original, not the intermediate state.
+    expect(await readFile(backupPath, 'utf8')).toBe(original)
+    const restored = await rollbackLeanAgentsGlobalConfig({ configPath, backupPath })
+    expect(restored).toBe(true)
+    expect(await readFile(configPath, 'utf8')).toBe(original)
+  })
+
   it('skips JSONC configs (comments) with a warning and never rewrites them', async () => {
     const jsonc = `{
   // user comment

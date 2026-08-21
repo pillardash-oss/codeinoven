@@ -1,6 +1,6 @@
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
-import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import {
   LEAN_AGENTS,
   LEAN_AGENT_NAMES,
@@ -143,14 +143,19 @@ export async function mergeLeanAgentsGlobalConfig(
   if (changed) {
     await mkdir(dirname(configPath), { recursive: true })
     if (hadFile) {
-      // Preserve the pre-merge file byte-for-byte BEFORE overwriting so the
-      // documented rollback can restore it exactly.
-      await writeFile(backupPath, raw, { encoding: 'utf8' })
+      // Preserve the ORIGINAL pre-merge file byte-for-byte BEFORE overwriting
+      // so rollback restores the true original — even when a later release
+      // adds another managed agent and merges again. `flag: 'wx'` never
+      // overwrites an existing backup with an intermediate, already-modified
+      // configuration.
+      await writeFile(backupPath, raw, { encoding: 'utf8', flag: 'wx' }).catch((error) => {
+        if (!(error instanceof Error && 'code' in error && error.code === 'EEXIST')) throw error
+      })
     } else {
       await rm(backupPath, { force: true }).catch(() => undefined)
     }
     config['agent'] = nextAgents
-    await writeFile(configPath, formatConfig(config), { encoding: 'utf8' })
+    await atomicWrite(configPath, formatConfig(config))
   }
 
   return {
@@ -174,7 +179,7 @@ export async function rollbackLeanAgentsGlobalConfig(
   const backupPath = options.backupPath ?? ROLLBACK_BACKUP_PATH(configPath)
   try {
     const backup = await readFile(backupPath, 'utf8')
-    await writeFile(configPath, backup, { encoding: 'utf8' })
+    await atomicWriteRaw(configPath, backup)
     await rm(backupPath, { force: true })
     return true
   } catch (error) {
@@ -207,9 +212,31 @@ export async function rollbackLeanAgentsGlobalConfig(
   if (changed) {
     if (Object.keys(agentMap).length === 0) delete config['agent']
     else config['agent'] = agentMap
-    await writeFile(configPath, formatConfig(config), { encoding: 'utf8' })
+    await atomicWrite(configPath, formatConfig(config))
   }
   return changed
+}
+
+/** Atomic config write: write `.tmp`, then rename over the target. */
+async function atomicWrite(filePath: string, raw: string): Promise<void> {
+  await atomicWriteRaw(filePath, raw.endsWith('\n') ? raw : `${raw}\n`)
+}
+
+/** Atomic byte-exact write: write `.tmp`, then rename — no normalization. */
+async function atomicWriteRaw(filePath: string, raw: string): Promise<void> {
+  await mkdir(dirname(filePath), { recursive: true })
+  const temporaryPath = `${filePath}.${process.pid}.${Date.now()}.tmp`
+  try {
+    await writeFile(temporaryPath, raw, {
+      encoding: 'utf8',
+      flag: 'wx',
+      mode: 0o600
+    })
+    await rename(temporaryPath, filePath)
+  } catch (error) {
+    await rm(temporaryPath, { force: true }).catch(() => undefined)
+    throw error
+  }
 }
 
 /**

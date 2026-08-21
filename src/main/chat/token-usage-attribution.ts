@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process'
 import { Logger } from '../system/logger'
 import { layerDevHash, layerSize } from './prompt-assembler'
 
@@ -42,6 +43,10 @@ export interface PromptAttributionEpisode {
 /** Provider-reported usage paired with the matching prompt episode. */
 export interface TurnUsageTotals {
   key: string
+  /** Selected lean opencode agent for trimmed modes, null for engineering. */
+  agent: string | null
+  driverId: string | null
+  harnessVersion: string | null
   providerId: string | null
   modelId: string | null
   reportedInputTokens: number | null
@@ -88,11 +93,38 @@ export function episodeFromPieces(input: {
 
 /**
  * Inert in production: dev-only attribution must never run in packaged builds.
- * `CIO_FORCE_ATTRIBUTION=1` re-enables it for local packaged-app measurement.
+ * There is intentionally no environment override — `NODE_ENV=production`
+ * always disables recording.
  */
 export function attributionEnabled(): boolean {
-  if (process.env['CIO_FORCE_ATTRIBUTION'] === '1') return true
   return process.env['NODE_ENV'] !== 'production'
+}
+
+let cachedHarnessVersion: string | null | undefined
+
+/**
+ * Installed opencode version, read once and cached. Dev-only and only invoked
+ * when attribution is enabled, so packaged builds never probe the harness.
+ */
+export function currentHarnessVersion(): string | null {
+  if (cachedHarnessVersion !== undefined) return cachedHarnessVersion
+  if (!attributionEnabled()) {
+    cachedHarnessVersion = null
+    return null
+  }
+  try {
+    const raw = execFileSync('opencode', ['--version'], {
+      encoding: 'utf8',
+      timeout: 15_000
+    })
+      .trim()
+      .split(/\r?\n/u)[0]
+      .trim()
+    cachedHarnessVersion = raw.length > 0 ? raw : null
+  } catch {
+    cachedHarnessVersion = null
+  }
+  return cachedHarnessVersion
 }
 
 export class TokenUsageAttributionRecorder {
@@ -132,6 +164,9 @@ export class TokenUsageAttributionRecorder {
       key: totals.key,
       paired: Boolean(episode),
       mode: episode?.mode ?? null,
+      agent: totals.agent,
+      driverId: totals.driverId,
+      harnessVersion: totals.harnessVersion,
       providerId: totals.providerId,
       modelId: totals.modelId,
       reportedInputTokens: totals.reportedInputTokens,

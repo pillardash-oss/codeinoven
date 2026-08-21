@@ -1,8 +1,8 @@
-import { spawn } from 'child_process'
-import { mkdtemp, mkdir, writeFile, rm } from 'fs/promises'
-import { join } from 'path'
-import { tmpdir } from 'os'
-import { execFileSync } from 'child_process'
+import { spawn, execFileSync } from 'node:child_process'
+import { mkdtemp, mkdir, writeFile, rm, readFile } from 'node:fs/promises'
+import { homedir } from 'node:os'
+import { dirname, join } from 'node:path'
+import { tmpdir } from 'node:os'
 import { buildProcessEnvironment } from '../drivers/cli-environment'
 
 /**
@@ -21,7 +21,66 @@ import { buildProcessEnvironment } from '../drivers/cli-environment'
  * Never touches the machine-wide opencode config. Uses free/flash provider
  * models only when a provider answers; provider/model outages at probe time
  * produce a clearly-labeled environment error rather than a false negative.
+ *
+ * A passing probe writes a persisted, dev-only compliance record for the
+ * installed opencode version. The startup agent merge consumes that record as
+ * its gate: agents are installed only for a harness version that has actually
+ * been proven deny-compliant (or when the operator sets the explicit override),
+ * so the app never ships denied-schema pruning on an unverified harness.
  */
+
+/** Dev-only persistence for the last deny-compliance result, keyed by opencode version. */
+export const OPENCODE_DENY_COMPLIANCE_RECORD_PATH = join(
+  homedir(),
+  '.config',
+  'pillardash',
+  'codeinoven',
+  'opencode-deny-compliance.json'
+)
+
+export interface PersistedDenyCompliance {
+  opencodeVersion: string
+  compliant: boolean
+  recordedAt: number
+  note: string
+}
+
+/** Record the last probe result so the startup merge can gate on proof. */
+export async function recordDenyCompliance(result: DenyProbeResult): Promise<void> {
+  const directory = dirname(OPENCODE_DENY_COMPLIANCE_RECORD_PATH)
+  await mkdir(directory, { recursive: true })
+  const record: PersistedDenyCompliance = {
+    opencodeVersion: result.version,
+    compliant: result.compliant,
+    recordedAt: Date.now(),
+    note: result.note
+  }
+  await writeFile(OPENCODE_DENY_COMPLIANCE_RECORD_PATH, `${JSON.stringify(record, null, 2)}\n`, {
+    encoding: 'utf8',
+    mode: 0o600
+  })
+}
+
+/** Read the persisted compliance record for the installed opencode version, if any. */
+export async function recordedDenyCompliance(
+  version: string
+): Promise<PersistedDenyCompliance | null> {
+  try {
+    const raw = await readFile(OPENCODE_DENY_COMPLIANCE_RECORD_PATH, 'utf8')
+    const parsed = JSON.parse(raw) as Partial<PersistedDenyCompliance>
+    if (parsed.opencodeVersion === version && typeof parsed.compliant === 'boolean') {
+      return {
+        opencodeVersion: version,
+        compliant: parsed.compliant,
+        recordedAt: typeof parsed.recordedAt === 'number' ? parsed.recordedAt : 0,
+        note: typeof parsed.note === 'string' ? parsed.note : ''
+      }
+    }
+    return null
+  } catch {
+    return null
+  }
+}
 
 export interface DenyProbeResult {
   version: string
@@ -32,9 +91,10 @@ export interface DenyProbeResult {
   note: string
 }
 
-function openCodeVersion(): string {
+/** Installed opencode CLI version, or null when the CLI is unavailable. */
+export function openCodeVersion(): string | null {
   try {
-    return execFileSync('opencode', ['--version'], {
+    const raw = execFileSync('opencode', ['--version'], {
       encoding: 'utf8',
       env: buildProcessEnvironment(),
       timeout: 15_000
@@ -42,8 +102,9 @@ function openCodeVersion(): string {
       .trim()
       .split(/\r?\n/u)[0]
       .trim()
+    return raw.length > 0 ? raw : null
   } catch {
-    return 'unknown'
+    return null
   }
 }
 
@@ -98,6 +159,17 @@ async function fetchJson(baseUrl: string, path: string, init?: RequestInit): Pro
   return res.json()
 }
 
+/** POST and consume a no-content response (`prompt_async` returns 204 with an
+ *  empty body — calling `.json()` on it throws `Unexpected end of JSON input`). */
+async function postNoContent(baseUrl: string, path: string, body: unknown): Promise<void> {
+  const res = await fetch(`${baseUrl}${path}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body)
+  })
+  if (!res.ok) throw new Error(`opencode probe ${path} failed with ${res.status}`)
+}
+
 function stepFinishInputTokens(value: unknown): { input: number | null; total: number | null } {
   const messages = Array.isArray(value) ? value : []
   for (const message of messages) {
@@ -145,11 +217,7 @@ async function runTurnMeasurement(
   sessionId: string,
   body: Record<string, unknown>
 ): Promise<{ input: number | null; total: number | null }> {
-  await fetchJson(baseUrl, `/session/${sessionId}/prompt_async`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body)
-  })
+  await postNoContent(baseUrl, `/session/${sessionId}/prompt_async`, body)
   return waitForMessage(baseUrl, sessionId)
 }
 
@@ -159,6 +227,16 @@ async function runTurnMeasurement(
  */
 export async function runOpenCodeDenyProbe(): Promise<DenyProbeResult> {
   const version = openCodeVersion()
+  if (version === null) {
+    return {
+      version: 'unknown',
+      compliant: false,
+      fullInputTokens: null,
+      leanInputTokens: null,
+      reductionInputTokens: null,
+      note: 'opencode CLI is unavailable'
+    }
+  }
   const projectDir = await mkdtemp(join(tmpdir(), 'opencode-deny-probe-'))
   let serve: { baseUrl: string; child: ReturnType<typeof spawn> } | null = null
   try {
@@ -225,7 +303,7 @@ export async function runOpenCodeDenyProbe(): Promise<DenyProbeResult> {
       }
     }
 
-    const model = { providerID: 'opencode', modelID: 'deepseek-v4-flash-free' }
+    const model = { providerID: 'opencode', modelID: 'x-preview-f-free' }
     const promptParts = [{ type: 'text', text: 'Reply with the single word: pong' }]
 
     const fullSession = (await fetchJson(serve.baseUrl, '/session', {
@@ -273,7 +351,7 @@ export async function runOpenCodeDenyProbe(): Promise<DenyProbeResult> {
     // Denied heavy tool/skill schemas must measurably shrink the assembled
     // prompt; a lean agent that prunes nothing fails the compliance gate.
     const compliant = leanUsage.input < fullUsage.input * 0.7
-    return {
+    const result: DenyProbeResult = {
       version,
       compliant,
       fullInputTokens: fullUsage.input,
@@ -283,6 +361,10 @@ export async function runOpenCodeDenyProbe(): Promise<DenyProbeResult> {
         ? 'denied tool/skill schemas are pruned server-side on the headless prompt endpoint'
         : 'agent deny had little/no effect on the assembled prompt (harness non-compliant)'
     }
+    // Persist the compliance proof so the startup agent merge is gated on the
+    // installed harness actually honoring deny (finding 1).
+    await recordDenyCompliance(result)
+    return result
   } finally {
     if (serve) {
       serve.child.kill()

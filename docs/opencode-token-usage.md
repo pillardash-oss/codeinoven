@@ -28,7 +28,7 @@ attributable to denied tool schemas and the pruned skills/instruction block.
 | File-system chat            | `cio-chat-fs`    | read, glob, grep, list, webfetch, websearch, question | none                            |
 | Ephemeral session           | `cio-eph`        | read, glob, grep, list, webfetch, websearch, question | none                            |
 | Image description           | `cio-img-desc`   | read                                                  | none                            |
-| PR compose                  | `cio-pr-compose` | read, glob, grep, list                                | bash read-only `git *`          |
+| PR compose                  | `cio-pr-compose` | read, glob, grep, list                                | bash read-only `git` commands only |
 | Brainstorm (session report) | `cio-brainstorm` | read, glob, grep, list, webfetch, websearch, question | edit `.cio/specs/*/versions/**` |
 
 Every lean agent sets an explicit `"*": "deny"` catch-all first, then
@@ -44,8 +44,10 @@ permission defaults.
 - `edit: { "*": "deny", "<scope>": "allow" }` grants a write only under an
   exact `.cio/` path. Brainstorm writes session-report revisions only under
   `.cio/specs/*/versions/`; PR compose returns its JSON result without writing.
-- `bash: { "*": "deny", "git *": "allow" }` grants only read-only `git`
-  commands for PR compose.
+- `bash` for PR compose allows **only read-only git commands** (an explicit
+  allowlist: `git status/diff/log/show/rev-parse/ls-files/ls-tree`, `git
+  branch --show-current`, `git remote -v/show`). Everything else, including
+  `git push`, `git reset`, `git clean`, and branch deletion, is denied.
 - The `@sveltejs/opencode` plugin weight is deliberately kept as-is; per-agent
   plugin scoping is revisited only if opencode supports it.
 
@@ -59,10 +61,18 @@ discipline as the provider-hiding merge (`provider-account-orchestrator`):
 - **Additive and idempotent.** Only CodeInOven's own agent names are touched;
   user agents, the `@sveltejs/opencode` plugin, MCP wiring, and every other key
   are preserved. A second run rewrites nothing (byte-stable across restart).
-- **Reversible.** Before any write the previous file is preserved at
-  `opencode.json.cio-agents-backup` for byte-for-byte rollback.
+- **Reversible.** Before the first write the ORIGINAL pre-merge file is
+  preserved byte-for-byte at `opencode.json.cio-agents-backup`. The backup is
+  written once (`wx`) and never overwritten by later merges (e.g. when a newer
+  release adds another managed agent), so rollback always restores the true
+  original. All writes are atomic (temp file + rename).
 
-Run at startup via `syncOpenCodeLeanAgents()` (fire-and-forget, non-fatal).
+Run at startup via `syncOpenCodeLeanAgents()`. The merge is **gated on the
+deny-compliance proof**: agents are installed only for an opencode version
+whose deny pruning was verified by the live probe (recorded under
+`~/.config/pillardash/codeinoven/opencode-deny-compliance.json`), or when the
+operator sets `CIO_OPCODE_MERGE_AGENTS_UNVERIFIED=1`. Otherwise the merge is
+skipped with a dev-only warning. Failures are non-fatal.
 
 ## Dev-only measurement workflow
 
@@ -83,11 +93,15 @@ historically unreliable (opencode issue #6396). The app therefore:
 
 1. Requires a **deny-compliance proof** against the installed harness before
    relying on deny pruning for correctness.
-2. Runs the proof via a gated probe:
+2. **Gates the startup agent merge on that proof.** The passing probe persists
+   a compliance record for the installed opencode version; `syncOpenCodeLeanAgents`
+   installs agents only when that record is compliant for the running version
+   (or when `CIO_OPCODE_MERGE_AGENTS_UNVERIFIED=1` is set by the operator).
+3. Runs the proof via a gated probe:
    `CIO_OPCODE_DENY_PROBE=1 bun run test tests/main/opencode-deny-compliance.test.ts`.
    The probe reports e.g.
    `opencode v1.18.15 deny compliance: COMPLIANT — full=12779 lean=4232 (reduction=8547)`.
-3. Logs a dev-only warning when the installed harness is not proven compliant,
+4. Logs a dev-only warning when the installed harness is not proven compliant,
    and never depends on deny pruning to preserve a flow (additive,
    non-breaking by default).
 
