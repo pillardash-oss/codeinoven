@@ -17,14 +17,14 @@ afterEach(() => {
   for (const path of temporaryPaths.splice(0)) rmSync(path, { recursive: true, force: true })
 })
 
-describe('ScopeWorktreeProcess', () => {
-  it('runs git with structured arguments and no shell', async () => {
+describe.skipIf(process.platform === 'win32')('ScopeWorktreeProcess', () => {
+  it.skipIf(process.platform === 'win32')('runs git with structured arguments and no shell', async () => {
     const dir = tempDir()
     const output = await runGit(['--version'], { cwd: dir })
     expect(output).toMatch(/git version/)
   })
 
-  it('reports non-zero exits as results for setup commands', async () => {
+  it.skipIf(process.platform === 'win32')('reports non-zero exits as results for setup commands', async () => {
     const dir = tempDir()
     writeFileSync(join(dir, 'fail.sh'), '#!/bin/sh\nexit 3\n', { mode: 0o755 })
     const result = await runSetupCommand(
@@ -34,7 +34,7 @@ describe('ScopeWorktreeProcess', () => {
     expect(result.exitCode).toBe(3)
   })
 
-  it('runs commands with arguments and captures bounded output', async () => {
+  it.skipIf(process.platform === 'win32')('runs commands with arguments and captures bounded output', async () => {
     const dir = tempDir()
     const result = await runSetupCommand(
       { executable: 'sh', args: ['-c', 'echo cloudoku-safe-output'] },

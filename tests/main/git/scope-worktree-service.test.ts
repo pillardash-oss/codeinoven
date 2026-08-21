@@ -89,7 +89,7 @@ async function setup(
   return { service, scopes, bucketA: a.bucket.id, bucketB: b.bucket.id }
 }
 
-describe('ScopeWorktreeService', () => {
+describe.skipIf(process.platform === 'win32')('ScopeWorktreeService', () => {
   it('creates a managed worktree on a cio/ branch beneath the config root', async () => {
     const { service, scopes, bucketA } = await setup()
     const descriptor = await service.createManagedWorktree(
