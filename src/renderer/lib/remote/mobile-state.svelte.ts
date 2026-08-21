@@ -102,6 +102,17 @@ class MobileState {
   settingsOpen = $state(false)
   installGuideOpen = $state(false)
 
+  /** The open temporary (explain/quick) chat tab, and whether its sheet shows.
+   *  The id survives closing the sheet so the header overflow menu can reopen
+   *  the conversation; switching threads discards it. */
+  temporaryChatTabId = $state<string | null>(null)
+  temporaryChatOpen = $state(false)
+
+  openTemporaryChatTab(tabId: string): void {
+    this.temporaryChatTabId = tabId
+    this.temporaryChatOpen = true
+  }
+
   projectIcons = new SvelteMap<string, string>()
   expandedFolders = new SvelteSet<string>()
 
@@ -227,6 +238,8 @@ class MobileState {
     this.selectedThread = thread
     this.selectedProject = project
     this.sidebarOpen = false
+    this.temporaryChatTabId = null
+    this.temporaryChatOpen = false
     const updated = await invoke('thread:markRead', thread.projectId, thread.id)
     this.applyThreadUpdate(updated)
     // The notification store is intentionally loaded lazily on the phone; a

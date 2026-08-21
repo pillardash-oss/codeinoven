@@ -142,6 +142,12 @@ export interface RemoteRpcServices {
     | 'listArtifacts'
     | 'deleteSkill'
     | 'deleteMcp'
+    | 'sendTemporaryPrompt'
+    | 'steerTemporaryPrompt'
+    | 'loadTemporaryChatMessages'
+    | 'getTemporaryChatStatus'
+    | 'abortTemporaryChat'
+    | 'touchTemporaryChat'
     | 'listProviders'
     | 'refreshAccountUsage'
     | 'loadSessionMessages'
@@ -909,6 +915,39 @@ export class RemoteRpcDispatcher {
         return chatEngine.deleteSkill(args[0] as AgentCapabilitySource)
       case 'capabilities:deleteMcp':
         return chatEngine.deleteMcp(args[0] as AgentCapabilitySource)
+      case 'agent:sendTemporaryPrompt':
+        return chatEngine.sendTemporaryPrompt(
+          this.string(args[0]),
+          this.string(args[1]),
+          this.string(args[2]),
+          args[3] as ThreadSettings,
+          this.string(args[4]),
+          (args[5] ?? []) as PromptAttachment[],
+          args[6] as string[] | undefined,
+          this.optionalString(args[7])
+        )
+      case 'agent:steerTemporaryPrompt':
+        return chatEngine.steerTemporaryPrompt(
+          this.string(args[0]),
+          this.string(args[1]),
+          this.string(args[2]),
+          args[3] as ThreadSettings,
+          this.string(args[4]),
+          (args[5] ?? []) as PromptAttachment[],
+          args[6] as string[] | undefined
+        )
+      case 'agent:loadTemporaryChatMessages':
+        return chatEngine.loadTemporaryChatMessages(this.string(args[0]))
+      case 'agent:getTemporaryChatStatus':
+        return chatEngine.getTemporaryChatStatus(this.string(args[0]))
+      case 'agent:abortTemporaryChat':
+        return chatEngine.abortTemporaryChat(
+          this.string(args[0]),
+          this.string(args[1]),
+          this.string(args[2])
+        )
+      case 'agent:touchTemporaryChat':
+        return chatEngine.touchTemporaryChat(this.string(args[0]))
       case 'agent:closeTemporaryChat':
         return chatEngine.closeTemporaryChat(this.string(args[0]))
       case 'agent:loadSessionMessages':

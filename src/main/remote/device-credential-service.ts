@@ -38,25 +38,20 @@ export const TOMBSTONE_RETENTION_MS = Math.max(
   DEVICE_EXPIRY_MS + 7 * 24 * 60 * 60 * 1_000
 )
 
-const LEGACY_READ_ONLY_DEVICE_SCOPES: readonly RemoteScope[] = [
-  'workspace.read',
-  'conversation.read',
-  'conversation.control',
-  'workflow.read',
-  'git.read',
-  'memory.read'
-]
-
 /** Workspace capabilities expected from the paired remote application. */
 export const DEFAULT_DEVICE_SCOPES: readonly RemoteScope[] = [
   'workspace.read',
   'workspace.write',
   'workspace.delete',
+  'config.read',
   'conversation.read',
   'conversation.control',
   'workflow.read',
   'git.read',
-  'memory.read'
+  'git.write',
+  'memory.read',
+  'memory.write',
+  'filesystem.read'
 ]
 
 export type EnrolledDevice = StoredRemoteDevice
@@ -215,15 +210,18 @@ export class DeviceCredentialService {
   }
 
   /**
-   * The first scoped-credential release enrolled the PWA as read-only even
-   * though its shipped UI exposed rename, pin, fork, and delete actions. Add
-   * only the missing workspace scopes to that exact legacy profile, preserving
-   * authVersion so an already paired phone does not get signed out.
+   * Earlier releases enrolled the PWA with fewer scopes than its shipped UI
+   * exposes. Top every active device whose scopes are a subset of the current
+   * default profile up to that profile, preserving authVersion so an already
+   * paired phone does not get signed out. Devices with custom grants outside
+   * the default set are left untouched.
    */
   private upgradeLegacyWorkspaceScopes(): void {
-    const legacy = [...LEGACY_READ_ONLY_DEVICE_SCOPES].sort().join(',')
+    const defaults = new Set<RemoteScope>(DEFAULT_DEVICE_SCOPES)
     for (const device of this.repo.listActive()) {
-      if ([...device.scopes].sort().join(',') !== legacy) continue
+      const current = new Set<RemoteScope>(device.scopes)
+      if (current.size === defaults.size) continue
+      if (![...current].every((scope) => defaults.has(scope))) continue
       this.repo.updateScopes(device.deviceId, [...DEFAULT_DEVICE_SCOPES], device.authVersion)
     }
   }

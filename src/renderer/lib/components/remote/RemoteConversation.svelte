@@ -2,7 +2,16 @@
   import { onDestroy, onMount } from 'svelte'
   import type { Attachment } from 'svelte/attachments'
   import { SvelteMap } from 'svelte/reactivity'
-  import { Check, ChevronDown, Copy, FileText, GitFork, Loader2 } from '@lucide/svelte'
+  import {
+    Check,
+    ChevronDown,
+    Copy,
+    FileText,
+    GitFork,
+    Loader2,
+    MessageSquareDashed,
+    X
+  } from '@lucide/svelte'
   import { threadMessages } from '$lib/stores/thread-messages.svelte'
   import { agentRuns } from '$lib/stores/agent-runs.svelte'
   import {
@@ -11,6 +20,7 @@
     chatEffectiveSettings
   } from '$lib/stores/thread-settings.svelte'
   import { providerCatalog } from '$lib/stores/provider-catalog.svelte'
+  import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
   import { invoke } from '$lib/ipc.svelte'
   import { messageId } from '$shared/id'
   import { isTodoToolPart } from '$lib/agent-todos'
@@ -20,6 +30,7 @@
   import { mobileState } from '$lib/remote/mobile-state.svelte'
   import ChatComposer from '../chats/ChatComposer.svelte'
   import AttachmentPreview from '../chats/AttachmentPreview.svelte'
+  import ResponseSelectionPopover from '../chats/ResponseSelectionPopover.svelte'
   import AgentProviderStatusCard from '../threads/AgentProviderStatusCard.svelte'
   import WorkingTrace from '../threads/WorkingTrace.svelte'
   import MarkdownView from '../markdown/MarkdownView.svelte'
@@ -31,6 +42,7 @@
     AgentProviderIssue,
     AgentSessionStatus,
     PromptAttachment,
+    PromptReference,
     Thread,
     ThreadSettings
   } from '$shared/types'
@@ -118,6 +130,13 @@
     if (!providerCatalog.cached(thread.projectId)) {
       void providerCatalog.refresh(thread.projectId)
     }
+  })
+
+  // Selection capture lives at the document level so a long-press that ends
+  // outside the transcript (over the composer, for instance) still resolves.
+  onMount(() => {
+    document.addEventListener('pointerup', captureResponseSelection)
+    return () => document.removeEventListener('pointerup', captureResponseSelection)
   })
 
   onMount(() => {
@@ -407,9 +426,16 @@
     text: string
     attachments: PromptAttachment[]
     startAfterThreads: StartAfterSelection[]
+    promptContext?: string
+    promptReferences?: PromptReference[]
   } | null>(null)
 
-  async function deliver(text: string, attachments: PromptAttachment[]): Promise<void> {
+  async function deliver(
+    text: string,
+    attachments: PromptAttachment[],
+    promptContext?: string,
+    promptReferences?: PromptReference[]
+  ): Promise<void> {
     sendError = ''
     const userMessageId = messageId()
     userScrolledAway = false
@@ -429,7 +455,10 @@
         text,
         attachments,
         undefined,
-        userMessageId
+        userMessageId,
+        undefined,
+        promptContext,
+        promptReferences
       )
       failedDelivery = null
     } catch (error) {
@@ -491,8 +520,14 @@
         : false
     )
     if (stillBusy) return
+    const pendingDelivery = pending
     queuedMessage = null
-    void deliver(pending.text, pending.attachments)
+    void deliver(
+      pendingDelivery.text,
+      pendingDelivery.attachments,
+      pendingDelivery.promptContext,
+      pendingDelivery.promptReferences
+    )
   })
 
   function handleSend(
@@ -505,12 +540,21 @@
   ): void {
     const msg = text.trim()
     if (!msg && attachments.length === 0) return
+    const promptContext = selectionReferenceContext()
+    const promptReferences = selectionReferences.length > 0 ? [...selectionReferences] : undefined
+    clearSelectionReferences()
     const dependencies = (startAfterThreads ?? []).filter((dep) => dep.id !== thread.id)
     if (dependencies.length > 0 || (busy && !direct)) {
-      queuedMessage = { text: msg, attachments, startAfterThreads: dependencies }
+      queuedMessage = {
+        text: msg,
+        attachments,
+        startAfterThreads: dependencies,
+        promptContext,
+        promptReferences
+      }
       return
     }
-    void deliver(msg, attachments)
+    void deliver(msg, attachments, promptContext, promptReferences)
   }
 
   async function abortRun(): Promise<void> {
@@ -537,6 +581,133 @@
       sourcePartId: part.id,
       activity: part.activity
     }
+  }
+
+  // ─── Response selection → references & temporary chats ────────────────
+  // Mirrors desktop's ThreadView: selecting text inside an assistant response
+  // offers "Add to chat" (reference the excerpt in the next prompt) and the
+  // temporary read-only chats ("Explain" / "Quick chat").
+  interface MobileResponseSelection {
+    text: string
+    messageId: string
+    x: number
+    y: number
+  }
+
+  let responseSelection = $state<MobileResponseSelection | null>(null)
+  let selectionReferences = $state<PromptReference[]>([])
+
+  function messageElementFor(node: Node | null): HTMLElement | null {
+    let current = node instanceof HTMLElement ? node : (node?.parentElement ?? null)
+    while (current) {
+      if (current.dataset.messageId) return current
+      current = current.parentElement
+    }
+    return null
+  }
+
+  function captureResponseSelection(): void {
+    const selection = document.getSelection()
+    if (!selection || selection.rangeCount === 0 || selection.isCollapsed) {
+      responseSelection = null
+      return
+    }
+    const anchorResponse = messageElementFor(selection.anchorNode)
+    const focusResponse = messageElementFor(selection.focusNode)
+    const anchorId = anchorResponse?.dataset.messageId
+    if (!anchorResponse || anchorResponse !== focusResponse || !anchorId) {
+      responseSelection = null
+      return
+    }
+    const message = messages.find((candidate) => candidate.id === anchorId)
+    if (!message || message.role !== 'assistant') {
+      responseSelection = null
+      return
+    }
+    const text = selection.toString().trim()
+    if (!text) {
+      responseSelection = null
+      return
+    }
+    const rect = selection.getRangeAt(0).getBoundingClientRect()
+    const estimatedWidth = 320
+    const estimatedHeight = 48
+    const x = Math.max(
+      12,
+      Math.min(
+        rect.left + rect.width / 2 - estimatedWidth / 2,
+        window.innerWidth - estimatedWidth - 12
+      )
+    )
+    const y =
+      rect.top - estimatedHeight >= 12
+        ? rect.top - estimatedHeight
+        : Math.max(12, Math.min(rect.bottom + 8, window.innerHeight - estimatedHeight - 8))
+    responseSelection = { text, messageId: anchorId, x, y }
+  }
+
+  function closeResponseSelection(): void {
+    responseSelection = null
+    document.getSelection()?.removeAllRanges()
+  }
+
+  function addSelectionReference(): void {
+    const selection = responseSelection
+    if (!selection) return
+    selectionReferences = [
+      ...selectionReferences,
+      {
+        id: crypto.randomUUID(),
+        label: `Selection ${selectionReferences.length + 1}`,
+        text: selection.text
+      }
+    ]
+    closeResponseSelection()
+  }
+
+  function removeSelectionReference(id: string): void {
+    selectionReferences = selectionReferences.filter((reference) => reference.id !== id)
+  }
+
+  function clearSelectionReferences(): void {
+    selectionReferences = []
+  }
+
+  function selectionReferenceContext(): string | undefined {
+    if (selectionReferences.length === 0) return undefined
+    return [
+      'The user attached these excerpts from your earlier response as references:',
+      ...selectionReferences.map(
+        (reference) => `[${reference.label}]\n<selection>\n${reference.text}\n</selection>`
+      )
+    ].join('\n\n')
+  }
+
+  /** Full-transcript context for a temporary chat, matching desktop. */
+  function temporaryConversationContext(): string {
+    return messages
+      .map((message) => {
+        const text = textFor(message).trim()
+        return text ? `${message.role.toUpperCase()}: ${text}` : ''
+      })
+      .filter(Boolean)
+      .join('\n\n')
+      .slice(-80_000)
+  }
+
+  function openTemporarySelectionChat(mode: 'elaborate' | 'quick'): void {
+    const selection = responseSelection
+    if (!selection) return
+    const tab = contextSidebarState.openTemporaryChat(
+      thread.projectId,
+      thread.id,
+      mode,
+      selection.text,
+      temporaryConversationContext(),
+      settings
+    )
+    mobileState.openTemporaryChatTab(tab.id)
+    closeResponseSelection()
   }
 </script>
 
@@ -751,6 +922,28 @@
         />
       </div>
     {/if}
+    {#if selectionReferences.length > 0}
+      <div class="flex flex-wrap gap-1.5 px-1 pb-1.5">
+        {#each selectionReferences as reference (reference.id)}
+          <span
+            class="flex max-w-full items-center gap-1 rounded-lg bg-elevated px-2 py-1 text-[11px] text-muted"
+            title={reference.text}
+          >
+            <MessageSquareDashed size={11} class="shrink-0" />
+            <span class="max-w-40 truncate">{reference.label}</span>
+            <button
+              type="button"
+              class="flex h-4 w-4 shrink-0 cursor-pointer items-center justify-center rounded text-muted transition-colors active:text-danger"
+              title="Remove {reference.label}"
+              aria-label="Remove {reference.label}"
+              onclick={() => removeSelectionReference(reference.id)}
+            >
+              <X size={11} />
+            </button>
+          </span>
+        {/each}
+      </div>
+    {/if}
     <ChatComposer
       onSend={handleSend}
       working={busy}
@@ -784,6 +977,18 @@
       <SubagentSessionView {tab} onOpenSubagent={openSubagent} />
     {/await}
   </BottomSheet>
+{/if}
+
+{#if responseSelection}
+  <ResponseSelectionPopover
+    text={responseSelection.text}
+    x={responseSelection.x}
+    y={responseSelection.y}
+    onAdd={addSelectionReference}
+    onElaborate={() => openTemporarySelectionChat('elaborate')}
+    onQuickChat={() => openTemporarySelectionChat('quick')}
+    onClose={closeResponseSelection}
+  />
 {/if}
 
 {#if previewAttachment}

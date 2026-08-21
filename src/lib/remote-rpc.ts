@@ -119,6 +119,12 @@ export const REMOTE_ALLOWED_CHANNELS: readonly string[] = [
   'agent:killThreadProcesses',
   'capabilities:deleteSkill',
   'capabilities:deleteMcp',
+  'agent:sendTemporaryPrompt',
+  'agent:steerTemporaryPrompt',
+  'agent:loadTemporaryChatMessages',
+  'agent:getTemporaryChatStatus',
+  'agent:abortTemporaryChat',
+  'agent:touchTemporaryChat',
   'agent:closeTemporaryChat',
   'agent:getChildSessionStatus',
   'agent:dismissSessionError',
@@ -400,8 +406,10 @@ export const REMOTE_CHANNEL_AUTHORIZATION: Readonly<Record<string, RemoteChannel
   'thread:delete': { scope: 'workspace.delete', stepUp: 'none' },
   'note:delete': { scope: 'workspace.delete', stepUp: 'none' },
 
-  // config.* — workstation-level, always step-up
-  'config:get': { scope: 'config.read', stepUp: 'always' },
+  // config.read — read-only settings exposure, no step-up (the phone's theme
+  // sync and the memory panel's enable-state load depend on it). Mutating
+  // workstation config stays behind an always step-up.
+  'config:get': { scope: 'config.read', stepUp: 'none' },
   'config:update': { scope: 'config.write', stepUp: 'always' },
   'config:syncAgentRole': { scope: 'config.write', stepUp: 'always' },
 
@@ -420,19 +428,26 @@ export const REMOTE_CHANNEL_AUTHORIZATION: Readonly<Record<string, RemoteChannel
   'agent:listProcesses': { scope: 'conversation.read', stepUp: 'none' },
   'agent:listArtifacts': { scope: 'conversation.read', stepUp: 'none' },
   'agent:getChildSessionStatus': { scope: 'conversation.read', stepUp: 'none' },
+  'agent:getTemporaryChatStatus': { scope: 'conversation.read', stepUp: 'none' },
+  'agent:loadTemporaryChatMessages': { scope: 'conversation.read', stepUp: 'none' },
+  'agent:touchTemporaryChat': { scope: 'conversation.read', stepUp: 'none' },
 
   // conversation.control — default, no step-up
   'agent:ensureSession': { scope: 'conversation.control', stepUp: 'none' },
   'agent:sendPrompt': { scope: 'conversation.control', stepUp: 'none' },
   'agent:steerPrompt': { scope: 'conversation.control', stepUp: 'none' },
+  'agent:sendTemporaryPrompt': { scope: 'conversation.control', stepUp: 'none' },
+  'agent:steerTemporaryPrompt': { scope: 'conversation.control', stepUp: 'none' },
+  'agent:abortTemporaryChat': { scope: 'conversation.control', stepUp: 'none' },
   'agent:abort': { scope: 'conversation.control', stepUp: 'none' },
   'agent:answerQuestion': { scope: 'conversation.control', stepUp: 'none' },
   'agent:dismissQuestion': { scope: 'conversation.control', stepUp: 'none' },
   'agent:updateQuestion': { scope: 'conversation.control', stepUp: 'none' },
   'agent:compact': { scope: 'conversation.control', stepUp: 'none' },
-  // Destructive process control — always step-up on a remote device.
-  'agent:killProcess': { scope: 'conversation.control', stepUp: 'always' },
-  'agent:killThreadProcesses': { scope: 'conversation.control', stepUp: 'always' },
+  // Destructive process control — the panels confirm before invoking, and a
+  // desktop-local step-up can never complete for a remote request.
+  'agent:killProcess': { scope: 'conversation.control', stepUp: 'none' },
+  'agent:killThreadProcesses': { scope: 'conversation.control', stepUp: 'none' },
   'agent:closeTemporaryChat': { scope: 'conversation.control', stepUp: 'none' },
   'agent:retryChildSession': { scope: 'conversation.control', stepUp: 'none' },
   'agent:dismissSessionError': { scope: 'conversation.control', stepUp: 'none' },
@@ -551,23 +566,26 @@ export const REMOTE_CHANNEL_AUTHORIZATION: Readonly<Record<string, RemoteChannel
   'memory:getPendingProposals': { scope: 'memory.read', stepUp: 'none' },
   'memory:getEntries': { scope: 'memory.read', stepUp: 'none' },
 
-  // memory.write — default-No, always step-up
-  'memory:approveProposal': { scope: 'memory.write', stepUp: 'always' },
-  'memory:rejectProposal': { scope: 'memory.write', stepUp: 'always' },
-  'memory:saveEntries': { scope: 'memory.write', stepUp: 'always' },
+  // memory.write — default-No, no step-up. Approve/reject/save are explicit,
+  // confirmed user actions in the memory panel; a desktop-local step-up can
+  // never complete for a remote request.
+  'memory:approveProposal': { scope: 'memory.write', stepUp: 'none' },
+  'memory:rejectProposal': { scope: 'memory.write', stepUp: 'none' },
+  'memory:saveEntries': { scope: 'memory.write', stepUp: 'none' },
 
-  // filesystem.read — default-No, always step-up
-  'projectFiles:resolveCitationPaths': { scope: 'filesystem.read', stepUp: 'always' },
-  'projectFiles:resolveExternalCitationPaths': { scope: 'filesystem.read', stepUp: 'always' },
-  'projectFiles:search': { scope: 'filesystem.read', stepUp: 'always' },
-  'repository:remoteOrigin': { scope: 'filesystem.read', stepUp: 'always' },
-  'repository:preflight': { scope: 'filesystem.read', stepUp: 'always' },
+  // filesystem.read — read-only path/origin lookups, no step-up. The phone's
+  // git panel preflight and the composer's @-file mentions depend on these.
+  'projectFiles:resolveCitationPaths': { scope: 'filesystem.read', stepUp: 'none' },
+  'projectFiles:resolveExternalCitationPaths': { scope: 'filesystem.read', stepUp: 'none' },
+  'projectFiles:search': { scope: 'filesystem.read', stepUp: 'none' },
+  'repository:remoteOrigin': { scope: 'filesystem.read', stepUp: 'none' },
+  'repository:preflight': { scope: 'filesystem.read', stepUp: 'none' },
 
   // git.read — default, no step-up
   'git:status': { scope: 'git.read', stepUp: 'none' },
   'git:diff': { scope: 'git.read', stepUp: 'none' },
   'git:analyzeConflict': { scope: 'git.read', stepUp: 'none' },
-  'git:prepareConflictWorkFile': { scope: 'git.write', stepUp: 'always' },
+  'git:prepareConflictWorkFile': { scope: 'git.write', stepUp: 'none' },
   'git:branches': { scope: 'git.read', stepUp: 'none' },
   'git:log': { scope: 'git.read', stepUp: 'none' },
   'git:commitDiff': { scope: 'git.read', stepUp: 'none' },
@@ -580,33 +598,39 @@ export const REMOTE_CHANNEL_AUTHORIZATION: Readonly<Record<string, RemoteChannel
   'git:stashFileDiff': { scope: 'git.read', stepUp: 'none' },
   'github:authStatus': { scope: 'git.read', stepUp: 'none' },
 
-  // git.write — default-No, always step-up
-  'git:stage': { scope: 'git.write', stepUp: 'always' },
-  'git:saveConflictDraft': { scope: 'git.write', stepUp: 'always' },
-  'git:saveConflictResolution': { scope: 'git.write', stepUp: 'always' },
-  'git:resolveConflicted': { scope: 'git.write', stepUp: 'always' },
-  'git:unstage': { scope: 'git.write', stepUp: 'always' },
-  'git:commit': { scope: 'git.write', stepUp: 'always' },
-  'git:amend': { scope: 'git.write', stepUp: 'always' },
-  'git:init': { scope: 'git.write', stepUp: 'always' },
-  'git:checkout': { scope: 'git.write', stepUp: 'always' },
-  'git:createBranch': { scope: 'git.write', stepUp: 'always' },
-  'git:deleteBranch': { scope: 'git.write', stepUp: 'always' },
-  'git:reset': { scope: 'git.write', stepUp: 'always' },
-  'git:deleteCommit': { scope: 'git.write', stepUp: 'always' },
-  'git:setIdentity': { scope: 'git.write', stepUp: 'always' },
-  'git:addRemote': { scope: 'git.write', stepUp: 'always' },
-  'git:removeRemote': { scope: 'git.write', stepUp: 'always' },
-  'git:fetch': { scope: 'git.write', stepUp: 'always' },
-  'git:pull': { scope: 'git.write', stepUp: 'always' },
-  'git:push': { scope: 'git.write', stepUp: 'always' },
-  'git:merge': { scope: 'git.write', stepUp: 'always' },
-  'git:rebase': { scope: 'git.write', stepUp: 'always' },
-  'git:stash': { scope: 'git.write', stepUp: 'always' },
-  'git:stashPop': { scope: 'git.write', stepUp: 'always' },
-  'git:stashDrop': { scope: 'git.write', stepUp: 'always' },
-  'git:abortMerge': { scope: 'git.write', stepUp: 'always' },
-  'git:abortRebase': { scope: 'git.write', stepUp: 'always' },
+  // git.write — default-No, no step-up. The phone drives the same read/write
+  // git surface as the desktop sidebar and already commands an agent with full
+  // repository access over this bridge, so git mutations do not widen trust.
+  // Step-up cannot gate these: the remote request fails before a desktop-local
+  // approval could land and the retry carries a fresh request id (the same
+  // reasoning that made thread:delete step-up free). The device scope plus the
+  // panels' destructive-action confirmations remain the boundary.
+  'git:stage': { scope: 'git.write', stepUp: 'none' },
+  'git:saveConflictDraft': { scope: 'git.write', stepUp: 'none' },
+  'git:saveConflictResolution': { scope: 'git.write', stepUp: 'none' },
+  'git:resolveConflicted': { scope: 'git.write', stepUp: 'none' },
+  'git:unstage': { scope: 'git.write', stepUp: 'none' },
+  'git:commit': { scope: 'git.write', stepUp: 'none' },
+  'git:amend': { scope: 'git.write', stepUp: 'none' },
+  'git:init': { scope: 'git.write', stepUp: 'none' },
+  'git:checkout': { scope: 'git.write', stepUp: 'none' },
+  'git:createBranch': { scope: 'git.write', stepUp: 'none' },
+  'git:deleteBranch': { scope: 'git.write', stepUp: 'none' },
+  'git:reset': { scope: 'git.write', stepUp: 'none' },
+  'git:deleteCommit': { scope: 'git.write', stepUp: 'none' },
+  'git:setIdentity': { scope: 'git.write', stepUp: 'none' },
+  'git:addRemote': { scope: 'git.write', stepUp: 'none' },
+  'git:removeRemote': { scope: 'git.write', stepUp: 'none' },
+  'git:fetch': { scope: 'git.write', stepUp: 'none' },
+  'git:pull': { scope: 'git.write', stepUp: 'none' },
+  'git:push': { scope: 'git.write', stepUp: 'none' },
+  'git:merge': { scope: 'git.write', stepUp: 'none' },
+  'git:rebase': { scope: 'git.write', stepUp: 'none' },
+  'git:stash': { scope: 'git.write', stepUp: 'none' },
+  'git:stashPop': { scope: 'git.write', stepUp: 'none' },
+  'git:stashDrop': { scope: 'git.write', stepUp: 'none' },
+  'git:abortMerge': { scope: 'git.write', stepUp: 'none' },
+  'git:abortRebase': { scope: 'git.write', stepUp: 'none' },
 
   // local.system — default-No, always step-up
   'dialog:pickFile': { scope: 'local.system', stepUp: 'always' },
@@ -614,8 +638,8 @@ export const REMOTE_CHANNEL_AUTHORIZATION: Readonly<Record<string, RemoteChannel
   'clipboard:saveImage': { scope: 'local.system', stepUp: 'always' },
   'shell:revealPath': { scope: 'local.system', stepUp: 'always' },
   'shell:openExternal': { scope: 'local.system', stepUp: 'always' },
-  'capabilities:deleteSkill': { scope: 'local.system', stepUp: 'always' },
-  'capabilities:deleteMcp': { scope: 'local.system', stepUp: 'always' }
+  'capabilities:deleteSkill': { scope: 'workspace.write', stepUp: 'none' },
+  'capabilities:deleteMcp': { scope: 'workspace.write', stepUp: 'none' }
 }
 
 /** Return the typed authorization entry for a channel, or `null` if unmapped. */
