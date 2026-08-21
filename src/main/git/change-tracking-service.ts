@@ -4,6 +4,7 @@ import { lstat, mkdir, readdir, readFile, realpath, unlink, writeFile } from 'fs
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'path'
 import { APP_SLUG } from '../../lib/brand'
 import { PROJECT_DATA_DIRECTORY } from '../../lib/project-artifacts'
+import { buildProcessEnvironment } from '../drivers/cli-environment'
 
 const DEFAULT_EXCLUDED_DIRECTORIES = new Set([
   '.git',
@@ -21,6 +22,8 @@ const DEFAULT_EXCLUDED_DIRECTORIES = new Set([
 export interface CheckpointBlobStore {
   put(hash: string, content: Uint8Array): Promise<void>
   get(hash: string): Promise<Uint8Array | null>
+  /** Changes whenever external maintenance may invalidate cached blob references. */
+  revision?(): Promise<string>
 }
 
 export interface CheckpointLimits {
@@ -52,6 +55,8 @@ export interface ProjectCheckpoint {
    *  cannot restore them; recording them keeps the limitation visible instead
    *  of failing the whole snapshot. */
   skippedFiles?: string[]
+  /** Paths whose metadata/hash was captured but whose content blob could not be persisted. */
+  unavailableFiles?: string[]
   git?: GitCheckpointMetadata
 }
 
@@ -118,6 +123,7 @@ export class ChangeTrackingService {
   private readonly limits: CheckpointLimits
   private readonly excludedDirectoryNames: Set<string>
   private cachedProjectRoot: string | undefined
+  private cachedBlobRevision: string | undefined
   private snapshotCache = new Map<string, CachedCheckpointFile>()
 
   constructor(
@@ -138,12 +144,22 @@ export class ChangeTrackingService {
       this.cachedProjectRoot = projectRoot
       this.snapshotCache.clear()
     }
+    const blobRevision = await this.blobs.revision?.()
+    if (
+      blobRevision !== undefined &&
+      this.cachedBlobRevision !== undefined &&
+      blobRevision !== this.cachedBlobRevision
+    ) {
+      this.snapshotCache.clear()
+    }
+    this.cachedBlobRevision = blobRevision
     const git = options.includeGitMetadata ? await this.readGitMetadata(projectRoot) : undefined
     const gitPaths = git
       ? await this.readGitCheckpointPaths(projectRoot, git).catch(() => undefined)
       : undefined
     const files: Record<string, CheckpointFile> = {}
     const skippedFiles: string[] = []
+    const unavailableFiles: string[] = []
     const nextCache = new Map<string, CachedCheckpointFile>()
     let fileCount = 0
     let totalBytes = 0
@@ -193,7 +209,14 @@ export class ChangeTrackingService {
 
       const content = await readFile(resolvedFile)
       const hash = createHash('sha256').update(content).digest('hex')
-      await this.blobs.put(hash, content)
+      try {
+        await this.blobs.put(hash, content)
+      } catch {
+        // Path attribution must survive a full/unavailable checkpoint store.
+        // The hash still identifies the observed state, while completion
+        // records a visible warning that diff/rollback content is incomplete.
+        unavailableFiles.push(relativePath)
+      }
       const file = { path: relativePath, hash, size, binary: isBinary(content) }
       files[relativePath] = file
       nextCache.set(relativePath, { signature, file })
@@ -210,6 +233,7 @@ export class ChangeTrackingService {
       createdAt: Date.now(),
       files,
       ...(skippedFiles.length > 0 ? { skippedFiles } : {}),
+      ...(unavailableFiles.length > 0 ? { unavailableFiles } : {}),
       ...(git ? { git } : {})
     }
   }
@@ -500,12 +524,17 @@ function isMissing(error: unknown): boolean {
 
 function runGit(args: string[]): Promise<string> {
   return new Promise((resolveCommand, rejectCommand) => {
-    execFile('git', args, { encoding: 'utf8', windowsHide: true }, (error, stdout, stderr) => {
-      if (error) {
-        rejectCommand(new Error(stderr || error.message))
-        return
+    execFile(
+      'git',
+      args,
+      { encoding: 'utf8', windowsHide: true, env: buildProcessEnvironment() },
+      (error, stdout, stderr) => {
+        if (error) {
+          rejectCommand(new Error(stderr || error.message))
+          return
+        }
+        resolveCommand(stdout)
       }
-      resolveCommand(stdout)
-    })
+    )
   })
 }

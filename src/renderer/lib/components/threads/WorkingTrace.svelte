@@ -20,6 +20,8 @@
   import MarkdownView from '../markdown/MarkdownView.svelte'
   import AgentIcon from '$lib/agent-icons/AgentIcon.svelte'
   import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
+  import ActionSheet from '../ui/ActionSheet.svelte'
+  import type { MenuItem } from '$lib/components/shared/ThreadDropdown.svelte'
   import type { AgentPart, AgentToolStatus, ThinkingLevel } from '$shared/types'
   import { isImageMime } from '$lib/mime'
   import { FileBlobUrlManager } from '$lib/media-urls.svelte'
@@ -246,6 +248,23 @@
     if (status === 'error') return 'Failed'
     return 'Starting'
   }
+
+  // Touch devices get a bottom-sheet list instead of the hover-oriented
+  // dropdown, whose small hit targets and portal positioning are unreliable
+  // under a phone keyboard/viewport.
+  const coarsePointer =
+    typeof window !== 'undefined' && window.matchMedia('(pointer: coarse)').matches
+  let subagentSheetOpen = $state(false)
+
+  function subagentSheetItems(): MenuItem[] {
+    return subagentParts.map((part) => ({
+      label: `${part.activity.agent || 'Sub-agent'} — ${
+        part.activity.description || subagentStatusLabel(part.activity.status)
+      }`,
+      icon: Bot,
+      onClick: () => onOpenSubagent?.(part)
+    }))
+  }
 </script>
 
 <details class="rounded-xl border border-border bg-surface" open={isOpen}>
@@ -273,7 +292,27 @@
           </span>
         {/if}
         {#if subagentCount > 0}
-          <DropdownMenu.Root>
+          {#if coarsePointer}
+            <button
+              type="button"
+              class="flex items-center gap-1 rounded-md bg-info/10 px-1.5 py-1 text-[9px] text-info transition-colors active:bg-info/20"
+              aria-label={`${subagentCount} ${subagentCount === 1 ? 'sub-agent' : 'sub-agents'} spawned — open list`}
+              title={`${subagentCount} ${subagentCount === 1 ? 'sub-agent' : 'sub-agents'} spawned — open list`}
+              onclick={(e: MouseEvent) => {
+                e.preventDefault()
+                e.stopPropagation()
+                subagentSheetOpen = true
+              }}
+            >
+              <Bot size={10} />
+              {#if activeSubagentCount > 0}
+                {activeSubagentCount} active · {subagentCount} total
+              {:else}
+                {subagentCount} {subagentCount === 1 ? 'sub-agent' : 'sub-agents'}
+              {/if}
+            </button>
+          {:else}
+            <DropdownMenu.Root>
             <DropdownMenu.Trigger
               class="flex items-center gap-1 rounded-md bg-info/10 px-1.5 py-0.5 text-[9px] text-info transition-colors hover:bg-info/20 focus:outline-none focus-visible:ring-2 focus-visible:ring-info/40"
               aria-label={`${subagentCount} ${subagentCount === 1 ? 'sub-agent' : 'sub-agents'} spawned — open list`}
@@ -361,6 +400,7 @@
               </DropdownMenu.Content>
             </DropdownMenu.Portal>
           </DropdownMenu.Root>
+          {/if}
         {/if}
       </span>
     {/if}
@@ -501,3 +541,12 @@
     </div>
   {/if}
 </details>
+
+{#if coarsePointer}
+  <ActionSheet
+    open={subagentSheetOpen}
+    title="Sub-agents"
+    items={subagentSheetItems()}
+    onClose={() => (subagentSheetOpen = false)}
+  />
+{/if}

@@ -126,7 +126,7 @@ export const CIO_PROMPT_DEFINITIONS: readonly CioPromptDefinition[] = [
     description: 'Evidence-driven research and generation of the durable Brainstorm document.',
     group: 'Engineering',
     modes: ['brainstorm'],
-    defaultTemplate: `Conduct evidence-driven research and create a reviewable Brainstorm document through {{BRAINSTORM_DOCUMENT_TOOL_NAME}}. Inspect actual project state with read-only tools and research current external facts when material. Label facts Verified, Inferred, or Unknown. Present viable options, tradeoffs, risks, and one justified recommendation without converting it into a user decision. Return Context, Goals, Decisions, Open Questions, Constraints, and Proposed Direction. Do not implement or mutate files. ${CITATIONS} ${MERMAID}`
+    defaultTemplate: `Conduct evidence-driven research and create a reviewable Brainstorm document through {{BRAINSTORM_DOCUMENT_TOOL_NAME}}. Inspect actual project state with read-only tools and research current external facts when material. Label facts Verified, Inferred, or Unknown. Present viable options, tradeoffs, risks, and one justified recommendation without converting it into a user decision. Return Context, Goals, Decisions, Open Questions, Constraints, and Proposed Direction. When the dispatch supplies an exact session-report revision path under .cio/specs, write the report Markdown to exactly that path and nowhere else; never modify any other file. Do not implement. ${CITATIONS} ${MERMAID}`
   },
   {
     id: 'engineering-spec',

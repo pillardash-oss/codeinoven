@@ -253,6 +253,7 @@
     return {
       ...(contextWindow === undefined ? {} : { contextWindow }),
       ...(contextUsed === undefined ? {} : { contextUsed }),
+      ...(contextUsed !== undefined && latest.contextEstimated ? { contextEstimated: true } : {}),
       ...(contextWindow !== undefined && contextUsed !== undefined
         ? { contextPercent: Math.min(100, (contextUsed / contextWindow) * 100) }
         : {}),
@@ -376,6 +377,9 @@
                   ? {}
                   : { contextWindow: event.contextWindow }),
                 ...(event.contextUsed === undefined ? {} : { contextUsed: event.contextUsed }),
+                ...(event.contextEstimated === undefined
+                  ? {}
+                  : { contextEstimated: event.contextEstimated }),
                 ...(event.rateLimits ? { rateLimits: event.rateLimits } : {}),
                 ...(event.credits ? { credits: event.credits } : {})
               }
@@ -393,6 +397,9 @@
                   ? {}
                   : { contextWindow: event.contextWindow }),
                 ...(event.contextUsed === undefined ? {} : { contextUsed: event.contextUsed }),
+                ...(event.contextEstimated === undefined
+                  ? {}
+                  : { contextEstimated: event.contextEstimated }),
                 ...(event.cost === undefined ? {} : { cost: event.cost }),
                 ...(event.rateLimits ? { rateLimits: event.rateLimits } : {}),
                 ...(event.credits ? { credits: event.credits } : {})

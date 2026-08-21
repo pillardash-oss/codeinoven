@@ -35,12 +35,13 @@
   Global PR dock — mirrors `HarnessRunModal` in `src/renderer/App.svelte:1638`.
   Mounted at the app root so each `GitPullRequestSheet` stays alive regardless
   of thread / project / view or whether the git sidebar is visible. One sheet
-  per `PrDraft` (hence per project by default) gives the same multi-entry
+  per `PrDraft` (hence per project scope by default) gives the same multi-entry
   behaviour as `harnessLifecycleStore.runs`.
 -->
 {#each store.drafts as draft (draft.id)}
   <GitPullRequestSheet
     projectId={draft.projectId}
+    scopeBucketId={draft.scopeBucketId}
     minimized={draft.minimized}
     onMinimize={() => store.minimize(draft.id)}
     onExpand={() => store.expand(draft.id)}

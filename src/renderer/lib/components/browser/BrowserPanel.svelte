@@ -43,6 +43,10 @@
   let addressError = $state('')
   let pageState = $state<BrowserPageState>(initialPageState())
   let activeSurface = $derived(tab.surface)
+  let panelVisible = $derived(
+    fullscreen ||
+      (contextSidebarState.sidebarVisible && contextSidebarState.sidebarActiveTab?.id === tab.id)
+  )
   let consoleEntries = $state<BrowserConsoleEntry[]>([])
   let consoleElement = $state<HTMLDivElement>()
   let errorCount = $derived(consoleEntries.filter((entry) => entry.level === 'error').length)
@@ -64,6 +68,13 @@
     }
   }
 
+  const manageNativeBrowserView: Attachment<HTMLDivElement> = () => {
+    void tick().then(showAtCurrentBounds)
+    return () => {
+      void invoke('browser:hide', tab.id)
+    }
+  }
+
   function contentBounds(): BrowserViewBounds | null {
     if (!contentElement) return null
     const rect = contentElement.getBoundingClientRect()
@@ -77,7 +88,7 @@
   }
 
   async function showAtCurrentBounds(): Promise<void> {
-    if (activeSurface !== 'page') return
+    if (!panelVisible || activeSurface !== 'page') return
     const bounds = contentBounds()
     if (!bounds) return
     pageState = await invoke('browser:show', tab.id, tab.projectId, tab.threadId, tab.url, bounds)
@@ -178,9 +189,7 @@
       if (now - startedAt < 260) animationFrame = requestAnimationFrame(followTransition)
     }
     animationFrame = requestAnimationFrame(followTransition)
-    void showAtCurrentBounds().then(async () => {
-      mergeConsoleEntries(await invoke('browser:getConsole', tab.id))
-    })
+    void invoke('browser:getConsole', tab.id).then(mergeConsoleEntries)
 
     return () => {
       cancelAnimationFrame(animationFrame)
@@ -193,7 +202,7 @@
   })
 </script>
 
-<div class="flex h-full min-h-0 flex-col bg-app">
+<div {@attach panelVisible && manageNativeBrowserView} class="flex h-full min-h-0 flex-col bg-app">
   <form
     class="flex h-10 shrink-0 items-center gap-1.5 border-b border-border bg-surface px-2"
     onsubmit={(event) => {
@@ -294,6 +303,7 @@
   {/if}
   <div
     {@attach attachContentElement}
+    data-native-browser-content
     class={['min-h-0 flex-1 bg-surface', activeSurface !== 'page' && 'hidden']}
     role="document"
     aria-label={`Browser content for ${pageState.title || address}`}

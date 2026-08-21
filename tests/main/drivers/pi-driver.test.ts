@@ -92,6 +92,18 @@ vi.mock('../../../src/main/drivers/pi-rpc-client', () => ({
   resolvePiExecutable: rpcMock.resolvePiExecutable
 }))
 
+vi.mock('../../../src/main/drivers/harness-runtime', async () => {
+  const actual = await vi.importActual<typeof import('../../../src/main/drivers/harness-runtime')>(
+    '../../../src/main/drivers/harness-runtime'
+  )
+  return {
+    ...actual,
+    resolveHarnessRuntime: vi.fn(async () => ({ command: 'pi', args: [] })),
+    prepareHarnessInvocation: vi.fn(async () => ({ command: 'pi', args: [] })),
+    runHarnessCommand: actual.runHarnessCommand
+  }
+})
+
 const roots: string[] = []
 afterEach(async () => {
   rpcMock.clients.splice(0)

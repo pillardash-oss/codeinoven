@@ -7,6 +7,8 @@ class FindNavState {
   focusFileTreeFilter = $state(0)
   conversationFindOpen = $state(false)
   conversationFindFocusTrigger = $state(0)
+  gitFindOpen = $state(false)
+  gitFindFocusTrigger = $state(0)
   studioFindOpen = $state(false)
   studioFindFocusTrigger = $state(0)
 
@@ -34,6 +36,15 @@ class FindNavState {
 
   closeConversationFind(): void {
     this.conversationFindOpen = false
+  }
+
+  openGitFind(): void {
+    this.gitFindOpen = true
+    this.gitFindFocusTrigger++
+  }
+
+  closeGitFind(): void {
+    this.gitFindOpen = false
   }
 
   openStudioFind(): void {

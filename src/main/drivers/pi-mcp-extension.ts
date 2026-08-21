@@ -110,6 +110,8 @@ class McpClient {
 
   private async startProcess(): Promise<void> {
     const child = spawn(this.config.command, this.config.args, {
+      // Pi itself is launched with CodeInOven's normalized process environment;
+      // preserve that inherited PATH while applying the MCP server's overlay.
       env: { ...process.env, ...this.config.env },
       stdio: ['pipe', 'pipe', 'pipe']
     })

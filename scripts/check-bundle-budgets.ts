@@ -5,7 +5,7 @@
  * audit's desktop and remote budgets over each **eagerly-loaded initial JS
  * closure** — the entry plus the chunks Vite emits as modulepreloads:
  *
- * - initial desktop JavaScript raw ≤ 4.5 MiB and gzip ≤ 1 MiB
+ * - initial desktop JavaScript raw ≤ 5 MiB and gzip ≤ 1.3 MiB
  * - initial remote JavaScript (gzip) ≤ 500 KB
  * - no single initial JS chunk (gzip) > 350 KB
  *

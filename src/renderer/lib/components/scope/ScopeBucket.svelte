@@ -29,6 +29,14 @@
       targetId: string,
       position: 'before' | 'after'
     ) => void
+    /** Lifecycle callbacks surfaced through the scope actions menu. */
+    onArchive?: () => void
+    onRestore?: () => void
+    onCreateWorktree?: () => void
+    onRetrySetup?: () => void
+    onDetach?: () => void
+    onRemoveWorktree?: () => void
+    onDeleteBranch?: () => void
   }
 
   let {
@@ -47,7 +55,14 @@
     onDelete,
     onFork,
     onMoveThread,
-    onReorderThread
+    onReorderThread,
+    onArchive,
+    onRestore,
+    onCreateWorktree,
+    onRetrySetup,
+    onDetach,
+    onRemoveWorktree,
+    onDeleteBranch
   }: Props = $props()
 
   let scopeDropPosition = $state<'before' | 'after' | null>(null)
@@ -143,6 +158,14 @@
       <h2 id="scope-bucket-{bucket.id}" class="truncate text-xs font-semibold text-foreground">
         {bucket.name}
       </h2>
+      {#if bucket.root.kind === 'worktree'}
+        <span
+          class="shrink-0 rounded border border-overlay bg-overlay px-1 py-0.5 text-[9px] leading-none text-muted"
+          title="Managed Git worktree scope on {bucket.root.branch}"
+        >
+          {bucket.root.branch}
+        </span>
+      {/if}
       <span class="text-[10px] tabular-nums text-dimmed">{threadCount}</span>
     </button>
 
@@ -155,7 +178,18 @@
       <Plus size={14} />
     </button>
 
-    <ScopeActionsMenu {bucket} onEdit={onEditBucket} onDelete={onDeleteBucket} />
+    <ScopeActionsMenu
+      {bucket}
+      onEdit={onEditBucket}
+      onDelete={onDeleteBucket}
+      {onArchive}
+      {onRestore}
+      {onCreateWorktree}
+      {onRetrySetup}
+      {onDetach}
+      {onRemoveWorktree}
+      {onDeleteBranch}
+    />
   </div>
 
   {#if !bucket.collapsed}

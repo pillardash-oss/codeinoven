@@ -81,11 +81,173 @@ export interface ScopeBucket {
   sortOrder: number
   collapsed: boolean
   collapsedSlices: ScopeSlice[]
+  /** Authoritative working-root descriptor owned by main; never renderer-edited. */
+  root: ScopeRootDescriptor
+  /** Present when the scope is archived; archival never mutates Git state. */
+  archivedAt?: number
+}
+
+/** Identifies the project + scope pair every scope-aware operation targets. */
+export interface ScopeTarget {
+  projectId: string
+  scopeBucketId: string
+}
+
+/** Environment-file propagation mode for a managed worktree. */
+export type ScopeEnvironmentMode = 'copy' | 'symlink'
+
+/** One structured setup command: an executable plus argument array (no shell). */
+export interface ScopeSetupCommandSpec {
+  executable: string
+  args: string[]
+}
+
+export type ScopeSetupCommandState =
+  'pending' | 'running' | 'succeeded' | 'failed' | 'skipped' | 'interrupted'
+
+/** Persisted per-command outcome. Output text is intentionally never persisted. */
+export interface ScopeSetupCommandRecord {
+  index: number
+  executable: string
+  args: string[]
+  state: ScopeSetupCommandState
+  exitCode?: number
+  startedAt?: number
+  finishedAt?: number
+}
+
+export type ScopeSetupStatusState = 'not_run' | 'running' | 'succeeded' | 'failed' | 'interrupted'
+
+export interface ScopeSetupStatus {
+  state: ScopeSetupStatusState
+  commands: ScopeSetupCommandRecord[]
+  startedAt?: number
+  finishedAt?: number
+}
+
+/** Root descriptor for scopes that resolve to the registered project directory. */
+export interface ProjectRootDescriptor {
+  kind: 'project'
+}
+
+/**
+ * Root descriptor for scopes backed by an app-managed Git worktree beneath the
+ * config root. `branch` and `directoryName` are stable for the lifetime of the
+ * scope even when its display name changes.
+ */
+export interface ManagedWorktreeDescriptor {
+  kind: 'worktree'
+  directoryName: string
+  branch: string
+  baseBranch: string
+  baseCommit: string
+  createdAt: number
+  environmentMode: ScopeEnvironmentMode
+  setup: ScopeSetupStatus
+}
+
+export type ScopeRootDescriptor = ProjectRootDescriptor | ManagedWorktreeDescriptor
+
+/** Project-level defaults applied to newly created managed worktrees. */
+export interface ScopeWorktreeDefaults {
+  setupCommands: ScopeSetupCommandSpec[]
+  runSetupByDefault: boolean
+  environmentMode: ScopeEnvironmentMode
+}
+
+export const DEFAULT_SCOPE_WORKTREE_DEFAULTS: ScopeWorktreeDefaults = {
+  setupCommands: [],
+  runSetupByDefault: true,
+  environmentMode: 'copy'
+}
+
+export function isManagedScopeRoot(
+  root: ScopeRootDescriptor | undefined
+): root is ManagedWorktreeDescriptor {
+  return root?.kind === 'worktree'
 }
 
 export interface ScopeBoard {
-  version: 1
+  version: 2
   buckets: ScopeBucket[]
+  worktreeDefaults: ScopeWorktreeDefaults
+}
+
+/** Renderer-supplied display-metadata patch; never touches lifecycle state. */
+export interface ScopeAppearancePatch {
+  name?: string
+  color?: string | null
+  iconType?: string | null
+}
+
+/** Renderer-supplied collapse-state patch for one bucket. */
+export interface ScopeCollapsePatch {
+  collapsed?: boolean
+  collapsedSlices?: ScopeSlice[]
+}
+
+/** Renderer input for creating a new project-rooted custom scope. */
+export interface ScopeCreateInput {
+  name: string
+  color?: string
+  iconType?: string
+}
+
+// ─── Managed worktree health & lifecycle ────────────────────────────────────
+
+export type ScopeWorktreeHealthCategory =
+  | 'healthy'
+  | 'missing'
+  | 'unregistered'
+  | 'locked'
+  | 'prunable'
+  | 'branch-mismatch'
+  | 'path-mismatch'
+  | 'repository-unavailable'
+
+export interface ScopeWorktreeHealth {
+  category: ScopeWorktreeHealthCategory
+  detail?: string
+  /** Expected absolute path of the managed worktree when derivable. */
+  expectedPath?: string
+  /** Actual registration path reported by Git when it differs. */
+  actualPath?: string
+  prunable?: boolean
+}
+
+/** Actions that require a state-bound, single-use confirmation ID. */
+export type ScopeLifecycleAction =
+  'detach' | 'remove-worktree' | 'delete-scope' | 'delete-branch' | 'delete-project-worktrees'
+
+export interface ScopeLifecyclePreflight {
+  action: ScopeLifecycleAction
+  projectId: string
+  scopeBucketId: string
+  /** Tracked files with uncommitted modifications (bounded list). */
+  dirtyFiles: string[]
+  /** Commits not reachable from any known remote-tracking ref. */
+  unpushedCommits: number
+  hasActiveProcesses: boolean
+  /** Whether the scope's branch is checked out by this worktree. */
+  branchOwnedByWorktree: boolean
+  /** Single-use token bound to this exact snapshot. */
+  confirmationId: string
+  createdAt: number
+}
+
+/** Bounded progress events for managed-worktree creation and setup. */
+export interface ScopeWorktreeProgress {
+  stage:
+    | 'none'
+    | 'naming'
+    | 'discovering-repository'
+    | 'creating-worktree'
+    | 'persisting-association'
+    | 'environment'
+    | 'setup'
+    | 'done'
+    | 'failed'
+  detail?: string
 }
 
 export interface ProjectFileEntry {
@@ -402,6 +564,8 @@ export type ProviderType = 'cli' | 'api' | 'hybrid'
 /** Live connection state of a provider harness on this machine. */
 export type ProviderConnectionStatus = 'idle' | 'checking' | 'available' | 'not_found' | 'error'
 
+export type HarnessExecutionTarget = { kind: 'native' } | { kind: 'wsl'; distribution: string }
+
 export interface ProviderConnectionInfo {
   id: string
   name: string
@@ -413,6 +577,8 @@ export interface ProviderConnectionInfo {
   status: ProviderConnectionStatus
   /** Absolute path to the resolved binary, when found. */
   resolvedPath?: string
+  /** Host runtime that owns the resolved binary. */
+  executionTarget?: HarnessExecutionTarget
   /** First line of `<command> --version` output, when the probe succeeds. */
   version?: string
   /** Human-readable detail for error/not_found states. */
@@ -1253,9 +1419,11 @@ export interface SkillMarketInstallRequest {
   source: string
   skillId: string
   manager: 'cio' | 'native'
-  scope: { kind: 'global' } | { kind: 'projects'; projectIds: string[] }
+  scope:
+    | { kind: 'global' }
+    | { kind: 'projects'; projectIds: string[] }
+    | { kind: 'harnesses'; harnessIds: string[] }
   activation?: UtilityActivation
-  nativeTarget?: { kind: 'shared' } | { kind: 'harnesses'; harnessIds: string[] }
 }
 
 // ─── Harness-native capability discovery ───────────────────────────────────
@@ -1592,6 +1760,8 @@ export interface AgentContextUsage {
   contextWindow?: number
   /** Tokens occupying the context when the harness reports that value. */
   contextUsed?: number
+  /** True when context occupancy was estimated from the composed request. */
+  contextEstimated?: boolean
   contextPercent?: number
   costUsd: number
   /** Per-turn token categories when the harness exposes token accounting. */
@@ -2089,6 +2259,8 @@ export interface AgentMessage {
   contextWindow?: number
   /** Cumulative tokens currently occupying the model context, when available. */
   contextUsed?: number
+  /** True when context occupancy was estimated from the composed request. */
+  contextEstimated?: boolean
   /** Optional account quota windows when the provider exposes them. */
   rateLimits?: AgentRateLimitWindow[]
   /** Prepaid-credit balance reported alongside quota windows. */
@@ -2234,6 +2406,8 @@ export type AgentEvent =
       contextWindow?: number
       /** Cumulative tokens currently occupying the model context, when available. */
       contextUsed?: number
+      /** True when context occupancy was estimated from the composed request. */
+      contextEstimated?: boolean
       /** Account quota windows reported after the harness refreshes usage. */
       rateLimits?: AgentRateLimitWindow[]
       /** Prepaid-credit balance reported alongside quota windows. */
@@ -2249,6 +2423,7 @@ export type AgentEvent =
       normalizedUsage?: NormalizedUsage
       contextWindow?: number
       contextUsed?: number
+      contextEstimated?: boolean
       cost?: number
       rateLimits?: AgentRateLimitWindow[]
       credits?: AgentUsageCredits
@@ -3141,6 +3316,8 @@ export interface MemoryImportPreview {
 
 export interface AppConfig {
   theme: ThemePreference
+  /** True after the user finishes or dismisses the first-run setup guide. */
+  onboardingCompleted: boolean
   threadLimit: number
   /** Time before a pending agent question automatically selects its recommendation. */
   questionTimeoutMs: number
@@ -3181,6 +3358,8 @@ export interface AppConfig {
   resumeWorkOnRestart: boolean
   /** Default PR merge method used by the Git panel, pre-selected when merging. */
   defaultMergeMethod: PrMergeMethod
+  /** Pull strategy used by the Git panel. `ask` opens the strategy chooser. */
+  defaultPullStrategy: GitPullPreference
   /** Hunks whose changed lines exceed this are collapsed with a notice so huge
    *  diffs do not hurt diff-view performance. */
   maxDiffLines: number
@@ -3201,6 +3380,7 @@ export type AppConfigPatch = Partial<
   Pick<
     AppConfig,
     | 'theme'
+    | 'onboardingCompleted'
     | 'threadLimit'
     | 'questionTimeoutMs'
     | 'slashCommandMode'
@@ -3217,12 +3397,19 @@ export type AppConfigPatch = Partial<
     | 'autoRetryAfterReset'
     | 'resumeWorkOnRestart'
     | 'defaultMergeMethod'
+    | 'defaultPullStrategy'
     | 'maxDiffLines'
     | 'openLocalhostInCioBrowser'
   >
 >
 
 // ─── Git management ──────────────────────────────────────────────────────────
+
+/** Explicit reconciliation strategies supported by `git pull`. */
+export type GitPullStrategy = 'merge' | 'rebase' | 'ff-only'
+
+/** Persisted Pull-button behavior. */
+export type GitPullPreference = 'ask' | GitPullStrategy
 
 /** Status of one file in the working tree. */
 export type GitFileStatus =
@@ -3282,11 +3469,19 @@ export interface GitStatus {
   behind: number
 }
 
-/** One local branch and its tracking relationship, when set. */
+/** One local or remote-tracking branch ref. */
 export interface GitBranchInfo {
+  /** Distinguishes writable local branches from read-only remote-tracking refs. */
+  kind: 'local' | 'remote'
+  /** Branch name without a remote prefix (e.g. `feature/auth`). */
   name: string
+  /** Unambiguous short ref used for display keys and git operations. */
+  ref: string
   current: boolean
+  /** Associated remote name (e.g. `origin`), when one exists. */
   remote: string | null
+  /** Full upstream ref for a tracked local branch (e.g. `origin/main`). */
+  upstream: string | null
   ahead: number
   behind: number
 }
@@ -3652,6 +3847,17 @@ export interface PrComposeReport {
   description: string
   /** Disposable task that produced the report; it is not a persisted Thread id. */
   taskId: string
+}
+
+/** Branch selection and optional existing copy for one isolated PR composition. */
+export interface PrComposeInput {
+  base: string
+  head: string
+  /** Remote uses cached origin refs only; local also includes unpushed commits and worktree changes. */
+  source: 'remote' | 'local'
+  includeWorkingTree: boolean
+  currentTitle?: string
+  currentDescription?: string
 }
 
 /** Repository identity resolved from a remote URL (e.g. `owner/repo`). */

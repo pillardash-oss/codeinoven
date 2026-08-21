@@ -83,12 +83,12 @@ export class BaseUrlProviderService {
   }
 
   async createProvider(
-    input: BaseUrlProviderCreateRequest & { apiKeyRef?: string }
+    input: BaseUrlProviderCreateRequest & { apiKeyRef?: string; id?: string }
   ): Promise<BaseUrlProvider> {
     return this.enqueue(async () => {
       const store = await this.load()
       const now = Date.now()
-      const id = generateId()
+      const id = input.id === undefined ? generateId() : identifier(input.id, 'Base URL provider ID')
       const apiKeyRef = input.apiKeyRef
       const apiKeyEnvVar = apiKeyRef === undefined ? undefined : apiKeyEnvVarFor(id)
       const provider: BaseUrlProvider = {
@@ -102,6 +102,12 @@ export class BaseUrlProviderService {
       if (hasNativeProviderCatalog(provider.harnessId)) {
         await this.nativeProviders.upsertProvider(provider, input.apiKey)
         return structuredClone(provider)
+      }
+      if (
+        input.id !== undefined &&
+        store.providers.some((candidate) => candidate.harnessId === provider.harnessId && candidate.id === id)
+      ) {
+        throw new Error(`Base URL provider already exists: ${provider.harnessId}:${id}`)
       }
       store.providers.push(provider)
       await this.save(store)

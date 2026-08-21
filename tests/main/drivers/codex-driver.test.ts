@@ -78,6 +78,7 @@ class FakeChild extends EventEmitter {
 const roots: string[] = []
 afterEach(async () => {
   spawnMock.mockReset()
+  vi.useRealTimers()
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })))
 })
 
@@ -439,6 +440,11 @@ describe('CodexDriver', () => {
   })
 
   it('surfaces a Codex usage-limit failure as a quota issue with a retry time', async () => {
+    // The message embeds a concrete reset time ("try again at …"). Fake the
+    // Date clock only (never setTimeout) so the embedded reset time is always
+    // in the future regardless of when the suite runs.
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date(2026, 7, 19, 12, 0, 0))
     const driver = new CodexDriver(await storage())
     const events: AgentEvent[] = []
     driver.onEvent((event) => events.push(event))

@@ -13,14 +13,16 @@
  */
 
 import type { Database } from '../database/database'
-import { appendFile, mkdir, rename, rm, writeFile } from 'node:fs/promises'
+import { appendFile, mkdir, open, realpath, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { randomUUID } from 'node:crypto'
-import { extname, join } from 'node:path'
+import { extname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { ThreadManager } from '../../lib/engines/thread-manager'
 import { NoteRepo } from '../database/repositories/note-repo'
 import { ProjectManager } from '../../lib/engines/project-manager'
 import { ProjectFilesService } from '../editor/project-files-service'
 import type { ChatEngine } from '../chat/chat-engine'
+import { ThreadCreationCoordinator } from '../chat/thread-creation-coordinator'
+import { ThreadDeletionCoordinator } from '../chat/thread-deletion-coordinator'
 import {
   broadcastNoteChanged,
   broadcastThreadDeleted,
@@ -35,6 +37,8 @@ import {
 } from '../../lib/remote-rpc'
 import { DeviceCredentialService, sha256Hex } from './device-credential-service'
 import { ScopeManager } from '../../lib/engines/scope-manager'
+import { ScopeWorktreeService } from '../git/scope-worktree-service'
+import { ScopeRootResolver, scopeRootProvider } from '../workspaces/scope-root-resolver'
 import {
   SpecEngine,
   type NewSpecProvenance,
@@ -61,8 +65,13 @@ import { StorageEngine } from '../storage/storage-engine'
 import {
   validateBoundedString,
   validateEntityId,
-  validateScopeBoard,
-  validateScopeSlice
+  validateScopeAppearancePatch,
+  validateScopeCollapsePatch,
+  validateScopeCreateInput,
+  validateScopeOrderIds,
+  validateScopeSlice,
+  validateScopeTarget,
+  validateWorktreeDefaults
 } from '../ipc/ipc-validation'
 import type {
   AgentCapabilitySource,
@@ -94,6 +103,7 @@ import type { AttachmentStorageScope } from '../../lib/types'
 
 const MAX_REMOTE_ATTACHMENT_BYTES = 32 * 1024 * 1024
 const MAX_REMOTE_ATTACHMENT_CHUNK_BYTES = 256 * 1024
+const REMOTE_ATTACHMENT_READ_CHUNK_BYTES = 192 * 1024
 const MAX_CONCURRENT_REMOTE_UPLOADS = 16
 const NOTE_BODY_MAX = 100_000
 const REMOTE_UPLOAD_TTL_MS = 10 * 60 * 1_000
@@ -139,6 +149,12 @@ export interface RemoteRpcServices {
     | 'listArtifacts'
     | 'deleteSkill'
     | 'deleteMcp'
+    | 'sendTemporaryPrompt'
+    | 'steerTemporaryPrompt'
+    | 'loadTemporaryChatMessages'
+    | 'getTemporaryChatStatus'
+    | 'abortTemporaryChat'
+    | 'touchTemporaryChat'
     | 'listProviders'
     | 'refreshAccountUsage'
     | 'loadSessionMessages'
@@ -174,6 +190,8 @@ export interface RemoteRpcServices {
    * dispatcher and isolated tests can construct it without device state.
    */
   credentials?: DeviceCredentialService
+  threadCreation?: ThreadCreationCoordinator
+  threadDeletion?: ThreadDeletionCoordinator
 }
 
 /** A remote RPC invoke request that reached the main process. */
@@ -193,6 +211,8 @@ export class RemoteRpcDispatcher {
   private readonly projectManager: ProjectManager
   private readonly projectFilesService: ProjectFilesService
   private readonly scopeManager: ScopeManager
+  private readonly scopeWorktreeService: ScopeWorktreeService
+  private readonly scopeRoots: ReturnType<typeof scopeRootProvider>
   private readonly specEngine: SpecEngine
   private readonly brainstormEngine: BrainstormEngine
   private readonly auditEngine: AuditEngine
@@ -206,11 +226,15 @@ export class RemoteRpcDispatcher {
   private readonly githubAuthService: GitHubAuthService
   private readonly storage: StorageEngine
   private readonly credentials: DeviceCredentialService | null
+  private readonly threadCreation: ThreadCreationCoordinator
+  private readonly threadDeletion: ThreadDeletionCoordinator
   private readonly remoteUploads = new Map<string, RemoteAttachmentUpload>()
 
   constructor(private readonly services: RemoteRpcServices) {
     this.storage = services.storage ?? new StorageEngine()
     this.credentials = services.credentials ?? null
+    this.threadCreation = services.threadCreation ?? new ThreadCreationCoordinator()
+    this.threadDeletion = services.threadDeletion ?? new ThreadDeletionCoordinator()
     this.checkpointManager = new CheckpointManager(services.database)
     this.threadManager = new ThreadManager(
       services.database,
@@ -230,6 +254,10 @@ export class RemoteRpcDispatcher {
     this.projectManager = services.projectManager ?? new ProjectManager(services.database)
     this.projectFilesService = new ProjectFilesService(this.projectManager)
     this.scopeManager = new ScopeManager(services.database)
+    this.scopeWorktreeService = new ScopeWorktreeService(this.scopeManager, this.projectManager)
+    this.scopeRoots = scopeRootProvider(
+      new ScopeRootResolver(this.projectManager, this.scopeManager, this.scopeWorktreeService)
+    )
     this.specEngine = new SpecEngine(this.storage, services.database, {
       validateForApproval: validateEngineeringSpec
     })
@@ -576,10 +604,24 @@ export class RemoteRpcDispatcher {
       case 'thread:list':
         return this.threadManager.listThreads(this.string(args[0]))
       case 'thread:get':
+        await this.threadCreation.awaitReady(this.string(args[1]))
         return this.threadManager.getThread(this.string(args[0]), this.string(args[1]))
-      case 'thread:create':
-        return this.threadManager.createThread(args[0] as CreateThreadInput)
+      case 'thread:create': {
+        const { thread, finalize } = this.threadManager.prepareCreateThread(
+          args[0] as CreateThreadInput
+        )
+        this.threadCreation.begin(
+          thread.id,
+          async () => {
+            await finalize()
+            broadcastThreadUpdate(thread)
+          },
+          () => broadcastThreadDeleted(thread)
+        )
+        return thread
+      }
       case 'thread:markRead':
+        await this.threadCreation.awaitReady(this.string(args[1]))
         return this.threadManager.markRead(this.string(args[0]), this.string(args[1]))
       case 'thread:setPinned':
         return this.threadManager.setPinned(
@@ -595,6 +637,7 @@ export class RemoteRpcDispatcher {
           args[3] as { read?: boolean } | undefined
         )
       case 'thread:updateSettings':
+        await this.threadCreation.awaitReady(this.string(args[1]))
         return this.threadManager.updateSettings(
           this.string(args[0]),
           this.string(args[1]),
@@ -632,7 +675,20 @@ export class RemoteRpcDispatcher {
           args[2] as Record<string, unknown>
         )
       case 'thread:delete':
-        await this.threadManager.deleteThread(this.string(args[0]), this.string(args[1]))
+        {
+          const projectId = this.string(args[0])
+          const threadId = this.string(args[1])
+          this.threadDeletion.begin(
+            projectId,
+            threadId,
+            () => this.threadManager.deleteThread(projectId, threadId),
+            () => {
+              void this.threadManager.getThreadViaWorker(projectId, threadId).then((thread) => {
+                if (thread) broadcastThreadUpdate(thread)
+              })
+            }
+          )
+        }
         return undefined
       case 'thread:fork': {
         await chatEngine.loadMessages(this.string(args[0]), this.string(args[1]))
@@ -705,6 +761,8 @@ export class RemoteRpcDispatcher {
         return this.finishRemoteUpload(device, this.string(args[0]))
       case 'attachment:cancelRemoteUpload':
         return this.cancelRemoteUpload(device, this.string(args[0]))
+      case 'attachment:readRemoteChunk':
+        return this.readRemoteAttachmentChunk(this.string(args[0]), args[1])
       case 'remotePush:getPublicKey':
         return remoteWebPush.publicKey()
       case 'remotePush:subscribe':
@@ -743,8 +801,40 @@ export class RemoteRpcDispatcher {
       // ─── Scope board ("charts") ─────────────────────────────────────────
       case 'scope:get':
         return this.scopeManager.getBoard(this.string(args[0]))
-      case 'scope:save':
-        return this.scopeManager.saveBoard(this.string(args[0]), validateScopeBoard(args[1]))
+      case 'scope:updateLayout':
+        return this.scopeManager.updateLayout(this.string(args[0]), validateScopeOrderIds(args[1]))
+      case 'scope:updateAppearance':
+        return this.scopeManager.updateAppearance(
+          this.string(args[0]),
+          this.string(args[1]),
+          validateScopeAppearancePatch(args[2])
+        )
+      case 'scope:updateCollapse':
+        return this.scopeManager.updateCollapse(
+          this.string(args[0]),
+          this.string(args[1]),
+          validateScopeCollapsePatch(args[2])
+        )
+      case 'scope:create':
+        return this.scopeManager.createBucket(
+          this.string(args[0]),
+          validateScopeCreateInput(args[1])
+        )
+      case 'scope:setArchive':
+        return this.scopeManager.setArchive(
+          this.string(args[0]),
+          this.string(args[1]),
+          this.boolean(args[2])
+        )
+      case 'scope:delete':
+        return this.scopeManager.deleteBucket(this.string(args[0]), this.string(args[1]))
+      case 'scope:setWorktreeDefaults':
+        return this.scopeManager.setWorktreeDefaults(
+          this.string(args[0]),
+          validateWorktreeDefaults(args[1])
+        )
+      case 'scope:worktree:health':
+        return this.scopeWorktreeService.health(validateScopeTarget(args[0]))
 
       // ─── Agent chat surface ─────────────────────────────────────────────
       case 'agent:loadMessages':
@@ -870,6 +960,39 @@ export class RemoteRpcDispatcher {
         return chatEngine.deleteSkill(args[0] as AgentCapabilitySource)
       case 'capabilities:deleteMcp':
         return chatEngine.deleteMcp(args[0] as AgentCapabilitySource)
+      case 'agent:sendTemporaryPrompt':
+        return chatEngine.sendTemporaryPrompt(
+          this.string(args[0]),
+          this.string(args[1]),
+          this.string(args[2]),
+          args[3] as ThreadSettings,
+          this.string(args[4]),
+          (args[5] ?? []) as PromptAttachment[],
+          args[6] as string[] | undefined,
+          this.optionalString(args[7])
+        )
+      case 'agent:steerTemporaryPrompt':
+        return chatEngine.steerTemporaryPrompt(
+          this.string(args[0]),
+          this.string(args[1]),
+          this.string(args[2]),
+          args[3] as ThreadSettings,
+          this.string(args[4]),
+          (args[5] ?? []) as PromptAttachment[],
+          args[6] as string[] | undefined
+        )
+      case 'agent:loadTemporaryChatMessages':
+        return chatEngine.loadTemporaryChatMessages(this.string(args[0]))
+      case 'agent:getTemporaryChatStatus':
+        return chatEngine.getTemporaryChatStatus(this.string(args[0]))
+      case 'agent:abortTemporaryChat':
+        return chatEngine.abortTemporaryChat(
+          this.string(args[0]),
+          this.string(args[1]),
+          this.string(args[2])
+        )
+      case 'agent:touchTemporaryChat':
+        return chatEngine.touchTemporaryChat(this.string(args[0]))
       case 'agent:closeTemporaryChat':
         return chatEngine.closeTemporaryChat(this.string(args[0]))
       case 'agent:loadSessionMessages':
@@ -1359,7 +1482,12 @@ export class RemoteRpcDispatcher {
       // vault and never crosses the bridge (it is resolved here for push), and
       // GitHub device-flow sign-in + pull-request creation are desktop-only.
       case 'git:status':
-        return this.gitService.getStatus(await this.resolveProjectPath(this.string(args[0])))
+        return this.gitService.getStatus(
+          await this.resolveProjectPath(
+            this.string(args[0]),
+            args[1] === undefined ? undefined : this.string(args[1])
+          )
+        )
       case 'git:diff':
         return this.gitService.getDiff(
           await this.resolveProjectPath(this.string(args[0])),
@@ -1406,7 +1534,10 @@ export class RemoteRpcDispatcher {
         )
       case 'git:commit':
         return this.gitService.commit(
-          await this.resolveProjectPath(this.string(args[0])),
+          await this.resolveProjectPath(
+            this.string(args[0]),
+            args[2] === undefined ? undefined : this.string(args[2])
+          ),
           this.string(args[1])
         )
       case 'git:amend':
@@ -1417,7 +1548,12 @@ export class RemoteRpcDispatcher {
       case 'git:init':
         return this.gitService.initialize(await this.resolveProjectPath(this.string(args[0])))
       case 'git:branches':
-        return this.gitService.listBranches(await this.resolveProjectPath(this.string(args[0])))
+        return this.gitService.listBranches(
+          await this.resolveProjectPath(
+            this.string(args[0]),
+            args[1] === undefined ? undefined : this.string(args[1])
+          )
+        )
       case 'git:checkout':
         return this.syncBranchAfterCheckout(
           this.string(args[0]),
@@ -1434,6 +1570,16 @@ export class RemoteRpcDispatcher {
             this.string(args[1])
           )
         )
+      case 'git:createTrackingBranch':
+        return this.syncBranchAfterCheckout(
+          this.string(args[0]),
+          await this.gitService.createTrackingBranch(
+            await this.resolveProjectPath(this.string(args[0])),
+            this.string(args[1]),
+            this.string(args[2]),
+            this.string(args[3])
+          )
+        )
       case 'git:deleteBranch':
         return this.gitService.deleteBranch(
           await this.resolveProjectPath(this.string(args[0])),
@@ -1444,7 +1590,8 @@ export class RemoteRpcDispatcher {
         return this.gitService.log(
           await this.resolveProjectPath(this.string(args[0])),
           typeof args[1] === 'number' ? args[1] : undefined,
-          typeof args[2] === 'number' ? args[2] : undefined
+          typeof args[2] === 'number' ? args[2] : undefined,
+          typeof args[3] === 'string' ? this.string(args[3]) : undefined
         )
       case 'git:commitDiff':
         return this.gitService.commitDiff(
@@ -1489,7 +1636,12 @@ export class RemoteRpcDispatcher {
         )
       }
       case 'git:remotes':
-        return this.gitService.listRemotes(await this.resolveProjectPath(this.string(args[0])))
+        return this.gitService.listRemotes(
+          await this.resolveProjectPath(
+            this.string(args[0]),
+            args[1] === undefined ? undefined : this.string(args[1])
+          )
+        )
       case 'git:addRemote':
         return this.gitService.addRemote(
           await this.resolveProjectPath(this.string(args[0])),
@@ -1516,18 +1668,28 @@ export class RemoteRpcDispatcher {
         const options = (args[1] ?? {}) as {
           remote?: string
           branch?: string
-          rebase?: boolean
+          strategy?: string
+        }
+        const strategy = options.strategy
+        if (strategy !== 'merge' && strategy !== 'rebase' && strategy !== 'ff-only') {
+          throw new TypeError('Invalid pull strategy')
         }
         const tokenRef = `git_pat_${projectId}`
         const token = (await this.vault.exists(tokenRef))
           ? await this.vault.resolve(tokenRef)
           : undefined
-        return this.gitService.pullIntegrate(await this.resolveProjectPath(projectId), {
-          remote: typeof options.remote === 'string' ? options.remote : undefined,
-          branch: typeof options.branch === 'string' ? options.branch : undefined,
-          rebase: Boolean(options.rebase),
-          token
-        })
+        return this.gitService.pullIntegrate(
+          await this.resolveProjectPath(
+            projectId,
+            args[2] === undefined ? undefined : this.string(args[2])
+          ),
+          {
+            remote: typeof options.remote === 'string' ? options.remote : undefined,
+            branch: typeof options.branch === 'string' ? options.branch : undefined,
+            strategy,
+            token
+          }
+        )
       }
       case 'git:push': {
         const projectId = this.string(args[0])
@@ -1540,12 +1702,18 @@ export class RemoteRpcDispatcher {
         const token = (await this.vault.exists(tokenRef))
           ? await this.vault.resolve(tokenRef)
           : undefined
-        return this.gitService.push(await this.resolveProjectPath(projectId), {
-          setUpstream: Boolean(options.setUpstream),
-          remote: typeof options.remote === 'string' ? options.remote : undefined,
-          branch: typeof options.branch === 'string' ? options.branch : undefined,
-          token
-        })
+        return this.gitService.push(
+          await this.resolveProjectPath(
+            projectId,
+            args[2] === undefined ? undefined : this.string(args[2])
+          ),
+          {
+            setUpstream: Boolean(options.setUpstream),
+            remote: typeof options.remote === 'string' ? options.remote : undefined,
+            branch: typeof options.branch === 'string' ? options.branch : undefined,
+            token
+          }
+        )
       }
       case 'git:getCredentialStatus': {
         const projectId = this.string(args[0])
@@ -1736,8 +1904,80 @@ export class RemoteRpcDispatcher {
     await rm(upload.stagingPath, { force: true }).catch(() => undefined)
   }
 
+  private async readRemoteAttachmentChunk(
+    requestedPath: string,
+    rawOffset: unknown
+  ): Promise<{ base64: string; nextOffset: number; size: number }> {
+    if (requestedPath.length < 1 || requestedPath.length > 4_096 || !isAbsolute(requestedPath)) {
+      throw new TypeError('Attachment path is invalid')
+    }
+    if (typeof rawOffset !== 'number' || !Number.isSafeInteger(rawOffset) || rawOffset < 0) {
+      throw new TypeError('Attachment read offset is invalid')
+    }
+
+    const canonicalPath = await realpath(resolve(requestedPath))
+    const fileInfo = await stat(canonicalPath)
+    if (!fileInfo.isFile()) throw new TypeError('Attachment source must be a file')
+    if (fileInfo.size < 1 || fileInfo.size > MAX_REMOTE_ATTACHMENT_BYTES) {
+      throw new TypeError('Remote attachment must be between 1 byte and 32 MB')
+    }
+    if (rawOffset > fileInfo.size) throw new RangeError('Attachment read offset exceeds file size')
+    if (!(await this.isAppOwnedAttachmentPath(canonicalPath))) {
+      throw new Error('Attachment path is outside app-owned temporary storage')
+    }
+
+    const byteLength = Math.min(REMOTE_ATTACHMENT_READ_CHUNK_BYTES, fileInfo.size - rawOffset)
+    if (byteLength === 0) return { base64: '', nextOffset: rawOffset, size: fileInfo.size }
+
+    const handle = await open(canonicalPath, 'r')
+    try {
+      const buffer = Buffer.allocUnsafe(byteLength)
+      const { bytesRead } = await handle.read(buffer, 0, byteLength, rawOffset)
+      if (bytesRead < 1) throw new Error('Attachment read ended unexpectedly')
+      return {
+        base64: buffer.subarray(0, bytesRead).toString('base64'),
+        nextOffset: rawOffset + bytesRead,
+        size: fileInfo.size
+      }
+    } finally {
+      await handle.close()
+    }
+  }
+
+  private async isAppOwnedAttachmentPath(canonicalPath: string): Promise<boolean> {
+    const configRoot = await realpath(getConfigRoot()).catch(() => resolve(getConfigRoot()))
+    const configRelative = relative(configRoot, canonicalPath)
+    if (isContainedRelativePath(configRelative)) {
+      const segments = configRelative.split(sep)
+      const chatAttachment =
+        segments[0] === 'chats' && segments.length >= 4 && segments[2] === 'tmp'
+      const projectAttachment =
+        segments[0] === 'projects' &&
+        segments.length >= 6 &&
+        segments[2] === 'threads' &&
+        segments[4] === 'tmp'
+      if (chatAttachment || projectAttachment) return true
+    }
+
+    const projects = await this.projectManager.listProjects()
+    for (const project of projects) {
+      if (project.source !== 'local' || !project.path) continue
+      const root = join(project.path, PROJECT_DATA_DIRECTORY, 'tmp', 'attachments')
+      const canonicalRoot = await realpath(root).catch(() => null)
+      if (canonicalRoot && isContainedRelativePath(relative(canonicalRoot, canonicalPath))) {
+        return true
+      }
+    }
+    return false
+  }
+
   /** Resolve a project id to its validated absolute path (git operates on paths). */
-  private async resolveProjectPath(projectId: string): Promise<string> {
+  private async resolveProjectPath(projectId: string, scopeBucketId?: string): Promise<string> {
+    if (scopeBucketId) {
+      const scopeRoot = await this.scopeRoots.resolveCompatibilityRoot(projectId, scopeBucketId)
+      if (!scopeRoot) throw new Error(`Scope root unavailable: ${projectId}:${scopeBucketId}`)
+      return scopeRoot
+    }
     const project = await this.projectManager.getProject(projectId)
     if (!project?.path) throw new Error(`Project not found: ${projectId}`)
     return project.path
@@ -1773,10 +2013,24 @@ export class RemoteRpcDispatcher {
     return value
   }
 
+  private boolean(value: unknown): boolean {
+    if (typeof value !== 'boolean') throw new TypeError('Expected a boolean argument')
+    return value
+  }
+
   private stringArray(value: unknown, label: string): string[] {
     if (!Array.isArray(value) || value.some((item) => typeof item !== 'string')) {
       throw new TypeError(`${label} must be an array of strings`)
     }
     return value
   }
+}
+
+function isContainedRelativePath(relativePath: string): boolean {
+  return (
+    relativePath.length > 0 &&
+    !isAbsolute(relativePath) &&
+    relativePath !== '..' &&
+    !relativePath.startsWith(`..${sep}`)
+  )
 }

@@ -1,4 +1,3 @@
-import { spawn } from 'child_process'
 import type {
   AgentMessage,
   AgentPart,
@@ -12,7 +11,7 @@ import type {
   ThinkingLevel,
   ThinkingPreset
 } from '../../lib/types'
-import { buildHarnessEnvironment } from './cli-environment'
+import { buildProcessEnvironment } from './cli-environment'
 import { attachmentReferences } from './attachment-reference'
 import { antigravityModelSlugs } from './antigravity-model-output'
 import type {
@@ -28,42 +27,30 @@ import type {
   SendPromptOptions
 } from './driver.interface'
 import type { StorageEngine } from '../storage/storage-engine'
+import { runHarnessCommand } from './harness-runtime'
 
 /**
  * Antigravity CLI reads its stdin and hangs when that pipe stays open without
  * EOF or a terminal. Every short-lived probe (version, model list) must spawn
  * with stdin ignored so it exits promptly in a desktop context.
  */
-function runAgy(
+async function runAgy(
   args: string[],
   timeoutMs: number
 ): Promise<{ succeeded: boolean; stdout: string; stderr: string }> {
-  return new Promise((resolve) => {
-    const child = spawn('agy', args, {
-      env: buildHarnessEnvironment(),
-      stdio: ['ignore', 'pipe', 'pipe']
+  try {
+    const result = await runHarnessCommand('agy', args, {
+      env: buildProcessEnvironment(),
+      timeoutMs
     })
-    let stdout = ''
-    let stderr = ''
-    const timer = setTimeout(() => {
-      child.kill()
-      resolve({ succeeded: false, stdout, stderr })
-    }, timeoutMs)
-    child.stdout?.on('data', (chunk: Buffer) => {
-      stdout += chunk.toString()
-    })
-    child.stderr?.on('data', (chunk: Buffer) => {
-      stderr += chunk.toString()
-    })
-    child.on('error', (error) => {
-      clearTimeout(timer)
-      resolve({ succeeded: false, stdout, stderr: error.message })
-    })
-    child.on('exit', (code) => {
-      clearTimeout(timer)
-      resolve({ succeeded: code === 0, stdout, stderr })
-    })
-  })
+    return { succeeded: true, ...result }
+  } catch (error) {
+    return {
+      succeeded: false,
+      stdout: '',
+      stderr: error instanceof Error ? error.message : String(error)
+    }
+  }
 }
 
 const AGY_PROBE_TIMEOUT_MS = 15_000
@@ -564,7 +551,7 @@ export class AntigravityDriver extends PersistentCliDriver {
   readonly capabilities: HarnessCapabilities = {
     runtimeTopology: { kind: 'turn_process', scope: 'session' },
     streaming: true,
-    steering: false,
+    steering: true,
     nativeResume: true,
     messageHistory: 'mirrored',
     interactivePermissions: false,
@@ -654,7 +641,7 @@ export class AntigravityDriver extends PersistentCliDriver {
   }
 
   protected async buildTurnCommand(
-    _projectPath: string,
+    projectPath: string,
     session: PersistentCliSession,
     options: SendPromptOptions
   ): Promise<CliTurnCommand> {
@@ -664,7 +651,18 @@ export class AntigravityDriver extends PersistentCliDriver {
     // of the prompt unless the prompt directly follows `-p`. The prompt must
     // come immediately after `-p`, with every flag after it, or print mode
     // silently emits the model's plain-text response instead of NDJSON events.
-    const args: string[] = ['-p', prompt, '--output-format', 'stream-json']
+    // Antigravity keeps its model workspace separate from the process cwd.
+    // Register the resolved scope root explicitly or relative repository paths
+    // are rewritten beneath Antigravity's scratch directory and file writes are
+    // then rejected as invalid conversation-artifact paths.
+    const args: string[] = [
+      '-p',
+      prompt,
+      '--output-format',
+      'stream-json',
+      '--add-dir',
+      projectPath
+    ]
     if (session.nativeSessionId) args.push('--conversation', session.nativeSessionId)
     if (options.settings.modelId && options.settings.modelId !== 'default') {
       await this.ensureModelVariants()
@@ -697,7 +695,7 @@ export class AntigravityDriver extends PersistentCliDriver {
       parts: [],
       started: false
     })
-    return { command: 'agy', args, env: buildHarnessEnvironment() }
+    return { command: 'agy', args, env: buildProcessEnvironment() }
   }
 
   protected parseJsonLine(value: unknown, context: CliLineParseContext): CliLineParseResult | null {

@@ -21,7 +21,7 @@ const DOCUMENTED_ALLOW: Record<LeanAgentMode, string[]> = {
   'file-system-chat': ['read', 'glob', 'grep', 'list', 'webfetch', 'websearch', 'question'],
   ephemeral: ['read', 'glob', 'grep', 'list', 'webfetch', 'websearch', 'question'],
   'image-description': ['read'],
-  'pr-compose': ['read', 'glob', 'grep', 'list'],
+  'pr-compose': [],
   'utility-setup': ['read', 'glob', 'grep', 'list', 'webfetch', 'websearch', 'question'],
   brainstorm: ['read', 'glob', 'grep', 'list', 'webfetch', 'websearch', 'question']
 }
@@ -29,12 +29,6 @@ const DOCUMENTED_ALLOW: Record<LeanAgentMode, string[]> = {
 /** Scoped `edit` patterns per write-capable mode. */
 const DOCUMENTED_EDIT_SCOPE: Partial<Record<LeanAgentMode, string>> = {
   brainstorm: '.cio/specs/*/versions/**'
-}
-
-/** Read-only git allowance for the PR compose agent. */
-const DOCUMENTED_BASH_SCOPE: Partial<Record<LeanAgentMode, string>> = {
-  'pr-compose': 'git *',
-  'utility-setup': 'curl *'
 }
 
 const HEAVY_KEYS = [
@@ -103,9 +97,16 @@ describe('lean agent definitions', () => {
       if (editScope !== undefined) {
         expect(agent.permission['edit']).toMatchObject({ '*': 'deny', [editScope]: 'allow' })
       }
-      const bashScope = DOCUMENTED_BASH_SCOPE[mode]
-      if (bashScope !== undefined) {
-        expect(agent.permission['bash']).toMatchObject({ '*': 'deny', [bashScope]: 'allow' })
+      // Utility setup alone receives a scoped shell for the app API. PR
+      // composition receives app-prepared evidence and has no tools.
+      if (mode === 'utility-setup') {
+        const configured = agent.permission['bash']
+        expect(typeof configured === 'object' && configured !== null).toBe(true)
+        const mapping = configured as Record<string, 'allow' | 'deny'>
+        expect(mapping['*']).toBe('deny')
+        expect(mapping['curl *']).toBe('allow')
+      } else {
+        expect(agent.permission['bash']).toBe('deny')
       }
       // Nothing beyond the documented allow list leaks through as 'allow'.
       const allowedKeys = HEAVY_KEYS.filter((key) => agent.permission[key] === 'allow')

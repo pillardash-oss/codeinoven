@@ -10,6 +10,7 @@
     FolderOpen,
     FolderPlus,
     GitBranch,
+    GraduationCap,
     Info,
     Keyboard,
     LayoutDashboard,
@@ -101,6 +102,7 @@
 
   const defaultConfig: AppConfig = {
     theme: 'system',
+    onboardingCompleted: false,
     threadLimit: 70,
     questionTimeoutMs: 300_000,
     keybindings: {},
@@ -118,6 +120,7 @@
     autoRetryAfterReset: true,
     resumeWorkOnRestart: true,
     defaultMergeMethod: 'squash',
+    defaultPullStrategy: 'ask',
     maxDiffLines: 100,
     openLocalhostInCioBrowser: true
   }
@@ -140,6 +143,10 @@
   let threadSearchTimer: number | null = null
   let threadSearchRequest = 0
   let newProjectSpotlightOpen = $state(false)
+  let onboardingOpen = $state(false)
+  let onboardingStep = $state(0)
+  let onboardingInitialized = false
+  let onboardingProjectPickerActive = false
   /** Stored custom project icon data-URLs (project.id → url), for palette badges. */
   let projectIconUrls = $state(new Map<string, string>())
   let paletteFocusBookmark: ElementSelectionBookmark | null = null
@@ -299,6 +306,15 @@
         source: applicationSource,
         icon: Bell,
         keywords: ['alerts', 'completed', 'attention']
+      },
+      {
+        id: 'app:getting-started',
+        title: 'Open getting started guide',
+        description: 'Tour the workspace and set up a project and coding agent',
+        category: 'navigation',
+        source: applicationSource,
+        icon: GraduationCap,
+        keywords: ['onboarding', 'tour', 'help', 'setup', 'opencode']
       }
     ]
 
@@ -451,8 +467,16 @@
       appConfigState.sync(config)
       applyTheme()
       settingsError = undefined
+      if (!onboardingInitialized) {
+        onboardingOpen = !config.onboardingCompleted
+        onboardingInitialized = true
+      }
     } catch {
       settingsError = 'Settings could not be loaded. Defaults are being used.'
+      if (!onboardingInitialized) {
+        onboardingOpen = true
+        onboardingInitialized = true
+      }
     } finally {
       settingsReady = true
     }
@@ -675,6 +699,10 @@
         return
       case 'app:notifications':
         contextSidebarState.toggleNotifications()
+        return
+      case 'app:getting-started':
+        onboardingStep = 0
+        onboardingOpen = true
         return
       case 'app:terminal': {
         const thread = workspaceState.selectedThread
@@ -1080,6 +1108,11 @@
     newProjectSpotlightOpen = false
     navigate('projects')
     await handleProjectCreated(project)
+    if (onboardingProjectPickerActive) {
+      onboardingProjectPickerActive = false
+      onboardingStep = 7
+      onboardingOpen = true
+    }
   }
 
   /** Spotlight flow: a picked folder already exists as a project — focus it. */
@@ -1095,6 +1128,41 @@
       workspaceState.clearThread()
       workspaceState.activeProject = project
     }
+    if (onboardingProjectPickerActive) {
+      onboardingProjectPickerActive = false
+      onboardingStep = 7
+      onboardingOpen = true
+    }
+  }
+
+  function updateOnboardingStep(step: number): void {
+    if (step === 4) navigate('chats')
+    onboardingStep = step
+  }
+
+  function chooseOnboardingProject(): void {
+    onboardingOpen = false
+    onboardingProjectPickerActive = true
+    newProjectSpotlightOpen = true
+  }
+
+  function closeNewProjectSpotlight(): void {
+    newProjectSpotlightOpen = false
+    if (onboardingProjectPickerActive) {
+      onboardingProjectPickerActive = false
+      onboardingOpen = true
+    }
+  }
+
+  function finishOnboarding(): void {
+    onboardingOpen = false
+    onboardingProjectPickerActive = false
+    void updateConfig({ onboardingCompleted: true })
+  }
+
+  function browseHarnessesFromOnboarding(): void {
+    finishOnboarding()
+    navigate('settings-harnesses')
   }
 
   async function openScopeThread(thread: Thread): Promise<void> {
@@ -1357,6 +1425,14 @@
     const active = document.activeElement instanceof Element ? document.activeElement : null
     if (active?.closest('[data-region="file-tree"]')) {
       findNavState.focusFileTreeFilter++
+      return
+    }
+    if (
+      active?.closest('[data-region="git-panel"]') ||
+      (active?.closest('[data-region="context-sidebar"]') &&
+        document.querySelector('[data-region="git-panel"]'))
+    ) {
+      findNavState.openGitFind()
       return
     }
     if (active?.closest('[data-region="editor"]')) {
@@ -1638,12 +1714,25 @@
       <ProjectCreateControl
         mode="spotlight"
         open={newProjectSpotlightOpen}
-        onClose={() => (newProjectSpotlightOpen = false)}
+        onClose={closeNewProjectSpotlight}
         projects={scopeState.projectRecords}
         onProjectCreated={handleSpotlightProjectCreated}
         onExisting={handleSpotlightExistingProject}
       />
     {/await}
+  {/if}
+  {#if onboardingOpen}
+    {#key onboardingStep}
+      {#await import('$lib/components/onboarding/OnboardingTour.svelte') then { default: OnboardingTour }}
+        <OnboardingTour
+          step={onboardingStep}
+          onStepChange={updateOnboardingStep}
+          onChooseProject={chooseOnboardingProject}
+          onBrowseHarnesses={browseHarnessesFromOnboarding}
+          onFinish={finishOnboarding}
+        />
+      {/await}
+    {/key}
   {/if}
   <Toaster />
   <TooltipHost />

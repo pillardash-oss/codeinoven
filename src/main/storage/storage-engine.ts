@@ -39,6 +39,7 @@ import type { WorkerNameSettings } from '../../lib/assignment/worker-names'
 
 const DEFAULT_CONFIG: AppConfig = {
   theme: 'system',
+  onboardingCompleted: false,
   threadLimit: 70,
   questionTimeoutMs: 300_000,
   keybindings: {},
@@ -56,6 +57,7 @@ const DEFAULT_CONFIG: AppConfig = {
   autoRetryAfterReset: true,
   resumeWorkOnRestart: true,
   defaultMergeMethod: 'squash',
+  defaultPullStrategy: 'ask',
   maxDiffLines: 100,
   openLocalhostInCioBrowser: true
 }

@@ -889,12 +889,12 @@ describe('CloudRelayClient — relay device proof of possession (A-04)', () => {
     })
     expect(usage?.rpc).toBe('result')
 
-    // git:push is outside the default scopes → capability-bound denial.
+    // agent:runCommand is outside the default scopes → capability-bound denial.
     const denied = await invokeReply(socket, 5, {
       rpc: 'invoke',
       id: 5,
-      channel: 'git:push',
-      args: ['p1']
+      channel: 'agent:runCommand',
+      args: ['p1', 't1', 'cmd-1', '']
     })
     expect(denied?.rpc).toBe('error')
     if (typeof denied?.message === 'string') expect(denied.message).toContain('Access denied')

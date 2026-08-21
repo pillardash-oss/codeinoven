@@ -14,6 +14,7 @@ import type {
   AgentEvent,
   AgentMessage,
   AgentPart,
+  AgentProviderIssue,
   PromptAttachment,
   PromptAssignmentTaskReference,
   PromptProjectReference,
@@ -28,7 +29,7 @@ interface ThreadMessagesEntry {
   loaded: boolean
   loading: boolean
   error: string
-  runError: string
+  runIssue: AgentProviderIssue | null
 }
 
 /** Bounded window warmed on hover, matching the ThreadView history window so a
@@ -104,7 +105,7 @@ class ThreadMessagesStore {
     const key = threadKey(projectId, threadId)
     let entry = this.#threads.get(key)
     if (!entry) {
-      entry = { messages: [], loaded: false, loading: false, error: '', runError: '' }
+      entry = { messages: [], loaded: false, loading: false, error: '', runIssue: null }
       this.#threads.set(key, entry)
       this.threads.set(key, { ...entry })
     }
@@ -132,14 +133,21 @@ class ThreadMessagesStore {
   }
 
   /** Terminal agent/session failure, kept separate from transcript-loading errors. */
-  runError(projectId: string, threadId: string): string {
-    return this.threads.get(threadKey(projectId, threadId))?.runError ?? ''
+  runIssue(projectId: string, threadId: string): AgentProviderIssue | null {
+    return this.threads.get(threadKey(projectId, threadId))?.runIssue ?? null
   }
 
-  setRunError(projectId: string, threadId: string, error: string): void {
+  setRunIssue(projectId: string, threadId: string, issue: AgentProviderIssue | null): void {
     const entry = this.entry(projectId, threadId)
-    if (entry.runError === error) return
-    entry.runError = error
+    if (entry.runIssue === issue) return
+    entry.runIssue = issue
+    this.#notify(projectId, threadId)
+  }
+
+  clearLoadError(projectId: string, threadId: string): void {
+    const entry = this.entry(projectId, threadId)
+    if (!entry.error) return
+    entry.error = ''
     this.#notify(projectId, threadId)
   }
 
@@ -359,7 +367,7 @@ class ThreadMessagesStore {
     presentation?: UserMessagePresentation,
     taskReferences?: PromptAssignmentTaskReference[]
   ): Promise<string> {
-    this.setRunError(projectId, threadId, '')
+    this.setRunIssue(projectId, threadId, null)
     const { entry, messageId } = this.appendOptimistic(
       projectId,
       threadId,
@@ -409,7 +417,7 @@ class ThreadMessagesStore {
     presentation?: UserMessagePresentation,
     taskReferences?: PromptAssignmentTaskReference[]
   ): Promise<string> {
-    this.setRunError(projectId, threadId, '')
+    this.setRunIssue(projectId, threadId, null)
     const { entry, messageId } = this.appendOptimistic(
       projectId,
       threadId,
@@ -512,6 +520,7 @@ class ThreadMessagesStore {
     tokens?: AgentMessage['tokens'],
     contextWindow?: number,
     contextUsed?: number,
+    contextEstimated?: boolean,
     rateLimits?: AgentMessage['rateLimits'],
     credits?: AgentMessage['credits']
   ): void {
@@ -525,6 +534,7 @@ class ThreadMessagesStore {
     if (tokens) doneMsg.tokens = tokens
     if (contextWindow !== undefined) doneMsg.contextWindow = contextWindow
     if (contextUsed !== undefined) doneMsg.contextUsed = contextUsed
+    if (contextEstimated !== undefined) doneMsg.contextEstimated = contextEstimated
     if (rateLimits) doneMsg.rateLimits = rateLimits
     if (credits) doneMsg.credits = credits
     if (compaction) {
@@ -557,6 +567,7 @@ class ThreadMessagesStore {
     tokens?: AgentMessage['tokens'],
     contextWindow?: number,
     contextUsed?: number,
+    contextEstimated?: boolean,
     cost?: number,
     rateLimits?: AgentMessage['rateLimits'],
     credits?: AgentMessage['credits']
@@ -568,6 +579,7 @@ class ThreadMessagesStore {
     if (tokens) message.tokens = tokens
     if (contextWindow !== undefined) message.contextWindow = contextWindow
     if (contextUsed !== undefined) message.contextUsed = contextUsed
+    if (contextEstimated !== undefined) message.contextEstimated = contextEstimated
     if (cost !== undefined) message.cost = cost
     if (rateLimits) message.rateLimits = rateLimits
     if (credits) message.credits = credits
@@ -614,7 +626,7 @@ class ThreadMessagesStore {
     // leave the thread idle — and fold its working trace — while parts keep
     // streaming (the definitive session.idle that ends the turn clears it).
     if (event.type === 'message.part.updated' || event.type === 'message.part.delta') {
-      this.setRunError(projectId, threadId, '')
+      this.setRunIssue(projectId, threadId, null)
       agentRuns.setBusy(projectId, threadId, true, this.#latestUserMessageId(projectId, threadId))
     }
 
@@ -644,6 +656,7 @@ class ThreadMessagesStore {
           event.tokens,
           event.contextWindow,
           event.contextUsed,
+          event.contextEstimated,
           event.rateLimits,
           event.credits
         )
@@ -657,6 +670,7 @@ class ThreadMessagesStore {
           event.tokens,
           event.contextWindow,
           event.contextUsed,
+          event.contextEstimated,
           event.cost,
           event.rateLimits,
           event.credits
@@ -664,7 +678,7 @@ class ThreadMessagesStore {
         break
       case 'session.status':
         if (event.status.state === 'working' || event.status.state === 'waiting') {
-          this.setRunError(projectId, threadId, '')
+          this.setRunIssue(projectId, threadId, null)
           agentRuns.setBusy(
             projectId,
             threadId,
@@ -680,10 +694,16 @@ class ThreadMessagesStore {
         break
       case 'session.error':
         agentRuns.setIdle(projectId, threadId)
-        this.setRunError(
+        this.setRunIssue(
           projectId,
           threadId,
-          event.issue?.message ?? event.error ?? 'The agent stopped with an unknown error.'
+          event.issue ?? {
+            kind: 'unknown',
+            message: event.error ?? 'The agent stopped with an unknown error.',
+            rawError: event.error,
+            harnessId: 'unknown',
+            retryable: true
+          }
         )
         break
     }

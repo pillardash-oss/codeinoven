@@ -1,6 +1,5 @@
-import { spawn } from 'child_process'
-import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises'
-import { homedir, tmpdir } from 'os'
+import { readFile, readdir } from 'node:fs/promises'
+import { homedir } from 'os'
 import { join } from 'path'
 import type {
   AgentMessage,
@@ -22,7 +21,7 @@ import {
   permissionPatterns
 } from '../../lib/agent-interactions'
 import { attachmentReference, attachmentTarget } from './attachment-reference'
-import { buildHarnessEnvironment } from './cli-environment'
+import { buildProcessEnvironment } from './cli-environment'
 import type {
   CliLineParseContext,
   CliLineParseResult,
@@ -36,14 +35,17 @@ import type {
   SendPromptOptions
 } from './driver.interface'
 import type { StorageEngine } from '../storage/storage-engine'
+import { runHarnessCommand } from './harness-runtime'
 
 /**
  * Muse Code (Meta) headless integration notes.
  *
  * Muse is a terminal-only coding agent whose programmatic surface is
  * `muse exec --json` — a one-shot, headless run that streams newline-delimited
- * JSON on stdout and exits when the turn is done. A prior session is resumed
- * with `--session-id <uuid>`.
+ * JSON on stdout and exits when the turn is done. CodeInOven deliberately runs
+ * every turn without Muse-native session history, workspace rules, or skills;
+ * the app supplies its own bounded history recap, behavior, memory, and utility
+ * context in the explicit prompt.
  *
  * Wire schema: every line is an envelope `{ record_type, payload_type, payload }`.
  * Meaningful payloads:
@@ -55,11 +57,8 @@ import type { StorageEngine } from '../storage/storage-engine'
  *   - `task.lifecycle.side_effect_intent` → tool running + provider call id
  *   - `task.lifecycle.output` → tool chunk (bash `{command,description,output}`)
  *   - `tool.result` → authoritative tool completion (`call_id`, `text`)
- * The provider session UUID is `envelope.stream.id`; `payload.run_stream.id`
- * is only the current turn/run UUID. Passing the session UUID back through
- * `--session-id` resumes Muse's retained native conversation. The live stream
- * omits rich interaction arguments, which are recovered after affected turns
- * through Muse's documented durable session export.
+ * The provider session UUID is intentionally not reused. The live stream is
+ * the sole source of provider events because native session logs are disabled.
  * There is no per-record token/usage telemetry.
  *
  * Meta's Muse Code launch documentation also demonstrates a local video file
@@ -68,8 +67,6 @@ import type { StorageEngine } from '../storage/storage-engine'
  */
 
 const MUSE_PROBE_TIMEOUT_MS = 15_000
-const MUSE_EXPORT_TIMEOUT_MS = 15_000
-
 /** Provider id under which every Muse-cloud model is catalogued. */
 const MUSE_PROVIDER_ID = 'meta'
 
@@ -252,36 +249,23 @@ async function readMuseModelCatalog(capabilities: MuseCliCapabilities): Promise<
  * terminal. Every short-lived probe (version) must spawn with stdin ignored so
  * it exits promptly in a desktop context.
  */
-function runMuse(
+async function runMuse(
   args: string[],
   timeoutMs: number
 ): Promise<{ succeeded: boolean; stdout: string; stderr: string }> {
-  return new Promise((resolve) => {
-    const child = spawn('muse', args, {
-      env: buildHarnessEnvironment(),
-      stdio: ['ignore', 'pipe', 'pipe']
+  try {
+    const result = await runHarnessCommand('muse', args, {
+      env: buildProcessEnvironment(),
+      timeoutMs
     })
-    let stdout = ''
-    let stderr = ''
-    const timer = setTimeout(() => {
-      child.kill()
-      resolve({ succeeded: false, stdout, stderr })
-    }, timeoutMs)
-    child.stdout?.on('data', (chunk: Buffer) => {
-      stdout += chunk.toString()
-    })
-    child.stderr?.on('data', (chunk: Buffer) => {
-      stderr += chunk.toString()
-    })
-    child.on('error', (error) => {
-      clearTimeout(timer)
-      resolve({ succeeded: false, stdout, stderr: error.message })
-    })
-    child.on('exit', (code) => {
-      clearTimeout(timer)
-      resolve({ succeeded: code === 0, stdout, stderr })
-    })
-  })
+    return { succeeded: true, ...result }
+  } catch (error) {
+    return {
+      succeeded: false,
+      stdout: '',
+      stderr: error instanceof Error ? error.message : String(error)
+    }
+  }
 }
 
 function record(value: unknown): Record<string, unknown> | null {
@@ -356,51 +340,6 @@ function museToolNeedsPermission(toolName: string): boolean {
   ].some((operation) => name.includes(operation))
 }
 
-/**
- * Muse intentionally keeps sensitive tool arguments out of the live JSONL
- * stream. Its documented session export contains the complete committed tool
- * calls, questions, approvals, and todo snapshots. Export only after a turn
- * that needs this enrichment, and keep the temporary document outside the
- * project so ordinary turns pay no disk or parsing cost.
- */
-async function readMuseTrailingRecords(nativeSessionId: string, runId: string): Promise<unknown[]> {
-  const directory = await mkdtemp(join(tmpdir(), 'codeinoven-muse-export-'))
-  const outputPath = join(directory, 'session.json')
-  try {
-    const result = await runMuse(
-      ['export', '--session', nativeSessionId, '--out', outputPath],
-      MUSE_EXPORT_TIMEOUT_MS
-    )
-    if (!result.succeeded) {
-      throw new Error(result.stderr.trim() || result.stdout.trim() || 'Muse export failed')
-    }
-    const root = record(JSON.parse(await readFile(outputPath, 'utf8')) as unknown)
-    const events = Array.isArray(root?.['events']) ? root['events'] : []
-    return events.flatMap((rawEvent) => {
-      const envelope = record(record(rawEvent)?.['envelope'])
-      const payload = record(envelope?.['payload'])
-      const event = record(payload?.['event'])
-      if (
-        envelope?.['payload_type'] !== 'runtime.session' ||
-        payload?.['run_id'] !== runId ||
-        !event
-      ) {
-        return []
-      }
-      const kind = stringValue(event['kind']) ?? ''
-      const carriesInteraction =
-        kind === 'assistant_tool_calls_committed' ||
-        kind === 'user_input_prompt_requested' ||
-        kind === 'todo_snapshot_updated' ||
-        (kind.includes('approval') &&
-          (kind.includes('request') || kind.includes('proposed') || kind.includes('pending')))
-      return carriesInteraction ? [envelope] : []
-    })
-  } finally {
-    await rm(directory, { recursive: true, force: true })
-  }
-}
-
 function museIssue(error: string): AgentProviderIssue {
   const normalized = error.toLowerCase()
   const quota =
@@ -449,11 +388,7 @@ interface MuseTurnState {
   tools: Map<string, MuseToolState>
   /** Reverse map: provider `call_id` → `task_id`, for `tool.result` correlation. */
   toolByCall: Map<string, string>
-  /** Muse run UUID used to select only this turn from the cumulative export. */
-  runId?: string
-  /** True when the live stream omitted data required by a shared interaction card. */
-  needsExport: boolean
-  /** Exported question/approval ids already promoted into the shared event stream. */
+  /** Question/approval ids already promoted into the shared event stream. */
   promotedInteractions: Set<string>
   /** Tool tasks synchronously stopped before Muse could execute them. */
   gatedTaskIds: Set<string>
@@ -600,8 +535,8 @@ function escapeMuseMentions(text: string): string {
  * Every line is `{ record_type, payload_type, payload }`; the meaningful
  * payloads are `run.output.delta` (streaming text), `run.terminal.completed`
  * (turn end), and `run.model.configured` (provenance). The top-level session
- * stream id is retained for `--session-id`; the nested run id only correlates
- * the current turn with its exported interaction details.
+ * stream ids are observed only as event metadata and are never reused for
+ * native conversation history.
  *
  * Unknown record types are ignored so schema drift degrades to a silent turn
  * rather than a broken session. Keeping this boundary pure makes it testable.
@@ -615,18 +550,11 @@ export function mapMuseRecord(
   const payload = record(entry?.['payload'])
   if (!entry || !payload) return null
 
-  const stream = record(entry['stream'])
-  const nativeSessionId = stream?.['kind'] === 'session' ? stringValue(stream['id']) : undefined
-  const base: CliLineParseResult = nativeSessionId ? { nativeSessionId } : {}
+  const base: CliLineParseResult = {}
 
   const payloadType = stringValue(entry['payload_type'])
   const taskId = stringValue(payload['task_id'])
-  const runStream = record(payload['run_stream'])
-  const observedRunId = stringValue(runStream?.['id']) ?? stringValue(payload['run_id'])
-  if (observedRunId) state.runId ??= observedRunId
-
   if (payloadType?.includes('approval')) {
-    state.needsExport = true
     if (
       payloadType.includes('request') ||
       payloadType.includes('proposed') ||
@@ -639,8 +567,7 @@ export function mapMuseRecord(
 
   if (payloadType === 'runtime.session') {
     const exportedEvent = record(payload['event'])
-    const exportedRunId = stringValue(payload['run_id'])
-    if (!exportedEvent || (state.runId && exportedRunId !== state.runId)) return base
+    if (!exportedEvent) return base
     const kind = stringValue(exportedEvent['kind'])
 
     if (kind === 'assistant_tool_calls_committed') {
@@ -736,10 +663,23 @@ export function mapMuseRecord(
         start: Date.now()
       }
       state.tools.set(taskId, tool)
-      if (isQuestionToolName(taskKind) || isTodoToolName(taskKind)) state.needsExport = true
-      // A rich question is promoted from Muse's retained export after the
-      // headless turn auto-resolves it. Emitting the empty live tool here would
-      // create a duplicate generic question card first.
+      if (tool.requiresPermission) {
+        const permissionEvent = musePermissionEvent(context, state, {
+          approval_id: taskId,
+          tool_name: taskKind,
+          input: record(event?.['input']) ?? record(event?.['arguments']) ?? {}
+        })
+        return {
+          ...base,
+          events: [
+            museToolEvent(context, state, tool),
+            ...(permissionEvent ? [permissionEvent] : [])
+          ]
+        }
+      }
+      // The live stream does not expose the rich question arguments. Keep the
+      // generic tool out of the conversation rather than duplicating the
+      // provider's own headless auto-resolution.
       if (isQuestionToolName(taskKind)) return base
       return { ...base, events: [museToolEvent(context, state, tool)] }
     }
@@ -767,9 +707,6 @@ export function mapMuseRecord(
     const policyDecision = stringValue(event?.['policy_decision'])
     if (policyDecision) {
       tool.policyDecision = policyDecision
-      if (!policyDecision.startsWith('allow') && policyDecision !== 'not_applicable') {
-        state.needsExport = true
-      }
     }
     const idempotencyKey = stringValue(event?.['idempotency_key'])
     const foundCallId = idempotencyKey?.split(':').find((segment) => segment.startsWith('call_'))
@@ -909,9 +846,9 @@ export class MuseDriver extends PersistentCliDriver {
   readonly capabilities: HarnessCapabilities = {
     runtimeTopology: { kind: 'turn_process', scope: 'session' },
     streaming: true,
-    steering: false,
-    nativeResume: true,
-    messageHistory: 'native',
+    steering: true,
+    nativeResume: false,
+    messageHistory: 'mirrored',
     interactivePermissions: true,
     attachments: true,
     commands: false,
@@ -964,11 +901,10 @@ export class MuseDriver extends PersistentCliDriver {
     const args: string[] = [
       'exec',
       '--json',
-      '--trust-workspace',
       '--no-foreign-personal-context',
+      '--no-session-log',
       '--user-input-auto-resolve'
     ]
-    if (session.nativeSessionId) args.push('--session-id', session.nativeSessionId)
     if (options.settings.providerId && options.settings.providerId !== 'default') {
       args.push('--provider', options.settings.providerId)
     }
@@ -1038,17 +974,20 @@ export class MuseDriver extends PersistentCliDriver {
       started: false,
       tools: new Map(),
       toolByCall: new Map(),
-      needsExport: false,
       promotedInteractions: new Set(),
       gatedTaskIds: new Set(),
       expectsProcessStop: false
     }
     this.turnStates.set(session.id, turnState)
-    this.continuationOptions.set(session.id, { ...options, text: '', attachments: [] })
+    this.continuationOptions.set(session.id, {
+      ...options,
+      settings: { ...options.settings },
+      attachments: [...options.attachments]
+    })
     return {
       command: 'muse',
       args,
-      env: buildHarnessEnvironment(),
+      env: buildProcessEnvironment(),
       onJsonRecord: (value) => {
         if (options.settings.permissionLevel === 'full_access') return
         const envelope = record(value)
@@ -1065,14 +1004,8 @@ export class MuseDriver extends PersistentCliDriver {
           return
         }
         turnState.gatedTaskIds.add(taskId)
-        turnState.needsExport = true
         turnState.expectsProcessStop = true
         this.stopActiveProcess(session.id)
-      },
-      loadTrailingRecords: async () => {
-        const state = this.turnStates.get(session.id)
-        if (!state?.needsExport || !session.nativeSessionId || !state.runId) return []
-        return readMuseTrailingRecords(session.nativeSessionId, state.runId)
       },
       suppressIdle: () => turnState.promotedInteractions.size > 0,
       isExpectedExit: () => turnState.expectsProcessStop,
@@ -1088,10 +1021,11 @@ export class MuseDriver extends PersistentCliDriver {
     sessionId?: string
   ): Promise<void> {
     if (!sessionId) throw new Error(`Muse permission request is no longer pending: ${requestId}`)
-    if (reply === 'reject' && !message) return
     const action =
       reply === 'reject'
-        ? `The user rejected the requested action and supplied this alternative:\n${message ?? ''}`
+        ? message
+          ? `The user rejected the requested action and supplied this alternative:\n${message}`
+          : 'The user rejected the requested action. Do not execute it. Continue safely without that action, or explain why the task cannot continue.'
         : `The user approved the requested action through CodeInOven (${reply}). Execute only that approved action, then continue. Ask again before any different action that requires approval.`
     if (reply === 'reject') {
       await this.continueInteraction(projectPath, sessionId, action)
@@ -1141,9 +1075,19 @@ export class MuseDriver extends PersistentCliDriver {
   ): Promise<void> {
     const options = this.continuationOptions.get(sessionId)
     if (!options) throw new Error(`Muse interaction session is unavailable: ${sessionId}`)
+    const continuationText = [
+      'Continue this CodeInOven-managed task without relying on Muse session memory.',
+      `Active task context:\n${options.text}`,
+      `New interaction result:\n${text}`
+    ].join('\n\n')
     this.hiddenContinuationSessions.add(sessionId)
     try {
-      await this.sendPrompt(projectPath, { ...options, sessionId, text, attachments: [] })
+      await this.sendPrompt(projectPath, {
+        ...options,
+        sessionId,
+        text: continuationText,
+        attachments: [...options.attachments]
+      })
     } finally {
       this.hiddenContinuationSessions.delete(sessionId)
     }

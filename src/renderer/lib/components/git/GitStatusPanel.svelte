@@ -3,13 +3,16 @@
   import { copyText } from '$lib/copy-text'
   import { openInBrowser } from '$lib/open-in-browser'
   import { diffLayoutToggleLabel } from '$lib/stores/diff-layout.svelte'
+  import { appConfigState } from '$lib/stores/app-config.svelte'
   import { gitState } from '$lib/stores/git.svelte'
   import { cachedHasDeployments, cacheHasDeployments } from '$lib/git-deployments-cache'
+  import { DEFAULT_SCOPE_BUCKET_ID } from '$shared/types'
   import type {
     GitBranchInfo,
     GitCommitInfo,
     GitDiff,
     GitFileChange,
+    GitPullStrategy,
     GitHubDeployment,
     GitHubDeploymentJob,
     GitHubDeploymentJobLog,
@@ -45,6 +48,7 @@
     Plus,
     RefreshCw,
     RotateCcwClock,
+    Search,
     Trash2,
     Unplug
   } from '@lucide/svelte'
@@ -66,19 +70,22 @@
   import GitPullRequestList from './GitPullRequestList.svelte'
   import GitPullRequestDetail from './GitPullRequestDetail.svelte'
   import GitDeploymentsMonitor from './GitDeploymentsMonitor.svelte'
+  import FindInBar from '../files/FindInBar.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
   import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
   import { threadSettings } from '$lib/stores/thread-settings.svelte'
   import { prLifecycleStore } from '$lib/stores/pr-lifecycle.svelte'
   import { gitPanelView } from '$lib/stores/git-panel-view.svelte'
+  import { findNavState } from '$lib/stores/find-nav.svelte'
   import type { PullRequestSummary } from '$shared/types'
 
   interface Props {
     projectId: string
     threadId: string
+    scopeBucketId?: string
   }
 
-  let { projectId, threadId }: Props = $props()
+  let { projectId, threadId, scopeBucketId = DEFAULT_SCOPE_BUCKET_ID }: Props = $props()
 
   type RepoState = 'loading' | 'git_unavailable' | 'not_git' | 'git'
   type TabId = 'changes' | 'history' | 'branches' | 'pulls' | 'deployments' | 'stashes'
@@ -104,6 +111,9 @@
   let identityName = $state('')
   let identityEmail = $state('')
   let pushConfirm = $state(false)
+  /** Pull strategy chooser, opened by the default `ask` preference or a failed strategy. */
+  let pullStrategyOpen = $state(false)
+  let pullStrategyError = $state('')
   /** Divergence recovery dialog: the branch is behind the remote, push was rejected. */
   let pushDiverged = $state(false)
   /** Which recovery action is running ('merge' | 'rebase'), to disable the buttons. */
@@ -115,7 +125,7 @@
   let stashDropTarget = $state<GitStashEntry | null>(null)
   let mergeTarget = $state('')
   let pendingOperation = $state<{ kind: 'merge' | 'rebase'; target: string } | null>(null)
-  let checkoutConfirm = $state<string | null>(null)
+  let checkoutConfirm = $state<GitBranchInfo | null>(null)
   let deleteBranchConfirm = $state<string | null>(null)
   let forceDeleteBranchConfirm = $state<string | null>(null)
   let creatingBranch = $state(false)
@@ -129,9 +139,15 @@
   let commitSelection = $state(false)
   let commitTextarea = $state<HTMLTextAreaElement | null>(null)
   let newBranchInput = $state<HTMLInputElement | null>(null)
+  let checkoutConfirmButton = $state<HTMLButtonElement | null>(null)
   let commitHistory = $state<GitCommitInfo[]>([])
   let loadingHistory = $state(false)
   let loadingMoreHistory = $state(false)
+  let commitSearchQuery = $state('')
+  let commitSearchResults = $state.raw<GitCommitInfo[]>([])
+  let commitSearchLoading = $state(false)
+  let commitSearchActiveIndex = $state(0)
+  let commitSearchRequestId = 0
   /** False once a page comes back shorter than requested — there's nothing older left. */
   let historyHasMore = $state(true)
   const HISTORY_PAGE_SIZE = 30
@@ -184,6 +200,8 @@
   ]
 
   const status = $derived(gitState.status)
+  const localBranches = $derived(gitState.branches.filter((branch) => branch.kind === 'local'))
+  const localBranchNames = $derived(new Set(localBranches.map((branch) => branch.name)))
   const isHeadCommit = $derived(
     selectedCommit !== null && commitHistory[0]?.hash === selectedCommit.hash
   )
@@ -298,9 +316,14 @@
     await gitState.unstage(projectId, allPaths)
   }
 
-  async function checkoutBranch(branch: string): Promise<void> {
-    if (!branch || branch === status?.branch) return
-    await gitState.checkout(projectId, branch)
+  async function checkoutBranch(branch: GitBranchInfo): Promise<void> {
+    if (branch.kind === 'local') {
+      if (branch.name === status?.branch) return
+      await gitState.checkout(projectId, branch.ref)
+      return
+    }
+    if (!branch.remote || localBranchNames.has(branch.name)) return
+    await gitState.createTrackingBranch(projectId, branch.remote, branch.name)
   }
 
   async function createBranchAction(name: string): Promise<void> {
@@ -313,9 +336,10 @@
   }
 
   /** Checking out switches the working tree, so it always confirms first from the Branches tab. */
-  function requestCheckout(name: string): void {
-    if (!name || name === status?.branch) return
-    checkoutConfirm = name
+  function requestCheckout(branch: GitBranchInfo): void {
+    if (branch.kind === 'local' && branch.name === status?.branch) return
+    if (branch.kind === 'remote' && localBranchNames.has(branch.name)) return
+    checkoutConfirm = branch
   }
 
   async function confirmCheckoutBranch(): Promise<void> {
@@ -345,7 +369,7 @@
 
   /** `git fetch <remote> <name>` — updates that branch's tracking ref without touching HEAD. */
   async function fetchBranchAction(branch: GitBranchInfo): Promise<void> {
-    const remote = branch.remote ?? primaryRemote?.name
+    const remote = branch.remote
     if (!remote) return
     await gitState.fetchBranch(projectId, remote, branch.name)
   }
@@ -686,6 +710,57 @@
     if (el.scrollHeight - el.scrollTop - el.clientHeight < 200) void loadMoreHistory()
   }
 
+  function openCommitSearch(): void {
+    findNavState.openGitFind()
+  }
+
+  function closeCommitSearch(): void {
+    commitSearchRequestId++
+    commitSearchQuery = ''
+    commitSearchResults = []
+    commitSearchLoading = false
+    commitSearchActiveIndex = 0
+    findNavState.closeGitFind()
+  }
+
+  async function searchCommits(rawQuery: string): Promise<void> {
+    const query = rawQuery.trim()
+    commitSearchQuery = query
+    commitSearchActiveIndex = 0
+    const requestId = ++commitSearchRequestId
+    if (!query) {
+      commitSearchResults = []
+      commitSearchLoading = false
+      return
+    }
+
+    commitSearchResults = []
+    commitSearchLoading = true
+    const results = await gitState.getLog(projectId, 50, 0, query)
+    if (requestId !== commitSearchRequestId) return
+    commitSearchResults = results
+    commitSearchLoading = false
+  }
+
+  function moveCommitSearch(direction: -1 | 1): void {
+    if (commitSearchResults.length === 0) return
+    commitSearchActiveIndex =
+      (commitSearchActiveIndex + direction + commitSearchResults.length) %
+      commitSearchResults.length
+  }
+
+  function openActiveCommitSearchResult(): void {
+    const commit = commitSearchResults[commitSearchActiveIndex]
+    if (!commit) return
+    closeCommitSearch()
+    void selectCommit(commit)
+  }
+
+  function selectCommitSearchResult(commit: GitCommitInfo): void {
+    closeCommitSearch()
+    void selectCommit(commit)
+  }
+
   async function selectCommit(commit: GitCommitInfo): Promise<void> {
     selectedCommit = commit
     activeTab = 'changes'
@@ -954,7 +1029,7 @@
   $effect(() => {
     // Claim this project before reading/writing shared state so a previous
     // project's data can never be shown or overwrite the current view.
-    gitState.activate(projectId)
+    gitState.activate(projectId, scopeBucketId)
     // Fast-render: show/hide the Deployments tab from the cache immediately,
     // long before the authoritative value comes back from the database.
     hasDeployments = cachedHasDeployments(projectId) ?? false
@@ -1023,6 +1098,7 @@
     return () => {
       unsubscribePullRequestOpen()
       unsubscribeThreadUpdates()
+      if (findNavState.gitFindOpen) closeCommitSearch()
     }
   })
 
@@ -1054,11 +1130,62 @@
   )
   const syncBusy = $derived(gitState.isBusy(['fetch', 'pull', 'push']))
 
+  function closePullStrategy(): void {
+    if (gitState.isBusy('pull')) return
+    pullStrategyOpen = false
+    pullStrategyError = ''
+  }
+
+  function resolvePullTarget(): { remote: string; branch: string } | null {
+    const currentStatus = status
+    if (!currentStatus?.branch) return null
+    const upstream = currentStatus.upstream
+    if (upstream) {
+      const trackedRemote = remotes.find((remote) => upstream.startsWith(`${remote.name}/`))
+      if (trackedRemote) {
+        return {
+          remote: trackedRemote.name,
+          branch: upstream.slice(trackedRemote.name.length + 1)
+        }
+      }
+    }
+    if (!primaryRemote) return null
+    return { remote: primaryRemote.name, branch: currentStatus.branch }
+  }
+
+  async function performPull(strategy: GitPullStrategy): Promise<void> {
+    const target = resolvePullTarget()
+    if (!target) {
+      pullStrategyError = 'No tracked branch is available to pull'
+      pullStrategyOpen = true
+      return
+    }
+
+    pullStrategyError = ''
+    await gitState.pullIntegrate(projectId, target.remote, target.branch, strategy)
+    if (gitState.error) {
+      pullStrategyError = gitState.error
+      gitState.error = null
+      pullStrategyOpen = true
+      return
+    }
+    pullStrategyOpen = false
+  }
+
+  async function pullAction(): Promise<void> {
+    if (appConfigState.defaultPullStrategy === 'ask') {
+      pullStrategyError = ''
+      pullStrategyOpen = true
+      return
+    }
+    await performPull(appConfigState.defaultPullStrategy)
+  }
+
   async function performPush(remote: { name: string; url: string }): Promise<void> {
     if (!status?.branch) return
     const result = await gitState.push(projectId, false, remote.name)
     // A non-fast-forward rejection becomes the recovery dialog, not an error.
-    if (result === 'rejected') pushDiverged = true
+    if (result.status === 'rejected') pushDiverged = true
   }
 
   async function pushAction(): Promise<void> {
@@ -1083,7 +1210,7 @@
     pushConfirm = false
     if (!primaryRemote || !status?.branch) return
     const result = await gitState.push(projectId, true, primaryRemote.name, status.branch)
-    if (result === 'rejected') pushDiverged = true
+    if (result.status === 'rejected') pushDiverged = true
   }
 
   /** Pull the remote into the local branch, then push once integration is clean. */
@@ -1093,7 +1220,7 @@
     pushDiverged = false
     pushRecoverMode = mode
     try {
-      await gitState.pullIntegrate(projectId, remote.name, status.branch, mode === 'rebase')
+      await gitState.pullIntegrate(projectId, remote.name, status.branch, mode)
       // Conflicts hand over to the conflict UI; never auto-push a half-merged tree.
       if (!gitState.error && gitState.conflicted.length === 0) {
         await performPush(remote)
@@ -1396,7 +1523,69 @@
   {/each}
 {/snippet}
 
-<div class="flex h-full min-h-0 flex-col bg-app">
+<div class="relative flex h-full min-h-0 flex-col bg-app" data-region="git-panel">
+  {#if findNavState.gitFindOpen}
+    <div data-find-exclude class="absolute right-3 top-3 z-30 w-[min(26rem,calc(100%-1.5rem))]">
+      <FindInBar
+        query={commitSearchQuery}
+        matches={commitSearchResults.length}
+        activeIndex={commitSearchActiveIndex}
+        placeholder="Search commit title or hash…"
+        label="Search commits"
+        focusTrigger={findNavState.gitFindFocusTrigger}
+        onQueryChange={searchCommits}
+        onNext={() => moveCommitSearch(1)}
+        onPrev={() => moveCommitSearch(-1)}
+        onSubmit={openActiveCommitSearchResult}
+        onClose={closeCommitSearch}
+      />
+      {#if commitSearchQuery}
+        <div
+          class="mt-1 max-h-80 overflow-y-auto rounded-xl border border-border bg-surface p-1 shadow-xl"
+          aria-live="polite"
+        >
+          {#if commitSearchLoading}
+            <div class="flex items-center justify-center gap-2 px-3 py-6 text-xs text-dimmed">
+              <Loader2 size={13} class="animate-spin" aria-hidden="true" />
+              Searching commits…
+            </div>
+          {:else if commitSearchResults.length === 0}
+            <p class="px-3 py-6 text-center text-xs text-dimmed">No matching commits</p>
+          {:else}
+            {#each commitSearchResults as commit, index (commit.hash)}
+              <button
+                type="button"
+                class={[
+                  'flex w-full items-start gap-2 rounded-lg px-2.5 py-2 text-left transition-colors',
+                  index === commitSearchActiveIndex
+                    ? 'bg-primary/10 text-foreground'
+                    : 'text-muted hover:bg-elevated'
+                ]}
+                aria-current={index === commitSearchActiveIndex ? 'true' : undefined}
+                onclick={() => selectCommitSearchResult(commit)}
+                onmouseenter={() => (commitSearchActiveIndex = index)}
+              >
+                <Search size={12} class="mt-0.5 shrink-0 text-dimmed" aria-hidden="true" />
+                <span class="min-w-0 flex-1">
+                  <span class="block truncate text-[11px] leading-snug">
+                    {commit.message.split('\n')[0]}
+                  </span>
+                  <span class="mt-0.5 flex items-center gap-1.5 text-[9px] text-dimmed">
+                    <span class="font-mono">{commit.shortHash}</span>
+                    <span>·</span>
+                    <span class="truncate">{commit.author}</span>
+                    <span>·</span>
+                    <span class="shrink-0">{relativeTime(commit.date)}</span>
+                  </span>
+                </span>
+              </button>
+            {/each}
+          {/if}
+        </div>
+      {/if}
+    </div>
+  {/if}
+
   <!-- Header: branch picker + tabs + actions -->
   <div class="flex shrink-0 flex-col border-b border-border">
     <!-- Top row: branch + tabs + actions -->
@@ -1415,7 +1604,7 @@
           currentBranch={status?.branch ?? null}
           isBusy={gitState.isBusy('checkout')}
           {primaryRemote}
-          onSelect={(branch) => void checkoutBranch(branch)}
+          onSelect={requestCheckout}
           onCreate={(name) => void createBranchAction(name)}
           onDelete={(name) => void deleteBranchAction(name)}
         />
@@ -1459,6 +1648,23 @@
         </span>
       {/if}
       <DiffLayoutToggle title={diffLayoutToggleLabel('vertical')} size={12} />
+      {#if repoState === 'git'}
+        <button
+          type="button"
+          class={[
+            'flex h-6 w-6 items-center justify-center rounded transition-colors',
+            findNavState.gitFindOpen
+              ? 'bg-elevated text-foreground'
+              : 'text-dimmed hover:bg-elevated hover:text-foreground'
+          ]}
+          aria-label="Search commits"
+          title="Search commits"
+          aria-pressed={findNavState.gitFindOpen}
+          onclick={() => (findNavState.gitFindOpen ? closeCommitSearch() : openCommitSearch())}
+        >
+          <Search size={12} aria-hidden="true" />
+        </button>
+      {/if}
       <button
         type="button"
         class="flex h-6 w-6 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-50"
@@ -1489,14 +1695,14 @@
             >
               <DropdownMenu.Item
                 class="flex cursor-pointer items-center gap-2 px-3 py-1.5 text-[11px] text-foreground outline-none data-highlighted:bg-elevated"
-                onSelect={() => prLifecycleStore.open(projectId, threadId)}
+                onSelect={() => prLifecycleStore.open(projectId, threadId, scopeBucketId)}
               >
                 <GitPullRequest size={12} class="shrink-0 text-dimmed" />
                 Create pull request…
               </DropdownMenu.Item>
               <DropdownMenu.Item
                 class="flex cursor-pointer items-center gap-2 px-3 py-1.5 text-[11px] text-foreground outline-none data-highlighted:bg-elevated data-disabled:opacity-40"
-                disabled={gitState.branches.length < 2}
+                disabled={localBranches.length < 2}
                 onSelect={() => (showIntegrateModal = true)}
               >
                 <GitMerge size={12} class="shrink-0 text-dimmed" />
@@ -2100,45 +2306,27 @@
                           {@const sectionAllSelected =
                             section.files.length > 0 &&
                             section.files.every((f) => selectedPaths[f.path])}
-                          {@const sectionSomeSelected = section.files.some(
-                            (f) => selectedPaths[f.path]
-                          )}
                           <div class="flex items-center gap-2 bg-elevated/50 px-3 py-1.5">
                             <span
-                              role="checkbox"
-                              tabindex="0"
-                              aria-checked={sectionAllSelected
-                                ? 'true'
-                                : sectionSomeSelected
-                                  ? 'mixed'
-                                  : 'false'}
-                              aria-label={sectionAllSelected
-                                ? `Deselect all ${section.files.length} files in ${section.title}`
-                                : `Select all ${section.files.length} files in ${section.title}`}
-                              class={[
-                                'flex h-3.5 w-3.5 shrink-0 cursor-pointer items-center justify-center rounded-sm border transition-colors',
-                                sectionAllSelected
-                                  ? 'border-primary bg-primary'
-                                  : 'border-border bg-elevated'
-                              ]}
+                              class="shrink-0"
+                              role="presentation"
                               onclick={(event: MouseEvent) => {
                                 event.stopPropagation()
                                 event.preventDefault()
-                                toggleSectionSelection(section.files)
                               }}
-                              onkeydown={(event: KeyboardEvent) => {
-                                if (event.key === 'Enter' || event.key === ' ') {
-                                  event.stopPropagation()
-                                  event.preventDefault()
-                                  toggleSectionSelection(section.files)
-                                }
-                              }}
+                              onkeydown={(event: KeyboardEvent) => event.stopPropagation()}
                             >
-                              {#if sectionAllSelected}
-                                <Check size={9} class="text-on-primary" />
-                              {:else if sectionSomeSelected}
-                                <span class="h-0.5 w-1.5 rounded-full bg-primary"></span>
-                              {/if}
+                              <Switch
+                                checked={sectionAllSelected}
+                                onchange={() => toggleSectionSelection(section.files)}
+                                title={sectionAllSelected
+                                  ? `Deselect all ${section.files.length} files in ${section.title}`
+                                  : `Select all ${section.files.length} files in ${section.title}`}
+                                aria-label={sectionAllSelected
+                                  ? `Deselect all ${section.files.length} files in ${section.title}`
+                                  : `Select all ${section.files.length} files in ${section.title}`}
+                                activeClass="border-primary bg-primary"
+                              />
                             </span>
                             <span
                               class="text-[9px] font-semibold uppercase tracking-wide text-muted"
@@ -2199,45 +2387,27 @@
                           {@const sectionAllSelected =
                             section.files.length > 0 &&
                             section.files.every((f) => selectedPaths[f.path])}
-                          {@const sectionSomeSelected = section.files.some(
-                            (f) => selectedPaths[f.path]
-                          )}
                           <div class="flex items-center gap-2 bg-elevated/50 px-3 py-1.5">
                             <span
-                              role="checkbox"
-                              tabindex="0"
-                              aria-checked={sectionAllSelected
-                                ? 'true'
-                                : sectionSomeSelected
-                                  ? 'mixed'
-                                  : 'false'}
-                              aria-label={sectionAllSelected
-                                ? `Deselect all ${section.files.length} files in ${section.title}`
-                                : `Select all ${section.files.length} files in ${section.title}`}
-                              class={[
-                                'flex h-3.5 w-3.5 shrink-0 cursor-pointer items-center justify-center rounded-sm border transition-colors',
-                                sectionAllSelected
-                                  ? 'border-primary bg-primary'
-                                  : 'border-border bg-elevated'
-                              ]}
+                              class="shrink-0"
+                              role="presentation"
                               onclick={(event: MouseEvent) => {
                                 event.stopPropagation()
                                 event.preventDefault()
-                                toggleSectionSelection(section.files)
                               }}
-                              onkeydown={(event: KeyboardEvent) => {
-                                if (event.key === 'Enter' || event.key === ' ') {
-                                  event.stopPropagation()
-                                  event.preventDefault()
-                                  toggleSectionSelection(section.files)
-                                }
-                              }}
+                              onkeydown={(event: KeyboardEvent) => event.stopPropagation()}
                             >
-                              {#if sectionAllSelected}
-                                <Check size={9} class="text-on-primary" />
-                              {:else if sectionSomeSelected}
-                                <span class="h-0.5 w-1.5 rounded-full bg-primary"></span>
-                              {/if}
+                              <Switch
+                                checked={sectionAllSelected}
+                                onchange={() => toggleSectionSelection(section.files)}
+                                title={sectionAllSelected
+                                  ? `Deselect all ${section.files.length} files in ${section.title}`
+                                  : `Select all ${section.files.length} files in ${section.title}`}
+                                aria-label={sectionAllSelected
+                                  ? `Deselect all ${section.files.length} files in ${section.title}`
+                                  : `Select all ${section.files.length} files in ${section.title}`}
+                                activeClass="border-primary bg-primary"
+                              />
                             </span>
                             <span
                               class="text-[9px] font-semibold uppercase tracking-wide text-muted"
@@ -2439,16 +2609,27 @@
                 <p class="text-xs font-medium text-muted">No branches</p>
               </div>
             {:else}
-              {@const sortedBranches = [...gitState.branches].sort((a, b) =>
-                a.current === b.current ? a.name.localeCompare(b.name) : a.current ? -1 : 1
-              )}
+              {@const sortedBranches = [...gitState.branches].sort((a, b) => {
+                if (a.kind !== b.kind) return a.kind === 'local' ? -1 : 1
+                if (a.current !== b.current) return a.current ? -1 : 1
+                return a.ref.localeCompare(b.ref)
+              })}
               <div class="space-y-0.5">
-                {#each sortedBranches as branch (branch.name)}
-                  {@const canFetch = Boolean(branch.remote ?? primaryRemote?.name)}
+                {#each sortedBranches as branch, index (branch.ref)}
+                  {#if index === 0 || sortedBranches[index - 1]?.kind !== branch.kind}
+                    <p
+                      class="px-2 pb-1 pt-2 text-[9px] font-semibold uppercase tracking-wide text-dimmed first:pt-0"
+                    >
+                      {branch.kind === 'local' ? 'Local' : 'Remote'}
+                    </p>
+                  {/if}
+                  {@const canFetch = Boolean(branch.remote)}
+                  {@const hasLocalCounterpart =
+                    branch.kind === 'remote' && localBranchNames.has(branch.name)}
                   <ContextMenu.Root>
                     <ContextMenu.Trigger
                       class="block w-full"
-                      aria-label={`Actions for branch ${branch.name}`}
+                      aria-label={`Actions for branch ${branch.ref}`}
                     >
                       <div
                         class="group flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-elevated/50"
@@ -2456,7 +2637,7 @@
                         <span
                           class={[
                             'flex size-5 shrink-0 items-center justify-center rounded-full',
-                            branchAvatarClass(branch.name)
+                            branchAvatarClass(branch.ref)
                           ]}
                         >
                           <GitBranch size={11} />
@@ -2465,15 +2646,25 @@
                           <button
                             type="button"
                             class="block w-full cursor-pointer truncate text-left text-[11px] text-foreground disabled:cursor-default"
-                            disabled={branch.current}
-                            title={branch.current ? undefined : `Check out ${branch.name}`}
-                            onclick={() => requestCheckout(branch.name)}
+                            disabled={branch.current || hasLocalCounterpart}
+                            title={branch.current
+                              ? undefined
+                              : hasLocalCounterpart
+                                ? `${branch.ref} already has a local branch`
+                                : branch.kind === 'local'
+                                  ? `Check out ${branch.name}`
+                                  : `Create local branch ${branch.name} from ${branch.ref}`}
+                            onclick={() => requestCheckout(branch)}
                           >
-                            {branch.name}
+                            {branch.kind === 'local' ? branch.name : branch.ref}
                           </button>
-                          {#if branch.remote}
+                          {#if branch.kind === 'local' && branch.upstream}
                             <span class="block truncate text-[9px] text-dimmed">
-                              tracks {branch.remote}/{branch.name}
+                              tracks {branch.upstream}
+                            </span>
+                          {:else if branch.kind === 'remote'}
+                            <span class="block truncate text-[9px] text-dimmed">
+                              {hasLocalCounterpart ? 'local branch exists' : 'remote branch'}
                             </span>
                           {/if}
                         </span>
@@ -2491,8 +2682,8 @@
                           <DropdownMenu.Root>
                             <DropdownMenu.Trigger
                               class="peer absolute inset-y-0 right-0 flex h-6 w-6 cursor-pointer items-center justify-center rounded text-dimmed opacity-0 transition-opacity hover:bg-elevated hover:text-foreground focus-visible:opacity-100 group-hover:opacity-100 data-[state=open]:opacity-100"
-                              aria-label={`More actions for branch ${branch.name}`}
-                              title={`More actions for branch ${branch.name}`}
+                              aria-label={`More actions for branch ${branch.ref}`}
+                              title={`More actions for branch ${branch.ref}`}
                             >
                               <MoreHorizontal size={13} />
                             </DropdownMenu.Trigger>
@@ -2506,9 +2697,14 @@
                               >
                                 <BranchActionsMenu
                                   isCurrent={branch.current}
+                                  canCheckout={!hasLocalCounterpart}
+                                  canDelete={branch.kind === 'local'}
                                   {canFetch}
+                                  checkoutLabel={branch.kind === 'local'
+                                    ? 'Check out'
+                                    : 'Create local branch'}
                                   busy={gitState.isBusy('checkout') || gitState.isBusy('fetch')}
-                                  onCheckout={() => requestCheckout(branch.name)}
+                                  onCheckout={() => requestCheckout(branch)}
                                   onFetch={() => void fetchBranchAction(branch)}
                                   onDelete={() => requestDeleteBranch(branch.name)}
                                 />
@@ -2535,9 +2731,14 @@
                       >
                         <BranchActionsMenu
                           isCurrent={branch.current}
+                          canCheckout={!hasLocalCounterpart}
+                          canDelete={branch.kind === 'local'}
                           {canFetch}
+                          checkoutLabel={branch.kind === 'local'
+                            ? 'Check out'
+                            : 'Create local branch'}
                           busy={gitState.isBusy('checkout') || gitState.isBusy('fetch')}
-                          onCheckout={() => requestCheckout(branch.name)}
+                          onCheckout={() => requestCheckout(branch)}
                           onFetch={() => void fetchBranchAction(branch)}
                           onDelete={() => requestDeleteBranch(branch.name)}
                         />
@@ -2570,7 +2771,7 @@
               {githubConnected}
               onOpen={(pr) => (selectedPullRequest = pr)}
               onSignIn={() => (showGitHubSignIn = true)}
-              onCreate={() => prLifecycleStore.open(projectId, threadId)}
+              onCreate={() => prLifecycleStore.open(projectId, threadId, scopeBucketId)}
               refreshSignal={prListRefresh}
             />
           {/if}
@@ -2844,6 +3045,86 @@
     </Modal>
   {/if}
 
+  {#if pullStrategyOpen}
+    <Modal open title="Choose pull strategy" onClose={closePullStrategy}>
+      <div class="space-y-3">
+        <div class="rounded-lg border border-border bg-elevated px-3 py-2">
+          <p class="text-[10px] font-medium text-foreground">
+            Pull into <span class="font-mono">{status?.branch ?? 'current branch'}</span>
+          </p>
+          <p class="mt-0.5 text-[9px] text-dimmed">
+            {status?.ahead ?? 0} ahead, {status?.behind ?? 0} behind
+            <span class="font-mono">{status?.upstream ?? 'its remote'}</span>
+          </p>
+        </div>
+        {#if pullStrategyError}
+          <div class="rounded-lg border border-danger/20 bg-danger/10 px-3 py-2" role="alert">
+            <p class="text-[10px] font-semibold text-danger">That pull strategy could not finish</p>
+            <p
+              class="mt-0.5 whitespace-pre-wrap break-words text-[9px] leading-relaxed text-danger"
+            >
+              {pullStrategyError}
+            </p>
+            <p class="mt-1 text-[9px] leading-relaxed text-dimmed">
+              Choose another strategy below, or cancel without changing the branch further.
+            </p>
+          </div>
+        {/if}
+        <div class="space-y-1 text-[9px] leading-relaxed text-dimmed">
+          <p>
+            <span class="font-medium text-foreground">Merge</span> keeps both histories and may create
+            a merge commit.
+          </p>
+          <p>
+            <span class="font-medium text-foreground">Rebase</span> replays local commits on top of the
+            remote branch.
+          </p>
+          <p>
+            <span class="font-medium text-foreground">Fast-forward only</span> pulls only when no reconciliation
+            is needed.
+          </p>
+        </div>
+      </div>
+      {#snippet footer()}
+        <div class="flex items-center justify-end gap-2">
+          <button
+            type="button"
+            class="cursor-pointer rounded-lg px-3 py-1.5 text-[11px] font-medium text-muted hover:bg-elevated hover:text-foreground disabled:cursor-default disabled:opacity-50"
+            disabled={gitState.isBusy('pull')}
+            onclick={closePullStrategy}
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            class="h-8 cursor-pointer rounded-lg border border-border px-3 text-[11px] font-medium text-foreground transition-colors hover:bg-elevated disabled:cursor-default disabled:opacity-50"
+            disabled={gitState.isBusy('pull')}
+            onclick={() => void performPull('ff-only')}
+          >
+            Fast-forward only
+          </button>
+          <button
+            type="button"
+            class="h-8 cursor-pointer rounded-lg border border-border px-3 text-[11px] font-medium text-foreground transition-colors hover:bg-elevated disabled:cursor-default disabled:opacity-50"
+            disabled={gitState.isBusy('pull')}
+            onclick={() => void performPull('rebase')}
+          >
+            Rebase
+          </button>
+          <button
+            type="button"
+            class="h-8 cursor-pointer rounded-lg bg-primary px-3 text-[11px] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:cursor-default disabled:opacity-50"
+            data-modal-primary
+            disabled={gitState.isBusy('pull')}
+            onclick={() => void performPull('merge')}
+          >
+            Merge
+          </button>
+        </div>
+      {/snippet}
+    </Modal>
+  {/if}
+
   <!--
     Fetch/pull/push act on the local working tree, so they only belong to the
     working-tree tabs. On the pull request tab they sat under a PR's own
@@ -2872,7 +3153,7 @@
           ? `Pull ${String(status.behind)} commit(s) from the remote`
           : 'Pull from the remote'}
         disabled={remotes.length === 0 || syncBusy}
-        onclick={() => void gitState.pull(projectId)}
+        onclick={() => void pullAction()}
       >
         {#if gitState.isBusy('pull')}
           <Loader2 size={11} class="animate-spin" />
@@ -2986,7 +3267,7 @@
           bind:value={mergeTarget}
         >
           <option value="" disabled>Select a branch…</option>
-          {#each gitState.branches as branch (branch.name)}
+          {#each localBranches as branch (branch.ref)}
             {#if branch.name !== status?.branch}
               <option value={branch.name}>{branch.name}</option>
             {/if}
@@ -3265,14 +3546,28 @@
       <AlertDialog.Portal>
         <AlertDialog.Content
           class="fixed left-1/2 top-1/2 z-50 w-[min(28rem,calc(100vw-2rem))] -translate-x-1/2 -translate-y-1/2 rounded-xl border border-border bg-surface p-5 shadow-xl"
+          onOpenAutoFocus={(event) => {
+            event.preventDefault()
+            checkoutConfirmButton?.focus()
+          }}
         >
           <AlertDialog.Title class="text-sm font-semibold text-foreground">
-            Check out “{target}”?
+            {target.kind === 'local'
+              ? `Check out “${target.name}”?`
+              : `Create local branch “${target.name}”?`}
           </AlertDialog.Title>
           <AlertDialog.Description class="mt-2 text-xs leading-5 text-muted">
-            This switches the working tree to <strong class="font-medium text-foreground"
-              >{target}</strong
-            >. Any uncommitted changes come with you if they don't conflict.
+            {#if target.kind === 'local'}
+              This switches the working tree to <strong class="font-medium text-foreground"
+                >{target.name}</strong
+              >. Any uncommitted changes come with you if they don't conflict.
+            {:else}
+              This creates and checks out <strong class="font-medium text-foreground"
+                >{target.name}</strong
+              >
+              as a local branch that tracks
+              <strong class="font-medium text-foreground">{target.ref}</strong>.
+            {/if}
           </AlertDialog.Description>
           <div class="mt-5 flex justify-end gap-2">
             <AlertDialog.Cancel
@@ -3281,6 +3576,7 @@
               Cancel
             </AlertDialog.Cancel>
             <AlertDialog.Action
+              bind:ref={checkoutConfirmButton}
               class="flex h-8 items-center gap-1.5 rounded-lg bg-primary px-3 text-xs font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
               disabled={gitState.isBusy('checkout')}
               onclick={() => void confirmCheckoutBranch()}
@@ -3288,7 +3584,7 @@
               {#if gitState.isBusy('checkout')}
                 <Loader2 size={12} class="animate-spin" />
               {/if}
-              Check out
+              {target.kind === 'local' ? 'Check out' : 'Create and check out'}
             </AlertDialog.Action>
           </div>
         </AlertDialog.Content>

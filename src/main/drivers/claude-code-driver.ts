@@ -2,7 +2,7 @@ import { execFile, spawn, type ChildProcess } from 'child_process'
 import { readFile } from 'node:fs/promises'
 import { basename } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import type { ModelInfo, SDKUserMessage } from '@anthropic-ai/claude-agent-sdk'
+import type { ModelInfo, SDKUserMessage, SpawnOptions } from '@anthropic-ai/claude-agent-sdk'
 import type {
   AgentQuestion,
   AgentMessage,
@@ -46,8 +46,14 @@ import type {
   UtilityRuntimePreparationRequest
 } from './driver.interface'
 import { InactiveQuestionTurnError } from './driver.interface'
-import { buildHarnessEnvironment } from './cli-environment'
+import { buildProcessEnvironment } from './cli-environment'
 import { attachmentReference } from './attachment-reference'
+import {
+  buildWslProcessEnvironment,
+  prepareHarnessInvocation,
+  resolveHarnessRuntime,
+  runHarnessCommand
+} from './harness-runtime'
 
 const THINKING_PRESETS: ThinkingPreset[] = [
   { id: 'low', label: 'Low', description: 'Low reasoning effort' },
@@ -71,14 +77,6 @@ const CLAUDE_USAGE_TIMEOUT_MS = 12_000
 const PRE_FLIGHT_AUTH_PROBE_TTL_MS = 30_000
 /** Bounded wait for the `claude auth status` pre-flight probe. */
 const PRE_FLIGHT_AUTH_PROBE_TIMEOUT_MS = 8_000
-/**
- * How long a proven authentication keeps the shared credential trusted for
- * concurrent spawns. The bypass must expire with the access token itself;
- * otherwise an idle "authenticated" session would let fresh spawns skip the
- * gate while the token is already expired, reopening the refresh race
- * (anthropics/claude-code#76905). Conservative vs the ~5h access-token TTL.
- */
-const ACCESS_TOKEN_FRESH_MS = 4 * 60 * 60 * 1_000
 /**
  * How long a first-party session spawn may hold the credential-refresh gate
  * while it resolves authentication. The gate exists because Claude Code's
@@ -117,7 +115,7 @@ const CLAUDE_COMMANDS_REQUIRING_ARGUMENTS = new Set(['config', 'settings'])
 /** Keep Claude Code's native per-repository memory from crossing app threads. */
 function buildClaudeEnvironment(): NodeJS.ProcessEnv {
   return {
-    ...buildHarnessEnvironment(),
+    ...buildProcessEnvironment(),
     CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1',
     CLAUDE_CODE_ENABLE_TODO_TOOLS: '1'
   }
@@ -303,13 +301,30 @@ function keepClaudeDiscoveryOpen(): AsyncIterable<SDKUserMessage> {
 }
 
 async function discoverClaudeModels(projectPath: string): Promise<ProviderModel[]> {
+  const runtime = await resolveHarnessRuntime('claude', projectPath)
+  if (!runtime) throw new Error('Claude Code CLI is unavailable')
   const { query } = await import('@anthropic-ai/claude-agent-sdk')
+  const wslDistribution = runtime.target.kind === 'wsl' ? runtime.target.distribution : undefined
+  const spawnClaudeCodeProcess = wslDistribution
+    ? (options: SpawnOptions) =>
+        spawn(
+          runtime.executable,
+          ['--distribution', wslDistribution, '--', runtime.resolvedPath, ...options.args],
+          {
+            ...(options.cwd ? { cwd: options.cwd } : {}),
+            env: buildWslProcessEnvironment(options.env),
+            signal: options.signal,
+            stdio: ['pipe', 'pipe', 'ignore']
+          }
+        )
+    : undefined
   const handle = query({
     prompt: keepClaudeDiscoveryOpen(),
     options: {
       cwd: projectPath,
       env: buildClaudeEnvironment(),
-      pathToClaudeCodeExecutable: 'claude',
+      pathToClaudeCodeExecutable: runtime.resolvedPath,
+      ...(spawnClaudeCodeProcess ? { spawnClaudeCodeProcess } : {}),
       tools: []
     }
   })
@@ -1386,19 +1401,12 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
   /**
    * Cross-process credential-refresh mutex. Multiple app instances each hold
    * their own in-memory auth slot, so they cannot serialize each other's claude
-   * spawns; this shared atomic lock closes that gap and is also respected by an
-   * externally-launched CLI sharing the same config root.
+   * spawns; this shared atomic lock closes that gap for every CodeInOven instance
+   * using the same config root.
    */
   private readonly crossProcessAuthLock = new CrossProcessMutex(CLAUDE_CREDENTIAL_LOCK_NAME)
-  /**
-   * Sessions whose live process proved authentication this run, with the time
-   * it was proven. A session only counts while its proof is fresh (within
-   * ACCESS_TOKEN_FRESH_MS): once that window passes, the shared access token
-   * may have expired, so concurrent spawns must go through the gate again.
-   */
-  private readonly authenticatedSessions = new Map<string, number>()
-  /** First-party sessions (shared Anthropic OAuth credential) spawned this run. */
-  private readonly firstPartySessions = new Set<string>()
+  /** Sessions whose current process has proved authentication. */
+  private readonly authenticatedSessions = new Set<string>()
   private readonly pendingClaudeQuestions = new Map<string, ClaudeQuestionRequest>()
   private readonly pendingClaudePermissions = new Map<string, ClaudePermissionRequest>()
   /** Held while a first-party session spawn may be refreshing the credential. */
@@ -1767,38 +1775,10 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
   protected async ensureCliReady(projectPath: string): Promise<void> {
     const release = await this.oneShotSpawnGate.acquire()
     try {
-      await new Promise<void>((resolve, reject) => {
-        let child: ChildProcess
-        try {
-          child = spawn('claude', ['--version'], {
-            cwd: projectPath,
-            env: buildClaudeEnvironment(),
-            stdio: ['ignore', 'ignore', 'pipe']
-          })
-        } catch (error) {
-          reject(
-            new Error(
-              `Claude Code CLI is unavailable: ${error instanceof Error ? error.message : String(error)}`
-            )
-          )
-          return
-        }
-        let stderr = ''
-        child.stderr?.on('data', (chunk: Buffer) => {
-          stderr += chunk.toString()
-        })
-        child.on('error', (error) =>
-          reject(new Error(`Claude Code CLI is unavailable: ${error.message}`))
-        )
-        child.on('exit', (code) =>
-          code === 0
-            ? resolve()
-            : reject(
-                new Error(
-                  `Claude Code CLI version probe failed${stderr ? `: ${stderr.trim()}` : ''}`
-                )
-              )
-        )
+      await runHarnessCommand('claude', ['--version'], {
+        cwd: projectPath,
+        env: buildClaudeEnvironment(),
+        timeoutMs: 10_000
       })
     } finally {
       release()
@@ -1921,44 +1901,25 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
    * Serialize the credential-refresh window for first-party session spawns.
    * Claude Code's macOS keychain OAuth store races when two processes refresh
    * a single-use token concurrently and the loser wipes the shared credential
-   * (anthropics/claude-code#76905), forcing repeated re-logins. Only the first
-   * spawn that has not yet authenticated may touch the credential; every other
-   * thread/project waits only until that session proves authentication, then
-   * spawns freely. Custom base-URL providers never share the Anthropic OAuth
-   * credential, so they bypass the gate entirely.
+   * (anthropics/claude-code#76905), forcing repeated re-logins. Every first-party
+   * process passes through the startup gate because a prior authentication does
+   * not reveal the access token's remaining lifetime. Custom base-URL providers
+   * never share the Anthropic OAuth credential, so they bypass the gate entirely.
    */
   override async sendPrompt(projectPath: string, opts: SendPromptOptions): Promise<void> {
     const firstParty = !opts.settings.providerId || opts.settings.providerId === 'anthropic'
-    if (firstParty) this.firstPartySessions.add(opts.sessionId)
-    if (firstParty && !this.hasLiveAuthenticatedSession()) {
-      const release = await this.acquireAuthSlot()
-      try {
-        if (this.hasLiveAuthenticatedSession()) {
-          await super.sendPrompt(projectPath, opts)
-          return
-        }
-        await super.sendPrompt(projectPath, opts)
-        await this.waitForAuthConfirmation(opts.sessionId)
-      } finally {
-        release()
-      }
+    if (!firstParty) {
+      await super.sendPrompt(projectPath, opts)
       return
     }
-    await super.sendPrompt(projectPath, opts)
-  }
-
-  /**
-   * Whether any live session has already authenticated this run. The shared
-   * credential is considered fresh in that case, so no serialization is needed.
-   */
-  private hasLiveAuthenticatedSession(): boolean {
-    const now = Date.now()
-    const live = this.activeSessionIds()
-    return live.some((sessionId) => {
-      if (!this.firstPartySessions.has(sessionId)) return false
-      const authenticatedAt = this.authenticatedSessions.get(sessionId)
-      return authenticatedAt !== undefined && now - authenticatedAt < ACCESS_TOKEN_FRESH_MS
-    })
+    const release = await this.acquireAuthSlot()
+    this.authenticatedSessions.delete(opts.sessionId)
+    try {
+      await super.sendPrompt(projectPath, opts)
+      await this.waitForAuthConfirmation(opts.sessionId)
+    } finally {
+      release()
+    }
   }
 
   /**
@@ -1986,19 +1947,20 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
   }
 
   /**
-   * Run an auth-touching CLI operation under the credential-refresh gate. The
-   * gate is engaged only while no live session has authenticated; once one has,
-   * the credential is fresh and the operation runs with full concurrency. The
-   * one-shot spawn gate then bounds concurrent short-lived claude spawns (auth
-   * probe, usage refresh, model discovery) so they cannot exhaust the process
-   * file-descriptor table and fail later spawns with `EBADF`.
+   * Run an auth-touching CLI operation under the credential-refresh gate. A
+   * successful process start proves only that the access token works at that
+   * instant; it does not reveal when the token expires. Every new process must
+   * therefore pass through this short startup gate. The one-shot spawn gate
+   * then bounds concurrent short-lived claude spawns (auth probe, usage refresh,
+   * model discovery) so they cannot exhaust the process file-descriptor table
+   * and fail later spawns with `EBADF`.
    *
    * Lock ordering: the auth slot is always acquired before the spawn gate
    * (sendPrompt → buildTurnCommand probe follows the same order), so no path
    * ever holds the gate while waiting for the auth slot.
    */
   private async runAuthSerialized<T>(operation: () => Promise<T>): Promise<T> {
-    const releaseAuth = this.hasLiveAuthenticatedSession() ? null : await this.acquireAuthSlot()
+    const releaseAuth = await this.acquireAuthSlot()
     try {
       const releaseSpawn = await this.oneShotSpawnGate.acquire()
       try {
@@ -2007,7 +1969,7 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
         releaseSpawn()
       }
     } finally {
-      releaseAuth?.()
+      releaseAuth()
     }
   }
 
@@ -2040,36 +2002,51 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
     const now = Date.now()
     const cached = this.authProbeCache.get(projectPath)
     if (cached && now - cached.at < PRE_FLIGHT_AUTH_PROBE_TTL_MS) return cached.authenticated
-    const authenticated = await new Promise<boolean>((resolve) => {
+    let authenticated: boolean
+    if (process.platform !== 'win32') {
+      authenticated = await new Promise<boolean>((resolve) => {
+        try {
+          execFile(
+            'claude',
+            ['auth', 'status', '--json'],
+            {
+              cwd: projectPath,
+              env: buildClaudeEnvironment(),
+              timeout: PRE_FLIGHT_AUTH_PROBE_TIMEOUT_MS,
+              maxBuffer: 1024 * 1024
+            },
+            (error, stdout) => {
+              if (error) {
+                resolve(true)
+                return
+              }
+              try {
+                const parsed = JSON.parse(stdout) as { loggedIn?: unknown }
+                resolve(parsed['loggedIn'] === true)
+              } catch {
+                resolve(true)
+              }
+            }
+          )
+        } catch {
+          resolve(true)
+        }
+      })
+    } else {
       try {
-        execFile(
-          'claude',
-          ['auth', 'status', '--json'],
-          {
-            cwd: projectPath,
-            env: buildClaudeEnvironment(),
-            timeout: PRE_FLIGHT_AUTH_PROBE_TIMEOUT_MS,
-            maxBuffer: 1024 * 1024
-          },
-          (error, stdout) => {
-            if (error) {
-              resolve(true)
-              return
-            }
-            try {
-              const parsed = JSON.parse(stdout) as { loggedIn?: unknown }
-              resolve(parsed['loggedIn'] === true)
-            } catch {
-              resolve(true)
-            }
-          }
-        )
+        const { stdout } = await runHarnessCommand('claude', ['auth', 'status', '--json'], {
+          cwd: projectPath,
+          env: buildClaudeEnvironment(),
+          timeoutMs: PRE_FLIGHT_AUTH_PROBE_TIMEOUT_MS,
+          maxOutputBytes: 1024 * 1024
+        })
+        const parsed = JSON.parse(stdout) as { loggedIn?: unknown }
+        authenticated = parsed['loggedIn'] === true
       } catch {
-        // Spawn itself threw synchronously (e.g. EBADF when the process is low
-        // on file descriptors). Fail open so the turn still has a chance.
-        resolve(true)
+        // Fail open so the turn still has a chance to report the real error.
+        authenticated = true
       }
-    })
+    }
     this.authProbeCache.delete(projectPath)
     if (authenticated) this.authProbeCache.set(projectPath, { authenticated, at: now })
     return authenticated
@@ -2238,29 +2215,24 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
       return this.mapAccountUsage(await this.readUsageFromActiveSession(activeSessionId))
     }
     try {
+      const prepared = await prepareHarnessInvocation(
+        'claude',
+        ['--print', '--output-format', 'stream-json', '--input-format', 'stream-json', '--verbose'],
+        { cwd: projectPath, env: buildClaudeEnvironment() }
+      )
       const telemetry = await this.runAuthSerialized(
         () =>
           new Promise<Record<string, unknown> | null>((resolve) => {
             let child: ChildProcess
             try {
-              child = spawn(
-                'claude',
-                [
-                  '--print',
-                  '--output-format',
-                  'stream-json',
-                  '--input-format',
-                  'stream-json',
-                  '--verbose'
-                ],
-                {
-                  cwd: projectPath,
-                  env: buildClaudeEnvironment(),
-                  // Usage telemetry is a side channel; do not leave a piped
-                  // stderr buffer undrained while the probe waits for JSON.
-                  stdio: ['pipe', 'pipe', 'ignore']
-                }
-              )
+              child = spawn(prepared.command, prepared.args, {
+                ...(prepared.cwd ? { cwd: prepared.cwd } : {}),
+                env: prepared.env,
+                shell: prepared.shell,
+                // Usage telemetry is a side channel; do not leave a piped
+                // stderr buffer undrained while the probe waits for JSON.
+                stdio: ['pipe', 'pipe', 'ignore']
+              })
             } catch {
               // Spawn itself threw synchronously (e.g. EBADF when the process is
               // low on file descriptors). Report no usage rather than rejecting.
@@ -2356,7 +2328,6 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
   override dispose(): void {
     this.authProbeCache.clear()
     this.authenticatedSessions.clear()
-    this.firstPartySessions.clear()
     for (const sessionId of this.activeUsageProbes.keys()) {
       this.finishActiveUsageProbe(sessionId, null)
     }
@@ -2372,7 +2343,7 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
   protected parseJsonLine(value: unknown, context: CliLineParseContext): CliLineParseResult | null {
     const entry = record(value)
     if (claudeAuthenticationResult(entry) === true) {
-      this.authenticatedSessions.set(context.sessionId, Date.now())
+      this.authenticatedSessions.add(context.sessionId)
     }
     this.captureActiveUsageResponse(context.sessionId, entry)
     const type = string(entry?.['type'])

@@ -10,6 +10,9 @@ import type {
 import { invoke } from '$lib/ipc.svelte'
 import { providerCatalog } from '$lib/stores/provider-catalog.svelte'
 
+/** Keep a large custom-provider catalog from monopolizing a renderer turn. */
+const CATALOG_SYNC_BATCH_SIZE = 8
+
 /**
  * Reactive store for custom base-URL providers.
  *
@@ -19,7 +22,7 @@ import { providerCatalog } from '$lib/stores/provider-catalog.svelte'
  * list and roll back on error so the UI stays responsive.
  */
 class BaseUrlProviderStore {
-  providers = $state<BaseUrlProvider[]>([])
+  providers = $state.raw<BaseUrlProvider[]>([])
   loading = $state(false)
   saving = $state(false)
   error = $state('')
@@ -30,7 +33,12 @@ class BaseUrlProviderStore {
     this.error = ''
     try {
       this.providers = await invoke('baseUrlProviders:list')
-      for (const provider of this.providers) providerCatalog.upsertCustomProvider(provider)
+      for (const [index, provider] of this.providers.entries()) {
+        providerCatalog.upsertCustomProvider(provider)
+        if ((index + 1) % CATALOG_SYNC_BATCH_SIZE === 0 && index < this.providers.length - 1) {
+          await new Promise((resolve) => setTimeout(resolve, 0))
+        }
+      }
     } catch (loadError) {
       this.error = loadError instanceof Error ? loadError.message : 'Failed to load providers.'
     } finally {

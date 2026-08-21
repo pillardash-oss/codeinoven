@@ -3,8 +3,10 @@ import { join } from 'path'
 import { tmpdir } from 'os'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { StorageEngine } from '../../src/main/storage/storage-engine'
-import { RetrySchedulerService, type PendingRetryRecord } from
-  '../../src/main/system/retry-scheduler-service'
+import {
+  RetrySchedulerService,
+  type PendingRetryRecord
+} from '../../src/main/system/retry-scheduler-service'
 
 const roots: string[] = []
 beforeEach(async () => {
@@ -54,7 +56,8 @@ describe('RetrySchedulerService', () => {
     await first.start()
     const saved = record({ retryAt: Date.now() + 120_000 })
     first.track(saved)
-    await new Promise((resolve) => setTimeout(resolve, 0))
+    // Wait for the serialized atomic write to land before simulating shutdown.
+    await first.flush()
     first.dispose()
 
     const restarted = new RetrySchedulerService(storageEngine)

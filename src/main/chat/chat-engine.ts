@@ -23,7 +23,7 @@ import { MuseDriver } from '../drivers/muse-driver'
 import { PiDriver } from '../drivers/pi-driver'
 import { CheckpointManager } from '../storage/checkpoint-manager'
 import { findHarness, listHarnesses } from '../agents/harness-registry'
-import { buildHarnessEnvironment, resolveExecutablePath } from '../drivers/cli-environment'
+import { buildProcessEnvironment, resolveExecutablePath } from '../drivers/cli-environment'
 import { CheckpointLimitError, type ProjectFingerprint } from '../git/change-tracking-service'
 import {
   broadcastThreadDeleted,
@@ -41,6 +41,7 @@ import {
   type WorkspaceScopeMode
 } from './prompt-assembler'
 import {
+  currentHarnessVersion,
   episodeFromPieces,
   tokenUsageAttribution,
   type AttributionMode
@@ -57,7 +58,8 @@ import { forwardRemoteEvent } from '../remote/remote-event-forwarder'
 import {
   InactiveQuestionTurnError,
   type HarnessDriver,
-  type SendPromptOptions
+  type SendPromptOptions,
+  type StructuredOutputRequest
 } from '../drivers/driver.interface'
 import type { TitleAttemptAccounting } from '../drivers/persistent-cli-driver'
 import type { PreparedUtilityRuntime } from '../drivers/driver.interface'
@@ -171,6 +173,8 @@ import { APP_NAME } from '../../lib/brand'
 import { DEFAULT_AGENT_BEHAVIOR_PROMPT } from '../../lib/agent-behavior'
 import { registerCioPromptDefault, type CioPromptId } from '../../lib/cio-prompts'
 import { estimateTokenCostUsd } from '../providers/pricing'
+import { ModelPricingService } from '../providers/model-pricing-service'
+import { OpenUsageClient } from '../usage/openusage-client'
 import {
   budgetTurnLayers,
   composeBudgetedSend,
@@ -232,6 +236,8 @@ const QUESTION_TOOL_INSTRUCTION = [
 
 const MEMORY_RESPONSE_BOUNDARY_INSTRUCTION = [
   'A request to remember a preference, rule, or fact does not authorize a project-file change.',
+  'Never call harness-native memory tools such as add_memory, edit_memory, read_memory, or delete_memory; CodeInOven exclusively owns persistent memory and its approval workflow.',
+  'Do not attempt to create, simulate, or announce a memory proposal during the user-facing turn. CodeInOven evaluates the completed turn separately and requests approval outside the conversation when warranted.',
   'Do not create or modify AGENTS.md, CLAUDE.md, README files, instruction files, configuration, or any other project file solely to remember information.',
   'Only modify a file when the user separately and explicitly asks you to edit that file or perform implementation work.',
   'Keep the user-facing response focused exclusively on the current request and its outcome.',
@@ -365,6 +371,9 @@ const INCOMPLETE_TURN_MESSAGE =
   'The harness ended the turn without returning a final response. The task may be incomplete.'
 const INCOMPLETE_TURN_CONTINUATION_PROMPT =
   'Your previous turn ended without a final response. Continue the same task from where you stopped, finish any remaining work, verify it, and return a complete final response to the user.'
+const SPEC_CONTRACT_COMPLETE_MARKER = 'SPEC CONTRACT COMPLETE'
+const SPEC_CONTRACT_BLOCKED_MARKER = 'SPEC CONTRACT BLOCKED'
+const SPEC_CONTRACT_CONTINUATION_PROMPT = 'COMPLETE THE TOTAL SPEC CONTRACT!'
 const HISTORY_MIRROR_ERROR_DETAIL_LIMIT = 240
 const SPEC_GENERATION_MAX_ATTEMPTS = 3
 const CURRENT_SPEC_GENERATION_VERSION = 1
@@ -699,6 +708,8 @@ export const SPEC_IMPLEMENT_SYSTEM_PROMPT = [
   DEPLOYMENT_URL_SYSTEM_INSTRUCTION,
   'Update the specification in your working plan to reflect the annotations, then implement it completely.',
   'Produce evidence, run the specified checks, update documentation, and make contextual commits.',
+  `A normal final response is not permission to stop. Before returning one, verify that every specification phase, success criterion, required check, evidence item, documentation requirement, and commit is complete. When the total specification contract is fulfilled, end the final response with the exact standalone line ${SPEC_CONTRACT_COMPLETE_MARKER}. Never emit that line while any contract work remains.`,
+  `If a hard external condition requires user intervention, explain the exact blocker and end with the exact standalone line ${SPEC_CONTRACT_BLOCKED_MARKER}. Do not use the blocked declaration for work you can continue yourself.`,
   'Stop and ask when the signed scope is ambiguous or insufficient.',
   CITATION_SYSTEM_INSTRUCTION,
   MERMAID_OUTPUT_INSTRUCTION,
@@ -748,7 +759,7 @@ const BRAINSTORM_GENERATION_SYSTEM_PROMPT = [
   'In Boundaries, capture user-stated and verified constraints with evidence where applicable.',
   'In Agreed Direction, state the current direction, the reason it fits, and the immediate handoff into specification. Keep alternatives only when the user has not ruled them out.',
   'You may append Additional Info (additional_info) only when useful material does not fit a required section. Omit it when empty.',
-  'Do not implement, assign work, mutate files, or claim the engineering specification is ready. This document is discovery input for a later specification.',
+  'When the dispatch supplies an exact session-report revision path under the feature versions directory, write the report Markdown to exactly that path and nowhere else; never modify any other file. Do not implement, assign work, or claim the engineering specification is ready. This document is discovery input for a later specification.',
   'Prefer clarity and accuracy over length. Do not repeat the request in different words or hide uncertainty behind confident prose.',
   MERMAID_OUTPUT_INSTRUCTION
 ].join(' ')
@@ -767,7 +778,7 @@ const BRAINSTORM_JSON_SHAPE = JSON.stringify({
 })
 
 const BRAINSTORM_JSON_FALLBACK_SYSTEM_PROMPT = [
-  'Research the supplied discussion and project, then return one valid Brainstorm JSON object. Read-only project and web research tools are available and should be used when relevant. Do not mutate files, return explanatory prose outside the object, or use Markdown fences around the object.',
+  'Research the supplied discussion and project, then return one valid Brainstorm JSON object. Read-only project and web research tools are available and should be used when relevant. When the dispatch supplies an exact session-report revision path, write the report there and nowhere else; otherwise do not mutate files. Do not return explanatory prose outside the object, or use Markdown fences around the object.',
   BRAINSTORM_GENERATION_SYSTEM_PROMPT,
   `Use this exact object shape: ${BRAINSTORM_JSON_SHAPE}`,
   'First response character must be { and last must be }.'
@@ -783,6 +794,28 @@ const BRAINSTORM_RESEARCH_ALLOWED_TOOLS = [
   'websearch',
   'gemini_quota'
 ]
+
+/**
+ * Tools for the brainstorm document-generation turn when the scoped-write
+ * route is active: research tools plus `edit`, whose execution scope comes
+ * exclusively from the `cio-brainstorm` agent permission (write allowed only
+ * under the feature versions directory, `.cio/specs/<slug>/versions/`). The
+ * `brainstorm_document` structured contract stays the validation authority;
+ * the agent write is only the persistence channel for the session-report
+ * revision.
+ */
+export const BRAINSTORM_DOCUMENT_WRITE_TOOLS = [...BRAINSTORM_RESEARCH_ALLOWED_TOOLS, 'edit']
+
+/**
+ * Whether the brainstorm document turn may dispatch through the agent's
+ * scoped-write channel. Only the opencode driver honors the lean-agent
+ * identifier and its path-scoped edit permission; every other harness keeps
+ * the read-only sandbox so no unscoped write channel ever opens.
+ */
+export function brainstormDocumentWriteEnabled(driverId: string): boolean {
+  return driverId === 'opencode'
+}
+
 const BRAINSTORM_GENERATION_TIMEOUT_MS = 10 * 60 * 1000
 const SPEC_GENERATION_TIMEOUT_MS = 10 * 60 * 1000
 
@@ -951,6 +984,8 @@ interface SessionInfo {
   activeTurnId?: string
   /** Stable user message that starts the active provider turn. */
   activeTurnUserMessageId?: string
+  /** Composed request occupancy used only when the harness emits no native context usage. */
+  estimatedContextUsed?: number
   changedPaths?: Set<string>
   /** Paths claimed by precise file-mutating tools this turn, path → last claimed ms. */
   preciseChangedPaths?: Map<string, number>
@@ -1264,6 +1299,15 @@ class AssignmentApiRequestError extends Error {
  * The renderer subscribes to `agent:event` for streaming AgentEvents; this
  * class broadcasts driver events to all windows through a bounded stream buffer.
  */
+export interface VirtualTaskOptions {
+  utilityManagement?: boolean
+  isolateOpenCode?: boolean
+  readOnly?: boolean
+  systemPrompt?: string
+  allowedTools?: string[]
+  structuredOutput?: StructuredOutputRequest
+}
+
 export class ChatEngine {
   private static readonly STREAM_BROADCAST_INTERVAL_MS = 50
   private static readonly TEMPORARY_CHAT_INACTIVITY_MS = 3 * 60 * 60 * 1000
@@ -1271,6 +1315,7 @@ export class ChatEngine {
   private static readonly AUDIT_RUN_TIMEOUT_MS = 30 * 60 * 1000
   private static readonly CATALOG_DRIVER_BUDGET_MS = 800
   private drivers = new Map<string, HarnessDriver>()
+  private readonly openUsage = new OpenUsageClient()
   private sessionRegistry = new Map<string, SessionInfo>()
   private childSessionOwners = new Map<string, ChildSessionInfo>()
   private childCaptureTasks = new Map<string, Promise<AgentMessage[]>>()
@@ -1288,6 +1333,8 @@ export class ChatEngine {
   private streamBroadcastTimer: ReturnType<typeof setTimeout> | null = null
   /** Number of hidden continuations issued after a turn ended without a final response. */
   private incompleteTurnRecoveryAttempts = new Map<string, number>()
+  /** Harness sessions implementing an approved specification until its contract is fulfilled. */
+  private engineeringImplementationSessions = new Set<string>()
   private temporaryChats = new Map<string, TemporaryChatSession>()
   private initialSpecTasks = new Map<string, Promise<EngineeringSpec | null>>()
   private activeInitialSpecSessions = new Map<string, ActiveInitialSpecSession>()
@@ -1509,8 +1556,11 @@ export class ChatEngine {
     private computerUsePip?: import('../utilities/computer-use-pip-service').ComputerUsePipService,
     private harnessManifest?: import('../agents/harness-manifest-service').HarnessManifestService,
     private threadCreation?: ThreadCreationCoordinator,
-    processJournalPath?: string
+    processJournalPath?: string,
+    private scopeRoots?: import('../../lib/engines/thread-manager').ThreadScopeRootProvider,
+    private modelPricing?: ModelPricingService
   ) {
+    this.modelPricing ??= new ModelPricingService(storage)
     this.agentProcesses.attachJournal(processJournalPath)
     this.threadCreation = threadCreation ?? new ThreadCreationCoordinator()
     this.usageRepo = new HarnessUsageRepo(database)
@@ -1531,7 +1581,8 @@ export class ChatEngine {
         for (const projectId of new Set(threads.map((thread) => thread.projectId))) {
           await this.checkpointManager.pruneUnusedBlobs(projectId)
         }
-      }
+      },
+      this.scopeRoots
     )
     this.memoryService = new MemoryService(storage)
     this.generatedArtifactService = new GeneratedArtifactService(storage)
@@ -2065,6 +2116,7 @@ export class ChatEngine {
         error: rawErrorMessage(error)
       })
     )
+    void this.recoverReadyInitialSpecs()
     void this.recoverInterruptedBrainstormEntries()
   }
 
@@ -2409,6 +2461,7 @@ export class ChatEngine {
     this.planningSessions.clear()
     this.handledIdleSessions.clear()
     this.userAbortedSessions.clear()
+    this.engineeringImplementationSessions.clear()
     this.providerCache.clear()
     this.assignmentApiCapabilities.clear()
     this.assignmentApiQueues.clear()
@@ -2630,8 +2683,32 @@ export class ChatEngine {
       [...harnessIds].map(async (harnessId): Promise<AgentAccountUsage | null> => {
         try {
           const { driver, projectPath } = await this.resolve(projectIdSafe, harnessId, threadId)
-          if (!driver.readAccountUsage) return null
-          const telemetry = await driver.readAccountUsage(projectPath)
+          const nativeTelemetry = driver.readAccountUsage
+            ? await driver.readAccountUsage(projectPath)
+            : null
+          const openUsage =
+            !nativeTelemetry || nativeTelemetry.rateLimits.length === 0
+              ? await this.openUsage.readHarnessUsage(harnessId)
+              : null
+          const telemetry =
+            nativeTelemetry || openUsage
+              ? {
+                  rateLimits: nativeTelemetry?.rateLimits.length
+                    ? nativeTelemetry.rateLimits
+                    : (openUsage?.rateLimits ?? []),
+                  ...(nativeTelemetry?.credits
+                    ? { credits: nativeTelemetry.credits }
+                    : openUsage?.credits
+                      ? { credits: openUsage.credits }
+                      : {}),
+                  ...(nativeTelemetry?.contextWindow === undefined
+                    ? {}
+                    : { contextWindow: nativeTelemetry.contextWindow }),
+                  ...(nativeTelemetry?.contextUsed === undefined
+                    ? {}
+                    : { contextUsed: nativeTelemetry.contextUsed })
+                }
+              : null
           if (
             !telemetry ||
             (telemetry.rateLimits.length === 0 &&
@@ -2669,7 +2746,7 @@ export class ChatEngine {
   /** One app-wide discovery pass; all projects share installed harness models. */
   private async discoverProviders(projectId: string): Promise<ProviderCatalog[]> {
     const projectPath = await this.resolveProjectPath(projectId)
-    const harnessEnv = buildHarnessEnvironment()
+    const harnessEnv = buildProcessEnvironment()
     const drivers = [...this.drivers.values()].filter((driver) => {
       const command = findHarness(driver.id)?.command
       return command !== undefined && resolveExecutablePath(command, harnessEnv) !== undefined
@@ -2770,7 +2847,7 @@ export class ChatEngine {
 
   /** Keep cached/fallback catalogs scoped to harness executables installed on this machine. */
   private filterInstalledProviderCatalogs(catalogs: ProviderCatalog[]): ProviderCatalog[] {
-    const env = buildHarnessEnvironment()
+    const env = buildProcessEnvironment()
     const installed = new Set(
       listHarnesses()
         .filter((harness) => resolveExecutablePath(harness.command, env) !== undefined)
@@ -2815,12 +2892,15 @@ export class ChatEngine {
     projectPath: string
   ): Promise<DriverDiscovery> {
     const budget = ChatEngine.CATALOG_DRIVER_BUDGET_MS
-    const probe = driver.listProviders(projectPath).then((catalogs) =>
-      catalogs.map((catalog) => ({
-        ...catalog,
-        supportsAttachments: driver.capabilities.attachments
-      }))
-    )
+    const probe = driver
+      .listProviders(projectPath)
+      .then((catalogs) =>
+        catalogs.map((catalog) => ({
+          ...catalog,
+          supportsAttachments: driver.capabilities.attachments
+        }))
+      )
+      .then((catalogs) => this.modelPricing?.enrichMissingContext(catalogs) ?? catalogs)
     let timer: ReturnType<typeof setTimeout> | undefined
     try {
       const catalogs = await Promise.race([
@@ -3236,7 +3316,10 @@ export class ChatEngine {
     }
     // Record whether the harness natively holds the conversation so the recap
     // path can skip a second provider history load.
-    this.sessionNativeHistory.set(sessionId, storedSessionMessages.length > 0)
+    this.sessionNativeHistory.set(
+      sessionId,
+      driver.capabilities.nativeResume !== false && storedSessionMessages.length > 0
+    )
 
     // A reused native session is replayed in full under whichever model the
     // next turn selects. When that model changed and its context window is much
@@ -3341,6 +3424,7 @@ export class ChatEngine {
     this.outboundMessageIdsBySession.delete(sessionId)
     this.mermaidRepairAttempts.delete(sessionId)
     this.incompleteTurnRecoveryAttempts.delete(sessionId)
+    this.engineeringImplementationSessions.delete(sessionId)
     this.searchNudgeAttempts.delete(sessionId)
     this.sessionNativeHistory.delete(sessionId)
     this.clearSessionWatchdog(sessionId)
@@ -4000,6 +4084,7 @@ export class ChatEngine {
           key: attributionKey ?? `${harnessId}:${threadId}`,
           mode: attributionModeFor(mode, executionScope, threadSettings?.fileSystemMode === true),
           driverId: harnessId,
+          harnessVersion: currentHarnessVersion() ?? undefined,
           pieces: assembled.layers.map((layer) => ({
             title: layer.title,
             content: layer.content
@@ -4043,6 +4128,11 @@ export class ChatEngine {
     if (!thread?.sessionId) return null
     const pendingSpec = await this.readPendingInitialSpec(projectId, threadId)
     if (pendingSpec?.state === 'pending' || pendingSpec?.state === 'generating') {
+      const activeSpec = await this.getActiveSpec(projectId, threadId)
+      if (activeSpec) {
+        await this.runPendingInitialSpec(projectId, threadId)
+        return { state: 'idle' }
+      }
       const liveActivity = this.sessionStatuses.get(thread.sessionId)
       return liveActivity?.state === 'working' && liveActivity.activity
         ? liveActivity
@@ -4108,6 +4198,10 @@ export class ChatEngine {
    * anything that would be interrupted by a forced restart: streaming turns,
    * permission/question decisions, in-flight shell tools, child sessions,
    * pending spec/brainstorm drafts, and in-progress compaction.
+   *
+   * Kept for power-management and diagnostics. The updater gate intentionally
+   * does NOT use this — see `workingSessionCount()` which mirrors the
+   * AppHeader pulse.
    */
   activeSessionCount(): number {
     const active = new Set<string>()
@@ -4139,6 +4233,21 @@ export class ChatEngine {
     for (const sessionId of this.pendingBrainstormTurns.keys()) add(sessionId)
     for (const sessionId of this.activeLoopRuns) add(sessionId)
     return active.size
+  }
+
+  /**
+   * Sessions actively producing work — mirrors `AppHeader`'s pulse
+   * (`agentRuns.isBusy` / `isThreadWorking`). Only `sessionStatuses === 'working'`
+   * counts; `waiting`, pending permissions/questions, compactions, brainstorm,
+   * loops, child sessions and idle PTYs do not pulse the header and must not
+   * block "Restart to update".
+   */
+  workingSessionCount(): number {
+    let count = 0
+    for (const status of this.sessionStatuses.values()) {
+      if (status.state === 'working') count++
+    }
+    return count
   }
 
   /** Publish one canonical working state to session and task consumers. */
@@ -4840,6 +4949,13 @@ export class ChatEngine {
       targetThread = await this.threadManager.getThread(projectId, threadId)
     }
     if (
+      specAction === undefined &&
+      targetThread?.sessionId &&
+      this.engineeringImplementationSessions.has(targetThread.sessionId)
+    ) {
+      specAction = 'implement'
+    }
+    if (
       targetThread?.userInputLocked &&
       targetThread.assignmentRole !== 'coordinator' &&
       origin === 'user'
@@ -4889,9 +5005,6 @@ export class ChatEngine {
       specAction !== 'implement'
     ) {
       throw new TypeError('Invalid specification action')
-    }
-    if (specAction === 'implement' && settings.engineeringMode) {
-      settings = { ...settings, engineeringMode: false }
     }
     const messageId = validateEntityId(userMessageId ?? createMessageId(), 'Message ID', 256)
     const coordinatorHandoff = (createdAt: number): QueuedCoordinatorHandoff => ({
@@ -5064,6 +5177,10 @@ export class ChatEngine {
     try {
       sessionId = await this.ensureSession(projectId, threadId, driverId)
       titleParentSessionId = sessionId
+      if (specAction === 'implement') {
+        this.engineeringImplementationSessions.add(sessionId)
+        this.planningSessions.delete(sessionId)
+      }
     } catch (error) {
       await this.threadManager.setStatus(projectId, threadId, 'failed')
       throw error
@@ -5316,6 +5433,8 @@ export class ChatEngine {
         })
       }
       this.registerSession(sessionId, projectId, threadId, projectPath, 'auto_review', driverId)
+      const planningSession = this.sessionRegistry.get(sessionId)
+      if (planningSession) planningSession.estimatedContextUsed = composition.totalTokens
       this.markSessionWorking(sessionId)
       try {
         if (requestedSpec && !revisingSpec && !activeBrainstormSession) {
@@ -5454,7 +5573,10 @@ export class ChatEngine {
         checkpointId
       )
       const activeSession = this.sessionRegistry.get(sessionId)
-      if (activeSession) activeSession.activeTurnUserMessageId = messageId
+      if (activeSession) {
+        activeSession.activeTurnUserMessageId = messageId
+        activeSession.estimatedContextUsed = composition.totalTokens
+      }
       this.markSessionWorking(sessionId)
       // Chat threads (standalone Chats-tab conversations) behave like a plain
       // browser chatbot: no file-system tools, internet-first answers. File
@@ -5711,6 +5833,9 @@ export class ChatEngine {
       if (response.error) throw new Error(response.error)
       tokenUsageAttribution.recordTurnTotals({
         key: `eph:${temporary.sessionId}`,
+        agent: leanAgentNameForMode('ephemeral'),
+        driverId: temporary.driverId,
+        harnessVersion: currentHarnessVersion(),
         providerId: response.providerId ?? settings.providerId ?? null,
         modelId: response.modelId ?? settings.modelId ?? null,
         reportedInputTokens: response.normalizedUsage?.uncachedInput ?? null,
@@ -5731,8 +5856,9 @@ export class ChatEngine {
    * Like title generation, this sends only the caller's exact task prompt
    * instead of assembling durable thread context. Model and thinking settings
    * remain under the user's control.
-   * Session and process bookkeeping are torn down before the result crosses
-   * IPC, so virtual work cannot consume project thread capacity.
+   * Session and process bookkeeping are retired as soon as the result is ready.
+   * Provider deletion and process cleanup continue asynchronously so they do
+   * not delay the caller after the response has been captured.
    */
   async runVirtualTask(
     projectId: string,
@@ -5740,7 +5866,7 @@ export class ChatEngine {
     settings: ThreadSettings,
     title: string,
     text: string,
-    options: { utilityManagement?: boolean } = {}
+    options: VirtualTaskOptions = {}
   ): Promise<AgentMessage> {
     projectId = validateEntityId(projectId, 'Project ID')
     virtualTaskId = validateEntityId(virtualTaskId, 'Virtual task ID')
@@ -5758,7 +5884,8 @@ export class ChatEngine {
     const { driver, projectPath } = await this.resolve(projectId, driverId)
     assertHarnessRequestCapabilities(driver, [], settings.permissionLevel)
     const isolated =
-      driver instanceof OpenCodeDriver
+      driver instanceof OpenCodeDriver &&
+      (options.isolateOpenCode ?? options.utilityManagement === true)
         ? await driver.createIsolatedSession(projectPath, title)
         : undefined
     const sessionId = isolated?.sessionId ?? (await driver.createSession(projectPath, title))
@@ -5799,9 +5926,14 @@ export class ChatEngine {
         settings,
         text,
         attachments: [],
-        systemPrompt: utilityInstructions || undefined,
-        readOnly: false,
+        systemPrompt:
+          [options.systemPrompt, utilityInstructions].filter(Boolean).join('\n\n') || undefined,
+        readOnly: options.readOnly ?? false,
         agent: leanAgentNameForMode(options.utilityManagement ? 'utility-setup' : 'pr-compose'),
+        ...(options.allowedTools === undefined ? {} : { allowedTools: options.allowedTools }),
+        ...(options.structuredOutput === undefined || driver.capabilities.structuredOutput !== true
+          ? {}
+          : { structuredOutput: options.structuredOutput }),
         userMessageId: turnId
       }
       traceLeanAgent('pr-compose', sessionId, driverId)
@@ -5828,6 +5960,9 @@ export class ChatEngine {
       if (response.error) throw new Error(response.error)
       tokenUsageAttribution.recordTurnTotals({
         key: `pr:${sessionId}`,
+        agent: leanAgentNameForMode('pr-compose'),
+        driverId,
+        harnessVersion: currentHarnessVersion(),
         providerId: response.providerId ?? settings.providerId ?? null,
         modelId: response.modelId ?? settings.modelId ?? null,
         reportedInputTokens: response.normalizedUsage?.uncachedInput ?? null,
@@ -5843,16 +5978,18 @@ export class ChatEngine {
       throw error
     } finally {
       this.clearCompletionWaiter(sessionId)
-      await this.cleanupTurnUtilities(sessionId).catch(() => undefined)
       this.retireSessionState(sessionId)
-      await this.agentProcesses
-        .releaseThread(projectId, virtualTaskId)
-        .catch((error) => Logger.dev('Virtual task process cleanup was incomplete:', error))
-      if (isolated && driver instanceof OpenCodeDriver) {
-        driver.disposeIsolatedSession(isolated)
-      } else if (driver.deleteSession) {
-        await driver.deleteSession(projectPath, sessionId).catch(() => undefined)
-      }
+      void (async () => {
+        await this.cleanupTurnUtilities(sessionId).catch(() => undefined)
+        await this.agentProcesses
+          .releaseThread(projectId, virtualTaskId)
+          .catch((error) => Logger.dev('Virtual task process cleanup was incomplete:', error))
+        if (isolated && driver instanceof OpenCodeDriver) {
+          driver.disposeIsolatedSession(isolated)
+        } else if (driver.deleteSession) {
+          await driver.deleteSession(projectPath, sessionId).catch(() => undefined)
+        }
+      })().catch((error) => Logger.dev('Virtual task cleanup was incomplete:', error))
     }
   }
 
@@ -6758,6 +6895,9 @@ export class ChatEngine {
       if (response.error) throw new Error(response.error)
       tokenUsageAttribution.recordTurnTotals({
         key: `img:${sessionId}`,
+        agent: leanAgentNameForMode('image-description'),
+        driverId: selection.harnessId,
+        harnessVersion: currentHarnessVersion(),
         providerId: response.providerId ?? settings.providerId ?? null,
         modelId: response.modelId ?? settings.modelId ?? null,
         reportedInputTokens: response.normalizedUsage?.uncachedInput ?? null,
@@ -9662,6 +9802,26 @@ export class ChatEngine {
     if (options.announceProgress !== false) {
       await this.beginBrainstormConversationTurn(projectId, threadId, source)
     }
+    // Scoped-write route (P3-cp4): on opencode, supply the EXACT revision path
+    // so the `cio-brainstorm` agent persists the session-report revision itself
+    // through its path-scoped `edit` permission. The app still validates the
+    // returned content via the brainstorm_document contract and records the
+    // authoritative copy through BrainstormEngine.
+    const brainstormWriteRoute = brainstormDocumentWriteEnabled(driverId)
+    let revisionPathInstruction = ''
+    if (brainstormWriteRoute) {
+      const featureSlug = await ensureFeatureSlug(this.database, projectId, threadId)
+      const revisionRelativePath = join(
+        featureArtifactDirectory(featureSlug),
+        'versions',
+        `session-${Date.now()}-brainstorm.md`
+      ).replace(/\\/gu, '/')
+      revisionPathInstruction = [
+        '',
+        'Session-report revision path (write the report Markdown to EXACTLY this project-relative path, creating parent directories as needed):',
+        revisionRelativePath
+      ].join('\n')
+    }
     const finish = async (content: BrainstormContent): Promise<BrainstormContent> => {
       await this.completeBrainstormConversationTurn(projectId, threadId, content, settings)
       return content
@@ -9729,6 +9889,12 @@ export class ChatEngine {
         ]
           .filter(Boolean)
           .join('\n\n')
+        // Scoped-write route (P3-cp4): on opencode the `cio-brainstorm` agent
+        // permission scopes `edit` to `.cio/specs/*/versions/**`, so the
+        // session-report revision persists through the agent's own write while
+        // the app still validates via the brainstorm_document contract. Every
+        // other harness keeps the read-only sandbox.
+        const brainstormWriteRoute = brainstormDocumentWriteEnabled(driverId)
         const prompt: SendPromptOptions = {
           sessionId,
           settings: {
@@ -9738,13 +9904,19 @@ export class ChatEngine {
             assignmentMode: false,
             loopMode: false
           },
-          text: [source, repairError ? this.brainstormRepairInstruction(repairError) : '']
+          text: [
+            source,
+            revisionPathInstruction,
+            repairError ? this.brainstormRepairInstruction(repairError) : ''
+          ]
             .filter(Boolean)
             .join('\n\n'),
           attachments: [],
           systemPrompt: brainstormSystemPrompt,
-          allowedTools: BRAINSTORM_RESEARCH_ALLOWED_TOOLS,
-          readOnly: true,
+          allowedTools: brainstormWriteRoute
+            ? BRAINSTORM_DOCUMENT_WRITE_TOOLS
+            : BRAINSTORM_RESEARCH_ALLOWED_TOOLS,
+          readOnly: !brainstormWriteRoute,
           agent: leanAgentNameForMode('brainstorm'),
           ...(useStructuredOutput
             ? {
@@ -9785,6 +9957,9 @@ export class ChatEngine {
         if (response.error) throw new Error(response.error)
         tokenUsageAttribution.recordTurnTotals({
           key: `brainstorm:${sessionId}`,
+          agent: leanAgentNameForMode('brainstorm'),
+          driverId,
+          harnessVersion: currentHarnessVersion(),
           providerId: response.providerId ?? settings.providerId ?? null,
           modelId: response.modelId ?? settings.modelId ?? null,
           reportedInputTokens: response.normalizedUsage?.uncachedInput ?? null,
@@ -10527,22 +10702,10 @@ export class ChatEngine {
       (coordinator.scopeBucketId?.startsWith('achievement-')
         ? coordinator.scopeBucketId
         : `achievement-${coordinatorThreadId}`)
-    const board = this.scopeManager.getBoard(projectId)
-    if (!board.buckets.some((bucket) => bucket.id === scopeBucketId)) {
-      this.scopeManager.saveBoard(projectId, {
-        ...board,
-        buckets: [
-          ...board.buckets,
-          {
-            id: scopeBucketId,
-            name: assignment?.content.title ?? `Achievement: ${coordinator.title}`,
-            sortOrder: board.buckets.length,
-            collapsed: false,
-            collapsedSlices: []
-          }
-        ]
-      })
-    }
+    this.scopeManager.ensureBucket(projectId, {
+      id: scopeBucketId,
+      name: assignment?.content.title ?? `Achievement: ${coordinator.title}`
+    })
     await this.threadManager.updateThread(projectId, coordinatorThreadId, {
       achievementRole: 'coordinator',
       scopeBucketId
@@ -12252,13 +12415,15 @@ export class ChatEngine {
         if (!thread.settings || !thread.sessionId) continue
         const current = this.sessionStatuses.get(thread.sessionId)
         if (current?.state === 'working' || current?.state === 'waiting') continue
+        const activeSpec = await this.getActiveSpec(thread.projectId, thread.id)
+        const resumesSpecContract = activeSpec?.status === 'approved' && !thread.auditState
         await this.sendPrompt(
           thread.projectId,
           thread.id,
           validateThreadSettings(thread.settings),
-          'Continue',
+          resumesSpecContract ? SPEC_CONTRACT_CONTINUATION_PROMPT : 'Continue',
           [],
-          undefined,
+          resumesSpecContract ? 'implement' : undefined,
           createMessageId(),
           undefined,
           undefined,
@@ -12273,6 +12438,35 @@ export class ChatEngine {
           error: rawErrorMessage(error)
         })
       }
+    }
+  }
+
+  /** Repair specifications persisted before their ready lifecycle finished. */
+  private async recoverReadyInitialSpecs(): Promise<void> {
+    try {
+      const threads = await this.threadManager.listAllThreads()
+      await Promise.all(
+        threads
+          .filter(
+            (thread) =>
+              thread.settings?.engineeringMode === true &&
+              (thread.status === 'planning' || thread.status === 'failed')
+          )
+          .map((thread) =>
+            this.runPendingInitialSpec(thread.projectId, thread.id).catch((error) => {
+              Logger.error('Ready specification thread recovery failed', {
+                projectId: thread.projectId,
+                threadId: thread.id,
+                error: rawErrorMessage(error)
+              })
+              return null
+            })
+          )
+      )
+    } catch (error) {
+      Logger.error('Ready specification recovery failed', {
+        error: rawErrorMessage(error)
+      })
     }
   }
 
@@ -12846,7 +13040,17 @@ export class ChatEngine {
     const operationKey = this.initialSpecKey(projectId, threadId)
     const active = await this.getActiveSpec(projectId, threadId)
     if (active) {
-      await this.clearPendingInitialSpec(projectId, threadId)
+      const pending = await this.readPendingInitialSpec(projectId, threadId)
+      if (pending) return this.finalizeInitialSpec(active, pending)
+      const thread = await this.threadManager.getThread(projectId, threadId)
+      if (
+        thread &&
+        active.status !== 'approved' &&
+        !(thread.dismissedSpecId === active.id && thread.dismissedSpecVersion === active.version) &&
+        (thread.status === 'planning' || thread.status === 'failed')
+      ) {
+        await this.publishInitialSpecReady(active, thread.sessionId)
+      }
       return active
     }
 
@@ -13198,45 +13402,89 @@ export class ChatEngine {
     spec: EngineeringSpec,
     pending: PendingInitialSpecGeneration
   ): Promise<EngineeringSpec> {
-    await this.clearPendingInitialSpec(pending.projectId, pending.threadId)
     if (pending.settings.assignmentMode === true) {
       if (!spec.content.assignment) {
-        throw new Error('Assignment mode requires a generated Assignment graph.')
+        Logger.error('Ready specification is missing its generated Assignment graph', {
+          projectId: pending.projectId,
+          threadId: pending.threadId,
+          specId: spec.id,
+          specVersion: spec.version
+        })
       }
       const existingAssignment = this.assignmentEngine.getActive(
         pending.projectId,
         pending.threadId
       )
-      if (!existingAssignment) {
-        await this.assignmentEngine.createDraft({
-          projectId: pending.projectId,
-          coordinatorThreadId: pending.threadId,
-          specId: spec.id,
-          specVersion: spec.version,
-          content: spec.content.assignment,
-          provenance: {
-            source: 'agent',
-            actor: 'Sr. Engineer',
-            harnessId: pending.settings.harnessId,
-            providerId: pending.settings.providerId,
-            modelId: pending.settings.modelId
-          }
-        })
+      if (!existingAssignment && spec.content.assignment) {
+        try {
+          await this.assignmentEngine.createDraft({
+            projectId: pending.projectId,
+            coordinatorThreadId: pending.threadId,
+            specId: spec.id,
+            specVersion: spec.version,
+            content: spec.content.assignment,
+            provenance: {
+              source: 'agent',
+              actor: 'Sr. Engineer',
+              harnessId: pending.settings.harnessId,
+              providerId: pending.settings.providerId,
+              modelId: pending.settings.modelId
+            }
+          })
+        } catch (error) {
+          Logger.error('Ready specification Assignment creation failed', {
+            projectId: pending.projectId,
+            threadId: pending.threadId,
+            specId: spec.id,
+            specVersion: spec.version,
+            error: rawErrorMessage(error)
+          })
+        }
       }
     }
-    const thread = await this.threadManager.getThread(pending.projectId, pending.threadId)
-    await this.threadManager.setStatus(pending.projectId, pending.threadId, 'spec', {
-      read: false
-    })
+    await this.publishInitialSpecReady(spec, pending.sessionId)
+    try {
+      await this.clearPendingInitialSpec(pending.projectId, pending.threadId)
+    } catch (error) {
+      Logger.error('Ready specification generation cleanup failed', {
+        projectId: pending.projectId,
+        threadId: pending.threadId,
+        specId: spec.id,
+        specVersion: spec.version,
+        error: rawErrorMessage(error)
+      })
+    }
+    return spec
+  }
+
+  private async publishInitialSpecReady(
+    spec: EngineeringSpec,
+    fallbackSessionId?: string
+  ): Promise<void> {
+    const thread = await this.threadManager.getThread(spec.projectId, spec.threadId)
+    try {
+      await this.threadManager.setStatus(spec.projectId, spec.threadId, 'spec', {
+        read: false
+      })
+    } catch (error) {
+      Logger.error('Ready specification thread status update failed', {
+        projectId: spec.projectId,
+        threadId: spec.threadId,
+        specId: spec.id,
+        specVersion: spec.version,
+        error: rawErrorMessage(error)
+      })
+    }
+    const sessionId = thread?.sessionId ?? fallbackSessionId ?? `spec-${spec.id}`
+    this.sessionStatuses.set(sessionId, { state: 'idle' })
     this.broadcast({
       type: 'spec.ready',
-      sessionId: thread?.sessionId ?? pending.sessionId,
-      projectId: pending.projectId,
-      threadId: pending.threadId,
+      sessionId,
+      projectId: spec.projectId,
+      threadId: spec.threadId,
       specId: spec.id,
       version: spec.version
     })
-    return spec
   }
 
   /** Execute a harness slash command in the thread's session. */
@@ -13511,6 +13759,17 @@ export class ChatEngine {
     const projectPath = await this.resolveProjectPath(projectId)
     const thread = await this.threadManager.getThread(projectId, threadId)
     if (!thread) throw new Error(`Thread not found: ${threadId}`)
+
+    // The scope resolver is authoritative for threads in a scope; a stale
+    // persisted directory never wins, and unhealthy managed scopes fail
+    // closed instead of silently operating on the project root.
+    if (this.scopeRoots && thread.scopeBucketId) {
+      const resolved = await this.scopeRoots.resolveCompatibilityRoot(
+        projectId,
+        thread.scopeBucketId
+      )
+      if (resolved) return resolved
+    }
 
     const workingDirectory = thread.workingDirectory.trim()
     if (!workingDirectory) return projectPath
@@ -13892,6 +14151,27 @@ export class ChatEngine {
       this.releasedProjects.delete(eventOwner.projectId)
       this.forwardBrainstormTrace(eventOwner, event)
       this.forwardInitialSpecTrace(eventOwner, event)
+    }
+    if (eventOwner && (event.type === 'message.completed' || event.type === 'usage.updated')) {
+      const selection = this.sessionModelIds.get(event.sessionId)
+      if (event.contextWindow === undefined && selection) {
+        const contextWindow = this.modelContextWindow(
+          eventOwner.projectId,
+          selection.providerId,
+          selection.modelId
+        )
+        if (contextWindow !== undefined) event.contextWindow = contextWindow
+      }
+      if (
+        event.type === 'message.completed' &&
+        !event.compaction &&
+        event.contextUsed === undefined &&
+        this.drivers.get(eventOwner.driverId)?.capabilities.contextUsage === false &&
+        eventOwner.estimatedContextUsed !== undefined
+      ) {
+        event.contextUsed = eventOwner.estimatedContextUsed
+        event.contextEstimated = true
+      }
     }
     const streamedMessageId =
       event.type === 'message.part.updated'
@@ -15167,12 +15447,29 @@ export class ChatEngine {
         [...this.pendingPermissions.values()].some(
           (pending) => pending.request.sessionId === sessionId
         )
+      const engineeringContractActive = this.engineeringImplementationSessions.has(sessionId)
+      const contractResponse = turnAssistant ? assistantText(turnAssistant).trim() : ''
+      const contractBlocked =
+        engineeringContractActive &&
+        hasTerminalSpecContractMarker(contractResponse, SPEC_CONTRACT_BLOCKED_MARKER)
+      const contractCompleted =
+        engineeringContractActive &&
+        hasTerminalSpecContractMarker(contractResponse, SPEC_CONTRACT_COMPLETE_MARKER) &&
+        !assistantAdmitsIncompleteSpec(contractResponse)
+      if (contractCompleted) this.engineeringImplementationSessions.delete(sessionId)
       const missingFinalResponse =
         !failure &&
         !awaitingUser &&
         !suppressTerminalAnswer &&
         (!turnAssistant ||
           (!assistantText(turnAssistant).trim() && turnAssistant.structuredOutput === undefined))
+      const contractContinuationRequired =
+        engineeringContractActive &&
+        !failure &&
+        !awaitingUser &&
+        !missingFinalResponse &&
+        !contractBlocked &&
+        !contractCompleted
       if (!missingFinalResponse) {
         this.incompleteTurnRecoveryAttempts.delete(sessionId)
       } else if (
@@ -15212,7 +15509,14 @@ export class ChatEngine {
         this.recordMessageUsageEvent(info.threadId, thread, parentTurnId, turnAssistant, failure)
         this.recordToolUsageEvents(info.threadId, parentTurnId, turnAssistant)
       }
-      if (parentTurnId && turnAssistant && !failure && !turnAssistant.error) {
+      if (
+        parentTurnId &&
+        turnAssistant &&
+        !failure &&
+        !turnAssistant.error &&
+        !contractContinuationRequired &&
+        !contractBlocked
+      ) {
         await this.openTurnOutcome(
           sessionId,
           thread,
@@ -15282,7 +15586,39 @@ export class ChatEngine {
             thread.settings,
             INCOMPLETE_TURN_CONTINUATION_PROMPT,
             [],
+            engineeringContractActive ? 'implement' : undefined,
             undefined,
+            undefined,
+            undefined,
+            undefined,
+            'internal'
+          )
+        } catch (error) {
+          this.pendingMemoryDecisions.delete(sessionId)
+          const issue = this.fallbackProviderIssue(info.driverId, rawErrorMessage(error))
+          await this.threadManager.setStatus(info.projectId, info.threadId, 'failed')
+          await this.broadcastThreadSessionError(info.projectId, info.threadId, sessionId, issue)
+        }
+        return
+      }
+      if (contractContinuationRequired && thread?.settings) {
+        await this.finishCheckpoint(
+          sessionId,
+          info,
+          'interrupted',
+          'The approved specification contract is incomplete; continuing implementation.'
+        )
+        await this.cleanupTurnUtilities(sessionId)
+        turnUtilitiesCleaned = true
+        if (pendingMemory) this.pendingMemoryDecisions.set(sessionId, pendingMemory)
+        try {
+          await this.sendPrompt(
+            info.projectId,
+            info.threadId,
+            thread.settings,
+            SPEC_CONTRACT_CONTINUATION_PROMPT,
+            [],
+            'implement',
             undefined,
             undefined,
             undefined,
@@ -15351,17 +15687,18 @@ export class ChatEngine {
       // otherwise claim success, keep it failed so a terminal "done"
       // notification can never shadow the real error.
       const threadBeforeFinalize = await this.threadManager.getThread(info.projectId, info.threadId)
-      const finalStatus = userAborted
-        ? 'interrupted'
-        : failure
-          ? 'failed'
-          : revisedSpec || revisedBrainstorm
-            ? 'spec'
-            : awaitingUser
-              ? 'awaiting_approval'
-              : threadBeforeFinalize?.status === 'failed'
-                ? 'failed'
-                : 'completed'
+      const finalStatus =
+        userAborted || contractBlocked
+          ? 'interrupted'
+          : failure
+            ? 'failed'
+            : revisedSpec || revisedBrainstorm
+              ? 'spec'
+              : awaitingUser
+                ? 'awaiting_approval'
+                : threadBeforeFinalize?.status === 'failed'
+                  ? 'failed'
+                  : 'completed'
       await this.threadManager.setStatus(info.projectId, info.threadId, finalStatus, {
         read: userAborted
       })
@@ -15374,7 +15711,7 @@ export class ChatEngine {
         )
       }
       const finishedThread = await this.threadManager.getThread(info.projectId, info.threadId)
-      if (!failure && !awaitingUser && finishedThread) {
+      if (!failure && !awaitingUser && !contractBlocked && finishedThread) {
         try {
           await this.notifyCoordinatorOfAssignmentAuditFeedback(finishedThread, lastAssistant)
         } catch (error) {
@@ -15400,7 +15737,7 @@ export class ChatEngine {
           }
         }
       }
-      if (!failure) {
+      if (!failure && !contractBlocked) {
         let assignment = this.assignmentEngine.getActive(info.projectId, info.threadId)
         const coordinatorSettings = finishedThread?.settings
         if (assignment && ['approved', 'running', 'attention'].includes(assignment.status)) {
@@ -15430,18 +15767,18 @@ export class ChatEngine {
         await this.finishCheckpoint(
           sessionId,
           info,
-          userAborted ? 'interrupted' : failure ? 'failed' : 'completed',
-          failure
+          userAborted || contractBlocked ? 'interrupted' : failure ? 'failed' : 'completed',
+          contractBlocked ? 'The specification contract requires user intervention.' : failure
         )
       }
-      if (!failure && !awaitingUser && !revisedSpec && !revisedBrainstorm) {
+      if (!failure && !awaitingUser && !contractBlocked && !revisedSpec && !revisedBrainstorm) {
         try {
           await this.runPendingInitialSpec(info.projectId, info.threadId)
         } catch (error) {
           Logger.error('Initial specification generation failed:', error)
         }
       }
-      if (!failure && !awaitingUser && !revisedSpec && !revisedBrainstorm) {
+      if (!failure && !awaitingUser && !contractBlocked && !revisedSpec && !revisedBrainstorm) {
         const [thread, activeSpec] = await Promise.all([
           this.threadManager.getThread(info.projectId, info.threadId),
           this.getActiveSpec(info.projectId, info.threadId)
@@ -15460,7 +15797,7 @@ export class ChatEngine {
           }
         }
       }
-      if (!failure && turnAssistant) {
+      if (!failure && !contractBlocked && turnAssistant) {
         assistantResponse = assistantMemoryDecisionContext(turnAssistant)
       }
     } catch (error) {
@@ -15471,6 +15808,7 @@ export class ChatEngine {
       await this.broadcastThreadSessionError(info.projectId, info.threadId, sessionId, issue)
     } finally {
       info.activeTurnUserMessageId = undefined
+      info.estimatedContextUsed = undefined
       if (!turnUtilitiesCleaned) await this.cleanupTurnUtilities(sessionId)
       // The abort marker only needs to survive until the session's idle
       // finalization has run; after that the session is on a fresh turn.
@@ -15578,6 +15916,9 @@ export class ChatEngine {
     const normalizedUsage = message.normalizedUsage
     tokenUsageAttribution.recordTurnTotals({
       key: parentTurnId,
+      agent: null,
+      driverId: message.harnessId ?? thread?.settings?.harnessId ?? null,
+      harnessVersion: currentHarnessVersion(),
       providerId: message.providerId ?? thread?.settings?.providerId ?? null,
       modelId: message.modelId ?? thread?.settings?.modelId ?? null,
       reportedInputTokens: normalizedUsage?.uncachedInput ?? null,
@@ -16208,9 +16549,11 @@ export class ChatEngine {
         info.projectPath,
         status,
         failure,
-        // An empty set is a real answer — the agent touched nothing this turn —
-        // so it is passed through instead of falling back to the unfiltered diff.
-        info.changeFilterReliable !== false ? (info.changedPaths ?? new Set()) : undefined,
+        // Only apply a path filter when a mutating tool or bounded shell window
+        // actually produced one. No observed mutation event is not proof that
+        // the harness touched nothing: some providers omit or rename those
+        // events, so the authoritative before/after snapshot must remain visible.
+        info.changeFilterReliable !== false ? info.changedPaths : undefined,
         {
           precisePaths: new Set(info.preciseChangedPaths?.keys() ?? []),
           foreignClaimedPaths: this.liveForeignClaimedPaths(info)
@@ -16284,7 +16627,8 @@ export class ChatEngine {
       driverId: existing?.driverId ?? driverId,
       activeTurnId: activeTurnId ?? existing?.activeTurnId,
       activeTurnUserMessageId: existing?.activeTurnUserMessageId,
-      changedPaths: activeTurnId ? new Set() : existing?.changedPaths,
+      estimatedContextUsed: activeTurnId ? undefined : existing?.estimatedContextUsed,
+      changedPaths: activeTurnId ? undefined : existing?.changedPaths,
       preciseChangedPaths: activeTurnId ? new Map() : existing?.preciseChangedPaths,
       changeFilterReliable: activeTurnId ? true : existing?.changeFilterReliable,
       openUnboundedTools: activeTurnId ? new Set() : existing?.openUnboundedTools,
@@ -16542,6 +16886,7 @@ export class ChatEngine {
     // `generateMemoryProposal` (each structured/fallback attempt).
     const extraction = await this.memoryService.evaluateMemoryExtraction({
       userMessage: composeMemoryUserInput(userMessage, references),
+      candidateUserMessage: composeMemoryCandidateInput(userMessage, references),
       assistantResponse,
       projectId,
       threadId
@@ -16675,6 +17020,7 @@ export class ChatEngine {
             'A request to implement, edit, fix, review, investigate, or choose something for the current task is not memory, even when it names a project, repository, feature, file, platform, or preferred implementation.',
             'Concrete artifact instructions such as "use the icon we created for this shortcut instead of a generic icon" are current-task requirements and must return propose false.',
             'Set propose to true only when the message establishes information expected to govern future turns after the current task is complete: a recurring standing preference, reusable project rule, identity fact, or lasting behavioral instruction.',
+            'Treat user-authored comments on referenced responses as primary evidence. A comment that addresses the current model or harness and uses recurring language such as always, never, or "I do not like this" to prescribe future response behavior is durable model memory, even though the referenced response came from the current task.',
             'A complaint or correction can still be durable when it includes an explicit recurring rule, for example "I have told you before: never use outlines." Do not reject a durable rule merely because the user is frustrated.',
             'Scope words such as global, project, thread, chat, repository, or codebase never make a one-off request durable. If durability is ambiguous, set propose to false.',
             'When propose is false, return empty title and content strings. When true, preserve the user intent exactly without inventing details.',
@@ -17259,6 +17605,24 @@ function assistantText(message: AgentMessage): string {
     .join('\n')
 }
 
+function hasTerminalSpecContractMarker(text: string, marker: string): boolean {
+  return text.trimEnd().split(/\r?\n/u).at(-1)?.trim() === marker
+}
+
+function assistantAdmitsIncompleteSpec(text: string): boolean {
+  const admissions = text.replace(
+    /\b(?:no|nothing)\b[^.!?\n]{0,120}\bremain(?:s|ing)?\b[^.!?\n]*/giu,
+    ''
+  )
+  return [
+    /\b(?:work|tasks?|phases?|requirements?|criteria|items?|implementation)\s+(?:still\s+)?remain(?:s)?\b/iu,
+    /\bremain(?:s|ing)?\s+(?:unfinished|incomplete|outstanding|unimplemented|on\s+legacy)\b/iu,
+    /\b(?:is|are)\s+(?:still\s+)?(?:unfinished|incomplete|outstanding|unimplemented)\b/iu,
+    /\bnot\s+(?:fully\s+)?(?:done|complete|completed|implemented|finished)\b/iu,
+    /\b(?:partial|partially)\s+(?:implementation|implemented|complete)\b/iu
+  ].some((pattern) => pattern.test(admissions))
+}
+
 function mermaidValidationFailureMessage(failures: MermaidValidationFailure[]): string {
   const diagnostics = failures
     .map((failure) => `diagram ${failure.block}: ${failure.detail}`)
@@ -17330,13 +17694,28 @@ function assistantMemoryDecisionContext(message: AgentMessage): string {
  */
 function composeMemoryUserInput(userMessage: string, references: PromptReference[]): string {
   if (references.length === 0) return userMessage
-  const selections = references
-    .map((reference, index) => {
-      const comment = reference.comment ? `\nUser comment: ${reference.comment}` : ''
-      return `<selection ${index + 1}>\n${reference.text}${comment}\n</selection>`
-    })
+  const userComments = references
+    .map((reference, index) =>
+      reference.comment ? `Selection ${index + 1} comment:\n${reference.comment}` : ''
+    )
+    .filter(Boolean)
     .join('\n\n')
-  return `Referenced response selections:\n${selections}\n\nUser message:\n${userMessage}`
+  const selections = references
+    .map((reference, index) => `<selection ${index + 1}>\n${reference.text}\n</selection>`)
+    .join('\n\n')
+  return [
+    `User message:\n${userMessage}`,
+    userComments ? `User-authored selection comments:\n${userComments}` : '',
+    `Referenced assistant response selections (context only):\n${selections}`
+  ]
+    .filter(Boolean)
+    .join('\n\n')
+}
+
+/** Keep deterministic gating limited to user-authored text, never selected assistant prose. */
+function composeMemoryCandidateInput(userMessage: string, references: PromptReference[]): string {
+  const comments = references.map((reference) => reference.comment?.trim() ?? '').filter(Boolean)
+  return [userMessage.trim(), ...comments].filter(Boolean).join('\n\n')
 }
 
 function parseStructuredMemoryProposal(

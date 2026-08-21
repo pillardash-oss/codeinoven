@@ -1,4 +1,3 @@
-import { execFile, spawn } from 'child_process'
 import { createHash } from 'crypto'
 import { mkdir, readFile, readdir, rm, unlink, writeFile } from 'fs/promises'
 import { homedir } from 'os'
@@ -30,7 +29,8 @@ import type {
 } from './driver.interface'
 import { PermissionPolicy, type PermissionRequest } from '../permissions/permission-policy'
 import { Logger } from '../system/logger'
-import { buildHarnessEnvironment } from './cli-environment'
+import { buildProcessEnvironment } from './cli-environment'
+import { resolveHarnessRuntime, runHarnessCommand } from './harness-runtime'
 import { attachmentReferences } from './attachment-reference'
 import type { BaseUrlProviderService } from '../providers/base-url-provider-service'
 import type { SecretVault } from '../storage/secret-vault'
@@ -328,7 +328,7 @@ let clineAvailabilityCache: { checkedAt: number; available: boolean } | null = n
  * remote model catalog costs a network round-trip for every provider-catalog
  * refresh, so it is pointless when Cline is not installed — gate on the binary
  * instead and fall back to the static catalog. The probe result is cached for
- * a short window so rapid refreshes don't respawn `which`.
+ * a short window so rapid refreshes do not repeat filesystem resolution.
  */
 async function isClineAvailable(): Promise<boolean> {
   if (
@@ -337,12 +337,7 @@ async function isClineAvailable(): Promise<boolean> {
   ) {
     return clineAvailabilityCache.available
   }
-  const probe = process.platform === 'win32' ? 'where' : 'which'
-  const available = await new Promise<boolean>((resolve) => {
-    execFile(probe, ['cline'], { env: buildHarnessEnvironment(), timeout: 5_000 }, (error) => {
-      resolve(!error)
-    })
-  })
+  const available = (await resolveHarnessRuntime('cline')) !== null
   clineAvailabilityCache = { checkedAt: Date.now(), available }
   return available
 }
@@ -852,7 +847,7 @@ export class ClineDriver extends PersistentCliDriver {
   readonly capabilities: HarnessCapabilities = {
     runtimeTopology: { kind: 'turn_process', scope: 'session' },
     streaming: true,
-    steering: false,
+    steering: true,
     nativeResume: true,
     messageHistory: 'mirrored',
     interactivePermissions: false,
@@ -890,24 +885,10 @@ export class ClineDriver extends PersistentCliDriver {
   }
 
   protected async ensureCliReady(projectPath: string): Promise<void> {
-    await new Promise<void>((resolve, reject) => {
-      const child = spawn('cline', ['--version'], {
-        cwd: projectPath,
-        env: buildHarnessEnvironment(),
-        stdio: ['ignore', 'ignore', 'pipe']
-      })
-      let stderr = ''
-      child.stderr?.on('data', (chunk: Buffer) => {
-        stderr += chunk.toString()
-      })
-      child.on('error', (error) => reject(new Error(`Cline CLI is unavailable: ${error.message}`)))
-      child.on('exit', (code) => {
-        if (code === 0) {
-          resolve()
-        } else {
-          reject(new Error(`Cline CLI version probe failed${stderr ? `: ${stderr.trim()}` : ''}`))
-        }
-      })
+    await runHarnessCommand('cline', ['--version'], {
+      cwd: projectPath,
+      env: buildProcessEnvironment(),
+      timeoutMs: 10_000
     })
   }
 
@@ -1104,7 +1085,7 @@ export class ClineDriver extends PersistentCliDriver {
     const prompt = /\s/u.test(promptBody) ? promptBody : `${promptBody}\n`
     args.push(prompt)
 
-    const env = buildHarnessEnvironment()
+    const env = buildProcessEnvironment()
     if (customProvider) {
       await this.seedCustomProvider(customProvider, modelId, session, env)
     }
@@ -1142,7 +1123,14 @@ export class ClineDriver extends PersistentCliDriver {
     const handled = new Set<string>()
     const pending = new Map<string, Promise<void>>()
     const sweep = (): void => {
-      void this.sweepApprovalRequests(directory, projectPath, policy, mode === 'read_only', handled, pending)
+      void this.sweepApprovalRequests(
+        directory,
+        projectPath,
+        policy,
+        mode === 'read_only',
+        handled,
+        pending
+      )
     }
     const timer = setInterval(sweep, 250)
     timer.unref()

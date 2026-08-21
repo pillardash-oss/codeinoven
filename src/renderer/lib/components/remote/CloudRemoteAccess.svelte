@@ -460,28 +460,36 @@
       // A new pairing must prove the complete internet path first. LAN is only
       // eligible for later reconnects, after cloud grant delivery and relay
       // device authentication have both completed successfully.
-      let lanTarget
-      if (!claimedMobileDeviceId && connection.lanEndpoint) {
-        const lanUrl = new URL(connection.lanEndpoint)
-        lanTarget = {
-          host: lanUrl.hostname,
-          port: Number(lanUrl.port) || 443,
-          scheme: 'wss' as const
-        }
-      }
+      const lanTargets = !claimedMobileDeviceId
+        ? connection.lanEndpoints.flatMap((endpoint) => {
+            try {
+              const lanUrl = new URL(endpoint)
+              return [
+                {
+                  host: lanUrl.hostname,
+                  port: Number(lanUrl.port) || 443,
+                  scheme: 'wss' as const
+                }
+              ]
+            } catch {
+              return []
+            }
+          })
+        : []
       await connectSessionUntilReady(
         {
           desktopId,
           mobileDeviceId: connection.mobileDeviceId,
           controlSecret: connection.controlSecret,
           relayPath: connection.relayPath,
-          lanTarget
+          lanTargets
         },
         controller.signal
       )
       connectedDesktopId = desktopId
       pendingEnrollment = null
       savePreferredDesktop(desktopId)
+      onOpenWorkspace()
       try {
         desktops = await listCloudDesktops()
       } catch {

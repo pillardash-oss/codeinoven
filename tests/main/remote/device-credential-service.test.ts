@@ -88,7 +88,10 @@ describe('Remote channel authorization registry', () => {
     expect(DEFAULT_DEVICE_SCOPES).toContain('workspace.delete')
     expect(authorizationForChannel('thread:delete')?.stepUp).toBe('none')
     expect(authorizationForChannel('git:push')?.scope).toBe('git.write')
-    expect(authorizationForChannel('git:push')?.stepUp).toBe('always')
+    // Git mutations ride the device's git.write scope without step-up: a
+    // desktop-local approval can never complete for a remote request.
+    expect(DEFAULT_DEVICE_SCOPES).toContain('git.write')
+    expect(authorizationForChannel('git:push')?.stepUp).toBe('none')
     expect(authorizationForChannel('checkpoint:rollbackPaths')?.scope).toBe('rollback')
   })
 })
@@ -602,10 +605,11 @@ describe('RemoteRpcDispatcher — capability-aware authorization', () => {
 
   it('denies a channel outside the device scopes', async () => {
     const { dispatcher, device } = await buildContext()
+    // command.run is deliberately not part of the default device profile.
     const outcome = await dispatcher.dispatch({
       id: 2,
-      channel: 'git:push',
-      args: ['project-1'],
+      channel: 'agent:runCommand',
+      args: ['project-1', 'thread-1', 'cmd-1', ''],
       device
     })
     expect(outcome.ok).toBe(false)
@@ -668,14 +672,19 @@ describe('RemoteRpcDispatcher — capability-aware authorization', () => {
 
   it('records audit events identifying the device, capability, and decision', async () => {
     const { dispatcher, device } = await buildContext()
-    await dispatcher.dispatch({ id: 3, channel: 'git:push', args: ['project-1'], device })
+    await dispatcher.dispatch({
+      id: 3,
+      channel: 'agent:runCommand',
+      args: ['project-1', 'thread-1', 'cmd-1', ''],
+      device
+    })
     await dispatcher.dispatch({ id: 4, channel: 'project:list', args: [], device })
     const events = dispatcher.listAuditEvents(50)
     const denied = events.find((event) => event.decision === 'rpc_denied')
     expect(denied).toBeDefined()
     expect(denied?.deviceId).toBe(device.deviceId)
-    expect(denied?.channel).toBe('git:push')
-    expect(denied?.requiredScope).toBe('git.write')
+    expect(denied?.channel).toBe('agent:runCommand')
+    expect(denied?.requiredScope).toBe('command.run')
     const allowed = events.find((event) => event.decision === 'rpc_allowed')
     expect(allowed).toBeDefined()
     expect(allowed?.deviceId).toBe(device.deviceId)

@@ -1,8 +1,19 @@
-import { stat, open, access, readFile, writeFile, rename, mkdir, rm, unlink } from 'fs/promises'
+import {
+  stat,
+  lstat,
+  open,
+  access,
+  readFile,
+  writeFile,
+  rename,
+  mkdir,
+  rm,
+  unlink
+} from 'fs/promises'
 import { resolve, relative, isAbsolute, sep, dirname } from 'path'
 import { createHash } from 'node:crypto'
 import { simpleGit } from 'simple-git'
-import type { LogOptions, SimpleGit, StatusResult } from 'simple-git'
+import type { DefaultLogFields, LogOptions, SimpleGit, StatusResult } from 'simple-git'
 import type {
   GitBranchInfo,
   GitCommitInfo,
@@ -14,13 +25,15 @@ import type {
   GitFileChange,
   GitFileStatus,
   GitIdentity,
+  GitPullStrategy,
   GitRemoteInfo,
   GitResetMode,
   GitStashEntry,
   GitStatus,
   GitSyncSummary,
   MergeSummary,
-  PullRequestCompare
+  PullRequestCompare,
+  PrComposeInput
 } from '../../lib/types'
 import { Logger } from '../system/logger'
 
@@ -29,6 +42,35 @@ const MAX_DIFF_BYTES = 500 * 1024
 
 /** Number of commits returned by `git log` by default. */
 const DEFAULT_LOG_LIMIT = 50
+
+const PR_COMPOSE_UNTRACKED_BYTES = 24 * 1024
+const PR_COMPOSE_UNTRACKED_FILES = 24
+const PR_COMPOSE_READ_BATCH = 4
+
+export interface PullRequestComposeContext {
+  source: PrComposeInput['source']
+  baseRef: string
+  headRef: string
+  commits: string
+  diffSummary: string
+  patch: string
+  pendingPushBaseRef: string | null
+  pendingCommits: string
+  pendingDiffSummary: string
+  pendingPatch: string
+  worktreePatch: string
+  untrackedFiles: string
+  truncated: boolean
+}
+
+function boundedUtf8(value: string, maximumBytes: number): { text: string; truncated: boolean } {
+  const content = Buffer.from(value, 'utf-8')
+  if (content.byteLength <= maximumBytes) return { text: value, truncated: false }
+  return {
+    text: content.subarray(0, maximumBytes).toString('utf-8'),
+    truncated: true
+  }
+}
 
 /** Kind of git command for error classification. */
 type CommandKind = 'read' | 'mutation'
@@ -497,18 +539,19 @@ export class GitService {
       const directory = await this.repo(projectPath)
       return this.wrapError(projectPath, 'read', async () => {
         const git = this.client(directory)
-        const local = await git.branchLocal()
-        const tracking = await this.branchTracking(git)
-        return Object.values(local.branches).map((branch): GitBranchInfo => {
-          const track = tracking.get(branch.name)
-          return {
-            name: branch.name,
-            current: branch.current,
-            remote: track?.remote ?? null,
-            ahead: track?.ahead ?? 0,
-            behind: track?.behind ?? 0
-          }
-        })
+        const [output, remotes] = await Promise.all([
+          git.raw([
+            'for-each-ref',
+            '--format=%(refname)%09%(refname:short)%09%(HEAD)%09%(upstream:short)%09%(upstream:remotename)%09%(upstream:track)%09%(symref)',
+            'refs/heads',
+            'refs/remotes'
+          ]),
+          git.getRemotes()
+        ])
+        return this.parseBranchRefs(
+          Array.isArray(output) ? output.join('\n') : output,
+          remotes.map(({ name }) => name)
+        )
       })
     })
   }
@@ -533,6 +576,27 @@ export class GitService {
     })
   }
 
+  async createTrackingBranch(
+    projectPath: string,
+    remote: string,
+    branch: string,
+    localName: string
+  ): Promise<GitStatus> {
+    return this.enqueue(projectPath, async () => {
+      const directory = await this.repo(projectPath)
+      await this.wrapError(projectPath, 'mutation', async () => {
+        await this.client(directory).raw([
+          'checkout',
+          '--track',
+          '-b',
+          localName,
+          `${remote}/${branch}`
+        ])
+      })
+      return this.readStatus(directory)
+    })
+  }
+
   async deleteBranch(projectPath: string, name: string, force = false): Promise<GitStatus> {
     return this.enqueue(projectPath, async () => {
       const directory = await this.repo(projectPath)
@@ -544,15 +608,34 @@ export class GitService {
   }
 
   /** `offset` skips the N newest commits — pages in older history for infinite scroll. */
-  async log(projectPath: string, limit = DEFAULT_LOG_LIMIT, offset = 0): Promise<GitCommitInfo[]> {
+  async log(
+    projectPath: string,
+    limit = DEFAULT_LOG_LIMIT,
+    offset = 0,
+    query?: string
+  ): Promise<GitCommitInfo[]> {
     return this.enqueue(projectPath, async () => {
       const directory = await this.repo(projectPath)
       return this.wrapError(projectPath, 'read', async () => {
         const git = this.client(directory)
-        const options: LogOptions & { '--skip'?: number } = {
+        const normalizedQuery = query?.trim()
+        if (normalizedQuery && normalizedQuery.length > 256) {
+          throw new TypeError('Commit search query must be at most 256 characters')
+        }
+        const options: LogOptions & {
+          '--fixed-strings'?: null
+          '--grep'?: string
+          '--regexp-ignore-case'?: null
+          '--skip'?: number
+        } = {
           maxCount: Math.max(1, Math.min(limit, 200))
         }
         if (offset > 0) options['--skip'] = Math.max(0, offset)
+        if (normalizedQuery) {
+          options['--fixed-strings'] = null
+          options['--grep'] = normalizedQuery
+          options['--regexp-ignore-case'] = null
+        }
         let history
         try {
           history = await git.log(options)
@@ -560,15 +643,53 @@ export class GitService {
           if (isUnbornBranchLogError(failure)) return []
           throw failure
         }
-        return history.all.map((entry): GitCommitInfo => ({
-          hash: entry.hash,
-          shortHash: entry.hash.slice(0, 7),
-          author: entry.author_name ?? entry.author_email ?? 'unknown',
-          date: entry.date ? new Date(entry.date).getTime() : Date.now(),
-          message: entry.message
-        }))
+        const matches = history.all.map((entry) => this.mapCommit(entry))
+
+        // `--grep` searches commit messages, not object IDs. Resolve a hash-like
+        // query separately, then pin that exact match above any title matches.
+        if (normalizedQuery && /^[0-9a-f]{4,40}$/iu.test(normalizedQuery)) {
+          const hashMatch = await this.commitForHash(git, normalizedQuery)
+          if (hashMatch) {
+            return [hashMatch, ...matches.filter((commit) => commit.hash !== hashMatch.hash)].slice(
+              0,
+              Math.max(1, Math.min(limit, 200))
+            )
+          }
+        }
+        return matches
       })
     })
+  }
+
+  private mapCommit(entry: DefaultLogFields): GitCommitInfo {
+    return {
+      hash: entry.hash,
+      shortHash: entry.hash.slice(0, 7),
+      author: entry.author_name ?? entry.author_email ?? 'unknown',
+      date: entry.date ? new Date(entry.date).getTime() : Date.now(),
+      message: entry.message
+    }
+  }
+
+  private async commitForHash(git: SimpleGit, query: string): Promise<GitCommitInfo | null> {
+    try {
+      const output = await git.show([
+        '--no-patch',
+        '--format=%H%x00%aI%x00%aN%x00%s',
+        `${query}^{commit}`
+      ])
+      const [hash, date, author, message] = output.trim().split('\0')
+      if (!hash || !date || !message) return null
+      return {
+        hash,
+        shortHash: hash.slice(0, 7),
+        author: author || 'unknown',
+        date: new Date(date).getTime(),
+        message
+      }
+    } catch {
+      return null
+    }
   }
 
   async commitDiff(projectPath: string, hash: string): Promise<GitFileChange[]> {
@@ -749,8 +870,8 @@ export class GitService {
   }
 
   /**
-   * Pull a specific remote branch, merging or rebasing, and return the
-   * refreshed status even when the integration stops on conflicts.
+   * Pull a specific remote branch with an explicit reconciliation strategy and
+   * return the refreshed status even when the integration stops on conflicts.
    *
    * The push-recovery flow needs to distinguish "pulled cleanly, safe to push"
    * from "stopped on conflicts, hand over to the conflict UI". A conflicted
@@ -760,12 +881,19 @@ export class GitService {
    */
   async pullIntegrate(
     projectPath: string,
-    options: { remote?: string; branch?: string; rebase?: boolean; token?: string } = {}
+    options: {
+      remote?: string
+      branch?: string
+      strategy: GitPullStrategy
+      token?: string
+    }
   ): Promise<GitStatus> {
     return this.enqueue(projectPath, async () => {
       const directory = await this.repo(projectPath)
       const args: string[] = []
-      if (options.rebase) args.push('--rebase')
+      if (options.strategy === 'rebase') args.push('--rebase')
+      else if (options.strategy === 'ff-only') args.push('--ff-only')
+      else args.push('--no-rebase')
       if (options.remote) args.push(options.remote)
       if (options.branch) args.push(options.branch)
       const git = options.token
@@ -865,6 +993,107 @@ export class GitService {
           totalCommits: aheadBy,
           filesChanged: summary.files.length,
           hasChanges: aheadBy > 0
+        }
+      })
+    })
+  }
+
+  /**
+   * Build bounded, read-only evidence for a PR writing task. This never fetches,
+   * checks out, stages, or otherwise changes repository state. Remote composition
+   * uses cached origin refs. Local composition adds the commits and worktree delta
+   * that the next push will publish.
+   */
+  async pullRequestComposeContext(
+    projectPath: string,
+    input: PrComposeInput
+  ): Promise<PullRequestComposeContext> {
+    return this.enqueue(projectPath, async () => {
+      const directory = await this.repo(projectPath)
+      return this.wrapError(projectPath, 'read', async () => {
+        const git = this.client(directory)
+        const remoteBase = `refs/remotes/origin/${input.base}`
+        const localBase = `refs/heads/${input.base}`
+        const baseRef = (await this.refExists(git, remoteBase))
+          ? remoteBase
+          : (await this.refExists(git, localBase))
+            ? localBase
+            : null
+        if (!baseRef) {
+          throw new Error(`The selected base branch ${input.base} is not available locally`)
+        }
+
+        const remoteHead = `refs/remotes/origin/${input.head}`
+        const localHead = `refs/heads/${input.head}`
+        const headRef =
+          input.source === 'remote'
+            ? (await this.refExists(git, remoteHead))
+              ? remoteHead
+              : null
+            : (await this.refExists(git, localHead))
+              ? localHead
+              : null
+        if (!headRef) {
+          const location = input.source === 'remote' ? `origin/${input.head}` : input.head
+          throw new Error(`The selected head branch ${location} is not available locally`)
+        }
+
+        const fullRange = `${baseRef}..${headRef}`
+        const fullDiffRange = `${baseRef}...${headRef}`
+        const pendingPushBaseRef =
+          input.source === 'local' && (await this.refExists(git, remoteHead)) ? remoteHead : null
+        const pendingRange = pendingPushBaseRef ? `${pendingPushBaseRef}..${headRef}` : fullRange
+
+        const readGit = async (args: string[]): Promise<string> => git.raw(args)
+        const [commitsRaw, diffSummary, patchRaw, pendingCommitsRaw, pendingSummary, pendingRaw] =
+          await Promise.all([
+            readGit(['log', '--max-count=100', '--format=%h%x09%s', fullRange]),
+            readGit(['diff', '--stat', fullDiffRange, '--']),
+            readGit(['diff', '--no-ext-diff', '--unified=2', fullDiffRange, '--']),
+            input.source === 'local'
+              ? readGit(['log', '--max-count=100', '--format=%h%x09%s', pendingRange])
+              : Promise.resolve(''),
+            input.source === 'local'
+              ? readGit(['diff', '--stat', pendingRange, '--'])
+              : Promise.resolve(''),
+            input.source === 'local'
+              ? readGit(['diff', '--no-ext-diff', '--unified=2', pendingRange, '--'])
+              : Promise.resolve('')
+          ])
+
+        const includeWorkingTree = input.source === 'local' && input.includeWorkingTree
+        const [worktreeRaw, untracked] = includeWorkingTree
+          ? await Promise.all([
+              readGit(['diff', '--no-ext-diff', '--unified=2', 'HEAD', '--']),
+              this.untrackedComposeContext(directory, git)
+            ])
+          : ['', { text: '', truncated: false }]
+
+        const commits = boundedUtf8(commitsRaw.trim(), 16 * 1024)
+        const patch = boundedUtf8(patchRaw.trim(), 56 * 1024)
+        const pendingCommits = boundedUtf8(pendingCommitsRaw.trim(), 12 * 1024)
+        const pendingPatch = boundedUtf8(pendingRaw.trim(), 20 * 1024)
+        const worktreePatch = boundedUtf8(worktreeRaw.trim(), 20 * 1024)
+        return {
+          source: input.source,
+          baseRef,
+          headRef,
+          commits: commits.text,
+          diffSummary: diffSummary.trim(),
+          patch: patch.text,
+          pendingPushBaseRef,
+          pendingCommits: pendingCommits.text,
+          pendingDiffSummary: pendingSummary.trim(),
+          pendingPatch: pendingPatch.text,
+          worktreePatch: worktreePatch.text,
+          untrackedFiles: untracked.text,
+          truncated:
+            commits.truncated ||
+            patch.truncated ||
+            pendingCommits.truncated ||
+            pendingPatch.truncated ||
+            worktreePatch.truncated ||
+            untracked.truncated
         }
       })
     })
@@ -1148,6 +1377,61 @@ export class GitService {
 
   // ─── Private helpers ─────────────────────────────────────────────────────
 
+  /** Read small previews of untracked text files without adding them to Git. */
+  private async untrackedComposeContext(
+    directory: string,
+    git: SimpleGit
+  ): Promise<{ text: string; truncated: boolean }> {
+    const status = await git.status()
+    const candidates = status.not_added.slice(0, PR_COMPOSE_UNTRACKED_FILES)
+    let remainingBytes = PR_COMPOSE_UNTRACKED_BYTES
+    let truncated = status.not_added.length > candidates.length
+    const sections: string[] = []
+
+    for (
+      let index = 0;
+      index < candidates.length && remainingBytes > 0;
+      index += PR_COMPOSE_READ_BATCH
+    ) {
+      const batch = candidates.slice(index, index + PR_COMPOSE_READ_BATCH)
+      const previews = await Promise.all(
+        batch.map(async (relativePath) => {
+          const safePath = this.assertRelativePath(directory, relativePath)
+          const absolutePath = resolve(directory, safePath)
+          const metadata = await lstat(absolutePath).catch(() => null)
+          if (!metadata?.isFile() || metadata.isSymbolicLink())
+            return { path: safePath, text: '', binary: true, truncated: false }
+          const maximum = Math.min(8 * 1024, remainingBytes)
+          const handle = await open(absolutePath, 'r')
+          try {
+            const buffer = Buffer.allocUnsafe(maximum)
+            const { bytesRead } = await handle.read(buffer, 0, maximum, 0)
+            const content = buffer.subarray(0, bytesRead)
+            const binary = content.includes(0)
+            return {
+              path: safePath,
+              text: binary ? '' : content.toString('utf-8'),
+              binary,
+              truncated: metadata.size > bytesRead
+            }
+          } finally {
+            await handle.close()
+          }
+        })
+      )
+      for (const preview of previews) {
+        const body = preview.binary ? '[binary or unreadable file]' : preview.text
+        const section = `File ${JSON.stringify(preview.path)}\n${body}`
+        const bounded = boundedUtf8(section, remainingBytes)
+        sections.push(bounded.text)
+        remainingBytes -= Buffer.byteLength(bounded.text, 'utf-8')
+        truncated ||= preview.truncated || bounded.truncated
+        if (bounded.truncated) break
+      }
+    }
+    return { text: sections.join('\n\n'), truncated }
+  }
+
   /** Files changed by any commit-like ref (hash or `stash@{n}`), vs its first parent. */
   private async diffVsParent(git: SimpleGit, ref: string): Promise<GitFileChange[]> {
     const safeRef = ref.trim()
@@ -1339,29 +1623,45 @@ export class GitService {
     }
   }
 
-  private async branchTracking(
-    git: SimpleGit
-  ): Promise<Map<string, { remote: string; ahead: number; behind: number }>> {
-    const output = await git.raw([
-      'for-each-ref',
-      '--format=%(refname:short)%09%(upstream:short)%09%(upstream:track)',
-      'refs/heads'
-    ])
-    const raw = Array.isArray(output) ? output.join('\n') : output
-    const tracking = new Map<string, { remote: string; ahead: number; behind: number }>()
+  private parseBranchRefs(raw: string, remoteNames: string[]): GitBranchInfo[] {
+    const namesBySpecificity = [...remoteNames].sort((left, right) => right.length - left.length)
+    const branches: GitBranchInfo[] = []
     for (const line of raw.split('\n')) {
       if (!line.trim()) continue
-      const [branch, upstream, drift] = line.split('\t')
-      if (!branch || !upstream) continue
-      const ahead = /ahead (\d+)/u.exec(drift ?? '')?.[1] ?? '0'
-      const behind = /behind (\d+)/u.exec(drift ?? '')?.[1] ?? '0'
-      tracking.set(branch, {
-        remote: upstream,
-        ahead: Number.parseInt(ahead, 10) || 0,
-        behind: Number.parseInt(behind, 10) || 0
+      const [fullRef, ref, head, upstream, remoteName, drift, symbolicTarget] = line.split('\t')
+      if (!fullRef || !ref) continue
+      if (fullRef.startsWith('refs/heads/')) {
+        const ahead = /ahead (\d+)/u.exec(drift ?? '')?.[1] ?? '0'
+        const behind = /behind (\d+)/u.exec(drift ?? '')?.[1] ?? '0'
+        branches.push({
+          kind: 'local',
+          name: ref,
+          ref,
+          current: head?.trim() === '*',
+          remote: remoteName || null,
+          upstream: upstream || null,
+          ahead: Number.parseInt(ahead, 10) || 0,
+          behind: Number.parseInt(behind, 10) || 0
+        })
+        continue
+      }
+      if (!fullRef.startsWith('refs/remotes/') || symbolicTarget) continue
+      const remote = namesBySpecificity.find((name) => ref.startsWith(`${name}/`))
+      if (!remote) continue
+      const name = ref.slice(remote.length + 1)
+      if (!name || name === 'HEAD') continue
+      branches.push({
+        kind: 'remote',
+        name,
+        ref,
+        current: false,
+        remote,
+        upstream: null,
+        ahead: 0,
+        behind: 0
       })
     }
-    return tracking
+    return branches
   }
 
   private emptyDiff(path: string, staged: boolean): GitDiff {

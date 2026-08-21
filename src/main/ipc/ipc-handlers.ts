@@ -2,19 +2,20 @@ import { app, dialog, shell, clipboard, BrowserWindow, nativeImage } from 'elect
 import type { IpcMainInvokeEvent } from 'electron'
 import { appRendererNavigationTargets, trustedIpcMain as ipcMain } from './trusted-ipc-main'
 import { existsSync, readFileSync } from 'node:fs'
-import { lstat, readFile, writeFile, mkdir, rename, rm, stat } from 'fs/promises'
+import { cp, lstat, readFile, writeFile, mkdir, rename, rm, stat } from 'fs/promises'
 import { release } from 'os'
 import { randomUUID } from 'node:crypto'
 import { spawn } from 'node:child_process'
 import { basename, dirname, extname, isAbsolute, join, resolve } from 'path'
 import { APP_NAME, APP_SLUG } from '../../lib/brand'
+import { harnessGlobalSkillPath, SHARED_GLOBAL_SKILL_PATH } from '../../lib/native-skill-paths'
 import { modelKey } from '../../lib/model-keys'
 import type { Database } from '../database/database'
 import { StorageEngine } from '../storage/storage-engine'
 import { Logger } from '../system/logger'
 import { EditorService } from '../editor/editor-service'
 import { RepositoryService } from '../git/repository-service'
-import { GitService } from '../git/git-service'
+import { GitService, type PullRequestComposeContext } from '../git/git-service'
 import { SecretVault } from '../storage/secret-vault'
 import { UtilityRegistryService } from '../utilities/utility-registry-service'
 import { GitHubAuthService } from '../git/github-auth-service'
@@ -26,6 +27,7 @@ import type { GitProvider } from '../git/git-provider.interface'
 import { ProjectFilesService } from '../editor/project-files-service'
 import { CheckpointManager } from '../storage/checkpoint-manager'
 import { ThreadCreationCoordinator } from '../chat/thread-creation-coordinator'
+import { ThreadDeletionCoordinator } from '../chat/thread-deletion-coordinator'
 import { DiagnosticsService } from '../system/diagnostics-service'
 import { resolveFavicons } from '../editor/favicon-service'
 import {
@@ -37,6 +39,7 @@ import {
 } from '../chat/memory-service'
 import type { HarnessManifestService } from '../agents/harness-manifest-service'
 import { listHarnesses } from '../agents/harness-registry'
+import { resolvePackageCommand } from '../drivers/cli-environment'
 import { SpecContextService } from '../chat/spec-context-service'
 import type { UpdaterService } from '../notifications/updater-service'
 import type { ChatEngine } from '../chat/chat-engine'
@@ -47,6 +50,7 @@ import type { RetrySchedulerService } from '../system/retry-scheduler-service'
 import {
   broadcastNoteChanged,
   broadcastThreadDeleted,
+  broadcastThreadOperationError,
   broadcastThreadUpdate,
   dismissThreadNotifications
 } from '../chat/thread-events'
@@ -55,6 +59,7 @@ import { AttachmentGrantRepo } from '../database/repositories/attachment-grant-r
 import { HarnessUsageRepo } from '../database/repositories/harness-usage-repo'
 import { TurnFeedbackRepo } from '../database/repositories/turn-feedback-repo'
 import { NoteRepo } from '../database/repositories/note-repo'
+import { readWordDocumentHtml } from '../drivers/document-attachment'
 import {
   validateBoundedInteger,
   validateBoundedString,
@@ -88,8 +93,16 @@ import {
   validateRemoteName,
   validateRemoteUrl,
   validateFaviconHostnames,
-  validateScopeBoard,
+  validateScopeAppearancePatch,
+  validateScopeCollapsePatch,
+  validateScopeCreateInput,
+  validateScopeLifecycleAction,
+  validateScopeOrderIds,
   validateScopeSlice,
+  validateScopeTarget,
+  validateScopeWorktreeCreateInput,
+  validateConfirmationToken,
+  validateWorktreeDefaults,
   validateStashMessage,
   validateStashId,
   validateThreadSettings,
@@ -102,6 +115,12 @@ import {
 import { ProjectManager } from '../../lib/engines/project-manager'
 import { ThreadManager } from '../../lib/engines/thread-manager'
 import { ScopeManager } from '../../lib/engines/scope-manager'
+import { ScopeWorktreeService } from '../git/scope-worktree-service'
+import {
+  ScopeRootResolver,
+  scopeRootProvider,
+  type ManagedWorktreeInspector
+} from '../workspaces/scope-root-resolver'
 import { HistoryEngine } from '../../lib/engines/history-engine'
 import { PlanEngine } from '../../lib/engines/plan-engine'
 import {
@@ -130,7 +149,7 @@ import {
 import { validateEngineeringSpec } from '../../lib/spec/spec-validation'
 import { parseGeneratedBrainstormContent } from '../../lib/brainstorm/brainstorm-validation'
 import { exportBrainstormMarkdown } from '../../lib/brainstorm/brainstorm-markdown'
-import { atomicWrite, getConfigRoot } from '../../lib/utils'
+import { atomicWrite, getConfigRoot, getScopeRootPath } from '../../lib/utils'
 import { PROJECT_DATA_DIRECTORY } from '../../lib/project-artifacts'
 import { normalizeWorkerNames } from '../../lib/assignment/worker-names'
 import { retainTemporaryAttachment } from '../editor/temporary-attachment-retention'
@@ -161,6 +180,7 @@ import type {
   EditorId,
   LocalProfileAnalyticsRange,
   MemoryEntry,
+  PrComposeInput,
   SkillMarketDetail,
   SpecContextReference,
   SpecSectionId,
@@ -188,6 +208,117 @@ const GITHUB_REPOSITORY_ACCESS_MESSAGE =
   'GitHub cannot access this repository. Install the CodeInOven GitHub App on it and grant the requested repository permissions.'
 const GITHUB_APP_INSTALL_URL = 'https://github.com/apps/codeinoven/installations/new'
 const SLASH_COMMAND_MODES = new Set(['app', 'passthrough'])
+const GIT_PULL_PREFERENCES = new Set(['ask', 'merge', 'rebase', 'ff-only'])
+
+const PR_COMPOSE_OUTPUT_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['title', 'description'],
+  properties: {
+    title: { type: 'string' },
+    description: { type: 'string' }
+  }
+} as const
+
+const PR_COMPOSE_SYSTEM_PROMPT = [
+  'You write pull request titles and descriptions from repository evidence supplied in the user message.',
+  'Use only that evidence. Do not inspect the repository, call tools, ask questions, or perform Git operations.',
+  'Return one JSON object with exactly the requested title and description fields.'
+].join(' ')
+
+function validatePrComposeInput(value: unknown): PrComposeInput {
+  if (!isRecord(value)) throw new TypeError('PR compose input must be an object')
+  const source = value['source']
+  if (source !== 'remote' && source !== 'local') {
+    throw new TypeError('PR compose source must be remote or local')
+  }
+  if (typeof value['includeWorkingTree'] !== 'boolean') {
+    throw new TypeError('PR compose working tree choice must be a boolean')
+  }
+  const currentTitle = value['currentTitle']
+  const currentDescription = value['currentDescription']
+  return {
+    base: canonicalGitHubBranch(validateBranchName(value['base'], 'PR compose base')),
+    head: canonicalGitHubBranch(validateBranchName(value['head'], 'PR compose head')),
+    source,
+    includeWorkingTree: value['includeWorkingTree'],
+    ...(currentTitle === undefined
+      ? {}
+      : { currentTitle: validateBoundedString(currentTitle, 'Current PR title', 0, 512) }),
+    ...(currentDescription === undefined
+      ? {}
+      : {
+          currentDescription: validateBoundedString(
+            currentDescription,
+            'Current PR description',
+            0,
+            100_000
+          )
+        })
+  }
+}
+
+function prComposePrompt(input: PrComposeInput, context: PullRequestComposeContext): string {
+  const sections = [
+    `Write a pull request for merging ${JSON.stringify(input.head)} into ${JSON.stringify(input.base)}.`,
+    '',
+    context.source === 'remote'
+      ? 'The selected branches are cached origin refs. The app performed read-only comparisons and did not fetch or change the repository.'
+      : 'The selected head is local. Cover the complete pull request range and the pending push, including the current worktree evidence below.',
+    '',
+    `Complete PR commit range (${context.baseRef}..${context.headRef}):`,
+    context.commits || '(no commit subjects available)',
+    '',
+    'Complete PR file summary:',
+    context.diffSummary || '(no file summary available)',
+    '',
+    'Complete PR patch evidence:',
+    context.patch || '(no patch available)'
+  ]
+  if (context.source === 'local') {
+    sections.push(
+      '',
+      context.pendingPushBaseRef
+        ? `Commits since the last cached push (${context.pendingPushBaseRef}..${context.headRef}):`
+        : 'The head has no cached origin branch. Treat the complete PR range as the pending first push.',
+      context.pendingCommits || '(no additional committed changes)',
+      '',
+      'Pending push file summary:',
+      context.pendingDiffSummary || '(no additional committed file changes)',
+      '',
+      'Pending push patch evidence:',
+      context.pendingPatch || '(no additional committed patch)',
+      '',
+      'Tracked worktree changes that will be committed before pushing:',
+      context.worktreePatch || '(none)',
+      '',
+      'Untracked files that will be committed before pushing:',
+      context.untrackedFiles || '(none)'
+    )
+  }
+  if (input.currentTitle !== undefined || input.currentDescription !== undefined) {
+    sections.push(
+      '',
+      'Improve the existing draft while keeping it faithful to the evidence:',
+      `Current title: ${JSON.stringify(input.currentTitle ?? '')}`,
+      'Current description:',
+      input.currentDescription?.trim() || '(empty)'
+    )
+  }
+  if (context.truncated) {
+    sections.push(
+      '',
+      'Some large evidence was truncated. Do not claim details absent from the text.'
+    )
+  }
+  sections.push(
+    '',
+    'Write a concise one-line title in imperative mood. The description must summarize what changed, why it changed when the evidence shows that, and what reviewers should know.',
+    'Return only JSON with this exact shape:',
+    '{"title":"The pull request title","description":"The pull request description"}'
+  )
+  return sections.join('\n')
+}
 
 function prComposePayload(value: unknown): { title: string; description: string } | null {
   if (!isRecord(value) || typeof value['title'] !== 'string') return null
@@ -258,12 +389,18 @@ function githubPermissionRequired(
   }
 }
 
-/** Run the industry-standard Skills CLI through Bun without a shell. */
-function installSkillWithBun(args: string[], cwd: string): Promise<string> {
+/** Run the industry-standard Skills CLI through the first available package manager. */
+function installSkillWithPackageManager(args: string[], cwd: string): Promise<string> {
   return new Promise((resolveInstall, rejectInstall) => {
-    const child = spawn('bun', ['x', '--bun', 'skills', ...args], {
+    const launch = resolvePackageCommand('execute', 'skills', args, {
+      ...process.env,
+      DISABLE_TELEMETRY: '1',
+      DO_NOT_TRACK: '1'
+    })
+    const child = spawn(launch.command, launch.args, {
       cwd,
-      env: { ...process.env, DISABLE_TELEMETRY: '1', DO_NOT_TRACK: '1' },
+      env: launch.env,
+      shell: launch.shell,
       stdio: ['ignore', 'pipe', 'pipe']
     })
     let output = ''
@@ -283,6 +420,30 @@ function installSkillWithBun(args: string[], cwd: string): Promise<string> {
       else rejectInstall(new Error(output.trim() || `Skills CLI exited with code ${code ?? -1}`))
     })
   })
+}
+
+const CANONICAL_ONLY_GLOBAL_SKILL_AGENTS = new Set(['opencode', 'codex', 'antigravity'])
+
+/**
+ * Skills CLI currently leaves universal agents in the canonical global folder
+ * even for a named `--agent` install. Materialize the harness-advertised path
+ * so OpenCode, Codex, and Antigravity can discover the selected skill there.
+ */
+async function materializeHarnessGlobalSkill(
+  home: string,
+  skillId: string,
+  harnessId: string
+): Promise<void> {
+  if (!CANONICAL_ONLY_GLOBAL_SKILL_AGENTS.has(harnessId)) return
+  const displayPath = harnessGlobalSkillPath(harnessId)
+  if (!displayPath || displayPath === SHARED_GLOBAL_SKILL_PATH || !displayPath.startsWith('~/')) {
+    return
+  }
+  const canonicalSkill = join(home, SHARED_GLOBAL_SKILL_PATH.slice(2), skillId)
+  if (!existsSync(canonicalSkill)) return
+  const harnessSkill = join(home, displayPath.slice(2), skillId)
+  await mkdir(dirname(harnessSkill), { recursive: true })
+  await cp(canonicalSkill, harnessSkill, { recursive: true, force: true, dereference: true })
 }
 
 const SKILL_MARKET_VIEWS = new Set(['all-time', 'trending', 'hot'])
@@ -617,6 +778,7 @@ function validateLocalProfileAnalyticsRange(value: unknown): LocalProfileAnalyti
 }
 const CONFIG_PATCH_FIELDS = new Set([
   'theme',
+  'onboardingCompleted',
   'threadLimit',
   'questionTimeoutMs',
   'slashCommandMode',
@@ -633,6 +795,7 @@ const CONFIG_PATCH_FIELDS = new Set([
   'autoRetryAfterReset',
   'resumeWorkOnRestart',
   'defaultMergeMethod',
+  'defaultPullStrategy',
   'maxDiffLines',
   'openLocalhostInCioBrowser'
 ])
@@ -1310,6 +1473,13 @@ export function validateAppConfigPatch(value: unknown): AppConfigPatch {
     patch.theme = value.theme as AppConfigPatch['theme']
   }
 
+  if ('onboardingCompleted' in value) {
+    if (typeof value.onboardingCompleted !== 'boolean') {
+      throw new TypeError('onboardingCompleted must be a boolean')
+    }
+    patch.onboardingCompleted = value.onboardingCompleted
+  }
+
   if ('threadLimit' in value) {
     if (
       typeof value.threadLimit !== 'number' ||
@@ -1346,6 +1516,16 @@ export function validateAppConfigPatch(value: unknown): AppConfigPatch {
       throw new TypeError('Max diff lines must be an integer between 10 and 5000')
     }
     patch.maxDiffLines = value.maxDiffLines
+  }
+
+  if ('defaultPullStrategy' in value) {
+    if (
+      typeof value.defaultPullStrategy !== 'string' ||
+      !GIT_PULL_PREFERENCES.has(value.defaultPullStrategy)
+    ) {
+      throw new TypeError('Invalid default pull strategy')
+    }
+    patch.defaultPullStrategy = value.defaultPullStrategy as AppConfigPatch['defaultPullStrategy']
   }
 
   if ('openLocalhostInCioBrowser' in value) {
@@ -1696,6 +1876,12 @@ export interface RegisterIpcHandlersOptions {
   hydrationHandlersRegistered?: boolean
   /** Optimistic thread-create finalization coordinator shared with ChatEngine. */
   threadCreation?: ThreadCreationCoordinator
+  /** Optimistic thread-delete cleanup coordinator shared with remote RPC. */
+  threadDeletion?: ThreadDeletionCoordinator
+  /** Git-backed inspector shared with the managed worktree service. */
+  worktreeInspector?: ManagedWorktreeInspector
+  /** Shared managed-worktree service; the resolver inspector falls back to it. */
+  worktreeService?: ScopeWorktreeService
 }
 
 export function registerIpcHandlers(
@@ -1709,7 +1895,17 @@ export function registerIpcHandlers(
   const projectManager = options.projectManager ?? new ProjectManager(database)
   const projectFilesService = options.projectFilesService ?? new ProjectFilesService(projectManager)
   const threadCreation = options.threadCreation ?? new ThreadCreationCoordinator()
+  const threadDeletion = options.threadDeletion ?? new ThreadDeletionCoordinator()
   const checkpointManager = new CheckpointManager(database)
+  const scopeManager = new ScopeManager(database)
+  const scopeWorktreeService =
+    options.worktreeService ?? new ScopeWorktreeService(scopeManager, projectManager)
+  const scopeRootResolver = new ScopeRootResolver(
+    projectManager,
+    scopeManager,
+    options.worktreeInspector ?? scopeWorktreeService
+  )
+  const scopeRoots = scopeRootProvider(scopeRootResolver)
   const threadManager = new ThreadManager(
     database,
     broadcastThreadUpdate,
@@ -1725,9 +1921,9 @@ export function registerIpcHandlers(
       for (const projectId of new Set(threads.map((thread) => thread.projectId))) {
         await checkpointManager.pruneUnusedBlobs(projectId)
       }
-    }
+    },
+    scopeRoots
   )
-  const scopeManager = new ScopeManager(database)
   const historyEngine = new HistoryEngine(database)
   const planEngine = new PlanEngine(storage, database)
   const specEngine = new SpecEngine(storage, database, {
@@ -1758,10 +1954,32 @@ export function registerIpcHandlers(
     navigationTargets: appRendererNavigationTargets(),
     allowDevelopmentHttp: !isProduction,
     scopes: {
-      projectRoots: async () =>
-        (await projectManager.listProjects())
+      projectRoots: async () => {
+        const projects = await projectManager.listProjects()
+        const roots = projects
           .map((project) => project.path)
-          .filter((path): path is string => typeof path === 'string' && path.length > 0),
+          .filter((path): path is string => typeof path === 'string' && path.length > 0)
+        // Healthy managed worktrees live beneath the config root and are added
+        // individually — never by approving the whole config directory.
+        for (const project of projects) {
+          const board = scopeManager.getBoard(project.id)
+          for (const bucket of board.buckets) {
+            if (bucket.root.kind !== 'worktree') continue
+            try {
+              const health = await scopeWorktreeService.health({
+                projectId: project.id,
+                scopeBucketId: bucket.id
+              })
+              if (health.category === 'healthy') {
+                roots.push(getScopeRootPath(project.id, bucket.root.directoryName))
+              }
+            } catch {
+              // Unhealthy managed roots grant no filesystem scope.
+            }
+          }
+        }
+        return roots
+      },
       appArtifactRoots: async () => {
         const projects = await projectManager.listProjects()
         return [
@@ -3429,6 +3647,24 @@ export function registerIpcHandlers(
     }
   })
 
+  // Convert a scoped Word document to bounded semantic HTML on demand. The
+  // renderer sanitizes and isolates the result before displaying it.
+  privileged('file:readWordPreview', async (_event, filePath: unknown) => {
+    try {
+      const safePath = await privilegedIpc.resolveScopedPath(filePath)
+      if (extname(safePath).toLowerCase() !== '.docx') return null
+      return readWordDocumentHtml({
+        mime: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        url: safePath,
+        filename: basename(safePath)
+      })
+    } catch (error) {
+      if (isMissingScopedPathError(error) || isMissingFilesystemError(error)) return null
+      Logger.error('file:readWordPreview rejected out-of-scope path:', error)
+      return null
+    }
+  })
+
   ipcMain.handle('diagnostics:export', async () => {
     const win = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0] ?? null
     const result = win
@@ -3482,9 +3718,98 @@ export function registerIpcHandlers(
       scopeManager.getBoard(validateEntityId(projectId, 'Project ID'))
     )
   }
-  ipcMain.handle('scope:save', (_, projectId: unknown, board: unknown) =>
-    scopeManager.saveBoard(validateEntityId(projectId, 'Project ID'), validateScopeBoard(board))
+  ipcMain.handle('scope:updateLayout', (_, projectId: unknown, orderedIds: unknown) =>
+    scopeManager.updateLayout(
+      validateEntityId(projectId, 'Project ID'),
+      validateScopeOrderIds(orderedIds)
+    )
   )
+  ipcMain.handle(
+    'scope:updateAppearance',
+    (_, projectId: unknown, bucketId: unknown, patch: unknown) =>
+      scopeManager.updateAppearance(
+        validateEntityId(projectId, 'Project ID'),
+        validateEntityId(bucketId, 'Scope bucket ID'),
+        validateScopeAppearancePatch(patch)
+      )
+  )
+  ipcMain.handle(
+    'scope:updateCollapse',
+    (_, projectId: unknown, bucketId: unknown, patch: unknown) =>
+      scopeManager.updateCollapse(
+        validateEntityId(projectId, 'Project ID'),
+        validateEntityId(bucketId, 'Scope bucket ID'),
+        validateScopeCollapsePatch(patch)
+      )
+  )
+  ipcMain.handle('scope:create', (_, projectId: unknown, input: unknown) => {
+    const validated = validateScopeCreateInput(input)
+    return scopeManager.createBucket(validateEntityId(projectId, 'Project ID'), validated)
+  })
+  ipcMain.handle(
+    'scope:setArchive',
+    (_, projectId: unknown, bucketId: unknown, archived: unknown) =>
+      scopeManager.setArchive(
+        validateEntityId(projectId, 'Project ID'),
+        validateEntityId(bucketId, 'Scope bucket ID'),
+        validateBoolean(archived, 'Archived')
+      )
+  )
+  ipcMain.handle('scope:delete', (_, projectId: unknown, bucketId: unknown) =>
+    scopeManager.deleteBucket(
+      validateEntityId(projectId, 'Project ID'),
+      validateEntityId(bucketId, 'Scope bucket ID')
+    )
+  )
+  ipcMain.handle('scope:setWorktreeDefaults', (_, projectId: unknown, defaults: unknown) =>
+    scopeManager.setWorktreeDefaults(
+      validateEntityId(projectId, 'Project ID'),
+      validateWorktreeDefaults(defaults)
+    )
+  )
+  ipcMain.handle('scope:worktree:create', (_, target: unknown, input: unknown) => {
+    const validatedTarget = validateScopeTarget(target)
+    const validatedInput = validateScopeWorktreeCreateInput(input)
+    return scopeWorktreeService.createManagedWorktree(validatedTarget, validatedInput)
+  })
+  ipcMain.handle('scope:worktree:health', (_, target: unknown) =>
+    scopeWorktreeService.health(validateScopeTarget(target))
+  )
+  ipcMain.handle('scope:worktree:preflight', (_, action: unknown, target: unknown) =>
+    scopeWorktreeService.preflight(
+      validateScopeLifecycleAction(action),
+      validateScopeTarget(target)
+    )
+  )
+  ipcMain.handle('scope:worktree:confirmDetach', (_, target: unknown, confirmationId: unknown) =>
+    scopeWorktreeService.confirmDetach(
+      validateScopeTarget(target),
+      validateConfirmationToken(confirmationId)
+    )
+  )
+  ipcMain.handle(
+    'scope:worktree:confirmRemove',
+    (_, target: unknown, confirmationId: unknown, force: unknown) =>
+      scopeWorktreeService.confirmRemoveWorktree(
+        validateScopeTarget(target),
+        validateConfirmationToken(confirmationId),
+        validateBoolean(force, 'Force')
+      )
+  )
+  ipcMain.handle(
+    'scope:worktree:confirmDeleteBranch',
+    (_, target: unknown, confirmationId: unknown) =>
+      scopeWorktreeService.confirmDeleteBranch(
+        validateScopeTarget(target),
+        validateConfirmationToken(confirmationId)
+      )
+  )
+  ipcMain.handle('scope:worktree:retrySetup', (_, target: unknown, options: unknown) => {
+    const validatedTarget = validateScopeTarget(target)
+    const input = options === undefined ? undefined : (options as Record<string, unknown>)
+    const runSetup = input === undefined ? true : validateBoolean(input.runSetup, 'Run setup')
+    return scopeWorktreeService.runSetupFromFailure(validatedTarget, { runSetup })
+  })
   ipcMain.handle(
     'project:update',
     async (_, projectId: string, input: Partial<CreateProjectInput>) => {
@@ -3506,6 +3831,16 @@ export function registerIpcHandlers(
       for (const thread of threads) {
         await chatEngine.deleteThreadSession(projectId, thread.id)
       }
+    }
+    // Never orphan a registered managed worktree silently: refuse deletion
+    // until every managed association in this project is detached/removed
+    // through the guarded lifecycle (dirty and unpushed work is protected).
+    const board = scopeManager.getBoard(projectId)
+    const managedBuckets = board.buckets.filter((bucket) => bucket.root.kind === 'worktree')
+    if (managedBuckets.length > 0) {
+      throw new Error(
+        `Cannot delete the project while ${managedBuckets.length} managed worktree scope(s) exist; remove them first`
+      )
     }
     await projectManager.deleteProject(projectId)
     projectFilesService.disposeProject(projectId)
@@ -3741,42 +4076,91 @@ export function registerIpcHandlers(
   )
 
   // ─── Git management ─────────────────────────────────────────────────────
-  const resolveProjectPath = async (projectId: string): Promise<string> => {
+  const resolveProjectPath = async (projectId: string, scopeBucketId?: string): Promise<string> => {
+    // When a scope is supplied, resolve through the authoritative scope
+    // resolver so a managed worktree becomes this operation's repository
+    // root. Unhealthy managed scopes fail closed (never fall back to the
+    // project directory).
+    if (scopeBucketId) {
+      const scopeRoot = await scopeRoots.resolveCompatibilityRoot(projectId, scopeBucketId)
+      if (!scopeRoot) throw new Error(`Scope root unavailable: ${projectId}:${scopeBucketId}`)
+      return scopeRoot
+    }
     const project = await projectManager.getProject(projectId)
     if (!project?.path) throw new Error(`Project not found: ${projectId}`)
     return project.path
   }
-  ipcMain.handle('git:status', async (_, projectId: unknown) =>
-    gitService.getStatus(await resolveProjectPath(validateEntityId(projectId, 'Project ID')))
+  ipcMain.handle('git:status', async (_, projectId: unknown, scopeBucketId?: unknown) =>
+    gitService.getStatus(
+      await resolveProjectPath(
+        validateEntityId(projectId, 'Project ID'),
+        scopeBucketId === undefined ? undefined : validateEntityId(scopeBucketId, 'Scope bucket ID')
+      )
+    )
   )
   ipcMain.handle(
     'git:diff',
-    async (_, projectId: unknown, relativePath: unknown, staged: unknown) =>
+    async (
+      _,
+      projectId: unknown,
+      relativePath: unknown,
+      staged: unknown,
+      scopeBucketId?: unknown
+    ) =>
       gitService.getDiff(
-        await resolveProjectPath(validateEntityId(projectId, 'Project ID')),
+        await resolveProjectPath(
+          validateEntityId(projectId, 'Project ID'),
+          scopeBucketId === undefined
+            ? undefined
+            : validateEntityId(scopeBucketId, 'Scope bucket ID')
+        ),
         validateGitRelativePath(relativePath),
         validateBoolean(staged, 'Staged')
       )
   )
-  ipcMain.handle('git:analyzeConflict', async (_, projectId: unknown, relativePath: unknown) =>
-    gitService.analyzeConflict(
-      await resolveProjectPath(validateEntityId(projectId, 'Project ID')),
-      validateGitRelativePath(relativePath)
-    )
+  ipcMain.handle(
+    'git:analyzeConflict',
+    async (_, projectId: unknown, relativePath: unknown, scopeBucketId?: unknown) =>
+      gitService.analyzeConflict(
+        await resolveProjectPath(
+          validateEntityId(projectId, 'Project ID'),
+          scopeBucketId === undefined
+            ? undefined
+            : validateEntityId(scopeBucketId, 'Scope bucket ID')
+        ),
+        validateGitRelativePath(relativePath)
+      )
   )
   ipcMain.handle(
     'git:prepareConflictWorkFile',
-    async (_, projectId: unknown, relativePath: unknown) =>
+    async (_, projectId: unknown, relativePath: unknown, scopeBucketId?: unknown) =>
       gitService.prepareConflictWorkFile(
-        await resolveProjectPath(validateEntityId(projectId, 'Project ID')),
+        await resolveProjectPath(
+          validateEntityId(projectId, 'Project ID'),
+          scopeBucketId === undefined
+            ? undefined
+            : validateEntityId(scopeBucketId, 'Scope bucket ID')
+        ),
         validateGitRelativePath(relativePath)
       )
   )
   ipcMain.handle(
     'git:saveConflictDraft',
-    async (_, projectId: unknown, relativePath: unknown, content: unknown, stateJson: unknown) =>
+    async (
+      _,
+      projectId: unknown,
+      relativePath: unknown,
+      content: unknown,
+      stateJson: unknown,
+      scopeBucketId?: unknown
+    ) =>
       gitService.saveConflictDraft(
-        await resolveProjectPath(validateEntityId(projectId, 'Project ID')),
+        await resolveProjectPath(
+          validateEntityId(projectId, 'Project ID'),
+          scopeBucketId === undefined
+            ? undefined
+            : validateEntityId(scopeBucketId, 'Scope bucket ID')
+        ),
         validateGitRelativePath(relativePath),
         validateConflictResolutionContent(content),
         validateConflictResolutionContent(stateJson)
@@ -3784,215 +4168,442 @@ export function registerIpcHandlers(
   )
   ipcMain.handle(
     'git:saveConflictResolution',
-    async (_, projectId: unknown, relativePath: unknown, content: unknown) =>
+    async (
+      _,
+      projectId: unknown,
+      relativePath: unknown,
+      content: unknown,
+      scopeBucketId?: unknown
+    ) =>
       gitService.saveConflictResolution(
-        await resolveProjectPath(validateEntityId(projectId, 'Project ID')),
+        await resolveProjectPath(
+          validateEntityId(projectId, 'Project ID'),
+          scopeBucketId === undefined
+            ? undefined
+            : validateEntityId(scopeBucketId, 'Scope bucket ID')
+        ),
         validateGitRelativePath(relativePath),
         validateConflictResolutionContent(content)
       )
   )
-  ipcMain.handle('git:stage', async (_, projectId: unknown, paths: unknown) =>
-    gitService.stage(
-      await resolveProjectPath(validateEntityId(projectId, 'Project ID')),
-      validateGitPathArray(paths)
+  ipcMain.handle(
+    'git:stage',
+    async (_, projectId: unknown, paths: unknown, scopeBucketId?: unknown) =>
+      gitService.stage(
+        await resolveProjectPath(
+          validateEntityId(projectId, 'Project ID'),
+          scopeBucketId === undefined
+            ? undefined
+            : validateEntityId(scopeBucketId, 'Scope bucket ID')
+        ),
+        validateGitPathArray(paths)
+      )
+  )
+  ipcMain.handle(
+    'git:resolveConflicted',
+    async (_, projectId: unknown, path: unknown, scopeBucketId?: unknown) =>
+      gitService.resolveConflicted(
+        await resolveProjectPath(
+          validateEntityId(projectId, 'Project ID'),
+          scopeBucketId === undefined
+            ? undefined
+            : validateEntityId(scopeBucketId, 'Scope bucket ID')
+        ),
+        validateGitRelativePath(path)
+      )
+  )
+  ipcMain.handle(
+    'git:unstage',
+    async (_, projectId: unknown, paths: unknown, scopeBucketId?: unknown) =>
+      gitService.unstage(
+        await resolveProjectPath(
+          validateEntityId(projectId, 'Project ID'),
+          scopeBucketId === undefined
+            ? undefined
+            : validateEntityId(scopeBucketId, 'Scope bucket ID')
+        ),
+        validateGitPathArray(paths)
+      )
+  )
+  ipcMain.handle(
+    'git:commit',
+    async (_, projectId: unknown, message: unknown, scopeBucketId?: unknown) =>
+      gitService.commit(
+        await resolveProjectPath(
+          validateEntityId(projectId, 'Project ID'),
+          scopeBucketId === undefined
+            ? undefined
+            : validateEntityId(scopeBucketId, 'Scope bucket ID')
+        ),
+        validateCommitMessage(message)
+      )
+  )
+  ipcMain.handle('git:init', async (_, projectId: unknown, scopeBucketId?: unknown) =>
+    gitService.initialize(
+      await resolveProjectPath(
+        validateEntityId(projectId, 'Project ID'),
+        scopeBucketId === undefined ? undefined : validateEntityId(scopeBucketId, 'Scope bucket ID')
+      )
     )
   )
-  ipcMain.handle('git:resolveConflicted', async (_, projectId: unknown, path: unknown) =>
-    gitService.resolveConflicted(
-      await resolveProjectPath(validateEntityId(projectId, 'Project ID')),
-      validateGitRelativePath(path)
+  ipcMain.handle('git:branches', async (_, projectId: unknown, scopeBucketId?: unknown) =>
+    gitService.listBranches(
+      await resolveProjectPath(
+        validateEntityId(projectId, 'Project ID'),
+        scopeBucketId === undefined ? undefined : validateEntityId(scopeBucketId, 'Scope bucket ID')
+      )
     )
   )
-  ipcMain.handle('git:unstage', async (_, projectId: unknown, paths: unknown) =>
-    gitService.unstage(
-      await resolveProjectPath(validateEntityId(projectId, 'Project ID')),
-      validateGitPathArray(paths)
-    )
-  )
-  ipcMain.handle('git:commit', async (_, projectId: unknown, message: unknown) =>
-    gitService.commit(
-      await resolveProjectPath(validateEntityId(projectId, 'Project ID')),
-      validateCommitMessage(message)
-    )
-  )
-  ipcMain.handle('git:init', async (_, projectId: unknown) =>
-    gitService.initialize(await resolveProjectPath(validateEntityId(projectId, 'Project ID')))
-  )
-  ipcMain.handle('git:branches', async (_, projectId: unknown) =>
-    gitService.listBranches(await resolveProjectPath(validateEntityId(projectId, 'Project ID')))
-  )
-  ipcMain.handle('git:checkout', async (_, projectId: unknown, branch: unknown) => {
-    const safeProjectId = validateEntityId(projectId, 'Project ID')
-    const status = await gitService.checkout(
-      await resolveProjectPath(safeProjectId),
-      validateBranchName(branch)
-    )
-    // Keep thread.branch coherent when the app drives a checkout (D7): update
-    // every owned thread whose working directory is this project.
-    const threads = await threadManager.listThreads(safeProjectId)
-    for (const thread of threads) {
-      if (thread.workingDirectory) {
-        const branchName = await repositoryService.getCurrentBranch(thread.workingDirectory)
-        if (branchName) await threadManager.setBranch(safeProjectId, thread.id, branchName)
+  ipcMain.handle(
+    'git:checkout',
+    async (_, projectId: unknown, branch: unknown, scopeBucketId?: unknown) => {
+      const safeProjectId = validateEntityId(projectId, 'Project ID')
+      const status = await gitService.checkout(
+        await resolveProjectPath(
+          safeProjectId,
+          scopeBucketId === undefined
+            ? undefined
+            : validateEntityId(scopeBucketId, 'Scope bucket ID')
+        ),
+        validateBranchName(branch)
+      )
+      // Keep thread.branch coherent when the app drives a checkout (D7): update
+      // every owned thread whose working directory is this project.
+      const threads = await threadManager.listThreads(safeProjectId)
+      for (const thread of threads) {
+        if (thread.workingDirectory) {
+          const branchName = await repositoryService.getCurrentBranch(thread.workingDirectory)
+          if (branchName) await threadManager.setBranch(safeProjectId, thread.id, branchName)
+        }
       }
+      return status
     }
-    return status
-  })
-  ipcMain.handle('git:createBranch', async (_, projectId: unknown, name: unknown) => {
-    const safeProjectId = validateEntityId(projectId, 'Project ID')
-    const status = await gitService.createBranch(
-      await resolveProjectPath(safeProjectId),
-      validateBranchName(name)
-    )
-    const threads = await threadManager.listThreads(safeProjectId)
-    for (const thread of threads) {
-      if (thread.workingDirectory) {
-        const branchName = await repositoryService.getCurrentBranch(thread.workingDirectory)
-        if (branchName) await threadManager.setBranch(safeProjectId, thread.id, branchName)
+  )
+  ipcMain.handle(
+    'git:createBranch',
+    async (_, projectId: unknown, name: unknown, scopeBucketId?: unknown) => {
+      const safeProjectId = validateEntityId(projectId, 'Project ID')
+      const status = await gitService.createBranch(
+        await resolveProjectPath(
+          safeProjectId,
+          scopeBucketId === undefined
+            ? undefined
+            : validateEntityId(scopeBucketId, 'Scope bucket ID')
+        ),
+        validateBranchName(name)
+      )
+      const threads = await threadManager.listThreads(safeProjectId)
+      for (const thread of threads) {
+        if (thread.workingDirectory) {
+          const branchName = await repositoryService.getCurrentBranch(thread.workingDirectory)
+          if (branchName) await threadManager.setBranch(safeProjectId, thread.id, branchName)
+        }
       }
+      return status
     }
-    return status
-  })
+  )
+  ipcMain.handle(
+    'git:createTrackingBranch',
+    async (
+      _,
+      projectId: unknown,
+      remote: unknown,
+      branch: unknown,
+      localName: unknown,
+      scopeBucketId?: unknown
+    ) => {
+      const safeProjectId = validateEntityId(projectId, 'Project ID')
+      const status = await gitService.createTrackingBranch(
+        await resolveProjectPath(
+          safeProjectId,
+          scopeBucketId === undefined
+            ? undefined
+            : validateEntityId(scopeBucketId, 'Scope bucket ID')
+        ),
+        validateRemoteName(remote),
+        validateBranchName(branch, 'Remote branch'),
+        validateBranchName(localName, 'Local branch')
+      )
+      const threads = await threadManager.listThreads(safeProjectId)
+      for (const thread of threads) {
+        if (thread.workingDirectory) {
+          const branchName = await repositoryService.getCurrentBranch(thread.workingDirectory)
+          if (branchName) await threadManager.setBranch(safeProjectId, thread.id, branchName)
+        }
+      }
+      return status
+    }
+  )
   ipcMain.handle(
     'git:deleteBranch',
-    async (_, projectId: unknown, name: unknown, force?: unknown) => {
+    async (_, projectId: unknown, name: unknown, force?: unknown, scopeBucketId?: unknown) => {
       return gitService.deleteBranch(
-        await resolveProjectPath(validateEntityId(projectId, 'Project ID')),
+        await resolveProjectPath(
+          validateEntityId(projectId, 'Project ID'),
+          scopeBucketId === undefined
+            ? undefined
+            : validateEntityId(scopeBucketId, 'Scope bucket ID')
+        ),
         validateBranchName(name),
         force === undefined ? false : validateBoolean(force, 'Force delete')
       )
     }
   )
-  ipcMain.handle('git:log', async (_, projectId: unknown, limit?: unknown, offset?: unknown) => {
-    const bounded = validateBoundedInteger(limit ?? 50, 'Log limit', 1, 200)
-    const boundedOffset = validateBoundedInteger(offset ?? 0, 'Log offset', 0, 100_000)
-    return gitService.log(
-      await resolveProjectPath(validateEntityId(projectId, 'Project ID')),
-      bounded,
-      boundedOffset
-    )
-  })
-  ipcMain.handle('git:commitDiff', async (_, projectId: unknown, hash: unknown) => {
-    const safeHash = validateEntityId(hash, 'Commit hash')
-    return gitService.commitDiff(
-      await resolveProjectPath(validateEntityId(projectId, 'Project ID')),
-      safeHash
-    )
-  })
+  ipcMain.handle(
+    'git:log',
+    async (
+      _,
+      projectId: unknown,
+      limit?: unknown,
+      offset?: unknown,
+      query?: unknown,
+      scopeBucketId?: unknown
+    ) => {
+      const bounded = validateBoundedInteger(limit ?? 50, 'Log limit', 1, 200)
+      const boundedOffset = validateBoundedInteger(offset ?? 0, 'Log offset', 0, 100_000)
+      const safeQuery =
+        query === undefined
+          ? undefined
+          : validateBoundedString(query, 'Commit search query', 1, 256)
+      return gitService.log(
+        await resolveProjectPath(
+          validateEntityId(projectId, 'Project ID'),
+          scopeBucketId === undefined
+            ? undefined
+            : validateEntityId(scopeBucketId, 'Scope bucket ID')
+        ),
+        bounded,
+        boundedOffset,
+        safeQuery
+      )
+    }
+  )
+  ipcMain.handle(
+    'git:commitDiff',
+    async (_, projectId: unknown, hash: unknown, scopeBucketId?: unknown) => {
+      const safeHash = validateEntityId(hash, 'Commit hash')
+      return gitService.commitDiff(
+        await resolveProjectPath(
+          validateEntityId(projectId, 'Project ID'),
+          scopeBucketId === undefined
+            ? undefined
+            : validateEntityId(scopeBucketId, 'Scope bucket ID')
+        ),
+        safeHash
+      )
+    }
+  )
   ipcMain.handle(
     'git:commitFileDiff',
-    async (_, projectId: unknown, hash: unknown, relativePath: unknown) =>
+    async (_, projectId: unknown, hash: unknown, relativePath: unknown, scopeBucketId?: unknown) =>
       gitService.commitFileDiff(
-        await resolveProjectPath(validateEntityId(projectId, 'Project ID')),
+        await resolveProjectPath(
+          validateEntityId(projectId, 'Project ID'),
+          scopeBucketId === undefined
+            ? undefined
+            : validateEntityId(scopeBucketId, 'Scope bucket ID')
+        ),
         validateEntityId(hash, 'Commit hash'),
         validateGitRelativePath(relativePath)
       )
   )
-  ipcMain.handle('git:amend', async (_, projectId: unknown, message: unknown) =>
-    gitService.amend(
-      await resolveProjectPath(validateEntityId(projectId, 'Project ID')),
-      validateCommitMessage(message)
+  ipcMain.handle(
+    'git:amend',
+    async (_, projectId: unknown, message: unknown, scopeBucketId?: unknown) =>
+      gitService.amend(
+        await resolveProjectPath(
+          validateEntityId(projectId, 'Project ID'),
+          scopeBucketId === undefined
+            ? undefined
+            : validateEntityId(scopeBucketId, 'Scope bucket ID')
+        ),
+        validateCommitMessage(message)
+      )
+  )
+  ipcMain.handle(
+    'git:reset',
+    async (_, projectId: unknown, mode: unknown, target?: unknown, scopeBucketId?: unknown) => {
+      const safeProjectId = validateEntityId(projectId, 'Project ID')
+      const status = await gitService.reset(
+        await resolveProjectPath(
+          safeProjectId,
+          scopeBucketId === undefined
+            ? undefined
+            : validateEntityId(scopeBucketId, 'Scope bucket ID')
+        ),
+        validateGitResetMode(mode),
+        target === undefined ? undefined : validateEntityId(target, 'Reset target')
+      )
+      // A reset moves the branch, so keep thread.branch coherent like checkout.
+      const threads = await threadManager.listThreads(safeProjectId)
+      for (const thread of threads) {
+        if (thread.workingDirectory) {
+          const branchName = await repositoryService.getCurrentBranch(thread.workingDirectory)
+          if (branchName) await threadManager.setBranch(safeProjectId, thread.id, branchName)
+        }
+      }
+      return status
+    }
+  )
+  ipcMain.handle(
+    'git:deleteCommit',
+    async (_, projectId: unknown, target: unknown, scopeBucketId?: unknown) => {
+      const safeProjectId = validateEntityId(projectId, 'Project ID')
+      const status = await gitService.deleteCommit(
+        await resolveProjectPath(
+          safeProjectId,
+          scopeBucketId === undefined
+            ? undefined
+            : validateEntityId(scopeBucketId, 'Scope bucket ID')
+        ),
+        validateEntityId(target, 'Delete commit target')
+      )
+      const threads = await threadManager.listThreads(safeProjectId)
+      for (const thread of threads) {
+        if (thread.workingDirectory) {
+          const branchName = await repositoryService.getCurrentBranch(thread.workingDirectory)
+          if (branchName) await threadManager.setBranch(safeProjectId, thread.id, branchName)
+        }
+      }
+      return status
+    }
+  )
+  ipcMain.handle('git:getIdentity', async (_, projectId: unknown, scopeBucketId?: unknown) =>
+    gitService.getIdentity(
+      await resolveProjectPath(
+        validateEntityId(projectId, 'Project ID'),
+        scopeBucketId === undefined ? undefined : validateEntityId(scopeBucketId, 'Scope bucket ID')
+      )
     )
   )
-  ipcMain.handle('git:reset', async (_, projectId: unknown, mode: unknown, target?: unknown) => {
-    const safeProjectId = validateEntityId(projectId, 'Project ID')
-    const status = await gitService.reset(
-      await resolveProjectPath(safeProjectId),
-      validateGitResetMode(mode),
-      target === undefined ? undefined : validateEntityId(target, 'Reset target')
-    )
-    // A reset moves the branch, so keep thread.branch coherent like checkout.
-    const threads = await threadManager.listThreads(safeProjectId)
-    for (const thread of threads) {
-      if (thread.workingDirectory) {
-        const branchName = await repositoryService.getCurrentBranch(thread.workingDirectory)
-        if (branchName) await threadManager.setBranch(safeProjectId, thread.id, branchName)
-      }
+  ipcMain.handle(
+    'git:setIdentity',
+    async (_, projectId: unknown, identity: unknown, scopeBucketId?: unknown) => {
+      const safe = validateGitIdentity(identity)
+      return gitService.setIdentity(
+        await resolveProjectPath(
+          validateEntityId(projectId, 'Project ID'),
+          scopeBucketId === undefined
+            ? undefined
+            : validateEntityId(scopeBucketId, 'Scope bucket ID')
+        ),
+        safe.name,
+        safe.email
+      )
     }
-    return status
-  })
-  ipcMain.handle('git:deleteCommit', async (_, projectId: unknown, target: unknown) => {
-    const safeProjectId = validateEntityId(projectId, 'Project ID')
-    const status = await gitService.deleteCommit(
-      await resolveProjectPath(safeProjectId),
-      validateEntityId(target, 'Delete commit target')
-    )
-    const threads = await threadManager.listThreads(safeProjectId)
-    for (const thread of threads) {
-      if (thread.workingDirectory) {
-        const branchName = await repositoryService.getCurrentBranch(thread.workingDirectory)
-        if (branchName) await threadManager.setBranch(safeProjectId, thread.id, branchName)
-      }
-    }
-    return status
-  })
-  ipcMain.handle('git:getIdentity', async (_, projectId: unknown) =>
-    gitService.getIdentity(await resolveProjectPath(validateEntityId(projectId, 'Project ID')))
   )
-  ipcMain.handle('git:setIdentity', async (_, projectId: unknown, identity: unknown) => {
-    const safe = validateGitIdentity(identity)
-    return gitService.setIdentity(
-      await resolveProjectPath(validateEntityId(projectId, 'Project ID')),
-      safe.name,
-      safe.email
-    )
-  })
   // ─── Git remotes, sync & credentials ────────────────────────────────────
   const gitCredentialRef = (projectId: string): string => `git_pat_${projectId}`
   const gitCredentialStatus = async (projectId: string) => ({
     configured: await vault.exists(gitCredentialRef(projectId)),
     secureStorageAvailable: vault.isAvailable()
   })
-  ipcMain.handle('git:remotes', async (_, projectId: unknown) =>
-    gitService.listRemotes(await resolveProjectPath(validateEntityId(projectId, 'Project ID')))
-  )
-  ipcMain.handle('git:addRemote', async (_, projectId: unknown, name: unknown, url: unknown) =>
-    gitService.addRemote(
-      await resolveProjectPath(validateEntityId(projectId, 'Project ID')),
-      validateRemoteName(name),
-      validateRemoteUrl(url)
+  ipcMain.handle('git:remotes', async (_, projectId: unknown, scopeBucketId?: unknown) =>
+    gitService.listRemotes(
+      await resolveProjectPath(
+        validateEntityId(projectId, 'Project ID'),
+        scopeBucketId === undefined ? undefined : validateEntityId(scopeBucketId, 'Scope bucket ID')
+      )
     )
   )
-  ipcMain.handle('git:removeRemote', async (_, projectId: unknown, name: unknown) =>
-    gitService.removeRemote(
-      await resolveProjectPath(validateEntityId(projectId, 'Project ID')),
-      validateRemoteName(name)
-    )
+  ipcMain.handle(
+    'git:addRemote',
+    async (_, projectId: unknown, name: unknown, url: unknown, scopeBucketId?: unknown) =>
+      gitService.addRemote(
+        await resolveProjectPath(
+          validateEntityId(projectId, 'Project ID'),
+          scopeBucketId === undefined
+            ? undefined
+            : validateEntityId(scopeBucketId, 'Scope bucket ID')
+        ),
+        validateRemoteName(name),
+        validateRemoteUrl(url)
+      )
   )
-  ipcMain.handle('git:fetch', async (_, projectId: unknown) =>
-    gitService.fetch(await resolveProjectPath(validateEntityId(projectId, 'Project ID')))
+  ipcMain.handle(
+    'git:removeRemote',
+    async (_, projectId: unknown, name: unknown, scopeBucketId?: unknown) =>
+      gitService.removeRemote(
+        await resolveProjectPath(
+          validateEntityId(projectId, 'Project ID'),
+          scopeBucketId === undefined
+            ? undefined
+            : validateEntityId(scopeBucketId, 'Scope bucket ID')
+        ),
+        validateRemoteName(name)
+      )
+  )
+  ipcMain.handle('git:fetch', async (_, projectId: unknown, scopeBucketId?: unknown) =>
+    gitService.fetch(
+      await resolveProjectPath(
+        validateEntityId(projectId, 'Project ID'),
+        scopeBucketId === undefined ? undefined : validateEntityId(scopeBucketId, 'Scope bucket ID')
+      )
+    )
   )
   ipcMain.handle(
     'git:fetchBranch',
-    async (_, projectId: unknown, remote: unknown, branch: unknown) =>
+    async (_, projectId: unknown, remote: unknown, branch: unknown, scopeBucketId?: unknown) =>
       gitService.fetchBranch(
-        await resolveProjectPath(validateEntityId(projectId, 'Project ID')),
+        await resolveProjectPath(
+          validateEntityId(projectId, 'Project ID'),
+          scopeBucketId === undefined
+            ? undefined
+            : validateEntityId(scopeBucketId, 'Scope bucket ID')
+        ),
         validateRemoteName(remote),
         validateBranchName(branch)
       )
   )
-  ipcMain.handle('git:pull', async (_, projectId: unknown) =>
-    gitService.pull(await resolveProjectPath(validateEntityId(projectId, 'Project ID')))
+  ipcMain.handle('git:pull', async (_, projectId: unknown, scopeBucketId?: unknown) =>
+    gitService.pull(
+      await resolveProjectPath(
+        validateEntityId(projectId, 'Project ID'),
+        scopeBucketId === undefined ? undefined : validateEntityId(scopeBucketId, 'Scope bucket ID')
+      )
+    )
   )
-  ipcMain.handle('git:pullIntegrate', async (_, projectId: unknown, options: unknown) => {
-    const safeProjectId = validateEntityId(projectId, 'Project ID')
-    const safeOptions = validatePullIntegrateOptions(options)
-    // Resolve the vaulted PAT in main only; the token never crosses IPC.
-    const tokenRef = gitCredentialRef(safeProjectId)
-    const token = (await vault.exists(tokenRef)) ? await vault.resolve(tokenRef) : undefined
-    return gitService.pullIntegrate(await resolveProjectPath(safeProjectId), {
-      ...safeOptions,
-      token
-    })
-  })
-  ipcMain.handle('git:push', async (_, projectId: unknown, options: unknown) => {
-    const safeProjectId = validateEntityId(projectId, 'Project ID')
-    const safeOptions = validatePushOptions(options)
-    // Resolve the vaulted PAT in main only; the token never crosses IPC.
-    const tokenRef = gitCredentialRef(safeProjectId)
-    const token = (await vault.exists(tokenRef)) ? await vault.resolve(tokenRef) : undefined
-    return gitService.push(await resolveProjectPath(safeProjectId), { ...safeOptions, token })
-  })
+  ipcMain.handle(
+    'git:pullIntegrate',
+    async (_, projectId: unknown, options: unknown, scopeBucketId?: unknown) => {
+      const safeProjectId = validateEntityId(projectId, 'Project ID')
+      const safeOptions = validatePullIntegrateOptions(options)
+      // Resolve the vaulted PAT in main only; the token never crosses IPC.
+      const tokenRef = gitCredentialRef(safeProjectId)
+      const token = (await vault.exists(tokenRef)) ? await vault.resolve(tokenRef) : undefined
+      return gitService.pullIntegrate(
+        await resolveProjectPath(
+          safeProjectId,
+          scopeBucketId === undefined
+            ? undefined
+            : validateEntityId(scopeBucketId, 'Scope bucket ID')
+        ),
+        {
+          ...safeOptions,
+          token
+        }
+      )
+    }
+  )
+  ipcMain.handle(
+    'git:push',
+    async (_, projectId: unknown, options: unknown, scopeBucketId?: unknown) => {
+      const safeProjectId = validateEntityId(projectId, 'Project ID')
+      const safeOptions = validatePushOptions(options)
+      // Resolve the vaulted PAT in main only; the token never crosses IPC.
+      const tokenRef = gitCredentialRef(safeProjectId)
+      const token = (await vault.exists(tokenRef)) ? await vault.resolve(tokenRef) : undefined
+      return gitService.push(
+        await resolveProjectPath(
+          safeProjectId,
+          scopeBucketId === undefined
+            ? undefined
+            : validateEntityId(scopeBucketId, 'Scope bucket ID')
+        ),
+        { ...safeOptions, token }
+      )
+    }
+  )
   ipcMain.handle('git:getCredentialStatus', async (_, projectId: unknown) =>
     gitCredentialStatus(validateEntityId(projectId, 'Project ID'))
   )
@@ -4016,78 +4627,161 @@ export function registerIpcHandlers(
   })
 
   // ─── Merge / rebase / stash (Phase 4) ───────────────────────────────────
-  ipcMain.handle('git:merge', async (_, projectId: unknown, target: unknown) =>
-    gitService.merge(
-      await resolveProjectPath(validateEntityId(projectId, 'Project ID')),
-      validateMergeTarget(target)
-    )
+  ipcMain.handle(
+    'git:merge',
+    async (_, projectId: unknown, target: unknown, scopeBucketId?: unknown) =>
+      gitService.merge(
+        await resolveProjectPath(
+          validateEntityId(projectId, 'Project ID'),
+          scopeBucketId === undefined
+            ? undefined
+            : validateEntityId(scopeBucketId, 'Scope bucket ID')
+        ),
+        validateMergeTarget(target)
+      )
   )
-  ipcMain.handle('git:rebase', async (_, projectId: unknown, target: unknown) =>
-    gitService.rebase(
-      await resolveProjectPath(validateEntityId(projectId, 'Project ID')),
-      validateMergeTarget(target)
-    )
+  ipcMain.handle(
+    'git:rebase',
+    async (_, projectId: unknown, target: unknown, scopeBucketId?: unknown) =>
+      gitService.rebase(
+        await resolveProjectPath(
+          validateEntityId(projectId, 'Project ID'),
+          scopeBucketId === undefined
+            ? undefined
+            : validateEntityId(scopeBucketId, 'Scope bucket ID')
+        ),
+        validateMergeTarget(target)
+      )
   )
-  ipcMain.handle('git:preparePrResolve', async (_, projectId: unknown, options: unknown) =>
-    gitService.preparePrResolve(
-      await resolveProjectPath(validateEntityId(projectId, 'Project ID')),
-      validatePrResolveOptions(options)
-    )
+  ipcMain.handle(
+    'git:preparePrResolve',
+    async (_, projectId: unknown, options: unknown, scopeBucketId?: unknown) =>
+      gitService.preparePrResolve(
+        await resolveProjectPath(
+          validateEntityId(projectId, 'Project ID'),
+          scopeBucketId === undefined
+            ? undefined
+            : validateEntityId(scopeBucketId, 'Scope bucket ID')
+        ),
+        validatePrResolveOptions(options)
+      )
   )
-  ipcMain.handle('git:stash', async (_, projectId: unknown, message?: unknown, paths?: unknown) =>
-    gitService.stash(
-      await resolveProjectPath(validateEntityId(projectId, 'Project ID')),
-      validateStashMessage(message),
-      paths === undefined ? undefined : validateGitPathArray(paths)
-    )
+  ipcMain.handle(
+    'git:stash',
+    async (_, projectId: unknown, message?: unknown, paths?: unknown, scopeBucketId?: unknown) =>
+      gitService.stash(
+        await resolveProjectPath(
+          validateEntityId(projectId, 'Project ID'),
+          scopeBucketId === undefined
+            ? undefined
+            : validateEntityId(scopeBucketId, 'Scope bucket ID')
+        ),
+        validateStashMessage(message),
+        paths === undefined ? undefined : validateGitPathArray(paths)
+      )
   )
-  ipcMain.handle('git:ignore', async (_, projectId: unknown, paths: unknown) =>
-    gitService.ignore(
-      await resolveProjectPath(validateEntityId(projectId, 'Project ID')),
-      validateGitPathArray(paths)
-    )
+  ipcMain.handle(
+    'git:ignore',
+    async (_, projectId: unknown, paths: unknown, scopeBucketId?: unknown) =>
+      gitService.ignore(
+        await resolveProjectPath(
+          validateEntityId(projectId, 'Project ID'),
+          scopeBucketId === undefined
+            ? undefined
+            : validateEntityId(scopeBucketId, 'Scope bucket ID')
+        ),
+        validateGitPathArray(paths)
+      )
   )
-  ipcMain.handle('git:discard', async (_, projectId: unknown, paths: unknown) =>
-    gitService.discard(
-      await resolveProjectPath(validateEntityId(projectId, 'Project ID')),
-      validateGitPathArray(paths)
-    )
+  ipcMain.handle(
+    'git:discard',
+    async (_, projectId: unknown, paths: unknown, scopeBucketId?: unknown) =>
+      gitService.discard(
+        await resolveProjectPath(
+          validateEntityId(projectId, 'Project ID'),
+          scopeBucketId === undefined
+            ? undefined
+            : validateEntityId(scopeBucketId, 'Scope bucket ID')
+        ),
+        validateGitPathArray(paths)
+      )
   )
-  ipcMain.handle('git:stashList', async (_, projectId: unknown) =>
-    gitService.listStashes(await resolveProjectPath(validateEntityId(projectId, 'Project ID')))
-  )
-  ipcMain.handle('git:stashPop', async (_, projectId: unknown, id?: unknown) =>
-    gitService.popStash(
-      await resolveProjectPath(validateEntityId(projectId, 'Project ID')),
-      validateStashId(id)
-    )
-  )
-  ipcMain.handle('git:stashDrop', async (_, projectId: unknown, id?: unknown) =>
-    gitService.dropStash(
-      await resolveProjectPath(validateEntityId(projectId, 'Project ID')),
-      validateStashId(id)
-    )
-  )
-  ipcMain.handle('git:stashDiff', async (_, projectId: unknown, id: unknown) =>
-    gitService.stashDiff(
-      await resolveProjectPath(validateEntityId(projectId, 'Project ID')),
-      validateStashId(id) ?? ''
+  ipcMain.handle('git:stashList', async (_, projectId: unknown, scopeBucketId?: unknown) =>
+    gitService.listStashes(
+      await resolveProjectPath(
+        validateEntityId(projectId, 'Project ID'),
+        scopeBucketId === undefined ? undefined : validateEntityId(scopeBucketId, 'Scope bucket ID')
+      )
     )
   )
   ipcMain.handle(
+    'git:stashPop',
+    async (_, projectId: unknown, id?: unknown, scopeBucketId?: unknown) =>
+      gitService.popStash(
+        await resolveProjectPath(
+          validateEntityId(projectId, 'Project ID'),
+          scopeBucketId === undefined
+            ? undefined
+            : validateEntityId(scopeBucketId, 'Scope bucket ID')
+        ),
+        validateStashId(id)
+      )
+  )
+  ipcMain.handle(
+    'git:stashDrop',
+    async (_, projectId: unknown, id?: unknown, scopeBucketId?: unknown) =>
+      gitService.dropStash(
+        await resolveProjectPath(
+          validateEntityId(projectId, 'Project ID'),
+          scopeBucketId === undefined
+            ? undefined
+            : validateEntityId(scopeBucketId, 'Scope bucket ID')
+        ),
+        validateStashId(id)
+      )
+  )
+  ipcMain.handle(
+    'git:stashDiff',
+    async (_, projectId: unknown, id: unknown, scopeBucketId?: unknown) =>
+      gitService.stashDiff(
+        await resolveProjectPath(
+          validateEntityId(projectId, 'Project ID'),
+          scopeBucketId === undefined
+            ? undefined
+            : validateEntityId(scopeBucketId, 'Scope bucket ID')
+        ),
+        validateStashId(id) ?? ''
+      )
+  )
+  ipcMain.handle(
     'git:stashFileDiff',
-    async (_, projectId: unknown, id: unknown, relativePath: unknown) =>
+    async (_, projectId: unknown, id: unknown, relativePath: unknown, scopeBucketId?: unknown) =>
       gitService.stashFileDiff(
-        await resolveProjectPath(validateEntityId(projectId, 'Project ID')),
+        await resolveProjectPath(
+          validateEntityId(projectId, 'Project ID'),
+          scopeBucketId === undefined
+            ? undefined
+            : validateEntityId(scopeBucketId, 'Scope bucket ID')
+        ),
         validateStashId(id) ?? '',
         validateGitRelativePath(relativePath)
       )
   )
-  ipcMain.handle('git:abortMerge', async (_, projectId: unknown) =>
-    gitService.abortMerge(await resolveProjectPath(validateEntityId(projectId, 'Project ID')))
+  ipcMain.handle('git:abortMerge', async (_, projectId: unknown, scopeBucketId?: unknown) =>
+    gitService.abortMerge(
+      await resolveProjectPath(
+        validateEntityId(projectId, 'Project ID'),
+        scopeBucketId === undefined ? undefined : validateEntityId(scopeBucketId, 'Scope bucket ID')
+      )
+    )
   )
-  ipcMain.handle('git:abortRebase', async (_, projectId: unknown) =>
-    gitService.abortRebase(await resolveProjectPath(validateEntityId(projectId, 'Project ID')))
+  ipcMain.handle('git:abortRebase', async (_, projectId: unknown, scopeBucketId?: unknown) =>
+    gitService.abortRebase(
+      await resolveProjectPath(
+        validateEntityId(projectId, 'Project ID'),
+        scopeBucketId === undefined ? undefined : validateEntityId(scopeBucketId, 'Scope bucket ID')
+      )
+    )
   )
 
   // ─── Pull requests (GitHub-first) ───────────────────────────────────────
@@ -4101,8 +4795,13 @@ export function registerIpcHandlers(
     const token = await vault.resolve(tokenRef)
     return new GitHubProvider(token)
   }
-  const remoteIdentity = async (projectId: string): Promise<{ owner: string; repo: string }> => {
-    const remoteUrl = await repositoryService.getRemoteOrigin(await resolveProjectPath(projectId))
+  const remoteIdentity = async (
+    projectId: string,
+    scopeBucketId?: string
+  ): Promise<{ owner: string; repo: string }> => {
+    const remoteUrl = await repositoryService.getRemoteOrigin(
+      await resolveProjectPath(projectId, scopeBucketId)
+    )
     const provider = new GitHubProvider('')
     const identity = provider.resolveRepositoryIdentity(remoteUrl ?? '')
     if (!identity) {
@@ -4110,24 +4809,29 @@ export function registerIpcHandlers(
     }
     return identity
   }
-  ipcMain.handle('pr:create', async (_, projectId: unknown, input: unknown) => {
-    const safeProjectId = validateEntityId(projectId, 'Project ID')
-    const provider = await providerForProject(safeProjectId)
-    if (!provider) throw new Error('Configure a GitHub token first (Git panel → Credentials)')
-    const identity = await remoteIdentity(safeProjectId)
-    const draft = validatePrCreateInput(input)
-    return runGitHubMutation(identity.owner, identity.repo, () =>
-      provider.createPullRequest({
-        owner: identity.owner,
-        repo: identity.repo,
-        title: draft.title,
-        body: draft.body,
-        head: draft.head,
-        base: draft.base,
-        draft: draft.draft
-      })
-    )
-  })
+  ipcMain.handle(
+    'pr:create',
+    async (_, projectId: unknown, input: unknown, scopeBucketId?: unknown) => {
+      const safeProjectId = validateEntityId(projectId, 'Project ID')
+      const provider = await providerForProject(safeProjectId)
+      if (!provider) throw new Error('Configure a GitHub token first (Git panel → Credentials)')
+      const safeScopeBucketId =
+        scopeBucketId === undefined ? undefined : validateEntityId(scopeBucketId, 'Scope bucket ID')
+      const identity = await remoteIdentity(safeProjectId, safeScopeBucketId)
+      const draft = validatePrCreateInput(input)
+      return runGitHubMutation(identity.owner, identity.repo, () =>
+        provider.createPullRequest({
+          owner: identity.owner,
+          repo: identity.repo,
+          title: draft.title,
+          body: draft.body,
+          head: draft.head,
+          base: draft.base,
+          draft: draft.draft
+        })
+      )
+    }
+  )
   ipcMain.handle(
     'pr:list',
     async (_, projectId: unknown, owner: unknown, repo: unknown, state?: unknown) => {
@@ -4175,7 +4879,15 @@ export function registerIpcHandlers(
 
   ipcMain.handle(
     'pr:compare',
-    async (_, projectId: unknown, owner: unknown, repo: unknown, base: unknown, head: unknown) => {
+    async (
+      _,
+      projectId: unknown,
+      owner: unknown,
+      repo: unknown,
+      base: unknown,
+      head: unknown,
+      scopeBucketId?: unknown
+    ) => {
       const safeProjectId = validateEntityId(projectId, 'Project ID')
       const provider = await providerForProject(safeProjectId)
       if (!provider) throw new Error('Sign in to GitHub to create pull requests')
@@ -4233,7 +4945,12 @@ export function registerIpcHandlers(
         missingRemoteHead = error
       }
       const localCompare = await gitService.comparePullRequestBranches(
-        await resolveProjectPath(safeProjectId),
+        await resolveProjectPath(
+          safeProjectId,
+          scopeBucketId === undefined
+            ? undefined
+            : validateEntityId(scopeBucketId, 'Scope bucket ID')
+        ),
         safeBase,
         safeHead
       )
@@ -5016,16 +5733,32 @@ export function registerIpcHandlers(
   ipcMain.handle('pr:composeWithAgent', async (_, ...args: unknown[]) => {
     if (!chatEngine?.runVirtualTask) throw new Error('The PR compose agent is unavailable')
     const safeProjectId = validateEntityId(args[0], 'Project ID')
-    const virtualTaskId = validateEntityId(args[1], 'Virtual task ID')
-    const settings = validateThreadSettings(args[2])
-    const title = validateBoundedString(args[3], 'Virtual task title', 1, 512)
-    const prompt = validateBoundedString(args[4], 'Virtual task prompt', 1, 200_000)
+    const scopeBucketId = validateEntityId(args[1], 'Scope bucket ID')
+    const virtualTaskId = validateEntityId(args[2], 'Virtual task ID')
+    const settings = validateThreadSettings({
+      ...validateThreadSettings(args[3]),
+      permissionLevel: 'auto_review',
+      engineeringMode: false,
+      assignmentMode: false,
+      loopMode: false
+    })
+    const input = validatePrComposeInput(args[4])
+    const context = await gitService.pullRequestComposeContext(
+      await resolveProjectPath(safeProjectId, scopeBucketId),
+      input
+    )
     const response = await chatEngine.runVirtualTask(
       safeProjectId,
       virtualTaskId,
       settings,
-      title,
-      prompt
+      `Compose PR: ${input.head} to ${input.base}`,
+      prComposePrompt(input, context),
+      {
+        systemPrompt: PR_COMPOSE_SYSTEM_PROMPT,
+        readOnly: true,
+        allowedTools: [],
+        structuredOutput: { schema: PR_COMPOSE_OUTPUT_SCHEMA, retryCount: 2 }
+      }
     )
     const report = prComposeResponse(response)
     if (!report.title.trim()) throw new Error('The PR compose agent returned no title')
@@ -5143,8 +5876,8 @@ export function registerIpcHandlers(
     const scope = rawRequest['scope']
     if (!isRecord(scope)) throw new TypeError('Skill install scope must be an object')
     const scopeKind = scope['kind']
-    if (scopeKind !== 'global' && scopeKind !== 'projects') {
-      throw new TypeError('Select global or project installation')
+    if (scopeKind !== 'global' && scopeKind !== 'projects' && scopeKind !== 'harnesses') {
+      throw new TypeError('Select global, project, or harness installation')
     }
     const projectIds =
       scopeKind === 'projects' ? selectedIds(scope['projectIds'], 'Project IDs') : []
@@ -5154,6 +5887,9 @@ export function registerIpcHandlers(
     }
 
     if (manager === 'cio') {
+      if (scopeKind === 'harnesses') {
+        throw new TypeError('CodeInOven-managed skills support global or project scope')
+      }
       const activation = rawRequest['activation']
       if (activation !== 'always' && activation !== 'on_demand') {
         throw new TypeError('Select always available or on-demand activation')
@@ -5187,30 +5923,23 @@ export function registerIpcHandlers(
       return `Added ${definitions.length} CodeInOven-managed skill${definitions.length === 1 ? '' : 's'}`
     }
 
-    const nativeTarget = rawRequest['nativeTarget']
-    if (!isRecord(nativeTarget)) throw new TypeError('Select a native skill directory')
     const knownHarnesses = new Set(listHarnesses().map((harness) => harness.id))
-    const targetKind = nativeTarget['kind']
-    let agentTargets: string[]
-    if (targetKind === 'shared') {
-      agentTargets = ['*']
-    } else if (targetKind === 'harnesses') {
-      agentTargets = selectedIds(nativeTarget['harnessIds'], 'Harness IDs')
+    let agentTargets = ['*']
+    if (scopeKind === 'harnesses') {
+      agentTargets = selectedIds(scope['harnessIds'], 'Harness IDs')
       if (agentTargets.some((harnessId) => !knownHarnesses.has(harnessId))) {
         throw new TypeError('Select only supported harnesses')
       }
-    } else {
-      throw new TypeError('Native skill directory is invalid')
     }
     const destinations =
-      scopeKind === 'global'
-        ? [app.getPath('home')]
-        : projectIds.map((projectId) => projectPaths.get(projectId)!)
+      scopeKind === 'projects'
+        ? projectIds.map((projectId) => projectPaths.get(projectId)!)
+        : [app.getPath('home')]
     const outputs: string[] = []
     for (const directory of destinations) {
       for (const agentTarget of agentTargets) {
         outputs.push(
-          await installSkillWithBun(
+          await installSkillWithPackageManager(
             [
               'add',
               installSource,
@@ -5219,11 +5948,14 @@ export function registerIpcHandlers(
               '--agent',
               agentTarget,
               '-y',
-              ...(scopeKind === 'global' ? ['--global'] : [])
+              ...(scopeKind === 'projects' ? [] : ['--global'])
             ],
             directory
           )
         )
+        if (scopeKind === 'harnesses') {
+          await materializeHarnessGlobalSkill(directory, skillId, agentTarget)
+        }
       }
     }
     return outputs.filter(Boolean).at(-1) ?? `Installed to ${destinations.length} destination(s)`
@@ -5306,18 +6038,8 @@ export function registerIpcHandlers(
   })
 
   // ─── Threads ────────────────────────────────────────────────────────────
-  ipcMain.handle('thread:create', async (_, input: unknown) => {
+  ipcMain.handle('thread:create', (_, input: unknown) => {
     const validated = validateCreateThreadInput(input)
-    if (validated.settings?.engineeringMode) {
-      const baseSettings = { ...validated.settings }
-      delete baseSettings.loopAuditor
-      const defaults = (await storage.getConfig()).agentDefaults
-      validated.settings = {
-        ...baseSettings,
-        ...(defaults.seniorEngineer ?? {}),
-        ...(defaults.auditor ? { loopAuditor: defaults.auditor } : {})
-      }
-    }
     // Optimistic create: the thread object (with its stable id) is returned
     // immediately while persistence, lazy capacity eviction, and branch
     // detection finalize in the background. Session/message entry points await
@@ -5331,16 +6053,45 @@ export function registerIpcHandlers(
           error: String(error)
         })
     })
-    threadCreation.begin(thread.id, async () => {
-      await finalize()
-      if (thread.workingDirectory) {
-        const branch = await repositoryService.getCurrentBranch(thread.workingDirectory)
-        if (branch) {
-          await threadManager.setBranch(thread.projectId, thread.id, branch)
-          thread.branch = branch
+    threadCreation.begin(
+      thread.id,
+      async () => {
+        if (validated.settings?.engineeringMode) {
+          const baseSettings = { ...validated.settings }
+          delete baseSettings.loopAuditor
+          const defaults = (await storage.getConfig()).agentDefaults
+          thread.settings = {
+            ...baseSettings,
+            ...(defaults.seniorEngineer ?? {}),
+            ...(defaults.auditor ? { loopAuditor: defaults.auditor } : {})
+          }
         }
+        await finalize()
+        if (thread.workingDirectory) {
+          try {
+            const branch = await repositoryService.getCurrentBranch(thread.workingDirectory)
+            if (branch) {
+              await threadManager.setBranch(thread.projectId, thread.id, branch)
+              thread.branch = branch
+            }
+          } catch (error) {
+            Logger.error('New thread branch detection failed', {
+              threadId: thread.id,
+              error: String(error)
+            })
+          }
+        }
+        broadcastThreadUpdate(thread)
+      },
+      () => {
+        broadcastThreadDeleted(thread)
+        broadcastThreadOperationError(
+          'The new thread could not be saved and was removed.',
+          thread.projectId,
+          thread.id
+        )
       }
-    })
+    )
     return thread
   })
   if (!options.hydrationHandlersRegistered) {
@@ -5504,10 +6255,32 @@ export function registerIpcHandlers(
       validateThreadUpdateInput(input)
     )
   )
-  ipcMain.handle('thread:delete', async (_, projectId: unknown, threadId: unknown) => {
+  ipcMain.handle('thread:delete', (_, projectId: unknown, threadId: unknown) => {
     const validProjectId = validateEntityId(projectId, 'Project ID')
     const validThreadId = validateEntityId(threadId, 'Thread ID')
-    await threadManager.deleteThread(validProjectId, validThreadId)
+    threadDeletion.begin(
+      validProjectId,
+      validThreadId,
+      () => threadManager.deleteThread(validProjectId, validThreadId),
+      () => {
+        void threadManager.getThreadViaWorker(validProjectId, validThreadId).then((thread) => {
+          if (thread) {
+            broadcastThreadUpdate(thread)
+            broadcastThreadOperationError(
+              'The thread cleanup failed. The thread has been restored.',
+              validProjectId,
+              validThreadId
+            )
+            return
+          }
+          broadcastThreadOperationError(
+            'The thread was deleted, but some background cleanup did not finish.',
+            validProjectId,
+            validThreadId
+          )
+        })
+      }
+    )
   })
   // ─── Thread notes (user-only scratch space) ─────────────────────────────
   const NOTE_BODY_MAX = 100_000

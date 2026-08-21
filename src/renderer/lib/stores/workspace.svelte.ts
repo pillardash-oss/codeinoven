@@ -160,7 +160,7 @@ class WorkspaceState {
     // Event-driven git refresh: every thread open (creation, switch, restore)
     // tells the git store the project is in use, so it can refresh status and
     // the connection-gated PR indicators without any polling.
-    gitState.notifyThreadOpened(project)
+    gitState.notifyThreadOpened(project, thread)
     // The moment a thread is opened its notifications are stale — drop them so
     // an error/completion that was already seen never lingers in the panel.
     notificationPanelState.dismissForThread(thread.projectId, thread.id)

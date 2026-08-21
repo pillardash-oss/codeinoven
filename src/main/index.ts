@@ -37,6 +37,7 @@ import {
   installProcessCrashDiagnostics
 } from './system/lifecycle-diagnostics'
 import type { ChatEngine } from './chat/chat-engine'
+import type { GatewaySupervisorService } from './gateway/gateway-supervisor-service'
 import type { HarnessManifestService } from './agents/harness-manifest-service'
 import type { ComputerUsePipService } from './utilities/computer-use-pip-service'
 import type { UpdaterService } from './notifications/updater-service'
@@ -44,6 +45,7 @@ import type { PowerWakeService } from './system/power-wake-service'
 import type { RetrySchedulerService } from './system/retry-scheduler-service'
 import { ModelPricingService } from './providers/model-pricing-service'
 import { ThreadCreationCoordinator } from './chat/thread-creation-coordinator'
+import { ThreadDeletionCoordinator } from './chat/thread-deletion-coordinator'
 import type { PtyService } from './system/pty-service'
 import type { ProviderConnectionService } from './providers/provider-connection'
 import type { HarnessUpdateService } from './agents/harness-update-service'
@@ -136,6 +138,7 @@ installProcessCrashDiagnostics()
 let mainWindow: BrowserWindow | null = null
 let splashWindow: BrowserWindow | null = null
 let browserService: BrowserService | null = null
+let gatewaySupervisor: GatewaySupervisorService | null = null
 let quitCleanupStarted = false
 let shutdownFailsafe: ReturnType<typeof setTimeout> | null = null
 
@@ -368,6 +371,8 @@ let powerWakeService: PowerWakeService | null = null
 let retryScheduler: RetrySchedulerService | null = null
 let remoteCredentials: DeviceCredentialService | null = null
 let remoteMode: RemoteModeController | null = null
+let stopRemoteOwnershipListener: (() => void) | null = null
+let remoteRestorePromise: Promise<void> | null = null
 let modelPricingService: ModelPricingService | null = null
 /**
  * Resolved lazily so the `appfile://` preview protocol can be installed before
@@ -376,6 +381,7 @@ let modelPricingService: ModelPricingService | null = null
  */
 let appfileProjectFiles: import('./editor/project-files-service').ProjectFilesService | null = null
 const threadCreation = new ThreadCreationCoordinator()
+const threadDeletion = new ThreadDeletionCoordinator()
 
 /** Resolve the app icon — static dir in dev, bundled renderer assets in production. */
 function getAppIconPath(): string {
@@ -501,6 +507,9 @@ async function bootPostPaintServices(): Promise<void> {
     { ProjectManager },
     { ProjectFilesService },
     { ChatEngine },
+    { ScopeManager },
+    { ScopeRootResolver, scopeRootProvider },
+    { ScopeWorktreeService },
     { HarnessManifestService },
     { ComputerUsePipService },
     { UpdaterService },
@@ -511,6 +520,9 @@ async function bootPostPaintServices(): Promise<void> {
     import('../lib/engines/project-manager'),
     import('./editor/project-files-service'),
     import('./chat/chat-engine'),
+    import('../lib/engines/scope-manager'),
+    import('./workspaces/scope-root-resolver'),
+    import('./git/scope-worktree-service'),
     import('./agents/harness-manifest-service'),
     import('./utilities/computer-use-pip-service'),
     import('./notifications/updater-service'),
@@ -519,6 +531,13 @@ async function bootPostPaintServices(): Promise<void> {
   ])
 
   const projectManager = new ProjectManager(database)
+  const scopeManager = new ScopeManager(database)
+  const scopeWorktreeService = new ScopeWorktreeService(scopeManager, projectManager)
+  const scopeRootResolver = new ScopeRootResolver(
+    projectManager,
+    scopeManager,
+    scopeWorktreeService
+  )
   const projectFilesService = new ProjectFilesService(projectManager)
   appfileProjectFiles = projectFilesService
   computerUsePipService = new ComputerUsePipService(storage)
@@ -530,7 +549,9 @@ async function bootPostPaintServices(): Promise<void> {
     computerUsePipService,
     harnessManifestService,
     threadCreation,
-    join(app.getPath('userData'), 'owned-processes.json')
+    join(app.getPath('userData'), 'owned-processes.json'),
+    scopeRootProvider(scopeRootResolver),
+    modelPricingService
   )
   // Merge the app-managed lean opencode agents into the machine-wide global
   // config. Idempotent, additive-only and non-fatal; runs after first paint
@@ -575,7 +596,9 @@ async function bootPostPaintServices(): Promise<void> {
     powerWakeService,
     retryScheduler,
     harnessManifestService,
+    worktreeService: scopeWorktreeService,
     threadCreation,
+    threadDeletion,
     hydrationHandlersRegistered: true
   })
   chatEngine.register()
@@ -619,7 +642,7 @@ async function bootPostPaintServices(): Promise<void> {
       import('./system/restart-recovery-service')
     ])
 
-    ptyService = new PtyService(storage, database)
+    ptyService = new PtyService(storage, database, scopeRootResolver)
     providerConnection = new ProviderConnectionService()
     harnessUpdateService = new HarnessUpdateService(providerConnection)
     harnessAutoUpdateService = new HarnessAutoUpdateService(storage)
@@ -641,7 +664,9 @@ async function bootPostPaintServices(): Promise<void> {
         database,
         chatEngine: chatEngine!,
         storage,
-        credentials: remoteCredentials
+        credentials: remoteCredentials,
+        threadCreation,
+        threadDeletion
       }),
       storage,
       credentials: remoteCredentials,
@@ -678,8 +703,20 @@ async function bootPostPaintServices(): Promise<void> {
         // memories, so replacing the local list is what propagates deletions.
         await accountMemory.saveEntries(entries.filter((entry) => entry.scope === 'global'))
       },
+      canOwnTransport: () => instanceRegistry.isPreferredRemoteOwner(),
       onSessionActiveChange: (active) => powerWakeService?.setRemoteSessionActive(active)
     })
+
+    const restoreRemoteModeIfOwner = (): void => {
+      if (!remoteMode || !instanceRegistry.isPreferredRemoteOwner() || remoteRestorePromise) return
+      remoteRestorePromise = remoteMode
+        .restoreRemoteMode()
+        .catch((error) => Logger.error('Remote mode restore failed (non-fatal):', error))
+        .finally(() => {
+          remoteRestorePromise = null
+        })
+    }
+    stopRemoteOwnershipListener = instanceRegistry.onLiveInstancesChanged(restoreRemoteModeIfOwner)
 
     // Optional IPC — registered only after the services exist.
     if (updaterService) {
@@ -700,9 +737,25 @@ async function bootPostPaintServices(): Promise<void> {
     const { registerProviderAccountIpc } = await import('./ipc/provider-account-ipc')
     const { registerBaseUrlProviderIpc } = await import('./providers/base-url-provider-ipc')
     const { registerUtilityIpc } = await import('./ipc/utility-ipc')
+    const { registerGatewayIpc } = await import('./ipc/gateway-ipc')
+    const { OwnedProcessJournal } = await import('./system/owned-process-journal')
     registerProviderAccountIpc()
     registerBaseUrlProviderIpc(storage)
     registerUtilityIpc(storage, undefined, undefined, undefined, computerUsePipService ?? undefined)
+    gatewaySupervisor = registerGatewayIpc(
+      storage,
+      () => mainWindow?.webContents ?? null,
+      undefined,
+      new OwnedProcessJournal(join(getConfigRoot(), 'gateways', 'owned-processes.json'))
+    )
+    // Reap gateway processes orphaned by a previous crash before anything can
+    // bind their port again, then bring enabled gateways back up.
+    void gatewaySupervisor
+      .recoverOrphans()
+      .then(() => gatewaySupervisor?.autoStartEnabled())
+      .catch((error) => {
+        Logger.error('Gateway startup recovery failed (non-fatal):', error)
+      })
 
     // Wire PTY to the window now that it exists.
     if (mainWindow && !mainWindow.isDestroyed()) {
@@ -779,9 +832,7 @@ async function bootPostPaintServices(): Promise<void> {
 
     // Restore remote mode after paint so users can see app UI while the LAN
     // stack spins up in the background.
-    void remoteMode
-      .restoreRemoteMode()
-      .catch((error) => Logger.error('Remote mode restore failed (non-fatal):', error))
+    restoreRemoteModeIfOwner()
 
     try {
       notificationService.start()
@@ -1236,10 +1287,19 @@ async function runShutdownPipeline(): Promise<void> {
   }
 
   try {
+    await gatewaySupervisor?.dispose()
+  } catch (error) {
+    Logger.error('Gateway supervisor cleanup failed during shutdown:', error)
+  }
+
+  try {
     await computerUsePipService?.dispose()
   } catch (error) {
     Logger.error('Computer-use PiP service cleanup failed during shutdown:', error)
   }
+
+  stopRemoteOwnershipListener?.()
+  stopRemoteOwnershipListener = null
 
   // Persist the final window geometry so the next launch restores size, position,
   // and maximized state exactly as the user left them.

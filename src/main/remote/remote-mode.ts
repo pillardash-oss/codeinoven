@@ -99,9 +99,12 @@ export interface RemoteModeOptions {
   loadAccountProfileData?: () => Promise<AccountProfileSyncPayload>
   /** Applies the merged cloud memory snapshot to local global memory. */
   applyGlobalMemories?: (entries: MemoryEntry[]) => Promise<void>
+  /** True only for the process elected to own shared remote transports. */
+  canOwnTransport?: () => boolean
 }
 
 export const DEFAULT_LAN_PORT = 4455
+const REMOTE_SUSPENSION_GRACE_MS = 5 * 60 * 1_000
 const CLOUD_CONFIG_PATH = 'remote/cloud-access.json'
 const ACCOUNT_CONFIG_PATH = 'account/session.json'
 
@@ -506,6 +509,7 @@ export class RemoteModeController {
   private readonly onSessionActiveChange?: (active: boolean) => void
   private readonly loadAccountProfileData?: () => Promise<AccountProfileSyncPayload>
   private readonly applyGlobalMemories?: (entries: MemoryEntry[]) => Promise<void>
+  private readonly canOwnTransport: () => boolean
   private readonly cloudApiOrigin: string | null = resolveCloudApiOrigin()
   private readonly accountAuthOrigin: string | null = resolveAccountAuthOrigin()
   private readonly vault: SecretVault | null
@@ -532,6 +536,14 @@ export class RemoteModeController {
   private cloudConnectedDeviceId: string | null = null
   /** Phones that explicitly opened the remote workspace, not merely paired. */
   private readonly activeWorkspaceDeviceIds = new Set<string>()
+  /**
+   * A mobile browser may drop its socket as soon as it is backgrounded. Keep
+   * that logical workspace live briefly so a foreground resume can replace the
+   * transport without emitting a false session-end transition or releasing the
+   * desktop wake blocker immediately.
+   */
+  private readonly suspendedDeviceIds = new Set<string>()
+  private readonly suspensionGraceTimers = new Map<string, ReturnType<typeof setTimeout>>()
   /** Connected devices, newest first (source of truth = the gateway). */
   private devices: RemoteDeviceInfo[] = []
 
@@ -549,6 +561,7 @@ export class RemoteModeController {
     this.onSessionActiveChange = options.onSessionActiveChange
     this.loadAccountProfileData = options.loadAccountProfileData
     this.applyGlobalMemories = options.applyGlobalMemories
+    this.canOwnTransport = options.canOwnTransport ?? (() => true)
     this.cloudStatus = {
       configured: this.cloudApiOrigin !== null,
       state: 'disabled',
@@ -567,6 +580,7 @@ export class RemoteModeController {
    * gateway + keep-alive (and Tray); it never hides the freshly opened window.
    */
   async restoreRemoteMode(): Promise<void> {
+    if (!this.canOwnTransport()) return
     if (this.remoteModeActive) return
     const enabled = await this.readPersistedEnabled()
     if (!enabled) return
@@ -691,7 +705,8 @@ export class RemoteModeController {
     const gateway = this.gateway?.info() ?? {
       listening: false,
       port: this.lanPort,
-      url: null
+      url: null,
+      urls: []
     }
     return {
       remoteMode: this.keepAlive.phase !== 'IDLE',
@@ -709,6 +724,7 @@ export class RemoteModeController {
 
   /** Start remote mode: arm keep-alive, launch the gateway, show the Tray. */
   toggleRemoteMode(enabled: boolean): RemoteModeStatus {
+    if (enabled && !this.canOwnTransport()) return this.status
     if (enabled && !this.remoteModeActive) {
       this.keepAlive.dispatch({ type: 'arm' })
       this.credentials?.startPeriodicMaintenance()
@@ -725,6 +741,7 @@ export class RemoteModeController {
       this.gateway = null
       this.tray?.destroy()
       this.tray = null
+      this.clearSuspensionGrace()
       this.activeWorkspaceDeviceIds.clear()
       this.onSessionActiveChange?.(false)
       this.stopCloudAccess()
@@ -746,13 +763,78 @@ export class RemoteModeController {
 
   /** Called by the gateway whenever the connected device set changes. */
   onDevicesChange(devices: RemoteDeviceInfo[]): void {
-    const wasLive = this.devices.some((device) => device.connected)
     const connectedIds = new Set(devices.map((device) => device.id))
     if (this.cloudConnectedDeviceId) connectedIds.add(this.cloudConnectedDeviceId)
-    this.refreshDevices(connectedIds)
-    this.reconcileSessionActivity(wasLive)
+    this.reconcileDeviceConnections(connectedIds)
     this.syncTray()
     this.broadcast()
+  }
+
+  /** Actual transport identities, excluding suspension-grace leases. */
+  private connectedTransportDeviceIds(): Set<string> {
+    const connectedIds = new Set(this.gateway?.listDevices().map((device) => device.id) ?? [])
+    if (this.cloudConnectedDeviceId) connectedIds.add(this.cloudConnectedDeviceId)
+    return connectedIds
+  }
+
+  /**
+   * Merge physical transport presence with short logical-session leases. A
+   * lease is only created for a phone that explicitly opened the workspace;
+   * paired-but-idle phones and explicit disconnects still end immediately.
+   */
+  private reconcileDeviceConnections(
+    connectedTransportIds: Set<string>,
+    allowSuspensionGrace = true
+  ): void {
+    const wasLive = this.devices.some((device) => device.connected)
+    for (const deviceId of connectedTransportIds) this.cancelSuspensionGrace(deviceId)
+    if (allowSuspensionGrace) {
+      for (const device of this.devices) {
+        if (
+          device.connected &&
+          !connectedTransportIds.has(device.id) &&
+          this.activeWorkspaceDeviceIds.has(device.id)
+        ) {
+          this.startSuspensionGrace(device.id)
+        }
+      }
+    } else {
+      for (const deviceId of [...this.suspendedDeviceIds]) {
+        if (!connectedTransportIds.has(deviceId)) this.cancelSuspensionGrace(deviceId)
+      }
+    }
+    const effectiveConnectedIds = new Set(connectedTransportIds)
+    for (const deviceId of this.suspendedDeviceIds) effectiveConnectedIds.add(deviceId)
+    this.refreshDevices(effectiveConnectedIds)
+    this.reconcileSessionActivity(wasLive)
+  }
+
+  private startSuspensionGrace(deviceId: string): void {
+    if (this.suspensionGraceTimers.has(deviceId)) return
+    this.suspendedDeviceIds.add(deviceId)
+    const timer = setTimeout(() => {
+      this.suspensionGraceTimers.delete(deviceId)
+      this.suspendedDeviceIds.delete(deviceId)
+      this.activeWorkspaceDeviceIds.delete(deviceId)
+      this.reconcileDeviceConnections(this.connectedTransportDeviceIds(), false)
+      this.onSessionActiveChange?.(this.activeWorkspaceDeviceIds.size > 0)
+      this.syncTray()
+      this.broadcast()
+    }, REMOTE_SUSPENSION_GRACE_MS)
+    this.suspensionGraceTimers.set(deviceId, timer)
+  }
+
+  private cancelSuspensionGrace(deviceId: string): void {
+    const timer = this.suspensionGraceTimers.get(deviceId)
+    if (timer) clearTimeout(timer)
+    this.suspensionGraceTimers.delete(deviceId)
+    this.suspendedDeviceIds.delete(deviceId)
+  }
+
+  private clearSuspensionGrace(): void {
+    for (const timer of this.suspensionGraceTimers.values()) clearTimeout(timer)
+    this.suspensionGraceTimers.clear()
+    this.suspendedDeviceIds.clear()
   }
 
   /** Reconcile keep-alive, power, tray notifications, and event forwarding. */
@@ -774,6 +856,7 @@ export class RemoteModeController {
     if (active && this.devices.some((device) => device.id === deviceId && device.connected)) {
       this.activeWorkspaceDeviceIds.add(deviceId)
     } else {
+      this.cancelSuspensionGrace(deviceId)
       this.activeWorkspaceDeviceIds.delete(deviceId)
     }
     this.onSessionActiveChange?.(this.activeWorkspaceDeviceIds.size > 0)
@@ -834,7 +917,15 @@ export class RemoteModeController {
 
   /** Disconnect a connected device by id. */
   disconnectDevice(deviceId: string): void {
-    this.gateway?.disconnectDevice(deviceId)
+    this.cancelSuspensionGrace(deviceId)
+    this.activeWorkspaceDeviceIds.delete(deviceId)
+    this.onSessionActiveChange?.(this.activeWorkspaceDeviceIds.size > 0)
+    const disconnected = this.gateway?.disconnectDevice(deviceId) ?? false
+    if (!disconnected) {
+      this.reconcileDeviceConnections(this.connectedTransportDeviceIds(), false)
+      this.syncTray()
+      this.broadcast()
+    }
   }
 
   /**
@@ -845,6 +936,9 @@ export class RemoteModeController {
     if (!this.credentials) throw new Error('Device credential service is unavailable')
     const revoked = this.credentials.revokeDevice(deviceId, reason || 'operator')
     if (!revoked) throw new Error('Device not found')
+    this.cancelSuspensionGrace(deviceId)
+    this.activeWorkspaceDeviceIds.delete(deviceId)
+    this.onSessionActiveChange?.(this.activeWorkspaceDeviceIds.size > 0)
     await remoteWebPush.removeDevice(deviceId)
     this.gateway?.disconnectDevice(deviceId)
     // Terminate any bound cloud relay session for this device immediately;
@@ -855,9 +949,7 @@ export class RemoteModeController {
       this.cloudRelay = null
       this.cloudStatus = { ...this.cloudStatus, state: 'offline', lastError: 'device revoked' }
     }
-    const wasLive = this.devices.some((device) => device.connected)
-    this.refreshDevices(new Set(this.gateway?.listDevices().map((d) => d.id) ?? []))
-    this.reconcileSessionActivity(wasLive)
+    this.reconcileDeviceConnections(this.connectedTransportDeviceIds(), false)
     this.syncTray()
     this.broadcast()
     return this.status
@@ -990,6 +1082,7 @@ export class RemoteModeController {
     setRemoteEventForwarder(null)
     this.stopCloudAccess()
     this.credentials?.stopPeriodicMaintenance()
+    this.clearSuspensionGrace()
     this.activeWorkspaceDeviceIds.clear()
     this.onSessionActiveChange?.(false)
     if (this.gateway) {
@@ -1603,7 +1696,8 @@ export class RemoteModeController {
         body: JSON.stringify({
           name: hostname(),
           platform: platform(),
-          lanEndpoint: this.gateway?.info().url ?? null
+          lanEndpoint: this.gateway?.info().url ?? null,
+          lanEndpoints: this.gateway?.info().urls ?? []
         })
       },
       CLOUD_REQUEST_TIMEOUT_MS,
@@ -1940,6 +2034,7 @@ export class RemoteModeController {
       apiOrigin: config.apiOrigin,
       deviceToken,
       controlSecret,
+      lanEndpoints: this.gateway?.info().urls ?? [],
       credentials: this.credentials ?? undefined,
       signal,
       connectTimeoutMs: remoteEnvInt('RELAY_CONNECT_TIMEOUT_MS', 15_000),
@@ -1965,12 +2060,8 @@ export class RemoteModeController {
         this.broadcast()
       },
       onDeviceAuthenticated: (deviceId, cloudMobileDeviceId) => {
-        const wasLive = this.devices.some((device) => device.connected)
         this.cloudConnectedDeviceId = deviceId
-        const connectedIds = new Set(this.gateway?.listDevices().map((device) => device.id) ?? [])
-        connectedIds.add(deviceId)
-        this.refreshDevices(connectedIds)
-        this.reconcileSessionActivity(wasLive)
+        this.reconcileDeviceConnections(this.connectedTransportDeviceIds())
         if (cloudMobileDeviceId === this.pendingCloudDeviceId) {
           this.pendingCloudDeviceId = null
           this.cloudStatus = {
@@ -2008,10 +2099,8 @@ export class RemoteModeController {
         }
         Logger.dev(`Remote cloud relay disconnected (${reason}); reconnecting automatically`)
         this.cloudStatus = { ...this.cloudStatus, state: 'offline', lastError: reason }
-        const wasLive = this.devices.some((device) => device.connected)
         this.cloudConnectedDeviceId = null
-        this.refreshDevices(new Set(this.gateway?.listDevices().map((device) => device.id) ?? []))
-        this.reconcileSessionActivity(wasLive)
+        this.reconcileDeviceConnections(this.connectedTransportDeviceIds())
         this.broadcast()
       },
       onRpc: async (channel, args, device) => {
@@ -2042,10 +2131,8 @@ export class RemoteModeController {
     this.cloudAbortController = null
     this.cloudRelay?.close()
     this.cloudRelay = null
-    const wasLive = this.devices.some((device) => device.connected)
     this.cloudConnectedDeviceId = null
-    this.refreshDevices(new Set(this.gateway?.listDevices().map((device) => device.id) ?? []))
-    this.reconcileSessionActivity(wasLive)
+    this.reconcileDeviceConnections(this.connectedTransportDeviceIds(), false)
     if (!this.devices.some((device) => device.connected)) setRemoteEventForwarder(null)
     if (this.cloudStatus.state !== 'disabled') {
       this.cloudStatus = { ...this.cloudStatus, state: 'offline' }

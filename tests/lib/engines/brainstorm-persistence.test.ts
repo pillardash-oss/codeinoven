@@ -14,10 +14,13 @@ import { BrainstormEngine } from '../../../src/lib/engines/brainstorm-engine'
 
 /**
  * Regression guard for brainstorm SESSION REPORT persistence under
- * `.cio/specs/<feature-slug>/versions/` after the seeded-refresh trim. The
- * agent's scoped write is the persistence channel for report revisions, while
- * the `brainstorm_document` contract + validation/repair loop stay
- * authoritative — this test proves the on-disk output contract never regresses.
+ * `.cio/specs/<feature-slug>/versions/`. This file covers the APP-SIDE
+ * persistence engine only: the `BrainstormEngine` writes and validates the
+ * report the app received. The agent's scoped-write channel (the dispatch
+ * contract that lets the `cio-brainstorm` agent persist its own revision) is
+ * covered separately in `tests/main/brainstorm-write-route.test.ts`; the
+ * `brainstorm_document` contract + validation/repair loop stay authoritative
+ * for content in both paths.
  */
 
 const temporaryRoots: string[] = []

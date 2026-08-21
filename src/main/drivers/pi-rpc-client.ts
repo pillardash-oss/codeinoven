@@ -1,8 +1,5 @@
 import { spawn, type ChildProcess } from 'node:child_process'
-import { access } from 'node:fs/promises'
-import { constants } from 'node:fs'
-import { delimiter, join } from 'node:path'
-import { buildHarnessEnvironment } from './cli-environment'
+import type { PreparedHarnessInvocation } from './harness-runtime'
 
 /**
  * A single Pi image content block, sent with a prompt or steer message.
@@ -20,12 +17,8 @@ interface PendingRequest {
 }
 
 interface PiRpcOptions {
-  /** Absolute path to a verified Pi executable. */
-  executable: string
-  cwd: string
-  env: NodeJS.ProcessEnv
-  /** Extra CLI arguments applied after `--mode rpc`, e.g. `--extension <path>`. */
-  args?: string[]
+  /** Prepared native or WSL invocation, including `--mode rpc`. */
+  invocation: PreparedHarnessInvocation
   /** Called once per agent event record streamed from the pi process. */
   onEvent?: (record: Record<string, unknown>) => void
   /** Called for dialog-style extension UI requests that need a human answer. */
@@ -64,12 +57,10 @@ export class PiRpcClient {
     // for a human; the driver always supplies its own handler that surfaces it.
     this.onUiRequest = options.onUiRequest ?? ((record) => this.dismissUiDialog(record))
     this.onExit = options.onExit ?? (() => undefined)
-    this.child = spawn(options.executable, ['--mode', 'rpc', ...(options.args ?? [])], {
-      cwd: options.cwd,
-      env: options.env,
-      ...(process.platform === 'win32' && /\.(?:cmd|bat)$/iu.test(options.executable)
-        ? { shell: true }
-        : {}),
+    this.child = spawn(options.invocation.command, options.invocation.args, {
+      ...(options.invocation.cwd ? { cwd: options.invocation.cwd } : {}),
+      env: options.invocation.env,
+      shell: options.invocation.shell,
       stdio: ['pipe', 'pipe', 'pipe']
     })
     this.child.stdout?.on('data', (chunk: Buffer) => this.consume(chunk.toString()))
@@ -261,57 +252,4 @@ export class PiRpcClient {
 /** Dialog extension UI methods that block until the client replies. */
 function isExtensionUiDialogMethod(method: unknown): boolean {
   return method === 'select' || method === 'confirm' || method === 'input' || method === 'editor'
-}
-
-/** Resolve the `pi` executable on PATH; returns null when unavailable. */
-export async function resolvePiExecutable(): Promise<string | null> {
-  const { execFile } = await import('node:child_process')
-  const env = buildHarnessEnvironment()
-  const candidates = await piPathCandidates(env)
-  for (const candidate of candidates) {
-    const healthy = await new Promise<boolean>((resolve) => {
-      execFile(
-        candidate,
-        ['--version'],
-        {
-          env,
-          timeout: 5_000,
-          ...(process.platform === 'win32' && /\.(?:cmd|bat)$/iu.test(candidate)
-            ? { shell: true }
-            : {})
-        },
-        (error) => resolve(!error)
-      )
-    })
-    if (healthy) return candidate
-  }
-  return null
-}
-
-/**
- * Return executable files in PATH order. Checking every candidate matters in
- * development: a removed project dependency can leave a broken `node_modules`
- * shim ahead of the user's working global Pi installation.
- */
-async function piPathCandidates(env: NodeJS.ProcessEnv): Promise<string[]> {
-  const names = process.platform === 'win32' ? ['pi.exe', 'pi.cmd', 'pi.bat', 'pi'] : ['pi']
-  const seen = new Set<string>()
-  const candidates: string[] = []
-  for (const directory of (env['PATH'] ?? '').split(delimiter)) {
-    const base = directory || process.cwd()
-    for (const name of names) {
-      const candidate = join(base, name)
-      if (seen.has(candidate)) continue
-      seen.add(candidate)
-      if (
-        await access(candidate, constants.X_OK).then(
-          () => true,
-          () => false
-        )
-      ) {
-        candidates.push(candidate)
-      }
-    }
-  }
-  return candidates
 }

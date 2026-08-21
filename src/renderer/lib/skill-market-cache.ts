@@ -1,8 +1,10 @@
 import { invoke } from '$lib/ipc.svelte'
-import type { SkillMarketDetail } from '$shared/types'
+import type { SkillMarketDetail, SkillMarketLeaderboard, SkillMarketView } from '$shared/types'
 
 const details = new Map<string, SkillMarketDetail>()
 const requests = new Map<string, Promise<SkillMarketDetail>>()
+const leaderboards = new Map<SkillMarketView, SkillMarketLeaderboard>()
+const leaderboardRequests = new Map<SkillMarketView, Promise<SkillMarketLeaderboard>>()
 const DETAIL_CACHE_LIMIT = 100
 
 function cacheDetail(id: string, detail: SkillMarketDetail): void {
@@ -15,6 +17,27 @@ function cacheDetail(id: string, detail: SkillMarketDetail): void {
 
 export function cachedSkillMarketDetail(id: string): SkillMarketDetail | null {
   return details.get(id) ?? null
+}
+
+export function cachedSkillMarketLeaderboard(view: SkillMarketView): SkillMarketLeaderboard | null {
+  return leaderboards.get(view) ?? null
+}
+
+/** Return cached leaderboard data immediately while one shared refresh updates it. */
+export function refreshSkillMarketLeaderboard(
+  view: SkillMarketView
+): Promise<SkillMarketLeaderboard> {
+  const pending = leaderboardRequests.get(view)
+  if (pending) return pending
+
+  const request = invoke('utilities:listSkillMarket', view)
+    .then((leaderboard) => {
+      leaderboards.set(view, leaderboard)
+      return leaderboard
+    })
+    .finally(() => leaderboardRequests.delete(view))
+  leaderboardRequests.set(view, request)
+  return request
 }
 
 export function loadSkillMarketDetail(id: string): Promise<SkillMarketDetail> {

@@ -5,10 +5,18 @@ import { APP_SLUG } from '$shared/brand'
 import {
   DEFAULT_SCOPE_BUCKET_ID,
   isOrchestrationChildThread,
+  type ManagedWorktreeDescriptor,
   type Project,
   type ScopeBoard,
   type ScopeBucket,
+  type ScopeEnvironmentMode,
+  type ScopeLifecycleAction,
+  type ScopeLifecyclePreflight,
   type ScopeSlice,
+  type ScopeTarget,
+  type ScopeWorktreeDefaults,
+  type ScopeWorktreeHealth,
+  type ScopeWorktreeProgress,
   type Thread,
   scopeSliceForStatus
 } from '$shared/types'
@@ -87,16 +95,18 @@ export const STAGE_ORDER: ThreadStage[] = [
 ]
 
 const EMPTY_BOARD: ScopeBoard = {
-  version: 1,
+  version: 2,
   buckets: [
     {
       id: DEFAULT_SCOPE_BUCKET_ID,
       name: 'Default',
       sortOrder: 0,
       collapsed: false,
-      collapsedSlices: []
+      collapsedSlices: [],
+      root: { kind: 'project' }
     }
-  ]
+  ],
+  worktreeDefaults: { setupCommands: [], runSetupByDefault: true, environmentMode: 'copy' }
 }
 
 interface ScopeSnapshot {
@@ -174,11 +184,25 @@ function orderedBuckets(board: ScopeBoard): ScopeBucket[] {
 
 function cloneBoard(board: ScopeBoard): ScopeBoard {
   return {
-    version: 1,
+    version: 2,
     buckets: orderedBuckets(board).map((bucket) => ({
       ...bucket,
-      collapsedSlices: [...bucket.collapsedSlices]
-    }))
+      collapsedSlices: [...bucket.collapsedSlices],
+      root:
+        bucket.root.kind === 'worktree'
+          ? {
+              ...bucket.root,
+              setup: {
+                ...bucket.root.setup,
+                commands: bucket.root.setup.commands.map((command) => ({ ...command }))
+              }
+            }
+          : { kind: 'project' }
+    })),
+    worktreeDefaults: {
+      ...board.worktreeDefaults,
+      setupCommands: board.worktreeDefaults.setupCommands.map((command) => ({ ...command }))
+    }
   }
 }
 
@@ -208,6 +232,10 @@ class ScopeState {
   /** Signal for ScopeView to create a thread in a specific bucket (triggered by Cmd+N). */
   requestCreateScopedThreadCount = $state(0)
   pendingCreateBucketId: string | null = $state(null)
+  /** Target-keyed health of managed worktrees, refreshed on demand. */
+  healthByTarget: Map<string, ScopeWorktreeHealth> = $state(new SvelteMap())
+  /** Transient worktree creation/setup progress. */
+  worktreeProgress = $state<ScopeWorktreeProgress>({ stage: 'none' })
   private loadSequence = 0
   private saveSequence = 0
 
@@ -342,22 +370,26 @@ class ScopeState {
     }
   }
 
-  async saveBoard(nextBoard: ScopeBoard): Promise<void> {
+  /**
+   * Apply a main-owned board mutation. The renderer never sends whole boards;
+   * each call maps to one validated lifecycle operation on the main side.
+   */
+  private async mutate<T extends ScopeBoard>(run: (projectId: string) => Promise<T>): Promise<T> {
     const projectId = this.activeProjectId
-    if (!projectId) return
+    if (!projectId) throw new Error('No active project')
 
     const previous = cloneBoard(this.board)
     const sequence = ++this.saveSequence
-    this.board = cloneBoard(nextBoard)
     this.saving = true
     this.error = null
     try {
-      const saved = await invoke('scope:save', projectId, cloneBoard(nextBoard))
+      const saved = await run(projectId)
       if (sequence === this.saveSequence && projectId === this.activeProjectId) {
         const cloned = cloneBoard(saved)
         this.board = cloned
         this.boards.set(projectId, cloned)
       }
+      return saved
     } catch (error) {
       if (sequence === this.saveSequence) {
         this.board = previous
@@ -370,19 +402,39 @@ class ScopeState {
     }
   }
 
+  async updateLayout(orderedIds: string[]): Promise<void> {
+    await this.mutate((projectId) => invoke('scope:updateLayout', projectId, orderedIds))
+  }
+
   async createBucket(name: string): Promise<ScopeBucket | null> {
     const trimmedName = name.trim()
     if (!trimmedName) return null
 
-    const bucket: ScopeBucket = {
-      id: crypto.randomUUID(),
-      name: trimmedName,
-      sortOrder: this.buckets.length,
-      collapsed: false,
-      collapsedSlices: []
+    const projectId = this.activeProjectId
+    if (!projectId) throw new Error('No active project')
+
+    const previous = cloneBoard(this.board)
+    const sequence = ++this.saveSequence
+    this.saving = true
+    this.error = null
+    try {
+      const result = await invoke('scope:create', projectId, { name: trimmedName })
+      const cloned = cloneBoard(result.board)
+      if (sequence === this.saveSequence && projectId === this.activeProjectId) {
+        this.board = cloned
+        this.boards.set(projectId, cloned)
+      }
+      return cloned.buckets.find((bucket) => bucket.id === result.bucket.id) ?? result.bucket
+    } catch (error) {
+      if (sequence === this.saveSequence) {
+        this.board = previous
+        this.boards.set(projectId, previous)
+        this.error = error instanceof Error ? error.message : 'The scope board could not be saved.'
+      }
+      throw error
+    } finally {
+      if (sequence === this.saveSequence) this.saving = false
     }
-    await this.saveBoard({ version: 1, buckets: [...this.buckets, bucket] })
-    return bucket
   }
 
   /** Create a scope bucket on a specific project's board (used when the
@@ -392,39 +444,25 @@ class ScopeState {
     if (!trimmedName) return null
 
     await this.ensureBoardLoaded(projectId)
-    const current = this.boards.get(projectId) ?? cloneBoard(EMPTY_BOARD)
-    const bucket: ScopeBucket = {
-      id: crypto.randomUUID(),
-      name: trimmedName,
-      sortOrder: current.buckets.length,
-      collapsed: false,
-      collapsedSlices: []
-    }
-    const nextBoard: ScopeBoard = { version: 1, buckets: [...current.buckets, bucket] }
-    const saved = await invoke('scope:save', projectId, cloneBoard(nextBoard))
-    const cloned = cloneBoard(saved)
+    const result = await invoke('scope:create', projectId, { name: trimmedName })
+    const cloned = cloneBoard(result.board)
     this.boards.set(projectId, cloned)
     if (projectId === this.activeProjectId) {
       this.board = cloned
     }
-    return cloned.buckets.find((candidate) => candidate.id === bucket.id) ?? bucket
+    return cloned.buckets.find((candidate) => candidate.id === result.bucket.id) ?? result.bucket
   }
 
   async editBucket(bucketId: string, edit: ScopeBucketEdit): Promise<void> {
     const trimmedName = edit.name.trim()
     if (!trimmedName) return
-    await this.saveBoard({
-      version: 1,
-      buckets: this.buckets.map((bucket) => {
-        if (bucket.id !== bucketId) return bucket
-        const updated: ScopeBucket = { ...bucket, name: trimmedName }
-        if (edit.color) updated.color = edit.color
-        else delete updated.color
-        if (edit.iconType) updated.iconType = edit.iconType
-        else delete updated.iconType
-        return updated
+    await this.mutate((projectId) =>
+      invoke('scope:updateAppearance', projectId, bucketId, {
+        name: trimmedName,
+        ...(edit.color ? { color: edit.color } : { color: null }),
+        ...(edit.iconType ? { iconType: edit.iconType } : { iconType: null })
       })
-    })
+    )
   }
 
   async reorderBucket(
@@ -440,42 +478,30 @@ class ScopeState {
     const targetIndex = buckets.findIndex((bucket) => bucket.id === targetId)
     if (targetIndex === -1) return
     buckets.splice(position === 'before' ? targetIndex : targetIndex + 1, 0, dragged)
-    await this.saveBoard({
-      version: 1,
-      buckets: buckets.map((bucket, sortOrder) => ({ ...bucket, sortOrder }))
-    })
+    await this.updateLayout(buckets.map((bucket) => bucket.id))
   }
 
   async removeBucket(bucketId: string): Promise<void> {
     if (bucketId === DEFAULT_SCOPE_BUCKET_ID) return
-    await this.saveBoard({
-      version: 1,
-      buckets: this.buckets
-        .filter((bucket) => bucket.id !== bucketId)
-        .map((bucket, sortOrder) => ({ ...bucket, sortOrder }))
-    })
+    await this.mutate((projectId) => invoke('scope:delete', projectId, bucketId))
   }
 
   async toggleBucket(bucketId: string): Promise<void> {
-    await this.saveBoard({
-      version: 1,
-      buckets: this.buckets.map((bucket) =>
-        bucket.id === bucketId ? { ...bucket, collapsed: !bucket.collapsed } : bucket
-      )
-    })
+    await this.mutate((projectId) =>
+      invoke('scope:updateCollapse', projectId, bucketId, {
+        collapsed: !this.buckets.find((bucket) => bucket.id === bucketId)?.collapsed
+      })
+    )
   }
 
   async toggleSlice(bucketId: string, slice: ThreadStage): Promise<void> {
-    await this.saveBoard({
-      version: 1,
-      buckets: this.buckets.map((bucket) => {
-        if (bucket.id !== bucketId) return bucket
-        const collapsedSlices = bucket.collapsedSlices.includes(slice)
-          ? bucket.collapsedSlices.filter((candidate) => candidate !== slice)
-          : [...bucket.collapsedSlices, slice]
-        return { ...bucket, collapsedSlices }
-      })
-    })
+    const current = this.buckets.find((bucket) => bucket.id === bucketId)
+    const collapsedSlices = current?.collapsedSlices.includes(slice)
+      ? current.collapsedSlices.filter((candidate) => candidate !== slice)
+      : [...(current?.collapsedSlices ?? []), slice]
+    await this.mutate((projectId) =>
+      invoke('scope:updateCollapse', projectId, bucketId, { collapsedSlices })
+    )
   }
 
   bucketForThread(thread: Thread): string {
@@ -671,6 +697,109 @@ class ScopeState {
         .map((thread) => thread.id)
     )
     this.allScopeThreads = this.allScopeThreads.filter((thread) => !removedIds.has(thread.id))
+  }
+
+  // ─── Managed worktree lifecycle ─────────────────────────────────────────
+
+  /** Create an isolated managed worktree for an existing scope bucket. */
+  async createWorktree(
+    projectId: string,
+    bucketId: string,
+    input: {
+      title: string
+      runSetup: boolean
+      environmentMode: ScopeEnvironmentMode
+      /** Source branch the worktree forks from; defaults to the current branch. */
+      baseBranch?: string
+    }
+  ): Promise<ManagedWorktreeDescriptor | null> {
+    this.worktreeProgress = { stage: 'naming' }
+    try {
+      const descriptor = await invoke(
+        'scope:worktree:create',
+        { projectId, scopeBucketId: bucketId },
+        input
+      )
+      this.worktreeProgress = { stage: 'done' }
+      await this.reloadBoard(projectId)
+      return descriptor
+    } catch (error) {
+      this.worktreeProgress = { stage: 'failed' }
+      this.error = error instanceof Error ? error.message : 'The worktree could not be created.'
+      throw error
+    }
+  }
+
+  /** Read the typed health of a managed scope worktree. */
+  async worktreeHealth(target: ScopeTarget): Promise<ScopeWorktreeHealth> {
+    const health = await invoke('scope:worktree:health', target)
+    this.healthByTarget.set(`${target.projectId}:${target.scopeBucketId}`, health)
+    return health
+  }
+
+  /** Compute a state-bound preflight and mint a single-use confirmation token. */
+  preflightWorktree(
+    projectId: string,
+    bucketId: string,
+    action: ScopeLifecycleAction
+  ): Promise<ScopeLifecyclePreflight> {
+    return invoke('scope:worktree:preflight', action, { projectId, scopeBucketId: bucketId })
+  }
+
+  /** Consume a confirmation token to apply a guarded lifecycle action. */
+  confirmWorktreeLifecycle(
+    projectId: string,
+    bucketId: string,
+    action: ScopeLifecycleAction,
+    confirmationId: string,
+    options?: { force?: boolean }
+  ): Promise<void> {
+    const target = { projectId, scopeBucketId: bucketId }
+    switch (action) {
+      case 'detach':
+        return invoke('scope:worktree:confirmDetach', target, confirmationId)
+      case 'remove-worktree':
+        return invoke(
+          'scope:worktree:confirmRemove',
+          target,
+          confirmationId,
+          options?.force ?? false
+        )
+      case 'delete-branch':
+        return invoke('scope:worktree:confirmDeleteBranch', target, confirmationId)
+      default:
+        return Promise.reject(new Error(`Unsupported lifecycle action for this path: ${action}`))
+    }
+  }
+
+  /** Retry from a failed/interrupted setup, or continue without setup. */
+  async retryWorktreeSetup(projectId: string, bucketId: string, runSetup: boolean): Promise<void> {
+    await invoke('scope:worktree:retrySetup', { projectId, scopeBucketId: bucketId }, { runSetup })
+    await this.reloadBoard(projectId)
+  }
+
+  /** Archive or restore a custom scope. Never touches its worktree. */
+  async setArchive(projectId: string, bucketId: string, archived: boolean): Promise<void> {
+    const board = await invoke('scope:setArchive', projectId, bucketId, archived)
+    const cloned = cloneBoard(board)
+    this.boards.set(projectId, cloned)
+    if (projectId === this.activeProjectId) this.board = cloned
+  }
+
+  /** Persistent project-level managed-worktree defaults. */
+  async setWorktreeDefaults(projectId: string, defaults: ScopeWorktreeDefaults): Promise<void> {
+    const board = await invoke('scope:setWorktreeDefaults', projectId, defaults)
+    const cloned = cloneBoard(board)
+    this.boards.set(projectId, cloned)
+    if (projectId === this.activeProjectId) this.board = cloned
+  }
+
+  private async reloadBoard(projectId: string): Promise<void> {
+    if (!projectId) return
+    const board = await invoke('scope:get', projectId)
+    const cloned = cloneBoard(board)
+    this.boards.set(projectId, cloned)
+    if (projectId === this.activeProjectId) this.board = cloned
   }
 }
 

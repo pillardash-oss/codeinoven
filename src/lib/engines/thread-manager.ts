@@ -5,7 +5,6 @@ import { messageId as createMessageId } from '../id'
 import { featureSlugFromTitle } from '../project-artifacts'
 import { ProjectRepo } from '../../main/database/repositories/project-repo'
 import { HarnessUsageRepo } from '../../main/database/repositories/harness-usage-repo'
-import { TurnFeedbackRepo } from '../../main/database/repositories/turn-feedback-repo'
 import {
   AgentMessageRepo,
   type ProviderDeltaSyncResult,
@@ -96,7 +95,8 @@ function placeholdersFor(count: number): string {
 /** Build one set-based cleanup transaction for a thread tree. */
 function buildThreadDeletionStatements(
   threads: Thread[],
-  assignmentIds: Set<string>
+  assignmentIds: Set<string>,
+  resolvedAt: number
 ): SqlStatement[] {
   if (threads.length === 0) return []
 
@@ -105,6 +105,13 @@ function buildThreadDeletionStatements(
   const projectId = threads[0].projectId
   const statements: SqlStatement[] = []
   const assignmentValues = [...assignmentIds]
+
+  statements.push({
+    sql: `UPDATE turn_feedback
+          SET status = 'success', signal = 'cleaned_up', score = 1, resolved_at = ?
+          WHERE thread_id IN (${threadPlaceholders}) AND status = 'pending'`,
+    params: [resolvedAt, ...threadIds]
+  })
 
   if (assignmentValues.length > 0) {
     const assignmentPlaceholders = placeholdersFor(assignmentValues.length)
@@ -229,12 +236,25 @@ function historyFromLatestCompaction(messages: AgentMessage[]): AgentMessage[] {
   return latestCompactionIndex === -1 ? messages : messages.slice(latestCompactionIndex)
 }
 
+/**
+ * Main-process injection point that resolves a scope target into its
+ * authoritative filesystem root. The persisted `Thread.workingDirectory` is
+ * compatibility data; this provider is the authority at creation time.
+ */
+export interface ThreadScopeRootProvider {
+  /**
+   * Resolve the compatibility working directory for a thread in the given
+   * scope. Returns null when the scope is unknown/project-rooted without a
+   * local project. Throws when a managed scope root is unhealthy.
+   */
+  resolveCompatibilityRoot(projectId: string, scopeBucketId?: string): Promise<string | null>
+}
+
 export class ThreadManager {
   private threadRepo: ThreadRepo
   private projectRepo: ProjectRepo
   private agentMessageRepo: AgentMessageRepo
   private harnessUsageRepo: HarnessUsageRepo
-  private turnFeedbackRepo: TurnFeedbackRepo
 
   /**
    * @param onChange Invoked after a thread's status/read state is persisted so
@@ -246,13 +266,13 @@ export class ThreadManager {
     private db: Database,
     private onChange?: (thread: Thread) => void,
     private onDelete?: (thread: Thread) => void | Promise<void>,
-    private onDeleted?: (threads: Thread[]) => void | Promise<void>
+    private onDeleted?: (threads: Thread[]) => void | Promise<void>,
+    private scopeRoots?: ThreadScopeRootProvider
   ) {
     this.threadRepo = new ThreadRepo(db)
     this.projectRepo = new ProjectRepo(db)
     this.agentMessageRepo = new AgentMessageRepo(db)
     this.harnessUsageRepo = new HarnessUsageRepo(db)
-    this.turnFeedbackRepo = new TurnFeedbackRepo(db)
   }
 
   /** Distinct harness ids used across a thread's session, newest first. */
@@ -303,10 +323,9 @@ export class ThreadManager {
    * Split the create so the renderer-facing path can return the thread
    * immediately and finalize persistence in the background:
    *
-   * - The synchronous half validates the project, enforces the thread bound
-   *   (including the all-pinned refusal), and builds the thread object.
-   * - The `finalize` half performs the DB work that can be deferred — the
-   *   lazy capacity eviction (the expensive cascade delete) and the upsert.
+   * - The synchronous half only builds the thread object and stable id.
+   * - The `finalize` half validates the project, enforces capacity, performs
+   *   the lazy eviction, and persists the row through the database worker.
    *   Eviction failure never breaks the new thread; it is surfaced through
    *   `onEvictionError` so the caller can audit it while the create proceeds.
    */
@@ -314,33 +333,10 @@ export class ThreadManager {
     input: CreateThreadInput,
     options: { onEvictionError?: (error: unknown) => void } = {}
   ): { thread: Thread; finalize: () => Promise<void> } {
-    const project = this.projectRepo.get(input.projectId)
-    if (!project) {
-      throw new Error(`Project not found: ${input.projectId}`)
-    }
-    const threadLimit = project.threadLimit
-
-    const existing = this.threadRepo.listByProject(input.projectId)
-    const active = existing.filter(
-      (thread) => !thread.archived && !isOrchestrationChildThread(thread)
-    )
     const creatingOrchestrationChild =
       input.assignmentRole === 'worker' ||
       input.achievementRole === 'auditor' ||
       input.coordinatorThreadId !== undefined
-    let toEvict: Thread | undefined
-    if (!creatingOrchestrationChild && active.length >= threadLimit) {
-      const evictable = active
-        .filter((t) => !isProtectedFromAutomaticCleanup(t))
-        .sort((a, b) => a.lastActivity - b.lastActivity)
-      toEvict = evictable[0]
-      if (!toEvict) {
-        // Every active thread is protected — refuse deterministically instead
-        // of silently exceeding the limit.
-        throw new AllThreadsProtectedError(input.projectId, threadLimit, active.length)
-      }
-    }
-
     const id = generateId()
     const now = Date.now()
 
@@ -371,13 +367,32 @@ export class ThreadManager {
     }
 
     const finalize = async (): Promise<void> => {
+      // Project validation and capacity reads are deliberately inside the
+      // async half. Renderer-facing creates can return the stable thread id
+      // before either SQLite query begins, while internal callers still await
+      // this function and receive the same deterministic errors.
+      const project = await this.projectRepo.getViaWorker(input.projectId)
+      if (!project) {
+        throw new Error(`Project not found: ${input.projectId}`)
+      }
+      const active = await this.threadRepo.listCapacityCandidatesViaWorker(input.projectId)
+      let toEvictId: string | undefined
+      if (!creatingOrchestrationChild && active.length >= project.threadLimit) {
+        const toEvict = active.find((candidate) => !isProtectedFromAutomaticCleanup(candidate))
+        toEvictId = toEvict?.id
+        if (!toEvictId) {
+          throw new AllThreadsProtectedError(input.projectId, project.threadLimit, active.length)
+        }
+      }
+
       // The new thread lands first so the optimistic create always yields a
       // persisted row; the bounded bucket delete is best-effort cleanup that
       // must never roll back the creation it is making room for.
+      await this.resolveCompatibilityRoot(input.projectId, input.scopeBucketId, thread)
       await this.threadRepo.upsertViaWorker(thread)
-      if (toEvict) {
+      if (toEvictId) {
         try {
-          await this.deleteThread(input.projectId, toEvict.id)
+          await this.deleteThread(input.projectId, toEvictId)
         } catch (error) {
           options.onEvictionError?.(error)
         }
@@ -387,12 +402,33 @@ export class ThreadManager {
     return { thread, finalize }
   }
 
+  /**
+   * Synchronize a thread's compatibility working directory with its scope's
+   * authoritative root. Renderer-supplied directories never win when the
+   * scope resolves; unhealthy managed scopes fail closed.
+   */
+  private async resolveCompatibilityRoot(
+    projectId: string,
+    scopeBucketId: string | undefined,
+    thread: Thread
+  ): Promise<void> {
+    if (!this.scopeRoots || !scopeBucketId) return
+    const resolved = await this.scopeRoots.resolveCompatibilityRoot(projectId, scopeBucketId)
+    if (resolved) thread.workingDirectory = resolved
+  }
+
   async getThread(projectId: string, threadId: string): Promise<Thread | null> {
     const thread = this.getOwnedThread(projectId, threadId)
     if (thread && !thread.titleSource) {
       thread.titleSource = 'default'
     }
     return thread
+  }
+
+  /** Worker-backed snapshot used to reconcile a failed optimistic operation. */
+  async getThreadViaWorker(projectId: string, threadId: string): Promise<Thread | null> {
+    const thread = await this.threadRepo.getViaWorker(threadId)
+    return thread?.projectId === projectId ? thread : null
   }
 
   async listThreads(projectId: string, options?: ThreadListOptions): Promise<Thread[]> {
@@ -633,6 +669,21 @@ export class ThreadManager {
       updatedAt: Date.now()
     }
 
+    // Moving a thread between scopes re-derives its compatibility working
+    // directory from the destination scope before anything can act on it.
+    if (
+      this.scopeRoots &&
+      input.scopeBucketId !== undefined &&
+      input.workingDirectory === undefined &&
+      input.scopeBucketId !== (existing.scopeBucketId ?? DEFAULT_SCOPE_BUCKET_ID)
+    ) {
+      const resolved = await this.scopeRoots.resolveCompatibilityRoot(
+        projectId,
+        updated.scopeBucketId
+      )
+      if (resolved) updated.workingDirectory = resolved
+    }
+
     await this.threadRepo.upsertViaWorker(updated)
     this.onChange?.(updated)
     return updated
@@ -653,9 +704,13 @@ export class ThreadManager {
     return updated
   }
   async deleteThread(projectId: string, threadId: string): Promise<void> {
-    const thread = this.requireOwnedThread(projectId, threadId)
-    const deletionOrder = [...this.orchestrationDescendants(projectId, threadId), thread]
-    const assignmentIds = this.assignmentIdsFor(deletionOrder)
+    const projectThreads = await this.threadRepo.listForDeletionViaWorker(projectId)
+    const thread = projectThreads.find((candidate) => candidate.id === threadId)
+    if (!thread) {
+      throw new Error(`Thread not found in project ${projectId}: ${threadId}`)
+    }
+    const deletionOrder = [...this.orchestrationDescendants(projectThreads, threadId), thread]
+    const assignmentIds = await this.assignmentIdsFor(deletionOrder)
     for (const candidate of deletionOrder) {
       await this.onDelete?.(candidate)
     }
@@ -665,11 +720,8 @@ export class ThreadManager {
     // remote, and capacity-eviction deletions all score consistently, and the
     // rows keep their attribution for the model-performance analytics (their
     // thread reference is SET NULL, never cascade-deleted).
-    for (const candidate of deletionOrder) {
-      this.turnFeedbackRepo.resolvePendingForThread(candidate.id, 'success', 'cleaned_up', 1)
-    }
     const outcome = await this.db.transactionViaWorker(
-      buildThreadDeletionStatements(deletionOrder, assignmentIds)
+      buildThreadDeletionStatements(deletionOrder, assignmentIds, Date.now())
     )
     if (!outcome.ok) {
       throw new Error(outcome.error ?? 'thread deletion failed')
@@ -677,8 +729,7 @@ export class ThreadManager {
     await this.onDeleted?.(deletionOrder)
   }
 
-  private orchestrationDescendants(projectId: string, coordinatorThreadId: string): Thread[] {
-    const threads = this.threadRepo.listByProject(projectId)
+  private orchestrationDescendants(threads: Thread[], coordinatorThreadId: string): Thread[] {
     const byCoordinator = new Map<string, Thread[]>()
     for (const thread of threads) {
       if (!thread.coordinatorThreadId) continue
@@ -700,23 +751,26 @@ export class ThreadManager {
     return descendants
   }
 
-  private assignmentIdsFor(threads: Thread[]): Set<string> {
+  private async assignmentIdsFor(threads: Thread[]): Promise<Set<string>> {
     const assignmentIds = new Set(
       threads.flatMap((thread) => (thread.assignmentId ? [thread.assignmentId] : []))
     )
-    for (const thread of threads) {
-      const workflow = this.db.get<{ assignment_id: string }>(
-        'SELECT assignment_id FROM assignment_workflow WHERE project_id=? AND coordinator_thread_id=?',
-        thread.projectId,
-        thread.id
-      )
-      if (workflow) assignmentIds.add(workflow.assignment_id)
-      const versions = this.db.all<{ assignment_id: string }>(
-        'SELECT DISTINCT assignment_id FROM assignment_versions WHERE project_id=? AND coordinator_thread_id=?',
-        thread.projectId,
-        thread.id
-      )
-      for (const version of versions) assignmentIds.add(version.assignment_id)
+    if (threads.length === 0) return assignmentIds
+    const threadIds = threads.map((thread) => thread.id)
+    const placeholders = placeholdersFor(threadIds.length)
+    const projectId = threads[0].projectId
+    const result = await this.db.queryViaWorker(
+      `SELECT assignment_id FROM assignment_workflow
+       WHERE project_id = ? AND coordinator_thread_id IN (${placeholders})
+       UNION
+       SELECT assignment_id FROM assignment_versions
+       WHERE project_id = ? AND coordinator_thread_id IN (${placeholders})`,
+      [projectId, ...threadIds, projectId, ...threadIds],
+      1_000
+    )
+    for (const row of result.rows) {
+      const assignmentId = row['assignment_id']
+      if (typeof assignmentId === 'string') assignmentIds.add(assignmentId)
     }
     return assignmentIds
   }
@@ -1156,6 +1210,7 @@ export class ThreadManager {
     copied = historyFromLatestCompaction(copied)
 
     const destinationPath = this.projectRepo.get(destinationProjectId)?.path ?? ''
+    const forkScopeBucketId = destinationProjectId === projectId ? parent.scopeBucketId : undefined
     const forked = await this.createThread({
       projectId: destinationProjectId,
       providerId: parent.providerId,
@@ -1168,11 +1223,13 @@ export class ThreadManager {
         destinationProjectId === projectId
           ? (parent.featureSlug ?? featureSlugFromTitle(parent.title))
           : undefined,
-      scopeBucketId: destinationProjectId === projectId ? parent.scopeBucketId : undefined,
+      scopeBucketId: forkScopeBucketId,
       workingDirectory:
         destinationProjectId === projectId ? parent.workingDirectory : destinationPath
     })
-
+    // Same-scope forks re-resolve their compatibility directory from the
+    // destination scope inside `createThread`, so a stale parent directory
+    // can never override the authoritative root.
     if (copied.length > 0) {
       const withNewIds = remapCopiedMessages(copied)
       await this.saveMessages(destinationProjectId, forked.id, withNewIds)

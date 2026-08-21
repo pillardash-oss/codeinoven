@@ -22,7 +22,8 @@ import type {
 import { Logger } from '../system/logger'
 import { estimateTokenCostUsd } from '../providers/pricing'
 import type { StorageEngine } from '../storage/storage-engine'
-import { buildHarnessEnvironment } from './cli-environment'
+import { buildProcessEnvironment } from './cli-environment'
+import { prepareHarnessInvocation } from './harness-runtime'
 import type {
   AgentEventCallback,
   AgentProcessObserver,
@@ -30,7 +31,8 @@ import type {
   HarnessCapabilities,
   HarnessDriver,
   PreparedUtilityRuntime,
-  SendPromptOptions
+  SendPromptOptions,
+  SteerPromptOptions
 } from './driver.interface'
 import { buildTitlePrompt, sanitizeGeneratedTitle } from '../chat/title-generator'
 import {
@@ -147,6 +149,18 @@ export abstract class PersistentCliDriver implements HarnessDriver {
 
   private eventCallback: AgentEventCallback | null = null
   private activeProcesses = new Map<string, ChildProcess>()
+  /** Full turn context retained so process-per-turn CLIs can emulate steering by resuming. */
+  private activeTurnOptions = new Map<string, SendPromptOptions>()
+  /** Resolves after the stopped process has flushed output and persisted its native session. */
+  private activeProcessSettlements = new Map<string, Promise<void>>()
+  private activeProcessSettlementResolvers = new Map<string, () => void>()
+  /** Prevent an intermediate idle event while an emulated steer replaces the active process. */
+  private steeringSessions = new Set<string>()
+  /** Public user payload retained when a stateless steer needs richer transport context. */
+  private outboundMessageOverrides = new Map<
+    string,
+    Pick<SendPromptOptions, 'text' | 'attachments'>
+  >()
   private utilityRuntimes = new Map<string, PreparedUtilityRuntime>()
   private sessionCache = new Map<string, PersistentCliSession>()
   private deletedSessions = new Set<string>()
@@ -363,10 +377,10 @@ export abstract class PersistentCliDriver implements HarnessDriver {
       : {}
     const invocationEnv = runtime
       ? {
-          ...(invocation.env ?? buildHarnessEnvironment()),
+          ...(invocation.env ?? buildProcessEnvironment()),
           ...runtimeEnv
         }
-      : (invocation.env ?? buildHarnessEnvironment())
+      : (invocation.env ?? buildProcessEnvironment())
     this.setTurnProvenance(
       session.id,
       opts.settings.providerId,
@@ -376,9 +390,14 @@ export abstract class PersistentCliDriver implements HarnessDriver {
     this.appendUserMessage(session, opts)
     let child: ChildProcess
     try {
-      child = spawn(invocation.command, invocationArgs, {
+      const prepared = await prepareHarnessInvocation(invocation.command, invocationArgs, {
         cwd: projectPath,
-        env: invocationEnv,
+        env: invocationEnv
+      })
+      child = spawn(prepared.command, prepared.args, {
+        ...(prepared.cwd ? { cwd: prepared.cwd } : {}),
+        env: prepared.env,
+        shell: prepared.shell,
         stdio: ['pipe', 'pipe', 'pipe']
       })
     } catch (error) {
@@ -388,6 +407,17 @@ export abstract class PersistentCliDriver implements HarnessDriver {
     this.observeHarnessProcess(session.id, child, invocation.command, projectPath)
     this.structuredProcessIssues.delete(session.id)
     this.activeProcesses.set(session.id, child)
+    this.activeTurnOptions.set(session.id, {
+      ...opts,
+      settings: { ...opts.settings },
+      attachments: [...opts.attachments]
+    })
+    let resolveProcessSettlement: (() => void) | undefined
+    const processSettlement = new Promise<void>((resolve) => {
+      resolveProcessSettlement = resolve
+    })
+    this.activeProcessSettlements.set(session.id, processSettlement)
+    this.activeProcessSettlementResolvers.set(session.id, () => resolveProcessSettlement?.())
 
     let stdoutBuffer = ''
     let stderrBuffer = ''
@@ -395,51 +425,57 @@ export abstract class PersistentCliDriver implements HarnessDriver {
     const finish = async (error?: string): Promise<void> => {
       if (completed) return
       completed = true
-      invocation.onProcessExit?.()
-      this.activeProcesses.delete(session.id)
-      if (invocation.loadTrailingRecords && !this.deletedSessions.has(session.id)) {
-        try {
-          const records = await invocation.loadTrailingRecords()
-          for (const record of records) {
-            this.consumeJsonValue(record, session, projectPath)
+      try {
+        invocation.onProcessExit?.()
+        this.activeProcesses.delete(session.id)
+        if (invocation.loadTrailingRecords && !this.deletedSessions.has(session.id)) {
+          try {
+            const records = await invocation.loadTrailingRecords()
+            for (const record of records) {
+              this.consumeJsonValue(record, session, projectPath)
+            }
+          } catch (trailingError) {
+            Logger.dev(`${this.name} trailing interaction records were unavailable:`, trailingError)
           }
-        } catch (trailingError) {
-          Logger.dev(`${this.name} trailing interaction records were unavailable:`, trailingError)
         }
-      }
-      if (!this.deletedSessions.has(session.id)) {
-        try {
-          await this.persistSession(session)
-        } catch (persistError) {
-          Logger.error('CLI session persistence failed:', persistError)
-          error ??= 'Harness session could not be persisted'
+        if (!this.deletedSessions.has(session.id)) {
+          try {
+            await this.persistSession(session)
+          } catch (persistError) {
+            Logger.error('CLI session persistence failed:', persistError)
+            error ??= 'Harness session could not be persisted'
+          }
         }
-      }
-      if (error && !this.structuredProcessIssues.has(session.id)) {
-        const kind = classifyProviderIssue(error)
-        this.emit({
-          type: 'session.error',
-          sessionId: session.id,
-          error,
-          ...(kind === 'unknown'
-            ? {}
-            : {
-                issue: {
-                  kind,
-                  message:
-                    kind === 'authentication'
-                      ? `${this.name} sign-in expired. Sign in again, then retry this message.`
-                      : error,
-                  rawError: error,
-                  harnessId: this.id,
-                  retryable: kind !== 'billing'
-                }
-              })
-        })
-      }
-      this.structuredProcessIssues.delete(session.id)
-      if (!invocation.suppressIdle?.()) {
-        this.emit({ type: 'session.idle', sessionId: session.id })
+        if (error && !this.structuredProcessIssues.has(session.id)) {
+          const kind = classifyProviderIssue(error)
+          this.emit({
+            type: 'session.error',
+            sessionId: session.id,
+            error,
+            ...(kind === 'unknown'
+              ? {}
+              : {
+                  issue: {
+                    kind,
+                    message:
+                      kind === 'authentication'
+                        ? `${this.name} sign-in expired. Sign in again, then retry this message.`
+                        : error,
+                    rawError: error,
+                    harnessId: this.id,
+                    retryable: kind !== 'billing'
+                  }
+                })
+          })
+        }
+        this.structuredProcessIssues.delete(session.id)
+        if (!invocation.suppressIdle?.() && !this.steeringSessions.has(session.id)) {
+          this.emit({ type: 'session.idle', sessionId: session.id })
+        }
+      } finally {
+        this.activeProcessSettlements.delete(session.id)
+        this.activeProcessSettlementResolvers.get(session.id)?.()
+        this.activeProcessSettlementResolvers.delete(session.id)
       }
     }
 
@@ -465,6 +501,61 @@ export abstract class PersistentCliDriver implements HarnessDriver {
 
     if (invocation.input) child.stdin?.write(invocation.input)
     if (!invocation.keepInputOpen) child.stdin?.end()
+  }
+
+  /**
+   * Deterministic steering fallback for one-process-per-turn CLIs.
+   *
+   * These transports cannot inject input into a running process. Stop at the
+   * current output boundary, wait for the provider-native session to persist,
+   * then resume that same session with the steering message and unchanged turn
+   * settings. The chat engine therefore exposes one steering contract across
+   * native-streaming and process-per-turn harnesses.
+   */
+  async steerPrompt(projectPath: string, options: SteerPromptOptions): Promise<void> {
+    const session = await this.requireSession(projectPath, options.sessionId)
+    const active = this.activeProcesses.get(session.id)
+    const settlement = this.activeProcessSettlements.get(session.id)
+    const previous = this.activeTurnOptions.get(session.id)
+    if (!active || active.killed || !settlement || !previous) {
+      throw new Error(`No active ${this.name} turn is available to steer for session ${session.id}`)
+    }
+
+    this.steeringSessions.add(session.id)
+    active.kill()
+    await settlement
+    const usesNativeHistory = this.capabilities.nativeResume !== false
+    const transportText = usesNativeHistory
+      ? options.text
+      : [
+          'Continue the active task using the steering update below. CodeInOven restarted this stateless harness turn to deliver it.',
+          `Active user request:\n${previous.text}`,
+          `User steering update:\n${options.text}`
+        ].join('\n\n')
+    const transportAttachments = usesNativeHistory
+      ? options.attachments
+      : [...previous.attachments, ...options.attachments]
+    if (!usesNativeHistory && options.userMessageId) {
+      this.outboundMessageOverrides.set(options.userMessageId, {
+        text: options.text,
+        attachments: options.attachments
+      })
+    }
+    try {
+      await this.sendPrompt(projectPath, {
+        ...previous,
+        sessionId: session.id,
+        text: transportText,
+        attachments: transportAttachments,
+        userMessageId: options.userMessageId
+      })
+    } catch (error) {
+      this.emit({ type: 'session.idle', sessionId: session.id })
+      throw error
+    } finally {
+      if (options.userMessageId) this.outboundMessageOverrides.delete(options.userMessageId)
+      this.steeringSessions.delete(session.id)
+    }
   }
 
   async loadMessages(projectPath: string, sessionId: string): Promise<AgentMessage[]> {
@@ -573,6 +664,12 @@ export abstract class PersistentCliDriver implements HarnessDriver {
   dispose(): void {
     for (const child of this.activeProcesses.values()) child.kill()
     this.activeProcesses.clear()
+    this.activeTurnOptions.clear()
+    for (const resolve of this.activeProcessSettlementResolvers.values()) resolve()
+    this.activeProcessSettlements.clear()
+    this.activeProcessSettlementResolvers.clear()
+    this.steeringSessions.clear()
+    this.outboundMessageOverrides.clear()
     for (const runtime of this.utilityRuntimes.values()) {
       void runtime.cleanup().catch((error) => {
         Logger.error(`${this.name} utility runtime cleanup failed:`, error)
@@ -668,14 +765,16 @@ export abstract class PersistentCliDriver implements HarnessDriver {
     opts: Pick<SendPromptOptions, 'text' | 'attachments' | 'userMessageId'>
   ): void {
     const userMessageId = opts.userMessageId ?? generateId()
+    const publicPayload = this.outboundMessageOverrides.get(userMessageId) ?? opts
+    this.outboundMessageOverrides.delete(userMessageId)
     const userParts: AgentPart[] = [
       {
         type: 'text',
         id: `${userMessageId}:text`,
         messageID: userMessageId,
-        text: opts.text
+        text: publicPayload.text
       },
-      ...opts.attachments.map((attachment, index): AgentPart => ({
+      ...publicPayload.attachments.map((attachment, index): AgentPart => ({
         type: 'file',
         id: `${userMessageId}:file:${index}`,
         messageID: userMessageId,
@@ -839,6 +938,7 @@ export abstract class PersistentCliDriver implements HarnessDriver {
         if (event.normalizedUsage) message.normalizedUsage = event.normalizedUsage
         if (event.contextWindow !== undefined) message.contextWindow = event.contextWindow
         if (event.contextUsed !== undefined) message.contextUsed = event.contextUsed
+        if (event.contextEstimated !== undefined) message.contextEstimated = event.contextEstimated
         if (event.rateLimits) message.rateLimits = event.rateLimits
         if (event.credits) message.credits = event.credits
         this.estimateMissingCost(message)
@@ -851,6 +951,7 @@ export abstract class PersistentCliDriver implements HarnessDriver {
         if (event.normalizedUsage) message.normalizedUsage = event.normalizedUsage
         if (event.contextWindow !== undefined) message.contextWindow = event.contextWindow
         if (event.contextUsed !== undefined) message.contextUsed = event.contextUsed
+        if (event.contextEstimated !== undefined) message.contextEstimated = event.contextEstimated
         if (event.cost !== undefined) message.cost = event.cost
         if (event.rateLimits) message.rateLimits = event.rateLimits
         if (event.credits) message.credits = event.credits

@@ -537,7 +537,8 @@
         name: 'Default',
         sortOrder: 0,
         collapsed: false,
-        collapsedSlices: []
+        collapsedSlices: [],
+        root: { kind: 'project' } as const
       }
     )
   })
@@ -610,7 +611,11 @@
   class="app-header titlebar-drag relative z-40 flex h-12 items-center border-b bg-surface pr-1"
   style={trafficLightInsetStyle()}
 >
-  <nav class="titlebar-no-drag flex shrink-0 items-center gap-1" aria-label="Primary navigation">
+  <nav
+    class="titlebar-no-drag flex shrink-0 items-center gap-1"
+    aria-label="Primary navigation"
+    data-onboarding="view-switcher"
+  >
     <!-- Global navigation: back / forward -->
     <div class="flex items-center gap-0.5">
       <button
@@ -1292,6 +1297,7 @@
         : ''}"
       aria-label={`Open notifications (${notificationPanelState.totalCount})`}
       title="Open notifications"
+      data-onboarding="notifications"
       onclick={() => contextSidebarState.toggleNotifications()}
     >
       <Bell size={16} />

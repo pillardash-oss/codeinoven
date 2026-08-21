@@ -214,6 +214,33 @@ function normalizeLanEndpoint(value: unknown): string | null {
   }
 }
 
+function normalizeLanEndpoints(value: unknown): string[] {
+  if (!Array.isArray(value)) return []
+  const endpoints = value
+    .slice(0, 16)
+    .map(normalizeLanEndpoint)
+    .filter((endpoint): endpoint is string => endpoint !== null)
+  return [...new Set(endpoints)]
+}
+
+function serializeLanEndpoints(endpoints: string[]): string | null {
+  if (endpoints.length === 0) return null
+  return endpoints.length === 1 ? (endpoints[0] ?? null) : JSON.stringify(endpoints)
+}
+
+function deserializeLanEndpoints(value: string | null): string[] {
+  if (!value) return []
+  try {
+    const parsed: unknown = JSON.parse(value)
+    const endpoints = normalizeLanEndpoints(parsed)
+    if (endpoints.length > 0) return endpoints
+  } catch {
+    // Legacy rows stored one URL directly rather than a JSON array.
+  }
+  const endpoint = normalizeLanEndpoint(value)
+  return endpoint ? [endpoint] : []
+}
+
 function validId(value: unknown): value is string {
   return typeof value === 'string' && value.length >= 16 && value.length <= 100
 }
@@ -272,8 +299,13 @@ async function handleEnrollmentRequestInner(request: Request): Promise<Response>
   const body = await readJsonObject(request)
   const name = normalizeLabel(body?.['name'])
   const platform = normalizeLabel(body?.['platform'], 50)
-  const lanEndpoint = normalizeLanEndpoint(body?.['lanEndpoint'])
-  if (!name || !platform || (body?.['lanEndpoint'] && !lanEndpoint)) {
+  const legacyLanEndpoint = normalizeLanEndpoint(body?.['lanEndpoint'])
+  const lanEndpoints = normalizeLanEndpoints(body?.['lanEndpoints'])
+  if (legacyLanEndpoint && !lanEndpoints.includes(legacyLanEndpoint)) {
+    lanEndpoints.push(legacyLanEndpoint)
+  }
+  const serializedLanEndpoints = serializeLanEndpoints(lanEndpoints)
+  if (!name || !platform || (body?.['lanEndpoint'] && !legacyLanEndpoint)) {
     return json({ error: 'invalid-enrollment' }, 400)
   }
   if (!withinRateLimit(request, 'enrollment', 10)) return json({ error: 'rate-limited' }, 429)
@@ -313,7 +345,7 @@ async function handleEnrollmentRequestInner(request: Request): Promise<Response>
       user_id: accountUserId,
       name,
       platform,
-      lan_endpoint: lanEndpoint,
+      lan_endpoint: serializedLanEndpoints,
       token_hash: tokenHash(deviceToken),
       profile_token_hash: desktopProfileTokenHash,
       control_secret_cipher: '',
@@ -322,6 +354,7 @@ async function handleEnrollmentRequestInner(request: Request): Promise<Response>
       revoked_at: null
     })
   }
+  if (existing) database.updateDesktopLanEndpoints(existing.id, serializedLanEndpoints)
 
   const code = createEnrollmentCode()
   const enrollment: EnrollmentRecord = {
@@ -496,6 +529,7 @@ function desktopConnection(
   if (!grant?.desktop_public_key || !grant.grant_ciphertext) {
     return json({ error: 'device-not-approved' }, 403)
   }
+  const lanEndpoints = deserializeLanEndpoints(desktop.lan_endpoint)
   return json({
     desktop: {
       id: desktop.id,
@@ -508,7 +542,8 @@ function desktopConnection(
       desktopPublicKey: JSON.parse(grant.desktop_public_key) as unknown,
       ciphertext: grant.grant_ciphertext
     },
-    lanEndpoint: desktop.lan_endpoint,
+    lanEndpoint: lanEndpoints[0] ?? null,
+    lanEndpoints,
     relayPath: '/v1/relay'
   })
 }
@@ -673,11 +708,18 @@ function relayMessage(socket: ServerWebSocket<RelaySocketData>, message: string 
       socket.close(4001, 'authentication-failed')
       return
     }
+    if (Array.isArray(record['lanEndpoints'])) {
+      database.updateDesktopLanEndpoints(
+        desktop.id,
+        serializeLanEndpoints(normalizeLanEndpoints(record['lanEndpoints']))
+      )
+    }
     const activeDesktop = relayHub.desktopSocket(desktop.id)
     if (activeDesktop && activeDesktop !== socket) {
       // Multiple app processes share this desktop identity and database, but
       // exactly one process must execute each RPC. Keep the current owner and
-      // let this follower retry for automatic ownership handoff later.
+      // let this follower enter quiet standby. The local instance registry
+      // elects a replacement owner when the current process exits.
       socket.close(4000, 'remote-host-active')
       return
     }

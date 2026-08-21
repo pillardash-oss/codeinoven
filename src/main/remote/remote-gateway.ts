@@ -32,6 +32,7 @@ import { readFile, stat } from 'node:fs/promises'
 import { existsSync, readFileSync } from 'node:fs'
 import { extname, join, normalize, resolve, sep } from 'node:path'
 import { createHash, randomBytes } from 'node:crypto'
+import { isIP } from 'node:net'
 import { brotliCompress, gzip } from 'node:zlib'
 import { promisify } from 'node:util'
 import type { Duplex } from 'node:stream'
@@ -224,6 +225,35 @@ function normalizeHostForComparison(host: string): string {
     .toLowerCase()
 }
 
+function lanHostPriority(host: string): number {
+  const normalized = normalizeHostForComparison(host)
+  if (isIP(normalized) === 4) {
+    if (normalized.startsWith('192.168.')) return 0
+    if (normalized.startsWith('10.')) return 1
+    const secondOctet = Number(normalized.split('.')[1])
+    if (normalized.startsWith('172.') && secondOctet >= 16 && secondOctet <= 31) return 2
+    return 3
+  }
+  if (/^(fc|fd)/i.test(normalized)) return 4
+  return 5
+}
+
+function usableAdvertisedHost(host: string): boolean {
+  const normalized = normalizeHostForComparison(host)
+  const family = isIP(normalized)
+  if (family === 4) {
+    return (
+      normalized !== '0.0.0.0' &&
+      !normalized.startsWith('127.') &&
+      !normalized.startsWith('169.254.')
+    )
+  }
+  if (family === 6) {
+    return normalized !== '::' && normalized !== '::1' && !normalized.startsWith('fe80:')
+  }
+  return false
+}
+
 function hostWithoutPort(hostHeaderValue: string | string[] | undefined): string {
   const value = Array.isArray(hostHeaderValue)
     ? (hostHeaderValue[0] ?? '')
@@ -271,12 +301,18 @@ export class RemoteGateway {
 
   info() {
     const listening = this.httpsServer !== null && this.httpsServer.listening
-    const host = this.advertisedHost()
-    const renderedHost = host.includes(':') ? `[${host}]` : host
+    const hosts = this.advertisedHosts()
+    const urls = listening
+      ? hosts.map((host) => {
+          const renderedHost = host.includes(':') ? `[${host}]` : host
+          return `https://${renderedHost}:${this.port}/remote.html`
+        })
+      : []
     return {
       listening,
       port: this.port,
-      url: listening ? `https://${renderedHost}:${this.port}/remote.html` : null
+      url: urls[0] ?? null,
+      urls
     }
   }
 
@@ -686,20 +722,32 @@ export class RemoteGateway {
     return existsSync(target) ? target : null
   }
 
-  private advertisedHost(): string {
+  private advertisedHosts(): string[] {
     try {
       const meta = JSON.parse(
         readFileSync(join(this.options.certificateDir, 'meta.json'), 'utf8')
       ) as {
         hosts?: string[]
+        preferredHosts?: string[]
       }
-      if (Array.isArray(meta.hosts) && meta.hosts.length > 0) {
-        return normalizeHostForComparison(meta.hosts[0] ?? '')
+      const advertised =
+        Array.isArray(meta.preferredHosts) && meta.preferredHosts.length > 0
+          ? meta.preferredHosts
+          : meta.hosts
+      if (Array.isArray(advertised) && advertised.length > 0) {
+        const hosts = advertised
+          .map(normalizeHostForComparison)
+          .filter(usableAdvertisedHost)
+          .sort(
+            (left, right) =>
+              lanHostPriority(left) - lanHostPriority(right) || left.localeCompare(right)
+          )
+        if (hosts.length > 0) return [...new Set(hosts)]
       }
     } catch {
       // fall through to localhost
     }
-    return 'localhost'
+    return ['localhost']
   }
 
   private handleUpgrade(

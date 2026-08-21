@@ -97,9 +97,10 @@
       onClose()
       return
     }
-    // Alt/Cmd+ArrowLeft — go back to the previous surface (e.g. the main Cmd+K).
-    // Shift is excluded so Shift+Alt/Cmd+ArrowLeft keeps its native text-selection behavior.
-    if (onBack && event.key === 'ArrowLeft' && !event.shiftKey && (event.altKey || event.metaKey)) {
+    // Alt/Opt+ArrowLeft — go back to the previous surface (e.g. the main Cmd+K).
+    // Shift is excluded so Shift+Alt+ArrowLeft keeps its native text-selection behavior.
+    // Cmd/Meta+ArrowLeft is intentionally ignored so word-jump remains native.
+    if (onBack && event.key === 'ArrowLeft' && !event.shiftKey && event.altKey) {
       event.preventDefault()
       event.stopPropagation()
       onBack()

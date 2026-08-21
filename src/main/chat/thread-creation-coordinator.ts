@@ -21,8 +21,13 @@ export class ThreadCreationCoordinator {
   private tail: Promise<void> = Promise.resolve()
 
   /** Schedule `work` to run serialized with every other finalization. */
-  begin(threadId: string, work: () => Promise<void>): void {
-    const run = this.tail.then(work)
+  begin(threadId: string, work: () => Promise<void>, onError?: (error: unknown) => void): void {
+    // Yield a full event-loop turn before starting even the worker-backed
+    // preparation. This lets Electron deliver the optimistic IPC response
+    // before finalization competes for main-process scheduling time.
+    const run = this.tail
+      .then(() => new Promise<void>((resolve) => setImmediate(resolve)))
+      .then(work)
     this.tail = run.then(
       () => undefined,
       () => undefined
@@ -31,6 +36,7 @@ export class ThreadCreationCoordinator {
     void run
       .catch((error) => {
         Logger.error('Thread finalization failed', { threadId, error: String(error) })
+        onError?.(error)
       })
       .finally(() => {
         if (this.finalizing.get(threadId) === run) this.finalizing.delete(threadId)

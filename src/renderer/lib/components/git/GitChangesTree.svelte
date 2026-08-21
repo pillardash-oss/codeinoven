@@ -1,5 +1,6 @@
 <script lang="ts">
   import { Check, ChevronDown, ChevronRight, Folder, FolderOpen, GitMerge } from '@lucide/svelte'
+  import Switch from '../ui/Switch.svelte'
   import { ContextMenu } from 'bits-ui'
   import type { GitDiff, GitFileChange, TurnCheckpointFileDiff } from '$shared/types'
   import FileDiffView from '../files/FileDiffView.svelte'
@@ -301,32 +302,25 @@
       >
         {#if change.status !== 'conflicted'}
           <span
-            role="checkbox"
-            tabindex="0"
-            aria-checked={selectedPaths[change.path]}
-            aria-label={selectedPaths[change.path]
-              ? `Deselect ${change.path}`
-              : `Select ${change.path}`}
-            class={[
-              'flex h-3.5 w-3.5 shrink-0 cursor-pointer items-center justify-center rounded-sm border transition-colors',
-              selectedPaths[change.path] ? 'border-primary bg-primary' : 'border-border bg-elevated'
-            ]}
+            class="shrink-0"
+            role="presentation"
             onclick={(event: MouseEvent) => {
               event.stopPropagation()
               event.preventDefault()
-              onToggleSelect(change, true)
             }}
-            onkeydown={(event: KeyboardEvent) => {
-              if (event.key === 'Enter' || event.key === ' ') {
-                event.stopPropagation()
-                event.preventDefault()
-                onToggleSelect(change, true)
-              }
-            }}
+            onkeydown={(event: KeyboardEvent) => event.stopPropagation()}
           >
-            {#if selectedPaths[change.path]}
-              <Check size={9} class="text-on-primary" />
-            {/if}
+            <Switch
+              checked={selectedPaths[change.path]}
+              onchange={() => onToggleSelect(change, true)}
+              title={selectedPaths[change.path]
+                ? `Deselect ${change.path}`
+                : `Select ${change.path}`}
+              aria-label={selectedPaths[change.path]
+                ? `Deselect ${change.path}`
+                : `Select ${change.path}`}
+              activeClass="border-primary bg-primary"
+            />
           </span>
         {/if}
         <span
@@ -421,30 +415,21 @@
         }}
       >
         <span
-          role="checkbox"
-          tabindex="0"
-          aria-checked={dirSelected}
-          aria-label={dirSelected ? `Deselect ${node.path}/` : `Select ${node.path}/`}
-          class={[
-            'flex h-3.5 w-3.5 shrink-0 cursor-pointer items-center justify-center rounded-sm border transition-colors',
-            dirSelected ? 'border-primary bg-primary' : 'border-border bg-elevated'
-          ]}
+          class="shrink-0"
+          role="presentation"
           onclick={(event: MouseEvent) => {
             event.stopPropagation()
             event.preventDefault()
-            onToggleSelectDir(node, true)
           }}
-          onkeydown={(event: KeyboardEvent) => {
-            if (event.key === 'Enter' || event.key === ' ') {
-              event.stopPropagation()
-              event.preventDefault()
-              onToggleSelectDir(node, true)
-            }
-          }}
+          onkeydown={(event: KeyboardEvent) => event.stopPropagation()}
         >
-          {#if dirSelected}
-            <Check size={9} class="text-on-primary" />
-          {/if}
+          <Switch
+            checked={dirSelected}
+            onchange={() => onToggleSelectDir(node, true)}
+            title={dirSelected ? `Deselect ${node.path}/` : `Select ${node.path}/`}
+            aria-label={dirSelected ? `Deselect ${node.path}/` : `Select ${node.path}/`}
+            activeClass="border-primary bg-primary"
+          />
         </span>
         {#if isOpen}
           <ChevronDown size={12} class="shrink-0 text-dimmed" />
@@ -489,39 +474,29 @@
   {@const isConflicts = section.title === 'Conflicts'}
   {@const sectionAllSelected =
     section.files.length > 0 && section.files.every((f) => selectedPaths[f.path])}
-  {@const sectionSomeSelected = section.files.some((f) => selectedPaths[f.path])}
   <div class="overflow-hidden rounded-lg border border-border bg-surface">
     <div class="flex items-center gap-2 bg-elevated/50 px-3 py-1.5">
       {#if !isConflicts}
         <span
-          role="checkbox"
-          tabindex="0"
-          aria-checked={sectionAllSelected ? 'true' : sectionSomeSelected ? 'mixed' : 'false'}
-          aria-label={sectionAllSelected
-            ? `Deselect all ${section.files.length} files in ${section.title}`
-            : `Select all ${section.files.length} files in ${section.title}`}
-          class={[
-            'flex h-3.5 w-3.5 shrink-0 cursor-pointer items-center justify-center rounded-sm border transition-colors',
-            sectionAllSelected ? 'border-primary bg-primary' : 'border-border bg-elevated'
-          ]}
+          class="shrink-0"
+          role="presentation"
           onclick={(event: MouseEvent) => {
             event.stopPropagation()
             event.preventDefault()
-            onToggleSection(section.files)
           }}
-          onkeydown={(event: KeyboardEvent) => {
-            if (event.key === 'Enter' || event.key === ' ') {
-              event.stopPropagation()
-              event.preventDefault()
-              onToggleSection(section.files)
-            }
-          }}
+          onkeydown={(event: KeyboardEvent) => event.stopPropagation()}
         >
-          {#if sectionAllSelected}
-            <Check size={9} class="text-on-primary" />
-          {:else if sectionSomeSelected}
-            <span class="h-0.5 w-1.5 rounded-full bg-primary"></span>
-          {/if}
+          <Switch
+            checked={sectionAllSelected}
+            onchange={() => onToggleSection(section.files)}
+            title={sectionAllSelected
+              ? `Deselect all ${section.files.length} files in ${section.title}`
+              : `Select all ${section.files.length} files in ${section.title}`}
+            aria-label={sectionAllSelected
+              ? `Deselect all ${section.files.length} files in ${section.title}`
+              : `Select all ${section.files.length} files in ${section.title}`}
+            activeClass="border-primary bg-primary"
+          />
         </span>
       {/if}
       <span class="text-[9px] font-semibold uppercase tracking-wide text-muted">

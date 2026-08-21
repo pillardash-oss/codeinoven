@@ -4,6 +4,7 @@ import { realpath, stat } from 'fs/promises'
 import { resolve } from 'path'
 import type { RepositoryPreflightResult } from '../../lib/types'
 import { Logger } from '../system/logger'
+import { buildProcessEnvironment } from '../drivers/cli-environment'
 
 interface GitCommandResult {
   stdout: string
@@ -133,14 +134,19 @@ export class RepositoryService {
 
   private runGit(args: string[]): Promise<GitCommandResult> {
     return new Promise((resolveCommand, rejectCommand) => {
-      execFile('git', args, { encoding: 'utf8', windowsHide: true }, (error, stdout, stderr) => {
-        if (error) {
-          rejectCommand({ error, stderr } satisfies GitCommandFailure)
-          return
-        }
+      execFile(
+        'git',
+        args,
+        { encoding: 'utf8', windowsHide: true, env: buildProcessEnvironment() },
+        (error, stdout, stderr) => {
+          if (error) {
+            rejectCommand({ error, stderr } satisfies GitCommandFailure)
+            return
+          }
 
-        resolveCommand({ stdout, stderr })
-      })
+          resolveCommand({ stdout, stderr })
+        }
+      )
     })
   }
 

@@ -117,8 +117,9 @@ const HARNESSES: readonly HarnessDescriptor[] = [
     versionArgs: ['--version'],
     integration: 'ready',
     supportsCustomProviders: false,
-    // Muse reads AGENTS.md natively, falling back to CLAUDE.md.
-    manifest: manifest({ loadsAgentsMd: true })
+    // Muse's workspace-native rules and skills are disabled by the driver;
+    // CodeInOven assembles the project instructions explicitly instead.
+    manifest: manifest({ loadsAgentsMd: false })
   }
 ]
 

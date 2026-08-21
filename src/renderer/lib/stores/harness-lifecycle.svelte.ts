@@ -7,6 +7,9 @@ import { invoke } from '$lib/ipc.svelte'
 import { toast } from 'svelte-sonner'
 import { providerStore } from '$lib/stores/providers.svelte'
 
+/** Reuse recent update results when Settings remounts or startup checks overlap. */
+const LOCAL_UPDATE_TTL_MS = 5 * 60_000
+
 /** What the embedded terminal is doing for this harness. */
 export type HarnessRunKind = 'update' | 'uninstall'
 
@@ -32,6 +35,8 @@ class HarnessLifecycleStore {
   runs = $state<HarnessRun[]>([])
   minimized = $state(false)
   focusedHarnessId = $state<string | null>(null)
+  private lastCheckedAt = 0
+  private checkAllInFlight: Promise<void> | null = null
 
   get activeCount(): number {
     return this.runs.filter((run) => run.exitCode === undefined).length
@@ -56,12 +61,26 @@ class HarnessLifecycleStore {
   }
 
   /** Fire the async update check for every harness. */
-  async checkAll(): Promise<void> {
+  async checkAll(force = false): Promise<void> {
+    if (!force && Date.now() - this.lastCheckedAt < LOCAL_UPDATE_TTL_MS) return
+    if (this.checkAllInFlight) return this.checkAllInFlight
+
+    const check = this.runCheckAll(force)
+    this.checkAllInFlight = check
     try {
-      const statuses = await invoke('harnessUpdates:checkAll')
+      await check
+    } finally {
+      this.checkAllInFlight = null
+    }
+  }
+
+  private async runCheckAll(force: boolean): Promise<void> {
+    try {
+      const statuses = await invoke('harnessUpdates:checkAll', force)
       const next: Record<string, HarnessUpdateStatus> = {}
       for (const status of statuses) next[status.harnessId] = status
       this.statuses = next
+      this.lastCheckedAt = Date.now()
     } catch {
       // Offline or IPC failure — existing results stay visible.
     }

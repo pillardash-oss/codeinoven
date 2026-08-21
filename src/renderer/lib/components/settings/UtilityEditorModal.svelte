@@ -894,7 +894,14 @@ ${instructions}`
 </script>
 
 {#if open}
-  <Modal open {title} size="xl" {onClose}>
+  <Modal
+    open
+    {title}
+    size="xl"
+    {onClose}
+    fill={setupPreset === 'agent'}
+    contentClass={setupPreset === 'agent' ? 'overflow-hidden p-0' : undefined}
+  >
     {#if loadingNative}
       <div class="flex items-center justify-center p-10">
         <Loader2 size={18} class="animate-spin text-dimmed" />
@@ -948,32 +955,14 @@ ${instructions}`
         </div>
       </div>
     {:else if !isNative && draft.id === null && setupPreset === 'agent'}
-      <div class="space-y-4">
+      <div class="flex h-full min-h-0 flex-col">
         {#if editorError}
-          <p class="rounded-lg bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">
+          <p class="mx-6 mt-4 rounded-lg bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">
             {editorError}
           </p>
         {/if}
-        <div class="space-y-2">
-          <label class="block text-xs font-medium" for="agent-utility-setup-request">
-            Setup request
-          </label>
-          <RichMarkdownEditor
-            id="agent-utility-setup-request"
-            bind:value={agentRequest}
-            placeholder="Set up the official Svelte MCP for Codex and Claude Code globally, or create a deployment skill for this project…"
-            ariaLabel="Agent utility setup request"
-            disabled={saving || agentReport !== null}
-            containerClass="rounded-xl border bg-elevated focus-within:border-primary focus-within:ring-1 focus-within:ring-primary"
-            class="min-h-64 max-h-[28rem] w-full resize-y overflow-y-auto px-4 py-3 text-sm leading-6 text-foreground outline-none"
-          />
-          <p class="text-[11px] leading-relaxed text-dimmed">
-            Use Markdown to describe the capability, target harnesses, scope, and any setup
-            constraints. The agent can report credential steps but cannot write secrets.
-          </p>
-        </div>
         {#if agentReport}
-          <div class="rounded-xl border bg-elevated p-4">
+          <div class="min-h-0 flex-1 overflow-y-auto p-6">
             <p class="text-sm font-semibold">Installed</p>
             <div class="mt-2 flex flex-wrap gap-1.5">
               {#each agentReport.installed as utility (utility.id)}
@@ -988,6 +977,16 @@ ${instructions}`
               </p>
             {/if}
           </div>
+        {:else}
+          <RichMarkdownEditor
+            id="agent-utility-setup-request"
+            bind:value={agentRequest}
+            placeholder="Set up the official Svelte MCP for Codex and Claude Code globally, or create a deployment skill for this project…"
+            ariaLabel="Agent utility setup request"
+            disabled={saving}
+            containerClass="min-h-0 flex-1"
+            class="h-full w-full overflow-y-auto px-3.5 pb-1 pt-3 text-sm leading-5 text-foreground outline-none"
+          />
         {/if}
       </div>
     {:else if !isNative && draft.id === null && setupPreset === 'plugin-bundle'}

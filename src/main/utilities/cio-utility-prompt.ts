@@ -1,5 +1,9 @@
+import { isQuotedMentionPosition } from '../../lib/mention-context'
+
 /** Stable built-in tag that grants the utility setup contract for one explicit turn. */
 export const CIO_UTILITY_TAG = '@cio-utility'
+
+const CIO_UTILITY_TAG_PATTERN = /(^|\s)@cio-utility(?=\s|$|[.,:;!?])/giu
 
 /**
  * Versioned application-owned setup knowledge. This is deliberately source code rather
@@ -55,5 +59,9 @@ Use global scope for capabilities intended across projects. Use project or threa
 when the user requests it and the required IDs are available in the setup context.`
 
 export function isCioUtilityRequest(text: string): boolean {
-  return /(^|\s)@cio-utility(?=\s|$|[.,:;!?])/iu.test(text)
+  for (const match of text.matchAll(CIO_UTILITY_TAG_PATTERN)) {
+    const mentionStart = (match.index ?? 0) + (match[1]?.length ?? 0)
+    if (!isQuotedMentionPosition(text, mentionStart)) return true
+  }
+  return false
 }

@@ -6,7 +6,7 @@ export const UTILITY_ACTIVATE_TOOL_NAME = 'utility_activate'
 export const UTILITY_INVOKE_TOOL_NAME = 'utility_invoke'
 /** Explicit-setup-only operation for installing validated utility definitions. */
 export const UTILITY_MANAGE_TOOL_NAME = 'utility_manage'
-/** Shell-callable recovery tool; intentionally never transported through MCP. */
+/** Shell-callable, turn-bound host recovery tool; intentionally never transported through MCP. */
 export const RETRIEVE_MCP_HOST_TOOL_NAME = 'retrieve_mcp_host'
 
 /** One tool the utility gateway MCP exposes to agents. */

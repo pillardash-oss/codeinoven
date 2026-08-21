@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from 'svelte'
+  import { onMount, tick } from 'svelte'
   import { invoke, subscribe } from '$lib/ipc.svelte'
   import { settingsUiState } from '$lib/stores/settings-ui.svelte'
   import type { SettingsSection } from '$lib/stores/renderer-recovery.svelte'
@@ -7,6 +7,7 @@
   import type {
     AppConfig,
     AppConfigPatch,
+    GitPullPreference,
     PrMergeMethod,
     SkillMarketEntry,
     SlashCommandMode,
@@ -19,31 +20,24 @@
     AlertTriangle,
     ArrowLeft,
     Bell,
-    BrainCircuit,
-    ChartColumn,
-    MessageSquareCode,
     CheckCircle2,
     Clock,
-    Cloud,
     Download,
     FolderOpen,
-    Globe,
-    Info,
-    Keyboard,
     Loader2,
     Monitor,
-    MonitorUp,
     Moon,
-    Puzzle,
-    Plug,
     RefreshCw,
+    Search,
     SlidersHorizontal,
-    Sun,
-    UsersRound
+    Sun
   } from '@lucide/svelte'
   import CollapsibleSidebar from '../layout/CollapsibleSidebar.svelte'
   import Switch from '../ui/Switch.svelte'
   import Modal from '../ui/Modal.svelte'
+  import { SETTINGS_SEARCH_ENTRIES } from '$lib/settings-search'
+  import type { SettingsSearchEntry } from '$lib/settings-search'
+  import type { ActionDefinition, ActionSelection } from '../../actions/types'
   import ProvidersView from '../providers/ProvidersView.svelte'
   import UtilitiesView from './UtilitiesView.svelte'
   import SkillsMarketplaceView from './SkillsMarketplaceView.svelte'
@@ -56,6 +50,8 @@
   import CloudDeploymentsSettingsTab from './CloudDeploymentsSettingsTab.svelte'
   import CioPromptsSettings from './CioPromptsSettings.svelte'
   import CuaBridgeSettings from './CuaBridgeSettings.svelte'
+  import GatewaySettingsTab from './GatewaySettingsTab.svelte'
+  import CommandPalette from '../actions/CommandPalette.svelte'
   import { toast } from 'svelte-sonner'
 
   type SelectChangeEvent = Event & { currentTarget: HTMLSelectElement }
@@ -138,29 +134,70 @@
 
   const escHandler = (e: KeyboardEvent) => {
     if (e.key === 'Escape') {
+      // The settings spotlight owns Escape while it is open.
+      if (settingsSearchOpen) return
       e.preventDefault()
       goBack()
     }
   }
 
+  // ── Settings search spotlight ────────────────────────────────────────────
+  let settingsSearchOpen = $state(false)
+
+  const settingsSearchIndex = new Map<string, SettingsSearchEntry>(
+    SETTINGS_SEARCH_ENTRIES.map((entry) => [`settings:${entry.id}`, entry])
+  )
+
+  const settingsSearchActions = $derived<ActionDefinition[]>(
+    SETTINGS_SEARCH_ENTRIES.map((entry) => ({
+      id: `settings:${entry.id}`,
+      title: entry.title,
+      description: entry.description,
+      category: 'navigation',
+      source: { id: 'app-settings', label: 'Settings', kind: 'app' },
+      showSourceBadge: false,
+      icon: entry.icon,
+      keywords: entry.keywords
+    }))
+  )
+
+  /** Flashes a block's border three times to draw the eye after navigation. */
+  function flashElement(element: HTMLElement): void {
+    element.classList.remove('settings-flash')
+    void element.offsetWidth // restart cleanly if a flash is already mid-run
+    element.classList.add('settings-flash')
+    element.addEventListener('animationend', () => element.classList.remove('settings-flash'), {
+      once: true
+    })
+  }
+
+  async function handleSettingsSearch(selection: ActionSelection): Promise<void> {
+    const entry = settingsSearchIndex.get(selection.action.id)
+    if (!entry) return
+
+    navigateSection(entry.section)
+    await tick()
+    // One frame so the freshly swapped section content has laid out.
+    await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()))
+
+    if (!entry.blockId) return
+    const element = document.getElementById(`settings-block-${entry.blockId}`)
+    if (!element) return
+    element.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    flashElement(element)
+  }
+
+  // Sidebar tabs come from the settings search registry — the same source the
+  // spotlight searches, so a page can never be navigable but not searchable.
   const tabs: Array<{
     id: SettingsSection
     label: string
     icon: typeof SlidersHorizontal
-  }> = [
-    { id: 'general', label: 'General', icon: SlidersHorizontal },
-    { id: 'memory', label: 'Memory', icon: BrainCircuit },
-    { id: 'audits', label: 'Agents', icon: UsersRound },
-    { id: 'cio-prompts', label: 'CIO Prompts', icon: MessageSquareCode },
-    { id: 'harnesses', label: 'Harnesses', icon: Plug },
-    { id: 'utilities', label: 'Utilities', icon: Puzzle },
-    { id: 'computer-use', label: 'Computer use', icon: MonitorUp },
-    { id: 'keymap', label: 'Keymap', icon: Keyboard },
-    { id: 'remote', label: 'Remote', icon: Globe },
-    { id: 'cloud-deployments', label: 'Cloud Deployments', icon: Cloud },
-    { id: 'profile', label: 'Usage', icon: ChartColumn },
-    { id: 'about', label: 'About', icon: Info }
-  ]
+  }> = SETTINGS_SEARCH_ENTRIES.filter((entry) => !entry.blockId).map((entry) => ({
+    id: entry.section,
+    label: entry.title,
+    icon: entry.icon
+  }))
 
   // The header mirrors the section on screen — cleared when Settings closes.
   $effect(() => {
@@ -207,6 +244,16 @@
     { id: 'squash', label: 'Squash' },
     { id: 'merge', label: 'Merge' },
     { id: 'rebase', label: 'Rebase' }
+  ]
+
+  const pullStrategyOptions: Array<{
+    id: GitPullPreference
+    label: string
+  }> = [
+    { id: 'ask', label: 'Ask every time' },
+    { id: 'merge', label: 'Merge' },
+    { id: 'rebase', label: 'Rebase' },
+    { id: 'ff-only', label: 'Fast-forward only' }
   ]
 
   function saveThreadLimit(event: Event): void {
@@ -361,6 +408,17 @@
       </button>
     {/snippet}
 
+    {#snippet header()}
+      <button
+        class="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-muted transition-colors hover:bg-elevated hover:text-foreground"
+        title="Search settings"
+        aria-label="Search settings"
+        onclick={() => (settingsSearchOpen = true)}
+      >
+        <Search size={14} />
+      </button>
+    {/snippet}
+
     <nav class="space-y-px" aria-label="Settings sections">
       {#each tabs as tab (tab.id)}
         {@const Icon = tab.icon}
@@ -415,7 +473,7 @@
 
         <div class="space-y-4">
           <!-- Appearance -->
-          <div class="rounded-xl border bg-surface p-4">
+          <div id="settings-block-general-appearance" class="rounded-xl border bg-surface p-4">
             <h3 class="mb-3 text-xs font-semibold uppercase tracking-wide text-muted">
               Appearance
             </h3>
@@ -446,7 +504,7 @@
           </div>
 
           <!-- Notifications -->
-          <div class="rounded-xl border bg-surface p-4">
+          <div id="settings-block-general-notifications" class="rounded-xl border bg-surface p-4">
             <h3 class="mb-3 text-xs font-semibold uppercase tracking-wide text-muted">
               Notifications
             </h3>
@@ -520,7 +578,7 @@
           </div>
 
           <!-- Browser -->
-          <div class="rounded-xl border bg-surface p-4">
+          <div id="settings-block-general-browser" class="rounded-xl border bg-surface p-4">
             <h3 class="mb-3 text-xs font-semibold uppercase tracking-wide text-muted">Browser</h3>
             <div class="flex items-center justify-between gap-4">
               <div>
@@ -542,7 +600,7 @@
           </div>
 
           <!-- Power -->
-          <div class="rounded-xl border bg-surface p-4">
+          <div id="settings-block-general-power" class="rounded-xl border bg-surface p-4">
             <h3 class="mb-3 text-xs font-semibold uppercase tracking-wide text-muted">Power</h3>
             <div class="flex items-center justify-between gap-4">
               <div>
@@ -562,7 +620,7 @@
           </div>
 
           <!-- Recovery -->
-          <div class="rounded-xl border bg-surface p-4">
+          <div id="settings-block-general-recovery" class="rounded-xl border bg-surface p-4">
             <h3 class="mb-3 text-xs font-semibold uppercase tracking-wide text-muted">Recovery</h3>
             <div class="space-y-4">
               <div class="flex items-center justify-between gap-4">
@@ -601,7 +659,7 @@
           </div>
 
           <!-- Git -->
-          <div class="rounded-xl border bg-surface p-4">
+          <div id="settings-block-general-git" class="rounded-xl border bg-surface p-4">
             <h3 class="mb-3 text-xs font-semibold uppercase tracking-wide text-muted">Git</h3>
             <div class="space-y-3">
               <div class="flex items-center justify-between">
@@ -622,6 +680,28 @@
                     })}
                 >
                   {#each mergeMethodOptions as option (option.id)}
+                    <option value={option.id}>{option.label}</option>
+                  {/each}
+                </select>
+              </div>
+              <div class="flex items-center justify-between gap-4">
+                <div>
+                  <p class="text-sm font-medium">Default pull strategy</p>
+                  <p class="text-xs text-dimmed">
+                    Ask when pulling, or always use one reconciliation strategy
+                  </p>
+                </div>
+                <select
+                  class="rounded-lg border bg-elevated px-2.5 py-1.5 text-xs font-medium outline-none focus:border-primary disabled:opacity-50"
+                  value={config.defaultPullStrategy}
+                  disabled={!settingsReady}
+                  aria-label="Default pull strategy"
+                  onchange={(event: SelectChangeEvent) =>
+                    void updateConfig({
+                      defaultPullStrategy: event.currentTarget.value as GitPullPreference
+                    })}
+                >
+                  {#each pullStrategyOptions as option (option.id)}
                     <option value={option.id}>{option.label}</option>
                   {/each}
                 </select>
@@ -652,7 +732,7 @@
           </div>
 
           <!-- Threads -->
-          <div class="rounded-xl border bg-surface p-4">
+          <div id="settings-block-general-threads" class="rounded-xl border bg-surface p-4">
             <h3 class="mb-3 text-xs font-semibold uppercase tracking-wide text-muted">Threads</h3>
             <div class="space-y-3">
               <div class="flex items-center justify-between">
@@ -755,6 +835,8 @@
       {/if}
     {:else if section === 'computer-use'}
       <CuaBridgeSettings />
+    {:else if section === 'gateways'}
+      <GatewaySettingsTab />
     {:else if section === 'keymap'}
       <KeymapSettingsTab />
     {:else if section === 'remote'}
@@ -789,7 +871,7 @@
         </div>
 
         <!-- Storage -->
-        <div class="mt-4 rounded-xl border bg-surface p-4">
+        <div id="settings-block-about-storage" class="mt-4 rounded-xl border bg-surface p-4">
           <h3 class="mb-3 text-xs font-semibold uppercase tracking-wide text-muted">Storage</h3>
           <div
             class="flex flex-col items-start gap-3 sm:flex-row sm:items-center sm:justify-between"
@@ -816,7 +898,7 @@
         </div>
 
         <!-- Diagnostics -->
-        <div class="mt-4 rounded-xl border bg-surface p-4">
+        <div id="settings-block-about-diagnostics" class="mt-4 rounded-xl border bg-surface p-4">
           <h3 class="mb-3 text-xs font-semibold uppercase tracking-wide text-muted">Diagnostics</h3>
           <div class="flex items-center justify-between gap-4">
             <div>
@@ -847,7 +929,7 @@
         </div>
 
         <!-- Updates -->
-        <div class="mt-4 rounded-xl border bg-surface p-4">
+        <div id="settings-block-about-updates" class="mt-4 rounded-xl border bg-surface p-4">
           <h3 class="mb-3 text-xs font-semibold uppercase tracking-wide text-muted">Updates</h3>
 
           <!-- Update status -->
@@ -1001,6 +1083,19 @@
     {/if}
   </div>
 </div>
+
+{#if settingsSearchOpen}
+  <CommandPalette
+    open={settingsSearchOpen}
+    actions={settingsSearchActions}
+    title="Search settings"
+    placeholder="Search settings pages and sections…"
+    emptyLabel="No matching settings"
+    headerIcon={Search}
+    onSelect={handleSettingsSearch}
+    onClose={() => (settingsSearchOpen = false)}
+  />
+{/if}
 
 {#if nightlyModalOpen}
   <Modal

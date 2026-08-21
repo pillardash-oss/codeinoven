@@ -11,7 +11,7 @@
     isBusy: boolean
     /** Primary remote (origin) shown as info at the top of the picker. */
     primaryRemote: { name: string; url: string } | null
-    onSelect: (branch: string) => void
+    onSelect: (branch: GitBranchInfo) => void
     onCreate?: (name: string) => void
     onDelete?: (name: string) => void
   }
@@ -27,16 +27,20 @@
 
   const filtered = $derived(
     search.trim()
-      ? branches.filter((b) => b.name.toLowerCase().includes(search.toLowerCase()))
+      ? branches.filter((b) => b.ref.toLowerCase().includes(search.toLowerCase()))
       : branches
   )
 
-  const localBranches = $derived(filtered.filter((b) => !b.remote))
-  const remoteBranches = $derived(filtered.filter((b) => b.remote))
+  const localBranches = $derived(filtered.filter((branch) => branch.kind === 'local'))
+  const remoteBranches = $derived(filtered.filter((branch) => branch.kind === 'remote'))
+  const localNames = $derived(
+    new Set(branches.filter((branch) => branch.kind === 'local').map((branch) => branch.name))
+  )
   const remoteIdentity = $derived(parseRemoteIdentity(primaryRemote?.url))
 
-  function handleSelect(branch: string): void {
-    if (branch === currentBranch) return
+  function handleSelect(branch: GitBranchInfo): void {
+    if (branch.kind === 'local' && branch.name === currentBranch) return
+    if (branch.kind === 'remote' && localNames.has(branch.name)) return
     onSelect(branch)
     open = false
     search = ''
@@ -138,12 +142,12 @@
           <p class="px-3 py-1 text-[9px] font-semibold uppercase tracking-wide text-dimmed">
             Local
           </p>
-          {#each localBranches as branch (branch.name)}
+          {#each localBranches as branch (branch.ref)}
             <!-- svelte-ignore a11y_no_static_element_interactions -->
             <div
               class="flex w-full cursor-pointer items-center gap-2 px-3 py-1.5 text-[11px] outline-none transition-colors hover:bg-elevated"
-              onclick={() => handleSelect(branch.name)}
-              onkeydown={(e: KeyboardEvent) => e.key === 'Enter' && handleSelect(branch.name)}
+              onclick={() => handleSelect(branch)}
+              onkeydown={(e: KeyboardEvent) => e.key === 'Enter' && handleSelect(branch)}
             >
               <GitBranch size={11} class="shrink-0 text-dimmed" />
               <span class="min-w-0 flex-1 truncate text-left text-foreground">{branch.name}</span>
@@ -179,18 +183,25 @@
           <p class="px-3 py-1 text-[9px] font-semibold uppercase tracking-wide text-dimmed">
             Remote
           </p>
-          {#each remoteBranches as branch (branch.name)}
+          {#each remoteBranches as branch (branch.ref)}
             <button
               type="button"
-              class="flex w-full cursor-pointer items-center gap-2 px-3 py-1.5 text-[11px] outline-none transition-colors hover:bg-elevated"
-              onclick={() => handleSelect(branch.name)}
+              class={[
+                'flex w-full items-center gap-2 px-3 py-1.5 text-[11px] outline-none transition-colors',
+                localNames.has(branch.name)
+                  ? 'cursor-default opacity-60'
+                  : 'cursor-pointer hover:bg-elevated'
+              ]}
+              title={localNames.has(branch.name)
+                ? `${branch.ref} already has a local branch`
+                : `Create local branch ${branch.name} from ${branch.ref}`}
+              disabled={localNames.has(branch.name)}
+              onclick={() => handleSelect(branch)}
             >
               <GitBranch size={11} class="shrink-0 text-dimmed" />
-              <span class="min-w-0 flex-1 truncate text-left text-muted"
-                >{branch.remote}/{branch.name}</span
-              >
-              {#if branch.current}
-                <Check size={12} class="shrink-0 text-primary" />
+              <span class="min-w-0 flex-1 truncate text-left text-muted">{branch.ref}</span>
+              {#if localNames.has(branch.name)}
+                <span class="shrink-0 text-[9px] text-dimmed">local exists</span>
               {/if}
             </button>
           {/each}

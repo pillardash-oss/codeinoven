@@ -232,6 +232,11 @@ export class RetrySchedulerService {
     return this.persistChain
   }
 
+  /** Await the serialized snapshot write so durability is observable (tests). */
+  flush(): Promise<void> {
+    return this.persistChain
+  }
+
   private refreshTimer(): void {
     const shouldRun = this.enabled && this.pending.size > 0
     if (shouldRun && this.timer === null) {

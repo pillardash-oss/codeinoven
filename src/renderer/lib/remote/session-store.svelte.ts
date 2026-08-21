@@ -42,7 +42,22 @@ interface AccountDesktopRoute {
   mobileDeviceId: string
   controlSecret: string
   relayPath?: string
+  lanTargets?: RemoteConnectionTarget[]
+  /** Legacy single-candidate route retained for restored clients during rollout. */
   lanTarget?: RemoteConnectionTarget
+}
+
+function lanTargets(route: AccountDesktopRoute): RemoteConnectionTarget[] {
+  const candidates = [...(route.lanTargets ?? []), ...(route.lanTarget ? [route.lanTarget] : [])]
+  return candidates.filter(
+    (candidate, index) =>
+      candidates.findIndex(
+        (entry) =>
+          entry.scheme === candidate.scheme &&
+          entry.host === candidate.host &&
+          entry.port === candidate.port
+      ) === index
+  )
 }
 
 export class RemoteSessionStore {
@@ -367,13 +382,19 @@ export class RemoteSessionStore {
   ): Promise<void> {
     if (!preserveWorkspace) this.recovering = false
     this.accountRoute = input
-    if (input.lanTarget) {
+    // Initial connections have no useful channel to preserve. Resume and
+    // upgrade flows keep the current transport alive until a LAN candidate has
+    // authenticated, preventing a probe from ejecting in-flight workspace RPC.
+    if (!preserveWorkspace) this.closeChannels()
+    for (const target of lanTargets(input)) {
       try {
-        await this.connectLan(input.controlSecret, input.lanTarget, input.desktopId)
+        await this.connectLan(input.controlSecret, target, input.desktopId, preserveWorkspace)
         this.accountRoute = input
         if (this.snapshot.route.kind === 'LAN_CONNECTED') return
       } catch (error) {
-        remoteLog.info(`Account LAN route unavailable; using cloud relay: ${String(error)}`)
+        remoteLog.info(
+          `Account LAN route ${target.host}:${target.port} unavailable: ${String(error)}`
+        )
       }
     }
     await this.connectCloud(input)
@@ -389,10 +410,13 @@ export class RemoteSessionStore {
   private async connectLan(
     secret: string,
     target: RemoteConnectionTarget,
-    desktopId: string | null = null
+    desktopId: string | null = null,
+    preserveExistingChannel = false
   ): Promise<void> {
     this.secret = secret
-    this.closeChannels()
+    const previousLan = this.lanTransport
+    const previousRelay = this.accountRelayClient
+    if (!preserveExistingChannel) this.closeChannels()
     const keyMaterial = await this.ensureKeyMaterial(desktopId)
     const device = {
       deviceId: keyMaterial.deviceId,
@@ -404,14 +428,19 @@ export class RemoteSessionStore {
     }
     this.dispatch({ type: 'lanProbeStart' })
     const peer: PeerRef = { host: target.host, port: target.port }
-    const accepted = await this.openLanSession(
+    const session = await this.openLanSession(
       peer,
       secret,
       target.scheme,
       device,
       keyMaterial.deviceId ? null : secret
     )
-    if (accepted) {
+    if (session && this.lanTransport === session) {
+      if (preserveExistingChannel) {
+        if (previousLan && previousLan !== session) previousLan.close()
+        previousRelay?.close()
+        if (this.accountRelayClient === previousRelay) this.accountRelayClient = null
+      }
       remoteLog.info(`Remote session connected over LAN to ${peer.host}:${peer.port}`)
       this.recovering = false
       this.dispatch({ type: 'lanConnected', peer })
@@ -428,7 +457,7 @@ export class RemoteSessionStore {
     scheme: 'ws' | 'wss',
     device?: import('./transport').LanDeviceCredentials,
     pairingBootstrap?: string | null
-  ): Promise<boolean> {
+  ): Promise<LanTransport | null> {
     const session = createLanTransport({
       peer,
       authSecret: secret,
@@ -446,9 +475,13 @@ export class RemoteSessionStore {
           return
         }
         if (event.kind === 'disconnected' && this.lanTransport === session) {
-          this.recovering = this.snapshot.route.kind === 'LAN_CONNECTED'
-          this.dispatch({ type: 'disconnected', reason: 'lan-lost' })
           this.lanTransport = null
+          // A candidate used for a make-before-break upgrade can disappear
+          // before it becomes the active route. Do not tear down the healthy
+          // relay in that case.
+          if (this.snapshot.route.kind !== 'LAN_CONNECTED') return
+          this.recovering = true
+          this.dispatch({ type: 'disconnected', reason: 'lan-lost' })
           if (this.accountRoute) void this.connectCloud(this.accountRoute)
         }
       }
@@ -456,10 +489,10 @@ export class RemoteSessionStore {
     const outcome = await session.connect()
     if (outcome === 'open') {
       this.lanTransport = session
-      return true
+      return session
     }
     session.close()
-    return false
+    return null
   }
 
   /** Tear down any open channel and return to DISCONNECTED. */
@@ -511,7 +544,8 @@ export class RemoteSessionStore {
   }
 
   private scheduleLanUpgrade(): void {
-    if (!this.accountRoute?.lanTarget || this.lanUpgradeTimer !== null) return
+    if (!this.accountRoute || lanTargets(this.accountRoute).length === 0) return
+    if (this.lanUpgradeTimer !== null) return
     this.lanUpgradeTimer = window.setTimeout(() => {
       this.lanUpgradeTimer = null
       void this.tryLanUpgrade()
@@ -520,10 +554,8 @@ export class RemoteSessionStore {
 
   private async tryLanUpgrade(): Promise<void> {
     const route = this.accountRoute
-    const target = route?.lanTarget
-    if (!route || !target || this.snapshot.route.kind !== 'RELAY_CONNECTED') return
+    if (!route || this.snapshot.route.kind !== 'RELAY_CONNECTED') return
     const keyMaterial = await this.ensureKeyMaterial(route.desktopId)
-    const peer: PeerRef = { host: target.host, port: target.port }
     const device = {
       deviceId: keyMaterial.deviceId,
       deviceName: keyMaterial.deviceName,
@@ -532,22 +564,26 @@ export class RemoteSessionStore {
       signingPublicJwk: keyMaterial.signingPublicJwk,
       agreementPublicJwk: keyMaterial.agreementPublicJwk
     }
-    const connected = await this.openLanSession(
-      peer,
-      route.controlSecret,
-      target.scheme,
-      device,
-      keyMaterial.deviceId ? null : route.controlSecret
-    )
-    if (!connected) {
-      this.scheduleLanUpgrade()
+    for (const target of lanTargets(route)) {
+      const peer: PeerRef = { host: target.host, port: target.port }
+      const session = await this.openLanSession(
+        peer,
+        route.controlSecret,
+        target.scheme,
+        device,
+        keyMaterial.deviceId ? null : route.controlSecret
+      )
+      if (!session || this.lanTransport !== session) continue
+      this.accountRelayClient?.close()
+      this.accountRelayClient = null
+      this.dispatch({ type: 'lanConnected', peer })
+      this.dispatch({ type: 'peerReachableChanged', reachable: true })
+      remoteLog.info(
+        `Remote session upgraded from cloud relay to LAN via ${peer.host}:${peer.port}`
+      )
       return
     }
-    this.accountRelayClient?.close()
-    this.accountRelayClient = null
-    this.dispatch({ type: 'lanConnected', peer })
-    this.dispatch({ type: 'peerReachableChanged', reachable: true })
-    remoteLog.info('Remote session upgraded from cloud relay to LAN')
+    this.scheduleLanUpgrade()
   }
 
   /** Update the desktop keep-alive phase surfaced to the phone client. */

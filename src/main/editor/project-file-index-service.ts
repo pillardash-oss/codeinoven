@@ -4,6 +4,7 @@ import { watch, type FSWatcher } from 'node:fs'
 import { StringDecoder } from 'node:string_decoder'
 import { basename, isAbsolute, join, relative, sep } from 'node:path'
 import { Logger } from '../system/logger'
+import { buildProcessEnvironment } from '../drivers/cli-environment'
 import type { ProjectFileEntry } from '../../lib/types'
 
 const MAX_SEARCH_RESULTS = 60
@@ -279,7 +280,11 @@ export class ProjectFileIndexService {
           '.',
           ...GIT_EXCLUDED_DIRECTORY_PATHS
         ],
-        { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] }
+        {
+          windowsHide: true,
+          env: buildProcessEnvironment(),
+          stdio: ['ignore', 'pipe', 'pipe']
+        }
       )
       const decoder = new StringDecoder('utf8')
       const paths: string[] = []

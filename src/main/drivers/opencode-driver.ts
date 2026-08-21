@@ -1,9 +1,8 @@
-import { execFile, spawn } from 'child_process'
+import { spawn } from 'child_process'
 import type { ChildProcess } from 'child_process'
 import { readFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
-import { promisify } from 'util'
 import { Logger } from '../system/logger'
 import type {
   AgentEvent,
@@ -37,7 +36,7 @@ import type {
   UtilityRuntimeOverlay,
   UtilityRuntimePreparationRequest
 } from './driver.interface'
-import { buildHarnessEnvironment } from './cli-environment'
+import { buildProcessEnvironment } from './cli-environment'
 import { BaseUrlProviderService } from '../providers/base-url-provider-service'
 import { hasNativeProviderCatalog } from '../agents/native-provider-config-service'
 import { SecretVault } from '../storage/secret-vault'
@@ -45,15 +44,20 @@ import { resolveFastModelId } from '../../lib/fast-inference'
 import { classifyProviderIssue } from '../../lib/provider-issue'
 import { isSvgAttachment, readSvgAttachmentText, formatSvgAsText } from './svg-attachment'
 import { isTextAttachment, readTextAttachment, formatTextAsText } from './text-attachment'
+import {
+  formatWordDocumentAsText,
+  isWordDocumentAttachment,
+  readWordDocumentText
+} from './document-attachment'
 import { buildTitlePrompt, sanitizeGeneratedTitle } from '../chat/title-generator'
+import { leanAgentConfigMap } from '../opencode/opencode-agent-definitions'
+import { prepareHarnessInvocation, runHarnessCommand } from './harness-runtime'
 
 /** Time allowed for an opencode server to announce its port before giving up. */
 const SERVER_START_TIMEOUT_MS = 25000
 const MODEL_DISCOVERY_TIMEOUT_MS = 20_000
 const ACCOUNT_USAGE_TIMEOUT_MS = 10_000
 const ACCOUNT_USAGE_ENDPOINT = 'https://opencode.ai/zen/go/v1/usage'
-const execFileAsync = promisify(execFile)
-
 const OPENCODE_ACCOUNT_PROVIDER_IDS = ['opencode-go', 'opencode'] as const
 const OPENCODE_USAGE_WINDOWS: ReadonlyArray<{
   id: string
@@ -1038,11 +1042,10 @@ export class OpenCodeDriver implements HarnessDriver {
   }
 
   async ensureReady(projectPath: string): Promise<void> {
-    await execFileAsync('opencode', ['--version'], {
+    await runHarnessCommand('opencode', ['--version'], {
       cwd: projectPath,
       env: this.buildEnv(),
-      timeout: 5_000,
-      windowsHide: true
+      timeoutMs: 5_000
     })
   }
 
@@ -1160,16 +1163,17 @@ export class OpenCodeDriver implements HarnessDriver {
       }
     }
 
-    return Object.keys(mcp).length > 0 || Object.keys(provider).length > 0
-      ? {
-          env: {
-            OPENCODE_CONFIG_CONTENT: JSON.stringify({ mcp, provider }),
-            ...baseUrlEnv
-          }
-        }
-      : Object.keys(baseUrlEnv).length > 0
-        ? { env: baseUrlEnv }
-        : {}
+    // Prompts name CodeInOven's lean agents directly. Keep those definitions
+    // in the app-owned server environment so inbox chat does not depend on a
+    // successful rewrite of the user's global OpenCode config. That rewrite
+    // may be skipped for JSONC or user-owned entries, but the prompt path must
+    // remain deterministic in every case.
+    return {
+      env: {
+        OPENCODE_CONFIG_CONTENT: JSON.stringify({ agent: leanAgentConfigMap(), mcp, provider }),
+        ...baseUrlEnv
+      }
+    }
   }
 
   async applyPreparedUtilityRuntime(
@@ -1347,6 +1351,13 @@ export class OpenCodeDriver implements HarnessDriver {
           continue
         }
       }
+      if (isWordDocumentAttachment(attachment)) {
+        const content = await readWordDocumentText(attachment)
+        if (content !== null) {
+          parts.push({ type: 'text', text: formatWordDocumentAsText(attachment, content) })
+          continue
+        }
+      }
       parts.push({
         type: 'file',
         mime: attachment.mime,
@@ -1426,6 +1437,13 @@ export class OpenCodeDriver implements HarnessDriver {
         const content = await readTextAttachment(attachment)
         if (content !== null) {
           parts.push({ type: 'text', text: formatTextAsText(attachment, content) })
+          continue
+        }
+      }
+      if (isWordDocumentAttachment(attachment)) {
+        const content = await readWordDocumentText(attachment)
+        if (content !== null) {
+          parts.push({ type: 'text', text: formatWordDocumentAsText(attachment, content) })
           continue
         }
       }
@@ -1558,12 +1576,11 @@ export class OpenCodeDriver implements HarnessDriver {
   }
 
   async listProviders(projectPath: string): Promise<ProviderCatalog[]> {
-    const { stdout } = await execFileAsync('opencode', ['models', '--verbose'], {
+    const { stdout } = await runHarnessCommand('opencode', ['models', '--verbose'], {
       cwd: projectPath,
       env: this.buildEnv(),
-      timeout: MODEL_DISCOVERY_TIMEOUT_MS,
-      maxBuffer: 16 * 1024 * 1024,
-      windowsHide: true
+      timeoutMs: MODEL_DISCOVERY_TIMEOUT_MS,
+      maxOutputBytes: 16 * 1024 * 1024
     })
     const rawProviders = new Map<string, Record<string, unknown>>()
     for (const model of parseOpenCodeModels(stdout)) {
@@ -2014,15 +2031,35 @@ export class OpenCodeDriver implements HarnessDriver {
   }
 
   /** Spawn a dedicated `opencode serve` process independent of the project pool. */
-  private startIsolatedServer(
+  private async startIsolatedServer(
     projectPath: string,
     runtime?: PreparedUtilityRuntime
   ): Promise<Omit<IsolatedHandle, 'sessionId'>> {
+    // Temporary chats, title generation, and other disposable work bypass the
+    // shared server. Give those fresh servers the same app-managed agent and
+    // provider overlay as the shared server, otherwise prompts that select a
+    // lean agent (for example `cio-eph`) fail before creating the user message.
+    const overlay = runtime
+      ? undefined
+      : await this.prepareUtilityRuntime({ projectPath, resolvedUtilities: [] })
+    const args = [
+      'serve',
+      '--port',
+      '0',
+      '--hostname',
+      '127.0.0.1',
+      ...(runtime?.args ?? overlay?.args ?? [])
+    ]
+    const env = runtime
+      ? this.buildEnv(runtime)
+      : buildProcessEnvironment({ ...process.env, ...(overlay?.env ?? {}) })
+    const prepared = await prepareHarnessInvocation('opencode', args, { cwd: projectPath, env })
+
     return new Promise((resolve, reject) => {
-      const args = ['serve', '--port', '0', '--hostname', '127.0.0.1', ...(runtime?.args ?? [])]
-      const child = spawn('opencode', args, {
-        cwd: projectPath,
-        env: this.buildEnv(runtime),
+      const child = spawn(prepared.command, prepared.args, {
+        ...(prepared.cwd ? { cwd: prepared.cwd } : {}),
+        env: prepared.env,
+        shell: prepared.shell,
         stdio: ['ignore', 'pipe', 'pipe']
       })
 
@@ -2091,11 +2128,16 @@ export class OpenCodeDriver implements HarnessDriver {
       projectPath,
       resolvedUtilities: []
     })
+    const args = ['serve', '--port', '0', '--hostname', '127.0.0.1']
+    const prepared = await prepareHarnessInvocation('opencode', args, {
+      cwd: projectPath,
+      env: buildProcessEnvironment({ ...process.env, ...(providerOverlay.env ?? {}) })
+    })
     return new Promise((resolve, reject) => {
-      const args = ['serve', '--port', '0', '--hostname', '127.0.0.1']
-      const child = spawn('opencode', args, {
-        cwd: projectPath,
-        env: buildHarnessEnvironment({ ...process.env, ...(providerOverlay.env ?? {}) }),
+      const child = spawn(prepared.command, prepared.args, {
+        ...(prepared.cwd ? { cwd: prepared.cwd } : {}),
+        env: prepared.env,
+        shell: prepared.shell,
         stdio: ['ignore', 'pipe', 'pipe']
       })
 
@@ -2160,7 +2202,7 @@ export class OpenCodeDriver implements HarnessDriver {
 
   /** GUI apps don't inherit the shell PATH — augment with common install locations. */
   private buildEnv(runtime?: PreparedUtilityRuntime): NodeJS.ProcessEnv {
-    if (!runtime) return buildHarnessEnvironment()
+    if (!runtime) return buildProcessEnvironment()
 
     const configPath =
       runtime.configPaths['OPENCODE_CONFIG'] ??
@@ -2170,7 +2212,7 @@ export class OpenCodeDriver implements HarnessDriver {
       runtime.configPaths['OPENCODE_CONFIG_DIR'] ??
       runtime.configPaths['opencode-skills'] ??
       runtime.configPaths['skills']
-    return buildHarnessEnvironment({
+    return buildProcessEnvironment({
       ...process.env,
       ...(configPath ? { OPENCODE_CONFIG: configPath } : {}),
       ...(skillPath ? { OPENCODE_CONFIG_DIR: skillPath } : {}),

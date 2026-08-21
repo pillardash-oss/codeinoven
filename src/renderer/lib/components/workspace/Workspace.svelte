@@ -68,6 +68,7 @@
   import AppearancePicker from '../shared/AppearancePicker.svelte'
   import ScopeBadge from '../shared/ScopeBadge.svelte'
   import StatusBadge from '../shared/StatusBadge.svelte'
+  import MessageHistoryPanel from '../shared/MessageHistoryPanel.svelte'
   import ProjectCreateControl from '../shared/ProjectCreateControl.svelte'
   import ThreadSearchControl from '../shared/ThreadSearchControl.svelte'
   import SidebarAccountControls from './SidebarAccountControls.svelte'
@@ -2432,10 +2433,16 @@
   }
 
   async function handleDelete(thread: Thread): Promise<void> {
-    await invoke('thread:delete', thread.projectId, thread.id)
     allThreads = allThreads.filter((t) => t.id !== thread.id)
     scopeState.removeThread(thread.id)
     if (selectedThread?.id === thread.id) workspaceState.clearThread()
+    try {
+      await invoke('thread:delete', thread.projectId, thread.id)
+    } catch (error) {
+      upsertThreadInList(thread)
+      scopeState.updateThread(thread)
+      reportError(error, 'The thread could not be deleted.')
+    }
   }
 
   async function forkThread(thread: Thread): Promise<void> {
@@ -3421,7 +3428,12 @@
       style:grid-template-columns={contextPanelColumns}
       style:grid-template-rows={contextPanelRows}
     >
-      <div class="min-h-0 min-w-0 overflow-hidden" style:grid-column="1" style:grid-row="1">
+      <div
+        class="min-h-0 min-w-0 overflow-hidden"
+        style:grid-column="1"
+        style:grid-row="1"
+        data-onboarding="conversation"
+      >
         {#if selectedThread}
           <div class="relative flex h-full min-h-0 min-w-0 flex-col overflow-hidden">
             {#key selectedThread.id}
@@ -3568,6 +3580,11 @@
                   <GitStatusPanel
                     projectId={activeContextTab.projectId}
                     threadId={activeContextTab.threadId}
+                    scopeBucketId={allThreads.find(
+                      (thread) =>
+                        thread.projectId === activeContextTab.projectId &&
+                        thread.id === activeContextTab.threadId
+                    )?.scopeBucketId ?? DEFAULT_SCOPE_BUCKET_ID}
                   />
                 {/await}
               {:else if activeContextTab.kind === 'cloud-deployment'}
@@ -3711,19 +3728,11 @@
     <p class="border-b px-3 py-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-dimmed">
       Your messages
     </p>
-    <div class="max-h-72 overflow-y-auto p-1">
-      {#each workspaceState.userMessages as message, index (message.id)}
-        <button
-          class="block w-full truncate px-2.5 py-1.5 text-left text-xs text-muted transition-colors hover:bg-elevated hover:text-foreground"
-          role="menuitem"
-          title={message.content}
-          onclick={() => jumpToHistoryMessage(message.id)}
-        >
-          {index + 1}. {message.content}
-        </button>
-      {:else}
-        <p class="px-2.5 py-2 text-xs text-dimmed">No messages yet</p>
-      {/each}
+    <div class="max-h-72 overflow-y-auto">
+      <MessageHistoryPanel
+        messages={workspaceState.userMessages}
+        onSelect={(id) => jumpToHistoryMessage(id)}
+      />
     </div>
   </div>
 {/snippet}

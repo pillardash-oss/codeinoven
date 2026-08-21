@@ -1,6 +1,6 @@
 /// <reference types="node" />
 
-import { lstatSync, realpathSync } from 'fs'
+import { lstatSync, realpathSync, existsSync } from 'fs'
 import { writeFile, rename, mkdir, readFile, readdir, rm } from 'fs/promises'
 import { isAbsolute, join, relative, resolve, sep, win32 } from 'path'
 import { randomBytes } from 'crypto'
@@ -140,6 +140,55 @@ export function getConfigRoot(): string {
 /** Get project storage path */
 export function getProjectPath(projectId: string): string {
   return join(getConfigRoot(), 'projects', projectId)
+}
+
+const SCOPE_DIRECTORY_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/
+
+/**
+ * Validate a managed-scope directory name: exactly one relative, path-safe
+ * segment with no traversal or absolute forms.
+ */
+export function validateScopeDirectoryName(directoryName: string): string {
+  if (
+    directoryName.length === 0 ||
+    directoryName.length > 128 ||
+    isAbsolute(directoryName) ||
+    win32.isAbsolute(directoryName) ||
+    !SCOPE_DIRECTORY_PATTERN.test(directoryName) ||
+    directoryName.split(/[\\/]+/u).includes('..')
+  ) {
+    throw new Error(`Managed scope directory name is not path-safe: "${directoryName}"`)
+  }
+  return directoryName
+}
+
+/**
+ * Canonical app-managed root for one scope worktree:
+ * `<config-root>/projects/<project-id>/scope/<directory-name>`.
+ * Deterministic for a given config root; never accepts absolute names.
+ * The returned path is symlink-resolved (`realpath`) so it exactly matches the
+ * path Git registers for the worktree (macOS `/var` → `/private/var`, etc.).
+ */
+export function getScopeRootPath(projectId: string, directoryName: string): string {
+  const logical = join(
+    getProjectPath(projectId),
+    'scope',
+    validateScopeDirectoryName(directoryName)
+  )
+  // Resolve symlinks from the deepest existing ancestor upward so the value is
+  // canonical even before the worktree directory exists, which exactly matches
+  // the path Git registers (`/var/folders` → `/private/var/folders` on macOS).
+  let ancestor = logical
+  while (!existsSync(ancestor)) {
+    const parent = join(ancestor, '..')
+    if (parent === ancestor) break
+    ancestor = parent
+  }
+  try {
+    return join(realpathSync.native(ancestor), logical.slice(ancestor.length))
+  } catch {
+    return logical
+  }
 }
 
 /** Get thread storage path */

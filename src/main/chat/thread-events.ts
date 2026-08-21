@@ -63,6 +63,22 @@ export function broadcastThreadDeleted(thread: Thread): void {
   dismissThreadNotifications(thread.projectId, thread.id)
 }
 
+/** Surface a failed optimistic thread operation without making its IPC acknowledgement blocking. */
+export function broadcastThreadOperationError(
+  message: string,
+  projectId: string,
+  threadId: string
+): void {
+  for (const win of BrowserWindow.getAllWindows()) {
+    sendToRenderer(win.webContents, 'app:toast', {
+      message,
+      type: 'error',
+      projectId,
+      threadId
+    })
+  }
+}
+
 /** Keep note-presence indicators synchronized across desktop and remote renderers. */
 export function broadcastNoteChanged(projectId: string, threadId: string, hasNote: boolean): void {
   for (const win of BrowserWindow.getAllWindows()) {

@@ -620,6 +620,28 @@ body {
   color: var(--color-info);
 }
 
+/* ─── Settings search reveal ─────────────────────────────────────────────── */
+/*
+ * When a settings search result is picked, the target block's border flashes
+ * three times (accent gold) so the eye lands on it after the jump.
+ */
+@keyframes settings-flash-border {
+  0%,
+  100% {
+    border-color: var(--color-border);
+    box-shadow: 0 0 0 0 transparent;
+  }
+  40%,
+  60% {
+    border-color: var(--color-accent);
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-accent) 35%, transparent);
+  }
+}
+
+.settings-flash {
+  animation: settings-flash-border 0.7s ease-in-out 3;
+}
+
 /* ─── Touch affordances ──────────────────────────────────────────────────── */
 /*
  * A finger cannot hover. Every control that only fades in on `group-hover`

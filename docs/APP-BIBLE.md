@@ -186,7 +186,7 @@ Accessibility is part of the design system, not an afterthought:
 
 ### 4.1 Toolchain
 
-- **Bun only.** All installs, scripts, and runs go through `bun`.
+- **Bun only for CodeInOven development.** Repository installs, scripts, checks, builds, and releases go through `bun`. This is a contributor toolchain rule, never an assumption that a packaged-app user's GUI environment contains Bun.
 - **TypeScript everywhere**, strict. The type `any` is forbidden — including `variable as any`. Model the type properly or fix the design.
 - **Svelte 5 (runes) + Tailwind v4** in the renderer. Always use current Svelte 5 idioms and consult the latest Svelte documentation (via the Svelte MCP) — no deprecated patterns.
 - Never import SvelteKit-only modules (`$app/*`) into shared utilities, domain modules, or anything bundled outside the app runtime. For runtime detection in shared code, use platform-safe checks (`typeof window !== 'undefined'`) or inject the value from an entrypoint.
@@ -221,7 +221,54 @@ Unless explicitly asked to run against the whole project:
 - Drivers implement `driver.interface.ts`; adapters implement `adapter.interface.ts`. New providers plug in via those contracts, never via special-cased branches.
 - CodeInOven's own state lives under its config directory only. Never write into a user's repository from app code.
 
+### 4.5 External process and package-manager invariant
+
+Electron GUI processes do not reliably inherit a user's interactive-shell `PATH`. Every main-process feature that probes or launches an external command must therefore use the single process environment and resolution boundary in `src/main/drivers/cli-environment.ts`:
+
+- Build the environment with `buildProcessEnvironment`; never pass raw `process.env` to a new external process. User-owned detached applications must opt out of the app-owned process marker so lifecycle cleanup cannot reap them.
+- Resolve PATH-based executables with `resolveExecutablePath` whenever probing, selecting, or persisting a command path. A structured command-name launch is allowed only with the normalized environment; it must never use raw Electron `process.env` or duplicate PATH lookup.
+- Run third-party JavaScript packages through `resolvePackageCommand`. Bun is preferred, with npm/npx, pnpm, and Yarn supported as fallbacks. A user-facing feature must not require Bun unless Bun itself is the feature's explicit runtime.
+- Preserve the user's selected runtime and package-manager paths. The shared environment owns support for GUI-safe system locations plus nvm/nvm-windows, Volta, fnm, asdf, mise, Bun, npm, pnpm, and Yarn locations.
+- Windows `.cmd`/`.bat` package-manager shims may use the shared shell decision helper. Shell execution is otherwise forbidden for package installation; arguments remain a structured array.
+- OS-owned commands at fixed platform locations and children of an already-normalized app-owned process may inherit their existing environment. Any such exception must be explicit in code and must not duplicate PATH construction.
+
+Direct `spawn('bun', ...)`, `spawn('node', ...)`, `spawn('npm', ...)`, ad-hoc `PATH` concatenation, and feature-local package-manager selection are architectural violations. New runtime and version-manager edge cases are fixed once in the shared boundary and inherited by every caller.
+
 ---
+
+### 4.6 Scopes own workspace roots
+
+Scopes — not threads, renderer state, or individual services — are the single
+authority for a repository root.
+
+- Every scope persists a **root descriptor** on its version 2 board. The Default
+  scope and migrated custom scopes use `{ kind: 'project' }`; an explicitly
+  isolated scope uses a managed descriptor with `directoryName`, `branch`,
+  `baseBranch`, `baseCommit`, `createdAt`, `environmentMode`, and `setup` state.
+- Managed worktree paths are derived only beneath CodeInOven's per-project
+  config directory (`<config-root>/projects/<project-id>/scope/<directory-name>`).
+  The renderer never selects or supplies absolute worktree paths.
+- `ScopeRootResolver` in `src/main/workspaces/scope-root-resolver.ts` is the only
+  authority converting a `{ projectId, scopeBucketId }` target into a filesystem
+  root. Unhealthy managed scopes fail closed with a typed health category and
+  never fall back to the project directory.
+- `Thread.workingDirectory` is compatibility data, not authority. Creation,
+  movement, forks, and worker generation re-derive roots from the scope at
+  execution time.
+- Renderer layout saves cannot overwrite lifecycle metadata: boards are mutated
+  through validated main-owned operations (layout, appearance, create, archive,
+  worktree attach/detach, delete).
+- Same-scope threads and agents intentionally share one root; separate managed
+  worktree scopes are the isolation boundary.
+- Every destructive lifecycle action is guarded by a state-bound, single-use
+  confirmation preflight (dirty files, unpushed commits, active processes) and
+  a confirmation dialog.
+
+See `docs/GIT-WORKTREES.md` for the full operator-facing lifecycle, setup
+structure, environment modes, health categories, and confirmations.
+
+---
+
 
 ## 5. Agent Workflow Contract
 

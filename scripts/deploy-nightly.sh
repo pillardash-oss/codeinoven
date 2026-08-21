@@ -59,12 +59,20 @@ git fetch origin
 if git rev-parse refs/tags/nightly >/dev/null 2>&1; then
   warn "Stale 'nightly' TAG found (it collides with the nightly branch). Deleting it..."
   if [[ "$DRY_RUN" -eq 0 ]]; then
-    git push origin :refs/tags/nightly
-    git tag -d nightly
+    if ! git push origin :refs/tags/nightly 2>&1; then
+      warn "Could not delete remote 'nightly' tag (likely protected by a repository rule). Continuing — git will use the branch ref explicitly."
+    fi
+    git tag -d nightly 2>/dev/null || true
   else
     say "(dry-run) git push origin :refs/tags/nightly && git tag -d nightly"
   fi
-  ok "Stale 'nightly' tag removed."
+  ok "Stale 'nightly' tag handled."
+fi
+# Also handle remote-only tag (local tag already deleted but remote still exists)
+if ! git rev-parse refs/tags/nightly >/dev/null 2>&1; then
+  if git ls-remote --tags origin | grep -q "refs/tags/nightly$"; then
+    warn "Remote 'nightly' tag still exists (protected). Will continue with explicit branch refs."
+  fi
 fi
 
 # --- 2. ensure we're on a clean, up-to-date dev ------------------------------

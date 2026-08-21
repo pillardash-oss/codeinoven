@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte'
+  import type { Attachment } from 'svelte/attachments'
   import { fade, slide } from 'svelte/transition'
   import {
     AlertTriangle,
@@ -47,6 +48,8 @@
   const RELATIVE_TIME_TICK_MS = 20_000
   /** How long a copy confirmation stays visible on the Path column. */
   const COPY_FEEDBACK_MS = 1500
+  /** Breathing room between background hydration jobs on low-end machines. */
+  const BACKGROUND_BATCH_DELAY_MS = 50
 
   /** Harnesses whose drivers can consume custom base-URL providers (per the manifest). */
   let baseUrlHarnesses = $derived(
@@ -55,7 +58,7 @@
     )
   )
 
-  let authStatuses = $state<Record<string, ProviderAccountAuthStatus>>({})
+  let authStatuses = $state.raw<Record<string, ProviderAccountAuthStatus>>({})
   let addTarget = $state<ProviderConnectionInfo | null>(null)
   let customEditorFor = $state<string | null>(null)
   /** Harness awaiting uninstall confirmation, with its resolved handoff command. */
@@ -65,10 +68,10 @@
   let uninstallError = $state('')
   let uninstallBusy = $state(false)
   /** Confirmed/effective harness behavior manifests, keyed by harness id. */
-  let manifestEntries = $state<Record<string, HarnessManifestEntry>>({})
+  let manifestEntries = $state.raw<Record<string, HarnessManifestEntry>>({})
   let manifestSaving = $state<Record<string, boolean>>({})
   /** Per-harness "update automatically on launch" preference, keyed by harness id. */
-  let autoUpdatePrefs = $state<Record<string, boolean>>({})
+  let autoUpdatePrefs = $state.raw<Record<string, boolean>>({})
   let autoUpdateSaving = $state<Record<string, boolean>>({})
   /** Which top-level tab is on screen. */
   let activeTab = $state<'harnesses' | 'custom'>('harnesses')
@@ -78,7 +81,7 @@
   let searchQuery = $state('')
   /** Status chip filter above the harness list. */
   let statusFilter = $state<'all' | 'updates' | 'issues'>('all')
-  let searchInputEl = $state<HTMLInputElement | undefined>(undefined)
+  let searchInputEl: HTMLInputElement | undefined
   /** Epoch ms of the most recent successful check pass, for the "Last checked" label. */
   let lastCheckedAt = $state<number | null>(null)
   /** Ticks on an interval so the relative "last checked" label stays fresh. */
@@ -118,7 +121,9 @@
       (provider) =>
         provider.name.toLowerCase().includes(query) ||
         provider.command.toLowerCase().includes(query) ||
-        (provider.resolvedPath?.toLowerCase().includes(query) ?? false)
+        (provider.resolvedPath?.toLowerCase().includes(query) ?? false) ||
+        (provider.executionTarget?.kind === 'wsl' &&
+          provider.executionTarget.distribution.toLowerCase().includes(query))
     )
   })
 
@@ -193,7 +198,10 @@
     if (provider.status === 'available' && provider.integration === 'ready') {
       return {
         Icon: CheckCircle2,
-        label: 'Ready',
+        label:
+          provider.executionTarget?.kind === 'wsl'
+            ? `Ready · WSL ${provider.executionTarget.distribution}`
+            : 'Ready · Native',
         classes: 'border-success/30 bg-success/10 text-success'
       }
     }
@@ -408,13 +416,17 @@
 
   async function checkAuth(harnessId: string): Promise<void> {
     try {
-      authStatuses[harnessId] = await invoke('providerAccounts:getAuthStatus', harnessId)
+      const status = await invoke('providerAccounts:getAuthStatus', harnessId)
+      authStatuses = { ...authStatuses, [harnessId]: status }
     } catch (authError) {
-      authStatuses[harnessId] = {
-        capabilities: null,
-        state: 'error',
-        accounts: [],
-        detail: authError instanceof Error ? authError.message : 'Authentication check failed.'
+      authStatuses = {
+        ...authStatuses,
+        [harnessId]: {
+          capabilities: null,
+          state: 'error',
+          accounts: [],
+          detail: authError instanceof Error ? authError.message : 'Authentication check failed.'
+        }
       }
     }
   }
@@ -423,13 +435,16 @@
     const ready = providerStore.providers.filter(
       (provider) => provider.integration === 'ready' && provider.status === 'available'
     )
-    await Promise.all(ready.map((provider) => checkAuth(provider.id)))
+    for (const [index, provider] of ready.entries()) {
+      await checkAuth(provider.id)
+      if (index < ready.length - 1) await yieldToRenderer()
+    }
   }
 
   async function recheckAll(): Promise<void> {
-    await providerStore.checkAll()
+    await providerStore.checkAll(true)
     await checkAllAuth()
-    await harnessLifecycleStore.checkAll()
+    await harnessLifecycleStore.checkAll(true)
     lastCheckedAt = Date.now()
   }
 
@@ -456,26 +471,49 @@
     }
   }
 
+  const captureSearchInput: Attachment<HTMLInputElement> = (element) => {
+    searchInputEl = element
+    return () => {
+      if (searchInputEl === element) searchInputEl = undefined
+    }
+  }
+
+  function yieldToRenderer(): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, BACKGROUND_BATCH_DELAY_MS))
+  }
+
+  async function hydrateInBatches(isActive: () => boolean): Promise<void> {
+    await providerStore.init()
+    if (!isActive()) return
+
+    const jobs: Array<() => Promise<void>> = [
+      loadManifests,
+      loadAutoUpdatePrefs,
+      () => baseUrlProviderStore.load(),
+      () => providerStore.checkAll(),
+      checkAllAuth,
+      () => harnessLifecycleStore.checkAll()
+    ]
+
+    for (const job of jobs) {
+      await yieldToRenderer()
+      if (!isActive()) return
+      await job()
+    }
+    if (isActive()) lastCheckedAt = Date.now()
+  }
+
   onMount(() => {
+    let active = true
     window.addEventListener('keydown', handleWindowKeydown, true)
     const relativeTimeInterval = setInterval(() => {
       now = Date.now()
     }, RELATIVE_TIME_TICK_MS)
 
-    void (async () => {
-      await providerStore.init()
-      await providerStore.checkAll()
-      await Promise.all([
-        checkAllAuth(),
-        baseUrlProviderStore.load(),
-        harnessLifecycleStore.checkAll(),
-        loadManifests(),
-        loadAutoUpdatePrefs()
-      ])
-      lastCheckedAt = Date.now()
-    })()
+    void hydrateInBatches(() => active)
 
     return () => {
+      active = false
       window.removeEventListener('keydown', handleWindowKeydown, true)
       clearInterval(relativeTimeInterval)
       clearTimeout(copyResetTimer)
@@ -538,7 +576,7 @@
           class="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-dimmed"
         />
         <input
-          bind:this={searchInputEl}
+          {@attach captureSearchInput}
           bind:value={searchQuery}
           type="text"
           placeholder="Search harnesses…"
@@ -677,7 +715,11 @@
             </div>
 
             <div class="min-w-0">
-              <p class="text-[10px] font-medium uppercase tracking-wide text-dimmed">Path</p>
+              <p class="text-[10px] font-medium uppercase tracking-wide text-dimmed">
+                {provider.executionTarget?.kind === 'wsl'
+                  ? `WSL path · ${provider.executionTarget.distribution}`
+                  : 'Path'}
+              </p>
               <div class="mt-0.5 flex items-center gap-1.5">
                 <span
                   class="min-w-0 truncate font-mono text-xs text-muted"
@@ -908,8 +950,8 @@
     <div class="mt-6 rounded-xl border border-dashed p-4 text-center">
       <Plug size={18} class="mx-auto mb-1 text-dimmed" />
       <p class="text-xs text-dimmed">
-        Harnesses are detected from your system PATH and verified with a version probe. Install the
-        CLI tool and click Check.
+        Harnesses are detected from your system PATH and Windows Subsystem for Linux distributions,
+        then verified with a version probe. Install the CLI tool and click Check.
       </p>
     </div>
 

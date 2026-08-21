@@ -1,7 +1,7 @@
 <script lang="ts">
-  import { onDestroy } from 'svelte'
+  import { onDestroy, onMount } from 'svelte'
   import { DropdownMenu } from 'bits-ui'
-  import { gitState } from '$lib/stores/git.svelte'
+  import { GitState } from '$lib/stores/git.svelte'
   import { invoke } from '$lib/ipc.svelte'
   import DockableModal from '../ui/DockableModal.svelte'
   import Switch from '../ui/Switch.svelte'
@@ -18,12 +18,15 @@
     type PrDockStatus
   } from '$lib/stores/pr-lifecycle.svelte'
   import { getProjectIcon } from '$lib/project-icons'
+  import { DEFAULT_SCOPE_BUCKET_ID, isOrchestrationChildThread } from '$shared/types'
   import type {
     Project,
+    PrComposeInput,
     PullRequestCompare,
     PullRequestReference,
     PullRequestSummary,
     ProviderCatalog,
+    Thread,
     ThinkingLevel,
     ThreadSettings
   } from '$shared/types'
@@ -43,6 +46,7 @@
 
   interface Props {
     projectId: string
+    scopeBucketId?: string
     onClose: () => void
     /** Fired once a pull request is actually created, so the list can refresh. */
     onCreated?: () => void
@@ -83,6 +87,7 @@
 
   let {
     projectId,
+    scopeBucketId = DEFAULT_SCOPE_BUCKET_ID,
     onClose,
     onCreated,
     onView,
@@ -93,8 +98,11 @@
     draftId
   }: Props = $props()
 
+  /** This draft owns its Git state; active-thread navigation cannot replace it. */
+  const gitState = new GitState()
+
   function preferencesStorageKey(): string {
-    return `${APP_SLUG}.pullRequestPreferences.${projectId}.v1`
+    return `${APP_SLUG}.pullRequestPreferences.${projectId}.${scopeBucketId}.v1`
   }
 
   function loadPrCreationPreferences(): PrCreationPreferences {
@@ -166,20 +174,21 @@
   let head = $state(initialPreferences.head ?? '')
   let base = $state(initialPreferences.base ?? '')
   let draft = $state(false)
-  /** Push committed local changes to the head branch so they land in the PR. */
-  let pushLocal = $state(true)
-  /** Commit staged files first, using the PR title as the commit message. */
-  let commitLocal = $state(false)
   let result: PullRequestReference | null = $state(null)
   let originError = $state('')
   let compare = $state<PullRequestCompare | null>(null)
   let comparing = $state(false)
   let compareError = $state('')
   let compareSequence = 0
+  let initialCompareStarted = false
   /** True while the commit → push → create sequence runs. */
   let submitting = $state(false)
   /** Set when the push was rejected: shows the pull/rebase recovery panel. */
   let pushRejected = $state(false)
+  /** Git's output for the latest rejected push, available on demand in the recovery panel. */
+  let pushErrorDetails = $state('')
+  /** A failed commit, push, or PR creation owned by this submission attempt. */
+  let createError = $state('')
   /** Which recovery action is running ('merge' | 'rebase'), to disable buttons. */
   let recoverMode = $state<'merge' | 'rebase' | null>(null)
   /** True while a prepared divergence-resolution thread is being opened. */
@@ -213,9 +222,6 @@
     ...threadSettings.lastUsed,
     ...(initialPreferences.compose ?? {})
   })
-  /** Branch selection from the last virtual compose — detects changes on recompose. */
-  let composeHead = $state('')
-  let composeBase = $state('')
   /** Latest compose error, shown inline in the dropdown. */
   let composeError = $state('')
   /** Timer that flips "Complete" → "Recompose" after a short pause. */
@@ -226,25 +232,42 @@
   )
 
   const branch = $derived(gitState.status?.branch ?? null)
-  const branches = $derived(gitState.branches.map((b) => b.name))
-  const creating = $derived(gitState.isBusy('pr-create'))
-  const hasStagedChanges = $derived(
-    (gitState.status?.changes ?? []).some(
-      (change) => change.staged && change.status !== 'conflicted'
+  const branches = $derived([
+    ...new Set(
+      gitState.branches
+        .filter((candidate) => candidate.kind === 'local' || candidate.remote === 'origin')
+        .map((candidate) => candidate.name)
     )
+  ])
+  const creating = $derived(gitState.isBusy('pr-create'))
+  const committableChanges = $derived(
+    (gitState.status?.changes ?? []).filter((change) => change.status !== 'conflicted')
   )
+  const hasLocalWorktreeChanges = $derived(committableChanges.length > 0)
   const sameBranch = $derived(canonicalBranch(head) === canonicalBranch(base))
   const headIsCurrent = $derived(canonicalBranch(head) === canonicalBranch(branch ?? ''))
-  const willCreateCommit = $derived(commitLocal && hasStagedChanges && headIsCurrent)
+  const willCreateCommit = $derived(hasLocalWorktreeChanges && headIsCurrent)
   const hasChangesToPublish = $derived(compare?.hasChanges === true || willCreateCommit)
-  const headInfo = $derived(gitState.branches.find((candidate) => candidate.name === head) ?? null)
+  const headInfo = $derived(
+    gitState.branches.find((candidate) => candidate.kind === 'local' && candidate.name === head) ??
+      gitState.branches.find(
+        (candidate) => candidate.kind === 'remote' && candidate.name === head
+      ) ??
+      null
+  )
   /** An open PR for the exact head→base pair — GitHub rejects a duplicate with a 422. */
   const existingPr = $derived(compare?.existing ?? null)
   const composeWorking = $derived(composePhase === 'working')
   const composeSucceeded = $derived(composePhase === 'complete' || composePhase === 'recompose')
   const dockHasIssue = $derived(
     Boolean(
-      originError || compareError || composeError || gitState.error || pushRejected || existingPr
+      originError ||
+      compareError ||
+      composeError ||
+      createError ||
+      gitState.error ||
+      pushRejected ||
+      existingPr
     )
   )
 
@@ -300,7 +323,8 @@
    * would be a pointless non-fast-forward rejection, so creation skips it.
    */
   const hasUnpushedHeadCommits = $derived(
-    willCreateCommit || headInfo === null || headInfo.remote === null || headInfo.ahead > 0
+    willCreateCommit ||
+      (headInfo?.kind === 'local' && (headInfo.remote === null || headInfo.ahead > 0))
   )
 
   /** Local-only commits must be pushed before GitHub can create the PR. */
@@ -311,7 +335,6 @@
       !sameBranch &&
       Boolean(title.trim()) &&
       hasChangesToPublish &&
-      (compare?.source !== 'local' || pushLocal) &&
       existingPr === null &&
       !creating &&
       !submitting &&
@@ -349,7 +372,8 @@
         const url = await invoke('project:getIcon', projectId).catch(() => null)
         projectIconUrl = url ?? null
       }
-      const url = await invoke('repository:remoteOrigin', project.path)
+      await gitState.refresh(projectId)
+      const url = gitState.remotes.find((remote) => remote.name === 'origin')?.url ?? null
       const identity = parseRemoteIdentity(url ?? '')
       originIdentity = identity
     } catch {
@@ -367,11 +391,18 @@
 
   /** Compare head against base; a stale response from an earlier selection is dropped. */
   async function runCompare(): Promise<void> {
-    if (!originIdentity || !head || !base || sameBranch) return
+    if (!originIdentity || !head || !base) return
     const sequence = ++compareSequence
-    comparing = true
+    compare = null
     compareError = ''
     pushRejected = false
+    pushErrorDetails = ''
+    createError = ''
+    if (sameBranch) {
+      comparing = false
+      return
+    }
+    comparing = true
     try {
       const snapshot = await gitState.comparePullRequests(
         projectId,
@@ -383,9 +414,6 @@
       if (sequence !== compareSequence) return
       if (snapshot) {
         compare = snapshot
-        // Local-only heads must be pushed (GitHub can't see them yet); remote
-        // heads only need a push when the local copy is ahead of the remote.
-        pushLocal = snapshot.source === 'local' || hasUnpushedHeadCommits
       } else {
         compare = null
         compareError = 'Could not compare these branches.'
@@ -399,18 +427,50 @@
     }
   }
 
+  function changeHead(event: Event): void {
+    const select = event.currentTarget
+    if (!(select instanceof HTMLSelectElement) || select.value === head) return
+    head = select.value
+    void runCompare()
+  }
+
+  function changeBase(event: Event): void {
+    const select = event.currentTarget
+    if (!(select instanceof HTMLSelectElement) || select.value === base) return
+    base = select.value
+    void runCompare()
+  }
+
   async function createPullRequest(): Promise<void> {
     if (!originIdentity || !head || !base || !canCreate || submitting) return
+    // Submission owns the status area from this point. Invalidate an in-flight
+    // comparison so a slow response cannot leave its spinner over a push error.
+    compareSequence++
+    comparing = false
+    pushRejected = false
+    pushErrorDetails = ''
+    createError = ''
     submitting = true
     try {
       // Decided up front: after the commit below, the refreshed status clears
       // staged changes, which would make hasUnpushedHeadCommits flip to false.
       const commitMade = willCreateCommit
-      const shouldPush = pushLocal && (commitMade || hasUnpushedHeadCommits)
-      // 1. Commit staged files first, using the PR title as the message.
+      const shouldPush = headInfo?.kind === 'local' && (commitMade || hasUnpushedHeadCommits)
+      // 1. Stage and commit the complete worktree first. Compose used the same
+      //    read-only worktree evidence, so the generated copy matches this push.
       if (commitMade) {
+        await gitState.stage(projectId, [
+          ...new Set(committableChanges.map((change) => change.path))
+        ])
+        if (gitState.error) {
+          createError = gitState.error
+          return
+        }
         await gitState.commit(projectId, `commit: ${title.trim()}`)
-        if (gitState.error) return
+        if (gitState.error) {
+          createError = gitState.error
+          return
+        }
       }
       // 2. Push local commits only when the head actually has something the
       //    remote doesn't — when the branch already exists on GitHub (and the
@@ -418,14 +478,17 @@
       //    nothing to push and GitHub builds the PR from the remote refs, so
       //    skipping the push avoids a spurious non-fast-forward rejection.
       if (shouldPush) {
-        const hasUpstream =
-          gitState.branches.find((candidate) => candidate.name === head)?.remote != null
+        const hasUpstream = headInfo?.kind === 'local' && headInfo.remote === 'origin'
         const pushed = await gitState.push(projectId, !hasUpstream, 'origin', head)
-        if (pushed === 'rejected') {
+        if (pushed.status === 'rejected') {
           pushRejected = true
+          pushErrorDetails = pushed.message
           return
         }
-        if (pushed === 'failed') return
+        if (pushed.status === 'failed') {
+          createError = pushed.message
+          return
+        }
       }
       // 3. Create the pull request.
       await finishCreate()
@@ -447,6 +510,8 @@
       persistPrCreationPreferences({ head, base })
       result = reference
       onCreated?.()
+    } else if (!gitState.githubPermission) {
+      createError = gitState.error ?? 'GitHub did not create the pull request. Try again.'
     }
   }
 
@@ -458,18 +523,27 @@
   async function recoverPush(mode: 'merge' | 'rebase'): Promise<void> {
     if (!originIdentity || !head || !base || recoverMode) return
     pushRejected = false
+    pushErrorDetails = ''
+    createError = ''
     recoverMode = mode
     try {
-      await gitState.pullIntegrate(projectId, 'origin', head, mode === 'rebase')
-      if (gitState.error || gitState.conflicted.length > 0) return
-      const hasUpstream =
-        gitState.branches.find((candidate) => candidate.name === head)?.remote != null
-      const pushed = await gitState.push(projectId, !hasUpstream, 'origin', head)
-      if (pushed === 'rejected') {
-        pushRejected = true
+      await gitState.pullIntegrate(projectId, 'origin', head, mode)
+      if (gitState.error) {
+        createError = gitState.error
         return
       }
-      if (pushed === 'failed') return
+      if (gitState.conflicted.length > 0) return
+      const hasUpstream = headInfo?.kind === 'local' && headInfo.remote === 'origin'
+      const pushed = await gitState.push(projectId, !hasUpstream, 'origin', head)
+      if (pushed.status === 'rejected') {
+        pushRejected = true
+        pushErrorDetails = pushed.message
+        return
+      }
+      if (pushed.status === 'failed') {
+        createError = pushed.message
+        return
+      }
       await finishCreate()
     } finally {
       recoverMode = null
@@ -528,73 +602,30 @@
     onClose()
   }
 
+  async function openProjectFirstThread(): Promise<void> {
+    if (!projectMeta) return
+    const allThreads: Thread[] = await invoke('thread:listAll').catch(() => [])
+    const firstThread = allThreads
+      .filter((thread) => thread.projectId === projectId && !thread.archived)
+      .filter((thread) => !isOrchestrationChildThread(thread))
+      .sort((a, b) => b.lastActivity - a.lastActivity)[0]
+    if (!firstThread) return
+    workspaceState.openThread(firstThread, projectMeta, projectIconUrl)
+  }
+
   // ─── Compose with agent ────────────────────────────────────────────────────
 
-  /** Extra context about local changes that will be pushed with the PR. */
-  function localChangesContext(): string {
-    const parts: string[] = []
-    if (commitLocal && hasStagedChanges) {
-      parts.push(
-        'Staged local changes will be committed and pushed with this pull request, so include them in your summary.'
-      )
+  function composeInput(recomposing: boolean): PrComposeInput {
+    const includeWorkingTree = headIsCurrent && hasLocalWorktreeChanges
+    const source: PrComposeInput['source'] =
+      includeWorkingTree || hasUnpushedHeadCommits ? 'local' : (compare?.source ?? 'remote')
+    return {
+      base,
+      head,
+      source,
+      includeWorkingTree,
+      ...(recomposing ? { currentTitle: title, currentDescription: body } : {})
     }
-    if (pushLocal && hasUnpushedHeadCommits) {
-      const ahead = headInfo?.ahead ?? 0
-      parts.push(
-        `The local \`${head}\` branch is ${ahead} commit${ahead === 1 ? '' : 's'} ahead of its remote and will be pushed with the PR, so cover those changes too.`
-      )
-    }
-    return parts.join('\n')
-  }
-
-  function composePrompt(): string {
-    const localChanges = localChangesContext()
-    return [
-      `Compose a pull request title and description for merging \`${head}\` into \`${base}\` in this repository.`,
-      '',
-      'Find the last set of commits on the head branch that are not yet part of the base branch:',
-      `1. \`git fetch origin\``,
-      `2. \`git log --oneline origin/${base}..origin/${head}\` (fall back to \`${base}..${head}\` if the refs are local-only).`,
-      '',
-      ...(localChanges ? [localChanges, ''] : []),
-      'Then write a concise, human-readable pull request title (one line, imperative mood) and a',
-      'description that summarizes what changed, why, and anything a reviewer should know. Do not',
-      'overstate scope — only cover the changes in those commits.',
-      '',
-      'Return only JSON with exactly this shape:',
-      '{',
-      '  "title": "The pull request title",',
-      '  "description": "The pull request description"',
-      '}',
-      '',
-      'Do not write any files, create the pull request, commit, or push.'
-    ].join('\n')
-  }
-
-  function recomposePrompt(): string {
-    const branchChanged = Boolean(
-      composeHead && composeBase && (composeHead !== head || composeBase !== base)
-    )
-    const localChanges = localChangesContext()
-    return [
-      `The user is not satisfied with the composed title and description for merging \`${head}\` into \`${base}\`.`,
-      ...(branchChanged
-        ? [
-            '',
-            `The branch selection has changed since the previous compose — it was \`${composeHead}\` into \`${composeBase}\`.`,
-            'Re-run the commit-range commands with the new branches so the summary matches them.'
-          ]
-        : []),
-      ...(localChanges ? ['', localChanges] : []),
-      '',
-      `Current title: ${JSON.stringify(title)}`,
-      'Current description:',
-      body.trim() || '(empty)',
-      '',
-      'Improve on it: re-read the commit range, make the title sharper and the description',
-      'clearer and more complete, then return only JSON with the same shape.',
-      'Do not write any files, create the pull request, commit, or push.'
-    ].join('\n')
   }
 
   function clearComposeTimers(): void {
@@ -676,14 +707,11 @@
         projectId,
         virtualTaskId,
         settings,
-        `Compose PR: ${head} → ${base}`,
-        recomposing ? recomposePrompt() : composePrompt()
+        composeInput(recomposing)
       )
       if (!report) {
         throw new Error(gitState.error ?? 'The PR compose agent did not return a result')
       }
-      composeHead = head
-      composeBase = base
       await applyComposeReport(report)
     } catch (reason) {
       composeError =
@@ -712,29 +740,23 @@
 
   onDestroy(clearComposeTimers)
 
-  $effect(() => {
-    void loadOrigin()
-  })
-
-  $effect(() => {
-    if (originIdentity && branches.length > 0) {
-      if (!head || !branches.includes(head)) {
-        head = branch && branches.includes(branch) ? branch : branches[0]
-      }
-      if (!base || !branches.includes(base)) {
-        base = branches.includes('main') ? 'main' : branches[0]
-      }
+  function initializeBranchSelection(): void {
+    if (!originIdentity || branches.length === 0) return
+    if (!head || !branches.includes(head)) {
+      head = branch && branches.includes(branch) ? branch : branches[0]
     }
-  })
-
-  $effect(() => {
-    if (sameBranch) {
-      compare = null
-      compareError = ''
-      compareSequence++
-      return
+    if (!base || !branches.includes(base)) {
+      base = branches.includes('main') ? 'main' : branches[0]
     }
-    if (originIdentity && head && base) void runCompare()
+    if (head && base && !initialCompareStarted) {
+      initialCompareStarted = true
+      void runCompare()
+    }
+  }
+
+  onMount(() => {
+    gitState.activate(projectId, scopeBucketId)
+    void loadOrigin().then(initializeBranchSelection)
   })
 </script>
 
@@ -752,8 +774,11 @@
 >
   {#snippet headerPrefix()}
     {#if dockProjectName}
-      <span
-        class="flex min-w-0 max-w-48 shrink-0 items-center gap-1.5 rounded-full border border-border bg-elevated py-0.5 pr-2.5 pl-1"
+      <button
+        class="flex min-w-0 max-w-48 shrink-0 cursor-pointer items-center gap-1.5 rounded-full border border-border bg-elevated py-0.5 pr-2.5 pl-1 transition-colors hover:bg-overlay"
+        title={`Open first thread in ${dockProjectName}`}
+        aria-label={`Open first thread in ${dockProjectName}`}
+        onclick={() => void openProjectFirstThread()}
       >
         {#if resolvedProjectIcon}
           <img src={resolvedProjectIcon} alt="" class="h-4 w-4 shrink-0 rounded" />
@@ -761,7 +786,7 @@
           <GitPullRequest size={13} class="shrink-0 text-dimmed" aria-hidden="true" />
         {/if}
         <span class="truncate text-[10px] font-semibold text-foreground">{dockProjectName}</span>
-      </span>
+      </button>
     {/if}
   {/snippet}
 
@@ -969,8 +994,9 @@
             <select
               id="pr-head"
               class="h-8 w-full cursor-pointer rounded-lg border border-border bg-elevated px-2 font-mono text-[11px] text-foreground outline-none focus:border-primary disabled:opacity-50"
-              bind:value={head}
+              value={head}
               disabled={branches.length === 0}
+              onchange={changeHead}
             >
               {#each branches as name (name)}
                 <option value={name}>{name}</option>
@@ -988,8 +1014,9 @@
             <select
               id="pr-base"
               class="h-8 w-full cursor-pointer rounded-lg border border-border bg-elevated px-2 font-mono text-[11px] text-foreground outline-none focus:border-primary disabled:opacity-50"
-              bind:value={base}
+              value={base}
               disabled={branches.length === 0}
+              onchange={changeBase}
             >
               {#each branches as name (name)}
                 <option value={name}>{name}</option>
@@ -1071,6 +1098,15 @@
                 so Git won't let you push over them. Pull the remote changes in first — the pull request
                 is created automatically afterwards.
               </p>
+              {#if pushErrorDetails}
+                <details class="mt-2 text-[9px] text-dimmed">
+                  <summary class="cursor-pointer select-none font-medium text-foreground">
+                    Show Git error
+                  </summary>
+                  <pre
+                    class="mt-1.5 max-h-32 overflow-auto whitespace-pre-wrap break-words rounded-lg border border-border bg-elevated p-2 font-mono text-[9px] leading-relaxed text-danger">{pushErrorDetails}</pre>
+                </details>
+              {/if}
               {#if headIsCurrent}
                 <div class="mt-2 flex items-center gap-1.5">
                   <button
@@ -1126,6 +1162,25 @@
         </div>
       {/if}
 
+      {#if createError}
+        <div class="rounded-lg border border-danger/20 bg-danger/10 px-3 py-2.5" role="alert">
+          <div class="flex items-start gap-2">
+            <TriangleAlert size={14} class="mt-0.5 shrink-0 text-danger" />
+            <div class="min-w-0">
+              <p class="text-[10px] font-semibold text-danger">Pull request was not created</p>
+              <p
+                class="mt-0.5 whitespace-pre-wrap break-words text-[9px] leading-relaxed text-danger"
+              >
+                {createError}
+              </p>
+              <p class="mt-1 text-[9px] leading-relaxed text-dimmed">
+                Fix the Git error, then choose Create pull request to try again.
+              </p>
+            </div>
+          </div>
+        </div>
+      {/if}
+
       <div>
         <label
           class="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-muted"
@@ -1167,42 +1222,25 @@
       </div>
 
       <div class="space-y-3 rounded-lg border border-border bg-surface p-2.5">
-        <div class="flex items-center justify-between gap-2">
-          <div class="min-w-0">
-            <span class="text-[10px] text-muted">Push local changes</span>
+        {#if hasLocalWorktreeChanges && headIsCurrent}
+          <div>
+            <span class="text-[10px] text-muted">Local changes</span>
             <p class="text-[9px] leading-relaxed text-dimmed">
-              Push committed changes to
-              <span class="font-mono text-foreground">{head}</span> so they're included in this pull
-              request.
-              {#if compare?.source === 'local'}
-                This is required because the compared commits are not on GitHub yet.
-              {/if}
+              Creating this pull request stages and commits every worktree change as
+              <span class="font-mono text-foreground">commit: {title.trim() || 'Title'}</span>, then
+              pushes all unpublished commits to
+              <span class="font-mono text-foreground">{head}</span>.
             </p>
           </div>
-          <Switch
-            checked={pushLocal}
-            onchange={(value) => (pushLocal = value)}
-            aria-label="Push local changes"
-          />
-        </div>
-        <div class="flex items-center justify-between gap-2">
-          <div class="min-w-0">
-            <span class="text-[10px] text-muted">Commit local changes</span>
+        {:else if hasUnpushedHeadCommits}
+          <div>
+            <span class="text-[10px] text-muted">Unpublished commits</span>
             <p class="text-[9px] leading-relaxed text-dimmed">
-              {hasStagedChanges
-                ? headIsCurrent
-                  ? `Commit staged files as commit: ${title.trim() || 'Title'} before pushing.`
-                  : `Check out ${head} before committing staged files to it.`
-                : 'No staged files to commit right now.'}
+              Creating this pull request pushes every unpublished commit on
+              <span class="font-mono text-foreground">{head}</span> first.
             </p>
           </div>
-          <Switch
-            checked={commitLocal}
-            onchange={(value) => (commitLocal = value)}
-            disabled={!hasStagedChanges || !headIsCurrent}
-            aria-label="Commit local changes"
-          />
-        </div>
+        {/if}
         <div class="flex items-center justify-between gap-2">
           <div class="min-w-0">
             <span class="text-[10px] text-muted">Create as draft</span>
@@ -1219,7 +1257,7 @@
       </div>
     {/if}
 
-    {#if gitState.error && !result && !composeError}
+    {#if gitState.error && !result && !composeError && !createError}
       <p
         class="rounded-lg border border-danger/20 bg-danger/10 px-3 py-1.5 text-[10px] leading-relaxed text-danger"
       >
@@ -1243,11 +1281,9 @@
         disabled={!canCreate}
         title={!canCreate && existingPr
           ? 'A pull request already exists for these branches'
-          : !canCreate && compare?.source === 'local' && !pushLocal
-            ? 'Push local changes to create this pull request'
-            : !canCreate && compare !== null && !hasChangesToPublish
-              ? 'There isn\u2019t anything to compare'
-              : undefined}
+          : !canCreate && compare !== null && !hasChangesToPublish
+            ? 'There isn\u2019t anything to compare'
+            : undefined}
         onclick={() => void createPullRequest()}
       >
         {#if creating || submitting}

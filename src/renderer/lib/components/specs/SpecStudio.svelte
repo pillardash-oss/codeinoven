@@ -78,6 +78,8 @@
     assignmentAvailable?: boolean
     assignmentMode?: boolean
     auditAvailable?: boolean
+    implementationAuditAvailable?: boolean
+    implementationAuditReady?: boolean
     history: StudioDocumentHistory<EngineeringSpec>
     onBack: () => void
     onOpenInEditor: (spec: EngineeringSpec) => CallbackResult
@@ -87,6 +89,8 @@
     onOpenAssignment?: () => void
     onGenerateAssignment?: (spec: EngineeringSpec) => CallbackResult
     onOpenAudit?: () => void
+    onRunImplementationAudit?: () => CallbackResult
+    onMarkImplementationComplete?: () => CallbackResult
     onSave: (spec: EngineeringSpec) => Promise<EngineeringSpec | null>
     onSelectVersion: (version: number) => CallbackResult
     onAddAnnotation: (
@@ -170,6 +174,8 @@
     assignmentAvailable = false,
     assignmentMode = false,
     auditAvailable = false,
+    implementationAuditAvailable = false,
+    implementationAuditReady = false,
     history,
     onBack,
     onOpenInEditor,
@@ -179,6 +185,8 @@
     onOpenAssignment,
     onGenerateAssignment,
     onOpenAudit,
+    onRunImplementationAudit,
+    onMarkImplementationComplete,
     onSave,
     onSelectVersion,
     onAddAnnotation,
@@ -1023,7 +1031,27 @@
       </div>
 
       <div class="flex items-center gap-1.5 md:justify-end">
-        {#if canDecide}
+        {#if implementationAuditAvailable}
+          <button
+            class="flex-1 rounded-lg border bg-elevated px-3 py-1.5 text-xs font-semibold max-md:h-10 md:flex-none hover:bg-overlay disabled:opacity-50"
+            disabled={busy}
+            title="Mark this implementation complete without an audit"
+            onclick={() => void onMarkImplementationComplete?.()}
+          >
+            Mark complete
+          </button>
+          <button
+            class="flex flex-1 items-center justify-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-on-primary max-md:h-10 md:flex-none hover:bg-primary-hover disabled:opacity-50"
+            disabled={busy}
+            title={implementationAuditReady
+              ? 'Open the implementation audit'
+              : 'Audit the completed implementation'}
+            onclick={() => void onRunImplementationAudit?.()}
+          >
+            <ShieldCheck size={13} />
+            {implementationAuditReady ? 'View audit' : 'Audit'}
+          </button>
+        {:else if canDecide}
           <button
             class="flex-1 rounded-lg border bg-elevated px-3 py-1.5 text-xs font-semibold max-md:h-10 md:flex-none hover:bg-overlay disabled:opacity-50"
             disabled={busy}

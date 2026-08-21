@@ -359,7 +359,7 @@ export class UtilityOrchestrationService {
     this.turnIdsByToken.set(token, id)
 
     const gateway = gatewayUtility(request, this.storage.resolve(scriptPath), bridgeUrl, token)
-    const recoveryInstruction = `The always-active ${RETRIEVE_MCP_HOST_TOOL_NAME} utility is independent of MCP. If the advertised app gateway is unreachable, call it through the shell with \`bun ${shellQuote(retrieverPath)} ${shellQuote(request.sessionId)}\`. It discovers the owning live CodeInOven instance and returns the current \`mcpHost\`. Retry the original route against that host with the current turn's authorization header. Never print or persist the bearer token.`
+    const recoveryInstruction = `The always-active ${RETRIEVE_MCP_HOST_TOOL_NAME} utility is independent of MCP. If the advertised app gateway is unreachable, call it through the shell with \`bun ${shellQuote(retrieverPath)} ${shellQuote(request.sessionId)} ${shellQuote(id)}\`. It discovers the CodeInOven instance that owns this exact utility turn and returns the current \`mcpHost\`. Retry the original route against that host with the current turn's authorization header. Never print or persist the bearer token.`
     await this.audit(state, 'turn.started', {
       eligibleUtilityIds: eligible.map(({ utility }) => utility.id),
       alwaysUtilityIds: always.map(({ utility }) => utility.id)
@@ -486,11 +486,10 @@ export class UtilityOrchestrationService {
       if (request.method === 'POST' && request.url === RETRIEVE_MCP_HOST_ROUTE) {
         const input = await readJsonBody(request)
         const sessionId = requiredString(input['session_id'], 'session_id', 128)
-        const ownsSession = [...this.turns.values()].some(
-          ({ state }) => state.request.sessionId === sessionId
-        )
-        if (!ownsSession || !this.gatewayBaseUrl) {
-          this.respond(response, 404, { error: 'Utility session is not owned by this instance' })
+        const turnId = requiredString(input['turn_id'], 'turn_id', 128)
+        const turn = this.turns.get(turnId)
+        if (turn?.state.request.sessionId !== sessionId || !this.gatewayBaseUrl) {
+          this.respond(response, 404, { error: 'Utility turn is not owned by this instance' })
           return
         }
         this.respond(response, 200, { mcpHost: this.gatewayBaseUrl })
@@ -1423,9 +1422,10 @@ import { join } from 'node:path'
 
 const instanceDirectory = ${JSON.stringify(instanceDirectory)}
 const sessionId = process.argv[2]?.trim()
+const turnId = process.argv[3]?.trim()
 
-if (!sessionId || sessionId.length > 128) {
-  process.stderr.write('retrieve_mcp_host requires the current utility session id.\n')
+if (!sessionId || sessionId.length > 128 || !turnId || turnId.length > 128) {
+  process.stderr.write('retrieve_mcp_host requires the current utility session and turn ids.\n')
   process.exit(1)
 }
 
@@ -1477,7 +1477,7 @@ async function resolveHost(host) {
     const response = await fetch(host + ${JSON.stringify(RETRIEVE_MCP_HOST_ROUTE)}, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ session_id: sessionId }),
+      body: JSON.stringify({ session_id: sessionId, turn_id: turnId }),
       signal: AbortSignal.timeout(1500)
     })
     if (!response.ok) return null

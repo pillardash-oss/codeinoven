@@ -25,8 +25,15 @@ import {
   validatePushOptions,
   validateRemoteName,
   validateRemoteUrl,
+  validateEnvironmentMode,
+  validateScopeBoard,
+  validateScopeDirectoryName,
+  validateScopeTarget,
+  validateSetupCommandSpec,
+  validateSetupCommandSpecs,
   validateThreadSettings,
-  validateThreadStatus
+  validateThreadStatus,
+  validateWorktreeDefaults
 } from '../../src/main/ipc/ipc-validation'
 
 const validSettings = {
@@ -564,5 +571,121 @@ describe('privileged-IPC scoped path validation', () => {
     await expect(validator.resolveScopedPath(join(roots[0]!, 'missing.md'))).rejects.toThrow(
       /does not resolve/iu
     )
+  })
+})
+
+describe('scope worktree validators', () => {
+  it('validates scope targets and rejects unknown fields', () => {
+    expect(validateScopeTarget({ projectId: 'p1', scopeBucketId: 'b2' })).toEqual({
+      projectId: 'p1',
+      scopeBucketId: 'b2'
+    })
+    expect(() => validateScopeTarget({ projectId: 'p1' })).toThrow(TypeError)
+    expect(() => validateScopeTarget({ projectId: 'p1', scopeBucketId: 'b', extra: 1 })).toThrow(
+      /Unsupported scope target field/
+    )
+    expect(() => validateScopeTarget({ projectId: '../p', scopeBucketId: 'b' })).toThrow(TypeError)
+  })
+
+  it('validates managed directory names as single path-safe segments', () => {
+    expect(validateScopeDirectoryName('feature-1')).toBe('feature-1')
+    expect(() => validateScopeDirectoryName('/abs')).toThrow(TypeError)
+    expect(() => validateScopeDirectoryName('..')).toThrow(TypeError)
+    expect(() => validateScopeDirectoryName('a/b')).toThrow(TypeError)
+    expect(() => validateScopeDirectoryName('.hidden')).toThrow(TypeError)
+  })
+
+  it('validates structured setup commands without shell strings', () => {
+    expect(validateSetupCommandSpec({ executable: 'bun', args: ['install'] })).toEqual({
+      executable: 'bun',
+      args: ['install']
+    })
+    expect(() => validateSetupCommandSpec({ executable: '', args: [] })).toThrow(TypeError)
+    expect(() => validateSetupCommandSpec({ executable: 'bun', args: ['x'], shell: true })).toThrow(
+      /Unsupported setup command field/
+    )
+    expect(() =>
+      validateSetupCommandSpecs(new Array(65).fill({ executable: 'x', args: [] }))
+    ).toThrow(/at most 64/)
+  })
+
+  it('validates environment modes and worktree defaults', () => {
+    expect(validateEnvironmentMode('copy')).toBe('copy')
+    expect(validateEnvironmentMode('symlink')).toBe('symlink')
+    expect(() => validateEnvironmentMode('both')).toThrow(TypeError)
+    expect(
+      validateWorktreeDefaults({
+        setupCommands: [],
+        runSetupByDefault: true,
+        environmentMode: 'copy'
+      })
+    ).toEqual({ setupCommands: [], runSetupByDefault: true, environmentMode: 'copy' })
+    expect(() =>
+      validateWorktreeDefaults({
+        setupCommands: [],
+        runSetupByDefault: 'yes',
+        environmentMode: 'copy'
+      })
+    ).toThrow(TypeError)
+  })
+
+  it('rejects version 1 boards and Default-scope violations in whole-board validation', () => {
+    const base = {
+      buckets: [
+        {
+          id: 'default',
+          name: 'Default',
+          sortOrder: 0,
+          collapsed: false,
+          collapsedSlices: [],
+          root: { kind: 'project' }
+        }
+      ],
+      worktreeDefaults: { setupCommands: [], runSetupByDefault: true, environmentMode: 'copy' }
+    }
+    expect(validateScopeBoard({ ...base, version: 2 }).version).toBe(2)
+    expect(() => validateScopeBoard({ ...base, version: 1 })).toThrow(/version must be 2/)
+    expect(() =>
+      validateScopeBoard({
+        ...base,
+        version: 2,
+        buckets: [
+          {
+            id: 'default',
+            name: 'Default',
+            sortOrder: 0,
+            collapsed: false,
+            collapsedSlices: [],
+            root: {
+              kind: 'worktree',
+              directoryName: 'd',
+              branch: 'cio/d',
+              baseBranch: 'main',
+              baseCommit: 'a',
+              createdAt: 1,
+              environmentMode: 'copy',
+              setup: { state: 'not_run', commands: [] }
+            }
+          }
+        ]
+      })
+    ).toThrow(/Default scope must remain project-rooted/)
+    expect(() =>
+      validateScopeBoard({
+        ...base,
+        version: 2,
+        buckets: [
+          {
+            id: 'default',
+            name: 'Default',
+            sortOrder: 0,
+            collapsed: false,
+            collapsedSlices: [],
+            root: { kind: 'project' },
+            archivedAt: 5
+          }
+        ]
+      })
+    ).toThrow(/Default scope cannot be archived/)
   })
 })

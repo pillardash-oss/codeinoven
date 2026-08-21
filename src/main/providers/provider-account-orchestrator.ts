@@ -1,6 +1,4 @@
 import { randomUUID } from 'crypto'
-import { execFile, spawn } from 'child_process'
-import { readFileSync } from 'fs'
 import { mkdir, readFile, rename, rm, writeFile } from 'fs/promises'
 import { homedir } from 'os'
 import { dirname, join } from 'path'
@@ -13,10 +11,18 @@ import type {
   HarnessLoginHandoff,
   HarnessLoginOptions
 } from '../drivers/driver.interface'
-import { buildHarnessEnvironment } from '../drivers/cli-environment'
+import { buildProcessEnvironment } from '../drivers/cli-environment'
 import { antigravityModelSlugs } from '../drivers/antigravity-model-output'
+import {
+  prepareHarnessTerminalHandoff,
+  readHarnessHomeFile,
+  runHarnessCommand,
+  writeHarnessHomeFile
+} from '../drivers/harness-runtime'
 
 const STATUS_TIMEOUT_MS = 10_000
+/** Status commands should emit a small response. Stop broken CLIs before they consume RAM. */
+const STATUS_OUTPUT_MAX_BYTES = 64 * 1024
 const ANSI_PATTERN = new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*m`, 'gu')
 /** Cline keeps provider/API-key state in JSON; the CLI has no status subcommand. */
 const CLINE_SETTINGS_DIR = join(homedir(), '.cline', 'data', 'settings')
@@ -189,34 +195,21 @@ function parseAntigravityStatus(output: string, succeeded: boolean): HarnessAuth
  * stdin ignored and let the common parser classify the result.
  */
 async function readAntigravityStatus(): Promise<HarnessAuthStatus> {
-  const result = await new Promise<{ succeeded: boolean; stdout: string; stderr: string }>(
-    (resolve) => {
-      const child = spawn('agy', ['models'], {
-        env: buildHarnessEnvironment(),
-        stdio: ['ignore', 'pipe', 'pipe']
-      })
-      let stdout = ''
-      let stderr = ''
-      const timer = setTimeout(() => {
-        child.kill()
-        resolve({ succeeded: false, stdout, stderr })
-      }, STATUS_TIMEOUT_MS)
-      child.stdout?.on('data', (chunk: Buffer) => {
-        stdout += chunk.toString()
-      })
-      child.stderr?.on('data', (chunk: Buffer) => {
-        stderr += chunk.toString()
-      })
-      child.on('error', (error) => {
-        clearTimeout(timer)
-        resolve({ succeeded: false, stdout, stderr: error.message })
-      })
-      child.on('exit', (code) => {
-        clearTimeout(timer)
-        resolve({ succeeded: code === 0, stdout, stderr })
-      })
+  let result: { succeeded: boolean; stdout: string; stderr: string }
+  try {
+    const output = await runHarnessCommand('agy', ['models'], {
+      env: buildProcessEnvironment(),
+      timeoutMs: STATUS_TIMEOUT_MS,
+      maxOutputBytes: STATUS_OUTPUT_MAX_BYTES
+    })
+    result = { succeeded: true, ...output }
+  } catch (error) {
+    result = {
+      succeeded: false,
+      stdout: '',
+      stderr: error instanceof Error ? error.message : String(error)
     }
-  )
+  }
   const output = result.stdout.trim() || result.stderr.trim()
   return parseAntigravityStatus(output, result.succeeded)
 }
@@ -226,10 +219,19 @@ async function readAntigravityStatus(): Promise<HarnessAuthStatus> {
  * CLI exposes no `auth status` subcommand (`cline auth <name>` only configures a
  * provider). Each configured provider is reported as an authenticated account.
  */
-async function readClineStatus(): Promise<HarnessAuthStatus> {
+async function readClineStatus(projectPath?: string): Promise<HarnessAuthStatus> {
   let stored: Record<string, unknown>
   try {
-    const raw = await readFile(join(CLINE_SETTINGS_DIR, 'providers.json'), 'utf8')
+    const wslRaw = await readHarnessHomeFile(
+      'cline',
+      '.cline/data/settings/providers.json',
+      projectPath
+    )
+    const raw =
+      wslRaw === undefined
+        ? await readFile(join(CLINE_SETTINGS_DIR, 'providers.json'), 'utf8')
+        : wslRaw
+    if (raw === null) return { state: 'unauthenticated', accounts: [] }
     stored = JSON.parse(raw) as Record<string, unknown>
   } catch {
     return { state: 'unauthenticated', accounts: [] }
@@ -264,10 +266,13 @@ async function readClineStatus(): Promise<HarnessAuthStatus> {
  * reported as an authenticated account when it carries an API key, and as a
  * configured-but-unauthenticated entry otherwise.
  */
-async function readPiStatus(): Promise<HarnessAuthStatus> {
+async function readPiStatus(projectPath?: string): Promise<HarnessAuthStatus> {
   let stored: Record<string, unknown>
   try {
-    const raw = await readFile(join(PI_AGENT_DIR, 'models.json'), 'utf8')
+    const wslRaw = await readHarnessHomeFile('pi', '.pi/agent/models.json', projectPath)
+    const raw =
+      wslRaw === undefined ? await readFile(join(PI_AGENT_DIR, 'models.json'), 'utf8') : wslRaw
+    if (raw === null) return { state: 'unauthenticated', accounts: [] }
     stored = JSON.parse(raw) as Record<string, unknown>
   } catch {
     return { state: 'unauthenticated', accounts: [] }
@@ -278,7 +283,10 @@ async function readPiStatus(): Promise<HarnessAuthStatus> {
   }
   let authKeys: Set<string> | null = null
   try {
-    const raw = await readFile(join(PI_AGENT_DIR, 'auth.json'), 'utf8')
+    const wslRaw = await readHarnessHomeFile('pi', '.pi/agent/auth.json', projectPath)
+    const raw =
+      wslRaw === undefined ? await readFile(join(PI_AGENT_DIR, 'auth.json'), 'utf8') : wslRaw
+    if (raw === null) throw new Error('Pi auth file is unavailable')
     const parsed = JSON.parse(raw) as unknown
     if (Array.isArray(parsed)) {
       authKeys = new Set(
@@ -322,7 +330,7 @@ async function readPiStatus(): Promise<HarnessAuthStatus> {
  * `{ schema_version, providers: { <id>: { access_token, api_key, ... } } }` —
  * a provider is authenticated when it carries an `access_token` or `api_key`.
  */
-async function readMuseStatus(): Promise<HarnessAuthStatus> {
+async function readMuseStatus(projectPath?: string): Promise<HarnessAuthStatus> {
   if (process.env['META_API_KEY']) {
     return {
       state: 'authenticated',
@@ -331,7 +339,9 @@ async function readMuseStatus(): Promise<HarnessAuthStatus> {
   }
   let stored: Record<string, unknown>
   try {
-    const raw = await readFile(MUSE_AUTH_PATH, 'utf8')
+    const wslRaw = await readHarnessHomeFile('muse', '.config/muse/auth.json', projectPath)
+    const raw = wslRaw === undefined ? await readFile(MUSE_AUTH_PATH, 'utf8') : wslRaw
+    if (raw === null) return { state: 'unauthenticated', accounts: [] }
     stored = JSON.parse(raw) as Record<string, unknown>
   } catch {
     return { state: 'unauthenticated', accounts: [] }
@@ -371,9 +381,11 @@ async function readMuseStatus(): Promise<HarnessAuthStatus> {
 }
 
 /** Provider ids listed under `disabled_providers` in OpenCode's global config. */
-function readHiddenProviders(): string[] {
+async function readHiddenProviders(): Promise<string[]> {
   try {
-    const raw = readFileSync(OPENCODE_CONFIG_PATH, 'utf8')
+    const wslRaw = await readHarnessHomeFile('opencode', '.config/opencode/opencode.json')
+    const raw = wslRaw === undefined ? await readConfigOrEmpty(OPENCODE_CONFIG_PATH) : wslRaw
+    if (raw === null) return []
     const errors: ParseError[] = []
     const parsed = parse(raw, errors, { allowTrailingComma: true })
     if (errors.length === 0 && parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
@@ -397,18 +409,23 @@ function readHiddenProviders(): string[] {
  * half-written.
  */
 async function writeHiddenProviders(providers: string[]): Promise<void> {
-  const configDir = dirname(OPENCODE_CONFIG_PATH)
-  await mkdir(configDir, { recursive: true })
-  const raw = await readConfigOrEmpty(OPENCODE_CONFIG_PATH)
+  const wslRaw = await readHarnessHomeFile('opencode', '.config/opencode/opencode.json')
+  const raw =
+    wslRaw === undefined ? await readConfigOrEmpty(OPENCODE_CONFIG_PATH) : (wslRaw ?? '{}\n')
   const edited = applyEdits(
     raw,
     modify(raw, ['disabled_providers'], providers, {
       formattingOptions: OPENCODE_CONFIG_FORMAT
     })
   )
+  const content = edited.endsWith('\n') ? edited : `${edited}\n`
+  if (await writeHarnessHomeFile('opencode', '.config/opencode/opencode.json', content)) return
+
+  const configDir = dirname(OPENCODE_CONFIG_PATH)
+  await mkdir(configDir, { recursive: true })
   const temporaryPath = `${OPENCODE_CONFIG_PATH}.${process.pid}.${randomUUID()}.tmp`
   try {
-    await writeFile(temporaryPath, edited.endsWith('\n') ? edited : `${edited}\n`, {
+    await writeFile(temporaryPath, content, {
       encoding: 'utf8',
       flag: 'wx',
       mode: 0o600
@@ -508,6 +525,8 @@ const AUTH_DEFINITIONS: AuthDefinition[] = [
  * a harness credential store on its own.
  */
 export class ProviderAccountOrchestrator {
+  private statusQueueTail: Promise<void> = Promise.resolve()
+
   capabilities(harnessId: string): HarnessAuthCapabilities | null {
     const definition = this.definition(harnessId)
     if (!definition) return null
@@ -519,32 +538,41 @@ export class ProviderAccountOrchestrator {
   }
 
   async getStatus(harnessId: string, projectPath?: string): Promise<HarnessAuthStatus> {
-    const definition = this.requireDefinition(harnessId)
-    if (definition.readStatus) {
-      return definition.readStatus(projectPath)
-    }
-    const result = await this.run(definition.command, definition.statusArgs ?? [], projectPath)
-    if (!definition.parseStatus) {
-      return {
-        state: 'error',
-        accounts: [],
-        detail: `Status parsing is not implemented for harness: ${harnessId}`
+    return this.enqueueStatus(async () => {
+      const definition = this.requireDefinition(harnessId)
+      if (definition.readStatus) {
+        return definition.readStatus(projectPath)
       }
-    }
-    const output = result.stdout.trim() || result.stderr.trim()
-    const status = definition.parseStatus(output, result.succeeded)
-    if (status.state === 'error' && result.error) {
-      return { ...status, detail: result.error }
-    }
-    return status
+      const result = await this.run(definition.command, definition.statusArgs ?? [], projectPath)
+      if (!definition.parseStatus) {
+        return {
+          state: 'error',
+          accounts: [],
+          detail: `Status parsing is not implemented for harness: ${harnessId}`
+        }
+      }
+      const output = result.stdout.trim() || result.stderr.trim()
+      const status = definition.parseStatus(output, result.succeeded)
+      if (status.state === 'error' && result.error) {
+        return { ...status, detail: result.error }
+      }
+      return status
+    })
   }
 
-  beginLogin(harnessId: string, options: HarnessLoginOptions = {}): HarnessLoginHandoff {
+  async beginLogin(
+    harnessId: string,
+    options: HarnessLoginOptions = {}
+  ): Promise<HarnessLoginHandoff> {
     const definition = this.requireDefinition(harnessId)
+    const prepared = await prepareHarnessTerminalHandoff(
+      definition.command,
+      definition.loginArgs(options)
+    )
     return {
       kind: 'terminal',
-      command: definition.command,
-      args: definition.loginArgs(options),
+      command: prepared.command,
+      args: prepared.args,
       title: `Sign in to ${definition.name}`,
       mutatesGlobalCredentials: true
     }
@@ -633,7 +661,7 @@ export class ProviderAccountOrchestrator {
   }
 
   /** Provider IDs currently hidden from the harness (via its own config). */
-  getHiddenProviders(harnessId: string): string[] {
+  async getHiddenProviders(harnessId: string): Promise<string[]> {
     if (harnessId !== 'opencode') return []
     return readHiddenProviders()
   }
@@ -647,7 +675,7 @@ export class ProviderAccountOrchestrator {
     if (harnessId !== 'opencode') {
       throw new Error(`${harnessId} does not support hiding providers from its config file.`)
     }
-    const current = readHiddenProviders()
+    const current = await readHiddenProviders()
     const next = new Set(current)
     if (hidden) {
       next.add(providerId)
@@ -679,26 +707,32 @@ export class ProviderAccountOrchestrator {
     return definition
   }
 
-  private run(command: string, args: string[], cwd?: string): Promise<CommandResult> {
-    return new Promise((resolve) => {
-      execFile(
-        command,
-        args,
-        {
-          ...(cwd ? { cwd } : {}),
-          env: buildHarnessEnvironment(),
-          timeout: STATUS_TIMEOUT_MS,
-          maxBuffer: 1024 * 1024
-        },
-        (error, stdout, stderr) => {
-          resolve({
-            succeeded: error === null,
-            stdout,
-            stderr,
-            ...(error ? { error: error.message } : {})
-          })
-        }
-      )
+  private async run(command: string, args: string[], cwd?: string): Promise<CommandResult> {
+    try {
+      const result = await runHarnessCommand(command, args, {
+        ...(cwd ? { cwd } : {}),
+        env: buildProcessEnvironment(),
+        timeoutMs: STATUS_TIMEOUT_MS,
+        maxOutputBytes: STATUS_OUTPUT_MAX_BYTES
+      })
+      return { succeeded: true, ...result }
+    } catch (error) {
+      return {
+        succeeded: false,
+        stdout: '',
+        stderr: '',
+        error: error instanceof Error ? error.message : String(error)
+      }
+    }
+  }
+
+  /** Serialize status reads and CLI probes across every renderer caller. */
+  private enqueueStatus<T>(task: () => Promise<T>): Promise<T> {
+    const preceding = this.statusQueueTail
+    let release: () => void = () => undefined
+    this.statusQueueTail = new Promise<void>((resolve) => {
+      release = resolve
     })
+    return preceding.then(task).finally(release)
   }
 }

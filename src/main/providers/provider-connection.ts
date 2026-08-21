@@ -1,14 +1,21 @@
 import { BrowserWindow } from 'electron'
 import { trustedIpcMain as ipcMain } from '../ipc/trusted-ipc-main'
-import { spawn } from 'child_process'
 import type { ProviderConnectionInfo } from '../../lib/types'
-import { buildHarnessEnvironment, resolveExecutablePath } from '../drivers/cli-environment'
 import { findHarness, listHarnesses, type HarnessDescriptor } from '../agents/harness-registry'
 import { forwardRemoteEvent } from '../remote/remote-event-forwarder'
 import { sendToRenderer } from '../ipc/renderer-delivery'
+import {
+  discoverHarnessRuntimes,
+  probeHarnessRuntime,
+  type HarnessRuntime
+} from '../drivers/harness-runtime'
 
-/** Probe timeout — harnesses that hang longer than this are marked as error. */
-const PROBE_TIMEOUT_MS = 8000
+/** Reopening Settings inside this window reuses the last completed probe pass. */
+const PROBE_CACHE_TTL_MS = 60_000
+/** Give Electron's main loop time between child processes on low-end machines. */
+const PROBE_YIELD_MS = 50
+/** Coalesce renderer work while still reporting progress during a full pass. */
+const PROBE_BROADCAST_BATCH_SIZE = 2
 
 /**
  * The harness is installed but its detected version is not yet supported by
@@ -33,6 +40,10 @@ function isOpenCodeV2(version: string): boolean {
  */
 export class ProviderConnectionService {
   private statuses = new Map<string, ProviderConnectionInfo>()
+  private lastCheckedAt = 0
+  private checkAllInFlight: Promise<ProviderConnectionInfo[]> | null = null
+  private checkOneInFlight = new Map<string, Promise<ProviderConnectionInfo>>()
+  private probeQueueTail: Promise<void> = Promise.resolve()
 
   constructor() {
     for (const harness of listHarnesses()) {
@@ -50,7 +61,7 @@ export class ProviderConnectionService {
   register(): void {
     ipcMain.handle('providers:getStatus', () => this.getAll())
     ipcMain.handle('providers:check', (_, id: string) => this.checkOne(id))
-    ipcMain.handle('providers:checkAll', () => this.checkAll())
+    ipcMain.handle('providers:checkAll', (_, force?: unknown) => this.checkAll(force === true))
   }
 
   getAll(): ProviderConnectionInfo[] {
@@ -58,6 +69,19 @@ export class ProviderConnectionService {
   }
 
   async checkOne(id: string): Promise<ProviderConnectionInfo> {
+    const active = this.checkOneInFlight.get(id)
+    if (active) return active
+
+    const check = this.runCheckOne(id)
+    this.checkOneInFlight.set(id, check)
+    try {
+      return await check
+    } finally {
+      this.checkOneInFlight.delete(id)
+    }
+  }
+
+  private async runCheckOne(id: string): Promise<ProviderConnectionInfo> {
     const def = findHarness(id)
     const current = this.statuses.get(id)
     if (!def || !current) {
@@ -75,21 +99,55 @@ export class ProviderConnectionService {
     }
 
     this.update({ ...current, status: 'checking', detail: undefined })
-    const result = await this.probe(def)
+    const runtime = (await discoverHarnessRuntimes([def.command], { force: true })).get(def.command)
+    const result = await this.enqueueProbe(() => this.probe(def, runtime ?? null))
     this.update(result)
     return result
   }
 
-  async checkAll(): Promise<ProviderConnectionInfo[]> {
-    const checks = listHarnesses().map((def) => {
-      const current = this.statuses.get(def.id)
-      if (current) this.update({ ...current, status: 'checking', detail: undefined })
-      return this.probe(def)
-    })
-    const results = await Promise.all(checks)
-    for (const result of results) {
-      this.update(result)
+  async checkAll(force = false): Promise<ProviderConnectionInfo[]> {
+    if (!force && Date.now() - this.lastCheckedAt < PROBE_CACHE_TTL_MS) return this.getAll()
+    if (this.checkAllInFlight) return this.checkAllInFlight
+
+    const check = this.runCheckAll(force)
+    this.checkAllInFlight = check
+    try {
+      return await check
+    } finally {
+      this.checkAllInFlight = null
     }
+  }
+
+  private async runCheckAll(force: boolean): Promise<ProviderConnectionInfo[]> {
+    const harnesses = listHarnesses()
+    for (const definition of harnesses) {
+      const current = this.statuses.get(definition.id)
+      if (current) {
+        this.statuses.set(definition.id, {
+          ...current,
+          status: 'checking',
+          detail: undefined
+        })
+      }
+    }
+    this.broadcast()
+    const runtimes = await discoverHarnessRuntimes(
+      harnesses.map((harness) => harness.command),
+      { force }
+    )
+
+    for (const [index, definition] of harnesses.entries()) {
+      const result = await this.enqueueProbe(() =>
+        this.probe(definition, runtimes.get(definition.command) ?? null)
+      )
+      this.statuses.set(result.id, result)
+      if ((index + 1) % PROBE_BROADCAST_BATCH_SIZE === 0 || index === harnesses.length - 1) {
+        this.broadcast()
+      }
+      if (index < harnesses.length - 1) await this.yieldToMainLoop()
+    }
+
+    this.lastCheckedAt = Date.now()
     return this.getAll()
   }
 
@@ -109,7 +167,10 @@ export class ProviderConnectionService {
   }
 
   /** Resolve the binary, then verify it actually responds to a version probe. */
-  private async probe(def: HarnessDescriptor): Promise<ProviderConnectionInfo> {
+  private async probe(
+    def: HarnessDescriptor,
+    runtime: HarnessRuntime | null
+  ): Promise<ProviderConnectionInfo> {
     const base: ProviderConnectionInfo = {
       id: def.id,
       name: def.name,
@@ -119,22 +180,31 @@ export class ProviderConnectionService {
       status: 'idle'
     }
 
-    const located = await this.locateBinary(def.command)
-    if (!located.found) {
-      return { ...base, status: 'not_found', detail: `"${def.command}" not found on PATH` }
+    if (!runtime) {
+      return {
+        ...base,
+        status: 'not_found',
+        detail:
+          process.platform === 'win32'
+            ? `"${def.command}" not found on Windows PATH or in WSL`
+            : `"${def.command}" not found on PATH`
+      }
     }
 
-    const versionResult = await this.probeVersion(def, located.path)
+    const versionResult = await probeHarnessRuntime(runtime, def.versionArgs)
     if (versionResult.ok) {
+      const version =
+        (versionResult.stdout || versionResult.stderr).split(/\r?\n/u)[0]?.trim() ?? ''
       // OpenCode V2 is not yet supported: report it as installed-but-unsupported
       // so the Harnesses page can surface a notice while every availability
       // check treats it as not installed.
-      if (def.id === 'opencode' && isOpenCodeV2(versionResult.version)) {
+      if (def.id === 'opencode' && isOpenCodeV2(version)) {
         return {
           ...base,
           status: 'error',
-          resolvedPath: located.path,
-          version: versionResult.version,
+          resolvedPath: runtime.resolvedPath,
+          executionTarget: runtime.target,
+          version,
           unsupportedReason: 'opencode-v2',
           detail: OPENCODE_V2_UNSUPPORTED_DETAIL
         }
@@ -142,66 +212,32 @@ export class ProviderConnectionService {
       return {
         ...base,
         status: 'available',
-        resolvedPath: located.path,
-        version: versionResult.version
+        resolvedPath: runtime.resolvedPath,
+        executionTarget: runtime.target,
+        version
       }
     }
 
     return {
       ...base,
       status: 'error',
-      resolvedPath: located.path,
+      resolvedPath: runtime.resolvedPath,
+      executionTarget: runtime.target,
       detail: versionResult.reason
     }
   }
 
-  /** GUI apps don't inherit the shell PATH — augment with common install locations. */
-  private buildEnv(): NodeJS.ProcessEnv {
-    return buildHarnessEnvironment()
+  private yieldToMainLoop(): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, PROBE_YIELD_MS))
   }
 
-  private locateBinary(command: string): Promise<{ found: boolean; path?: string }> {
-    const path = resolveExecutablePath(command, this.buildEnv())
-    return Promise.resolve(path ? { found: true, path } : { found: false })
-  }
-
-  /** Execute `<command> --version` with a timeout to prove the harness responds. */
-  private probeVersion(
-    def: HarnessDescriptor,
-    resolvedPath: string | undefined
-  ): Promise<{ ok: true; version: string } | { ok: false; reason: string }> {
-    return new Promise((resolve) => {
-      const child = spawn(resolvedPath ?? def.command, def.versionArgs, {
-        env: this.buildEnv(),
-        stdio: ['ignore', 'pipe', 'pipe']
-      })
-      let stdout = ''
-      let stderr = ''
-      const timer = setTimeout(() => {
-        child.kill()
-        resolve({ ok: false, reason: `Timed out after ${PROBE_TIMEOUT_MS / 1000}s` })
-      }, PROBE_TIMEOUT_MS)
-      child.stdout?.on('data', (chunk: Buffer) => {
-        stdout += chunk.toString()
-      })
-      child.stderr?.on('data', (chunk: Buffer) => {
-        stderr += chunk.toString()
-      })
-      child.on('error', (error) => {
-        clearTimeout(timer)
-        resolve({ ok: false, reason: error.message.split('\n')[0]?.trim() || 'unknown error' })
-      })
-      child.on('exit', (code) => {
-        clearTimeout(timer)
-        if (code !== 0) {
-          const reason =
-            (stderr || stdout).split('\n')[0]?.trim() || `Exited with code ${code ?? 'unknown'}`
-          resolve({ ok: false, reason })
-          return
-        }
-        const version = (stdout || stderr).split('\n')[0]?.trim() ?? ''
-        resolve({ ok: true, version })
-      })
+  /** Serialize every version process, including overlapping windows and row clicks. */
+  private enqueueProbe<T>(task: () => Promise<T>): Promise<T> {
+    const preceding = this.probeQueueTail
+    let release: () => void = () => undefined
+    this.probeQueueTail = new Promise<void>((resolve) => {
+      release = resolve
     })
+    return preceding.then(task).finally(release)
   }
 }

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   TokenUsageAttributionRecorder,
+  attributionEnabled,
   attributionLayer,
   episodeFromPieces
 } from '../../src/main/chat/token-usage-attribution'
@@ -57,6 +58,9 @@ describe('token-usage attribution', () => {
     expect(recorder.pendingCount()).toBe(1)
     recorder.recordTurnTotals({
       key: 'turn-1',
+      agent: null,
+      driverId: 'opencode',
+      harnessVersion: '1.18.15',
       providerId: 'opencode',
       modelId: 'deepseek-v4-flash',
       reportedInputTokens: 2_400,
@@ -70,6 +74,9 @@ describe('token-usage attribution', () => {
     expect(() =>
       recorder.recordTurnTotals({
         key: 'turn-missing',
+        agent: null,
+        driverId: 'opencode',
+        harnessVersion: null,
         providerId: null,
         modelId: null,
         reportedInputTokens: 1_000,
@@ -90,11 +97,49 @@ describe('token-usage attribution', () => {
     )
     recorder.recordTurnTotals({
       key: 'turn-1',
+      agent: null,
+      driverId: 'opencode',
+      harnessVersion: null,
       providerId: null,
       modelId: null,
       reportedInputTokens: null,
       reportedTotalTokens: null
     })
     expect(recorder.pendingCount()).toBe(0)
+  })
+
+  it('is inert in production regardless of any override (no CIO_FORCE_ATTRIBUTION escape)', () => {
+    const previous = process.env['NODE_ENV']
+    const previousForce = process.env['CIO_FORCE_ATTRIBUTION']
+    try {
+      process.env['NODE_ENV'] = 'production'
+      process.env['CIO_FORCE_ATTRIBUTION'] = '1'
+      expect(attributionEnabled()).toBe(false)
+      const recorder = new TokenUsageAttributionRecorder(attributionEnabled())
+      recorder.recordPromptAttribution(
+        episodeFromPieces({
+          key: 'prod-turn',
+          mode: 'inbox-chat',
+          driverId: 'opencode',
+          pieces: [{ title: 'System', content: 'Must never be recorded.' }]
+        })
+      )
+      recorder.recordTurnTotals({
+        key: 'prod-turn',
+        agent: null,
+        driverId: 'opencode',
+        harnessVersion: null,
+        providerId: null,
+        modelId: null,
+        reportedInputTokens: null,
+        reportedTotalTokens: null
+      })
+      expect(recorder.pendingCount()).toBe(0)
+    } finally {
+      if (previous === undefined) delete process.env['NODE_ENV']
+      else process.env['NODE_ENV'] = previous
+      if (previousForce === undefined) delete process.env['CIO_FORCE_ATTRIBUTION']
+      else process.env['CIO_FORCE_ATTRIBUTION'] = previousForce
+    }
   })
 })

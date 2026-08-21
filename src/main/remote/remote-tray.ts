@@ -53,7 +53,7 @@ export function createRemoteTray(
     remoteMode: false,
     phase: 'IDLE',
     blockedQuit: false,
-    gateway: { listening: false, port: 0, url: null },
+    gateway: { listening: false, port: 0, url: null, urls: [] },
     cloud: {
       configured: false,
       state: 'disabled',

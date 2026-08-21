@@ -24,6 +24,8 @@ export interface CloudRelayClientOptions {
   apiOrigin: string
   deviceToken: string
   controlSecret: string
+  /** Current Wi-Fi/Ethernet endpoints advertised on every relay authentication. */
+  lanEndpoints?: string[]
   onAuthenticated: () => void
   onDisconnected: (reason: string) => void
   onRpc: (
@@ -234,7 +236,13 @@ export class CloudRelayClient {
         clearTimeout(this.connectTimer)
         this.connectTimer = null
       }
-      socket.send(JSON.stringify({ type: 'relay:authenticate', token: this.options.deviceToken }))
+      socket.send(
+        JSON.stringify({
+          type: 'relay:authenticate',
+          token: this.options.deviceToken,
+          ...(this.options.lanEndpoints ? { lanEndpoints: this.options.lanEndpoints } : {})
+        })
+      )
       this.authTimer = setTimeout(() => {
         if (!this.closed && !this.authenticated) {
           Logger.error('Remote cloud relay authentication deadline exceeded')
@@ -258,6 +266,10 @@ export class CloudRelayClient {
       if (this.closing || this.closed) return
       this.authenticated = false
       const reason = event.reason || `relay-closed-${event.code}`
+      if (reason === 'remote-host-active') {
+        this.stopAfterTerminalClose(reason)
+        return
+      }
       Logger.dev(`Remote cloud relay socket closed (${event.code}: ${reason})`)
       if (event.code === 4003 || reason === 'revoked') {
         this.stopAfterTerminalClose(reason)

@@ -34,6 +34,7 @@
     MessageSquare,
     Network,
     Pencil,
+    Plus,
     Target,
     Trash2,
     Video,
@@ -41,6 +42,7 @@
     Zap
   } from '@lucide/svelte'
   import ChatComposer from '../chats/ChatComposer.svelte'
+  import StartAfterThreadPicker from '../chats/StartAfterThreadPicker.svelte'
   import ResponseSelectionPopover from '../chats/ResponseSelectionPopover.svelte'
   import ResponseAnnotationBubble from '../chats/ResponseAnnotationBubble.svelte'
   import ResponseAnnotationComment from '../chats/ResponseAnnotationComment.svelte'
@@ -616,6 +618,7 @@
     let latestMessage: AgentMessage | undefined
     let latestTokens: NonNullable<AgentContextUsage['tokens']> | undefined
     let latestContextUsed: number | undefined
+    let latestContextEstimated = false
     let latestRateLimits: AgentContextUsage['rateLimits'] | undefined
     let latestCredits: AgentContextUsage['credits'] | undefined
     let costUsd = 0
@@ -676,7 +679,10 @@
         // Preserve each latest snapshot so a token-only update cannot erase a
         // previously reported quota status when the user reveals live usage.
         if (tokens) latestTokens = tokens
-        if (message.contextUsed !== undefined) latestContextUsed = message.contextUsed
+        if (message.contextUsed !== undefined) {
+          latestContextUsed = message.contextUsed
+          latestContextEstimated = message.contextEstimated === true
+        }
         if (message.rateLimits?.length) latestRateLimits = message.rateLimits
         if (message.credits) latestCredits = message.credits
       }
@@ -706,6 +712,7 @@
     return {
       ...(contextWindow === undefined ? {} : { contextWindow }),
       ...(contextUsed === undefined ? {} : { contextUsed }),
+      ...(contextUsed !== undefined && latestContextEstimated ? { contextEstimated: true } : {}),
       ...(contextWindow !== undefined && contextUsed !== undefined
         ? { contextPercent: Math.min(100, (contextUsed / contextWindow) * 100) }
         : {}),
@@ -909,6 +916,10 @@
       tokens: incoming.tokens ?? previous.tokens,
       costUsd: incoming.costUsd ?? previous.costUsd,
       contextUsed: incoming.contextUsed ?? previous.contextUsed,
+      contextEstimated:
+        incoming.contextUsed !== undefined
+          ? incoming.contextEstimated === true
+          : previous.contextEstimated === true,
       contextWindow: incoming.contextWindow ?? previous.contextWindow,
       contextPercent: incoming.contextPercent ?? previous.contextPercent,
       rateLimits: incoming.rateLimits?.length ? incoming.rateLimits : previous.rateLimits,
@@ -1615,6 +1626,25 @@
       thread.achievementRole === 'auditor'
   )
   let achievementOnly = $derived(settings.loopMode === true && settings.assignmentMode !== true)
+  let studioOnlyAuditWorkflow = $derived(
+    settings.assignmentMode !== true &&
+      settings.loopMode !== true &&
+      assignment === null &&
+      thread.assignmentId === undefined &&
+      thread.achievementRole === undefined
+  )
+  let plainEngineeringAuditAvailable = $derived(
+    settings.engineeringMode === true &&
+      studioOnlyAuditWorkflow &&
+      spec?.status === 'approved' &&
+      (auditState === 'offered' || (auditState === 'report_ready' && auditReport !== null))
+  )
+  let plainEngineeringAuditReady = $derived(
+    settings.engineeringMode === true &&
+      studioOnlyAuditWorkflow &&
+      auditState === 'report_ready' &&
+      auditReport !== null
+  )
 
   /** Which coordinator, if any, this thread publishes to the context dock. */
   let coordinatorKind = $derived.by((): 'assignment' | 'achievement' | null => {
@@ -2478,6 +2508,20 @@
     unsubscribeThreadUpdated = subscribe('thread:updated', (...args: unknown[]) => {
       const updatedThread = args[0] as Thread
       if (updatedThread.projectId === thread.projectId && updatedThread.id === thread.id) {
+        // Another renderer (notably the PWA) can create or resume the harness
+        // session while this desktop view stays mounted. Adopt that persisted
+        // binding before its stream arrives, then reconcile the user message
+        // that the remote renderer optimistically owns in its own cache.
+        if (updatedThread.sessionId && updatedThread.sessionId !== sessionId) {
+          sessionBindingVersion += 1
+          sessionId = updatedThread.sessionId
+          sessionReady = Promise.resolve(updatedThread.sessionId)
+          threadMessages.setSessionId(thread.projectId, thread.id, updatedThread.sessionId)
+        }
+        // Thread updates are deliberately low-frequency lifecycle boundaries.
+        // Reconcile on every one so early-return workflows (for example a
+        // planning turn awaiting a choice) cannot strand the remote prompt.
+        void refreshMessages()
         restoreWorkingState(updatedThread.status, updatedThread.auditState === 'running')
       }
       if (
@@ -2964,7 +3008,7 @@
       event.projectId === thread.projectId &&
       event.threadId === thread.id
     ) {
-      void refreshCheckpoints()
+      void refreshCompletedTurn()
       return
     }
     if (
@@ -3199,6 +3243,18 @@
     }
   }
 
+  /**
+   * Checkpoint completion is also the durable transcript-reconciliation
+   * boundary. Refresh both halves so the checkpoint's source message id can
+   * attach to the final rendered turn without waiting for a later remount.
+   */
+  async function refreshCompletedTurn(): Promise<void> {
+    const staleMessageRefresh = refreshMessagesInFlight
+    const checkpointRefresh = refreshCheckpoints()
+    if (staleMessageRefresh) await staleMessageRefresh
+    await Promise.all([refreshMessages(), checkpointRefresh])
+  }
+
   async function refreshCommands(): Promise<void> {
     const { projectId, id } = thread
     try {
@@ -3413,6 +3469,8 @@
   let queuedPresentation = $state<UserMessagePresentation | undefined>()
   let queuedTaskReferences = $state<PromptAssignmentTaskReference[]>([])
   let queuedStartAfterThreads = $state<StartAfterThreadReference[]>([])
+  let queuedStartAfterPickerOpen = $state(false)
+  let queuedStartAfterPendingRemoval = $state<StartAfterThreadReference | null>(null)
   /** True when a queued payload exists even though the message text is empty
    *  (e.g. a selection carrying only a user comment). */
   let queuedHasContent = $state(false)
@@ -3997,7 +4055,9 @@
         checkpoint.id,
         paths
       )
-      toast.success(`Re-applied ${paths.length} ${paths.length === 1 ? 'file' : 'files'} from this turn`)
+      toast.success(
+        `Re-applied ${paths.length} ${paths.length === 1 ? 'file' : 'files'} from this turn`
+      )
     } catch (error) {
       reportError(error, 'This turn could not be redone.', {
         projectId: thread.projectId,
@@ -4019,6 +4079,16 @@
         invoke('brainstorm:getActive', projectId, workflowThreadId)
       ])
     if (!alive) return
+    const staleSpecGeneration =
+      active !== null &&
+      providerStatus?.state === 'working' &&
+      providerStatus.activity?.kind === 'spec_generation'
+    if (staleSpecGeneration) {
+      clearSpecGenerationTrace()
+      clearLocalTurn()
+      agentRuns.setIdle(thread.projectId, thread.id)
+      if (providerStatus?.state !== 'error') providerStatus = null
+    }
     brainstormWorkflow = workflow
     brainstorm = activeBrainstorm
     brainstormGenerationFailed =
@@ -4708,6 +4778,40 @@
     const linkedThread =
       threadId === thread.id ? thread : await invoke('thread:get', thread.projectId, threadId)
     if (linkedThread) workspaceState.openThread(linkedThread, project)
+  }
+
+  function persistQueuedStartAfterThreads(): void {
+    rendererRecovery.setQueuedMessage(thread.projectId, thread.id, {
+      text: queuedMessage,
+      attachments: queuedAttachments,
+      promptContext: queuedPromptContext,
+      promptReferences: queuedPromptReferences,
+      projectReferences: queuedProjectReferences,
+      presentation: queuedPresentation,
+      taskReferences: queuedTaskReferences,
+      startAfterThreads: queuedStartAfterThreads
+    })
+    idleAttentionHandled = false
+    void handleIdleAttention()
+  }
+
+  function addQueuedStartAfterThread(selectedThread: Thread): void {
+    if (queuedStartAfterThreads.some((reference) => reference.id === selectedThread.id)) return
+    queuedStartAfterThreads = [
+      ...queuedStartAfterThreads,
+      { id: selectedThread.id, title: selectedThread.title }
+    ]
+    persistQueuedStartAfterThreads()
+  }
+
+  function confirmRemoveQueuedStartAfterThread(): void {
+    const dependency = queuedStartAfterPendingRemoval
+    if (!dependency) return
+    queuedStartAfterPendingRemoval = null
+    queuedStartAfterThreads = queuedStartAfterThreads.filter(
+      (reference) => reference.id !== dependency.id
+    )
+    persistQueuedStartAfterThreads()
   }
 
   /** Debounces the dependency warmup so a fast mouse pass never fires an IPC call. */
@@ -5687,9 +5791,6 @@
           )
         }
         await setActiveSpec(active)
-        settings = { ...settings, engineeringMode: false }
-        commitSettings(settings)
-        await invoke('thread:updateSettings', thread.projectId, thread.id, settings)
         if (active.content.assignment && settings.assignmentMode) {
           await reconcileReadySpec()
           return
@@ -6734,6 +6835,8 @@
           assignmentAvailable={assignment !== null}
           assignmentMode={settings.assignmentMode === true}
           auditAvailable={auditReport !== null}
+          implementationAuditAvailable={plainEngineeringAuditAvailable}
+          implementationAuditReady={plainEngineeringAuditReady}
           brainstormAvailable={brainstorm !== null}
           onBack={closeSpecStudio}
           onOpenBrainstorm={openBrainstormStudio}
@@ -6744,6 +6847,9 @@
           onOpenAssignment={openAssignmentStudio}
           onGenerateAssignment={() => generateAssignmentDraft()}
           onOpenAudit={openAuditStudio}
+          onRunImplementationAudit={() =>
+            plainEngineeringAuditReady ? openAuditStudio() : generateAudit(auditSettings)}
+          onMarkImplementationComplete={completeAudit}
           onSave={saveSpec}
           onSelectVersion={selectSpecVersion}
           onAddAnnotation={addSpecAnnotation}
@@ -7455,6 +7561,15 @@
                   >
                   <div class="flex items-center gap-1">
                     <button
+                      type="button"
+                      class="flex h-6 w-6 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+                      title="Add thread to Starts after"
+                      aria-label="Add thread to Starts after"
+                      onclick={() => (queuedStartAfterPickerOpen = true)}
+                    >
+                      <Plus size={13} />
+                    </button>
+                    <button
                       class="rounded-md px-2 py-0.5 text-[11px] font-medium text-foreground transition-colors hover:bg-elevated"
                       title={`Steer — ${steerModifierLabel}Enter — send this message to the agent now`}
                       onclick={() => void steerQueuedMessage()}
@@ -7531,20 +7646,40 @@
                 {#if queuedStartAfterThreads.length > 0}
                   <div class="flex flex-col gap-1 px-3 pb-2.5">
                     {#each queuedStartAfterThreads as dependency (dependency.id)}
-                      <button
-                        type="button"
-                        class="flex w-full items-center gap-2 rounded-lg px-1.5 py-1 text-left transition-colors hover:bg-elevated"
-                        title={`Open ${dependency.title}`}
-                        aria-label={`Open ${dependency.title}`}
+                      <div
+                        class="flex w-full items-center gap-1 rounded-lg px-1.5 py-1 transition-colors hover:bg-elevated"
+                        role="group"
                         onmouseenter={() => preloadStartAfterThread(dependency.id)}
-                        onclick={() => void openStartAfterThread(dependency.id)}
                       >
                         <Clock size={12} class="shrink-0 text-info" />
-                        <span class="min-w-0 flex-1 truncate text-[11px] text-info">
+                        <button
+                          type="button"
+                          class="min-w-0 flex-1 truncate text-left text-[11px] text-info"
+                          title={`Open ${dependency.title}`}
+                          aria-label={`Open ${dependency.title}`}
+                          onclick={() => void openStartAfterThread(dependency.id)}
+                        >
                           {dependency.title}
-                        </span>
-                        <ArrowUpRight size={12} class="shrink-0 text-dimmed" />
-                      </button>
+                        </button>
+                        <button
+                          type="button"
+                          class="flex h-5 w-5 shrink-0 items-center justify-center rounded text-dimmed transition-colors hover:bg-danger/10 hover:text-danger"
+                          title={`Remove ${dependency.title} from Starts after`}
+                          aria-label={`Remove ${dependency.title} from Starts after`}
+                          onclick={() => (queuedStartAfterPendingRemoval = dependency)}
+                        >
+                          <Trash2 size={12} />
+                        </button>
+                        <button
+                          type="button"
+                          class="flex h-5 w-5 shrink-0 items-center justify-center rounded text-dimmed transition-colors hover:bg-overlay hover:text-foreground"
+                          title={`Open ${dependency.title}`}
+                          aria-label={`Open ${dependency.title}`}
+                          onclick={() => void openStartAfterThread(dependency.id)}
+                        >
+                          <ArrowUpRight size={12} />
+                        </button>
+                      </div>
                     {/each}
                   </div>
                 {/if}
@@ -7704,7 +7839,7 @@
                   rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
                 onViewReport={openAuditStudio}
               />
-            {:else if assignmentAuditState === 'offered' && !busy && !achievementAutonomous}
+            {:else if assignmentAuditState === 'offered' && !busy && !achievementAutonomous && !studioOnlyAuditWorkflow}
               <AuditOfferCard
                 threadTitle={thread.title}
                 reworkCycle={assignmentReworkCycle}
@@ -7722,7 +7857,7 @@
                 onReorderFavorite={(draggedKey, targetKey, position) =>
                   rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
               />
-            {:else if assignmentAuditState === 'report_ready' && auditReport && !busy && !achievementAutonomous}
+            {:else if assignmentAuditState === 'report_ready' && auditReport && !busy && !achievementAutonomous && !studioOnlyAuditWorkflow}
               <AuditReadyCard
                 report={auditReport}
                 {providers}
@@ -8012,6 +8147,40 @@
   onClose={() => (transcriptExportOpen = false)}
   onExport={(includeTrace) => exportTranscript(includeTrace)}
 />
+
+<StartAfterThreadPicker
+  open={queuedStartAfterPickerOpen}
+  projectId={thread.projectId}
+  currentThreadId={thread.id}
+  selectedIds={queuedStartAfterThreads.map((reference) => reference.id)}
+  onSelect={addQueuedStartAfterThread}
+  onClose={() => (queuedStartAfterPickerOpen = false)}
+/>
+
+<Modal
+  open={queuedStartAfterPendingRemoval !== null}
+  title="Remove wait dependency?"
+  onClose={() => (queuedStartAfterPendingRemoval = null)}
+>
+  <p class="text-sm text-muted">
+    The queued message will no longer wait for
+    <span class="font-medium text-foreground">{queuedStartAfterPendingRemoval?.title}</span>.
+  </p>
+  {#snippet footer()}
+    <button
+      class="rounded-lg border bg-elevated px-3 py-2 text-sm font-medium hover:bg-overlay"
+      onclick={() => (queuedStartAfterPendingRemoval = null)}
+    >
+      Cancel
+    </button>
+    <button
+      class="rounded-lg bg-danger px-3 py-2 text-sm font-semibold text-on-danger hover:opacity-90"
+      onclick={confirmRemoveQueuedStartAfterThread}
+    >
+      Remove dependency
+    </button>
+  {/snippet}
+</Modal>
 
 <Modal
   open={studioExitConfirmationOpen}

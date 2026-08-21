@@ -51,14 +51,17 @@ export class RestartRecoveryService {
 
   async recover(): Promise<RestartRecoveryResult> {
     const allThreads = await this.threads.listAllViaWorker()
+    const activeTurnThreadIds = await this.activeTurnThreadIds()
     const recovered: Thread[] = []
     const completed: Thread[] = []
     const failures: RestartRecoveryFailure[] = []
 
     for (const thread of allThreads) {
-      if (!RECOVERABLE_STATUSES.has(thread.status)) continue
+      const completedWithOrphanCheckpoint =
+        thread.status === 'completed' && activeTurnThreadIds.has(thread.id)
+      if (!RECOVERABLE_STATUSES.has(thread.status) && !completedWithOrphanCheckpoint) continue
 
-      if (await this.turnDemonstrablyCompleted(thread)) {
+      if (completedWithOrphanCheckpoint || (await this.turnDemonstrablyCompleted(thread))) {
         try {
           await this.checkpoints.markActiveCompleted(thread.projectId, thread.id)
         } catch (error) {
@@ -103,6 +106,14 @@ export class RestartRecoveryService {
       completed,
       failures
     }
+  }
+
+  private async activeTurnThreadIds(): Promise<Set<string>> {
+    const result = await this.db.queryViaWorker('SELECT thread_id FROM active_turns', [], 100_000)
+    if (!result.ok) {
+      throw new Error(result.error ?? 'active checkpoint recovery query failed')
+    }
+    return new Set(result.rows.map((row) => String(row['thread_id'])))
   }
 
   /**

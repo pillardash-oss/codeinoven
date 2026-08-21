@@ -19,6 +19,7 @@ import type {
   GitHubPermissionRequired,
   GitHubWorkflowRunDetail,
   GitIdentity,
+  GitPullStrategy,
   GitRemoteInfo,
   GitResetMode,
   GitStashEntry,
@@ -26,6 +27,7 @@ import type {
   MergeSummary,
   PrCreateInput,
   PrAgentReport,
+  PrComposeInput,
   PrComposeReport,
   PrMergeMethod,
   PrReviewEvent,
@@ -126,6 +128,11 @@ export function isPushRejected(message: string): boolean {
   )
 }
 
+export type GitPushResult =
+  | { status: 'pushed' }
+  | { status: 'rejected'; message: string }
+  | { status: 'failed'; message: string }
+
 export type DeleteBranchResult = 'deleted' | 'requires-force' | 'failed'
 
 /** Git refuses `branch -d` when commits would become unreachable. */
@@ -193,6 +200,13 @@ export class GitState {
    */
   activeProjectId: string | null = $state(null)
 
+  /**
+   * The scope whose worktree (if any) the shared Git fields reflect. Keyed
+   * alongside the active project so one scope can never display another
+   * scope's state, and late responses for the prior target are suppressed.
+   */
+  activeScopeBucketId: string | null = $state(null)
+
   // Not reactive rendered data — a plain dedup registry for agent-event
   // subscriptions, so SvelteSet is the wrong tool here.
   // eslint-disable-next-line svelte/prefer-svelte-reactivity
@@ -219,10 +233,55 @@ export class GitState {
 
   /** Switch the panel to a project, dropping any leftover state from the
    *  previous one so stale data is never shown. */
-  activate(projectId: string): void {
-    if (this.activeProjectId === projectId) return
+  activate(projectId: string, scopeBucketId?: string): void {
+    const nextScopeBucketId = scopeBucketId ?? null
+    if (this.activeProjectId === projectId && this.activeScopeBucketId === nextScopeBucketId) return
     this.activeProjectId = projectId
+    this.activeScopeBucketId = nextScopeBucketId
     this.clearProjectState()
+  }
+
+  /**
+   * Scope-sensitive activation: called when a thread moves between scopes
+   * while the Git panel stays open. Re-resolves status for the new root so
+   * sibling worktrees never display each other's state.
+   */
+  notifyScopeChanged(projectId: string, scopeBucketId: string): void {
+    this.activeProjectId = projectId
+    this.activeScopeBucketId = scopeBucketId
+    this.clearProjectState()
+    queueMicrotask(() => void this.refresh(projectId).catch(() => {}))
+  }
+
+  /** The scope-qualified Git target used by status reads. */
+  private statusTarget(projectId: string): [string, string | null] {
+    const project = this.activeProjectId === projectId ? this.activeScopeBucketId : null
+    return [projectId, project]
+  }
+
+  private scopeFor(projectId: string): string | undefined {
+    return this.activeProjectId === projectId ? (this.activeScopeBucketId ?? undefined) : undefined
+  }
+
+  /**
+   * Append the active scope bucket id to a git:* local-repository invoke so the
+   * operation runs against the worktree (when one is active) instead of always
+   * reaching the project root. `undefined` is forwarded as-is for project-root
+   * callers, keeping backward compatibility.
+   */
+  private scopedGitArgs<Args extends unknown[]>(
+    projectId: string,
+    ...args: Args
+  ): [string, ...Args, string | undefined] {
+    const scope = this.scopeFor(projectId)
+    return [projectId, ...args, scope ?? undefined]
+  }
+
+  private async readStatus(projectId: string): Promise<GitStatus | null> {
+    const [id, scope] = this.statusTarget(projectId)
+    const status = (await invoke('git:status', id, scope ?? undefined)) as GitStatus | null | undefined
+    if (!status) return null
+    return status
   }
 
   /** Clear Git state when the active thread has no Git-capable project. */
@@ -238,12 +297,12 @@ export class GitState {
    * switched, app-restore). The store decides whether git tracking applies and
    * refreshes deterministically — no polling anywhere.
    */
-  notifyThreadOpened(project: Project | null): void {
+  notifyThreadOpened(project: Project | null, thread?: { scopeBucketId?: string } | null): void {
     if (!project || project.id === INBOX_PROJECT_ID) return
     if (project.source !== 'local' || project.changeTrackingMode !== 'git') return
     if (!project.path.trim()) return
-    this.activate(project.id)
-    queueMicrotask(() => void this.refresh(project.id))
+    this.activate(project.id, thread?.scopeBucketId ?? undefined)
+    queueMicrotask(() => void this.refresh(project.id).catch(() => {}))
   }
 
   /**
@@ -259,7 +318,7 @@ export class GitState {
     if (project.source !== 'local' || project.changeTrackingMode !== 'git') return
     if (!project.path.trim()) return
     this.activate(project.id)
-    queueMicrotask(() => void this.refresh(project.id))
+    queueMicrotask(() => void this.refresh(project.id).catch(() => {}))
   }
 
   /**
@@ -269,7 +328,7 @@ export class GitState {
    */
   notifyGitPanelOpened(projectId: string): void {
     this.activate(projectId)
-    queueMicrotask(() => void this.refresh(projectId))
+    queueMicrotask(() => void this.refresh(projectId).catch(() => {}))
   }
 
   /**
@@ -345,7 +404,8 @@ export class GitState {
 
   /** `{ owner, repo }` parsed from the active project's origin remote URL. */
   private get originRepo(): { owner: string; repo: string } | null {
-    const origin = (this.remotes ?? []).find((remote) => remote.name === 'origin')
+    const remotesList = Array.isArray(this.remotes) ? this.remotes : []
+    const origin = remotesList.find((remote) => remote.name === 'origin')
     if (!origin) return null
     const match = /(?:github\.com[:/])([^/]+)\/([^/.]+)(?:\.git)?\/?$/u.exec(origin.url.trim())
     if (!match) return null
@@ -499,22 +559,24 @@ export class GitState {
     subscribe('agent:event', (...args: unknown[]) => {
       const event = args[0] as { type: string; projectId?: string } | undefined
       if (event?.type === 'checkpoint.updated' && event.projectId === projectId) {
-        void this.refresh(projectId)
+        void this.refresh(projectId).catch(() => {})
       }
     })
   }
 
   async refresh(projectId: string): Promise<void> {
     if (projectId === INBOX_PROJECT_ID || projectId !== this.activeProjectId) return
-    const inflight = this.refreshes.get(projectId)
+    const scopeBucketId = this.scopeFor(projectId)
+    const targetKey = `${projectId}:${scopeBucketId ?? ''}`
+    const inflight = this.refreshes.get(targetKey)
     if (inflight) return inflight
 
     const refresh = this.runRefresh(projectId)
-    this.refreshes.set(projectId, refresh)
+    this.refreshes.set(targetKey, refresh)
     try {
       await refresh
     } finally {
-      if (this.refreshes.get(projectId) === refresh) this.refreshes.delete(projectId)
+      if (this.refreshes.get(targetKey) === refresh) this.refreshes.delete(targetKey)
     }
   }
 
@@ -524,23 +586,36 @@ export class GitState {
     // has already switched to another project, the result is stale and must
     // never be written.
     const targetProject = this.activeProjectId
+    const targetScope = this.activeScopeBucketId
     this.error = null
     try {
+      const branchesRequest = invoke('git:branches', projectId, targetScope ?? undefined)
+      const remotesRequest = invoke('git:remotes', projectId, targetScope ?? undefined)
       const [status, branches, identity, remotes, credentialStatus, stashes] = await Promise.all([
-        invoke('git:status', projectId),
-        invoke('git:branches', projectId),
+        this.readStatus(projectId),
+        branchesRequest,
         invoke('git:getIdentity', projectId),
-        invoke('git:remotes', projectId).catch(() => [] as GitRemoteInfo[]),
+        remotesRequest.catch(() => [] as GitRemoteInfo[]),
         invoke('git:getCredentialStatus', projectId).catch(
           () => null as GitCredentialStatus | null
         ),
         invoke('git:stashList', projectId).catch(() => [] as GitStashEntry[])
       ])
-      if (targetProject !== this.activeProjectId || projectId !== this.activeProjectId) return
+      if (
+        targetProject !== this.activeProjectId ||
+        targetScope !== this.activeScopeBucketId ||
+        projectId !== this.activeProjectId
+      )
+        return
+      if (!status) {
+        this.error = errorMessage(new Error('Git status returned no result'), 'Git status could not be loaded')
+        this.status = null
+        return
+      }
       this.status = status
       this.branches = branches
       this.identity = identity
-      this.remotes = remotes
+      this.remotes = Array.isArray(remotes) ? remotes : []
       this.credentialStatus = credentialStatus
       this.stashes = stashes
       // Conflicts mode is only meaningful while actual conflicts exist — once
@@ -548,9 +623,14 @@ export class GitState {
       if (status.conflicted.length === 0) this.conflictsMode = false
       // Refresh the open-PR conflict indicator (cooldown-gated) so the header
       // badge stays current without a GitHub round trip on every mutation.
-      void this.refreshPrConflictIndicators(projectId)
+      void this.refreshPrConflictIndicators(projectId).catch(() => {})
     } catch (reason) {
-      if (targetProject !== this.activeProjectId || projectId !== this.activeProjectId) return
+      if (
+        targetProject !== this.activeProjectId ||
+        targetScope !== this.activeScopeBucketId ||
+        projectId !== this.activeProjectId
+      )
+        return
       this.error = errorMessage(reason, 'Git status could not be loaded')
       this.status = null
     } finally {
@@ -562,7 +642,10 @@ export class GitState {
     this.markBusy('stage', true)
     this.error = null
     try {
-      this.status = await invoke('git:stage', projectId, paths)
+      const scopeBucketId = this.scopeFor(projectId)
+      this.status = scopeBucketId
+        ? await invoke('git:stage', projectId, paths, scopeBucketId)
+        : await invoke('git:stage', projectId, paths)
     } catch (reason) {
       this.error = errorMessage(reason, 'Files could not be staged')
     } finally {
@@ -575,11 +658,11 @@ export class GitState {
    * panel (ours/theirs sides plus their line spans).
    */
   async analyzeConflict(projectId: string, path: string): Promise<GitConflictAnalysis> {
-    return invoke('git:analyzeConflict', projectId, path)
+    return invoke('git:analyzeConflict', ...this.scopedGitArgs(projectId, path))
   }
 
   async prepareConflictWorkFile(projectId: string, path: string): Promise<GitConflictWorkFile> {
-    return invoke('git:prepareConflictWorkFile', projectId, path)
+    return invoke('git:prepareConflictWorkFile', ...this.scopedGitArgs(projectId, path))
   }
 
   /** Persist partial resolution progress in the conflict scratch file only. */
@@ -591,7 +674,10 @@ export class GitState {
   ): Promise<boolean> {
     this.error = null
     try {
-      await invoke('git:saveConflictDraft', projectId, path, content, JSON.stringify(hunks))
+      await invoke(
+        'git:saveConflictDraft',
+        ...this.scopedGitArgs(projectId, path, content, JSON.stringify(hunks))
+      )
       return true
     } catch (reason) {
       this.error = errorMessage(reason, 'Conflict draft could not be saved')
@@ -608,7 +694,10 @@ export class GitState {
     this.markBusy('stage', true)
     this.error = null
     try {
-      this.status = await invoke('git:saveConflictResolution', projectId, path, content)
+      this.status = await invoke(
+        'git:saveConflictResolution',
+        ...this.scopedGitArgs(projectId, path, content)
+      )
       return true
     } catch (reason) {
       this.error = errorMessage(reason, 'Conflict could not be saved')
@@ -627,7 +716,7 @@ export class GitState {
     this.markBusy('stage', true)
     this.error = null
     try {
-      this.status = await invoke('git:resolveConflicted', projectId, path)
+      this.status = await invoke('git:resolveConflicted', ...this.scopedGitArgs(projectId, path))
     } catch (reason) {
       this.error = errorMessage(reason, 'Conflict could not be resolved')
     } finally {
@@ -639,7 +728,7 @@ export class GitState {
     this.markBusy('unstage', true)
     this.error = null
     try {
-      this.status = await invoke('git:unstage', projectId, paths)
+      this.status = await invoke('git:unstage', ...this.scopedGitArgs(projectId, paths))
     } catch (reason) {
       this.error = errorMessage(reason, 'Files could not be unstaged')
     } finally {
@@ -651,7 +740,10 @@ export class GitState {
     this.markBusy('commit', true)
     this.error = null
     try {
-      this.status = await invoke('git:commit', projectId, message)
+      const scopeBucketId = this.scopeFor(projectId)
+      this.status = scopeBucketId
+        ? await invoke('git:commit', projectId, message, scopeBucketId)
+        : await invoke('git:commit', projectId, message)
     } catch (reason) {
       this.error = errorMessage(reason, 'Commit failed')
     } finally {
@@ -663,7 +755,7 @@ export class GitState {
     this.markBusy('init', true)
     this.error = null
     try {
-      this.status = await invoke('git:init', projectId)
+      this.status = await invoke('git:init', ...this.scopedGitArgs(projectId))
     } catch (reason) {
       this.error = errorMessage(reason, 'Repository could not be initialized')
     } finally {
@@ -675,7 +767,7 @@ export class GitState {
     this.markBusy('checkout', true)
     this.error = null
     try {
-      this.status = await invoke('git:checkout', projectId, branch)
+      this.status = await invoke('git:checkout', ...this.scopedGitArgs(projectId, branch))
       await this.refresh(projectId)
     } catch (reason) {
       this.error = errorMessage(reason, 'Checkout failed')
@@ -688,10 +780,31 @@ export class GitState {
     this.markBusy('checkout', true)
     this.error = null
     try {
-      this.status = await invoke('git:createBranch', projectId, name)
+      this.status = await invoke('git:createBranch', ...this.scopedGitArgs(projectId, name))
       await this.refresh(projectId)
     } catch (reason) {
       this.error = errorMessage(reason, 'Branch creation failed')
+    } finally {
+      this.markBusy('checkout', false)
+    }
+  }
+
+  async createTrackingBranch(
+    projectId: string,
+    remote: string,
+    branch: string,
+    localName = branch
+  ): Promise<void> {
+    this.markBusy('checkout', true)
+    this.error = null
+    try {
+      this.status = await invoke(
+        'git:createTrackingBranch',
+        ...this.scopedGitArgs(projectId, remote, branch, localName)
+      )
+      await this.refresh(projectId)
+    } catch (reason) {
+      this.error = errorMessage(reason, 'Remote branch checkout failed')
     } finally {
       this.markBusy('checkout', false)
     }
@@ -701,7 +814,7 @@ export class GitState {
     this.markBusy('checkout', true)
     this.error = null
     try {
-      this.status = await invoke('git:deleteBranch', projectId, name, force)
+      this.status = await invoke('git:deleteBranch', ...this.scopedGitArgs(projectId, name, force))
       await this.refresh(projectId)
       return 'deleted'
     } catch (reason) {
@@ -717,21 +830,24 @@ export class GitState {
   async setIdentity(projectId: string, name: string, email: string): Promise<void> {
     this.error = null
     try {
-      this.identity = await invoke('git:setIdentity', projectId, { name, email })
+      this.identity = await invoke(
+        'git:setIdentity',
+        ...this.scopedGitArgs(projectId, { name, email })
+      )
     } catch (reason) {
       this.error = errorMessage(reason, 'Identity could not be saved')
     }
   }
 
   async getDiff(projectId: string, path: string, staged: boolean): Promise<GitDiff> {
-    return invoke('git:diff', projectId, path, staged)
+    return invoke('git:diff', ...this.scopedGitArgs(projectId, path, staged))
   }
 
   async fetch(projectId: string): Promise<void> {
     this.markBusy('fetch', true)
     this.error = null
     try {
-      this.status = await invoke('git:fetch', projectId)
+      this.status = await invoke('git:fetch', ...this.scopedGitArgs(projectId))
       // Branch tracking (ahead/behind) changes with every fetch — refresh it so
       // push decisions (like the PR sheet's "is there anything to push?") are
       // made against freshly fetched remote refs, not the last panel refresh.
@@ -748,7 +864,10 @@ export class GitState {
     this.markBusy('fetch', true)
     this.error = null
     try {
-      this.status = await invoke('git:fetchBranch', projectId, remote, branch)
+      this.status = await invoke(
+        'git:fetchBranch',
+        ...this.scopedGitArgs(projectId, remote, branch)
+      )
       await this.refresh(projectId)
     } catch (reason) {
       this.error = errorMessage(reason, 'Fetch failed')
@@ -761,7 +880,7 @@ export class GitState {
     this.markBusy('pull', true)
     this.error = null
     try {
-      this.status = await invoke('git:pull', projectId)
+      this.status = await invoke('git:pull', ...this.scopedGitArgs(projectId))
     } catch (reason) {
       this.error = errorMessage(reason, 'Pull failed')
     } finally {
@@ -774,45 +893,59 @@ export class GitState {
     setUpstream: boolean,
     remote?: string,
     branch?: string
-  ): Promise<'pushed' | 'rejected' | 'failed'> {
+  ): Promise<GitPushResult> {
     this.markBusy('push', true)
     this.error = null
     try {
-      this.status = await invoke('git:push', projectId, { setUpstream, remote, branch })
+      const options = { setUpstream, remote, branch }
+      const scopeBucketId = this.scopeFor(projectId)
+      this.status = scopeBucketId
+        ? await invoke('git:push', projectId, options, scopeBucketId)
+        : await invoke('git:push', projectId, options)
       await this.refresh(projectId)
       // Pushing changes what GitHub computes for the branch — force a fresh
       // conflict check instead of waiting for the next thread open.
       void this.refreshPrConflictIndicators(projectId, true)
-      return 'pushed'
+      return { status: 'pushed' }
     } catch (reason) {
       const message = errorMessage(reason, 'Push failed')
       // A non-fast-forward rejection is not a failure — the panel turns it into
       // the "pull & push" recovery dialog instead of a scary error banner.
-      if (isPushRejected(message)) return 'rejected'
+      if (isPushRejected(message)) return { status: 'rejected', message }
       this.error = message
-      return 'failed'
+      return { status: 'failed', message }
     } finally {
       this.markBusy('push', false)
     }
   }
 
   /**
-   * Pull a specific remote branch (merge or rebase) for push recovery, then
-   * surface the refreshed status. A pull that stops on conflicts is a normal
-   * state — the panel hands over to the conflict UI and never auto-pushes.
+   * Pull a specific remote branch with an explicit strategy, then surface the
+   * refreshed status. A pull that stops on conflicts is a normal state; the
+   * panel hands over to the conflict UI and never auto-pushes.
    */
   async pullIntegrate(
     projectId: string,
     remote: string,
     branch: string,
-    rebase: boolean
+    strategy: GitPullStrategy
   ): Promise<void> {
     this.markBusy('pull', true)
     this.error = null
     try {
-      this.status = await invoke('git:pullIntegrate', projectId, { remote, branch, rebase })
+      const options = { remote, branch, strategy }
+      const scopeBucketId = this.scopeFor(projectId)
+      this.status = scopeBucketId
+        ? await invoke('git:pullIntegrate', projectId, options, scopeBucketId)
+        : await invoke('git:pullIntegrate', projectId, options)
     } catch (reason) {
-      this.error = errorMessage(reason, rebase ? 'Pull with rebase failed' : 'Pull failed')
+      const fallback =
+        strategy === 'rebase'
+          ? 'Pull with rebase failed'
+          : strategy === 'ff-only'
+            ? 'Fast-forward pull failed'
+            : 'Pull with merge failed'
+      this.error = errorMessage(reason, fallback)
     } finally {
       this.markBusy('pull', false)
     }
@@ -821,7 +954,7 @@ export class GitState {
   async addRemote(projectId: string, name: string, url: string): Promise<void> {
     this.error = null
     try {
-      this.remotes = await invoke('git:addRemote', projectId, name, url)
+      this.remotes = await invoke('git:addRemote', ...this.scopedGitArgs(projectId, name, url))
     } catch (reason) {
       this.error = errorMessage(reason, 'Remote could not be added')
     }
@@ -830,7 +963,7 @@ export class GitState {
   async removeRemote(projectId: string, name: string): Promise<void> {
     this.error = null
     try {
-      this.remotes = await invoke('git:removeRemote', projectId, name)
+      this.remotes = await invoke('git:removeRemote', ...this.scopedGitArgs(projectId, name))
     } catch (reason) {
       this.error = errorMessage(reason, 'Remote could not be removed')
     }
@@ -858,8 +991,8 @@ export class GitState {
     this.markBusy('merge', true)
     this.error = null
     try {
-      const summary = await invoke('git:merge', projectId, target)
-      this.status = await invoke('git:status', projectId)
+      const summary = await invoke('git:merge', ...this.scopedGitArgs(projectId, target))
+      this.status = await this.readStatus(projectId)
       return summary
     } catch (reason) {
       this.error = errorMessage(reason, 'Merge failed')
@@ -873,8 +1006,8 @@ export class GitState {
     this.markBusy('rebase', true)
     this.error = null
     try {
-      const summary = await invoke('git:rebase', projectId, target)
-      this.status = await invoke('git:status', projectId)
+      const summary = await invoke('git:rebase', ...this.scopedGitArgs(projectId, target))
+      this.status = await this.readStatus(projectId)
       return summary
     } catch (reason) {
       this.error = errorMessage(reason, 'Rebase failed')
@@ -888,7 +1021,7 @@ export class GitState {
     this.markBusy('abortMerge', true)
     this.error = null
     try {
-      this.status = await invoke('git:abortMerge', projectId)
+      this.status = await invoke('git:abortMerge', ...this.scopedGitArgs(projectId))
     } catch (reason) {
       this.error = errorMessage(reason, 'Merge abort failed')
     } finally {
@@ -900,7 +1033,7 @@ export class GitState {
     this.markBusy('abortRebase', true)
     this.error = null
     try {
-      this.status = await invoke('git:abortRebase', projectId)
+      this.status = await invoke('git:abortRebase', ...this.scopedGitArgs(projectId))
     } catch (reason) {
       this.error = errorMessage(reason, 'Rebase abort failed')
     } finally {
@@ -921,7 +1054,7 @@ export class GitState {
     this.markBusy('merge', true)
     this.error = null
     try {
-      this.status = await invoke('git:preparePrResolve', projectId, options)
+      this.status = await invoke('git:preparePrResolve', ...this.scopedGitArgs(projectId, options))
       await this.refresh(projectId)
     } catch (reason) {
       this.error = errorMessage(reason, 'Could not prepare PR conflict resolution')
@@ -934,8 +1067,8 @@ export class GitState {
     this.markBusy('stash', true)
     this.error = null
     try {
-      this.status = await invoke('git:stash', projectId, message, paths)
-      this.stashes = await invoke('git:stashList', projectId)
+      this.status = await invoke('git:stash', ...this.scopedGitArgs(projectId, message, paths))
+      this.stashes = await invoke('git:stashList', ...this.scopedGitArgs(projectId))
     } catch (reason) {
       this.error = errorMessage(reason, 'Stash failed')
     } finally {
@@ -947,7 +1080,7 @@ export class GitState {
     this.markBusy('ignore', true)
     this.error = null
     try {
-      this.status = await invoke('git:ignore', projectId, paths)
+      this.status = await invoke('git:ignore', ...this.scopedGitArgs(projectId, paths))
     } catch (reason) {
       this.error = errorMessage(reason, 'Files could not be ignored')
     } finally {
@@ -959,7 +1092,7 @@ export class GitState {
     this.markBusy('discard', true)
     this.error = null
     try {
-      this.status = await invoke('git:discard', projectId, paths)
+      this.status = await invoke('git:discard', ...this.scopedGitArgs(projectId, paths))
     } catch (reason) {
       this.error = errorMessage(reason, 'Changes could not be discarded')
     } finally {
@@ -971,8 +1104,8 @@ export class GitState {
     this.markBusy('stash-pop', true)
     this.error = null
     try {
-      this.status = await invoke('git:stashPop', projectId, id)
-      this.stashes = await invoke('git:stashList', projectId)
+      this.status = await invoke('git:stashPop', ...this.scopedGitArgs(projectId, id))
+      this.stashes = await invoke('git:stashList', ...this.scopedGitArgs(projectId))
     } catch (reason) {
       this.error = errorMessage(reason, 'Stash pop failed')
     } finally {
@@ -984,8 +1117,8 @@ export class GitState {
     this.markBusy('stash-drop', true)
     this.error = null
     try {
-      this.status = await invoke('git:stashDrop', projectId, id)
-      this.stashes = await invoke('git:stashList', projectId)
+      this.status = await invoke('git:stashDrop', ...this.scopedGitArgs(projectId, id))
+      this.stashes = await invoke('git:stashList', ...this.scopedGitArgs(projectId))
     } catch (reason) {
       this.error = errorMessage(reason, 'Stash drop failed')
     } finally {
@@ -1001,7 +1134,11 @@ export class GitState {
     this.error = null
     this.githubPermission = null
     try {
-      const reference = this.resolveGitHubMutation(await invoke('pr:create', projectId, input))
+      const scopeBucketId = this.scopeFor(projectId)
+      const result = scopeBucketId
+        ? await invoke('pr:create', projectId, input, scopeBucketId)
+        : await invoke('pr:create', projectId, input)
+      const reference = this.resolveGitHubMutation(result)
       // A new PR can already have conflicts — refresh the indicator immediately.
       void this.refreshPrConflictIndicators(projectId, true)
       return reference
@@ -1098,7 +1235,10 @@ export class GitState {
     head: string
   ): Promise<PullRequestCompare | null> {
     try {
-      return await invoke('pr:compare', projectId, owner, repo, base, head)
+      const scopeBucketId = this.scopeFor(projectId)
+      return scopeBucketId
+        ? await invoke('pr:compare', projectId, owner, repo, base, head, scopeBucketId)
+        : await invoke('pr:compare', projectId, owner, repo, base, head)
     } catch {
       return null
     }
@@ -1571,12 +1711,20 @@ export class GitState {
     projectId: string,
     virtualTaskId: string,
     settings: ThreadSettings,
-    title: string,
-    prompt: string
+    input: PrComposeInput
   ): Promise<PrComposeReport | null> {
     this.error = null
     try {
-      return await invoke('pr:composeWithAgent', projectId, virtualTaskId, settings, title, prompt)
+      const scopeBucketId = this.scopeFor(projectId)
+      if (!scopeBucketId) throw new Error('The pull request scope is unavailable')
+      return await invoke(
+        'pr:composeWithAgent',
+        projectId,
+        scopeBucketId,
+        virtualTaskId,
+        settings,
+        input
+      )
     } catch (reason) {
       this.error = errorMessage(reason, 'The PR compose agent could not complete its task')
       return null
@@ -1645,9 +1793,14 @@ export class GitState {
     }
   }
 
-  async getLog(projectId: string, limit = 30, offset = 0): Promise<GitCommitInfo[]> {
+  async getLog(
+    projectId: string,
+    limit = 30,
+    offset = 0,
+    query?: string
+  ): Promise<GitCommitInfo[]> {
     try {
-      return await invoke('git:log', projectId, limit, offset)
+      return await invoke('git:log', ...this.scopedGitArgs(projectId, limit, offset, query))
     } catch {
       return []
     }
@@ -1655,33 +1808,33 @@ export class GitState {
 
   async getCommitDiff(projectId: string, hash: string): Promise<GitFileChange[]> {
     try {
-      return await invoke('git:commitDiff', projectId, hash)
+      return await invoke('git:commitDiff', ...this.scopedGitArgs(projectId, hash))
     } catch {
       return []
     }
   }
 
   async getCommitFileDiff(projectId: string, hash: string, path: string): Promise<GitDiff> {
-    return invoke('git:commitFileDiff', projectId, hash, path)
+    return invoke('git:commitFileDiff', ...this.scopedGitArgs(projectId, hash, path))
   }
 
   async getStashDiff(projectId: string, id: string): Promise<GitFileChange[]> {
     try {
-      return await invoke('git:stashDiff', projectId, id)
+      return await invoke('git:stashDiff', ...this.scopedGitArgs(projectId, id))
     } catch {
       return []
     }
   }
 
   async getStashFileDiff(projectId: string, id: string, path: string): Promise<GitDiff> {
-    return invoke('git:stashFileDiff', projectId, id, path)
+    return invoke('git:stashFileDiff', ...this.scopedGitArgs(projectId, id, path))
   }
 
   async amend(projectId: string, message: string): Promise<void> {
     this.markBusy('amend', true)
     this.error = null
     try {
-      this.status = await invoke('git:amend', projectId, message)
+      this.status = await invoke('git:amend', ...this.scopedGitArgs(projectId, message))
     } catch (reason) {
       this.error = errorMessage(reason, 'Amend failed')
     } finally {
@@ -1693,7 +1846,7 @@ export class GitState {
     this.markBusy('reset', true)
     this.error = null
     try {
-      this.status = await invoke('git:reset', projectId, mode, target)
+      this.status = await invoke('git:reset', ...this.scopedGitArgs(projectId, mode, target))
     } catch (reason) {
       this.error = errorMessage(reason, 'Reset failed')
     } finally {
@@ -1705,7 +1858,7 @@ export class GitState {
     this.markBusy('delete-commit', true)
     this.error = null
     try {
-      this.status = await invoke('git:deleteCommit', projectId, target)
+      this.status = await invoke('git:deleteCommit', ...this.scopedGitArgs(projectId, target))
     } catch (reason) {
       this.error = errorMessage(reason, 'Commit could not be deleted')
     } finally {

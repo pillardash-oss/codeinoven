@@ -2,7 +2,17 @@
   import { onDestroy, onMount } from 'svelte'
   import type { Attachment } from 'svelte/attachments'
   import { SvelteMap } from 'svelte/reactivity'
-  import { Check, ChevronDown, Copy, FileText, GitFork, Loader2, RefreshCw } from '@lucide/svelte'
+  import {
+    Brain,
+    Check,
+    ChevronDown,
+    Copy,
+    FileText,
+    GitFork,
+    Loader2,
+    MessageSquareDashed,
+    X
+  } from '@lucide/svelte'
   import { threadMessages } from '$lib/stores/thread-messages.svelte'
   import { agentRuns } from '$lib/stores/agent-runs.svelte'
   import {
@@ -11,13 +21,20 @@
     chatEffectiveSettings
   } from '$lib/stores/thread-settings.svelte'
   import { providerCatalog } from '$lib/stores/provider-catalog.svelte'
+  import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
   import { invoke } from '$lib/ipc.svelte'
   import { messageId } from '$shared/id'
   import { isTodoToolPart } from '$lib/agent-todos'
   import { copyText } from '$lib/copy-text'
+  import { attachmentPreviewKind, fileUrlToPath } from '$lib/mime'
   import { getAgentIcon } from '$lib/agent-icons/registry'
+  import { fastVariantForModelId } from '$shared/fast-inference'
+  import { resolveDefaultThinkingLevel } from '$shared/thinking-presets'
   import { mobileState } from '$lib/remote/mobile-state.svelte'
   import ChatComposer from '../chats/ChatComposer.svelte'
+  import AttachmentPreview from '../chats/AttachmentPreview.svelte'
+  import ResponseSelectionPopover from '../chats/ResponseSelectionPopover.svelte'
+  import AgentProviderStatusCard from '../threads/AgentProviderStatusCard.svelte'
   import WorkingTrace from '../threads/WorkingTrace.svelte'
   import MarkdownView from '../markdown/MarkdownView.svelte'
   import BottomSheet from '../ui/BottomSheet.svelte'
@@ -25,10 +42,14 @@
   import type {
     AgentMessage,
     AgentPart,
+    AgentProviderIssue,
+    AgentSessionStatus,
     PromptAttachment,
+    PromptReference,
     Thread,
     ThreadSettings
   } from '$shared/types'
+  import type { ThinkingLevel } from '$shared/types'
 
   type StartAfterSelection = Pick<Thread, 'id' | 'title'>
 
@@ -44,10 +65,12 @@
   let loaded = $derived(threadMessages.loaded(thread.projectId, thread.id))
   let loading = $derived(threadMessages.loading(thread.projectId, thread.id))
   let loadError = $derived(threadMessages.error(thread.projectId, thread.id))
-  let runError = $derived(threadMessages.runError(thread.projectId, thread.id))
+  let runIssue = $derived(threadMessages.runIssue(thread.projectId, thread.id))
   let busy = $derived(agentRuns.isBusy(thread.projectId, thread.id))
 
   let sendError = $state('')
+  let failedDelivery = $state<{ text: string; attachments: PromptAttachment[] } | null>(null)
+  let errorRetrying = $state(false)
   let scrollEl = $state<HTMLDivElement>()
   /** Whether the user has scrolled away from the live tail. While away, the
    *  auto-follow must stay released until they scroll back to the bottom. */
@@ -111,6 +134,13 @@
     if (!providerCatalog.cached(thread.projectId)) {
       void providerCatalog.refresh(thread.projectId)
     }
+  })
+
+  // Selection capture lives at the document level so a long-press that ends
+  // outside the transcript (over the composer, for instance) still resolves.
+  onMount(() => {
+    document.addEventListener('pointerup', captureResponseSelection)
+    return () => document.removeEventListener('pointerup', captureResponseSelection)
   })
 
   onMount(() => {
@@ -238,15 +268,6 @@
     return files
   }
 
-  function turnError(startIndex: number): string {
-    const endIndex = turnEndIndex(startIndex)
-    for (let index = endIndex; index >= startIndex; index -= 1) {
-      const error = messages[index]?.error
-      if (error) return error
-    }
-    return ''
-  }
-
   function turnStartTime(startIndex: number): number | undefined {
     const preceding = messages[startIndex - 1]
     return preceding?.role === 'user' ? preceding.createdAt : messages[startIndex]?.createdAt
@@ -263,10 +284,34 @@
 
   function modelLabel(message: AgentMessage): string | null {
     if (!message.modelId) return null
-    return (
-      providers.flatMap((provider) => provider.models).find((model) => model.id === message.modelId)
-        ?.name ?? message.modelId
-    )
+    const allModels = providers.flatMap((provider) => provider.models)
+    const model =
+      allModels.find(
+        (model) =>
+          model.id === message.modelId &&
+          (!message.providerId || model.providerId === message.providerId)
+      ) ?? allModels.find((model) => model.id === message.modelId)
+    if (model) return model.name
+    // Fast variants may be absent from harness catalogs — fall back to a derived label.
+    return fastVariantForModelId(message.modelId)?.label ?? message.modelId
+  }
+
+  /** Thinking level used for the turn, mirroring desktop's messageThinkingLevel. */
+  function turnThinkingLevel(message: AgentMessage): ThinkingLevel | null {
+    if (!message.modelId) return null
+    const allModels = providers.flatMap((provider) => provider.models)
+    const model =
+      allModels.find(
+        (candidate) =>
+          candidate.id === message.modelId &&
+          (!message.providerId || candidate.providerId === message.providerId)
+      ) ?? allModels.find((candidate) => candidate.id === message.modelId)
+    const presets = model?.thinkingPresets ?? []
+    // A model known not to reason never shows a thinking badge.
+    if (model && presets.length === 0) return null
+    if (message.thinkingLevel) return message.thinkingLevel
+    if (presets.length === 0) return null
+    return resolveDefaultThinkingLevel(presets, undefined, settings.thinkingLevel) ?? null
   }
 
   function providerName(message: AgentMessage): string | null {
@@ -285,6 +330,33 @@
     return getAgentIcon(id)?.name ?? id
   }
 
+  function localIssue(message: string, retryable: boolean): AgentProviderIssue {
+    return {
+      kind: 'unknown',
+      message,
+      rawError: message,
+      harnessId: settings.harnessId,
+      retryable
+    }
+  }
+
+  let visibleErrorStatus = $derived.by<Extract<AgentSessionStatus, { state: 'error' }> | null>(
+    () => {
+      if (runIssue) return { state: 'error', issue: runIssue }
+      if (sendError) {
+        return { state: 'error', issue: localIssue(sendError, failedDelivery !== null) }
+      }
+      if (loadError) return { state: 'error', issue: localIssue(loadError, true) }
+      return null
+    }
+  )
+  let errorProviderName = $derived(
+    visibleErrorStatus
+      ? (getAgentIcon(visibleErrorStatus.issue.harnessId)?.name ??
+          visibleErrorStatus.issue.harnessId)
+      : settings.harnessId
+  )
+
   function formatDuration(milliseconds: number): string {
     const seconds = Math.max(0, Math.round(milliseconds / 1000))
     if (seconds < 60) return `${seconds}s`
@@ -296,6 +368,45 @@
   let copiedMessageId = $state<string | null>(null)
   let copyResetTimer: ReturnType<typeof setTimeout> | undefined
   let forkingMessageId = $state<string | null>(null)
+  let openingAttachmentId = $state<string | null>(null)
+  let previewAttachment = $state<PromptAttachment | null>(null)
+  let previewSrc = $state<string>()
+  let previewText = $state<string>()
+
+  function attachmentName(part: Extract<AgentPart, { type: 'file' }>): string {
+    return part.filename ?? part.url.split(/[/\\]/u).pop() ?? 'file'
+  }
+
+  function closeAttachmentPreview(): void {
+    if (previewSrc) URL.revokeObjectURL(previewSrc)
+    previewAttachment = null
+    previewSrc = undefined
+    previewText = undefined
+  }
+
+  async function openAttachment(part: Extract<AgentPart, { type: 'file' }>): Promise<void> {
+    if (openingAttachmentId) return
+    openingAttachmentId = part.id
+    try {
+      const filename = attachmentName(part)
+      const bytes = await window.api.readFile(fileUrlToPath(part.url))
+      const kind = attachmentPreviewKind(part.mime, filename)
+      closeAttachmentPreview()
+      previewAttachment = { mime: part.mime, url: part.url, filename }
+      if (kind === 'markdown' || kind === 'text' || kind === 'csv') {
+        previewText = new TextDecoder().decode(bytes)
+      } else {
+        previewSrc = URL.createObjectURL(
+          new Blob([bytes], { type: part.mime || 'application/octet-stream' })
+        )
+      }
+    } catch (error) {
+      failedDelivery = null
+      sendError = error instanceof Error ? error.message : 'The attachment could not be opened.'
+    } finally {
+      openingAttachmentId = null
+    }
+  }
 
   async function copyTurn(
     message: AgentMessage,
@@ -307,6 +418,7 @@
       clearTimeout(copyResetTimer)
       copyResetTimer = setTimeout(() => (copiedMessageId = null), 1_500)
     } catch {
+      failedDelivery = null
       sendError = 'The response could not be copied to the clipboard.'
     }
   }
@@ -325,22 +437,33 @@
       )
       await mobileState.openThread(forked)
     } catch (error) {
+      failedDelivery = null
       sendError = error instanceof Error ? error.message : 'The thread could not be forked.'
     } finally {
       forkingMessageId = null
     }
   }
 
-  onDestroy(() => clearTimeout(copyResetTimer))
+  onDestroy(() => {
+    clearTimeout(copyResetTimer)
+    if (previewSrc) URL.revokeObjectURL(previewSrc)
+  })
 
   // ─── Sending, queued "start after" dependencies, and abort ──────────────
   let queuedMessage = $state<{
     text: string
     attachments: PromptAttachment[]
     startAfterThreads: StartAfterSelection[]
+    promptContext?: string
+    promptReferences?: PromptReference[]
   } | null>(null)
 
-  async function deliver(text: string, attachments: PromptAttachment[]): Promise<void> {
+  async function deliver(
+    text: string,
+    attachments: PromptAttachment[],
+    promptContext?: string,
+    promptReferences?: PromptReference[]
+  ): Promise<void> {
     sendError = ''
     const userMessageId = messageId()
     userScrolledAway = false
@@ -360,12 +483,59 @@
         text,
         attachments,
         undefined,
-        userMessageId
+        userMessageId,
+        undefined,
+        promptContext,
+        promptReferences
       )
+      failedDelivery = null
     } catch (error) {
       agentRuns.setIdle(thread.projectId, thread.id)
+      failedDelivery = { text, attachments }
       sendError = error instanceof Error ? error.message : 'The message could not be sent.'
     }
+  }
+
+  async function retryVisibleError(): Promise<void> {
+    if (errorRetrying) return
+    errorRetrying = true
+    try {
+      if (loadError && !runIssue && !sendError) {
+        await threadMessages.load(thread.projectId, thread.id)
+        return
+      }
+      if (sendError && failedDelivery) {
+        const failed = failedDelivery
+        await deliver(failed.text, failed.attachments)
+        return
+      }
+      await deliver('Continue', [])
+    } finally {
+      errorRetrying = false
+    }
+  }
+
+  async function dismissVisibleError(): Promise<void> {
+    if (runIssue) {
+      try {
+        await invoke(
+          'agent:dismissSessionError',
+          thread.projectId,
+          thread.id,
+          thread.sessionId ?? ''
+        )
+        threadMessages.setRunIssue(thread.projectId, thread.id, null)
+      } catch {
+        // Keep the actionable card visible when the desktop cannot dismiss it.
+      }
+      return
+    }
+    if (sendError) {
+      sendError = ''
+      failedDelivery = null
+      return
+    }
+    threadMessages.clearLoadError(thread.projectId, thread.id)
   }
 
   /** Once every dependency thread this message waits on goes idle, deliver it. */
@@ -378,8 +548,14 @@
         : false
     )
     if (stillBusy) return
+    const pendingDelivery = pending
     queuedMessage = null
-    void deliver(pending.text, pending.attachments)
+    void deliver(
+      pendingDelivery.text,
+      pendingDelivery.attachments,
+      pendingDelivery.promptContext,
+      pendingDelivery.promptReferences
+    )
   })
 
   function handleSend(
@@ -392,12 +568,21 @@
   ): void {
     const msg = text.trim()
     if (!msg && attachments.length === 0) return
+    const promptContext = selectionReferenceContext()
+    const promptReferences = selectionReferences.length > 0 ? [...selectionReferences] : undefined
+    clearSelectionReferences()
     const dependencies = (startAfterThreads ?? []).filter((dep) => dep.id !== thread.id)
     if (dependencies.length > 0 || (busy && !direct)) {
-      queuedMessage = { text: msg, attachments, startAfterThreads: dependencies }
+      queuedMessage = {
+        text: msg,
+        attachments,
+        startAfterThreads: dependencies,
+        promptContext,
+        promptReferences
+      }
       return
     }
-    void deliver(msg, attachments)
+    void deliver(msg, attachments, promptContext, promptReferences)
   }
 
   async function abortRun(): Promise<void> {
@@ -406,6 +591,7 @@
       await invoke('agent:abort', thread.projectId, thread.id)
       agentRuns.setIdle(thread.projectId, thread.id)
     } catch (error) {
+      failedDelivery = null
       sendError = error instanceof Error ? error.message : 'The request could not be stopped.'
     }
   }
@@ -423,6 +609,133 @@
       sourcePartId: part.id,
       activity: part.activity
     }
+  }
+
+  // ─── Response selection → references & temporary chats ────────────────
+  // Mirrors desktop's ThreadView: selecting text inside an assistant response
+  // offers "Add to chat" (reference the excerpt in the next prompt) and the
+  // temporary read-only chats ("Explain" / "Quick chat").
+  interface MobileResponseSelection {
+    text: string
+    messageId: string
+    x: number
+    y: number
+  }
+
+  let responseSelection = $state<MobileResponseSelection | null>(null)
+  let selectionReferences = $state<PromptReference[]>([])
+
+  function messageElementFor(node: Node | null): HTMLElement | null {
+    let current = node instanceof HTMLElement ? node : (node?.parentElement ?? null)
+    while (current) {
+      if (current.dataset.messageId) return current
+      current = current.parentElement
+    }
+    return null
+  }
+
+  function captureResponseSelection(): void {
+    const selection = document.getSelection()
+    if (!selection || selection.rangeCount === 0 || selection.isCollapsed) {
+      responseSelection = null
+      return
+    }
+    const anchorResponse = messageElementFor(selection.anchorNode)
+    const focusResponse = messageElementFor(selection.focusNode)
+    const anchorId = anchorResponse?.dataset.messageId
+    if (!anchorResponse || anchorResponse !== focusResponse || !anchorId) {
+      responseSelection = null
+      return
+    }
+    const message = messages.find((candidate) => candidate.id === anchorId)
+    if (!message || message.role !== 'assistant') {
+      responseSelection = null
+      return
+    }
+    const text = selection.toString().trim()
+    if (!text) {
+      responseSelection = null
+      return
+    }
+    const rect = selection.getRangeAt(0).getBoundingClientRect()
+    const estimatedWidth = 320
+    const estimatedHeight = 48
+    const x = Math.max(
+      12,
+      Math.min(
+        rect.left + rect.width / 2 - estimatedWidth / 2,
+        window.innerWidth - estimatedWidth - 12
+      )
+    )
+    const y =
+      rect.top - estimatedHeight >= 12
+        ? rect.top - estimatedHeight
+        : Math.max(12, Math.min(rect.bottom + 8, window.innerHeight - estimatedHeight - 8))
+    responseSelection = { text, messageId: anchorId, x, y }
+  }
+
+  function closeResponseSelection(): void {
+    responseSelection = null
+    document.getSelection()?.removeAllRanges()
+  }
+
+  function addSelectionReference(): void {
+    const selection = responseSelection
+    if (!selection) return
+    selectionReferences = [
+      ...selectionReferences,
+      {
+        id: crypto.randomUUID(),
+        label: `Selection ${selectionReferences.length + 1}`,
+        text: selection.text
+      }
+    ]
+    closeResponseSelection()
+  }
+
+  function removeSelectionReference(id: string): void {
+    selectionReferences = selectionReferences.filter((reference) => reference.id !== id)
+  }
+
+  function clearSelectionReferences(): void {
+    selectionReferences = []
+  }
+
+  function selectionReferenceContext(): string | undefined {
+    if (selectionReferences.length === 0) return undefined
+    return [
+      'The user attached these excerpts from your earlier response as references:',
+      ...selectionReferences.map(
+        (reference) => `[${reference.label}]\n<selection>\n${reference.text}\n</selection>`
+      )
+    ].join('\n\n')
+  }
+
+  /** Full-transcript context for a temporary chat, matching desktop. */
+  function temporaryConversationContext(): string {
+    return messages
+      .map((message) => {
+        const text = textFor(message).trim()
+        return text ? `${message.role.toUpperCase()}: ${text}` : ''
+      })
+      .filter(Boolean)
+      .join('\n\n')
+      .slice(-80_000)
+  }
+
+  function openTemporarySelectionChat(mode: 'elaborate' | 'quick'): void {
+    const selection = responseSelection
+    if (!selection) return
+    const tab = contextSidebarState.openTemporaryChat(
+      thread.projectId,
+      thread.id,
+      mode,
+      selection.text,
+      temporaryConversationContext(),
+      settings
+    )
+    mobileState.openTemporaryChatTab(tab.id)
+    closeResponseSelection()
   }
 </script>
 
@@ -449,26 +762,32 @@
         {#each messages as message, index (message.id)}
           {@const text = textFor(message)}
           {@const files = fileParts(message)}
-          <div
-            {@attach registerMessageElement}
-            class="group flex flex-col gap-1.5"
-            data-message-id={message.id}
-          >
-            {#if message.role === 'user'}
+          {#if message.role === 'user'}
+            <div
+              {@attach registerMessageElement}
+              class="group flex flex-col gap-1.5"
+              data-message-id={message.id}
+            >
               <div class="flex justify-end">
                 <div class="max-w-[85%] rounded-2xl bg-surface px-3.5 py-2.5">
                   {#if files.length > 0}
                     <div class="mb-1.5 flex flex-wrap justify-end gap-1.5">
                       {#each files as part (part.id)}
-                        <span
-                          class="flex max-w-full items-center gap-1.5 rounded-lg bg-elevated px-2 py-1 text-[11px] text-muted"
-                          title={part.filename ?? part.url}
+                        <button
+                          type="button"
+                          class="flex h-8 max-w-full cursor-pointer items-center gap-1.5 rounded-lg bg-elevated px-2 text-[11px] text-muted transition-colors active:bg-overlay active:text-foreground disabled:cursor-wait disabled:opacity-60"
+                          title={`Open ${attachmentName(part)}`}
+                          aria-label={`Open attachment ${attachmentName(part)}`}
+                          disabled={openingAttachmentId !== null}
+                          onclick={() => void openAttachment(part)}
                         >
-                          <FileText size={11} class="shrink-0" />
-                          <span class="max-w-40 truncate"
-                            >{part.filename ?? part.url.split('/').pop() ?? 'file'}</span
-                          >
-                        </span>
+                          {#if openingAttachmentId === part.id}
+                            <Loader2 size={11} class="shrink-0 animate-spin" />
+                          {:else}
+                            <FileText size={11} class="shrink-0" />
+                          {/if}
+                          <span class="max-w-40 truncate">{attachmentName(part)}</span>
+                        </button>
                       {/each}
                     </div>
                   {/if}
@@ -479,27 +798,27 @@
                   {/if}
                 </div>
               </div>
-            {:else if index === 0 || messages[index - 1]?.role === 'user'}
-              {@const endIndex = turnEndIndex(index)}
-              {@const endMessage = messages[endIndex]}
-              {@const final = turnFinalText(index)}
-              {@const turnBusy = busy && endIndex === messages.length - 1}
-              {@const trace = turnTraceParts(index, turnBusy)}
-              {@const assistantFiles = turnFiles(index)}
-              {@const error = turnError(index)}
-              {@const attribution = turnAttribution(index)}
-              {@const isLatestAssistantTurn = messages
-                .slice(endIndex + 1)
-                .every((candidate) => candidate.role === 'user')}
-              {@const turnDone = endMessage.completedAt !== undefined || !turnBusy}
+            </div>
+          {:else if index === 0 || messages[index - 1]?.role === 'user'}
+            {@const endIndex = turnEndIndex(index)}
+            {@const endMessage = messages[endIndex]}
+            {@const final = turnFinalText(index)}
+            {@const turnBusy = busy && endIndex === messages.length - 1}
+            {@const trace = turnTraceParts(index, turnBusy)}
+            {@const assistantFiles = turnFiles(index)}
+            {@const attribution = turnAttribution(index)}
+            {@const isLatestAssistantTurn = messages
+              .slice(endIndex + 1)
+              .every((candidate) => candidate.role === 'user')}
+            {@const turnDone = endMessage.completedAt !== undefined || !turnBusy}
+            {@const model = modelLabel(attribution)}
+            {@const thinking = turnThinkingLevel(attribution)}
+            <div
+              {@attach registerMessageElement}
+              class="group flex flex-col gap-1.5"
+              data-message-id={message.id}
+            >
               <div class="flex flex-col gap-1.5">
-                {#if error}
-                  <p
-                    class="rounded-xl border border-danger/30 bg-danger/10 px-3 py-2 text-[13px] text-danger"
-                  >
-                    {error}
-                  </p>
-                {/if}
                 {#if trace.length > 0}
                   <WorkingTrace
                     parts={trace}
@@ -526,15 +845,21 @@
                 {#if assistantFiles.length > 0}
                   <div class="flex flex-wrap gap-1.5">
                     {#each assistantFiles as part (part.id)}
-                      <span
-                        class="flex max-w-full items-center gap-1.5 rounded-lg bg-elevated px-2 py-1 text-[11px] text-muted"
-                        title={part.filename ?? part.url}
+                      <button
+                        type="button"
+                        class="flex h-8 max-w-full cursor-pointer items-center gap-1.5 rounded-lg bg-elevated px-2 text-[11px] text-muted transition-colors active:bg-overlay active:text-foreground disabled:cursor-wait disabled:opacity-60"
+                        title={`Open ${attachmentName(part)}`}
+                        aria-label={`Open attachment ${attachmentName(part)}`}
+                        disabled={openingAttachmentId !== null}
+                        onclick={() => void openAttachment(part)}
                       >
-                        <FileText size={11} class="shrink-0" />
-                        <span class="max-w-40 truncate"
-                          >{part.filename ?? part.url.split('/').pop() ?? 'file'}</span
-                        >
-                      </span>
+                        {#if openingAttachmentId === part.id}
+                          <Loader2 size={11} class="shrink-0 animate-spin" />
+                        {:else}
+                          <FileText size={11} class="shrink-0" />
+                        {/if}
+                        <span class="max-w-40 truncate">{attachmentName(part)}</span>
+                      </button>
                     {/each}
                   </div>
                 {/if}
@@ -544,7 +869,7 @@
                     Working…
                   </div>
                 {/if}
-                {#if turnDone && !turnBusy && (final || error)}
+                {#if turnDone && !turnBusy && final}
                   <div class="mt-1 flex min-h-8 items-center gap-1 text-dimmed">
                     {#if final}
                       <button
@@ -575,18 +900,33 @@
                         <GitFork size={14} />
                       {/if}
                     </button>
-                    <span class="ml-1 min-w-0 truncate text-[10px]">
-                      {harnessName(attribution)}{#if modelLabel(attribution)}
-                        · {modelLabel(attribution)}{/if}
+                    <span class="ml-1 flex min-w-0 items-center gap-1 truncate text-[10px]">
+                      <span class="truncate">
+                        {harnessName(attribution)}{#if providerName(attribution)}
+                          · {providerName(attribution)}{/if}{#if model}
+                          · {model}{/if}
+                      </span>
+                      {#if thinking}
+                        <span
+                          class="flex shrink-0 items-center gap-0.5 rounded-md bg-elevated px-1.5 py-0.5 text-[9px] capitalize text-muted"
+                          title={`Thinking level: ${thinking}`}
+                          aria-label={`Thinking level: ${thinking}`}
+                        >
+                          <Brain size={9} />
+                          {thinking}
+                        </span>
+                      {/if}
                       {#if endMessage.completedAt && turnStartTime(index)}
-                        · {formatDuration(endMessage.completedAt - (turnStartTime(index) ?? 0))}
+                        <span class="shrink-0 tabular-nums">
+                          · {formatDuration(endMessage.completedAt - (turnStartTime(index) ?? 0))}
+                        </span>
                       {/if}
                     </span>
                   </div>
                 {/if}
               </div>
-            {/if}
-          </div>
+            </div>
+          {/if}
         {/each}
       {/if}
 
@@ -595,41 +935,6 @@
           <Loader2 size={13} class="animate-spin" />
           Working…
         </div>
-      {/if}
-
-      {#if loadError}
-        <div
-          class="flex items-center justify-between gap-2 rounded-xl border border-danger/30 bg-danger/10 px-3 py-2 text-[13px] text-danger"
-        >
-          <span>{loadError}</span>
-          <button
-            type="button"
-            class="flex h-8 shrink-0 cursor-pointer items-center gap-1.5 rounded-lg px-2 text-xs text-danger transition-colors hover:bg-danger/10"
-            title="Retry loading the conversation"
-            aria-label="Retry loading the conversation"
-            onclick={() => void threadMessages.load(thread.projectId, thread.id)}
-          >
-            <RefreshCw size={13} />
-            Retry
-          </button>
-        </div>
-      {/if}
-
-      {#if sendError}
-        <p
-          class="rounded-xl border border-danger/30 bg-danger/10 px-3 py-2 text-[13px] text-danger"
-        >
-          {sendError}
-        </p>
-      {/if}
-
-      {#if runError && !sendError && !messages.some((message) => message.error === runError)}
-        <p
-          class="rounded-xl border border-danger/30 bg-danger/10 px-3 py-2 text-[13px] text-danger"
-          role="alert"
-        >
-          {runError}
-        </p>
       {/if}
 
       {#if queuedMessage}
@@ -655,6 +960,40 @@
       >
         <ChevronDown size={19} />
       </button>
+    {/if}
+    {#if visibleErrorStatus}
+      <div class="mb-2">
+        <AgentProviderStatusCard
+          status={visibleErrorStatus}
+          providerName={errorProviderName}
+          retrying={errorRetrying}
+          retryLabel={loadError && !runIssue && !sendError ? 'Retry loading' : 'Retry'}
+          onRetry={visibleErrorStatus.issue.retryable ? retryVisibleError : undefined}
+          onDismiss={dismissVisibleError}
+        />
+      </div>
+    {/if}
+    {#if selectionReferences.length > 0}
+      <div class="flex flex-wrap gap-1.5 px-1 pb-1.5">
+        {#each selectionReferences as reference (reference.id)}
+          <span
+            class="flex max-w-full items-center gap-1 rounded-lg bg-elevated px-2 py-1 text-[11px] text-muted"
+            title={reference.text}
+          >
+            <MessageSquareDashed size={11} class="shrink-0" />
+            <span class="max-w-40 truncate">{reference.label}</span>
+            <button
+              type="button"
+              class="flex h-4 w-4 shrink-0 cursor-pointer items-center justify-center rounded text-muted transition-colors active:text-danger"
+              title="Remove {reference.label}"
+              aria-label="Remove {reference.label}"
+              onclick={() => removeSelectionReference(reference.id)}
+            >
+              <X size={11} />
+            </button>
+          </span>
+        {/each}
+      </div>
     {/if}
     <ChatComposer
       onSend={handleSend}
@@ -689,4 +1028,25 @@
       <SubagentSessionView {tab} onOpenSubagent={openSubagent} />
     {/await}
   </BottomSheet>
+{/if}
+
+{#if responseSelection}
+  <ResponseSelectionPopover
+    text={responseSelection.text}
+    x={responseSelection.x}
+    y={responseSelection.y}
+    onAdd={addSelectionReference}
+    onElaborate={() => openTemporarySelectionChat('elaborate')}
+    onQuickChat={() => openTemporarySelectionChat('quick')}
+    onClose={closeResponseSelection}
+  />
+{/if}
+
+{#if previewAttachment}
+  <AttachmentPreview
+    attachment={previewAttachment}
+    src={previewSrc}
+    text={previewText}
+    onClose={closeAttachmentPreview}
+  />
 {/if}
