@@ -11,14 +11,15 @@ import { ProjectManager } from '../../lib/engines/project-manager'
 import type { Database } from '../database/database'
 import type { StorageEngine } from '../storage/storage-engine'
 import { buildProcessEnvironment } from '../drivers/cli-environment'
+import { scopeRootProvider, type ScopeRootResolver } from '../workspaces/scope-root-resolver'
 
 interface PtySession {
   id: string
-  process: pty.IPty
   projectId: string
   cwd: string
   shell: string
   createdAt: number
+  process: pty.IPty
 }
 
 function buildShellEnv(): Record<string, string> {
@@ -69,12 +70,15 @@ export class PtyService {
   private sessions = new Map<string, PtySession>()
   private sender: WebContents | null = null
   private projectManager: ProjectManager
+  private scopeRoots
 
   constructor(
     private storage: StorageEngine,
-    _database: Database
+    _database: Database,
+    scopeResolver?: ScopeRootResolver
   ) {
     this.projectManager = new ProjectManager(_database)
+    this.scopeRoots = scopeResolver ? scopeRootProvider(scopeResolver) : undefined
   }
 
   attach(sender: WebContents): void {
@@ -86,8 +90,10 @@ export class PtyService {
   }
 
   register(): void {
-    ipcMain.handle('pty:create', (_, id: string, projectId: string, cols: number, rows: number) =>
-      this.create(id, projectId, cols, rows)
+    ipcMain.handle(
+      'pty:create',
+      (_, id: string, projectId: string, cols: number, rows: number, scopeBucketId?: string) =>
+        this.create(id, projectId, cols, rows, scopeBucketId)
     )
     ipcMain.handle(
       'pty:createCommand',
@@ -105,14 +111,23 @@ export class PtyService {
     id: string,
     projectId: string,
     cols: number,
-    rows: number
+    rows: number,
+    scopeBucketId?: string
   ): Promise<{ id: string; pid: number }> {
     const project = await this.projectManager.getProject(projectId)
     if (!project || project.hidden || project.source !== 'local' || !project.path) {
       throw new Error(`Terminal sessions require a local ${APP_NAME} project`)
     }
-    if (!existsSync(project.path)) {
-      throw new Error(`Project directory is unavailable: ${project.path}`)
+
+    // Resolve the terminal root through the scope when one is supplied; a
+    // managed scope's worktree is captured here and kept for the session
+    // lifetime, even if the UI later switches scope.
+    const cwd =
+      scopeBucketId && this.scopeRoots
+        ? await this.scopeRoots.resolveCompatibilityRoot(projectId, scopeBucketId)
+        : project.path
+    if (!cwd || !existsSync(cwd)) {
+      throw new Error(`Project directory is unavailable`)
     }
 
     // Tear down any existing session with the same id
@@ -125,7 +140,7 @@ export class PtyService {
       name: 'xterm-256color',
       cols,
       rows,
-      cwd: project.path,
+      cwd,
       env: buildShellEnv()
     })
 
@@ -140,7 +155,7 @@ export class PtyService {
         type: 'exit',
         terminalId: id,
         projectId,
-        cwd: project.path,
+        cwd,
         shell,
         pid: proc.pid,
         exitCode,
@@ -152,7 +167,7 @@ export class PtyService {
       id,
       process: proc,
       projectId,
-      cwd: project.path,
+      cwd,
       shell,
       createdAt
     })
@@ -160,7 +175,7 @@ export class PtyService {
       type: 'create',
       terminalId: id,
       projectId,
-      cwd: project.path,
+      cwd,
       shell,
       pid: proc.pid,
       source: 'user_terminal',

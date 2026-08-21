@@ -199,6 +199,13 @@ export class GitState {
    */
   activeProjectId: string | null = $state(null)
 
+  /**
+   * The scope whose worktree (if any) the shared Git fields reflect. Keyed
+   * alongside the active project so one scope can never display another
+   * scope's state, and late responses for the prior target are suppressed.
+   */
+  activeScopeBucketId: string | null = $state(null)
+
   // Not reactive rendered data — a plain dedup registry for agent-event
   // subscriptions, so SvelteSet is the wrong tool here.
   // eslint-disable-next-line svelte/prefer-svelte-reactivity
@@ -225,10 +232,36 @@ export class GitState {
 
   /** Switch the panel to a project, dropping any leftover state from the
    *  previous one so stale data is never shown. */
-  activate(projectId: string): void {
-    if (this.activeProjectId === projectId) return
+  activate(projectId: string, scopeBucketId?: string): void {
+    if (this.activeProjectId === projectId && this.activeScopeBucketId === scopeBucketId) return
     this.activeProjectId = projectId
+    this.activeScopeBucketId = scopeBucketId ?? null
     this.clearProjectState()
+  }
+
+  /**
+   * Scope-sensitive activation: called when a thread moves between scopes
+   * while the Git panel stays open. Re-resolves status for the new root so
+   * sibling worktrees never display each other's state.
+   */
+  notifyScopeChanged(projectId: string, scopeBucketId: string): void {
+    this.activeProjectId = projectId
+    this.activeScopeBucketId = scopeBucketId
+    this.clearProjectState()
+    queueMicrotask(() => void this.refresh(projectId))
+  }
+
+  /** The scope-qualified Git target used by status reads. */
+  private statusTarget(projectId: string): [string, string | null] {
+    const project = this.activeProjectId === projectId ? this.activeScopeBucketId : null
+    return [projectId, project]
+  }
+
+  private async readStatus(projectId: string): Promise<GitStatus> {
+    const [id, scope] = this.statusTarget(projectId)
+    const status = await invoke('git:status', id, scope ?? undefined)
+    if (!status) throw new Error('Git status returned no result')
+    return status
   }
 
   /** Clear Git state when the active thread has no Git-capable project. */
@@ -244,11 +277,11 @@ export class GitState {
    * switched, app-restore). The store decides whether git tracking applies and
    * refreshes deterministically — no polling anywhere.
    */
-  notifyThreadOpened(project: Project | null): void {
+  notifyThreadOpened(project: Project | null, thread?: { scopeBucketId?: string } | null): void {
     if (!project || project.id === INBOX_PROJECT_ID) return
     if (project.source !== 'local' || project.changeTrackingMode !== 'git') return
     if (!project.path.trim()) return
-    this.activate(project.id)
+    this.activate(project.id, thread?.scopeBucketId ?? undefined)
     queueMicrotask(() => void this.refresh(project.id))
   }
 
@@ -533,7 +566,7 @@ export class GitState {
     this.error = null
     try {
       const [status, branches, identity, remotes, credentialStatus, stashes] = await Promise.all([
-        invoke('git:status', projectId),
+        this.readStatus(projectId),
         invoke('git:branches', projectId),
         invoke('git:getIdentity', projectId),
         invoke('git:remotes', projectId).catch(() => [] as GitRemoteInfo[]),
@@ -551,7 +584,7 @@ export class GitState {
       this.stashes = stashes
       // Conflicts mode is only meaningful while actual conflicts exist — once
       // they are all resolved the filter auto-closes, like the last-turn one.
-      if (status.conflicted.length === 0) this.conflictsMode = false
+      if (status && status.conflicted.length === 0) this.conflictsMode = false
       // Refresh the open-PR conflict indicator (cooldown-gated) so the header
       // badge stays current without a GitHub round trip on every mutation.
       void this.refreshPrConflictIndicators(projectId)
@@ -889,7 +922,7 @@ export class GitState {
     this.error = null
     try {
       const summary = await invoke('git:merge', projectId, target)
-      this.status = await invoke('git:status', projectId)
+      this.status = await this.readStatus(projectId)
       return summary
     } catch (reason) {
       this.error = errorMessage(reason, 'Merge failed')
@@ -904,7 +937,7 @@ export class GitState {
     this.error = null
     try {
       const summary = await invoke('git:rebase', projectId, target)
-      this.status = await invoke('git:status', projectId)
+      this.status = await this.readStatus(projectId)
       return summary
     } catch (reason) {
       this.error = errorMessage(reason, 'Rebase failed')

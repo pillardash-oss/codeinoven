@@ -876,7 +876,7 @@ export interface IpcInvokeContract {
   'editors:detect': Contract<[], EditorInfo[]>
   'editors:getPreferred': Contract<[], EditorId>
   'editors:setPreferred': Contract<[editorId: EditorId], void>
-  'git:status': Contract<[projectId: string], GitStatus>
+  'git:status': Contract<[projectId: string, scopeBucketId?: string], GitStatus>
   'git:diff': Contract<[projectId: string, relativePath: string, staged: boolean], GitDiff>
   'git:analyzeConflict': Contract<[projectId: string, relativePath: string], GitConflictAnalysis>
   'git:prepareConflictWorkFile': Contract<

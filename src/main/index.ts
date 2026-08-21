@@ -509,6 +509,7 @@ async function bootPostPaintServices(): Promise<void> {
     { ChatEngine },
     { ScopeManager },
     { ScopeRootResolver, scopeRootProvider },
+    { ScopeWorktreeService },
     { HarnessManifestService },
     { ComputerUsePipService },
     { UpdaterService },
@@ -521,6 +522,7 @@ async function bootPostPaintServices(): Promise<void> {
     import('./chat/chat-engine'),
     import('../lib/engines/scope-manager'),
     import('./workspaces/scope-root-resolver'),
+    import('./git/scope-worktree-service'),
     import('./agents/harness-manifest-service'),
     import('./utilities/computer-use-pip-service'),
     import('./notifications/updater-service'),
@@ -530,7 +532,12 @@ async function bootPostPaintServices(): Promise<void> {
 
   const projectManager = new ProjectManager(database)
   const scopeManager = new ScopeManager(database)
-  const scopeRootResolver = new ScopeRootResolver(projectManager, scopeManager)
+  const scopeWorktreeService = new ScopeWorktreeService(scopeManager, projectManager)
+  const scopeRootResolver = new ScopeRootResolver(
+    projectManager,
+    scopeManager,
+    scopeWorktreeService
+  )
   const projectFilesService = new ProjectFilesService(projectManager)
   appfileProjectFiles = projectFilesService
   computerUsePipService = new ComputerUsePipService(storage)
@@ -588,6 +595,7 @@ async function bootPostPaintServices(): Promise<void> {
     powerWakeService,
     retryScheduler,
     harnessManifestService,
+    worktreeService: scopeWorktreeService,
     threadCreation,
     threadDeletion,
     hydrationHandlersRegistered: true
@@ -633,7 +641,7 @@ async function bootPostPaintServices(): Promise<void> {
       import('./system/restart-recovery-service')
     ])
 
-    ptyService = new PtyService(storage, database)
+    ptyService = new PtyService(storage, database, scopeRootResolver)
     providerConnection = new ProviderConnectionService()
     harnessUpdateService = new HarnessUpdateService(providerConnection)
     harnessAutoUpdateService = new HarnessAutoUpdateService(storage)

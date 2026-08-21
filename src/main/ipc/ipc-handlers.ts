@@ -1769,6 +1769,8 @@ export interface RegisterIpcHandlersOptions {
   threadDeletion?: ThreadDeletionCoordinator
   /** Git-backed inspector shared with the managed worktree service. */
   worktreeInspector?: ManagedWorktreeInspector
+  /** Shared managed-worktree service; the resolver inspector falls back to it. */
+  worktreeService?: ScopeWorktreeService
 }
 
 export function registerIpcHandlers(
@@ -1785,7 +1787,8 @@ export function registerIpcHandlers(
   const threadDeletion = options.threadDeletion ?? new ThreadDeletionCoordinator()
   const checkpointManager = new CheckpointManager(database)
   const scopeManager = new ScopeManager(database)
-  const scopeWorktreeService = new ScopeWorktreeService(scopeManager, projectManager)
+  const scopeWorktreeService =
+    options.worktreeService ?? new ScopeWorktreeService(scopeManager, projectManager)
   const scopeRootResolver = new ScopeRootResolver(
     projectManager,
     scopeManager,
@@ -3962,13 +3965,27 @@ export function registerIpcHandlers(
   )
 
   // ─── Git management ─────────────────────────────────────────────────────
-  const resolveProjectPath = async (projectId: string): Promise<string> => {
+  const resolveProjectPath = async (projectId: string, scopeBucketId?: string): Promise<string> => {
+    // When a scope is supplied, resolve through the authoritative scope
+    // resolver so a managed worktree becomes this operation's repository
+    // root. Unhealthy managed scopes fail closed (never fall back to the
+    // project directory).
+    if (scopeBucketId) {
+      const scopeRoot = await scopeRoots.resolveCompatibilityRoot(projectId, scopeBucketId)
+      if (!scopeRoot) throw new Error(`Scope root unavailable: ${projectId}:${scopeBucketId}`)
+      return scopeRoot
+    }
     const project = await projectManager.getProject(projectId)
     if (!project?.path) throw new Error(`Project not found: ${projectId}`)
     return project.path
   }
-  ipcMain.handle('git:status', async (_, projectId: unknown) =>
-    gitService.getStatus(await resolveProjectPath(validateEntityId(projectId, 'Project ID')))
+  ipcMain.handle('git:status', async (_, projectId: unknown, scopeBucketId?: unknown) =>
+    gitService.getStatus(
+      await resolveProjectPath(
+        validateEntityId(projectId, 'Project ID'),
+        scopeBucketId === undefined ? undefined : validateEntityId(scopeBucketId, 'Scope bucket ID')
+      )
+    )
   )
   ipcMain.handle(
     'git:diff',
