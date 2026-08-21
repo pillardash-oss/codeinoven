@@ -9,11 +9,12 @@
     FolderKanban,
     GitBranch,
     History,
-    Library,
+    Info,
     Loader2,
     MessageSquare,
+    MessageSquareDashed,
     MoreVertical,
-    NotebookPen,
+    StickyNote,
     PanelLeft,
     Pencil,
     Pin,
@@ -31,6 +32,7 @@
   import BottomSheet from '$lib/components/ui/BottomSheet.svelte'
   import ActionSheet from '$lib/components/ui/ActionSheet.svelte'
   import type { MenuItem } from '$lib/components/shared/ThreadDropdown.svelte'
+  import MessageHistoryPanel from '$lib/components/shared/MessageHistoryPanel.svelte'
   import { mobileNotifications } from '$lib/remote/mobile-notifications.svelte'
   import { pwaInstall } from '$lib/remote/pwa-install.svelte'
   import { invoke, subscribe } from '$lib/ipc.svelte'
@@ -259,46 +261,51 @@
   }
 
   function headerMenuItems(): MenuItem[] {
-    const items: MenuItem[] = [
+    const thread = mobileState.selectedThread
+    return [
+      {
+        label: 'Git',
+        icon: GitBranch,
+        disabled: !thread || mobileState.chatMode,
+        onClick: () => (mobileState.gitOpen = true)
+      },
+      {
+        label: 'Notifications',
+        icon: Bell,
+        onClick: () => (mobileState.notificationsOpen = true)
+      },
       {
         label: 'Message history',
         icon: History,
-        disabled: mobileState.userMessages.length === 0,
         onClick: () => (mobileState.historyOpen = true)
+      },
+      {
+        label: 'Sources',
+        icon: Info,
+        disabled: !thread,
+        onClick: () => (mobileState.sourcesOpen = true)
       },
       {
         label: 'Memory',
         icon: BrainCircuit,
         onClick: () => (mobileState.memoryOpen = true)
       },
+      ...(mobileState.temporaryChatTabId
+        ? [
+            {
+              label: 'Temporary chat',
+              icon: MessageSquareDashed,
+              onClick: () => (mobileState.temporaryChatOpen = true)
+            }
+          ]
+        : []),
       {
-        label: 'Notifications',
-        icon: Bell,
-        onClick: () => (mobileState.notificationsOpen = true)
+        label: 'Notes',
+        icon: StickyNote,
+        disabled: !thread,
+        onClick: openNotes
       }
     ]
-    if (mobileState.selectedThread) {
-      if (!mobileState.chatMode) {
-        items.push({
-          label: 'Git',
-          icon: GitBranch,
-          onClick: () => (mobileState.gitOpen = true)
-        })
-      }
-      items.push(
-        {
-          label: 'Sources',
-          icon: Library,
-          onClick: () => (mobileState.sourcesOpen = true)
-        },
-        {
-          label: 'Notes',
-          icon: NotebookPen,
-          onClick: openNotes
-        }
-      )
-    }
-    return items
   }
 
   function threadDot(thread: Thread): string {
@@ -402,6 +409,15 @@
   class="mobile-shell flex w-full flex-col overflow-hidden bg-app text-foreground"
   style="height: {shellHeight}"
 >
+  <!-- Working indicator for a thread row in the sidebar: a spinner while the
+       thread is actively running, otherwise its status dot. -->
+  {#snippet threadStatusDot(item: Thread)}
+    {#if mobileState.isWorking(item)}
+      <Loader2 size={13} class="shrink-0 animate-spin text-thread-working" />
+    {:else}
+      <span class={`h-2 w-2 shrink-0 rounded-full ${threadDot(item)}`}></span>
+    {/if}
+  {/snippet}
   {#if deleteError}
     <div
       class="fixed left-1/2 top-[max(1rem,env(safe-area-inset-top))] z-60 flex w-[min(26rem,calc(100vw-2rem))] -translate-x-1/2 items-start gap-3 rounded-xl border border-danger/30 bg-surface px-4 py-3 text-sm text-danger shadow-xl"
@@ -557,21 +573,7 @@
     title="Your messages"
     onClose={() => (mobileState.historyOpen = false)}
   >
-    <div class="p-1.5">
-      {#each mobileState.userMessages as message, index (message.id)}
-        <button
-          type="button"
-          class="block w-full cursor-pointer truncate rounded-lg px-3 py-3 text-left text-[14px] text-muted transition-colors active:bg-elevated"
-          title={message.content}
-          onclick={() => historyJump(message.id, message.content)}
-        >
-          <span class="mr-1.5 tabular-nums text-dimmed">{index + 1}.</span>
-          {message.content}
-        </button>
-      {:else}
-        <p class="px-3 py-8 text-center text-[13px] text-dimmed">No messages yet</p>
-      {/each}
-    </div>
+    <MessageHistoryPanel messages={mobileState.userMessages} onSelect={historyJump} />
   </BottomSheet>
 
   <!-- Notifications sheet — the panel lazy-loads at open time. -->
@@ -609,7 +611,15 @@
         </p>
       {/if}
     </div>
-    {#await import('$lib/components/notifications/NotificationPanel.svelte') then { default: NotificationPanel }}
+    {#await import('$lib/components/notifications/NotificationPanel.svelte')}
+      <div
+        class="flex min-h-40 items-center justify-center gap-2 text-sm text-dimmed"
+        role="status"
+      >
+        <Loader2 size={16} class="animate-spin" />
+        Loading notifications…
+      </div>
+    {:then { default: NotificationPanel }}
       <NotificationPanel />
     {/await}
   </BottomSheet>
@@ -621,7 +631,15 @@
     onClose={() => (mobileState.memoryOpen = false)}
   >
     <div class="p-3">
-      {#await import('$lib/components/memory/MemoryPanel.svelte') then { default: MemoryPanel }}
+      {#await import('$lib/components/memory/MemoryPanel.svelte')}
+        <div
+          class="flex min-h-40 items-center justify-center gap-2 text-sm text-dimmed"
+          role="status"
+        >
+          <Loader2 size={16} class="animate-spin" />
+          Loading memory…
+        </div>
+      {:then { default: MemoryPanel }}
         <MemoryPanel
           variant="sidebar"
           projectId={mobileState.selectedThread?.projectId ?? mobileState.selectedProject?.id}
@@ -632,6 +650,29 @@
     </div>
   </BottomSheet>
 
+  <!-- Temporary (explain / quick) chat sheet — opened from the conversation's
+       selection popover or the header overflow menu. -->
+  {#if mobileState.temporaryChatTabId && contextSidebarState.temporaryChatTab(mobileState.temporaryChatTabId)}
+    <BottomSheet
+      open={mobileState.temporaryChatOpen}
+      title="Temporary chat"
+      onClose={() => (mobileState.temporaryChatOpen = false)}
+      fixedHeight
+    >
+      {#await import('$lib/components/chats/TemporaryChatView.svelte')}
+        <div
+          class="flex h-full items-center justify-center gap-2 text-sm text-dimmed"
+          role="status"
+        >
+          <Loader2 size={16} class="animate-spin" />
+          Loading chat…
+        </div>
+      {:then { default: TemporaryChatView }}
+        <TemporaryChatView tabId={mobileState.temporaryChatTabId} />
+      {/await}
+    </BottomSheet>
+  {/if}
+
   <!-- Git sheet — the desktop panel lazy-loads at open time. -->
   {#if mobileState.selectedThread && !mobileState.chatMode}
     <BottomSheet
@@ -640,7 +681,15 @@
       onClose={() => (mobileState.gitOpen = false)}
       fixedHeight
     >
-      {#await import('$lib/components/git/GitStatusPanel.svelte') then { default: GitStatusPanel }}
+      {#await import('$lib/components/git/GitStatusPanel.svelte')}
+        <div
+          class="flex h-full items-center justify-center gap-2 text-sm text-dimmed"
+          role="status"
+        >
+          <Loader2 size={16} class="animate-spin" />
+          Loading Git…
+        </div>
+      {:then { default: GitStatusPanel }}
         <GitStatusPanel
           projectId={mobileState.selectedThread?.projectId ?? ''}
           threadId={mobileState.selectedThread?.id ?? ''}
@@ -657,8 +706,24 @@
       onClose={() => (mobileState.sourcesOpen = false)}
       fixedHeight
     >
-      {#await import('$lib/components/threads/SourcesPanel.svelte') then { default: SourcesPanel }}
-        {#await import('$lib/agent-sources') then { collectAgentSources }}
+      {#await import('$lib/components/threads/SourcesPanel.svelte')}
+        <div
+          class="flex h-full items-center justify-center gap-2 text-sm text-dimmed"
+          role="status"
+        >
+          <Loader2 size={16} class="animate-spin" />
+          Loading sources…
+        </div>
+      {:then { default: SourcesPanel }}
+        {#await import('$lib/agent-sources')}
+          <div
+            class="flex h-full items-center justify-center gap-2 text-sm text-dimmed"
+            role="status"
+          >
+            <Loader2 size={16} class="animate-spin" />
+            Loading sources…
+          </div>
+        {:then { collectAgentSources }}
           <SourcesPanel
             sources={collectAgentSources(
               threadMessages.messages(
@@ -683,7 +748,15 @@
       fixedHeight
     >
       {#if mobileNoteTab}
-        {#await import('$lib/components/threads/ThreadNotePanel.svelte') then { default: ThreadNotePanel }}
+        {#await import('$lib/components/threads/ThreadNotePanel.svelte')}
+          <div
+            class="flex h-full items-center justify-center gap-2 text-sm text-dimmed"
+            role="status"
+          >
+            <Loader2 size={16} class="animate-spin" />
+            Loading note…
+          </div>
+        {:then { default: ThreadNotePanel }}
           <ThreadNotePanel tab={mobileNoteTab} />
         {/await}
       {:else}
@@ -789,8 +862,7 @@
                   onclick={() => void mobileState.openThread(result.thread)}
                 >
                   <span class="flex min-w-0 items-center gap-2">
-                    <span class={`h-2 w-2 shrink-0 rounded-full ${threadDot(result.thread)}`}
-                    ></span>
+                    {@render threadStatusDot(result.thread)}
                     <span class="min-w-0 flex-1 truncate text-[13px] text-foreground">
                       {result.thread.title}
                     </span>
@@ -842,7 +914,7 @@
                     title={thread.title}
                     onclick={() => void mobileState.openThread(thread)}
                   >
-                    <span class={`h-2 w-2 shrink-0 rounded-full ${threadDot(thread)}`}></span>
+                    {@render threadStatusDot(thread)}
                     <span class="min-w-0 flex-1 truncate text-[13px] text-foreground">
                       {thread.title}
                     </span>
@@ -885,7 +957,7 @@
                     {project.name}
                   </span>
                   {#if working}
-                    <span class="h-1.5 w-1.5 shrink-0 rounded-full bg-thread-working"></span>
+                    <Loader2 size={13} class="shrink-0 animate-spin text-thread-working" />
                   {/if}
                   <ChevronDown
                     size={14}
@@ -917,7 +989,7 @@
                         title={thread.title}
                         onclick={() => void mobileState.openThread(thread)}
                       >
-                        <span class={`h-2 w-2 shrink-0 rounded-full ${threadDot(thread)}`}></span>
+                        {@render threadStatusDot(thread)}
                         <span class="min-w-0 flex-1 truncate text-[13px] text-foreground">
                           {thread.title}
                         </span>
@@ -998,7 +1070,7 @@
                   {#if iconUrl}
                     <img src={iconUrl} alt="" class="h-3.5 w-3.5 shrink-0 rounded object-contain" />
                   {/if}
-                  <span class={`h-2 w-2 shrink-0 rounded-full ${threadDot(thread)}`}></span>
+                  {@render threadStatusDot(thread)}
                   <span class="min-w-0 flex-1 truncate text-[13px] text-foreground">
                     {thread.title}
                   </span>
@@ -1036,7 +1108,7 @@
                   title={thread.title}
                   onclick={() => void mobileState.openThread(thread)}
                 >
-                  <span class={`h-2 w-2 shrink-0 rounded-full ${threadDot(thread)}`}></span>
+                  {@render threadStatusDot(thread)}
                   <span class="min-w-0 flex-1 truncate text-[13px] text-foreground">
                     {thread.title}
                   </span>
@@ -1099,7 +1171,9 @@
           <button
             type="button"
             class="flex h-11 w-11 shrink-0 cursor-pointer items-center justify-center rounded-xl bg-primary text-on-primary transition-colors active:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-40"
-            aria-label={activeThreadProject ? `New thread in ${activeThreadProject.name}` : 'New thread'}
+            aria-label={activeThreadProject
+              ? `New thread in ${activeThreadProject.name}`
+              : 'New thread'}
             title={activeThreadProject ? `New thread in ${activeThreadProject.name}` : 'New thread'}
             disabled={!activeThreadProject}
             onclick={() => {
