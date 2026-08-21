@@ -221,17 +221,21 @@ export function validateScopeWorktreeCreateInput(value: unknown): {
   title: string
   runSetup: boolean
   environmentMode: import('../../lib/types').ScopeEnvironmentMode
+  baseBranch?: string
 } {
   const input = assertRecord(value, 'Scope worktree create input')
   rejectUnknownFields(
     input,
-    new Set(['title', 'runSetup', 'environmentMode']),
+    new Set(['title', 'runSetup', 'environmentMode', 'baseBranch']),
     'scope worktree create input'
   )
   return {
     title: validateBoundedString(input.title, 'Scope title', 1, 120),
     runSetup: validateBoolean(input.runSetup, 'Run setup'),
-    environmentMode: validateEnvironmentMode(input.environmentMode)
+    environmentMode: validateEnvironmentMode(input.environmentMode),
+    ...(input.baseBranch === undefined
+      ? {}
+      : { baseBranch: validateBranchName(input.baseBranch, 'Source branch') })
   }
 }
 

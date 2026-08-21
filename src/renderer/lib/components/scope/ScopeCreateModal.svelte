@@ -25,6 +25,7 @@
   let runSetup = $state(true)
   let environmentMode = $state<'copy' | 'symlink'>('copy')
   let setupCommands = $state<ScopeSetupCommandSpec[]>([])
+  let baseBranch = $state('')
   let error = $state<string | null>(null)
   let busy = $state(false)
 
@@ -38,6 +39,7 @@
       runSetup = true
       environmentMode = 'copy'
       setupCommands = []
+      baseBranch = ''
     }
   })
 
@@ -73,7 +75,8 @@
         await scopeState.createWorktree(projectId, bucketId, {
           title: trimmed,
           runSetup,
-          environmentMode
+          environmentMode,
+          ...(baseBranch.trim() ? { baseBranch: baseBranch.trim() } : {})
         })
       }
       if (setupCommands.length > 0) {
@@ -135,6 +138,16 @@
           <div class="flex items-center gap-1.5 text-xs text-muted">
             <GitBranch size={13} />
             <code>{previewBranch()}</code>
+          </div>
+          <div class="mt-1.5 flex items-center gap-1.5 text-xs text-muted">
+            <label for={`${componentId}-base-branch`} class="shrink-0">Source branch</label>
+            <input
+              id={`${componentId}-base-branch`}
+              class="min-w-0 flex-1 rounded-md border bg-elevated px-2 py-1 text-xs text-foreground"
+              placeholder="Current branch (default)"
+              title="Existing branch the worktree forks from; leave empty to fork from the current branch"
+              bind:value={baseBranch}
+            />
           </div>
           <p class="text-xs text-dimmed">
             Worktree folder: <code

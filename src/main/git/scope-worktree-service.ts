@@ -271,10 +271,18 @@ export class ScopeWorktreeService implements ManagedWorktreeInspector {
    * Create a managed worktree and persist the scope association. Safe for
    * concurrent invocation: the per-project queue serializes mutations, and a
    * crash midway preserves the registered worktree for recovery.
+   *
+   * The worktree branches from `input.baseBranch` when supplied, otherwise
+   * from the currently checked-out branch.
    */
   async createManagedWorktree(
     target: ScopeTarget,
-    input: { title: string; runSetup: boolean; environmentMode: ScopeEnvironmentMode },
+    input: {
+      title: string
+      runSetup: boolean
+      environmentMode: ScopeEnvironmentMode
+      baseBranch?: string
+    },
     progress?: (event: ScopeWorktreeProgress) => void
   ): Promise<ManagedWorktreeDescriptor> {
     return this.enqueue(target.projectId, async () => {
@@ -295,7 +303,12 @@ export class ScopeWorktreeService implements ManagedWorktreeInspector {
         )
       }
 
-      const { branch: baseBranch, commit: baseCommit } = await this.currentBranchAndCommit(repoPath)
+      const baseRef = input.baseBranch?.trim() || undefined
+      const base =
+        baseRef === undefined
+          ? await this.currentBranchAndCommit(repoPath)
+          : await this.branchToCommit(repoPath, baseRef)
+
       const {
         directoryName,
         branch: createdBranch,
@@ -304,7 +317,7 @@ export class ScopeWorktreeService implements ManagedWorktreeInspector {
 
       progress?.({ stage: 'creating-worktree', detail: createdBranch })
       await ensureParentDir(path)
-      await runGit(['worktree', 'add', '-b', createdBranch, path, baseCommit], {
+      await runGit(['worktree', 'add', '-b', createdBranch, path, base.commit], {
         cwd: repoPath,
         timeoutMs: 120_000
       }).catch(async (error) => {
@@ -324,8 +337,8 @@ export class ScopeWorktreeService implements ManagedWorktreeInspector {
         kind: 'worktree',
         directoryName,
         branch: createdBranch,
-        baseBranch,
-        baseCommit,
+        baseBranch: base.branch,
+        baseCommit: base.commit,
         createdAt: Date.now(),
         environmentMode: input.environmentMode,
         setup: { state: 'not_run', commands: [] }
@@ -342,6 +355,25 @@ export class ScopeWorktreeService implements ManagedWorktreeInspector {
       progress?.({ stage: 'done' })
       return descriptor
     })
+  }
+
+  /** Resolve a named source branch to its checked-out commit, or fail loudly. */
+  private async branchToCommit(
+    repoPath: string,
+    branch: string
+  ): Promise<{ branch: string; commit: string }> {
+    const ref = /^refs\//u.test(branch) ? branch : `refs/heads/${branch}`
+    const commit = await runGit(['rev-parse', '--verify', `${ref}^{commit}`], {
+      cwd: repoPath
+    })
+      .catch(() => {
+        throw new Error(`Source branch does not exist: ${branch}`)
+      })
+      .then((output) => output.trim())
+    if (!/^[0-9a-f]{7,64}$/iu.test(commit)) {
+      throw new Error(`Source branch does not exist: ${branch}`)
+    }
+    return { branch, commit }
   }
 
   /**

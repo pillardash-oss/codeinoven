@@ -1286,6 +1286,8 @@ export interface IpcInvokeContract {
         title: string
         runSetup: boolean
         environmentMode: ScopeEnvironmentMode
+        /** Source branch the worktree forks from; defaults to the current branch. */
+        baseBranch?: string
       }
     ],
     ManagedWorktreeDescriptor
