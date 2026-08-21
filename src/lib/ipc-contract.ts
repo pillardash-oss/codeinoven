@@ -1390,10 +1390,10 @@ export interface IpcInvokeContract {
     ProjectTextFile
   >
   'providers:check': Contract<[providerId: string], ProviderConnectionInfo>
-  'providers:checkAll': Contract<[], ProviderConnectionInfo[]>
+  'providers:checkAll': Contract<[force?: boolean], ProviderConnectionInfo[]>
   'providers:getStatus': Contract<[], ProviderConnectionInfo[]>
   'harnessUpdates:check': Contract<[harnessId: string], HarnessUpdateStatus>
-  'harnessUpdates:checkAll': Contract<[], HarnessUpdateStatus[]>
+  'harnessUpdates:checkAll': Contract<[force?: boolean], HarnessUpdateStatus[]>
   'harnessUpdates:handoff': Contract<[harnessId: string], HarnessUpdateHandoff>
   'harnessInstall:getInfo': Contract<[harnessId: string], HarnessInstallInfo>
   'harnessUninstall:handoff': Contract<[harnessId: string], HarnessUninstallHandoff>

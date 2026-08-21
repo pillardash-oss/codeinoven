@@ -17,6 +17,8 @@ import { buildProcessEnvironment } from '../drivers/cli-environment'
 import { antigravityModelSlugs } from '../drivers/antigravity-model-output'
 
 const STATUS_TIMEOUT_MS = 10_000
+/** Status commands should emit a small response. Stop broken CLIs before they consume RAM. */
+const STATUS_OUTPUT_MAX_BYTES = 64 * 1024
 const ANSI_PATTERN = new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*m`, 'gu')
 /** Cline keeps provider/API-key state in JSON; the CLI has no status subcommand. */
 const CLINE_SETTINGS_DIR = join(homedir(), '.cline', 'data', 'settings')
@@ -197,23 +199,42 @@ async function readAntigravityStatus(): Promise<HarnessAuthStatus> {
       })
       let stdout = ''
       let stderr = ''
+      let outputBytes = 0
+      let settled = false
+      const finish = (result: { succeeded: boolean; stdout: string; stderr: string }) => {
+        if (settled) return
+        settled = true
+        clearTimeout(timer)
+        resolve(result)
+      }
+      const append = (current: string, chunk: Buffer): string => {
+        outputBytes += chunk.byteLength
+        if (outputBytes > STATUS_OUTPUT_MAX_BYTES) {
+          child.kill()
+          finish({
+            succeeded: false,
+            stdout,
+            stderr: 'Authentication status probe produced too much output.'
+          })
+          return current
+        }
+        return current + chunk.toString()
+      }
       const timer = setTimeout(() => {
         child.kill()
-        resolve({ succeeded: false, stdout, stderr })
+        finish({ succeeded: false, stdout, stderr })
       }, STATUS_TIMEOUT_MS)
       child.stdout?.on('data', (chunk: Buffer) => {
-        stdout += chunk.toString()
+        stdout = append(stdout, chunk)
       })
       child.stderr?.on('data', (chunk: Buffer) => {
-        stderr += chunk.toString()
+        stderr = append(stderr, chunk)
       })
       child.on('error', (error) => {
-        clearTimeout(timer)
-        resolve({ succeeded: false, stdout, stderr: error.message })
+        finish({ succeeded: false, stdout, stderr: error.message })
       })
       child.on('exit', (code) => {
-        clearTimeout(timer)
-        resolve({ succeeded: code === 0, stdout, stderr })
+        finish({ succeeded: code === 0, stdout, stderr })
       })
     }
   )
@@ -508,6 +529,8 @@ const AUTH_DEFINITIONS: AuthDefinition[] = [
  * a harness credential store on its own.
  */
 export class ProviderAccountOrchestrator {
+  private statusQueueTail: Promise<void> = Promise.resolve()
+
   capabilities(harnessId: string): HarnessAuthCapabilities | null {
     const definition = this.definition(harnessId)
     if (!definition) return null
@@ -519,24 +542,26 @@ export class ProviderAccountOrchestrator {
   }
 
   async getStatus(harnessId: string, projectPath?: string): Promise<HarnessAuthStatus> {
-    const definition = this.requireDefinition(harnessId)
-    if (definition.readStatus) {
-      return definition.readStatus(projectPath)
-    }
-    const result = await this.run(definition.command, definition.statusArgs ?? [], projectPath)
-    if (!definition.parseStatus) {
-      return {
-        state: 'error',
-        accounts: [],
-        detail: `Status parsing is not implemented for harness: ${harnessId}`
+    return this.enqueueStatus(async () => {
+      const definition = this.requireDefinition(harnessId)
+      if (definition.readStatus) {
+        return definition.readStatus(projectPath)
       }
-    }
-    const output = result.stdout.trim() || result.stderr.trim()
-    const status = definition.parseStatus(output, result.succeeded)
-    if (status.state === 'error' && result.error) {
-      return { ...status, detail: result.error }
-    }
-    return status
+      const result = await this.run(definition.command, definition.statusArgs ?? [], projectPath)
+      if (!definition.parseStatus) {
+        return {
+          state: 'error',
+          accounts: [],
+          detail: `Status parsing is not implemented for harness: ${harnessId}`
+        }
+      }
+      const output = result.stdout.trim() || result.stderr.trim()
+      const status = definition.parseStatus(output, result.succeeded)
+      if (status.state === 'error' && result.error) {
+        return { ...status, detail: result.error }
+      }
+      return status
+    })
   }
 
   beginLogin(harnessId: string, options: HarnessLoginOptions = {}): HarnessLoginHandoff {
@@ -688,7 +713,7 @@ export class ProviderAccountOrchestrator {
           ...(cwd ? { cwd } : {}),
           env: buildProcessEnvironment(),
           timeout: STATUS_TIMEOUT_MS,
-          maxBuffer: 1024 * 1024
+          maxBuffer: STATUS_OUTPUT_MAX_BYTES
         },
         (error, stdout, stderr) => {
           resolve({
@@ -700,5 +725,15 @@ export class ProviderAccountOrchestrator {
         }
       )
     })
+  }
+
+  /** Serialize status reads and CLI probes across every renderer caller. */
+  private enqueueStatus<T>(task: () => Promise<T>): Promise<T> {
+    const preceding = this.statusQueueTail
+    let release: () => void = () => undefined
+    this.statusQueueTail = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    return preceding.then(task).finally(release)
   }
 }

@@ -6,6 +6,10 @@ import { Logger } from '../system/logger'
 
 /** Network timeout for a registry/release lookup — a slow network must never hang the UI. */
 const FETCH_TIMEOUT_MS = 10_000
+/** Reopening the Harnesses page should not repeat the same registry traffic. */
+const UPDATE_CACHE_TTL_MS = 5 * 60_000
+/** Leave room for Electron's main loop between registry requests. */
+const UPDATE_YIELD_MS = 50
 
 /** Npm registry and GitHub release endpoints, matching the harness's install channel. */
 interface NpmSource {
@@ -119,11 +123,15 @@ function idleStatus(harnessId: string): HarnessUpdateStatus {
  */
 export class HarnessUpdateService {
   private results = new Map<string, HarnessUpdateStatus>()
+  private lastCheckedAt = 0
+  private checkAllInFlight: Promise<HarnessUpdateStatus[]> | null = null
+  private checkOneInFlight = new Map<string, Promise<HarnessUpdateStatus>>()
+  private lookupQueueTail: Promise<void> = Promise.resolve()
 
   constructor(private providers: ProviderConnectionService) {}
 
   register(): void {
-    ipcMain.handle('harnessUpdates:checkAll', () => this.checkAll())
+    ipcMain.handle('harnessUpdates:checkAll', (_, force?: unknown) => this.checkAll(force === true))
     ipcMain.handle('harnessUpdates:check', (_, rawHarnessId: unknown) =>
       this.checkOne(this.harnessId(rawHarnessId))
     )
@@ -137,12 +145,44 @@ export class HarnessUpdateService {
     return listHarnesses().map((harness) => this.results.get(harness.id) ?? idleStatus(harness.id))
   }
 
-  async checkAll(): Promise<HarnessUpdateStatus[]> {
-    const results = await Promise.all(listHarnesses().map((harness) => this.checkOne(harness.id)))
-    return results
+  async checkAll(force = false): Promise<HarnessUpdateStatus[]> {
+    if (!force && Date.now() - this.lastCheckedAt < UPDATE_CACHE_TTL_MS) return this.getAll()
+    if (this.checkAllInFlight) return this.checkAllInFlight
+
+    const check = this.runCheckAll()
+    this.checkAllInFlight = check
+    try {
+      return await check
+    } finally {
+      this.checkAllInFlight = null
+    }
   }
 
   async checkOne(harnessId: string): Promise<HarnessUpdateStatus> {
+    const active = this.checkOneInFlight.get(harnessId)
+    if (active) return active
+
+    const check = this.runCheckOne(harnessId)
+    this.checkOneInFlight.set(harnessId, check)
+    try {
+      return await check
+    } finally {
+      this.checkOneInFlight.delete(harnessId)
+    }
+  }
+
+  private async runCheckAll(): Promise<HarnessUpdateStatus[]> {
+    const results: HarnessUpdateStatus[] = []
+    const harnesses = listHarnesses()
+    for (const [index, harness] of harnesses.entries()) {
+      results.push(await this.checkOne(harness.id))
+      if (index < harnesses.length - 1) await this.yieldToMainLoop()
+    }
+    this.lastCheckedAt = Date.now()
+    return results
+  }
+
+  private async runCheckOne(harnessId: string): Promise<HarnessUpdateStatus> {
     const provider = this.providers.getAll().find((candidate) => candidate.id === harnessId)
     const base = idleStatus(harnessId)
     if (!provider || provider.status !== 'available') {
@@ -166,7 +206,7 @@ export class HarnessUpdateService {
 
     let latestVersion: string | undefined
     try {
-      latestVersion = await fetchLatest(source)
+      latestVersion = await this.enqueueLookup(() => fetchLatest(source))
     } catch (error) {
       Logger.dev(`[harness-update] ${harnessId} lookup failed:`, error)
       return this.settle(harnessId, {
@@ -225,5 +265,19 @@ export class HarnessUpdateService {
     const finalized = { ...status, checkedAt: Date.now() }
     this.results.set(harnessId, finalized)
     return finalized
+  }
+
+  private yieldToMainLoop(): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, UPDATE_YIELD_MS))
+  }
+
+  /** Serialize registry traffic even when windows or row actions overlap. */
+  private enqueueLookup<T>(task: () => Promise<T>): Promise<T> {
+    const preceding = this.lookupQueueTail
+    let release: () => void = () => undefined
+    this.lookupQueueTail = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    return preceding.then(task).finally(release)
   }
 }
