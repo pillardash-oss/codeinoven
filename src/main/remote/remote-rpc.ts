@@ -37,6 +37,7 @@ import {
 } from '../../lib/remote-rpc'
 import { DeviceCredentialService, sha256Hex } from './device-credential-service'
 import { ScopeManager } from '../../lib/engines/scope-manager'
+import { ScopeWorktreeService } from '../git/scope-worktree-service'
 import {
   SpecEngine,
   type NewSpecProvenance,
@@ -67,7 +68,9 @@ import {
   validateScopeCollapsePatch,
   validateScopeCreateInput,
   validateScopeOrderIds,
-  validateScopeSlice
+  validateScopeSlice,
+  validateScopeTarget,
+  validateWorktreeDefaults
 } from '../ipc/ipc-validation'
 import type {
   AgentCapabilitySource,
@@ -207,6 +210,7 @@ export class RemoteRpcDispatcher {
   private readonly projectManager: ProjectManager
   private readonly projectFilesService: ProjectFilesService
   private readonly scopeManager: ScopeManager
+  private readonly scopeWorktreeService: ScopeWorktreeService
   private readonly specEngine: SpecEngine
   private readonly brainstormEngine: BrainstormEngine
   private readonly auditEngine: AuditEngine
@@ -248,6 +252,7 @@ export class RemoteRpcDispatcher {
     this.projectManager = services.projectManager ?? new ProjectManager(services.database)
     this.projectFilesService = new ProjectFilesService(this.projectManager)
     this.scopeManager = new ScopeManager(services.database)
+    this.scopeWorktreeService = new ScopeWorktreeService(this.scopeManager, this.projectManager)
     this.specEngine = new SpecEngine(this.storage, services.database, {
       validateForApproval: validateEngineeringSpec
     })
@@ -818,6 +823,13 @@ export class RemoteRpcDispatcher {
         )
       case 'scope:delete':
         return this.scopeManager.deleteBucket(this.string(args[0]), this.string(args[1]))
+      case 'scope:setWorktreeDefaults':
+        return this.scopeManager.setWorktreeDefaults(
+          this.string(args[0]),
+          validateWorktreeDefaults(args[1])
+        )
+      case 'scope:worktree:health':
+        return this.scopeWorktreeService.health(validateScopeTarget(args[0]))
 
       // ─── Agent chat surface ─────────────────────────────────────────────
       case 'agent:loadMessages':

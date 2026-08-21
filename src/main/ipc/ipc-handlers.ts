@@ -95,8 +95,13 @@ import {
   validateScopeAppearancePatch,
   validateScopeCollapsePatch,
   validateScopeCreateInput,
+  validateScopeLifecycleAction,
   validateScopeOrderIds,
   validateScopeSlice,
+  validateScopeTarget,
+  validateScopeWorktreeCreateInput,
+  validateConfirmationToken,
+  validateWorktreeDefaults,
   validateStashMessage,
   validateStashId,
   validateThreadSettings,
@@ -109,6 +114,7 @@ import {
 import { ProjectManager } from '../../lib/engines/project-manager'
 import { ThreadManager } from '../../lib/engines/thread-manager'
 import { ScopeManager } from '../../lib/engines/scope-manager'
+import { ScopeWorktreeService } from '../git/scope-worktree-service'
 import {
   ScopeRootResolver,
   scopeRootProvider,
@@ -142,7 +148,7 @@ import {
 import { validateEngineeringSpec } from '../../lib/spec/spec-validation'
 import { parseGeneratedBrainstormContent } from '../../lib/brainstorm/brainstorm-validation'
 import { exportBrainstormMarkdown } from '../../lib/brainstorm/brainstorm-markdown'
-import { atomicWrite, getConfigRoot } from '../../lib/utils'
+import { atomicWrite, getConfigRoot, getScopeRootPath } from '../../lib/utils'
 import { PROJECT_DATA_DIRECTORY } from '../../lib/project-artifacts'
 import { normalizeWorkerNames } from '../../lib/assignment/worker-names'
 import { retainTemporaryAttachment } from '../editor/temporary-attachment-retention'
@@ -1770,10 +1776,11 @@ export function registerIpcHandlers(
   const threadDeletion = options.threadDeletion ?? new ThreadDeletionCoordinator()
   const checkpointManager = new CheckpointManager(database)
   const scopeManager = new ScopeManager(database)
+  const scopeWorktreeService = new ScopeWorktreeService(scopeManager, projectManager)
   const scopeRootResolver = new ScopeRootResolver(
     projectManager,
     scopeManager,
-    options.worktreeInspector
+    options.worktreeInspector ?? scopeWorktreeService
   )
   const scopeRoots = scopeRootProvider(scopeRootResolver)
   const threadManager = new ThreadManager(
@@ -1824,10 +1831,32 @@ export function registerIpcHandlers(
     navigationTargets: appRendererNavigationTargets(),
     allowDevelopmentHttp: !isProduction,
     scopes: {
-      projectRoots: async () =>
-        (await projectManager.listProjects())
+      projectRoots: async () => {
+        const projects = await projectManager.listProjects()
+        const roots = projects
           .map((project) => project.path)
-          .filter((path): path is string => typeof path === 'string' && path.length > 0),
+          .filter((path): path is string => typeof path === 'string' && path.length > 0)
+        // Healthy managed worktrees live beneath the config root and are added
+        // individually — never by approving the whole config directory.
+        for (const project of projects) {
+          const board = scopeManager.getBoard(project.id)
+          for (const bucket of board.buckets) {
+            if (bucket.root.kind !== 'worktree') continue
+            try {
+              const health = await scopeWorktreeService.health({
+                projectId: project.id,
+                scopeBucketId: bucket.id
+              })
+              if (health.category === 'healthy') {
+                roots.push(getScopeRootPath(project.id, bucket.root.directoryName))
+              }
+            } catch {
+              // Unhealthy managed roots grant no filesystem scope.
+            }
+          }
+        }
+        return roots
+      },
       appArtifactRoots: async () => {
         const projects = await projectManager.listProjects()
         return [
@@ -3591,6 +3620,55 @@ export function registerIpcHandlers(
       validateEntityId(bucketId, 'Scope bucket ID')
     )
   )
+  ipcMain.handle('scope:setWorktreeDefaults', (_, projectId: unknown, defaults: unknown) =>
+    scopeManager.setWorktreeDefaults(
+      validateEntityId(projectId, 'Project ID'),
+      validateWorktreeDefaults(defaults)
+    )
+  )
+  ipcMain.handle('scope:worktree:create', (_, target: unknown, input: unknown) => {
+    const validatedTarget = validateScopeTarget(target)
+    const validatedInput = validateScopeWorktreeCreateInput(input)
+    return scopeWorktreeService.createManagedWorktree(validatedTarget, validatedInput)
+  })
+  ipcMain.handle('scope:worktree:health', (_, target: unknown) =>
+    scopeWorktreeService.health(validateScopeTarget(target))
+  )
+  ipcMain.handle('scope:worktree:preflight', (_, action: unknown, target: unknown) =>
+    scopeWorktreeService.preflight(
+      validateScopeLifecycleAction(action),
+      validateScopeTarget(target)
+    )
+  )
+  ipcMain.handle('scope:worktree:confirmDetach', (_, target: unknown, confirmationId: unknown) =>
+    scopeWorktreeService.confirmDetach(
+      validateScopeTarget(target),
+      validateConfirmationToken(confirmationId)
+    )
+  )
+  ipcMain.handle(
+    'scope:worktree:confirmRemove',
+    (_, target: unknown, confirmationId: unknown, force: unknown) =>
+      scopeWorktreeService.confirmRemoveWorktree(
+        validateScopeTarget(target),
+        validateConfirmationToken(confirmationId),
+        validateBoolean(force, 'Force')
+      )
+  )
+  ipcMain.handle(
+    'scope:worktree:confirmDeleteBranch',
+    (_, target: unknown, confirmationId: unknown) =>
+      scopeWorktreeService.confirmDeleteBranch(
+        validateScopeTarget(target),
+        validateConfirmationToken(confirmationId)
+      )
+  )
+  ipcMain.handle('scope:worktree:retrySetup', (_, target: unknown, options: unknown) => {
+    const validatedTarget = validateScopeTarget(target)
+    const input = options === undefined ? undefined : (options as Record<string, unknown>)
+    const runSetup = input === undefined ? true : validateBoolean(input.runSetup, 'Run setup')
+    return scopeWorktreeService.runSetupFromFailure(validatedTarget, { runSetup })
+  })
   ipcMain.handle(
     'project:update',
     async (_, projectId: string, input: Partial<CreateProjectInput>) => {
@@ -3612,6 +3690,16 @@ export function registerIpcHandlers(
       for (const thread of threads) {
         await chatEngine.deleteThreadSession(projectId, thread.id)
       }
+    }
+    // Never orphan a registered managed worktree silently: refuse deletion
+    // until every managed association in this project is detached/removed
+    // through the guarded lifecycle (dirty and unpushed work is protected).
+    const board = scopeManager.getBoard(projectId)
+    const managedBuckets = board.buckets.filter((bucket) => bucket.root.kind === 'worktree')
+    if (managedBuckets.length > 0) {
+      throw new Error(
+        `Cannot delete the project while ${managedBuckets.length} managed worktree scope(s) exist; remove them first`
+      )
     }
     await projectManager.deleteProject(projectId)
     projectFilesService.disposeProject(projectId)

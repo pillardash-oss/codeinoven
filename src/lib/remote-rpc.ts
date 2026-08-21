@@ -94,6 +94,8 @@ export const REMOTE_ALLOWED_CHANNELS: readonly string[] = [
   'scope:updateCollapse',
   'scope:create',
   'scope:setArchive',
+  'scope:setWorktreeDefaults',
+  'scope:worktree:health',
   'scope:delete',
   // Agent chat surface
   'agent:loadMessages',
@@ -385,6 +387,8 @@ export const REMOTE_CHANNEL_AUTHORIZATION: Readonly<Record<string, RemoteChannel
   'scope:create': { scope: 'workspace.write', stepUp: 'none' },
   'scope:setArchive': { scope: 'workspace.write', stepUp: 'none' },
   'scope:delete': { scope: 'workspace.delete', stepUp: 'none' },
+  'scope:setWorktreeDefaults': { scope: 'workspace.write', stepUp: 'none' },
+  'scope:worktree:health': { scope: 'workspace.read', stepUp: 'none' },
   'note:get': { scope: 'workspace.read', stepUp: 'none' },
   'note:list': { scope: 'workspace.read', stepUp: 'none' },
   'attachment:readRemoteChunk': { scope: 'conversation.read', stepUp: 'none' },

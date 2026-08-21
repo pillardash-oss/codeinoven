@@ -115,6 +115,13 @@ import type {
   ScopeAppearancePatch,
   ScopeCollapsePatch,
   ScopeCreateInput,
+  ScopeEnvironmentMode,
+  ScopeLifecycleAction,
+  ScopeLifecyclePreflight,
+  ScopeTarget,
+  ScopeWorktreeDefaults,
+  ScopeWorktreeHealth,
+  ManagedWorktreeDescriptor,
   ScopeSlice,
   SpecContextReference,
   SpecDecisionAction,
@@ -1254,6 +1261,47 @@ export interface IpcInvokeContract {
   >
   'scope:setArchive': Contract<[projectId: string, bucketId: string, archived: boolean], ScopeBoard>
   'scope:delete': Contract<[projectId: string, bucketId: string], ScopeBoard>
+  /** Create an isolated managed worktree and attach it to a scope. */
+  'scope:worktree:create': Contract<
+    [
+      target: ScopeTarget,
+      input: {
+        title: string
+        runSetup: boolean
+        environmentMode: ScopeEnvironmentMode
+      }
+    ],
+    ManagedWorktreeDescriptor
+  >
+  /** Refresh the typed health state of a managed scope. */
+  'scope:worktree:health': Contract<[target: ScopeTarget], ScopeWorktreeHealth>
+  /** Compute a state-bound preflight and mint a single-use confirmation token. */
+  'scope:worktree:preflight': Contract<
+    [action: ScopeLifecycleAction, target: ScopeTarget, options?: { scopeBucketId?: string }],
+    ScopeLifecyclePreflight
+  >
+  /** Consume a confirmation token to detach a managed worktree. */
+  'scope:worktree:confirmDetach': Contract<[target: ScopeTarget, confirmationId: string], void>
+  /** Consume a confirmation token to remove a managed worktree (optionally forced). */
+  'scope:worktree:confirmRemove': Contract<
+    [target: ScopeTarget, confirmationId: string, force: boolean],
+    void
+  >
+  /** Consume a separate confirmation token to delete a managed scope's branch. */
+  'scope:worktree:confirmDeleteBranch': Contract<
+    [target: ScopeTarget, confirmationId: string],
+    void
+  >
+  /** Retry a failed/interrupted setup from its failed command. */
+  'scope:worktree:retrySetup': Contract<
+    [target: ScopeTarget, options: { runSetup: boolean }],
+    ManagedWorktreeDescriptor
+  >
+  /** Update project-level managed-worktree defaults. */
+  'scope:setWorktreeDefaults': Contract<
+    [projectId: string, defaults: ScopeWorktreeDefaults],
+    ScopeBoard
+  >
   'history:load': Contract<[projectId: string, threadId: string, limit?: number], HistoryEntry[]>
   'notification:test': Contract<[], SystemNotificationTestResult>
   'notification:getPermissionStatus': Contract<[], SystemNotificationPermissionStatus>

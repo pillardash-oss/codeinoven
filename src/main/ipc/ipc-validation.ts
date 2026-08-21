@@ -202,6 +202,47 @@ export function validateStringArray(
   )
 }
 
+const SCOPE_LIFECYCLE_ACTIONS = new Set<import('../../lib/types').ScopeLifecycleAction>([
+  'detach',
+  'remove-worktree',
+  'delete-scope',
+  'delete-branch',
+  'delete-project-worktrees'
+])
+
+export function validateScopeLifecycleAction(
+  value: unknown
+): import('../../lib/types').ScopeLifecycleAction {
+  return assertEnum(value, SCOPE_LIFECYCLE_ACTIONS, 'scope lifecycle action')
+}
+
+/** Validate the renderer input for managed-worktree creation. */
+export function validateScopeWorktreeCreateInput(value: unknown): {
+  title: string
+  runSetup: boolean
+  environmentMode: import('../../lib/types').ScopeEnvironmentMode
+} {
+  const input = assertRecord(value, 'Scope worktree create input')
+  rejectUnknownFields(
+    input,
+    new Set(['title', 'runSetup', 'environmentMode']),
+    'scope worktree create input'
+  )
+  return {
+    title: validateBoundedString(input.title, 'Scope title', 1, 120),
+    runSetup: validateBoolean(input.runSetup, 'Run setup'),
+    environmentMode: validateEnvironmentMode(input.environmentMode)
+  }
+}
+
+export function validateConfirmationToken(value: unknown): string {
+  const token = validateBoundedString(value, 'Confirmation token', 1, 128)
+  if (!/^[0-9a-f]{32}$/u.test(token)) {
+    throw new TypeError('Confirmation token is malformed')
+  }
+  return token
+}
+
 /** Validate a full scope ordering for the layout operation. */
 export function validateScopeOrderIds(value: unknown): string[] {
   return validateStringArray(value, 'Scope order', 1, 256, 256)

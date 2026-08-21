@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { mkdtempSync, rmSync } from 'fs'
+import { mkdtempSync, realpathSync, rmSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { createTestDb, destroyTestDb } from '../../main/database/test-helper'
@@ -225,7 +225,9 @@ describe('ScopeManager', () => {
 
 describe('getScopeRootPath', () => {
   it('resolves beneath projects/<id>/scope deterministically', async () => {
-    const expected = join(temporaryConfigRoot, 'projects', 'p1', 'scope', 'feature')
+    // getScopeRootPath is symlink-canonical; resolve the config root first so
+    // the expected path matches the realpath'd value on macOS.
+    const expected = join(realpathSync(temporaryConfigRoot), 'projects', 'p1', 'scope', 'feature')
     expect(getScopeRootPath('p1', 'feature')).toBe(expected)
     expect(getScopeRootPath('p1', 'feature')).toBe(getScopeRootPath('p1', 'feature'))
   })
