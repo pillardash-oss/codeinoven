@@ -23,7 +23,7 @@ import { MuseDriver } from '../drivers/muse-driver'
 import { PiDriver } from '../drivers/pi-driver'
 import { CheckpointManager } from '../storage/checkpoint-manager'
 import { findHarness, listHarnesses } from '../agents/harness-registry'
-import { buildHarnessEnvironment, resolveExecutablePath } from '../drivers/cli-environment'
+import { buildProcessEnvironment, resolveExecutablePath } from '../drivers/cli-environment'
 import { CheckpointLimitError, type ProjectFingerprint } from '../git/change-tracking-service'
 import {
   broadcastThreadDeleted,
@@ -2671,7 +2671,7 @@ export class ChatEngine {
   /** One app-wide discovery pass; all projects share installed harness models. */
   private async discoverProviders(projectId: string): Promise<ProviderCatalog[]> {
     const projectPath = await this.resolveProjectPath(projectId)
-    const harnessEnv = buildHarnessEnvironment()
+    const harnessEnv = buildProcessEnvironment()
     const drivers = [...this.drivers.values()].filter((driver) => {
       const command = findHarness(driver.id)?.command
       return command !== undefined && resolveExecutablePath(command, harnessEnv) !== undefined
@@ -2772,7 +2772,7 @@ export class ChatEngine {
 
   /** Keep cached/fallback catalogs scoped to harness executables installed on this machine. */
   private filterInstalledProviderCatalogs(catalogs: ProviderCatalog[]): ProviderCatalog[] {
-    const env = buildHarnessEnvironment()
+    const env = buildProcessEnvironment()
     const installed = new Set(
       listHarnesses()
         .filter((harness) => resolveExecutablePath(harness.command, env) !== undefined)

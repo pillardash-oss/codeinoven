@@ -2,7 +2,7 @@ import { BrowserWindow } from 'electron'
 import { trustedIpcMain as ipcMain } from '../ipc/trusted-ipc-main'
 import { spawn } from 'child_process'
 import type { ProviderConnectionInfo } from '../../lib/types'
-import { buildHarnessEnvironment, resolveExecutablePath } from '../drivers/cli-environment'
+import { buildProcessEnvironment, resolveExecutablePath } from '../drivers/cli-environment'
 import { findHarness, listHarnesses, type HarnessDescriptor } from '../agents/harness-registry'
 import { forwardRemoteEvent } from '../remote/remote-event-forwarder'
 import { sendToRenderer } from '../ipc/renderer-delivery'
@@ -157,7 +157,7 @@ export class ProviderConnectionService {
 
   /** GUI apps don't inherit the shell PATH — augment with common install locations. */
   private buildEnv(): NodeJS.ProcessEnv {
-    return buildHarnessEnvironment()
+    return buildProcessEnvironment()
   }
 
   private locateBinary(command: string): Promise<{ found: boolean; path?: string }> {

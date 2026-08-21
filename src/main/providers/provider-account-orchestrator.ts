@@ -13,7 +13,7 @@ import type {
   HarnessLoginHandoff,
   HarnessLoginOptions
 } from '../drivers/driver.interface'
-import { buildHarnessEnvironment } from '../drivers/cli-environment'
+import { buildProcessEnvironment } from '../drivers/cli-environment'
 import { antigravityModelSlugs } from '../drivers/antigravity-model-output'
 
 const STATUS_TIMEOUT_MS = 10_000
@@ -192,7 +192,7 @@ async function readAntigravityStatus(): Promise<HarnessAuthStatus> {
   const result = await new Promise<{ succeeded: boolean; stdout: string; stderr: string }>(
     (resolve) => {
       const child = spawn('agy', ['models'], {
-        env: buildHarnessEnvironment(),
+        env: buildProcessEnvironment(),
         stdio: ['ignore', 'pipe', 'pipe']
       })
       let stdout = ''
@@ -686,7 +686,7 @@ export class ProviderAccountOrchestrator {
         args,
         {
           ...(cwd ? { cwd } : {}),
-          env: buildHarnessEnvironment(),
+          env: buildProcessEnvironment(),
           timeout: STATUS_TIMEOUT_MS,
           maxBuffer: 1024 * 1024
         },

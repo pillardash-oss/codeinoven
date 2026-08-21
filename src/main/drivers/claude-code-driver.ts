@@ -46,7 +46,7 @@ import type {
   UtilityRuntimePreparationRequest
 } from './driver.interface'
 import { InactiveQuestionTurnError } from './driver.interface'
-import { buildHarnessEnvironment } from './cli-environment'
+import { buildProcessEnvironment } from './cli-environment'
 import { attachmentReference } from './attachment-reference'
 
 const THINKING_PRESETS: ThinkingPreset[] = [
@@ -117,7 +117,7 @@ const CLAUDE_COMMANDS_REQUIRING_ARGUMENTS = new Set(['config', 'settings'])
 /** Keep Claude Code's native per-repository memory from crossing app threads. */
 function buildClaudeEnvironment(): NodeJS.ProcessEnv {
   return {
-    ...buildHarnessEnvironment(),
+    ...buildProcessEnvironment(),
     CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1',
     CLAUDE_CODE_ENABLE_TODO_TOOLS: '1'
   }

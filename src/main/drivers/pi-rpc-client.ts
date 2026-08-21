@@ -1,8 +1,5 @@
 import { spawn, type ChildProcess } from 'node:child_process'
-import { access } from 'node:fs/promises'
-import { constants } from 'node:fs'
-import { delimiter, join } from 'node:path'
-import { buildHarnessEnvironment } from './cli-environment'
+import { buildProcessEnvironment, resolveExecutablePaths } from './cli-environment'
 
 /**
  * A single Pi image content block, sent with a prompt or steer message.
@@ -266,8 +263,8 @@ function isExtensionUiDialogMethod(method: unknown): boolean {
 /** Resolve the `pi` executable on PATH; returns null when unavailable. */
 export async function resolvePiExecutable(): Promise<string | null> {
   const { execFile } = await import('node:child_process')
-  const env = buildHarnessEnvironment()
-  const candidates = await piPathCandidates(env)
+  const env = buildProcessEnvironment()
+  const candidates = resolveExecutablePaths('pi', env)
   for (const candidate of candidates) {
     const healthy = await new Promise<boolean>((resolve) => {
       execFile(
@@ -286,32 +283,4 @@ export async function resolvePiExecutable(): Promise<string | null> {
     if (healthy) return candidate
   }
   return null
-}
-
-/**
- * Return executable files in PATH order. Checking every candidate matters in
- * development: a removed project dependency can leave a broken `node_modules`
- * shim ahead of the user's working global Pi installation.
- */
-async function piPathCandidates(env: NodeJS.ProcessEnv): Promise<string[]> {
-  const names = process.platform === 'win32' ? ['pi.exe', 'pi.cmd', 'pi.bat', 'pi'] : ['pi']
-  const seen = new Set<string>()
-  const candidates: string[] = []
-  for (const directory of (env['PATH'] ?? '').split(delimiter)) {
-    const base = directory || process.cwd()
-    for (const name of names) {
-      const candidate = join(base, name)
-      if (seen.has(candidate)) continue
-      seen.add(candidate)
-      if (
-        await access(candidate, constants.X_OK).then(
-          () => true,
-          () => false
-        )
-      ) {
-        candidates.push(candidate)
-      }
-    }
-  }
-  return candidates
 }

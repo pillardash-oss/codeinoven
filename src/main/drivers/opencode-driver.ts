@@ -37,7 +37,7 @@ import type {
   UtilityRuntimeOverlay,
   UtilityRuntimePreparationRequest
 } from './driver.interface'
-import { buildHarnessEnvironment } from './cli-environment'
+import { buildProcessEnvironment } from './cli-environment'
 import { BaseUrlProviderService } from '../providers/base-url-provider-service'
 import { hasNativeProviderCatalog } from '../agents/native-provider-config-service'
 import { SecretVault } from '../storage/secret-vault'
@@ -2095,7 +2095,7 @@ export class OpenCodeDriver implements HarnessDriver {
       const args = ['serve', '--port', '0', '--hostname', '127.0.0.1']
       const child = spawn('opencode', args, {
         cwd: projectPath,
-        env: buildHarnessEnvironment({ ...process.env, ...(providerOverlay.env ?? {}) }),
+        env: buildProcessEnvironment({ ...process.env, ...(providerOverlay.env ?? {}) }),
         stdio: ['ignore', 'pipe', 'pipe']
       })
 
@@ -2160,7 +2160,7 @@ export class OpenCodeDriver implements HarnessDriver {
 
   /** GUI apps don't inherit the shell PATH — augment with common install locations. */
   private buildEnv(runtime?: PreparedUtilityRuntime): NodeJS.ProcessEnv {
-    if (!runtime) return buildHarnessEnvironment()
+    if (!runtime) return buildProcessEnvironment()
 
     const configPath =
       runtime.configPaths['OPENCODE_CONFIG'] ??
@@ -2170,7 +2170,7 @@ export class OpenCodeDriver implements HarnessDriver {
       runtime.configPaths['OPENCODE_CONFIG_DIR'] ??
       runtime.configPaths['opencode-skills'] ??
       runtime.configPaths['skills']
-    return buildHarnessEnvironment({
+    return buildProcessEnvironment({
       ...process.env,
       ...(configPath ? { OPENCODE_CONFIG: configPath } : {}),
       ...(skillPath ? { OPENCODE_CONFIG_DIR: skillPath } : {}),

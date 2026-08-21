@@ -22,7 +22,7 @@ import type {
 import { Logger } from '../system/logger'
 import { estimateTokenCostUsd } from '../providers/pricing'
 import type { StorageEngine } from '../storage/storage-engine'
-import { buildHarnessEnvironment } from './cli-environment'
+import { buildProcessEnvironment } from './cli-environment'
 import type {
   AgentEventCallback,
   AgentProcessObserver,
@@ -376,10 +376,10 @@ export abstract class PersistentCliDriver implements HarnessDriver {
       : {}
     const invocationEnv = runtime
       ? {
-          ...(invocation.env ?? buildHarnessEnvironment()),
+          ...(invocation.env ?? buildProcessEnvironment()),
           ...runtimeEnv
         }
-      : (invocation.env ?? buildHarnessEnvironment())
+      : (invocation.env ?? buildProcessEnvironment())
     this.setTurnProvenance(
       session.id,
       opts.settings.providerId,

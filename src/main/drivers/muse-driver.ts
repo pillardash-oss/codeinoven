@@ -22,7 +22,7 @@ import {
   permissionPatterns
 } from '../../lib/agent-interactions'
 import { attachmentReference, attachmentTarget } from './attachment-reference'
-import { buildHarnessEnvironment } from './cli-environment'
+import { buildProcessEnvironment } from './cli-environment'
 import type {
   CliLineParseContext,
   CliLineParseResult,
@@ -255,7 +255,7 @@ function runMuse(
 ): Promise<{ succeeded: boolean; stdout: string; stderr: string }> {
   return new Promise((resolve) => {
     const child = spawn('muse', args, {
-      env: buildHarnessEnvironment(),
+      env: buildProcessEnvironment(),
       stdio: ['ignore', 'pipe', 'pipe']
     })
     let stdout = ''
@@ -1000,7 +1000,7 @@ export class MuseDriver extends PersistentCliDriver {
     return {
       command: 'muse',
       args,
-      env: buildHarnessEnvironment(),
+      env: buildProcessEnvironment(),
       onJsonRecord: (value) => {
         if (options.settings.permissionLevel === 'full_access') return
         const envelope = record(value)

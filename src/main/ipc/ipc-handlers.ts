@@ -39,6 +39,7 @@ import {
 } from '../chat/memory-service'
 import type { HarnessManifestService } from '../agents/harness-manifest-service'
 import { listHarnesses } from '../agents/harness-registry'
+import { resolvePackageCommand } from '../drivers/cli-environment'
 import { SpecContextService } from '../chat/spec-context-service'
 import type { UpdaterService } from '../notifications/updater-service'
 import type { ChatEngine } from '../chat/chat-engine'
@@ -261,12 +262,18 @@ function githubPermissionRequired(
   }
 }
 
-/** Run the industry-standard Skills CLI through Bun without a shell. */
-function installSkillWithBun(args: string[], cwd: string): Promise<string> {
+/** Run the industry-standard Skills CLI through the first available package manager. */
+function installSkillWithPackageManager(args: string[], cwd: string): Promise<string> {
   return new Promise((resolveInstall, rejectInstall) => {
-    const child = spawn('bun', ['x', '--bun', 'skills', ...args], {
+    const launch = resolvePackageCommand('execute', 'skills', args, {
+      ...process.env,
+      DISABLE_TELEMETRY: '1',
+      DO_NOT_TRACK: '1'
+    })
+    const child = spawn(launch.command, launch.args, {
       cwd,
-      env: { ...process.env, DISABLE_TELEMETRY: '1', DO_NOT_TRACK: '1' },
+      env: launch.env,
+      shell: launch.shell,
       stdio: ['ignore', 'pipe', 'pipe']
     })
     let output = ''
@@ -5236,7 +5243,7 @@ export function registerIpcHandlers(
     for (const directory of destinations) {
       for (const agentTarget of agentTargets) {
         outputs.push(
-          await installSkillWithBun(
+          await installSkillWithPackageManager(
             [
               'add',
               installSource,

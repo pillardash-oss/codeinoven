@@ -7,6 +7,7 @@ import { app, shell } from 'electron'
 import { APP_SLUG } from '../../lib/brand'
 import { Logger } from '../system/logger'
 import type { EditorId, EditorInfo } from '../../lib/types'
+import { buildProcessEnvironment, resolveExecutablePath } from '../drivers/cli-environment'
 
 type TargetKind = 'directory' | 'file'
 
@@ -115,8 +116,8 @@ for arg in CommandLine.arguments.dropFirst() {
  * machine and launches the user's preferred one against a project folder.
  *
  * Detection strategy:
- *  - CLI tools (`code`, `zed`, ...) are resolved via `which` on an augmented
- *    PATH (GUI apps don't inherit the user's shell PATH).
+ *  - CLI tools (`code`, `zed`, ...) are resolved through the app-wide desktop
+ *    process environment (GUI apps do not inherit the user's shell PATH).
  *  - macOS app bundles are probed in /Applications, ~/Applications and the
  *    system utilities folder (Terminal.app).
  */
@@ -856,35 +857,14 @@ export class EditorService {
     }
   }
 
-  /** GUI apps don't inherit the shell PATH — augment with common install locations. */
+  /** Use the app-wide desktop process environment for every editor launch and probe. */
   private buildEnv(): NodeJS.ProcessEnv {
-    const home = process.env['HOME'] ?? ''
-    const extraPaths = [
-      '/opt/homebrew/bin',
-      '/usr/local/bin',
-      '/usr/bin',
-      '/bin',
-      `${home}/.local/bin`,
-      `${home}/.opencode/bin`,
-      `${home}/.bun/bin`,
-      `${home}/.cargo/bin`,
-      `${home}/.npm-global/bin`,
-      `${home}/.nvm/current/bin`
-    ]
-    return { ...process.env, PATH: `${process.env['PATH'] ?? ''}:${extraPaths.join(':')}` }
+    // Editors and terminals belong to the user, not the app's orphan reaper.
+    return buildProcessEnvironment(process.env, process.platform, false)
   }
 
   private locateBinary(command: string): Promise<{ found: boolean; path?: string }> {
-    const probe = process.platform === 'win32' ? 'where' : 'which'
-    return new Promise((resolve) => {
-      execFile(probe, [command], { env: this.buildEnv(), timeout: 5000 }, (error, stdout) => {
-        if (error) {
-          resolve({ found: false })
-          return
-        }
-        const resolved = stdout.split('\n')[0]?.trim() ?? ''
-        resolve({ found: true, path: resolved || undefined })
-      })
-    })
+    const resolved = resolveExecutablePath(command, this.buildEnv())
+    return Promise.resolve(resolved ? { found: true, path: resolved } : { found: false })
   }
 }

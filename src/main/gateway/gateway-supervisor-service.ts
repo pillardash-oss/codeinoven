@@ -17,7 +17,17 @@ import type { SecretVault } from '../storage/secret-vault'
 import type { BaseUrlProviderService } from '../providers/base-url-provider-service'
 import { Logger } from '../system/logger'
 import { OwnedProcessJournal } from '../system/owned-process-journal'
-import { getGatewayAdapter, DEFAULT_GATEWAY_ADAPTER_ID, DEFAULT_GATEWAY_PLUGIN_ID } from './gateway-adapters'
+import {
+  buildProcessEnvironment,
+  commandRequiresShell,
+  resolveExecutablePath,
+  resolvePackageCommand
+} from '../drivers/cli-environment'
+import {
+  getGatewayAdapter,
+  DEFAULT_GATEWAY_ADAPTER_ID,
+  DEFAULT_GATEWAY_PLUGIN_ID
+} from './gateway-adapters'
 import { removeGatewayProviders, syncGatewayProviders } from './gateway-provider-sync'
 
 const STATE_PATH = 'gateways/state.json'
@@ -51,7 +61,7 @@ export type GatewayStateListener = (status: GatewayStatus) => void
 
 /**
  * Owns the full lifecycle of managed local gateway processes: app-owned
- * installation via Bun, supervised launch on a loopback port, health gating,
+ * installation via an available package manager, supervised launch on a loopback port, health gating,
  * model-catalog discovery, and syncing the discovered catalog into the harness
  * custom-provider store. CodeInOven — never the gateway — owns restarts,
  * ports, and cleanup; the root PID is journaled for crash reaping.
@@ -62,7 +72,6 @@ export class GatewaySupervisorService {
   private readonly listeners = new Set<GatewayStateListener>()
   private readonly journal: OwnedProcessJournal | undefined
   private catalogCache = new Map<string, GatewayCatalogSnapshot>()
-  private bunVersionPromise: Promise<string> | null = null
   private nodeVersionPromise: Promise<string> | null = null
 
   constructor(
@@ -81,9 +90,7 @@ export class GatewaySupervisorService {
 
   async listStatus(): Promise<GatewayStatus[]> {
     const store = await this.loadStore()
-    return Promise.all(
-      Object.values(store.plugins).map((state) => this.toStatus(state))
-    )
+    return Promise.all(Object.values(store.plugins).map((state) => this.toStatus(state)))
   }
 
   async setEnabled(pluginId: string, enabled: boolean): Promise<GatewayStatus> {
@@ -165,20 +172,25 @@ export class GatewaySupervisorService {
       if (adapter.runtime === 'node') await this.assertNodeRuntime()
       const dashboardPassword = await this.ensureDashboardPassword(pluginId)
 
-      const child = spawn(this.runtimeCommand(adapter), [binPath, ...adapter.serveArgs], {
+      const env = buildProcessEnvironment({
+        ...process.env,
+        ...(adapter.env ?? {}),
+        PORT: String(port),
+        DATA_DIR: this.dataDir(pluginId),
+        ...(dashboardPassword === undefined ? {} : { INITIAL_PASSWORD: dashboardPassword })
+      })
+      const child = spawn(this.runtimeCommand(adapter, env), [binPath, ...adapter.serveArgs], {
         cwd: installDir,
-        env: {
-          ...process.env,
-          ...(adapter.env ?? {}),
-          PORT: String(port),
-          DATA_DIR: this.dataDir(pluginId),
-          ...(dashboardPassword === undefined ? {} : { INITIAL_PASSWORD: dashboardPassword })
-        },
+        env,
         stdio: ['ignore', 'pipe', 'pipe']
       })
       const stderrTail = attachStderrTail(child)
 
-      this.journal?.register(child.pid ?? 0, `node ${adapter.npmPackage} (PORT=${port})`, installDir)
+      this.journal?.register(
+        child.pid ?? 0,
+        `node ${adapter.npmPackage} (PORT=${port})`,
+        installDir
+      )
       this.running.set(pluginId, { child, port, adapter })
 
       child.once('exit', () => {
@@ -330,9 +342,13 @@ export class GatewaySupervisorService {
     return join(getConfigRoot(), 'gateways', pluginId, 'data')
   }
 
-  private runtimeCommand(adapter: GatewayAdapterDefinition): string {
-    if (adapter.runtime === 'bun') return 'bun'
-    return 'node'
+  private runtimeCommand(adapter: GatewayAdapterDefinition, env: NodeJS.ProcessEnv): string {
+    const command = adapter.runtime === 'bun' ? 'bun' : 'node'
+    const resolved = resolveExecutablePath(command, env)
+    if (!resolved) {
+      throw new Error(`${command} was not found in the desktop process environment`)
+    }
+    return resolved
   }
 
   private async ensureInstalled(
@@ -347,28 +363,16 @@ export class GatewaySupervisorService {
     } catch {
       // Not installed yet — fall through to the install path.
     }
-    await this.assertBunAvailable()
     await mkdir(dir, { recursive: true })
     await writeFile(
       join(dir, 'package.json'),
       `${JSON.stringify({ name: `codeinoven-${pluginId}`, private: true }, null, 2)}\n`,
       'utf8'
     )
-    await this.runCommand(
-      'bun',
-      ['add', `${adapter.npmPackage}@${adapter.version}`],
-      dir,
-      INSTALL_TIMEOUT_MS
-    )
+    const install = resolvePackageCommand('install', `${adapter.npmPackage}@${adapter.version}`)
+    await this.runCommand(install.command, install.args, dir, INSTALL_TIMEOUT_MS)
     await writeFile(markerPath, `${adapter.version}\n`, 'utf8')
     return dir
-  }
-
-  private async assertBunAvailable(): Promise<string> {
-    if (!this.bunVersionPromise) {
-      this.bunVersionPromise = this.runCommand('bun', ['--version'], getConfigRoot(), 15_000)
-    }
-    return this.bunVersionPromise
   }
 
   /**
@@ -397,7 +401,18 @@ export class GatewaySupervisorService {
     timeoutMs: number
   ): Promise<string> {
     return new Promise<string>((resolve, reject) => {
-      const child = spawn(command, args, { cwd, stdio: ['ignore', 'pipe', 'pipe'] })
+      const env = buildProcessEnvironment()
+      const resolved = resolveExecutablePath(command, env)
+      if (!resolved) {
+        reject(new Error(`${command} was not found in the desktop process environment`))
+        return
+      }
+      const child = spawn(resolved, args, {
+        cwd,
+        env,
+        shell: commandRequiresShell(resolved),
+        stdio: ['ignore', 'pipe', 'pipe']
+      })
       let stdout = ''
       let stderr = ''
       const timer = setTimeout(() => {
@@ -417,7 +432,12 @@ export class GatewaySupervisorService {
       child.once('exit', (code) => {
         clearTimeout(timer)
         if (code === 0) resolve(stdout.trim())
-        else reject(new Error(`${command} ${args.join(' ')} failed (${code ?? 'signal'}): ${stderr.slice(-2_000)}`))
+        else
+          reject(
+            new Error(
+              `${command} ${args.join(' ')} failed (${code ?? 'signal'}): ${stderr.slice(-2_000)}`
+            )
+          )
       })
     })
   }

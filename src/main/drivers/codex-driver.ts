@@ -30,7 +30,7 @@ import { BaseUrlProviderService } from '../providers/base-url-provider-service'
 import { Logger } from '../system/logger'
 import { SecretVault } from '../storage/secret-vault'
 import type { StorageEngine } from '../storage/storage-engine'
-import { buildHarnessEnvironment } from './cli-environment'
+import { buildProcessEnvironment } from './cli-environment'
 import { attachmentReference } from './attachment-reference'
 import type {
   GenerateTitleOptions,
@@ -288,7 +288,7 @@ export class CodexDriver extends PersistentCliDriver {
   protected async ensureCliReady(): Promise<void> {
     try {
       await execFileAsync('codex', ['--version'], {
-        env: buildHarnessEnvironment(),
+        env: buildProcessEnvironment(),
         timeout: 10_000
       })
     } catch (error) {
@@ -694,7 +694,7 @@ export class CodexDriver extends PersistentCliDriver {
       [...providerArgs, 'app-server', ...featureArgs, '--listen', 'stdio://'],
       {
         cwd: projectPath,
-        env: { ...buildHarnessEnvironment(), ...providerEnv },
+        env: { ...buildProcessEnvironment(), ...providerEnv },
         stdio: ['pipe', 'pipe', 'pipe']
       }
     )
@@ -1512,7 +1512,7 @@ export class CodexDriver extends PersistentCliDriver {
     return {
       command: 'codex',
       args,
-      env: { ...buildHarnessEnvironment(), ...env },
+      env: { ...buildProcessEnvironment(), ...env },
       provenanceModelId: resolveFastModelId(
         options.settings.modelId,
         fastInference ? 'fast' : 'normal'

@@ -3,6 +3,7 @@ import { mkdtemp, mkdir, writeFile, rm } from 'fs/promises'
 import { join } from 'path'
 import { tmpdir } from 'os'
 import { execFileSync } from 'child_process'
+import { buildProcessEnvironment } from '../drivers/cli-environment'
 
 /**
  * Dev-only compliance probe for the installed opencode harness.
@@ -35,6 +36,7 @@ function openCodeVersion(): string {
   try {
     return execFileSync('opencode', ['--version'], {
       encoding: 'utf8',
+      env: buildProcessEnvironment(),
       timeout: 15_000
     })
       .trim()
@@ -52,6 +54,7 @@ async function startServe(projectDir: string): Promise<{
   return new Promise((resolve, reject) => {
     const child = spawn('opencode', ['serve', '--port', '0', '--hostname', '127.0.0.1'], {
       cwd: projectDir,
+      env: buildProcessEnvironment(),
       stdio: ['ignore', 'pipe', 'pipe']
     })
     let buffer = ''
@@ -118,15 +121,18 @@ async function waitForMessage(
 ): Promise<{ input: number | null; total: number | null }> {
   const deadline = Date.now() + timeoutMs
   while (Date.now() < deadline) {
-    const value = (await fetchJson(
-      baseUrl,
-      `/session/${sessionId}/message`
-    )) as Array<Record<string, unknown>>
+    const value = (await fetchJson(baseUrl, `/session/${sessionId}/message`)) as Array<
+      Record<string, unknown>
+    >
     const usage = stepFinishInputTokens(value)
     if (usage.input !== null || usage.total !== null) return usage
     const errored = value.some((message) => {
       const info = message?.['info']
-      return typeof info === 'object' && info !== null && Boolean((info as Record<string, unknown>)['error'])
+      return (
+        typeof info === 'object' &&
+        info !== null &&
+        Boolean((info as Record<string, unknown>)['error'])
+      )
     })
     if (errored) break
     await new Promise((resolve) => setTimeout(resolve, 1_000))
@@ -198,11 +204,25 @@ export async function runOpenCodeDenyProbe(): Promise<DenyProbeResult> {
     }>
     const probeAgent = agents.find((agent) => agent.name === 'cio-probe-lean')
     if (!probeAgent) {
-      return { version, compliant: false, fullInputTokens: null, leanInputTokens: null, reductionInputTokens: null, note: 'probe agent was not loaded by the harness' }
+      return {
+        version,
+        compliant: false,
+        fullInputTokens: null,
+        leanInputTokens: null,
+        reductionInputTokens: null,
+        note: 'probe agent was not loaded by the harness'
+      }
     }
     const bashPermission = probeAgent.permission?.find((entry) => entry.permission === 'bash')
     if (bashPermission?.action !== 'deny') {
-      return { version, compliant: false, fullInputTokens: null, leanInputTokens: null, reductionInputTokens: null, note: 'probe agent bash permission did not resolve to deny' }
+      return {
+        version,
+        compliant: false,
+        fullInputTokens: null,
+        leanInputTokens: null,
+        reductionInputTokens: null,
+        note: 'probe agent bash permission did not resolve to deny'
+      }
     }
 
     const model = { providerID: 'opencode', modelID: 'deepseek-v4-flash-free' }
@@ -230,10 +250,24 @@ export async function runOpenCodeDenyProbe(): Promise<DenyProbeResult> {
     })
 
     if (fullUsage.input === null) {
-      return { version, compliant: false, fullInputTokens: null, leanInputTokens: leanUsage.input, reductionInputTokens: null, note: 'full-agent turn produced no provider token report (model/provider outage at probe time)' }
+      return {
+        version,
+        compliant: false,
+        fullInputTokens: null,
+        leanInputTokens: leanUsage.input,
+        reductionInputTokens: null,
+        note: 'full-agent turn produced no provider token report (model/provider outage at probe time)'
+      }
     }
     if (leanUsage.input === null) {
-      return { version, compliant: false, fullInputTokens: fullUsage.input, leanInputTokens: null, reductionInputTokens: null, note: 'lean-agent turn produced no provider token report (model/provider outage at probe time)' }
+      return {
+        version,
+        compliant: false,
+        fullInputTokens: fullUsage.input,
+        leanInputTokens: null,
+        reductionInputTokens: null,
+        note: 'lean-agent turn produced no provider token report (model/provider outage at probe time)'
+      }
     }
     const reduction = fullUsage.input - leanUsage.input
     // Denied heavy tool/skill schemas must measurably shrink the assembled

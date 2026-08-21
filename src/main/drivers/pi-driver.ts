@@ -14,7 +14,7 @@ import type {
   ThinkingPreset
 } from '../../lib/types'
 import { normalizeAgentQuestions } from '../../lib/agent-interactions'
-import { buildHarnessEnvironment } from './cli-environment'
+import { buildProcessEnvironment } from './cli-environment'
 import { hasNativeProviderCatalog } from '../agents/native-provider-config-service'
 import type { BaseUrlProviderService } from '../providers/base-url-provider-service'
 import type { SecretVault } from '../storage/secret-vault'
@@ -732,7 +732,7 @@ export class PiDriver extends PersistentCliDriver {
     const client = new PiRpcClient({
       executable,
       cwd: projectPath,
-      env: { ...buildHarnessEnvironment(), ...overlay.env },
+      env: { ...buildProcessEnvironment(), ...overlay.env },
       args: overlay.args
     })
     try {
@@ -764,7 +764,7 @@ export class PiDriver extends PersistentCliDriver {
         executable,
         ['--help'],
         {
-          env: buildHarnessEnvironment(),
+          env: buildProcessEnvironment(),
           timeout: 10_000
         },
         (error, stdout) => {
@@ -787,7 +787,7 @@ export class PiDriver extends PersistentCliDriver {
     const client = new PiRpcClient({
       executable,
       cwd,
-      env: buildHarnessEnvironment()
+      env: buildProcessEnvironment()
     })
     try {
       await client.newSession()
@@ -1119,7 +1119,7 @@ export class PiDriver extends PersistentCliDriver {
       executable,
       cwd: projectPath,
       env: {
-        ...buildHarnessEnvironment(),
+        ...buildProcessEnvironment(),
         ...runtimeEnv
       },
       args,

@@ -10,7 +10,7 @@ import { sendToRenderer } from '../ipc/renderer-delivery'
 import { ProjectManager } from '../../lib/engines/project-manager'
 import type { Database } from '../database/database'
 import type { StorageEngine } from '../storage/storage-engine'
-import { buildHarnessEnvironment } from '../drivers/cli-environment'
+import { buildProcessEnvironment } from '../drivers/cli-environment'
 
 interface PtySession {
   id: string
@@ -22,7 +22,7 @@ interface PtySession {
 }
 
 function buildShellEnv(): Record<string, string> {
-  const harnessEnv = buildHarnessEnvironment()
+  const harnessEnv = buildProcessEnvironment()
   const env = Object.fromEntries(
     Object.entries(harnessEnv).filter((entry): entry is [string, string] => entry[1] !== undefined)
   )

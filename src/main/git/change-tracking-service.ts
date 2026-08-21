@@ -4,6 +4,7 @@ import { lstat, mkdir, readdir, readFile, realpath, unlink, writeFile } from 'fs
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'path'
 import { APP_SLUG } from '../../lib/brand'
 import { PROJECT_DATA_DIRECTORY } from '../../lib/project-artifacts'
+import { buildProcessEnvironment } from '../drivers/cli-environment'
 
 const DEFAULT_EXCLUDED_DIRECTORIES = new Set([
   '.git',
@@ -500,12 +501,17 @@ function isMissing(error: unknown): boolean {
 
 function runGit(args: string[]): Promise<string> {
   return new Promise((resolveCommand, rejectCommand) => {
-    execFile('git', args, { encoding: 'utf8', windowsHide: true }, (error, stdout, stderr) => {
-      if (error) {
-        rejectCommand(new Error(stderr || error.message))
-        return
+    execFile(
+      'git',
+      args,
+      { encoding: 'utf8', windowsHide: true, env: buildProcessEnvironment() },
+      (error, stdout, stderr) => {
+        if (error) {
+          rejectCommand(new Error(stderr || error.message))
+          return
+        }
+        resolveCommand(stdout)
       }
-      resolveCommand(stdout)
-    })
+    )
   })
 }

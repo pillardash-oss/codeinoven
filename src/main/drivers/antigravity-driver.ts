@@ -12,7 +12,7 @@ import type {
   ThinkingLevel,
   ThinkingPreset
 } from '../../lib/types'
-import { buildHarnessEnvironment } from './cli-environment'
+import { buildProcessEnvironment } from './cli-environment'
 import { attachmentReferences } from './attachment-reference'
 import { antigravityModelSlugs } from './antigravity-model-output'
 import type {
@@ -40,7 +40,7 @@ function runAgy(
 ): Promise<{ succeeded: boolean; stdout: string; stderr: string }> {
   return new Promise((resolve) => {
     const child = spawn('agy', args, {
-      env: buildHarnessEnvironment(),
+      env: buildProcessEnvironment(),
       stdio: ['ignore', 'pipe', 'pipe']
     })
     let stdout = ''
@@ -697,7 +697,7 @@ export class AntigravityDriver extends PersistentCliDriver {
       parts: [],
       started: false
     })
-    return { command: 'agy', args, env: buildHarnessEnvironment() }
+    return { command: 'agy', args, env: buildProcessEnvironment() }
   }
 
   protected parseJsonLine(value: unknown, context: CliLineParseContext): CliLineParseResult | null {
