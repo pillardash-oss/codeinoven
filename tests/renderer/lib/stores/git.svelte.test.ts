@@ -47,6 +47,7 @@ describe('GitState store', () => {
   afterEach(() => {
     invoke.mockReset()
     subscribe.mockReset()
+    gitState.deactivate()
   })
 
   it('refresh resolves a typed GitStatus shape and derived accessors', async () => {

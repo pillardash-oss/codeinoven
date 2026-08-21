@@ -250,7 +250,7 @@ export class GitState {
     this.activeProjectId = projectId
     this.activeScopeBucketId = scopeBucketId
     this.clearProjectState()
-    queueMicrotask(() => void this.refresh(projectId))
+    queueMicrotask(() => void this.refresh(projectId).catch(() => {}))
   }
 
   /** The scope-qualified Git target used by status reads. */
@@ -277,10 +277,10 @@ export class GitState {
     return [projectId, ...args, scope ?? undefined]
   }
 
-  private async readStatus(projectId: string): Promise<GitStatus> {
+  private async readStatus(projectId: string): Promise<GitStatus | null> {
     const [id, scope] = this.statusTarget(projectId)
-    const status = await invoke('git:status', id, scope ?? undefined)
-    if (!status) throw new Error('Git status returned no result')
+    const status = (await invoke('git:status', id, scope ?? undefined)) as GitStatus | null | undefined
+    if (!status) return null
     return status
   }
 
@@ -302,7 +302,7 @@ export class GitState {
     if (project.source !== 'local' || project.changeTrackingMode !== 'git') return
     if (!project.path.trim()) return
     this.activate(project.id, thread?.scopeBucketId ?? undefined)
-    queueMicrotask(() => void this.refresh(project.id))
+    queueMicrotask(() => void this.refresh(project.id).catch(() => {}))
   }
 
   /**
@@ -318,7 +318,7 @@ export class GitState {
     if (project.source !== 'local' || project.changeTrackingMode !== 'git') return
     if (!project.path.trim()) return
     this.activate(project.id)
-    queueMicrotask(() => void this.refresh(project.id))
+    queueMicrotask(() => void this.refresh(project.id).catch(() => {}))
   }
 
   /**
@@ -328,7 +328,7 @@ export class GitState {
    */
   notifyGitPanelOpened(projectId: string): void {
     this.activate(projectId)
-    queueMicrotask(() => void this.refresh(projectId))
+    queueMicrotask(() => void this.refresh(projectId).catch(() => {}))
   }
 
   /**
@@ -404,7 +404,8 @@ export class GitState {
 
   /** `{ owner, repo }` parsed from the active project's origin remote URL. */
   private get originRepo(): { owner: string; repo: string } | null {
-    const origin = (this.remotes ?? []).find((remote) => remote.name === 'origin')
+    const remotesList = Array.isArray(this.remotes) ? this.remotes : []
+    const origin = remotesList.find((remote) => remote.name === 'origin')
     if (!origin) return null
     const match = /(?:github\.com[:/])([^/]+)\/([^/.]+)(?:\.git)?\/?$/u.exec(origin.url.trim())
     if (!match) return null
@@ -558,7 +559,7 @@ export class GitState {
     subscribe('agent:event', (...args: unknown[]) => {
       const event = args[0] as { type: string; projectId?: string } | undefined
       if (event?.type === 'checkpoint.updated' && event.projectId === projectId) {
-        void this.refresh(projectId)
+        void this.refresh(projectId).catch(() => {})
       }
     })
   }
@@ -606,18 +607,23 @@ export class GitState {
         projectId !== this.activeProjectId
       )
         return
+      if (!status) {
+        this.error = errorMessage(new Error('Git status returned no result'), 'Git status could not be loaded')
+        this.status = null
+        return
+      }
       this.status = status
       this.branches = branches
       this.identity = identity
-      this.remotes = remotes
+      this.remotes = Array.isArray(remotes) ? remotes : []
       this.credentialStatus = credentialStatus
       this.stashes = stashes
       // Conflicts mode is only meaningful while actual conflicts exist — once
       // they are all resolved the filter auto-closes, like the last-turn one.
-      if (status && status.conflicted.length === 0) this.conflictsMode = false
+      if (status.conflicted.length === 0) this.conflictsMode = false
       // Refresh the open-PR conflict indicator (cooldown-gated) so the header
       // badge stays current without a GitHub round trip on every mutation.
-      void this.refreshPrConflictIndicators(projectId)
+      void this.refreshPrConflictIndicators(projectId).catch(() => {})
     } catch (reason) {
       if (
         targetProject !== this.activeProjectId ||
