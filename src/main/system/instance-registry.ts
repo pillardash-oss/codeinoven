@@ -13,8 +13,6 @@ import type { AgentEvent } from '../../lib/types'
 import { getConfigRoot } from '../../lib/utils'
 
 const HEARTBEAT_MS = 30_000
-/** Instances whose heartbeat is older than this are treated as gone. */
-const STALE_MS = 120_000
 const CHECKPOINT_EVENT_STALE_MS = 120_000
 
 type CheckpointUpdatedEvent = Extract<AgentEvent, { type: 'checkpoint.updated' }>
@@ -50,6 +48,7 @@ export class InstanceRegistry {
   private watcher: FSWatcher | null = null
   private checkpointEventSequence = 0
   private readonly checkpointListeners = new Set<(event: CheckpointUpdatedEvent) => void>()
+  private readonly liveInstanceListeners = new Set<() => void>()
   private readonly seenCheckpointEvents = new Set<string>()
 
   constructor() {
@@ -127,25 +126,53 @@ export class InstanceRegistry {
   }
 
   /**
+   * Elect the oldest live process as the sole owner of shared remote
+   * transports. A later process stays cold until the owner exits.
+   */
+  isPreferredRemoteOwner(): boolean {
+    try {
+      const entries = this.liveEntries()
+      if (entries.length === 0) return true
+      entries.sort((left, right) => left.startedAt - right.startedAt || left.pid - right.pid)
+      return entries[0]?.pid === this.selfEntry.pid
+    } catch {
+      // Registry failures must not make remote mode unavailable.
+      return true
+    }
+  }
+
+  /** Wake services that may need to take over after another process exits. */
+  onLiveInstancesChanged(listener: () => void): () => void {
+    this.liveInstanceListeners.add(listener)
+    return () => this.liveInstanceListeners.delete(listener)
+  }
+
+  /**
    * True when at least one other CodeInOven process is registered and alive.
-   * A dead-but-stale entry is ignored, so a crash or force quit doesn't cause a
-   * fresh instance to think a phantom still exists.
+   * Dead entries are ignored, so a crash or force quit doesn't cause a fresh
+   * instance to think a phantom still exists.
    */
   hasOtherLiveInstance(): boolean {
     try {
-      const files = readdirSync(this.dir).filter((name) => name.endsWith('.json'))
-      const now = Date.now()
-      for (const file of files) {
-        const entry = this.readEntry(file)
-        if (!entry) continue
+      for (const entry of this.liveEntries()) {
         if (entry.pid === this.selfEntry.pid) continue
-        if (now - entry.lastHeartbeat > STALE_MS) continue
-        if (this.isProcessAlive(entry.pid)) return true
+        return true
       }
     } catch {
       // Registry unreadable — assume we are the only instance.
     }
     return false
+  }
+
+  private liveEntries(): InstanceEntry[] {
+    const files = readdirSync(this.dir).filter((name) => name.endsWith('.json'))
+    const entries: InstanceEntry[] = []
+    for (const file of files) {
+      const entry = this.readEntry(file)
+      if (!entry) continue
+      if (this.isProcessAlive(entry.pid)) entries.push(entry)
+    }
+    return entries
   }
 
   private writeEntry(): void {
@@ -169,6 +196,13 @@ export class InstanceRegistry {
             if (!candidate.endsWith('.json') || candidate === `${this.selfEntry.pid}.json`) continue
             const entry = this.readEntry(candidate)
             if (entry) this.consumeCheckpointEvent(entry)
+          }
+          for (const listener of this.liveInstanceListeners) {
+            try {
+              listener()
+            } catch {
+              // One service failing to reconcile must not block the others.
+            }
           }
         } catch {
           // The directory can disappear during shutdown between notification

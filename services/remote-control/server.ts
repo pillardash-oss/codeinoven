@@ -718,7 +718,8 @@ function relayMessage(socket: ServerWebSocket<RelaySocketData>, message: string 
     if (activeDesktop && activeDesktop !== socket) {
       // Multiple app processes share this desktop identity and database, but
       // exactly one process must execute each RPC. Keep the current owner and
-      // let this follower retry for automatic ownership handoff later.
+      // let this follower enter quiet standby. The local instance registry
+      // elects a replacement owner when the current process exits.
       socket.close(4000, 'remote-host-active')
       return
     }

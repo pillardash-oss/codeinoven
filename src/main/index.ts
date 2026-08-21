@@ -371,6 +371,8 @@ let powerWakeService: PowerWakeService | null = null
 let retryScheduler: RetrySchedulerService | null = null
 let remoteCredentials: DeviceCredentialService | null = null
 let remoteMode: RemoteModeController | null = null
+let stopRemoteOwnershipListener: (() => void) | null = null
+let remoteRestorePromise: Promise<void> | null = null
 let modelPricingService: ModelPricingService | null = null
 /**
  * Resolved lazily so the `appfile://` preview protocol can be installed before
@@ -685,8 +687,20 @@ async function bootPostPaintServices(): Promise<void> {
         // memories, so replacing the local list is what propagates deletions.
         await accountMemory.saveEntries(entries.filter((entry) => entry.scope === 'global'))
       },
+      canOwnTransport: () => instanceRegistry.isPreferredRemoteOwner(),
       onSessionActiveChange: (active) => powerWakeService?.setRemoteSessionActive(active)
     })
+
+    const restoreRemoteModeIfOwner = (): void => {
+      if (!remoteMode || !instanceRegistry.isPreferredRemoteOwner() || remoteRestorePromise) return
+      remoteRestorePromise = remoteMode
+        .restoreRemoteMode()
+        .catch((error) => Logger.error('Remote mode restore failed (non-fatal):', error))
+        .finally(() => {
+          remoteRestorePromise = null
+        })
+    }
+    stopRemoteOwnershipListener = instanceRegistry.onLiveInstancesChanged(restoreRemoteModeIfOwner)
 
     // Optional IPC — registered only after the services exist.
     if (updaterService) {
@@ -788,9 +802,7 @@ async function bootPostPaintServices(): Promise<void> {
 
     // Restore remote mode after paint so users can see app UI while the LAN
     // stack spins up in the background.
-    void remoteMode
-      .restoreRemoteMode()
-      .catch((error) => Logger.error('Remote mode restore failed (non-fatal):', error))
+    restoreRemoteModeIfOwner()
 
     try {
       notificationService.start()
@@ -1255,6 +1267,9 @@ async function runShutdownPipeline(): Promise<void> {
   } catch (error) {
     Logger.error('Computer-use PiP service cleanup failed during shutdown:', error)
   }
+
+  stopRemoteOwnershipListener?.()
+  stopRemoteOwnershipListener = null
 
   // Persist the final window geometry so the next launch restores size, position,
   // and maximized state exactly as the user left them.

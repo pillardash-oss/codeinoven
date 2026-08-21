@@ -266,6 +266,10 @@ export class CloudRelayClient {
       if (this.closing || this.closed) return
       this.authenticated = false
       const reason = event.reason || `relay-closed-${event.code}`
+      if (reason === 'remote-host-active') {
+        this.stopAfterTerminalClose(reason)
+        return
+      }
       Logger.dev(`Remote cloud relay socket closed (${event.code}: ${reason})`)
       if (event.code === 4003 || reason === 'revoked') {
         this.stopAfterTerminalClose(reason)

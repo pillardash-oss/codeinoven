@@ -99,6 +99,8 @@ export interface RemoteModeOptions {
   loadAccountProfileData?: () => Promise<AccountProfileSyncPayload>
   /** Applies the merged cloud memory snapshot to local global memory. */
   applyGlobalMemories?: (entries: MemoryEntry[]) => Promise<void>
+  /** True only for the process elected to own shared remote transports. */
+  canOwnTransport?: () => boolean
 }
 
 export const DEFAULT_LAN_PORT = 4455
@@ -507,6 +509,7 @@ export class RemoteModeController {
   private readonly onSessionActiveChange?: (active: boolean) => void
   private readonly loadAccountProfileData?: () => Promise<AccountProfileSyncPayload>
   private readonly applyGlobalMemories?: (entries: MemoryEntry[]) => Promise<void>
+  private readonly canOwnTransport: () => boolean
   private readonly cloudApiOrigin: string | null = resolveCloudApiOrigin()
   private readonly accountAuthOrigin: string | null = resolveAccountAuthOrigin()
   private readonly vault: SecretVault | null
@@ -558,6 +561,7 @@ export class RemoteModeController {
     this.onSessionActiveChange = options.onSessionActiveChange
     this.loadAccountProfileData = options.loadAccountProfileData
     this.applyGlobalMemories = options.applyGlobalMemories
+    this.canOwnTransport = options.canOwnTransport ?? (() => true)
     this.cloudStatus = {
       configured: this.cloudApiOrigin !== null,
       state: 'disabled',
@@ -576,6 +580,7 @@ export class RemoteModeController {
    * gateway + keep-alive (and Tray); it never hides the freshly opened window.
    */
   async restoreRemoteMode(): Promise<void> {
+    if (!this.canOwnTransport()) return
     if (this.remoteModeActive) return
     const enabled = await this.readPersistedEnabled()
     if (!enabled) return
@@ -719,6 +724,7 @@ export class RemoteModeController {
 
   /** Start remote mode: arm keep-alive, launch the gateway, show the Tray. */
   toggleRemoteMode(enabled: boolean): RemoteModeStatus {
+    if (enabled && !this.canOwnTransport()) return this.status
     if (enabled && !this.remoteModeActive) {
       this.keepAlive.dispatch({ type: 'arm' })
       this.credentials?.startPeriodicMaintenance()
