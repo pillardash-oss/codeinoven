@@ -146,6 +146,8 @@ const CLOUD_ENROLLMENT_RETRY_MAX_MS = 5 * 60_000
 const ACCOUNT_TOKEN_REFRESH_LEAD_MS = 7 * 24 * 60 * 60_000
 const ACCOUNT_TOKEN_REFRESH_RETRY_MS = 5 * 60_000
 const ACCOUNT_TOKEN_REFRESH_TIMER_MAX_MS = 24 * 60 * 60_000
+const ACCOUNT_PROFILE_REFRESH_RETRY_INITIAL_MS = 30_000
+const ACCOUNT_PROFILE_REFRESH_RETRY_MAX_MS = 5 * 60_000
 
 function cloudResponseIsTerminal(status: number): boolean {
   return status >= 400 && status < 500 && status !== 408 && status !== 425 && status !== 429
@@ -520,6 +522,9 @@ export class RemoteModeController {
   private accountTokenRefreshPromise: Promise<AccountSessionConfig> | null = null
   /** Bumped on sign-out so in-flight profile refreshes never re-broadcast stale state. */
   private accountProfileGeneration = 0
+  private accountProfileRefreshPromise: Promise<void> | null = null
+  private accountProfileRefreshFailureCount = 0
+  private accountProfileRefreshRetryAt = 0
   private cloudConfig: CloudAccessConfig | null = null
   private cloudRelay: CloudRelayClient | null = null
   private cloudEventSendQueue: Promise<void> = Promise.resolve()
@@ -720,6 +725,35 @@ export class RemoteModeController {
 
   get remoteModeActive(): boolean {
     return this.keepAlive.phase !== 'IDLE'
+  }
+
+  /**
+   * Stop this process's transports without changing the shared persisted
+   * preference. A newer app process can then restore the same enrollment and
+   * become the sole RPC executor.
+   */
+  async relinquishTransportOwnership(): Promise<void> {
+    if (!this.remoteModeActive) return
+    this.keepAlive.dispatch({ type: 'disarm' })
+    const gateway = this.gateway
+    this.gateway = null
+    this.tray?.destroy()
+    this.tray = null
+    this.clearSuspensionGrace()
+    this.activeWorkspaceDeviceIds.clear()
+    this.onSessionActiveChange?.(false)
+    this.stopCloudAccess()
+    this.credentials?.stopPeriodicMaintenance()
+    if (gateway) {
+      try {
+        await gateway.stop()
+      } catch (error) {
+        Logger.error('Remote gateway stop failed during transport handoff:', error)
+      }
+    }
+    this.syncTray()
+    this.broadcast()
+    Logger.info('Remote transport handed to a newer CodeInOven instance')
   }
 
   /** Start remote mode: arm keep-alive, launch the gateway, show the Tray. */
@@ -1280,7 +1314,16 @@ export class RemoteModeController {
    * already served. Network failures are deliberately swallowed — the cached
    * signed-in identity stays until a successful fetch or an explicit sign-out.
    */
-  private async refreshAccountProfileInBackground(): Promise<void> {
+  private refreshAccountProfileInBackground(): Promise<void> {
+    if (this.accountProfileRefreshPromise) return this.accountProfileRefreshPromise
+    if (Date.now() < this.accountProfileRefreshRetryAt) return Promise.resolve()
+    this.accountProfileRefreshPromise = this.runAccountProfileRefresh().finally(() => {
+      this.accountProfileRefreshPromise = null
+    })
+    return this.accountProfileRefreshPromise
+  }
+
+  private async runAccountProfileRefresh(): Promise<void> {
     const generation = this.accountProfileGeneration
     try {
       const state = await this.fetchAccountProfile()
@@ -1289,17 +1332,36 @@ export class RemoteModeController {
       // fetch (or an explicit sign-out) changes what the user sees.
       if (state.status !== 'signed-in') {
         Logger.dev('Account profile revalidation is not signed in; keeping the cached profile')
+        this.deferAccountProfileRefresh()
         return
       }
+      this.accountProfileRefreshFailureCount = 0
+      this.accountProfileRefreshRetryAt = 0
       this.broadcastAccountProfile(state)
     } catch (error) {
+      if (generation !== this.accountProfileGeneration) return
+      const retryDelay = this.deferAccountProfileRefresh()
       // Cancellation (cloud teardown/enrollment resets the shared abort
-      // controller) and timeouts are expected while offline — retried on the
-      // next probe, so keep the log quiet.
+      // controller) and timeouts are expected while offline, so keep the log
+      // quiet while the bounded retry delay is active.
       if (!isExpectedCloudFailure(error)) {
-        Logger.dev('Account profile refresh deferred; keeping the cached profile:', error)
+        Logger.dev(
+          `Account profile refresh deferred for ${Math.ceil(retryDelay / 1_000)}s; keeping the cached profile:`,
+          error
+        )
       }
     }
+  }
+
+  private deferAccountProfileRefresh(): number {
+    const exponent = Math.min(this.accountProfileRefreshFailureCount, 4)
+    const retryDelay = Math.min(
+      ACCOUNT_PROFILE_REFRESH_RETRY_INITIAL_MS * 2 ** exponent,
+      ACCOUNT_PROFILE_REFRESH_RETRY_MAX_MS
+    )
+    this.accountProfileRefreshFailureCount += 1
+    this.accountProfileRefreshRetryAt = Date.now() + retryDelay
+    return retryDelay
   }
 
   private async readCachedAccountProfile(): Promise<AccountProfile | null> {
@@ -1334,6 +1396,8 @@ export class RemoteModeController {
    */
   async signOutAccount(): Promise<void> {
     this.accountProfileGeneration++
+    this.accountProfileRefreshFailureCount = 0
+    this.accountProfileRefreshRetryAt = 0
     const config =
       this.accountConfig ??
       (await this.storage?.read<AccountSessionConfig>(ACCOUNT_CONFIG_PATH)) ??
@@ -1453,6 +1517,8 @@ export class RemoteModeController {
             await this.storage!.write(ACCOUNT_CONFIG_PATH, this.accountConfig)
             this.scheduleAccountTokenRefresh(expiresAt)
             this.accountProfileGeneration++
+            this.accountProfileRefreshFailureCount = 0
+            this.accountProfileRefreshRetryAt = 0
             const profile = await this.syncAccountProfile()
             this.broadcastAccountProfile(profile)
             this.accountCallbackResponse(
@@ -2080,8 +2146,8 @@ export class RemoteModeController {
       onDisconnected: (reason) => {
         if (this.cloudRelay !== relay) return
         if (reason === 'remote-host-active') {
-          Logger.dev('Another CodeInOven instance owns the shared remote transport')
-          this.cloudStatus = { ...this.cloudStatus, state: 'online', lastError: null }
+          Logger.dev('Waiting for the active CodeInOven instance to hand off remote transport')
+          this.cloudStatus = { ...this.cloudStatus, state: 'connecting', lastError: null }
           this.broadcast()
           return
         }
