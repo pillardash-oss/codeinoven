@@ -438,22 +438,7 @@ export class AssignmentEngine {
     const coordinator = await this.threads.getThread(projectId, coordinatorThreadId)
     if (!coordinator) throw new AssignmentEngineError('not_found', 'Coordinator not found')
     this.db.transaction(() => {
-      const board = this.scopes.getBoard(projectId)
-      this.scopes.saveBoard(projectId, {
-        ...board,
-        buckets: board.buckets.some((bucket) => bucket.id === scopeBucketId)
-          ? board.buckets
-          : [
-              ...board.buckets,
-              {
-                id: scopeBucketId,
-                name: active.content.title,
-                sortOrder: board.buckets.length,
-                collapsed: false,
-                collapsedSlices: []
-              }
-            ]
-      })
+      this.scopes.ensureBucket(projectId, { id: scopeBucketId, name: active.content.title })
       this.repo.save(approved, approved.version)
       new ThreadRepo(this.db).upsert({
         ...coordinator,
