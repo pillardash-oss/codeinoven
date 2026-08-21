@@ -2067,6 +2067,7 @@ export class ChatEngine {
         error: rawErrorMessage(error)
       })
     )
+    void this.recoverReadyInitialSpecs()
     void this.recoverInterruptedBrainstormEntries()
   }
 
@@ -4048,6 +4049,11 @@ export class ChatEngine {
     if (!thread?.sessionId) return null
     const pendingSpec = await this.readPendingInitialSpec(projectId, threadId)
     if (pendingSpec?.state === 'pending' || pendingSpec?.state === 'generating') {
+      const activeSpec = await this.getActiveSpec(projectId, threadId)
+      if (activeSpec) {
+        await this.runPendingInitialSpec(projectId, threadId)
+        return { state: 'idle' }
+      }
       const liveActivity = this.sessionStatuses.get(thread.sessionId)
       return liveActivity?.state === 'working' && liveActivity.activity
         ? liveActivity
@@ -12300,6 +12306,35 @@ export class ChatEngine {
     }
   }
 
+  /** Repair specifications persisted before their ready lifecycle finished. */
+  private async recoverReadyInitialSpecs(): Promise<void> {
+    try {
+      const threads = await this.threadManager.listAllThreads()
+      await Promise.all(
+        threads
+          .filter(
+            (thread) =>
+              thread.settings?.engineeringMode === true &&
+              (thread.status === 'planning' || thread.status === 'failed')
+          )
+          .map((thread) =>
+            this.runPendingInitialSpec(thread.projectId, thread.id).catch((error) => {
+              Logger.error('Ready specification thread recovery failed', {
+                projectId: thread.projectId,
+                threadId: thread.id,
+                error: rawErrorMessage(error)
+              })
+              return null
+            })
+          )
+      )
+    } catch (error) {
+      Logger.error('Ready specification recovery failed', {
+        error: rawErrorMessage(error)
+      })
+    }
+  }
+
   /** Ephemeral Brainstorm generation cannot survive a main-process restart. */
   private async recoverInterruptedBrainstormEntries(): Promise<void> {
     try {
@@ -12870,7 +12905,17 @@ export class ChatEngine {
     const operationKey = this.initialSpecKey(projectId, threadId)
     const active = await this.getActiveSpec(projectId, threadId)
     if (active) {
-      await this.clearPendingInitialSpec(projectId, threadId)
+      const pending = await this.readPendingInitialSpec(projectId, threadId)
+      if (pending) return this.finalizeInitialSpec(active, pending)
+      const thread = await this.threadManager.getThread(projectId, threadId)
+      if (
+        thread &&
+        active.status !== 'approved' &&
+        !(thread.dismissedSpecId === active.id && thread.dismissedSpecVersion === active.version) &&
+        (thread.status === 'planning' || thread.status === 'failed')
+      ) {
+        await this.publishInitialSpecReady(active, thread.sessionId)
+      }
       return active
     }
 
@@ -13222,45 +13267,89 @@ export class ChatEngine {
     spec: EngineeringSpec,
     pending: PendingInitialSpecGeneration
   ): Promise<EngineeringSpec> {
-    await this.clearPendingInitialSpec(pending.projectId, pending.threadId)
     if (pending.settings.assignmentMode === true) {
       if (!spec.content.assignment) {
-        throw new Error('Assignment mode requires a generated Assignment graph.')
+        Logger.error('Ready specification is missing its generated Assignment graph', {
+          projectId: pending.projectId,
+          threadId: pending.threadId,
+          specId: spec.id,
+          specVersion: spec.version
+        })
       }
       const existingAssignment = this.assignmentEngine.getActive(
         pending.projectId,
         pending.threadId
       )
-      if (!existingAssignment) {
-        await this.assignmentEngine.createDraft({
-          projectId: pending.projectId,
-          coordinatorThreadId: pending.threadId,
-          specId: spec.id,
-          specVersion: spec.version,
-          content: spec.content.assignment,
-          provenance: {
-            source: 'agent',
-            actor: 'Sr. Engineer',
-            harnessId: pending.settings.harnessId,
-            providerId: pending.settings.providerId,
-            modelId: pending.settings.modelId
-          }
-        })
+      if (!existingAssignment && spec.content.assignment) {
+        try {
+          await this.assignmentEngine.createDraft({
+            projectId: pending.projectId,
+            coordinatorThreadId: pending.threadId,
+            specId: spec.id,
+            specVersion: spec.version,
+            content: spec.content.assignment,
+            provenance: {
+              source: 'agent',
+              actor: 'Sr. Engineer',
+              harnessId: pending.settings.harnessId,
+              providerId: pending.settings.providerId,
+              modelId: pending.settings.modelId
+            }
+          })
+        } catch (error) {
+          Logger.error('Ready specification Assignment creation failed', {
+            projectId: pending.projectId,
+            threadId: pending.threadId,
+            specId: spec.id,
+            specVersion: spec.version,
+            error: rawErrorMessage(error)
+          })
+        }
       }
     }
-    const thread = await this.threadManager.getThread(pending.projectId, pending.threadId)
-    await this.threadManager.setStatus(pending.projectId, pending.threadId, 'spec', {
-      read: false
-    })
+    await this.publishInitialSpecReady(spec, pending.sessionId)
+    try {
+      await this.clearPendingInitialSpec(pending.projectId, pending.threadId)
+    } catch (error) {
+      Logger.error('Ready specification generation cleanup failed', {
+        projectId: pending.projectId,
+        threadId: pending.threadId,
+        specId: spec.id,
+        specVersion: spec.version,
+        error: rawErrorMessage(error)
+      })
+    }
+    return spec
+  }
+
+  private async publishInitialSpecReady(
+    spec: EngineeringSpec,
+    fallbackSessionId?: string
+  ): Promise<void> {
+    const thread = await this.threadManager.getThread(spec.projectId, spec.threadId)
+    try {
+      await this.threadManager.setStatus(spec.projectId, spec.threadId, 'spec', {
+        read: false
+      })
+    } catch (error) {
+      Logger.error('Ready specification thread status update failed', {
+        projectId: spec.projectId,
+        threadId: spec.threadId,
+        specId: spec.id,
+        specVersion: spec.version,
+        error: rawErrorMessage(error)
+      })
+    }
+    const sessionId = thread?.sessionId ?? fallbackSessionId ?? `spec-${spec.id}`
+    this.sessionStatuses.set(sessionId, { state: 'idle' })
     this.broadcast({
       type: 'spec.ready',
-      sessionId: thread?.sessionId ?? pending.sessionId,
-      projectId: pending.projectId,
-      threadId: pending.threadId,
+      sessionId,
+      projectId: spec.projectId,
+      threadId: spec.threadId,
       specId: spec.id,
       version: spec.version
     })
-    return spec
   }
 
   /** Execute a harness slash command in the thread's session. */

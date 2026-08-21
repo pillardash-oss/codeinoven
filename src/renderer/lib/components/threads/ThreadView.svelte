@@ -4051,6 +4051,16 @@
         invoke('brainstorm:getActive', projectId, workflowThreadId)
       ])
     if (!alive) return
+    const staleSpecGeneration =
+      active !== null &&
+      providerStatus?.state === 'working' &&
+      providerStatus.activity?.kind === 'spec_generation'
+    if (staleSpecGeneration) {
+      clearSpecGenerationTrace()
+      clearLocalTurn()
+      agentRuns.setIdle(thread.projectId, thread.id)
+      if (providerStatus?.state !== 'error') providerStatus = null
+    }
     brainstormWorkflow = workflow
     brainstorm = activeBrainstorm
     brainstormGenerationFailed =
