@@ -88,6 +88,10 @@ export interface DenyProbeResult {
   fullInputTokens: number | null
   leanInputTokens: number | null
   reductionInputTokens: number | null
+  /** Bash tool-call parts observed on the CONTROL (default build) leg. */
+  controlBashToolCalls: number | null
+  /** Bash tool-call parts observed on the LEAN (deny) leg — must be 0. */
+  leanBashToolCalls: number | null
   note: string
 }
 
@@ -221,6 +225,54 @@ async function runTurnMeasurement(
   return waitForMessage(baseUrl, sessionId)
 }
 
+/** Assistant-message tool parts observed for a finished turn. */
+async function waitForToolCalls(
+  baseUrl: string,
+  sessionId: string,
+  timeoutMs = 90_000
+): Promise<string[]> {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    const value = (await fetchJson(baseUrl, `/session/${sessionId}/message`)) as Array<
+      Record<string, unknown>
+    >
+    const messages = Array.isArray(value) ? value : []
+    const assistant = messages.filter(
+      (message) =>
+        typeof message?.['info'] === 'object' &&
+        message['info'] !== null &&
+        (message['info'] as Record<string, unknown>)['role'] === 'assistant'
+    )
+    if (assistant.length > 0) {
+      const names = new Set<string>()
+      for (const message of assistant) {
+        const parts = Array.isArray(message?.['parts']) ? message['parts'] : []
+        for (const part of parts) {
+          if (part?.['type'] === 'tool' && typeof part?.['tool'] === 'string') {
+            names.add(part['tool'])
+          }
+        }
+      }
+      // A turn with a step-finish is complete; return whatever tool calls ran.
+      const finished = assistant.some((message) =>
+        (Array.isArray(message?.['parts']) ? message['parts'] : []).some(
+          (part) => part?.['type'] === 'step-finish'
+        )
+      )
+      if (finished) return [...names]
+    }
+    const errored = messages.some((message) => {
+      const info = message?.['info']
+      return (
+        typeof info === 'object' && info !== null && Boolean((info as Record<string, unknown>)['error'])
+      )
+    })
+    if (errored) return []
+    await new Promise((resolve) => setTimeout(resolve, 1_000))
+  }
+  return []
+}
+
 /**
  * Run the deny-compliance probe against the installed opencode harness.
  * Not for production use — dev measurement and CI gating only.
@@ -234,6 +286,8 @@ export async function runOpenCodeDenyProbe(): Promise<DenyProbeResult> {
       fullInputTokens: null,
       leanInputTokens: null,
       reductionInputTokens: null,
+      controlBashToolCalls: null,
+      leanBashToolCalls: null,
       note: 'opencode CLI is unavailable'
     }
   }
@@ -288,6 +342,8 @@ export async function runOpenCodeDenyProbe(): Promise<DenyProbeResult> {
         fullInputTokens: null,
         leanInputTokens: null,
         reductionInputTokens: null,
+        controlBashToolCalls: null,
+        leanBashToolCalls: null,
         note: 'probe agent was not loaded by the harness'
       }
     }
@@ -299,6 +355,8 @@ export async function runOpenCodeDenyProbe(): Promise<DenyProbeResult> {
         fullInputTokens: null,
         leanInputTokens: null,
         reductionInputTokens: null,
+        controlBashToolCalls: null,
+        leanBashToolCalls: null,
         note: 'probe agent bash permission did not resolve to deny'
       }
     }
@@ -334,6 +392,8 @@ export async function runOpenCodeDenyProbe(): Promise<DenyProbeResult> {
         fullInputTokens: null,
         leanInputTokens: leanUsage.input,
         reductionInputTokens: null,
+        controlBashToolCalls: null,
+        leanBashToolCalls: null,
         note: 'full-agent turn produced no provider token report (model/provider outage at probe time)'
       }
     }
@@ -344,22 +404,63 @@ export async function runOpenCodeDenyProbe(): Promise<DenyProbeResult> {
         fullInputTokens: fullUsage.input,
         leanInputTokens: null,
         reductionInputTokens: null,
+        controlBashToolCalls: null,
+        leanBashToolCalls: null,
         note: 'lean-agent turn produced no provider token report (model/provider outage at probe time)'
       }
     }
+
+    // Behavioral schema-absence legs (P1-cp3): instruct both agents to use the
+    // denied `bash` tool. The CONTROL leg proves the instruction is actionable
+    // (bash tool-call parts appear); the LEAN leg must show ZERO bash tool
+    // parts — the denied schema is absent from its assembled prompt.
+    const bashInstruction =
+      'Use the bash tool to run exactly this command: echo cio-deny-probe. You must call the bash tool.'
+    const controlBashSession = (await fetchJson(serve.baseUrl, '/session', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title: 'control-bash' })
+    })) as { id: string }
+    await postNoContent(serve.baseUrl, `/session/${controlBashSession.id}/prompt_async`, {
+      model,
+      parts: [{ type: 'text', text: bashInstruction }]
+    })
+    const controlTools = await waitForToolCalls(serve.baseUrl, controlBashSession.id)
+    const controlBashToolCalls = controlTools.filter((tool) => tool === 'bash').length
+
+    const leanBashSession = (await fetchJson(serve.baseUrl, '/session', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title: 'lean-bash' })
+    })) as { id: string }
+    await postNoContent(serve.baseUrl, `/session/${leanBashSession.id}/prompt_async`, {
+      model,
+      agent: 'cio-probe-lean',
+      parts: [{ type: 'text', text: bashInstruction }]
+    })
+    const leanTools = await waitForToolCalls(serve.baseUrl, leanBashSession.id)
+    const leanBashToolCalls = leanTools.filter((tool) => tool === 'bash').length
+
     const reduction = fullUsage.input - leanUsage.input
     // Denied heavy tool/skill schemas must measurably shrink the assembled
-    // prompt; a lean agent that prunes nothing fails the compliance gate.
-    const compliant = leanUsage.input < fullUsage.input * 0.7
+    // prompt AND the denied bash tool must never appear on the lean leg.
+    const tokenCompliant = leanUsage.input < fullUsage.input * 0.7
+    const compliant = tokenCompliant && leanBashToolCalls === 0
     const result: DenyProbeResult = {
       version,
       compliant,
       fullInputTokens: fullUsage.input,
       leanInputTokens: leanUsage.input,
       reductionInputTokens: reduction,
+      controlBashToolCalls,
+      leanBashToolCalls,
       note: compliant
-        ? 'denied tool/skill schemas are pruned server-side on the headless prompt endpoint'
-        : 'agent deny had little/no effect on the assembled prompt (harness non-compliant)'
+        ? controlBashToolCalls > 0
+          ? 'denied bash schema absent from the lean prompt (zero bash tool calls vs. control) and schemas pruned server-side'
+          : 'denied bash never invoked on the lean leg; pruning verified via token delta (control leg did not invoke bash)'
+        : tokenCompliant
+          ? 'denied bash tool was still reachable on the lean leg (harness non-compliant)'
+          : 'agent deny had little/no effect on the assembled prompt (harness non-compliant)'
     }
     // Persist the compliance proof so the startup agent merge is gated on the
     // installed harness actually honoring deny (finding 1).
@@ -376,5 +477,5 @@ export async function runOpenCodeDenyProbe(): Promise<DenyProbeResult> {
 /** Human-line summary of the latest probe run for the dev log / progress record. */
 export function formatDenyProbeResult(result: DenyProbeResult): string {
   const verdict = result.compliant ? 'COMPLIANT' : 'NON-COMPLIANT'
-  return `opencode v${result.version} deny compliance: ${verdict} — full=${result.fullInputTokens ?? 'n/a'} lean=${result.leanInputTokens ?? 'n/a'} (reduction=${result.reductionInputTokens ?? 'n/a'}) — ${result.note}`
+  return `opencode v${result.version} deny compliance: ${verdict} — full=${result.fullInputTokens ?? 'n/a'} lean=${result.leanInputTokens ?? 'n/a'} (reduction=${result.reductionInputTokens ?? 'n/a'}) — bash tool calls control=${result.controlBashToolCalls ?? 'n/a'} lean=${result.leanBashToolCalls ?? 'n/a'} — ${result.note}`
 }

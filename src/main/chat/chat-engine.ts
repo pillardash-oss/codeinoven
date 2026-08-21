@@ -793,6 +793,28 @@ const BRAINSTORM_RESEARCH_ALLOWED_TOOLS = [
   'websearch',
   'gemini_quota'
 ]
+
+/**
+ * Tools for the brainstorm document-generation turn when the scoped-write
+ * route is active: research tools plus `edit`, whose execution scope comes
+ * exclusively from the `cio-brainstorm` agent permission (write allowed only
+ * under the feature versions directory, `.cio/specs/<slug>/versions/`). The
+ * `brainstorm_document` structured contract stays the validation authority;
+ * the agent write is only the persistence channel for the session-report
+ * revision.
+ */
+export const BRAINSTORM_DOCUMENT_WRITE_TOOLS = [...BRAINSTORM_RESEARCH_ALLOWED_TOOLS, 'edit']
+
+/**
+ * Whether the brainstorm document turn may dispatch through the agent's
+ * scoped-write channel. Only the opencode driver honors the lean-agent
+ * identifier and its path-scoped edit permission; every other harness keeps
+ * the read-only sandbox so no unscoped write channel ever opens.
+ */
+export function brainstormDocumentWriteEnabled(driverId: string): boolean {
+  return driverId === 'opencode'
+}
+
 const BRAINSTORM_GENERATION_TIMEOUT_MS = 10 * 60 * 1000
 const SPEC_GENERATION_TIMEOUT_MS = 10 * 60 * 1000
 
@@ -9828,6 +9850,12 @@ export class ChatEngine {
         ]
           .filter(Boolean)
           .join('\n\n')
+        // Scoped-write route (P3-cp4): on opencode the `cio-brainstorm` agent
+        // permission scopes `edit` to `.cio/specs/*/versions/**`, so the
+        // session-report revision persists through the agent's own write while
+        // the app still validates via the brainstorm_document contract. Every
+        // other harness keeps the read-only sandbox.
+        const brainstormWriteRoute = brainstormDocumentWriteEnabled(driverId)
         const prompt: SendPromptOptions = {
           sessionId,
           settings: {
@@ -9842,8 +9870,10 @@ export class ChatEngine {
             .join('\n\n'),
           attachments: [],
           systemPrompt: brainstormSystemPrompt,
-          allowedTools: BRAINSTORM_RESEARCH_ALLOWED_TOOLS,
-          readOnly: true,
+          allowedTools: brainstormWriteRoute
+            ? BRAINSTORM_DOCUMENT_WRITE_TOOLS
+            : BRAINSTORM_RESEARCH_ALLOWED_TOOLS,
+          readOnly: !brainstormWriteRoute,
           agent: leanAgentNameForMode('brainstorm'),
           ...(useStructuredOutput
             ? {
