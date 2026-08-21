@@ -171,8 +171,8 @@ import { APP_NAME } from '../../lib/brand'
 import { DEFAULT_AGENT_BEHAVIOR_PROMPT } from '../../lib/agent-behavior'
 import { registerCioPromptDefault, type CioPromptId } from '../../lib/cio-prompts'
 import { estimateTokenCostUsd } from '../providers/pricing'
+import { ModelsDevContextService } from '../providers/models-dev-context-service'
 import { OpenUsageClient } from '../usage/openusage-client'
-import { fallbackModelContextWindow } from '../../lib/model-context-window'
 import {
   budgetTurnLayers,
   composeBudgetedSend,
@@ -1283,6 +1283,7 @@ export class ChatEngine {
   private static readonly CATALOG_DRIVER_BUDGET_MS = 800
   private drivers = new Map<string, HarnessDriver>()
   private readonly openUsage = new OpenUsageClient()
+  private readonly modelsDevContext = new ModelsDevContextService()
   private sessionRegistry = new Map<string, SessionInfo>()
   private childSessionOwners = new Map<string, ChildSessionInfo>()
   private childCaptureTasks = new Map<string, Promise<AgentMessage[]>>()
@@ -2857,17 +2858,15 @@ export class ChatEngine {
     projectPath: string
   ): Promise<DriverDiscovery> {
     const budget = ChatEngine.CATALOG_DRIVER_BUDGET_MS
-    const probe = driver.listProviders(projectPath).then((catalogs) =>
-      catalogs.map((catalog) => ({
-        ...catalog,
-        supportsAttachments: driver.capabilities.attachments,
-        models: catalog.models.map((model) => {
-          if (model.contextWindow !== undefined) return model
-          const contextWindow = fallbackModelContextWindow(driver.id, model.id)
-          return contextWindow === undefined ? model : { ...model, contextWindow }
-        })
-      }))
-    )
+    const probe = driver
+      .listProviders(projectPath)
+      .then((catalogs) =>
+        catalogs.map((catalog) => ({
+          ...catalog,
+          supportsAttachments: driver.capabilities.attachments
+        }))
+      )
+      .then((catalogs) => this.modelsDevContext.enrichMissing(catalogs))
     let timer: ReturnType<typeof setTimeout> | undefined
     try {
       const catalogs = await Promise.race([
