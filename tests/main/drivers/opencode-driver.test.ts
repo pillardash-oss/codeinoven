@@ -8,6 +8,7 @@ import {
 } from '../../../src/main/drivers/opencode-driver'
 import type { IsolatedHandle } from '../../../src/main/drivers/opencode-driver'
 import type { SendPromptOptions } from '../../../src/main/drivers/driver.interface'
+import { LEAN_AGENT_NAMES } from '../../../src/main/opencode/opencode-agent-definitions'
 
 vi.mock('child_process', () => ({ execFile: vi.fn(), spawn: vi.fn() }))
 
@@ -715,5 +716,25 @@ describe('OpenCodeDriver prompt body agent field', () => {
   it('omits the agent field when none is set', async () => {
     const body = await capturePromptBody(undefined)
     expect(body['agent']).toBeUndefined()
+  })
+})
+
+describe('OpenCodeDriver runtime agent config', () => {
+  it('always injects app-managed lean agents without relying on global OpenCode config', async () => {
+    const driver = new OpenCodeDriver()
+    const overlay = await driver.prepareUtilityRuntime({
+      projectPath: '/tmp/proj',
+      resolvedUtilities: []
+    })
+
+    const raw = overlay.env?.['OPENCODE_CONFIG_CONTENT']
+    expect(raw).toBeDefined()
+    const config = JSON.parse(raw ?? '{}') as Record<string, unknown>
+    const agents = config['agent'] as Record<string, unknown>
+
+    expect(Object.keys(agents)).toEqual(LEAN_AGENT_NAMES)
+    expect(agents['cio-chat']).toMatchObject({ mode: 'primary' })
+    expect(config['mcp']).toEqual({})
+    expect(config['provider']).toEqual({})
   })
 })

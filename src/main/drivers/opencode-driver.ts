@@ -46,6 +46,7 @@ import { classifyProviderIssue } from '../../lib/provider-issue'
 import { isSvgAttachment, readSvgAttachmentText, formatSvgAsText } from './svg-attachment'
 import { isTextAttachment, readTextAttachment, formatTextAsText } from './text-attachment'
 import { buildTitlePrompt, sanitizeGeneratedTitle } from '../chat/title-generator'
+import { leanAgentConfigMap } from '../opencode/opencode-agent-definitions'
 
 /** Time allowed for an opencode server to announce its port before giving up. */
 const SERVER_START_TIMEOUT_MS = 25000
@@ -1160,16 +1161,17 @@ export class OpenCodeDriver implements HarnessDriver {
       }
     }
 
-    return Object.keys(mcp).length > 0 || Object.keys(provider).length > 0
-      ? {
-          env: {
-            OPENCODE_CONFIG_CONTENT: JSON.stringify({ mcp, provider }),
-            ...baseUrlEnv
-          }
-        }
-      : Object.keys(baseUrlEnv).length > 0
-        ? { env: baseUrlEnv }
-        : {}
+    // Prompts name CodeInOven's lean agents directly. Keep those definitions
+    // in the app-owned server environment so inbox chat does not depend on a
+    // successful rewrite of the user's global OpenCode config. That rewrite
+    // may be skipped for JSONC or user-owned entries, but the prompt path must
+    // remain deterministic in every case.
+    return {
+      env: {
+        OPENCODE_CONFIG_CONTENT: JSON.stringify({ agent: leanAgentConfigMap(), mcp, provider }),
+        ...baseUrlEnv
+      }
+    }
   }
 
   async applyPreparedUtilityRuntime(
