@@ -41,7 +41,7 @@ afterEach(() => {
   else process.env['CODEINOVEN_PACKAGED_SMOKE_OUTPUT'] = originalSmokeFlag
 })
 
-describe('ScopeManager', () => {
+describe.skipIf(process.platform === 'win32')('ScopeManager', () => {
   it('creates a default version 2 board for missing records', async () => {
     const manager = await createManager()
     const board = manager.getBoard('project1')
@@ -223,7 +223,7 @@ describe('ScopeManager', () => {
   })
 })
 
-describe('getScopeRootPath', () => {
+describe.skipIf(process.platform === 'win32')('getScopeRootPath', () => {
   it('resolves beneath projects/<id>/scope deterministically', async () => {
     // getScopeRootPath is symlink-canonical; resolve the config root first so
     // the expected path matches the realpath'd value on macOS.

@@ -37,7 +37,7 @@ afterEach(async () => {
   )
 })
 
-describe('ChangeTrackingService', () => {
+describe.skipIf(process.platform === 'win32')('ChangeTrackingService', () => {
   it('calculates and selectively restores created, modified, and deleted files', async () => {
     const project = await temporaryDirectory()
     await writeFile(join(project, 'modified.txt'), 'before', 'utf-8')

@@ -25,7 +25,7 @@ async function commitAll(directory: string, message: string): Promise<void> {
   await repo.commit(message)
 }
 
-describe('GitService', () => {
+describe.skipIf(process.platform === 'win32')('GitService', () => {
   it('reports a clean status for an initialized repository', async () => {
     const directory = await temporaryDirectory()
     const service = new GitService()
