@@ -83,26 +83,9 @@ const imageDescriptionPermission: Record<string, AgentPermissionValue> = {
   read: ALLOW
 }
 
-/** PR compose: read/search + READ-ONLY git; mutating git commands are denied. */
+/** PR compose receives app-prepared evidence and has no repository tools. */
 const prComposePermission: Record<string, AgentPermissionValue> = {
-  ...baseDeny,
-  read: ALLOW,
-  glob: ALLOW,
-  grep: ALLOW,
-  list: ALLOW,
-  bash: {
-    '*': 'deny',
-    'git status *': 'allow',
-    'git diff *': 'allow',
-    'git log *': 'allow',
-    'git show *': 'allow',
-    'git rev-parse *': 'allow',
-    'git ls-files *': 'allow',
-    'git ls-tree *': 'allow',
-    'git branch --show-current': 'allow',
-    'git remote -v': 'allow',
-    'git remote show *': 'allow'
-  }
+  ...baseDeny
 }
 
 /** Explicit utility setup: research plus the turn-scoped loopback API, no file writes. */
@@ -178,10 +161,10 @@ const leanAgents: readonly LeanOpenCodeAgent[] = [
     description: `Composes GitHub pull-request title and description for ${APP_NAME}.`,
     mode: 'primary',
     prompt: [
-      `You compose the title and description of a pull request for the user's ${APP_NAME} project.`,
-      'Inspect the relevant repository state with read/search tools and read-only git commands.',
+      `You compose a pull request title and description for the user's ${APP_NAME} project.`,
+      'Use only the repository evidence supplied in the user prompt. Do not inspect the repository or call tools.',
       'Return the result as the JSON object requested by the user prompt.',
-      'Never modify project source files, never push, and never touch Engineering lifecycle artifacts.'
+      'Never modify files, fetch, commit, push, or touch Engineering lifecycle artifacts.'
     ].join(' '),
     permission: prComposePermission
   },

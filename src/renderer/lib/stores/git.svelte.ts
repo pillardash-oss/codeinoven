@@ -27,6 +27,7 @@ import type {
   MergeSummary,
   PrCreateInput,
   PrAgentReport,
+  PrComposeInput,
   PrComposeReport,
   PrMergeMethod,
   PrReviewEvent,
@@ -625,7 +626,10 @@ export class GitState {
     this.markBusy('stage', true)
     this.error = null
     try {
-      this.status = await invoke('git:stage', projectId, paths)
+      const scopeBucketId = this.scopeFor(projectId)
+      this.status = scopeBucketId
+        ? await invoke('git:stage', projectId, paths, scopeBucketId)
+        : await invoke('git:stage', projectId, paths)
     } catch (reason) {
       this.error = errorMessage(reason, 'Files could not be staged')
     } finally {
@@ -1676,12 +1680,20 @@ export class GitState {
     projectId: string,
     virtualTaskId: string,
     settings: ThreadSettings,
-    title: string,
-    prompt: string
+    input: PrComposeInput
   ): Promise<PrComposeReport | null> {
     this.error = null
     try {
-      return await invoke('pr:composeWithAgent', projectId, virtualTaskId, settings, title, prompt)
+      const scopeBucketId = this.scopeFor(projectId)
+      if (!scopeBucketId) throw new Error('The pull request scope is unavailable')
+      return await invoke(
+        'pr:composeWithAgent',
+        projectId,
+        scopeBucketId,
+        virtualTaskId,
+        settings,
+        input
+      )
     } catch (reason) {
       this.error = errorMessage(reason, 'The PR compose agent could not complete its task')
       return null

@@ -1,4 +1,15 @@
-import { stat, open, access, readFile, writeFile, rename, mkdir, rm, unlink } from 'fs/promises'
+import {
+  stat,
+  lstat,
+  open,
+  access,
+  readFile,
+  writeFile,
+  rename,
+  mkdir,
+  rm,
+  unlink
+} from 'fs/promises'
 import { resolve, relative, isAbsolute, sep, dirname } from 'path'
 import { createHash } from 'node:crypto'
 import { simpleGit } from 'simple-git'
@@ -21,7 +32,8 @@ import type {
   GitStatus,
   GitSyncSummary,
   MergeSummary,
-  PullRequestCompare
+  PullRequestCompare,
+  PrComposeInput
 } from '../../lib/types'
 import { Logger } from '../system/logger'
 
@@ -30,6 +42,35 @@ const MAX_DIFF_BYTES = 500 * 1024
 
 /** Number of commits returned by `git log` by default. */
 const DEFAULT_LOG_LIMIT = 50
+
+const PR_COMPOSE_UNTRACKED_BYTES = 24 * 1024
+const PR_COMPOSE_UNTRACKED_FILES = 24
+const PR_COMPOSE_READ_BATCH = 4
+
+export interface PullRequestComposeContext {
+  source: PrComposeInput['source']
+  baseRef: string
+  headRef: string
+  commits: string
+  diffSummary: string
+  patch: string
+  pendingPushBaseRef: string | null
+  pendingCommits: string
+  pendingDiffSummary: string
+  pendingPatch: string
+  worktreePatch: string
+  untrackedFiles: string
+  truncated: boolean
+}
+
+function boundedUtf8(value: string, maximumBytes: number): { text: string; truncated: boolean } {
+  const content = Buffer.from(value, 'utf-8')
+  if (content.byteLength <= maximumBytes) return { text: value, truncated: false }
+  return {
+    text: content.subarray(0, maximumBytes).toString('utf-8'),
+    truncated: true
+  }
+}
 
 /** Kind of git command for error classification. */
 type CommandKind = 'read' | 'mutation'
@@ -957,6 +998,107 @@ export class GitService {
     })
   }
 
+  /**
+   * Build bounded, read-only evidence for a PR writing task. This never fetches,
+   * checks out, stages, or otherwise changes repository state. Remote composition
+   * uses cached origin refs. Local composition adds the commits and worktree delta
+   * that the next push will publish.
+   */
+  async pullRequestComposeContext(
+    projectPath: string,
+    input: PrComposeInput
+  ): Promise<PullRequestComposeContext> {
+    return this.enqueue(projectPath, async () => {
+      const directory = await this.repo(projectPath)
+      return this.wrapError(projectPath, 'read', async () => {
+        const git = this.client(directory)
+        const remoteBase = `refs/remotes/origin/${input.base}`
+        const localBase = `refs/heads/${input.base}`
+        const baseRef = (await this.refExists(git, remoteBase))
+          ? remoteBase
+          : (await this.refExists(git, localBase))
+            ? localBase
+            : null
+        if (!baseRef) {
+          throw new Error(`The selected base branch ${input.base} is not available locally`)
+        }
+
+        const remoteHead = `refs/remotes/origin/${input.head}`
+        const localHead = `refs/heads/${input.head}`
+        const headRef =
+          input.source === 'remote'
+            ? (await this.refExists(git, remoteHead))
+              ? remoteHead
+              : null
+            : (await this.refExists(git, localHead))
+              ? localHead
+              : null
+        if (!headRef) {
+          const location = input.source === 'remote' ? `origin/${input.head}` : input.head
+          throw new Error(`The selected head branch ${location} is not available locally`)
+        }
+
+        const fullRange = `${baseRef}..${headRef}`
+        const fullDiffRange = `${baseRef}...${headRef}`
+        const pendingPushBaseRef =
+          input.source === 'local' && (await this.refExists(git, remoteHead)) ? remoteHead : null
+        const pendingRange = pendingPushBaseRef ? `${pendingPushBaseRef}..${headRef}` : fullRange
+
+        const readGit = async (args: string[]): Promise<string> => git.raw(args)
+        const [commitsRaw, diffSummary, patchRaw, pendingCommitsRaw, pendingSummary, pendingRaw] =
+          await Promise.all([
+            readGit(['log', '--max-count=100', '--format=%h%x09%s', fullRange]),
+            readGit(['diff', '--stat', fullDiffRange, '--']),
+            readGit(['diff', '--no-ext-diff', '--unified=2', fullDiffRange, '--']),
+            input.source === 'local'
+              ? readGit(['log', '--max-count=100', '--format=%h%x09%s', pendingRange])
+              : Promise.resolve(''),
+            input.source === 'local'
+              ? readGit(['diff', '--stat', pendingRange, '--'])
+              : Promise.resolve(''),
+            input.source === 'local'
+              ? readGit(['diff', '--no-ext-diff', '--unified=2', pendingRange, '--'])
+              : Promise.resolve('')
+          ])
+
+        const includeWorkingTree = input.source === 'local' && input.includeWorkingTree
+        const [worktreeRaw, untracked] = includeWorkingTree
+          ? await Promise.all([
+              readGit(['diff', '--no-ext-diff', '--unified=2', 'HEAD', '--']),
+              this.untrackedComposeContext(directory, git)
+            ])
+          : ['', { text: '', truncated: false }]
+
+        const commits = boundedUtf8(commitsRaw.trim(), 16 * 1024)
+        const patch = boundedUtf8(patchRaw.trim(), 56 * 1024)
+        const pendingCommits = boundedUtf8(pendingCommitsRaw.trim(), 12 * 1024)
+        const pendingPatch = boundedUtf8(pendingRaw.trim(), 20 * 1024)
+        const worktreePatch = boundedUtf8(worktreeRaw.trim(), 20 * 1024)
+        return {
+          source: input.source,
+          baseRef,
+          headRef,
+          commits: commits.text,
+          diffSummary: diffSummary.trim(),
+          patch: patch.text,
+          pendingPushBaseRef,
+          pendingCommits: pendingCommits.text,
+          pendingDiffSummary: pendingSummary.trim(),
+          pendingPatch: pendingPatch.text,
+          worktreePatch: worktreePatch.text,
+          untrackedFiles: untracked.text,
+          truncated:
+            commits.truncated ||
+            patch.truncated ||
+            pendingCommits.truncated ||
+            pendingPatch.truncated ||
+            worktreePatch.truncated ||
+            untracked.truncated
+        }
+      })
+    })
+  }
+
   // ─── Merge / rebase / stash (Phase 4) ────────────────────────────────────
 
   async merge(projectPath: string, target: string): Promise<MergeSummary> {
@@ -1234,6 +1376,61 @@ export class GitService {
   }
 
   // ─── Private helpers ─────────────────────────────────────────────────────
+
+  /** Read small previews of untracked text files without adding them to Git. */
+  private async untrackedComposeContext(
+    directory: string,
+    git: SimpleGit
+  ): Promise<{ text: string; truncated: boolean }> {
+    const status = await git.status()
+    const candidates = status.not_added.slice(0, PR_COMPOSE_UNTRACKED_FILES)
+    let remainingBytes = PR_COMPOSE_UNTRACKED_BYTES
+    let truncated = status.not_added.length > candidates.length
+    const sections: string[] = []
+
+    for (
+      let index = 0;
+      index < candidates.length && remainingBytes > 0;
+      index += PR_COMPOSE_READ_BATCH
+    ) {
+      const batch = candidates.slice(index, index + PR_COMPOSE_READ_BATCH)
+      const previews = await Promise.all(
+        batch.map(async (relativePath) => {
+          const safePath = this.assertRelativePath(directory, relativePath)
+          const absolutePath = resolve(directory, safePath)
+          const metadata = await lstat(absolutePath).catch(() => null)
+          if (!metadata?.isFile() || metadata.isSymbolicLink())
+            return { path: safePath, text: '', binary: true, truncated: false }
+          const maximum = Math.min(8 * 1024, remainingBytes)
+          const handle = await open(absolutePath, 'r')
+          try {
+            const buffer = Buffer.allocUnsafe(maximum)
+            const { bytesRead } = await handle.read(buffer, 0, maximum, 0)
+            const content = buffer.subarray(0, bytesRead)
+            const binary = content.includes(0)
+            return {
+              path: safePath,
+              text: binary ? '' : content.toString('utf-8'),
+              binary,
+              truncated: metadata.size > bytesRead
+            }
+          } finally {
+            await handle.close()
+          }
+        })
+      )
+      for (const preview of previews) {
+        const body = preview.binary ? '[binary or unreadable file]' : preview.text
+        const section = `File ${JSON.stringify(preview.path)}\n${body}`
+        const bounded = boundedUtf8(section, remainingBytes)
+        sections.push(bounded.text)
+        remainingBytes -= Buffer.byteLength(bounded.text, 'utf-8')
+        truncated ||= preview.truncated || bounded.truncated
+        if (bounded.truncated) break
+      }
+    }
+    return { text: sections.join('\n\n'), truncated }
+  }
 
   /** Files changed by any commit-like ref (hash or `stash@{n}`), vs its first parent. */
   private async diffVsParent(git: SimpleGit, ref: string): Promise<GitFileChange[]> {

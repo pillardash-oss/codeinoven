@@ -21,6 +21,7 @@
   import { DEFAULT_SCOPE_BUCKET_ID, isOrchestrationChildThread } from '$shared/types'
   import type {
     Project,
+    PrComposeInput,
     PullRequestCompare,
     PullRequestReference,
     PullRequestSummary,
@@ -173,10 +174,6 @@
   let head = $state(initialPreferences.head ?? '')
   let base = $state(initialPreferences.base ?? '')
   let draft = $state(false)
-  /** Push committed local changes to the head branch so they land in the PR. */
-  let pushLocal = $state(true)
-  /** Commit staged files first, using the PR title as the commit message. */
-  let commitLocal = $state(false)
   let result: PullRequestReference | null = $state(null)
   let originError = $state('')
   let compare = $state<PullRequestCompare | null>(null)
@@ -225,9 +222,6 @@
     ...threadSettings.lastUsed,
     ...(initialPreferences.compose ?? {})
   })
-  /** Branch selection from the last virtual compose — detects changes on recompose. */
-  let composeHead = $state('')
-  let composeBase = $state('')
   /** Latest compose error, shown inline in the dropdown. */
   let composeError = $state('')
   /** Timer that flips "Complete" → "Recompose" after a short pause. */
@@ -246,14 +240,13 @@
     )
   ])
   const creating = $derived(gitState.isBusy('pr-create'))
-  const hasStagedChanges = $derived(
-    (gitState.status?.changes ?? []).some(
-      (change) => change.staged && change.status !== 'conflicted'
-    )
+  const committableChanges = $derived(
+    (gitState.status?.changes ?? []).filter((change) => change.status !== 'conflicted')
   )
+  const hasLocalWorktreeChanges = $derived(committableChanges.length > 0)
   const sameBranch = $derived(canonicalBranch(head) === canonicalBranch(base))
   const headIsCurrent = $derived(canonicalBranch(head) === canonicalBranch(branch ?? ''))
-  const willCreateCommit = $derived(commitLocal && hasStagedChanges && headIsCurrent)
+  const willCreateCommit = $derived(hasLocalWorktreeChanges && headIsCurrent)
   const hasChangesToPublish = $derived(compare?.hasChanges === true || willCreateCommit)
   const headInfo = $derived(
     gitState.branches.find((candidate) => candidate.kind === 'local' && candidate.name === head) ??
@@ -342,7 +335,6 @@
       !sameBranch &&
       Boolean(title.trim()) &&
       hasChangesToPublish &&
-      (compare?.source !== 'local' || pushLocal) &&
       existingPr === null &&
       !creating &&
       !submitting &&
@@ -422,9 +414,6 @@
       if (sequence !== compareSequence) return
       if (snapshot) {
         compare = snapshot
-        // Local-only heads must be pushed (GitHub can't see them yet); remote
-        // heads only need a push when the local copy is ahead of the remote.
-        pushLocal = snapshot.source === 'local' || hasUnpushedHeadCommits
       } else {
         compare = null
         compareError = 'Could not compare these branches.'
@@ -466,10 +455,17 @@
       // Decided up front: after the commit below, the refreshed status clears
       // staged changes, which would make hasUnpushedHeadCommits flip to false.
       const commitMade = willCreateCommit
-      const shouldPush =
-        pushLocal && headInfo?.kind === 'local' && (commitMade || hasUnpushedHeadCommits)
-      // 1. Commit staged files first, using the PR title as the message.
+      const shouldPush = headInfo?.kind === 'local' && (commitMade || hasUnpushedHeadCommits)
+      // 1. Stage and commit the complete worktree first. Compose used the same
+      //    read-only worktree evidence, so the generated copy matches this push.
       if (commitMade) {
+        await gitState.stage(projectId, [
+          ...new Set(committableChanges.map((change) => change.path))
+        ])
+        if (gitState.error) {
+          createError = gitState.error
+          return
+        }
         await gitState.commit(projectId, `commit: ${title.trim()}`)
         if (gitState.error) {
           createError = gitState.error
@@ -619,71 +615,17 @@
 
   // ─── Compose with agent ────────────────────────────────────────────────────
 
-  /** Extra context about local changes that will be pushed with the PR. */
-  function localChangesContext(): string {
-    const parts: string[] = []
-    if (commitLocal && hasStagedChanges) {
-      parts.push(
-        'Staged local changes will be committed and pushed with this pull request, so include them in your summary.'
-      )
+  function composeInput(recomposing: boolean): PrComposeInput {
+    const includeWorkingTree = headIsCurrent && hasLocalWorktreeChanges
+    const source: PrComposeInput['source'] =
+      includeWorkingTree || hasUnpushedHeadCommits ? 'local' : (compare?.source ?? 'remote')
+    return {
+      base,
+      head,
+      source,
+      includeWorkingTree,
+      ...(recomposing ? { currentTitle: title, currentDescription: body } : {})
     }
-    if (pushLocal && hasUnpushedHeadCommits) {
-      const ahead = headInfo?.ahead ?? 0
-      parts.push(
-        `The local \`${head}\` branch is ${ahead} commit${ahead === 1 ? '' : 's'} ahead of its remote and will be pushed with the PR, so cover those changes too.`
-      )
-    }
-    return parts.join('\n')
-  }
-
-  function composePrompt(): string {
-    const localChanges = localChangesContext()
-    return [
-      `Compose a pull request title and description for merging \`${head}\` into \`${base}\` in this repository.`,
-      '',
-      'Find the last set of commits on the head branch that are not yet part of the base branch:',
-      `1. \`git fetch origin\``,
-      `2. \`git log --oneline origin/${base}..origin/${head}\` (fall back to \`${base}..${head}\` if the refs are local-only).`,
-      '',
-      ...(localChanges ? [localChanges, ''] : []),
-      'Then write a concise, human-readable pull request title (one line, imperative mood) and a',
-      'description that summarizes what changed, why, and anything a reviewer should know. Do not',
-      'overstate scope — only cover the changes in those commits.',
-      '',
-      'Return only JSON with exactly this shape:',
-      '{',
-      '  "title": "The pull request title",',
-      '  "description": "The pull request description"',
-      '}',
-      '',
-      'Do not write any files, create the pull request, commit, or push.'
-    ].join('\n')
-  }
-
-  function recomposePrompt(): string {
-    const branchChanged = Boolean(
-      composeHead && composeBase && (composeHead !== head || composeBase !== base)
-    )
-    const localChanges = localChangesContext()
-    return [
-      `The user is not satisfied with the composed title and description for merging \`${head}\` into \`${base}\`.`,
-      ...(branchChanged
-        ? [
-            '',
-            `The branch selection has changed since the previous compose — it was \`${composeHead}\` into \`${composeBase}\`.`,
-            'Re-run the commit-range commands with the new branches so the summary matches them.'
-          ]
-        : []),
-      ...(localChanges ? ['', localChanges] : []),
-      '',
-      `Current title: ${JSON.stringify(title)}`,
-      'Current description:',
-      body.trim() || '(empty)',
-      '',
-      'Improve on it: re-read the commit range, make the title sharper and the description',
-      'clearer and more complete, then return only JSON with the same shape.',
-      'Do not write any files, create the pull request, commit, or push.'
-    ].join('\n')
   }
 
   function clearComposeTimers(): void {
@@ -765,14 +707,11 @@
         projectId,
         virtualTaskId,
         settings,
-        `Compose PR: ${head} → ${base}`,
-        recomposing ? recomposePrompt() : composePrompt()
+        composeInput(recomposing)
       )
       if (!report) {
         throw new Error(gitState.error ?? 'The PR compose agent did not return a result')
       }
-      composeHead = head
-      composeBase = base
       await applyComposeReport(report)
     } catch (reason) {
       composeError =
@@ -801,27 +740,23 @@
 
   onDestroy(clearComposeTimers)
 
+  function initializeBranchSelection(): void {
+    if (!originIdentity || branches.length === 0) return
+    if (!head || !branches.includes(head)) {
+      head = branch && branches.includes(branch) ? branch : branches[0]
+    }
+    if (!base || !branches.includes(base)) {
+      base = branches.includes('main') ? 'main' : branches[0]
+    }
+    if (head && base && !initialCompareStarted) {
+      initialCompareStarted = true
+      void runCompare()
+    }
+  }
+
   onMount(() => {
     gitState.activate(projectId, scopeBucketId)
-    void loadOrigin()
-  })
-
-  $effect(() => {
-    if (originIdentity && branches.length > 0) {
-      let selectionChanged = false
-      if (!head || !branches.includes(head)) {
-        head = branch && branches.includes(branch) ? branch : branches[0]
-        selectionChanged = true
-      }
-      if (!base || !branches.includes(base)) {
-        base = branches.includes('main') ? 'main' : branches[0]
-        selectionChanged = true
-      }
-      if (head && base && (selectionChanged || !initialCompareStarted)) {
-        initialCompareStarted = true
-        void runCompare()
-      }
-    }
+    void loadOrigin().then(initializeBranchSelection)
   })
 </script>
 
@@ -1287,42 +1222,25 @@
       </div>
 
       <div class="space-y-3 rounded-lg border border-border bg-surface p-2.5">
-        <div class="flex items-center justify-between gap-2">
-          <div class="min-w-0">
-            <span class="text-[10px] text-muted">Push local changes</span>
+        {#if hasLocalWorktreeChanges && headIsCurrent}
+          <div>
+            <span class="text-[10px] text-muted">Local changes</span>
             <p class="text-[9px] leading-relaxed text-dimmed">
-              Push committed changes to
-              <span class="font-mono text-foreground">{head}</span> so they're included in this pull
-              request.
-              {#if compare?.source === 'local'}
-                This is required because the compared commits are not on GitHub yet.
-              {/if}
+              Creating this pull request stages and commits every worktree change as
+              <span class="font-mono text-foreground">commit: {title.trim() || 'Title'}</span>, then
+              pushes all unpublished commits to
+              <span class="font-mono text-foreground">{head}</span>.
             </p>
           </div>
-          <Switch
-            checked={pushLocal}
-            onchange={(value) => (pushLocal = value)}
-            aria-label="Push local changes"
-          />
-        </div>
-        <div class="flex items-center justify-between gap-2">
-          <div class="min-w-0">
-            <span class="text-[10px] text-muted">Commit local changes</span>
+        {:else if hasUnpushedHeadCommits}
+          <div>
+            <span class="text-[10px] text-muted">Unpublished commits</span>
             <p class="text-[9px] leading-relaxed text-dimmed">
-              {hasStagedChanges
-                ? headIsCurrent
-                  ? `Commit staged files as commit: ${title.trim() || 'Title'} before pushing.`
-                  : `Check out ${head} before committing staged files to it.`
-                : 'No staged files to commit right now.'}
+              Creating this pull request pushes every unpublished commit on
+              <span class="font-mono text-foreground">{head}</span> first.
             </p>
           </div>
-          <Switch
-            checked={commitLocal}
-            onchange={(value) => (commitLocal = value)}
-            disabled={!hasStagedChanges || !headIsCurrent}
-            aria-label="Commit local changes"
-          />
-        </div>
+        {/if}
         <div class="flex items-center justify-between gap-2">
           <div class="min-w-0">
             <span class="text-[10px] text-muted">Create as draft</span>
@@ -1363,11 +1281,9 @@
         disabled={!canCreate}
         title={!canCreate && existingPr
           ? 'A pull request already exists for these branches'
-          : !canCreate && compare?.source === 'local' && !pushLocal
-            ? 'Push local changes to create this pull request'
-            : !canCreate && compare !== null && !hasChangesToPublish
-              ? 'There isn\u2019t anything to compare'
-              : undefined}
+          : !canCreate && compare !== null && !hasChangesToPublish
+            ? 'There isn\u2019t anything to compare'
+            : undefined}
         onclick={() => void createPullRequest()}
       >
         {#if creating || submitting}

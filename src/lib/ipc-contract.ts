@@ -891,7 +891,7 @@ export interface IpcInvokeContract {
     [projectId: string, relativePath: string, content: string],
     GitStatus
   >
-  'git:stage': Contract<[projectId: string, paths: string[]], GitStatus>
+  'git:stage': Contract<[projectId: string, paths: string[], scopeBucketId?: string], GitStatus>
   'git:resolveConflicted': Contract<[projectId: string, path: string], GitStatus>
   'git:unstage': Contract<[projectId: string, paths: string[]], GitStatus>
   'git:commit': Contract<[projectId: string, message: string, scopeBucketId?: string], GitStatus>
@@ -1235,10 +1235,10 @@ export interface IpcInvokeContract {
   'pr:composeWithAgent': Contract<
     [
       projectId: string,
+      scopeBucketId: string,
       virtualTaskId: string,
       settings: ThreadSettings,
-      title: string,
-      prompt: string
+      input: import('./types').PrComposeInput
     ],
     PrComposeReport
   >

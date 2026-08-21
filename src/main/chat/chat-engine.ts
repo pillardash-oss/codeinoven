@@ -58,7 +58,8 @@ import { forwardRemoteEvent } from '../remote/remote-event-forwarder'
 import {
   InactiveQuestionTurnError,
   type HarnessDriver,
-  type SendPromptOptions
+  type SendPromptOptions,
+  type StructuredOutputRequest
 } from '../drivers/driver.interface'
 import type { TitleAttemptAccounting } from '../drivers/persistent-cli-driver'
 import type { PreparedUtilityRuntime } from '../drivers/driver.interface'
@@ -1298,6 +1299,15 @@ class AssignmentApiRequestError extends Error {
  * The renderer subscribes to `agent:event` for streaming AgentEvents; this
  * class broadcasts driver events to all windows through a bounded stream buffer.
  */
+export interface VirtualTaskOptions {
+  utilityManagement?: boolean
+  isolateOpenCode?: boolean
+  readOnly?: boolean
+  systemPrompt?: string
+  allowedTools?: string[]
+  structuredOutput?: StructuredOutputRequest
+}
+
 export class ChatEngine {
   private static readonly STREAM_BROADCAST_INTERVAL_MS = 50
   private static readonly TEMPORARY_CHAT_INACTIVITY_MS = 3 * 60 * 60 * 1000
@@ -5846,8 +5856,9 @@ export class ChatEngine {
    * Like title generation, this sends only the caller's exact task prompt
    * instead of assembling durable thread context. Model and thinking settings
    * remain under the user's control.
-   * Session and process bookkeeping are torn down before the result crosses
-   * IPC, so virtual work cannot consume project thread capacity.
+   * Session and process bookkeeping are retired as soon as the result is ready.
+   * Provider deletion and process cleanup continue asynchronously so they do
+   * not delay the caller after the response has been captured.
    */
   async runVirtualTask(
     projectId: string,
@@ -5855,7 +5866,7 @@ export class ChatEngine {
     settings: ThreadSettings,
     title: string,
     text: string,
-    options: { utilityManagement?: boolean } = {}
+    options: VirtualTaskOptions = {}
   ): Promise<AgentMessage> {
     projectId = validateEntityId(projectId, 'Project ID')
     virtualTaskId = validateEntityId(virtualTaskId, 'Virtual task ID')
@@ -5873,7 +5884,8 @@ export class ChatEngine {
     const { driver, projectPath } = await this.resolve(projectId, driverId)
     assertHarnessRequestCapabilities(driver, [], settings.permissionLevel)
     const isolated =
-      driver instanceof OpenCodeDriver
+      driver instanceof OpenCodeDriver &&
+      (options.isolateOpenCode ?? options.utilityManagement === true)
         ? await driver.createIsolatedSession(projectPath, title)
         : undefined
     const sessionId = isolated?.sessionId ?? (await driver.createSession(projectPath, title))
@@ -5914,9 +5926,14 @@ export class ChatEngine {
         settings,
         text,
         attachments: [],
-        systemPrompt: utilityInstructions || undefined,
-        readOnly: false,
+        systemPrompt:
+          [options.systemPrompt, utilityInstructions].filter(Boolean).join('\n\n') || undefined,
+        readOnly: options.readOnly ?? false,
         agent: leanAgentNameForMode(options.utilityManagement ? 'utility-setup' : 'pr-compose'),
+        ...(options.allowedTools === undefined ? {} : { allowedTools: options.allowedTools }),
+        ...(options.structuredOutput === undefined || driver.capabilities.structuredOutput !== true
+          ? {}
+          : { structuredOutput: options.structuredOutput }),
         userMessageId: turnId
       }
       traceLeanAgent('pr-compose', sessionId, driverId)
@@ -5961,16 +5978,18 @@ export class ChatEngine {
       throw error
     } finally {
       this.clearCompletionWaiter(sessionId)
-      await this.cleanupTurnUtilities(sessionId).catch(() => undefined)
       this.retireSessionState(sessionId)
-      await this.agentProcesses
-        .releaseThread(projectId, virtualTaskId)
-        .catch((error) => Logger.dev('Virtual task process cleanup was incomplete:', error))
-      if (isolated && driver instanceof OpenCodeDriver) {
-        driver.disposeIsolatedSession(isolated)
-      } else if (driver.deleteSession) {
-        await driver.deleteSession(projectPath, sessionId).catch(() => undefined)
-      }
+      void (async () => {
+        await this.cleanupTurnUtilities(sessionId).catch(() => undefined)
+        await this.agentProcesses
+          .releaseThread(projectId, virtualTaskId)
+          .catch((error) => Logger.dev('Virtual task process cleanup was incomplete:', error))
+        if (isolated && driver instanceof OpenCodeDriver) {
+          driver.disposeIsolatedSession(isolated)
+        } else if (driver.deleteSession) {
+          await driver.deleteSession(projectPath, sessionId).catch(() => undefined)
+        }
+      })().catch((error) => Logger.dev('Virtual task cleanup was incomplete:', error))
     }
   }
 

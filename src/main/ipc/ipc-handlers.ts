@@ -15,7 +15,7 @@ import { StorageEngine } from '../storage/storage-engine'
 import { Logger } from '../system/logger'
 import { EditorService } from '../editor/editor-service'
 import { RepositoryService } from '../git/repository-service'
-import { GitService } from '../git/git-service'
+import { GitService, type PullRequestComposeContext } from '../git/git-service'
 import { SecretVault } from '../storage/secret-vault'
 import { UtilityRegistryService } from '../utilities/utility-registry-service'
 import { GitHubAuthService } from '../git/github-auth-service'
@@ -180,6 +180,7 @@ import type {
   EditorId,
   LocalProfileAnalyticsRange,
   MemoryEntry,
+  PrComposeInput,
   SkillMarketDetail,
   SpecContextReference,
   SpecSectionId,
@@ -208,6 +209,116 @@ const GITHUB_REPOSITORY_ACCESS_MESSAGE =
 const GITHUB_APP_INSTALL_URL = 'https://github.com/apps/codeinoven/installations/new'
 const SLASH_COMMAND_MODES = new Set(['app', 'passthrough'])
 const GIT_PULL_PREFERENCES = new Set(['ask', 'merge', 'rebase', 'ff-only'])
+
+const PR_COMPOSE_OUTPUT_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['title', 'description'],
+  properties: {
+    title: { type: 'string' },
+    description: { type: 'string' }
+  }
+} as const
+
+const PR_COMPOSE_SYSTEM_PROMPT = [
+  'You write pull request titles and descriptions from repository evidence supplied in the user message.',
+  'Use only that evidence. Do not inspect the repository, call tools, ask questions, or perform Git operations.',
+  'Return one JSON object with exactly the requested title and description fields.'
+].join(' ')
+
+function validatePrComposeInput(value: unknown): PrComposeInput {
+  if (!isRecord(value)) throw new TypeError('PR compose input must be an object')
+  const source = value['source']
+  if (source !== 'remote' && source !== 'local') {
+    throw new TypeError('PR compose source must be remote or local')
+  }
+  if (typeof value['includeWorkingTree'] !== 'boolean') {
+    throw new TypeError('PR compose working tree choice must be a boolean')
+  }
+  const currentTitle = value['currentTitle']
+  const currentDescription = value['currentDescription']
+  return {
+    base: canonicalGitHubBranch(validateBranchName(value['base'], 'PR compose base')),
+    head: canonicalGitHubBranch(validateBranchName(value['head'], 'PR compose head')),
+    source,
+    includeWorkingTree: value['includeWorkingTree'],
+    ...(currentTitle === undefined
+      ? {}
+      : { currentTitle: validateBoundedString(currentTitle, 'Current PR title', 0, 512) }),
+    ...(currentDescription === undefined
+      ? {}
+      : {
+          currentDescription: validateBoundedString(
+            currentDescription,
+            'Current PR description',
+            0,
+            100_000
+          )
+        })
+  }
+}
+
+function prComposePrompt(input: PrComposeInput, context: PullRequestComposeContext): string {
+  const sections = [
+    `Write a pull request for merging ${JSON.stringify(input.head)} into ${JSON.stringify(input.base)}.`,
+    '',
+    context.source === 'remote'
+      ? 'The selected branches are cached origin refs. The app performed read-only comparisons and did not fetch or change the repository.'
+      : 'The selected head is local. Cover the complete pull request range and the pending push, including the current worktree evidence below.',
+    '',
+    `Complete PR commit range (${context.baseRef}..${context.headRef}):`,
+    context.commits || '(no commit subjects available)',
+    '',
+    'Complete PR file summary:',
+    context.diffSummary || '(no file summary available)',
+    '',
+    'Complete PR patch evidence:',
+    context.patch || '(no patch available)'
+  ]
+  if (context.source === 'local') {
+    sections.push(
+      '',
+      context.pendingPushBaseRef
+        ? `Commits since the last cached push (${context.pendingPushBaseRef}..${context.headRef}):`
+        : 'The head has no cached origin branch. Treat the complete PR range as the pending first push.',
+      context.pendingCommits || '(no additional committed changes)',
+      '',
+      'Pending push file summary:',
+      context.pendingDiffSummary || '(no additional committed file changes)',
+      '',
+      'Pending push patch evidence:',
+      context.pendingPatch || '(no additional committed patch)',
+      '',
+      'Tracked worktree changes that will be committed before pushing:',
+      context.worktreePatch || '(none)',
+      '',
+      'Untracked files that will be committed before pushing:',
+      context.untrackedFiles || '(none)'
+    )
+  }
+  if (input.currentTitle !== undefined || input.currentDescription !== undefined) {
+    sections.push(
+      '',
+      'Improve the existing draft while keeping it faithful to the evidence:',
+      `Current title: ${JSON.stringify(input.currentTitle ?? '')}`,
+      'Current description:',
+      input.currentDescription?.trim() || '(empty)'
+    )
+  }
+  if (context.truncated) {
+    sections.push(
+      '',
+      'Some large evidence was truncated. Do not claim details absent from the text.'
+    )
+  }
+  sections.push(
+    '',
+    'Write a concise one-line title in imperative mood. The description must summarize what changed, why it changed when the evidence shows that, and what reviewers should know.',
+    'Return only JSON with this exact shape:',
+    '{"title":"The pull request title","description":"The pull request description"}'
+  )
+  return sections.join('\n')
+}
 
 function prComposePayload(value: unknown): { title: string; description: string } | null {
   if (!isRecord(value) || typeof value['title'] !== 'string') return null
@@ -4029,11 +4140,18 @@ export function registerIpcHandlers(
         validateConflictResolutionContent(content)
       )
   )
-  ipcMain.handle('git:stage', async (_, projectId: unknown, paths: unknown) =>
-    gitService.stage(
-      await resolveProjectPath(validateEntityId(projectId, 'Project ID')),
-      validateGitPathArray(paths)
-    )
+  ipcMain.handle(
+    'git:stage',
+    async (_, projectId: unknown, paths: unknown, scopeBucketId?: unknown) =>
+      gitService.stage(
+        await resolveProjectPath(
+          validateEntityId(projectId, 'Project ID'),
+          scopeBucketId === undefined
+            ? undefined
+            : validateEntityId(scopeBucketId, 'Scope bucket ID')
+        ),
+        validateGitPathArray(paths)
+      )
   )
   ipcMain.handle('git:resolveConflicted', async (_, projectId: unknown, path: unknown) =>
     gitService.resolveConflicted(
@@ -5344,16 +5462,32 @@ export function registerIpcHandlers(
   ipcMain.handle('pr:composeWithAgent', async (_, ...args: unknown[]) => {
     if (!chatEngine?.runVirtualTask) throw new Error('The PR compose agent is unavailable')
     const safeProjectId = validateEntityId(args[0], 'Project ID')
-    const virtualTaskId = validateEntityId(args[1], 'Virtual task ID')
-    const settings = validateThreadSettings(args[2])
-    const title = validateBoundedString(args[3], 'Virtual task title', 1, 512)
-    const prompt = validateBoundedString(args[4], 'Virtual task prompt', 1, 200_000)
+    const scopeBucketId = validateEntityId(args[1], 'Scope bucket ID')
+    const virtualTaskId = validateEntityId(args[2], 'Virtual task ID')
+    const settings = validateThreadSettings({
+      ...validateThreadSettings(args[3]),
+      permissionLevel: 'auto_review',
+      engineeringMode: false,
+      assignmentMode: false,
+      loopMode: false
+    })
+    const input = validatePrComposeInput(args[4])
+    const context = await gitService.pullRequestComposeContext(
+      await resolveProjectPath(safeProjectId, scopeBucketId),
+      input
+    )
     const response = await chatEngine.runVirtualTask(
       safeProjectId,
       virtualTaskId,
       settings,
-      title,
-      prompt
+      `Compose PR: ${input.head} to ${input.base}`,
+      prComposePrompt(input, context),
+      {
+        systemPrompt: PR_COMPOSE_SYSTEM_PROMPT,
+        readOnly: true,
+        allowedTools: [],
+        structuredOutput: { schema: PR_COMPOSE_OUTPUT_SCHEMA, retryCount: 2 }
+      }
     )
     const report = prComposeResponse(response)
     if (!report.title.trim()) throw new Error('The PR compose agent returned no title')

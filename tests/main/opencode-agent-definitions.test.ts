@@ -21,7 +21,7 @@ const DOCUMENTED_ALLOW: Record<LeanAgentMode, string[]> = {
   'file-system-chat': ['read', 'glob', 'grep', 'list', 'webfetch', 'websearch', 'question'],
   ephemeral: ['read', 'glob', 'grep', 'list', 'webfetch', 'websearch', 'question'],
   'image-description': ['read'],
-  'pr-compose': ['read', 'glob', 'grep', 'list'],
+  'pr-compose': [],
   'utility-setup': ['read', 'glob', 'grep', 'list', 'webfetch', 'websearch', 'question'],
   brainstorm: ['read', 'glob', 'grep', 'list', 'webfetch', 'websearch', 'question']
 }
@@ -30,20 +30,6 @@ const DOCUMENTED_ALLOW: Record<LeanAgentMode, string[]> = {
 const DOCUMENTED_EDIT_SCOPE: Partial<Record<LeanAgentMode, string>> = {
   brainstorm: '.cio/specs/*/versions/**'
 }
-
-/** Read-only git allowances for the PR compose agent (mutating git denied). */
-const DOCUMENTED_BASH_SCOPES: Array<string> = [
-  'git status *',
-  'git diff *',
-  'git log *',
-  'git show *',
-  'git rev-parse *',
-  'git ls-files *',
-  'git ls-tree *',
-  'git branch --show-current',
-  'git remote -v',
-  'git remote show *'
-]
 
 const HEAVY_KEYS = [
   'read',
@@ -111,15 +97,14 @@ describe('lean agent definitions', () => {
       if (editScope !== undefined) {
         expect(agent.permission['edit']).toMatchObject({ '*': 'deny', [editScope]: 'allow' })
       }
-      // Object-shaped bash scopes are pinned per mode: PR compose allows only
-      // read-only git commands; utility-setup allows only `curl` to the app API.
-      if (mode === 'pr-compose' || mode === 'utility-setup') {
+      // Utility setup alone receives a scoped shell for the app API. PR
+      // composition receives app-prepared evidence and has no tools.
+      if (mode === 'utility-setup') {
         const configured = agent.permission['bash']
         expect(typeof configured === 'object' && configured !== null).toBe(true)
         const mapping = configured as Record<string, 'allow' | 'deny'>
         expect(mapping['*']).toBe('deny')
-        const expectedScopes = mode === 'utility-setup' ? ['curl *'] : DOCUMENTED_BASH_SCOPES
-        for (const scope of expectedScopes) expect(mapping[scope]).toBe('allow')
+        expect(mapping['curl *']).toBe('allow')
       } else {
         expect(agent.permission['bash']).toBe('deny')
       }

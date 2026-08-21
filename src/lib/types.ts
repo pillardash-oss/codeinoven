@@ -3849,6 +3849,17 @@ export interface PrComposeReport {
   taskId: string
 }
 
+/** Branch selection and optional existing copy for one isolated PR composition. */
+export interface PrComposeInput {
+  base: string
+  head: string
+  /** Remote uses cached origin refs only; local also includes unpushed commits and worktree changes. */
+  source: 'remote' | 'local'
+  includeWorkingTree: boolean
+  currentTitle?: string
+  currentDescription?: string
+}
+
 /** Repository identity resolved from a remote URL (e.g. `owner/repo`). */
 export interface GitRepositoryIdentity {
   owner: string
