@@ -442,10 +442,17 @@ export async function runOpenCodeDenyProbe(): Promise<DenyProbeResult> {
     const leanBashToolCalls = leanTools.filter((tool) => tool === 'bash').length
 
     const reduction = fullUsage.input - leanUsage.input
-    // Denied heavy tool/skill schemas must measurably shrink the assembled
-    // prompt AND the denied bash tool must never appear on the lean leg.
+    // Compliance requires ALL of:
+    // 1. Token delta: denied schemas measurably shrink the assembled prompt.
+    // 2. Control leg PROVES the instruction was actionable — bash was actually
+    //    invoked under the default build agent (>= 1 bash tool-call part).
+    // 3. Lean leg shows ZERO bash tool-call parts: the denied schema is absent.
+    // A control leg with zero bash calls makes the differential meaningless, so
+    // the probe refuses to declare compliance (environment/model refusal).
     const tokenCompliant = leanUsage.input < fullUsage.input * 0.7
-    const compliant = tokenCompliant && leanBashToolCalls === 0
+    const controlProvedBash = controlBashToolCalls > 0
+    const leanClean = leanBashToolCalls === 0
+    const compliant = tokenCompliant && controlProvedBash && leanClean
     const result: DenyProbeResult = {
       version,
       compliant,
@@ -455,12 +462,12 @@ export async function runOpenCodeDenyProbe(): Promise<DenyProbeResult> {
       controlBashToolCalls,
       leanBashToolCalls,
       note: compliant
-        ? controlBashToolCalls > 0
-          ? 'denied bash schema absent from the lean prompt (zero bash tool calls vs. control) and schemas pruned server-side'
-          : 'denied bash never invoked on the lean leg; pruning verified via token delta (control leg did not invoke bash)'
-        : tokenCompliant
-          ? 'denied bash tool was still reachable on the lean leg (harness non-compliant)'
-          : 'agent deny had little/no effect on the assembled prompt (harness non-compliant)'
+        ? 'denied bash schema absent from the lean prompt (zero bash tool calls) while the control leg invoked bash; schemas pruned server-side'
+        : !controlProvedBash
+          ? 'control leg did not invoke bash, so schema absence cannot be proven differentially (model refusal or outage at probe time)'
+          : !tokenCompliant
+            ? 'agent deny had little/no effect on the assembled prompt (harness non-compliant)'
+            : 'denied bash tool was still reachable on the lean leg (harness non-compliant)'
     }
     // Persist the compliance proof so the startup agent merge is gated on the
     // installed harness actually honoring deny (finding 1).

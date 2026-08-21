@@ -47,15 +47,12 @@ describe('opencode deny-compliance probe', () => {
         return
       }
       expect(result.compliant).toBe(true)
-      // P1-cp3: the denied bash tool must be ABSENT from the lean agent's
-      // assembled prompt — zero bash tool-call parts on the lean leg.
+      // P1-cp3: schema absence is proven DIFFERENTIALLY. The control leg must
+      // have actually invoked bash (proving the instruction was actionable),
+      // and the lean leg must show ZERO bash tool-call parts.
+      expect(result.controlBashToolCalls ?? 0).toBeGreaterThanOrEqual(1)
       expect(result.leanBashToolCalls).toBe(0)
-      // The control leg proves the instruction was actionable (bash reachable
-      // under the default build agent). If the model declined on the control
-      // leg the note says so; the lean-leg zero is still mandatory.
-      if ((result.controlBashToolCalls ?? 0) > 0) {
-        expect(result.note).toContain('absent')
-      }
+      expect(result.note).toContain('absent')
       expect(result.leanInputTokens ?? 0).toBeLessThan((result.fullInputTokens ?? 0) * 0.7)
       expect((result.fullInputTokens ?? 0) - (result.leanInputTokens ?? 0)).toBeGreaterThan(500)
     },

@@ -759,7 +759,7 @@ const BRAINSTORM_GENERATION_SYSTEM_PROMPT = [
   'In Boundaries, capture user-stated and verified constraints with evidence where applicable.',
   'In Agreed Direction, state the current direction, the reason it fits, and the immediate handoff into specification. Keep alternatives only when the user has not ruled them out.',
   'You may append Additional Info (additional_info) only when useful material does not fit a required section. Omit it when empty.',
-  'Do not implement, assign work, mutate files, or claim the engineering specification is ready. This document is discovery input for a later specification.',
+  'When the dispatch supplies an exact session-report revision path under the feature versions directory, write the report Markdown to exactly that path and nowhere else; never modify any other file. Do not implement, assign work, or claim the engineering specification is ready. This document is discovery input for a later specification.',
   'Prefer clarity and accuracy over length. Do not repeat the request in different words or hide uncertainty behind confident prose.',
   MERMAID_OUTPUT_INSTRUCTION
 ].join(' ')
@@ -778,7 +778,7 @@ const BRAINSTORM_JSON_SHAPE = JSON.stringify({
 })
 
 const BRAINSTORM_JSON_FALLBACK_SYSTEM_PROMPT = [
-  'Research the supplied discussion and project, then return one valid Brainstorm JSON object. Read-only project and web research tools are available and should be used when relevant. Do not mutate files, return explanatory prose outside the object, or use Markdown fences around the object.',
+  'Research the supplied discussion and project, then return one valid Brainstorm JSON object. Read-only project and web research tools are available and should be used when relevant. When the dispatch supplies an exact session-report revision path, write the report there and nowhere else; otherwise do not mutate files. Do not return explanatory prose outside the object, or use Markdown fences around the object.',
   BRAINSTORM_GENERATION_SYSTEM_PROMPT,
   `Use this exact object shape: ${BRAINSTORM_JSON_SHAPE}`,
   'First response character must be { and last must be }.'
@@ -9802,6 +9802,26 @@ export class ChatEngine {
     if (options.announceProgress !== false) {
       await this.beginBrainstormConversationTurn(projectId, threadId, source)
     }
+    // Scoped-write route (P3-cp4): on opencode, supply the EXACT revision path
+    // so the `cio-brainstorm` agent persists the session-report revision itself
+    // through its path-scoped `edit` permission. The app still validates the
+    // returned content via the brainstorm_document contract and records the
+    // authoritative copy through BrainstormEngine.
+    const brainstormWriteRoute = brainstormDocumentWriteEnabled(driverId)
+    let revisionPathInstruction = ''
+    if (brainstormWriteRoute) {
+      const featureSlug = await ensureFeatureSlug(this.database, projectId, threadId)
+      const revisionRelativePath = join(
+        featureArtifactDirectory(featureSlug),
+        'versions',
+        `session-${Date.now()}-brainstorm.md`
+      ).replace(/\\/gu, '/')
+      revisionPathInstruction = [
+        '',
+        'Session-report revision path (write the report Markdown to EXACTLY this project-relative path, creating parent directories as needed):',
+        revisionRelativePath
+      ].join('\n')
+    }
     const finish = async (content: BrainstormContent): Promise<BrainstormContent> => {
       await this.completeBrainstormConversationTurn(projectId, threadId, content, settings)
       return content
@@ -9884,7 +9904,11 @@ export class ChatEngine {
             assignmentMode: false,
             loopMode: false
           },
-          text: [source, repairError ? this.brainstormRepairInstruction(repairError) : '']
+          text: [
+            source,
+            revisionPathInstruction,
+            repairError ? this.brainstormRepairInstruction(repairError) : ''
+          ]
             .filter(Boolean)
             .join('\n\n'),
           attachments: [],
