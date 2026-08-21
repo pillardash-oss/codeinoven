@@ -126,6 +126,11 @@ export function isPushRejected(message: string): boolean {
   )
 }
 
+export type GitPushResult =
+  | { status: 'pushed' }
+  | { status: 'rejected'; message: string }
+  | { status: 'failed'; message: string }
+
 export type DeleteBranchResult = 'deleted' | 'requires-force' | 'failed'
 
 /** Git refuses `branch -d` when commits would become unreachable. */
@@ -774,7 +779,7 @@ export class GitState {
     setUpstream: boolean,
     remote?: string,
     branch?: string
-  ): Promise<'pushed' | 'rejected' | 'failed'> {
+  ): Promise<GitPushResult> {
     this.markBusy('push', true)
     this.error = null
     try {
@@ -783,14 +788,14 @@ export class GitState {
       // Pushing changes what GitHub computes for the branch — force a fresh
       // conflict check instead of waiting for the next thread open.
       void this.refreshPrConflictIndicators(projectId, true)
-      return 'pushed'
+      return { status: 'pushed' }
     } catch (reason) {
       const message = errorMessage(reason, 'Push failed')
       // A non-fast-forward rejection is not a failure — the panel turns it into
       // the "pull & push" recovery dialog instead of a scary error banner.
-      if (isPushRejected(message)) return 'rejected'
+      if (isPushRejected(message)) return { status: 'rejected', message }
       this.error = message
-      return 'failed'
+      return { status: 'failed', message }
     } finally {
       this.markBusy('push', false)
     }

@@ -1118,7 +1118,7 @@
     if (!status?.branch) return
     const result = await gitState.push(projectId, false, remote.name)
     // A non-fast-forward rejection becomes the recovery dialog, not an error.
-    if (result === 'rejected') pushDiverged = true
+    if (result.status === 'rejected') pushDiverged = true
   }
 
   async function pushAction(): Promise<void> {
@@ -1143,7 +1143,7 @@
     pushConfirm = false
     if (!primaryRemote || !status?.branch) return
     const result = await gitState.push(projectId, true, primaryRemote.name, status.branch)
-    if (result === 'rejected') pushDiverged = true
+    if (result.status === 'rejected') pushDiverged = true
   }
 
   /** Pull the remote into the local branch, then push once integration is clean. */

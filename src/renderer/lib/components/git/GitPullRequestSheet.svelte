@@ -182,6 +182,10 @@
   let submitting = $state(false)
   /** Set when the push was rejected: shows the pull/rebase recovery panel. */
   let pushRejected = $state(false)
+  /** Git's output for the latest rejected push, available on demand in the recovery panel. */
+  let pushErrorDetails = $state('')
+  /** A failed commit, push, or PR creation owned by this submission attempt. */
+  let createError = $state('')
   /** Which recovery action is running ('merge' | 'rebase'), to disable buttons. */
   let recoverMode = $state<'merge' | 'rebase' | null>(null)
   /** True while a prepared divergence-resolution thread is being opened. */
@@ -246,7 +250,13 @@
   const composeSucceeded = $derived(composePhase === 'complete' || composePhase === 'recompose')
   const dockHasIssue = $derived(
     Boolean(
-      originError || compareError || composeError || gitState.error || pushRejected || existingPr
+      originError ||
+      compareError ||
+      composeError ||
+      createError ||
+      gitState.error ||
+      pushRejected ||
+      existingPr
     )
   )
 
@@ -374,6 +384,8 @@
     comparing = true
     compareError = ''
     pushRejected = false
+    pushErrorDetails = ''
+    createError = ''
     try {
       const snapshot = await gitState.comparePullRequests(
         projectId,
@@ -403,6 +415,13 @@
 
   async function createPullRequest(): Promise<void> {
     if (!originIdentity || !head || !base || !canCreate || submitting) return
+    // Submission owns the status area from this point. Invalidate an in-flight
+    // comparison so a slow response cannot leave its spinner over a push error.
+    compareSequence++
+    comparing = false
+    pushRejected = false
+    pushErrorDetails = ''
+    createError = ''
     submitting = true
     try {
       // Decided up front: after the commit below, the refreshed status clears
@@ -412,7 +431,10 @@
       // 1. Commit staged files first, using the PR title as the message.
       if (commitMade) {
         await gitState.commit(projectId, `commit: ${title.trim()}`)
-        if (gitState.error) return
+        if (gitState.error) {
+          createError = gitState.error
+          return
+        }
       }
       // 2. Push local commits only when the head actually has something the
       //    remote doesn't — when the branch already exists on GitHub (and the
@@ -423,11 +445,15 @@
         const hasUpstream =
           gitState.branches.find((candidate) => candidate.name === head)?.remote != null
         const pushed = await gitState.push(projectId, !hasUpstream, 'origin', head)
-        if (pushed === 'rejected') {
+        if (pushed.status === 'rejected') {
           pushRejected = true
+          pushErrorDetails = pushed.message
           return
         }
-        if (pushed === 'failed') return
+        if (pushed.status === 'failed') {
+          createError = pushed.message
+          return
+        }
       }
       // 3. Create the pull request.
       await finishCreate()
@@ -449,6 +475,8 @@
       persistPrCreationPreferences({ head, base })
       result = reference
       onCreated?.()
+    } else if (!gitState.githubPermission) {
+      createError = gitState.error ?? 'GitHub did not create the pull request. Try again.'
     }
   }
 
@@ -460,18 +488,28 @@
   async function recoverPush(mode: 'merge' | 'rebase'): Promise<void> {
     if (!originIdentity || !head || !base || recoverMode) return
     pushRejected = false
+    pushErrorDetails = ''
+    createError = ''
     recoverMode = mode
     try {
       await gitState.pullIntegrate(projectId, 'origin', head, mode === 'rebase')
-      if (gitState.error || gitState.conflicted.length > 0) return
+      if (gitState.error) {
+        createError = gitState.error
+        return
+      }
+      if (gitState.conflicted.length > 0) return
       const hasUpstream =
         gitState.branches.find((candidate) => candidate.name === head)?.remote != null
       const pushed = await gitState.push(projectId, !hasUpstream, 'origin', head)
-      if (pushed === 'rejected') {
+      if (pushed.status === 'rejected') {
         pushRejected = true
+        pushErrorDetails = pushed.message
         return
       }
-      if (pushed === 'failed') return
+      if (pushed.status === 'failed') {
+        createError = pushed.message
+        return
+      }
       await finishCreate()
     } finally {
       recoverMode = null
@@ -1087,6 +1125,15 @@
                 so Git won't let you push over them. Pull the remote changes in first — the pull request
                 is created automatically afterwards.
               </p>
+              {#if pushErrorDetails}
+                <details class="mt-2 text-[9px] text-dimmed">
+                  <summary class="cursor-pointer select-none font-medium text-foreground">
+                    Show Git error
+                  </summary>
+                  <pre
+                    class="mt-1.5 max-h-32 overflow-auto whitespace-pre-wrap break-words rounded-lg border border-border bg-elevated p-2 font-mono text-[9px] leading-relaxed text-danger">{pushErrorDetails}</pre>
+                </details>
+              {/if}
               {#if headIsCurrent}
                 <div class="mt-2 flex items-center gap-1.5">
                   <button
@@ -1138,6 +1185,25 @@
               {/if}
               Resolve with agent
             </button>
+          </div>
+        </div>
+      {/if}
+
+      {#if createError}
+        <div class="rounded-lg border border-danger/20 bg-danger/10 px-3 py-2.5" role="alert">
+          <div class="flex items-start gap-2">
+            <TriangleAlert size={14} class="mt-0.5 shrink-0 text-danger" />
+            <div class="min-w-0">
+              <p class="text-[10px] font-semibold text-danger">Pull request was not created</p>
+              <p
+                class="mt-0.5 whitespace-pre-wrap break-words text-[9px] leading-relaxed text-danger"
+              >
+                {createError}
+              </p>
+              <p class="mt-1 text-[9px] leading-relaxed text-dimmed">
+                Fix the Git error, then choose Create pull request to try again.
+              </p>
+            </div>
           </div>
         </div>
       {/if}
@@ -1235,7 +1301,7 @@
       </div>
     {/if}
 
-    {#if gitState.error && !result && !composeError}
+    {#if gitState.error && !result && !composeError && !createError}
       <p
         class="rounded-lg border border-danger/20 bg-danger/10 px-3 py-1.5 text-[10px] leading-relaxed text-danger"
       >
