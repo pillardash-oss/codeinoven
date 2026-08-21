@@ -378,10 +378,13 @@
   })
   let isDragging = $state(false)
   let previewFile = $state<PromptAttachment | null>(null)
-  /** Object URLs for image/pdf previews, keyed by attachment file:// URL. */
+  /** Object URLs for image/PDF/media/document downloads, keyed by attachment file:// URL. */
   let previewUrls = $state<Record<string, string>>({})
   /** Decoded text content for markdown/plain-text previews, keyed by url. */
   let previewTexts = $state<Record<string, string>>({})
+  /** Converted Word document HTML, loaded only when the preview is opened. */
+  let previewDocuments = $state<Record<string, string>>({})
+  let previewDocumentLoading = $state<Record<string, boolean>>({})
   /** Image-descriptor gate state: intercepts sending an image to a text-only model. */
   let imageDescriptorGateOpen = $state(false)
   let gateVisionSelection = $state<AgentModelSelection | null>(null)
@@ -850,6 +853,8 @@
     taskReferences = []
     previewUrls = {}
     previewTexts = {}
+    previewDocuments = {}
+    previewDocumentLoading = {}
     onAttachmentsChange?.([])
     onProjectReferencesChange?.([])
     onTaskReferencesChange?.([])
@@ -1139,15 +1144,31 @@
     else threadSettingsStore.commit(updated)
   }
 
-  /** Loads the preview payload for one attachment: blob URLs for images/pdfs,
-   *  decoded text for markdown/plain-text. Missing/undecodable files silently
+  /** Loads the preview payload for one attachment: blob URLs for binary media,
+   *  converted Word HTML, or decoded text. Missing/undecodable files silently
    *  yield no preview so the chip falls back to the file:// URL or the modal
    *  shows its unavailable state. */
   async function loadAttachmentPreview(file: PromptAttachment): Promise<void> {
     const kind = attachmentPreviewKind(file.mime, file.filename ?? '')
     if (!kind) return
+    if (kind === 'document' && previewFile?.url !== file.url) return
     try {
-      const bytes = await window.api.readFile(fileUrlToPath(file.url))
+      const filePath = fileUrlToPath(file.url)
+      if (kind === 'document') {
+        if (previewDocuments[file.url] !== undefined && previewUrls[file.url]) return
+        if (previewDocumentLoading[file.url]) return
+        previewDocumentLoading = { ...previewDocumentLoading, [file.url]: true }
+        const html = await invoke('file:readWordPreview', filePath)
+        if (!html) return
+        previewDocuments = { ...previewDocuments, [file.url]: html }
+        if (!previewUrls[file.url]) {
+          const bytes = await window.api.readFile(filePath)
+          const objectUrl = URL.createObjectURL(new Blob([bytes], { type: file.mime }))
+          previewUrls = { ...previewUrls, [file.url]: objectUrl }
+        }
+        return
+      }
+      const bytes = await window.api.readFile(filePath)
       if (kind === 'markdown' || kind === 'text' || kind === 'csv') {
         if (previewTexts[file.url] !== undefined) return
         previewTexts = { ...previewTexts, [file.url]: new TextDecoder().decode(bytes) }
@@ -1158,7 +1179,16 @@
       previewUrls = { ...previewUrls, [file.url]: objectUrl }
     } catch {
       // Preview unavailable; the chip/modal will fall back to the file:// URL.
+    } finally {
+      if (kind === 'document') {
+        previewDocumentLoading = { ...previewDocumentLoading, [file.url]: false }
+      }
     }
+  }
+
+  function openAttachmentPreview(file: PromptAttachment): void {
+    previewFile = file
+    void loadAttachmentPreview(file)
   }
 
   async function loadAttachmentPreviews(files: PromptAttachment[]): Promise<void> {
@@ -1245,6 +1275,12 @@
       const restTexts = { ...previewTexts }
       delete restTexts[removed.url]
       previewTexts = restTexts
+      const restDocuments = { ...previewDocuments }
+      delete restDocuments[removed.url]
+      previewDocuments = restDocuments
+      const restLoading = { ...previewDocumentLoading }
+      delete restLoading[removed.url]
+      previewDocumentLoading = restLoading
     }
     attachments = attachments.filter((_, i) => i !== index)
     onAttachmentsChange?.(attachments)
@@ -1623,6 +1659,8 @@
     attachment={previewFile}
     src={previewUrls[previewFile.url]}
     text={previewTexts[previewFile.url]}
+    documentHtml={previewDocuments[previewFile.url]}
+    documentLoading={previewDocumentLoading[previewFile.url] ?? false}
     onSaveText={isEditablePastedTextAttachment(previewFile) ? savePreviewText : undefined}
     onClose={() => (previewFile = null)}
   />
@@ -2022,7 +2060,7 @@
                   class="flex min-w-0 items-center gap-1.5 py-1 pr-1 pl-2 text-left transition-colors hover:text-foreground"
                   title="Click to preview"
                   aria-label="Preview {file.filename ?? 'file'}"
-                  onclick={() => (previewFile = file)}
+                  onclick={() => openAttachmentPreview(file)}
                 >
                   {#if previewKind === 'image'}
                     {#if previewUrls[file.url]}

@@ -59,6 +59,7 @@ import { AttachmentGrantRepo } from '../database/repositories/attachment-grant-r
 import { HarnessUsageRepo } from '../database/repositories/harness-usage-repo'
 import { TurnFeedbackRepo } from '../database/repositories/turn-feedback-repo'
 import { NoteRepo } from '../database/repositories/note-repo'
+import { readWordDocumentHtml } from '../drivers/document-attachment'
 import {
   validateBoundedInteger,
   validateBoundedString,
@@ -3520,6 +3521,24 @@ export function registerIpcHandlers(
     } catch (error) {
       if (isMissingScopedPathError(error) || isMissingFilesystemError(error)) return null
       Logger.error('file:readAsDataUrl rejected out-of-scope path:', error)
+      return null
+    }
+  })
+
+  // Convert a scoped Word document to bounded semantic HTML on demand. The
+  // renderer sanitizes and isolates the result before displaying it.
+  privileged('file:readWordPreview', async (_event, filePath: unknown) => {
+    try {
+      const safePath = await privilegedIpc.resolveScopedPath(filePath)
+      if (extname(safePath).toLowerCase() !== '.docx') return null
+      return readWordDocumentHtml({
+        mime: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        url: safePath,
+        filename: basename(safePath)
+      })
+    } catch (error) {
+      if (isMissingScopedPathError(error) || isMissingFilesystemError(error)) return null
+      Logger.error('file:readWordPreview rejected out-of-scope path:', error)
       return null
     }
   })

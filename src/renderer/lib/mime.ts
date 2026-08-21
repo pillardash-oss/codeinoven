@@ -133,19 +133,13 @@ const TEXT_EXTENSION_PATTERN =
 const CSV_EXTENSION_PATTERN = /\.(?:csv|tsv)$/iu
 
 /** The kind of inline preview a chat attachment supports, or `null` when the
- *  file type has no renderer (images render as `<img>`, pdf as an iframe via
- *  the Chromium PDF viewer, video/audio via the native media elements,
+ *  file type has no renderer (images render as `<img>`, PDF and converted DOCX
+ *  content in isolated frames, video/audio via the native media elements,
  *  markdown via `MarkdownView`, plain text raw, CSV as a table). Filename
  *  extensions provide a fallback for files whose reported mime is
  *  `application/octet-stream` or empty. */
 export type AttachmentPreviewKind =
-  | 'image'
-  | 'pdf'
-  | 'video'
-  | 'audio'
-  | 'markdown'
-  | 'text'
-  | 'csv'
+  'image' | 'pdf' | 'document' | 'video' | 'audio' | 'markdown' | 'text' | 'csv'
 
 export function attachmentPreviewKind(
   mime: string,
@@ -155,6 +149,12 @@ export function attachmentPreviewKind(
   if (isVideoMime(mime) || VIDEO_EXTENSION_PATTERN.test(filename)) return 'video'
   if (isAudioMime(mime) || AUDIO_EXTENSION_PATTERN.test(filename)) return 'audio'
   if (isPdfMime(mime) || /\.pdf$/iu.test(filename)) return 'pdf'
+  if (
+    mime === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' ||
+    /\.docx$/iu.test(filename)
+  ) {
+    return 'document'
+  }
   if (
     mime === 'text/csv' ||
     mime === 'text/tab-separated-values' ||

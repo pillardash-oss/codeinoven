@@ -18,6 +18,7 @@
   import { PanZoom } from '$lib/pan-zoom.svelte'
   import type { PromptAttachment } from '$shared/types'
   import { attachmentPreviewKind } from '$lib/mime'
+  import DOMPurify from 'dompurify'
 
   interface Props {
     attachment: PromptAttachment
@@ -25,12 +26,23 @@
     src?: string
     /** Decoded text content for markdown/plain-text previews. */
     text?: string
+    /** Semantic HTML produced from a Word document in the main process. */
+    documentHtml?: string
+    documentLoading?: boolean
     /** Persists edits when this is an app-owned pasted-text attachment. */
     onSaveText?: (text: string) => Promise<void>
     onClose: () => void
   }
 
-  let { attachment, src, text, onSaveText, onClose }: Props = $props()
+  let {
+    attachment,
+    src,
+    text,
+    documentHtml,
+    documentLoading = false,
+    onSaveText,
+    onClose
+  }: Props = $props()
 
   const filename = $derived(attachment.filename ?? 'file')
   const kind = $derived(attachmentPreviewKind(attachment.mime, filename))
@@ -46,6 +58,9 @@
   let saveError = $state('')
   let confirmCloseOpen = $state(false)
   const dirty = $derived(editableText && draft !== (text ?? ''))
+  const documentSrcdoc = $derived(
+    kind === 'document' && documentHtml ? wordPreviewDocument(documentHtml) : undefined
+  )
 
   const panZoom = new PanZoom()
   let imageViewport = $state<HTMLDivElement>()
@@ -66,6 +81,29 @@
     document.body.appendChild(link)
     link.click()
     link.remove()
+  }
+
+  function wordPreviewDocument(html: string): string {
+    const sanitized = DOMPurify.sanitize(html)
+    return `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <style>
+      :root { color-scheme: light; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+      body { box-sizing: border-box; max-width: 52rem; min-height: calc(100vh - 4rem); margin: 2rem auto; padding: 3.5rem 4rem; color: #202124; background: #fff; box-shadow: 0 8px 30px rgb(0 0 0 / 14%); line-height: 1.55; }
+      h1, h2, h3, h4, h5, h6 { line-height: 1.25; }
+      img { max-width: 100%; height: auto; }
+      table { width: 100%; border-collapse: collapse; }
+      th, td { border: 1px solid #d5d7da; padding: .45rem .6rem; vertical-align: top; }
+      li + li { margin-top: .35rem; }
+      a { color: #0969da; }
+      @media (max-width: 700px) { body { margin: 0; padding: 1.5rem; box-shadow: none; } }
+    </style>
+  </head>
+  <body>${sanitized}</body>
+</html>`
   }
 
   function handleDownload(): void {
@@ -322,6 +360,21 @@
           class="h-full w-full rounded-lg border-0 shadow-2xl"
           title={`Preview ${filename}`}
         ></iframe>
+      {:else if kind === 'document' && documentSrcdoc}
+        <iframe
+          srcdoc={documentSrcdoc}
+          sandbox=""
+          class="h-full w-full rounded-lg border-0 bg-[#eceff1] shadow-2xl"
+          title={`Preview ${filename}`}
+        ></iframe>
+      {:else if kind === 'document' && documentLoading}
+        <div
+          class="flex h-full w-full items-center justify-center rounded-lg bg-surface text-muted shadow-2xl"
+          role="status"
+        >
+          <Loader2 size={24} class="animate-spin" />
+          <span class="sr-only">Loading document preview</span>
+        </div>
       {:else if kind === 'markdown' && text !== undefined}
         <div
           class="flex min-h-0 w-full flex-1 flex-col overflow-auto rounded-lg bg-surface p-4 shadow-2xl"
@@ -335,10 +388,7 @@
         <div
           class="flex min-h-0 w-full flex-1 flex-col overflow-auto rounded-lg bg-surface shadow-2xl"
         >
-          <table
-            class="w-full border-collapse text-xs"
-            aria-label={`${filename} data table`}
-          >
+          <table class="w-full border-collapse text-xs" aria-label={`${filename} data table`}>
             <thead>
               <tr class="bg-elevated">
                 {#each csvRows[0] as cell, c (c)}
@@ -355,7 +405,9 @@
               {#each csvRows.slice(1) as cells, r (r)}
                 <tr class="border-t border-border">
                   {#each cells as cell, c (c)}
-                    <td class="border-r border-border px-3 py-1.5 align-top break-words whitespace-pre-wrap">
+                    <td
+                      class="border-r border-border px-3 py-1.5 align-top break-words whitespace-pre-wrap"
+                    >
                       {cell}
                     </td>
                   {/each}

@@ -8,6 +8,7 @@ import type { PromptAttachment } from '../../lib/types'
 const DOCX_MIME = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
 const MAX_DOCX_BYTES = 16 * 1024 * 1024
 const MAX_EXTRACTED_CHARACTERS = 200_000
+const MAX_PREVIEW_CHARACTERS = 4_000_000
 
 function documentAttachmentLabel(attachment: PromptAttachment): string {
   return (attachment.filename ?? attachment.url).replace(/[\r\n]+/gu, ' ')
@@ -63,6 +64,26 @@ export async function readWordDocumentText(attachment: PromptAttachment): Promis
     return text || null
   } catch (error) {
     Logger.error(`Failed to extract Word document ${documentAttachmentLabel(attachment)}:`, error)
+    return null
+  }
+}
+
+/**
+ * Convert a local or embedded DOCX to semantic HTML for the attachment preview.
+ * The renderer sanitizes and isolates this markup before displaying it.
+ */
+export async function readWordDocumentHtml(attachment: PromptAttachment): Promise<string | null> {
+  if (!isWordDocumentAttachment(attachment)) return null
+  try {
+    const bytes = await documentAttachmentBytes(attachment)
+    if (!bytes) return null
+    const mammoth = (await import('mammoth')).default
+    const result = await mammoth.convertToHtml({ buffer: bytes })
+    const html = result.value.trim()
+    if (!html || html.length > MAX_PREVIEW_CHARACTERS) return null
+    return html
+  } catch (error) {
+    Logger.error(`Failed to render Word document ${documentAttachmentLabel(attachment)}:`, error)
     return null
   }
 }
