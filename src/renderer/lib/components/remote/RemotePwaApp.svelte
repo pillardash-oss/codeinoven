@@ -14,7 +14,10 @@
       remoteSession.snapshot.route.kind === 'RELAY_CONNECTED'
   )
   let workspaceOpened = $state(false)
-  let workspaceActive = $derived(workspaceOpened && (connected || remoteSession.recovering))
+  // A transport route is transient; the user's workspace is not. Keep the
+  // shell mounted across LAN probes, relay authentication, and background
+  // resume. Only the explicit disconnect action closes it.
+  let workspaceActive = $derived(workspaceOpened)
 
   // The desktop shell applies the theme from its own root component, which the
   // phone never mounts. Without this the client is stuck in light mode.
@@ -94,11 +97,12 @@
   <RemoteMobileShell onDisconnect={disconnectDesktop} onConnected={syncDesktopTheme} />
   {#if remoteSession.recovering}
     <div
-      class="fixed left-1/2 top-[calc(env(safe-area-inset-top)+3.5rem+0.5rem)] z-60 -translate-x-1/2 rounded-full border border-border bg-surface px-4 py-2 text-xs font-medium text-muted shadow-xl"
+      class="pointer-events-none fixed left-1/2 z-60 -translate-x-1/2 whitespace-nowrap text-xs font-medium text-muted"
+      style="top: calc(env(safe-area-inset-top) + 5.875rem)"
       role="status"
       aria-live="polite"
     >
-      Restoring desktop connection…
+      Restoring connection
     </div>
   {/if}
 {:else}

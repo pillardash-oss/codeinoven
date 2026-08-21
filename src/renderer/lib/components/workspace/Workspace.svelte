@@ -68,6 +68,7 @@
   import AppearancePicker from '../shared/AppearancePicker.svelte'
   import ScopeBadge from '../shared/ScopeBadge.svelte'
   import StatusBadge from '../shared/StatusBadge.svelte'
+  import MessageHistoryPanel from '../shared/MessageHistoryPanel.svelte'
   import ProjectCreateControl from '../shared/ProjectCreateControl.svelte'
   import ThreadSearchControl from '../shared/ThreadSearchControl.svelte'
   import SidebarAccountControls from './SidebarAccountControls.svelte'
@@ -3765,19 +3766,11 @@
     <p class="border-b px-3 py-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-dimmed">
       Your messages
     </p>
-    <div class="max-h-72 overflow-y-auto p-1">
-      {#each workspaceState.userMessages as message, index (message.id)}
-        <button
-          class="block w-full truncate px-2.5 py-1.5 text-left text-xs text-muted transition-colors hover:bg-elevated hover:text-foreground"
-          role="menuitem"
-          title={message.content}
-          onclick={() => jumpToHistoryMessage(message.id)}
-        >
-          {index + 1}. {message.content}
-        </button>
-      {:else}
-        <p class="px-2.5 py-2 text-xs text-dimmed">No messages yet</p>
-      {/each}
+    <div class="max-h-72 overflow-y-auto">
+      <MessageHistoryPanel
+        messages={workspaceState.userMessages}
+        onSelect={(id) => jumpToHistoryMessage(id)}
+      />
     </div>
   </div>
 {/snippet}
