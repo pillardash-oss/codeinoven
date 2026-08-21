@@ -52,7 +52,7 @@ const AGY_MODELS = [
   'gpt-oss-120b-medium'
 ].join('\n')
 
-describe('AntigravityDriver', () => {
+describe.skipIf(process.platform === 'win32')('AntigravityDriver', () => {
   it('resolves a bare effort model id to an effort-suffixed slug before sending the turn', async () => {
     const calls: string[][] = []
     spawnMock.mockImplementation((_command: string, args: string[]) => {

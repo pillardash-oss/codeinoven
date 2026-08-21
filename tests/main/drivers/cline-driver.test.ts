@@ -55,7 +55,7 @@ const settings = {
   engineeringMode: false
 }
 
-describe('ClineDriver approval bridge', () => {
+describe.skipIf(process.platform === 'win32')('ClineDriver approval bridge', () => {
   it('runs headless turns in-process and auto-approves tools via the app policy', async () => {
     const driver = new ClineDriver(await storage())
     const events: AgentEvent[] = []

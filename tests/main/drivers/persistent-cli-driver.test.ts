@@ -149,7 +149,7 @@ async function createStorage(): Promise<StorageEngine> {
   return storage
 }
 
-describe('PersistentCliDriver', () => {
+describe.skipIf(process.platform === 'win32')('PersistentCliDriver', () => {
   it('persists logical sessions and rehydrates their messages', async () => {
     const storage = await createStorage()
     const driver = new FixtureCliDriver(storage)

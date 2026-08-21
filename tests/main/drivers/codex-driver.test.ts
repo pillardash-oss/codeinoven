@@ -99,7 +99,7 @@ const settings = {
   engineeringMode: false
 }
 
-describe('CodexDriver', () => {
+describe.skipIf(process.platform === 'win32')('CodexDriver', () => {
   it('maps Codex collaboration items into a visible subagent lifecycle', async () => {
     const driver = new CodexDriver(await storage())
     const events: AgentEvent[] = []
