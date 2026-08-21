@@ -45,8 +45,8 @@ function createLockDirPath(name: string): string {
  * This exists to close a gap the in-process auth gate cannot cover: two app
  * instances each hold their own in-memory gate, so their claude spawns can still
  * race a single-use keychain token and the loser wipes the shared credential
- * (anthropics/claude-code#76905 daily re-login). An atomic lock file is shared
- * across every instance and even across an externally-launched CLI.
+ * (anthropics/claude-code#76905 daily re-login). An atomic lock directory is
+ * shared across every CodeInOven instance using the same config root.
  *
  * Stale locks (owner process gone, or held far past a normal refresh window) are
  * broken so a crashed process can never permanently wedge the gate.
