@@ -109,6 +109,11 @@ import {
 import { ProjectManager } from '../../lib/engines/project-manager'
 import { ThreadManager } from '../../lib/engines/thread-manager'
 import { ScopeManager } from '../../lib/engines/scope-manager'
+import {
+  ScopeRootResolver,
+  scopeRootProvider,
+  type ManagedWorktreeInspector
+} from '../workspaces/scope-root-resolver'
 import { HistoryEngine } from '../../lib/engines/history-engine'
 import { PlanEngine } from '../../lib/engines/plan-engine'
 import {
@@ -195,6 +200,7 @@ const GITHUB_REPOSITORY_ACCESS_MESSAGE =
   'GitHub cannot access this repository. Install the CodeInOven GitHub App on it and grant the requested repository permissions.'
 const GITHUB_APP_INSTALL_URL = 'https://github.com/apps/codeinoven/installations/new'
 const SLASH_COMMAND_MODES = new Set(['app', 'passthrough'])
+const GIT_PULL_PREFERENCES = new Set(['ask', 'merge', 'rebase', 'ff-only'])
 
 function prComposePayload(value: unknown): { title: string; description: string } | null {
   if (!isRecord(value) || typeof value['title'] !== 'string') return null
@@ -670,6 +676,7 @@ const CONFIG_PATCH_FIELDS = new Set([
   'autoRetryAfterReset',
   'resumeWorkOnRestart',
   'defaultMergeMethod',
+  'defaultPullStrategy',
   'maxDiffLines',
   'openLocalhostInCioBrowser'
 ])
@@ -1385,6 +1392,16 @@ export function validateAppConfigPatch(value: unknown): AppConfigPatch {
     patch.maxDiffLines = value.maxDiffLines
   }
 
+  if ('defaultPullStrategy' in value) {
+    if (
+      typeof value.defaultPullStrategy !== 'string' ||
+      !GIT_PULL_PREFERENCES.has(value.defaultPullStrategy)
+    ) {
+      throw new TypeError('Invalid default pull strategy')
+    }
+    patch.defaultPullStrategy = value.defaultPullStrategy as AppConfigPatch['defaultPullStrategy']
+  }
+
   if ('openLocalhostInCioBrowser' in value) {
     if (typeof value.openLocalhostInCioBrowser !== 'boolean') {
       throw new TypeError('Open localhost in CIO browser must be a boolean')
@@ -1735,6 +1752,8 @@ export interface RegisterIpcHandlersOptions {
   threadCreation?: ThreadCreationCoordinator
   /** Optimistic thread-delete cleanup coordinator shared with remote RPC. */
   threadDeletion?: ThreadDeletionCoordinator
+  /** Git-backed inspector shared with the managed worktree service. */
+  worktreeInspector?: ManagedWorktreeInspector
 }
 
 export function registerIpcHandlers(
@@ -1750,6 +1769,13 @@ export function registerIpcHandlers(
   const threadCreation = options.threadCreation ?? new ThreadCreationCoordinator()
   const threadDeletion = options.threadDeletion ?? new ThreadDeletionCoordinator()
   const checkpointManager = new CheckpointManager(database)
+  const scopeManager = new ScopeManager(database)
+  const scopeRootResolver = new ScopeRootResolver(
+    projectManager,
+    scopeManager,
+    options.worktreeInspector
+  )
+  const scopeRoots = scopeRootProvider(scopeRootResolver)
   const threadManager = new ThreadManager(
     database,
     broadcastThreadUpdate,
@@ -1765,9 +1791,9 @@ export function registerIpcHandlers(
       for (const projectId of new Set(threads.map((thread) => thread.projectId))) {
         await checkpointManager.pruneUnusedBlobs(projectId)
       }
-    }
+    },
+    scopeRoots
   )
-  const scopeManager = new ScopeManager(database)
   const historyEngine = new HistoryEngine(database)
   const planEngine = new PlanEngine(storage, database)
   const specEngine = new SpecEngine(storage, database, {

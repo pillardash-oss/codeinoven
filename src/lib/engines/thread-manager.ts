@@ -236,6 +236,20 @@ function historyFromLatestCompaction(messages: AgentMessage[]): AgentMessage[] {
   return latestCompactionIndex === -1 ? messages : messages.slice(latestCompactionIndex)
 }
 
+/**
+ * Main-process injection point that resolves a scope target into its
+ * authoritative filesystem root. The persisted `Thread.workingDirectory` is
+ * compatibility data; this provider is the authority at creation time.
+ */
+export interface ThreadScopeRootProvider {
+  /**
+   * Resolve the compatibility working directory for a thread in the given
+   * scope. Returns null when the scope is unknown/project-rooted without a
+   * local project. Throws when a managed scope root is unhealthy.
+   */
+  resolveCompatibilityRoot(projectId: string, scopeBucketId?: string): Promise<string | null>
+}
+
 export class ThreadManager {
   private threadRepo: ThreadRepo
   private projectRepo: ProjectRepo
@@ -252,7 +266,8 @@ export class ThreadManager {
     private db: Database,
     private onChange?: (thread: Thread) => void,
     private onDelete?: (thread: Thread) => void | Promise<void>,
-    private onDeleted?: (threads: Thread[]) => void | Promise<void>
+    private onDeleted?: (threads: Thread[]) => void | Promise<void>,
+    private scopeRoots?: ThreadScopeRootProvider
   ) {
     this.threadRepo = new ThreadRepo(db)
     this.projectRepo = new ProjectRepo(db)
@@ -373,6 +388,7 @@ export class ThreadManager {
       // The new thread lands first so the optimistic create always yields a
       // persisted row; the bounded bucket delete is best-effort cleanup that
       // must never roll back the creation it is making room for.
+      await this.resolveCompatibilityRoot(input.projectId, input.scopeBucketId, thread)
       await this.threadRepo.upsertViaWorker(thread)
       if (toEvictId) {
         try {
@@ -384,6 +400,21 @@ export class ThreadManager {
     }
 
     return { thread, finalize }
+  }
+
+  /**
+   * Synchronize a thread's compatibility working directory with its scope's
+   * authoritative root. Renderer-supplied directories never win when the
+   * scope resolves; unhealthy managed scopes fail closed.
+   */
+  private async resolveCompatibilityRoot(
+    projectId: string,
+    scopeBucketId: string | undefined,
+    thread: Thread
+  ): Promise<void> {
+    if (!this.scopeRoots || !scopeBucketId) return
+    const resolved = await this.scopeRoots.resolveCompatibilityRoot(projectId, scopeBucketId)
+    if (resolved) thread.workingDirectory = resolved
   }
 
   async getThread(projectId: string, threadId: string): Promise<Thread | null> {
@@ -636,6 +667,21 @@ export class ThreadManager {
           ? undefined
           : existing.scopeSortOrder,
       updatedAt: Date.now()
+    }
+
+    // Moving a thread between scopes re-derives its compatibility working
+    // directory from the destination scope before anything can act on it.
+    if (
+      this.scopeRoots &&
+      input.scopeBucketId !== undefined &&
+      input.workingDirectory === undefined &&
+      input.scopeBucketId !== (existing.scopeBucketId ?? DEFAULT_SCOPE_BUCKET_ID)
+    ) {
+      const resolved = await this.scopeRoots.resolveCompatibilityRoot(
+        projectId,
+        updated.scopeBucketId
+      )
+      if (resolved) updated.workingDirectory = resolved
     }
 
     await this.threadRepo.upsertViaWorker(updated)
@@ -1164,6 +1210,7 @@ export class ThreadManager {
     copied = historyFromLatestCompaction(copied)
 
     const destinationPath = this.projectRepo.get(destinationProjectId)?.path ?? ''
+    const forkScopeBucketId = destinationProjectId === projectId ? parent.scopeBucketId : undefined
     const forked = await this.createThread({
       projectId: destinationProjectId,
       providerId: parent.providerId,
@@ -1176,11 +1223,13 @@ export class ThreadManager {
         destinationProjectId === projectId
           ? (parent.featureSlug ?? featureSlugFromTitle(parent.title))
           : undefined,
-      scopeBucketId: destinationProjectId === projectId ? parent.scopeBucketId : undefined,
+      scopeBucketId: forkScopeBucketId,
       workingDirectory:
         destinationProjectId === projectId ? parent.workingDirectory : destinationPath
     })
-
+    // Same-scope forks re-resolve their compatibility directory from the
+    // destination scope inside `createThread`, so a stale parent directory
+    // can never override the authoritative root.
     if (copied.length > 0) {
       const withNewIds = remapCopiedMessages(copied)
       await this.saveMessages(destinationProjectId, forked.id, withNewIds)

@@ -1511,7 +1511,8 @@ export class ChatEngine {
     private computerUsePip?: import('../utilities/computer-use-pip-service').ComputerUsePipService,
     private harnessManifest?: import('../agents/harness-manifest-service').HarnessManifestService,
     private threadCreation?: ThreadCreationCoordinator,
-    processJournalPath?: string
+    processJournalPath?: string,
+    private scopeRoots?: import('../../lib/engines/thread-manager').ThreadScopeRootProvider
   ) {
     this.agentProcesses.attachJournal(processJournalPath)
     this.threadCreation = threadCreation ?? new ThreadCreationCoordinator()
@@ -1533,7 +1534,8 @@ export class ChatEngine {
         for (const projectId of new Set(threads.map((thread) => thread.projectId))) {
           await this.checkpointManager.pruneUnusedBlobs(projectId)
         }
-      }
+      },
+      this.scopeRoots
     )
     this.memoryService = new MemoryService(storage)
     this.generatedArtifactService = new GeneratedArtifactService(storage)
@@ -10557,22 +10559,10 @@ export class ChatEngine {
       (coordinator.scopeBucketId?.startsWith('achievement-')
         ? coordinator.scopeBucketId
         : `achievement-${coordinatorThreadId}`)
-    const board = this.scopeManager.getBoard(projectId)
-    if (!board.buckets.some((bucket) => bucket.id === scopeBucketId)) {
-      this.scopeManager.saveBoard(projectId, {
-        ...board,
-        buckets: [
-          ...board.buckets,
-          {
-            id: scopeBucketId,
-            name: assignment?.content.title ?? `Achievement: ${coordinator.title}`,
-            sortOrder: board.buckets.length,
-            collapsed: false,
-            collapsedSlices: []
-          }
-        ]
-      })
-    }
+    this.scopeManager.ensureBucket(projectId, {
+      id: scopeBucketId,
+      name: assignment?.content.title ?? `Achievement: ${coordinator.title}`
+    })
     await this.threadManager.updateThread(projectId, coordinatorThreadId, {
       achievementRole: 'coordinator',
       scopeBucketId
@@ -13624,6 +13614,17 @@ export class ChatEngine {
     const projectPath = await this.resolveProjectPath(projectId)
     const thread = await this.threadManager.getThread(projectId, threadId)
     if (!thread) throw new Error(`Thread not found: ${threadId}`)
+
+    // The scope resolver is authoritative for threads in a scope; a stale
+    // persisted directory never wins, and unhealthy managed scopes fail
+    // closed instead of silently operating on the project root.
+    if (this.scopeRoots && thread.scopeBucketId) {
+      const resolved = await this.scopeRoots.resolveCompatibilityRoot(
+        projectId,
+        thread.scopeBucketId
+      )
+      if (resolved) return resolved
+    }
 
     const workingDirectory = thread.workingDirectory.trim()
     if (!workingDirectory) return projectPath

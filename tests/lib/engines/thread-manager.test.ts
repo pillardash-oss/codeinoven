@@ -40,6 +40,35 @@ async function createManager(threadLimit = 70): Promise<{
   return { manager: new ThreadManager(db), db }
 }
 
+async function createManagerWithRoots(
+  roots: Map<string, string>,
+  threadLimit = 70
+): Promise<{ manager: ThreadManager; db: Database }> {
+  const db = await createTestDb()
+  temporaryDatabases.push(db)
+  new ProjectRepo(db).upsert({
+    id: 'project1',
+    name: 'Test project',
+    path: '/tmp/project1',
+    source: 'local',
+    providerId: 'openai',
+    workflowId: 'default',
+    threadLimit,
+    changeTrackingMode: 'manual',
+    createdAt: Date.now(),
+    updatedAt: Date.now()
+  })
+  const manager = new ThreadManager(db, undefined, undefined, undefined, {
+    async resolveCompatibilityRoot(projectId, scopeBucketId) {
+      if (!scopeBucketId) return null
+      const root = roots.get(`${projectId}:${scopeBucketId}`)
+      if (!root) throw new Error(`Unhealthy scope: ${projectId}:${scopeBucketId}`)
+      return root
+    }
+  })
+  return { manager, db }
+}
+
 afterEach(async () => {
   vi.useRealTimers()
   temporaryDatabases.splice(0).forEach(destroyTestDb)
@@ -381,5 +410,84 @@ describe('ThreadManager', () => {
     expect(row.signal).toBe('cleaned_up')
     expect(row.score).toBe(1)
     expect(row.model_id).toBe('gpt-x')
+  })
+})
+
+describe('ThreadManager scope-root propagation', () => {
+  it('derives the compatibility working directory from the destination scope on create', async () => {
+    const roots = new Map([['project1:scope-a', '/worktrees/feature-a']])
+    const { manager } = await createManagerWithRoots(roots)
+    const thread = await manager.createThread({
+      projectId: 'project1',
+      providerId: 'openai',
+      title: 'Scoped thread',
+      scopeBucketId: 'scope-a',
+      // A renderer-supplied directory must never override the resolved root.
+      workingDirectory: '/renderer/chose/this'
+    })
+    expect(thread.scopeBucketId).toBe('scope-a')
+    expect(thread.workingDirectory).toBe('/worktrees/feature-a')
+  })
+
+  it('re-derives the working directory when a thread moves between scopes', async () => {
+    const roots = new Map([
+      ['project1:scope-a', '/worktrees/feature-a'],
+      ['project1:default', '/tmp/project1']
+    ])
+    const { manager } = await createManagerWithRoots(roots)
+    const thread = await manager.createThread({
+      projectId: 'project1',
+      providerId: 'openai',
+      title: 'Mover',
+      scopeBucketId: 'scope-a'
+    })
+    expect(thread.workingDirectory).toBe('/worktrees/feature-a')
+
+    const moved = await manager.updateThread('project1', thread.id, {
+      scopeBucketId: 'default'
+    })
+    expect(moved.scopeBucketId).toBe('default')
+    expect(moved.workingDirectory).toBe('/tmp/project1')
+
+    const back = await manager.updateThread('project1', thread.id, {
+      scopeBucketId: 'scope-a'
+    })
+    expect(back.workingDirectory).toBe('/worktrees/feature-a')
+  })
+
+  it('fails closed when a moved-to managed scope is unhealthy', async () => {
+    const roots = new Map([['project1:scope-a', '/worktrees/feature-a']])
+    const { manager } = await createManagerWithRoots(roots)
+    const thread = await manager.createThread({
+      projectId: 'project1',
+      providerId: 'openai',
+      title: 'Stuck',
+      scopeBucketId: 'scope-a'
+    })
+    await expect(
+      manager.updateThread('project1', thread.id, { scopeBucketId: 'broken-scope' })
+    ).rejects.toThrow(/Unhealthy scope/)
+  })
+
+  it('gives same-scope forks the resolved root and cross-project forks the destination default', async () => {
+    const roots = new Map([['project1:scope-a', '/worktrees/feature-a']])
+    const { manager } = await createManagerWithRoots(roots)
+    const parent = await manager.createThread({
+      projectId: 'project1',
+      providerId: 'openai',
+      title: 'Parent',
+      scopeBucketId: 'scope-a'
+    })
+    await manager.saveMessages('project1', parent.id, [
+      {
+        id: 'm1',
+        role: 'user',
+        parts: [{ type: 'text', text: 'hello' }],
+        createdAt: Date.now()
+      } as AgentMessage
+    ])
+    const fork = await manager.forkThread('project1', parent.id, 'Fork')
+    expect(fork.scopeBucketId).toBe('scope-a')
+    expect(fork.workingDirectory).toBe('/worktrees/feature-a')
   })
 })

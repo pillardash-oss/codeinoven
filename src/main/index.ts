@@ -507,6 +507,8 @@ async function bootPostPaintServices(): Promise<void> {
     { ProjectManager },
     { ProjectFilesService },
     { ChatEngine },
+    { ScopeManager },
+    { ScopeRootResolver, scopeRootProvider },
     { HarnessManifestService },
     { ComputerUsePipService },
     { UpdaterService },
@@ -517,6 +519,8 @@ async function bootPostPaintServices(): Promise<void> {
     import('../lib/engines/project-manager'),
     import('./editor/project-files-service'),
     import('./chat/chat-engine'),
+    import('../lib/engines/scope-manager'),
+    import('./workspaces/scope-root-resolver'),
     import('./agents/harness-manifest-service'),
     import('./utilities/computer-use-pip-service'),
     import('./notifications/updater-service'),
@@ -525,6 +529,8 @@ async function bootPostPaintServices(): Promise<void> {
   ])
 
   const projectManager = new ProjectManager(database)
+  const scopeManager = new ScopeManager(database)
+  const scopeRootResolver = new ScopeRootResolver(projectManager, scopeManager)
   const projectFilesService = new ProjectFilesService(projectManager)
   appfileProjectFiles = projectFilesService
   computerUsePipService = new ComputerUsePipService(storage)
@@ -536,7 +542,8 @@ async function bootPostPaintServices(): Promise<void> {
     computerUsePipService,
     harnessManifestService,
     threadCreation,
-    join(app.getPath('userData'), 'owned-processes.json')
+    join(app.getPath('userData'), 'owned-processes.json'),
+    scopeRootProvider(scopeRootResolver)
   )
   // Merge the app-managed lean opencode agents into the machine-wide global
   // config. Idempotent, additive-only and non-fatal; runs after first paint
