@@ -91,6 +91,17 @@ export interface GatewayStatus {
   modelCount: number
   /** Harness provider ids currently synced from this gateway. */
   syncedHarnessIds: string[]
+  /** Live install/download progress while lifecycle is `installing`/`starting`. */
+  progress?: GatewayInstallProgress
+}
+
+export interface GatewayInstallProgress {
+  phase: 'downloading' | 'installing'
+  /** 0–100; omitted while the phase has no measurable total. */
+  percent?: number
+  downloadedBytes?: number
+  totalBytes?: number
+  detail?: string
 }
 
 export interface GatewayCatalogSnapshot {

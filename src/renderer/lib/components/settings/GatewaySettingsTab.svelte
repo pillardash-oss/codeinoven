@@ -264,6 +264,47 @@
           </div>
         {/if}
 
+        {#if (gateway.lifecycle === 'installing' || gateway.lifecycle === 'starting') && gateway.progress}
+          {@const progress = gateway.progress}
+          <div class="mt-4">
+            <div class="flex items-center justify-between text-xs">
+              <span class="font-medium text-muted">
+                {progress.phase === 'downloading'
+                  ? `Downloading ${progress.detail ?? gateway.adapterName}`
+                  : 'Installing packages'}
+              </span>
+              {#if progress.percent !== undefined}
+                <span class="tabular-nums text-dimmed">{progress.percent}%</span>
+              {/if}
+            </div>
+            <div
+              class="mt-1.5 h-1.5 w-full overflow-hidden rounded-full bg-elevated"
+              role="progressbar"
+              aria-label="{gateway.adapterName} install progress"
+              aria-valuemin={0}
+              aria-valuemax={100}
+              aria-valuenow={progress.percent ?? undefined}
+            >
+              {#if progress.percent !== undefined}
+                <div
+                  class="h-full rounded-full bg-primary transition-all"
+                  style="width: {Math.max(2, progress.percent)}%"
+                ></div>
+              {:else}
+                <div class="indeterminate-progress h-full w-1/3 rounded-full bg-primary"></div>
+              {/if}
+            </div>
+            {#if progress.phase === 'downloading' && progress.downloadedBytes !== undefined && progress.totalBytes !== undefined}
+              <p class="mt-1 text-right text-[11px] tabular-nums text-dimmed">
+                {(progress.downloadedBytes / 1_048_576).toFixed(1)}
+                /
+                {(progress.totalBytes / 1_048_576).toFixed(1)}
+                MB
+              </p>
+            {/if}
+          </div>
+        {/if}
+
         <div class="mt-4 flex flex-wrap gap-2">
           {#if gateway.lifecycle === 'ready'}
             <button
@@ -454,3 +495,17 @@
     {/snippet}
   </Modal>
 {/if}
+
+<style>
+  .indeterminate-progress {
+    animation: gateway-indeterminate 1.4s ease-in-out infinite;
+  }
+  @keyframes gateway-indeterminate {
+    0% {
+      transform: translateX(-100%);
+    }
+    100% {
+      transform: translateX(400%);
+    }
+  }
+</style>

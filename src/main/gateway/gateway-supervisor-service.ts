@@ -1,12 +1,13 @@
 import { execFile, spawn, type ChildProcess } from 'node:child_process'
-import { randomBytes } from 'node:crypto'
+import { createHash, randomBytes } from 'node:crypto'
 import { createServer } from 'node:net'
-import { access, mkdir, readdir, realpath, rm, writeFile } from 'node:fs/promises'
+import { access, mkdir, open, readdir, realpath, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
 import type {
   GatewayAdapterDefinition,
   GatewayCatalogSnapshot,
+  GatewayInstallProgress,
   GatewayLifecycleState,
   GatewayModelInfo,
   GatewayPluginState,
@@ -41,6 +42,8 @@ const CATALOG_TTL_MS = 60_000
 const PORT_PROBE_ATTEMPTS = 50
 const STDERR_TAIL_LINES = 40
 const DASHBOARD_PASSWORD_BYTES = 24
+const PROGRESS_EMIT_INTERVAL_MS = 250
+const DOWNLOAD_TIMEOUT_MS = 600_000
 
 interface GatewayStateStore {
   version: number
@@ -74,6 +77,9 @@ export class GatewaySupervisorService {
   private readonly journal: OwnedProcessJournal | undefined
   private catalogCache = new Map<string, GatewayCatalogSnapshot>()
   private nodeVersionPromise: Promise<string> | null = null
+  private readonly installProgress = new Map<string, GatewayInstallProgress>()
+  private readonly lastProgressEmit = new Map<string, number>()
+  private readonly lastProgressPhase = new Map<string, string | undefined>()
 
   constructor(
     private readonly storage: StorageEngine,
@@ -236,7 +242,9 @@ export class GatewaySupervisorService {
     }
     try {
       this.setState(pluginId, { lifecycle: 'starting', detail: undefined })
+      this.setState(pluginId, { lifecycle: 'installing' })
       const installDir = await this.ensureInstalled(pluginId, adapter)
+      this.setState(pluginId, { lifecycle: 'starting' })
       const preferred = (await this.loadStore()).plugins[pluginId]?.preferredPort ?? 0
       const port = await this.allocatePort(preferred)
       const binPath = join(installDir, 'node_modules', adapter.npmPackage, adapter.binPath)
@@ -293,6 +301,7 @@ export class GatewaySupervisorService {
       }))
       return this.toStatus(state)
     } catch (error) {
+      this.setProgress(pluginId, undefined)
       this.running.get(pluginId)?.child.kill('SIGTERM')
       this.running.delete(pluginId)
       const message = error instanceof Error ? error.message : String(error)
@@ -368,6 +377,7 @@ export class GatewaySupervisorService {
     const pluginDir = join(getConfigRoot(), 'gateways', pluginId)
     await rm(join(pluginDir, 'install'), { recursive: true, force: true })
     await rm(join(pluginDir, 'data'), { recursive: true, force: true })
+    await rm(join(pluginDir, 'cache'), { recursive: true, force: true })
     await rm(join(pluginDir, 'catalog.json'), { force: true })
     this.catalogCache.delete(pluginId)
     return this.toStatus(
@@ -456,10 +466,80 @@ export class GatewaySupervisorService {
       `${JSON.stringify({ name: `codeinoven-${pluginId}`, private: true }, null, 2)}\n`,
       'utf8'
     )
-    const install = resolvePackageCommand('install', `${adapter.npmPackage}@${adapter.version}`)
+    let installTarget = `${adapter.npmPackage}@${adapter.version}`
+    try {
+      const tarballPath = await this.downloadPinnedTarball(pluginId, adapter)
+      if (tarballPath) {
+        // Installing from the already-downloaded file keeps the package
+        // manager offline for the heavy part and makes retries cheap.
+        installTarget = tarballPath
+      }
+    } catch (error) {
+      this.setProgress(pluginId, undefined)
+      Logger.error('Gateway tarball download failed; falling back to direct install', {
+        pluginId,
+        error: error instanceof Error ? error.message : String(error)
+      })
+    }
+    this.setProgress(pluginId, { phase: 'installing' })
+    const install = resolvePackageCommand('install', installTarget)
     await this.runCommand(install.command, install.args, dir, INSTALL_TIMEOUT_MS)
+    this.setProgress(pluginId, undefined)
     await writeFile(markerPath, `${adapter.version}\n`, 'utf8')
     return dir
+  }
+
+  /**
+   * Download the pinned version's tarball through the registry metadata so the
+   * UI can show a true byte percentage, and verify its integrity digest before
+   * handing it to the package manager. Returns null when the registry is
+   * unreachable — callers then fall back to a direct `add pkg@version`.
+   */
+  private async downloadPinnedTarball(
+    pluginId: string,
+    adapter: GatewayAdapterDefinition
+  ): Promise<string | null> {
+    const metadata = await fetchPackageMetadata(adapter.npmPackage, adapter.version)
+    if (!metadata) return null
+    const cacheDir = join(getConfigRoot(), 'gateways', pluginId, 'cache')
+    await mkdir(cacheDir, { recursive: true })
+    const tarballPath = join(cacheDir, `${adapter.npmPackage}-${adapter.version}.tgz`)
+    await downloadTarball(metadata, tarballPath, (downloadedBytes, totalBytes) => {
+      this.setProgress(pluginId, {
+        phase: 'downloading',
+        ...(totalBytes > 0
+          ? { percent: Math.min(100, Math.floor((downloadedBytes / totalBytes) * 100)) }
+          : {}),
+        downloadedBytes,
+        totalBytes,
+        detail: `${adapter.name} ${adapter.version}`
+      })
+    })
+    return tarballPath
+  }
+
+  /** Publish install progress to state listeners, throttled during streaming. */
+  private setProgress(pluginId: string, progress: GatewayInstallProgress | undefined): void {
+    if (progress === undefined) this.installProgress.delete(pluginId)
+    else this.installProgress.set(pluginId, progress)
+
+    const now = Date.now()
+    const last = this.lastProgressEmit.get(pluginId) ?? 0
+    const phaseChanged = progress?.phase !== this.lastProgressPhase.get(pluginId)
+    if (!phaseChanged && progress !== undefined && now - last < PROGRESS_EMIT_INTERVAL_MS) return
+    this.lastProgressEmit.set(pluginId, now)
+    this.lastProgressPhase.set(pluginId, progress?.phase)
+    void this.loadStore()
+      .then((store) => {
+        const state = store.plugins[pluginId]
+        if (state) void this.emitStatus(state)
+      })
+      .catch((error) => {
+        Logger.error('Gateway progress emit failed', {
+          pluginId,
+          error: error instanceof Error ? error.message : String(error)
+        })
+      })
   }
 
   /**
@@ -674,7 +754,10 @@ export class GatewaySupervisorService {
       ...(state.installedVersion === undefined ? {} : { installedVersion: state.installedVersion }),
       availableVersion: adapter?.version ?? '',
       modelCount: snapshot?.models.length ?? 0,
-      syncedHarnessIds: []
+      syncedHarnessIds: [],
+      ...(lifecycle === 'installing' || lifecycle === 'starting'
+        ? { progress: this.installProgress.get(state.pluginId) }
+        : {})
     }
   }
 
@@ -699,6 +782,122 @@ function normalizeStopped(state: GatewayPluginState): GatewayLifecycleState {
 
 function dashboardPasswordRef(pluginId: string): string {
   return `gateway_${pluginId}_dashboard`
+}
+
+interface PackageTarballMetadata {
+  tarballUrl: string
+  /** Registry-reported tarball byte size; absent on some packages. */
+  size?: number
+  shasum: string
+}
+
+/**
+ * Fetch registry metadata for one exact package version (tarball URL,
+ * integrity digest, optional byte size). Returns null when the registry is
+ * unreachable so callers can fall back to a direct package-manager install.
+ */
+export async function fetchPackageMetadata(
+  npmPackage: string,
+  version: string
+): Promise<PackageTarballMetadata | null> {
+  try {
+    const response = await fetch(`https://registry.npmjs.org/${npmPackage}/${version}`, {
+      signal: AbortSignal.timeout(15_000),
+      headers: { Accept: 'application/json' }
+    })
+    if (!response.ok) return null
+    const payload: unknown = await response.json()
+    if (typeof payload !== 'object' || payload === null) return null
+    const dist = (payload as Record<string, unknown>)['dist']
+    if (typeof dist !== 'object' || dist === null) return null
+    const raw = dist as Record<string, unknown>
+    const tarballUrl = raw['tarball']
+    const size = raw['size']
+    const shasum = raw['shasum']
+    if (
+      typeof tarballUrl !== 'string' ||
+      !tarballUrl.startsWith('https://') ||
+      typeof shasum !== 'string' ||
+      !/^[a-f0-9]{40}$/u.test(shasum)
+    ) {
+      return null
+    }
+    const resolvedSize =
+      typeof size === 'number' && size > 0 ? size : await probeTarballSize(tarballUrl)
+    return {
+      tarballUrl,
+      shasum,
+      ...(resolvedSize === undefined ? {} : { size: resolvedSize })
+    }
+  } catch {
+    return null
+  }
+}
+
+/**
+ * The registry omits both dist.size and Content-Length for many packages, so
+ * a 1-byte range request is used to learn the exact total for the progress
+ * percentage. Returns undefined when the probe fails — progress then degrades
+ * to indeterminate rather than showing a wrong percentage.
+ */
+async function probeTarballSize(tarballUrl: string): Promise<number | undefined> {
+  try {
+    const response = await fetch(tarballUrl, {
+      headers: { Range: 'bytes=0-0' },
+      signal: AbortSignal.timeout(15_000)
+    })
+    const contentRange = response.headers.get('content-range')
+    if (response.status !== 206 || !contentRange) return undefined
+    const total = Number(contentRange.split('/')[1])
+    return Number.isSafeInteger(total) && total > 0 ? total : undefined
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * Stream the tarball to disk, reporting true byte progress from the response
+ * length, and verify the registry's sha1 digest before resolving. The partial
+ * file is removed on any failure.
+ */
+export async function downloadTarball(
+  metadata: PackageTarballMetadata,
+  destination: string,
+  onProgress: (downloadedBytes: number, totalBytes: number) => void
+): Promise<void> {
+  const response = await fetch(metadata.tarballUrl, {
+    signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS)
+  })
+  if (!response.ok || !response.body) {
+    throw new Error(`Tarball download failed with status ${response.status}`)
+  }
+  const contentLength = Number(response.headers.get('content-length'))
+  const totalBytes =
+    contentLength > 0 ? contentLength : (metadata.size ?? 0)
+  const hash = createHash('sha1')
+  const handle = await open(destination, 'w')
+  let downloadedBytes = 0
+  try {
+    const reader = response.body.getReader()
+    for (;;) {
+      const { done, value } = await reader.read()
+      if (done) break
+      if (!value) continue
+      await handle.write(value)
+      hash.update(value)
+      downloadedBytes += value.byteLength
+      onProgress(downloadedBytes, totalBytes)
+    }
+    const digest = hash.digest('hex')
+    if (digest !== metadata.shasum) {
+      throw new Error('Tarball integrity check failed (sha1 mismatch)')
+    }
+  } catch (error) {
+    await rm(destination, { force: true })
+    throw error
+  } finally {
+    await handle.close()
+  }
 }
 
 /** Live gateway server commands carry the package name (see journal entries). */
