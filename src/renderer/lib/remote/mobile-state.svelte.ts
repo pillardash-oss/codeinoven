@@ -79,6 +79,13 @@ export interface MobileJumpTarget {
   nonce: number
 }
 
+/**
+ * A desktop starts the thread before it prepares a replacement harness session.
+ * Check a few progressively wider gaps so an older desktop that does not push
+ * the new binding can still hand the PWA the stream without continuous polling.
+ */
+const SESSION_BINDING_REFRESH_DELAYS_MS = [75, 250, 750, 2_000, 5_000]
+
 class MobileState {
   projects = $state<Project[]>([])
   allThreads = $state<Thread[]>([])
@@ -122,6 +129,9 @@ class MobileState {
   /** Mobile-owned attention counter — bumped when a thread update pushes an
    *  awaiting-approval or unread thread into the list. No desktop stores. */
   attentionCount = $state(0)
+
+  private sessionBindingRefreshGeneration = 0
+  private sessionBindingRefreshTimer: ReturnType<typeof setTimeout> | null = null
 
   // ─── Derived lists (same grouping as the desktop sidebar) ───────────────
 
@@ -233,10 +243,82 @@ class MobileState {
 
   // ─── Thread + folder actions ────────────────────────────────────────────
 
+  private bindThreadSession(thread: Thread): void {
+    if (!thread.sessionId) return
+    threadMessages.setSessionId(thread.projectId, thread.id, thread.sessionId)
+  }
+
+  private cancelSessionBindingRefresh(): void {
+    this.sessionBindingRefreshGeneration += 1
+    if (this.sessionBindingRefreshTimer !== null) {
+      clearTimeout(this.sessionBindingRefreshTimer)
+      this.sessionBindingRefreshTimer = null
+    }
+  }
+
+  /**
+   * Older desktops publish the working status before creating a replacement
+   * harness session, then omit the binding update. Reconcile only the visible
+   * active thread, with a bounded backoff, and hydrate once if its id changes so
+   * any stream fragments sent during the small discovery window are recovered.
+   */
+  private refreshPreparingSession(thread: Thread): void {
+    this.cancelSessionBindingRefresh()
+    const generation = this.sessionBindingRefreshGeneration
+    const expectedSessionId = thread.sessionId
+    let retryIndex = 0
+
+    const scheduleNext = (): void => {
+      const delay = SESSION_BINDING_REFRESH_DELAYS_MS[retryIndex]
+      if (delay === undefined || generation !== this.sessionBindingRefreshGeneration) return
+      retryIndex += 1
+      this.sessionBindingRefreshTimer = setTimeout(() => {
+        this.sessionBindingRefreshTimer = null
+        void refresh()
+      }, delay)
+    }
+
+    const refresh = async (): Promise<void> => {
+      const selected = this.selectedThread
+      if (
+        generation !== this.sessionBindingRefreshGeneration ||
+        selected?.projectId !== thread.projectId ||
+        selected.id !== thread.id ||
+        !isThreadWorking(selected)
+      ) {
+        return
+      }
+
+      try {
+        const latest = await invoke('thread:get', thread.projectId, thread.id)
+        if (generation !== this.sessionBindingRefreshGeneration) return
+        if (latest?.sessionId && latest.sessionId !== expectedSessionId) {
+          this.allThreads = this.allThreads.map((candidate) =>
+            candidate.projectId === latest.projectId && candidate.id === latest.id
+              ? latest
+              : candidate
+          )
+          this.selectedThread = latest
+          this.bindThreadSession(latest)
+          await threadMessages.load(latest.projectId, latest.id)
+          return
+        }
+      } catch {
+        // A later bounded attempt can recover a transient bridge failure.
+      }
+      scheduleNext()
+    }
+
+    scheduleNext()
+  }
+
   async openThread(thread: Thread): Promise<void> {
     const project = this.projects.find((p) => p.id === thread.projectId) ?? null
+    this.cancelSessionBindingRefresh()
     this.selectedThread = thread
     this.selectedProject = project
+    this.bindThreadSession(thread)
+    if (isThreadWorking(thread) && !thread.sessionId) this.refreshPreparingSession(thread)
     this.sidebarOpen = false
     this.temporaryChatTabId = null
     this.temporaryChatOpen = false
@@ -283,6 +365,7 @@ class MobileState {
     )
     this.refreshAttention()
     if (this.selectedThread?.id === thread.id) {
+      this.cancelSessionBindingRefresh()
       this.selectedThread = null
       this.selectedProject = null
     }
@@ -360,8 +443,15 @@ class MobileState {
     if (agentRuns.hasSettled(updated.projectId, updated.id) && !isThreadWorking(updated)) {
       agentRuns.setIdle(updated.projectId, updated.id)
     }
-    if (this.selectedThread?.id === updated.id) {
+    if (
+      this.selectedThread?.projectId === updated.projectId &&
+      this.selectedThread.id === updated.id
+    ) {
+      const startedWorking = !isThreadWorking(this.selectedThread) && isThreadWorking(updated)
       this.selectedThread = updated
+      this.bindThreadSession(updated)
+      if (startedWorking) this.refreshPreparingSession(updated)
+      else if (!isThreadWorking(updated)) this.cancelSessionBindingRefresh()
       if (!updated.read) {
         void invoke('thread:markRead', updated.projectId, updated.id).catch(() => undefined)
       }
@@ -373,7 +463,10 @@ class MobileState {
     this.orchestrationThreads = this.orchestrationThreads.filter(
       (thread) => thread.id !== threadId && thread.coordinatorThreadId !== threadId
     )
-    if (this.selectedThread?.id === threadId) this.selectedThread = null
+    if (this.selectedThread?.id === threadId) {
+      this.cancelSessionBindingRefresh()
+      this.selectedThread = null
+    }
     this.refreshAttention()
   }
 
@@ -396,7 +489,13 @@ class MobileState {
     )
     this.selectedProject =
       this.projects.find((project) => project.id === selected.projectId) ?? this.selectedProject
-    if (refreshed) this.selectedThread = refreshed
+    if (refreshed) {
+      this.selectedThread = refreshed
+      this.bindThreadSession(refreshed)
+      if (isThreadWorking(refreshed) && !refreshed.sessionId) {
+        this.refreshPreparingSession(refreshed)
+      }
+    }
     const status = await invoke(
       'agent:getSessionStatus',
       selected.projectId,
