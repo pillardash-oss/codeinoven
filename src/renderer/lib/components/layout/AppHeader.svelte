@@ -22,6 +22,7 @@
   import ScopeCreateControl from '$lib/components/shared/ScopeCreateControl.svelte'
   import ThreadSearchControl from '$lib/components/shared/ThreadSearchControl.svelte'
   import { editorPreference } from '$lib/stores/editor-preference.svelte'
+  import { gatewayState } from '$lib/stores/gateway.svelte'
   import type { EditorId, Project, Thread } from '$shared/types'
   import {
     AppWindow,
@@ -37,6 +38,7 @@
     GitFork,
     GitMergeConflict,
     GitPullRequest,
+    Globe2,
     Kanban,
     MessageSquare,
     SquareDashedKanban,
@@ -449,6 +451,19 @@
   }
 
   void editorPreference.load()
+  gatewayState.ensureSubscribed()
+
+  let gatewayDashboardUrl = $derived(gatewayState.dashboardUrl)
+  let hasGateway = $derived(gatewayState.hasReadyGateway)
+
+  async function openGatewayDashboard(): Promise<void> {
+    if (!gatewayDashboardUrl) {
+      toast.error('Gateway dashboard is not available — start the gateway first')
+      return
+    }
+    const opened = await gatewayState.openDashboard(gatewayDashboardUrl)
+    if (!opened) toast.error('Could not open dashboard')
+  }
 
   // ─── Git status chip ─────────────────────────────────────────────────────
 
@@ -1122,6 +1137,18 @@
   {/if}
 
   <div class="titlebar-no-drag ml-auto flex shrink-0 items-center gap-1">
+    <!-- Gateway dashboard — global browser entry, visible when gateway is ready -->
+    {#if hasGateway && gatewayDashboardUrl}
+      <button
+        class="flex h-8 w-8 items-center justify-center text-muted transition-colors duration-150 hover:bg-elevated hover:text-foreground"
+        aria-label="Open gateway dashboard"
+        title="Open gateway dashboard — {gatewayDashboardUrl}"
+        onclick={() => void openGatewayDashboard()}
+      >
+        <Globe2 size={16} />
+      </button>
+    {/if}
+
     <!-- Editor preference — hidden in chat mode, scope view, and when no project is selected -->
     {#if !chatMode && !onScope && workspaceState.activeProject}
       <div class="relative flex items-center">
