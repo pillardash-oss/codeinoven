@@ -77,7 +77,23 @@
     }
   })
 
-  let shellHeight = $derived(viewportHeight === null ? '100dvh' : `${viewportHeight}px`)
+  let shellHeight = $derived(
+    viewportHeight !== null && viewportHeight > 150 ? `${viewportHeight}px` : '100dvh'
+  )
+
+  /**
+   * Retry token for lazy feature chunks. Every `{#await}` expression below
+   * passes this value as `retryableChunk`'s attempt argument, so incrementing
+   * it re-runs each load: failed imports retry, already-resolved ones resolve
+   * instantly from the module cache. Without a catch branch a rejected import
+   * leaves the conversation area or sheet blank forever.
+   */
+  let chunkRetry = $state(0)
+
+  /** Re-run the loader whenever the caller passes a new attempt value. */
+  function retryableChunk<T>(attempt: number, load: () => Promise<T>): Promise<T> {
+    return load()
+  }
 
   // ─── Rename / delete dialogs ────────────────────────────────────────────
   let renameTarget = $state<Thread | null>(null)
@@ -418,6 +434,27 @@
       <span class={`h-2 w-2 shrink-0 rounded-full ${threadDot(item)}`}></span>
     {/if}
   {/snippet}
+
+  <!-- Shared lazy-chunk failure state: any rejected dynamic import below
+       renders this instead of staying silently blank. "Try again" bumps
+       `chunkRetry`, which re-runs every failed load (resolved modules
+       resolve instantly from cache). -->
+  {#snippet chunkFailure()}
+    <div class="flex min-h-40 flex-col items-center justify-center gap-3 px-6 py-8 text-center">
+      <p class="max-w-[16rem] text-[13px] leading-relaxed text-muted">
+        This panel could not load. Check your connection and try again.
+      </p>
+      <button
+        type="button"
+        class="h-9 cursor-pointer rounded-lg bg-primary px-4 text-[13px] font-medium text-on-primary transition-colors active:bg-primary-hover"
+        title="Reload this panel"
+        aria-label="Reload this panel"
+        onclick={() => (chunkRetry += 1)}
+      >
+        Try again
+      </button>
+    </div>
+  {/snippet}
   {#if deleteError}
     <div
       class="fixed left-1/2 top-[max(1rem,env(safe-area-inset-top))] z-60 flex w-[min(26rem,calc(100vw-2rem))] -translate-x-1/2 items-start gap-3 rounded-xl border border-danger/30 bg-surface px-4 py-3 text-sm text-danger shadow-xl"
@@ -538,12 +575,14 @@
   <main class="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
     {#if mobileState.selectedThread}
       {#key mobileState.selectedThread.id}
-        {#await import('./RemoteConversation.svelte') then { default: RemoteConversation }}
+        {#await retryableChunk(chunkRetry, () => import('./RemoteConversation.svelte')) then { default: RemoteConversation }}
           <RemoteConversation
             thread={mobileState.selectedThread}
             chatMode={mobileState.chatMode}
             jumpTarget={mobileState.jumpTarget}
           />
+        {:catch}
+          {@render chunkFailure()}
         {/await}
       {/key}
     {:else}
@@ -611,7 +650,7 @@
         </p>
       {/if}
     </div>
-    {#await import('$lib/components/notifications/NotificationPanel.svelte')}
+    {#await retryableChunk(chunkRetry, () => import('$lib/components/notifications/NotificationPanel.svelte'))}
       <div
         class="flex min-h-40 items-center justify-center gap-2 text-sm text-dimmed"
         role="status"
@@ -621,6 +660,8 @@
       </div>
     {:then { default: NotificationPanel }}
       <NotificationPanel />
+    {:catch}
+      {@render chunkFailure()}
     {/await}
   </BottomSheet>
 
@@ -631,7 +672,7 @@
     onClose={() => (mobileState.memoryOpen = false)}
   >
     <div class="p-3">
-      {#await import('$lib/components/memory/MemoryPanel.svelte')}
+      {#await retryableChunk(chunkRetry, () => import('$lib/components/memory/MemoryPanel.svelte'))}
         <div
           class="flex min-h-40 items-center justify-center gap-2 text-sm text-dimmed"
           role="status"
@@ -646,6 +687,8 @@
           threadId={mobileState.selectedThread?.id}
           allowTransfer={false}
         />
+      {:catch}
+        {@render chunkFailure()}
       {/await}
     </div>
   </BottomSheet>
@@ -659,7 +702,7 @@
       onClose={() => (mobileState.temporaryChatOpen = false)}
       fixedHeight
     >
-      {#await import('$lib/components/chats/TemporaryChatView.svelte')}
+      {#await retryableChunk(chunkRetry, () => import('$lib/components/chats/TemporaryChatView.svelte'))}
         <div
           class="flex h-full items-center justify-center gap-2 text-sm text-dimmed"
           role="status"
@@ -669,6 +712,8 @@
         </div>
       {:then { default: TemporaryChatView }}
         <TemporaryChatView tabId={mobileState.temporaryChatTabId} />
+      {:catch}
+        {@render chunkFailure()}
       {/await}
     </BottomSheet>
   {/if}
@@ -681,7 +726,7 @@
       onClose={() => (mobileState.gitOpen = false)}
       fixedHeight
     >
-      {#await import('$lib/components/git/GitStatusPanel.svelte')}
+      {#await retryableChunk(chunkRetry, () => import('$lib/components/git/GitStatusPanel.svelte'))}
         <div
           class="flex h-full items-center justify-center gap-2 text-sm text-dimmed"
           role="status"
@@ -695,6 +740,8 @@
           threadId={mobileState.selectedThread?.id ?? ''}
           scopeBucketId={mobileState.selectedThread?.scopeBucketId}
         />
+      {:catch}
+        {@render chunkFailure()}
       {/await}
     </BottomSheet>
   {/if}
@@ -707,7 +754,7 @@
       onClose={() => (mobileState.sourcesOpen = false)}
       fixedHeight
     >
-      {#await import('$lib/components/threads/SourcesPanel.svelte')}
+      {#await retryableChunk(chunkRetry, () => import('$lib/components/threads/SourcesPanel.svelte'))}
         <div
           class="flex h-full items-center justify-center gap-2 text-sm text-dimmed"
           role="status"
@@ -716,7 +763,7 @@
           Loading sources…
         </div>
       {:then { default: SourcesPanel }}
-        {#await import('$lib/agent-sources')}
+        {#await retryableChunk(chunkRetry, () => import('$lib/agent-sources'))}
           <div
             class="flex h-full items-center justify-center gap-2 text-sm text-dimmed"
             role="status"
@@ -735,7 +782,11 @@
             projectId={mobileState.selectedThread?.projectId}
             threadId={mobileState.selectedThread?.id}
           />
+        {:catch}
+          {@render chunkFailure()}
         {/await}
+      {:catch}
+        {@render chunkFailure()}
       {/await}
     </BottomSheet>
   {/if}
@@ -749,7 +800,7 @@
       fixedHeight
     >
       {#if mobileNoteTab}
-        {#await import('$lib/components/threads/ThreadNotePanel.svelte')}
+        {#await retryableChunk(chunkRetry, () => import('$lib/components/threads/ThreadNotePanel.svelte'))}
           <div
             class="flex h-full items-center justify-center gap-2 text-sm text-dimmed"
             role="status"
@@ -759,6 +810,8 @@
           </div>
         {:then { default: ThreadNotePanel }}
           <ThreadNotePanel tab={mobileNoteTab} />
+        {:catch}
+          {@render chunkFailure()}
         {/await}
       {:else}
         <p class="py-10 text-center text-sm text-dimmed">Loading note…</p>
@@ -774,8 +827,10 @@
       onClose={() => (mobileState.usageOpen = false)}
     >
       <div class="p-3">
-        {#await import('$lib/components/chats/ContextUsageIndicator.svelte') then { default: ContextUsageIndicator }}
+        {#await retryableChunk(chunkRetry, () => import('$lib/components/chats/ContextUsageIndicator.svelte')) then { default: ContextUsageIndicator }}
           <ContextUsageIndicator layout="panel" usage={mobileState.selectedThread?.contextUsage} />
+        {:catch}
+          {@render chunkFailure()}
         {/await}
       </div>
     </BottomSheet>

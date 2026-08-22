@@ -3304,7 +3304,16 @@ export class ChatEngine {
     }
     if (!sessionId) {
       sessionId = await driver.createSession(projectPath, thread.title)
-      await this.threadManager.setSessionId(projectId, threadId, sessionId, driverId)
+      const boundThread = await this.threadManager.setSessionId(
+        projectId,
+        threadId,
+        sessionId,
+        driverId
+      )
+      // The desktop view adopts ensureSession's return value directly. Publish
+      // the persisted binding too so remote renderers can route the very first
+      // streamed part from a new or replacement harness session.
+      broadcastThreadUpdate(boundThread)
       if (rotatedPlanningSession) {
         this.preparedImplementationSessions.add(sessionId)
         Logger.info('Prepared a clean implementation session for the approved specification', {
