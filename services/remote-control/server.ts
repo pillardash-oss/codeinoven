@@ -524,7 +524,7 @@ function desktopConnection(
 ): Response {
   if (!mobileDeviceId) return json({ error: 'device-not-approved' }, 403)
   const desktop = database.findDesktop(desktopId)
-  const grant = database.enrollmentGrant(desktopId, session.userId, mobileDeviceId)
+  const grant = database.connectionGrant(desktopId, session.userId, mobileDeviceId)
   if (!desktop || desktop.revoked_at !== null) return json({ error: 'not-found' }, 404)
   if (!grant?.desktop_public_key || !grant.grant_ciphertext) {
     return json({ error: 'device-not-approved' }, 403)
@@ -589,7 +589,7 @@ async function websocketUpgrade(request: Request, url: URL): Promise<Response | 
     const session = await sessionFromRequest(request)
     const grant =
       session && desktopId && mobileDeviceId
-        ? database.enrollmentGrant(desktopId, session.userId, mobileDeviceId)
+        ? database.connectionGrant(desktopId, session.userId, mobileDeviceId)
         : null
     if (!session || !desktopId || !mobileDeviceId || !grant?.grant_ciphertext) {
       return json({ error: 'unauthorized' }, 401)

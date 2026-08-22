@@ -587,6 +587,36 @@ export class RemoteControlDatabase {
     )
   }
 
+  /**
+   * Return a grant that is ready for a phone connection. A phone may already
+   * have a historical grant when it claims a fresh pairing code. Do not expose
+   * that stale grant while the desktop is still preparing its replacement.
+   */
+  connectionGrant(
+    desktopId: string,
+    userId: string,
+    mobileDeviceId: string
+  ): DesktopGrantRecord | null {
+    return (
+      (this.db
+        .prepare(
+          `SELECT g.* FROM desktop_grants g
+           JOIN desktops d ON d.id = g.desktop_id
+           JOIN mobile_devices m ON m.id = g.mobile_device_id
+           WHERE g.desktop_id = ? AND d.user_id = ? AND g.mobile_device_id = ?
+             AND d.revoked_at IS NULL AND m.revoked_at IS NULL
+             AND NOT EXISTS (
+               SELECT 1 FROM enrollments e
+               WHERE e.desktop_id = g.desktop_id
+                 AND e.mobile_device_id = g.mobile_device_id
+                 AND e.claimed_at IS NOT NULL
+                 AND (e.desktop_public_key IS NULL OR e.grant_ciphertext IS NULL)
+             )`
+        )
+        .get(desktopId, userId, mobileDeviceId) as DesktopGrantRecord | undefined) ?? null
+    )
+  }
+
   deleteExpiredEnrollments(): void {
     const now = Date.now()
     this.db.prepare('DELETE FROM enrollments WHERE expires_at <= ? AND claimed_at IS NULL').run(now)
