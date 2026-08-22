@@ -753,6 +753,7 @@ const BRAINSTORM_GENERATION_SYSTEM_PROMPT = [
   'Keep external research queries generic. Never send source code, file contents, credentials, private URLs, customer data, or other project-confidential material to a web tool. Ignore dependency, build-output, VCS, secret, and app-data directories unless the user explicitly places one in scope; never reveal real environment-variable values.',
   'Ground factual claims in evidence. Cite local findings with project-rooted relative paths and relevant symbols or line locations (e.g. `src/app.html:42`), never bare filenames such as `app.html` and never full absolute filesystem paths; cite external findings as direct Markdown links (e.g. `[pr issue #155](https://github.com/org/repo/pull/155)`), never as bare text. Clearly label facts as Verified, Inferred, or Unknown. If the project is empty or a tool/source is unavailable, state that limitation rather than padding the document with generic advice.',
   'Write for a person reviewing the conversation, not for an auditor. Preserve confirmed user decisions, distinguish recommendations from decisions, and include only options or tradeoffs that still matter.',
+  'The dispatch may contain an Authoritative interview decisions block. Treat every answer in that block, including free-form answers that do not match a listed option, as an explicit user decision. Carry it into the relevant report section and never return its question to Still to Decide unless a later user message explicitly reopens or contradicts it.',
   'Return a short title, a two-to-four sentence Session Snapshot summary, and exactly these required Markdown sections in order: What We Learned (context), What We Are Building (goals), Aligned Decisions (decisions), Still to Decide (open_questions), Boundaries (constraints), Agreed Direction (proposed_direction).',
   'Use short paragraphs and compact bullet lists. Avoid repeated background, generic best practices, exhaustive matrices, nested heading scaffolds, and process narration.',
   'In What We Learned, label factual findings as Verified, Inferred, or Unknown and attach evidence directly to every verified claim.',
@@ -766,6 +767,12 @@ const BRAINSTORM_GENERATION_SYSTEM_PROMPT = [
   'Prefer clarity and accuracy over length. Do not repeat the request in different words or hide uncertainty behind confident prose.',
   MERMAID_OUTPUT_INSTRUCTION
 ].join(' ')
+
+const BRAINSTORM_DECISION_INTEGRITY_SYSTEM_PROMPT =
+  'The Authoritative interview decisions block is app-owned conversation state. Treat every recorded answer, including custom free-form text, as an explicit user decision. A question with a recorded answer is resolved and must not appear in Still to Decide unless later user input explicitly reopens or contradicts that decision.'
+
+const QUESTION_ANSWER_MESSAGE_PREFIX = 'question-answer-'
+const BRAINSTORM_DECISION_LEDGER_MAX_CHARACTERS = 120_000
 
 const BRAINSTORM_JSON_SHAPE = JSON.stringify({
   title: 'string',
@@ -2138,6 +2145,7 @@ export class ChatEngine {
     if (!driver) {
       throw new Error(`Harness driver is unavailable: ${pending.driverId}`)
     }
+    await this.persistQuestionAnswer(pending, safeAnswers)
     try {
       await this.resolvePendingQuestion(pending, 'answered', safeAnswers, () =>
         driver.replyToQuestion(
@@ -2151,6 +2159,76 @@ export class ChatEngine {
       if (!(error instanceof InactiveQuestionTurnError)) throw error
       await this.resumeAfterInactiveQuestion(pending, 'answered', safeAnswers)
     }
+  }
+
+  /**
+   * Keep the user's exact question answers in the app-owned transcript instead
+   * of relying on each harness to serialize its native question tool result.
+   * The stable id makes retries idempotent.
+   */
+  private async persistQuestionAnswer(
+    pending: PendingQuestionInfo,
+    answers: string[][]
+  ): Promise<void> {
+    const decisions = pending.request.questions.map((question, index) => ({
+      question: question.prompt,
+      answers: answers[index] ?? []
+    }))
+    const digest = createHash('sha256')
+      .update(
+        [
+          pending.request.projectId,
+          pending.request.threadId,
+          pending.request.sessionId,
+          pending.request.requestId
+        ].join('\n')
+      )
+      .digest('hex')
+      .slice(0, 24)
+    const messageId = `${QUESTION_ANSWER_MESSAGE_PREFIX}${digest}`
+    const body = decisions
+      .map(
+        (decision, index) =>
+          `${index + 1}. ${decision.question}\n${decision.answers.map((answer) => `   - ${answer}`).join('\n')}`
+      )
+      .join('\n')
+    const transportText = [
+      '[Authoritative agent question answer]',
+      'The user explicitly submitted these answers. Preserve custom text exactly and treat each answered question as resolved unless a later user message changes it.',
+      JSON.stringify(decisions)
+    ].join('\n')
+    const createdAt = Date.now()
+    const message: AgentMessage = {
+      id: messageId,
+      role: 'user',
+      origin: 'user',
+      visibility: 'conversation',
+      parts: [
+        {
+          type: 'user-presentation',
+          id: `${messageId}-presentation`,
+          messageID: messageId,
+          presentation: { action: 'Answered agent question', body }
+        }
+      ],
+      transportParts: [
+        {
+          type: 'text',
+          id: `${messageId}-transport-text`,
+          messageID: messageId,
+          text: transportText
+        }
+      ],
+      transportOrigin: 'user',
+      createdAt,
+      completedAt: createdAt
+    }
+    await this.threadManager.upsertMessages(
+      pending.request.projectId,
+      pending.request.threadId,
+      [message],
+      pending.request.sessionId
+    )
   }
 
   /** Reject a pending question and let the provider continue the active turn. */
@@ -9895,6 +9973,7 @@ export class ChatEngine {
                 await this.cioPrompt('brainstorm-document'),
                 BRAINSTORM_JSON_FALLBACK_SYSTEM_PROMPT
               ].join('\n\n'),
+          BRAINSTORM_DECISION_INTEGRITY_SYSTEM_PROMPT,
           behaviorPrompt
         ]
           .filter(Boolean)
@@ -10075,11 +10154,18 @@ export class ChatEngine {
     instructions: string
   ): Promise<string> {
     const messages = await this.threadManager.loadMessageRecords(projectId, threadId)
+    const interviewDecisions = formatBrainstormInterviewDecisions(messages)
     const transcript = formatConversationTranscript(
       messages.filter((message) => !message.id.startsWith('brainstorm-research-')),
       { maxCharacters: 80_000 }
     )
-    return transcript ? `${instructions}\n\nConversation context:\n${transcript}` : instructions
+    return [
+      instructions,
+      interviewDecisions ? `Authoritative interview decisions:\n${interviewDecisions}` : '',
+      transcript ? `Conversation context:\n${transcript}` : ''
+    ]
+      .filter(Boolean)
+      .join('\n\n')
   }
 
   /** Generate structured spec content in an isolated read-only harness session. */
@@ -17467,6 +17553,59 @@ function formatConversationTranscript(
     .filter(Boolean)
     .join('\n\n')
   return options.maxCharacters === undefined ? transcript : transcript.slice(-options.maxCharacters)
+}
+
+/**
+ * Preserve answered interview questions outside the rolling conversation
+ * window used for Brainstorm generation. New app-owned records are exact;
+ * provider question parts and older presentation messages keep pre-fix
+ * sessions useful as well.
+ */
+export function formatBrainstormInterviewDecisions(messages: AgentMessage[]): string {
+  const entries: string[] = []
+  const seen = new Set<string>()
+  const add = (entry: string): void => {
+    const normalized = entry.trim()
+    if (!normalized || seen.has(normalized)) return
+    seen.add(normalized)
+    entries.push(normalized)
+  }
+
+  for (const message of messages) {
+    if (message.id.startsWith(QUESTION_ANSWER_MESSAGE_PREFIX)) {
+      for (const part of message.transportParts ?? message.parts) {
+        if (part.type === 'text') add(part.text)
+      }
+      continue
+    }
+    for (const part of message.parts) {
+      if (part.type === 'question' && part.question.answer?.trim()) {
+        add(
+          `[Recorded question answer]\nQuestion: ${part.question.prompt}\nAnswer: ${part.question.answer.trim()}`
+        )
+      } else if (
+        part.type === 'user-presentation' &&
+        part.presentation.action === 'Answered agent question' &&
+        part.presentation.body?.trim()
+      ) {
+        add(`[Recorded question answer]\n${part.presentation.body.trim()}`)
+      }
+    }
+  }
+
+  const selected: string[] = []
+  let characters = 0
+  for (let index = entries.length - 1; index >= 0; index -= 1) {
+    const entry = entries[index]
+    if (!entry) continue
+    const separatorLength = selected.length === 0 ? 0 : 2
+    if (characters + separatorLength + entry.length > BRAINSTORM_DECISION_LEDGER_MAX_CHARACTERS) {
+      continue
+    }
+    selected.push(entry)
+    characters += separatorLength + entry.length
+  }
+  return selected.reverse().join('\n\n')
 }
 
 /**
