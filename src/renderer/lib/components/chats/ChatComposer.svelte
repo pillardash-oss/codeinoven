@@ -55,7 +55,11 @@
   import Switch from '../ui/Switch.svelte'
   import ContextUsageIndicator from './ContextUsageIndicator.svelte'
   import ProjectFileMentionMenu from './ProjectFileMentionMenu.svelte'
-  import { composerMentionQuery, type ComposerMentionEntry } from './composer-mentions'
+  import {
+    composerMentionQuery,
+    normalizeComposerMessage,
+    type ComposerMentionEntry
+  } from './composer-mentions'
   import SlashActionMenu from '../actions/SlashActionMenu.svelte'
   import RichMarkdownEditor from '../shared/RichMarkdownEditor.svelte'
   import ModelPicker from '../shared/ModelPicker.svelte'
@@ -814,7 +818,7 @@
       return
     }
     cancelStop()
-    const msg = value.trim()
+    const msg = normalizeComposerMessage(value, projectReferences)
     if (!msg && attachments.length === 0 && !hasCommentReference) return
     historyIndex = -1
     savedValue = ''
@@ -851,7 +855,7 @@
       attachmentBlockedNotice = true
       return
     }
-    const msg = value.trim()
+    const msg = normalizeComposerMessage(value, projectReferences)
     value = ''
     onValueChange?.('')
     const files = [...attachments]

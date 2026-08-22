@@ -42,6 +42,7 @@
     Zap
   } from '@lucide/svelte'
   import ChatComposer from '../chats/ChatComposer.svelte'
+  import { normalizeComposerMessage } from '../chats/composer-mentions'
   import StartAfterThreadPicker from '../chats/StartAfterThreadPicker.svelte'
   import ResponseSelectionPopover from '../chats/ResponseSelectionPopover.svelte'
   import ResponseAnnotationBubble from '../chats/ResponseAnnotationBubble.svelte'
@@ -3545,7 +3546,7 @@
     restorable?: boolean,
     startAfterThreads: StartAfterThreadReference[] = []
   ): Promise<void> {
-    const msg = text.trim()
+    const msg = normalizeComposerMessage(text, projectReferences)
     const hasAttachments = (attachments?.length ?? 0) > 0
     const hasProjectReferences = (projectReferences?.length ?? 0) > 0
     const hasTaskReferences = (taskReferences?.length ?? 0) > 0
