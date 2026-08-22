@@ -241,10 +241,10 @@ export class GatewaySupervisorService {
       return this.toStatus(state)
     }
     try {
-      this.setState(pluginId, { lifecycle: 'starting', detail: undefined })
-      this.setState(pluginId, { lifecycle: 'installing' })
+      await this.mutateState(pluginId, (current) => ({ ...current, lifecycle: 'starting', detail: undefined }))
+      await this.mutateState(pluginId, (current) => ({ ...current, lifecycle: 'installing' }))
       const installDir = await this.ensureInstalled(pluginId, adapter)
-      this.setState(pluginId, { lifecycle: 'starting' })
+      await this.mutateState(pluginId, (current) => ({ ...current, lifecycle: 'starting' }))
       const preferred = (await this.loadStore()).plugins[pluginId]?.preferredPort ?? 0
       const port = await this.allocatePort(preferred)
       const binPath = join(installDir, 'node_modules', adapter.npmPackage, adapter.binPath)
@@ -755,9 +755,11 @@ export class GatewaySupervisorService {
       availableVersion: adapter?.version ?? '',
       modelCount: snapshot?.models.length ?? 0,
       syncedHarnessIds: [],
-      ...(lifecycle === 'installing' || lifecycle === 'starting'
+      ...(this.installProgress.get(state.pluginId) !== undefined
         ? { progress: this.installProgress.get(state.pluginId) }
-        : {})
+        : lifecycle === 'installing' || lifecycle === 'starting'
+          ? { progress: this.installProgress.get(state.pluginId) }
+          : {})
     }
   }
 

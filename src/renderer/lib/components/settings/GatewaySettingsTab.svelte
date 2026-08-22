@@ -264,7 +264,7 @@
           </div>
         {/if}
 
-        {#if (gateway.lifecycle === 'installing' || gateway.lifecycle === 'starting') && gateway.progress}
+        {#if gateway.progress}
           {@const progress = gateway.progress}
           <div class="mt-4">
             <div class="flex items-center justify-between text-xs">
