@@ -38,7 +38,7 @@
     GitFork,
     GitMergeConflict,
     GitPullRequest,
-    Globe2,
+    Globe,
     Kanban,
     MessageSquare,
     SquareDashedKanban,
@@ -1145,7 +1145,7 @@
         title="Open gateway dashboard — {gatewayDashboardUrl}"
         onclick={() => void openGatewayDashboard()}
       >
-        <Globe2 size={16} />
+        <Globe size={16} />
       </button>
     {/if}
 
