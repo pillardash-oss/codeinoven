@@ -107,11 +107,13 @@
     })
     applyCurrentTheme()
     const syncVisibility = (): void => {
-      if (document.visibilityState === 'visible') void remoteSession.resume()
+      if (document.visibilityState === 'visible') void remoteSession.resume().catch(() => undefined)
       else remoteSession.suspend()
     }
     const suspend = (): void => remoteSession.suspend()
-    const resume = (): void => void remoteSession.resume()
+    const resume = (): void => {
+      void remoteSession.resume().catch(() => undefined)
+    }
     let wasConnected = connected
     const stopStateWatch = remoteSession.onStateChange((snapshot) => {
       const isConnectedNow =
