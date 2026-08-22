@@ -545,6 +545,11 @@ class ContextSidebarState {
   activateThread(projectId: string, threadId: string, threadTitle?: string): void {
     const keepNotificationsVisible = this.notificationsVisible
     const projectChanged = this.activeProjectId !== projectId
+    // Capture before `activeProjectId` moves: the native view (if any) belongs
+    // to the outgoing project and must be detached from the store layer so the
+    // floating view never outlives its sidebar visibility.
+    const browserWasVisible = this.browserVisible
+    const previousBrowserTabId = this.browserActiveTabId ?? this.activeBrowserTabs.at(-1)?.id ?? null
     this.activeProjectId = projectId
     this.activeThreadId = threadId
     this.ensureProjectContext(projectId)
@@ -557,9 +562,13 @@ class ContextSidebarState {
       !projectChanged &&
       this.browserVisible &&
       this.activeBrowserTabs.length > 0
+    if (browserWasVisible && !this.browserVisible && previousBrowserTabId) {
+      void invoke('browser:hide', previousBrowserTabId)
+    }
   }
 
   deactivateThread(): void {
+    this.detachNativeBrowserView()
     this.browserVisible = false
     this.activeProjectId = null
     this.activeThreadId = null
@@ -567,6 +576,7 @@ class ContextSidebarState {
 
   toggle(): void {
     if (this.browserVisible) {
+      this.detachNativeBrowserView()
       this.browserVisible = false
       const context = this.activeProjectContext
       if (context) context.visible = false
@@ -588,6 +598,7 @@ class ContextSidebarState {
       return
     }
     if (this.browserVisible) {
+      this.detachNativeBrowserView()
       this.browserVisible = false
       const context = this.activeProjectContext
       if (context) context.visible = false
@@ -1089,6 +1100,7 @@ class ContextSidebarState {
   toggleNotifications(): void {
     this.notificationsVisible = !this.notificationsVisible
     if (this.notificationsVisible) {
+      if (this.browserVisible) this.detachNativeBrowserView()
       this.browserVisible = false
     }
   }
@@ -1517,6 +1529,7 @@ class ContextSidebarState {
   private focusInContext(context: ThreadSidebarContext, id: string): void {
     const tab = context.tabs.find((candidate) => candidate.id === id)
     if (!tab) return
+    if (this.browserVisible) this.detachNativeBrowserView()
     context.activeTabIds[tab.kind] = id
     const project = this.ensureProjectContext(context.projectId)
     project.activeKind = tab.kind
@@ -1539,6 +1552,7 @@ class ContextSidebarState {
   private focusInProjectContext(context: ProjectSidebarContext, id: string): void {
     const tab = context.tabs.find((candidate) => candidate.id === id)
     if (!tab) return
+    if (this.browserVisible) this.detachNativeBrowserView()
     context.activeTabIds[tab.kind] = id
     this.browserVisible = false
     this.notificationsVisible = false
@@ -1568,6 +1582,17 @@ class ContextSidebarState {
     this.browserActiveTabId = id
     this.browserVisible = true
     this.notificationsVisible = false
+  }
+
+  /** Detach the native browser view at the store layer. The panel's own
+   *  attachment also hides on teardown; this duplicate is the safety net that
+   *  keeps the floating native view bound to sidebar visibility even when a
+   *  component lifecycle or effect flush is interrupted (transitions, HMR,
+   *  a sibling render error). Firing it for a tab that is not attached is a
+   *  cheap no-op in the main process. */
+  private detachNativeBrowserView(): void {
+    const tabId = this.browserActiveTabId ?? this.activeBrowserTabs.at(-1)?.id
+    if (tabId) void invoke('browser:hide', tabId)
   }
 
   private persistBrowserTabs(): void {
