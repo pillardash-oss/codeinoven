@@ -165,6 +165,8 @@ export class BrowserService {
     ipcMain.handle('browser:hide', (_event, rawTabId) => {
       const tabId = validateTabId(rawTabId)
       if (this.activeTabId === tabId) this.detachActiveView()
+      // Missing tabs are silently ignored — the renderer may call hide
+      // during teardown after the tab was already destroyed.
     })
     ipcMain.handle('browser:navigate', (_event, rawTabId, rawUrl) => {
       this.load(validateTabId(rawTabId), validateBrowserUrl(rawUrl))
@@ -188,7 +190,8 @@ export class BrowserService {
       this.requireTab(validateTabId(rawTabId)).view.webContents.stop()
     })
     ipcMain.handle('browser:getConsole', (_event, rawTabId) => {
-      return [...this.requireTab(validateTabId(rawTabId)).consoleEntries]
+      const tab = this.tabs.get(validateTabId(rawTabId))
+      return tab ? [...tab.consoleEntries] : []
     })
     ipcMain.handle('browser:clearConsole', (_event, rawTabId) => {
       this.requireTab(validateTabId(rawTabId)).consoleEntries = []

@@ -13,8 +13,8 @@
   } from '@lucide/svelte'
   import type { GatewayStatus } from '$shared/gateway-types'
   import { invoke, subscribe } from '$lib/ipc.svelte'
-  import { openInBrowser } from '$lib/open-in-browser'
   import { toast } from 'svelte-sonner'
+  import { gatewayState } from '$lib/stores/gateway.svelte'
   import Modal from '../ui/Modal.svelte'
   import Switch from '../ui/Switch.svelte'
 
@@ -150,8 +150,9 @@
     }
   }
 
-  function openDashboard(url: string): void {
-    void openInBrowser(url)
+  async function openDashboard(url: string): Promise<void> {
+    const opened = await gatewayState.openDashboard(url)
+    if (!opened) toast.error('No project context — open a project first, or the dashboard will open externally.')
   }
 
   function hasUpdate(gateway: GatewayStatus): boolean {
@@ -264,7 +265,7 @@
           </div>
         {/if}
 
-        {#if (gateway.lifecycle === 'installing' || gateway.lifecycle === 'starting') && gateway.progress}
+        {#if gateway.progress}
           {@const progress = gateway.progress}
           <div class="mt-4">
             <div class="flex items-center justify-between text-xs">

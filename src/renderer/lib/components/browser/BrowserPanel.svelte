@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount, tick } from 'svelte'
+  import { onMount, tick, untrack } from 'svelte'
   import type { Attachment } from 'svelte/attachments'
   import {
     ArrowLeft,
@@ -27,11 +27,25 @@
 
   let { tab, fullscreen = false }: Props = $props()
 
+  // Capture stable tab identity at construction — `tab` is a prop object that
+  // Svelte may detach during keyed destroy, so every async callback and
+  // teardown must read from this snapshot instead of `tab.id` directly.
+  // svelte-ignore state_referenced_locally
+  const tabId = tab.id
+  // svelte-ignore state_referenced_locally
+  const tabProjectId = tab.projectId
+  // svelte-ignore state_referenced_locally
+  const tabThreadId = tab.threadId
+  // svelte-ignore state_referenced_locally
+  const tabInitialUrl = tab.url
+  // svelte-ignore state_referenced_locally
+  const tabInitialTitle = tab.title
+
   function initialPageState(): BrowserPageState {
     return {
-      tabId: tab.id,
-      url: tab.url,
-      title: tab.title,
+      tabId,
+      url: tabInitialUrl,
+      title: tabInitialTitle,
       loading: true,
       canGoBack: false,
       canGoForward: false
@@ -42,10 +56,11 @@
   let address = $state(initialPageState().url)
   let addressError = $state('')
   let pageState = $state<BrowserPageState>(initialPageState())
-  let activeSurface = $derived(tab.surface)
+  // svelte-ignore state_referenced_locally
+  const initialSurface = tab.surface
+  let activeSurface = $derived((tab as BrowserContextTab | null)?.surface ?? initialSurface)
   let panelVisible = $derived(
-    fullscreen ||
-      (contextSidebarState.sidebarVisible && contextSidebarState.sidebarActiveTab?.id === tab.id)
+    fullscreen || (contextSidebarState.sidebarVisible && contextSidebarState.sidebarActiveTab?.id === tabId)
   )
   let consoleEntries = $state<BrowserConsoleEntry[]>([])
   let consoleElement = $state<HTMLDivElement>()
@@ -69,9 +84,11 @@
   }
 
   const manageNativeBrowserView: Attachment<HTMLDivElement> = () => {
-    void tick().then(showAtCurrentBounds)
+    void tick().then(() => {
+      showAtCurrentBounds().catch(() => {})
+    })
     return () => {
-      void invoke('browser:hide', tab.id)
+      void invoke('browser:hide', tabId).catch(() => {})
     }
   }
 
@@ -88,10 +105,20 @@
   }
 
   async function showAtCurrentBounds(): Promise<void> {
-    if (!panelVisible || activeSurface !== 'page') return
+    // Read deriveds outside the async continuation so Svelte doesn't flag
+    // `derived_inert` when this is called from ResizeObserver/rAF after
+    // the owning render effect has been torn down.
+    const visible = untrack(() => panelVisible)
+    const surface = untrack(() => activeSurface)
+    if (!visible || surface !== 'page') return
     const bounds = contentBounds()
     if (!bounds) return
-    pageState = await invoke('browser:show', tab.id, tab.projectId, tab.threadId, tab.url, bounds)
+    try {
+      const currentUrl = untrack(() => (tab as BrowserContextTab | null)?.url ?? tabInitialUrl)
+      pageState = await invoke('browser:show', tabId, tabProjectId, tabThreadId, currentUrl, bounds)
+    } catch {
+      // Tab may have been destroyed between the visibility check and the IPC.
+    }
   }
 
   function navigate(): void {
@@ -102,21 +129,21 @@
     }
     addressError = ''
     address = url
-    contextSidebarState.updateBrowserTab(tab.id, url)
-    void invoke('browser:navigate', tab.id, url)
+    contextSidebarState.updateBrowserTab(tabId, url)
+    void invoke('browser:navigate', tabId, url).catch(() => {})
   }
 
   function applyPageState(next: BrowserPageState): void {
-    if (next.tabId !== tab.id) return
+    if (next.tabId !== tabId) return
     pageState = next
     if (next.url) address = next.url
-    contextSidebarState.updateBrowserTab(tab.id, next.url || tab.url, next.title)
+    contextSidebarState.updateBrowserTab(tabId, next.url || untrack(() => (tab as BrowserContextTab | null)?.url ?? tabInitialUrl), next.title)
   }
 
   function mergeConsoleEntries(entries: BrowserConsoleEntry[]): void {
     const merged = [...consoleEntries]
     for (const entry of entries) {
-      if (entry.tabId !== tab.id) continue
+      if (entry.tabId !== tabId) continue
       const index = merged.findIndex((candidate) => candidate.id === entry.id)
       if (index >= 0) merged[index] = entry
       else merged.push(entry)
@@ -125,7 +152,7 @@
   }
 
   function applyConsoleEntry(entry: BrowserConsoleEntry): void {
-    if (entry.tabId !== tab.id) return
+    if (entry.tabId !== tabId) return
     mergeConsoleEntries([entry])
     if (activeSurface === 'console') {
       requestAnimationFrame(() => {
@@ -137,9 +164,13 @@
 
   async function selectSurface(surface: BrowserContextTab['surface']): Promise<void> {
     if (activeSurface === surface) return
-    contextSidebarState.updateBrowserSurface(tab.id, surface)
+    contextSidebarState.updateBrowserSurface(tabId, surface)
     if (surface === 'console') {
-      await invoke('browser:hide', tab.id)
+      try {
+        await invoke('browser:hide', tabId)
+      } catch {
+        // Tab already destroyed.
+      }
       return
     }
     await tick()
@@ -173,11 +204,16 @@
   }
 
   onMount(() => {
+    let destroyed = false
     const unsubscribeState = subscribe('browser:state', applyPageState)
     const unsubscribeConsole = subscribe('browser:console', applyConsoleEntry)
-    const observer = new ResizeObserver(() => void showAtCurrentBounds())
+    const observer = new ResizeObserver(() => {
+      if (!destroyed) void showAtCurrentBounds().catch(() => {})
+    })
     if (contentElement) observer.observe(contentElement)
-    const onWindowResize = (): void => void showAtCurrentBounds()
+    const onWindowResize = (): void => {
+      if (!destroyed) void showAtCurrentBounds().catch(() => {})
+    }
     window.addEventListener('resize', onWindowResize)
 
     // The sidebar enters with a short transform. Follow its rectangle until the
@@ -185,19 +221,21 @@
     const startedAt = performance.now()
     let animationFrame = 0
     const followTransition = (now: number): void => {
-      void showAtCurrentBounds()
+      if (destroyed) return
+      void showAtCurrentBounds().catch(() => {})
       if (now - startedAt < 260) animationFrame = requestAnimationFrame(followTransition)
     }
     animationFrame = requestAnimationFrame(followTransition)
-    void invoke('browser:getConsole', tab.id).then(mergeConsoleEntries)
+    void invoke('browser:getConsole', tabId).then(mergeConsoleEntries).catch(() => {})
 
     return () => {
+      destroyed = true
       cancelAnimationFrame(animationFrame)
       observer.disconnect()
       window.removeEventListener('resize', onWindowResize)
       unsubscribeState()
       unsubscribeConsole()
-      void invoke('browser:hide', tab.id)
+      void invoke('browser:hide', tabId).catch(() => {})
     }
   })
 </script>
@@ -216,7 +254,7 @@
       disabled={!pageState.canGoBack}
       aria-label="Go back"
       title="Go back"
-      onclick={() => void invoke('browser:goBack', tab.id)}
+      onclick={() => void invoke('browser:goBack', tabId).catch(() => {})}
     >
       <ArrowLeft size={14} />
     </button>
@@ -226,7 +264,7 @@
       disabled={!pageState.canGoForward}
       aria-label="Go forward"
       title="Go forward"
-      onclick={() => void invoke('browser:goForward', tab.id)}
+      onclick={() => void invoke('browser:goForward', tabId).catch(() => {})}
     >
       <ArrowRight size={14} />
     </button>
@@ -235,7 +273,7 @@
       class="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
       aria-label={pageState.loading ? 'Stop loading' : 'Reload page'}
       title={pageState.loading ? 'Stop loading' : 'Reload page'}
-      onclick={() => void invoke(pageState.loading ? 'browser:stop' : 'browser:reload', tab.id)}
+      onclick={() => void invoke(pageState.loading ? 'browser:stop' : 'browser:reload', tabId).catch(() => {})}
     >
       {#if pageState.loading}
         <X size={14} />

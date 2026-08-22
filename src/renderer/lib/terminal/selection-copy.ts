@@ -16,6 +16,7 @@
  * `getLine`, which also treats scrollback rows as unwrapped).
  */
 
+import { invoke } from '$lib/ipc.svelte'
 import { SelectionManager, type GhosttyTerminal } from 'ghostty-web'
 
 interface SelectionCoordinate {
@@ -36,6 +37,31 @@ let patched = false
 export function patchSelectionCopy(): void {
   if (patched) return
   patched = true
+
+  // Prefer the Electron clipboard (always available in this app) over the
+  // browser's `execCommand("copy")` fallback, which logs `❌ execCommand
+  // copy failed` noise in the console and is deprecated.
+  const originalCopy = (
+    SelectionManager.prototype as unknown as {
+      copyToClipboard: (text: string) => Promise<void>
+    }
+  ).copyToClipboard
+  ;(SelectionManager.prototype as unknown as { copyToClipboard: (text: string) => Promise<void> }).copyToClipboard =
+    async function (this: SelectionManager, text: string): Promise<void> {
+      // Try Electron IPC first — works even when the terminal isn't focused.
+      try {
+        await invoke('clipboard:writeText', text)
+        return
+      } catch {
+        // Fall through to the browser / execCommand path.
+      }
+      try {
+        await originalCopy.call(this, text)
+      } catch {
+        // Both paths failed — swallow the ghostty-web `console.error` noise.
+        // The selection itself is still valid; manual copy remains possible.
+      }
+    }
 
   SelectionManager.prototype.getSelection = function (this: SelectionManager): string {
     const { selectionStart, selectionEnd, wasmTerm } = this as unknown as SelectionManagerInternals
