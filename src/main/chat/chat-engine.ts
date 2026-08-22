@@ -13,7 +13,6 @@ import { ThreadManager, remapCopiedMessages } from '../../lib/engines/thread-man
 import { SpecEngine } from '../../lib/engines/spec-engine'
 import { AuditEngine } from '../../lib/engines/audit-engine'
 import { AssignmentEngine, AssignmentEngineError } from '../../lib/engines/assignment-engine'
-import { ScopeManager } from '../../lib/engines/scope-manager'
 import { OpenCodeDriver, type IsolatedHandle } from '../drivers/opencode-driver'
 import { ClaudeCodeDriver } from '../drivers/claude-code-driver'
 import { CodexDriver } from '../drivers/codex-driver'
@@ -167,7 +166,11 @@ import type {
   UsageEventFeature,
   UsagePricingProvenance
 } from '../../lib/types'
-import { INBOX_PROJECT_ID, isOrchestrationChildThread } from '../../lib/types'
+import {
+  DEFAULT_SCOPE_BUCKET_ID,
+  INBOX_PROJECT_ID,
+  isOrchestrationChildThread
+} from '../../lib/types'
 import { modelKey } from '../../lib/model-keys'
 import { APP_NAME } from '../../lib/brand'
 import { DEFAULT_AGENT_BEHAVIOR_PROMPT } from '../../lib/agent-behavior'
@@ -1415,7 +1418,6 @@ export class ChatEngine {
   private brainstormEngine: BrainstormEngine
   private auditEngine: AuditEngine
   private assignmentEngine: AssignmentEngine
-  private scopeManager: ScopeManager
   private assignmentApiServer: Server | null = null
   private assignmentApiBaseUrl = ''
   private readonly assignmentApiCapabilities = new Map<string, AssignmentApiCapability>()
@@ -1607,7 +1609,6 @@ export class ChatEngine {
     this.brainstormEngine = new BrainstormEngine(storage, database)
     this.auditEngine = new AuditEngine(storage, database)
     this.assignmentEngine = new AssignmentEngine(storage, database)
-    this.scopeManager = new ScopeManager(database)
     // Register available harness drivers. Order follows the harness registry —
     // the single source of truth — so the model list and providers settings
     // page agree. Only harnesses with an integrated driver are instantiated.
@@ -10695,29 +10696,18 @@ export class ChatEngine {
     throw lastError ?? new Error('The audit agent failed.')
   }
 
-  /** Create or reuse the pinned scope owned by an Achievement coordinator. */
+  /** Enable Achievement coordination without changing the thread's workspace scope. */
   async ensureAchievementScope(projectId: string, coordinatorThreadId: string): Promise<Thread> {
     projectId = validateEntityId(projectId, 'Project ID')
     coordinatorThreadId = validateEntityId(coordinatorThreadId, 'Coordinator thread ID')
     const coordinator = await this.threadManager.getThread(projectId, coordinatorThreadId)
     if (!coordinator) throw new Error('Achievement coordinator not found.')
     if (coordinator.achievementRole === 'auditor') {
-      throw new Error('An Achievement Auditor cannot own an Achievement scope.')
+      throw new Error('An Achievement Auditor cannot coordinate Achievement.')
     }
-    const assignment = this.assignmentEngine.getActive(projectId, coordinatorThreadId)
-    const scopeBucketId =
-      assignment?.scopeBucketId ??
-      (assignment ? `assignment-${assignment.id}` : undefined) ??
-      (coordinator.scopeBucketId?.startsWith('achievement-')
-        ? coordinator.scopeBucketId
-        : `achievement-${coordinatorThreadId}`)
-    this.scopeManager.ensureBucket(projectId, {
-      id: scopeBucketId,
-      name: assignment?.content.title ?? `Achievement: ${coordinator.title}`
-    })
     await this.threadManager.updateThread(projectId, coordinatorThreadId, {
       achievementRole: 'coordinator',
-      scopeBucketId
+      scopeBucketId: coordinator.scopeBucketId ?? DEFAULT_SCOPE_BUCKET_ID
     })
     await this.threadManager.setPinned(projectId, coordinatorThreadId, true)
     return (await this.threadManager.getThread(projectId, coordinatorThreadId)) ?? coordinator
