@@ -1,10 +1,11 @@
 <script lang="ts">
-  import { GitBranch } from '@lucide/svelte'
+  import { GitBranch, Loader2 } from '@lucide/svelte'
   import Modal from '../ui/Modal.svelte'
   import Switch from '../ui/Switch.svelte'
   import ScopeSetupCommandsEditor from './ScopeSetupCommandsEditor.svelte'
+  import { invoke } from '$lib/ipc.svelte'
   import { scopeState } from '$lib/stores/scope.svelte'
-  import type { ScopeSetupCommandSpec } from '$shared/types'
+  import type { GitBranchInfo, ScopeSetupCommandSpec } from '$shared/types'
 
   interface Props {
     open: boolean
@@ -26,22 +27,30 @@
   let environmentMode = $state<'copy' | 'symlink'>('copy')
   let setupCommands = $state<ScopeSetupCommandSpec[]>([])
   let baseBranch = $state('')
+  let localBranches = $state.raw<GitBranchInfo[]>([])
+  let branchesLoading = $state(true)
+  let branchesError = $state<string | null>(null)
   let error = $state<string | null>(null)
   let busy = $state(false)
 
-  $effect(() => {
-    // Reset transient state each time the modal opens so stale inputs never leak.
-    if (open) {
-      name = ''
-      error = null
-      busy = false
-      isolated = true
-      runSetup = true
-      environmentMode = 'copy'
-      setupCommands = []
+  async function loadLocalBranches(getProjectId: () => string): Promise<void> {
+    try {
+      const branches = (await invoke('git:branches', getProjectId())).filter(
+        (branch) => branch.kind === 'local'
+      )
+      localBranches = branches
+      baseBranch = branches.find((branch) => branch.current)?.name ?? branches[0]?.name ?? ''
+      branchesError = branches.length > 0 ? null : 'This repository has no local branches.'
+    } catch (cause) {
+      localBranches = []
       baseBranch = ''
+      branchesError = cause instanceof Error ? cause.message : 'Local branches could not be loaded.'
+    } finally {
+      branchesLoading = false
     }
-  })
+  }
+
+  void loadLocalBranches(() => projectId)
 
   /** Preview the collision-safe branch and config-root folder for the title. */
   function previewBranch(): string {
@@ -58,7 +67,7 @@
 
   async function create(): Promise<void> {
     const trimmed = name.trim()
-    if (!trimmed || busy) return
+    if (!trimmed || busy || (isolated && (branchesLoading || !baseBranch))) return
     busy = true
     error = null
     try {
@@ -141,14 +150,41 @@
           </div>
           <div class="mt-1.5 flex items-center gap-1.5 text-xs text-muted">
             <label for={`${componentId}-base-branch`} class="shrink-0">Source branch</label>
-            <input
-              id={`${componentId}-base-branch`}
-              class="min-w-0 flex-1 rounded-md border bg-elevated px-2 py-1 text-xs text-foreground"
-              placeholder="Current branch (default)"
-              title="Existing branch the worktree forks from; leave empty to fork from the current branch"
-              bind:value={baseBranch}
-            />
+            <div class="relative min-w-0 flex-1">
+              <select
+                id={`${componentId}-base-branch`}
+                class="h-7 w-full cursor-pointer rounded-md border bg-elevated px-2 pr-7 font-mono text-xs text-foreground outline-none focus:border-primary disabled:cursor-wait disabled:opacity-60"
+                title="Local branch the worktree forks from"
+                bind:value={baseBranch}
+                disabled={branchesLoading || localBranches.length === 0}
+                aria-describedby={`${componentId}-base-branch-status`}
+              >
+                {#if branchesLoading}
+                  <option value="">Loading local branches…</option>
+                {:else if localBranches.length === 0}
+                  <option value="">No local branches</option>
+                {:else}
+                  {#each localBranches as branch (branch.ref)}
+                    <option value={branch.name}>
+                      {branch.name}{branch.current ? ' (current)' : ''}
+                    </option>
+                  {/each}
+                {/if}
+              </select>
+              {#if branchesLoading}
+                <Loader2
+                  size={12}
+                  class="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 animate-spin text-dimmed"
+                />
+              {/if}
+            </div>
           </div>
+          <p
+            id={`${componentId}-base-branch-status`}
+            class={branchesError ? 'mt-1 text-xs text-danger' : 'sr-only'}
+          >
+            {branchesError ?? 'Only local branches are available as worktree sources.'}
+          </p>
           <p class="text-xs text-dimmed">
             Worktree folder: <code
               >projects/{projectId}/scope/<span class="text-foreground"
@@ -221,7 +257,7 @@
       type="submit"
       form={formId}
       class="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
-      disabled={!name.trim() || busy}
+      disabled={!name.trim() || busy || (isolated && (branchesLoading || !baseBranch))}
     >
       {busy ? 'Creating…' : 'Create'}
     </button>

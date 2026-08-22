@@ -22,8 +22,6 @@
   <Kanban size={15} strokeWidth={1.8} />
 </button>
 
-<ScopeCreateModal
-  {open}
-  projectId={scopeState.activeProjectId ?? ''}
-  onClose={() => (open = false)}
-/>
+{#if open && scopeState.activeProjectId}
+  <ScopeCreateModal {open} projectId={scopeState.activeProjectId} onClose={() => (open = false)} />
+{/if}
