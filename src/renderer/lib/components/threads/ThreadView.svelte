@@ -6280,7 +6280,7 @@
    *  the question timeout; here we populate the chat and set a question-specific
    *  auto prompt. */
   function handleQuestionExplain(_requestId: string, question: AgentQuestion): void {
-    const selection = formatQuestionForExplain(question)
+    const selection = formatQuestionForTemporaryChat(question)
     contextSidebarState.openTemporaryChat(
       thread.projectId,
       thread.id,
@@ -6293,10 +6293,23 @@
     )
   }
 
+  /** Open a user-driven quick chat with the active agent question attached as
+   *  its selection and the surrounding thread available as read-only context. */
+  function handleQuestionQuickChat(_requestId: string, question: AgentQuestion): void {
+    contextSidebarState.openTemporaryChat(
+      thread.projectId,
+      thread.id,
+      'quick',
+      formatQuestionForTemporaryChat(question),
+      temporaryConversationContext(),
+      settings
+    )
+  }
+
   const EXPLAIN_QUESTION_PROMPT =
     'Explain this question and all of its options clearly so the user can understand it and make a more informed decision. Base the explanation on the surrounding context. Use simple, everyday language and avoid unnecessary technical jargon unless it is truly needed. Be clear, concise, and neutral — do not recommend a specific answer. Do not perform any execution, make code changes, run tests, or do anything beyond: read-only explanation focused only on this question and its options.'
 
-  function formatQuestionForExplain(question: AgentQuestion): string {
+  function formatQuestionForTemporaryChat(question: AgentQuestion): string {
     const parts: string[] = []
     if (question.header) parts.push(`Question: ${question.header}`)
     if (question.prompt) parts.push(`Prompt: ${question.prompt}`)
@@ -7798,6 +7811,7 @@
                   onDismiss={handleQuestionDismiss}
                   onUpdate={handleQuestionUpdate}
                   onExplain={handleQuestionExplain}
+                  onQuickChat={handleQuestionQuickChat}
                 />
               {/key}
             {:else if assignmentAuditState === 'running' && assignment && !achievementAutonomous}

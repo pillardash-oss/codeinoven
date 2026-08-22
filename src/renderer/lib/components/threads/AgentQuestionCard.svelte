@@ -1,5 +1,14 @@
 <script lang="ts">
-  import { Check, ChevronLeft, ChevronRight, Clock, HelpCircle, Send, X } from '@lucide/svelte'
+  import {
+    Check,
+    ChevronLeft,
+    ChevronRight,
+    Clock,
+    HelpCircle,
+    MessageSquareDashed,
+    Send,
+    X
+  } from '@lucide/svelte'
   import { onDestroy } from 'svelte'
   import { SvelteSet } from 'svelte/reactivity'
   import { blockHtml, lexMarkdown } from '../markdown/markdown'
@@ -18,9 +27,11 @@
     ) => Promise<PendingAgentQuestionRequest>
     /** Open the explain side chat for the given question, pausing its timeout. */
     onExplain?: (requestId: string, question: AgentQuestion) => void
+    /** Open a quick chat for the given question, pausing its timeout. */
+    onQuickChat?: (requestId: string, question: AgentQuestion) => void
   }
 
-  let { request, onAnswer, onDismiss, onUpdate, onExplain }: Props = $props()
+  let { request, onAnswer, onDismiss, onUpdate, onExplain, onQuickChat }: Props = $props()
 
   // The parent keys this component by request id, so these drafts belong to one
   // authoritative pending request for the lifetime of the component.
@@ -208,12 +219,14 @@
     }
   }
 
-  function handleExplain(): void {
-    if (working || !onExplain) return
+  function openQuestionChat(
+    onOpen: ((requestId: string, question: AgentQuestion) => void) | undefined
+  ): void {
+    if (working || !onOpen) return
     // Persisting progress without a next index clears the timeout, so the timer
-    // is paused while the user reads the explanation.
+    // is paused while the user works in the temporary chat.
     persistProgress(currentIndex, currentAnswers)
-    onExplain(request.requestId, question)
+    onOpen(request.requestId, question)
   }
 </script>
 
@@ -410,17 +423,35 @@
   </div>
 
   <div class="flex items-center justify-between gap-3 border-t px-4 py-2.5">
-    {#if onExplain}
-      <button
-        class="flex h-7 items-center gap-1 rounded-lg border border-border px-2 text-[11px] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
-        disabled={working}
-        onclick={handleExplain}
-        title="Explain this question to help you decide"
-        aria-label="Explain this question in a temporary read-only chat"
-      >
-        <HelpCircle size={13} />
-        Explain
-      </button>
+    {#if onExplain || onQuickChat}
+      <div class="flex items-center gap-1">
+        {#if onExplain}
+          <button
+            type="button"
+            class="flex h-7 items-center gap-1 rounded-lg border border-border px-2 text-[11px] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
+            disabled={working}
+            onclick={() => openQuestionChat(onExplain)}
+            title="Explain this question to help you decide"
+            aria-label="Explain this question in a temporary read-only chat"
+          >
+            <HelpCircle size={13} />
+            Explain
+          </button>
+        {/if}
+        {#if onQuickChat}
+          <button
+            type="button"
+            class="flex h-7 items-center gap-1 rounded-lg border border-border px-2 text-[11px] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
+            disabled={working}
+            onclick={() => openQuestionChat(onQuickChat)}
+            title="Start a temporary read-only quick chat about this question"
+            aria-label="Start a temporary read-only quick chat about this question"
+          >
+            <MessageSquareDashed size={13} />
+            Quick chat
+          </button>
+        {/if}
+      </div>
     {:else}
       <p class="text-[11px] text-muted">
         {#if !currentAnswers.length}
