@@ -2624,6 +2624,24 @@ export interface BrainstormContent {
   sections: BrainstormSection[]
 }
 
+export type BrainstormReviewField = 'title' | 'summary' | BrainstormSectionId
+
+export interface BrainstormReviewEdit {
+  field: BrainstormReviewField
+  startOffset: number
+  endOffset: number
+  before: string
+  after: string
+  contextBefore: string
+  contextAfter: string
+  truncated: boolean
+}
+
+export interface BrainstormReviewChanges {
+  baselineAvailable: boolean
+  edits: BrainstormReviewEdit[]
+}
+
 export type BrainstormStatus = 'draft' | 'finalized' | 'superseded'
 export type BrainstormDecisionAction = 'review' | 'finalize'
 export type BrainstormEntryChoice = 'brainstorm' | 'spec'
@@ -2669,6 +2687,8 @@ export interface BrainstormDocument {
   version: number
   status: BrainstormStatus
   content: BrainstormContent
+  /** Agent-generated content retained so manual review edits can be sent as compact diffs. */
+  generatedContent?: BrainstormContent
   annotations: BrainstormAnnotation[]
   decisionComments: BrainstormDecisionComment[]
   provenance: BrainstormProvenance

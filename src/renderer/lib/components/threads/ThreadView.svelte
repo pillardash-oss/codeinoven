@@ -159,6 +159,7 @@
     CapturableSpecContextType,
     BrainstormDecisionAction,
     BrainstormDocument,
+    BrainstormReviewChanges,
     BrainstormSectionId,
     BrainstormTraceUpdate,
     SpecGenerationTraceUpdate,
@@ -4618,54 +4619,186 @@
     }
   }
 
-  const BRAINSTORM_REVIEW_SECTION_CONTEXT_LIMIT = 8_000
-  const BRAINSTORM_REVIEW_ANNOTATION_CONTEXT_LIMIT = 20_000
+  const BRAINSTORM_REVIEW_ANCHOR_CONTEXT_LENGTH = 160
+  const BRAINSTORM_REVIEW_FALLBACK_LIMIT = 90_000
+  const DOCUMENT_WIDE_REVIEW_PATTERN =
+    /\b(?:entire|whole|overall|throughout|document-wide|full report|all sections|every section|reconsider everything|start over)\b/iu
 
-  function boundedBrainstormReviewText(value: string, limit: number): string {
-    if (value.length <= limit) return value
-    return `${value.slice(0, limit)}\n[Remaining content omitted from this discussion turn.]`
+  interface BrainstormReviewAnnotationManifest {
+    id: string
+    section: BrainstormSectionId
+    comment: string
+    exactQuote: string
+    range: {
+      startLine?: number
+      endLine?: number
+      startOffset?: number
+      endOffset?: number
+    }
+    surroundingText: { before: string; after: string }
+    occurrenceCount: number
+    located: boolean
   }
 
-  function brainstormReviewDiscussionContext(draft: BrainstormDocument): string {
-    const report = [
-      `# ${boundedBrainstormReviewText(draft.content.title, 2_000)}`,
+  function brainstormContentMarkdown(draft: BrainstormDocument): string {
+    return [
+      `# ${draft.content.title}`,
       '',
       '## Session Snapshot',
       '',
-      boundedBrainstormReviewText(draft.content.summary, BRAINSTORM_REVIEW_SECTION_CONTEXT_LIMIT),
+      draft.content.summary,
       '',
       ...draft.content.sections.flatMap((section) => [
         `## ${section.title}`,
         '',
-        boundedBrainstormReviewText(section.markdown, BRAINSTORM_REVIEW_SECTION_CONTEXT_LIMIT),
+        section.markdown,
         ''
       ])
     ].join('\n')
-    const openAnnotations = boundedBrainstormReviewText(
-      draft.annotations
-        .filter((annotation) => annotation.status === 'open')
-        .map(
-          (annotation) =>
-            `- [${annotation.section}] ${annotation.body}${annotation.quote ? `\n  Selected text: ${annotation.quote}` : ''}`
-        )
-        .join('\n'),
-      BRAINSTORM_REVIEW_ANNOTATION_CONTEXT_LIMIT
-    )
+  }
+
+  function boundedBrainstormFallback(draft: BrainstormDocument): {
+    markdown: string
+    truncated: boolean
+  } {
+    const markdown = brainstormContentMarkdown(draft)
+    if (markdown.length <= BRAINSTORM_REVIEW_FALLBACK_LIMIT) {
+      return { markdown, truncated: false }
+    }
+    return {
+      markdown: markdown.slice(0, BRAINSTORM_REVIEW_FALLBACK_LIMIT),
+      truncated: true
+    }
+  }
+
+  function quoteOccurrences(value: string, quote: string): number[] {
+    const occurrences: number[] = []
+    let fromIndex = 0
+    while (fromIndex <= value.length - quote.length) {
+      const index = value.indexOf(quote, fromIndex)
+      if (index < 0) break
+      occurrences.push(index)
+      fromIndex = index + Math.max(quote.length, 1)
+    }
+    return occurrences
+  }
+
+  function brainstormReviewAnnotation(
+    draft: BrainstormDocument,
+    annotation: BrainstormDocument['annotations'][number]
+  ): BrainstormReviewAnnotationManifest {
+    const section = draft.content.sections.find((candidate) => candidate.id === annotation.section)
+    const quote = annotation.quote?.trim() ?? ''
+    const sectionLevel = Boolean(section && quote === section.title)
+    const searchableText = sectionLevel ? (section?.title ?? '') : (section?.markdown ?? '')
+    const occurrences = quote ? quoteOccurrences(searchableText, quote) : []
+    const preferredOffset = annotation.startOffset
+    const locatedIndex =
+      occurrences.length === 0
+        ? undefined
+        : occurrences.length === 1
+          ? occurrences[0]
+          : preferredOffset === undefined
+            ? undefined
+            : occurrences.reduce((nearest, candidate) =>
+                Math.abs(candidate - preferredOffset) < Math.abs(nearest - preferredOffset)
+                  ? candidate
+                  : nearest
+              )
+    const located = locatedIndex !== undefined
+
+    return {
+      id: annotation.id,
+      section: annotation.section,
+      comment: annotation.body,
+      exactQuote: quote,
+      range: {
+        startLine: annotation.startLine,
+        endLine: annotation.endLine,
+        startOffset: annotation.startOffset,
+        endOffset: annotation.endOffset
+      },
+      surroundingText: located
+        ? {
+            before: searchableText.slice(
+              Math.max(0, locatedIndex - BRAINSTORM_REVIEW_ANCHOR_CONTEXT_LENGTH),
+              locatedIndex
+            ),
+            after: searchableText.slice(
+              locatedIndex + quote.length,
+              locatedIndex + quote.length + BRAINSTORM_REVIEW_ANCHOR_CONTEXT_LENGTH
+            )
+          }
+        : { before: '', after: '' },
+      occurrenceCount: occurrences.length,
+      located
+    }
+  }
+
+  async function brainstormContentHash(draft: BrainstormDocument): Promise<string> {
+    const encoded = new TextEncoder().encode(JSON.stringify(draft.content))
+    const digest = await crypto.subtle.digest('SHA-256', encoded)
+    return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('')
+  }
+
+  async function brainstormReviewDiscussionContext(
+    draft: BrainstormDocument,
+    notes: string,
+    reviewChanges: BrainstormReviewChanges
+  ): Promise<string> {
+    const annotations = draft.annotations
+      .filter((annotation) => annotation.status === 'open')
+      .map((annotation) => brainstormReviewAnnotation(draft, annotation))
+    const fallbackReasons: string[] = []
+    if (annotations.some((annotation) => !annotation.located)) {
+      fallbackReasons.push('one or more annotation anchors could not be located reliably')
+    }
+    if (reviewChanges.edits.some((edit) => edit.truncated)) {
+      fallbackReasons.push('one or more edited fragments exceeded the compact payload limit')
+    }
+    if (!reviewChanges.baselineAvailable) {
+      fallbackReasons.push('this legacy report does not retain its generated-content baseline')
+    }
+    if (annotations.length === 0 && reviewChanges.edits.length === 0) {
+      fallbackReasons.push('the feedback has no local annotation or edit anchor')
+    }
+    if (DOCUMENT_WIDE_REVIEW_PATTERN.test(notes)) {
+      fallbackReasons.push('the reviewer requested document-wide reconsideration')
+    }
+
+    const manifest = {
+      schemaVersion: 1,
+      report: {
+        id: draft.id,
+        version: draft.version,
+        contentHash: await brainstormContentHash(draft),
+        updatedAt: draft.updatedAt
+      },
+      annotations,
+      edits: reviewChanges.edits,
+      ...(fallbackReasons.length > 0
+        ? {
+            fullReportFallback: {
+              reasons: fallbackReasons,
+              ...boundedBrainstormFallback(draft)
+            }
+          }
+        : {})
+    }
 
     return [
       'Continue the interactive Brainstorm discussion about this session report.',
       'Treat the review feedback as discussion input, not as instructions for a one-pass rewrite. Address what is already clear. When any material intent, tradeoff, or requested change remains ambiguous, use the question tool and continue the back-and-forth until alignment is reached. Do not generate or rewrite the session report in this response. The application refreshes it after the discussion turn is complete.',
-      `Current Brainstorm session report:\n<brainstorm-report>\n${report}\n</brainstorm-report>`,
-      openAnnotations ? `Open review annotations:\n${openAnnotations}` : ''
-    ]
-      .filter(Boolean)
-      .join('\n\n')
+      'The review manifest is authoritative for the report identity and content hash. Resolve annotations using their exact quote, range, and surrounding text together. If those anchors disagree, ask the reviewer instead of guessing. The edits are compact diffs from the agent-generated baseline. Do not ask for or reconstruct the full report when fullReportFallback is absent.',
+      `<brainstorm-review-manifest>\n${JSON.stringify(manifest)}\n</brainstorm-review-manifest>`
+    ].join('\n\n')
   }
 
   async function submitBrainstormDecision(
     action: BrainstormDecisionAction,
     draft: BrainstormDocument,
-    notes: string
+    notes: string,
+    reviewChanges: BrainstormReviewChanges = { baselineAvailable: false, edits: [] }
   ): Promise<void> {
     brainstormError = ''
     showSpecStudio = false
@@ -4678,7 +4811,7 @@
         [],
         undefined,
         undefined,
-        brainstormReviewDiscussionContext(draft),
+        await brainstormReviewDiscussionContext(draft, notes, reviewChanges),
         [],
         [],
         {

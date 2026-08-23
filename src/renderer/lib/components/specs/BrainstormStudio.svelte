@@ -33,6 +33,8 @@
     BrainstormAnnotation,
     BrainstormDecisionAction,
     BrainstormDocument,
+    BrainstormReviewChanges,
+    BrainstormReviewEdit,
     BrainstormSection,
     BrainstormSectionId
   } from '$shared/types'
@@ -83,7 +85,8 @@
     onSubmit: (
       action: BrainstormDecisionAction,
       brainstorm: BrainstormDocument,
-      additionalNotes: string
+      additionalNotes: string,
+      reviewChanges: BrainstormReviewChanges
     ) => CallbackResult
     onOpenInEditor?: (brainstorm: BrainstormDocument) => CallbackResult
     onRevealInAppFile?: (brainstorm: BrainstormDocument) => CallbackResult
@@ -130,6 +133,10 @@
   // a newly selected or persisted version while retaining intentional local edit buffers.
   // svelte-ignore state_referenced_locally
   let draft = $state<BrainstormDocument>(history.attach($state.snapshot(brainstorm)))
+  // This component is keyed by report version, and new reports persist their generated baseline.
+  // Older stored reports fall back to the content present when the studio is first opened.
+  // svelte-ignore state_referenced_locally
+  const reviewBaseline = $state.snapshot(brainstorm.generatedContent ?? brainstorm.content)
   let preferredIcon = $derived(editorPreference.preferredInfo?.iconDataUrl)
   let preferredName = $derived(editorPreference.preferredInfo?.name ?? 'System Default')
   // svelte-ignore state_referenced_locally
@@ -519,7 +526,77 @@
     closeAnnotation()
   }
 
+  const REVIEW_EDIT_FRAGMENT_LIMIT = 4_000
+  const REVIEW_EDIT_CONTEXT_LENGTH = 160
+
+  function reviewEdit(
+    field: BrainstormReviewEdit['field'],
+    before: string,
+    after: string
+  ): BrainstormReviewEdit | null {
+    if (before === after) return null
+
+    const sharedLength = Math.min(before.length, after.length)
+    let startOffset = 0
+    while (startOffset < sharedLength && before[startOffset] === after[startOffset]) {
+      startOffset += 1
+    }
+
+    let sharedSuffixLength = 0
+    const remainingBefore = before.length - startOffset
+    const remainingAfter = after.length - startOffset
+    while (
+      sharedSuffixLength < remainingBefore &&
+      sharedSuffixLength < remainingAfter &&
+      before[before.length - sharedSuffixLength - 1] ===
+        after[after.length - sharedSuffixLength - 1]
+    ) {
+      sharedSuffixLength += 1
+    }
+
+    const endOffset = before.length - sharedSuffixLength
+    const afterEndOffset = after.length - sharedSuffixLength
+    const beforeFragment = before.slice(startOffset, endOffset)
+    const afterFragment = after.slice(startOffset, afterEndOffset)
+    const truncated =
+      beforeFragment.length > REVIEW_EDIT_FRAGMENT_LIMIT ||
+      afterFragment.length > REVIEW_EDIT_FRAGMENT_LIMIT
+
+    return {
+      field,
+      startOffset,
+      endOffset,
+      before: beforeFragment.slice(0, REVIEW_EDIT_FRAGMENT_LIMIT),
+      after: afterFragment.slice(0, REVIEW_EDIT_FRAGMENT_LIMIT),
+      contextBefore: before.slice(
+        Math.max(0, startOffset - REVIEW_EDIT_CONTEXT_LENGTH),
+        startOffset
+      ),
+      contextAfter: before.slice(
+        endOffset,
+        Math.min(before.length, endOffset + REVIEW_EDIT_CONTEXT_LENGTH)
+      ),
+      truncated
+    }
+  }
+
+  function collectReviewEdits(): BrainstormReviewEdit[] {
+    const edits: BrainstormReviewEdit[] = []
+    const titleEdit = reviewEdit('title', reviewBaseline.title, draft.content.title)
+    const summaryEdit = reviewEdit('summary', reviewBaseline.summary, draft.content.summary)
+    if (titleEdit) edits.push(titleEdit)
+    if (summaryEdit) edits.push(summaryEdit)
+
+    for (const section of draft.content.sections) {
+      const baseline = reviewBaseline.sections.find((candidate) => candidate.id === section.id)
+      const edit = reviewEdit(section.id, baseline?.markdown ?? '', section.markdown)
+      if (edit) edits.push(edit)
+    }
+    return edits
+  }
+
   async function submitAction(action: BrainstormDecisionAction): Promise<void> {
+    const reviewEdits = collectReviewEdits()
     let submitted = $state.snapshot(draft)
     if (dirty) {
       const saved = await saveDraft()
@@ -529,7 +606,10 @@
     const notes = additionalNotes
     pendingAction = null
     additionalNotes = ''
-    await onSubmit(action, submitted, notes)
+    await onSubmit(action, submitted, notes, {
+      baselineAvailable: brainstorm.generatedContent !== undefined,
+      edits: reviewEdits
+    })
   }
 
   function handleWindowKeydown(event: KeyboardEvent): void {
