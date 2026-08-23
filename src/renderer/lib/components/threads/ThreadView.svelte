@@ -84,7 +84,7 @@
   import FileCitationContextMenu from '../markdown/FileCitationContextMenu.svelte'
   import { getProjectIcon } from '$lib/project-icons'
   import { isImageMime, isVideoMime, isAudioMime, fileUrlToPath } from '$lib/mime'
-  import { fastBaseModelId, fastVariantForModelId } from '$shared/fast-inference'
+  import { fastBaseModelId, fastVariantForModelId, normalizeFastInference, supportsFastInference } from '$shared/fast-inference'
   import { FileBlobUrlManager } from '$lib/media-urls.svelte'
   import { actionContext } from '$lib/stores/action-context.svelte'
   import type { ActionDefinition, ActionSelection, ActionSource } from '$lib/actions'
@@ -506,20 +506,16 @@
       visibleProviderStatus !== null &&
       visibleProviderStatus.issue === proactiveAuthIssue
   )
-  const providerName = $derived(
-    settings.harnessId === 'opencode'
-      ? 'OpenCode'
-      : settings.harnessId === 'claude-code'
-        ? 'Claude Code'
-        : settings.harnessId === 'codex'
-          ? 'Codex'
-          : settings.harnessId === 'cline'
-            ? 'Cline'
-            : settings.harnessId === 'pi'
-              ? 'Pi'
-              : settings.harnessId === 'antigravity'
-                ? 'Antigravity'
-                : settings.harnessId
+  const providerName = $derived(harnessDisplayName(settings.harnessId))
+  /** Harness that actually produced the visible provider issue. When it differs
+   *  from the thread's current harness (e.g. a Codex usage-limit card still on
+   *  screen while the user already switched the thread to OpenCode), the badge
+   *  must attribute the card to the harness that reported it — never to the
+   *  harness that happens to be selected now. */
+  const statusCardProviderName = $derived(
+    visibleProviderStatus?.issue?.harnessId
+      ? harnessDisplayName(visibleProviderStatus.issue.harnessId)
+      : providerName
   )
   const applicationActionSource = {
     id: 'application',
@@ -5634,6 +5630,19 @@
     return harnessId
   }
 
+  /** True when the selected model exposes a fast tier, per the live catalog. */
+  function fastSupportedFor(
+    harnessId: string,
+    providerId: string,
+    modelId: string
+  ): boolean {
+    const provider = providers.find(
+      (candidate) => candidate.harnessId === harnessId && candidate.id === providerId
+    )
+    const model = provider?.models.find((candidate) => candidate.id === modelId)
+    return supportsFastInference(harnessId, providerId, model?.fastSupported)
+  }
+
   function assignmentWorkerAttentionStatus(
     task: AssignmentTask,
     worker: Thread
@@ -5666,12 +5675,19 @@
     worker: Thread,
     selected: ThreadSettings
   ): Promise<void> {
+    const normalized = normalizeFastInference(
+      selected,
+      selected.harnessId,
+      selected.providerId,
+      selected.modelId,
+      fastSupportedFor(selected.harnessId, selected.providerId, selected.modelId)
+    )
     try {
       const updatedWorker = await invoke(
         'thread:updateSettings',
         worker.projectId,
         worker.id,
-        selected
+        normalized
       )
       assignmentThreads = assignmentThreads.map((candidate) =>
         candidate.id === updatedWorker.id ? updatedWorker : candidate
@@ -6024,20 +6040,27 @@
   }
 
   function changeAuditModel(selected: ThreadSettings): void {
-    auditSettings = selected
+    const normalized = normalizeFastInference(
+      selected,
+      selected.harnessId,
+      selected.providerId,
+      selected.modelId,
+      fastSupportedFor(selected.harnessId, selected.providerId, selected.modelId)
+    )
+    auditSettings = normalized
     const auditor = {
-      harnessId: selected.harnessId,
-      providerId: selected.providerId,
-      modelId: selected.modelId,
-      thinkingLevel: selected.thinkingLevel
+      harnessId: normalized.harnessId,
+      providerId: normalized.providerId,
+      modelId: normalized.modelId,
+      thinkingLevel: normalized.thinkingLevel
     }
     rendererRecovery.setAuditModel(
-      modelKey(selected.harnessId, selected.providerId, selected.modelId)
+      modelKey(normalized.harnessId, normalized.providerId, normalized.modelId)
     )
     if (isAssignmentAuditorThread) {
       updateSettings({
         ...settings,
-        ...selected,
+        ...normalized,
         permissionLevel: 'auto_review',
         engineeringMode: false,
         assignmentMode: false,
@@ -6052,18 +6075,32 @@
   }
 
   function changeSpecModel(selected: ThreadSettings): void {
-    rendererRecovery.addRecentModel(
-      modelKey(selected.harnessId, selected.providerId, selected.modelId)
+    const normalized = normalizeFastInference(
+      selected,
+      selected.harnessId,
+      selected.providerId,
+      selected.modelId,
+      fastSupportedFor(selected.harnessId, selected.providerId, selected.modelId)
     )
-    updateSettings({ ...settings, ...selected })
+    rendererRecovery.addRecentModel(
+      modelKey(normalized.harnessId, normalized.providerId, normalized.modelId)
+    )
+    updateSettings({ ...settings, ...normalized })
   }
 
   /** Switch the thread's text model from the provider-error card's picker. */
   function changeThreadModel(selected: ThreadSettings): void {
-    rendererRecovery.addRecentModel(
-      modelKey(selected.harnessId, selected.providerId, selected.modelId)
+    const normalized = normalizeFastInference(
+      selected,
+      selected.harnessId,
+      selected.providerId,
+      selected.modelId,
+      fastSupportedFor(selected.harnessId, selected.providerId, selected.modelId)
     )
-    updateSettings({ ...settings, ...selected })
+    rendererRecovery.addRecentModel(
+      modelKey(normalized.harnessId, normalized.providerId, normalized.modelId)
+    )
+    updateSettings({ ...settings, ...normalized })
   }
 
   async function completeAudit(): Promise<void> {
@@ -6815,8 +6852,22 @@
             thinkingLevel: auditSettings.thinkingLevel
           }
         : undefined
+    // Fast inference only exists for models that actually support it. A model
+    // switch must never carry a `fast` mode into a model (or harness) without
+    // a fast tier — the resolved `*-fast` id would target a nonexistent model.
+    const effectiveIncoming = seniorModelChanged
+      ? normalizeFastInference(
+          incoming,
+          incoming.harnessId,
+          incoming.providerId,
+          incoming.modelId,
+          incoming.inferenceMode === 'fast'
+            ? fastSupportedFor(incoming.harnessId, incoming.providerId, incoming.modelId)
+            : undefined
+        )
+      : incoming
     const normalized: ThreadSettings = {
-      ...incoming,
+      ...effectiveIncoming,
       ...(loopJustEnabled && loopAuditor ? { loopAuditor } : {})
     }
     const harnessChanged = settings.harnessId !== normalized.harnessId
@@ -6830,6 +6881,22 @@
       // refetch so the newly selected harness's quota is current.
       contextUsageDisplay = undefined
       accountUsageFetchedAt = 0
+      // A provider card produced by the previous harness no longer applies once
+      // the user switches to another harness — otherwise the stale issue's
+      // message and links (e.g. a Codex usage-limit URL) linger under the badge
+      // of the newly selected one. Dismiss it so the next send surfaces fresh
+      // status for the current configuration.
+      if (
+        providerStatus &&
+        (providerStatus.state === 'waiting' || providerStatus.state === 'error') &&
+        providerStatus.issue.harnessId &&
+        providerStatus.issue.harnessId !== normalized.harnessId
+      ) {
+        providerStatus = null
+      }
+      if (proactiveAuthIssue && proactiveAuthIssue.harnessId !== normalized.harnessId) {
+        proactiveAuthIssue = null
+      }
     }
     if (seniorModelChanged && normalized.engineeringMode) {
       syncAgentRole('seniorEngineer', {
@@ -8440,7 +8507,7 @@
             <div class="mx-auto max-w-3xl">
               <AgentProviderStatusCard
                 status={visibleProviderStatus}
-                {providerName}
+                providerName={statusCardProviderName}
                 settings={chatMode
                   ? { ...settings, engineeringMode: false, assignmentMode: false, loopMode: false }
                   : settings}
