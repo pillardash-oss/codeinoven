@@ -441,6 +441,34 @@ CREATE TABLE IF NOT EXISTS brainstorm_versions (
 CREATE INDEX IF NOT EXISTS idx_brainstorm_versions_thread
   ON brainstorm_versions(project_id, thread_id);
 
+-- ─── PRD Workflow ──────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS prd_workflow (
+  project_id             TEXT NOT NULL,
+  thread_id              TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
+  entry_choice           TEXT CHECK(entry_choice IN ('brainstorm_first','start_prd')),
+  stage                  TEXT NOT NULL CHECK(stage IN ('choice_pending','brainstorming','drafting','finalized')),
+  active_prd_id          TEXT,
+  active_prd_version     INTEGER,
+  finalized_prd_version  INTEGER,
+  finalized_input_hash   TEXT,
+  updated_at             INTEGER NOT NULL,
+  PRIMARY KEY (project_id, thread_id)
+);
+
+CREATE TABLE IF NOT EXISTS prd_versions (
+  prd_id      TEXT NOT NULL,
+  version     INTEGER NOT NULL,
+  project_id  TEXT NOT NULL,
+  thread_id   TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
+  status      TEXT NOT NULL CHECK(status IN ('draft','finalized','superseded')),
+  data        TEXT NOT NULL,
+  created_at  INTEGER NOT NULL,
+  updated_at  INTEGER NOT NULL,
+  PRIMARY KEY (prd_id, version)
+);
+
+CREATE INDEX IF NOT EXISTS idx_prd_versions_thread ON prd_versions(project_id, thread_id);
+
 -- ─── Spec Workflow ───────────────────────────────────────────────────
 -- Persisted Engineering selection and restart-safe progression. started_at
 -- is permanent once set so the renderer can keep the Toolbox history fill.

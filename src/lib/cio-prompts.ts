@@ -9,6 +9,7 @@ export type CioPromptMode =
   | 'file-system-chat'
   | 'temporary-chat'
   | 'brainstorm'
+  | 'prd'
   | 'engineer'
   | 'assignment'
   | 'achievement'
@@ -25,6 +26,8 @@ export type CioPromptId =
   | 'temporary-chat'
   | 'brainstorm-discussion'
   | 'brainstorm-document'
+  | 'prd-discussion'
+  | 'prd-document'
   | 'engineering-spec'
   | 'engineering-implementation'
   | 'assignment-plan'
@@ -59,6 +62,11 @@ export const CIO_PROMPT_TEMPLATE_TAGS = [
     tag: '{{BRAINSTORM_DOCUMENT_TOOL_NAME}}',
     description: 'The stable Brainstorm document tool name.',
     value: 'brainstorm_document'
+  },
+  {
+    tag: '{{PRODUCT_REQUIREMENTS_DOCUMENT_TOOL_NAME}}',
+    description: 'The stable product requirements document tool name.',
+    value: 'product_requirements_document'
   }
 ] as const
 
@@ -127,6 +135,24 @@ export const CIO_PROMPT_DEFINITIONS: readonly CioPromptDefinition[] = [
     group: 'Engineering',
     modes: ['brainstorm'],
     defaultTemplate: `Conduct evidence-driven research and create a reviewable Brainstorm document through {{BRAINSTORM_DOCUMENT_TOOL_NAME}}. Inspect actual project state with read-only tools and research current external facts when material. Label facts Verified, Inferred, or Unknown. Present viable options, tradeoffs, risks, and one justified recommendation without converting it into a user decision. Treat every answer in an Authoritative interview decisions block, including custom free-form text, as an explicit user decision. Carry it into the relevant report section and never return its question to Open Questions unless later user input explicitly reopens or contradicts it. Return Context, Goals, Decisions, Open Questions, Constraints, and Proposed Direction. When the dispatch supplies an exact session-report revision path under .cio/specs, write the report Markdown to exactly that path and nowhere else; never modify any other file. Do not implement. ${CITATIONS} ${MERMAID}`
+  },
+  {
+    id: 'prd-discussion',
+    filename: 'prd-discussion.md',
+    title: 'PRD discussion',
+    description: 'Product discovery and alignment before PRD finalization.',
+    group: 'Engineering',
+    modes: ['prd'],
+    defaultTemplate: `You are the product lead facilitating a PRD discussion. Use finalized Brainstorm material when present, inspect relevant project context read-only, and ask only unresolved product questions through the application question tool. Do not generate a specification, assign work, implement, or mutate application files. ${CITATIONS} ${QUESTION}`
+  },
+  {
+    id: 'prd-document',
+    filename: 'prd-document.md',
+    title: 'PRD document',
+    description: 'Generates the canonical, versioned product requirements document.',
+    group: 'Engineering',
+    modes: ['prd'],
+    defaultTemplate: `Create a reviewable PRD through {{PRODUCT_REQUIREMENTS_DOCUMENT_TOOL_NAME}}. Include title, summary, Problem, Goals, Non-goals, Users and Use Cases, Product Requirements, Experience Flow, Acceptance Criteria, Dependencies, Risks, and Open Questions. Open Questions may be empty, but every section must be present. Use finalized Brainstorm material when available. Do not generate an engineering specification or implement. ${CITATIONS} ${MERMAID}`
   },
   {
     id: 'engineering-spec',

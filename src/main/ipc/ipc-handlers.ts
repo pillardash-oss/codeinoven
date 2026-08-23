@@ -137,6 +137,11 @@ import {
   type AddBrainstormAnnotationInput,
   type NewBrainstormProvenance
 } from '../../lib/engines/brainstorm-engine'
+import {
+  PrdEngine,
+  type AddPrdAnnotationInput,
+  type NewPrdProvenance
+} from '../../lib/engines/prd-engine'
 import { AuditEngine, type AddAuditAnnotationInput } from '../../lib/engines/audit-engine'
 import {
   AssignmentEngine,
@@ -153,6 +158,8 @@ import {
 import { validateEngineeringSpec } from '../../lib/spec/spec-validation'
 import { parseGeneratedBrainstormContent } from '../../lib/brainstorm/brainstorm-validation'
 import { exportBrainstormMarkdown } from '../../lib/brainstorm/brainstorm-markdown'
+import { exportPrdMarkdown } from '../../lib/prd/prd-markdown'
+import { parseGeneratedPrdContent } from '../../lib/prd/prd-validation'
 import { atomicWrite, getConfigRoot, getScopeRootPath } from '../../lib/utils'
 import { PROJECT_DATA_DIRECTORY } from '../../lib/project-artifacts'
 import { normalizeWorkerNames } from '../../lib/assignment/worker-names'
@@ -172,6 +179,8 @@ import type {
   AssignmentTask,
   BrainstormEntryChoice,
   BrainstormSectionId,
+  PrdEntryChoice,
+  PrdSectionId,
   CapturableSpecContextType,
   CreateProjectInput,
   EngineeringSpec,
@@ -858,6 +867,18 @@ const BRAINSTORM_SECTIONS = new Set<BrainstormSectionId>([
   'proposed_direction',
   'additional_info'
 ])
+const PRD_SECTIONS = new Set<PrdSectionId>([
+  'problem',
+  'goals',
+  'non_goals',
+  'users_and_use_cases',
+  'product_requirements',
+  'experience_flow',
+  'acceptance_criteria',
+  'dependencies',
+  'risks',
+  'open_questions'
+])
 const AUDIT_SECTIONS = new Set<AuditSectionId>([
   'executive_summary',
   'findings',
@@ -1223,6 +1244,59 @@ function validateBrainstormAnnotationInput(value: unknown): AddBrainstormAnnotat
     ...(endLine === undefined ? {} : { endLine }),
     ...(startOffset === undefined ? {} : { startOffset }),
     ...(endOffset === undefined ? {} : { endOffset })
+  }
+}
+
+function validatePrdProvenance(value: unknown): NewPrdProvenance {
+  if (!isRecord(value)) throw new TypeError('PRD provenance must be an object')
+  if (value.source !== 'agent' && value.source !== 'manual') {
+    throw new TypeError('Invalid PRD provenance source')
+  }
+  return {
+    source: value.source,
+    actor: requireString(value.actor, 'PRD provenance actor'),
+    ...(typeof value.harnessId === 'string' ? { harnessId: value.harnessId } : {}),
+    ...(typeof value.providerId === 'string' ? { providerId: value.providerId } : {}),
+    ...(typeof value.modelId === 'string' ? { modelId: value.modelId } : {}),
+    ...(typeof value.brainstormId === 'string'
+      ? { brainstormId: validateEntityId(value.brainstormId, 'Brainstorm ID') }
+      : {}),
+    ...(value.brainstormVersion === undefined
+      ? {}
+      : { brainstormVersion: requireVersion(value.brainstormVersion) }),
+    ...(typeof value.brainstormInputHash === 'string'
+      ? { brainstormInputHash: requireString(value.brainstormInputHash, 'Brainstorm input hash') }
+      : {})
+  }
+}
+
+function validatePrdAnnotationInput(value: unknown): AddPrdAnnotationInput {
+  if (!isRecord(value)) throw new TypeError('PRD annotation input must be an object')
+  if (typeof value.section !== 'string' || !PRD_SECTIONS.has(value.section as PrdSectionId)) {
+    throw new TypeError('Invalid PRD section')
+  }
+  return {
+    section: value.section as PrdSectionId,
+    body: requireString(value.body, 'PRD annotation body'),
+    author: requireString(value.author, 'PRD annotation author'),
+    ...(value.quote === undefined ? {} : { quote: requireString(value.quote, 'Annotation quote') }),
+    ...(value.startLine === undefined
+      ? {}
+      : { startLine: validateOptionalAnnotationLine(value.startLine, 'Annotation start line') }),
+    ...(value.endLine === undefined
+      ? {}
+      : { endLine: validateOptionalAnnotationLine(value.endLine, 'Annotation end line') }),
+    ...(value.startOffset === undefined
+      ? {}
+      : {
+          startOffset: validateOptionalAnnotationOffset(
+            value.startOffset,
+            'Annotation start offset'
+          )
+        }),
+    ...(value.endOffset === undefined
+      ? {}
+      : { endOffset: validateOptionalAnnotationOffset(value.endOffset, 'Annotation end offset') })
   }
 }
 
@@ -1963,6 +2037,7 @@ export function registerIpcHandlers(
     validateForApproval: validateEngineeringSpec
   })
   const brainstormEngine = new BrainstormEngine(storage, database)
+  const prdEngine = new PrdEngine(storage, database)
   const auditEngine = new AuditEngine(storage, database)
   const assignmentEngine = new AssignmentEngine(storage, database)
   const specContextService = new SpecContextService(database, projectManager)
@@ -2835,6 +2910,187 @@ export function registerIpcHandlers(
       await atomicWrite(targetPath, exportBrainstormMarkdown(document))
       return targetPath
     }
+  )
+  ipcMain.handle('prd:ensureWorkflow', (_, projectId: unknown, threadId: unknown) =>
+    prdEngine.ensureWorkflow(
+      validateEntityId(projectId, 'Project ID'),
+      validateEntityId(threadId, 'Thread ID')
+    )
+  )
+  ipcMain.handle('prd:getWorkflow', (_, projectId: unknown, threadId: unknown) =>
+    prdEngine.getWorkflowState(
+      validateEntityId(projectId, 'Project ID'),
+      validateEntityId(threadId, 'Thread ID')
+    )
+  )
+  ipcMain.handle('prd:chooseEntry', (_, projectId: unknown, threadId: unknown, choice: unknown) => {
+    if (choice !== 'brainstorm_first' && choice !== 'start_prd') {
+      throw new TypeError('PRD entry choice must be brainstorm_first or start_prd')
+    }
+    return prdEngine.chooseEntry(
+      validateEntityId(projectId, 'Project ID'),
+      validateEntityId(threadId, 'Thread ID'),
+      choice as PrdEntryChoice
+    )
+  })
+  ipcMain.handle('prd:beginDrafting', (_, projectId: unknown, threadId: unknown) =>
+    prdEngine.beginDrafting(
+      validateEntityId(projectId, 'Project ID'),
+      validateEntityId(threadId, 'Thread ID')
+    )
+  )
+  ipcMain.handle('prd:getActive', (_, projectId: unknown, threadId: unknown) =>
+    prdEngine.getActive(
+      validateEntityId(projectId, 'Project ID'),
+      validateEntityId(threadId, 'Thread ID')
+    )
+  )
+  ipcMain.handle('prd:listVersions', (_, projectId: unknown, threadId: unknown, prdId: unknown) =>
+    prdEngine.listVersions(
+      validateEntityId(projectId, 'Project ID'),
+      validateEntityId(threadId, 'Thread ID'),
+      validateEntityId(prdId, 'PRD ID')
+    )
+  )
+  ipcMain.handle(
+    'prd:createDraft',
+    (_, projectId: unknown, threadId: unknown, content: unknown, provenance: unknown) =>
+      prdEngine.createDraft(
+        validateEntityId(projectId, 'Project ID'),
+        validateEntityId(threadId, 'Thread ID'),
+        parseGeneratedPrdContent(content),
+        validatePrdProvenance(provenance)
+      )
+  )
+  ipcMain.handle(
+    'prd:saveDraft',
+    (
+      _,
+      projectId: unknown,
+      threadId: unknown,
+      prdId: unknown,
+      version: unknown,
+      content: unknown
+    ) =>
+      prdEngine.saveDraft(
+        validateEntityId(projectId, 'Project ID'),
+        validateEntityId(threadId, 'Thread ID'),
+        validateEntityId(prdId, 'PRD ID'),
+        requireVersion(version),
+        parseGeneratedPrdContent(content)
+      )
+  )
+  ipcMain.handle(
+    'prd:createVersion',
+    (
+      _,
+      projectId: unknown,
+      threadId: unknown,
+      prdId: unknown,
+      content: unknown,
+      provenance: unknown
+    ) =>
+      prdEngine.createVersion(
+        validateEntityId(projectId, 'Project ID'),
+        validateEntityId(threadId, 'Thread ID'),
+        validateEntityId(prdId, 'PRD ID'),
+        parseGeneratedPrdContent(content),
+        validatePrdProvenance(provenance)
+      )
+  )
+  ipcMain.handle(
+    'prd:addAnnotation',
+    (_, projectId: unknown, threadId: unknown, prdId: unknown, version: unknown, input: unknown) =>
+      prdEngine.addAnnotation(
+        validateEntityId(projectId, 'Project ID'),
+        validateEntityId(threadId, 'Thread ID'),
+        validateEntityId(prdId, 'PRD ID'),
+        requireVersion(version),
+        validatePrdAnnotationInput(input)
+      )
+  )
+  ipcMain.handle(
+    'prd:updateAnnotation',
+    (
+      _,
+      projectId: unknown,
+      threadId: unknown,
+      prdId: unknown,
+      version: unknown,
+      annotationId: unknown,
+      body: unknown
+    ) =>
+      prdEngine.updateAnnotation(
+        validateEntityId(projectId, 'Project ID'),
+        validateEntityId(threadId, 'Thread ID'),
+        validateEntityId(prdId, 'PRD ID'),
+        requireVersion(version),
+        validateEntityId(annotationId, 'PRD annotation ID'),
+        requireString(body, 'PRD annotation body')
+      )
+  )
+  ipcMain.handle(
+    'prd:resolveAnnotation',
+    (
+      _,
+      projectId: unknown,
+      threadId: unknown,
+      prdId: unknown,
+      version: unknown,
+      annotationId: unknown
+    ) =>
+      prdEngine.resolveAnnotation(
+        validateEntityId(projectId, 'Project ID'),
+        validateEntityId(threadId, 'Thread ID'),
+        validateEntityId(prdId, 'PRD ID'),
+        requireVersion(version),
+        validateEntityId(annotationId, 'PRD annotation ID')
+      )
+  )
+  ipcMain.handle(
+    'prd:finalize',
+    (_, projectId: unknown, threadId: unknown, prdId: unknown, version: unknown) =>
+      prdEngine.finalize(
+        validateEntityId(projectId, 'Project ID'),
+        validateEntityId(threadId, 'Thread ID'),
+        validateEntityId(prdId, 'PRD ID'),
+        requireVersion(version)
+      )
+  )
+  const preparePrdMarkdown = async (
+    projectId: unknown,
+    threadId: unknown,
+    prdId: unknown,
+    version: unknown
+  ): Promise<string> => {
+    const safeProjectId = validateEntityId(projectId, 'Project ID')
+    const safeThreadId = validateEntityId(threadId, 'Thread ID')
+    const safePrdId = validateEntityId(prdId, 'PRD ID')
+    const safeVersion = requireVersion(version)
+    const document = prdEngine.getVersion(safeProjectId, safeThreadId, safePrdId, safeVersion)
+    if (!document) throw new Error('PRD version not found')
+    const targetPath = await prdEngine.markdownPath(
+      safeProjectId,
+      safeThreadId,
+      safePrdId,
+      safeVersion
+    )
+    await atomicWrite(targetPath, exportPrdMarkdown(document))
+    return targetPath
+  }
+  privileged(
+    'prd:openInEditor',
+    async (_event, projectId: unknown, threadId: unknown, prdId: unknown, version: unknown) => {
+      const targetPath = await preparePrdMarkdown(projectId, threadId, prdId, version)
+      const config = await storage.getConfig()
+      await editorService.openInEditor(config.preferredEditor, targetPath, 'file')
+      return targetPath
+    }
+  )
+  privileged(
+    'prd:revealInFiles',
+    async (_event, projectId: unknown, threadId: unknown, prdId: unknown, version: unknown) =>
+      preparePrdMarkdown(projectId, threadId, prdId, version)
   )
   ipcMain.handle('spec:getActive', async (_, projectId: unknown, threadId: unknown) => {
     const safeProjectId = validateEntityId(projectId, 'Project ID')

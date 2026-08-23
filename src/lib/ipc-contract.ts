@@ -102,6 +102,12 @@ import type {
   PromptAssignmentTaskReference,
   PromptProjectReference,
   PromptReference,
+  PrdContent,
+  PrdDocument,
+  PrdEntryChoice,
+  PrdProvenance,
+  PrdSectionId,
+  PrdWorkflowState,
   ProviderAccountAuthStatus,
   ProviderAccountLoginHandoff,
   ProviderAccountLoginOptions,
@@ -178,6 +184,7 @@ type Contract<Args extends unknown[], Result> = {
 
 type NewSpecProvenance = Omit<SpecProvenance, 'createdAt' | 'parentVersion'>
 type NewBrainstormProvenance = Omit<BrainstormProvenance, 'createdAt' | 'parentVersion'>
+type NewPrdProvenance = Omit<PrdProvenance, 'createdAt' | 'parentVersion'>
 type NewAssignmentProvenance = Omit<AssignmentProvenance, 'createdAt' | 'parentVersion'>
 
 /**
@@ -282,6 +289,79 @@ export interface IpcInvokeContract {
   'engineeringLifecycle:cancel': Contract<
     [projectId: string, threadId: string, confirmed: true],
     EngineeringLifecycleState
+  >
+  'prd:ensureWorkflow': Contract<[projectId: string, threadId: string], PrdWorkflowState>
+  'prd:getWorkflow': Contract<[projectId: string, threadId: string], PrdWorkflowState | null>
+  'prd:chooseEntry': Contract<
+    [projectId: string, threadId: string, choice: PrdEntryChoice],
+    PrdWorkflowState
+  >
+  'prd:beginDrafting': Contract<[projectId: string, threadId: string], PrdWorkflowState>
+  'prd:getActive': Contract<[projectId: string, threadId: string], PrdDocument | null>
+  'prd:listVersions': Contract<[projectId: string, threadId: string, prdId: string], PrdDocument[]>
+  'prd:createDraft': Contract<
+    [projectId: string, threadId: string, content: PrdContent, provenance: NewPrdProvenance],
+    PrdDocument
+  >
+  'prd:saveDraft': Contract<
+    [projectId: string, threadId: string, prdId: string, version: number, content: PrdContent],
+    PrdDocument
+  >
+  'prd:createVersion': Contract<
+    [
+      projectId: string,
+      threadId: string,
+      prdId: string,
+      content: PrdContent,
+      provenance: NewPrdProvenance
+    ],
+    PrdDocument
+  >
+  'prd:addAnnotation': Contract<
+    [
+      projectId: string,
+      threadId: string,
+      prdId: string,
+      version: number,
+      input: {
+        section: PrdSectionId
+        body: string
+        author: string
+        quote?: string
+        startLine?: number
+        endLine?: number
+        startOffset?: number
+        endOffset?: number
+      }
+    ],
+    PrdDocument
+  >
+  'prd:updateAnnotation': Contract<
+    [
+      projectId: string,
+      threadId: string,
+      prdId: string,
+      version: number,
+      annotationId: string,
+      body: string
+    ],
+    PrdDocument
+  >
+  'prd:resolveAnnotation': Contract<
+    [projectId: string, threadId: string, prdId: string, version: number, annotationId: string],
+    PrdDocument
+  >
+  'prd:finalize': Contract<
+    [projectId: string, threadId: string, prdId: string, version: number],
+    PrdDocument
+  >
+  'prd:openInEditor': Contract<
+    [projectId: string, threadId: string, prdId: string, version: number],
+    string
+  >
+  'prd:revealInFiles': Contract<
+    [projectId: string, threadId: string, prdId: string, version: number],
+    string
   >
   'brainstorm:ensureWorkflow': Contract<
     [projectId: string, threadId: string],
