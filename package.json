@@ -1,6 +1,6 @@
 {
   "name": "codeinoven",
-  "version": "0.5.39",
+  "version": "0.5.40",
   "description": "CodeInOven — Desktop workstation for coordinated agentic software engineering",
   "license": "MIT",
   "packageManager": "bun@1.3.14",
@@ -15,14 +15,15 @@
     "email": "hey@pillardash.com"
   },
   "trustedDependencies": [
-    "electron"
+    "electron",
+    "ffmpeg-static"
   ],
   "overrides": {
     "nanoid": "3.3.18"
   },
   "scripts": {
     "postinstall": "bun scripts/patch-binary-data.ts && electron-builder install-app-deps",
-    "predev": "bun scripts/brand-electron.ts",
+    "predev": "bun run speech:build-mlx && bun scripts/brand-electron.ts",
     "dev": "electron-vite dev",
     "build": "electron-vite build",
     "build:production": "electron-vite build --mode production",
@@ -34,14 +35,16 @@
     "check:bundle": "bun scripts/check-bundle-budgets.ts",
     "verify:packaged-app": "bun run scripts/verify-packaged-app.ts",
     "smoke:packaged": "bun run scripts/smoke-packaged-app.ts",
+    "speech:catalog": "bun scripts/benchmark-speech-models.ts",
+    "speech:build-mlx": "bun scripts/build-mlx-speech-worker.ts",
     "verify": "bun run check && bun run lint . && bun run test && bun audit",
     "verify:release": "bun run verify && bun run build:production && bun run check:bundle",
     "version:bump": "bun scripts/bump-version.ts",
-    "package": "bun run build:production && electron-builder --dir -c.forceCodeSigning=false -c.mac.identity=- -c.mac.hardenedRuntime=false -c.mac.notarize=false",
-    "package:mac": "bun run build:production && electron-builder --mac -c.forceCodeSigning=false -c.mac.identity=- -c.mac.hardenedRuntime=false -c.mac.notarize=false",
+    "package": "bun run speech:build-mlx && bun run build:production && electron-builder --dir -c.forceCodeSigning=false -c.mac.identity=- -c.mac.hardenedRuntime=false -c.mac.notarize=false",
+    "package:mac": "bun run speech:build-mlx && bun run build:production && electron-builder --mac -c.forceCodeSigning=false -c.mac.identity=- -c.mac.hardenedRuntime=false -c.mac.notarize=false",
     "package:linux": "bun run build:production && electron-builder --linux -c.forceCodeSigning=false",
     "package:win": "bun run build:production && electron-builder --win -c.forceCodeSigning=false",
-    "release:mac": "bun run verify:release && electron-builder --mac",
+    "release:mac": "bun run speech:build-mlx && bun run verify:release && electron-builder --mac",
     "deploy:nightly": "bash scripts/deploy-nightly.sh",
     "deploy:main": "bash scripts/deploy-main.sh"
   },
@@ -57,8 +60,10 @@
     "better-sqlite3": "^13.0.3",
     "chokidar": "^5.0.0",
     "electron-updater": "^6.8.9",
+    "ffmpeg-static": "5.2.0",
     "mammoth": "1.12.1",
     "node-pty": "1.1.0",
+    "sherpa-onnx-node": "1.13.6",
     "web-push": "^3.6.7",
     "werift": "^0.24.4"
   },

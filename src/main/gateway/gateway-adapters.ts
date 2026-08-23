@@ -21,7 +21,14 @@ export const GATEWAY_ADAPTERS: Record<string, GatewayAdapterDefinition> = {
     serveArgs: [],
     env: {
       NODE_ENV: 'production',
-      OMNIROUTE_SERVER_HOST: '127.0.0.1'
+      // Next's standalone server reads HOSTNAME for its primary listener.
+      HOSTNAME: '127.0.0.1',
+      // CodeInOven only needs the dashboard and model gateway. OmniRoute's
+      // background bundle also starts an embedded-service WS proxy on :20131,
+      // while LiveWS starts a dashboard event sidecar on :20132. Disable both
+      // so the supervised gateway owns only its selected loopback port.
+      OMNIROUTE_DISABLE_BACKGROUND_SERVICES: 'true',
+      OMNIROUTE_ENABLE_LIVE_WS: '0'
     },
     healthPaths: ['/api/monitoring/health', '/api/health'],
     modelsPath: '/v1/models',

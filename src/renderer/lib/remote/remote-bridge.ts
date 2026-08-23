@@ -87,7 +87,7 @@ class RemoteRpcBridge {
   /** Invoke a desktop channel; returns the result or rejects on error. */
   async invoke(channel: string, ...args: unknown[]): Promise<unknown> {
     this.ensureListening()
-    if (remoteSession.recovering) await remoteSession.resume()
+    await remoteSession.resume()
     if (
       remoteSession.snapshot.route.kind !== 'LAN_CONNECTED' &&
       remoteSession.snapshot.route.kind !== 'RELAY_CONNECTED'

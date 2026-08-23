@@ -5,6 +5,7 @@
   import type { ProviderCatalog, Thread, ThreadSettings, ThinkingLevel } from '$shared/types'
 
   interface Props {
+    mode?: 'achievement' | 'audit'
     specTitle: string
     specSummary: string
     auditThread?: Thread
@@ -20,7 +21,7 @@
     onOpenAudit?: () => void
     onViewReport?: () => void
     onOpenThread: (thread: Thread) => void
-    onResume: () => void
+    onResume?: () => void
     onModelChange: (settings: ThreadSettings) => void
     onToggleFavorite?: (providerId: string, modelId: string, harnessId: string) => void
     onReorderFavorite?: (
@@ -31,6 +32,7 @@
   }
 
   let {
+    mode = 'achievement',
     specTitle,
     specSummary,
     auditThread,
@@ -64,6 +66,9 @@
   })
 
   let auditRunning = $derived(auditState === 'running')
+  let coordinatorLabel = $derived(
+    mode === 'achievement' ? 'Achievement coordinator' : 'Audit coordinator'
+  )
   let modelLocked = $derived(auditRunning)
   let progress = $derived.by(() => {
     if (auditState === 'report_ready') {
@@ -101,11 +106,18 @@
         tone: 'text-info'
       }
     }
-    return {
-      label: 'Coordination paused',
-      description: 'Resume the Sr. Engineer to continue implementation or evaluate the next audit.',
-      tone: 'text-muted'
-    }
+    return mode === 'achievement'
+      ? {
+          label: 'Coordination paused',
+          description:
+            'Resume the Sr. Engineer to continue implementation or evaluate the next audit.',
+          tone: 'text-muted'
+        }
+      : {
+          label: 'Audit coordinator ready',
+          description: 'Choose the auditor model and start the durable implementation audit.',
+          tone: 'text-muted'
+        }
   })
 
   function chooseModel(providerId: string, modelId: string, harnessId: string): void {
@@ -124,14 +136,19 @@
 -->
 <div
   class="achievement-coordinator-panel flex h-full min-h-0 flex-col"
-  aria-label="Achievement coordinator"
+  aria-label={coordinatorLabel}
 >
   <header class="shrink-0 border-b border-border p-4">
     <div class="flex min-w-0 items-center gap-2 text-primary">
-      <Target size={15} class="shrink-0" />
-      <h2 class="text-xs font-semibold uppercase tracking-wide">Achievement coordinator</h2>
+      {#if mode === 'achievement'}
+        <Target size={15} class="shrink-0" />
+      {:else}
+        <ShieldCheck size={15} class="shrink-0" />
+      {/if}
+      <h2 class="text-xs font-semibold uppercase tracking-wide">{coordinatorLabel}</h2>
     </div>
-    <h3 class="mt-3 text-sm font-semibold text-foreground">{specTitle}</h3>
+    <p class="mt-3 text-[10px] font-semibold uppercase tracking-wide text-dimmed">Goal</p>
+    <h3 class="mt-1 text-sm font-semibold text-foreground">{specTitle}</h3>
     <p class="mt-1 line-clamp-4 text-xs leading-relaxed text-muted">{specSummary}</p>
     <div class="mt-3 flex gap-2">
       {#if auditState === 'offered' && onOpenAudit}
@@ -160,7 +177,7 @@
   </header>
 
   <div class="min-h-0 flex-1 overflow-y-auto">
-    <section class="border-b border-border p-4" aria-label="Achievement progress">
+    <section class="border-b border-border p-4" aria-label={`${coordinatorLabel} progress`}>
       <p class="text-[10px] font-semibold uppercase tracking-wide text-dimmed">Current state</p>
       <div class="mt-2 flex items-start gap-2">
         <span
@@ -172,7 +189,7 @@
           <p class="mt-1 text-xs leading-relaxed text-muted">{progress.description}</p>
         </div>
       </div>
-      {#if !coordinatorWorking && !auditRunning && auditState !== 'report_ready'}
+      {#if onResume && !coordinatorWorking && !auditRunning && auditState !== 'report_ready'}
         <button
           type="button"
           class="mt-3 flex h-8 w-full items-center justify-center gap-2 rounded-lg border border-border bg-elevated px-3 text-xs font-semibold text-foreground hover:bg-overlay"
@@ -185,7 +202,7 @@
       {/if}
     </section>
 
-    <section class="border-b border-border p-4" aria-label="Achievement auditor model">
+    <section class="border-b border-border p-4" aria-label={`${coordinatorLabel} auditor model`}>
       <div class="flex items-start gap-3">
         <div class="rounded-lg bg-primary/10 p-2 text-primary">
           <ShieldCheck size={16} />
@@ -227,7 +244,7 @@
       {/if}
     </section>
 
-    <section class="py-3" aria-label="Achievement audit thread">
+    <section class="py-3" aria-label={`${coordinatorLabel} audit thread`}>
       <h3 class="px-4 pb-2 text-[10px] font-semibold uppercase tracking-wide text-dimmed">
         Audit thread
       </h3>

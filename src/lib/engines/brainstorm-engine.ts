@@ -225,6 +225,7 @@ export class BrainstormEngine {
     }
     const now = this.now()
     const id = this.newId('brainstorm')
+    const generatedContent = parseGeneratedBrainstormContent(input.content)
     const document: BrainstormDocument = {
       schemaVersion: 1,
       id,
@@ -232,7 +233,8 @@ export class BrainstormEngine {
       threadId: input.threadId,
       version: 1,
       status: 'draft',
-      content: parseGeneratedBrainstormContent(input.content),
+      content: structuredClone(generatedContent),
+      generatedContent,
       annotations: [],
       decisionComments: [],
       provenance: { ...input.provenance, createdAt: now },
@@ -287,12 +289,14 @@ export class BrainstormEngine {
       throw new BrainstormEngineError('immutable', 'Only a draft can produce a revised brainstorm')
     }
     const now = this.now()
+    const generatedContent = parseGeneratedBrainstormContent(input.content)
     const superseded: BrainstormDocument = { ...previous, status: 'superseded', updatedAt: now }
     const next: BrainstormDocument = {
       ...previous,
       version: previous.version + 1,
       status: 'draft',
-      content: parseGeneratedBrainstormContent(input.content),
+      content: structuredClone(generatedContent),
+      generatedContent,
       annotations: [],
       decisionComments: [],
       provenance: {

@@ -9,6 +9,11 @@ publish:
   repo: codeinoven
   releaseType: release
 afterPack: scripts/native-splash/after-pack.js
+extraResources:
+  - from: resources/speech/model-catalog.json
+    to: speech/model-catalog.json
+asarUnpack:
+  - node_modules/ffmpeg-static/ffmpeg*
 files:
   - out/**/*
   - '!out/**/.DS_Store'
@@ -30,13 +35,18 @@ forceCodeSigning: false
 # renamed Electron child before electron-builder signs it. Declaring them here
 # would make electron-builder target the public native launcher instead.
 mac:
+  extraResources:
+    - from: resources/speech/model-catalog.json
+      to: speech/model-catalog.json
+    - from: resources/speech/runtime/darwin-arm64
+      to: speech
   hardenedRuntime: true
   notarize: true
   entitlements: build/entitlements.mac.plist
   entitlementsInherit: build/entitlements.mac.plist
   extendInfo:
     NSCameraUsageDescription: Allow browser pages you approve to use the camera for local app testing.
-    NSMicrophoneUsageDescription: Allow browser pages you approve to use the microphone for local app testing.
+    NSMicrophoneUsageDescription: Record audio for local dictation and transcription in CodeInOven.
   icon: src/renderer/static/macos/AppIcon.icns
   category: public.app-category.developer-tools
   target:

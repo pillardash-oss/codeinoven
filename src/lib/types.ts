@@ -155,6 +155,31 @@ export interface ScopeWorktreeDefaults {
   environmentMode: ScopeEnvironmentMode
 }
 
+/**
+ * Immutable creation request for one managed worktree. The selected
+ * environment mode and setup commands are executed for exactly this worktree,
+ * independent of later edits to the project-level defaults.
+ */
+export interface ScopeWorktreeCreateInput {
+  title: string
+  runSetup: boolean
+  environmentMode: ScopeEnvironmentMode
+  /** Source branch the worktree forks from; defaults to the current branch. */
+  baseBranch?: string
+  /** Setup commands to execute for this worktree; falls back to project defaults. */
+  setupCommands?: ScopeSetupCommandSpec[]
+}
+
+/** Facts about a project's source checkout, surfaced before worktree creation. */
+export interface ScopeWorktreeSourceInfo {
+  /** Currently checked-out branch of the main project checkout. */
+  currentBranch: string
+  /** Commit a worktree would fork from when created right now. */
+  headCommit: string
+  /** Bounded list of uncommitted changes that a new worktree will not include. */
+  dirtyFiles: string[]
+}
+
 export const DEFAULT_SCOPE_WORKTREE_DEFAULTS: ScopeWorktreeDefaults = {
   setupCommands: [],
   runSetupByDefault: true,
@@ -213,6 +238,20 @@ export interface ScopeWorktreeHealth {
   /** Actual registration path reported by Git when it differs. */
   actualPath?: string
   prunable?: boolean
+}
+
+/** Preview of whether an existing Git worktree checkout can be adopted as a managed scope root. */
+export interface AdoptableWorktreeInfo {
+  /** Whether the path is a registered worktree of the project repository. */
+  registered: boolean
+  detached: boolean
+  /** Absolute registration path reported by Git when registered. */
+  path?: string
+  /** Checked-out branch (without `refs/heads/`) when not detached. */
+  branch?: string
+  adoptable: boolean
+  /** Human-readable explanation when not adoptable. */
+  reason?: string
 }
 
 /** Actions that require a state-bound, single-use confirmation ID. */
@@ -2360,6 +2399,8 @@ export type BrainstormTraceUpdate =
   | { type: 'part.updated'; messageId: string; part: AgentPart }
   | { type: 'part.delta'; messageId: string; partId: string; field: string; delta: string }
   | { type: 'completed'; messages: AgentMessage[] }
+  | { type: 'refresh.started'; startedAt: number }
+  | { type: 'refresh.completed' }
 
 export type SpecGenerationTraceUpdate =
   | { type: 'started'; startedAt: number }
@@ -2622,6 +2663,40 @@ export interface BrainstormContent {
   title: string
   summary: string
   sections: BrainstormSection[]
+  /** Present only when prototype work was explicitly requested. */
+  prototypes?: BrainstormPrototype[]
+}
+
+export type BrainstormPrototypeFidelity = 'lofi' | 'hifi'
+
+export interface BrainstormPrototype {
+  id: string
+  fidelity: BrainstormPrototypeFidelity
+  title: string
+  parentPrototypeId?: string
+  entryFile: string
+  artifactPath: string
+  previewPath: string
+  contentHash: string
+  createdAt: number
+}
+
+export type BrainstormReviewField = 'title' | 'summary' | BrainstormSectionId
+
+export interface BrainstormReviewEdit {
+  field: BrainstormReviewField
+  startOffset: number
+  endOffset: number
+  before: string
+  after: string
+  contextBefore: string
+  contextAfter: string
+  truncated: boolean
+}
+
+export interface BrainstormReviewChanges {
+  baselineAvailable: boolean
+  edits: BrainstormReviewEdit[]
 }
 
 export type BrainstormStatus = 'draft' | 'finalized' | 'superseded'
@@ -2669,6 +2744,8 @@ export interface BrainstormDocument {
   version: number
   status: BrainstormStatus
   content: BrainstormContent
+  /** Agent-generated content retained so manual review edits can be sent as compact diffs. */
+  generatedContent?: BrainstormContent
   annotations: BrainstormAnnotation[]
   decisionComments: BrainstormDecisionComment[]
   provenance: BrainstormProvenance
@@ -2690,6 +2767,96 @@ export interface BrainstormWorkflowState {
   updatedAt: number
 }
 
+// ─── Product requirements documents ──────────────────────────────────────
+
+export const PRD_SECTION_IDS = [
+  'problem',
+  'goals',
+  'non_goals',
+  'users_and_use_cases',
+  'product_requirements',
+  'experience_flow',
+  'acceptance_criteria',
+  'dependencies',
+  'risks',
+  'open_questions'
+] as const
+
+export type PrdSectionId = (typeof PRD_SECTION_IDS)[number]
+
+export interface PrdSection {
+  id: PrdSectionId
+  title: string
+  markdown: string
+}
+
+export interface PrdContent {
+  title: string
+  summary: string
+  sections: PrdSection[]
+}
+
+export type PrdStatus = 'draft' | 'finalized' | 'superseded'
+export type PrdEntryChoice = 'brainstorm_first' | 'start_prd'
+export type PrdWorkflowStage = 'choice_pending' | 'brainstorming' | 'drafting' | 'finalized'
+
+export interface PrdProvenance {
+  source: 'agent' | 'manual'
+  actor: string
+  harnessId?: string
+  providerId?: string
+  modelId?: string
+  brainstormId?: string
+  brainstormVersion?: number
+  brainstormInputHash?: string
+  parentVersion?: number
+  createdAt: number
+}
+
+export interface PrdAnnotation {
+  id: string
+  section: PrdSectionId
+  body: string
+  quote?: string
+  startLine?: number
+  endLine?: number
+  startOffset?: number
+  endOffset?: number
+  status: 'open' | 'resolved'
+  author: string
+  createdAt: number
+  resolvedAt?: number
+}
+
+export interface PrdDocument {
+  schemaVersion: 1
+  id: string
+  projectId: string
+  threadId: string
+  version: number
+  status: PrdStatus
+  content: PrdContent
+  generatedContent?: PrdContent
+  annotations: PrdAnnotation[]
+  provenance: PrdProvenance
+  createdAt: number
+  updatedAt: number
+  finalizedAt?: number
+  finalizedInputHash?: string
+}
+
+export interface PrdWorkflowState {
+  projectId: string
+  threadId: string
+  entryChoice?: PrdEntryChoice
+  stage: PrdWorkflowStage
+  activePrdId?: string
+  activePrdVersion?: number
+  finalizedPrdVersion?: number
+  finalizedInputHash?: string
+  updatedAt: number
+}
+
 // ─── Engineering Specifications ────────────────────────────────────────────
 
 export type EngineeringSpecStatus = 'draft' | 'in_review' | 'approved' | 'superseded'
@@ -2704,7 +2871,7 @@ export type SpecSectionId =
   | 'commit_pattern'
   | 'constraints_risks'
 
-export type SpecProvenanceSource = 'manual' | 'agent' | 'brainstorm' | 'markdown_import'
+export type SpecProvenanceSource = 'manual' | 'agent' | 'brainstorm' | 'prd' | 'markdown_import'
 
 export interface SpecProvenance {
   source: SpecProvenanceSource
@@ -2717,6 +2884,9 @@ export interface SpecProvenance {
   brainstormId?: string
   brainstormVersion?: number
   brainstormInputHash?: string
+  prdId?: string
+  prdVersion?: number
+  prdInputHash?: string
   createdAt: number
 }
 
@@ -2872,6 +3042,58 @@ export interface EngineeringWorkflowState {
 }
 
 // ─── Assignment Plans ──────────────────────────────────────────────────────
+
+// ─── Engineering lifecycle ──────────────────────────────────────────
+
+export const ENGINEERING_LIFECYCLE_STAGE_VALUES = [
+  'brainstorm',
+  'prd',
+  'spec',
+  'assignment',
+  'achievement'
+] as const
+
+export type EngineeringLifecycleStage = (typeof ENGINEERING_LIFECYCLE_STAGE_VALUES)[number]
+
+export const ENGINEERING_LIFECYCLE_SELECTION_VALUES = [
+  'none',
+  ...ENGINEERING_LIFECYCLE_STAGE_VALUES,
+  'run_all'
+] as const
+
+export type EngineeringLifecycleSelection = (typeof ENGINEERING_LIFECYCLE_SELECTION_VALUES)[number]
+
+export type EngineeringLifecycleGate =
+  | 'prototype_selection'
+  | 'brainstorm_finalization'
+  | 'prd_finalization'
+  | 'spec_approval'
+  | 'assignment_approval'
+  | 'terminal_failure'
+
+export type EngineeringLifecycleDecision = 'continue' | 'continue_without_hifi' | 'retry' | 'cancel'
+
+export type BrainstormPrototypeIntent = 'none' | 'lofi' | 'hifi' | 'both'
+
+export interface EngineeringLifecycleState {
+  projectId: string
+  threadId: string
+  selection: EngineeringLifecycleSelection
+  activeStage?: EngineeringLifecycleStage
+  completedStages: EngineeringLifecycleStage[]
+  humanGate?: EngineeringLifecycleGate
+  resumeToken?: string
+  lastConsumedResumeToken?: string
+  failure?: string
+  /** Permanent history marker. It is never cleared after Engineering starts. */
+  startedAt?: number
+  updatedAt: number
+}
+
+export interface EngineeringLifecycleTransitionResult {
+  state: EngineeringLifecycleState
+  idempotent: boolean
+}
 
 export type AssignmentStatus =
   'draft' | 'approved' | 'running' | 'attention' | 'completed' | 'failed' | 'stopped'
@@ -3169,7 +3391,6 @@ export interface AuditReport {
 
 export interface AuditGenerationRequest {
   settings: ThreadSettings
-  temporaryChatId: string
 }
 
 // ─── Workflow ───────────────────────────────────────────────────────────────
@@ -3365,6 +3586,8 @@ export interface AppConfig {
   maxDiffLines: number
   /** Route loopback development links into the app-scoped test browser. */
   openLocalhostInCioBrowser: boolean
+  /** Local speech capture, cleanup, model, cue, history, and playback preferences. */
+  sound: import('./speech/types').SpeechSettings
 }
 
 /** A single layer of the assembled prompt/behavior display. */
@@ -3400,6 +3623,7 @@ export type AppConfigPatch = Partial<
     | 'defaultPullStrategy'
     | 'maxDiffLines'
     | 'openLocalhostInCioBrowser'
+    | 'sound'
   >
 >
 

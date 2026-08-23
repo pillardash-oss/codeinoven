@@ -18,6 +18,7 @@ every expected confirmation before a destructive lifecycle action.
   where `<config-root>` is CodeInOven's per-app config directory. The renderer
   never supplies a worktree path; main derives it from the persisted scope
   descriptor.
+
 - `Thread.workingDirectory` is **compatibility data only**. The
   `ScopeRootResolver` is the authority at execution time: new threads, moved
   threads, forks, assignment workers, achievement workers, chat harnesses,
@@ -69,6 +70,14 @@ UI offers **retry from the failed command** or **continue without setup**. A
 setup process interrupted by restart is reported as recoverable, never as
 complete.
 
+The commands chosen in the creation dialog are an **immutable request
+snapshot**: they are executed for exactly that worktree even if the
+project-level defaults change later, and retries replay the persisted
+per-command records instead of whatever the defaults contain at retry time.
+During creation the source checkout's current branch, HEAD commit, and
+uncommitted changes are surfaced, together with a warning that dirty changes
+will not be included in the new worktree.
+
 ## 5. Environment files
 
 During creation the service discovers **untracked, regular, root-level** `.env`
@@ -117,28 +126,50 @@ its `cio/` branch, not the project root:
 
 Managed scopes expose a typed health result:
 
-| Category | Meaning |
-| --- | --- |
-| `healthy` | Directory exists and Git registers it at the expected path on the expected branch |
-| `missing` | The managed checkout directory is gone |
-| `unregistered` | Git does not register the expected directory as a worktree |
-| `locked` | The worktree is locked by Git |
-| `prunable` | Git reports a stale registration |
-| `branch-mismatch` | The worktree checks out a different branch |
-| `path-mismatch` | The expected branch is registered at another directory |
-| `repository-unavailable` | Git discovery failed or the project has no local repo |
+| Category                 | Meaning                                                                           |
+| ------------------------ | --------------------------------------------------------------------------------- |
+| `healthy`                | Directory exists and Git registers it at the expected path on the expected branch |
+| `missing`                | The managed checkout directory is gone                                            |
+| `unregistered`           | Git does not register the expected directory as a worktree                        |
+| `locked`                 | The worktree is locked by Git                                                     |
+| `prunable`               | Git reports a stale registration                                                  |
+| `branch-mismatch`        | The worktree checks out a different branch                                        |
+| `path-mismatch`          | The expected branch is registered at another directory                            |
+| `repository-unavailable` | Git discovery failed or the project has no local repo                             |
 
 Resolution fails closed for every non-`healthy` category. Repair, unlock,
 restore, adopt, or detach actions appear in the UI; unhealthy scopes show
 recovery guidance instead of operating on the project root.
 
+### 7a. Repair and adoption
+
+The **Repair worktree** action maps one-to-one onto health categories:
+locked registrations are unlocked, prunable registrations are pruned (and
+re-created from the managed branch when the checkout is gone), missing
+checkouts are restored from their `cio/` branch, relocated checkouts are
+moved back under the config root with `git worktree move`, switched branches
+are re-checked out, and unregistered directories get a best-effort
+`git worktree repair`. The resulting health state is surfaced afterwards;
+repair never silently falls back to the project directory.
+
+**Adoption** registers an existing raw Git worktree (for example one created
+manually with `git worktree add`) as a managed scope root. Adoption requires
+a registered, non-detached, non-bare worktree on a named branch that is not
+the main project checkout and whose branch is not already managed. The
+checkout is moved beneath the canonical config-root path with
+`git worktree move`, attached to the scope, and then treated exactly like a
+freshly created managed worktree (environment propagation, optional setup,
+typed health).
+
 ## 8. Destructive lifecycle
 
 Every destructive action is preceded by a confirmation dialog backed by a
-**state-bound, single-use preflight**. The preflight reports dirty files, unique
-commits not reachable from any remote-tracking ref, active processes, and
-branch ownership, and mints one confirmation ID bound to that snapshot. The ID
-is consumed at execution; stale or mismatched IDs are rejected.
+**state-bound, single-use preflight**. The preflight reports dirty files,
+unique commits on the scope's managed branch that are not reachable from any
+remote-tracking ref (unrelated local branches never block this scope),
+active processes in the scope, and branch ownership, and mints one
+confirmation ID bound to that snapshot. The ID is consumed at execution;
+stale or mismatched IDs are rejected.
 
 - **Detach:** returns the scope to the project directory. Refused when the
   worktree is dirty or unpushed.

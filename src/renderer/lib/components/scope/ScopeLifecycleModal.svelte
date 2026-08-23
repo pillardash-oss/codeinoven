@@ -21,10 +21,11 @@
   let busy = $state(false)
   let error = $state<string | null>(null)
 
+  // Mirrors main's guard exactly: removal refuses when the worktree is dirty
+  // OR carries unpushed commits, so both conditions require force confirmation.
   let forceNeeded = $derived(
     action === 'remove-worktree' &&
-      (preflight?.dirtyFiles.length ?? 0) > 0 &&
-      (preflight?.unpushedCommits ?? 0) > 0
+      ((preflight?.dirtyFiles.length ?? 0) > 0 || (preflight?.unpushedCommits ?? 0) > 0)
   )
 
   function labelFor(value: ScopeLifecycleAction): string {
@@ -86,6 +87,9 @@
         preflight.confirmationId,
         { force: secondConfirm }
       )
+      // Lifecycle mutations happen in main; refresh so the board reflects
+      // the detached/removed state immediately.
+      await scopeState.loadBoard(projectId)
       onDone?.()
       close()
     } catch (cause) {

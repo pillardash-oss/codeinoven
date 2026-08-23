@@ -31,6 +31,11 @@ export type MobileNotificationPermission = NotificationPermission | 'unsupported
 
 export type OpenNotificationHandler = (projectId: string, threadId: string) => void
 
+interface NotificationOpenTarget {
+  projectId: string
+  threadId: string
+}
+
 /** `renotify` is a real Web Notification option absent from this project's lib.dom. */
 interface ReplacingNotificationOptions extends NotificationOptions {
   renotify?: boolean
@@ -42,6 +47,7 @@ class MobileNotifications {
   /** Browser permission for this origin; `unsupported` off the PWA. */
   permission = $state<MobileNotificationPermission>('default')
   private openHandler: OpenNotificationHandler | null = null
+  private pendingOpen: NotificationOpenTarget | null = null
   private unsub: (() => void) | null = null
   private pushRegistered = false
 
@@ -62,6 +68,10 @@ class MobileNotifications {
   /** The shell registers how a tapped notification should open a thread. */
   setOpenHandler(handler: OpenNotificationHandler | null): void {
     this.openHandler = handler
+    if (!handler || !this.pendingOpen) return
+    const target = this.pendingOpen
+    this.pendingOpen = null
+    handler(target.projectId, target.threadId)
   }
 
   /**
@@ -251,7 +261,11 @@ class MobileNotifications {
 
   /** Route a service-worker `notification:open` message to the shell. */
   routeOpen(projectId: string, threadId: string): void {
-    this.openHandler?.(projectId, threadId)
+    if (this.openHandler) {
+      this.openHandler(projectId, threadId)
+      return
+    }
+    this.pendingOpen = { projectId, threadId }
   }
 
   private readEnabled(): boolean {

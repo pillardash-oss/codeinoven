@@ -1,6 +1,7 @@
 node_modules/
 out/
 dist/
+/resources/speech/runtime/
 *.log
 .DS_Store
 Thumbs.db

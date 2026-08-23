@@ -15,13 +15,18 @@
   import { DropdownMenu } from 'bits-ui'
   import { onDestroy, onMount, tick } from 'svelte'
   import { compactViewport } from '$lib/compact-viewport.svelte'
+  import { draggablePopover } from '$lib/draggable-popover.svelte'
   import { editorPreference } from '$lib/stores/editor-preference.svelte'
   import RichMarkdownEditor from '../shared/RichMarkdownEditor.svelte'
+  import VoiceInputButton from '../speech/VoiceInputButton.svelte'
+  import { speechController } from '../../speech/speech-controller.svelte'
+  import PopoverDragHandle from '../ui/PopoverDragHandle.svelte'
   import EditableMarkdown from './EditableMarkdown.svelte'
   import StudioSelectionActions from './StudioSelectionActions.svelte'
   import StudioHistoryControls from './StudioHistoryControls.svelte'
   import StudioDocumentNavigation from './StudioDocumentNavigation.svelte'
   import StudioSidebarResizeHandle from './StudioSidebarResizeHandle.svelte'
+  import { copyText } from '$lib/copy-text'
   import {
     offsetsForQuote,
     offsetsForRange,
@@ -33,6 +38,8 @@
     BrainstormAnnotation,
     BrainstormDecisionAction,
     BrainstormDocument,
+    BrainstormReviewChanges,
+    BrainstormReviewEdit,
     BrainstormSection,
     BrainstormSectionId
   } from '$shared/types'
@@ -61,12 +68,14 @@
     error?: string
     agentMessagesOpen?: boolean
     specAvailable?: boolean
+    prdAvailable?: boolean
     assignmentAvailable?: boolean
     auditAvailable?: boolean
     history: StudioDocumentHistory<BrainstormDocument>
     onBack: () => void
     onToggleAgentMessages: () => void
     onOpenSpec?: () => void
+    onOpenPrd?: () => void
     onOpenAssignment?: () => void
     onOpenAudit?: () => void
     onSelectVersion: (version: number) => CallbackResult
@@ -83,10 +92,12 @@
     onSubmit: (
       action: BrainstormDecisionAction,
       brainstorm: BrainstormDocument,
-      additionalNotes: string
+      additionalNotes: string,
+      reviewChanges: BrainstormReviewChanges
     ) => CallbackResult
     onOpenInEditor?: (brainstorm: BrainstormDocument) => CallbackResult
     onRevealInAppFile?: (brainstorm: BrainstormDocument) => CallbackResult
+    onOpenPrototype?: (previewPath: string) => CallbackResult
   }
 
   let {
@@ -96,12 +107,14 @@
     error,
     agentMessagesOpen = false,
     specAvailable = false,
+    prdAvailable = false,
     assignmentAvailable = false,
     auditAvailable = false,
     history,
     onBack,
     onToggleAgentMessages,
     onOpenSpec,
+    onOpenPrd,
     onOpenAssignment,
     onOpenAudit,
     onSelectVersion,
@@ -113,7 +126,8 @@
     onQuickChatSelection,
     onSubmit,
     onOpenInEditor,
-    onRevealInAppFile
+    onRevealInAppFile,
+    onOpenPrototype
   }: Props = $props()
 
   const canonicalSections: Array<{ id: BrainstormSectionId; title: string }> = [
@@ -130,6 +144,10 @@
   // a newly selected or persisted version while retaining intentional local edit buffers.
   // svelte-ignore state_referenced_locally
   let draft = $state<BrainstormDocument>(history.attach($state.snapshot(brainstorm)))
+  // This component is keyed by report version, and new reports persist their generated baseline.
+  // Older stored reports fall back to the content present when the studio is first opened.
+  // svelte-ignore state_referenced_locally
+  const reviewBaseline = $state.snapshot(brainstorm.generatedContent ?? brainstorm.content)
   let preferredIcon = $derived(editorPreference.preferredInfo?.iconDataUrl)
   let preferredName = $derived(editorPreference.preferredInfo?.name ?? 'System Default')
   // svelte-ignore state_referenced_locally
@@ -146,6 +164,33 @@
   let annotationBody = $state('')
   let editingAnnotation = $state<BrainstormAnnotation | null>(null)
   let editingAnnotationBody = $state('')
+  let annotationEditor = $state<RichMarkdownEditor>()
+  let editingAnnotationEditor = $state<RichMarkdownEditor>()
+  let decisionNotesEditor = $state<RichMarkdownEditor>()
+  const pendingSpeechTargetId = `brainstorm-annotation-${crypto.randomUUID()}`
+  const decisionSpeechTargetId = `brainstorm-decision-${crypto.randomUUID()}`
+  const speechScope = $derived({
+    kind: 'project',
+    projectId: brainstorm.projectId,
+    threadId: brainstorm.threadId
+  } as const)
+
+  function pendingSpeechTarget() {
+    return annotationEditor?.speechEditorTarget(pendingSpeechTargetId) ?? null
+  }
+
+  function editingSpeechTarget() {
+    if (!editingAnnotation) return null
+    return (
+      editingAnnotationEditor?.speechEditorTarget(
+        `brainstorm-annotation-edit-${editingAnnotation.id}`
+      ) ?? null
+    )
+  }
+
+  function decisionSpeechTarget() {
+    return decisionNotesEditor?.speechEditorTarget(decisionSpeechTargetId) ?? null
+  }
   let annotationEditMode = $state(false)
   let editingAnnotationPosition = $state<{ x: number; y: number } | null>(null)
   let annotationMarkers = $state<Array<{ annotation: BrainstormAnnotation; x: number; y: number }>>(
@@ -393,6 +438,7 @@
       endOffset: anchor.endOffset
     })
     if (!updated) return
+    speechController.observeSent(pendingSpeechTargetId, body)
     applyDocument(updated)
     closePendingAnnotation()
     const added = [...updated.annotations]
@@ -506,6 +552,7 @@
     if (!annotation || !body) return
     const updated = await onUpdateAnnotation(annotation.id, body)
     if (!updated) return
+    speechController.observeSent(`brainstorm-annotation-edit-${annotation.id}`, body)
     applyDocument(updated)
     editingAnnotation =
       updated.annotations.find((candidate) => candidate.id === annotation.id) ?? null
@@ -519,7 +566,77 @@
     closeAnnotation()
   }
 
+  const REVIEW_EDIT_FRAGMENT_LIMIT = 4_000
+  const REVIEW_EDIT_CONTEXT_LENGTH = 160
+
+  function reviewEdit(
+    field: BrainstormReviewEdit['field'],
+    before: string,
+    after: string
+  ): BrainstormReviewEdit | null {
+    if (before === after) return null
+
+    const sharedLength = Math.min(before.length, after.length)
+    let startOffset = 0
+    while (startOffset < sharedLength && before[startOffset] === after[startOffset]) {
+      startOffset += 1
+    }
+
+    let sharedSuffixLength = 0
+    const remainingBefore = before.length - startOffset
+    const remainingAfter = after.length - startOffset
+    while (
+      sharedSuffixLength < remainingBefore &&
+      sharedSuffixLength < remainingAfter &&
+      before[before.length - sharedSuffixLength - 1] ===
+        after[after.length - sharedSuffixLength - 1]
+    ) {
+      sharedSuffixLength += 1
+    }
+
+    const endOffset = before.length - sharedSuffixLength
+    const afterEndOffset = after.length - sharedSuffixLength
+    const beforeFragment = before.slice(startOffset, endOffset)
+    const afterFragment = after.slice(startOffset, afterEndOffset)
+    const truncated =
+      beforeFragment.length > REVIEW_EDIT_FRAGMENT_LIMIT ||
+      afterFragment.length > REVIEW_EDIT_FRAGMENT_LIMIT
+
+    return {
+      field,
+      startOffset,
+      endOffset,
+      before: beforeFragment.slice(0, REVIEW_EDIT_FRAGMENT_LIMIT),
+      after: afterFragment.slice(0, REVIEW_EDIT_FRAGMENT_LIMIT),
+      contextBefore: before.slice(
+        Math.max(0, startOffset - REVIEW_EDIT_CONTEXT_LENGTH),
+        startOffset
+      ),
+      contextAfter: before.slice(
+        endOffset,
+        Math.min(before.length, endOffset + REVIEW_EDIT_CONTEXT_LENGTH)
+      ),
+      truncated
+    }
+  }
+
+  function collectReviewEdits(): BrainstormReviewEdit[] {
+    const edits: BrainstormReviewEdit[] = []
+    const titleEdit = reviewEdit('title', reviewBaseline.title, draft.content.title)
+    const summaryEdit = reviewEdit('summary', reviewBaseline.summary, draft.content.summary)
+    if (titleEdit) edits.push(titleEdit)
+    if (summaryEdit) edits.push(summaryEdit)
+
+    for (const section of draft.content.sections) {
+      const baseline = reviewBaseline.sections.find((candidate) => candidate.id === section.id)
+      const edit = reviewEdit(section.id, baseline?.markdown ?? '', section.markdown)
+      if (edit) edits.push(edit)
+    }
+    return edits
+  }
+
   async function submitAction(action: BrainstormDecisionAction): Promise<void> {
+    const reviewEdits = collectReviewEdits()
     let submitted = $state.snapshot(draft)
     if (dirty) {
       const saved = await saveDraft()
@@ -529,7 +646,11 @@
     const notes = additionalNotes
     pendingAction = null
     additionalNotes = ''
-    await onSubmit(action, submitted, notes)
+    await onSubmit(action, submitted, notes, {
+      baselineAvailable: brainstorm.generatedContent !== undefined,
+      edits: reviewEdits
+    })
+    speechController.observeSent(decisionSpeechTargetId, notes)
   }
 
   function handleWindowKeydown(event: KeyboardEvent): void {
@@ -572,6 +693,7 @@
         <StudioDocumentNavigation
           active="brainstorm"
           brainstormAvailable
+          {prdAvailable}
           {specAvailable}
           {assignmentAvailable}
           {auditAvailable}
@@ -582,6 +704,7 @@
           sectionsLabel="brainstorm sections"
           onToggleSections={() => (sectionsOpen = !sectionsOpen)}
           onOpenBrainstorm={() => undefined}
+          {onOpenPrd}
           onOpenSpec={specAvailable ? onOpenSpec : undefined}
           {onOpenAssignment}
           {onOpenAudit}
@@ -679,6 +802,7 @@
         <label class="min-w-0 flex-1 text-[11px] font-medium text-muted">
           Additional notes
           <RichMarkdownEditor
+            bind:this={decisionNotesEditor}
             class="mt-1 min-h-14 w-full resize-y rounded-lg border bg-elevated px-3 py-2 text-xs text-foreground outline-none focus:border-primary"
             bind:value={additionalNotes}
             placeholder={pendingAction === 'review'
@@ -693,6 +817,12 @@
           title="Cancel"
           onclick={() => (pendingAction = null)}>Cancel</button
         >
+        <VoiceInputButton
+          targetId={decisionSpeechTargetId}
+          getTarget={decisionSpeechTarget}
+          scope={speechScope}
+          disabled={busy}
+        />
         <button
           class="rounded-lg bg-primary px-3 py-2 text-xs font-semibold text-on-primary disabled:opacity-50"
           disabled={busy}
@@ -911,6 +1041,53 @@
             </section>
           {/if}
         {/each}
+
+        {#if draft.content.prototypes?.length}
+          <section id="brainstorm-section-prototypes" class="scroll-mt-5">
+            <h2 class="text-xl font-semibold tracking-tight">Prototypes</h2>
+            <div class="mt-4 grid gap-3 sm:grid-cols-2">
+              {#each draft.content.prototypes as prototype (prototype.id)}
+                <article class="rounded-xl border bg-surface p-4 shadow-sm">
+                  <div class="flex items-start justify-between gap-3">
+                    <div>
+                      <p class="text-xs font-semibold text-thread-spec">{prototype.id}</p>
+                      <h3 class="mt-1 text-sm font-semibold text-foreground">{prototype.title}</h3>
+                    </div>
+                    <span class="rounded-full bg-raised px-2 py-1 text-[10px] text-muted">
+                      {prototype.fidelity === 'lofi' ? 'LoFi' : 'HiFi'}
+                    </span>
+                  </div>
+                  {#if prototype.parentPrototypeId}
+                    <p class="mt-2 text-[11px] text-muted">
+                      Based on {prototype.parentPrototypeId}
+                    </p>
+                  {/if}
+                  <p class="mt-3 truncate font-mono text-[10px] text-dimmed">
+                    {prototype.previewPath}
+                  </p>
+                  <div class="mt-3 flex gap-2">
+                    {#if onOpenPrototype}
+                      <button
+                        type="button"
+                        class="rounded-lg bg-thread-spec px-2.5 py-1.5 text-xs font-medium text-foreground"
+                        onclick={() => void onOpenPrototype?.(prototype.previewPath)}
+                      >
+                        Open preview
+                      </button>
+                    {/if}
+                    <button
+                      type="button"
+                      class="rounded-lg px-2.5 py-1.5 text-xs text-muted hover:bg-elevated hover:text-foreground"
+                      onclick={() => void copyText(prototype.previewPath)}
+                    >
+                      Copy path
+                    </button>
+                  </div>
+                </article>
+              {/each}
+            </div>
+          </section>
+        {/if}
       </article>
 
       {#each annotationMarkers as marker (marker.annotation.id)}
@@ -933,22 +1110,30 @@
 {#if pendingAnnotation}
   <div
     class="fixed z-50 w-96 rounded-xl border bg-surface p-3 shadow-xl max-md:inset-x-0 max-md:bottom-0 max-md:w-auto max-md:rounded-b-none max-md:pb-[calc(0.75rem+env(safe-area-inset-bottom))]"
-    style:left={compactViewport.matches ? undefined : `${pendingAnnotation.x}px`}
-    style:top={compactViewport.matches ? undefined : `${pendingAnnotation.y}px`}
     role="dialog"
     aria-label={pendingAnnotation.sectionLevel
       ? 'Annotate section'
       : canEdit
         ? 'Comment on selection'
         : 'Actions for selection'}
+    {@attach draggablePopover({
+      x: pendingAnnotation.x,
+      y: pendingAnnotation.y,
+      disabled: compactViewport.matches
+    })}
   >
-    <p class="text-[10px] font-semibold uppercase tracking-wide text-muted">
-      {pendingAnnotation.sectionLevel
-        ? 'Annotate section'
-        : canEdit
-          ? 'Comment on selection'
-          : 'Selection'}
-    </p>
+    <div class="flex items-center gap-1">
+      {#if !compactViewport.matches}
+        <PopoverDragHandle title="Move selection comment" />
+      {/if}
+      <p class="text-[10px] font-semibold uppercase tracking-wide text-muted">
+        {pendingAnnotation.sectionLevel
+          ? 'Annotate section'
+          : canEdit
+            ? 'Comment on selection'
+            : 'Selection'}
+      </p>
+    </div>
     <blockquote
       class="mt-2 line-clamp-3 border-l-2 border-accent pl-2 text-[11px] leading-relaxed text-muted"
     >
@@ -956,6 +1141,7 @@
     </blockquote>
     {#if canEdit}
       <RichMarkdownEditor
+        bind:this={annotationEditor}
         class="mt-2 min-h-16 w-full resize-y rounded-lg border bg-elevated px-2.5 py-2 text-xs outline-none focus:border-primary"
         bind:value={annotationBody}
         placeholder="Leave your review note…"
@@ -977,6 +1163,12 @@
           onclick={closePendingAnnotation}>Cancel</button
         >
         {#if canEdit}
+          <VoiceInputButton
+            targetId={pendingSpeechTargetId}
+            getTarget={pendingSpeechTarget}
+            scope={speechScope}
+            disabled={busy}
+          />
           <button
             class="rounded-lg bg-primary px-2.5 py-1.5 text-xs font-semibold text-on-primary disabled:opacity-50"
             disabled={busy || !annotationBody.trim()}
@@ -992,15 +1184,23 @@
 {#if editingAnnotation && editingAnnotationPosition}
   <div
     class="fixed z-50 w-80 rounded-xl border bg-surface p-4 shadow-xl max-md:inset-x-0 max-md:bottom-0 max-md:w-auto max-md:rounded-b-none max-md:pb-[calc(1rem+env(safe-area-inset-bottom))]"
-    style:left={compactViewport.matches ? undefined : `${editingAnnotationPosition.x}px`}
-    style:top={compactViewport.matches ? undefined : `${editingAnnotationPosition.y}px`}
     role="dialog"
     aria-label="Brainstorm annotation"
+    {@attach draggablePopover({
+      x: editingAnnotationPosition.x,
+      y: editingAnnotationPosition.y,
+      disabled: compactViewport.matches
+    })}
   >
     <div class="flex items-center justify-between gap-2">
-      <p class="text-[10px] font-semibold uppercase tracking-wide text-muted">
-        {annotationEditMode ? 'Edit annotation' : 'Annotation'}
-      </p>
+      <span class="flex min-w-0 items-center gap-1">
+        {#if !compactViewport.matches}
+          <PopoverDragHandle title="Move annotation" />
+        {/if}
+        <span class="text-[10px] font-semibold uppercase tracking-wide text-muted">
+          {annotationEditMode ? 'Edit annotation' : 'Annotation'}
+        </span>
+      </span>
       <button
         class="rounded-md p-1 text-muted hover:bg-overlay hover:text-foreground"
         title="Close annotation"
@@ -1017,6 +1217,7 @@
     {/if}
     {#if annotationEditMode}
       <RichMarkdownEditor
+        bind:this={editingAnnotationEditor}
         class="mt-3 min-h-24 w-full resize-y rounded-lg border bg-elevated px-3 py-2 text-xs outline-none focus:border-primary"
         bind:value={editingAnnotationBody}
         ariaLabel="Brainstorm annotation body"
@@ -1043,6 +1244,11 @@
               title="Cancel editing"
               onclick={() => (annotationEditMode = false)}>Cancel</button
             >
+            <VoiceInputButton
+              targetId={`brainstorm-annotation-edit-${editingAnnotation.id}`}
+              getTarget={editingSpeechTarget}
+              scope={speechScope}
+            />
             <button
               class="rounded-lg bg-primary px-2.5 py-1.5 text-xs font-semibold text-on-primary disabled:opacity-50"
               disabled={!editingAnnotationBody.trim()}

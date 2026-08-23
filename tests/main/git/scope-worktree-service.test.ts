@@ -6,7 +6,10 @@ import { simpleGit } from 'simple-git'
 import { createTestDb, destroyTestDb } from '../database/test-helper'
 import type { Database } from '../../../src/main/database/database'
 import { ScopeManager } from '../../../src/lib/engines/scope-manager'
-import { ScopeWorktreeService } from '../../../src/main/git/scope-worktree-service'
+import {
+  discoverEnvironmentFiles,
+  ScopeWorktreeService
+} from '../../../src/main/git/scope-worktree-service'
 import { getScopeRootPath } from '../../../src/lib/utils'
 
 const temporaryDatabases: Database[] = []
@@ -192,6 +195,26 @@ describe.skipIf(process.platform === 'win32')('ScopeWorktreeService', () => {
     expect(readFileSync(join(repoPath, '.env'), 'utf8')).toContain('SECRET=value')
   }, 60_000)
 
+  it('classifies env files through Git and only propagates untracked ones', async () => {
+    const { service, bucketA } = await setup()
+    writeFileSync(join(repoPath, '.env'), 'SECRET=value\n')
+    writeFileSync(join(repoPath, '.env.tracked'), 'TRACKED=1\n')
+    const git = simpleGit(repoPath)
+    await git.add(['.env.tracked'])
+    await git.commit('track one env file')
+
+    // `.env.tracked` is tracked, so discovery must exclude it even though it
+    // matches the root-level `.env.*` pattern; ignored `.env` stays eligible.
+    expect(await discoverEnvironmentFiles(repoPath)).toEqual(['.env'])
+
+    const descriptor = await service.createManagedWorktree(
+      { projectId: 'p1', scopeBucketId: bucketA },
+      { title: 'EnvClassified', runSetup: false, environmentMode: 'copy' }
+    )
+    const worktreePath = getScopeRootPath('p1', descriptor.directoryName)
+    expect(existsSync(join(worktreePath, '.env'))).toBe(true)
+  }, 60_000)
+
   it('symlinks environment files when selected', async () => {
     const { service, scopes, bucketA } = await setup()
     writeFileSync(join(repoPath, '.env'), 'SECRET=value\n')
@@ -251,6 +274,110 @@ describe.skipIf(process.platform === 'win32')('ScopeWorktreeService', () => {
     expect((await service.health({ projectId: 'p1', scopeBucketId: bucketA })).category).toBe(
       'missing'
     )
+  }, 60_000)
+
+  it('scopes preflight unpushed counting to the managed branch', async () => {
+    const { service, scopes, bucketA } = await setup()
+    // Publish main to a bare remote so only genuinely new commits count.
+    const remote = mkdtempSync(join(tmpdir(), 'codeinoven-wt-remote-'))
+    temporaryPaths.push(remote)
+    const git = simpleGit(repoPath)
+    await simpleGit(remote).init(true)
+    await git.addRemote('origin', remote)
+    await git.push(['origin', 'main'])
+
+    await service.createManagedWorktree(
+      { projectId: 'p1', scopeBucketId: bucketA },
+      { title: 'Scoped', runSetup: false, environmentMode: 'copy' }
+    )
+
+    // Unrelated local branch with an unpublished commit must not leak into
+    // this scope's preflight.
+    await git.checkoutLocalBranch('unrelated')
+    writeFileSync(join(repoPath, 'other.txt'), 'other\n')
+    await git.add('.')
+    await git.commit('unrelated work')
+    await git.checkout('main')
+
+    let preflight = await service.preflight('detach', {
+      projectId: 'p1',
+      scopeBucketId: bucketA
+    })
+    expect(preflight.unpushedCommits).toBe(0)
+    expect(preflight.branchOwnedByWorktree).toBe(true)
+
+    // A commit on the managed branch itself does count.
+    const board = scopes.getBoard('p1')
+    const managed = board.buckets.find((candidate) => candidate.id === bucketA)
+    if (managed?.root.kind !== 'worktree') throw new Error('managed root missing')
+    const worktreeGit = simpleGit(getScopeRootPath('p1', managed.root.directoryName))
+    const worktreeRoot = (await worktreeGit.revparse(['--show-toplevel'])).trim()
+    writeFileSync(join(worktreeRoot, 'feature.txt'), 'feature\n')
+    await worktreeGit.add('.')
+    await worktreeGit.commit('feature work')
+
+    preflight = await service.preflight('detach', { projectId: 'p1', scopeBucketId: bucketA })
+    expect(preflight.unpushedCommits).toBe(1)
+  }, 60_000)
+
+  it('repairs locked and missing managed checkouts', async () => {
+    const { service, bucketA } = await setup()
+    const descriptor = await service.createManagedWorktree(
+      { projectId: 'p1', scopeBucketId: bucketA },
+      { title: 'RepairMe', runSetup: false, environmentMode: 'copy' }
+    )
+    const worktreePath = getScopeRootPath('p1', descriptor.directoryName)
+    const git = simpleGit(repoPath)
+
+    // Locked registrations unlock back to healthy.
+    await git.raw(['worktree', 'lock', worktreePath])
+    expect((await service.health({ projectId: 'p1', scopeBucketId: bucketA })).category).toBe(
+      'locked'
+    )
+    const unlocked = await service.repair({ projectId: 'p1', scopeBucketId: bucketA })
+    expect(unlocked.category).toBe('healthy')
+
+    // Missing directories are restored from the managed branch.
+    rmSync(worktreePath, { recursive: true, force: true })
+    expect((await service.health({ projectId: 'p1', scopeBucketId: bucketA })).category).toBe(
+      'missing'
+    )
+    const restored = await service.repair({ projectId: 'p1', scopeBucketId: bucketA })
+    expect(restored.category).toBe('healthy')
+    expect(existsSync(join(worktreePath, '.git'))).toBe(true)
+  }, 60_000)
+
+  it('adopts an existing raw Git worktree as a managed scope root', async () => {
+    const { service, scopes, bucketA } = await setup()
+    const git = simpleGit(repoPath)
+    const external = join(configRoot, 'external-raw')
+    await git.raw(['worktree', 'add', '-b', 'cio/raw-deploy', external])
+    writeFileSync(join(external, 'deploy.txt'), 'raw\n')
+    const rawGit = simpleGit(external)
+    await rawGit.add('.')
+    await rawGit.commit('raw work')
+
+    const preview = await service.detectAdoptable('p1', external)
+    expect(preview.adoptable).toBe(true)
+    expect(preview.branch).toBe('cio/raw-deploy')
+
+    const descriptor = await service.adoptWorktree(
+      { projectId: 'p1', scopeBucketId: bucketA },
+      { sourcePath: external, runSetup: false }
+    )
+    expect(descriptor.branch).toBe('cio/raw-deploy')
+
+    const expectedPath = getScopeRootPath('p1', descriptor.directoryName)
+    expect(existsSync(expectedPath)).toBe(true)
+    expect(existsSync(external)).toBe(false)
+    expect(scopes.getBoard('p1').buckets.find((b) => b.id === bucketA)?.root.kind).toBe('worktree')
+    expect(await service.health({ projectId: 'p1', scopeBucketId: bucketA })).toMatchObject({
+      category: 'healthy'
+    })
+
+    // The main checkout can never be adopted.
+    const main = await service.detectAdoptable('p1', repoPath)
+    expect(main.adoptable).toBe(false)
   }, 60_000)
 
   it('guards removal behind single-use confirmations and dirty-state checks', async () => {

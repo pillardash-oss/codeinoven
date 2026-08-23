@@ -90,6 +90,7 @@
     type ThreadSearchResult
   } from '$shared/types'
   import { DEFAULT_AGENT_BEHAVIOR_PROMPT } from '$shared/agent-behavior'
+  import { DEFAULT_SPEECH_SETTINGS } from '$shared/speech/types'
   import type {
     AgentNotificationPayload,
     CloseConfirmationPayload,
@@ -122,7 +123,8 @@
     defaultMergeMethod: 'squash',
     defaultPullStrategy: 'ask',
     maxDiffLines: 100,
-    openLocalhostInCioBrowser: true
+    openLocalhostInCioBrowser: true,
+    sound: structuredClone(DEFAULT_SPEECH_SETTINGS)
   }
 
   let config = $state<AppConfig>(defaultConfig)
