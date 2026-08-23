@@ -51,6 +51,7 @@
   import CioPromptsSettings from './CioPromptsSettings.svelte'
   import CuaBridgeSettings from './CuaBridgeSettings.svelte'
   import GatewaySettingsTab from './GatewaySettingsTab.svelte'
+  import SoundSettingsTab from './SoundSettingsTab.svelte'
   import CommandPalette from '../actions/CommandPalette.svelte'
   import { toast } from 'svelte-sonner'
 
@@ -835,6 +836,8 @@
       {/if}
     {:else if section === 'computer-use'}
       <CuaBridgeSettings />
+    {:else if section === 'sound'}
+      <SoundSettingsTab settings={config.sound} {settingsReady} {updateConfig} />
     {:else if section === 'gateways'}
       <GatewaySettingsTab />
     {:else if section === 'keymap'}

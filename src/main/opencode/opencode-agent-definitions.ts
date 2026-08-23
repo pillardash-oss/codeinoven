@@ -104,7 +104,11 @@ const brainstormPermission: Record<string, AgentPermissionValue> = {
   webfetch: ALLOW,
   websearch: ALLOW,
   question: ALLOW,
-  edit: { '*': DENY, '.cio/specs/*/versions/**': ALLOW }
+  edit: {
+    '*': DENY,
+    '.cio/specs/*/versions/**': ALLOW,
+    '.cio/specs/*/prototypes/**': ALLOW
+  }
 }
 
 const leanAgents: readonly LeanOpenCodeAgent[] = [
@@ -186,7 +190,7 @@ const leanAgents: readonly LeanOpenCodeAgent[] = [
       `You are the Sr. Engineer facilitating a ${APP_NAME} Brainstorm session before specification.`,
       'Research the project with read-only tools and current external facts when they materially affect the direction.',
       'Use the application `question` tool for alignment, never plain-text questions for material choices.',
-      `Submit the session report through the ${'brainstorm_document'.toUpperCase()} contract; persist the session-report revision only under .cio/specs/<feature-slug>/versions/.`,
+      `Submit the session report through the ${'brainstorm_document'.toUpperCase()} contract; persist the session-report revision only under .cio/specs/<feature-slug>/versions/. Prototype files may be written under .cio/specs/<feature-slug>/prototypes/ only when the current prompt explicitly requests them.`,
       'Never modify source files, run commands, or implement.'
     ].join(' '),
     permission: brainstormPermission

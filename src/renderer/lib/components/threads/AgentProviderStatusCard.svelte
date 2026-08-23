@@ -20,6 +20,7 @@
     ThreadSettings
   } from '$shared/types'
   import { invoke } from '$lib/ipc.svelte'
+  import { normalizeFastInference, supportsFastInference } from '$shared/fast-inference'
   import Modal from '../ui/Modal.svelte'
   import ProviderLoginTerminal from '../providers/ProviderLoginTerminal.svelte'
 
@@ -165,11 +166,23 @@
   }
 
   /** Commit a new thread model from the shared picker, mirroring the pattern used
-   *  by the Audit/Spec/Assignment cards. */
+   *  by the Audit/Spec/Assignment cards. Fast inference only survives the switch
+   *  when the newly selected model actually exposes a fast tier. */
   function chooseModel(providerId: string, modelId: string, nextHarnessId?: string): void {
     if (!settings || !onModelChange) return
     const harnessId = nextHarnessId ?? settings.harnessId
-    onModelChange({ ...settings, harnessId, providerId, modelId })
+    const provider = providers.find(
+      (candidate) => candidate.harnessId === harnessId && candidate.id === providerId
+    )
+    const model = provider?.models.find((candidate) => candidate.id === modelId)
+    const updated = normalizeFastInference(
+      { ...settings, harnessId, providerId, modelId },
+      harnessId,
+      providerId,
+      modelId,
+      supportsFastInference(harnessId, providerId, model?.fastSupported)
+    )
+    onModelChange(updated)
   }
 
   function chooseThinking(level: ThinkingLevel): void {

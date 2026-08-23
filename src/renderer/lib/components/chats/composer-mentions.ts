@@ -1,4 +1,4 @@
-import type { AssignmentTask, ProjectFileEntry } from '$shared/types'
+import type { AssignmentTask, ProjectFileEntry, PromptProjectReference } from '$shared/types'
 import { isQuotedMentionPosition } from '$shared/mention-context'
 
 export type ComposerMentionEntry =
@@ -25,4 +25,22 @@ export function composerMentionKey(mention: ComposerMentionEntry): string {
   if (mention.type === 'project') return `project:${mention.entry.path}`
   if (mention.type === 'task') return `task:${mention.entry.id}`
   return `utility:${mention.entry.id}`
+}
+
+/**
+ * Trim a composer draft while preserving the single separator inserted after
+ * a terminal project mention. This keeps sent text consistent with the draft
+ * without retaining unrelated trailing whitespace.
+ */
+export function normalizeComposerMessage(
+  text: string,
+  projectReferences: readonly Pick<PromptProjectReference, 'path'>[]
+): string {
+  const trimmed = text.trim()
+  if (!trimmed || !/\s$/u.test(text)) return trimmed
+
+  const endsWithProjectMention = projectReferences.some((reference) =>
+    trimmed.endsWith(`@${reference.path}`)
+  )
+  return endsWithProjectMention ? `${trimmed} ` : trimmed
 }

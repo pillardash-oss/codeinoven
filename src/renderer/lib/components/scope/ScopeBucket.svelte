@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { ChevronDown, ChevronRight, GripVertical, Plus } from '@lucide/svelte'
+  import { ChevronDown, ChevronRight, GripVertical, Plus, TriangleAlert } from '@lucide/svelte'
   import StageContainer from './StageContainer.svelte'
   import ScopeActionsMenu from '../shared/ScopeActionsMenu.svelte'
   import { pickColorForSeed } from '$lib/project-colors'
@@ -33,7 +33,9 @@
     onArchive?: () => void
     onRestore?: () => void
     onCreateWorktree?: () => void
+    onAdoptWorktree?: () => void
     onRetrySetup?: () => void
+    onRepairWorktree?: () => void
     onDetach?: () => void
     onRemoveWorktree?: () => void
     onDeleteBranch?: () => void
@@ -59,7 +61,9 @@
     onArchive,
     onRestore,
     onCreateWorktree,
+    onAdoptWorktree,
     onRetrySetup,
+    onRepairWorktree,
     onDetach,
     onRemoveWorktree,
     onDeleteBranch
@@ -70,6 +74,25 @@
     scopeState.currentProjectThreads.filter(
       (thread) => scopeState.bucketForThread(thread) === bucket.id
     ).length
+  )
+
+  const REPAIRABLE_HEALTH_CATEGORIES = new Set([
+    'missing',
+    'unregistered',
+    'locked',
+    'prunable',
+    'branch-mismatch',
+    'path-mismatch'
+  ])
+
+  let healthKey = $derived(`${scopeState.activeProjectId ?? ''}:${bucket.id}`)
+  let health = $derived(scopeState.healthByTarget.get(healthKey))
+  let unhealthy = $derived(health !== undefined && health.category !== 'healthy')
+  let repairable = $derived(
+    unhealthy && health !== undefined && REPAIRABLE_HEALTH_CATEGORIES.has(health.category)
+  )
+  let healthDetail = $derived(
+    health === undefined ? '' : (health.detail ?? `Worktree is ${health.category}`)
   )
 
   let visibleStages = $derived(
@@ -169,6 +192,21 @@
       <span class="text-[10px] tabular-nums text-dimmed">{threadCount}</span>
     </button>
 
+    {#if unhealthy}
+      <button
+        class="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-warning transition-colors hover:bg-elevated hover:text-foreground"
+        aria-label="Worktree problem in {bucket.name}: {healthDetail}. {repairable
+          ? 'Click to repair.'
+          : ''}"
+        title="{healthDetail}{repairable ? ' Click to repair.' : ''}"
+        onclick={() => {
+          if (repairable) onRepairWorktree?.()
+        }}
+      >
+        <TriangleAlert size={13} />
+      </button>
+    {/if}
+
     <button
       class="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-muted transition-colors hover:bg-elevated hover:text-foreground"
       aria-label="New thread in {bucket.name}"
@@ -185,7 +223,10 @@
       {onArchive}
       {onRestore}
       {onCreateWorktree}
+      {onAdoptWorktree}
       {onRetrySetup}
+      {onRepairWorktree}
+      hasRepairableIssue={repairable}
       {onDetach}
       {onRemoveWorktree}
       {onDeleteBranch}

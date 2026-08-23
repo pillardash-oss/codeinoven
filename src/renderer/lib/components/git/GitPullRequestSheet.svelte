@@ -9,6 +9,7 @@
   import { APP_SLUG } from '$shared/brand'
   import { threadSettings } from '$lib/stores/thread-settings.svelte'
   import { providerCatalog } from '$lib/stores/provider-catalog.svelte'
+  import { prComposeAgentSettings } from '$lib/stores/pr-compose-agent-settings.svelte'
   import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
   import { modelKey } from '$lib/model-keys'
@@ -19,6 +20,8 @@
   } from '$lib/stores/pr-lifecycle.svelte'
   import { getProjectIcon } from '$lib/project-icons'
   import { DEFAULT_SCOPE_BUCKET_ID, isOrchestrationChildThread } from '$shared/types'
+  import { DEFAULT_THINKING_LEVEL, resolveDefaultThinkingLevel } from '$shared/thinking-presets'
+  import { baseUrlProviderStore } from '$lib/stores/base-url-providers.svelte'
   import type {
     Project,
     PrComposeInput,
@@ -62,28 +65,10 @@
     draftId?: string
   }
 
-  interface StoredComposeSelection {
-    harnessId: string
-    providerId: string
-    modelId: string
-    thinkingLevel: ThinkingLevel
-  }
-
   interface PrCreationPreferences {
     head?: string
     base?: string
-    compose?: StoredComposeSelection
   }
-
-  const THINKING_LEVELS = new Set<ThinkingLevel>([
-    'minimal',
-    'low',
-    'medium',
-    'high',
-    'xhigh',
-    'max',
-    'ultra'
-  ])
 
   let {
     projectId,
@@ -113,34 +98,9 @@
       const parsed: unknown = JSON.parse(raw)
       if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return {}
       const record = parsed as Record<string, unknown>
-      const composeValue = record['compose']
-      let compose: StoredComposeSelection | undefined
-      if (
-        typeof composeValue === 'object' &&
-        composeValue !== null &&
-        !Array.isArray(composeValue)
-      ) {
-        const selection = composeValue as Record<string, unknown>
-        const thinkingLevel = selection['thinkingLevel']
-        if (
-          typeof selection['harnessId'] === 'string' &&
-          typeof selection['providerId'] === 'string' &&
-          typeof selection['modelId'] === 'string' &&
-          typeof thinkingLevel === 'string' &&
-          THINKING_LEVELS.has(thinkingLevel as ThinkingLevel)
-        ) {
-          compose = {
-            harnessId: selection['harnessId'],
-            providerId: selection['providerId'],
-            modelId: selection['modelId'],
-            thinkingLevel: thinkingLevel as ThinkingLevel
-          }
-        }
-      }
       return {
         ...(typeof record['head'] === 'string' ? { head: record['head'] } : {}),
-        ...(typeof record['base'] === 'string' ? { base: record['base'] } : {}),
-        ...(compose ? { compose } : {})
+        ...(typeof record['base'] === 'string' ? { base: record['base'] } : {})
       }
     } catch {
       return {}
@@ -174,6 +134,10 @@
   let head = $state(initialPreferences.head ?? '')
   let base = $state(initialPreferences.base ?? '')
   let draft = $state(false)
+  /** Push unpublished commits from the local head before creating the pull request. */
+  let pushLocalCommits = $state(true)
+  /** Commit staged and untracked files on the current head before creating the pull request. */
+  let commitPendingFiles = $state(false)
   let result: PullRequestReference | null = $state(null)
   let originError = $state('')
   let compare = $state<PullRequestCompare | null>(null)
@@ -217,11 +181,6 @@
   let composeOpen = $state(false)
   /** Phase of the compose flow, drives the dropdown's button label. */
   let composePhase = $state<'idle' | 'working' | 'complete' | 'recompose'>('idle')
-  /** Project-specific PR model when available; otherwise the user's last project model. */
-  let composeSettings = $state<ThreadSettings>({
-    ...threadSettings.lastUsed,
-    ...(initialPreferences.compose ?? {})
-  })
   /** Latest compose error, shown inline in the dropdown. */
   let composeError = $state('')
   /** Timer that flips "Complete" → "Recompose" after a short pause. */
@@ -244,9 +203,13 @@
     (gitState.status?.changes ?? []).filter((change) => change.status !== 'conflicted')
   )
   const hasLocalWorktreeChanges = $derived(committableChanges.length > 0)
+  const pendingCommitChanges = $derived(
+    committableChanges.filter((change) => change.staged || change.status === 'untracked')
+  )
+  const hasPendingCommitChanges = $derived(pendingCommitChanges.length > 0)
   const sameBranch = $derived(canonicalBranch(head) === canonicalBranch(base))
   const headIsCurrent = $derived(canonicalBranch(head) === canonicalBranch(branch ?? ''))
-  const willCreateCommit = $derived(hasLocalWorktreeChanges && headIsCurrent)
+  const willCreateCommit = $derived(commitPendingFiles && hasPendingCommitChanges && headIsCurrent)
   const hasChangesToPublish = $derived(compare?.hasChanges === true || willCreateCommit)
   const headInfo = $derived(
     gitState.branches.find((candidate) => candidate.kind === 'local' && candidate.name === head) ??
@@ -335,6 +298,7 @@
       !sameBranch &&
       Boolean(title.trim()) &&
       hasChangesToPublish &&
+      (compare?.source !== 'local' || pushLocalCommits) &&
       existingPr === null &&
       !creating &&
       !submitting &&
@@ -346,6 +310,13 @@
       .replace(/^refs\/remotes\/origin\//u, '')
       .replace(/^refs\/heads\//u, '')
       .replace(/^origin\//u, '')
+  }
+
+  function uncategorizedCommitMessage(date: Date): string {
+    const pad = (value: number): string => value.toString().padStart(2, '0')
+    const day = `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`
+    const time = `${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`
+    return `Uncategorized commit ${day} ${time}`
   }
 
   function createdPullRequestSummary(reference: PullRequestReference): PullRequestSummary {
@@ -455,18 +426,21 @@
       // Decided up front: after the commit below, the refreshed status clears
       // staged changes, which would make hasUnpushedHeadCommits flip to false.
       const commitMade = willCreateCommit
-      const shouldPush = headInfo?.kind === 'local' && (commitMade || hasUnpushedHeadCommits)
-      // 1. Stage and commit the complete worktree first. Compose used the same
-      //    read-only worktree evidence, so the generated copy matches this push.
+      const shouldPush =
+        pushLocalCommits && headInfo?.kind === 'local' && (commitMade || hasUnpushedHeadCommits)
+      // 1. Commit the current index plus untracked files, leaving unstaged edits alone.
       if (commitMade) {
-        await gitState.stage(projectId, [
-          ...new Set(committableChanges.map((change) => change.path))
-        ])
-        if (gitState.error) {
-          createError = gitState.error
-          return
+        const untrackedPaths = pendingCommitChanges
+          .filter((change) => change.status === 'untracked')
+          .map((change) => change.path)
+        if (untrackedPaths.length > 0) {
+          await gitState.stage(projectId, [...new Set(untrackedPaths)])
+          if (gitState.error) {
+            createError = gitState.error
+            return
+          }
         }
-        await gitState.commit(projectId, `commit: ${title.trim()}`)
+        await gitState.commit(projectId, uncategorizedCommitMessage(new Date()))
         if (gitState.error) {
           createError = gitState.error
           return
@@ -671,25 +645,21 @@
    * low-exposure `auto_review` permission mode regardless of what the last-used
    * or persisted thread-level permission was — never `full_access`.
    */
-  function composeVirtualTaskSettings(): ThreadSettings {
+  function composeVirtualTaskSettings(): ThreadSettings | null {
+    const selection = prComposeAgentSettings.selection
+    if (!selection) return null
     return {
-      ...composeSettings,
+      harnessId: selection.harnessId,
+      providerId: selection.providerId,
+      modelId: selection.modelId,
+      thinkingLevel: selection.thinkingLevel,
+      inferenceMode: 'normal',
       permissionLevel: 'auto_review',
       engineeringMode: false,
       assignmentMode: false,
-      loopMode: false
+      loopMode: false,
+      fileSystemMode: false
     }
-  }
-
-  function persistComposeSelection(settings: ThreadSettings): void {
-    persistPrCreationPreferences({
-      compose: {
-        harnessId: settings.harnessId,
-        providerId: settings.providerId,
-        modelId: settings.modelId,
-        thinkingLevel: settings.thinkingLevel
-      }
-    })
   }
 
   /** Kick off a fresh disposable compose or recompose task. */
@@ -701,7 +671,7 @@
     composePhase = 'working'
     try {
       const settings = composeVirtualTaskSettings()
-      persistComposeSelection(settings)
+      if (!settings) throw new Error('Choose a model for Compose PR first')
       const virtualTaskId = crypto.randomUUID()
       const report = await gitState.composeWithAgent(
         projectId,
@@ -721,21 +691,29 @@
   }
 
   function chooseComposeModel(providerId: string, modelId: string, harnessId: string): void {
-    composeSettings = {
-      ...composeSettings,
+    const provider = composeProviders.find(
+      (candidate) => candidate.harnessId === harnessId && candidate.id === providerId
+    )
+    const model = provider?.models.find((candidate) => candidate.id === modelId)
+    const thinkingLevel =
+      resolveDefaultThinkingLevel(
+        model?.thinkingPresets,
+        baseUrlProviderStore.defaultThinkingLevel(harnessId, providerId, modelId),
+        prComposeAgentSettings.selection?.thinkingLevel
+      ) ??
+      prComposeAgentSettings.selection?.thinkingLevel ??
+      DEFAULT_THINKING_LEVEL
+    prComposeAgentSettings.selectModel({
       harnessId,
       providerId,
-      modelId
-    }
-    persistComposeSelection(composeSettings)
+      modelId,
+      thinkingLevel
+    })
+    composeError = ''
   }
 
   function chooseComposeThinking(level: ThinkingLevel): void {
-    composeSettings = {
-      ...composeSettings,
-      thinkingLevel: level
-    }
-    persistComposeSelection(composeSettings)
+    prComposeAgentSettings.selectThinking(level)
   }
 
   onDestroy(clearComposeTimers)
@@ -869,8 +847,12 @@
             <DropdownMenu.Root bind:open={composeOpen}>
               <DropdownMenu.Trigger
                 class="flex h-7 cursor-pointer items-center gap-1.5 rounded-lg border border-border px-2.5 text-[10px] font-medium text-foreground transition-colors hover:bg-elevated disabled:cursor-default disabled:opacity-50"
-                aria-label="Compose with agent"
-                title="Compose the title and description with an agent"
+                aria-label={prComposeAgentSettings.selection
+                  ? 'Compose with agent'
+                  : 'Choose a model for Compose PR'}
+                title={prComposeAgentSettings.selection
+                  ? 'Compose the title and description with an agent'
+                  : 'Choose the model Compose PR will reuse'}
                 disabled={composePhase === 'working'}
               >
                 {#if composePhase === 'working'}
@@ -881,7 +863,13 @@
                   <span>Complete</span>
                 {:else}
                   <Sparkles size={11} />
-                  <span>{composePhase === 'recompose' ? 'Recompose' : 'Compose with agent'}</span>
+                  <span>
+                    {prComposeAgentSettings.selection
+                      ? composePhase === 'recompose'
+                        ? 'Recompose'
+                        : 'Compose with agent'
+                      : 'Choose compose model'}
+                  </span>
                 {/if}
               </DropdownMenu.Trigger>
               <DropdownMenu.Portal>
@@ -893,6 +881,14 @@
                   class="z-50 w-72 rounded-xl border border-border bg-surface p-2 shadow-xl"
                 >
                   <div class="space-y-1.5">
+                    {#if !prComposeAgentSettings.selection}
+                      <p
+                        class="rounded-lg border border-border bg-elevated px-2.5 py-2 text-[10px] leading-relaxed text-muted"
+                      >
+                        Choose a model for Compose PR. This choice is kept separate from every
+                        thread and reused until you change it.
+                      </p>
+                    {/if}
                     <div>
                       <p
                         class="mb-1 px-0.5 text-[9px] font-semibold uppercase tracking-wide text-muted"
@@ -902,15 +898,16 @@
                       <ModelPicker
                         providers={composeProviders}
                         {projectId}
-                        harnessId={composeSettings.harnessId}
-                        providerId={composeSettings.providerId}
-                        modelId={composeSettings.modelId}
+                        harnessId={prComposeAgentSettings.selection?.harnessId ?? ''}
+                        providerId={prComposeAgentSettings.selection?.providerId ?? ''}
+                        modelId={prComposeAgentSettings.selection?.modelId ?? ''}
+                        label={prComposeAgentSettings.selection ? undefined : 'Choose a model'}
                         favoriteModels={rendererRecovery.favoriteModels}
                         recentModels={rendererRecovery.recentModels}
                         side="top"
                         variant="action"
                         onSelect={chooseComposeModel}
-                        thinkingLevel={composeSettings.thinkingLevel}
+                        thinkingLevel={prComposeAgentSettings.selection?.thinkingLevel ?? null}
                         onSelectThinking={chooseComposeThinking}
                         onToggleFavorite={(providerId, modelId, harnessId) =>
                           rendererRecovery.toggleFavorite(modelKey(harnessId, providerId, modelId))}
@@ -921,7 +918,7 @@
                     <button
                       type="button"
                       class="flex h-8 w-full cursor-pointer items-center justify-center gap-1.5 rounded-lg bg-primary px-3 text-[11px] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:cursor-default disabled:opacity-50"
-                      disabled={composePhase === 'working'}
+                      disabled={composePhase === 'working' || !prComposeAgentSettings.selection}
                       onclick={() => void runCompose()}
                     >
                       {#if composePhase === 'working'}
@@ -1222,25 +1219,38 @@
       </div>
 
       <div class="space-y-3 rounded-lg border border-border bg-surface p-2.5">
-        {#if hasLocalWorktreeChanges && headIsCurrent}
-          <div>
-            <span class="text-[10px] text-muted">Local changes</span>
+        <div class="flex items-center justify-between gap-2">
+          <div class="min-w-0">
+            <span class="text-[10px] text-muted">Push local commits</span>
             <p class="text-[9px] leading-relaxed text-dimmed">
-              Creating this pull request stages and commits every worktree change as
-              <span class="font-mono text-foreground">commit: {title.trim() || 'Title'}</span>, then
-              pushes all unpublished commits to
-              <span class="font-mono text-foreground">{head}</span>.
+              Push unpublished commits on
+              <span class="font-mono text-foreground">{head}</span> before creating the pull request.
             </p>
           </div>
-        {:else if hasUnpushedHeadCommits}
-          <div>
-            <span class="text-[10px] text-muted">Unpublished commits</span>
+          <Switch
+            checked={pushLocalCommits}
+            onchange={(value) => (pushLocalCommits = value)}
+            aria-label="Push local commits"
+          />
+        </div>
+        <div class="flex items-center justify-between gap-2">
+          <div class="min-w-0">
+            <span class="text-[10px] text-muted">Commit staged and untracked files</span>
             <p class="text-[9px] leading-relaxed text-dimmed">
-              Creating this pull request pushes every unpublished commit on
-              <span class="font-mono text-foreground">{head}</span> first.
+              {hasPendingCommitChanges
+                ? headIsCurrent
+                  ? 'Create an uncategorized commit dated at submission time.'
+                  : `Check out ${head} before committing files to it.`
+                : 'No staged or untracked files to commit right now.'}
             </p>
           </div>
-        {/if}
+          <Switch
+            checked={commitPendingFiles}
+            onchange={(value) => (commitPendingFiles = value)}
+            disabled={!hasPendingCommitChanges || !headIsCurrent}
+            aria-label="Commit staged and untracked files"
+          />
+        </div>
         <div class="flex items-center justify-between gap-2">
           <div class="min-w-0">
             <span class="text-[10px] text-muted">Create as draft</span>
@@ -1281,9 +1291,11 @@
         disabled={!canCreate}
         title={!canCreate && existingPr
           ? 'A pull request already exists for these branches'
-          : !canCreate && compare !== null && !hasChangesToPublish
-            ? 'There isn\u2019t anything to compare'
-            : undefined}
+          : !canCreate && compare?.source === 'local' && !pushLocalCommits
+            ? 'Push local commits to create this pull request'
+            : !canCreate && compare !== null && !hasChangesToPublish
+              ? 'There isn\u2019t anything to compare'
+              : undefined}
         onclick={() => void createPullRequest()}
       >
         {#if creating || submitting}

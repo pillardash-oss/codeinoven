@@ -37,6 +37,8 @@ const CACHE_PREFIX = 'codeinoven-remote-shell-'
 const CACHE_NAME = CACHE_PREFIX + PRECACHE_VERSION
 const SHELL_META_KEY = './__sw_shell_meta__'
 const CORE_ASSETS = ['./remote.html', './manifest.webmanifest']
+const NOTIFICATION_PROJECT_PARAM = 'notificationProject'
+const NOTIFICATION_THREAD_PARAM = 'notificationThread'
 
 self.addEventListener('install', (event) => {
   event.waitUntil(installShell().then(() => self.skipWaiting()))
@@ -146,28 +148,28 @@ self.addEventListener('notificationclick', (event) => {
   notification.close()
   event.waitUntil(
     self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clients) => {
-      for (const client of clients) {
-        if ('focus' in client) {
-          client.focus()
-          if (data.projectId && data.threadId) {
-            client.postMessage({
-              type: 'notification:open',
-              projectId: data.projectId,
-              threadId: data.threadId
-            })
-          }
-          return
-        }
-      }
-      return self.clients.openWindow('/').then((client) => {
-        if (client && data.projectId && data.threadId) {
+      const client =
+        clients.find((candidate) => candidate.focused) ||
+        clients.find((candidate) => candidate.visibilityState === 'visible') ||
+        clients[0]
+      if (client) {
+        if (data.projectId && data.threadId) {
           client.postMessage({
             type: 'notification:open',
             projectId: data.projectId,
             threadId: data.threadId
           })
         }
-      })
+        return client.focus()
+      }
+      const target = new URL('/', self.location.origin)
+      if (data.projectId && data.threadId) {
+        target.hash = new URLSearchParams({
+          [NOTIFICATION_PROJECT_PARAM]: String(data.projectId),
+          [NOTIFICATION_THREAD_PARAM]: String(data.threadId)
+        }).toString()
+      }
+      return self.clients.openWindow(target.href)
     })
   )
 })

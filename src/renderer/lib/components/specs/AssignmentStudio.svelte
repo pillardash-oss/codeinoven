@@ -13,13 +13,17 @@
   import { onDestroy, onMount, tick } from 'svelte'
   import AssignmentReviewContent from './AssignmentReviewContent.svelte'
   import RichMarkdownEditor from '../shared/RichMarkdownEditor.svelte'
+  import VoiceInputButton from '../speech/VoiceInputButton.svelte'
+  import { speechController } from '../../speech/speech-controller.svelte'
   import MarkdownView from '../markdown/MarkdownView.svelte'
   import StudioSelectionActions from './StudioSelectionActions.svelte'
   import StudioHistoryControls from './StudioHistoryControls.svelte'
   import StudioDocumentNavigation from './StudioDocumentNavigation.svelte'
   import StudioSidebarResizeHandle from './StudioSidebarResizeHandle.svelte'
   import { compactViewport } from '$lib/compact-viewport.svelte'
+  import { draggablePopover } from '$lib/draggable-popover.svelte'
   import { editorPreference } from '$lib/stores/editor-preference.svelte'
+  import PopoverDragHandle from '../ui/PopoverDragHandle.svelte'
   import { validateAssignment } from '$shared/assignment/assignment-validation'
   import { exportAssignmentMarkdown } from '$shared/assignment/assignment-markdown'
   import {
@@ -41,6 +45,7 @@
 
   interface Props {
     assignment: AssignmentPlan
+    threadId: string
     versions?: AssignmentPlan[]
     providers: ProviderCatalog[]
     harnessId: string
@@ -54,12 +59,14 @@
     focusTaskId?: string
     agentMessagesOpen?: boolean
     brainstormAvailable?: boolean
+    prdAvailable?: boolean
     auditAvailable?: boolean
     auditActive?: boolean
     finalComplete?: boolean
     history: StudioDocumentHistory<AssignmentPlanContent>
     onBack: () => void
     onOpenBrainstorm?: () => void
+    onOpenPrd?: () => void
     onOpenSpec: () => void
     onToggleAgentMessages: () => void
     onOpenAudit?: () => void
@@ -98,6 +105,7 @@
 
   let {
     assignment,
+    threadId,
     versions = [],
     providers,
     harnessId,
@@ -111,12 +119,14 @@
     focusTaskId,
     agentMessagesOpen = false,
     brainstormAvailable = false,
+    prdAvailable = false,
     auditAvailable = false,
     auditActive = false,
     finalComplete = false,
     history,
     onBack,
     onOpenBrainstorm,
+    onOpenPrd,
     onOpenSpec,
     onToggleAgentMessages,
     onOpenAudit,
@@ -170,6 +180,27 @@
   let annotationBody = $state('')
   let editingAnnotation = $state<AssignmentAnnotation | null>(null)
   let editingAnnotationBody = $state('')
+  let annotationEditor = $state<RichMarkdownEditor>()
+  let editingAnnotationEditor = $state<RichMarkdownEditor>()
+  const pendingSpeechTargetId = `assignment-annotation-${crypto.randomUUID()}`
+  const speechScope = $derived({
+    kind: 'project',
+    projectId: assignment.projectId,
+    threadId
+  } as const)
+
+  function pendingSpeechTarget() {
+    return annotationEditor?.speechEditorTarget(pendingSpeechTargetId) ?? null
+  }
+
+  function editingSpeechTarget() {
+    if (!editingAnnotation) return null
+    return (
+      editingAnnotationEditor?.speechEditorTarget(
+        `assignment-annotation-edit-${editingAnnotation.id}`
+      ) ?? null
+    )
+  }
   let editingAnnotationPosition = $state<{ x: number; y: number } | null>(null)
   let annotationMarkers = $state<Array<{ annotation: AssignmentAnnotation; x: number; y: number }>>(
     []
@@ -379,6 +410,7 @@
       endOffset: anchor.endOffset
     })
     if (!updated) return
+    speechController.observeSent(pendingSpeechTargetId, body)
     applyAssignment(updated)
     closePendingAnnotation()
     const added = [...(updated.annotations ?? [])]
@@ -485,6 +517,10 @@
     if (!editingAnnotation || !editingAnnotationBody.trim() || !onUpdateAnnotation) return
     const updated = await onUpdateAnnotation(editingAnnotation.id, editingAnnotationBody.trim())
     if (!updated) return
+    speechController.observeSent(
+      `assignment-annotation-edit-${editingAnnotation.id}`,
+      editingAnnotationBody.trim()
+    )
     applyAssignment(updated)
     editingAnnotation =
       (updated.annotations ?? []).find((item) => item.id === editingAnnotation?.id) ?? null
@@ -537,6 +573,7 @@
         <StudioDocumentNavigation
           active="assignment"
           {brainstormAvailable}
+          {prdAvailable}
           assignmentAvailable
           {auditAvailable}
           {agentMessagesOpen}
@@ -546,6 +583,7 @@
           sectionsLabel="assignment sections"
           onToggleSections={() => (sectionsOpen = !sectionsOpen)}
           {onOpenBrainstorm}
+          {onOpenPrd}
           {onOpenSpec}
           {onOpenAudit}
         />
@@ -819,27 +857,36 @@
 {#if pendingAnnotation}
   <div
     class="fixed z-50 w-96 rounded-xl border bg-surface p-3 shadow-xl max-md:inset-x-0 max-md:bottom-0 max-md:w-auto max-md:rounded-b-none max-md:pb-[calc(0.75rem+env(safe-area-inset-bottom))]"
-    style:left={compactViewport.matches ? undefined : `${pendingAnnotation.x}px`}
-    style:top={compactViewport.matches ? undefined : `${pendingAnnotation.y}px`}
     role="dialog"
     aria-label={pendingAnnotation.sectionLevel
       ? 'Annotate assignment section'
       : !readOnly && onAddAnnotation
         ? 'Comment on assignment selection'
         : 'Actions for assignment selection'}
+    {@attach draggablePopover({
+      x: pendingAnnotation.x,
+      y: pendingAnnotation.y,
+      disabled: compactViewport.matches
+    })}
   >
-    <p class="text-[10px] font-semibold uppercase tracking-wide text-muted">
-      {pendingAnnotation.sectionLevel
-        ? 'Annotate section'
-        : !readOnly && onAddAnnotation
-          ? 'Comment on selection'
-          : 'Selection'}
-    </p>
+    <div class="flex items-center gap-1">
+      {#if !compactViewport.matches}
+        <PopoverDragHandle title="Move selection comment" />
+      {/if}
+      <p class="text-[10px] font-semibold uppercase tracking-wide text-muted">
+        {pendingAnnotation.sectionLevel
+          ? 'Annotate section'
+          : !readOnly && onAddAnnotation
+            ? 'Comment on selection'
+            : 'Selection'}
+      </p>
+    </div>
     <blockquote class="mt-2 line-clamp-3 border-l-2 border-accent pl-2 text-[11px] text-muted">
       “{pendingAnnotation.quote}”
     </blockquote>
     {#if !readOnly && onAddAnnotation}
       <RichMarkdownEditor
+        bind:this={annotationEditor}
         class="mt-2 min-h-16 w-full resize-y rounded-lg border bg-elevated px-2.5 py-2 text-xs outline-none focus:border-primary"
         bind:value={annotationBody}
         placeholder="Leave your review note…"
@@ -861,6 +908,12 @@
           onclick={closePendingAnnotation}>Cancel</button
         >
         {#if !readOnly && onAddAnnotation}
+          <VoiceInputButton
+            targetId={pendingSpeechTargetId}
+            getTarget={pendingSpeechTarget}
+            scope={speechScope}
+            disabled={busy}
+          />
           <button
             class="rounded-lg bg-primary px-2.5 py-1.5 text-xs font-semibold text-on-primary disabled:opacity-50"
             disabled={busy || !annotationBody.trim()}
@@ -876,12 +929,20 @@
 {#if editingAnnotation && editingAnnotationPosition}
   <div
     class="fixed z-50 w-80 rounded-xl border bg-surface p-4 shadow-xl max-md:inset-x-0 max-md:bottom-0 max-md:w-auto max-md:rounded-b-none max-md:pb-[calc(1rem+env(safe-area-inset-bottom))]"
-    style:left={compactViewport.matches ? undefined : `${editingAnnotationPosition.x}px`}
-    style:top={compactViewport.matches ? undefined : `${editingAnnotationPosition.y}px`}
     role="dialog"
     aria-label="Anchored assignment comment"
+    {@attach draggablePopover({
+      x: editingAnnotationPosition.x,
+      y: editingAnnotationPosition.y,
+      disabled: compactViewport.matches
+    })}
   >
-    <p class="text-[10px] font-semibold uppercase tracking-wide text-muted">Anchored comment</p>
+    <div class="flex items-center gap-1">
+      {#if !compactViewport.matches}
+        <PopoverDragHandle title="Move anchored comment" />
+      {/if}
+      <p class="text-[10px] font-semibold uppercase tracking-wide text-muted">Anchored comment</p>
+    </div>
     {#if editingAnnotation.quote}
       <blockquote class="mt-2 line-clamp-3 border-l-2 border-accent pl-2 text-[11px] text-muted">
         “{editingAnnotation.quote}”
@@ -889,6 +950,7 @@
     {/if}
     {#if !readOnly}
       <RichMarkdownEditor
+        bind:this={editingAnnotationEditor}
         class="mt-3 min-h-24 w-full resize-y rounded-lg border bg-elevated px-3 py-2 text-xs outline-none focus:border-primary"
         bind:value={editingAnnotationBody}
         ariaLabel="Assignment annotation body"
@@ -923,6 +985,11 @@
           }}>Close</button
         >
         {#if !readOnly}
+          <VoiceInputButton
+            targetId={`assignment-annotation-edit-${editingAnnotation.id}`}
+            getTarget={editingSpeechTarget}
+            scope={speechScope}
+          />
           <button
             class="rounded-lg bg-primary px-2.5 py-1.5 text-xs font-semibold text-on-primary disabled:opacity-50"
             disabled={!editingAnnotationBody.trim()}

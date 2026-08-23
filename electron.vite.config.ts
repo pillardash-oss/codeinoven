@@ -68,6 +68,11 @@ export default defineConfig(({ mode }) => {
         // Coolify resolves the current Convex account service at runtime.
         __CODEINOVEN_ACCOUNT_AUTH_ORIGIN__: JSON.stringify(
           env.MAIN_VITE_ACCOUNT_AUTH_ORIGIN ?? 'https://mobile.codeinoven.com'
+        ),
+        // Public, isolated origin for generated Engineering prototype previews.
+        // There is deliberately no production default.
+        __CODEINOVEN_PROTOTYPE_PREVIEW_ORIGIN__: JSON.stringify(
+          env.MAIN_VITE_PUBLIC_PROTOTYPE_PREVIEW_ORIGIN ?? ''
         )
       },
       build: {

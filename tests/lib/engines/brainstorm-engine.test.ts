@@ -8,6 +8,7 @@ import { ProjectRepo } from '../../../src/main/database/repositories/project-rep
 import { ThreadRepo } from '../../../src/main/database/repositories/thread-repo'
 import { StorageEngine } from '../../../src/main/storage/storage-engine'
 import { parseGeneratedBrainstormContent } from '../../../src/lib/brainstorm/brainstorm-validation'
+import { exportBrainstormMarkdown } from '../../../src/lib/brainstorm/brainstorm-markdown'
 import type { BrainstormContent } from '../../../src/lib/types'
 import { BrainstormEngine, BrainstormEngineError } from '../../../src/lib/engines/brainstorm-engine'
 
@@ -187,7 +188,10 @@ describe('BrainstormEngine', () => {
   })
 
   it('requires canonical core sections exactly once and omits empty additional info', () => {
-    expect(parseGeneratedBrainstormContent(content()).sections).toHaveLength(6)
+    const ordinary = parseGeneratedBrainstormContent(content())
+    expect(ordinary.sections).toHaveLength(6)
+    expect(ordinary).not.toHaveProperty('prototypes')
+    expect(exportBrainstormMarkdown({ content: ordinary })).not.toContain('Prototype')
     expect(() =>
       parseGeneratedBrainstormContent({
         ...content(),
@@ -200,6 +204,26 @@ describe('BrainstormEngine', () => {
         sections: [...content().sections, content().sections[0]]
       })
     ).toThrow('at most once')
+  })
+
+  it('retains requested prototype metadata and renders it conditionally', () => {
+    const parsed = parseGeneratedBrainstormContent({
+      ...content(),
+      prototypes: [
+        {
+          id: 'H1',
+          fidelity: 'hifi',
+          title: 'Refined toolbox',
+          entryFile: 'index.html',
+          artifactPath: '.cio/specs/toolbox/prototypes/H1',
+          previewPath: 'cio/toolbox-h1/',
+          contentHash: 'a'.repeat(64),
+          createdAt: 10
+        }
+      ]
+    })
+    expect(parsed.prototypes).toMatchObject([{ id: 'H1', fidelity: 'hifi' }])
+    expect(exportBrainstormMarkdown({ content: parsed })).toContain('## Prototypes')
   })
 
   it('persists the skip choice without creating a document', async () => {

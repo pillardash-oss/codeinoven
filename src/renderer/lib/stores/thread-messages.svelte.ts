@@ -15,6 +15,7 @@ import type {
   AgentMessage,
   AgentPart,
   AgentProviderIssue,
+  BrainstormTraceUpdate,
   PromptAttachment,
   PromptAssignmentTaskReference,
   PromptProjectReference,
@@ -615,7 +616,52 @@ class ThreadMessagesStore {
     return this.#sessionIds.get(threadKey(projectId, threadId)) === sessionId
   }
 
+  /** Apply Brainstorm lifecycle events by thread identity so navigation never drops them. */
+  #applyBrainstormTrace(projectId: string, threadId: string, update: BrainstormTraceUpdate): void {
+    if (update.type === 'refresh.started') {
+      agentRuns.setBackgroundBusy(projectId, threadId, 'brainstorm_report', update.startedAt)
+      return
+    }
+    if (update.type === 'refresh.completed') {
+      agentRuns.completeBackground(projectId, threadId, 'brainstorm_report')
+      return
+    }
+    if (update.type === 'started' || update.type === 'completed') {
+      this.mergePage(projectId, threadId, update.messages)
+      if (update.type === 'started') {
+        agentRuns.setBusy(projectId, threadId, true, this.#latestUserMessageId(projectId, threadId))
+      } else {
+        agentRuns.setIdle(projectId, threadId)
+      }
+      return
+    }
+
+    const entry = this.entry(projectId, threadId)
+    const message = entry.messages.find((candidate) => candidate.id === update.messageId)
+    if (!message) return
+    if (update.type === 'part.updated') {
+      const partIndex = message.parts.findIndex((part) => part.id === update.part.id)
+      const parts =
+        partIndex === -1
+          ? [...message.parts, update.part]
+          : message.parts.map((part, index) => (index === partIndex ? update.part : part))
+      this.mergePage(projectId, threadId, [{ ...message, parts }])
+      return
+    }
+    if (update.field !== 'text') return
+    const parts = message.parts.map((part) => {
+      if (part.id !== update.partId) return part
+      if (part.type !== 'text' && part.type !== 'reasoning') return part
+      return { ...part, text: `${part.text}${update.delta}` }
+    })
+    this.mergePage(projectId, threadId, [{ ...message, parts }])
+  }
+
   #handleAgentEvent(event: AgentEvent): void {
+    if (event.type === 'brainstorm.trace') {
+      this.#applyBrainstormTrace(event.projectId, event.threadId, event.update)
+      return
+    }
     if (!('sessionId' in event)) return
     const target = this.#threadsBySession.get(event.sessionId)
     if (!target) return
@@ -686,11 +732,11 @@ class ThreadMessagesStore {
             this.#latestUserMessageId(projectId, threadId)
           )
         } else if (event.status.state === 'idle') {
-          agentRuns.setIdle(projectId, threadId)
+          agentRuns.completeSession(projectId, threadId)
         }
         break
       case 'session.idle':
-        agentRuns.setIdle(projectId, threadId)
+        agentRuns.completeSession(projectId, threadId)
         break
       case 'session.error':
         agentRuns.setIdle(projectId, threadId)

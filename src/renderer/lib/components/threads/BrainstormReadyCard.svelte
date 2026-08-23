@@ -1,14 +1,31 @@
 <script lang="ts">
   import { ArrowRight, Lightbulb } from '@lucide/svelte'
+  import type { BrainstormPrototype } from '$shared/types'
 
   interface Props {
     version: number
     busy?: boolean
     onReview: () => void
     onFinalize: () => void
+    prototypes?: BrainstormPrototype[]
+    onSelectPrototype?: (prototypeId: string) => void | Promise<void>
+    onContinueWithoutHifi?: () => void
+    finalizeLabel?: string
   }
 
-  let { version, busy = false, onReview, onFinalize }: Props = $props()
+  let {
+    version,
+    busy = false,
+    onReview,
+    onFinalize,
+    prototypes = [],
+    onSelectPrototype,
+    onContinueWithoutHifi,
+    finalizeLabel = 'Prepare spec'
+  }: Props = $props()
+
+  let lofiPrototypes = $derived(prototypes.filter((prototype) => prototype.fidelity === 'lofi'))
+  let hasHifi = $derived(prototypes.some((prototype) => prototype.fidelity === 'hifi'))
 </script>
 
 <section
@@ -28,9 +45,33 @@
       Keep talking to refine the direction, review the concise report, or use it to prepare the
       specification.
     </p>
+    {#if lofiPrototypes.length > 0 && !hasHifi && onSelectPrototype}
+      <div class="grid gap-2 pt-2 sm:grid-cols-2">
+        {#each lofiPrototypes as prototype (prototype.id)}
+          <button
+            type="button"
+            class="rounded-lg border bg-raised px-3 py-2 text-left hover:bg-elevated disabled:opacity-40"
+            disabled={busy}
+            onclick={() => void onSelectPrototype?.(prototype.id)}
+          >
+            <span class="text-xs font-semibold text-thread-spec">{prototype.id}</span>
+            <span class="mt-0.5 block text-xs text-foreground"
+              >Build HiFi from {prototype.title}</span
+            >
+          </button>
+        {/each}
+      </div>
+    {/if}
   </div>
 
   <div class="flex items-center justify-end gap-2 border-t px-4 py-2.5">
+    {#if lofiPrototypes.length > 0 && !hasHifi && onContinueWithoutHifi}
+      <button
+        class="min-h-8 rounded-lg px-3 py-1.5 text-xs font-semibold text-muted hover:bg-elevated hover:text-foreground disabled:opacity-40"
+        disabled={busy}
+        onclick={onContinueWithoutHifi}>Continue without HiFi</button
+      >
+    {/if}
     <button
       class="min-h-8 rounded-lg border bg-elevated px-3 py-1.5 text-xs font-semibold text-foreground transition-colors hover:bg-overlay disabled:opacity-40"
       disabled={busy}
@@ -43,7 +84,7 @@
       disabled={busy}
       onclick={onFinalize}
     >
-      Prepare spec
+      {finalizeLabel}
       <ArrowRight size={13} />
     </button>
   </div>

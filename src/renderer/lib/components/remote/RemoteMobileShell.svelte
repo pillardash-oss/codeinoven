@@ -351,9 +351,14 @@
     mobileState.historyJump(messageId, content)
   }
 
+  async function openNotificationThread(projectId: string, threadId: string): Promise<void> {
+    await mobileState.openThreadById(projectId, threadId)
+    mobileState.notificationsOpen = false
+  }
+
   onMount(() => {
     onConnected()
-    void mobileState.loadData()
+    const initialDataLoad = mobileState.loadData()
     const unsubscribeThreadUpdates = subscribe('thread:updated', (...args: unknown[]) => {
       const updated = args[0] as Thread
       if (updated) mobileState.applyThreadUpdate(updated)
@@ -362,21 +367,13 @@
       mobileState.applyThreadDeletion(threadId)
     })
     mobileNotifications.init()
-    mobileNotifications.setOpenHandler(
-      (projectId, threadId) => void mobileState.openThreadById(projectId, threadId)
-    )
+    mobileNotifications.setOpenHandler((projectId, threadId) => {
+      void initialDataLoad.then(() => openNotificationThread(projectId, threadId))
+    })
     void mobileNotifications.maybePrompt()
-    const onServiceWorkerMessage = (event: MessageEvent): void => {
-      const record = event.data
-      if (record?.type === 'notification:open' && record.projectId && record.threadId) {
-        void mobileState.openThreadById(String(record.projectId), String(record.threadId))
-      }
-    }
-    navigator.serviceWorker?.addEventListener('message', onServiceWorkerMessage)
     return () => {
       unsubscribeThreadUpdates()
       unsubscribeThreadDeleted()
-      navigator.serviceWorker?.removeEventListener('message', onServiceWorkerMessage)
       mobileNotifications.setOpenHandler(null)
       clearTimeout(searchTimer)
     }
@@ -659,7 +656,7 @@
         Loading notifications…
       </div>
     {:then { default: NotificationPanel }}
-      <NotificationPanel />
+      <NotificationPanel onOpenThread={openNotificationThread} />
     {:catch}
       {@render chunkFailure()}
     {/await}

@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte'
+  import { SvelteURLSearchParams } from 'svelte/reactivity'
   import CloudRemoteAccess from '$lib/components/remote/CloudRemoteAccess.svelte'
   import RemoteMobileShell from '$lib/components/remote/RemoteMobileShell.svelte'
   import { remoteSession } from '$lib/remote/session-store.svelte'
@@ -8,6 +9,15 @@
   import { applyTheme, resolveTheme, watchSystemDark } from '$lib/theme'
   import Toaster from '$lib/components/ui/Toaster.svelte'
   import { mobileState } from '$lib/remote/mobile-state.svelte'
+  import { mobileNotifications } from '$lib/remote/mobile-notifications.svelte'
+
+  const NOTIFICATION_PROJECT_PARAM = 'notificationProject'
+  const NOTIFICATION_THREAD_PARAM = 'notificationThread'
+
+  interface NotificationOpenTarget {
+    projectId: string
+    threadId: string
+  }
 
   let connected = $derived(
     remoteSession.snapshot.route.kind === 'LAN_CONNECTED' ||
@@ -57,18 +67,53 @@
     void remoteSession.setWorkspaceActive(true).catch(() => undefined)
   }
 
+  function consumeNotificationTarget(): NotificationOpenTarget | null {
+    const params = new SvelteURLSearchParams(location.hash.replace(/^#/u, ''))
+    const projectId = params.get(NOTIFICATION_PROJECT_PARAM)
+    const threadId = params.get(NOTIFICATION_THREAD_PARAM)
+    if (!projectId || !threadId) return null
+
+    params.delete(NOTIFICATION_PROJECT_PARAM)
+    params.delete(NOTIFICATION_THREAD_PARAM)
+    const remainingHash = params.toString()
+    history.replaceState(
+      history.state,
+      '',
+      `${location.pathname}${location.search}${remainingHash ? `#${remainingHash}` : ''}`
+    )
+    return { projectId, threadId }
+  }
+
   onMount(() => {
+    let openWorkspaceWhenConnected = false
+    const routeNotification = (projectId: string, threadId: string): void => {
+      mobileNotifications.routeOpen(projectId, threadId)
+      if (connected) {
+        openWorkspace()
+        openWorkspaceWhenConnected = false
+      } else {
+        openWorkspaceWhenConnected = true
+      }
+    }
+    const onServiceWorkerMessage = (event: MessageEvent): void => {
+      const record = event.data
+      if (record?.type === 'notification:open' && record.projectId && record.threadId) {
+        routeNotification(String(record.projectId), String(record.threadId))
+      }
+    }
     const stopWatching = watchSystemDark((dark) => {
       systemDark = dark
       applyCurrentTheme()
     })
     applyCurrentTheme()
     const syncVisibility = (): void => {
-      if (document.visibilityState === 'visible') void remoteSession.resume()
+      if (document.visibilityState === 'visible') void remoteSession.resume().catch(() => undefined)
       else remoteSession.suspend()
     }
     const suspend = (): void => remoteSession.suspend()
-    const resume = (): void => void remoteSession.resume()
+    const resume = (): void => {
+      void remoteSession.resume().catch(() => undefined)
+    }
     let wasConnected = connected
     const stopStateWatch = remoteSession.onStateChange((snapshot) => {
       const isConnectedNow =
@@ -77,14 +122,24 @@
         void remoteSession.setWorkspaceActive(true).catch(() => undefined)
         void mobileState.reconcileAfterReconnect()
       }
+      if (isConnectedNow && openWorkspaceWhenConnected) {
+        openWorkspaceWhenConnected = false
+        openWorkspace()
+      }
       wasConnected = isConnectedNow
     })
+    navigator.serviceWorker?.addEventListener('message', onServiceWorkerMessage)
     document.addEventListener('visibilitychange', syncVisibility)
     window.addEventListener('pagehide', suspend)
     window.addEventListener('pageshow', resume)
+    const notificationTarget = consumeNotificationTarget()
+    if (notificationTarget) {
+      routeNotification(notificationTarget.projectId, notificationTarget.threadId)
+    }
     syncVisibility()
     return () => {
       stopWatching()
+      navigator.serviceWorker?.removeEventListener('message', onServiceWorkerMessage)
       document.removeEventListener('visibilitychange', syncVisibility)
       window.removeEventListener('pagehide', suspend)
       window.removeEventListener('pageshow', resume)

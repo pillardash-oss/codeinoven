@@ -14,6 +14,31 @@ export const remoteDatabasePath = resolve(
 )
 export const trustRemoteProxy = process.env['TRUST_PROXY'] === '1'
 
+function publicPrototypePreviewOrigin(value: string | undefined): string | null {
+  if (!value?.trim()) return null
+  try {
+    const url = new URL(value)
+    if (
+      url.protocol !== 'https:' ||
+      url.username ||
+      url.password ||
+      url.pathname !== '/' ||
+      url.search ||
+      url.hash
+    ) {
+      return null
+    }
+    return url.origin
+  } catch {
+    return null
+  }
+}
+
+/** Null means prototype previews are not deployment-ready; no origin is guessed. */
+export const prototypePreviewOrigin = publicPrototypePreviewOrigin(
+  process.env['CODEINOVEN_PUBLIC_PROTOTYPE_PREVIEW_ORIGIN']
+)
+
 function csv(value: string | undefined): string[] {
   return (value ?? '')
     .split(',')

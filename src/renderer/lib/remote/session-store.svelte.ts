@@ -29,6 +29,9 @@ import {
 import { SvelteSet } from 'svelte/reactivity'
 
 const LAN_HANDSHAKE_TIMEOUT_MS = 3_000
+const WAKE_RECONNECT_TIMEOUT_MS = 30_000
+const ACCOUNT_RECONNECT_INITIAL_DELAY_MS = 750
+const ACCOUNT_RECONNECT_MAX_DELAY_MS = 10_000
 
 /** An explicit endpoint to connect to (the LAN gateway, LAN-first). */
 export interface RemoteConnectionTarget {
@@ -83,6 +86,14 @@ export class RemoteSessionStore {
   /** Unique identity for the current browser relay WebSocket connection. */
   private relayConnectionId = ''
   private resumeTask: Promise<void> | null = null
+
+  private hasUsableConnection(): boolean {
+    return (
+      !this.recovering &&
+      (this.snapshot.route.kind === 'LAN_CONNECTED' ||
+        this.snapshot.route.kind === 'RELAY_CONNECTED')
+    )
+  }
 
   private async ensureKeyMaterial(desktopId: string | null = null): Promise<DeviceKeyMaterial> {
     if (this.keyMaterial && this.keyMaterialDesktopId === desktopId) return this.keyMaterial
@@ -298,7 +309,6 @@ export class RemoteSessionStore {
           return
         }
         if (event.kind === 'connected' && this.accountRelayClient === client) {
-          this.accountReconnectAttempt = 0
           if (awaitingInitialConnection) {
             awaitingInitialConnection = false
           } else {
@@ -309,14 +319,16 @@ export class RemoteSessionStore {
             void deviceAuth
               .then(() => {
                 if (this.accountRelayClient !== client) return
+                this.accountReconnectAttempt = 0
                 this.recovering = false
                 this.dispatch({ type: 'relayConnected', relay: { url: window.location.origin } })
                 this.scheduleLanUpgrade()
               })
               .catch(() => {
                 if (this.accountRelayClient === client) {
-                  this.recovering = false
+                  this.recovering = true
                   this.dispatch({ type: 'disconnected', reason: 'device-auth-failed' })
+                  this.scheduleAccountReconnect(client)
                 }
               })
           }
@@ -347,7 +359,6 @@ export class RemoteSessionStore {
     const outcome = await client.connect()
     awaitingInitialConnection = false
     if (outcome === 'open') {
-      this.accountReconnectAttempt = 0
       try {
         const deviceAuth = this.relayDeviceAuth
         if (!deviceAuth) throw new Error('Relay device authentication did not start')
@@ -355,10 +366,12 @@ export class RemoteSessionStore {
       } catch (error) {
         if (this.accountRelayClient === client) {
           this.dispatch({ type: 'disconnected', reason: 'device-auth-failed' })
+          if (this.recovering) this.scheduleAccountReconnect(client)
         }
         throw error
       }
       if (this.accountRelayClient !== client) return
+      this.accountReconnectAttempt = 0
       this.recovering = false
       this.dispatch({ type: 'relayConnected', relay: { url: window.location.origin } })
       this.scheduleLanUpgrade()
@@ -499,8 +512,32 @@ export class RemoteSessionStore {
   disconnect(): void {
     this.accountRoute = null
     this.recovering = false
+    this.accountReconnectAttempt = 0
     this.closeChannels()
     this.dispatch({ type: 'disconnected' })
+  }
+
+  /** Rebuild a relay whose socket opened but device authentication did not. */
+  private scheduleAccountReconnect(client: AccountRelayClient): void {
+    const route = this.accountRoute
+    if (!route || this.accountRelayClient !== client || this.accountReconnectTimer !== null) return
+    const exponent = Math.min(this.accountReconnectAttempt, 5)
+    const delay = Math.min(
+      ACCOUNT_RECONNECT_INITIAL_DELAY_MS * 2 ** exponent,
+      ACCOUNT_RECONNECT_MAX_DELAY_MS
+    )
+    this.accountReconnectAttempt += 1
+    this.accountReconnectTimer = window.setTimeout(() => {
+      this.accountReconnectTimer = null
+      if (this.accountRoute !== route || this.accountRelayClient !== client) return
+      void this.connectCloud(route).catch((error: unknown) => {
+        remoteLog.error(`Remote relay recovery failed: ${String(error)}`)
+        const current = this.accountRelayClient
+        if (current && this.accountRoute === route && this.recovering) {
+          this.scheduleAccountReconnect(current)
+        }
+      })
+    }, delay)
   }
 
   private closeChannels(): void {
@@ -520,16 +557,59 @@ export class RemoteSessionStore {
    * Re-establish a selected desktop after a phone browser resumes from
    * suspension. Mobile operating systems may silently discard the WebSocket
    * while the page is frozen, so waiting only for its close callback can leave
-   * the installed PWA stranded indefinitely.
+   * the installed PWA stranded indefinitely. The shared task keeps concurrent
+   * RPC retries from starting parallel connection attempts, and it resolves
+   * only after the replacement transport has authenticated.
    */
   async resume(): Promise<void> {
     if (this.resumeTask) return this.resumeTask
     const route = this.accountRoute
-    if (!route || !this.recovering) return
-    this.resumeTask = this.connectAccountDesktop(route, true).finally(() => {
+    if (!route || this.hasUsableConnection()) return
+    this.recovering = true
+    this.resumeTask = (async () => {
+      let connectionError: unknown
+      try {
+        await this.connectAccountDesktop(route, true)
+      } catch (error) {
+        connectionError = error
+      }
+      if (this.hasUsableConnection()) return
+      try {
+        await this.waitForUsableConnection(WAKE_RECONNECT_TIMEOUT_MS)
+      } catch {
+        if (connectionError instanceof Error) throw connectionError
+        throw new Error(
+          'Desktop reconnection timed out. Check that the desktop is online and retry.'
+        )
+      }
+    })().finally(() => {
       this.resumeTask = null
     })
     await this.resumeTask
+  }
+
+  /** Wait without polling while a relay's bounded reconnect loop authenticates. */
+  private waitForUsableConnection(timeoutMs: number): Promise<void> {
+    if (this.hasUsableConnection()) return Promise.resolve()
+    return new Promise<void>((resolve, reject) => {
+      let settled = false
+      let unsubscribe = (): void => undefined
+      const finish = (error?: Error): void => {
+        if (settled) return
+        settled = true
+        window.clearTimeout(timer)
+        unsubscribe()
+        if (error) reject(error)
+        else resolve()
+      }
+      const timer = window.setTimeout(() => {
+        finish(new Error('Desktop reconnection timed out'))
+      }, timeoutMs)
+      unsubscribe = this.onStateChange(() => {
+        if (this.hasUsableConnection()) finish()
+        else if (!this.accountRoute) finish(new Error('Desktop connection was closed'))
+      })
+    })
   }
 
   /** Mark an account route for verification when the browser is foregrounded. */

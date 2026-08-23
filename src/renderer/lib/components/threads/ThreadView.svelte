@@ -35,6 +35,7 @@
     Network,
     Pencil,
     Plus,
+    ShieldCheck,
     Target,
     Trash2,
     Video,
@@ -42,6 +43,7 @@
     Zap
   } from '@lucide/svelte'
   import ChatComposer from '../chats/ChatComposer.svelte'
+  import { normalizeComposerMessage } from '../chats/composer-mentions'
   import StartAfterThreadPicker from '../chats/StartAfterThreadPicker.svelte'
   import ResponseSelectionPopover from '../chats/ResponseSelectionPopover.svelte'
   import ResponseAnnotationBubble from '../chats/ResponseAnnotationBubble.svelte'
@@ -50,6 +52,9 @@
   import FileTypeIcon from '../files/FileTypeIcon.svelte'
   import FolderTypeIcon from '../files/FolderTypeIcon.svelte'
   import RichMarkdownEditor from '../shared/RichMarkdownEditor.svelte'
+  import VoiceInputButton from '../speech/VoiceInputButton.svelte'
+  import SpeechPlaybackButton from '../speech/SpeechPlaybackButton.svelte'
+  import { speechController } from '../../speech/speech-controller.svelte'
   import WorkingTrace from './WorkingTrace.svelte'
   import FindInSurface from './FindInSurface.svelte'
   import ContinueInProjectModal from './ContinueInProjectModal.svelte'
@@ -66,6 +71,9 @@
   import SpecReadyCard from './SpecReadyCard.svelte'
   import BrainstormEntryChoiceCard from './BrainstormEntryChoiceCard.svelte'
   import BrainstormReadyCard from './BrainstormReadyCard.svelte'
+  import PrdEntryChoiceCard from './PrdEntryChoiceCard.svelte'
+  import PrdReadyCard from './PrdReadyCard.svelte'
+  import EngineeringFlowCancelModal from './EngineeringFlowCancelModal.svelte'
   import AssignmentReadyCard from './AssignmentReadyCard.svelte'
   import AssignmentCoordinatorPanel from './AssignmentCoordinatorPanel.svelte'
   import AchievementCoordinatorPanel from './AchievementCoordinatorPanel.svelte'
@@ -76,12 +84,13 @@
   import FileCitationContextMenu from '../markdown/FileCitationContextMenu.svelte'
   import { getProjectIcon } from '$lib/project-icons'
   import { isImageMime, isVideoMime, isAudioMime, fileUrlToPath } from '$lib/mime'
-  import { fastBaseModelId, fastVariantForModelId } from '$shared/fast-inference'
+  import { fastBaseModelId, fastVariantForModelId, normalizeFastInference, supportsFastInference } from '$shared/fast-inference'
   import { FileBlobUrlManager } from '$lib/media-urls.svelte'
   import { actionContext } from '$lib/stores/action-context.svelte'
   import type { ActionDefinition, ActionSelection, ActionSource } from '$lib/actions'
   import SpecStudio from '../specs/SpecStudio.svelte'
   import BrainstormStudio from '../specs/BrainstormStudio.svelte'
+  import PrdStudio from '../specs/PrdStudio.svelte'
   import AssignmentStudio from '../specs/AssignmentStudio.svelte'
   import AuditStudio from '../specs/AuditStudio.svelte'
   import { StudioDocumentHistoryCollection } from '../specs/studio-document-history.svelte'
@@ -109,7 +118,7 @@
     rendererRecovery,
     type StartAfterThreadReference
   } from '$lib/stores/renderer-recovery.svelte'
-  import { modelKey } from '$lib/model-keys'
+  import { modelKey, parseModelKey } from '$lib/model-keys'
   import { threadMessages } from '$lib/stores/thread-messages.svelte'
   import { queuedMessageDispatcher } from '$lib/stores/queued-message-dispatcher'
   import { claimQueuedMessage, releaseQueuedMessage } from '$lib/stores/queued-message-claim'
@@ -158,10 +167,14 @@
     CapturableSpecContextType,
     BrainstormDecisionAction,
     BrainstormDocument,
+    BrainstormReviewChanges,
     BrainstormSectionId,
-    BrainstormTraceUpdate,
     SpecGenerationTraceUpdate,
     BrainstormWorkflowState,
+    PrdContent,
+    PrdDocument,
+    PrdSectionId,
+    PrdWorkflowState,
     EngineeringSpec,
     AssignmentPlan,
     AssignmentPlanContent,
@@ -181,10 +194,14 @@
     ImageDescriptorReplyAction,
     UserMessagePresentation,
     UserMessageSummary,
-    UsageEfficiencyKpis
+    UsageEfficiencyKpis,
+    EngineeringLifecycleSelection,
+    EngineeringLifecycleState
   } from '$shared/types'
   import { APP_NAME } from '$shared/brand'
+  import { workflowActionPresentation } from '$shared/workflow-action-presentation'
   import { LatestRequestGuard } from '$lib/refresh-guard'
+  import { isRemotePwaRuntime } from '$lib/runtime-context'
 
   type WorkingModelSelection = Pick<
     ThreadSettings,
@@ -260,7 +277,7 @@
       endIndex < messages.length - 1 &&
       messages.slice(endIndex + 1).every((message) => message.role === 'user')
     const turnCompleted = messages[endIndex]?.completedAt !== undefined
-    const threadBusy = threadWorking
+    const threadBusy = brainstormReportRefreshing ? delegatedWorkBusy : threadWorking
     return { startIndex, active: threadBusy || !(trailingUserOnly && turnCompleted) }
   })
   let olderMessagesAvailable = $state(false)
@@ -277,6 +294,10 @@
   )
   let loaded = $derived(threadMessages.loaded(thread.projectId, thread.id))
   let busy = $derived(agentRuns.isBusy(thread.projectId, thread.id))
+  let conversationBusy = $derived(agentRuns.isConversationBusy(thread.projectId, thread.id))
+  let brainstormReportRefreshing = $derived(
+    agentRuns.activity(thread.projectId, thread.id) === 'brainstorm_report'
+  )
   /** Whether the current run is confirmed by live session activity. Persisted
    *  `planning`/`executing` is not enough to make the composer or trace busy. */
   let liveBusy = $derived(agentRuns.isLiveBusy(thread.projectId, thread.id))
@@ -294,16 +315,19 @@
    *  must not be mistaken for the current work. Count nothing in that window
    *  so the bottom working placeholder keeps showing instead of a blank tail. */
   let latestTurnRenderableParts = $derived.by(() => {
-    if (busy && messages[messages.length - 1]?.role === 'user') return []
+    if (conversationBusy && messages[messages.length - 1]?.role === 'user') return []
     if (latestTurnInfo.startIndex === -1) return []
-    return getTurnWorkingParts(latestTurnInfo.startIndex, busy && latestTurnInfo.active)
+    return getTurnWorkingParts(latestTurnInfo.startIndex, conversationBusy && latestTurnInfo.active)
   })
   // A persisted in-flight status is only a recovery hint. Start every mount in
   // a settled idle state unless this thread is already receiving live activity;
   // `connectSession` will promote it to busy when the live session confirms it.
   // This removes the false working flash on refresh and on view remounts.
   // svelte-ignore state_referenced_locally
-  if (!agentRuns.isLiveBusy(thread.projectId, thread.id)) {
+  if (
+    !agentRuns.isLiveBusy(thread.projectId, thread.id) &&
+    agentRuns.activity(thread.projectId, thread.id) !== 'brainstorm_report'
+  ) {
     agentRuns.setIdle(thread.projectId, thread.id)
   }
   /** When the current busy run started; authoritative source for the live timer. */
@@ -321,6 +345,125 @@
       ? normalizeChatSettings(chatSettings.initialFor(thread, chatEffectiveSettings()))
       : threadSettings.initialFor(thread)
   )
+  let engineeringLifecycle = $state<EngineeringLifecycleState | null>(null)
+  let pendingLifecycleSelection = $state<EngineeringLifecycleSelection | null>(null)
+  let lifecycleCancelModalOpen = $state(false)
+
+  function legacySettingsForLifecycle(selection: EngineeringLifecycleSelection): ThreadSettings {
+    if (selection === 'none') {
+      return { ...settings, engineeringMode: false, assignmentMode: false, loopMode: false }
+    }
+    return {
+      ...settings,
+      engineeringMode:
+        selection === 'brainstorm' ||
+        selection === 'prd' ||
+        selection === 'spec' ||
+        selection === 'run_all',
+      assignmentMode: selection === 'assignment' || selection === 'run_all',
+      loopMode: selection === 'achievement' || selection === 'run_all'
+    }
+  }
+
+  async function applyLifecycleSelection(selection: EngineeringLifecycleSelection): Promise<void> {
+    engineeringLifecycle = await invoke(
+      'engineeringLifecycle:select',
+      thread.projectId,
+      thread.id,
+      selection
+    )
+    updateSettings(legacySettingsForLifecycle(selection))
+    prdWorkflow =
+      selection === 'prd'
+        ? await invoke('prd:ensureWorkflow', thread.projectId, thread.id)
+        : prdWorkflow
+  }
+
+  async function selectEngineeringLifecycle(
+    selection: EngineeringLifecycleSelection
+  ): Promise<void> {
+    if (
+      engineeringLifecycle &&
+      (engineeringLifecycle.activeStage !== undefined ||
+        engineeringLifecycle.humanGate !== undefined) &&
+      selection !== engineeringLifecycle.selection
+    ) {
+      pendingLifecycleSelection = selection
+      lifecycleCancelModalOpen = true
+      return
+    }
+    await applyLifecycleSelection(selection)
+  }
+
+  async function confirmLifecycleReplacement(): Promise<void> {
+    const replacement = pendingLifecycleSelection ?? 'none'
+    engineeringLifecycle = await invoke(
+      'engineeringLifecycle:cancel',
+      thread.projectId,
+      thread.id,
+      true
+    )
+    lifecycleCancelModalOpen = false
+    pendingLifecycleSelection = null
+    if (replacement !== 'none') await applyLifecycleSelection(replacement)
+    else updateSettings(legacySettingsForLifecycle('none'))
+  }
+
+  async function retryEngineeringLifecycle(): Promise<void> {
+    const current = engineeringLifecycle
+    if (current?.humanGate !== 'terminal_failure' || !current.resumeToken) return
+    try {
+      engineeringLifecycle = await invoke(
+        'engineeringLifecycle:retry',
+        thread.projectId,
+        thread.id,
+        current.resumeToken
+      )
+      updateSettings(legacySettingsForLifecycle(engineeringLifecycle.selection))
+      const stage = engineeringLifecycle.activeStage
+      if (stage === 'brainstorm') {
+        const active = await invoke('brainstorm:getActive', thread.projectId, thread.id)
+        if (active) applyBrainstormDocument(active)
+        else
+          await sendMessage(
+            'Retry the persisted Brainstorm stage using the existing conversation and project context.',
+            [],
+            undefined,
+            true
+          )
+      } else if (stage === 'prd') {
+        const active = await invoke('prd:getActive', thread.projectId, thread.id)
+        if (active) prd = active
+        else {
+          prd = await invoke(
+            'agent:generatePrd',
+            thread.projectId,
+            thread.id,
+            settings,
+            'Retry the persisted PRD stage using the existing conversation, finalized Brainstorm, and project context.',
+            [],
+            messageId()
+          )
+        }
+      } else if (stage === 'spec') {
+        await setActiveSpec(await invoke('agent:ensureInitialSpec', thread.projectId, thread.id))
+      } else if (stage === 'assignment') {
+        await generateAssignmentDraft()
+      } else if (stage === 'achievement') {
+        await sendMessage(
+          'Retry the persisted Achievement audit and rework stage from its durable artifacts.',
+          [],
+          'implement',
+          true
+        )
+      }
+      await reconcileReadySpec()
+    } catch (error) {
+      errorMessage =
+        error instanceof Error ? error.message : 'The Engineering stage could not retry.'
+      engineeringLifecycle = await invoke('engineeringLifecycle:get', thread.projectId, thread.id)
+    }
+  }
   /** Snapshot of the selection that started the live turn. Model controls can
    *  still change the next-turn settings while the current turn is running. */
   let liveWorkingSelection = $state<WorkingModelSelection | null>(null)
@@ -419,20 +562,16 @@
       visibleProviderStatus !== null &&
       visibleProviderStatus.issue === proactiveAuthIssue
   )
-  const providerName = $derived(
-    settings.harnessId === 'opencode'
-      ? 'OpenCode'
-      : settings.harnessId === 'claude-code'
-        ? 'Claude Code'
-        : settings.harnessId === 'codex'
-          ? 'Codex'
-          : settings.harnessId === 'cline'
-            ? 'Cline'
-            : settings.harnessId === 'pi'
-              ? 'Pi'
-              : settings.harnessId === 'antigravity'
-                ? 'Antigravity'
-                : settings.harnessId
+  const providerName = $derived(harnessDisplayName(settings.harnessId))
+  /** Harness that actually produced the visible provider issue. When it differs
+   *  from the thread's current harness (e.g. a Codex usage-limit card still on
+   *  screen while the user already switched the thread to OpenCode), the badge
+   *  must attribute the card to the harness that reported it — never to the
+   *  harness that happens to be selected now. */
+  const statusCardProviderName = $derived(
+    visibleProviderStatus?.issue?.harnessId
+      ? harnessDisplayName(visibleProviderStatus.issue.harnessId)
+      : providerName
   )
   const applicationActionSource = {
     id: 'application',
@@ -1069,6 +1208,14 @@
     {}
   )
   let commentEditorReferenceId = $state<string | null>(null)
+  let messageEditEditor = $state<RichMarkdownEditor>()
+
+  function messageEditSpeechTarget() {
+    if (!editingMessageId) return null
+    return (
+      messageEditEditor?.speechEditorTarget(`message-edit-${thread.id}-${editingMessageId}`) ?? null
+    )
+  }
 
   function responseElementFor(node: Node | null): HTMLElement | null {
     const element = node instanceof Element ? node : node?.parentElement
@@ -1432,6 +1579,12 @@
   let brainstorm = $state<BrainstormDocument | null>(null)
   let brainstormVersions = $state<BrainstormDocument[]>([])
   let selectedBrainstormVersion = $state<number | undefined>()
+  let prd = $state<PrdDocument | null>(null)
+  let prdWorkflow = $state<PrdWorkflowState | null>(null)
+  let prdVersions = $state<PrdDocument[]>([])
+  let selectedPrdVersion = $state<number | undefined>()
+  let prdBusy = $state(false)
+  let prdError = $state('')
   let brainstormBusy = $state(false)
   let brainstormEntryInFlight = $state<'brainstorm' | 'spec' | null>(null)
   let brainstormDecisionInFlight = $state<BrainstormDecisionAction | null>(null)
@@ -1497,38 +1650,6 @@
     })
   }
 
-  function applyBrainstormTrace(update: BrainstormTraceUpdate): void {
-    if (update.type === 'started' || update.type === 'completed') {
-      threadMessages.mergePage(thread.projectId, thread.id, update.messages)
-      if (update.type === 'started') {
-        agentRuns.setBusy(thread.projectId, thread.id, true, latestUserMessageId())
-      }
-      return
-    }
-    if (update.type === 'part.updated') {
-      const message = threadMessages
-        .messages(thread.projectId, thread.id)
-        .find((candidate) => candidate.id === update.messageId)
-      if (!message) return
-      const partIndex = message.parts.findIndex((part) => part.id === update.part.id)
-      const parts =
-        partIndex === -1
-          ? [...message.parts, update.part]
-          : message.parts.map((part, index) => (index === partIndex ? update.part : part))
-      threadMessages.mergePage(thread.projectId, thread.id, [{ ...message, parts }])
-      return
-    }
-    const message = threadMessages
-      .messages(thread.projectId, thread.id)
-      .find((candidate) => candidate.id === update.messageId)
-    if (!message) return
-    const parts = message.parts.map((part) => {
-      if (part.id !== update.partId || update.field !== 'text') return part
-      if (part.type !== 'text' && part.type !== 'reasoning') return part
-      return { ...part, text: `${part.text}${update.delta}` }
-    })
-    threadMessages.mergePage(thread.projectId, thread.id, [{ ...message, parts }])
-  }
   let brainstormError = $state('')
   let planningResumeRequested = false
   let specVersions = $state<EngineeringSpec[]>([])
@@ -1543,7 +1664,7 @@
   let selectedAssignmentVersion = $state<number | undefined>()
   let assignmentThreads = $state<Thread[]>([])
   let assignmentAuditThread = $state<Thread | undefined>()
-  let achievementAuditThread = $state<Thread | undefined>()
+  let durableAuditThread = $state<Thread | undefined>()
   let assignmentCoordinatorThread = $state<Thread | undefined>()
   let assignmentBusy = $state(false)
   let assignmentError = $state('')
@@ -1587,7 +1708,7 @@
   let auditState = $state<Thread['auditState']>(thread.auditState)
   let auditBusy = $state(false)
   let auditError = $state('')
-  let studioDocument = $state<'brainstorm' | 'spec' | 'assignment' | 'audit'>('spec')
+  let studioDocument = $state<'brainstorm' | 'prd' | 'spec' | 'assignment' | 'audit'>('spec')
   const brainstormStudioHistories = new StudioDocumentHistoryCollection<BrainstormDocument>()
   const specStudioHistories = new StudioDocumentHistoryCollection<EngineeringSpec>()
   const assignmentStudioHistories = new StudioDocumentHistoryCollection<AssignmentPlanContent>()
@@ -1618,6 +1739,9 @@
     brainstormVersions.find((candidate) => candidate.version === selectedBrainstormVersion) ??
       brainstorm
   )
+  let studioPrd = $derived(
+    prdVersions.find((candidate) => candidate.version === selectedPrdVersion) ?? prd
+  )
   let auditSettings = $state<ThreadSettings>(auditSettingsForThread())
   let isAssignmentAuditorThread = $derived(
     (thread.assignmentId !== undefined &&
@@ -1637,7 +1761,12 @@
     settings.engineeringMode === true &&
       studioOnlyAuditWorkflow &&
       spec?.status === 'approved' &&
-      (auditState === 'offered' || (auditState === 'report_ready' && auditReport !== null))
+      (auditState === 'offered' ||
+        auditState === 'running' ||
+        (auditState === 'report_ready' && auditReport !== null))
+  )
+  let plainEngineeringAuditRunning = $derived(
+    settings.engineeringMode === true && studioOnlyAuditWorkflow && auditState === 'running'
   )
   let plainEngineeringAuditReady = $derived(
     settings.engineeringMode === true &&
@@ -1647,10 +1776,11 @@
   )
 
   /** Which coordinator, if any, this thread publishes to the context dock. */
-  let coordinatorKind = $derived.by((): 'assignment' | 'achievement' | null => {
+  let coordinatorKind = $derived.by((): 'assignment' | 'achievement' | 'audit' | null => {
     if (isAssignmentAuditorThread) return null
     if (assignment && assignment.status !== 'draft') return 'assignment'
     if (achievementOnly && spec) return 'achievement'
+    if (plainEngineeringAuditAvailable && spec) return 'audit'
     return null
   })
 
@@ -1661,13 +1791,23 @@
   $effect(() => {
     const kind = coordinatorKind
     if (!kind) return
-    const label = kind === 'assignment' ? 'Assignment coordinator' : 'Achievement coordinator'
+    const label =
+      kind === 'assignment'
+        ? 'Assignment coordinator'
+        : kind === 'achievement'
+          ? 'Achievement coordinator'
+          : 'Audit coordinator'
     const dispose = coordinatorDockState.register({
       projectId: thread.projectId,
       threadId: thread.id,
       label,
-      icon: kind === 'assignment' ? Network : Target,
-      panel: kind === 'assignment' ? assignmentCoordinatorPanel : achievementCoordinatorPanel
+      icon: kind === 'assignment' ? Network : kind === 'achievement' ? Target : ShieldCheck,
+      panel:
+        kind === 'assignment'
+          ? assignmentCoordinatorPanel
+          : kind === 'achievement'
+            ? achievementCoordinatorPanel
+            : auditCoordinatorPanel
     })
     // Docks itself the first time a thread starts coordinating, unless the user
     // closed it before; later runs are no-ops because the tab already exists.
@@ -1720,7 +1860,7 @@
     assignmentAuditState === 'running' || delegatedThreadWorking(assignmentAuditThread)
   )
   let achievementAuditorWorking = $derived(
-    auditState === 'running' || delegatedThreadWorking(achievementAuditThread)
+    auditState === 'running' || delegatedThreadWorking(durableAuditThread)
   )
   let delegatedWorkBusy = $derived.by(() => {
     if (assignment?.coordinatorThreadId === thread.id) {
@@ -1842,6 +1982,17 @@
       return {
         ...settings,
         ...settings.loopAuditor,
+        engineeringMode: false,
+        loopMode: false
+      }
+    }
+    const inheritedAuditor = rendererRecovery.auditModelKey
+      ? parseModelKey(rendererRecovery.auditModelKey)
+      : null
+    if (inheritedAuditor) {
+      return {
+        ...settings,
+        ...inheritedAuditor,
         engineeringMode: false,
         loopMode: false
       }
@@ -2162,7 +2313,11 @@
   // a final response and the generation path has reported an error.
   $effect(() => {
     const hasStudioDocument =
-      brainstorm !== null || spec !== null || assignment !== null || auditReport !== null
+      brainstorm !== null ||
+      prd !== null ||
+      spec !== null ||
+      assignment !== null ||
+      auditReport !== null
     workspaceState.specStudioAvailable = !chatMode && (hasStudioDocument || specStudioRetryable)
     workspaceState.specStudioOpen = showSpecStudio
     workspaceState.specStudioBusy = specBusy
@@ -2191,6 +2346,8 @@
         openAssignmentStudio()
       } else if (spec) {
         void openSpecStudio()
+      } else if (prd) {
+        openPrdStudio()
       } else if (brainstorm) {
         openBrainstormStudio()
       } else if (specStudioRetryable) {
@@ -2491,6 +2648,15 @@
     const mountedThreadId = thread.id
     workspaceState.jumpToMessage = jumpToMessage
     void refreshEfficiencyKpis()
+    if (!chatMode) {
+      void invoke('engineeringLifecycle:get', mountedProjectId, mountedThreadId)
+        .then((state) => {
+          if (alive) engineeringLifecycle = state
+        })
+        .catch((error) => {
+          reportError(error, 'Engineering lifecycle could not be loaded')
+        })
+    }
     scheduleResponseHighlightRestore(responseReferences)
     // This view owns dispatch of the thread's queued message while mounted;
     // the background dispatcher must defer to it to avoid a double send.
@@ -2615,6 +2781,7 @@
   /** Cached thread/session state may describe the previous turn on reconnect. */
   function setIdleFromRestore(): void {
     if (locallySubmittedTurnId) return
+    if (agentRuns.activity(thread.projectId, thread.id) === 'brainstorm_report') return
     liveWorkingSelection = null
     agentRuns.setIdle(thread.projectId, thread.id)
   }
@@ -2622,6 +2789,7 @@
   /** A live idle event owns the current turn only after live activity confirms it. */
   function setIdleFromSession(): boolean {
     if (locallySubmittedTurnId && !locallySubmittedTurnAcknowledged) return false
+    if (agentRuns.activity(thread.projectId, thread.id) === 'brainstorm_report') return false
     clearLocalTurn()
     agentRuns.setIdle(thread.projectId, thread.id)
     return true
@@ -3000,7 +3168,6 @@
       event.projectId === thread.projectId &&
       event.threadId === thread.id
     ) {
-      applyBrainstormTrace(event.update)
       return
     }
     if (
@@ -3522,6 +3689,29 @@
     // Let the mount-time lookup finish first so it cannot persist an older
     // harness session after this send-specific lookup.
     const { projectId, id } = thread
+    if (
+      engineeringLifecycle?.selection !== undefined &&
+      engineeringLifecycle.selection !== 'none' &&
+      engineeringLifecycle.activeStage === undefined &&
+      engineeringLifecycle.humanGate === undefined
+    ) {
+      const started = await invoke('engineeringLifecycle:start', projectId, id)
+      engineeringLifecycle = started.state
+      if (started.state.activeStage === 'brainstorm' || started.state.activeStage === 'spec') {
+        const workflow = await invoke('brainstorm:ensureWorkflow', projectId, id)
+        if (!workflow.entryChoice) {
+          await invoke(
+            'brainstorm:chooseEntry',
+            projectId,
+            id,
+            started.state.activeStage === 'brainstorm' ? 'brainstorm' : 'spec'
+          )
+        }
+      } else if (started.state.activeStage === 'prd') {
+        const workflow = await invoke('prd:ensureWorkflow', projectId, id)
+        prdWorkflow = workflow
+      }
+    }
     await sessionReady
     const bindingVersion = ++sessionBindingVersion
     const readySessionId = await invoke('agent:ensureSession', projectId, id, settings.harnessId)
@@ -3545,7 +3735,7 @@
     restorable?: boolean,
     startAfterThreads: StartAfterThreadReference[] = []
   ): Promise<void> {
-    const msg = text.trim()
+    const msg = normalizeComposerMessage(text, projectReferences)
     const hasAttachments = (attachments?.length ?? 0) > 0
     const hasProjectReferences = (projectReferences?.length ?? 0) > 0
     const hasTaskReferences = (taskReferences?.length ?? 0) > 0
@@ -3564,6 +3754,18 @@
       return
     }
     if (specFormulating && specAction !== 'request') return
+    if (
+      specAction === undefined &&
+      (engineeringLifecycle?.activeStage === 'achievement' ||
+        (engineeringLifecycle?.selection === 'achievement' &&
+          engineeringLifecycle.activeStage === undefined))
+    ) {
+      if (!spec || spec.status !== 'approved') {
+        errorMessage = 'Achievement requires an approved Spec.'
+        return
+      }
+      specAction = 'implement'
+    }
     const dependencyThreads = startAfterThreads.filter(
       (reference) => reference.id !== thread.id && reference.id.length > 0
     )
@@ -3589,6 +3791,68 @@
       })
       idleAttentionHandled = false
       void handleIdleAttention()
+      return
+    }
+
+    const selectedAssignment =
+      engineeringLifecycle?.activeStage === 'assignment' ||
+      (engineeringLifecycle?.selection === 'assignment' &&
+        engineeringLifecycle.activeStage === undefined)
+    if (selectedAssignment && specAction === undefined) {
+      if (!spec || spec.status !== 'approved') {
+        assignmentError = 'Assignment requires an approved Spec.'
+        return
+      }
+      if (engineeringLifecycle?.activeStage === undefined) {
+        engineeringLifecycle = (
+          await invoke('engineeringLifecycle:start', thread.projectId, thread.id)
+        ).state
+      }
+      await generateAssignmentDraft()
+      return
+    }
+
+    const selectedPrd =
+      engineeringLifecycle?.activeStage === 'prd' ||
+      (engineeringLifecycle?.selection === 'prd' && engineeringLifecycle.activeStage === undefined)
+    const selectedPrdWorkflow = selectedPrd
+      ? await invoke('prd:ensureWorkflow', thread.projectId, thread.id)
+      : null
+    if (selectedPrdWorkflow) prdWorkflow = selectedPrdWorkflow
+    if (selectedPrd && selectedPrdWorkflow?.stage !== 'brainstorming' && specAction === undefined) {
+      if (selectedPrdWorkflow?.stage === 'choice_pending') {
+        prdError = 'Choose Brainstorm first or Start PRD before sending the requirements.'
+        return
+      }
+      const userMessageId = messageId()
+      const { projectId, id } = thread
+      beginLocalTurn(userMessageId)
+      agentRuns.setBusy(projectId, id, true, userMessageId)
+      try {
+        if (engineeringLifecycle?.activeStage === undefined) {
+          const started = await invoke('engineeringLifecycle:start', projectId, id)
+          engineeringLifecycle = started.state
+        }
+        prd = await invoke(
+          'agent:generatePrd',
+          projectId,
+          id,
+          settings,
+          [msg, promptContext].filter(Boolean).join('\n\n'),
+          attachments,
+          userMessageId
+        )
+        prdVersions = prd ? [prd] : []
+        selectedPrdVersion = prd?.version ?? null
+        engineeringLifecycle = await invoke('engineeringLifecycle:get', projectId, id)
+        await threadMessages.load(projectId, id)
+        clearLocalTurn()
+        agentRuns.setIdle(projectId, id)
+      } catch (error) {
+        clearLocalTurn()
+        agentRuns.setIdle(projectId, id)
+        errorMessage = error instanceof Error ? error.message : 'The PRD could not be generated.'
+      }
       return
     }
 
@@ -4069,15 +4333,25 @@
   async function reconcileReadySpec(): Promise<void> {
     const { projectId, id } = thread
     const workflowThreadId = isAssignmentAuditorThread ? (thread.coordinatorThreadId ?? id) : id
-    const [active, workflowThread, activeAssignment, projectThreads, workflow, activeBrainstorm] =
-      await Promise.all([
-        invoke('spec:getActive', projectId, workflowThreadId),
-        invoke('thread:get', projectId, workflowThreadId),
-        invoke('assignment:getActive', projectId, workflowThreadId),
-        invoke('thread:list', projectId),
-        invoke('brainstorm:getWorkflow', projectId, workflowThreadId),
-        invoke('brainstorm:getActive', projectId, workflowThreadId)
-      ])
+    const [
+      active,
+      workflowThread,
+      activeAssignment,
+      projectThreads,
+      workflow,
+      activeBrainstorm,
+      currentPrdWorkflow,
+      activePrd
+    ] = await Promise.all([
+      invoke('spec:getActive', projectId, workflowThreadId),
+      invoke('thread:get', projectId, workflowThreadId),
+      invoke('assignment:getActive', projectId, workflowThreadId),
+      invoke('thread:list', projectId),
+      invoke('brainstorm:getWorkflow', projectId, workflowThreadId),
+      invoke('brainstorm:getActive', projectId, workflowThreadId),
+      invoke('prd:getWorkflow', projectId, workflowThreadId),
+      invoke('prd:getActive', projectId, workflowThreadId)
+    ])
     if (!alive) return
     const staleSpecGeneration =
       active !== null &&
@@ -4090,7 +4364,15 @@
       if (providerStatus?.state !== 'error') providerStatus = null
     }
     brainstormWorkflow = workflow
+    prdWorkflow = currentPrdWorkflow
     brainstorm = activeBrainstorm
+    prd = activePrd
+    prdVersions = activePrd
+      ? await invoke('prd:listVersions', projectId, workflowThreadId, activePrd.id)
+      : []
+    if (activePrd && !prdVersions.some((candidate) => candidate.version === selectedPrdVersion)) {
+      selectedPrdVersion = activePrd.version
+    }
     brainstormGenerationFailed =
       workflowThread?.status === 'failed' &&
       workflow?.entryChoice !== undefined &&
@@ -4106,6 +4388,32 @@
       selectedBrainstormVersion = activeBrainstorm.version
     }
     assignment = activeAssignment
+    if (
+      engineeringLifecycle?.selection === 'run_all' &&
+      engineeringLifecycle.activeStage === 'achievement' &&
+      activeAssignment?.auditCycle?.status === 'completed'
+    ) {
+      engineeringLifecycle = await invoke(
+        'engineeringLifecycle:complete',
+        projectId,
+        workflowThreadId,
+        'achievement'
+      )
+      updateSettings(legacySettingsForLifecycle('none'))
+    }
+    if (
+      engineeringLifecycle?.selection === 'assignment' &&
+      engineeringLifecycle.activeStage === 'assignment' &&
+      activeAssignment?.status === 'completed'
+    ) {
+      engineeringLifecycle = await invoke(
+        'engineeringLifecycle:complete',
+        projectId,
+        workflowThreadId,
+        'assignment'
+      )
+      updateSettings(legacySettingsForLifecycle('none'))
+    }
     assignmentVersions = activeAssignment
       ? await invoke('assignment:listVersions', projectId, workflowThreadId, activeAssignment.id)
       : []
@@ -4115,7 +4423,7 @@
     assignmentAuditThread = activeAssignment?.auditorThreadId
       ? projectThreads.find((candidate) => candidate.id === activeAssignment.auditorThreadId)
       : undefined
-    achievementAuditThread = workflowThread?.auditorThreadId
+    durableAuditThread = workflowThread?.auditorThreadId
       ? projectThreads.find((candidate) => candidate.id === workflowThread.auditorThreadId)
       : undefined
     assignmentThreads = activeAssignment
@@ -4174,7 +4482,12 @@
         showSpecStudio = true
       }
     }
-    if (!active && workflowThread?.status !== 'failed' && !planningResumeRequested) {
+    if (
+      !active &&
+      workflowThread?.status !== 'failed' &&
+      !planningResumeRequested &&
+      (!engineeringLifecycle || engineeringLifecycle.selection === 'none')
+    ) {
       const resume =
         workflow?.stage === 'skipped'
           ? invoke('agent:chooseBrainstormEntry', projectId, workflowThreadId, 'spec')
@@ -4221,6 +4534,7 @@
         assignment.id
       )
       selectedAssignmentVersion = assignment.version
+      engineeringLifecycle = await invoke('engineeringLifecycle:get', thread.projectId, thread.id)
       return true
     } catch (error) {
       assignmentError =
@@ -4355,7 +4669,32 @@
           modelId: settings.modelId
         })
       }
+      if (
+        engineeringLifecycle?.humanGate === 'assignment_approval' &&
+        engineeringLifecycle.resumeToken
+      ) {
+        engineeringLifecycle = (
+          await invoke(
+            'engineeringLifecycle:resume',
+            thread.projectId,
+            thread.id,
+            engineeringLifecycle.resumeToken,
+            'continue'
+          )
+        ).state
+      }
       assignment = await invoke('agent:startAssignment', thread.projectId, thread.id)
+      if (
+        engineeringLifecycle?.selection === 'run_all' &&
+        engineeringLifecycle.activeStage === 'assignment'
+      ) {
+        engineeringLifecycle = await invoke(
+          'engineeringLifecycle:complete',
+          thread.projectId,
+          thread.id,
+          'assignment'
+        )
+      }
       assignmentVersions = await invoke(
         'assignment:listVersions',
         assignment.projectId,
@@ -4364,11 +4703,19 @@
       )
       selectedAssignmentVersion = assignment.version
       specReadyToolVisible = false
-      settings = {
-        ...settings,
-        engineeringMode: false,
-        assignmentMode: false
-      }
+      settings =
+        engineeringLifecycle?.selection === 'run_all'
+          ? {
+              ...settings,
+              engineeringMode: false,
+              assignmentMode: true,
+              loopMode: true
+            }
+          : {
+              ...settings,
+              engineeringMode: false,
+              assignmentMode: false
+            }
       commitSettings(settings)
     } catch (error) {
       assignmentError =
@@ -4429,6 +4776,7 @@
         assignment.id
       )
       selectedAssignmentVersion = assignment.version
+      engineeringLifecycle = await invoke('engineeringLifecycle:get', thread.projectId, thread.id)
       specReadyToolVisible = false
       studioDocument = 'assignment'
       showSpecStudio = true
@@ -4452,6 +4800,12 @@
       : [...brainstormVersions, updated]
     selectedBrainstormVersion = updated.version
     return updated
+  }
+
+  function isBrainstormDocument(
+    document: BrainstormDocument | EngineeringSpec
+  ): document is BrainstormDocument {
+    return 'sections' in document.content
   }
 
   async function chooseBrainstormEntry(choice: 'brainstorm' | 'spec'): Promise<void> {
@@ -4515,6 +4869,270 @@
 
   function selectBrainstormVersion(version: number): void {
     selectedBrainstormVersion = version
+  }
+
+  function openPrdStudio(): void {
+    if (!prd) return
+    selectedPrdVersion = prd.version
+    workspaceState.specAgentSidebarOpen = false
+    studioDocument = 'prd'
+    showSpecStudio = true
+  }
+
+  function selectPrdVersion(version: number): void {
+    selectedPrdVersion = version
+  }
+
+  async function choosePrdEntry(choice: 'brainstorm_first' | 'start_prd'): Promise<void> {
+    if (prdBusy) return
+    prdBusy = true
+    prdError = ''
+    try {
+      prdWorkflow = await invoke('prd:chooseEntry', thread.projectId, thread.id, choice)
+      if (choice === 'brainstorm_first') {
+        const workflow = await invoke('brainstorm:ensureWorkflow', thread.projectId, thread.id)
+        brainstormWorkflow = workflow.entryChoice
+          ? workflow
+          : await invoke('brainstorm:chooseEntry', thread.projectId, thread.id, 'brainstorm')
+      }
+    } catch (error) {
+      prdError = error instanceof Error ? error.message : 'The PRD entry choice could not be saved.'
+    } finally {
+      prdBusy = false
+    }
+  }
+
+  async function savePrd(content: PrdContent): Promise<void> {
+    if (!studioPrd || studioPrd.status !== 'draft') return
+    prdBusy = true
+    prdError = ''
+    try {
+      const updated = await invoke(
+        'prd:saveDraft',
+        studioPrd.projectId,
+        studioPrd.threadId,
+        studioPrd.id,
+        studioPrd.version,
+        content
+      )
+      prd = updated
+      prdVersions = prdVersions.map((candidate) =>
+        candidate.version === updated.version ? updated : candidate
+      )
+    } catch (error) {
+      prdError = error instanceof Error ? error.message : 'The PRD could not be saved.'
+    } finally {
+      prdBusy = false
+    }
+  }
+
+  function applyPrdDocument(updated: PrdDocument): void {
+    prd = updated
+    prdVersions = prdVersions.some((candidate) => candidate.version === updated.version)
+      ? prdVersions.map((candidate) =>
+          candidate.version === updated.version ? updated : candidate
+        )
+      : [...prdVersions, updated]
+    selectedPrdVersion = updated.version
+  }
+
+  async function addPrdAnnotation(section: PrdSectionId, body: string): Promise<void> {
+    if (!studioPrd || studioPrd.status !== 'draft') return
+    prdBusy = true
+    prdError = ''
+    try {
+      applyPrdDocument(
+        await invoke(
+          'prd:addAnnotation',
+          studioPrd.projectId,
+          studioPrd.threadId,
+          studioPrd.id,
+          studioPrd.version,
+          { section, body, author: 'user' }
+        )
+      )
+    } catch (error) {
+      prdError = error instanceof Error ? error.message : 'The PRD comment could not be added.'
+    } finally {
+      prdBusy = false
+    }
+  }
+
+  async function updatePrdAnnotation(annotationId: string, body: string): Promise<void> {
+    if (!studioPrd || studioPrd.status !== 'draft') return
+    prdBusy = true
+    prdError = ''
+    try {
+      applyPrdDocument(
+        await invoke(
+          'prd:updateAnnotation',
+          studioPrd.projectId,
+          studioPrd.threadId,
+          studioPrd.id,
+          studioPrd.version,
+          annotationId,
+          body
+        )
+      )
+    } catch (error) {
+      prdError = error instanceof Error ? error.message : 'The PRD comment could not be updated.'
+    } finally {
+      prdBusy = false
+    }
+  }
+
+  async function resolvePrdAnnotation(annotationId: string): Promise<void> {
+    if (!studioPrd || studioPrd.status !== 'draft') return
+    prdBusy = true
+    prdError = ''
+    try {
+      applyPrdDocument(
+        await invoke(
+          'prd:resolveAnnotation',
+          studioPrd.projectId,
+          studioPrd.threadId,
+          studioPrd.id,
+          studioPrd.version,
+          annotationId
+        )
+      )
+    } catch (error) {
+      prdError = error instanceof Error ? error.message : 'The PRD comment could not be resolved.'
+    } finally {
+      prdBusy = false
+    }
+  }
+
+  async function finalizePrd(): Promise<void> {
+    if (!studioPrd || studioPrd.status !== 'draft') return
+    prdBusy = true
+    prdError = ''
+    try {
+      if (
+        engineeringLifecycle?.humanGate === 'prd_finalization' &&
+        engineeringLifecycle.resumeToken
+      ) {
+        engineeringLifecycle = (
+          await invoke(
+            'engineeringLifecycle:resume',
+            thread.projectId,
+            thread.id,
+            engineeringLifecycle.resumeToken,
+            'continue'
+          )
+        ).state
+      }
+      const finalized = await invoke(
+        'prd:finalize',
+        studioPrd.projectId,
+        studioPrd.threadId,
+        studioPrd.id,
+        studioPrd.version
+      )
+      prd = finalized
+      prdVersions = prdVersions.map((candidate) =>
+        candidate.version === finalized.version ? finalized : candidate
+      )
+      if (engineeringLifecycle?.selection === 'prd') {
+        engineeringLifecycle = await invoke(
+          'engineeringLifecycle:complete',
+          thread.projectId,
+          thread.id,
+          'prd'
+        )
+        updateSettings(legacySettingsForLifecycle('none'))
+      } else if (engineeringLifecycle?.selection === 'run_all') {
+        engineeringLifecycle = await invoke(
+          'engineeringLifecycle:complete',
+          thread.projectId,
+          thread.id,
+          'prd'
+        )
+        updateSettings(legacySettingsForLifecycle('run_all'))
+        specFormulating = true
+        const generatedSpec = await invoke('agent:ensureInitialSpec', thread.projectId, thread.id)
+        await setActiveSpec(generatedSpec)
+        engineeringLifecycle = await invoke('engineeringLifecycle:get', thread.projectId, thread.id)
+        studioDocument = 'spec'
+        showSpecStudio = true
+      }
+    } catch (error) {
+      prdError = error instanceof Error ? error.message : 'The PRD could not be finalized.'
+    } finally {
+      specFormulating = false
+      prdBusy = false
+    }
+  }
+
+  async function openPrdInEditor(): Promise<void> {
+    if (!studioPrd) return
+    await invoke(
+      'prd:openInEditor',
+      studioPrd.projectId,
+      studioPrd.threadId,
+      studioPrd.id,
+      studioPrd.version
+    )
+  }
+
+  async function revealPrdInFiles(): Promise<void> {
+    if (!studioPrd) return
+    await invoke(
+      'prd:revealInFiles',
+      studioPrd.projectId,
+      studioPrd.threadId,
+      studioPrd.id,
+      studioPrd.version
+    )
+  }
+
+  async function openPrototypePreview(previewPath: string): Promise<void> {
+    if (isRemotePwaRuntime()) {
+      const configuredOrigin = await invoke('prototypePreview:getOrigin')
+      if (!configuredOrigin) {
+        throw new Error('Prototype preview origin is not configured for this deployment.')
+      }
+      let offset = 0
+      let size = 0
+      let mime = 'text/html; charset=utf-8'
+      const chunks: ArrayBuffer[] = []
+      while (offset === 0 || offset < size) {
+        const chunk = await invoke(
+          'prototypePreview:readChunk',
+          thread.projectId,
+          thread.id,
+          previewPath,
+          offset
+        )
+        if (
+          chunk.nextOffset <= offset ||
+          chunk.size < 1 ||
+          chunk.size > 25 * 1024 * 1024 ||
+          chunk.nextOffset > chunk.size
+        ) {
+          throw new Error('The prototype preview returned invalid chunk metadata.')
+        }
+        const binary = atob(chunk.base64)
+        const bytes = new Uint8Array(binary.length)
+        for (let index = 0; index < binary.length; index += 1) {
+          bytes[index] = binary.charCodeAt(index)
+        }
+        chunks.push(bytes.buffer)
+        offset = chunk.nextOffset
+        size = chunk.size
+        mime = chunk.mime
+      }
+      const url = URL.createObjectURL(new Blob(chunks, { type: mime }))
+      window.open(url, '_blank', 'noopener,noreferrer')
+      setTimeout(() => URL.revokeObjectURL(url), 60_000)
+      return
+    }
+    const origin = await invoke('prototypePreview:getOrigin')
+    if (!origin) {
+      errorMessage = 'Prototype preview origin is not configured for this deployment.'
+      return
+    }
+    await invoke('shell:openExternal', new URL(previewPath, `${origin}/`).toString())
   }
 
   async function saveBrainstorm(edited: BrainstormDocument): Promise<BrainstormDocument | null> {
@@ -4617,39 +5235,246 @@
     }
   }
 
+  const BRAINSTORM_REVIEW_ANCHOR_CONTEXT_LENGTH = 160
+  const BRAINSTORM_REVIEW_FALLBACK_LIMIT = 90_000
+  const DOCUMENT_WIDE_REVIEW_PATTERN =
+    /\b(?:entire|whole|overall|throughout|document-wide|full report|all sections|every section|reconsider everything|start over)\b/iu
+
+  interface BrainstormReviewAnnotationManifest {
+    id: string
+    section: BrainstormSectionId
+    comment: string
+    exactQuote: string
+    range: {
+      startLine?: number
+      endLine?: number
+      startOffset?: number
+      endOffset?: number
+    }
+    surroundingText: { before: string; after: string }
+    occurrenceCount: number
+    located: boolean
+  }
+
+  function brainstormContentMarkdown(draft: BrainstormDocument): string {
+    return [
+      `# ${draft.content.title}`,
+      '',
+      '## Session Snapshot',
+      '',
+      draft.content.summary,
+      '',
+      ...draft.content.sections.flatMap((section) => [
+        `## ${section.title}`,
+        '',
+        section.markdown,
+        ''
+      ])
+    ].join('\n')
+  }
+
+  function boundedBrainstormFallback(draft: BrainstormDocument): {
+    markdown: string
+    truncated: boolean
+  } {
+    const markdown = brainstormContentMarkdown(draft)
+    if (markdown.length <= BRAINSTORM_REVIEW_FALLBACK_LIMIT) {
+      return { markdown, truncated: false }
+    }
+    return {
+      markdown: markdown.slice(0, BRAINSTORM_REVIEW_FALLBACK_LIMIT),
+      truncated: true
+    }
+  }
+
+  function quoteOccurrences(value: string, quote: string): number[] {
+    const occurrences: number[] = []
+    let fromIndex = 0
+    while (fromIndex <= value.length - quote.length) {
+      const index = value.indexOf(quote, fromIndex)
+      if (index < 0) break
+      occurrences.push(index)
+      fromIndex = index + Math.max(quote.length, 1)
+    }
+    return occurrences
+  }
+
+  function brainstormReviewAnnotation(
+    draft: BrainstormDocument,
+    annotation: BrainstormDocument['annotations'][number]
+  ): BrainstormReviewAnnotationManifest {
+    const section = draft.content.sections.find((candidate) => candidate.id === annotation.section)
+    const quote = annotation.quote?.trim() ?? ''
+    const sectionLevel = Boolean(section && quote === section.title)
+    const searchableText = sectionLevel ? (section?.title ?? '') : (section?.markdown ?? '')
+    const occurrences = quote ? quoteOccurrences(searchableText, quote) : []
+    const preferredOffset = annotation.startOffset
+    const locatedIndex =
+      occurrences.length === 0
+        ? undefined
+        : occurrences.length === 1
+          ? occurrences[0]
+          : preferredOffset === undefined
+            ? undefined
+            : occurrences.reduce((nearest, candidate) =>
+                Math.abs(candidate - preferredOffset) < Math.abs(nearest - preferredOffset)
+                  ? candidate
+                  : nearest
+              )
+    const located = locatedIndex !== undefined
+
+    return {
+      id: annotation.id,
+      section: annotation.section,
+      comment: annotation.body,
+      exactQuote: quote,
+      range: {
+        startLine: annotation.startLine,
+        endLine: annotation.endLine,
+        startOffset: annotation.startOffset,
+        endOffset: annotation.endOffset
+      },
+      surroundingText: located
+        ? {
+            before: searchableText.slice(
+              Math.max(0, locatedIndex - BRAINSTORM_REVIEW_ANCHOR_CONTEXT_LENGTH),
+              locatedIndex
+            ),
+            after: searchableText.slice(
+              locatedIndex + quote.length,
+              locatedIndex + quote.length + BRAINSTORM_REVIEW_ANCHOR_CONTEXT_LENGTH
+            )
+          }
+        : { before: '', after: '' },
+      occurrenceCount: occurrences.length,
+      located
+    }
+  }
+
+  async function brainstormContentHash(draft: BrainstormDocument): Promise<string> {
+    const encoded = new TextEncoder().encode(JSON.stringify(draft.content))
+    const digest = await crypto.subtle.digest('SHA-256', encoded)
+    return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('')
+  }
+
+  async function brainstormReviewDiscussionContext(
+    draft: BrainstormDocument,
+    notes: string,
+    reviewChanges: BrainstormReviewChanges
+  ): Promise<string> {
+    const annotations = draft.annotations
+      .filter((annotation) => annotation.status === 'open')
+      .map((annotation) => brainstormReviewAnnotation(draft, annotation))
+    const fallbackReasons: string[] = []
+    if (annotations.some((annotation) => !annotation.located)) {
+      fallbackReasons.push('one or more annotation anchors could not be located reliably')
+    }
+    if (reviewChanges.edits.some((edit) => edit.truncated)) {
+      fallbackReasons.push('one or more edited fragments exceeded the compact payload limit')
+    }
+    if (!reviewChanges.baselineAvailable) {
+      fallbackReasons.push('this legacy report does not retain its generated-content baseline')
+    }
+    if (annotations.length === 0 && reviewChanges.edits.length === 0) {
+      fallbackReasons.push('the feedback has no local annotation or edit anchor')
+    }
+    if (DOCUMENT_WIDE_REVIEW_PATTERN.test(notes)) {
+      fallbackReasons.push('the reviewer requested document-wide reconsideration')
+    }
+
+    const manifest = {
+      schemaVersion: 1,
+      report: {
+        id: draft.id,
+        version: draft.version,
+        contentHash: await brainstormContentHash(draft),
+        updatedAt: draft.updatedAt
+      },
+      annotations,
+      edits: reviewChanges.edits,
+      ...(fallbackReasons.length > 0
+        ? {
+            fullReportFallback: {
+              reasons: fallbackReasons,
+              ...boundedBrainstormFallback(draft)
+            }
+          }
+        : {})
+    }
+
+    return [
+      'Continue the interactive Brainstorm discussion about this session report.',
+      'Treat the review feedback as discussion input, not as instructions for a one-pass rewrite. Address what is already clear. When any material intent, tradeoff, or requested change remains ambiguous, use the question tool and continue the back-and-forth until alignment is reached. Do not generate or rewrite the session report in this response. The application refreshes it after the discussion turn is complete.',
+      'The review manifest is authoritative for the report identity and content hash. Resolve annotations using their exact quote, range, and surrounding text together. If those anchors disagree, ask the reviewer instead of guessing. The edits are compact diffs from the agent-generated baseline. Do not ask for or reconstruct the full report when fullReportFallback is absent.',
+      `<brainstorm-review-manifest>\n${JSON.stringify(manifest)}\n</brainstorm-review-manifest>`
+    ].join('\n\n')
+  }
+
   async function submitBrainstormDecision(
     action: BrainstormDecisionAction,
     draft: BrainstormDocument,
-    notes: string
+    notes: string,
+    reviewChanges: BrainstormReviewChanges = { baselineAvailable: false, edits: [] }
   ): Promise<void> {
+    brainstormError = ''
+    showSpecStudio = false
+    if (action === 'review') {
+      const feedback =
+        notes.trim() ||
+        'I want to continue discussing this Brainstorm before preparing the specification.'
+      await sendMessage(
+        feedback,
+        [],
+        undefined,
+        undefined,
+        await brainstormReviewDiscussionContext(draft, notes, reviewChanges),
+        [],
+        [],
+        workflowActionPresentation('Review Brainstorm', notes)
+      )
+      return
+    }
     brainstormBusy = true
     brainstormDecisionInFlight = action
     agentRuns.setBusy(thread.projectId, thread.id, true, latestUserMessageId())
-    brainstormError = ''
-    showSpecStudio = false
     try {
-      if (action === 'review') {
-        applyBrainstormDocument(
-          await invoke(
-            'agent:reviewBrainstorm',
-            draft.projectId,
-            draft.threadId,
-            draft.id,
-            draft.version,
-            notes
+      const result = await invoke(
+        'agent:finalizeBrainstorm',
+        draft.projectId,
+        draft.threadId,
+        draft.id,
+        draft.version,
+        notes
+      )
+      engineeringLifecycle = await invoke('engineeringLifecycle:get', thread.projectId, thread.id)
+      if (isBrainstormDocument(result)) {
+        applyBrainstormDocument(result)
+        await reconcileReadySpec()
+        if (engineeringLifecycle?.activeStage === 'prd') {
+          const workflow = await invoke('prd:ensureWorkflow', thread.projectId, thread.id)
+          prdWorkflow = workflow
+          prd = await invoke(
+            'agent:generatePrd',
+            thread.projectId,
+            thread.id,
+            settings,
+            'Continue Run all by generating the PRD from the finalized Brainstorm and verified project context.',
+            [],
+            messageId()
           )
-        )
+          prdVersions = prd ? [prd] : []
+          selectedPrdVersion = prd?.version ?? null
+          engineeringLifecycle = await invoke(
+            'engineeringLifecycle:get',
+            thread.projectId,
+            thread.id
+          )
+        }
+        studioDocument = engineeringLifecycle?.activeStage === 'prd' ? 'prd' : 'brainstorm'
+        showSpecStudio = true
       } else {
-        await invoke(
-          'agent:finalizeBrainstorm',
-          draft.projectId,
-          draft.threadId,
-          draft.id,
-          draft.version,
-          notes
-        )
+        await reconcileReadySpec()
       }
-      await reconcileReadySpec()
     } catch (error) {
       brainstormError =
         error instanceof Error ? error.message : `The Brainstorm ${action} action failed.`
@@ -4658,6 +5483,30 @@
       brainstormBusy = false
       brainstormDecisionInFlight = null
       agentRuns.setIdle(thread.projectId, thread.id)
+    }
+  }
+
+  async function selectLofiPrototype(prototypeId: string): Promise<void> {
+    const current = brainstorm
+    if (!current || brainstormBusy) return
+    brainstormBusy = true
+    brainstormError = ''
+    try {
+      applyBrainstormDocument(
+        await invoke(
+          'agent:reviewBrainstorm',
+          current.projectId,
+          current.threadId,
+          current.id,
+          current.version,
+          `Generate one direct HiFi prototype H1 based on selected LoFi prototype ${prototypeId}. Preserve all existing LoFi prototypes and the aligned Brainstorm content.`
+        )
+      )
+    } catch (error) {
+      brainstormError =
+        error instanceof Error ? error.message : 'The HiFi prototype could not be generated.'
+    } finally {
+      brainstormBusy = false
     }
   }
 
@@ -4837,6 +5686,19 @@
     return harnessId
   }
 
+  /** True when the selected model exposes a fast tier, per the live catalog. */
+  function fastSupportedFor(
+    harnessId: string,
+    providerId: string,
+    modelId: string
+  ): boolean {
+    const provider = providers.find(
+      (candidate) => candidate.harnessId === harnessId && candidate.id === providerId
+    )
+    const model = provider?.models.find((candidate) => candidate.id === modelId)
+    return supportsFastInference(harnessId, providerId, model?.fastSupported)
+  }
+
   function assignmentWorkerAttentionStatus(
     task: AssignmentTask,
     worker: Thread
@@ -4869,12 +5731,19 @@
     worker: Thread,
     selected: ThreadSettings
   ): Promise<void> {
+    const normalized = normalizeFastInference(
+      selected,
+      selected.harnessId,
+      selected.providerId,
+      selected.modelId,
+      fastSupportedFor(selected.harnessId, selected.providerId, selected.modelId)
+    )
     try {
       const updatedWorker = await invoke(
         'thread:updateSettings',
         worker.projectId,
         worker.id,
-        selected
+        normalized
       )
       assignmentThreads = assignmentThreads.map((candidate) =>
         candidate.id === updatedWorker.id ? updatedWorker : candidate
@@ -5023,6 +5892,11 @@
     scrollEl?.scrollTo({ top: scrollEl.scrollHeight, behavior: 'smooth' })
   }
 
+  async function openDurableAuditWork(): Promise<void> {
+    coordinatorDockState.setAutoOpen(true)
+    contextSidebarState.openCoordinator(thread.projectId, thread.id, 'Audit coordinator')
+  }
+
   async function openCoordinatorAuditReport(
     report: AuditReport | null = auditReport
   ): Promise<void> {
@@ -5049,54 +5923,57 @@
       await generateDurableAssignmentAudit(selected)
       return
     }
-    if (achievementOnly || thread.achievementRole === 'auditor') {
+    if (achievementOnly) {
       await generateDurableAchievementAudit(selected, thread.coordinatorThreadId ?? thread.id)
       return
     }
-    const auditTab = contextSidebarState.openAuditSession(thread.projectId, thread.id, selected)
+    if (thread.achievementRole === 'auditor') {
+      await retryAssignmentAuditFromAuditor(selected)
+      return
+    }
+    await generateDurableImplementationAudit(selected)
+  }
+
+  async function generateDurableImplementationAudit(
+    selected: ThreadSettings,
+    coordinatorThreadId = thread.id
+  ): Promise<void> {
     auditBusy = true
     auditError = ''
     errorMessage = ''
     auditState = 'running'
-    auditTab.busy = true
-    auditTab.error = ''
     auditSettings = selected
     rendererRecovery.addRecentModel(
       modelKey(selected.harnessId, selected.providerId, selected.modelId)
     )
     try {
-      const session = await invoke(
-        'agent:ensureAuditSession',
+      durableAuditThread = await invoke(
+        'agent:ensureImplementationAuditorThread',
         thread.projectId,
-        thread.id,
-        auditTab.temporaryChatId,
+        coordinatorThreadId,
         selected
       )
-      auditTab.sessionId = session.sessionId
-      auditTab.sessionStarted = true
-      contextSidebarState.touchTemporaryChat(auditTab, session.expiresAt)
-      auditReport = await invoke('agent:generateAudit', thread.projectId, thread.id, {
-        settings: selected,
-        temporaryChatId: auditTab.temporaryChatId
+      if (thread.id === coordinatorThreadId) {
+        coordinatorDockState.setAutoOpen(true)
+        contextSidebarState.openCoordinator(thread.projectId, thread.id, 'Audit coordinator')
+      }
+      auditReport = await invoke('agent:generateAudit', thread.projectId, coordinatorThreadId, {
+        settings: selected
       })
       auditVersions = await invoke(
         'audit:listVersions',
         thread.projectId,
-        thread.id,
+        coordinatorThreadId,
         auditReport.id
       )
       auditState = 'report_ready'
     } catch (error) {
       auditState = 'offered'
-      const auditTabStillOpen = contextSidebarState.tabs.some((tab) => tab.id === auditTab.id)
-      if (auditTabStillOpen) {
-        const rawError = error instanceof Error ? error.message : 'The implementation audit failed.'
-        errorMessage = rawError.replace(/^Error invoking remote method '[^']+': Error:\s*/u, '')
-        auditTab.error = errorMessage
-      }
+      const rawError = error instanceof Error ? error.message : 'The implementation audit failed.'
+      errorMessage = rawError.replace(/^Error invoking remote method '[^']+': Error:\s*/u, '')
+      auditError = errorMessage
     } finally {
       auditBusy = false
-      auditTab.busy = false
     }
   }
 
@@ -5170,7 +6047,7 @@
       modelKey(selected.harnessId, selected.providerId, selected.modelId)
     )
     try {
-      achievementAuditThread = await invoke(
+      durableAuditThread = await invoke(
         'agent:ensureAchievementAuditorThread',
         thread.projectId,
         coordinatorThreadId,
@@ -5182,7 +6059,7 @@
         coordinatorThreadId,
         selected
       )
-      achievementAuditThread = result.auditorThread
+      durableAuditThread = result.auditorThread
       auditReport = result.report
       auditVersions = await invoke(
         'audit:listVersions',
@@ -5206,28 +6083,40 @@
       auditError = 'The coordinator could not be found.'
       return
     }
-    if (thread.achievementRole === 'auditor') {
+    if (thread.assignmentId !== undefined) {
+      await generateDurableAssignmentAudit(selected, thread.coordinatorThreadId)
+      return
+    }
+    const coordinator = await invoke('thread:get', thread.projectId, thread.coordinatorThreadId)
+    if (coordinator?.settings?.loopMode === true) {
       await generateDurableAchievementAudit(selected, thread.coordinatorThreadId)
       return
     }
-    await generateDurableAssignmentAudit(selected, thread.coordinatorThreadId)
+    await generateDurableImplementationAudit(selected, thread.coordinatorThreadId)
   }
 
   function changeAuditModel(selected: ThreadSettings): void {
-    auditSettings = selected
+    const normalized = normalizeFastInference(
+      selected,
+      selected.harnessId,
+      selected.providerId,
+      selected.modelId,
+      fastSupportedFor(selected.harnessId, selected.providerId, selected.modelId)
+    )
+    auditSettings = normalized
     const auditor = {
-      harnessId: selected.harnessId,
-      providerId: selected.providerId,
-      modelId: selected.modelId,
-      thinkingLevel: selected.thinkingLevel
+      harnessId: normalized.harnessId,
+      providerId: normalized.providerId,
+      modelId: normalized.modelId,
+      thinkingLevel: normalized.thinkingLevel
     }
-    rendererRecovery.addRecentModel(
-      modelKey(selected.harnessId, selected.providerId, selected.modelId)
+    rendererRecovery.setAuditModel(
+      modelKey(normalized.harnessId, normalized.providerId, normalized.modelId)
     )
     if (isAssignmentAuditorThread) {
       updateSettings({
         ...settings,
-        ...selected,
+        ...normalized,
         permissionLevel: 'auto_review',
         engineeringMode: false,
         assignmentMode: false,
@@ -5242,24 +6131,46 @@
   }
 
   function changeSpecModel(selected: ThreadSettings): void {
-    rendererRecovery.addRecentModel(
-      modelKey(selected.harnessId, selected.providerId, selected.modelId)
+    const normalized = normalizeFastInference(
+      selected,
+      selected.harnessId,
+      selected.providerId,
+      selected.modelId,
+      fastSupportedFor(selected.harnessId, selected.providerId, selected.modelId)
     )
-    updateSettings({ ...settings, ...selected })
+    rendererRecovery.addRecentModel(
+      modelKey(normalized.harnessId, normalized.providerId, normalized.modelId)
+    )
+    updateSettings({ ...settings, ...normalized })
   }
 
   /** Switch the thread's text model from the provider-error card's picker. */
   function changeThreadModel(selected: ThreadSettings): void {
-    rendererRecovery.addRecentModel(
-      modelKey(selected.harnessId, selected.providerId, selected.modelId)
+    const normalized = normalizeFastInference(
+      selected,
+      selected.harnessId,
+      selected.providerId,
+      selected.modelId,
+      fastSupportedFor(selected.harnessId, selected.providerId, selected.modelId)
     )
-    updateSettings({ ...settings, ...selected })
+    rendererRecovery.addRecentModel(
+      modelKey(normalized.harnessId, normalized.providerId, normalized.modelId)
+    )
+    updateSettings({ ...settings, ...normalized })
   }
 
   async function completeAudit(): Promise<void> {
     auditBusy = true
     try {
       await invoke('audit:complete', thread.projectId, thread.id)
+      if (engineeringLifecycle?.activeStage === 'achievement') {
+        engineeringLifecycle = await invoke(
+          'engineeringLifecycle:complete',
+          thread.projectId,
+          thread.id,
+          'achievement'
+        )
+      }
       settings = { ...settings, engineeringMode: false, loopMode: false }
       commitSettings(settings)
       await invoke('thread:updateSettings', thread.projectId, thread.id, settings)
@@ -5767,6 +6678,58 @@
         await setActiveSpec(active)
       }
       if (action === 'implement') {
+        const lifecycleSpecApproval =
+          (engineeringLifecycle?.activeStage === 'spec' ||
+            engineeringLifecycle?.humanGate === 'spec_approval') &&
+          (engineeringLifecycle.selection === 'spec' ||
+            engineeringLifecycle.selection === 'run_all')
+        if (lifecycleSpecApproval) {
+          if (
+            engineeringLifecycle?.humanGate === 'spec_approval' &&
+            engineeringLifecycle.resumeToken
+          ) {
+            engineeringLifecycle = (
+              await invoke(
+                'engineeringLifecycle:resume',
+                thread.projectId,
+                thread.id,
+                engineeringLifecycle.resumeToken,
+                'continue'
+              )
+            ).state
+          }
+          if (active.status === 'draft') {
+            active = await invoke(
+              'spec:setReview',
+              active.projectId,
+              active.threadId,
+              active.id,
+              active.version
+            )
+          }
+          if (active.status === 'in_review') {
+            active = await invoke(
+              'spec:approve',
+              active.projectId,
+              active.threadId,
+              active.id,
+              active.version
+            )
+          }
+          await setActiveSpec(active)
+          engineeringLifecycle = await invoke(
+            'engineeringLifecycle:complete',
+            thread.projectId,
+            thread.id,
+            'spec'
+          )
+          if (engineeringLifecycle.selection === 'run_all') {
+            await generateAssignmentDraft()
+          } else {
+            updateSettings(legacySettingsForLifecycle('none'))
+          }
+          return
+        }
         if (settings.assignmentMode) {
           if (assignment) openAssignmentStudio()
           else await generateAssignmentDraft()
@@ -5811,10 +6774,7 @@
         undefined,
         [],
         [],
-        {
-          action: specActionLabel(action),
-          ...(notes.trim() ? { body: notes.trim() } : {})
-        }
+        workflowActionPresentation(specActionLabel(action), notes)
       )
     } catch (error) {
       errorMessage =
@@ -5948,8 +6908,22 @@
             thinkingLevel: auditSettings.thinkingLevel
           }
         : undefined
+    // Fast inference only exists for models that actually support it. A model
+    // switch must never carry a `fast` mode into a model (or harness) without
+    // a fast tier — the resolved `*-fast` id would target a nonexistent model.
+    const effectiveIncoming = seniorModelChanged
+      ? normalizeFastInference(
+          incoming,
+          incoming.harnessId,
+          incoming.providerId,
+          incoming.modelId,
+          incoming.inferenceMode === 'fast'
+            ? fastSupportedFor(incoming.harnessId, incoming.providerId, incoming.modelId)
+            : undefined
+        )
+      : incoming
     const normalized: ThreadSettings = {
-      ...incoming,
+      ...effectiveIncoming,
       ...(loopJustEnabled && loopAuditor ? { loopAuditor } : {})
     }
     const harnessChanged = settings.harnessId !== normalized.harnessId
@@ -5963,6 +6937,22 @@
       // refetch so the newly selected harness's quota is current.
       contextUsageDisplay = undefined
       accountUsageFetchedAt = 0
+      // A provider card produced by the previous harness no longer applies once
+      // the user switches to another harness — otherwise the stale issue's
+      // message and links (e.g. a Codex usage-limit URL) linger under the badge
+      // of the newly selected one. Dismiss it so the next send surfaces fresh
+      // status for the current configuration.
+      if (
+        providerStatus &&
+        (providerStatus.state === 'waiting' || providerStatus.state === 'error') &&
+        providerStatus.issue.harnessId &&
+        providerStatus.issue.harnessId !== normalized.harnessId
+      ) {
+        providerStatus = null
+      }
+      if (proactiveAuthIssue && proactiveAuthIssue.harnessId !== normalized.harnessId) {
+        proactiveAuthIssue = null
+      }
     }
     if (seniorModelChanged && normalized.engineeringMode) {
       syncAgentRole('seniorEngineer', {
@@ -6232,6 +7222,7 @@
     editingText = ''
     editingMessageAttachments = []
     editingMessageProjectReferences = []
+    speechController.observeSent(`message-edit-${thread.id}-${msg.id}`, text)
     await sendMessage(text, attachments, undefined, undefined, undefined, [], projectReferences)
   }
 
@@ -6279,7 +7270,7 @@
    *  the question timeout; here we populate the chat and set a question-specific
    *  auto prompt. */
   function handleQuestionExplain(_requestId: string, question: AgentQuestion): void {
-    const selection = formatQuestionForExplain(question)
+    const selection = formatQuestionForTemporaryChat(question)
     contextSidebarState.openTemporaryChat(
       thread.projectId,
       thread.id,
@@ -6292,10 +7283,23 @@
     )
   }
 
+  /** Open a user-driven quick chat with the active agent question attached as
+   *  its selection and the surrounding thread available as read-only context. */
+  function handleQuestionQuickChat(_requestId: string, question: AgentQuestion): void {
+    contextSidebarState.openTemporaryChat(
+      thread.projectId,
+      thread.id,
+      'quick',
+      formatQuestionForTemporaryChat(question),
+      temporaryConversationContext(),
+      settings
+    )
+  }
+
   const EXPLAIN_QUESTION_PROMPT =
     'Explain this question and all of its options clearly so the user can understand it and make a more informed decision. Base the explanation on the surrounding context. Use simple, everyday language and avoid unnecessary technical jargon unless it is truly needed. Be clear, concise, and neutral — do not recommend a specific answer. Do not perform any execution, make code changes, run tests, or do anything beyond: read-only explanation focused only on this question and its options.'
 
-  function formatQuestionForExplain(question: AgentQuestion): string {
+  function formatQuestionForTemporaryChat(question: AgentQuestion): string {
     const parts: string[] = []
     if (question.header) parts.push(`Question: ${question.header}`)
     if (question.prompt) parts.push(`Prompt: ${question.prompt}`)
@@ -6679,6 +7683,8 @@
       x={editorPosition.x + RESPONSE_BUBBLE_SIZE / 2}
       y={editorPosition.y}
       initialComment={editorReference.comment ?? ''}
+      targetId={`response-comment-${thread.id}-${editorReference.id}`}
+      scope={{ kind: 'project', projectId: thread.projectId }}
       onDraftChange={(comment) => persistResponseReferenceCommentDraft(editorReference.id, comment)}
       onDone={(comment) => saveResponseReferenceComment(editorReference.id, comment)}
       onRemoveComment={() => removeResponseReferenceComment(editorReference.id)}
@@ -6714,12 +7720,14 @@
           error={brainstormError}
           agentMessagesOpen={workspaceState.specAgentSidebarOpen}
           specAvailable={spec !== null}
+          prdAvailable={prd !== null}
           assignmentAvailable={assignment !== null}
           auditAvailable={auditReport !== null}
           onBack={closeSpecStudio}
           onToggleAgentMessages={() =>
             (workspaceState.specAgentSidebarOpen = !workspaceState.specAgentSidebarOpen)}
           onOpenSpec={() => (studioDocument = 'spec')}
+          onOpenPrd={openPrdStudio}
           onOpenAssignment={openAssignmentStudio}
           onOpenAudit={openAuditStudio}
           onSelectVersion={selectBrainstormVersion}
@@ -6734,6 +7742,36 @@
           onSubmit={submitBrainstormDecision}
           onOpenInEditor={openBrainstormInEditor}
           onRevealInAppFile={revealBrainstormInAppFile}
+          onOpenPrototype={openPrototypePreview}
+        />
+      {/key}
+    {:else if studioDocument === 'prd' && studioPrd}
+      {#key `${studioPrd.id}:${studioPrd.version}:${studioPrd.updatedAt}`}
+        <PrdStudio
+          prd={studioPrd}
+          versions={prdVersions}
+          busy={prdBusy || busy}
+          error={prdError}
+          brainstormAvailable={brainstorm !== null}
+          specAvailable={spec !== null}
+          assignmentAvailable={assignment !== null}
+          auditAvailable={auditReport !== null}
+          agentMessagesOpen={workspaceState.specAgentSidebarOpen}
+          onBack={closeSpecStudio}
+          onToggleAgentMessages={() =>
+            (workspaceState.specAgentSidebarOpen = !workspaceState.specAgentSidebarOpen)}
+          onOpenBrainstorm={openBrainstormStudio}
+          onOpenSpec={() => (studioDocument = 'spec')}
+          onOpenAssignment={openAssignmentStudio}
+          onOpenAudit={openAuditStudio}
+          onSelectVersion={selectPrdVersion}
+          onSave={savePrd}
+          onAddAnnotation={addPrdAnnotation}
+          onUpdateAnnotation={updatePrdAnnotation}
+          onResolveAnnotation={resolvePrdAnnotation}
+          onFinalize={finalizePrd}
+          onOpenInEditor={openPrdInEditor}
+          onRevealInFiles={revealPrdInFiles}
         />
       {/key}
     {:else if studioDocument === 'audit' && auditReport}
@@ -6746,10 +7784,12 @@
           error={auditError}
           assignmentAvailable={assignment !== null}
           brainstormAvailable={brainstorm !== null}
+          prdAvailable={prd !== null}
           actionsAvailable={auditReportActionsAvailable}
           agentMessagesOpen={workspaceState.specAgentSidebarOpen}
           onBack={closeSpecStudio}
           onOpenBrainstorm={openBrainstormStudio}
+          onOpenPrd={openPrdStudio}
           onOpenSpec={() => (studioDocument = 'spec')}
           onOpenAssignment={openAssignmentStudio}
           onToggleAgentMessages={() =>
@@ -6773,6 +7813,7 @@
       {#key `${studioAssignment.id}:${studioAssignment.version}`}
         <AssignmentStudio
           assignment={studioAssignment}
+          threadId={thread.id}
           versions={assignmentVersions}
           history={assignmentStudioHistories.forDocument(
             `${studioAssignment.id}:${studioAssignment.version}`
@@ -6791,11 +7832,13 @@
           agentMessagesOpen={workspaceState.specAgentSidebarOpen}
           auditAvailable={auditReport !== null}
           brainstormAvailable={brainstorm !== null}
+          prdAvailable={prd !== null}
           auditActive={studioAssignment.version === assignment.version &&
             assignmentAuditState === 'offered'}
           finalComplete={assignmentFinalComplete}
           onBack={closeSpecStudio}
           onOpenBrainstorm={openBrainstormStudio}
+          onOpenPrd={openPrdStudio}
           onOpenSpec={() => (studioDocument = 'spec')}
           onToggleAgentMessages={() =>
             (workspaceState.specAgentSidebarOpen = !workspaceState.specAgentSidebarOpen)}
@@ -6826,6 +7869,11 @@
       {#key `${spec.id}:${spec.version}`}
         <SpecStudio
           {spec}
+          {providers}
+          projectId={thread.projectId}
+          {auditSettings}
+          favoriteModels={rendererRecovery.favoriteModels}
+          recentModels={rendererRecovery.recentModels}
           history={specStudioHistories.forDocument(`${spec.id}:${spec.version}`)}
           validation={specValidation}
           versions={specVersions}
@@ -6837,9 +7885,12 @@
           auditAvailable={auditReport !== null}
           implementationAuditAvailable={plainEngineeringAuditAvailable}
           implementationAuditReady={plainEngineeringAuditReady}
+          implementationAuditRunning={plainEngineeringAuditRunning}
           brainstormAvailable={brainstorm !== null}
+          prdAvailable={prd !== null}
           onBack={closeSpecStudio}
           onOpenBrainstorm={openBrainstormStudio}
+          onOpenPrd={openPrdStudio}
           onOpenInEditor={openSpecInEditor}
           onRevealInAppFile={revealSpecInAppFile}
           onToggleAgentMessages={() =>
@@ -6848,7 +7899,16 @@
           onGenerateAssignment={() => generateAssignmentDraft()}
           onOpenAudit={openAuditStudio}
           onRunImplementationAudit={() =>
-            plainEngineeringAuditReady ? openAuditStudio() : generateAudit(auditSettings)}
+            plainEngineeringAuditReady
+              ? openAuditStudio()
+              : plainEngineeringAuditRunning
+                ? openDurableAuditWork()
+                : generateAudit(auditSettings)}
+          onAuditModelChange={changeAuditModel}
+          onToggleFavorite={(providerId, modelId, harnessId) =>
+            rendererRecovery.toggleFavorite(modelKey(harnessId, providerId, modelId))}
+          onReorderFavorite={(draggedKey, targetKey, position) =>
+            rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
           onMarkImplementationComplete={completeAudit}
           onSave={saveSpec}
           onSelectVersion={selectSpecVersion}
@@ -6920,6 +7980,7 @@
                 <div id={`msg-${msg.id}`} class="group flex min-w-0 flex-col">
                   {#if editingMessageId === msg.id}
                     <RichMarkdownEditor
+                      bind:this={messageEditEditor}
                       bind:value={editingText}
                       class="w-full rounded-lg bg-surface px-4 py-2.5 text-sm whitespace-pre-wrap text-foreground ring-2 ring-info/60 outline-none"
                       ariaLabel="Edit message"
@@ -6933,6 +7994,12 @@
                       >
                         Cancel
                       </button>
+                      <VoiceInputButton
+                        targetId={`message-edit-${thread.id}-${msg.id}`}
+                        getTarget={messageEditSpeechTarget}
+                        scope={{ kind: 'project', projectId: thread.projectId }}
+                        disabled={busy}
+                      />
                       <button
                         class="rounded-md bg-primary px-2.5 py-1 text-xs font-semibold text-on-primary transition-opacity hover:opacity-90 disabled:opacity-50"
                         title="Send the edited message — replaces the conversation from here down"
@@ -7246,7 +8313,7 @@
                   {#if isTurnEnd}
                     <!-- Final text output + footer — hide only on the active in-progress turn -->
                     {#if isAssignmentAuditorThread}
-                      {#if !busy || !isLatest}
+                      {#if !conversationBusy || !isLatest}
                         {#if turnAuditReport}
                           <AuditGeneratedCard
                             state="report_ready"
@@ -7270,7 +8337,7 @@
                       {/if}
                     {:else}
                       {@const turnFinalText = getTurnFinalText(msgIndex)}
-                      {#if !busy || !isLatest}
+                      {#if !conversationBusy || !isLatest}
                         {#if turnFinalText}
                           <div
                             id={`msg-${msg.id}`}
@@ -7320,6 +8387,10 @@
                                   <Copy size={12} />
                                 {/if}
                               </button>
+                              <SpeechPlaybackButton
+                                messageId={msg.id}
+                                markdown={messageText(msg)}
+                              />
                               <button
                                 class="rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
                                 aria-label="Fork thread from this message"
@@ -7420,10 +8491,16 @@
             />
           {/if}
 
-          {#if delegatedWorkBusy || (!activePlanningEntry && !specFormulating && busy && latestTurnRenderableParts.length === 0)}
+          {#if brainstormReportRefreshing || delegatedWorkBusy || (!activePlanningEntry && !specFormulating && busy && latestTurnRenderableParts.length === 0)}
             <div class="flex items-center gap-2 text-sm text-dimmed">
               <Loader2 size={14} class="animate-spin text-info" />
-              <span>{delegatedWorkBusy ? delegatedActivityLabel : activityLabel}</span>
+              <span>
+                {brainstormReportRefreshing
+                  ? 'Refreshing Brainstorm report'
+                  : delegatedWorkBusy
+                    ? delegatedActivityLabel
+                    : activityLabel}
+              </span>
               <span class="text-[11px]">…</span>
             </div>
           {/if}
@@ -7486,7 +8563,7 @@
             <div class="mx-auto max-w-3xl">
               <AgentProviderStatusCard
                 status={visibleProviderStatus}
-                {providerName}
+                providerName={statusCardProviderName}
                 settings={chatMode
                   ? { ...settings, engineeringMode: false, assignmentMode: false, loopMode: false }
                   : settings}
@@ -7753,6 +8830,12 @@
                   rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
                 onViewReport={openCoordinatorAuditReport}
               />
+            {:else if engineeringLifecycle?.selection === 'prd' && prdWorkflow?.stage === 'choice_pending' && !busy}
+              <PrdEntryChoiceCard
+                busy={prdBusy}
+                onBrainstormFirst={() => choosePrdEntry('brainstorm_first')}
+                onStartPrd={() => choosePrdEntry('start_prd')}
+              />
             {:else if brainstormWorkflow?.entryChoice && !brainstorm && !spec && brainstormGenerationFailed && !busy}
               <BrainstormEntryChoiceCard
                 busy={brainstormBusy}
@@ -7797,6 +8880,7 @@
                   onDismiss={handleQuestionDismiss}
                   onUpdate={handleQuestionUpdate}
                   onExplain={handleQuestionExplain}
+                  onQuickChat={handleQuestionQuickChat}
                 />
               {/key}
             {:else if assignmentAuditState === 'running' && assignment && !achievementAutonomous}
@@ -7815,6 +8899,23 @@
                   rendererRecovery.toggleFavorite(modelKey(harnessId, providerId, modelId))}
                 onReorderFavorite={(draggedKey, targetKey, position) =>
                   rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
+                onViewReport={openAuditStudio}
+              />
+            {:else if plainEngineeringAuditRunning && !achievementAutonomous}
+              <AuditGeneratedCard
+                state="running"
+                settings={auditSettings}
+                {providers}
+                projectId={thread.projectId}
+                favoriteModels={rendererRecovery.favoriteModels}
+                recentModels={rendererRecovery.recentModels}
+                onRetry={generateDurableImplementationAudit}
+                onModelChange={changeAuditModel}
+                onToggleFavorite={(providerId, modelId, harnessId) =>
+                  rendererRecovery.toggleFavorite(modelKey(harnessId, providerId, modelId))}
+                onReorderFavorite={(draggedKey, targetKey, position) =>
+                  rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
+                onViewTrace={() => void openDurableAuditWork()}
                 onViewReport={openAuditStudio}
               />
             {:else if assignmentAuditState === 'failed' && assignment && !busy && !achievementAutonomous}
@@ -7876,12 +8977,20 @@
                 onReorderFavorite={(draggedKey, targetKey, position) =>
                   rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
               />
+            {:else if prd?.status === 'draft' && !busy && !specFormulating}
+              <PrdReadyCard busy={prdBusy} onReview={openPrdStudio} onFinalize={finalizePrd} />
             {:else if brainstormWorkflow?.stage === 'drafting' && brainstorm && !busy && !specFormulating}
               {@const readyBrainstorm = brainstorm}
               <BrainstormReadyCard
                 version={readyBrainstorm.version}
+                prototypes={readyBrainstorm.content.prototypes ?? []}
                 busy={brainstormBusy}
                 onReview={openBrainstormStudio}
+                onSelectPrototype={selectLofiPrototype}
+                onContinueWithoutHifi={openBrainstormStudio}
+                finalizeLabel={engineeringLifecycle?.activeStage === 'brainstorm'
+                  ? 'Finalize Brainstorm'
+                  : 'Prepare spec'}
                 onFinalize={() => submitBrainstormDecision('finalize', readyBrainstorm, '')}
               />
             {:else if assignment?.status === 'draft' && !busy && !specFormulating}
@@ -7952,6 +9061,9 @@
                   onStop={abortRun}
                   autofocus
                   showEngineeringMode={!chatMode}
+                  {engineeringLifecycle}
+                  onEngineeringLifecycleSelect={selectEngineeringLifecycle}
+                  onEngineeringLifecycleRetry={retryEngineeringLifecycle}
                   showChatModes={chatMode}
                   {settings}
                   onSettingsChange={updateSettings}
@@ -8105,7 +9217,7 @@
     <AchievementCoordinatorPanel
       specTitle={thread.title}
       specSummary={spec.content.resolutionSummary}
-      auditThread={achievementAuditThread}
+      auditThread={durableAuditThread}
       {auditState}
       reportAvailable={auditReport !== null}
       selectedThreadId={thread.id}
@@ -8119,6 +9231,34 @@
       onViewReport={openAuditStudio}
       onOpenThread={(auditor) => workspaceState.openThread(auditor, project)}
       onResume={resumeAchievementCoordination}
+      onModelChange={changeAuditModel}
+      onToggleFavorite={(providerId, modelId, harnessId) =>
+        rendererRecovery.toggleFavorite(modelKey(harnessId, providerId, modelId))}
+      onReorderFavorite={(draggedKey, targetKey, position) =>
+        rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
+    />
+  {/if}
+{/snippet}
+
+{#snippet auditCoordinatorPanel()}
+  {#if spec}
+    <AchievementCoordinatorPanel
+      mode="audit"
+      specTitle={thread.title}
+      specSummary={spec.content.resolutionSummary}
+      auditThread={durableAuditThread}
+      {auditState}
+      reportAvailable={auditReport !== null}
+      selectedThreadId={thread.id}
+      auditorSettings={auditSettings}
+      {providers}
+      projectId={thread.projectId}
+      favoriteModels={rendererRecovery.favoriteModels}
+      recentModels={rendererRecovery.recentModels}
+      coordinatorWorking={auditBusy}
+      onOpenAudit={() => void generateAudit(auditSettings)}
+      onViewReport={openAuditStudio}
+      onOpenThread={(auditor) => workspaceState.openThread(auditor, project)}
       onModelChange={changeAuditModel}
       onToggleFavorite={(providerId, modelId, harnessId) =>
         rendererRecovery.toggleFavorite(modelKey(harnessId, providerId, modelId))}
@@ -8235,6 +9375,15 @@
     </button>
   {/snippet}
 </Modal>
+
+<EngineeringFlowCancelModal
+  open={lifecycleCancelModalOpen}
+  oncancel={() => {
+    lifecycleCancelModalOpen = false
+    pendingLifecycleSelection = null
+  }}
+  onconfirm={confirmLifecycleReplacement}
+/>
 
 <style>
   .thread-view {

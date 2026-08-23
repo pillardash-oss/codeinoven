@@ -20,6 +20,7 @@
   import ScopeBucketView from './ScopeBucket.svelte'
   import ScopeLifecycleModal from './ScopeLifecycleModal.svelte'
   import ScopeCreateModal from './ScopeCreateModal.svelte'
+  import ScopeAdoptModal from './ScopeAdoptModal.svelte'
   import type { ScopeLifecycleAction } from '$shared/types'
 
   interface Props {
@@ -37,6 +38,7 @@
   let actionError = $state<string | null>(null)
   let lifecycleAction = $state<{ action: ScopeLifecycleAction; bucket: ScopeBucket } | null>(null)
   let createWorktreeTarget = $state<ScopeBucket | null>(null)
+  let adoptWorktreeTarget = $state<ScopeBucket | null>(null)
 
   let activeProject = $derived(
     scopeState.projectRecords.find((project) => project.id === scopeState.activeProjectId) ?? null
@@ -45,6 +47,24 @@
   $effect(() => {
     const projectId = scopeState.activeProjectId
     if (projectId) void scopeState.loadBoard(projectId)
+  })
+
+  // Keep the typed health of every managed worktree on the active board
+  // fresh so unhealthy scopes surface repair actions immediately.
+  let prevHealthSignature = ''
+  $effect(() => {
+    const projectId = scopeState.activeProjectId
+    const buckets = projectId ? scopeState.boards.get(projectId)?.buckets : undefined
+    const signature = projectId
+      ? `${projectId}:${buckets?.map((bucket) => (bucket.root.kind === 'worktree' ? bucket.id : '')).join(',')} `
+      : ''
+    if (!projectId || !buckets) return
+    if (signature === prevHealthSignature) return
+    prevHealthSignature = signature
+    for (const bucket of buckets) {
+      if (bucket.root.kind !== 'worktree') continue
+      void scopeState.worktreeHealth({ projectId, scopeBucketId: bucket.id }).catch(() => undefined)
+    }
   })
 
   $effect(() => {
@@ -295,6 +315,21 @@
     }
   }
 
+  async function repairWorktree(bucket: ScopeBucket): Promise<void> {
+    if (!scopeState.activeProjectId || bucket.root.kind !== 'worktree') return
+    try {
+      const health = await scopeState.repairWorktree({
+        projectId: scopeState.activeProjectId,
+        scopeBucketId: bucket.id
+      })
+      if (health.category !== 'healthy') {
+        actionError = health.detail ?? `The worktree is still ${health.category}.`
+      }
+    } catch (error) {
+      actionError = errorMessage(error, 'The worktree could not be repaired.')
+    }
+  }
+
   async function confirmDeleteBucket(): Promise<void> {
     if (!deleteBucketTarget || deleteBucketTarget.id === DEFAULT_SCOPE_BUCKET_ID) return
     try {
@@ -392,7 +427,9 @@
               onArchive={() => void toggleArchive(bucket, true)}
               onRestore={() => void toggleArchive(bucket, false)}
               onCreateWorktree={() => (createWorktreeTarget = bucket)}
+              onAdoptWorktree={() => (adoptWorktreeTarget = bucket)}
               onRetrySetup={() => void retrySetup(bucket)}
+              onRepairWorktree={() => void repairWorktree(bucket)}
               onDetach={() => openLifecycle(bucket, 'detach')}
               onRemoveWorktree={() => openLifecycle(bucket, 'remove-worktree')}
               onDeleteBranch={() => openLifecycle(bucket, 'delete-branch')}
@@ -526,5 +563,16 @@
     projectId={scopeState.activeProjectId}
     existingBucketId={createWorktreeTarget.id}
     onClose={() => (createWorktreeTarget = null)}
+  />
+{/if}
+
+{#if adoptWorktreeTarget && scopeState.activeProjectId}
+  <ScopeAdoptModal
+    open={adoptWorktreeTarget !== null}
+    projectId={scopeState.activeProjectId}
+    bucketId={adoptWorktreeTarget.id}
+    bucketName={adoptWorktreeTarget.name}
+    onClose={() => (adoptWorktreeTarget = null)}
+    onAdopted={() => (adoptWorktreeTarget = null)}
   />
 {/if}

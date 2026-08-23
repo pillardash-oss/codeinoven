@@ -11,7 +11,8 @@ import {
   Puzzle,
   Router,
   SlidersHorizontal,
-  UsersRound
+  UsersRound,
+  Volume2
 } from '@lucide/svelte'
 import type { SettingsSection } from './stores/renderer-recovery'
 
@@ -101,6 +102,14 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     description: 'Bridge settings for computer-control agents.',
     keywords: ['cua', 'bridge', 'automation'],
     icon: MonitorUp
+  },
+  {
+    id: 'sound',
+    section: 'sound',
+    title: 'Sound',
+    description: 'Local speech models, dictation, cleanup, history, and spoken responses.',
+    keywords: ['microphone', 'voice', 'asr', 'tts', 'recording'],
+    icon: Volume2
   },
   {
     id: 'keymap',
