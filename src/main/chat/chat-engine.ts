@@ -9559,6 +9559,16 @@ export class ChatEngine {
     try {
       const current = this.brainstormEngine.getVersion(projectId, threadId, brainstormId, version)
       if (!current || current.status !== 'draft') throw new Error('Brainstorm draft is unavailable')
+      const lifecycle = this.engineeringLifecycleEngine.get(projectId, threadId)
+      if (lifecycle?.humanGate === 'prototype_selection' && lifecycle.resumeToken) {
+        this.engineeringLifecycleEngine.resume(
+          projectId,
+          threadId,
+          lifecycle.resumeToken,
+          'continue',
+          'brainstorm'
+        )
+      }
       const thread = await this.threadManager.getThread(projectId, threadId)
       if (!thread?.settings) throw new Error('Sr. Engineer settings are missing')
       await this.threadManager.setStatus(projectId, threadId, 'planning')
@@ -9878,6 +9888,12 @@ export class ChatEngine {
             }
           : {})
       })
+      const lifecycle = this.engineeringLifecycleEngine.get(projectId, threadId)
+      if (lifecycle?.activeStage === 'prd') {
+        this.engineeringLifecycleEngine.advance(projectId, threadId, {
+          gate: 'prd_finalization'
+        })
+      }
       const completedMessage: AgentMessage = {
         ...startedMessage,
         parts: [
@@ -9986,7 +10002,20 @@ export class ChatEngine {
         await this.threadManager.setStatus(projectId, threadId, 'planning', { read: false })
         return finalized
       }
-      const lifecycle = this.engineeringLifecycleEngine.get(projectId, threadId)
+      let lifecycle = this.engineeringLifecycleEngine.get(projectId, threadId)
+      if (
+        lifecycle?.resumeToken &&
+        (lifecycle.humanGate === 'prototype_selection' ||
+          lifecycle.humanGate === 'brainstorm_finalization')
+      ) {
+        lifecycle = this.engineeringLifecycleEngine.resume(
+          projectId,
+          threadId,
+          lifecycle.resumeToken,
+          lifecycle.humanGate === 'prototype_selection' ? 'continue_without_hifi' : 'continue',
+          'brainstorm'
+        ).state
+      }
       if (lifecycle?.activeStage === 'brainstorm') {
         this.engineeringLifecycleEngine.completeStage(projectId, threadId, 'brainstorm')
         if (lifecycle.selection === 'run_all') this.prdEngine.ensureWorkflow(projectId, threadId)
@@ -10044,6 +10073,16 @@ export class ChatEngine {
     brainstorm: BrainstormDocument,
     sessionId?: string
   ): Promise<void> {
+    const lifecycle = this.engineeringLifecycleEngine.get(brainstorm.projectId, brainstorm.threadId)
+    if (lifecycle?.activeStage === 'brainstorm') {
+      const prototypes = brainstorm.content.prototypes ?? []
+      const needsPrototypeSelection =
+        prototypes.some((prototype) => prototype.fidelity === 'lofi') &&
+        !prototypes.some((prototype) => prototype.fidelity === 'hifi')
+      this.engineeringLifecycleEngine.advance(brainstorm.projectId, brainstorm.threadId, {
+        gate: needsPrototypeSelection ? 'prototype_selection' : 'brainstorm_finalization'
+      })
+    }
     await this.threadManager.setStatus(brainstorm.projectId, brainstorm.threadId, 'spec', {
       read: false
     })
@@ -10938,6 +10977,12 @@ export class ChatEngine {
           modelId: settings.modelId
         }
       })
+      const lifecycle = this.engineeringLifecycleEngine.get(projectId, coordinatorThreadId)
+      if (lifecycle?.activeStage === 'assignment') {
+        this.engineeringLifecycleEngine.advance(projectId, coordinatorThreadId, {
+          gate: 'assignment_approval'
+        })
+      }
       await this.threadManager.setStatus(projectId, coordinatorThreadId, 'spec', {
         read: false
       })
@@ -14179,6 +14224,12 @@ export class ChatEngine {
     spec: EngineeringSpec,
     fallbackSessionId?: string
   ): Promise<void> {
+    const lifecycle = this.engineeringLifecycleEngine.get(spec.projectId, spec.threadId)
+    if (lifecycle?.activeStage === 'spec') {
+      this.engineeringLifecycleEngine.advance(spec.projectId, spec.threadId, {
+        gate: 'spec_approval'
+      })
+    }
     const thread = await this.threadManager.getThread(spec.projectId, spec.threadId)
     try {
       await this.threadManager.setStatus(spec.projectId, spec.threadId, 'spec', {

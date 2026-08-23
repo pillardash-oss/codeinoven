@@ -3757,6 +3757,7 @@
         )
         prdVersions = prd ? [prd] : []
         selectedPrdVersion = prd?.version ?? null
+        engineeringLifecycle = await invoke('engineeringLifecycle:get', projectId, id)
         await threadMessages.load(projectId, id)
         clearLocalTurn()
         agentRuns.setIdle(projectId, id)
@@ -4302,15 +4303,9 @@
     assignment = activeAssignment
     if (
       engineeringLifecycle?.selection === 'run_all' &&
-      engineeringLifecycle.activeStage === 'assignment' &&
+      engineeringLifecycle.activeStage === 'achievement' &&
       activeAssignment?.auditCycle?.status === 'completed'
     ) {
-      engineeringLifecycle = await invoke(
-        'engineeringLifecycle:complete',
-        projectId,
-        workflowThreadId,
-        'assignment'
-      )
       engineeringLifecycle = await invoke(
         'engineeringLifecycle:complete',
         projectId,
@@ -4439,6 +4434,7 @@
         assignment.id
       )
       selectedAssignmentVersion = assignment.version
+      engineeringLifecycle = await invoke('engineeringLifecycle:get', thread.projectId, thread.id)
       return true
     } catch (error) {
       assignmentError =
@@ -4573,7 +4569,32 @@
           modelId: settings.modelId
         })
       }
+      if (
+        engineeringLifecycle?.humanGate === 'assignment_approval' &&
+        engineeringLifecycle.resumeToken
+      ) {
+        engineeringLifecycle = (
+          await invoke(
+            'engineeringLifecycle:resume',
+            thread.projectId,
+            thread.id,
+            engineeringLifecycle.resumeToken,
+            'continue'
+          )
+        ).state
+      }
       assignment = await invoke('agent:startAssignment', thread.projectId, thread.id)
+      if (
+        engineeringLifecycle?.selection === 'run_all' &&
+        engineeringLifecycle.activeStage === 'assignment'
+      ) {
+        engineeringLifecycle = await invoke(
+          'engineeringLifecycle:complete',
+          thread.projectId,
+          thread.id,
+          'assignment'
+        )
+      }
       assignmentVersions = await invoke(
         'assignment:listVersions',
         assignment.projectId,
@@ -4655,6 +4676,7 @@
         assignment.id
       )
       selectedAssignmentVersion = assignment.version
+      engineeringLifecycle = await invoke('engineeringLifecycle:get', thread.projectId, thread.id)
       specReadyToolVisible = false
       studioDocument = 'assignment'
       showSpecStudio = true
@@ -4886,6 +4908,20 @@
     prdBusy = true
     prdError = ''
     try {
+      if (
+        engineeringLifecycle?.humanGate === 'prd_finalization' &&
+        engineeringLifecycle.resumeToken
+      ) {
+        engineeringLifecycle = (
+          await invoke(
+            'engineeringLifecycle:resume',
+            thread.projectId,
+            thread.id,
+            engineeringLifecycle.resumeToken,
+            'continue'
+          )
+        ).state
+      }
       const finalized = await invoke(
         'prd:finalize',
         studioPrd.projectId,
@@ -4916,6 +4952,7 @@
         specFormulating = true
         const generatedSpec = await invoke('agent:ensureInitialSpec', thread.projectId, thread.id)
         await setActiveSpec(generatedSpec)
+        engineeringLifecycle = await invoke('engineeringLifecycle:get', thread.projectId, thread.id)
         studioDocument = 'spec'
         showSpecStudio = true
       }
@@ -5327,6 +5364,11 @@
           )
           prdVersions = prd ? [prd] : []
           selectedPrdVersion = prd?.version ?? null
+          engineeringLifecycle = await invoke(
+            'engineeringLifecycle:get',
+            thread.projectId,
+            thread.id
+          )
         }
         studioDocument = engineeringLifecycle?.activeStage === 'prd' ? 'prd' : 'brainstorm'
         showSpecStudio = true
@@ -6488,10 +6530,25 @@
       }
       if (action === 'implement') {
         const lifecycleSpecApproval =
-          engineeringLifecycle?.activeStage === 'spec' &&
+          (engineeringLifecycle?.activeStage === 'spec' ||
+            engineeringLifecycle?.humanGate === 'spec_approval') &&
           (engineeringLifecycle.selection === 'spec' ||
             engineeringLifecycle.selection === 'run_all')
         if (lifecycleSpecApproval) {
+          if (
+            engineeringLifecycle?.humanGate === 'spec_approval' &&
+            engineeringLifecycle.resumeToken
+          ) {
+            engineeringLifecycle = (
+              await invoke(
+                'engineeringLifecycle:resume',
+                thread.projectId,
+                thread.id,
+                engineeringLifecycle.resumeToken,
+                'continue'
+              )
+            ).state
+          }
           if (active.status === 'draft') {
             active = await invoke(
               'spec:setReview',

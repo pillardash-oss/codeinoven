@@ -15,10 +15,11 @@ const MAX_TOKEN_LENGTH = 256
 const STAGES = new Set<EngineeringLifecycleStage>(ENGINEERING_LIFECYCLE_STAGE_VALUES)
 const NEXT_STAGE_AFTER_GATE: Partial<Record<EngineeringLifecycleGate, EngineeringLifecycleStage>> =
   {
-    brainstorm_finalization: 'prd',
-    prd_finalization: 'spec',
-    spec_approval: 'assignment',
-    assignment_approval: 'achievement'
+    prototype_selection: 'brainstorm',
+    brainstorm_finalization: 'brainstorm',
+    prd_finalization: 'prd',
+    spec_approval: 'spec',
+    assignment_approval: 'assignment'
   }
 const NEXT_STAGE: Partial<Record<EngineeringLifecycleStage, EngineeringLifecycleStage>> = {
   brainstorm: 'prd',
