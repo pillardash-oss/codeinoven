@@ -201,6 +201,10 @@ import {
   SPEC_GENERATION_SCHEMA
 } from '../../lib/agent-tools'
 import { BrainstormEngine } from '../../lib/engines/brainstorm-engine'
+import {
+  finalizePrototypeArtifact,
+  planPrototypeGeneration
+} from '../../lib/prototypes/prototype-artifacts'
 import { PRD_DOCUMENT_JSON_SCHEMA, parseGeneratedPrdContent } from '../../lib/prd/prd-validation'
 import {
   BRAINSTORM_DOCUMENT_JSON_SCHEMA,
@@ -10203,8 +10207,31 @@ export class ChatEngine {
     // authoritative copy through BrainstormEngine.
     const brainstormWriteRoute = brainstormDocumentWriteEnabled(driverId)
     let revisionPathInstruction = ''
+    let featureSlug: string | undefined
+    const lifecycle = this.engineeringLifecycleEngine.get(projectId, threadId)
+    const prototypeMentioned = /\b(prototype|wireframe|mockup|lofi|lo-fi|hifi|hi-fi)\b/iu.test(
+      source
+    )
+    const prototypeFidelity =
+      lifecycle?.selection === 'run_all'
+        ? 'lofi'
+        : /\b(hifi|hi-fi|high[ -]fidelity)\b/iu.test(source)
+          ? 'hifi'
+          : prototypeMentioned
+            ? 'lofi'
+            : undefined
+    const requestedPrototypeCount = prototypeFidelity
+      ? Number(
+          /\b([1-9]|1[0-9]|20)\s+(?:lofi|lo-fi|hifi|hi-fi|prototype|wireframe|mockup)/iu.exec(
+            source
+          )?.[1]
+        ) || undefined
+      : undefined
+    const prototypeBatches = prototypeFidelity
+      ? planPrototypeGeneration(prototypeFidelity, requestedPrototypeCount)
+      : []
     if (brainstormWriteRoute) {
-      const featureSlug = await ensureFeatureSlug(this.database, projectId, threadId)
+      featureSlug = await ensureFeatureSlug(this.database, projectId, threadId)
       const revisionRelativePath = join(
         featureArtifactDirectory(featureSlug),
         'versions',
@@ -10213,12 +10240,61 @@ export class ChatEngine {
       revisionPathInstruction = [
         '',
         'Session-report revision path (write the report Markdown to EXACTLY this project-relative path, creating parent directories as needed):',
-        revisionRelativePath
+        revisionRelativePath,
+        ...(prototypeBatches.length > 0
+          ? [
+              '',
+              'Prototype work was explicitly requested. Generate dependency-free HTML/CSS/JavaScript without installing packages. Reuse the existing project stack only when it is already available without setup.',
+              ...prototypeBatches
+                .flat()
+                .map(
+                  (item) =>
+                    `Create ${item.fidelity} prototype ${item.id} at .cio/specs/${featureSlug}/prototypes/${item.id}/index.html and include matching metadata for ${item.id} in the Brainstorm prototypes collection.`
+                ),
+              'Do not write anywhere else. Keep each concept self-contained and visibly identified.'
+            ]
+          : [])
       ].join('\n')
     }
     const finish = async (content: BrainstormContent): Promise<BrainstormContent> => {
-      await this.completeBrainstormConversationTurn(projectId, threadId, content, settings)
-      return content
+      let completed: BrainstormContent = {
+        title: content.title,
+        summary: content.summary,
+        sections: content.sections
+      }
+      if (prototypeBatches.length > 0) {
+        if (!brainstormWriteRoute || !featureSlug) {
+          throw new Error('This harness cannot create scoped prototype artifacts')
+        }
+        const declared = new Map(
+          (content.prototypes ?? []).map((prototype) => [prototype.id, prototype])
+        )
+        const projectRoot = requireLocalProject(this.database, projectId).path
+        const prototypes: NonNullable<BrainstormContent['prototypes']> = []
+        for (const batch of prototypeBatches) {
+          const finalized = await Promise.all(
+            batch.map((item) => {
+              const candidate = declared.get(item.id)
+              return finalizePrototypeArtifact({
+                projectRoot,
+                featureSlug,
+                prototypeId: item.id,
+                fidelity: item.fidelity,
+                title:
+                  candidate?.title || `${item.fidelity === 'lofi' ? 'LoFi' : 'HiFi'} ${item.id}`,
+                entryFile: 'index.html',
+                ...(candidate?.parentPrototypeId
+                  ? { parentPrototypeId: candidate.parentPrototypeId }
+                  : {})
+              })
+            })
+          )
+          prototypes.push(...finalized)
+        }
+        completed = { ...content, prototypes }
+      }
+      await this.completeBrainstormConversationTurn(projectId, threadId, completed, settings)
+      return completed
     }
     const structuredOutputKey = `${driverId}:${settings.providerId}:${settings.modelId}`
     const isZenFreeModel =
@@ -10280,6 +10356,9 @@ export class ChatEngine {
                 BRAINSTORM_JSON_FALLBACK_SYSTEM_PROMPT
               ].join('\n\n'),
           BRAINSTORM_DECISION_INTEGRITY_SYSTEM_PROMPT,
+          prototypeBatches.length > 0
+            ? 'Prototype content is part of this Brainstorm. Include only the requested prototype entries.'
+            : 'No prototype was requested. Do not include a prototypes field, prototype section, placeholder, or prototype wording.',
           behaviorPrompt
         ]
           .filter(Boolean)
