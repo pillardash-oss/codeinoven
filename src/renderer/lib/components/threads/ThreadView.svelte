@@ -51,6 +51,7 @@
   import FileTypeIcon from '../files/FileTypeIcon.svelte'
   import FolderTypeIcon from '../files/FolderTypeIcon.svelte'
   import RichMarkdownEditor from '../shared/RichMarkdownEditor.svelte'
+  import VoiceInputButton from '../speech/VoiceInputButton.svelte'
   import WorkingTrace from './WorkingTrace.svelte'
   import FindInSurface from './FindInSurface.svelte'
   import ContinueInProjectModal from './ContinueInProjectModal.svelte'
@@ -1077,6 +1078,14 @@
     {}
   )
   let commentEditorReferenceId = $state<string | null>(null)
+  let messageEditEditor = $state<RichMarkdownEditor>()
+
+  function messageEditSpeechTarget() {
+    if (!editingMessageId) return null
+    return (
+      messageEditEditor?.speechEditorTarget(`message-edit-${thread.id}-${editingMessageId}`) ?? null
+    )
+  }
 
   function responseElementFor(node: Node | null): HTMLElement | null {
     const element = node instanceof Element ? node : node?.parentElement
@@ -6886,6 +6895,8 @@
       x={editorPosition.x + RESPONSE_BUBBLE_SIZE / 2}
       y={editorPosition.y}
       initialComment={editorReference.comment ?? ''}
+      targetId={`response-comment-${thread.id}-${editorReference.id}`}
+      scope={{ kind: 'project', projectId: thread.projectId }}
       onDraftChange={(comment) => persistResponseReferenceCommentDraft(editorReference.id, comment)}
       onDone={(comment) => saveResponseReferenceComment(editorReference.id, comment)}
       onRemoveComment={() => removeResponseReferenceComment(editorReference.id)}
@@ -7127,6 +7138,7 @@
                 <div id={`msg-${msg.id}`} class="group flex min-w-0 flex-col">
                   {#if editingMessageId === msg.id}
                     <RichMarkdownEditor
+                      bind:this={messageEditEditor}
                       bind:value={editingText}
                       class="w-full rounded-lg bg-surface px-4 py-2.5 text-sm whitespace-pre-wrap text-foreground ring-2 ring-info/60 outline-none"
                       ariaLabel="Edit message"
@@ -7140,6 +7152,12 @@
                       >
                         Cancel
                       </button>
+                      <VoiceInputButton
+                        targetId={`message-edit-${thread.id}-${msg.id}`}
+                        getTarget={messageEditSpeechTarget}
+                        scope={{ kind: 'project', projectId: thread.projectId }}
+                        disabled={busy}
+                      />
                       <button
                         class="rounded-md bg-primary px-2.5 py-1 text-xs font-semibold text-on-primary transition-opacity hover:opacity-90 disabled:opacity-50"
                         title="Send the edited message — replaces the conversation from here down"

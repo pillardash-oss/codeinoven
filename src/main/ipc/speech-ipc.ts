@@ -58,6 +58,16 @@ export function registerSpeechIpc(
       service.beginCapture(scope(rawScope), boundedString(rawMimeType, 'MIME type', 128))
     )
   )
+  ipcMain.handle(
+    'speech:recordPermissionFailure',
+    (_event, rawScope: unknown, rawMessage: unknown) =>
+      speechResult(() =>
+        service.recordPermissionFailure(
+          scope(rawScope),
+          boundedString(rawMessage, 'Permission failure', 1_000)
+        )
+      )
+  )
   ipcMain.handle('speech:appendCapture', (_event, rawSessionId: unknown, rawChunk: unknown) =>
     speechResult(() => {
       const sessionId = entityId(rawSessionId, 'Capture session id')
@@ -82,6 +92,16 @@ export function registerSpeechIpc(
         boundedString(rawMessage, 'Capture failure', 1_000)
       )
     )
+  )
+  ipcMain.handle(
+    'speech:markAttemptFailure',
+    (_event, rawAttemptId: unknown, rawMessage: unknown) =>
+      speechResult(() =>
+        service.markAttemptFailure(
+          entityId(rawAttemptId, 'Attempt id'),
+          boundedString(rawMessage, 'Attempt failure', 1_000)
+        )
+      )
   )
   ipcMain.handle(
     'speech:transcribe',
@@ -126,9 +146,11 @@ export function registerSpeechIpc(
       'speech:getCapabilities',
       'speech:getCatalog',
       'speech:beginCapture',
+      'speech:recordPermissionFailure',
       'speech:appendCapture',
       'speech:finishCapture',
       'speech:failCapture',
+      'speech:markAttemptFailure',
       'speech:transcribe',
       'speech:getHistory',
       'speech:downloadArtifact',

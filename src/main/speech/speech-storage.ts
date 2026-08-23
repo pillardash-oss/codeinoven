@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { open, mkdir, readFile, readdir, rename, rm, stat } from 'node:fs/promises'
+import { open, mkdir, readFile, readdir, rename, rm, stat, statfs } from 'node:fs/promises'
 import type { FileHandle } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { SpeechHistoryPage, SpeechRecordingAttempt, SpeechScope } from '../../lib/speech/types'
@@ -18,6 +18,7 @@ interface CaptureSession {
   handle: FileHandle
   byteSize: number
   startedAt: number
+  lastDiskCheckBytes: number
 }
 
 export interface SpeechCaptureStart {
@@ -84,11 +85,39 @@ export class SpeechStorage {
       stagingPath,
       handle,
       byteSize: 0,
-      startedAt: now
+      startedAt: now,
+      lastDiskCheckBytes: 0
     })
     this.index.attempts.push(attempt)
     await this.persistIndex()
     return { sessionId, attempt: structuredClone(attempt) }
+  }
+
+  async recordPermissionFailure(
+    scope: SpeechScope,
+    message: string
+  ): Promise<SpeechRecordingAttempt> {
+    const now = Date.now()
+    const attempt: SpeechRecordingAttempt = {
+      id: randomUUID(),
+      createdAt: now,
+      updatedAt: now,
+      stage: 'failed',
+      scope,
+      audioAvailable: false,
+      byteSize: 0,
+      retries: [],
+      errors: [
+        {
+          stage: 'permission',
+          occurredAt: now,
+          error: { code: 'permission-denied', message, retryable: true }
+        }
+      ]
+    }
+    this.index.attempts.push(attempt)
+    await this.persistIndex()
+    return structuredClone(attempt)
   }
 
   async appendCapture(sessionId: string, chunk: Uint8Array): Promise<number> {
@@ -97,6 +126,14 @@ export class SpeechStorage {
     }
     const session = this.sessions.get(sessionId)
     if (!session) throw new Error('Capture session is stale or unknown.')
+    if (session.byteSize - session.lastDiskCheckBytes >= 8 * 1024 * 1024) {
+      const filesystem = await statfs(this.root)
+      const availableBytes = filesystem.bavail * filesystem.bsize
+      if (availableBytes < 64 * 1024 * 1024) {
+        throw new Error('Insufficient disk space to continue recording.')
+      }
+      session.lastDiskCheckBytes = session.byteSize
+    }
     await session.handle.write(chunk)
     session.byteSize += chunk.byteLength
     return session.byteSize

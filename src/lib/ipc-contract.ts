@@ -876,6 +876,10 @@ export interface IpcInvokeContract {
     [scope: import('./speech/types').SpeechScope, mimeType: string],
     import('./speech/types').SpeechResult<import('./speech/types').SpeechCaptureSessionInfo>
   >
+  'speech:recordPermissionFailure': Contract<
+    [scope: import('./speech/types').SpeechScope, message: string],
+    import('./speech/types').SpeechResult<import('./speech/types').SpeechRecordingAttempt>
+  >
   'speech:appendCapture': Contract<
     [sessionId: string, chunk: Uint8Array<ArrayBuffer>],
     import('./speech/types').SpeechResult<number>
@@ -886,6 +890,10 @@ export interface IpcInvokeContract {
   >
   'speech:failCapture': Contract<
     [sessionId: string, message: string],
+    import('./speech/types').SpeechResult<import('./speech/types').SpeechRecordingAttempt>
+  >
+  'speech:markAttemptFailure': Contract<
+    [attemptId: string, message: string],
     import('./speech/types').SpeechResult<import('./speech/types').SpeechRecordingAttempt>
   >
   'speech:transcribe': Contract<

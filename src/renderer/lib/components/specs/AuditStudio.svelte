@@ -21,6 +21,7 @@
   } from '$shared/types'
   import { exportAuditReportMarkdown } from '$shared/audit/audit-markdown'
   import RichMarkdownEditor from '../shared/RichMarkdownEditor.svelte'
+  import VoiceInputButton from '../speech/VoiceInputButton.svelte'
   import PopoverDragHandle from '../ui/PopoverDragHandle.svelte'
   import EditableMarkdown from './EditableMarkdown.svelte'
   import StudioSelectionActions from './StudioSelectionActions.svelte'
@@ -118,6 +119,29 @@
   let pendingAnnotation = $state<PendingAnnotation | null>(null)
   let editingAnnotation = $state<AuditAnnotation | null>(null)
   let editingAnnotationBody = $state('')
+  let annotationEditor = $state<RichMarkdownEditor>()
+  let editingAnnotationEditor = $state<RichMarkdownEditor>()
+  let reviewNotesEditor = $state<RichMarkdownEditor>()
+  const pendingSpeechTargetId = `audit-annotation-${crypto.randomUUID()}`
+  const reviewSpeechTargetId = `audit-review-${crypto.randomUUID()}`
+  const speechScope = $derived({ kind: 'project', projectId: report.projectId } as const)
+
+  function pendingSpeechTarget() {
+    return annotationEditor?.speechEditorTarget(pendingSpeechTargetId) ?? null
+  }
+
+  function editingSpeechTarget() {
+    if (!editingAnnotation) return null
+    return (
+      editingAnnotationEditor?.speechEditorTarget(
+        `audit-annotation-edit-${editingAnnotation.id}`
+      ) ?? null
+    )
+  }
+
+  function reviewSpeechTarget() {
+    return reviewNotesEditor?.speechEditorTarget(reviewSpeechTargetId) ?? null
+  }
   let editingAnnotationPosition = $state<{ x: number; y: number } | null>(null)
   let annotationEditMode = $state(false)
   let annotationMarkers = $state<Array<{ annotation: AuditAnnotation; x: number; y: number }>>([])
@@ -742,6 +766,7 @@
         <label class="min-w-0 flex-1 text-[11px] font-medium text-muted">
           Additional instructions for the primary agent
           <RichMarkdownEditor
+            bind:this={reviewNotesEditor}
             class="mt-1 min-h-14 w-full rounded-lg border bg-elevated px-3 py-2 text-xs"
             bind:value={reviewNotes}
             placeholder="Optional rework instructions"
@@ -755,6 +780,12 @@
         >
           Cancel
         </button>
+        <VoiceInputButton
+          targetId={reviewSpeechTargetId}
+          getTarget={reviewSpeechTarget}
+          scope={speechScope}
+          disabled={busy || reviewSubmitting}
+        />
         <button
           class="rounded-lg bg-primary px-3 py-2 text-xs font-semibold text-on-primary disabled:opacity-50"
           disabled={busy || reviewSubmitting}
@@ -1202,6 +1233,7 @@
     </blockquote>
     {#if workflowActionsVisible}
       <RichMarkdownEditor
+        bind:this={annotationEditor}
         class="mt-2 min-h-16 w-full resize-y rounded-lg border bg-elevated px-2.5 py-2 text-xs outline-none focus:border-primary"
         bind:value={annotationBody}
         placeholder="Leave your review note…"
@@ -1223,6 +1255,12 @@
           onclick={closePendingAnnotation}>Cancel</button
         >
         {#if workflowActionsVisible}
+          <VoiceInputButton
+            targetId={pendingSpeechTargetId}
+            getTarget={pendingSpeechTarget}
+            scope={speechScope}
+            disabled={busy}
+          />
           <button
             class="rounded-lg bg-primary px-2.5 py-1.5 text-xs font-semibold text-on-primary disabled:opacity-50"
             disabled={busy || !annotationBody.trim()}
@@ -1273,6 +1311,7 @@
     {/if}
     {#if annotationEditMode}
       <RichMarkdownEditor
+        bind:this={editingAnnotationEditor}
         class="mt-3 min-h-24 w-full resize-y rounded-lg border bg-elevated px-3 py-2 text-xs outline-none focus:border-primary"
         bind:value={editingAnnotationBody}
         ariaLabel="Audit annotation body"
@@ -1300,6 +1339,11 @@
               title="Cancel editing"
               onclick={() => (annotationEditMode = false)}>Cancel</button
             >
+            <VoiceInputButton
+              targetId={`audit-annotation-edit-${editingAnnotation.id}`}
+              getTarget={editingSpeechTarget}
+              scope={speechScope}
+            />
             <button
               class="rounded-lg bg-primary px-2.5 py-1.5 text-xs font-semibold text-on-primary disabled:opacity-50"
               disabled={!editingAnnotationBody.trim()}

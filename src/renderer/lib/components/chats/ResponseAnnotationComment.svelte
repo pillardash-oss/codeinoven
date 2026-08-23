@@ -2,6 +2,9 @@
   import { Check, Trash2, X } from '@lucide/svelte'
   import { draggablePopover } from '$lib/draggable-popover.svelte'
   import PopoverDragHandle from '../ui/PopoverDragHandle.svelte'
+  import VoiceInputButton from '../speech/VoiceInputButton.svelte'
+  import { plainTextEditorTarget } from '../../speech/editor-target'
+  import type { SpeechScope } from '../../../../lib/speech/types'
 
   interface Props {
     /** Horizontal center of the anchor bubble, viewport coordinates. */
@@ -9,13 +12,25 @@
     /** Top edge of the anchor bubble, viewport coordinates. */
     y: number
     initialComment: string
+    targetId: string
+    scope: SpeechScope
     onDraftChange: (comment: string) => void
     onDone: (comment: string) => void
     onRemoveComment: () => void
     onClose: () => void
   }
 
-  let { x, y, initialComment, onDraftChange, onDone, onRemoveComment, onClose }: Props = $props()
+  let {
+    x,
+    y,
+    initialComment,
+    targetId,
+    scope,
+    onDraftChange,
+    onDone,
+    onRemoveComment,
+    onClose
+  }: Props = $props()
 
   const POPOVER_WIDTH = 400
 
@@ -25,6 +40,8 @@
   let comment = $state(initialComment)
   // svelte-ignore state_referenced_locally
   const initialCursorPosition = initialComment.length
+  let textarea: HTMLTextAreaElement | null = null
+  const speechTarget = $derived(plainTextEditorTarget({ id: targetId, element: () => textarea }))
 
   let preferredLeft = $derived(x - POPOVER_WIDTH / 2)
   let preferredTop = $derived(y + 41)
@@ -85,6 +102,7 @@
     </button>
   </div>
   <textarea
+    bind:this={textarea}
     {@attach focusTextarea}
     value={comment}
     class="h-20 min-h-20 w-full resize-y rounded-lg border border-border bg-elevated px-2.5 py-2 text-sm text-foreground outline-none placeholder:text-dimmed"
@@ -102,6 +120,7 @@
       <Trash2 size={12} />
       Remove
     </button>
+    <VoiceInputButton {targetId} getTarget={() => speechTarget} {scope} />
     <button
       type="button"
       class="flex h-8 items-center gap-1.5 rounded-lg bg-primary px-3 text-xs font-medium text-on-primary transition-colors hover:bg-primary-hover"

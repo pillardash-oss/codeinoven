@@ -24,6 +24,7 @@
   import { validateEngineeringSpec } from '$shared/spec/spec-validation'
   import MarkdownView from '../markdown/MarkdownView.svelte'
   import RichMarkdownEditor from '../shared/RichMarkdownEditor.svelte'
+  import VoiceInputButton from '../speech/VoiceInputButton.svelte'
   import EditableMarkdown from './EditableMarkdown.svelte'
   import StudioSelectionActions from './StudioSelectionActions.svelte'
   import StudioHistoryControls from './StudioHistoryControls.svelte'
@@ -229,6 +230,28 @@
   let pendingAnnotation = $state<PendingAnnotation | null>(null)
   let editingAnnotation = $state<SpecAnnotation | null>(null)
   let editingAnnotationBody = $state('')
+  let annotationEditor = $state<RichMarkdownEditor>()
+  let editingAnnotationEditor = $state<RichMarkdownEditor>()
+  let decisionNotesEditor = $state<RichMarkdownEditor>()
+  const pendingSpeechTargetId = `spec-annotation-${crypto.randomUUID()}`
+  const decisionSpeechTargetId = `spec-decision-${crypto.randomUUID()}`
+  const speechScope = $derived({ kind: 'project', projectId: spec.projectId } as const)
+
+  function pendingSpeechTarget() {
+    return annotationEditor?.speechEditorTarget(pendingSpeechTargetId) ?? null
+  }
+
+  function editingSpeechTarget() {
+    if (!editingAnnotation) return null
+    return (
+      editingAnnotationEditor?.speechEditorTarget(`spec-annotation-edit-${editingAnnotation.id}`) ??
+      null
+    )
+  }
+
+  function decisionSpeechTarget() {
+    return decisionNotesEditor?.speechEditorTarget(decisionSpeechTargetId) ?? null
+  }
   let editingAnnotationPosition = $state<{ x: number; y: number } | null>(null)
   let annotationMarkers = $state<Array<{ annotation: SpecAnnotation; x: number; y: number }>>([])
   let documentScroller = $state<HTMLElement | null>(null)
@@ -1108,6 +1131,7 @@
         <label class="min-w-0 flex-1 text-[11px] font-medium text-muted">
           Additional notes
           <RichMarkdownEditor
+            bind:this={decisionNotesEditor}
             class="mt-1 min-h-14 w-full resize-y rounded-lg border bg-elevated px-3 py-2 text-xs text-foreground outline-none focus:border-primary"
             bind:value={additionalNotes}
             placeholder="Additional notes"
@@ -1123,6 +1147,12 @@
           >
             Cancel
           </button>
+          <VoiceInputButton
+            targetId={decisionSpeechTargetId}
+            getTarget={decisionSpeechTarget}
+            scope={speechScope}
+            disabled={busy}
+          />
           <button
             class="flex-1 rounded-lg bg-primary px-3 py-2 text-xs font-semibold text-on-primary max-md:h-10 md:flex-none disabled:opacity-50"
             disabled={busy || (pendingAction === 'implement' && !currentValidation.valid)}
@@ -1936,6 +1966,7 @@
     </blockquote>
     {#if canDecide}
       <RichMarkdownEditor
+        bind:this={annotationEditor}
         class="mt-2 min-h-16 w-full resize-y rounded-lg border bg-elevated px-2.5 py-2 text-xs outline-none focus:border-primary"
         bind:value={annotationBody}
         placeholder="Leave your review note…"
@@ -1957,6 +1988,12 @@
           onclick={closePendingAnnotation}>Cancel</button
         >
         {#if canDecide}
+          <VoiceInputButton
+            targetId={pendingSpeechTargetId}
+            getTarget={pendingSpeechTarget}
+            scope={speechScope}
+            disabled={busy}
+          />
           <button
             class="rounded-lg bg-primary px-2.5 py-1.5 text-xs font-semibold text-on-primary disabled:opacity-50"
             disabled={busy || !annotationBody.trim()}
@@ -1995,6 +2032,7 @@
     {/if}
     {#if canDecide}
       <RichMarkdownEditor
+        bind:this={editingAnnotationEditor}
         class="mt-3 min-h-24 w-full resize-y rounded-lg border bg-elevated px-3 py-2 text-xs outline-none focus:border-primary"
         bind:value={editingAnnotationBody}
         ariaLabel="Annotation body"
@@ -2032,6 +2070,11 @@
           }}>Close</button
         >
         {#if canDecide}
+          <VoiceInputButton
+            targetId={`spec-annotation-edit-${editingAnnotation.id}`}
+            getTarget={editingSpeechTarget}
+            scope={speechScope}
+          />
           <button
             class="rounded-lg bg-primary px-2.5 py-1.5 text-xs font-semibold text-on-primary disabled:opacity-50"
             disabled={!editingAnnotationBody.trim()}

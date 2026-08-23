@@ -62,6 +62,7 @@
   } from './composer-mentions'
   import SlashActionMenu from '../actions/SlashActionMenu.svelte'
   import RichMarkdownEditor from '../shared/RichMarkdownEditor.svelte'
+  import VoiceInputButton from '../speech/VoiceInputButton.svelte'
   import ModelPicker from '../shared/ModelPicker.svelte'
   import { filterActions } from '$lib/actions'
   import { APP_NAME } from '$shared/brand'
@@ -421,6 +422,13 @@
   let lastCaretText: string | null = null
   let lastCaretSupportsCommands: boolean | null = null
   let richEditor: RichMarkdownEditor
+  const speechScope = $derived(
+    projectId ? ({ kind: 'project', projectId } as const) : ({ kind: 'inbox' } as const)
+  )
+
+  function composerSpeechTarget() {
+    return richEditor?.speechEditorTarget(composerEditorId) ?? null
+  }
 
   // Dropdown open state
   let plusMenuOpen = $state(false)
@@ -2519,6 +2527,13 @@
         refreshing={usageRefreshing}
       />
     {/if}
+
+    <VoiceInputButton
+      targetId={composerEditorId}
+      getTarget={composerSpeechTarget}
+      scope={speechScope}
+      {disabled}
+    />
 
     <!-- Send / Queue / Stop button.
          - Agent idle:       ArrowUp (send) — primary, disabled when empty

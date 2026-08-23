@@ -13,6 +13,7 @@
   import { onDestroy, onMount, tick } from 'svelte'
   import AssignmentReviewContent from './AssignmentReviewContent.svelte'
   import RichMarkdownEditor from '../shared/RichMarkdownEditor.svelte'
+  import VoiceInputButton from '../speech/VoiceInputButton.svelte'
   import MarkdownView from '../markdown/MarkdownView.svelte'
   import StudioSelectionActions from './StudioSelectionActions.svelte'
   import StudioHistoryControls from './StudioHistoryControls.svelte'
@@ -172,6 +173,23 @@
   let annotationBody = $state('')
   let editingAnnotation = $state<AssignmentAnnotation | null>(null)
   let editingAnnotationBody = $state('')
+  let annotationEditor = $state<RichMarkdownEditor>()
+  let editingAnnotationEditor = $state<RichMarkdownEditor>()
+  const pendingSpeechTargetId = `assignment-annotation-${crypto.randomUUID()}`
+  const speechScope = $derived({ kind: 'project', projectId: assignment.projectId } as const)
+
+  function pendingSpeechTarget() {
+    return annotationEditor?.speechEditorTarget(pendingSpeechTargetId) ?? null
+  }
+
+  function editingSpeechTarget() {
+    if (!editingAnnotation) return null
+    return (
+      editingAnnotationEditor?.speechEditorTarget(
+        `assignment-annotation-edit-${editingAnnotation.id}`
+      ) ?? null
+    )
+  }
   let editingAnnotationPosition = $state<{ x: number; y: number } | null>(null)
   let annotationMarkers = $state<Array<{ annotation: AssignmentAnnotation; x: number; y: number }>>(
     []
@@ -850,6 +868,7 @@
     </blockquote>
     {#if !readOnly && onAddAnnotation}
       <RichMarkdownEditor
+        bind:this={annotationEditor}
         class="mt-2 min-h-16 w-full resize-y rounded-lg border bg-elevated px-2.5 py-2 text-xs outline-none focus:border-primary"
         bind:value={annotationBody}
         placeholder="Leave your review note…"
@@ -871,6 +890,12 @@
           onclick={closePendingAnnotation}>Cancel</button
         >
         {#if !readOnly && onAddAnnotation}
+          <VoiceInputButton
+            targetId={pendingSpeechTargetId}
+            getTarget={pendingSpeechTarget}
+            scope={speechScope}
+            disabled={busy}
+          />
           <button
             class="rounded-lg bg-primary px-2.5 py-1.5 text-xs font-semibold text-on-primary disabled:opacity-50"
             disabled={busy || !annotationBody.trim()}
@@ -907,6 +932,7 @@
     {/if}
     {#if !readOnly}
       <RichMarkdownEditor
+        bind:this={editingAnnotationEditor}
         class="mt-3 min-h-24 w-full resize-y rounded-lg border bg-elevated px-3 py-2 text-xs outline-none focus:border-primary"
         bind:value={editingAnnotationBody}
         ariaLabel="Assignment annotation body"
@@ -941,6 +967,11 @@
           }}>Close</button
         >
         {#if !readOnly}
+          <VoiceInputButton
+            targetId={`assignment-annotation-edit-${editingAnnotation.id}`}
+            getTarget={editingSpeechTarget}
+            scope={speechScope}
+          />
           <button
             class="rounded-lg bg-primary px-2.5 py-1.5 text-xs font-semibold text-on-primary disabled:opacity-50"
             disabled={!editingAnnotationBody.trim()}

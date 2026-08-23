@@ -128,6 +128,15 @@ export class SpeechService {
     return value
   }
 
+  async recordPermissionFailure(
+    scope: SpeechScope,
+    message: string
+  ): Promise<SpeechRecordingAttempt> {
+    const attempt = await this.storage.recordPermissionFailure(scope, message)
+    this.emit({ kind: 'history', attemptId: attempt.id, stage: 'failed' })
+    return attempt
+  }
+
   async appendCapture(sessionId: string, chunk: Uint8Array): Promise<number> {
     if (chunk.byteLength > MAX_SPEECH_CHUNK_BYTES) throw new RangeError('Audio chunk is too large.')
     return this.storage.appendCapture(sessionId, chunk)
@@ -145,6 +154,27 @@ export class SpeechService {
   async failCapture(sessionId: string, message: string): Promise<SpeechRecordingAttempt> {
     const attempt = await this.storage.failCapture(sessionId, message)
     this.emit({ kind: 'history', attemptId: attempt.id, stage: 'failed' })
+    return attempt
+  }
+
+  async markAttemptFailure(attemptId: string, message: string): Promise<SpeechRecordingAttempt> {
+    const attempt = await this.storage.updateAttempt(attemptId, (current) => {
+      if (
+        current.stage === 'failed' &&
+        current.errors.some(
+          (failure) => failure.stage === 'transcribing' && failure.error.message === message
+        )
+      ) {
+        return
+      }
+      current.stage = 'failed'
+      current.errors.push({
+        stage: 'transcribing',
+        occurredAt: Date.now(),
+        error: { code: 'transcription-failed', message, retryable: current.audioAvailable }
+      })
+    })
+    this.emit({ kind: 'history', attemptId, stage: 'failed' })
     return attempt
   }
 
@@ -471,20 +501,22 @@ function speechIpcError(cause: unknown): SpeechError {
       ? 'invalid-request'
       : normalized.includes('stale')
         ? 'capture-session-stale'
-        : normalized.includes('checksum')
-          ? 'checksum-mismatch'
-          : normalized.includes('not qualified')
-            ? 'model-not-qualified'
-            : normalized.includes('not installed')
-              ? 'model-unavailable'
-              : normalized.includes('incompatible')
-                ? 'model-incompatible'
-                : normalized.includes('not found')
-                  ? 'not-found'
-                  : normalized.includes('cancel')
-                    ? 'cancelled'
-                    : normalized.includes('download')
-                      ? 'download-failed'
-                      : 'backend-failed'
+        : normalized.includes('disk space')
+          ? 'insufficient-disk'
+          : normalized.includes('checksum')
+            ? 'checksum-mismatch'
+            : normalized.includes('not qualified')
+              ? 'model-not-qualified'
+              : normalized.includes('not installed')
+                ? 'model-unavailable'
+                : normalized.includes('incompatible')
+                  ? 'model-incompatible'
+                  : normalized.includes('not found')
+                    ? 'not-found'
+                    : normalized.includes('cancel')
+                      ? 'cancelled'
+                      : normalized.includes('download')
+                        ? 'download-failed'
+                        : 'backend-failed'
   return { code, message, retryable: code !== 'invalid-request' && code !== 'model-incompatible' }
 }
