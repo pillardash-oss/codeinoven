@@ -4618,38 +4618,88 @@
     }
   }
 
+  const BRAINSTORM_REVIEW_SECTION_CONTEXT_LIMIT = 8_000
+  const BRAINSTORM_REVIEW_ANNOTATION_CONTEXT_LIMIT = 20_000
+
+  function boundedBrainstormReviewText(value: string, limit: number): string {
+    if (value.length <= limit) return value
+    return `${value.slice(0, limit)}\n[Remaining content omitted from this discussion turn.]`
+  }
+
+  function brainstormReviewDiscussionContext(draft: BrainstormDocument): string {
+    const report = [
+      `# ${boundedBrainstormReviewText(draft.content.title, 2_000)}`,
+      '',
+      '## Session Snapshot',
+      '',
+      boundedBrainstormReviewText(draft.content.summary, BRAINSTORM_REVIEW_SECTION_CONTEXT_LIMIT),
+      '',
+      ...draft.content.sections.flatMap((section) => [
+        `## ${section.title}`,
+        '',
+        boundedBrainstormReviewText(section.markdown, BRAINSTORM_REVIEW_SECTION_CONTEXT_LIMIT),
+        ''
+      ])
+    ].join('\n')
+    const openAnnotations = boundedBrainstormReviewText(
+      draft.annotations
+        .filter((annotation) => annotation.status === 'open')
+        .map(
+          (annotation) =>
+            `- [${annotation.section}] ${annotation.body}${annotation.quote ? `\n  Selected text: ${annotation.quote}` : ''}`
+        )
+        .join('\n'),
+      BRAINSTORM_REVIEW_ANNOTATION_CONTEXT_LIMIT
+    )
+
+    return [
+      'Continue the interactive Brainstorm discussion about this session report.',
+      'Treat the review feedback as discussion input, not as instructions for a one-pass rewrite. Address what is already clear. When any material intent, tradeoff, or requested change remains ambiguous, use the question tool and continue the back-and-forth until alignment is reached. Do not generate or rewrite the session report in this response. The application refreshes it after the discussion turn is complete.',
+      `Current Brainstorm session report:\n<brainstorm-report>\n${report}\n</brainstorm-report>`,
+      openAnnotations ? `Open review annotations:\n${openAnnotations}` : ''
+    ]
+      .filter(Boolean)
+      .join('\n\n')
+  }
+
   async function submitBrainstormDecision(
     action: BrainstormDecisionAction,
     draft: BrainstormDocument,
     notes: string
   ): Promise<void> {
+    brainstormError = ''
+    showSpecStudio = false
+    if (action === 'review') {
+      const feedback =
+        notes.trim() ||
+        'I want to continue discussing this Brainstorm before preparing the specification.'
+      await sendMessage(
+        feedback,
+        [],
+        undefined,
+        undefined,
+        brainstormReviewDiscussionContext(draft),
+        [],
+        [],
+        {
+          action: 'Discuss Brainstorm changes',
+          ...(notes.trim() ? { body: notes.trim() } : {})
+        }
+      )
+      return
+    }
     brainstormBusy = true
     brainstormDecisionInFlight = action
     agentRuns.setBusy(thread.projectId, thread.id, true, latestUserMessageId())
-    brainstormError = ''
-    showSpecStudio = false
     try {
-      if (action === 'review') {
-        applyBrainstormDocument(
-          await invoke(
-            'agent:reviewBrainstorm',
-            draft.projectId,
-            draft.threadId,
-            draft.id,
-            draft.version,
-            notes
-          )
-        )
-      } else {
-        await invoke(
-          'agent:finalizeBrainstorm',
-          draft.projectId,
-          draft.threadId,
-          draft.id,
-          draft.version,
-          notes
-        )
-      }
+      await invoke(
+        'agent:finalizeBrainstorm',
+        draft.projectId,
+        draft.threadId,
+        draft.id,
+        draft.version,
+        notes
+      )
       await reconcileReadySpec()
     } catch (error) {
       brainstormError =
