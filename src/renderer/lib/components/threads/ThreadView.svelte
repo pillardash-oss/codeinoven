@@ -5500,7 +5500,7 @@
     errorMessage = ''
     auditState = 'running'
     auditSettings = selected
-    rendererRecovery.setAuditModel(
+    rendererRecovery.addRecentModel(
       modelKey(selected.harnessId, selected.providerId, selected.modelId)
     )
     try {
@@ -5660,7 +5660,7 @@
       modelId: selected.modelId,
       thinkingLevel: selected.thinkingLevel
     }
-    rendererRecovery.addRecentModel(
+    rendererRecovery.setAuditModel(
       modelKey(selected.harnessId, selected.providerId, selected.modelId)
     )
     if (isAssignmentAuditorThread) {
