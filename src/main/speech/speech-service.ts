@@ -4,6 +4,8 @@ import { access, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises
 import { dirname, join } from 'node:path'
 import type {
   SpeechCapabilitySnapshot,
+  SpeechCleanupMode,
+  SpeechCleanupProvenance,
   SpeechCaptureSessionInfo,
   SpeechDownloadState,
   SpeechError,
@@ -200,7 +202,8 @@ export class SpeechService {
     attemptId: string,
     runtime: SpeechRuntime,
     artifactId: string,
-    language: string | 'auto'
+    language: string | 'auto',
+    cleanupMode: SpeechCleanupMode = { kind: 'local' }
   ): Promise<SpeechTranscriptionResult> {
     const artifact = this.requireSelectableArtifact(artifactId, runtime, 'asr')
     const backend = this.requireBackend(runtime)
@@ -235,21 +238,13 @@ export class SpeechService {
     })
     try {
       const rawTranscript = await queued.result
-      const cleanupArtifact = this.requireCatalog().artifacts.find(
-        (candidate) =>
-          candidate.runtime === runtime &&
-          candidate.capability === 'cleanup' &&
-          candidate.qualification.status === 'qualified' &&
-          this.installed.artifacts.some(
-            (installed) => installed.available && installed.artifactId === candidate.id
-          )
-      )
       let finalTranscript = rawTranscript
-      let cleanupProvenance = this.cleanup.fallback(
-        rawTranscript,
-        new Error(`Install a qualified ${runtime} cleanup model to enable local cleanup.`)
-      ).provenance
-      if (cleanupArtifact) {
+      let cleanupProvenance: SpeechCleanupProvenance = {
+        mode: 'none' as const,
+        appliedRuleIds: [] as string[],
+        failed: false
+      }
+      if (cleanupMode.kind === 'local') {
         try {
           const punctuated = await this.queue.enqueue({
             capability: 'cleanup',
@@ -258,8 +253,8 @@ export class SpeechService {
               backend.cleanup(
                 rawTranscript,
                 {
-                  id: cleanupArtifact.id,
-                  directory: this.storage.modelDirectory(cleanupArtifact.id)
+                  id: artifact.id,
+                  directory: this.storage.modelDirectory(artifact.id)
                 },
                 signal
               )
@@ -272,11 +267,16 @@ export class SpeechService {
           cleanupProvenance = {
             ...cleaned.provenance,
             runtime,
-            artifactId: cleanupArtifact.id
+            artifactId: cleanupMode.artifactId
           }
         } catch (cause) {
           cleanupProvenance = this.cleanup.fallback(rawTranscript, cause).provenance
         }
+      } else if (cleanupMode.kind === 'remote') {
+        cleanupProvenance = this.cleanup.fallback(
+          rawTranscript,
+          new Error('The selected remote cleanup model is unavailable for this conversation.')
+        ).provenance
       }
       await this.storage.updateAttempt(attemptId, (attempt) => {
         attempt.stage = 'completed'

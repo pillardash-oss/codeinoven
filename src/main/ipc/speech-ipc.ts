@@ -2,6 +2,7 @@ import type { WebContents } from 'electron'
 import { MAX_SPEECH_CHUNK_BYTES } from '../../lib/speech/types'
 import type {
   SpeechCorrectionObservation,
+  SpeechCleanupMode,
   SpeechDestructiveAction,
   SpeechRuntime,
   SpeechScope
@@ -33,6 +34,36 @@ function destructiveAction(value: unknown): SpeechDestructiveAction {
 function runtime(value: unknown): SpeechRuntime {
   if (value !== 'mlx' && value !== 'sherpa-onnx') throw new RangeError('Speech runtime is invalid.')
   return value
+}
+
+function cleanupMode(value: unknown): SpeechCleanupMode {
+  if (typeof value !== 'object' || value === null) throw new RangeError('Cleanup mode is invalid.')
+  const candidate = value as Record<string, unknown>
+  if (candidate['kind'] === 'disabled') return { kind: 'disabled' }
+  if (candidate['kind'] === 'local') {
+    const artifactId = candidate['artifactId']
+    return artifactId === undefined
+      ? { kind: 'local' }
+      : { kind: 'local', artifactId: entityId(artifactId, 'Cleanup artifact id') }
+  }
+  if (candidate['kind'] === 'remote') {
+    const selection = candidate['selection']
+    if (selection !== 'fixed' && selection !== 'conversation') {
+      throw new RangeError('Remote cleanup selection is invalid.')
+    }
+    const modelId = candidate['modelId']
+    if (selection === 'fixed' && modelId === undefined) {
+      throw new RangeError('A fixed remote cleanup model is required.')
+    }
+    return modelId === undefined
+      ? { kind: 'remote', selection }
+      : {
+          kind: 'remote',
+          selection,
+          modelId: boundedString(modelId, 'Remote cleanup model', 256)
+        }
+  }
+  throw new RangeError('Cleanup mode is invalid.')
 }
 
 function scope(value: unknown): SpeechScope {
@@ -152,14 +183,16 @@ export function registerSpeechIpc(
       rawAttemptId: unknown,
       rawRuntime: unknown,
       rawArtifactId: unknown,
-      rawLanguage: unknown
+      rawLanguage: unknown,
+      rawCleanupMode: unknown
     ) =>
       speechResult(() =>
         service.transcribe(
           entityId(rawAttemptId, 'Attempt id'),
           runtime(rawRuntime),
           entityId(rawArtifactId, 'Artifact id'),
-          boundedString(rawLanguage, 'Language', 32)
+          boundedString(rawLanguage, 'Language', 32),
+          cleanupMode(rawCleanupMode)
         )
       )
   )

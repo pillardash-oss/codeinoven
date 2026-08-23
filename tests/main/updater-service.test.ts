@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AppConfig } from '../../src/lib/types'
 import type { StorageEngine } from '../../src/main/storage/storage-engine'
 import { DEFAULT_AGENT_BEHAVIOR_PROMPT } from '../../src/lib/agent-behavior'
+import { DEFAULT_SPEECH_SETTINGS } from '../../src/lib/speech/types'
 import {
   UpdaterService,
   type SessionActivitySource
@@ -72,7 +73,8 @@ function defaultConfig(): AppConfig {
     resumeWorkOnRestart: true,
     defaultMergeMethod: 'squash',
     defaultPullStrategy: 'ask',
-    maxDiffLines: 100
+    maxDiffLines: 100,
+    sound: structuredClone(DEFAULT_SPEECH_SETTINGS)
   }
 }
 

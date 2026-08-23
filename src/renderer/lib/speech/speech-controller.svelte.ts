@@ -216,7 +216,8 @@ class SpeechController {
         active.attemptId,
         selection.runtime,
         selection.artifact.id,
-        'auto'
+        'auto',
+        this.cleanupMode()
       )
       if (!result.ok) throw new Error(result.error.message)
       const transcript = result.value.finalTranscript
@@ -412,6 +413,19 @@ class SpeechController {
     if (!artifact)
       throw new Error(`Install a qualified ${runtime} speech-to-text model in Sound settings.`)
     return { runtime, artifact }
+  }
+
+  private cleanupMode(): import('../../../lib/speech/types').SpeechCleanupMode {
+    if (this.sound.remoteCleanupEnabled) {
+      return {
+        kind: 'remote',
+        selection: this.sound.remoteCleanupSelection,
+        ...(this.sound.remoteCleanupModelId ? { modelId: this.sound.remoteCleanupModelId } : {})
+      }
+    }
+    return this.sound.localCleanupEnabled
+      ? { kind: 'local', artifactId: this.sound.cleanupArtifactId }
+      : { kind: 'disabled' }
   }
 
   private async selectTtsArtifact(): Promise<{

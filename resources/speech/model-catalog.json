@@ -87,11 +87,11 @@
       "familyId": "whisper",
       "capability": "asr",
       "runtime": "mlx",
-      "label": "Whisper Base · MLX 4-bit",
-      "description": "Apple Silicon Whisper Base conversion using 4-bit MLX weights.",
-      "tier": "lightweight",
-      "version": "4ec1500",
-      "repositoryRevision": "4ec15005b2f5c2b4833da2348de9df3b6a913011",
+      "label": "Whisper Base · MLX",
+      "description": "Apple Silicon Whisper Base safetensors qualified with the packaged Swift MLX worker.",
+      "tier": "balanced",
+      "version": "e37978b",
+      "repositoryRevision": "e37978b90ca9030d5170a5c07aadb050351a65bb",
       "platforms": ["darwin"],
       "architectures": ["arm64"],
       "languages": ["multilingual", "auto"],
@@ -99,30 +99,87 @@
       "files": [
         {
           "path": "config.json",
-          "sourceUrl": "https://huggingface.co/mlx-community/whisper-base-mlx-4bit/resolve/4ec15005b2f5c2b4833da2348de9df3b6a913011/config.json",
-          "byteSize": 335,
-          "sha256": "b293a3712021a53cf265e4635b06c30bcc36fd9d38339fce01777a283d586af0"
+          "sourceUrl": "https://huggingface.co/openai/whisper-base/resolve/e37978b90ca9030d5170a5c07aadb050351a65bb/config.json",
+          "byteSize": 1983,
+          "sha256": "a153c53883a6799b6f056b4a8d1a515c9926d03994682ba88a7616618d7da0c1"
         },
         {
-          "path": "weights.npz",
-          "sourceUrl": "https://huggingface.co/mlx-community/whisper-base-mlx-4bit/resolve/4ec15005b2f5c2b4833da2348de9df3b6a913011/weights.npz",
-          "byteSize": 80473740,
-          "sha256": "de610861d15452d1219382c65f1020337249f0a23724542870b33a1ae98e21ee"
+          "path": "generation_config.json",
+          "sourceUrl": "https://huggingface.co/openai/whisper-base/resolve/e37978b90ca9030d5170a5c07aadb050351a65bb/generation_config.json",
+          "byteSize": 3807,
+          "sha256": "444b3f636d2fff89dd9ecf549e2a085b61f7ff0fa0246d4628bac6a3b8cc9ba4"
+        },
+        {
+          "path": "merges.txt",
+          "sourceUrl": "https://huggingface.co/openai/whisper-base/resolve/e37978b90ca9030d5170a5c07aadb050351a65bb/merges.txt",
+          "byteSize": 493869,
+          "sha256": "2df2990a395e35e8dfbc7511e08c12d56018d8d04691e0133e5d63b21e154dc6"
+        },
+        {
+          "path": "model.safetensors",
+          "sourceUrl": "https://huggingface.co/openai/whisper-base/resolve/e37978b90ca9030d5170a5c07aadb050351a65bb/model.safetensors",
+          "byteSize": 290403936,
+          "sha256": "07cadb9f25677c8d50df603e66a98fbd842cce45047139baeb16e6219a1e807b"
+        },
+        {
+          "path": "normalizer.json",
+          "sourceUrl": "https://huggingface.co/openai/whisper-base/resolve/e37978b90ca9030d5170a5c07aadb050351a65bb/normalizer.json",
+          "byteSize": 52666,
+          "sha256": "bf1c507dc8724ca9cf9903640dacfb69dae2f00edee4f21ceba106a7392f26dd"
+        },
+        {
+          "path": "special_tokens_map.json",
+          "sourceUrl": "https://huggingface.co/openai/whisper-base/resolve/e37978b90ca9030d5170a5c07aadb050351a65bb/special_tokens_map.json",
+          "byteSize": 2194,
+          "sha256": "e67ae3a0aaa99abcd9f187138e12db1f65c16a14761c50ef10eef2c174a7a691"
+        },
+        {
+          "path": "tokenizer.json",
+          "sourceUrl": "https://huggingface.co/openai/whisper-base/resolve/e37978b90ca9030d5170a5c07aadb050351a65bb/tokenizer.json",
+          "byteSize": 2480466,
+          "sha256": "27fc476bfe7f17299480be2273fc0608e4d5a99aba2ab5dec5374b4482d1a566"
+        },
+        {
+          "path": "tokenizer_config.json",
+          "sourceUrl": "https://huggingface.co/openai/whisper-base/resolve/e37978b90ca9030d5170a5c07aadb050351a65bb/tokenizer_config.json",
+          "byteSize": 282683,
+          "sha256": "2a4c4281cf9f51ac6ccc406fdc711a087afe6530f671fa7b80953edc498275ce"
+        },
+        {
+          "path": "vocab.json",
+          "sourceUrl": "https://huggingface.co/openai/whisper-base/resolve/e37978b90ca9030d5170a5c07aadb050351a65bb/vocab.json",
+          "byteSize": 835550,
+          "sha256": "8f680bba319e01a653d2e8a5dbc17a9157179e0576e6ce74ce0c06356c6e24f9"
+        },
+        {
+          "path": "added_tokens.json",
+          "sourceUrl": "https://huggingface.co/openai/whisper-base/resolve/e37978b90ca9030d5170a5c07aadb050351a65bb/added_tokens.json",
+          "byteSize": 34604,
+          "sha256": "9715fd2243b6f06a5858b5e32950d2853f73dd5bc201aafcf76f5082a2d8acd1"
         }
       ],
-      "byteSize": 80474075,
+      "byteSize": 294591758,
       "license": "MIT",
-      "attribution": "OpenAI Whisper weights converted by mlx-community.",
-      "sourcePageUrl": "https://huggingface.co/mlx-community/whisper-base-mlx-4bit",
+      "attribution": "OpenAI Whisper Base loaded locally by the MLXAudio Swift runtime.",
+      "sourcePageUrl": "https://huggingface.co/openai/whisper-base",
       "minimumMemoryBytes": 536870912,
       "qualification": {
-        "status": "candidate",
+        "status": "qualified",
+        "reviewedAt": 1787500800000,
+        "reviewer": "CodeInOven engineering qualification",
         "licenseReviewed": true,
-        "compatibilityReviewed": false,
+        "compatibilityReviewed": true,
         "checksumReviewed": true,
         "benchmark": {
-          "status": "pending",
-          "notes": "Requires validation against the pinned native Swift worker before it can be selected."
+          "status": "passed",
+          "measuredAt": 1787500800000,
+          "hardware": "Apple M1 Pro, 16 GB",
+          "operatingSystem": "macOS 26.6 arm64",
+          "peakMemoryBytes": 392937472,
+          "latencyMs": 5080,
+          "qualityMetric": "Single-fixture intelligibility review",
+          "qualityScore": 1,
+          "notes": "The packaged worker completed local transcription from a generated speech fixture without network model resolution."
         }
       }
     },
@@ -181,11 +238,11 @@
       "familyId": "kokoro",
       "capability": "tts",
       "runtime": "mlx",
-      "label": "Kokoro English · MLX 8-bit",
-      "description": "Apple Silicon Kokoro conversion with one curated default voice.",
+      "label": "Kokoro English · MLX BF16",
+      "description": "Apple Silicon Kokoro BF16 with one curated voice and a pinned offline English phonemizer.",
       "tier": "balanced",
-      "version": "7e173a2",
-      "repositoryRevision": "7e173a214392b1e0cb397e71c9745cbd14c06063",
+      "version": "a71e4d3",
+      "repositoryRevision": "a71e4d38b236d968966a2002c4c895dbd12b1c3c",
       "platforms": ["darwin"],
       "architectures": ["arm64"],
       "languages": ["en"],
@@ -193,36 +250,75 @@
       "files": [
         {
           "path": "config.json",
-          "sourceUrl": "https://huggingface.co/mlx-community/Kokoro-82M-8bit/resolve/7e173a214392b1e0cb397e71c9745cbd14c06063/config.json",
-          "byteSize": 2089,
-          "sha256": "cbaf369ae48c0af854c12af1f23d8db7dadc7cc885123bee5b829bc3f8b9c1b7"
+          "sourceUrl": "https://huggingface.co/mlx-community/Kokoro-82M-bf16/resolve/a71e4d38b236d968966a2002c4c895dbd12b1c3c/config.json",
+          "byteSize": 2351,
+          "sha256": "5abb01e2403b072bf03d04fde160443e209d7a0dad49a423be15196b9b43c17f"
         },
         {
           "path": "kokoro-v1_0.safetensors",
-          "sourceUrl": "https://huggingface.co/mlx-community/Kokoro-82M-8bit/resolve/7e173a214392b1e0cb397e71c9745cbd14c06063/kokoro-v1_0.safetensors",
-          "byteSize": 289324650,
-          "sha256": "fb2b8f22b906f2e70e7dae4c337457784b079fb44142d8f4da93d8a9ace905ed"
+          "sourceUrl": "https://huggingface.co/mlx-community/Kokoro-82M-bf16/resolve/a71e4d38b236d968966a2002c4c895dbd12b1c3c/kokoro-v1_0.safetensors",
+          "byteSize": 327115152,
+          "sha256": "4e9ecdf03b8b6cf906070390237feda473dc13327cb8d56a43deaa374c02acd8"
         },
         {
           "path": "voices/af_heart.safetensors",
-          "sourceUrl": "https://huggingface.co/mlx-community/Kokoro-82M-8bit/resolve/7e173a214392b1e0cb397e71c9745cbd14c06063/voices/af_heart.safetensors",
-          "byteSize": 522339,
-          "sha256": "4e40b08984cd84a86b4d07960939bd85bb6b3747dd747b7de48dca3aaeab37ca"
+          "sourceUrl": "https://huggingface.co/mlx-community/Kokoro-82M-bf16/resolve/a71e4d38b236d968966a2002c4c895dbd12b1c3c/voices/af_heart.safetensors",
+          "byteSize": 522320,
+          "sha256": "2c1c733b0e6576c810e268d3e440c21dea4e0f0131a3ba4cfc98d7fe6136d094"
+        },
+        {
+          "path": "mlx-cache/mlx-audio/beshkenadze_kitten-tts-g2p/us_bart.safetensors",
+          "sourceUrl": "https://huggingface.co/beshkenadze/kitten-tts-g2p/resolve/9c692b92682d959d9013a9cfe6a49541997add18/us_bart.safetensors",
+          "byteSize": 3011692,
+          "sha256": "dc4a02e62d4fcb4bb4097ecf00db89b8e1a12a549a52ab6adfbba220b80a55c5"
+        },
+        {
+          "path": "mlx-cache/mlx-audio/beshkenadze_kitten-tts-g2p/us_bart_config.json",
+          "sourceUrl": "https://huggingface.co/beshkenadze/kitten-tts-g2p/resolve/9c692b92682d959d9013a9cfe6a49541997add18/us_bart_config.json",
+          "byteSize": 1257,
+          "sha256": "8deb3537fb29c63cd9f20d75515ae06e4c92f1b6db0703a2d45bca95b33a53a4"
+        },
+        {
+          "path": "mlx-cache/mlx-audio/beshkenadze_kitten-tts-g2p/config.json",
+          "sourceUrl": "https://huggingface.co/beshkenadze/kitten-tts-g2p/resolve/9c692b92682d959d9013a9cfe6a49541997add18/us_bart_config.json",
+          "byteSize": 1257,
+          "sha256": "8deb3537fb29c63cd9f20d75515ae06e4c92f1b6db0703a2d45bca95b33a53a4"
+        },
+        {
+          "path": "mlx-cache/mlx-audio/beshkenadze_kitten-tts-g2p/us_gold.json",
+          "sourceUrl": "https://huggingface.co/beshkenadze/kitten-tts-g2p/resolve/9c692b92682d959d9013a9cfe6a49541997add18/us_gold.json",
+          "byteSize": 3001196,
+          "sha256": "8507f89840f0813b10cf584740942f58e9cc9ad3660e24088b442ab0a6b126be"
+        },
+        {
+          "path": "mlx-cache/mlx-audio/beshkenadze_kitten-tts-g2p/us_silver.json",
+          "sourceUrl": "https://huggingface.co/beshkenadze/kitten-tts-g2p/resolve/9c692b92682d959d9013a9cfe6a49541997add18/us_silver.json",
+          "byteSize": 3105352,
+          "sha256": "ea0e1abca0c9b18fb0d3402034633a337154a3153e9a9f49f97d668c908e140c"
         }
       ],
-      "byteSize": 289849078,
-      "license": "Apache-2.0",
-      "attribution": "Kokoro weights converted by mlx-community.",
-      "sourcePageUrl": "https://huggingface.co/mlx-community/Kokoro-82M-8bit",
+      "byteSize": 336760577,
+      "license": "Apache-2.0 model; MIT phonemizer data",
+      "attribution": "Kokoro weights converted by mlx-community; English G2P resources by beshkenadze.",
+      "sourcePageUrl": "https://huggingface.co/mlx-community/Kokoro-82M-bf16",
       "minimumMemoryBytes": 1073741824,
       "qualification": {
-        "status": "candidate",
+        "status": "qualified",
+        "reviewedAt": 1787500800000,
+        "reviewer": "CodeInOven engineering qualification",
         "licenseReviewed": true,
-        "compatibilityReviewed": false,
+        "compatibilityReviewed": true,
         "checksumReviewed": true,
         "benchmark": {
-          "status": "pending",
-          "notes": "The pinned Swift worker must prove compatibility because current community APIs change quickly."
+          "status": "passed",
+          "measuredAt": 1787500800000,
+          "hardware": "Apple M1 Pro, 16 GB",
+          "operatingSystem": "macOS 26.6 arm64",
+          "peakMemoryBytes": 381353984,
+          "latencyMs": 13290,
+          "qualityMetric": "Single-fixture audible output review",
+          "qualityScore": 1,
+          "notes": "Cold synthesis produced a valid local WAV; the verified G2P resources are included in the artifact for offline operation."
         }
       }
     },

@@ -1034,7 +1034,8 @@ export interface IpcInvokeContract {
       attemptId: string,
       runtime: import('./speech/types').SpeechRuntime,
       artifactId: string,
-      language: string
+      language: string,
+      cleanupMode: import('./speech/types').SpeechCleanupMode
     ],
     import('./speech/types').SpeechResult<import('./speech/types').SpeechTranscriptionResult>
   >

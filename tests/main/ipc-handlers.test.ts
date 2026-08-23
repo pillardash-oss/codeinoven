@@ -56,6 +56,7 @@ import { exportEngineeringSpecMarkdown } from '../../src/lib/spec/spec-markdown'
 import { StorageEngine } from '../../src/main/storage/storage-engine'
 import { registerIpcHandlers, validateAppConfigPatch } from '../../src/main/ipc/ipc-handlers'
 import { appRendererNavigationTargets } from '../../src/main/ipc/trusted-ipc-main'
+import { DEFAULT_SPEECH_SETTINGS } from '../../src/lib/speech/types'
 import { createTestDb, destroyTestDb } from './database/test-helper'
 import type { Database } from '../../src/main/database/database'
 import { ProjectRepo } from '../../src/main/database/repositories/project-repo'
@@ -101,7 +102,8 @@ const defaultConfig: AppConfig = {
   resumeWorkOnRestart: true,
   defaultMergeMethod: 'squash',
   defaultPullStrategy: 'ask',
-  maxDiffLines: 100
+  maxDiffLines: 100,
+  sound: structuredClone(DEFAULT_SPEECH_SETTINGS)
 }
 
 beforeEach(async () => {

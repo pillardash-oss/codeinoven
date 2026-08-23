@@ -9,11 +9,10 @@ The recommended runtime is platform-specific:
 | Platform | Architecture  | Recommended runtime |
 | -------- | ------------- | ------------------- |
 | macOS    | Apple Silicon | MLX                 |
-| macOS    | Intel         | sherpa-onnx         |
 | Windows  | x64           | sherpa-onnx         |
 | Linux    | x64 or arm64  | sherpa-onnx         |
 
-The current macOS package targets Apple Silicon. The Intel row remains part of the compatibility contract so runtime selection stays deterministic if packaging expands later.
+The macOS package targets Apple Silicon. Intel macOS is not a supported target.
 
 A user may override the recommendation with another installed, compatible runtime. An unavailable override fails with a compatibility error; CodeInOven never changes runtime, model, or network path silently after a failure.
 
@@ -25,7 +24,7 @@ Chromium's MediaRecorder output is decoded to mono 16 kHz WAV by the pinned pack
 
 `resources/speech/model-catalog.json` groups artifacts by logical family while keeping runtime-specific facts separate. A shared family name does not promise equal latency, memory use, accuracy, language coverage, voices, or licensing.
 
-The first candidates are:
+The initial families are:
 
 - Whisper Base for local ASR through MLX or sherpa-onnx.
 - Kokoro English for local TTS through MLX or sherpa-onnx.
@@ -42,6 +41,8 @@ Every downloadable file has a pinned repository revision, HTTPS URL, exact byte 
 6. A reviewer promotes the artifact only after compatibility, checksum, license, and benchmark records are complete.
 
 Run `bun run speech:catalog` during development to validate the manifest and list blocked candidates. The same command accepts an explicit packaged-worker path and bounded sample set once workers are available. It prints measurements for CodeInOven's lifecycle evidence; it does not silently rewrite the reviewed catalog.
+
+Apple Silicon packages build the pinned Swift worker with `bun run speech:build-mlx`. Packaging copies that executable and the checksum-verified MLX Metal library into the application resources; model weights remain separate downloads. Whisper Base and Kokoro BF16 are qualified on an Apple M1 Pro with the exact measurements recorded in the catalog. Kokoro's verified English G2P resources are part of its downloadable artifact so first synthesis does not perform a hidden network fetch.
 
 ## Recording and storage
 
@@ -100,6 +101,6 @@ Every destructive action uses the shared confirmation modal. The modal focuses i
 
 ## Release qualification status
 
-The shipped catalog intentionally keeps every initial artifact at `candidate` until real benchmark hardware, checksum, compatibility, and license review promote it. Candidate models cannot be downloaded or selected. The Apple Silicon MLX default additionally requires a signed packaged worker resource. A release must not claim local speech readiness until those catalog records are qualified, the MLX worker is installed at the packaged resource path, and the packaged verification commands pass. These gates fail closed and never enable sherpa or a remote provider silently.
+The Apple Silicon Whisper and Kokoro artifacts are qualified and selectable after their verified downloads complete. Portable sherpa artifacts and standalone cleanup-model candidates remain blocked until their own platform-specific gates pass; a shared family name never inherits another backend's results. Package and release commands rebuild the pinned MLX worker, and packaged verification rejects missing runtime resources or bundled model weights. These gates fail closed and never enable sherpa or a remote provider silently.
 
 The Sound page persists the default-off remote-cleanup consent and model-source choice, but provider invocation remains a release gate: no remote request is made until the dedicated minimal-payload auxiliary model adapter is connected and verified. Local cleanup failure continues to return raw text without networking.

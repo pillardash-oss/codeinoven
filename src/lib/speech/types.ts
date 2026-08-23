@@ -23,7 +23,6 @@ export const SPEECH_PLATFORM_DEFAULTS: ReadonlyArray<{
   runtime: SpeechRuntime
 }> = [
   { target: { platform: 'darwin', architecture: 'arm64' }, runtime: 'mlx' },
-  { target: { platform: 'darwin', architecture: 'x64' }, runtime: 'sherpa-onnx' },
   { target: { platform: 'win32', architecture: 'x64' }, runtime: 'sherpa-onnx' },
   { target: { platform: 'linux', architecture: 'x64' }, runtime: 'sherpa-onnx' },
   { target: { platform: 'linux', architecture: 'arm64' }, runtime: 'sherpa-onnx' }
