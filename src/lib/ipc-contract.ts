@@ -1022,6 +1022,10 @@ export interface IpcInvokeContract {
     [cursor?: string, limit?: number],
     import('./speech/types').SpeechResult<import('./speech/types').SpeechHistoryPage>
   >
+  'speech:enforceHistoryLimit': Contract<
+    [limit: number],
+    import('./speech/types').SpeechResult<void>
+  >
   'speech:downloadArtifact': Contract<
     [artifactId: string],
     import('./speech/types').SpeechResult<void>
@@ -1044,7 +1048,36 @@ export interface IpcInvokeContract {
     import('./speech/types').SpeechResult<import('./speech/types').SpeechCorrectionRule>
   >
   'speech:deleteCorrectionRule': Contract<
-    [ruleId: string],
+    [ruleId: string, confirmationToken: string],
+    import('./speech/types').SpeechResult<void>
+  >
+  'speech:requestConfirmation': Contract<
+    [action: import('./speech/types').SpeechDestructiveAction, targetId: string],
+    import('./speech/types').SpeechResult<import('./speech/types').SpeechConfirmation>
+  >
+  'speech:deleteHistory': Contract<
+    [attemptId: string, confirmationToken: string],
+    import('./speech/types').SpeechResult<void>
+  >
+  'speech:deleteAllHistory': Contract<
+    [confirmationToken: string],
+    import('./speech/types').SpeechResult<void>
+  >
+  'speech:readAudio': Contract<
+    [attemptId: string],
+    import('./speech/types').SpeechResult<Uint8Array<ArrayBuffer>>
+  >
+  'speech:retryTranscription': Contract<
+    [
+      attemptId: string,
+      runtime: import('./speech/types').SpeechRuntime,
+      artifactId: string,
+      language: string
+    ],
+    import('./speech/types').SpeechResult<import('./speech/types').SpeechTranscriptionResult>
+  >
+  'speech:deleteArtifact': Contract<
+    [artifactId: string, confirmationToken: string],
     import('./speech/types').SpeechResult<void>
   >
   'speech:preparePlayback': Contract<

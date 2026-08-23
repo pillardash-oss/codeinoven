@@ -3532,6 +3532,8 @@ export interface AppConfig {
   maxDiffLines: number
   /** Route loopback development links into the app-scoped test browser. */
   openLocalhostInCioBrowser: boolean
+  /** Local speech capture, cleanup, model, cue, history, and playback preferences. */
+  sound: import('./speech/types').SpeechSettings
 }
 
 /** A single layer of the assembled prompt/behavior display. */
@@ -3567,6 +3569,7 @@ export type AppConfigPatch = Partial<
     | 'defaultPullStrategy'
     | 'maxDiffLines'
     | 'openLocalhostInCioBrowser'
+    | 'sound'
   >
 >
 

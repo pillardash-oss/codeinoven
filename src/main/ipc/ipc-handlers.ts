@@ -838,7 +838,8 @@ const CONFIG_PATCH_FIELDS = new Set([
   'defaultMergeMethod',
   'defaultPullStrategy',
   'maxDiffLines',
-  'openLocalhostInCioBrowser'
+  'openLocalhostInCioBrowser',
+  'sound'
 ])
 const SPEC_SECTIONS = new Set<SpecSectionId>([
   'problem',
@@ -1639,6 +1640,71 @@ export function validateAppConfigPatch(value: unknown): AppConfigPatch {
       throw new TypeError('Open localhost in CIO browser must be a boolean')
     }
     patch.openLocalhostInCioBrowser = value.openLocalhostInCioBrowser
+  }
+
+  if ('sound' in value) {
+    if (!isRecord(value.sound)) throw new TypeError('Sound settings must be an object')
+    const sound = value.sound
+    if (
+      typeof sound.localCleanupEnabled !== 'boolean' ||
+      typeof sound.remoteCleanupEnabled !== 'boolean' ||
+      (sound.remoteCleanupSelection !== 'fixed' &&
+        sound.remoteCleanupSelection !== 'conversation') ||
+      (sound.runtimeOverride !== undefined &&
+        sound.runtimeOverride !== 'mlx' &&
+        sound.runtimeOverride !== 'sherpa-onnx') ||
+      typeof sound.includeCodeBlocksInSpeech !== 'boolean' ||
+      !Array.isArray(sound.preferredLanguages) ||
+      !sound.preferredLanguages.every(
+        (language) => typeof language === 'string' && language.length <= 32
+      ) ||
+      typeof sound.keepAsrLoaded !== 'boolean' ||
+      typeof sound.keepCleanupLoaded !== 'boolean' ||
+      typeof sound.keepTtsLoaded !== 'boolean' ||
+      !Number.isSafeInteger(sound.historyLimit) ||
+      Number(sound.historyLimit) < 1 ||
+      Number(sound.historyLimit) > 500 ||
+      !isRecord(sound.cues) ||
+      typeof sound.cues.listeningStarted !== 'boolean' ||
+      typeof sound.cues.recordingStopped !== 'boolean' ||
+      typeof sound.cues.transcriptReady !== 'boolean' ||
+      typeof sound.cues.volume !== 'number' ||
+      sound.cues.volume < 0 ||
+      sound.cues.volume > 1
+    ) {
+      throw new TypeError('Sound settings are invalid')
+    }
+    const optionalId = (field: string): string | undefined => {
+      const candidate = sound[field]
+      if (candidate === undefined) return undefined
+      if (typeof candidate !== 'string' || candidate.length === 0 || candidate.length > 256) {
+        throw new TypeError(`Sound ${field} is invalid`)
+      }
+      return candidate
+    }
+    patch.sound = {
+      runtimeOverride: sound.runtimeOverride,
+      asrArtifactId: optionalId('asrArtifactId'),
+      cleanupArtifactId: optionalId('cleanupArtifactId'),
+      ttsArtifactId: optionalId('ttsArtifactId'),
+      ttsVoiceId: optionalId('ttsVoiceId'),
+      preferredLanguages: sound.preferredLanguages,
+      localCleanupEnabled: sound.localCleanupEnabled,
+      remoteCleanupEnabled: sound.remoteCleanupEnabled,
+      remoteCleanupSelection: sound.remoteCleanupSelection,
+      remoteCleanupModelId: optionalId('remoteCleanupModelId'),
+      includeCodeBlocksInSpeech: sound.includeCodeBlocksInSpeech,
+      historyLimit: Number(sound.historyLimit),
+      cues: {
+        listeningStarted: sound.cues.listeningStarted,
+        recordingStopped: sound.cues.recordingStopped,
+        transcriptReady: sound.cues.transcriptReady,
+        volume: sound.cues.volume
+      },
+      keepAsrLoaded: sound.keepAsrLoaded,
+      keepCleanupLoaded: sound.keepCleanupLoaded,
+      keepTtsLoaded: sound.keepTtsLoaded
+    }
   }
 
   if ('slashCommandMode' in value) {

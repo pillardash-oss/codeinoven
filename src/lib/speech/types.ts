@@ -408,6 +408,16 @@ export interface SpeechHistoryPage {
   total: number
 }
 
+export type SpeechDestructiveAction =
+  'history-item' | 'all-history' | 'recording' | 'rule' | 'model'
+
+export interface SpeechConfirmation {
+  token: string
+  action: SpeechDestructiveAction
+  targetId: string
+  expiresAt: number
+}
+
 export type SpeechResult<T> = { ok: true; value: T } | { ok: false; error: SpeechError }
 
 export interface SpeechCaptureSessionInfo {

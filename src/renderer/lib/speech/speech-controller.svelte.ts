@@ -8,6 +8,7 @@ import type {
   SpeechPreparedPlayback,
   SpeechSynthesizedSegment
 } from '../../../lib/speech/types'
+import { DEFAULT_SPEECH_SETTINGS } from '../../../lib/speech/types'
 import type { SpeechEditorSnapshot, SpeechEditorTarget } from './editor-target'
 
 export type RendererSpeechState =
@@ -68,6 +69,7 @@ class SpeechController {
   private elapsedTimer: ReturnType<typeof setInterval> | null = null
   private readonly spans = new Map<string, SpeechDictationSpan[]>()
   private activePlayback: ActivePlayback | null = null
+  private sound = structuredClone(DEFAULT_SPEECH_SETTINGS)
 
   isActiveTarget(targetId: string): boolean {
     return 'targetId' in this.state && this.state.targetId === targetId
@@ -79,6 +81,7 @@ class SpeechController {
     preparedSnapshot?: SpeechEditorSnapshot | null
   ): Promise<void> {
     if (this.active || !['idle', 'failed'].includes(this.state.state)) return
+    await this.loadSettings()
     const snapshot = preparedSnapshot ?? target.capture()
     if (!snapshot) {
       this.state = {
@@ -293,16 +296,22 @@ class SpeechController {
       return
     }
     await this.cancelPlayback()
+    await this.loadSettings()
     this.playback = { state: 'preparing', sessionId: 'pending', messageId }
     try {
       const selection = await this.selectTtsArtifact()
-      const prepared = await invoke('speech:preparePlayback', messageId, markdown, false)
+      const prepared = await invoke(
+        'speech:preparePlayback',
+        messageId,
+        markdown,
+        this.sound.includeCodeBlocksInSpeech
+      )
       if (!prepared.ok) throw new Error(prepared.error.message)
       const playback: ActivePlayback = {
         prepared: prepared.value,
         runtime: selection.runtime,
         artifact: selection.artifact,
-        voiceId: selection.artifact.voices[0] ?? '0',
+        voiceId: this.sound.ttsVoiceId ?? selection.artifact.voices[0] ?? '0',
         audio: null,
         audioUrl: null,
         next: null,
@@ -381,7 +390,7 @@ class SpeechController {
     ])
     if (!capabilities.ok) throw new Error(capabilities.error.message)
     if (!catalog.ok) throw new Error(catalog.error.message)
-    const runtime = capabilities.value.selectedRuntime
+    const runtime = this.sound.runtimeOverride ?? capabilities.value.selectedRuntime
     if (!runtime) {
       throw new Error(
         `${capabilities.value.recommendedRuntime === 'mlx' ? 'MLX' : 'sherpa-onnx'} is unavailable on this device.`
@@ -394,6 +403,7 @@ class SpeechController {
     )
     const artifact = catalog.value.artifacts.find(
       (candidate) =>
+        (!this.sound.asrArtifactId || candidate.id === this.sound.asrArtifactId) &&
         candidate.runtime === runtime &&
         candidate.capability === 'asr' &&
         candidate.qualification.status === 'qualified' &&
@@ -414,7 +424,7 @@ class SpeechController {
     ])
     if (!capabilities.ok) throw new Error(capabilities.error.message)
     if (!catalog.ok) throw new Error(catalog.error.message)
-    const runtime = capabilities.value.selectedRuntime
+    const runtime = this.sound.runtimeOverride ?? capabilities.value.selectedRuntime
     if (!runtime) throw new Error('The selected local speech runtime is unavailable.')
     const installed = new Set(
       capabilities.value.installedArtifacts
@@ -423,6 +433,7 @@ class SpeechController {
     )
     const artifact = catalog.value.artifacts.find(
       (item) =>
+        (!this.sound.ttsArtifactId || item.id === this.sound.ttsArtifactId) &&
         item.runtime === runtime &&
         item.capability === 'tts' &&
         item.qualification.status === 'qualified' &&
@@ -493,6 +504,13 @@ class SpeechController {
   }
 
   private playCue(kind: 'started' | 'stopped' | 'completed'): void {
+    const enabled =
+      kind === 'started'
+        ? this.sound.cues.listeningStarted
+        : kind === 'stopped'
+          ? this.sound.cues.recordingStopped
+          : this.sound.cues.transcriptReady
+    if (!enabled || this.sound.cues.volume === 0) return
     const AudioContextConstructor = window.AudioContext
     const context = new AudioContextConstructor()
     const oscillator = context.createOscillator()
@@ -500,13 +518,25 @@ class SpeechController {
     const frequency = kind === 'started' ? 520 : kind === 'stopped' ? 360 : 700
     oscillator.frequency.setValueAtTime(frequency, context.currentTime)
     gain.gain.setValueAtTime(0.0001, context.currentTime)
-    gain.gain.exponentialRampToValueAtTime(0.04, context.currentTime + 0.01)
+    gain.gain.exponentialRampToValueAtTime(
+      Math.max(0.0001, 0.06 * this.sound.cues.volume),
+      context.currentTime + 0.01
+    )
     gain.gain.exponentialRampToValueAtTime(0.0001, context.currentTime + 0.09)
     oscillator.connect(gain)
     gain.connect(context.destination)
     oscillator.start()
     oscillator.stop(context.currentTime + 0.1)
     oscillator.addEventListener('ended', () => void context.close(), { once: true })
+  }
+
+  private async loadSettings(): Promise<void> {
+    try {
+      const config = await invoke('config:get')
+      this.sound = structuredClone(config.sound)
+    } catch {
+      this.sound = structuredClone(DEFAULT_SPEECH_SETTINGS)
+    }
   }
 }
 

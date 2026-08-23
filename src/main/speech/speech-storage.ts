@@ -90,6 +90,7 @@ export class SpeechStorage {
     })
     this.index.attempts.push(attempt)
     await this.persistIndex()
+    await this.enforceHistoryLimit()
     return { sessionId, attempt: structuredClone(attempt) }
   }
 
@@ -117,6 +118,7 @@ export class SpeechStorage {
     }
     this.index.attempts.push(attempt)
     await this.persistIndex()
+    await this.enforceHistoryLimit()
     return structuredClone(attempt)
   }
 
@@ -244,6 +246,29 @@ export class SpeechStorage {
         attempt.audioId ? rm(this.audioPath(attempt.audioId), { force: true }) : Promise.resolve()
       )
     )
+  }
+
+  async deleteAttempt(attemptId: string, deleteAudio: boolean): Promise<void> {
+    const attempt = this.requireAttempt(attemptId)
+    this.index.attempts = this.index.attempts.filter((item) => item.id !== attemptId)
+    await this.persistIndex()
+    if (deleteAudio && attempt.audioId) await rm(this.audioPath(attempt.audioId), { force: true })
+  }
+
+  async deleteAllAttempts(): Promise<void> {
+    const attempts = this.index.attempts
+    this.index.attempts = []
+    await this.persistIndex()
+    await Promise.all(
+      attempts.map((attempt) =>
+        attempt.audioId ? rm(this.audioPath(attempt.audioId), { force: true }) : Promise.resolve()
+      )
+    )
+  }
+
+  async readAudio(attemptId: string): Promise<Uint8Array<ArrayBuffer>> {
+    const bytes = await readFile(this.getAudioPath(attemptId))
+    return new Uint8Array(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength))
   }
 
   async dispose(): Promise<void> {

@@ -20,6 +20,7 @@ export type SettingsSection =
   | 'utilities'
   | 'gateways'
   | 'computer-use'
+  | 'sound'
   | 'keymap'
   | 'remote'
   | 'cloud-deployments'
@@ -39,6 +40,7 @@ export type MainView =
   | 'settings-utilities'
   | 'settings-gateways'
   | 'settings-computer-use'
+  | 'settings-sound'
   | 'settings-keymap'
   | 'settings-remote'
   | 'settings-cloud-deployments'
@@ -137,6 +139,7 @@ const MAIN_VIEWS: readonly MainView[] = [
   'settings-cio-prompts',
   'settings-harnesses',
   'settings-utilities',
+  'settings-sound',
   'settings-keymap',
   'settings-remote',
   'settings-about'
@@ -151,6 +154,7 @@ const SETTINGS_SECTIONS: readonly SettingsSection[] = [
   'utilities',
   'gateways',
   'computer-use',
+  'sound',
   'keymap',
   'remote',
   'cloud-deployments',

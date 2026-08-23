@@ -2,6 +2,7 @@ import type { WebContents } from 'electron'
 import { MAX_SPEECH_CHUNK_BYTES } from '../../lib/speech/types'
 import type {
   SpeechCorrectionObservation,
+  SpeechDestructiveAction,
   SpeechRuntime,
   SpeechScope
 } from '../../lib/speech/types'
@@ -12,6 +13,19 @@ import { trustedIpcMain as ipcMain } from './trusted-ipc-main'
 function entityId(value: unknown, label: string): string {
   if (typeof value !== 'string' || !/^[a-zA-Z0-9][a-zA-Z0-9._:-]{2,127}$/u.test(value)) {
     throw new RangeError(`${label} is invalid.`)
+  }
+  return value
+}
+
+function destructiveAction(value: unknown): SpeechDestructiveAction {
+  if (
+    value !== 'history-item' &&
+    value !== 'all-history' &&
+    value !== 'recording' &&
+    value !== 'rule' &&
+    value !== 'model'
+  ) {
+    throw new RangeError('Destructive speech action is invalid.')
   }
   return value
 }
@@ -158,6 +172,11 @@ export function registerSpeechIpc(
       return service.history(cursor, limit)
     })
   )
+  ipcMain.handle('speech:enforceHistoryLimit', (_event, rawLimit: unknown) =>
+    speechResult(() =>
+      service.enforceHistoryLimit(boundedInteger(rawLimit, 'History limit', 1, 500))
+    )
+  )
   ipcMain.handle('speech:downloadArtifact', (_event, rawArtifactId: unknown) =>
     speechResult(() => service.downloadArtifact(entityId(rawArtifactId, 'Artifact id')))
   )
@@ -183,8 +202,69 @@ export function registerSpeechIpc(
         return service.setCorrectionRuleEnabled(entityId(rawRuleId, 'Rule id'), rawEnabled)
       })
   )
-  ipcMain.handle('speech:deleteCorrectionRule', (_event, rawRuleId: unknown) =>
-    speechResult(() => service.deleteCorrectionRule(entityId(rawRuleId, 'Rule id')))
+  ipcMain.handle(
+    'speech:deleteCorrectionRule',
+    (_event, rawRuleId: unknown, rawConfirmationToken: unknown) =>
+      speechResult(() =>
+        service.deleteCorrectionRule(
+          entityId(rawRuleId, 'Rule id'),
+          entityId(rawConfirmationToken, 'Confirmation token')
+        )
+      )
+  )
+  ipcMain.handle('speech:requestConfirmation', (_event, rawAction: unknown, rawTargetId: unknown) =>
+    speechResult(async () =>
+      service.requestConfirmation(
+        destructiveAction(rawAction),
+        entityId(rawTargetId, 'Confirmation target')
+      )
+    )
+  )
+  ipcMain.handle(
+    'speech:deleteHistory',
+    (_event, rawAttemptId: unknown, rawConfirmationToken: unknown) =>
+      speechResult(() =>
+        service.deleteHistory(
+          entityId(rawAttemptId, 'Attempt id'),
+          entityId(rawConfirmationToken, 'Confirmation token')
+        )
+      )
+  )
+  ipcMain.handle('speech:deleteAllHistory', (_event, rawConfirmationToken: unknown) =>
+    speechResult(() =>
+      service.deleteAllHistory(entityId(rawConfirmationToken, 'Confirmation token'))
+    )
+  )
+  ipcMain.handle('speech:readAudio', (_event, rawAttemptId: unknown) =>
+    speechResult(() => service.readAudio(entityId(rawAttemptId, 'Attempt id')))
+  )
+  ipcMain.handle(
+    'speech:retryTranscription',
+    (
+      _event,
+      rawAttemptId: unknown,
+      rawRuntime: unknown,
+      rawArtifactId: unknown,
+      rawLanguage: unknown
+    ) =>
+      speechResult(() =>
+        service.retryTranscription(
+          entityId(rawAttemptId, 'Attempt id'),
+          runtime(rawRuntime),
+          entityId(rawArtifactId, 'Artifact id'),
+          boundedString(rawLanguage, 'Language', 32)
+        )
+      )
+  )
+  ipcMain.handle(
+    'speech:deleteArtifact',
+    (_event, rawArtifactId: unknown, rawConfirmationToken: unknown) =>
+      speechResult(() =>
+        service.deleteArtifact(
+          entityId(rawArtifactId, 'Artifact id'),
+          entityId(rawConfirmationToken, 'Confirmation token')
+        )
+      )
   )
   ipcMain.handle(
     'speech:preparePlayback',
@@ -241,6 +321,7 @@ export function registerSpeechIpc(
       'speech:markAttemptFailure',
       'speech:transcribe',
       'speech:getHistory',
+      'speech:enforceHistoryLimit',
       'speech:downloadArtifact',
       'speech:cancelDownload',
       'speech:cancelJob',
@@ -248,6 +329,12 @@ export function registerSpeechIpc(
       'speech:observeCorrection',
       'speech:setCorrectionRuleEnabled',
       'speech:deleteCorrectionRule',
+      'speech:requestConfirmation',
+      'speech:deleteHistory',
+      'speech:deleteAllHistory',
+      'speech:readAudio',
+      'speech:retryTranscription',
+      'speech:deleteArtifact',
       'speech:preparePlayback',
       'speech:synthesizePlaybackSegment',
       'speech:cancelPlayback'

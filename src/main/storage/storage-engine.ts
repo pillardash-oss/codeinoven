@@ -36,6 +36,7 @@ import {
   normalizeWorkerNames
 } from '../../lib/assignment/worker-names'
 import type { WorkerNameSettings } from '../../lib/assignment/worker-names'
+import { DEFAULT_SPEECH_SETTINGS } from '../../lib/speech/types'
 
 const DEFAULT_CONFIG: AppConfig = {
   theme: 'system',
@@ -59,7 +60,8 @@ const DEFAULT_CONFIG: AppConfig = {
   defaultMergeMethod: 'squash',
   defaultPullStrategy: 'ask',
   maxDiffLines: 100,
-  openLocalhostInCioBrowser: true
+  openLocalhostInCioBrowser: true,
+  sound: DEFAULT_SPEECH_SETTINGS
 }
 
 /**
@@ -125,6 +127,14 @@ export class StorageEngine {
         ...DEFAULT_CONFIG.memory,
         ...(config?.memory ?? {}),
         entries: config?.memory?.entries ?? []
+      },
+      sound: {
+        ...DEFAULT_CONFIG.sound,
+        ...(config?.sound ?? {}),
+        cues: {
+          ...DEFAULT_CONFIG.sound.cues,
+          ...(config?.sound?.cues ?? {})
+        }
       },
       agentBehaviorPrompt: await this.readBehaviorPrompt()
     }

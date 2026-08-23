@@ -15,6 +15,8 @@ import type {
   SpeechRecordingAttempt,
   SpeechPreparedPlayback,
   SpeechSynthesizedSegment,
+  SpeechConfirmation,
+  SpeechDestructiveAction,
   SpeechResult,
   SpeechRuntime,
   SpeechRuntimeAvailability,
@@ -70,6 +72,7 @@ export class SpeechService {
     join(getConfigRoot(), 'speech', 'corrections.json')
   )
   private readonly playback = new TtsPlaybackService()
+  private readonly confirmations = new Map<string, SpeechConfirmation>()
 
   constructor(
     private readonly paths: SpeechServicePaths,
@@ -305,6 +308,90 @@ export class SpeechService {
     return this.storage.listHistory(cursor, limit)
   }
 
+  enforceHistoryLimit(limit: number): Promise<void> {
+    return this.storage.enforceHistoryLimit(limit)
+  }
+
+  requestConfirmation(action: SpeechDestructiveAction, targetId: string): SpeechConfirmation {
+    const confirmation: SpeechConfirmation = {
+      token: randomUUID(),
+      action,
+      targetId,
+      expiresAt: Date.now() + 60_000
+    }
+    this.confirmations.set(confirmation.token, confirmation)
+    return confirmation
+  }
+
+  async deleteHistory(attemptId: string, token: string): Promise<void> {
+    this.consumeConfirmation(token, 'history-item', attemptId)
+    await this.storage.deleteAttempt(attemptId, true)
+  }
+
+  async deleteAllHistory(token: string): Promise<void> {
+    this.consumeConfirmation(token, 'all-history', 'all')
+    await this.storage.deleteAllAttempts()
+  }
+
+  readAudio(attemptId: string): Promise<Uint8Array<ArrayBuffer>> {
+    return this.storage.readAudio(attemptId)
+  }
+
+  async deleteArtifact(artifactId: string, token: string): Promise<void> {
+    this.consumeConfirmation(token, 'model', artifactId)
+    await rm(this.storage.modelDirectory(artifactId), { recursive: true, force: true })
+    this.installed.artifacts = this.installed.artifacts.filter(
+      (item) => item.artifactId !== artifactId
+    )
+    await this.persistInstalledIndex()
+  }
+
+  async deleteCorrectionRuleConfirmed(ruleId: string, token: string): Promise<void> {
+    this.consumeConfirmation(token, 'rule', ruleId)
+    await this.learning.delete(ruleId)
+  }
+
+  async retryTranscription(
+    attemptId: string,
+    runtime: SpeechRuntime,
+    artifactId: string,
+    language: string | 'auto'
+  ): Promise<SpeechTranscriptionResult> {
+    const attempt = this.storage.getAttempt(attemptId)
+    if (!attempt?.audioAvailable) throw new Error('Recording audio is unavailable.')
+    const retryId = randomUUID()
+    await this.storage.updateAttempt(attemptId, (current) => {
+      current.retries.push({
+        id: retryId,
+        createdAt: Date.now(),
+        runtime,
+        artifactId,
+        state: 'running'
+      })
+    })
+    try {
+      const result = await this.transcribe(attemptId, runtime, artifactId, language)
+      await this.storage.updateAttempt(attemptId, (current) => {
+        const retry = current.retries.find((item) => item.id === retryId)
+        if (!retry) return
+        retry.state = 'succeeded'
+        retry.completedAt = Date.now()
+        retry.rawTranscript = result.rawTranscript
+        retry.cleanedTranscript = result.finalTranscript
+      })
+      return result
+    } catch (cause) {
+      await this.storage.updateAttempt(attemptId, (current) => {
+        const retry = current.retries.find((item) => item.id === retryId)
+        if (!retry) return
+        retry.state = 'failed'
+        retry.completedAt = Date.now()
+        retry.error = this.asError(cause, 'transcription-failed')
+      })
+      throw cause
+    }
+  }
+
   correctionRules(scope?: SpeechScope): SpeechCorrectionRule[] {
     return this.learning.list(scope)
   }
@@ -319,8 +406,8 @@ export class SpeechService {
     return this.learning.setEnabled(ruleId, enabled)
   }
 
-  deleteCorrectionRule(ruleId: string): Promise<void> {
-    return this.learning.delete(ruleId)
+  deleteCorrectionRule(ruleId: string, token: string): Promise<void> {
+    return this.deleteCorrectionRuleConfirmed(ruleId, token)
   }
 
   preparePlayback(
@@ -552,6 +639,23 @@ export class SpeechService {
     )
     if (!installed) throw new Error('The selected model is not installed.')
     return artifact
+  }
+
+  private consumeConfirmation(
+    token: string,
+    action: SpeechDestructiveAction,
+    targetId: string
+  ): void {
+    const confirmation = this.confirmations.get(token)
+    this.confirmations.delete(token)
+    if (
+      !confirmation ||
+      confirmation.action !== action ||
+      confirmation.targetId !== targetId ||
+      confirmation.expiresAt < Date.now()
+    ) {
+      throw new Error('Destructive confirmation is stale or invalid.')
+    }
   }
 
   private requireAttemptScope(attemptId: string): SpeechScope {
