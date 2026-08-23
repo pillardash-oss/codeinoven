@@ -9,6 +9,7 @@
   import { APP_SLUG } from '$shared/brand'
   import { threadSettings } from '$lib/stores/thread-settings.svelte'
   import { providerCatalog } from '$lib/stores/provider-catalog.svelte'
+  import { prComposeAgentSettings } from '$lib/stores/pr-compose-agent-settings.svelte'
   import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
   import { modelKey } from '$lib/model-keys'
@@ -19,6 +20,8 @@
   } from '$lib/stores/pr-lifecycle.svelte'
   import { getProjectIcon } from '$lib/project-icons'
   import { DEFAULT_SCOPE_BUCKET_ID, isOrchestrationChildThread } from '$shared/types'
+  import { DEFAULT_THINKING_LEVEL, resolveDefaultThinkingLevel } from '$shared/thinking-presets'
+  import { baseUrlProviderStore } from '$lib/stores/base-url-providers.svelte'
   import type {
     Project,
     PrComposeInput,
@@ -62,28 +65,10 @@
     draftId?: string
   }
 
-  interface StoredComposeSelection {
-    harnessId: string
-    providerId: string
-    modelId: string
-    thinkingLevel: ThinkingLevel
-  }
-
   interface PrCreationPreferences {
     head?: string
     base?: string
-    compose?: StoredComposeSelection
   }
-
-  const THINKING_LEVELS = new Set<ThinkingLevel>([
-    'minimal',
-    'low',
-    'medium',
-    'high',
-    'xhigh',
-    'max',
-    'ultra'
-  ])
 
   let {
     projectId,
@@ -113,34 +98,9 @@
       const parsed: unknown = JSON.parse(raw)
       if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return {}
       const record = parsed as Record<string, unknown>
-      const composeValue = record['compose']
-      let compose: StoredComposeSelection | undefined
-      if (
-        typeof composeValue === 'object' &&
-        composeValue !== null &&
-        !Array.isArray(composeValue)
-      ) {
-        const selection = composeValue as Record<string, unknown>
-        const thinkingLevel = selection['thinkingLevel']
-        if (
-          typeof selection['harnessId'] === 'string' &&
-          typeof selection['providerId'] === 'string' &&
-          typeof selection['modelId'] === 'string' &&
-          typeof thinkingLevel === 'string' &&
-          THINKING_LEVELS.has(thinkingLevel as ThinkingLevel)
-        ) {
-          compose = {
-            harnessId: selection['harnessId'],
-            providerId: selection['providerId'],
-            modelId: selection['modelId'],
-            thinkingLevel: thinkingLevel as ThinkingLevel
-          }
-        }
-      }
       return {
         ...(typeof record['head'] === 'string' ? { head: record['head'] } : {}),
-        ...(typeof record['base'] === 'string' ? { base: record['base'] } : {}),
-        ...(compose ? { compose } : {})
+        ...(typeof record['base'] === 'string' ? { base: record['base'] } : {})
       }
     } catch {
       return {}
@@ -221,11 +181,6 @@
   let composeOpen = $state(false)
   /** Phase of the compose flow, drives the dropdown's button label. */
   let composePhase = $state<'idle' | 'working' | 'complete' | 'recompose'>('idle')
-  /** Project-specific PR model when available; otherwise the user's last project model. */
-  let composeSettings = $state<ThreadSettings>({
-    ...threadSettings.lastUsed,
-    ...(initialPreferences.compose ?? {})
-  })
   /** Latest compose error, shown inline in the dropdown. */
   let composeError = $state('')
   /** Timer that flips "Complete" → "Recompose" after a short pause. */
@@ -690,25 +645,21 @@
    * low-exposure `auto_review` permission mode regardless of what the last-used
    * or persisted thread-level permission was — never `full_access`.
    */
-  function composeVirtualTaskSettings(): ThreadSettings {
+  function composeVirtualTaskSettings(): ThreadSettings | null {
+    const selection = prComposeAgentSettings.selection
+    if (!selection) return null
     return {
-      ...composeSettings,
+      harnessId: selection.harnessId,
+      providerId: selection.providerId,
+      modelId: selection.modelId,
+      thinkingLevel: selection.thinkingLevel,
+      inferenceMode: 'normal',
       permissionLevel: 'auto_review',
       engineeringMode: false,
       assignmentMode: false,
-      loopMode: false
+      loopMode: false,
+      fileSystemMode: false
     }
-  }
-
-  function persistComposeSelection(settings: ThreadSettings): void {
-    persistPrCreationPreferences({
-      compose: {
-        harnessId: settings.harnessId,
-        providerId: settings.providerId,
-        modelId: settings.modelId,
-        thinkingLevel: settings.thinkingLevel
-      }
-    })
   }
 
   /** Kick off a fresh disposable compose or recompose task. */
@@ -720,7 +671,7 @@
     composePhase = 'working'
     try {
       const settings = composeVirtualTaskSettings()
-      persistComposeSelection(settings)
+      if (!settings) throw new Error('Choose a model for Compose PR first')
       const virtualTaskId = crypto.randomUUID()
       const report = await gitState.composeWithAgent(
         projectId,
@@ -740,21 +691,29 @@
   }
 
   function chooseComposeModel(providerId: string, modelId: string, harnessId: string): void {
-    composeSettings = {
-      ...composeSettings,
+    const provider = composeProviders.find(
+      (candidate) => candidate.harnessId === harnessId && candidate.id === providerId
+    )
+    const model = provider?.models.find((candidate) => candidate.id === modelId)
+    const thinkingLevel =
+      resolveDefaultThinkingLevel(
+        model?.thinkingPresets,
+        baseUrlProviderStore.defaultThinkingLevel(harnessId, providerId, modelId),
+        prComposeAgentSettings.selection?.thinkingLevel
+      ) ??
+      prComposeAgentSettings.selection?.thinkingLevel ??
+      DEFAULT_THINKING_LEVEL
+    prComposeAgentSettings.selectModel({
       harnessId,
       providerId,
-      modelId
-    }
-    persistComposeSelection(composeSettings)
+      modelId,
+      thinkingLevel
+    })
+    composeError = ''
   }
 
   function chooseComposeThinking(level: ThinkingLevel): void {
-    composeSettings = {
-      ...composeSettings,
-      thinkingLevel: level
-    }
-    persistComposeSelection(composeSettings)
+    prComposeAgentSettings.selectThinking(level)
   }
 
   onDestroy(clearComposeTimers)
@@ -888,8 +847,12 @@
             <DropdownMenu.Root bind:open={composeOpen}>
               <DropdownMenu.Trigger
                 class="flex h-7 cursor-pointer items-center gap-1.5 rounded-lg border border-border px-2.5 text-[10px] font-medium text-foreground transition-colors hover:bg-elevated disabled:cursor-default disabled:opacity-50"
-                aria-label="Compose with agent"
-                title="Compose the title and description with an agent"
+                aria-label={prComposeAgentSettings.selection
+                  ? 'Compose with agent'
+                  : 'Choose a model for Compose PR'}
+                title={prComposeAgentSettings.selection
+                  ? 'Compose the title and description with an agent'
+                  : 'Choose the model Compose PR will reuse'}
                 disabled={composePhase === 'working'}
               >
                 {#if composePhase === 'working'}
@@ -900,7 +863,13 @@
                   <span>Complete</span>
                 {:else}
                   <Sparkles size={11} />
-                  <span>{composePhase === 'recompose' ? 'Recompose' : 'Compose with agent'}</span>
+                  <span>
+                    {prComposeAgentSettings.selection
+                      ? composePhase === 'recompose'
+                        ? 'Recompose'
+                        : 'Compose with agent'
+                      : 'Choose compose model'}
+                  </span>
                 {/if}
               </DropdownMenu.Trigger>
               <DropdownMenu.Portal>
@@ -912,6 +881,14 @@
                   class="z-50 w-72 rounded-xl border border-border bg-surface p-2 shadow-xl"
                 >
                   <div class="space-y-1.5">
+                    {#if !prComposeAgentSettings.selection}
+                      <p
+                        class="rounded-lg border border-border bg-elevated px-2.5 py-2 text-[10px] leading-relaxed text-muted"
+                      >
+                        Choose a model for Compose PR. This choice is kept separate from every
+                        thread and reused until you change it.
+                      </p>
+                    {/if}
                     <div>
                       <p
                         class="mb-1 px-0.5 text-[9px] font-semibold uppercase tracking-wide text-muted"
@@ -921,15 +898,16 @@
                       <ModelPicker
                         providers={composeProviders}
                         {projectId}
-                        harnessId={composeSettings.harnessId}
-                        providerId={composeSettings.providerId}
-                        modelId={composeSettings.modelId}
+                        harnessId={prComposeAgentSettings.selection?.harnessId ?? ''}
+                        providerId={prComposeAgentSettings.selection?.providerId ?? ''}
+                        modelId={prComposeAgentSettings.selection?.modelId ?? ''}
+                        label={prComposeAgentSettings.selection ? undefined : 'Choose a model'}
                         favoriteModels={rendererRecovery.favoriteModels}
                         recentModels={rendererRecovery.recentModels}
                         side="top"
                         variant="action"
                         onSelect={chooseComposeModel}
-                        thinkingLevel={composeSettings.thinkingLevel}
+                        thinkingLevel={prComposeAgentSettings.selection?.thinkingLevel ?? null}
                         onSelectThinking={chooseComposeThinking}
                         onToggleFavorite={(providerId, modelId, harnessId) =>
                           rendererRecovery.toggleFavorite(modelKey(harnessId, providerId, modelId))}
@@ -940,7 +918,7 @@
                     <button
                       type="button"
                       class="flex h-8 w-full cursor-pointer items-center justify-center gap-1.5 rounded-lg bg-primary px-3 text-[11px] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:cursor-default disabled:opacity-50"
-                      disabled={composePhase === 'working'}
+                      disabled={composePhase === 'working' || !prComposeAgentSettings.selection}
                       onclick={() => void runCompose()}
                     >
                       {#if composePhase === 'working'}

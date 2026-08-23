@@ -5763,12 +5763,18 @@ export function registerIpcHandlers(
     const safeProjectId = validateEntityId(args[0], 'Project ID')
     const scopeBucketId = validateEntityId(args[1], 'Scope bucket ID')
     const virtualTaskId = validateEntityId(args[2], 'Virtual task ID')
+    const requestedSettings = validateThreadSettings(args[3])
     const settings = validateThreadSettings({
-      ...validateThreadSettings(args[3]),
+      harnessId: requestedSettings.harnessId,
+      providerId: requestedSettings.providerId,
+      modelId: requestedSettings.modelId,
+      thinkingLevel: requestedSettings.thinkingLevel,
+      inferenceMode: 'normal',
       permissionLevel: 'auto_review',
       engineeringMode: false,
       assignmentMode: false,
-      loopMode: false
+      loopMode: false,
+      fileSystemMode: false
     })
     const input = validatePrComposeInput(args[4])
     const context = await gitService.pullRequestComposeContext(
