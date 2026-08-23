@@ -442,29 +442,6 @@ CREATE INDEX IF NOT EXISTS idx_brainstorm_versions_thread
   ON brainstorm_versions(project_id, thread_id);
 
 -- ─── Spec Workflow ───────────────────────────────────────────────────
--- Persisted Engineering selection and restart-safe progression. started_at
--- is permanent once set so the renderer can keep the Toolbox history fill.
-CREATE TABLE IF NOT EXISTS engineering_lifecycle (
-  project_id                  TEXT NOT NULL,
-  thread_id                   TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
-  selection                   TEXT NOT NULL DEFAULT 'none'
-    CHECK(selection IN ('none','brainstorm','prd','spec','assignment','achievement','run_all')),
-  active_stage                TEXT
-    CHECK(active_stage IS NULL OR active_stage IN ('brainstorm','prd','spec','assignment','achievement')),
-  completed_stages_json       TEXT NOT NULL DEFAULT '[]',
-  human_gate                  TEXT
-    CHECK(human_gate IS NULL OR human_gate IN ('prototype_selection','brainstorm_finalization','prd_finalization','spec_approval','assignment_approval','terminal_failure')),
-  resume_token                TEXT,
-  last_consumed_resume_token  TEXT,
-  failure                     TEXT,
-  started_at                  INTEGER,
-  updated_at                  INTEGER NOT NULL,
-  PRIMARY KEY (project_id, thread_id)
-);
-
-CREATE INDEX IF NOT EXISTS idx_engineering_lifecycle_active
-  ON engineering_lifecycle(selection, active_stage, updated_at);
-
 CREATE TABLE IF NOT EXISTS spec_workflow (
   project_id           TEXT NOT NULL,
   thread_id            TEXT NOT NULL,

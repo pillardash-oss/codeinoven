@@ -2,7 +2,10 @@ import { afterEach, describe, expect, it } from 'vitest'
 import type { Database } from '../../../src/main/database/database'
 import { ProjectRepo } from '../../../src/main/database/repositories/project-repo'
 import { ThreadRepo } from '../../../src/main/database/repositories/thread-repo'
-import { EngineeringLifecycleEngine } from '../../../src/lib/engines/engineering-lifecycle-engine'
+import {
+  deriveEngineeringLifecycleSwitchState,
+  EngineeringLifecycleEngine
+} from '../../../src/lib/engines/engineering-lifecycle-engine'
 import { createTestDb, destroyTestDb } from '../../main/database/test-helper'
 
 const databases: Database[] = []
@@ -51,6 +54,25 @@ async function setup(): Promise<{ db: Database; lifecycle: EngineeringLifecycleE
 afterEach(() => databases.splice(0).forEach(destroyTestDb))
 
 describe('EngineeringLifecycleEngine', () => {
+  it('derives every stage as selected and immutable while Run all is selected', () => {
+    expect(deriveEngineeringLifecycleSwitchState('run_all', 'brainstorm')).toEqual({
+      checked: true,
+      disabled: true
+    })
+    expect(deriveEngineeringLifecycleSwitchState('run_all', 'achievement')).toEqual({
+      checked: true,
+      disabled: true
+    })
+    expect(deriveEngineeringLifecycleSwitchState('prd', 'prd')).toEqual({
+      checked: true,
+      disabled: false
+    })
+    expect(deriveEngineeringLifecycleSwitchState('prd', 'spec')).toEqual({
+      checked: false,
+      disabled: false
+    })
+  })
+
   it('does not mark history until the selected stage starts and never clears it', async () => {
     const { db, lifecycle } = await setup()
     expect(lifecycle.select('project-1', 'thread-1', 'spec').startedAt).toBeUndefined()

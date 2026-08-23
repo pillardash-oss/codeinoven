@@ -21,6 +21,22 @@ const NEXT_STAGE_AFTER_GATE: Partial<Record<EngineeringLifecycleGate, Engineerin
     assignment_approval: 'achievement'
   }
 
+export interface EngineeringLifecycleSwitchState {
+  checked: boolean
+  disabled: boolean
+}
+
+/** Derive switch presentation from the one canonical lifecycle selection. */
+export function deriveEngineeringLifecycleSwitchState(
+  selection: EngineeringLifecycleSelection,
+  stage: EngineeringLifecycleStage
+): EngineeringLifecycleSwitchState {
+  return {
+    checked: selection === 'run_all' || selection === stage,
+    disabled: selection === 'run_all'
+  }
+}
+
 export class EngineeringLifecycleError extends Error {
   constructor(
     readonly code: 'not_found' | 'invalid_transition' | 'stale_resume_token',

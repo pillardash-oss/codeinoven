@@ -42,10 +42,6 @@ import type {
   EditorInfo,
   EngineeringSpec,
   EngineeringSpecContent,
-  EngineeringLifecycleDecision,
-  EngineeringLifecycleSelection,
-  EngineeringLifecycleState,
-  EngineeringLifecycleTransitionResult,
   ScopedHarnessCommand,
   HistoryEntry,
   HistoryRole,
@@ -254,35 +250,6 @@ export interface IpcInvokeContract {
   >
   'account:syncProfile': Contract<[], import('./types').AccountProfileState>
   'account:signOut': Contract<[], void>
-  'engineeringLifecycle:get': Contract<
-    [projectId: string, threadId: string],
-    EngineeringLifecycleState | null
-  >
-  'engineeringLifecycle:select': Contract<
-    [projectId: string, threadId: string, selection: EngineeringLifecycleSelection],
-    EngineeringLifecycleState
-  >
-  'engineeringLifecycle:start': Contract<
-    [projectId: string, threadId: string],
-    EngineeringLifecycleTransitionResult
-  >
-  'engineeringLifecycle:resume': Contract<
-    [
-      projectId: string,
-      threadId: string,
-      resumeToken: string,
-      decision: EngineeringLifecycleDecision
-    ],
-    EngineeringLifecycleTransitionResult
-  >
-  'engineeringLifecycle:retry': Contract<
-    [projectId: string, threadId: string, resumeToken: string],
-    EngineeringLifecycleTransitionResult
-  >
-  'engineeringLifecycle:cancel': Contract<
-    [projectId: string, threadId: string, confirmed: true],
-    EngineeringLifecycleState
-  >
   'brainstorm:ensureWorkflow': Contract<
     [projectId: string, threadId: string],
     BrainstormWorkflowState
@@ -597,10 +564,6 @@ export interface IpcInvokeContract {
     [projectId: string, threadId: string, request: AuditGenerationRequest],
     AuditReport
   >
-  'agent:ensureImplementationAuditorThread': Contract<
-    [projectId: string, coordinatorThreadId: string, settings: ThreadSettings],
-    Thread
-  >
   'agent:ensureAssignmentAuditorThread': Contract<
     [projectId: string, coordinatorThreadId: string, settings: ThreadSettings],
     Thread
@@ -804,6 +767,10 @@ export interface IpcInvokeContract {
   'agent:getTemporaryChatStatus': Contract<
     [temporaryChatId: string],
     { active: boolean; expiresAt?: number }
+  >
+  'agent:ensureAuditSession': Contract<
+    [projectId: string, threadId: string, temporaryChatId: string, settings: ThreadSettings],
+    { sessionId: string; expiresAt: number }
   >
   'agent:touchTemporaryChat': Contract<
     [temporaryChatId: string],

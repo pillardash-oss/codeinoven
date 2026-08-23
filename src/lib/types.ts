@@ -2895,58 +2895,6 @@ export interface EngineeringWorkflowState {
 
 // ─── Assignment Plans ──────────────────────────────────────────────────────
 
-// ─── Engineering lifecycle ──────────────────────────────────────────
-
-export const ENGINEERING_LIFECYCLE_STAGE_VALUES = [
-  'brainstorm',
-  'prd',
-  'spec',
-  'assignment',
-  'achievement'
-] as const
-
-export type EngineeringLifecycleStage = (typeof ENGINEERING_LIFECYCLE_STAGE_VALUES)[number]
-
-export const ENGINEERING_LIFECYCLE_SELECTION_VALUES = [
-  'none',
-  ...ENGINEERING_LIFECYCLE_STAGE_VALUES,
-  'run_all'
-] as const
-
-export type EngineeringLifecycleSelection = (typeof ENGINEERING_LIFECYCLE_SELECTION_VALUES)[number]
-
-export type EngineeringLifecycleGate =
-  | 'prototype_selection'
-  | 'brainstorm_finalization'
-  | 'prd_finalization'
-  | 'spec_approval'
-  | 'assignment_approval'
-  | 'terminal_failure'
-
-export type EngineeringLifecycleDecision = 'continue' | 'continue_without_hifi' | 'retry' | 'cancel'
-
-export type BrainstormPrototypeIntent = 'none' | 'lofi' | 'hifi' | 'both'
-
-export interface EngineeringLifecycleState {
-  projectId: string
-  threadId: string
-  selection: EngineeringLifecycleSelection
-  activeStage?: EngineeringLifecycleStage
-  completedStages: EngineeringLifecycleStage[]
-  humanGate?: EngineeringLifecycleGate
-  resumeToken?: string
-  lastConsumedResumeToken?: string
-  failure?: string
-  /** Permanent history marker. It is never cleared after Engineering starts. */
-  startedAt?: number
-  updatedAt: number
-}
-
-export interface EngineeringLifecycleTransitionResult {
-  state: EngineeringLifecycleState
-  idempotent: boolean
-}
-
 export type AssignmentStatus =
   'draft' | 'approved' | 'running' | 'attention' | 'completed' | 'failed' | 'stopped'
 
@@ -3243,6 +3191,7 @@ export interface AuditReport {
 
 export interface AuditGenerationRequest {
   settings: ThreadSettings
+  temporaryChatId: string
 }
 
 // ─── Workflow ───────────────────────────────────────────────────────────────
