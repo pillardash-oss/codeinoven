@@ -173,6 +173,7 @@ import {
 } from '../../lib/types'
 import { modelKey } from '../../lib/model-keys'
 import { APP_NAME } from '../../lib/brand'
+import { workflowActionPresentation } from '../../lib/workflow-action-presentation'
 import { DEFAULT_AGENT_BEHAVIOR_PROMPT } from '../../lib/agent-behavior'
 import { registerCioPromptDefault, type CioPromptId } from '../../lib/cio-prompts'
 import { estimateTokenCostUsd } from '../providers/pricing'
@@ -9581,15 +9582,6 @@ export class ChatEngine {
           .map((comment) => `- ${comment.body}`),
         ...(note.trim() ? [`- ${note.trim()}`] : [])
       ].join('\n')
-      const visibleReviewBody = [
-        note.trim(),
-        ...current.annotations
-          .filter((annotation) => annotation.status === 'open')
-          .map((annotation) => annotation.body.trim())
-      ]
-        .filter(Boolean)
-        .join('\n\n')
-      const boundedVisibleReviewBody = visibleReviewBody.slice(0, 20_000)
       const content = await this.generateBrainstormContent(
         projectId,
         threadId,
@@ -9608,10 +9600,7 @@ export class ChatEngine {
           ? { announceProgress: false }
           : {
               includeConversationContext: false,
-              presentation: {
-                action: 'Review Brainstorm',
-                ...(boundedVisibleReviewBody ? { body: boundedVisibleReviewBody } : {})
-              }
+              presentation: workflowActionPresentation('Review Brainstorm', note)
             }
       )
       let revised = await this.brainstormEngine.createVersion({
@@ -11239,10 +11228,7 @@ export class ChatEngine {
         undefined,
         undefined,
         'internal',
-        {
-          action: `Apply Achievement audit v${report.version}`,
-          body: feedback.trim() || "Apply the audit report's actionable findings."
-        }
+        workflowActionPresentation(`Apply Achievement audit v${report.version}`, feedback)
       )
     }
     return (await this.threadManager.getThread(projectId, coordinatorThreadId)) ?? coordinator
@@ -11358,12 +11344,7 @@ export class ChatEngine {
         undefined,
         undefined,
         'internal',
-        {
-          action: `Review audit report v${report.version}`,
-          body:
-            feedback.trim() ||
-            "Digest the audit report's actionable findings and choose a corrective path."
-        }
+        workflowActionPresentation(`Review audit report v${report.version}`, feedback)
       )
     }
     return updated

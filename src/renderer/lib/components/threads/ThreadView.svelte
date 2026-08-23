@@ -186,6 +186,7 @@
     UsageEfficiencyKpis
   } from '$shared/types'
   import { APP_NAME } from '$shared/brand'
+  import { workflowActionPresentation } from '$shared/workflow-action-presentation'
   import { LatestRequestGuard } from '$lib/refresh-guard'
 
   type WorkingModelSelection = Pick<
@@ -4605,7 +4606,6 @@
 
   const BRAINSTORM_REVIEW_ANCHOR_CONTEXT_LENGTH = 160
   const BRAINSTORM_REVIEW_FALLBACK_LIMIT = 90_000
-  const BRAINSTORM_REVIEW_PRESENTATION_LIMIT = 20_000
   const DOCUMENT_WIDE_REVIEW_PATTERN =
     /\b(?:entire|whole|overall|throughout|document-wide|full report|all sections|every section|reconsider everything|start over)\b/iu
 
@@ -4779,38 +4779,6 @@
     ].join('\n\n')
   }
 
-  function brainstormReviewPresentationBody(
-    draft: BrainstormDocument,
-    notes: string,
-    reviewChanges: BrainstormReviewChanges
-  ): string {
-    const sections: string[] = []
-    const trimmedNotes = notes.trim()
-    if (trimmedNotes) sections.push(trimmedNotes)
-
-    const annotationComments = draft.annotations
-      .filter((annotation) => annotation.status === 'open')
-      .map((annotation) => {
-        const selected = annotation.quote?.trim()
-        return selected
-          ? `- ${annotation.section}: ${annotation.body}\n  Selected text: ${selected.slice(0, 240)}`
-          : `- ${annotation.section}: ${annotation.body}`
-      })
-    if (annotationComments.length > 0) {
-      sections.push(`Review comments:\n${annotationComments.join('\n')}`)
-    }
-    if (reviewChanges.edits.length > 0) {
-      sections.push(
-        `Edited report fields: ${reviewChanges.edits.map((edit) => edit.field).join(', ')}`
-      )
-    }
-
-    const body = sections.join('\n\n')
-    if (body.length <= BRAINSTORM_REVIEW_PRESENTATION_LIMIT) return body
-    const suffix = '\n\n[Additional review details omitted from this message.]'
-    return `${body.slice(0, BRAINSTORM_REVIEW_PRESENTATION_LIMIT - suffix.length)}${suffix}`
-  }
-
   async function submitBrainstormDecision(
     action: BrainstormDecisionAction,
     draft: BrainstormDocument,
@@ -4823,8 +4791,6 @@
       const feedback =
         notes.trim() ||
         'I want to continue discussing this Brainstorm before preparing the specification.'
-      const presentationBody =
-        brainstormReviewPresentationBody(draft, notes, reviewChanges) || feedback
       await sendMessage(
         feedback,
         [],
@@ -4833,10 +4799,7 @@
         await brainstormReviewDiscussionContext(draft, notes, reviewChanges),
         [],
         [],
-        {
-          action: 'Review Brainstorm',
-          body: presentationBody
-        }
+        workflowActionPresentation('Review Brainstorm', notes)
       )
       return
     }
@@ -6014,10 +5977,7 @@
         undefined,
         [],
         [],
-        {
-          action: specActionLabel(action),
-          ...(notes.trim() ? { body: notes.trim() } : {})
-        }
+        workflowActionPresentation(specActionLabel(action), notes)
       )
     } catch (error) {
       errorMessage =
