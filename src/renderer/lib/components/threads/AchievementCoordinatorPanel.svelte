@@ -147,7 +147,8 @@
       {/if}
       <h2 class="text-xs font-semibold uppercase tracking-wide">{coordinatorLabel}</h2>
     </div>
-    <h3 class="mt-3 text-sm font-semibold text-foreground">{specTitle}</h3>
+    <p class="mt-3 text-[10px] font-semibold uppercase tracking-wide text-dimmed">Goal</p>
+    <h3 class="mt-1 text-sm font-semibold text-foreground">{specTitle}</h3>
     <p class="mt-1 line-clamp-4 text-xs leading-relaxed text-muted">{specSummary}</p>
     <div class="mt-3 flex gap-2">
       {#if auditState === 'offered' && onOpenAudit}
@@ -176,10 +177,7 @@
   </header>
 
   <div class="min-h-0 flex-1 overflow-y-auto">
-    <section
-      class="border-b border-border p-4"
-      aria-label={`${coordinatorLabel} progress`}
-    >
+    <section class="border-b border-border p-4" aria-label={`${coordinatorLabel} progress`}>
       <p class="text-[10px] font-semibold uppercase tracking-wide text-dimmed">Current state</p>
       <div class="mt-2 flex items-start gap-2">
         <span
@@ -204,10 +202,7 @@
       {/if}
     </section>
 
-    <section
-      class="border-b border-border p-4"
-      aria-label={`${coordinatorLabel} auditor model`}
-    >
+    <section class="border-b border-border p-4" aria-label={`${coordinatorLabel} auditor model`}>
       <div class="flex items-start gap-3">
         <div class="rounded-lg bg-primary/10 p-2 text-primary">
           <ShieldCheck size={16} />
