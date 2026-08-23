@@ -1,11 +1,12 @@
 <script lang="ts">
   import { ArrowLeft, MessageSquareText, PanelLeft } from '@lucide/svelte'
 
-  type StudioDocument = 'brainstorm' | 'spec' | 'assignment' | 'audit'
+  type StudioDocument = 'brainstorm' | 'prd' | 'spec' | 'assignment' | 'audit'
 
   interface Props {
     active: StudioDocument
     brainstormAvailable?: boolean
+    prdAvailable?: boolean
     specAvailable?: boolean
     assignmentAvailable?: boolean
     auditAvailable?: boolean
@@ -18,6 +19,7 @@
     onToggleAgentMessages: () => void
     onToggleSections?: () => void
     onOpenBrainstorm?: () => void
+    onOpenPrd?: () => void
     onOpenSpec?: () => void
     onOpenAssignment?: () => void
     onOpenAudit?: () => void
@@ -26,6 +28,7 @@
   let {
     active,
     brainstormAvailable = false,
+    prdAvailable = false,
     specAvailable = true,
     assignmentAvailable = false,
     auditAvailable = false,
@@ -36,6 +39,7 @@
     onToggleAgentMessages,
     onToggleSections,
     onOpenBrainstorm,
+    onOpenPrd,
     onOpenSpec,
     onOpenAssignment,
     onOpenAudit
@@ -90,6 +94,17 @@
         onclick={onOpenBrainstorm}
       >
         Brainstorm
+      </button>
+    {/if}
+    {#if prdAvailable && onOpenPrd}
+      <button
+        class="shrink-0 rounded-md px-2 py-1 text-xs max-md:px-3 max-md:py-2 {active === 'prd'
+          ? 'bg-surface font-semibold text-foreground shadow-sm'
+          : 'text-muted hover:bg-overlay hover:text-foreground'}"
+        aria-pressed={active === 'prd'}
+        onclick={onOpenPrd}
+      >
+        PRD
       </button>
     {/if}
     <button

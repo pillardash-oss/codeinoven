@@ -3,10 +3,12 @@
     Archive,
     ArchiveRestore,
     Ellipsis,
+    FolderInput,
     GitBranch,
     Pencil,
     Trash2,
-    RefreshCw
+    RefreshCw,
+    Wrench
   } from '@lucide/svelte'
   import { DEFAULT_SCOPE_BUCKET_ID, type ScopeBucket } from '$shared/types'
 
@@ -15,7 +17,9 @@
     | 'archive'
     | 'restore'
     | 'create-worktree'
+    | 'adopt-worktree'
     | 'retry-setup'
+    | 'repair-worktree'
     | 'detach'
     | 'remove-worktree'
     | 'delete-branch'
@@ -28,7 +32,11 @@
     onArchive?: () => void
     onRestore?: () => void
     onCreateWorktree?: () => void
+    onAdoptWorktree?: () => void
     onRetrySetup?: () => void
+    onRepairWorktree?: () => void
+    /** Cached health reports a repairable managed-worktree problem. */
+    hasRepairableIssue?: boolean
     onDetach?: () => void
     onRemoveWorktree?: () => void
     onDeleteBranch?: () => void
@@ -41,7 +49,10 @@
     onArchive,
     onRestore,
     onCreateWorktree,
+    onAdoptWorktree,
     onRetrySetup,
+    onRepairWorktree,
+    hasRepairableIssue = false,
     onDetach,
     onRemoveWorktree,
     onDeleteBranch
@@ -100,6 +111,22 @@
           label: 'Create Git worktree',
           run: () => {
             onCreateWorktree?.()
+            closeMenu()
+          }
+        })
+        list.push({
+          label: 'Adopt Git worktree…',
+          run: () => {
+            onAdoptWorktree?.()
+            closeMenu()
+          }
+        })
+      }
+      if (isManaged && hasRepairableIssue) {
+        list.push({
+          label: 'Repair worktree',
+          run: () => {
+            onRepairWorktree?.()
             closeMenu()
           }
         })
@@ -191,6 +218,10 @@
         >
           {#if item.label === 'Retry setup'}
             <RefreshCw size={13} class="text-muted" />
+          {:else if item.label === 'Repair worktree'}
+            <Wrench size={13} class="text-muted" />
+          {:else if item.label === 'Adopt Git worktree…'}
+            <FolderInput size={13} class="text-muted" />
           {:else if item.label === 'Archive'}
             <Archive size={13} class="text-muted" />
           {:else if item.label === 'Restore'}

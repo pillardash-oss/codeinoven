@@ -12,7 +12,7 @@ import { leanAgentDefinition, leanAgentNameForMode } from '../../src/main/openco
  * - `readOnly` is false (the write channel is live),
  * - the body tool map permits `edit`,
  * - the dispatched agent is `cio-brainstorm`, whose permission scopes `edit`
- *   to the feature versions directory (`.cio/specs/<slug>/versions/`) and
+ *   to the feature versions and explicitly requested prototype directories and
  *   denies every other write path,
  * - non-opencode harnesses keep the read-only sandbox with no `edit`.
  *
@@ -21,6 +21,7 @@ import { leanAgentDefinition, leanAgentNameForMode } from '../../src/main/openco
  */
 
 const SCOPED_WRITE_PATH = '.cio/specs/*/versions/**'
+const SCOPED_PROTOTYPE_PATH = '.cio/specs/*/prototypes/**'
 
 describe('brainstorm scoped-write route', () => {
   it('enables the write route only for the opencode driver', () => {
@@ -46,15 +47,14 @@ describe('brainstorm scoped-write route', () => {
     const edit = agent.permission['edit']
     expect(typeof edit === 'object' && edit !== null).toBe(true)
     const mapping = edit as Record<string, 'allow' | 'deny'>
-    // Every path is denied except the feature versions directory.
+    // Every path is denied except the app-owned feature document and prototype roots.
     expect(mapping['*']).toBe('deny')
     expect(mapping[SCOPED_WRITE_PATH]).toBe('allow')
-    // No other allow entries exist for edit — the write cannot escape the
-    // versions directory.
+    expect(mapping[SCOPED_PROTOTYPE_PATH]).toBe('allow')
     const allowedPaths = Object.entries(mapping)
       .filter(([path, action]) => path !== '*' && action === 'allow')
       .map(([path]) => path)
-    expect(allowedPaths).toEqual([SCOPED_WRITE_PATH])
+    expect(allowedPaths).toEqual([SCOPED_WRITE_PATH, SCOPED_PROTOTYPE_PATH])
   })
 
   it('keeps mutating bash denied on the brainstorm agent', () => {

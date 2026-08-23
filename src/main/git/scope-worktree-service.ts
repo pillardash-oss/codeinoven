@@ -1,15 +1,18 @@
 import { copyFile, mkdir, readdir, realpath, rename, rm } from 'fs/promises'
-import { existsSync } from 'fs'
-import { join } from 'path'
+import { existsSync, realpathSync } from 'fs'
+import { isAbsolute, join } from 'path'
 import { randomBytes } from 'crypto'
 import type {
+  AdoptableWorktreeInfo,
   ManagedWorktreeDescriptor,
   ScopeEnvironmentMode,
   ScopeLifecyclePreflight,
   ScopeSetupCommandRecord,
   ScopeSetupCommandSpec,
   ScopeTarget,
-  ScopeWorktreeHealth
+  ScopeWorktreeCreateInput,
+  ScopeWorktreeHealth,
+  ScopeWorktreeSourceInfo
 } from '../../lib/types'
 import { getScopeRootPath } from '../../lib/utils'
 import { ScopeManager } from '../../lib/engines/scope-manager'
@@ -24,9 +27,10 @@ import { Logger } from '../system/logger'
 const WORKTREE_BRANCH_PREFIX = 'cio/'
 const SLUG_LIMIT = 48
 
-/** Minimal structural view of an agent process that may hold worktree files. */
+/** Minimal structural view of agent processes that may hold worktree files. */
 export interface ActiveProcessProbe {
-  hasActiveProcessesFor(projectId: string): Promise<boolean> | boolean
+  /** Whether threads in the project — optionally one scope — own live processes. */
+  hasActiveProcessesFor(projectId: string, scopeBucketId?: string): Promise<boolean> | boolean
 }
 
 export interface ScopeWorktreeServiceOptions {
@@ -273,16 +277,13 @@ export class ScopeWorktreeService implements ManagedWorktreeInspector {
    * crash midway preserves the registered worktree for recovery.
    *
    * The worktree branches from `input.baseBranch` when supplied, otherwise
-   * from the currently checked-out branch.
+   * from the currently checked-out branch. The environment mode and setup
+   * commands travel with the request: they are executed for exactly this
+   * worktree even if the project-level defaults change afterwards.
    */
   async createManagedWorktree(
     target: ScopeTarget,
-    input: {
-      title: string
-      runSetup: boolean
-      environmentMode: ScopeEnvironmentMode
-      baseBranch?: string
-    },
+    input: ScopeWorktreeCreateInput,
     progress?: (event: ScopeWorktreeProgress) => void
   ): Promise<ManagedWorktreeDescriptor> {
     return this.enqueue(target.projectId, async () => {
@@ -347,7 +348,8 @@ export class ScopeWorktreeService implements ManagedWorktreeInspector {
       this.scopes.attachManagedRoot(target.projectId, bucketId, descriptor)
 
       if (input.runSetup) {
-        await this.runEnvironmentAndSetup(target.projectId, path, descriptor, progress)
+        const commands = input.setupCommands ?? this.setupCommands(target.projectId)
+        await this.runEnvironmentAndSetup(target.projectId, path, descriptor, commands, progress)
       } else {
         await this.propagateEnvironment(target.projectId, path, input.environmentMode, progress)
       }
@@ -355,6 +357,27 @@ export class ScopeWorktreeService implements ManagedWorktreeInspector {
       progress?.({ stage: 'done' })
       return descriptor
     })
+  }
+
+  /**
+   * Facts about the source checkout that a new worktree would fork from:
+   * current branch, HEAD commit, and the uncommitted changes that will NOT be
+   * included. Surfaced to the renderer before creation.
+   */
+  async sourceInfo(projectId: string): Promise<ScopeWorktreeSourceInfo> {
+    const project = await this.projects.getProject(projectId)
+    if (!project || project.source !== 'local' || !project.path) {
+      throw new Error('Managed worktrees require a local project repository')
+    }
+    if (!this.ensureRepo(project.path)) {
+      throw new Error(`${project.path} is not a Git repository`)
+    }
+    const { branch, commit } = await this.currentBranchAndCommit(project.path)
+    return {
+      currentBranch: branch,
+      headCommit: commit,
+      dirtyFiles: await this.dirtyFiles(project.path, project.path)
+    }
   }
 
   /** Resolve a named source branch to its checked-out commit, or fail loudly. */
@@ -379,6 +402,10 @@ export class ScopeWorktreeService implements ManagedWorktreeInspector {
   /**
    * Recover or continue work: retry setup from the first failed/interrupted
    * command, or run the remaining commands. Preserves the worktree.
+   *
+   * The executed snapshot is derived from the persisted per-command records so
+   * a retry replays exactly what this worktree was created with, even when the
+   * project-level defaults have since changed.
    */
   async runSetupFromFailure(
     target: ScopeTarget,
@@ -388,21 +415,41 @@ export class ScopeWorktreeService implements ManagedWorktreeInspector {
     return this.enqueue(target.projectId, async () => {
       const descriptor = this.requireManaged(target)
       const path = getScopeRootPath(target.projectId, descriptor.directoryName)
-      const updated = {
-        ...descriptor,
-        environmentMode: descriptor.environmentMode
-      }
-      if (options.runSetup) {
-        await this.runEnvironmentAndSetup(target.projectId, path, updated, progress)
-      } else {
+      if (!options.runSetup) {
         await this.propagateEnvironment(
           target.projectId,
           path,
           descriptor.environmentMode,
           progress
         )
+        return descriptor
       }
-      return updated
+      const records = descriptor.setup.commands
+      const firstPending = records.findIndex((record) => record.state !== 'succeeded')
+      if (records.length > 0 && firstPending === -1) {
+        // Everything already succeeded; nothing left to retry.
+        await this.propagateEnvironment(
+          target.projectId,
+          path,
+          descriptor.environmentMode,
+          progress
+        )
+        return descriptor
+      }
+      const startIndex = records.length === 0 ? 0 : Math.max(firstPending, 0)
+      const commands: ScopeSetupCommandSpec[] =
+        records.length > 0
+          ? records.map((record) => ({ executable: record.executable, args: record.args }))
+          : this.setupCommands(target.projectId)
+      await this.runEnvironmentAndSetup(
+        target.projectId,
+        path,
+        descriptor,
+        commands,
+        progress,
+        records.length > 0 ? { startIndex } : undefined
+      )
+      return descriptor
     })
   }
 
@@ -438,27 +485,43 @@ export class ScopeWorktreeService implements ManagedWorktreeInspector {
     }
   }
 
-  /** Propagate environment files, then run ordered setup commands sequentially. */
+  /**
+   * Propagate environment files, then run ordered setup commands sequentially.
+   * When resuming, `resume.startIndex` skips already-succeeded commands and
+   * their records are carried into the persisted status.
+   */
   private async runEnvironmentAndSetup(
     projectId: string,
     worktreePath: string,
     descriptor: ManagedWorktreeDescriptor,
-    progress?: (event: ScopeWorktreeProgress) => void
+    commands: ScopeSetupCommandSpec[],
+    progress?: (event: ScopeWorktreeProgress) => void,
+    resume?: { startIndex: number }
   ): Promise<void> {
     await this.propagateEnvironment(projectId, worktreePath, descriptor.environmentMode, progress)
 
-    const commands = this.setupCommands(projectId)
-    progress?.({ stage: 'setup', detail: '0' })
+    const startIndex = resume?.startIndex ?? 0
+    const carried: ScopeSetupCommandRecord[] =
+      resume?.startIndex === undefined
+        ? []
+        : commands.slice(0, startIndex).map((spec, index) => ({
+            index,
+            executable: spec.executable,
+            args: spec.args,
+            state: 'succeeded' as const
+          }))
+    progress?.({ stage: 'setup', detail: String(startIndex) })
 
-    const records: ScopeSetupCommandRecord[] = []
+    const records: ScopeSetupCommandRecord[] = [...carried]
     const startedAt = Date.now()
     this.scopes.attachManagedRoot(projectId, this.bucketIdFor(projectId, descriptor), {
       ...descriptor,
-      setup: { state: 'running', commands: [], startedAt }
+      setup: { state: 'running', commands: [...carried], startedAt }
     })
 
-    for (let index = 0; index < commands.length; index += 1) {
-      const spec = commands[index]!
+    for (let index = startIndex; index < commands.length; index += 1) {
+      const spec = commands[index]
+      if (!spec) continue
       const record: ScopeSetupCommandRecord = {
         index,
         executable: spec.executable,
@@ -577,6 +640,278 @@ export class ScopeWorktreeService implements ManagedWorktreeInspector {
   }
 
   /**
+   * Repair an unhealthy managed scope according to its health category:
+   * unlock locked registrations, prune stale ones, restore missing checkouts
+   * from their managed branch, move relocated checkouts back under the config
+   * root, and re-checkout a switched branch. Returns the fresh health state.
+   */
+  async repair(target: ScopeTarget): Promise<ScopeWorktreeHealth> {
+    return this.enqueue(target.projectId, async () => {
+      const descriptor = this.requireManaged(target)
+      const expectedPath = getScopeRootPath(target.projectId, descriptor.directoryName)
+      const project = await this.projects.getProject(target.projectId)
+      const repoPath = project?.source === 'local' && project.path ? project.path : undefined
+      const gitCwd = repoPath ?? expectedPath
+      const before = await this.health(target)
+      switch (before.category) {
+        case 'healthy':
+          return before
+        case 'repository-unavailable':
+          throw new Error(before.detail ?? 'The project repository is unavailable')
+        case 'locked':
+          await runGit(['worktree', 'unlock', expectedPath], { cwd: gitCwd })
+          break
+        case 'prunable': {
+          await runGit(['worktree', 'prune'], { cwd: gitCwd, timeoutMs: 120_000 })
+          if (!existsSync(expectedPath)) {
+            await this.restoreCheckout(gitCwd, expectedPath, descriptor.branch)
+          }
+          break
+        }
+        case 'missing':
+          await this.restoreCheckout(gitCwd, expectedPath, descriptor.branch)
+          break
+        case 'path-mismatch':
+          if (!before.actualPath) {
+            throw new Error('Git did not report the relocated worktree path')
+          }
+          await ensureParentDir(expectedPath)
+          await runGit(['worktree', 'move', before.actualPath, expectedPath], {
+            cwd: gitCwd,
+            timeoutMs: 120_000
+          })
+          break
+        case 'branch-mismatch':
+          await runGit(['checkout', descriptor.branch], { cwd: expectedPath, timeoutMs: 60_000 })
+          break
+        case 'unregistered':
+          // Relink registrations for directories that were moved manually.
+          await runGit(['worktree', 'repair'], { cwd: gitCwd, timeoutMs: 120_000 })
+          break
+      }
+      return this.health(target)
+    })
+  }
+
+  /** Re-create the checkout at `expectedPath` from an existing managed branch. */
+  private async restoreCheckout(
+    repoPath: string,
+    expectedPath: string,
+    branch: string
+  ): Promise<void> {
+    await runGit(['worktree', 'prune'], { cwd: repoPath, timeoutMs: 120_000 }).catch(
+      () => undefined
+    )
+    await ensureParentDir(expectedPath)
+    await runGit(['worktree', 'add', expectedPath, branch], {
+      cwd: repoPath,
+      timeoutMs: 120_000
+    }).catch(async (error) => {
+      await rm(expectedPath, { recursive: true, force: true }).catch(() => undefined)
+      throw error
+    })
+  }
+
+  /**
+   * Preview whether an absolute path can be adopted as a managed scope root:
+   * it must be a registered, non-bare worktree of this repository on a named
+   * branch, and must not be the main project checkout itself.
+   */
+  async detectAdoptable(projectId: string, sourcePath: string): Promise<AdoptableWorktreeInfo> {
+    const project = await this.requireLocalProject(projectId)
+    const normalized = normalizeAdoptSourcePath(sourcePath)
+    let registrations: WorktreeRegistration[]
+    try {
+      registrations = await this.listWorktrees(project.path)
+    } catch (cause) {
+      throw new Error(
+        `Git worktree discovery failed: ${cause instanceof Error ? cause.message : String(cause)}`,
+        { cause }
+      )
+    }
+    const entry = registrations.find((registration) => registration.path === normalized)
+    if (!entry) {
+      return {
+        registered: false,
+        detached: false,
+        adoptable: false,
+        reason: 'This path is not a Git worktree registered under the project repository'
+      }
+    }
+    // Compare against the resolved repository root so symlinked paths
+    // (`/var` vs `/private/var`) still identify the main checkout.
+    const repoRoot = resolveRepositoryRoot(project.path)
+    if (entry.path === repoRoot) {
+      return {
+        registered: true,
+        detached: entry.head === undefined,
+        path: entry.path,
+        ...(entry.head ? { branch: branchNameOf(entry.head) } : {}),
+        adoptable: false,
+        reason: 'The main project checkout cannot be adopted'
+      }
+    }
+    if (!entry.head) {
+      return {
+        registered: true,
+        detached: true,
+        path: entry.path,
+        adoptable: false,
+        reason: 'Detached-HEAD worktrees cannot be adopted; check out a branch first'
+      }
+    }
+    return {
+      registered: true,
+      detached: false,
+      path: entry.path,
+      branch: branchNameOf(entry.head),
+      adoptable: true
+    }
+  }
+
+  /**
+   * Adopt an existing raw Git worktree as a managed scope root: its checkout
+   * is moved beneath the canonical config-root location via `git worktree
+   * move`, then attached to the scope with environment propagation and an
+   * optional setup run — exactly like a freshly created managed worktree.
+   */
+  async adoptWorktree(
+    target: ScopeTarget,
+    input: { sourcePath: string; runSetup: boolean },
+    progress?: (event: ScopeWorktreeProgress) => void
+  ): Promise<ManagedWorktreeDescriptor> {
+    return this.enqueue(target.projectId, async () => {
+      progress?.({ stage: 'discovering-repository' })
+      const project = await this.requireLocalProject(target.projectId)
+      const board = this.scopes.getBoard(target.projectId)
+      const bucket = board.buckets.find((candidate) => candidate.id === target.scopeBucketId)
+      if (!bucket || bucket.root.kind === 'worktree') {
+        throw new Error('Choose a scope that does not already own a worktree')
+      }
+      const info = await this.detectAdoptable(target.projectId, input.sourcePath)
+      if (!info.adoptable || !info.branch || !info.path) {
+        throw new Error(info.reason ?? 'This checkout cannot be adopted')
+      }
+      for (const candidate of board.buckets) {
+        if (candidate.root.kind === 'worktree' && candidate.root.branch === info.branch) {
+          throw new Error(`Branch ${info.branch} is already managed by scope "${candidate.name}"`)
+        }
+      }
+
+      progress?.({ stage: 'naming' })
+      const directoryName = await this.deriveDirectoryNameForBranch(
+        target.projectId,
+        project.path,
+        info.branch
+      )
+      const destination = getScopeRootPath(target.projectId, directoryName)
+
+      progress?.({ stage: 'creating-worktree', detail: info.branch })
+      await ensureParentDir(destination)
+      try {
+        await runGit(['worktree', 'move', info.path, destination], {
+          cwd: project.path,
+          timeoutMs: 120_000
+        })
+      } catch (error) {
+        await rm(destination, { recursive: true, force: true }).catch(() => undefined)
+        throw error instanceof Error ? error : new Error(String(error))
+      }
+
+      const defaults = this.scopes.getBoard(target.projectId).worktreeDefaults
+      const metadata = await this.adoptionMetadata(project.path, info.branch).catch(() => ({
+        baseBranch: '',
+        baseCommit: ''
+      }))
+      const descriptor: ManagedWorktreeDescriptor = {
+        kind: 'worktree',
+        directoryName,
+        branch: info.branch,
+        ...metadata,
+        createdAt: Date.now(),
+        environmentMode: defaults.environmentMode,
+        setup: { state: 'not_run', commands: [] }
+      }
+      progress?.({ stage: 'persisting-association' })
+      this.scopes.attachManagedRoot(target.projectId, target.scopeBucketId, descriptor)
+
+      if (input.runSetup && defaults.setupCommands.length > 0) {
+        await this.runEnvironmentAndSetup(
+          target.projectId,
+          destination,
+          descriptor,
+          defaults.setupCommands.map((command) => ({ ...command })),
+          progress
+        )
+      } else {
+        await this.propagateEnvironment(
+          target.projectId,
+          destination,
+          descriptor.environmentMode,
+          progress
+        )
+      }
+
+      progress?.({ stage: 'done' })
+      return descriptor
+    })
+  }
+
+  /** Collision-safe config-root directory name derived from an existing branch. */
+  private async deriveDirectoryNameForBranch(
+    projectId: string,
+    repoPath: string,
+    branch: string
+  ): Promise<string> {
+    const base = this.slugify(branch.replace(/^cio\//u, '')) || 'adopted'
+    const existing = await this.distinctExistingNames(repoPath)
+    const persisted = this.persistedDirectories(projectId)
+    for (let candidate = 0; ; candidate += 1) {
+      const suffix = candidate === 0 ? '' : `-${candidate + 1}`
+      const directoryName = `${base}${suffix}`
+      if (persisted.has(directoryName)) continue
+      if (existing.paths.has(getScopeRootPath(projectId, directoryName))) continue
+      return directoryName
+    }
+  }
+
+  /**
+   * Informational fork metadata for an adopted branch: merge-base with the
+   * repository's current branch when one exists, otherwise the branch root.
+   */
+  private async adoptionMetadata(
+    repoPath: string,
+    branch: string
+  ): Promise<{ baseBranch: string; baseCommit: string }> {
+    const current = await this.currentBranchAndCommit(repoPath)
+    const ref = `refs/heads/${branch}`
+    const mergeBase = await runGit(['merge-base', ref, 'HEAD'], { cwd: repoPath })
+      .then((output) => output.trim())
+      .catch(() => '')
+    if (/^[0-9a-f]{7,64}$/iu.test(mergeBase)) {
+      return { baseBranch: current.branch, baseCommit: mergeBase }
+    }
+    const root = await runGit(['rev-list', '--max-parents=0', '-n', '1', ref], {
+      cwd: repoPath
+    })
+      .then((output) => output.trim())
+      .catch(() => '')
+    if (/^[0-9a-f]{7,64}$/iu.test(root)) return { baseBranch: current.branch, baseCommit: root }
+    throw new Error(`Could not derive adoption metadata for ${branch}`)
+  }
+
+  private async requireLocalProject(projectId: string): Promise<{ id: string; path: string }> {
+    const project = await this.projects.getProject(projectId)
+    if (!project || project.source !== 'local' || !project.path) {
+      throw new Error('Managed worktrees require a local project repository')
+    }
+    if (!this.ensureRepo(project.path)) {
+      throw new Error(`${project.path} is not a Git repository`)
+    }
+    return { id: project.id, path: project.path }
+  }
+
+  /**
    * Compute a state-bound preflight snapshot for a destructive lifecycle
    * action and mint a single-use confirmation token.
    */
@@ -591,9 +926,17 @@ export class ScopeWorktreeService implements ManagedWorktreeInspector {
       const repoPath = project?.path
 
       const dirtyFiles = await this.dirtyFiles(repoPath, worktreePath)
-      const unpushedCommits = await this.unpushedCount(repoPath)
+      const unpushedCommits = await this.unpushedCount(repoPath, descriptor.branch, worktreePath)
+      const branchOwnedByWorktree = await this.managedBranchRegisteredAt(
+        repoPath ?? worktreePath,
+        worktreePath,
+        descriptor.branch
+      )
       const hasActiveProcesses =
-        (await this.activeProcesses?.hasActiveProcessesFor(target.projectId)) ?? false
+        (await this.activeProcesses?.hasActiveProcessesFor(
+          target.projectId,
+          target.scopeBucketId
+        )) ?? false
 
       const snapshot: PreflightSnapshot = {
         action,
@@ -601,7 +944,7 @@ export class ScopeWorktreeService implements ManagedWorktreeInspector {
         dirtyFiles,
         unpushedCommits,
         hasActiveProcesses,
-        branchOwnedByWorktree: dirtyFiles.length > 0 || unpushedCommits > 0,
+        branchOwnedByWorktree,
         token: randomBytes(16).toString('hex'),
         createdAt: Date.now()
       }
@@ -651,18 +994,45 @@ export class ScopeWorktreeService implements ManagedWorktreeInspector {
     }
   }
 
-  private async unpushedCount(repoPath: string | undefined): Promise<number> {
-    if (!repoPath) return 0
+  /** Whether Git registers the managed branch at the expected worktree path. */
+  private async managedBranchRegisteredAt(
+    discoveryCwd: string,
+    expectedPath: string,
+    branch: string
+  ): Promise<boolean> {
     try {
-      const output = await runGit(['log', '--oneline', '--branches', '--not', '--remotes'], {
-        cwd: repoPath,
-        timeoutMs: 60_000
-      })
-      return output.trim() ? output.split('\n').length : 0
-    } catch (error) {
-      // A repo with no remote can legitimately produce no output; treat it as
-      // zero unpushed commits rather than surfacing a discovery failure.
-      if (error instanceof Error && error.message === 'git produced no output') return 0
+      const registrations = await this.listWorktrees(discoveryCwd)
+      return registrations.some(
+        (registration) =>
+          registration.path === expectedPath && registration.head === `refs/heads/${branch}`
+      )
+    } catch {
+      return false
+    }
+  }
+
+  /**
+   * Count commits on the managed branch that are not reachable from any
+   * remote-tracking ref. Scoped to the branch so unrelated local branches in
+   * the shared repository never block this scope's lifecycle.
+   */
+  private async unpushedCount(
+    repoPath: string | undefined,
+    branch: string,
+    worktreeFallback?: string
+  ): Promise<number> {
+    const cwd = repoPath ?? worktreeFallback
+    if (!cwd) return 0
+    try {
+      const output = await runGit(
+        ['rev-list', '--count', `refs/heads/${branch}`, '--not', '--remotes'],
+        { cwd, timeoutMs: 60_000 }
+      )
+      const count = Number.parseInt(output.trim(), 10)
+      return Number.isSafeInteger(count) && count > 0 ? count : 0
+    } catch {
+      // A missing branch or unavailable repository must not invent risk here;
+      // the dirty-file check and health checks cover those cases separately.
       return 0
     }
   }
@@ -700,7 +1070,7 @@ export class ScopeWorktreeService implements ManagedWorktreeInspector {
       const repoPath = project?.path
 
       const nowDirty = await this.dirtyFiles(repoPath, worktreePath)
-      const nowUnpushed = await this.unpushedCount(repoPath)
+      const nowUnpushed = await this.unpushedCount(repoPath, descriptor.branch, worktreePath)
       if (nowDirty.length > 0 || nowUnpushed > 0) {
         if (!force) {
           throw new Error(
@@ -776,18 +1146,70 @@ function ensureParentDir(path: string): Promise<void> {
   return mkdir(join(path, '..'), { recursive: true }).then(() => undefined)
 }
 
-/** Discover untracked, regular, root-level `.env` and `.env.*` files. */
-async function discoverEnvironmentFiles(repoPath: string): Promise<string[]> {
+/** Normalize a renderer-supplied worktree path for registration comparison. */
+function normalizeAdoptSourcePath(sourcePath: string): string {
+  const trimmed = sourcePath.trim()
+  if (!isAbsolute(trimmed)) {
+    throw new Error('Worktree paths must be absolute')
+  }
+  if (trimmed.includes('\0')) {
+    throw new Error('Worktree path must not contain control characters')
+  }
+  const withoutTrailingSeparators = trimmed.replace(/[\\/]+$/u, '')
+  // Git registers symlink-resolved absolute paths (`/var` → `/private/var` on
+  // macOS), so compare against the resolved checkout directory.
+  try {
+    return realpathSync.native(withoutTrailingSeparators)
+  } catch {
+    return withoutTrailingSeparators
+  }
+}
+
+/** Strip the `refs/heads/` prefix from a full HEAD ref. */
+function branchNameOf(head: string): string {
+  return head.replace(/^refs\/heads\//u, '')
+}
+
+/** Symlink-resolved repository root so main-checkout detection survives macOS `/var` aliasing. */
+function resolveRepositoryRoot(repoPath: string): string {
+  try {
+    return realpathSync.native(repoPath)
+  } catch {
+    return repoPath
+  }
+}
+
+/**
+ * Discover untracked, regular, root-level `.env` and `.env.*` files.
+ *
+ * Candidates found on disk are classified through `git ls-files`: anything
+ * tracked is excluded so only genuinely untracked environment files propagate,
+ * matching the documented contract. Template files never propagate. A Git
+ * failure fails closed (no propagation) rather than risking a worktree that
+ * silently misses its environment.
+ */
+export async function discoverEnvironmentFiles(repoPath: string): Promise<string[]> {
   const entries = await readdir(repoPath, { withFileTypes: true })
   const excluded = new Set(['.env.example', '.env.sample', '.env.template'])
-  const files: string[] = []
+  const candidates: string[] = []
   for (const entry of entries) {
     if (!entry.isFile()) continue
     const name = entry.name
     if (excluded.has(name)) continue
-    if (name === '.env' || name.startsWith('.env.')) files.push(name)
+    if (name === '.env' || name.startsWith('.env.')) candidates.push(name)
   }
-  return files.sort()
+  if (candidates.length === 0) return []
+  let trackedOutput: string
+  try {
+    trackedOutput = await runGit(['ls-files', '-z', '--', ...candidates], { cwd: repoPath })
+  } catch (cause) {
+    throw new Error(
+      `Environment discovery failed: ${cause instanceof Error ? cause.message : String(cause)}`,
+      { cause }
+    )
+  }
+  const tracked = new Set(trackedOutput.split('\0').filter(Boolean))
+  return candidates.filter((name) => !tracked.has(name)).sort()
 }
 
 /** Copy through a temporary file then rename (atomic, never overwrite). */

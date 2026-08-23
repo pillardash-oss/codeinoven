@@ -25,6 +25,7 @@
       targetKey: string,
       position: 'before' | 'after'
     ) => void
+    onViewTrace?: () => void
     onViewReport: () => void
   }
 
@@ -46,6 +47,7 @@
     onModelChange,
     onToggleFavorite,
     onReorderFavorite,
+    onViewTrace,
     onViewReport
   }: Props = $props()
 
@@ -87,7 +89,7 @@
 
 <section
   class="rounded-xl border bg-surface p-4 {failed ? 'border-danger/40' : 'border-border'}"
-  aria-label="Assignment audit status"
+  aria-label="Audit status"
 >
   <div class="flex items-start gap-3">
     <div
@@ -147,9 +149,7 @@
         </details>
       {/if}
     </div>
-  </div>
-  {#if failed || interrupted}
-    <div class="mt-4 flex flex-wrap items-center justify-end gap-2">
+    <div class="shrink-0">
       <ModelPicker
         {providers}
         {projectId}
@@ -159,14 +159,18 @@
         {favoriteModels}
         {recentModels}
         side="top"
-        label={invalidShapeRecovery ? 'Change model' : 'Change auditor'}
         variant="action"
+        disabled={busy || state === 'running'}
         onSelect={chooseModel}
         thinkingLevel={settings.thinkingLevel}
         onSelectThinking={chooseThinking}
         {onToggleFavorite}
         {onReorderFavorite}
       />
+    </div>
+  </div>
+  {#if failed || interrupted}
+    <div class="mt-4 flex flex-wrap items-center justify-end gap-2">
       <button
         class="flex items-center gap-1.5 rounded-lg bg-primary px-3 py-2 text-xs font-semibold text-on-primary disabled:opacity-50"
         disabled={busy}
@@ -174,6 +178,16 @@
       >
         {#if busy}<Loader2 size={13} class="animate-spin" />{/if}
         {retryLabel}
+      </button>
+    </div>
+  {:else if state === 'running' && onViewTrace}
+    <div class="mt-4 flex justify-end">
+      <button
+        class="rounded-lg border bg-elevated px-3 py-2 text-xs font-semibold text-foreground hover:bg-overlay"
+        title="Open the durable auditor thread and its live working trace"
+        onclick={onViewTrace}
+      >
+        View trace
       </button>
     </div>
   {:else if version !== undefined}

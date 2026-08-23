@@ -17,6 +17,16 @@ import { appendFile, mkdir, open, realpath, rename, rm, stat, writeFile } from '
 import { randomUUID } from 'node:crypto'
 import { extname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { ThreadManager } from '../../lib/engines/thread-manager'
+import { EngineeringLifecycleEngine } from '../../lib/engines/engineering-lifecycle-engine'
+import {
+  PrdEngine,
+  type AddPrdAnnotationInput,
+  type NewPrdProvenance
+} from '../../lib/engines/prd-engine'
+import { parseGeneratedPrdContent } from '../../lib/prd/prd-validation'
+import { resolvePrototypePreviewOrigin } from '../prototypes/prototype-preview-origin'
+
+declare const __CODEINOVEN_PROTOTYPE_PREVIEW_ORIGIN__: string | undefined
 import { NoteRepo } from '../database/repositories/note-repo'
 import { ProjectManager } from '../../lib/engines/project-manager'
 import { ProjectFilesService } from '../editor/project-files-service'
@@ -65,12 +75,17 @@ import { StorageEngine } from '../storage/storage-engine'
 import {
   validateBoundedString,
   validateEntityId,
+  validateEngineeringLifecycleDecision,
+  validateEngineeringLifecycleResumeToken,
+  validateEngineeringLifecycleSelection,
+  validateEngineeringLifecycleStage,
   validateScopeAppearancePatch,
   validateScopeCollapsePatch,
   validateScopeCreateInput,
   validateScopeOrderIds,
   validateScopeSlice,
   validateScopeTarget,
+  validateSourcePath,
   validateWorktreeDefaults
 } from '../ipc/ipc-validation'
 import type {
@@ -166,7 +181,10 @@ export interface RemoteRpcServices {
     | 'chooseBrainstormEntry'
     | 'reviewBrainstorm'
     | 'finalizeBrainstorm'
-    | 'ensureAuditSession'
+    | 'generatePrd'
+    | 'ensureInitialSpec'
+    | 'readPrototypePreviewChunk'
+    | 'ensureImplementationAuditorThread'
     | 'startAssignment'
     | 'stopAssignment'
     | 'resumeAssignment'
@@ -214,6 +232,8 @@ export class RemoteRpcDispatcher {
   private readonly scopeWorktreeService: ScopeWorktreeService
   private readonly scopeRoots: ReturnType<typeof scopeRootProvider>
   private readonly specEngine: SpecEngine
+  private readonly engineeringLifecycleEngine: EngineeringLifecycleEngine
+  private readonly prdEngine: PrdEngine
   private readonly brainstormEngine: BrainstormEngine
   private readonly auditEngine: AuditEngine
   private readonly assignmentEngine: AssignmentEngine
@@ -261,6 +281,8 @@ export class RemoteRpcDispatcher {
     this.specEngine = new SpecEngine(this.storage, services.database, {
       validateForApproval: validateEngineeringSpec
     })
+    this.engineeringLifecycleEngine = new EngineeringLifecycleEngine(services.database)
+    this.prdEngine = new PrdEngine(this.storage, services.database)
     this.brainstormEngine = new BrainstormEngine(this.storage, services.database)
     this.auditEngine = new AuditEngine(this.storage, services.database)
     this.assignmentEngine = new AssignmentEngine(this.storage, services.database)
@@ -835,6 +857,13 @@ export class RemoteRpcDispatcher {
         )
       case 'scope:worktree:health':
         return this.scopeWorktreeService.health(validateScopeTarget(args[0]))
+      case 'scope:worktree:sourceInfo':
+        return this.scopeWorktreeService.sourceInfo(this.string(args[0]))
+      case 'scope:worktree:detectAdopt':
+        return this.scopeWorktreeService.detectAdoptable(
+          this.string(args[0]),
+          validateSourcePath(args[1])
+        )
 
       // ─── Agent chat surface ─────────────────────────────────────────────
       case 'agent:loadMessages':
@@ -1049,12 +1078,29 @@ export class RemoteRpcDispatcher {
           args[3] as number,
           typeof args[4] === 'string' ? args[4] : ''
         )
-      case 'agent:ensureAuditSession':
-        return chatEngine.ensureAuditSession(
+      case 'agent:generatePrd':
+        return chatEngine.generatePrd(
+          this.string(args[0]),
+          this.string(args[1]),
+          args[2] as ThreadSettings,
+          this.string(args[3]),
+          args[4] as PromptAttachment[],
+          this.string(args[5])
+        )
+      case 'agent:ensureInitialSpec':
+        return chatEngine.ensureInitialSpec(this.string(args[0]), this.string(args[1]))
+      case 'prototypePreview:readChunk':
+        return chatEngine.readPrototypePreviewChunk(
           this.string(args[0]),
           this.string(args[1]),
           this.string(args[2]),
-          args[3] as ThreadSettings
+          args[3] as number
+        )
+      case 'agent:ensureImplementationAuditorThread':
+        return chatEngine.ensureImplementationAuditorThread(
+          this.string(args[0]),
+          this.string(args[1]),
+          args[2] as ThreadSettings
         )
       case 'agent:startAssignment':
         return chatEngine.startAssignment(
@@ -1352,6 +1398,135 @@ export class RemoteRpcDispatcher {
       }
 
       // ─── Brainstorm studio ──────────────────────────────────────────────
+      case 'engineeringLifecycle:get':
+        return this.engineeringLifecycleEngine.get(
+          validateEntityId(args[0], 'Project ID'),
+          validateEntityId(args[1], 'Thread ID')
+        )
+      case 'engineeringLifecycle:select':
+        return this.engineeringLifecycleEngine.select(
+          validateEntityId(args[0], 'Project ID'),
+          validateEntityId(args[1], 'Thread ID'),
+          validateEngineeringLifecycleSelection(args[2])
+        )
+      case 'engineeringLifecycle:start':
+        return this.engineeringLifecycleEngine.start(
+          validateEntityId(args[0], 'Project ID'),
+          validateEntityId(args[1], 'Thread ID')
+        )
+      case 'engineeringLifecycle:complete':
+        return this.engineeringLifecycleEngine.completeStage(
+          validateEntityId(args[0], 'Project ID'),
+          validateEntityId(args[1], 'Thread ID'),
+          validateEngineeringLifecycleStage(args[2])
+        )
+      case 'engineeringLifecycle:resume':
+        return this.engineeringLifecycleEngine.resume(
+          validateEntityId(args[0], 'Project ID'),
+          validateEntityId(args[1], 'Thread ID'),
+          validateEngineeringLifecycleResumeToken(args[2]),
+          validateEngineeringLifecycleDecision(args[3])
+        )
+      case 'engineeringLifecycle:retry':
+        return this.engineeringLifecycleEngine.retry(
+          validateEntityId(args[0], 'Project ID'),
+          validateEntityId(args[1], 'Thread ID'),
+          validateEngineeringLifecycleResumeToken(args[2])
+        )
+      case 'engineeringLifecycle:cancel':
+        if (args[2] !== true) {
+          throw new TypeError('Engineering lifecycle cancellation requires confirmation')
+        }
+        return this.engineeringLifecycleEngine.cancel(
+          validateEntityId(args[0], 'Project ID'),
+          validateEntityId(args[1], 'Thread ID')
+        )
+      case 'prd:ensureWorkflow':
+        return this.prdEngine.ensureWorkflow(this.string(args[0]), this.string(args[1]))
+      case 'prd:getWorkflow':
+        return this.prdEngine.getWorkflowState(this.string(args[0]), this.string(args[1]))
+      case 'prd:chooseEntry': {
+        const choice = args[2]
+        if (choice !== 'brainstorm_first' && choice !== 'start_prd') {
+          throw new TypeError('Invalid PRD entry choice')
+        }
+        return this.prdEngine.chooseEntry(this.string(args[0]), this.string(args[1]), choice)
+      }
+      case 'prd:beginDrafting':
+        return this.prdEngine.beginDrafting(this.string(args[0]), this.string(args[1]))
+      case 'prd:getActive':
+        return this.prdEngine.getActive(this.string(args[0]), this.string(args[1]))
+      case 'prd:listVersions':
+        return this.prdEngine.listVersions(
+          this.string(args[0]),
+          this.string(args[1]),
+          this.string(args[2])
+        )
+      case 'prd:createDraft':
+        return this.prdEngine.createDraft(
+          this.string(args[0]),
+          this.string(args[1]),
+          parseGeneratedPrdContent(args[2]),
+          args[3] as NewPrdProvenance
+        )
+      case 'prd:saveDraft':
+        return this.prdEngine.saveDraft(
+          this.string(args[0]),
+          this.string(args[1]),
+          this.string(args[2]),
+          args[3] as number,
+          parseGeneratedPrdContent(args[4])
+        )
+      case 'prd:createVersion':
+        return this.prdEngine.createVersion(
+          this.string(args[0]),
+          this.string(args[1]),
+          this.string(args[2]),
+          parseGeneratedPrdContent(args[3]),
+          args[4] as NewPrdProvenance
+        )
+      case 'prd:addAnnotation':
+        return this.prdEngine.addAnnotation(
+          this.string(args[0]),
+          this.string(args[1]),
+          this.string(args[2]),
+          args[3] as number,
+          args[4] as AddPrdAnnotationInput
+        )
+      case 'prd:updateAnnotation':
+        return this.prdEngine.updateAnnotation(
+          this.string(args[0]),
+          this.string(args[1]),
+          this.string(args[2]),
+          args[3] as number,
+          this.string(args[4]),
+          this.string(args[5])
+        )
+      case 'prd:resolveAnnotation':
+        return this.prdEngine.resolveAnnotation(
+          this.string(args[0]),
+          this.string(args[1]),
+          this.string(args[2]),
+          args[3] as number,
+          this.string(args[4])
+        )
+      case 'prd:finalize':
+        return this.prdEngine.finalize(
+          this.string(args[0]),
+          this.string(args[1]),
+          this.string(args[2]),
+          args[3] as number
+        )
+      case 'prd:openInEditor':
+      case 'prd:revealInFiles':
+        return ''
+      case 'prototypePreview:getOrigin':
+        return (
+          resolvePrototypePreviewOrigin(process.env, {
+            development: false,
+            bakedOrigin: __CODEINOVEN_PROTOTYPE_PREVIEW_ORIGIN__
+          }).origin ?? null
+        )
       case 'brainstorm:getActive':
         return this.brainstormEngine.getActive(this.string(args[0]), this.string(args[1]))
       case 'brainstorm:getWorkflow':

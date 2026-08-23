@@ -12,6 +12,12 @@
   import { invoke } from '$lib/ipc.svelte'
   import { copyText } from '$lib/copy-text'
 
+  interface Props {
+    onOpenThread?: (projectId: string, threadId: string) => void | Promise<void>
+  }
+
+  let { onOpenThread }: Props = $props()
+
   const filters: { key: NotificationFilter; label: string }[] = [
     { key: 'all', label: 'All' },
     { key: 'attention', label: 'Attention' },
@@ -33,12 +39,19 @@
   async function navigateToNotification(n: InAppNotification): Promise<void> {
     busyId = n.id
     try {
+      if (onOpenThread) {
+        await onOpenThread(n.projectId, n.threadId)
+        notificationPanelState.dismiss(n.id)
+        return
+      }
       const [project, thread] = await Promise.all([
         invoke('project:get', n.projectId),
         invoke('thread:get', n.projectId, n.threadId)
       ])
       if (!project || !thread) return
-      await workspaceState.openThreadFromNotification?.(thread, project)
+      const openDesktopThread = workspaceState.openThreadFromNotification
+      if (!openDesktopThread) return
+      await openDesktopThread(thread, project)
       notificationPanelState.dismiss(n.id)
     } catch {
       // Thread or project may have been deleted

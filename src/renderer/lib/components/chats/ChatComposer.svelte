@@ -7,7 +7,6 @@
     Plus,
     Paperclip,
     Square,
-    Wrench,
     X,
     Folder,
     GitBranch,
@@ -18,8 +17,6 @@
     FileText,
     Upload,
     MessageSquare,
-    Repeat2,
-    Network,
     HardDrive,
     Zap,
     ShieldAlert,
@@ -55,9 +52,16 @@
   import Switch from '../ui/Switch.svelte'
   import ContextUsageIndicator from './ContextUsageIndicator.svelte'
   import ProjectFileMentionMenu from './ProjectFileMentionMenu.svelte'
-  import { composerMentionQuery, type ComposerMentionEntry } from './composer-mentions'
+  import {
+    composerMentionQuery,
+    normalizeComposerMessage,
+    type ComposerMentionEntry
+  } from './composer-mentions'
   import SlashActionMenu from '../actions/SlashActionMenu.svelte'
   import RichMarkdownEditor from '../shared/RichMarkdownEditor.svelte'
+  import VoiceInputButton from '../speech/VoiceInputButton.svelte'
+  import EngineeringToolbox from './EngineeringToolbox.svelte'
+  import { speechController } from '../../speech/speech-controller.svelte'
   import ModelPicker from '../shared/ModelPicker.svelte'
   import { filterActions } from '$lib/actions'
   import { APP_NAME } from '$shared/brand'
@@ -83,7 +87,9 @@
     AgentModelSelection,
     AttachmentStorageScope,
     UsageEfficiencyKpis,
-    Thread
+    Thread,
+    EngineeringLifecycleSelection,
+    EngineeringLifecycleState
   } from '$shared/types'
 
   type StartAfterSelection = Pick<Thread, 'id' | 'title'>
@@ -166,6 +172,11 @@
     onEditReference?: (id: string) => void
     /** False on the Chats tab — plain chats never surface the engineer toggle. */
     showEngineeringMode?: boolean
+    engineeringLifecycle?: EngineeringLifecycleState | null
+    onEngineeringLifecycleSelect?: (
+      selection: EngineeringLifecycleSelection
+    ) => void | Promise<void>
+    onEngineeringLifecycleRetry?: () => void | Promise<void>
     /** True on the Chats tab — surfaces the chat-only Engineering and File System toggles. */
     showChatModes?: boolean
     /** Hides the permission level selector and forces auto review — chats are
@@ -261,6 +272,9 @@
     onRemoveAllReferences,
     onEditReference,
     showEngineeringMode = true,
+    engineeringLifecycle = null,
+    onEngineeringLifecycleSelect,
+    onEngineeringLifecycleRetry,
     showChatModes = false,
     hidePermissionSelector = false,
     readOnlyMode = false,
@@ -417,9 +431,19 @@
   let lastCaretText: string | null = null
   let lastCaretSupportsCommands: boolean | null = null
   let richEditor: RichMarkdownEditor
+  const speechScope = $derived(
+    projectId
+      ? ({ kind: 'project', projectId, ...(threadId ? { threadId } : {}) } as const)
+      : ({ kind: 'inbox', ...(threadId ? { threadId } : {}) } as const)
+  )
+
+  function composerSpeechTarget() {
+    return richEditor?.speechEditorTarget(composerEditorId) ?? null
+  }
 
   // Dropdown open state
   let plusMenuOpen = $state(false)
+  let engineeringToolbox: EngineeringToolbox | undefined = $state(undefined)
   let modelMenuOpen = $state(false)
   let inferenceMenuOpen = $state(false)
   let permissionMenuOpen = $state(false)
@@ -814,7 +838,7 @@
       return
     }
     cancelStop()
-    const msg = value.trim()
+    const msg = normalizeComposerMessage(value, projectReferences)
     if (!msg && attachments.length === 0 && !hasCommentReference) return
     historyIndex = -1
     savedValue = ''
@@ -851,7 +875,8 @@
       attachmentBlockedNotice = true
       return
     }
-    const msg = value.trim()
+    const msg = normalizeComposerMessage(value, projectReferences)
+    speechController.observeSent(composerEditorId, msg)
     value = ''
     onValueChange?.('')
     const files = [...attachments]
@@ -1055,42 +1080,6 @@
     }
     if (inserted) return
     void tick().then(focusComposerAtEnd)
-  }
-
-  function toggleEngineeringMode(): void {
-    const engineeringMode = !resolved.engineeringMode
-    const updated = {
-      ...resolved,
-      engineeringMode,
-      assignmentMode: engineeringMode ? resolved.assignmentMode : false,
-      loopMode: engineeringMode ? resolved.loopMode : false
-    }
-    if (onSettingsChange) onSettingsChange(updated)
-    else threadSettingsStore.commit(updated)
-  }
-
-  function toggleAssignmentMode(): void {
-    const assignmentMode = resolved.assignmentMode !== true
-    const updated = {
-      ...resolved,
-      engineeringMode: assignmentMode ? true : resolved.engineeringMode,
-      assignmentMode,
-      loopMode: resolved.loopMode
-    }
-    if (onSettingsChange) onSettingsChange(updated)
-    else threadSettingsStore.commit(updated)
-  }
-
-  function toggleLoopMode(): void {
-    const loopMode = resolved.loopMode !== true
-    const updated = {
-      ...resolved,
-      engineeringMode: loopMode ? true : resolved.engineeringMode,
-      assignmentMode: resolved.assignmentMode,
-      loopMode
-    }
-    if (onSettingsChange) onSettingsChange(updated)
-    else threadSettingsStore.commit(updated)
   }
 
   function toggleFileSystemMode(): void {
@@ -1632,7 +1621,7 @@
     }
     if (e.key === 'Tab' && e.shiftKey && isComposerFocused && showEngineeringMode) {
       e.preventDefault()
-      toggleEngineeringMode()
+      void engineeringToolbox?.openAndFocus()
       return
     }
     if (e.key !== 'Escape') return
@@ -1804,7 +1793,7 @@
   {/if}
 
   <!-- Project context + attachment chips -->
-  {#if projectContext || attachments.length > 0 || references.length > 0 || startAfterThreads.length > 0 || (showEngineeringMode && (resolved.engineeringMode || resolved.assignmentMode || resolved.loopMode)) || (showChatModes && resolved.fileSystemMode)}
+  {#if projectContext || attachments.length > 0 || references.length > 0 || startAfterThreads.length > 0 || (showChatModes && resolved.fileSystemMode)}
     <div class="flex flex-col gap-1.5 px-3 pt-2.5">
       <div class="flex flex-wrap items-center gap-1.5">
         {#if projectContext}
@@ -1845,61 +1834,6 @@
               </span>
             {/if}
           </ProjectSwitch>
-        {/if}
-        {#if showEngineeringMode && (resolved.engineeringMode || resolved.loopMode)}
-          <div class="flex flex-wrap items-center gap-1.5" aria-label="Active chat modes">
-            {#if resolved.engineeringMode}
-              <span
-                class="flex shrink-0 items-center gap-1 rounded-md bg-primary/10 px-1.5 py-0.5 text-[10px] text-primary"
-              >
-                <Wrench size={9} class="shrink-0" />
-                <span>Engineering</span>
-                <button
-                  type="button"
-                  class="shrink-0 text-primary/60 transition-colors hover:text-primary"
-                  title="Turn off Engineering"
-                  aria-label="Turn off Engineering"
-                  onclick={toggleEngineeringMode}
-                >
-                  <X size={9} />
-                </button>
-              </span>
-            {/if}
-            {#if resolved.assignmentMode}
-              <span
-                class="flex shrink-0 items-center gap-1 rounded-md bg-info/10 px-1.5 py-0.5 text-[10px] text-info"
-              >
-                <Network size={9} class="shrink-0" />
-                <span>Assignment</span>
-                <button
-                  type="button"
-                  class="shrink-0 text-info/60 transition-colors hover:text-info"
-                  title="Turn off Assignment"
-                  aria-label="Turn off Assignment"
-                  onclick={toggleAssignmentMode}
-                >
-                  <X size={9} />
-                </button>
-              </span>
-            {/if}
-            {#if resolved.loopMode}
-              <span
-                class="flex shrink-0 items-center gap-1 rounded-md bg-accent/10 px-1.5 py-0.5 text-[10px] text-accent"
-              >
-                <Repeat2 size={9} class="shrink-0" />
-                <span>Achievement</span>
-                <button
-                  type="button"
-                  class="shrink-0 text-accent/60 transition-colors hover:text-accent"
-                  title="Turn off Achievement"
-                  aria-label="Turn off Achievement"
-                  onclick={toggleLoopMode}
-                >
-                  <X size={9} />
-                </button>
-              </span>
-            {/if}
-          </div>
         {/if}
         {#if showChatModes && resolved.fileSystemMode}
           <div class="flex flex-wrap items-center gap-1.5" aria-label="Active chat modes">
@@ -2148,7 +2082,7 @@
 
   <!-- Bottom bar: + menu · model · thinking ··· send -->
   <div class="composer-toolbar flex min-w-0 items-center gap-1 px-3 pb-2 pt-1">
-    <!-- Plus menu — Engineering, Achievement, attachments, future per-chat options -->
+    <!-- Plus menu — attachments and project scheduling; Engineering lives in Toolbox. -->
     {#if !readOnlyMode || allowAttachments || showEngineeringMode}
       <div class="relative">
         <button
@@ -2183,7 +2117,6 @@
                 <Switch
                   checked={resolved.fileSystemMode === true}
                   onchange={toggleFileSystemMode}
-                  role="menuitemcheckbox"
                   title={resolved.fileSystemMode
                     ? 'Turn off File System — chat becomes web-only'
                     : 'Turn on File System — grant this thread file operations'}
@@ -2200,68 +2133,6 @@
                       class={resolved.fileSystemMode ? 'text-info' : 'text-dimmed'}
                     />
                     File System
-                  </span>
-                </Switch>
-              {:else}
-                <!-- Engineering toggle -->
-                <Switch
-                  checked={resolved.engineeringMode}
-                  onchange={toggleEngineeringMode}
-                  role="menuitemcheckbox"
-                  title={resolved.engineeringMode ? 'Turn off Engineering' : 'Turn on Engineering'}
-                  class="w-full justify-between rounded-lg px-2.5 py-2 transition-colors hover:bg-elevated"
-                >
-                  <span
-                    class="flex min-w-0 items-center gap-2 {resolved.engineeringMode
-                      ? 'text-foreground'
-                      : 'text-muted'}"
-                  >
-                    <Wrench
-                      size={13}
-                      class={resolved.engineeringMode ? 'text-primary' : 'text-dimmed'}
-                    />
-                    Engineering
-                  </span>
-                </Switch>
-
-                <!-- Assignment toggle -->
-                <Switch
-                  checked={resolved.assignmentMode === true}
-                  onchange={toggleAssignmentMode}
-                  role="menuitemcheckbox"
-                  title={resolved.assignmentMode ? 'Turn off Assignment' : 'Turn on Assignment'}
-                  activeClass="bg-info"
-                  class="w-full justify-between rounded-lg px-2.5 py-2 transition-colors hover:bg-elevated"
-                >
-                  <span
-                    class="flex min-w-0 items-center gap-2 {resolved.assignmentMode
-                      ? 'text-foreground'
-                      : 'text-muted'}"
-                  >
-                    <Network
-                      size={13}
-                      class={resolved.assignmentMode ? 'text-info' : 'text-dimmed'}
-                    />
-                    Assignment
-                  </span>
-                </Switch>
-
-                <!-- Achievement toggle -->
-                <Switch
-                  checked={resolved.loopMode === true}
-                  onchange={toggleLoopMode}
-                  role="menuitemcheckbox"
-                  title={resolved.loopMode ? 'Turn off Achievement' : 'Turn on Achievement'}
-                  activeClass="bg-accent"
-                  class="w-full justify-between rounded-lg px-2.5 py-2 transition-colors hover:bg-elevated"
-                >
-                  <span
-                    class="flex min-w-0 items-center gap-2 {resolved.loopMode
-                      ? 'text-foreground'
-                      : 'text-muted'}"
-                  >
-                    <Repeat2 size={13} class={resolved.loopMode ? 'text-accent' : 'text-dimmed'} />
-                    Achievement
                   </span>
                 </Switch>
               {/if}
@@ -2345,6 +2216,16 @@
           </div>
         {/if}
       </div>
+    {/if}
+
+    {#if showEngineeringMode && onEngineeringLifecycleSelect}
+      <EngineeringToolbox
+        bind:this={engineeringToolbox}
+        lifecycleState={engineeringLifecycle}
+        disabled={readOnlyMode}
+        onselect={onEngineeringLifecycleSelect}
+        onretry={onEngineeringLifecycleRetry}
+      />
     {/if}
 
     <!-- Permission level selector -->
@@ -2515,6 +2396,13 @@
         refreshing={usageRefreshing}
       />
     {/if}
+
+    <VoiceInputButton
+      targetId={composerEditorId}
+      getTarget={composerSpeechTarget}
+      scope={speechScope}
+      {disabled}
+    />
 
     <!-- Send / Queue / Stop button.
          - Agent idle:       ArrowUp (send) — primary, disabled when empty

@@ -61,6 +61,9 @@ import { hasNativeSplashHandoff, signalNativeSplashReady } from './system/native
 import { instanceRegistry } from './system/instance-registry'
 import { BrowserService } from './browser/browser-service'
 import { getConfigRoot } from '../lib/utils'
+import type { SpeechService } from './speech/speech-service'
+
+declare const __CODEINOVEN_PROTOTYPE_PREVIEW_ORIGIN__: string | undefined
 
 const mainBundleDirectory = dirname(fileURLToPath(import.meta.url))
 
@@ -375,6 +378,10 @@ let stopRemoteOwnershipListener: (() => void) | null = null
 let remoteOwnershipPromise: Promise<void> | null = null
 let remoteOwnershipReconcilePending = false
 let modelPricingService: ModelPricingService | null = null
+let speechService: SpeechService | null = null
+let unregisterSpeechIpc: (() => void) | null = null
+let prototypePreviewService:
+  import('./prototypes/prototype-preview-service').PrototypePreviewService | null = null
 /**
  * Resolved lazily so the `appfile://` preview protocol can be installed before
  * the main window loads (its renderer requests previews as soon as it hydrates).
@@ -515,7 +522,10 @@ async function bootPostPaintServices(): Promise<void> {
     { ComputerUsePipService },
     { UpdaterService },
     { PowerWakeService },
-    { RetrySchedulerService }
+    { RetrySchedulerService },
+    { SpeechService },
+    { registerSpeechIpc },
+    { PrototypePreviewService }
   ] = await Promise.all([
     import('./ipc/ipc-handlers'),
     import('../lib/engines/project-manager'),
@@ -528,7 +538,10 @@ async function bootPostPaintServices(): Promise<void> {
     import('./utilities/computer-use-pip-service'),
     import('./notifications/updater-service'),
     import('./system/power-wake-service'),
-    import('./system/retry-scheduler-service')
+    import('./system/retry-scheduler-service'),
+    import('./speech/speech-service'),
+    import('./ipc/speech-ipc'),
+    import('./prototypes/prototype-preview-service')
   ])
 
   const projectManager = new ProjectManager(database)
@@ -564,6 +577,43 @@ async function bootPostPaintServices(): Promise<void> {
   updaterService = new UpdaterService(storage)
   powerWakeService = new PowerWakeService(storage, database)
   retryScheduler = new RetrySchedulerService(storage)
+  speechService = new SpeechService(
+    {
+      catalogPath: app.isPackaged
+        ? join(process.resourcesPath, 'speech/model-catalog.json')
+        : join(app.getAppPath(), 'resources/speech/model-catalog.json'),
+      mlxWorkerPath: app.isPackaged
+        ? join(process.resourcesPath, 'speech/mlx-worker')
+        : join(app.getAppPath(), 'resources/speech/runtime/darwin-arm64/mlx-worker')
+    },
+    undefined,
+    (input) => chatEngine!.cleanupSpeechTranscript(input)
+  )
+  await speechService.initialize()
+  unregisterSpeechIpc = registerSpeechIpc(speechService, () => mainWindow?.webContents ?? null)
+  prototypePreviewService = new PrototypePreviewService()
+  const prototypePreviewPort = await prototypePreviewService.start()
+  chatEngine.setPrototypePreviewRegistrar(
+    (previewSlug, canonicalRoot) =>
+      prototypePreviewService?.register(previewSlug, canonicalRoot) ?? Promise.resolve()
+  )
+  void (async () => {
+    const projects = await projectManager.listProjects()
+    let registered = 0
+    for (const project of projects) {
+      if (project.source !== 'local' || !project.path) continue
+      registered += (await prototypePreviewService?.registerProject(project.path)) ?? 0
+    }
+    Logger.dev('Prototype preview registrations restored', { registered })
+  })().catch((error) => Logger.error('Prototype preview registration recovery failed:', error))
+  const { resolvePrototypePreviewOrigin } = await import('./prototypes/prototype-preview-origin')
+  const previewOrigin = resolvePrototypePreviewOrigin(process.env, {
+    development: !isProduction,
+    bakedOrigin: __CODEINOVEN_PROTOTYPE_PREVIEW_ORIGIN__,
+    allocatedPort: prototypePreviewPort
+  })
+  ipcMain.removeHandler('prototypePreview:getOrigin')
+  ipcMain.handle('prototypePreview:getOrigin', () => previewOrigin.origin ?? null)
   if (mainWindow && !mainWindow.isDestroyed()) {
     const service = new BrowserService(mainWindow)
     browserService = service
@@ -1084,12 +1134,38 @@ void app
     // the feature graph remains dynamically imported after first paint.
     registerHydrationIpcHandlers(storage, database, threadCreation)
 
-    // Deny every permission request from the renderer (camera, microphone,
-    // notifications, geolocation, fullscreen, etc.). No desktop feature relies
-    // on web permission grants.
-    session.defaultSession.setPermissionRequestHandler((_webContents, _permission, callback) => {
-      callback(false)
-    })
+    // The trusted top-level renderer may capture microphone audio for local
+    // dictation. Camera, subframes, foreign documents, and every unrelated
+    // permission remain denied. Electron requires both handlers for complete
+    // media permission coverage.
+    session.defaultSession.setPermissionCheckHandler(
+      (webContents, permission, _origin, details) => {
+        const requestingUrl = details.requestingUrl ?? webContents?.getURL() ?? ''
+        return (
+          permission === 'media' &&
+          details.mediaType === 'audio' &&
+          details.isMainFrame &&
+          webContents === mainWindow?.webContents &&
+          windowBoundaryValidator.isTrustedNavigation(requestingUrl)
+        )
+      }
+    )
+    session.defaultSession.setPermissionRequestHandler(
+      (webContents, permission, callback, details) => {
+        const mediaTypes = 'mediaTypes' in details ? details.mediaTypes : undefined
+        const audioOnly =
+          Array.isArray(mediaTypes) &&
+          mediaTypes.length > 0 &&
+          mediaTypes.every((mediaType) => mediaType === 'audio')
+        callback(
+          permission === 'media' &&
+            audioOnly &&
+            details.isMainFrame &&
+            webContents === mainWindow?.webContents &&
+            windowBoundaryValidator.isTrustedNavigation(details.requestingUrl)
+        )
+      }
+    )
 
     // Deny all downloads initiated from the renderer; exports always use the
     // native save dialog in the main process.
@@ -1214,6 +1290,10 @@ void app
         {
           name: 'retryScheduler',
           close: () => retryScheduler?.dispose()
+        },
+        {
+          name: 'speechService',
+          close: () => void speechService?.dispose()
         }
       ],
       showErrorBox: (title, message) => dialog.showErrorBox(title, message),
@@ -1307,6 +1387,24 @@ async function runShutdownPipeline(): Promise<void> {
     await computerUsePipService?.dispose()
   } catch (error) {
     Logger.error('Computer-use PiP service cleanup failed during shutdown:', error)
+  }
+
+  try {
+    ipcMain.removeHandler('prototypePreview:getOrigin')
+    chatEngine?.setPrototypePreviewRegistrar(null)
+    await prototypePreviewService?.dispose()
+    prototypePreviewService = null
+  } catch (error) {
+    Logger.error('Prototype preview service cleanup failed during shutdown:', error)
+  }
+
+  try {
+    unregisterSpeechIpc?.()
+    unregisterSpeechIpc = null
+    await speechService?.dispose()
+    speechService = null
+  } catch (error) {
+    Logger.error('Speech service cleanup failed during shutdown:', error)
   }
 
   stopRemoteOwnershipListener?.()

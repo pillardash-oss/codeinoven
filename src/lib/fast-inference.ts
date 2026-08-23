@@ -1,4 +1,4 @@
-import type { InferenceMode } from './types'
+import type { InferenceMode, ThreadSettings } from './types'
 
 /**
  * Display metadata for a fast-inference variant.
@@ -78,6 +78,26 @@ export function fastVariantForModelId(modelId: string): FastInferenceVariant | n
     label: `${humanizeModelId(fastBaseModelId(modelId))} Fast`,
     multiplier: fastMultiplierFor(modelId)
   }
+}
+
+/**
+ * Force `inferenceMode` back to `normal` whenever the newly selected model
+ * cannot run fast inference. Model switches across operators (composer picker,
+ * provider-error card, audit/spec cards, worker settings) all commit settings
+ * independently, so a harness-safe fast mode for one model must never leak
+ * into a subsequent model that has no fast tier — otherwise the resolved
+ * `*-fast` model id targets a model that does not exist.
+ */
+export function normalizeFastInference(
+  settings: ThreadSettings,
+  harnessId: string,
+  providerId: string,
+  modelId: string,
+  modelFastSupported?: boolean
+): ThreadSettings {
+  if (settings.inferenceMode !== 'fast') return settings
+  if (supportsFastInference(harnessId, providerId, modelFastSupported)) return settings
+  return { ...settings, inferenceMode: 'normal' }
 }
 
 /**

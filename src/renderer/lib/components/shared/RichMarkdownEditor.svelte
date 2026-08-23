@@ -14,6 +14,11 @@
     unlistListItem
   } from './rich-markdown'
   import type { RichInlineBadge } from './rich-markdown'
+  import type {
+    SpeechEditorApplyResult,
+    SpeechEditorSnapshot,
+    SpeechEditorTarget
+  } from '../../speech/editor-target'
 
   interface HistoryController {
     undo: () => void
@@ -201,6 +206,60 @@
     const anchor = pointAtOffset(editor, bookmark.anchor)
     const focus = pointAtOffset(editor, bookmark.focus)
     selection.setBaseAndExtent(anchor.node, anchor.offset, focus.node, focus.offset)
+  }
+
+  function dictationSnapshot(targetId: string): SpeechEditorSnapshot | null {
+    if (!editor) return null
+    const selection = captureSelection() ?? {
+      anchor: nodeLength(editor),
+      focus: nodeLength(editor)
+    }
+    return {
+      targetId,
+      value: serializeRichMarkdown(editor),
+      selection,
+      capturedAt: Date.now()
+    }
+  }
+
+  function applyDictation(
+    targetId: string,
+    snapshot: SpeechEditorSnapshot,
+    transcript: string
+  ): SpeechEditorApplyResult {
+    if (!editor) return { ok: false, reason: 'destroyed' }
+    const before = serializeRichMarkdown(editor)
+    if (snapshot.targetId !== targetId || before !== snapshot.value) {
+      return { ok: false, reason: 'changed' }
+    }
+    const start = Math.min(snapshot.selection.anchor, snapshot.selection.focus)
+    const end = Math.max(snapshot.selection.anchor, snapshot.selection.focus)
+    if (start < 0 || end > nodeLength(editor)) return { ok: false, reason: 'invalid-selection' }
+    const historyEntry = captureHistoryEntry()
+    restoreSelection(snapshot.selection)
+    insertPlainText(editor, transcript)
+    emitEditorValue(true)
+    commitHistory(historyEntry)
+    publishCaretText()
+    editor.focus()
+    const after = serializeRichMarkdown(editor)
+    let prefix = 0
+    while (prefix < before.length && prefix < after.length && before[prefix] === after[prefix])
+      prefix += 1
+    return {
+      ok: true,
+      value: after,
+      startOffset: prefix,
+      endOffset: prefix + transcript.length
+    }
+  }
+
+  export function speechEditorTarget(targetId: string): SpeechEditorTarget {
+    return {
+      id: targetId,
+      capture: () => dictationSnapshot(targetId),
+      apply: (snapshot, transcript) => applyDictation(targetId, snapshot, transcript)
+    }
   }
 
   /** Visible characters in a text node — zero-width caret anchors are stripped by

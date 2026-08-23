@@ -1,11 +1,14 @@
 import { fileURLToPath } from 'url'
 import { realpath } from 'fs/promises'
-import { isAbsolute, relative, resolve, sep, win32 } from 'path'
+import { isAbsolute, posix, relative, resolve, sep, win32 } from 'path'
 import type { WebFrameMain } from 'electron'
 import type {
   ChecklistItemStatus,
   CreateProjectInput,
   CreateThreadInput,
+  EngineeringLifecycleDecision,
+  EngineeringLifecycleSelection,
+  EngineeringLifecycleStage,
   HistoryRole,
   InferenceMode,
   ScopeBoard,
@@ -55,6 +58,46 @@ const CHANGE_TRACKING_MODES = new Set<NonNullable<CreateProjectInput['changeTrac
   'manual'
 ])
 const THREAD_TITLE_SOURCES = new Set<ThreadTitleSource>(['default', 'auto', 'manual'])
+const ENGINEERING_LIFECYCLE_SELECTIONS = new Set<EngineeringLifecycleSelection>([
+  'none',
+  'brainstorm',
+  'prd',
+  'spec',
+  'assignment',
+  'achievement',
+  'run_all'
+])
+const ENGINEERING_LIFECYCLE_DECISIONS = new Set<EngineeringLifecycleDecision>([
+  'continue',
+  'continue_without_hifi',
+  'retry',
+  'cancel'
+])
+const ENGINEERING_LIFECYCLE_STAGES = new Set<EngineeringLifecycleStage>([
+  'brainstorm',
+  'prd',
+  'spec',
+  'assignment',
+  'achievement'
+])
+
+export function validateEngineeringLifecycleSelection(
+  value: unknown
+): EngineeringLifecycleSelection {
+  return assertEnum(value, ENGINEERING_LIFECYCLE_SELECTIONS, 'engineering lifecycle selection')
+}
+
+export function validateEngineeringLifecycleDecision(value: unknown): EngineeringLifecycleDecision {
+  return assertEnum(value, ENGINEERING_LIFECYCLE_DECISIONS, 'engineering lifecycle decision')
+}
+
+export function validateEngineeringLifecycleStage(value: unknown): EngineeringLifecycleStage {
+  return assertEnum(value, ENGINEERING_LIFECYCLE_STAGES, 'engineering lifecycle stage')
+}
+
+export function validateEngineeringLifecycleResumeToken(value: unknown): string {
+  return validateBoundedString(value, 'Engineering lifecycle resume token', 1, 256)
+}
 
 const THREAD_SETTINGS_FIELDS = new Set([
   'harnessId',
@@ -217,16 +260,13 @@ export function validateScopeLifecycleAction(
 }
 
 /** Validate the renderer input for managed-worktree creation. */
-export function validateScopeWorktreeCreateInput(value: unknown): {
-  title: string
-  runSetup: boolean
-  environmentMode: import('../../lib/types').ScopeEnvironmentMode
-  baseBranch?: string
-} {
+export function validateScopeWorktreeCreateInput(
+  value: unknown
+): import('../../lib/types').ScopeWorktreeCreateInput {
   const input = assertRecord(value, 'Scope worktree create input')
   rejectUnknownFields(
     input,
-    new Set(['title', 'runSetup', 'environmentMode', 'baseBranch']),
+    new Set(['title', 'runSetup', 'environmentMode', 'baseBranch', 'setupCommands']),
     'scope worktree create input'
   )
   return {
@@ -235,7 +275,10 @@ export function validateScopeWorktreeCreateInput(value: unknown): {
     environmentMode: validateEnvironmentMode(input.environmentMode),
     ...(input.baseBranch === undefined
       ? {}
-      : { baseBranch: validateBranchName(input.baseBranch, 'Source branch') })
+      : { baseBranch: validateBranchName(input.baseBranch, 'Source branch') }),
+    ...(input.setupCommands === undefined
+      ? {}
+      : { setupCommands: validateSetupCommandSpecs(input.setupCommands) })
   }
 }
 
@@ -245,6 +288,36 @@ export function validateConfirmationToken(value: unknown): string {
     throw new TypeError('Confirmation token is malformed')
   }
   return token
+}
+
+/** Validate an absolute filesystem path supplied for worktree adoption. */
+export function validateSourcePath(value: unknown): string {
+  const sourcePath = validateBoundedString(value, 'Worktree path', 1, 4096)
+  const trimmed = sourcePath.trim()
+  const absolute =
+    process.platform === 'win32'
+      ? win32.isAbsolute(trimmed) || posix.isAbsolute(trimmed)
+      : posix.isAbsolute(trimmed)
+  if (!absolute) {
+    throw new TypeError('Worktree path must be absolute')
+  }
+  if (trimmed.includes('\0')) {
+    throw new TypeError('Worktree path must not contain control characters')
+  }
+  return trimmed
+}
+
+/** Validate the renderer input for adopting an existing Git worktree. */
+export function validateScopeAdoptInput(value: unknown): {
+  sourcePath: string
+  runSetup: boolean
+} {
+  const input = assertRecord(value, 'Scope worktree adopt input')
+  rejectUnknownFields(input, new Set(['sourcePath', 'runSetup']), 'scope worktree adopt input')
+  return {
+    sourcePath: validateSourcePath(input.sourcePath),
+    runSetup: validateBoolean(input.runSetup, 'Run setup')
+  }
 }
 
 /** Validate a full scope ordering for the layout operation. */

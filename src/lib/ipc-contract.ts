@@ -42,6 +42,10 @@ import type {
   EditorInfo,
   EngineeringSpec,
   EngineeringSpecContent,
+  EngineeringLifecycleDecision,
+  EngineeringLifecycleSelection,
+  EngineeringLifecycleState,
+  EngineeringLifecycleTransitionResult,
   ScopedHarnessCommand,
   HistoryEntry,
   HistoryRole,
@@ -98,6 +102,12 @@ import type {
   PromptAssignmentTaskReference,
   PromptProjectReference,
   PromptReference,
+  PrdContent,
+  PrdDocument,
+  PrdEntryChoice,
+  PrdProvenance,
+  PrdSectionId,
+  PrdWorkflowState,
   ProviderAccountAuthStatus,
   ProviderAccountLoginHandoff,
   ProviderAccountLoginOptions,
@@ -109,18 +119,20 @@ import type {
   HarnessManifestEntry,
   HarnessUninstallHandoff,
   OfferedProvider,
+  AdoptableWorktreeInfo,
   RepositoryPreflightResult,
   ScopeBoard,
   ScopeBucket,
   ScopeAppearancePatch,
   ScopeCollapsePatch,
   ScopeCreateInput,
-  ScopeEnvironmentMode,
   ScopeLifecycleAction,
   ScopeLifecyclePreflight,
   ScopeTarget,
+  ScopeWorktreeCreateInput,
   ScopeWorktreeDefaults,
   ScopeWorktreeHealth,
+  ScopeWorktreeSourceInfo,
   ManagedWorktreeDescriptor,
   ScopeSlice,
   SpecContextReference,
@@ -174,6 +186,7 @@ type Contract<Args extends unknown[], Result> = {
 
 type NewSpecProvenance = Omit<SpecProvenance, 'createdAt' | 'parentVersion'>
 type NewBrainstormProvenance = Omit<BrainstormProvenance, 'createdAt' | 'parentVersion'>
+type NewPrdProvenance = Omit<PrdProvenance, 'createdAt' | 'parentVersion'>
 type NewAssignmentProvenance = Omit<AssignmentProvenance, 'createdAt' | 'parentVersion'>
 
 /**
@@ -250,6 +263,117 @@ export interface IpcInvokeContract {
   >
   'account:syncProfile': Contract<[], import('./types').AccountProfileState>
   'account:signOut': Contract<[], void>
+  'engineeringLifecycle:get': Contract<
+    [projectId: string, threadId: string],
+    EngineeringLifecycleState | null
+  >
+  'engineeringLifecycle:select': Contract<
+    [projectId: string, threadId: string, selection: EngineeringLifecycleSelection],
+    EngineeringLifecycleState
+  >
+  'engineeringLifecycle:start': Contract<
+    [projectId: string, threadId: string],
+    EngineeringLifecycleTransitionResult
+  >
+  'engineeringLifecycle:complete': Contract<
+    [projectId: string, threadId: string, stage: import('./types').EngineeringLifecycleStage],
+    EngineeringLifecycleState
+  >
+  'engineeringLifecycle:resume': Contract<
+    [
+      projectId: string,
+      threadId: string,
+      resumeToken: string,
+      decision: EngineeringLifecycleDecision
+    ],
+    EngineeringLifecycleTransitionResult
+  >
+  'engineeringLifecycle:retry': Contract<
+    [projectId: string, threadId: string, resumeToken: string],
+    EngineeringLifecycleState
+  >
+  'engineeringLifecycle:cancel': Contract<
+    [projectId: string, threadId: string, confirmed: true],
+    EngineeringLifecycleState
+  >
+  'prd:ensureWorkflow': Contract<[projectId: string, threadId: string], PrdWorkflowState>
+  'prd:getWorkflow': Contract<[projectId: string, threadId: string], PrdWorkflowState | null>
+  'prd:chooseEntry': Contract<
+    [projectId: string, threadId: string, choice: PrdEntryChoice],
+    PrdWorkflowState
+  >
+  'prd:beginDrafting': Contract<[projectId: string, threadId: string], PrdWorkflowState>
+  'prd:getActive': Contract<[projectId: string, threadId: string], PrdDocument | null>
+  'prd:listVersions': Contract<[projectId: string, threadId: string, prdId: string], PrdDocument[]>
+  'prd:createDraft': Contract<
+    [projectId: string, threadId: string, content: PrdContent, provenance: NewPrdProvenance],
+    PrdDocument
+  >
+  'prd:saveDraft': Contract<
+    [projectId: string, threadId: string, prdId: string, version: number, content: PrdContent],
+    PrdDocument
+  >
+  'prd:createVersion': Contract<
+    [
+      projectId: string,
+      threadId: string,
+      prdId: string,
+      content: PrdContent,
+      provenance: NewPrdProvenance
+    ],
+    PrdDocument
+  >
+  'prd:addAnnotation': Contract<
+    [
+      projectId: string,
+      threadId: string,
+      prdId: string,
+      version: number,
+      input: {
+        section: PrdSectionId
+        body: string
+        author: string
+        quote?: string
+        startLine?: number
+        endLine?: number
+        startOffset?: number
+        endOffset?: number
+      }
+    ],
+    PrdDocument
+  >
+  'prd:updateAnnotation': Contract<
+    [
+      projectId: string,
+      threadId: string,
+      prdId: string,
+      version: number,
+      annotationId: string,
+      body: string
+    ],
+    PrdDocument
+  >
+  'prd:resolveAnnotation': Contract<
+    [projectId: string, threadId: string, prdId: string, version: number, annotationId: string],
+    PrdDocument
+  >
+  'prd:finalize': Contract<
+    [projectId: string, threadId: string, prdId: string, version: number],
+    PrdDocument
+  >
+  'prd:openInEditor': Contract<
+    [projectId: string, threadId: string, prdId: string, version: number],
+    string
+  >
+  'prd:revealInFiles': Contract<
+    [projectId: string, threadId: string, prdId: string, version: number],
+    string
+  >
+  'prototypePreview:getOrigin': Contract<[], string | null>
+  'prototypePreview:readChunk': Contract<
+    [projectId: string, threadId: string, previewPath: string, offset: number],
+    { base64: string; nextOffset: number; size: number; mime: string }
+  >
   'brainstorm:ensureWorkflow': Contract<
     [projectId: string, threadId: string],
     BrainstormWorkflowState
@@ -362,7 +486,18 @@ export interface IpcInvokeContract {
   >
   'agent:finalizeBrainstorm': Contract<
     [projectId: string, threadId: string, brainstormId: string, version: number, note?: string],
-    EngineeringSpec
+    EngineeringSpec | BrainstormDocument
+  >
+  'agent:generatePrd': Contract<
+    [
+      projectId: string,
+      threadId: string,
+      settings: ThreadSettings,
+      instructions: string,
+      attachments: PromptAttachment[],
+      userMessageId: string
+    ],
+    PrdDocument
   >
   'assignment:getActive': Contract<
     [projectId: string, coordinatorThreadId: string],
@@ -563,6 +698,10 @@ export interface IpcInvokeContract {
   'agent:generateAudit': Contract<
     [projectId: string, threadId: string, request: AuditGenerationRequest],
     AuditReport
+  >
+  'agent:ensureImplementationAuditorThread': Contract<
+    [projectId: string, coordinatorThreadId: string, settings: ThreadSettings],
+    Thread
   >
   'agent:ensureAssignmentAuditorThread': Contract<
     [projectId: string, coordinatorThreadId: string, settings: ThreadSettings],
@@ -768,10 +907,6 @@ export interface IpcInvokeContract {
     [temporaryChatId: string],
     { active: boolean; expiresAt?: number }
   >
-  'agent:ensureAuditSession': Contract<
-    [projectId: string, threadId: string, temporaryChatId: string, settings: ThreadSettings],
-    { sessionId: string; expiresAt: number }
-  >
   'agent:touchTemporaryChat': Contract<
     [temporaryChatId: string],
     { active: boolean; expiresAt?: number }
@@ -864,6 +999,128 @@ export interface IpcInvokeContract {
   'remotePush:unsubscribe': Contract<[endpoint: string], void>
   'clipboard:writeText': Contract<[text: string], void>
   'clipboard:readText': Contract<[], string>
+  'speech:getCapabilities': Contract<
+    [],
+    import('./speech/types').SpeechResult<import('./speech/types').SpeechCapabilitySnapshot>
+  >
+  'speech:getCatalog': Contract<
+    [],
+    import('./speech/types').SpeechResult<import('./speech/types').SpeechModelCatalog>
+  >
+  'speech:beginCapture': Contract<
+    [scope: import('./speech/types').SpeechScope, mimeType: string],
+    import('./speech/types').SpeechResult<import('./speech/types').SpeechCaptureSessionInfo>
+  >
+  'speech:recordPermissionFailure': Contract<
+    [scope: import('./speech/types').SpeechScope, message: string],
+    import('./speech/types').SpeechResult<import('./speech/types').SpeechRecordingAttempt>
+  >
+  'speech:appendCapture': Contract<
+    [sessionId: string, chunk: Uint8Array<ArrayBuffer>],
+    import('./speech/types').SpeechResult<number>
+  >
+  'speech:finishCapture': Contract<
+    [sessionId: string, durationMs: number],
+    import('./speech/types').SpeechResult<import('./speech/types').SpeechRecordingAttempt>
+  >
+  'speech:failCapture': Contract<
+    [sessionId: string, message: string],
+    import('./speech/types').SpeechResult<import('./speech/types').SpeechRecordingAttempt>
+  >
+  'speech:markAttemptFailure': Contract<
+    [attemptId: string, message: string],
+    import('./speech/types').SpeechResult<import('./speech/types').SpeechRecordingAttempt>
+  >
+  'speech:transcribe': Contract<
+    [
+      attemptId: string,
+      runtime: import('./speech/types').SpeechRuntime,
+      artifactId: string,
+      language: string,
+      cleanupMode: import('./speech/types').SpeechCleanupMode
+    ],
+    import('./speech/types').SpeechResult<import('./speech/types').SpeechTranscriptionResult>
+  >
+  'speech:getHistory': Contract<
+    [cursor?: string, limit?: number],
+    import('./speech/types').SpeechResult<import('./speech/types').SpeechHistoryPage>
+  >
+  'speech:enforceHistoryLimit': Contract<
+    [limit: number],
+    import('./speech/types').SpeechResult<void>
+  >
+  'speech:downloadArtifact': Contract<
+    [artifactId: string],
+    import('./speech/types').SpeechResult<void>
+  >
+  'speech:cancelDownload': Contract<
+    [artifactId: string],
+    import('./speech/types').SpeechResult<boolean>
+  >
+  'speech:cancelJob': Contract<[jobId: string], import('./speech/types').SpeechResult<boolean>>
+  'speech:getCorrectionRules': Contract<
+    [scope?: import('./speech/types').SpeechScope],
+    import('./speech/types').SpeechResult<import('./speech/types').SpeechCorrectionRule[]>
+  >
+  'speech:observeCorrection': Contract<
+    [observation: import('./speech/types').SpeechCorrectionObservation],
+    import('./speech/types').SpeechResult<import('./speech/types').SpeechCorrectionRule | null>
+  >
+  'speech:setCorrectionRuleEnabled': Contract<
+    [ruleId: string, enabled: boolean],
+    import('./speech/types').SpeechResult<import('./speech/types').SpeechCorrectionRule>
+  >
+  'speech:deleteCorrectionRule': Contract<
+    [ruleId: string, confirmationToken: string],
+    import('./speech/types').SpeechResult<void>
+  >
+  'speech:requestConfirmation': Contract<
+    [action: import('./speech/types').SpeechDestructiveAction, targetId: string],
+    import('./speech/types').SpeechResult<import('./speech/types').SpeechConfirmation>
+  >
+  'speech:deleteHistory': Contract<
+    [attemptId: string, confirmationToken: string],
+    import('./speech/types').SpeechResult<void>
+  >
+  'speech:deleteAllHistory': Contract<
+    [confirmationToken: string],
+    import('./speech/types').SpeechResult<void>
+  >
+  'speech:readAudio': Contract<
+    [attemptId: string],
+    import('./speech/types').SpeechResult<Uint8Array<ArrayBuffer>>
+  >
+  'speech:retryTranscription': Contract<
+    [
+      attemptId: string,
+      runtime: import('./speech/types').SpeechRuntime,
+      artifactId: string,
+      language: string
+    ],
+    import('./speech/types').SpeechResult<import('./speech/types').SpeechTranscriptionResult>
+  >
+  'speech:deleteArtifact': Contract<
+    [artifactId: string, confirmationToken: string],
+    import('./speech/types').SpeechResult<void>
+  >
+  'speech:preparePlayback': Contract<
+    [messageId: string, markdown: string, includeCodeBlocks: boolean],
+    import('./speech/types').SpeechResult<import('./speech/types').SpeechPreparedPlayback>
+  >
+  'speech:synthesizePlaybackSegment': Contract<
+    [
+      sessionId: string,
+      segmentIndex: number,
+      runtime: import('./speech/types').SpeechRuntime,
+      artifactId: string,
+      voiceId: string
+    ],
+    import('./speech/types').SpeechResult<import('./speech/types').SpeechSynthesizedSegment>
+  >
+  'speech:cancelPlayback': Contract<
+    [sessionId?: string],
+    import('./speech/types').SpeechResult<boolean>
+  >
   'dialog:pickFile': Contract<[scope?: AttachmentStorageScope], string | null>
   'dialog:pickFiles': Contract<[scope?: AttachmentStorageScope], string[]>
   'dialog:pickImage': Contract<[], string | null>
@@ -1336,20 +1593,25 @@ export interface IpcInvokeContract {
   'scope:delete': Contract<[projectId: string, bucketId: string], ScopeBoard>
   /** Create an isolated managed worktree and attach it to a scope. */
   'scope:worktree:create': Contract<
-    [
-      target: ScopeTarget,
-      input: {
-        title: string
-        runSetup: boolean
-        environmentMode: ScopeEnvironmentMode
-        /** Source branch the worktree forks from; defaults to the current branch. */
-        baseBranch?: string
-      }
-    ],
+    [target: ScopeTarget, input: ScopeWorktreeCreateInput],
     ManagedWorktreeDescriptor
   >
+  /** Inspect the source checkout before creating a worktree. */
+  'scope:worktree:sourceInfo': Contract<[projectId: string], ScopeWorktreeSourceInfo>
   /** Refresh the typed health state of a managed scope. */
   'scope:worktree:health': Contract<[target: ScopeTarget], ScopeWorktreeHealth>
+  /** Repair an unhealthy managed scope according to its health category. */
+  'scope:worktree:repair': Contract<[target: ScopeTarget], ScopeWorktreeHealth>
+  /** Preview whether an existing Git worktree checkout can be adopted. */
+  'scope:worktree:detectAdopt': Contract<
+    [projectId: string, sourcePath: string],
+    AdoptableWorktreeInfo
+  >
+  /** Adopt an existing raw Git worktree as a managed scope root. */
+  'scope:worktree:adopt': Contract<
+    [target: ScopeTarget, input: { sourcePath: string; runSetup: boolean }],
+    ManagedWorktreeDescriptor
+  >
   /** Compute a state-bound preflight and mint a single-use confirmation token. */
   'scope:worktree:preflight': Contract<
     [action: ScopeLifecycleAction, target: ScopeTarget, options?: { scopeBucketId?: string }],
@@ -2090,6 +2352,7 @@ export interface IpcEventContract {
    * Emitted whenever a high-risk remote operation requires local approval.
    */
   'remote:stepUpPending': [approvals: RemotePendingStepUpApproval[]]
+  'speech:progress': [progress: import('./speech/types').SpeechProgressEvent]
 }
 
 export type InvokeChannel = keyof IpcInvokeContract

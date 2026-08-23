@@ -80,7 +80,32 @@ const mustHave = (label: string, condition: boolean): void => {
 
 mustHave('at least one file', files.length > 0)
 
+const speechCatalog = findFileUnder(absArtifactDir, (entry) => entry === 'model-catalog.json')
+const speechDecoder = findFileUnder(absArtifactDir, (entry) =>
+  process.platform === 'win32' ? entry === 'ffmpeg.exe' : entry === 'ffmpeg'
+)
+const bundledModelWeight = findFileUnder(absArtifactDir, (entry) =>
+  /\.(?:onnx|safetensors|gguf|npz)$/iu.test(entry)
+)
+mustHave('speech model catalog', Boolean(speechCatalog))
+mustHave('packaged speech audio decoder', Boolean(speechDecoder))
+if (bundledModelWeight) {
+  Logger.error(
+    `[verify-packaged-app] downloaded model weight entered the bundle: ${bundledModelWeight}`
+  )
+  process.exit(1)
+}
+
 if (target === 'mac') {
+  // MLX worker requires Swift 6.2; CI macOS runner has 5.10 - warn but don't fail
+  const hasMlxWorker = Boolean(findFileUnder(absArtifactDir, (entry) => entry === 'mlx-worker'))
+  const hasMlxMetallib = Boolean(findFileUnder(absArtifactDir, (entry) => entry === 'mlx.metallib'))
+  if (!hasMlxWorker) {
+    Logger.info('[verify-packaged-app] Apple Silicon MLX worker not found (Swift 6.2 required, runner has 5.10) - skipping')
+  }
+  if (!hasMlxMetallib) {
+    Logger.info('[verify-packaged-app] Apple Silicon MLX Metal library not found - skipping')
+  }
   mustHave('mac disk image', hasExtension('.dmg'))
   mustHave('mac zip artifact', hasExtension('.zip'))
 } else if (target === 'win') {
@@ -96,16 +121,12 @@ if (target === 'mac') {
 mustHave(
   'metadata file',
   files.some(
-    (file) =>
-      extname(file) === '.yml' &&
-      (file.includes('latest') || file.includes('nightly'))
+    (file) => extname(file) === '.yml' && (file.includes('latest') || file.includes('nightly'))
   )
 )
 
 const yamlFiles = files.filter(
-  (file) =>
-    extname(file) === '.yml' &&
-    (file.includes('latest') || file.includes('nightly'))
+  (file) => extname(file) === '.yml' && (file.includes('latest') || file.includes('nightly'))
 )
 let hasVersionMarker = false
 for (const file of yamlFiles) {

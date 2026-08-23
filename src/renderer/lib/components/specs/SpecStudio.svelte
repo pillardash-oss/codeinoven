@@ -24,7 +24,10 @@
   import { validateEngineeringSpec } from '$shared/spec/spec-validation'
   import MarkdownView from '../markdown/MarkdownView.svelte'
   import RichMarkdownEditor from '../shared/RichMarkdownEditor.svelte'
+  import VoiceInputButton from '../speech/VoiceInputButton.svelte'
+  import { speechController } from '../../speech/speech-controller.svelte'
   import EditableMarkdown from './EditableMarkdown.svelte'
+  import ModelPicker from '../shared/ModelPicker.svelte'
   import StudioSelectionActions from './StudioSelectionActions.svelte'
   import StudioHistoryControls from './StudioHistoryControls.svelte'
   import StudioDocumentNavigation from './StudioDocumentNavigation.svelte'
@@ -37,16 +40,21 @@
   } from './studio-annotation-anchors'
   import type { StudioDocumentHistory } from './studio-document-history.svelte'
   import { compactViewport } from '$lib/compact-viewport.svelte'
+  import { draggablePopover } from '$lib/draggable-popover.svelte'
   import { editorPreference } from '$lib/stores/editor-preference.svelte'
+  import PopoverDragHandle from '../ui/PopoverDragHandle.svelte'
   import type {
     CapturableSpecContextType,
     EngineeringSpec,
     ProjectFileEntry,
+    ProviderCatalog,
     SpecAnnotation,
     SpecDecisionAction,
     SpecSectionId,
     SpecValidationIssue,
-    SpecValidationResult
+    SpecValidationResult,
+    ThinkingLevel,
+    ThreadSettings
   } from '$shared/types'
 
   type CallbackResult = void | Promise<void>
@@ -75,21 +83,36 @@
     error?: string
     agentMessagesOpen?: boolean
     brainstormAvailable?: boolean
+    prdAvailable?: boolean
     assignmentAvailable?: boolean
     assignmentMode?: boolean
     auditAvailable?: boolean
     implementationAuditAvailable?: boolean
     implementationAuditReady?: boolean
+    implementationAuditRunning?: boolean
+    auditSettings: ThreadSettings
+    providers: ProviderCatalog[]
+    projectId?: string | null
+    favoriteModels?: string[]
+    recentModels?: string[]
     history: StudioDocumentHistory<EngineeringSpec>
     onBack: () => void
     onOpenInEditor: (spec: EngineeringSpec) => CallbackResult
     onRevealInAppFile: (spec: EngineeringSpec) => CallbackResult
     onToggleAgentMessages: () => void
     onOpenBrainstorm?: () => void
+    onOpenPrd?: () => void
     onOpenAssignment?: () => void
     onGenerateAssignment?: (spec: EngineeringSpec) => CallbackResult
     onOpenAudit?: () => void
     onRunImplementationAudit?: () => CallbackResult
+    onAuditModelChange: (settings: ThreadSettings) => void
+    onToggleFavorite?: (providerId: string, modelId: string, harnessId: string) => void
+    onReorderFavorite?: (
+      draggedKey: string,
+      targetKey: string,
+      position: 'before' | 'after'
+    ) => void
     onMarkImplementationComplete?: () => CallbackResult
     onSave: (spec: EngineeringSpec) => Promise<EngineeringSpec | null>
     onSelectVersion: (version: number) => CallbackResult
@@ -171,21 +194,32 @@
     error,
     agentMessagesOpen = false,
     brainstormAvailable = false,
+    prdAvailable = false,
     assignmentAvailable = false,
     assignmentMode = false,
     auditAvailable = false,
     implementationAuditAvailable = false,
     implementationAuditReady = false,
+    implementationAuditRunning = false,
+    auditSettings,
+    providers,
+    projectId = null,
+    favoriteModels = [],
+    recentModels = [],
     history,
     onBack,
     onOpenInEditor,
     onRevealInAppFile,
     onToggleAgentMessages,
     onOpenBrainstorm,
+    onOpenPrd,
     onOpenAssignment,
     onGenerateAssignment,
     onOpenAudit,
     onRunImplementationAudit,
+    onAuditModelChange,
+    onToggleFavorite,
+    onReorderFavorite,
     onMarkImplementationComplete,
     onSave,
     onSelectVersion,
@@ -203,6 +237,19 @@
 
   let preferredIcon = $derived(editorPreference.preferredInfo?.iconDataUrl)
   let preferredName = $derived(editorPreference.preferredInfo?.name ?? 'System Default')
+
+  function chooseAuditModel(providerId: string, modelId: string, harnessId?: string): void {
+    onAuditModelChange({
+      ...auditSettings,
+      harnessId: harnessId ?? auditSettings.harnessId,
+      providerId,
+      modelId
+    })
+  }
+
+  function chooseAuditThinking(level: ThinkingLevel): void {
+    onAuditModelChange({ ...auditSettings, thinkingLevel: level })
+  }
 
   let selectedSection = $state<SpecSectionId>('problem')
   /** Phone only: the section rail is a bottom drawer instead of a column. */
@@ -227,6 +274,32 @@
   let pendingAnnotation = $state<PendingAnnotation | null>(null)
   let editingAnnotation = $state<SpecAnnotation | null>(null)
   let editingAnnotationBody = $state('')
+  let annotationEditor = $state<RichMarkdownEditor>()
+  let editingAnnotationEditor = $state<RichMarkdownEditor>()
+  let decisionNotesEditor = $state<RichMarkdownEditor>()
+  const pendingSpeechTargetId = `spec-annotation-${crypto.randomUUID()}`
+  const decisionSpeechTargetId = `spec-decision-${crypto.randomUUID()}`
+  const speechScope = $derived({
+    kind: 'project',
+    projectId: spec.projectId,
+    threadId: spec.threadId
+  } as const)
+
+  function pendingSpeechTarget() {
+    return annotationEditor?.speechEditorTarget(pendingSpeechTargetId) ?? null
+  }
+
+  function editingSpeechTarget() {
+    if (!editingAnnotation) return null
+    return (
+      editingAnnotationEditor?.speechEditorTarget(`spec-annotation-edit-${editingAnnotation.id}`) ??
+      null
+    )
+  }
+
+  function decisionSpeechTarget() {
+    return decisionNotesEditor?.speechEditorTarget(decisionSpeechTargetId) ?? null
+  }
   let editingAnnotationPosition = $state<{ x: number; y: number } | null>(null)
   let annotationMarkers = $state<Array<{ annotation: SpecAnnotation; x: number; y: number }>>([])
   let documentScroller = $state<HTMLElement | null>(null)
@@ -713,6 +786,7 @@
       endOffset: anchor.endOffset
     })
     if (!updated) return
+    speechController.observeSent(pendingSpeechTargetId, body)
     applySpec(updated)
     closePendingAnnotation()
     const added = [...updated.annotations]
@@ -819,6 +893,7 @@
     if (!annotation || !body) return
     const updated = await onUpdateAnnotation(annotation.id, body)
     if (!updated) return
+    speechController.observeSent(`spec-annotation-edit-${annotation.id}`, body)
     applySpec(updated)
     const saved = updated.annotations.find((candidate) => candidate.id === annotation.id)
     if (saved) {
@@ -845,6 +920,7 @@
     pendingAction = null
     additionalNotes = ''
     await onSubmit(action, submittedDraft, notes)
+    speechController.observeSent(decisionSpeechTargetId, notes)
   }
 
   async function generateAssignment(): Promise<void> {
@@ -949,6 +1025,7 @@
         <StudioDocumentNavigation
           active="spec"
           {brainstormAvailable}
+          {prdAvailable}
           {assignmentAvailable}
           {auditAvailable}
           {agentMessagesOpen}
@@ -958,6 +1035,7 @@
           sectionsLabel="spec sections"
           onToggleSections={() => (sectionsOpen = !sectionsOpen)}
           {onOpenBrainstorm}
+          {onOpenPrd}
           {onOpenAssignment}
           {onOpenAudit}
         />
@@ -1032,24 +1110,50 @@
 
       <div class="flex items-center gap-1.5 md:justify-end">
         {#if implementationAuditAvailable}
-          <button
-            class="flex-1 rounded-lg border bg-elevated px-3 py-1.5 text-xs font-semibold max-md:h-10 md:flex-none hover:bg-overlay disabled:opacity-50"
-            disabled={busy}
-            title="Mark this implementation complete without an audit"
-            onclick={() => void onMarkImplementationComplete?.()}
-          >
-            Mark complete
-          </button>
+          {#if !implementationAuditReady && !implementationAuditRunning}
+            <ModelPicker
+              {providers}
+              {projectId}
+              harnessId={auditSettings.harnessId}
+              providerId={auditSettings.providerId}
+              modelId={auditSettings.modelId}
+              {favoriteModels}
+              {recentModels}
+              side="top"
+              variant="action"
+              onSelect={chooseAuditModel}
+              thinkingLevel={auditSettings.thinkingLevel}
+              onSelectThinking={chooseAuditThinking}
+              {onToggleFavorite}
+              {onReorderFavorite}
+            />
+          {/if}
+          {#if !implementationAuditRunning}
+            <button
+              class="flex-1 rounded-lg border bg-elevated px-3 py-1.5 text-xs font-semibold max-md:h-10 md:flex-none hover:bg-overlay disabled:opacity-50"
+              disabled={busy}
+              title="Mark this implementation complete without an audit"
+              onclick={() => void onMarkImplementationComplete?.()}
+            >
+              Mark complete
+            </button>
+          {/if}
           <button
             class="flex flex-1 items-center justify-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-on-primary max-md:h-10 md:flex-none hover:bg-primary-hover disabled:opacity-50"
             disabled={busy}
             title={implementationAuditReady
               ? 'Open the implementation audit'
-              : 'Audit the completed implementation'}
+              : implementationAuditRunning
+                ? 'Open the live auditor trace'
+                : 'Audit the completed implementation'}
             onclick={() => void onRunImplementationAudit?.()}
           >
             <ShieldCheck size={13} />
-            {implementationAuditReady ? 'View audit' : 'Audit'}
+            {implementationAuditReady
+              ? 'View audit'
+              : implementationAuditRunning
+                ? 'View trace'
+                : 'Audit'}
           </button>
         {:else if canDecide}
           <button
@@ -1106,6 +1210,7 @@
         <label class="min-w-0 flex-1 text-[11px] font-medium text-muted">
           Additional notes
           <RichMarkdownEditor
+            bind:this={decisionNotesEditor}
             class="mt-1 min-h-14 w-full resize-y rounded-lg border bg-elevated px-3 py-2 text-xs text-foreground outline-none focus:border-primary"
             bind:value={additionalNotes}
             placeholder="Additional notes"
@@ -1121,6 +1226,12 @@
           >
             Cancel
           </button>
+          <VoiceInputButton
+            targetId={decisionSpeechTargetId}
+            getTarget={decisionSpeechTarget}
+            scope={speechScope}
+            disabled={busy}
+          />
           <button
             class="flex-1 rounded-lg bg-primary px-3 py-2 text-xs font-semibold text-on-primary max-md:h-10 md:flex-none disabled:opacity-50"
             disabled={busy || (pendingAction === 'implement' && !currentValidation.valid)}
@@ -1903,22 +2014,30 @@
 {#if pendingAnnotation}
   <div
     class="fixed z-50 w-96 rounded-xl border bg-surface p-3 shadow-xl max-md:inset-x-0 max-md:bottom-0 max-md:w-auto max-md:rounded-b-none max-md:pb-[calc(0.75rem+env(safe-area-inset-bottom))]"
-    style:left={compactViewport.matches ? undefined : `${pendingAnnotation.x}px`}
-    style:top={compactViewport.matches ? undefined : `${pendingAnnotation.y}px`}
     role="dialog"
     aria-label={pendingAnnotation.sectionLevel
       ? 'Annotate section'
       : canDecide
         ? 'Comment on selection'
         : 'Actions for selection'}
+    {@attach draggablePopover({
+      x: pendingAnnotation.x,
+      y: pendingAnnotation.y,
+      disabled: compactViewport.matches
+    })}
   >
-    <p class="text-[10px] font-semibold uppercase tracking-wide text-muted">
-      {pendingAnnotation.sectionLevel
-        ? 'Annotate section'
-        : canDecide
-          ? 'Comment on selection'
-          : 'Selection'}
-    </p>
+    <div class="flex items-center gap-1">
+      {#if !compactViewport.matches}
+        <PopoverDragHandle title="Move selection comment" />
+      {/if}
+      <p class="text-[10px] font-semibold uppercase tracking-wide text-muted">
+        {pendingAnnotation.sectionLevel
+          ? 'Annotate section'
+          : canDecide
+            ? 'Comment on selection'
+            : 'Selection'}
+      </p>
+    </div>
     <blockquote
       class="mt-2 line-clamp-3 border-l-2 border-accent pl-2 text-[11px] leading-relaxed text-muted"
     >
@@ -1926,6 +2045,7 @@
     </blockquote>
     {#if canDecide}
       <RichMarkdownEditor
+        bind:this={annotationEditor}
         class="mt-2 min-h-16 w-full resize-y rounded-lg border bg-elevated px-2.5 py-2 text-xs outline-none focus:border-primary"
         bind:value={annotationBody}
         placeholder="Leave your review note…"
@@ -1947,6 +2067,12 @@
           onclick={closePendingAnnotation}>Cancel</button
         >
         {#if canDecide}
+          <VoiceInputButton
+            targetId={pendingSpeechTargetId}
+            getTarget={pendingSpeechTarget}
+            scope={speechScope}
+            disabled={busy}
+          />
           <button
             class="rounded-lg bg-primary px-2.5 py-1.5 text-xs font-semibold text-on-primary disabled:opacity-50"
             disabled={busy || !annotationBody.trim()}
@@ -1962,12 +2088,20 @@
 {#if editingAnnotation && editingAnnotationPosition}
   <div
     class="fixed z-50 w-80 rounded-xl border bg-surface p-4 shadow-xl max-md:inset-x-0 max-md:bottom-0 max-md:w-auto max-md:rounded-b-none max-md:pb-[calc(1rem+env(safe-area-inset-bottom))]"
-    style:left={compactViewport.matches ? undefined : `${editingAnnotationPosition.x}px`}
-    style:top={compactViewport.matches ? undefined : `${editingAnnotationPosition.y}px`}
     role="dialog"
     aria-label="Anchored annotation"
+    {@attach draggablePopover({
+      x: editingAnnotationPosition.x,
+      y: editingAnnotationPosition.y,
+      disabled: compactViewport.matches
+    })}
   >
-    <p class="text-[10px] font-semibold uppercase tracking-wide text-muted">Anchored comment</p>
+    <div class="flex items-center gap-1">
+      {#if !compactViewport.matches}
+        <PopoverDragHandle title="Move anchored comment" />
+      {/if}
+      <p class="text-[10px] font-semibold uppercase tracking-wide text-muted">Anchored comment</p>
+    </div>
     {#if editingAnnotation.quote}
       <blockquote
         class="mt-2 line-clamp-3 border-l-2 border-accent pl-2 text-[11px] leading-relaxed text-muted"
@@ -1977,6 +2111,7 @@
     {/if}
     {#if canDecide}
       <RichMarkdownEditor
+        bind:this={editingAnnotationEditor}
         class="mt-3 min-h-24 w-full resize-y rounded-lg border bg-elevated px-3 py-2 text-xs outline-none focus:border-primary"
         bind:value={editingAnnotationBody}
         ariaLabel="Annotation body"
@@ -2014,6 +2149,11 @@
           }}>Close</button
         >
         {#if canDecide}
+          <VoiceInputButton
+            targetId={`spec-annotation-edit-${editingAnnotation.id}`}
+            getTarget={editingSpeechTarget}
+            scope={speechScope}
+          />
           <button
             class="rounded-lg bg-primary px-2.5 py-1.5 text-xs font-semibold text-on-primary disabled:opacity-50"
             disabled={!editingAnnotationBody.trim()}

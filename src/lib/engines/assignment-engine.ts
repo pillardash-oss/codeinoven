@@ -20,12 +20,12 @@ import type {
   Thread,
   ThreadSettings
 } from '../types'
+import { DEFAULT_SCOPE_BUCKET_ID } from '../types'
 import { generateId } from '../utils'
 import { ensureFeatureSlug, requireLocalProject } from '../project-artifacts'
 import { exportAssignmentMarkdown, exportAuditChecklist } from '../assignment/assignment-markdown'
 import { validateAssignment } from '../assignment/assignment-validation'
 import { ThreadManager } from './thread-manager'
-import { ScopeManager } from './scope-manager'
 import type { SpecEngine } from './spec-engine'
 
 export const ASSIGNMENT_WORKER_INSTRUCTION =
@@ -67,7 +67,6 @@ export class AssignmentEngineError extends Error {
 export class AssignmentEngine {
   private readonly repo: AssignmentRepo
   private readonly threads: ThreadManager
-  private readonly scopes: ScopeManager
 
   constructor(
     private readonly storage: StorageEngine,
@@ -78,7 +77,6 @@ export class AssignmentEngine {
   ) {
     this.repo = new AssignmentRepo(db)
     this.threads = new ThreadManager(db)
-    this.scopes = new ScopeManager(db)
   }
 
   async createDraft(input: CreateAssignmentInput): Promise<AssignmentPlan> {
@@ -379,7 +377,13 @@ export class AssignmentEngine {
     }
 
     const now = this.now()
-    const scopeBucketId = `assignment-${active.id}`
+    const coordinator = await this.threads.getThread(projectId, coordinatorThreadId)
+    if (!coordinator) throw new AssignmentEngineError('not_found', 'Coordinator not found')
+    // Orchestration stays inside whatever workspace scope the coordinator
+    // already uses (project root or a managed worktree); workers and the
+    // auditor inherit it through `scopeBucketId`. No dedicated bucket is
+    // created and the coordinator is never moved between scopes.
+    const scopeBucketId = coordinator.scopeBucketId ?? DEFAULT_SCOPE_BUCKET_ID
     const reworkActivation = active.auditCycle?.status === 'awaiting_rework_approval'
     const scopeRepairActivation = reworkActivation && active.auditCycle?.scopeRepair === true
     const completedTaskIds = new Set(
@@ -435,16 +439,15 @@ export class AssignmentEngine {
     }
 
     await this.writeMarkdown(approved)
-    const coordinator = await this.threads.getThread(projectId, coordinatorThreadId)
-    if (!coordinator) throw new AssignmentEngineError('not_found', 'Coordinator not found')
     this.db.transaction(() => {
-      this.scopes.ensureBucket(projectId, { id: scopeBucketId, name: active.content.title })
       this.repo.save(approved, approved.version)
       new ThreadRepo(this.db).upsert({
         ...coordinator,
         assignmentId: active.id,
         assignmentRole: 'coordinator',
-        scopeBucketId,
+        // Normalized to the default only when unset; an existing custom or
+        // managed-worktree scope is preserved untouched.
+        scopeBucketId: coordinator.scopeBucketId ?? DEFAULT_SCOPE_BUCKET_ID,
         userInputLocked: false,
         pinned: true,
         updatedAt: now

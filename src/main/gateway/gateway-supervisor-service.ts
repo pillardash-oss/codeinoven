@@ -100,10 +100,12 @@ export class GatewaySupervisorService {
     return Promise.all(Object.values(store.plugins).map((state) => this.toStatus(state)))
   }
 
-  async setEnabled(pluginId: string, enabled: boolean): Promise<GatewayStatus> {
-    const state = await this.mutateState(pluginId, (current) => ({ ...current, enabled }))
-    if (!enabled) await this.stop(pluginId)
-    return this.toStatus(state)
+  setEnabled(pluginId: string, enabled: boolean): Promise<GatewayStatus> {
+    return this.serialize(pluginId, async () => {
+      if (!enabled) return this.stopInner(pluginId, 'disable')
+      const state = await this.mutateState(pluginId, (current) => ({ ...current, enabled: true }))
+      return this.toStatus(state)
+    })
   }
 
   /** Install (if needed) and start the gateway, gating readiness on health. */
@@ -111,8 +113,9 @@ export class GatewaySupervisorService {
     return this.serialize(pluginId, () => this.startInner(pluginId))
   }
 
+  /** Stop the gateway and persist that it must not auto-start on app launch. */
   stop(pluginId: string): Promise<GatewayStatus> {
-    return this.serialize(pluginId, () => this.stopInner(pluginId))
+    return this.serialize(pluginId, () => this.stopInner(pluginId, 'disable'))
   }
 
   /**
@@ -158,7 +161,9 @@ export class GatewaySupervisorService {
   }
 
   async dispose(): Promise<void> {
-    await Promise.all([...this.running.keys()].map((pluginId) => this.stopInner(pluginId)))
+    await Promise.all(
+      [...this.running.keys()].map((pluginId) => this.stopInner(pluginId, 'preserve'))
+    )
   }
 
   /**
@@ -241,7 +246,11 @@ export class GatewaySupervisorService {
       return this.toStatus(state)
     }
     try {
-      await this.mutateState(pluginId, (current) => ({ ...current, lifecycle: 'starting', detail: undefined }))
+      await this.mutateState(pluginId, (current) => ({
+        ...current,
+        lifecycle: 'starting',
+        detail: undefined
+      }))
       await this.mutateState(pluginId, (current) => ({ ...current, lifecycle: 'installing' }))
       const installDir = await this.ensureInstalled(pluginId, adapter)
       await this.mutateState(pluginId, (current) => ({ ...current, lifecycle: 'starting' }))
@@ -314,7 +323,10 @@ export class GatewaySupervisorService {
     }
   }
 
-  private async stopInner(pluginId: string): Promise<GatewayStatus> {
+  private async stopInner(
+    pluginId: string,
+    enabledPreference: 'disable' | 'preserve'
+  ): Promise<GatewayStatus> {
     const instance = this.running.get(pluginId)
     if (instance) {
       this.setState(pluginId, { lifecycle: 'stopping' })
@@ -343,6 +355,7 @@ export class GatewaySupervisorService {
     })
     const state = await this.mutateState(pluginId, (current) => ({
       ...current,
+      enabled: enabledPreference === 'disable' ? false : current.enabled,
       lifecycle: 'stopped',
       detail: undefined,
       boundPort: undefined
@@ -371,7 +384,7 @@ export class GatewaySupervisorService {
 
   private async uninstallInner(pluginId: string): Promise<GatewayStatus> {
     this.requireAdapter(pluginId)
-    await this.stopInner(pluginId)
+    await this.stopInner(pluginId, 'disable')
     await removeGatewayProviders(this.providers, pluginId)
     if (this.vault) await this.vault.remove(dashboardPasswordRef(pluginId))
     const pluginDir = join(getConfigRoot(), 'gateways', pluginId)
@@ -383,6 +396,7 @@ export class GatewaySupervisorService {
     return this.toStatus(
       await this.mutateState(pluginId, (current) => ({
         ...current,
+        enabled: false,
         lifecycle: 'not_installed',
         detail: undefined,
         boundPort: undefined,
@@ -395,7 +409,7 @@ export class GatewaySupervisorService {
   private async updateInner(pluginId: string): Promise<GatewayStatus> {
     const adapter = this.requireAdapter(pluginId)
     const wasRunning = this.running.has(pluginId)
-    await this.stopInner(pluginId)
+    await this.stopInner(pluginId, 'preserve')
     const dir = this.installDir(pluginId)
     for (const entry of await readdir(dir).catch(() => [])) {
       if (entry.startsWith('.codeinoven-installed-')) {
@@ -874,8 +888,7 @@ export async function downloadTarball(
     throw new Error(`Tarball download failed with status ${response.status}`)
   }
   const contentLength = Number(response.headers.get('content-length'))
-  const totalBytes =
-    contentLength > 0 ? contentLength : (metadata.size ?? 0)
+  const totalBytes = contentLength > 0 ? contentLength : (metadata.size ?? 0)
   const hash = createHash('sha1')
   const handle = await open(destination, 'w')
   let downloadedBytes = 0

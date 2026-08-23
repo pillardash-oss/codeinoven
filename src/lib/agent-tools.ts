@@ -1,11 +1,13 @@
 import type { ApplicationAgentToolDefinition } from './types'
 import { APP_NAME } from './brand'
 import { BRAINSTORM_DOCUMENT_JSON_SCHEMA } from './brainstorm/brainstorm-validation'
+import { PRD_DOCUMENT_JSON_SCHEMA } from './prd/prd-validation'
 import { GATEWAY_TOOLS } from './gateway-tools'
 
 /** Stable application-facing name for the canonical specification contract. */
 export const ENGINEERING_SPEC_TOOL_NAME = 'engineering_spec'
 export const BRAINSTORM_DOCUMENT_TOOL_NAME = 'brainstorm_document'
+export const PRODUCT_REQUIREMENTS_DOCUMENT_TOOL_NAME = 'product_requirements_document'
 export const FEATURE_AUDIT_TOOL_NAME = 'request_audit'
 export const AUDIT_REPORT_TOOL_NAME = 'audit_report'
 export const PROPOSE_MEMORY_TOOL_NAME = 'propose_memory'
@@ -354,6 +356,14 @@ export const APPLICATION_AGENT_TOOLS: ApplicationAgentToolDefinition[] = [
     inputSchema: BRAINSTORM_DOCUMENT_JSON_SCHEMA,
     source: 'application',
     sentWhen: 'Initial Brainstorm generation and every Brainstorm review turn before finalization'
+  },
+  {
+    name: PRODUCT_REQUIREMENTS_DOCUMENT_TOOL_NAME,
+    transportName: 'StructuredOutput',
+    description: `Submit a complete, versioned product requirements document for ${APP_NAME}. Every canonical section must be present; Open Questions may be empty after alignment.`,
+    inputSchema: PRD_DOCUMENT_JSON_SCHEMA,
+    source: 'application',
+    sentWhen: 'Initial PRD generation and every PRD review turn before finalization'
   },
   {
     name: ENGINEERING_SPEC_TOOL_NAME,
