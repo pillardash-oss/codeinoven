@@ -71,6 +71,9 @@ import {
   validateCreateProjectInput,
   validateCreateThreadInput,
   validateEntityId,
+  validateEngineeringLifecycleDecision,
+  validateEngineeringLifecycleResumeToken,
+  validateEngineeringLifecycleSelection,
   validateGitIdentity,
   validateGitPathArray,
   validateGitRelativePath,
@@ -122,6 +125,7 @@ import {
   type ManagedWorktreeInspector
 } from '../workspaces/scope-root-resolver'
 import { HistoryEngine } from '../../lib/engines/history-engine'
+import { EngineeringLifecycleEngine } from '../../lib/engines/engineering-lifecycle-engine'
 import { PlanEngine } from '../../lib/engines/plan-engine'
 import {
   SpecEngine,
@@ -1953,6 +1957,7 @@ export function registerIpcHandlers(
     scopeRoots
   )
   const historyEngine = new HistoryEngine(database)
+  const engineeringLifecycleEngine = new EngineeringLifecycleEngine(database)
   const planEngine = new PlanEngine(storage, database)
   const specEngine = new SpecEngine(storage, database, {
     validateForApproval: validateEngineeringSpec
@@ -1974,6 +1979,58 @@ export function registerIpcHandlers(
   const harnessUsageRepo = new HarnessUsageRepo(database)
   const turnFeedbackRepo = new TurnFeedbackRepo(database)
   const noteRepo = new NoteRepo(database)
+
+  ipcMain.handle('engineeringLifecycle:get', (_, projectId: unknown, threadId: unknown) =>
+    engineeringLifecycleEngine.get(
+      validateEntityId(projectId, 'Project ID'),
+      validateEntityId(threadId, 'Thread ID')
+    )
+  )
+  ipcMain.handle(
+    'engineeringLifecycle:select',
+    (_, projectId: unknown, threadId: unknown, selection: unknown) =>
+      engineeringLifecycleEngine.select(
+        validateEntityId(projectId, 'Project ID'),
+        validateEntityId(threadId, 'Thread ID'),
+        validateEngineeringLifecycleSelection(selection)
+      )
+  )
+  ipcMain.handle('engineeringLifecycle:start', (_, projectId: unknown, threadId: unknown) =>
+    engineeringLifecycleEngine.start(
+      validateEntityId(projectId, 'Project ID'),
+      validateEntityId(threadId, 'Thread ID')
+    )
+  )
+  ipcMain.handle(
+    'engineeringLifecycle:resume',
+    (_, projectId: unknown, threadId: unknown, resumeToken: unknown, decision: unknown) =>
+      engineeringLifecycleEngine.resume(
+        validateEntityId(projectId, 'Project ID'),
+        validateEntityId(threadId, 'Thread ID'),
+        validateEngineeringLifecycleResumeToken(resumeToken),
+        validateEngineeringLifecycleDecision(decision)
+      )
+  )
+  ipcMain.handle(
+    'engineeringLifecycle:retry',
+    (_, projectId: unknown, threadId: unknown, resumeToken: unknown) =>
+      engineeringLifecycleEngine.retry(
+        validateEntityId(projectId, 'Project ID'),
+        validateEntityId(threadId, 'Thread ID'),
+        validateEngineeringLifecycleResumeToken(resumeToken)
+      )
+  )
+  ipcMain.handle(
+    'engineeringLifecycle:cancel',
+    (_, projectId: unknown, threadId: unknown, confirmed: unknown) => {
+      if (confirmed !== true)
+        throw new TypeError('Engineering lifecycle cancellation requires confirmation')
+      return engineeringLifecycleEngine.cancel(
+        validateEntityId(projectId, 'Project ID'),
+        validateEntityId(threadId, 'Thread ID')
+      )
+    }
+  )
 
   // Shared privileged-IPC boundary: every renderer call that can open the
   // system browser, reveal files, or read local files is validated here.

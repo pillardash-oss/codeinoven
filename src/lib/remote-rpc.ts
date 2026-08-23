@@ -138,10 +138,16 @@ export const REMOTE_ALLOWED_CHANNELS: readonly string[] = [
   'agent:retryChildSession',
   'agent:abortChildSession',
   // Engineering workflow (spec/assignment/audit/brainstorm studios)
+  'engineeringLifecycle:get',
+  'engineeringLifecycle:select',
+  'engineeringLifecycle:start',
+  'engineeringLifecycle:resume',
+  'engineeringLifecycle:retry',
+  'engineeringLifecycle:cancel',
   'agent:chooseBrainstormEntry',
   'agent:reviewBrainstorm',
   'agent:finalizeBrainstorm',
-  'agent:ensureAuditSession',
+  'agent:ensureImplementationAuditorThread',
   'agent:startAssignment',
   'agent:stopAssignment',
   'agent:resumeAssignment',
@@ -476,6 +482,7 @@ export const REMOTE_CHANNEL_AUTHORIZATION: Readonly<Record<string, RemoteChannel
   'agent:truncateMessages': { scope: 'command.run', stepUp: 'always' },
 
   // workflow.read — default, no step-up
+  'engineeringLifecycle:get': { scope: 'workflow.read', stepUp: 'none' },
   'spec:getActive': { scope: 'workflow.read', stepUp: 'none' },
   'spec:listVersions': { scope: 'workflow.read', stepUp: 'none' },
   'spec:validate': { scope: 'workflow.read', stepUp: 'none' },
@@ -491,6 +498,15 @@ export const REMOTE_CHANNEL_AUTHORIZATION: Readonly<Record<string, RemoteChannel
   'checkpoint:diff': { scope: 'workflow.read', stepUp: 'none' },
 
   // workflow.write — default-No, conditional step-up
+  'engineeringLifecycle:select': { scope: 'workflow.write', stepUp: 'conditional' },
+  'engineeringLifecycle:start': { scope: 'workflow.write', stepUp: 'conditional' },
+  'engineeringLifecycle:resume': { scope: 'workflow.write', stepUp: 'conditional' },
+  'engineeringLifecycle:retry': { scope: 'workflow.write', stepUp: 'conditional' },
+  'engineeringLifecycle:cancel': {
+    scope: 'workflow.write',
+    stepUp: 'conditional',
+    requiresStepUp: true
+  },
   'agent:chooseBrainstormEntry': { scope: 'workflow.write', stepUp: 'conditional' },
   'agent:reviewBrainstorm': { scope: 'workflow.write', stepUp: 'conditional' },
   'agent:finalizeBrainstorm': {
@@ -498,7 +514,10 @@ export const REMOTE_CHANNEL_AUTHORIZATION: Readonly<Record<string, RemoteChannel
     stepUp: 'conditional',
     requiresStepUp: true
   },
-  'agent:ensureAuditSession': { scope: 'workflow.write', stepUp: 'conditional' },
+  'agent:ensureImplementationAuditorThread': {
+    scope: 'workflow.write',
+    stepUp: 'conditional'
+  },
   'agent:startAssignment': { scope: 'workflow.write', stepUp: 'conditional', requiresStepUp: true },
   'agent:stopAssignment': { scope: 'workflow.write', stepUp: 'conditional', requiresStepUp: true },
   'agent:resumeAssignment': {

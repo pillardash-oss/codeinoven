@@ -17,6 +17,7 @@ import { appendFile, mkdir, open, realpath, rename, rm, stat, writeFile } from '
 import { randomUUID } from 'node:crypto'
 import { extname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { ThreadManager } from '../../lib/engines/thread-manager'
+import { EngineeringLifecycleEngine } from '../../lib/engines/engineering-lifecycle-engine'
 import { NoteRepo } from '../database/repositories/note-repo'
 import { ProjectManager } from '../../lib/engines/project-manager'
 import { ProjectFilesService } from '../editor/project-files-service'
@@ -65,6 +66,9 @@ import { StorageEngine } from '../storage/storage-engine'
 import {
   validateBoundedString,
   validateEntityId,
+  validateEngineeringLifecycleDecision,
+  validateEngineeringLifecycleResumeToken,
+  validateEngineeringLifecycleSelection,
   validateScopeAppearancePatch,
   validateScopeCollapsePatch,
   validateScopeCreateInput,
@@ -166,7 +170,7 @@ export interface RemoteRpcServices {
     | 'chooseBrainstormEntry'
     | 'reviewBrainstorm'
     | 'finalizeBrainstorm'
-    | 'ensureAuditSession'
+    | 'ensureImplementationAuditorThread'
     | 'startAssignment'
     | 'stopAssignment'
     | 'resumeAssignment'
@@ -214,6 +218,7 @@ export class RemoteRpcDispatcher {
   private readonly scopeWorktreeService: ScopeWorktreeService
   private readonly scopeRoots: ReturnType<typeof scopeRootProvider>
   private readonly specEngine: SpecEngine
+  private readonly engineeringLifecycleEngine: EngineeringLifecycleEngine
   private readonly brainstormEngine: BrainstormEngine
   private readonly auditEngine: AuditEngine
   private readonly assignmentEngine: AssignmentEngine
@@ -261,6 +266,7 @@ export class RemoteRpcDispatcher {
     this.specEngine = new SpecEngine(this.storage, services.database, {
       validateForApproval: validateEngineeringSpec
     })
+    this.engineeringLifecycleEngine = new EngineeringLifecycleEngine(services.database)
     this.brainstormEngine = new BrainstormEngine(this.storage, services.database)
     this.auditEngine = new AuditEngine(this.storage, services.database)
     this.assignmentEngine = new AssignmentEngine(this.storage, services.database)
@@ -1049,12 +1055,11 @@ export class RemoteRpcDispatcher {
           args[3] as number,
           typeof args[4] === 'string' ? args[4] : ''
         )
-      case 'agent:ensureAuditSession':
-        return chatEngine.ensureAuditSession(
+      case 'agent:ensureImplementationAuditorThread':
+        return chatEngine.ensureImplementationAuditorThread(
           this.string(args[0]),
           this.string(args[1]),
-          this.string(args[2]),
-          args[3] as ThreadSettings
+          args[2] as ThreadSettings
         )
       case 'agent:startAssignment':
         return chatEngine.startAssignment(
@@ -1352,6 +1357,43 @@ export class RemoteRpcDispatcher {
       }
 
       // ─── Brainstorm studio ──────────────────────────────────────────────
+      case 'engineeringLifecycle:get':
+        return this.engineeringLifecycleEngine.get(
+          validateEntityId(args[0], 'Project ID'),
+          validateEntityId(args[1], 'Thread ID')
+        )
+      case 'engineeringLifecycle:select':
+        return this.engineeringLifecycleEngine.select(
+          validateEntityId(args[0], 'Project ID'),
+          validateEntityId(args[1], 'Thread ID'),
+          validateEngineeringLifecycleSelection(args[2])
+        )
+      case 'engineeringLifecycle:start':
+        return this.engineeringLifecycleEngine.start(
+          validateEntityId(args[0], 'Project ID'),
+          validateEntityId(args[1], 'Thread ID')
+        )
+      case 'engineeringLifecycle:resume':
+        return this.engineeringLifecycleEngine.resume(
+          validateEntityId(args[0], 'Project ID'),
+          validateEntityId(args[1], 'Thread ID'),
+          validateEngineeringLifecycleResumeToken(args[2]),
+          validateEngineeringLifecycleDecision(args[3])
+        )
+      case 'engineeringLifecycle:retry':
+        return this.engineeringLifecycleEngine.retry(
+          validateEntityId(args[0], 'Project ID'),
+          validateEntityId(args[1], 'Thread ID'),
+          validateEngineeringLifecycleResumeToken(args[2])
+        )
+      case 'engineeringLifecycle:cancel':
+        if (args[2] !== true) {
+          throw new TypeError('Engineering lifecycle cancellation requires confirmation')
+        }
+        return this.engineeringLifecycleEngine.cancel(
+          validateEntityId(args[0], 'Project ID'),
+          validateEntityId(args[1], 'Thread ID')
+        )
       case 'brainstorm:getActive':
         return this.brainstormEngine.getActive(this.string(args[0]), this.string(args[1]))
       case 'brainstorm:getWorkflow':
