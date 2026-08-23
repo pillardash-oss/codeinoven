@@ -9932,6 +9932,12 @@ export class ChatEngine {
         version,
         note
       )
+      const prdWorkflow = this.prdEngine.getWorkflowState(projectId, threadId)
+      if (prdWorkflow?.stage === 'brainstorming') {
+        this.prdEngine.beginDrafting(projectId, threadId)
+        await this.threadManager.setStatus(projectId, threadId, 'planning', { read: false })
+        return finalized
+      }
       const lifecycle = this.engineeringLifecycleEngine.get(projectId, threadId)
       if (lifecycle?.activeStage === 'brainstorm') {
         this.engineeringLifecycleEngine.completeStage(projectId, threadId, 'brainstorm')

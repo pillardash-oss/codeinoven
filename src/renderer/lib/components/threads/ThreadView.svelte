@@ -70,6 +70,8 @@
   import SpecReadyCard from './SpecReadyCard.svelte'
   import BrainstormEntryChoiceCard from './BrainstormEntryChoiceCard.svelte'
   import BrainstormReadyCard from './BrainstormReadyCard.svelte'
+  import PrdEntryChoiceCard from './PrdEntryChoiceCard.svelte'
+  import PrdReadyCard from './PrdReadyCard.svelte'
   import EngineeringFlowCancelModal from './EngineeringFlowCancelModal.svelte'
   import AssignmentReadyCard from './AssignmentReadyCard.svelte'
   import AssignmentCoordinatorPanel from './AssignmentCoordinatorPanel.svelte'
@@ -170,6 +172,8 @@
     BrainstormWorkflowState,
     PrdContent,
     PrdDocument,
+    PrdSectionId,
+    PrdWorkflowState,
     EngineeringSpec,
     AssignmentPlan,
     AssignmentPlanContent,
@@ -363,6 +367,10 @@
       selection
     )
     updateSettings(legacySettingsForLifecycle(selection))
+    prdWorkflow =
+      selection === 'prd'
+        ? await invoke('prd:ensureWorkflow', thread.projectId, thread.id)
+        : prdWorkflow
   }
 
   async function selectEngineeringLifecycle(
@@ -1514,6 +1522,7 @@
   let brainstormVersions = $state<BrainstormDocument[]>([])
   let selectedBrainstormVersion = $state<number | undefined>()
   let prd = $state<PrdDocument | null>(null)
+  let prdWorkflow = $state<PrdWorkflowState | null>(null)
   let prdVersions = $state<PrdDocument[]>([])
   let selectedPrdVersion = $state<number | undefined>()
   let prdBusy = $state(false)
@@ -3642,9 +3651,7 @@
         }
       } else if (started.state.activeStage === 'prd') {
         const workflow = await invoke('prd:ensureWorkflow', projectId, id)
-        if (workflow.stage === 'choice_pending') {
-          await invoke('prd:chooseEntry', projectId, id, 'start_prd')
-        }
+        prdWorkflow = workflow
       }
     }
     await sessionReady
@@ -3720,7 +3727,15 @@
     const selectedPrd =
       engineeringLifecycle?.activeStage === 'prd' ||
       (engineeringLifecycle?.selection === 'prd' && engineeringLifecycle.activeStage === undefined)
-    if (selectedPrd && specAction === undefined) {
+    const selectedPrdWorkflow = selectedPrd
+      ? await invoke('prd:ensureWorkflow', thread.projectId, thread.id)
+      : null
+    if (selectedPrdWorkflow) prdWorkflow = selectedPrdWorkflow
+    if (selectedPrd && selectedPrdWorkflow?.stage !== 'brainstorming' && specAction === undefined) {
+      if (selectedPrdWorkflow?.stage === 'choice_pending') {
+        prdError = 'Choose Brainstorm first or Start PRD before sending the requirements.'
+        return
+      }
       const userMessageId = messageId()
       const { projectId, id } = thread
       beginLocalTurn(userMessageId)
@@ -3729,10 +3744,6 @@
         if (engineeringLifecycle?.activeStage === undefined) {
           const started = await invoke('engineeringLifecycle:start', projectId, id)
           engineeringLifecycle = started.state
-        }
-        const workflow = await invoke('prd:ensureWorkflow', projectId, id)
-        if (workflow.stage === 'choice_pending') {
-          await invoke('prd:chooseEntry', projectId, id, 'start_prd')
         }
         prd = await invoke(
           'agent:generatePrd',
@@ -4240,6 +4251,7 @@
       projectThreads,
       workflow,
       activeBrainstorm,
+      currentPrdWorkflow,
       activePrd
     ] = await Promise.all([
       invoke('spec:getActive', projectId, workflowThreadId),
@@ -4248,6 +4260,7 @@
       invoke('thread:list', projectId),
       invoke('brainstorm:getWorkflow', projectId, workflowThreadId),
       invoke('brainstorm:getActive', projectId, workflowThreadId),
+      invoke('prd:getWorkflow', projectId, workflowThreadId),
       invoke('prd:getActive', projectId, workflowThreadId)
     ])
     if (!alive) return
@@ -4262,6 +4275,7 @@
       if (providerStatus?.state !== 'error') providerStatus = null
     }
     brainstormWorkflow = workflow
+    prdWorkflow = currentPrdWorkflow
     brainstorm = activeBrainstorm
     prd = activePrd
     prdVersions = activePrd
@@ -4746,6 +4760,25 @@
     selectedPrdVersion = version
   }
 
+  async function choosePrdEntry(choice: 'brainstorm_first' | 'start_prd'): Promise<void> {
+    if (prdBusy) return
+    prdBusy = true
+    prdError = ''
+    try {
+      prdWorkflow = await invoke('prd:chooseEntry', thread.projectId, thread.id, choice)
+      if (choice === 'brainstorm_first') {
+        const workflow = await invoke('brainstorm:ensureWorkflow', thread.projectId, thread.id)
+        brainstormWorkflow = workflow.entryChoice
+          ? workflow
+          : await invoke('brainstorm:chooseEntry', thread.projectId, thread.id, 'brainstorm')
+      }
+    } catch (error) {
+      prdError = error instanceof Error ? error.message : 'The PRD entry choice could not be saved.'
+    } finally {
+      prdBusy = false
+    }
+  }
+
   async function savePrd(content: PrdContent): Promise<void> {
     if (!studioPrd || studioPrd.status !== 'draft') return
     prdBusy = true
@@ -4765,6 +4798,83 @@
       )
     } catch (error) {
       prdError = error instanceof Error ? error.message : 'The PRD could not be saved.'
+    } finally {
+      prdBusy = false
+    }
+  }
+
+  function applyPrdDocument(updated: PrdDocument): void {
+    prd = updated
+    prdVersions = prdVersions.some((candidate) => candidate.version === updated.version)
+      ? prdVersions.map((candidate) =>
+          candidate.version === updated.version ? updated : candidate
+        )
+      : [...prdVersions, updated]
+    selectedPrdVersion = updated.version
+  }
+
+  async function addPrdAnnotation(section: PrdSectionId, body: string): Promise<void> {
+    if (!studioPrd || studioPrd.status !== 'draft') return
+    prdBusy = true
+    prdError = ''
+    try {
+      applyPrdDocument(
+        await invoke(
+          'prd:addAnnotation',
+          studioPrd.projectId,
+          studioPrd.threadId,
+          studioPrd.id,
+          studioPrd.version,
+          { section, body, author: 'user' }
+        )
+      )
+    } catch (error) {
+      prdError = error instanceof Error ? error.message : 'The PRD comment could not be added.'
+    } finally {
+      prdBusy = false
+    }
+  }
+
+  async function updatePrdAnnotation(annotationId: string, body: string): Promise<void> {
+    if (!studioPrd || studioPrd.status !== 'draft') return
+    prdBusy = true
+    prdError = ''
+    try {
+      applyPrdDocument(
+        await invoke(
+          'prd:updateAnnotation',
+          studioPrd.projectId,
+          studioPrd.threadId,
+          studioPrd.id,
+          studioPrd.version,
+          annotationId,
+          body
+        )
+      )
+    } catch (error) {
+      prdError = error instanceof Error ? error.message : 'The PRD comment could not be updated.'
+    } finally {
+      prdBusy = false
+    }
+  }
+
+  async function resolvePrdAnnotation(annotationId: string): Promise<void> {
+    if (!studioPrd || studioPrd.status !== 'draft') return
+    prdBusy = true
+    prdError = ''
+    try {
+      applyPrdDocument(
+        await invoke(
+          'prd:resolveAnnotation',
+          studioPrd.projectId,
+          studioPrd.threadId,
+          studioPrd.id,
+          studioPrd.version,
+          annotationId
+        )
+      )
+    } catch (error) {
+      prdError = error instanceof Error ? error.message : 'The PRD comment could not be resolved.'
     } finally {
       prdBusy = false
     }
@@ -5162,14 +5272,9 @@
       if (isBrainstormDocument(result)) {
         applyBrainstormDocument(result)
         await reconcileReadySpec()
-        if (
-          engineeringLifecycle?.selection === 'run_all' &&
-          engineeringLifecycle.activeStage === 'prd'
-        ) {
+        if (engineeringLifecycle?.activeStage === 'prd') {
           const workflow = await invoke('prd:ensureWorkflow', thread.projectId, thread.id)
-          if (workflow.stage === 'choice_pending') {
-            await invoke('prd:chooseEntry', thread.projectId, thread.id, 'start_prd')
-          }
+          prdWorkflow = workflow
           prd = await invoke(
             'agent:generatePrd',
             thread.projectId,
@@ -7359,6 +7464,9 @@
           onOpenAudit={openAuditStudio}
           onSelectVersion={selectPrdVersion}
           onSave={savePrd}
+          onAddAnnotation={addPrdAnnotation}
+          onUpdateAnnotation={updatePrdAnnotation}
+          onResolveAnnotation={resolvePrdAnnotation}
           onFinalize={finalizePrd}
           onOpenInEditor={openPrdInEditor}
           onRevealInFiles={revealPrdInFiles}
@@ -8419,6 +8527,12 @@
                   rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
                 onViewReport={openCoordinatorAuditReport}
               />
+            {:else if engineeringLifecycle?.selection === 'prd' && prdWorkflow?.stage === 'choice_pending' && !busy}
+              <PrdEntryChoiceCard
+                busy={prdBusy}
+                onBrainstormFirst={() => choosePrdEntry('brainstorm_first')}
+                onStartPrd={() => choosePrdEntry('start_prd')}
+              />
             {:else if brainstormWorkflow?.entryChoice && !brainstorm && !spec && brainstormGenerationFailed && !busy}
               <BrainstormEntryChoiceCard
                 busy={brainstormBusy}
@@ -8560,6 +8674,8 @@
                 onReorderFavorite={(draggedKey, targetKey, position) =>
                   rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
               />
+            {:else if prd?.status === 'draft' && !busy && !specFormulating}
+              <PrdReadyCard busy={prdBusy} onReview={openPrdStudio} onFinalize={finalizePrd} />
             {:else if brainstormWorkflow?.stage === 'drafting' && brainstorm && !busy && !specFormulating}
               {@const readyBrainstorm = brainstorm}
               <BrainstormReadyCard

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Check, ExternalLink, FolderOpen, Save } from '@lucide/svelte'
+  import { Check, ExternalLink, FolderOpen, MessageSquarePlus, Save } from '@lucide/svelte'
   import StudioDocumentNavigation from './StudioDocumentNavigation.svelte'
   import type { PrdContent, PrdDocument, PrdSectionId } from '$shared/types'
 
@@ -21,6 +21,9 @@
     onOpenAudit?: () => void
     onSelectVersion: (version: number) => void | Promise<void>
     onSave: (content: PrdContent) => void | Promise<void>
+    onAddAnnotation: (section: PrdSectionId, body: string) => void | Promise<void>
+    onUpdateAnnotation: (annotationId: string, body: string) => void | Promise<void>
+    onResolveAnnotation: (annotationId: string) => void | Promise<void>
     onFinalize: () => void | Promise<void>
     onOpenInEditor?: () => void | Promise<void>
     onRevealInFiles?: () => void | Promise<void>
@@ -44,6 +47,9 @@
     onOpenAudit,
     onSelectVersion,
     onSave,
+    onAddAnnotation,
+    onUpdateAnnotation,
+    onResolveAnnotation,
     onFinalize,
     onOpenInEditor,
     onRevealInFiles
@@ -53,6 +59,7 @@
   // svelte-ignore state_referenced_locally
   let content = $state<PrdContent>(structuredClone(prd.content))
   let dirty = $state(false)
+  let annotationDrafts = $state<Partial<Record<PrdSectionId, string>>>({})
 
   function updateSection(id: PrdSectionId, markdown: string): void {
     content = {
@@ -62,6 +69,10 @@
       )
     }
     dirty = true
+  }
+
+  function annotationsForSection(section: PrdSectionId) {
+    return prd.annotations.filter((annotation) => annotation.section === section)
   }
 </script>
 
@@ -165,6 +176,67 @@
             aria-label={section.title}
             disabled={prd.status !== 'draft'}
             oninput={(event) => updateSection(section.id, event.currentTarget.value)}></textarea>
+          {#if annotationsForSection(section.id).length > 0}
+            <div class="mt-2 space-y-2" aria-label={`${section.title} comments`}>
+              {#each annotationsForSection(section.id) as annotation (annotation.id)}
+                <div class="rounded-lg border bg-raised p-2.5">
+                  <textarea
+                    class="min-h-16 w-full resize-y bg-transparent text-xs leading-5 text-foreground outline-none disabled:text-muted"
+                    value={annotation.body}
+                    aria-label={`Comment on ${section.title}`}
+                    disabled={busy || prd.status !== 'draft' || annotation.status === 'resolved'}
+                    onblur={(event) => {
+                      const body = event.currentTarget.value.trim()
+                      if (body && body !== annotation.body) {
+                        void onUpdateAnnotation(annotation.id, body)
+                      }
+                    }}></textarea>
+                  <div class="mt-1 flex items-center justify-between gap-2">
+                    <span class="text-xs text-dimmed">{annotation.status}</span>
+                    {#if annotation.status === 'open' && prd.status === 'draft'}
+                      <button
+                        type="button"
+                        class="rounded-lg px-2 py-1 text-xs text-muted hover:bg-overlay hover:text-foreground disabled:opacity-50"
+                        disabled={busy}
+                        onclick={() => void onResolveAnnotation(annotation.id)}>Resolve</button
+                      >
+                    {/if}
+                  </div>
+                </div>
+              {/each}
+            </div>
+          {/if}
+          {#if prd.status === 'draft'}
+            <div class="mt-2 flex items-start gap-2">
+              <textarea
+                class="min-h-16 flex-1 resize-y rounded-lg border bg-surface p-2.5 text-xs leading-5 text-foreground outline-none focus:ring-1 focus:ring-thread-spec"
+                value={annotationDrafts[section.id] ?? ''}
+                aria-label={`Add comment to ${section.title}`}
+                placeholder="Add review comment"
+                disabled={busy}
+                oninput={(event) => {
+                  annotationDrafts = {
+                    ...annotationDrafts,
+                    [section.id]: event.currentTarget.value
+                  }
+                }}></textarea>
+              <button
+                type="button"
+                class="flex h-8 w-8 items-center justify-center rounded-lg border text-muted hover:bg-elevated hover:text-foreground disabled:opacity-50"
+                title={`Add comment to ${section.title}`}
+                aria-label={`Add comment to ${section.title}`}
+                disabled={busy || !(annotationDrafts[section.id] ?? '').trim()}
+                onclick={() => {
+                  const body = (annotationDrafts[section.id] ?? '').trim()
+                  if (!body) return
+                  void onAddAnnotation(section.id, body)
+                  annotationDrafts = { ...annotationDrafts, [section.id]: '' }
+                }}
+              >
+                <MessageSquarePlus size={14} />
+              </button>
+            </div>
+          {/if}
         </section>
       {/each}
       {#if error}<p class="mt-5 text-xs text-danger">{error}</p>{/if}
