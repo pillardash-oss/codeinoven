@@ -156,6 +156,17 @@ const INVOKE_CHANNELS = [
   'clipboard:saveImage',
   'clipboard:writeText',
   'clipboard:readText',
+  'speech:getCapabilities',
+  'speech:getCatalog',
+  'speech:beginCapture',
+  'speech:appendCapture',
+  'speech:finishCapture',
+  'speech:failCapture',
+  'speech:transcribe',
+  'speech:getHistory',
+  'speech:downloadArtifact',
+  'speech:cancelDownload',
+  'speech:cancelJob',
   'dialog:pickFile',
   'dialog:pickFiles',
   'dialog:pickImage',
@@ -513,7 +524,8 @@ const EVENT_CHANNELS = [
   'browser:permissionRequested',
   'browser:permissionResolved',
   'remote:status',
-  'remote:stepUpPending'
+  'remote:stepUpPending',
+  'speech:progress'
 ] as const
 
 export type SendChannel = (typeof SEND_CHANNELS)[number]

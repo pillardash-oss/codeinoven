@@ -864,6 +864,52 @@ export interface IpcInvokeContract {
   'remotePush:unsubscribe': Contract<[endpoint: string], void>
   'clipboard:writeText': Contract<[text: string], void>
   'clipboard:readText': Contract<[], string>
+  'speech:getCapabilities': Contract<
+    [],
+    import('./speech/types').SpeechResult<import('./speech/types').SpeechCapabilitySnapshot>
+  >
+  'speech:getCatalog': Contract<
+    [],
+    import('./speech/types').SpeechResult<import('./speech/types').SpeechModelCatalog>
+  >
+  'speech:beginCapture': Contract<
+    [scope: import('./speech/types').SpeechScope, mimeType: string],
+    import('./speech/types').SpeechResult<import('./speech/types').SpeechCaptureSessionInfo>
+  >
+  'speech:appendCapture': Contract<
+    [sessionId: string, chunk: Uint8Array<ArrayBuffer>],
+    import('./speech/types').SpeechResult<number>
+  >
+  'speech:finishCapture': Contract<
+    [sessionId: string, durationMs: number],
+    import('./speech/types').SpeechResult<import('./speech/types').SpeechRecordingAttempt>
+  >
+  'speech:failCapture': Contract<
+    [sessionId: string, message: string],
+    import('./speech/types').SpeechResult<import('./speech/types').SpeechRecordingAttempt>
+  >
+  'speech:transcribe': Contract<
+    [
+      attemptId: string,
+      runtime: import('./speech/types').SpeechRuntime,
+      artifactId: string,
+      language: string
+    ],
+    import('./speech/types').SpeechResult<import('./speech/types').SpeechTranscriptionResult>
+  >
+  'speech:getHistory': Contract<
+    [cursor?: string, limit?: number],
+    import('./speech/types').SpeechResult<import('./speech/types').SpeechHistoryPage>
+  >
+  'speech:downloadArtifact': Contract<
+    [artifactId: string],
+    import('./speech/types').SpeechResult<void>
+  >
+  'speech:cancelDownload': Contract<
+    [artifactId: string],
+    import('./speech/types').SpeechResult<boolean>
+  >
+  'speech:cancelJob': Contract<[jobId: string], import('./speech/types').SpeechResult<boolean>>
   'dialog:pickFile': Contract<[scope?: AttachmentStorageScope], string | null>
   'dialog:pickFiles': Contract<[scope?: AttachmentStorageScope], string[]>
   'dialog:pickImage': Contract<[], string | null>
@@ -2090,6 +2136,7 @@ export interface IpcEventContract {
    * Emitted whenever a high-risk remote operation requires local approval.
    */
   'remote:stepUpPending': [approvals: RemotePendingStepUpApproval[]]
+  'speech:progress': [progress: import('./speech/types').SpeechProgressEvent]
 }
 
 export type InvokeChannel = keyof IpcInvokeContract

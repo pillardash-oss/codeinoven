@@ -396,6 +396,25 @@ export interface SpeechHistoryPage {
   total: number
 }
 
+export type SpeechResult<T> = { ok: true; value: T } | { ok: false; error: SpeechError }
+
+export interface SpeechCaptureSessionInfo {
+  sessionId: string
+  attemptId: string
+  startedAt: number
+}
+
+export interface SpeechTranscriptionResult {
+  attemptId: string
+  jobId: string
+  rawTranscript: string
+  finalTranscript: string
+}
+
+export interface SpeechDownloadRequest {
+  artifactId: string
+}
+
 export interface SpeechCapabilitySnapshot {
   target: SpeechPlatformTarget
   runtimes: SpeechRuntimeAvailability[]

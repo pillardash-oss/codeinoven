@@ -39,7 +39,7 @@ mac:
   entitlementsInherit: build/entitlements.mac.plist
   extendInfo:
     NSCameraUsageDescription: Allow browser pages you approve to use the camera for local app testing.
-    NSMicrophoneUsageDescription: Allow browser pages you approve to use the microphone for local app testing.
+    NSMicrophoneUsageDescription: Record audio for local dictation and transcription in CodeInOven.
   icon: src/renderer/static/macos/AppIcon.icns
   category: public.app-category.developer-tools
   target:
