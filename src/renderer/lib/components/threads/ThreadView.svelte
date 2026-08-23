@@ -4285,6 +4285,25 @@
       selectedBrainstormVersion = activeBrainstorm.version
     }
     assignment = activeAssignment
+    if (
+      engineeringLifecycle?.selection === 'run_all' &&
+      engineeringLifecycle.activeStage === 'assignment' &&
+      activeAssignment?.auditCycle?.status === 'completed'
+    ) {
+      engineeringLifecycle = await invoke(
+        'engineeringLifecycle:complete',
+        projectId,
+        workflowThreadId,
+        'assignment'
+      )
+      engineeringLifecycle = await invoke(
+        'engineeringLifecycle:complete',
+        projectId,
+        workflowThreadId,
+        'achievement'
+      )
+      updateSettings(legacySettingsForLifecycle('none'))
+    }
     assignmentVersions = activeAssignment
       ? await invoke('assignment:listVersions', projectId, workflowThreadId, activeAssignment.id)
       : []
@@ -4550,7 +4569,12 @@
       specReadyToolVisible = false
       settings =
         engineeringLifecycle?.selection === 'run_all'
-          ? legacySettingsForLifecycle('run_all')
+          ? {
+              ...settings,
+              engineeringMode: false,
+              assignmentMode: true,
+              loopMode: true
+            }
           : {
               ...settings,
               engineeringMode: false,
