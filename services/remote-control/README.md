@@ -165,3 +165,7 @@ periodically promoted to LAN when the trusted local route becomes available.
 Revocation closes every live desktop/mobile socket. Relay payloads are capped at 1 MiB and the
 service applies origin checks, request-size limits, Better Auth's OAuth state/session protections,
 database-backed auth rate limiting, and per-source relay/enrollment rate limiting.
+
+# Prototype previews
+
+Production prototype links require an explicit HTTPS `CODEINOVEN_PUBLIC_PROTOTYPE_PREVIEW_ORIGIN`. Localhost and `127.0.0.1` values are development-only. The preview origin is public configuration, not a secret, and must remain separate from account authentication and remote API origins.
