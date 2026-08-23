@@ -61,13 +61,20 @@ function epochMilliseconds(value: unknown): number | undefined {
   return Number.isFinite(parsed) ? parsed : undefined
 }
 
-function parseProviderTelemetry(value: unknown, providerId: string): OpenUsageTelemetry | null {
+function matchesProvider(candidate: unknown, providerId: string): boolean {
+  return (
+    typeof candidate === 'string' &&
+    (candidate === providerId || candidate.startsWith(`${providerId}:`))
+  )
+}
+
+function parseLimitsTelemetry(value: unknown, providerId: string): OpenUsageTelemetry | null {
   const envelope = record(value)
   if (envelope?.['schema'] !== OPENUSAGE_SCHEMA) return null
   const providers = record(envelope['providers'])
   if (!providers) return null
   const matchingProviders = Object.entries(providers)
-    .filter(([id]) => id === providerId || id.startsWith(`${providerId}:`))
+    .filter(([id]) => matchesProvider(id, providerId))
     .map(([, provider]) => record(provider))
     .filter((provider): provider is Record<string, unknown> => provider !== null)
   if (matchingProviders.length === 0) return null
@@ -125,6 +132,49 @@ function parseProviderTelemetry(value: unknown, providerId: string): OpenUsageTe
   }
 
   return rateLimits.length > 0 || credits ? { rateLimits, ...(credits ? { credits } : {}) } : null
+}
+
+/**
+ * OpenUsage kept the UI-oriented `/v1/usage` route for compatibility when it
+ * introduced `/v1/limits`. Older installed builds only expose this shape, so
+ * accept its progress rows instead of making quota bars depend on an app update.
+ */
+function parseLegacyUsageTelemetry(value: unknown, providerId: string): OpenUsageTelemetry | null {
+  const snapshots = Array.isArray(value) ? value : [value]
+  const rateLimits: AgentRateLimitWindow[] = []
+  for (const [snapshotIndex, rawSnapshot] of snapshots.entries()) {
+    const snapshot = record(rawSnapshot)
+    if (!snapshot || !matchesProvider(snapshot['providerId'], providerId)) continue
+    const lines = Array.isArray(snapshot['lines']) ? snapshot['lines'] : []
+    for (const [lineIndex, rawLine] of lines.entries()) {
+      const line = record(rawLine)
+      if (!line || line['type'] !== 'progress') continue
+      const used = finiteNumber(line['used'])
+      const limit = finiteNumber(line['limit'])
+      if (used === undefined && limit === undefined) continue
+      const label = typeof line['label'] === 'string' ? line['label'] : `Limit ${lineIndex + 1}`
+      const resetsAt = epochMilliseconds(line['resetsAt'])
+      const periodDurationMs = finiteNumber(line['periodDurationMs'])
+      rateLimits.push({
+        id: `openusage:${providerId}:legacy:${snapshotIndex}:${lineIndex}`,
+        label,
+        ...(used !== undefined && limit !== undefined && limit > 0
+          ? {
+              usedPercent: Math.max(0, Math.min(100, (used / limit) * 100)),
+              remaining: Math.max(0, limit - used),
+              limit
+            }
+          : {}),
+        ...(resetsAt === undefined ? {} : { resetsAt }),
+        ...(periodDurationMs === undefined ? {} : { windowMinutes: periodDurationMs / 60_000 })
+      })
+    }
+  }
+  return rateLimits.length > 0 ? { rateLimits } : null
+}
+
+function parseProviderTelemetry(value: unknown, providerId: string): OpenUsageTelemetry | null {
+  return parseLimitsTelemetry(value, providerId) ?? parseLegacyUsageTelemetry(value, providerId)
 }
 
 async function openUsageExecutable(): Promise<string | undefined> {
@@ -203,18 +253,31 @@ export class OpenUsageClient {
   }
 
   private async fetchProvider(providerId: string): Promise<OpenUsageTelemetry | null> {
-    let payload: unknown = null
-    try {
-      const response = await fetch(`${OPENUSAGE_API_BASE}/${encodeURIComponent(providerId)}`, {
-        signal: AbortSignal.timeout(1_000)
-      })
-      if (response.ok) payload = (await response.json()) as unknown
-    } catch {
-      // The menu-bar app is optional; fall through to the documented one-shot CLI.
+    const encodedProviderId = encodeURIComponent(providerId)
+    const endpoints = [
+      `${OPENUSAGE_API_BASE}/${encodedProviderId}`,
+      `http://127.0.0.1:6736/v1/usage/${encodedProviderId}`
+    ]
+    for (const endpoint of endpoints) {
+      try {
+        const response = await fetch(endpoint, { signal: AbortSignal.timeout(1_000) })
+        if (!response.ok) continue
+        const value = parseProviderTelemetry((await response.json()) as unknown, providerId)
+        if (value) {
+          this.cache.set(providerId, { expiresAt: Date.now() + OPENUSAGE_CACHE_MS, value })
+          return value
+        }
+      } catch {
+        // The menu-bar app is optional; try its other contract, then the CLI.
+      }
     }
-    payload ??= await readOpenUsageCli(providerId)
-    const value = parseProviderTelemetry(payload, providerId)
-    this.cache.set(providerId, { expiresAt: Date.now() + OPENUSAGE_CACHE_MS, value })
+
+    const value = parseProviderTelemetry(await readOpenUsageCli(providerId), providerId)
+    // A missing helper or a provider refresh failure is transient. Do not cache
+    // the miss, otherwise opening OpenUsage and hovering again still shows no bar.
+    if (value) {
+      this.cache.set(providerId, { expiresAt: Date.now() + OPENUSAGE_CACHE_MS, value })
+    }
     return value
   }
 }
