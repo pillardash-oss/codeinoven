@@ -9594,12 +9594,24 @@ export class ChatEngine {
               presentation: workflowActionPresentation('Review Brainstorm', note)
             }
       )
+      const existingPrototypes = current.content.prototypes ?? []
+      const mergedContent = content.prototypes?.length
+        ? {
+            ...content,
+            prototypes: [
+              ...existingPrototypes,
+              ...content.prototypes.filter(
+                (prototype) => !existingPrototypes.some((existing) => existing.id === prototype.id)
+              )
+            ]
+          }
+        : content
       let revised = await this.brainstormEngine.createVersion({
         projectId,
         threadId,
         brainstormId,
         baseVersion: version,
-        content,
+        content: mergedContent,
         provenance: {
           source: 'agent',
           actor: 'Sr. Engineer',

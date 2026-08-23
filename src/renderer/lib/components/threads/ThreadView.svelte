@@ -4951,6 +4951,10 @@
 
   async function openPrototypePreview(previewPath: string): Promise<void> {
     if (isRemotePwaRuntime()) {
+      const configuredOrigin = await invoke('prototypePreview:getOrigin')
+      if (!configuredOrigin) {
+        throw new Error('Prototype preview origin is not configured for this deployment.')
+      }
       let offset = 0
       let size = 0
       let mime = 'text/html; charset=utf-8'
@@ -5337,6 +5341,30 @@
       brainstormBusy = false
       brainstormDecisionInFlight = null
       agentRuns.setIdle(thread.projectId, thread.id)
+    }
+  }
+
+  async function selectLofiPrototype(prototypeId: string): Promise<void> {
+    const current = brainstorm
+    if (!current || brainstormBusy) return
+    brainstormBusy = true
+    brainstormError = ''
+    try {
+      applyBrainstormDocument(
+        await invoke(
+          'agent:reviewBrainstorm',
+          current.projectId,
+          current.threadId,
+          current.id,
+          current.version,
+          `Generate one direct HiFi prototype H1 based on selected LoFi prototype ${prototypeId}. Preserve all existing LoFi prototypes and the aligned Brainstorm content.`
+        )
+      )
+    } catch (error) {
+      brainstormError =
+        error instanceof Error ? error.message : 'The HiFi prototype could not be generated.'
+    } finally {
+      brainstormBusy = false
     }
   }
 
@@ -8717,8 +8745,14 @@
               {@const readyBrainstorm = brainstorm}
               <BrainstormReadyCard
                 version={readyBrainstorm.version}
+                prototypes={readyBrainstorm.content.prototypes ?? []}
                 busy={brainstormBusy}
                 onReview={openBrainstormStudio}
+                onSelectPrototype={selectLofiPrototype}
+                onContinueWithoutHifi={openBrainstormStudio}
+                finalizeLabel={engineeringLifecycle?.activeStage === 'brainstorm'
+                  ? 'Finalize Brainstorm'
+                  : 'Prepare spec'}
                 onFinalize={() => submitBrainstormDecision('finalize', readyBrainstorm, '')}
               />
             {:else if assignment?.status === 'draft' && !busy && !specFormulating}
