@@ -17,6 +17,8 @@ import type {
   SpeechRuntime,
   SpeechRuntimeAvailability,
   SpeechScope,
+  SpeechCorrectionObservation,
+  SpeechCorrectionRule,
   SpeechTranscriptionResult
 } from '../../lib/speech/types'
 import {
@@ -32,6 +34,9 @@ import type { SpeechBackend } from './speech-backend'
 import { SherpaSpeechBackend } from './backends/sherpa-backend'
 import { MlxSpeechBackend } from './backends/mlx-backend'
 import { Logger } from '../system/logger'
+import { getConfigRoot } from '../../lib/utils'
+import { SpeechCleanupService } from './speech-cleanup-service'
+import { SpeechLearningService } from './speech-learning-service'
 
 interface InstalledArtifactIndex {
   version: 1
@@ -56,6 +61,10 @@ export class SpeechService {
   private readonly downloadControllers = new Map<string, AbortController>()
   private catalog: SpeechModelCatalog | null = null
   private installed: InstalledArtifactIndex = { version: 1, artifacts: [] }
+  private readonly cleanup = new SpeechCleanupService()
+  private readonly learning = new SpeechLearningService(
+    join(getConfigRoot(), 'speech', 'corrections.json')
+  )
 
   constructor(
     private readonly paths: SpeechServicePaths,
@@ -70,6 +79,7 @@ export class SpeechService {
 
   async initialize(): Promise<void> {
     await this.storage.initialize()
+    await this.learning.initialize()
     this.catalog = parseSpeechModelCatalog(
       JSON.parse(await readFile(this.paths.catalogPath, 'utf8'))
     )
@@ -217,13 +227,65 @@ export class SpeechService {
     })
     try {
       const rawTranscript = await queued.result
+      const cleanupArtifact = this.requireCatalog().artifacts.find(
+        (candidate) =>
+          candidate.runtime === runtime &&
+          candidate.capability === 'cleanup' &&
+          candidate.qualification.status === 'qualified' &&
+          this.installed.artifacts.some(
+            (installed) => installed.available && installed.artifactId === candidate.id
+          )
+      )
+      let finalTranscript = rawTranscript
+      let cleanupProvenance = this.cleanup.fallback(
+        rawTranscript,
+        new Error(`Install a qualified ${runtime} cleanup model to enable local cleanup.`)
+      ).provenance
+      if (cleanupArtifact) {
+        try {
+          const punctuated = await this.queue.enqueue({
+            capability: 'cleanup',
+            runtime,
+            run: (signal) =>
+              backend.cleanup(
+                rawTranscript,
+                {
+                  id: cleanupArtifact.id,
+                  directory: this.storage.modelDirectory(cleanupArtifact.id)
+                },
+                signal
+              )
+          }).result
+          const cleaned = this.cleanup.applyRules(
+            punctuated,
+            this.learning.enabled(this.requireAttemptScope(attemptId))
+          )
+          finalTranscript = cleaned.text
+          cleanupProvenance = {
+            ...cleaned.provenance,
+            runtime,
+            artifactId: cleanupArtifact.id
+          }
+        } catch (cause) {
+          cleanupProvenance = this.cleanup.fallback(rawTranscript, cause).provenance
+        }
+      }
       await this.storage.updateAttempt(attemptId, (attempt) => {
         attempt.stage = 'completed'
         attempt.rawTranscript = rawTranscript
-        attempt.finalTranscript = rawTranscript
+        attempt.cleanedTranscript = cleanupProvenance.failed ? undefined : finalTranscript
+        attempt.finalTranscript = finalTranscript
+        attempt.cleanupProvenance = cleanupProvenance
+        if (cleanupProvenance.failed && cleanupProvenance.error) {
+          attempt.errors.push({
+            stage: 'cleaning',
+            error: cleanupProvenance.error,
+            occurredAt: Date.now()
+          })
+        }
       })
       this.emit({ kind: 'history', attemptId, stage: 'completed' })
-      return { attemptId, jobId: queued.id, rawTranscript, finalTranscript: rawTranscript }
+      return { attemptId, jobId: queued.id, rawTranscript, finalTranscript }
     } catch (cause) {
       const error = this.asError(cause, 'transcription-failed')
       await this.storage.updateAttempt(attemptId, (attempt) => {
@@ -236,6 +298,24 @@ export class SpeechService {
 
   async history(cursor?: string, limit?: number): Promise<SpeechHistoryPage> {
     return this.storage.listHistory(cursor, limit)
+  }
+
+  correctionRules(scope?: SpeechScope): SpeechCorrectionRule[] {
+    return this.learning.list(scope)
+  }
+
+  observeCorrection(
+    observation: SpeechCorrectionObservation
+  ): Promise<SpeechCorrectionRule | null> {
+    return this.learning.observe(observation)
+  }
+
+  setCorrectionRuleEnabled(ruleId: string, enabled: boolean): Promise<SpeechCorrectionRule> {
+    return this.learning.setEnabled(ruleId, enabled)
+  }
+
+  deleteCorrectionRule(ruleId: string): Promise<void> {
+    return this.learning.delete(ruleId)
   }
 
   async downloadArtifact(artifactId: string): Promise<void> {
@@ -404,6 +484,12 @@ export class SpeechService {
     )
     if (!installed) throw new Error('The selected model is not installed.')
     return artifact
+  }
+
+  private requireAttemptScope(attemptId: string): SpeechScope {
+    const attempt = this.storage.getAttempt(attemptId)
+    if (!attempt) throw new Error('Recording attempt was not found.')
+    return attempt.scope
   }
 
   private requireBackend(runtime: SpeechRuntime): SpeechBackend {

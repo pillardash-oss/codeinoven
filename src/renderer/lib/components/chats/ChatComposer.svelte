@@ -63,6 +63,7 @@
   import SlashActionMenu from '../actions/SlashActionMenu.svelte'
   import RichMarkdownEditor from '../shared/RichMarkdownEditor.svelte'
   import VoiceInputButton from '../speech/VoiceInputButton.svelte'
+  import { speechController } from '../../speech/speech-controller.svelte'
   import ModelPicker from '../shared/ModelPicker.svelte'
   import { filterActions } from '$lib/actions'
   import { APP_NAME } from '$shared/brand'
@@ -864,6 +865,7 @@
       return
     }
     const msg = normalizeComposerMessage(value, projectReferences)
+    speechController.observeSent(composerEditorId, msg)
     value = ''
     onValueChange?.('')
     const files = [...attachments]

@@ -918,6 +918,22 @@ export interface IpcInvokeContract {
     import('./speech/types').SpeechResult<boolean>
   >
   'speech:cancelJob': Contract<[jobId: string], import('./speech/types').SpeechResult<boolean>>
+  'speech:getCorrectionRules': Contract<
+    [scope?: import('./speech/types').SpeechScope],
+    import('./speech/types').SpeechResult<import('./speech/types').SpeechCorrectionRule[]>
+  >
+  'speech:observeCorrection': Contract<
+    [observation: import('./speech/types').SpeechCorrectionObservation],
+    import('./speech/types').SpeechResult<import('./speech/types').SpeechCorrectionRule | null>
+  >
+  'speech:setCorrectionRuleEnabled': Contract<
+    [ruleId: string, enabled: boolean],
+    import('./speech/types').SpeechResult<import('./speech/types').SpeechCorrectionRule>
+  >
+  'speech:deleteCorrectionRule': Contract<
+    [ruleId: string],
+    import('./speech/types').SpeechResult<void>
+  >
   'dialog:pickFile': Contract<[scope?: AttachmentStorageScope], string | null>
   'dialog:pickFiles': Contract<[scope?: AttachmentStorageScope], string[]>
   'dialog:pickImage': Contract<[], string | null>

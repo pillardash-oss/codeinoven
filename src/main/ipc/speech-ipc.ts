@@ -1,6 +1,10 @@
 import type { WebContents } from 'electron'
 import { MAX_SPEECH_CHUNK_BYTES } from '../../lib/speech/types'
-import type { SpeechRuntime, SpeechScope } from '../../lib/speech/types'
+import type {
+  SpeechCorrectionObservation,
+  SpeechRuntime,
+  SpeechScope
+} from '../../lib/speech/types'
 import { SpeechService, speechResult } from '../speech/speech-service'
 import { sendToRenderer } from './renderer-delivery'
 import { trustedIpcMain as ipcMain } from './trusted-ipc-main'
@@ -40,6 +44,30 @@ function boundedInteger(value: unknown, label: string, min: number, max: number)
     throw new RangeError(`${label} is invalid.`)
   }
   return value
+}
+
+function correctionObservation(value: unknown): SpeechCorrectionObservation {
+  if (typeof value !== 'object' || value === null) throw new RangeError('Correction is invalid.')
+  const candidate = value as Record<string, unknown>
+  const rawSpan = candidate['span']
+  if (typeof rawSpan !== 'object' || rawSpan === null) throw new RangeError('Span is invalid.')
+  const span = rawSpan as Record<string, unknown>
+  const startOffset = boundedInteger(span['startOffset'], 'Start offset', 0, 100_000)
+  const endOffset = boundedInteger(span['endOffset'], 'End offset', startOffset, 100_000)
+  return {
+    span: {
+      id: entityId(span['id'], 'Span id'),
+      attemptId: entityId(span['attemptId'], 'Attempt id'),
+      editorId: entityId(span['editorId'], 'Editor id'),
+      insertedText: boundedString(span['insertedText'], 'Inserted text', 100_000),
+      startOffset,
+      endOffset,
+      insertedAt: boundedInteger(span['insertedAt'], 'Inserted time', 0, Number.MAX_SAFE_INTEGER),
+      scope: scope(span['scope'])
+    },
+    sentText: boundedString(candidate['sentText'], 'Sent text', 100_000),
+    sentAt: boundedInteger(candidate['sentAt'], 'Sent time', 0, Number.MAX_SAFE_INTEGER)
+  }
 }
 
 /** Register the intentionally small, validated speech IPC allowlist. */
@@ -139,6 +167,25 @@ export function registerSpeechIpc(
   ipcMain.handle('speech:cancelJob', (_event, rawJobId: unknown) =>
     speechResult(async () => service.cancelJob(entityId(rawJobId, 'Speech job id')))
   )
+  ipcMain.handle('speech:getCorrectionRules', (_event, rawScope?: unknown) =>
+    speechResult(async () =>
+      service.correctionRules(rawScope === undefined ? undefined : scope(rawScope))
+    )
+  )
+  ipcMain.handle('speech:observeCorrection', (_event, rawObservation: unknown) =>
+    speechResult(() => service.observeCorrection(correctionObservation(rawObservation)))
+  )
+  ipcMain.handle(
+    'speech:setCorrectionRuleEnabled',
+    (_event, rawRuleId: unknown, rawEnabled: unknown) =>
+      speechResult(() => {
+        if (typeof rawEnabled !== 'boolean') throw new RangeError('Enabled state is invalid.')
+        return service.setCorrectionRuleEnabled(entityId(rawRuleId, 'Rule id'), rawEnabled)
+      })
+  )
+  ipcMain.handle('speech:deleteCorrectionRule', (_event, rawRuleId: unknown) =>
+    speechResult(() => service.deleteCorrectionRule(entityId(rawRuleId, 'Rule id')))
+  )
 
   return () => {
     stopProgress()
@@ -155,7 +202,11 @@ export function registerSpeechIpc(
       'speech:getHistory',
       'speech:downloadArtifact',
       'speech:cancelDownload',
-      'speech:cancelJob'
+      'speech:cancelJob',
+      'speech:getCorrectionRules',
+      'speech:observeCorrection',
+      'speech:setCorrectionRuleEnabled',
+      'speech:deleteCorrectionRule'
     ]) {
       ipcMain.removeHandler(channel)
     }

@@ -1,5 +1,10 @@
 import { invoke } from '$lib/ipc.svelte'
-import type { SpeechModelArtifact, SpeechRuntime, SpeechScope } from '../../../lib/speech/types'
+import type {
+  SpeechDictationSpan,
+  SpeechModelArtifact,
+  SpeechRuntime,
+  SpeechScope
+} from '../../../lib/speech/types'
 import type { SpeechEditorSnapshot, SpeechEditorTarget } from './editor-target'
 
 export type RendererSpeechState =
@@ -46,6 +51,7 @@ class SpeechController {
   state = $state<RendererSpeechState>({ state: 'idle' })
   private active: ActiveCapture | null = null
   private elapsedTimer: ReturnType<typeof setInterval> | null = null
+  private readonly spans = new Map<string, SpeechDictationSpan[]>()
 
   isActiveTarget(targetId: string): boolean {
     return 'targetId' in this.state && this.state.targetId === targetId
@@ -207,6 +213,18 @@ class SpeechController {
         }
         return
       }
+      const span: SpeechDictationSpan = {
+        id: crypto.randomUUID(),
+        attemptId: active.attemptId,
+        editorId: active.target.id,
+        insertedText: transcript,
+        startOffset: inserted.startOffset,
+        endOffset: inserted.endOffset,
+        insertedAt: Date.now(),
+        scope: structuredClone(active.scope)
+      }
+      const current = this.spans.get(active.target.id) ?? []
+      this.spans.set(active.target.id, [...current.slice(-7), span])
       this.state = { state: 'idle' }
     } catch (cause) {
       const message = errorMessage(cause)
@@ -224,6 +242,16 @@ class SpeechController {
   resetFailure(targetId: string): void {
     if (this.state.state === 'failed' && this.state.targetId === targetId)
       this.state = { state: 'idle' }
+  }
+
+  observeSent(targetId: string, sentText: string): void {
+    const spans = this.spans.get(targetId)
+    if (!spans?.length) return
+    this.spans.delete(targetId)
+    const sentAt = Date.now()
+    for (const span of spans) {
+      void invoke('speech:observeCorrection', { span, sentText, sentAt })
+    }
   }
 
   private queueChunk(active: ActiveCapture, blob: Blob): void {
