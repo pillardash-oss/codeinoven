@@ -101,10 +101,10 @@ if (target === 'mac') {
   const hasMlxWorker = Boolean(findFileUnder(absArtifactDir, (entry) => entry === 'mlx-worker'))
   const hasMlxMetallib = Boolean(findFileUnder(absArtifactDir, (entry) => entry === 'mlx.metallib'))
   if (!hasMlxWorker) {
-    Logger.warn('[verify-packaged-app] Apple Silicon MLX worker not found (Swift 6.2 required, runner has 5.10) - skipping')
+    Logger.info('[verify-packaged-app] Apple Silicon MLX worker not found (Swift 6.2 required, runner has 5.10) - skipping')
   }
   if (!hasMlxMetallib) {
-    Logger.warn('[verify-packaged-app] Apple Silicon MLX Metal library not found - skipping')
+    Logger.info('[verify-packaged-app] Apple Silicon MLX Metal library not found - skipping')
   }
   mustHave('mac disk image', hasExtension('.dmg'))
   mustHave('mac zip artifact', hasExtension('.zip'))
