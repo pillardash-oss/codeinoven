@@ -6,7 +6,10 @@ import { simpleGit } from 'simple-git'
 import { createTestDb, destroyTestDb } from '../database/test-helper'
 import type { Database } from '../../../src/main/database/database'
 import { ScopeManager } from '../../../src/lib/engines/scope-manager'
-import { ScopeWorktreeService } from '../../../src/main/git/scope-worktree-service'
+import {
+  discoverEnvironmentFiles,
+  ScopeWorktreeService
+} from '../../../src/main/git/scope-worktree-service'
 import { getScopeRootPath } from '../../../src/lib/utils'
 
 const temporaryDatabases: Database[] = []
@@ -192,6 +195,26 @@ describe.skipIf(process.platform === 'win32')('ScopeWorktreeService', () => {
     expect(readFileSync(join(repoPath, '.env'), 'utf8')).toContain('SECRET=value')
   }, 60_000)
 
+  it('classifies env files through Git and only propagates untracked ones', async () => {
+    const { service, bucketA } = await setup()
+    writeFileSync(join(repoPath, '.env'), 'SECRET=value\n')
+    writeFileSync(join(repoPath, '.env.tracked'), 'TRACKED=1\n')
+    const git = simpleGit(repoPath)
+    await git.add(['.env.tracked'])
+    await git.commit('track one env file')
+
+    // `.env.tracked` is tracked, so discovery must exclude it even though it
+    // matches the root-level `.env.*` pattern; ignored `.env` stays eligible.
+    expect(await discoverEnvironmentFiles(repoPath)).toEqual(['.env'])
+
+    const descriptor = await service.createManagedWorktree(
+      { projectId: 'p1', scopeBucketId: bucketA },
+      { title: 'EnvClassified', runSetup: false, environmentMode: 'copy' }
+    )
+    const worktreePath = getScopeRootPath('p1', descriptor.directoryName)
+    expect(existsSync(join(worktreePath, '.env'))).toBe(true)
+  }, 60_000)
+
   it('symlinks environment files when selected', async () => {
     const { service, scopes, bucketA } = await setup()
     writeFileSync(join(repoPath, '.env'), 'SECRET=value\n')
@@ -251,6 +274,50 @@ describe.skipIf(process.platform === 'win32')('ScopeWorktreeService', () => {
     expect((await service.health({ projectId: 'p1', scopeBucketId: bucketA })).category).toBe(
       'missing'
     )
+  }, 60_000)
+
+  it('scopes preflight unpushed counting to the managed branch', async () => {
+    const { service, scopes, bucketA } = await setup()
+    // Publish main to a bare remote so only genuinely new commits count.
+    const remote = mkdtempSync(join(tmpdir(), 'codeinoven-wt-remote-'))
+    temporaryPaths.push(remote)
+    const git = simpleGit(repoPath)
+    await simpleGit(remote).init(true)
+    await git.addRemote('origin', remote)
+    await git.push(['origin', 'main'])
+
+    await service.createManagedWorktree(
+      { projectId: 'p1', scopeBucketId: bucketA },
+      { title: 'Scoped', runSetup: false, environmentMode: 'copy' }
+    )
+
+    // Unrelated local branch with an unpublished commit must not leak into
+    // this scope's preflight.
+    await git.checkoutLocalBranch('unrelated')
+    writeFileSync(join(repoPath, 'other.txt'), 'other\n')
+    await git.add('.')
+    await git.commit('unrelated work')
+    await git.checkout('main')
+
+    let preflight = await service.preflight('detach', {
+      projectId: 'p1',
+      scopeBucketId: bucketA
+    })
+    expect(preflight.unpushedCommits).toBe(0)
+    expect(preflight.branchOwnedByWorktree).toBe(true)
+
+    // A commit on the managed branch itself does count.
+    const board = scopes.getBoard('p1')
+    const managed = board.buckets.find((candidate) => candidate.id === bucketA)
+    if (managed?.root.kind !== 'worktree') throw new Error('managed root missing')
+    const worktreeGit = simpleGit(getScopeRootPath('p1', managed.root.directoryName))
+    const worktreeRoot = (await worktreeGit.revparse(['--show-toplevel'])).trim()
+    writeFileSync(join(worktreeRoot, 'feature.txt'), 'feature\n')
+    await worktreeGit.add('.')
+    await worktreeGit.commit('feature work')
+
+    preflight = await service.preflight('detach', { projectId: 'p1', scopeBucketId: bucketA })
+    expect(preflight.unpushedCommits).toBe(1)
   }, 60_000)
 
   it('guards removal behind single-use confirmations and dirty-state checks', async () => {

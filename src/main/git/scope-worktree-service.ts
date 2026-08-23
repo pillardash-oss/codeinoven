@@ -24,9 +24,10 @@ import { Logger } from '../system/logger'
 const WORKTREE_BRANCH_PREFIX = 'cio/'
 const SLUG_LIMIT = 48
 
-/** Minimal structural view of an agent process that may hold worktree files. */
+/** Minimal structural view of agent processes that may hold worktree files. */
 export interface ActiveProcessProbe {
-  hasActiveProcessesFor(projectId: string): Promise<boolean> | boolean
+  /** Whether threads in the project — optionally one scope — own live processes. */
+  hasActiveProcessesFor(projectId: string, scopeBucketId?: string): Promise<boolean> | boolean
 }
 
 export interface ScopeWorktreeServiceOptions {
@@ -591,9 +592,23 @@ export class ScopeWorktreeService implements ManagedWorktreeInspector {
       const repoPath = project?.path
 
       const dirtyFiles = await this.dirtyFiles(repoPath, worktreePath)
-      const unpushedCommits = await this.unpushedCount(repoPath)
+      const unpushedCommits = await this.unpushedCount(repoPath, descriptor.branch, worktreePath)
+      let branchOwnedByWorktree = false
+      try {
+        const registrations = await this.listWorktrees(repoPath ?? worktreePath)
+        branchOwnedByWorktree = registrations.some(
+          (registration) =>
+            registration.path === worktreePath &&
+            registration.head === `refs/heads/${descriptor.branch}`
+        )
+      } catch {
+        branchOwnedByWorktree = false
+      }
       const hasActiveProcesses =
-        (await this.activeProcesses?.hasActiveProcessesFor(target.projectId)) ?? false
+        (await this.activeProcesses?.hasActiveProcessesFor(
+          target.projectId,
+          target.scopeBucketId
+        )) ?? false
 
       const snapshot: PreflightSnapshot = {
         action,
@@ -601,7 +616,7 @@ export class ScopeWorktreeService implements ManagedWorktreeInspector {
         dirtyFiles,
         unpushedCommits,
         hasActiveProcesses,
-        branchOwnedByWorktree: dirtyFiles.length > 0 || unpushedCommits > 0,
+        branchOwnedByWorktree,
         token: randomBytes(16).toString('hex'),
         createdAt: Date.now()
       }
@@ -651,18 +666,28 @@ export class ScopeWorktreeService implements ManagedWorktreeInspector {
     }
   }
 
-  private async unpushedCount(repoPath: string | undefined): Promise<number> {
-    if (!repoPath) return 0
+  /**
+   * Count commits on the managed branch that are not reachable from any
+   * remote-tracking ref. Scoped to the branch so unrelated local branches in
+   * the shared repository never block this scope's lifecycle.
+   */
+  private async unpushedCount(
+    repoPath: string | undefined,
+    branch: string,
+    worktreeFallback?: string
+  ): Promise<number> {
+    const cwd = repoPath ?? worktreeFallback
+    if (!cwd) return 0
     try {
-      const output = await runGit(['log', '--oneline', '--branches', '--not', '--remotes'], {
-        cwd: repoPath,
-        timeoutMs: 60_000
-      })
-      return output.trim() ? output.split('\n').length : 0
-    } catch (error) {
-      // A repo with no remote can legitimately produce no output; treat it as
-      // zero unpushed commits rather than surfacing a discovery failure.
-      if (error instanceof Error && error.message === 'git produced no output') return 0
+      const output = await runGit(
+        ['rev-list', '--count', `refs/heads/${branch}`, '--not', '--remotes'],
+        { cwd, timeoutMs: 60_000 }
+      )
+      const count = Number.parseInt(output.trim(), 10)
+      return Number.isSafeInteger(count) && count > 0 ? count : 0
+    } catch {
+      // A missing branch or unavailable repository must not invent risk here;
+      // the dirty-file check and health checks cover those cases separately.
       return 0
     }
   }
@@ -700,7 +725,7 @@ export class ScopeWorktreeService implements ManagedWorktreeInspector {
       const repoPath = project?.path
 
       const nowDirty = await this.dirtyFiles(repoPath, worktreePath)
-      const nowUnpushed = await this.unpushedCount(repoPath)
+      const nowUnpushed = await this.unpushedCount(repoPath, descriptor.branch, worktreePath)
       if (nowDirty.length > 0 || nowUnpushed > 0) {
         if (!force) {
           throw new Error(
@@ -776,18 +801,36 @@ function ensureParentDir(path: string): Promise<void> {
   return mkdir(join(path, '..'), { recursive: true }).then(() => undefined)
 }
 
-/** Discover untracked, regular, root-level `.env` and `.env.*` files. */
-async function discoverEnvironmentFiles(repoPath: string): Promise<string[]> {
+/**
+ * Discover untracked, regular, root-level `.env` and `.env.*` files.
+ *
+ * Candidates found on disk are classified through `git ls-files`: anything
+ * tracked is excluded so only genuinely untracked environment files propagate,
+ * matching the documented contract. Template files never propagate. A Git
+ * failure fails closed (no propagation) rather than risking a worktree that
+ * silently misses its environment.
+ */
+export async function discoverEnvironmentFiles(repoPath: string): Promise<string[]> {
   const entries = await readdir(repoPath, { withFileTypes: true })
   const excluded = new Set(['.env.example', '.env.sample', '.env.template'])
-  const files: string[] = []
+  const candidates: string[] = []
   for (const entry of entries) {
     if (!entry.isFile()) continue
     const name = entry.name
     if (excluded.has(name)) continue
-    if (name === '.env' || name.startsWith('.env.')) files.push(name)
+    if (name === '.env' || name.startsWith('.env.')) candidates.push(name)
   }
-  return files.sort()
+  if (candidates.length === 0) return []
+  let trackedOutput: string
+  try {
+    trackedOutput = await runGit(['ls-files', '-z', '--', ...candidates], { cwd: repoPath })
+  } catch (error) {
+    throw new Error(
+      `Environment discovery failed: ${error instanceof Error ? error.message : String(error)}`
+    )
+  }
+  const tracked = new Set(trackedOutput.split('\0').filter(Boolean))
+  return candidates.filter((name) => !tracked.has(name)).sort()
 }
 
 /** Copy through a temporary file then rename (atomic, never overwrite). */

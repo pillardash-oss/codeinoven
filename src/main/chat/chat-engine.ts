@@ -1711,6 +1711,16 @@ export class ChatEngine {
     return this.storage.getCioPrompt(id)
   }
 
+  private markEngineeringLifecycleFailure(
+    projectId: string,
+    threadId: string,
+    error: unknown
+  ): void {
+    const state = this.engineeringLifecycleEngine.get(projectId, threadId)
+    if (!state?.activeStage || state.selection === 'none') return
+    this.engineeringLifecycleEngine.fail(projectId, threadId, rawErrorMessage(error))
+  }
+
   register(): void {
     ipcMain.handle('agent:compact', (_, projectId: string, threadId: string) =>
       this.compactSession(projectId, threadId)
@@ -3907,6 +3917,27 @@ export class ChatEngine {
       validateEntityId(projectId, 'Project ID'),
       validateEntityId(threadId, 'Thread ID')
     )
+  }
+
+  /**
+   * Whether any live agent process is owned by threads in the project —
+   * optionally narrowed to one scope bucket — used by worktree lifecycle
+   * preflights so removals never strand running agents.
+   */
+  async hasActiveProcessesInScope(projectId: string, scopeBucketId?: string): Promise<boolean> {
+    projectId = validateEntityId(projectId, 'Project ID')
+    const threads = await this.threadManager.listThreads(projectId)
+    for (const thread of threads) {
+      if (thread.archived) continue
+      if (
+        scopeBucketId !== undefined &&
+        (thread.scopeBucketId ?? DEFAULT_SCOPE_BUCKET_ID) !== scopeBucketId
+      ) {
+        continue
+      }
+      if (this.agentProcesses.list(projectId, thread.id).length > 0) return true
+    }
+    return false
   }
 
   /** Kill one app-owned process by pid for a thread. */
@@ -9614,6 +9645,7 @@ export class ChatEngine {
         await this.threadManager.setStatus(projectId, threadId, 'interrupted', { read: true })
         return null
       }
+      this.markEngineeringLifecycleFailure(projectId, threadId, error)
       await this.threadManager.setStatus(projectId, threadId, 'failed', { read: false })
       throw error
     } finally {
@@ -9745,6 +9777,7 @@ export class ChatEngine {
         )
         if (unchanged) return unchanged
       }
+      this.markEngineeringLifecycleFailure(projectId, threadId, error)
       await this.threadManager.setStatus(projectId, threadId, 'spec', { read: false })
       throw error
     } finally {
@@ -10051,6 +10084,7 @@ export class ChatEngine {
           messages: [withoutTransportParts(userMessage), failedMessage]
         }
       })
+      this.markEngineeringLifecycleFailure(projectId, threadId, error)
       await this.threadManager.setStatus(projectId, threadId, 'failed', { read: false })
       throw error
     } finally {
@@ -10090,6 +10124,16 @@ export class ChatEngine {
       )
       const prdWorkflow = this.prdEngine.getWorkflowState(projectId, threadId)
       if (prdWorkflow?.stage === 'brainstorming') {
+        const lifecycle = this.engineeringLifecycleEngine.get(projectId, threadId)
+        if (lifecycle?.humanGate === 'brainstorm_finalization' && lifecycle.resumeToken) {
+          this.engineeringLifecycleEngine.resume(
+            projectId,
+            threadId,
+            lifecycle.resumeToken,
+            'continue',
+            'prd'
+          )
+        }
         this.prdEngine.beginDrafting(projectId, threadId)
         await this.threadManager.setStatus(projectId, threadId, 'planning', { read: false })
         return finalized
@@ -10154,6 +10198,7 @@ export class ChatEngine {
       if (!generated) throw new Error(SPEC_GENERATION_FAILURE_USER_MESSAGE)
       return generated
     } catch (error) {
+      this.markEngineeringLifecycleFailure(projectId, threadId, error)
       await this.threadManager.setStatus(projectId, threadId, 'failed', { read: false })
       throw error
     } finally {
@@ -10166,13 +10211,22 @@ export class ChatEngine {
     sessionId?: string
   ): Promise<void> {
     const lifecycle = this.engineeringLifecycleEngine.get(brainstorm.projectId, brainstorm.threadId)
-    if (lifecycle?.activeStage === 'brainstorm') {
+    const prdWorkflow = this.prdEngine.getWorkflowState(brainstorm.projectId, brainstorm.threadId)
+    if (
+      lifecycle?.activeStage === 'brainstorm' ||
+      (lifecycle?.activeStage === 'prd' && prdWorkflow?.stage === 'brainstorming')
+    ) {
       const prototypes = brainstorm.content.prototypes ?? []
       const needsPrototypeSelection =
         prototypes.some((prototype) => prototype.fidelity === 'lofi') &&
         !prototypes.some((prototype) => prototype.fidelity === 'hifi')
       this.engineeringLifecycleEngine.advance(brainstorm.projectId, brainstorm.threadId, {
-        gate: needsPrototypeSelection ? 'prototype_selection' : 'brainstorm_finalization'
+        gate:
+          lifecycle.activeStage === 'prd'
+            ? 'brainstorm_finalization'
+            : needsPrototypeSelection
+              ? 'prototype_selection'
+              : 'brainstorm_finalization'
       })
     }
     await this.threadManager.setStatus(brainstorm.projectId, brainstorm.threadId, 'spec', {
@@ -11086,6 +11140,7 @@ export class ChatEngine {
       await this.threadManager.setStatus(projectId, coordinatorThreadId, 'spec', {
         read: false
       })
+      this.markEngineeringLifecycleFailure(projectId, coordinatorThreadId, error)
       throw error
     }
   }
@@ -13102,14 +13157,14 @@ export class ChatEngine {
       }
 
       if (iteration >= LOOP_MAX_ITERATIONS) {
+        const failure = `Achievement stopped after ${LOOP_MAX_ITERATIONS} audits without satisfying the goal.`
         await this.threadManager.setAuditState(projectId, threadId, undefined)
         await this.threadManager.updateSettings(projectId, threadId, {
           ...current.settings,
           loopMode: false
         })
-        this.broadcastToast(
-          `Achievement stopped after ${LOOP_MAX_ITERATIONS} audits without satisfying the goal.`
-        )
+        this.markEngineeringLifecycleFailure(projectId, threadId, failure)
+        this.broadcastToast(failure)
         return
       }
 
@@ -13143,6 +13198,7 @@ export class ChatEngine {
       if (current?.auditState === 'running' || current?.auditState === 'reworking') {
         await this.threadManager.setAuditState(projectId, threadId, undefined)
       }
+      this.markEngineeringLifecycleFailure(projectId, threadId, error)
       this.broadcastToast(`Achievement stopped: ${rawErrorMessage(error)}`)
     } finally {
       this.activeLoopRuns.delete(key)
@@ -14097,6 +14153,7 @@ export class ChatEngine {
       updatedAt: Date.now()
     }
     await this.writePendingInitialSpec(pending)
+    this.markEngineeringLifecycleFailure(projectId, threadId, pending.error)
     Logger.error('Specification generation failed', {
       projectId,
       threadId,

@@ -2061,7 +2061,7 @@ export function registerIpcHandlers(
   storage: StorageEngine,
   database: Database,
   updaterService?: UpdaterService,
-  chatEngine?: Pick<ChatEngine, 'loadMessages' | 'deleteThreadSession'> &
+  chatEngine?: Pick<ChatEngine, 'loadMessages' | 'deleteThreadSession' | 'hasActiveProcessesInScope'> &
     Partial<Pick<ChatEngine, 'runVirtualTask'>>,
   options: RegisterIpcHandlersOptions = {}
 ): void {
@@ -2072,7 +2072,15 @@ export function registerIpcHandlers(
   const checkpointManager = new CheckpointManager(database)
   const scopeManager = new ScopeManager(database)
   const scopeWorktreeService =
-    options.worktreeService ?? new ScopeWorktreeService(scopeManager, projectManager)
+    options.worktreeService ??
+    new ScopeWorktreeService(scopeManager, projectManager, {
+      activeProcesses: chatEngine
+        ? {
+            hasActiveProcessesFor: (projectId: string, scopeBucketId?: string) =>
+              chatEngine.hasActiveProcessesInScope(projectId, scopeBucketId)
+          }
+        : undefined
+    })
   const scopeRootResolver = new ScopeRootResolver(
     projectManager,
     scopeManager,
