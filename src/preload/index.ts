@@ -339,6 +339,7 @@ const INVOKE_CHANNELS = [
   'scope:setArchive',
   'scope:delete',
   'scope:worktree:create',
+  'scope:worktree:sourceInfo',
   'scope:worktree:health',
   'scope:worktree:preflight',
   'scope:worktree:confirmDetach',

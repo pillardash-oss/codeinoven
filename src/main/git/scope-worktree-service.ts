@@ -9,7 +9,9 @@ import type {
   ScopeSetupCommandRecord,
   ScopeSetupCommandSpec,
   ScopeTarget,
-  ScopeWorktreeHealth
+  ScopeWorktreeCreateInput,
+  ScopeWorktreeHealth,
+  ScopeWorktreeSourceInfo
 } from '../../lib/types'
 import { getScopeRootPath } from '../../lib/utils'
 import { ScopeManager } from '../../lib/engines/scope-manager'
@@ -274,16 +276,13 @@ export class ScopeWorktreeService implements ManagedWorktreeInspector {
    * crash midway preserves the registered worktree for recovery.
    *
    * The worktree branches from `input.baseBranch` when supplied, otherwise
-   * from the currently checked-out branch.
+   * from the currently checked-out branch. The environment mode and setup
+   * commands travel with the request: they are executed for exactly this
+   * worktree even if the project-level defaults change afterwards.
    */
   async createManagedWorktree(
     target: ScopeTarget,
-    input: {
-      title: string
-      runSetup: boolean
-      environmentMode: ScopeEnvironmentMode
-      baseBranch?: string
-    },
+    input: ScopeWorktreeCreateInput,
     progress?: (event: ScopeWorktreeProgress) => void
   ): Promise<ManagedWorktreeDescriptor> {
     return this.enqueue(target.projectId, async () => {
@@ -348,7 +347,8 @@ export class ScopeWorktreeService implements ManagedWorktreeInspector {
       this.scopes.attachManagedRoot(target.projectId, bucketId, descriptor)
 
       if (input.runSetup) {
-        await this.runEnvironmentAndSetup(target.projectId, path, descriptor, progress)
+        const commands = input.setupCommands ?? this.setupCommands(target.projectId)
+        await this.runEnvironmentAndSetup(target.projectId, path, descriptor, commands, progress)
       } else {
         await this.propagateEnvironment(target.projectId, path, input.environmentMode, progress)
       }
@@ -356,6 +356,27 @@ export class ScopeWorktreeService implements ManagedWorktreeInspector {
       progress?.({ stage: 'done' })
       return descriptor
     })
+  }
+
+  /**
+   * Facts about the source checkout that a new worktree would fork from:
+   * current branch, HEAD commit, and the uncommitted changes that will NOT be
+   * included. Surfaced to the renderer before creation.
+   */
+  async sourceInfo(projectId: string): Promise<ScopeWorktreeSourceInfo> {
+    const project = await this.projects.getProject(projectId)
+    if (!project || project.source !== 'local' || !project.path) {
+      throw new Error('Managed worktrees require a local project repository')
+    }
+    if (!this.ensureRepo(project.path)) {
+      throw new Error(`${project.path} is not a Git repository`)
+    }
+    const { branch, commit } = await this.currentBranchAndCommit(project.path)
+    return {
+      currentBranch: branch,
+      headCommit: commit,
+      dirtyFiles: await this.dirtyFiles(project.path, project.path)
+    }
   }
 
   /** Resolve a named source branch to its checked-out commit, or fail loudly. */
@@ -380,6 +401,10 @@ export class ScopeWorktreeService implements ManagedWorktreeInspector {
   /**
    * Recover or continue work: retry setup from the first failed/interrupted
    * command, or run the remaining commands. Preserves the worktree.
+   *
+   * The executed snapshot is derived from the persisted per-command records so
+   * a retry replays exactly what this worktree was created with, even when the
+   * project-level defaults have since changed.
    */
   async runSetupFromFailure(
     target: ScopeTarget,
@@ -389,21 +414,41 @@ export class ScopeWorktreeService implements ManagedWorktreeInspector {
     return this.enqueue(target.projectId, async () => {
       const descriptor = this.requireManaged(target)
       const path = getScopeRootPath(target.projectId, descriptor.directoryName)
-      const updated = {
-        ...descriptor,
-        environmentMode: descriptor.environmentMode
-      }
-      if (options.runSetup) {
-        await this.runEnvironmentAndSetup(target.projectId, path, updated, progress)
-      } else {
+      if (!options.runSetup) {
         await this.propagateEnvironment(
           target.projectId,
           path,
           descriptor.environmentMode,
           progress
         )
+        return descriptor
       }
-      return updated
+      const records = descriptor.setup.commands
+      const firstPending = records.findIndex((record) => record.state !== 'succeeded')
+      if (records.length > 0 && firstPending === -1) {
+        // Everything already succeeded; nothing left to retry.
+        await this.propagateEnvironment(
+          target.projectId,
+          path,
+          descriptor.environmentMode,
+          progress
+        )
+        return descriptor
+      }
+      const startIndex = records.length === 0 ? 0 : Math.max(firstPending, 0)
+      const commands: ScopeSetupCommandSpec[] =
+        records.length > 0
+          ? records.map((record) => ({ executable: record.executable, args: record.args }))
+          : this.setupCommands(target.projectId)
+      await this.runEnvironmentAndSetup(
+        target.projectId,
+        path,
+        descriptor,
+        commands,
+        progress,
+        records.length > 0 ? { startIndex } : undefined
+      )
+      return descriptor
     })
   }
 
@@ -439,27 +484,43 @@ export class ScopeWorktreeService implements ManagedWorktreeInspector {
     }
   }
 
-  /** Propagate environment files, then run ordered setup commands sequentially. */
+  /**
+   * Propagate environment files, then run ordered setup commands sequentially.
+   * When resuming, `resume.startIndex` skips already-succeeded commands and
+   * their records are carried into the persisted status.
+   */
   private async runEnvironmentAndSetup(
     projectId: string,
     worktreePath: string,
     descriptor: ManagedWorktreeDescriptor,
-    progress?: (event: ScopeWorktreeProgress) => void
+    commands: ScopeSetupCommandSpec[],
+    progress?: (event: ScopeWorktreeProgress) => void,
+    resume?: { startIndex: number }
   ): Promise<void> {
     await this.propagateEnvironment(projectId, worktreePath, descriptor.environmentMode, progress)
 
-    const commands = this.setupCommands(projectId)
-    progress?.({ stage: 'setup', detail: '0' })
+    const startIndex = resume?.startIndex ?? 0
+    const carried: ScopeSetupCommandRecord[] =
+      resume?.startIndex === undefined
+        ? []
+        : commands.slice(0, startIndex).map((spec, index) => ({
+            index,
+            executable: spec.executable,
+            args: spec.args,
+            state: 'succeeded' as const
+          }))
+    progress?.({ stage: 'setup', detail: String(startIndex) })
 
-    const records: ScopeSetupCommandRecord[] = []
+    const records: ScopeSetupCommandRecord[] = [...carried]
     const startedAt = Date.now()
     this.scopes.attachManagedRoot(projectId, this.bucketIdFor(projectId, descriptor), {
       ...descriptor,
-      setup: { state: 'running', commands: [], startedAt }
+      setup: { state: 'running', commands: [...carried], startedAt }
     })
 
-    for (let index = 0; index < commands.length; index += 1) {
-      const spec = commands[index]!
+    for (let index = startIndex; index < commands.length; index += 1) {
+      const spec = commands[index]
+      if (!spec) continue
       const record: ScopeSetupCommandRecord = {
         index,
         executable: spec.executable,
@@ -593,17 +654,11 @@ export class ScopeWorktreeService implements ManagedWorktreeInspector {
 
       const dirtyFiles = await this.dirtyFiles(repoPath, worktreePath)
       const unpushedCommits = await this.unpushedCount(repoPath, descriptor.branch, worktreePath)
-      let branchOwnedByWorktree = false
-      try {
-        const registrations = await this.listWorktrees(repoPath ?? worktreePath)
-        branchOwnedByWorktree = registrations.some(
-          (registration) =>
-            registration.path === worktreePath &&
-            registration.head === `refs/heads/${descriptor.branch}`
-        )
-      } catch {
-        branchOwnedByWorktree = false
-      }
+      const branchOwnedByWorktree = await this.managedBranchRegisteredAt(
+        repoPath ?? worktreePath,
+        worktreePath,
+        descriptor.branch
+      )
       const hasActiveProcesses =
         (await this.activeProcesses?.hasActiveProcessesFor(
           target.projectId,
@@ -663,6 +718,23 @@ export class ScopeWorktreeService implements ManagedWorktreeInspector {
       return files.slice(0, 200)
     } catch {
       return []
+    }
+  }
+
+  /** Whether Git registers the managed branch at the expected worktree path. */
+  private async managedBranchRegisteredAt(
+    discoveryCwd: string,
+    expectedPath: string,
+    branch: string
+  ): Promise<boolean> {
+    try {
+      const registrations = await this.listWorktrees(discoveryCwd)
+      return registrations.some(
+        (registration) =>
+          registration.path === expectedPath && registration.head === `refs/heads/${branch}`
+      )
+    } catch {
+      return false
     }
   }
 
@@ -824,9 +896,10 @@ export async function discoverEnvironmentFiles(repoPath: string): Promise<string
   let trackedOutput: string
   try {
     trackedOutput = await runGit(['ls-files', '-z', '--', ...candidates], { cwd: repoPath })
-  } catch (error) {
+  } catch (cause) {
     throw new Error(
-      `Environment discovery failed: ${error instanceof Error ? error.message : String(error)}`
+      `Environment discovery failed: ${cause instanceof Error ? cause.message : String(cause)}`,
+      { cause }
     )
   }
   const tracked = new Set(trackedOutput.split('\0').filter(Boolean))

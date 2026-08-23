@@ -12,11 +12,13 @@ import {
   type ScopeEnvironmentMode,
   type ScopeLifecycleAction,
   type ScopeLifecyclePreflight,
+  type ScopeSetupCommandSpec,
   type ScopeSlice,
   type ScopeTarget,
   type ScopeWorktreeDefaults,
   type ScopeWorktreeHealth,
   type ScopeWorktreeProgress,
+  type ScopeWorktreeSourceInfo,
   type Thread,
   scopeSliceForStatus
 } from '$shared/types'
@@ -711,6 +713,8 @@ class ScopeState {
       environmentMode: ScopeEnvironmentMode
       /** Source branch the worktree forks from; defaults to the current branch. */
       baseBranch?: string
+      /** Setup commands executed for exactly this worktree. */
+      setupCommands?: ScopeSetupCommandSpec[]
     }
   ): Promise<ManagedWorktreeDescriptor | null> {
     this.worktreeProgress = { stage: 'naming' }
@@ -728,6 +732,11 @@ class ScopeState {
       this.error = error instanceof Error ? error.message : 'The worktree could not be created.'
       throw error
     }
+  }
+
+  /** Inspect the source checkout before creating a worktree. */
+  worktreeSourceInfo(projectId: string): Promise<ScopeWorktreeSourceInfo> {
+    return invoke('scope:worktree:sourceInfo', projectId)
   }
 
   /** Read the typed health of a managed scope worktree. */

@@ -155,6 +155,31 @@ export interface ScopeWorktreeDefaults {
   environmentMode: ScopeEnvironmentMode
 }
 
+/**
+ * Immutable creation request for one managed worktree. The selected
+ * environment mode and setup commands are executed for exactly this worktree,
+ * independent of later edits to the project-level defaults.
+ */
+export interface ScopeWorktreeCreateInput {
+  title: string
+  runSetup: boolean
+  environmentMode: ScopeEnvironmentMode
+  /** Source branch the worktree forks from; defaults to the current branch. */
+  baseBranch?: string
+  /** Setup commands to execute for this worktree; falls back to project defaults. */
+  setupCommands?: ScopeSetupCommandSpec[]
+}
+
+/** Facts about a project's source checkout, surfaced before worktree creation. */
+export interface ScopeWorktreeSourceInfo {
+  /** Currently checked-out branch of the main project checkout. */
+  currentBranch: string
+  /** Commit a worktree would fork from when created right now. */
+  headCommit: string
+  /** Bounded list of uncommitted changes that a new worktree will not include. */
+  dirtyFiles: string[]
+}
+
 export const DEFAULT_SCOPE_WORKTREE_DEFAULTS: ScopeWorktreeDefaults = {
   setupCommands: [],
   runSetupByDefault: true,

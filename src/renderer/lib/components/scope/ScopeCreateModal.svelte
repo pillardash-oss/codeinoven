@@ -1,11 +1,11 @@
 <script lang="ts">
-  import { GitBranch, Loader2 } from '@lucide/svelte'
+  import { GitBranch, Loader2, TriangleAlert } from '@lucide/svelte'
   import Modal from '../ui/Modal.svelte'
   import Switch from '../ui/Switch.svelte'
   import ScopeSetupCommandsEditor from './ScopeSetupCommandsEditor.svelte'
   import { invoke } from '$lib/ipc.svelte'
   import { scopeState } from '$lib/stores/scope.svelte'
-  import type { GitBranchInfo, ScopeSetupCommandSpec } from '$shared/types'
+  import type { GitBranchInfo, ScopeSetupCommandSpec, ScopeWorktreeSourceInfo } from '$shared/types'
 
   interface Props {
     open: boolean
@@ -30,6 +30,7 @@
   let localBranches = $state.raw<GitBranchInfo[]>([])
   let branchesLoading = $state(true)
   let branchesError = $state<string | null>(null)
+  let sourceInfo = $state.raw<ScopeWorktreeSourceInfo | null>(null)
   let error = $state<string | null>(null)
   let busy = $state(false)
 
@@ -50,7 +51,32 @@
     }
   }
 
+  /** Seed the form from persisted project-level worktree defaults. */
+  async function loadDefaults(): Promise<void> {
+    try {
+      await scopeState.ensureBoardLoaded(projectId)
+    } catch {
+      return
+    }
+    const defaults = scopeState.boards.get(projectId)?.worktreeDefaults
+    if (!defaults) return
+    runSetup = defaults.runSetupByDefault
+    environmentMode = defaults.environmentMode
+    setupCommands = defaults.setupCommands.map((command) => ({ ...command }))
+  }
+
+  /** Surface the source checkout state so dirty work is not silently skipped. */
+  async function loadSourceInfo(): Promise<void> {
+    try {
+      sourceInfo = await scopeState.worktreeSourceInfo(projectId)
+    } catch {
+      sourceInfo = null
+    }
+  }
+
   void loadLocalBranches(() => projectId)
+  void loadDefaults()
+  void loadSourceInfo()
 
   /** Preview the collision-safe branch and config-root folder for the title. */
   function previewBranch(): string {
@@ -81,18 +107,20 @@
         if (!bucketId) throw new Error('The scope could not be created')
       }
       if (isolated) {
-        await scopeState.createWorktree(projectId, bucketId, {
-          title: trimmed,
-          runSetup,
-          environmentMode,
-          ...(baseBranch.trim() ? { baseBranch: baseBranch.trim() } : {})
-        })
-      }
-      if (setupCommands.length > 0) {
+        // Persist the entered configuration as project defaults BEFORE creating
+        // so the saved defaults can never race ahead of this worktree, then
+        // pass the exact snapshot so these commands run for THIS worktree.
         await scopeState.setWorktreeDefaults(projectId, {
           setupCommands,
           runSetupByDefault: runSetup,
           environmentMode
+        })
+        await scopeState.createWorktree(projectId, bucketId, {
+          title: trimmed,
+          runSetup,
+          environmentMode,
+          setupCommands: setupCommands.map((command) => ({ ...command })),
+          ...(baseBranch.trim() ? { baseBranch: baseBranch.trim() } : {})
         })
       }
       onCreated?.(bucketId)
@@ -185,6 +213,27 @@
           >
             {branchesError ?? 'Only local branches are available as worktree sources.'}
           </p>
+          {#if sourceInfo}
+            <p class="text-xs text-dimmed">
+              Forks from <span class="text-muted">{baseBranch || sourceInfo.currentBranch}</span>
+              at commit <code class="text-muted">{sourceInfo.headCommit.slice(0, 10)}</code>.
+            </p>
+            {#if sourceInfo.dirtyFiles.length > 0}
+              <div
+                class="mt-1.5 flex items-start gap-1.5 rounded-md border border-warning/30 bg-warning/10 p-2 text-xs text-warning"
+                role="status"
+              >
+                <TriangleAlert size={13} class="mt-0.5 shrink-0" />
+                <span>
+                  {sourceInfo.dirtyFiles.length} uncommitted change{sourceInfo.dirtyFiles.length ===
+                  1
+                    ? ''
+                    : 's'} in this checkout will not be included — commit them first if they belong in
+                  this feature.
+                </span>
+              </div>
+            {/if}
+          {/if}
           <p class="text-xs text-dimmed">
             Worktree folder: <code
               >projects/{projectId}/scope/<span class="text-foreground"

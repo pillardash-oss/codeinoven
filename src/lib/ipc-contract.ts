@@ -125,12 +125,13 @@ import type {
   ScopeAppearancePatch,
   ScopeCollapsePatch,
   ScopeCreateInput,
-  ScopeEnvironmentMode,
   ScopeLifecycleAction,
   ScopeLifecyclePreflight,
   ScopeTarget,
+  ScopeWorktreeCreateInput,
   ScopeWorktreeDefaults,
   ScopeWorktreeHealth,
+  ScopeWorktreeSourceInfo,
   ManagedWorktreeDescriptor,
   ScopeSlice,
   SpecContextReference,
@@ -288,7 +289,7 @@ export interface IpcInvokeContract {
   >
   'engineeringLifecycle:retry': Contract<
     [projectId: string, threadId: string, resumeToken: string],
-    EngineeringLifecycleTransitionResult
+    EngineeringLifecycleState
   >
   'engineeringLifecycle:cancel': Contract<
     [projectId: string, threadId: string, confirmed: true],
@@ -1591,18 +1592,11 @@ export interface IpcInvokeContract {
   'scope:delete': Contract<[projectId: string, bucketId: string], ScopeBoard>
   /** Create an isolated managed worktree and attach it to a scope. */
   'scope:worktree:create': Contract<
-    [
-      target: ScopeTarget,
-      input: {
-        title: string
-        runSetup: boolean
-        environmentMode: ScopeEnvironmentMode
-        /** Source branch the worktree forks from; defaults to the current branch. */
-        baseBranch?: string
-      }
-    ],
+    [target: ScopeTarget, input: ScopeWorktreeCreateInput],
     ManagedWorktreeDescriptor
   >
+  /** Inspect the source checkout before creating a worktree. */
+  'scope:worktree:sourceInfo': Contract<[projectId: string], ScopeWorktreeSourceInfo>
   /** Refresh the typed health state of a managed scope. */
   'scope:worktree:health': Contract<[target: ScopeTarget], ScopeWorktreeHealth>
   /** Compute a state-bound preflight and mint a single-use confirmation token. */

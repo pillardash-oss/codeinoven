@@ -260,16 +260,13 @@ export function validateScopeLifecycleAction(
 }
 
 /** Validate the renderer input for managed-worktree creation. */
-export function validateScopeWorktreeCreateInput(value: unknown): {
-  title: string
-  runSetup: boolean
-  environmentMode: import('../../lib/types').ScopeEnvironmentMode
-  baseBranch?: string
-} {
+export function validateScopeWorktreeCreateInput(
+  value: unknown
+): import('../../lib/types').ScopeWorktreeCreateInput {
   const input = assertRecord(value, 'Scope worktree create input')
   rejectUnknownFields(
     input,
-    new Set(['title', 'runSetup', 'environmentMode', 'baseBranch']),
+    new Set(['title', 'runSetup', 'environmentMode', 'baseBranch', 'setupCommands']),
     'scope worktree create input'
   )
   return {
@@ -278,7 +275,10 @@ export function validateScopeWorktreeCreateInput(value: unknown): {
     environmentMode: validateEnvironmentMode(input.environmentMode),
     ...(input.baseBranch === undefined
       ? {}
-      : { baseBranch: validateBranchName(input.baseBranch, 'Source branch') })
+      : { baseBranch: validateBranchName(input.baseBranch, 'Source branch') }),
+    ...(input.setupCommands === undefined
+      ? {}
+      : { setupCommands: validateSetupCommandSpecs(input.setupCommands) })
   }
 }
 

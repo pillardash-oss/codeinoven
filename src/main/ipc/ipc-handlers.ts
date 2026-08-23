@@ -2061,7 +2061,10 @@ export function registerIpcHandlers(
   storage: StorageEngine,
   database: Database,
   updaterService?: UpdaterService,
-  chatEngine?: Pick<ChatEngine, 'loadMessages' | 'deleteThreadSession' | 'hasActiveProcessesInScope'> &
+  chatEngine?: Pick<
+    ChatEngine,
+    'loadMessages' | 'deleteThreadSession' | 'hasActiveProcessesInScope'
+  > &
     Partial<Pick<ChatEngine, 'runVirtualTask'>>,
   options: RegisterIpcHandlersOptions = {}
 ): void {
@@ -4197,6 +4200,9 @@ export function registerIpcHandlers(
     const validatedInput = validateScopeWorktreeCreateInput(input)
     return scopeWorktreeService.createManagedWorktree(validatedTarget, validatedInput)
   })
+  ipcMain.handle('scope:worktree:sourceInfo', (_, projectId: unknown) =>
+    scopeWorktreeService.sourceInfo(validateEntityId(projectId, 'Project ID'))
+  )
   ipcMain.handle('scope:worktree:health', (_, target: unknown) =>
     scopeWorktreeService.health(validateScopeTarget(target))
   )
