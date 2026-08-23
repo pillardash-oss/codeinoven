@@ -141,6 +141,7 @@ export const REMOTE_ALLOWED_CHANNELS: readonly string[] = [
   'engineeringLifecycle:get',
   'engineeringLifecycle:select',
   'engineeringLifecycle:start',
+  'engineeringLifecycle:complete',
   'engineeringLifecycle:resume',
   'engineeringLifecycle:retry',
   'engineeringLifecycle:cancel',
@@ -159,6 +160,7 @@ export const REMOTE_ALLOWED_CHANNELS: readonly string[] = [
   'prd:finalize',
   'prd:openInEditor',
   'prd:revealInFiles',
+  'prototypePreview:getOrigin',
   'agent:chooseBrainstormEntry',
   'agent:reviewBrainstorm',
   'agent:finalizeBrainstorm',
@@ -501,6 +503,7 @@ export const REMOTE_CHANNEL_AUTHORIZATION: Readonly<Record<string, RemoteChannel
   'prd:getWorkflow': { scope: 'workflow.read', stepUp: 'none' },
   'prd:getActive': { scope: 'workflow.read', stepUp: 'none' },
   'prd:listVersions': { scope: 'workflow.read', stepUp: 'none' },
+  'prototypePreview:getOrigin': { scope: 'workflow.read', stepUp: 'none' },
   'spec:getActive': { scope: 'workflow.read', stepUp: 'none' },
   'spec:listVersions': { scope: 'workflow.read', stepUp: 'none' },
   'spec:validate': { scope: 'workflow.read', stepUp: 'none' },
@@ -518,6 +521,7 @@ export const REMOTE_CHANNEL_AUTHORIZATION: Readonly<Record<string, RemoteChannel
   // workflow.write — default-No, conditional step-up
   'engineeringLifecycle:select': { scope: 'workflow.write', stepUp: 'conditional' },
   'engineeringLifecycle:start': { scope: 'workflow.write', stepUp: 'conditional' },
+  'engineeringLifecycle:complete': { scope: 'workflow.write', stepUp: 'conditional' },
   'engineeringLifecycle:resume': { scope: 'workflow.write', stepUp: 'conditional' },
   'engineeringLifecycle:retry': { scope: 'workflow.write', stepUp: 'conditional' },
   'engineeringLifecycle:cancel': {

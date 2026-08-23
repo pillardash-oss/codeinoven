@@ -74,6 +74,7 @@ import {
   validateEngineeringLifecycleDecision,
   validateEngineeringLifecycleResumeToken,
   validateEngineeringLifecycleSelection,
+  validateEngineeringLifecycleStage,
   validateGitIdentity,
   validateGitPathArray,
   validateGitRelativePath,
@@ -2141,6 +2142,15 @@ export function registerIpcHandlers(
       validateEntityId(projectId, 'Project ID'),
       validateEntityId(threadId, 'Thread ID')
     )
+  )
+  ipcMain.handle(
+    'engineeringLifecycle:complete',
+    (_, projectId: unknown, threadId: unknown, stage: unknown) =>
+      engineeringLifecycleEngine.completeStage(
+        validateEntityId(projectId, 'Project ID'),
+        validateEntityId(threadId, 'Thread ID'),
+        validateEngineeringLifecycleStage(stage)
+      )
   )
   ipcMain.handle(
     'engineeringLifecycle:resume',

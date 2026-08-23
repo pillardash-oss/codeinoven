@@ -63,6 +63,8 @@ import { BrowserService } from './browser/browser-service'
 import { getConfigRoot } from '../lib/utils'
 import type { SpeechService } from './speech/speech-service'
 
+declare const __CODEINOVEN_PROTOTYPE_PREVIEW_ORIGIN__: string | undefined
+
 const mainBundleDirectory = dirname(fileURLToPath(import.meta.url))
 
 app.setName(APP_NAME)
@@ -378,8 +380,8 @@ let remoteOwnershipReconcilePending = false
 let modelPricingService: ModelPricingService | null = null
 let speechService: SpeechService | null = null
 let unregisterSpeechIpc: (() => void) | null = null
-let prototypePreviewService: import('./prototypes/prototype-preview-service').PrototypePreviewService | null =
-  null
+let prototypePreviewService:
+  import('./prototypes/prototype-preview-service').PrototypePreviewService | null = null
 /**
  * Resolved lazily so the `appfile://` preview protocol can be installed before
  * the main window loads (its renderer requests previews as soon as it hydrates).
@@ -586,7 +588,15 @@ async function bootPostPaintServices(): Promise<void> {
   await speechService.initialize()
   unregisterSpeechIpc = registerSpeechIpc(speechService, () => mainWindow?.webContents ?? null)
   prototypePreviewService = new PrototypePreviewService()
-  await prototypePreviewService.start()
+  const prototypePreviewPort = await prototypePreviewService.start()
+  const { resolvePrototypePreviewOrigin } = await import('./prototypes/prototype-preview-origin')
+  const previewOrigin = resolvePrototypePreviewOrigin(process.env, {
+    development: !isProduction,
+    bakedOrigin: __CODEINOVEN_PROTOTYPE_PREVIEW_ORIGIN__,
+    allocatedPort: prototypePreviewPort
+  })
+  ipcMain.removeHandler('prototypePreview:getOrigin')
+  ipcMain.handle('prototypePreview:getOrigin', () => previewOrigin.origin ?? null)
   if (mainWindow && !mainWindow.isDestroyed()) {
     const service = new BrowserService(mainWindow)
     browserService = service
@@ -1363,6 +1373,7 @@ async function runShutdownPipeline(): Promise<void> {
   }
 
   try {
+    ipcMain.removeHandler('prototypePreview:getOrigin')
     await prototypePreviewService?.dispose()
     prototypePreviewService = null
   } catch (error) {

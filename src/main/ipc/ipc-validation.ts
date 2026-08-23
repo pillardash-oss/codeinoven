@@ -8,6 +8,7 @@ import type {
   CreateThreadInput,
   EngineeringLifecycleDecision,
   EngineeringLifecycleSelection,
+  EngineeringLifecycleStage,
   HistoryRole,
   InferenceMode,
   ScopeBoard,
@@ -72,6 +73,13 @@ const ENGINEERING_LIFECYCLE_DECISIONS = new Set<EngineeringLifecycleDecision>([
   'retry',
   'cancel'
 ])
+const ENGINEERING_LIFECYCLE_STAGES = new Set<EngineeringLifecycleStage>([
+  'brainstorm',
+  'prd',
+  'spec',
+  'assignment',
+  'achievement'
+])
 
 export function validateEngineeringLifecycleSelection(
   value: unknown
@@ -81,6 +89,10 @@ export function validateEngineeringLifecycleSelection(
 
 export function validateEngineeringLifecycleDecision(value: unknown): EngineeringLifecycleDecision {
   return assertEnum(value, ENGINEERING_LIFECYCLE_DECISIONS, 'engineering lifecycle decision')
+}
+
+export function validateEngineeringLifecycleStage(value: unknown): EngineeringLifecycleStage {
+  return assertEnum(value, ENGINEERING_LIFECYCLE_STAGES, 'engineering lifecycle stage')
 }
 
 export function validateEngineeringLifecycleResumeToken(value: unknown): string {

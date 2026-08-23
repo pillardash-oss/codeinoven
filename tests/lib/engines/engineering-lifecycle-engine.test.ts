@@ -133,4 +133,23 @@ describe('EngineeringLifecycleEngine', () => {
     const cancelled = lifecycle.cancel('project-1', 'thread-1')
     expect(cancelled).toMatchObject({ selection: 'none', startedAt: started.startedAt })
   })
+
+  it('completes one stage terminally and advances Run all without clearing history', async () => {
+    const { lifecycle } = await setup()
+    lifecycle.select('project-1', 'thread-1', 'prd')
+    const individual = lifecycle.start('project-1', 'thread-1').state
+    expect(lifecycle.completeStage('project-1', 'thread-1', 'prd')).toMatchObject({
+      selection: 'none',
+      completedStages: ['prd'],
+      startedAt: individual.startedAt
+    })
+
+    lifecycle.select('project-1', 'thread-1', 'run_all')
+    lifecycle.start('project-1', 'thread-1')
+    expect(lifecycle.completeStage('project-1', 'thread-1', 'brainstorm')).toMatchObject({
+      selection: 'run_all',
+      activeStage: 'prd',
+      completedStages: ['brainstorm']
+    })
+  })
 })

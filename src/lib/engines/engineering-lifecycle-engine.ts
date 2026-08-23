@@ -20,6 +20,12 @@ const NEXT_STAGE_AFTER_GATE: Partial<Record<EngineeringLifecycleGate, Engineerin
     spec_approval: 'assignment',
     assignment_approval: 'achievement'
   }
+const NEXT_STAGE: Partial<Record<EngineeringLifecycleStage, EngineeringLifecycleStage>> = {
+  brainstorm: 'prd',
+  prd: 'spec',
+  spec: 'assignment',
+  assignment: 'achievement'
+}
 
 export interface EngineeringLifecycleSwitchState {
   checked: boolean
@@ -227,6 +233,28 @@ export class EngineeringLifecycleEngine {
       failure,
       updatedAt: now
     }
+  }
+
+  completeStage(
+    projectId: string,
+    threadId: string,
+    stage: EngineeringLifecycleStage
+  ): EngineeringLifecycleState {
+    const current = this.require(projectId, threadId)
+    if (current.activeStage !== stage) {
+      throw new EngineeringLifecycleError(
+        'invalid_transition',
+        `Cannot complete ${stage} while ${current.activeStage ?? 'no stage'} is active`
+      )
+    }
+    if (current.selection !== 'run_all' || stage === 'achievement') {
+      return this.advance(projectId, threadId, { completedStage: stage, terminal: true })
+    }
+    const nextStage = NEXT_STAGE[stage]
+    if (!nextStage) {
+      throw new EngineeringLifecycleError('invalid_transition', `No stage follows ${stage}`)
+    }
+    return this.advance(projectId, threadId, { completedStage: stage, nextStage })
   }
 
   resume(

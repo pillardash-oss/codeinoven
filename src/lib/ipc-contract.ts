@@ -273,6 +273,10 @@ export interface IpcInvokeContract {
     [projectId: string, threadId: string],
     EngineeringLifecycleTransitionResult
   >
+  'engineeringLifecycle:complete': Contract<
+    [projectId: string, threadId: string, stage: import('./types').EngineeringLifecycleStage],
+    EngineeringLifecycleState
+  >
   'engineeringLifecycle:resume': Contract<
     [
       projectId: string,
@@ -363,6 +367,7 @@ export interface IpcInvokeContract {
     [projectId: string, threadId: string, prdId: string, version: number],
     string
   >
+  'prototypePreview:getOrigin': Contract<[], string | null>
   'brainstorm:ensureWorkflow': Contract<
     [projectId: string, threadId: string],
     BrainstormWorkflowState

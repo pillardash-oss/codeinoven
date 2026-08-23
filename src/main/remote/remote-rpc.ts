@@ -24,6 +24,9 @@ import {
   type NewPrdProvenance
 } from '../../lib/engines/prd-engine'
 import { parseGeneratedPrdContent } from '../../lib/prd/prd-validation'
+import { resolvePrototypePreviewOrigin } from '../prototypes/prototype-preview-origin'
+
+declare const __CODEINOVEN_PROTOTYPE_PREVIEW_ORIGIN__: string | undefined
 import { NoteRepo } from '../database/repositories/note-repo'
 import { ProjectManager } from '../../lib/engines/project-manager'
 import { ProjectFilesService } from '../editor/project-files-service'
@@ -75,6 +78,7 @@ import {
   validateEngineeringLifecycleDecision,
   validateEngineeringLifecycleResumeToken,
   validateEngineeringLifecycleSelection,
+  validateEngineeringLifecycleStage,
   validateScopeAppearancePatch,
   validateScopeCollapsePatch,
   validateScopeCreateInput,
@@ -1381,6 +1385,12 @@ export class RemoteRpcDispatcher {
           validateEntityId(args[0], 'Project ID'),
           validateEntityId(args[1], 'Thread ID')
         )
+      case 'engineeringLifecycle:complete':
+        return this.engineeringLifecycleEngine.completeStage(
+          validateEntityId(args[0], 'Project ID'),
+          validateEntityId(args[1], 'Thread ID'),
+          validateEngineeringLifecycleStage(args[2])
+        )
       case 'engineeringLifecycle:resume':
         return this.engineeringLifecycleEngine.resume(
           validateEntityId(args[0], 'Project ID'),
@@ -1481,6 +1491,13 @@ export class RemoteRpcDispatcher {
       case 'prd:openInEditor':
       case 'prd:revealInFiles':
         return ''
+      case 'prototypePreview:getOrigin':
+        return (
+          resolvePrototypePreviewOrigin(process.env, {
+            development: false,
+            bakedOrigin: __CODEINOVEN_PROTOTYPE_PREVIEW_ORIGIN__
+          }).origin ?? null
+        )
       case 'brainstorm:getActive':
         return this.brainstormEngine.getActive(this.string(args[0]), this.string(args[1]))
       case 'brainstorm:getWorkflow':
