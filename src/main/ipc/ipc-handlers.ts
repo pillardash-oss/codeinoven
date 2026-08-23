@@ -328,6 +328,13 @@ function prComposePayload(value: unknown): { title: string; description: string 
   }
 }
 
+function prComposeResponseText(response: AgentMessage): string {
+  return response.parts
+    .flatMap((part) => (part.type === 'text' && part.phase !== 'commentary' ? [part.text] : []))
+    .join('\n')
+    .trim()
+}
+
 /** Read the compose result from a harness response without requiring the agent
  *  to write into the project. JSON-only prompts should parse directly, while
  *  fences and a short explanatory wrapper are tolerated across CLI providers. */
@@ -335,10 +342,7 @@ function prComposeResponse(response: AgentMessage): { title: string; description
   const structured = prComposePayload(response.structuredOutput)
   if (structured) return structured
 
-  const text = response.parts
-    .flatMap((part) => (part.type === 'text' && part.phase !== 'commentary' ? [part.text] : []))
-    .join('\n')
-    .trim()
+  const text = prComposeResponseText(response)
   const candidates = [text]
   for (const match of text.matchAll(/```(?:json)?\s*([\s\S]*?)```/giu)) {
     if (match[1]) candidates.push(match[1].trim())
@@ -358,6 +362,30 @@ function prComposeResponse(response: AgentMessage): { title: string; description
     }
   }
   throw new Error('The PR compose agent returned invalid JSON')
+}
+
+function hasPrComposeResponse(response: AgentMessage): boolean {
+  try {
+    prComposeResponse(response)
+    return true
+  } catch {
+    return false
+  }
+}
+
+function prComposeRepairPrompt(response: AgentMessage, attempt: number): string {
+  const draft = prComposeResponseText(response).slice(0, 100_000)
+  return [
+    `Correction attempt ${attempt}. Your previous answer was not valid JSON.`,
+    'Convert it into exactly one JSON object with string fields named title and description.',
+    'Keep the same factual content. Escape every line break inside a JSON string as \\n.',
+    'Do not use a Markdown fence or add explanatory text.',
+    'Return only this shape:',
+    '{"title":"The pull request title","description":"The pull request description"}',
+    '',
+    'Previous answer:',
+    draft || '(empty)'
+  ].join('\n')
 }
 
 /** Reduce local/tracking ref spellings to the branch name GitHub expects. */
@@ -5757,7 +5785,11 @@ export function registerIpcHandlers(
         systemPrompt: PR_COMPOSE_SYSTEM_PROMPT,
         readOnly: true,
         allowedTools: [],
-        structuredOutput: { schema: PR_COMPOSE_OUTPUT_SCHEMA, retryCount: 2 }
+        structuredOutput: { schema: PR_COMPOSE_OUTPUT_SCHEMA, retryCount: 2 },
+        textOutputFallback: {
+          accepts: hasPrComposeResponse,
+          repairPrompt: prComposeRepairPrompt
+        }
       }
     )
     const report = prComposeResponse(response)

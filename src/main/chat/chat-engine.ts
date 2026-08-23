@@ -1316,6 +1316,15 @@ export interface VirtualTaskOptions {
   systemPrompt?: string
   allowedTools?: string[]
   structuredOutput?: StructuredOutputRequest
+  /**
+   * Prompt-only drivers cannot enforce `structuredOutput`. Give those drivers
+   * a bounded in-session correction path while preserving native schema output
+   * for drivers that support it.
+   */
+  textOutputFallback?: {
+    accepts(response: AgentMessage): boolean
+    repairPrompt(response: AgentMessage, attempt: number): string
+  }
 }
 
 export class ChatEngine {
@@ -5988,7 +5997,7 @@ export class ChatEngine {
       turnId,
       true
     )
-    const completion = this.waitForSessionCompletion(sessionId, 180_000, title)
+    const initialCompletion = this.waitForSessionCompletion(sessionId, 180_000, title)
 
     try {
       const utilityInstructions = options.utilityManagement
@@ -6033,29 +6042,77 @@ export class ChatEngine {
           pieces: [{ title: 'Virtual task prompt', content: text }]
         })
       )
-      if (isolated && driver instanceof OpenCodeDriver) {
-        await driver.sendPrompt(projectPath, request, isolated)
-      } else {
-        await driver.sendPrompt(projectPath, request)
+      const runAttempt = async (
+        prompt: SendPromptOptions,
+        completion: Promise<unknown | undefined>
+      ): Promise<AgentMessage> => {
+        if (isolated && driver instanceof OpenCodeDriver) {
+          await driver.sendPrompt(projectPath, prompt, isolated)
+        } else {
+          await driver.sendPrompt(projectPath, prompt)
+        }
+        await completion
+        const messages =
+          isolated && driver instanceof OpenCodeDriver
+            ? await driver.loadMessages(projectPath, sessionId, isolated)
+            : await driver.loadMessages(projectPath, sessionId)
+        const response = [...messages].reverse().find((message) => message.role === 'assistant')
+        if (!response) throw new Error(`${title} returned no response`)
+        if (response.error) throw new Error(response.error)
+        return response
       }
-      await completion
-      const messages =
-        isolated && driver instanceof OpenCodeDriver
-          ? await driver.loadMessages(projectPath, sessionId, isolated)
-          : await driver.loadMessages(projectPath, sessionId)
-      const response = [...messages].reverse().find((message) => message.role === 'assistant')
-      if (!response) throw new Error(`${title} returned no response`)
-      if (response.error) throw new Error(response.error)
-      tokenUsageAttribution.recordTurnTotals({
-        key: `pr:${sessionId}`,
-        agent: leanAgentNameForMode('pr-compose'),
-        driverId,
-        harnessVersion: currentHarnessVersion(),
-        providerId: response.providerId ?? settings.providerId ?? null,
-        modelId: response.modelId ?? settings.modelId ?? null,
-        reportedInputTokens: response.normalizedUsage?.uncachedInput ?? null,
-        reportedTotalTokens: response.normalizedUsage?.rawTotal ?? null
-      })
+      const recordUsage = (response: AgentMessage, key: string): void => {
+        tokenUsageAttribution.recordTurnTotals({
+          key,
+          agent: leanAgentNameForMode('pr-compose'),
+          driverId,
+          harnessVersion: currentHarnessVersion(),
+          providerId: response.providerId ?? settings.providerId ?? null,
+          modelId: response.modelId ?? settings.modelId ?? null,
+          reportedInputTokens: response.normalizedUsage?.uncachedInput ?? null,
+          reportedTotalTokens: response.normalizedUsage?.rawTotal ?? null
+        })
+      }
+
+      let response = await runAttempt(request, initialCompletion)
+      recordUsage(response, `pr:${sessionId}`)
+
+      const fallback = options.textOutputFallback
+      const requestedRetries = options.structuredOutput?.retryCount ?? 0
+      const retryCount =
+        Number.isSafeInteger(requestedRetries) && requestedRetries > 0
+          ? Math.min(requestedRetries, 3)
+          : 0
+      if (fallback && driver.capabilities.structuredOutput !== true) {
+        for (let attempt = 1; attempt <= retryCount && !fallback.accepts(response); attempt += 1) {
+          const repairText = validateBoundedString(
+            fallback.repairPrompt(response, attempt),
+            'Virtual task repair prompt',
+            1,
+            200_000
+          )
+          const attributionKey = `pr:${sessionId}:repair:${attempt}`
+          tokenUsageAttribution.recordPromptAttribution(
+            episodeFromPieces({
+              key: attributionKey,
+              mode: 'pr-compose',
+              driverId,
+              pieces: [{ title: `Virtual task repair ${attempt}`, content: repairText }]
+            })
+          )
+          const completion = this.waitForSessionCompletion(sessionId, 180_000, title)
+          response = await runAttempt(
+            {
+              ...request,
+              text: repairText,
+              attachments: [],
+              userMessageId: createMessageId()
+            },
+            completion
+          )
+          recordUsage(response, attributionKey)
+        }
+      }
       return response
     } catch (error) {
       if (isolated && driver instanceof OpenCodeDriver) {
