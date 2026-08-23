@@ -1,7 +1,7 @@
 import { createReadStream } from 'node:fs'
 import { createServer, type Server } from 'node:http'
-import { realpath, stat } from 'node:fs/promises'
-import { extname, isAbsolute, relative, resolve, sep } from 'node:path'
+import { opendir, realpath, stat } from 'node:fs/promises'
+import { extname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { PROTOTYPE_ASSET_BYTE_LIMIT } from '../../lib/prototypes/prototype-artifacts'
 
 const MIME_TYPES: Readonly<Record<string, string>> = {
@@ -31,6 +31,41 @@ export class PrototypePreviewService {
       throw new TypeError('Invalid prototype preview slug')
     }
     this.roots.set(previewSlug, await realpath(canonicalRoot))
+  }
+
+  /** Restore feature-scoped preview registrations without traversing project source trees. */
+  async registerProject(projectRoot: string): Promise<number> {
+    const specsRoot = join(projectRoot, '.cio', 'specs')
+    let registered = 0
+    let inspected = 0
+    try {
+      const features = await opendir(specsRoot)
+      for await (const feature of features) {
+        if (!feature.isDirectory() || !/^[a-z0-9][a-z0-9-]{0,127}$/u.test(feature.name)) continue
+        const prototypesRoot = join(specsRoot, feature.name, 'prototypes')
+        try {
+          const prototypes = await opendir(prototypesRoot)
+          for await (const prototype of prototypes) {
+            inspected += 1
+            if (inspected > 1_000) return registered
+            if (!prototype.isDirectory() || !/^[LH][1-9][0-9]*$/u.test(prototype.name)) continue
+            await this.register(
+              `${feature.name}-${prototype.name.toLowerCase()}`,
+              join(prototypesRoot, prototype.name)
+            )
+            registered += 1
+            if (registered % 20 === 0)
+              await new Promise<void>((resolveYield) => setImmediate(resolveYield))
+          }
+        } catch (error) {
+          if (!(error instanceof Error) || !('code' in error) || error.code !== 'ENOENT')
+            throw error
+        }
+      }
+    } catch (error) {
+      if (!(error instanceof Error) || !('code' in error) || error.code !== 'ENOENT') throw error
+    }
+    return registered
   }
 
   async start(): Promise<number> {

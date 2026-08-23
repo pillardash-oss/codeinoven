@@ -203,7 +203,8 @@ import {
 import { BrainstormEngine } from '../../lib/engines/brainstorm-engine'
 import {
   finalizePrototypeArtifact,
-  planPrototypeGeneration
+  planPrototypeGeneration,
+  resolvePrototypeArtifactPaths
 } from '../../lib/prototypes/prototype-artifacts'
 import { PRD_DOCUMENT_JSON_SCHEMA, parseGeneratedPrdContent } from '../../lib/prd/prd-validation'
 import {
@@ -1485,6 +1486,8 @@ export class ChatEngine {
   private workingStatusReconciliations = new Map<string, Promise<void>>()
   private readonly agentProcesses = new AgentProcessService()
   private generatedArtifactService: GeneratedArtifactService
+  private prototypePreviewRegistrar:
+    ((previewSlug: string, canonicalRoot: string) => Promise<void>) | null = null
 
   /**
    * Tracks reasoning start timestamps per session per part id.
@@ -1673,6 +1676,12 @@ export class ChatEngine {
 
   setBrowserUtilityExecutor(executor: BrowserUtilityExecutor | null): void {
     this.utilityOrchestration.setBrowserExecutor(executor)
+  }
+
+  setPrototypePreviewRegistrar(
+    registrar: ((previewSlug: string, canonicalRoot: string) => Promise<void>) | null
+  ): void {
+    this.prototypePreviewRegistrar = registrar
   }
 
   private cioPrompt(id: CioPromptId): Promise<string> {
@@ -10279,9 +10288,9 @@ export class ChatEngine {
         const prototypes: NonNullable<BrainstormContent['prototypes']> = []
         for (const batch of prototypeBatches) {
           const finalized = await Promise.all(
-            batch.map((item) => {
+            batch.map(async (item) => {
               const candidate = declared.get(item.id)
-              return finalizePrototypeArtifact({
+              const artifact = await finalizePrototypeArtifact({
                 projectRoot,
                 featureSlug,
                 prototypeId: item.id,
@@ -10293,6 +10302,9 @@ export class ChatEngine {
                   ? { parentPrototypeId: candidate.parentPrototypeId }
                   : {})
               })
+              const paths = resolvePrototypeArtifactPaths(projectRoot, featureSlug, item.id)
+              await this.prototypePreviewRegistrar?.(paths.previewSlug, paths.canonicalRoot)
+              return artifact
             })
           )
           prototypes.push(...finalized)

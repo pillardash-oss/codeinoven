@@ -583,12 +583,25 @@ async function bootPostPaintServices(): Promise<void> {
       : join(app.getAppPath(), 'resources/speech/model-catalog.json'),
     mlxWorkerPath: app.isPackaged
       ? join(process.resourcesPath, 'speech/mlx-worker')
-      : join(app.getAppPath(), 'resources/speech/mlx-worker')
+      : join(app.getAppPath(), 'resources/speech/runtime/darwin-arm64/mlx-worker')
   })
   await speechService.initialize()
   unregisterSpeechIpc = registerSpeechIpc(speechService, () => mainWindow?.webContents ?? null)
   prototypePreviewService = new PrototypePreviewService()
   const prototypePreviewPort = await prototypePreviewService.start()
+  chatEngine.setPrototypePreviewRegistrar(
+    (previewSlug, canonicalRoot) =>
+      prototypePreviewService?.register(previewSlug, canonicalRoot) ?? Promise.resolve()
+  )
+  void (async () => {
+    const projects = await projectManager.listProjects()
+    let registered = 0
+    for (const project of projects) {
+      if (project.source !== 'local' || !project.path) continue
+      registered += (await prototypePreviewService?.registerProject(project.path)) ?? 0
+    }
+    Logger.dev('Prototype preview registrations restored', { registered })
+  })().catch((error) => Logger.error('Prototype preview registration recovery failed:', error))
   const { resolvePrototypePreviewOrigin } = await import('./prototypes/prototype-preview-origin')
   const previewOrigin = resolvePrototypePreviewOrigin(process.env, {
     development: !isProduction,
@@ -1374,6 +1387,7 @@ async function runShutdownPipeline(): Promise<void> {
 
   try {
     ipcMain.removeHandler('prototypePreview:getOrigin')
+    chatEngine?.setPrototypePreviewRegistrar(null)
     await prototypePreviewService?.dispose()
     prototypePreviewService = null
   } catch (error) {

@@ -48,7 +48,7 @@ describe('prototype artifacts and preview service', () => {
 
     const service = new PrototypePreviewService()
     services.push(service)
-    await service.register(paths.previewSlug, paths.canonicalRoot)
+    await expect(service.registerProject(projectRoot)).resolves.toBe(1)
     const port = await service.start()
     const response = await fetch(`http://127.0.0.1:${port}/${prototype.previewPath}`)
     expect(response.status).toBe(200)
