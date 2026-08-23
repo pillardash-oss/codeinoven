@@ -174,6 +174,10 @@
   let head = $state(initialPreferences.head ?? '')
   let base = $state(initialPreferences.base ?? '')
   let draft = $state(false)
+  /** Push unpublished commits from the local head before creating the pull request. */
+  let pushLocalCommits = $state(true)
+  /** Commit staged and untracked files on the current head before creating the pull request. */
+  let commitPendingFiles = $state(false)
   let result: PullRequestReference | null = $state(null)
   let originError = $state('')
   let compare = $state<PullRequestCompare | null>(null)
@@ -244,9 +248,13 @@
     (gitState.status?.changes ?? []).filter((change) => change.status !== 'conflicted')
   )
   const hasLocalWorktreeChanges = $derived(committableChanges.length > 0)
+  const pendingCommitChanges = $derived(
+    committableChanges.filter((change) => change.staged || change.status === 'untracked')
+  )
+  const hasPendingCommitChanges = $derived(pendingCommitChanges.length > 0)
   const sameBranch = $derived(canonicalBranch(head) === canonicalBranch(base))
   const headIsCurrent = $derived(canonicalBranch(head) === canonicalBranch(branch ?? ''))
-  const willCreateCommit = $derived(hasLocalWorktreeChanges && headIsCurrent)
+  const willCreateCommit = $derived(commitPendingFiles && hasPendingCommitChanges && headIsCurrent)
   const hasChangesToPublish = $derived(compare?.hasChanges === true || willCreateCommit)
   const headInfo = $derived(
     gitState.branches.find((candidate) => candidate.kind === 'local' && candidate.name === head) ??
@@ -335,6 +343,7 @@
       !sameBranch &&
       Boolean(title.trim()) &&
       hasChangesToPublish &&
+      (compare?.source !== 'local' || pushLocalCommits) &&
       existingPr === null &&
       !creating &&
       !submitting &&
@@ -346,6 +355,13 @@
       .replace(/^refs\/remotes\/origin\//u, '')
       .replace(/^refs\/heads\//u, '')
       .replace(/^origin\//u, '')
+  }
+
+  function uncategorizedCommitMessage(date: Date): string {
+    const pad = (value: number): string => value.toString().padStart(2, '0')
+    const day = `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`
+    const time = `${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`
+    return `Uncategorized commit ${day} ${time}`
   }
 
   function createdPullRequestSummary(reference: PullRequestReference): PullRequestSummary {
@@ -455,18 +471,21 @@
       // Decided up front: after the commit below, the refreshed status clears
       // staged changes, which would make hasUnpushedHeadCommits flip to false.
       const commitMade = willCreateCommit
-      const shouldPush = headInfo?.kind === 'local' && (commitMade || hasUnpushedHeadCommits)
-      // 1. Stage and commit the complete worktree first. Compose used the same
-      //    read-only worktree evidence, so the generated copy matches this push.
+      const shouldPush =
+        pushLocalCommits && headInfo?.kind === 'local' && (commitMade || hasUnpushedHeadCommits)
+      // 1. Commit the current index plus untracked files, leaving unstaged edits alone.
       if (commitMade) {
-        await gitState.stage(projectId, [
-          ...new Set(committableChanges.map((change) => change.path))
-        ])
-        if (gitState.error) {
-          createError = gitState.error
-          return
+        const untrackedPaths = pendingCommitChanges
+          .filter((change) => change.status === 'untracked')
+          .map((change) => change.path)
+        if (untrackedPaths.length > 0) {
+          await gitState.stage(projectId, [...new Set(untrackedPaths)])
+          if (gitState.error) {
+            createError = gitState.error
+            return
+          }
         }
-        await gitState.commit(projectId, `commit: ${title.trim()}`)
+        await gitState.commit(projectId, uncategorizedCommitMessage(new Date()))
         if (gitState.error) {
           createError = gitState.error
           return
@@ -1222,25 +1241,38 @@
       </div>
 
       <div class="space-y-3 rounded-lg border border-border bg-surface p-2.5">
-        {#if hasLocalWorktreeChanges && headIsCurrent}
-          <div>
-            <span class="text-[10px] text-muted">Local changes</span>
+        <div class="flex items-center justify-between gap-2">
+          <div class="min-w-0">
+            <span class="text-[10px] text-muted">Push local commits</span>
             <p class="text-[9px] leading-relaxed text-dimmed">
-              Creating this pull request stages and commits every worktree change as
-              <span class="font-mono text-foreground">commit: {title.trim() || 'Title'}</span>, then
-              pushes all unpublished commits to
-              <span class="font-mono text-foreground">{head}</span>.
+              Push unpublished commits on
+              <span class="font-mono text-foreground">{head}</span> before creating the pull request.
             </p>
           </div>
-        {:else if hasUnpushedHeadCommits}
-          <div>
-            <span class="text-[10px] text-muted">Unpublished commits</span>
+          <Switch
+            checked={pushLocalCommits}
+            onchange={(value) => (pushLocalCommits = value)}
+            aria-label="Push local commits"
+          />
+        </div>
+        <div class="flex items-center justify-between gap-2">
+          <div class="min-w-0">
+            <span class="text-[10px] text-muted">Commit staged and untracked files</span>
             <p class="text-[9px] leading-relaxed text-dimmed">
-              Creating this pull request pushes every unpublished commit on
-              <span class="font-mono text-foreground">{head}</span> first.
+              {hasPendingCommitChanges
+                ? headIsCurrent
+                  ? 'Create an uncategorized commit dated at submission time.'
+                  : `Check out ${head} before committing files to it.`
+                : 'No staged or untracked files to commit right now.'}
             </p>
           </div>
-        {/if}
+          <Switch
+            checked={commitPendingFiles}
+            onchange={(value) => (commitPendingFiles = value)}
+            disabled={!hasPendingCommitChanges || !headIsCurrent}
+            aria-label="Commit staged and untracked files"
+          />
+        </div>
         <div class="flex items-center justify-between gap-2">
           <div class="min-w-0">
             <span class="text-[10px] text-muted">Create as draft</span>
@@ -1281,9 +1313,11 @@
         disabled={!canCreate}
         title={!canCreate && existingPr
           ? 'A pull request already exists for these branches'
-          : !canCreate && compare !== null && !hasChangesToPublish
-            ? 'There isn\u2019t anything to compare'
-            : undefined}
+          : !canCreate && compare?.source === 'local' && !pushLocalCommits
+            ? 'Push local commits to create this pull request'
+            : !canCreate && compare !== null && !hasChangesToPublish
+              ? 'There isn\u2019t anything to compare'
+              : undefined}
         onclick={() => void createPullRequest()}
       >
         {#if creating || submitting}
