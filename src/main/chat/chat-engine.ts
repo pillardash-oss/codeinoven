@@ -13,6 +13,8 @@ import { ThreadManager, remapCopiedMessages } from '../../lib/engines/thread-man
 import { SpecEngine } from '../../lib/engines/spec-engine'
 import { AuditEngine } from '../../lib/engines/audit-engine'
 import { AssignmentEngine, AssignmentEngineError } from '../../lib/engines/assignment-engine'
+import { PrdEngine } from '../../lib/engines/prd-engine'
+import { EngineeringLifecycleEngine } from '../../lib/engines/engineering-lifecycle-engine'
 import { OpenCodeDriver, type IsolatedHandle } from '../drivers/opencode-driver'
 import { ClaudeCodeDriver } from '../drivers/claude-code-driver'
 import { CodexDriver } from '../drivers/codex-driver'
@@ -135,6 +137,8 @@ import type {
   BrainstormContent,
   BrainstormDocument,
   BrainstormEntryChoice,
+  PrdContent,
+  PrdDocument,
   PendingAgentQuestionRequest,
   EngineeringSpec,
   EngineeringSpecContent,
@@ -192,10 +196,12 @@ import {
   APPLICATION_AGENT_TOOLS,
   BRAINSTORM_DOCUMENT_TOOL_NAME,
   ENGINEERING_SPEC_TOOL_NAME,
+  PRODUCT_REQUIREMENTS_DOCUMENT_TOOL_NAME,
   PROPOSE_MEMORY_SCHEMA,
   SPEC_GENERATION_SCHEMA
 } from '../../lib/agent-tools'
 import { BrainstormEngine } from '../../lib/engines/brainstorm-engine'
+import { PRD_DOCUMENT_JSON_SCHEMA, parseGeneratedPrdContent } from '../../lib/prd/prd-validation'
 import {
   BRAINSTORM_DOCUMENT_JSON_SCHEMA,
   parseGeneratedBrainstormFallbackContent,
@@ -1437,6 +1443,8 @@ export class ChatEngine {
   private checkpointManager: CheckpointManager
   private specEngine: SpecEngine
   private brainstormEngine: BrainstormEngine
+  private prdEngine: PrdEngine
+  private engineeringLifecycleEngine: EngineeringLifecycleEngine
   private auditEngine: AuditEngine
   private assignmentEngine: AssignmentEngine
   private assignmentApiServer: Server | null = null
@@ -1628,6 +1636,8 @@ export class ChatEngine {
       validateForApproval: validateEngineeringSpec
     })
     this.brainstormEngine = new BrainstormEngine(storage, database)
+    this.prdEngine = new PrdEngine(storage, database)
+    this.engineeringLifecycleEngine = new EngineeringLifecycleEngine(database)
     this.auditEngine = new AuditEngine(storage, database)
     this.assignmentEngine = new AssignmentEngine(storage, database)
     // Register available harness drivers. Order follows the harness registry —
@@ -1864,6 +1874,18 @@ export class ChatEngine {
         version: number,
         note?: string
       ) => this.finalizeBrainstorm(projectId, threadId, brainstormId, version, note)
+    )
+    ipcMain.handle(
+      'agent:generatePrd',
+      (
+        _,
+        projectId: string,
+        threadId: string,
+        settings: ThreadSettings,
+        instructions: string,
+        attachments: PromptAttachment[],
+        userMessageId: string
+      ) => this.generatePrd(projectId, threadId, settings, instructions, attachments, userMessageId)
     )
     ipcMain.handle(
       'agent:steerPrompt',
@@ -9620,13 +9642,272 @@ export class ChatEngine {
     return created
   }
 
+  async generatePrd(
+    projectId: string,
+    threadId: string,
+    settings: ThreadSettings,
+    instructions: string,
+    attachments: PromptAttachment[],
+    userMessageId: string
+  ): Promise<PrdDocument> {
+    projectId = validateEntityId(projectId, 'Project ID')
+    threadId = validateEntityId(threadId, 'Thread ID')
+    settings = validateThreadSettings(settings)
+    instructions = validateBoundedString(instructions, 'PRD instructions', 1, 200_000)
+    userMessageId = validateEntityId(userMessageId, 'Message ID', 256)
+    const workflow = this.prdEngine.ensureWorkflow(projectId, threadId)
+    if (workflow.stage === 'choice_pending') {
+      throw new Error('Choose Brainstorm first or Start PRD before generating the PRD')
+    }
+    if (workflow.stage !== 'drafting') {
+      throw new Error('The PRD workflow is not ready for generation')
+    }
+    const active = this.prdEngine.getActive(projectId, threadId)
+    if (active) return active
+
+    const driverId = settings.harnessId || 'opencode'
+    const { driver, projectPath } = await this.resolve(projectId, driverId, threadId)
+    assertHarnessRequestCapabilities(driver, attachments, settings.permissionLevel)
+    const userMessage = await this.persistOutboundMessage(
+      projectId,
+      threadId,
+      userMessageId,
+      instructions,
+      instructions,
+      attachments,
+      [],
+      [],
+      undefined,
+      'user'
+    )
+    const assistantId = `${userMessageId}-prd`
+    const startedAt = Date.now()
+    const startedMessage: AgentMessage = {
+      id: assistantId,
+      role: 'assistant',
+      origin: 'assistant',
+      visibility: 'conversation',
+      parts: [
+        {
+          type: 'text',
+          id: `${assistantId}-started`,
+          messageID: assistantId,
+          text: 'Researching the product requirements and project constraints.',
+          phase: 'commentary'
+        }
+      ],
+      createdAt: startedAt
+    }
+    await this.threadManager.upsertMessages(projectId, threadId, [userMessage, startedMessage])
+    this.broadcast({
+      type: 'brainstorm.trace',
+      sessionId: `${projectId}:${threadId}:prd`,
+      projectId,
+      threadId,
+      update: { type: 'started', messages: [withoutTransportParts(userMessage), startedMessage] }
+    })
+    await this.threadManager.setStatus(projectId, threadId, 'planning')
+
+    const source = await this.brainstormSourceWithConversationContext(
+      projectId,
+      threadId,
+      instructions
+    )
+    const finalizedBrainstorm = await this.brainstormEngine.getActive(projectId, threadId)
+    const behaviorPrompt = await this.getBehaviorPrompt(
+      projectId,
+      threadId,
+      projectPath,
+      'brainstorm',
+      settings,
+      'ephemeral'
+    )
+    const systemPrompt = [
+      await this.cioPrompt('prd-document'),
+      `Submit the complete PRD through ${PRODUCT_REQUIREMENTS_DOCUMENT_TOOL_NAME}. Do not generate a specification or implementation.`,
+      behaviorPrompt
+    ].join('\n\n')
+    const structured = driver.capabilities?.structuredOutput === true
+    let sessionId = ''
+    let isolated: IsolatedHandle | undefined
+    try {
+      isolated =
+        driver instanceof OpenCodeDriver
+          ? await driver.createIsolatedSession(projectPath, `PRD ${new Date().toISOString()}`)
+          : undefined
+      sessionId =
+        isolated?.sessionId ??
+        (await driver.createSession(projectPath, `PRD ${new Date().toISOString()}`))
+      this.registerSession(
+        sessionId,
+        projectId,
+        threadId,
+        projectPath,
+        'auto_review',
+        driverId,
+        undefined,
+        true
+      )
+      const completion = this.waitForSessionCompletion(
+        sessionId,
+        BRAINSTORM_GENERATION_TIMEOUT_MS,
+        'PRD generation'
+      )
+      const prompt: SendPromptOptions = {
+        sessionId,
+        settings: {
+          ...settings,
+          permissionLevel: 'auto_review',
+          engineeringMode: false,
+          assignmentMode: false,
+          loopMode: false
+        },
+        text: [
+          source,
+          finalizedBrainstorm?.status === 'finalized'
+            ? `Use finalized Brainstorm ${finalizedBrainstorm.id} version ${finalizedBrainstorm.version} as product context.`
+            : '',
+          structured
+            ? ''
+            : `Return only JSON matching this schema: ${JSON.stringify(PRD_DOCUMENT_JSON_SCHEMA)}`
+        ]
+          .filter(Boolean)
+          .join('\n\n'),
+        attachments,
+        systemPrompt,
+        allowedTools: BRAINSTORM_RESEARCH_ALLOWED_TOOLS,
+        readOnly: true,
+        agent: leanAgentNameForMode('brainstorm'),
+        ...(structured
+          ? { structuredOutput: { schema: PRD_DOCUMENT_JSON_SCHEMA, retryCount: 2 } }
+          : {})
+      }
+      if (isolated && driver instanceof OpenCodeDriver) {
+        await driver.sendPrompt(projectPath, prompt, isolated)
+      } else {
+        await driver.sendPrompt(projectPath, prompt)
+      }
+      const streamed = await completion
+      const generatedMessages =
+        streamed === undefined
+          ? isolated && driver instanceof OpenCodeDriver
+            ? await driver.loadMessages(projectPath, sessionId, isolated)
+            : await driver.loadMessages(projectPath, sessionId)
+          : []
+      const response = [...generatedMessages]
+        .reverse()
+        .find((message) => message.role === 'assistant')
+      if (response?.error) throw new Error(response.error)
+      const raw =
+        streamed ??
+        response?.structuredOutput ??
+        parseGeneratedJson(
+          response?.parts
+            .filter((part) => part.type === 'text')
+            .map((part) => part.text)
+            .join('\n') ?? '',
+          'The PRD agent returned invalid JSON'
+        )
+      const content: PrdContent = parseGeneratedPrdContent(raw)
+      const created = await this.prdEngine.createDraft(projectId, threadId, content, {
+        source: 'agent',
+        actor: 'Sr. Engineer',
+        harnessId: settings.harnessId,
+        providerId: settings.providerId,
+        modelId: settings.modelId,
+        ...(finalizedBrainstorm?.status === 'finalized'
+          ? {
+              brainstormId: finalizedBrainstorm.id,
+              brainstormVersion: finalizedBrainstorm.version,
+              brainstormInputHash: finalizedBrainstorm.finalizedInputHash
+            }
+          : {})
+      })
+      const completedMessage: AgentMessage = {
+        ...startedMessage,
+        parts: [
+          ...startedMessage.parts,
+          {
+            type: 'text',
+            id: `${assistantId}-final`,
+            messageID: assistantId,
+            text: `The PRD “${created.content.title}” is ready for review and finalization.`,
+            phase: 'final_answer'
+          }
+        ],
+        harnessId: settings.harnessId,
+        providerId: settings.providerId,
+        modelId: settings.modelId,
+        completedAt: Date.now()
+      }
+      await this.threadManager.upsertMessages(projectId, threadId, [completedMessage])
+      this.broadcast({
+        type: 'brainstorm.trace',
+        sessionId: `${projectId}:${threadId}:prd`,
+        projectId,
+        threadId,
+        update: {
+          type: 'completed',
+          messages: [withoutTransportParts(userMessage), completedMessage]
+        }
+      })
+      await this.threadManager.setStatus(projectId, threadId, 'awaiting_approval', { read: false })
+      return created
+    } catch (error) {
+      if (sessionId) {
+        if (isolated && driver instanceof OpenCodeDriver) {
+          await driver.abort(projectPath, sessionId, isolated).catch(() => undefined)
+        } else {
+          await driver.abort(projectPath, sessionId).catch(() => undefined)
+        }
+      }
+      const message = error instanceof Error ? error.message : 'The PRD agent failed.'
+      const failedMessage: AgentMessage = {
+        ...startedMessage,
+        parts: [
+          ...startedMessage.parts,
+          {
+            type: 'text',
+            id: `${assistantId}-failed`,
+            messageID: assistantId,
+            text: `The PRD could not be generated. ${message}`,
+            phase: 'final_answer'
+          }
+        ],
+        completedAt: Date.now(),
+        error: message
+      }
+      await this.threadManager.upsertMessages(projectId, threadId, [failedMessage])
+      this.broadcast({
+        type: 'brainstorm.trace',
+        sessionId: `${projectId}:${threadId}:prd`,
+        projectId,
+        threadId,
+        update: {
+          type: 'completed',
+          messages: [withoutTransportParts(userMessage), failedMessage]
+        }
+      })
+      await this.threadManager.setStatus(projectId, threadId, 'failed', { read: false })
+      throw error
+    } finally {
+      if (sessionId) {
+        this.clearCompletionWaiter(sessionId)
+        this.sessionRegistry.delete(sessionId)
+        this.reasoningTimes.delete(sessionId)
+        this.toolTimes.delete(sessionId)
+      }
+      if (isolated && driver instanceof OpenCodeDriver) driver.disposeIsolatedSession(isolated)
+    }
+  }
+
   async finalizeBrainstorm(
     projectId: string,
     threadId: string,
     brainstormId: string,
     version: number,
     note = ''
-  ): Promise<EngineeringSpec> {
+  ): Promise<EngineeringSpec | BrainstormDocument> {
     projectId = validateEntityId(projectId, 'Project ID')
     threadId = validateEntityId(threadId, 'Thread ID')
     brainstormId = validateEntityId(brainstormId, 'Brainstorm ID')
@@ -9644,6 +9925,15 @@ export class ChatEngine {
         version,
         note
       )
+      const lifecycle = this.engineeringLifecycleEngine.get(projectId, threadId)
+      if (lifecycle?.activeStage === 'brainstorm') {
+        this.engineeringLifecycleEngine.completeStage(projectId, threadId, 'brainstorm')
+        if (lifecycle.selection === 'run_all') this.prdEngine.ensureWorkflow(projectId, threadId)
+        await this.threadManager.setStatus(projectId, threadId, 'awaiting_approval', {
+          read: false
+        })
+        return finalized
+      }
       const existing = await this.getActiveSpec(projectId, threadId)
       if (
         existing?.provenance.brainstormId === finalized.id &&

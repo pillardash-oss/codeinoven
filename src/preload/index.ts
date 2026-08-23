@@ -62,6 +62,7 @@ const INVOKE_CHANNELS = [
   'agent:chooseBrainstormEntry',
   'agent:reviewBrainstorm',
   'agent:finalizeBrainstorm',
+  'agent:generatePrd',
   'assignment:getActive',
   'assignment:listVersions',
   'assignment:saveDraft',

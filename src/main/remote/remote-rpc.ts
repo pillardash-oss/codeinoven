@@ -180,6 +180,7 @@ export interface RemoteRpcServices {
     | 'chooseBrainstormEntry'
     | 'reviewBrainstorm'
     | 'finalizeBrainstorm'
+    | 'generatePrd'
     | 'ensureImplementationAuditorThread'
     | 'startAssignment'
     | 'stopAssignment'
@@ -1066,6 +1067,15 @@ export class RemoteRpcDispatcher {
           this.string(args[2]),
           args[3] as number,
           typeof args[4] === 'string' ? args[4] : ''
+        )
+      case 'agent:generatePrd':
+        return chatEngine.generatePrd(
+          this.string(args[0]),
+          this.string(args[1]),
+          args[2] as ThreadSettings,
+          this.string(args[3]),
+          args[4] as PromptAttachment[],
+          this.string(args[5])
         )
       case 'agent:ensureImplementationAuditorThread':
         return chatEngine.ensureImplementationAuditorThread(

@@ -480,7 +480,18 @@ export interface IpcInvokeContract {
   >
   'agent:finalizeBrainstorm': Contract<
     [projectId: string, threadId: string, brainstormId: string, version: number, note?: string],
-    EngineeringSpec
+    EngineeringSpec | BrainstormDocument
+  >
+  'agent:generatePrd': Contract<
+    [
+      projectId: string,
+      threadId: string,
+      settings: ThreadSettings,
+      instructions: string,
+      attachments: PromptAttachment[],
+      userMessageId: string
+    ],
+    PrdDocument
   >
   'assignment:getActive': Contract<
     [projectId: string, coordinatorThreadId: string],

@@ -164,6 +164,7 @@ export const REMOTE_ALLOWED_CHANNELS: readonly string[] = [
   'agent:chooseBrainstormEntry',
   'agent:reviewBrainstorm',
   'agent:finalizeBrainstorm',
+  'agent:generatePrd',
   'agent:ensureImplementationAuditorThread',
   'agent:startAssignment',
   'agent:stopAssignment',
@@ -548,6 +549,7 @@ export const REMOTE_CHANNEL_AUTHORIZATION: Readonly<Record<string, RemoteChannel
     stepUp: 'conditional',
     requiresStepUp: true
   },
+  'agent:generatePrd': { scope: 'workflow.write', stepUp: 'conditional' },
   'agent:ensureImplementationAuditorThread': {
     scope: 'workflow.write',
     stepUp: 'conditional'

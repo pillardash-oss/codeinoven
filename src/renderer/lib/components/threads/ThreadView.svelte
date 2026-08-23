@@ -3717,6 +3717,45 @@
       return
     }
 
+    const selectedPrd =
+      engineeringLifecycle?.activeStage === 'prd' ||
+      (engineeringLifecycle?.selection === 'prd' && engineeringLifecycle.activeStage === undefined)
+    if (selectedPrd && specAction === undefined) {
+      const userMessageId = messageId()
+      const { projectId, id } = thread
+      beginLocalTurn(userMessageId)
+      agentRuns.setBusy(projectId, id, true, userMessageId)
+      try {
+        if (engineeringLifecycle?.activeStage === undefined) {
+          const started = await invoke('engineeringLifecycle:start', projectId, id)
+          engineeringLifecycle = started.state
+        }
+        const workflow = await invoke('prd:ensureWorkflow', projectId, id)
+        if (workflow.stage === 'choice_pending') {
+          await invoke('prd:chooseEntry', projectId, id, 'start_prd')
+        }
+        prd = await invoke(
+          'agent:generatePrd',
+          projectId,
+          id,
+          settings,
+          [msg, promptContext].filter(Boolean).join('\n\n'),
+          attachments,
+          userMessageId
+        )
+        prdVersions = prd ? [prd] : []
+        selectedPrdVersion = prd?.version ?? null
+        await threadMessages.load(projectId, id)
+        clearLocalTurn()
+        agentRuns.setIdle(projectId, id)
+      } catch (error) {
+        clearLocalTurn()
+        agentRuns.setIdle(projectId, id)
+        errorMessage = error instanceof Error ? error.message : 'The PRD could not be generated.'
+      }
+      return
+    }
+
     recordModelUse()
 
     // Snap scroll to bottom — the user just sent something, they want to see it
@@ -4314,7 +4353,12 @@
         showSpecStudio = true
       }
     }
-    if (!active && workflowThread?.status !== 'failed' && !planningResumeRequested) {
+    if (
+      !active &&
+      workflowThread?.status !== 'failed' &&
+      !planningResumeRequested &&
+      (!engineeringLifecycle || engineeringLifecycle.selection === 'none')
+    ) {
       const resume =
         workflow?.stage === 'skipped'
           ? invoke('agent:chooseBrainstormEntry', projectId, workflowThreadId, 'spec')
@@ -4592,6 +4636,12 @@
       : [...brainstormVersions, updated]
     selectedBrainstormVersion = updated.version
     return updated
+  }
+
+  function isBrainstormDocument(
+    document: BrainstormDocument | EngineeringSpec
+  ): document is BrainstormDocument {
+    return 'sections' in document.content
   }
 
   async function chooseBrainstormEntry(choice: 'brainstorm' | 'spec'): Promise<void> {
@@ -5067,7 +5117,7 @@
     brainstormDecisionInFlight = action
     agentRuns.setBusy(thread.projectId, thread.id, true, latestUserMessageId())
     try {
-      await invoke(
+      const result = await invoke(
         'agent:finalizeBrainstorm',
         draft.projectId,
         draft.threadId,
@@ -5075,7 +5125,15 @@
         draft.version,
         notes
       )
-      await reconcileReadySpec()
+      engineeringLifecycle = await invoke('engineeringLifecycle:get', thread.projectId, thread.id)
+      if (isBrainstormDocument(result)) {
+        applyBrainstormDocument(result)
+        await reconcileReadySpec()
+        studioDocument = engineeringLifecycle?.activeStage === 'prd' ? 'prd' : 'brainstorm'
+        showSpecStudio = true
+      } else {
+        await reconcileReadySpec()
+      }
     } catch (error) {
       brainstormError =
         error instanceof Error ? error.message : `The Brainstorm ${action} action failed.`
