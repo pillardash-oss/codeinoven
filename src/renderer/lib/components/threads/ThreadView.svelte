@@ -354,7 +354,11 @@
     }
     return {
       ...settings,
-      engineeringMode: true,
+      engineeringMode:
+        selection === 'brainstorm' ||
+        selection === 'prd' ||
+        selection === 'spec' ||
+        selection === 'run_all',
       assignmentMode: selection === 'assignment' || selection === 'run_all',
       loopMode: selection === 'achievement' || selection === 'run_all'
     }
@@ -3697,6 +3701,18 @@
       return
     }
     if (specFormulating && specAction !== 'request') return
+    if (
+      specAction === undefined &&
+      (engineeringLifecycle?.activeStage === 'achievement' ||
+        (engineeringLifecycle?.selection === 'achievement' &&
+          engineeringLifecycle.activeStage === undefined))
+    ) {
+      if (!spec || spec.status !== 'approved') {
+        errorMessage = 'Achievement requires an approved Spec.'
+        return
+      }
+      specAction = 'implement'
+    }
     const dependencyThreads = startAfterThreads.filter(
       (reference) => reference.id !== thread.id && reference.id.length > 0
     )
@@ -3722,6 +3738,24 @@
       })
       idleAttentionHandled = false
       void handleIdleAttention()
+      return
+    }
+
+    const selectedAssignment =
+      engineeringLifecycle?.activeStage === 'assignment' ||
+      (engineeringLifecycle?.selection === 'assignment' &&
+        engineeringLifecycle.activeStage === undefined)
+    if (selectedAssignment && specAction === undefined) {
+      if (!spec || spec.status !== 'approved') {
+        assignmentError = 'Assignment requires an approved Spec.'
+        return
+      }
+      if (engineeringLifecycle?.activeStage === undefined) {
+        engineeringLifecycle = (
+          await invoke('engineeringLifecycle:start', thread.projectId, thread.id)
+        ).state
+      }
+      await generateAssignmentDraft()
       return
     }
 
@@ -4311,6 +4345,19 @@
         projectId,
         workflowThreadId,
         'achievement'
+      )
+      updateSettings(legacySettingsForLifecycle('none'))
+    }
+    if (
+      engineeringLifecycle?.selection === 'assignment' &&
+      engineeringLifecycle.activeStage === 'assignment' &&
+      activeAssignment?.status === 'completed'
+    ) {
+      engineeringLifecycle = await invoke(
+        'engineeringLifecycle:complete',
+        projectId,
+        workflowThreadId,
+        'assignment'
       )
       updateSettings(legacySettingsForLifecycle('none'))
     }
@@ -6022,6 +6069,14 @@
     auditBusy = true
     try {
       await invoke('audit:complete', thread.projectId, thread.id)
+      if (engineeringLifecycle?.activeStage === 'achievement') {
+        engineeringLifecycle = await invoke(
+          'engineeringLifecycle:complete',
+          thread.projectId,
+          thread.id,
+          'achievement'
+        )
+      }
       settings = { ...settings, engineeringMode: false, loopMode: false }
       commitSettings(settings)
       await invoke('thread:updateSettings', thread.projectId, thread.id, settings)

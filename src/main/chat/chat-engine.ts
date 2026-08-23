@@ -10939,6 +10939,9 @@ export class ChatEngine {
 
     const spec = await this.getActiveSpec(projectId, coordinatorThreadId)
     if (!spec) throw new Error('Generate a specification before generating an Assignment.')
+    if (spec.status !== 'approved') {
+      throw new Error('Approve the specification before generating an Assignment.')
+    }
 
     await this.threadManager.setStatus(projectId, coordinatorThreadId, 'planning', { read: false })
     try {
