@@ -9,6 +9,9 @@ publish:
   repo: codeinoven
   releaseType: release
 afterPack: scripts/native-splash/after-pack.js
+extraResources:
+  - from: resources/speech/model-catalog.json
+    to: speech/model-catalog.json
 files:
   - out/**/*
   - '!out/**/.DS_Store'
