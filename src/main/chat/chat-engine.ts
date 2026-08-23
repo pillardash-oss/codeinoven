@@ -9497,6 +9497,16 @@ export class ChatEngine {
       throw new Error('The Sr. Engineer is already updating this Brainstorm')
     }
     this.activeBrainstormOperations.add(operationKey)
+    const refreshSessionId = `brainstorm-refresh-${brainstormId}-v${version}-${Date.now()}`
+    if (options.sessionTurn) {
+      this.broadcast({
+        type: 'brainstorm.trace',
+        sessionId: refreshSessionId,
+        projectId,
+        threadId,
+        update: { type: 'refresh.started', startedAt: Date.now() }
+      })
+    }
     try {
       const current = this.brainstormEngine.getVersion(projectId, threadId, brainstormId, version)
       if (!current || current.status !== 'draft') throw new Error('Brainstorm draft is unavailable')
@@ -9514,6 +9524,15 @@ export class ChatEngine {
           .map((comment) => `- ${comment.body}`),
         ...(note.trim() ? [`- ${note.trim()}`] : [])
       ].join('\n')
+      const visibleReviewBody = [
+        note.trim(),
+        ...current.annotations
+          .filter((annotation) => annotation.status === 'open')
+          .map((annotation) => annotation.body.trim())
+      ]
+        .filter(Boolean)
+        .join('\n\n')
+      const boundedVisibleReviewBody = visibleReviewBody.slice(0, 20_000)
       const content = await this.generateBrainstormContent(
         projectId,
         threadId,
@@ -9528,7 +9547,15 @@ export class ChatEngine {
         ]
           .filter(Boolean)
           .join('\n\n'),
-        options.sessionTurn ? { announceProgress: false } : { includeConversationContext: false }
+        options.sessionTurn
+          ? { announceProgress: false }
+          : {
+              includeConversationContext: false,
+              presentation: {
+                action: 'Review Brainstorm',
+                ...(boundedVisibleReviewBody ? { body: boundedVisibleReviewBody } : {})
+              }
+            }
       )
       let revised = await this.brainstormEngine.createVersion({
         projectId,
@@ -9570,6 +9597,15 @@ export class ChatEngine {
       await this.threadManager.setStatus(projectId, threadId, 'spec', { read: false })
       throw error
     } finally {
+      if (options.sessionTurn) {
+        this.broadcast({
+          type: 'brainstorm.trace',
+          sessionId: refreshSessionId,
+          projectId,
+          threadId,
+          update: { type: 'refresh.completed' }
+        })
+      }
       this.activeBrainstormOperations.delete(operationKey)
     }
   }
@@ -9701,7 +9737,8 @@ export class ChatEngine {
   private async beginBrainstormConversationTurn(
     projectId: string,
     threadId: string,
-    source: string
+    source: string,
+    presentation?: UserMessagePresentation
   ): Promise<ActiveBrainstormConversationTurn> {
     const operationKey = `${projectId}:${threadId}`
     const digest = createHash('sha256')
@@ -9723,7 +9760,7 @@ export class ChatEngine {
           type: 'user-presentation',
           id: `${turnId}-user-presentation`,
           messageID: `${turnId}-user`,
-          presentation: { action }
+          presentation: presentation ?? { action }
         }
       ],
       createdAt: startedAt
@@ -9861,7 +9898,11 @@ export class ChatEngine {
     threadId: string,
     settings: ThreadSettings,
     instructions: string,
-    options: { includeConversationContext?: boolean; announceProgress?: boolean } = {}
+    options: {
+      includeConversationContext?: boolean
+      announceProgress?: boolean
+      presentation?: UserMessagePresentation
+    } = {}
   ): Promise<BrainstormContent> {
     const driverId = settings.harnessId || 'opencode'
     const { driver, projectPath } = await this.resolve(projectId, driverId, threadId)
@@ -9888,7 +9929,7 @@ export class ChatEngine {
             validatedInstructions
           )
     if (options.announceProgress !== false) {
-      await this.beginBrainstormConversationTurn(projectId, threadId, source)
+      await this.beginBrainstormConversationTurn(projectId, threadId, source, options.presentation)
     }
     // Scoped-write route (P3-cp4): on opencode, supply the EXACT revision path
     // so the `cio-brainstorm` agent persists the session-report revision itself

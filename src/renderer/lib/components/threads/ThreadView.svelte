@@ -161,7 +161,6 @@
     BrainstormDocument,
     BrainstormReviewChanges,
     BrainstormSectionId,
-    BrainstormTraceUpdate,
     SpecGenerationTraceUpdate,
     BrainstormWorkflowState,
     EngineeringSpec,
@@ -262,7 +261,7 @@
       endIndex < messages.length - 1 &&
       messages.slice(endIndex + 1).every((message) => message.role === 'user')
     const turnCompleted = messages[endIndex]?.completedAt !== undefined
-    const threadBusy = threadWorking
+    const threadBusy = brainstormReportRefreshing ? delegatedWorkBusy : threadWorking
     return { startIndex, active: threadBusy || !(trailingUserOnly && turnCompleted) }
   })
   let olderMessagesAvailable = $state(false)
@@ -279,6 +278,10 @@
   )
   let loaded = $derived(threadMessages.loaded(thread.projectId, thread.id))
   let busy = $derived(agentRuns.isBusy(thread.projectId, thread.id))
+  let conversationBusy = $derived(agentRuns.isConversationBusy(thread.projectId, thread.id))
+  let brainstormReportRefreshing = $derived(
+    agentRuns.activity(thread.projectId, thread.id) === 'brainstorm_report'
+  )
   /** Whether the current run is confirmed by live session activity. Persisted
    *  `planning`/`executing` is not enough to make the composer or trace busy. */
   let liveBusy = $derived(agentRuns.isLiveBusy(thread.projectId, thread.id))
@@ -296,16 +299,19 @@
    *  must not be mistaken for the current work. Count nothing in that window
    *  so the bottom working placeholder keeps showing instead of a blank tail. */
   let latestTurnRenderableParts = $derived.by(() => {
-    if (busy && messages[messages.length - 1]?.role === 'user') return []
+    if (conversationBusy && messages[messages.length - 1]?.role === 'user') return []
     if (latestTurnInfo.startIndex === -1) return []
-    return getTurnWorkingParts(latestTurnInfo.startIndex, busy && latestTurnInfo.active)
+    return getTurnWorkingParts(latestTurnInfo.startIndex, conversationBusy && latestTurnInfo.active)
   })
   // A persisted in-flight status is only a recovery hint. Start every mount in
   // a settled idle state unless this thread is already receiving live activity;
   // `connectSession` will promote it to busy when the live session confirms it.
   // This removes the false working flash on refresh and on view remounts.
   // svelte-ignore state_referenced_locally
-  if (!agentRuns.isLiveBusy(thread.projectId, thread.id)) {
+  if (
+    !agentRuns.isLiveBusy(thread.projectId, thread.id) &&
+    agentRuns.activity(thread.projectId, thread.id) !== 'brainstorm_report'
+  ) {
     agentRuns.setIdle(thread.projectId, thread.id)
   }
   /** When the current busy run started; authoritative source for the live timer. */
@@ -1499,38 +1505,6 @@
     })
   }
 
-  function applyBrainstormTrace(update: BrainstormTraceUpdate): void {
-    if (update.type === 'started' || update.type === 'completed') {
-      threadMessages.mergePage(thread.projectId, thread.id, update.messages)
-      if (update.type === 'started') {
-        agentRuns.setBusy(thread.projectId, thread.id, true, latestUserMessageId())
-      }
-      return
-    }
-    if (update.type === 'part.updated') {
-      const message = threadMessages
-        .messages(thread.projectId, thread.id)
-        .find((candidate) => candidate.id === update.messageId)
-      if (!message) return
-      const partIndex = message.parts.findIndex((part) => part.id === update.part.id)
-      const parts =
-        partIndex === -1
-          ? [...message.parts, update.part]
-          : message.parts.map((part, index) => (index === partIndex ? update.part : part))
-      threadMessages.mergePage(thread.projectId, thread.id, [{ ...message, parts }])
-      return
-    }
-    const message = threadMessages
-      .messages(thread.projectId, thread.id)
-      .find((candidate) => candidate.id === update.messageId)
-    if (!message) return
-    const parts = message.parts.map((part) => {
-      if (part.id !== update.partId || update.field !== 'text') return part
-      if (part.type !== 'text' && part.type !== 'reasoning') return part
-      return { ...part, text: `${part.text}${update.delta}` }
-    })
-    threadMessages.mergePage(thread.projectId, thread.id, [{ ...message, parts }])
-  }
   let brainstormError = $state('')
   let planningResumeRequested = false
   let specVersions = $state<EngineeringSpec[]>([])
@@ -2617,6 +2591,7 @@
   /** Cached thread/session state may describe the previous turn on reconnect. */
   function setIdleFromRestore(): void {
     if (locallySubmittedTurnId) return
+    if (agentRuns.activity(thread.projectId, thread.id) === 'brainstorm_report') return
     liveWorkingSelection = null
     agentRuns.setIdle(thread.projectId, thread.id)
   }
@@ -2624,6 +2599,7 @@
   /** A live idle event owns the current turn only after live activity confirms it. */
   function setIdleFromSession(): boolean {
     if (locallySubmittedTurnId && !locallySubmittedTurnAcknowledged) return false
+    if (agentRuns.activity(thread.projectId, thread.id) === 'brainstorm_report') return false
     clearLocalTurn()
     agentRuns.setIdle(thread.projectId, thread.id)
     return true
@@ -3002,7 +2978,6 @@
       event.projectId === thread.projectId &&
       event.threadId === thread.id
     ) {
-      applyBrainstormTrace(event.update)
       return
     }
     if (
@@ -4621,6 +4596,7 @@
 
   const BRAINSTORM_REVIEW_ANCHOR_CONTEXT_LENGTH = 160
   const BRAINSTORM_REVIEW_FALLBACK_LIMIT = 90_000
+  const BRAINSTORM_REVIEW_PRESENTATION_LIMIT = 20_000
   const DOCUMENT_WIDE_REVIEW_PATTERN =
     /\b(?:entire|whole|overall|throughout|document-wide|full report|all sections|every section|reconsider everything|start over)\b/iu
 
@@ -4794,6 +4770,38 @@
     ].join('\n\n')
   }
 
+  function brainstormReviewPresentationBody(
+    draft: BrainstormDocument,
+    notes: string,
+    reviewChanges: BrainstormReviewChanges
+  ): string {
+    const sections: string[] = []
+    const trimmedNotes = notes.trim()
+    if (trimmedNotes) sections.push(trimmedNotes)
+
+    const annotationComments = draft.annotations
+      .filter((annotation) => annotation.status === 'open')
+      .map((annotation) => {
+        const selected = annotation.quote?.trim()
+        return selected
+          ? `- ${annotation.section}: ${annotation.body}\n  Selected text: ${selected.slice(0, 240)}`
+          : `- ${annotation.section}: ${annotation.body}`
+      })
+    if (annotationComments.length > 0) {
+      sections.push(`Review comments:\n${annotationComments.join('\n')}`)
+    }
+    if (reviewChanges.edits.length > 0) {
+      sections.push(
+        `Edited report fields: ${reviewChanges.edits.map((edit) => edit.field).join(', ')}`
+      )
+    }
+
+    const body = sections.join('\n\n')
+    if (body.length <= BRAINSTORM_REVIEW_PRESENTATION_LIMIT) return body
+    const suffix = '\n\n[Additional review details omitted from this message.]'
+    return `${body.slice(0, BRAINSTORM_REVIEW_PRESENTATION_LIMIT - suffix.length)}${suffix}`
+  }
+
   async function submitBrainstormDecision(
     action: BrainstormDecisionAction,
     draft: BrainstormDocument,
@@ -4806,6 +4814,8 @@
       const feedback =
         notes.trim() ||
         'I want to continue discussing this Brainstorm before preparing the specification.'
+      const presentationBody =
+        brainstormReviewPresentationBody(draft, notes, reviewChanges) || feedback
       await sendMessage(
         feedback,
         [],
@@ -4815,8 +4825,8 @@
         [],
         [],
         {
-          action: 'Discuss Brainstorm changes',
-          ...(notes.trim() ? { body: notes.trim() } : {})
+          action: 'Review Brainstorm',
+          body: presentationBody
         }
       )
       return
@@ -7443,7 +7453,7 @@
                   {#if isTurnEnd}
                     <!-- Final text output + footer — hide only on the active in-progress turn -->
                     {#if isAssignmentAuditorThread}
-                      {#if !busy || !isLatest}
+                      {#if !conversationBusy || !isLatest}
                         {#if turnAuditReport}
                           <AuditGeneratedCard
                             state="report_ready"
@@ -7467,7 +7477,7 @@
                       {/if}
                     {:else}
                       {@const turnFinalText = getTurnFinalText(msgIndex)}
-                      {#if !busy || !isLatest}
+                      {#if !conversationBusy || !isLatest}
                         {#if turnFinalText}
                           <div
                             id={`msg-${msg.id}`}
@@ -7617,10 +7627,16 @@
             />
           {/if}
 
-          {#if delegatedWorkBusy || (!activePlanningEntry && !specFormulating && busy && latestTurnRenderableParts.length === 0)}
+          {#if brainstormReportRefreshing || delegatedWorkBusy || (!activePlanningEntry && !specFormulating && busy && latestTurnRenderableParts.length === 0)}
             <div class="flex items-center gap-2 text-sm text-dimmed">
               <Loader2 size={14} class="animate-spin text-info" />
-              <span>{delegatedWorkBusy ? delegatedActivityLabel : activityLabel}</span>
+              <span>
+                {brainstormReportRefreshing
+                  ? 'Refreshing Brainstorm report'
+                  : delegatedWorkBusy
+                    ? delegatedActivityLabel
+                    : activityLabel}
+              </span>
               <span class="text-[11px]">…</span>
             </div>
           {/if}

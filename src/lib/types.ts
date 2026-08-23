@@ -2360,6 +2360,8 @@ export type BrainstormTraceUpdate =
   | { type: 'part.updated'; messageId: string; part: AgentPart }
   | { type: 'part.delta'; messageId: string; partId: string; field: string; delta: string }
   | { type: 'completed'; messages: AgentMessage[] }
+  | { type: 'refresh.started'; startedAt: number }
+  | { type: 'refresh.completed' }
 
 export type SpecGenerationTraceUpdate =
   | { type: 'started'; startedAt: number }
