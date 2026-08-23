@@ -4548,11 +4548,14 @@
       )
       selectedAssignmentVersion = assignment.version
       specReadyToolVisible = false
-      settings = {
-        ...settings,
-        engineeringMode: false,
-        assignmentMode: false
-      }
+      settings =
+        engineeringLifecycle?.selection === 'run_all'
+          ? legacySettingsForLifecycle('run_all')
+          : {
+              ...settings,
+              engineeringMode: false,
+              assignmentMode: false
+            }
       commitSettings(settings)
     } catch (error) {
       assignmentError =
@@ -4775,10 +4778,16 @@
           'prd'
         )
         updateSettings(legacySettingsForLifecycle('run_all'))
+        specFormulating = true
+        const generatedSpec = await invoke('agent:ensureInitialSpec', thread.projectId, thread.id)
+        await setActiveSpec(generatedSpec)
+        studioDocument = 'spec'
+        showSpecStudio = true
       }
     } catch (error) {
       prdError = error instanceof Error ? error.message : 'The PRD could not be finalized.'
     } finally {
+      specFormulating = false
       prdBusy = false
     }
   }
@@ -5129,6 +5138,26 @@
       if (isBrainstormDocument(result)) {
         applyBrainstormDocument(result)
         await reconcileReadySpec()
+        if (
+          engineeringLifecycle?.selection === 'run_all' &&
+          engineeringLifecycle.activeStage === 'prd'
+        ) {
+          const workflow = await invoke('prd:ensureWorkflow', thread.projectId, thread.id)
+          if (workflow.stage === 'choice_pending') {
+            await invoke('prd:chooseEntry', thread.projectId, thread.id, 'start_prd')
+          }
+          prd = await invoke(
+            'agent:generatePrd',
+            thread.projectId,
+            thread.id,
+            settings,
+            'Continue Run all by generating the PRD from the finalized Brainstorm and verified project context.',
+            [],
+            messageId()
+          )
+          prdVersions = prd ? [prd] : []
+          selectedPrdVersion = prd?.version ?? null
+        }
         studioDocument = engineeringLifecycle?.activeStage === 'prd' ? 'prd' : 'brainstorm'
         showSpecStudio = true
       } else {
@@ -6264,6 +6293,43 @@
         await setActiveSpec(active)
       }
       if (action === 'implement') {
+        const lifecycleSpecApproval =
+          engineeringLifecycle?.activeStage === 'spec' &&
+          (engineeringLifecycle.selection === 'spec' ||
+            engineeringLifecycle.selection === 'run_all')
+        if (lifecycleSpecApproval) {
+          if (active.status === 'draft') {
+            active = await invoke(
+              'spec:setReview',
+              active.projectId,
+              active.threadId,
+              active.id,
+              active.version
+            )
+          }
+          if (active.status === 'in_review') {
+            active = await invoke(
+              'spec:approve',
+              active.projectId,
+              active.threadId,
+              active.id,
+              active.version
+            )
+          }
+          await setActiveSpec(active)
+          engineeringLifecycle = await invoke(
+            'engineeringLifecycle:complete',
+            thread.projectId,
+            thread.id,
+            'spec'
+          )
+          if (engineeringLifecycle.selection === 'run_all') {
+            await generateAssignmentDraft()
+          } else {
+            updateSettings(legacySettingsForLifecycle('none'))
+          }
+          return
+        }
         if (settings.assignmentMode) {
           if (assignment) openAssignmentStudio()
           else await generateAssignmentDraft()

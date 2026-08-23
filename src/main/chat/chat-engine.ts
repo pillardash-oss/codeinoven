@@ -1196,6 +1196,9 @@ interface PendingInitialSpecGeneration {
   brainstormId?: string
   brainstormVersion?: number
   brainstormInputHash?: string
+  prdId?: string
+  prdVersion?: number
+  prdInputHash?: string
   /**
    * When true, the generation source is explicit (e.g. a Brainstorm document) and the
    * engine must not try to read a spec submission from the planning session. Brainstorm
@@ -13048,20 +13051,61 @@ export class ChatEngine {
           engineeringMode: true
         }
       )
-      pending = {
-        schemaVersion: 1,
-        generationVersion: CURRENT_SPEC_GENERATION_VERSION,
-        projectId,
-        threadId,
-        sessionId: thread.sessionId ?? '',
-        source,
-        settings,
-        state: 'pending',
-        attempts: 0,
-        createdAt: Date.now(),
-        updatedAt: Date.now()
+      const activePrd = this.prdEngine.getActive(projectId, threadId)
+      const finalizedPrd = activePrd?.status === 'finalized' ? activePrd : undefined
+      const activeBrainstorm = await this.brainstormEngine.getActive(projectId, threadId)
+      const finalizedBrainstorm =
+        activeBrainstorm?.status === 'finalized' ? activeBrainstorm : undefined
+      if (finalizedPrd) {
+        const prdPath = await this.artifactRef(
+          projectId,
+          threadId,
+          join('versions', `${finalizedPrd.id}-v${finalizedPrd.version}-prd.md`)
+        )
+        const brainstormPath = finalizedBrainstorm
+          ? await this.artifactRef(
+              projectId,
+              threadId,
+              join(
+                'versions',
+                `${finalizedBrainstorm.id}-v${finalizedBrainstorm.version}-brainstorm.md`
+              )
+            )
+          : undefined
+        await this.queuePendingInitialSpec({
+          projectId,
+          threadId,
+          sessionId: thread.sessionId ?? '',
+          source: [
+            'Generate the engineering specification from the finalized PRD and, when present, the finalized Brainstorm. Do not repeat product discovery questions already resolved by these documents.',
+            `PRD document: ${prdPath}`,
+            brainstormPath ? `Brainstorm document: ${brainstormPath}` : ''
+          ]
+            .filter(Boolean)
+            .join('\n\n'),
+          settings,
+          prd: finalizedPrd,
+          brainstorm: finalizedBrainstorm,
+          skipSubmittedRead: true
+        })
+        pending = await this.readPendingInitialSpec(projectId, threadId)
+        if (!pending) throw new Error('The PRD-backed specification request could not be queued')
+      } else {
+        pending = {
+          schemaVersion: 1,
+          generationVersion: CURRENT_SPEC_GENERATION_VERSION,
+          projectId,
+          threadId,
+          sessionId: thread.sessionId ?? '',
+          source,
+          settings,
+          state: 'pending',
+          attempts: 0,
+          createdAt: Date.now(),
+          updatedAt: Date.now()
+        }
+        await this.writePendingInitialSpec(pending)
       }
-      await this.writePendingInitialSpec(pending)
     } else if (pending.state === 'failed') {
       const now = Date.now()
       pending = {
@@ -13443,6 +13487,7 @@ export class ChatEngine {
     source: string
     settings: ThreadSettings
     brainstorm?: BrainstormDocument
+    prd?: PrdDocument
     skipSubmittedRead?: boolean
   }): Promise<void> {
     const existing = await this.readPendingInitialSpec(input.projectId, input.threadId)
@@ -13462,6 +13507,9 @@ export class ChatEngine {
             brainstormId: input.brainstorm?.id,
             brainstormVersion: input.brainstorm?.version,
             brainstormInputHash: input.brainstorm?.finalizedInputHash,
+            prdId: input.prd?.id,
+            prdVersion: input.prd?.version,
+            prdInputHash: input.prd?.finalizedInputHash,
             skipSubmittedRead: input.skipSubmittedRead ?? false,
             updatedAt: now
           }
@@ -13476,6 +13524,9 @@ export class ChatEngine {
             brainstormId: input.brainstorm?.id,
             brainstormVersion: input.brainstorm?.version,
             brainstormInputHash: input.brainstorm?.finalizedInputHash,
+            prdId: input.prd?.id,
+            prdVersion: input.prd?.version,
+            prdInputHash: input.prd?.finalizedInputHash,
             skipSubmittedRead: input.skipSubmittedRead ?? false,
             state: 'pending',
             attempts: 0,
@@ -13701,15 +13752,26 @@ export class ChatEngine {
           projectId,
           threadId,
           content,
-          provenance: pending.brainstormId
+          provenance: pending.prdId
             ? {
-                source: 'brainstorm',
+                source: 'prd',
                 actor: 'Sr. Engineer',
+                prdId: pending.prdId,
+                prdVersion: pending.prdVersion,
+                prdInputHash: pending.prdInputHash,
                 brainstormId: pending.brainstormId,
                 brainstormVersion: pending.brainstormVersion,
                 brainstormInputHash: pending.brainstormInputHash
               }
-            : { source: 'agent', actor: 'spec-agent' },
+            : pending.brainstormId
+              ? {
+                  source: 'brainstorm',
+                  actor: 'Sr. Engineer',
+                  brainstormId: pending.brainstormId,
+                  brainstormVersion: pending.brainstormVersion,
+                  brainstormInputHash: pending.brainstormInputHash
+                }
+              : { source: 'agent', actor: 'spec-agent' },
           context
         })
         return this.finalizeInitialSpec(spec, pending)
