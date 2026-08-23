@@ -25,6 +25,7 @@
   import StudioHistoryControls from './StudioHistoryControls.svelte'
   import StudioDocumentNavigation from './StudioDocumentNavigation.svelte'
   import StudioSidebarResizeHandle from './StudioSidebarResizeHandle.svelte'
+  import { copyText } from '$lib/copy-text'
   import {
     offsetsForQuote,
     offsetsForRange,
@@ -66,12 +67,14 @@
     error?: string
     agentMessagesOpen?: boolean
     specAvailable?: boolean
+    prdAvailable?: boolean
     assignmentAvailable?: boolean
     auditAvailable?: boolean
     history: StudioDocumentHistory<BrainstormDocument>
     onBack: () => void
     onToggleAgentMessages: () => void
     onOpenSpec?: () => void
+    onOpenPrd?: () => void
     onOpenAssignment?: () => void
     onOpenAudit?: () => void
     onSelectVersion: (version: number) => CallbackResult
@@ -93,6 +96,7 @@
     ) => CallbackResult
     onOpenInEditor?: (brainstorm: BrainstormDocument) => CallbackResult
     onRevealInAppFile?: (brainstorm: BrainstormDocument) => CallbackResult
+    onOpenPrototype?: (previewPath: string) => CallbackResult
   }
 
   let {
@@ -102,12 +106,14 @@
     error,
     agentMessagesOpen = false,
     specAvailable = false,
+    prdAvailable = false,
     assignmentAvailable = false,
     auditAvailable = false,
     history,
     onBack,
     onToggleAgentMessages,
     onOpenSpec,
+    onOpenPrd,
     onOpenAssignment,
     onOpenAudit,
     onSelectVersion,
@@ -119,7 +125,8 @@
     onQuickChatSelection,
     onSubmit,
     onOpenInEditor,
-    onRevealInAppFile
+    onRevealInAppFile,
+    onOpenPrototype
   }: Props = $props()
 
   const canonicalSections: Array<{ id: BrainstormSectionId; title: string }> = [
@@ -678,6 +685,7 @@
         <StudioDocumentNavigation
           active="brainstorm"
           brainstormAvailable
+          {prdAvailable}
           {specAvailable}
           {assignmentAvailable}
           {auditAvailable}
@@ -688,6 +696,7 @@
           sectionsLabel="brainstorm sections"
           onToggleSections={() => (sectionsOpen = !sectionsOpen)}
           onOpenBrainstorm={() => undefined}
+          {onOpenPrd}
           onOpenSpec={specAvailable ? onOpenSpec : undefined}
           {onOpenAssignment}
           {onOpenAudit}
@@ -1024,6 +1033,53 @@
             </section>
           {/if}
         {/each}
+
+        {#if draft.content.prototypes?.length}
+          <section id="brainstorm-section-prototypes" class="scroll-mt-5">
+            <h2 class="text-xl font-semibold tracking-tight">Prototypes</h2>
+            <div class="mt-4 grid gap-3 sm:grid-cols-2">
+              {#each draft.content.prototypes as prototype (prototype.id)}
+                <article class="rounded-xl border bg-surface p-4 shadow-sm">
+                  <div class="flex items-start justify-between gap-3">
+                    <div>
+                      <p class="text-xs font-semibold text-thread-spec">{prototype.id}</p>
+                      <h3 class="mt-1 text-sm font-semibold text-foreground">{prototype.title}</h3>
+                    </div>
+                    <span class="rounded-full bg-raised px-2 py-1 text-[10px] text-muted">
+                      {prototype.fidelity === 'lofi' ? 'LoFi' : 'HiFi'}
+                    </span>
+                  </div>
+                  {#if prototype.parentPrototypeId}
+                    <p class="mt-2 text-[11px] text-muted">
+                      Based on {prototype.parentPrototypeId}
+                    </p>
+                  {/if}
+                  <p class="mt-3 truncate font-mono text-[10px] text-dimmed">
+                    {prototype.previewPath}
+                  </p>
+                  <div class="mt-3 flex gap-2">
+                    {#if onOpenPrototype}
+                      <button
+                        type="button"
+                        class="rounded-lg bg-thread-spec px-2.5 py-1.5 text-xs font-medium text-foreground"
+                        onclick={() => void onOpenPrototype?.(prototype.previewPath)}
+                      >
+                        Open preview
+                      </button>
+                    {/if}
+                    <button
+                      type="button"
+                      class="rounded-lg px-2.5 py-1.5 text-xs text-muted hover:bg-elevated hover:text-foreground"
+                      onclick={() => void copyText(prototype.previewPath)}
+                    >
+                      Copy path
+                    </button>
+                  </div>
+                </article>
+              {/each}
+            </div>
+          </section>
+        {/if}
       </article>
 
       {#each annotationMarkers as marker (marker.annotation.id)}

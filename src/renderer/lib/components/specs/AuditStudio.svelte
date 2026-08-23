@@ -54,11 +54,13 @@
     busy?: boolean
     error?: string
     brainstormAvailable?: boolean
+    prdAvailable?: boolean
     assignmentAvailable?: boolean
     agentMessagesOpen?: boolean
     actionsAvailable?: boolean
     onBack: () => void
     onOpenBrainstorm?: () => void
+    onOpenPrd?: () => void
     onOpenSpec: () => void
     onOpenAssignment?: () => void
     onToggleAgentMessages: () => void
@@ -86,11 +88,13 @@
     busy = false,
     error,
     brainstormAvailable = false,
+    prdAvailable = false,
     assignmentAvailable = false,
     agentMessagesOpen = false,
     actionsAvailable = true,
     onBack,
     onOpenBrainstorm,
+    onOpenPrd,
     onOpenSpec,
     onOpenAssignment,
     onToggleAgentMessages,
@@ -698,6 +702,7 @@
         <StudioDocumentNavigation
           active="audit"
           {brainstormAvailable}
+          {prdAvailable}
           {assignmentAvailable}
           auditAvailable
           {agentMessagesOpen}
@@ -707,6 +712,7 @@
           sectionsLabel="audit sections"
           onToggleSections={() => (sectionsOpen = !sectionsOpen)}
           {onOpenBrainstorm}
+          {onOpenPrd}
           {onOpenSpec}
           {onOpenAssignment}
         />

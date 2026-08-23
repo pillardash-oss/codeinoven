@@ -82,6 +82,7 @@
     error?: string
     agentMessagesOpen?: boolean
     brainstormAvailable?: boolean
+    prdAvailable?: boolean
     assignmentAvailable?: boolean
     assignmentMode?: boolean
     auditAvailable?: boolean
@@ -99,6 +100,7 @@
     onRevealInAppFile: (spec: EngineeringSpec) => CallbackResult
     onToggleAgentMessages: () => void
     onOpenBrainstorm?: () => void
+    onOpenPrd?: () => void
     onOpenAssignment?: () => void
     onGenerateAssignment?: (spec: EngineeringSpec) => CallbackResult
     onOpenAudit?: () => void
@@ -191,6 +193,7 @@
     error,
     agentMessagesOpen = false,
     brainstormAvailable = false,
+    prdAvailable = false,
     assignmentAvailable = false,
     assignmentMode = false,
     auditAvailable = false,
@@ -208,6 +211,7 @@
     onRevealInAppFile,
     onToggleAgentMessages,
     onOpenBrainstorm,
+    onOpenPrd,
     onOpenAssignment,
     onGenerateAssignment,
     onOpenAudit,
@@ -1013,6 +1017,7 @@
         <StudioDocumentNavigation
           active="spec"
           {brainstormAvailable}
+          {prdAvailable}
           {assignmentAvailable}
           {auditAvailable}
           {agentMessagesOpen}
@@ -1022,6 +1027,7 @@
           sectionsLabel="spec sections"
           onToggleSections={() => (sectionsOpen = !sectionsOpen)}
           {onOpenBrainstorm}
+          {onOpenPrd}
           {onOpenAssignment}
           {onOpenAudit}
         />

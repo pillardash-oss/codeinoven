@@ -70,6 +70,7 @@
   import SpecReadyCard from './SpecReadyCard.svelte'
   import BrainstormEntryChoiceCard from './BrainstormEntryChoiceCard.svelte'
   import BrainstormReadyCard from './BrainstormReadyCard.svelte'
+  import EngineeringFlowCancelModal from './EngineeringFlowCancelModal.svelte'
   import AssignmentReadyCard from './AssignmentReadyCard.svelte'
   import AssignmentCoordinatorPanel from './AssignmentCoordinatorPanel.svelte'
   import AchievementCoordinatorPanel from './AchievementCoordinatorPanel.svelte'
@@ -86,6 +87,7 @@
   import type { ActionDefinition, ActionSelection, ActionSource } from '$lib/actions'
   import SpecStudio from '../specs/SpecStudio.svelte'
   import BrainstormStudio from '../specs/BrainstormStudio.svelte'
+  import PrdStudio from '../specs/PrdStudio.svelte'
   import AssignmentStudio from '../specs/AssignmentStudio.svelte'
   import AuditStudio from '../specs/AuditStudio.svelte'
   import { StudioDocumentHistoryCollection } from '../specs/studio-document-history.svelte'
@@ -113,7 +115,7 @@
     rendererRecovery,
     type StartAfterThreadReference
   } from '$lib/stores/renderer-recovery.svelte'
-  import { modelKey } from '$lib/model-keys'
+  import { modelKey, parseModelKey } from '$lib/model-keys'
   import { threadMessages } from '$lib/stores/thread-messages.svelte'
   import { queuedMessageDispatcher } from '$lib/stores/queued-message-dispatcher'
   import { claimQueuedMessage, releaseQueuedMessage } from '$lib/stores/queued-message-claim'
@@ -166,6 +168,8 @@
     BrainstormSectionId,
     SpecGenerationTraceUpdate,
     BrainstormWorkflowState,
+    PrdContent,
+    PrdDocument,
     EngineeringSpec,
     AssignmentPlan,
     AssignmentPlanContent,
@@ -185,7 +189,9 @@
     ImageDescriptorReplyAction,
     UserMessagePresentation,
     UserMessageSummary,
-    UsageEfficiencyKpis
+    UsageEfficiencyKpis,
+    EngineeringLifecycleSelection,
+    EngineeringLifecycleState
   } from '$shared/types'
   import { APP_NAME } from '$shared/brand'
   import { workflowActionPresentation } from '$shared/workflow-action-presentation'
@@ -333,6 +339,61 @@
       ? normalizeChatSettings(chatSettings.initialFor(thread, chatEffectiveSettings()))
       : threadSettings.initialFor(thread)
   )
+  let engineeringLifecycle = $state<EngineeringLifecycleState | null>(null)
+  let pendingLifecycleSelection = $state<EngineeringLifecycleSelection | null>(null)
+  let lifecycleCancelModalOpen = $state(false)
+
+  function legacySettingsForLifecycle(selection: EngineeringLifecycleSelection): ThreadSettings {
+    if (selection === 'none') {
+      return { ...settings, engineeringMode: false, assignmentMode: false, loopMode: false }
+    }
+    return {
+      ...settings,
+      engineeringMode: true,
+      assignmentMode: selection === 'assignment' || selection === 'run_all',
+      loopMode: selection === 'achievement' || selection === 'run_all'
+    }
+  }
+
+  async function applyLifecycleSelection(selection: EngineeringLifecycleSelection): Promise<void> {
+    engineeringLifecycle = await invoke(
+      'engineeringLifecycle:select',
+      thread.projectId,
+      thread.id,
+      selection
+    )
+    updateSettings(legacySettingsForLifecycle(selection))
+  }
+
+  async function selectEngineeringLifecycle(
+    selection: EngineeringLifecycleSelection
+  ): Promise<void> {
+    if (
+      engineeringLifecycle &&
+      (engineeringLifecycle.activeStage !== undefined ||
+        engineeringLifecycle.humanGate !== undefined) &&
+      selection !== engineeringLifecycle.selection
+    ) {
+      pendingLifecycleSelection = selection
+      lifecycleCancelModalOpen = true
+      return
+    }
+    await applyLifecycleSelection(selection)
+  }
+
+  async function confirmLifecycleReplacement(): Promise<void> {
+    const replacement = pendingLifecycleSelection ?? 'none'
+    engineeringLifecycle = await invoke(
+      'engineeringLifecycle:cancel',
+      thread.projectId,
+      thread.id,
+      true
+    )
+    lifecycleCancelModalOpen = false
+    pendingLifecycleSelection = null
+    if (replacement !== 'none') await applyLifecycleSelection(replacement)
+    else updateSettings(legacySettingsForLifecycle('none'))
+  }
   /** Snapshot of the selection that started the live turn. Model controls can
    *  still change the next-turn settings while the current turn is running. */
   let liveWorkingSelection = $state<WorkingModelSelection | null>(null)
@@ -1452,6 +1513,11 @@
   let brainstorm = $state<BrainstormDocument | null>(null)
   let brainstormVersions = $state<BrainstormDocument[]>([])
   let selectedBrainstormVersion = $state<number | undefined>()
+  let prd = $state<PrdDocument | null>(null)
+  let prdVersions = $state<PrdDocument[]>([])
+  let selectedPrdVersion = $state<number | undefined>()
+  let prdBusy = $state(false)
+  let prdError = $state('')
   let brainstormBusy = $state(false)
   let brainstormEntryInFlight = $state<'brainstorm' | 'spec' | null>(null)
   let brainstormDecisionInFlight = $state<BrainstormDecisionAction | null>(null)
@@ -1575,7 +1641,7 @@
   let auditState = $state<Thread['auditState']>(thread.auditState)
   let auditBusy = $state(false)
   let auditError = $state('')
-  let studioDocument = $state<'brainstorm' | 'spec' | 'assignment' | 'audit'>('spec')
+  let studioDocument = $state<'brainstorm' | 'prd' | 'spec' | 'assignment' | 'audit'>('spec')
   const brainstormStudioHistories = new StudioDocumentHistoryCollection<BrainstormDocument>()
   const specStudioHistories = new StudioDocumentHistoryCollection<EngineeringSpec>()
   const assignmentStudioHistories = new StudioDocumentHistoryCollection<AssignmentPlanContent>()
@@ -1605,6 +1671,9 @@
   let studioBrainstorm = $derived(
     brainstormVersions.find((candidate) => candidate.version === selectedBrainstormVersion) ??
       brainstorm
+  )
+  let studioPrd = $derived(
+    prdVersions.find((candidate) => candidate.version === selectedPrdVersion) ?? prd
   )
   let auditSettings = $state<ThreadSettings>(auditSettingsForThread())
   let isAssignmentAuditorThread = $derived(
@@ -1846,6 +1915,17 @@
       return {
         ...settings,
         ...settings.loopAuditor,
+        engineeringMode: false,
+        loopMode: false
+      }
+    }
+    const inheritedAuditor = rendererRecovery.auditModelKey
+      ? parseModelKey(rendererRecovery.auditModelKey)
+      : null
+    if (inheritedAuditor) {
+      return {
+        ...settings,
+        ...inheritedAuditor,
         engineeringMode: false,
         loopMode: false
       }
@@ -2166,7 +2246,11 @@
   // a final response and the generation path has reported an error.
   $effect(() => {
     const hasStudioDocument =
-      brainstorm !== null || spec !== null || assignment !== null || auditReport !== null
+      brainstorm !== null ||
+      prd !== null ||
+      spec !== null ||
+      assignment !== null ||
+      auditReport !== null
     workspaceState.specStudioAvailable = !chatMode && (hasStudioDocument || specStudioRetryable)
     workspaceState.specStudioOpen = showSpecStudio
     workspaceState.specStudioBusy = specBusy
@@ -2195,6 +2279,8 @@
         openAssignmentStudio()
       } else if (spec) {
         void openSpecStudio()
+      } else if (prd) {
+        openPrdStudio()
       } else if (brainstorm) {
         openBrainstormStudio()
       } else if (specStudioRetryable) {
@@ -2495,6 +2581,15 @@
     const mountedThreadId = thread.id
     workspaceState.jumpToMessage = jumpToMessage
     void refreshEfficiencyKpis()
+    if (!chatMode) {
+      void invoke('engineeringLifecycle:get', mountedProjectId, mountedThreadId)
+        .then((state) => {
+          if (alive) engineeringLifecycle = state
+        })
+        .catch((error) => {
+          reportError(error, 'Engineering lifecycle could not be loaded')
+        })
+    }
     scheduleResponseHighlightRestore(responseReferences)
     // This view owns dispatch of the thread's queued message while mounted;
     // the background dispatcher must defer to it to avoid a double send.
@@ -3527,6 +3622,31 @@
     // Let the mount-time lookup finish first so it cannot persist an older
     // harness session after this send-specific lookup.
     const { projectId, id } = thread
+    if (
+      engineeringLifecycle?.selection !== undefined &&
+      engineeringLifecycle.selection !== 'none' &&
+      engineeringLifecycle.activeStage === undefined &&
+      engineeringLifecycle.humanGate === undefined
+    ) {
+      const started = await invoke('engineeringLifecycle:start', projectId, id)
+      engineeringLifecycle = started.state
+      if (started.state.activeStage === 'brainstorm' || started.state.activeStage === 'spec') {
+        const workflow = await invoke('brainstorm:ensureWorkflow', projectId, id)
+        if (!workflow.entryChoice) {
+          await invoke(
+            'brainstorm:chooseEntry',
+            projectId,
+            id,
+            started.state.activeStage === 'brainstorm' ? 'brainstorm' : 'spec'
+          )
+        }
+      } else if (started.state.activeStage === 'prd') {
+        const workflow = await invoke('prd:ensureWorkflow', projectId, id)
+        if (workflow.stage === 'choice_pending') {
+          await invoke('prd:chooseEntry', projectId, id, 'start_prd')
+        }
+      }
+    }
     await sessionReady
     const bindingVersion = ++sessionBindingVersion
     const readySessionId = await invoke('agent:ensureSession', projectId, id, settings.harnessId)
@@ -4074,15 +4194,23 @@
   async function reconcileReadySpec(): Promise<void> {
     const { projectId, id } = thread
     const workflowThreadId = isAssignmentAuditorThread ? (thread.coordinatorThreadId ?? id) : id
-    const [active, workflowThread, activeAssignment, projectThreads, workflow, activeBrainstorm] =
-      await Promise.all([
-        invoke('spec:getActive', projectId, workflowThreadId),
-        invoke('thread:get', projectId, workflowThreadId),
-        invoke('assignment:getActive', projectId, workflowThreadId),
-        invoke('thread:list', projectId),
-        invoke('brainstorm:getWorkflow', projectId, workflowThreadId),
-        invoke('brainstorm:getActive', projectId, workflowThreadId)
-      ])
+    const [
+      active,
+      workflowThread,
+      activeAssignment,
+      projectThreads,
+      workflow,
+      activeBrainstorm,
+      activePrd
+    ] = await Promise.all([
+      invoke('spec:getActive', projectId, workflowThreadId),
+      invoke('thread:get', projectId, workflowThreadId),
+      invoke('assignment:getActive', projectId, workflowThreadId),
+      invoke('thread:list', projectId),
+      invoke('brainstorm:getWorkflow', projectId, workflowThreadId),
+      invoke('brainstorm:getActive', projectId, workflowThreadId),
+      invoke('prd:getActive', projectId, workflowThreadId)
+    ])
     if (!alive) return
     const staleSpecGeneration =
       active !== null &&
@@ -4096,6 +4224,13 @@
     }
     brainstormWorkflow = workflow
     brainstorm = activeBrainstorm
+    prd = activePrd
+    prdVersions = activePrd
+      ? await invoke('prd:listVersions', projectId, workflowThreadId, activePrd.id)
+      : []
+    if (activePrd && !prdVersions.some((candidate) => candidate.version === selectedPrdVersion)) {
+      selectedPrdVersion = activePrd.version
+    }
     brainstormGenerationFailed =
       workflowThread?.status === 'failed' &&
       workflow?.entryChoice !== undefined &&
@@ -4520,6 +4655,113 @@
 
   function selectBrainstormVersion(version: number): void {
     selectedBrainstormVersion = version
+  }
+
+  function openPrdStudio(): void {
+    if (!prd) return
+    selectedPrdVersion = prd.version
+    workspaceState.specAgentSidebarOpen = false
+    studioDocument = 'prd'
+    showSpecStudio = true
+  }
+
+  function selectPrdVersion(version: number): void {
+    selectedPrdVersion = version
+  }
+
+  async function savePrd(content: PrdContent): Promise<void> {
+    if (!studioPrd || studioPrd.status !== 'draft') return
+    prdBusy = true
+    prdError = ''
+    try {
+      const updated = await invoke(
+        'prd:saveDraft',
+        studioPrd.projectId,
+        studioPrd.threadId,
+        studioPrd.id,
+        studioPrd.version,
+        content
+      )
+      prd = updated
+      prdVersions = prdVersions.map((candidate) =>
+        candidate.version === updated.version ? updated : candidate
+      )
+    } catch (error) {
+      prdError = error instanceof Error ? error.message : 'The PRD could not be saved.'
+    } finally {
+      prdBusy = false
+    }
+  }
+
+  async function finalizePrd(): Promise<void> {
+    if (!studioPrd || studioPrd.status !== 'draft') return
+    prdBusy = true
+    prdError = ''
+    try {
+      const finalized = await invoke(
+        'prd:finalize',
+        studioPrd.projectId,
+        studioPrd.threadId,
+        studioPrd.id,
+        studioPrd.version
+      )
+      prd = finalized
+      prdVersions = prdVersions.map((candidate) =>
+        candidate.version === finalized.version ? finalized : candidate
+      )
+      if (engineeringLifecycle?.selection === 'prd') {
+        engineeringLifecycle = await invoke(
+          'engineeringLifecycle:complete',
+          thread.projectId,
+          thread.id,
+          'prd'
+        )
+        updateSettings(legacySettingsForLifecycle('none'))
+      } else if (engineeringLifecycle?.selection === 'run_all') {
+        engineeringLifecycle = await invoke(
+          'engineeringLifecycle:complete',
+          thread.projectId,
+          thread.id,
+          'prd'
+        )
+        updateSettings(legacySettingsForLifecycle('run_all'))
+      }
+    } catch (error) {
+      prdError = error instanceof Error ? error.message : 'The PRD could not be finalized.'
+    } finally {
+      prdBusy = false
+    }
+  }
+
+  async function openPrdInEditor(): Promise<void> {
+    if (!studioPrd) return
+    await invoke(
+      'prd:openInEditor',
+      studioPrd.projectId,
+      studioPrd.threadId,
+      studioPrd.id,
+      studioPrd.version
+    )
+  }
+
+  async function revealPrdInFiles(): Promise<void> {
+    if (!studioPrd) return
+    await invoke(
+      'prd:revealInFiles',
+      studioPrd.projectId,
+      studioPrd.threadId,
+      studioPrd.id,
+      studioPrd.version
+    )
+  }
+
+  async function openPrototypePreview(previewPath: string): Promise<void> {
+    const origin = await invoke('prototypePreview:getOrigin')
+    if (!origin) {
+      errorMessage = 'Prototype preview origin is not configured for this deployment.'
+      return
+    }
+    await invoke('shell:openExternal', new URL(previewPath, `${origin}/`).toString())
   }
 
   async function saveBrainstorm(edited: BrainstormDocument): Promise<BrainstormDocument | null> {
@@ -5258,7 +5500,7 @@
     errorMessage = ''
     auditState = 'running'
     auditSettings = selected
-    rendererRecovery.addRecentModel(
+    rendererRecovery.setAuditModel(
       modelKey(selected.harnessId, selected.providerId, selected.modelId)
     )
     try {
@@ -6923,12 +7165,14 @@
           error={brainstormError}
           agentMessagesOpen={workspaceState.specAgentSidebarOpen}
           specAvailable={spec !== null}
+          prdAvailable={prd !== null}
           assignmentAvailable={assignment !== null}
           auditAvailable={auditReport !== null}
           onBack={closeSpecStudio}
           onToggleAgentMessages={() =>
             (workspaceState.specAgentSidebarOpen = !workspaceState.specAgentSidebarOpen)}
           onOpenSpec={() => (studioDocument = 'spec')}
+          onOpenPrd={openPrdStudio}
           onOpenAssignment={openAssignmentStudio}
           onOpenAudit={openAuditStudio}
           onSelectVersion={selectBrainstormVersion}
@@ -6943,6 +7187,33 @@
           onSubmit={submitBrainstormDecision}
           onOpenInEditor={openBrainstormInEditor}
           onRevealInAppFile={revealBrainstormInAppFile}
+          onOpenPrototype={openPrototypePreview}
+        />
+      {/key}
+    {:else if studioDocument === 'prd' && studioPrd}
+      {#key `${studioPrd.id}:${studioPrd.version}:${studioPrd.updatedAt}`}
+        <PrdStudio
+          prd={studioPrd}
+          versions={prdVersions}
+          busy={prdBusy || busy}
+          error={prdError}
+          brainstormAvailable={brainstorm !== null}
+          specAvailable={spec !== null}
+          assignmentAvailable={assignment !== null}
+          auditAvailable={auditReport !== null}
+          agentMessagesOpen={workspaceState.specAgentSidebarOpen}
+          onBack={closeSpecStudio}
+          onToggleAgentMessages={() =>
+            (workspaceState.specAgentSidebarOpen = !workspaceState.specAgentSidebarOpen)}
+          onOpenBrainstorm={openBrainstormStudio}
+          onOpenSpec={() => (studioDocument = 'spec')}
+          onOpenAssignment={openAssignmentStudio}
+          onOpenAudit={openAuditStudio}
+          onSelectVersion={selectPrdVersion}
+          onSave={savePrd}
+          onFinalize={finalizePrd}
+          onOpenInEditor={openPrdInEditor}
+          onRevealInFiles={revealPrdInFiles}
         />
       {/key}
     {:else if studioDocument === 'audit' && auditReport}
@@ -6955,10 +7226,12 @@
           error={auditError}
           assignmentAvailable={assignment !== null}
           brainstormAvailable={brainstorm !== null}
+          prdAvailable={prd !== null}
           actionsAvailable={auditReportActionsAvailable}
           agentMessagesOpen={workspaceState.specAgentSidebarOpen}
           onBack={closeSpecStudio}
           onOpenBrainstorm={openBrainstormStudio}
+          onOpenPrd={openPrdStudio}
           onOpenSpec={() => (studioDocument = 'spec')}
           onOpenAssignment={openAssignmentStudio}
           onToggleAgentMessages={() =>
@@ -7000,11 +7273,13 @@
           agentMessagesOpen={workspaceState.specAgentSidebarOpen}
           auditAvailable={auditReport !== null}
           brainstormAvailable={brainstorm !== null}
+          prdAvailable={prd !== null}
           auditActive={studioAssignment.version === assignment.version &&
             assignmentAuditState === 'offered'}
           finalComplete={assignmentFinalComplete}
           onBack={closeSpecStudio}
           onOpenBrainstorm={openBrainstormStudio}
+          onOpenPrd={openPrdStudio}
           onOpenSpec={() => (studioDocument = 'spec')}
           onToggleAgentMessages={() =>
             (workspaceState.specAgentSidebarOpen = !workspaceState.specAgentSidebarOpen)}
@@ -7053,8 +7328,10 @@
           implementationAuditReady={plainEngineeringAuditReady}
           implementationAuditRunning={plainEngineeringAuditRunning}
           brainstormAvailable={brainstorm !== null}
+          prdAvailable={prd !== null}
           onBack={closeSpecStudio}
           onOpenBrainstorm={openBrainstormStudio}
+          onOpenPrd={openPrdStudio}
           onOpenInEditor={openSpecInEditor}
           onRevealInAppFile={revealSpecInAppFile}
           onToggleAgentMessages={() =>
@@ -8211,6 +8488,8 @@
                   onStop={abortRun}
                   autofocus
                   showEngineeringMode={!chatMode}
+                  {engineeringLifecycle}
+                  onEngineeringLifecycleSelect={selectEngineeringLifecycle}
                   showChatModes={chatMode}
                   {settings}
                   onSettingsChange={updateSettings}
@@ -8522,6 +8801,15 @@
     </button>
   {/snippet}
 </Modal>
+
+<EngineeringFlowCancelModal
+  open={lifecycleCancelModalOpen}
+  oncancel={() => {
+    lifecycleCancelModalOpen = false
+    pendingLifecycleSelection = null
+  }}
+  onconfirm={confirmLifecycleReplacement}
+/>
 
 <style>
   .thread-view {

@@ -57,12 +57,14 @@
     focusTaskId?: string
     agentMessagesOpen?: boolean
     brainstormAvailable?: boolean
+    prdAvailable?: boolean
     auditAvailable?: boolean
     auditActive?: boolean
     finalComplete?: boolean
     history: StudioDocumentHistory<AssignmentPlanContent>
     onBack: () => void
     onOpenBrainstorm?: () => void
+    onOpenPrd?: () => void
     onOpenSpec: () => void
     onToggleAgentMessages: () => void
     onOpenAudit?: () => void
@@ -114,12 +116,14 @@
     focusTaskId,
     agentMessagesOpen = false,
     brainstormAvailable = false,
+    prdAvailable = false,
     auditAvailable = false,
     auditActive = false,
     finalComplete = false,
     history,
     onBack,
     onOpenBrainstorm,
+    onOpenPrd,
     onOpenSpec,
     onToggleAgentMessages,
     onOpenAudit,
@@ -557,6 +561,7 @@
         <StudioDocumentNavigation
           active="assignment"
           {brainstormAvailable}
+          {prdAvailable}
           assignmentAvailable
           {auditAvailable}
           {agentMessagesOpen}
@@ -566,6 +571,7 @@
           sectionsLabel="assignment sections"
           onToggleSections={() => (sectionsOpen = !sectionsOpen)}
           {onOpenBrainstorm}
+          {onOpenPrd}
           {onOpenSpec}
           {onOpenAudit}
         />
