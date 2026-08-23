@@ -100,6 +100,11 @@ async function main(): Promise<void> {
         'Run `bun run build:production` before checking bundle budgets.'
     )
   }
+  const rendererFiles = await import('node:fs/promises').then(({ readdir }) =>
+    readdir(staticRoot, { recursive: true })
+  )
+  const bundledModel = rendererFiles.find((entry) => /\.(?:onnx|safetensors|gguf)$/iu.test(entry))
+  if (bundledModel) fail(`Downloaded speech model entered the renderer bundle: ${bundledModel}`)
 
   const desktop = await computeDesktopBudget()
   const desktopChunkRows = desktop.chunks

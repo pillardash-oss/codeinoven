@@ -1,5 +1,8 @@
 import { createRequire } from 'node:module'
 import { join } from 'node:path'
+import { spawn } from 'node:child_process'
+import { rm } from 'node:fs/promises'
+import ffmpegPath from 'ffmpeg-static'
 import { parentPort } from 'node:worker_threads'
 import type { SpeechWorkerRequest, SpeechWorkerResponse } from './speech-worker-protocol'
 
@@ -76,6 +79,40 @@ async function transcribe(
   request: Extract<SpeechWorkerRequest, { kind: 'transcribe' }>
 ): Promise<string> {
   const runtime = sherpa()
+  const decoderPath = ffmpegPath
+  if (!decoderPath) throw new Error('The packaged audio decoder is unavailable.')
+  const wavePath = `${request.audioPath}.decoded.wav`
+  await new Promise<void>((resolve, reject) => {
+    const child = spawn(
+      decoderPath,
+      [
+        '-nostdin',
+        '-hide_banner',
+        '-loglevel',
+        'error',
+        '-y',
+        '-i',
+        request.audioPath,
+        '-ac',
+        '1',
+        '-ar',
+        '16000',
+        wavePath
+      ],
+      { stdio: ['ignore', 'ignore', 'pipe'] }
+    )
+    let failure = ''
+    child.stderr.setEncoding('utf8')
+    child.stderr.on('data', (chunk: string) => {
+      if (failure.length < 2_000) failure += chunk
+    })
+    child.once('error', reject)
+    child.once('exit', (code: number | null) => {
+      if (code === 0) resolve()
+      else
+        reject(new Error(failure.trim() || `Audio decoding exited with code ${code ?? 'unknown'}.`))
+    })
+  })
   const recognizer = await runtime.OfflineRecognizer.createAsync({
     featConfig: { sampleRate: 16000, featureDim: 80 },
     modelConfig: {
@@ -92,10 +129,14 @@ async function transcribe(
       provider: 'cpu'
     }
   })
-  const stream = recognizer.createStream()
-  stream.acceptWaveform(runtime.readWave(request.audioPath))
-  const result = await recognizer.decodeAsync(stream)
-  return result.text?.trim() ?? ''
+  try {
+    const stream = recognizer.createStream()
+    stream.acceptWaveform(runtime.readWave(wavePath))
+    const result = await recognizer.decodeAsync(stream)
+    return result.text?.trim() ?? ''
+  } finally {
+    await rm(wavePath, { force: true })
+  }
 }
 
 function cleanup(request: Extract<SpeechWorkerRequest, { kind: 'cleanup' }>): string {

@@ -15,7 +15,8 @@
     "email": "hey@pillardash.com"
   },
   "trustedDependencies": [
-    "electron"
+    "electron",
+    "ffmpeg-static"
   ],
   "overrides": {
     "nanoid": "3.3.18"
@@ -58,6 +59,7 @@
     "better-sqlite3": "^13.0.3",
     "chokidar": "^5.0.0",
     "electron-updater": "^6.8.9",
+    "ffmpeg-static": "5.2.0",
     "mammoth": "1.12.1",
     "node-pty": "1.1.0",
     "sherpa-onnx-node": "1.13.6",

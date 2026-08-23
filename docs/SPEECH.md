@@ -19,6 +19,8 @@ A user may override the recommendation with another installed, compatible runtim
 
 Runtime executables and native libraries ship inside the application. The packaged feature never resolves a speech worker from `PATH` and never requires Bun, Python, or an interactive shell. Model weights are separate downloads and never belong in the application bundle.
 
+Chromium's MediaRecorder output is decoded to mono 16 kHz WAV by the pinned packaged `ffmpeg-static` executable inside the sherpa worker thread before ASR. Decoding never runs on the renderer or Electron main event loop, and its temporary WAV is removed after inference.
+
 ## Model catalog and admission
 
 `resources/speech/model-catalog.json` groups artifacts by logical family while keeping runtime-specific facts separate. A shared family name does not promise equal latency, memory use, accuracy, language coverage, voices, or licensing.
@@ -95,3 +97,9 @@ Every destructive action uses the shared confirmation modal. The modal focuses i
 - **Cleanup failed:** The raw transcript is retained and inserted. Details remain on the original history attempt.
 - **Speech does not start offline:** Confirm that a compatible qualified model and packaged runtime are installed. No cloud fallback is attempted.
 - **Imported model moved:** Imported folders remain user-owned references. Restore the folder or choose it again; removing the registration does not delete external files.
+
+## Release qualification status
+
+The shipped catalog intentionally keeps every initial artifact at `candidate` until real benchmark hardware, checksum, compatibility, and license review promote it. Candidate models cannot be downloaded or selected. The Apple Silicon MLX default additionally requires a signed packaged worker resource. A release must not claim local speech readiness until those catalog records are qualified, the MLX worker is installed at the packaged resource path, and the packaged verification commands pass. These gates fail closed and never enable sherpa or a remote provider silently.
+
+The Sound page persists the default-off remote-cleanup consent and model-source choice, but provider invocation remains a release gate: no remote request is made until the dedicated minimal-payload auxiliary model adapter is connected and verified. Local cleanup failure continues to return raw text without networking.

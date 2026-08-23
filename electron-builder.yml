@@ -12,6 +12,8 @@ afterPack: scripts/native-splash/after-pack.js
 extraResources:
   - from: resources/speech/model-catalog.json
     to: speech/model-catalog.json
+asarUnpack:
+  - node_modules/ffmpeg-static/ffmpeg*
 files:
   - out/**/*
   - '!out/**/.DS_Store'
