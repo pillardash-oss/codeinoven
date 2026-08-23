@@ -2624,6 +2624,22 @@ export interface BrainstormContent {
   title: string
   summary: string
   sections: BrainstormSection[]
+  /** Present only when prototype work was explicitly requested. */
+  prototypes?: BrainstormPrototype[]
+}
+
+export type BrainstormPrototypeFidelity = 'lofi' | 'hifi'
+
+export interface BrainstormPrototype {
+  id: string
+  fidelity: BrainstormPrototypeFidelity
+  title: string
+  parentPrototypeId?: string
+  entryFile: string
+  artifactPath: string
+  previewPath: string
+  contentHash: string
+  createdAt: number
 }
 
 export type BrainstormReviewField = 'title' | 'summary' | BrainstormSectionId

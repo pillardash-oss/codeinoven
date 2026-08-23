@@ -378,6 +378,8 @@ let remoteOwnershipReconcilePending = false
 let modelPricingService: ModelPricingService | null = null
 let speechService: SpeechService | null = null
 let unregisterSpeechIpc: (() => void) | null = null
+let prototypePreviewService: import('./prototypes/prototype-preview-service').PrototypePreviewService | null =
+  null
 /**
  * Resolved lazily so the `appfile://` preview protocol can be installed before
  * the main window loads (its renderer requests previews as soon as it hydrates).
@@ -520,7 +522,8 @@ async function bootPostPaintServices(): Promise<void> {
     { PowerWakeService },
     { RetrySchedulerService },
     { SpeechService },
-    { registerSpeechIpc }
+    { registerSpeechIpc },
+    { PrototypePreviewService }
   ] = await Promise.all([
     import('./ipc/ipc-handlers'),
     import('../lib/engines/project-manager'),
@@ -535,7 +538,8 @@ async function bootPostPaintServices(): Promise<void> {
     import('./system/power-wake-service'),
     import('./system/retry-scheduler-service'),
     import('./speech/speech-service'),
-    import('./ipc/speech-ipc')
+    import('./ipc/speech-ipc'),
+    import('./prototypes/prototype-preview-service')
   ])
 
   const projectManager = new ProjectManager(database)
@@ -581,6 +585,8 @@ async function bootPostPaintServices(): Promise<void> {
   })
   await speechService.initialize()
   unregisterSpeechIpc = registerSpeechIpc(speechService, () => mainWindow?.webContents ?? null)
+  prototypePreviewService = new PrototypePreviewService()
+  await prototypePreviewService.start()
   if (mainWindow && !mainWindow.isDestroyed()) {
     const service = new BrowserService(mainWindow)
     browserService = service
@@ -1354,6 +1360,13 @@ async function runShutdownPipeline(): Promise<void> {
     await computerUsePipService?.dispose()
   } catch (error) {
     Logger.error('Computer-use PiP service cleanup failed during shutdown:', error)
+  }
+
+  try {
+    await prototypePreviewService?.dispose()
+    prototypePreviewService = null
+  } catch (error) {
+    Logger.error('Prototype preview service cleanup failed during shutdown:', error)
   }
 
   try {

@@ -1,4 +1,9 @@
-import type { BrainstormContent, BrainstormSection, BrainstormSectionId } from '../types'
+import type {
+  BrainstormContent,
+  BrainstormPrototype,
+  BrainstormSection,
+  BrainstormSectionId
+} from '../types'
 
 export const BRAINSTORM_SECTION_DEFINITIONS = [
   { id: 'context', title: 'What We Learned', legacyTitle: 'Context', required: true },
@@ -63,6 +68,35 @@ export const BRAINSTORM_DOCUMENT_JSON_SCHEMA = {
           markdown: { type: 'string' }
         }
       }
+    },
+    prototypes: {
+      type: 'array',
+      minItems: 1,
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: [
+          'id',
+          'fidelity',
+          'title',
+          'entryFile',
+          'artifactPath',
+          'previewPath',
+          'contentHash',
+          'createdAt'
+        ],
+        properties: {
+          id: { type: 'string', pattern: '^[LH][1-9][0-9]*$' },
+          fidelity: { type: 'string', enum: ['lofi', 'hifi'] },
+          title: { type: 'string', minLength: 1 },
+          parentPrototypeId: { type: 'string', pattern: '^L[1-9][0-9]*$' },
+          entryFile: { type: 'string', minLength: 1 },
+          artifactPath: { type: 'string', minLength: 1 },
+          previewPath: { type: 'string', minLength: 1 },
+          contentHash: { type: 'string', pattern: '^[a-f0-9]{64}$' },
+          createdAt: { type: 'integer', minimum: 0 }
+        }
+      }
     }
   }
 } as const
@@ -121,14 +155,65 @@ export function parseGeneratedBrainstormContent(value: unknown): BrainstormConte
     }
   }
 
+  const prototypes = parsePrototypes(value.prototypes)
   return {
     title,
     summary,
     sections: BRAINSTORM_SECTION_DEFINITIONS.flatMap((definition) => {
       const section = sections.get(definition.id)
       return section ? [section] : []
-    })
+    }),
+    ...(prototypes ? { prototypes } : {})
   }
+}
+
+function parsePrototypes(value: unknown): BrainstormPrototype[] | undefined {
+  if (value === undefined) return undefined
+  if (!Array.isArray(value) || value.length === 0) {
+    throw new TypeError('Brainstorm prototypes must be a non-empty array when present')
+  }
+  const seen = new Set<string>()
+  return value.map((raw, index) => {
+    if (!isRecord(raw)) throw new TypeError(`Brainstorm prototype ${index} must be an object`)
+    const id = requireString(raw.id, `Brainstorm prototype ${index} ID`)
+    if (!/^[LH][1-9][0-9]*$/u.test(id) || seen.has(id)) {
+      throw new TypeError(`Invalid or duplicate Brainstorm prototype ID: ${id}`)
+    }
+    seen.add(id)
+    const fidelity = raw.fidelity
+    if (fidelity !== 'lofi' && fidelity !== 'hifi') {
+      throw new TypeError(`Brainstorm prototype ${id} has invalid fidelity`)
+    }
+    if ((fidelity === 'lofi') !== id.startsWith('L')) {
+      throw new TypeError(`Brainstorm prototype ${id} fidelity does not match its ID`)
+    }
+    const parentPrototypeId =
+      raw.parentPrototypeId === undefined
+        ? undefined
+        : requireString(raw.parentPrototypeId, `Brainstorm prototype ${id} parent`)
+    if (parentPrototypeId && !/^L[1-9][0-9]*$/u.test(parentPrototypeId)) {
+      throw new TypeError(`Brainstorm prototype ${id} parent must be a LoFi identifier`)
+    }
+    const createdAt = raw.createdAt
+    if (!Number.isSafeInteger(createdAt) || Number(createdAt) < 0) {
+      throw new TypeError(`Brainstorm prototype ${id} createdAt must be a timestamp`)
+    }
+    const contentHash = requireString(raw.contentHash, `Brainstorm prototype ${id} content hash`)
+    if (!/^[a-f0-9]{64}$/u.test(contentHash)) {
+      throw new TypeError(`Brainstorm prototype ${id} content hash must be SHA-256`)
+    }
+    return {
+      id,
+      fidelity,
+      title: requireString(raw.title, `Brainstorm prototype ${id} title`),
+      ...(parentPrototypeId ? { parentPrototypeId } : {}),
+      entryFile: requireString(raw.entryFile, `Brainstorm prototype ${id} entry file`),
+      artifactPath: requireString(raw.artifactPath, `Brainstorm prototype ${id} artifact path`),
+      previewPath: requireString(raw.previewPath, `Brainstorm prototype ${id} preview path`),
+      contentHash,
+      createdAt: Number(createdAt)
+    }
+  })
 }
 
 const FALLBACK_SECTION_KEYS: Record<BrainstormSectionId, string[]> = {
