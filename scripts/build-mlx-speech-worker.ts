@@ -19,6 +19,19 @@ const metalWheel = {
 
 if (process.platform !== 'darwin' || process.arch !== 'arm64') process.exit(0)
 
+const sourcePaths = [
+  join(packageDirectory, 'Package.swift'),
+  join(packageDirectory, 'Package.resolved'),
+  join(packageDirectory, 'Sources/MLXWorker/main.swift')
+]
+const outputStats = await Promise.all(
+  [outputPath, metallibPath].map((path) => stat(path).catch(() => null))
+)
+const sourceStats = await Promise.all(sourcePaths.map((path) => stat(path)))
+const newestSource = Math.max(...sourceStats.map((entry) => entry.mtimeMs))
+if (outputStats[0]?.isFile() && outputStats[0].mtimeMs >= newestSource && outputStats[1]?.isFile())
+  process.exit(0)
+
 await mkdir(buildDirectory, { recursive: true })
 await mkdir(outputDirectory, { recursive: true })
 

@@ -23,7 +23,7 @@
   },
   "scripts": {
     "postinstall": "bun scripts/patch-binary-data.ts && electron-builder install-app-deps",
-    "predev": "bun scripts/brand-electron.ts",
+    "predev": "bun run speech:build-mlx && bun scripts/brand-electron.ts",
     "dev": "electron-vite dev",
     "build": "electron-vite build",
     "build:production": "electron-vite build --mode production",

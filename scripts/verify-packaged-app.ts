@@ -85,7 +85,7 @@ const speechDecoder = findFileUnder(absArtifactDir, (entry) =>
   process.platform === 'win32' ? entry === 'ffmpeg.exe' : entry === 'ffmpeg'
 )
 const bundledModelWeight = findFileUnder(absArtifactDir, (entry) =>
-  /\.(?:onnx|safetensors|gguf)$/iu.test(entry)
+  /\.(?:onnx|safetensors|gguf|npz)$/iu.test(entry)
 )
 mustHave('speech model catalog', Boolean(speechCatalog))
 mustHave('packaged speech audio decoder', Boolean(speechDecoder))
@@ -97,6 +97,14 @@ if (bundledModelWeight) {
 }
 
 if (target === 'mac') {
+  mustHave(
+    'Apple Silicon MLX worker',
+    Boolean(findFileUnder(absArtifactDir, (entry) => entry === 'mlx-worker'))
+  )
+  mustHave(
+    'Apple Silicon MLX Metal library',
+    Boolean(findFileUnder(absArtifactDir, (entry) => entry === 'mlx.metallib'))
+  )
   mustHave('mac disk image', hasExtension('.dmg'))
   mustHave('mac zip artifact', hasExtension('.zip'))
 } else if (target === 'win') {
