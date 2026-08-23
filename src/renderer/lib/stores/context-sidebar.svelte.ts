@@ -4,7 +4,6 @@ import { APP_SLUG } from '$shared/brand'
 import type { AgentMessage, AgentSubagentActivity, ThreadSettings } from '$shared/types'
 
 const TEMPORARY_CHAT_INACTIVITY_MS = 3 * 60 * 60 * 1000
-const AUDIT_SESSION_INACTIVITY_MS = 24 * 60 * 60 * 1000
 const CONTEXT_SIDEBAR_MIN_WIDTH = 340
 const CONTEXT_SIDEBAR_MAX_WIDTH = 1600
 const TERMINAL_DOCK_MIN_HEIGHT = 180
@@ -152,7 +151,7 @@ export interface MemoryContextTab {
 }
 
 /**
- * The Assignment / Achievement coordinator, docked into the sidebar. The tab
+ * The Assignment / Achievement / Audit coordinator, docked into the sidebar. The tab
  * carries no data of its own: the panel is a snippet published by the thread
  * that owns the coordination, registered on `coordinatorDockState`.
  */
@@ -164,7 +163,7 @@ export interface CoordinatorContextTab {
   threadId: string
 }
 
-export type TemporaryChatMode = 'audit' | 'elaborate' | 'quick'
+export type TemporaryChatMode = 'elaborate' | 'quick'
 
 export interface TemporaryChatContextTab {
   id: string
@@ -1048,7 +1047,7 @@ class ContextSidebarState {
 
   /**
    * Dock the coordinator for a thread. The title tracks the coordination kind
-   * (Assignment vs Achievement), so an existing tab is re-titled rather than
+   * (Assignment vs Achievement vs Audit), so an existing tab is re-titled rather than
    * duplicated when a thread switches modes.
    */
   openCoordinator(projectId: string, threadId: string, title: string): void {
@@ -1168,55 +1167,9 @@ class ContextSidebarState {
     return tab
   }
 
-  openAuditSession(
-    projectId: string,
-    threadId: string,
-    settings: ThreadSettings
-  ): TemporaryChatContextTab {
-    const context = this.ensureContext(projectId, threadId)
-    const existing = context.tabs.find(
-      (tab): tab is TemporaryChatContextTab => tab.kind === 'temporary-chat' && tab.mode === 'audit'
-    )
-    if (existing) {
-      existing.settings = { ...settings, engineeringMode: false, permissionLevel: 'auto_review' }
-      this.focusInContext(context, existing.id)
-      this.touchTemporaryChat(existing)
-      return existing
-    }
-
-    const temporaryChatId = crypto.randomUUID()
-    const tab: TemporaryChatContextTab = {
-      id: `temporary-chat:${temporaryChatId}`,
-      kind: 'temporary-chat',
-      title: 'Audit',
-      projectId,
-      threadId,
-      temporaryChatId,
-      sessionId: null,
-      mode: 'audit',
-      selections: [],
-      initialContext: '',
-      settings: { ...settings, engineeringMode: false, permissionLevel: 'auto_review' },
-      messages: [],
-      busy: false,
-      error: '',
-      draft: '',
-      selectionAttached: false,
-      selectionMessageId: null,
-      autoPromptSent: true,
-      sessionStarted: false,
-      expired: false,
-      expiresAt: Date.now() + AUDIT_SESSION_INACTIVITY_MS
-    }
-    this.open(context, tab)
-    this.scheduleTemporaryChatExpiry(tab)
-    return tab
-  }
-
   touchTemporaryChat(
     tab: TemporaryChatContextTab,
-    expiresAt = Date.now() +
-      (tab.mode === 'audit' ? AUDIT_SESSION_INACTIVITY_MS : TEMPORARY_CHAT_INACTIVITY_MS)
+    expiresAt = Date.now() + TEMPORARY_CHAT_INACTIVITY_MS
   ): void {
     if (tab.expired) return
     tab.expiresAt = expiresAt
@@ -1253,9 +1206,7 @@ class ContextSidebarState {
     tab.autoPromptSent = false
     tab.sessionStarted = false
     tab.expired = false
-    tab.expiresAt =
-      Date.now() +
-      (tab.mode === 'audit' ? AUDIT_SESSION_INACTIVITY_MS : TEMPORARY_CHAT_INACTIVITY_MS)
+    tab.expiresAt = Date.now() + TEMPORARY_CHAT_INACTIVITY_MS
     this.scheduleTemporaryChatExpiry(tab)
   }
 

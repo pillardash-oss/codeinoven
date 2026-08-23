@@ -26,6 +26,7 @@
   import RichMarkdownEditor from '../shared/RichMarkdownEditor.svelte'
   import VoiceInputButton from '../speech/VoiceInputButton.svelte'
   import EditableMarkdown from './EditableMarkdown.svelte'
+  import ModelPicker from '../shared/ModelPicker.svelte'
   import StudioSelectionActions from './StudioSelectionActions.svelte'
   import StudioHistoryControls from './StudioHistoryControls.svelte'
   import StudioDocumentNavigation from './StudioDocumentNavigation.svelte'
@@ -45,11 +46,14 @@
     CapturableSpecContextType,
     EngineeringSpec,
     ProjectFileEntry,
+    ProviderCatalog,
     SpecAnnotation,
     SpecDecisionAction,
     SpecSectionId,
     SpecValidationIssue,
-    SpecValidationResult
+    SpecValidationResult,
+    ThinkingLevel,
+    ThreadSettings
   } from '$shared/types'
 
   type CallbackResult = void | Promise<void>
@@ -83,6 +87,12 @@
     auditAvailable?: boolean
     implementationAuditAvailable?: boolean
     implementationAuditReady?: boolean
+    implementationAuditRunning?: boolean
+    auditSettings: ThreadSettings
+    providers: ProviderCatalog[]
+    projectId?: string | null
+    favoriteModels?: string[]
+    recentModels?: string[]
     history: StudioDocumentHistory<EngineeringSpec>
     onBack: () => void
     onOpenInEditor: (spec: EngineeringSpec) => CallbackResult
@@ -93,6 +103,13 @@
     onGenerateAssignment?: (spec: EngineeringSpec) => CallbackResult
     onOpenAudit?: () => void
     onRunImplementationAudit?: () => CallbackResult
+    onAuditModelChange: (settings: ThreadSettings) => void
+    onToggleFavorite?: (providerId: string, modelId: string, harnessId: string) => void
+    onReorderFavorite?: (
+      draggedKey: string,
+      targetKey: string,
+      position: 'before' | 'after'
+    ) => void
     onMarkImplementationComplete?: () => CallbackResult
     onSave: (spec: EngineeringSpec) => Promise<EngineeringSpec | null>
     onSelectVersion: (version: number) => CallbackResult
@@ -179,6 +196,12 @@
     auditAvailable = false,
     implementationAuditAvailable = false,
     implementationAuditReady = false,
+    implementationAuditRunning = false,
+    auditSettings,
+    providers,
+    projectId = null,
+    favoriteModels = [],
+    recentModels = [],
     history,
     onBack,
     onOpenInEditor,
@@ -189,6 +212,9 @@
     onGenerateAssignment,
     onOpenAudit,
     onRunImplementationAudit,
+    onAuditModelChange,
+    onToggleFavorite,
+    onReorderFavorite,
     onMarkImplementationComplete,
     onSave,
     onSelectVersion,
@@ -206,6 +232,19 @@
 
   let preferredIcon = $derived(editorPreference.preferredInfo?.iconDataUrl)
   let preferredName = $derived(editorPreference.preferredInfo?.name ?? 'System Default')
+
+  function chooseAuditModel(providerId: string, modelId: string, harnessId?: string): void {
+    onAuditModelChange({
+      ...auditSettings,
+      harnessId: harnessId ?? auditSettings.harnessId,
+      providerId,
+      modelId
+    })
+  }
+
+  function chooseAuditThinking(level: ThinkingLevel): void {
+    onAuditModelChange({ ...auditSettings, thinkingLevel: level })
+  }
 
   let selectedSection = $state<SpecSectionId>('problem')
   /** Phone only: the section rail is a bottom drawer instead of a column. */
@@ -1057,24 +1096,50 @@
 
       <div class="flex items-center gap-1.5 md:justify-end">
         {#if implementationAuditAvailable}
-          <button
-            class="flex-1 rounded-lg border bg-elevated px-3 py-1.5 text-xs font-semibold max-md:h-10 md:flex-none hover:bg-overlay disabled:opacity-50"
-            disabled={busy}
-            title="Mark this implementation complete without an audit"
-            onclick={() => void onMarkImplementationComplete?.()}
-          >
-            Mark complete
-          </button>
+          {#if !implementationAuditReady && !implementationAuditRunning}
+            <ModelPicker
+              {providers}
+              {projectId}
+              harnessId={auditSettings.harnessId}
+              providerId={auditSettings.providerId}
+              modelId={auditSettings.modelId}
+              {favoriteModels}
+              {recentModels}
+              side="top"
+              variant="action"
+              onSelect={chooseAuditModel}
+              thinkingLevel={auditSettings.thinkingLevel}
+              onSelectThinking={chooseAuditThinking}
+              {onToggleFavorite}
+              {onReorderFavorite}
+            />
+          {/if}
+          {#if !implementationAuditRunning}
+            <button
+              class="flex-1 rounded-lg border bg-elevated px-3 py-1.5 text-xs font-semibold max-md:h-10 md:flex-none hover:bg-overlay disabled:opacity-50"
+              disabled={busy}
+              title="Mark this implementation complete without an audit"
+              onclick={() => void onMarkImplementationComplete?.()}
+            >
+              Mark complete
+            </button>
+          {/if}
           <button
             class="flex flex-1 items-center justify-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-on-primary max-md:h-10 md:flex-none hover:bg-primary-hover disabled:opacity-50"
             disabled={busy}
             title={implementationAuditReady
               ? 'Open the implementation audit'
-              : 'Audit the completed implementation'}
+              : implementationAuditRunning
+                ? 'Open the live auditor trace'
+                : 'Audit the completed implementation'}
             onclick={() => void onRunImplementationAudit?.()}
           >
             <ShieldCheck size={13} />
-            {implementationAuditReady ? 'View audit' : 'Audit'}
+            {implementationAuditReady
+              ? 'View audit'
+              : implementationAuditRunning
+                ? 'View trace'
+                : 'Audit'}
           </button>
         {:else if canDecide}
           <button

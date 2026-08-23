@@ -188,7 +188,6 @@ import {
 } from '../../lib/prompt-budget'
 import { decideModelSwitchCompaction } from '../../lib/model-switch-compaction'
 import {
-  AUDIT_REPORT_SCHEMA,
   ASSIGNMENT_PLAN_SCHEMA,
   APPLICATION_AGENT_TOOLS,
   BRAINSTORM_DOCUMENT_TOOL_NAME,
@@ -1012,7 +1011,7 @@ interface SessionInfo {
 
 interface TemporaryChatSession {
   id: string
-  kind: 'audit' | 'chat'
+  kind: 'chat'
   projectId: string
   threadId: string
   projectPath: string
@@ -1331,7 +1330,6 @@ export interface VirtualTaskOptions {
 export class ChatEngine {
   private static readonly STREAM_BROADCAST_INTERVAL_MS = 50
   private static readonly TEMPORARY_CHAT_INACTIVITY_MS = 3 * 60 * 60 * 1000
-  private static readonly AUDIT_SESSION_INACTIVITY_MS = 24 * 60 * 60 * 1000
   private static readonly AUDIT_RUN_TIMEOUT_MS = 30 * 60 * 1000
   private static readonly CATALOG_DRIVER_BUDGET_MS = 800
   private drivers = new Map<string, HarnessDriver>()
@@ -1366,6 +1364,12 @@ export class ChatEngine {
     string,
     Promise<{ report: AuditReport; auditorThread: Thread }>
   >()
+  /** One durable auditor run per ordinary Engineering thread. */
+  private activeImplementationAuditRuns = new Map<
+    string,
+    Promise<{ report: AuditReport; auditorThread: Thread }>
+  >()
+  private activeImplementationAuditorEnsures = new Map<string, Promise<Thread>>()
   /** Assignment audits explicitly cancelled by Stop; late provider output must be ignored. */
   private stoppedAssignmentAuditRuns = new Set<string>()
   /** Sessions owned by stopped Assignments stay quarantined until an explicit Resume. */
@@ -1935,11 +1939,6 @@ export class ChatEngine {
           selections
         )
     )
-    ipcMain.handle(
-      'agent:ensureAuditSession',
-      (_, projectId: string, threadId: string, temporaryChatId: string, settings: ThreadSettings) =>
-        this.ensureAuditSession(projectId, threadId, temporaryChatId, settings)
-    )
     ipcMain.handle('agent:closeTemporaryChat', (_, temporaryChatId: string) =>
       this.closeTemporaryChat(temporaryChatId)
     )
@@ -2035,6 +2034,11 @@ export class ChatEngine {
       'agent:generateAudit',
       (_, projectId: string, threadId: string, request: AuditGenerationRequest) =>
         this.generateAudit(projectId, threadId, request)
+    )
+    ipcMain.handle(
+      'agent:ensureImplementationAuditorThread',
+      (_, projectId: string, coordinatorThreadId: string, settings: ThreadSettings) =>
+        this.ensureImplementationAuditorThread(projectId, coordinatorThreadId, settings)
     )
     ipcMain.handle(
       'agent:ensureAssignmentAuditorThread',
@@ -6285,84 +6289,6 @@ export class ChatEngine {
     if (!thread?.settings) return false
     if (thread.settings.engineeringMode || thread.settings.loopMode) return true
     return this.assignmentEngine.getActive(thread.projectId, thread.id)?.status === 'completed'
-  }
-
-  async ensureAuditSession(
-    projectId: string,
-    threadId: string,
-    temporaryChatId: string,
-    settings: ThreadSettings
-  ): Promise<{ sessionId: string; expiresAt: number }> {
-    projectId = validateEntityId(projectId, 'Project ID')
-    threadId = validateEntityId(threadId, 'Thread ID')
-    temporaryChatId = validateEntityId(temporaryChatId, 'Temporary chat ID', 256)
-    settings = validateThreadSettings(settings)
-    if (this.assignmentEngine.getActive(projectId, threadId)?.status === 'completed') {
-      throw new Error('Completed Assignments use their durable auditor thread')
-    }
-    const achievementThread = await this.threadManager.getThread(projectId, threadId)
-    if (achievementThread?.settings?.loopMode === true) {
-      throw new Error('Achievement uses its durable Auditor thread')
-    }
-    const existing = this.temporaryChats.get(temporaryChatId)
-    if (existing) {
-      if (
-        existing.kind !== 'audit' ||
-        existing.projectId !== projectId ||
-        existing.threadId !== threadId
-      ) {
-        throw new Error('Audit session does not belong to this thread')
-      }
-      if (existing.driverId !== settings.harnessId) {
-        throw new Error('Close the existing audit tab before changing its harness')
-      }
-      this.refreshTemporaryChatExpiry(existing)
-      return { sessionId: existing.sessionId, expiresAt: existing.expiresAt }
-    }
-
-    const thread = await this.threadManager.getThread(projectId, threadId)
-    if (!thread) throw new Error(`Thread not found: ${threadId}`)
-    if (!this.implementationAuditEligible(thread)) {
-      throw new Error('Audit sessions require Engineering, Achievement, or a completed Assignment')
-    }
-    const driverId = settings.harnessId || 'opencode'
-    const { driver, projectPath } = await this.resolve(projectId, driverId, threadId)
-    const isolated =
-      driver instanceof OpenCodeDriver
-        ? await driver.createIsolatedSession(projectPath, 'Implementation audit')
-        : undefined
-    const sessionId =
-      isolated?.sessionId ?? (await driver.createSession(projectPath, 'Implementation audit'))
-    const expiresAt = Date.now() + ChatEngine.AUDIT_SESSION_INACTIVITY_MS
-    const auditSession: TemporaryChatSession = {
-      id: temporaryChatId,
-      kind: 'audit',
-      projectId,
-      threadId,
-      projectPath,
-      driverId,
-      sessionId,
-      isolated,
-      contextApplied: true,
-      inactivityMs: ChatEngine.AUDIT_SESSION_INACTIVITY_MS,
-      expiresAt,
-      expiryTimer: setTimeout(
-        () => void this.expireTemporaryChat(temporaryChatId),
-        ChatEngine.AUDIT_SESSION_INACTIVITY_MS
-      )
-    }
-    this.temporaryChats.set(temporaryChatId, auditSession)
-    this.registerSession(
-      sessionId,
-      projectId,
-      threadId,
-      projectPath,
-      'auto_review',
-      driverId,
-      undefined,
-      true
-    )
-    return { sessionId, expiresAt }
   }
 
   async closeTemporaryChat(temporaryChatId: string): Promise<void> {
@@ -10734,16 +10660,11 @@ export class ChatEngine {
     projectId = validateEntityId(projectId, 'Project ID')
     threadId = validateEntityId(threadId, 'Thread ID')
     const settings = validateThreadSettings(request.settings)
-    const temporaryChatId = validateEntityId(request.temporaryChatId, 'Temporary chat ID', 256)
-    const spec = await this.getActiveSpec(projectId, threadId)
     const thread = await this.threadManager.getThread(projectId, threadId)
     if (!this.implementationAuditEligible(thread)) {
       throw new Error(
         'Implementation audits require Engineering, Achievement, or a completed Assignment'
       )
-    }
-    if (!spec || spec.status !== 'approved') {
-      throw new Error('An approved specification is required before audit.')
     }
     const completedAssignment = this.assignmentEngine.getActive(projectId, threadId)
     if (completedAssignment?.status === 'completed') {
@@ -10752,121 +10673,119 @@ export class ChatEngine {
     if (thread?.settings?.loopMode === true && !completedAssignment) {
       return (await this.generateAchievementAudit(projectId, threadId, settings)).report
     }
-    await this.threadManager.setAuditState(projectId, threadId, 'running')
-    await this.ensureAuditSession(projectId, threadId, temporaryChatId, settings)
-    const temporary = this.temporaryChats.get(temporaryChatId)
-    if (!temporary || temporary.kind !== 'audit') {
-      throw new Error('The audit session could not be prepared.')
-    }
-    const driver = this.drivers.get(temporary.driverId)
-    if (!driver) throw new Error(`Unknown harness: ${temporary.driverId}`)
-    const specPath = await this.artifactRef(
-      projectId,
-      threadId,
-      join('versions', `${spec.id}-v${spec.version}.md`)
-    )
-    const prompt = [
-      `Audit the current project implementation against the approved specification at this project-relative path: ${specPath}`,
-      `Open annotations on the specification:\n${formatOpenAnnotations(spec.annotations)}`
-    ].join('\n\n')
-    const isZenFreeModel =
-      temporary.driverId === 'opencode' &&
-      settings.providerId === 'opencode' &&
-      settings.modelId.endsWith('-free')
-    let lastError: Error | null = null
-
-    for (let attemptIndex = 0; ; attemptIndex += 1) {
-      const useStructuredOutput =
-        attemptIndex === 0 && driver.capabilities?.structuredOutput === true && !isZenFreeModel
-      this.refreshTemporaryChatExpiry(temporary)
-      const completion = this.waitForSessionCompletion(
-        temporary.sessionId,
-        ChatEngine.AUDIT_RUN_TIMEOUT_MS,
-        'Implementation audit'
-      )
-      try {
-        const auditPrompt: SendPromptOptions = {
-          sessionId: temporary.sessionId,
-          settings: { ...settings, permissionLevel: 'auto_review', engineeringMode: false },
-          text:
-            attemptIndex === 0
-              ? prompt
-              : [
-                  'Your previous audit response was not valid JSON.',
-                  'Correct only the reported contract violation in your previous audit response, preserving its findings and evidence. Return exactly one corrected audit-report JSON object with no Markdown fences or commentary.',
-                  `Previous validation error: ${lastError?.message ?? 'unknown format error'}`,
-                  prompt
-                ].join('\n\n'),
-          attachments: [],
-          systemPrompt: await this.cioPrompt('audit-report'),
-          allowedTools: AUDIT_ALLOWED_TOOLS,
-          ...(useStructuredOutput ? { structuredOutput: { schema: AUDIT_REPORT_SCHEMA } } : {})
-        }
-        if (temporary.isolated && driver instanceof OpenCodeDriver) {
-          await driver.sendPrompt(temporary.projectPath, auditPrompt, temporary.isolated)
-        } else {
-          await driver.sendPrompt(temporary.projectPath, auditPrompt)
-        }
-        const streamed = await completion
-        let content: AuditReportContent
-        if (streamed !== undefined) {
-          content = validateAuditReportContent(streamed)
-        } else {
-          const messages =
-            temporary.isolated && driver instanceof OpenCodeDriver
-              ? await driver.loadMessages(
-                  temporary.projectPath,
-                  temporary.sessionId,
-                  temporary.isolated
-                )
-              : await driver.loadMessages(temporary.projectPath, temporary.sessionId)
-          const response = [...messages].reverse().find((message) => message.role === 'assistant')
-          if (!response) throw new Error('The audit agent returned no response')
-          if (response.error) throw new Error(response.error)
-          content =
-            response.structuredOutput !== undefined
-              ? validateAuditReportContent(response.structuredOutput)
-              : parseAuditReportContent(
-                  response.parts
-                    .filter((part) => part.type === 'text')
-                    .map((part) => part.text)
-                    .join('\n')
-                )
-        }
-        const report = await this.auditEngine.create({
-          projectId,
-          threadId,
-          specId: spec.id,
-          specVersion: spec.version,
-          content,
-          provenance: {
-            source: 'agent',
-            actor: 'auditor',
-            harnessId: settings.harnessId,
-            providerId: settings.providerId,
-            modelId: settings.modelId
-          }
-        })
-        await this.threadManager.setAuditState(projectId, threadId, 'report_ready', {
-          id: report.id,
-          version: report.version
-        })
-        this.refreshTemporaryChatExpiry(temporary)
-        return report
-      } catch (error) {
-        lastError = error instanceof Error ? error : new Error('The audit agent failed.')
-        const correctableOutput =
-          lastError instanceof AuditReportValidationError ||
-          lastError instanceof SyntaxError ||
-          lastError.message === 'The audit agent returned no response'
-        if (!correctableOutput) break
-      } finally {
-        this.clearCompletionWaiter(temporary.sessionId)
+    const key = `${projectId}:${threadId}`
+    const running = this.activeImplementationAuditRuns.get(key)
+    if (running) return (await running).report
+    const run = this.runImplementationAudit(projectId, threadId, settings)
+    this.activeImplementationAuditRuns.set(key, run)
+    try {
+      return (await run).report
+    } finally {
+      if (this.activeImplementationAuditRuns.get(key) === run) {
+        this.activeImplementationAuditRuns.delete(key)
       }
     }
+  }
 
-    await this.threadManager.setAuditState(projectId, threadId, 'offered')
-    throw lastError ?? new Error('The audit agent failed.')
+  async ensureImplementationAuditorThread(
+    projectId: string,
+    coordinatorThreadId: string,
+    settings: ThreadSettings
+  ): Promise<Thread> {
+    projectId = validateEntityId(projectId, 'Project ID')
+    coordinatorThreadId = validateEntityId(coordinatorThreadId, 'Coordinator thread ID')
+    settings = validateThreadSettings(settings)
+    const key = `${projectId}:${coordinatorThreadId}`
+    const running = this.activeImplementationAuditorEnsures.get(key)
+    if (running) return running
+    const task = this.createOrUpdateImplementationAuditor(projectId, coordinatorThreadId, settings)
+    this.activeImplementationAuditorEnsures.set(key, task)
+    try {
+      return await task
+    } finally {
+      if (this.activeImplementationAuditorEnsures.get(key) === task) {
+        this.activeImplementationAuditorEnsures.delete(key)
+      }
+    }
+  }
+
+  private async createOrUpdateImplementationAuditor(
+    projectId: string,
+    coordinatorThreadId: string,
+    settings: ThreadSettings
+  ): Promise<Thread> {
+    const coordinator = await this.threadManager.getThread(projectId, coordinatorThreadId)
+    if (!coordinator) throw new Error('Engineering audit coordinator not found.')
+    if (!this.implementationAuditEligible(coordinator)) {
+      throw new Error('An approved Engineering implementation is required before audit.')
+    }
+    if (this.assignmentEngine.getActive(projectId, coordinatorThreadId)) {
+      throw new Error('Assignment audits use their Assignment auditor thread.')
+    }
+    if (coordinator.settings?.loopMode === true) {
+      throw new Error('Achievement audits use their Achievement Auditor thread.')
+    }
+    const auditorSettings: ThreadSettings = {
+      ...settings,
+      permissionLevel: 'auto_review',
+      engineeringMode: false,
+      assignmentMode: false,
+      loopMode: false,
+      loopAuditor: undefined
+    }
+    let auditor = coordinator.auditorThreadId
+      ? await this.threadManager.getThread(projectId, coordinator.auditorThreadId)
+      : null
+    if (
+      !auditor ||
+      auditor.achievementRole !== 'auditor' ||
+      auditor.coordinatorThreadId !== coordinatorThreadId
+    ) {
+      auditor =
+        (await this.threadManager.listThreads(projectId)).find(
+          (candidate) =>
+            candidate.achievementRole === 'auditor' &&
+            candidate.coordinatorThreadId === coordinatorThreadId
+        ) ?? null
+    }
+    if (!auditor) {
+      const names = await this.storage.getWorkerNames()
+      const name = names[randomInt(names.length)]
+      auditor = await this.threadManager.createThread({
+        projectId,
+        providerId: auditorSettings.providerId,
+        title: `audit-${name}: ${coordinator.title}`,
+        titleSource: 'manual',
+        settings: auditorSettings,
+        featureSlug: coordinator.featureSlug,
+        scopeBucketId: coordinator.scopeBucketId,
+        workingDirectory: coordinator.workingDirectory,
+        coordinatorThreadId,
+        achievementRole: 'auditor',
+        userInputLocked: true
+      })
+    }
+    if (
+      auditor.sessionId &&
+      auditor.settings?.harnessId &&
+      auditor.settings.harnessId !== auditorSettings.harnessId
+    ) {
+      await this.cleanupTurnUtilities(auditor.sessionId)
+      this.retireSessionState(auditor.sessionId)
+      await this.threadManager.clearSessionId(projectId, auditor.id)
+    }
+    await this.threadManager.updateSettings(projectId, auditor.id, auditorSettings)
+    await this.threadManager.updateThread(projectId, auditor.id, {
+      achievementRole: 'auditor',
+      coordinatorThreadId,
+      scopeBucketId: coordinator.scopeBucketId,
+      userInputLocked: true
+    })
+    await this.threadManager.setPinned(projectId, auditor.id, true)
+    await this.threadManager.updateThread(projectId, coordinatorThreadId, {
+      auditorThreadId: auditor.id
+    })
+    return (await this.threadManager.getThread(projectId, auditor.id)) ?? auditor
   }
 
   /** Enable Achievement coordination without changing the thread's workspace scope. */
@@ -12224,6 +12143,153 @@ export class ChatEngine {
     })
     await this.threadManager.setStatus(projectId, auditorThread.id, 'failed', { read: false })
     throw failure
+  }
+
+  private async runImplementationAudit(
+    projectId: string,
+    coordinatorThreadId: string,
+    settings: ThreadSettings
+  ): Promise<{ report: AuditReport; auditorThread: Thread }> {
+    const spec = await this.getActiveSpec(projectId, coordinatorThreadId)
+    if (!spec || spec.status !== 'approved') {
+      throw new Error('An approved specification is required before audit.')
+    }
+    const auditorThread = await this.ensureImplementationAuditorThread(
+      projectId,
+      coordinatorThreadId,
+      settings
+    )
+    const auditorSettings = auditorThread.settings ?? settings
+    const driverId = auditorSettings.harnessId || 'opencode'
+    const { driver, projectPath } = await this.resolve(projectId, driverId, auditorThread.id)
+    const sessionId = await this.ensureSession(projectId, auditorThread.id, driverId)
+    const specPath = await this.artifactRef(
+      projectId,
+      coordinatorThreadId,
+      join('versions', `${spec.id}-v${spec.version}.md`)
+    )
+    const basePrompt = [
+      `Independently audit the current project implementation against the approved specification at this project-relative path: ${specPath}`,
+      `Open annotations on the specification:\n${formatOpenAnnotations(spec.annotations)}`
+    ].join('\n\n')
+    let lastError: Error | null = null
+
+    await this.threadManager.setAuditState(projectId, coordinatorThreadId, 'running')
+    await this.threadManager.setStatus(projectId, coordinatorThreadId, 'executing', {
+      read: false
+    })
+    for (let attemptIndex = 0; attemptIndex < 3; attemptIndex += 1) {
+      await this.threadManager.setStatus(projectId, auditorThread.id, 'executing')
+      this.handledIdleSessions.delete(sessionId)
+      this.markSessionWorking(sessionId)
+      const messageId = createMessageId()
+      const prompt =
+        attemptIndex === 0
+          ? basePrompt
+          : [
+              'Your previous audit response was not valid JSON.',
+              'Correct only the reported contract violation in your previous audit response, preserving its findings and evidence. Return exactly one corrected audit-report JSON object with no Markdown fences or commentary.',
+              `Previous validation error: ${lastError?.message ?? 'unknown format error'}`
+            ].join('\n\n')
+      await this.persistOutboundMessage(
+        projectId,
+        auditorThread.id,
+        messageId,
+        `Audit implementation: ${spec.content.resolutionSummary}`,
+        prompt,
+        [],
+        [],
+        [],
+        attemptIndex === 0
+          ? { action: 'Audit implementation', body: spec.content.resolutionSummary }
+          : undefined,
+        'internal'
+      )
+      const outboundIds = this.outboundMessageIdsBySession.get(sessionId) ?? new Set<string>()
+      outboundIds.add(messageId)
+      this.outboundMessageIdsBySession.set(sessionId, outboundIds)
+      const completion = this.waitForSessionCompletion(
+        sessionId,
+        ChatEngine.AUDIT_RUN_TIMEOUT_MS,
+        'Implementation audit'
+      )
+      try {
+        await driver.sendPrompt(projectPath, {
+          sessionId,
+          settings: auditorSettings,
+          text: prompt,
+          attachments: [],
+          systemPrompt: await this.cioPrompt('audit-report'),
+          allowedTools: AUDIT_ALLOWED_TOOLS,
+          userMessageId: messageId
+        })
+        const streamed = await completion
+        let content: AuditReportContent
+        if (streamed !== undefined) {
+          content = validateAuditReportContent(streamed)
+        } else {
+          const messages = await driver.loadMessages(projectPath, sessionId)
+          const response = [...messages].reverse().find((message) => message.role === 'assistant')
+          if (!response) throw new Error('The Auditor returned no response')
+          if (response.error) throw new Error(response.error)
+          content =
+            response.structuredOutput !== undefined
+              ? validateAuditReportContent(response.structuredOutput)
+              : parseAuditReportContent(
+                  response.parts
+                    .filter((part) => part.type === 'text')
+                    .map((part) => part.text)
+                    .join('\n')
+                )
+        }
+        const report = await this.auditEngine.create({
+          projectId,
+          threadId: coordinatorThreadId,
+          specId: spec.id,
+          specVersion: spec.version,
+          content,
+          provenance: {
+            source: 'agent',
+            actor: 'auditor',
+            harnessId: auditorSettings.harnessId,
+            providerId: auditorSettings.providerId,
+            modelId: auditorSettings.modelId
+          }
+        })
+        await this.threadManager.setAuditState(projectId, coordinatorThreadId, 'report_ready', {
+          id: report.id,
+          version: report.version
+        })
+        await this.threadManager.setStatus(projectId, auditorThread.id, 'completed', {
+          read: false
+        })
+        await this.threadManager.setStatus(projectId, coordinatorThreadId, 'spec', {
+          read: false
+        })
+        await this.loadMessages(projectId, auditorThread.id)
+        return {
+          report,
+          auditorThread:
+            (await this.threadManager.getThread(projectId, auditorThread.id)) ?? auditorThread
+        }
+      } catch (error) {
+        lastError = error instanceof Error ? error : new Error('The Auditor failed.')
+        const correctableOutput =
+          lastError instanceof AuditReportValidationError ||
+          lastError instanceof SyntaxError ||
+          lastError.message === 'The Auditor returned no response'
+        if (!correctableOutput) break
+      } finally {
+        this.clearCompletionWaiter(sessionId)
+      }
+    }
+
+    await this.threadManager.setAuditState(projectId, coordinatorThreadId, 'offered')
+    await this.threadManager.setStatus(projectId, coordinatorThreadId, 'spec', {
+      read: false
+    })
+    await this.threadManager.setStatus(projectId, auditorThread.id, 'failed', { read: false })
+    throw lastError ?? new Error('The Auditor failed.')
   }
 
   private async runAchievementAudit(

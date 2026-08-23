@@ -714,9 +714,9 @@
     open()
   }
 
-  /** Quick chats, explains and audits open from inside a thread and live in the
-   *  sidebar as tabs. The rail only mirrors them so they can be toggled away
-   *  and back without losing the conversation. */
+  /** Quick chats and explains open from inside a thread and live in the sidebar
+   *  as tabs. The rail mirrors them so they can be toggled away and back without
+   *  losing the conversation. Durable audits use the coordinator dock instead. */
   let temporaryChatTabs = $derived(
     contextSidebarState.sidebarTabs.filter((tab) => tab.kind === 'temporary-chat')
   )

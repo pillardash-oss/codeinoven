@@ -3352,7 +3352,6 @@ export interface AuditReport {
 
 export interface AuditGenerationRequest {
   settings: ThreadSettings
-  temporaryChatId: string
 }
 
 // ─── Workflow ───────────────────────────────────────────────────────────────

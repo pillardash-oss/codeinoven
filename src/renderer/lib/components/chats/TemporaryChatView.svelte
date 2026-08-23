@@ -71,7 +71,6 @@
   /** Reactive provider catalog for the tab's project — seeded from the cache
    *  and kept current when the model picker lazily refreshes the store. */
   let providers = $derived(providerCatalog.cached(tab.projectId) ?? providerCatalog.allCached())
-  let loadedAuditSessionId = $state('')
   let previewFile = $state<Extract<AgentPart, { type: 'file' }> | null>(null)
   let imageUrls = new FileBlobUrlManager()
   let references = $derived<PromptReference[]>(
@@ -727,16 +726,14 @@
           contextSidebarState.touchTemporaryChat(tab, status.expiresAt)
         }
       })
-      if (tab.mode !== 'audit') {
-        void invoke('agent:loadTemporaryChatMessages', temporaryChatId)
-          .then((messages) => {
-            if (tab.temporaryChatId !== temporaryChatId || tab.expired) return
-            mergeLoadedQuickChatMessages(messages)
-          })
-          .catch(() => {
-            // Live events and the in-flight send still reconcile the response.
-          })
-      }
+      void invoke('agent:loadTemporaryChatMessages', temporaryChatId)
+        .then((messages) => {
+          if (tab.temporaryChatId !== temporaryChatId || tab.expired) return
+          mergeLoadedQuickChatMessages(messages)
+        })
+        .catch(() => {
+          // Live events and the in-flight send still reconcile the response.
+        })
     }
     if (tab.mode === 'elaborate' && !tab.autoPromptSent) {
       tab.autoPromptSent = true
@@ -746,21 +743,6 @@
       unsubscribeExpiry()
       unsubscribeEvents()
     }
-  })
-
-  $effect(() => {
-    const sessionId = tab.sessionId
-    if (tab.mode !== 'audit' || !sessionId || loadedAuditSessionId === sessionId) return
-    loadedAuditSessionId = sessionId
-    const temporaryChatId = tab.temporaryChatId
-    void invoke('agent:loadTemporaryChatMessages', temporaryChatId)
-      .then((messages) => {
-        if (tab.temporaryChatId !== temporaryChatId || tab.sessionId !== sessionId) return
-        tab.messages = messages
-      })
-      .catch(() => {
-        // Live events still populate the trace when provider history is temporarily unavailable.
-      })
   })
 
   // Convert file:// attachment URLs to blob: Object URLs so attached images and
@@ -801,8 +783,7 @@
         <Clock3 size={20} class="mx-auto text-dimmed" />
         <p class="mt-3 text-sm font-semibold text-foreground">Side chat has expired</p>
         <p class="mt-1 text-xs leading-relaxed text-muted">
-          Its temporary history and agent session were discarded after
-          {tab.mode === 'audit' ? '24 hours' : 'three hours'} of inactivity.
+          Its temporary history and agent session were discarded after three hours of inactivity.
         </p>
         <button
           type="button"
@@ -815,34 +796,6 @@
       </div>
     </div>
   {:else}
-    {#if tab.mode === 'audit'}
-      <header class="shrink-0 border-b border-border px-4 py-3">
-        <div class="flex items-center justify-between gap-3">
-          <div class="min-w-0">
-            <h2 class="text-xs font-semibold text-foreground">Audit agent</h2>
-            <p class="mt-0.5 text-[11px] text-muted">
-              This trace remains available for 24 hours. Hiding the sidebar keeps it alive.
-            </p>
-          </div>
-          <span
-            class="flex shrink-0 items-center gap-1 text-[10px] {tab.busy
-              ? 'text-info'
-              : tab.error
-                ? 'text-danger'
-                : 'text-success'}"
-          >
-            {#if tab.busy}
-              <Loader2 size={10} class="animate-spin" />
-              Auditing
-            {:else if tab.error}
-              Failed
-            {:else}
-              Ready
-            {/if}
-          </span>
-        </div>
-      </header>
-    {/if}
     <div class="min-h-0 flex-1 overflow-y-auto px-4 py-4">
       <div class="mx-auto flex w-full max-w-2xl flex-col gap-5">
         {#each tab.messages as message, messageIndex (message.id)}
@@ -950,7 +903,7 @@
                 />
               {/if}
               <MarkdownView text={textFor(message)} />
-              {#if tab.mode !== 'audit' && turnFinished(message)}
+              {#if turnFinished(message)}
                 {@render turnFooter(message, messageIndex)}
               {/if}
             </div>
@@ -968,7 +921,7 @@
                 harnessId={tab.settings.harnessId}
                 {harnessName}
               />
-              {#if tab.mode !== 'audit' && turnFinished(message)}
+              {#if turnFinished(message)}
                 {@render turnFooter(message, messageIndex)}
               {/if}
             </div>
@@ -978,7 +931,7 @@
         {#if tab.busy}
           <div class="flex items-center gap-2 text-xs text-dimmed">
             <Loader2 size={13} class="animate-spin text-info" />
-            {tab.mode === 'audit' ? 'Auditing implementation…' : 'Reading context…'}
+            Reading context…
           </div>
         {/if}
 
@@ -1018,160 +971,158 @@
       </div>
     </div>
 
-    {#if tab.mode !== 'audit'}
-      {#if queued}
-        <div class="shrink-0 border-t border-border bg-app px-3 pt-2">
-          <div class="mx-auto max-w-2xl">
-            <div class="rounded-t-xl border border-border bg-surface shadow-sm">
-              <div class="flex items-center justify-between gap-2 px-3 pt-2.5 pb-1">
-                <span class="text-[10px] font-semibold uppercase tracking-wide text-dimmed"
-                  >Queued</span
+    {#if queued}
+      <div class="shrink-0 border-t border-border bg-app px-3 pt-2">
+        <div class="mx-auto max-w-2xl">
+          <div class="rounded-t-xl border border-border bg-surface shadow-sm">
+            <div class="flex items-center justify-between gap-2 px-3 pt-2.5 pb-1">
+              <span class="text-[10px] font-semibold uppercase tracking-wide text-dimmed"
+                >Queued</span
+              >
+              <div class="flex items-center gap-1">
+                <button
+                  type="button"
+                  class="rounded-md px-2 py-0.5 text-[11px] font-medium text-foreground transition-colors hover:bg-elevated"
+                  title={`Steer — ${steerModifierLabel}Enter — send this message to the agent now`}
+                  onclick={() => void steerQueuedMessage()}
                 >
-                <div class="flex items-center gap-1">
+                  Steer
+                </button>
+                <div class="relative">
                   <button
                     type="button"
-                    class="rounded-md px-2 py-0.5 text-[11px] font-medium text-foreground transition-colors hover:bg-elevated"
-                    title={`Steer — ${steerModifierLabel}Enter — send this message to the agent now`}
-                    onclick={() => void steerQueuedMessage()}
+                    class="flex h-6 w-6 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+                    aria-label="Queued message actions"
+                    title="Queued message actions"
+                    onclick={() => (showQueueMenu = !showQueueMenu)}
+                    oncontextmenu={(e: MouseEvent) => {
+                      e.preventDefault()
+                      showQueueMenu = true
+                    }}
                   >
-                    Steer
+                    <Ellipsis size={13} />
                   </button>
-                  <div class="relative">
+                  {#if showQueueMenu}
                     <button
                       type="button"
-                      class="flex h-6 w-6 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
-                      aria-label="Queued message actions"
-                      title="Queued message actions"
-                      onclick={() => (showQueueMenu = !showQueueMenu)}
-                      oncontextmenu={(e: MouseEvent) => {
-                        e.preventDefault()
-                        showQueueMenu = true
-                      }}
+                      class="fixed inset-0 z-30 cursor-default"
+                      aria-label="Close menu"
+                      onclick={() => (showQueueMenu = false)}
+                    ></button>
+                    <div
+                      class="absolute bottom-8 right-0 z-40 w-32 overflow-hidden rounded-xl border bg-surface p-1 shadow-lg"
+                      role="menu"
                     >
-                      <Ellipsis size={13} />
-                    </button>
-                    {#if showQueueMenu}
                       <button
                         type="button"
-                        class="fixed inset-0 z-30 cursor-default"
-                        aria-label="Close menu"
-                        onclick={() => (showQueueMenu = false)}
-                      ></button>
-                      <div
-                        class="absolute bottom-8 right-0 z-40 w-32 overflow-hidden rounded-xl border bg-surface p-1 shadow-lg"
-                        role="menu"
+                        class="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-sm text-foreground transition-colors hover:bg-elevated"
+                        role="menuitem"
+                        onclick={editQueuedMessage}
                       >
-                        <button
-                          type="button"
-                          class="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-sm text-foreground transition-colors hover:bg-elevated"
-                          role="menuitem"
-                          onclick={editQueuedMessage}
-                        >
-                          <Pencil size={13} class="text-muted" />
-                          Edit
-                        </button>
-                        <div class="mx-2 my-1 border-t"></div>
-                        <button
-                          type="button"
-                          class="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-sm text-danger transition-colors hover:bg-danger/10"
-                          role="menuitem"
-                          onclick={deleteQueuedMessage}
-                        >
-                          <Trash2 size={13} />
-                          Delete
-                        </button>
-                      </div>
-                    {/if}
-                  </div>
+                        <Pencil size={13} class="text-muted" />
+                        Edit
+                      </button>
+                      <div class="mx-2 my-1 border-t"></div>
+                      <button
+                        type="button"
+                        class="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-sm text-danger transition-colors hover:bg-danger/10"
+                        role="menuitem"
+                        onclick={deleteQueuedMessage}
+                      >
+                        <Trash2 size={13} />
+                        Delete
+                      </button>
+                    </div>
+                  {/if}
                 </div>
               </div>
-              {#if queued.selectionAttached && queued.selections.length > 0}
-                <div class="flex flex-wrap gap-1.5 px-3 pb-2">
-                  {#each queued.selections as selection, index (index)}
-                    <span
-                      class="flex max-w-full items-center gap-1.5 rounded-lg border border-accent/30 bg-accent/10 px-2 py-1 text-[11px]"
-                      title={selection}
-                    >
-                      <MessageSquare size={11} class="shrink-0 text-accent" />
-                      <span class="font-medium text-foreground">Selection {index + 1}</span>
-                      <span class="truncate text-muted">{selection}</span>
-                    </span>
-                  {/each}
-                </div>
-              {/if}
-              {#if queued.attachments.length > 0}
-                <div class="flex flex-wrap gap-1.5 px-3 pb-2">
-                  {#each queued.attachments as attachment (attachment.url)}
-                    <span
-                      class="flex max-w-full items-center gap-1.5 rounded-lg bg-surface px-2 py-1 text-[11px] text-muted"
-                      title={attachment.filename ?? attachment.url}
-                    >
-                      <FileText size={11} class="shrink-0" />
-                      <span class="max-w-32 truncate"
-                        >{attachment.filename ?? attachment.url.split('/').pop() ?? 'file'}</span
-                      >
-                    </span>
-                  {/each}
-                </div>
-              {/if}
-              <p class="px-3 pb-2.5 text-[12px] text-muted line-clamp-3">{queued.text}</p>
             </div>
+            {#if queued.selectionAttached && queued.selections.length > 0}
+              <div class="flex flex-wrap gap-1.5 px-3 pb-2">
+                {#each queued.selections as selection, index (index)}
+                  <span
+                    class="flex max-w-full items-center gap-1.5 rounded-lg border border-accent/30 bg-accent/10 px-2 py-1 text-[11px]"
+                    title={selection}
+                  >
+                    <MessageSquare size={11} class="shrink-0 text-accent" />
+                    <span class="font-medium text-foreground">Selection {index + 1}</span>
+                    <span class="truncate text-muted">{selection}</span>
+                  </span>
+                {/each}
+              </div>
+            {/if}
+            {#if queued.attachments.length > 0}
+              <div class="flex flex-wrap gap-1.5 px-3 pb-2">
+                {#each queued.attachments as attachment (attachment.url)}
+                  <span
+                    class="flex max-w-full items-center gap-1.5 rounded-lg bg-surface px-2 py-1 text-[11px] text-muted"
+                    title={attachment.filename ?? attachment.url}
+                  >
+                    <FileText size={11} class="shrink-0" />
+                    <span class="max-w-32 truncate"
+                      >{attachment.filename ?? attachment.url.split('/').pop() ?? 'file'}</span
+                    >
+                  </span>
+                {/each}
+              </div>
+            {/if}
+            <p class="px-3 pb-2.5 text-[12px] text-muted line-clamp-3">{queued.text}</p>
           </div>
-        </div>
-      {/if}
-      <div class="shrink-0 border-t border-border bg-app px-3 py-3">
-        <div class="mx-auto max-w-2xl">
-          {#key composerRestoreKey}
-            <ChatComposer
-              placeholder={tab.busy
-                ? 'The agent is working — type to queue a question'
-                : 'Ask a read-only question…'}
-              autofocus
-              working={tab.busy}
-              onStop={stopRun}
-              settings={tab.settings}
-              onSettingsChange={updateSettings}
-              {providers}
-              projectId={tab.projectId}
-              attachmentStorage={{
-                kind: tab.projectId === INBOX_PROJECT_ID ? 'chat' : 'project',
-                projectId: tab.projectId,
-                threadId: tab.threadId
-              }}
-              harnessId={tab.settings.harnessId}
-              {contextUsage}
-              showEngineeringMode={false}
-              readOnlyMode
-              allowAttachments
-              hidePermissionSelector
-              enableImageDescriptorGate={false}
-              favoriteModels={rendererRecovery.chatFavoriteModels}
-              onToggleFavorite={(providerId, modelId, harnessId) =>
-                rendererRecovery.toggleChatFavorite(modelKey(harnessId, providerId, modelId))}
-              onReorderFavorite={(draggedKey, targetKey, position) =>
-                rendererRecovery.reorderChatFavorite(draggedKey, targetKey, position)}
-              recentModels={rendererRecovery.chatRecentModels}
-              onModelUsed={(modelKey) => rendererRecovery.addChatRecentModel(modelKey)}
-              {references}
-              onRemoveReference={(id) => {
-                const index = references.findIndex((reference) => reference.id === id)
-                if (index < 0) return
-                tab.selections = tab.selections.filter((_, i) => i !== index)
-                tab.selectionAttached = tab.selections.length > 0
-              }}
-              initialValue={tab.draft}
-              initialAttachments={restoredAttachments}
-              onValueChange={(value) => {
-                tab.draft = value
-                touch()
-              }}
-              onSend={(message, attachments, direct) =>
-                void send(message, attachments, message, direct)}
-            />
-          {/key}
         </div>
       </div>
     {/if}
+    <div class="shrink-0 border-t border-border bg-app px-3 py-3">
+      <div class="mx-auto max-w-2xl">
+        {#key composerRestoreKey}
+          <ChatComposer
+            placeholder={tab.busy
+              ? 'The agent is working — type to queue a question'
+              : 'Ask a read-only question…'}
+            autofocus
+            working={tab.busy}
+            onStop={stopRun}
+            settings={tab.settings}
+            onSettingsChange={updateSettings}
+            {providers}
+            projectId={tab.projectId}
+            attachmentStorage={{
+              kind: tab.projectId === INBOX_PROJECT_ID ? 'chat' : 'project',
+              projectId: tab.projectId,
+              threadId: tab.threadId
+            }}
+            harnessId={tab.settings.harnessId}
+            {contextUsage}
+            showEngineeringMode={false}
+            readOnlyMode
+            allowAttachments
+            hidePermissionSelector
+            enableImageDescriptorGate={false}
+            favoriteModels={rendererRecovery.chatFavoriteModels}
+            onToggleFavorite={(providerId, modelId, harnessId) =>
+              rendererRecovery.toggleChatFavorite(modelKey(harnessId, providerId, modelId))}
+            onReorderFavorite={(draggedKey, targetKey, position) =>
+              rendererRecovery.reorderChatFavorite(draggedKey, targetKey, position)}
+            recentModels={rendererRecovery.chatRecentModels}
+            onModelUsed={(modelKey) => rendererRecovery.addChatRecentModel(modelKey)}
+            {references}
+            onRemoveReference={(id) => {
+              const index = references.findIndex((reference) => reference.id === id)
+              if (index < 0) return
+              tab.selections = tab.selections.filter((_, i) => i !== index)
+              tab.selectionAttached = tab.selections.length > 0
+            }}
+            initialValue={tab.draft}
+            initialAttachments={restoredAttachments}
+            onValueChange={(value) => {
+              tab.draft = value
+              touch()
+            }}
+            onSend={(message, attachments, direct) =>
+              void send(message, attachments, message, direct)}
+          />
+        {/key}
+      </div>
+    </div>
   {/if}
 </div>
 

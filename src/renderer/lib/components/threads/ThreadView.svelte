@@ -35,6 +35,7 @@
     Network,
     Pencil,
     Plus,
+    ShieldCheck,
     Target,
     Trash2,
     Video,
@@ -1530,7 +1531,7 @@
   let selectedAssignmentVersion = $state<number | undefined>()
   let assignmentThreads = $state<Thread[]>([])
   let assignmentAuditThread = $state<Thread | undefined>()
-  let achievementAuditThread = $state<Thread | undefined>()
+  let durableAuditThread = $state<Thread | undefined>()
   let assignmentCoordinatorThread = $state<Thread | undefined>()
   let assignmentBusy = $state(false)
   let assignmentError = $state('')
@@ -1624,7 +1625,12 @@
     settings.engineeringMode === true &&
       studioOnlyAuditWorkflow &&
       spec?.status === 'approved' &&
-      (auditState === 'offered' || (auditState === 'report_ready' && auditReport !== null))
+      (auditState === 'offered' ||
+        auditState === 'running' ||
+        (auditState === 'report_ready' && auditReport !== null))
+  )
+  let plainEngineeringAuditRunning = $derived(
+    settings.engineeringMode === true && studioOnlyAuditWorkflow && auditState === 'running'
   )
   let plainEngineeringAuditReady = $derived(
     settings.engineeringMode === true &&
@@ -1634,10 +1640,11 @@
   )
 
   /** Which coordinator, if any, this thread publishes to the context dock. */
-  let coordinatorKind = $derived.by((): 'assignment' | 'achievement' | null => {
+  let coordinatorKind = $derived.by((): 'assignment' | 'achievement' | 'audit' | null => {
     if (isAssignmentAuditorThread) return null
     if (assignment && assignment.status !== 'draft') return 'assignment'
     if (achievementOnly && spec) return 'achievement'
+    if (plainEngineeringAuditAvailable && spec) return 'audit'
     return null
   })
 
@@ -1648,13 +1655,23 @@
   $effect(() => {
     const kind = coordinatorKind
     if (!kind) return
-    const label = kind === 'assignment' ? 'Assignment coordinator' : 'Achievement coordinator'
+    const label =
+      kind === 'assignment'
+        ? 'Assignment coordinator'
+        : kind === 'achievement'
+          ? 'Achievement coordinator'
+          : 'Audit coordinator'
     const dispose = coordinatorDockState.register({
       projectId: thread.projectId,
       threadId: thread.id,
       label,
-      icon: kind === 'assignment' ? Network : Target,
-      panel: kind === 'assignment' ? assignmentCoordinatorPanel : achievementCoordinatorPanel
+      icon: kind === 'assignment' ? Network : kind === 'achievement' ? Target : ShieldCheck,
+      panel:
+        kind === 'assignment'
+          ? assignmentCoordinatorPanel
+          : kind === 'achievement'
+            ? achievementCoordinatorPanel
+            : auditCoordinatorPanel
     })
     // Docks itself the first time a thread starts coordinating, unless the user
     // closed it before; later runs are no-ops because the tab already exists.
@@ -1707,7 +1724,7 @@
     assignmentAuditState === 'running' || delegatedThreadWorking(assignmentAuditThread)
   )
   let achievementAuditorWorking = $derived(
-    auditState === 'running' || delegatedThreadWorking(achievementAuditThread)
+    auditState === 'running' || delegatedThreadWorking(durableAuditThread)
   )
   let delegatedWorkBusy = $derived.by(() => {
     if (assignment?.coordinatorThreadId === thread.id) {
@@ -4103,7 +4120,7 @@
     assignmentAuditThread = activeAssignment?.auditorThreadId
       ? projectThreads.find((candidate) => candidate.id === activeAssignment.auditorThreadId)
       : undefined
-    achievementAuditThread = workflowThread?.auditorThreadId
+    durableAuditThread = workflowThread?.auditorThreadId
       ? projectThreads.find((candidate) => candidate.id === workflowThread.auditorThreadId)
       : undefined
     assignmentThreads = activeAssignment
@@ -5190,6 +5207,11 @@
     scrollEl?.scrollTo({ top: scrollEl.scrollHeight, behavior: 'smooth' })
   }
 
+  async function openDurableAuditWork(): Promise<void> {
+    coordinatorDockState.setAutoOpen(true)
+    contextSidebarState.openCoordinator(thread.projectId, thread.id, 'Audit coordinator')
+  }
+
   async function openCoordinatorAuditReport(
     report: AuditReport | null = auditReport
   ): Promise<void> {
@@ -5216,54 +5238,57 @@
       await generateDurableAssignmentAudit(selected)
       return
     }
-    if (achievementOnly || thread.achievementRole === 'auditor') {
+    if (achievementOnly) {
       await generateDurableAchievementAudit(selected, thread.coordinatorThreadId ?? thread.id)
       return
     }
-    const auditTab = contextSidebarState.openAuditSession(thread.projectId, thread.id, selected)
+    if (thread.achievementRole === 'auditor') {
+      await retryAssignmentAuditFromAuditor(selected)
+      return
+    }
+    await generateDurableImplementationAudit(selected)
+  }
+
+  async function generateDurableImplementationAudit(
+    selected: ThreadSettings,
+    coordinatorThreadId = thread.id
+  ): Promise<void> {
     auditBusy = true
     auditError = ''
     errorMessage = ''
     auditState = 'running'
-    auditTab.busy = true
-    auditTab.error = ''
     auditSettings = selected
     rendererRecovery.addRecentModel(
       modelKey(selected.harnessId, selected.providerId, selected.modelId)
     )
     try {
-      const session = await invoke(
-        'agent:ensureAuditSession',
+      durableAuditThread = await invoke(
+        'agent:ensureImplementationAuditorThread',
         thread.projectId,
-        thread.id,
-        auditTab.temporaryChatId,
+        coordinatorThreadId,
         selected
       )
-      auditTab.sessionId = session.sessionId
-      auditTab.sessionStarted = true
-      contextSidebarState.touchTemporaryChat(auditTab, session.expiresAt)
-      auditReport = await invoke('agent:generateAudit', thread.projectId, thread.id, {
-        settings: selected,
-        temporaryChatId: auditTab.temporaryChatId
+      if (thread.id === coordinatorThreadId) {
+        coordinatorDockState.setAutoOpen(true)
+        contextSidebarState.openCoordinator(thread.projectId, thread.id, 'Audit coordinator')
+      }
+      auditReport = await invoke('agent:generateAudit', thread.projectId, coordinatorThreadId, {
+        settings: selected
       })
       auditVersions = await invoke(
         'audit:listVersions',
         thread.projectId,
-        thread.id,
+        coordinatorThreadId,
         auditReport.id
       )
       auditState = 'report_ready'
     } catch (error) {
       auditState = 'offered'
-      const auditTabStillOpen = contextSidebarState.tabs.some((tab) => tab.id === auditTab.id)
-      if (auditTabStillOpen) {
-        const rawError = error instanceof Error ? error.message : 'The implementation audit failed.'
-        errorMessage = rawError.replace(/^Error invoking remote method '[^']+': Error:\s*/u, '')
-        auditTab.error = errorMessage
-      }
+      const rawError = error instanceof Error ? error.message : 'The implementation audit failed.'
+      errorMessage = rawError.replace(/^Error invoking remote method '[^']+': Error:\s*/u, '')
+      auditError = errorMessage
     } finally {
       auditBusy = false
-      auditTab.busy = false
     }
   }
 
@@ -5337,7 +5362,7 @@
       modelKey(selected.harnessId, selected.providerId, selected.modelId)
     )
     try {
-      achievementAuditThread = await invoke(
+      durableAuditThread = await invoke(
         'agent:ensureAchievementAuditorThread',
         thread.projectId,
         coordinatorThreadId,
@@ -5349,7 +5374,7 @@
         coordinatorThreadId,
         selected
       )
-      achievementAuditThread = result.auditorThread
+      durableAuditThread = result.auditorThread
       auditReport = result.report
       auditVersions = await invoke(
         'audit:listVersions',
@@ -5373,11 +5398,16 @@
       auditError = 'The coordinator could not be found.'
       return
     }
-    if (thread.achievementRole === 'auditor') {
+    if (thread.assignmentId !== undefined) {
+      await generateDurableAssignmentAudit(selected, thread.coordinatorThreadId)
+      return
+    }
+    const coordinator = await invoke('thread:get', thread.projectId, thread.coordinatorThreadId)
+    if (coordinator?.settings?.loopMode === true) {
       await generateDurableAchievementAudit(selected, thread.coordinatorThreadId)
       return
     }
-    await generateDurableAssignmentAudit(selected, thread.coordinatorThreadId)
+    await generateDurableImplementationAudit(selected, thread.coordinatorThreadId)
   }
 
   function changeAuditModel(selected: ThreadSettings): void {
@@ -7005,6 +7035,11 @@
       {#key `${spec.id}:${spec.version}`}
         <SpecStudio
           {spec}
+          {providers}
+          projectId={thread.projectId}
+          {auditSettings}
+          favoriteModels={rendererRecovery.favoriteModels}
+          recentModels={rendererRecovery.recentModels}
           history={specStudioHistories.forDocument(`${spec.id}:${spec.version}`)}
           validation={specValidation}
           versions={specVersions}
@@ -7016,6 +7051,7 @@
           auditAvailable={auditReport !== null}
           implementationAuditAvailable={plainEngineeringAuditAvailable}
           implementationAuditReady={plainEngineeringAuditReady}
+          implementationAuditRunning={plainEngineeringAuditRunning}
           brainstormAvailable={brainstorm !== null}
           onBack={closeSpecStudio}
           onOpenBrainstorm={openBrainstormStudio}
@@ -7027,7 +7063,16 @@
           onGenerateAssignment={() => generateAssignmentDraft()}
           onOpenAudit={openAuditStudio}
           onRunImplementationAudit={() =>
-            plainEngineeringAuditReady ? openAuditStudio() : generateAudit(auditSettings)}
+            plainEngineeringAuditReady
+              ? openAuditStudio()
+              : plainEngineeringAuditRunning
+                ? openDurableAuditWork()
+                : generateAudit(auditSettings)}
+          onAuditModelChange={changeAuditModel}
+          onToggleFavorite={(providerId, modelId, harnessId) =>
+            rendererRecovery.toggleFavorite(modelKey(harnessId, providerId, modelId))}
+          onReorderFavorite={(draggedKey, targetKey, position) =>
+            rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
           onMarkImplementationComplete={completeAudit}
           onSave={saveSpec}
           onSelectVersion={selectSpecVersion}
@@ -8014,6 +8059,23 @@
                   rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
                 onViewReport={openAuditStudio}
               />
+            {:else if plainEngineeringAuditRunning && !achievementAutonomous}
+              <AuditGeneratedCard
+                state="running"
+                settings={auditSettings}
+                {providers}
+                projectId={thread.projectId}
+                favoriteModels={rendererRecovery.favoriteModels}
+                recentModels={rendererRecovery.recentModels}
+                onRetry={generateDurableImplementationAudit}
+                onModelChange={changeAuditModel}
+                onToggleFavorite={(providerId, modelId, harnessId) =>
+                  rendererRecovery.toggleFavorite(modelKey(harnessId, providerId, modelId))}
+                onReorderFavorite={(draggedKey, targetKey, position) =>
+                  rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
+                onViewTrace={() => void openDurableAuditWork()}
+                onViewReport={openAuditStudio}
+              />
             {:else if assignmentAuditState === 'failed' && assignment && !busy && !achievementAutonomous}
               <AuditGeneratedCard
                 state="failed"
@@ -8302,7 +8364,7 @@
     <AchievementCoordinatorPanel
       specTitle={thread.title}
       specSummary={spec.content.resolutionSummary}
-      auditThread={achievementAuditThread}
+      auditThread={durableAuditThread}
       {auditState}
       reportAvailable={auditReport !== null}
       selectedThreadId={thread.id}
@@ -8316,6 +8378,34 @@
       onViewReport={openAuditStudio}
       onOpenThread={(auditor) => workspaceState.openThread(auditor, project)}
       onResume={resumeAchievementCoordination}
+      onModelChange={changeAuditModel}
+      onToggleFavorite={(providerId, modelId, harnessId) =>
+        rendererRecovery.toggleFavorite(modelKey(harnessId, providerId, modelId))}
+      onReorderFavorite={(draggedKey, targetKey, position) =>
+        rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
+    />
+  {/if}
+{/snippet}
+
+{#snippet auditCoordinatorPanel()}
+  {#if spec}
+    <AchievementCoordinatorPanel
+      mode="audit"
+      specTitle={thread.title}
+      specSummary={spec.content.resolutionSummary}
+      auditThread={durableAuditThread}
+      {auditState}
+      reportAvailable={auditReport !== null}
+      selectedThreadId={thread.id}
+      auditorSettings={auditSettings}
+      {providers}
+      projectId={thread.projectId}
+      favoriteModels={rendererRecovery.favoriteModels}
+      recentModels={rendererRecovery.recentModels}
+      coordinatorWorking={auditBusy}
+      onOpenAudit={() => void generateAudit(auditSettings)}
+      onViewReport={openAuditStudio}
+      onOpenThread={(auditor) => workspaceState.openThread(auditor, project)}
       onModelChange={changeAuditModel}
       onToggleFavorite={(providerId, modelId, harnessId) =>
         rendererRecovery.toggleFavorite(modelKey(harnessId, providerId, modelId))}

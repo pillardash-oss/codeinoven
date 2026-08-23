@@ -99,7 +99,8 @@
     'debugger',
     'notifications',
     'git',
-    'thread-note'
+    'thread-note',
+    'coordinator'
   ])
 
   /** Files are headerless like the other single-panel tools right up until a
