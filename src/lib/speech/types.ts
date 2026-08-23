@@ -317,6 +317,18 @@ export interface SpeechPlaybackSession {
   createdAt: number
 }
 
+export interface SpeechPreparedPlayback {
+  sessionId: string
+  messageId: string
+  segments: SpeechSegment[]
+}
+
+export interface SpeechSynthesizedSegment {
+  sessionId: string
+  segmentIndex: number
+  audio: Uint8Array<ArrayBuffer>
+}
+
 export interface SpeechCueSettings {
   listeningStarted: boolean
   recordingStopped: boolean

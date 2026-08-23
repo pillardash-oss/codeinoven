@@ -26,6 +26,7 @@
   import { messageId } from '$shared/id'
   import { isTodoToolPart } from '$lib/agent-todos'
   import { copyText } from '$lib/copy-text'
+  import SpeechPlaybackButton from '../speech/SpeechPlaybackButton.svelte'
   import { attachmentPreviewKind, fileUrlToPath } from '$lib/mime'
   import { getAgentIcon } from '$lib/agent-icons/registry'
   import { fastVariantForModelId } from '$shared/fast-inference'
@@ -886,6 +887,7 @@
                         {/if}
                       </button>
                     {/if}
+                    <SpeechPlaybackButton messageId={endMessage.id} markdown={final.text} />
                     <button
                       type="button"
                       class="flex h-8 w-8 cursor-pointer items-center justify-center rounded-lg transition-colors active:bg-elevated active:text-foreground disabled:cursor-not-allowed disabled:opacity-50"

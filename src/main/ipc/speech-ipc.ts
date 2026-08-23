@@ -186,6 +186,47 @@ export function registerSpeechIpc(
   ipcMain.handle('speech:deleteCorrectionRule', (_event, rawRuleId: unknown) =>
     speechResult(() => service.deleteCorrectionRule(entityId(rawRuleId, 'Rule id')))
   )
+  ipcMain.handle(
+    'speech:preparePlayback',
+    (_event, rawMessageId: unknown, rawMarkdown: unknown, rawIncludeCodeBlocks: unknown) =>
+      speechResult(async () => {
+        if (typeof rawIncludeCodeBlocks !== 'boolean') {
+          throw new RangeError('Code-block preference is invalid.')
+        }
+        return service.preparePlayback(
+          entityId(rawMessageId, 'Message id'),
+          boundedString(rawMarkdown, 'Response text', 1_000_000),
+          rawIncludeCodeBlocks
+        )
+      })
+  )
+  ipcMain.handle(
+    'speech:synthesizePlaybackSegment',
+    (
+      _event,
+      rawSessionId: unknown,
+      rawSegmentIndex: unknown,
+      rawRuntime: unknown,
+      rawArtifactId: unknown,
+      rawVoiceId: unknown
+    ) =>
+      speechResult(() =>
+        service.synthesizePlaybackSegment(
+          entityId(rawSessionId, 'Playback session id'),
+          boundedInteger(rawSegmentIndex, 'Segment index', 0, 10_000),
+          runtime(rawRuntime),
+          entityId(rawArtifactId, 'Artifact id'),
+          boundedString(rawVoiceId, 'Voice id', 128)
+        )
+      )
+  )
+  ipcMain.handle('speech:cancelPlayback', (_event, rawSessionId?: unknown) =>
+    speechResult(async () =>
+      service.cancelPlayback(
+        rawSessionId === undefined ? undefined : entityId(rawSessionId, 'Playback session id')
+      )
+    )
+  )
 
   return () => {
     stopProgress()
@@ -206,7 +247,10 @@ export function registerSpeechIpc(
       'speech:getCorrectionRules',
       'speech:observeCorrection',
       'speech:setCorrectionRuleEnabled',
-      'speech:deleteCorrectionRule'
+      'speech:deleteCorrectionRule',
+      'speech:preparePlayback',
+      'speech:synthesizePlaybackSegment',
+      'speech:cancelPlayback'
     ]) {
       ipcMain.removeHandler(channel)
     }

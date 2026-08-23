@@ -27,6 +27,7 @@
   import { fastBaseModelId, fastVariantForModelId } from '$shared/fast-inference'
   import { invoke, subscribe } from '$lib/ipc.svelte'
   import { copyText } from '$lib/copy-text'
+  import SpeechPlaybackButton from '../speech/SpeechPlaybackButton.svelte'
   import { messageId } from '$shared/id'
   import { resolveDefaultThinkingLevel } from '$shared/thinking-presets'
   import { FileBlobUrlManager } from '$lib/media-urls.svelte'
@@ -1193,6 +1194,7 @@
           <Copy size={12} />
         {/if}
       </button>
+      <SpeechPlaybackButton messageId={message.id} markdown={textFor(message)} />
       <button
         class="rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
         aria-label="Continue in a new thread"

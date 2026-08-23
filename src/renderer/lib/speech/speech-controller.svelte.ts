@@ -3,7 +3,10 @@ import type {
   SpeechDictationSpan,
   SpeechModelArtifact,
   SpeechRuntime,
-  SpeechScope
+  SpeechScope,
+  SpeechPlaybackState,
+  SpeechPreparedPlayback,
+  SpeechSynthesizedSegment
 } from '../../../lib/speech/types'
 import type { SpeechEditorSnapshot, SpeechEditorTarget } from './editor-target'
 
@@ -35,6 +38,17 @@ interface ActiveCapture {
   uploadError: Error | null
 }
 
+interface ActivePlayback {
+  prepared: SpeechPreparedPlayback
+  runtime: SpeechRuntime
+  artifact: SpeechModelArtifact
+  voiceId: string
+  audio: HTMLAudioElement | null
+  audioUrl: string | null
+  next: Promise<SpeechSynthesizedSegment> | null
+  index: number
+}
+
 const MIME_TYPES = ['audio/webm;codecs=opus', 'audio/webm', 'audio/ogg;codecs=opus'] as const
 const CAPTURE_TIMESLICE_MS = 250
 const PAUSE_UPLOAD_DEPTH = 4
@@ -49,9 +63,11 @@ function selectedMimeType(): string {
 
 class SpeechController {
   state = $state<RendererSpeechState>({ state: 'idle' })
+  playback = $state<SpeechPlaybackState>({ state: 'idle' })
   private active: ActiveCapture | null = null
   private elapsedTimer: ReturnType<typeof setInterval> | null = null
   private readonly spans = new Map<string, SpeechDictationSpan[]>()
+  private activePlayback: ActivePlayback | null = null
 
   isActiveTarget(targetId: string): boolean {
     return 'targetId' in this.state && this.state.targetId === targetId
@@ -254,6 +270,66 @@ class SpeechController {
     }
   }
 
+  async togglePlayback(messageId: string, markdown: string): Promise<void> {
+    const active = this.activePlayback
+    if (active?.prepared.messageId === messageId && active.audio) {
+      if (active.audio.paused) {
+        await active.audio.play()
+        this.playback = {
+          state: 'playing',
+          sessionId: active.prepared.sessionId,
+          messageId,
+          segmentIndex: active.index
+        }
+      } else {
+        active.audio.pause()
+        this.playback = {
+          state: 'paused',
+          sessionId: active.prepared.sessionId,
+          messageId,
+          segmentIndex: active.index
+        }
+      }
+      return
+    }
+    await this.cancelPlayback()
+    this.playback = { state: 'preparing', sessionId: 'pending', messageId }
+    try {
+      const selection = await this.selectTtsArtifact()
+      const prepared = await invoke('speech:preparePlayback', messageId, markdown, false)
+      if (!prepared.ok) throw new Error(prepared.error.message)
+      const playback: ActivePlayback = {
+        prepared: prepared.value,
+        runtime: selection.runtime,
+        artifact: selection.artifact,
+        voiceId: selection.artifact.voices[0] ?? '0',
+        audio: null,
+        audioUrl: null,
+        next: null,
+        index: 0
+      }
+      this.activePlayback = playback
+      await this.playSegment(playback, 0)
+    } catch (cause) {
+      this.playback = {
+        state: 'failed',
+        messageId,
+        error: { code: 'synthesis-failed', message: errorMessage(cause), retryable: true }
+      }
+    }
+  }
+
+  async cancelPlayback(): Promise<void> {
+    const active = this.activePlayback
+    this.activePlayback = null
+    if (active) {
+      active.audio?.pause()
+      if (active.audioUrl) URL.revokeObjectURL(active.audioUrl)
+      await invoke('speech:cancelPlayback', active.prepared.sessionId).catch(() => undefined)
+    }
+    this.playback = { state: 'idle' }
+  }
+
   private queueChunk(active: ActiveCapture, blob: Blob): void {
     if (blob.size === 0) return
     active.queuedChunks += 1
@@ -326,6 +402,94 @@ class SpeechController {
     if (!artifact)
       throw new Error(`Install a qualified ${runtime} speech-to-text model in Sound settings.`)
     return { runtime, artifact }
+  }
+
+  private async selectTtsArtifact(): Promise<{
+    runtime: SpeechRuntime
+    artifact: SpeechModelArtifact
+  }> {
+    const [capabilities, catalog] = await Promise.all([
+      invoke('speech:getCapabilities'),
+      invoke('speech:getCatalog')
+    ])
+    if (!capabilities.ok) throw new Error(capabilities.error.message)
+    if (!catalog.ok) throw new Error(catalog.error.message)
+    const runtime = capabilities.value.selectedRuntime
+    if (!runtime) throw new Error('The selected local speech runtime is unavailable.')
+    const installed = new Set(
+      capabilities.value.installedArtifacts
+        .filter((item) => item.available && item.runtime === runtime)
+        .map((item) => item.artifactId)
+    )
+    const artifact = catalog.value.artifacts.find(
+      (item) =>
+        item.runtime === runtime &&
+        item.capability === 'tts' &&
+        item.qualification.status === 'qualified' &&
+        installed.has(item.id)
+    )
+    if (!artifact) throw new Error(`Install a qualified ${runtime} text-to-speech model.`)
+    return { runtime, artifact }
+  }
+
+  private synthesize(playback: ActivePlayback, index: number): Promise<SpeechSynthesizedSegment> {
+    return invoke(
+      'speech:synthesizePlaybackSegment',
+      playback.prepared.sessionId,
+      index,
+      playback.runtime,
+      playback.artifact.id,
+      playback.voiceId
+    ).then((result) => {
+      if (!result.ok) throw new Error(result.error.message)
+      return result.value
+    })
+  }
+
+  private async playSegment(playback: ActivePlayback, index: number): Promise<void> {
+    if (this.activePlayback !== playback) return
+    const synthesized = playback.next ? await playback.next : await this.synthesize(playback, index)
+    playback.next = null
+    if (this.activePlayback !== playback) return
+    playback.index = index
+    if (index + 1 < playback.prepared.segments.length) {
+      playback.next = this.synthesize(playback, index + 1)
+    }
+    if (playback.audioUrl) URL.revokeObjectURL(playback.audioUrl)
+    const url = URL.createObjectURL(new Blob([synthesized.audio], { type: 'audio/wav' }))
+    const audio = new Audio(url)
+    playback.audioUrl = url
+    playback.audio = audio
+    audio.addEventListener(
+      'ended',
+      () => {
+        if (this.activePlayback !== playback) return
+        if (index + 1 < playback.prepared.segments.length) {
+          void this.playSegment(playback, index + 1).catch((cause: unknown) => {
+            this.playback = {
+              state: 'failed',
+              messageId: playback.prepared.messageId,
+              error: {
+                code: 'synthesis-failed',
+                message: errorMessage(cause),
+                retryable: true
+              }
+            }
+          })
+        } else {
+          this.playback = { state: 'completed', messageId: playback.prepared.messageId }
+          void this.cancelPlayback()
+        }
+      },
+      { once: true }
+    )
+    await audio.play()
+    this.playback = {
+      state: 'playing',
+      sessionId: playback.prepared.sessionId,
+      messageId: playback.prepared.messageId,
+      segmentIndex: index
+    }
   }
 
   private playCue(kind: 'started' | 'stopped' | 'completed'): void {

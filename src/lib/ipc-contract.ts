@@ -42,6 +42,10 @@ import type {
   EditorInfo,
   EngineeringSpec,
   EngineeringSpecContent,
+  EngineeringLifecycleDecision,
+  EngineeringLifecycleSelection,
+  EngineeringLifecycleState,
+  EngineeringLifecycleTransitionResult,
   ScopedHarnessCommand,
   HistoryEntry,
   HistoryRole,
@@ -250,6 +254,35 @@ export interface IpcInvokeContract {
   >
   'account:syncProfile': Contract<[], import('./types').AccountProfileState>
   'account:signOut': Contract<[], void>
+  'engineeringLifecycle:get': Contract<
+    [projectId: string, threadId: string],
+    EngineeringLifecycleState | null
+  >
+  'engineeringLifecycle:select': Contract<
+    [projectId: string, threadId: string, selection: EngineeringLifecycleSelection],
+    EngineeringLifecycleState
+  >
+  'engineeringLifecycle:start': Contract<
+    [projectId: string, threadId: string],
+    EngineeringLifecycleTransitionResult
+  >
+  'engineeringLifecycle:resume': Contract<
+    [
+      projectId: string,
+      threadId: string,
+      resumeToken: string,
+      decision: EngineeringLifecycleDecision
+    ],
+    EngineeringLifecycleTransitionResult
+  >
+  'engineeringLifecycle:retry': Contract<
+    [projectId: string, threadId: string, resumeToken: string],
+    EngineeringLifecycleTransitionResult
+  >
+  'engineeringLifecycle:cancel': Contract<
+    [projectId: string, threadId: string, confirmed: true],
+    EngineeringLifecycleState
+  >
   'brainstorm:ensureWorkflow': Contract<
     [projectId: string, threadId: string],
     BrainstormWorkflowState
@@ -564,6 +597,10 @@ export interface IpcInvokeContract {
     [projectId: string, threadId: string, request: AuditGenerationRequest],
     AuditReport
   >
+  'agent:ensureImplementationAuditorThread': Contract<
+    [projectId: string, coordinatorThreadId: string, settings: ThreadSettings],
+    Thread
+  >
   'agent:ensureAssignmentAuditorThread': Contract<
     [projectId: string, coordinatorThreadId: string, settings: ThreadSettings],
     Thread
@@ -768,10 +805,6 @@ export interface IpcInvokeContract {
     [temporaryChatId: string],
     { active: boolean; expiresAt?: number }
   >
-  'agent:ensureAuditSession': Contract<
-    [projectId: string, threadId: string, temporaryChatId: string, settings: ThreadSettings],
-    { sessionId: string; expiresAt: number }
-  >
   'agent:touchTemporaryChat': Contract<
     [temporaryChatId: string],
     { active: boolean; expiresAt?: number }
@@ -933,6 +966,24 @@ export interface IpcInvokeContract {
   'speech:deleteCorrectionRule': Contract<
     [ruleId: string],
     import('./speech/types').SpeechResult<void>
+  >
+  'speech:preparePlayback': Contract<
+    [messageId: string, markdown: string, includeCodeBlocks: boolean],
+    import('./speech/types').SpeechResult<import('./speech/types').SpeechPreparedPlayback>
+  >
+  'speech:synthesizePlaybackSegment': Contract<
+    [
+      sessionId: string,
+      segmentIndex: number,
+      runtime: import('./speech/types').SpeechRuntime,
+      artifactId: string,
+      voiceId: string
+    ],
+    import('./speech/types').SpeechResult<import('./speech/types').SpeechSynthesizedSegment>
+  >
+  'speech:cancelPlayback': Contract<
+    [sessionId?: string],
+    import('./speech/types').SpeechResult<boolean>
   >
   'dialog:pickFile': Contract<[scope?: AttachmentStorageScope], string | null>
   'dialog:pickFiles': Contract<[scope?: AttachmentStorageScope], string[]>

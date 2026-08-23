@@ -13,6 +13,8 @@ import type {
   SpeechModelCatalog,
   SpeechProgressEvent,
   SpeechRecordingAttempt,
+  SpeechPreparedPlayback,
+  SpeechSynthesizedSegment,
   SpeechResult,
   SpeechRuntime,
   SpeechRuntimeAvailability,
@@ -37,6 +39,8 @@ import { Logger } from '../system/logger'
 import { getConfigRoot } from '../../lib/utils'
 import { SpeechCleanupService } from './speech-cleanup-service'
 import { SpeechLearningService } from './speech-learning-service'
+import { normalizeSpeechMarkdown } from '../../lib/speech/tts-normalizer'
+import { TtsPlaybackService } from './tts-playback-service'
 
 interface InstalledArtifactIndex {
   version: 1
@@ -65,6 +69,7 @@ export class SpeechService {
   private readonly learning = new SpeechLearningService(
     join(getConfigRoot(), 'speech', 'corrections.json')
   )
+  private readonly playback = new TtsPlaybackService()
 
   constructor(
     private readonly paths: SpeechServicePaths,
@@ -316,6 +321,69 @@ export class SpeechService {
 
   deleteCorrectionRule(ruleId: string): Promise<void> {
     return this.learning.delete(ruleId)
+  }
+
+  preparePlayback(
+    messageId: string,
+    markdown: string,
+    includeCodeBlocks: boolean
+  ): SpeechPreparedPlayback {
+    const segments = normalizeSpeechMarkdown(markdown, includeCodeBlocks)
+    if (segments.length === 0) throw new Error('This response has no readable text.')
+    const prepared = this.playback.prepare(messageId, segments)
+    this.emit({
+      kind: 'playback',
+      playback: {
+        state: 'preparing',
+        sessionId: prepared.sessionId,
+        messageId: prepared.messageId
+      }
+    })
+    return prepared
+  }
+
+  async synthesizePlaybackSegment(
+    sessionId: string,
+    segmentIndex: number,
+    runtime: SpeechRuntime,
+    artifactId: string,
+    voiceId: string
+  ): Promise<SpeechSynthesizedSegment> {
+    this.playback.assertActive(sessionId)
+    const artifact = this.requireSelectableArtifact(artifactId, runtime, 'tts')
+    const backend = this.requireBackend(runtime)
+    const outputPath = this.storage.stagingFile(`${sessionId}.${segmentIndex}.${randomUUID()}.wav`)
+    const prepared = this.playback.segment(sessionId, segmentIndex)
+    const queued = this.queue.enqueue({
+      capability: 'tts',
+      runtime,
+      run: (signal) =>
+        backend.synthesize(
+          {
+            artifact: { id: artifact.id, directory: this.storage.modelDirectory(artifact.id) },
+            text: prepared.text,
+            voiceId,
+            outputPath
+          },
+          signal
+        )
+    })
+    try {
+      await queued.result
+      this.playback.assertActive(sessionId)
+      return {
+        sessionId,
+        segmentIndex,
+        audio: await this.playback.consumeAudio(outputPath)
+      }
+    } catch (cause) {
+      await rm(outputPath, { force: true })
+      throw cause
+    }
+  }
+
+  cancelPlayback(sessionId?: string): boolean {
+    return this.playback.cancel(sessionId)
   }
 
   async downloadArtifact(artifactId: string): Promise<void> {

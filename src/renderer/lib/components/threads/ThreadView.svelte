@@ -52,6 +52,7 @@
   import FolderTypeIcon from '../files/FolderTypeIcon.svelte'
   import RichMarkdownEditor from '../shared/RichMarkdownEditor.svelte'
   import VoiceInputButton from '../speech/VoiceInputButton.svelte'
+  import SpeechPlaybackButton from '../speech/SpeechPlaybackButton.svelte'
   import WorkingTrace from './WorkingTrace.svelte'
   import FindInSurface from './FindInSurface.svelte'
   import ContinueInProjectModal from './ContinueInProjectModal.svelte'
@@ -7505,6 +7506,10 @@
                                   <Copy size={12} />
                                 {/if}
                               </button>
+                              <SpeechPlaybackButton
+                                messageId={msg.id}
+                                markdown={messageText(msg)}
+                              />
                               <button
                                 class="rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
                                 aria-label="Fork thread from this message"

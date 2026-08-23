@@ -6,6 +6,8 @@ import type {
   ChecklistItemStatus,
   CreateProjectInput,
   CreateThreadInput,
+  EngineeringLifecycleDecision,
+  EngineeringLifecycleSelection,
   HistoryRole,
   InferenceMode,
   ScopeBoard,
@@ -55,6 +57,35 @@ const CHANGE_TRACKING_MODES = new Set<NonNullable<CreateProjectInput['changeTrac
   'manual'
 ])
 const THREAD_TITLE_SOURCES = new Set<ThreadTitleSource>(['default', 'auto', 'manual'])
+const ENGINEERING_LIFECYCLE_SELECTIONS = new Set<EngineeringLifecycleSelection>([
+  'none',
+  'brainstorm',
+  'prd',
+  'spec',
+  'assignment',
+  'achievement',
+  'run_all'
+])
+const ENGINEERING_LIFECYCLE_DECISIONS = new Set<EngineeringLifecycleDecision>([
+  'continue',
+  'continue_without_hifi',
+  'retry',
+  'cancel'
+])
+
+export function validateEngineeringLifecycleSelection(
+  value: unknown
+): EngineeringLifecycleSelection {
+  return assertEnum(value, ENGINEERING_LIFECYCLE_SELECTIONS, 'engineering lifecycle selection')
+}
+
+export function validateEngineeringLifecycleDecision(value: unknown): EngineeringLifecycleDecision {
+  return assertEnum(value, ENGINEERING_LIFECYCLE_DECISIONS, 'engineering lifecycle decision')
+}
+
+export function validateEngineeringLifecycleResumeToken(value: unknown): string {
+  return validateBoundedString(value, 'Engineering lifecycle resume token', 1, 256)
+}
 
 const THREAD_SETTINGS_FIELDS = new Set([
   'harnessId',
