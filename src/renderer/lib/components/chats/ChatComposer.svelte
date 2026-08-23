@@ -176,6 +176,7 @@
     onEngineeringLifecycleSelect?: (
       selection: EngineeringLifecycleSelection
     ) => void | Promise<void>
+    onEngineeringLifecycleRetry?: () => void | Promise<void>
     /** True on the Chats tab — surfaces the chat-only Engineering and File System toggles. */
     showChatModes?: boolean
     /** Hides the permission level selector and forces auto review — chats are
@@ -273,6 +274,7 @@
     showEngineeringMode = true,
     engineeringLifecycle = null,
     onEngineeringLifecycleSelect,
+    onEngineeringLifecycleRetry,
     showChatModes = false,
     hidePermissionSelector = false,
     readOnlyMode = false,
@@ -2080,7 +2082,7 @@
 
   <!-- Bottom bar: + menu · model · thinking ··· send -->
   <div class="composer-toolbar flex min-w-0 items-center gap-1 px-3 pb-2 pt-1">
-    <!-- Plus menu — Engineering, Achievement, attachments, future per-chat options -->
+    <!-- Plus menu — attachments and project scheduling; Engineering lives in Toolbox. -->
     {#if !readOnlyMode || allowAttachments || showEngineeringMode}
       <div class="relative">
         <button
@@ -2222,6 +2224,7 @@
         lifecycleState={engineeringLifecycle}
         disabled={readOnlyMode}
         onselect={onEngineeringLifecycleSelect}
+        onretry={onEngineeringLifecycleRetry}
       />
     {/if}
 

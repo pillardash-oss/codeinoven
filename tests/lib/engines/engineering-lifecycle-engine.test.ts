@@ -152,4 +152,30 @@ describe('EngineeringLifecycleEngine', () => {
       completedStages: ['brainstorm']
     })
   })
+
+  it('keeps the failed stage selected and resumes it without duplicating history', async () => {
+    const { db, lifecycle } = await setup()
+    lifecycle.select('project-1', 'thread-1', 'run_all')
+    const started = lifecycle.start('project-1', 'thread-1').state
+    const failed = lifecycle.fail('project-1', 'thread-1', 'Provider unavailable')
+
+    expect(failed).toMatchObject({
+      selection: 'run_all',
+      activeStage: 'brainstorm',
+      humanGate: 'terminal_failure',
+      failure: 'Provider unavailable',
+      resumeToken: 'resume-1',
+      startedAt: started.startedAt
+    })
+
+    const reopened = new EngineeringLifecycleEngine(db)
+    const retried = reopened.retry('project-1', 'thread-1', 'resume-1')
+    expect(retried).toMatchObject({
+      selection: 'run_all',
+      activeStage: 'brainstorm',
+      startedAt: started.startedAt
+    })
+    expect(retried.humanGate).toBeUndefined()
+    expect(retried.failure).toBeUndefined()
+  })
 })

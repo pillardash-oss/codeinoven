@@ -169,3 +169,5 @@ database-backed auth rate limiting, and per-source relay/enrollment rate limitin
 # Prototype previews
 
 Production prototype links require an explicit HTTPS `CODEINOVEN_PUBLIC_PROTOTYPE_PREVIEW_ORIGIN`. Localhost and `127.0.0.1` values are development-only. The preview origin is public configuration, not a secret, and must remain separate from account authentication and remote API origins.
+
+Paired remote clients fetch prototype assets through authenticated, end-to-end encrypted workflow RPC in bounded chunks. The desktop verifies the requested preview against the owning thread's active Brainstorm metadata and canonical prototype root before reading it; the client assembles the response in a temporary Blob. The configured HTTPS origin remains the deployment-readiness and link-origin contract, while `REMOTE_API_ORIGIN` and account authentication keep their existing responsibilities.

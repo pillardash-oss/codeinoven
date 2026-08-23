@@ -12,9 +12,10 @@
     lifecycleState: EngineeringLifecycleState | null
     disabled?: boolean
     onselect: (selection: EngineeringLifecycleSelection) => void | Promise<void>
+    onretry?: () => void | Promise<void>
   }
 
-  let { lifecycleState, disabled = false, onselect }: Props = $props()
+  let { lifecycleState, disabled = false, onselect, onretry }: Props = $props()
   let open = $state(false)
   let panel: HTMLDivElement | undefined = $state(undefined)
 
@@ -139,6 +140,31 @@
           </span>
         </span>
       </Switch>
+      {#if lifecycleState?.humanGate === 'terminal_failure'}
+        <div class="mx-2 mt-2 rounded-lg border border-danger/30 bg-danger/5 p-2.5">
+          <p class="text-[11px] font-medium text-danger">Engineering needs attention</p>
+          <p class="mt-1 line-clamp-3 text-[11px] leading-4 text-muted">
+            {lifecycleState.failure ?? 'The active stage could not complete.'}
+          </p>
+          <div class="mt-2 flex justify-end gap-2">
+            <button
+              type="button"
+              class="rounded-lg px-2.5 py-1.5 text-[11px] text-muted transition-colors hover:bg-elevated hover:text-foreground"
+              onclick={() => void onselect('none')}
+            >
+              Stop
+            </button>
+            <button
+              type="button"
+              class="rounded-lg bg-thread-spec px-2.5 py-1.5 text-[11px] font-medium text-foreground disabled:opacity-50"
+              disabled={!onretry}
+              onclick={() => void onretry?.()}
+            >
+              Retry stage
+            </button>
+          </div>
+        </div>
+      {/if}
     </div>
   {/if}
 </div>

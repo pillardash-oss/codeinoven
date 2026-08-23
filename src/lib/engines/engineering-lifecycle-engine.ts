@@ -209,7 +209,10 @@ export class EngineeringLifecycleEngine {
     const gate = input.gate
     const terminal = input.terminal === true
     const selection = terminal ? 'none' : current.selection
-    const activeStage = terminal || gate ? undefined : input.nextStage
+    const activeStage =
+      terminal || (gate && gate !== 'terminal_failure')
+        ? undefined
+        : (input.nextStage ?? current.activeStage)
     const token = gate ? this.newToken() : undefined
     const now = this.now()
     this.db.run(
@@ -307,6 +310,16 @@ export class EngineeringLifecycleEngine {
 
   retry(projectId: string, threadId: string, resumeToken: string): EngineeringLifecycleState {
     return this.resume(projectId, threadId, resumeToken, 'retry').state
+  }
+
+  fail(projectId: string, threadId: string, failure: string): EngineeringLifecycleState {
+    const current = this.require(projectId, threadId)
+    if (!current.activeStage || current.selection === 'none') return current
+    if (current.humanGate === 'terminal_failure') return current
+    return this.advance(projectId, threadId, {
+      gate: 'terminal_failure',
+      failure
+    })
   }
 
   cancel(projectId: string, threadId: string, resumeToken?: string): EngineeringLifecycleState {

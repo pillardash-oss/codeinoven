@@ -33,6 +33,8 @@
   import { resolveDefaultThinkingLevel } from '$shared/thinking-presets'
   import { mobileState } from '$lib/remote/mobile-state.svelte'
   import ChatComposer from '../chats/ChatComposer.svelte'
+  import EngineeringFlowCancelModal from '../threads/EngineeringFlowCancelModal.svelte'
+  import PrdEntryChoiceCard from '../threads/PrdEntryChoiceCard.svelte'
   import AttachmentPreview from '../chats/AttachmentPreview.svelte'
   import ResponseSelectionPopover from '../chats/ResponseSelectionPopover.svelte'
   import AgentProviderStatusCard from '../threads/AgentProviderStatusCard.svelte'
@@ -45,8 +47,12 @@
     AgentPart,
     AgentProviderIssue,
     AgentSessionStatus,
+    BrainstormDocument,
     PromptAttachment,
     PromptReference,
+    EngineeringLifecycleSelection,
+    EngineeringLifecycleState,
+    PrdWorkflowState,
     Thread,
     ThreadSettings
   } from '$shared/types'
@@ -70,6 +76,12 @@
   let busy = $derived(agentRuns.isBusy(thread.projectId, thread.id))
 
   let sendError = $state('')
+  let engineeringLifecycle = $state<EngineeringLifecycleState | null>(null)
+  let prdWorkflow = $state<PrdWorkflowState | null>(null)
+  let gateBrainstorm = $state<BrainstormDocument | null>(null)
+  let continueWithoutHifi = $state(false)
+  let pendingLifecycleSelection = $state<EngineeringLifecycleSelection | null>(null)
+  let lifecycleChoiceBusy = $state(false)
   let failedDelivery = $state<{ text: string; attachments: PromptAttachment[] } | null>(null)
   let errorRetrying = $state(false)
   let scrollEl = $state<HTMLDivElement>()
@@ -127,6 +139,19 @@
     settings = updated
   }
 
+  function settingsForLifecycle(selection: EngineeringLifecycleSelection): ThreadSettings {
+    return {
+      ...settings,
+      engineeringMode:
+        selection === 'brainstorm' ||
+        selection === 'prd' ||
+        selection === 'spec' ||
+        selection === 'run_all',
+      assignmentMode: selection === 'assignment' || selection === 'run_all',
+      loopMode: selection === 'achievement' || selection === 'run_all'
+    }
+  }
+
   // Provider/model catalog — hydrate this project's catalog if it hasn't
   // been fetched yet (desktop's App.svelte seeds every project at startup;
   // mobile only ever opens one project's threads at a time).
@@ -171,6 +196,7 @@
       }
     }
     void hydrate()
+    if (!chatMode) void refreshEngineeringLifecycle()
     const bind = (sessionId: string | undefined): void => {
       if (sessionId) threadMessages.setSessionId(projectId, id, sessionId)
     }
@@ -184,6 +210,245 @@
         .catch(() => undefined)
     }
   })
+
+  async function refreshEngineeringLifecycle(): Promise<void> {
+    const [lifecycle, workflow] = await Promise.all([
+      invoke('engineeringLifecycle:get', thread.projectId, thread.id),
+      invoke('prd:getWorkflow', thread.projectId, thread.id)
+    ])
+    engineeringLifecycle = lifecycle
+    prdWorkflow = workflow
+    gateBrainstorm =
+      lifecycle?.humanGate === 'prototype_selection' ||
+      lifecycle?.humanGate === 'brainstorm_finalization'
+        ? await invoke('brainstorm:getActive', thread.projectId, thread.id)
+        : null
+    if (lifecycle?.humanGate !== 'prototype_selection') continueWithoutHifi = false
+  }
+
+  async function applyLifecycleSelection(selection: EngineeringLifecycleSelection): Promise<void> {
+    engineeringLifecycle = await invoke(
+      'engineeringLifecycle:select',
+      thread.projectId,
+      thread.id,
+      selection
+    )
+    settings = settingsForLifecycle(selection)
+    await invoke('thread:updateSettings', thread.projectId, thread.id, settings)
+    if (selection === 'prd') {
+      prdWorkflow = await invoke('prd:ensureWorkflow', thread.projectId, thread.id)
+    }
+  }
+
+  async function selectEngineeringLifecycle(
+    selection: EngineeringLifecycleSelection
+  ): Promise<void> {
+    const current = engineeringLifecycle
+    if (
+      current &&
+      selection !== current.selection &&
+      (current.activeStage !== undefined || current.humanGate !== undefined)
+    ) {
+      pendingLifecycleSelection = selection
+      return
+    }
+    await applyLifecycleSelection(selection)
+  }
+
+  async function confirmLifecycleReplacement(): Promise<void> {
+    const selection = pendingLifecycleSelection
+    if (selection === null) return
+    engineeringLifecycle = await invoke(
+      'engineeringLifecycle:cancel',
+      thread.projectId,
+      thread.id,
+      true
+    )
+    pendingLifecycleSelection = null
+    if (selection !== 'none') await applyLifecycleSelection(selection)
+  }
+
+  async function choosePrdEntry(choice: 'brainstorm_first' | 'start_prd'): Promise<void> {
+    lifecycleChoiceBusy = true
+    sendError = ''
+    try {
+      if (!engineeringLifecycle?.activeStage) {
+        engineeringLifecycle = (
+          await invoke('engineeringLifecycle:start', thread.projectId, thread.id)
+        ).state
+      }
+      prdWorkflow = await invoke('prd:chooseEntry', thread.projectId, thread.id, choice)
+    } catch (error) {
+      sendError =
+        error instanceof Error ? error.message : 'The PRD entry choice could not be saved.'
+    } finally {
+      lifecycleChoiceBusy = false
+    }
+  }
+
+  async function retryEngineeringLifecycle(): Promise<void> {
+    const current = engineeringLifecycle
+    if (current?.humanGate !== 'terminal_failure' || !current.resumeToken) return
+    try {
+      engineeringLifecycle = await invoke(
+        'engineeringLifecycle:retry',
+        thread.projectId,
+        thread.id,
+        current.resumeToken
+      )
+      settings = settingsForLifecycle(engineeringLifecycle.selection)
+      await deliver(
+        `Retry the persisted ${engineeringLifecycle.activeStage ?? 'Engineering'} stage from its durable state.`,
+        []
+      )
+    } catch (error) {
+      sendError = error instanceof Error ? error.message : 'The Engineering stage could not retry.'
+    }
+  }
+
+  async function selectRemoteLofi(prototypeId: string): Promise<void> {
+    const draft = gateBrainstorm
+    if (!draft) return
+    lifecycleChoiceBusy = true
+    try {
+      gateBrainstorm = await invoke(
+        'agent:reviewBrainstorm',
+        draft.projectId,
+        draft.threadId,
+        draft.id,
+        draft.version,
+        `Generate one direct HiFi prototype H1 based on selected LoFi prototype ${prototypeId}. Preserve all existing prototypes and aligned Brainstorm content.`
+      )
+      await refreshEngineeringLifecycle()
+    } catch (error) {
+      sendError =
+        error instanceof Error ? error.message : 'The HiFi prototype could not be generated.'
+    } finally {
+      lifecycleChoiceBusy = false
+    }
+  }
+
+  async function finalizeRemoteBrainstorm(): Promise<void> {
+    const draft = gateBrainstorm
+    if (!draft) return
+    lifecycleChoiceBusy = true
+    try {
+      await invoke(
+        'agent:finalizeBrainstorm',
+        draft.projectId,
+        draft.threadId,
+        draft.id,
+        draft.version,
+        continueWithoutHifi ? 'Continue without HiFi.' : ''
+      )
+      await refreshEngineeringLifecycle()
+      if (engineeringLifecycle?.activeStage === 'prd') {
+        await invoke(
+          'agent:generatePrd',
+          thread.projectId,
+          thread.id,
+          settings,
+          'Continue Run all by generating the PRD from the finalized Brainstorm and project context.',
+          [],
+          messageId()
+        )
+        await refreshEngineeringLifecycle()
+      }
+    } catch (error) {
+      sendError = error instanceof Error ? error.message : 'The Brainstorm could not be finalized.'
+    } finally {
+      lifecycleChoiceBusy = false
+    }
+  }
+
+  async function continueRemoteLifecycleGate(): Promise<void> {
+    const lifecycle = engineeringLifecycle
+    if (!lifecycle?.humanGate || !lifecycle.resumeToken) return
+    lifecycleChoiceBusy = true
+    try {
+      if (lifecycle.humanGate === 'prd_finalization') {
+        const draft = await invoke('prd:getActive', thread.projectId, thread.id)
+        if (!draft) throw new Error('The PRD draft is unavailable.')
+        engineeringLifecycle = (
+          await invoke(
+            'engineeringLifecycle:resume',
+            thread.projectId,
+            thread.id,
+            lifecycle.resumeToken,
+            'continue'
+          )
+        ).state
+        await invoke('prd:finalize', draft.projectId, draft.threadId, draft.id, draft.version)
+        engineeringLifecycle = await invoke(
+          'engineeringLifecycle:complete',
+          thread.projectId,
+          thread.id,
+          'prd'
+        )
+        if (engineeringLifecycle.activeStage === 'spec') {
+          await invoke('agent:ensureInitialSpec', thread.projectId, thread.id)
+        }
+      } else if (lifecycle.humanGate === 'spec_approval') {
+        let draft = await invoke('spec:getActive', thread.projectId, thread.id)
+        if (!draft) throw new Error('The Spec draft is unavailable.')
+        engineeringLifecycle = (
+          await invoke(
+            'engineeringLifecycle:resume',
+            thread.projectId,
+            thread.id,
+            lifecycle.resumeToken,
+            'continue'
+          )
+        ).state
+        if (draft.status === 'draft') {
+          draft = await invoke(
+            'spec:setReview',
+            draft.projectId,
+            draft.threadId,
+            draft.id,
+            draft.version
+          )
+        }
+        if (draft.status === 'in_review') {
+          await invoke('spec:approve', draft.projectId, draft.threadId, draft.id, draft.version)
+        }
+        engineeringLifecycle = await invoke(
+          'engineeringLifecycle:complete',
+          thread.projectId,
+          thread.id,
+          'spec'
+        )
+        if (engineeringLifecycle.activeStage === 'assignment') {
+          await invoke('agent:generateAssignmentDraft', thread.projectId, thread.id, settings)
+        }
+      } else if (lifecycle.humanGate === 'assignment_approval') {
+        engineeringLifecycle = (
+          await invoke(
+            'engineeringLifecycle:resume',
+            thread.projectId,
+            thread.id,
+            lifecycle.resumeToken,
+            'continue'
+          )
+        ).state
+        await invoke('agent:startAssignment', thread.projectId, thread.id)
+        if (engineeringLifecycle.selection === 'run_all') {
+          engineeringLifecycle = await invoke(
+            'engineeringLifecycle:complete',
+            thread.projectId,
+            thread.id,
+            'assignment'
+          )
+        }
+      }
+      await refreshEngineeringLifecycle()
+    } catch (error) {
+      sendError =
+        error instanceof Error ? error.message : 'The Engineering gate could not continue.'
+    } finally {
+      lifecycleChoiceBusy = false
+    }
+  }
 
   // Auto-scroll to the newest message, and honour history jumps.
   $effect(() => {
@@ -475,6 +740,40 @@
       threadSettings.commit(settings)
     }
     try {
+      if (
+        !chatMode &&
+        engineeringLifecycle !== null &&
+        engineeringLifecycle?.selection !== 'none' &&
+        engineeringLifecycle?.activeStage === undefined &&
+        engineeringLifecycle?.humanGate === undefined
+      ) {
+        engineeringLifecycle = (
+          await invoke('engineeringLifecycle:start', thread.projectId, thread.id)
+        ).state
+      }
+      if (engineeringLifecycle?.activeStage === 'prd' && prdWorkflow?.stage === 'drafting') {
+        await invoke(
+          'agent:generatePrd',
+          thread.projectId,
+          thread.id,
+          settings,
+          text,
+          attachments,
+          userMessageId
+        )
+        failedDelivery = null
+        engineeringLifecycle = await invoke('engineeringLifecycle:get', thread.projectId, thread.id)
+        prdWorkflow = await invoke('prd:getWorkflow', thread.projectId, thread.id)
+        agentRuns.setIdle(thread.projectId, thread.id)
+        return
+      }
+      if (engineeringLifecycle?.activeStage === 'assignment') {
+        await invoke('agent:generateAssignmentDraft', thread.projectId, thread.id, settings)
+        failedDelivery = null
+        engineeringLifecycle = await invoke('engineeringLifecycle:get', thread.projectId, thread.id)
+        agentRuns.setIdle(thread.projectId, thread.id)
+        return
+      }
       const sessionId = await invoke('agent:ensureSession', thread.projectId, thread.id)
       threadMessages.setSessionId(thread.projectId, thread.id, sessionId)
       await threadMessages.send(
@@ -483,13 +782,17 @@
         settings,
         text,
         attachments,
-        undefined,
+        engineeringLifecycle?.activeStage === 'achievement' ? 'implement' : undefined,
         userMessageId,
         undefined,
         promptContext,
         promptReferences
       )
       failedDelivery = null
+      if (!chatMode) {
+        engineeringLifecycle = await invoke('engineeringLifecycle:get', thread.projectId, thread.id)
+        prdWorkflow = await invoke('prd:getWorkflow', thread.projectId, thread.id)
+      }
     } catch (error) {
       agentRuns.setIdle(thread.projectId, thread.id)
       failedDelivery = { text, attachments }
@@ -997,6 +1300,77 @@
         {/each}
       </div>
     {/if}
+    {#if !chatMode && engineeringLifecycle?.selection === 'prd' && prdWorkflow?.stage === 'choice_pending'}
+      <div class="px-1 pb-2">
+        <PrdEntryChoiceCard
+          busy={lifecycleChoiceBusy}
+          onBrainstormFirst={() => choosePrdEntry('brainstorm_first')}
+          onStartPrd={() => choosePrdEntry('start_prd')}
+        />
+      </div>
+    {/if}
+    {#if !chatMode && engineeringLifecycle?.humanGate && engineeringLifecycle.humanGate !== 'terminal_failure'}
+      <section class="mx-1 mb-2 rounded-2xl border bg-surface p-4 shadow-sm">
+        <h2 class="text-sm font-semibold text-foreground">Engineering review</h2>
+        {#if engineeringLifecycle.humanGate === 'prototype_selection' && !continueWithoutHifi}
+          <p class="mt-1 text-xs leading-5 text-muted">
+            Choose a LoFi direction for H1, or continue to Brainstorm sign-off without HiFi.
+          </p>
+          <div class="mt-3 grid gap-2">
+            {#each gateBrainstorm?.content.prototypes?.filter((prototype) => prototype.fidelity === 'lofi') ?? [] as prototype (prototype.id)}
+              <button
+                type="button"
+                class="rounded-xl bg-thread-spec px-3 py-2.5 text-left text-xs font-medium text-foreground disabled:opacity-50"
+                disabled={lifecycleChoiceBusy}
+                onclick={() => void selectRemoteLofi(prototype.id)}
+              >
+                Build HiFi from {prototype.id} · {prototype.title}
+              </button>
+            {/each}
+            <button
+              type="button"
+              class="rounded-xl border px-3 py-2.5 text-left text-xs font-medium text-foreground disabled:opacity-50"
+              disabled={lifecycleChoiceBusy}
+              onclick={() => (continueWithoutHifi = true)}
+            >
+              Continue without HiFi
+            </button>
+          </div>
+        {:else if engineeringLifecycle.humanGate === 'brainstorm_finalization' || continueWithoutHifi}
+          <p class="mt-1 text-xs leading-5 text-muted">
+            Finalize the reviewed Brainstorm to continue the persisted lifecycle.
+          </p>
+          <button
+            type="button"
+            class="mt-3 w-full rounded-xl bg-thread-spec px-3 py-2.5 text-xs font-medium text-foreground disabled:opacity-50"
+            disabled={lifecycleChoiceBusy || !gateBrainstorm}
+            onclick={() => void finalizeRemoteBrainstorm()}
+          >
+            Finalize Brainstorm
+          </button>
+        {:else}
+          <p class="mt-1 text-xs leading-5 text-muted">
+            {engineeringLifecycle.humanGate === 'prd_finalization'
+              ? 'Finalize the reviewed PRD.'
+              : engineeringLifecycle.humanGate === 'spec_approval'
+                ? 'Approve the reviewed Spec without starting implementation early.'
+                : 'Approve the Assignment and start its workers.'}
+          </p>
+          <button
+            type="button"
+            class="mt-3 w-full rounded-xl bg-thread-spec px-3 py-2.5 text-xs font-medium text-foreground disabled:opacity-50"
+            disabled={lifecycleChoiceBusy}
+            onclick={() => void continueRemoteLifecycleGate()}
+          >
+            {engineeringLifecycle.humanGate === 'prd_finalization'
+              ? 'Finalize PRD'
+              : engineeringLifecycle.humanGate === 'spec_approval'
+                ? 'Approve Spec'
+                : 'Approve Assignment'}
+          </button>
+        {/if}
+      </section>
+    {/if}
     <ChatComposer
       onSend={handleSend}
       working={busy}
@@ -1016,12 +1390,25 @@
       contextUsage={thread.contextUsage}
       hideUsageIndicator
       hidePermissionSelector={chatMode}
-      showEngineeringMode={false}
+      showEngineeringMode={!chatMode}
+      {engineeringLifecycle}
+      onEngineeringLifecycleSelect={selectEngineeringLifecycle}
+      onEngineeringLifecycleRetry={retryEngineeringLifecycle}
       showChatModes={false}
       initialStartAfterThreads={queuedMessage?.startAfterThreads}
     />
   </div>
 </div>
+
+<EngineeringFlowCancelModal
+  open={pendingLifecycleSelection !== null}
+  title={pendingLifecycleSelection === 'none'
+    ? 'Stop Engineering work?'
+    : 'Replace Engineering work?'}
+  message="Generated documents and prototype artifacts will be preserved. Confirm before changing the active lifecycle run."
+  oncancel={() => (pendingLifecycleSelection = null)}
+  onconfirm={confirmLifecycleReplacement}
+/>
 
 {#if openSubagentTab}
   {@const tab = openSubagentTab}

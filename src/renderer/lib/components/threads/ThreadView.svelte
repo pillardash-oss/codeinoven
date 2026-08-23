@@ -408,6 +408,62 @@
     if (replacement !== 'none') await applyLifecycleSelection(replacement)
     else updateSettings(legacySettingsForLifecycle('none'))
   }
+
+  async function retryEngineeringLifecycle(): Promise<void> {
+    const current = engineeringLifecycle
+    if (current?.humanGate !== 'terminal_failure' || !current.resumeToken) return
+    try {
+      engineeringLifecycle = await invoke(
+        'engineeringLifecycle:retry',
+        thread.projectId,
+        thread.id,
+        current.resumeToken
+      )
+      updateSettings(legacySettingsForLifecycle(engineeringLifecycle.selection))
+      const stage = engineeringLifecycle.activeStage
+      if (stage === 'brainstorm') {
+        const active = await invoke('brainstorm:getActive', thread.projectId, thread.id)
+        if (active) applyBrainstormDocument(active)
+        else
+          await sendMessage(
+            'Retry the persisted Brainstorm stage using the existing conversation and project context.',
+            [],
+            undefined,
+            true
+          )
+      } else if (stage === 'prd') {
+        const active = await invoke('prd:getActive', thread.projectId, thread.id)
+        if (active) prd = active
+        else {
+          prd = await invoke(
+            'agent:generatePrd',
+            thread.projectId,
+            thread.id,
+            settings,
+            'Retry the persisted PRD stage using the existing conversation, finalized Brainstorm, and project context.',
+            [],
+            messageId()
+          )
+        }
+      } else if (stage === 'spec') {
+        await setActiveSpec(await invoke('agent:ensureInitialSpec', thread.projectId, thread.id))
+      } else if (stage === 'assignment') {
+        await generateAssignmentDraft()
+      } else if (stage === 'achievement') {
+        await sendMessage(
+          'Retry the persisted Achievement audit and rework stage from its durable artifacts.',
+          [],
+          'implement',
+          true
+        )
+      }
+      await reconcileReadySpec()
+    } catch (error) {
+      errorMessage =
+        error instanceof Error ? error.message : 'The Engineering stage could not retry.'
+      engineeringLifecycle = await invoke('engineeringLifecycle:get', thread.projectId, thread.id)
+    }
+  }
   /** Snapshot of the selection that started the live turn. Model controls can
    *  still change the next-turn settings while the current turn is running. */
   let liveWorkingSelection = $state<WorkingModelSelection | null>(null)
@@ -9007,6 +9063,7 @@
                   showEngineeringMode={!chatMode}
                   {engineeringLifecycle}
                   onEngineeringLifecycleSelect={selectEngineeringLifecycle}
+                  onEngineeringLifecycleRetry={retryEngineeringLifecycle}
                   showChatModes={chatMode}
                   {settings}
                   onSettingsChange={updateSettings}
