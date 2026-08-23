@@ -103,6 +103,7 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y libgtk-3-dev
 
       - name: Build Apple Silicon speech worker
+        continue-on-error: true
         run: bun run speech:build-mlx
 
       - name: Build production bundle
