@@ -15,8 +15,10 @@
   import { DropdownMenu } from 'bits-ui'
   import { onDestroy, onMount, tick } from 'svelte'
   import { compactViewport } from '$lib/compact-viewport.svelte'
+  import { draggablePopover } from '$lib/draggable-popover.svelte'
   import { editorPreference } from '$lib/stores/editor-preference.svelte'
   import RichMarkdownEditor from '../shared/RichMarkdownEditor.svelte'
+  import PopoverDragHandle from '../ui/PopoverDragHandle.svelte'
   import EditableMarkdown from './EditableMarkdown.svelte'
   import StudioSelectionActions from './StudioSelectionActions.svelte'
   import StudioHistoryControls from './StudioHistoryControls.svelte'
@@ -1013,22 +1015,30 @@
 {#if pendingAnnotation}
   <div
     class="fixed z-50 w-96 rounded-xl border bg-surface p-3 shadow-xl max-md:inset-x-0 max-md:bottom-0 max-md:w-auto max-md:rounded-b-none max-md:pb-[calc(0.75rem+env(safe-area-inset-bottom))]"
-    style:left={compactViewport.matches ? undefined : `${pendingAnnotation.x}px`}
-    style:top={compactViewport.matches ? undefined : `${pendingAnnotation.y}px`}
     role="dialog"
     aria-label={pendingAnnotation.sectionLevel
       ? 'Annotate section'
       : canEdit
         ? 'Comment on selection'
         : 'Actions for selection'}
+    {@attach draggablePopover({
+      x: pendingAnnotation.x,
+      y: pendingAnnotation.y,
+      disabled: compactViewport.matches
+    })}
   >
-    <p class="text-[10px] font-semibold uppercase tracking-wide text-muted">
-      {pendingAnnotation.sectionLevel
-        ? 'Annotate section'
-        : canEdit
-          ? 'Comment on selection'
-          : 'Selection'}
-    </p>
+    <div class="flex items-center gap-1">
+      {#if !compactViewport.matches}
+        <PopoverDragHandle title="Move selection comment" />
+      {/if}
+      <p class="text-[10px] font-semibold uppercase tracking-wide text-muted">
+        {pendingAnnotation.sectionLevel
+          ? 'Annotate section'
+          : canEdit
+            ? 'Comment on selection'
+            : 'Selection'}
+      </p>
+    </div>
     <blockquote
       class="mt-2 line-clamp-3 border-l-2 border-accent pl-2 text-[11px] leading-relaxed text-muted"
     >
@@ -1072,15 +1082,23 @@
 {#if editingAnnotation && editingAnnotationPosition}
   <div
     class="fixed z-50 w-80 rounded-xl border bg-surface p-4 shadow-xl max-md:inset-x-0 max-md:bottom-0 max-md:w-auto max-md:rounded-b-none max-md:pb-[calc(1rem+env(safe-area-inset-bottom))]"
-    style:left={compactViewport.matches ? undefined : `${editingAnnotationPosition.x}px`}
-    style:top={compactViewport.matches ? undefined : `${editingAnnotationPosition.y}px`}
     role="dialog"
     aria-label="Brainstorm annotation"
+    {@attach draggablePopover({
+      x: editingAnnotationPosition.x,
+      y: editingAnnotationPosition.y,
+      disabled: compactViewport.matches
+    })}
   >
     <div class="flex items-center justify-between gap-2">
-      <p class="text-[10px] font-semibold uppercase tracking-wide text-muted">
-        {annotationEditMode ? 'Edit annotation' : 'Annotation'}
-      </p>
+      <span class="flex min-w-0 items-center gap-1">
+        {#if !compactViewport.matches}
+          <PopoverDragHandle title="Move annotation" />
+        {/if}
+        <span class="text-[10px] font-semibold uppercase tracking-wide text-muted">
+          {annotationEditMode ? 'Edit annotation' : 'Annotation'}
+        </span>
+      </span>
       <button
         class="rounded-md p-1 text-muted hover:bg-overlay hover:text-foreground"
         title="Close annotation"
