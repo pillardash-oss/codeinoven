@@ -4,6 +4,7 @@
   import PopoverDragHandle from '../ui/PopoverDragHandle.svelte'
   import VoiceInputButton from '../speech/VoiceInputButton.svelte'
   import { plainTextEditorTarget } from '../../speech/editor-target'
+  import { speechController } from '../../speech/speech-controller.svelte'
   import type { SpeechScope } from '../../../../lib/speech/types'
 
   interface Props {
@@ -52,6 +53,7 @@
   }
 
   function submit(): void {
+    speechController.observeSent(targetId, comment)
     onDone(comment)
   }
 

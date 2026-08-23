@@ -54,6 +54,7 @@
   import RichMarkdownEditor from '../shared/RichMarkdownEditor.svelte'
   import VoiceInputButton from '../speech/VoiceInputButton.svelte'
   import SpeechPlaybackButton from '../speech/SpeechPlaybackButton.svelte'
+  import { speechController } from '../../speech/speech-controller.svelte'
   import WorkingTrace from './WorkingTrace.svelte'
   import FindInSurface from './FindInSurface.svelte'
   import ContinueInProjectModal from './ContinueInProjectModal.svelte'
@@ -7098,6 +7099,7 @@
     editingText = ''
     editingMessageAttachments = []
     editingMessageProjectReferences = []
+    speechController.observeSent(`message-edit-${thread.id}-${msg.id}`, text)
     await sendMessage(text, attachments, undefined, undefined, undefined, [], projectReferences)
   }
 
@@ -7688,6 +7690,7 @@
       {#key `${studioAssignment.id}:${studioAssignment.version}`}
         <AssignmentStudio
           assignment={studioAssignment}
+          threadId={thread.id}
           versions={assignmentVersions}
           history={assignmentStudioHistories.forDocument(
             `${studioAssignment.id}:${studioAssignment.version}`

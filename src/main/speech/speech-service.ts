@@ -56,6 +56,22 @@ interface SpeechServicePaths {
   mlxWorkerPath: string
 }
 
+export interface SpeechRemoteCleanupInput {
+  transcript: string
+  scope: SpeechScope
+  selection: 'fixed' | 'conversation'
+  modelId?: string
+}
+
+export interface SpeechRemoteCleanupOutput {
+  text: string
+  modelId: string
+}
+
+export type SpeechRemoteCleanupExecutor = (
+  input: SpeechRemoteCleanupInput
+) => Promise<SpeechRemoteCleanupOutput>
+
 type SpeechProgressListener = (event: SpeechProgressEvent) => void
 
 const DOWNLOAD_CHUNK_BYTES = 256 * 1024
@@ -78,7 +94,8 @@ export class SpeechService {
 
   constructor(
     private readonly paths: SpeechServicePaths,
-    storage?: SpeechStorage
+    storage?: SpeechStorage,
+    private readonly remoteCleanup?: SpeechRemoteCleanupExecutor
   ) {
     this.storage = storage ?? new SpeechStorage()
     this.backends = new Map<SpeechRuntime, SpeechBackend>([
@@ -273,10 +290,31 @@ export class SpeechService {
           cleanupProvenance = this.cleanup.fallback(rawTranscript, cause).provenance
         }
       } else if (cleanupMode.kind === 'remote') {
-        cleanupProvenance = this.cleanup.fallback(
-          rawTranscript,
-          new Error('The selected remote cleanup model is unavailable for this conversation.')
-        ).provenance
+        try {
+          if (!this.remoteCleanup) throw new Error('Remote cleanup is unavailable.')
+          const remote = await this.remoteCleanup({
+            transcript: rawTranscript,
+            scope: this.requireAttemptScope(attemptId),
+            selection: cleanupMode.selection,
+            ...(cleanupMode.modelId ? { modelId: cleanupMode.modelId } : {})
+          })
+          const cleaned = this.cleanup.applyRules(
+            remote.text,
+            this.learning.enabled(this.requireAttemptScope(attemptId))
+          )
+          finalTranscript = cleaned.text
+          cleanupProvenance = {
+            mode: 'remote',
+            modelId: remote.modelId,
+            appliedRuleIds: cleaned.provenance.appliedRuleIds,
+            failed: false
+          }
+        } catch (cause) {
+          cleanupProvenance = {
+            ...this.cleanup.fallback(rawTranscript, cause).provenance,
+            mode: 'remote'
+          }
+        }
       }
       await this.storage.updateAttempt(attemptId, (attempt) => {
         attempt.stage = 'completed'

@@ -19,6 +19,7 @@
   import { editorPreference } from '$lib/stores/editor-preference.svelte'
   import RichMarkdownEditor from '../shared/RichMarkdownEditor.svelte'
   import VoiceInputButton from '../speech/VoiceInputButton.svelte'
+  import { speechController } from '../../speech/speech-controller.svelte'
   import PopoverDragHandle from '../ui/PopoverDragHandle.svelte'
   import EditableMarkdown from './EditableMarkdown.svelte'
   import StudioSelectionActions from './StudioSelectionActions.svelte'
@@ -168,7 +169,11 @@
   let decisionNotesEditor = $state<RichMarkdownEditor>()
   const pendingSpeechTargetId = `brainstorm-annotation-${crypto.randomUUID()}`
   const decisionSpeechTargetId = `brainstorm-decision-${crypto.randomUUID()}`
-  const speechScope = $derived({ kind: 'project', projectId: brainstorm.projectId } as const)
+  const speechScope = $derived({
+    kind: 'project',
+    projectId: brainstorm.projectId,
+    threadId: brainstorm.threadId
+  } as const)
 
   function pendingSpeechTarget() {
     return annotationEditor?.speechEditorTarget(pendingSpeechTargetId) ?? null
@@ -433,6 +438,7 @@
       endOffset: anchor.endOffset
     })
     if (!updated) return
+    speechController.observeSent(pendingSpeechTargetId, body)
     applyDocument(updated)
     closePendingAnnotation()
     const added = [...updated.annotations]
@@ -546,6 +552,7 @@
     if (!annotation || !body) return
     const updated = await onUpdateAnnotation(annotation.id, body)
     if (!updated) return
+    speechController.observeSent(`brainstorm-annotation-edit-${annotation.id}`, body)
     applyDocument(updated)
     editingAnnotation =
       updated.annotations.find((candidate) => candidate.id === annotation.id) ?? null
@@ -643,6 +650,7 @@
       baselineAvailable: brainstorm.generatedContent !== undefined,
       edits: reviewEdits
     })
+    speechController.observeSent(decisionSpeechTargetId, notes)
   }
 
   function handleWindowKeydown(event: KeyboardEvent): void {

@@ -11,7 +11,9 @@ export type SpeechCapability = 'asr' | 'cleanup' | 'tts'
 export type SpeechPlatform = 'darwin' | 'win32' | 'linux'
 export type SpeechArchitecture = 'arm64' | 'x64'
 export type SpeechScope =
-  { kind: 'global' } | { kind: 'project'; projectId: string } | { kind: 'inbox' }
+  | { kind: 'global' }
+  | { kind: 'project'; projectId: string; threadId?: string }
+  | { kind: 'inbox'; threadId?: string }
 
 export interface SpeechPlatformTarget {
   platform: SpeechPlatform

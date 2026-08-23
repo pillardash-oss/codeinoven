@@ -14,6 +14,7 @@
   import AssignmentReviewContent from './AssignmentReviewContent.svelte'
   import RichMarkdownEditor from '../shared/RichMarkdownEditor.svelte'
   import VoiceInputButton from '../speech/VoiceInputButton.svelte'
+  import { speechController } from '../../speech/speech-controller.svelte'
   import MarkdownView from '../markdown/MarkdownView.svelte'
   import StudioSelectionActions from './StudioSelectionActions.svelte'
   import StudioHistoryControls from './StudioHistoryControls.svelte'
@@ -44,6 +45,7 @@
 
   interface Props {
     assignment: AssignmentPlan
+    threadId: string
     versions?: AssignmentPlan[]
     providers: ProviderCatalog[]
     harnessId: string
@@ -103,6 +105,7 @@
 
   let {
     assignment,
+    threadId,
     versions = [],
     providers,
     harnessId,
@@ -180,7 +183,11 @@
   let annotationEditor = $state<RichMarkdownEditor>()
   let editingAnnotationEditor = $state<RichMarkdownEditor>()
   const pendingSpeechTargetId = `assignment-annotation-${crypto.randomUUID()}`
-  const speechScope = $derived({ kind: 'project', projectId: assignment.projectId } as const)
+  const speechScope = $derived({
+    kind: 'project',
+    projectId: assignment.projectId,
+    threadId
+  } as const)
 
   function pendingSpeechTarget() {
     return annotationEditor?.speechEditorTarget(pendingSpeechTargetId) ?? null
@@ -403,6 +410,7 @@
       endOffset: anchor.endOffset
     })
     if (!updated) return
+    speechController.observeSent(pendingSpeechTargetId, body)
     applyAssignment(updated)
     closePendingAnnotation()
     const added = [...(updated.annotations ?? [])]
@@ -509,6 +517,10 @@
     if (!editingAnnotation || !editingAnnotationBody.trim() || !onUpdateAnnotation) return
     const updated = await onUpdateAnnotation(editingAnnotation.id, editingAnnotationBody.trim())
     if (!updated) return
+    speechController.observeSent(
+      `assignment-annotation-edit-${editingAnnotation.id}`,
+      editingAnnotationBody.trim()
+    )
     applyAssignment(updated)
     editingAnnotation =
       (updated.annotations ?? []).find((item) => item.id === editingAnnotation?.id) ?? null

@@ -577,14 +577,18 @@ async function bootPostPaintServices(): Promise<void> {
   updaterService = new UpdaterService(storage)
   powerWakeService = new PowerWakeService(storage, database)
   retryScheduler = new RetrySchedulerService(storage)
-  speechService = new SpeechService({
-    catalogPath: app.isPackaged
-      ? join(process.resourcesPath, 'speech/model-catalog.json')
-      : join(app.getAppPath(), 'resources/speech/model-catalog.json'),
-    mlxWorkerPath: app.isPackaged
-      ? join(process.resourcesPath, 'speech/mlx-worker')
-      : join(app.getAppPath(), 'resources/speech/runtime/darwin-arm64/mlx-worker')
-  })
+  speechService = new SpeechService(
+    {
+      catalogPath: app.isPackaged
+        ? join(process.resourcesPath, 'speech/model-catalog.json')
+        : join(app.getAppPath(), 'resources/speech/model-catalog.json'),
+      mlxWorkerPath: app.isPackaged
+        ? join(process.resourcesPath, 'speech/mlx-worker')
+        : join(app.getAppPath(), 'resources/speech/runtime/darwin-arm64/mlx-worker')
+    },
+    undefined,
+    (input) => chatEngine!.cleanupSpeechTranscript(input)
+  )
   await speechService.initialize()
   unregisterSpeechIpc = registerSpeechIpc(speechService, () => mainWindow?.webContents ?? null)
   prototypePreviewService = new PrototypePreviewService()

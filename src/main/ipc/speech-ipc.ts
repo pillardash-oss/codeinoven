@@ -70,9 +70,19 @@ function scope(value: unknown): SpeechScope {
   if (typeof value !== 'object' || value === null) throw new RangeError('Speech scope is invalid.')
   const candidate = value as Record<string, unknown>
   if (candidate['kind'] === 'global') return { kind: 'global' }
-  if (candidate['kind'] === 'inbox') return { kind: 'inbox' }
+  if (candidate['kind'] === 'inbox') {
+    const threadId = candidate['threadId']
+    return threadId === undefined
+      ? { kind: 'inbox' }
+      : { kind: 'inbox', threadId: entityId(threadId, 'Thread id') }
+  }
   if (candidate['kind'] === 'project') {
-    return { kind: 'project', projectId: entityId(candidate['projectId'], 'Project id') }
+    const threadId = candidate['threadId']
+    return {
+      kind: 'project',
+      projectId: entityId(candidate['projectId'], 'Project id'),
+      ...(threadId === undefined ? {} : { threadId: entityId(threadId, 'Thread id') })
+    }
   }
   throw new RangeError('Speech scope is invalid.')
 }

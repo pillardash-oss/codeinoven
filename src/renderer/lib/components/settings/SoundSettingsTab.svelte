@@ -174,6 +174,23 @@
           <option value="conversation">Current conversation model</option>
           <option value="fixed">Selected fixed model</option>
         </select>
+        {#if settings.remoteCleanupSelection === 'fixed'}
+          <label class="block text-xs text-muted">
+            Fixed model ID
+            <input
+              class="mt-1 w-full rounded-lg border bg-elevated px-2.5 py-2 text-xs outline-none focus:border-primary disabled:opacity-50"
+              type="text"
+              value={settings.remoteCleanupModelId ?? ''}
+              disabled={!settings.remoteCleanupEnabled}
+              placeholder="Model ID from the current harness"
+              autocomplete="off"
+              oninput={(event) =>
+                patch({
+                  remoteCleanupModelId: event.currentTarget.value.trim() || undefined
+                })}
+            />
+          </label>
+        {/if}
       </div>
     </section>
 

@@ -430,7 +430,9 @@
   let lastCaretSupportsCommands: boolean | null = null
   let richEditor: RichMarkdownEditor
   const speechScope = $derived(
-    projectId ? ({ kind: 'project', projectId } as const) : ({ kind: 'inbox' } as const)
+    projectId
+      ? ({ kind: 'project', projectId, ...(threadId ? { threadId } : {}) } as const)
+      : ({ kind: 'inbox', ...(threadId ? { threadId } : {}) } as const)
   )
 
   function composerSpeechTarget() {

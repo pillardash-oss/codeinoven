@@ -22,6 +22,7 @@
   import { exportAuditReportMarkdown } from '$shared/audit/audit-markdown'
   import RichMarkdownEditor from '../shared/RichMarkdownEditor.svelte'
   import VoiceInputButton from '../speech/VoiceInputButton.svelte'
+  import { speechController } from '../../speech/speech-controller.svelte'
   import PopoverDragHandle from '../ui/PopoverDragHandle.svelte'
   import EditableMarkdown from './EditableMarkdown.svelte'
   import StudioSelectionActions from './StudioSelectionActions.svelte'
@@ -128,7 +129,11 @@
   let reviewNotesEditor = $state<RichMarkdownEditor>()
   const pendingSpeechTargetId = `audit-annotation-${crypto.randomUUID()}`
   const reviewSpeechTargetId = `audit-review-${crypto.randomUUID()}`
-  const speechScope = $derived({ kind: 'project', projectId: report.projectId } as const)
+  const speechScope = $derived({
+    kind: 'project',
+    projectId: report.projectId,
+    threadId: report.threadId
+  } as const)
 
   function pendingSpeechTarget() {
     return annotationEditor?.speechEditorTarget(pendingSpeechTargetId) ?? null
@@ -185,7 +190,10 @@
     if (reviewSubmitting || busy || !workflowActionsVisible) return
     reviewSubmitting = true
     try {
-      if (await onReview($state.snapshot(draft), reviewNotes)) reviewOpen = false
+      if (await onReview($state.snapshot(draft), reviewNotes)) {
+        speechController.observeSent(reviewSpeechTargetId, reviewNotes)
+        reviewOpen = false
+      }
     } finally {
       reviewSubmitting = false
     }
@@ -446,6 +454,7 @@
       endOffset: anchor.endOffset
     })
     if (!updated) return
+    speechController.observeSent(pendingSpeechTargetId, body)
     applyReport(updated)
     closePendingAnnotation()
     const added = [...updated.annotations]
@@ -633,6 +642,7 @@
     if (!annotation || !body) return
     const updated = await onUpdateAnnotation(annotation.id, body)
     if (!updated) return
+    speechController.observeSent(`audit-annotation-edit-${annotation.id}`, body)
     applyReport(updated)
     const saved = updated.annotations.find((candidate) => candidate.id === annotation.id)
     if (saved) {

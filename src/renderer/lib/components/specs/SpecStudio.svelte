@@ -25,6 +25,7 @@
   import MarkdownView from '../markdown/MarkdownView.svelte'
   import RichMarkdownEditor from '../shared/RichMarkdownEditor.svelte'
   import VoiceInputButton from '../speech/VoiceInputButton.svelte'
+  import { speechController } from '../../speech/speech-controller.svelte'
   import EditableMarkdown from './EditableMarkdown.svelte'
   import ModelPicker from '../shared/ModelPicker.svelte'
   import StudioSelectionActions from './StudioSelectionActions.svelte'
@@ -278,7 +279,11 @@
   let decisionNotesEditor = $state<RichMarkdownEditor>()
   const pendingSpeechTargetId = `spec-annotation-${crypto.randomUUID()}`
   const decisionSpeechTargetId = `spec-decision-${crypto.randomUUID()}`
-  const speechScope = $derived({ kind: 'project', projectId: spec.projectId } as const)
+  const speechScope = $derived({
+    kind: 'project',
+    projectId: spec.projectId,
+    threadId: spec.threadId
+  } as const)
 
   function pendingSpeechTarget() {
     return annotationEditor?.speechEditorTarget(pendingSpeechTargetId) ?? null
@@ -781,6 +786,7 @@
       endOffset: anchor.endOffset
     })
     if (!updated) return
+    speechController.observeSent(pendingSpeechTargetId, body)
     applySpec(updated)
     closePendingAnnotation()
     const added = [...updated.annotations]
@@ -887,6 +893,7 @@
     if (!annotation || !body) return
     const updated = await onUpdateAnnotation(annotation.id, body)
     if (!updated) return
+    speechController.observeSent(`spec-annotation-edit-${annotation.id}`, body)
     applySpec(updated)
     const saved = updated.annotations.find((candidate) => candidate.id === annotation.id)
     if (saved) {
@@ -913,6 +920,7 @@
     pendingAction = null
     additionalNotes = ''
     await onSubmit(action, submittedDraft, notes)
+    speechController.observeSent(decisionSpeechTargetId, notes)
   }
 
   async function generateAssignment(): Promise<void> {
