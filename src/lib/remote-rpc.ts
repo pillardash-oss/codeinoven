@@ -96,6 +96,8 @@ export const REMOTE_ALLOWED_CHANNELS: readonly string[] = [
   'scope:setArchive',
   'scope:setWorktreeDefaults',
   'scope:worktree:health',
+  'scope:worktree:sourceInfo',
+  'scope:worktree:detectAdopt',
   'scope:delete',
   // Agent chat surface
   'agent:loadMessages',
@@ -166,6 +168,7 @@ export const REMOTE_ALLOWED_CHANNELS: readonly string[] = [
   'agent:reviewBrainstorm',
   'agent:finalizeBrainstorm',
   'agent:generatePrd',
+  'agent:ensureInitialSpec',
   'agent:ensureImplementationAuditorThread',
   'agent:startAssignment',
   'agent:stopAssignment',
@@ -415,6 +418,8 @@ export const REMOTE_CHANNEL_AUTHORIZATION: Readonly<Record<string, RemoteChannel
   'scope:delete': { scope: 'workspace.delete', stepUp: 'none' },
   'scope:setWorktreeDefaults': { scope: 'workspace.write', stepUp: 'none' },
   'scope:worktree:health': { scope: 'workspace.read', stepUp: 'none' },
+  'scope:worktree:sourceInfo': { scope: 'workspace.read', stepUp: 'none' },
+  'scope:worktree:detectAdopt': { scope: 'workspace.read', stepUp: 'none' },
   'note:get': { scope: 'workspace.read', stepUp: 'none' },
   'note:list': { scope: 'workspace.read', stepUp: 'none' },
   'attachment:readRemoteChunk': { scope: 'conversation.read', stepUp: 'none' },
@@ -552,6 +557,7 @@ export const REMOTE_CHANNEL_AUTHORIZATION: Readonly<Record<string, RemoteChannel
     requiresStepUp: true
   },
   'agent:generatePrd': { scope: 'workflow.write', stepUp: 'conditional' },
+  'agent:ensureInitialSpec': { scope: 'workflow.write', stepUp: 'conditional' },
   'agent:ensureImplementationAuditorThread': {
     scope: 'workflow.write',
     stepUp: 'conditional'

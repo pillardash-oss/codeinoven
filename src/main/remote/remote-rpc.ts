@@ -85,6 +85,7 @@ import {
   validateScopeOrderIds,
   validateScopeSlice,
   validateScopeTarget,
+  validateSourcePath,
   validateWorktreeDefaults
 } from '../ipc/ipc-validation'
 import type {
@@ -181,6 +182,7 @@ export interface RemoteRpcServices {
     | 'reviewBrainstorm'
     | 'finalizeBrainstorm'
     | 'generatePrd'
+    | 'ensureInitialSpec'
     | 'readPrototypePreviewChunk'
     | 'ensureImplementationAuditorThread'
     | 'startAssignment'
@@ -855,6 +857,13 @@ export class RemoteRpcDispatcher {
         )
       case 'scope:worktree:health':
         return this.scopeWorktreeService.health(validateScopeTarget(args[0]))
+      case 'scope:worktree:sourceInfo':
+        return this.scopeWorktreeService.sourceInfo(this.string(args[0]))
+      case 'scope:worktree:detectAdopt':
+        return this.scopeWorktreeService.detectAdoptable(
+          this.string(args[0]),
+          validateSourcePath(args[1])
+        )
 
       // ─── Agent chat surface ─────────────────────────────────────────────
       case 'agent:loadMessages':
@@ -1078,6 +1087,8 @@ export class RemoteRpcDispatcher {
           args[4] as PromptAttachment[],
           this.string(args[5])
         )
+      case 'agent:ensureInitialSpec':
+        return chatEngine.ensureInitialSpec(this.string(args[0]), this.string(args[1]))
       case 'prototypePreview:readChunk':
         return chatEngine.readPrototypePreviewChunk(
           this.string(args[0]),
