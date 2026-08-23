@@ -240,6 +240,20 @@ export interface ScopeWorktreeHealth {
   prunable?: boolean
 }
 
+/** Preview of whether an existing Git worktree checkout can be adopted as a managed scope root. */
+export interface AdoptableWorktreeInfo {
+  /** Whether the path is a registered worktree of the project repository. */
+  registered: boolean
+  detached: boolean
+  /** Absolute registration path reported by Git when registered. */
+  path?: string
+  /** Checked-out branch (without `refs/heads/`) when not detached. */
+  branch?: string
+  adoptable: boolean
+  /** Human-readable explanation when not adoptable. */
+  reason?: string
+}
+
 /** Actions that require a state-bound, single-use confirmation ID. */
 export type ScopeLifecycleAction =
   'detach' | 'remove-worktree' | 'delete-scope' | 'delete-branch' | 'delete-project-worktrees'

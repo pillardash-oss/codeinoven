@@ -320,6 +320,66 @@ describe.skipIf(process.platform === 'win32')('ScopeWorktreeService', () => {
     expect(preflight.unpushedCommits).toBe(1)
   }, 60_000)
 
+  it('repairs locked and missing managed checkouts', async () => {
+    const { service, bucketA } = await setup()
+    const descriptor = await service.createManagedWorktree(
+      { projectId: 'p1', scopeBucketId: bucketA },
+      { title: 'RepairMe', runSetup: false, environmentMode: 'copy' }
+    )
+    const worktreePath = getScopeRootPath('p1', descriptor.directoryName)
+    const git = simpleGit(repoPath)
+
+    // Locked registrations unlock back to healthy.
+    await git.raw(['worktree', 'lock', worktreePath])
+    expect((await service.health({ projectId: 'p1', scopeBucketId: bucketA })).category).toBe(
+      'locked'
+    )
+    const unlocked = await service.repair({ projectId: 'p1', scopeBucketId: bucketA })
+    expect(unlocked.category).toBe('healthy')
+
+    // Missing directories are restored from the managed branch.
+    rmSync(worktreePath, { recursive: true, force: true })
+    expect((await service.health({ projectId: 'p1', scopeBucketId: bucketA })).category).toBe(
+      'missing'
+    )
+    const restored = await service.repair({ projectId: 'p1', scopeBucketId: bucketA })
+    expect(restored.category).toBe('healthy')
+    expect(existsSync(join(worktreePath, '.git'))).toBe(true)
+  }, 60_000)
+
+  it('adopts an existing raw Git worktree as a managed scope root', async () => {
+    const { service, scopes, bucketA } = await setup()
+    const git = simpleGit(repoPath)
+    const external = join(configRoot, 'external-raw')
+    await git.raw(['worktree', 'add', '-b', 'cio/raw-deploy', external])
+    writeFileSync(join(external, 'deploy.txt'), 'raw\n')
+    const rawGit = simpleGit(external)
+    await rawGit.add('.')
+    await rawGit.commit('raw work')
+
+    const preview = await service.detectAdoptable('p1', external)
+    expect(preview.adoptable).toBe(true)
+    expect(preview.branch).toBe('cio/raw-deploy')
+
+    const descriptor = await service.adoptWorktree(
+      { projectId: 'p1', scopeBucketId: bucketA },
+      { sourcePath: external, runSetup: false }
+    )
+    expect(descriptor.branch).toBe('cio/raw-deploy')
+
+    const expectedPath = getScopeRootPath('p1', descriptor.directoryName)
+    expect(existsSync(expectedPath)).toBe(true)
+    expect(existsSync(external)).toBe(false)
+    expect(scopes.getBoard('p1').buckets.find((b) => b.id === bucketA)?.root.kind).toBe('worktree')
+    expect(await service.health({ projectId: 'p1', scopeBucketId: bucketA })).toMatchObject({
+      category: 'healthy'
+    })
+
+    // The main checkout can never be adopted.
+    const main = await service.detectAdoptable('p1', repoPath)
+    expect(main.adoptable).toBe(false)
+  }, 60_000)
+
   it('guards removal behind single-use confirmations and dirty-state checks', async () => {
     const { service, scopes, bucketA } = await setup()
     const descriptor = await service.createManagedWorktree(

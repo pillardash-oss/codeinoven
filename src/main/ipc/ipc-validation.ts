@@ -1,6 +1,6 @@
 import { fileURLToPath } from 'url'
 import { realpath } from 'fs/promises'
-import { isAbsolute, relative, resolve, sep, win32 } from 'path'
+import { isAbsolute, posix, relative, resolve, sep, win32 } from 'path'
 import type { WebFrameMain } from 'electron'
 import type {
   ChecklistItemStatus,
@@ -288,6 +288,36 @@ export function validateConfirmationToken(value: unknown): string {
     throw new TypeError('Confirmation token is malformed')
   }
   return token
+}
+
+/** Validate an absolute filesystem path supplied for worktree adoption. */
+export function validateSourcePath(value: unknown): string {
+  const sourcePath = validateBoundedString(value, 'Worktree path', 1, 4096)
+  const trimmed = sourcePath.trim()
+  const absolute =
+    process.platform === 'win32'
+      ? win32.isAbsolute(trimmed) || posix.isAbsolute(trimmed)
+      : posix.isAbsolute(trimmed)
+  if (!absolute) {
+    throw new TypeError('Worktree path must be absolute')
+  }
+  if (trimmed.includes('\0')) {
+    throw new TypeError('Worktree path must not contain control characters')
+  }
+  return trimmed
+}
+
+/** Validate the renderer input for adopting an existing Git worktree. */
+export function validateScopeAdoptInput(value: unknown): {
+  sourcePath: string
+  runSetup: boolean
+} {
+  const input = assertRecord(value, 'Scope worktree adopt input')
+  rejectUnknownFields(input, new Set(['sourcePath', 'runSetup']), 'scope worktree adopt input')
+  return {
+    sourcePath: validateSourcePath(input.sourcePath),
+    runSetup: validateBoolean(input.runSetup, 'Run setup')
+  }
 }
 
 /** Validate a full scope ordering for the layout operation. */

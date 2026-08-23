@@ -5,6 +5,7 @@ import { APP_SLUG } from '$shared/brand'
 import {
   DEFAULT_SCOPE_BUCKET_ID,
   isOrchestrationChildThread,
+  type AdoptableWorktreeInfo,
   type ManagedWorktreeDescriptor,
   type Project,
   type ScopeBoard,
@@ -744,6 +745,58 @@ class ScopeState {
     const health = await invoke('scope:worktree:health', target)
     this.healthByTarget.set(`${target.projectId}:${target.scopeBucketId}`, health)
     return health
+  }
+
+  /** Repair an unhealthy managed scope and refresh its cached health. */
+  async repairWorktree(target: ScopeTarget): Promise<ScopeWorktreeHealth> {
+    const health = await invoke('scope:worktree:repair', target)
+    this.healthByTarget.set(`${target.projectId}:${target.scopeBucketId}`, health)
+    await this.reloadBoard(target.projectId)
+    return health
+  }
+
+  /** Preview whether an existing Git worktree checkout can be adopted. */
+  detectAdoptableWorktree(projectId: string, sourcePath: string): Promise<AdoptableWorktreeInfo> {
+    return invoke('scope:worktree:detectAdopt', projectId, sourcePath)
+  }
+
+  /** Adopt an existing raw Git worktree as a managed scope root. */
+  async adoptWorktree(
+    projectId: string,
+    bucketId: string,
+    input: { sourcePath: string; runSetup: boolean }
+  ): Promise<ManagedWorktreeDescriptor | null> {
+    this.worktreeProgress = { stage: 'naming' }
+    try {
+      const descriptor = await invoke(
+        'scope:worktree:adopt',
+        { projectId, scopeBucketId: bucketId },
+        input
+      )
+      this.worktreeProgress = { stage: 'done' }
+      await this.reloadBoard(projectId)
+      await this.worktreeHealth({ projectId, scopeBucketId: bucketId })
+      return descriptor
+    } catch (error) {
+      this.worktreeProgress = { stage: 'failed' }
+      this.error = error instanceof Error ? error.message : 'The worktree could not be adopted.'
+      throw error
+    }
+  }
+
+  /** Refresh the cached health of every managed bucket on the active board. */
+  async refreshWorktreeHealth(projectId?: string): Promise<void> {
+    const targetProjectId = projectId ?? this.activeProjectId
+    if (!targetProjectId) return
+    const buckets = this.boards.get(targetProjectId)?.buckets ?? []
+    for (const bucket of buckets) {
+      if (bucket.root.kind !== 'worktree') continue
+      try {
+        await this.worktreeHealth({ projectId: targetProjectId, scopeBucketId: bucket.id })
+      } catch {
+        // Health stays at its previous cached value; failures surface in UI state.
+      }
+    }
   }
 
   /** Compute a state-bound preflight and mint a single-use confirmation token. */

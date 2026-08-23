@@ -119,6 +119,7 @@ import type {
   HarnessManifestEntry,
   HarnessUninstallHandoff,
   OfferedProvider,
+  AdoptableWorktreeInfo,
   RepositoryPreflightResult,
   ScopeBoard,
   ScopeBucket,
@@ -1599,6 +1600,18 @@ export interface IpcInvokeContract {
   'scope:worktree:sourceInfo': Contract<[projectId: string], ScopeWorktreeSourceInfo>
   /** Refresh the typed health state of a managed scope. */
   'scope:worktree:health': Contract<[target: ScopeTarget], ScopeWorktreeHealth>
+  /** Repair an unhealthy managed scope according to its health category. */
+  'scope:worktree:repair': Contract<[target: ScopeTarget], ScopeWorktreeHealth>
+  /** Preview whether an existing Git worktree checkout can be adopted. */
+  'scope:worktree:detectAdopt': Contract<
+    [projectId: string, sourcePath: string],
+    AdoptableWorktreeInfo
+  >
+  /** Adopt an existing raw Git worktree as a managed scope root. */
+  'scope:worktree:adopt': Contract<
+    [target: ScopeTarget, input: { sourcePath: string; runSetup: boolean }],
+    ManagedWorktreeDescriptor
+  >
   /** Compute a state-bound preflight and mint a single-use confirmation token. */
   'scope:worktree:preflight': Contract<
     [action: ScopeLifecycleAction, target: ScopeTarget, options?: { scopeBucketId?: string }],

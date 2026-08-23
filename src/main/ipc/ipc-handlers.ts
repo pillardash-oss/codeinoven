@@ -101,10 +101,12 @@ import {
   validateScopeCollapsePatch,
   validateScopeCreateInput,
   validateScopeLifecycleAction,
+  validateScopeAdoptInput,
   validateScopeOrderIds,
   validateScopeSlice,
   validateScopeTarget,
   validateScopeWorktreeCreateInput,
+  validateSourcePath,
   validateConfirmationToken,
   validateWorktreeDefaults,
   validateStashMessage,
@@ -4206,6 +4208,20 @@ export function registerIpcHandlers(
   ipcMain.handle('scope:worktree:health', (_, target: unknown) =>
     scopeWorktreeService.health(validateScopeTarget(target))
   )
+  ipcMain.handle('scope:worktree:repair', (_, target: unknown) =>
+    scopeWorktreeService.repair(validateScopeTarget(target))
+  )
+  ipcMain.handle('scope:worktree:detectAdopt', (_, projectId: unknown, sourcePath: unknown) =>
+    scopeWorktreeService.detectAdoptable(
+      validateEntityId(projectId, 'Project ID'),
+      validateSourcePath(sourcePath)
+    )
+  )
+  ipcMain.handle('scope:worktree:adopt', (_, target: unknown, input: unknown) => {
+    const validatedTarget = validateScopeTarget(target)
+    const validatedInput = validateScopeAdoptInput(input)
+    return scopeWorktreeService.adoptWorktree(validatedTarget, validatedInput)
+  })
   ipcMain.handle('scope:worktree:preflight', (_, action: unknown, target: unknown) =>
     scopeWorktreeService.preflight(
       validateScopeLifecycleAction(action),
