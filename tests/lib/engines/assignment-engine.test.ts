@@ -159,7 +159,10 @@ describe('AssignmentEngine', () => {
     expect(coordinator?.userInputLocked).toBe(false)
     expect(coordinator?.assignmentRole).toBe('coordinator')
     expect(coordinator?.pinned).toBe(true)
-    expect(coordinator?.scopeBucketId).toBe('assignment-assignment-1')
+    // The coordinator keeps its workspace scope; orchestration no longer
+    // moves threads into a dedicated assignment bucket.
+    expect(coordinator?.scopeBucketId).toBe('default')
+    expect(activated.scopeBucketId).toBe('default')
 
     const firstSnapshot = await engine.claimCoordinatorSnapshot(activated.id)
     const restartedEngine = new AssignmentEngine(
@@ -205,6 +208,39 @@ describe('AssignmentEngine', () => {
       'report-setup'
     )
     expect(reported.task?.status).toBe('reported')
+  })
+
+  it('preserves a coordinator that already works inside another scope', async () => {
+    const engine = new AssignmentEngine(
+      storage,
+      db,
+      () => 100,
+      () => 'assignment-1'
+    )
+    const threads = new ThreadManager(db)
+    await threads.updateThread('project-1', coordinatorId, {
+      scopeBucketId: 'scope-managed-1'
+    })
+    await engine.createDraft({
+      projectId: 'project-1',
+      coordinatorThreadId: coordinatorId,
+      specId: 'spec-1',
+      specVersion: 1,
+      content: content(),
+      provenance: { source: 'agent', actor: 'Sr. Engineer' }
+    })
+    const activated = await engine.activate('project-1', coordinatorId)
+    expect(activated.scopeBucketId).toBe('scope-managed-1')
+    const coordinator = await threads.getThread('project-1', coordinatorId)
+    expect(coordinator?.scopeBucketId).toBe('scope-managed-1')
+    // No dedicated orchestration bucket is created on the board.
+    const board = JSON.parse(
+      (db.get<{ data: string }>('SELECT data FROM scope_boards WHERE project_id=?', 'project-1')
+        ?.data ?? '{}') as string
+    ) as { buckets?: { id: string }[] }
+    for (const bucket of board.buckets ?? []) {
+      expect(bucket.id.startsWith('assignment-')).toBe(false)
+    }
   })
 
   it('rebinds a draft assignment to a revised specification', async () => {
@@ -476,7 +512,8 @@ describe('AssignmentEngine', () => {
     expect(first.assignmentId).toBe('assignment-1')
     expect(first.assignmentRole).toBeUndefined()
     expect(first.coordinatorThreadId).toBe(coordinatorId)
-    expect(first.scopeBucketId).toBe('assignment-assignment-1')
+    // The auditor inherits the coordinator's preserved workspace scope.
+    expect(first.scopeBucketId).toBe('default')
     expect(first.workingDirectory).toBe(projectPath)
     expect(first.settings).toMatchObject({
       permissionLevel: 'auto_review',
