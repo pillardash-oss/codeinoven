@@ -206,6 +206,7 @@ import {
   planPrototypeGeneration,
   resolvePrototypeArtifactPaths
 } from '../../lib/prototypes/prototype-artifacts'
+import { readPrototypePreviewChunk } from '../prototypes/prototype-preview-service'
 import { PRD_DOCUMENT_JSON_SCHEMA, parseGeneratedPrdContent } from '../../lib/prd/prd-validation'
 import {
   BRAINSTORM_DOCUMENT_JSON_SCHEMA,
@@ -1684,6 +1685,27 @@ export class ChatEngine {
     this.prototypePreviewRegistrar = registrar
   }
 
+  async readPrototypePreviewChunk(
+    projectId: string,
+    threadId: string,
+    previewPath: string,
+    offset: number
+  ) {
+    projectId = validateEntityId(projectId, 'Project ID')
+    threadId = validateEntityId(threadId, 'Thread ID')
+    previewPath = validateBoundedString(previewPath, 'Prototype preview path', 1, 512)
+    if (!Number.isSafeInteger(offset) || offset < 0) throw new TypeError('Invalid preview offset')
+    const brainstorm = await this.brainstormEngine.getActive(projectId, threadId)
+    const prototype = brainstorm?.content.prototypes?.find(
+      (candidate) => candidate.previewPath === previewPath
+    )
+    if (!prototype) throw new Error('Prototype preview is not owned by this Brainstorm')
+    const projectRoot = requireLocalProject(this.database, projectId).path
+    const featureSlug = await ensureFeatureSlug(this.database, projectId, threadId)
+    const paths = resolvePrototypeArtifactPaths(projectRoot, featureSlug, prototype.id)
+    return readPrototypePreviewChunk(paths.canonicalRoot, prototype.entryFile, offset)
+  }
+
   private cioPrompt(id: CioPromptId): Promise<string> {
     return this.storage.getCioPrompt(id)
   }
@@ -1902,6 +1924,11 @@ export class ChatEngine {
         attachments: PromptAttachment[],
         userMessageId: string
       ) => this.generatePrd(projectId, threadId, settings, instructions, attachments, userMessageId)
+    )
+    ipcMain.handle(
+      'prototypePreview:readChunk',
+      (_, projectId: string, threadId: string, previewPath: string, offset: number) =>
+        this.readPrototypePreviewChunk(projectId, threadId, previewPath, offset)
     )
     ipcMain.handle(
       'agent:steerPrompt',

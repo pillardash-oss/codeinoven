@@ -45,6 +45,7 @@ const INVOKE_CHANNELS = [
   'prd:openInEditor',
   'prd:revealInFiles',
   'prototypePreview:getOrigin',
+  'prototypePreview:readChunk',
   'brainstorm:ensureWorkflow',
   'brainstorm:getWorkflow',
   'brainstorm:chooseEntry',

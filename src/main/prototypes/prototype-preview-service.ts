@@ -1,6 +1,6 @@
 import { createReadStream } from 'node:fs'
 import { createServer, type Server } from 'node:http'
-import { opendir, realpath, stat } from 'node:fs/promises'
+import { open, opendir, realpath, stat } from 'node:fs/promises'
 import { extname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { PROTOTYPE_ASSET_BYTE_LIMIT } from '../../lib/prototypes/prototype-artifacts'
 
@@ -15,6 +15,51 @@ const MIME_TYPES: Readonly<Record<string, string>> = {
   '.svg': 'image/svg+xml',
   '.webp': 'image/webp',
   '.woff2': 'font/woff2'
+}
+const PREVIEW_CHUNK_BYTES = 192 * 1024
+
+export interface PrototypePreviewChunk {
+  base64: string
+  nextOffset: number
+  size: number
+  mime: string
+}
+
+export async function readPrototypePreviewChunk(
+  canonicalRoot: string,
+  relativeFile: string,
+  offset: number
+): Promise<PrototypePreviewChunk> {
+  if (!Number.isSafeInteger(offset) || offset < 0) throw new TypeError('Invalid preview offset')
+  const root = await realpath(canonicalRoot)
+  const requested = resolve(root, relativeFile)
+  if (!inside(root, requested)) throw new TypeError('Preview asset escapes its approved root')
+  const actual = await realpath(requested)
+  if (!inside(root, actual)) throw new TypeError('Preview asset resolves outside its approved root')
+  const info = await stat(actual)
+  if (
+    !info.isFile() ||
+    info.size < 1 ||
+    info.size > PROTOTYPE_ASSET_BYTE_LIMIT ||
+    offset >= info.size
+  ) {
+    throw new TypeError('Invalid preview asset')
+  }
+  const length = Math.min(PREVIEW_CHUNK_BYTES, info.size - offset)
+  const buffer = Buffer.allocUnsafe(length)
+  const handle = await open(actual, 'r')
+  try {
+    const result = await handle.read(buffer, 0, length, offset)
+    if (result.bytesRead !== length) throw new Error('Preview asset changed while reading')
+  } finally {
+    await handle.close()
+  }
+  return {
+    base64: buffer.toString('base64'),
+    nextOffset: offset + length,
+    size: info.size,
+    mime: MIME_TYPES[extname(actual).toLowerCase()] ?? 'application/octet-stream'
+  }
 }
 
 function inside(root: string, target: string): boolean {

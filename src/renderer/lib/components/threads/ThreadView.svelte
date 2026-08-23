@@ -200,6 +200,7 @@
   import { APP_NAME } from '$shared/brand'
   import { workflowActionPresentation } from '$shared/workflow-action-presentation'
   import { LatestRequestGuard } from '$lib/refresh-guard'
+  import { isRemotePwaRuntime } from '$lib/runtime-context'
 
   type WorkingModelSelection = Pick<
     ThreadSettings,
@@ -4949,6 +4950,42 @@
   }
 
   async function openPrototypePreview(previewPath: string): Promise<void> {
+    if (isRemotePwaRuntime()) {
+      let offset = 0
+      let size = 0
+      let mime = 'text/html; charset=utf-8'
+      const chunks: ArrayBuffer[] = []
+      while (offset === 0 || offset < size) {
+        const chunk = await invoke(
+          'prototypePreview:readChunk',
+          thread.projectId,
+          thread.id,
+          previewPath,
+          offset
+        )
+        if (
+          chunk.nextOffset <= offset ||
+          chunk.size < 1 ||
+          chunk.size > 25 * 1024 * 1024 ||
+          chunk.nextOffset > chunk.size
+        ) {
+          throw new Error('The prototype preview returned invalid chunk metadata.')
+        }
+        const binary = atob(chunk.base64)
+        const bytes = new Uint8Array(binary.length)
+        for (let index = 0; index < binary.length; index += 1) {
+          bytes[index] = binary.charCodeAt(index)
+        }
+        chunks.push(bytes.buffer)
+        offset = chunk.nextOffset
+        size = chunk.size
+        mime = chunk.mime
+      }
+      const url = URL.createObjectURL(new Blob(chunks, { type: mime }))
+      window.open(url, '_blank', 'noopener,noreferrer')
+      setTimeout(() => URL.revokeObjectURL(url), 60_000)
+      return
+    }
     const origin = await invoke('prototypePreview:getOrigin')
     if (!origin) {
       errorMessage = 'Prototype preview origin is not configured for this deployment.'

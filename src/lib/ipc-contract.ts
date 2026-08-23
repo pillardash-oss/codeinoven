@@ -368,6 +368,10 @@ export interface IpcInvokeContract {
     string
   >
   'prototypePreview:getOrigin': Contract<[], string | null>
+  'prototypePreview:readChunk': Contract<
+    [projectId: string, threadId: string, previewPath: string, offset: number],
+    { base64: string; nextOffset: number; size: number; mime: string }
+  >
   'brainstorm:ensureWorkflow': Contract<
     [projectId: string, threadId: string],
     BrainstormWorkflowState

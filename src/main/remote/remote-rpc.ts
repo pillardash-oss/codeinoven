@@ -181,6 +181,7 @@ export interface RemoteRpcServices {
     | 'reviewBrainstorm'
     | 'finalizeBrainstorm'
     | 'generatePrd'
+    | 'readPrototypePreviewChunk'
     | 'ensureImplementationAuditorThread'
     | 'startAssignment'
     | 'stopAssignment'
@@ -1076,6 +1077,13 @@ export class RemoteRpcDispatcher {
           this.string(args[3]),
           args[4] as PromptAttachment[],
           this.string(args[5])
+        )
+      case 'prototypePreview:readChunk':
+        return chatEngine.readPrototypePreviewChunk(
+          this.string(args[0]),
+          this.string(args[1]),
+          this.string(args[2]),
+          args[3] as number
         )
       case 'agent:ensureImplementationAuditorThread':
         return chatEngine.ensureImplementationAuditorThread(
