@@ -518,6 +518,13 @@
   /** Snapshot of the selection that started the live turn. Model controls can
    *  still change the next-turn settings while the current turn is running. */
   let liveWorkingSelection = $state<WorkingModelSelection | null>(null)
+  /** True while we are showing a working trace rehydrated from persisted state
+   *  because no live session activity is available to confirm the run (a silent
+   *  session, an app restart, or a relay drop mid-turn). The trace renders the
+   *  last-known saved parts with a "restored / reconnecting" note instead of the
+   *  thread dropping to idle or showing a bare "Agent working…" spinner. Cleared
+   *  as soon as a live session confirms the real terminal state. */
+  let restoredBusy = $state(false)
   let agentDefaults = $state<AgentDefaultsConfig>({ syncFromThreadChanges: false })
   /** Global "don't ask again" flag for the image-descriptor vision model picker. */
   let imageDescriptorAskAgain = $state(false)
@@ -2873,6 +2880,7 @@
   }
 
   function beginLocalTurn(userMessageId: string): void {
+    restoredBusy = false
     locallySubmittedTurnId = userMessageId
     locallySubmittedTurnAcknowledged = false
     turnSawCompaction = false
@@ -2895,6 +2903,7 @@
   function setIdleFromRestore(): void {
     if (locallySubmittedTurnId) return
     if (agentRuns.activity(thread.projectId, thread.id) === 'brainstorm_report') return
+    restoredBusy = false
     liveWorkingSelection = null
     agentRuns.setIdle(thread.projectId, thread.id)
   }
@@ -2903,6 +2912,7 @@
   function setIdleFromSession(): boolean {
     if (locallySubmittedTurnId && !locallySubmittedTurnAcknowledged) return false
     if (agentRuns.activity(thread.projectId, thread.id) === 'brainstorm_report') return false
+    restoredBusy = false
     clearLocalTurn()
     agentRuns.setIdle(thread.projectId, thread.id)
     return true
@@ -3077,9 +3087,16 @@
       // spec/retry surfaces it). loadLocal may have optimistically restored busy
       // off a leftover `planning`/`executing` DB row — clear it so a finished or
       // never-started thread never keeps the composer/rows looking busy after a
-      // view switch or refresh.
+      // view switch or refresh. The one exception is persisted evidence of a
+      // mid-flight turn: if the saved latest turn has real working parts and no
+      // terminal message, rehydrate that working trace (with a "restored /
+      // reconnecting" note) instead of dropping to idle, so the user can tell a
+      // run was in progress even though the live stream is not confirming it.
+      // The thread itself stays interactive (not busy) so a poke message can
+      // still be sent normally.
       if (providerStatus === null) {
-        setIdleFromRestore()
+        restoredBusy = hasPersistedInFlightWork()
+        if (!restoredBusy) setIdleFromRestore()
       }
       // A thread opened while its turn is still running has its accumulated
       // working trace only in the live harness session: the mirror persists
@@ -3309,6 +3326,7 @@
     if (event.type === 'thread.error') {
       if (event.projectId !== thread.projectId || event.threadId !== thread.id) return
       clearSpecGenerationTrace()
+      restoredBusy = false
       clearLocalTurn()
       agentRuns.setIdle(thread.projectId, thread.id)
       pendingPermissions = []
@@ -3406,6 +3424,7 @@
           providerStatus = event.status
         }
         if (event.status.state === 'waiting' || event.status.state === 'working') {
+          restoredBusy = false
           acknowledgeLocalTurn()
           if (event.status.state === 'working') idleAttentionHandled = false
           ensureLiveWorkingSelection()
@@ -7796,6 +7815,22 @@
     return last?.role === 'assistant' && last.completedAt !== undefined
   }
 
+  /** True when the persisted latest turn shows a run was mid-flight when the
+   *  live stream went away: the turn has not completed a terminal message but
+   *  already persisted real working parts (reasoning, tool calls, sub-agents).
+   *  This is the evidence used to rehydrate the working trace instead of the
+   *  thread reading as idle or as a bare spinner when no live session confirms
+   *  the run. */
+  function hasPersistedInFlightWork(): boolean {
+    const startIndex = latestTurnInfo.startIndex
+    if (startIndex === -1) return false
+    if (isTurnCompleted(startIndex)) return false
+    const parts = getTurnWorkingParts(startIndex, false)
+    return parts.some(
+      (part) => part.type === 'reasoning' || part.type === 'tool' || part.type === 'subagent'
+    )
+  }
+
   /** Find the last text part in a turn ending at the given message index. */
   function getTurnFinalText(endMsgIndex: number): AgentPart | null {
     let turnStart = endMsgIndex
@@ -8477,10 +8512,9 @@
               {#if isTurnStart || questionParts.length > 0 || isTurnEnd}
                 <div class="group mb-6 flex min-w-0 flex-col">
                   {#if isTurnStart}
-                    {@const collectedTurnParts = getTurnWorkingParts(
-                      msgIndex,
-                      liveBusy && isLatestTurn
-                    )}
+                    {@const traceIsLive = liveBusy && isLatestTurn}
+                    {@const traceIsRestored = restoredBusy && isLatestTurn && !liveBusy}
+                    {@const collectedTurnParts = getTurnWorkingParts(msgIndex, traceIsLive)}
                     {@const turnParts = isAssignmentAuditorThread
                       ? collectedTurnParts.filter(
                           (part) => part.type !== 'text' || part.phase === 'commentary'
@@ -8489,10 +8523,11 @@
                     {#if turnParts.length > 0}
                       <WorkingTrace
                         parts={turnParts}
-                        open={liveBusy && isLatestTurn}
-                        busy={liveBusy && isLatestTurn}
+                        open={traceIsLive || traceIsRestored}
+                        busy={traceIsLive || traceIsRestored}
                         latest={isLatestTurn}
                         done={isTurnCompleted(msgIndex)}
+                        rehydrated={traceIsRestored}
                         startTime={isLatestTurn
                           ? (getTurnStartTime(msgIndex) ?? activeTurnStartTime)
                           : getTurnStartTime(msgIndex)}
