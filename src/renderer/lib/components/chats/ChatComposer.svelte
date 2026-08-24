@@ -2222,6 +2222,7 @@
       <EngineeringToolbox
         bind:this={engineeringToolbox}
         lifecycleState={engineeringLifecycle}
+        active={resolved.engineeringMode === true}
         disabled={readOnlyMode}
         onselect={onEngineeringLifecycleSelect}
         onretry={onEngineeringLifecycleRetry}
