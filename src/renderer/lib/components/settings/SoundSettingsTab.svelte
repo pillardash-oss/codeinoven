@@ -92,14 +92,6 @@
     if (sub === 'asr') patch({ asrArtifactId: artifactId })
     else if (sub === 'tts') patch({ ttsArtifactId: artifactId })
     else patch({ cleanupArtifactId: artifactId })
-    // Displacing previous active is implicit: only one artifactId per capability
-    // remains; the previous model is no longer considered resident in memory.
-  }
-
-  function clearActive(sub: ModelSubTab): void {
-    if (sub === 'asr') patch({ asrArtifactId: undefined })
-    else if (sub === 'tts') patch({ ttsArtifactId: undefined })
-    else patch({ cleanupArtifactId: undefined })
   }
 
   function labelForInstalled(artifactId: string): string {
@@ -186,6 +178,7 @@
     if (runtime === 'mlx') return 'MLX'
     if (runtime === 'sherpa-onnx') return 'ONNX'
     if (runtime === 'gguf') return 'GGUF'
+    if (runtime === 'coreml') return 'Core ML'
     return runtime.toUpperCase()
   }
 
@@ -193,6 +186,7 @@
     if (runtime === 'mlx') return 'bg-violet-500/15 text-violet-600 border-violet-500/20'
     if (runtime === 'sherpa-onnx') return 'bg-emerald-500/15 text-emerald-600 border-emerald-500/20'
     if (runtime === 'gguf') return 'bg-amber-500/15 text-amber-600 border-amber-500/20'
+    if (runtime === 'coreml') return 'bg-blue-500/15 text-blue-600 border-blue-500/20'
     return 'bg-muted/10 text-muted border-border'
   }
 
@@ -470,58 +464,65 @@
           <p class="mb-2 text-xs font-semibold uppercase tracking-wide text-muted">
             Imported models · {activeModelSubTab.toUpperCase()}
           </p>
-          <div class="divide-y divide-border">
+          <div class="space-y-2">
             {#each importedForTab as artifact (artifact.artifactId)}
               {@const parsedImp = artifact.importPath ? parseModelIdentityFromPath(artifact.importPath, artifact.runtime) : null}
-              <div class="flex items-center gap-3 py-2">
+              {@const impDetails = parsedImp ? parsedImp.details.filter((d) => d.label !== 'Family' && d.label !== 'Runtime') : []}
+              <div class="flex items-start gap-3 rounded-xl border px-3 py-3 {isActiveImported(artifact.artifactId, activeModelSubTab) ? 'bg-success/[0.04] border-success/25' : 'bg-elevated border-border/70'}">
                 <div class="min-w-0 flex-1">
                   {#if parsedImp}
-                    <p class="truncate text-xs font-semibold" title={parsedImp.baseWithoutExtension}>{parsedImp.displayName}</p>
-                    <p class="truncate font-mono text-[11px] text-dimmed" title={artifact.importPath}>{artifact.importPath}</p>
-                    <p class="mt-1 flex flex-wrap gap-1">
-                      {#each parsedImp.details as d (d.label)}
-                        <span class="inline-flex items-center gap-1 rounded-full border bg-elevated px-1.5 py-0.5 text-[10px]"><span class="text-muted">{d.label}:</span><span class="font-medium">{d.value}</span></span>
-                      {/each}
-                      {#if parsedImp.tokens.length}
-                        <span class="inline-flex items-center gap-1 rounded-full border bg-surface px-1.5 py-0.5 text-[10px] text-dimmed">Breakup: {parsedImp.tokens.join(' · ')}</span>
+                    <div class="flex flex-wrap items-center gap-1.5">
+                      <p class="truncate text-sm font-semibold leading-none" title={parsedImp.baseWithoutExtension}>{parsedImp.displayName}</p>
+                      <span class="inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-medium {runtimeBadgeClass(artifact.runtime)}">{runtimeBadge(artifact.runtime)}</span>
+                      <span class="text-[10px] text-dimmed">· external</span>
+                      {#if isActiveImported(artifact.artifactId, activeModelSubTab)}
+                        <span class="inline-flex items-center gap-1 rounded-full bg-success px-2 py-0.5 text-[10px] font-semibold text-white"><Check size={10} aria-hidden="true" /> Active</span>
                       {/if}
-                    </p>
-                  {:else}
-                    <p class="truncate text-xs font-medium">{artifact.importPath}</p>
-                  {/if}
-                  <p class="mt-1 text-[10px] text-dimmed flex items-center gap-1.5">
-                    <span class="inline-flex rounded-full border px-1.5 py-0.5 text-[9px] font-medium">{artifact.runtime}</span> · external
-                    {#if isActiveImported(artifact.artifactId, activeModelSubTab)}
-                      <span class="inline-flex items-center gap-1 rounded-full bg-success/15 px-1.5 py-0.5 text-[10px] font-semibold text-success border border-success/20"><Check size={10} aria-hidden="true" /> Active</span>
+                    </div>
+                    <p class="mt-1 truncate font-mono text-[11px] leading-none text-dimmed" title={artifact.importPath}>{artifact.importPath}</p>
+                    {#if impDetails.length}
+                      <p class="mt-1.5 flex flex-wrap items-center gap-x-1 text-[11px] leading-none text-muted">
+                        {#each impDetails as d, i (d.label)}
+                          <span class="font-medium">{d.value}</span>{#if i < impDetails.length - 1}<span class="mx-0.5 opacity-30">·</span>{/if}
+                        {/each}
+                      </p>
                     {/if}
-                  </p>
+                    {#if parsedImp.tokens.length}
+                      <p class="mt-1 font-mono text-[10px] leading-none text-dimmed/80">{parsedImp.tokens.join(' · ')}</p>
+                    {/if}
+                  {:else}
+                    <p class="truncate text-sm font-medium">{artifact.importPath}</p>
+                    <p class="mt-1 inline-flex items-center gap-1.5 text-[10px] text-dimmed">
+                      <span class="inline-flex rounded-full border px-2 py-0.5 text-[10px] font-medium {runtimeBadgeClass(artifact.runtime)}">{runtimeBadge(artifact.runtime)}</span>
+                      <span>· external</span>
+                    </p>
+                  {/if}
                 </div>
-                <div class="flex items-center gap-1">
+                <div class="flex shrink-0 items-center gap-1">
                   {#if isActiveImported(artifact.artifactId, activeModelSubTab)}
                     <button
                       type="button"
-                      class="rounded-md border bg-surface px-2 py-1 text-[11px] text-dimmed"
-                      title="Clear active"
+                      class="rounded-lg border bg-surface px-2.5 py-1 text-xs text-muted hover:text-foreground"
+                      title="Clear active model"
                       aria-label="Clear active {artifact.importPath}"
                       onclick={() => clearActive(activeModelSubTab)}
                     >Clear</button>
                   {:else}
                     <button
                       type="button"
-                      class="rounded-md border bg-primary/10 px-2 py-1 text-[11px] font-medium text-primary hover:bg-primary/15"
-                      title="Make this imported model the active {activeModelSubTab.toUpperCase()} model — displaces current active"
+                      class="inline-flex items-center gap-1 rounded-lg bg-primary px-2.5 py-1 text-xs font-medium text-on-primary hover:bg-primary/90"
+                      title="Make this imported model active — displaces current active"
                       aria-label="Make imported {artifact.importPath} active"
                       onclick={() => setActive(activeModelSubTab, artifact.artifactId)}
                     ><Star size={11} aria-hidden="true" /> Active</button>
                   {/if}
                   <button
                     type="button"
-                    class="flex h-8 w-8 items-center justify-center rounded-lg text-muted hover:bg-danger/10 hover:text-danger"
+                    class="flex h-7 w-7 items-center justify-center rounded-lg border border-transparent text-dimmed hover:border-border hover:bg-surface hover:text-muted"
                     title={`Unregister ${artifact.importPath}`}
                     aria-label={`Unregister ${artifact.importPath}`}
                     onclick={() => removeImported(artifact.artifactId, artifact.importPath ?? '')}
-                    ><Trash2 size={13} aria-hidden="true" /></button
-                  >
+                    ><Trash2 size={12} aria-hidden="true" /></button>
                 </div>
               </div>
             {/each}
@@ -690,12 +691,13 @@
                 runtimeOverride:
                   event.currentTarget.value === ''
                     ? undefined
-                    : (event.currentTarget.value as 'mlx' | 'sherpa-onnx')
+                    : (event.currentTarget.value as 'mlx' | 'sherpa-onnx' | 'coreml' | 'gguf')
               })}
           >
             <option value="">Platform default</option>
             <option value="mlx">MLX</option>
             <option value="sherpa-onnx">sherpa-onnx</option>
+            <option value="coreml">Core ML</option>
           </select>
         </div>
       </section>

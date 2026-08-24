@@ -42,6 +42,7 @@ import { SpeechStorage } from './speech-storage'
 import type { SpeechBackend } from './speech-backend'
 import { SherpaSpeechBackend } from './backends/sherpa-backend'
 import { MlxSpeechBackend } from './backends/mlx-backend'
+import { CoreMlSpeechBackend } from './backends/coreml-backend'
 import { Logger } from '../system/logger'
 import { getConfigRoot } from '../../lib/utils'
 import { SpeechCleanupService } from './speech-cleanup-service'
@@ -119,7 +120,8 @@ export class SpeechService {
     this.storage = storage ?? new SpeechStorage()
     this.backends = new Map<SpeechRuntime, SpeechBackend>([
       ['sherpa-onnx', new SherpaSpeechBackend()],
-      ['mlx', new MlxSpeechBackend(paths.mlxWorkerPath)]
+      ['mlx', new MlxSpeechBackend(paths.mlxWorkerPath)],
+      ['coreml', new CoreMlSpeechBackend()]
     ])
   }
 
