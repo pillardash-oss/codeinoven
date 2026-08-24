@@ -7,6 +7,7 @@
   import { speechSettingsStore as speech } from '$lib/stores/speech.svelte'
   import Switch from '../ui/Switch.svelte'
   import Modal from '../ui/Modal.svelte'
+  import PasteModelPathModal from './PasteModelPathModal.svelte'
 
   interface Props {
     settings: SpeechSettings
@@ -28,6 +29,7 @@
   let mutationBusy = $state(false)
   let activeTab = $state<SoundTab>('models')
   let importing = $state(false)
+  let pasteOpen = $state(false)
 
   const tabs: ReadonlyArray<{ id: SoundTab; label: string }> = [
     { id: 'models', label: 'Models' },
@@ -301,19 +303,30 @@
       <section id="settings-block-sound-models" class="rounded-xl border bg-surface p-4">
         <div class="mb-3 flex items-center justify-between gap-3">
           <h2 class="text-xs font-semibold uppercase tracking-wide text-muted">Models</h2>
-          <button
-            type="button"
-            class="rounded-lg border bg-elevated px-2.5 py-1 text-xs text-muted hover:text-foreground disabled:opacity-50"
-            title="Import your own model (.mlx or .gguf)"
-            aria-label="Import your own model"
-            disabled={importing}
-            onclick={() => void pickImport()}
-          >
-            {#if importing}
-              <LoaderCircle size={12} class="mr-1 inline animate-spin" aria-hidden="true" />
-            {/if}
-            Import
-          </button>
+          <div class="flex items-center gap-1.5">
+            <button
+              type="button"
+              class="rounded-lg border bg-elevated px-2.5 py-1 text-xs text-muted hover:text-foreground disabled:opacity-50"
+              title="Import your own model (.mlx or .gguf)"
+              aria-label="Import your own model"
+              disabled={importing}
+              onclick={() => void pickImport()}
+            >
+              {#if importing}
+                <LoaderCircle size={12} class="mr-1 inline animate-spin" aria-hidden="true" />
+              {/if}
+              Import
+            </button>
+            <button
+              type="button"
+              class="rounded-lg border bg-elevated px-2.5 py-1 text-xs text-muted hover:text-foreground"
+              title="Paste a filesystem path to a model"
+              aria-label="Paste model path"
+              onclick={() => (pasteOpen = true)}
+            >
+              Paste Path
+            </button>
+          </div>
         </div>
         <div class="divide-y divide-border">
           {#each speech.catalog?.artifacts ?? [] as artifact (artifact.id)}
@@ -625,6 +638,8 @@
     {/if}
   </div>
 </div>
+
+<PasteModelPathModal open={pasteOpen} onClose={() => (pasteOpen = false)} onImported={() => void speech.load()} />
 
 <Modal open={deleting !== null} title="Confirm deletion" onClose={() => (deleting = null)}>
   <p class="text-sm text-muted">

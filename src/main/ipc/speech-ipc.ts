@@ -234,6 +234,9 @@ export function registerSpeechIpc(
       return service.history(cursor, limit)
     })
   )
+  ipcMain.handle('speech:validateModelPath', (_event, rawPath: unknown) =>
+    speechResult(() => service.validateModelPath(boundedString(rawPath, 'Model path', 4_096)))
+  )
   ipcMain.handle('speech:importModel', (_event, rawPath: unknown) =>
     speechResult(() =>
       service.registerImportedModel(
@@ -400,6 +403,7 @@ export function registerSpeechIpc(
       'speech:markAttemptFailure',
       'speech:transcribe',
       'speech:transcribeAudioToLlm',
+      'speech:validateModelPath',
       'speech:getHistory',
       'speech:importModel',
       'speech:unregisterModel',

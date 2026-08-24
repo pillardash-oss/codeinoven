@@ -442,6 +442,24 @@ export interface SpeechConfirmation {
   expiresAt: number
 }
 
+export type ModelPathValidationCode =
+  | 'empty'
+  | 'not-found'
+  | 'permission-denied'
+  | 'unsupported-format'
+  | 'platform-unsupported'
+  | 'valid'
+
+export interface ModelPathValidationResult {
+  ok: boolean
+  normalizedPath: string
+  wasNormalized: boolean
+  runtime?: SpeechRuntime
+  code: ModelPathValidationCode
+  reason: string
+  detectedExtension?: string
+}
+
 export type SpeechResult<T> = { ok: true; value: T } | { ok: false; error: SpeechError }
 
 export interface SpeechCaptureSessionInfo {

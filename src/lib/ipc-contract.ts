@@ -1131,6 +1131,10 @@ export interface IpcInvokeContract {
     ],
     import('./speech/types').SpeechResult<import('./speech/types').SpeechTranscriptionResult>
   >
+  'speech:validateModelPath': Contract<
+    [path: string],
+    import('./speech/types').SpeechResult<import('./speech/types').ModelPathValidationResult>
+  >
   'speech:importModel': Contract<
     [path: string],
     import('./speech/types').SpeechResult<import('./speech/types').SpeechInstalledArtifact>
@@ -2302,11 +2306,21 @@ export interface CloseConfirmationPayload {
 
 export type AgentNotificationKind = 'completed' | 'chat-completed' | 'attention' | 'spec' | 'error'
 
+/** Where a notification originated: a project thread, the global chat (inbox),
+ *  or a temporary (side) chat piped through a parent thread. */
+export type NotificationSource = 'project' | 'chat' | 'temporary-chat'
+
 export interface AgentNotificationPayload extends ThreadClickedPayload {
   id: string
   kind: AgentNotificationKind
   title: string
   body: string
+  /** Origin of the notification, used by the panel to tag its source. */
+  source: NotificationSource
+  /** Name of the owning project (or the inbox "Chats" project for chats). */
+  projectName: string
+  /** Accent colour of the owning project, when known. */
+  projectColor?: string
 }
 
 export type SystemNotificationTestResult =

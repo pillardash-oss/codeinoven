@@ -34,6 +34,8 @@ import {
   resolveSpeechRuntime
 } from '../../lib/speech/types'
 import { parseSpeechModelCatalog } from '../../lib/speech/model-catalog'
+import { normalizePastedPath } from '../../lib/speech/model-path-validation'
+import type { ModelPathValidationResult } from '../../lib/speech/types'
 import { SpeechJobQueue, SpeechQueueError } from './speech-job-queue'
 import { SpeechStorage } from './speech-storage'
 import type { SpeechBackend } from './speech-backend'
@@ -467,10 +469,164 @@ export class SpeechService {
   }
 
   /**
-   * Register a user-owned model as an external reference. The app never copies
-   * or deletes the referenced files; only the reference is persisted. `.mlx` is
-   * gated to Apple Silicon; `.gguf` maps to the GGUF/llama.cpp runtime.
+   * Validate a pasted filesystem path without registering it.
+   * Runs entirely in the main process (filesystem access) and returns a
+   * structured validation result for inline UI feedback. Never logs raw paths.
    */
+  async validateModelPath(rawPath: string): Promise<ModelPathValidationResult> {
+    const { normalized, wasNormalized } = normalizePastedPath(rawPath)
+    if (normalized.length === 0) {
+      return {
+        ok: false,
+        normalizedPath: normalized,
+        wasNormalized,
+        code: 'empty',
+        reason: 'Paste a filesystem path to a supported model.'
+      }
+    }
+    if (normalized.length > 4_096) {
+      return {
+        ok: false,
+        normalizedPath: normalized,
+        wasNormalized,
+        code: 'unsupported-format',
+        reason: 'Path is too long. Paste a local file or folder path.'
+      }
+    }
+    const lower = normalized.toLowerCase()
+    const isMlx =
+      lower.endsWith('.mlx') ||
+      lower.endsWith('/.mlx') ||
+      lower.endsWith('\\mlx')
+    const isGgufFile = lower.endsWith('.gguf')
+    // Stat the path (batched, non-blocking) - avoid blocking renderer
+    let stat: { isFile: boolean; isDirectory: boolean } | null
+    try {
+      const { stat: fsStat } = await import('node:fs/promises')
+      // Use stat to handle symlinks: validate the resolved target
+      const s = await fsStat(normalized)
+      stat = { isFile: s.isFile(), isDirectory: s.isDirectory() }
+    } catch (cause) {
+      const code = (cause as NodeJS.ErrnoException)?.code ?? ''
+      if (code === 'ENOENT') {
+        return {
+          ok: false,
+          normalizedPath: normalized,
+          wasNormalized,
+          code: 'not-found',
+          reason: 'No file or folder exists at that path. Check the path and try again.'
+        }
+      }
+      if (code === 'EACCES' || code === 'EPERM') {
+        return {
+          ok: false,
+          normalizedPath: normalized,
+          wasNormalized,
+          code: 'permission-denied',
+          reason: 'Permission denied at that path. Check access and try again.'
+        }
+      }
+      return {
+        ok: false,
+        normalizedPath: normalized,
+        wasNormalized,
+        code: 'not-found',
+        reason: 'That path cannot be read. Verify it and try again.'
+      }
+    }
+    // Platform gate for MLX
+    if (isMlx) {
+      const target = this.platformTarget()
+      if (target.platform !== 'darwin' || target.architecture !== 'arm64') {
+        return {
+          ok: false,
+          normalizedPath: normalized,
+          wasNormalized,
+          runtime: 'mlx',
+          code: 'platform-unsupported',
+          reason: 'MLX models are only supported on Apple Silicon.',
+          detectedExtension: '.mlx'
+        }
+      }
+      return {
+        ok: true,
+        normalizedPath: normalized,
+        wasNormalized,
+        runtime: 'mlx',
+        code: 'valid',
+        reason: 'Supported model found — MLX — ready to import.',
+        detectedExtension: '.mlx'
+      }
+    }
+    if (isGgufFile) {
+      if (stat?.isDirectory) {
+        return {
+          ok: false,
+          normalizedPath: normalized,
+          wasNormalized,
+          code: 'unsupported-format',
+          reason: 'That .gguf path is a directory. Paste the file path to the .gguf.',
+          detectedExtension: '.gguf'
+        }
+      }
+      return {
+        ok: true,
+        normalizedPath: normalized,
+        wasNormalized,
+        runtime: 'gguf',
+        code: 'valid',
+        reason: 'Supported model found — GGUF (local-LLM) — ready to import.',
+        detectedExtension: '.gguf'
+      }
+    }
+    // Directory containing .gguf?
+    if (stat?.isDirectory) {
+      try {
+        const entries = await readdir(normalized, { withFileTypes: true })
+        const hasGguf = entries.some((entry) => entry.name.toLowerCase().endsWith('.gguf'))
+        if (hasGguf) {
+          return {
+            ok: true,
+            normalizedPath: normalized,
+            wasNormalized,
+            runtime: 'gguf',
+            code: 'valid',
+            reason: 'Supported model found — folder containing .gguf — ready to import.',
+            detectedExtension: '.gguf'
+          }
+        }
+      } catch (cause) {
+        const code = (cause as NodeJS.ErrnoException)?.code ?? ''
+        if (code === 'EACCES' || code === 'EPERM') {
+          return {
+            ok: false,
+            normalizedPath: normalized,
+            wasNormalized,
+            code: 'permission-denied',
+            reason: 'Permission denied reading that folder.'
+          }
+        }
+      }
+      return {
+        ok: false,
+        normalizedPath: normalized,
+        wasNormalized,
+        code: 'unsupported-format',
+        reason: 'No supported model at that path. Use a .mlx path or a .gguf file / folder containing .gguf.',
+        detectedExtension: undefined
+      }
+    }
+    // File with unsupported extension
+    return {
+      ok: false,
+      normalizedPath: normalized,
+      wasNormalized,
+      code: 'unsupported-format',
+      reason: 'Unsupported format. Import a .mlx path (Apple Silicon) or .gguf.',
+      detectedExtension: undefined
+    }
+  }
+
   async registerImportedModel(path: string): Promise<SpeechInstalledArtifact> {
     const normalized = path.trim()
     const lower = normalized.toLowerCase()
