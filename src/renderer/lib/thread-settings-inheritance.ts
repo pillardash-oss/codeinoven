@@ -1,5 +1,6 @@
 import type { Thread, ThreadSettings } from '$shared/types'
 import { invoke } from '$lib/ipc.svelte'
+import { threadSettings } from '$lib/stores/thread-settings.svelte'
 
 function cloneSettings(settings: ThreadSettings): ThreadSettings {
   return {
@@ -15,7 +16,13 @@ export function settingsForNewThread(
   fallback: ThreadSettings
 ): ThreadSettings {
   const settings = activeThread?.settings ?? fallback
-  return cloneSettings(settings)
+  const cloned = cloneSettings(settings)
+  // Persist this as the last-used default so a thread created later in another
+  // project (where there is no active thread to inherit from) seeds from the
+  // configuration the most recent thread was set up with, not the stale global
+  // default. Idempotent when the fallback is already the saved value.
+  threadSettings.commit(cloned)
+  return cloned
 }
 
 /** Apply inherited settings immediately while their durable write finishes off the UI path. */
