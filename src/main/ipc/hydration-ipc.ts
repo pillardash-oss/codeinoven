@@ -1,4 +1,5 @@
 import { trustedIpcMain as ipcMain } from './trusted-ipc-main'
+import { registerRendererLogIpcHandler } from './renderer-log-ipc'
 import type { Database } from '../database/database'
 import { StorageEngine } from '../storage/storage-engine'
 import { ProjectManager } from '../../lib/engines/project-manager'
@@ -18,6 +19,9 @@ function isRecord(value: unknown): value is Record<string, unknown> {
  * graphs remain registered by `registerIpcHandlers` after first paint.
  */
 export function registerHydrationIpcHandlers(storage: StorageEngine, database: Database): void {
+  // Renderer error capture runs from the first renderer statement, so the
+  // durable logging bridge must exist before BrowserWindow navigation.
+  registerRendererLogIpcHandler()
   const projectManager = new ProjectManager(database)
   const scopeManager = new ScopeManager(database)
   const threadManager = new ThreadManager(database)

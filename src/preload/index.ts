@@ -17,6 +17,7 @@ import type {
 export type { InvokeArgs, InvokeChannel, InvokeResult } from '../lib/ipc-contract'
 
 const INVOKE_CHANNELS = [
+  'renderer:log',
   'account:getLocalUsage',
   'account:getProfile',
   'account:beginSignIn',
@@ -190,6 +191,7 @@ const INVOKE_CHANNELS = [
   'speech:failCapture',
   'speech:markAttemptFailure',
   'speech:transcribe',
+  'speech:transcribeAudioToLlm',
   'speech:getHistory',
   'speech:enforceHistoryLimit',
   'speech:downloadArtifact',

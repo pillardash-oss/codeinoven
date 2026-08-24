@@ -587,7 +587,8 @@ async function bootPostPaintServices(): Promise<void> {
         : join(app.getAppPath(), 'resources/speech/runtime/darwin-arm64/mlx-worker')
     },
     undefined,
-    (input) => chatEngine!.cleanupSpeechTranscript(input)
+    (input) => chatEngine!.cleanupSpeechTranscript(input),
+    (input) => chatEngine!.transcribeSpeechAudio(input)
   )
   await speechService.initialize()
   unregisterSpeechIpc = registerSpeechIpc(speechService, () => mainWindow?.webContents ?? null)
@@ -1034,6 +1035,30 @@ function createWindow(): BrowserWindow {
     if (!windowBoundaryValidator.isTrustedNavigation(url)) {
       event.preventDefault()
     }
+  })
+
+  // Renderer freeze/crash diagnostics. On a slow machine (e.g. M1) the renderer
+  // can seize up or be torn down in ways that never surface as a JS exception —
+  // the OS shows "not responding" while nothing lands in the log. These
+  // webContents lifecycle events record the freeze/crash deterministically even
+  // though the renderer's own JS can no longer run to log it.
+  window.webContents.on('unresponsive', () => {
+    Logger.error('Renderer became unresponsive (UI frozen; check renderer main-thread work)')
+  })
+  window.webContents.on('responsive', () => {
+    Logger.info('Renderer recovered after being unresponsive')
+  })
+  window.webContents.on('render-process-gone', (_event, details) => {
+    Logger.error('Renderer process terminated', {
+      reason: details.reason,
+      exitCode: details.exitCode
+    })
+  })
+  window.webContents.on('preload-error', (_event, preloadPath, error) => {
+    Logger.error('Renderer preload script failed', {
+      preloadPath,
+      error: error instanceof Error ? error.message : String(error)
+    })
   })
 
   if (!isProduction && is.dev && process.env['ELECTRON_RENDERER_URL']) {

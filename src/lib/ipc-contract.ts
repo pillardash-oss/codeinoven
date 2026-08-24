@@ -240,6 +240,25 @@ export interface BrowserPermissionRequest {
 
 export type BrowserConsoleLevel = 'debug' | 'info' | 'warning' | 'error'
 
+/** Where a renderer log line originated, for the durable log tag. */
+export type RendererLogSource = 'error' | 'unhandledrejection' | 'console'
+
+/** Renderer-level log levels forwarded to the main-process Logger. */
+export type RendererLogLevel = 'dev' | 'info' | 'error'
+
+/**
+ * A renderer-originated log line forwarded to the main-process durable Logger.
+ * Carries only the message/stack and origin label — no paths, user content, or
+ * credentials; secrets are redacted by the main-process sink before write.
+ */
+export interface RendererLogEntry {
+  level: RendererLogLevel
+  message: string
+  stack?: string
+  source: RendererLogSource
+  at: number
+}
+
 /** A console or runtime diagnostic emitted by one app-scoped browser tab. */
 export interface BrowserConsoleEntry {
   id: string
@@ -1048,6 +1067,15 @@ export interface IpcInvokeContract {
   'speech:enforceHistoryLimit': Contract<
     [limit: number],
     import('./speech/types').SpeechResult<void>
+  >
+  'speech:transcribeAudioToLlm': Contract<
+    [
+      attemptId: string,
+      scope: import('./speech/types').SpeechScope,
+      language: string,
+      cleanupMode: import('./speech/types').SpeechCleanupMode
+    ],
+    import('./speech/types').SpeechResult<import('./speech/types').SpeechTranscriptionResult>
   >
   'speech:downloadArtifact': Contract<
     [artifactId: string],
@@ -2156,6 +2184,12 @@ export interface IpcInvokeContract {
    * phases. Carries no payload.
    */
   'app:rendererReady': Contract<[], void>
+  /**
+   * Renderer forwards its own captured errors (uncaught exceptions, unhandled
+   * rejections, console errors) to the main-process durable Logger. Fire and
+   * forget; returns `void`.
+   */
+  'renderer:log': Contract<[entry: RendererLogEntry], void>
 }
 
 export interface ThreadClickedPayload {
