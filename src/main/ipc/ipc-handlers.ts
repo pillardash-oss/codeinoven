@@ -4156,6 +4156,104 @@ export function registerIpcHandlers(
       threadLimit: input.threadLimit ?? config.threadLimit
     })
   })
+
+  function deriveRepoNameFromUrl(url: string): string {
+    const trimmed = url.trim().replace(/\/+$/u, '')
+    if (!trimmed) return 'repo'
+    const withoutQuery = trimmed.split('?')[0].split('#')[0]
+    // Take after last '/' or ':' (covers git@github.com:org/repo.git)
+    const lastSlash = withoutQuery.lastIndexOf('/')
+    const lastColon = withoutQuery.lastIndexOf(':')
+    const sepIndex = Math.max(lastSlash, lastColon)
+    const segment = sepIndex >= 0 ? withoutQuery.slice(sepIndex + 1) : withoutQuery
+    const withoutGit = segment.endsWith('.git') ? segment.slice(0, -4) : segment
+    const sanitized = withoutGit.replace(/[^A-Za-z0-9._-]/gu, '-').replace(/^-+/u, '').replace(/-+$/u, '')
+    return sanitized.length > 0 ? sanitized.slice(0, 100) : 'repo'
+  }
+
+  function validateGitCloneInput(value: unknown): { url: string; destination?: string } {
+    if (typeof value !== 'object' || value === null) throw new TypeError('Git clone input must be an object')
+    const record = value as Record<string, unknown>
+    const url = record['url']
+    if (typeof url !== 'string' || url.trim().length === 0) throw new TypeError('Git URL is required')
+    if (url.length > 2048) throw new TypeError('Git URL is too long')
+    if (url.includes('\0')) throw new TypeError('Git URL contains invalid characters')
+    const trimmed = url.trim()
+    // Allow https, http, git, ssh, and scp-like git@host:path
+    const isHttps = /^https?:\/\/.+/u.test(trimmed)
+    const isSsh = /^ssh:\/\/.+/u.test(trimmed)
+    const isGit = /^git:\/\/.+/u.test(trimmed)
+    const isScp = /^[^:]+@[^:]+:.+/u.test(trimmed) && !trimmed.includes('://')
+    const isGitAt = /^git@.+/u.test(trimmed)
+    if (!(isHttps || isSsh || isGit || isScp || isGitAt)) {
+      throw new TypeError('Git URL must be a valid https:// or ssh (git@host:owner/repo) URL')
+    }
+    const destination = record['destination']
+    if (destination !== undefined) {
+      if (typeof destination !== 'string' || destination.trim().length === 0) throw new TypeError('Destination must be a non-empty path')
+      if (destination.length > 4096) throw new TypeError('Destination path is too long')
+      if (destination.includes('\0')) throw new TypeError('Destination contains invalid characters')
+      if (!isAbsolute(destination)) throw new TypeError('Destination must be an absolute path')
+    }
+    return { url: trimmed, destination: typeof destination === 'string' ? destination.trim() : undefined }
+  }
+
+  ipcMain.handle('dialog:pickCloneDestination', async () => {
+    try {
+      const win = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0] ?? null
+      if (win && !win.isFocused()) win.focus()
+      const defaultPath = join(getConfigRoot(), 'projects-gh')
+      await mkdir(defaultPath, { recursive: true })
+      const config = await storage.getConfig()
+      const options: Electron.OpenDialogOptions = {
+        title: 'Select Clone Destination',
+        properties: ['openDirectory', 'createDirectory'],
+        defaultPath: config.lastFolderDialogPath || defaultPath
+      }
+      const result = win ? await dialog.showOpenDialog(win, options) : await dialog.showOpenDialog(options)
+      if (result.canceled || result.filePaths.length === 0) return null
+      const chosen = result.filePaths[0]
+      await privilegedIpc.registerUserSelectedRoot(chosen)
+      return chosen
+    } catch (error) {
+      Logger.error('dialog:pickCloneDestination failed:', error)
+      return null
+    }
+  })
+
+  ipcMain.handle('git:defaultClonePath', async (_, rawUrl: unknown) => {
+    if (typeof rawUrl !== 'string' || rawUrl.trim().length === 0) throw new TypeError('Git URL is required')
+    const repoName = deriveRepoNameFromUrl(rawUrl)
+    const defaultPath = join(getConfigRoot(), 'projects-gh', repoName)
+    return defaultPath
+  })
+
+  ipcMain.handle('git:cloneHandoff', async (_, rawInput: unknown) => {
+    const { url, destination } = validateGitCloneInput(rawInput)
+    const repoName = deriveRepoNameFromUrl(url)
+    const resolvedDestination = destination ?? join(getConfigRoot(), 'projects-gh', repoName)
+    // Ensure the projects-gh parent exists
+    await mkdir(join(getConfigRoot(), 'projects-gh'), { recursive: true })
+    // Guard against cloning into an existing non-empty directory
+    try {
+      const statResult = await stat(resolvedDestination)
+      if (statResult.isDirectory()) {
+        const entries = await import('fs/promises').then((m) => m.readdir(resolvedDestination))
+        if (entries.length > 0) throw new Error(`Destination already exists and is not empty: ${resolvedDestination}`)
+      } else {
+        throw new Error(`Destination already exists and is not a directory: ${resolvedDestination}`)
+      }
+    } catch (error) {
+      if (error instanceof Error && 'code' in error && (error as NodeJS.ErrnoException).code === 'ENOENT') {
+        // Destination does not exist — git clone will create it
+      } else {
+        throw error
+      }
+    }
+    await privilegedIpc.registerUserSelectedRoot(dirname(resolvedDestination))
+    await privilegedIpc.registerUserSelectedRoot(resolvedDestination)
+    return { command: 'git', args: ['clone', url, resolvedDestination], destination: resolvedDestination, repoName }
+  })
   if (!options.hydrationHandlersRegistered) {
     ipcMain.handle('project:get', (_, projectId: string) => projectManager.getProject(projectId))
     ipcMain.handle('project:list', async () => {

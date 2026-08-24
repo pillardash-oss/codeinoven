@@ -1039,6 +1039,12 @@ export interface IpcInvokeContract {
   'workerNames:getSettings': Contract<[], WorkerNameSettings>
   'workerNames:saveCustom': Contract<[names: string[]], void>
   'dialog:pickFolder': Contract<[], string | null>
+  'dialog:pickCloneDestination': Contract<[], string | null>
+  'git:defaultClonePath': Contract<[url: string], string>
+  'git:cloneHandoff': Contract<
+    [input: { url: string; destination?: string }],
+    { command: string; args: string[]; destination: string; repoName: string }
+  >
   'clipboard:saveImage': Contract<[scope: AttachmentStorageScope], string | null>
   'attachment:saveText': Contract<
     [scope: AttachmentStorageScope, text: string, existingPath?: string],
