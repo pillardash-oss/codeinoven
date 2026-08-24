@@ -296,6 +296,31 @@ export interface BrowserConsoleEntry {
   timestamp: number
 }
 
+/** Lifecycle state of a download started by an app-scoped browser tab. */
+export type BrowserDownloadState = 'progressing' | 'interrupted' | 'completed' | 'cancelled'
+
+/**
+ * Metadata for a download started inside the app-scoped browser. Contains no
+ * cookies, headers, or page content — only what the download manager needs to
+ * render progress and offer cancel/pause/open/reveal actions.
+ */
+export interface BrowserDownload {
+  id: string
+  tabId: string
+  projectId: string
+  fileName: string
+  url: string
+  mimeType: string
+  receivedBytes: number
+  totalBytes: number
+  speedBytes: number
+  progress: number
+  state: BrowserDownloadState
+  paused: boolean
+  savePath: string
+  error: string
+}
+
 export interface IpcInvokeContract {
   'account:getLocalUsage': Contract<
     [range: import('./types').LocalProfileAnalyticsRange],
@@ -1910,6 +1935,12 @@ export interface IpcInvokeContract {
   'browser:destroy': Contract<[tabId: string], void>
   'browser:destroyThread': Contract<[projectId: string, threadId: string], void>
   'browser:destroyProject': Contract<[projectId: string], void>
+  'browser:getDownloads': Contract<[projectId: string], BrowserDownload[]>
+  'browser:cancelDownload': Contract<[id: string], void>
+  'browser:pauseDownload': Contract<[id: string], void>
+  'browser:resumeDownload': Contract<[id: string], void>
+  'browser:openDownload': Contract<[id: string], void>
+  'browser:revealDownload': Contract<[id: string], boolean>
   /** Open the native Ctrl+Tab overlay above the browser view with a fresh
    *  display payload. Only used while the native browser view is on screen;
    *  otherwise the renderer uses the DOM switcher. */
@@ -2418,6 +2449,7 @@ export interface IpcEventContract {
   'browser:openRequested': [url: string, context?: BrowserOpenRequestContext]
   'browser:permissionRequested': [request: BrowserPermissionRequest]
   'browser:permissionResolved': [requestId: string]
+  'browser:download': [download: BrowserDownload]
   /** Native Ctrl+Tab overlay asked the renderer to switch to a thread. */
   'switcher:select': [threadId: string]
   /** Native Ctrl+Tab overlay moved its highlight (so the renderer can preload
