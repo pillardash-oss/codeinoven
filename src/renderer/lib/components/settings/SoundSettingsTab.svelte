@@ -252,17 +252,7 @@
         {/each}
       </div>
 
-      <!-- Per-capability Import / Paste Path -->
-      <div class="flex items-center justify-between gap-3">
-        <p class="text-xs text-dimmed">
-          {#if activeModelSubTab === 'asr'}
-            Parakeet TDT ranked first — V2 best for English, V3 best for multilingual — followed by Whisper. Fixed-height list scrolls internally.
-          {:else if activeModelSubTab === 'tts'}
-            Kokoro voices — local synthesis per runtime. Fixed-height list scrolls internally.
-          {:else}
-            Cleanup LLMs — Qwen MLX recommended, sherpa punctuation lightweight. Fixed-height list scrolls internally.
-          {/if}
-        </p>
+      <div class="flex items-center justify-end gap-3">
         <div class="flex shrink-0 items-center gap-1.5">
           <button
             type="button"
@@ -292,7 +282,7 @@
         </div>
       </div>
 
-      <!-- Fixed-height scrollable model cards -->
+      <!-- Scrollable model cards -->
       <div class="max-h-[520px] space-y-3 overflow-y-auto rounded-xl border bg-surface p-3 pr-2">
         {#each sortedForSubTab(activeModelSubTab) as artifact (artifact.id)}
           {@const installed = speech.capabilities?.installedArtifacts.find(
