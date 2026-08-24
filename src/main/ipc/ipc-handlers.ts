@@ -2065,7 +2065,7 @@ export function registerIpcHandlers(
   updaterService?: UpdaterService,
   chatEngine?: Pick<
     ChatEngine,
-    'loadMessages' | 'deleteThreadSession' | 'hasActiveProcessesInScope'
+    'loadMessages' | 'deleteThreadSession' | 'hasActiveProcessesInScope' | 'abort'
   > &
     Partial<Pick<ChatEngine, 'runVirtualTask'>>,
   options: RegisterIpcHandlersOptions = {}
@@ -2186,13 +2186,28 @@ export function registerIpcHandlers(
   )
   ipcMain.handle(
     'engineeringLifecycle:cancel',
-    (_, projectId: unknown, threadId: unknown, confirmed: unknown) => {
+    async (_, projectId: unknown, threadId: unknown, confirmed: unknown) => {
       if (confirmed !== true)
         throw new TypeError('Engineering lifecycle cancellation requires confirmation')
-      return engineeringLifecycleEngine.cancel(
-        validateEntityId(projectId, 'Project ID'),
-        validateEntityId(threadId, 'Thread ID')
-      )
+      const pid = validateEntityId(projectId, 'Project ID')
+      const tid = validateEntityId(threadId, 'Thread ID')
+      const before = engineeringLifecycleEngine.get(pid, tid)
+      const result = engineeringLifecycleEngine.cancel(pid, tid)
+      // A user-initiated stop must halt the in-flight generation turn too,
+      // otherwise the thread stays planning/executing and is re-surfaced on
+      // view switch or resumed by restart recovery. abort() tears down the
+      // active harness session and marks the thread `interrupted`
+      // (non-recoverable), so an explicitly stopped run stays stopped.
+      if (
+        before &&
+        (before.activeStage !== undefined ||
+          before.humanGate !== undefined ||
+          before.selection !== 'none') &&
+        chatEngine?.abort
+      ) {
+        await chatEngine.abort(pid, tid)
+      }
+      return result
     }
   )
 
@@ -6499,10 +6514,11 @@ export function registerIpcHandlers(
     const validated = validateCreateThreadInput(input)
     // Optimistic create: the thread object (with its stable id) is returned
     // immediately while persistence, lazy capacity eviction, and branch
-    // detection finalize in the background. Session/message entry points await
+    // detection finalize in the background. Only the send path awaits
     // `threadCreation.awaitReady`, so a message sent in this window renders
     // instantly and is queued behind the finalization before reaching the
-    // harness — thread creation never waits on the database.
+    // harness — thread creation never waits on the database, and neither does
+    // typing, reading, or switching threads.
     const { thread, finalize } = threadManager.prepareCreateThread(validated, {
       onEvictionError: (error) =>
         Logger.error('Thread capacity eviction failed', {
@@ -6552,10 +6568,13 @@ export function registerIpcHandlers(
     return thread
   })
   if (!options.hydrationHandlersRegistered) {
-    ipcMain.handle('thread:get', async (_, projectId: string, threadId: string) => {
-      await threadCreation.awaitReady(threadId)
-      return threadManager.getThread(projectId, threadId)
-    })
+    // Reads must never wait for optimistic thread finalization: the renderer
+    // already holds the thread object returned by `thread:create`. Reading is
+    // always instant — only the send path (`ensureSession`/`sendPrompt`) queues
+    // behind readiness.
+    ipcMain.handle('thread:get', (_, projectId: string, threadId: string) =>
+      threadManager.getThread(projectId, threadId)
+    )
   }
   ipcMain.handle('thread:list', (_, projectId: string) => threadManager.listThreads(projectId))
   ipcMain.handle('thread:listAll', () => threadManager.listAllThreads())
@@ -6637,7 +6656,6 @@ export function registerIpcHandlers(
       }
       const safeProjectId = validateEntityId(projectId, 'Project ID')
       const safeThreadId = validateEntityId(threadId, 'Thread ID')
-      await threadCreation.awaitReady(safeThreadId)
       return threadManager.loadMessagePage(
         safeProjectId,
         safeThreadId,
@@ -6662,7 +6680,6 @@ export function registerIpcHandlers(
   ipcMain.handle('thread:loadUserMessages', async (_, projectId: unknown, threadId: unknown) => {
     const safeProjectId = validateEntityId(projectId, 'Project ID')
     const safeThreadId = validateEntityId(threadId, 'Thread ID')
-    await threadCreation.awaitReady(safeThreadId)
     return threadManager.loadUserMessages(safeProjectId, safeThreadId)
   })
   // Export the conversation transcript as Markdown, off the main thread.
@@ -6671,7 +6688,6 @@ export function registerIpcHandlers(
     async (_, projectId: unknown, threadId: unknown, rawOptions: unknown) => {
       const safeProjectId = validateEntityId(projectId, 'Project ID')
       const safeThreadId = validateEntityId(threadId, 'Thread ID')
-      await threadCreation.awaitReady(safeThreadId)
       const thread = await threadManager.getThread(safeProjectId, safeThreadId)
       if (!thread) throw new Error('Thread not found')
       const includeTrace = isRecord(rawOptions)
@@ -6820,17 +6836,14 @@ export function registerIpcHandlers(
   ipcMain.handle('thread:harnessUsage', async (_, projectId: unknown, threadId: unknown) => {
     const safeProjectId = validateEntityId(projectId, 'Project ID')
     const safeThreadId = validateEntityId(threadId, 'Thread ID')
-    await threadCreation.awaitReady(safeThreadId)
     return threadManager.harnessUsageFor(safeProjectId, safeThreadId)
   })
   ipcMain.handle('thread:efficiencyKpis', async (_, projectId: unknown, threadId: unknown) => {
     const safeProjectId = validateEntityId(projectId, 'Project ID')
     const safeThreadId = validateEntityId(threadId, 'Thread ID')
-    await threadCreation.awaitReady(safeThreadId)
     return threadManager.efficiencyKpisFor(safeProjectId, safeThreadId)
   })
   ipcMain.handle('thread:markRead', async (_, projectId: string, threadId: string) => {
-    await threadCreation.awaitReady(threadId)
     // Opening a thread means the user moved on from wherever they were; any
     // completed turn left pending on another thread counts as a success.
     turnFeedbackRepo.resolvePendingForOtherThreads(
@@ -6883,7 +6896,6 @@ export function registerIpcHandlers(
       const safeProjectId = validateEntityId(projectId, 'Project ID')
       const safeThreadId = validateEntityId(threadId, 'Thread ID')
       const safeSettings = validateThreadSettings(settings)
-      await threadCreation.awaitReady(safeThreadId)
       return threadManager.updateSettings(safeProjectId, safeThreadId, safeSettings)
     }
   )
