@@ -35,7 +35,7 @@ import {
   resolveSpeechRuntime
 } from '../../lib/speech/types'
 import { parseSpeechModelCatalog } from '../../lib/speech/model-catalog'
-import { CAPABILITY_RUNTIMES, describeSupportedFormatsForCapability, normalizePastedPath } from '../../lib/speech/model-path-validation'
+import { buildParsedIdentityForValidation, CAPABILITY_RUNTIMES, describeSupportedFormatsForCapability, normalizePastedPath } from '../../lib/speech/model-path-validation'
 import type { ModelPathValidationResult } from '../../lib/speech/types'
 import { SpeechJobQueue, SpeechQueueError } from './speech-job-queue'
 import { SpeechStorage } from './speech-storage'
@@ -479,6 +479,7 @@ export class SpeechService {
     const cap: SpeechCapability = capability === 'asr' || capability === 'tts' || capability === 'cleanup' ? capability : 'asr'
     const allowed = CAPABILITY_RUNTIMES[cap]
     const hint = describeSupportedFormatsForCapability(cap)
+    const parsedFor = (runtime: import('../../lib/speech/types').SpeechRuntime | null) => buildParsedIdentityForValidation(normalized, runtime)
     if (normalized.length === 0) {
       return {
         ok: false,
@@ -486,8 +487,9 @@ export class SpeechService {
         normalizedPath: normalized,
         wasNormalized,
         code: 'empty',
-        reason: hint
-      }
+        reason: hint,
+      parsedIdentity: parsedFor(null as unknown as import('../../lib/speech/types').SpeechRuntime | null)
+    }
     }
     if (normalized.length > 4_096) {
       return {
@@ -496,8 +498,9 @@ export class SpeechService {
         normalizedPath: normalized,
         wasNormalized,
         code: 'unsupported-format',
-        reason: 'Path is too long. Paste a local file or folder path.'
-      }
+        reason: 'Path is too long. Paste a local file or folder path.',
+      parsedIdentity: parsedFor(null as unknown as import('../../lib/speech/types').SpeechRuntime | null)
+    }
     }
     const lower = normalized.toLowerCase()
     const isMlx =
@@ -522,8 +525,9 @@ export class SpeechService {
           normalizedPath: normalized,
           wasNormalized,
           code: 'not-found',
-          reason: 'No file or folder exists at that path. Check the path and try again.'
-        }
+          reason: 'No file or folder exists at that path. Check the path and try again.',
+      parsedIdentity: parsedFor(null as unknown as import('../../lib/speech/types').SpeechRuntime | null)
+    }
       }
       if (code === 'EACCES' || code === 'EPERM') {
         return {
@@ -532,8 +536,9 @@ export class SpeechService {
           normalizedPath: normalized,
           wasNormalized,
           code: 'permission-denied',
-          reason: 'Permission denied at that path. Check access and try again.'
-        }
+          reason: 'Permission denied at that path. Check access and try again.',
+      parsedIdentity: parsedFor(null as unknown as import('../../lib/speech/types').SpeechRuntime | null)
+    }
       }
       return {
         ok: false,
@@ -541,8 +546,9 @@ export class SpeechService {
         normalizedPath: normalized,
         wasNormalized,
         code: 'not-found',
-        reason: 'That path cannot be read. Verify it and try again.'
-      }
+        reason: 'That path cannot be read. Verify it and try again.',
+      parsedIdentity: parsedFor(null as unknown as import('../../lib/speech/types').SpeechRuntime | null)
+    }
     }
 
     const forbid = (runtime: string, reason: string): ModelPathValidationResult => ({
@@ -553,7 +559,8 @@ export class SpeechService {
       runtime: runtime as SpeechRuntime,
       code: 'unsupported-format',
       reason,
-      detectedExtension: runtime === 'gguf' ? '.gguf' : runtime === 'mlx' ? '.mlx' : runtime === 'coreml' ? '.mlmodelc' : '.onnx'
+      detectedExtension: runtime === 'gguf' ? '.gguf' : runtime === 'mlx' ? '.mlx' : runtime === 'coreml' ? '.mlmodelc' : '.onnx',
+      parsedIdentity: parsedFor(runtime as import('../../lib/speech/types').SpeechRuntime)
     })
 
     // Direct file hits - check capability before accepting
@@ -572,7 +579,9 @@ export class SpeechService {
           code: 'platform-unsupported',
           reason: 'MLX models are only supported on Apple Silicon.',
           detectedExtension: '.mlx'
-        }
+        ,
+      parsedIdentity: parsedFor('mlx' as unknown as import('../../lib/speech/types').SpeechRuntime | null)
+    }
       }
       return {
         ok: true,
@@ -583,7 +592,9 @@ export class SpeechService {
         code: 'valid',
         reason: `Supported model found — MLX ${cap.toUpperCase()} — ready to import.`,
         detectedExtension: '.mlx'
-      }
+      ,
+      parsedIdentity: parsedFor('mlx' as unknown as import('../../lib/speech/types').SpeechRuntime | null)
+    }
     }
     if (isGgufFile) {
       if (!allowed.includes('gguf')) {
@@ -598,7 +609,9 @@ export class SpeechService {
           code: 'unsupported-format',
           reason: 'That .gguf path is a directory. Paste the file path to the .gguf.',
           detectedExtension: '.gguf'
-        }
+        ,
+      parsedIdentity: parsedFor(null as unknown as import('../../lib/speech/types').SpeechRuntime | null)
+    }
       }
       return {
         ok: true,
@@ -609,7 +622,9 @@ export class SpeechService {
         code: 'valid',
         reason: 'Supported model found — GGUF (LLM / Cleanup) — ready to import.',
         detectedExtension: '.gguf'
-      }
+      ,
+      parsedIdentity: parsedFor('gguf' as unknown as import('../../lib/speech/types').SpeechRuntime | null)
+    }
     }
     if (isCoreMlFile) {
       if (!allowed.includes('coreml')) {
@@ -626,7 +641,9 @@ export class SpeechService {
           code: 'platform-unsupported',
           reason: 'Core ML models are only supported on Apple Silicon.',
           detectedExtension: '.mlmodelc'
-        }
+        ,
+      parsedIdentity: parsedFor('coreml' as unknown as import('../../lib/speech/types').SpeechRuntime | null)
+    }
       }
       return {
         ok: true,
@@ -637,7 +654,9 @@ export class SpeechService {
         code: 'valid',
         reason: 'Supported model found — Core ML ASR bundle — ready to import.',
         detectedExtension: lower.endsWith('.mlpackage') ? '.mlpackage' : '.mlmodelc'
-      }
+      ,
+      parsedIdentity: parsedFor('coreml' as unknown as import('../../lib/speech/types').SpeechRuntime | null)
+    }
     }
     if (isOnnxFile) {
       if (!allowed.includes('sherpa-onnx')) {
@@ -652,7 +671,9 @@ export class SpeechService {
         code: 'valid',
         reason: 'Supported model found — sherpa-onnx (.onnx) — ready to import.',
         detectedExtension: '.onnx'
-      }
+      ,
+      parsedIdentity: parsedFor('sherpa-onnx' as unknown as import('../../lib/speech/types').SpeechRuntime | null)
+    }
     }
 
     // Directory scans - contextual per capability
@@ -669,8 +690,9 @@ export class SpeechService {
             normalizedPath: normalized,
             wasNormalized,
             code: 'permission-denied',
-            reason: 'Permission denied reading that folder.'
-          }
+            reason: 'Permission denied reading that folder.',
+      parsedIdentity: parsedFor(null as unknown as import('../../lib/speech/types').SpeechRuntime | null)
+    }
         }
         return {
           ok: false,
@@ -678,8 +700,9 @@ export class SpeechService {
           normalizedPath: normalized,
           wasNormalized,
           code: 'unsupported-format',
-          reason: hint
-        }
+          reason: hint,
+      parsedIdentity: parsedFor(null as unknown as import('../../lib/speech/types').SpeechRuntime | null)
+    }
       }
       const lowerNames = entries.map((e) => e.name.toLowerCase())
       const hasGguf = lowerNames.some((n) => n.endsWith('.gguf'))
@@ -703,7 +726,9 @@ export class SpeechService {
             code: 'platform-unsupported',
             reason: 'Core ML models are only supported on Apple Silicon.',
             detectedExtension: '.mlmodelc'
-          }
+          ,
+      parsedIdentity: parsedFor('coreml' as unknown as import('../../lib/speech/types').SpeechRuntime | null)
+    }
         }
         return {
           ok: true,
@@ -714,7 +739,9 @@ export class SpeechService {
           code: 'valid',
           reason: 'Supported model found — folder containing Core ML ASR bundle — ready to import.',
           detectedExtension: '.mlmodelc'
-        }
+        ,
+      parsedIdentity: parsedFor('coreml' as unknown as import('../../lib/speech/types').SpeechRuntime | null)
+    }
       }
       if (hasGguf) {
         if (!allowed.includes('gguf')) {
@@ -729,7 +756,9 @@ export class SpeechService {
           code: 'valid',
           reason: 'Supported model found — folder containing .gguf — ready to import.',
           detectedExtension: '.gguf'
-        }
+        ,
+      parsedIdentity: parsedFor('gguf' as unknown as import('../../lib/speech/types').SpeechRuntime | null)
+    }
       }
       if (hasOnnx) {
         if (!allowed.includes('sherpa-onnx')) {
@@ -746,7 +775,9 @@ export class SpeechService {
             code: 'valid',
             reason: 'Found sherpa-onnx model (.onnx) — missing tokens.txt; may still import but verify the directory is a full sherpa model.',
             detectedExtension: '.onnx'
-          }
+          ,
+      parsedIdentity: parsedFor('sherpa-onnx' as unknown as import('../../lib/speech/types').SpeechRuntime | null)
+    }
         }
         return {
           ok: true,
@@ -757,7 +788,9 @@ export class SpeechService {
           code: 'valid',
           reason: `Supported model found — sherpa-onnx ${cap.toUpperCase()} folder — ready to import.`,
           detectedExtension: '.onnx'
-        }
+        ,
+      parsedIdentity: parsedFor('sherpa-onnx' as unknown as import('../../lib/speech/types').SpeechRuntime | null)
+    }
       }
       return {
         ok: false,
@@ -767,7 +800,9 @@ export class SpeechService {
         code: 'unsupported-format',
         reason: hint,
         detectedExtension: undefined
-      }
+      ,
+      parsedIdentity: parsedFor(null as unknown as import('../../lib/speech/types').SpeechRuntime | null)
+    }
     }
     // File with unsupported extension
     return {
@@ -778,6 +813,8 @@ export class SpeechService {
       code: 'unsupported-format',
       reason: hint,
       detectedExtension: undefined
+    ,
+      parsedIdentity: parsedFor(null as unknown as import('../../lib/speech/types').SpeechRuntime | null)
     }
   }
 

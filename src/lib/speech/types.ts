@@ -450,6 +450,22 @@ export type ModelPathValidationCode =
   | 'platform-unsupported'
   | 'valid'
 
+export interface ParsedModelIdentity {
+  rawBasename: string
+  baseWithoutExtension: string
+  displayName: string
+  family?: string
+  variant?: string
+  size?: string
+  version?: string
+  quantization?: string
+  languageHint?: string
+  runtimeHint?: SpeechRuntime
+  confidence: 'high' | 'medium' | 'low'
+  tokens: string[]
+  details: Array<{ label: string; value: string }>
+}
+
 export interface ModelPathValidationResult {
   ok: boolean
   capability?: SpeechCapability
@@ -459,6 +475,7 @@ export interface ModelPathValidationResult {
   code: ModelPathValidationCode
   reason: string
   detectedExtension?: string
+  parsedIdentity?: ParsedModelIdentity | null
 }
 
 export type SpeechResult<T> = { ok: true; value: T } | { ok: false; error: SpeechError }

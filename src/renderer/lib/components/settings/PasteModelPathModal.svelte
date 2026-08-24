@@ -2,8 +2,8 @@
   import { LoaderCircle, CheckCircle2, AlertCircle, Info } from '@lucide/svelte'
   import { invoke } from '$lib/ipc.svelte'
   import { speechSettingsStore as speech } from '$lib/stores/speech.svelte'
-  import type { ModelPathValidationResult, SpeechCapability } from '../../../../lib/speech/types'
-  import { describeSupportedFormatsForCapability } from '../../../../lib/speech/model-path-validation'
+  import type { ModelPathValidationResult, ParsedModelIdentity, SpeechCapability } from '../../../../lib/speech/types'
+  import { buildParsedIdentityForValidation, describeSupportedFormatsForCapability, inferRuntimeFromExtension } from '../../../../lib/speech/model-path-validation'
   import Modal from '../ui/Modal.svelte'
 
   interface Props {
@@ -35,7 +35,8 @@
         normalizedPath: '',
         wasNormalized: false,
         code: 'empty',
-        reason: helpText
+        reason: helpText,
+        parsedIdentity: null
       }
       return
     }
@@ -56,7 +57,8 @@
           normalizedPath: forRaw.trim(),
           wasNormalized: false,
           code: 'unsupported-format',
-          reason: result.error.message
+          reason: result.error.message,
+          parsedIdentity: buildParsedIdentityForValidation(forRaw.trim(), inferRuntimeFromExtension(forRaw.trim()))
         }
       } else {
         validation = result.value
@@ -67,7 +69,8 @@
         normalizedPath: forRaw.trim(),
         wasNormalized: false,
         code: 'unsupported-format',
-        reason: cause instanceof Error ? cause.message : String(cause)
+        reason: cause instanceof Error ? cause.message : String(cause),
+        parsedIdentity: buildParsedIdentityForValidation(forRaw.trim(), inferRuntimeFromExtension(forRaw.trim()))
       }
     } finally {
       validating = false
@@ -127,6 +130,22 @@
   const showNormalizedHint = $derived(
     validation !== null && validation.wasNormalized && rawPath.trim().length > 0
   )
+
+  // Show breakup immediately from pasted path even before main-process stat, and from returned validation after
+  const liveParsed = $derived.by((): ParsedModelIdentity | null => {
+    if (validation?.parsedIdentity) return validation.parsedIdentity
+    const raw = rawPath.trim()
+    if (!raw) return null
+    // Strip outer quotes like normalizePastedPath for preview
+    let norm = raw
+    if (norm.length >= 2 && ((norm[0] === '"' && norm[norm.length - 1] === '"') || (norm[0] === "'" && norm[norm.length - 1] === "'"))) {
+      const inner = norm.slice(1, -1).trim()
+      if (inner) norm = inner
+    }
+    const runtime = inferRuntimeFromExtension(norm)
+    return buildParsedIdentityForValidation(norm, runtime)
+  })
+  const hasBreakup = $derived(liveParsed !== null && liveParsed.details.length > 0)
 </script>
 
 <Modal open={open} title="Paste model path" onClose={resetAndClose} size="md">
@@ -195,6 +214,40 @@
         <span class="text-muted">Paste a path to validate.</span>
       {/if}
     </div>
+
+    {#if hasBreakup && liveParsed}
+      <div class="rounded-xl border bg-surface p-3">
+        <p class="mb-2 flex items-center justify-between text-[11px] font-semibold uppercase tracking-wide text-muted">
+          <span>Detected model</span>
+          {#if liveParsed.confidence === 'high'}
+            <span class="rounded-full bg-success/10 px-2 py-0.5 text-[10px] font-medium text-success">High confidence</span>
+          {:else if liveParsed.confidence === 'medium'}
+            <span class="rounded-full bg-amber-500/10 px-2 py-0.5 text-[10px] font-medium text-amber-600">Medium confidence</span>
+          {:else}
+            <span class="rounded-full bg-surface-hover px-2 py-0.5 text-[10px] font-medium text-dimmed">Low confidence</span>
+          {/if}
+        </p>
+        <p class="text-sm font-semibold leading-none" title={liveParsed.baseWithoutExtension}>{liveParsed.displayName}</p>
+        <p class="mt-1 truncate font-mono text-[11px] text-dimmed" title={liveParsed.rawBasename}>{liveParsed.rawBasename}</p>
+        <div class="mt-2 flex flex-wrap gap-1.5">
+          {#each liveParsed.details as d (d.label)}
+            <span class="inline-flex items-center gap-1 rounded-full border bg-elevated px-2 py-0.5 text-[11px]">
+              <span class="font-medium text-muted">{d.label}:</span>
+              <span class="font-semibold">{d.value}</span>
+            </span>
+          {/each}
+        </div>
+        {#if liveParsed.tokens.length}
+          <p class="mt-2 flex flex-wrap items-center gap-1 text-[11px] text-dimmed">
+            <span class="text-[10px] uppercase tracking-wide">Breakup:</span>
+            {#each liveParsed.tokens as tok, i (i)}
+              <code class="rounded bg-elevated px-1 py-0.5 font-mono text-[11px]">{tok}</code>
+              {#if i < liveParsed.tokens.length - 1}<span class="opacity-40">·</span>{/if}
+            {/each}
+          </p>
+        {/if}
+      </div>
+    {/if}
 
     {#if validation !== null && !validation.ok && validation.code === 'unsupported-format'}
       <p class="text-[11px] text-dimmed">
