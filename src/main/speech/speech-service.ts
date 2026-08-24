@@ -880,6 +880,7 @@ export class SpeechService {
       existing.available = true
       if (capability) existing.capability = capability
       await this.persistInstalledIndex()
+      this.emit({ kind: 'history', attemptId: existing.artifactId, stage: 'completed' })
       return structuredClone(existing)
     }
     const artifact: SpeechInstalledArtifact = {
@@ -894,6 +895,7 @@ export class SpeechService {
     }
     this.installed.artifacts.push(artifact)
     await this.persistInstalledIndex()
+    this.emit({ kind: 'history', attemptId: artifact.artifactId, stage: 'completed' })
     return structuredClone(artifact)
   }
 
@@ -907,6 +909,7 @@ export class SpeechService {
       (item) => item.artifactId !== artifactId
     )
     await this.persistInstalledIndex()
+    this.emit({ kind: 'history', attemptId: artifactId, stage: 'completed' })
   }
 
   async retryTranscription(

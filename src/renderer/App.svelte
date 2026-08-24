@@ -488,11 +488,19 @@
     const previous = config
     config = { ...config, ...patch }
     applyTheme()
+    if (patch.sound) {
+      window.dispatchEvent(
+        new CustomEvent('cio:soundChanged', { detail: { ...config.sound, ...patch.sound } })
+      )
+    }
     try {
       config = await invoke('config:update', patch)
       appConfigState.sync(config)
       applyTheme()
       settingsError = undefined
+      if (patch.sound) {
+        window.dispatchEvent(new CustomEvent('cio:soundChanged', { detail: config.sound }))
+      }
     } catch {
       config = previous
       applyTheme()

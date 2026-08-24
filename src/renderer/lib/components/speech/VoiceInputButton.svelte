@@ -1,7 +1,8 @@
 <script lang="ts">
   import { onMount } from 'svelte'
   import { Mic, TriangleAlert } from '@lucide/svelte'
-  import { invoke } from '$lib/ipc.svelte'
+  import { invoke, subscribe } from '$lib/ipc.svelte'
+  import { speechSettingsStore } from '$lib/stores/speech.svelte'
   import type { SpeechScope } from '../../../../lib/speech/types'
   import type { SpeechEditorSnapshot, SpeechEditorTarget } from '../../speech/editor-target'
   import { speechController } from '../../speech/speech-controller.svelte'
@@ -17,16 +18,32 @@
   let { targetId, getTarget, scope, disabled = false, class: className = '' }: Props = $props()
   let preparedTarget: SpeechEditorTarget | null = null
   let preparedSnapshot: SpeechEditorSnapshot | null = null
-  let hasInstalledAsr = $state(false)
-  let voiceRecordingEnabled = $state(false)
+  let fetchedHasInstalledAsr = $state(false)
+  let fetchedVoiceRecordingEnabled = $state(false)
   let visibilityKnown = $state(false)
 
-  // The mic is hidden unless a local ASR model is installed or the user has
-  // opted into audio-to-LLM voice recording (default off). Once resolved the
-  // decision is cheap and cached for the component lifetime.
+  let storeHasInstalledAsr = $derived.by(() => {
+    const caps = speechSettingsStore.capabilities
+    const catalog = speechSettingsStore.catalog
+    if (!caps || !catalog) return undefined as boolean | undefined
+    const installedIds = new Set(
+      caps.installedArtifacts.filter((a) => a.available).map((a) => a.artifactId)
+    )
+    return catalog.artifacts.some(
+      (a) => a.capability === 'asr' && a.qualification.status === 'qualified' && installedIds.has(a.id)
+    )
+  })
+
+  let hasInstalledAsr = $derived(storeHasInstalledAsr ?? fetchedHasInstalledAsr)
+  let voiceRecordingEnabled = $derived(fetchedVoiceRecordingEnabled)
+
+  // Mic is hidden only when we know the state and neither a local ASR nor the
+  // opt-in audio-to-LLM fallback is available. Store-derived ASR makes this
+  // reactive across the app without a restart — import/activate in Sound
+  // immediately flows to every mounted composer, edit and comment editor.
   let hidden = $derived(visibilityKnown && !hasInstalledAsr && !voiceRecordingEnabled)
 
-  onMount(async () => {
+  async function refreshFetchedState(): Promise<void> {
     try {
       const [capabilities, catalog, config] = await Promise.all([
         invoke('speech:getCapabilities'),
@@ -39,19 +56,47 @@
             .filter((artifact) => artifact.available)
             .map((artifact) => artifact.artifactId)
         )
-        hasInstalledAsr = catalog.value.artifacts.some(
+        fetchedHasInstalledAsr = catalog.value.artifacts.some(
           (artifact) =>
             artifact.capability === 'asr' &&
             artifact.qualification.status === 'qualified' &&
             installedIds.has(artifact.id)
         )
       }
-      const sound = config?.sound
-      voiceRecordingEnabled = Boolean(sound?.voiceRecordingEnabled)
+      fetchedVoiceRecordingEnabled = Boolean((config as unknown as { sound?: { voiceRecordingEnabled?: boolean } })?.sound?.voiceRecordingEnabled)
     } catch {
-      // Keep the mic visible if the availability probe fails unexpectedly.
+      // keep mic visible on probe failure
     } finally {
       visibilityKnown = true
+    }
+  }
+
+  onMount(() => {
+    void refreshFetchedState()
+    // If Sound settings loads after us, the store-derived ASR flips visibility
+    // without waiting for this component to remount. Count store readiness as
+    // known as well so hidden recomputes as soon as store populates.
+    const unsubProgress = subscribe('speech:progress', () => {
+      void refreshFetchedState()
+      // also ensure the shared store reloads for other consumers
+      void speechSettingsStore.load()
+    })
+    const onSoundChanged = (event: Event) => {
+      const detail = (event as CustomEvent<{ voiceRecordingEnabled?: boolean }>).detail
+      if (detail && typeof detail.voiceRecordingEnabled === 'boolean') {
+        fetchedVoiceRecordingEnabled = detail.voiceRecordingEnabled
+        visibilityKnown = true
+      } else {
+        void refreshFetchedState()
+      }
+    }
+    const onFocus = () => void refreshFetchedState()
+    window.addEventListener('cio:soundChanged', onSoundChanged as EventListener)
+    window.addEventListener('focus', onFocus)
+    return () => {
+      unsubProgress()
+      window.removeEventListener('cio:soundChanged', onSoundChanged as EventListener)
+      window.removeEventListener('focus', onFocus)
     }
   })
 
