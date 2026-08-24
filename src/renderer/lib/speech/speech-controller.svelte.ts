@@ -472,15 +472,15 @@ class SpeechController {
     if (!catalog.ok) throw new Error(catalog.error.message)
     const installedAll = capabilities.value.installedArtifacts.filter((a) => a.available)
     const installedIds = new Set(installedAll.map((a) => a.artifactId))
-    // If user has chosen an active artifact, respect it (including imported) regardless of runtime
-    if (this.sound.asrArtifactId) {
-      const chosenInstalled = installedAll.find((a) => a.artifactId === this.sound.asrArtifactId)
+    const activeArtifactId = this.sound.asrArtifactId
+    if (activeArtifactId) {
+      const chosenInstalled = installedAll.find((a) => a.artifactId === activeArtifactId)
       if (chosenInstalled) {
         const catalogHit = catalog.value.artifacts.find((c) => c.id === chosenInstalled.artifactId)
         if (catalogHit) {
           if (catalogHit.capability === 'asr' && catalogHit.qualification.status === 'qualified')
             return { runtime: chosenInstalled.runtime, artifact: catalogHit }
-        } else {
+        } else if (chosenInstalled.capability !== 'tts') {
           // Imported model — synthesize a pseudo-artifact; service will handle directory
           const pseudo = {
             id: chosenInstalled.artifactId,
@@ -513,7 +513,7 @@ class SpeechController {
           return { runtime: chosenInstalled.runtime, artifact: pseudo }
         }
       }
-      throw new Error(`The active speech-to-text model is not installed.`)
+      this.forgetUnavailableAsrSelection(activeArtifactId)
     }
     const artifact = catalog.value.artifacts.find(
       (candidate) =>
@@ -523,6 +523,15 @@ class SpeechController {
     )
     if (!artifact) throw new Error(`Install a qualified speech-to-text model in Sound settings.`)
     return { runtime: artifact.runtime, artifact }
+  }
+
+  private forgetUnavailableAsrSelection(artifactId: string): void {
+    if (this.sound.asrArtifactId !== artifactId) return
+    const nextSound = { ...this.sound, asrArtifactId: undefined }
+    this.sound = nextSound
+    void invoke('config:update', { sound: nextSound }).catch((cause: unknown) => {
+      logRendererError('Could not clear the unavailable speech-to-text model selection.', cause)
+    })
   }
 
   /**
