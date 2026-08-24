@@ -254,9 +254,22 @@ export class CloudRelayClient {
       if (typeof event.data !== 'string') return
       this.handleMessage(event.data, 'relay')
     }
-    socket.onerror = () => {
+    socket.onerror = (event) => {
       if (this.closing || this.closed) return
-      Logger.error('Remote cloud relay WebSocket failed')
+      // Per the WHATWG WebSocket spec an `error` always fires before `close`,
+      // and the close handler carries the code/reason and drives the bounded
+      // self-reconnect. This is therefore a diagnostic breadcrumb, not a fault
+      // to surface at error level — logging every transient drop as an error
+      // only floods the error log with noise the recovery path already handles.
+      const detail =
+        event && typeof event === 'object' && 'message' in event
+          ? String((event as { message?: unknown }).message)
+          : ''
+      Logger.dev(
+        detail
+          ? `Remote cloud relay error: ${detail}`
+          : 'Remote cloud relay error; awaiting close'
+      )
     }
     socket.onclose = (event) => {
       if (this.authTimer !== null) {
