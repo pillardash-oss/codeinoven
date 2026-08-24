@@ -87,6 +87,7 @@
     chatEffectiveSettings
   } from '$lib/stores/thread-settings.svelte'
   import {
+    inheritEngineeringLifecycle,
     persistInheritedThreadSettings,
     settingsForNewThread,
     threadWithInheritedSettings
@@ -2235,6 +2236,9 @@
             )
           : existing
         upsertThreadInList(thread)
+        if (activeThread) {
+          await inheritEngineeringLifecycle(project.id, activeThread.id, thread.id)
+        }
         workspaceState.openThread(thread, project)
         if (scopeBucketId) {
           scopeState.updateThread(thread)
@@ -2259,6 +2263,9 @@
     if (scopeBucketId) {
       scopeState.updateThread(thread)
       scopeState.showSidebarForThread(thread, scopeBucketId)
+    }
+    if (activeThread) {
+      await inheritEngineeringLifecycle(project.id, activeThread.id, thread.id)
     }
     workspaceState.openThread(thread, project)
     if (activeThread?.settings) {

@@ -88,7 +88,11 @@
     {disabled}
     onclick={() => void toggle()}
   >
-    <Toolbox size={15} class={filled ? 'text-accent' : ''} fill={filled ? 'currentColor' : 'none'} />
+    <Toolbox
+      size={15}
+      class={filled ? 'text-accent' : ''}
+      fill={filled ? 'currentColor' : 'none'}
+    />
   </button>
 
   {#if open}

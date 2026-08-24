@@ -41,3 +41,26 @@ export async function persistInheritedThreadSettings(
     return invoke('thread:updateSettings', thread.projectId, thread.id, settings)
   }
 }
+
+/**
+ * Carry the source thread's Engineering stage selection into a sibling thread
+ * so the switch that was turned on stays on. Best-effort and non-fatal: when
+ * the source has no lifecycle selection (or is not in engineering mode) the
+ * destination keeps its default untouched state.
+ */
+export async function inheritEngineeringLifecycle(
+  projectId: string,
+  sourceThreadId: string,
+  destinationThreadId: string
+): Promise<void> {
+  try {
+    const source = await invoke('engineeringLifecycle:get', projectId, sourceThreadId)
+    if (!source?.selection || source.selection === 'none') return
+    // The destination is created optimistically; make sure its row is durable
+    // before writing lifecycle state onto it.
+    await invoke('thread:get', projectId, destinationThreadId)
+    await invoke('engineeringLifecycle:select', projectId, destinationThreadId, source.selection)
+  } catch {
+    // Lifecycle inheritance is cosmetic — never block thread creation on it.
+  }
+}
