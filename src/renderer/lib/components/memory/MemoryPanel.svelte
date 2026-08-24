@@ -287,6 +287,7 @@
   }
 
   async function save(): Promise<void> {
+    if (saving || loading) return
     saving = true
     error = ''
     saved = false
@@ -352,6 +353,7 @@
   }
 
   async function addEntry(): Promise<void> {
+    if (saving || loading) return
     // Add is append-only: single-entry path, not bulk rewrite.
     // Generates a valid placeholder via the main-process addEntry (read + push + save),
     // then inserts the persisted entry at the top and expands it.
@@ -620,7 +622,8 @@
         {/if}
         {#if currentSection === 'active'}
           <button
-            class="flex items-center gap-1.5 rounded-lg border bg-elevated px-3 py-1.5 text-sm font-medium transition-colors hover:bg-overlay"
+            class="flex items-center gap-1.5 rounded-lg border bg-elevated px-3 py-1.5 text-sm font-medium transition-colors hover:bg-overlay disabled:opacity-50"
+            disabled={saving || loading}
             title="Add a new memory entry"
             type="button"
             onclick={addEntry}
