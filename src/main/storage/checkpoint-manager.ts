@@ -286,6 +286,33 @@ export class CheckpointManager {
     return foreign
   }
 
+  /**
+   * Re-bind the active turn's source message to the latest user expression (a
+   * steer). A steer extends the same native turn, so the single checkpoint's
+   * diff still spans both the original prompt and every follow-up; pointing its
+   * `sourceMessageId` at the steer lets renderers attach the file card to the
+   * turn that actually produced the changes. No-op when no active turn exists.
+   */
+  async rebindActiveSource(
+    projectId: string,
+    threadId: string,
+    sourceMessageId: string
+  ): Promise<void> {
+    assertId(projectId)
+    assertId(threadId)
+    assertId(sourceMessageId)
+    const active = this.db.get<{ turn_id: string | null }>(
+      'SELECT turn_id FROM active_turns WHERE project_id = ? AND thread_id = ?',
+      projectId,
+      threadId
+    )
+    if (!active?.turn_id) return
+    const checkpoint = await this.get(projectId, threadId, active.turn_id)
+    if (!checkpoint || checkpoint.status !== 'active') return
+    if (checkpoint.sourceMessageId === sourceMessageId) return
+    await this.save({ ...checkpoint, sourceMessageId })
+  }
+
   async markActiveInterrupted(projectId: string, threadId: string): Promise<TurnCheckpoint | null> {
     const active = this.db.get<{ turn_id: string | null }>(
       'SELECT turn_id FROM active_turns WHERE project_id = ? AND thread_id = ?',

@@ -189,6 +189,32 @@ describe('CheckpointManager', () => {
     expect(interrupted).toMatchObject({ id: checkpoint.id, status: 'interrupted' })
   })
 
+  it('rebinds the active checkpoint source to a steer mid-turn', async () => {
+    const projectRoot = await temporaryDirectory('codeinoven-project-')
+    const manager = await testCheckpointManager()
+
+    const checkpoint = await manager.beginTurn(
+      'project4',
+      'thread4',
+      projectRoot,
+      'Initial prompt',
+      false,
+      'msg_original'
+    )
+    expect(checkpoint.sourceMessageId).toBe('msg_original')
+
+    // A steer arrives while the turn is still active.
+    await manager.rebindActiveSource('project4', 'thread4', 'msg_steer')
+    const rebound = await manager.get('project4', 'thread4', checkpoint.id)
+    expect(rebound?.sourceMessageId).toBe('msg_steer')
+
+    // Re-bind is a no-op once the turn is completed.
+    await manager.completeTurn('project4', 'thread4', checkpoint.id, projectRoot, 'completed')
+    await manager.rebindActiveSource('project4', 'thread4', 'msg_after')
+    const completed = await manager.get('project4', 'thread4', checkpoint.id)
+    expect(completed?.sourceMessageId).toBe('msg_steer')
+  })
+
   it('finalizes an active turn as completed when the harness demonstrably finished', async () => {
     const projectRoot = await temporaryDirectory('codeinoven-project-')
     const manager = await testCheckpointManager()

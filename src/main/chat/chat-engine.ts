@@ -5012,6 +5012,17 @@ export class ChatEngine {
     const outboundIds = this.outboundMessageIdsBySession.get(activeSessionId) ?? new Set<string>()
     outboundIds.add(messageId)
     this.outboundMessageIdsBySession.set(activeSessionId, outboundIds)
+    // The steer is now the operative user expression of this running turn, so
+    // re-bind the active checkpoint to it. Otherwise the file card renders under
+    // the original prompt instead of the turn whose work produced the changes.
+    const activeTurnId = this.sessionRegistry.get(activeSessionId)?.activeTurnId
+    if (activeTurnId && !activeBrainstorm) {
+      await this.checkpointManager
+        .rebindActiveSource(projectId, threadId, messageId)
+        .catch((error: unknown) => {
+          Logger.error('steer checkpoint source re-bind failed:', error)
+        })
+    }
     const steerSettings =
       thread.settings ??
       ({
@@ -5641,6 +5652,21 @@ export class ChatEngine {
       const outboundIds = this.outboundMessageIdsBySession.get(sessionId) ?? new Set<string>()
       outboundIds.add(messageId)
       this.outboundMessageIdsBySession.set(sessionId, outboundIds)
+      // The steer is now the operative user expression of this running turn, so
+      // re-bind the active checkpoint to it. Otherwise the file card renders
+      // under the original prompt instead of the turn that produced the edits.
+      const steeredSession = this.sessionRegistry.get(sessionId)
+      if (steeredSession) {
+        steeredSession.activeTurnUserMessageId = messageId
+        const rebindTurnId = steeredSession.activeTurnId
+        if (rebindTurnId) {
+          await this.checkpointManager
+            .rebindActiveSource(projectId, threadId, messageId)
+            .catch((error: unknown) => {
+              Logger.error('steer checkpoint source re-bind failed:', error)
+            })
+        }
+      }
       // Note: steering appends to the LIVE native turn, which still runs under
       // the model that started it. Do not record the new settings model here —
       // that would mask a pending model switch until the following resume.
