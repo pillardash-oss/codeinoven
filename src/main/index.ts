@@ -1132,7 +1132,7 @@ void app
     // The renderer invokes its first config/project/scope/thread reads while
     // its document evaluates. Register that bounded surface before navigation;
     // the feature graph remains dynamically imported after first paint.
-    registerHydrationIpcHandlers(storage, database, threadCreation)
+    registerHydrationIpcHandlers(storage, database)
 
     // The trusted top-level renderer may capture microphone audio for local
     // dictation. Camera, subframes, foreign documents, and every unrelated

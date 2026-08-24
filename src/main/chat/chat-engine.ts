@@ -3695,7 +3695,6 @@ export class ChatEngine {
   async loadMessages(projectId: string, threadId: string): Promise<AgentMessage[]> {
     projectId = validateEntityId(projectId, 'Project ID')
     threadId = validateEntityId(threadId, 'Thread ID')
-    await this.threadCreation?.awaitReady(threadId)
     const thread = await this.threadManager.getThread(projectId, threadId)
     if (!thread) return []
     if (!thread.sessionId) {
