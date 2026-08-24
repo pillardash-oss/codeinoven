@@ -1855,29 +1855,44 @@
       thread.assignmentId === undefined &&
       thread.achievementRole === undefined
   )
+  /** Persisted evidence that a durable audit ever ran on this studio-only thread. */
+  let plainAuditTriggered = $derived(
+    auditState === 'offered' ||
+      auditState === 'running' ||
+      auditState === 'reworking' ||
+      auditState === 'report_ready' ||
+      auditReport !== null
+  )
   let plainEngineeringAuditAvailable = $derived(
-    settings.engineeringMode === true &&
-      studioOnlyAuditWorkflow &&
+    studioOnlyAuditWorkflow &&
+      (settings.engineeringMode === true || plainAuditTriggered) &&
       spec?.status === 'approved' &&
       (auditState === 'offered' ||
         auditState === 'running' ||
-        (auditState === 'report_ready' && auditReport !== null))
+        auditState === 'reworking' ||
+        (auditState === 'report_ready' && auditReport !== null) ||
+        (auditState === undefined && auditReport !== null))
   )
   let plainEngineeringAuditRunning = $derived(
-    settings.engineeringMode === true && studioOnlyAuditWorkflow && auditState === 'running'
+    studioOnlyAuditWorkflow &&
+      (settings.engineeringMode === true || plainAuditTriggered) &&
+      auditState === 'running'
   )
   let plainEngineeringAuditReady = $derived(
-    settings.engineeringMode === true &&
-      studioOnlyAuditWorkflow &&
+    studioOnlyAuditWorkflow &&
+      (settings.engineeringMode === true || plainAuditTriggered) &&
       auditState === 'report_ready' &&
       auditReport !== null
   )
+
+  /** Sticky: Achievement coordination remains once the flow has ever run. */
+  let achievementTriggered = $derived(achievementOnly || thread.achievementRole === 'coordinator')
 
   /** Which coordinator, if any, this thread publishes to the context dock. */
   let coordinatorKind = $derived.by((): 'assignment' | 'achievement' | 'audit' | null => {
     if (isAssignmentAuditorThread) return null
     if (assignment && assignment.status !== 'draft') return 'assignment'
-    if (achievementOnly && spec) return 'achievement'
+    if (achievementTriggered && spec) return 'achievement'
     if (plainEngineeringAuditAvailable && spec) return 'audit'
     return null
   })
@@ -3851,10 +3866,7 @@
       return
     }
     if (specFormulating && specAction !== 'request') return
-    if (
-      specAction === undefined &&
-      engineeringLifecycle?.activeStage === 'achievement'
-    ) {
+    if (specAction === undefined && engineeringLifecycle?.activeStage === 'achievement') {
       if (!spec || spec.status !== 'approved') {
         errorMessage = 'Achievement requires an approved Spec.'
         return
