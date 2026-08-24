@@ -289,9 +289,20 @@
 
       <div class="flex items-center justify-end gap-3">
         {#if activeIdFor(activeModelSubTab)}
-          <p class="text-xs text-muted">
+          <button
+            type="button"
+            class="text-xs text-muted hover:text-foreground hover:underline underline-offset-2"
+            title="Scroll to active model"
+            aria-label="Scroll to active model {labelForInstalled(activeIdFor(activeModelSubTab)!)}"
+            onclick={() => {
+              const id = activeIdFor(activeModelSubTab)
+              if (!id) return
+              const el = document.getElementById(`model-card-${id}`)
+              el?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+            }}
+          >
             Active: <span class="font-semibold text-foreground">{labelForInstalled(activeIdFor(activeModelSubTab)!)}</span>
-          </p>
+          </button>
         {/if}
         <div class="ml-auto flex shrink-0 items-center gap-1.5">
           <button
@@ -333,7 +344,7 @@
           )}
           {@const download = speech.downloads[artifact.id]}
           {@const badge = bestForBadge(artifact)}
-          <div class="rounded-xl border p-3 {isActiveCatalog(artifact.id, activeModelSubTab) ? 'bg-success/5 border-success/30 ring-1 ring-success/20' : 'bg-elevated'}">
+          <div id="model-card-{artifact.id}" class="rounded-xl border p-3 {isActiveCatalog(artifact.id, activeModelSubTab) ? 'bg-success/5 border-success/30 ring-1 ring-success/20' : 'bg-elevated'}">
             <div class="flex items-start justify-between gap-3">
               <div class="min-w-0 flex-1">
                 <div class="flex flex-wrap items-center gap-1.5">
@@ -364,15 +375,16 @@
               </div>
               <div class="flex shrink-0 flex-col items-end gap-1.5">
                 {#if installed}
-                  <button
-                    type="button"
-                    class="flex h-8 w-8 items-center justify-center rounded-lg text-muted hover:bg-danger/10 hover:text-danger"
+                  {#if !isActiveCatalog(artifact.id, activeModelSubTab)}
+                    <button
+                      type="button"
+                      class="flex h-8 w-8 items-center justify-center rounded-lg text-muted hover:bg-danger/10 hover:text-danger"
                     title={`Delete ${artifact.label}`}
                     aria-label={`Delete ${artifact.label}`}
                     onclick={() =>
                       (deleting = { action: 'model', targetId: artifact.id, label: artifact.label })}
                     ><Trash2 size={14} aria-hidden="true" /></button
-                  >
+                  >{/if}
                 {:else if download?.state === 'downloading'}
                   <button
                     type="button"
@@ -452,7 +464,7 @@
             {#each importedForTab as artifact (artifact.artifactId)}
               {@const parsedImp = artifact.importPath ? parseModelIdentityFromPath(artifact.importPath, artifact.runtime) : null}
               {@const impDetails = parsedImp ? parsedImp.details.filter((d) => d.label !== 'Family' && d.label !== 'Runtime') : []}
-              <div class="flex items-start gap-3 rounded-xl border px-3 py-3 {isActiveImported(artifact.artifactId, activeModelSubTab) ? 'bg-success/[0.04] border-success/25' : 'bg-elevated border-border/70'}">
+              <div id="model-card-{artifact.artifactId}" class="flex items-start gap-3 rounded-xl border px-3 py-3 {isActiveImported(artifact.artifactId, activeModelSubTab) ? 'bg-success/[0.04] border-success/25' : 'bg-elevated border-border/70'}">
                 <div class="min-w-0 flex-1">
                   {#if parsedImp}
                     <div class="flex flex-wrap items-center gap-1.5">
@@ -483,11 +495,7 @@
                   {/if}
                 </div>
                 <div class="flex shrink-0 items-center gap-1">
-                  {#if isActiveImported(artifact.artifactId, activeModelSubTab)}
-                    <span class="inline-flex items-center gap-1 rounded-full bg-success/15 px-2 py-0.5 text-[11px] font-semibold text-success border border-success/20">
-                      <Check size={11} aria-hidden="true" /> Active
-                    </span>
-                  {:else}
+                  {#if !isActiveImported(artifact.artifactId, activeModelSubTab)}
                     <button
                       type="button"
                       class="inline-flex items-center gap-1 rounded-lg bg-primary px-2.5 py-1 text-xs font-medium text-on-primary hover:bg-primary/90"
@@ -497,13 +505,13 @@
                     ><Star size={11} aria-hidden="true" /> Set Active</button
                     >
                   {/if}
-                  <button
+                  {#if !isActiveImported(artifact.artifactId, activeModelSubTab)}<button
                     type="button"
                     class="flex h-7 w-7 items-center justify-center rounded-lg border border-transparent text-dimmed hover:border-border hover:bg-surface hover:text-muted"
                     title={`Unregister ${artifact.importPath}`}
                     aria-label={`Unregister ${artifact.importPath}`}
                     onclick={() => removeImported(artifact.artifactId, artifact.importPath ?? '')}
-                    ><Trash2 size={12} aria-hidden="true" /></button>
+                    ><Trash2 size={12} aria-hidden="true" /></button>{/if}
                 </div>
               </div>
             {/each}
