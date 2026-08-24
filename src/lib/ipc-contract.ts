@@ -1138,7 +1138,7 @@ export interface IpcInvokeContract {
     import('./speech/types').SpeechResult<import('./speech/types').SpeechTranscriptionResult>
   >
   'speech:validateModelPath': Contract<
-    [path: string],
+    [path: string, capability: import('./speech/types').SpeechCapability],
     import('./speech/types').SpeechResult<import('./speech/types').ModelPathValidationResult>
   >
   'speech:importModel': Contract<

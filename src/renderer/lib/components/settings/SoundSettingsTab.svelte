@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte'
-  import { Download, ExternalLink, LoaderCircle, Play, RefreshCw, Trash2, Upload, ClipboardPaste, X } from '@lucide/svelte'
+  import { Download, ExternalLink, LoaderCircle, RefreshCw, Trash2, Upload, ClipboardPaste, X } from '@lucide/svelte'
   import type { AppConfigPatch } from '$shared/types'
   import type { SpeechDestructiveAction, SpeechSettings } from '../../../../lib/speech/types'
   import type { SpeechModelArtifact } from '../../../../lib/speech/types'
@@ -9,6 +9,7 @@
   import Switch from '../ui/Switch.svelte'
   import Modal from '../ui/Modal.svelte'
   import PasteModelPathModal from './PasteModelPathModal.svelte'
+  import HistoryAudioPlayer from './HistoryAudioPlayer.svelte'
 
   interface Props {
     settings: SpeechSettings
@@ -31,6 +32,7 @@
   let mutationBusy = $state(false)
   let activeTab = $state<SoundTab>('models')
   let activeModelSubTab = $state<ModelSubTab>('asr')
+  const pasteCapability = $derived(activeModelSubTab === 'asr' ? 'asr' as const : activeModelSubTab === 'tts' ? 'tts' as const : 'cleanup' as const)
   let importing = $state(false)
   let pasteOpen = $state(false)
 
@@ -167,7 +169,7 @@
 
   function sortedForSubTab(sub: ModelSubTab): SpeechModelArtifact[] {
     const all = speech.catalog?.artifacts ?? []
-    let filtered: SpeechModelArtifact[] = []
+    let filtered: SpeechModelArtifact[]
     if (sub === 'asr') filtered = all.filter((a) => a.capability === 'asr')
     else if (sub === 'tts') filtered = all.filter((a) => a.capability === 'tts')
     else filtered = all.filter((a) => a.capability === 'cleanup')
@@ -444,33 +446,26 @@
         </div>
         <div class="max-h-80 divide-y divide-border overflow-y-auto">
           {#each speech.history.items as attempt (attempt.id)}
-            <div class="flex items-start gap-3 py-3">
-              <div class="min-w-0 flex-1">
-                <p class="text-xs font-medium">
-                  {new Date(attempt.createdAt).toLocaleString()} · {attempt.stage}
-                </p>
-                <p class="mt-0.5 line-clamp-2 text-[11px] text-dimmed">
-                  {attempt.finalTranscript ??
-                    attempt.rawTranscript ??
-                    attempt.errors.at(-1)?.error.message ??
-                    'No transcript'}
-                </p>
-                <p class="mt-1 text-[10px] text-dimmed">
-                  {(attempt.byteSize / 1024).toFixed(1)} KB{attempt.runtime
-                    ? ` · ${attempt.runtime}`
-                    : ''}{attempt.rawTranscript ? ' · raw + cleaned' : ''}{attempt.retries.length
-                    ? ` · ${attempt.retries.length} retries`
-                    : ''}
-                </p>
-              </div>
-              {#if attempt.audioAvailable}<button
-                  type="button"
-                  class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-muted hover:bg-elevated"
-                  title="Play recording"
-                  aria-label="Play recording"
-                  onclick={() => void speech.playRecording(attempt.id)}
-                  ><Play size={13} aria-hidden="true" /></button
-                >{/if}
+            <div class="py-3">
+              <div class="flex items-start gap-3">
+                <div class="min-w-0 flex-1">
+                  <p class="text-xs font-medium">
+                    {new Date(attempt.createdAt).toLocaleString()} · {attempt.stage}
+                  </p>
+                  <p class="mt-0.5 line-clamp-2 text-[11px] text-dimmed">
+                    {attempt.finalTranscript ??
+                      attempt.rawTranscript ??
+                      attempt.errors.at(-1)?.error.message ??
+                      'No transcript'}
+                  </p>
+                  <p class="mt-1 text-[10px] text-dimmed">
+                    {(attempt.byteSize / 1024).toFixed(1)} KB{attempt.runtime
+                      ? ` · ${attempt.runtime}`
+                      : ''}{attempt.rawTranscript ? ' · raw + cleaned' : ''}{attempt.retries.length
+                      ? ` · ${attempt.retries.length} retries`
+                      : ''}
+                  </p>
+                </div>
               {#if attempt.audioAvailable && attempt.stage === 'failed'}
                 {@const asr = speech.catalog?.artifacts.find(
                   (item) =>
@@ -502,6 +497,12 @@
                     label: new Date(attempt.createdAt).toLocaleString()
                   })}><Trash2 size={13} aria-hidden="true" /></button
               >
+              </div>
+              {#if attempt.audioAvailable}
+                <div class="mt-2">
+                  <HistoryAudioPlayer attemptId={attempt.id} mimeType={attempt.mimeType} label="Recording {new Date(attempt.createdAt).toLocaleString()}" />
+                </div>
+              {/if}
             </div>
           {/each}
         </div>
@@ -769,7 +770,7 @@
   </div>
 </div>
 
-<PasteModelPathModal open={pasteOpen} onClose={() => (pasteOpen = false)} onImported={() => void speech.load()} />
+<PasteModelPathModal open={pasteOpen} capability={pasteCapability} onClose={() => (pasteOpen = false)} onImported={() => void speech.load()} />
 
 <Modal open={deleting !== null} title="Confirm deletion" onClose={() => (deleting = null)}>
   <p class="text-sm text-muted">

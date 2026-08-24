@@ -6,7 +6,7 @@ export const MAX_SPEECH_QUEUE_DEPTH = 8
 export const MAX_GLOBAL_CORRECTION_RULES = 500
 export const MAX_CONTEXT_CORRECTION_RULES = 200
 
-export type SpeechRuntime = 'mlx' | 'sherpa-onnx' | 'gguf'
+export type SpeechRuntime = 'mlx' | 'sherpa-onnx' | 'gguf' | 'coreml'
 export type SpeechCapability = 'asr' | 'cleanup' | 'tts'
 export type SpeechPlatform = 'darwin' | 'win32' | 'linux'
 export type SpeechArchitecture = 'arm64' | 'x64'
@@ -452,6 +452,7 @@ export type ModelPathValidationCode =
 
 export interface ModelPathValidationResult {
   ok: boolean
+  capability?: SpeechCapability
   normalizedPath: string
   wasNormalized: boolean
   runtime?: SpeechRuntime

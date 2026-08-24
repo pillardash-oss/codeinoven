@@ -3,6 +3,7 @@ import { createWriteStream } from 'node:fs'
 import { access, mkdir, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import type {
+  SpeechCapability,
   SpeechCapabilitySnapshot,
   SpeechCleanupMode,
   SpeechCleanupProvenance,
@@ -34,7 +35,7 @@ import {
   resolveSpeechRuntime
 } from '../../lib/speech/types'
 import { parseSpeechModelCatalog } from '../../lib/speech/model-catalog'
-import { normalizePastedPath } from '../../lib/speech/model-path-validation'
+import { CAPABILITY_RUNTIMES, describeSupportedFormatsForCapability, normalizePastedPath } from '../../lib/speech/model-path-validation'
 import type { ModelPathValidationResult } from '../../lib/speech/types'
 import { SpeechJobQueue, SpeechQueueError } from './speech-job-queue'
 import { SpeechStorage } from './speech-storage'
@@ -473,20 +474,25 @@ export class SpeechService {
    * Runs entirely in the main process (filesystem access) and returns a
    * structured validation result for inline UI feedback. Never logs raw paths.
    */
-  async validateModelPath(rawPath: string): Promise<ModelPathValidationResult> {
+  async validateModelPath(rawPath: string, capability: SpeechCapability = 'asr'): Promise<ModelPathValidationResult> {
     const { normalized, wasNormalized } = normalizePastedPath(rawPath)
+    const cap: SpeechCapability = capability === 'asr' || capability === 'tts' || capability === 'cleanup' ? capability : 'asr'
+    const allowed = CAPABILITY_RUNTIMES[cap]
+    const hint = describeSupportedFormatsForCapability(cap)
     if (normalized.length === 0) {
       return {
         ok: false,
+        capability: cap,
         normalizedPath: normalized,
         wasNormalized,
         code: 'empty',
-        reason: 'Paste a filesystem path to a supported model.'
+        reason: hint
       }
     }
     if (normalized.length > 4_096) {
       return {
         ok: false,
+        capability: cap,
         normalizedPath: normalized,
         wasNormalized,
         code: 'unsupported-format',
@@ -499,11 +505,12 @@ export class SpeechService {
       lower.endsWith('/.mlx') ||
       lower.endsWith('\\mlx')
     const isGgufFile = lower.endsWith('.gguf')
+    const isCoreMlFile = lower.endsWith('.mlmodelc') || lower.endsWith('.mlpackage')
+    const isOnnxFile = lower.endsWith('.onnx')
     // Stat the path (batched, non-blocking) - avoid blocking renderer
     let stat: { isFile: boolean; isDirectory: boolean } | null
     try {
       const { stat: fsStat } = await import('node:fs/promises')
-      // Use stat to handle symlinks: validate the resolved target
       const s = await fsStat(normalized)
       stat = { isFile: s.isFile(), isDirectory: s.isDirectory() }
     } catch (cause) {
@@ -511,6 +518,7 @@ export class SpeechService {
       if (code === 'ENOENT') {
         return {
           ok: false,
+          capability: cap,
           normalizedPath: normalized,
           wasNormalized,
           code: 'not-found',
@@ -520,6 +528,7 @@ export class SpeechService {
       if (code === 'EACCES' || code === 'EPERM') {
         return {
           ok: false,
+          capability: cap,
           normalizedPath: normalized,
           wasNormalized,
           code: 'permission-denied',
@@ -528,18 +537,35 @@ export class SpeechService {
       }
       return {
         ok: false,
+        capability: cap,
         normalizedPath: normalized,
         wasNormalized,
         code: 'not-found',
         reason: 'That path cannot be read. Verify it and try again.'
       }
     }
-    // Platform gate for MLX
+
+    const forbid = (runtime: string, reason: string): ModelPathValidationResult => ({
+      ok: false,
+      capability: cap,
+      normalizedPath: normalized,
+      wasNormalized,
+      runtime: runtime as SpeechRuntime,
+      code: 'unsupported-format',
+      reason,
+      detectedExtension: runtime === 'gguf' ? '.gguf' : runtime === 'mlx' ? '.mlx' : runtime === 'coreml' ? '.mlmodelc' : '.onnx'
+    })
+
+    // Direct file hits - check capability before accepting
     if (isMlx) {
+      if (!allowed.includes('mlx')) {
+        return forbid('mlx', `MLX models cannot run as ${cap.toUpperCase()}. ${hint}`)
+      }
       const target = this.platformTarget()
       if (target.platform !== 'darwin' || target.architecture !== 'arm64') {
         return {
           ok: false,
+          capability: cap,
           normalizedPath: normalized,
           wasNormalized,
           runtime: 'mlx',
@@ -550,18 +576,23 @@ export class SpeechService {
       }
       return {
         ok: true,
+        capability: cap,
         normalizedPath: normalized,
         wasNormalized,
         runtime: 'mlx',
         code: 'valid',
-        reason: 'Supported model found — MLX — ready to import.',
+        reason: `Supported model found — MLX ${cap.toUpperCase()} — ready to import.`,
         detectedExtension: '.mlx'
       }
     }
     if (isGgufFile) {
+      if (!allowed.includes('gguf')) {
+        return forbid('gguf', `GGUF models only run as LLM / Cleanup, not as ${cap.toUpperCase()}. ${hint}`)
+      }
       if (stat?.isDirectory) {
         return {
           ok: false,
+          capability: cap,
           normalizedPath: normalized,
           wasNormalized,
           code: 'unsupported-format',
@@ -571,58 +602,181 @@ export class SpeechService {
       }
       return {
         ok: true,
+        capability: cap,
         normalizedPath: normalized,
         wasNormalized,
         runtime: 'gguf',
         code: 'valid',
-        reason: 'Supported model found — GGUF (local-LLM) — ready to import.',
+        reason: 'Supported model found — GGUF (LLM / Cleanup) — ready to import.',
         detectedExtension: '.gguf'
       }
     }
-    // Directory containing .gguf?
-    if (stat?.isDirectory) {
-      try {
-        const entries = await readdir(normalized, { withFileTypes: true })
-        const hasGguf = entries.some((entry) => entry.name.toLowerCase().endsWith('.gguf'))
-        if (hasGguf) {
-          return {
-            ok: true,
-            normalizedPath: normalized,
-            wasNormalized,
-            runtime: 'gguf',
-            code: 'valid',
-            reason: 'Supported model found — folder containing .gguf — ready to import.',
-            detectedExtension: '.gguf'
-          }
+    if (isCoreMlFile) {
+      if (!allowed.includes('coreml')) {
+        return forbid('coreml', `Core ML bundles only run as ASR, not as ${cap.toUpperCase()}. ${hint}`)
+      }
+      const target = this.platformTarget()
+      if (target.platform !== 'darwin' || target.architecture !== 'arm64') {
+        return {
+          ok: false,
+          capability: cap,
+          normalizedPath: normalized,
+          wasNormalized,
+          runtime: 'coreml',
+          code: 'platform-unsupported',
+          reason: 'Core ML models are only supported on Apple Silicon.',
+          detectedExtension: '.mlmodelc'
         }
+      }
+      return {
+        ok: true,
+        capability: cap,
+        normalizedPath: normalized,
+        wasNormalized,
+        runtime: 'coreml',
+        code: 'valid',
+        reason: 'Supported model found — Core ML ASR bundle — ready to import.',
+        detectedExtension: lower.endsWith('.mlpackage') ? '.mlpackage' : '.mlmodelc'
+      }
+    }
+    if (isOnnxFile) {
+      if (!allowed.includes('sherpa-onnx')) {
+        return forbid('sherpa-onnx', `ONNX models cannot run as ${cap.toUpperCase()} in this context. ${hint}`)
+      }
+      return {
+        ok: true,
+        capability: cap,
+        normalizedPath: normalized,
+        wasNormalized,
+        runtime: 'sherpa-onnx',
+        code: 'valid',
+        reason: 'Supported model found — sherpa-onnx (.onnx) — ready to import.',
+        detectedExtension: '.onnx'
+      }
+    }
+
+    // Directory scans - contextual per capability
+    if (stat?.isDirectory) {
+      let entries: import('node:fs').Dirent[]
+      try {
+        entries = await readdir(normalized, { withFileTypes: true })
       } catch (cause) {
         const code = (cause as NodeJS.ErrnoException)?.code ?? ''
         if (code === 'EACCES' || code === 'EPERM') {
           return {
             ok: false,
+            capability: cap,
             normalizedPath: normalized,
             wasNormalized,
             code: 'permission-denied',
             reason: 'Permission denied reading that folder.'
           }
         }
+        return {
+          ok: false,
+          capability: cap,
+          normalizedPath: normalized,
+          wasNormalized,
+          code: 'unsupported-format',
+          reason: hint
+        }
+      }
+      const lowerNames = entries.map((e) => e.name.toLowerCase())
+      const hasGguf = lowerNames.some((n) => n.endsWith('.gguf'))
+      const hasOnnx = lowerNames.some((n) => n.endsWith('.onnx'))
+      const hasCoreMl = entries.some((e) => e.isDirectory() && (e.name.toLowerCase().endsWith('.mlmodelc') || e.name.toLowerCase().endsWith('.mlpackage')))
+      const hasTokens = lowerNames.includes('tokens.txt')
+
+      // Core ML bundle folder (e.g. FluidAudio parakeet-tdt-0.6b-v2)
+      if (hasCoreMl) {
+        if (!allowed.includes('coreml')) {
+          return forbid('coreml', `That folder contains a Core ML bundle — only valid for ASR, not ${cap.toUpperCase()}. ${hint}`)
+        }
+        const target = this.platformTarget()
+        if (target.platform !== 'darwin' || target.architecture !== 'arm64') {
+          return {
+            ok: false,
+            capability: cap,
+            normalizedPath: normalized,
+            wasNormalized,
+            runtime: 'coreml',
+            code: 'platform-unsupported',
+            reason: 'Core ML models are only supported on Apple Silicon.',
+            detectedExtension: '.mlmodelc'
+          }
+        }
+        return {
+          ok: true,
+          capability: cap,
+          normalizedPath: normalized,
+          wasNormalized,
+          runtime: 'coreml',
+          code: 'valid',
+          reason: 'Supported model found — folder containing Core ML ASR bundle — ready to import.',
+          detectedExtension: '.mlmodelc'
+        }
+      }
+      if (hasGguf) {
+        if (!allowed.includes('gguf')) {
+          return forbid('gguf', `That folder contains .gguf — only valid for LLM / Cleanup, not ${cap.toUpperCase()}. ${hint}`)
+        }
+        return {
+          ok: true,
+          capability: cap,
+          normalizedPath: normalized,
+          wasNormalized,
+          runtime: 'gguf',
+          code: 'valid',
+          reason: 'Supported model found — folder containing .gguf — ready to import.',
+          detectedExtension: '.gguf'
+        }
+      }
+      if (hasOnnx) {
+        if (!allowed.includes('sherpa-onnx')) {
+          return forbid('sherpa-onnx', `That folder contains .onnx — not valid for ${cap.toUpperCase()}. ${hint}`)
+        }
+        // Heuristic: sherpa-onnx ASR/TTS expects tokens.txt sibling; warn but still accept
+        if (cap === 'asr' && !hasTokens) {
+          return {
+            ok: true,
+            capability: cap,
+            normalizedPath: normalized,
+            wasNormalized,
+            runtime: 'sherpa-onnx',
+            code: 'valid',
+            reason: 'Found sherpa-onnx model (.onnx) — missing tokens.txt; may still import but verify the directory is a full sherpa model.',
+            detectedExtension: '.onnx'
+          }
+        }
+        return {
+          ok: true,
+          capability: cap,
+          normalizedPath: normalized,
+          wasNormalized,
+          runtime: 'sherpa-onnx',
+          code: 'valid',
+          reason: `Supported model found — sherpa-onnx ${cap.toUpperCase()} folder — ready to import.`,
+          detectedExtension: '.onnx'
+        }
       }
       return {
         ok: false,
+        capability: cap,
         normalizedPath: normalized,
         wasNormalized,
         code: 'unsupported-format',
-        reason: 'No supported model at that path. Use a .mlx path or a .gguf file / folder containing .gguf.',
+        reason: hint,
         detectedExtension: undefined
       }
     }
     // File with unsupported extension
     return {
       ok: false,
+      capability: cap,
       normalizedPath: normalized,
       wasNormalized,
       code: 'unsupported-format',
-      reason: 'Unsupported format. Import a .mlx path (Apple Silicon) or .gguf.',
+      reason: hint,
       detectedExtension: undefined
     }
   }
@@ -637,20 +791,43 @@ export class SpeechService {
         throw new Error('MLX models are only supported on Apple Silicon.')
       }
       runtime = 'mlx'
-    } else {
-      let hasGguf = lower.endsWith('.gguf')
-      if (!hasGguf) {
-        try {
-          const entries = await readdir(normalized, { withFileTypes: true })
-          hasGguf = entries.some((entry) => entry.name.toLowerCase().endsWith('.gguf'))
-        } catch {
-          hasGguf = false
-        }
+    } else if (lower.endsWith('.mlmodelc') || lower.endsWith('.mlpackage')) {
+      if (target.platform !== 'darwin' || target.architecture !== 'arm64') {
+        throw new Error('Core ML models are only supported on Apple Silicon.')
       }
-      if (!hasGguf) {
-        throw new Error('Unsupported model format. Import an .mlx or .gguf model.')
-      }
+      runtime = 'coreml'
+    } else if (lower.endsWith('.onnx')) {
+      runtime = 'sherpa-onnx'
+    } else if (lower.endsWith('.gguf')) {
       runtime = 'gguf'
+    } else {
+      // Directory scan: detect GGUF / ONNX / Core ML bundle
+      let hasGguf: boolean
+      let hasOnnx: boolean
+      let hasCoreMl: boolean
+      try {
+        const entries = await readdir(normalized, { withFileTypes: true })
+        const lowerNames = entries.map((e) => e.name.toLowerCase())
+        hasGguf = lowerNames.some((n) => n.endsWith('.gguf'))
+        hasOnnx = lowerNames.some((n) => n.endsWith('.onnx'))
+        hasCoreMl = entries.some((e) => e.isDirectory() && (e.name.toLowerCase().endsWith('.mlmodelc') || e.name.toLowerCase().endsWith('.mlpackage')))
+      } catch {
+        hasGguf = false
+        hasOnnx = false
+        hasCoreMl = false
+      }
+      if (hasCoreMl) {
+        if (target.platform !== 'darwin' || target.architecture !== 'arm64') {
+          throw new Error('Core ML models are only supported on Apple Silicon.')
+        }
+        runtime = 'coreml'
+      } else if (hasGguf) {
+        runtime = 'gguf'
+      } else if (hasOnnx) {
+        runtime = 'sherpa-onnx'
+      } else {
+        throw new Error('Unsupported model format. Import a .mlx, .onnx, .mlmodelc/.mlpackage, or .gguf model.')
+      }
     }
     try {
       await access(normalized)

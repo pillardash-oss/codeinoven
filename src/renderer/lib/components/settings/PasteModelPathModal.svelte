@@ -2,17 +2,18 @@
   import { LoaderCircle, CheckCircle2, AlertCircle, Info } from '@lucide/svelte'
   import { invoke } from '$lib/ipc.svelte'
   import { speechSettingsStore as speech } from '$lib/stores/speech.svelte'
-  import type { ModelPathValidationResult } from '../../../../lib/speech/types'
-  import { describeSupportedFormats } from '../../../../lib/speech/model-path-validation'
+  import type { ModelPathValidationResult, SpeechCapability } from '../../../../lib/speech/types'
+  import { describeSupportedFormatsForCapability } from '../../../../lib/speech/model-path-validation'
   import Modal from '../ui/Modal.svelte'
 
   interface Props {
     open: boolean
+    capability: SpeechCapability
     onClose: () => void
     onImported?: () => void
   }
 
-  let { open, onClose, onImported }: Props = $props()
+  let { open, capability, onClose, onImported }: Props = $props()
 
   let rawPath = $state('')
   let validation = $state<ModelPathValidationResult | null>(null)
@@ -21,7 +22,7 @@
   let debounceId: ReturnType<typeof setTimeout> | null = null
   let lastValidatedFor = $state('')
 
-  const helpText = describeSupportedFormats()
+  const helpText = $derived(describeSupportedFormatsForCapability(capability))
   const placeholder = '/Users/you/models/whisper.mlx  or  /path/to/model.gguf'
 
   function scheduleValidate(nextRaw: string): void {
@@ -45,7 +46,7 @@
   async function runValidate(forRaw: string): Promise<void> {
     lastValidatedFor = forRaw
     try {
-      const result = await invoke('speech:validateModelPath', forRaw)
+      const result = await invoke('speech:validateModelPath', forRaw, capability)
       // Only apply if still relevant (avoid stale overwrites)
       if (lastValidatedFor !== forRaw) return
       if (!result.ok) {

@@ -1,6 +1,7 @@
 import type { WebContents } from 'electron'
 import { MAX_SPEECH_CHUNK_BYTES } from '../../lib/speech/types'
 import type {
+  SpeechCapability,
   SpeechCorrectionObservation,
   SpeechCleanupMode,
   SpeechDestructiveAction,
@@ -31,8 +32,13 @@ function destructiveAction(value: unknown): SpeechDestructiveAction {
   return value
 }
 
+function speechCapability(value: unknown): SpeechCapability {
+  if (value !== 'asr' && value !== 'cleanup' && value !== 'tts') throw new RangeError('Speech capability is invalid.')
+  return value
+}
+
 function runtime(value: unknown): SpeechRuntime {
-  if (value !== 'mlx' && value !== 'sherpa-onnx') throw new RangeError('Speech runtime is invalid.')
+  if (value !== 'mlx' && value !== 'sherpa-onnx' && value !== 'gguf' && value !== 'coreml') throw new RangeError('Speech runtime is invalid.')
   return value
 }
 
@@ -234,8 +240,13 @@ export function registerSpeechIpc(
       return service.history(cursor, limit)
     })
   )
-  ipcMain.handle('speech:validateModelPath', (_event, rawPath: unknown) =>
-    speechResult(() => service.validateModelPath(boundedString(rawPath, 'Model path', 4_096)))
+  ipcMain.handle('speech:validateModelPath', (_event, rawPath: unknown, rawCapability: unknown) =>
+    speechResult(() =>
+      service.validateModelPath(
+        boundedString(rawPath, 'Model path', 4_096),
+        rawCapability === undefined ? 'asr' : speechCapability(rawCapability)
+      )
+    )
   )
   ipcMain.handle('speech:importModel', (_event, rawPath: unknown) =>
     speechResult(() =>
