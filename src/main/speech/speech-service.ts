@@ -215,6 +215,7 @@ export class SpeechService {
   }
 
   async markAttemptFailure(attemptId: string, message: string): Promise<SpeechRecordingAttempt> {
+    Logger.error('Speech attempt failed', { attemptId, error: message })
     const attempt = await this.storage.updateAttempt(attemptId, (current) => {
       if (
         current.stage === 'failed' &&
@@ -244,13 +245,22 @@ export class SpeechService {
   ): Promise<SpeechTranscriptionResult> {
     const artifact = this.requireSelectableArtifact(artifactId, runtime, 'asr')
     const backend = this.requireBackend(runtime)
+    const modelFamily =
+      artifact.files.length > 0 &&
+      (artifact.familyId === 'whisper' || artifact.familyId === 'parakeet')
+        ? artifact.familyId
+        : undefined
     const queued = this.queue.enqueue({
       capability: 'asr',
       runtime,
       run: (signal) =>
         backend.transcribe(
           {
-            artifact: { id: artifact.id, directory: this.artifactDirectory(artifact.id) },
+            artifact: {
+              id: artifact.id,
+              directory: this.artifactDirectory(artifact.id),
+              ...(modelFamily ? { modelFamily } : {})
+            },
             audioPath: this.storage.getAudioPath(attemptId),
             language
           },
@@ -274,7 +284,10 @@ export class SpeechService {
       }
     })
     try {
-      const rawTranscript = await queued.result
+      const rawTranscript = (await queued.result).trim()
+      if (rawTranscript.length === 0) {
+        throw new Error('The speech runtime returned an empty transcript.')
+      }
       let finalTranscript = rawTranscript
       let cleanupProvenance: SpeechCleanupProvenance = {
         mode: 'none' as const,
@@ -291,7 +304,7 @@ export class SpeechService {
                 rawTranscript,
                 {
                   id: artifact.id,
-                  directory: this.storage.modelDirectory(artifact.id)
+                  directory: this.artifactDirectory(artifact.id)
                 },
                 signal
               )
@@ -354,6 +367,13 @@ export class SpeechService {
       return { attemptId, jobId: queued.id, rawTranscript, finalTranscript }
     } catch (cause) {
       const error = this.asError(cause, 'transcription-failed')
+      Logger.error('Speech transcription failed', {
+        attemptId,
+        runtime,
+        artifactId,
+        jobId: queued.id,
+        error: error.message
+      })
       await this.storage.updateAttempt(attemptId, (attempt) => {
         attempt.stage = error.code === 'cancelled' ? 'cancelled' : 'failed'
         attempt.errors.push({ stage: 'transcribing', error, occurredAt: Date.now() })
@@ -1260,7 +1280,15 @@ export class SpeechService {
 
   private artifactDirectory(artifactId: string): string {
     const installed = this.installed.artifacts.find((item) => item.artifactId === artifactId)
-    if (installed?.source === 'import' && installed.importPath) return installed.importPath
+    if (installed?.source === 'import' && installed.importPath) {
+      if (
+        installed.runtime === 'sherpa-onnx' &&
+        installed.importPath.toLowerCase().endsWith('.onnx')
+      ) {
+        return dirname(installed.importPath)
+      }
+      return installed.importPath
+    }
     return this.storage.modelDirectory(artifactId)
   }
 
@@ -1436,9 +1464,15 @@ export class SpeechService {
       if (code !== 'ENOENT') Logger.error('Could not load speech model index', cause)
     }
     for (const artifact of this.installed.artifacts) {
-      artifact.available = await access(this.storage.modelDirectory(artifact.artifactId))
+      const location =
+        artifact.source === 'import' && artifact.importPath
+          ? artifact.importPath
+          : this.storage.modelDirectory(artifact.artifactId)
+      artifact.available = await access(location)
         .then(() => true)
         .catch(() => false)
+      if (!artifact.available) artifact.unavailableReason = 'The model path is no longer available.'
+      else artifact.unavailableReason = undefined
     }
   }
 

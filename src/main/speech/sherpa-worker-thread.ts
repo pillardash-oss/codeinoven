@@ -1,4 +1,5 @@
 import { createRequire } from 'node:module'
+import { readdir } from 'node:fs/promises'
 import { join } from 'node:path'
 import { spawn } from 'node:child_process'
 import { rm } from 'node:fs/promises'
@@ -57,6 +58,8 @@ interface SherpaModule {
   writeWave: (path: string, wave: SherpaWave) => void
 }
 
+type SherpaAsrFamily = 'whisper' | 'parakeet'
+
 const port = parentPort
 const require = createRequire(import.meta.url)
 let loadedModule: SherpaModule | null = null
@@ -113,17 +116,64 @@ async function transcribe(
         reject(new Error(failure.trim() || `Audio decoding exited with code ${code ?? 'unknown'}.`))
     })
   })
+  const modelFiles = new Set(
+    (await readdir(request.modelDirectory)).map((fileName) => fileName.toLowerCase())
+  )
+  const modelFamily = resolveAsrFamily(request.modelFamily, modelFiles)
+  const modelConfig =
+    modelFamily === 'parakeet'
+      ? {
+          transducer: {
+            encoder: modelPath(
+              modelFiles,
+              request.modelDirectory,
+              ['encoder.int8.onnx', 'encoder.onnx'],
+              'encoder'
+            ),
+            decoder: modelPath(
+              modelFiles,
+              request.modelDirectory,
+              ['decoder.int8.onnx', 'decoder.onnx'],
+              'decoder'
+            ),
+            joiner: modelPath(
+              modelFiles,
+              request.modelDirectory,
+              ['joiner.int8.onnx', 'joiner.onnx'],
+              'joiner'
+            )
+          },
+          tokens: modelPath(modelFiles, request.modelDirectory, ['tokens.txt'], 'tokens')
+        }
+      : {
+          whisper: {
+            encoder: modelPath(
+              modelFiles,
+              request.modelDirectory,
+              ['base-encoder.int8.onnx', 'base-encoder.onnx', 'encoder.onnx'],
+              'Whisper encoder'
+            ),
+            decoder: modelPath(
+              modelFiles,
+              request.modelDirectory,
+              ['base-decoder.int8.onnx', 'base-decoder.onnx', 'decoder.onnx'],
+              'Whisper decoder'
+            ),
+            language: request.language === 'auto' ? '' : request.language,
+            task: 'transcribe',
+            tailPaddings: -1
+          },
+          tokens: modelPath(
+            modelFiles,
+            request.modelDirectory,
+            ['base-tokens.txt', 'tokens.txt'],
+            'Whisper tokens'
+          )
+        }
   const recognizer = await runtime.OfflineRecognizer.createAsync({
     featConfig: { sampleRate: 16000, featureDim: 80 },
     modelConfig: {
-      whisper: {
-        encoder: join(request.modelDirectory, 'base-encoder.int8.onnx'),
-        decoder: join(request.modelDirectory, 'base-decoder.int8.onnx'),
-        language: request.language === 'auto' ? '' : request.language,
-        task: 'transcribe',
-        tailPaddings: -1
-      },
-      tokens: join(request.modelDirectory, 'base-tokens.txt'),
+      ...modelConfig,
       numThreads: 2,
       debug: false,
       provider: 'cpu'
@@ -137,6 +187,31 @@ async function transcribe(
   } finally {
     await rm(wavePath, { force: true })
   }
+}
+
+function resolveAsrFamily(
+  requestedFamily: 'whisper' | 'parakeet' | undefined,
+  modelFiles: ReadonlySet<string>
+): SherpaAsrFamily {
+  if (requestedFamily) return requestedFamily
+  if (modelFiles.has('joiner.int8.onnx') || modelFiles.has('joiner.onnx')) return 'parakeet'
+  if (modelFiles.has('base-encoder.int8.onnx') || modelFiles.has('base-encoder.onnx')) {
+    return 'whisper'
+  }
+  throw new Error(
+    'Unsupported sherpa-onnx ASR model. Expected Whisper base encoder/decoder/tokens or Parakeet encoder/decoder/joiner/tokens.'
+  )
+}
+
+function modelPath(
+  modelFiles: ReadonlySet<string>,
+  directory: string,
+  candidates: readonly string[],
+  label: string
+): string {
+  const fileName = candidates.find((candidate) => modelFiles.has(candidate.toLowerCase()))
+  if (!fileName) throw new Error(`Sherpa-onnx model is missing its ${label} file.`)
+  return join(directory, fileName)
 }
 
 function cleanup(request: Extract<SpeechWorkerRequest, { kind: 'cleanup' }>): string {

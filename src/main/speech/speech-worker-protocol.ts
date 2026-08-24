@@ -5,6 +5,7 @@ export type SpeechWorkerRequest =
       modelDirectory: string
       audioPath: string
       language: string | 'auto'
+      modelFamily?: 'whisper' | 'parakeet'
     }
   | { id: string; kind: 'cleanup'; modelDirectory: string; transcript: string }
   | {
