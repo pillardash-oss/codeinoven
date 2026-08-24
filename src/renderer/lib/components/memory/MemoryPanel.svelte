@@ -593,41 +593,44 @@
           </button>
         {/if}
       </div>
-      {#if variant === 'settings'}
-        <div class="flex shrink-0 items-center gap-3">
+      <div class="flex shrink-0 items-center gap-3">
+        {#if variant === 'settings'}
           <span class="hidden text-xs text-dimmed sm:inline">
             {stats.total}
             {stats.total === 1 ? 'entry' : 'entries'}{#if stats.autoDetected > 0},
               {stats.autoDetected} auto-detected{/if}
           </span>
-          <button
-            class="flex items-center gap-1.5 rounded-lg border bg-elevated px-3 py-1.5 text-sm font-medium transition-colors hover:bg-overlay"
-            title="Add a new memory entry"
-            type="button"
-            onclick={addEntry}
-          >
-            <Plus size={14} />
-            Add Memory
-          </button>
-          <button
-            class="flex items-center gap-1.5 rounded-lg bg-primary px-4 py-1.5 text-sm font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-50"
-            disabled={saving || loading}
-            title="Save all memory entries"
-            type="button"
-            onclick={() => void save()}
-          >
-            {#if saving}
-              <Loader2 size={14} class="animate-spin" />
-            {:else}
-              <Save size={14} />
-            {/if}
-            Save
-          </button>
-          {#if saved}
-            <span class="text-xs text-primary">Saved</span>
+        {/if}
+        <button
+          class="flex items-center gap-1.5 rounded-lg border bg-elevated px-3 py-1.5 text-sm font-medium transition-colors hover:bg-overlay"
+          title="Add a new memory entry"
+          type="button"
+          onclick={addEntry}
+        >
+          <Plus size={14} />
+          Add Memory
+        </button>
+        <button
+          class="flex items-center gap-1.5 rounded-lg bg-primary px-4 py-1.5 text-sm font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-50"
+          disabled={saving || loading}
+          title="Save all memory entries"
+          type="button"
+          onclick={() => void save()}
+        >
+          {#if saving}
+            <Loader2 size={14} class="animate-spin" />
+          {:else}
+            <Save size={14} />
           {/if}
-        </div>
-      {/if}
+          Save
+        </button>
+        {#if saved}
+          <span class="text-xs text-primary">Saved</span>
+        {/if}
+        {#if variant === 'sidebar' && allowTransfer && projectId}
+          <MemoryTransfer {variant} {projectId} onImported={load} />
+        {/if}
+      </div>
     </div>
   </div>
 
@@ -742,42 +745,6 @@
           </select>
         </div>
       </div>
-
-      {#if variant === 'sidebar'}
-        <div class="mb-4 flex items-center gap-3">
-          <button
-            class="flex items-center gap-1.5 rounded-lg border bg-elevated px-3 py-2 text-sm font-medium transition-colors hover:bg-overlay"
-            title="Add a new memory entry"
-            type="button"
-            onclick={addEntry}
-          >
-            <Plus size={14} />
-            Add Memory
-          </button>
-          <button
-            class="flex items-center gap-1.5 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-50"
-            disabled={saving || loading}
-            title="Save all memory entries"
-            type="button"
-            onclick={() => void save()}
-          >
-            {#if saving}
-              <Loader2 size={14} class="animate-spin" />
-            {:else}
-              <Save size={14} />
-            {/if}
-            Save
-          </button>
-          {#if saved}
-            <span class="text-xs text-primary">Saved</span>
-          {/if}
-          {#if allowTransfer && projectId}
-            <div class="ml-auto">
-              <MemoryTransfer {variant} {projectId} onImported={load} />
-            </div>
-          {/if}
-        </div>
-      {/if}
     </div>
 
     <!-- Entries list (scrollable) -->
