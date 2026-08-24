@@ -44,7 +44,19 @@ Run `bun run speech:catalog` during development to validate the manifest and lis
 
 ### User model import
 
-Users can import their own models by pointing at a local folder or file. Import registers a **user-owned external reference** only — CodeInOven never copies or deletes the referenced files. A `.mlx` model is registered to the MLX runtime and is gated to Apple Silicon; a `.gguf` model is registered to the GGUF/llama.cpp runtime; anything else is rejected with an unsupported-format error. Unregistering an imported model removes the reference only and never touches the external files on disk. Imported models appear under an “Imported models” group in the Sound Models tab.
+Users can import their own models by pointing at a local folder or file via **Import** (native file picker) or **Paste Path** (paste a filesystem path copied from a terminal or documentation). Both actions share the same validation and registration path. Import registers a **user-owned external reference** only — CodeInOven never copies or deletes the referenced files. A `.mlx` model is registered to the MLX runtime and is gated to Apple Silicon; a `.gguf` model is registered to the GGUF/llama.cpp runtime (either a single `.gguf` file or a folder containing `.gguf` files); anything else is rejected with an unsupported-format error. Unregistering an imported model removes the reference only and never touches the external files on disk. Imported models appear under an “Imported models” group in the Sound Models tab.
+
+Pasting a path opens **Paste model path** — a modal with a focused input that validates live on paste and on edit. The modal trims surrounding whitespace and matching outer quotes before validation and shows when normalization occurred. Validation runs in the main process (filesystem access never leaves the renderer) and is debounced to avoid blocking the UI. The modal shows:
+
+- **Supported model found** (with detected type: MLX or GGUF) — Import enabled.
+- **Empty** — guidance with supported formats.
+- **Not found** — no file or folder exists at that path.
+- **Permission denied** — the path cannot be read.
+- **Unsupported format / platform** — wrong extension, directory vs file mismatch (e.g. a `.gguf` directory), or MLX on non-Apple Silicon.
+
+Import remains disabled until validation passes. The modal is fully keyboard-accessible: focus lands on the input when opened, **Escape** closes it, **Enter** imports when valid, and tab order is trapped by the shared modal behavior. No network download is performed from the paste flow; it only validates and registers a local path.
+
+IPC: `speech:validateModelPath` (main-process filesystem validation, returns `ModelPathValidationResult`) and `speech:importModel` (shared registration for both picker and paste). See `src/lib/speech/model-path-validation.ts` for the shared normalization and extension allowlist, and `src/main/speech/speech-service.ts` for the main-process validation and registration logic.
 
 ### History retention
 
