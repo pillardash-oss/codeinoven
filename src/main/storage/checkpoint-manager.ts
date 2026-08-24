@@ -221,8 +221,15 @@ export class CheckpointManager {
         !foreign.has(path) ||
         precisePaths.has(path) ||
         (changedPaths?.has(path) ?? false)
-      const changes = changedPaths
-        ? allChanges.filter((change) => changedPaths.has(change.path) && keepChange(change.path))
+      // An empty path filter is no evidence at all: it must not hide real
+      // before/after changes (e.g. edits made through tools that reported no
+      // paths). Only a non-empty set restricts the recorded diff; otherwise the
+      // authoritative snapshot diff stays visible.
+      const filterChangedPaths = changedPaths && changedPaths.size > 0 ? changedPaths : undefined
+      const changes = filterChangedPaths
+        ? allChanges.filter(
+            (change) => filterChangedPaths.has(change.path) && keepChange(change.path)
+          )
         : allChanges.filter((change) => keepChange(change.path))
       const lineStats = await this.calculateLineStats(tracker, changes)
       const contentUnavailable = new Set([
@@ -239,7 +246,7 @@ export class CheckpointManager {
         status,
         after,
         changes,
-        changeFilterApplied: changedPaths !== undefined,
+        changeFilterApplied: filterChangedPaths !== undefined,
         lineStats: lineStats.stats,
         completedAt: Date.now(),
         ...(completionFailure ? { failure: completionFailure } : {})

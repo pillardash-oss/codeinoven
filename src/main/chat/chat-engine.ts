@@ -17687,7 +17687,11 @@ export class ChatEngine {
     })()
     pendingScans.add(scan)
     void scan
-      .then(() => this.scanLivePathsAfterTool(session).catch((error) => Logger.dev('live scan after window failed:', error)))
+      .then(() =>
+        this.scanLivePathsAfterTool(session).catch((error) =>
+          Logger.dev('live scan after window failed:', error)
+        )
+      )
       .finally(() => pendingScans.delete(scan))
   }
 
@@ -17714,7 +17718,12 @@ export class ChatEngine {
         // actually produced one. No observed mutation event is not proof that
         // the harness touched nothing: some providers omit or rename those
         // events, so the authoritative before/after snapshot must remain visible.
-        info.changeFilterReliable !== false ? info.changedPaths : undefined,
+        // An empty path set is the same as no evidence — passing it would hide
+        // every real change (edits made through tools that reported no paths),
+        // so it must not restrict the recorded diff either.
+        info.changeFilterReliable !== false && (info.changedPaths?.size ?? 0) > 0
+          ? info.changedPaths
+          : undefined,
         {
           precisePaths: new Set(info.preciseChangedPaths?.keys() ?? []),
           foreignClaimedPaths: this.liveForeignClaimedPaths(info)
@@ -17827,7 +17836,12 @@ export class ChatEngine {
           try {
             afterBuf = await readFile(abs)
           } catch (error) {
-            if (!(error instanceof Error && 'code' in error && (error as NodeJS.ErrnoException).code === 'ENOENT')) return null
+            if (!(
+              error instanceof Error &&
+              'code' in error &&
+              (error as NodeJS.ErrnoException).code === 'ENOENT'
+            ))
+              return null
             if (!before) return null
             return {
               path,
@@ -17897,7 +17911,11 @@ export class ChatEngine {
             const hash = createHash('sha256').update(buf).digest('hex')
             return hash !== before.hash ? path : null
           } catch (error) {
-            if (error instanceof Error && 'code' in error && (error as NodeJS.ErrnoException).code === 'ENOENT') {
+            if (
+              error instanceof Error &&
+              'code' in error &&
+              (error as NodeJS.ErrnoException).code === 'ENOENT'
+            ) {
               return before ? path : null // deleted vs never existed
             }
             return null
@@ -17908,7 +17926,8 @@ export class ChatEngine {
     }
     // Prune stale claims (touched but not actually changed)
     for (const p of [...session.changedPaths]) if (!keep.has(p)) session.changedPaths.delete(p)
-    for (const p of [...(session.preciseChangedPaths?.keys() ?? [])]) if (!keep.has(p)) session.preciseChangedPaths?.delete(p)
+    for (const p of [...(session.preciseChangedPaths?.keys() ?? [])])
+      if (!keep.has(p)) session.preciseChangedPaths?.delete(p)
     // Notify renderers that the live file list changed
     this.broadcast({
       type: 'checkpoint.liveUpdated',
