@@ -248,10 +248,11 @@ export function registerSpeechIpc(
       )
     )
   )
-  ipcMain.handle('speech:importModel', (_event, rawPath: unknown) =>
+  ipcMain.handle('speech:importModel', (_event, rawPath: unknown, rawCapability?: unknown) =>
     speechResult(() =>
       service.registerImportedModel(
-        boundedString(rawPath, 'Model path', 4_096)
+        boundedString(rawPath, 'Model path', 4_096),
+        rawCapability === undefined ? undefined : speechCapability(rawCapability)
       )
     )
   )

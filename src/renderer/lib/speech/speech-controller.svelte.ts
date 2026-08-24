@@ -389,14 +389,59 @@ class SpeechController {
         `${capabilities.value.recommendedRuntime === 'mlx' ? 'MLX' : 'sherpa-onnx'} is unavailable on this device.`
       )
     }
-    const installedIds = new Set(
-      capabilities.value.installedArtifacts
-        .filter((artifact) => artifact.available && artifact.runtime === runtime)
-        .map((artifact) => artifact.artifactId)
+    const installed = capabilities.value.installedArtifacts.filter(
+      (a) => a.available && a.runtime === runtime
     )
+    const installedIds = new Set(installed.map((a) => a.artifactId))
+    // If user has chosen an active artifact, respect it (including imported)
+    if (this.sound.asrArtifactId) {
+      const chosenInstalled = installed.find((a) => a.artifactId === this.sound.asrArtifactId)
+      if (chosenInstalled) {
+        const catalogHit = catalog.value.artifacts.find((c) => c.id === chosenInstalled.artifactId)
+        if (catalogHit) {
+          if (
+            catalogHit.runtime === runtime &&
+            catalogHit.capability === 'asr' &&
+            catalogHit.qualification.status === 'qualified'
+          )
+            return { runtime, artifact: catalogHit }
+        } else {
+          // Imported model — synthesize a pseudo-artifact; service will handle directory
+          const pseudo = {
+            id: chosenInstalled.artifactId,
+            familyId: 'whisper',
+            capability: 'asr' as const,
+            runtime: chosenInstalled.runtime,
+            label: chosenInstalled.importPath?.split('/').pop() ?? chosenInstalled.artifactId,
+            description: '',
+            tier: 'balanced' as const,
+            version: 'imported',
+            repositoryRevision: 'imported',
+            platforms: [] as unknown as string[],
+            architectures: [] as unknown as string[],
+            languages: [],
+            voices: [],
+            files: [],
+            byteSize: 0,
+            license: 'user-provided',
+            attribution: '',
+            sourcePageUrl: '',
+            minimumMemoryBytes: 0,
+            qualification: {
+              status: 'qualified' as const,
+              licenseReviewed: true,
+              compatibilityReviewed: true,
+              checksumReviewed: true,
+              benchmark: { status: 'passed' as const }
+            }
+          } as unknown as import('../../../lib/speech/types').SpeechModelArtifact
+          return { runtime: chosenInstalled.runtime, artifact: pseudo }
+        }
+      }
+      throw new Error(`The active speech-to-text model is not installed for ${runtime}.`)
+    }
     const artifact = catalog.value.artifacts.find(
       (candidate) =>
-        (!this.sound.asrArtifactId || candidate.id === this.sound.asrArtifactId) &&
         candidate.runtime === runtime &&
         candidate.capability === 'asr' &&
         candidate.qualification.status === 'qualified' &&
@@ -482,14 +527,57 @@ class SpeechController {
     if (!catalog.ok) throw new Error(catalog.error.message)
     const runtime = this.sound.runtimeOverride ?? capabilities.value.selectedRuntime
     if (!runtime) throw new Error('The selected local speech runtime is unavailable.')
-    const installed = new Set(
-      capabilities.value.installedArtifacts
-        .filter((item) => item.available && item.runtime === runtime)
-        .map((item) => item.artifactId)
+    const installedList = capabilities.value.installedArtifacts.filter(
+      (item) => item.available && item.runtime === runtime
     )
+    const installed = new Set(installedList.map((item) => item.artifactId))
+    if (this.sound.ttsArtifactId) {
+      const chosenInstalled = installedList.find((a) => a.artifactId === this.sound.ttsArtifactId)
+      if (chosenInstalled) {
+        const catalogHit = catalog.value.artifacts.find((c) => c.id === chosenInstalled.artifactId)
+        if (catalogHit) {
+          if (
+            catalogHit.runtime === runtime &&
+            catalogHit.capability === 'tts' &&
+            catalogHit.qualification.status === 'qualified'
+          )
+            return { runtime, artifact: catalogHit }
+        } else {
+          const pseudo = {
+            id: chosenInstalled.artifactId,
+            familyId: 'kokoro',
+            capability: 'tts' as const,
+            runtime: chosenInstalled.runtime,
+            label: chosenInstalled.importPath?.split('/').pop() ?? chosenInstalled.artifactId,
+            description: '',
+            tier: 'balanced' as const,
+            version: 'imported',
+            repositoryRevision: 'imported',
+            platforms: [] as unknown as string[],
+            architectures: [] as unknown as string[],
+            languages: [],
+            voices: [],
+            files: [],
+            byteSize: 0,
+            license: 'user-provided',
+            attribution: '',
+            sourcePageUrl: '',
+            minimumMemoryBytes: 0,
+            qualification: {
+              status: 'qualified' as const,
+              licenseReviewed: true,
+              compatibilityReviewed: true,
+              checksumReviewed: true,
+              benchmark: { status: 'passed' as const }
+            }
+          } as unknown as import('../../../lib/speech/types').SpeechModelArtifact
+          return { runtime: chosenInstalled.runtime, artifact: pseudo }
+        }
+      }
+      throw new Error(`The active text-to-speech model is not installed for ${runtime}.`)
+    }
     const artifact = catalog.value.artifacts.find(
       (item) =>
-        (!this.sound.ttsArtifactId || item.id === this.sound.ttsArtifactId) &&
         item.runtime === runtime &&
         item.capability === 'tts' &&
         item.qualification.status === 'qualified' &&

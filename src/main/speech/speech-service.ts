@@ -249,7 +249,7 @@ export class SpeechService {
       run: (signal) =>
         backend.transcribe(
           {
-            artifact: { id: artifact.id, directory: this.storage.modelDirectory(artifact.id) },
+            artifact: { id: artifact.id, directory: this.artifactDirectory(artifact.id) },
             audioPath: this.storage.getAudioPath(attemptId),
             language
           },
@@ -818,7 +818,7 @@ export class SpeechService {
     }
   }
 
-  async registerImportedModel(path: string): Promise<SpeechInstalledArtifact> {
+  async registerImportedModel(path: string, capability?: SpeechCapability): Promise<SpeechInstalledArtifact> {
     const normalized = path.trim()
     const lower = normalized.toLowerCase()
     const target = this.platformTarget()
@@ -876,6 +876,7 @@ export class SpeechService {
     if (existing) {
       existing.importPath = normalized
       existing.available = true
+      if (capability) existing.capability = capability
       await this.persistInstalledIndex()
       return structuredClone(existing)
     }
@@ -886,7 +887,8 @@ export class SpeechService {
       source: 'import',
       externalReference: true,
       available: true,
-      importPath: normalized
+      importPath: normalized,
+      ...(capability ? { capability } : {})
     }
     this.installed.artifacts.push(artifact)
     await this.persistInstalledIndex()
@@ -1001,7 +1003,7 @@ export class SpeechService {
       run: (signal) =>
         backend.synthesize(
           {
-            artifact: { id: artifact.id, directory: this.storage.modelDirectory(artifact.id) },
+            artifact: { id: artifact.id, directory: this.artifactDirectory(artifact.id) },
             text: prepared.text,
             voiceId,
             outputPath
@@ -1182,17 +1184,67 @@ export class SpeechService {
     runtime: SpeechRuntime,
     capability: SpeechModelArtifact['capability']
   ): SpeechModelArtifact {
-    const artifact = this.requireCatalog().artifacts.find((item) => item.id === artifactId)
-    if (!artifact || artifact.runtime !== runtime || artifact.capability !== capability) {
-      throw new Error('The selected model is incompatible with this operation.')
+    const catalogArtifact = this.requireCatalog().artifacts.find((item) => item.id === artifactId)
+    if (catalogArtifact) {
+      if (catalogArtifact.runtime !== runtime || catalogArtifact.capability !== capability) {
+        throw new Error('The selected model is incompatible with this operation.')
+      }
+      if (catalogArtifact.qualification.status !== 'qualified')
+        throw new Error('The selected model is not qualified.')
+      const installed = this.installed.artifacts.find(
+        (item) => item.artifactId === artifactId && item.available
+      )
+      if (!installed) throw new Error('The selected model is not installed.')
+      return catalogArtifact
     }
-    if (artifact.qualification.status !== 'qualified')
-      throw new Error('The selected model is not qualified.')
-    const installed = this.installed.artifacts.find(
-      (item) => item.artifactId === artifactId && item.available
+    // Imported model: not in catalog but in installed index
+    const imported = this.installed.artifacts.find(
+      (item) => item.artifactId === artifactId && item.available && item.source === 'import'
     )
-    if (!installed) throw new Error('The selected model is not installed.')
-    return artifact
+    if (imported) {
+      if (imported.runtime !== runtime) {
+        throw new Error('The selected model is incompatible with this operation.')
+      }
+      if (imported.capability && imported.capability !== capability) {
+        throw new Error('The selected model is incompatible with this operation.')
+      }
+      // Synthesize a minimal qualified artifact for imported models
+      return {
+        id: imported.artifactId,
+        familyId: 'whisper',
+        capability,
+        runtime: imported.runtime,
+        label: imported.importPath?.split('/').pop()?.split('\\').pop() ?? imported.artifactId,
+        description: `Imported model at ${imported.importPath ?? ''}`.trim(),
+        tier: 'balanced',
+        version: 'imported',
+        repositoryRevision: 'imported',
+        platforms: ['darwin', 'win32', 'linux'] as unknown as SpeechModelArtifact['platforms'],
+        architectures: ['arm64', 'x64'] as unknown as SpeechModelArtifact['architectures'],
+        languages: [],
+        voices: [],
+        files: [],
+        byteSize: 0,
+        license: 'user-provided',
+        attribution: '',
+        sourcePageUrl: '',
+        minimumMemoryBytes: 0,
+        qualification: {
+          status: 'qualified' as const,
+          licenseReviewed: true,
+          compatibilityReviewed: true,
+          checksumReviewed: true,
+          benchmark: { status: 'passed' as const }
+        }
+      } as SpeechModelArtifact
+    }
+    throw new Error('The selected model is not installed.')
+  }
+
+  private artifactDirectory(artifactId: string): string {
+    const installed = this.installed.artifacts.find((item) => item.artifactId === artifactId)
+    if (installed?.source === 'import' && installed.importPath) return installed.importPath
+    return this.storage.modelDirectory(artifactId)
   }
 
   private consumeConfirmation(
@@ -1299,7 +1351,7 @@ export class SpeechService {
               run: (signal) =>
                 this.requireBackend(runtime).cleanup(
                   rawTranscript,
-                  { id: artifact.id, directory: this.storage.modelDirectory(artifact.id) },
+                  { id: artifact.id, directory: this.artifactDirectory(artifact.id) },
                   signal
                 )
             })

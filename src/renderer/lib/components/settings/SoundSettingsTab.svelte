@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte'
-  import { Download, ExternalLink, LoaderCircle, RefreshCw, Trash2, Upload, ClipboardPaste, X } from '@lucide/svelte'
+  import { Download, ExternalLink, LoaderCircle, RefreshCw, Trash2, Upload, ClipboardPaste, X, Check, Star } from '@lucide/svelte'
+  import { parseModelIdentityFromPath } from '../../../../lib/speech/model-path-validation'
   import type { AppConfigPatch } from '$shared/types'
   import type { SpeechDestructiveAction, SpeechSettings } from '../../../../lib/speech/types'
   import type { SpeechModelArtifact } from '../../../../lib/speech/types'
@@ -73,6 +74,46 @@
     void updateConfig({ sound: { ...settings, ...next } })
   }
 
+  function activeIdFor(sub: ModelSubTab): string | undefined {
+    if (sub === 'asr') return settings.asrArtifactId
+    if (sub === 'tts') return settings.ttsArtifactId
+    return settings.cleanupArtifactId
+  }
+
+  function isActiveCatalog(artifactId: string, sub: ModelSubTab): boolean {
+    return activeIdFor(sub) === artifactId
+  }
+
+  function isActiveImported(artifactId: string, sub: ModelSubTab): boolean {
+    return activeIdFor(sub) === artifactId
+  }
+
+  function setActive(sub: ModelSubTab, artifactId: string): void {
+    if (sub === 'asr') patch({ asrArtifactId: artifactId })
+    else if (sub === 'tts') patch({ ttsArtifactId: artifactId })
+    else patch({ cleanupArtifactId: artifactId })
+    // Displacing previous active is implicit: only one artifactId per capability
+    // remains; the previous model is no longer considered resident in memory.
+  }
+
+  function clearActive(sub: ModelSubTab): void {
+    if (sub === 'asr') patch({ asrArtifactId: undefined })
+    else if (sub === 'tts') patch({ ttsArtifactId: undefined })
+    else patch({ cleanupArtifactId: undefined })
+  }
+
+  function labelForInstalled(artifactId: string): string {
+    const a = speech.catalog?.artifacts.find((x) => x.id === artifactId)
+    if (a) return a.label
+    const imp = speech.capabilities?.installedArtifacts.find((x) => x.artifactId === artifactId)
+    if (imp?.importPath) {
+      const parsed = parseModelIdentityFromPath(imp.importPath, imp.runtime)
+      if (parsed) return parsed.displayName
+      return imp.importPath.split('/').pop() ?? artifactId
+    }
+    return artifactId
+  }
+
   function patchCues(next: Partial<SpeechSettings['cues']>): void {
     patch({ cues: { ...settings.cues, ...next } })
   }
@@ -124,7 +165,7 @@
     try {
       const path = await invoke('dialog:pickFolder')
       if (!path) return
-      await speech.importModel(path)
+      await speech.importModel(path, pasteCapability)
     } catch (cause) {
       speech.error = cause instanceof Error ? cause.message : String(cause)
     } finally {
@@ -252,6 +293,19 @@
         {/each}
       </div>
 
+      {#if activeIdFor(activeModelSubTab)}
+        <div class="flex items-center justify-between gap-3 rounded-lg border bg-success/5 px-3 py-2 border-success/20">
+          <p class="text-xs">
+            <span class="font-medium text-muted">Active for {activeModelSubTab.toUpperCase()}:</span>
+            <span class="ml-1 font-semibold text-success">{labelForInstalled(activeIdFor(activeModelSubTab)!)}</span>
+            <span class="ml-1 text-[11px] text-dimmed">(only this model stays resident)</span>
+          </p>
+          <button type="button" class="text-[11px] text-muted hover:text-foreground underline" onclick={() => clearActive(activeModelSubTab)}>Clear</button>
+        </div>
+      {:else}
+        <p class="rounded-lg border border-dashed px-3 py-2 text-xs text-dimmed">No active model for {activeModelSubTab.toUpperCase()} — import or download one and set it active. First qualified installed model is used when none is selected.</p>
+      {/if}
+
       <div class="flex items-center justify-end gap-3">
         <div class="flex shrink-0 items-center gap-1.5">
           <button
@@ -290,7 +344,7 @@
           )}
           {@const download = speech.downloads[artifact.id]}
           {@const badge = bestForBadge(artifact)}
-          <div class="rounded-xl border bg-elevated p-3">
+          <div class="rounded-xl border p-3 {isActiveCatalog(artifact.id, activeModelSubTab) ? 'bg-success/5 border-success/30 ring-1 ring-success/20' : 'bg-elevated'}">
             <div class="flex items-start justify-between gap-3">
               <div class="min-w-0 flex-1">
                 <div class="flex flex-wrap items-center gap-1.5">
@@ -298,6 +352,9 @@
                   <span class="inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-medium {runtimeBadgeClass(artifact.runtime)}">{runtimeBadge(artifact.runtime)}</span>
                   {#if badge}
                     <span class="inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-semibold {badge.cls}">{badge.label}</span>
+                  {/if}
+                  {#if isActiveCatalog(artifact.id, activeModelSubTab)}
+                    <span class="inline-flex items-center gap-1 rounded-full bg-success px-2 py-0.5 text-[10px] font-semibold text-white border-success"><Check size={10} aria-hidden="true" /> Active</span>
                   {/if}
                 </div>
                 <p class="mt-1 text-xs leading-relaxed text-muted">{artifact.description}</p>
@@ -349,8 +406,34 @@
                 {/if}
               </div>
             </div>
-            <!-- Per-card Import / Paste Path -->
+            <!-- Per-card Import / Paste Path + Active -->
             <div class="mt-3 flex items-center gap-1.5 border-t pt-3">
+              {#if installed}
+                {#if isActiveCatalog(artifact.id, activeModelSubTab)}
+                  <span class="inline-flex items-center gap-1 rounded-full bg-success/15 px-2 py-0.5 text-[11px] font-semibold text-success border border-success/20">
+                    <Check size={11} aria-hidden="true" /> Active
+                  </span>
+                  <button
+                    type="button"
+                    class="inline-flex items-center gap-1 rounded-md border bg-surface px-2 py-1 text-[11px] text-dimmed"
+                    title="Clear active model"
+                    aria-label="Clear active {artifact.label}"
+                    onclick={() => clearActive(activeModelSubTab)}
+                  >
+                    Clear
+                  </button>
+                {:else}
+                  <button
+                    type="button"
+                    class="inline-flex items-center gap-1 rounded-md border bg-primary/10 px-2 py-1 text-[11px] font-medium text-primary hover:bg-primary/15"
+                    title="Make {artifact.label} the active model — displaces current active"
+                    aria-label="Make {artifact.label} active"
+                    onclick={() => setActive(activeModelSubTab, artifact.id)}
+                  >
+                    <Star size={11} aria-hidden="true" /> Set Active
+                  </button>
+                {/if}
+              {/if}
               <button
                 type="button"
                 class="inline-flex items-center gap-1 rounded-md border bg-surface px-2 py-1 text-[11px] text-muted hover:text-foreground disabled:opacity-50"
@@ -370,7 +453,7 @@
               >
                 <ClipboardPaste size={11} aria-hidden="true" /> Paste Path
               </button>
-              <span class="ml-auto text-[10px] text-dimmed">Import registers an external path — never copies or deletes files.</span>
+              <span class="ml-auto text-[10px] text-dimmed">Only the active model stays in memory.</span>
             </div>
           </div>
         {/each}
@@ -379,30 +462,67 @@
         {/if}
       </div>
 
-      {#if (speech.capabilities?.installedArtifacts ?? []).some((item) => item.source === 'import')}
+      {@const importedForTab = (speech.capabilities?.installedArtifacts ?? []).filter(
+        (item) => item.source === 'import' && (item.capability ? item.capability === pasteCapability : true)
+      )}
+      {#if importedForTab.length > 0}
         <div class="rounded-xl border bg-surface p-3">
           <p class="mb-2 text-xs font-semibold uppercase tracking-wide text-muted">
-            Imported models
+            Imported models · {activeModelSubTab.toUpperCase()}
           </p>
           <div class="divide-y divide-border">
-            {#each (speech.capabilities?.installedArtifacts ?? []).filter(
-              (item) => item.source === 'import'
-            ) as artifact (artifact.artifactId)}
+            {#each importedForTab as artifact (artifact.artifactId)}
+              {@const parsedImp = artifact.importPath ? parseModelIdentityFromPath(artifact.importPath, artifact.runtime) : null}
               <div class="flex items-center gap-3 py-2">
                 <div class="min-w-0 flex-1">
-                  <p class="truncate text-xs font-medium">{artifact.importPath}</p>
-                  <p class="text-[10px] text-dimmed">
-                    {artifact.runtime} · external
+                  {#if parsedImp}
+                    <p class="truncate text-xs font-semibold" title={parsedImp.baseWithoutExtension}>{parsedImp.displayName}</p>
+                    <p class="truncate font-mono text-[11px] text-dimmed" title={artifact.importPath}>{artifact.importPath}</p>
+                    <p class="mt-1 flex flex-wrap gap-1">
+                      {#each parsedImp.details as d (d.label)}
+                        <span class="inline-flex items-center gap-1 rounded-full border bg-elevated px-1.5 py-0.5 text-[10px]"><span class="text-muted">{d.label}:</span><span class="font-medium">{d.value}</span></span>
+                      {/each}
+                      {#if parsedImp.tokens.length}
+                        <span class="inline-flex items-center gap-1 rounded-full border bg-surface px-1.5 py-0.5 text-[10px] text-dimmed">Breakup: {parsedImp.tokens.join(' · ')}</span>
+                      {/if}
+                    </p>
+                  {:else}
+                    <p class="truncate text-xs font-medium">{artifact.importPath}</p>
+                  {/if}
+                  <p class="mt-1 text-[10px] text-dimmed flex items-center gap-1.5">
+                    <span class="inline-flex rounded-full border px-1.5 py-0.5 text-[9px] font-medium">{artifact.runtime}</span> · external
+                    {#if isActiveImported(artifact.artifactId, activeModelSubTab)}
+                      <span class="inline-flex items-center gap-1 rounded-full bg-success/15 px-1.5 py-0.5 text-[10px] font-semibold text-success border border-success/20"><Check size={10} aria-hidden="true" /> Active</span>
+                    {/if}
                   </p>
                 </div>
-                <button
-                  type="button"
-                  class="flex h-8 w-8 items-center justify-center rounded-lg text-muted hover:bg-danger/10 hover:text-danger"
-                  title={`Unregister ${artifact.importPath}`}
-                  aria-label={`Unregister ${artifact.importPath}`}
-                  onclick={() => removeImported(artifact.artifactId, artifact.importPath ?? '')}
-                  ><Trash2 size={13} aria-hidden="true" /></button
-                >
+                <div class="flex items-center gap-1">
+                  {#if isActiveImported(artifact.artifactId, activeModelSubTab)}
+                    <button
+                      type="button"
+                      class="rounded-md border bg-surface px-2 py-1 text-[11px] text-dimmed"
+                      title="Clear active"
+                      aria-label="Clear active {artifact.importPath}"
+                      onclick={() => clearActive(activeModelSubTab)}
+                    >Clear</button>
+                  {:else}
+                    <button
+                      type="button"
+                      class="rounded-md border bg-primary/10 px-2 py-1 text-[11px] font-medium text-primary hover:bg-primary/15"
+                      title="Make this imported model the active {activeModelSubTab.toUpperCase()} model — displaces current active"
+                      aria-label="Make imported {artifact.importPath} active"
+                      onclick={() => setActive(activeModelSubTab, artifact.artifactId)}
+                    ><Star size={11} aria-hidden="true" /> Active</button>
+                  {/if}
+                  <button
+                    type="button"
+                    class="flex h-8 w-8 items-center justify-center rounded-lg text-muted hover:bg-danger/10 hover:text-danger"
+                    title={`Unregister ${artifact.importPath}`}
+                    aria-label={`Unregister ${artifact.importPath}`}
+                    onclick={() => removeImported(artifact.artifactId, artifact.importPath ?? '')}
+                    ><Trash2 size={13} aria-hidden="true" /></button
+                  >
+                </div>
               </div>
             {/each}
           </div>

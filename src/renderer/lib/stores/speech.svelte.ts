@@ -51,8 +51,8 @@ class SpeechSettingsStore {
     await this.load()
   }
 
-  async importModel(path: string): Promise<boolean> {
-    const result = await invoke('speech:importModel', path)
+  async importModel(path: string, capability?: import('../../../lib/speech/types').SpeechCapability): Promise<boolean> {
+    const result = await invoke('speech:importModel', path, capability)
     if (!result.ok) this.error = result.error.message
     await this.load()
     return result.ok

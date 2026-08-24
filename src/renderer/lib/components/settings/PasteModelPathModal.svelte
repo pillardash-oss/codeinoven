@@ -109,7 +109,7 @@
     if (!validation?.ok || validating || importing) return
     importing = true
     try {
-      const ok = await speech.importModel(validation.normalizedPath)
+      const ok = await speech.importModel(validation.normalizedPath, capability)
       if (ok) {
         onImported?.()
         resetAndClose()
