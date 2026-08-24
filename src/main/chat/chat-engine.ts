@@ -184,6 +184,7 @@ import {
   INBOX_PROJECT_ID,
   isOrchestrationChildThread
 } from '../../lib/types'
+import { foldTurnStreamEvents, type TurnStreamEvent } from './turn-stream'
 import { modelKey } from '../../lib/model-keys'
 import { APP_NAME } from '../../lib/brand'
 import { workflowActionPresentation } from '../../lib/workflow-action-presentation'
@@ -1852,6 +1853,9 @@ export class ChatEngine {
       'agent:loadSessionMessages',
       (_, projectId: string, threadId: string, sessionId: string) =>
         this.loadSessionMessages(projectId, threadId, sessionId)
+    )
+    ipcMain.handle('thread:loadStreamParts', (_, projectId: string, threadId: string) =>
+      this.loadTurnStreamParts(projectId, threadId)
     )
     ipcMain.handle('agent:loadTemporaryChatMessages', (_, temporaryChatId: string) =>
       this.loadTemporaryChatMessages(temporaryChatId)
@@ -15299,6 +15303,20 @@ export class ChatEngine {
       return
     }
     void this.recordDriverEvent(driverId, event)
+    // Durably persist the working-trace part stream to the thread's SSE log so a
+    // mid-turn/restart reopen can rehydrate the full trace (tools, reasoning,
+    // sub-agents) even if the harness session is no longer reachable. Ephemeral
+    // isolated workers are excluded — they are forwarded as spec/brainstorm
+    // traces through their own paths.
+    if (
+      eventOwner &&
+      !eventOwner.ephemeral &&
+      (event.type === 'message.part.updated' || event.type === 'message.part.delta')
+    ) {
+      void this.persistTurnStreamEvent(eventOwner, event).catch((error) =>
+        Logger.dev('Turn stream write failed:', error)
+      )
+    }
     const coordinatorSpecSession = eventOwner
       ? this.activeInitialSpecSessions.get(
           this.initialSpecKey(eventOwner.projectId, eventOwner.threadId)
@@ -15958,6 +15976,68 @@ export class ChatEngine {
     } catch (error) {
       Logger.error('Driver event audit write failed:', error)
     }
+  }
+
+  /** Append one working-trace part event to the thread's durable SSE log. */
+  private async persistTurnStreamEvent(
+    owner: SessionInfo,
+    event: Extract<AgentEvent, { type: 'message.part.updated' | 'message.part.delta' }>
+  ): Promise<void> {
+    const ts = Date.now()
+    const sessionId = event.sessionId
+    const turnId = owner.activeTurnId ?? ''
+    const streamEvent: TurnStreamEvent =
+      event.type === 'message.part.updated'
+        ? {
+            kind: 'part.updated',
+            sessionId,
+            messageId: event.part.messageID,
+            turnId,
+            ts,
+            part: event.part
+          }
+        : {
+            kind: 'part.delta',
+            sessionId,
+            messageId: event.messageId,
+            partId: event.partId,
+            field: event.field,
+            delta: event.delta,
+            turnId,
+            ts
+          }
+    await this.storage.appendRaw(
+      this.turnStreamPath(owner.projectId, owner.threadId),
+      `${JSON.stringify(streamEvent)}\n`
+    )
+  }
+
+  private turnStreamPath(projectId: string, threadId: string): string {
+    return `projects/${projectId}/threads/${threadId}/stream.jsonl`
+  }
+
+  /** Rebuild the working-trace parts from the thread's durable SSE log. Returns
+   *  only the most recent logical turn's parts, so a reopened mid-turn thread
+   *  shows its own streamed work rather than stale parts from earlier turns. */
+  async loadTurnStreamParts(projectId: string, threadId: string): Promise<AgentPart[]> {
+    const raw = await this.storage.readRaw(this.turnStreamPath(projectId, threadId))
+    if (!raw) return []
+    const events: TurnStreamEvent[] = []
+    let latestTurnId = ''
+    for (const line of raw.split('\n')) {
+      const trimmed = line.trim()
+      if (!trimmed) continue
+      try {
+        const parsed = JSON.parse(trimmed) as TurnStreamEvent
+        if (parsed.kind === 'part.updated' || parsed.kind === 'part.delta') {
+          events.push(parsed)
+          if (parsed.turnId) latestTurnId = parsed.turnId
+        }
+      } catch {
+        // A malformed line must not block rehydration of the rest of the stream.
+      }
+    }
+    return foldTurnStreamEvents(events, latestTurnId || undefined)
   }
 
   /**

@@ -525,6 +525,10 @@
    *  thread dropping to idle or showing a bare "Agent working…" spinner. Cleared
    *  as soon as a live session confirms the real terminal state. */
   let restoredBusy = $state(false)
+  /** Working-trace parts rebuilt from the thread's durable SSE log. Used to
+   *  backfill the restored trace when the live session is unreachable and the
+   *  message mirror has not persisted the streaming parts yet. */
+  let streamParts = $state<AgentPart[]>([])
   let agentDefaults = $state<AgentDefaultsConfig>({ syncFromThreadChanges: false })
   /** Global "don't ask again" flag for the image-descriptor vision model picker. */
   let imageDescriptorAskAgain = $state(false)
@@ -2881,6 +2885,7 @@
 
   function beginLocalTurn(userMessageId: string): void {
     restoredBusy = false
+    streamParts = []
     locallySubmittedTurnId = userMessageId
     locallySubmittedTurnAcknowledged = false
     turnSawCompaction = false
@@ -2904,6 +2909,7 @@
     if (locallySubmittedTurnId) return
     if (agentRuns.activity(thread.projectId, thread.id) === 'brainstorm_report') return
     restoredBusy = false
+    streamParts = []
     liveWorkingSelection = null
     agentRuns.setIdle(thread.projectId, thread.id)
   }
@@ -3096,7 +3102,20 @@
       // still be sent normally.
       if (providerStatus === null) {
         restoredBusy = hasPersistedInFlightWork()
-        if (!restoredBusy) setIdleFromRestore()
+        if (restoredBusy) {
+          // Rebuild the working trace from the durable SSE log so the restored
+          // trace shows everything streamed so far, not just what the mirror
+          // happened to persist. Even if the harness session died with the app,
+          // the file holds the full event stream up to the reopen.
+          void invoke('thread:loadStreamParts', projectId, id)
+            .then((parts) => {
+              if (alive) streamParts = parts
+            })
+            .catch(() => {})
+        } else {
+          streamParts = []
+          setIdleFromRestore()
+        }
       }
       // A thread opened while its turn is still running has its accumulated
       // working trace only in the live harness session: the mirror persists
@@ -3109,7 +3128,14 @@
       // own session is idle between handoffs, so `threadWorking` (not just the
       // raw busy flag) decides whether accumulated work must be recovered.
       if (threadWorking) {
-        void refreshMessages()
+        // Pull the LIVE driver transcript (agent:loadMessages) instead of a DB
+        // mirror page: when a harness session survives an app restart, its
+        // conversation holds every working part streamed so far. Reading it now
+        // rehydrates the full working trace (tools, sub-agents, reasoning) all
+        // the way up to the live stream instead of only the parts persisted at
+        // the last turn boundary — so reopening a long-running thread shows
+        // everything the agent already did, not a bare user message.
+        void threadMessages.load(projectId, id).catch(() => refreshMessages())
       }
       if (providerStatus?.state === 'idle') {
         scheduleIdleAttention()
@@ -7338,7 +7364,9 @@
   function inlineChipHtml(reference: PromptProjectReference): string {
     const safeName = escapeHtmlForChip(reference.name)
     const safePath = escapeHtmlForChip(reference.path)
-    const safeTitle = escapeHtmlForChip(`Tagged ${reference.kind}: ${reference.name} — ${reference.path}`)
+    const safeTitle = escapeHtmlForChip(
+      `Tagged ${reference.kind}: ${reference.name} — ${reference.path}`
+    )
     const icon =
       reference.kind === 'directory'
         ? '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M4 4a2 2 0 0 1 2-2h4l2 2h6a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V4z"/></svg>'
@@ -7924,6 +7952,28 @@
     )
   }
 
+  /** Merge durable stream-log parts (freshest) with mirror parts, deduped by id
+   *  and preserving first-seen order. The stream log may hold parts the mirror
+   *  has not persisted yet, so it takes precedence for the restored trace. */
+  function mergeWorkingParts(preferred: AgentPart[], fallback: AgentPart[]): AgentPart[] {
+    const byId: Record<string, AgentPart> = {}
+    const order: string[] = []
+    for (const part of preferred) {
+      if (!byId[part.id]) order.push(part.id)
+      byId[part.id] = part
+    }
+    for (const part of fallback) {
+      if (!byId[part.id]) {
+        order.push(part.id)
+        byId[part.id] = part
+      }
+    }
+    return order.flatMap((id) => {
+      const part = byId[id]
+      return part ? [part] : []
+    })
+  }
+
   /** Find the last text part in a turn ending at the given message index. */
   function getTurnFinalText(endMsgIndex: number): AgentPart | null {
     let turnStart = endMsgIndex
@@ -8377,7 +8427,9 @@
                     {/if}
                     {@const inlineTags = inlineFileTagsForMessage(msg)}
                     {@const inlinedPaths = new Set(inlineTags.map((tag) => tag.token.slice(1)))}
-                    {@const leftoverReferences = (msg.projectReferences ?? []).filter((reference) => !inlinedPaths.has(reference.path))}
+                    {@const leftoverReferences = (msg.projectReferences ?? []).filter(
+                      (reference) => !inlinedPaths.has(reference.path)
+                    )}
                     <div
                       class="w-full rounded-lg bg-surface px-4 py-2.5 text-sm text-foreground"
                       data-conversation-searchable
@@ -8612,7 +8664,11 @@
                   {#if isTurnStart}
                     {@const traceIsLive = liveBusy && isLatestTurn}
                     {@const traceIsRestored = restoredBusy && isLatestTurn && !liveBusy}
-                    {@const collectedTurnParts = getTurnWorkingParts(msgIndex, traceIsLive)}
+                    {@const accumulatedTurnParts = getTurnWorkingParts(msgIndex, traceIsLive)}
+                    {@const collectedTurnParts =
+                      traceIsRestored && streamParts.length > 0
+                        ? mergeWorkingParts(streamParts, accumulatedTurnParts)
+                        : accumulatedTurnParts}
                     {@const turnParts = isAssignmentAuditorThread
                       ? collectedTurnParts.filter(
                           (part) => part.type !== 'text' || part.phase === 'commentary'

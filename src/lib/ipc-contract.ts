@@ -2212,6 +2212,10 @@ export interface IpcInvokeContract {
     ThreadMessagePage
   >
   'thread:loadUserMessages': Contract<[projectId: string, threadId: string], UserMessageSummary[]>
+  'thread:loadStreamParts': Contract<
+    [projectId: string, threadId: string],
+    import('./types').AgentPart[]
+  >
   'thread:markRead': Contract<[projectId: string, threadId: string], Thread>
   'thread:setPinned': Contract<[projectId: string, threadId: string, pinned: boolean], Thread>
   'thread:setContextUsage': Contract<

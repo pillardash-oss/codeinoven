@@ -137,6 +137,7 @@ export interface RemoteRpcServices {
   chatEngine: Pick<
     ChatEngine,
     | 'loadMessages'
+    | 'loadTurnStreamParts'
     | 'deleteThreadSession'
     | 'activeTurnChangeSummary'
     | 'listProviderSnapshot'
@@ -690,6 +691,11 @@ export class RemoteRpcDispatcher {
           typeof args[3] === 'number' ? args[3] : 40
         )
       }
+      case 'thread:loadStreamParts':
+        return this.services.chatEngine.loadTurnStreamParts(
+          this.string(args[0]),
+          this.string(args[1])
+        )
       case 'thread:update':
         return this.threadManager.updateThread(
           this.string(args[0]),
