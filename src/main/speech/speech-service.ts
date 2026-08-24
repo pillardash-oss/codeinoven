@@ -1053,6 +1053,7 @@ export class SpeechService {
         bytesReceived: 0,
         totalBytes: artifact.byteSize
       })
+      let lastEmitAt = 0
       for (const file of artifact.files) {
         const target = join(staging, file.path)
         await mkdir(dirname(target), { recursive: true })
@@ -1061,7 +1062,17 @@ export class SpeechService {
           target,
           file.byteSize,
           file.sha256,
-          controller.signal
+          controller.signal,
+          (fileReceivedSoFar) => {
+            const now = Date.now()
+            if (now - lastEmitAt < 120) return
+            lastEmitAt = now
+            this.emitDownload(artifact, {
+              state: 'downloading',
+              bytesReceived: received + fileReceivedSoFar,
+              totalBytes: artifact.byteSize
+            })
+          }
         )
         this.emitDownload(artifact, {
           state: 'downloading',
@@ -1141,7 +1152,8 @@ export class SpeechService {
     destination: string,
     expectedBytes: number,
     expectedSha256: string,
-    signal: AbortSignal
+    signal: AbortSignal,
+    onProgress?: (receivedSoFar: number) => void
   ): Promise<number> {
     const response = await fetch(url, { signal, redirect: 'follow' })
     if (!response.ok || !response.body)
@@ -1162,6 +1174,7 @@ export class SpeechService {
             throw new Error('Downloaded model exceeds its catalog byte count.')
           }
           hash.update(chunk)
+          onProgress?.(received)
           if (!stream.write(chunk)) {
             await Promise.race([
               new Promise<void>((resolve) => stream.once('drain', resolve)),

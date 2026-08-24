@@ -203,6 +203,18 @@
     return null
   }
 
+  function formatBytes(bytes: number): string {
+    if (bytes < 1024) return `${bytes} B`
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+    if (bytes < 1024 * 1024 * 1024) return `${(bytes / 1_048_576).toFixed(1)} MB`
+    return `${(bytes / 1_073_741_824).toFixed(2)} GB`
+  }
+
+  function downloadPercent(download: { bytesReceived: number; totalBytes: number }): number {
+    if (download.totalBytes <= 0) return 0
+    return Math.min(100, Math.max(0, Math.round((download.bytesReceived / download.totalBytes) * 100)))
+  }
+
   function isImportedForCapability(
     artifact: { capability?: import('../../../../lib/speech/types').SpeechCapability; runtime: import('../../../../lib/speech/types').SpeechRuntime },
     cap: import('../../../../lib/speech/types').SpeechCapability
@@ -489,10 +501,10 @@
                       (deleting = { action: 'model', targetId: artifact.id, label: artifact.label })}
                     ><Trash2 size={14} aria-hidden="true" /></button
                   >{/if}
-                {:else if download?.state === 'downloading'}
+                {:else if download?.state === 'downloading' || download?.state === 'verifying' || download?.state === 'queued'}
                   <button
                     type="button"
-                    class="flex h-8 w-8 items-center justify-center rounded-lg text-muted"
+                    class="flex h-8 w-8 items-center justify-center rounded-lg text-muted hover:bg-muted/20"
                     title={`Cancel ${artifact.label} download`}
                     aria-label={`Cancel ${artifact.label} download`}
                     onclick={() => void speech.cancelDownload(artifact.id)}
@@ -511,6 +523,39 @@
                 {/if}
               </div>
             </div>
+            {#if download?.state === 'downloading' || download?.state === 'verifying' || download?.state === 'queued'}
+              {@const pct = download.state === 'queued' ? 0 : download.state === 'verifying' ? 100 : downloadPercent(download)}
+              {@const isVerifying = download.state === 'verifying'}
+              {@const isQueued = download.state === 'queued'}
+              <div class="mt-3 rounded-lg border bg-surface px-3 py-2.5">
+                <div class="flex items-center justify-between gap-2 text-[11px]">
+                  <span class="inline-flex items-center gap-1.5 font-medium {isVerifying ? 'text-amber-600' : 'text-foreground'}">
+                    <LoaderCircle size={11} class="animate-spin shrink-0" aria-hidden="true" />
+                    {#if isVerifying}Verifying…{:else if isQueued}Queued… — waiting to start{:else}Downloading… {pct}%{/if}
+                  </span>
+                  <span class="shrink-0 tabular-nums text-muted">
+                    {#if download.state === 'downloading'}{formatBytes(download.bytesReceived)} / {formatBytes(download.totalBytes)}{:else if isVerifying}{formatBytes(download.bytesReceived)} · checksum{:else if isQueued}Position {download.position}{/if}
+                  </span>
+                </div>
+                <div class="mt-2 h-1.5 overflow-hidden rounded-full bg-muted/15" role="progressbar" aria-valuenow={pct} aria-valuemin={0} aria-valuemax={100} aria-label={`Download progress ${pct}%`}>
+                  <div class="h-full rounded-full transition-all duration-200 {isVerifying ? 'bg-amber-500 animate-pulse' : 'bg-primary'}" style={`width: ${pct}%`}></div>
+                </div>
+                {#if download.state === 'downloading'}
+                  <p class="mt-1.5 text-[10px] leading-none text-dimmed">Large models can take a few minutes — you can keep using the app. Cancel with the × above.</p>
+                {/if}
+              </div>
+            {/if}
+            {#if download?.state === 'failed'}
+              <div class="mt-3 flex items-start justify-between gap-2 rounded-lg border border-danger/20 bg-danger/5 px-3 py-2">
+                <p class="text-[11px] leading-snug text-danger">
+                  Download failed{download.error?.message ? `: ${download.error.message}` : '.'}
+                </p>
+                <button type="button" class="shrink-0 rounded-md border bg-elevated px-2 py-1 text-[11px] font-medium text-foreground hover:bg-surface" onclick={() => void speech.download(artifact.id)}>Retry</button>
+              </div>
+            {/if}
+            {#if download?.state === 'cancelled'}
+              <p class="mt-3 rounded-lg border bg-muted/10 px-3 py-2 text-[11px] text-muted">Download cancelled.</p>
+            {/if}
             <div class="mt-3 flex items-center gap-1.5 border-t pt-3">
               {#if installed}
                 {#if isActiveCatalog(artifact.id, activeModelSubTab)}
