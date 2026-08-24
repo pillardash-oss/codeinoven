@@ -1404,6 +1404,14 @@ export class ChatEngine {
   /** Provider/model combinations that rejected JSON-schema output during this app run. */
   private unsupportedStructuredOutputModels = new Set<string>()
   private activeBrainstormOperations = new Set<string>()
+  /** In-flight Brainstorm finalizations keyed by `projectId:threadId`. A repeat
+   *  finalize for the same thread reuses the running promise instead of throwing
+   *  a misleading "already updating this Brainstorm" while the spec is still
+   *  being generated after the finalize. */
+  private activeBrainstormFinalizes = new Map<
+    string,
+    Promise<EngineeringSpec | BrainstormDocument>
+  >()
   private activeBrainstormSessions = new Map<string, ActiveBrainstormSession>()
   private activeBrainstormConversationTurns = new Map<string, ActiveBrainstormConversationTurn>()
   private userAbortedBrainstormOperations = new Set<string>()
@@ -2618,6 +2626,7 @@ export class ChatEngine {
     this.activeAchievementAuditRuns.clear()
     this.unsupportedStructuredOutputModels.clear()
     this.activeBrainstormOperations.clear()
+    this.activeBrainstormFinalizes.clear()
     this.activeBrainstormSessions.clear()
     this.activeBrainstormConversationTurns.clear()
     this.userAbortedBrainstormOperations.clear()
@@ -10109,9 +10118,42 @@ export class ChatEngine {
     brainstormId = validateEntityId(brainstormId, 'Brainstorm ID')
     note = validateBoundedString(note, 'Brainstorm finalize note', 0, 20_000)
     const operationKey = `${projectId}:${threadId}`
+    const runningFinalize = this.activeBrainstormFinalizes.get(operationKey)
+    if (runningFinalize) {
+      // A finalize is already in flight for this thread (finalizing the Brainstorm
+      // and/or generating its spec takes a while). Reuse it instead of failing with
+      // a misleading "already updating this Brainstorm" on a legitimate retry.
+      return runningFinalize
+    }
     if (this.activeBrainstormOperations.has(operationKey)) {
       throw new Error('The Sr. Engineer is already updating this Brainstorm')
     }
+    const operation = this.runFinalizeBrainstorm(
+      projectId,
+      threadId,
+      brainstormId,
+      version,
+      note,
+      operationKey
+    )
+    this.activeBrainstormFinalizes.set(operationKey, operation)
+    try {
+      return await operation
+    } finally {
+      if (this.activeBrainstormFinalizes.get(operationKey) === operation) {
+        this.activeBrainstormFinalizes.delete(operationKey)
+      }
+    }
+  }
+
+  private async runFinalizeBrainstorm(
+    projectId: string,
+    threadId: string,
+    brainstormId: string,
+    version: number,
+    note: string,
+    operationKey: string
+  ): Promise<EngineeringSpec | BrainstormDocument> {
     this.activeBrainstormOperations.add(operationKey)
     try {
       const finalized = await this.brainstormEngine.finalize(
@@ -14152,6 +14194,15 @@ export class ChatEngine {
       updatedAt: Date.now()
     }
     await this.writePendingInitialSpec(pending)
+    // The run is terminally done — release the live working trace so the
+    // dedicated Retry-specification card replaces it instead of a stale trace.
+    this.broadcast({
+      type: 'spec.trace',
+      sessionId: pending.sessionId || '',
+      projectId,
+      threadId,
+      update: { type: 'completed' }
+    })
     this.markEngineeringLifecycleFailure(projectId, threadId, pending.error)
     Logger.error('Specification generation failed', {
       projectId,
@@ -15506,11 +15557,7 @@ export class ChatEngine {
     const active = this.activeInitialSpecSessions.get(key)
     if (!active || active.sessionId !== event.sessionId) return
 
-    if (
-      event.type === 'message.completed' ||
-      event.type === 'session.idle' ||
-      event.type === 'session.error'
-    ) {
+    if (event.type === 'session.idle' || event.type === 'session.error') {
       this.broadcast({
         type: 'spec.trace',
         sessionId: event.sessionId,
@@ -15518,6 +15565,23 @@ export class ChatEngine {
         threadId: owner.threadId,
         update: { type: 'completed' }
       })
+      return
+    }
+    if (event.type === 'message.completed') {
+      // Only a completed message carrying the final structured specification
+      // ends the trace. Intermediate messages (tool-call steps, continuing
+      // reasoning) are part of the same live run and must never hide the trace
+      // the moment they complete; clearing on each one is what made the spec
+      // trace flash in and out instead of staying visible through generation.
+      if (event.structuredOutput !== undefined) {
+        this.broadcast({
+          type: 'spec.trace',
+          sessionId: event.sessionId,
+          projectId: owner.projectId,
+          threadId: owner.threadId,
+          update: { type: 'completed' }
+        })
+      }
       return
     }
 
