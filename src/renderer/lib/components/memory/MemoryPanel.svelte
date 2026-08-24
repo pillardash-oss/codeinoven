@@ -72,6 +72,7 @@
   let filterCategory = $state<MemoryCategory | ''>('')
   let filterPriority = $state<MemoryPriority | ''>('')
   let settingsSection = $state<'active' | 'inactive'>('active')
+  let lastAddedId = $state<string | null>(null)
 
   const categoryLabels: Record<MemoryCategory, string> = {
     behavioral: 'Behavioral',
@@ -346,11 +347,15 @@
   }
 
   function addEntry(): void {
+    // Ensure the new enabled entry is actually visible — switch to the Active tab first.
+    if (variant === 'settings') settingsSection = 'active'
+    else activeSection = 'active'
     const entryScope = availableScopes[0]?.value ?? 'global'
+    const id = `memory-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+    lastAddedId = id
     entries = [
-      ...entries,
       {
-        id: `memory-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        id,
         label: '',
         content: '',
         enabled: true,
@@ -363,7 +368,8 @@
         lastReinforced: Date.now(),
         projectId: entryScope === 'project' || entryScope === 'thread' ? projectId : undefined,
         threadId: entryScope === 'thread' ? threadId : undefined
-      }
+      },
+      ...entries
     ]
   }
 
@@ -601,29 +607,33 @@
               {stats.autoDetected} auto-detected{/if}
           </span>
         {/if}
-        <button
-          class="flex items-center gap-1.5 rounded-lg border bg-elevated px-3 py-1.5 text-sm font-medium transition-colors hover:bg-overlay"
-          title="Add a new memory entry"
-          type="button"
-          onclick={addEntry}
-        >
-          <Plus size={14} />
-          Add Memory
-        </button>
-        <button
-          class="flex items-center gap-1.5 rounded-lg bg-primary px-4 py-1.5 text-sm font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-50"
-          disabled={saving || loading}
-          title="Save all memory entries"
-          type="button"
-          onclick={() => void save()}
-        >
-          {#if saving}
-            <Loader2 size={14} class="animate-spin" />
-          {:else}
-            <Save size={14} />
-          {/if}
-          Save
-        </button>
+        {#if currentSection === 'active'}
+          <button
+            class="flex items-center gap-1.5 rounded-lg border bg-elevated px-3 py-1.5 text-sm font-medium transition-colors hover:bg-overlay"
+            title="Add a new memory entry"
+            type="button"
+            onclick={addEntry}
+          >
+            <Plus size={14} />
+            Add Memory
+          </button>
+        {/if}
+        {#if currentSection !== 'proposed'}
+          <button
+            class="flex items-center gap-1.5 rounded-lg bg-primary px-4 py-1.5 text-sm font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-50"
+            disabled={saving || loading}
+            title="Save all memory entries"
+            type="button"
+            onclick={() => void save()}
+          >
+            {#if saving}
+              <Loader2 size={14} class="animate-spin" />
+            {:else}
+              <Save size={14} />
+            {/if}
+            Save
+          </button>
+        {/if}
         {#if saved}
           <span class="text-xs text-primary">Saved</span>
         {/if}
@@ -756,6 +766,7 @@
             index={entries.indexOf(entry)}
             {projectId}
             scopeOptions={availableScopes}
+            initiallyExpanded={entry.id === lastAddedId}
             onUpdate={updateEntry}
             onRemove={removeEntry}
           />

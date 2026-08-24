@@ -12,6 +12,7 @@
     index: number
     projectId?: string
     scopeOptions: Array<{ value: MemoryScope; label: string }>
+    initiallyExpanded?: boolean
     onUpdate: (
       index: number,
       field: keyof MemoryEntry,
@@ -20,8 +21,9 @@
     onRemove: (index: number) => void
   }
 
-  let { entry, index, projectId, scopeOptions, onUpdate, onRemove }: Props = $props()
-  let expanded = $state(false)
+  let { entry, index, projectId, scopeOptions, initiallyExpanded, onUpdate, onRemove }: Props =
+    $props()
+  let expanded = $state(initiallyExpanded ?? false)
   let selectedModel = $derived(
     (entry.modelKeys ?? []).map((key) => parseModelKey(key)).find((model) => model !== null)
   )
