@@ -80,7 +80,7 @@
   <button
     type="button"
     class="flex h-7 w-7 items-center justify-center rounded-lg transition-colors {filled
-      ? 'text-accent'
+      ? 'text-thread-spec'
       : 'text-muted hover:bg-elevated hover:text-foreground'}"
     title="Engineering Toolbox"
     aria-label="Open Engineering Toolbox"
@@ -91,8 +91,9 @@
   >
     <Toolbox
       size={15}
-      class={filled ? 'text-accent' : ''}
-      fill={filled ? 'currentColor' : 'none'}
+      class={filled ? 'text-thread-spec' : ''}
+      fill={filled ? 'var(--color-thread-spec)' : 'none'}
+      fill-opacity={filled ? 0.18 : undefined}
     />
   </button>
 
