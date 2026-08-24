@@ -1657,11 +1657,6 @@ export function validateAppConfigPatch(value: unknown): AppConfigPatch {
       typeof sound.remoteCleanupEnabled !== 'boolean' ||
       (sound.remoteCleanupSelection !== 'fixed' &&
         sound.remoteCleanupSelection !== 'conversation') ||
-      (sound.runtimeOverride !== undefined &&
-        sound.runtimeOverride !== 'mlx' &&
-        sound.runtimeOverride !== 'sherpa-onnx' &&
-        sound.runtimeOverride !== 'coreml' &&
-        sound.runtimeOverride !== 'gguf') ||
       typeof sound.includeCodeBlocksInSpeech !== 'boolean' ||
       !Array.isArray(sound.preferredLanguages) ||
       !sound.preferredLanguages.every(
@@ -1695,7 +1690,6 @@ export function validateAppConfigPatch(value: unknown): AppConfigPatch {
       return candidate
     }
     patch.sound = {
-      runtimeOverride: sound.runtimeOverride,
       asrArtifactId: optionalId('asrArtifactId'),
       cleanupArtifactId: optionalId('cleanupArtifactId'),
       ttsArtifactId: optionalId('ttsArtifactId'),

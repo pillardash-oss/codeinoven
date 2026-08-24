@@ -29,7 +29,6 @@ import type {
   SpeechTranscriptionResult
 } from '../../lib/speech/types'
 import {
-  DEFAULT_SPEECH_SETTINGS,
   MAX_SPEECH_CHUNK_BYTES,
   recommendedSpeechRuntime,
   resolveSpeechRuntime
@@ -158,7 +157,7 @@ export class SpeechService {
         }
       })
     )
-    const selected = resolveSpeechRuntime(target, runtimes, DEFAULT_SPEECH_SETTINGS.runtimeOverride)
+    const selected = resolveSpeechRuntime(target, runtimes)
     return {
       target,
       runtimes,

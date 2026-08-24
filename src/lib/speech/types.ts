@@ -355,7 +355,6 @@ export interface SpeechDictionaryEntry {
 }
 
 export interface SpeechSettings {
-  runtimeOverride?: SpeechRuntime
   asrArtifactId?: string
   cleanupArtifactId?: string
   ttsArtifactId?: string
