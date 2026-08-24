@@ -217,7 +217,10 @@ export class CheckpointManager {
         allChanges.length > 0 ? await this.foreignClaimedPaths(checkpoint, options) : undefined
       const precisePaths = options.precisePaths ?? new Set<string>()
       const keepChange = (path: string): boolean =>
-        foreign === undefined || !foreign.has(path) || precisePaths.has(path)
+        foreign === undefined ||
+        !foreign.has(path) ||
+        precisePaths.has(path) ||
+        (changedPaths?.has(path) ?? false)
       const changes = changedPaths
         ? allChanges.filter((change) => changedPaths.has(change.path) && keepChange(change.path))
         : allChanges.filter((change) => keepChange(change.path))
