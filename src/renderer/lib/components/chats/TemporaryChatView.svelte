@@ -22,6 +22,7 @@
   import MediaPreview from './MediaPreview.svelte'
   import MarkdownView from '../markdown/MarkdownView.svelte'
   import WorkingTrace from '../threads/WorkingTrace.svelte'
+  import AgentProviderStatusCard from '../threads/AgentProviderStatusCard.svelte'
   import AgentIcon from '$lib/agent-icons/AgentIcon.svelte'
   import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
   import { fastBaseModelId, fastVariantForModelId } from '$shared/fast-inference'
@@ -46,6 +47,8 @@
     AgentMessage,
     AgentEvent,
     AgentPart,
+    AgentProviderIssue,
+    AgentSessionStatus,
     PromptAttachment,
     PromptReference,
     ProviderCatalog,
@@ -99,6 +102,31 @@
       ? (getAgentIcon(tab.settings.harnessId)?.name ?? tab.settings.harnessId)
       : null
   )
+
+  /** Provider status card shown above the composer, mirroring the main chat: a
+   *  rich waiting/error status when the session reported one, falling back to a
+   *  generic issue built from the plain error string otherwise. */
+  const visibleStatus = $derived.by<Extract<
+    AgentSessionStatus,
+    { state: 'waiting' | 'error' }
+  > | null>(() => {
+    if (tab.status) return tab.status
+    if (!tab.error) return null
+    return {
+      state: 'error',
+      issue: {
+        kind: 'unknown',
+        message: tab.error,
+        harnessId: tab.settings.harnessId ?? 'opencode',
+        retryable: false
+      }
+    }
+  })
+
+  function setError(issue: AgentProviderIssue | null | undefined, fallback: string | null): void {
+    tab.error = issue?.message ?? fallback ?? ''
+    tab.status = issue ? { state: 'error', issue } : null
+  }
 
   function textFor(message: AgentMessage): string {
     return message.parts
@@ -408,13 +436,17 @@
         )
         break
       case 'session.error':
-        tab.error = event.issue?.message ?? event.error ?? 'The audit session failed.'
+        setError(event.issue, event.error ?? 'The temporary chat session failed.')
         tab.busy = false
         break
       case 'session.status':
         if (event.status.state === 'error') {
-          tab.error = event.status.issue.message
+          setError(event.status.issue, null)
           tab.busy = false
+        } else if (event.status.state === 'waiting') {
+          tab.status = event.status
+        } else {
+          tab.status = null
         }
         break
       case 'session.idle':
@@ -561,6 +593,7 @@
     tab.draft = ''
     tab.busy = true
     tab.error = ''
+    tab.status = null
     tab.sessionStarted = true
     try {
       const response = await invoke(
@@ -620,6 +653,22 @@
       aborting = false
       tab.error = error instanceof Error ? error.message : 'The request could not be stopped.'
     }
+  }
+
+  /** Retry the most recent user prompt, mirroring the main chat's retry of a
+   *  failed/errored turn. Clears the error card and re-sends the last prompt. */
+  async function retryLastTurn(): Promise<void> {
+    if (tab.busy || tab.expired) return
+    const lastUser = [...tab.messages].reverse().find((message) => message.role === 'user')
+    const text = lastUser ? textFor(lastUser) : ''
+    if (!text.trim()) {
+      tab.error = ''
+      tab.status = null
+      return
+    }
+    tab.error = ''
+    tab.status = null
+    await send(text, [], text)
   }
 
   /**
@@ -935,23 +984,6 @@
           </div>
         {/if}
 
-        {#if tab.error}
-          <div
-            class="flex items-start justify-between gap-2 rounded-lg border border-danger/30 bg-danger/10 px-3 py-2 text-xs text-danger"
-          >
-            <span>{tab.error}</span>
-            <button
-              type="button"
-              class="shrink-0 rounded p-0.5 transition-colors hover:bg-danger/10"
-              title="Dismiss error"
-              aria-label="Dismiss temporary chat error"
-              onclick={() => (tab.error = '')}
-            >
-              <X size={12} />
-            </button>
-          </div>
-        {/if}
-
         {#if continueError}
           <div
             class="flex items-start justify-between gap-2 rounded-lg border border-danger/30 bg-danger/10 px-3 py-2 text-xs text-danger"
@@ -1068,6 +1100,33 @@
             {/if}
             <p class="px-3 pb-2.5 text-[12px] text-muted line-clamp-3">{queued.text}</p>
           </div>
+        </div>
+      </div>
+    {/if}
+    {#if visibleStatus}
+      <div class="shrink-0 border-t border-border bg-app px-3 pb-2 pt-3">
+        <div class="mx-auto max-w-2xl">
+          <AgentProviderStatusCard
+            status={visibleStatus}
+            providerName={harnessName ?? tab.settings.harnessId ?? 'OpenCode'}
+            settings={tab.settings}
+            {providers}
+            projectId={tab.projectId}
+            favoriteModels={rendererRecovery.chatFavoriteModels}
+            recentModels={rendererRecovery.chatRecentModels}
+            onModelChange={updateSettings}
+            onToggleFavorite={(providerId, modelId, harnessId) =>
+              rendererRecovery.toggleChatFavorite(modelKey(harnessId, providerId, modelId))}
+            onReorderFavorite={(draggedKey, targetKey, position) =>
+              rendererRecovery.reorderChatFavorite(draggedKey, targetKey, position)}
+            onStop={stopRun}
+            onRetry={() => void retryLastTurn()}
+            onDismiss={() => {
+              tab.error = ''
+              tab.status = null
+            }}
+            retryLabel="Retry"
+          />
         </div>
       </div>
     {/if}

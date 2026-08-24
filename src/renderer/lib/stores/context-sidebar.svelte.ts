@@ -1,7 +1,12 @@
 import { invoke } from '$lib/ipc.svelte'
 import { gitState } from './git.svelte'
 import { APP_SLUG } from '$shared/brand'
-import type { AgentMessage, AgentSubagentActivity, ThreadSettings } from '$shared/types'
+import type {
+  AgentMessage,
+  AgentSessionStatus,
+  AgentSubagentActivity,
+  ThreadSettings
+} from '$shared/types'
 
 const TEMPORARY_CHAT_INACTIVITY_MS = 3 * 60 * 60 * 1000
 const CONTEXT_SIDEBAR_MIN_WIDTH = 340
@@ -180,6 +185,9 @@ export interface TemporaryChatContextTab {
   messages: AgentMessage[]
   busy: boolean
   error: string
+  /** Structured provider lifecycle state mirroring the main chat, so the
+   *  temporary chat renders the same provider status card above its composer. */
+  status: Extract<AgentSessionStatus, { state: 'waiting' | 'error' }> | null
   draft: string
   selectionAttached: boolean
   selectionMessageId: string | null
@@ -548,7 +556,8 @@ class ContextSidebarState {
     // to the outgoing project and must be detached from the store layer so the
     // floating view never outlives its sidebar visibility.
     const browserWasVisible = this.browserVisible
-    const previousBrowserTabId = this.browserActiveTabId ?? this.activeBrowserTabs.at(-1)?.id ?? null
+    const previousBrowserTabId =
+      this.browserActiveTabId ?? this.activeBrowserTabs.at(-1)?.id ?? null
     this.activeProjectId = projectId
     this.activeThreadId = threadId
     this.ensureProjectContext(projectId)
@@ -1153,6 +1162,7 @@ class ContextSidebarState {
       messages: [],
       busy: false,
       error: '',
+      status: null,
       draft: '',
       selectionAttached,
       selectionMessageId: null,
@@ -1185,6 +1195,7 @@ class ContextSidebarState {
     tab.initialContext = ''
     tab.busy = false
     tab.error = ''
+    tab.status = null
     tab.selectionAttached = false
     tab.selectionMessageId = null
     this.clearTemporaryChatExpiry(temporaryChatId)
@@ -1198,6 +1209,7 @@ class ContextSidebarState {
     tab.messages = []
     tab.busy = false
     tab.error = ''
+    tab.status = null
     tab.draft = ''
     // Re-attach the selections on restart only when there are any — a quick chat
     // opened from the last agent turn has no selection attached.
