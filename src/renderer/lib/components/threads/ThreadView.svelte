@@ -4353,58 +4353,37 @@
     const assistant = messages[messageIndex]
     if (!assistant || assistant.role !== 'assistant') return null
 
-    let sourceMessage: AgentMessage | null = null
-    for (let index = messageIndex - 1; index >= 0; index -= 1) {
-      const candidate = messages[index]
-      if (candidate?.role !== 'user') continue
-      // Question-answer and activity-only user messages are mid-turn responses,
-      // not new turn sources — skip them so the card attaches to the real user
-      // message that started this turn (which may precede an in-turn question).
-      if (!candidate.parts.some((part) => part.type === 'text')) continue
-      sourceMessage = candidate
-      break
-    }
-
+    // A checkpoint's turn spans beginTurn (createdAt) → completeTurn
+    // (completedAt). Every message of that turn — including steers,
+    // question-answers, permission prompts, sub-agent spawns, and compaction —
+    // falls inside this window, so match the card by time instead of walking
+    // back to a "user" message (whose role/shape varies with what the agent
+    // did mid-turn). Choosing the most recent window resolves
+    // interrupted-then-resumed turns to the resumed checkpoint.
     const completed = checkpoints.filter((checkpoint) => checkpoint.status !== 'active')
-    const exact = completed.find(
-      (checkpoint) =>
-        checkpoint.sourceMessageId === assistant.id ||
-        checkpoint.sourceMessageId === sourceMessage?.id
-    )
-    if (exact) return exact
+    let owner: TurnCheckpointSummary | null = null
+    for (const checkpoint of completed) {
+      const end = checkpoint.completedAt ?? checkpoint.createdAt
+      if (assistant.createdAt >= checkpoint.createdAt - 5_000 && assistant.createdAt <= end) {
+        if (!owner || checkpoint.createdAt > owner.createdAt) owner = checkpoint
+      }
+    }
+    return owner
+  }
 
-    // When the turn's source user message IS loaded, the id match is
-    // authoritative: a checkpoint that doesn't match this turn's user message
-    // belongs to a different — earlier — turn. A previous turn can be
-    // temporally adjacent to the current in-progress turn (e.g. a queued
-    // message sent the moment the agent idled), so a time-based fallback here
-    // would render the previous turn's file card under the current turn while
-    // it is still working. The time fallback is only valid when the source
-    // user message is outside the loaded history window.
-    if (sourceMessage) return null
-
-    // The source user message may not be paged in yet (it can live outside the
-    // initially loaded history window — a single turn can span dozens of tool
-    // messages), so an id match alone can miss a turn until the user scrolls.
-    // Fall back to matching the checkpoint to this turn by time: the checkpoint
-    // is created at the turn's start and completed just after its last message,
-    // so compare its completedAt against this assistant message.
-    const turnStart = assistant.createdAt
-    const nextUser = messages.slice(messageIndex + 1).find((message) => message.role === 'user')
-    const turnEnd = nextUser?.createdAt ?? Number.POSITIVE_INFINITY
-    const withinTurn = completed.filter(
-      (checkpoint) =>
-        (checkpoint.completedAt ?? checkpoint.createdAt) >= turnStart - 5_000 &&
-        checkpoint.createdAt < turnEnd
-    )
-    const targetTime = assistant.completedAt ?? assistant.createdAt
-    return (
-      withinTurn.sort(
-        (left, right) =>
-          Math.abs((left.completedAt ?? left.createdAt) - targetTime) -
-          Math.abs((right.completedAt ?? right.createdAt) - targetTime)
-      )[0] ?? null
-    )
+  /** True when `messageIndex` is the final assistant message of `checkpoint`'s
+   *  turn — the single place its file card should render. Keeps a card from
+   *  being drawn multiple times when mid-turn question-answer user messages
+   *  split the visual turn into several `isTurnEnd` boundaries. */
+  function isCheckpointTurnEnd(messageIndex: number, checkpoint: TurnCheckpointSummary): boolean {
+    const start = checkpoint.createdAt - 5_000
+    const end = checkpoint.completedAt ?? checkpoint.createdAt
+    for (let index = messageIndex + 1; index < messages.length; index += 1) {
+      const candidate = messages[index]
+      if (candidate?.role !== 'assistant') continue
+      if (candidate.createdAt >= start && candidate.createdAt <= end) return false
+    }
+    return true
   }
 
   async function openCheckpointFile(checkpointId: string, path: string): Promise<void> {
@@ -8616,7 +8595,7 @@
                         {/if}
                       {/if}
 
-                      {#if turnCheckpoint && turnCheckpoint.changes.length > 0}
+                      {#if turnCheckpoint && turnCheckpoint.changes.length > 0 && isCheckpointTurnEnd(msgIndex, turnCheckpoint)}
                         <div class="mt-3">
                           <RunChangesCard
                             checkpoint={turnCheckpoint}
