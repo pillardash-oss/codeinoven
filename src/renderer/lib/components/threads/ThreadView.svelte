@@ -4900,6 +4900,58 @@
     }
   }
 
+  /** Revert an accidental engineering-mode send. The pending user message that
+   *  triggered the "Plan your work" card is deleted from the thread, restored
+   *  into the composer as a draft, and engineering mode is turned off so the
+   *  message can be sent again as a normal chat message. */
+  async function revertEngineeringEntryChoice(): Promise<void> {
+    if (busy || brainstormBusy) return
+    const { projectId, id } = thread
+    const pendingId = latestUserMessageId()
+    const pending = pendingId ? messages.find((m) => m.id === pendingId) : undefined
+    const draft = pending ? messageText(pending) : ''
+    const attachments = pending
+      ? pending.parts
+          .filter((p): p is Extract<AgentPart, { type: 'file' }> => p.type === 'file')
+          .map((p) => ({ mime: p.mime, url: p.url, filename: p.filename }))
+      : []
+    const projectReferences = pending?.projectReferences ?? []
+
+    brainstormGenerationFailed = false
+    brainstormError = ''
+    errorMessage = ''
+    brainstormWorkflow = null
+    brainstormBusy = true
+    try {
+      if (pendingId) {
+        await threadMessages.truncate(projectId, id, pendingId)
+      }
+      await invoke('brainstorm:resetWorkflow', projectId, id)
+      if (
+        engineeringLifecycle &&
+        (engineeringLifecycle.selection !== 'none' ||
+          engineeringLifecycle.activeStage !== undefined ||
+          engineeringLifecycle.humanGate !== undefined)
+      ) {
+        engineeringLifecycle = await invoke('engineeringLifecycle:cancel', projectId, id, true)
+      }
+      updateSettings(settingsForEngineeringState(engineeringLifecycle))
+      await invoke('thread:setStatus', projectId, id, 'created')
+      if (draft || attachments.length > 0 || projectReferences.length > 0) {
+        rendererRecovery.setDraft(projectId, id, draft, attachments, projectReferences)
+        composerRestoreKey += 1
+      }
+      await reconcileReadySpec()
+    } catch (error) {
+      errorMessage =
+        error instanceof Error
+          ? error.message
+          : 'The engineering entry choice could not be reverted.'
+    } finally {
+      brainstormBusy = false
+    }
+  }
+
   function openBrainstormStudio(): void {
     if (!brainstorm) return
     selectedBrainstormVersion = brainstorm.version
@@ -8949,6 +9001,7 @@
                 busy={brainstormBusy}
                 onStartBrainstorm={() => chooseBrainstormEntry('brainstorm')}
                 onJumpToSpec={() => chooseBrainstormEntry('spec')}
+                onClose={revertEngineeringEntryChoice}
               />
             {:else if pendingPermissions.length > 0 && !achievementAutonomous}
               {@const pendingPermission = pendingPermissions[0]}

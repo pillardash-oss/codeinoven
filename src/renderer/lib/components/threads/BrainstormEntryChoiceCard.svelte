@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { FileText, Lightbulb, Loader2, Sparkles } from '@lucide/svelte'
+  import { FileText, Lightbulb, Loader2, Sparkles, X } from '@lucide/svelte'
   import ModelPicker from '../shared/ModelPicker.svelte'
   import type { ProviderCatalog, ThreadSettings, ThinkingLevel } from '$shared/types'
 
@@ -15,6 +15,8 @@
     onJumpToSpec: () => void | Promise<void>
     onModelChange?: (settings: ThreadSettings) => void
     onCancel?: () => void
+    /** Dismiss the card and revert an accidental engineering-mode send. */
+    onClose?: () => void | Promise<void>
     onToggleFavorite?: (providerId: string, modelId: string, harnessId: string) => void
     onReorderFavorite?: (
       draggedKey: string,
@@ -35,6 +37,7 @@
     onJumpToSpec,
     onModelChange,
     onCancel,
+    onClose,
     onToggleFavorite,
     onReorderFavorite
   }: Props = $props()
@@ -62,6 +65,18 @@
   <div class="flex items-center gap-2 border-b px-4 py-2.5">
     <Sparkles size={15} class="shrink-0 text-accent" />
     <p class="truncate text-xs font-semibold uppercase tracking-wide text-muted">Plan your work</p>
+    {#if onClose}
+      <button
+        type="button"
+        class="ml-auto flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-40"
+        title="Close and revert this message to a normal chat draft"
+        aria-label="Close and revert this message to a normal chat draft"
+        disabled={busy}
+        onclick={() => void onClose()}
+      >
+        <X size={14} />
+      </button>
+    {/if}
   </div>
 
   <div class="space-y-1.5 p-4">
