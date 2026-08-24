@@ -472,7 +472,7 @@
 </script>
 
 <div
-  class="flex h-full min-h-0 flex-col {variant === 'settings'
+  class="memory-panel flex h-full min-h-0 flex-col {variant === 'settings'
     ? 'mx-auto w-full max-w-3xl p-6'
     : 'p-5'}"
 >
@@ -622,21 +622,23 @@
         {/if}
         {#if currentSection === 'active'}
           <button
-            class="flex items-center gap-1.5 rounded-lg border bg-elevated px-3 py-1.5 text-sm font-medium transition-colors hover:bg-overlay disabled:opacity-50"
+            class="memory-action-btn flex items-center gap-1.5 rounded-lg border bg-elevated px-3 py-1.5 text-sm font-medium transition-colors hover:bg-overlay disabled:opacity-50"
             disabled={saving || loading}
             title="Add a new memory entry"
+            aria-label="Add a new memory entry"
             type="button"
             onclick={addEntry}
           >
             <Plus size={14} />
-            Add Memory
+            <span class="memory-action-label">Add Memory</span>
           </button>
         {/if}
         {#if currentSection !== 'proposed'}
           <button
-            class="flex items-center gap-1.5 rounded-lg bg-primary px-4 py-1.5 text-sm font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-50"
+            class="memory-action-btn flex items-center gap-1.5 rounded-lg bg-primary px-4 py-1.5 text-sm font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-50"
             disabled={saving || loading}
             title={saved ? 'All memories saved' : 'Save all memory entries'}
+            aria-label={saved ? 'All memories saved' : 'Save all memory entries'}
             type="button"
             onclick={() => void save()}
           >
@@ -647,7 +649,7 @@
             {:else}
               <Save size={14} />
             {/if}
-            {saved ? 'Saved' : 'Save'}
+            <span class="memory-action-label">{saved ? 'Saved' : 'Save'}</span>
           </button>
         {/if}
         {#if variant === 'sidebar' && allowTransfer && projectId}
@@ -795,3 +797,19 @@
     </div>
   {/if}
 </div>
+
+<style>
+  .memory-panel {
+    container-type: inline-size;
+  }
+
+  @container (max-width: 480px) {
+    .memory-action-label {
+      display: none;
+    }
+
+    .memory-action-btn {
+      padding-inline: 0.5rem;
+    }
+  }
+</style>
