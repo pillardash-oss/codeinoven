@@ -210,17 +210,7 @@ class SpeechController {
         targetId: active.target.id,
         attemptId: active.attemptId
       }
-      const selection = await this.selectAsrArtifact()
-      const result = await invoke(
-        'speech:transcribe',
-        active.attemptId,
-        selection.runtime,
-        selection.artifact.id,
-        'auto',
-        this.cleanupMode()
-      )
-      if (!result.ok) throw new Error(result.error.message)
-      const transcript = result.value.finalTranscript
+      const transcript = await this.transcribeActive(active)
       await invoke('clipboard:writeText', transcript)
       const inserted = active.target.apply(active.snapshot, transcript)
       this.playCue('completed')
@@ -413,6 +403,55 @@ class SpeechController {
     if (!artifact)
       throw new Error(`Install a qualified ${runtime} speech-to-text model in Sound settings.`)
     return { runtime, artifact }
+  }
+
+  /**
+   * Produce the final transcript for a finished capture. Prefers an installed
+   * local ASR model; when voice recording is enabled and no local ASR is
+   * installed, falls back to audio-to-LLM transcription (audio never leaves the
+   * device unless the user has opted in via the default-`false` toggle).
+   */
+  private async transcribeActive(active: ActiveCapture): Promise<string> {
+    if (this.sound.voiceRecordingEnabled) {
+      let selection: { runtime: SpeechRuntime; artifact: SpeechModelArtifact } | null
+      try {
+        selection = await this.selectAsrArtifact()
+      } catch {
+        selection = null
+      }
+      if (selection) {
+        const result = await invoke(
+          'speech:transcribe',
+          active.attemptId,
+          selection.runtime,
+          selection.artifact.id,
+          'auto',
+          this.cleanupMode()
+        )
+        if (!result.ok) throw new Error(result.error.message)
+        return result.value.finalTranscript
+      }
+      const audioLlm = await invoke(
+        'speech:transcribeAudioToLlm',
+        active.attemptId,
+        active.scope,
+        'auto',
+        this.cleanupMode()
+      )
+      if (!audioLlm.ok) throw new Error(audioLlm.error.message)
+      return audioLlm.value.finalTranscript
+    }
+    const selection = await this.selectAsrArtifact()
+    const result = await invoke(
+      'speech:transcribe',
+      active.attemptId,
+      selection.runtime,
+      selection.artifact.id,
+      'auto',
+      this.cleanupMode()
+    )
+    if (!result.ok) throw new Error(result.error.message)
+    return result.value.finalTranscript
   }
 
   private cleanupMode(): import('../../../lib/speech/types').SpeechCleanupMode {

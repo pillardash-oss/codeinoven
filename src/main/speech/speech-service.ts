@@ -72,6 +72,21 @@ export type SpeechRemoteCleanupExecutor = (
   input: SpeechRemoteCleanupInput
 ) => Promise<SpeechRemoteCleanupOutput>
 
+export interface SpeechAudioTranscribeInput {
+  audio: Uint8Array<ArrayBuffer>
+  language: string | 'auto'
+  scope: SpeechScope
+}
+
+export interface SpeechAudioTranscribeOutput {
+  text: string
+  modelId: string
+}
+
+export type SpeechAudioTranscribeExecutor = (
+  input: SpeechAudioTranscribeInput
+) => Promise<SpeechAudioTranscribeOutput>
+
 type SpeechProgressListener = (event: SpeechProgressEvent) => void
 
 const DOWNLOAD_CHUNK_BYTES = 256 * 1024
@@ -95,7 +110,8 @@ export class SpeechService {
   constructor(
     private readonly paths: SpeechServicePaths,
     storage?: SpeechStorage,
-    private readonly remoteCleanup?: SpeechRemoteCleanupExecutor
+    private readonly remoteCleanup?: SpeechRemoteCleanupExecutor,
+    private readonly transcribeAudio?: SpeechAudioTranscribeExecutor
   ) {
     this.storage = storage ?? new SpeechStorage()
     this.backends = new Map<SpeechRuntime, SpeechBackend>([
@@ -348,6 +364,67 @@ export class SpeechService {
 
   enforceHistoryLimit(limit: number): Promise<void> {
     return this.storage.enforceHistoryLimit(limit)
+  }
+
+  /**
+   * Transcribe a finished recording by sending its audio to an audio-capable
+   * conversation model. This path is only reachable when the user has opted in
+   * via the default-`false` `voiceRecordingEnabled` setting; it never runs for
+   * the local-ASR flow. The raw transcript then flows through cleanup as usual.
+   */
+  async transcribeAudioToLlm(
+    attemptId: string,
+    scope: SpeechScope,
+    language: string | 'auto',
+    cleanupMode: SpeechCleanupMode = { kind: 'local' }
+  ): Promise<SpeechTranscriptionResult> {
+    if (!this.transcribeAudio) {
+      throw new Error('Audio-to-LLM transcription is unavailable.')
+    }
+    const attempt = this.storage.getAttempt(attemptId)
+    if (!attempt?.audioAvailable) throw new Error('Recording audio is unavailable.')
+    await this.storage.updateAttempt(attemptId, (current) => {
+      current.stage = 'transcribing'
+    })
+    const audio = await this.storage.readAudio(attemptId)
+    try {
+      const remote = await this.transcribeAudio({ audio, language, scope })
+      const rawTranscript = remote.text
+      const finalized = await this.runCleanup(rawTranscript, cleanupMode, scope)
+      await this.storage.updateAttempt(attemptId, (current) => {
+        current.stage = 'completed'
+        current.rawTranscript = rawTranscript
+        current.cleanedTranscript = finalized.provenance.failed ? undefined : finalized.text
+        current.finalTranscript = finalized.text
+        current.cleanupProvenance = finalized.provenance
+        if (finalized.provenance.failed && finalized.provenance.error) {
+          current.errors.push({
+            stage: 'cleaning',
+            error: finalized.provenance.error,
+            occurredAt: Date.now()
+          })
+        }
+      })
+      this.emit({ kind: 'history', attemptId, stage: 'completed' })
+      return {
+        attemptId,
+        jobId: `audio-llm-${attemptId}`,
+        rawTranscript,
+        finalTranscript: finalized.text
+      }
+    } catch (cause) {
+      const error = this.asError(cause, 'audio-llm-unavailable')
+      await this.storage.updateAttempt(attemptId, (current) => {
+        current.stage = error.code === 'cancelled' ? 'cancelled' : 'failed'
+        current.errors.push({
+          stage: 'transcribing',
+          error: { code: error.code, message: error.message, retryable: true },
+          occurredAt: Date.now()
+        })
+      })
+      this.emit({ kind: 'history', attemptId, stage: 'failed' })
+      throw cause
+    }
   }
 
   requestConfirmation(action: SpeechDestructiveAction, targetId: string): SpeechConfirmation {
@@ -706,6 +783,106 @@ export class SpeechService {
     const backend = this.backends.get(runtime)
     if (!backend) throw new Error(`Unsupported speech runtime: ${runtime}`)
     return backend
+  }
+
+  /** Resolve an installed, qualified cleanup artifact for a runtime, if any. */
+  private installedCleanupArtifact(runtime: SpeechRuntime): SpeechModelArtifact | null {
+    const artifact = this.requireCatalog().artifacts.find(
+      (candidate) =>
+        candidate.capability === 'cleanup' &&
+        candidate.runtime === runtime &&
+        candidate.qualification.status === 'qualified'
+    )
+    if (!artifact) return null
+    const installed = this.installed.artifacts.find(
+      (item) => item.artifactId === artifact.id && item.available && item.runtime === runtime
+    )
+    return installed ? artifact : null
+  }
+
+  /**
+   * Apply cleanup to a transcript for the local-LLM / audio-to-LLM path. Prefers
+   * an installed local cleanup model when present, otherwise applies learned
+   * correction rules with no model, and never switches path silently on failure
+   * (raw transcript is returned).
+   */
+  private async runCleanup(
+    rawTranscript: string,
+    mode: SpeechCleanupMode,
+    scope: SpeechScope
+  ): Promise<{
+    text: string
+    provenance: {
+      mode: 'none' | 'local' | 'remote'
+      runtime?: SpeechRuntime
+      artifactId?: string
+      modelId?: string
+      appliedRuleIds: string[]
+      failed: boolean
+      error?: SpeechError
+    }
+  }> {
+    if (mode.kind === 'disabled') {
+      return { text: rawTranscript, provenance: { mode: 'none', appliedRuleIds: [], failed: false } }
+    }
+    if (mode.kind === 'remote') {
+      try {
+        if (!this.remoteCleanup) throw new Error('Remote cleanup is unavailable.')
+        const remote = await this.remoteCleanup({
+          transcript: rawTranscript,
+          scope,
+          selection: mode.selection,
+          ...(mode.modelId ? { modelId: mode.modelId } : {})
+        })
+        const cleaned = this.cleanup.applyRules(remote.text, this.learning.enabled(scope))
+        return {
+          text: cleaned.text,
+          provenance: {
+            mode: 'remote',
+            modelId: remote.modelId,
+            appliedRuleIds: cleaned.provenance.appliedRuleIds,
+            failed: false
+          }
+        }
+      } catch (cause) {
+        const fallback = this.cleanup.fallback(rawTranscript, cause)
+        return { text: fallback.text, provenance: { ...fallback.provenance, mode: 'remote' } }
+      }
+    }
+    try {
+      const runtime = this.currentRuntime()
+      const artifact = this.installedCleanupArtifact(runtime)
+      const punctuated = artifact
+        ? await this.queue
+            .enqueue({
+              capability: 'cleanup',
+              runtime,
+              run: (signal) =>
+                this.requireBackend(runtime).cleanup(
+                  rawTranscript,
+                  { id: artifact.id, directory: this.storage.modelDirectory(artifact.id) },
+                  signal
+                )
+            })
+            .result.catch(() => rawTranscript)
+        : rawTranscript
+      const cleaned = this.cleanup.applyRules(punctuated, this.learning.enabled(scope))
+      return {
+        text: cleaned.text,
+        provenance: {
+          ...cleaned.provenance,
+          mode: 'local',
+          ...(artifact ? { runtime, artifactId: artifact.id } : {})
+        }
+      }
+    } catch (cause) {
+      const fallback = this.cleanup.fallback(rawTranscript, cause)
+      return { text: fallback.text, provenance: { ...fallback.provenance, mode: 'local' } }
+    }
+  }
+
+  private currentRuntime(): SpeechRuntime {
+    return recommendedSpeechRuntime(this.platformTarget())
   }
 
   private requireCatalog(): SpeechModelCatalog {

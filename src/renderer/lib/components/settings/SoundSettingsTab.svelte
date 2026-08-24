@@ -194,6 +194,24 @@
       </div>
     </section>
 
+    <section id="settings-block-sound-voice-recording" class="rounded-xl border bg-surface p-4">
+      <div class="flex items-center justify-between gap-4">
+        <div>
+          <p class="text-sm font-medium">Enable voice recording</p>
+          <p class="text-xs text-dimmed">
+            When no local speech-to-text model is installed, dictation can send audio to an
+            audio-capable conversation model. Audio never leaves this device unless you turn this
+            on. Off by default.
+          </p>
+        </div>
+        <Switch
+          checked={settings.voiceRecordingEnabled}
+          onchange={(checked) => patch({ voiceRecordingEnabled: checked })}
+          aria-label="Toggle voice recording via the conversation model"
+        />
+      </div>
+    </section>
+
     <section id="settings-block-sound-cues" class="rounded-xl border bg-surface p-4">
       <h2 class="mb-3 text-xs font-semibold uppercase tracking-wide text-muted">
         Cues and playback

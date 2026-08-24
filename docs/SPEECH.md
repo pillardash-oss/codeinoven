@@ -56,11 +56,17 @@ Unlimited recording can still consume substantial disk space. The Sound page rep
 
 ## Dictation and clipboard
 
-Every agent-directed editor receives the same microphone control immediately before its send or submit action. Clicking once starts capture; clicking again stops it. Distinct cues mark active capture, successful stop, and finalized transcription.
+Every agent-directed editor receives the same microphone control immediately before its send or submit action. The control is a slim `h-8 w-8` icon button that matches the send button: its `Mic` SVG turns filled red and pulses while capturing, shows a small animated waveform while the recording is being processed, and returns to the plain `Mic` when idle. There is no recording-duration display. Clicking once starts capture; clicking again stops it. Distinct cues mark active capture, successful stop, and finalized transcription.
+
+In the chat composer the mic swaps into the send-button slot whenever nothing is sendable (idle and empty), and sits beside the send button when there is content to send. Other agent-directed editors keep the mic before their send/submit action.
 
 The controller snapshots the editor and its selection before the microphone button moves focus. Final text replaces that selected range or inserts at the saved caret without overwriting adjacent text. If the target disappears or changes, CodeInOven keeps the transcript in history and the operating-system clipboard but does not insert it into an unrelated editor.
 
 Writing finalized dictation replaces the current operating-system clipboard contents. This is intentional so supported operating systems can include the transcript in clipboard history.
+
+### Voice recording without a local model
+
+The mic is hidden on machines with no installed local speech-to-text model unless the user explicitly enables **Enable voice recording** in the Sound page. This toggle is OFF by default and is the only exception that allows audio bytes to leave the device: when ON and no local ASR is installed, a finished recording is sent as an audio attachment to an audio-capable conversation model (a disposable, tool-free session) for transcription, and the resulting transcript then flows through cleanup as usual. When a local ASR model is installed it remains the preferred path. Audio never leaves the device while this toggle is OFF.
 
 ## Cleanup and privacy
 

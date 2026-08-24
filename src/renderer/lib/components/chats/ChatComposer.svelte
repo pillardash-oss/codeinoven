@@ -749,6 +749,9 @@
   /** Whether the button should show the stop icon (agent working, nothing to send). */
   let canStop = $derived(working && !hasSendableContent)
 
+  /** When nothing is sendable (or the composer is disabled), the mic replaces the send slot. */
+  let micReplacesSend = $derived(disabled || (!working && !hasSendableContent))
+
   // Cancel pending stop when the agent stops working on its own.
   $effect(() => {
     if (working) return
@@ -2398,55 +2401,65 @@
       />
     {/if}
 
-    <VoiceInputButton
-      targetId={composerEditorId}
-      getTarget={composerSpeechTarget}
-      scope={speechScope}
-      {disabled}
-    />
+    {#if micReplacesSend}
+      <!-- Nothing sendable: the mic swaps into the send-button slot. -->
+      <VoiceInputButton
+        targetId={composerEditorId}
+        getTarget={composerSpeechTarget}
+        scope={speechScope}
+        {disabled}
+      />
+    {:else}
+      <VoiceInputButton
+        targetId={composerEditorId}
+        getTarget={composerSpeechTarget}
+        scope={speechScope}
+        {disabled}
+      />
 
-    <!-- Send / Queue / Stop button.
-         - Agent idle:       ArrowUp (send) — primary, disabled when empty
-         - Agent working, user typing:  Clock (queue) — primary, always clickable
-         - Agent working, no text:      Square (stop) — danger tint
-         - Stop confirmation pending:   "Stop?" danger label -->
-    <button
-      type="button"
-      class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg transition-colors {pendingStop
-        ? 'bg-danger text-on-danger hover:bg-danger-hover'
-        : canStop
-          ? 'bg-danger/10 text-danger hover:bg-danger/20'
-          : 'bg-primary text-on-primary hover:bg-primary-hover'}"
-      aria-label={pendingStop
-        ? 'Confirm stop'
-        : canStop
-          ? 'Stop agent'
-          : working
-            ? 'Queue message'
-            : 'Send message'}
-      title={pendingStop
-        ? 'Click again to stop — Esc to cancel'
-        : canStop
-          ? 'Stop the running agent'
-          : working
-            ? `Queue — ${sendModifierLabel}Enter · Steer — ${sendModifierLabel}⇧Enter`
-            : `Send — ${sendModifierLabel}Enter`}
-      disabled={disabled || (!working && !hasSendableContent)}
-      onclick={() => submit()}
-    >
-      {#if pendingStop}
-        <span class="pending-stop-label text-[9px] font-semibold">Stop?</span>
-        <span class="pending-stop-icon">
+      <!-- Send / Queue / Stop button.
+           - Agent idle:       ArrowUp (send) — primary, disabled when empty
+           - Agent working, user typing:  Clock (queue) — primary, always clickable
+           - Agent working, no text:      Square (stop) — danger tint
+           - Stop confirmation pending:   "Stop?" danger label -->
+      <button
+        type="button"
+        class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg transition-colors {pendingStop
+          ? 'bg-danger text-on-danger hover:bg-danger-hover'
+          : canStop
+            ? 'bg-danger/10 text-danger hover:bg-danger/20'
+            : 'bg-primary text-on-primary hover:bg-primary-hover'}"
+        aria-label={pendingStop
+          ? 'Confirm stop'
+          : canStop
+            ? 'Stop agent'
+            : working
+              ? 'Queue message'
+              : 'Send message'}
+        title={pendingStop
+          ? 'Click again to stop — Esc to cancel'
+          : canStop
+            ? 'Stop the running agent'
+            : working
+              ? `Queue — ${sendModifierLabel}Enter · Steer — ${sendModifierLabel}⇧Enter`
+              : `Send — ${sendModifierLabel}Enter`}
+        disabled={disabled || (!working && !hasSendableContent)}
+        onclick={() => submit()}
+      >
+        {#if pendingStop}
+          <span class="pending-stop-label text-[9px] font-semibold">Stop?</span>
+          <span class="pending-stop-icon">
+            <Square size={14} />
+          </span>
+        {:else if canStop}
           <Square size={14} />
-        </span>
-      {:else if canStop}
-        <Square size={14} />
-      {:else if working}
-        <Clock size={15} />
-      {:else}
-        <ArrowUp size={16} />
-      {/if}
-    </button>
+        {:else if working}
+          <Clock size={15} />
+        {:else}
+          <ArrowUp size={16} />
+        {/if}
+      </button>
+    {/if}
   </div>
 </div>
 

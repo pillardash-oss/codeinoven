@@ -1664,6 +1664,7 @@ export function validateAppConfigPatch(value: unknown): AppConfigPatch {
       typeof sound.keepAsrLoaded !== 'boolean' ||
       typeof sound.keepCleanupLoaded !== 'boolean' ||
       typeof sound.keepTtsLoaded !== 'boolean' ||
+      typeof sound.voiceRecordingEnabled !== 'boolean' ||
       !Number.isSafeInteger(sound.historyLimit) ||
       Number(sound.historyLimit) < 1 ||
       Number(sound.historyLimit) > 500 ||
@@ -1706,7 +1707,8 @@ export function validateAppConfigPatch(value: unknown): AppConfigPatch {
       },
       keepAsrLoaded: sound.keepAsrLoaded,
       keepCleanupLoaded: sound.keepCleanupLoaded,
-      keepTtsLoaded: sound.keepTtsLoaded
+      keepTtsLoaded: sound.keepTtsLoaded,
+      voiceRecordingEnabled: sound.voiceRecordingEnabled
     }
   }
 

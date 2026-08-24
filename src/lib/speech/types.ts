@@ -351,6 +351,7 @@ export interface SpeechSettings {
   includeCodeBlocksInSpeech: boolean
   historyLimit: number
   cues: SpeechCueSettings
+  voiceRecordingEnabled: boolean
   keepAsrLoaded: boolean
   keepCleanupLoaded: boolean
   keepTtsLoaded: boolean
@@ -369,6 +370,7 @@ export const DEFAULT_SPEECH_SETTINGS: SpeechSettings = {
     transcriptReady: true,
     volume: 0.7
   },
+  voiceRecordingEnabled: false,
   keepAsrLoaded: false,
   keepCleanupLoaded: false,
   keepTtsLoaded: false
@@ -393,6 +395,7 @@ export type SpeechErrorCode =
   | 'cleanup-failed'
   | 'synthesis-failed'
   | 'not-found'
+  | 'audio-llm-unavailable'
   | 'confirmation-required'
   | 'confirmation-stale'
 

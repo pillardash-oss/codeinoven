@@ -206,6 +206,24 @@ export function registerSpeechIpc(
         )
       )
   )
+  ipcMain.handle(
+    'speech:transcribeAudioToLlm',
+    (
+      _event,
+      rawAttemptId: unknown,
+      rawScope: unknown,
+      rawLanguage: unknown,
+      rawCleanupMode: unknown
+    ) =>
+      speechResult(() =>
+        service.transcribeAudioToLlm(
+          entityId(rawAttemptId, 'Attempt id'),
+          scope(rawScope),
+          boundedString(rawLanguage, 'Language', 32),
+          cleanupMode(rawCleanupMode)
+        )
+      )
+  )
   ipcMain.handle('speech:getHistory', (_event, rawCursor?: unknown, rawLimit?: unknown) =>
     speechResult(() => {
       const cursor =
@@ -363,6 +381,7 @@ export function registerSpeechIpc(
       'speech:failCapture',
       'speech:markAttemptFailure',
       'speech:transcribe',
+      'speech:transcribeAudioToLlm',
       'speech:getHistory',
       'speech:enforceHistoryLimit',
       'speech:downloadArtifact',
