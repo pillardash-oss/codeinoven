@@ -287,21 +287,13 @@
         {/each}
       </div>
 
-      {#if activeIdFor(activeModelSubTab)}
-        <div class="flex items-center justify-between gap-3 rounded-lg border bg-success/5 px-3 py-2 border-success/20">
-          <p class="text-xs">
-            <span class="font-medium text-muted">Active for {activeModelSubTab.toUpperCase()}:</span>
-            <span class="ml-1 font-semibold text-success">{labelForInstalled(activeIdFor(activeModelSubTab)!)}</span>
-            <span class="ml-1 text-[11px] text-dimmed">(only this model stays resident)</span>
-          </p>
-          <button type="button" class="text-[11px] text-muted hover:text-foreground underline" onclick={() => clearActive(activeModelSubTab)}>Clear</button>
-        </div>
-      {:else}
-        <p class="rounded-lg border border-dashed px-3 py-2 text-xs text-dimmed">No active model for {activeModelSubTab.toUpperCase()} — import or download one and set it active. First qualified installed model is used when none is selected.</p>
-      {/if}
-
       <div class="flex items-center justify-end gap-3">
-        <div class="flex shrink-0 items-center gap-1.5">
+        {#if activeIdFor(activeModelSubTab)}
+          <p class="text-xs text-muted">
+            Active: <span class="font-semibold text-foreground">{labelForInstalled(activeIdFor(activeModelSubTab)!)}</span>
+          </p>
+        {/if}
+        <div class="ml-auto flex shrink-0 items-center gap-1.5">
           <button
             type="button"
             class="inline-flex items-center gap-1 rounded-lg border bg-elevated px-2.5 py-1 text-xs text-muted hover:text-foreground disabled:opacity-50"
@@ -329,6 +321,9 @@
           </button>
         </div>
       </div>
+      {#if !activeIdFor(activeModelSubTab)}
+        <p class="rounded-lg border border-dashed px-3 py-2 text-xs text-dimmed">No active model — import or download one and set it active.</p>
+      {/if}
 
       <!-- Scrollable model cards -->
       <div class="max-h-[520px] space-y-3 overflow-y-auto rounded-xl border bg-surface p-3 pr-2">
@@ -400,27 +395,17 @@
                 {/if}
               </div>
             </div>
-            <!-- Per-card Import / Paste Path + Active -->
             <div class="mt-3 flex items-center gap-1.5 border-t pt-3">
               {#if installed}
                 {#if isActiveCatalog(artifact.id, activeModelSubTab)}
                   <span class="inline-flex items-center gap-1 rounded-full bg-success/15 px-2 py-0.5 text-[11px] font-semibold text-success border border-success/20">
                     <Check size={11} aria-hidden="true" /> Active
                   </span>
-                  <button
-                    type="button"
-                    class="inline-flex items-center gap-1 rounded-md border bg-surface px-2 py-1 text-[11px] text-dimmed"
-                    title="Clear active model"
-                    aria-label="Clear active {artifact.label}"
-                    onclick={() => clearActive(activeModelSubTab)}
-                  >
-                    Clear
-                  </button>
                 {:else}
                   <button
                     type="button"
                     class="inline-flex items-center gap-1 rounded-md border bg-primary/10 px-2 py-1 text-[11px] font-medium text-primary hover:bg-primary/15"
-                    title="Make {artifact.label} the active model — displaces current active"
+                    title="Make {artifact.label} active"
                     aria-label="Make {artifact.label} active"
                     onclick={() => setActive(activeModelSubTab, artifact.id)}
                   >
@@ -447,7 +432,6 @@
               >
                 <ClipboardPaste size={11} aria-hidden="true" /> Paste Path
               </button>
-              <span class="ml-auto text-[10px] text-dimmed">Only the active model stays in memory.</span>
             </div>
           </div>
         {/each}
@@ -500,21 +484,18 @@
                 </div>
                 <div class="flex shrink-0 items-center gap-1">
                   {#if isActiveImported(artifact.artifactId, activeModelSubTab)}
-                    <button
-                      type="button"
-                      class="rounded-lg border bg-surface px-2.5 py-1 text-xs text-muted hover:text-foreground"
-                      title="Clear active model"
-                      aria-label="Clear active {artifact.importPath}"
-                      onclick={() => clearActive(activeModelSubTab)}
-                    >Clear</button>
+                    <span class="inline-flex items-center gap-1 rounded-full bg-success/15 px-2 py-0.5 text-[11px] font-semibold text-success border border-success/20">
+                      <Check size={11} aria-hidden="true" /> Active
+                    </span>
                   {:else}
                     <button
                       type="button"
                       class="inline-flex items-center gap-1 rounded-lg bg-primary px-2.5 py-1 text-xs font-medium text-on-primary hover:bg-primary/90"
-                      title="Make this imported model active — displaces current active"
+                      title="Make this imported model active"
                       aria-label="Make imported {artifact.importPath} active"
                       onclick={() => setActive(activeModelSubTab, artifact.artifactId)}
-                    ><Star size={11} aria-hidden="true" /> Active</button>
+                    ><Star size={11} aria-hidden="true" /> Set Active</button
+                    >
                   {/if}
                   <button
                     type="button"
