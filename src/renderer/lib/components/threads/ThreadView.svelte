@@ -4356,10 +4356,13 @@
     let sourceMessage: AgentMessage | null = null
     for (let index = messageIndex - 1; index >= 0; index -= 1) {
       const candidate = messages[index]
-      if (candidate?.role === 'user') {
-        sourceMessage = candidate
-        break
-      }
+      if (candidate?.role !== 'user') continue
+      // Question-answer and activity-only user messages are mid-turn responses,
+      // not new turn sources — skip them so the card attaches to the real user
+      // message that started this turn (which may precede an in-turn question).
+      if (!candidate.parts.some((part) => part.type === 'text')) continue
+      sourceMessage = candidate
+      break
     }
 
     const completed = checkpoints.filter((checkpoint) => checkpoint.status !== 'active')
