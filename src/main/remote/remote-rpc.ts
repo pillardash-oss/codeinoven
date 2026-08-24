@@ -138,6 +138,7 @@ export interface RemoteRpcServices {
     ChatEngine,
     | 'loadMessages'
     | 'deleteThreadSession'
+    | 'activeTurnChangeSummary'
     | 'listProviderSnapshot'
     | 'getSessionStatus'
     | 'getHarnessAuthStatus'
@@ -1592,6 +1593,18 @@ export class RemoteRpcDispatcher {
       // ─── Checkpoints ────────────────────────────────────────────────────
       case 'checkpoint:list':
         return this.checkpointManager.listSummaries(this.string(args[0]), this.string(args[1]))
+      case 'checkpoint:activeSummary':
+        return this.services.chatEngine.activeTurnChangeSummary(
+          this.string(args[0]),
+          this.string(args[1])
+        )
+      case 'checkpoint:liveDiff':
+        return this.checkpointManager.getLiveFileDiff(
+          this.string(args[0]),
+          this.string(args[1]),
+          this.string(args[2]),
+          this.string(args[3])
+        )
       case 'checkpoint:diff':
         return this.checkpointManager.getFileDiff(
           this.string(args[0]),

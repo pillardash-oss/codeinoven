@@ -1015,6 +1015,14 @@ export interface IpcInvokeContract {
     Checklist | null
   >
   'checkpoint:list': Contract<[projectId: string, threadId: string], TurnCheckpointSummary[]>
+  'checkpoint:activeSummary': Contract<
+    [projectId: string, threadId: string],
+    TurnCheckpointSummary | null
+  >
+  'checkpoint:liveDiff': Contract<
+    [projectId: string, threadId: string, checkpointId: string, path: string],
+    TurnCheckpointFileDiff
+  >
   'checkpoint:diff': Contract<
     [projectId: string, threadId: string, checkpointId: string, path: string],
     TurnCheckpointFileDiff

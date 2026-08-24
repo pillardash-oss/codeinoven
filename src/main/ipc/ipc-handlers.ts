@@ -2076,7 +2076,11 @@ export function registerIpcHandlers(
   updaterService?: UpdaterService,
   chatEngine?: Pick<
     ChatEngine,
-    'loadMessages' | 'deleteThreadSession' | 'hasActiveProcessesInScope' | 'abort'
+    | 'loadMessages'
+    | 'deleteThreadSession'
+    | 'activeTurnChangeSummary'
+    | 'hasActiveProcessesInScope'
+    | 'abort'
   > &
     Partial<Pick<ChatEngine, 'runVirtualTask'>>,
   options: RegisterIpcHandlersOptions = {}
@@ -6582,6 +6586,20 @@ export function registerIpcHandlers(
 
   ipcMain.handle('checkpoint:list', (_, projectId: string, threadId: string) =>
     checkpointManager.listSummaries(projectId, threadId)
+  )
+  ipcMain.handle('checkpoint:activeSummary', async (_, projectId: string, threadId: string) => {
+    if (!chatEngine?.activeTurnChangeSummary) return null
+    return chatEngine.activeTurnChangeSummary(projectId, threadId)
+  })
+  ipcMain.handle(
+    'checkpoint:liveDiff',
+    (_, projectId: unknown, threadId: unknown, checkpointId: unknown, path: unknown) =>
+      checkpointManager.getLiveFileDiff(
+        validateEntityId(projectId, 'Project ID'),
+        validateEntityId(threadId, 'Thread ID'),
+        validateEntityId(checkpointId, 'Checkpoint ID'),
+        requireString(path, 'Checkpoint path')
+      )
   )
   ipcMain.handle(
     'checkpoint:diff',

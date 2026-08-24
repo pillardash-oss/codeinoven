@@ -223,7 +223,9 @@ export const REMOTE_ALLOWED_CHANNELS: readonly string[] = [
   'brainstorm:resolveAnnotation',
   // Checkpoints
   'checkpoint:list',
+  'checkpoint:activeSummary',
   'checkpoint:diff',
+  'checkpoint:liveDiff',
   'checkpoint:rollbackPaths',
   // Memory (proposal panel + memory sidebar)
   'memory:getPendingProposals',
@@ -524,7 +526,9 @@ export const REMOTE_CHANNEL_AUTHORIZATION: Readonly<Record<string, RemoteChannel
   'brainstorm:getWorkflow': { scope: 'workflow.read', stepUp: 'none' },
   'brainstorm:listVersions': { scope: 'workflow.read', stepUp: 'none' },
   'checkpoint:list': { scope: 'workflow.read', stepUp: 'none' },
+  'checkpoint:activeSummary': { scope: 'workflow.read', stepUp: 'none' },
   'checkpoint:diff': { scope: 'workflow.read', stepUp: 'none' },
+  'checkpoint:liveDiff': { scope: 'workflow.read', stepUp: 'none' },
 
   // workflow.write — default-No, conditional step-up
   'engineeringLifecycle:select': { scope: 'workflow.write', stepUp: 'conditional' },

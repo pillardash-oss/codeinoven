@@ -1,4 +1,5 @@
 import { BrowserWindow } from 'electron'
+import { stat } from 'fs/promises'
 import { trustedIpcMain as ipcMain } from '../ipc/trusted-ipc-main'
 import { basename, isAbsolute, join, relative, resolve } from 'path'
 import { createHash, randomBytes, randomInt } from 'crypto'
@@ -171,6 +172,8 @@ import type {
   ThreadStatus,
   Thread,
   ThreadSettings,
+  TurnCheckpointChangeSummary,
+  TurnCheckpointSummary,
   TurnOutcomeTaskType,
   UsageEventDetails,
   UsageEventFeature,
@@ -17766,6 +17769,68 @@ export class ChatEngine {
       }
     }
     return foreign
+  }
+
+  /**
+   * In-progress file changes for the thread's running turn, so the Changes tab
+   * can surface edits before the turn completes. Nothing is persisted: the
+   * summary stats the turn's claimed paths against the active checkpoint's
+   * opening snapshot. Returns null when no turn is running or nothing has been
+   * observed to change yet.
+   */
+  async activeTurnChangeSummary(
+    projectId: string,
+    threadId: string
+  ): Promise<TurnCheckpointSummary | null> {
+    projectId = validateEntityId(projectId, 'Project ID')
+    threadId = validateEntityId(threadId, 'Thread ID')
+    const session = [...this.sessionRegistry.values()].find(
+      (candidate) =>
+        candidate.projectId === projectId &&
+        candidate.threadId === threadId &&
+        candidate.activeTurnId &&
+        (candidate.changedPaths?.size ?? 0) > 0
+    )
+    if (!session?.activeTurnId) return null
+    const checkpoint = await this.checkpointManager.getActive(projectId, threadId)
+    if (!checkpoint) return null
+
+    const MAX_LIVE_PATHS = 200
+    const changedPaths = session.changedPaths ?? new Set<string>()
+    const paths = [...changedPaths].sort().slice(0, MAX_LIVE_PATHS)
+    const changes: TurnCheckpointChangeSummary[] = []
+    for (const path of paths) {
+      const before = checkpoint.before.files[path]
+      try {
+        const fileStat = await stat(join(checkpoint.before.projectRoot, path))
+        changes.push({
+          path,
+          kind: before ? 'modified' : 'created',
+          binary: false,
+          ...(before ? { beforeSize: before.size } : {}),
+          afterSize: fileStat.size
+        })
+      } catch (error) {
+        if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT')) continue
+        if (!before) continue // claimed but never written and now gone — skip
+        changes.push({
+          path,
+          kind: 'deleted',
+          binary: false,
+          beforeSize: before.size
+        })
+      }
+    }
+    if (changes.length === 0) return null
+    return {
+      id: checkpoint.id,
+      projectId,
+      threadId,
+      label: checkpoint.label,
+      status: 'active',
+      changes,
+      createdAt: checkpoint.createdAt
+    }
   }
 
   // ─── Session registry ─────────────────────────────────────────────────────

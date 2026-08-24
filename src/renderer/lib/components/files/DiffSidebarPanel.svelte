@@ -82,6 +82,9 @@
     : null
 
   let checkpoints = $state<TurnCheckpointSummary[]>(initialCache.checkpoints)
+  /** The running turn's live change summary — absent once the turn completes. */
+  let liveTurn = $state<TurnCheckpointSummary | null>(null)
+  let liveRevision = $state(0)
   let selectedCheckpointId = $state<string | null>(initialCheckpointId)
   let loading = $state(false)
   let error = $state('')
@@ -94,7 +97,12 @@
   let flashPath = $state<string | null>(null)
   let scrollContainer = $state<HTMLElement | null>(null)
   let loadedDiffKey: string | null = initialFileDiffs ? initialCheckpointId : null
-  const turns = $derived(checkpoints.filter((checkpoint) => checkpoint.status !== 'active'))
+  const completedCheckpoints = $derived(
+    checkpoints.filter((checkpoint) => checkpoint.status !== 'active')
+  )
+  // The in-progress turn leads the list so opening Changes during a run lands
+  // on its live edits instead of the last completed turn.
+  const turns = $derived(liveTurn ? [liveTurn, ...completedCheckpoints] : completedCheckpoints)
   const selectedIndex = $derived(
     Math.max(
       0,
@@ -120,15 +128,44 @@
     }).format(timestamp)
   }
 
+  function diffCacheKeyFor(checkpoint: TurnCheckpointSummary): string {
+    // Live and final views share one checkpoint id; keeping the live diffs under
+    // a distinct key makes completion swap in the authoritative persisted diffs.
+    return checkpoint.status === 'active' ? `${checkpoint.id}:live` : checkpoint.id
+  }
+
+  async function refreshLive(): Promise<void> {
+    try {
+      const next = await invoke('checkpoint:activeSummary', projectId, threadId)
+      const finished = liveTurn !== null && next === null
+      liveTurn = next
+      if (next) liveRevision += 1
+      if (finished) {
+        // The turn just completed — pull its authoritative checkpoint in.
+        void refresh(selectedCheckpointId)
+      } else if (next && !selectedCheckpointId) {
+        selectedCheckpointId = next.id
+      }
+    } catch {
+      // Live tracking is supplementary; the completed history stays available.
+    }
+  }
+
   async function refresh(preferredCheckpointId = selectedCheckpointId): Promise<void> {
     const request = checkpointRefreshGuard.begin()
     loading = true
     error = ''
     try {
-      const nextCheckpoints = await invoke('checkpoint:list', projectId, threadId)
+      const [nextCheckpoints, nextLive] = await Promise.all([
+        invoke('checkpoint:list', projectId, threadId),
+        invoke('checkpoint:activeSummary', projectId, threadId).catch(() => null)
+      ])
       if (!checkpointRefreshGuard.isCurrent(request)) return
       checkpoints = nextCheckpoints
-      const nextTurns = nextCheckpoints.filter((checkpoint) => checkpoint.status !== 'active')
+      liveTurn = nextLive
+      const nextTurns = nextLive
+        ? [nextLive, ...nextCheckpoints.filter((checkpoint) => checkpoint.status !== 'active')]
+        : nextCheckpoints.filter((checkpoint) => checkpoint.status !== 'active')
       selectedCheckpointId =
         nextTurns.find((checkpoint) => checkpoint.id === preferredCheckpointId)?.id ??
         nextTurns[0]?.id ??
@@ -205,15 +242,25 @@
       loadedDiffKey = null
       return
     }
-    const key = checkpoint.id
+    const key =
+      checkpoint.status === 'active'
+        ? `${diffCacheKeyFor(checkpoint)}#${liveRevision}`
+        : diffCacheKeyFor(checkpoint)
     if (loadedDiffKey === key) return
+    const isLive = checkpoint.status === 'active'
     loadedDiffKey = key
     fileDiffs = []
     loadingDiffs = true
     let cancelled = false
     void Promise.allSettled(
       checkpoint.changes.map((change) =>
-        invoke('checkpoint:diff', projectId, threadId, checkpoint.id, change.path)
+        invoke(
+          isLive ? 'checkpoint:liveDiff' : 'checkpoint:diff',
+          projectId,
+          threadId,
+          checkpoint.id,
+          change.path
+        )
       )
     ).then((results) => {
       if (cancelled) return
@@ -269,8 +316,11 @@
     return () => clearTimeout(timer)
   })
 
-  onMount(() =>
-    subscribe('agent:event', (...args: unknown[]) => {
+  onMount(() => {
+    // Light poll keeps the live turn current while the panel is open; the
+    // main-process side only stats the paths the turn has claimed so far.
+    const liveTimer = setInterval(() => void refreshLive(), 2_500)
+    const unsubscribeEvents = subscribe('agent:event', (...args: unknown[]) => {
       const event = args[0] as AgentEvent
       if (
         event.type === 'checkpoint.updated' &&
@@ -280,7 +330,11 @@
         void refresh()
       }
     })
-  )
+    return () => {
+      clearInterval(liveTimer)
+      unsubscribeEvents()
+    }
+  })
 </script>
 
 <div class="flex h-full min-h-0 flex-col bg-app">
@@ -372,7 +426,9 @@
         <div>
           <FileDiff size={22} class="mx-auto mb-2 text-dimmed" />
           <p class="text-xs font-medium text-muted">No recorded changes</p>
-          <p class="mt-1 text-[10px] text-dimmed">Completed runs will appear here.</p>
+          <p class="mt-1 text-[10px] text-dimmed">
+            Changes appear here the moment a run edits a file.
+          </p>
         </div>
       </div>
     {:else}
@@ -380,6 +436,11 @@
       {#if checkpoint}
         {#if mode === 'diffs'}
           <div class="space-y-2">
+            {#if checkpoint.status === 'active'}
+              <p class="px-1 pb-1 text-[10px] leading-relaxed text-dimmed">
+                Live changes — this turn is still running.
+              </p>
+            {/if}
             {#if checkpoint.failure}
               <p
                 class="rounded-lg border border-danger/20 bg-danger/10 px-3 py-1.5 text-[10px] leading-relaxed text-danger"
@@ -444,15 +505,17 @@
                         <ChevronRight size={12} class="shrink-0 text-dimmed" />
                       {/if}
                     </button>
-                    <button
-                      type="button"
-                      class="flex h-6 w-6 shrink-0 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
-                      aria-label={`Open ${fileDiff.path} in the changes sidebar`}
-                      title={`Open ${fileDiff.path} in the changes sidebar`}
-                      onclick={() => void openChange(checkpoint.id, fileDiff.path)}
-                    >
-                      <Eye size={13} />
-                    </button>
+                    {#if checkpoint.status !== 'active'}
+                      <button
+                        type="button"
+                        class="flex h-6 w-6 shrink-0 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+                        aria-label={`Open ${fileDiff.path} in the changes sidebar`}
+                        title={`Open ${fileDiff.path} in the changes sidebar`}
+                        onclick={() => void openChange(checkpoint.id, fileDiff.path)}
+                      >
+                        <Eye size={13} />
+                      </button>
+                    {/if}
                   </div>
                   {#if expanded}
                     <div class="border-t border-border">
@@ -469,8 +532,17 @@
               <div class="flex min-h-10 items-center gap-2 px-3 py-2">
                 <FileDiff size={13} class="shrink-0 text-info" />
                 <span class="min-w-0 flex-1">
-                  <span class="block truncate text-[11px] font-medium text-foreground">
-                    {checkpoint.label}
+                  <span class="flex items-center gap-1.5">
+                    <span class="min-w-0 flex-1 truncate text-[11px] font-medium text-foreground">
+                      {checkpoint.label}
+                    </span>
+                    {#if checkpoint.status === 'active'}
+                      <span
+                        class="shrink-0 rounded bg-info/10 px-1.5 py-0.5 text-[9px] font-semibold text-info"
+                      >
+                        In progress
+                      </span>
+                    {/if}
                   </span>
                   <span class="block text-[9px] text-dimmed">
                     {formatDate(checkpoint.completedAt ?? checkpoint.createdAt)}
@@ -486,6 +558,11 @@
                     {checkpoint.failure}
                   </p>
                 {/if}
+                {#if checkpoint.status === 'active'}
+                  <p class="px-3 py-1.5 text-[10px] leading-relaxed text-dimmed">
+                    This turn is still running — files update here as the agent edits them.
+                  </p>
+                {/if}
                 {#if checkpoint.changes.length === 0}
                   <p class="px-3 py-2 text-[10px] text-dimmed">No file changes detected.</p>
                 {:else}
@@ -493,7 +570,7 @@
                     <div
                       class="flex h-8 items-center gap-2 px-3 transition-colors hover:bg-elevated"
                     >
-                      {#if checkpoint.status !== 'rolled_back'}
+                      {#if checkpoint.status !== 'rolled_back' && checkpoint.status !== 'active'}
                         <Switch
                           checked={(selections[checkpoint.id] ?? []).includes(change.path)}
                           disabled={checkpoint.rolledBackPaths?.includes(change.path)}
@@ -514,20 +591,26 @@
                         {change.kind === 'created' ? 'A' : change.kind === 'deleted' ? 'D' : 'M'}
                       </span>
                       <FileTypeIcon path={change.path} />
-                      <button
-                        type="button"
-                        class="min-w-0 flex-1 truncate text-left font-mono text-[10px] text-muted hover:text-foreground"
-                        title={`Open ${change.path}`}
-                        onclick={() => void openChange(checkpoint.id, change.path)}
-                      >
-                        {isMarkdown(change.path) ? filename(change.path) : change.path}
-                      </button>
+                      {#if checkpoint.status === 'active'}
+                        <span class="min-w-0 flex-1 truncate font-mono text-[10px] text-muted">
+                          {change.path}
+                        </span>
+                      {:else}
+                        <button
+                          type="button"
+                          class="min-w-0 flex-1 truncate text-left font-mono text-[10px] text-muted hover:text-foreground"
+                          title={`Open ${change.path}`}
+                          onclick={() => void openChange(checkpoint.id, change.path)}
+                        >
+                          {isMarkdown(change.path) ? filename(change.path) : change.path}
+                        </button>
+                      {/if}
                       {#if change.binary}
                         <span class="text-[9px] text-dimmed">binary</span>
                       {/if}
                     </div>
                   {/each}
-                  {#if checkpoint.status !== 'rolled_back'}
+                  {#if checkpoint.status !== 'rolled_back' && checkpoint.status !== 'active'}
                     <div class="flex items-center gap-2 border-t border-border px-3 py-2">
                       <button
                         type="button"
