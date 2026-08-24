@@ -199,8 +199,14 @@ class MobileState {
 
   // ─── Data loading ───────────────────────────────────────────────────────
 
-  async loadData(): Promise<void> {
-    this.loading = true
+  async loadData(options: { background?: boolean } = {}): Promise<void> {
+    const { background = false } = options
+    // Keep the already-rendered list visible on a background refresh so a
+    // slight reconnect never flashes the whole sidebar to "Loading…". The
+    // full-screen loading state is reserved for the first paint, when there is
+    // nothing to show yet.
+    const hasData = this.projects.length > 0 || this.allThreads.length > 0
+    if (!background || !hasData) this.loading = true
     this.loadError = null
     try {
       const [projectList, threadList] = await Promise.all([
@@ -221,9 +227,13 @@ class MobileState {
         this.projectIcons.set(projectId, iconUrl)
       }
     } catch (error) {
-      this.projects = []
-      this.allThreads = []
-      this.orchestrationThreads = []
+      // A background refresh must not discard data the phone already shows —
+      // keep the last-known list and surface the failure only on first paint.
+      if (!background || !hasData) {
+        this.projects = []
+        this.allThreads = []
+        this.orchestrationThreads = []
+      }
       this.loadError =
         error instanceof Error ? error.message : 'The desktop workspace could not be loaded.'
     } finally {
@@ -482,7 +492,9 @@ class MobileState {
     const selected = this.selectedThread
       ? { projectId: this.selectedThread.projectId, threadId: this.selectedThread.id }
       : null
-    await this.loadData()
+    // Background-hydrate: keep the visible thread list mounted so a quick
+    // bounce of the socket never flashes the whole sidebar to "Loading…".
+    await this.loadData({ background: true })
     if (!selected) return
     const refreshed = this.allThreads.find(
       (thread) => thread.projectId === selected.projectId && thread.id === selected.threadId

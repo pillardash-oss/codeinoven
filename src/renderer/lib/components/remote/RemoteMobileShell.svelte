@@ -861,22 +861,23 @@
         {/if}
         <button
           type="button"
-          class="flex h-10 flex-1 cursor-pointer items-center justify-center gap-1.5 rounded-xl bg-elevated text-[13px] font-medium text-muted transition-colors active:bg-danger/10 active:text-danger"
-          title="Disconnect from the desktop"
-          onclick={onDisconnect}
+          class="flex h-10 flex-1 cursor-pointer items-center justify-center gap-1.5 rounded-xl bg-elevated text-[13px] font-medium text-muted transition-colors active:bg-elevated active:text-foreground"
+          title="Close the sidebar"
+          aria-label="Close the sidebar"
+          onclick={() => (mobileState.sidebarOpen = false)}
         >
-          <Power size={14} />
-          Disconnect
+          <X size={16} />
+          Close
         </button>
 
         <button
           type="button"
-          class="flex h-10 w-10 shrink-0 cursor-pointer items-center justify-center rounded-xl text-muted transition-colors active:bg-elevated"
-          aria-label="Close the sidebar"
-          title="Close the sidebar"
-          onclick={() => (mobileState.sidebarOpen = false)}
+          class="flex h-10 w-10 shrink-0 cursor-pointer items-center justify-center rounded-xl text-muted transition-colors active:bg-danger/10 active:text-danger"
+          aria-label="Disconnect from the desktop"
+          title="Disconnect from the desktop"
+          onclick={onDisconnect}
         >
-          <X size={18} />
+          <Power size={17} />
         </button>
       </div>
 
