@@ -192,14 +192,17 @@
     0%,
     100% {
       opacity: 1;
+      transform: scale(1);
     }
     50% {
-      opacity: 0.35;
+      opacity: 0.65;
+      transform: scale(1.06);
     }
   }
   .mic-recording {
-    fill: var(--color-danger);
-    animation: cio-mic-record-pulse 1.2s ease-in-out infinite;
+    fill: var(--color-warning);
+    color: var(--color-warning);
+    animation: cio-mic-record-pulse 1.15s ease-in-out infinite;
   }
   @keyframes cio-wave-bar {
     0%,
