@@ -4,6 +4,7 @@
   import { settingsUiState } from '$lib/stores/settings-ui.svelte'
   import type { SettingsSection } from '$lib/stores/renderer-recovery.svelte'
   import { updaterState } from '$lib/stores/updater.svelte'
+  import DownloadProgress from '../ui/DownloadProgress.svelte'
   import type {
     AppConfig,
     AppConfigPatch,
@@ -950,21 +951,12 @@
             </div>
           {:else if updaterState.status.state === 'downloading'}
             <div class="mb-3">
-              <div class="flex items-center gap-2 text-xs text-muted">
-                <Loader2 size={13} class="animate-spin" />
-                Downloading update…
-              </div>
-              {#if updaterState.status.downloadProgress !== undefined}
-                <div class="mt-1.5 h-1.5 w-full overflow-hidden rounded-full bg-elevated">
-                  <div
-                    class="h-full rounded-full bg-primary transition-all"
-                    style="width: {updaterState.status.downloadProgress}%"
-                  ></div>
-                </div>
-                <p class="mt-0.5 text-right text-[11px] tabular-nums text-dimmed">
-                  {updaterState.status.downloadProgress}%
-                </p>
-              {/if}
+              <DownloadProgress
+                percent={updaterState.status.downloadProgress}
+                label="Downloading update…"
+                detail={updaterState.status.downloadProgress !== undefined ? `${updaterState.status.downloadProgress}%` : undefined}
+                ariaLabel="Update download progress"
+              />
             </div>
           {:else if updaterState.status.state === 'downloaded'}
             <div class="mb-3 flex items-center gap-2 text-xs text-primary">

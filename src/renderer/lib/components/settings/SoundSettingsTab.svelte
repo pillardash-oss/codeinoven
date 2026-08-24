@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte'
   import { Download, ExternalLink, LoaderCircle, RefreshCw, Trash2, Upload, ClipboardPaste, X, Check, Star } from '@lucide/svelte'
+  import DownloadProgress from '../ui/DownloadProgress.svelte'
   import { parseModelIdentityFromPath } from '../../../../lib/speech/model-path-validation'
   import type { AppConfigPatch } from '$shared/types'
   import type { SpeechDestructiveAction, SpeechSettings } from '../../../../lib/speech/types'
@@ -527,22 +528,17 @@
               {@const pct = download.state === 'queued' ? 0 : download.state === 'verifying' ? 100 : downloadPercent(download)}
               {@const isVerifying = download.state === 'verifying'}
               {@const isQueued = download.state === 'queued'}
-              <div class="mt-3 rounded-lg border bg-surface px-3 py-2.5">
-                <div class="flex items-center justify-between gap-2 text-[11px]">
-                  <span class="inline-flex items-center gap-1.5 font-medium {isVerifying ? 'text-amber-600' : 'text-foreground'}">
-                    <LoaderCircle size={11} class="animate-spin shrink-0" aria-hidden="true" />
-                    {#if isVerifying}Verifying…{:else if isQueued}Queued… — waiting to start{:else}Downloading… {pct}%{/if}
-                  </span>
-                  <span class="shrink-0 tabular-nums text-muted">
-                    {#if download.state === 'downloading'}{formatBytes(download.bytesReceived)} / {formatBytes(download.totalBytes)}{:else if isVerifying}{formatBytes(download.bytesReceived)} · checksum{:else if isQueued}Position {download.position}{/if}
-                  </span>
-                </div>
-                <div class="mt-2 h-1.5 overflow-hidden rounded-full bg-muted/15" role="progressbar" aria-valuenow={pct} aria-valuemin={0} aria-valuemax={100} aria-label={`Download progress ${pct}%`}>
-                  <div class="h-full rounded-full transition-all duration-200 {isVerifying ? 'bg-amber-500 animate-pulse' : 'bg-primary'}" style={`width: ${pct}%`}></div>
-                </div>
-                {#if download.state === 'downloading'}
-                  <p class="mt-1.5 text-[10px] leading-none text-dimmed">Large models can take a few minutes — you can keep using the app. Cancel with the × above.</p>
-                {/if}
+              <div class="mt-3">
+                <DownloadProgress
+                  percent={pct}
+                  label={isVerifying ? 'Verifying…' : isQueued ? 'Queued… — waiting to start' : 'Downloading…'}
+                  detail={download.state === 'downloading' ? `${formatBytes(download.bytesReceived)} / ${formatBytes(download.totalBytes)}` : isVerifying ? `${formatBytes(download.bytesReceived)} · checksum` : `Position ${download.position}`}
+                  tone={isVerifying ? 'verifying' : 'default'}
+                  ariaLabel={`Download progress ${pct}%`}
+                  onCancel={() => void speech.cancelDownload(artifact.id)}
+                  cancelLabel={`Cancel ${artifact.label} download`}
+                  hint={download.state === 'downloading' ? 'Large models can take a few minutes — you can keep using the app.' : undefined}
+                />
               </div>
             {/if}
             {#if download?.state === 'failed'}
