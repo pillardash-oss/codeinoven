@@ -53,7 +53,18 @@ export const MEMORY_EXTRACTION_LIMITS = {
 
 /** Standing-preference vocabulary that makes a user turn a durable candidate. */
 const STANDING_PREFERENCE_PATTERN =
-  /\b(?:always|never|from now on|in future|going forward|from here on|from today|please remember|remember that|i prefer|i like|i don'?t (?:like|want)|i want you to|prefer(?: \w+){0,4} over|make sure (?:to|you))\b/iu
+  /\b(?:always|never|from now on|in future|going forward|from here on|from today|please remember|remember that|i prefer|i like|i don'?t (?:like|want)|i want you to|prefer(?: \w+){0,4} over|make sure (?:to|you)|golden rule|standing rule|general rule|reusable rule|persistent rule)\b/iu
+
+/** Durability phrases that signal a rule should outlive the current task. */
+const DURABLE_RULE_PATTERN =
+  /\b(?:not a one[ -]?time|not one[ -]?off|not just (?:this|one) time|every time|each time|for every|not a single[ -]?use|ever again|from now|as a rule|one[ -]?time rule)\b/iu
+
+const UNIVERSAL_QUANTIFIER_PATTERN = /\b(?:anything|everything|every|all)\b/iu
+const DEONTIC_MODAL_PATTERN = /\b(?:must(?: be)?|should(?: be)?|have to be|has to be|needs? to be|required to be|ought to)\b/iu
+
+/** Frustration/repetition signals that indicate a previously stated preference was ignored. */
+const FRUSTRATION_PATTERN =
+  /\b(?:again|you keep|you never|you always|you forgot|you ignore|are you (?:a fool|fool|stupid|retarded|dumb|idiot)|wtf|fuck|damn|annoying|frustrat\w*|useless|horrible|terrible|why.*(?:not.*(?:remember|propose|track|save)|waste)|i (?:told|said) you|repeatedly|already told you)\b/iu
 
 const TRIVIAL_CONTINUATION_PATTERN =
   /^(?:ok|okay|yes|no|yep|nope|sure|fine|got it|understood|thanks|thank you|thank you!|thx|cool|nice|great|perfect|lgtm|please continue|continue|go ahead|go on|proceed)\b/iu
@@ -97,10 +108,32 @@ function normalizeText(text: string): string {
   return text.replace(/\s+/gu, ' ').trim().toLowerCase()
 }
 
+function hasFrustrationSignal(message: string): boolean {
+  return FRUSTRATION_PATTERN.test(message)
+}
+
+function hasUniversalDeonticSignal(message: string): boolean {
+  const sentences = message.split(/(?<=[.!?])\s+/u)
+  for (const sentence of sentences) {
+    if (UNIVERSAL_QUANTIFIER_PATTERN.test(sentence) && DEONTIC_MODAL_PATTERN.test(sentence)) return true
+  }
+  return UNIVERSAL_QUANTIFIER_PATTERN.test(message) && DEONTIC_MODAL_PATTERN.test(message)
+}
+
+function hasDurableSignal(message: string): boolean {
+  return STANDING_PREFERENCE_PATTERN.test(message) || DURABLE_RULE_PATTERN.test(message) || hasUniversalDeonticSignal(message)
+}
+
+function hasRuleLikeContent(message: string): boolean {
+  return hasDurableSignal(message) || DEONTIC_MODAL_PATTERN.test(message) || /\b(?:never|always|must|should|need to|required)\b/iu.test(message)
+}
+
 function isTrivialUserTurn(message: string): boolean {
   const trimmed = message.trim()
-  if (trimmed.length === 0 || trimmed.length < 15) return true
-  if (trimmed.endsWith('?')) return true
+  if (trimmed.length === 0) return true
+  if (hasFrustrationSignal(trimmed)) return false
+  if (trimmed.length < 15) return true
+  if (trimmed.endsWith('?') && !hasDurableSignal(trimmed) && !hasFrustrationSignal(trimmed)) return true
   return TRIVIAL_CONTINUATION_PATTERN.test(trimmed)
 }
 
@@ -108,12 +141,13 @@ function categoryForCandidate(message: string, matched: string): MemoryCategory 
   if (/i am\b|my name\b|i work as\b|i'?m a\b/i.test(matched)) return 'identity'
   if (/\bnever\b|\bdon'?t\b|\bdo not\b|make sure\b/i.test(matched)) return 'behavioral'
   if (/\bprefer\b|i like\b|i don'?t (?:like|want)\b/i.test(matched)) return 'preference'
-  if (/\bproject|repository|codebase|stack|tooling\b/i.test(message)) return 'project-rule'
+  if (/\bproject|repository|codebase|stack|tooling\b|download|install|track|progress\b/i.test(message)) return 'project-rule'
+  if (/golden rule|standing rule|must be|should be/i.test(matched)) return 'project-rule'
   return 'preference'
 }
 
 function priorityForCandidate(matched: string): MemoryPriority {
-  return /\b(?:always|never|from now on|in future|going forward)\b/iu.test(matched)
+  return /\b(?:always|never|from now on|in future|going forward|golden rule|standing rule|every time|not a one[ -]?time)\b/iu.test(matched)
     ? 'high'
     : 'medium'
 }
@@ -121,9 +155,21 @@ function priorityForCandidate(matched: string): MemoryPriority {
 /** Extract the sentences of the user message that carry a standing marker. */
 function extractDurableContent(message: string): string {
   const sentences = message.split(/(?<=[.!?])\s+/u)
-  const durable = sentences.filter((sentence) => STANDING_PREFERENCE_PATTERN.test(sentence))
-  if (durable.length === 0 && STANDING_PREFERENCE_PATTERN.test(message)) return message
-  return durable.join(' ')
+  const durable = sentences.filter(
+    (sentence) =>
+      STANDING_PREFERENCE_PATTERN.test(sentence) ||
+      DURABLE_RULE_PATTERN.test(sentence) ||
+      hasUniversalDeonticSignal(sentence)
+  )
+  if (durable.length > 0) return durable.join(' ')
+  if (hasDurableSignal(message)) return message
+  // Frustration-driven turns: keep the frustrated sentences that carry rule-like content
+  if (hasFrustrationSignal(message)) {
+    const frustrated = sentences.filter((sentence) => hasRuleLikeContent(sentence))
+    if (frustrated.length > 0) return frustrated.join(' ')
+    return message
+  }
+  return ''
 }
 
 /**
@@ -141,13 +187,17 @@ export function detectMemoryCandidates(input: {
 }): MemoryCandidate[] {
   const user = input.userMessage.trim()
   if (isTrivialUserTurn(user)) return []
-  if (!STANDING_PREFERENCE_PATTERN.test(user)) return []
+  const durable = hasDurableSignal(user)
+  const frustrated = hasFrustrationSignal(user)
+  if (!durable && !frustrated) return []
+  if (frustrated && !durable && !hasRuleLikeContent(user)) return []
 
   const content = extractDurableContent(user)
   if (!content) return []
   const cappedContent = capText(content, MEMORY_EXTRACTION_LIMITS.maxUserCandidateCharacters)
-  const match = STANDING_PREFERENCE_PATTERN.exec(cappedContent)
-  const matched = match ? match[0] : ''
+  const standingMatch = STANDING_PREFERENCE_PATTERN.exec(cappedContent)
+  const durableMatch = DURABLE_RULE_PATTERN.exec(cappedContent)
+  const matched = standingMatch ? standingMatch[0] : durableMatch ? durableMatch[0] : cappedContent.slice(0, 80)
   const existing = new Set(
     input.existingEntries
       .filter((entry) => entry.enabled)
