@@ -663,7 +663,6 @@ export interface IpcInvokeContract {
     void
   >
   'memory:getMergedEntries': Contract<[projectId: string], import('./types').MemoryEntry[]>
-  'memory:getAllEntries': Contract<[kind: 'projects' | 'chats'], import('./types').MemoryEntry[]>
   'memory:addEntry': Contract<
     [
       label: string,

@@ -328,7 +328,6 @@ const INVOKE_CHANNELS = [
   'memory:getEntries',
   'memory:saveEntries',
   'memory:getMergedEntries',
-  'memory:getAllEntries',
   'memory:addEntry',
   'memory:removeEntry',
   'memory:searchEntries',

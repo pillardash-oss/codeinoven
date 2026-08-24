@@ -102,8 +102,8 @@
   let headerDescription = $derived(
     variant === 'settings'
       ? scope === 'chats'
-        ? 'Every memory for conversations — global, chat-wide, and per-chat. Global preferences are shared with projects.'
-        : 'Every memory for project work — global, per-project, and per-thread. Global preferences are shared with chats.'
+        ? 'Global memory used in every chat. Manage one chat’s own memory from that chat’s sidebar.'
+        : 'Global memory used in every project. Manage one project’s own memory from that project’s sidebar.'
       : projectId === INBOX_PROJECT_ID
         ? 'Global, chat, and thread preferences active in this conversation.'
         : 'Global, project, and thread preferences active in this conversation.'
@@ -114,14 +114,11 @@
       return scope === 'chats'
         ? [
             { value: 'global', label: 'Global' },
-            { value: 'chat', label: 'Chats' },
-            { value: 'thread', label: 'Thread' }
+            { value: 'chat', label: 'Chats' }
           ]
         : [
             { value: 'global', label: 'Global' },
-            { value: 'projects', label: 'Projects' },
-            { value: 'project', label: 'Specific project' },
-            { value: 'thread', label: 'Thread' }
+            { value: 'projects', label: 'Projects' }
           ]
     }
     if (projectId === INBOX_PROJECT_ID) {
@@ -189,12 +186,12 @@
     if (variant === 'settings') {
       return scope === 'chats'
         ? {
-            title: 'No chat memories yet.',
-            body: 'Add a preference you want chat agents to remember, or approve suggested ones.'
+            title: 'No global chat memories yet.',
+            body: 'Add a preference you want every chat to remember, or approve suggested ones.'
           }
         : {
-            title: 'No project memories yet.',
-            body: 'Explicit preferences are suggested for approval, or you can add one manually.'
+            title: 'No global memories yet.',
+            body: 'Add a preference you want every project to remember. Project-specific memory lives in that project’s sidebar.'
           }
     }
     return {
@@ -215,18 +212,19 @@
       let nextProposals: PendingProposal[]
       if (variant === 'settings') {
         if (scope === 'chats') {
-          const [chatEntries, globalProposals, chatProposals] = await Promise.all([
-            invoke('memory:getAllEntries', 'chats'),
+          const [rootEntries, chatEntries, globalProposals, chatProposals] = await Promise.all([
+            invoke('memory:getEntries'),
+            invoke('memory:getEntries', INBOX_PROJECT_ID),
             invoke('memory:getPendingProposals'),
             invoke('memory:getPendingProposals', INBOX_PROJECT_ID)
           ])
-          nextEntries = chatEntries
+          nextEntries = [...rootEntries.filter((entry) => entry.scope === 'global'), ...chatEntries]
           nextProposals = [
             ...globalProposals.map((proposal) => ({ proposal })),
             ...chatProposals.map((proposal) => ({ proposal, queueProjectId: INBOX_PROJECT_ID }))
           ]
         } else {
-          nextEntries = await invoke('memory:getAllEntries', 'projects')
+          nextEntries = await invoke('memory:getEntries')
           nextProposals = []
         }
       } else if (projectId === INBOX_PROJECT_ID) {
