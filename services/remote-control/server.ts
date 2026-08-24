@@ -799,6 +799,13 @@ function relayMessage(socket: ServerWebSocket<RelaySocketData>, message: string 
     return
   }
 
+  // Application-level keep-alive: echo so the peer knows its socket is still
+  // routed (the arrival itself also resets the server's idle-connection cutoff).
+  if (record['type'] === 'relay:ping') {
+    socket.send(JSON.stringify({ type: 'relay:pong' }))
+    return
+  }
+
   if (record['type'] !== 'relay:data' || typeof record['payload'] !== 'string') return
   const desktopId = socket.data.desktopId
   if (!desktopId) return
