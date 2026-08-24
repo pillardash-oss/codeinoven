@@ -170,7 +170,10 @@
   onclick={() => void activate()}
 >
   {#if belongsHere && speechController.state.state === 'recording'}
-    <Mic size={14} class="mic-recording" aria-hidden="true" />
+    <span class="recording-wrap" aria-hidden="true">
+      <span class="recording-dot"></span>
+      <span class="recording-ping"></span>
+    </span>
   {:else if belongsHere && speechController.state.state === 'failed'}
     <TriangleAlert size={14} aria-hidden="true" />
   {:else if belongsHere && speechController.state.state !== 'idle'}
@@ -188,21 +191,49 @@
 {/if}
 
 <style>
-  @keyframes cio-mic-record-pulse {
-    0%,
-    100% {
-      opacity: 1;
+  @keyframes cio-record-ping {
+    0% {
       transform: scale(1);
+      opacity: 0.45;
     }
-    50% {
-      opacity: 0.65;
-      transform: scale(1.06);
+    75%,
+    100% {
+      transform: scale(1.9);
+      opacity: 0;
     }
   }
-  .mic-recording {
-    fill: var(--color-warning);
-    color: var(--color-warning);
-    animation: cio-mic-record-pulse 1.15s ease-in-out infinite;
+  .recording-wrap {
+    position: relative;
+    display: flex;
+    width: 14px;
+    height: 14px;
+    align-items: center;
+    justify-content: center;
+  }
+  .recording-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 9999px;
+    background: var(--color-danger);
+    animation: cio-record-pulse 1.1s ease-in-out infinite;
+  }
+  .recording-ping {
+    position: absolute;
+    inset: 0;
+    border-radius: 9999px;
+    background: var(--color-danger);
+    animation: cio-record-ping 1.35s cubic-bezier(0, 0, 0.2, 1) infinite;
+  }
+  @keyframes cio-record-pulse {
+    0%,
+    100% {
+      transform: scale(1);
+      opacity: 1;
+    }
+    50% {
+      transform: scale(1.15);
+      opacity: 0.78;
+    }
   }
   @keyframes cio-wave-bar {
     0%,
@@ -218,7 +249,7 @@
     width: 2px;
     height: 6px;
     border-radius: 1px;
-    background: var(--color-danger);
+    background: var(--color-warning);
     animation: cio-wave-bar 0.9s ease-in-out infinite;
   }
   .wave-bar-delay-1 {
