@@ -449,6 +449,8 @@ const INVOKE_CHANNELS = [
   'browser:destroy',
   'browser:destroyThread',
   'browser:destroyProject',
+  'switcher:open',
+  'switcher:close',
   'spec:addAnnotation',
   'spec:addDecisionComment',
   'spec:approve',
@@ -572,6 +574,9 @@ const EVENT_CHANNELS = [
   'browser:openRequested',
   'browser:permissionRequested',
   'browser:permissionResolved',
+  'switcher:select',
+  'switcher:highlight',
+  'switcher:closed',
   'remote:status',
   'remote:stepUpPending',
   'speech:progress'

@@ -16,6 +16,7 @@
   import { trafficLightInsetStyle } from '$lib/stores/traffic-light.svelte'
   import { wrapTextState, wrapToggleLabel } from '$lib/stores/wrap-text.svelte'
   import { PanZoom } from '$lib/pan-zoom.svelte'
+  import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
   import type { PromptAttachment } from '$shared/types'
   import { attachmentPreviewKind } from '$lib/mime'
   import DOMPurify from 'dompurify'
@@ -49,6 +50,9 @@
   const editableText = $derived(
     (kind === 'markdown' || kind === 'text') && onSaveText !== undefined
   )
+  $effect(() => {
+    contextSidebarState.setFullscreenSurfaceActive('attachment-editor', editableText)
+  })
   const csvRows = $derived(kind === 'csv' && text !== undefined ? parseCsv(text) : [])
   // The preview is created anew for each selected attachment, so this is the
   // editor's intentional local draft rather than a live mirror of the prop.

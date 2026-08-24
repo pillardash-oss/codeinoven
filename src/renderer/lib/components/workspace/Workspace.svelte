@@ -1099,6 +1099,32 @@
   let sidebarVisible = $derived(contextSidebarState.sidebarVisible)
   let terminalDockVisible = $derived(contextSidebarState.terminalDockVisible)
 
+  /** True when the browser's native WebContentsView is on screen, either from
+   *  the right sidebar or the browser's own fullscreen dialog. The native
+   *  Ctrl+Tab overlay is only needed in this state; otherwise the DOM switcher
+   *  suffices (it already stacks above all non-native panels). */
+  const browserNativeVisible = $derived(
+    !contextSidebarState.fullscreenSuppression &&
+      (contextSidebarState.sidebarBrowserNativeVisible ||
+        (browserFullscreenTabId !== null &&
+          contextSidebarState.tabs.some(
+            (tab) => tab.id === browserFullscreenTabId && tab.kind === 'browser' && tab.surface === 'page'
+          )))
+  )
+
+  // A full-window DOM surface (fullscreen terminal, media previews, fullscreen
+  // file editors) covers the workspace. The browser's native view floats above
+  // every DOM surface, so it must be hidden while such a surface is open — the
+  // browser panel unmounts its native surface via its own visibility lifecycle
+  // when this flips true. The browser's own fullscreen dialog is not registered
+  // here so the browser stays visible when the user fullscreens it deliberately.
+  $effect(() => {
+    contextSidebarState.setFullscreenSurfaceActive(
+      'workspace-terminal-fullscreen',
+      terminalFullscreenTabId !== null
+    )
+  })
+
   // The grid column/row that hosts each panel collapses the instant
   // `sidebarVisible`/`terminalDockVisible` flips, but the panel itself keeps
   // playing its out:fly for PANEL_EXIT_MS. Without this, the closing panel is
@@ -4092,13 +4118,14 @@
   {/snippet}
 </Modal>
 
-<ThreadSwitcher
-  threads={recentThreads}
-  projects={visibleProjects}
-  projectIconUrls={projectIcons}
-  selectedThreadId={selectedThread?.id ?? null}
-  onSelect={openThreadFromSwitcher}
-/>
+  <ThreadSwitcher
+    threads={recentThreads}
+    projects={visibleProjects}
+    projectIconUrls={projectIcons}
+    selectedThreadId={selectedThread?.id ?? null}
+    nativeAvailable={browserNativeVisible}
+    onSelect={openThreadFromSwitcher}
+  />
 
 <!-- Terminal fullscreen dialog -->
 {#if terminalFullscreenTabId}

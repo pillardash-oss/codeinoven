@@ -149,6 +149,9 @@
   let showLineNumbers = $state(true)
   const wrapLines = $derived(wrapTextState.wrapped)
   let fullscreenOpen = $state(false)
+  $effect(() => {
+    contextSidebarState.setFullscreenSurfaceActive('files-fullscreen-editor', fullscreenOpen)
+  })
   let handledFullscreenRequest = $state(0)
   let conflictController = $state<ConflictResolutionController | null>(null)
   let conflictStatus = $state<ConflictResolutionStatus>({

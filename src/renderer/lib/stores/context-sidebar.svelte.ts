@@ -354,6 +354,11 @@ class ContextSidebarState {
   private browserTabs: BrowserContextTab[] = $state(loadBrowserTabs())
   private browserActiveTabId: string | null = $state(null)
   private browserVisible = $state(false)
+  /** Keys of full-window DOM surfaces currently covering the workspace (e.g.
+   *  fullscreen terminal/media/file editors). The browser's native view must
+   *  hide while any is active, because a native view floats above every DOM
+   *  modal. Tracked as a keyed set so nested/overlapping surfaces are safe. */
+  private fullscreenSurfaceKeys = $state(new Set<string>())
   private activeProjectId: string | null = $state(null)
   private activeThreadId: string | null = $state(null)
   private notificationsVisible = $state(false)
@@ -391,6 +396,33 @@ class ContextSidebarState {
 
   get activeTab(): ContextSidebarTab | null {
     return this.sidebarActiveTab
+  }
+
+  /** Whether any full-window DOM surface is suppressing native surfaces. */
+  get fullscreenSuppression(): boolean {
+    return this.fullscreenSurfaceKeys.size > 0
+  }
+
+  /** Register (or unregister) a full-window DOM surface that covers the
+   *  workspace. While any key is active the browser's native view is hidden —
+   *  it would otherwise float above the DOM surface. */
+  setFullscreenSurfaceActive(key: string, active: boolean): void {
+    if (active) this.fullscreenSurfaceKeys.add(key)
+    else this.fullscreenSurfaceKeys.delete(key)
+  }
+
+  /**
+   * Whether the native browser view is currently on screen from the right
+   * sidebar (a visible browser tab whose surface is the page). The native
+   * Ctrl+Tab overlay is only needed while this is true.
+   */
+  get sidebarBrowserNativeVisible(): boolean {
+    if (this.fullscreenSuppression) return false
+    if (!this.browserVisible) return false
+    const active =
+      this.activeBrowserTabs.find((tab) => tab.id === this.browserActiveTabId) ??
+      this.activeBrowserTabs.at(-1)
+    return active?.surface === 'page'
   }
 
   /**

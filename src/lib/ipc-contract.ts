@@ -220,6 +220,32 @@ export interface BrowserPageState {
   canGoForward: boolean
 }
 
+/** One row rendered by the native Ctrl+Tab overlay, fully display-ready. */
+export interface NativeSwitcherThread {
+  id: string
+  title: string
+  projectId: string
+  /** Project icon as a data URL, or null for a fallback mark. */
+  icon: string | null
+  selected: boolean
+}
+
+export type NativeSwitcherTheme = 'light' | 'dark'
+
+/**
+ * Display payload for the native Ctrl+Tab overlay. The renderer resolves the
+ * visible thread list, highlighting, and theme; the overlay only renders the
+ * rows and reports input back through the main process.
+ */
+export interface NativeSwitcherPayload {
+  threads: NativeSwitcherThread[]
+  highlightedThreadId: string | null
+  theme: NativeSwitcherTheme
+  /** Width/height (density-independent px) hint for the dialog, unused by the
+   *  full-window overlay page but kept for future sizing. */
+  windowHeight: number
+}
+
 /** Ownership metadata for a browser tab requested by the main process. */
 export interface BrowserOpenRequestContext {
   projectId: string
@@ -1884,6 +1910,11 @@ export interface IpcInvokeContract {
   'browser:destroy': Contract<[tabId: string], void>
   'browser:destroyThread': Contract<[projectId: string, threadId: string], void>
   'browser:destroyProject': Contract<[projectId: string], void>
+  /** Open the native Ctrl+Tab overlay above the browser view with a fresh
+   *  display payload. Only used while the native browser view is on screen;
+   *  otherwise the renderer uses the DOM switcher. */
+  'switcher:open': Contract<[payload: NativeSwitcherPayload], void>
+  'switcher:close': Contract<[], void>
   'spec:addAnnotation': Contract<
     [
       projectId: string,
@@ -2387,6 +2418,13 @@ export interface IpcEventContract {
   'browser:openRequested': [url: string, context?: BrowserOpenRequestContext]
   'browser:permissionRequested': [request: BrowserPermissionRequest]
   'browser:permissionResolved': [requestId: string]
+  /** Native Ctrl+Tab overlay asked the renderer to switch to a thread. */
+  'switcher:select': [threadId: string]
+  /** Native Ctrl+Tab overlay moved its highlight (so the renderer can preload
+   *  that thread's messages). */
+  'switcher:highlight': [threadId: string]
+  /** Native Ctrl+Tab overlay was dismissed without a selection. */
+  'switcher:closed': []
   /** Remote-mode status changes from the main process. */
   'remote:status': [status: RemoteModeStatus]
   /**
