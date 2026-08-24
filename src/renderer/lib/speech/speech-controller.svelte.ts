@@ -1,5 +1,7 @@
 import { invoke } from '$lib/ipc.svelte'
+import { reportErrorWithDetails } from '$lib/stores/app-errors.svelte'
 import { pauseCurrentHistoryAudio } from './global-audio'
+import { logRendererError } from '../system/renderer-logger'
 import type {
   SpeechDictationSpan,
   SpeechModelArtifact,
@@ -54,13 +56,37 @@ interface ActivePlayback {
 const MIME_TYPES = ['audio/webm;codecs=opus', 'audio/webm', 'audio/ogg;codecs=opus'] as const
 const CAPTURE_TIMESLICE_MS = 250
 const PAUSE_UPLOAD_DEPTH = 4
+const CAPTURE_STOP_TIMEOUT_MS = 5_000
+
+type RecordingFailurePhase = 'prepare' | 'permission' | 'capture' | 'transcription' | 'insert'
 
 function errorMessage(cause: unknown): string {
-  return cause instanceof Error ? cause.message : String(cause)
+  if (cause instanceof Error && cause.message.trim()) return cause.message
+  if (typeof cause === 'string' && cause.trim()) return cause
+  return 'Unknown recording error.'
 }
 
 function selectedMimeType(): string {
+  if (typeof MediaRecorder === 'undefined') return ''
   return MIME_TYPES.find((mimeType) => MediaRecorder.isTypeSupported(mimeType)) ?? ''
+}
+
+function recordingToastMessage(cause: unknown, phase: RecordingFailurePhase): string {
+  const name =
+    typeof DOMException !== 'undefined' && cause instanceof DOMException ? cause.name : ''
+  if (phase === 'prepare') return 'Focus the editor before recording.'
+  if (name === 'NotAllowedError' || name === 'SecurityError') {
+    return 'Microphone access is blocked.'
+  }
+  if (name === 'NotFoundError' || name === 'DevicesNotFoundError') {
+    return 'No microphone was found.'
+  }
+  if (name === 'NotReadableError' || name === 'TrackStartError') {
+    return 'The microphone is unavailable.'
+  }
+  if (phase === 'insert') return 'The transcript could not be inserted.'
+  if (phase === 'transcription') return 'Voice recording could not be transcribed.'
+  return 'Voice recording failed.'
 }
 
 class SpeechController {
@@ -70,6 +96,7 @@ class SpeechController {
   private elapsedTimer: ReturnType<typeof setInterval> | null = null
   private readonly spans = new Map<string, SpeechDictationSpan[]>()
   private activePlayback: ActivePlayback | null = null
+  private stopPromise: Promise<void> | null = null
   private sound = structuredClone(DEFAULT_SPEECH_SETTINGS)
 
   isActiveTarget(targetId: string): boolean {
@@ -85,17 +112,19 @@ class SpeechController {
     await this.loadSettings()
     const snapshot = preparedSnapshot ?? target.capture()
     if (!snapshot) {
-      this.state = {
-        state: 'failed',
-        targetId: target.id,
-        message: 'Focus the editor before recording.'
-      }
+      this.surfaceFailure(target.id, 'prepare', new Error('Focus the editor before recording.'))
       return
     }
     this.state = { state: 'requesting-permission', targetId: target.id }
 
     let stream: MediaStream
     try {
+      if (typeof navigator.mediaDevices?.getUserMedia !== 'function') {
+        throw new Error('Microphone recording is unavailable in this environment.')
+      }
+      if (typeof MediaRecorder === 'undefined') {
+        throw new Error('Audio recording is unavailable in this environment.')
+      }
       stream = await navigator.mediaDevices.getUserMedia({
         audio: {
           channelCount: 1,
@@ -108,14 +137,15 @@ class SpeechController {
     } catch (cause) {
       const message = errorMessage(cause)
       await invoke('speech:recordPermissionFailure', scope, message).catch(() => undefined)
-      this.state = { state: 'failed', targetId: target.id, message }
+      this.surfaceFailure(target.id, 'permission', cause)
       return
     }
 
-    const mimeType = selectedMimeType()
     let recorder: MediaRecorder
     let pendingSessionId: string | null = null
+    let active: ActiveCapture | null = null
     try {
+      const mimeType = selectedMimeType()
       recorder = new MediaRecorder(stream, {
         ...(mimeType ? { mimeType } : {}),
         audioBitsPerSecond: 64_000
@@ -127,7 +157,7 @@ class SpeechController {
       )
       if (!started.ok) throw new Error(started.error.message)
       pendingSessionId = started.value.sessionId
-      const active: ActiveCapture = {
+      const capture: ActiveCapture = {
         target,
         snapshot,
         scope,
@@ -140,18 +170,19 @@ class SpeechController {
         queuedChunks: 0,
         uploadError: null
       }
-      this.active = active
-      recorder.ondataavailable = (event) => this.queueChunk(active, event.data)
+      active = capture
+      this.active = capture
+      recorder.ondataavailable = (event) => this.queueChunk(capture, event.data)
       recorder.onerror = () => {
-        active.uploadError ??= new Error('The recording device stopped unexpectedly.')
+        capture.uploadError ??= new Error('The recording device stopped unexpectedly.')
         void this.stop()
       }
       for (const track of stream.getAudioTracks()) {
         track.addEventListener(
           'ended',
           () => {
-            if (this.active !== active || recorder.state === 'inactive') return
-            active.uploadError ??= new Error(
+            if (this.active !== capture || recorder.state === 'inactive') return
+            capture.uploadError ??= new Error(
               'Microphone access was revoked or the device was disconnected.'
             )
             void this.stop()
@@ -164,37 +195,54 @@ class SpeechController {
       this.state = {
         state: 'recording',
         targetId: target.id,
-        attemptId: active.attemptId,
+        attemptId: capture.attemptId,
         startedAt: Date.now(),
         elapsedMs: 0
       }
-      this.startElapsedTimer(active)
+      this.startElapsedTimer(capture)
       this.playCue('started')
     } catch (cause) {
-      if (pendingSessionId) {
+      this.clearElapsedTimer()
+      if (active) {
+        active.uploadError ??= cause instanceof Error ? cause : new Error(errorMessage(cause))
+        await this.stopRecorder(active.recorder).catch(() => undefined)
+        for (const track of active.stream.getTracks()) track.stop()
+        await active.uploadTail.catch(() => undefined)
+        await invoke('speech:failCapture', active.sessionId, errorMessage(cause)).catch(
+          () => undefined
+        )
+      } else if (pendingSessionId) {
         await invoke('speech:failCapture', pendingSessionId, errorMessage(cause)).catch(
           () => undefined
         )
       }
       for (const track of stream.getTracks()) track.stop()
       this.active = null
-      this.state = { state: 'failed', targetId: target.id, message: errorMessage(cause) }
+      this.surfaceFailure(target.id, 'capture', cause)
     }
   }
 
   async stop(): Promise<void> {
     const active = this.active
-    if (!active || active.recorder.state === 'inactive') return
+    if (!active) return
+    if (this.stopPromise) return this.stopPromise
+    const pending = this.finishStop(active)
+    this.stopPromise = pending
+    try {
+      await pending
+    } finally {
+      if (this.stopPromise === pending) this.stopPromise = null
+    }
+  }
+
+  private async finishStop(active: ActiveCapture): Promise<void> {
     this.clearElapsedTimer()
     this.state = { state: 'stopping', targetId: active.target.id, attemptId: active.attemptId }
-    await new Promise<void>((resolve) => {
-      active.recorder.addEventListener('stop', () => resolve(), { once: true })
-      active.recorder.stop()
-    })
-    for (const track of active.stream.getTracks()) track.stop()
 
     let finalized = false
     try {
+      await this.stopRecorder(active.recorder)
+      for (const track of active.stream.getTracks()) track.stop()
       await active.uploadTail
       if (active.uploadError) throw active.uploadError
       const durationMs = Math.max(0, performance.now() - active.startedAt)
@@ -216,12 +264,12 @@ class SpeechController {
       const inserted = active.target.apply(active.snapshot, transcript)
       this.playCue('completed')
       if (!inserted.ok) {
-        this.state = {
-          state: 'failed',
-          targetId: active.target.id,
-          message:
-            'Transcript copied to the clipboard. The original editor changed, so it was not inserted.'
-        }
+        const insertionFailure =
+          'Transcript copied to the clipboard. The original editor changed, so it was not inserted.'
+        await invoke('speech:markAttemptFailure', active.attemptId, insertionFailure).catch(
+          () => undefined
+        )
+        this.surfaceFailure(active.target.id, 'insert', new Error(insertionFailure))
         return
       }
       const span: SpeechDictationSpan = {
@@ -244,10 +292,49 @@ class SpeechController {
           ? invoke('speech:markAttemptFailure', active.attemptId, message)
           : invoke('speech:failCapture', active.sessionId, message)
       ).catch(() => undefined)
-      this.state = { state: 'failed', targetId: active.target.id, message: errorMessage(cause) }
+      this.surfaceFailure(active.target.id, finalized ? 'transcription' : 'capture', cause)
     } finally {
+      for (const track of active.stream.getTracks()) track.stop()
       this.active = null
     }
+  }
+
+  private stopRecorder(recorder: MediaRecorder): Promise<void> {
+    if (recorder.state === 'inactive') return Promise.resolve()
+    return new Promise<void>((resolve, reject) => {
+      let timeout: ReturnType<typeof setTimeout> | null = null
+      const cleanup = (): void => {
+        if (timeout) clearTimeout(timeout)
+        timeout = null
+        recorder.removeEventListener('stop', onStop)
+      }
+      const onStop = (): void => {
+        cleanup()
+        resolve()
+      }
+      recorder.addEventListener('stop', onStop, { once: true })
+      timeout = setTimeout(() => {
+        cleanup()
+        reject(new Error('The recording device did not stop cleanly.'))
+      }, CAPTURE_STOP_TIMEOUT_MS)
+      try {
+        recorder.stop()
+      } catch (cause) {
+        cleanup()
+        reject(cause)
+      }
+    })
+  }
+
+  private surfaceFailure(targetId: string, phase: RecordingFailurePhase, cause: unknown): void {
+    const detail = errorMessage(cause)
+    logRendererError(`Voice recording ${phase} failed: ${detail}`, cause)
+    try {
+      reportErrorWithDetails(recordingToastMessage(cause, phase), { details: detail })
+    } catch (toastCause) {
+      logRendererError('Could not show the voice recording error toast.', toastCause)
+    }
+    this.state = { state: 'failed', targetId, message: detail }
   }
 
   resetFailure(targetId: string): void {
@@ -391,10 +478,7 @@ class SpeechController {
       if (chosenInstalled) {
         const catalogHit = catalog.value.artifacts.find((c) => c.id === chosenInstalled.artifactId)
         if (catalogHit) {
-          if (
-            catalogHit.capability === 'asr' &&
-            catalogHit.qualification.status === 'qualified'
-          )
+          if (catalogHit.capability === 'asr' && catalogHit.qualification.status === 'qualified')
             return { runtime: chosenInstalled.runtime, artifact: catalogHit }
         } else {
           // Imported model — synthesize a pseudo-artifact; service will handle directory
@@ -437,8 +521,7 @@ class SpeechController {
         candidate.qualification.status === 'qualified' &&
         installedIds.has(candidate.id)
     )
-    if (!artifact)
-      throw new Error(`Install a qualified speech-to-text model in Sound settings.`)
+    if (!artifact) throw new Error(`Install a qualified speech-to-text model in Sound settings.`)
     return { runtime: artifact.runtime, artifact }
   }
 
@@ -522,10 +605,7 @@ class SpeechController {
       if (chosenInstalled) {
         const catalogHit = catalog.value.artifacts.find((c) => c.id === chosenInstalled.artifactId)
         if (catalogHit) {
-          if (
-            catalogHit.capability === 'tts' &&
-            catalogHit.qualification.status === 'qualified'
-          )
+          if (catalogHit.capability === 'tts' && catalogHit.qualification.status === 'qualified')
             return { runtime: chosenInstalled.runtime, artifact: catalogHit }
         } else {
           const pseudo = {
@@ -641,22 +721,27 @@ class SpeechController {
           : this.sound.cues.transcriptReady
     if (!enabled || this.sound.cues.volume === 0) return
     const AudioContextConstructor = window.AudioContext
-    const context = new AudioContextConstructor()
-    const oscillator = context.createOscillator()
-    const gain = context.createGain()
-    const frequency = kind === 'started' ? 520 : kind === 'stopped' ? 360 : 700
-    oscillator.frequency.setValueAtTime(frequency, context.currentTime)
-    gain.gain.setValueAtTime(0.0001, context.currentTime)
-    gain.gain.exponentialRampToValueAtTime(
-      Math.max(0.0001, 0.06 * this.sound.cues.volume),
-      context.currentTime + 0.01
-    )
-    gain.gain.exponentialRampToValueAtTime(0.0001, context.currentTime + 0.09)
-    oscillator.connect(gain)
-    gain.connect(context.destination)
-    oscillator.start()
-    oscillator.stop(context.currentTime + 0.1)
-    oscillator.addEventListener('ended', () => void context.close(), { once: true })
+    if (typeof AudioContextConstructor !== 'function') return
+    try {
+      const context = new AudioContextConstructor()
+      const oscillator = context.createOscillator()
+      const gain = context.createGain()
+      const frequency = kind === 'started' ? 520 : kind === 'stopped' ? 360 : 700
+      oscillator.frequency.setValueAtTime(frequency, context.currentTime)
+      gain.gain.setValueAtTime(0.0001, context.currentTime)
+      gain.gain.exponentialRampToValueAtTime(
+        Math.max(0.0001, 0.06 * this.sound.cues.volume),
+        context.currentTime + 0.01
+      )
+      gain.gain.exponentialRampToValueAtTime(0.0001, context.currentTime + 0.09)
+      oscillator.connect(gain)
+      gain.connect(context.destination)
+      oscillator.start()
+      oscillator.stop(context.currentTime + 0.1)
+      oscillator.addEventListener('ended', () => void context.close(), { once: true })
+    } catch (cause) {
+      logRendererError(`Voice recording ${kind} cue failed: ${errorMessage(cause)}`, cause)
+    }
   }
 
   private async loadSettings(): Promise<void> {

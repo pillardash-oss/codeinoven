@@ -61,6 +61,12 @@ function describeReason(reason: unknown): { message: string; stack: string | und
   }
 }
 
+/** Forward an expected renderer failure to the durable main-process logger. */
+export function logRendererError(message: string, cause?: unknown): void {
+  const detail = cause === undefined ? { message, stack: undefined } : describeReason(cause)
+  send('error', message, detail.stack, 'error')
+}
+
 /**
  * Install window-level error handlers and `console.error` interception so every
  * renderer JS error is captured and forwarded to the main-process durable log.
