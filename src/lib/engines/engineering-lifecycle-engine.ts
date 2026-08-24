@@ -241,8 +241,12 @@ export class EngineeringLifecycleEngine {
       return current
     }
     const now = this.now()
+    // A new selection starts a fresh run: clear the permanent started marker so
+    // send-time auto-start only applies to a brand-new selection and a parked
+    // (circle-completed) lifecycle stays in implementation mode until a
+    // designated button re-enters it.
     this.db.run(
-      'UPDATE engineering_lifecycle SET selection=?, selected_stages_json=?, autopilot=?, completed_stages_json=?, resume_token=NULL, last_consumed_resume_token=NULL, failure=NULL, updated_at=? WHERE project_id=? AND thread_id=?',
+      'UPDATE engineering_lifecycle SET selection=?, selected_stages_json=?, autopilot=?, completed_stages_json=?, started_at=NULL, resume_token=NULL, last_consumed_resume_token=NULL, failure=NULL, updated_at=? WHERE project_id=? AND thread_id=?',
       selection,
       JSON.stringify(selectedStages),
       autopilot ? 1 : 0,
@@ -388,11 +392,12 @@ export class EngineeringLifecycleEngine {
     const terminal = selectedStages.length === 0
     const now = this.now()
     this.db.run(
-      'UPDATE engineering_lifecycle SET selection=?, selected_stages_json=?, active_stage=?, completed_stages_json=?, human_gate=NULL, resume_token=NULL, failure=NULL, updated_at=? WHERE project_id=? AND thread_id=?',
+      'UPDATE engineering_lifecycle SET selection=?, selected_stages_json=?, active_stage=?, completed_stages_json=?, started_at=COALESCE(started_at, ?), human_gate=NULL, resume_token=NULL, failure=NULL, updated_at=? WHERE project_id=? AND thread_id=?',
       terminal ? 'none' : selection,
       JSON.stringify(selectedStages),
       null,
       JSON.stringify(completedStages),
+      now,
       now,
       projectId,
       threadId
@@ -430,9 +435,7 @@ export class EngineeringLifecycleEngine {
     }
     const resumedStage =
       nextStage ??
-      (current.autopilot && decision === 'continue'
-        ? NEXT_STAGE_AFTER_GATE[current.humanGate]
-        : undefined) ??
+      (decision === 'continue' ? NEXT_STAGE_AFTER_GATE[current.humanGate] : undefined) ??
       current.activeStage
     const now = this.now()
     this.db.run(

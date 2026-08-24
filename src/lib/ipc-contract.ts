@@ -345,7 +345,7 @@ export interface IpcInvokeContract {
     EngineeringLifecycleState
   >
   'engineeringLifecycle:start': Contract<
-    [projectId: string, threadId: string],
+    [projectId: string, threadId: string, stage?: import('./types').EngineeringLifecycleStage],
     EngineeringLifecycleTransitionResult
   >
   'engineeringLifecycle:complete': Contract<
@@ -663,10 +663,7 @@ export interface IpcInvokeContract {
     void
   >
   'memory:getMergedEntries': Contract<[projectId: string], import('./types').MemoryEntry[]>
-  'memory:getAllEntries': Contract<
-    [kind: 'projects' | 'chats'],
-    import('./types').MemoryEntry[]
-  >
+  'memory:getAllEntries': Contract<[kind: 'projects' | 'chats'], import('./types').MemoryEntry[]>
   'memory:addEntry': Contract<
     [
       label: string,

@@ -746,6 +746,20 @@ const ACHIEVEMENT_IMPLEMENT_SYSTEM_PROMPT = [
   'Do not declare the goal complete merely because this turn is ending; the application will independently audit the result and return actionable findings for the next turn.'
 ].join(' ')
 
+/**
+ * Injected on non-planning turns when an Engineering lifecycle is parked:
+ * stages were selected but no circle is currently running and no decision gate
+ * is pending. The user is chatting in implementation mode; regular messages
+ * must be answered directly and must never re-enter brainstorming or
+ * re-formulate problem statements.
+ */
+const ENGINEERING_PARKED_LIFECYCLE_INSTRUCTION = [
+  'The Engineering lifecycle for this thread is parked: no stage is actively running and no decision is awaiting your button.',
+  'Answer the user directly in implementation mode. Do NOT re-enter brainstorming, generate a new specification, or reformulate problem statements unless the user explicitly asks you to use the Engineering Studio buttons (Review, Next step, Implement) or to start a specific stage.',
+  'If the user asks you to implement, review, or advance a stage from a plain message, explain that they must use the Review / Next step / Implement buttons in the Engineering Studio, or fork this branch into another branch and turn Engineering mode off to continue without the lifecycle.',
+  'Continue assisting with code and discussions as a regular engineering assistant.'
+].join(' ')
+
 const SPEC_MARKDOWN_INSTRUCTION =
   'Write human-facing prose string fields as readable Markdown. Use short paragraphs with blank-line separation. When one string enumerates multiple distinct steps, findings, or recommendations, use newline-delimited `1.` or `-` list items; never compress them into inline forms such as `(1) ...; (2) ...`. Do not add list markers inside fields already modeled as arrays, and do not repeat specification section headings inside field values.'
 
@@ -5536,7 +5550,22 @@ export class ChatEngine {
     if (driverId !== 'claude-code') void scheduleAutoTitle()
     const isChatThread = project.id === INBOX_PROJECT_ID
     const chatFileSystemEnabled = isChatThread && settings.fileSystemMode === true
-    const planningSpecTurn = settings.engineeringMode && specAction !== 'implement'
+    // A parked lifecycle (stages selected but no circle actively running and no
+    // decision gate pending) means the user is free to chat: their message must
+    // NOT be hijacked into the planning/spec workflow. Only explicit designated
+    // stage actions ('request'/'review' from the studios) or an actively
+    // planning lifecycle take the brainstorming path.
+    const lifecycleForMode = this.engineeringLifecycleEngine.get(projectId, threadId)
+    const lifecycleParked =
+      lifecycleForMode !== null &&
+      lifecycleForMode.selection !== 'none' &&
+      lifecycleForMode.activeStage === undefined &&
+      lifecycleForMode.humanGate === undefined
+    const explicitPlanningAction = specAction === 'request' || specAction === 'review'
+    const planningSpecTurn =
+      settings.engineeringMode &&
+      specAction !== 'implement' &&
+      (explicitPlanningAction || !lifecycleParked)
     // Persist the selected harness before resolving the session. The renderer
     // pre-binds this same harness immediately before dispatch; leaving the old
     // harness in thread settings would make ensureSession replace that session
@@ -5733,7 +5762,7 @@ export class ChatEngine {
     // system-prompt base estimate and the final composition below, so compute
     // them once before the history recap budget is derived.
     const behaviorMode =
-      specAction === 'implement' ? 'implement' : settings.engineeringMode ? 'brainstorm' : 'chat'
+      specAction === 'implement' ? 'implement' : planningSpecTurn ? 'brainstorm' : 'chat'
     const [checkpointId, utilityInstructions, behaviorPrompt, rawRecap] = await Promise.all([
       checkpointPromise,
       utilityInstructionsPromise,
@@ -5758,13 +5787,18 @@ export class ChatEngine {
         featureSlug: undefined
       }
     )
-    const promptBehavior = [behaviorPrompt, generatedArtifactPrompt].filter(Boolean).join('\n\n')
+    const parkedLifecycleInstruction = lifecycleParked
+      ? ENGINEERING_PARKED_LIFECYCLE_INSTRUCTION
+      : ''
+    const promptBehavior = [behaviorPrompt, generatedArtifactPrompt, parkedLifecycleInstruction]
+      .filter(Boolean)
+      .join('\n\n')
     // One aggregate selected-model input budget across user text + the final
     // system/behavior/tool prompt + hidden orchestration context + history
     // recap, with output/tool headroom reserved once (A-13). The recap takes
     // only the headroom left after the fixed user/system layers and the actual
     // hidden context consumed.
-    const brainstormingTurn = settings.engineeringMode && specAction !== 'implement'
+    const brainstormingTurn = planningSpecTurn
     const chatSystemPrompt = isChatThread
       ? await this.cioPrompt(chatFileSystemEnabled ? 'file-system-chat' : 'chat')
       : ''

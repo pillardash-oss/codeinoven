@@ -267,4 +267,43 @@ describe('EngineeringLifecycleEngine', () => {
       autopilot: false
     })
   })
+
+  it('restores the gated stage on a manual continue so the next step can complete it', async () => {
+    const { lifecycle } = await setup()
+    lifecycle.select('project-1', 'thread-1', { stages: ['spec'] })
+    lifecycle.start('project-1', 'thread-1')
+    const gated = lifecycle.advance('project-1', 'thread-1', {
+      completedStage: 'spec',
+      gate: 'spec_approval'
+    })
+    expect(gated.humanGate).toBe('spec_approval')
+    const resumed = lifecycle.resume('project-1', 'thread-1', gated.resumeToken!, 'continue')
+    // Manual continue re-enters the paused stage, so the renderer's next
+    // completeStage can drive the circle to completion.
+    expect(resumed).toMatchObject({
+      idempotent: false,
+      state: { activeStage: 'spec', humanGate: undefined }
+    })
+    expect(lifecycle.completeStage('project-1', 'thread-1', 'spec')).toMatchObject({
+      selection: 'none',
+      activeStage: undefined,
+      completedStages: ['spec']
+    })
+  })
+
+  it('clears the permanent startedAt marker when a new selection replaces the old one', async () => {
+    const { db, lifecycle } = await setup()
+    lifecycle.select('project-1', 'thread-1', { stages: ['spec'] })
+    lifecycle.start('project-1', 'thread-1')
+    const timestamps: number[] = []
+    timestamps.push(lifecycle.get('project-1', 'thread-1')?.startedAt as number)
+    lifecycle.completeStage('project-1', 'thread-1', 'spec')
+    timestamps.push(lifecycle.get('project-1', 'thread-1')?.startedAt as number)
+    expect(timestamps[0]).toBeTypeOf('number')
+    expect(timestamps[1]).toBe(timestamps[0])
+    lifecycle.select('project-1', 'thread-1', { stages: ['brainstorm', 'spec'] })
+    expect(lifecycle.get('project-1', 'thread-1')?.startedAt).toBeUndefined()
+    const reopened = new EngineeringLifecycleEngine(db)
+    expect(reopened.get('project-1', 'thread-1')?.startedAt).toBeUndefined()
+  })
 })

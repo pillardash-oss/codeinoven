@@ -43,7 +43,7 @@
     Zap
   } from '@lucide/svelte'
   import ChatComposer from '../chats/ChatComposer.svelte'
-  import { normalizeComposerMessage } from '../chats/composer-mentions'
+  import { normalizeComposerMessage, spaceOutProjectReferences } from '../chats/composer-mentions'
   import StartAfterThreadPicker from '../chats/StartAfterThreadPicker.svelte'
   import ResponseSelectionPopover from '../chats/ResponseSelectionPopover.svelte'
   import ResponseAnnotationBubble from '../chats/ResponseAnnotationBubble.svelte'
@@ -3821,11 +3821,21 @@
     // Let the mount-time lookup finish first so it cannot persist an older
     // harness session after this send-specific lookup.
     const { projectId, id } = thread
+    // A parked lifecycle (a circle has already started and completed) must not
+    // be re-started by a plain send: the designated Next-step/Review/Implement
+    // buttons own stage re-entry. A fresh selection (startedAt cleared by
+    // select) may still start on send, because that is the user asking to run
+    // the newly selected Engineering stage.
+    const lifecycleStarted =
+      engineeringLifecycle !== null &&
+      engineeringLifecycle !== undefined &&
+      engineeringLifecycle.startedAt !== undefined
     if (
       engineeringLifecycle?.selection !== undefined &&
       engineeringLifecycle.selection !== 'none' &&
       engineeringLifecycle.activeStage === undefined &&
-      engineeringLifecycle.humanGate === undefined
+      engineeringLifecycle.humanGate === undefined &&
+      !lifecycleStarted
     ) {
       const started = await invoke('engineeringLifecycle:start', projectId, id)
       engineeringLifecycle = started.state
@@ -3960,10 +3970,15 @@
       }
     }
 
+    const lifecycleStarted =
+      engineeringLifecycle !== null &&
+      engineeringLifecycle !== undefined &&
+      engineeringLifecycle.startedAt !== undefined
     const selectedPrd =
       engineeringLifecycle?.activeStage === 'prd' ||
       (hasSelectedStage(engineeringLifecycle, 'prd') &&
-        engineeringLifecycle?.activeStage === undefined)
+        engineeringLifecycle?.activeStage === undefined &&
+        !lifecycleStarted)
     const selectedPrdWorkflow = selectedPrd
       ? await invoke('prd:ensureWorkflow', thread.projectId, thread.id)
       : null
@@ -5251,6 +5266,40 @@
     }
   }
 
+  /** Designated Next-step from a finalized PRD: start the Spec stage (manual
+   *  stop-mode no longer auto-advances) and generate the spec from the PRD. */
+  async function nextStepFromPrd(): Promise<void> {
+    if (prdBusy || specFormulating) return
+    prdBusy = true
+    specFormulating = true
+    prdError = ''
+    try {
+      let lifecycle = engineeringLifecycle
+      if (lifecycle && !lifecycle.autopilot && !hasSelectedStage(lifecycle, 'spec')) {
+        lifecycle = await invoke('engineeringLifecycle:select', thread.projectId, thread.id, {
+          stages: [...(lifecycle.selectedStages ?? []), 'spec'],
+          autopilot: false
+        })
+      }
+      if (lifecycle && lifecycle.activeStage === undefined && lifecycle.humanGate === undefined) {
+        lifecycle = (
+          await invoke('engineeringLifecycle:start', thread.projectId, thread.id, 'spec')
+        ).state
+      }
+      engineeringLifecycle = lifecycle
+      const generatedSpec = await invoke('agent:ensureInitialSpec', thread.projectId, thread.id)
+      await setActiveSpec(generatedSpec)
+      engineeringLifecycle = await invoke('engineeringLifecycle:get', thread.projectId, thread.id)
+      studioDocument = 'spec'
+      showSpecStudio = true
+    } catch (error) {
+      prdError = error instanceof Error ? error.message : 'The Spec could not be generated.'
+    } finally {
+      specFormulating = false
+      prdBusy = false
+    }
+  }
+
   async function openPrdInEditor(): Promise<void> {
     if (!studioPrd) return
     await invoke(
@@ -5685,33 +5734,54 @@
       await submitBrainstormDecision('review', draft, note)
       return
     }
-    // PRD | Spec: make sure the target stage is part of the lifecycle, then
-    // finalize so the Sr. Engineer produces the requested document.
+    // PRD | Spec: finalize the Brainstorm (the finalize consumes any pending
+    // gate), then, in manual stop-mode, explicitly re-enter the requested stage
+    // and drive its generation. Autopilot keeps its automatic chain.
     const requestedStage = step === 'prd' ? 'prd' : 'spec'
-    if (
-      engineeringLifecycle?.autopilot !== true &&
-      !hasSelectedStage(engineeringLifecycle, requestedStage)
-    ) {
-      engineeringLifecycle = await invoke(
-        'engineeringLifecycle:select',
-        thread.projectId,
-        thread.id,
-        {
-          stages: [...(engineeringLifecycle?.selectedStages ?? []), requestedStage],
-          autopilot: false
-        }
-      )
-    }
+    await submitBrainstormDecision('finalize', draft, '')
     if (
       engineeringLifecycle &&
+      !engineeringLifecycle.autopilot &&
       engineeringLifecycle.activeStage === undefined &&
-      engineeringLifecycle.selection !== 'none'
+      engineeringLifecycle.humanGate === undefined
     ) {
+      if (!hasSelectedStage(engineeringLifecycle, requestedStage)) {
+        engineeringLifecycle = await invoke(
+          'engineeringLifecycle:select',
+          thread.projectId,
+          thread.id,
+          {
+            stages: [...(engineeringLifecycle.selectedStages ?? []), requestedStage],
+            autopilot: false
+          }
+        )
+      }
       engineeringLifecycle = (
-        await invoke('engineeringLifecycle:start', thread.projectId, thread.id)
+        await invoke('engineeringLifecycle:start', thread.projectId, thread.id, requestedStage)
       ).state
+      if (requestedStage === 'prd') {
+        await invoke('prd:ensureWorkflow', thread.projectId, thread.id)
+        prd = await invoke(
+          'agent:generatePrd',
+          thread.projectId,
+          thread.id,
+          settings,
+          'Generate the PRD from the finalized Brainstorm and verified project context.',
+          [],
+          messageId()
+        )
+        prdVersions = prd ? [prd] : []
+        selectedPrdVersion = prd?.version ?? null
+        studioDocument = 'prd'
+        showSpecStudio = true
+      } else {
+        const generatedSpec = await invoke('agent:ensureInitialSpec', thread.projectId, thread.id)
+        await setActiveSpec(generatedSpec)
+        studioDocument = 'spec'
+        showSpecStudio = true
+      }
+      engineeringLifecycle = await invoke('engineeringLifecycle:get', thread.projectId, thread.id)
     }
-    await submitBrainstormDecision('finalize', draft, '')
   }
 
   async function selectLofiPrototype(prototypeId: string): Promise<void> {
@@ -7249,7 +7319,11 @@
     const text = rawMessageText(msg)
     const explicit = explicitMessagePresentation(msg)
     if (explicit) return [explicit.action, explicit.body].filter(Boolean).join('\n\n')
-    return text
+    // Restore the separator a tagged path lost when it was glued to the next
+    // word, so already-sent messages read with a clean space before the chip.
+    return msg.projectReferences?.length
+      ? spaceOutProjectReferences(text, msg.projectReferences)
+      : text
   }
 
   // ─── Message actions (copy / fork / edit) ──────────────────────────────
@@ -8010,6 +8084,7 @@
           onUpdateAnnotation={updatePrdAnnotation}
           onResolveAnnotation={resolvePrdAnnotation}
           onFinalize={finalizePrd}
+          onNextStep={prd?.status === 'finalized' ? nextStepFromPrd : undefined}
           onOpenInEditor={openPrdInEditor}
           onRevealInFiles={revealPrdInFiles}
         />
