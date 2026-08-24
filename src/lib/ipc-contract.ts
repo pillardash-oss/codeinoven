@@ -43,7 +43,6 @@ import type {
   EngineeringSpec,
   EngineeringSpecContent,
   EngineeringLifecycleDecision,
-  EngineeringLifecycleSelection,
   EngineeringLifecycleState,
   EngineeringLifecycleTransitionResult,
   ScopedHarnessCommand,
@@ -338,7 +337,11 @@ export interface IpcInvokeContract {
     EngineeringLifecycleState | null
   >
   'engineeringLifecycle:select': Contract<
-    [projectId: string, threadId: string, selection: EngineeringLifecycleSelection],
+    [
+      projectId: string,
+      threadId: string,
+      input: import('./types').EngineeringLifecycleSelectionInput
+    ],
     EngineeringLifecycleState
   >
   'engineeringLifecycle:start': Contract<

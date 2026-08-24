@@ -77,7 +77,7 @@ import {
   validateEntityId,
   validateEngineeringLifecycleDecision,
   validateEngineeringLifecycleResumeToken,
-  validateEngineeringLifecycleSelection,
+  validateEngineeringLifecycleSelectionInput,
   validateEngineeringLifecycleStage,
   validateScopeAppearancePatch,
   validateScopeCollapsePatch,
@@ -1406,7 +1406,7 @@ export class RemoteRpcDispatcher {
         return this.engineeringLifecycleEngine.select(
           validateEntityId(args[0], 'Project ID'),
           validateEntityId(args[1], 'Thread ID'),
-          validateEngineeringLifecycleSelection(args[2])
+          validateEngineeringLifecycleSelectionInput(args[2])
         )
       case 'engineeringLifecycle:start':
         return this.engineeringLifecycleEngine.start(

@@ -66,7 +66,10 @@ export async function inheritEngineeringLifecycle(
     // The destination is created optimistically; make sure its row is durable
     // before writing lifecycle state onto it.
     await invoke('thread:get', projectId, destinationThreadId)
-    await invoke('engineeringLifecycle:select', projectId, destinationThreadId, source.selection)
+    await invoke('engineeringLifecycle:select', projectId, destinationThreadId, {
+      stages: source.selectedStages ?? [],
+      autopilot: source.autopilot
+    })
   } catch {
     // Lifecycle inheritance is cosmetic — never block thread creation on it.
   }

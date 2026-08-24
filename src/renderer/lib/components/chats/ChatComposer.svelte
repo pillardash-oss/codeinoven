@@ -88,7 +88,7 @@
     AttachmentStorageScope,
     UsageEfficiencyKpis,
     Thread,
-    EngineeringLifecycleSelection,
+    EngineeringLifecycleSelectionInput,
     EngineeringLifecycleState
   } from '$shared/types'
 
@@ -174,7 +174,7 @@
     showEngineeringMode?: boolean
     engineeringLifecycle?: EngineeringLifecycleState | null
     onEngineeringLifecycleSelect?: (
-      selection: EngineeringLifecycleSelection
+      input: EngineeringLifecycleSelectionInput
     ) => void | Promise<void>
     onEngineeringLifecycleRetry?: () => void | Promise<void>
     /** True on the Chats tab — surfaces the chat-only Engineering and File System toggles. */

@@ -1,21 +1,22 @@
 # Engineering lifecycle
 
-The Engineering Toolbox stores one canonical selection per project thread: `none`, `brainstorm`, `prd`, `spec`, `assignment`, `achievement`, or `run_all`. Selecting a stage does not mark it as started. The first start sets `started_at`; that timestamp is permanent and keeps the Toolbox filled after completion, cancellation, failure, reload, or restart.
+The Engineering Toolbox stores a set of independent stage switches per project thread and an optional **Auto Pilot** flag. Any combination of `brainstorm`, `prd`, `spec`, `assignment`, and `achievement` can be enabled at once; the lifecycle runs the enabled stages in canonical order (`brainstorm → prd → spec → assignment → achievement`), skipping stages that are not enabled. Selecting a stage does not mark it as started. The first start sets `started_at`; that timestamp is permanent and keeps the Toolbox filled after completion, cancellation, failure, reload, or restart.
 
 ## Stage behavior
 
-Single-stage runs stop after their selected stage. PRD finalization does not select Spec. Spec approval does not start implementation. Assignment and Achievement require an approved Spec.
+Dependencies cascade when a switch is enabled: **Assignment and Achievement both imply Spec**, so enabling either one leaves the Spec switch on. Achievement is a loop mode and never enables Assignment. Turning on PRD or Spec never turns on Brainstorm — instead, PRD and Spec require context, so the **engineer entry card** ("Brainstorm first | Jump directly into PRD/Spec") is shown at the point of sending a message, never when the switch is toggled. Jumping in still lets the Sr. Engineer ask alignment questions; it simply skips the Brainstorm document and generates the PRD or Spec from the message instead.
 
-Run all advances in this order:
+Single-stage runs stop after their selected stage. PRD finalization does not select Spec. Spec approval does not start implementation on its own. Assignment and Achievement require an approved Spec.
 
-1. Brainstorm
-2. Optional prototype work inside Brainstorm
-3. PRD
-4. Spec
-5. Assignment
-6. Achievement audit and rework
+After a Brainstorm session, the studio offers a **Next step** menu instead of a single "Prepare spec" action: Prototype Lo-Fi, Prototype Hi-Fi, Generate PRD, or Generate Spec. Prototype steps steer the Sr. Engineer to extend the Brainstorm; PRD and Spec steps finalize the Brainstorm and produce the requested document.
 
-Run all remains selected while work is active or awaiting a human decision. Completed stages are persisted before the next stage starts. Resume tokens are bounded, single-use, and safe to replay: a repeated consumed token returns the current state without repeating work.
+### Auto Pilot
+
+Auto Pilot replaces the old "Run all" toggle. It is a full-autonomy mode: the lifecycle runs `brainstorm → prd → spec → assignment → achievement` and keeps the achievement audit/rework loop active until the goal passes or reaches a hard terminal failure. Auto Pilot generates only what the pipeline needs — the Brainstorm may be skipped, the message is used as input (alignment questions are still allowed), a Spec is generated, worker tasks are assigned to the re-used workers from the last run or the agent defaults, and the run proceeds without waiting for human intervention.
+
+## Stage behavior (original single-run notes)
+
+Completing a stage advances to the next enabled stage; when no further stage is enabled the run terminates. Run all remains selected while work is active or awaiting a human decision. Completed stages are persisted before the next stage starts. Resume tokens are bounded, single-use, and safe to replay: a repeated consumed token returns the current state without repeating work.
 
 Human gates cover LoFi selection when HiFi is offered, Brainstorm finalization, PRD finalization, Spec approval, Assignment approval, and acknowledged terminal failures. A hard failure retains the failed stage and selection behind a single-use retry token; Retry re-enters that same stage, while Stop uses the normal confirmation flow. Replacing or stopping an active run requires confirmation. Existing documents and prototype artifacts are preserved after cancellation.
 

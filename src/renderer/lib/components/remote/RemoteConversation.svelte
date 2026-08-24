@@ -34,7 +34,7 @@
   import { mobileState } from '$lib/remote/mobile-state.svelte'
   import ChatComposer from '../chats/ChatComposer.svelte'
   import EngineeringFlowCancelModal from '../threads/EngineeringFlowCancelModal.svelte'
-  import PrdEntryChoiceCard from '../threads/PrdEntryChoiceCard.svelte'
+  import EngineeringEntryCard from '../chats/EngineeringEntryCard.svelte'
   import AttachmentPreview from '../chats/AttachmentPreview.svelte'
   import ResponseSelectionPopover from '../chats/ResponseSelectionPopover.svelte'
   import AgentProviderStatusCard from '../threads/AgentProviderStatusCard.svelte'
@@ -50,12 +50,17 @@
     BrainstormDocument,
     PromptAttachment,
     PromptReference,
-    EngineeringLifecycleSelection,
+    EngineeringLifecycleSelectionInput,
     EngineeringLifecycleState,
     PrdWorkflowState,
     Thread,
     ThreadSettings
   } from '$shared/types'
+  import {
+    hasSelectedStage,
+    normalizeLifecycleStages,
+    representativeLifecycleSelection
+  } from '$shared/engines/engineering-lifecycle-engine'
   import type { ThinkingLevel } from '$shared/types'
 
   type StartAfterSelection = Pick<Thread, 'id' | 'title'>
@@ -80,7 +85,7 @@
   let prdWorkflow = $state<PrdWorkflowState | null>(null)
   let gateBrainstorm = $state<BrainstormDocument | null>(null)
   let continueWithoutHifi = $state(false)
-  let pendingLifecycleSelection = $state<EngineeringLifecycleSelection | null>(null)
+  let pendingLifecycleSelection = $state<EngineeringLifecycleSelectionInput | null>(null)
   let lifecycleChoiceBusy = $state(false)
   let failedDelivery = $state<{ text: string; attachments: PromptAttachment[] } | null>(null)
   let errorRetrying = $state(false)
@@ -139,16 +144,25 @@
     settings = updated
   }
 
-  function settingsForLifecycle(selection: EngineeringLifecycleSelection): ThreadSettings {
+  function settingsForEngineeringState(state: EngineeringLifecycleState | null): ThreadSettings {
+    if (!state || (state.selectedStages.length === 0 && !state.autopilot)) {
+      return {
+        ...settings,
+        engineeringMode: false,
+        assignmentMode: false,
+        loopMode: false
+      }
+    }
+    const { selectedStages, autopilot } = state
     return {
       ...settings,
       engineeringMode:
-        selection === 'brainstorm' ||
-        selection === 'prd' ||
-        selection === 'spec' ||
-        selection === 'run_all',
-      assignmentMode: selection === 'assignment' || selection === 'run_all',
-      loopMode: selection === 'achievement' || selection === 'run_all'
+        autopilot ||
+        selectedStages.includes('brainstorm') ||
+        selectedStages.includes('prd') ||
+        selectedStages.includes('spec'),
+      assignmentMode: autopilot || selectedStages.includes('assignment'),
+      loopMode: autopilot || selectedStages.includes('achievement')
     }
   }
 
@@ -226,38 +240,45 @@
     if (lifecycle?.humanGate !== 'prototype_selection') continueWithoutHifi = false
   }
 
-  async function applyLifecycleSelection(selection: EngineeringLifecycleSelection): Promise<void> {
+  async function applyLifecycleSelection(input: EngineeringLifecycleSelectionInput): Promise<void> {
     engineeringLifecycle = await invoke(
       'engineeringLifecycle:select',
       thread.projectId,
       thread.id,
-      selection
+      input
     )
-    settings = settingsForLifecycle(selection)
+    settings = settingsForEngineeringState(engineeringLifecycle)
     await invoke('thread:updateSettings', thread.projectId, thread.id, settings)
-    if (selection === 'prd') {
-      prdWorkflow = await invoke('prd:ensureWorkflow', thread.projectId, thread.id)
-    }
   }
 
   async function selectEngineeringLifecycle(
-    selection: EngineeringLifecycleSelection
+    input: EngineeringLifecycleSelectionInput
   ): Promise<void> {
     const current = engineeringLifecycle
     if (
       current &&
-      selection !== current.selection &&
+      lifecycleSelectionDiffers(current, input) &&
       (current.activeStage !== undefined || current.humanGate !== undefined)
     ) {
-      pendingLifecycleSelection = selection
+      pendingLifecycleSelection = input
       return
     }
-    await applyLifecycleSelection(selection)
+    await applyLifecycleSelection(input)
+  }
+
+  function lifecycleSelectionDiffers(
+    state: EngineeringLifecycleState,
+    input: EngineeringLifecycleSelectionInput
+  ): boolean {
+    const representative = representativeLifecycleSelection(
+      normalizeLifecycleStages(input.stages),
+      input.autopilot === true
+    )
+    return representative !== state.selection || input.autopilot !== state.autopilot
   }
 
   async function confirmLifecycleReplacement(): Promise<void> {
-    const selection = pendingLifecycleSelection
-    if (selection === null) return
+    const replacement = pendingLifecycleSelection ?? { stages: [], autopilot: false }
     engineeringLifecycle = await invoke(
       'engineeringLifecycle:cancel',
       thread.projectId,
@@ -265,7 +286,9 @@
       true
     )
     pendingLifecycleSelection = null
-    if (selection !== 'none') await applyLifecycleSelection(selection)
+    if (replacement.stages.length > 0 || replacement.autopilot) {
+      await applyLifecycleSelection(replacement)
+    }
   }
 
   async function choosePrdEntry(choice: 'brainstorm_first' | 'start_prd'): Promise<void> {
@@ -296,7 +319,7 @@
         thread.id,
         current.resumeToken
       )
-      settings = settingsForLifecycle(engineeringLifecycle.selection)
+      settings = settingsForEngineeringState(engineeringLifecycle)
       await deliver(
         `Retry the persisted ${engineeringLifecycle.activeStage ?? 'Engineering'} stage from its durable state.`,
         []
@@ -432,7 +455,7 @@
           )
         ).state
         await invoke('agent:startAssignment', thread.projectId, thread.id)
-        if (engineeringLifecycle.selection === 'run_all') {
+        if (engineeringLifecycle.autopilot) {
           engineeringLifecycle = await invoke(
             'engineeringLifecycle:complete',
             thread.projectId,
@@ -750,6 +773,14 @@
         engineeringLifecycle = (
           await invoke('engineeringLifecycle:start', thread.projectId, thread.id)
         ).state
+      }
+      if (engineeringLifecycle?.activeStage === 'prd' && prdWorkflow?.stage !== 'drafting') {
+        prdWorkflow = await invoke('prd:ensureWorkflow', thread.projectId, thread.id)
+        if (prdWorkflow?.stage === 'choice_pending' || prdWorkflow?.stage === 'brainstorming') {
+          failedDelivery = null
+          agentRuns.setIdle(thread.projectId, thread.id)
+          return
+        }
       }
       if (engineeringLifecycle?.activeStage === 'prd' && prdWorkflow?.stage === 'drafting') {
         await invoke(
@@ -1300,12 +1331,13 @@
         {/each}
       </div>
     {/if}
-    {#if !chatMode && engineeringLifecycle?.selection === 'prd' && prdWorkflow?.stage === 'choice_pending'}
+    {#if !chatMode && hasSelectedStage(engineeringLifecycle, 'prd') && prdWorkflow?.stage === 'choice_pending'}
       <div class="px-1 pb-2">
-        <PrdEntryChoiceCard
+        <EngineeringEntryCard
+          target="prd"
           busy={lifecycleChoiceBusy}
           onBrainstormFirst={() => choosePrdEntry('brainstorm_first')}
-          onStartPrd={() => choosePrdEntry('start_prd')}
+          onJumpIn={() => choosePrdEntry('start_prd')}
         />
       </div>
     {/if}
@@ -1402,7 +1434,7 @@
 
 <EngineeringFlowCancelModal
   open={pendingLifecycleSelection !== null}
-  title={pendingLifecycleSelection === 'none'
+  title={pendingLifecycleSelection === null
     ? 'Stop Engineering work?'
     : 'Replace Engineering work?'}
   message="Generated documents and prototype artifacts will be preserved. Confirm before changing the active lifecycle run."

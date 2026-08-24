@@ -73,7 +73,7 @@ import {
   validateEntityId,
   validateEngineeringLifecycleDecision,
   validateEngineeringLifecycleResumeToken,
-  validateEngineeringLifecycleSelection,
+  validateEngineeringLifecycleSelectionInput,
   validateEngineeringLifecycleStage,
   validateGitIdentity,
   validateGitPathArray,
@@ -1713,7 +1713,8 @@ export function validateAppConfigPatch(value: unknown): AppConfigPatch {
       },
       voiceRecordingEnabled: sound.voiceRecordingEnabled,
       localLlmCleanupEnabled: sound.localLlmCleanupEnabled,
-      localLlmBaseUrl: sound.localLlmBaseUrl === undefined ? undefined : String(sound.localLlmBaseUrl),
+      localLlmBaseUrl:
+        sound.localLlmBaseUrl === undefined ? undefined : String(sound.localLlmBaseUrl),
       asrUnload: sound.asrUnload,
       cleanupUnload: sound.cleanupUnload,
       ttsUnload: sound.ttsUnload
@@ -2153,11 +2154,11 @@ export function registerIpcHandlers(
   )
   ipcMain.handle(
     'engineeringLifecycle:select',
-    (_, projectId: unknown, threadId: unknown, selection: unknown) =>
+    (_, projectId: unknown, threadId: unknown, input: unknown) =>
       engineeringLifecycleEngine.select(
         validateEntityId(projectId, 'Project ID'),
         validateEntityId(threadId, 'Thread ID'),
-        validateEngineeringLifecycleSelection(selection)
+        validateEngineeringLifecycleSelectionInput(input)
       )
   )
   ipcMain.handle('engineeringLifecycle:start', (_, projectId: unknown, threadId: unknown) =>

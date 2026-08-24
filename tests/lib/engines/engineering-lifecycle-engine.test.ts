@@ -4,8 +4,10 @@ import { ProjectRepo } from '../../../src/main/database/repositories/project-rep
 import { ThreadRepo } from '../../../src/main/database/repositories/thread-repo'
 import {
   deriveEngineeringLifecycleSwitchState,
-  EngineeringLifecycleEngine
+  EngineeringLifecycleEngine,
+  normalizeLifecycleStages
 } from '../../../src/lib/engines/engineering-lifecycle-engine'
+import type { EngineeringLifecycleState } from '../../../src/lib/types'
 import { createTestDb, destroyTestDb } from '../../main/database/test-helper'
 
 const databases: Database[] = []
@@ -54,20 +56,46 @@ async function setup(): Promise<{ db: Database; lifecycle: EngineeringLifecycleE
 afterEach(() => databases.splice(0).forEach(destroyTestDb))
 
 describe('EngineeringLifecycleEngine', () => {
-  it('derives every stage as selected and immutable while Run all is selected', () => {
-    expect(deriveEngineeringLifecycleSwitchState('run_all', 'brainstorm')).toEqual({
+  it('applies cascade dependencies so Assignment and Achievement enable Spec', () => {
+    expect(normalizeLifecycleStages(['assignment'])).toEqual(['spec', 'assignment'])
+    expect(normalizeLifecycleStages(['achievement'])).toEqual(['spec', 'achievement'])
+    // Achievement is a loop mode: it never drags Assignment in.
+    expect(normalizeLifecycleStages(['achievement'])).not.toContain('assignment')
+    expect(normalizeLifecycleStages(['prd', 'brainstorm'])).toEqual(['brainstorm', 'prd'])
+  })
+
+  it('derives every stage as selected and immutable while Auto Pilot is on', () => {
+    const autopilot: EngineeringLifecycleState = {
+      projectId: 'p',
+      threadId: 't',
+      selection: 'run_all',
+      selectedStages: [],
+      autopilot: true,
+      completedStages: [],
+      updatedAt: 1
+    }
+    expect(deriveEngineeringLifecycleSwitchState(autopilot, 'brainstorm')).toEqual({
       checked: true,
       disabled: true
     })
-    expect(deriveEngineeringLifecycleSwitchState('run_all', 'achievement')).toEqual({
+    expect(deriveEngineeringLifecycleSwitchState(autopilot, 'achievement')).toEqual({
       checked: true,
       disabled: true
     })
-    expect(deriveEngineeringLifecycleSwitchState('prd', 'prd')).toEqual({
+    const prd: EngineeringLifecycleState = {
+      projectId: 'p',
+      threadId: 't',
+      selection: 'prd',
+      selectedStages: ['prd'],
+      autopilot: false,
+      completedStages: [],
+      updatedAt: 1
+    }
+    expect(deriveEngineeringLifecycleSwitchState(prd, 'prd')).toEqual({
       checked: true,
       disabled: false
     })
-    expect(deriveEngineeringLifecycleSwitchState('prd', 'spec')).toEqual({
+    expect(deriveEngineeringLifecycleSwitchState(prd, 'spec')).toEqual({
       checked: false,
       disabled: false
     })
@@ -75,9 +103,15 @@ describe('EngineeringLifecycleEngine', () => {
 
   it('does not mark history until the selected stage starts and never clears it', async () => {
     const { db, lifecycle } = await setup()
-    expect(lifecycle.select('project-1', 'thread-1', 'spec').startedAt).toBeUndefined()
+    expect(
+      lifecycle.select('project-1', 'thread-1', { stages: ['spec'] }).startedAt
+    ).toBeUndefined()
     const started = lifecycle.start('project-1', 'thread-1').state
-    expect(started).toMatchObject({ selection: 'spec', activeStage: 'spec' })
+    expect(started).toMatchObject({
+      selection: 'spec',
+      selectedStages: ['spec'],
+      activeStage: 'spec'
+    })
     expect(started.startedAt).toBeTypeOf('number')
     const terminal = lifecycle.advance('project-1', 'thread-1', {
       completedStage: 'spec',
@@ -85,6 +119,7 @@ describe('EngineeringLifecycleEngine', () => {
     })
     expect(terminal).toMatchObject({
       selection: 'none',
+      selectedStages: ['spec'],
       completedStages: ['spec'],
       startedAt: started.startedAt
     })
@@ -94,9 +129,69 @@ describe('EngineeringLifecycleEngine', () => {
     })
   })
 
-  it('resumes Run all at a persisted gate and treats replayed tokens as idempotent', async () => {
+  it('advances through the multi-select set and ends terminally after the last stage', async () => {
+    const { lifecycle } = await setup()
+    lifecycle.select('project-1', 'thread-1', { stages: ['brainstorm', 'prd'] })
+    lifecycle.start('project-1', 'thread-1')
+    expect(lifecycle.completeStage('project-1', 'thread-1', 'brainstorm')).toMatchObject({
+      selection: 'brainstorm',
+      activeStage: 'prd',
+      completedStages: ['brainstorm']
+    })
+    expect(lifecycle.completeStage('project-1', 'thread-1', 'prd')).toMatchObject({
+      selection: 'none',
+      completedStages: ['brainstorm', 'prd']
+    })
+  })
+
+  it('starts Auto Pilot at Brainstorm and advances the whole chain', async () => {
+    const { lifecycle } = await setup()
+    lifecycle.select('project-1', 'thread-1', { stages: [], autopilot: true })
+    expect(lifecycle.get('project-1', 'thread-1')).toMatchObject({
+      selection: 'run_all',
+      autopilot: true,
+      selectedStages: []
+    })
+    lifecycle.start('project-1', 'thread-1')
+    expect(lifecycle.completeStage('project-1', 'thread-1', 'brainstorm')).toMatchObject({
+      selection: 'run_all',
+      activeStage: 'prd',
+      completedStages: ['brainstorm']
+    })
+    expect(lifecycle.completeStage('project-1', 'thread-1', 'prd')).toMatchObject({
+      selection: 'run_all',
+      activeStage: 'spec',
+      completedStages: ['brainstorm', 'prd']
+    })
+    expect(lifecycle.completeStage('project-1', 'thread-1', 'spec')).toMatchObject({
+      selection: 'run_all',
+      activeStage: 'assignment'
+    })
+    expect(lifecycle.completeStage('project-1', 'thread-1', 'assignment')).toMatchObject({
+      selection: 'run_all',
+      activeStage: 'achievement'
+    })
+    expect(lifecycle.completeStage('project-1', 'thread-1', 'achievement')).toMatchObject({
+      selection: 'none'
+    })
+  })
+
+  it('preserves startedAt after confirmed cancellation', async () => {
+    const { lifecycle } = await setup()
+    lifecycle.select('project-1', 'thread-1', { stages: ['assignment'] })
+    const started = lifecycle.start('project-1', 'thread-1').state
+    const cancelled = lifecycle.cancel('project-1', 'thread-1')
+    expect(cancelled).toMatchObject({
+      selection: 'none',
+      selectedStages: [],
+      autopilot: false,
+      startedAt: started.startedAt
+    })
+  })
+
+  it('resumes Auto Pilot at a persisted gate and treats replayed tokens as idempotent', async () => {
     const { db, lifecycle } = await setup()
-    lifecycle.select('project-1', 'thread-1', 'run_all')
+    lifecycle.select('project-1', 'thread-1', { stages: [], autopilot: true })
     lifecycle.start('project-1', 'thread-1')
     const gated = lifecycle.advance('project-1', 'thread-1', {
       completedStage: 'brainstorm',
@@ -111,6 +206,7 @@ describe('EngineeringLifecycleEngine', () => {
     const reopened = new EngineeringLifecycleEngine(db)
     expect(reopened.get('project-1', 'thread-1')).toMatchObject({
       selection: 'run_all',
+      autopilot: true,
       completedStages: ['brainstorm'],
       humanGate: 'brainstorm_finalization',
       resumeToken: 'resume-1',
@@ -126,41 +222,15 @@ describe('EngineeringLifecycleEngine', () => {
     })
   })
 
-  it('preserves startedAt after confirmed cancellation', async () => {
-    const { lifecycle } = await setup()
-    lifecycle.select('project-1', 'thread-1', 'assignment')
-    const started = lifecycle.start('project-1', 'thread-1').state
-    const cancelled = lifecycle.cancel('project-1', 'thread-1')
-    expect(cancelled).toMatchObject({ selection: 'none', startedAt: started.startedAt })
-  })
-
-  it('completes one stage terminally and advances Run all without clearing history', async () => {
-    const { lifecycle } = await setup()
-    lifecycle.select('project-1', 'thread-1', 'prd')
-    const individual = lifecycle.start('project-1', 'thread-1').state
-    expect(lifecycle.completeStage('project-1', 'thread-1', 'prd')).toMatchObject({
-      selection: 'none',
-      completedStages: ['prd'],
-      startedAt: individual.startedAt
-    })
-
-    lifecycle.select('project-1', 'thread-1', 'run_all')
-    lifecycle.start('project-1', 'thread-1')
-    expect(lifecycle.completeStage('project-1', 'thread-1', 'brainstorm')).toMatchObject({
-      selection: 'run_all',
-      activeStage: 'prd',
-      completedStages: ['brainstorm']
-    })
-  })
-
   it('keeps the failed stage selected and resumes it without duplicating history', async () => {
     const { db, lifecycle } = await setup()
-    lifecycle.select('project-1', 'thread-1', 'run_all')
+    lifecycle.select('project-1', 'thread-1', { stages: [], autopilot: true })
     const started = lifecycle.start('project-1', 'thread-1').state
     const failed = lifecycle.fail('project-1', 'thread-1', 'Provider unavailable')
 
     expect(failed).toMatchObject({
       selection: 'run_all',
+      autopilot: true,
       activeStage: 'brainstorm',
       humanGate: 'terminal_failure',
       failure: 'Provider unavailable',
@@ -172,10 +242,26 @@ describe('EngineeringLifecycleEngine', () => {
     const retried = reopened.retry('project-1', 'thread-1', 'resume-1')
     expect(retried).toMatchObject({
       selection: 'run_all',
+      autopilot: true,
       activeStage: 'brainstorm',
       startedAt: started.startedAt
     })
     expect(retried.humanGate).toBeUndefined()
     expect(retried.failure).toBeUndefined()
+  })
+
+  it('derives a single legacy selection into the multi-select set on read', async () => {
+    const { db, lifecycle } = await setup()
+    const dbConnection = db.raw()
+    dbConnection
+      .prepare(
+        'INSERT INTO engineering_lifecycle(project_id, thread_id, selection, selected_stages_json, autopilot, completed_stages_json, updated_at) VALUES(?,?,?,?,?,?,?)'
+      )
+      .run('project-1', 'thread-1', 'prd', '[]', 0, '[]', 5)
+    expect(lifecycle.get('project-1', 'thread-1')).toMatchObject({
+      selection: 'prd',
+      selectedStages: ['prd'],
+      autopilot: false
+    })
   })
 })

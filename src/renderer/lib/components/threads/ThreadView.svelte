@@ -71,7 +71,7 @@
   import SpecReadyCard from './SpecReadyCard.svelte'
   import BrainstormEntryChoiceCard from './BrainstormEntryChoiceCard.svelte'
   import BrainstormReadyCard from './BrainstormReadyCard.svelte'
-  import PrdEntryChoiceCard from './PrdEntryChoiceCard.svelte'
+  import EngineeringEntryCard from '../chats/EngineeringEntryCard.svelte'
   import PrdReadyCard from './PrdReadyCard.svelte'
   import EngineeringFlowCancelModal from './EngineeringFlowCancelModal.svelte'
   import AssignmentReadyCard from './AssignmentReadyCard.svelte'
@@ -84,7 +84,12 @@
   import FileCitationContextMenu from '../markdown/FileCitationContextMenu.svelte'
   import { getProjectIcon } from '$lib/project-icons'
   import { isImageMime, isVideoMime, isAudioMime, fileUrlToPath } from '$lib/mime'
-  import { fastBaseModelId, fastVariantForModelId, normalizeFastInference, supportsFastInference } from '$shared/fast-inference'
+  import {
+    fastBaseModelId,
+    fastVariantForModelId,
+    normalizeFastInference,
+    supportsFastInference
+  } from '$shared/fast-inference'
   import { FileBlobUrlManager } from '$lib/media-urls.svelte'
   import { actionContext } from '$lib/stores/action-context.svelte'
   import type { ActionDefinition, ActionSelection, ActionSource } from '$lib/actions'
@@ -174,7 +179,6 @@
     PrdContent,
     PrdDocument,
     PrdSectionId,
-    PrdWorkflowState,
     EngineeringSpec,
     AssignmentPlan,
     AssignmentPlanContent,
@@ -195,9 +199,14 @@
     UserMessagePresentation,
     UserMessageSummary,
     UsageEfficiencyKpis,
-    EngineeringLifecycleSelection,
+    EngineeringLifecycleSelectionInput,
     EngineeringLifecycleState
   } from '$shared/types'
+  import {
+    hasSelectedStage,
+    normalizeLifecycleStages,
+    representativeLifecycleSelection
+  } from '$shared/engines/engineering-lifecycle-engine'
   import { APP_NAME } from '$shared/brand'
   import { workflowActionPresentation } from '$shared/workflow-action-presentation'
   import { LatestRequestGuard } from '$lib/refresh-guard'
@@ -346,57 +355,69 @@
       : threadSettings.initialFor(thread)
   )
   let engineeringLifecycle = $state<EngineeringLifecycleState | null>(null)
-  let pendingLifecycleSelection = $state<EngineeringLifecycleSelection | null>(null)
+  let pendingLifecycleSelection = $state<EngineeringLifecycleSelectionInput | null>(null)
   let lifecycleCancelModalOpen = $state(false)
+  /** Send-time engineering entry card: PRD/Spec need context, so the "Brainstorm
+   *  first | Jump directly into…" choice is shown only after the user tries to send,
+   *  never when the Toolbox switch is toggled. */
+  let pendingEngineeringEntry = $state<'prd' | 'spec' | null>(null)
 
-  function legacySettingsForLifecycle(selection: EngineeringLifecycleSelection): ThreadSettings {
-    if (selection === 'none') {
+  function settingsForEngineeringState(state: EngineeringLifecycleState | null): ThreadSettings {
+    if (!state || (state.selectedStages.length === 0 && !state.autopilot)) {
       return { ...settings, engineeringMode: false, assignmentMode: false, loopMode: false }
     }
+    const { selectedStages, autopilot } = state
     return {
       ...settings,
       engineeringMode:
-        selection === 'brainstorm' ||
-        selection === 'prd' ||
-        selection === 'spec' ||
-        selection === 'run_all',
-      assignmentMode: selection === 'assignment' || selection === 'run_all',
-      loopMode: selection === 'achievement' || selection === 'run_all'
+        autopilot ||
+        selectedStages.includes('brainstorm') ||
+        selectedStages.includes('prd') ||
+        selectedStages.includes('spec'),
+      assignmentMode: autopilot || selectedStages.includes('assignment'),
+      loopMode: autopilot || selectedStages.includes('achievement')
     }
   }
 
-  async function applyLifecycleSelection(selection: EngineeringLifecycleSelection): Promise<void> {
+  async function applyLifecycleSelection(input: EngineeringLifecycleSelectionInput): Promise<void> {
     engineeringLifecycle = await invoke(
       'engineeringLifecycle:select',
       thread.projectId,
       thread.id,
-      selection
+      input
     )
-    updateSettings(legacySettingsForLifecycle(selection))
-    prdWorkflow =
-      selection === 'prd'
-        ? await invoke('prd:ensureWorkflow', thread.projectId, thread.id)
-        : prdWorkflow
+    updateSettings(settingsForEngineeringState(engineeringLifecycle))
   }
 
   async function selectEngineeringLifecycle(
-    selection: EngineeringLifecycleSelection
+    input: EngineeringLifecycleSelectionInput
   ): Promise<void> {
     if (
       engineeringLifecycle &&
       (engineeringLifecycle.activeStage !== undefined ||
         engineeringLifecycle.humanGate !== undefined) &&
-      selection !== engineeringLifecycle.selection
+      lifecycleSelectionDiffers(engineeringLifecycle, input)
     ) {
-      pendingLifecycleSelection = selection
+      pendingLifecycleSelection = input
       lifecycleCancelModalOpen = true
       return
     }
-    await applyLifecycleSelection(selection)
+    await applyLifecycleSelection(input)
+  }
+
+  function lifecycleSelectionDiffers(
+    state: EngineeringLifecycleState,
+    input: EngineeringLifecycleSelectionInput
+  ): boolean {
+    const representative = representativeLifecycleSelection(
+      normalizeLifecycleStages(input.stages),
+      input.autopilot === true
+    )
+    return representative !== state.selection || input.autopilot !== state.autopilot
   }
 
   async function confirmLifecycleReplacement(): Promise<void> {
-    const replacement = pendingLifecycleSelection ?? 'none'
+    const replacement = pendingLifecycleSelection ?? { stages: [], autopilot: false }
     engineeringLifecycle = await invoke(
       'engineeringLifecycle:cancel',
       thread.projectId,
@@ -405,8 +426,11 @@
     )
     lifecycleCancelModalOpen = false
     pendingLifecycleSelection = null
-    if (replacement !== 'none') await applyLifecycleSelection(replacement)
-    else updateSettings(legacySettingsForLifecycle('none'))
+    if (replacement.stages.length > 0 || replacement.autopilot) {
+      await applyLifecycleSelection(replacement)
+    } else {
+      updateSettings(settingsForEngineeringState(engineeringLifecycle))
+    }
   }
 
   async function retryEngineeringLifecycle(): Promise<void> {
@@ -419,7 +443,7 @@
         thread.id,
         current.resumeToken
       )
-      updateSettings(legacySettingsForLifecycle(engineeringLifecycle.selection))
+      updateSettings(settingsForEngineeringState(engineeringLifecycle))
       const stage = engineeringLifecycle.activeStage
       if (stage === 'brainstorm') {
         const active = await invoke('brainstorm:getActive', thread.projectId, thread.id)
@@ -1580,7 +1604,6 @@
   let brainstormVersions = $state<BrainstormDocument[]>([])
   let selectedBrainstormVersion = $state<number | undefined>()
   let prd = $state<PrdDocument | null>(null)
-  let prdWorkflow = $state<PrdWorkflowState | null>(null)
   let prdVersions = $state<PrdDocument[]>([])
   let selectedPrdVersion = $state<number | undefined>()
   let prdBusy = $state(false)
@@ -3708,8 +3731,7 @@
           )
         }
       } else if (started.state.activeStage === 'prd') {
-        const workflow = await invoke('prd:ensureWorkflow', projectId, id)
-        prdWorkflow = workflow
+        await invoke('prd:ensureWorkflow', projectId, id)
       }
     }
     await sessionReady
@@ -3757,8 +3779,8 @@
     if (
       specAction === undefined &&
       (engineeringLifecycle?.activeStage === 'achievement' ||
-        (engineeringLifecycle?.selection === 'achievement' &&
-          engineeringLifecycle.activeStage === undefined))
+        (hasSelectedStage(engineeringLifecycle, 'achievement') &&
+          engineeringLifecycle?.activeStage === undefined))
     ) {
       if (!spec || spec.status !== 'approved') {
         errorMessage = 'Achievement requires an approved Spec.'
@@ -3796,8 +3818,8 @@
 
     const selectedAssignment =
       engineeringLifecycle?.activeStage === 'assignment' ||
-      (engineeringLifecycle?.selection === 'assignment' &&
-        engineeringLifecycle.activeStage === undefined)
+      (hasSelectedStage(engineeringLifecycle, 'assignment') &&
+        engineeringLifecycle?.activeStage === undefined)
     if (selectedAssignment && specAction === undefined) {
       if (!spec || spec.status !== 'approved') {
         assignmentError = 'Assignment requires an approved Spec.'
@@ -3812,13 +3834,38 @@
       return
     }
 
+    // PRD/Spec need context: show the "Brainstorm first | Jump directly into…"
+    // card at SEND time, never when the Toolbox switch is toggled. Jumping in
+    // still lets the Sr. Engineer align — it just skips the Brainstorm document.
+    const entryPrd = hasSelectedStage(engineeringLifecycle, 'prd')
+    const entrySpec = hasSelectedStage(engineeringLifecycle, 'spec')
+    if (
+      engineeringLifecycle &&
+      engineeringLifecycle.activeStage === undefined &&
+      !engineeringLifecycle.autopilot &&
+      !hasSelectedStage(engineeringLifecycle, 'brainstorm') &&
+      !hasSelectedStage(engineeringLifecycle, 'assignment') &&
+      !hasSelectedStage(engineeringLifecycle, 'achievement') &&
+      (entryPrd || entrySpec)
+    ) {
+      const contextReady = entryPrd
+        ? Boolean(brainstorm?.status === 'finalized' || prd)
+        : Boolean(brainstorm?.status === 'finalized' || prd || spec)
+      if (!contextReady) {
+        if (pendingEngineeringEntry === null) {
+          pendingEngineeringEntry = entryPrd ? 'prd' : 'spec'
+        }
+        return
+      }
+    }
+
     const selectedPrd =
       engineeringLifecycle?.activeStage === 'prd' ||
-      (engineeringLifecycle?.selection === 'prd' && engineeringLifecycle.activeStage === undefined)
+      (hasSelectedStage(engineeringLifecycle, 'prd') &&
+        engineeringLifecycle?.activeStage === undefined)
     const selectedPrdWorkflow = selectedPrd
       ? await invoke('prd:ensureWorkflow', thread.projectId, thread.id)
       : null
-    if (selectedPrdWorkflow) prdWorkflow = selectedPrdWorkflow
     if (selectedPrd && selectedPrdWorkflow?.stage !== 'brainstorming' && specAction === undefined) {
       if (selectedPrdWorkflow?.stage === 'choice_pending') {
         prdError = 'Choose Brainstorm first or Start PRD before sending the requirements.'
@@ -4340,7 +4387,6 @@
       projectThreads,
       workflow,
       activeBrainstorm,
-      currentPrdWorkflow,
       activePrd
     ] = await Promise.all([
       invoke('spec:getActive', projectId, workflowThreadId),
@@ -4349,7 +4395,6 @@
       invoke('thread:list', projectId),
       invoke('brainstorm:getWorkflow', projectId, workflowThreadId),
       invoke('brainstorm:getActive', projectId, workflowThreadId),
-      invoke('prd:getWorkflow', projectId, workflowThreadId),
       invoke('prd:getActive', projectId, workflowThreadId)
     ])
     if (!alive) return
@@ -4364,7 +4409,6 @@
       if (providerStatus?.state !== 'error') providerStatus = null
     }
     brainstormWorkflow = workflow
-    prdWorkflow = currentPrdWorkflow
     brainstorm = activeBrainstorm
     prd = activePrd
     prdVersions = activePrd
@@ -4389,7 +4433,7 @@
     }
     assignment = activeAssignment
     if (
-      engineeringLifecycle?.selection === 'run_all' &&
+      engineeringLifecycle?.autopilot &&
       engineeringLifecycle.activeStage === 'achievement' &&
       activeAssignment?.auditCycle?.status === 'completed'
     ) {
@@ -4399,11 +4443,11 @@
         workflowThreadId,
         'achievement'
       )
-      updateSettings(legacySettingsForLifecycle('none'))
+      updateSettings(settingsForEngineeringState(engineeringLifecycle))
     }
     if (
-      engineeringLifecycle?.selection === 'assignment' &&
-      engineeringLifecycle.activeStage === 'assignment' &&
+      hasSelectedStage(engineeringLifecycle, 'assignment') &&
+      engineeringLifecycle?.activeStage === 'assignment' &&
       activeAssignment?.status === 'completed'
     ) {
       engineeringLifecycle = await invoke(
@@ -4412,7 +4456,7 @@
         workflowThreadId,
         'assignment'
       )
-      updateSettings(legacySettingsForLifecycle('none'))
+      updateSettings(settingsForEngineeringState(engineeringLifecycle))
     }
     assignmentVersions = activeAssignment
       ? await invoke('assignment:listVersions', projectId, workflowThreadId, activeAssignment.id)
@@ -4486,7 +4530,8 @@
       !active &&
       workflowThread?.status !== 'failed' &&
       !planningResumeRequested &&
-      (!engineeringLifecycle || engineeringLifecycle.selection === 'none')
+      (!engineeringLifecycle ||
+        (engineeringLifecycle.selectedStages.length === 0 && !engineeringLifecycle.autopilot))
     ) {
       const resume =
         workflow?.stage === 'skipped'
@@ -4684,10 +4729,7 @@
         ).state
       }
       assignment = await invoke('agent:startAssignment', thread.projectId, thread.id)
-      if (
-        engineeringLifecycle?.selection === 'run_all' &&
-        engineeringLifecycle.activeStage === 'assignment'
-      ) {
+      if (engineeringLifecycle?.autopilot && engineeringLifecycle.activeStage === 'assignment') {
         engineeringLifecycle = await invoke(
           'engineeringLifecycle:complete',
           thread.projectId,
@@ -4703,19 +4745,18 @@
       )
       selectedAssignmentVersion = assignment.version
       specReadyToolVisible = false
-      settings =
-        engineeringLifecycle?.selection === 'run_all'
-          ? {
-              ...settings,
-              engineeringMode: false,
-              assignmentMode: true,
-              loopMode: true
-            }
-          : {
-              ...settings,
-              engineeringMode: false,
-              assignmentMode: false
-            }
+      settings = engineeringLifecycle?.autopilot
+        ? {
+            ...settings,
+            engineeringMode: false,
+            assignmentMode: true,
+            loopMode: true
+          }
+        : {
+            ...settings,
+            engineeringMode: false,
+            assignmentMode: false
+          }
       commitSettings(settings)
     } catch (error) {
       assignmentError =
@@ -4883,12 +4924,23 @@
     selectedPrdVersion = version
   }
 
+  async function chooseEngineeringEntry(choice: 'brainstorm_first' | 'jump_in'): Promise<void> {
+    const target = pendingEngineeringEntry
+    if (target === null) return
+    pendingEngineeringEntry = null
+    if (target === 'prd') {
+      await choosePrdEntry(choice === 'brainstorm_first' ? 'brainstorm_first' : 'start_prd')
+    } else {
+      await chooseBrainstormEntry(choice === 'brainstorm_first' ? 'brainstorm' : 'spec')
+    }
+  }
+
   async function choosePrdEntry(choice: 'brainstorm_first' | 'start_prd'): Promise<void> {
     if (prdBusy) return
     prdBusy = true
     prdError = ''
     try {
-      prdWorkflow = await invoke('prd:chooseEntry', thread.projectId, thread.id, choice)
+      await invoke('prd:chooseEntry', thread.projectId, thread.id, choice)
       if (choice === 'brainstorm_first') {
         const workflow = await invoke('brainstorm:ensureWorkflow', thread.projectId, thread.id)
         brainstormWorkflow = workflow.entryChoice
@@ -5033,22 +5085,22 @@
       prdVersions = prdVersions.map((candidate) =>
         candidate.version === finalized.version ? finalized : candidate
       )
-      if (engineeringLifecycle?.selection === 'prd') {
+      if (hasSelectedStage(engineeringLifecycle, 'prd') && !engineeringLifecycle?.autopilot) {
         engineeringLifecycle = await invoke(
           'engineeringLifecycle:complete',
           thread.projectId,
           thread.id,
           'prd'
         )
-        updateSettings(legacySettingsForLifecycle('none'))
-      } else if (engineeringLifecycle?.selection === 'run_all') {
+        updateSettings(settingsForEngineeringState(engineeringLifecycle))
+      } else if (engineeringLifecycle?.autopilot) {
         engineeringLifecycle = await invoke(
           'engineeringLifecycle:complete',
           thread.projectId,
           thread.id,
           'prd'
         )
-        updateSettings(legacySettingsForLifecycle('run_all'))
+        updateSettings(settingsForEngineeringState(engineeringLifecycle))
         specFormulating = true
         const generatedSpec = await invoke('agent:ensureInitialSpec', thread.projectId, thread.id)
         await setActiveSpec(generatedSpec)
@@ -5451,8 +5503,7 @@
         applyBrainstormDocument(result)
         await reconcileReadySpec()
         if (engineeringLifecycle?.activeStage === 'prd') {
-          const workflow = await invoke('prd:ensureWorkflow', thread.projectId, thread.id)
-          prdWorkflow = workflow
+          await invoke('prd:ensureWorkflow', thread.projectId, thread.id)
           prd = await invoke(
             'agent:generatePrd',
             thread.projectId,
@@ -5484,6 +5535,48 @@
       brainstormDecisionInFlight = null
       agentRuns.setIdle(thread.projectId, thread.id)
     }
+  }
+
+  /** Next-step choices from the Brainstorm studio after a session. */
+  async function brainstormNextStep(
+    step: 'lofi' | 'hifi' | 'prd' | 'spec',
+    draft: BrainstormDocument
+  ): Promise<void> {
+    if (step === 'lofi' || step === 'hifi') {
+      const note =
+        step === 'lofi'
+          ? 'Generate Lo-Fi prototypes (L1, L2) for the agreed direction and add them to the Brainstorm.'
+          : 'Generate one direct HiFi prototype H1 based on the agreed direction and add it to the Brainstorm.'
+      await submitBrainstormDecision('review', draft, note)
+      return
+    }
+    // PRD | Spec: make sure the target stage is part of the lifecycle, then
+    // finalize so the Sr. Engineer produces the requested document.
+    const requestedStage = step === 'prd' ? 'prd' : 'spec'
+    if (
+      engineeringLifecycle?.autopilot !== true &&
+      !hasSelectedStage(engineeringLifecycle, requestedStage)
+    ) {
+      engineeringLifecycle = await invoke(
+        'engineeringLifecycle:select',
+        thread.projectId,
+        thread.id,
+        {
+          stages: [...(engineeringLifecycle?.selectedStages ?? []), requestedStage],
+          autopilot: false
+        }
+      )
+    }
+    if (
+      engineeringLifecycle &&
+      engineeringLifecycle.activeStage === undefined &&
+      engineeringLifecycle.selection !== 'none'
+    ) {
+      engineeringLifecycle = (
+        await invoke('engineeringLifecycle:start', thread.projectId, thread.id)
+      ).state
+    }
+    await submitBrainstormDecision('finalize', draft, '')
   }
 
   async function selectLofiPrototype(prototypeId: string): Promise<void> {
@@ -5687,11 +5780,7 @@
   }
 
   /** True when the selected model exposes a fast tier, per the live catalog. */
-  function fastSupportedFor(
-    harnessId: string,
-    providerId: string,
-    modelId: string
-  ): boolean {
+  function fastSupportedFor(harnessId: string, providerId: string, modelId: string): boolean {
     const provider = providers.find(
       (candidate) => candidate.harnessId === harnessId && candidate.id === providerId
     )
@@ -6681,8 +6770,7 @@
         const lifecycleSpecApproval =
           (engineeringLifecycle?.activeStage === 'spec' ||
             engineeringLifecycle?.humanGate === 'spec_approval') &&
-          (engineeringLifecycle.selection === 'spec' ||
-            engineeringLifecycle.selection === 'run_all')
+          (hasSelectedStage(engineeringLifecycle, 'spec') || engineeringLifecycle?.autopilot)
         if (lifecycleSpecApproval) {
           if (
             engineeringLifecycle?.humanGate === 'spec_approval' &&
@@ -6723,10 +6811,10 @@
             thread.id,
             'spec'
           )
-          if (engineeringLifecycle.selection === 'run_all') {
+          if (engineeringLifecycle.autopilot) {
             await generateAssignmentDraft()
           } else {
-            updateSettings(legacySettingsForLifecycle('none'))
+            updateSettings(settingsForEngineeringState(engineeringLifecycle))
           }
           return
         }
@@ -7740,6 +7828,7 @@
           onQuickChatSelection={(selection, documentContext) =>
             openStudioSelectionChat('brainstorm', 'quick', selection, documentContext)}
           onSubmit={submitBrainstormDecision}
+          onNextStep={brainstormNextStep}
           onOpenInEditor={openBrainstormInEditor}
           onRevealInAppFile={revealBrainstormInAppFile}
           onOpenPrototype={openPrototypePreview}
@@ -8830,11 +8919,12 @@
                   rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
                 onViewReport={openCoordinatorAuditReport}
               />
-            {:else if engineeringLifecycle?.selection === 'prd' && prdWorkflow?.stage === 'choice_pending' && !busy}
-              <PrdEntryChoiceCard
-                busy={prdBusy}
-                onBrainstormFirst={() => choosePrdEntry('brainstorm_first')}
-                onStartPrd={() => choosePrdEntry('start_prd')}
+            {:else if (pendingEngineeringEntry === 'prd' || pendingEngineeringEntry === 'spec') && !busy}
+              <EngineeringEntryCard
+                target={pendingEngineeringEntry}
+                busy={prdBusy || brainstormBusy}
+                onBrainstormFirst={() => chooseEngineeringEntry('brainstorm_first')}
+                onJumpIn={() => chooseEngineeringEntry('jump_in')}
               />
             {:else if brainstormWorkflow?.entryChoice && !brainstorm && !spec && brainstormGenerationFailed && !busy}
               <BrainstormEntryChoiceCard

@@ -3075,10 +3075,27 @@ export type EngineeringLifecycleDecision = 'continue' | 'continue_without_hifi' 
 
 export type BrainstormPrototypeIntent = 'none' | 'lofi' | 'hifi' | 'both'
 
+/** Client → engine selection payload for the Engineering lifecycle. */
+export interface EngineeringLifecycleSelectionInput {
+  /** Independent stage switches that are enabled (canonical, no duplicates).
+   *  Cascade dependencies (Assignment/Achievement imply Spec) are applied by the
+   *  engine — the client sends the raw request and the engine normalizes it. */
+  stages: EngineeringLifecycleStage[]
+  /** Auto Pilot runs the full brainstorm→spec→assignment→achievement loop without
+   *  human gates. When true, the per-stage set is ignored. */
+  autopilot?: boolean
+}
+
 export interface EngineeringLifecycleState {
   projectId: string
   threadId: string
+  /** Back-compat single representative: 'none' when no stage is selected,
+   *  'run_all' when Auto Pilot is on, otherwise the earliest selected stage. */
   selection: EngineeringLifecycleSelection
+  /** Enabled stage switches (canonical order, no duplicates). Empty in Auto Pilot. */
+  selectedStages: EngineeringLifecycleStage[]
+  /** Auto Pilot: full autonomous lifecycle loop without human gates. */
+  autopilot: boolean
   activeStage?: EngineeringLifecycleStage
   completedStages: EngineeringLifecycleStage[]
   humanGate?: EngineeringLifecycleGate
