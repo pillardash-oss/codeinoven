@@ -23,6 +23,8 @@
 
   let { entry, index, projectId, scopeOptions, initiallyExpanded, onUpdate, onRemove }: Props =
     $props()
+  // newly-created memory should mount expanded; capturing the initial prop is intentional
+  // svelte-ignore state_referenced_locally
   let expanded = $state(initiallyExpanded ?? false)
   let selectedModel = $derived(
     (entry.modelKeys ?? []).map((key) => parseModelKey(key)).find((model) => model !== null)
