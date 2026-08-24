@@ -357,10 +357,35 @@
   let engineeringLifecycle = $state<EngineeringLifecycleState | null>(null)
   let pendingLifecycleSelection = $state<EngineeringLifecycleSelectionInput | null>(null)
   let lifecycleCancelModalOpen = $state(false)
+  /** A user send that was parked behind the replacement guard, resubmitted after
+   *  the user confirms stopping the active Engineering work. */
+  let pendingGuardedSend = $state<GuardedSendPayload | null>(null)
   /** Send-time engineering entry card: PRD/Spec need context, so the "Brainstorm
    *  first | Jump directly into…" choice is shown only after the user tries to send,
    *  never when the Toolbox switch is toggled. */
   let pendingEngineeringEntry = $state<'prd' | 'spec' | null>(null)
+  /** Toolbox presentation mirrors the staged selection so switches flip
+   *  immediately, while every side effect stays deferred until the send. */
+  const pendingLifecycleDisplay = $derived.by((): EngineeringLifecycleState | null => {
+    const pending = pendingLifecycleSelection
+    const base = engineeringLifecycle
+    if (!pending) return base
+    const autopilot = pending.autopilot === true
+    const selectedStages = autopilot ? [] : normalizeLifecycleStages(pending.stages)
+    return {
+      projectId: base?.projectId ?? thread.projectId,
+      threadId: base?.threadId ?? thread.id,
+      selection: representativeLifecycleSelection(selectedStages, autopilot),
+      selectedStages,
+      autopilot,
+      completedStages: base?.completedStages ?? [],
+      ...(base?.activeStage ? { activeStage: base.activeStage } : {}),
+      ...(base?.humanGate ? { humanGate: base.humanGate } : {}),
+      ...(base?.failure ? { failure: base.failure } : {}),
+      ...(base?.startedAt ? { startedAt: base.startedAt } : {}),
+      updatedAt: base?.updatedAt ?? Date.now()
+    }
+  })
 
   function settingsForEngineeringState(state: EngineeringLifecycleState | null): ThreadSettings {
     if (!state || (state.selectedStages.length === 0 && !state.autopilot)) {
@@ -389,31 +414,12 @@
     updateSettings(settingsForEngineeringState(engineeringLifecycle))
   }
 
-  async function selectEngineeringLifecycle(
-    input: EngineeringLifecycleSelectionInput
-  ): Promise<void> {
-    if (
-      engineeringLifecycle &&
-      (engineeringLifecycle.activeStage !== undefined ||
-        engineeringLifecycle.humanGate !== undefined) &&
-      lifecycleSelectionDiffers(engineeringLifecycle, input)
-    ) {
-      pendingLifecycleSelection = input
-      lifecycleCancelModalOpen = true
-      return
-    }
-    await applyLifecycleSelection(input)
-  }
-
-  function lifecycleSelectionDiffers(
-    state: EngineeringLifecycleState,
-    input: EngineeringLifecycleSelectionInput
-  ): boolean {
-    const representative = representativeLifecycleSelection(
-      normalizeLifecycleStages(input.stages),
-      input.autopilot === true
-    )
-    return representative !== state.selection || input.autopilot !== state.autopilot
+  /** Toolbox toggles are intent, never action: the selection is only staged here
+   *  and applied when the user actually sends a message. Flipping switches while
+   *  "playing around" in the composer must never apply settings, surface audit/
+   *  assignment offer cards, or pop the replacement guard. */
+  function selectEngineeringLifecycle(input: EngineeringLifecycleSelectionInput): void {
+    pendingLifecycleSelection = input
   }
 
   async function confirmLifecycleReplacement(): Promise<void> {
@@ -430,6 +436,27 @@
       await applyLifecycleSelection(replacement)
     } else {
       updateSettings(settingsForEngineeringState(engineeringLifecycle))
+    }
+    // A user send parked behind the replacement guard resumes once confirmed.
+    const guarded = pendingGuardedSend
+    if (guarded) {
+      pendingGuardedSend = null
+      await sendMessage(
+        guarded.text,
+        guarded.attachments,
+        undefined,
+        guarded.direct,
+        guarded.promptContext,
+        guarded.promptReferences,
+        guarded.projectReferences,
+        undefined,
+        guarded.taskReferences,
+        true,
+        guarded.startAfterThreads
+      )
+      // The parked draft was re-seeded into the composer; the send now owns it.
+      rendererRecovery.clearDraft(thread.projectId, thread.id)
+      composerRestoreKey += 1
     }
   }
 
@@ -1511,6 +1538,17 @@
     ].join('\n\n')
   }
 
+  interface GuardedSendPayload {
+    text: string
+    attachments: PromptAttachment[]
+    direct?: boolean
+    promptContext?: string
+    promptReferences: ResponseReferenceAnchor[]
+    projectReferences: PromptProjectReference[]
+    taskReferences: PromptAssignmentTaskReference[]
+    startAfterThreads: StartAfterThreadReference[]
+  }
+
   function sendComposerMessage(
     text: string,
     attachments: PromptAttachment[],
@@ -1543,19 +1581,56 @@
     const promptContext = [responseReferenceContext(), taskContext].filter(Boolean).join('\n\n')
     const promptReferences = [...responseReferences]
     clearResponseReferences()
-    void sendMessage(
-      text,
-      attachments,
-      undefined,
-      direct,
-      promptContext || undefined,
-      promptReferences,
-      projectReferences,
-      undefined,
-      currentTaskReferences,
-      true,
-      startAfterThreads
-    )
+    void (async () => {
+      const staged = pendingLifecycleSelection
+      if (staged) {
+        if (
+          engineeringLifecycle &&
+          (engineeringLifecycle.activeStage !== undefined ||
+            engineeringLifecycle.humanGate !== undefined)
+        ) {
+          // Keep the staged choice — confirmLifecycleReplacement reads it.
+          pendingGuardedSend = {
+            text,
+            attachments,
+            ...(direct ? { direct } : {}),
+            ...(promptContext ? { promptContext } : {}),
+            promptReferences,
+            projectReferences,
+            taskReferences: currentTaskReferences,
+            startAfterThreads
+          }
+          // The composer has already cleared its buffer, so restore the draft
+          // and ask for confirmation before replacing the active Engineering run.
+          rendererRecovery.setDraft(
+            thread.projectId,
+            thread.id,
+            text,
+            attachments,
+            projectReferences,
+            taskReferences
+          )
+          composerRestoreKey += 1
+          lifecycleCancelModalOpen = true
+          return
+        }
+        pendingLifecycleSelection = null
+        await applyLifecycleSelection(staged)
+      }
+      await sendMessage(
+        text,
+        attachments,
+        undefined,
+        direct,
+        promptContext || undefined,
+        promptReferences,
+        projectReferences,
+        undefined,
+        currentTaskReferences,
+        true,
+        startAfterThreads
+      )
+    })()
   }
 
   function temporaryConversationContext(): string {
@@ -3778,9 +3853,7 @@
     if (specFormulating && specAction !== 'request') return
     if (
       specAction === undefined &&
-      (engineeringLifecycle?.activeStage === 'achievement' ||
-        (hasSelectedStage(engineeringLifecycle, 'achievement') &&
-          engineeringLifecycle?.activeStage === undefined))
+      engineeringLifecycle?.activeStage === 'achievement'
     ) {
       if (!spec || spec.status !== 'approved') {
         errorMessage = 'Achievement requires an approved Spec.'
@@ -3816,10 +3889,7 @@
       return
     }
 
-    const selectedAssignment =
-      engineeringLifecycle?.activeStage === 'assignment' ||
-      (hasSelectedStage(engineeringLifecycle, 'assignment') &&
-        engineeringLifecycle?.activeStage === undefined)
+    const selectedAssignment = engineeringLifecycle?.activeStage === 'assignment'
     if (selectedAssignment && specAction === undefined) {
       if (!spec || spec.status !== 'approved') {
         assignmentError = 'Assignment requires an approved Spec.'
@@ -9204,7 +9274,7 @@
                   onStop={abortRun}
                   autofocus
                   showEngineeringMode={!chatMode}
-                  {engineeringLifecycle}
+                  engineeringLifecycle={pendingLifecycleDisplay}
                   onEngineeringLifecycleSelect={selectEngineeringLifecycle}
                   onEngineeringLifecycleRetry={retryEngineeringLifecycle}
                   showChatModes={chatMode}
@@ -9523,7 +9593,9 @@
   open={lifecycleCancelModalOpen}
   oncancel={() => {
     lifecycleCancelModalOpen = false
-    pendingLifecycleSelection = null
+    // The staged Toolbox choice stays staged (the user toggled it deliberately);
+    // only the parked send is discarded — its draft was restored already.
+    pendingGuardedSend = null
   }}
   onconfirm={confirmLifecycleReplacement}
 />

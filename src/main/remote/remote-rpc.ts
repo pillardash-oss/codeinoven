@@ -1411,7 +1411,10 @@ export class RemoteRpcDispatcher {
       case 'engineeringLifecycle:start':
         return this.engineeringLifecycleEngine.start(
           validateEntityId(args[0], 'Project ID'),
-          validateEntityId(args[1], 'Thread ID')
+          validateEntityId(args[1], 'Thread ID'),
+          args[2] === undefined || args[2] === null
+            ? undefined
+            : validateEngineeringLifecycleStage(args[2])
         )
       case 'engineeringLifecycle:complete':
         return this.engineeringLifecycleEngine.completeStage(

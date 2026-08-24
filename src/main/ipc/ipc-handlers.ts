@@ -2161,11 +2161,14 @@ export function registerIpcHandlers(
         validateEngineeringLifecycleSelectionInput(input)
       )
   )
-  ipcMain.handle('engineeringLifecycle:start', (_, projectId: unknown, threadId: unknown) =>
-    engineeringLifecycleEngine.start(
-      validateEntityId(projectId, 'Project ID'),
-      validateEntityId(threadId, 'Thread ID')
-    )
+  ipcMain.handle(
+    'engineeringLifecycle:start',
+    (_, projectId: unknown, threadId: unknown, stage: unknown) =>
+      engineeringLifecycleEngine.start(
+        validateEntityId(projectId, 'Project ID'),
+        validateEntityId(threadId, 'Thread ID'),
+        stage === undefined || stage === null ? undefined : validateEngineeringLifecycleStage(stage)
+      )
   )
   ipcMain.handle(
     'engineeringLifecycle:complete',
@@ -4167,15 +4170,20 @@ export function registerIpcHandlers(
     const sepIndex = Math.max(lastSlash, lastColon)
     const segment = sepIndex >= 0 ? withoutQuery.slice(sepIndex + 1) : withoutQuery
     const withoutGit = segment.endsWith('.git') ? segment.slice(0, -4) : segment
-    const sanitized = withoutGit.replace(/[^A-Za-z0-9._-]/gu, '-').replace(/^-+/u, '').replace(/-+$/u, '')
+    const sanitized = withoutGit
+      .replace(/[^A-Za-z0-9._-]/gu, '-')
+      .replace(/^-+/u, '')
+      .replace(/-+$/u, '')
     return sanitized.length > 0 ? sanitized.slice(0, 100) : 'repo'
   }
 
   function validateGitCloneInput(value: unknown): { url: string; destination?: string } {
-    if (typeof value !== 'object' || value === null) throw new TypeError('Git clone input must be an object')
+    if (typeof value !== 'object' || value === null)
+      throw new TypeError('Git clone input must be an object')
     const record = value as Record<string, unknown>
     const url = record['url']
-    if (typeof url !== 'string' || url.trim().length === 0) throw new TypeError('Git URL is required')
+    if (typeof url !== 'string' || url.trim().length === 0)
+      throw new TypeError('Git URL is required')
     if (url.length > 2048) throw new TypeError('Git URL is too long')
     if (url.includes('\0')) throw new TypeError('Git URL contains invalid characters')
     const trimmed = url.trim()
@@ -4190,12 +4198,16 @@ export function registerIpcHandlers(
     }
     const destination = record['destination']
     if (destination !== undefined) {
-      if (typeof destination !== 'string' || destination.trim().length === 0) throw new TypeError('Destination must be a non-empty path')
+      if (typeof destination !== 'string' || destination.trim().length === 0)
+        throw new TypeError('Destination must be a non-empty path')
       if (destination.length > 4096) throw new TypeError('Destination path is too long')
       if (destination.includes('\0')) throw new TypeError('Destination contains invalid characters')
       if (!isAbsolute(destination)) throw new TypeError('Destination must be an absolute path')
     }
-    return { url: trimmed, destination: typeof destination === 'string' ? destination.trim() : undefined }
+    return {
+      url: trimmed,
+      destination: typeof destination === 'string' ? destination.trim() : undefined
+    }
   }
 
   ipcMain.handle('dialog:pickCloneDestination', async () => {
@@ -4210,7 +4222,9 @@ export function registerIpcHandlers(
         properties: ['openDirectory', 'createDirectory'],
         defaultPath: config.lastFolderDialogPath || defaultPath
       }
-      const result = win ? await dialog.showOpenDialog(win, options) : await dialog.showOpenDialog(options)
+      const result = win
+        ? await dialog.showOpenDialog(win, options)
+        : await dialog.showOpenDialog(options)
       if (result.canceled || result.filePaths.length === 0) return null
       const chosen = result.filePaths[0]
       await privilegedIpc.registerUserSelectedRoot(chosen)
@@ -4222,7 +4236,8 @@ export function registerIpcHandlers(
   })
 
   ipcMain.handle('git:defaultClonePath', async (_, rawUrl: unknown) => {
-    if (typeof rawUrl !== 'string' || rawUrl.trim().length === 0) throw new TypeError('Git URL is required')
+    if (typeof rawUrl !== 'string' || rawUrl.trim().length === 0)
+      throw new TypeError('Git URL is required')
     const repoName = deriveRepoNameFromUrl(rawUrl)
     const defaultPath = join(getConfigRoot(), 'projects-gh', repoName)
     return defaultPath
@@ -4239,12 +4254,17 @@ export function registerIpcHandlers(
       const statResult = await stat(resolvedDestination)
       if (statResult.isDirectory()) {
         const entries = await import('fs/promises').then((m) => m.readdir(resolvedDestination))
-        if (entries.length > 0) throw new Error(`Destination already exists and is not empty: ${resolvedDestination}`)
+        if (entries.length > 0)
+          throw new Error(`Destination already exists and is not empty: ${resolvedDestination}`)
       } else {
         throw new Error(`Destination already exists and is not a directory: ${resolvedDestination}`)
       }
     } catch (error) {
-      if (error instanceof Error && 'code' in error && (error as NodeJS.ErrnoException).code === 'ENOENT') {
+      if (
+        error instanceof Error &&
+        'code' in error &&
+        (error as NodeJS.ErrnoException).code === 'ENOENT'
+      ) {
         // Destination does not exist — git clone will create it
       } else {
         throw error
@@ -4252,7 +4272,12 @@ export function registerIpcHandlers(
     }
     await privilegedIpc.registerUserSelectedRoot(dirname(resolvedDestination))
     await privilegedIpc.registerUserSelectedRoot(resolvedDestination)
-    return { command: 'git', args: ['clone', url, resolvedDestination], destination: resolvedDestination, repoName }
+    return {
+      command: 'git',
+      args: ['clone', url, resolvedDestination],
+      destination: resolvedDestination,
+      repoName
+    }
   })
   if (!options.hydrationHandlersRegistered) {
     ipcMain.handle('project:get', (_, projectId: string) => projectManager.getProject(projectId))

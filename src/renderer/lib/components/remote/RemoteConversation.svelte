@@ -86,6 +86,19 @@
   let gateBrainstorm = $state<BrainstormDocument | null>(null)
   let continueWithoutHifi = $state(false)
   let pendingLifecycleSelection = $state<EngineeringLifecycleSelectionInput | null>(null)
+  /** True only after a user send that must replace active Engineering work; the
+   *  Toolbox toggle itself never opens the guard. */
+  let lifecycleGuardOpen = $state(false)
+  /** A user send parked behind the replacement guard, resubmitted after confirm. */
+  let guardedSend = $state<{
+    text: string
+    attachments: PromptAttachment[]
+    promptContext?: string
+    promptReferences?: PromptReference[]
+  } | null>(null)
+  /** Draft restore for a send parked behind the replacement guard. */
+  let composerRestore = $state<{ text: string; attachments: PromptAttachment[] } | null>(null)
+  let composerRestoreKey = $state(0)
   let lifecycleChoiceBusy = $state(false)
   let failedDelivery = $state<{ text: string; attachments: PromptAttachment[] } | null>(null)
   let errorRetrying = $state(false)
@@ -251,30 +264,11 @@
     await invoke('thread:updateSettings', thread.projectId, thread.id, settings)
   }
 
-  async function selectEngineeringLifecycle(
-    input: EngineeringLifecycleSelectionInput
-  ): Promise<void> {
-    const current = engineeringLifecycle
-    if (
-      current &&
-      lifecycleSelectionDiffers(current, input) &&
-      (current.activeStage !== undefined || current.humanGate !== undefined)
-    ) {
-      pendingLifecycleSelection = input
-      return
-    }
-    await applyLifecycleSelection(input)
-  }
-
-  function lifecycleSelectionDiffers(
-    state: EngineeringLifecycleState,
-    input: EngineeringLifecycleSelectionInput
-  ): boolean {
-    const representative = representativeLifecycleSelection(
-      normalizeLifecycleStages(input.stages),
-      input.autopilot === true
-    )
-    return representative !== state.selection || input.autopilot !== state.autopilot
+  /** Toolbox toggles are intent, never action: the selection is only staged here
+   *  and applied when the user actually sends a message. Flipping switches while
+   *  playing around in the composer must not apply settings or open the guard. */
+  function selectEngineeringLifecycle(input: EngineeringLifecycleSelectionInput): void {
+    pendingLifecycleSelection = input
   }
 
   async function confirmLifecycleReplacement(): Promise<void> {
@@ -286,8 +280,16 @@
       true
     )
     pendingLifecycleSelection = null
+    lifecycleGuardOpen = false
     if (replacement.stages.length > 0 || replacement.autopilot) {
       await applyLifecycleSelection(replacement)
+    }
+    const parked = guardedSend
+    if (parked) {
+      guardedSend = null
+      await deliver(parked.text, parked.attachments, parked.promptContext, parked.promptReferences)
+      composerRestore = null
+      composerRestoreKey += 1
     }
   }
 
@@ -893,6 +895,29 @@
     )
   })
 
+  /** Toolbox presentation mirrors the staged selection so switches flip
+   *  immediately, while every side effect stays deferred until the send. */
+  const pendingLifecycleDisplay = $derived.by((): EngineeringLifecycleState | null => {
+    const pending = pendingLifecycleSelection
+    const base = engineeringLifecycle
+    if (!pending) return base
+    const autopilot = pending.autopilot === true
+    const selectedStages = autopilot ? [] : normalizeLifecycleStages(pending.stages)
+    return {
+      projectId: base?.projectId ?? thread.projectId,
+      threadId: base?.threadId ?? thread.id,
+      selection: representativeLifecycleSelection(selectedStages, autopilot),
+      selectedStages,
+      autopilot,
+      completedStages: base?.completedStages ?? [],
+      ...(base?.activeStage ? { activeStage: base.activeStage } : {}),
+      ...(base?.humanGate ? { humanGate: base.humanGate } : {}),
+      ...(base?.failure ? { failure: base.failure } : {}),
+      ...(base?.startedAt ? { startedAt: base.startedAt } : {}),
+      updatedAt: base?.updatedAt ?? Date.now()
+    }
+  })
+
   function handleSend(
     text: string,
     attachments: PromptAttachment[],
@@ -903,21 +928,49 @@
   ): void {
     const msg = text.trim()
     if (!msg && attachments.length === 0) return
+    composerRestore = null
     const promptContext = selectionReferenceContext()
     const promptReferences = selectionReferences.length > 0 ? [...selectionReferences] : undefined
     clearSelectionReferences()
     const dependencies = (startAfterThreads ?? []).filter((dep) => dep.id !== thread.id)
-    if (dependencies.length > 0 || (busy && !direct)) {
-      queuedMessage = {
-        text: msg,
-        attachments,
-        startAfterThreads: dependencies,
-        promptContext,
-        promptReferences
+    // Commit any staged Toolbox choice before routing the send: the user is
+    // actually sending now, so the choice applies (or asks for confirmation)
+    // because it will steer this message — never at toggle time.
+    void (async () => {
+      const staged = pendingLifecycleSelection
+      if (staged) {
+        if (
+          engineeringLifecycle &&
+          (engineeringLifecycle.activeStage !== undefined ||
+            engineeringLifecycle.humanGate !== undefined)
+        ) {
+          // Keep the staged choice — confirmLifecycleReplacement reads it.
+          guardedSend = {
+            text: msg,
+            attachments,
+            promptContext: promptContext ?? undefined,
+            promptReferences: promptReferences ?? undefined
+          }
+          composerRestore = { text: msg, attachments }
+          composerRestoreKey += 1
+          lifecycleGuardOpen = true
+          return
+        }
+        pendingLifecycleSelection = null
+        await applyLifecycleSelection(staged)
       }
-      return
-    }
-    void deliver(msg, attachments, promptContext, promptReferences)
+      if (dependencies.length > 0 || (busy && !direct)) {
+        queuedMessage = {
+          text: msg,
+          attachments,
+          startAfterThreads: dependencies,
+          promptContext,
+          promptReferences
+        }
+        return
+      }
+      await deliver(msg, attachments, promptContext, promptReferences)
+    })()
   }
 
   async function abortRun(): Promise<void> {
@@ -1403,42 +1456,51 @@
         {/if}
       </section>
     {/if}
-    <ChatComposer
-      onSend={handleSend}
-      working={busy}
-      onStop={abortRun}
-      placeholder={busy ? `${chatMode ? 'Chat' : 'Agent'} is working — type to queue` : 'Message…'}
-      {settings}
-      onSettingsChange={updateSettings}
-      {providers}
-      harnessId={settings.harnessId}
-      projectId={thread.projectId}
-      threadId={thread.id}
-      attachmentStorage={{
-        kind: chatMode ? 'chat' : 'project',
-        projectId: thread.projectId,
-        threadId: thread.id
-      }}
-      contextUsage={thread.contextUsage}
-      hideUsageIndicator
-      hidePermissionSelector={chatMode}
-      showEngineeringMode={!chatMode}
-      {engineeringLifecycle}
-      onEngineeringLifecycleSelect={selectEngineeringLifecycle}
-      onEngineeringLifecycleRetry={retryEngineeringLifecycle}
-      showChatModes={false}
-      initialStartAfterThreads={queuedMessage?.startAfterThreads}
-    />
+    {#key composerRestoreKey}
+      <ChatComposer
+        onSend={handleSend}
+        working={busy}
+        onStop={abortRun}
+        placeholder={busy
+          ? `${chatMode ? 'Chat' : 'Agent'} is working — type to queue`
+          : 'Message…'}
+        {settings}
+        onSettingsChange={updateSettings}
+        {providers}
+        harnessId={settings.harnessId}
+        projectId={thread.projectId}
+        threadId={thread.id}
+        attachmentStorage={{
+          kind: chatMode ? 'chat' : 'project',
+          projectId: thread.projectId,
+          threadId: thread.id
+        }}
+        contextUsage={thread.contextUsage}
+        hideUsageIndicator
+        hidePermissionSelector={chatMode}
+        showEngineeringMode={!chatMode}
+        engineeringLifecycle={pendingLifecycleDisplay}
+        onEngineeringLifecycleSelect={selectEngineeringLifecycle}
+        onEngineeringLifecycleRetry={retryEngineeringLifecycle}
+        showChatModes={false}
+        initialStartAfterThreads={queuedMessage?.startAfterThreads}
+        initialValue={composerRestore?.text ?? ''}
+        initialAttachments={composerRestore?.attachments ?? []}
+      />
+    {/key}
   </div>
 </div>
 
 <EngineeringFlowCancelModal
-  open={pendingLifecycleSelection !== null}
-  title={pendingLifecycleSelection === null
-    ? 'Stop Engineering work?'
-    : 'Replace Engineering work?'}
+  open={lifecycleGuardOpen}
+  title="Replace Engineering work?"
   message="Generated documents and prototype artifacts will be preserved. Confirm before changing the active lifecycle run."
-  oncancel={() => (pendingLifecycleSelection = null)}
+  oncancel={() => {
+    lifecycleGuardOpen = false
+    // The staged Toolbox choice stays staged (deliberate toggle); only the
+    // parked send is discarded — its draft was restored into the composer.
+    guardedSend = null
+  }}
   onconfirm={confirmLifecycleReplacement}
 />
 

@@ -129,17 +129,20 @@ describe('EngineeringLifecycleEngine', () => {
     })
   })
 
-  it('advances through the multi-select set and ends terminally after the last stage', async () => {
+  it('turns each completed manual circle off and ends terminally after the last stage', async () => {
     const { lifecycle } = await setup()
     lifecycle.select('project-1', 'thread-1', { stages: ['brainstorm', 'prd'] })
     lifecycle.start('project-1', 'thread-1')
     expect(lifecycle.completeStage('project-1', 'thread-1', 'brainstorm')).toMatchObject({
-      selection: 'brainstorm',
-      activeStage: 'prd',
+      selection: 'prd',
+      selectedStages: ['prd'],
+      activeStage: undefined,
       completedStages: ['brainstorm']
     })
+    lifecycle.start('project-1', 'thread-1')
     expect(lifecycle.completeStage('project-1', 'thread-1', 'prd')).toMatchObject({
       selection: 'none',
+      activeStage: undefined,
       completedStages: ['brainstorm', 'prd']
     })
   })

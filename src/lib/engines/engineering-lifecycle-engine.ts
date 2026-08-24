@@ -262,17 +262,27 @@ export class EngineeringLifecycleEngine {
     }
   }
 
-  start(projectId: string, threadId: string): EngineeringLifecycleTransitionResult {
+  start(
+    projectId: string,
+    threadId: string,
+    stage?: EngineeringLifecycleStage
+  ): EngineeringLifecycleTransitionResult {
     const current = this.ensure(projectId, threadId)
     if (!current.autopilot && current.selectedStages.length === 0) {
       throw new EngineeringLifecycleError('invalid_transition', 'Select an Engineering stage first')
     }
     if (current.activeStage || current.humanGate) return { state: current, idempotent: true }
-    const stage = current.autopilot ? 'brainstorm' : current.selectedStages[0]
+    if (stage && !STAGES.has(stage)) {
+      throw new EngineeringLifecycleError(
+        'invalid_transition',
+        `Unknown Engineering stage ${stage}`
+      )
+    }
+    const stageToStart = stage ?? (current.autopilot ? 'brainstorm' : current.selectedStages[0])
     const now = this.now()
     this.db.run(
       'UPDATE engineering_lifecycle SET active_stage=?, started_at=COALESCE(started_at, ?), failure=NULL, updated_at=? WHERE project_id=? AND thread_id=?',
-      stage,
+      stageToStart,
       now,
       now,
       projectId,
@@ -281,7 +291,7 @@ export class EngineeringLifecycleEngine {
     return {
       state: {
         ...current,
-        activeStage: stage,
+        activeStage: stageToStart,
         startedAt: current.startedAt ?? now,
         updatedAt: now
       },
@@ -360,11 +370,44 @@ export class EngineeringLifecycleEngine {
       }
       return this.advance(projectId, threadId, { completedStage: stage, nextStage })
     }
-    const nextStage = this.nextSelectedStage(current.selectedStages, stage)
-    if (!nextStage) {
-      return this.advance(projectId, threadId, { completedStage: stage, terminal: true })
+    // Manual mode: a completed circle turns its switch OFF and drops the thread to
+    // implementation mode. Selected stages remaining (e.g. PRD after Brainstorm) do NOT
+    // auto-advance — the user continues by pressing the designated Next-step/Review/
+    // Implement/Approve buttons. Achievement keeps the chained loop behavior: its audit/
+    // rework cycle is what drives the pipeline forward.
+    if (current.selectedStages.includes('achievement')) {
+      const nextStage = this.nextSelectedStage(current.selectedStages, stage)
+      if (!nextStage) {
+        return this.advance(projectId, threadId, { completedStage: stage, terminal: true })
+      }
+      return this.advance(projectId, threadId, { completedStage: stage, nextStage })
     }
-    return this.advance(projectId, threadId, { completedStage: stage, nextStage })
+    const selectedStages = current.selectedStages.filter((candidate) => candidate !== stage)
+    const selection = representativeLifecycleSelection(selectedStages, false)
+    const completedStages = [...new Set([...current.completedStages, stage])]
+    const terminal = selectedStages.length === 0
+    const now = this.now()
+    this.db.run(
+      'UPDATE engineering_lifecycle SET selection=?, selected_stages_json=?, active_stage=?, completed_stages_json=?, human_gate=NULL, resume_token=NULL, failure=NULL, updated_at=? WHERE project_id=? AND thread_id=?',
+      terminal ? 'none' : selection,
+      JSON.stringify(selectedStages),
+      null,
+      JSON.stringify(completedStages),
+      now,
+      projectId,
+      threadId
+    )
+    return {
+      ...current,
+      selection: terminal ? 'none' : selection,
+      selectedStages,
+      completedStages,
+      activeStage: undefined,
+      humanGate: undefined,
+      resumeToken: undefined,
+      failure: undefined,
+      updatedAt: now
+    }
   }
 
   resume(
