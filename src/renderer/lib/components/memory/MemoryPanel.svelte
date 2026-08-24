@@ -12,9 +12,7 @@
   import MemoryTransfer from './MemoryTransfer.svelte'
   import {
     managedScopesFor,
-    memoryDestinationFor,
-    memoryLocationKey,
-    normalizeMemoryEntryForLocation,
+    planMemorySaveGroups,
     type MemoryLocation
   } from './memory-routing'
   import Switch from '../ui/Switch.svelte'
@@ -59,6 +57,8 @@
   }: Props = $props()
 
   let entries = $state<MemoryEntry[]>([])
+  /** Snapshot of what load() last fetched, for stale-save reconciliation. */
+  let loadedEntries = $state<MemoryEntry[]>([])
   let proposals = $state<PendingProposal[]>([])
   let loading = $state(true)
   let saving = $state(false)
@@ -220,12 +220,20 @@
           ])
           nextEntries = [...rootEntries.filter((entry) => entry.scope === 'global'), ...chatEntries]
           nextProposals = [
-            ...globalProposals.map((proposal) => ({ proposal })),
+            ...globalProposals
+              .filter((proposal) => proposal.scope === 'global')
+              .map((proposal) => ({ proposal })),
             ...chatProposals.map((proposal) => ({ proposal, queueProjectId: INBOX_PROJECT_ID }))
           ]
         } else {
-          nextEntries = await invoke('memory:getEntries')
-          nextProposals = []
+          const [rootEntries, globalProposals] = await Promise.all([
+            invoke('memory:getEntries'),
+            invoke('memory:getPendingProposals')
+          ])
+          nextEntries = rootEntries
+          nextProposals = globalProposals
+            .filter((proposal) => proposal.scope === 'global' || proposal.scope === 'projects')
+            .map((proposal) => ({ proposal }))
         }
       } else if (projectId === INBOX_PROJECT_ID) {
         const [rootEntries, chatEntries, threadEntries, globalProposals, chatProposals] =
@@ -242,7 +250,9 @@
           ...(threadId ? threadEntries : [])
         ]
         nextProposals = [
-          ...globalProposals.map((proposal) => ({ proposal })),
+          ...globalProposals
+            .filter((proposal) => proposal.scope === 'global')
+            .map((proposal) => ({ proposal })),
           ...chatProposals.map((proposal) => ({ proposal, queueProjectId: INBOX_PROJECT_ID }))
         ]
       } else if (projectId && threadId) {
@@ -265,6 +275,7 @@
       }
       if (request !== loadRequest) return
       entries = nextEntries
+      loadedEntries = nextEntries
       proposals = nextProposals
     } catch (e) {
       error = e instanceof Error ? e.message : 'Failed to load memory entries.'
@@ -281,7 +292,7 @@
       if (variant === 'settings' || (projectId && threadId)) {
         const fallback: MemoryLocation =
           variant === 'sidebar' ? { projectId, threadId } : {}
-        await saveGrouped(entries, fallback, managedScopesFor(contextKind))
+        await saveGrouped(entries, loadedEntries, fallback, managedScopesFor(contextKind))
         saved = true
         await load()
       } else {
@@ -297,35 +308,37 @@
   /**
    * Write the panel's entries back to their per-file homes. Each entry is
    * routed by its own scope (plus the panel's context as a fallback for
-   * staged entries), and entries the panel does not manage are preserved so a
-   * partial load can never wipe a sibling file's entries.
+   * staged entries). Entries the panel does not manage are preserved so a
+   * partial load can never wipe a sibling file's entries, and so is any
+   * managed-scope entry that landed on disk after this panel's own load
+   * (e.g. a global memory approved from another window) — only entries this
+   * panel actually loaded can be dropped by omission, which is what makes a
+   * deletion here take effect.
    */
   async function saveGrouped(
     panelEntries: MemoryEntry[],
+    loadedBaseline: MemoryEntry[],
     fallback: MemoryLocation,
     managedScopes: readonly MemoryScope[]
   ): Promise<void> {
-    const groups: Record<string, { location: MemoryLocation; entries: MemoryEntry[] }> = {}
-    for (const entry of panelEntries) {
-      const location = memoryDestinationFor(entry, fallback)
-      const key = memoryLocationKey(location)
-      const group = groups[key]
-      if (group) {
-        group.entries.push(normalizeMemoryEntryForLocation(entry, location))
-      } else {
-        groups[key] = { location, entries: [normalizeMemoryEntryForLocation(entry, location)] }
-      }
-    }
-    for (const group of Object.values(groups)) {
+    const groups = planMemorySaveGroups(panelEntries, loadedBaseline, fallback)
+    for (const group of groups) {
       const existing = await invoke(
         'memory:getEntries',
         group.location.projectId,
         group.location.threadId
       )
-      const preserved = existing.filter((entry) => !managedScopes.includes(entry.scope))
+      const managedIds = new Set(group.managedEntries.map((entry) => entry.id))
+      const newSinceLoad = existing.filter(
+        (entry) =>
+          managedScopes.includes(entry.scope) &&
+          !group.loadedIds.has(entry.id) &&
+          !managedIds.has(entry.id)
+      )
+      const preservedOther = existing.filter((entry) => !managedScopes.includes(entry.scope))
       await invoke(
         'memory:saveEntries',
-        [...group.entries, ...preserved],
+        [...group.managedEntries, ...newSinceLoad, ...preservedOther],
         group.location.projectId,
         group.location.threadId
       )

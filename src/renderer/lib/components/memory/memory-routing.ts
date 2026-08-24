@@ -85,3 +85,46 @@ export function normalizeMemoryEntryForLocation(
   }
   return { ...entry, projectId: location.projectId, threadId: location.threadId }
 }
+
+/** One destination file a save touches, with enough context to reconcile it. */
+export interface MemorySaveGroup {
+  location: MemoryLocation
+  /** The panel's current entries destined for this location (edits + keeps). */
+  managedEntries: MemoryEntry[]
+  /** IDs the panel already knew about here when it loaded. */
+  loadedIds: Set<string>
+}
+
+/**
+ * Group a panel's current entries by destination file for saving.
+ *
+ * Includes every location the panel's original load touched — even one that
+ * now has zero managed entries — so deleting the last entry in a scope still
+ * reaches its file instead of silently no-op'ing. `loadedIds` lets the
+ * caller distinguish "the user deleted this" (was loaded, now absent) from
+ * "this appeared elsewhere after load" (never loaded, still on disk), which
+ * a save must never overwrite.
+ */
+export function planMemorySaveGroups(
+  panelEntries: MemoryEntry[],
+  loadedEntries: MemoryEntry[],
+  fallback: MemoryLocation = {}
+): MemorySaveGroup[] {
+  const groups = new Map<string, MemorySaveGroup>()
+  const ensure = (location: MemoryLocation): MemorySaveGroup => {
+    const key = memoryLocationKey(location)
+    const existing = groups.get(key)
+    if (existing) return existing
+    const created: MemorySaveGroup = { location, managedEntries: [], loadedIds: new Set() }
+    groups.set(key, created)
+    return created
+  }
+  for (const entry of loadedEntries) {
+    ensure(memoryDestinationFor(entry, fallback)).loadedIds.add(entry.id)
+  }
+  for (const entry of panelEntries) {
+    const location = memoryDestinationFor(entry, fallback)
+    ensure(location).managedEntries.push(normalizeMemoryEntryForLocation(entry, location))
+  }
+  return [...groups.values()]
+}
