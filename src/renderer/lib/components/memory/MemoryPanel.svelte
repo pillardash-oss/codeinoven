@@ -351,31 +351,37 @@
     }
   }
 
-  function addEntry(): void {
-    // Ensure the new enabled entry is actually visible — switch to the Active tab first.
+  async function addEntry(): Promise<void> {
+    // Add is append-only: single-entry path, not bulk rewrite.
+    // Generates a valid placeholder via the main-process addEntry (read + push + save),
+    // then inserts the persisted entry at the top and expands it.
     if (variant === 'settings') settingsSection = 'active'
     else activeSection = 'active'
     const entryScope = availableScopes[0]?.value ?? 'global'
-    const id = `memory-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
-    lastAddedId = id
-    entries = [
-      {
-        id,
-        label: '',
-        content: '',
-        enabled: true,
-        updatedAt: Date.now(),
+    const placeholderSuffix = Math.random().toString(36).slice(2, 6)
+    const label = 'Untitled memory'
+    const content = `New memory — ${Date.now()}-${placeholderSuffix}`
+    error = ''
+    saving = true
+    try {
+      const created = await invoke('memory:addEntry', label, content, {
         category: 'preference',
         priority: 'medium',
         scope: entryScope,
         source: 'manual',
-        frequency: 1,
-        lastReinforced: Date.now(),
         projectId: entryScope === 'project' || entryScope === 'thread' ? projectId : undefined,
         threadId: entryScope === 'thread' ? threadId : undefined
-      },
-      ...entries
-    ]
+      })
+      lastAddedId = created.id
+      // Prepend and keep load baseline in sync so a following bulk Save
+      // treats this as already-known (not newSinceLoad/duplicate).
+      entries = [created, ...entries]
+      loadedEntries = [created, ...loadedEntries]
+    } catch (e) {
+      error = e instanceof Error ? e.message : 'Failed to add memory.'
+    } finally {
+      saving = false
+    }
   }
 
   async function setMemoryEnabled(enabled: boolean): Promise<void> {
