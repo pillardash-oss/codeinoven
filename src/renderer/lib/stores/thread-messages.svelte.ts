@@ -39,6 +39,13 @@ export const THREAD_MESSAGE_PRELOAD_WINDOW = 40
 
 const EMPTY_MESSAGES: AgentMessage[] = []
 const STREAM_NOTIFICATION_DELAY_MS = 50
+/** How many messages to reveal per frame when a large conversation first loads,
+ *  so the heavy markdown render spreads across frames instead of mounting
+ *  dozens of blocks in one synchronous flush (which blocks the composer). */
+const LOAD_REVEAL_BATCH_SIZE = 6
+/** Pause between reveal batches — one frame lets the renderer paint and the
+ *  composer accept input between batches. */
+const LOAD_REVEAL_INTERVAL_MS = 16
 
 function threadKey(projectId: string, threadId: string): string {
   return `${projectId}:${threadId}`
@@ -85,6 +92,10 @@ class ThreadMessagesStore {
   #threads = new Map<string, ThreadMessagesEntry>()
   #streamNotifyTimer: ReturnType<typeof setTimeout> | undefined
   #streamDirtyKeys = new Set<string>()
+  /** Pending batched-reveal state for a large initial load, keyed by thread. */
+  #revealTimers = new Map<string, ReturnType<typeof setTimeout>>()
+  #revealGens = new Map<string, number>()
+  #revealPending = new Map<string, { entry: ThreadMessagesEntry; merged: AgentMessage[] }>()
 
   /** Reactive cache keyed by `projectId:threadId`. */
   threads = new SvelteMap<string, ThreadMessagesEntry>()
@@ -239,9 +250,7 @@ class ThreadMessagesStore {
       return a.id.localeCompare(b.id)
     })
 
-    entry.messages = merged
-    entry.loaded = true
-    this.#notify(projectId, threadId)
+    this.#applyLoadedMessages(projectId, threadId, entry, merged)
   }
 
   /** Merge a bounded history page without discarding pages already loaded for the thread. */
@@ -252,13 +261,87 @@ class ThreadMessagesStore {
       const cached = mergedById.get(message.id)
       mergedById.set(message.id, cached ? mergeMessageSnapshot(cached, message) : message)
     }
-    entry.messages = [...mergedById.values()].sort((a, b) => {
+    const merged = [...mergedById.values()].sort((a, b) => {
       const timeDiff = a.createdAt - b.createdAt
       if (timeDiff !== 0) return timeDiff
       return a.id.localeCompare(b.id)
     })
+    this.#applyLoadedMessages(projectId, threadId, entry, merged)
+  }
+
+  /**
+   * Apply a freshly loaded message set without ever freezing the renderer.
+   *
+   * Small sets (a warm cache, an incremental refresh, a short conversation)
+   * land atomically. A large initial load is marked `loaded` immediately so the
+   * "Loading conversation…" placeholder clears and the composer stays live, then
+   * revealed tail-first in small batches across frames — each batch yields to
+   * the event loop so the heavy per-message markdown render never blocks typing.
+   *
+   * A newer authoritative set (another load, a streaming event) cancels any
+   * in-flight reveal and applies the whole thing, so nothing is ever lost.
+   */
+  #applyLoadedMessages(
+    projectId: string,
+    threadId: string,
+    entry: ThreadMessagesEntry,
+    merged: AgentMessage[]
+  ): void {
+    const key = threadKey(projectId, threadId)
+    // Incremental/small sets and follow-up authoritative loads apply in full.
+    if (merged.length <= LOAD_REVEAL_BATCH_SIZE) {
+      this.#cancelReveal(key)
+      entry.messages = merged
+      entry.loaded = true
+      this.#notify(projectId, threadId)
+      return
+    }
+    this.#cancelReveal(key)
     entry.loaded = true
-    this.#notify(projectId, threadId)
+    const generation = (this.#revealGens.get(key) ?? 0) + 1
+    this.#revealGens.set(key, generation)
+    this.#revealPending.set(key, { entry, merged })
+
+    let revealed = LOAD_REVEAL_BATCH_SIZE
+    const publishBatch = (): void => {
+      if (this.#revealGens.get(key) !== generation) return
+      // Tail-first: the newest, most-visible messages render before older ones.
+      entry.messages = merged.slice(merged.length - revealed)
+      this.#notify(projectId, threadId)
+      if (revealed >= merged.length) {
+        this.#revealTimers.delete(key)
+        this.#revealPending.delete(key)
+        return
+      }
+      revealed = Math.min(merged.length, revealed + LOAD_REVEAL_BATCH_SIZE)
+      this.#revealTimers.set(key, setTimeout(publishBatch, LOAD_REVEAL_INTERVAL_MS))
+    }
+    this.#revealTimers.set(key, setTimeout(publishBatch, LOAD_REVEAL_INTERVAL_MS))
+  }
+
+  /** Stop any in-flight batched reveal for a thread. */
+  #cancelReveal(key: string): void {
+    const timer = this.#revealTimers.get(key)
+    if (timer !== undefined) {
+      clearTimeout(timer)
+      this.#revealTimers.delete(key)
+    }
+    const generation = this.#revealGens.get(key)
+    if (generation !== undefined) this.#revealGens.set(key, generation + 1)
+    this.#revealPending.delete(key)
+  }
+
+  /**
+   * Flush a pending batched reveal immediately. Used when live streaming or an
+   * optimistic mutation needs the complete message set so a batch tick never
+   * overwrites newer streaming data with an older partial slice.
+   */
+  #flushReveal(key: string): void {
+    const pending = this.#revealPending.get(key)
+    if (!pending) return
+    this.#cancelReveal(key)
+    pending.entry.messages = pending.merged
+    this.#notifyByKey(key)
   }
 
   private appendOptimistic(
@@ -271,6 +354,7 @@ class ThreadMessagesStore {
     projectReferences?: PromptProjectReference[],
     presentation?: UserMessagePresentation
   ): { entry: ThreadMessagesEntry; messageId: string } {
+    this.#flushReveal(threadKey(projectId, threadId))
     const entry = this.entry(projectId, threadId)
     const messageId = userMessageId ?? createMessageId()
     const optimistic: AgentMessage = {
@@ -454,6 +538,7 @@ class ThreadMessagesStore {
   /** Apply a streaming part update to the cached messages. */
   upsertPart(projectId: string, threadId: string, sessionId: string, part: AgentPart): void {
     if (!this.#matchesSession(projectId, threadId, sessionId)) return
+    this.#flushReveal(threadKey(projectId, threadId))
     const entry = this.entry(projectId, threadId)
     const msgId = part.messageID
     const msgIndex = entry.messages.findLastIndex((message) => message.id === msgId)
@@ -498,6 +583,7 @@ class ThreadMessagesStore {
     delta: string
   ): void {
     if (!this.#matchesSession(projectId, threadId, sessionId)) return
+    this.#flushReveal(threadKey(projectId, threadId))
     const entry = this.entry(projectId, threadId)
     const msg = entry.messages.findLast((message) => message.id === messageId)
     if (!msg) return
@@ -526,6 +612,7 @@ class ThreadMessagesStore {
     credits?: AgentMessage['credits']
   ): void {
     if (!this.#matchesSession(projectId, threadId, sessionId)) return
+    this.#flushReveal(threadKey(projectId, threadId))
     const entry = this.entry(projectId, threadId)
     const doneMsg = entry.messages.find((m) => m.id === messageId)
     if (!doneMsg) return
@@ -574,6 +661,7 @@ class ThreadMessagesStore {
     credits?: AgentMessage['credits']
   ): void {
     if (!this.#matchesSession(projectId, threadId, sessionId)) return
+    this.#flushReveal(threadKey(projectId, threadId))
     const entry = this.entry(projectId, threadId)
     const message = entry.messages.find((candidate) => candidate.id === messageId)
     if (!message) return
@@ -592,6 +680,7 @@ class ThreadMessagesStore {
   async truncate(projectId: string, threadId: string, messageId: string): Promise<AgentMessage[]> {
     const kept = await invoke('agent:truncateMessages', projectId, threadId, messageId)
     const key = threadKey(projectId, threadId)
+    this.#cancelReveal(key)
     const entry = this.entry(projectId, threadId)
     entry.messages = kept
     entry.loaded = true
@@ -604,6 +693,7 @@ class ThreadMessagesStore {
   /** Clear the cache for a thread (e.g. on deletion). */
   clear(projectId: string, threadId: string): void {
     const key = threadKey(projectId, threadId)
+    this.#cancelReveal(key)
     const sessionId = this.#sessionIds.get(key)
     if (sessionId) this.#threadsBySession.delete(sessionId)
     this.#threads.delete(key)
@@ -776,6 +866,11 @@ class ThreadMessagesStore {
 
   #notify(projectId: string, threadId: string): void {
     const key = threadKey(projectId, threadId)
+    this.#streamDirtyKeys.delete(key)
+    this.#publish(key)
+  }
+
+  #notifyByKey(key: string): void {
     this.#streamDirtyKeys.delete(key)
     this.#publish(key)
   }
