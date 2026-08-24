@@ -1055,7 +1055,7 @@
       })
       const visibleThreads = threadList.filter((thread) => !thread.archived)
       scopeState.setThreads(visibleThreads)
-      notificationPanelState.hydrateFromThreads(visibleThreads)
+      notificationPanelState.hydrateFromThreads(visibleThreads, projectList)
 
       // 3. The selected project's scope board is the visible surface — load it
       //    before warming any provider data.

@@ -1,6 +1,11 @@
 import { APP_SLUG } from '$shared/brand'
-import type { AgentNotificationPayload } from '$shared/ipc-contract'
-import { isOrchestrationChildThread, type Thread } from '$shared/types'
+import type { AgentNotificationPayload, NotificationSource } from '$shared/ipc-contract'
+import {
+  INBOX_PROJECT_ID,
+  isOrchestrationChildThread,
+  type Project,
+  type Thread
+} from '$shared/types'
 
 export type NotificationFilter =
   'all' | 'completed' | 'chat-completed' | 'attention' | 'spec' | 'error' | 'app-errors'
@@ -12,6 +17,9 @@ export interface InAppNotification {
   body: string
   projectId: string
   threadId: string
+  source: NotificationSource
+  projectName: string
+  projectColor?: string
   timestamp: number
 }
 
@@ -88,26 +96,35 @@ class NotificationPanelState {
   }
 
   /** Populate attention notifications from persisted threads on startup. */
-  hydrateFromThreads(threads: Thread[]): void {
+  hydrateFromThreads(threads: Thread[], projects: Project[] = []): void {
+    const projectById = new Map(projects.map((project) => [project.id, project]))
     for (const thread of threads) {
       if (
         (thread.status === 'awaiting_approval' || thread.status === 'spec') &&
         !thread.read &&
         !isOrchestrationChildThread(thread)
       ) {
+        const project = projectById.get(thread.projectId)
+        const isChat = thread.projectId === INBOX_PROJECT_ID
+        const sourceName = isChat ? 'Chat' : (project?.name ?? thread.title)
         this.add({
           id: `${APP_SLUG}-${thread.projectId}-${thread.id}-${thread.status}-${thread.updatedAt}`,
           kind: thread.status === 'spec' ? 'spec' : 'attention',
           title:
             thread.status === 'spec'
-              ? 'Specification ready for review'
-              : 'Agent needs your attention',
+              ? `${sourceName} spec is ready`
+              : `${sourceName} needs attention`,
           body:
             thread.status === 'spec'
-              ? `${thread.title} has a reviewable engineering artifact ready.`
-              : `${thread.title} is waiting for your input.`,
+              ? `${thread.title} has a reviewable engineering artifact ready in ${
+                  project?.name ?? ''
+                }.`
+              : `${thread.title} is waiting for your input in ${project?.name ?? ''}.`,
           projectId: thread.projectId,
-          threadId: thread.id
+          threadId: thread.id,
+          source: isChat ? 'chat' : 'project',
+          projectName: project?.name ?? '',
+          projectColor: project?.color
         })
       }
     }

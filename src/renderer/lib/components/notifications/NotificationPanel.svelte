@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Bell, Bug, Check, Copy, X } from '@lucide/svelte'
+  import { Bell, Bug, Check, Copy, MessageCircleDashed, MessageSquare, X } from '@lucide/svelte'
   import {
     notificationPanelState,
     type NotificationFilter,
@@ -11,6 +11,7 @@
   import StatusBadge from '$lib/components/shared/StatusBadge.svelte'
   import { invoke } from '$lib/ipc.svelte'
   import { copyText } from '$lib/copy-text'
+  import { INBOX_PROJECT_ID } from '$shared/types'
 
   interface Props {
     onOpenThread?: (projectId: string, threadId: string) => void | Promise<void>
@@ -295,6 +296,30 @@
               <div class="flex items-center gap-2">
                 <span class="truncate text-[11px] font-medium text-foreground">{n.title}</span>
                 <span class="shrink-0 text-[10px] text-dimmed">{formatTime(n.timestamp)}</span>
+              </div>
+              <div class="mt-1 flex items-center gap-1 text-[10px] text-dimmed">
+                {#if n.source === 'chat'}
+                  <MessageSquare size={10} class="shrink-0" />
+                  <span>Chat</span>
+                {:else}
+                  <span
+                    class="h-1.5 w-1.5 shrink-0 rounded-full"
+                    style="background: {n.projectColor ?? 'var(--color-border)'}"
+                    role="presentation"
+                  ></span>
+                  <span class="truncate"
+                    >{n.projectId === INBOX_PROJECT_ID ? 'Chat' : n.projectName}</span
+                  >
+                  {#if n.source === 'temporary-chat'}
+                    <span class="shrink-0">·</span>
+                    <MessageCircleDashed
+                      size={10}
+                      class="shrink-0 text-info"
+                      title="Temporary chat"
+                      aria-hidden="true"
+                    />
+                  {/if}
+                {/if}
               </div>
               {#if n.body}
                 <p class="mt-0.5 line-clamp-2 text-[11px] leading-relaxed text-muted">

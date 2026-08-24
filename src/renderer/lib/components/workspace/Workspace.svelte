@@ -1820,7 +1820,7 @@
       allThreads = uniqueThreads.filter((t) => !isOrchestrationChildThread(t))
       historyOffset = threadList.length
       hasMoreHistory = threadList.length === INITIAL_THREAD_LIMIT
-      notificationPanelState.hydrateFromThreads(uniqueThreads)
+      notificationPanelState.hydrateFromThreads(uniqueThreads, projectList)
       projectIcons.clear()
       for (const [projectId, iconUrl] of await loadProjectIcons(projectList)) {
         projectIcons.set(projectId, iconUrl)
@@ -1901,7 +1901,7 @@
       allThreads = uniqueThreads.filter((t) => !isOrchestrationChildThread(t))
       historyOffset = threadList.length
       hasMoreHistory = threadList.length === INITIAL_THREAD_LIMIT
-      notificationPanelState.hydrateFromThreads(uniqueThreads)
+      notificationPanelState.hydrateFromThreads(uniqueThreads, projectList)
       projectIcons.clear()
       for (const [projectId, iconUrl] of await loadProjectIcons(projectList)) {
         projectIcons.set(projectId, iconUrl)
