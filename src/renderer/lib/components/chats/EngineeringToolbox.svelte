@@ -10,12 +10,17 @@
 
   interface Props {
     lifecycleState: EngineeringLifecycleState | null
+    /** Whether the thread is in engineering mode. A thread can be in
+     *  engineering mode (inherited or via a lifecycle stage selection) before
+     *  any specific stage has been chosen, e.g. when a new thread inherits the
+     *  previous thread's engineering settings. */
+    active?: boolean
     disabled?: boolean
     onselect: (selection: EngineeringLifecycleSelection) => void | Promise<void>
     onretry?: () => void | Promise<void>
   }
 
-  let { lifecycleState, disabled = false, onselect, onretry }: Props = $props()
+  let { lifecycleState, active = false, disabled = false, onselect, onretry }: Props = $props()
   let open = $state(false)
   let panel: HTMLDivElement | undefined = $state(undefined)
 
@@ -32,7 +37,7 @@
   ]
 
   const selection = $derived(lifecycleState?.selection ?? 'none')
-  const filled = $derived(selection !== 'none' || lifecycleState?.startedAt !== undefined)
+  const filled = $derived(active || selection !== 'none' || lifecycleState?.startedAt !== undefined)
 
   function checked(stage: EngineeringLifecycleStage): boolean {
     return selection === 'run_all' || selection === stage
@@ -74,7 +79,7 @@
   <button
     type="button"
     class="flex h-7 w-7 items-center justify-center rounded-lg transition-colors {filled
-      ? 'bg-thread-spec text-foreground'
+      ? 'text-accent'
       : 'text-muted hover:bg-elevated hover:text-foreground'}"
     title="Engineering Toolbox"
     aria-label="Open Engineering Toolbox"
@@ -83,7 +88,7 @@
     {disabled}
     onclick={() => void toggle()}
   >
-    <Toolbox size={15} />
+    <Toolbox size={15} class={filled ? 'text-accent' : ''} fill={filled ? 'currentColor' : 'none'} />
   </button>
 
   {#if open}
