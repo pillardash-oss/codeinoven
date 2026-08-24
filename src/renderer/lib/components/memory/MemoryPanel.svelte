@@ -10,6 +10,13 @@
   } from '$shared/types'
   import MemoryEntryComponent from './MemoryEntry.svelte'
   import MemoryTransfer from './MemoryTransfer.svelte'
+  import {
+    managedScopesFor,
+    memoryDestinationFor,
+    memoryLocationKey,
+    normalizeMemoryEntryForLocation,
+    type MemoryLocation
+  } from './memory-routing'
   import Switch from '../ui/Switch.svelte'
   import { memoryProposalState } from '$lib/stores/memory-proposals.svelte'
   import { Check, Loader2, Plus, Save, Search, X } from '@lucide/svelte'
@@ -95,8 +102,8 @@
   let headerDescription = $derived(
     variant === 'settings'
       ? scope === 'chats'
-        ? 'Memory that applies to standalone chats. Global preferences are shared with projects.'
-        : 'Memory that applies to project work. Global preferences are shared with chats.'
+        ? 'Every memory for conversations — global, chat-wide, and per-chat. Global preferences are shared with projects.'
+        : 'Every memory for project work — global, per-project, and per-thread. Global preferences are shared with chats.'
       : projectId === INBOX_PROJECT_ID
         ? 'Global, chat, and thread preferences active in this conversation.'
         : 'Global, project, and thread preferences active in this conversation.'
@@ -107,11 +114,14 @@
       return scope === 'chats'
         ? [
             { value: 'global', label: 'Global' },
-            { value: 'chat', label: 'Chats' }
+            { value: 'chat', label: 'Chats' },
+            { value: 'thread', label: 'Thread' }
           ]
         : [
             { value: 'global', label: 'Global' },
-            { value: 'projects', label: 'Projects' }
+            { value: 'projects', label: 'Projects' },
+            { value: 'project', label: 'Specific project' },
+            { value: 'thread', label: 'Thread' }
           ]
     }
     if (projectId === INBOX_PROJECT_ID) {
@@ -205,19 +215,18 @@
       let nextProposals: PendingProposal[]
       if (variant === 'settings') {
         if (scope === 'chats') {
-          const [rootEntries, chatEntries, globalProposals, chatProposals] = await Promise.all([
-            invoke('memory:getEntries'),
-            invoke('memory:getEntries', INBOX_PROJECT_ID),
+          const [chatEntries, globalProposals, chatProposals] = await Promise.all([
+            invoke('memory:getAllEntries', 'chats'),
             invoke('memory:getPendingProposals'),
             invoke('memory:getPendingProposals', INBOX_PROJECT_ID)
           ])
-          nextEntries = [...rootEntries.filter((entry) => entry.scope === 'global'), ...chatEntries]
+          nextEntries = chatEntries
           nextProposals = [
             ...globalProposals.map((proposal) => ({ proposal })),
             ...chatProposals.map((proposal) => ({ proposal, queueProjectId: INBOX_PROJECT_ID }))
           ]
         } else {
-          nextEntries = await invoke('memory:getEntries')
+          nextEntries = await invoke('memory:getAllEntries', 'projects')
           nextProposals = []
         }
       } else if (projectId === INBOX_PROJECT_ID) {
@@ -271,59 +280,15 @@
     error = ''
     saved = false
     try {
-      if (variant === 'settings') {
-        if (scope === 'chats') {
-          const globalEntries = entries
-            .filter((entry) => entry.scope === 'global')
-            .map((entry) => withScope(entry, 'global'))
-          const chatEntries = entries
-            .filter((entry) => entry.scope === 'chat')
-            .map((entry) => withScope(entry, 'chat'))
-          await Promise.all([
-            invoke('memory:saveEntries', globalEntries),
-            invoke('memory:saveEntries', chatEntries, INBOX_PROJECT_ID)
-          ])
-        } else {
-          await invoke(
-            'memory:saveEntries',
-            entries.map((entry) => withScope(entry, entry.scope))
-          )
-        }
-      } else if (projectId === INBOX_PROJECT_ID) {
-        const globalEntries = entries
-          .filter((entry) => entry.scope === 'global')
-          .map((entry) => withScope(entry, 'global'))
-        const chatEntries = entries
-          .filter((entry) => entry.scope === 'chat')
-          .map((entry) => withScope(entry, 'chat'))
-        const threadEntries = entries
-          .filter((entry) => entry.scope === 'thread')
-          .map((entry) => withScope(entry, 'thread'))
-        await Promise.all([
-          invoke('memory:saveEntries', globalEntries),
-          invoke('memory:saveEntries', chatEntries, INBOX_PROJECT_ID),
-          invoke('memory:saveEntries', threadEntries, INBOX_PROJECT_ID, threadId)
-        ])
-      } else if (projectId && threadId) {
-        const rootEntries = entries
-          .filter((entry) => entry.scope === 'global' || entry.scope === 'projects')
-          .map((entry) => withScope(entry, entry.scope))
-        const projectEntries = entries
-          .filter((entry) => entry.scope === 'project')
-          .map((entry) => withScope(entry, 'project'))
-        const threadEntries = entries
-          .filter((entry) => entry.scope === 'thread')
-          .map((entry) => withScope(entry, 'thread'))
-        await Promise.all([
-          invoke('memory:saveEntries', rootEntries),
-          invoke('memory:saveEntries', projectEntries, projectId),
-          invoke('memory:saveEntries', threadEntries, projectId, threadId)
-        ])
+      if (variant === 'settings' || (projectId && threadId)) {
+        const fallback: MemoryLocation =
+          variant === 'sidebar' ? { projectId, threadId } : {}
+        await saveGrouped(entries, fallback, managedScopesFor(contextKind))
+        saved = true
+        await load()
       } else {
         throw new Error('Open a project thread before editing scoped memory.')
       }
-      saved = true
-      await load()
     } catch (e) {
       error = e instanceof Error ? e.message : 'Failed to save memory entries.'
     } finally {
@@ -331,17 +296,46 @@
     }
   }
 
-  function withScope(entry: MemoryEntry, entryScope: MemoryScope): MemoryEntry {
-    return {
-      ...entry,
-      scope: entryScope,
-      projectId: entryScope === 'project' || entryScope === 'thread' ? projectId : undefined,
-      threadId: entryScope === 'thread' ? threadId : undefined
+  /**
+   * Write the panel's entries back to their per-file homes. Each entry is
+   * routed by its own scope (plus the panel's context as a fallback for
+   * staged entries), and entries the panel does not manage are preserved so a
+   * partial load can never wipe a sibling file's entries.
+   */
+  async function saveGrouped(
+    panelEntries: MemoryEntry[],
+    fallback: MemoryLocation,
+    managedScopes: readonly MemoryScope[]
+  ): Promise<void> {
+    const groups: Record<string, { location: MemoryLocation; entries: MemoryEntry[] }> = {}
+    for (const entry of panelEntries) {
+      const location = memoryDestinationFor(entry, fallback)
+      const key = memoryLocationKey(location)
+      const group = groups[key]
+      if (group) {
+        group.entries.push(normalizeMemoryEntryForLocation(entry, location))
+      } else {
+        groups[key] = { location, entries: [normalizeMemoryEntryForLocation(entry, location)] }
+      }
+    }
+    for (const group of Object.values(groups)) {
+      const existing = await invoke(
+        'memory:getEntries',
+        group.location.projectId,
+        group.location.threadId
+      )
+      const preserved = existing.filter((entry) => !managedScopes.includes(entry.scope))
+      await invoke(
+        'memory:saveEntries',
+        [...group.entries, ...preserved],
+        group.location.projectId,
+        group.location.threadId
+      )
     }
   }
 
   function addEntry(): void {
-    const entryScope = availableScopes.at(-1)?.value ?? 'global'
+    const entryScope = availableScopes[0]?.value ?? 'global'
     entries = [
       ...entries,
       {

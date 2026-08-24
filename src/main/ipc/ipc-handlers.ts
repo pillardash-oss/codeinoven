@@ -2503,6 +2503,9 @@ export function registerIpcHandlers(
   ipcMain.handle('memory:getMergedEntries', (_, projectId: unknown) =>
     memoryService.getMergedEntries(requireString(projectId, 'Project ID', true))
   )
+  ipcMain.handle('memory:getAllEntries', (_, kind: unknown) =>
+    memoryService.exportEntries(kind === 'chats' ? 'chats' : 'projects')
+  )
   ipcMain.handle(
     'memory:addEntry',
     async (_, label: unknown, content: unknown, options?: unknown) => {
