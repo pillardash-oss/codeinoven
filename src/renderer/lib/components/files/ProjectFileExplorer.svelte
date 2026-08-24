@@ -521,7 +521,7 @@
     if (entry.kind === 'file') {
       if (onFileSelect) {
         onFileSelect(entry.path)
-      } else if (activeCheckpointId && activeCheckpointPaths.includes(entry.path)) {
+      } else if (lastTurnOnly && activeCheckpointId && activeCheckpointPaths.includes(entry.path)) {
         await projectFilesWorkspace.openCheckpointFile(
           projectId,
           activeCheckpointId,
