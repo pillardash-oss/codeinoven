@@ -26,10 +26,10 @@ Chromium's MediaRecorder output is decoded to mono 16 kHz WAV by the pinned pack
 
 The initial families are:
 
-- Whisper Base for local ASR through MLX or sherpa-onnx.
-- Kokoro English for local TTS through MLX or sherpa-onnx.
-- Qwen3 0.6B 4-bit for compact MLX cleanup.
-- A sherpa-onnx English and Chinese punctuation model for portable cleanup.
+- Parakeet TDT 0.6B v2 (English-optimized) and v3 (multilingual) for local ASR through sherpa-onnx — ranked first in the ASR tab, with **Best for English** (v2) and **Best for Multilingual** (v3) badges.
+- Whisper Base for local ASR through MLX or sherpa-onnx — ranked after Parakeet, with platform badges and Hugging Face links.
+- Kokoro English for local TTS through MLX or sherpa-onnx — shown in the TTS tab with **MLX / ONNX** runtime badges and Hugging Face links.
+- Qwen3 0.6B 4-bit for compact MLX cleanup and a sherpa-onnx English and Chinese punctuation model — shown in the LLM (cleanup) tab with runtime badges and Hugging Face links.
 
 Every downloadable file has a pinned repository revision, HTTPS URL, exact byte count, and SHA-256 digest. A catalog entry remains a non-selectable `candidate` until all of these admission gates pass:
 
@@ -44,7 +44,7 @@ Run `bun run speech:catalog` during development to validate the manifest and lis
 
 ### User model import
 
-Users can import their own models by pointing at a local folder or file via **Import** (native file picker) or **Paste Path** (paste a filesystem path copied from a terminal or documentation). Both actions share the same validation and registration path. Import registers a **user-owned external reference** only — CodeInOven never copies or deletes the referenced files. A `.mlx` model is registered to the MLX runtime and is gated to Apple Silicon; a `.gguf` model is registered to the GGUF/llama.cpp runtime (either a single `.gguf` file or a folder containing `.gguf` files); anything else is rejected with an unsupported-format error. Unregistering an imported model removes the reference only and never touches the external files on disk. Imported models appear under an “Imported models” group in the Sound Models tab.
+Sound → **Models** is a tabbed surface with three sub-tabs — **ASR**, **TTS**, and **LLM** (cleanup) — each showing its artifacts as individual cards in a fixed-height, internally scrollable container (`max-h-[520px] overflow-y-auto`). Cards are ranked: Parakeet TDT v2 (**Best for English**) then v3 (**Best for Multilingual**) first in ASR, followed by Whisper variants; Kokoro variants in TTS; Qwen MLX then sherpa punctuation in LLM. Each card shows a **runtime badge** (MLX / ONNX / GGUF), a ranking/best-for badge where applicable, size, license, qualification, languages, and a **Hugging Face link** (`sourcePageUrl`). Each card has its **own Import and Paste Path buttons** (in addition to per-sub-tab header buttons), so the user can paste and import directly from any card; a fixed-height scroll keeps the section bounded. Users can import their own models by pointing at a local folder or file via **Import** (native file picker) or **Paste Path** (paste a filesystem path). Both actions share the same validation and registration path. Import registers a **user-owned external reference** only — CodeInOven never copies or deletes the referenced files. A `.mlx` model is registered to the MLX runtime and is gated to Apple Silicon; a `.gguf` model is registered to the GGUF/llama.cpp runtime (either a single `.gguf` file or a folder containing `.gguf` files); anything else is rejected with an unsupported-format error. Unregistering an imported model removes the reference only and never touches the external files on disk. Imported models appear under an “Imported models” group within the Models tab.
 
 Pasting a path opens **Paste model path** — a modal with a focused input that validates live on paste and on edit. The modal trims surrounding whitespace and matching outer quotes before validation and shows when normalization occurred. Validation runs in the main process (filesystem access never leaves the renderer) and is debounced to avoid blocking the UI. The modal shows:
 
@@ -94,7 +94,7 @@ Local cleanup is enabled by default. It applies the selected punctuation or form
 
 Remote cleanup is a separate `Switch` that defaults off. Enabling it requires an explicit fixed model or the current conversation model. Only transcript text and minimal formatting context may leave the machine: view kind, project or thread labels, active branch, and the bounded glossary or rules. Audio bytes, source files, full conversation history, and unrelated project content are excluded.
 
-A local-LLM cleanup control is exposed in the Sound Models tab (default off): when enabled, transcripts are sent to a local LLM (llama.cpp/GGUF or MLX) for formatting, via either an app-managed runtime or a user-supplied OpenAI-compatible base URL (e.g. LM Studio or a running `llama.cpp --server`). It is treated as a local path and is distinct from the off-by-default remote conversation-model cleanup.
+A local-LLM cleanup control is exposed in the Sound **Preferences** tab (default off), alongside **Runtime** and **Transcript cleanup** (which no longer appear in the Models tab): when enabled, transcripts are sent to a local LLM (llama.cpp/GGUF or MLX) for formatting, via either an app-managed runtime or a user-supplied OpenAI-compatible base URL (e.g. LM Studio or a running `llama.cpp --server`). It is treated as a local path and is distinct from the off-by-default remote conversation-model cleanup. The **Preferences** tab also holds Model memory, Cues and playback, and Enable voice recording.
 
 ## Model memory
 

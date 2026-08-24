@@ -22,6 +22,7 @@ const PLATFORMS = new Set<SpeechPlatform>(['darwin', 'win32', 'linux'])
 const ARCHITECTURES = new Set<SpeechArchitecture>(['arm64', 'x64'])
 const FAMILY_IDS = new Set<SpeechModelFamilyId>([
   'whisper',
+  'parakeet',
   'kokoro',
   'qwen-cleanup',
   'sherpa-punctuation'

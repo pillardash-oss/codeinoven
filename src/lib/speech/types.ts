@@ -62,7 +62,7 @@ export interface SpeechCompatibilityError {
 export type SpeechRuntimeResolutionResult =
   { ok: true; value: SpeechRuntimeResolution } | { ok: false; error: SpeechCompatibilityError }
 
-export type SpeechModelFamilyId = 'whisper' | 'kokoro' | 'qwen-cleanup' | 'sherpa-punctuation'
+export type SpeechModelFamilyId = 'whisper' | 'parakeet' | 'kokoro' | 'qwen-cleanup' | 'sherpa-punctuation'
 export type SpeechArtifactStatus = 'candidate' | 'qualified' | 'retired'
 
 export interface SpeechArtifactFile {

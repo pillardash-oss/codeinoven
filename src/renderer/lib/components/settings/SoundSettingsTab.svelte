@@ -1,8 +1,9 @@
 <script lang="ts">
   import { onMount } from 'svelte'
-  import { Download, LoaderCircle, Play, RefreshCw, Trash2, X } from '@lucide/svelte'
+  import { Download, ExternalLink, LoaderCircle, Play, RefreshCw, Trash2, Upload, ClipboardPaste, X } from '@lucide/svelte'
   import type { AppConfigPatch } from '$shared/types'
   import type { SpeechDestructiveAction, SpeechSettings } from '../../../../lib/speech/types'
+  import type { SpeechModelArtifact } from '../../../../lib/speech/types'
   import { invoke } from '$lib/ipc.svelte'
   import { speechSettingsStore as speech } from '$lib/stores/speech.svelte'
   import Switch from '../ui/Switch.svelte'
@@ -22,12 +23,14 @@
     isImported?: boolean
   }
 
-  type SoundTab = 'models' | 'history' | 'learning' | 'playback'
+  type SoundTab = 'models' | 'history' | 'learning' | 'preferences'
+  type ModelSubTab = 'asr' | 'tts' | 'llm'
 
   let { settings, settingsReady, updateConfig }: Props = $props()
   let deleting = $state<PendingDeletion | null>(null)
   let mutationBusy = $state(false)
   let activeTab = $state<SoundTab>('models')
+  let activeModelSubTab = $state<ModelSubTab>('asr')
   let importing = $state(false)
   let pasteOpen = $state(false)
 
@@ -35,7 +38,13 @@
     { id: 'models', label: 'Models' },
     { id: 'history', label: 'History' },
     { id: 'learning', label: 'Learning' },
-    { id: 'playback', label: 'Playback' }
+    { id: 'preferences', label: 'Preferences' }
+  ]
+
+  const modelSubTabs: ReadonlyArray<{ id: ModelSubTab; label: string; hint: string }> = [
+    { id: 'asr', label: 'ASR', hint: 'Speech-to-text' },
+    { id: 'tts', label: 'TTS', hint: 'Speech synthesis' },
+    { id: 'llm', label: 'LLM', hint: 'Cleanup models' }
   ]
 
   const unloadItems = [
@@ -129,6 +138,51 @@
       isImported: true
     }
   }
+
+  function runtimeBadge(runtime: string): string {
+    if (runtime === 'mlx') return 'MLX'
+    if (runtime === 'sherpa-onnx') return 'ONNX'
+    if (runtime === 'gguf') return 'GGUF'
+    return runtime.toUpperCase()
+  }
+
+  function runtimeBadgeClass(runtime: string): string {
+    if (runtime === 'mlx') return 'bg-violet-500/15 text-violet-600 border-violet-500/20'
+    if (runtime === 'sherpa-onnx') return 'bg-emerald-500/15 text-emerald-600 border-emerald-500/20'
+    if (runtime === 'gguf') return 'bg-amber-500/15 text-amber-600 border-amber-500/20'
+    return 'bg-muted/10 text-muted border-border'
+  }
+
+  function bestForBadge(artifact: SpeechModelArtifact): { label: string; cls: string } | null {
+    if (artifact.id === 'parakeet-tdt-v2-sherpa-onnx-int8') return { label: 'Best for English', cls: 'bg-sky-500 text-white border-sky-600' }
+    if (artifact.id === 'parakeet-tdt-v3-sherpa-onnx-int8') return { label: 'Best for Multilingual', cls: 'bg-indigo-500 text-white border-indigo-600' }
+    if (artifact.id === 'whisper-base-mlx-4bit') return { label: 'Apple Silicon · Fast', cls: 'bg-zinc-800 text-white border-zinc-700' }
+    if (artifact.id === 'whisper-base-sherpa-int8') return { label: 'Portable · All platforms', cls: 'bg-white text-zinc-700 border-zinc-200' }
+    if (artifact.id === 'kokoro-en-mlx-8bit') return { label: 'Best quality · MLX', cls: 'bg-violet-500 text-white border-violet-600' }
+    if (artifact.id === 'kokoro-en-sherpa-v0-19') return { label: 'Portable · ONNX', cls: 'bg-white text-zinc-700 border-zinc-200' }
+    if (artifact.id === 'qwen3-cleanup-mlx-0-6b-4bit') return { label: 'Recommended · MLX', cls: 'bg-violet-500 text-white border-violet-600' }
+    if (artifact.id === 'sherpa-punctuation-zh-en') return { label: 'Lightweight · Portable', cls: 'bg-white text-zinc-700 border-zinc-200' }
+    return null
+  }
+
+  function sortedForSubTab(sub: ModelSubTab): SpeechModelArtifact[] {
+    const all = speech.catalog?.artifacts ?? []
+    let filtered: SpeechModelArtifact[] = []
+    if (sub === 'asr') filtered = all.filter((a) => a.capability === 'asr')
+    else if (sub === 'tts') filtered = all.filter((a) => a.capability === 'tts')
+    else filtered = all.filter((a) => a.capability === 'cleanup')
+    const order: Record<string, number> = {
+      'parakeet-tdt-v2-sherpa-onnx-int8': 1,
+      'parakeet-tdt-v3-sherpa-onnx-int8': 2,
+      'whisper-base-mlx-4bit': 3,
+      'whisper-base-sherpa-int8': 4,
+      'kokoro-en-mlx-8bit': 1,
+      'kokoro-en-sherpa-v0-19': 2,
+      'qwen3-cleanup-mlx-0-6b-4bit': 1,
+      'sherpa-punctuation-zh-en': 2
+    }
+    return [...filtered].sort((a, b) => (order[a.id] ?? 99) - (order[b.id] ?? 99))
+  }
 </script>
 
 <div class="mx-auto max-w-3xl p-6 pb-24">
@@ -180,232 +234,188 @@
 
   <div class="space-y-4">
     {#if activeTab === 'models'}
-      <section id="settings-block-sound-runtime" class="rounded-xl border bg-surface p-4">
-        <h2 class="mb-3 text-xs font-semibold uppercase tracking-wide text-muted">Runtime</h2>
-        <div class="flex items-center justify-between gap-4">
-          <div>
-            <p class="text-sm font-medium">Local speech runtime</p>
-            <p class="text-xs text-dimmed">
-              Apple Silicon defaults to MLX; other desktops use sherpa-onnx.
-            </p>
-          </div>
-          <select
-            class="rounded-lg border bg-elevated px-2.5 py-1.5 text-xs outline-none focus:border-primary"
-            aria-label="Local speech runtime"
-            value={settings.runtimeOverride ?? ''}
-            disabled={!settingsReady}
-            onchange={(event) =>
-              patch({
-                runtimeOverride:
-                  event.currentTarget.value === ''
-                    ? undefined
-                    : (event.currentTarget.value as 'mlx' | 'sherpa-onnx')
-              })}
+      <!-- Model capability sub-tabs -->
+      <div class="flex items-center gap-1 rounded-lg border bg-surface p-1" role="tablist" aria-label="Model categories">
+        {#each modelSubTabs as sub (sub.id)}
+          <button
+            type="button"
+            role="tab"
+            aria-selected={activeModelSubTab === sub.id}
+            class="flex-1 rounded-md px-3 py-2 text-sm font-medium transition-colors {activeModelSubTab === sub.id ? 'bg-elevated text-foreground shadow-sm' : 'text-muted hover:text-foreground'}"
+            onclick={() => (activeModelSubTab = sub.id)}
           >
-            <option value="">Platform default</option>
-            <option value="mlx">MLX</option>
-            <option value="sherpa-onnx">sherpa-onnx</option>
-          </select>
-        </div>
-      </section>
+            <span class="block text-sm font-semibold leading-none">{sub.label}</span>
+            <span class="block text-[10px] font-normal leading-none opacity-70">{sub.hint}</span>
+          </button>
+        {/each}
+      </div>
 
-      <section id="settings-block-sound-cleanup" class="rounded-xl border bg-surface p-4">
-        <h2 class="mb-3 text-xs font-semibold uppercase tracking-wide text-muted">
-          Transcript cleanup
-        </h2>
-        <div class="space-y-4">
-          <div class="flex items-center justify-between gap-4">
-            <div>
-              <p class="text-sm font-medium">Local cleanup</p>
-              <p class="text-xs text-dimmed">Punctuation and learned rules stay on this device.</p>
-            </div>
-            <Switch
-              checked={settings.localCleanupEnabled}
-              onchange={(checked) => patch({ localCleanupEnabled: checked })}
-              aria-label="Toggle local transcript cleanup"
-            />
-          </div>
-          <div class="flex items-center justify-between gap-4">
-            <div>
-              <p class="text-sm font-medium">Remote cleanup</p>
-              <p class="text-xs text-dimmed">
-                Send transcript text and minimal context only. Audio never leaves the device.
-              </p>
-            </div>
-            <Switch
-              checked={settings.remoteCleanupEnabled}
-              onchange={(checked) => patch({ remoteCleanupEnabled: checked })}
-              aria-label="Toggle remote transcript cleanup"
-            />
-          </div>
-          <div class="flex items-center justify-between gap-4">
-            <div>
-              <p class="text-sm font-medium">Local-LLM cleanup</p>
-              <p class="text-xs text-dimmed">
-                Format transcripts with a local LLM (llama.cpp/GGUF or MLX). Point at a running
-                server, or leave blank to use the app-managed runtime.
-              </p>
-            </div>
-            <Switch
-              checked={settings.localLlmCleanupEnabled}
-              onchange={(checked) => patch({ localLlmCleanupEnabled: checked })}
-              aria-label="Toggle local-LLM transcript cleanup"
-            />
-          </div>
-          <label class="block text-xs text-muted">
-            Local-LLM server base URL
-            <input
-              class="mt-1 w-full rounded-lg border bg-elevated px-2.5 py-2 text-xs outline-none focus:border-primary disabled:opacity-50"
-              type="text"
-              value={settings.localLlmBaseUrl ?? ''}
-              disabled={!settings.localLlmCleanupEnabled}
-              placeholder="http://127.0.0.1:8080 (LM Studio, llama.cpp server)"
-              autocomplete="off"
-              oninput={(event) =>
-                patch({
-                  localLlmBaseUrl: event.currentTarget.value.trim() || undefined
-                })}
-            />
-          </label>
-          <select
-            class="w-full rounded-lg border bg-elevated px-2.5 py-2 text-xs outline-none focus:border-primary disabled:opacity-50"
-            aria-label="Remote cleanup model source"
-            disabled={!settings.remoteCleanupEnabled}
-            value={settings.remoteCleanupSelection}
-            onchange={(event) =>
-              patch({
-                remoteCleanupSelection: event.currentTarget.value as 'fixed' | 'conversation'
-              })}
-          >
-            <option value="conversation">Current conversation model</option>
-            <option value="fixed">Selected fixed model</option>
-          </select>
-          {#if settings.remoteCleanupSelection === 'fixed'}
-            <label class="block text-xs text-muted">
-              Fixed model ID
-              <input
-                class="mt-1 w-full rounded-lg border bg-elevated px-2.5 py-2 text-xs outline-none focus:border-primary disabled:opacity-50"
-                type="text"
-                value={settings.remoteCleanupModelId ?? ''}
-                disabled={!settings.remoteCleanupEnabled}
-                placeholder="Model ID from the current harness"
-                autocomplete="off"
-                oninput={(event) =>
-                  patch({
-                    remoteCleanupModelId: event.currentTarget.value.trim() || undefined
-                  })}
-              />
-            </label>
+      <!-- Per-capability Import / Paste Path -->
+      <div class="flex items-center justify-between gap-3">
+        <p class="text-xs text-dimmed">
+          {#if activeModelSubTab === 'asr'}
+            Parakeet TDT ranked first — V2 best for English, V3 best for multilingual — followed by Whisper. Fixed-height list scrolls internally.
+          {:else if activeModelSubTab === 'tts'}
+            Kokoro voices — local synthesis per runtime. Fixed-height list scrolls internally.
+          {:else}
+            Cleanup LLMs — Qwen MLX recommended, sherpa punctuation lightweight. Fixed-height list scrolls internally.
           {/if}
+        </p>
+        <div class="flex shrink-0 items-center gap-1.5">
+          <button
+            type="button"
+            class="inline-flex items-center gap-1 rounded-lg border bg-elevated px-2.5 py-1 text-xs text-muted hover:text-foreground disabled:opacity-50"
+            title="Import your own model (.mlx or .gguf)"
+            aria-label="Import model for {activeModelSubTab.toUpperCase()}"
+            disabled={importing}
+            onclick={() => void pickImport()}
+          >
+            {#if importing}
+              <LoaderCircle size={12} class="animate-spin" aria-hidden="true" />
+            {:else}
+              <Upload size={12} aria-hidden="true" />
+            {/if}
+            Import
+          </button>
+          <button
+            type="button"
+            class="inline-flex items-center gap-1 rounded-lg border bg-elevated px-2.5 py-1 text-xs text-muted hover:text-foreground"
+            title="Paste a filesystem path to a model"
+            aria-label="Paste model path for {activeModelSubTab.toUpperCase()}"
+            onclick={() => (pasteOpen = true)}
+          >
+            <ClipboardPaste size={12} aria-hidden="true" />
+            Paste Path
+          </button>
         </div>
-      </section>
+      </div>
 
-      <section id="settings-block-sound-models" class="rounded-xl border bg-surface p-4">
-        <div class="mb-3 flex items-center justify-between gap-3">
-          <h2 class="text-xs font-semibold uppercase tracking-wide text-muted">Models</h2>
-          <div class="flex items-center gap-1.5">
-            <button
-              type="button"
-              class="rounded-lg border bg-elevated px-2.5 py-1 text-xs text-muted hover:text-foreground disabled:opacity-50"
-              title="Import your own model (.mlx or .gguf)"
-              aria-label="Import your own model"
-              disabled={importing}
-              onclick={() => void pickImport()}
-            >
-              {#if importing}
-                <LoaderCircle size={12} class="mr-1 inline animate-spin" aria-hidden="true" />
-              {/if}
-              Import
-            </button>
-            <button
-              type="button"
-              class="rounded-lg border bg-elevated px-2.5 py-1 text-xs text-muted hover:text-foreground"
-              title="Paste a filesystem path to a model"
-              aria-label="Paste model path"
-              onclick={() => (pasteOpen = true)}
-            >
-              Paste Path
-            </button>
-          </div>
-        </div>
-        <div class="divide-y divide-border">
-          {#each speech.catalog?.artifacts ?? [] as artifact (artifact.id)}
-            {@const installed = speech.capabilities?.installedArtifacts.find(
-              (item) => item.artifactId === artifact.id && item.available
-            )}
-            {@const download = speech.downloads[artifact.id]}
-            <div class="flex items-center gap-3 py-3">
+      <!-- Fixed-height scrollable model cards -->
+      <div class="max-h-[520px] space-y-3 overflow-y-auto rounded-xl border bg-surface p-3 pr-2">
+        {#each sortedForSubTab(activeModelSubTab) as artifact (artifact.id)}
+          {@const installed = speech.capabilities?.installedArtifacts.find(
+            (item) => item.artifactId === artifact.id && item.available
+          )}
+          {@const download = speech.downloads[artifact.id]}
+          {@const badge = bestForBadge(artifact)}
+          <div class="rounded-xl border bg-elevated p-3">
+            <div class="flex items-start justify-between gap-3">
               <div class="min-w-0 flex-1">
-                <p class="truncate text-sm font-medium">{artifact.label}</p>
-                <p class="text-[11px] text-dimmed">
-                  {artifact.runtime} · {artifact.capability} · {(
-                    artifact.byteSize / 1_048_576
-                  ).toFixed(0)} MB · {artifact.license} · {artifact.qualification.status}
+                <div class="flex flex-wrap items-center gap-1.5">
+                  <p class="truncate text-sm font-semibold">{artifact.label}</p>
+                  <span class="inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-medium {runtimeBadgeClass(artifact.runtime)}">{runtimeBadge(artifact.runtime)}</span>
+                  {#if badge}
+                    <span class="inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-semibold {badge.cls}">{badge.label}</span>
+                  {/if}
+                </div>
+                <p class="mt-1 text-xs leading-relaxed text-muted">{artifact.description}</p>
+                <p class="mt-1.5 flex flex-wrap items-center gap-2 text-[11px] text-dimmed">
+                  <span>{(artifact.byteSize / 1_048_576).toFixed(0)} MB</span>
+                  <span class="opacity-40">·</span>
+                  <span>{artifact.license}</span>
+                  <span class="opacity-40">·</span>
+                  <span class={artifact.qualification.status === 'qualified' ? 'text-success' : 'text-amber-600'}>{artifact.qualification.status}</span>
+                  {#if artifact.languages.length}
+                    <span class="opacity-40">·</span>
+                    <span>{artifact.languages.join(', ')}</span>
+                  {/if}
                 </p>
+                <a href={artifact.sourcePageUrl} target="_blank" rel="noreferrer" class="mt-1 inline-flex items-center gap-1 text-[11px] text-primary hover:underline">
+                  Hugging Face <ExternalLink size={10} aria-hidden="true" />
+                </a>
               </div>
-              {#if installed}
-                <button
-                  type="button"
-                  class="flex h-8 w-8 items-center justify-center rounded-lg text-muted hover:bg-danger/10 hover:text-danger"
-                  title={`Delete ${artifact.label}`}
-                  aria-label={`Delete ${artifact.label}`}
-                  onclick={() =>
-                    (deleting = { action: 'model', targetId: artifact.id, label: artifact.label })}
-                  ><Trash2 size={14} aria-hidden="true" /></button
-                >
-              {:else if download?.state === 'downloading'}
-                <button
-                  type="button"
-                  class="flex h-8 w-8 items-center justify-center rounded-lg text-muted"
-                  title={`Cancel ${artifact.label} download`}
-                  aria-label={`Cancel ${artifact.label} download`}
-                  onclick={() => void speech.cancelDownload(artifact.id)}
-                  ><X size={14} aria-hidden="true" /></button
-                >
-              {:else}
-                <button
-                  type="button"
-                  class="flex h-8 w-8 items-center justify-center rounded-lg text-muted hover:bg-elevated hover:text-foreground disabled:opacity-40"
-                  title={`Download ${artifact.label}`}
-                  aria-label={`Download ${artifact.label}`}
-                  disabled={artifact.qualification.status !== 'qualified'}
-                  onclick={() => void speech.download(artifact.id)}
-                  ><Download size={14} aria-hidden="true" /></button
-                >
-              {/if}
-            </div>
-          {/each}
-        </div>
-        {#if (speech.capabilities?.installedArtifacts ?? []).some((item) => item.source === 'import')}
-          <div class="mt-4">
-            <p class="mb-2 text-xs font-semibold uppercase tracking-wide text-muted">
-              Imported models
-            </p>
-            <div class="divide-y divide-border">
-              {#each (speech.capabilities?.installedArtifacts ?? []).filter(
-                (item) => item.source === 'import'
-              ) as artifact (artifact.artifactId)}
-                <div class="flex items-center gap-3 py-2">
-                  <div class="min-w-0 flex-1">
-                    <p class="truncate text-xs font-medium">{artifact.importPath}</p>
-                    <p class="text-[10px] text-dimmed">
-                      {artifact.runtime} · external
-                    </p>
-                  </div>
+              <div class="flex shrink-0 flex-col items-end gap-1.5">
+                {#if installed}
                   <button
                     type="button"
                     class="flex h-8 w-8 items-center justify-center rounded-lg text-muted hover:bg-danger/10 hover:text-danger"
-                    title={`Unregister ${artifact.importPath}`}
-                    aria-label={`Unregister ${artifact.importPath}`}
-                    onclick={() => removeImported(artifact.artifactId, artifact.importPath ?? '')}
-                    ><Trash2 size={13} aria-hidden="true" /></button
+                    title={`Delete ${artifact.label}`}
+                    aria-label={`Delete ${artifact.label}`}
+                    onclick={() =>
+                      (deleting = { action: 'model', targetId: artifact.id, label: artifact.label })}
+                    ><Trash2 size={14} aria-hidden="true" /></button
                   >
-                </div>
-              {/each}
+                {:else if download?.state === 'downloading'}
+                  <button
+                    type="button"
+                    class="flex h-8 w-8 items-center justify-center rounded-lg text-muted"
+                    title={`Cancel ${artifact.label} download`}
+                    aria-label={`Cancel ${artifact.label} download`}
+                    onclick={() => void speech.cancelDownload(artifact.id)}
+                    ><X size={14} aria-hidden="true" /></button
+                  >
+                {:else}
+                  <button
+                    type="button"
+                    class="flex h-8 w-8 items-center justify-center rounded-lg text-muted hover:bg-elevated hover:text-foreground disabled:opacity-40"
+                    title={`Download ${artifact.label}`}
+                    aria-label={`Download ${artifact.label}`}
+                    disabled={artifact.qualification.status !== 'qualified' && artifact.qualification.status !== 'candidate'}
+                    onclick={() => void speech.download(artifact.id)}
+                    ><Download size={14} aria-hidden="true" /></button
+                  >
+                {/if}
+              </div>
+            </div>
+            <!-- Per-card Import / Paste Path -->
+            <div class="mt-3 flex items-center gap-1.5 border-t pt-3">
+              <button
+                type="button"
+                class="inline-flex items-center gap-1 rounded-md border bg-surface px-2 py-1 text-[11px] text-muted hover:text-foreground disabled:opacity-50"
+                title="Import a local model file for this family"
+                aria-label="Import for {artifact.label}"
+                disabled={importing}
+                onclick={() => void pickImport()}
+              >
+                <Upload size={11} aria-hidden="true" /> Import
+              </button>
+              <button
+                type="button"
+                class="inline-flex items-center gap-1 rounded-md border bg-surface px-2 py-1 text-[11px] text-muted hover:text-foreground"
+                title="Paste a filesystem path for this family"
+                aria-label="Paste path for {artifact.label}"
+                onclick={() => (pasteOpen = true)}
+              >
+                <ClipboardPaste size={11} aria-hidden="true" /> Paste Path
+              </button>
+              <span class="ml-auto text-[10px] text-dimmed">Import registers an external path — never copies or deletes files.</span>
             </div>
           </div>
+        {/each}
+        {#if sortedForSubTab(activeModelSubTab).length === 0}
+          <p class="py-8 text-center text-sm text-dimmed">No models in this category.</p>
         {/if}
-      </section>
+      </div>
+
+      {#if (speech.capabilities?.installedArtifacts ?? []).some((item) => item.source === 'import')}
+        <div class="rounded-xl border bg-surface p-3">
+          <p class="mb-2 text-xs font-semibold uppercase tracking-wide text-muted">
+            Imported models
+          </p>
+          <div class="divide-y divide-border">
+            {#each (speech.capabilities?.installedArtifacts ?? []).filter(
+              (item) => item.source === 'import'
+            ) as artifact (artifact.artifactId)}
+              <div class="flex items-center gap-3 py-2">
+                <div class="min-w-0 flex-1">
+                  <p class="truncate text-xs font-medium">{artifact.importPath}</p>
+                  <p class="text-[10px] text-dimmed">
+                    {artifact.runtime} · external
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  class="flex h-8 w-8 items-center justify-center rounded-lg text-muted hover:bg-danger/10 hover:text-danger"
+                  title={`Unregister ${artifact.importPath}`}
+                  aria-label={`Unregister ${artifact.importPath}`}
+                  onclick={() => removeImported(artifact.artifactId, artifact.importPath ?? '')}
+                  ><Trash2 size={13} aria-hidden="true" /></button
+                >
+              </div>
+            {/each}
+          </div>
+        </div>
+      {/if}
     {/if}
 
     {#if activeTab === 'history'}
@@ -549,7 +559,127 @@
       </section>
     {/if}
 
-    {#if activeTab === 'playback'}
+    {#if activeTab === 'preferences'}
+      <section id="settings-block-sound-runtime" class="rounded-xl border bg-surface p-4">
+        <h2 class="mb-3 text-xs font-semibold uppercase tracking-wide text-muted">Runtime</h2>
+        <div class="flex items-center justify-between gap-4">
+          <div>
+            <p class="text-sm font-medium">Local speech runtime</p>
+            <p class="text-xs text-dimmed">
+              Apple Silicon defaults to MLX; other desktops use sherpa-onnx.
+            </p>
+          </div>
+          <select
+            class="rounded-lg border bg-elevated px-2.5 py-1.5 text-xs outline-none focus:border-primary"
+            aria-label="Local speech runtime"
+            value={settings.runtimeOverride ?? ''}
+            disabled={!settingsReady}
+            onchange={(event) =>
+              patch({
+                runtimeOverride:
+                  event.currentTarget.value === ''
+                    ? undefined
+                    : (event.currentTarget.value as 'mlx' | 'sherpa-onnx')
+              })}
+          >
+            <option value="">Platform default</option>
+            <option value="mlx">MLX</option>
+            <option value="sherpa-onnx">sherpa-onnx</option>
+          </select>
+        </div>
+      </section>
+
+      <section id="settings-block-sound-cleanup" class="rounded-xl border bg-surface p-4">
+        <h2 class="mb-3 text-xs font-semibold uppercase tracking-wide text-muted">
+          Transcript cleanup
+        </h2>
+        <div class="space-y-4">
+          <div class="flex items-center justify-between gap-4">
+            <div>
+              <p class="text-sm font-medium">Local cleanup</p>
+              <p class="text-xs text-dimmed">Punctuation and learned rules stay on this device.</p>
+            </div>
+            <Switch
+              checked={settings.localCleanupEnabled}
+              onchange={(checked) => patch({ localCleanupEnabled: checked })}
+              aria-label="Toggle local transcript cleanup"
+            />
+          </div>
+          <div class="flex items-center justify-between gap-4">
+            <div>
+              <p class="text-sm font-medium">Remote cleanup</p>
+              <p class="text-xs text-dimmed">
+                Send transcript text and minimal context only. Audio never leaves the device.
+              </p>
+            </div>
+            <Switch
+              checked={settings.remoteCleanupEnabled}
+              onchange={(checked) => patch({ remoteCleanupEnabled: checked })}
+              aria-label="Toggle remote transcript cleanup"
+            />
+          </div>
+          <div class="flex items-center justify-between gap-4">
+            <div>
+              <p class="text-sm font-medium">Local-LLM cleanup</p>
+              <p class="text-xs text-dimmed">
+                Format transcripts with a local LLM (llama.cpp/GGUF or MLX). Point at a running
+                server, or leave blank to use the app-managed runtime.
+              </p>
+            </div>
+            <Switch
+              checked={settings.localLlmCleanupEnabled}
+              onchange={(checked) => patch({ localLlmCleanupEnabled: checked })}
+              aria-label="Toggle local-LLM transcript cleanup"
+            />
+          </div>
+          <label class="block text-xs text-muted">
+            Local-LLM server base URL
+            <input
+              class="mt-1 w-full rounded-lg border bg-elevated px-2.5 py-2 text-xs outline-none focus:border-primary disabled:opacity-50"
+              type="text"
+              value={settings.localLlmBaseUrl ?? ''}
+              disabled={!settings.localLlmCleanupEnabled}
+              placeholder="http://127.0.0.1:8080 (LM Studio, llama.cpp server)"
+              autocomplete="off"
+              oninput={(event) =>
+                patch({
+                  localLlmBaseUrl: event.currentTarget.value.trim() || undefined
+                })}
+            />
+          </label>
+          <select
+            class="w-full rounded-lg border bg-elevated px-2.5 py-2 text-xs outline-none focus:border-primary disabled:opacity-50"
+            aria-label="Remote cleanup model source"
+            disabled={!settings.remoteCleanupEnabled}
+            value={settings.remoteCleanupSelection}
+            onchange={(event) =>
+              patch({
+                remoteCleanupSelection: event.currentTarget.value as 'fixed' | 'conversation'
+              })}
+          >
+            <option value="conversation">Current conversation model</option>
+            <option value="fixed">Selected fixed model</option>
+          </select>
+          {#if settings.remoteCleanupSelection === 'fixed'}
+            <label class="block text-xs text-muted">
+              Fixed model ID
+              <input
+                class="mt-1 w-full rounded-lg border bg-elevated px-2.5 py-2 text-xs outline-none focus:border-primary disabled:opacity-50"
+                type="text"
+                value={settings.remoteCleanupModelId ?? ''}
+                disabled={!settings.remoteCleanupEnabled}
+                placeholder="Model ID from the current harness"
+                autocomplete="off"
+                oninput={(event) =>
+                  patch({
+                    remoteCleanupModelId: event.currentTarget.value.trim() || undefined
+                  })}
+              />
+            </label>
+          {/if}
+        </div>
+      </section>
+
       <section id="settings-block-sound-voice-recording" class="rounded-xl border bg-surface p-4">
         <div class="flex items-center justify-between gap-4">
           <div>
