@@ -35,6 +35,7 @@
   import MessageHistoryPanel from '$lib/components/shared/MessageHistoryPanel.svelte'
   import { mobileNotifications } from '$lib/remote/mobile-notifications.svelte'
   import { pwaInstall } from '$lib/remote/pwa-install.svelte'
+  import { resetPwaCacheAndReload } from '$lib/remote/reset-pwa-cache'
   import { invoke, subscribe } from '$lib/ipc.svelte'
   import { getProjectIcon } from '$lib/project-icons'
   import { mobileState } from '$lib/remote/mobile-state.svelte'
@@ -82,15 +83,16 @@
   )
 
   /**
-   * Retry token for lazy feature chunks. Every `{#await}` expression below
-   * passes this value as `retryableChunk`'s attempt argument, so incrementing
-   * it re-runs each load: failed imports retry, already-resolved ones resolve
-   * instantly from the module cache. Without a catch branch a rejected import
-   * leaves the conversation area or sheet blank forever.
+   * Retry token for lazy feature chunks. Passing this value into each retryable
+   * import keeps the `{#await}` reactive, so bumping it re-runs the load. A
+   * rejected import most often means the installed PWA holds a cached shell
+   * referencing chunk hashes a rebuilt desktop no longer serves; re-importing
+   * the same hash cannot succeed, so the panel's recovery path resets the PWA
+   * cache and reloads instead.
    */
   let chunkRetry = $state(0)
 
-  /** Re-run the loader whenever the caller passes a new attempt value. */
+  /** Re-run the loader whenever the caller is re-evaluated with a new attempt. */
   function retryableChunk<T>(attempt: number, load: () => Promise<T>): Promise<T> {
     return load()
   }
@@ -433,20 +435,21 @@
   {/snippet}
 
   <!-- Shared lazy-chunk failure state: any rejected dynamic import below
-       renders this instead of staying silently blank. "Try again" bumps
-       `chunkRetry`, which re-runs every failed load (resolved modules
-       resolve instantly from cache). -->
+       renders this instead of staying silently blank. The phone most often
+       hits this when the desktop rebuilt while the installed PWA still cached
+       the previous shell, so "Try again" resets the stale cache and reloads a
+       fresh shell rather than re-importing a chunk hash that no longer exists. -->
   {#snippet chunkFailure()}
     <div class="flex min-h-40 flex-col items-center justify-center gap-3 px-6 py-8 text-center">
       <p class="max-w-[16rem] text-[13px] leading-relaxed text-muted">
-        This panel could not load. Check your connection and try again.
+        This panel could not load. If it keeps failing, the desktop may have been updated.
       </p>
       <button
         type="button"
         class="h-9 cursor-pointer rounded-lg bg-primary px-4 text-[13px] font-medium text-on-primary transition-colors active:bg-primary-hover"
         title="Reload this panel"
         aria-label="Reload this panel"
-        onclick={() => (chunkRetry += 1)}
+        onclick={() => void resetPwaCacheAndReload()}
       >
         Try again
       </button>
