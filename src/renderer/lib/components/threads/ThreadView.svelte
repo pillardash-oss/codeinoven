@@ -8662,8 +8662,10 @@
               {#if isTurnStart || questionParts.length > 0 || isTurnEnd}
                 <div class="group mb-6 flex min-w-0 flex-col">
                   {#if isTurnStart}
+                    {@const turnDone = isTurnCompleted(msgIndex)}
                     {@const traceIsLive = liveBusy && isLatestTurn}
-                    {@const traceIsRestored = restoredBusy && isLatestTurn && !liveBusy}
+                    {@const traceIsRestored =
+                      restoredBusy && isLatestTurn && !liveBusy && !turnDone}
                     {@const accumulatedTurnParts = getTurnWorkingParts(msgIndex, traceIsLive)}
                     {@const collectedTurnParts =
                       traceIsRestored && streamParts.length > 0
@@ -8680,7 +8682,7 @@
                         open={traceIsLive || traceIsRestored}
                         busy={traceIsLive || traceIsRestored}
                         latest={isLatestTurn}
-                        done={isTurnCompleted(msgIndex)}
+                        done={turnDone}
                         rehydrated={traceIsRestored}
                         startTime={isLatestTurn
                           ? (getTurnStartTime(msgIndex) ?? activeTurnStartTime)
