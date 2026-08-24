@@ -1592,7 +1592,7 @@
         historyIndex = -1
         savedValue = ''
       }
-      if (e.key === 'ArrowUp' && (value === '' || historyIndex >= 0)) {
+      if (e.key === 'ArrowUp' && !e.shiftKey && (value === '' || historyIndex >= 0)) {
         const history = historyMessages
         if (history.length > 0) {
           e.preventDefault()
@@ -1607,7 +1607,7 @@
           return
         }
       }
-      if (e.key === 'ArrowDown' && historyIndex >= 0) {
+      if (e.key === 'ArrowDown' && !e.shiftKey && historyIndex >= 0) {
         e.preventDefault()
         const history = historyMessages
         if (historyIndex >= history.length - 1) {

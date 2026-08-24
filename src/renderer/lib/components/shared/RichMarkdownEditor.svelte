@@ -635,7 +635,12 @@
       return
     }
 
-    if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
+    // Shift+Arrow never moves the caret by hand: the browser's own extended
+    // selection must run untouched. Intercepting here (e.g. exiting an inline
+    // token or a leading/trailing code block) would collapse the selection the
+    // user is trying to build — exactly the breakage seen after pasting content
+    // that renders as one of those structures.
+    if (!event.shiftKey && (event.key === 'ArrowLeft' || event.key === 'ArrowRight')) {
       const left = event.key === 'ArrowLeft'
       const inlineElement = inlineElementAtBoundary(left)
       if (inlineElement && !hasRealAdjacentContent(inlineElement, left)) {
@@ -645,7 +650,7 @@
       }
     }
 
-    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+    if (!event.shiftKey && (event.key === 'ArrowDown' || event.key === 'ArrowUp')) {
       const selection = window.getSelection()
       let codeBlock = selection?.anchorNode?.parentElement?.closest?.(
         '[data-editor-codeblock]'
