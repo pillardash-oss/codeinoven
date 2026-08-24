@@ -428,13 +428,13 @@
         <span class="text-[11px] font-medium text-muted">Filter:</span>
         <button
           type="button"
-          class="rounded-full border px-2.5 py-1 text-[11px] font-medium {runtimeFilter === 'all' ? 'bg-foreground text-background border-foreground' : 'bg-elevated text-muted border-border hover:text-foreground'}"
+          class="rounded-full border px-2.5 py-1 text-[11px] font-medium {runtimeFilter === 'all' ? 'bg-primary text-on-primary border-primary' : 'bg-elevated text-muted border-border hover:text-foreground'}"
           onclick={() => runtimeFilter = 'all'}
         >All</button>
         {#each runtimesForSubTab(activeModelSubTab) as rt (rt)}
           <button
             type="button"
-            class="rounded-full border px-2.5 py-1 text-[11px] font-medium {runtimeFilter === rt ? 'bg-foreground text-background border-foreground' : 'bg-elevated text-muted border-border hover:text-foreground'}"
+            class="rounded-full border px-2.5 py-1 text-[11px] font-medium {runtimeFilter === rt ? 'bg-primary text-on-primary border-primary' : 'bg-elevated text-muted border-border hover:text-foreground'}"
             onclick={() => runtimeFilter = rt}
           >{runtimeBadge(rt)}</button>
         {/each}
