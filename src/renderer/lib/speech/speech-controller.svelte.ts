@@ -383,28 +383,19 @@ class SpeechController {
     ])
     if (!capabilities.ok) throw new Error(capabilities.error.message)
     if (!catalog.ok) throw new Error(catalog.error.message)
-    const runtime = this.sound.runtimeOverride ?? capabilities.value.selectedRuntime
-    if (!runtime) {
-      throw new Error(
-        `${capabilities.value.recommendedRuntime === 'mlx' ? 'MLX' : 'sherpa-onnx'} is unavailable on this device.`
-      )
-    }
-    const installed = capabilities.value.installedArtifacts.filter(
-      (a) => a.available && a.runtime === runtime
-    )
-    const installedIds = new Set(installed.map((a) => a.artifactId))
-    // If user has chosen an active artifact, respect it (including imported)
+    const installedAll = capabilities.value.installedArtifacts.filter((a) => a.available)
+    const installedIds = new Set(installedAll.map((a) => a.artifactId))
+    // If user has chosen an active artifact, respect it (including imported) regardless of runtime
     if (this.sound.asrArtifactId) {
-      const chosenInstalled = installed.find((a) => a.artifactId === this.sound.asrArtifactId)
+      const chosenInstalled = installedAll.find((a) => a.artifactId === this.sound.asrArtifactId)
       if (chosenInstalled) {
         const catalogHit = catalog.value.artifacts.find((c) => c.id === chosenInstalled.artifactId)
         if (catalogHit) {
           if (
-            catalogHit.runtime === runtime &&
             catalogHit.capability === 'asr' &&
             catalogHit.qualification.status === 'qualified'
           )
-            return { runtime, artifact: catalogHit }
+            return { runtime: chosenInstalled.runtime, artifact: catalogHit }
         } else {
           // Imported model — synthesize a pseudo-artifact; service will handle directory
           const pseudo = {
@@ -438,18 +429,17 @@ class SpeechController {
           return { runtime: chosenInstalled.runtime, artifact: pseudo }
         }
       }
-      throw new Error(`The active speech-to-text model is not installed for ${runtime}.`)
+      throw new Error(`The active speech-to-text model is not installed.`)
     }
     const artifact = catalog.value.artifacts.find(
       (candidate) =>
-        candidate.runtime === runtime &&
         candidate.capability === 'asr' &&
         candidate.qualification.status === 'qualified' &&
         installedIds.has(candidate.id)
     )
     if (!artifact)
-      throw new Error(`Install a qualified ${runtime} speech-to-text model in Sound settings.`)
-    return { runtime, artifact }
+      throw new Error(`Install a qualified speech-to-text model in Sound settings.`)
+    return { runtime: artifact.runtime, artifact }
   }
 
   /**
@@ -525,23 +515,18 @@ class SpeechController {
     ])
     if (!capabilities.ok) throw new Error(capabilities.error.message)
     if (!catalog.ok) throw new Error(catalog.error.message)
-    const runtime = this.sound.runtimeOverride ?? capabilities.value.selectedRuntime
-    if (!runtime) throw new Error('The selected local speech runtime is unavailable.')
-    const installedList = capabilities.value.installedArtifacts.filter(
-      (item) => item.available && item.runtime === runtime
-    )
-    const installed = new Set(installedList.map((item) => item.artifactId))
+    const installedAll = capabilities.value.installedArtifacts.filter((item) => item.available)
+    const installed = new Set(installedAll.map((item) => item.artifactId))
     if (this.sound.ttsArtifactId) {
-      const chosenInstalled = installedList.find((a) => a.artifactId === this.sound.ttsArtifactId)
+      const chosenInstalled = installedAll.find((a) => a.artifactId === this.sound.ttsArtifactId)
       if (chosenInstalled) {
         const catalogHit = catalog.value.artifacts.find((c) => c.id === chosenInstalled.artifactId)
         if (catalogHit) {
           if (
-            catalogHit.runtime === runtime &&
             catalogHit.capability === 'tts' &&
             catalogHit.qualification.status === 'qualified'
           )
-            return { runtime, artifact: catalogHit }
+            return { runtime: chosenInstalled.runtime, artifact: catalogHit }
         } else {
           const pseudo = {
             id: chosenInstalled.artifactId,
@@ -574,17 +559,16 @@ class SpeechController {
           return { runtime: chosenInstalled.runtime, artifact: pseudo }
         }
       }
-      throw new Error(`The active text-to-speech model is not installed for ${runtime}.`)
+      throw new Error(`The active text-to-speech model is not installed.`)
     }
     const artifact = catalog.value.artifacts.find(
       (item) =>
-        item.runtime === runtime &&
         item.capability === 'tts' &&
         item.qualification.status === 'qualified' &&
         installed.has(item.id)
     )
-    if (!artifact) throw new Error(`Install a qualified ${runtime} text-to-speech model.`)
-    return { runtime, artifact }
+    if (!artifact) throw new Error(`Install a qualified text-to-speech model.`)
+    return { runtime: artifact.runtime, artifact }
   }
 
   private synthesize(playback: ActivePlayback, index: number): Promise<SpeechSynthesizedSegment> {

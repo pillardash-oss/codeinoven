@@ -1659,7 +1659,9 @@ export function validateAppConfigPatch(value: unknown): AppConfigPatch {
         sound.remoteCleanupSelection !== 'conversation') ||
       (sound.runtimeOverride !== undefined &&
         sound.runtimeOverride !== 'mlx' &&
-        sound.runtimeOverride !== 'sherpa-onnx') ||
+        sound.runtimeOverride !== 'sherpa-onnx' &&
+        sound.runtimeOverride !== 'coreml' &&
+        sound.runtimeOverride !== 'gguf') ||
       typeof sound.includeCodeBlocksInSpeech !== 'boolean' ||
       !Array.isArray(sound.preferredLanguages) ||
       !sound.preferredLanguages.every(

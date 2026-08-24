@@ -355,6 +355,7 @@ export interface SpeechDictionaryEntry {
 }
 
 export interface SpeechSettings {
+  /** @deprecated runtimeOverride removed — model selection now uses per-artifact active IDs and runtime filters; kept for migration. */
   runtimeOverride?: SpeechRuntime
   asrArtifactId?: string
   cleanupArtifactId?: string
