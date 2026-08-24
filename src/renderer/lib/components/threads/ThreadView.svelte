@@ -7326,6 +7326,43 @@
       : text
   }
 
+  function escapeHtmlForChip(value: string): string {
+    return value
+      .replaceAll('&', '&amp;')
+      .replaceAll('<', '&lt;')
+      .replaceAll('>', '&gt;')
+      .replaceAll('"', '&quot;')
+      .replaceAll("'", '&#39;')
+  }
+
+  function inlineChipHtml(reference: PromptProjectReference): string {
+    const safeName = escapeHtmlForChip(reference.name)
+    const safePath = escapeHtmlForChip(reference.path)
+    const safeTitle = escapeHtmlForChip(`Tagged ${reference.kind}: ${reference.name} — ${reference.path}`)
+    const icon =
+      reference.kind === 'directory'
+        ? '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M4 4a2 2 0 0 1 2-2h4l2 2h6a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V4z"/></svg>'
+        : '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>'
+    return `<span class="inline-flex max-w-full items-center gap-1 rounded-md border border-border bg-elevated px-1.5 py-0.5 text-[11px] leading-none align-baseline" title="${safeTitle}" data-file-chip="${safePath}">${icon}<span class="max-w-48 truncate font-medium">${safeName}</span></span>`
+  }
+
+  function inlineFileTagsForMessage(msg: AgentMessage): Array<{ token: string; html: string }> {
+    if (!msg.projectReferences?.length) return []
+    const text = messageText(msg)
+    // Only inline references that actually appear as `@path` in the stored text;
+    // remaining references will still render as the legacy top pills so no tag
+    // is lost. Longest paths first prevents a parent directory token from
+    // swallowing the prefix of a longer child path.
+    const ordered = [...msg.projectReferences].sort((a, b) => b.path.length - a.path.length)
+    const tags: Array<{ token: string; html: string }> = []
+    for (const reference of ordered) {
+      const token = `@${reference.path}`
+      if (!token || !text.includes(token)) continue
+      tags.push({ token, html: inlineChipHtml(reference) })
+    }
+    return tags
+  }
+
   // ─── Message actions (copy / fork / edit) ──────────────────────────────
 
   let copiedMessageId = $state<string | null>(null)
@@ -8338,13 +8375,16 @@
                         <span>{formatTime(previousTurnAudit.endTime)}</span>
                       </div>
                     {/if}
+                    {@const inlineTags = inlineFileTagsForMessage(msg)}
+                    {@const inlinedPaths = new Set(inlineTags.map((tag) => tag.token.slice(1)))}
+                    {@const leftoverReferences = (msg.projectReferences ?? []).filter((reference) => !inlinedPaths.has(reference.path))}
                     <div
                       class="w-full rounded-lg bg-surface px-4 py-2.5 text-sm text-foreground"
                       data-conversation-searchable
                     >
-                      {#if msg.projectReferences?.length}
+                      {#if leftoverReferences.length}
                         <div class="mb-2 flex flex-wrap gap-1.5">
-                          {#each msg.projectReferences as reference (reference.id)}
+                          {#each leftoverReferences as reference (reference.id)}
                             <span
                               class="inline-flex max-w-full items-center gap-1.5 rounded-md border border-border bg-elevated px-2 py-1 text-[11px]"
                               title="Tagged {reference.kind}: {reference.name}"
@@ -8396,6 +8436,7 @@
                       {:else}
                         <MarkdownView
                           text={messageText(msg)}
+                          inlineFileTags={inlineTags}
                           onCiteFile={openFileCitation}
                           onOpenLocalFile={(url) => void openFilePart(url)}
                         />
