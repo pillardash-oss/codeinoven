@@ -260,6 +260,14 @@ export class CheckpointManager {
    * made after this turn started count: a stale claim from an earlier turn must
    * not hide this thread's own shell-driven edit.
    */
+  async foreignClaimedPathsForLive(
+    checkpoint: TurnCheckpoint,
+    foreignLive: ReadonlyMap<string, number>
+  ): Promise<Map<string, number>> {
+    const opts: TurnCompletionOptions = { foreignClaimedPaths: foreignLive }
+    return this.foreignClaimedPaths(checkpoint, opts)
+  }
+
   private async foreignClaimedPaths(
     checkpoint: TurnCheckpoint,
     options: TurnCompletionOptions

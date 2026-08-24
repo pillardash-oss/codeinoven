@@ -1,5 +1,5 @@
 import { BrowserWindow } from 'electron'
-import { stat } from 'fs/promises'
+import { readFile } from 'fs/promises'
 import { trustedIpcMain as ipcMain } from '../ipc/trusted-ipc-main'
 import { basename, isAbsolute, join, relative, resolve } from 'path'
 import { createHash, randomBytes, randomInt } from 'crypto'
@@ -5029,17 +5029,9 @@ export class ChatEngine {
     const outboundIds = this.outboundMessageIdsBySession.get(activeSessionId) ?? new Set<string>()
     outboundIds.add(messageId)
     this.outboundMessageIdsBySession.set(activeSessionId, outboundIds)
-    // The steer is now the operative user expression of this running turn, so
-    // re-bind the active checkpoint to it. Otherwise the file card renders under
-    // the original prompt instead of the turn whose work produced the changes.
-    const activeTurnId = this.sessionRegistry.get(activeSessionId)?.activeTurnId
-    if (activeTurnId && !activeBrainstorm) {
-      await this.checkpointManager
-        .rebindActiveSource(projectId, threadId, messageId)
-        .catch((error: unknown) => {
-          Logger.error('steer checkpoint source re-bind failed:', error)
-        })
-    }
+    // Steer does not start a new turn — keep the original turn's checkpoint
+    // source and start-message anchor. The scanner's window is the true turn
+    // (message after final output → final output), not the steer.
     const steerSettings =
       thread.settings ??
       ({
@@ -5684,21 +5676,9 @@ export class ChatEngine {
       const outboundIds = this.outboundMessageIdsBySession.get(sessionId) ?? new Set<string>()
       outboundIds.add(messageId)
       this.outboundMessageIdsBySession.set(sessionId, outboundIds)
-      // The steer is now the operative user expression of this running turn, so
-      // re-bind the active checkpoint to it. Otherwise the file card renders
-      // under the original prompt instead of the turn that produced the edits.
-      const steeredSession = this.sessionRegistry.get(sessionId)
-      if (steeredSession) {
-        steeredSession.activeTurnUserMessageId = messageId
-        const rebindTurnId = steeredSession.activeTurnId
-        if (rebindTurnId) {
-          await this.checkpointManager
-            .rebindActiveSource(projectId, threadId, messageId)
-            .catch((error: unknown) => {
-              Logger.error('steer checkpoint source re-bind failed:', error)
-            })
-        }
-      }
+      // Steer appends to the live turn — do not rebind the checkpoint source
+      // or move the turn-start anchor. Only a message after final output
+      // starts a new turn; steers are mid-turn follow-ups.
       // Note: steering appends to the LIVE native turn, which still runs under
       // the model that started it. Do not record the new settings model here —
       // that would mask a pending model switch until the following resume.
@@ -15465,6 +15445,15 @@ export class ChatEngine {
               session.changedPaths.add(path)
               session.preciseChangedPaths.set(path, claimedAt)
             }
+            // Scanner: at end of each file-related tool call, validate the
+            // claimed paths actually changed vs the turn's before snapshot. This
+            // keeps live tracking accurate and prevents a fork from keeping a
+            // file it only touched but didn't change.
+            if (part.state.status === 'completed' || part.state.status === 'error') {
+              void this.scanLivePathsAfterTool(session).catch((error) =>
+                Logger.dev('live scan after tool failed:', error)
+              )
+            }
           }
         }
         let perSession = this.toolTimes.get(event.sessionId)
@@ -17697,7 +17686,9 @@ export class ChatEngine {
       }
     })()
     pendingScans.add(scan)
-    void scan.finally(() => pendingScans.delete(scan))
+    void scan
+      .then(() => this.scanLivePathsAfterTool(session).catch((error) => Logger.dev('live scan after window failed:', error)))
+      .finally(() => pendingScans.delete(scan))
   }
 
   private async finishCheckpoint(
@@ -17795,33 +17786,81 @@ export class ChatEngine {
     const checkpoint = await this.checkpointManager.getActive(projectId, threadId)
     if (!checkpoint) return null
 
+    // Scanner: validate that each claimed path actually changed from the turn's
+    // opening snapshot (before) to current disk. Steer does not reset the
+    // window — it stays [checkpoint.before.createdAt, now]. Foreign filtering
+    // mirrors completeTurn so a fork never claims a file it didn't touch.
     const MAX_LIVE_PATHS = 200
     const changedPaths = session.changedPaths ?? new Set<string>()
-    const paths = [...changedPaths].sort().slice(0, MAX_LIVE_PATHS)
+    const rawPaths = [...changedPaths].sort().slice(0, MAX_LIVE_PATHS)
+    const turnStart = checkpoint.before.createdAt
+    const foreign = await this.checkpointManager.foreignClaimedPathsForLive(
+      checkpoint,
+      this.liveForeignClaimedPaths(session)
+    )
+    const precise = session.preciseChangedPaths ?? new Map<string, number>()
+    // Batched, bounded scanning: stat + hash only claimed paths, 8 at a time,
+    // so low-end hardware is never hammered.
+    const BATCH = 8
     const changes: TurnCheckpointChangeSummary[] = []
-    for (const path of paths) {
-      const before = checkpoint.before.files[path]
-      try {
-        const fileStat = await stat(join(checkpoint.before.projectRoot, path))
-        changes.push({
-          path,
-          kind: before ? 'modified' : 'created',
-          binary: false,
-          ...(before ? { beforeSize: before.size } : {}),
-          afterSize: fileStat.size
+    const isBinaryByStat = (buf: Uint8Array): boolean => {
+      // Keep live binary detection cheap: reuse the same heuristic as the
+      // change-tracking service (null byte).
+      for (let i = 0; i < Math.min(buf.length, 8000); i++) if (buf[i] === 0) return true
+      return false
+    }
+    for (let i = 0; i < rawPaths.length; i += BATCH) {
+      const batch = rawPaths.slice(i, i + BATCH)
+      const results = await Promise.all(
+        batch.map(async (path) => {
+          // Foreign dedup: another thread demonstrably edited this path during
+          // this turn and this thread didn't precisely claim it — skip. Window
+          // proof alone does not exempt, so a fork can't steal a file via its
+          // shell window.
+          const claimedAt = foreign.get(path)
+          if (claimedAt !== undefined && claimedAt >= turnStart && !precise.has(path)) {
+            return null
+          }
+          const before = checkpoint.before.files[path]
+          const abs = join(checkpoint.before.projectRoot, path)
+          let afterBuf: Uint8Array
+          try {
+            afterBuf = await readFile(abs)
+          } catch (error) {
+            if (!(error instanceof Error && 'code' in error && (error as NodeJS.ErrnoException).code === 'ENOENT')) return null
+            if (!before) return null
+            return {
+              path,
+              kind: 'deleted' as const,
+              binary: false,
+              beforeSize: before.size
+            } satisfies TurnCheckpointChangeSummary
+          }
+          if (!before) {
+            return {
+              path,
+              kind: 'created' as const,
+              binary: isBinaryByStat(afterBuf),
+              afterSize: afterBuf.length
+            } satisfies TurnCheckpointChangeSummary
+          }
+          // Modified only if hash differs — size alone is not enough.
+          const afterHash = createHash('sha256').update(afterBuf).digest('hex')
+          if (afterHash === before.hash) return null
+          return {
+            path,
+            kind: 'modified' as const,
+            binary: isBinaryByStat(afterBuf),
+            beforeSize: before.size,
+            afterSize: afterBuf.length
+          } satisfies TurnCheckpointChangeSummary
         })
-      } catch (error) {
-        if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT')) continue
-        if (!before) continue // claimed but never written and now gone — skip
-        changes.push({
-          path,
-          kind: 'deleted',
-          binary: false,
-          beforeSize: before.size
-        })
-      }
+      )
+      for (const r of results) if (r) changes.push(r)
     }
     if (changes.length === 0) return null
+    // Keep deterministic ordering
+    changes.sort((a, b) => a.path.localeCompare(b.path))
     return {
       id: checkpoint.id,
       projectId,
@@ -17831,6 +17870,51 @@ export class ChatEngine {
       changes,
       createdAt: checkpoint.createdAt
     }
+  }
+
+  /**
+   * Scanner hook: at the end of each file-related tool call or bash window,
+   * prune claimed paths that didn't actually change vs the turn's before
+   * snapshot. Runs batched and fires a live update so the Changes tab can
+   * surface the next file immediately instead of waiting for the 2.5s poll.
+   */
+  private async scanLivePathsAfterTool(session: SessionInfo): Promise<void> {
+    if (!session.activeTurnId || !session.changedPaths || session.changedPaths.size === 0) return
+    const checkpoint = await this.checkpointManager.getActive(session.projectId, session.threadId)
+    if (!checkpoint) return
+    const toCheck = [...session.changedPaths]
+    const BATCH = 8
+    const keep = new Set<string>()
+    for (let i = 0; i < toCheck.length; i += BATCH) {
+      const batch = toCheck.slice(i, i + BATCH)
+      const results = await Promise.all(
+        batch.map(async (path) => {
+          const before = checkpoint.before.files[path]
+          const abs = join(checkpoint.before.projectRoot, path)
+          try {
+            const buf = await readFile(abs)
+            if (!before) return path // created
+            const hash = createHash('sha256').update(buf).digest('hex')
+            return hash !== before.hash ? path : null
+          } catch (error) {
+            if (error instanceof Error && 'code' in error && (error as NodeJS.ErrnoException).code === 'ENOENT') {
+              return before ? path : null // deleted vs never existed
+            }
+            return null
+          }
+        })
+      )
+      for (const p of results) if (p) keep.add(p)
+    }
+    // Prune stale claims (touched but not actually changed)
+    for (const p of [...session.changedPaths]) if (!keep.has(p)) session.changedPaths.delete(p)
+    for (const p of [...(session.preciseChangedPaths?.keys() ?? [])]) if (!keep.has(p)) session.preciseChangedPaths?.delete(p)
+    // Notify renderers that the live file list changed
+    this.broadcast({
+      type: 'checkpoint.liveUpdated',
+      projectId: session.projectId,
+      threadId: session.threadId
+    } as unknown as AgentEvent)
   }
 
   // ─── Session registry ─────────────────────────────────────────────────────

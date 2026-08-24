@@ -58,7 +58,7 @@
   import { LatestRequestGuard } from '$lib/refresh-guard'
   import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
   import { projectFilesWorkspace } from '$lib/stores/project-files.svelte'
-  import type { AgentEvent } from '$shared/types'
+  import type { AgentEvent as _AgentEvent } from '$shared/types'
 
   type ChangesMode = 'diffs' | 'files'
 
@@ -318,16 +318,18 @@
 
   onMount(() => {
     // Light poll keeps the live turn current while the panel is open; the
-    // main-process side only stats the paths the turn has claimed so far.
+    // main-process side only validates claimed paths that actually changed.
     const liveTimer = setInterval(() => void refreshLive(), 2_500)
     const unsubscribeEvents = subscribe('agent:event', (...args: unknown[]) => {
-      const event = args[0] as AgentEvent
-      if (
-        event.type === 'checkpoint.updated' &&
-        event.projectId === projectId &&
-        event.threadId === threadId
-      ) {
+      const raw = args[0] as Record<string, unknown>
+      if (raw['projectId'] !== projectId || raw['threadId'] !== threadId) return
+      const type = raw['type'] as string | undefined
+      if (type === 'checkpoint.updated') {
         void refresh()
+        return
+      }
+      if (type === 'checkpoint.liveUpdated') {
+        void refreshLive()
       }
     })
     return () => {
