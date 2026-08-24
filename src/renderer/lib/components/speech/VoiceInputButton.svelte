@@ -90,12 +90,14 @@
         void refreshFetchedState()
       }
     }
-    const onFocus = () => void refreshFetchedState()
-    window.addEventListener('cio:soundChanged', onSoundChanged as EventListener)
+    const onFocus = (): void => {
+      void refreshFetchedState()
+    }
+    window.addEventListener('cio:soundChanged', onSoundChanged)
     window.addEventListener('focus', onFocus)
     return () => {
       unsubProgress()
-      window.removeEventListener('cio:soundChanged', onSoundChanged as EventListener)
+      window.removeEventListener('cio:soundChanged', onSoundChanged)
       window.removeEventListener('focus', onFocus)
     }
   })
