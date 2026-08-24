@@ -10320,7 +10320,7 @@ export class ChatEngine {
       }
       if (lifecycle?.activeStage === 'brainstorm') {
         this.engineeringLifecycleEngine.completeStage(projectId, threadId, 'brainstorm')
-        if (lifecycle.selection === 'run_all') this.prdEngine.ensureWorkflow(projectId, threadId)
+        if (lifecycle.autopilot) this.prdEngine.ensureWorkflow(projectId, threadId)
         await this.threadManager.setStatus(projectId, threadId, 'awaiting_approval', {
           read: false
         })
@@ -10618,7 +10618,7 @@ export class ChatEngine {
       source
     )
     const prototypeFidelity =
-      lifecycle?.selection === 'run_all'
+      lifecycle?.autopilot === true
         ? 'lofi'
         : /\b(hifi|hi-fi|high[ -]fidelity)\b/iu.test(source)
           ? 'hifi'
@@ -16278,24 +16278,48 @@ export class ChatEngine {
     this.markProjectActive(info.projectId)
 
     const thread = await this.threadManager.getThread(info.projectId, info.threadId)
+    // When an automatic resolution fails (e.g. the gated harness turn had not
+    // settled so the continuation could not start), surface the request as
+    // needing attention instead of stranding the thread silently.
+    const surfaceForApproval = async (): Promise<void> => {
+      await this.threadManager.setStatus(info.projectId, info.threadId, 'awaiting_approval', {
+        read: false
+      })
+      if (this.pendingPermissions.get(request.id) !== pending) return
+      this.broadcast({ ...event, permission: enrichedRequest })
+    }
     if (await this.achievementOwnsDecisions(thread ?? null)) {
-      await this.replyPermissionRaw(
-        pending,
-        level === 'full_access' ? 'always' : 'once',
-        `achievement:${level}`
-      )
-      return
+      try {
+        await this.replyPermissionRaw(
+          pending,
+          level === 'full_access' ? 'always' : 'once',
+          `achievement:${level}`
+        )
+        return
+      } catch (error) {
+        Logger.error('Permission auto-approval failed; surfacing for attention', {
+          requestId: request.id,
+          reason: rawErrorMessage(error)
+        })
+        await surfaceForApproval()
+        return
+      }
     }
 
     if (policy.approved) {
-      await this.replyPermissionRaw(pending, 'once', `policy:${level}`)
-      return
+      try {
+        await this.replyPermissionRaw(pending, 'once', `policy:${level}`)
+        return
+      } catch (error) {
+        Logger.error('Permission auto-approval failed; surfacing for attention', {
+          requestId: request.id,
+          reason: rawErrorMessage(error)
+        })
+        await surfaceForApproval()
+        return
+      }
     }
-    await this.threadManager.setStatus(info.projectId, info.threadId, 'awaiting_approval', {
-      read: false
-    })
-    if (this.pendingPermissions.get(request.id) !== pending) return
-    this.broadcast({ ...event, permission: enrichedRequest })
+    await surfaceForApproval()
   }
 
   private async replyPermissionRaw(

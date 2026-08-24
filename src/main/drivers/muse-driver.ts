@@ -390,6 +390,8 @@ interface MuseTurnState {
   toolByCall: Map<string, string>
   /** Question/approval ids already promoted into the shared event stream. */
   promotedInteractions: Set<string>
+  /** Gated tool tasks whose permission card has already been surfaced. */
+  emittedPermissionTasks: Set<string>
   /** Tool tasks synchronously stopped before Muse could execute them. */
   gatedTaskIds: Set<string>
   /** Muse converts CodeInOven's deliberate SIGTERM into numeric exit code 143. */
@@ -591,12 +593,19 @@ export function mapMuseRecord(
             !tool.policyDecision.startsWith('allow') &&
             tool.policyDecision !== 'not_applicable')
         ) {
-          const permissionEvent = musePermissionEvent(context, state, {
-            approval_id: callId,
-            tool_name: toolName,
-            input: tool.input
-          })
-          if (permissionEvent) events.push(permissionEvent)
+          // Surface the card only once — and only after the committed args are
+          // available so the permission carries the actual command.
+          if (!tool.requiresPermission || !state.emittedPermissionTasks.has(tool.taskId)) {
+            const permissionEvent = musePermissionEvent(context, state, {
+              approval_id: callId,
+              tool_name: toolName,
+              input: tool.input
+            })
+            if (permissionEvent) {
+              if (tool.requiresPermission) state.emittedPermissionTasks.add(tool.taskId)
+              events.push(permissionEvent)
+            }
+          }
         }
       }
       return events.length > 0 ? { ...base, events } : base
@@ -658,24 +667,18 @@ export function mapMuseRecord(
         taskId,
         tool: taskKind,
         status: 'pending',
-        input: {},
+        input: record(event?.['input']) ?? record(event?.['arguments']) ?? {},
         ...(state.gatedTaskIds.has(taskId) ? { requiresPermission: true } : {}),
         start: Date.now()
       }
       state.tools.set(taskId, tool)
       if (tool.requiresPermission) {
-        const permissionEvent = musePermissionEvent(context, state, {
-          approval_id: taskId,
-          tool_name: taskKind,
-          input: record(event?.['input']) ?? record(event?.['arguments']) ?? {}
-        })
-        return {
-          ...base,
-          events: [
-            museToolEvent(context, state, tool),
-            ...(permissionEvent ? [permissionEvent] : [])
-          ]
-        }
+        // Deliberately do NOT emit the permission card here: Muse streams the
+        // command after `proposed` (`assistant_tool_calls_committed` /
+        // `task.lifecycle.output`), so a card emitted on this record would
+        // surface empty details. Keep the pending tool card and surface the
+        // permission once the command is known.
+        return { ...base, events: [museToolEvent(context, state, tool)] }
       }
       // The live stream does not expose the rich question arguments. Keep the
       // generic tool out of the conversation rather than duplicating the
@@ -715,8 +718,23 @@ export function mapMuseRecord(
       state.toolByCall.set(foundCallId, taskId)
     }
     tool.status = 'running'
+    let sideEffectEvents: SessionAgentEvent[] = []
+    if (tool.requiresPermission && !state.emittedPermissionTasks.has(tool.taskId)) {
+      const permissionEvent = musePermissionEvent(context, state, {
+        approval_id: tool.callId ?? taskId,
+        tool_name: tool.tool,
+        input: tool.input
+      })
+      if (permissionEvent) {
+        state.emittedPermissionTasks.add(tool.taskId)
+        sideEffectEvents = [permissionEvent]
+      }
+    }
     if (isQuestionToolName(tool.tool)) return base
-    return { ...base, events: [museToolEvent(context, state, tool)] }
+    return {
+      ...base,
+      events: [museToolEvent(context, state, tool), ...sideEffectEvents]
+    }
   }
 
   // Tool output chunk — for bash it is a JSON `{command, description, output}`;
@@ -747,8 +765,28 @@ export function mapMuseRecord(
       tool.output = chunk
       if (!tool.title) tool.title = tool.tool
     }
+    let outputEvents: SessionAgentEvent[] = []
+    if (
+      tool.requiresPermission &&
+      !state.emittedPermissionTasks.has(tool.taskId) &&
+      typeof tool.input['command'] === 'string' &&
+      tool.input['command'].trim().length > 0
+    ) {
+      const permissionEvent = musePermissionEvent(context, state, {
+        approval_id: tool.callId ?? taskId,
+        tool_name: tool.tool,
+        input: tool.input
+      })
+      if (permissionEvent) {
+        state.emittedPermissionTasks.add(tool.taskId)
+        outputEvents = [permissionEvent]
+      }
+    }
     if (isQuestionToolName(tool.tool)) return base
-    return { ...base, events: [museToolEvent(context, state, tool)] }
+    return {
+      ...base,
+      events: [museToolEvent(context, state, tool), ...outputEvents]
+    }
   }
 
   // Tool result — authoritative completion; correlate by provider call id.
@@ -816,6 +854,22 @@ export function mapMuseRecord(
           sessionId: context.sessionId,
           part: textPart(state)
         })
+      }
+      // A gated tool can still be stopped before the stream carries its
+      // command (the `proposed` record gates immediately). Surface the pending
+      // permission at turn end with whatever arguments were captured so the
+      // user can still approve or reject instead of the request vanishing.
+      for (const tool of state.tools.values()) {
+        if (!tool.requiresPermission || state.emittedPermissionTasks.has(tool.taskId)) continue
+        const permissionEvent = musePermissionEvent(context, state, {
+          approval_id: tool.callId ?? tool.taskId,
+          tool_name: tool.tool,
+          input: tool.input
+        })
+        if (permissionEvent) {
+          state.emittedPermissionTasks.add(tool.taskId)
+          events.push(permissionEvent)
+        }
       }
       events.push({
         type: 'message.completed',
@@ -975,6 +1029,7 @@ export class MuseDriver extends PersistentCliDriver {
       tools: new Map(),
       toolByCall: new Map(),
       promotedInteractions: new Set(),
+      emittedPermissionTasks: new Set(),
       gatedTaskIds: new Set(),
       expectsProcessStop: false
     }
@@ -1082,6 +1137,11 @@ export class MuseDriver extends PersistentCliDriver {
     ].join('\n\n')
     this.hiddenContinuationSessions.add(sessionId)
     try {
+      // The gated run was stopped (or is paused waiting on an interaction
+      // prompt). Await the process settlement so resuming never collides with
+      // the still-active turn ("A turn is already active") — same teardown
+      // contract steerPrompt relies on.
+      await this.settleActiveProcess(sessionId)
       await this.sendPrompt(projectPath, {
         ...options,
         sessionId,
