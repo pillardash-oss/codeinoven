@@ -27,11 +27,27 @@
     label: string
     description: string
   }> = [
-    { stage: 'brainstorm', label: 'Brainstorm', description: 'Research and align the direction.' },
-    { stage: 'prd', label: 'PRD', description: 'Define product requirements and outcomes.' },
+    {
+      stage: 'brainstorm',
+      label: 'Brainstorm',
+      description: 'Research, prototype and align your vision.'
+    },
+    {
+      stage: 'prd',
+      label: 'PRD',
+      description: 'Define product requirements, usecase and outcomes.'
+    },
     { stage: 'spec', label: 'Spec', description: 'Create an implementation-ready contract.' },
-    { stage: 'assignment', label: 'Assignment', description: 'Plan and dispatch approved work.' },
-    { stage: 'achievement', label: 'Achievement', description: 'Audit and rework until complete.' }
+    {
+      stage: 'assignment',
+      label: 'Assignment',
+      description: 'Breakup your tasks & assign to worker agents.'
+    },
+    {
+      stage: 'achievement',
+      label: 'Achievement',
+      description: 'Spec, Implement, Audit and rework until complete.'
+    }
   ]
 
   const autopilot = $derived(lifecycleState?.autopilot === true)
