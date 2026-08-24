@@ -1,4 +1,5 @@
 import { invoke } from '$lib/ipc.svelte'
+import { pauseCurrentHistoryAudio } from './global-audio'
 import type {
   SpeechDictationSpan,
   SpeechModelArtifact,
@@ -287,6 +288,7 @@ class SpeechController {
       return
     }
     await this.cancelPlayback()
+    pauseCurrentHistoryAudio()
     await this.loadSettings()
     this.playback = { state: 'preparing', sessionId: 'pending', messageId }
     try {
@@ -548,6 +550,7 @@ class SpeechController {
       },
       { once: true }
     )
+    pauseCurrentHistoryAudio()
     await audio.play()
     this.playback = {
       state: 'playing',
