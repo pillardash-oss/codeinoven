@@ -455,6 +455,7 @@ class SpeechController {
   }
 
   private cleanupMode(): import('../../../lib/speech/types').SpeechCleanupMode {
+    if (this.sound.localLlmCleanupEnabled) return { kind: 'local-llm' }
     if (this.sound.remoteCleanupEnabled) {
       return {
         kind: 'remote',

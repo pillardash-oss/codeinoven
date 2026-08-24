@@ -40,6 +40,7 @@ function cleanupMode(value: unknown): SpeechCleanupMode {
   if (typeof value !== 'object' || value === null) throw new RangeError('Cleanup mode is invalid.')
   const candidate = value as Record<string, unknown>
   if (candidate['kind'] === 'disabled') return { kind: 'disabled' }
+  if (candidate['kind'] === 'local-llm') return { kind: 'local-llm' }
   if (candidate['kind'] === 'local') {
     const artifactId = candidate['artifactId']
     return artifactId === undefined

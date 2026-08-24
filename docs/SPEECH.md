@@ -82,6 +82,12 @@ Local cleanup is enabled by default. It applies the selected punctuation or form
 
 Remote cleanup is a separate `Switch` that defaults off. Enabling it requires an explicit fixed model or the current conversation model. Only transcript text and minimal formatting context may leave the machine: view kind, project or thread labels, active branch, and the bounded glossary or rules. Audio bytes, source files, full conversation history, and unrelated project content are excluded.
 
+A local-LLM cleanup control is exposed in the Sound Models tab (default off): when enabled, transcripts are sent to a local LLM (llama.cpp/GGUF or MLX) for formatting, via either an app-managed runtime or a user-supplied OpenAI-compatible base URL (e.g. LM Studio or a running `llama.cpp --server`). It is treated as a local path and is distinct from the off-by-default remote conversation-model cleanup.
+
+## Model memory
+
+Speech models are kept resident so later use is instant, and are unloaded after a per-subsystem idle delay. Each subsystem (speech-to-text, cleanup LLM, text-to-speech) exposes an unload option of `30 minutes`, `1 hour`, or `keep until the application closes`. The defaults are 30 minutes. Unloading runs as part of application-close cleanup and is scheduled with batched, non-blocking timers so it never stalls the main thread.
+
 ## Correction learning
 
 Learning compares the inserted dictation span with the text the user actually sends. It derives conservative vocabulary substitutions and formatting transformations; it never fine-tunes or changes model weights.

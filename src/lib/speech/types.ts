@@ -235,6 +235,7 @@ export interface SpeechTranscriptionJob {
 export type SpeechCleanupMode =
   | { kind: 'disabled' }
   | { kind: 'local'; artifactId?: string }
+  | { kind: 'local-llm' }
   | { kind: 'remote'; selection: 'fixed' | 'conversation'; modelId?: string }
 
 export interface SpeechCleanupRequest {
@@ -254,7 +255,7 @@ export interface SpeechCleanupContext {
 }
 
 export interface SpeechCleanupProvenance {
-  mode: 'none' | 'local' | 'remote'
+  mode: 'none' | 'local' | 'local-llm' | 'remote'
   runtime?: SpeechRuntime
   artifactId?: string
   modelId?: string
@@ -341,6 +342,18 @@ export interface SpeechCueSettings {
   volume: number
 }
 
+/** How long a subsystem model stays resident before it is unloaded. */
+export type SpeechUnloadOption = '30m' | '1h' | 'keep'
+
+export interface SpeechDictionaryEntry {
+  id: string
+  phrase: string
+  isAction: boolean
+  variant?: string
+  createdAt: number
+  updatedAt: number
+}
+
 export interface SpeechSettings {
   runtimeOverride?: SpeechRuntime
   asrArtifactId?: string
@@ -352,13 +365,15 @@ export interface SpeechSettings {
   remoteCleanupEnabled: boolean
   remoteCleanupSelection: 'fixed' | 'conversation'
   remoteCleanupModelId?: string
+  localLlmCleanupEnabled: boolean
+  localLlmBaseUrl?: string
   includeCodeBlocksInSpeech: boolean
   historyLimit: number
   cues: SpeechCueSettings
   voiceRecordingEnabled: boolean
-  keepAsrLoaded: boolean
-  keepCleanupLoaded: boolean
-  keepTtsLoaded: boolean
+  asrUnload: SpeechUnloadOption
+  cleanupUnload: SpeechUnloadOption
+  ttsUnload: SpeechUnloadOption
 }
 
 export const DEFAULT_SPEECH_SETTINGS: SpeechSettings = {
@@ -366,6 +381,7 @@ export const DEFAULT_SPEECH_SETTINGS: SpeechSettings = {
   localCleanupEnabled: true,
   remoteCleanupEnabled: false,
   remoteCleanupSelection: 'conversation',
+  localLlmCleanupEnabled: false,
   includeCodeBlocksInSpeech: false,
   historyLimit: DEFAULT_SPEECH_HISTORY_LIMIT,
   cues: {
@@ -375,9 +391,9 @@ export const DEFAULT_SPEECH_SETTINGS: SpeechSettings = {
     volume: 0.7
   },
   voiceRecordingEnabled: false,
-  keepAsrLoaded: false,
-  keepCleanupLoaded: false,
-  keepTtsLoaded: false
+  asrUnload: '30m',
+  cleanupUnload: '30m',
+  ttsUnload: '30m'
 }
 
 export type SpeechErrorCode =

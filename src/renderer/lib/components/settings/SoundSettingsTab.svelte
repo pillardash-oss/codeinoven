@@ -36,6 +36,21 @@
     { id: 'playback', label: 'Playback' }
   ]
 
+  const unloadItems = [
+    { key: 'asrUnload', label: 'Speech-to-text (ASR)' },
+    { key: 'cleanupUnload', label: 'Cleanup LLM' },
+    { key: 'ttsUnload', label: 'Text-to-speech (TTS)' }
+  ] as const satisfies ReadonlyArray<{
+    key: keyof Pick<SpeechSettings, 'asrUnload' | 'cleanupUnload' | 'ttsUnload'>
+    label: string
+  }>
+
+  const unloadOptions = [
+    { value: '30m', label: '30 minutes' },
+    { value: '1h', label: '1 hour' },
+    { value: 'keep', label: 'Keep until app closes' }
+  ] as const satisfies ReadonlyArray<{ value: '30m' | '1h' | 'keep'; label: string }>
+
   onMount(() => {
     void speech.load()
     return () => speech.dispose()
@@ -221,6 +236,35 @@
               aria-label="Toggle remote transcript cleanup"
             />
           </div>
+          <div class="flex items-center justify-between gap-4">
+            <div>
+              <p class="text-sm font-medium">Local-LLM cleanup</p>
+              <p class="text-xs text-dimmed">
+                Format transcripts with a local LLM (llama.cpp/GGUF or MLX). Point at a running
+                server, or leave blank to use the app-managed runtime.
+              </p>
+            </div>
+            <Switch
+              checked={settings.localLlmCleanupEnabled}
+              onchange={(checked) => patch({ localLlmCleanupEnabled: checked })}
+              aria-label="Toggle local-LLM transcript cleanup"
+            />
+          </div>
+          <label class="block text-xs text-muted">
+            Local-LLM server base URL
+            <input
+              class="mt-1 w-full rounded-lg border bg-elevated px-2.5 py-2 text-xs outline-none focus:border-primary disabled:opacity-50"
+              type="text"
+              value={settings.localLlmBaseUrl ?? ''}
+              disabled={!settings.localLlmCleanupEnabled}
+              placeholder="http://127.0.0.1:8080 (LM Studio, llama.cpp server)"
+              autocomplete="off"
+              oninput={(event) =>
+                patch({
+                  localLlmBaseUrl: event.currentTarget.value.trim() || undefined
+                })}
+            />
+          </label>
           <select
             class="w-full rounded-lg border bg-elevated px-2.5 py-2 text-xs outline-none focus:border-primary disabled:opacity-50"
             aria-label="Remote cleanup model source"
@@ -508,6 +552,30 @@
             onchange={(checked) => patch({ voiceRecordingEnabled: checked })}
             aria-label="Toggle voice recording via the conversation model"
           />
+        </div>
+      </section>
+
+      <section id="settings-block-sound-memory" class="rounded-xl border bg-surface p-4">
+        <h2 class="mb-3 text-xs font-semibold uppercase tracking-wide text-muted">Model memory</h2>
+        <div class="space-y-3">
+          {#each unloadItems as item (item.key)}
+            <label class="flex items-center justify-between gap-3 text-xs text-muted">
+              {item.label}
+              <select
+                class="rounded-lg border bg-elevated px-2.5 py-1.5 text-xs outline-none focus:border-primary"
+                aria-label={`${item.label} unload delay`}
+                value={settings[item.key]}
+                onchange={(event) =>
+                  patch({
+                    [item.key]: event.currentTarget.value as '30m' | '1h' | 'keep'
+                  })}
+              >
+                {#each unloadOptions as option (option.value)}
+                  <option value={option.value}>{option.label}</option>
+                {/each}
+              </select>
+            </label>
+          {/each}
         </div>
       </section>
 

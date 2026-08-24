@@ -902,6 +902,10 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
+function isUnloadOption(value: unknown): value is '30m' | '1h' | 'keep' {
+  return value === '30m' || value === '1h' || value === 'keep'
+}
+
 function validateAttachmentStorageScope(value: unknown): AttachmentStorageScope {
   if (!isRecord(value) || (value.kind !== 'project' && value.kind !== 'chat')) {
     throw new TypeError('Attachment storage scope is invalid')
@@ -1661,10 +1665,12 @@ export function validateAppConfigPatch(value: unknown): AppConfigPatch {
       !sound.preferredLanguages.every(
         (language) => typeof language === 'string' && language.length <= 32
       ) ||
-      typeof sound.keepAsrLoaded !== 'boolean' ||
-      typeof sound.keepCleanupLoaded !== 'boolean' ||
-      typeof sound.keepTtsLoaded !== 'boolean' ||
       typeof sound.voiceRecordingEnabled !== 'boolean' ||
+      typeof sound.localLlmCleanupEnabled !== 'boolean' ||
+      (sound.localLlmBaseUrl !== undefined && typeof sound.localLlmBaseUrl !== 'string') ||
+      !isUnloadOption(sound.asrUnload) ||
+      !isUnloadOption(sound.cleanupUnload) ||
+      !isUnloadOption(sound.ttsUnload) ||
       !Number.isSafeInteger(sound.historyLimit) ||
       Number(sound.historyLimit) < 1 ||
       Number(sound.historyLimit) > 500 ||
@@ -1705,10 +1711,12 @@ export function validateAppConfigPatch(value: unknown): AppConfigPatch {
         transcriptReady: sound.cues.transcriptReady,
         volume: sound.cues.volume
       },
-      keepAsrLoaded: sound.keepAsrLoaded,
-      keepCleanupLoaded: sound.keepCleanupLoaded,
-      keepTtsLoaded: sound.keepTtsLoaded,
-      voiceRecordingEnabled: sound.voiceRecordingEnabled
+      voiceRecordingEnabled: sound.voiceRecordingEnabled,
+      localLlmCleanupEnabled: sound.localLlmCleanupEnabled,
+      localLlmBaseUrl: sound.localLlmBaseUrl === undefined ? undefined : String(sound.localLlmBaseUrl),
+      asrUnload: sound.asrUnload,
+      cleanupUnload: sound.cleanupUnload,
+      ttsUnload: sound.ttsUnload
     }
   }
 
