@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { createWriteStream } from 'node:fs'
-import { access, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
+import { access, mkdir, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import type {
   SpeechCapabilitySnapshot,
@@ -464,6 +464,75 @@ export class SpeechService {
   async deleteCorrectionRuleConfirmed(ruleId: string, token: string): Promise<void> {
     this.consumeConfirmation(token, 'rule', ruleId)
     await this.learning.delete(ruleId)
+  }
+
+  /**
+   * Register a user-owned model as an external reference. The app never copies
+   * or deletes the referenced files; only the reference is persisted. `.mlx` is
+   * gated to Apple Silicon; `.gguf` maps to the GGUF/llama.cpp runtime.
+   */
+  async registerImportedModel(path: string): Promise<SpeechInstalledArtifact> {
+    const normalized = path.trim()
+    const lower = normalized.toLowerCase()
+    const target = this.platformTarget()
+    let runtime: SpeechRuntime
+    if (lower.endsWith('.mlx') || lower.endsWith('/.mlx') || lower.endsWith('\\mlx')) {
+      if (target.platform !== 'darwin' || target.architecture !== 'arm64') {
+        throw new Error('MLX models are only supported on Apple Silicon.')
+      }
+      runtime = 'mlx'
+    } else {
+      let hasGguf = lower.endsWith('.gguf')
+      if (!hasGguf) {
+        try {
+          const entries = await readdir(normalized, { withFileTypes: true })
+          hasGguf = entries.some((entry) => entry.name.toLowerCase().endsWith('.gguf'))
+        } catch {
+          hasGguf = false
+        }
+      }
+      if (!hasGguf) {
+        throw new Error('Unsupported model format. Import an .mlx or .gguf model.')
+      }
+      runtime = 'gguf'
+    }
+    try {
+      await access(normalized)
+    } catch {
+      throw new Error('The model path does not exist.')
+    }
+    const artifactId = `imported-${createHash('sha256').update(normalized).digest('hex').slice(0, 16)}`
+    const existing = this.installed.artifacts.find((item) => item.artifactId === artifactId)
+    if (existing) {
+      existing.importPath = normalized
+      existing.available = true
+      await this.persistInstalledIndex()
+      return structuredClone(existing)
+    }
+    const artifact: SpeechInstalledArtifact = {
+      artifactId,
+      runtime,
+      installedAt: Date.now(),
+      source: 'import',
+      externalReference: true,
+      available: true,
+      importPath: normalized
+    }
+    this.installed.artifacts.push(artifact)
+    await this.persistInstalledIndex()
+    return structuredClone(artifact)
+  }
+
+  async unregisterImportedModel(artifactId: string, token: string): Promise<void> {
+    this.consumeConfirmation(token, 'model', artifactId)
+    const artifact = this.installed.artifacts.find(
+      (item) => item.artifactId === artifactId && item.source === 'import'
+    )
+    if (!artifact) throw new Error('Imported model was not found.')
+    this.installed.artifacts = this.installed.artifacts.filter(
+      (item) => item.artifactId !== artifactId
+    )
+    await this.persistInstalledIndex()
   }
 
   async retryTranscription(

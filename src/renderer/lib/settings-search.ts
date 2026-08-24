@@ -108,7 +108,7 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     section: 'sound',
     title: 'Sound',
     description: 'Local speech models, dictation, cleanup, history, and spoken responses.',
-    keywords: ['microphone', 'voice', 'asr', 'tts', 'recording'],
+    keywords: ['microphone', 'voice', 'asr', 'tts', 'recording', 'models', 'import', 'cleanup'],
     icon: Volume2
   },
   {

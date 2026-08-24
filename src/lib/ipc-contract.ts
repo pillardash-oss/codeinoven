@@ -1077,6 +1077,14 @@ export interface IpcInvokeContract {
     ],
     import('./speech/types').SpeechResult<import('./speech/types').SpeechTranscriptionResult>
   >
+  'speech:importModel': Contract<
+    [path: string],
+    import('./speech/types').SpeechResult<import('./speech/types').SpeechInstalledArtifact>
+  >
+  'speech:unregisterModel': Contract<
+    [artifactId: string, confirmationToken: string],
+    import('./speech/types').SpeechResult<void>
+  >
   'speech:downloadArtifact': Contract<
     [artifactId: string],
     import('./speech/types').SpeechResult<void>

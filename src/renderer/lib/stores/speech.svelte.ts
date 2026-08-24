@@ -51,6 +51,20 @@ class SpeechSettingsStore {
     await this.load()
   }
 
+  async importModel(path: string): Promise<boolean> {
+    const result = await invoke('speech:importModel', path)
+    if (!result.ok) this.error = result.error.message
+    await this.load()
+    return result.ok
+  }
+
+  async unregisterModel(artifactId: string, token: string): Promise<boolean> {
+    const result = await invoke('speech:unregisterModel', artifactId, token)
+    if (!result.ok) this.error = result.error.message
+    await this.load()
+    return result.ok
+  }
+
   async cancelDownload(artifactId: string): Promise<void> {
     await invoke('speech:cancelDownload', artifactId)
   }

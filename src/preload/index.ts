@@ -193,6 +193,8 @@ const INVOKE_CHANNELS = [
   'speech:transcribe',
   'speech:transcribeAudioToLlm',
   'speech:getHistory',
+  'speech:importModel',
+  'speech:unregisterModel',
   'speech:enforceHistoryLimit',
   'speech:downloadArtifact',
   'speech:cancelDownload',

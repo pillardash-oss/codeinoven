@@ -42,6 +42,14 @@ Every downloadable file has a pinned repository revision, HTTPS URL, exact byte 
 
 Run `bun run speech:catalog` during development to validate the manifest and list blocked candidates. The same command accepts an explicit packaged-worker path and bounded sample set once workers are available. It prints measurements for CodeInOven's lifecycle evidence; it does not silently rewrite the reviewed catalog.
 
+### User model import
+
+Users can import their own models by pointing at a local folder or file. Import registers a **user-owned external reference** only — CodeInOven never copies or deletes the referenced files. A `.mlx` model is registered to the MLX runtime and is gated to Apple Silicon; a `.gguf` model is registered to the GGUF/llama.cpp runtime; anything else is rejected with an unsupported-format error. Unregistering an imported model removes the reference only and never touches the external files on disk. Imported models appear under an “Imported models” group in the Sound Models tab.
+
+### History retention
+
+Speech history defaults to 30 attempts (1–500) and evicts oldest-first at the configured limit, removing the evicted attempt's app-owned audio. Every attempt — success or failure — records the audio plus its raw transcript and cleaned transcript; retries append results without duplicating retained audio. Explicit deletion always requires confirmation.
+
 Apple Silicon packages build the pinned Swift worker with `bun run speech:build-mlx`. Packaging copies that executable and the checksum-verified MLX Metal library into the application resources; model weights remain separate downloads. Whisper Base and Kokoro BF16 are qualified on an Apple M1 Pro with the exact measurements recorded in the catalog. Kokoro's verified English G2P resources are part of its downloadable artifact so first synthesis does not perform a hidden network fetch.
 
 ## Recording and storage

@@ -233,6 +233,23 @@ export function registerSpeechIpc(
       return service.history(cursor, limit)
     })
   )
+  ipcMain.handle('speech:importModel', (_event, rawPath: unknown) =>
+    speechResult(() =>
+      service.registerImportedModel(
+        boundedString(rawPath, 'Model path', 4_096)
+      )
+    )
+  )
+  ipcMain.handle(
+    'speech:unregisterModel',
+    (_event, rawArtifactId: unknown, rawConfirmationToken: unknown) =>
+      speechResult(() =>
+        service.unregisterImportedModel(
+          entityId(rawArtifactId, 'Artifact id'),
+          entityId(rawConfirmationToken, 'Confirmation token')
+        )
+      )
+  )
   ipcMain.handle('speech:enforceHistoryLimit', (_event, rawLimit: unknown) =>
     speechResult(() =>
       service.enforceHistoryLimit(boundedInteger(rawLimit, 'History limit', 1, 500))
@@ -383,6 +400,8 @@ export function registerSpeechIpc(
       'speech:transcribe',
       'speech:transcribeAudioToLlm',
       'speech:getHistory',
+      'speech:importModel',
+      'speech:unregisterModel',
       'speech:enforceHistoryLimit',
       'speech:downloadArtifact',
       'speech:cancelDownload',
