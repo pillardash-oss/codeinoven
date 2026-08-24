@@ -63,6 +63,7 @@
   let loading = $state(true)
   let saving = $state(false)
   let saved = $state(false)
+  let savedTimeout: ReturnType<typeof setTimeout> | null = null
   let error = $state('')
   let loadedProjectEnabled = $state(true)
   let loadedChatEnabled = $state(true)
@@ -295,6 +296,10 @@
           variant === 'sidebar' ? { projectId, threadId } : {}
         await saveGrouped(entries, loadedEntries, fallback, managedScopesFor(contextKind))
         saved = true
+        if (savedTimeout) clearTimeout(savedTimeout)
+        savedTimeout = setTimeout(() => {
+          saved = false
+        }, 2000)
         await load()
       } else {
         throw new Error('Open a project thread before editing scoped memory.')
@@ -622,20 +627,19 @@
           <button
             class="flex items-center gap-1.5 rounded-lg bg-primary px-4 py-1.5 text-sm font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-50"
             disabled={saving || loading}
-            title="Save all memory entries"
+            title={saved ? 'All memories saved' : 'Save all memory entries'}
             type="button"
             onclick={() => void save()}
           >
             {#if saving}
               <Loader2 size={14} class="animate-spin" />
+            {:else if saved}
+              <Check size={14} />
             {:else}
               <Save size={14} />
             {/if}
-            Save
+            {saved ? 'Saved' : 'Save'}
           </button>
-        {/if}
-        {#if saved}
-          <span class="text-xs text-primary">Saved</span>
         {/if}
         {#if variant === 'sidebar' && allowTransfer && projectId}
           <MemoryTransfer {variant} {projectId} onImported={load} />
