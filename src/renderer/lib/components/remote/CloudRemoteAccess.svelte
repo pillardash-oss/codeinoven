@@ -659,7 +659,7 @@
 {#if loading || !user}
   <main class="grid min-h-dvh w-full place-items-center bg-app p-6 text-foreground">
     <section class="flex w-full max-w-xs flex-col items-center text-center">
-      <img class="h-24 w-24 rounded-2xl" src="/logo.png" alt="CodeInOven" />
+      <VendorIcon name="CodeInOven" size={96} class="rounded-2xl" />
       <h1 class="mt-5 text-lg font-semibold tracking-tight">Remote connection</h1>
 
       {#if errorMessage}
