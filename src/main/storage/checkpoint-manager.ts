@@ -246,7 +246,7 @@ export class CheckpointManager {
         status,
         after,
         changes,
-        changeFilterApplied: filterChangedPaths !== undefined,
+        changeFilterApplied: filterChangedPaths !== undefined || changes.length !== allChanges.length,
         lineStats: lineStats.stats,
         completedAt: Date.now(),
         ...(completionFailure ? { failure: completionFailure } : {})
