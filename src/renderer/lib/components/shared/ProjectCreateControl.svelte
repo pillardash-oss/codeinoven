@@ -10,6 +10,7 @@
   } from '@lucide/svelte'
   import { DropdownMenu } from 'bits-ui'
   import Modal from '../ui/Modal.svelte'
+  import GitCloneModal from './GitCloneModal.svelte'
   import { invoke } from '$lib/ipc.svelte'
   import { APP_NAME } from '$shared/brand'
   import type { ChangeTrackingMode, Project, RepositoryPreflightResult } from '$shared/types'
@@ -48,6 +49,7 @@
     }
   })
   let showSshModal = $state(false)
+  let showGitCloneModal = $state(false)
   let newProjectName = $state('')
   let newProjectHost = $state('')
 
@@ -141,6 +143,10 @@
     showSshModal = true
   }
 
+  function addGitCloneProject(): void {
+    showGitCloneModal = true
+  }
+
   async function createSshProject(): Promise<void> {
     if (!newProjectName.trim() || !newProjectHost.trim()) return
     const host = newProjectHost.trim()
@@ -191,6 +197,14 @@
           <Globe size={14} class="shrink-0 text-muted" />
           SSH / Remote
         </DropdownMenu.Item>
+        <DropdownMenu.Item
+          class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-sm text-foreground outline-none transition-colors hover:bg-elevated focus:bg-elevated"
+          title="Clone a Git repository"
+          onSelect={addGitCloneProject}
+        >
+          <GitBranch size={14} class="shrink-0 text-muted" />
+          Clone Git Repo
+        </DropdownMenu.Item>
       </DropdownMenu.Content>
     </DropdownMenu.Portal>
   </DropdownMenu.Root>
@@ -222,9 +236,27 @@
           <span class="mt-0.5 block text-xs text-dimmed">Connect a project over SSH.</span>
         </span>
       </button>
+      <button
+        type="button"
+        class="flex items-center gap-3 rounded-xl border p-3 text-left transition-colors hover:bg-elevated"
+        title="Clone a Git repository"
+        onclick={addGitCloneProject}
+      >
+        <GitBranch size={16} class="shrink-0 text-muted" />
+        <span>
+          <span class="block text-sm font-medium">Clone Git Repo</span>
+          <span class="mt-0.5 block text-xs text-dimmed">Clone from https or ssh.</span>
+        </span>
+      </button>
     </div>
   </Modal>
 {/if}
+
+<GitCloneModal
+  open={showGitCloneModal}
+  onClose={() => (showGitCloneModal = false)}
+  onProjectCreated={onProjectCreated}
+/>
 
 <Modal open={showSshModal} title="Connect SSH Project" onClose={() => (showSshModal = false)}>
   <form

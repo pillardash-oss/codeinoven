@@ -26,10 +26,10 @@ Chromium's MediaRecorder output is decoded to mono 16 kHz WAV by the pinned pack
 
 The initial families are:
 
-- Whisper Base for local ASR through MLX or sherpa-onnx.
-- Kokoro English for local TTS through MLX or sherpa-onnx.
-- Qwen3 0.6B 4-bit for compact MLX cleanup.
-- A sherpa-onnx English and Chinese punctuation model for portable cleanup.
+- Parakeet TDT 0.6B v2 (English-optimized) and v3 (multilingual) for local ASR through sherpa-onnx — ranked first in the ASR tab, with **Best for English** (v2) and **Best for Multilingual** (v3) badges.
+- Whisper Base for local ASR through MLX or sherpa-onnx — ranked after Parakeet, with platform badges and Hugging Face links.
+- Kokoro English for local TTS through MLX or sherpa-onnx — shown in the TTS tab with **MLX / ONNX** runtime badges and Hugging Face links.
+- Qwen3 0.6B 4-bit for compact MLX cleanup and a sherpa-onnx English and Chinese punctuation model — shown in the LLM (cleanup) tab with runtime badges and Hugging Face links.
 
 Every downloadable file has a pinned repository revision, HTTPS URL, exact byte count, and SHA-256 digest. A catalog entry remains a non-selectable `candidate` until all of these admission gates pass:
 
@@ -41,6 +41,32 @@ Every downloadable file has a pinned repository revision, HTTPS URL, exact byte 
 6. A reviewer promotes the artifact only after compatibility, checksum, license, and benchmark records are complete.
 
 Run `bun run speech:catalog` during development to validate the manifest and list blocked candidates. The same command accepts an explicit packaged-worker path and bounded sample set once workers are available. It prints measurements for CodeInOven's lifecycle evidence; it does not silently rewrite the reviewed catalog.
+
+### User model import
+
+Sound → **Models** is a tabbed surface with three sub-tabs — **ASR**, **TTS**, and **LLM** (cleanup) — each showing its artifacts as individual cards in a fixed-height, internally scrollable container (`max-h-[520px] overflow-y-auto`). Cards are ranked: Parakeet TDT v2 (**Best for English**) then v3 (**Best for Multilingual**) first in ASR, followed by Whisper variants; Kokoro variants in TTS; Qwen MLX then sherpa punctuation in LLM. Each card shows a **runtime badge** (MLX / ONNX / GGUF), a ranking/best-for badge where applicable, size, license, qualification, languages, and a **Hugging Face link** (`sourcePageUrl`). Each card has its **own Import and Paste Path buttons** (in addition to per-sub-tab header buttons), so the user can paste and import directly from any card; a fixed-height scroll keeps the section bounded. Users can import their own models by pointing at a local folder or file via **Import** (native file picker) or **Paste Path** (paste a filesystem path). Both actions share the same validation and registration path. Import registers a **user-owned external reference** only — CodeInOven never copies or deletes the referenced files. A `.mlx` model is registered to the MLX runtime and is gated to Apple Silicon; a `.gguf` model is registered to the GGUF/llama.cpp runtime (either a single `.gguf` file or a folder containing `.gguf` files); anything else is rejected with an unsupported-format error. Unregistering an imported model removes the reference only and never touches the external files on disk. Imported models appear under an “Imported models” group within the Models tab.
+
+Pasting a path opens **Paste model path** — a modal with a focused input that validates live on paste and on edit. The modal trims surrounding whitespace and matching outer quotes before validation and shows when normalization occurred. Validation runs in the main process (filesystem access never leaves the renderer) and is debounced to avoid blocking the UI. The modal shows:
+
+- **Supported model found** (with detected type: MLX or GGUF) — Import enabled.
+- **Empty** — guidance with supported formats.
+- **Not found** — no file or folder exists at that path.
+- **Permission denied** — the path cannot be read.
+- **Unsupported format / platform** — wrong extension, directory vs file mismatch (e.g. a `.gguf` directory), or MLX on non-Apple Silicon.
+
+Import remains disabled until validation passes. The modal is fully keyboard-accessible: focus lands on the input when opened, **Escape** closes it, **Enter** imports when valid, and tab order is trapped by the shared modal behavior. No network download is performed from the paste flow; it only validates and registers a local path.
+
+Pasting also shows a **detected model breakup** directly from the filesystem path: the modal parses the basename (e.g. `parakeet-tdt-0.6b-v2`) into family/variant/size/version/quantization and displays a structured preview with confidence, detail chips, and raw token breakup. This preview is live on edit (debounced main validation) and also appears for imported models in the **Imported models** list. The parse is heuristic and never blocks validation. See `src/lib/speech/model-path-validation.ts` (`parseModelIdentityFromPath`) and `docs/SPEECH.md`.
+
+### Active model and single-resident policy
+
+Each capability — **ASR**, **TTS**, and **LLM (cleanup)** — has at most **one active model** at a time (`sound.asrArtifactId`, `sound.ttsArtifactId`, `sound.cleanupArtifactId` in `src/lib/speech/types.ts`). The Sound → Models header shows the current active for the selected sub-tab (e.g. “Active for ASR: Parakeet TDT 0.6B v2 — only this model stays resident”) and a **Clear** action; when no active is set the UI explains that the first qualified installed model is used. Each catalog card that is installed shows **Set Active** (which displaces the previous active for that capability) or an **Active** badge and highlight when it is the active model; imported models show the same parsed identity breakup and an **Active** toggle per capability. Activating a model for a capability implicitly displaces the previous one — only the active model is considered resident in memory — and the selection is persisted in app config (`src/main/ipc/ipc-handlers.ts`). Catalog and imported models share the same activation path; imported models are validated contextually per tab (`src/main/speech/speech-service.ts:validateModelPath`) and registered with their capability (`speech:importModel`).
+
+IPC: `speech:validateModelPath` (main-process filesystem validation, returns `ModelPathValidationResult`) and `speech:importModel` (shared registration for both picker and paste, now `speech:importModel(path, capability)`). See `src/lib/speech/model-path-validation.ts` for the shared normalization and extension allowlist, and `src/main/speech/speech-service.ts` for the main-process validation and registration logic.
+
+### History retention
+
+Speech history defaults to 30 attempts (1–500) and evicts oldest-first at the configured limit, removing the evicted attempt's app-owned audio. Every attempt — success or failure — records the audio plus its raw transcript and cleaned transcript; retries append results without duplicating retained audio. Explicit deletion always requires confirmation.
 
 Apple Silicon packages build the pinned Swift worker with `bun run speech:build-mlx`. Packaging copies that executable and the checksum-verified MLX Metal library into the application resources; model weights remain separate downloads. Whisper Base and Kokoro BF16 are qualified on an Apple M1 Pro with the exact measurements recorded in the catalog. Kokoro's verified English G2P resources are part of its downloadable artifact so first synthesis does not perform a hidden network fetch.
 
@@ -56,17 +82,29 @@ Unlimited recording can still consume substantial disk space. The Sound page rep
 
 ## Dictation and clipboard
 
-Every agent-directed editor receives the same microphone control immediately before its send or submit action. Clicking once starts capture; clicking again stops it. Distinct cues mark active capture, successful stop, and finalized transcription.
+Every agent-directed editor receives the same microphone control immediately before its send or submit action. The control is a slim `h-8 w-8` icon button that matches the send button: its `Mic` SVG turns filled red and pulses while capturing, shows a small animated waveform while the recording is being processed, and returns to the plain `Mic` when idle. There is no recording-duration display. Clicking once starts capture; clicking again stops it. Distinct cues mark active capture, successful stop, and finalized transcription.
+
+In the chat composer the mic swaps into the send-button slot whenever nothing is sendable (idle and empty), and sits beside the send button when there is content to send. Other agent-directed editors keep the mic before their send/submit action.
 
 The controller snapshots the editor and its selection before the microphone button moves focus. Final text replaces that selected range or inserts at the saved caret without overwriting adjacent text. If the target disappears or changes, CodeInOven keeps the transcript in history and the operating-system clipboard but does not insert it into an unrelated editor.
 
 Writing finalized dictation replaces the current operating-system clipboard contents. This is intentional so supported operating systems can include the transcript in clipboard history.
+
+### Voice recording without a local model
+
+The mic is hidden on machines with no installed local speech-to-text model unless the user explicitly enables **Enable voice recording** in the Sound page. This toggle is OFF by default and is the only exception that allows audio bytes to leave the device: when ON and no local ASR is installed, a finished recording is sent as an audio attachment to an audio-capable conversation model (a disposable, tool-free session) for transcription, and the resulting transcript then flows through cleanup as usual. When a local ASR model is installed it remains the preferred path. Audio never leaves the device while this toggle is OFF.
 
 ## Cleanup and privacy
 
 Local cleanup is enabled by default. It applies the selected punctuation or formatting model and enabled correction rules. If local cleanup fails, CodeInOven inserts the raw transcript, records the error, and does not switch backend or contact a remote model.
 
 Remote cleanup is a separate `Switch` that defaults off. Enabling it requires an explicit fixed model or the current conversation model. Only transcript text and minimal formatting context may leave the machine: view kind, project or thread labels, active branch, and the bounded glossary or rules. Audio bytes, source files, full conversation history, and unrelated project content are excluded.
+
+A local-LLM cleanup control is exposed in the Sound **Preferences** tab (default off), alongside **Runtime** and **Transcript cleanup** (which no longer appear in the Models tab): when enabled, transcripts are sent to a local LLM (llama.cpp/GGUF or MLX) for formatting, via either an app-managed runtime or a user-supplied OpenAI-compatible base URL (e.g. LM Studio or a running `llama.cpp --server`). It is treated as a local path and is distinct from the off-by-default remote conversation-model cleanup. The **Preferences** tab also holds Model memory, Cues and playback, and Enable voice recording.
+
+## Model memory
+
+Speech models are kept resident so later use is instant, and are unloaded after a per-subsystem idle delay. Each subsystem (speech-to-text, cleanup LLM, text-to-speech) exposes an unload option of `30 minutes`, `1 hour`, or `keep until the application closes`. The defaults are 30 minutes. Unloading runs as part of application-close cleanup and is scheduled with batched, non-blocking timers so it never stalls the main thread.
 
 ## Correction learning
 

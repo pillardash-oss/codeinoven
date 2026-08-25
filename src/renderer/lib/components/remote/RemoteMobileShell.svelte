@@ -31,16 +31,19 @@
   import Switch from '$lib/components/ui/Switch.svelte'
   import BottomSheet from '$lib/components/ui/BottomSheet.svelte'
   import ActionSheet from '$lib/components/ui/ActionSheet.svelte'
+  import RecordingIndicator from '$lib/components/speech/RecordingIndicator.svelte'
   import type { MenuItem } from '$lib/components/shared/ThreadDropdown.svelte'
   import MessageHistoryPanel from '$lib/components/shared/MessageHistoryPanel.svelte'
   import { mobileNotifications } from '$lib/remote/mobile-notifications.svelte'
   import { pwaInstall } from '$lib/remote/pwa-install.svelte'
+  import { resetPwaCacheAndReload } from '$lib/remote/reset-pwa-cache'
   import { invoke, subscribe } from '$lib/ipc.svelte'
   import { getProjectIcon } from '$lib/project-icons'
   import { mobileState } from '$lib/remote/mobile-state.svelte'
   import { threadMessages } from '$lib/stores/thread-messages.svelte'
   import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
   import { gitState } from '$lib/stores/git.svelte'
+  import { speechController } from '$lib/speech/speech-controller.svelte'
   import { toast } from 'svelte-sonner'
   import { INBOX_PROJECT_ID, type Thread, type ThreadSearchResult } from '$shared/types'
 
@@ -82,15 +85,16 @@
   )
 
   /**
-   * Retry token for lazy feature chunks. Every `{#await}` expression below
-   * passes this value as `retryableChunk`'s attempt argument, so incrementing
-   * it re-runs each load: failed imports retry, already-resolved ones resolve
-   * instantly from the module cache. Without a catch branch a rejected import
-   * leaves the conversation area or sheet blank forever.
+   * Retry token for lazy feature chunks. Passing this value into each retryable
+   * import keeps the `{#await}` reactive, so bumping it re-runs the load. A
+   * rejected import most often means the installed PWA holds a cached shell
+   * referencing chunk hashes a rebuilt desktop no longer serves; re-importing
+   * the same hash cannot succeed, so the panel's recovery path resets the PWA
+   * cache and reloads instead.
    */
   let chunkRetry = $state(0)
 
-  /** Re-run the loader whenever the caller passes a new attempt value. */
+  /** Re-run the loader whenever the caller is re-evaluated with a new attempt. */
   function retryableChunk<T>(attempt: number, load: () => Promise<T>): Promise<T> {
     return load()
   }
@@ -433,20 +437,21 @@
   {/snippet}
 
   <!-- Shared lazy-chunk failure state: any rejected dynamic import below
-       renders this instead of staying silently blank. "Try again" bumps
-       `chunkRetry`, which re-runs every failed load (resolved modules
-       resolve instantly from cache). -->
+       renders this instead of staying silently blank. The phone most often
+       hits this when the desktop rebuilt while the installed PWA still cached
+       the previous shell, so "Try again" resets the stale cache and reloads a
+       fresh shell rather than re-importing a chunk hash that no longer exists. -->
   {#snippet chunkFailure()}
     <div class="flex min-h-40 flex-col items-center justify-center gap-3 px-6 py-8 text-center">
       <p class="max-w-[16rem] text-[13px] leading-relaxed text-muted">
-        This panel could not load. Check your connection and try again.
+        This panel could not load. If it keeps failing, the desktop may have been updated.
       </p>
       <button
         type="button"
         class="h-9 cursor-pointer rounded-lg bg-primary px-4 text-[13px] font-medium text-on-primary transition-colors active:bg-primary-hover"
         title="Reload this panel"
         aria-label="Reload this panel"
-        onclick={() => (chunkRetry += 1)}
+        onclick={() => void resetPwaCacheAndReload()}
       >
         Try again
       </button>
@@ -858,22 +863,23 @@
         {/if}
         <button
           type="button"
-          class="flex h-10 flex-1 cursor-pointer items-center justify-center gap-1.5 rounded-xl bg-elevated text-[13px] font-medium text-muted transition-colors active:bg-danger/10 active:text-danger"
-          title="Disconnect from the desktop"
-          onclick={onDisconnect}
+          class="flex h-10 flex-1 cursor-pointer items-center justify-center gap-1.5 rounded-xl bg-elevated text-[13px] font-medium text-muted transition-colors active:bg-elevated active:text-foreground"
+          title="Close the sidebar"
+          aria-label="Close the sidebar"
+          onclick={() => (mobileState.sidebarOpen = false)}
         >
-          <Power size={14} />
-          Disconnect
+          <X size={16} />
+          Close
         </button>
 
         <button
           type="button"
-          class="flex h-10 w-10 shrink-0 cursor-pointer items-center justify-center rounded-xl text-muted transition-colors active:bg-elevated"
-          aria-label="Close the sidebar"
-          title="Close the sidebar"
-          onclick={() => (mobileState.sidebarOpen = false)}
+          class="flex h-10 w-10 shrink-0 cursor-pointer items-center justify-center rounded-xl text-muted transition-colors active:bg-danger/10 active:text-danger"
+          aria-label="Disconnect from the desktop"
+          title="Disconnect from the desktop"
+          onclick={onDisconnect}
         >
-          <X size={18} />
+          <Power size={17} />
         </button>
       </div>
 
@@ -915,7 +921,11 @@
                   onclick={() => void mobileState.openThread(result.thread)}
                 >
                   <span class="flex min-w-0 items-center gap-2">
-                    {@render threadStatusDot(result.thread)}
+                    {#if speechController.isRecordingThread(result.thread.id)}
+                      <RecordingIndicator label="Listening" />
+                    {:else}
+                      {@render threadStatusDot(result.thread)}
+                    {/if}
                     <span class="min-w-0 flex-1 truncate text-[13px] text-foreground">
                       {result.thread.title}
                     </span>
@@ -971,9 +981,13 @@
                     <span class="min-w-0 flex-1 truncate text-[13px] text-foreground">
                       {thread.title}
                     </span>
-                    <span class="shrink-0 text-[10px] text-dimmed"
-                      >{relativeTime(thread.createdAt)}</span
-                    >
+                    {#if speechController.isRecordingThread(thread.id)}
+                      <RecordingIndicator label="Listening" />
+                    {:else}
+                      <span class="shrink-0 text-[10px] text-dimmed"
+                        >{relativeTime(thread.createdAt)}</span
+                      >
+                    {/if}
                   </button>
                   <button
                     type="button"
@@ -1046,9 +1060,13 @@
                         <span class="min-w-0 flex-1 truncate text-[13px] text-foreground">
                           {thread.title}
                         </span>
-                        <span class="shrink-0 text-[10px] text-dimmed"
-                          >{relativeTime(thread.createdAt)}</span
-                        >
+                        {#if speechController.isRecordingThread(thread.id)}
+                          <RecordingIndicator label="Listening" />
+                        {:else}
+                          <span class="shrink-0 text-[10px] text-dimmed"
+                            >{relativeTime(thread.createdAt)}</span
+                          >
+                        {/if}
                       </button>
                       <button
                         type="button"
@@ -1127,9 +1145,13 @@
                   <span class="min-w-0 flex-1 truncate text-[13px] text-foreground">
                     {thread.title}
                   </span>
-                  <span class="shrink-0 text-[10px] text-dimmed"
-                    >{relativeTime(thread.createdAt)}</span
-                  >
+                  {#if speechController.isRecordingThread(thread.id)}
+                    <RecordingIndicator label="Listening" />
+                  {:else}
+                    <span class="shrink-0 text-[10px] text-dimmed"
+                      >{relativeTime(thread.createdAt)}</span
+                    >
+                  {/if}
                 </button>
                 <button
                   type="button"
@@ -1165,9 +1187,13 @@
                   <span class="min-w-0 flex-1 truncate text-[13px] text-foreground">
                     {thread.title}
                   </span>
-                  <span class="shrink-0 text-[10px] text-dimmed"
-                    >{relativeTime(thread.createdAt)}</span
-                  >
+                  {#if speechController.isRecordingThread(thread.id)}
+                    <RecordingIndicator label="Listening" />
+                  {:else}
+                    <span class="shrink-0 text-[10px] text-dimmed"
+                      >{relativeTime(thread.createdAt)}</span
+                    >
+                  {/if}
                 </button>
                 <button
                   type="button"

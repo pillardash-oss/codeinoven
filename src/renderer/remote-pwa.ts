@@ -1,6 +1,7 @@
 import { mount } from 'svelte'
 import { installRemoteApiShim } from './lib/remote/remote-api-shim'
 import { remoteLog } from './lib/remote/logger'
+import { resetPwaCacheAndReload } from './lib/remote/reset-pwa-cache'
 import { markRemotePwaRuntime } from './lib/runtime-context'
 // The global design-system sheet (Tailwind layers + theme tokens). The desktop
 // entry imports this too; without it the phone client renders as unstyled HTML,
@@ -20,29 +21,6 @@ if ('serviceWorker' in navigator) {
 // encrypted remote WebSocket bridge BEFORE any store module is constructed
 // (stores subscribe to events at module evaluation time).
 installRemoteApiShim()
-
-/**
- * Drop every cached response and service worker for this origin, then reload.
- *
- * A phone that cached an older build can hold references to chunk hashes the
- * desktop no longer has on disk. Clearing the cache is the one recovery the
- * user can perform from the phone itself.
- */
-async function resetAndReload(): Promise<void> {
-  try {
-    if ('serviceWorker' in navigator) {
-      const registrations = await navigator.serviceWorker.getRegistrations()
-      await Promise.all(registrations.map((registration) => registration.unregister()))
-    }
-    if ('caches' in window) {
-      const keys = await caches.keys()
-      await Promise.all(keys.map((key) => caches.delete(key)))
-    }
-  } catch {
-    // best-effort — reload regardless
-  }
-  location.reload()
-}
 
 /**
  * Render the reason the client could not start.
@@ -89,7 +67,7 @@ function showBootFailure(reason: unknown): void {
     'appearance:none;border:0;border-radius:8px;padding:12px 18px;background:#2563eb;color:#fff;font-size:15px;font-weight:600;min-height:44px'
   )
   reset.addEventListener('click', () => {
-    void resetAndReload()
+    void resetPwaCacheAndReload()
   })
 
   panel.append(heading, detail, hint, reset)

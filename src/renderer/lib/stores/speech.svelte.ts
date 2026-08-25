@@ -1,4 +1,5 @@
 import { invoke, subscribe } from '$lib/ipc.svelte'
+import { toast } from 'svelte-sonner'
 import type {
   SpeechCapabilitySnapshot,
   SpeechCorrectionRule,
@@ -46,9 +47,35 @@ class SpeechSettingsStore {
   }
 
   async download(artifactId: string): Promise<void> {
-    const result = await invoke('speech:downloadArtifact', artifactId)
+    this.error = ''
+    try {
+      const result = await invoke('speech:downloadArtifact', artifactId)
+      if (!result.ok) {
+        this.error = result.error.message
+        toast.error(result.error.message)
+        return
+      }
+    } catch (cause) {
+      const message = cause instanceof Error ? cause.message : String(cause)
+      this.error = message
+      toast.error(message)
+      return
+    }
+    await this.load()
+  }
+
+  async importModel(path: string, capability?: import('../../../lib/speech/types').SpeechCapability): Promise<boolean> {
+    const result = await invoke('speech:importModel', path, capability)
     if (!result.ok) this.error = result.error.message
     await this.load()
+    return result.ok
+  }
+
+  async unregisterModel(artifactId: string, token: string): Promise<boolean> {
+    const result = await invoke('speech:unregisterModel', artifactId, token)
+    if (!result.ok) this.error = result.error.message
+    await this.load()
+    return result.ok
   }
 
   async cancelDownload(artifactId: string): Promise<void> {

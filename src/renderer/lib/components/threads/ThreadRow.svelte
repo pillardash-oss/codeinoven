@@ -34,6 +34,8 @@
   import AgentIcon from '$lib/agent-icons/AgentIcon.svelte'
   import { getAgentIcon } from '$lib/agent-icons/registry'
   import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
+  import RecordingIndicator from '$lib/components/speech/RecordingIndicator.svelte'
+  import { speechController } from '$lib/speech/speech-controller.svelte'
   import { providerCatalog } from '$lib/stores/provider-catalog.svelte'
   import {
     coordinatorHasActiveDelegates,
@@ -367,6 +369,7 @@
   let isBusyIndicator = $derived(
     isWorking || isRetryPaused || (Boolean(thread.sessionId) && isThreadBusy(thread) && !isDraft)
   )
+  let isRecording = $derived(speechController.isRecordingThread(thread.id))
 
   /**
    * Sending clears the draft, which would otherwise flash the badge back to the
@@ -671,9 +674,13 @@
         {displayTitle}
       </span>
       {#if !showBottomRow}
-        <span class="whitespace-nowrap text-[10px] text-dimmed">
-          {relativeTime(thread.createdAt)}
-        </span>
+        {#if isRecording}
+          <RecordingIndicator label="Listening" />
+        {:else}
+          <span class="whitespace-nowrap text-[10px] text-dimmed">
+            {relativeTime(thread.createdAt)}
+          </span>
+        {/if}
       {:else if currentModelProviderName}
         <span class="flex shrink-0 items-center" title={thread.settings?.modelId ?? 'Model'}>
           <VendorIcon name={currentModelProviderName} size={13} />
@@ -723,9 +730,13 @@
               <StickyNote size={11} />
             </span>
           {/if}
-          <span class="whitespace-nowrap text-[10px] text-dimmed">
-            {relativeTime(thread.createdAt)}
-          </span>
+          {#if isRecording}
+            <RecordingIndicator label="Listening" />
+          {:else}
+            <span class="whitespace-nowrap text-[10px] text-dimmed">
+              {relativeTime(thread.createdAt)}
+            </span>
+          {/if}
         </span>
       </span>
     {/if}
@@ -859,14 +870,18 @@
 
       <!-- Single-line default: time rides on the top line -->
       {#if !showBottomRow}
-        <span
-          class="whitespace-nowrap text-[10px] text-dimmed transition-opacity duration-150 {hovered
-            ? 'opacity-0'
-            : 'opacity-100'}"
-          aria-hidden={hovered}
-        >
-          {relativeTime(thread.createdAt)}
-        </span>
+        {#if isRecording}
+          <RecordingIndicator label="Listening" />
+        {:else}
+          <span
+            class="whitespace-nowrap text-[10px] text-dimmed transition-opacity duration-150 {hovered
+              ? 'opacity-0'
+              : 'opacity-100'}"
+            aria-hidden={hovered}
+          >
+            {relativeTime(thread.createdAt)}
+          </span>
+        {/if}
       {:else}
         <!-- Current working / last worked model — provider icon alone -->
         {#if currentModelProviderName}
@@ -930,14 +945,18 @@
               <StickyNote size={11} />
             </span>
           {/if}
-          <span
-            class="whitespace-nowrap text-[10px] text-dimmed transition-opacity duration-150 {hovered
-              ? 'opacity-0'
-              : 'opacity-100'}"
-            aria-hidden={hovered}
-          >
-            {relativeTime(thread.createdAt)}
-          </span>
+          {#if isRecording}
+            <RecordingIndicator label="Listening" />
+          {:else}
+            <span
+              class="whitespace-nowrap text-[10px] text-dimmed transition-opacity duration-150 {hovered
+                ? 'opacity-0'
+                : 'opacity-100'}"
+              aria-hidden={hovered}
+            >
+              {relativeTime(thread.createdAt)}
+            </span>
+          {/if}
         </span>
       </span>
     {/if}

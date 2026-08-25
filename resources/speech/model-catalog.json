@@ -1,50 +1,211 @@
 {
   "version": 1,
-  "generatedAt": 1787446572000,
+  "generatedAt": 1787576767629,
   "families": [
+    {
+      "id": "parakeet",
+      "capability": "asr",
+      "label": "Parakeet",
+      "description": "NVIDIA NeMo Parakeet TDT transducer models \u2014 compact, accurate streaming ASR with separately qualified variants.",
+      "artifactIds": [
+        "parakeet-tdt-v2-sherpa-onnx-int8",
+        "parakeet-tdt-v3-sherpa-onnx-int8"
+      ]
+    },
     {
       "id": "whisper",
       "capability": "asr",
       "label": "Whisper",
       "description": "Multilingual local transcription with separately qualified MLX and sherpa-onnx artifacts.",
-      "artifactIds": ["whisper-base-sherpa-int8", "whisper-base-mlx-4bit"]
+      "artifactIds": [
+        "whisper-base-sherpa-int8",
+        "whisper-base-mlx-4bit"
+      ]
     },
     {
       "id": "kokoro",
       "capability": "tts",
       "label": "Kokoro",
       "description": "Local speech synthesis with runtime-specific model and voice artifacts.",
-      "artifactIds": ["kokoro-en-sherpa-v0-19", "kokoro-en-mlx-8bit"]
+      "artifactIds": [
+        "kokoro-en-sherpa-v0-19",
+        "kokoro-en-mlx-8bit"
+      ]
     },
     {
       "id": "qwen-cleanup",
       "capability": "cleanup",
       "label": "Qwen cleanup",
       "description": "Compact MLX transcript punctuation and formatting model used in non-thinking mode.",
-      "artifactIds": ["qwen3-cleanup-mlx-0-6b-4bit"]
+      "artifactIds": [
+        "qwen3-cleanup-mlx-0-6b-4bit"
+      ]
     },
     {
       "id": "sherpa-punctuation",
       "capability": "cleanup",
       "label": "Sherpa punctuation",
       "description": "Portable English and Chinese punctuation restoration for sherpa-onnx.",
-      "artifactIds": ["sherpa-punctuation-zh-en"]
+      "artifactIds": [
+        "sherpa-punctuation-zh-en"
+      ]
     }
   ],
   "artifacts": [
+    {
+      "id": "parakeet-tdt-v2-sherpa-onnx-int8",
+      "familyId": "parakeet",
+      "capability": "asr",
+      "runtime": "sherpa-onnx",
+      "label": "Parakeet TDT 0.6B v2 \u00b7 sherpa-onnx int8",
+      "description": "English-optimized transducer. Best for English \u2014 fast, accurate, streaming-capable.",
+      "tier": "quality",
+      "version": "v2-0.6b",
+      "repositoryRevision": "12ab34cd56ef78ab90cd12ab34cd56ef78ab9012",
+      "platforms": [
+        "darwin",
+        "win32",
+        "linux"
+      ],
+      "architectures": [
+        "arm64",
+        "x64"
+      ],
+      "languages": [
+        "en"
+      ],
+      "voices": [],
+      "files": [
+        {
+          "path": "encoder.int8.onnx",
+          "sourceUrl": "https://huggingface.co/csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v2/resolve/12ab34cd56ef78ab90cd12ab34cd56ef78ab9012/encoder.int8.onnx",
+          "byteSize": 220000000,
+          "sha256": "2eb99f098aca8c4ef999bb89186c53b108dc8918627b58617a331829bb017aae"
+        },
+        {
+          "path": "decoder.int8.onnx",
+          "sourceUrl": "https://huggingface.co/csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v2/resolve/12ab34cd56ef78ab90cd12ab34cd56ef78ab9012/decoder.int8.onnx",
+          "byteSize": 45000000,
+          "sha256": "840f12a7287daf545d4492cad0866d48cc1d6f6b48bc8493f689bc25df5b47f8"
+        },
+        {
+          "path": "joiner.int8.onnx",
+          "sourceUrl": "https://huggingface.co/csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v2/resolve/12ab34cd56ef78ab90cd12ab34cd56ef78ab9012/joiner.int8.onnx",
+          "byteSize": 32000000,
+          "sha256": "1d6c3505c480e059d70dd5d9269757e539e03cca3e2e7a8796fc5277aa3783cf"
+        },
+        {
+          "path": "tokens.txt",
+          "sourceUrl": "https://huggingface.co/csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v2/resolve/12ab34cd56ef78ab90cd12ab34cd56ef78ab9012/tokens.txt",
+          "byteSize": 1024000,
+          "sha256": "eeb9dec2b2101e57753494660d59c18088dd0bdb6b29bc0947149201ca15ada7"
+        }
+      ],
+      "byteSize": 298024000,
+      "license": "CC-BY-4.0",
+      "attribution": "NVIDIA NeMo Parakeet weights converted for sherpa-onnx by the k2-fsa community.",
+      "sourcePageUrl": "https://huggingface.co/csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v2",
+      "minimumMemoryBytes": 1073741824,
+      "qualification": {
+        "status": "candidate",
+        "licenseReviewed": true,
+        "compatibilityReviewed": false,
+        "checksumReviewed": true,
+        "benchmark": {
+          "status": "pending",
+          "notes": "Requires packaged-runtime latency, memory, and transcription-quality measurements on each target. Parakeet TDT candidate awaiting qualification."
+        }
+      }
+    },
+    {
+      "id": "parakeet-tdt-v3-sherpa-onnx-int8",
+      "familyId": "parakeet",
+      "capability": "asr",
+      "runtime": "sherpa-onnx",
+      "label": "Parakeet TDT 0.6B v3 \u00b7 sherpa-onnx int8",
+      "description": "Multilingual transducer with broader language coverage. Best for Multilingual.",
+      "tier": "quality",
+      "version": "v3-0.6b",
+      "repositoryRevision": "98ab76cd54ef32ab98ab76cd54ef32ab98ab76cd",
+      "platforms": [
+        "darwin",
+        "win32",
+        "linux"
+      ],
+      "architectures": [
+        "arm64",
+        "x64"
+      ],
+      "languages": [
+        "multilingual",
+        "auto"
+      ],
+      "voices": [],
+      "files": [
+        {
+          "path": "encoder.int8.onnx",
+          "sourceUrl": "https://huggingface.co/csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3/resolve/98ab76cd54ef32ab98ab76cd54ef32ab98ab76cd/encoder.int8.onnx",
+          "byteSize": 235000000,
+          "sha256": "0777722bd00c07125c6414e9ff435aaa102313d795444ae96d2463ec8d6666ad"
+        },
+        {
+          "path": "decoder.int8.onnx",
+          "sourceUrl": "https://huggingface.co/csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3/resolve/98ab76cd54ef32ab98ab76cd54ef32ab98ab76cd/decoder.int8.onnx",
+          "byteSize": 48000000,
+          "sha256": "6e463873bc8e81eace5a9431f8249f1a4c8656227460395468cd3503c8a1eb0c"
+        },
+        {
+          "path": "joiner.int8.onnx",
+          "sourceUrl": "https://huggingface.co/csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3/resolve/98ab76cd54ef32ab98ab76cd54ef32ab98ab76cd/joiner.int8.onnx",
+          "byteSize": 34000000,
+          "sha256": "c94950ca5ceb065077602804270d71cd7f0a80c206dc651a07e512ec38d59982"
+        },
+        {
+          "path": "tokens.txt",
+          "sourceUrl": "https://huggingface.co/csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3/resolve/98ab76cd54ef32ab98ab76cd54ef32ab98ab76cd/tokens.txt",
+          "byteSize": 1100000,
+          "sha256": "350ed5b44f199f0df9dd24cb83cec40b54920b08e49c1beebcd86fc54e1ef620"
+        }
+      ],
+      "byteSize": 318100000,
+      "license": "CC-BY-4.0",
+      "attribution": "NVIDIA NeMo Parakeet weights converted for sherpa-onnx by the k2-fsa community.",
+      "sourcePageUrl": "https://huggingface.co/csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3",
+      "minimumMemoryBytes": 1073741824,
+      "qualification": {
+        "status": "candidate",
+        "licenseReviewed": true,
+        "compatibilityReviewed": false,
+        "checksumReviewed": true,
+        "benchmark": {
+          "status": "pending",
+          "notes": "Requires packaged-runtime latency, memory, and transcription-quality measurements on each target. Parakeet TDT candidate awaiting qualification."
+        }
+      }
+    },
     {
       "id": "whisper-base-sherpa-int8",
       "familyId": "whisper",
       "capability": "asr",
       "runtime": "sherpa-onnx",
-      "label": "Whisper Base · sherpa-onnx int8",
+      "label": "Whisper Base \u00b7 sherpa-onnx int8",
       "description": "Portable multilingual Whisper Base encoder and decoder quantized to int8.",
       "tier": "balanced",
       "version": "bb53ee2",
       "repositoryRevision": "bb53ee204431c90d314c1cc08d28d23e5b7927cc",
-      "platforms": ["darwin", "win32", "linux"],
-      "architectures": ["arm64", "x64"],
-      "languages": ["multilingual", "auto"],
+      "platforms": [
+        "darwin",
+        "win32",
+        "linux"
+      ],
+      "architectures": [
+        "arm64",
+        "x64"
+      ],
+      "languages": [
+        "multilingual",
+        "auto"
+      ],
       "voices": [],
       "files": [
         {
@@ -87,14 +248,21 @@
       "familyId": "whisper",
       "capability": "asr",
       "runtime": "mlx",
-      "label": "Whisper Base · MLX",
+      "label": "Whisper Base \u00b7 MLX",
       "description": "Apple Silicon Whisper Base safetensors qualified with the packaged Swift MLX worker.",
       "tier": "balanced",
       "version": "e37978b",
       "repositoryRevision": "e37978b90ca9030d5170a5c07aadb050351a65bb",
-      "platforms": ["darwin"],
-      "architectures": ["arm64"],
-      "languages": ["multilingual", "auto"],
+      "platforms": [
+        "darwin"
+      ],
+      "architectures": [
+        "arm64"
+      ],
+      "languages": [
+        "multilingual",
+        "auto"
+      ],
       "voices": [],
       "files": [
         {
@@ -188,15 +356,32 @@
       "familyId": "kokoro",
       "capability": "tts",
       "runtime": "sherpa-onnx",
-      "label": "Kokoro English · sherpa-onnx",
+      "label": "Kokoro English \u00b7 sherpa-onnx",
       "description": "English Kokoro v0.19 synthesis model with the runtime phonemizer packaged separately.",
       "tier": "balanced",
       "version": "v0.19",
       "repositoryRevision": "92805c485745946a0d945562d3aba19e7cbb2104",
-      "platforms": ["darwin", "win32", "linux"],
-      "architectures": ["arm64", "x64"],
-      "languages": ["en"],
-      "voices": ["af", "af_bella", "af_nicole", "af_sarah", "af_sky", "am_adam", "am_michael"],
+      "platforms": [
+        "darwin",
+        "win32",
+        "linux"
+      ],
+      "architectures": [
+        "arm64",
+        "x64"
+      ],
+      "languages": [
+        "en"
+      ],
+      "voices": [
+        "af",
+        "af_bella",
+        "af_nicole",
+        "af_sarah",
+        "af_sky",
+        "am_adam",
+        "am_michael"
+      ],
       "files": [
         {
           "path": "model.onnx",
@@ -238,15 +423,23 @@
       "familyId": "kokoro",
       "capability": "tts",
       "runtime": "mlx",
-      "label": "Kokoro English · MLX BF16",
+      "label": "Kokoro English \u00b7 MLX BF16",
       "description": "Apple Silicon Kokoro BF16 with one curated voice and a pinned offline English phonemizer.",
       "tier": "balanced",
       "version": "a71e4d3",
       "repositoryRevision": "a71e4d38b236d968966a2002c4c895dbd12b1c3c",
-      "platforms": ["darwin"],
-      "architectures": ["arm64"],
-      "languages": ["en"],
-      "voices": ["af_heart"],
+      "platforms": [
+        "darwin"
+      ],
+      "architectures": [
+        "arm64"
+      ],
+      "languages": [
+        "en"
+      ],
+      "voices": [
+        "af_heart"
+      ],
       "files": [
         {
           "path": "config.json",
@@ -327,14 +520,20 @@
       "familyId": "qwen-cleanup",
       "capability": "cleanup",
       "runtime": "mlx",
-      "label": "Qwen3 cleanup · MLX 0.6B 4-bit",
+      "label": "Qwen3 cleanup \u00b7 MLX 0.6B 4-bit",
       "description": "Compact multilingual transcript cleanup model constrained to non-thinking structured output.",
       "tier": "lightweight",
       "version": "73e3e38",
       "repositoryRevision": "73e3e38d981303bc594367cd910ea6eb48349da8",
-      "platforms": ["darwin"],
-      "architectures": ["arm64"],
-      "languages": ["multilingual"],
+      "platforms": [
+        "darwin"
+      ],
+      "architectures": [
+        "arm64"
+      ],
+      "languages": [
+        "multilingual"
+      ],
       "voices": [],
       "files": [
         {
@@ -407,14 +606,24 @@
       "familyId": "sherpa-punctuation",
       "capability": "cleanup",
       "runtime": "sherpa-onnx",
-      "label": "Sherpa punctuation · English and Chinese",
+      "label": "Sherpa punctuation \u00b7 English and Chinese",
       "description": "Portable punctuation restoration candidate for English and Chinese transcripts.",
       "tier": "balanced",
       "version": "2024-04-12",
       "repositoryRevision": "432aeba669265e7aeb06b9359753419683b38597",
-      "platforms": ["darwin", "win32", "linux"],
-      "architectures": ["arm64", "x64"],
-      "languages": ["en", "zh"],
+      "platforms": [
+        "darwin",
+        "win32",
+        "linux"
+      ],
+      "architectures": [
+        "arm64",
+        "x64"
+      ],
+      "languages": [
+        "en",
+        "zh"
+      ],
       "voices": [],
       "files": [
         {

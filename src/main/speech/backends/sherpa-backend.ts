@@ -34,7 +34,8 @@ export class SherpaSpeechBackend implements SpeechBackend {
         kind: 'transcribe',
         modelDirectory: input.artifact.directory,
         audioPath: input.audioPath,
-        language: input.language
+        language: input.language,
+        ...(input.artifact.modelFamily ? { modelFamily: input.artifact.modelFamily } : {})
       },
       signal
     )

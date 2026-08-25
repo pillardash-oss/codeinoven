@@ -1,6 +1,7 @@
 <script lang="ts">
   import { X, Download } from '@lucide/svelte'
   import { isVideoMime, isAudioMime } from '$lib/mime'
+  import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
 
   interface Props {
     src: string
@@ -12,6 +13,11 @@
   }
 
   let { src, filename, mime, onClose, onLoadError }: Props = $props()
+
+  $effect(() => {
+    contextSidebarState.setFullscreenSurfaceActive('media-preview', true)
+    return () => contextSidebarState.setFullscreenSurfaceActive('media-preview', false)
+  })
 
   const kind = $derived(isVideoMime(mime) ? 'video' : isAudioMime(mime) ? 'audio' : 'image')
 

@@ -87,6 +87,25 @@ export function validateEngineeringLifecycleSelection(
   return assertEnum(value, ENGINEERING_LIFECYCLE_SELECTIONS, 'engineering lifecycle selection')
 }
 
+export function validateEngineeringLifecycleSelectionInput(value: unknown): {
+  stages: EngineeringLifecycleStage[]
+  autopilot: boolean
+} {
+  if (typeof value !== 'object' || value === null) {
+    throw new TypeError('Engineering lifecycle selection must be an object')
+  }
+  const record = value as Record<string, unknown>
+  const rawStages = record.stages
+  const stages = Array.isArray(rawStages)
+    ? rawStages
+        .map((stage) => validateEngineeringLifecycleStage(stage))
+        .filter(
+          (stage, index, all): stage is EngineeringLifecycleStage => all.indexOf(stage) === index
+        )
+    : []
+  return { stages, autopilot: record.autopilot === true }
+}
+
 export function validateEngineeringLifecycleDecision(value: unknown): EngineeringLifecycleDecision {
   return assertEnum(value, ENGINEERING_LIFECYCLE_DECISIONS, 'engineering lifecycle decision')
 }
@@ -134,6 +153,7 @@ const CREATE_PROJECT_FIELDS = new Set([
   'changeTrackingMode'
 ])
 const CREATE_THREAD_FIELDS = new Set([
+  'id',
   'projectId',
   'providerId',
   'title',
@@ -1094,6 +1114,7 @@ export function validateCreateThreadInput(value: unknown): CreateThreadInput {
   rejectUnknownFields(input, CREATE_THREAD_FIELDS, 'create thread')
 
   const sanitized: CreateThreadInput = {
+    ...(input.id !== undefined ? { id: validateEntityId(input.id, 'Thread ID') } : {}),
     projectId: validateEntityId(input.projectId, 'Project ID'),
     providerId: validateEntityId(input.providerId, 'Provider ID'),
     title: validateBoundedString(input.title, 'Thread title', 1, 240)

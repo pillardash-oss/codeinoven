@@ -477,6 +477,8 @@ CREATE TABLE IF NOT EXISTS engineering_lifecycle (
   thread_id                   TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
   selection                   TEXT NOT NULL DEFAULT 'none'
     CHECK(selection IN ('none','brainstorm','prd','spec','assignment','achievement','run_all')),
+  selected_stages_json        TEXT NOT NULL DEFAULT '[]',
+  autopilot                   INTEGER NOT NULL DEFAULT 0,
   active_stage                TEXT
     CHECK(active_stage IS NULL OR active_stage IN ('brainstorm','prd','spec','assignment','achievement')),
   completed_stages_json       TEXT NOT NULL DEFAULT '[]',

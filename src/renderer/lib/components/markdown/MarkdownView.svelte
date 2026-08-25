@@ -12,6 +12,17 @@
   import { faviconState } from '$lib/stores/favicons.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
 
+  interface InlineFileTag {
+    /** The exact `@path` token in the source text to replace with the chip. */
+    token: string
+    /**
+     * Trusted, self-contained HTML for the inline tag chip. This is built by
+     * the caller from validated project references (never from user-authored
+     * markup) and is injected after sanitization, so it bypasses DOMPurify.
+     */
+    html: string
+  }
+
   interface Props {
     /** Markdown source — may be an incomplete, still-streaming message. */
     text: string
@@ -23,6 +34,12 @@
      * Sanitizing still strips scripts, frames, styles, and form controls.
      */
     allowHtml?: boolean
+    /**
+     * Replace exact `@path` tokens in the source with trusted inline chips.
+     * Used for user messages that tag project files/directories so a long
+     * project-relative path renders as a compact tag instead of raw text.
+     */
+    inlineFileTags?: ReadonlyArray<InlineFileTag>
     /** Fired when a file citation is clicked. */
     onCiteFile?: (path: string, line?: number) => void
     /** Fired when an explicit local file URL is clicked. */
@@ -35,12 +52,47 @@
     text,
     class: className = '',
     allowHtml = false,
+    inlineFileTags = [],
     onCiteFile,
     onOpenLocalFile,
     onAnnotateMermaid
   }: Props = $props()
 
-  const tokens = $derived(lexMarkdown(text, allowHtml))
+  /**
+   * Substitute each reference token with a private-use placeholder before
+   * lexing so the markdown pipeline treats the token as opaque text. The
+   * placeholder is then swapped for the trusted chip HTML after DOMPurify has
+   * sanitized the block, keeping user-authored markup escaped the whole way.
+   */
+  const tagSubstitutions = $derived.by(() => {
+    const tags = inlineFileTags
+      .filter((tag) => tag.token.length > 0)
+      .slice()
+      .sort((left, right) => right.token.length - left.token.length)
+    if (tags.length === 0) return { prepared: text, substitutions: new Map<string, string>() }
+    let prepared = text
+    const substitutions = new Map<string, string>() // eslint-disable-line svelte/prefer-svelte-reactivity
+    for (const [index, tag] of tags.entries()) {
+      if (!prepared.includes(tag.token)) continue
+      const placeholder = `\uE7F0${index}\uE7F1`
+      prepared = prepared.split(tag.token).join(placeholder)
+      substitutions.set(placeholder, tag.html)
+    }
+    return { prepared, substitutions }
+  })
+
+  const tokens = $derived(lexMarkdown(tagSubstitutions.prepared, allowHtml))
+
+  function renderBlockHtml(token: Token): string {
+    const html = blockHtml(token, allowHtml)
+    const { substitutions } = tagSubstitutions
+    if (substitutions.size === 0) return html
+    let result = html
+    for (const [placeholder, chip] of substitutions) {
+      result = result.replaceAll(placeholder, chip)
+    }
+    return result
+  }
   let tooltip = $state<{ text: string; x: number; y: number } | null>(null)
   let tooltipTimer: ReturnType<typeof setTimeout> | null = null
   let tooltipLink: HTMLAnchorElement | null = null
@@ -231,7 +283,7 @@
       </blockquote>
     {:else if token.type !== 'space'}
       <!-- eslint-disable-next-line svelte/no-at-html-tags -- blockHtml is DOMPurify-sanitized -->
-      {@html blockHtml(token, allowHtml)}
+      {@html renderBlockHtml(token)}
     {/if}
   {/each}
 {/snippet}

@@ -42,11 +42,20 @@ export {
   settingsSectionForView,
   settingsViewForSection
 } from './renderer-recovery'
+
+/** How long to wait after the last mutation before writing recovery state to
+ *  storage. Long enough that bursts of mutations (draft typing, model toggles)
+ *  collapse into a single write, short enough that state is durable on a quick
+ *  navigation/quit (the flush-on-hide path writes immediately regardless). */
+const PERSIST_DEBOUNCE_MS = 400
+
 /**
  * Restart-safe renderer navigation and composer state.
  *
- * Mutations persist synchronously and tolerate blocked/quota-limited storage.
- * Consumers should restore IDs against main-process data before selecting them.
+ * Mutations update in-memory state immediately and persist to storage on a
+ * trailing debounce (with a flush on window hide/shutdown), tolerating
+ * blocked/quota-limited storage. Consumers should restore IDs against
+ * main-process data before selecting them.
  */
 export class RendererRecoveryStore {
   activeView = $state<MainView>('projects')
@@ -63,6 +72,11 @@ export class RendererRecoveryStore {
   private composerDrafts = $state<Record<string, ComposerDraftEntry>>({})
   private queuedMessages = $state<Record<string, QueuedMessageEntry>>({})
 
+  /** Trailing debounce so rapid mutations (e.g. typing a draft) coalesce into
+   *  one disk write instead of serializing the whole snapshot on every keystroke.
+   *  In-memory state stays instant-reactive; only the localStorage write lags. */
+  private persistTimer: ReturnType<typeof setTimeout> | undefined = undefined
+
   constructor(private readonly storage: RecoveryStorage | undefined = browserRecoveryStorage()) {
     const saved = loadRendererRecoveryState(this.storage)
     this.activeView = saved.activeView
@@ -78,6 +92,17 @@ export class RendererRecoveryStore {
     this.auditModelKey = saved.auditModelKey
     this.composerDrafts = saved.composerDrafts
     this.queuedMessages = saved.queuedMessages
+
+    // Flush any pending write when the page is hidden or torn down so a quit or
+    // backgrounding never loses the latest recovery state.
+    if (typeof window !== 'undefined') {
+      const flush = (): void => this.flushPersist()
+      window.addEventListener('pagehide', flush)
+      window.addEventListener('beforeunload', flush)
+      document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'hidden') flush()
+      })
+    }
   }
 
   private entryFor(projectId: string, threadId: string): ComposerDraftEntry {
@@ -543,6 +568,19 @@ export class RendererRecoveryStore {
   }
 
   private persist(): void {
+    if (this.persistTimer !== undefined) clearTimeout(this.persistTimer)
+    this.persistTimer = setTimeout(() => {
+      this.persistTimer = undefined
+      persistRendererRecoveryState(this.storage, this.snapshot())
+    }, PERSIST_DEBOUNCE_MS)
+  }
+
+  /** Write any pending state immediately (used on window hide/shutdown). */
+  flushPersist(): void {
+    if (this.persistTimer !== undefined) {
+      clearTimeout(this.persistTimer)
+      this.persistTimer = undefined
+    }
     persistRendererRecoveryState(this.storage, this.snapshot())
   }
 }

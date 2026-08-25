@@ -266,7 +266,7 @@
         ...new Map(
           entries.filter((entry) => entry.enabled).map((entry) => [entry.id, entry])
         ).values()
-      ]
+      ].sort((a, b) => b.updatedAt - a.updatedAt)
     } catch (loadError) {
       memoryError =
         loadError instanceof Error ? loadError.message : 'Active memory could not be loaded.'

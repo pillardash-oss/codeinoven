@@ -65,7 +65,7 @@
   import ModelPicker from '../shared/ModelPicker.svelte'
   import { filterActions } from '$lib/actions'
   import { APP_NAME } from '$shared/brand'
-  import { publicAssetUrl } from '$lib/static-assets'
+  import { getVendorIconDataUri } from '$lib/vendor-icons/registry'
   import { isRemotePwaRuntime } from '$lib/runtime-context'
   import type { ActionDefinition, ActionSelection, ActionSource } from '$lib/actions'
   import type { RichInlineBadge } from '../shared/rich-markdown'
@@ -88,14 +88,14 @@
     AttachmentStorageScope,
     UsageEfficiencyKpis,
     Thread,
-    EngineeringLifecycleSelection,
+    EngineeringLifecycleSelectionInput,
     EngineeringLifecycleState
   } from '$shared/types'
 
   type StartAfterSelection = Pick<Thread, 'id' | 'title'>
   const MAX_PROMPT_CHARACTERS = 200_000
   const LONG_PASTE_ATTACHMENT_CHARACTERS = 100_000
-  const codeInOvenIconUrl = publicAssetUrl('macos/AppIcon64.png')
+  const codeInOvenIconUrl = getVendorIconDataUri(APP_NAME)
 
   interface Props {
     /** Called with the trimmed message and attachments when the user sends.
@@ -174,7 +174,7 @@
     showEngineeringMode?: boolean
     engineeringLifecycle?: EngineeringLifecycleState | null
     onEngineeringLifecycleSelect?: (
-      selection: EngineeringLifecycleSelection
+      input: EngineeringLifecycleSelectionInput
     ) => void | Promise<void>
     onEngineeringLifecycleRetry?: () => void | Promise<void>
     /** True on the Chats tab — surfaces the chat-only Engineering and File System toggles. */
@@ -748,6 +748,9 @@
 
   /** Whether the button should show the stop icon (agent working, nothing to send). */
   let canStop = $derived(working && !hasSendableContent)
+
+  /** The mic stays mounted; only the send/stop control follows composer state. */
+  let showSendControl = $derived(!disabled && (working || hasSendableContent))
 
   // Cancel pending stop when the agent stops working on its own.
   $effect(() => {
@@ -1589,7 +1592,7 @@
         historyIndex = -1
         savedValue = ''
       }
-      if (e.key === 'ArrowUp' && (value === '' || historyIndex >= 0)) {
+      if (e.key === 'ArrowUp' && !e.shiftKey && (value === '' || historyIndex >= 0)) {
         const history = historyMessages
         if (history.length > 0) {
           e.preventDefault()
@@ -1604,7 +1607,7 @@
           return
         }
       }
-      if (e.key === 'ArrowDown' && historyIndex >= 0) {
+      if (e.key === 'ArrowDown' && !e.shiftKey && historyIndex >= 0) {
         e.preventDefault()
         const history = historyMessages
         if (historyIndex >= history.length - 1) {
@@ -2222,6 +2225,7 @@
       <EngineeringToolbox
         bind:this={engineeringToolbox}
         lifecycleState={engineeringLifecycle}
+        active={resolved.engineeringMode === true}
         disabled={readOnlyMode}
         onselect={onEngineeringLifecycleSelect}
         onretry={onEngineeringLifecycleRetry}
@@ -2397,6 +2401,8 @@
       />
     {/if}
 
+    <!-- Keep the mic mounted in one stable slot so recording state never resets
+         when the composer gains text and the send control appears. -->
     <VoiceInputButton
       targetId={composerEditorId}
       getTarget={composerSpeechTarget}
@@ -2404,48 +2410,50 @@
       {disabled}
     />
 
-    <!-- Send / Queue / Stop button.
-         - Agent idle:       ArrowUp (send) — primary, disabled when empty
-         - Agent working, user typing:  Clock (queue) — primary, always clickable
-         - Agent working, no text:      Square (stop) — danger tint
-         - Stop confirmation pending:   "Stop?" danger label -->
-    <button
-      type="button"
-      class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg transition-colors {pendingStop
-        ? 'bg-danger text-on-danger hover:bg-danger-hover'
-        : canStop
-          ? 'bg-danger/10 text-danger hover:bg-danger/20'
-          : 'bg-primary text-on-primary hover:bg-primary-hover'}"
-      aria-label={pendingStop
-        ? 'Confirm stop'
-        : canStop
-          ? 'Stop agent'
-          : working
-            ? 'Queue message'
-            : 'Send message'}
-      title={pendingStop
-        ? 'Click again to stop — Esc to cancel'
-        : canStop
-          ? 'Stop the running agent'
-          : working
-            ? `Queue — ${sendModifierLabel}Enter · Steer — ${sendModifierLabel}⇧Enter`
-            : `Send — ${sendModifierLabel}Enter`}
-      disabled={disabled || (!working && !hasSendableContent)}
-      onclick={() => submit()}
-    >
-      {#if pendingStop}
-        <span class="pending-stop-label text-[9px] font-semibold">Stop?</span>
-        <span class="pending-stop-icon">
+    {#if showSendControl}
+      <!-- Send / Queue / Stop button.
+           - Agent idle:       ArrowUp (send) — primary, disabled when empty
+           - Agent working, user typing:  Clock (queue) — primary, always clickable
+           - Agent working, no text:      Square (stop) — danger tint
+           - Stop confirmation pending:   "Stop?" danger label -->
+      <button
+        type="button"
+        class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg transition-colors {pendingStop
+          ? 'bg-danger text-on-danger hover:bg-danger-hover'
+          : canStop
+            ? 'bg-danger/10 text-danger hover:bg-danger/20'
+            : 'bg-primary text-on-primary hover:bg-primary-hover'}"
+        aria-label={pendingStop
+          ? 'Confirm stop'
+          : canStop
+            ? 'Stop agent'
+            : working
+              ? 'Queue message'
+              : 'Send message'}
+        title={pendingStop
+          ? 'Click again to stop — Esc to cancel'
+          : canStop
+            ? 'Stop the running agent'
+            : working
+              ? `Queue — ${sendModifierLabel}Enter · Steer — ${sendModifierLabel}⇧Enter`
+              : `Send — ${sendModifierLabel}Enter`}
+        disabled={disabled || (!working && !hasSendableContent)}
+        onclick={() => submit()}
+      >
+        {#if pendingStop}
+          <span class="pending-stop-label text-[9px] font-semibold">Stop?</span>
+          <span class="pending-stop-icon">
+            <Square size={14} />
+          </span>
+        {:else if canStop}
           <Square size={14} />
-        </span>
-      {:else if canStop}
-        <Square size={14} />
-      {:else if working}
-        <Clock size={15} />
-      {:else}
-        <ArrowUp size={16} />
-      {/if}
-    </button>
+        {:else if working}
+          <Clock size={15} />
+        {:else}
+          <ArrowUp size={16} />
+        {/if}
+      </button>
+    {/if}
   </div>
 </div>
 

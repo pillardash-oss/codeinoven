@@ -26,6 +26,9 @@
     Bug,
     Cloud,
     Cookie,
+    CircleStop,
+    Download,
+    FileDown,
     FileDiff,
     FolderTree,
     Globe2,
@@ -33,6 +36,8 @@
     Info,
     Minimize2,
     MessageCircleDashed,
+    Pause,
+    Play,
     ShieldQuestion,
     SquareTerminal,
     StickyNote
@@ -64,6 +69,7 @@
   import NotificationPanel from '../notifications/NotificationPanel.svelte'
   import MemoryPanel from '../memory/MemoryPanel.svelte'
   import Modal from '../ui/Modal.svelte'
+  import StatusPill from '../ui/StatusPill.svelte'
   import Switch from '../ui/Switch.svelte'
   import AppearancePicker from '../shared/AppearancePicker.svelte'
   import ScopeBadge from '../shared/ScopeBadge.svelte'
@@ -87,6 +93,7 @@
     chatEffectiveSettings
   } from '$lib/stores/thread-settings.svelte'
   import {
+    inheritEngineeringLifecycle,
     persistInheritedThreadSettings,
     settingsForNewThread,
     threadWithInheritedSettings
@@ -139,7 +146,7 @@
     Thread,
     ThreadSearchResult
   } from '$shared/types'
-  import type { BrowserPermissionRequest } from '$shared/ipc-contract'
+  import type { BrowserDownload, BrowserPermissionRequest } from '$shared/ipc-contract'
 
   interface Props {
     /** Which sidebar the shell shows — the main content stays mounted across modes. */
@@ -871,6 +878,94 @@
     })
   }
 
+  let browserDownloads = $state<BrowserDownload[]>([])
+  let showBrowserDownloads = $state(false)
+
+  const activeDownloadCount = $derived(
+    selectedThread
+      ? browserDownloads.filter((download) => download.projectId === selectedThread.projectId)
+          .length
+      : 0
+  )
+
+  function upsertBrowserDownload(next: BrowserDownload): void {
+    const index = browserDownloads.findIndex((candidate) => candidate.id === next.id)
+    if (index >= 0) {
+      browserDownloads[index] = next
+      return
+    }
+    browserDownloads = [...browserDownloads, next]
+  }
+
+  function openBrowserDownloads(): void {
+    showBrowserMenu = false
+    showBrowserDownloads = true
+    if (!selectedThread) return
+    void invoke('browser:getDownloads', selectedThread.projectId)
+      .then((downloads) => {
+        browserDownloads = downloads
+      })
+      .catch((error: unknown) => {
+        reportError(error, 'Browser downloads could not be loaded.')
+      })
+  }
+
+  function pauseBrowserDownload(download: BrowserDownload): void {
+    void invoke('browser:pauseDownload', download.id).catch(() => {})
+  }
+
+  function resumeBrowserDownload(download: BrowserDownload): void {
+    void invoke('browser:resumeDownload', download.id).catch(() => {})
+  }
+
+  function cancelBrowserDownload(download: BrowserDownload): void {
+    void invoke('browser:cancelDownload', download.id).catch(() => {})
+  }
+
+  function openBrowserDownload(download: BrowserDownload): void {
+    void invoke('browser:openDownload', download.id).catch((error: unknown) => {
+      reportError(error, 'The downloaded file could not be opened.')
+    })
+  }
+
+  function revealBrowserDownload(download: BrowserDownload): void {
+    void invoke('browser:revealDownload', download.id).catch((error: unknown) => {
+      reportError(error, 'The downloaded file could not be revealed.')
+    })
+  }
+
+  function browserDownloadHost(url: string): string {
+    try {
+      return new URL(url).host
+    } catch {
+      return url
+    }
+  }
+
+  function browserDownloadBytes(bytes: number): string {
+    if (!Number.isFinite(bytes) || bytes < 0) return '0 B'
+    if (bytes < 1024) return `${bytes} B`
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+    if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+    return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`
+  }
+
+  function browserDownloadStateLabel(download: BrowserDownload): string {
+    if (download.state === 'completed') return 'Completed'
+    if (download.state === 'cancelled') return 'Cancelled'
+    if (download.state === 'interrupted') return 'Interrupted'
+    return download.paused ? 'Paused' : 'Downloading'
+  }
+
+  function browserDownloadTone(
+    download: BrowserDownload
+  ): 'success' | 'danger' | 'warning' | 'neutral' | 'info' {
+    if (download.state === 'completed') return 'success'
+    if (download.state === 'cancelled') return 'neutral'
+    if (download.state === 'interrupted') return 'danger'
+    return download.paused ? 'warning' : 'info'
+  }
+
   function jumpToHistoryMessage(id: string): void {
     showHistoryMenu = false
     workspaceState.jumpToMessage?.(id)
@@ -1045,6 +1140,7 @@
         label: dockKindActive('browser') ? `Hide ${name}` : `Show ${name}`,
         icon: Globe2,
         active: dockKindActive('browser'),
+        countBadge: activeDownloadCount > 0 ? String(activeDownloadCount) : undefined,
         menu: showBrowserMenu ? browserMenu : undefined,
         onSelect: () => {
           showBrowserMenu = false
@@ -1097,6 +1193,33 @@
   let browserFullscreenTabId = $state<string | null>(null)
   let sidebarVisible = $derived(contextSidebarState.sidebarVisible)
   let terminalDockVisible = $derived(contextSidebarState.terminalDockVisible)
+
+  /** True when the browser's native WebContentsView is on screen, either from
+   *  the right sidebar or the browser's own fullscreen dialog. The native
+   *  Ctrl+Tab overlay is only needed in this state; otherwise the DOM switcher
+   *  suffices (it already stacks above all non-native panels). */
+  const browserNativeVisible = $derived(
+    !contextSidebarState.fullscreenSuppression &&
+      (contextSidebarState.sidebarBrowserNativeVisible ||
+        (browserFullscreenTabId !== null &&
+          contextSidebarState.tabs.some(
+            (tab) =>
+              tab.id === browserFullscreenTabId && tab.kind === 'browser' && tab.surface === 'page'
+          )))
+  )
+
+  // A full-window DOM surface (fullscreen terminal, media previews, fullscreen
+  // file editors) covers the workspace. The browser's native view floats above
+  // every DOM surface, so it must be hidden while such a surface is open — the
+  // browser panel unmounts its native surface via its own visibility lifecycle
+  // when this flips true. The browser's own fullscreen dialog is not registered
+  // here so the browser stays visible when the user fullscreens it deliberately.
+  $effect(() => {
+    contextSidebarState.setFullscreenSurfaceActive(
+      'workspace-terminal-fullscreen',
+      terminalFullscreenTabId !== null
+    )
+  })
 
   // The grid column/row that hosts each panel collapses the instant
   // `sidebarVisible`/`terminalDockVisible` flips, but the panel itself keeps
@@ -1518,6 +1641,12 @@
     })
   })
 
+  $effect(() => {
+    return subscribe('browser:download', (download) => {
+      upsertBrowserDownload(download)
+    })
+  })
+
   /** The last (thread, draft-state) pair the draft→todo nudge ran for, so the
    *  effect below only fires when the draft state actually transitions — never
    *  clobbering a manual slice switch while a draft stays unchanged. */
@@ -1691,7 +1820,7 @@
       allThreads = uniqueThreads.filter((t) => !isOrchestrationChildThread(t))
       historyOffset = threadList.length
       hasMoreHistory = threadList.length === INITIAL_THREAD_LIMIT
-      notificationPanelState.hydrateFromThreads(uniqueThreads)
+      notificationPanelState.hydrateFromThreads(uniqueThreads, projectList)
       projectIcons.clear()
       for (const [projectId, iconUrl] of await loadProjectIcons(projectList)) {
         projectIcons.set(projectId, iconUrl)
@@ -1772,7 +1901,7 @@
       allThreads = uniqueThreads.filter((t) => !isOrchestrationChildThread(t))
       historyOffset = threadList.length
       hasMoreHistory = threadList.length === INITIAL_THREAD_LIMIT
-      notificationPanelState.hydrateFromThreads(uniqueThreads)
+      notificationPanelState.hydrateFromThreads(uniqueThreads, projectList)
       projectIcons.clear()
       for (const [projectId, iconUrl] of await loadProjectIcons(projectList)) {
         projectIcons.set(projectId, iconUrl)
@@ -2226,24 +2355,73 @@
       if (workspaceState.selectedThread?.id === existing.id) {
         workspaceState.requestFocusComposer()
       } else {
-        const thread = activeThread?.settings
-          ? await invoke(
-              'thread:updateSettings',
-              existing.projectId,
-              existing.id,
-              inheritedSettings
-            )
-          : existing
+        // Open instantly — settings/lifecycle sync is best-effort off the critical path
+        const needsSettingsUpdate = Boolean(activeThread?.settings)
+        const thread = existing
         upsertThreadInList(thread)
+        threadMessages.seedEmpty(thread.projectId, thread.id)
         workspaceState.openThread(thread, project)
         if (scopeBucketId) {
           scopeState.updateThread(thread)
           scopeState.showSidebarForThread(thread, scopeBucketId)
         }
+        if (needsSettingsUpdate) {
+          void invoke('thread:updateSettings', existing.projectId, existing.id, inheritedSettings)
+            .then((updated) => upsertThreadInList(updated))
+            .catch(() => {})
+        }
+        if (activeThread) {
+          void inheritEngineeringLifecycle(project.id, activeThread.id, thread.id)
+        }
       }
       return
     }
-    const created = await invoke('thread:create', {
+    // Instant mount: create optimistic thread locally so the composer
+    // paints on the same tick as the click — no IPC on the critical path.
+    // Git branch and persistence hydrate async via the thread:update broadcast.
+    const optimisticId = (() => {
+      const bytes = new Uint8Array(12)
+      crypto.getRandomValues(bytes)
+      return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('')
+    })()
+    const optimisticThread = {
+      id: optimisticId,
+      projectId: project.id,
+      providerId: 'opencode' as const,
+      title: DEFAULT_THREAD_TITLE,
+      titleSource: 'default' as const,
+      status: 'created' as const,
+      pinned: false,
+      archived: false,
+      read: true,
+      settings: inheritedSettings,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      lastActivity: Date.now(),
+      workingDirectory: project.path,
+      ...(scopeBucketId ? { scopeBucketId } : {})
+    }
+    // Apply inherited settings immediately so the composer has correct model
+    const thread = optimisticThread as unknown as typeof optimisticThread & { settings: typeof inheritedSettings }
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    upsertThreadInList(thread as any)
+    threadMessages.seedEmpty(thread.projectId, thread.id)
+    expandedFolders.add(project.id)
+    if (scopeBucketId) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      scopeState.updateThread(thread as any)
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      scopeState.showSidebarForThread(thread as any, scopeBucketId)
+    }
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    workspaceState.openThread(thread as any, project)
+    if (activeThread) {
+      void inheritEngineeringLifecycle(project.id, activeThread.id, thread.id)
+    }
+    // Persist in background with the same stable id — no ID swap, branch
+    // detection runs after the first thread:update broadcast, never blocking typing.
+    void invoke('thread:create', {
+      id: optimisticId,
       projectId: project.id,
       providerId: 'opencode',
       title: DEFAULT_THREAD_TITLE,
@@ -2251,20 +2429,29 @@
       settings: inheritedSettings,
       ...(scopeBucketId ? { scopeBucketId } : {})
     })
-    const thread = activeThread?.settings
-      ? threadWithInheritedSettings(created, inheritedSettings)
-      : created
-    upsertThreadInList(thread)
-    expandedFolders.add(project.id)
-    if (scopeBucketId) {
-      scopeState.updateThread(thread)
-      scopeState.showSidebarForThread(thread, scopeBucketId)
-    }
-    workspaceState.openThread(thread, project)
-    if (activeThread?.settings) {
-      void persistInheritedThreadSettings(thread, inheritedSettings).catch((error) => {
-        reportError(error, 'The inherited thread settings could not be saved.')
+      .then((created) => {
+        // Server confirms with same id; upsert the authoritative row (now with branch when ready)
+        const confirmed = activeThread?.settings
+          ? threadWithInheritedSettings(created, inheritedSettings)
+          : created
+        upsertThreadInList(confirmed)
+        if (workspaceState.selectedThread?.id === optimisticId) {
+          workspaceState.openThread(confirmed, project)
+        }
       })
+      .catch((error) => {
+        // Creation failed — remove the optimistic thread so the UI does not strand on a phantom
+        const idx = allThreads.findIndex((t) => t.id === optimisticId)
+        if (idx !== -1) allThreads.splice(idx, 1)
+        if (workspaceState.selectedThread?.id === optimisticId) {
+          workspaceState.clearThread()
+        }
+        reportError(error, 'The new thread could not be created.')
+      })
+    if (activeThread?.settings) {
+      // Settings already applied optimistically; background persistence will confirm via thread:update
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      void persistInheritedThreadSettings(thread as any, inheritedSettings).catch(() => {})
     }
   }
 
@@ -3751,8 +3938,25 @@
   <div
     class="absolute right-full top-0 z-40 mr-2 w-56 overflow-hidden rounded-lg border bg-surface p-1 shadow-lg"
     role="menu"
-    aria-label="Browser data"
+    aria-label="Browser menu"
   >
+    <button
+      type="button"
+      class="flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-xs text-foreground transition-colors hover:bg-elevated"
+      role="menuitem"
+      title="Manage downloaded files"
+      onclick={openBrowserDownloads}
+    >
+      <Download size={14} />
+      <span>Manage downloads</span>
+      {#if activeDownloadCount > 0}
+        <span
+          class="ml-auto rounded-full bg-elevated px-1.5 text-[10px] font-semibold tabular-nums text-muted"
+        >
+          {activeDownloadCount}
+        </span>
+      {/if}
+    </button>
     <button
       type="button"
       class="flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-xs text-danger transition-colors hover:bg-danger/10"
@@ -3854,6 +4058,153 @@
       onclick={() => resolveBrowserPermission(true)}
     >
       Allow
+    </button>
+  {/snippet}
+</Modal>
+
+<Modal
+  open={showBrowserDownloads}
+  title="Browser downloads"
+  onClose={() => (showBrowserDownloads = false)}
+  size="lg"
+  contentClass="overflow-y-auto p-5"
+  closeOnBackdrop={false}
+>
+  {#if browserDownloads.length === 0}
+    <div class="flex flex-col items-center justify-center gap-2 py-12 text-center text-dimmed">
+      <Download size={20} strokeWidth={1.5} />
+      <p class="text-xs">No downloads for this project yet.</p>
+      <p class="text-[11px]">Files download to the location you pick in the save dialog.</p>
+    </div>
+  {:else}
+    <ul class="space-y-2">
+      {#each browserDownloads as download (download.id)}
+        {@const progressing = download.state === 'progressing'}
+        <li class="rounded-xl border border-border bg-elevated p-3">
+          <div class="flex items-start gap-3">
+            <div
+              class="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-raised text-muted"
+            >
+              <FileDown size={15} />
+            </div>
+            <div class="min-w-0 flex-1">
+              <div class="flex min-w-0 items-center gap-2">
+                <p
+                  class="min-w-0 truncate text-sm font-medium text-foreground"
+                  title={download.fileName}
+                >
+                  {download.fileName}
+                </p>
+                <StatusPill tone={browserDownloadTone(download)} dot title={download.state}>
+                  {browserDownloadStateLabel(download)}
+                </StatusPill>
+              </div>
+              <p class="mt-0.5 truncate text-[11px] text-muted" title={download.url}>
+                {browserDownloadHost(download.url)} · {browserDownloadBytes(download.receivedBytes)}
+                {progressing && download.totalBytes > 0
+                  ? ` of ${browserDownloadBytes(download.totalBytes)}`
+                  : ''}
+              </p>
+              {#if progressing && download.speedBytes > 0}
+                <p class="mt-0.5 text-[11px] tabular-nums text-dimmed">
+                  {browserDownloadBytes(download.speedBytes)}/s
+                </p>
+              {/if}
+            </div>
+            <div class="flex shrink-0 items-center gap-1">
+              {#if progressing}
+                {#if download.paused}
+                  <button
+                    type="button"
+                    class="flex h-7 w-7 items-center justify-center rounded-md text-muted transition-colors hover:bg-overlay hover:text-foreground"
+                    aria-label={`Resume ${download.fileName}`}
+                    title={`Resume ${download.fileName}`}
+                    onclick={() => resumeBrowserDownload(download)}
+                  >
+                    <Play size={13} />
+                  </button>
+                {:else}
+                  <button
+                    type="button"
+                    class="flex h-7 w-7 items-center justify-center rounded-md text-muted transition-colors hover:bg-overlay hover:text-foreground"
+                    aria-label={`Pause ${download.fileName}`}
+                    title={`Pause ${download.fileName}`}
+                    onclick={() => pauseBrowserDownload(download)}
+                  >
+                    <Pause size={13} />
+                  </button>
+                {/if}
+              {/if}
+              {#if download.state === 'completed'}
+                <button
+                  type="button"
+                  class="flex h-7 w-7 items-center justify-center rounded-md text-muted transition-colors hover:bg-overlay hover:text-foreground"
+                  aria-label={`Open ${download.fileName}`}
+                  title={`Open ${download.fileName}`}
+                  onclick={() => openBrowserDownload(download)}
+                >
+                  <ExternalLink size={13} />
+                </button>
+                <button
+                  type="button"
+                  class="flex h-7 w-7 items-center justify-center rounded-md text-muted transition-colors hover:bg-overlay hover:text-foreground"
+                  aria-label={`Reveal ${download.fileName} in file manager`}
+                  title={`Reveal ${download.fileName} in file manager`}
+                  onclick={() => revealBrowserDownload(download)}
+                >
+                  <FolderOpen size={13} />
+                </button>
+              {/if}
+              {#if progressing || download.state === 'interrupted'}
+                <button
+                  type="button"
+                  class="flex h-7 w-7 items-center justify-center rounded-md text-muted transition-colors hover:bg-overlay hover:text-danger"
+                  aria-label={`Cancel ${download.fileName}`}
+                  title={`Cancel ${download.fileName}`}
+                  onclick={() => cancelBrowserDownload(download)}
+                >
+                  <CircleStop size={13} />
+                </button>
+              {/if}
+            </div>
+          </div>
+          {#if progressing}
+            {@const percent = Math.min(100, Math.max(0, download.progress))}
+            <div class="mt-3 flex items-center gap-2">
+              <div
+                class="h-1.5 min-w-0 flex-1 overflow-hidden rounded-full bg-overlay"
+                role="progressbar"
+                aria-label={`Download progress for ${download.fileName}`}
+                aria-valuenow={Math.round(percent)}
+                aria-valuemin={0}
+                aria-valuemax={100}
+              >
+                <div
+                  class="h-full rounded-full bg-primary transition-[width] duration-150"
+                  style={`width: ${percent}%`}
+                ></div>
+              </div>
+              <span class="w-9 shrink-0 text-right text-[10px] tabular-nums text-dimmed">
+                {Math.round(percent)}%
+              </span>
+            </div>
+          {/if}
+          {#if download.error}
+            <p class="mt-2 text-[11px] text-danger" role="alert">{download.error}</p>
+          {/if}
+        </li>
+      {/each}
+    </ul>
+  {/if}
+
+  {#snippet footer()}
+    <button
+      type="button"
+      class="rounded-lg px-3 py-2 text-sm text-muted transition-colors hover:bg-elevated"
+      title="Close the downloads manager"
+      onclick={() => (showBrowserDownloads = false)}
+    >
+      Close
     </button>
   {/snippet}
 </Modal>
@@ -4090,6 +4441,7 @@
   projects={visibleProjects}
   projectIconUrls={projectIcons}
   selectedThreadId={selectedThread?.id ?? null}
+  nativeAvailable={browserNativeVisible}
   onSelect={openThreadFromSwitcher}
 />
 

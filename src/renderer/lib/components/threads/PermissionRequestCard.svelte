@@ -1,6 +1,8 @@
 <script lang="ts">
   import { Check, CheckCheck, CornerDownRight, ShieldAlert, X } from '@lucide/svelte'
   import RichMarkdownEditor from '../shared/RichMarkdownEditor.svelte'
+  import VoiceInputButton from '../speech/VoiceInputButton.svelte'
+  import type { SpeechScope } from '../../../../lib/speech/types'
   import type { PermissionRequest } from '$shared/types'
 
   interface Props {
@@ -9,17 +11,24 @@
     onAllowAlways: (requestId: string) => Promise<void>
     onReject: (requestId: string) => Promise<void>
     onAlternative: (requestId: string, alternative: string) => Promise<void>
+    scope: SpeechScope
   }
 
-  let { request, onAllowOnce, onAllowAlways, onReject, onAlternative }: Props = $props()
+  let { request, onAllowOnce, onAllowAlways, onReject, onAlternative, scope }: Props = $props()
 
   let showingAlternative = $state(false)
   let alternative = $state('')
   let working = $state(false)
   let actionError = $state('')
+  let alternativeEditor = $state<RichMarkdownEditor>()
+  const alternativeSpeechTargetId = $derived(`permission-alternative-${request.id}`)
 
   let metadataEntries = $derived(Object.entries(request.metadata))
   let canSubmitAlternative = $derived(alternative.trim().length > 0 && !working)
+
+  function alternativeSpeechTarget() {
+    return alternativeEditor?.speechEditorTarget(alternativeSpeechTargetId) ?? null
+  }
 
   function riskClass(risk: NonNullable<PermissionRequest['policy']>['risk']): string {
     if (risk === 'critical') return 'bg-danger/10 text-danger'
@@ -169,19 +178,29 @@
 
     {#if showingAlternative}
       <div>
-        <label for="permission-alternative" class="text-xs font-semibold text-foreground">
+        <label for={alternativeSpeechTargetId} class="text-xs font-semibold text-foreground">
           Alternative instruction
         </label>
-        <RichMarkdownEditor
-          id="permission-alternative"
-          bind:value={alternative}
-          autofocus
-          disabled={working}
-          placeholder="Describe what the agent should do instead…"
-          class="mt-1.5 w-full resize-y rounded-lg border bg-app px-3 py-2 text-sm text-foreground outline-none transition-colors placeholder:text-dimmed focus:border-primary disabled:opacity-50"
-          ariaLabel="Alternative instruction"
-          onSubmit={() => void submitAlternative()}
-        />
+        <div class="mt-1.5 flex items-start gap-2">
+          <RichMarkdownEditor
+            bind:this={alternativeEditor}
+            id={alternativeSpeechTargetId}
+            bind:value={alternative}
+            autofocus
+            disabled={working}
+            placeholder="Describe what the agent should do instead…"
+            class="w-full resize-y rounded-lg border bg-app px-3 py-2 text-sm text-foreground outline-none transition-colors placeholder:text-dimmed focus:border-primary disabled:opacity-50"
+            containerClass="min-w-0 flex-1"
+            ariaLabel="Alternative instruction"
+            onSubmit={() => void submitAlternative()}
+          />
+          <VoiceInputButton
+            targetId={alternativeSpeechTargetId}
+            getTarget={alternativeSpeechTarget}
+            {scope}
+            disabled={working}
+          />
+        </div>
         <p class="mt-1 text-[11px] text-dimmed">
           The requested action will be rejected and this instruction will steer the current run.
         </p>

@@ -9,6 +9,7 @@
     FileText,
     Layers3,
     Loader2,
+    RefreshCw,
     XCircle,
     Zap
   } from '@lucide/svelte'
@@ -35,6 +36,10 @@
     /** True once this trace's turn produced a completed assistant message — the
      *  only condition under which the trace may fold itself. */
     done?: boolean
+    /** True when this trace was rehydrated from persisted state because no live
+     *  session activity is confirming the run. Renders a "restored / reconnecting"
+     *  note instead of a live "Agent working…" spinner. */
+    rehydrated?: boolean
     initialOpen?: boolean
     initialUserOpened?: boolean
     /** When the agent started working on this trace; used to show a live duration. */
@@ -62,6 +67,7 @@
     busy = false,
     latest = false,
     done = false,
+    rehydrated = false,
     initialOpen = false,
     initialUserOpened = false,
     startTime,
@@ -491,15 +497,29 @@
       {/each}
       {#if busy}
         <div class="flex flex-wrap items-center gap-x-2 gap-y-1">
-          <span class="flex min-w-0 shrink items-center gap-2">
-            <Loader2 size={11} class="shrink-0 animate-spin text-info" />
-            <span class="shrink-0 text-[10px] text-info/80">Agent working…</span>
-            {#if effectiveStartTime}
-              <span class="shrink-0 tabular-nums text-[10px] text-info/80">
-                · {formatDuration(elapsed)}
+          {#if rehydrated}
+            <span class="flex min-w-0 shrink items-center gap-2">
+              <RefreshCw size={11} class="shrink-0 text-info" />
+              <span class="shrink-0 text-[10px] text-info/80">
+                Reconnecting — showing last saved activity
               </span>
-            {/if}
-          </span>
+              {#if effectiveStartTime}
+                <span class="shrink-0 tabular-nums text-[10px] text-info/80">
+                  · {formatDuration(elapsed)}
+                </span>
+              {/if}
+            </span>
+          {:else}
+            <span class="flex min-w-0 shrink items-center gap-2">
+              <Loader2 size={11} class="shrink-0 animate-spin text-info" />
+              <span class="shrink-0 text-[10px] text-info/80">Agent working…</span>
+              {#if effectiveStartTime}
+                <span class="shrink-0 tabular-nums text-[10px] text-info/80">
+                  · {formatDuration(elapsed)}
+                </span>
+              {/if}
+            </span>
+          {/if}
           {#if modelLabel}
             <span
               class="flex min-w-0 items-center gap-1.5 text-[10px] text-dimmed max-sm:basis-full max-sm:pl-[18px] max-sm:text-[9px] sm:ml-auto"

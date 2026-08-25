@@ -723,6 +723,35 @@ export abstract class PersistentCliDriver implements HarnessDriver {
     if (child && !child.killed) child.kill()
   }
 
+  /**
+   * Wait for a session's in-flight harness process to fully settle (stream
+   * flushed and the active-turn state released) before resuming the same
+   * session. Mirrors the teardown used by `steerPrompt` so interaction
+   * continuations never race the process they just stopped.
+   */
+  protected async settleActiveProcess(
+    sessionId: string,
+    timeoutMs = 10_000
+  ): Promise<void> {
+    const active = this.activeProcesses.get(sessionId)
+    if (active && !active.killed) active.kill()
+    const settlement = this.activeProcessSettlements.get(sessionId)
+    if (settlement) {
+      try {
+        await Promise.race([
+          settlement,
+          new Promise<void>((resolve) => setTimeout(resolve, timeoutMs))
+        ])
+      } catch {
+        // Timed out waiting for the harness process to settle; continue best-effort.
+      }
+    }
+    const deadline = Date.now() + timeoutMs
+    while (this.activeProcesses.has(sessionId) && Date.now() < deadline) {
+      await new Promise<void>((resolve) => setTimeout(resolve, 25))
+    }
+  }
+
   /** Close a streaming-input turn after its final provider result arrives. */
   protected closeActiveInput(sessionId: string): void {
     this.activeProcesses.get(sessionId)?.stdin?.end()

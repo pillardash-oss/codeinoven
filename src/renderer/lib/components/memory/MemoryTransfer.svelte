@@ -106,78 +106,93 @@
         return 'this project'
     }
   })
+
+  let transferOpen = $state(false)
 </script>
 
 {#if variant === 'settings'}
-  <div aria-labelledby="memory-transfer-title">
-    <div class="mb-2 flex items-center justify-between gap-2">
-      <h2 id="memory-transfer-title" class="text-xs font-semibold text-foreground">
-        Transfer memory
-      </h2>
-      <span class="text-[11px] text-dimmed">Merges on import — duplicates are skipped</span>
-    </div>
+  <button
+    class="flex shrink-0 items-center gap-1.5 rounded-lg border bg-elevated px-3 py-1.5 text-xs font-medium text-muted transition-colors hover:bg-overlay hover:text-foreground"
+    type="button"
+    title="Export or import memory as a backup file"
+    onclick={() => (transferOpen = true)}
+  >
+    <Upload size={13} />
+    Transfer
+  </button>
 
-    <div class="flex flex-wrap items-center gap-2">
-      <div
-        class="flex w-max items-center gap-0.5 rounded-lg border bg-elevated p-0.5"
-        role="tablist"
-        aria-label="Memory transfer scope"
-      >
-        {#each exportKinds as option (option.value)}
+  {#if transferOpen}
+    <Modal
+      title="Transfer memory"
+      size="md"
+      open={true}
+      onClose={() => {
+        if (!busy) transferOpen = false
+      }}
+    >
+      <div class="space-y-3">
+        <p class="text-xs text-dimmed">
+          Export memory to a JSON backup, or import one. Merges on import — duplicates are
+          skipped.
+        </p>
+        <div
+          class="flex w-max items-center gap-0.5 rounded-lg border bg-elevated p-0.5"
+          role="tablist"
+          aria-label="Memory transfer scope"
+        >
+          {#each exportKinds as option (option.value)}
+            <button
+              class="flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-colors {transferScope ===
+              option.value
+                ? 'bg-surface text-foreground shadow-sm'
+                : 'text-muted hover:text-foreground'}"
+              role="tab"
+              aria-selected={transferScope === option.value}
+              title="Export or import {option.label.toLowerCase()} memory"
+              onclick={() => (userScope = option.value)}
+            >
+              {option.label}
+            </button>
+          {/each}
+        </div>
+        <div class="flex items-center gap-2">
           <button
-            class="flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-colors {transferScope ===
-            option.value
-              ? 'bg-surface text-foreground shadow-sm'
-              : 'text-muted hover:text-foreground'}"
-            role="tab"
-            aria-selected={transferScope === option.value}
-            title="Export or import {option.label.toLowerCase()} memory"
-            onclick={() => (userScope = option.value)}
+            class="flex items-center gap-1.5 rounded-lg border bg-elevated px-3 py-1.5 text-xs font-medium hover:bg-overlay disabled:opacity-50"
+            type="button"
+            disabled={busy}
+            title="Export the selected memory scope to a JSON file"
+            onclick={() => void exportMemory()}
           >
-            {option.label}
+            {#if busy}
+              <Loader2 size={13} class="animate-spin" />
+            {:else}
+              <Download size={13} />
+            {/if}
+            Export
           </button>
-        {/each}
-      </div>
-      <div class="flex items-center gap-2">
-        <button
-          class="flex items-center gap-1.5 rounded-lg border bg-elevated px-3 py-1.5 text-xs font-medium hover:bg-overlay disabled:opacity-50"
-          type="button"
-          disabled={busy}
-          title="Export the selected memory scope to a JSON file"
-          onclick={() => void exportMemory()}
-        >
-          {#if busy}
-            <Loader2 size={13} class="animate-spin" />
-          {:else}
-            <Download size={13} />
-          {/if}
-          Export
-        </button>
-        <button
-          class="flex items-center gap-1.5 rounded-lg border bg-elevated px-3 py-1.5 text-xs font-medium hover:bg-overlay disabled:opacity-50"
-          type="button"
-          disabled={busy}
-          title="Import a memory export file and merge its entries"
-          onclick={() => void pickImport()}
-        >
-          <Upload size={13} />
-          Import
-        </button>
-      </div>
-    </div>
+          <button
+            class="flex items-center gap-1.5 rounded-lg border bg-elevated px-3 py-1.5 text-xs font-medium hover:bg-overlay disabled:opacity-50"
+            type="button"
+            disabled={busy}
+            title="Import a memory export file and merge its entries"
+            onclick={() => void pickImport()}
+          >
+            <Upload size={13} />
+            Import
+          </button>
+        </div>
 
-    {#if error}
-      <p class="mt-2 rounded-lg bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">{error}</p>
-    {/if}
-    {#if message}
-      <p
-        class="mt-2 break-all rounded-lg bg-primary/10 px-3 py-2 text-xs text-primary"
-        role="status"
-      >
-        {message}
-      </p>
-    {/if}
-  </div>
+        {#if error}
+          <p class="rounded-lg bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">{error}</p>
+        {/if}
+        {#if message}
+          <p class="break-all rounded-lg bg-primary/10 px-3 py-2 text-xs text-primary" role="status">
+            {message}
+          </p>
+        {/if}
+      </div>
+    </Modal>
+  {/if}
 {:else}
   <ThreadDropdown
     items={[

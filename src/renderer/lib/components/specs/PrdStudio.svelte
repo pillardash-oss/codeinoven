@@ -1,5 +1,13 @@
 <script lang="ts">
-  import { Check, ExternalLink, FolderOpen, MessageSquarePlus, Save } from '@lucide/svelte'
+  import {
+    Check,
+    ChevronDown,
+    ExternalLink,
+    FolderOpen,
+    MessageSquarePlus,
+    Save
+  } from '@lucide/svelte'
+  import { DropdownMenu } from 'bits-ui'
   import StudioDocumentNavigation from './StudioDocumentNavigation.svelte'
   import type { PrdContent, PrdDocument, PrdSectionId } from '$shared/types'
 
@@ -25,6 +33,7 @@
     onUpdateAnnotation: (annotationId: string, body: string) => void | Promise<void>
     onResolveAnnotation: (annotationId: string) => void | Promise<void>
     onFinalize: () => void | Promise<void>
+    onNextStep?: () => void | Promise<void>
     onOpenInEditor?: () => void | Promise<void>
     onRevealInFiles?: () => void | Promise<void>
   }
@@ -51,6 +60,7 @@
     onUpdateAnnotation,
     onResolveAnnotation,
     onFinalize,
+    onNextStep,
     onOpenInEditor,
     onRevealInFiles
   }: Props = $props()
@@ -60,6 +70,7 @@
   let content = $state<PrdContent>(structuredClone(prd.content))
   let dirty = $state(false)
   let annotationDrafts = $state<Partial<Record<PrdSectionId, string>>>({})
+  let nextStepBusy = $state(false)
 
   function updateSection(id: PrdSectionId, markdown: string): void {
     content = {
@@ -143,6 +154,44 @@
       >
         <Check size={13} /> Finalize
       </button>
+      {#if onNextStep}
+        <DropdownMenu.Root>
+          <DropdownMenu.Trigger
+            class="flex h-8 items-center gap-1.5 rounded-lg border bg-elevated px-2.5 text-xs font-medium hover:bg-overlay disabled:cursor-not-allowed disabled:opacity-50"
+            disabled={busy || nextStepBusy}
+            title="Choose what to build next from this PRD"
+          >
+            {nextStepBusy ? 'Working…' : 'Next step'}
+            <ChevronDown size={13} />
+          </DropdownMenu.Trigger>
+          <DropdownMenu.Portal>
+            <DropdownMenu.Content
+              side="bottom"
+              align="end"
+              sideOffset={4}
+              collisionPadding={8}
+              strategy="fixed"
+              class="z-50 w-52 rounded-lg border border-border bg-surface p-1 shadow-lg"
+            >
+              <DropdownMenu.Item
+                class="flex cursor-default items-center justify-between gap-3 rounded-md px-2 py-1.5 text-xs outline-none data-[highlighted]:bg-elevated"
+                title="Generate an implementation-ready Spec from this PRD"
+                disabled={nextStepBusy}
+                onSelect={() => {
+                  if (!onNextStep || nextStepBusy) return
+                  nextStepBusy = true
+                  dirty = false
+                  void Promise.resolve(onNextStep()).finally(() => {
+                    nextStepBusy = false
+                  })
+                }}
+              >
+                <span>Generate Spec</span>
+              </DropdownMenu.Item>
+            </DropdownMenu.Content>
+          </DropdownMenu.Portal>
+        </DropdownMenu.Root>
+      {/if}
     </div>
   </header>
 

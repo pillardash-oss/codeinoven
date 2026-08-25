@@ -218,7 +218,8 @@ export class PtyService {
       'bun',
       'brew',
       'winget',
-      'rm'
+      'rm',
+      'git'
     ])
     if (!allowed.has(basename(command))) {
       throw new Error(`Refusing to start unknown harness command: ${command}`)

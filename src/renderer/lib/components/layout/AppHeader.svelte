@@ -919,7 +919,7 @@
           {/if}
           <div class="flex min-w-0 items-center gap-1.5 overflow-hidden">
             <h1
-              class="truncate text-[13px] font-medium tracking-tight text-foreground"
+              class="max-w-52 truncate text-[13px] font-medium tracking-tight text-foreground"
               title={headerThreadTitle}
             >
               {headerThreadTitle}

@@ -189,6 +189,76 @@ describe('CheckpointManager', () => {
     expect(interrupted).toMatchObject({ id: checkpoint.id, status: 'interrupted' })
   })
 
+  it('rebinds the active checkpoint source to a steer mid-turn', async () => {
+    const projectRoot = await temporaryDirectory('codeinoven-project-')
+    const manager = await testCheckpointManager()
+
+    const checkpoint = await manager.beginTurn(
+      'project4',
+      'thread4',
+      projectRoot,
+      'Initial prompt',
+      false,
+      'msg_original'
+    )
+    expect(checkpoint.sourceMessageId).toBe('msg_original')
+
+    // A steer arrives while the turn is still active.
+    await manager.rebindActiveSource('project4', 'thread4', 'msg_steer')
+    const rebound = await manager.get('project4', 'thread4', checkpoint.id)
+    expect(rebound?.sourceMessageId).toBe('msg_steer')
+
+    // Re-bind is a no-op once the turn is completed.
+    await manager.completeTurn('project4', 'thread4', checkpoint.id, projectRoot, 'completed')
+    await manager.rebindActiveSource('project4', 'thread4', 'msg_after')
+    const completed = await manager.get('project4', 'thread4', checkpoint.id)
+    expect(completed?.sourceMessageId).toBe('msg_steer')
+  })
+
+  it('diffs an in-flight turn against disk without persisting anything', async () => {
+    const projectRoot = await temporaryDirectory('codeinoven-project-')
+    const manager = await testCheckpointManager()
+    await writeFile(join(projectRoot, 'tracked.txt'), 'before', 'utf-8')
+
+    const checkpoint = await manager.beginTurn(
+      'project5',
+      'thread5',
+      projectRoot,
+      'Live turn',
+      false
+    )
+    await writeFile(join(projectRoot, 'tracked.txt'), 'after', 'utf-8')
+    await writeFile(join(projectRoot, 'new.txt'), 'created', 'utf-8')
+
+    const modified = await manager.getLiveFileDiff(
+      'project5',
+      'thread5',
+      checkpoint.id,
+      'tracked.txt'
+    )
+    expect(modified).toMatchObject({
+      path: 'tracked.txt',
+      kind: 'modified',
+      binary: false,
+      before: 'before',
+      after: 'after'
+    })
+
+    const created = await manager.getLiveFileDiff('project5', 'thread5', checkpoint.id, 'new.txt')
+    expect(created).toMatchObject({ path: 'new.txt', kind: 'created', after: 'created' })
+
+    // Paths outside the project root are rejected even mid-turn.
+    await expect(
+      manager.getLiveFileDiff('project5', 'thread5', checkpoint.id, '../outside.txt')
+    ).rejects.toThrow('outside this checkpoint')
+
+    // Completion freezes the checkpoint: live diffs stop resolving.
+    await manager.completeTurn('project5', 'thread5', checkpoint.id, projectRoot, 'completed')
+    await expect(
+      manager.getLiveFileDiff('project5', 'thread5', checkpoint.id, 'tracked.txt')
+    ).rejects.toThrow('no longer active')
+  })
+
   it('finalizes an active turn as completed when the harness demonstrably finished', async () => {
     const projectRoot = await temporaryDirectory('codeinoven-project-')
     const manager = await testCheckpointManager()

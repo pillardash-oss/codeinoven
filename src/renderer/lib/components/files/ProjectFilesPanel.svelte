@@ -149,6 +149,9 @@
   let showLineNumbers = $state(true)
   const wrapLines = $derived(wrapTextState.wrapped)
   let fullscreenOpen = $state(false)
+  $effect(() => {
+    contextSidebarState.setFullscreenSurfaceActive('files-fullscreen-editor', fullscreenOpen)
+  })
   let handledFullscreenRequest = $state(0)
   let conflictController = $state<ConflictResolutionController | null>(null)
   let conflictStatus = $state<ConflictResolutionStatus>({
@@ -284,12 +287,15 @@
   }
 
   function fullscreenOpenFile(path: string): void {
-    if (!activeTab) {
-      void projectFilesWorkspace.openFile(projectId, path)
+    if (path === activeTab?.path) return
+    // Opening a checkpoint (last-turn) diff never leaves the fullscreen modal:
+    // switch to the new file's diff in place.
+    if (activeTab?.checkpointId && activeCheckpointPaths.includes(path)) {
+      void projectFilesWorkspace.openCheckpointFile(projectId, activeTab.checkpointId, path, 'diff')
       return
     }
-    if (activeTab.checkpointId && activeCheckpointPaths.includes(path)) {
-      void projectFilesWorkspace.openCheckpointFile(projectId, activeTab.checkpointId, path, 'diff')
+    if (!activeTab) {
+      void projectFilesWorkspace.openFile(projectId, path)
       return
     }
     if (dirty) {

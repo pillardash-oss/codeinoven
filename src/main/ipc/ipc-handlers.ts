@@ -73,7 +73,7 @@ import {
   validateEntityId,
   validateEngineeringLifecycleDecision,
   validateEngineeringLifecycleResumeToken,
-  validateEngineeringLifecycleSelection,
+  validateEngineeringLifecycleSelectionInput,
   validateEngineeringLifecycleStage,
   validateGitIdentity,
   validateGitPathArray,
@@ -902,6 +902,10 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
+function isUnloadOption(value: unknown): value is '30m' | '1h' | 'keep' {
+  return value === '30m' || value === '1h' || value === 'keep'
+}
+
 function validateAttachmentStorageScope(value: unknown): AttachmentStorageScope {
   if (!isRecord(value) || (value.kind !== 'project' && value.kind !== 'chat')) {
     throw new TypeError('Attachment storage scope is invalid')
@@ -1653,17 +1657,17 @@ export function validateAppConfigPatch(value: unknown): AppConfigPatch {
       typeof sound.remoteCleanupEnabled !== 'boolean' ||
       (sound.remoteCleanupSelection !== 'fixed' &&
         sound.remoteCleanupSelection !== 'conversation') ||
-      (sound.runtimeOverride !== undefined &&
-        sound.runtimeOverride !== 'mlx' &&
-        sound.runtimeOverride !== 'sherpa-onnx') ||
       typeof sound.includeCodeBlocksInSpeech !== 'boolean' ||
       !Array.isArray(sound.preferredLanguages) ||
       !sound.preferredLanguages.every(
         (language) => typeof language === 'string' && language.length <= 32
       ) ||
-      typeof sound.keepAsrLoaded !== 'boolean' ||
-      typeof sound.keepCleanupLoaded !== 'boolean' ||
-      typeof sound.keepTtsLoaded !== 'boolean' ||
+      typeof sound.voiceRecordingEnabled !== 'boolean' ||
+      typeof sound.localLlmCleanupEnabled !== 'boolean' ||
+      (sound.localLlmBaseUrl !== undefined && typeof sound.localLlmBaseUrl !== 'string') ||
+      !isUnloadOption(sound.asrUnload) ||
+      !isUnloadOption(sound.cleanupUnload) ||
+      !isUnloadOption(sound.ttsUnload) ||
       !Number.isSafeInteger(sound.historyLimit) ||
       Number(sound.historyLimit) < 1 ||
       Number(sound.historyLimit) > 500 ||
@@ -1686,7 +1690,6 @@ export function validateAppConfigPatch(value: unknown): AppConfigPatch {
       return candidate
     }
     patch.sound = {
-      runtimeOverride: sound.runtimeOverride,
       asrArtifactId: optionalId('asrArtifactId'),
       cleanupArtifactId: optionalId('cleanupArtifactId'),
       ttsArtifactId: optionalId('ttsArtifactId'),
@@ -1704,9 +1707,13 @@ export function validateAppConfigPatch(value: unknown): AppConfigPatch {
         transcriptReady: sound.cues.transcriptReady,
         volume: sound.cues.volume
       },
-      keepAsrLoaded: sound.keepAsrLoaded,
-      keepCleanupLoaded: sound.keepCleanupLoaded,
-      keepTtsLoaded: sound.keepTtsLoaded
+      voiceRecordingEnabled: sound.voiceRecordingEnabled,
+      localLlmCleanupEnabled: sound.localLlmCleanupEnabled,
+      localLlmBaseUrl:
+        sound.localLlmBaseUrl === undefined ? undefined : String(sound.localLlmBaseUrl),
+      asrUnload: sound.asrUnload,
+      cleanupUnload: sound.cleanupUnload,
+      ttsUnload: sound.ttsUnload
     }
   }
 
@@ -2065,7 +2072,11 @@ export function registerIpcHandlers(
   updaterService?: UpdaterService,
   chatEngine?: Pick<
     ChatEngine,
-    'loadMessages' | 'deleteThreadSession' | 'hasActiveProcessesInScope'
+    | 'loadMessages'
+    | 'deleteThreadSession'
+    | 'activeTurnChangeSummary'
+    | 'hasActiveProcessesInScope'
+    | 'abort'
   > &
     Partial<Pick<ChatEngine, 'runVirtualTask'>>,
   options: RegisterIpcHandlersOptions = {}
@@ -2143,18 +2154,21 @@ export function registerIpcHandlers(
   )
   ipcMain.handle(
     'engineeringLifecycle:select',
-    (_, projectId: unknown, threadId: unknown, selection: unknown) =>
+    (_, projectId: unknown, threadId: unknown, input: unknown) =>
       engineeringLifecycleEngine.select(
         validateEntityId(projectId, 'Project ID'),
         validateEntityId(threadId, 'Thread ID'),
-        validateEngineeringLifecycleSelection(selection)
+        validateEngineeringLifecycleSelectionInput(input)
       )
   )
-  ipcMain.handle('engineeringLifecycle:start', (_, projectId: unknown, threadId: unknown) =>
-    engineeringLifecycleEngine.start(
-      validateEntityId(projectId, 'Project ID'),
-      validateEntityId(threadId, 'Thread ID')
-    )
+  ipcMain.handle(
+    'engineeringLifecycle:start',
+    (_, projectId: unknown, threadId: unknown, stage: unknown) =>
+      engineeringLifecycleEngine.start(
+        validateEntityId(projectId, 'Project ID'),
+        validateEntityId(threadId, 'Thread ID'),
+        stage === undefined || stage === null ? undefined : validateEngineeringLifecycleStage(stage)
+      )
   )
   ipcMain.handle(
     'engineeringLifecycle:complete',
@@ -2186,13 +2200,28 @@ export function registerIpcHandlers(
   )
   ipcMain.handle(
     'engineeringLifecycle:cancel',
-    (_, projectId: unknown, threadId: unknown, confirmed: unknown) => {
+    async (_, projectId: unknown, threadId: unknown, confirmed: unknown) => {
       if (confirmed !== true)
         throw new TypeError('Engineering lifecycle cancellation requires confirmation')
-      return engineeringLifecycleEngine.cancel(
-        validateEntityId(projectId, 'Project ID'),
-        validateEntityId(threadId, 'Thread ID')
-      )
+      const pid = validateEntityId(projectId, 'Project ID')
+      const tid = validateEntityId(threadId, 'Thread ID')
+      const before = engineeringLifecycleEngine.get(pid, tid)
+      const result = engineeringLifecycleEngine.cancel(pid, tid)
+      // A user-initiated stop must halt the in-flight generation turn too,
+      // otherwise the thread stays planning/executing and is re-surfaced on
+      // view switch or resumed by restart recovery. abort() tears down the
+      // active harness session and marks the thread `interrupted`
+      // (non-recoverable), so an explicitly stopped run stays stopped.
+      if (
+        before &&
+        (before.activeStage !== undefined ||
+          before.humanGate !== undefined ||
+          before.selection !== 'none') &&
+        chatEngine?.abort
+      ) {
+        await chatEngine.abort(pid, tid)
+      }
+      return result
     }
   )
 
@@ -4129,6 +4158,126 @@ export function registerIpcHandlers(
       ...input,
       threadLimit: input.threadLimit ?? config.threadLimit
     })
+  })
+
+  function deriveRepoNameFromUrl(url: string): string {
+    const trimmed = url.trim().replace(/\/+$/u, '')
+    if (!trimmed) return 'repo'
+    const withoutQuery = trimmed.split('?')[0].split('#')[0]
+    // Take after last '/' or ':' (covers git@github.com:org/repo.git)
+    const lastSlash = withoutQuery.lastIndexOf('/')
+    const lastColon = withoutQuery.lastIndexOf(':')
+    const sepIndex = Math.max(lastSlash, lastColon)
+    const segment = sepIndex >= 0 ? withoutQuery.slice(sepIndex + 1) : withoutQuery
+    const withoutGit = segment.endsWith('.git') ? segment.slice(0, -4) : segment
+    const sanitized = withoutGit
+      .replace(/[^A-Za-z0-9._-]/gu, '-')
+      .replace(/^-+/u, '')
+      .replace(/-+$/u, '')
+    return sanitized.length > 0 ? sanitized.slice(0, 100) : 'repo'
+  }
+
+  function validateGitCloneInput(value: unknown): { url: string; destination?: string } {
+    if (typeof value !== 'object' || value === null)
+      throw new TypeError('Git clone input must be an object')
+    const record = value as Record<string, unknown>
+    const url = record['url']
+    if (typeof url !== 'string' || url.trim().length === 0)
+      throw new TypeError('Git URL is required')
+    if (url.length > 2048) throw new TypeError('Git URL is too long')
+    if (url.includes('\0')) throw new TypeError('Git URL contains invalid characters')
+    const trimmed = url.trim()
+    // Allow https, http, git, ssh, and scp-like git@host:path
+    const isHttps = /^https?:\/\/.+/u.test(trimmed)
+    const isSsh = /^ssh:\/\/.+/u.test(trimmed)
+    const isGit = /^git:\/\/.+/u.test(trimmed)
+    const isScp = /^[^:]+@[^:]+:.+/u.test(trimmed) && !trimmed.includes('://')
+    const isGitAt = /^git@.+/u.test(trimmed)
+    if (!(isHttps || isSsh || isGit || isScp || isGitAt)) {
+      throw new TypeError('Git URL must be a valid https:// or ssh (git@host:owner/repo) URL')
+    }
+    const destination = record['destination']
+    if (destination !== undefined) {
+      if (typeof destination !== 'string' || destination.trim().length === 0)
+        throw new TypeError('Destination must be a non-empty path')
+      if (destination.length > 4096) throw new TypeError('Destination path is too long')
+      if (destination.includes('\0')) throw new TypeError('Destination contains invalid characters')
+      if (!isAbsolute(destination)) throw new TypeError('Destination must be an absolute path')
+    }
+    return {
+      url: trimmed,
+      destination: typeof destination === 'string' ? destination.trim() : undefined
+    }
+  }
+
+  ipcMain.handle('dialog:pickCloneDestination', async () => {
+    try {
+      const win = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0] ?? null
+      if (win && !win.isFocused()) win.focus()
+      const defaultPath = join(getConfigRoot(), 'projects-gh')
+      await mkdir(defaultPath, { recursive: true })
+      const config = await storage.getConfig()
+      const options: Electron.OpenDialogOptions = {
+        title: 'Select Clone Destination',
+        properties: ['openDirectory', 'createDirectory'],
+        defaultPath: config.lastFolderDialogPath || defaultPath
+      }
+      const result = win
+        ? await dialog.showOpenDialog(win, options)
+        : await dialog.showOpenDialog(options)
+      if (result.canceled || result.filePaths.length === 0) return null
+      const chosen = result.filePaths[0]
+      await privilegedIpc.registerUserSelectedRoot(chosen)
+      return chosen
+    } catch (error) {
+      Logger.error('dialog:pickCloneDestination failed:', error)
+      return null
+    }
+  })
+
+  ipcMain.handle('git:defaultClonePath', async (_, rawUrl: unknown) => {
+    if (typeof rawUrl !== 'string' || rawUrl.trim().length === 0)
+      throw new TypeError('Git URL is required')
+    const repoName = deriveRepoNameFromUrl(rawUrl)
+    const defaultPath = join(getConfigRoot(), 'projects-gh', repoName)
+    return defaultPath
+  })
+
+  ipcMain.handle('git:cloneHandoff', async (_, rawInput: unknown) => {
+    const { url, destination } = validateGitCloneInput(rawInput)
+    const repoName = deriveRepoNameFromUrl(url)
+    const resolvedDestination = destination ?? join(getConfigRoot(), 'projects-gh', repoName)
+    // Ensure the projects-gh parent exists
+    await mkdir(join(getConfigRoot(), 'projects-gh'), { recursive: true })
+    // Guard against cloning into an existing non-empty directory
+    try {
+      const statResult = await stat(resolvedDestination)
+      if (statResult.isDirectory()) {
+        const entries = await import('fs/promises').then((m) => m.readdir(resolvedDestination))
+        if (entries.length > 0)
+          throw new Error(`Destination already exists and is not empty: ${resolvedDestination}`)
+      } else {
+        throw new Error(`Destination already exists and is not a directory: ${resolvedDestination}`)
+      }
+    } catch (error) {
+      if (
+        error instanceof Error &&
+        'code' in error &&
+        (error as NodeJS.ErrnoException).code === 'ENOENT'
+      ) {
+        // Destination does not exist — git clone will create it
+      } else {
+        throw error
+      }
+    }
+    await privilegedIpc.registerUserSelectedRoot(dirname(resolvedDestination))
+    await privilegedIpc.registerUserSelectedRoot(resolvedDestination)
+    return {
+      command: 'git',
+      args: ['clone', url, resolvedDestination],
+      destination: resolvedDestination,
+      repoName
+    }
   })
   if (!options.hydrationHandlersRegistered) {
     ipcMain.handle('project:get', (_, projectId: string) => projectManager.getProject(projectId))
@@ -6431,6 +6580,20 @@ export function registerIpcHandlers(
   ipcMain.handle('checkpoint:list', (_, projectId: string, threadId: string) =>
     checkpointManager.listSummaries(projectId, threadId)
   )
+  ipcMain.handle('checkpoint:activeSummary', async (_, projectId: string, threadId: string) => {
+    if (!chatEngine?.activeTurnChangeSummary) return null
+    return chatEngine.activeTurnChangeSummary(projectId, threadId)
+  })
+  ipcMain.handle(
+    'checkpoint:liveDiff',
+    (_, projectId: unknown, threadId: unknown, checkpointId: unknown, path: unknown) =>
+      checkpointManager.getLiveFileDiff(
+        validateEntityId(projectId, 'Project ID'),
+        validateEntityId(threadId, 'Thread ID'),
+        validateEntityId(checkpointId, 'Checkpoint ID'),
+        requireString(path, 'Checkpoint path')
+      )
+  )
   ipcMain.handle(
     'checkpoint:diff',
     (_, projectId: unknown, threadId: unknown, checkpointId: unknown, path: unknown) =>
@@ -6499,10 +6662,11 @@ export function registerIpcHandlers(
     const validated = validateCreateThreadInput(input)
     // Optimistic create: the thread object (with its stable id) is returned
     // immediately while persistence, lazy capacity eviction, and branch
-    // detection finalize in the background. Session/message entry points await
+    // detection finalize in the background. Only the send path awaits
     // `threadCreation.awaitReady`, so a message sent in this window renders
     // instantly and is queued behind the finalization before reaching the
-    // harness — thread creation never waits on the database.
+    // harness — thread creation never waits on the database, and neither does
+    // typing, reading, or switching threads.
     const { thread, finalize } = threadManager.prepareCreateThread(validated, {
       onEvictionError: (error) =>
         Logger.error('Thread capacity eviction failed', {
@@ -6524,12 +6688,17 @@ export function registerIpcHandlers(
           }
         }
         await finalize()
+        // Broadcast immediately so the new thread opens instantly — branch
+        // detection runs afterwards and updates the row without ever blocking
+        // typing, voice, or the "Loading conversation..." state.
+        broadcastThreadUpdate(thread)
         if (thread.workingDirectory) {
           try {
             const branch = await repositoryService.getCurrentBranch(thread.workingDirectory)
             if (branch) {
               await threadManager.setBranch(thread.projectId, thread.id, branch)
               thread.branch = branch
+              broadcastThreadUpdate(thread)
             }
           } catch (error) {
             Logger.error('New thread branch detection failed', {
@@ -6538,7 +6707,6 @@ export function registerIpcHandlers(
             })
           }
         }
-        broadcastThreadUpdate(thread)
       },
       () => {
         broadcastThreadDeleted(thread)
@@ -6552,10 +6720,13 @@ export function registerIpcHandlers(
     return thread
   })
   if (!options.hydrationHandlersRegistered) {
-    ipcMain.handle('thread:get', async (_, projectId: string, threadId: string) => {
-      await threadCreation.awaitReady(threadId)
-      return threadManager.getThread(projectId, threadId)
-    })
+    // Reads must never wait for optimistic thread finalization: the renderer
+    // already holds the thread object returned by `thread:create`. Reading is
+    // always instant — only the send path (`ensureSession`/`sendPrompt`) queues
+    // behind readiness.
+    ipcMain.handle('thread:get', (_, projectId: string, threadId: string) =>
+      threadManager.getThread(projectId, threadId)
+    )
   }
   ipcMain.handle('thread:list', (_, projectId: string) => threadManager.listThreads(projectId))
   ipcMain.handle('thread:listAll', () => threadManager.listAllThreads())
@@ -6637,7 +6808,6 @@ export function registerIpcHandlers(
       }
       const safeProjectId = validateEntityId(projectId, 'Project ID')
       const safeThreadId = validateEntityId(threadId, 'Thread ID')
-      await threadCreation.awaitReady(safeThreadId)
       return threadManager.loadMessagePage(
         safeProjectId,
         safeThreadId,
@@ -6662,7 +6832,6 @@ export function registerIpcHandlers(
   ipcMain.handle('thread:loadUserMessages', async (_, projectId: unknown, threadId: unknown) => {
     const safeProjectId = validateEntityId(projectId, 'Project ID')
     const safeThreadId = validateEntityId(threadId, 'Thread ID')
-    await threadCreation.awaitReady(safeThreadId)
     return threadManager.loadUserMessages(safeProjectId, safeThreadId)
   })
   // Export the conversation transcript as Markdown, off the main thread.
@@ -6671,7 +6840,6 @@ export function registerIpcHandlers(
     async (_, projectId: unknown, threadId: unknown, rawOptions: unknown) => {
       const safeProjectId = validateEntityId(projectId, 'Project ID')
       const safeThreadId = validateEntityId(threadId, 'Thread ID')
-      await threadCreation.awaitReady(safeThreadId)
       const thread = await threadManager.getThread(safeProjectId, safeThreadId)
       if (!thread) throw new Error('Thread not found')
       const includeTrace = isRecord(rawOptions)
@@ -6820,17 +6988,14 @@ export function registerIpcHandlers(
   ipcMain.handle('thread:harnessUsage', async (_, projectId: unknown, threadId: unknown) => {
     const safeProjectId = validateEntityId(projectId, 'Project ID')
     const safeThreadId = validateEntityId(threadId, 'Thread ID')
-    await threadCreation.awaitReady(safeThreadId)
     return threadManager.harnessUsageFor(safeProjectId, safeThreadId)
   })
   ipcMain.handle('thread:efficiencyKpis', async (_, projectId: unknown, threadId: unknown) => {
     const safeProjectId = validateEntityId(projectId, 'Project ID')
     const safeThreadId = validateEntityId(threadId, 'Thread ID')
-    await threadCreation.awaitReady(safeThreadId)
     return threadManager.efficiencyKpisFor(safeProjectId, safeThreadId)
   })
   ipcMain.handle('thread:markRead', async (_, projectId: string, threadId: string) => {
-    await threadCreation.awaitReady(threadId)
     // Opening a thread means the user moved on from wherever they were; any
     // completed turn left pending on another thread counts as a success.
     turnFeedbackRepo.resolvePendingForOtherThreads(
@@ -6883,7 +7048,6 @@ export function registerIpcHandlers(
       const safeProjectId = validateEntityId(projectId, 'Project ID')
       const safeThreadId = validateEntityId(threadId, 'Thread ID')
       const safeSettings = validateThreadSettings(settings)
-      await threadCreation.awaitReady(safeThreadId)
       return threadManager.updateSettings(safeProjectId, safeThreadId, safeSettings)
     }
   )

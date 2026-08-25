@@ -152,7 +152,7 @@
   <RemoteMobileShell onDisconnect={disconnectDesktop} onConnected={syncDesktopTheme} />
   {#if remoteSession.recovering}
     <div
-      class="pointer-events-none fixed left-1/2 z-60 -translate-x-1/2 whitespace-nowrap text-xs font-medium text-muted"
+      class="pointer-events-none fixed left-1/2 z-60 -translate-x-1/2 whitespace-nowrap rounded-full border border-border/60 bg-surface/70 px-4 py-1.5 text-xs font-medium text-muted backdrop-blur-md"
       style="top: calc(env(safe-area-inset-top) + 5.875rem)"
       role="status"
       aria-live="polite"

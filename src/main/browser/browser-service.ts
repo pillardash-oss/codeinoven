@@ -1,7 +1,10 @@
-import { session, WebContentsView, type BrowserWindow, type Session } from 'electron'
+import { app, session, shell, WebContentsView, type BrowserWindow, type Session } from 'electron'
+import { join } from 'node:path'
 import type {
   BrowserConsoleEntry,
   BrowserConsoleLevel,
+  BrowserDownload,
+  BrowserDownloadState,
   BrowserPageState,
   BrowserPermissionRequest,
   BrowserViewBounds
@@ -13,10 +16,13 @@ import { Logger } from '../system/logger'
 const BROWSER_PARTITION_PREFIX = 'persist:codeinoven-browser:'
 const MAX_BROWSER_URL_LENGTH = 8192
 const MAX_CONSOLE_ENTRIES = 500
+const MAX_TRACKED_DOWNLOADS = 50
+const DOWNLOAD_EVENT_INTERVAL_MS = 150
 const TAB_ID_PATTERN = /^browser:[a-zA-Z0-9:_-]{1,240}$/u
 const PROJECT_ID_PATTERN = /^[a-zA-Z0-9:._-]{1,240}$/u
 const PERMISSION_REQUEST_ID_PATTERN = /^[a-f0-9-]{36}$/u
 const PERMISSION_TIMEOUT_MS = 60_000
+const DOWNLOAD_ID_PATTERN = /^[a-f0-9-]{36}$/u
 
 interface BrowserTab {
   view: WebContentsView
@@ -30,6 +36,12 @@ interface PendingBrowserPermission {
   request: BrowserPermissionRequest
   callback: (granted: boolean) => void
   timer: ReturnType<typeof setTimeout>
+}
+
+interface BrowserDownloadRecord {
+  item: Electron.DownloadItem
+  download: BrowserDownload
+  lastEmittedAt: number
 }
 
 function validateTabId(value: unknown): string {
@@ -62,6 +74,39 @@ function validatePermissionRequestId(value: unknown): string {
     throw new TypeError('Browser permission request ID is invalid')
   }
   return value
+}
+
+function validateDownloadId(value: unknown): string {
+  if (typeof value !== 'string' || !DOWNLOAD_ID_PATTERN.test(value)) {
+    throw new TypeError('Browser download ID is invalid')
+  }
+  return value
+}
+
+/** Reduce a server-suggested filename to a safe, absolute-path-free basename. */
+function safeBasename(value: string): string {
+  // Substitute every path separator, drive-part, or control character with an
+  // underscore, then collapse dots/whitespace so the result is a plain basename.
+  let cleaned = ''
+  for (const char of value) {
+    const code = char.charCodeAt(0)
+    const substitute =
+      code === 0x2f || // '/'
+      code === 0x5c || // '\'
+      code === 0x3a || // ':'
+      code === 0x2a || // '*'
+      code === 0x3f || // '?'
+      code === 0x22 || // '"'
+      code === 0x3c || // '<'
+      code === 0x3e || // '>'
+      code === 0x7c || // '|'
+      code < 0x20 ||
+      code === 0x7f
+    cleaned += substitute ? '_' : char
+  }
+  const normalized = cleaned.replace(/\s+/g, ' ').trim().replace(/^\.+/, '')
+  const base = normalized.length > 0 ? normalized.slice(0, 240) : 'download'
+  return base
 }
 
 function permissionOrigin(value: string): string | null {
@@ -132,6 +177,7 @@ export class BrowserService {
   private readonly permissionGrants = new Map<string, Set<string>>()
   private readonly pendingPermissions = new Map<string, PendingBrowserPermission>()
   private readonly permissionSuspendedTabs = new Set<string>()
+  private readonly downloads = new Map<string, BrowserDownloadRecord>()
   private activeTabId: string | null = null
   private consoleSequence = 0
 
@@ -222,6 +268,41 @@ export class BrowserService {
         if (tab.projectId === projectId) this.destroy(tabId)
       }
     })
+    ipcMain.handle('browser:getDownloads', (_event, rawProjectId) => {
+      const projectId = validateProjectId(rawProjectId)
+      return [...this.downloads.values()]
+        .filter((record) => record.download.projectId === projectId)
+        .map((record) => ({ ...record.download }))
+    })
+    ipcMain.handle('browser:cancelDownload', (_event, rawDownloadId) => {
+      this.downloads.get(validateDownloadId(rawDownloadId))?.item.cancel()
+    })
+    ipcMain.handle('browser:pauseDownload', (_event, rawDownloadId) => {
+      const record = this.downloads.get(validateDownloadId(rawDownloadId))
+      if (record && !record.item.isPaused()) {
+        record.item.pause()
+        record.download = { ...record.download, paused: true }
+        this.emitDownload(record.download.id, true)
+      }
+    })
+    ipcMain.handle('browser:resumeDownload', (_event, rawDownloadId) => {
+      const record = this.downloads.get(validateDownloadId(rawDownloadId))
+      if (record && record.item.canResume()) {
+        record.item.resume()
+        record.download = { ...record.download, paused: false }
+        this.emitDownload(record.download.id, true)
+      }
+    })
+    ipcMain.handle('browser:openDownload', (_event, rawDownloadId) => {
+      const record = this.downloads.get(validateDownloadId(rawDownloadId))
+      if (record && record.download.savePath) void shell.openPath(record.download.savePath)
+    })
+    ipcMain.handle('browser:revealDownload', (_event, rawDownloadId) => {
+      const record = this.downloads.get(validateDownloadId(rawDownloadId))
+      if (!record?.download.savePath) return false
+      shell.showItemInFolder(record.download.savePath)
+      return true
+    })
   }
 
   dispose(): void {
@@ -236,6 +317,10 @@ export class BrowserService {
     this.agentTabIds.clear()
     this.configuredSessions.clear()
     this.permissionGrants.clear()
+    for (const record of this.downloads.values()) {
+      if (record.download.state === 'progressing') record.item.cancel()
+    }
+    this.downloads.clear()
   }
 
   async executeUtility(
@@ -488,14 +573,112 @@ export class BrowserService {
       this.suspendTabForPermission(tabId)
       sendToRenderer(this.window.webContents, 'browser:permissionRequested', request)
     })
-    browserSession.on('will-download', (event) => event.preventDefault())
+    browserSession.on('will-download', (event, item, contents) => {
+      this.handleDownload(projectId, item, contents.id)
+    })
     this.configuredSessions.add(partition)
     return browserSession
+  }
+
+  /** Route a session download through the app-scoped save dialog and tracker. */
+  private handleDownload(projectId: string, item: Electron.DownloadItem, contentsId: number): void {
+    const tabEntry = [...this.tabs.entries()].find(
+      ([, tab]) => tab.projectId === projectId && tab.view.webContents.id === contentsId
+    )
+    const fileName = safeBasename(item.getFilename())
+    const defaultPath = join(app.getPath('downloads'), fileName)
+    item.setSaveDialogOptions({
+      title: 'Save downloaded file',
+      defaultPath
+    })
+
+    const id = crypto.randomUUID()
+    const record: BrowserDownloadRecord = {
+      item,
+      download: {
+        id,
+        tabId: tabEntry?.[0] ?? '',
+        projectId,
+        fileName,
+        url: item.getURL().slice(0, 2048),
+        mimeType: item.getMimeType().slice(0, 256),
+        receivedBytes: item.getReceivedBytes(),
+        totalBytes: item.getTotalBytes(),
+        speedBytes: item.getCurrentBytesPerSecond(),
+        progress: item.getPercentComplete(),
+        state: 'progressing',
+        paused: false,
+        savePath: '',
+        error: ''
+      },
+      lastEmittedAt: 0
+    }
+    this.downloads.set(id, record)
+    this.emitDownload(id)
+
+    item.on('updated', () => {
+      const current = this.downloads.get(id)
+      if (!current) return
+      current.download = {
+        ...current.download,
+        receivedBytes: item.getReceivedBytes(),
+        totalBytes: item.getTotalBytes() || current.download.totalBytes,
+        speedBytes: item.getCurrentBytesPerSecond(),
+        progress: item.getPercentComplete(),
+        paused: item.isPaused()
+      }
+      this.emitDownload(id)
+    })
+    item.once('done', (_event, state) => {
+      const current = this.downloads.get(id)
+      if (!current) return
+      const finished = state as BrowserDownloadState
+      current.download = {
+        ...current.download,
+        state: finished,
+        receivedBytes: item.getReceivedBytes(),
+        totalBytes: item.getTotalBytes() || current.download.totalBytes,
+        progress: item.getPercentComplete(),
+        paused: false,
+        savePath: item.getSavePath(),
+        error:
+          finished === 'interrupted'
+            ? 'The download was interrupted and could not resume.'
+            : current.download.error
+      }
+      this.emitDownload(id, true)
+      this.trimDownloads()
+    })
+  }
+
+  private emitDownload(id: string, force = false): void {
+    const record = this.downloads.get(id)
+    if (!record || this.window.webContents.isDestroyed()) return
+    const now = Date.now()
+    if (!force && now - record.lastEmittedAt < DOWNLOAD_EVENT_INTERVAL_MS) return
+    record.lastEmittedAt = now
+    sendToRenderer(this.window.webContents, 'browser:download', { ...record.download })
+  }
+
+  private trimDownloads(): void {
+    if (this.downloads.size <= MAX_TRACKED_DOWNLOADS) return
+    const terminal = [...this.downloads.entries()].filter(
+      ([, record]) => record.download.state !== 'progressing'
+    )
+    while (this.downloads.size > MAX_TRACKED_DOWNLOADS && terminal.length > 0) {
+      const [id] = terminal.shift() ?? []
+      if (id) this.downloads.delete(id)
+    }
   }
 
   private async clearProjectData(projectId: string): Promise<void> {
     for (const [requestId, pending] of this.pendingPermissions) {
       if (pending.request.projectId === projectId) this.resolvePermission(requestId, false, false)
+    }
+    for (const record of this.downloads.values()) {
+      if (record.download.projectId === projectId && record.download.state === 'progressing') {
+        record.item.cancel()
+      }
     }
     const partition = `${BROWSER_PARTITION_PREFIX}${projectId}`
     this.permissionGrants.get(partition)?.clear()

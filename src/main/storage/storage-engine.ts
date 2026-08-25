@@ -81,6 +81,7 @@ export class StorageEngine {
   async initialize(): Promise<void> {
     await ensureDir(this.root)
     await ensureDir(this.resolve('projects'))
+    await ensureDir(this.resolve('projects-gh'))
     await ensureDir(this.resolve('workflows'))
     await ensureDir(this.resolve('blobs'))
     await ensureDir(this.resolve('remote'))

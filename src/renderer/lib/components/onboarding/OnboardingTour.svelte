@@ -76,7 +76,8 @@
       selector: '[data-onboarding="composer"]',
       eyebrow: 'Send and steer',
       title: 'Type what you want done',
-      description: 'The composer accepts plain instructions, files, and images.'
+      description:
+        'The composer accepts plain instructions, files, and images. You can also dictate with the microphone, or tap it to read a message in Sound settings.'
     },
     {
       step: 5,

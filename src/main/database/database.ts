@@ -635,7 +635,32 @@ export class Database {
 
   private applySchema(): void {
     const connection = this.requireDb()
-    connection.transaction(() => connection.exec(DATABASE_SCHEMA_SQL))()
+    connection.transaction(() => {
+      connection.exec(DATABASE_SCHEMA_SQL)
+      this.migrateEngineeringLifecycleColumns(connection)
+    })()
+  }
+
+  /** Existing databases predate the multi-select lifecycle columns. `CREATE TABLE IF
+   *  NOT EXISTS` never alters an existing table, so add the columns when missing. */
+  private migrateEngineeringLifecycleColumns(connection: DatabaseType): void {
+    const columns = new Set<string>(
+      (
+        connection.prepare('PRAGMA table_info(engineering_lifecycle)').all() as Array<{
+          name: string
+        }>
+      ).map((column) => column.name)
+    )
+    if (!columns.has('selected_stages_json')) {
+      connection.exec(
+        "ALTER TABLE engineering_lifecycle ADD COLUMN selected_stages_json TEXT NOT NULL DEFAULT '[]'"
+      )
+    }
+    if (!columns.has('autopilot')) {
+      connection.exec(
+        'ALTER TABLE engineering_lifecycle ADD COLUMN autopilot INTEGER NOT NULL DEFAULT 0'
+      )
+    }
   }
 }
 

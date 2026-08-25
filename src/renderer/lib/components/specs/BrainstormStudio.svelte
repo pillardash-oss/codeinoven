@@ -1,7 +1,6 @@
 <script lang="ts">
   import {
     AppWindow,
-    ArrowRight,
     Check,
     ChevronDown,
     FileText,
@@ -45,6 +44,9 @@
   } from '$shared/types'
 
   type CallbackResult = void | Promise<void>
+
+  /** Next-step choices offered after a Brainstorm session. */
+  export type BrainstormNextStep = 'lofi' | 'hifi' | 'prd' | 'spec'
 
   interface AnnotationAnchor {
     quote: string
@@ -95,6 +97,7 @@
       additionalNotes: string,
       reviewChanges: BrainstormReviewChanges
     ) => CallbackResult
+    onNextStep?: (step: BrainstormNextStep, brainstorm: BrainstormDocument) => CallbackResult
     onOpenInEditor?: (brainstorm: BrainstormDocument) => CallbackResult
     onRevealInAppFile?: (brainstorm: BrainstormDocument) => CallbackResult
     onOpenPrototype?: (previewPath: string) => CallbackResult
@@ -125,6 +128,7 @@
     onExplainSelection,
     onQuickChatSelection,
     onSubmit,
+    onNextStep,
     onOpenInEditor,
     onRevealInAppFile,
     onOpenPrototype
@@ -653,6 +657,24 @@
     speechController.observeSent(decisionSpeechTargetId, notes)
   }
 
+  let nextStepBusy = $state(false)
+
+  async function runNextStep(step: BrainstormNextStep): Promise<void> {
+    if (nextStepBusy || !onNextStep) return
+    nextStepBusy = true
+    try {
+      let submitted = $state.snapshot(draft)
+      if (dirty) {
+        const saved = await saveDraft()
+        if (!saved) return
+        submitted = saved
+      }
+      await onNextStep(step, submitted)
+    } finally {
+      nextStepBusy = false
+    }
+  }
+
   function handleWindowKeydown(event: KeyboardEvent): void {
     if (event.key === 'Escape') {
       closePendingAnnotation()
@@ -784,15 +806,59 @@
               additionalNotes = ''
             }}>Discuss changes</button
           >
-          <button
-            class="flex items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-on-primary hover:bg-primary-hover disabled:opacity-50"
-            disabled={busy}
-            title="Use this session report to prepare the specification"
-            onclick={() => {
-              pendingAction = 'finalize'
-              additionalNotes = ''
-            }}>Prepare spec <ArrowRight size={13} /></button
-          >
+          <DropdownMenu.Root>
+            <DropdownMenu.Trigger
+              class="flex items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-on-primary hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-50"
+              disabled={busy || nextStepBusy || !onNextStep}
+              title="Choose what to build next from this Brainstorm"
+            >
+              {nextStepBusy ? 'Working…' : 'Next step'}
+              <ChevronDown size={13} />
+            </DropdownMenu.Trigger>
+            <DropdownMenu.Portal>
+              <DropdownMenu.Content
+                side="bottom"
+                align="end"
+                sideOffset={4}
+                collisionPadding={8}
+                strategy="fixed"
+                class="z-50 w-52 rounded-lg border border-border bg-surface p-1 shadow-lg"
+              >
+                <DropdownMenu.Item
+                  class="flex cursor-default items-center justify-between gap-3 rounded-md px-2 py-1.5 text-xs outline-none data-[highlighted]:bg-elevated"
+                  title="Prototype a low-fidelity Lo-Fi wireframe direction"
+                  disabled={nextStepBusy}
+                  onSelect={() => void runNextStep('lofi')}
+                >
+                  <span>Prototype Lo-Fi</span>
+                </DropdownMenu.Item>
+                <DropdownMenu.Item
+                  class="flex cursor-default items-center justify-between gap-3 rounded-md px-2 py-1.5 text-xs outline-none data-[highlighted]:bg-elevated"
+                  title="Prototype a single high-fidelity Hi-Fi direction"
+                  disabled={nextStepBusy}
+                  onSelect={() => void runNextStep('hifi')}
+                >
+                  <span>Prototype Hi-Fi</span>
+                </DropdownMenu.Item>
+                <DropdownMenu.Item
+                  class="flex cursor-default items-center justify-between gap-3 rounded-md px-2 py-1.5 text-xs outline-none data-[highlighted]:bg-elevated"
+                  title="Generate the product requirements document from this Brainstorm"
+                  disabled={nextStepBusy}
+                  onSelect={() => void runNextStep('prd')}
+                >
+                  <span>Generate PRD</span>
+                </DropdownMenu.Item>
+                <DropdownMenu.Item
+                  class="flex cursor-default items-center justify-between gap-3 rounded-md px-2 py-1.5 text-xs outline-none data-[highlighted]:bg-elevated"
+                  title="Finalize this Brainstorm and generate an implementation-ready Spec"
+                  disabled={nextStepBusy}
+                  onSelect={() => void runNextStep('spec')}
+                >
+                  <span>Generate Spec</span>
+                </DropdownMenu.Item>
+              </DropdownMenu.Content>
+            </DropdownMenu.Portal>
+          </DropdownMenu.Root>
         {/if}
       </div>
     </div>

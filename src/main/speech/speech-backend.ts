@@ -3,6 +3,7 @@ import type { SpeechCapability, SpeechRuntime } from '../../lib/speech/types'
 export interface SpeechBackendArtifact {
   id: string
   directory: string
+  modelFamily?: 'whisper' | 'parakeet'
 }
 
 export interface SpeechTranscribeInput {

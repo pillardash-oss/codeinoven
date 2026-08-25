@@ -488,11 +488,19 @@
     const previous = config
     config = { ...config, ...patch }
     applyTheme()
+    if (patch.sound) {
+      window.dispatchEvent(
+        new CustomEvent('cio:soundChanged', { detail: { ...config.sound, ...patch.sound } })
+      )
+    }
     try {
       config = await invoke('config:update', patch)
       appConfigState.sync(config)
       applyTheme()
       settingsError = undefined
+      if (patch.sound) {
+        window.dispatchEvent(new CustomEvent('cio:soundChanged', { detail: config.sound }))
+      }
     } catch {
       config = previous
       applyTheme()
@@ -1055,7 +1063,7 @@
       })
       const visibleThreads = threadList.filter((thread) => !thread.archived)
       scopeState.setThreads(visibleThreads)
-      notificationPanelState.hydrateFromThreads(visibleThreads)
+      notificationPanelState.hydrateFromThreads(visibleThreads, projectList)
 
       // 3. The selected project's scope board is the visible surface — load it
       //    before warming any provider data.

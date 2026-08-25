@@ -5,6 +5,7 @@ import type {
   AgentMessage,
   AgentPart,
   AgentProviderIssue,
+  AgentSubagentActivity,
   PermissionReply,
   ProviderCatalog,
   ProviderModel,
@@ -32,10 +33,12 @@ import { PersistentCliDriver } from './persistent-cli-driver'
 import type {
   GenerateTitleOptions,
   HarnessCapabilities,
-  SendPromptOptions
+  SendPromptOptions,
+  SteerPromptOptions
 } from './driver.interface'
 import type { StorageEngine } from '../storage/storage-engine'
 import { runHarnessCommand } from './harness-runtime'
+import { Logger } from '../system/logger'
 
 /**
  * Muse Code (Meta) headless integration notes.
@@ -50,12 +53,18 @@ import { runHarnessCommand } from './harness-runtime'
  * Wire schema: every line is an envelope `{ record_type, payload_type, payload }`.
  * Meaningful payloads:
  *   - `run.output.delta`  → `payload.text` (incremental assistant text)
+ *   - `run.output.reasoning.delta` / `run.reasoning.delta` / `run.thinking.delta`
+ *     → incremental reasoning trace (`payload.text` / `payload.delta` / `payload.reasoning`)
  *   - `run.terminal.completed` → `payload.terminal` (`completed`|`error`),
  *     `payload.text` (final), `payload.reason`
  *   - `run.model.configured` → `payload.provider_id` / `payload.model_id`
  *   - `task.lifecycle.proposed` → tool call announced (`event.task_kind` `tool.*`)
  *   - `task.lifecycle.side_effect_intent` → tool running + provider call id
  *   - `task.lifecycle.output` → tool chunk (bash `{command,description,output}`)
+ *   - `*.compaction*` / `runtime.session` `compaction` → harness-native context
+ *     compaction checkpoint (auto when soft/hard threshold hit). Mirrored as a
+ *     `compaction` part so `formatHistoryRecap` slices from that cut on the
+ *     next turn — seamless continuation.
  *   - `tool.result` → authoritative tool completion (`call_id`, `text`)
  * The provider session UUID is intentionally not reused. The live stream is
  * the sole source of provider events because native session logs are disabled.
@@ -381,6 +390,9 @@ interface MuseTurnState {
   messageId: string
   createdAt: number
   text: string
+  reasoning: string
+  reasoningSummary?: string
+  reasoningTime?: { start?: number; end?: number }
   parts: AgentPart[]
   /** True once any assistant part has been emitted (message exists on disk). */
   started: boolean
@@ -390,6 +402,8 @@ interface MuseTurnState {
   toolByCall: Map<string, string>
   /** Question/approval ids already promoted into the shared event stream. */
   promotedInteractions: Set<string>
+  /** Gated tool tasks whose permission card has already been surfaced. */
+  emittedPermissionTasks: Set<string>
   /** Tool tasks synchronously stopped before Muse could execute them. */
   gatedTaskIds: Set<string>
   /** Muse converts CodeInOven's deliberate SIGTERM into numeric exit code 143. */
@@ -423,6 +437,17 @@ function textPart(state: MuseTurnState): Extract<AgentPart, { type: 'text' }> {
   }
 }
 
+function reasoningPart(state: MuseTurnState): Extract<AgentPart, { type: 'reasoning' }> {
+  return {
+    type: 'reasoning',
+    id: `${state.messageId}:reasoning`,
+    messageID: state.messageId,
+    text: state.reasoning,
+    ...(state.reasoningSummary ? { summary: state.reasoningSummary } : {}),
+    ...(state.reasoningTime ? { time: state.reasoningTime } : {})
+  }
+}
+
 /** Build a `tool` part from an in-flight Muse tool-call record. */
 function museToolPart(state: MuseTurnState, tool: MuseToolState): AgentPart {
   return {
@@ -444,6 +469,98 @@ function museToolPart(state: MuseTurnState, tool: MuseToolState): AgentPart {
 /** Emit a `message.part.updated` event for the given tool's current state. */
 function museToolEvent(context: CliLineParseContext, state: MuseTurnState, tool: MuseToolState) {
   const part = museToolPart(state, tool)
+  upsertPart(state, part)
+  return { type: 'message.part.updated' as const, sessionId: context.sessionId, part }
+}
+
+function museCompactionResult(
+  context: CliLineParseContext,
+  summary: string | undefined,
+  auto: boolean,
+  overflow?: boolean
+): CliLineParseResult {
+  const messageId = `muse-compaction-${context.sessionId}-${Date.now()}`
+  const fallbackSummary =
+    summary ??
+    'Automatic context compaction by Muse — older history summarized per summary-preserved-suffix/v1; next turn continues seamlessly from this checkpoint with preserved suffix.'
+  const part: Extract<AgentPart, { type: 'compaction' }> = {
+    type: 'compaction',
+    id: `${messageId}:compaction`,
+    messageID: messageId,
+    auto,
+    summary: fallbackSummary,
+    ...(overflow ? { overflow: true } : {})
+  }
+  return {
+    messages: [
+      {
+        id: messageId,
+        role: 'assistant',
+        origin: 'compaction',
+        visibility: 'working_trace',
+        parts: [part],
+        createdAt: Date.now(),
+        completedAt: Date.now(),
+        harnessId: 'muse'
+      }
+    ],
+    events: [
+      { type: 'message.part.updated', sessionId: context.sessionId, part },
+      { type: 'message.completed', sessionId: context.sessionId, messageId, compaction: true }
+    ]
+  }
+}
+
+function isMuseSubagentSpawn(name: string): boolean {
+  return normalizeInteractionName(name) === 'subagent_spawn' || name === 'subagent_spawn'
+}
+
+function museSubagentPart(state: MuseTurnState, tool: MuseToolState): AgentPart {
+  const input = tool.input ?? {}
+  const agent =
+    stringValue(input['role']) ??
+    stringValue(input['subagent_type']) ??
+    stringValue(input['agent']) ??
+    tool.tool
+  const description =
+    stringValue(input['objective']) ??
+    stringValue(input['description']) ??
+    stringValue(input['task_name']) ??
+    stringValue(input['prompt']) ??
+    agent
+  const prompt = stringValue(input['objective']) ?? stringValue(input['prompt']) ?? stringValue(input['description'])
+  const childSessionId =
+    stringValue(input['subagent_id']) ??
+    stringValue(input['childSessionId']) ??
+    tool.callId ??
+    tool.taskId
+  const providerTaskId = tool.callId ?? tool.taskId
+  const background = input['background'] === true
+  const status = tool.status as AgentSubagentActivity['status']
+  const output = tool.output
+  const error = status === 'error' ? (output ?? 'Sub-agent task failed') : undefined
+  return {
+    type: 'subagent',
+    id: `muse-subagent-${tool.taskId}`,
+    messageID: state.messageId,
+    callID: tool.callId ?? tool.taskId,
+    activity: {
+      status,
+      agent,
+      description,
+      ...(prompt ? { prompt } : {}),
+      ...(childSessionId ? { childSessionId } : {}),
+      ...(providerTaskId ? { providerTaskId } : {}),
+      background,
+      ...(output ? { output } : {}),
+      ...(error ? { error } : {}),
+      time: { start: tool.start, ...(tool.end ? { end: tool.end } : {}) }
+    }
+  }
+}
+
+function museSubagentEvent(context: CliLineParseContext, state: MuseTurnState, tool: MuseToolState) {
+  const part = museSubagentPart(state, tool)
   upsertPart(state, part)
   return { type: 'message.part.updated' as const, sessionId: context.sessionId, part }
 }
@@ -533,10 +650,11 @@ function escapeMuseMentions(text: string): string {
  * Map one `muse exec --json` envelope into CodeInOven's stable shapes.
  *
  * Every line is `{ record_type, payload_type, payload }`; the meaningful
- * payloads are `run.output.delta` (streaming text), `run.terminal.completed`
- * (turn end), and `run.model.configured` (provenance). The top-level session
- * stream ids are observed only as event metadata and are never reused for
- * native conversation history.
+ * payloads are `run.output.delta` (streaming text), reasoning deltas
+ * (`run.output.reasoning.delta` / `run.reasoning.delta` / `run.thinking.delta`),
+ * `run.terminal.completed` (turn end), and `run.model.configured` (provenance).
+ * The top-level session stream ids are observed only as event metadata and are
+ * never reused for native conversation history.
  *
  * Unknown record types are ignored so schema drift degrades to a silent turn
  * rather than a broken session. Keeping this boundary pure makes it testable.
@@ -584,19 +702,30 @@ export function mapMuseRecord(
         if (input) tool.input = input
         tool.callId = callId
         state.toolByCall.set(callId, tool.taskId)
-        events.push(museToolEvent(context, state, tool))
+        if (isMuseSubagentSpawn(tool.tool)) {
+          events.push(museSubagentEvent(context, state, tool))
+        } else {
+          events.push(museToolEvent(context, state, tool))
+        }
         if (
           tool.requiresPermission ||
           (tool.policyDecision &&
             !tool.policyDecision.startsWith('allow') &&
             tool.policyDecision !== 'not_applicable')
         ) {
-          const permissionEvent = musePermissionEvent(context, state, {
-            approval_id: callId,
-            tool_name: toolName,
-            input: tool.input
-          })
-          if (permissionEvent) events.push(permissionEvent)
+          // Surface the card only once — and only after the committed args are
+          // available so the permission carries the actual command.
+          if (!tool.requiresPermission || !state.emittedPermissionTasks.has(tool.taskId)) {
+            const permissionEvent = musePermissionEvent(context, state, {
+              approval_id: callId,
+              tool_name: toolName,
+              input: tool.input
+            })
+            if (permissionEvent) {
+              if (tool.requiresPermission) state.emittedPermissionTasks.add(tool.taskId)
+              events.push(permissionEvent)
+            }
+          }
         }
       }
       return events.length > 0 ? { ...base, events } : base
@@ -646,10 +775,53 @@ export function mapMuseRecord(
       const event = musePermissionEvent(context, state, exportedEvent)
       return event ? { ...base, events: [event] } : base
     }
+    if (kind && kind.toLowerCase().includes('compaction')) {
+      const summary = firstString(
+        stringValue(exportedEvent['summary']),
+        stringValue(exportedEvent['text']),
+        stringValue(exportedEvent['compact_summary']),
+        stringValue(exportedEvent['summary_text']),
+        stringValue(payload['summary']),
+        stringValue(payload['text'])
+      )
+      const trigger = stringValue(exportedEvent['trigger']) ?? stringValue(exportedEvent['kind'])
+      const auto = trigger ? trigger !== 'manual' : true
+      const overflow = trigger === 'auto'
+      return { ...base, ...museCompactionResult(context, summary, auto, overflow || undefined) }
+    }
     return base
   }
 
+  // Harness-native context compaction — emitted by Muse when the soft/hard
+  // threshold fires (summary-preserved-suffix/v1). Mirror it as a CodeInOven
+  // compaction checkpoint so the next turn's history recap slices from that cut
+  // and continues seamlessly instead of replaying the full pre-compaction
+  // transcript.
+  if (payloadType && payloadType.toLowerCase().includes('compaction')) {
+    const eventRec = record(payload['event'])
+    const summary = firstString(
+      stringValue(payload['summary']),
+      stringValue(payload['text']),
+      stringValue(payload['compact_summary']),
+      stringValue(payload['summary_text']),
+      stringValue(eventRec?.['summary']),
+      stringValue(eventRec?.['text']),
+      stringValue(eventRec?.['compact_summary']),
+      stringValue(eventRec?.['summary_text'])
+    )
+    const trigger =
+      stringValue(payload['trigger']) ??
+      stringValue(eventRec?.['trigger']) ??
+      stringValue(eventRec?.['kind'])
+    const auto = trigger ? trigger !== 'manual' : true
+    const overflow = trigger === 'auto' || payloadType.toLowerCase().includes('overflow')
+    return { ...base, ...museCompactionResult(context, summary, auto, overflow || undefined) }
+  }
+
   // Tool call proposed — announce a pending tool card in the working trace.
+  // Muse sub-agents (`subagent_spawn`) are rendered as `type:'subagent'` so
+  // WorkingTrace shows SubagentCard + the header chip/sheet instead of a flat
+  // generic tool card.
   if (payloadType === 'task.lifecycle.proposed') {
     const event = record(payload['event'])
     const taskKind = museToolName(event?.['task_kind'], 'task_kind')
@@ -658,24 +830,21 @@ export function mapMuseRecord(
         taskId,
         tool: taskKind,
         status: 'pending',
-        input: {},
+        input: record(event?.['input']) ?? record(event?.['arguments']) ?? {},
         ...(state.gatedTaskIds.has(taskId) ? { requiresPermission: true } : {}),
         start: Date.now()
       }
       state.tools.set(taskId, tool)
+      if (isMuseSubagentSpawn(taskKind)) {
+        return { ...base, events: [museSubagentEvent(context, state, tool)] }
+      }
       if (tool.requiresPermission) {
-        const permissionEvent = musePermissionEvent(context, state, {
-          approval_id: taskId,
-          tool_name: taskKind,
-          input: record(event?.['input']) ?? record(event?.['arguments']) ?? {}
-        })
-        return {
-          ...base,
-          events: [
-            museToolEvent(context, state, tool),
-            ...(permissionEvent ? [permissionEvent] : [])
-          ]
-        }
+        // Deliberately do NOT emit the permission card here: Muse streams the
+        // command after `proposed` (`assistant_tool_calls_committed` /
+        // `task.lifecycle.output`), so a card emitted on this record would
+        // surface empty details. Keep the pending tool card and surface the
+        // permission once the command is known.
+        return { ...base, events: [museToolEvent(context, state, tool)] }
       }
       // The live stream does not expose the rich question arguments. Keep the
       // generic tool out of the conversation rather than duplicating the
@@ -715,8 +884,29 @@ export function mapMuseRecord(
       state.toolByCall.set(foundCallId, taskId)
     }
     tool.status = 'running'
+    let sideEffectEvents: SessionAgentEvent[] = []
+    if (tool.requiresPermission && !state.emittedPermissionTasks.has(tool.taskId)) {
+      const permissionEvent = musePermissionEvent(context, state, {
+        approval_id: tool.callId ?? taskId,
+        tool_name: tool.tool,
+        input: tool.input
+      })
+      if (permissionEvent) {
+        state.emittedPermissionTasks.add(tool.taskId)
+        sideEffectEvents = [permissionEvent]
+      }
+    }
+    if (isMuseSubagentSpawn(tool.tool)) {
+      return {
+        ...base,
+        events: [museSubagentEvent(context, state, tool), ...sideEffectEvents]
+      }
+    }
     if (isQuestionToolName(tool.tool)) return base
-    return { ...base, events: [museToolEvent(context, state, tool)] }
+    return {
+      ...base,
+      events: [museToolEvent(context, state, tool), ...sideEffectEvents]
+    }
   }
 
   // Tool output chunk — for bash it is a JSON `{command, description, output}`;
@@ -747,8 +937,34 @@ export function mapMuseRecord(
       tool.output = chunk
       if (!tool.title) tool.title = tool.tool
     }
+    let outputEvents: SessionAgentEvent[] = []
+    if (
+      tool.requiresPermission &&
+      !state.emittedPermissionTasks.has(tool.taskId) &&
+      typeof tool.input['command'] === 'string' &&
+      tool.input['command'].trim().length > 0
+    ) {
+      const permissionEvent = musePermissionEvent(context, state, {
+        approval_id: tool.callId ?? taskId,
+        tool_name: tool.tool,
+        input: tool.input
+      })
+      if (permissionEvent) {
+        state.emittedPermissionTasks.add(tool.taskId)
+        outputEvents = [permissionEvent]
+      }
+    }
+    if (isMuseSubagentSpawn(tool.tool)) {
+      return {
+        ...base,
+        events: [museSubagentEvent(context, state, tool), ...outputEvents]
+      }
+    }
     if (isQuestionToolName(tool.tool)) return base
-    return { ...base, events: [museToolEvent(context, state, tool)] }
+    return {
+      ...base,
+      events: [museToolEvent(context, state, tool), ...outputEvents]
+    }
   }
 
   // Tool result — authoritative completion; correlate by provider call id.
@@ -775,7 +991,58 @@ export function mapMuseRecord(
     }
     tool.end = Date.now()
     if (isQuestionToolName(tool.tool)) return base
+    if (isMuseSubagentSpawn(tool.tool)) {
+      return { ...base, events: [museSubagentEvent(context, state, tool)] }
+    }
     return { ...base, events: [museToolEvent(context, state, tool)] }
+  }
+
+  // Streaming reasoning trace — Muse Spark reasoning effort produces
+  // provider-side thinking that the CLI surfaces as a separate delta channel.
+  // The current CLI (0.2.1) inlines reasoning into `run.output.delta` text for
+  // most turns, but any future `*reasoning*` / `*thinking*` payload is captured
+  // here so the working trace renders a distinct `ThinkingBlock` instead of
+  // silently dropping the trace.
+  if (
+    payloadType === 'run.output.reasoning.delta' ||
+    payloadType === 'run.reasoning.delta' ||
+    payloadType === 'run.thinking.delta' ||
+    payloadType === 'run.output.thinking.delta' ||
+    (payloadType !== undefined && (payloadType.includes('reasoning') || payloadType.includes('thinking')))
+  ) {
+    const delta =
+      stringValue(payload['text']) ??
+      stringValue(payload['delta']) ??
+      stringValue(payload['reasoning']) ??
+      stringValue(payload['thinking']) ??
+      stringValue(payload['content']) ??
+      stringValue(record(payload['event'])?.['delta']) ??
+      stringValue(record(payload['event'])?.['thinking'])
+    const summary = stringValue(payload['summary']) ?? stringValue(record(payload['event'])?.['summary'])
+    if (summary) state.reasoningSummary = summary
+    if (delta) {
+      if (!state.reasoningTime?.start) {
+        state.reasoningTime = { start: Date.now(), ...state.reasoningTime }
+      }
+      state.reasoning += delta
+      const part = reasoningPart(state)
+      upsertPart(state, part)
+      return {
+        ...base,
+        messages: [museMessage(state)],
+        events: [{ type: 'message.part.updated', sessionId: context.sessionId, part }]
+      }
+    }
+    if (summary) {
+      const part = reasoningPart(state)
+      upsertPart(state, part)
+      return {
+        ...base,
+        messages: [museMessage(state)],
+        events: [{ type: 'message.part.updated', sessionId: context.sessionId, part }]
+      }
+    }
+    return base
   }
 
   // Streaming assistant text — `payload.text` is an incremental delta.
@@ -801,6 +1068,20 @@ export function mapMuseRecord(
     const terminal = stringValue(payload['terminal'])
     const finalText = stringValue(payload['text'])
     const reason = stringValue(payload['reason'])
+    const finalReasoning =
+      stringValue(payload['reasoning']) ??
+      stringValue(payload['thinking']) ??
+      stringValue(payload['reasoning_text'])
+    const finalReasoningSummary = stringValue(payload['reasoning_summary']) ?? stringValue(payload['summary'])
+    if (finalReasoningSummary) state.reasoningSummary = finalReasoningSummary
+    if (finalReasoning && finalReasoning.length > state.reasoning.length) {
+      state.reasoning = finalReasoning
+      state.reasoningTime = { ...(state.reasoningTime ?? {}), end: Date.now() }
+      upsertPart(state, reasoningPart(state))
+    } else if (state.reasoning && !state.reasoningTime?.end) {
+      state.reasoningTime = { ...(state.reasoningTime ?? {}), end: Date.now() }
+      upsertPart(state, reasoningPart(state))
+    }
     if (finalText) {
       state.text = finalText
       upsertPart(state, textPart(state))
@@ -816,6 +1097,22 @@ export function mapMuseRecord(
           sessionId: context.sessionId,
           part: textPart(state)
         })
+      }
+      // A gated tool can still be stopped before the stream carries its
+      // command (the `proposed` record gates immediately). Surface the pending
+      // permission at turn end with whatever arguments were captured so the
+      // user can still approve or reject instead of the request vanishing.
+      for (const tool of state.tools.values()) {
+        if (!tool.requiresPermission || state.emittedPermissionTasks.has(tool.taskId)) continue
+        const permissionEvent = musePermissionEvent(context, state, {
+          approval_id: tool.callId ?? tool.taskId,
+          tool_name: tool.tool,
+          input: tool.input
+        })
+        if (permissionEvent) {
+          state.emittedPermissionTasks.add(tool.taskId)
+          events.push(permissionEvent)
+        }
       }
       events.push({
         type: 'message.completed',
@@ -855,8 +1152,8 @@ export class MuseDriver extends PersistentCliDriver {
     providerCatalog: true,
     sessionStatus: false,
     contextUsage: false,
-    compaction: false,
-    subagents: false,
+    compaction: true,
+    subagents: true,
     nativeUtilities: []
   }
 
@@ -864,6 +1161,20 @@ export class MuseDriver extends PersistentCliDriver {
   private continuationOptions = new Map<string, SendPromptOptions>()
   private approvedToolAllowances = new Map<string, number>()
   private hiddenContinuationSessions = new Set<string>()
+  /**
+   * Steers received while a tool call is mid-flight (e.g. a running shell
+   * command). Muse's `exec` process cannot accept live input, so a steer
+   * always restarts the turn — but restarting immediately would kill the
+   * tool call itself. Queue it here and deliver once `onJsonRecord` observes
+   * the tool call settle (`tool.result`), or the process exits for any other
+   * reason. The user's message is already visible in the transcript via
+   * chat-engine's optimistic persist, so this only delays transport, not
+   * display.
+   */
+  private pendingSteers = new Map<
+    string,
+    { projectPath: string; options: SteerPromptOptions }[]
+  >()
 
   constructor(storage: StorageEngine) {
     super(storage)
@@ -934,7 +1245,27 @@ export class MuseDriver extends PersistentCliDriver {
     } else if (options.settings.permissionLevel === 'full_access') {
       // Full Access trusts the workspace and bypasses approval and the sandbox.
       args.push('--yolo')
+    } else {
+      args.push('--disable-approval')
     }
+
+    // Native automatic compaction keeps the provider context window bounded
+    // even for this stateless harness (mirrored history + recap).
+    args.push(
+      '--context-compaction-strategy',
+      'summary-preserved-suffix/v1',
+      '--context-compaction-soft-threshold',
+      '0.8',
+      '--context-compaction-hard-threshold',
+      '0.95'
+    )
+
+    // Enable native worktree-isolated subagents so `subagent_spawn` with
+    // `worktree_isolation: true` is accepted. This is a compatibility flag;
+    // isolation still requires the child request (`worktree_isolation:true`) —
+    // omission stays shared. Passing it here unlocks the fanout contract
+    // described in the cookbook without requiring a separate launch flag.
+    args.push('--subagent-worktree-isolation')
 
     const attachmentReferences: string[] = []
     for (const attachment of options.attachments) {
@@ -970,11 +1301,14 @@ export class MuseDriver extends PersistentCliDriver {
       messageId: `muse:${session.id}:${turnIndex}`,
       createdAt: Date.now(),
       text: '',
+      reasoning: '',
+      reasoningTime: { start: Date.now() },
       parts: [],
       started: false,
       tools: new Map(),
       toolByCall: new Map(),
       promotedInteractions: new Set(),
+      emittedPermissionTasks: new Set(),
       gatedTaskIds: new Set(),
       expectsProcessStop: false
     }
@@ -989,28 +1323,87 @@ export class MuseDriver extends PersistentCliDriver {
       args,
       env: buildProcessEnvironment(),
       onJsonRecord: (value) => {
-        if (options.settings.permissionLevel === 'full_access') return
         const envelope = record(value)
-        if (envelope?.['payload_type'] !== 'task.lifecycle.proposed') return
-        const payload = record(envelope['payload'])
-        const event = record(payload?.['event'])
-        const taskId = stringValue(payload?.['task_id'])
-        const taskKind = museToolName(event?.['task_kind'], 'task_kind')
-        if (!taskId || !taskKind || !museToolNeedsPermission(taskKind)) return
-        const allowance = this.approvedToolAllowances.get(session.id) ?? 0
-        if (allowance > 0) {
-          if (allowance === 1) this.approvedToolAllowances.delete(session.id)
-          else this.approvedToolAllowances.set(session.id, allowance - 1)
-          return
+        const payloadType = envelope?.['payload_type']
+        const payload = record(envelope?.['payload'])
+
+        if (options.settings.permissionLevel !== 'full_access' && payloadType === 'task.lifecycle.proposed') {
+          const event = record(payload?.['event'])
+          const taskId = stringValue(payload?.['task_id'])
+          const taskKind = museToolName(event?.['task_kind'], 'task_kind')
+          if (taskId && taskKind && !isMuseSubagentSpawn(taskKind) && museToolNeedsPermission(taskKind)) {
+            const allowance = this.approvedToolAllowances.get(session.id) ?? 0
+            if (allowance > 0) {
+              if (allowance === 1) this.approvedToolAllowances.delete(session.id)
+              else this.approvedToolAllowances.set(session.id, allowance - 1)
+            } else {
+              turnState.gatedTaskIds.add(taskId)
+              turnState.expectsProcessStop = true
+              this.stopActiveProcess(session.id)
+              return
+            }
+          }
         }
-        turnState.gatedTaskIds.add(taskId)
-        turnState.expectsProcessStop = true
-        this.stopActiveProcess(session.id)
+
+        // A tool call just settled (its authoritative completion signal) — if a
+        // steer is queued and no other tool call is still in flight, this is
+        // the safe boundary to deliver it at.
+        if (payloadType === 'tool.result') {
+          const callId = stringValue(payload?.['call_id'])
+          const settlingTaskId = callId ? turnState.toolByCall.get(callId) : undefined
+          const stillActive = [...turnState.tools.entries()].some(
+            ([taskId, tool]) =>
+              taskId !== settlingTaskId &&
+              !turnState.gatedTaskIds.has(taskId) &&
+              (tool.status === 'pending' || tool.status === 'running')
+          )
+          if (!stillActive) this.deliverPendingSteers(session.id)
+        }
       },
       suppressIdle: () => turnState.promotedInteractions.size > 0,
       isExpectedExit: () => turnState.expectsProcessStop,
-      onProcessExit: () => this.approvedToolAllowances.delete(session.id)
+      onProcessExit: () => {
+        this.approvedToolAllowances.delete(session.id)
+        // Fallback for turns that never produced a tool-call boundary (a
+        // plain-text reply, or the process exiting before one settled) — a
+        // steer queued against this turn would otherwise never be delivered.
+        this.deliverPendingSteers(session.id)
+      }
     }
+  }
+
+  override async steerPrompt(projectPath: string, options: SteerPromptOptions): Promise<void> {
+    const turnState = this.turnStates.get(options.sessionId)
+    const hasActiveTool = turnState
+      ? [...turnState.tools.values()].some(
+          (tool) =>
+            !turnState.gatedTaskIds.has(tool.taskId) &&
+            (tool.status === 'pending' || tool.status === 'running')
+        )
+      : false
+    if (!hasActiveTool) {
+      await super.steerPrompt(projectPath, options)
+      return
+    }
+    const queue = this.pendingSteers.get(options.sessionId) ?? []
+    queue.push({ projectPath, options })
+    this.pendingSteers.set(options.sessionId, queue)
+  }
+
+  /** Deliver every steer queued for a session as one merged, deferred steer. */
+  private deliverPendingSteers(sessionId: string): void {
+    const queue = this.pendingSteers.get(sessionId)
+    if (!queue || queue.length === 0) return
+    this.pendingSteers.delete(sessionId)
+    const last = queue[queue.length - 1]
+    const merged: SteerPromptOptions = {
+      ...last.options,
+      text: queue.map((entry) => entry.options.text).join('\n\n'),
+      attachments: queue.flatMap((entry) => entry.options.attachments)
+    }
+    super.steerPrompt(last.projectPath, merged).catch((error: unknown) => {
+      Logger.error(`Muse deferred steer failed for session ${sessionId}:`, error)
+    })
   }
 
   override async replyPermission(
@@ -1082,6 +1475,11 @@ export class MuseDriver extends PersistentCliDriver {
     ].join('\n\n')
     this.hiddenContinuationSessions.add(sessionId)
     try {
+      // The gated run was stopped (or is paused waiting on an interaction
+      // prompt). Await the process settlement so resuming never collides with
+      // the still-active turn ("A turn is already active") — same teardown
+      // contract steerPrompt relies on.
+      await this.settleActiveProcess(sessionId)
       await this.sendPrompt(projectPath, {
         ...options,
         sessionId,
@@ -1107,6 +1505,80 @@ export class MuseDriver extends PersistentCliDriver {
     const state = this.turnStates.get(context.sessionId)
     if (!state) return null
     return mapMuseRecord(value, context, state)
+  }
+
+  async compactSession(
+    projectPath: string,
+    sessionId: string,
+    _settings: import('../../lib/types').ThreadSettings
+  ): Promise<void> {
+    void _settings
+    const session = await this.requireSession(projectPath, sessionId)
+    if (session.messages.length === 0) {
+      throw new Error('No messages to compact for this thread')
+    }
+    const messageId = `${sessionId}:compaction:${Date.now()}`
+    const partId = `${messageId}:compaction`
+    const summary = this.buildLocalCompactionSummary(session.messages)
+    const compactionPart: Extract<AgentPart, { type: 'compaction' }> = {
+      type: 'compaction',
+      id: partId,
+      messageID: messageId,
+      auto: false,
+      summary
+    }
+    session.messages.push({
+      id: messageId,
+      role: 'assistant',
+      parts: [compactionPart],
+      createdAt: Date.now(),
+      harnessId: this.id
+    })
+
+    this.emit({ type: 'session.status', sessionId, status: { state: 'working' } })
+    this.applyEventToSession(session, {
+      type: 'message.part.updated',
+      sessionId,
+      part: compactionPart
+    })
+    this.emit({ type: 'message.part.updated', sessionId, part: compactionPart })
+    await this.persistSession(session)
+
+    this.applyEventToSession(session, {
+      type: 'message.completed',
+      sessionId,
+      messageId,
+      compaction: true
+    })
+    this.emit({ type: 'message.completed', sessionId, messageId, compaction: true })
+    this.emit({ type: 'session.idle', sessionId })
+    await this.persistSession(session)
+  }
+
+  private buildLocalCompactionSummary(messages: AgentMessage[]): string {
+    const transcript = messages
+      .map((message) => {
+        const text = message.parts
+          .flatMap((part) => {
+            if (part.type === 'text') return [part.text]
+            if (part.type === 'compaction' && typeof part.summary === 'string' && part.summary.trim())
+              return [`[Prior compaction] ${part.summary.trim()}`]
+            if (part.type === 'compaction-summary' && typeof part.text === 'string')
+              return [`[Prior compaction] ${part.text.trim()}`]
+            return []
+          })
+          .join('\n')
+          .trim()
+        if (!text) return ''
+        const role = message.role === 'user' ? 'USER' : 'ASSISTANT'
+        return `${role}: ${text}`
+      })
+      .filter(Boolean)
+      .join('\n\n')
+    const maxChars = 12_000
+    const truncated = transcript.length > maxChars ? transcript.slice(-maxChars) : transcript
+    const header = `Manual compaction of ${messages.length} messages. Older context summarized below; the next turn replays only this summary plus suffix per summary-preserved-suffix/v1.`
+    return truncated ? `${header}\n\n${truncated}` : header
   }
 
   dispose(): void {

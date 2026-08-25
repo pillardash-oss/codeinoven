@@ -23,9 +23,9 @@
   import { openInBrowser } from '$lib/open-in-browser'
   import { getProjectIcon, loadProjectIcons } from '$lib/project-icons'
   import { cachedSkillMarketDetail, loadSkillMarketDetail } from '$lib/skill-market-cache'
-  import { publicAssetUrl } from '$lib/static-assets'
   import { providerCatalog } from '$lib/stores/provider-catalog.svelte'
   import { providerStore } from '$lib/stores/providers.svelte'
+  import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
   import MarkdownView from '../markdown/MarkdownView.svelte'
   import ProjectMultiSelect from '../shared/ProjectMultiSelect.svelte'
   import type { ProjectMultiSelectOption } from '../shared/ProjectMultiSelect.svelte'
@@ -55,8 +55,6 @@
     label: string
     path: string
   }
-
-  const codeInOvenIconUrl = publicAssetUrl('macos/AppIcon64.png')
 
   let { entry }: Props = $props()
   let detail = $state<SkillMarketDetail | null>(null)
@@ -314,7 +312,7 @@
             aria-pressed={manager === 'cio'}
             onclick={() => selectManager('cio')}
           >
-            <img src={codeInOvenIconUrl} alt="" class="h-4 w-4 shrink-0 object-contain" />
+            <VendorIcon name={APP_NAME} size={16} />
             {APP_NAME}
           </button>
           <button

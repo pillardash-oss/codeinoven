@@ -60,6 +60,7 @@ import { sendToRenderer } from './ipc/renderer-delivery'
 import { hasNativeSplashHandoff, signalNativeSplashReady } from './system/native-splash-handoff'
 import { instanceRegistry } from './system/instance-registry'
 import { BrowserService } from './browser/browser-service'
+import { CtrlTabOverlayService } from './browser/ctrl-tab-overlay-service'
 import { getConfigRoot } from '../lib/utils'
 import type { SpeechService } from './speech/speech-service'
 
@@ -141,6 +142,7 @@ installProcessCrashDiagnostics()
 let mainWindow: BrowserWindow | null = null
 let splashWindow: BrowserWindow | null = null
 let browserService: BrowserService | null = null
+let ctrlTabOverlayService: CtrlTabOverlayService | null = null
 let gatewaySupervisor: GatewaySupervisorService | null = null
 let quitCleanupStarted = false
 let shutdownFailsafe: ReturnType<typeof setTimeout> | null = null
@@ -584,10 +586,17 @@ async function bootPostPaintServices(): Promise<void> {
         : join(app.getAppPath(), 'resources/speech/model-catalog.json'),
       mlxWorkerPath: app.isPackaged
         ? join(process.resourcesPath, 'speech/mlx-worker')
-        : join(app.getAppPath(), 'resources/speech/runtime/darwin-arm64/mlx-worker')
+        : join(app.getAppPath(), 'resources/speech/runtime/darwin-arm64/mlx-worker'),
+      coremlWorkerPath: app.isPackaged
+        ? join(process.resourcesPath, 'speech/coreml-worker')
+        : join(app.getAppPath(), 'resources/speech/runtime/darwin-arm64/coreml-worker'),
+      nativeCaptureWorkerPath: app.isPackaged
+        ? join(process.resourcesPath, 'speech/speech-capture-worker')
+        : join(app.getAppPath(), 'resources/speech/runtime/darwin-arm64/speech-capture-worker')
     },
     undefined,
-    (input) => chatEngine!.cleanupSpeechTranscript(input)
+    (input) => chatEngine!.cleanupSpeechTranscript(input),
+    (input) => chatEngine!.transcribeSpeechAudio(input)
   )
   await speechService.initialize()
   unregisterSpeechIpc = registerSpeechIpc(speechService, () => mainWindow?.webContents ?? null)
@@ -621,6 +630,8 @@ async function bootPostPaintServices(): Promise<void> {
     chatEngine.setBrowserUtilityExecutor((operation, input, context) =>
       service.executeUtility(operation, input, context)
     )
+    ctrlTabOverlayService = new CtrlTabOverlayService(mainWindow)
+    ctrlTabOverlayService.register()
   }
   // Keep the device awake while a scheduled auto-retry is due within the wake
   // window, so a usage-limit reset fires even when the user is away.
@@ -832,6 +843,7 @@ async function bootPostPaintServices(): Promise<void> {
 
     try {
       await retryScheduler?.start()
+      await chatEngine?.repairPendingRetryThreadStatuses()
     } catch (error) {
       Logger.error('Retry scheduler startup failed (non-fatal):', error)
     }
@@ -1036,6 +1048,30 @@ function createWindow(): BrowserWindow {
     }
   })
 
+  // Renderer freeze/crash diagnostics. On a slow machine (e.g. M1) the renderer
+  // can seize up or be torn down in ways that never surface as a JS exception —
+  // the OS shows "not responding" while nothing lands in the log. These
+  // webContents lifecycle events record the freeze/crash deterministically even
+  // though the renderer's own JS can no longer run to log it.
+  window.webContents.on('unresponsive', () => {
+    Logger.error('Renderer became unresponsive (UI frozen; check renderer main-thread work)')
+  })
+  window.webContents.on('responsive', () => {
+    Logger.info('Renderer recovered after being unresponsive')
+  })
+  window.webContents.on('render-process-gone', (_event, details) => {
+    Logger.error('Renderer process terminated', {
+      reason: details.reason,
+      exitCode: details.exitCode
+    })
+  })
+  window.webContents.on('preload-error', (_event, preloadPath, error) => {
+    Logger.error('Renderer preload script failed', {
+      preloadPath,
+      error: error instanceof Error ? error.message : String(error)
+    })
+  })
+
   if (!isProduction && is.dev && process.env['ELECTRON_RENDERER_URL']) {
     void window.loadURL(process.env['ELECTRON_RENDERER_URL'])
   } else {
@@ -1132,7 +1168,7 @@ void app
     // The renderer invokes its first config/project/scope/thread reads while
     // its document evaluates. Register that bounded surface before navigation;
     // the feature graph remains dynamically imported after first paint.
-    registerHydrationIpcHandlers(storage, database, threadCreation)
+    registerHydrationIpcHandlers(storage, database)
 
     // The trusted top-level renderer may capture microphone audio for local
     // dictation. Camera, subframes, foreign documents, and every unrelated
@@ -1373,6 +1409,8 @@ async function runShutdownPipeline(): Promise<void> {
   try {
     browserService?.dispose()
     browserService = null
+    ctrlTabOverlayService?.dispose()
+    ctrlTabOverlayService = null
   } catch (error) {
     Logger.error('Browser service cleanup failed during shutdown:', error)
   }
