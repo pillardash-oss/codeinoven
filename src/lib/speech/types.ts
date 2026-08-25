@@ -6,7 +6,7 @@ export const MAX_SPEECH_QUEUE_DEPTH = 8
 export const MAX_GLOBAL_CORRECTION_RULES = 500
 export const MAX_CONTEXT_CORRECTION_RULES = 200
 
-export type SpeechRuntime = 'mlx' | 'sherpa-onnx'
+export type SpeechRuntime = 'mlx' | 'sherpa-onnx' | 'gguf' | 'coreml'
 export type SpeechCapability = 'asr' | 'cleanup' | 'tts'
 export type SpeechPlatform = 'darwin' | 'win32' | 'linux'
 export type SpeechArchitecture = 'arm64' | 'x64'
@@ -62,7 +62,7 @@ export interface SpeechCompatibilityError {
 export type SpeechRuntimeResolutionResult =
   { ok: true; value: SpeechRuntimeResolution } | { ok: false; error: SpeechCompatibilityError }
 
-export type SpeechModelFamilyId = 'whisper' | 'kokoro' | 'qwen-cleanup' | 'sherpa-punctuation'
+export type SpeechModelFamilyId = 'whisper' | 'parakeet' | 'kokoro' | 'qwen-cleanup' | 'sherpa-punctuation'
 export type SpeechArtifactStatus = 'candidate' | 'qualified' | 'retired'
 
 export interface SpeechArtifactFile {
@@ -145,13 +145,17 @@ export type SpeechDownloadState =
 export interface SpeechInstalledArtifact {
   artifactId: string
   runtime: SpeechRuntime
-  revision: string
+  revision?: string
   installedAt: number
-  byteSize: number
+  byteSize?: number
   source: 'download' | 'import'
   externalReference: boolean
   available: boolean
   unavailableReason?: string
+  /** For imported, user-owned models: the local folder/file the user pointed at. */
+  importPath?: string
+  /** Capability for user-imported models (inferred from the artifact/catalog). */
+  capability?: SpeechCapability
 }
 
 export type SpeechAttemptStage =
@@ -231,6 +235,7 @@ export interface SpeechTranscriptionJob {
 export type SpeechCleanupMode =
   | { kind: 'disabled' }
   | { kind: 'local'; artifactId?: string }
+  | { kind: 'local-llm' }
   | { kind: 'remote'; selection: 'fixed' | 'conversation'; modelId?: string }
 
 export interface SpeechCleanupRequest {
@@ -250,7 +255,7 @@ export interface SpeechCleanupContext {
 }
 
 export interface SpeechCleanupProvenance {
-  mode: 'none' | 'local' | 'remote'
+  mode: 'none' | 'local' | 'local-llm' | 'remote'
   runtime?: SpeechRuntime
   artifactId?: string
   modelId?: string
@@ -337,8 +342,19 @@ export interface SpeechCueSettings {
   volume: number
 }
 
+/** How long a subsystem model stays resident before it is unloaded. */
+export type SpeechUnloadOption = '30m' | '1h' | 'keep'
+
+export interface SpeechDictionaryEntry {
+  id: string
+  phrase: string
+  isAction: boolean
+  variant?: string
+  createdAt: number
+  updatedAt: number
+}
+
 export interface SpeechSettings {
-  runtimeOverride?: SpeechRuntime
   asrArtifactId?: string
   cleanupArtifactId?: string
   ttsArtifactId?: string
@@ -348,12 +364,15 @@ export interface SpeechSettings {
   remoteCleanupEnabled: boolean
   remoteCleanupSelection: 'fixed' | 'conversation'
   remoteCleanupModelId?: string
+  localLlmCleanupEnabled: boolean
+  localLlmBaseUrl?: string
   includeCodeBlocksInSpeech: boolean
   historyLimit: number
   cues: SpeechCueSettings
-  keepAsrLoaded: boolean
-  keepCleanupLoaded: boolean
-  keepTtsLoaded: boolean
+  voiceRecordingEnabled: boolean
+  asrUnload: SpeechUnloadOption
+  cleanupUnload: SpeechUnloadOption
+  ttsUnload: SpeechUnloadOption
 }
 
 export const DEFAULT_SPEECH_SETTINGS: SpeechSettings = {
@@ -361,6 +380,7 @@ export const DEFAULT_SPEECH_SETTINGS: SpeechSettings = {
   localCleanupEnabled: true,
   remoteCleanupEnabled: false,
   remoteCleanupSelection: 'conversation',
+  localLlmCleanupEnabled: false,
   includeCodeBlocksInSpeech: false,
   historyLimit: DEFAULT_SPEECH_HISTORY_LIMIT,
   cues: {
@@ -369,9 +389,10 @@ export const DEFAULT_SPEECH_SETTINGS: SpeechSettings = {
     transcriptReady: true,
     volume: 0.7
   },
-  keepAsrLoaded: false,
-  keepCleanupLoaded: false,
-  keepTtsLoaded: false
+  voiceRecordingEnabled: false,
+  asrUnload: '30m',
+  cleanupUnload: '30m',
+  ttsUnload: '30m'
 }
 
 export type SpeechErrorCode =
@@ -393,6 +414,7 @@ export type SpeechErrorCode =
   | 'cleanup-failed'
   | 'synthesis-failed'
   | 'not-found'
+  | 'audio-llm-unavailable'
   | 'confirmation-required'
   | 'confirmation-stale'
 
@@ -417,6 +439,42 @@ export interface SpeechConfirmation {
   action: SpeechDestructiveAction
   targetId: string
   expiresAt: number
+}
+
+export type ModelPathValidationCode =
+  | 'empty'
+  | 'not-found'
+  | 'permission-denied'
+  | 'unsupported-format'
+  | 'platform-unsupported'
+  | 'valid'
+
+export interface ParsedModelIdentity {
+  rawBasename: string
+  baseWithoutExtension: string
+  displayName: string
+  family?: string
+  variant?: string
+  size?: string
+  version?: string
+  quantization?: string
+  languageHint?: string
+  runtimeHint?: SpeechRuntime
+  confidence: 'high' | 'medium' | 'low'
+  tokens: string[]
+  details: Array<{ label: string; value: string }>
+}
+
+export interface ModelPathValidationResult {
+  ok: boolean
+  capability?: SpeechCapability
+  normalizedPath: string
+  wasNormalized: boolean
+  runtime?: SpeechRuntime
+  code: ModelPathValidationCode
+  reason: string
+  detectedExtension?: string
+  parsedIdentity?: ParsedModelIdentity | null
 }
 
 export type SpeechResult<T> = { ok: true; value: T } | { ok: false; error: SpeechError }

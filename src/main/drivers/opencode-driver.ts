@@ -1214,8 +1214,8 @@ export class OpenCodeDriver implements HarnessDriver {
       .filter((model) => /(?:^|[-:])free$/iu.test(model.id))
       .sort(
         (left, right) =>
-          Number(left.id !== 'deepseek-v4-flash-free') -
-          Number(right.id !== 'deepseek-v4-flash-free')
+          Number(left.id !== 'big-pickle-free') -
+          Number(right.id !== 'big-pickle-free')
       )[0]
     const goFlash = catalogs
       .find((catalog) => catalog.id === 'opencode-go')

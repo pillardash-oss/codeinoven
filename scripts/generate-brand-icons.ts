@@ -136,6 +136,22 @@ writeFileSync(
 )
 Logger.dev(`[generate-brand-icons] Wrote vendored opencode mark to ${vendorOutDir}.`)
 
+// CodeInOven is a citizen of its own bundle — its mark is vendored by hand
+// from the official logo artwork (rounded obsidian tile + two-tone oven) so
+// the vendor registry serves the real brand icon wherever a vendor icon is
+// rendered (e.g. `<VendorIcon name="CodeInOven">`).
+let cioMark = readFileSync(join(root, 'src/renderer/static/icon.svg'), 'utf8')
+cioMark = cioMark
+  .replace(/^<\?xml[\s\S]*?\?>\s*/i, '')
+  .replace(/^<!DOCTYPE[\s\S]*?>\s*/i, '')
+  .replace('width="100%" height="100%"', 'width="1em" height="1em"')
+  .replace(
+    /(<svg[^>]*>)/,
+    '$1<title>CodeInOven</title><rect width="1254" height="1254" rx="256" fill="#081825"/>'
+  )
+writeFileSync(join(vendorOutDir, 'cio.svg'), cioMark)
+Logger.dev(`[generate-brand-icons] Wrote vendored CodeInOven mark to ${vendorOutDir}.`)
+
 // ─── Agents ─────────────────────────────────────────────────────────────────
 
 /** Where agent SVGs are served from as static files. */

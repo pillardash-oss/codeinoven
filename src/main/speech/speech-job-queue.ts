@@ -41,7 +41,8 @@ export class SpeechQueueError extends Error {
 export class SpeechJobQueue {
   private readonly pending = new Map<SpeechRuntime, QueueEntry<unknown>[]>([
     ['mlx', []],
-    ['sherpa-onnx', []]
+    ['sherpa-onnx', []],
+    ['coreml', []]
   ])
   private readonly active = new Map<SpeechRuntime, QueueEntry<unknown>>()
   private readonly states = new Map<string, SpeechJobState>()
@@ -65,6 +66,10 @@ export class SpeechJobQueue {
       resolveResult = resolve
       rejectResult = reject
     })
+    // A backend can fail before the caller finishes recording the job metadata.
+    // Attach a rejection observer immediately; callers still receive the original
+    // rejected promise, but Electron never treats the expected failure as global.
+    void result.catch(() => undefined)
     const entry: QueueEntry<T> = {
       id,
       task,

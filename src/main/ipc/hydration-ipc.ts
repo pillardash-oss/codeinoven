@@ -1,4 +1,5 @@
 import { trustedIpcMain as ipcMain } from './trusted-ipc-main'
+import { registerRendererLogIpcHandler } from './renderer-log-ipc'
 import type { Database } from '../database/database'
 import { StorageEngine } from '../storage/storage-engine'
 import { ProjectManager } from '../../lib/engines/project-manager'
@@ -7,7 +8,6 @@ import { ThreadManager } from '../../lib/engines/thread-manager'
 import { NoteRepo } from '../database/repositories/note-repo'
 import { validateBoundedInteger, validateEntityId } from './ipc-validation'
 import type { Thread } from '../../lib/types'
-import type { ThreadCreationCoordinator } from '../chat/thread-creation-coordinator'
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -18,11 +18,10 @@ function isRecord(value: unknown): value is Record<string, unknown> {
  * document is evaluating. This runs before BrowserWindow navigation; feature
  * graphs remain registered by `registerIpcHandlers` after first paint.
  */
-export function registerHydrationIpcHandlers(
-  storage: StorageEngine,
-  database: Database,
-  threadCreation?: ThreadCreationCoordinator
-): void {
+export function registerHydrationIpcHandlers(storage: StorageEngine, database: Database): void {
+  // Renderer error capture runs from the first renderer statement, so the
+  // durable logging bridge must exist before BrowserWindow navigation.
+  registerRendererLogIpcHandler()
   const projectManager = new ProjectManager(database)
   const scopeManager = new ScopeManager(database)
   const threadManager = new ThreadManager(database)
@@ -38,16 +37,12 @@ export function registerHydrationIpcHandlers(
   ipcMain.handle('scope:get', (_, projectId: unknown) =>
     scopeManager.getBoard(validateEntityId(projectId, 'Project ID'))
   )
-  ipcMain.handle('thread:get', async (_, projectId: string, threadId: string) => {
-    // A thread just created optimistically may still be finalizing; wait for
-    // its row before answering so the renderer never reads a phantom thread.
-    await threadCreation?.awaitReady(threadId)
-    return threadManager.getThread(projectId, threadId)
-  })
+  ipcMain.handle('thread:get', (_, projectId: string, threadId: string) =>
+    threadManager.getThread(projectId, threadId)
+  )
   ipcMain.handle('note:get', async (_, projectId: unknown, threadId: unknown) => {
     const validProjectId = validateEntityId(projectId, 'Project ID')
     const validThreadId = validateEntityId(threadId, 'Thread ID')
-    await threadCreation?.awaitReady(validThreadId)
     const thread = await threadManager.getThread(validProjectId, validThreadId)
     if (!thread) return null
     return noteRepo.get(validThreadId)

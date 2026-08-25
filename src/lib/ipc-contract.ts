@@ -43,7 +43,6 @@ import type {
   EngineeringSpec,
   EngineeringSpecContent,
   EngineeringLifecycleDecision,
-  EngineeringLifecycleSelection,
   EngineeringLifecycleState,
   EngineeringLifecycleTransitionResult,
   ScopedHarnessCommand,
@@ -220,6 +219,32 @@ export interface BrowserPageState {
   canGoForward: boolean
 }
 
+/** One row rendered by the native Ctrl+Tab overlay, fully display-ready. */
+export interface NativeSwitcherThread {
+  id: string
+  title: string
+  projectId: string
+  /** Project icon as a data URL, or null for a fallback mark. */
+  icon: string | null
+  selected: boolean
+}
+
+export type NativeSwitcherTheme = 'light' | 'dark'
+
+/**
+ * Display payload for the native Ctrl+Tab overlay. The renderer resolves the
+ * visible thread list, highlighting, and theme; the overlay only renders the
+ * rows and reports input back through the main process.
+ */
+export interface NativeSwitcherPayload {
+  threads: NativeSwitcherThread[]
+  highlightedThreadId: string | null
+  theme: NativeSwitcherTheme
+  /** Width/height (density-independent px) hint for the dialog, unused by the
+   *  full-window overlay page but kept for future sizing. */
+  windowHeight: number
+}
+
 /** Ownership metadata for a browser tab requested by the main process. */
 export interface BrowserOpenRequestContext {
   projectId: string
@@ -240,6 +265,25 @@ export interface BrowserPermissionRequest {
 
 export type BrowserConsoleLevel = 'debug' | 'info' | 'warning' | 'error'
 
+/** Where a renderer log line originated, for the durable log tag. */
+export type RendererLogSource = 'error' | 'unhandledrejection' | 'console'
+
+/** Renderer-level log levels forwarded to the main-process Logger. */
+export type RendererLogLevel = 'dev' | 'info' | 'error'
+
+/**
+ * A renderer-originated log line forwarded to the main-process durable Logger.
+ * Carries only the message/stack and origin label — no paths, user content, or
+ * credentials; secrets are redacted by the main-process sink before write.
+ */
+export interface RendererLogEntry {
+  level: RendererLogLevel
+  message: string
+  stack?: string
+  source: RendererLogSource
+  at: number
+}
+
 /** A console or runtime diagnostic emitted by one app-scoped browser tab. */
 export interface BrowserConsoleEntry {
   id: string
@@ -249,6 +293,31 @@ export interface BrowserConsoleEntry {
   sourceId: string
   lineNumber: number
   timestamp: number
+}
+
+/** Lifecycle state of a download started by an app-scoped browser tab. */
+export type BrowserDownloadState = 'progressing' | 'interrupted' | 'completed' | 'cancelled'
+
+/**
+ * Metadata for a download started inside the app-scoped browser. Contains no
+ * cookies, headers, or page content — only what the download manager needs to
+ * render progress and offer cancel/pause/open/reveal actions.
+ */
+export interface BrowserDownload {
+  id: string
+  tabId: string
+  projectId: string
+  fileName: string
+  url: string
+  mimeType: string
+  receivedBytes: number
+  totalBytes: number
+  speedBytes: number
+  progress: number
+  state: BrowserDownloadState
+  paused: boolean
+  savePath: string
+  error: string
 }
 
 export interface IpcInvokeContract {
@@ -268,11 +337,15 @@ export interface IpcInvokeContract {
     EngineeringLifecycleState | null
   >
   'engineeringLifecycle:select': Contract<
-    [projectId: string, threadId: string, selection: EngineeringLifecycleSelection],
+    [
+      projectId: string,
+      threadId: string,
+      input: import('./types').EngineeringLifecycleSelectionInput
+    ],
     EngineeringLifecycleState
   >
   'engineeringLifecycle:start': Contract<
-    [projectId: string, threadId: string],
+    [projectId: string, threadId: string, stage?: import('./types').EngineeringLifecycleStage],
     EngineeringLifecycleTransitionResult
   >
   'engineeringLifecycle:complete': Contract<
@@ -941,6 +1014,14 @@ export interface IpcInvokeContract {
     Checklist | null
   >
   'checkpoint:list': Contract<[projectId: string, threadId: string], TurnCheckpointSummary[]>
+  'checkpoint:activeSummary': Contract<
+    [projectId: string, threadId: string],
+    TurnCheckpointSummary | null
+  >
+  'checkpoint:liveDiff': Contract<
+    [projectId: string, threadId: string, checkpointId: string, path: string],
+    TurnCheckpointFileDiff
+  >
   'checkpoint:diff': Contract<
     [projectId: string, threadId: string, checkpointId: string, path: string],
     TurnCheckpointFileDiff
@@ -966,6 +1047,12 @@ export interface IpcInvokeContract {
   'workerNames:getSettings': Contract<[], WorkerNameSettings>
   'workerNames:saveCustom': Contract<[names: string[]], void>
   'dialog:pickFolder': Contract<[], string | null>
+  'dialog:pickCloneDestination': Contract<[], string | null>
+  'git:defaultClonePath': Contract<[url: string], string>
+  'git:cloneHandoff': Contract<
+    [input: { url: string; destination?: string }],
+    { command: string; args: string[]; destination: string; repoName: string }
+  >
   'clipboard:saveImage': Contract<[scope: AttachmentStorageScope], string | null>
   'attachment:saveText': Contract<
     [scope: AttachmentStorageScope, text: string, existingPath?: string],
@@ -1011,6 +1098,10 @@ export interface IpcInvokeContract {
     [scope: import('./speech/types').SpeechScope, mimeType: string],
     import('./speech/types').SpeechResult<import('./speech/types').SpeechCaptureSessionInfo>
   >
+  'speech:beginNativeCapture': Contract<
+    [scope: import('./speech/types').SpeechScope],
+    import('./speech/types').SpeechResult<import('./speech/types').SpeechCaptureSessionInfo>
+  >
   'speech:recordPermissionFailure': Contract<
     [scope: import('./speech/types').SpeechScope, message: string],
     import('./speech/types').SpeechResult<import('./speech/types').SpeechRecordingAttempt>
@@ -1023,7 +1114,15 @@ export interface IpcInvokeContract {
     [sessionId: string, durationMs: number],
     import('./speech/types').SpeechResult<import('./speech/types').SpeechRecordingAttempt>
   >
+  'speech:finishNativeCapture': Contract<
+    [sessionId: string, durationMs: number],
+    import('./speech/types').SpeechResult<import('./speech/types').SpeechRecordingAttempt>
+  >
   'speech:failCapture': Contract<
+    [sessionId: string, message: string],
+    import('./speech/types').SpeechResult<import('./speech/types').SpeechRecordingAttempt>
+  >
+  'speech:failNativeCapture': Contract<
     [sessionId: string, message: string],
     import('./speech/types').SpeechResult<import('./speech/types').SpeechRecordingAttempt>
   >
@@ -1047,6 +1146,27 @@ export interface IpcInvokeContract {
   >
   'speech:enforceHistoryLimit': Contract<
     [limit: number],
+    import('./speech/types').SpeechResult<void>
+  >
+  'speech:transcribeAudioToLlm': Contract<
+    [
+      attemptId: string,
+      scope: import('./speech/types').SpeechScope,
+      language: string,
+      cleanupMode: import('./speech/types').SpeechCleanupMode
+    ],
+    import('./speech/types').SpeechResult<import('./speech/types').SpeechTranscriptionResult>
+  >
+  'speech:validateModelPath': Contract<
+    [path: string, capability: import('./speech/types').SpeechCapability],
+    import('./speech/types').SpeechResult<import('./speech/types').ModelPathValidationResult>
+  >
+  'speech:importModel': Contract<
+    [path: string, capability?: import('./speech/types').SpeechCapability],
+    import('./speech/types').SpeechResult<import('./speech/types').SpeechInstalledArtifact>
+  >
+  'speech:unregisterModel': Contract<
+    [artifactId: string, confirmationToken: string],
     import('./speech/types').SpeechResult<void>
   >
   'speech:downloadArtifact': Contract<
@@ -1848,6 +1968,17 @@ export interface IpcInvokeContract {
   'browser:destroy': Contract<[tabId: string], void>
   'browser:destroyThread': Contract<[projectId: string, threadId: string], void>
   'browser:destroyProject': Contract<[projectId: string], void>
+  'browser:getDownloads': Contract<[projectId: string], BrowserDownload[]>
+  'browser:cancelDownload': Contract<[id: string], void>
+  'browser:pauseDownload': Contract<[id: string], void>
+  'browser:resumeDownload': Contract<[id: string], void>
+  'browser:openDownload': Contract<[id: string], void>
+  'browser:revealDownload': Contract<[id: string], boolean>
+  /** Open the native Ctrl+Tab overlay above the browser view with a fresh
+   *  display payload. Only used while the native browser view is on screen;
+   *  otherwise the renderer uses the DOM switcher. */
+  'switcher:open': Contract<[payload: NativeSwitcherPayload], void>
+  'switcher:close': Contract<[], void>
   'spec:addAnnotation': Contract<
     [
       projectId: string,
@@ -2093,6 +2224,10 @@ export interface IpcInvokeContract {
     ThreadMessagePage
   >
   'thread:loadUserMessages': Contract<[projectId: string, threadId: string], UserMessageSummary[]>
+  'thread:loadStreamParts': Contract<
+    [projectId: string, threadId: string],
+    import('./types').AgentPart[]
+  >
   'thread:markRead': Contract<[projectId: string, threadId: string], Thread>
   'thread:setPinned': Contract<[projectId: string, threadId: string, pinned: boolean], Thread>
   'thread:setContextUsage': Contract<
@@ -2156,6 +2291,12 @@ export interface IpcInvokeContract {
    * phases. Carries no payload.
    */
   'app:rendererReady': Contract<[], void>
+  /**
+   * Renderer forwards its own captured errors (uncaught exceptions, unhandled
+   * rejections, console errors) to the main-process durable Logger. Fire and
+   * forget; returns `void`.
+   */
+  'renderer:log': Contract<[entry: RendererLogEntry], void>
 }
 
 export interface ThreadClickedPayload {
@@ -2195,11 +2336,21 @@ export interface CloseConfirmationPayload {
 
 export type AgentNotificationKind = 'completed' | 'chat-completed' | 'attention' | 'spec' | 'error'
 
+/** Where a notification originated: a project thread, the global chat (inbox),
+ *  or a temporary (side) chat piped through a parent thread. */
+export type NotificationSource = 'project' | 'chat' | 'temporary-chat'
+
 export interface AgentNotificationPayload extends ThreadClickedPayload {
   id: string
   kind: AgentNotificationKind
   title: string
   body: string
+  /** Origin of the notification, used by the panel to tag its source. */
+  source: NotificationSource
+  /** Name of the owning project (or the inbox "Chats" project for chats). */
+  projectName: string
+  /** Accent colour of the owning project, when known. */
+  projectColor?: string
 }
 
 export type SystemNotificationTestResult =
@@ -2345,6 +2496,14 @@ export interface IpcEventContract {
   'browser:openRequested': [url: string, context?: BrowserOpenRequestContext]
   'browser:permissionRequested': [request: BrowserPermissionRequest]
   'browser:permissionResolved': [requestId: string]
+  'browser:download': [download: BrowserDownload]
+  /** Native Ctrl+Tab overlay asked the renderer to switch to a thread. */
+  'switcher:select': [threadId: string]
+  /** Native Ctrl+Tab overlay moved its highlight (so the renderer can preload
+   *  that thread's messages). */
+  'switcher:highlight': [threadId: string]
+  /** Native Ctrl+Tab overlay was dismissed without a selection. */
+  'switcher:closed': []
   /** Remote-mode status changes from the main process. */
   'remote:status': [status: RemoteModeStatus]
   /**

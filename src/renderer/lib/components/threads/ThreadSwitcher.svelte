@@ -1,11 +1,13 @@
 <script lang="ts">
   import { Dialog } from 'bits-ui'
-  import { tick } from 'svelte'
+  import { onMount, tick } from 'svelte'
   import { SvelteMap } from 'svelte/reactivity'
   import { getProjectIcon } from '$lib/project-icons'
+  import { invoke, subscribe } from '$lib/ipc.svelte'
   import ThreadRow from './ThreadRow.svelte'
   import { threadMessages } from '$lib/stores/thread-messages.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
+  import type { NativeSwitcherPayload } from '$shared/ipc-contract'
   import type { Project, Thread } from '$shared/types'
 
   interface Props {
@@ -13,12 +15,27 @@
     projects: readonly Project[]
     projectIconUrls: ReadonlyMap<string, string>
     selectedThreadId: string | null
+    /** When true, Ctrl+Tab opens the native overlay instead of the DOM dialog —
+     *  required whenever the browser's native WebContentsView is on screen,
+     *  because a native view stacks above all renderer DOM. */
+    nativeAvailable?: boolean
     onSelect: (thread: Thread) => void | Promise<void>
   }
 
-  let { threads, projects, projectIconUrls, selectedThreadId, onSelect }: Props = $props()
+  let {
+    threads,
+    projects,
+    projectIconUrls,
+    selectedThreadId,
+    nativeAvailable = false,
+    onSelect
+  }: Props = $props()
 
   let open = $state(false)
+  /** True while the native overlay session is active. The overlay owns its own
+   *  keyboard handling, so the DOM dialog and the renderer's window handlers
+   *  must step aside while it is focused. */
+  let nativeSessionActive = $state(false)
   let highlightedIndex = $state(0)
   let contentElement = $state<HTMLElement | null>(null)
   let previousFocus: HTMLElement | null = null
@@ -94,6 +111,90 @@
     workspaceState.requestFocusComposerEditor()
   }
 
+  function nativePayload(direction: 1 | -1): NativeSwitcherPayload {
+    const selectedIndex = threads.findIndex((thread) => thread.id === selectedThreadId)
+    const startingIndex = selectedIndex >= 0 ? selectedIndex : direction === 1 ? -1 : 0
+    const initialIndex = (startingIndex + direction + threads.length) % threads.length
+    return {
+      threads: threads.map((thread) => ({
+        id: thread.id,
+        title: thread.title,
+        projectId: thread.projectId,
+        icon: projectIcon(thread),
+        selected: thread.id === selectedThreadId
+      })),
+      // Matches the DOM dialog's first-press jump: the very first Ctrl+Tab (or
+      // Shift+Ctrl+Tab) already moves the highlight to the next (previous)
+      // thread, so releasing early still lands on a neighbour.
+      highlightedThreadId: threads[initialIndex]?.id ?? null,
+      theme: document.documentElement.classList.contains('dark') ? 'dark' : 'light',
+      windowHeight: window.innerHeight
+    }
+  }
+
+  function openNative(direction: 1 | -1): void {
+    if (threads.length === 0 || nativeSessionActive) return
+    nativeSessionActive = true
+    const payload = nativePayload(direction)
+    void invoke('switcher:open', payload).catch(() => {
+      nativeSessionActive = false
+    })
+    const highlightedThreadId = payload.highlightedThreadId
+    if (highlightedThreadId) {
+      const thread = threads.find((candidate) => candidate.id === highlightedThreadId)
+      if (thread && !threadMessages.loaded(thread.projectId, thread.id)) {
+        void threadMessages.preload(thread.projectId, thread.id)
+      }
+    }
+  }
+
+  function closeNative(): void {
+    if (!nativeSessionActive) return
+    nativeSessionActive = false
+    void invoke('switcher:close').catch(() => {})
+  }
+
+  async function handleNativeSelect(threadId: string): Promise<void> {
+    if (!nativeSessionActive) return
+    nativeSessionActive = false
+    void invoke('switcher:close').catch(() => {})
+    const thread = threads.find((candidate) => candidate.id === threadId)
+    if (!thread) return
+    await onSelect(thread)
+    workspaceState.requestFocusComposerEditor()
+  }
+
+  function handleNativeHighlight(threadId: string): void {
+    const thread = threads.find((candidate) => candidate.id === threadId)
+    if (!thread || threadMessages.loaded(thread.projectId, thread.id)) return
+    void threadMessages.preload(thread.projectId, thread.id)
+  }
+
+  // While a native session is active the overlay owns the keyboard, so the
+  // DOM state machine must stay dormant. If the browser view disappears (the
+  // reason the native overlay exists) the overlay closes and the next Ctrl+Tab
+  // falls back to the DOM dialog.
+  $effect(() => {
+    if (nativeSessionActive && (!nativeAvailable || threads.length === 0)) closeNative()
+  })
+
+  onMount(() => {
+    const unsubscribeSelect = subscribe('switcher:select', (threadId) => {
+      void handleNativeSelect(threadId)
+    })
+    const unsubscribeHighlight = subscribe('switcher:highlight', (threadId) => {
+      handleNativeHighlight(threadId)
+    })
+    const unsubscribeClosed = subscribe('switcher:closed', () => {
+      nativeSessionActive = false
+    })
+    return () => {
+      unsubscribeSelect()
+      unsubscribeHighlight()
+      unsubscribeClosed()
+    }
+  })
+
   /** Warm the highlighted thread's message cache so releasing Ctrl (or
    *  clicking) opens it without the loading spinner. */
   $effect(() => {
@@ -109,6 +210,10 @@
       if (threads.length === 0) return
       event.preventDefault()
       event.stopPropagation()
+      if (nativeAvailable) {
+        if (!nativeSessionActive) openNative(event.shiftKey ? -1 : 1)
+        return
+      }
       cycle(event.shiftKey ? -1 : 1)
       return
     }
@@ -121,6 +226,7 @@
   }
 
   function handleWindowKeyup(event: KeyboardEvent): void {
+    if (nativeSessionActive) return
     if (!open || event.key !== 'Control') return
     event.preventDefault()
     const thread = threads[highlightedIndex]
@@ -129,6 +235,9 @@
   }
 
   function handleWindowBlur(): void {
+    // The native overlay owns its own blur dismissal (it may blur the renderer
+    // window when the overlay itself takes focus), so only the DOM dialog is
+    // cancelled here.
     cancel()
   }
 </script>

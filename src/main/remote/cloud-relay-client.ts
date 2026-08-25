@@ -15,7 +15,8 @@ import {
   parseRelayDataFrame,
   parseRelayNackFrame,
   serializeRelayAckFrame,
-  serializeRelayDataFrame
+  serializeRelayDataFrame,
+  serializeRelayPingFrame
 } from '../../renderer/lib/remote/relay-protocol'
 
 export { fullJitterDelay } from '../../renderer/lib/remote/relay-protocol'
@@ -91,6 +92,11 @@ const DEFAULT_QUEUE_LIMIT = 1_000
 const DEFAULT_REPLAY_LIMIT = 4_096
 const DEFAULT_RECONNECT_INITIAL_DELAY_MS = 1_000
 const DEFAULT_RECONNECT_MAX_DELAY_MS = 30_000
+/** Heartbeat period: safely under the relay server's ~90s idle-connection cutoff. */
+const HEARTBEAT_INTERVAL_MS = 30_000
+/** A connection must stay authenticated this long before reconnect backoff resets,
+ *  so fast-fail-after-auth cycles back off to the cap instead of hot-looping. */
+const RECONNECT_STABILITY_MS = 20_000
 const PAYLOAD_AUTH_FAILURE_CLOSE_CODE = 4002
 
 /** Resolve `promise` with `fallback` when it does not settle within `ms`. */
@@ -117,7 +123,11 @@ export class CloudRelayClient {
   private connectTimer: ReturnType<typeof setTimeout> | null = null
   private authTimer: ReturnType<typeof setTimeout> | null = null
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null
+  private heartbeatTimer: ReturnType<typeof setInterval> | null = null
   private reconnectAttempt = 0
+  /** Timestamp of the last successful authentication; used to keep reconnect
+   *  backoff from resetting on connections that die moments after auth. */
+  private authenticatedAt: number | null = null
   private readonly nextMessageId: () => string
   private readonly queue: OutboundRecord[] = []
   private readonly inFlight: BoundedMap<OutboundRecord>
@@ -218,6 +228,7 @@ export class CloudRelayClient {
   private openSocket(): void {
     this.closed = false
     this.authenticated = false
+    this.authenticatedAt = null
     const target = new URL('/v1/relay', this.options.apiOrigin)
     target.protocol = target.protocol === 'https:' ? 'wss:' : 'ws:'
     target.searchParams.set('role', 'desktop')
@@ -254,9 +265,22 @@ export class CloudRelayClient {
       if (typeof event.data !== 'string') return
       this.handleMessage(event.data, 'relay')
     }
-    socket.onerror = () => {
+    socket.onerror = (event) => {
       if (this.closing || this.closed) return
-      Logger.error('Remote cloud relay WebSocket failed')
+      // Per the WHATWG WebSocket spec an `error` always fires before `close`,
+      // and the close handler carries the code/reason and drives the bounded
+      // self-reconnect. This is therefore a diagnostic breadcrumb, not a fault
+      // to surface at error level — logging every transient drop as an error
+      // only floods the error log with noise the recovery path already handles.
+      const detail =
+        event && typeof event === 'object' && 'message' in event
+          ? String((event as { message?: unknown }).message)
+          : ''
+      Logger.dev(
+        detail
+          ? `Remote cloud relay error: ${detail}`
+          : 'Remote cloud relay error; awaiting close'
+      )
     }
     socket.onclose = (event) => {
       if (this.authTimer !== null) {
@@ -296,6 +320,14 @@ export class CloudRelayClient {
     this.closed = true
     this.clearTimers()
     this.authenticated = false
+    // Reset the reconnect backoff only after a connection survived long enough
+    // to be considered stable; otherwise fast-fail-after-auth cycles grow the
+    // delay toward the cap instead of hot-looping at the initial interval.
+    const wasStable =
+      this.authenticatedAt !== null &&
+      Date.now() - this.authenticatedAt >= RECONNECT_STABILITY_MS
+    this.authenticatedAt = null
+    if (wasStable) this.reconnectAttempt = 0
     this.boundDevice = null
     this.pendingDeviceChallenge = ''
     this.mobileConnectionId = ''
@@ -359,6 +391,27 @@ export class CloudRelayClient {
     if (this.authTimer !== null) {
       clearTimeout(this.authTimer)
       this.authTimer = null
+    }
+    this.stopHeartbeat()
+  }
+
+  /**
+   * Keep the relay socket alive: the server force-closes connections that carry
+   * no traffic for ~90s, and a desktop relay socket can idle indefinitely when
+   * no phone is connected. A lightweight `relay:ping` keeps it below the cutoff.
+   */
+  private startHeartbeat(): void {
+    this.stopHeartbeat()
+    this.heartbeatTimer = setInterval(() => {
+      if (!this.authenticated || !this.socket || this.socket.readyState !== WebSocket.OPEN) return
+      this.socket.send(serializeRelayPingFrame())
+    }, HEARTBEAT_INTERVAL_MS)
+  }
+
+  private stopHeartbeat(): void {
+    if (this.heartbeatTimer !== null) {
+      clearInterval(this.heartbeatTimer)
+      this.heartbeatTimer = null
     }
   }
 
@@ -453,7 +506,8 @@ export class CloudRelayClient {
       this.authenticated = true
       this.iceServers = this.parseIceServers(record['iceServers'])
       this.reconnecting = false
-      this.reconnectAttempt = 0
+      this.authenticatedAt = Date.now()
+      this.startHeartbeat()
       this.options.onAuthenticated()
       this.issueDeviceChallenge()
       void this.flushQueue()

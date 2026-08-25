@@ -43,7 +43,7 @@
     Zap
   } from '@lucide/svelte'
   import ChatComposer from '../chats/ChatComposer.svelte'
-  import { normalizeComposerMessage } from '../chats/composer-mentions'
+  import { normalizeComposerMessage, spaceOutProjectReferences } from '../chats/composer-mentions'
   import StartAfterThreadPicker from '../chats/StartAfterThreadPicker.svelte'
   import ResponseSelectionPopover from '../chats/ResponseSelectionPopover.svelte'
   import ResponseAnnotationBubble from '../chats/ResponseAnnotationBubble.svelte'
@@ -71,7 +71,7 @@
   import SpecReadyCard from './SpecReadyCard.svelte'
   import BrainstormEntryChoiceCard from './BrainstormEntryChoiceCard.svelte'
   import BrainstormReadyCard from './BrainstormReadyCard.svelte'
-  import PrdEntryChoiceCard from './PrdEntryChoiceCard.svelte'
+  import EngineeringEntryCard from '../chats/EngineeringEntryCard.svelte'
   import PrdReadyCard from './PrdReadyCard.svelte'
   import EngineeringFlowCancelModal from './EngineeringFlowCancelModal.svelte'
   import AssignmentReadyCard from './AssignmentReadyCard.svelte'
@@ -84,7 +84,12 @@
   import FileCitationContextMenu from '../markdown/FileCitationContextMenu.svelte'
   import { getProjectIcon } from '$lib/project-icons'
   import { isImageMime, isVideoMime, isAudioMime, fileUrlToPath } from '$lib/mime'
-  import { fastBaseModelId, fastVariantForModelId, normalizeFastInference, supportsFastInference } from '$shared/fast-inference'
+  import {
+    fastBaseModelId,
+    fastVariantForModelId,
+    normalizeFastInference,
+    supportsFastInference
+  } from '$shared/fast-inference'
   import { FileBlobUrlManager } from '$lib/media-urls.svelte'
   import { actionContext } from '$lib/stores/action-context.svelte'
   import type { ActionDefinition, ActionSelection, ActionSource } from '$lib/actions'
@@ -174,7 +179,6 @@
     PrdContent,
     PrdDocument,
     PrdSectionId,
-    PrdWorkflowState,
     EngineeringSpec,
     AssignmentPlan,
     AssignmentPlanContent,
@@ -195,9 +199,14 @@
     UserMessagePresentation,
     UserMessageSummary,
     UsageEfficiencyKpis,
-    EngineeringLifecycleSelection,
+    EngineeringLifecycleSelectionInput,
     EngineeringLifecycleState
   } from '$shared/types'
+  import {
+    hasSelectedStage,
+    normalizeLifecycleStages,
+    representativeLifecycleSelection
+  } from '$shared/engines/engineering-lifecycle-engine'
   import { APP_NAME } from '$shared/brand'
   import { workflowActionPresentation } from '$shared/workflow-action-presentation'
   import { LatestRequestGuard } from '$lib/refresh-guard'
@@ -346,57 +355,75 @@
       : threadSettings.initialFor(thread)
   )
   let engineeringLifecycle = $state<EngineeringLifecycleState | null>(null)
-  let pendingLifecycleSelection = $state<EngineeringLifecycleSelection | null>(null)
+  let pendingLifecycleSelection = $state<EngineeringLifecycleSelectionInput | null>(null)
   let lifecycleCancelModalOpen = $state(false)
+  /** A user send that was parked behind the replacement guard, resubmitted after
+   *  the user confirms stopping the active Engineering work. */
+  let pendingGuardedSend = $state<GuardedSendPayload | null>(null)
+  /** Send-time engineering entry card: PRD/Spec need context, so the "Brainstorm
+   *  first | Jump directly into…" choice is shown only after the user tries to send,
+   *  never when the Toolbox switch is toggled. */
+  let pendingEngineeringEntry = $state<'prd' | 'spec' | null>(null)
+  /** Toolbox presentation mirrors the staged selection so switches flip
+   *  immediately, while every side effect stays deferred until the send. */
+  const pendingLifecycleDisplay = $derived.by((): EngineeringLifecycleState | null => {
+    const pending = pendingLifecycleSelection
+    const base = engineeringLifecycle
+    if (!pending) return base
+    const autopilot = pending.autopilot === true
+    const selectedStages = autopilot ? [] : normalizeLifecycleStages(pending.stages)
+    return {
+      projectId: base?.projectId ?? thread.projectId,
+      threadId: base?.threadId ?? thread.id,
+      selection: representativeLifecycleSelection(selectedStages, autopilot),
+      selectedStages,
+      autopilot,
+      completedStages: base?.completedStages ?? [],
+      ...(base?.activeStage ? { activeStage: base.activeStage } : {}),
+      ...(base?.humanGate ? { humanGate: base.humanGate } : {}),
+      ...(base?.failure ? { failure: base.failure } : {}),
+      ...(base?.startedAt ? { startedAt: base.startedAt } : {}),
+      updatedAt: base?.updatedAt ?? Date.now()
+    }
+  })
 
-  function legacySettingsForLifecycle(selection: EngineeringLifecycleSelection): ThreadSettings {
-    if (selection === 'none') {
+  function settingsForEngineeringState(state: EngineeringLifecycleState | null): ThreadSettings {
+    if (!state || (state.selectedStages.length === 0 && !state.autopilot)) {
       return { ...settings, engineeringMode: false, assignmentMode: false, loopMode: false }
     }
+    const { selectedStages, autopilot } = state
     return {
       ...settings,
       engineeringMode:
-        selection === 'brainstorm' ||
-        selection === 'prd' ||
-        selection === 'spec' ||
-        selection === 'run_all',
-      assignmentMode: selection === 'assignment' || selection === 'run_all',
-      loopMode: selection === 'achievement' || selection === 'run_all'
+        autopilot ||
+        selectedStages.includes('brainstorm') ||
+        selectedStages.includes('prd') ||
+        selectedStages.includes('spec'),
+      assignmentMode: autopilot || selectedStages.includes('assignment'),
+      loopMode: autopilot || selectedStages.includes('achievement')
     }
   }
 
-  async function applyLifecycleSelection(selection: EngineeringLifecycleSelection): Promise<void> {
+  async function applyLifecycleSelection(input: EngineeringLifecycleSelectionInput): Promise<void> {
     engineeringLifecycle = await invoke(
       'engineeringLifecycle:select',
       thread.projectId,
       thread.id,
-      selection
+      input
     )
-    updateSettings(legacySettingsForLifecycle(selection))
-    prdWorkflow =
-      selection === 'prd'
-        ? await invoke('prd:ensureWorkflow', thread.projectId, thread.id)
-        : prdWorkflow
+    updateSettings(settingsForEngineeringState(engineeringLifecycle))
   }
 
-  async function selectEngineeringLifecycle(
-    selection: EngineeringLifecycleSelection
-  ): Promise<void> {
-    if (
-      engineeringLifecycle &&
-      (engineeringLifecycle.activeStage !== undefined ||
-        engineeringLifecycle.humanGate !== undefined) &&
-      selection !== engineeringLifecycle.selection
-    ) {
-      pendingLifecycleSelection = selection
-      lifecycleCancelModalOpen = true
-      return
-    }
-    await applyLifecycleSelection(selection)
+  /** Toolbox toggles are intent, never action: the selection is only staged here
+   *  and applied when the user actually sends a message. Flipping switches while
+   *  "playing around" in the composer must never apply settings, surface audit/
+   *  assignment offer cards, or pop the replacement guard. */
+  function selectEngineeringLifecycle(input: EngineeringLifecycleSelectionInput): void {
+    pendingLifecycleSelection = input
   }
 
   async function confirmLifecycleReplacement(): Promise<void> {
-    const replacement = pendingLifecycleSelection ?? 'none'
+    const replacement = pendingLifecycleSelection ?? { stages: [], autopilot: false }
     engineeringLifecycle = await invoke(
       'engineeringLifecycle:cancel',
       thread.projectId,
@@ -405,8 +432,32 @@
     )
     lifecycleCancelModalOpen = false
     pendingLifecycleSelection = null
-    if (replacement !== 'none') await applyLifecycleSelection(replacement)
-    else updateSettings(legacySettingsForLifecycle('none'))
+    if (replacement.stages.length > 0 || replacement.autopilot) {
+      await applyLifecycleSelection(replacement)
+    } else {
+      updateSettings(settingsForEngineeringState(engineeringLifecycle))
+    }
+    // A user send parked behind the replacement guard resumes once confirmed.
+    const guarded = pendingGuardedSend
+    if (guarded) {
+      pendingGuardedSend = null
+      await sendMessage(
+        guarded.text,
+        guarded.attachments,
+        undefined,
+        guarded.direct,
+        guarded.promptContext,
+        guarded.promptReferences,
+        guarded.projectReferences,
+        undefined,
+        guarded.taskReferences,
+        true,
+        guarded.startAfterThreads
+      )
+      // The parked draft was re-seeded into the composer; the send now owns it.
+      rendererRecovery.clearDraft(thread.projectId, thread.id)
+      composerRestoreKey += 1
+    }
   }
 
   async function retryEngineeringLifecycle(): Promise<void> {
@@ -419,7 +470,7 @@
         thread.id,
         current.resumeToken
       )
-      updateSettings(legacySettingsForLifecycle(engineeringLifecycle.selection))
+      updateSettings(settingsForEngineeringState(engineeringLifecycle))
       const stage = engineeringLifecycle.activeStage
       if (stage === 'brainstorm') {
         const active = await invoke('brainstorm:getActive', thread.projectId, thread.id)
@@ -467,6 +518,17 @@
   /** Snapshot of the selection that started the live turn. Model controls can
    *  still change the next-turn settings while the current turn is running. */
   let liveWorkingSelection = $state<WorkingModelSelection | null>(null)
+  /** True while we are showing a working trace rehydrated from persisted state
+   *  because no live session activity is available to confirm the run (a silent
+   *  session, an app restart, or a relay drop mid-turn). The trace renders the
+   *  last-known saved parts with a "restored / reconnecting" note instead of the
+   *  thread dropping to idle or showing a bare "Agent working…" spinner. Cleared
+   *  as soon as a live session confirms the real terminal state. */
+  let restoredBusy = $state(false)
+  /** Working-trace parts rebuilt from the thread's durable SSE log. Used to
+   *  backfill the restored trace when the live session is unreachable and the
+   *  message mirror has not persisted the streaming parts yet. */
+  let streamParts = $state<AgentPart[]>([])
   let agentDefaults = $state<AgentDefaultsConfig>({ syncFromThreadChanges: false })
   /** Global "don't ask again" flag for the image-descriptor vision model picker. */
   let imageDescriptorAskAgain = $state(false)
@@ -1487,6 +1549,17 @@
     ].join('\n\n')
   }
 
+  interface GuardedSendPayload {
+    text: string
+    attachments: PromptAttachment[]
+    direct?: boolean
+    promptContext?: string
+    promptReferences: ResponseReferenceAnchor[]
+    projectReferences: PromptProjectReference[]
+    taskReferences: PromptAssignmentTaskReference[]
+    startAfterThreads: StartAfterThreadReference[]
+  }
+
   function sendComposerMessage(
     text: string,
     attachments: PromptAttachment[],
@@ -1519,19 +1592,56 @@
     const promptContext = [responseReferenceContext(), taskContext].filter(Boolean).join('\n\n')
     const promptReferences = [...responseReferences]
     clearResponseReferences()
-    void sendMessage(
-      text,
-      attachments,
-      undefined,
-      direct,
-      promptContext || undefined,
-      promptReferences,
-      projectReferences,
-      undefined,
-      currentTaskReferences,
-      true,
-      startAfterThreads
-    )
+    void (async () => {
+      const staged = pendingLifecycleSelection
+      if (staged) {
+        if (
+          engineeringLifecycle &&
+          (engineeringLifecycle.activeStage !== undefined ||
+            engineeringLifecycle.humanGate !== undefined)
+        ) {
+          // Keep the staged choice — confirmLifecycleReplacement reads it.
+          pendingGuardedSend = {
+            text,
+            attachments,
+            ...(direct ? { direct } : {}),
+            ...(promptContext ? { promptContext } : {}),
+            promptReferences,
+            projectReferences,
+            taskReferences: currentTaskReferences,
+            startAfterThreads
+          }
+          // The composer has already cleared its buffer, so restore the draft
+          // and ask for confirmation before replacing the active Engineering run.
+          rendererRecovery.setDraft(
+            thread.projectId,
+            thread.id,
+            text,
+            attachments,
+            projectReferences,
+            taskReferences
+          )
+          composerRestoreKey += 1
+          lifecycleCancelModalOpen = true
+          return
+        }
+        pendingLifecycleSelection = null
+        await applyLifecycleSelection(staged)
+      }
+      await sendMessage(
+        text,
+        attachments,
+        undefined,
+        direct,
+        promptContext || undefined,
+        promptReferences,
+        projectReferences,
+        undefined,
+        currentTaskReferences,
+        true,
+        startAfterThreads
+      )
+    })()
   }
 
   function temporaryConversationContext(): string {
@@ -1580,7 +1690,6 @@
   let brainstormVersions = $state<BrainstormDocument[]>([])
   let selectedBrainstormVersion = $state<number | undefined>()
   let prd = $state<PrdDocument | null>(null)
-  let prdWorkflow = $state<PrdWorkflowState | null>(null)
   let prdVersions = $state<PrdDocument[]>([])
   let selectedPrdVersion = $state<number | undefined>()
   let prdBusy = $state(false)
@@ -1757,29 +1866,44 @@
       thread.assignmentId === undefined &&
       thread.achievementRole === undefined
   )
+  /** Persisted evidence that a durable audit ever ran on this studio-only thread. */
+  let plainAuditTriggered = $derived(
+    auditState === 'offered' ||
+      auditState === 'running' ||
+      auditState === 'reworking' ||
+      auditState === 'report_ready' ||
+      auditReport !== null
+  )
   let plainEngineeringAuditAvailable = $derived(
-    settings.engineeringMode === true &&
-      studioOnlyAuditWorkflow &&
+    studioOnlyAuditWorkflow &&
+      (settings.engineeringMode === true || plainAuditTriggered) &&
       spec?.status === 'approved' &&
       (auditState === 'offered' ||
         auditState === 'running' ||
-        (auditState === 'report_ready' && auditReport !== null))
+        auditState === 'reworking' ||
+        (auditState === 'report_ready' && auditReport !== null) ||
+        (auditState === undefined && auditReport !== null))
   )
   let plainEngineeringAuditRunning = $derived(
-    settings.engineeringMode === true && studioOnlyAuditWorkflow && auditState === 'running'
+    studioOnlyAuditWorkflow &&
+      (settings.engineeringMode === true || plainAuditTriggered) &&
+      auditState === 'running'
   )
   let plainEngineeringAuditReady = $derived(
-    settings.engineeringMode === true &&
-      studioOnlyAuditWorkflow &&
+    studioOnlyAuditWorkflow &&
+      (settings.engineeringMode === true || plainAuditTriggered) &&
       auditState === 'report_ready' &&
       auditReport !== null
   )
+
+  /** Sticky: Achievement coordination remains once the flow has ever run. */
+  let achievementTriggered = $derived(achievementOnly || thread.achievementRole === 'coordinator')
 
   /** Which coordinator, if any, this thread publishes to the context dock. */
   let coordinatorKind = $derived.by((): 'assignment' | 'achievement' | 'audit' | null => {
     if (isAssignmentAuditorThread) return null
     if (assignment && assignment.status !== 'draft') return 'assignment'
-    if (achievementOnly && spec) return 'achievement'
+    if (achievementTriggered && spec) return 'achievement'
     if (plainEngineeringAuditAvailable && spec) return 'audit'
     return null
   })
@@ -2760,6 +2884,8 @@
   }
 
   function beginLocalTurn(userMessageId: string): void {
+    restoredBusy = false
+    streamParts = []
     locallySubmittedTurnId = userMessageId
     locallySubmittedTurnAcknowledged = false
     turnSawCompaction = false
@@ -2782,6 +2908,8 @@
   function setIdleFromRestore(): void {
     if (locallySubmittedTurnId) return
     if (agentRuns.activity(thread.projectId, thread.id) === 'brainstorm_report') return
+    restoredBusy = false
+    streamParts = []
     liveWorkingSelection = null
     agentRuns.setIdle(thread.projectId, thread.id)
   }
@@ -2790,6 +2918,7 @@
   function setIdleFromSession(): boolean {
     if (locallySubmittedTurnId && !locallySubmittedTurnAcknowledged) return false
     if (agentRuns.activity(thread.projectId, thread.id) === 'brainstorm_report') return false
+    restoredBusy = false
     clearLocalTurn()
     agentRuns.setIdle(thread.projectId, thread.id)
     return true
@@ -2842,6 +2971,62 @@
 
   async function loadLocal(attempt = 0): Promise<void> {
     const { projectId, id } = thread
+    // New empty thread seeded as loaded before mount must render the
+    // composer instantly — zero IPC on the critical path. All persistence
+    // reads enrich state in the background without ever blocking typing
+    // or voice, and never show "Loading conversation...".
+    const alreadySeeded = threadMessages.loaded(projectId, id)
+    if (alreadySeeded && threadMessages.messages(projectId, id).length === 0) {
+      // Seeded empty thread: composer must paint on the very first frame with
+      // zero synchronous work beyond the reactive `loaded` flag already set.
+      // Every other hydration step is fully async and never blocks typing/voice;
+      // git branch arrives later via the thread:update broadcast.
+      olderMessagesAvailable = false
+      // Defer all non-composer hydration off the paint — schedule as microtask
+      // so the first frame only mounts ChatComposer.
+      queueMicrotask(() => {
+        if (!alive) return
+        initializeHistoryWindow(0)
+        if (thread.settings) {
+          settings = chatMode
+            ? normalizeChatSettings(chatSettings.initialFor(thread, chatEffectiveSettings()))
+            : threadSettings.initialFor(thread)
+        }
+        auditSettings = auditSettingsForThread()
+        syncOpenSubagentTabs()
+        if (!liveStatusKnown) {
+          restoreWorkingState(thread.status, thread.auditState === 'running')
+        }
+        restoreQueuedMessage()
+        restoreResponseReferences()
+      })
+      // Background persistence/config enrichment — never blocks input, never shows loading
+      void Promise.all([invoke('thread:get', projectId, id), invoke('config:get')])
+        .then(([threadData, config]) => {
+          if (!alive) return
+          queueMicrotask(() => {
+            if (!alive) return
+            if (threadData?.settings) {
+              settings = chatMode
+                ? normalizeChatSettings(chatSettings.initialFor(threadData, chatEffectiveSettings()))
+                : threadSettings.initialFor(threadData)
+            }
+            agentDefaults = config.agentDefaults
+            imageDescriptorAskAgain = config.imageDescriptorAskAgain === true
+            autoRetryAfterReset = config.autoRetryAfterReset === true
+            auditSettings = auditSettingsForThread()
+            if (threadData?.sessionId) {
+              threadMessages.setSessionId(projectId, id, threadData.sessionId)
+            }
+            syncOpenSubagentTabs()
+            seedContextUsageSnapshot(threadData?.contextUsage)
+            restoreQueuedMessage()
+            restoreResponseReferences()
+          })
+        })
+        .catch(() => {})
+      return
+    }
     try {
       const [threadData, page, config] = await Promise.all([
         invoke('thread:get', projectId, id),
@@ -2964,23 +3149,39 @@
       // spec/retry surfaces it). loadLocal may have optimistically restored busy
       // off a leftover `planning`/`executing` DB row — clear it so a finished or
       // never-started thread never keeps the composer/rows looking busy after a
-      // view switch or refresh.
+      // view switch or refresh. The one exception is persisted evidence of a
+      // mid-flight turn: if the saved latest turn has real working parts and no
+      // terminal message, rehydrate that working trace (with a "restored /
+      // reconnecting" note) instead of dropping to idle, so the user can tell a
+      // run was in progress even though the live stream is not confirming it.
+      // The thread itself stays interactive (not busy) so a poke message can
+      // still be sent normally.
       if (providerStatus === null) {
-        setIdleFromRestore()
+        restoredBusy = hasPersistedInFlightWork()
+        if (restoredBusy) {
+          // Rebuild the working trace from the durable SSE log so the restored
+          // trace shows everything streamed so far, not just what the mirror
+          // happened to persist. Even if the harness session died with the app,
+          // the file holds the full event stream up to the reopen.
+          void invoke('thread:loadStreamParts', projectId, id)
+            .then((parts) => {
+              if (alive) streamParts = parts
+            })
+            .catch(() => {})
+        } else {
+          streamParts = []
+          setIdleFromRestore()
+        }
       }
-      // A thread opened while its turn is still running has its accumulated
-      // working trace only in the live harness session: the mirror persists
-      // assistant parts only when the turn idles/completes, and parts that
-      // streamed before this view mounted were never routed to the local
-      // cache. Pull the live driver transcript now so the working trace
-      // (tools, sub-agents, reasoning) renders immediately instead of a bare
-      // user message that only fills in after the turn ends. This covers the
-      // thread's own live turn AND delegated work it owns: the coordinator's
-      // own session is idle between handoffs, so `threadWorking` (not just the
-      // raw busy flag) decides whether accumulated work must be recovered.
-      if (threadWorking) {
-        void refreshMessages()
-      }
+      // Never pull the full live harness transcript while mounting a thread.
+      // `agent:loadMessages` is intentionally unbounded: a long-running agent
+      // can return thousands of parts, and the main process then synchronizes
+      // and serializes that whole transcript before the renderer can use it.
+      // The bounded mirror page above keeps opening interactive immediately;
+      // live events continue to populate the current turn, and the durable
+      // stream log restores interrupted work when no live session exists.
+      // A full provider transcript must only be loaded by an explicit workflow,
+      // never as a side effect of opening a thread.
       if (providerStatus?.state === 'idle') {
         scheduleIdleAttention()
       }
@@ -3196,6 +3397,7 @@
     if (event.type === 'thread.error') {
       if (event.projectId !== thread.projectId || event.threadId !== thread.id) return
       clearSpecGenerationTrace()
+      restoredBusy = false
       clearLocalTurn()
       agentRuns.setIdle(thread.projectId, thread.id)
       pendingPermissions = []
@@ -3293,6 +3495,7 @@
           providerStatus = event.status
         }
         if (event.status.state === 'waiting' || event.status.state === 'working') {
+          restoredBusy = false
           acknowledgeLocalTurn()
           if (event.status.state === 'working') idleAttentionHandled = false
           ensureLiveWorkingSelection()
@@ -3689,11 +3892,21 @@
     // Let the mount-time lookup finish first so it cannot persist an older
     // harness session after this send-specific lookup.
     const { projectId, id } = thread
+    // A parked lifecycle (a circle has already started and completed) must not
+    // be re-started by a plain send: the designated Next-step/Review/Implement
+    // buttons own stage re-entry. A fresh selection (startedAt cleared by
+    // select) may still start on send, because that is the user asking to run
+    // the newly selected Engineering stage.
+    const lifecycleStarted =
+      engineeringLifecycle !== null &&
+      engineeringLifecycle !== undefined &&
+      engineeringLifecycle.startedAt !== undefined
     if (
       engineeringLifecycle?.selection !== undefined &&
       engineeringLifecycle.selection !== 'none' &&
       engineeringLifecycle.activeStage === undefined &&
-      engineeringLifecycle.humanGate === undefined
+      engineeringLifecycle.humanGate === undefined &&
+      !lifecycleStarted
     ) {
       const started = await invoke('engineeringLifecycle:start', projectId, id)
       engineeringLifecycle = started.state
@@ -3708,8 +3921,7 @@
           )
         }
       } else if (started.state.activeStage === 'prd') {
-        const workflow = await invoke('prd:ensureWorkflow', projectId, id)
-        prdWorkflow = workflow
+        await invoke('prd:ensureWorkflow', projectId, id)
       }
     }
     await sessionReady
@@ -3754,12 +3966,7 @@
       return
     }
     if (specFormulating && specAction !== 'request') return
-    if (
-      specAction === undefined &&
-      (engineeringLifecycle?.activeStage === 'achievement' ||
-        (engineeringLifecycle?.selection === 'achievement' &&
-          engineeringLifecycle.activeStage === undefined))
-    ) {
+    if (specAction === undefined && engineeringLifecycle?.activeStage === 'achievement') {
       if (!spec || spec.status !== 'approved') {
         errorMessage = 'Achievement requires an approved Spec.'
         return
@@ -3794,10 +4001,7 @@
       return
     }
 
-    const selectedAssignment =
-      engineeringLifecycle?.activeStage === 'assignment' ||
-      (engineeringLifecycle?.selection === 'assignment' &&
-        engineeringLifecycle.activeStage === undefined)
+    const selectedAssignment = engineeringLifecycle?.activeStage === 'assignment'
     if (selectedAssignment && specAction === undefined) {
       if (!spec || spec.status !== 'approved') {
         assignmentError = 'Assignment requires an approved Spec.'
@@ -3812,13 +4016,43 @@
       return
     }
 
+    // PRD/Spec need context: show the "Brainstorm first | Jump directly into…"
+    // card at SEND time, never when the Toolbox switch is toggled. Jumping in
+    // still lets the Sr. Engineer align — it just skips the Brainstorm document.
+    const entryPrd = hasSelectedStage(engineeringLifecycle, 'prd')
+    const entrySpec = hasSelectedStage(engineeringLifecycle, 'spec')
+    if (
+      engineeringLifecycle &&
+      engineeringLifecycle.activeStage === undefined &&
+      !engineeringLifecycle.autopilot &&
+      !hasSelectedStage(engineeringLifecycle, 'brainstorm') &&
+      !hasSelectedStage(engineeringLifecycle, 'assignment') &&
+      !hasSelectedStage(engineeringLifecycle, 'achievement') &&
+      (entryPrd || entrySpec)
+    ) {
+      const contextReady = entryPrd
+        ? Boolean(brainstorm?.status === 'finalized' || prd)
+        : Boolean(brainstorm?.status === 'finalized' || prd || spec)
+      if (!contextReady) {
+        if (pendingEngineeringEntry === null) {
+          pendingEngineeringEntry = entryPrd ? 'prd' : 'spec'
+        }
+        return
+      }
+    }
+
+    const lifecycleStarted =
+      engineeringLifecycle !== null &&
+      engineeringLifecycle !== undefined &&
+      engineeringLifecycle.startedAt !== undefined
     const selectedPrd =
       engineeringLifecycle?.activeStage === 'prd' ||
-      (engineeringLifecycle?.selection === 'prd' && engineeringLifecycle.activeStage === undefined)
+      (hasSelectedStage(engineeringLifecycle, 'prd') &&
+        engineeringLifecycle?.activeStage === undefined &&
+        !lifecycleStarted)
     const selectedPrdWorkflow = selectedPrd
       ? await invoke('prd:ensureWorkflow', thread.projectId, thread.id)
       : null
-    if (selectedPrdWorkflow) prdWorkflow = selectedPrdWorkflow
     if (selectedPrd && selectedPrdWorkflow?.stage !== 'brainstorming' && specAction === undefined) {
       if (selectedPrdWorkflow?.stage === 'choice_pending') {
         prdError = 'Choose Brainstorm first or Start PRD before sending the requirements.'
@@ -4205,55 +4439,37 @@
     const assistant = messages[messageIndex]
     if (!assistant || assistant.role !== 'assistant') return null
 
-    let sourceMessage: AgentMessage | null = null
-    for (let index = messageIndex - 1; index >= 0; index -= 1) {
-      const candidate = messages[index]
-      if (candidate?.role === 'user') {
-        sourceMessage = candidate
-        break
+    // A checkpoint's turn spans beginTurn (createdAt) → completeTurn
+    // (completedAt). Every message of that turn — including steers,
+    // question-answers, permission prompts, sub-agent spawns, and compaction —
+    // falls inside this window, so match the card by time instead of walking
+    // back to a "user" message (whose role/shape varies with what the agent
+    // did mid-turn). Choosing the most recent window resolves
+    // interrupted-then-resumed turns to the resumed checkpoint.
+    const completed = checkpoints.filter((checkpoint) => checkpoint.status !== 'active')
+    let owner: TurnCheckpointSummary | null = null
+    for (const checkpoint of completed) {
+      const end = checkpoint.completedAt ?? checkpoint.createdAt
+      if (assistant.createdAt >= checkpoint.createdAt - 5_000 && assistant.createdAt <= end) {
+        if (!owner || checkpoint.createdAt > owner.createdAt) owner = checkpoint
       }
     }
+    return owner
+  }
 
-    const completed = checkpoints.filter((checkpoint) => checkpoint.status !== 'active')
-    const exact = completed.find(
-      (checkpoint) =>
-        checkpoint.sourceMessageId === assistant.id ||
-        checkpoint.sourceMessageId === sourceMessage?.id
-    )
-    if (exact) return exact
-
-    // When the turn's source user message IS loaded, the id match is
-    // authoritative: a checkpoint that doesn't match this turn's user message
-    // belongs to a different — earlier — turn. A previous turn can be
-    // temporally adjacent to the current in-progress turn (e.g. a queued
-    // message sent the moment the agent idled), so a time-based fallback here
-    // would render the previous turn's file card under the current turn while
-    // it is still working. The time fallback is only valid when the source
-    // user message is outside the loaded history window.
-    if (sourceMessage) return null
-
-    // The source user message may not be paged in yet (it can live outside the
-    // initially loaded history window — a single turn can span dozens of tool
-    // messages), so an id match alone can miss a turn until the user scrolls.
-    // Fall back to matching the checkpoint to this turn by time: the checkpoint
-    // is created at the turn's start and completed just after its last message,
-    // so compare its completedAt against this assistant message.
-    const turnStart = assistant.createdAt
-    const nextUser = messages.slice(messageIndex + 1).find((message) => message.role === 'user')
-    const turnEnd = nextUser?.createdAt ?? Number.POSITIVE_INFINITY
-    const withinTurn = completed.filter(
-      (checkpoint) =>
-        (checkpoint.completedAt ?? checkpoint.createdAt) >= turnStart - 5_000 &&
-        checkpoint.createdAt < turnEnd
-    )
-    const targetTime = assistant.completedAt ?? assistant.createdAt
-    return (
-      withinTurn.sort(
-        (left, right) =>
-          Math.abs((left.completedAt ?? left.createdAt) - targetTime) -
-          Math.abs((right.completedAt ?? right.createdAt) - targetTime)
-      )[0] ?? null
-    )
+  /** True when `messageIndex` is the final assistant message of `checkpoint`'s
+   *  turn — the single place its file card should render. Keeps a card from
+   *  being drawn multiple times when mid-turn question-answer user messages
+   *  split the visual turn into several `isTurnEnd` boundaries. */
+  function isCheckpointTurnEnd(messageIndex: number, checkpoint: TurnCheckpointSummary): boolean {
+    const start = checkpoint.createdAt - 5_000
+    const end = checkpoint.completedAt ?? checkpoint.createdAt
+    for (let index = messageIndex + 1; index < messages.length; index += 1) {
+      const candidate = messages[index]
+      if (candidate?.role !== 'assistant') continue
+      if (candidate.createdAt >= start && candidate.createdAt <= end) return false
+    }
+    return true
   }
 
   async function openCheckpointFile(checkpointId: string, path: string): Promise<void> {
@@ -4340,7 +4556,6 @@
       projectThreads,
       workflow,
       activeBrainstorm,
-      currentPrdWorkflow,
       activePrd
     ] = await Promise.all([
       invoke('spec:getActive', projectId, workflowThreadId),
@@ -4349,7 +4564,6 @@
       invoke('thread:list', projectId),
       invoke('brainstorm:getWorkflow', projectId, workflowThreadId),
       invoke('brainstorm:getActive', projectId, workflowThreadId),
-      invoke('prd:getWorkflow', projectId, workflowThreadId),
       invoke('prd:getActive', projectId, workflowThreadId)
     ])
     if (!alive) return
@@ -4364,7 +4578,6 @@
       if (providerStatus?.state !== 'error') providerStatus = null
     }
     brainstormWorkflow = workflow
-    prdWorkflow = currentPrdWorkflow
     brainstorm = activeBrainstorm
     prd = activePrd
     prdVersions = activePrd
@@ -4389,7 +4602,7 @@
     }
     assignment = activeAssignment
     if (
-      engineeringLifecycle?.selection === 'run_all' &&
+      engineeringLifecycle?.autopilot &&
       engineeringLifecycle.activeStage === 'achievement' &&
       activeAssignment?.auditCycle?.status === 'completed'
     ) {
@@ -4399,11 +4612,11 @@
         workflowThreadId,
         'achievement'
       )
-      updateSettings(legacySettingsForLifecycle('none'))
+      updateSettings(settingsForEngineeringState(engineeringLifecycle))
     }
     if (
-      engineeringLifecycle?.selection === 'assignment' &&
-      engineeringLifecycle.activeStage === 'assignment' &&
+      hasSelectedStage(engineeringLifecycle, 'assignment') &&
+      engineeringLifecycle?.activeStage === 'assignment' &&
       activeAssignment?.status === 'completed'
     ) {
       engineeringLifecycle = await invoke(
@@ -4412,7 +4625,7 @@
         workflowThreadId,
         'assignment'
       )
-      updateSettings(legacySettingsForLifecycle('none'))
+      updateSettings(settingsForEngineeringState(engineeringLifecycle))
     }
     assignmentVersions = activeAssignment
       ? await invoke('assignment:listVersions', projectId, workflowThreadId, activeAssignment.id)
@@ -4486,7 +4699,8 @@
       !active &&
       workflowThread?.status !== 'failed' &&
       !planningResumeRequested &&
-      (!engineeringLifecycle || engineeringLifecycle.selection === 'none')
+      (!engineeringLifecycle ||
+        (engineeringLifecycle.selectedStages.length === 0 && !engineeringLifecycle.autopilot))
     ) {
       const resume =
         workflow?.stage === 'skipped'
@@ -4684,10 +4898,7 @@
         ).state
       }
       assignment = await invoke('agent:startAssignment', thread.projectId, thread.id)
-      if (
-        engineeringLifecycle?.selection === 'run_all' &&
-        engineeringLifecycle.activeStage === 'assignment'
-      ) {
+      if (engineeringLifecycle?.autopilot && engineeringLifecycle.activeStage === 'assignment') {
         engineeringLifecycle = await invoke(
           'engineeringLifecycle:complete',
           thread.projectId,
@@ -4703,19 +4914,18 @@
       )
       selectedAssignmentVersion = assignment.version
       specReadyToolVisible = false
-      settings =
-        engineeringLifecycle?.selection === 'run_all'
-          ? {
-              ...settings,
-              engineeringMode: false,
-              assignmentMode: true,
-              loopMode: true
-            }
-          : {
-              ...settings,
-              engineeringMode: false,
-              assignmentMode: false
-            }
+      settings = engineeringLifecycle?.autopilot
+        ? {
+            ...settings,
+            engineeringMode: false,
+            assignmentMode: true,
+            loopMode: true
+          }
+        : {
+            ...settings,
+            engineeringMode: false,
+            assignmentMode: false
+          }
       commitSettings(settings)
     } catch (error) {
       assignmentError =
@@ -4859,6 +5069,58 @@
     }
   }
 
+  /** Revert an accidental engineering-mode send. The pending user message that
+   *  triggered the "Plan your work" card is deleted from the thread, restored
+   *  into the composer as a draft, and engineering mode is turned off so the
+   *  message can be sent again as a normal chat message. */
+  async function revertEngineeringEntryChoice(): Promise<void> {
+    if (busy || brainstormBusy) return
+    const { projectId, id } = thread
+    const pendingId = latestUserMessageId()
+    const pending = pendingId ? messages.find((m) => m.id === pendingId) : undefined
+    const draft = pending ? messageText(pending) : ''
+    const attachments = pending
+      ? pending.parts
+          .filter((p): p is Extract<AgentPart, { type: 'file' }> => p.type === 'file')
+          .map((p) => ({ mime: p.mime, url: p.url, filename: p.filename }))
+      : []
+    const projectReferences = pending?.projectReferences ?? []
+
+    brainstormGenerationFailed = false
+    brainstormError = ''
+    errorMessage = ''
+    brainstormWorkflow = null
+    brainstormBusy = true
+    try {
+      if (pendingId) {
+        await threadMessages.truncate(projectId, id, pendingId)
+      }
+      await invoke('brainstorm:resetWorkflow', projectId, id)
+      if (
+        engineeringLifecycle &&
+        (engineeringLifecycle.selection !== 'none' ||
+          engineeringLifecycle.activeStage !== undefined ||
+          engineeringLifecycle.humanGate !== undefined)
+      ) {
+        engineeringLifecycle = await invoke('engineeringLifecycle:cancel', projectId, id, true)
+      }
+      updateSettings(settingsForEngineeringState(engineeringLifecycle))
+      await invoke('thread:setStatus', projectId, id, 'created')
+      if (draft || attachments.length > 0 || projectReferences.length > 0) {
+        rendererRecovery.setDraft(projectId, id, draft, attachments, projectReferences)
+        composerRestoreKey += 1
+      }
+      await reconcileReadySpec()
+    } catch (error) {
+      errorMessage =
+        error instanceof Error
+          ? error.message
+          : 'The engineering entry choice could not be reverted.'
+    } finally {
+      brainstormBusy = false
+    }
+  }
+
   function openBrainstormStudio(): void {
     if (!brainstorm) return
     selectedBrainstormVersion = brainstorm.version
@@ -4883,12 +5145,23 @@
     selectedPrdVersion = version
   }
 
+  async function chooseEngineeringEntry(choice: 'brainstorm_first' | 'jump_in'): Promise<void> {
+    const target = pendingEngineeringEntry
+    if (target === null) return
+    pendingEngineeringEntry = null
+    if (target === 'prd') {
+      await choosePrdEntry(choice === 'brainstorm_first' ? 'brainstorm_first' : 'start_prd')
+    } else {
+      await chooseBrainstormEntry(choice === 'brainstorm_first' ? 'brainstorm' : 'spec')
+    }
+  }
+
   async function choosePrdEntry(choice: 'brainstorm_first' | 'start_prd'): Promise<void> {
     if (prdBusy) return
     prdBusy = true
     prdError = ''
     try {
-      prdWorkflow = await invoke('prd:chooseEntry', thread.projectId, thread.id, choice)
+      await invoke('prd:chooseEntry', thread.projectId, thread.id, choice)
       if (choice === 'brainstorm_first') {
         const workflow = await invoke('brainstorm:ensureWorkflow', thread.projectId, thread.id)
         brainstormWorkflow = workflow.entryChoice
@@ -5033,22 +5306,22 @@
       prdVersions = prdVersions.map((candidate) =>
         candidate.version === finalized.version ? finalized : candidate
       )
-      if (engineeringLifecycle?.selection === 'prd') {
+      if (hasSelectedStage(engineeringLifecycle, 'prd') && !engineeringLifecycle?.autopilot) {
         engineeringLifecycle = await invoke(
           'engineeringLifecycle:complete',
           thread.projectId,
           thread.id,
           'prd'
         )
-        updateSettings(legacySettingsForLifecycle('none'))
-      } else if (engineeringLifecycle?.selection === 'run_all') {
+        updateSettings(settingsForEngineeringState(engineeringLifecycle))
+      } else if (engineeringLifecycle?.autopilot) {
         engineeringLifecycle = await invoke(
           'engineeringLifecycle:complete',
           thread.projectId,
           thread.id,
           'prd'
         )
-        updateSettings(legacySettingsForLifecycle('run_all'))
+        updateSettings(settingsForEngineeringState(engineeringLifecycle))
         specFormulating = true
         const generatedSpec = await invoke('agent:ensureInitialSpec', thread.projectId, thread.id)
         await setActiveSpec(generatedSpec)
@@ -5058,6 +5331,40 @@
       }
     } catch (error) {
       prdError = error instanceof Error ? error.message : 'The PRD could not be finalized.'
+    } finally {
+      specFormulating = false
+      prdBusy = false
+    }
+  }
+
+  /** Designated Next-step from a finalized PRD: start the Spec stage (manual
+   *  stop-mode no longer auto-advances) and generate the spec from the PRD. */
+  async function nextStepFromPrd(): Promise<void> {
+    if (prdBusy || specFormulating) return
+    prdBusy = true
+    specFormulating = true
+    prdError = ''
+    try {
+      let lifecycle = engineeringLifecycle
+      if (lifecycle && !lifecycle.autopilot && !hasSelectedStage(lifecycle, 'spec')) {
+        lifecycle = await invoke('engineeringLifecycle:select', thread.projectId, thread.id, {
+          stages: [...(lifecycle.selectedStages ?? []), 'spec'],
+          autopilot: false
+        })
+      }
+      if (lifecycle && lifecycle.activeStage === undefined && lifecycle.humanGate === undefined) {
+        lifecycle = (
+          await invoke('engineeringLifecycle:start', thread.projectId, thread.id, 'spec')
+        ).state
+      }
+      engineeringLifecycle = lifecycle
+      const generatedSpec = await invoke('agent:ensureInitialSpec', thread.projectId, thread.id)
+      await setActiveSpec(generatedSpec)
+      engineeringLifecycle = await invoke('engineeringLifecycle:get', thread.projectId, thread.id)
+      studioDocument = 'spec'
+      showSpecStudio = true
+    } catch (error) {
+      prdError = error instanceof Error ? error.message : 'The Spec could not be generated.'
     } finally {
       specFormulating = false
       prdBusy = false
@@ -5451,8 +5758,7 @@
         applyBrainstormDocument(result)
         await reconcileReadySpec()
         if (engineeringLifecycle?.activeStage === 'prd') {
-          const workflow = await invoke('prd:ensureWorkflow', thread.projectId, thread.id)
-          prdWorkflow = workflow
+          await invoke('prd:ensureWorkflow', thread.projectId, thread.id)
           prd = await invoke(
             'agent:generatePrd',
             thread.projectId,
@@ -5483,6 +5789,69 @@
       brainstormBusy = false
       brainstormDecisionInFlight = null
       agentRuns.setIdle(thread.projectId, thread.id)
+    }
+  }
+
+  /** Next-step choices from the Brainstorm studio after a session. */
+  async function brainstormNextStep(
+    step: 'lofi' | 'hifi' | 'prd' | 'spec',
+    draft: BrainstormDocument
+  ): Promise<void> {
+    if (step === 'lofi' || step === 'hifi') {
+      const note =
+        step === 'lofi'
+          ? 'Generate Lo-Fi prototypes (L1, L2) for the agreed direction and add them to the Brainstorm.'
+          : 'Generate one direct HiFi prototype H1 based on the agreed direction and add it to the Brainstorm.'
+      await submitBrainstormDecision('review', draft, note)
+      return
+    }
+    // PRD | Spec: finalize the Brainstorm (the finalize consumes any pending
+    // gate), then, in manual stop-mode, explicitly re-enter the requested stage
+    // and drive its generation. Autopilot keeps its automatic chain.
+    const requestedStage = step === 'prd' ? 'prd' : 'spec'
+    await submitBrainstormDecision('finalize', draft, '')
+    if (
+      engineeringLifecycle &&
+      !engineeringLifecycle.autopilot &&
+      engineeringLifecycle.activeStage === undefined &&
+      engineeringLifecycle.humanGate === undefined
+    ) {
+      if (!hasSelectedStage(engineeringLifecycle, requestedStage)) {
+        engineeringLifecycle = await invoke(
+          'engineeringLifecycle:select',
+          thread.projectId,
+          thread.id,
+          {
+            stages: [...(engineeringLifecycle.selectedStages ?? []), requestedStage],
+            autopilot: false
+          }
+        )
+      }
+      engineeringLifecycle = (
+        await invoke('engineeringLifecycle:start', thread.projectId, thread.id, requestedStage)
+      ).state
+      if (requestedStage === 'prd') {
+        await invoke('prd:ensureWorkflow', thread.projectId, thread.id)
+        prd = await invoke(
+          'agent:generatePrd',
+          thread.projectId,
+          thread.id,
+          settings,
+          'Generate the PRD from the finalized Brainstorm and verified project context.',
+          [],
+          messageId()
+        )
+        prdVersions = prd ? [prd] : []
+        selectedPrdVersion = prd?.version ?? null
+        studioDocument = 'prd'
+        showSpecStudio = true
+      } else {
+        const generatedSpec = await invoke('agent:ensureInitialSpec', thread.projectId, thread.id)
+        await setActiveSpec(generatedSpec)
+        studioDocument = 'spec'
+        showSpecStudio = true
+      }
+      engineeringLifecycle = await invoke('engineeringLifecycle:get', thread.projectId, thread.id)
     }
   }
 
@@ -5687,11 +6056,7 @@
   }
 
   /** True when the selected model exposes a fast tier, per the live catalog. */
-  function fastSupportedFor(
-    harnessId: string,
-    providerId: string,
-    modelId: string
-  ): boolean {
+  function fastSupportedFor(harnessId: string, providerId: string, modelId: string): boolean {
     const provider = providers.find(
       (candidate) => candidate.harnessId === harnessId && candidate.id === providerId
     )
@@ -6681,8 +7046,7 @@
         const lifecycleSpecApproval =
           (engineeringLifecycle?.activeStage === 'spec' ||
             engineeringLifecycle?.humanGate === 'spec_approval') &&
-          (engineeringLifecycle.selection === 'spec' ||
-            engineeringLifecycle.selection === 'run_all')
+          (hasSelectedStage(engineeringLifecycle, 'spec') || engineeringLifecycle?.autopilot)
         if (lifecycleSpecApproval) {
           if (
             engineeringLifecycle?.humanGate === 'spec_approval' &&
@@ -6723,10 +7087,10 @@
             thread.id,
             'spec'
           )
-          if (engineeringLifecycle.selection === 'run_all') {
+          if (engineeringLifecycle.autopilot) {
             await generateAssignmentDraft()
           } else {
-            updateSettings(legacySettingsForLifecycle('none'))
+            updateSettings(settingsForEngineeringState(engineeringLifecycle))
           }
           return
         }
@@ -7026,7 +7390,50 @@
     const text = rawMessageText(msg)
     const explicit = explicitMessagePresentation(msg)
     if (explicit) return [explicit.action, explicit.body].filter(Boolean).join('\n\n')
-    return text
+    // Restore the separator a tagged path lost when it was glued to the next
+    // word, so already-sent messages read with a clean space before the chip.
+    return msg.projectReferences?.length
+      ? spaceOutProjectReferences(text, msg.projectReferences)
+      : text
+  }
+
+  function escapeHtmlForChip(value: string): string {
+    return value
+      .replaceAll('&', '&amp;')
+      .replaceAll('<', '&lt;')
+      .replaceAll('>', '&gt;')
+      .replaceAll('"', '&quot;')
+      .replaceAll("'", '&#39;')
+  }
+
+  function inlineChipHtml(reference: PromptProjectReference): string {
+    const safeName = escapeHtmlForChip(reference.name)
+    const safePath = escapeHtmlForChip(reference.path)
+    const safeTitle = escapeHtmlForChip(
+      `Tagged ${reference.kind}: ${reference.name} — ${reference.path}`
+    )
+    const icon =
+      reference.kind === 'directory'
+        ? '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M4 4a2 2 0 0 1 2-2h4l2 2h6a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V4z"/></svg>'
+        : '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>'
+    return `<span class="inline-flex max-w-full items-center gap-1 rounded-md border border-border bg-elevated px-1.5 py-0.5 text-[11px] leading-none align-baseline" title="${safeTitle}" data-file-chip="${safePath}">${icon}<span class="max-w-48 truncate font-medium">${safeName}</span></span>`
+  }
+
+  function inlineFileTagsForMessage(msg: AgentMessage): Array<{ token: string; html: string }> {
+    if (!msg.projectReferences?.length) return []
+    const text = messageText(msg)
+    // Only inline references that actually appear as `@path` in the stored text;
+    // remaining references will still render as the legacy top pills so no tag
+    // is lost. Longest paths first prevents a parent directory token from
+    // swallowing the prefix of a longer child path.
+    const ordered = [...msg.projectReferences].sort((a, b) => b.path.length - a.path.length)
+    const tags: Array<{ token: string; html: string }> = []
+    for (const reference of ordered) {
+      const token = `@${reference.path}`
+      if (!token || !text.includes(token)) continue
+      tags.push({ token, html: inlineChipHtml(reference) })
+    }
+    return tags
   }
 
   // ─── Message actions (copy / fork / edit) ──────────────────────────────
@@ -7574,6 +7981,44 @@
     return last?.role === 'assistant' && last.completedAt !== undefined
   }
 
+  /** True when the persisted latest turn shows a run was mid-flight when the
+   *  live stream went away: the turn has not completed a terminal message but
+   *  already persisted real working parts (reasoning, tool calls, sub-agents).
+   *  This is the evidence used to rehydrate the working trace instead of the
+   *  thread reading as idle or as a bare spinner when no live session confirms
+   *  the run. */
+  function hasPersistedInFlightWork(): boolean {
+    const startIndex = latestTurnInfo.startIndex
+    if (startIndex === -1) return false
+    if (isTurnCompleted(startIndex)) return false
+    const parts = getTurnWorkingParts(startIndex, false)
+    return parts.some(
+      (part) => part.type === 'reasoning' || part.type === 'tool' || part.type === 'subagent'
+    )
+  }
+
+  /** Merge durable stream-log parts (freshest) with mirror parts, deduped by id
+   *  and preserving first-seen order. The stream log may hold parts the mirror
+   *  has not persisted yet, so it takes precedence for the restored trace. */
+  function mergeWorkingParts(preferred: AgentPart[], fallback: AgentPart[]): AgentPart[] {
+    const byId: Record<string, AgentPart> = {}
+    const order: string[] = []
+    for (const part of preferred) {
+      if (!byId[part.id]) order.push(part.id)
+      byId[part.id] = part
+    }
+    for (const part of fallback) {
+      if (!byId[part.id]) {
+        order.push(part.id)
+        byId[part.id] = part
+      }
+    }
+    return order.flatMap((id) => {
+      const part = byId[id]
+      return part ? [part] : []
+    })
+  }
+
   /** Find the last text part in a turn ending at the given message index. */
   function getTurnFinalText(endMsgIndex: number): AgentPart | null {
     let turnStart = endMsgIndex
@@ -7740,6 +8185,7 @@
           onQuickChatSelection={(selection, documentContext) =>
             openStudioSelectionChat('brainstorm', 'quick', selection, documentContext)}
           onSubmit={submitBrainstormDecision}
+          onNextStep={brainstormNextStep}
           onOpenInEditor={openBrainstormInEditor}
           onRevealInAppFile={revealBrainstormInAppFile}
           onOpenPrototype={openPrototypePreview}
@@ -7770,6 +8216,7 @@
           onUpdateAnnotation={updatePrdAnnotation}
           onResolveAnnotation={resolvePrdAnnotation}
           onFinalize={finalizePrd}
+          onNextStep={prd?.status === 'finalized' ? nextStepFromPrd : undefined}
           onOpenInEditor={openPrdInEditor}
           onRevealInFiles={revealPrdInFiles}
         />
@@ -8023,13 +8470,18 @@
                         <span>{formatTime(previousTurnAudit.endTime)}</span>
                       </div>
                     {/if}
+                    {@const inlineTags = inlineFileTagsForMessage(msg)}
+                    {@const inlinedPaths = new Set(inlineTags.map((tag) => tag.token.slice(1)))}
+                    {@const leftoverReferences = (msg.projectReferences ?? []).filter(
+                      (reference) => !inlinedPaths.has(reference.path)
+                    )}
                     <div
                       class="w-full rounded-lg bg-surface px-4 py-2.5 text-sm text-foreground"
                       data-conversation-searchable
                     >
-                      {#if msg.projectReferences?.length}
+                      {#if leftoverReferences.length}
                         <div class="mb-2 flex flex-wrap gap-1.5">
-                          {#each msg.projectReferences as reference (reference.id)}
+                          {#each leftoverReferences as reference (reference.id)}
                             <span
                               class="inline-flex max-w-full items-center gap-1.5 rounded-md border border-border bg-elevated px-2 py-1 text-[11px]"
                               title="Tagged {reference.kind}: {reference.name}"
@@ -8081,6 +8533,7 @@
                       {:else}
                         <MarkdownView
                           text={messageText(msg)}
+                          inlineFileTags={inlineTags}
                           onCiteFile={openFileCitation}
                           onOpenLocalFile={(url) => void openFilePart(url)}
                         />
@@ -8254,10 +8707,15 @@
               {#if isTurnStart || questionParts.length > 0 || isTurnEnd}
                 <div class="group mb-6 flex min-w-0 flex-col">
                   {#if isTurnStart}
-                    {@const collectedTurnParts = getTurnWorkingParts(
-                      msgIndex,
-                      liveBusy && isLatestTurn
-                    )}
+                    {@const turnDone = isTurnCompleted(msgIndex)}
+                    {@const traceIsLive = liveBusy && isLatestTurn}
+                    {@const traceIsRestored =
+                      restoredBusy && isLatestTurn && !liveBusy && !turnDone}
+                    {@const accumulatedTurnParts = getTurnWorkingParts(msgIndex, traceIsLive)}
+                    {@const collectedTurnParts =
+                      traceIsRestored && streamParts.length > 0
+                        ? mergeWorkingParts(streamParts, accumulatedTurnParts)
+                        : accumulatedTurnParts}
                     {@const turnParts = isAssignmentAuditorThread
                       ? collectedTurnParts.filter(
                           (part) => part.type !== 'text' || part.phase === 'commentary'
@@ -8266,10 +8724,11 @@
                     {#if turnParts.length > 0}
                       <WorkingTrace
                         parts={turnParts}
-                        open={liveBusy && isLatestTurn}
-                        busy={liveBusy && isLatestTurn}
+                        open={traceIsLive || traceIsRestored}
+                        busy={traceIsLive || traceIsRestored}
                         latest={isLatestTurn}
-                        done={isTurnCompleted(msgIndex)}
+                        done={turnDone}
+                        rehydrated={traceIsRestored}
                         startTime={isLatestTurn
                           ? (getTurnStartTime(msgIndex) ?? activeTurnStartTime)
                           : getTurnStartTime(msgIndex)}
@@ -8339,9 +8798,10 @@
                       {@const turnFinalText = getTurnFinalText(msgIndex)}
                       {#if !conversationBusy || !isLatest}
                         {#if turnFinalText}
+                          {@const isReadingThisTurn = 'messageId' in speechController.playback && speechController.playback.messageId === msg.id && (speechController.playback.state === 'preparing' || speechController.playback.state === 'playing' || speechController.playback.state === 'paused')}
                           <div
                             id={`msg-${msg.id}`}
-                            class="min-w-0 w-full text-sm text-foreground"
+                            class={isReadingThisTurn ? 'min-w-0 w-full rounded-lg border border-dashed border-info/40 bg-info/5 p-3 text-sm text-foreground transition-colors' : 'min-w-0 w-full text-sm text-foreground'}
                             data-assistant-response
                             data-conversation-searchable
                             data-message-id={msg.id}
@@ -8355,7 +8815,7 @@
                         {/if}
                       {/if}
 
-                      {#if turnCheckpoint && turnCheckpoint.changes.length > 0}
+                      {#if turnCheckpoint && turnCheckpoint.changes.length > 0 && isCheckpointTurnEnd(msgIndex, turnCheckpoint)}
                         <div class="mt-3">
                           <RunChangesCard
                             checkpoint={turnCheckpoint}
@@ -8830,11 +9290,12 @@
                   rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
                 onViewReport={openCoordinatorAuditReport}
               />
-            {:else if engineeringLifecycle?.selection === 'prd' && prdWorkflow?.stage === 'choice_pending' && !busy}
-              <PrdEntryChoiceCard
-                busy={prdBusy}
-                onBrainstormFirst={() => choosePrdEntry('brainstorm_first')}
-                onStartPrd={() => choosePrdEntry('start_prd')}
+            {:else if (pendingEngineeringEntry === 'prd' || pendingEngineeringEntry === 'spec') && !busy}
+              <EngineeringEntryCard
+                target={pendingEngineeringEntry}
+                busy={prdBusy || brainstormBusy}
+                onBrainstormFirst={() => chooseEngineeringEntry('brainstorm_first')}
+                onJumpIn={() => chooseEngineeringEntry('jump_in')}
               />
             {:else if brainstormWorkflow?.entryChoice && !brainstorm && !spec && brainstormGenerationFailed && !busy}
               <BrainstormEntryChoiceCard
@@ -8859,12 +9320,14 @@
                 busy={brainstormBusy}
                 onStartBrainstorm={() => chooseBrainstormEntry('brainstorm')}
                 onJumpToSpec={() => chooseBrainstormEntry('spec')}
+                onClose={revertEngineeringEntryChoice}
               />
             {:else if pendingPermissions.length > 0 && !achievementAutonomous}
               {@const pendingPermission = pendingPermissions[0]}
               {#key pendingPermission.id}
                 <PermissionRequestCard
                   request={pendingPermission}
+                  scope={{ kind: 'project', projectId: thread.projectId, threadId: thread.id }}
                   onAllowOnce={allowPermissionOnce}
                   onAllowAlways={allowPermissionAlways}
                   onReject={rejectPermission}
@@ -8876,6 +9339,7 @@
               {#key pendingRequest.requestId}
                 <AgentQuestionCard
                   request={pendingRequest}
+                  scope={{ kind: 'project', projectId: thread.projectId, threadId: thread.id }}
                   onAnswer={handleQuestionAnswer}
                   onDismiss={handleQuestionDismiss}
                   onUpdate={handleQuestionUpdate}
@@ -9061,7 +9525,7 @@
                   onStop={abortRun}
                   autofocus
                   showEngineeringMode={!chatMode}
-                  {engineeringLifecycle}
+                  engineeringLifecycle={pendingLifecycleDisplay}
                   onEngineeringLifecycleSelect={selectEngineeringLifecycle}
                   onEngineeringLifecycleRetry={retryEngineeringLifecycle}
                   showChatModes={chatMode}
@@ -9380,7 +9844,9 @@
   open={lifecycleCancelModalOpen}
   oncancel={() => {
     lifecycleCancelModalOpen = false
-    pendingLifecycleSelection = null
+    // The staged Toolbox choice stays staged (the user toggled it deliberately);
+    // only the parked send is discarded — its draft was restored already.
+    pendingGuardedSend = null
   }}
   onconfirm={confirmLifecycleReplacement}
 />

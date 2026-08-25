@@ -1,6 +1,7 @@
 import type { WebContents } from 'electron'
 import { MAX_SPEECH_CHUNK_BYTES } from '../../lib/speech/types'
 import type {
+  SpeechCapability,
   SpeechCorrectionObservation,
   SpeechCleanupMode,
   SpeechDestructiveAction,
@@ -31,8 +32,15 @@ function destructiveAction(value: unknown): SpeechDestructiveAction {
   return value
 }
 
+function speechCapability(value: unknown): SpeechCapability {
+  if (value !== 'asr' && value !== 'cleanup' && value !== 'tts')
+    throw new RangeError('Speech capability is invalid.')
+  return value
+}
+
 function runtime(value: unknown): SpeechRuntime {
-  if (value !== 'mlx' && value !== 'sherpa-onnx') throw new RangeError('Speech runtime is invalid.')
+  if (value !== 'mlx' && value !== 'sherpa-onnx' && value !== 'gguf' && value !== 'coreml')
+    throw new RangeError('Speech runtime is invalid.')
   return value
 }
 
@@ -40,6 +48,7 @@ function cleanupMode(value: unknown): SpeechCleanupMode {
   if (typeof value !== 'object' || value === null) throw new RangeError('Cleanup mode is invalid.')
   const candidate = value as Record<string, unknown>
   if (candidate['kind'] === 'disabled') return { kind: 'disabled' }
+  if (candidate['kind'] === 'local-llm') return { kind: 'local-llm' }
   if (candidate['kind'] === 'local') {
     const artifactId = candidate['artifactId']
     return artifactId === undefined
@@ -141,6 +150,9 @@ export function registerSpeechIpc(
       service.beginCapture(scope(rawScope), boundedString(rawMimeType, 'MIME type', 128))
     )
   )
+  ipcMain.handle('speech:beginNativeCapture', (_event, rawScope: unknown) =>
+    speechResult(() => service.beginNativeCapture(scope(rawScope)))
+  )
   ipcMain.handle(
     'speech:recordPermissionFailure',
     (_event, rawScope: unknown, rawMessage: unknown) =>
@@ -168,10 +180,28 @@ export function registerSpeechIpc(
       )
     )
   )
+  ipcMain.handle(
+    'speech:finishNativeCapture',
+    (_event, rawSessionId: unknown, rawDurationMs: unknown) =>
+      speechResult(() =>
+        service.finishNativeCapture(
+          entityId(rawSessionId, 'Native capture session id'),
+          boundedInteger(rawDurationMs, 'Recording duration', 0, Number.MAX_SAFE_INTEGER)
+        )
+      )
+  )
   ipcMain.handle('speech:failCapture', (_event, rawSessionId: unknown, rawMessage: unknown) =>
     speechResult(() =>
       service.failCapture(
         entityId(rawSessionId, 'Capture session id'),
+        boundedString(rawMessage, 'Capture failure', 1_000)
+      )
+    )
+  )
+  ipcMain.handle('speech:failNativeCapture', (_event, rawSessionId: unknown, rawMessage: unknown) =>
+    speechResult(() =>
+      service.failNativeCapture(
+        entityId(rawSessionId, 'Native capture session id'),
         boundedString(rawMessage, 'Capture failure', 1_000)
       )
     )
@@ -206,6 +236,24 @@ export function registerSpeechIpc(
         )
       )
   )
+  ipcMain.handle(
+    'speech:transcribeAudioToLlm',
+    (
+      _event,
+      rawAttemptId: unknown,
+      rawScope: unknown,
+      rawLanguage: unknown,
+      rawCleanupMode: unknown
+    ) =>
+      speechResult(() =>
+        service.transcribeAudioToLlm(
+          entityId(rawAttemptId, 'Attempt id'),
+          scope(rawScope),
+          boundedString(rawLanguage, 'Language', 32),
+          cleanupMode(rawCleanupMode)
+        )
+      )
+  )
   ipcMain.handle('speech:getHistory', (_event, rawCursor?: unknown, rawLimit?: unknown) =>
     speechResult(() => {
       const cursor =
@@ -214,6 +262,32 @@ export function registerSpeechIpc(
         rawLimit === undefined ? undefined : boundedInteger(rawLimit, 'History limit', 1, 100)
       return service.history(cursor, limit)
     })
+  )
+  ipcMain.handle('speech:validateModelPath', (_event, rawPath: unknown, rawCapability: unknown) =>
+    speechResult(() =>
+      service.validateModelPath(
+        boundedString(rawPath, 'Model path', 4_096),
+        rawCapability === undefined ? 'asr' : speechCapability(rawCapability)
+      )
+    )
+  )
+  ipcMain.handle('speech:importModel', (_event, rawPath: unknown, rawCapability?: unknown) =>
+    speechResult(() =>
+      service.registerImportedModel(
+        boundedString(rawPath, 'Model path', 4_096),
+        rawCapability === undefined ? undefined : speechCapability(rawCapability)
+      )
+    )
+  )
+  ipcMain.handle(
+    'speech:unregisterModel',
+    (_event, rawArtifactId: unknown, rawConfirmationToken: unknown) =>
+      speechResult(() =>
+        service.unregisterImportedModel(
+          entityId(rawArtifactId, 'Artifact id'),
+          entityId(rawConfirmationToken, 'Confirmation token')
+        )
+      )
   )
   ipcMain.handle('speech:enforceHistoryLimit', (_event, rawLimit: unknown) =>
     speechResult(() =>
@@ -357,13 +431,20 @@ export function registerSpeechIpc(
       'speech:getCapabilities',
       'speech:getCatalog',
       'speech:beginCapture',
+      'speech:beginNativeCapture',
       'speech:recordPermissionFailure',
       'speech:appendCapture',
       'speech:finishCapture',
+      'speech:finishNativeCapture',
       'speech:failCapture',
+      'speech:failNativeCapture',
       'speech:markAttemptFailure',
       'speech:transcribe',
+      'speech:transcribeAudioToLlm',
+      'speech:validateModelPath',
       'speech:getHistory',
+      'speech:importModel',
+      'speech:unregisterModel',
       'speech:enforceHistoryLimit',
       'speech:downloadArtifact',
       'speech:cancelDownload',

@@ -1,5 +1,5 @@
 import { mkdir, readFile, readdir, rm, writeFile } from 'fs/promises'
-import { dirname, join } from 'path'
+import { dirname, join, resolve, sep } from 'path'
 import { APP_NAME } from '../../lib/brand'
 import { generateId, getConfigRoot } from '../../lib/utils'
 import type {
@@ -12,6 +12,7 @@ import type { Database } from '../database/database'
 import { CrossProcessMutex } from '../system/cross-process-mutex'
 import {
   ChangeTrackingService,
+  isBinary,
   type CheckpointBlobStore,
   type CheckpointChange,
   type CheckpointFile,
@@ -216,9 +217,19 @@ export class CheckpointManager {
         allChanges.length > 0 ? await this.foreignClaimedPaths(checkpoint, options) : undefined
       const precisePaths = options.precisePaths ?? new Set<string>()
       const keepChange = (path: string): boolean =>
-        foreign === undefined || !foreign.has(path) || precisePaths.has(path)
-      const changes = changedPaths
-        ? allChanges.filter((change) => changedPaths.has(change.path) && keepChange(change.path))
+        foreign === undefined ||
+        !foreign.has(path) ||
+        precisePaths.has(path) ||
+        (changedPaths?.has(path) ?? false)
+      // An empty path filter is no evidence at all: it must not hide real
+      // before/after changes (e.g. edits made through tools that reported no
+      // paths). Only a non-empty set restricts the recorded diff; otherwise the
+      // authoritative snapshot diff stays visible.
+      const filterChangedPaths = changedPaths && changedPaths.size > 0 ? changedPaths : undefined
+      const changes = filterChangedPaths
+        ? allChanges.filter(
+            (change) => filterChangedPaths.has(change.path) && keepChange(change.path)
+          )
         : allChanges.filter((change) => keepChange(change.path))
       const lineStats = await this.calculateLineStats(tracker, changes)
       const contentUnavailable = new Set([
@@ -235,7 +246,7 @@ export class CheckpointManager {
         status,
         after,
         changes,
-        changeFilterApplied: changedPaths !== undefined,
+        changeFilterApplied: filterChangedPaths !== undefined || changes.length !== allChanges.length,
         lineStats: lineStats.stats,
         completedAt: Date.now(),
         ...(completionFailure ? { failure: completionFailure } : {})
@@ -256,6 +267,14 @@ export class CheckpointManager {
    * made after this turn started count: a stale claim from an earlier turn must
    * not hide this thread's own shell-driven edit.
    */
+  async foreignClaimedPathsForLive(
+    checkpoint: TurnCheckpoint,
+    foreignLive: ReadonlyMap<string, number>
+  ): Promise<Map<string, number>> {
+    const opts: TurnCompletionOptions = { foreignClaimedPaths: foreignLive }
+    return this.foreignClaimedPaths(checkpoint, opts)
+  }
+
   private async foreignClaimedPaths(
     checkpoint: TurnCheckpoint,
     options: TurnCompletionOptions
@@ -284,6 +303,33 @@ export class CheckpointManager {
       }
     }
     return foreign
+  }
+
+  /**
+   * Re-bind the active turn's source message to the latest user expression (a
+   * steer). A steer extends the same native turn, so the single checkpoint's
+   * diff still spans both the original prompt and every follow-up; pointing its
+   * `sourceMessageId` at the steer lets renderers attach the file card to the
+   * turn that actually produced the changes. No-op when no active turn exists.
+   */
+  async rebindActiveSource(
+    projectId: string,
+    threadId: string,
+    sourceMessageId: string
+  ): Promise<void> {
+    assertId(projectId)
+    assertId(threadId)
+    assertId(sourceMessageId)
+    const active = this.db.get<{ turn_id: string | null }>(
+      'SELECT turn_id FROM active_turns WHERE project_id = ? AND thread_id = ?',
+      projectId,
+      threadId
+    )
+    if (!active?.turn_id) return
+    const checkpoint = await this.get(projectId, threadId, active.turn_id)
+    if (!checkpoint || checkpoint.status !== 'active') return
+    if (checkpoint.sourceMessageId === sourceMessageId) return
+    await this.save({ ...checkpoint, sourceMessageId })
   }
 
   async markActiveInterrupted(projectId: string, threadId: string): Promise<TurnCheckpoint | null> {
@@ -522,6 +568,69 @@ export class CheckpointManager {
     return row
       ? this.recoverUnfilteredChanges(projectId, JSON.parse(row.data) as TurnCheckpoint)
       : null
+  }
+
+  /** The thread's in-flight checkpoint, if a turn is currently running. */
+  async getActive(projectId: string, threadId: string): Promise<TurnCheckpoint | null> {
+    assertId(projectId)
+    assertId(threadId)
+    const active = this.db.get<{ turn_id: string | null }>(
+      'SELECT turn_id FROM active_turns WHERE project_id = ? AND thread_id = ?',
+      projectId,
+      threadId
+    )
+    if (!active?.turn_id) return null
+    const checkpoint = await this.get(projectId, threadId, active.turn_id)
+    return checkpoint && checkpoint.status === 'active' ? checkpoint : null
+  }
+
+  /**
+   * Diff one file of the in-flight turn: `before` comes from the checkpoint's
+   * opening snapshot blob, `after` is read straight from disk. Nothing is
+   * persisted mid-turn, so this complements `getFileDiff`, which only serves
+   * changes recorded at completion.
+   */
+  async getLiveFileDiff(
+    projectId: string,
+    threadId: string,
+    turnId: string,
+    path: string
+  ): Promise<TurnCheckpointFileDiff> {
+    const checkpoint = await this.get(projectId, threadId, turnId)
+    if (!checkpoint) throw new Error(`Turn checkpoint not found: ${turnId}`)
+    if (checkpoint.status !== 'active') {
+      throw new Error(`Turn checkpoint is no longer active: ${turnId}`)
+    }
+    // Unlike persisted diffs (which only serve recorded change paths), a live
+    // turn legitimately creates files absent from its opening snapshot — so
+    // membership is enforced as containment within the project root instead.
+    const root = resolve(checkpoint.before.projectRoot)
+    const absolutePath = resolve(join(root, path))
+    if (absolutePath !== root && !absolutePath.startsWith(root + sep)) {
+      throw new Error(`Path is outside this checkpoint's project: ${path}`)
+    }
+    const beforeFile = checkpoint.before.files[path]
+    const tracker = this.tracker(projectId)
+    const before = beforeFile ? await tracker.readBlob(beforeFile.hash) : null
+    if (beforeFile && !before) throw new Error(`Checkpoint blob is unavailable for ${path}`)
+    let after: Uint8Array | null = null
+    try {
+      after = await readFile(absolutePath)
+    } catch (error) {
+      if (!isMissing(error)) throw error
+    }
+    if (after !== null && isBinary(after)) {
+      return { path, kind: beforeFile ? 'modified' : 'created', binary: true, truncated: false }
+    }
+    const window = decodeDiffWindow(before, after, MAX_DIFF_WINDOW_BYTES, DIFF_WINDOW_CONTEXT_BYTES)
+    return {
+      path,
+      kind: beforeFile ? (after ? 'modified' : 'deleted') : 'created',
+      binary: false,
+      before: window.before,
+      after: window.after,
+      truncated: window.truncated
+    }
   }
 
   /**

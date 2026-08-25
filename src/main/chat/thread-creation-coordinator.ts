@@ -6,12 +6,12 @@ import { Logger } from '../system/logger'
  *
  * `thread:create` returns the thread object immediately; persistence (upsert,
  * lazy capacity eviction, branch detection) is finalized in the background,
- * serialized so concurrent creates never overlap their evictions. Any entry
- * point that needs the thread's persisted state — the session/message send
- * path, thread reads — calls `awaitReady` first, so a message sent in the
- * window between create and finalize is rendered optimistically by the
- * renderer and queued here behind the finalization before it reaches the
- * harness.
+ * serialized so concurrent creates never overlap their evictions. Only the
+ * send path (`session:ensure`, `agent:send`) awaits finalization via
+ * `awaitReady` before dispatching a prompt — typing, switching threads, and
+ * every read never wait. A message sent in the window between create and
+ * finalize is rendered optimistically by the renderer and queued here behind
+ * the finalization before it reaches the harness.
  *
  * A failed finalization is logged and `awaitReady` still resolves, so a
  * best-effort create never wedges the send path.

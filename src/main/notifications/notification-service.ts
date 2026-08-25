@@ -10,11 +10,17 @@ import type { Database } from '../database/database'
 import { ProjectRepo } from '../database/repositories/project-repo'
 import { ThreadRepo } from '../database/repositories/thread-repo'
 import { AssignmentRepo } from '../database/repositories/assignment-repo'
-import { isOrchestrationChildThread, type Thread, type ThreadStatus } from '../../lib/types'
+import {
+  INBOX_PROJECT_ID,
+  isOrchestrationChildThread,
+  type Thread,
+  type ThreadStatus
+} from '../../lib/types'
 import { THREAD_STATUSES, threadStatusPolicy } from '../../lib/thread-status-policy'
 import type {
   AgentNotificationKind,
   AgentNotificationPayload,
+  NotificationSource,
   SystemNotificationPermissionStatus,
   SystemNotificationTestResult,
   ThreadClickedPayload
@@ -464,9 +470,11 @@ export class NotificationService {
     if (thread.status === 'completed' && previous === 'failed') return
 
     let projectName = ''
+    let projectColor: string | undefined
     try {
       const project = this.projectRepo.get(thread.projectId)
       projectName = project?.name ?? ''
+      projectColor = project?.color
     } catch (error) {
       Logger.dev('Notification project name resolution failed:', error)
     }
@@ -475,7 +483,13 @@ export class NotificationService {
 
     this.markThreadNotified(threadKey)
 
-    const payload = this.notificationPayload(thread, projectName || APP_NAME)
+    const payload = this.notificationPayload(
+      thread,
+      projectName || APP_NAME,
+      projectColor,
+      thread.projectId === INBOX_PROJECT_ID ? 'chat' : 'project'
+    )
+    const subtitle = payload.source === 'chat' ? 'Chat' : payload.projectName
     const windows = BrowserWindow.getAllWindows()
     for (const window of windows) {
       if (!window.isDestroyed() && !window.webContents.isDestroyed()) {
@@ -503,7 +517,7 @@ export class NotificationService {
         id: payload.id,
         groupId: `${APP_SLUG}-${thread.projectId}`,
         title: payload.title,
-        subtitle: projectName || APP_NAME,
+        subtitle,
         body: payload.body,
         urgency: payload.kind === 'error' ? 'critical' : 'normal',
         silent
@@ -555,9 +569,11 @@ export class NotificationService {
     if (this.isSuppressedOrchestration(thread)) return
 
     let projectName = ''
+    let projectColor: string | undefined
     try {
       const project = this.projectRepo.get(thread.projectId)
       projectName = project?.name ?? ''
+      projectColor = project?.color
     } catch (error) {
       Logger.dev('Notification project name resolution failed:', error)
     }
@@ -566,8 +582,10 @@ export class NotificationService {
       thread,
       temporaryChatId,
       kind,
-      projectName || APP_NAME
+      projectName || APP_NAME,
+      projectColor
     )
+    const subtitle = payload.source === 'chat' ? 'Chat' : payload.projectName
     const windows = BrowserWindow.getAllWindows()
     for (const window of windows) {
       if (!window.isDestroyed() && !window.webContents.isDestroyed()) {
@@ -595,7 +613,7 @@ export class NotificationService {
         id: payload.id,
         groupId: `${APP_SLUG}-${thread.projectId}`,
         title: payload.title,
-        subtitle: projectName || APP_NAME,
+        subtitle,
         body: payload.body,
         urgency: payload.kind === 'error' ? 'critical' : 'normal',
         silent
@@ -694,17 +712,23 @@ export class NotificationService {
     })
   }
 
-  private notificationPayload(thread: Thread, projectName: string): AgentNotificationPayload {
+  private notificationPayload(
+    thread: Thread,
+    projectName: string,
+    projectColor: string | undefined,
+    source: NotificationSource
+  ): AgentNotificationPayload {
     const kind: AgentNotificationKind =
       threadStatusPolicy(thread.status).notificationKind ?? 'error'
+    const displayName = source === 'chat' ? 'Chat' : projectName
     const title =
       kind === 'completed'
-        ? 'Agent turn complete'
+        ? `${displayName} Done`
         : kind === 'attention'
-          ? 'Agent needs your attention'
+          ? `${displayName} needs attention`
           : kind === 'spec'
-            ? 'Specification ready for review'
-            : 'Agent encountered an error'
+            ? `${displayName} spec is ready`
+            : `${displayName} hit an error`
     const body =
       kind === 'completed'
         ? `${thread.title} finished in ${projectName}.`
@@ -720,7 +744,10 @@ export class NotificationService {
       title,
       body,
       projectId: thread.projectId,
-      threadId: thread.id
+      threadId: thread.id,
+      source,
+      projectName,
+      projectColor
     }
   }
 
@@ -728,7 +755,8 @@ export class NotificationService {
     thread: Thread,
     temporaryChatId: string,
     kind: Extract<AgentNotificationKind, 'completed' | 'error'>,
-    projectName: string
+    projectName: string,
+    projectColor: string | undefined
   ): AgentNotificationPayload {
     const notificationKind: AgentNotificationKind =
       kind === 'completed' ? 'chat-completed' : 'error'
@@ -743,7 +771,10 @@ export class NotificationService {
       title,
       body,
       projectId: thread.projectId,
-      threadId: thread.id
+      threadId: thread.id,
+      source: 'temporary-chat',
+      projectName,
+      projectColor
     }
   }
 

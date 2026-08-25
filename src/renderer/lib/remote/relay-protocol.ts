@@ -105,6 +105,17 @@ export function serializeRelayNackFrame(id: string, reason?: string): string {
   } satisfies RelayNackFrame)
 }
 
+/** Application-level keep-alive the relay peers send to stay under the relay
+ *  server's idle-connection cutoff (sockets with no traffic are force-closed). */
+export function serializeRelayPingFrame(): string {
+  return JSON.stringify({ type: 'relay:ping' })
+}
+
+/** Relay server echo for a `relay:ping`, confirming the socket is still routed. */
+export function serializeRelayPongFrame(): string {
+  return JSON.stringify({ type: 'relay:pong' })
+}
+
 export function parseRelayDataFrame(value: string): RelayDataFrame | null {
   try {
     const parsed: unknown = JSON.parse(value)

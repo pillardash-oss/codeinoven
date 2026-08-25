@@ -4,7 +4,9 @@
   import type { Attachment } from 'svelte/attachments'
   import StatusBadge from '$lib/components/shared/StatusBadge.svelte'
   import ThreadHoverPopover from '$lib/components/shared/ThreadHoverPopover.svelte'
+  import RecordingIndicator from '$lib/components/speech/RecordingIndicator.svelte'
   import { agentRuns } from '$lib/stores/agent-runs.svelte'
+  import { speechController } from '$lib/speech/speech-controller.svelte'
   import { statusBadgeForThread } from '$lib/thread-status-badge'
   import { isThreadWorking, type Thread, type ThreadSearchResult } from '$shared/types'
 
@@ -17,6 +19,7 @@
   let { result, selected = false, onOpen }: Props = $props()
 
   let thread = $derived(result.thread)
+  let isRecording = $derived(speechController.isRecordingThread(thread.id))
 
   /** Live-settled run state wins over the persisted status, matching ThreadRow. */
   let isWorking = $derived(
@@ -205,9 +208,13 @@
       {/if}
     </span>
     <span class="min-w-0 flex-1 truncate text-[13px] text-foreground">{thread.title}</span>
-    <span class="shrink-0 whitespace-nowrap text-[10px] text-dimmed">
-      {relativeTime(thread.createdAt)}
-    </span>
+    {#if isRecording}
+      <RecordingIndicator label="Listening" />
+    {:else}
+      <span class="shrink-0 whitespace-nowrap text-[10px] text-dimmed">
+        {relativeTime(thread.createdAt)}
+      </span>
+    {/if}
   </span>
   {#if result.kind === 'message' && result.snippet}
     <span class="line-clamp-2 pl-[22px] text-[11px] leading-snug text-dimmed">

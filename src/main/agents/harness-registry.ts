@@ -117,9 +117,7 @@ const HARNESSES: readonly HarnessDescriptor[] = [
     versionArgs: ['--version'],
     integration: 'ready',
     supportsCustomProviders: false,
-    // Muse's workspace-native rules and skills are disabled by the driver;
-    // CodeInOven assembles the project instructions explicitly instead.
-    manifest: manifest({ loadsAgentsMd: false })
+    manifest: manifest({ loadsAgentsMd: true })
   }
 ]
 

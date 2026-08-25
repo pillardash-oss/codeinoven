@@ -13,6 +13,8 @@
   import { SvelteSet } from 'svelte/reactivity'
   import { blockHtml, lexMarkdown } from '../markdown/markdown'
   import RichMarkdownEditor from '../shared/RichMarkdownEditor.svelte'
+  import VoiceInputButton from '../speech/VoiceInputButton.svelte'
+  import type { SpeechScope } from '../../../../lib/speech/types'
   import type { AgentQuestion, PendingAgentQuestionRequest } from '$shared/types'
 
   interface Props {
@@ -25,13 +27,14 @@
       answers: string[],
       nextQuestionIndex?: number
     ) => Promise<PendingAgentQuestionRequest>
+    scope: SpeechScope
     /** Open the explain side chat for the given question, pausing its timeout. */
     onExplain?: (requestId: string, question: AgentQuestion) => void
     /** Open a quick chat for the given question, pausing its timeout. */
     onQuickChat?: (requestId: string, question: AgentQuestion) => void
   }
 
-  let { request, onAnswer, onDismiss, onUpdate, onExplain, onQuickChat }: Props = $props()
+  let { request, onAnswer, onDismiss, onUpdate, scope, onExplain, onQuickChat }: Props = $props()
 
   // The parent keys this component by request id, so these drafts belong to one
   // authoritative pending request for the lifetime of the component.
@@ -55,6 +58,8 @@
   let interactedIndexes = new SvelteSet(request.interactedQuestionIndexes)
   let syncedServerState = $state('')
   let customSaveTimer: ReturnType<typeof setTimeout> | undefined
+  let customAnswerEditor = $state<RichMarkdownEditor>()
+  const customAnswerSpeechTargetId = $derived(`custom-answer-${request.requestId}-${currentIndex}`)
 
   function isOptionAnswer(question: AgentQuestion, value: string): boolean {
     return (
@@ -73,6 +78,10 @@
     timerPaused || request.expiresAt === undefined ? null : Math.max(0, request.expiresAt - now)
   )
   let remainingLabel = $derived(remainingMs === null ? 'Paused' : formatRemaining(remainingMs))
+
+  function customAnswerSpeechTarget() {
+    return customAnswerEditor?.speechEditorTarget(customAnswerSpeechTargetId) ?? null
+  }
 
   $effect(() => {
     if (request.expiresAt === undefined) return
@@ -390,6 +399,7 @@
         </label>
         <div class="flex items-stretch gap-2">
           <RichMarkdownEditor
+            bind:this={customAnswerEditor}
             id={`custom-answer-${request.requestId}-${currentIndex}`}
             value={currentCustomAnswer}
             class="max-h-40 min-h-10 w-full resize-none overflow-y-auto rounded-lg border bg-elevated px-3 py-2 text-sm text-foreground outline-none transition-[width] focus:border-primary disabled:opacity-50"
@@ -399,6 +409,12 @@
             disabled={working}
             onValueChange={handleCustomInput}
             onSubmit={() => void handleSubmit()}
+          />
+          <VoiceInputButton
+            targetId={customAnswerSpeechTargetId}
+            getTarget={customAnswerSpeechTarget}
+            {scope}
+            disabled={working}
           />
           {#if currentCustomAnswer.trim() && currentIndex < total - 1}
             <button

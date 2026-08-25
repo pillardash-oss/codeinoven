@@ -15,7 +15,7 @@ interface CaptureSession {
   id: string
   attemptId: string
   stagingPath: string
-  handle: FileHandle
+  handle: FileHandle | null
   byteSize: number
   startedAt: number
   lastDiskCheckBytes: number
@@ -24,6 +24,10 @@ interface CaptureSession {
 export interface SpeechCaptureStart {
   sessionId: string
   attempt: SpeechRecordingAttempt
+}
+
+export interface NativeSpeechCaptureStart extends SpeechCaptureStart {
+  stagingPath: string
 }
 
 /** App-owned streamed storage. Only opaque ids cross IPC; paths remain private. */
@@ -94,6 +98,40 @@ export class SpeechStorage {
     return { sessionId, attempt: structuredClone(attempt) }
   }
 
+  async beginNativeCapture(scope: SpeechScope): Promise<NativeSpeechCaptureStart> {
+    const id = randomUUID()
+    const sessionId = randomUUID()
+    const now = Date.now()
+    const stagingPath = join(this.stagingDir, `${id}.${sessionId}.part`)
+    const handle = await open(stagingPath, 'wx', 0o600)
+    await handle.close()
+    const attempt: SpeechRecordingAttempt = {
+      id,
+      createdAt: now,
+      updatedAt: now,
+      stage: 'recording',
+      scope,
+      audioAvailable: false,
+      byteSize: 0,
+      mimeType: 'audio/wav',
+      retries: [],
+      errors: []
+    }
+    this.sessions.set(sessionId, {
+      id: sessionId,
+      attemptId: id,
+      stagingPath,
+      handle: null,
+      byteSize: 0,
+      startedAt: now,
+      lastDiskCheckBytes: 0
+    })
+    this.index.attempts.push(attempt)
+    await this.persistIndex()
+    await this.enforceHistoryLimit()
+    return { sessionId, attempt: structuredClone(attempt), stagingPath }
+  }
+
   async recordPermissionFailure(
     scope: SpeechScope,
     message: string
@@ -128,6 +166,7 @@ export class SpeechStorage {
     }
     const session = this.sessions.get(sessionId)
     if (!session) throw new Error('Capture session is stale or unknown.')
+    if (!session.handle) throw new Error('This capture is owned by the native recorder.')
     if (session.byteSize - session.lastDiskCheckBytes >= 8 * 1024 * 1024) {
       const filesystem = await statfs(this.root)
       const availableBytes = filesystem.bavail * filesystem.bsize
@@ -145,8 +184,12 @@ export class SpeechStorage {
     const session = this.sessions.get(sessionId)
     if (!session) throw new Error('Capture session is stale or unknown.')
     this.sessions.delete(sessionId)
-    await session.handle.sync()
-    await session.handle.close()
+    if (session.handle) {
+      await session.handle.sync()
+      await session.handle.close()
+    } else {
+      session.byteSize = (await stat(session.stagingPath)).size
+    }
     const audioId = randomUUID()
     const finalPath = this.audioPath(audioId)
     await rename(session.stagingPath, finalPath)
@@ -165,7 +208,7 @@ export class SpeechStorage {
     const session = this.sessions.get(sessionId)
     if (!session) throw new Error('Capture session is stale or unknown.')
     this.sessions.delete(sessionId)
-    await session.handle.close().catch(() => undefined)
+    if (session.handle) await session.handle.close().catch(() => undefined)
     const attempt = this.requireAttempt(session.attemptId)
     if (session.byteSize > 0) {
       const audioId = randomUUID()
@@ -275,7 +318,7 @@ export class SpeechStorage {
     const sessions = [...this.sessions.values()]
     this.sessions.clear()
     for (const session of sessions) {
-      await session.handle.close().catch(() => undefined)
+      if (session.handle) await session.handle.close().catch(() => undefined)
       const attempt = this.requireAttempt(session.attemptId)
       if (session.byteSize > 0) {
         const audioId = randomUUID()

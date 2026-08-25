@@ -22,7 +22,8 @@ import {
   parseRelayDataFrame,
   parseRelayNackFrame,
   serializeRelayAckFrame,
-  serializeRelayDataFrame
+  serializeRelayDataFrame,
+  serializeRelayPingFrame
 } from './relay-protocol'
 
 export type AccountRelayEvent =
@@ -72,6 +73,9 @@ const DEFAULT_QUEUE_LIMIT = 1_000
 const DEFAULT_RECONNECT_INITIAL_DELAY_MS = 1_000
 const DEFAULT_RECONNECT_MAX_DELAY_MS = 30_000
 const PAYLOAD_AUTH_FAILURE_CLOSE_CODE = 4002
+/** Heartbeat period: safely under the relay server's ~90s idle-connection cutoff.
+ *  The phone relay socket can idle even while the workspace runs over WebRTC. */
+const HEARTBEAT_INTERVAL_MS = 30_000
 
 function relayUrl(path: string): string {
   const target = new URL(path, window.location.origin)
@@ -119,6 +123,7 @@ export function createAccountRelayClient(options: AccountRelayOptions): AccountR
   let open = false
   let closing = false
   let reconnectTimer: number | null = null
+  let heartbeatTimer: ReturnType<typeof setInterval> | null = null
   let reconnectAttempt = 0
   let payloadAuthenticationFailed = false
   let settled = false
@@ -168,6 +173,25 @@ export function createAccountRelayClient(options: AccountRelayOptions): AccountR
       const record = queue.shift()
       if (!record) break
       await transmit(record)
+    }
+  }
+
+  /** Keep the relay socket alive: the server force-closes connections that carry
+   *  no traffic for ~90s, and the phone relay socket can idle while the
+   *  workspace runs over WebRTC. A lightweight `relay:ping` keeps it below the
+   *  cutoff without routing any application payload. */
+  function startHeartbeat(): void {
+    stopHeartbeat()
+    heartbeatTimer = setInterval(() => {
+      if (!open || !socket || socket.readyState !== WebSocket.OPEN) return
+      socket.send(serializeRelayPingFrame())
+    }, HEARTBEAT_INTERVAL_MS)
+  }
+
+  function stopHeartbeat(): void {
+    if (heartbeatTimer !== null) {
+      clearInterval(heartbeatTimer)
+      heartbeatTimer = null
     }
   }
 
@@ -267,6 +291,7 @@ export function createAccountRelayClient(options: AccountRelayOptions): AccountR
       reconnectAttempt = 0
       options.onEvent({ kind: 'connected', url })
       finish('open')
+      startHeartbeat()
       void flushQueue()
       return
     }
@@ -350,6 +375,7 @@ export function createAccountRelayClient(options: AccountRelayOptions): AccountR
       if (timer !== null) window.clearTimeout(timer)
       const wasOpen = open
       open = false
+      stopHeartbeat()
       rtc?.close()
       rtc = null
       if (closing) return
@@ -376,8 +402,18 @@ export function createAccountRelayClient(options: AccountRelayOptions): AccountR
       options.onEvent({ kind: 'disconnected', reason })
       if (!terminalAuthenticationFailure) scheduleReconnect()
     }
-    socket.onerror = () => {
-      remoteLog.error('Cloud relay WebSocket failed')
+    socket.onerror = (event) => {
+      // Per the WHATWG WebSocket spec an `error` always fires before `close`,
+      // which carries the code/reason and drives the self-reconnect. Logging
+      // every transient drop as an error only floods the log with noise the
+      // recovery path already handles.
+      const detail =
+        event && typeof event === 'object' && 'message' in event
+          ? String((event as { message?: unknown }).message)
+          : ''
+      remoteLog.dev(
+        detail ? `Cloud relay error: ${detail}` : 'Cloud relay error; awaiting close'
+      )
     }
 
     return new Promise((resolve) => {
@@ -404,6 +440,7 @@ export function createAccountRelayClient(options: AccountRelayOptions): AccountR
       closing = true
       if (reconnectTimer !== null) window.clearTimeout(reconnectTimer)
       reconnectTimer = null
+      stopHeartbeat()
       open = false
       rtc?.close()
       rtc = null

@@ -66,6 +66,7 @@ export const REMOTE_ALLOWED_CHANNELS: readonly string[] = [
   'thread:harnessUsage',
   'thread:efficiencyKpis',
   'thread:loadMessages',
+  'thread:loadStreamParts',
   'thread:exportTranscript',
   'thread:update',
   'thread:delete',
@@ -223,7 +224,9 @@ export const REMOTE_ALLOWED_CHANNELS: readonly string[] = [
   'brainstorm:resolveAnnotation',
   // Checkpoints
   'checkpoint:list',
+  'checkpoint:activeSummary',
   'checkpoint:diff',
+  'checkpoint:liveDiff',
   'checkpoint:rollbackPaths',
   // Memory (proposal panel + memory sidebar)
   'memory:getPendingProposals',
@@ -407,6 +410,7 @@ export const REMOTE_CHANNEL_AUTHORIZATION: Readonly<Record<string, RemoteChannel
   'thread:harnessUsage': { scope: 'workspace.read', stepUp: 'none' },
   'thread:efficiencyKpis': { scope: 'workspace.read', stepUp: 'none' },
   'thread:loadMessages': { scope: 'workspace.read', stepUp: 'none' },
+  'thread:loadStreamParts': { scope: 'workspace.read', stepUp: 'none' },
   'threads:search': { scope: 'workspace.read', stepUp: 'none' },
   'remotePush:getPublicKey': { scope: 'workspace.read', stepUp: 'none' },
   'scope:get': { scope: 'workspace.read', stepUp: 'none' },
@@ -524,7 +528,9 @@ export const REMOTE_CHANNEL_AUTHORIZATION: Readonly<Record<string, RemoteChannel
   'brainstorm:getWorkflow': { scope: 'workflow.read', stepUp: 'none' },
   'brainstorm:listVersions': { scope: 'workflow.read', stepUp: 'none' },
   'checkpoint:list': { scope: 'workflow.read', stepUp: 'none' },
+  'checkpoint:activeSummary': { scope: 'workflow.read', stepUp: 'none' },
   'checkpoint:diff': { scope: 'workflow.read', stepUp: 'none' },
+  'checkpoint:liveDiff': { scope: 'workflow.read', stepUp: 'none' },
 
   // workflow.write — default-No, conditional step-up
   'engineeringLifecycle:select': { scope: 'workflow.write', stepUp: 'conditional' },

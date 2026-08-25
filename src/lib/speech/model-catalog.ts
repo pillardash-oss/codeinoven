@@ -17,11 +17,12 @@ const SHA256_PATTERN = /^[a-f0-9]{64}$/
 const REVISION_PATTERN = /^[a-f0-9]{40}$/
 const ID_PATTERN = /^[a-z0-9][a-z0-9._-]{1,127}$/
 const CAPABILITIES = new Set<SpeechCapability>(['asr', 'cleanup', 'tts'])
-const RUNTIMES = new Set<SpeechRuntime>(['mlx', 'sherpa-onnx'])
+const RUNTIMES = new Set<SpeechRuntime>(['mlx', 'sherpa-onnx', 'gguf', 'coreml'])
 const PLATFORMS = new Set<SpeechPlatform>(['darwin', 'win32', 'linux'])
 const ARCHITECTURES = new Set<SpeechArchitecture>(['arm64', 'x64'])
 const FAMILY_IDS = new Set<SpeechModelFamilyId>([
   'whisper',
+  'parakeet',
   'kokoro',
   'qwen-cleanup',
   'sherpa-punctuation'

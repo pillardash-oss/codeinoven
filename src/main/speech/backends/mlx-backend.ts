@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { access } from 'node:fs/promises'
+import { rm } from 'node:fs/promises'
 import { spawn } from 'node:child_process'
 import type { ChildProcessWithoutNullStreams } from 'node:child_process'
 import type { SpeechCapability } from '../../../lib/speech/types'
@@ -9,6 +10,7 @@ import type {
   SpeechSynthesisInput,
   SpeechTranscribeInput
 } from '../speech-backend'
+import { resolveFfmpegPath } from '../ffmpeg-path'
 
 type MlxRequest =
   | { id: string; operation: 'transcribe'; model: string; audio: string; language: string }
@@ -51,6 +53,7 @@ export class MlxSpeechBackend implements SpeechBackend {
     if (process.platform !== 'darwin' || process.arch !== 'arm64') return []
     try {
       await access(this.executablePath)
+      await resolveFfmpegPath()
       return ['asr', 'cleanup', 'tts']
     } catch {
       return []
@@ -58,17 +61,73 @@ export class MlxSpeechBackend implements SpeechBackend {
   }
 
   async transcribe(input: SpeechTranscribeInput, signal: AbortSignal): Promise<string> {
-    const response = await this.request(
-      {
-        id: randomUUID(),
-        operation: 'transcribe',
-        model: input.artifact.directory,
-        audio: input.audioPath,
-        language: input.language
-      },
-      signal
-    )
-    return this.text(response)
+    const decodedPath = await this.decodeToWav(input.audioPath, signal)
+    try {
+      const response = await this.request(
+        {
+          id: randomUUID(),
+          operation: 'transcribe',
+          model: input.artifact.directory,
+          audio: decodedPath,
+          language: input.language
+        },
+        signal
+      )
+      return this.text(response)
+    } finally {
+      await rm(decodedPath, { force: true }).catch(() => undefined)
+    }
+  }
+
+  private async decodeToWav(sourcePath: string, signal: AbortSignal): Promise<string> {
+    const decoder = await resolveFfmpegPath()
+    const decodedPath = `${sourcePath}.decoded.wav`
+    if (signal.aborted) throw new Error('Speech operation cancelled.')
+    await new Promise<void>((resolve, reject) => {
+      const child = spawn(
+        decoder,
+        [
+          '-nostdin',
+          '-hide_banner',
+          '-loglevel',
+          'error',
+          '-y',
+          '-i',
+          sourcePath,
+          '-ac',
+          '1',
+          '-ar',
+          '16000',
+          '-c:a',
+          'pcm_s16le',
+          decodedPath
+        ],
+        { stdio: ['ignore', 'ignore', 'pipe'] }
+      )
+      let failure = ''
+      const onAbort = (): void => {
+        child.kill('SIGKILL')
+        reject(new Error('Speech operation cancelled.'))
+      }
+      signal.addEventListener('abort', onAbort, { once: true })
+      child.stderr.setEncoding('utf8')
+      child.stderr.on('data', (chunk: string) => {
+        if (failure.length < 2000) failure += chunk
+      })
+      child.once('error', (err) => {
+        signal.removeEventListener('abort', onAbort)
+        reject(err)
+      })
+      child.once('exit', (code: number | null) => {
+        signal.removeEventListener('abort', onAbort)
+        if (code === 0) resolve()
+        else
+          reject(
+            new Error(failure.trim() || `Audio decoding exited with code ${code ?? 'unknown'}.`)
+          )
+      })
+    })
+    return decodedPath
   }
 
   async cleanup(

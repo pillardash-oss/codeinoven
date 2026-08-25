@@ -77,7 +77,7 @@ import {
   validateEntityId,
   validateEngineeringLifecycleDecision,
   validateEngineeringLifecycleResumeToken,
-  validateEngineeringLifecycleSelection,
+  validateEngineeringLifecycleSelectionInput,
   validateEngineeringLifecycleStage,
   validateScopeAppearancePatch,
   validateScopeCollapsePatch,
@@ -137,7 +137,9 @@ export interface RemoteRpcServices {
   chatEngine: Pick<
     ChatEngine,
     | 'loadMessages'
+    | 'loadTurnStreamParts'
     | 'deleteThreadSession'
+    | 'activeTurnChangeSummary'
     | 'listProviderSnapshot'
     | 'getSessionStatus'
     | 'getHarnessAuthStatus'
@@ -626,7 +628,8 @@ export class RemoteRpcDispatcher {
       case 'thread:list':
         return this.threadManager.listThreads(this.string(args[0]))
       case 'thread:get':
-        await this.threadCreation.awaitReady(this.string(args[1]))
+        // Reads never wait for optimistic thread finalization; the remote
+        // renderer already holds the thread object from `thread:create`.
         return this.threadManager.getThread(this.string(args[0]), this.string(args[1]))
       case 'thread:create': {
         const { thread, finalize } = this.threadManager.prepareCreateThread(
@@ -643,7 +646,6 @@ export class RemoteRpcDispatcher {
         return thread
       }
       case 'thread:markRead':
-        await this.threadCreation.awaitReady(this.string(args[1]))
         return this.threadManager.markRead(this.string(args[0]), this.string(args[1]))
       case 'thread:setPinned':
         return this.threadManager.setPinned(
@@ -659,7 +661,6 @@ export class RemoteRpcDispatcher {
           args[3] as { read?: boolean } | undefined
         )
       case 'thread:updateSettings':
-        await this.threadCreation.awaitReady(this.string(args[1]))
         return this.threadManager.updateSettings(
           this.string(args[0]),
           this.string(args[1]),
@@ -690,6 +691,11 @@ export class RemoteRpcDispatcher {
           typeof args[3] === 'number' ? args[3] : 40
         )
       }
+      case 'thread:loadStreamParts':
+        return this.services.chatEngine.loadTurnStreamParts(
+          this.string(args[0]),
+          this.string(args[1])
+        )
       case 'thread:update':
         return this.threadManager.updateThread(
           this.string(args[0]),
@@ -1407,12 +1413,15 @@ export class RemoteRpcDispatcher {
         return this.engineeringLifecycleEngine.select(
           validateEntityId(args[0], 'Project ID'),
           validateEntityId(args[1], 'Thread ID'),
-          validateEngineeringLifecycleSelection(args[2])
+          validateEngineeringLifecycleSelectionInput(args[2])
         )
       case 'engineeringLifecycle:start':
         return this.engineeringLifecycleEngine.start(
           validateEntityId(args[0], 'Project ID'),
-          validateEntityId(args[1], 'Thread ID')
+          validateEntityId(args[1], 'Thread ID'),
+          args[2] === undefined || args[2] === null
+            ? undefined
+            : validateEngineeringLifecycleStage(args[2])
         )
       case 'engineeringLifecycle:complete':
         return this.engineeringLifecycleEngine.completeStage(
@@ -1437,10 +1446,24 @@ export class RemoteRpcDispatcher {
         if (args[2] !== true) {
           throw new TypeError('Engineering lifecycle cancellation requires confirmation')
         }
-        return this.engineeringLifecycleEngine.cancel(
-          validateEntityId(args[0], 'Project ID'),
-          validateEntityId(args[1], 'Thread ID')
-        )
+        {
+          const pid = validateEntityId(args[0], 'Project ID')
+          const tid = validateEntityId(args[1], 'Thread ID')
+          const before = this.engineeringLifecycleEngine.get(pid, tid)
+          const result = this.engineeringLifecycleEngine.cancel(pid, tid)
+          // Match the desktop handler: a user-initiated stop must halt the
+          // in-flight generation turn so the thread cannot be re-surfaced on
+          // view switch or resumed by restart recovery.
+          if (
+            before &&
+            (before.activeStage !== undefined ||
+              before.humanGate !== undefined ||
+              before.selection !== 'none')
+          ) {
+            await chatEngine.abort(pid, tid)
+          }
+          return result
+        }
       case 'prd:ensureWorkflow':
         return this.prdEngine.ensureWorkflow(this.string(args[0]), this.string(args[1]))
       case 'prd:getWorkflow':
@@ -1576,6 +1599,18 @@ export class RemoteRpcDispatcher {
       // ─── Checkpoints ────────────────────────────────────────────────────
       case 'checkpoint:list':
         return this.checkpointManager.listSummaries(this.string(args[0]), this.string(args[1]))
+      case 'checkpoint:activeSummary':
+        return this.services.chatEngine.activeTurnChangeSummary(
+          this.string(args[0]),
+          this.string(args[1])
+        )
+      case 'checkpoint:liveDiff':
+        return this.checkpointManager.getLiveFileDiff(
+          this.string(args[0]),
+          this.string(args[1]),
+          this.string(args[2]),
+          this.string(args[3])
+        )
       case 'checkpoint:diff':
         return this.checkpointManager.getFileDiff(
           this.string(args[0]),

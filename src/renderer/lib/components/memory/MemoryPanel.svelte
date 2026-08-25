@@ -10,6 +10,11 @@
   } from '$shared/types'
   import MemoryEntryComponent from './MemoryEntry.svelte'
   import MemoryTransfer from './MemoryTransfer.svelte'
+  import {
+    managedScopesFor,
+    planMemorySaveGroups,
+    type MemoryLocation
+  } from './memory-routing'
   import Switch from '../ui/Switch.svelte'
   import { memoryProposalState } from '$lib/stores/memory-proposals.svelte'
   import { Check, Loader2, Plus, Save, Search, X } from '@lucide/svelte'
@@ -52,10 +57,13 @@
   }: Props = $props()
 
   let entries = $state<MemoryEntry[]>([])
+  /** Snapshot of what load() last fetched, for stale-save reconciliation. */
+  let loadedEntries = $state<MemoryEntry[]>([])
   let proposals = $state<PendingProposal[]>([])
   let loading = $state(true)
   let saving = $state(false)
   let saved = $state(false)
+  let savedTimeout: ReturnType<typeof setTimeout> | null = null
   let error = $state('')
   let loadedProjectEnabled = $state(true)
   let loadedChatEnabled = $state(true)
@@ -65,6 +73,7 @@
   let filterCategory = $state<MemoryCategory | ''>('')
   let filterPriority = $state<MemoryPriority | ''>('')
   let settingsSection = $state<'active' | 'inactive'>('active')
+  let lastAddedId = $state<string | null>(null)
 
   const categoryLabels: Record<MemoryCategory, string> = {
     behavioral: 'Behavioral',
@@ -95,8 +104,8 @@
   let headerDescription = $derived(
     variant === 'settings'
       ? scope === 'chats'
-        ? 'Memory that applies to standalone chats. Global preferences are shared with projects.'
-        : 'Memory that applies to project work. Global preferences are shared with chats.'
+        ? 'Global memory used in every chat. Manage one chat’s own memory from that chat’s sidebar.'
+        : 'Global memory used in every project. Manage one project’s own memory from that project’s sidebar.'
       : projectId === INBOX_PROJECT_ID
         ? 'Global, chat, and thread preferences active in this conversation.'
         : 'Global, project, and thread preferences active in this conversation.'
@@ -179,12 +188,12 @@
     if (variant === 'settings') {
       return scope === 'chats'
         ? {
-            title: 'No chat memories yet.',
-            body: 'Add a preference you want chat agents to remember, or approve suggested ones.'
+            title: 'No global chat memories yet.',
+            body: 'Add a preference you want every chat to remember, or approve suggested ones.'
           }
         : {
-            title: 'No project memories yet.',
-            body: 'Explicit preferences are suggested for approval, or you can add one manually.'
+            title: 'No global memories yet.',
+            body: 'Add a preference you want every project to remember. Project-specific memory lives in that project’s sidebar.'
           }
     }
     return {
@@ -213,12 +222,20 @@
           ])
           nextEntries = [...rootEntries.filter((entry) => entry.scope === 'global'), ...chatEntries]
           nextProposals = [
-            ...globalProposals.map((proposal) => ({ proposal })),
+            ...globalProposals
+              .filter((proposal) => proposal.scope === 'global')
+              .map((proposal) => ({ proposal })),
             ...chatProposals.map((proposal) => ({ proposal, queueProjectId: INBOX_PROJECT_ID }))
           ]
         } else {
-          nextEntries = await invoke('memory:getEntries')
-          nextProposals = []
+          const [rootEntries, globalProposals] = await Promise.all([
+            invoke('memory:getEntries'),
+            invoke('memory:getPendingProposals')
+          ])
+          nextEntries = rootEntries
+          nextProposals = globalProposals
+            .filter((proposal) => proposal.scope === 'global' || proposal.scope === 'projects')
+            .map((proposal) => ({ proposal }))
         }
       } else if (projectId === INBOX_PROJECT_ID) {
         const [rootEntries, chatEntries, threadEntries, globalProposals, chatProposals] =
@@ -235,7 +252,9 @@
           ...(threadId ? threadEntries : [])
         ]
         nextProposals = [
-          ...globalProposals.map((proposal) => ({ proposal })),
+          ...globalProposals
+            .filter((proposal) => proposal.scope === 'global')
+            .map((proposal) => ({ proposal })),
           ...chatProposals.map((proposal) => ({ proposal, queueProjectId: INBOX_PROJECT_ID }))
         ]
       } else if (projectId && threadId) {
@@ -256,8 +275,10 @@
         nextEntries = []
         nextProposals = []
       }
+      nextEntries = [...nextEntries].sort((a, b) => b.updatedAt - a.updatedAt)
       if (request !== loadRequest) return
       entries = nextEntries
+      loadedEntries = nextEntries
       proposals = nextProposals
     } catch (e) {
       error = e instanceof Error ? e.message : 'Failed to load memory entries.'
@@ -267,63 +288,24 @@
   }
 
   async function save(): Promise<void> {
+    if (saving || loading) return
     saving = true
     error = ''
     saved = false
     try {
-      if (variant === 'settings') {
-        if (scope === 'chats') {
-          const globalEntries = entries
-            .filter((entry) => entry.scope === 'global')
-            .map((entry) => withScope(entry, 'global'))
-          const chatEntries = entries
-            .filter((entry) => entry.scope === 'chat')
-            .map((entry) => withScope(entry, 'chat'))
-          await Promise.all([
-            invoke('memory:saveEntries', globalEntries),
-            invoke('memory:saveEntries', chatEntries, INBOX_PROJECT_ID)
-          ])
-        } else {
-          await invoke(
-            'memory:saveEntries',
-            entries.map((entry) => withScope(entry, entry.scope))
-          )
-        }
-      } else if (projectId === INBOX_PROJECT_ID) {
-        const globalEntries = entries
-          .filter((entry) => entry.scope === 'global')
-          .map((entry) => withScope(entry, 'global'))
-        const chatEntries = entries
-          .filter((entry) => entry.scope === 'chat')
-          .map((entry) => withScope(entry, 'chat'))
-        const threadEntries = entries
-          .filter((entry) => entry.scope === 'thread')
-          .map((entry) => withScope(entry, 'thread'))
-        await Promise.all([
-          invoke('memory:saveEntries', globalEntries),
-          invoke('memory:saveEntries', chatEntries, INBOX_PROJECT_ID),
-          invoke('memory:saveEntries', threadEntries, INBOX_PROJECT_ID, threadId)
-        ])
-      } else if (projectId && threadId) {
-        const rootEntries = entries
-          .filter((entry) => entry.scope === 'global' || entry.scope === 'projects')
-          .map((entry) => withScope(entry, entry.scope))
-        const projectEntries = entries
-          .filter((entry) => entry.scope === 'project')
-          .map((entry) => withScope(entry, 'project'))
-        const threadEntries = entries
-          .filter((entry) => entry.scope === 'thread')
-          .map((entry) => withScope(entry, 'thread'))
-        await Promise.all([
-          invoke('memory:saveEntries', rootEntries),
-          invoke('memory:saveEntries', projectEntries, projectId),
-          invoke('memory:saveEntries', threadEntries, projectId, threadId)
-        ])
+      if (variant === 'settings' || (projectId && threadId)) {
+        const fallback: MemoryLocation =
+          variant === 'sidebar' ? { projectId, threadId } : {}
+        await saveGrouped(entries, loadedEntries, fallback, managedScopesFor(contextKind))
+        saved = true
+        if (savedTimeout) clearTimeout(savedTimeout)
+        savedTimeout = setTimeout(() => {
+          saved = false
+        }, 2000)
+        await load()
       } else {
         throw new Error('Open a project thread before editing scoped memory.')
       }
-      saved = true
-      await load()
     } catch (e) {
       error = e instanceof Error ? e.message : 'Failed to save memory entries.'
     } finally {
@@ -331,35 +313,78 @@
     }
   }
 
-  function withScope(entry: MemoryEntry, entryScope: MemoryScope): MemoryEntry {
-    return {
-      ...entry,
-      scope: entryScope,
-      projectId: entryScope === 'project' || entryScope === 'thread' ? projectId : undefined,
-      threadId: entryScope === 'thread' ? threadId : undefined
+  /**
+   * Write the panel's entries back to their per-file homes. Each entry is
+   * routed by its own scope (plus the panel's context as a fallback for
+   * staged entries). Entries the panel does not manage are preserved so a
+   * partial load can never wipe a sibling file's entries, and so is any
+   * managed-scope entry that landed on disk after this panel's own load
+   * (e.g. a global memory approved from another window) — only entries this
+   * panel actually loaded can be dropped by omission, which is what makes a
+   * deletion here take effect.
+   */
+  async function saveGrouped(
+    panelEntries: MemoryEntry[],
+    loadedBaseline: MemoryEntry[],
+    fallback: MemoryLocation,
+    managedScopes: readonly MemoryScope[]
+  ): Promise<void> {
+    const groups = planMemorySaveGroups(panelEntries, loadedBaseline, fallback)
+    for (const group of groups) {
+      const existing = await invoke(
+        'memory:getEntries',
+        group.location.projectId,
+        group.location.threadId
+      )
+      const managedIds = new Set(group.managedEntries.map((entry) => entry.id))
+      const newSinceLoad = existing.filter(
+        (entry) =>
+          managedScopes.includes(entry.scope) &&
+          !group.loadedIds.has(entry.id) &&
+          !managedIds.has(entry.id)
+      )
+      const preservedOther = existing.filter((entry) => !managedScopes.includes(entry.scope))
+      await invoke(
+        'memory:saveEntries',
+        [...group.managedEntries, ...newSinceLoad, ...preservedOther],
+        group.location.projectId,
+        group.location.threadId
+      )
     }
   }
 
-  function addEntry(): void {
-    const entryScope = availableScopes.at(-1)?.value ?? 'global'
-    entries = [
-      ...entries,
-      {
-        id: `memory-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-        label: '',
-        content: '',
-        enabled: true,
-        updatedAt: Date.now(),
+  async function addEntry(): Promise<void> {
+    if (saving || loading) return
+    // Add is append-only: single-entry path, not bulk rewrite.
+    // Generates a valid placeholder via the main-process addEntry (read + push + save),
+    // then inserts the persisted entry at the top and expands it.
+    if (variant === 'settings') settingsSection = 'active'
+    else activeSection = 'active'
+    const entryScope = availableScopes[0]?.value ?? 'global'
+    const placeholderSuffix = Math.random().toString(36).slice(2, 6)
+    const label = 'Untitled memory'
+    const content = `New memory — ${Date.now()}-${placeholderSuffix}`
+    error = ''
+    saving = true
+    try {
+      const created = await invoke('memory:addEntry', label, content, {
         category: 'preference',
         priority: 'medium',
         scope: entryScope,
         source: 'manual',
-        frequency: 1,
-        lastReinforced: Date.now(),
         projectId: entryScope === 'project' || entryScope === 'thread' ? projectId : undefined,
         threadId: entryScope === 'thread' ? threadId : undefined
-      }
-    ]
+      })
+      lastAddedId = created.id
+      // Prepend and keep load baseline in sync so a following bulk Save
+      // treats this as already-known (not newSinceLoad/duplicate).
+      entries = [created, ...entries]
+      loadedEntries = [created, ...loadedEntries]
+    } catch (e) {
+      error = e instanceof Error ? e.message : 'Failed to add memory.'
+    } finally {
+      saving = false
+    }
   }
 
   async function setMemoryEnabled(enabled: boolean): Promise<void> {
@@ -448,7 +473,7 @@
 </script>
 
 <div
-  class="flex h-full min-h-0 flex-col {variant === 'settings'
+  class="memory-panel flex h-full min-h-0 flex-col {variant === 'settings'
     ? 'mx-auto w-full max-w-3xl p-6'
     : 'p-5'}"
 >
@@ -495,16 +520,8 @@
     </div>
 
     {#if variant === 'settings'}
-      <div class="mb-4 rounded-xl border bg-surface p-4">
-        <div class="flex items-center justify-between gap-4">
-          <div>
-            <p class="text-sm font-medium text-foreground">
-              Use persistent memory in {contextKind === 'chats' ? 'chats' : 'projects'}
-            </p>
-            <p class="mt-0.5 text-xs text-muted">
-              When disabled, saved entries remain available here but are not sent to agents.
-            </p>
-          </div>
+      <div class="mb-4 flex items-center justify-between gap-3">
+        <label class="flex items-center gap-2 text-sm font-medium text-foreground">
           <Switch
             checked={effectiveMemoryEnabled}
             onchange={() => void setMemoryEnabled(!effectiveMemoryEnabled)}
@@ -515,19 +532,12 @@
               : effectiveMemoryEnabled
                 ? 'Disable persistent memory for projects'
                 : 'Enable persistent memory for projects'}
-            title={contextKind === 'chats'
-              ? effectiveMemoryEnabled
-                ? 'Disable persistent memory for chats'
-                : 'Enable persistent memory for chats'
-              : effectiveMemoryEnabled
-                ? 'Disable persistent memory for projects'
-                : 'Enable persistent memory for projects'}
+            title="When off, saved entries stay here but are not sent to agents"
           />
-        </div>
+          Persistent memory
+        </label>
         {#if allowTransfer}
-          <div class="mt-4 border-t pt-4">
-            <MemoryTransfer {variant} {scope} onImported={load} />
-          </div>
+          <MemoryTransfer {variant} {scope} onImported={load} />
         {/if}
       </div>
     {:else if !effectiveMemoryEnabled}
@@ -603,13 +613,50 @@
           </button>
         {/if}
       </div>
-      {#if variant === 'settings'}
-        <span class="text-xs text-dimmed">
-          {stats.total}
-          {stats.total === 1 ? 'entry' : 'entries'}{#if stats.autoDetected > 0},
-            {stats.autoDetected} auto-detected{/if}
-        </span>
-      {/if}
+      <div class="flex shrink-0 items-center gap-3">
+        {#if variant === 'settings'}
+          <span class="hidden text-xs text-dimmed sm:inline">
+            {stats.total}
+            {stats.total === 1 ? 'entry' : 'entries'}{#if stats.autoDetected > 0},
+              {stats.autoDetected} auto-detected{/if}
+          </span>
+        {/if}
+        {#if currentSection === 'active'}
+          <button
+            class="memory-action-btn flex items-center gap-1.5 rounded-lg border bg-elevated px-3 py-1.5 text-sm font-medium transition-colors hover:bg-overlay disabled:opacity-50"
+            disabled={saving || loading}
+            title="Add a new memory entry"
+            aria-label="Add a new memory entry"
+            type="button"
+            onclick={addEntry}
+          >
+            <Plus size={14} />
+            <span class="memory-action-label">Add Memory</span>
+          </button>
+        {/if}
+        {#if currentSection !== 'proposed'}
+          <button
+            class="memory-action-btn flex items-center gap-1.5 rounded-lg bg-primary px-4 py-1.5 text-sm font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-50"
+            disabled={saving || loading}
+            title={saved ? 'All memories saved' : 'Save all memory entries'}
+            aria-label={saved ? 'All memories saved' : 'Save all memory entries'}
+            type="button"
+            onclick={() => void save()}
+          >
+            {#if saving}
+              <Loader2 size={14} class="animate-spin" />
+            {:else if saved}
+              <Check size={14} />
+            {:else}
+              <Save size={14} />
+            {/if}
+            <span class="memory-action-label">{saved ? 'Saved' : 'Save'}</span>
+          </button>
+        {/if}
+        {#if variant === 'sidebar' && allowTransfer && projectId}
+          <MemoryTransfer {variant} {projectId} onImported={load} />
+        {/if}
+      </div>
     </div>
   </div>
 
@@ -723,74 +770,7 @@
             {/each}
           </select>
         </div>
-
-        {#if variant === 'settings'}
-          <div class="ml-auto flex shrink-0 items-center gap-2">
-            <button
-              class="flex items-center gap-1.5 rounded-lg border bg-elevated px-3 py-1.5 text-sm font-medium transition-colors hover:bg-overlay"
-              title="Add a new memory entry"
-              type="button"
-              onclick={addEntry}
-            >
-              <Plus size={14} />
-              Add Memory
-            </button>
-            <button
-              class="flex items-center gap-1.5 rounded-lg bg-primary px-4 py-1.5 text-sm font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-50"
-              disabled={saving || loading}
-              title="Save all memory entries"
-              type="button"
-              onclick={() => void save()}
-            >
-              {#if saving}
-                <Loader2 size={14} class="animate-spin" />
-              {:else}
-                <Save size={14} />
-              {/if}
-              Save
-            </button>
-            {#if saved}
-              <span class="text-xs text-primary">Saved</span>
-            {/if}
-          </div>
-        {/if}
       </div>
-
-      {#if variant === 'sidebar'}
-        <div class="mb-4 flex items-center gap-3">
-          <button
-            class="flex items-center gap-1.5 rounded-lg border bg-elevated px-3 py-2 text-sm font-medium transition-colors hover:bg-overlay"
-            title="Add a new memory entry"
-            type="button"
-            onclick={addEntry}
-          >
-            <Plus size={14} />
-            Add Memory
-          </button>
-          <button
-            class="flex items-center gap-1.5 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-50"
-            disabled={saving || loading}
-            title="Save all memory entries"
-            type="button"
-            onclick={() => void save()}
-          >
-            {#if saving}
-              <Loader2 size={14} class="animate-spin" />
-            {:else}
-              <Save size={14} />
-            {/if}
-            Save
-          </button>
-          {#if saved}
-            <span class="text-xs text-primary">Saved</span>
-          {/if}
-          {#if allowTransfer && projectId}
-            <div class="ml-auto">
-              <MemoryTransfer {variant} {projectId} onImported={load} />
-            </div>
-          {/if}
-        </div>
-      {/if}
     </div>
 
     <!-- Entries list (scrollable) -->
@@ -802,6 +782,7 @@
             index={entries.indexOf(entry)}
             {projectId}
             scopeOptions={availableScopes}
+            initiallyExpanded={entry.id === lastAddedId}
             onUpdate={updateEntry}
             onRemove={removeEntry}
           />
@@ -817,3 +798,19 @@
     </div>
   {/if}
 </div>
+
+<style>
+  .memory-panel {
+    container-type: inline-size;
+  }
+
+  @container (max-width: 480px) {
+    .memory-action-label {
+      display: none;
+    }
+
+    .memory-action-btn {
+      padding-inline: 0.5rem;
+    }
+  }
+</style>

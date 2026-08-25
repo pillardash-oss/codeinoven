@@ -510,7 +510,8 @@ export class ChangeTrackingService {
   }
 }
 
-function isBinary(content: Uint8Array): boolean {
+/** Heuristic binary detection: a NUL byte in the first 8 KB marks binary content. */
+export function isBinary(content: Uint8Array): boolean {
   const sampleSize = Math.min(content.length, 8_192)
   for (let index = 0; index < sampleSize; index += 1) {
     if (content[index] === 0) return true

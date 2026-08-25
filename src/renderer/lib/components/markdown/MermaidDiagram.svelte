@@ -16,6 +16,7 @@
   import { PanZoom } from '$lib/pan-zoom.svelte'
   import CodeBlock from './CodeBlock.svelte'
   import { renderMermaid, type MermaidTheme } from './mermaid'
+  import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
 
   interface Props {
     code: string
@@ -30,6 +31,9 @@
   let error = $state<string>()
   let errorDetail = $state<string>()
   let expanded = $state(false)
+  $effect(() => {
+    contextSidebarState.setFullscreenSurfaceActive('mermaid-expanded', expanded)
+  })
   let rendering = $state(true)
   let sourceVisible = $state(false)
   let svg = $state('')

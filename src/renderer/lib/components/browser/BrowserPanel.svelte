@@ -60,7 +60,10 @@
   const initialSurface = tab.surface
   let activeSurface = $derived((tab as BrowserContextTab | null)?.surface ?? initialSurface)
   let panelVisible = $derived(
-    fullscreen || (contextSidebarState.sidebarVisible && contextSidebarState.sidebarActiveTab?.id === tabId)
+    !contextSidebarState.fullscreenSuppression &&
+      (fullscreen ||
+        (contextSidebarState.sidebarVisible &&
+          contextSidebarState.sidebarActiveTab?.id === tabId))
   )
   let consoleEntries = $state<BrowserConsoleEntry[]>([])
   let consoleElement = $state<HTMLDivElement>()

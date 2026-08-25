@@ -6,6 +6,7 @@
   import { scopeState, type ThreadStage } from '$lib/stores/scope.svelte'
   import { threadSettings } from '$lib/stores/thread-settings.svelte'
   import {
+    inheritEngineeringLifecycle,
     persistInheritedThreadSettings,
     settingsForNewThread,
     threadWithInheritedSettings
@@ -230,6 +231,9 @@
           scopeState.updateThread(thread)
           scopeState.showSidebarForThread(thread, bucketId)
           navigateToProjects?.()
+          if (activeThread) {
+            await inheritEngineeringLifecycle(activeProject.id, activeThread.id, thread.id)
+          }
           workspaceState.openThread(thread, activeProject)
         } catch (error) {
           actionError = errorMessage(error, 'The thread could not be opened.')
@@ -252,6 +256,9 @@
       scopeState.updateThread(thread)
       scopeState.showSidebarForThread(thread, bucketId)
       navigateToProjects?.()
+      if (activeThread) {
+        await inheritEngineeringLifecycle(activeProject.id, activeThread.id, thread.id)
+      }
       workspaceState.openThread(thread, activeProject)
       if (activeThread?.settings) {
         void persistInheritedThreadSettings(thread, inheritedSettings).catch((error) => {

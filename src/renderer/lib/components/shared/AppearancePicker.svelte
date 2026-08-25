@@ -7,6 +7,7 @@
     getIconSvgDataUrl
   } from '$lib/project-svg-icons'
   import ColorPicker from './ColorPicker.svelte'
+  import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
 
   interface Props {
     name: string
@@ -34,6 +35,9 @@
   let isCustomColor = $derived(Boolean(color && !PROJECT_COLORS.some((c) => c.value === color)))
 
   let showColorPicker = $state(false)
+  $effect(() => {
+    contextSidebarState.setFullscreenSurfaceActive('appearance-color-picker', showColorPicker)
+  })
 
   function handleCustomColorClick() {
     showColorPicker = true
