@@ -337,7 +337,7 @@ export class ThreadManager {
       input.assignmentRole === 'worker' ||
       input.achievementRole === 'auditor' ||
       input.coordinatorThreadId !== undefined
-    const id = generateId()
+    const id = input.id ?? generateId()
     const now = Date.now()
 
     const thread: Thread = {

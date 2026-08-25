@@ -153,6 +153,7 @@ const CREATE_PROJECT_FIELDS = new Set([
   'changeTrackingMode'
 ])
 const CREATE_THREAD_FIELDS = new Set([
+  'id',
   'projectId',
   'providerId',
   'title',
@@ -1113,6 +1114,7 @@ export function validateCreateThreadInput(value: unknown): CreateThreadInput {
   rejectUnknownFields(input, CREATE_THREAD_FIELDS, 'create thread')
 
   const sanitized: CreateThreadInput = {
+    ...(input.id !== undefined ? { id: validateEntityId(input.id, 'Thread ID') } : {}),
     projectId: validateEntityId(input.projectId, 'Project ID'),
     providerId: validateEntityId(input.providerId, 'Provider ID'),
     title: validateBoundedString(input.title, 'Thread title', 1, 240)

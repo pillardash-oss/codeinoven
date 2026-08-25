@@ -494,6 +494,7 @@ export function coordinatorHasActiveDelegates(
 }
 
 export interface CreateThreadInput {
+  id?: string
   projectId: string
   providerId: string
   title: string

@@ -2977,42 +2977,52 @@
     // or voice, and never show "Loading conversation...".
     const alreadySeeded = threadMessages.loaded(projectId, id)
     if (alreadySeeded && threadMessages.messages(projectId, id).length === 0) {
-      // Synchronous instant init from the optimistic thread prop — composer
-      // is usable on the very first frame, no await before paint.
+      // Seeded empty thread: composer must paint on the very first frame with
+      // zero synchronous work beyond the reactive `loaded` flag already set.
+      // Every other hydration step is fully async and never blocks typing/voice;
+      // git branch arrives later via the thread:update broadcast.
       olderMessagesAvailable = false
-      initializeHistoryWindow(0)
-      if (thread.settings) {
-        settings = chatMode
-          ? normalizeChatSettings(chatSettings.initialFor(thread, chatEffectiveSettings()))
-          : threadSettings.initialFor(thread)
-      }
-      auditSettings = auditSettingsForThread()
-      syncOpenSubagentTabs()
-      if (!liveStatusKnown) {
-        restoreWorkingState(thread.status, thread.auditState === 'running')
-      }
-      restoreQueuedMessage()
-      restoreResponseReferences()
-      // Background enrichment — never blocks typing/voice; updates when ready.
+      // Defer all non-composer hydration off the paint — schedule as microtask
+      // so the first frame only mounts ChatComposer.
+      queueMicrotask(() => {
+        if (!alive) return
+        initializeHistoryWindow(0)
+        if (thread.settings) {
+          settings = chatMode
+            ? normalizeChatSettings(chatSettings.initialFor(thread, chatEffectiveSettings()))
+            : threadSettings.initialFor(thread)
+        }
+        auditSettings = auditSettingsForThread()
+        syncOpenSubagentTabs()
+        if (!liveStatusKnown) {
+          restoreWorkingState(thread.status, thread.auditState === 'running')
+        }
+        restoreQueuedMessage()
+        restoreResponseReferences()
+      })
+      // Background persistence/config enrichment — never blocks input, never shows loading
       void Promise.all([invoke('thread:get', projectId, id), invoke('config:get')])
         .then(([threadData, config]) => {
           if (!alive) return
-          if (threadData?.settings) {
-            settings = chatMode
-              ? normalizeChatSettings(chatSettings.initialFor(threadData, chatEffectiveSettings()))
-              : threadSettings.initialFor(threadData)
-          }
-          agentDefaults = config.agentDefaults
-          imageDescriptorAskAgain = config.imageDescriptorAskAgain === true
-          autoRetryAfterReset = config.autoRetryAfterReset === true
-          auditSettings = auditSettingsForThread()
-          if (threadData?.sessionId) {
-            threadMessages.setSessionId(projectId, id, threadData.sessionId)
-          }
-          syncOpenSubagentTabs()
-          seedContextUsageSnapshot(threadData?.contextUsage)
-          restoreQueuedMessage()
-          restoreResponseReferences()
+          queueMicrotask(() => {
+            if (!alive) return
+            if (threadData?.settings) {
+              settings = chatMode
+                ? normalizeChatSettings(chatSettings.initialFor(threadData, chatEffectiveSettings()))
+                : threadSettings.initialFor(threadData)
+            }
+            agentDefaults = config.agentDefaults
+            imageDescriptorAskAgain = config.imageDescriptorAskAgain === true
+            autoRetryAfterReset = config.autoRetryAfterReset === true
+            auditSettings = auditSettingsForThread()
+            if (threadData?.sessionId) {
+              threadMessages.setSessionId(projectId, id, threadData.sessionId)
+            }
+            syncOpenSubagentTabs()
+            seedContextUsageSnapshot(threadData?.contextUsage)
+            restoreQueuedMessage()
+            restoreResponseReferences()
+          })
         })
         .catch(() => {})
       return

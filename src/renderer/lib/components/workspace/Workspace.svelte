@@ -2376,7 +2376,48 @@
       }
       return
     }
-    const created = await invoke('thread:create', {
+    // Instant mount: create optimistic thread locally so the composer
+    // paints on the same tick as the click — no IPC on the critical path.
+    // Git branch and persistence hydrate async via the thread:update broadcast.
+    const optimisticId = (() => {
+      const bytes = new Uint8Array(12)
+      crypto.getRandomValues(bytes)
+      return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('')
+    })()
+    const optimisticThread = {
+      id: optimisticId,
+      projectId: project.id,
+      providerId: 'opencode' as const,
+      title: DEFAULT_THREAD_TITLE,
+      titleSource: 'default' as const,
+      status: 'created' as const,
+      pinned: false,
+      archived: false,
+      read: true,
+      settings: inheritedSettings,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      lastActivity: Date.now(),
+      workingDirectory: project.path,
+      ...(scopeBucketId ? { scopeBucketId } : {})
+    }
+    // Apply inherited settings immediately so the composer has correct model
+    const thread = optimisticThread as unknown as typeof optimisticThread & { settings: typeof inheritedSettings }
+    upsertThreadInList(thread as any)
+    threadMessages.seedEmpty(thread.projectId, thread.id)
+    expandedFolders.add(project.id)
+    if (scopeBucketId) {
+      scopeState.updateThread(thread as any)
+      scopeState.showSidebarForThread(thread as any, scopeBucketId)
+    }
+    workspaceState.openThread(thread as any, project)
+    if (activeThread) {
+      void inheritEngineeringLifecycle(project.id, activeThread.id, thread.id)
+    }
+    // Persist in background with the same stable id — no ID swap, branch
+    // detection runs after the first thread:update broadcast, never blocking typing.
+    void invoke('thread:create', {
+      id: optimisticId,
       projectId: project.id,
       providerId: 'opencode',
       title: DEFAULT_THREAD_TITLE,
@@ -2384,26 +2425,28 @@
       settings: inheritedSettings,
       ...(scopeBucketId ? { scopeBucketId } : {})
     })
-    const thread = activeThread?.settings
-      ? threadWithInheritedSettings(created, inheritedSettings)
-      : created
-    upsertThreadInList(thread)
-    threadMessages.seedEmpty(thread.projectId, thread.id)
-    expandedFolders.add(project.id)
-    if (scopeBucketId) {
-      scopeState.updateThread(thread)
-      scopeState.showSidebarForThread(thread, scopeBucketId)
-    }
-    // Open instantly — lifecycle/settings persistence is off the critical path
-    // so typing and voice are never blocked by IPC or git work.
-    workspaceState.openThread(thread, project)
-    if (activeThread) {
-      void inheritEngineeringLifecycle(project.id, activeThread.id, thread.id)
-    }
-    if (activeThread?.settings) {
-      void persistInheritedThreadSettings(thread, inheritedSettings).catch((error) => {
-        reportError(error, 'The inherited thread settings could not be saved.')
+      .then((created) => {
+        // Server confirms with same id; upsert the authoritative row (now with branch when ready)
+        const confirmed = activeThread?.settings
+          ? threadWithInheritedSettings(created, inheritedSettings)
+          : created
+        upsertThreadInList(confirmed)
+        if (workspaceState.selectedThread?.id === optimisticId) {
+          workspaceState.openThread(confirmed, project)
+        }
       })
+      .catch((error) => {
+        // Creation failed — remove the optimistic thread so the UI does not strand on a phantom
+        const idx = allThreads.findIndex((t) => t.id === optimisticId)
+        if (idx !== -1) allThreads.splice(idx, 1)
+        if (workspaceState.selectedThread?.id === optimisticId) {
+          workspaceState.clearThread()
+        }
+        reportError(error, 'The new thread could not be created.')
+      })
+    if (activeThread?.settings) {
+      // Settings already applied optimistically; background persistence will confirm via thread:update
+      void persistInheritedThreadSettings(thread as any, inheritedSettings).catch(() => {})
     }
   }
 
