@@ -988,7 +988,7 @@ export class MuseDriver extends PersistentCliDriver {
     providerCatalog: true,
     sessionStatus: false,
     contextUsage: false,
-    compaction: false,
+    compaction: true,
     subagents: true,
     nativeUtilities: []
   }
@@ -1070,6 +1070,17 @@ export class MuseDriver extends PersistentCliDriver {
     } else {
       args.push('--disable-approval')
     }
+
+    // Native automatic compaction keeps the provider context window bounded
+    // even for this stateless harness (mirrored history + recap).
+    args.push(
+      '--context-compaction-strategy',
+      'summary-preserved-suffix/v1',
+      '--context-compaction-soft-threshold',
+      '0.8',
+      '--context-compaction-hard-threshold',
+      '0.95'
+    )
 
     const attachmentReferences: string[] = []
     for (const attachment of options.attachments) {
@@ -1250,6 +1261,80 @@ export class MuseDriver extends PersistentCliDriver {
     const state = this.turnStates.get(context.sessionId)
     if (!state) return null
     return mapMuseRecord(value, context, state)
+  }
+
+  async compactSession(
+    projectPath: string,
+    sessionId: string,
+    _settings: import('../../lib/types').ThreadSettings
+  ): Promise<void> {
+    void _settings
+    const session = await this.requireSession(projectPath, sessionId)
+    if (session.messages.length === 0) {
+      throw new Error('No messages to compact for this thread')
+    }
+    const messageId = `${sessionId}:compaction:${Date.now()}`
+    const partId = `${messageId}:compaction`
+    const summary = this.buildLocalCompactionSummary(session.messages)
+    const compactionPart: Extract<AgentPart, { type: 'compaction' }> = {
+      type: 'compaction',
+      id: partId,
+      messageID: messageId,
+      auto: false,
+      summary
+    }
+    session.messages.push({
+      id: messageId,
+      role: 'assistant',
+      parts: [compactionPart],
+      createdAt: Date.now(),
+      harnessId: this.id
+    })
+
+    this.emit({ type: 'session.status', sessionId, status: { state: 'working' } })
+    this.applyEventToSession(session, {
+      type: 'message.part.updated',
+      sessionId,
+      part: compactionPart
+    })
+    this.emit({ type: 'message.part.updated', sessionId, part: compactionPart })
+    await this.persistSession(session)
+
+    this.applyEventToSession(session, {
+      type: 'message.completed',
+      sessionId,
+      messageId,
+      compaction: true
+    })
+    this.emit({ type: 'message.completed', sessionId, messageId, compaction: true })
+    this.emit({ type: 'session.idle', sessionId })
+    await this.persistSession(session)
+  }
+
+  private buildLocalCompactionSummary(messages: AgentMessage[]): string {
+    const transcript = messages
+      .map((message) => {
+        const text = message.parts
+          .flatMap((part) => {
+            if (part.type === 'text') return [part.text]
+            if (part.type === 'compaction' && typeof part.summary === 'string' && part.summary.trim())
+              return [`[Prior compaction] ${part.summary.trim()}`]
+            if (part.type === 'compaction-summary' && typeof part.text === 'string')
+              return [`[Prior compaction] ${part.text.trim()}`]
+            return []
+          })
+          .join('\n')
+          .trim()
+        if (!text) return ''
+        const role = message.role === 'user' ? 'USER' : 'ASSISTANT'
+        return `${role}: ${text}`
+      })
+      .filter(Boolean)
+      .join('\n\n')
+    const maxChars = 12_000
+    const truncated = transcript.length > maxChars ? transcript.slice(-maxChars) : transcript
+    const header = `Manual compaction of ${messages.length} messages. Older context summarized below; the next turn replays only this summary plus suffix per summary-preserved-suffix/v1.`
+    return truncated ? `${header}\n\n${truncated}` : header
   }
 
   dispose(): void {
