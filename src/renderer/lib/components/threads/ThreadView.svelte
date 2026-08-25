@@ -8784,9 +8784,10 @@
                       {@const turnFinalText = getTurnFinalText(msgIndex)}
                       {#if !conversationBusy || !isLatest}
                         {#if turnFinalText}
+                          {@const isReadingThisTurn = 'messageId' in speechController.playback && speechController.playback.messageId === msg.id && (speechController.playback.state === 'preparing' || speechController.playback.state === 'playing' || speechController.playback.state === 'paused')}
                           <div
                             id={`msg-${msg.id}`}
-                            class="min-w-0 w-full text-sm text-foreground"
+                            class={isReadingThisTurn ? 'min-w-0 w-full rounded-lg border border-dashed border-info/40 bg-info/5 p-3 text-sm text-foreground transition-colors' : 'min-w-0 w-full text-sm text-foreground'}
                             data-assistant-response
                             data-conversation-searchable
                             data-message-id={msg.id}

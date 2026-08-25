@@ -29,6 +29,7 @@
   import { invoke, subscribe } from '$lib/ipc.svelte'
   import { copyText } from '$lib/copy-text'
   import SpeechPlaybackButton from '../speech/SpeechPlaybackButton.svelte'
+  import { speechController } from '../../speech/speech-controller.svelte'
   import { messageId } from '$shared/id'
   import { resolveDefaultThinkingLevel } from '$shared/thinking-presets'
   import { FileBlobUrlManager } from '$lib/media-urls.svelte'
@@ -936,6 +937,7 @@
             </div>
           {:else if textFor(message)}
             {@const traceParts = workingParts(message)}
+            {@const isReadingChat = 'messageId' in speechController.playback && speechController.playback.messageId === message.id && (speechController.playback.state === 'preparing' || speechController.playback.state === 'playing' || speechController.playback.state === 'paused')}
             <div class="group flex min-w-0 flex-col gap-2.5 text-sm text-foreground">
               {#if traceParts.length > 0}
                 <WorkingTrace
@@ -951,7 +953,9 @@
                   {harnessName}
                 />
               {/if}
-              <MarkdownView text={textFor(message)} />
+              <div class={isReadingChat ? 'rounded-lg border border-dashed border-info/40 bg-info/5 p-3 transition-colors' : ''}>
+                <MarkdownView text={textFor(message)} />
+              </div>
               {#if turnFinished(message)}
                 {@render turnFooter(message, messageIndex)}
               {/if}

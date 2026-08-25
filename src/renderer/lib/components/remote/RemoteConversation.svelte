@@ -27,6 +27,7 @@
   import { isTodoToolPart } from '$lib/agent-todos'
   import { copyText } from '$lib/copy-text'
   import SpeechPlaybackButton from '../speech/SpeechPlaybackButton.svelte'
+  import { speechController } from '../../speech/speech-controller.svelte'
   import { attachmentPreviewKind, fileUrlToPath } from '$lib/mime'
   import { getAgentIcon } from '$lib/agent-icons/registry'
   import { fastVariantForModelId } from '$shared/fast-inference'
@@ -1226,7 +1227,8 @@
                   />
                 {/if}
                 {#if final && !turnBusy}
-                  <div class="text-sm text-foreground">
+                  {@const isReadingRemote = 'messageId' in speechController.playback && speechController.playback.messageId === endMessage.id && (speechController.playback.state === 'preparing' || speechController.playback.state === 'playing' || speechController.playback.state === 'paused')}
+                  <div class={isReadingRemote ? 'rounded-lg border border-dashed border-info/40 bg-info/5 p-3 text-sm text-foreground transition-colors' : 'text-sm text-foreground'}>
                     <MarkdownView text={final.text} />
                   </div>
                 {/if}
