@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "generatedAt": 1787576767629,
+  "generatedAt": 1787650535715,
   "families": [
     {
       "id": "parakeet",
@@ -61,7 +61,7 @@
       "description": "English-optimized transducer. Best for English \u2014 fast, accurate, streaming-capable.",
       "tier": "quality",
       "version": "v2-0.6b",
-      "repositoryRevision": "12ab34cd56ef78ab90cd12ab34cd56ef78ab9012",
+      "repositoryRevision": "1ab9323565ddb038682214b292f588070a538ce2",
       "platforms": [
         "darwin",
         "win32",
@@ -78,33 +78,33 @@
       "files": [
         {
           "path": "encoder.int8.onnx",
-          "sourceUrl": "https://huggingface.co/csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v2/resolve/12ab34cd56ef78ab90cd12ab34cd56ef78ab9012/encoder.int8.onnx",
-          "byteSize": 220000000,
-          "sha256": "2eb99f098aca8c4ef999bb89186c53b108dc8918627b58617a331829bb017aae"
+          "sourceUrl": "https://huggingface.co/csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8/resolve/1ab9323565ddb038682214b292f588070a538ce2/encoder.int8.onnx",
+          "byteSize": 652184296,
+          "sha256": "a32b12d17bbbc309d0686fbbcc2987b5e9b8333a7da83fa6b089f0a2acd651ab"
         },
         {
           "path": "decoder.int8.onnx",
-          "sourceUrl": "https://huggingface.co/csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v2/resolve/12ab34cd56ef78ab90cd12ab34cd56ef78ab9012/decoder.int8.onnx",
-          "byteSize": 45000000,
-          "sha256": "840f12a7287daf545d4492cad0866d48cc1d6f6b48bc8493f689bc25df5b47f8"
+          "sourceUrl": "https://huggingface.co/csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8/resolve/1ab9323565ddb038682214b292f588070a538ce2/decoder.int8.onnx",
+          "byteSize": 7257753,
+          "sha256": "b6bb64963457237b900e496ee9994b59294526439fbcc1fecf705b31a15c6b4e"
         },
         {
           "path": "joiner.int8.onnx",
-          "sourceUrl": "https://huggingface.co/csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v2/resolve/12ab34cd56ef78ab90cd12ab34cd56ef78ab9012/joiner.int8.onnx",
-          "byteSize": 32000000,
-          "sha256": "1d6c3505c480e059d70dd5d9269757e539e03cca3e2e7a8796fc5277aa3783cf"
+          "sourceUrl": "https://huggingface.co/csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8/resolve/1ab9323565ddb038682214b292f588070a538ce2/joiner.int8.onnx",
+          "byteSize": 1739080,
+          "sha256": "7946164367946e7f9f29a122407c3252b680dbae9a51343eb2488d057c3c43d2"
         },
         {
           "path": "tokens.txt",
-          "sourceUrl": "https://huggingface.co/csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v2/resolve/12ab34cd56ef78ab90cd12ab34cd56ef78ab9012/tokens.txt",
-          "byteSize": 1024000,
-          "sha256": "eeb9dec2b2101e57753494660d59c18088dd0bdb6b29bc0947149201ca15ada7"
+          "sourceUrl": "https://huggingface.co/csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8/resolve/1ab9323565ddb038682214b292f588070a538ce2/tokens.txt",
+          "byteSize": 9384,
+          "sha256": "ec182b70dd42113aff6c5372c75cac58c952443eb22322f57bbd7f53977d497d"
         }
       ],
-      "byteSize": 298024000,
+      "byteSize": 661190513,
       "license": "CC-BY-4.0",
       "attribution": "NVIDIA NeMo Parakeet weights converted for sherpa-onnx by the k2-fsa community.",
-      "sourcePageUrl": "https://huggingface.co/csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v2",
+      "sourcePageUrl": "https://huggingface.co/csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8",
       "minimumMemoryBytes": 1073741824,
       "qualification": {
         "status": "candidate",
@@ -126,7 +126,7 @@
       "description": "Multilingual transducer with broader language coverage. Best for Multilingual.",
       "tier": "quality",
       "version": "v3-0.6b",
-      "repositoryRevision": "98ab76cd54ef32ab98ab76cd54ef32ab98ab76cd",
+      "repositoryRevision": "2bda32ec70b097a55adaa07d9a7173915b43cc78",
       "platforms": [
         "darwin",
         "win32",
@@ -144,33 +144,33 @@
       "files": [
         {
           "path": "encoder.int8.onnx",
-          "sourceUrl": "https://huggingface.co/csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3/resolve/98ab76cd54ef32ab98ab76cd54ef32ab98ab76cd/encoder.int8.onnx",
-          "byteSize": 235000000,
-          "sha256": "0777722bd00c07125c6414e9ff435aaa102313d795444ae96d2463ec8d6666ad"
+          "sourceUrl": "https://huggingface.co/csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8/resolve/2bda32ec70b097a55adaa07d9a7173915b43cc78/encoder.int8.onnx",
+          "byteSize": 652184281,
+          "sha256": "acfc2b4456377e15d04f0243af540b7fe7c992f8d898d751cf134c3a55fd2247"
         },
         {
           "path": "decoder.int8.onnx",
-          "sourceUrl": "https://huggingface.co/csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3/resolve/98ab76cd54ef32ab98ab76cd54ef32ab98ab76cd/decoder.int8.onnx",
-          "byteSize": 48000000,
-          "sha256": "6e463873bc8e81eace5a9431f8249f1a4c8656227460395468cd3503c8a1eb0c"
+          "sourceUrl": "https://huggingface.co/csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8/resolve/2bda32ec70b097a55adaa07d9a7173915b43cc78/decoder.int8.onnx",
+          "byteSize": 11845275,
+          "sha256": "179e50c43d1a9de79c8a24149a2f9bac6eb5981823f2a2ed88d655b24248db4e"
         },
         {
           "path": "joiner.int8.onnx",
-          "sourceUrl": "https://huggingface.co/csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3/resolve/98ab76cd54ef32ab98ab76cd54ef32ab98ab76cd/joiner.int8.onnx",
-          "byteSize": 34000000,
-          "sha256": "c94950ca5ceb065077602804270d71cd7f0a80c206dc651a07e512ec38d59982"
+          "sourceUrl": "https://huggingface.co/csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8/resolve/2bda32ec70b097a55adaa07d9a7173915b43cc78/joiner.int8.onnx",
+          "byteSize": 6355277,
+          "sha256": "3164c13fc2821009440d20fcb5fdc78bff28b4db2f8d0f0b329101719c0948b3"
         },
         {
           "path": "tokens.txt",
-          "sourceUrl": "https://huggingface.co/csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3/resolve/98ab76cd54ef32ab98ab76cd54ef32ab98ab76cd/tokens.txt",
-          "byteSize": 1100000,
-          "sha256": "350ed5b44f199f0df9dd24cb83cec40b54920b08e49c1beebcd86fc54e1ef620"
+          "sourceUrl": "https://huggingface.co/csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8/resolve/2bda32ec70b097a55adaa07d9a7173915b43cc78/tokens.txt",
+          "byteSize": 93939,
+          "sha256": "d58544679ea4bc6ac563d1f545eb7d474bd6cfa467f0a6e2c1dc1c7d37e3c35d"
         }
       ],
-      "byteSize": 318100000,
+      "byteSize": 670478772,
       "license": "CC-BY-4.0",
       "attribution": "NVIDIA NeMo Parakeet weights converted for sherpa-onnx by the k2-fsa community.",
-      "sourcePageUrl": "https://huggingface.co/csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3",
+      "sourcePageUrl": "https://huggingface.co/csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8",
       "minimumMemoryBytes": 1073741824,
       "qualification": {
         "status": "candidate",
