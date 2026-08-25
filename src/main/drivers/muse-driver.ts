@@ -1260,12 +1260,11 @@ export class MuseDriver extends PersistentCliDriver {
       '0.95'
     )
 
-    // Enable native worktree-isolated subagents so `subagent_spawn` with
-    // `worktree_isolation: true` is accepted. This is a compatibility flag;
-    // isolation still requires the child request (`worktree_isolation:true`) —
-    // omission stays shared. Passing it here unlocks the fanout contract
-    // described in the cookbook without requiring a separate launch flag.
-    args.push('--subagent-worktree-isolation')
+    // Subagents share the CodeInOven-managed worktree/scope. Do not
+    // pass `--subagent-worktree-isolation` — CodeInOven owns the Git
+    // worktree lifecycle (`ScopeWorktreeService`); harness-owned worktrees
+    // are intentionally disabled. `subagent_spawn` without
+    // `worktree_isolation:true` stays shared by default.
 
     const attachmentReferences: string[] = []
     for (const attachment of options.attachments) {
