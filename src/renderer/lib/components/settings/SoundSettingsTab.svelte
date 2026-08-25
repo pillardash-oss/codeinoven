@@ -461,6 +461,11 @@
           )}
           {@const download = speech.downloads[artifact.id]}
           {@const badge = bestForBadge(artifact)}
+          {@const isQualified = artifact.qualification.status === 'qualified'}
+          {@const unavailableReason = artifact.qualification.status === 'candidate' ? 'pending qualification' : 'retired'}
+          {@const downloadLabel = isQualified
+            ? `Download ${artifact.label}`
+            : `${artifact.label} is ${unavailableReason}`}
           <div id="model-card-{artifact.id}" class="rounded-xl border p-3 {isActiveCatalog(artifact.id, activeModelSubTab) ? 'bg-success/5 border-success/30 ring-1 ring-success/20' : 'bg-elevated'}">
             <div class="flex items-start justify-between gap-3">
               <div class="min-w-0 flex-1">
@@ -515,15 +520,20 @@
                   <button
                     type="button"
                     class="flex h-8 w-8 items-center justify-center rounded-lg text-muted hover:bg-elevated hover:text-foreground disabled:opacity-40"
-                    title={`Download ${artifact.label}`}
-                    aria-label={`Download ${artifact.label}`}
-                    disabled={artifact.qualification.status !== 'qualified' && artifact.qualification.status !== 'candidate'}
+                    title={downloadLabel}
+                    aria-label={downloadLabel}
+                    disabled={!isQualified}
                     onclick={() => void speech.download(artifact.id)}
                     ><Download size={14} aria-hidden="true" /></button
                   >
                 {/if}
               </div>
             </div>
+            {#if !isQualified}
+              <p class="mt-3 rounded-lg border border-amber-500/20 bg-amber-500/5 px-3 py-2 text-[11px] leading-snug text-amber-700 dark:text-amber-300">
+                Download unavailable because this model is {unavailableReason}.
+              </p>
+            {/if}
             {#if download?.state === 'downloading' || download?.state === 'verifying' || download?.state === 'queued'}
               {@const pct = download.state === 'queued' ? 0 : download.state === 'verifying' ? 100 : downloadPercent(download)}
               {@const isVerifying = download.state === 'verifying'}
