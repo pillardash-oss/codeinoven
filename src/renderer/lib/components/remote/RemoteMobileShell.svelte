@@ -31,6 +31,7 @@
   import Switch from '$lib/components/ui/Switch.svelte'
   import BottomSheet from '$lib/components/ui/BottomSheet.svelte'
   import ActionSheet from '$lib/components/ui/ActionSheet.svelte'
+  import RecordingIndicator from '$lib/components/speech/RecordingIndicator.svelte'
   import type { MenuItem } from '$lib/components/shared/ThreadDropdown.svelte'
   import MessageHistoryPanel from '$lib/components/shared/MessageHistoryPanel.svelte'
   import { mobileNotifications } from '$lib/remote/mobile-notifications.svelte'
@@ -42,6 +43,7 @@
   import { threadMessages } from '$lib/stores/thread-messages.svelte'
   import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
   import { gitState } from '$lib/stores/git.svelte'
+  import { speechController } from '$lib/speech/speech-controller.svelte'
   import { toast } from 'svelte-sonner'
   import { INBOX_PROJECT_ID, type Thread, type ThreadSearchResult } from '$shared/types'
 
@@ -919,7 +921,11 @@
                   onclick={() => void mobileState.openThread(result.thread)}
                 >
                   <span class="flex min-w-0 items-center gap-2">
-                    {@render threadStatusDot(result.thread)}
+                    {#if speechController.isRecordingThread(result.thread.id)}
+                      <RecordingIndicator label="Listening" />
+                    {:else}
+                      {@render threadStatusDot(result.thread)}
+                    {/if}
                     <span class="min-w-0 flex-1 truncate text-[13px] text-foreground">
                       {result.thread.title}
                     </span>
@@ -975,9 +981,13 @@
                     <span class="min-w-0 flex-1 truncate text-[13px] text-foreground">
                       {thread.title}
                     </span>
-                    <span class="shrink-0 text-[10px] text-dimmed"
-                      >{relativeTime(thread.createdAt)}</span
-                    >
+                    {#if speechController.isRecordingThread(thread.id)}
+                      <RecordingIndicator label="Listening" />
+                    {:else}
+                      <span class="shrink-0 text-[10px] text-dimmed"
+                        >{relativeTime(thread.createdAt)}</span
+                      >
+                    {/if}
                   </button>
                   <button
                     type="button"
@@ -1050,9 +1060,13 @@
                         <span class="min-w-0 flex-1 truncate text-[13px] text-foreground">
                           {thread.title}
                         </span>
-                        <span class="shrink-0 text-[10px] text-dimmed"
-                          >{relativeTime(thread.createdAt)}</span
-                        >
+                        {#if speechController.isRecordingThread(thread.id)}
+                          <RecordingIndicator label="Listening" />
+                        {:else}
+                          <span class="shrink-0 text-[10px] text-dimmed"
+                            >{relativeTime(thread.createdAt)}</span
+                          >
+                        {/if}
                       </button>
                       <button
                         type="button"
@@ -1131,9 +1145,13 @@
                   <span class="min-w-0 flex-1 truncate text-[13px] text-foreground">
                     {thread.title}
                   </span>
-                  <span class="shrink-0 text-[10px] text-dimmed"
-                    >{relativeTime(thread.createdAt)}</span
-                  >
+                  {#if speechController.isRecordingThread(thread.id)}
+                    <RecordingIndicator label="Listening" />
+                  {:else}
+                    <span class="shrink-0 text-[10px] text-dimmed"
+                      >{relativeTime(thread.createdAt)}</span
+                    >
+                  {/if}
                 </button>
                 <button
                   type="button"
@@ -1169,9 +1187,13 @@
                   <span class="min-w-0 flex-1 truncate text-[13px] text-foreground">
                     {thread.title}
                   </span>
-                  <span class="shrink-0 text-[10px] text-dimmed"
-                    >{relativeTime(thread.createdAt)}</span
-                  >
+                  {#if speechController.isRecordingThread(thread.id)}
+                    <RecordingIndicator label="Listening" />
+                  {:else}
+                    <span class="shrink-0 text-[10px] text-dimmed"
+                      >{relativeTime(thread.createdAt)}</span
+                    >
+                  {/if}
                 </button>
                 <button
                   type="button"

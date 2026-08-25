@@ -2,6 +2,7 @@
   import { onMount } from 'svelte'
   import { Mic, TriangleAlert } from '@lucide/svelte'
   import { invoke, subscribe } from '$lib/ipc.svelte'
+  import RecordingIndicator from './RecordingIndicator.svelte'
   import { speechSettingsStore } from '$lib/stores/speech.svelte'
   import type { SpeechScope } from '../../../../lib/speech/types'
   import type { SpeechEditorSnapshot, SpeechEditorTarget } from '../../speech/editor-target'
@@ -30,7 +31,8 @@
       caps.installedArtifacts.filter((a) => a.available).map((a) => a.artifactId)
     )
     return catalog.artifacts.some(
-      (a) => a.capability === 'asr' && a.qualification.status === 'qualified' && installedIds.has(a.id)
+      (a) =>
+        a.capability === 'asr' && a.qualification.status === 'qualified' && installedIds.has(a.id)
     )
   })
 
@@ -63,7 +65,10 @@
             installedIds.has(artifact.id)
         )
       }
-      fetchedVoiceRecordingEnabled = Boolean((config as unknown as { sound?: { voiceRecordingEnabled?: boolean } })?.sound?.voiceRecordingEnabled)
+      fetchedVoiceRecordingEnabled = Boolean(
+        (config as unknown as { sound?: { voiceRecordingEnabled?: boolean } })?.sound
+          ?.voiceRecordingEnabled
+      )
     } catch {
       // keep mic visible on probe failure
     } finally {
@@ -154,87 +159,40 @@
 </script>
 
 {#if !hidden}
-<button
-  type="button"
-  class="relative flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-muted transition-colors hover:bg-elevated hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary disabled:cursor-not-allowed disabled:opacity-45 {anotherTargetActive
-    ? 'pointer-events-none opacity-40'
-    : ''}   {className}"
-  title={label}
-  aria-label={label}
-  aria-pressed={belongsHere && speechController.state.state === 'recording'}
-  disabled={disabled || anotherTargetActive || action === 'wait'}
-  onpointerdown={prepareTarget}
-  onkeydown={(event) => {
-    if (event.key === 'Enter' || event.key === ' ') prepareTarget()
-  }}
-  onclick={() => void activate()}
->
-  {#if belongsHere && speechController.state.state === 'recording'}
-    <span class="recording-wrap" aria-hidden="true">
-      <span class="recording-dot"></span>
-      <span class="recording-ping"></span>
-    </span>
-  {:else if belongsHere && speechController.state.state === 'failed'}
-    <TriangleAlert size={14} aria-hidden="true" />
-  {:else if belongsHere && speechController.state.state !== 'idle'}
-    <span class="flex h-3 items-center gap-[2px]" aria-hidden="true">
-      <span class="wave-bar"></span>
-      <span class="wave-bar wave-bar-delay-1"></span>
-      <span class="wave-bar wave-bar-delay-2"></span>
-    </span>
-  {:else}
-    <Mic size={14} aria-hidden="true" />
-  {/if}
-</button>
+  <button
+    type="button"
+    class="relative flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-muted transition-colors hover:bg-elevated hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary disabled:cursor-not-allowed disabled:opacity-45 {anotherTargetActive
+      ? 'pointer-events-none opacity-40'
+      : ''}   {className}"
+    title={label}
+    aria-label={label}
+    aria-pressed={belongsHere && speechController.state.state === 'recording'}
+    disabled={disabled || anotherTargetActive || action === 'wait'}
+    onpointerdown={prepareTarget}
+    onkeydown={(event) => {
+      if (event.key === 'Enter' || event.key === ' ') prepareTarget()
+    }}
+    onclick={() => void activate()}
+  >
+    {#if belongsHere && speechController.state.state === 'recording'}
+      <RecordingIndicator decorative />
+    {:else if belongsHere && speechController.state.state === 'failed'}
+      <TriangleAlert size={14} aria-hidden="true" />
+    {:else if belongsHere && speechController.state.state !== 'idle'}
+      <span class="flex h-3 items-center gap-[2px]" aria-hidden="true">
+        <span class="wave-bar"></span>
+        <span class="wave-bar wave-bar-delay-1"></span>
+        <span class="wave-bar wave-bar-delay-2"></span>
+      </span>
+    {:else}
+      <Mic size={14} aria-hidden="true" />
+    {/if}
+  </button>
 
-<span class="sr-only" aria-live="polite">{belongsHere ? label : ''}</span>
+  <span class="sr-only" aria-live="polite">{belongsHere ? label : ''}</span>
 {/if}
 
 <style>
-  @keyframes cio-record-ping {
-    0% {
-      transform: scale(1);
-      opacity: 0.45;
-    }
-    75%,
-    100% {
-      transform: scale(1.9);
-      opacity: 0;
-    }
-  }
-  .recording-wrap {
-    position: relative;
-    display: flex;
-    width: 14px;
-    height: 14px;
-    align-items: center;
-    justify-content: center;
-  }
-  .recording-dot {
-    width: 10px;
-    height: 10px;
-    border-radius: 9999px;
-    background: var(--color-danger);
-    animation: cio-record-pulse 1.1s ease-in-out infinite;
-  }
-  .recording-ping {
-    position: absolute;
-    inset: 0;
-    border-radius: 9999px;
-    background: var(--color-danger);
-    animation: cio-record-ping 1.35s cubic-bezier(0, 0, 0.2, 1) infinite;
-  }
-  @keyframes cio-record-pulse {
-    0%,
-    100% {
-      transform: scale(1);
-      opacity: 1;
-    }
-    50% {
-      transform: scale(1.15);
-      opacity: 0.78;
-    }
-  }
   @keyframes cio-wave-bar {
     0%,
     100% {

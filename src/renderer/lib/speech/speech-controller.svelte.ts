@@ -103,6 +103,16 @@ class SpeechController {
     return 'targetId' in this.state && this.state.targetId === targetId
   }
 
+  isRecordingThread(threadId: string): boolean {
+    const scope = this.active?.scope
+    return (
+      this.state.state === 'recording' &&
+      scope !== undefined &&
+      scope.kind !== 'global' &&
+      scope.threadId === threadId
+    )
+  }
+
   async start(
     target: SpeechEditorTarget,
     scope: SpeechScope,
