@@ -4704,6 +4704,27 @@ export class ChatEngine {
       const expectedStatus: Extract<ThreadStatus, 'planning' | 'executing'> =
         this.planningSessions.has(sessionId) ? 'planning' : 'executing'
       const thread = await this.threadManager.getThread(info.projectId, info.threadId)
+      // Guard: never flip a visible Waiting to retry back to Working on a
+      // spurious provider working signal. A retry-paused thread stays paused
+      // until the retry actually fires (scheduler tick or native harness resume
+      // at/after retryAt). While a pending retry is still in the future, keep
+      // the paused status visible — this prevents the ec748... bounce.
+      if (thread?.status === 'working-paused') {
+        const pending = this.retryScheduler?.getPendingRetry(sessionId)
+        if (pending) {
+          // Legitimate resume happens at or after retryAt; spurious working
+          // arrives well before the window. Keep paused when retryAt is still
+          // in the future (with a small grace for clock jitter).
+          const GRACE_MS = 30_000
+          if (pending.retryAt > Date.now() + GRACE_MS) return
+        } else {
+          // No scheduler record (missing retryAt, >6h un-derived, or native
+          // harness without a tracked window). Stay paused — explicit resume
+          // (scheduled continue or manual Retry) will transition the thread,
+          // not this reconciliation.
+          return
+        }
+      }
       const assignmentChanged = thread ? await this.reconcileWorkingAssignmentState(thread) : false
       if (thread && thread.status !== expectedStatus) {
         await this.threadManager.setStatus(info.projectId, info.threadId, expectedStatus)
@@ -15374,15 +15395,20 @@ export class ChatEngine {
         !eventOwner.ephemeral &&
         event.status.issue.retryable
       ) {
-        if (
-          typeof event.status.issue.retryAt === 'number' &&
-          Number.isFinite(event.status.issue.retryAt)
-        ) {
-          updateRetryWakeWindow(event.sessionId, event.status.issue.retryAt)
-          void this.threadManager
-            .setStatus(eventOwner.projectId, eventOwner.threadId, 'working-paused', { read: false })
-            .catch((error) => Logger.error('Retry-paused status update failed:', error))
+        const retryAt = event.status.issue.retryAt
+        const hasFiniteRetryAt = typeof retryAt === 'number' && Number.isFinite(retryAt)
+        if (hasFiniteRetryAt) {
+          updateRetryWakeWindow(event.sessionId, retryAt)
+        } else {
+          updateRetryWakeWindow(event.sessionId, null)
         }
+        // Ethos: usage-limit expiry must surface as Waiting to retry, not Working.
+        // Persist working-paused for every retryable waiting signal, even when
+        // retryAt is missing or beyond the 6h wake window, or when the harness
+        // owns its own retry — the persisted pause makes the stopped state visible.
+        void this.threadManager
+          .setStatus(eventOwner.projectId, eventOwner.threadId, 'working-paused', { read: false })
+          .catch((error) => Logger.error('Retry-paused status update failed:', error))
         // Record the wait in the retry scheduler for every harness — including
         // harnesses that schedule their own retry (OpenCode). Their native
         // resume emits `working` and clears the record; the recorded wait keeps
@@ -16212,7 +16238,18 @@ export class ChatEngine {
         Logger.dev('Auto-resume retry time derivation unavailable:', error)
       }
     }
-    if (typeof retryAt !== 'number' || !Number.isFinite(retryAt)) return false
+    if (typeof retryAt !== 'number' || !Number.isFinite(retryAt)) {
+      // No derivable retry time (e.g. ba9a... silent case): still surface as
+      // Waiting to retry so the user sees work has stopped, even though no
+      // automatic retry can be scheduled. The thread stays paused until manual Retry.
+      if (isUsageResetWaitIssue(issue) && issue.retryable) {
+        await this.threadManager.setStatus(info.projectId, info.threadId, 'working-paused', {
+          read: false
+        })
+        updateRetryWakeWindow(sessionId, null)
+      }
+      return false
+    }
     await this.threadManager.setStatus(info.projectId, info.threadId, 'working-paused', {
       read: false
     })
@@ -16240,6 +16277,28 @@ export class ChatEngine {
     error?: string
   ): Promise<void> {
     const retryScheduled = await this.scheduleAutomaticRetry(sessionId, issue)
+    // Fallback: if scheduling did not produce a pending retry but the issue is
+    // a retryable usage reset, still treat as paused so the thread does not
+    // fall to failed and hide the will-retry state (ba9a... silent case).
+    // scheduleAutomaticRetry already persisted working-paused in this branch,
+    // so we just need to signal the caller that the thread is paused.
+    const shouldStayPaused =
+      !retryScheduled && isUsageResetWaitIssue(issue) && issue.retryable
+    if (shouldStayPaused) {
+      const info = this.sessionRegistry.get(sessionId)
+      if (info && !info.ephemeral) {
+        // Ensure the persisted status is paused even if schedule exited early
+        // before the dedicated fallback above (e.g. scheduler disabled).
+        const current = await this.threadManager.getThread(info.projectId, info.threadId)
+        if (current && current.status !== 'working-paused') {
+          await this.threadManager.setStatus(info.projectId, info.threadId, 'working-paused', {
+            read: false
+          })
+        }
+      }
+      await this.onSessionError(sessionId, error, true)
+      return
+    }
     await this.onSessionError(sessionId, error, retryScheduled)
   }
 
