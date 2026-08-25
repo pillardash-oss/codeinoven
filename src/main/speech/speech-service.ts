@@ -62,6 +62,7 @@ interface InstalledArtifactIndex {
 interface SpeechServicePaths {
   catalogPath: string
   mlxWorkerPath: string
+  coremlWorkerPath: string
 }
 
 export interface SpeechRemoteCleanupInput {
@@ -125,7 +126,7 @@ export class SpeechService {
     this.backends = new Map<SpeechRuntime, SpeechBackend>([
       ['sherpa-onnx', new SherpaSpeechBackend()],
       ['mlx', new MlxSpeechBackend(paths.mlxWorkerPath)],
-      ['coreml', new CoreMlSpeechBackend()]
+      ['coreml', new CoreMlSpeechBackend(paths.coremlWorkerPath)]
     ])
   }
 
@@ -157,7 +158,7 @@ export class SpeechService {
                   runtime === 'mlx'
                     ? 'The packaged MLX worker is unavailable.'
                     : runtime === 'coreml'
-                      ? 'Core ML transcription is not available until its native bridge is implemented.'
+                      ? 'The packaged Core ML worker or audio decoder is unavailable.'
                       : 'Runtime unavailable.'
               }
             : {})
@@ -261,11 +262,6 @@ export class SpeechService {
     language: string | 'auto',
     cleanupMode: SpeechCleanupMode = { kind: 'local' }
   ): Promise<SpeechTranscriptionResult> {
-    if (runtime === 'coreml') {
-      throw new Error(
-        'Core ML transcription is not available until its native bridge is implemented. Use MLX or sherpa-onnx for on-device ASR.'
-      )
-    }
     const artifact = this.requireSelectableArtifact(artifactId, runtime, 'asr')
     const backend = this.requireBackend(runtime)
     const modelFamily =
@@ -1378,6 +1374,13 @@ export class SpeechService {
       if (
         installed.runtime === 'sherpa-onnx' &&
         installed.importPath.toLowerCase().endsWith('.onnx')
+      ) {
+        return dirname(installed.importPath)
+      }
+      if (
+        installed.runtime === 'coreml' &&
+        (installed.importPath.toLowerCase().endsWith('.mlmodelc') ||
+          installed.importPath.toLowerCase().endsWith('.mlpackage'))
       ) {
         return dirname(installed.importPath)
       }

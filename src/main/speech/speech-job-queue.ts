@@ -41,7 +41,8 @@ export class SpeechQueueError extends Error {
 export class SpeechJobQueue {
   private readonly pending = new Map<SpeechRuntime, QueueEntry<unknown>[]>([
     ['mlx', []],
-    ['sherpa-onnx', []]
+    ['sherpa-onnx', []],
+    ['coreml', []]
   ])
   private readonly active = new Map<SpeechRuntime, QueueEntry<unknown>>()
   private readonly states = new Map<string, SpeechJobState>()
