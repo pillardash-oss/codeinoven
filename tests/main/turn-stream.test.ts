@@ -11,6 +11,7 @@ function tool(id: string): AgentPart {
     type: 'tool',
     id,
     messageID: `m-${id}`,
+    callID: `c-${id}`,
     tool: 'read',
     state: { status: 'completed', input: {}, output: 'ok' }
   }

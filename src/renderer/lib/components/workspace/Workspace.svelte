@@ -2403,13 +2403,17 @@
     }
     // Apply inherited settings immediately so the composer has correct model
     const thread = optimisticThread as unknown as typeof optimisticThread & { settings: typeof inheritedSettings }
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     upsertThreadInList(thread as any)
     threadMessages.seedEmpty(thread.projectId, thread.id)
     expandedFolders.add(project.id)
     if (scopeBucketId) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       scopeState.updateThread(thread as any)
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       scopeState.showSidebarForThread(thread as any, scopeBucketId)
     }
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     workspaceState.openThread(thread as any, project)
     if (activeThread) {
       void inheritEngineeringLifecycle(project.id, activeThread.id, thread.id)
@@ -2446,6 +2450,7 @@
       })
     if (activeThread?.settings) {
       // Settings already applied optimistically; background persistence will confirm via thread:update
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       void persistInheritedThreadSettings(thread as any, inheritedSettings).catch(() => {})
     }
   }

@@ -71,7 +71,7 @@
       .sort((left, right) => right.token.length - left.token.length)
     if (tags.length === 0) return { prepared: text, substitutions: new Map<string, string>() }
     let prepared = text
-    const substitutions = new Map<string, string>()
+    const substitutions = new Map<string, string>() // eslint-disable-line svelte/prefer-svelte-reactivity
     for (const [index, tag] of tags.entries()) {
       if (!prepared.includes(tag.token)) continue
       const placeholder = `\uE7F0${index}\uE7F1`

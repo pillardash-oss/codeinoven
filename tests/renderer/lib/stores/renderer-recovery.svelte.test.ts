@@ -212,6 +212,7 @@ describe('RendererRecoveryStore', () => {
     }
 
     store.setPromptReferences('project-1', 'thread-1', [reference])
+    store.flushPersist()
     expect(store.draftPromptReferences('project-1', 'thread-1')).toEqual([reference])
     expect(store.hasDraftContent('project-1', 'thread-1')).toBe(true)
 
@@ -221,6 +222,7 @@ describe('RendererRecoveryStore', () => {
 
     // Clearing annotations drops the whole draft entry when nothing else is present.
     store.setPromptReferences('project-1', 'thread-1', [])
+    store.flushPersist()
     expect(store.hasDraftContent('project-1', 'thread-1')).toBe(false)
     const cleared = new RendererRecoveryStore(storage)
     expect(cleared.draftPromptReferences('project-1', 'thread-1')).toEqual([])
@@ -234,6 +236,7 @@ describe('RendererRecoveryStore', () => {
       { id: 'source-1', title: 'Source one' },
       { id: 'source-2', title: 'Source two' }
     ])
+    store.flushPersist()
     expect(store.startAfterThreadsFor('project-1', 'thread-1')).toEqual([
       { id: 'source-1', title: 'Source one' },
       { id: 'source-2', title: 'Source two' }
@@ -249,6 +252,7 @@ describe('RendererRecoveryStore', () => {
 
     // Clearing removes the whole draft entry when nothing else is present.
     store.clearStartAfterThreads('project-1', 'thread-1')
+    store.flushPersist()
     expect(store.hasDraftContent('project-1', 'thread-1')).toBe(false)
   })
 

@@ -6,7 +6,6 @@ import type {
   AgentPart,
   AgentProviderIssue,
   AgentSubagentActivity,
-  AgentToolStatus,
   PermissionReply,
   ProviderCatalog,
   ProviderModel,
