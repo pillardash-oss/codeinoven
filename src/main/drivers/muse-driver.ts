@@ -50,6 +50,8 @@ import { runHarnessCommand } from './harness-runtime'
  * Wire schema: every line is an envelope `{ record_type, payload_type, payload }`.
  * Meaningful payloads:
  *   - `run.output.delta`  → `payload.text` (incremental assistant text)
+ *   - `run.output.reasoning.delta` / `run.reasoning.delta` / `run.thinking.delta`
+ *     → incremental reasoning trace (`payload.text` / `payload.delta` / `payload.reasoning`)
  *   - `run.terminal.completed` → `payload.terminal` (`completed`|`error`),
  *     `payload.text` (final), `payload.reason`
  *   - `run.model.configured` → `payload.provider_id` / `payload.model_id`
@@ -381,6 +383,9 @@ interface MuseTurnState {
   messageId: string
   createdAt: number
   text: string
+  reasoning: string
+  reasoningSummary?: string
+  reasoningTime?: { start?: number; end?: number }
   parts: AgentPart[]
   /** True once any assistant part has been emitted (message exists on disk). */
   started: boolean
@@ -422,6 +427,17 @@ function textPart(state: MuseTurnState): Extract<AgentPart, { type: 'text' }> {
     id: `${state.messageId}:text`,
     messageID: state.messageId,
     text: state.text
+  }
+}
+
+function reasoningPart(state: MuseTurnState): Extract<AgentPart, { type: 'reasoning' }> {
+  return {
+    type: 'reasoning',
+    id: `${state.messageId}:reasoning`,
+    messageID: state.messageId,
+    text: state.reasoning,
+    ...(state.reasoningSummary ? { summary: state.reasoningSummary } : {}),
+    ...(state.reasoningTime ? { time: state.reasoningTime } : {})
   }
 }
 
@@ -535,10 +551,11 @@ function escapeMuseMentions(text: string): string {
  * Map one `muse exec --json` envelope into CodeInOven's stable shapes.
  *
  * Every line is `{ record_type, payload_type, payload }`; the meaningful
- * payloads are `run.output.delta` (streaming text), `run.terminal.completed`
- * (turn end), and `run.model.configured` (provenance). The top-level session
- * stream ids are observed only as event metadata and are never reused for
- * native conversation history.
+ * payloads are `run.output.delta` (streaming text), reasoning deltas
+ * (`run.output.reasoning.delta` / `run.reasoning.delta` / `run.thinking.delta`),
+ * `run.terminal.completed` (turn end), and `run.model.configured` (provenance).
+ * The top-level session stream ids are observed only as event metadata and are
+ * never reused for native conversation history.
  *
  * Unknown record types are ignored so schema drift degrades to a silent turn
  * rather than a broken session. Keeping this boundary pure makes it testable.
@@ -816,6 +833,54 @@ export function mapMuseRecord(
     return { ...base, events: [museToolEvent(context, state, tool)] }
   }
 
+  // Streaming reasoning trace — Muse Spark reasoning effort produces
+  // provider-side thinking that the CLI surfaces as a separate delta channel.
+  // The current CLI (0.2.1) inlines reasoning into `run.output.delta` text for
+  // most turns, but any future `*reasoning*` / `*thinking*` payload is captured
+  // here so the working trace renders a distinct `ThinkingBlock` instead of
+  // silently dropping the trace.
+  if (
+    payloadType === 'run.output.reasoning.delta' ||
+    payloadType === 'run.reasoning.delta' ||
+    payloadType === 'run.thinking.delta' ||
+    payloadType === 'run.output.thinking.delta' ||
+    (payloadType !== undefined && (payloadType.includes('reasoning') || payloadType.includes('thinking')))
+  ) {
+    const delta =
+      stringValue(payload['text']) ??
+      stringValue(payload['delta']) ??
+      stringValue(payload['reasoning']) ??
+      stringValue(payload['thinking']) ??
+      stringValue(payload['content']) ??
+      stringValue(record(payload['event'])?.['delta']) ??
+      stringValue(record(payload['event'])?.['thinking'])
+    const summary = stringValue(payload['summary']) ?? stringValue(record(payload['event'])?.['summary'])
+    if (summary) state.reasoningSummary = summary
+    if (delta) {
+      if (!state.reasoningTime?.start) {
+        state.reasoningTime = { start: Date.now(), ...state.reasoningTime }
+      }
+      state.reasoning += delta
+      const part = reasoningPart(state)
+      upsertPart(state, part)
+      return {
+        ...base,
+        messages: [museMessage(state)],
+        events: [{ type: 'message.part.updated', sessionId: context.sessionId, part }]
+      }
+    }
+    if (summary) {
+      const part = reasoningPart(state)
+      upsertPart(state, part)
+      return {
+        ...base,
+        messages: [museMessage(state)],
+        events: [{ type: 'message.part.updated', sessionId: context.sessionId, part }]
+      }
+    }
+    return base
+  }
+
   // Streaming assistant text — `payload.text` is an incremental delta.
   if (payloadType === 'run.output.delta') {
     const delta = stringValue(payload['text'])
@@ -839,6 +904,20 @@ export function mapMuseRecord(
     const terminal = stringValue(payload['terminal'])
     const finalText = stringValue(payload['text'])
     const reason = stringValue(payload['reason'])
+    const finalReasoning =
+      stringValue(payload['reasoning']) ??
+      stringValue(payload['thinking']) ??
+      stringValue(payload['reasoning_text'])
+    const finalReasoningSummary = stringValue(payload['reasoning_summary']) ?? stringValue(payload['summary'])
+    if (finalReasoningSummary) state.reasoningSummary = finalReasoningSummary
+    if (finalReasoning && finalReasoning.length > state.reasoning.length) {
+      state.reasoning = finalReasoning
+      state.reasoningTime = { ...(state.reasoningTime ?? {}), end: Date.now() }
+      upsertPart(state, reasoningPart(state))
+    } else if (state.reasoning && !state.reasoningTime?.end) {
+      state.reasoningTime = { ...(state.reasoningTime ?? {}), end: Date.now() }
+      upsertPart(state, reasoningPart(state))
+    }
     if (finalText) {
       state.text = finalText
       upsertPart(state, textPart(state))
@@ -1026,6 +1105,8 @@ export class MuseDriver extends PersistentCliDriver {
       messageId: `muse:${session.id}:${turnIndex}`,
       createdAt: Date.now(),
       text: '',
+      reasoning: '',
+      reasoningTime: { start: Date.now() },
       parts: [],
       started: false,
       tools: new Map(),
