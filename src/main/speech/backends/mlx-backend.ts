@@ -3,7 +3,6 @@ import { access } from 'node:fs/promises'
 import { rm } from 'node:fs/promises'
 import { spawn } from 'node:child_process'
 import type { ChildProcessWithoutNullStreams } from 'node:child_process'
-import ffmpegPath from 'ffmpeg-static'
 import type { SpeechCapability } from '../../../lib/speech/types'
 import type {
   SpeechBackend,
@@ -11,6 +10,7 @@ import type {
   SpeechSynthesisInput,
   SpeechTranscribeInput
 } from '../speech-backend'
+import { resolveFfmpegPath } from '../ffmpeg-path'
 
 type MlxRequest =
   | { id: string; operation: 'transcribe'; model: string; audio: string; language: string }
@@ -53,6 +53,7 @@ export class MlxSpeechBackend implements SpeechBackend {
     if (process.platform !== 'darwin' || process.arch !== 'arm64') return []
     try {
       await access(this.executablePath)
+      await resolveFfmpegPath()
       return ['asr', 'cleanup', 'tts']
     } catch {
       return []
@@ -79,8 +80,7 @@ export class MlxSpeechBackend implements SpeechBackend {
   }
 
   private async decodeToWav(sourcePath: string, signal: AbortSignal): Promise<string> {
-    const decoder = ffmpegPath as unknown as string | null
-    if (!decoder) throw new Error('The packaged audio decoder is unavailable.')
+    const decoder = await resolveFfmpegPath()
     const decodedPath = `${sourcePath}.decoded.wav`
     if (signal.aborted) throw new Error('Speech operation cancelled.')
     await new Promise<void>((resolve, reject) => {
@@ -121,7 +121,10 @@ export class MlxSpeechBackend implements SpeechBackend {
       child.once('exit', (code: number | null) => {
         signal.removeEventListener('abort', onAbort)
         if (code === 0) resolve()
-        else reject(new Error(failure.trim() || `Audio decoding exited with code ${code ?? 'unknown'}.`))
+        else
+          reject(
+            new Error(failure.trim() || `Audio decoding exited with code ${code ?? 'unknown'}.`)
+          )
       })
     })
     return decodedPath

@@ -3,9 +3,9 @@ import { readdir } from 'node:fs/promises'
 import { join } from 'node:path'
 import { spawn } from 'node:child_process'
 import { rm } from 'node:fs/promises'
-import ffmpegPath from 'ffmpeg-static'
 import { parentPort } from 'node:worker_threads'
 import type { SpeechWorkerRequest, SpeechWorkerResponse } from './speech-worker-protocol'
+import { resolveFfmpegPath } from './ffmpeg-path'
 
 interface SherpaWave {
   samples: Float32Array
@@ -82,8 +82,7 @@ async function transcribe(
   request: Extract<SpeechWorkerRequest, { kind: 'transcribe' }>
 ): Promise<string> {
   const runtime = sherpa()
-  const decoderPath = ffmpegPath
-  if (!decoderPath) throw new Error('The packaged audio decoder is unavailable.')
+  const decoderPath = await resolveFfmpegPath()
   const wavePath = `${request.audioPath}.decoded.wav`
   await new Promise<void>((resolve, reject) => {
     const child = spawn(

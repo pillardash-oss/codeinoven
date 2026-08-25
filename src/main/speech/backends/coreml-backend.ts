@@ -1,24 +1,25 @@
 import { access, readdir } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { SpeechCapability } from '../../../lib/speech/types'
-import type { SpeechBackend, SpeechBackendArtifact, SpeechSynthesisInput, SpeechTranscribeInput } from '../speech-backend'
+import type {
+  SpeechBackend,
+  SpeechBackendArtifact,
+  SpeechSynthesisInput,
+  SpeechTranscribeInput
+} from '../speech-backend'
 
 /**
  * Core ML adapter for Parakeet TDT and other .mlmodelc / .mlpackage bundles.
  * Runs only on Apple Silicon (darwin:arm64). Unlike the MLX worker, this
- * backend currently validates and reports capability without requiring a
- * separate helper binary — the model directory is inspected for compiled
- * Core ML bundles. Transcription via the native Core ML runtime is stubbed
- * with a clear error until the Swift bridge lands; import/validation/selection
- * already works so a pasted FluidAudio path becomes a selectable ASR model.
+ * backend currently validates Core ML bundles, but does not have a native
+ * transcription bridge. It must not report ASR capability until that bridge
+ * exists, otherwise the model can be selected and fail after recording.
  */
 export class CoreMlSpeechBackend implements SpeechBackend {
   readonly runtime = 'coreml' as const
 
   async capabilities(): Promise<SpeechCapability[]> {
-    if (process.platform !== 'darwin' || process.arch !== 'arm64') return []
-    // Core ML itself is always available on Apple Silicon; ASR only.
-    return ['asr']
+    return []
   }
 
   async transcribe(input: SpeechTranscribeInput, signal: AbortSignal): Promise<string> {
@@ -42,14 +43,22 @@ export class CoreMlSpeechBackend implements SpeechBackend {
     )
   }
 
-  async cleanup(transcript: string, _artifact: SpeechBackendArtifact, signal: AbortSignal): Promise<string> {
+  async cleanup(
+    transcript: string,
+    _artifact: SpeechBackendArtifact,
+    signal: AbortSignal
+  ): Promise<string> {
     if (signal.aborted) throw new Error('Speech operation cancelled.')
-    throw new Error('Core ML does not support transcript cleanup. Use sherpa-onnx, MLX, or GGUF cleanup models.')
+    throw new Error(
+      'Core ML does not support transcript cleanup. Use sherpa-onnx, MLX, or GGUF cleanup models.'
+    )
   }
 
   async synthesize(_input: SpeechSynthesisInput, signal: AbortSignal): Promise<void> {
     if (signal.aborted) throw new Error('Speech operation cancelled.')
-    throw new Error('Core ML does not support speech synthesis. Use an MLX or sherpa-onnx TTS model.')
+    throw new Error(
+      'Core ML does not support speech synthesis. Use an MLX or sherpa-onnx TTS model.'
+    )
   }
 
   async dispose(): Promise<void> {}
@@ -67,7 +76,8 @@ export class CoreMlSpeechBackend implements SpeechBackend {
       if (lower.endsWith('.mlmodelc') || lower.endsWith('.mlpackage')) return true
       for (const entry of entries) {
         const name = entry.name.toLowerCase()
-        if (entry.isDirectory() && (name.endsWith('.mlmodelc') || name.endsWith('.mlpackage'))) return true
+        if (entry.isDirectory() && (name.endsWith('.mlmodelc') || name.endsWith('.mlpackage')))
+          return true
         // Also accept the nested compiled form (coremldata.bin inside .mlmodelc)
         if (entry.isDirectory() && name === 'coremldata.bin') return true
       }
@@ -77,7 +87,11 @@ export class CoreMlSpeechBackend implements SpeechBackend {
         try {
           const inner = await readdir(join(directory, entry.name), { withFileTypes: true })
           for (const sub of inner) {
-            if (sub.name.toLowerCase().endsWith('.mlmodelc') || sub.name.toLowerCase().endsWith('.mlpackage')) return true
+            if (
+              sub.name.toLowerCase().endsWith('.mlmodelc') ||
+              sub.name.toLowerCase().endsWith('.mlpackage')
+            )
+              return true
           }
         } catch {
           // ignore
