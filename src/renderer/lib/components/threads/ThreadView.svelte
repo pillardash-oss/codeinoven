@@ -9270,6 +9270,7 @@
               {#key pendingPermission.id}
                 <PermissionRequestCard
                   request={pendingPermission}
+                  scope={{ kind: 'project', projectId: thread.projectId, threadId: thread.id }}
                   onAllowOnce={allowPermissionOnce}
                   onAllowAlways={allowPermissionAlways}
                   onReject={rejectPermission}
@@ -9281,6 +9282,7 @@
               {#key pendingRequest.requestId}
                 <AgentQuestionCard
                   request={pendingRequest}
+                  scope={{ kind: 'project', projectId: thread.projectId, threadId: thread.id }}
                   onAnswer={handleQuestionAnswer}
                   onDismiss={handleQuestionDismiss}
                   onUpdate={handleQuestionUpdate}
