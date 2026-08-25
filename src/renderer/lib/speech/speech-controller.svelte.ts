@@ -1,5 +1,6 @@
 import { invoke } from '$lib/ipc.svelte'
 import { reportErrorWithDetails } from '$lib/stores/app-errors.svelte'
+import { toast } from 'svelte-sonner'
 import { pauseCurrentHistoryAudio } from './global-audio'
 import { logRendererError } from '../system/renderer-logger'
 import type {
@@ -54,11 +55,14 @@ interface ActivePlayback {
 }
 
 const MIME_TYPES = ['audio/webm;codecs=opus', 'audio/webm', 'audio/ogg;codecs=opus'] as const
+// Chunk the stream for bounded IPC and disk writes. There is intentionally no
+// elapsed-time cap on a recording; it ends only when the user stops it or the
+// capture device/storage reports a real failure.
 const CAPTURE_TIMESLICE_MS = 250
 const PAUSE_UPLOAD_DEPTH = 4
 const CAPTURE_STOP_TIMEOUT_MS = 5_000
 
-type RecordingFailurePhase = 'prepare' | 'permission' | 'capture' | 'transcription' | 'insert'
+type RecordingFailurePhase = 'prepare' | 'permission' | 'capture' | 'transcription'
 
 function errorMessage(cause: unknown): string {
   if (cause instanceof Error && cause.message.trim()) return cause.message
@@ -84,7 +88,6 @@ function recordingToastMessage(cause: unknown, phase: RecordingFailurePhase): st
   if (name === 'NotReadableError' || name === 'TrackStartError') {
     return 'The microphone is unavailable.'
   }
-  if (phase === 'insert') return 'The transcript could not be inserted.'
   if (phase === 'transcription') return 'Voice recording could not be transcribed.'
   return 'Voice recording failed.'
 }
@@ -248,6 +251,10 @@ class SpeechController {
   private async finishStop(active: ActiveCapture): Promise<void> {
     this.clearElapsedTimer()
     this.state = { state: 'stopping', targetId: active.target.id, attemptId: active.attemptId }
+    // Capture the target's current value and caret when the user stops, not
+    // only when recording started. This lets users type and reposition the
+    // caret while the mic is active without losing the intended insertion point.
+    const insertionSnapshot = active.target.capture() ?? active.snapshot
 
     let finalized = false
     try {
@@ -271,15 +278,17 @@ class SpeechController {
       }
       const transcript = await this.transcribeActive(active)
       await invoke('clipboard:writeText', transcript)
-      const inserted = active.target.apply(active.snapshot, transcript)
+      const inserted = active.target.apply(insertionSnapshot, transcript)
       this.playCue('completed')
       if (!inserted.ok) {
-        const insertionFailure =
-          'Transcript copied to the clipboard. The original editor changed, so it was not inserted.'
-        await invoke('speech:markAttemptFailure', active.attemptId, insertionFailure).catch(
-          () => undefined
-        )
-        this.surfaceFailure(active.target.id, 'insert', new Error(insertionFailure))
+        const insertionNotice =
+          'Transcript copied to the clipboard. It could not be inserted into the recording field.'
+        try {
+          toast.info(insertionNotice, { closeButton: true })
+        } catch (cause) {
+          logRendererError('Could not show the voice recording clipboard notice.', cause)
+        }
+        this.state = { state: 'idle' }
         return
       }
       const span: SpeechDictationSpan = {

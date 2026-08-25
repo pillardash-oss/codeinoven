@@ -749,8 +749,8 @@
   /** Whether the button should show the stop icon (agent working, nothing to send). */
   let canStop = $derived(working && !hasSendableContent)
 
-  /** When nothing is sendable (or the composer is disabled), the mic replaces the send slot. */
-  let micReplacesSend = $derived(disabled || (!working && !hasSendableContent))
+  /** The mic stays mounted; only the send/stop control follows composer state. */
+  let showSendControl = $derived(!disabled && (working || hasSendableContent))
 
   // Cancel pending stop when the agent stops working on its own.
   $effect(() => {
@@ -2401,22 +2401,16 @@
       />
     {/if}
 
-    {#if micReplacesSend}
-      <!-- Nothing sendable: the mic swaps into the send-button slot. -->
-      <VoiceInputButton
-        targetId={composerEditorId}
-        getTarget={composerSpeechTarget}
-        scope={speechScope}
-        {disabled}
-      />
-    {:else}
-      <VoiceInputButton
-        targetId={composerEditorId}
-        getTarget={composerSpeechTarget}
-        scope={speechScope}
-        {disabled}
-      />
+    <!-- Keep the mic mounted in one stable slot so recording state never resets
+         when the composer gains text and the send control appears. -->
+    <VoiceInputButton
+      targetId={composerEditorId}
+      getTarget={composerSpeechTarget}
+      scope={speechScope}
+      {disabled}
+    />
 
+    {#if showSendControl}
       <!-- Send / Queue / Stop button.
            - Agent idle:       ArrowUp (send) — primary, disabled when empty
            - Agent working, user typing:  Clock (queue) — primary, always clickable
