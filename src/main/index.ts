@@ -840,6 +840,7 @@ async function bootPostPaintServices(): Promise<void> {
 
     try {
       await retryScheduler?.start()
+      await chatEngine?.repairPendingRetryThreadStatuses()
     } catch (error) {
       Logger.error('Retry scheduler startup failed (non-fatal):', error)
     }

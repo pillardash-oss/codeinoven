@@ -16192,6 +16192,27 @@ export class ChatEngine {
     scheduler.attachContinue((record) => this.continueScheduledThread(record))
   }
 
+  /** Repair stale working rows for scheduler-restored retries so UI shows Waiting to retry immediately on launch. */
+  async repairPendingRetryThreadStatuses(): Promise<void> {
+    const scheduler = this.retryScheduler
+    if (!scheduler) return
+    // Access pending records via public getter; iterate defensively.
+    const pending = (scheduler as unknown as { pending: Map<string, { projectId: string; threadId: string }> })
+    const map = pending.pending
+    if (!map || map.size === 0) return
+    for (const record of map.values()) {
+      try {
+        const thread = await this.threadManager.getThread(record.projectId, record.threadId)
+        if (!thread) continue
+        if (thread.status === 'working-paused') continue
+        // Only repair threads that look like they were left in a working state
+        if (!['planning', 'executing', 'working-paused'].includes(thread.status)) continue
+        const updated = await this.threadManager.setStatus(record.projectId, record.threadId, 'working-paused', { read: false })
+        broadcastThreadUpdate(updated)
+      } catch {}
+    }
+  }
+
   /**
    * Record a thread whose turn ended in a usage/rate-limit reset so the
    * scheduler resumes it once the reset time passes. Every harness is tracked —
