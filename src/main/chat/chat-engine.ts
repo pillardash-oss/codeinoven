@@ -17922,12 +17922,22 @@ export class ChatEngine {
    */
   private liveForeignClaimedPaths(self: SessionInfo): Map<string, number> {
     const foreign = new Map<string, number>()
+    const now = Date.now()
     for (const other of this.sessionRegistry.values()) {
       if (other === self || other.projectId !== self.projectId) continue
       if (other.threadId === self.threadId) continue
+      if (!other.activeTurnId) continue
       for (const [path, claimedAt] of other.preciseChangedPaths ?? []) {
         const existing = foreign.get(path)
         if (existing === undefined || claimedAt < existing) foreign.set(path, claimedAt)
+      }
+      // Shell-window mutations have no per-path timestamp; treat any path the
+      // other active turn has observed as claimed now so an overlapping victim
+      // turn that didn't precisely claim it is filtered as foreign. A victim's
+      // own precise claim still exempts it via keepChange in completeTurn.
+      for (const path of other.changedPaths ?? []) {
+        if (foreign.has(path)) continue
+        foreign.set(path, now)
       }
     }
     return foreign
