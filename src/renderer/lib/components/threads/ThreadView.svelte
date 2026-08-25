@@ -3117,26 +3117,15 @@
           setIdleFromRestore()
         }
       }
-      // A thread opened while its turn is still running has its accumulated
-      // working trace only in the live harness session: the mirror persists
-      // assistant parts only when the turn idles/completes, and parts that
-      // streamed before this view mounted were never routed to the local
-      // cache. Pull the live driver transcript now so the working trace
-      // (tools, sub-agents, reasoning) renders immediately instead of a bare
-      // user message that only fills in after the turn ends. This covers the
-      // thread's own live turn AND delegated work it owns: the coordinator's
-      // own session is idle between handoffs, so `threadWorking` (not just the
-      // raw busy flag) decides whether accumulated work must be recovered.
-      if (threadWorking) {
-        // Pull the LIVE driver transcript (agent:loadMessages) instead of a DB
-        // mirror page: when a harness session survives an app restart, its
-        // conversation holds every working part streamed so far. Reading it now
-        // rehydrates the full working trace (tools, sub-agents, reasoning) all
-        // the way up to the live stream instead of only the parts persisted at
-        // the last turn boundary — so reopening a long-running thread shows
-        // everything the agent already did, not a bare user message.
-        void threadMessages.load(projectId, id).catch(() => refreshMessages())
-      }
+      // Never pull the full live harness transcript while mounting a thread.
+      // `agent:loadMessages` is intentionally unbounded: a long-running agent
+      // can return thousands of parts, and the main process then synchronizes
+      // and serializes that whole transcript before the renderer can use it.
+      // The bounded mirror page above keeps opening interactive immediately;
+      // live events continue to populate the current turn, and the durable
+      // stream log restores interrupted work when no live session exists.
+      // A full provider transcript must only be loaded by an explicit workflow,
+      // never as a side effect of opening a thread.
       if (providerStatus?.state === 'idle') {
         scheduleIdleAttention()
       }
