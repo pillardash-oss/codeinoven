@@ -1162,6 +1162,20 @@ export class MuseDriver extends PersistentCliDriver {
   private continuationOptions = new Map<string, SendPromptOptions>()
   private approvedToolAllowances = new Map<string, number>()
   private hiddenContinuationSessions = new Set<string>()
+  /**
+   * Steers received while a tool call is mid-flight (e.g. a running shell
+   * command). Muse's `exec` process cannot accept live input, so a steer
+   * always restarts the turn — but restarting immediately would kill the
+   * tool call itself. Queue it here and deliver once `onJsonRecord` observes
+   * the tool call settle (`tool.result`), or the process exits for any other
+   * reason. The user's message is already visible in the transcript via
+   * chat-engine's optimistic persist, so this only delays transport, not
+   * display.
+   */
+  private pendingSteers = new Map<
+    string,
+    { projectPath: string; options: SteerPromptOptions }[]
+  >()
 
   constructor(storage: StorageEngine) {
     super(storage)
@@ -1310,28 +1324,87 @@ export class MuseDriver extends PersistentCliDriver {
       args,
       env: buildProcessEnvironment(),
       onJsonRecord: (value) => {
-        if (options.settings.permissionLevel === 'full_access') return
         const envelope = record(value)
-        if (envelope?.['payload_type'] !== 'task.lifecycle.proposed') return
-        const payload = record(envelope['payload'])
-        const event = record(payload?.['event'])
-        const taskId = stringValue(payload?.['task_id'])
-        const taskKind = museToolName(event?.['task_kind'], 'task_kind')
-        if (!taskId || !taskKind || isMuseSubagentSpawn(taskKind) || !museToolNeedsPermission(taskKind)) return
-        const allowance = this.approvedToolAllowances.get(session.id) ?? 0
-        if (allowance > 0) {
-          if (allowance === 1) this.approvedToolAllowances.delete(session.id)
-          else this.approvedToolAllowances.set(session.id, allowance - 1)
-          return
+        const payloadType = envelope?.['payload_type']
+        const payload = record(envelope?.['payload'])
+
+        if (options.settings.permissionLevel !== 'full_access' && payloadType === 'task.lifecycle.proposed') {
+          const event = record(payload?.['event'])
+          const taskId = stringValue(payload?.['task_id'])
+          const taskKind = museToolName(event?.['task_kind'], 'task_kind')
+          if (taskId && taskKind && !isMuseSubagentSpawn(taskKind) && museToolNeedsPermission(taskKind)) {
+            const allowance = this.approvedToolAllowances.get(session.id) ?? 0
+            if (allowance > 0) {
+              if (allowance === 1) this.approvedToolAllowances.delete(session.id)
+              else this.approvedToolAllowances.set(session.id, allowance - 1)
+            } else {
+              turnState.gatedTaskIds.add(taskId)
+              turnState.expectsProcessStop = true
+              this.stopActiveProcess(session.id)
+              return
+            }
+          }
         }
-        turnState.gatedTaskIds.add(taskId)
-        turnState.expectsProcessStop = true
-        this.stopActiveProcess(session.id)
+
+        // A tool call just settled (its authoritative completion signal) — if a
+        // steer is queued and no other tool call is still in flight, this is
+        // the safe boundary to deliver it at.
+        if (payloadType === 'tool.result') {
+          const callId = stringValue(payload?.['call_id'])
+          const settlingTaskId = callId ? turnState.toolByCall.get(callId) : undefined
+          const stillActive = [...turnState.tools.entries()].some(
+            ([taskId, tool]) =>
+              taskId !== settlingTaskId &&
+              !turnState.gatedTaskIds.has(taskId) &&
+              (tool.status === 'pending' || tool.status === 'running')
+          )
+          if (!stillActive) this.deliverPendingSteers(session.id)
+        }
       },
       suppressIdle: () => turnState.promotedInteractions.size > 0,
       isExpectedExit: () => turnState.expectsProcessStop,
-      onProcessExit: () => this.approvedToolAllowances.delete(session.id)
+      onProcessExit: () => {
+        this.approvedToolAllowances.delete(session.id)
+        // Fallback for turns that never produced a tool-call boundary (a
+        // plain-text reply, or the process exiting before one settled) — a
+        // steer queued against this turn would otherwise never be delivered.
+        this.deliverPendingSteers(session.id)
+      }
     }
+  }
+
+  override async steerPrompt(projectPath: string, options: SteerPromptOptions): Promise<void> {
+    const turnState = this.turnStates.get(options.sessionId)
+    const hasActiveTool = turnState
+      ? [...turnState.tools.values()].some(
+          (tool) =>
+            !turnState.gatedTaskIds.has(tool.taskId) &&
+            (tool.status === 'pending' || tool.status === 'running')
+        )
+      : false
+    if (!hasActiveTool) {
+      await super.steerPrompt(projectPath, options)
+      return
+    }
+    const queue = this.pendingSteers.get(options.sessionId) ?? []
+    queue.push({ projectPath, options })
+    this.pendingSteers.set(options.sessionId, queue)
+  }
+
+  /** Deliver every steer queued for a session as one merged, deferred steer. */
+  private deliverPendingSteers(sessionId: string): void {
+    const queue = this.pendingSteers.get(sessionId)
+    if (!queue || queue.length === 0) return
+    this.pendingSteers.delete(sessionId)
+    const last = queue[queue.length - 1]
+    const merged: SteerPromptOptions = {
+      ...last.options,
+      text: queue.map((entry) => entry.options.text).join('\n\n'),
+      attachments: queue.flatMap((entry) => entry.options.attachments)
+    }
+    super.steerPrompt(last.projectPath, merged).catch((error: unknown) => {
+      Logger.error(`Muse deferred steer failed for session ${sessionId}:`, error)
+    })
   }
 
   override async replyPermission(
