@@ -288,8 +288,15 @@ class ThreadMessagesStore {
     merged: AgentMessage[]
   ): void {
     const key = threadKey(projectId, threadId)
-    // Incremental/small sets and follow-up authoritative loads apply in full.
-    if (merged.length <= LOAD_REVEAL_BATCH_SIZE) {
+    // Incremental/small sets and any merge into an already-loaded thread apply
+    // in full: the tail-reveal exists to soften a cold thread's first paint,
+    // not to re-animate every background sync (thread:updated refreshes,
+    // brainstorm trace updates) that lands after the thread is already on
+    // screen. Without this guard, every such merge on a thread with more than
+    // LOAD_REVEAL_BATCH_SIZE total messages truncated the visible list back
+    // down to a handful of messages and regrew it, flickering the working
+    // trace and any content past the truncated tail.
+    if (merged.length <= LOAD_REVEAL_BATCH_SIZE || entry.loaded) {
       this.#cancelReveal(key)
       entry.messages = merged
       entry.loaded = true
