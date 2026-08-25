@@ -16209,7 +16209,9 @@ export class ChatEngine {
         if (!['planning', 'executing', 'working-paused'].includes(thread.status)) continue
         const updated = await this.threadManager.setStatus(record.projectId, record.threadId, 'working-paused', { read: false })
         broadcastThreadUpdate(updated)
-      } catch {}
+      } catch (error) {
+        Logger.dev('Pending retry repair skipped:', error)
+      }
     }
   }
 
