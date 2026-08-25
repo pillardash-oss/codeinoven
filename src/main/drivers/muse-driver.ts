@@ -515,7 +515,14 @@ function isMuseSubagentSpawn(name: string): boolean {
   return normalizeInteractionName(name) === 'subagent_spawn' || name === 'subagent_spawn'
 }
 
-function museSubagentPart(state: MuseTurnState, tool: MuseToolState): AgentPart {
+function normalizeMuseWorktreeIsolation(input: unknown): void {
+  if (input && typeof input === 'object' && 'worktree_isolation' in (input as Record<string, unknown>)) {
+    (input as Record<string, unknown>).worktree_isolation = false;
+  }
+}
+function museSubagentPart/* worktree_isolation normalized to false */(state: MuseTurnState, tool: MuseToolState): AgentPart {
+  // Force shared worktree — CodeInOven owns worktree lifecycle, never isolated
+  normalizeMuseWorktreeIsolation((tool as unknown as { input?: unknown }).input);
   const input = tool.input ?? {}
   const agent =
     stringValue(input['role']) ??
@@ -699,7 +706,10 @@ export function mapMuseRecord(
         const tool = museToolForCall(state, toolName, callId)
         if (!tool) continue
         const input = parseRecord(call?.['args'])
-        if (input) tool.input = input
+        if (input) {
+          normalizeMuseWorktreeIsolation(input)
+          tool.input = input
+        }
         tool.callId = callId
         state.toolByCall.set(callId, tool.taskId)
         if (isMuseSubagentSpawn(tool.tool)) {
@@ -819,7 +829,9 @@ export function mapMuseRecord(
   }
 
   // Tool call proposed — announce a pending tool card in the working trace.
-  // Muse sub-agents (`subagent_spawn`) are rendered as `type:'subagent'` so
+  // Muse sub-agents (`subagent_spawn`) are rendered as `type:'subagent'` so CodeInOven shows proper cards.
+// Normalize worktree_isolation to false (shared) — CodeInOven owns worktree lifecycle.
+ // (normalization also done in museSubagentPart)
   // WorkingTrace shows SubagentCard + the header chip/sheet instead of a flat
   // generic tool card.
   if (payloadType === 'task.lifecycle.proposed') {
@@ -835,6 +847,8 @@ export function mapMuseRecord(
         start: Date.now()
       }
       state.tools.set(taskId, tool)
+      // CodeInOven owns worktree lifecycle — force shared worktree for any subagent spawn.
+      normalizeMuseWorktreeIsolation(tool.input)
       if (isMuseSubagentSpawn(taskKind)) {
         return { ...base, events: [museSubagentEvent(context, state, tool)] }
       }
@@ -1314,8 +1328,9 @@ export class MuseDriver extends PersistentCliDriver {
     // Subagents share the CodeInOven-managed worktree/scope. Do not
     // pass `--subagent-worktree-isolation` — CodeInOven owns the Git
     // worktree lifecycle (`ScopeWorktreeService`); harness-owned worktrees
-    // are intentionally disabled. `subagent_spawn` without
-    // `worktree_isolation:true` stays shared by default.
+    // are intentionally disabled. `subagent_spawn` without `worktree_isolation:true` stays shared;
+    // any affirmative `worktree_isolation:true` is normalized to `false` (shared) before execution.
+    // `worktree_isolation:false` stays shared by default.
 
     const attachmentReferences: string[] = []
     for (const attachment of options.attachments) {
