@@ -997,12 +997,33 @@ export function mapMuseRecord(
     return { ...base, events: [museToolEvent(context, state, tool)] }
   }
 
+  // Muse Spark always reasons; ensure the working trace shows a ThinkingBlock
+  // immediately when the run starts so the user sees "Thinking …" even though
+  // CLI 0.2.1 inlines reasoning into `run.output.delta` text rather than a
+  // separate reasoning delta channel. The block stays active until the terminal
+  // record closes it.
+  if (payloadType === 'run.lifecycle.started') {
+    if (!state.reasoningTime?.start) state.reasoningTime = { start: Date.now() }
+    // Emit an initial empty reasoning part so WorkingTrace renders ThinkingBlock
+    // during the busy phase. Subsequent reasoning deltas (if any) append to it.
+    if (!state.parts.some((p) => p.type === 'reasoning')) {
+      const part = reasoningPart(state)
+      upsertPart(state, part)
+      return {
+        ...base,
+        messages: [museMessage(state)],
+        events: [{ type: 'message.part.updated', sessionId: context.sessionId, part }]
+      }
+    }
+  }
+
   // Streaming reasoning trace — Muse Spark reasoning effort produces
   // provider-side thinking that the CLI surfaces as a separate delta channel.
   // The current CLI (0.2.1) inlines reasoning into `run.output.delta` text for
   // most turns, but any future `*reasoning*` / `*thinking*` payload is captured
   // here so the working trace renders a distinct `ThinkingBlock` instead of
-  // silently dropping the trace.
+  // silently dropping the trace. Also handles generic payloads that carry
+  // `reasoning`/`thinking` keys regardless of payload_type.
   if (
     payloadType === 'run.output.reasoning.delta' ||
     payloadType === 'run.reasoning.delta' ||
@@ -1062,6 +1083,36 @@ export function mapMuseRecord(
     return base
   }
 
+  // Generic reasoning payload — captures any envelope that carries reasoning/
+  // thinking content even when payload_type does not contain those words.
+  {
+    const genericDelta =
+      stringValue(payload['reasoning']) ??
+      stringValue(payload['thinking']) ??
+      stringValue(payload['reasoning_text']) ??
+      stringValue(payload['reasoning_content']) ??
+      stringValue(record(payload['event'])?.['reasoning']) ??
+      stringValue(record(payload['event'])?.['thinking'])
+    const genericSummary = stringValue(payload['reasoning_summary']) ?? stringValue(payload['summary'])
+    if (
+      genericDelta &&
+      payloadType !== 'run.output.delta' &&
+      payloadType !== 'run.terminal.completed' &&
+      payloadType !== 'run.lifecycle.started'
+    ) {
+      if (!state.reasoningTime?.start) state.reasoningTime = { start: Date.now() }
+      state.reasoning += genericDelta
+      if (genericSummary) state.reasoningSummary = genericSummary
+      const part = reasoningPart(state)
+      upsertPart(state, part)
+      return {
+        ...base,
+        messages: [museMessage(state)],
+        events: [{ type: 'message.part.updated', sessionId: context.sessionId, part }]
+      }
+    }
+  }
+
   // Turn end — `payload.terminal` is `completed` on success, anything else is an
   // error. `payload.text` is the authoritative final text.
   if (payloadType === 'run.terminal.completed') {
@@ -1078,7 +1129,7 @@ export function mapMuseRecord(
       state.reasoning = finalReasoning
       state.reasoningTime = { ...(state.reasoningTime ?? {}), end: Date.now() }
       upsertPart(state, reasoningPart(state))
-    } else if (state.reasoning && !state.reasoningTime?.end) {
+    } else if ((state.reasoning || state.reasoningTime?.start) && !state.reasoningTime?.end) {
       state.reasoningTime = { ...(state.reasoningTime ?? {}), end: Date.now() }
       upsertPart(state, reasoningPart(state))
     }
