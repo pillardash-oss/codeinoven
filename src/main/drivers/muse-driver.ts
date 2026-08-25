@@ -5,6 +5,8 @@ import type {
   AgentMessage,
   AgentPart,
   AgentProviderIssue,
+  AgentSubagentActivity,
+  AgentToolStatus,
   PermissionReply,
   ProviderCatalog,
   ProviderModel,
@@ -32,10 +34,12 @@ import { PersistentCliDriver } from './persistent-cli-driver'
 import type {
   GenerateTitleOptions,
   HarnessCapabilities,
-  SendPromptOptions
+  SendPromptOptions,
+  SteerPromptOptions
 } from './driver.interface'
 import type { StorageEngine } from '../storage/storage-engine'
 import { runHarnessCommand } from './harness-runtime'
+import { Logger } from '../system/logger'
 
 /**
  * Muse Code (Meta) headless integration notes.
@@ -508,6 +512,60 @@ function museCompactionResult(
   }
 }
 
+function isMuseSubagentSpawn(name: string): boolean {
+  return normalizeInteractionName(name) === 'subagent_spawn' || name === 'subagent_spawn'
+}
+
+function museSubagentPart(state: MuseTurnState, tool: MuseToolState): AgentPart {
+  const input = tool.input ?? {}
+  const agent =
+    stringValue(input['role']) ??
+    stringValue(input['subagent_type']) ??
+    stringValue(input['agent']) ??
+    tool.tool
+  const description =
+    stringValue(input['objective']) ??
+    stringValue(input['description']) ??
+    stringValue(input['task_name']) ??
+    stringValue(input['prompt']) ??
+    agent
+  const prompt = stringValue(input['objective']) ?? stringValue(input['prompt']) ?? stringValue(input['description'])
+  const childSessionId =
+    stringValue(input['subagent_id']) ??
+    stringValue(input['childSessionId']) ??
+    tool.callId ??
+    tool.taskId
+  const providerTaskId = tool.callId ?? tool.taskId
+  const background = input['background'] === true
+  const status = tool.status as AgentSubagentActivity['status']
+  const output = tool.output
+  const error = status === 'error' ? (output ?? 'Sub-agent task failed') : undefined
+  return {
+    type: 'subagent',
+    id: `muse-subagent-${tool.taskId}`,
+    messageID: state.messageId,
+    callID: tool.callId ?? tool.taskId,
+    activity: {
+      status,
+      agent,
+      description,
+      ...(prompt ? { prompt } : {}),
+      ...(childSessionId ? { childSessionId } : {}),
+      ...(providerTaskId ? { providerTaskId } : {}),
+      background,
+      ...(output ? { output } : {}),
+      ...(error ? { error } : {}),
+      time: { start: tool.start, ...(tool.end ? { end: tool.end } : {}) }
+    }
+  }
+}
+
+function museSubagentEvent(context: CliLineParseContext, state: MuseTurnState, tool: MuseToolState) {
+  const part = museSubagentPart(state, tool)
+  upsertPart(state, part)
+  return { type: 'message.part.updated' as const, sessionId: context.sessionId, part }
+}
+
 function museToolForCall(
   state: MuseTurnState,
   toolName: string,
@@ -645,7 +703,11 @@ export function mapMuseRecord(
         if (input) tool.input = input
         tool.callId = callId
         state.toolByCall.set(callId, tool.taskId)
-        events.push(museToolEvent(context, state, tool))
+        if (isMuseSubagentSpawn(tool.tool)) {
+          events.push(museSubagentEvent(context, state, tool))
+        } else {
+          events.push(museToolEvent(context, state, tool))
+        }
         if (
           tool.requiresPermission ||
           (tool.policyDecision &&
@@ -758,6 +820,9 @@ export function mapMuseRecord(
   }
 
   // Tool call proposed — announce a pending tool card in the working trace.
+  // Muse sub-agents (`subagent_spawn`) are rendered as `type:'subagent'` so
+  // WorkingTrace shows SubagentCard + the header chip/sheet instead of a flat
+  // generic tool card.
   if (payloadType === 'task.lifecycle.proposed') {
     const event = record(payload['event'])
     const taskKind = museToolName(event?.['task_kind'], 'task_kind')
@@ -771,6 +836,9 @@ export function mapMuseRecord(
         start: Date.now()
       }
       state.tools.set(taskId, tool)
+      if (isMuseSubagentSpawn(taskKind)) {
+        return { ...base, events: [museSubagentEvent(context, state, tool)] }
+      }
       if (tool.requiresPermission) {
         // Deliberately do NOT emit the permission card here: Muse streams the
         // command after `proposed` (`assistant_tool_calls_committed` /
@@ -829,6 +897,12 @@ export function mapMuseRecord(
         sideEffectEvents = [permissionEvent]
       }
     }
+    if (isMuseSubagentSpawn(tool.tool)) {
+      return {
+        ...base,
+        events: [museSubagentEvent(context, state, tool), ...sideEffectEvents]
+      }
+    }
     if (isQuestionToolName(tool.tool)) return base
     return {
       ...base,
@@ -881,6 +955,12 @@ export function mapMuseRecord(
         outputEvents = [permissionEvent]
       }
     }
+    if (isMuseSubagentSpawn(tool.tool)) {
+      return {
+        ...base,
+        events: [museSubagentEvent(context, state, tool), ...outputEvents]
+      }
+    }
     if (isQuestionToolName(tool.tool)) return base
     return {
       ...base,
@@ -912,6 +992,9 @@ export function mapMuseRecord(
     }
     tool.end = Date.now()
     if (isQuestionToolName(tool.tool)) return base
+    if (isMuseSubagentSpawn(tool.tool)) {
+      return { ...base, events: [museSubagentEvent(context, state, tool)] }
+    }
     return { ...base, events: [museToolEvent(context, state, tool)] }
   }
 
@@ -1164,6 +1247,13 @@ export class MuseDriver extends PersistentCliDriver {
       '0.95'
     )
 
+    // Enable native worktree-isolated subagents so `subagent_spawn` with
+    // `worktree_isolation: true` is accepted. This is a compatibility flag;
+    // isolation still requires the child request (`worktree_isolation:true`) —
+    // omission stays shared. Passing it here unlocks the fanout contract
+    // described in the cookbook without requiring a separate launch flag.
+    args.push('--subagent-worktree-isolation')
+
     const attachmentReferences: string[] = []
     for (const attachment of options.attachments) {
       if (attachment.mime.toLocaleLowerCase().startsWith('image/')) {
@@ -1227,7 +1317,7 @@ export class MuseDriver extends PersistentCliDriver {
         const event = record(payload?.['event'])
         const taskId = stringValue(payload?.['task_id'])
         const taskKind = museToolName(event?.['task_kind'], 'task_kind')
-        if (!taskId || !taskKind || !museToolNeedsPermission(taskKind)) return
+        if (!taskId || !taskKind || isMuseSubagentSpawn(taskKind) || !museToolNeedsPermission(taskKind)) return
         const allowance = this.approvedToolAllowances.get(session.id) ?? 0
         if (allowance > 0) {
           if (allowance === 1) this.approvedToolAllowances.delete(session.id)
