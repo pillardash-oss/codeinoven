@@ -1148,8 +1148,8 @@ export class SpeechService {
       throw new Error('Model download is already active.')
     const artifact = this.requireCatalog().artifacts.find((item) => item.id === artifactId)
     if (!artifact) throw new Error('Model artifact was not found.')
-    if (artifact.qualification.status !== 'qualified') {
-      throw new Error('Model artifact has not passed qualification and cannot be downloaded.')
+    if (artifact.qualification.status === 'retired') {
+      throw new Error('Retired model artifacts cannot be downloaded.')
     }
     const controller = new AbortController()
     this.downloadControllers.set(artifactId, controller)
@@ -1316,8 +1316,8 @@ export class SpeechService {
       if (catalogArtifact.runtime !== runtime || catalogArtifact.capability !== capability) {
         throw new Error('The selected model is incompatible with this operation.')
       }
-      if (catalogArtifact.qualification.status !== 'qualified')
-        throw new Error('The selected model is not qualified.')
+      if (catalogArtifact.qualification.status === 'retired')
+        throw new Error('The selected model is retired.')
       const installed = this.installed.artifacts.find(
         (item) => item.artifactId === artifactId && item.available
       )
@@ -1424,7 +1424,7 @@ export class SpeechService {
       (candidate) =>
         candidate.capability === 'cleanup' &&
         candidate.runtime === runtime &&
-        candidate.qualification.status === 'qualified'
+        candidate.qualification.status !== 'retired'
     )
     if (!artifact) return null
     const installed = this.installed.artifacts.find(

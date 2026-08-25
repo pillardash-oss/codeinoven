@@ -511,7 +511,7 @@ class SpeechController {
       if (chosenInstalled) {
         const catalogHit = catalog.value.artifacts.find((c) => c.id === chosenInstalled.artifactId)
         if (catalogHit) {
-          if (catalogHit.capability === 'asr' && catalogHit.qualification.status === 'qualified')
+          if (catalogHit.capability === 'asr' && catalogHit.qualification.status !== 'retired')
             return { runtime: chosenInstalled.runtime, artifact: catalogHit }
         } else if (chosenInstalled.capability !== 'tts') {
           // Imported model — synthesize a pseudo-artifact; service will handle directory
@@ -551,10 +551,10 @@ class SpeechController {
     const artifact = catalog.value.artifacts.find(
       (candidate) =>
         candidate.capability === 'asr' &&
-        candidate.qualification.status === 'qualified' &&
+        candidate.qualification.status !== 'retired' &&
         installedIds.has(candidate.id)
     )
-    if (!artifact) throw new Error(`Install a qualified speech-to-text model in Sound settings.`)
+    if (!artifact) throw new Error(`Install a speech-to-text model in Sound settings.`)
     return { runtime: artifact.runtime, artifact }
   }
 
@@ -647,7 +647,7 @@ class SpeechController {
       if (chosenInstalled) {
         const catalogHit = catalog.value.artifacts.find((c) => c.id === chosenInstalled.artifactId)
         if (catalogHit) {
-          if (catalogHit.capability === 'tts' && catalogHit.qualification.status === 'qualified')
+          if (catalogHit.capability === 'tts' && catalogHit.qualification.status !== 'retired')
             return { runtime: chosenInstalled.runtime, artifact: catalogHit }
         } else {
           const pseudo = {
@@ -686,10 +686,10 @@ class SpeechController {
     const artifact = catalog.value.artifacts.find(
       (item) =>
         item.capability === 'tts' &&
-        item.qualification.status === 'qualified' &&
+        item.qualification.status !== 'retired' &&
         installed.has(item.id)
     )
-    if (!artifact) throw new Error(`Install a qualified text-to-speech model.`)
+    if (!artifact) throw new Error(`Install a text-to-speech model.`)
     return { runtime: artifact.runtime, artifact }
   }
 

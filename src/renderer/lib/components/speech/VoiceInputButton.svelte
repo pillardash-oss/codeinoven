@@ -32,7 +32,7 @@
     )
     return catalog.artifacts.some(
       (a) =>
-        a.capability === 'asr' && a.qualification.status === 'qualified' && installedIds.has(a.id)
+        a.capability === 'asr' && a.qualification.status !== 'retired' && installedIds.has(a.id)
     )
   })
 
@@ -61,7 +61,7 @@
         fetchedHasInstalledAsr = catalog.value.artifacts.some(
           (artifact) =>
             artifact.capability === 'asr' &&
-            artifact.qualification.status === 'qualified' &&
+            artifact.qualification.status !== 'retired' &&
             installedIds.has(artifact.id)
         )
       }
