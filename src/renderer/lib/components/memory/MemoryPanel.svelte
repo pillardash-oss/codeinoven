@@ -275,6 +275,7 @@
         nextEntries = []
         nextProposals = []
       }
+      nextEntries = [...nextEntries].sort((a, b) => b.updatedAt - a.updatedAt)
       if (request !== loadRequest) return
       entries = nextEntries
       loadedEntries = nextEntries
