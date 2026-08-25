@@ -129,6 +129,23 @@ class ThreadMessagesStore {
     return this.threads.get(threadKey(projectId, threadId))?.messages ?? EMPTY_MESSAGES
   }
 
+  /** Seed a freshly created empty thread as instantly loaded so the
+   *  composer never shows "Loading conversation..." and typing is
+   *  available on the very first frame. Idempotent and never clobbers
+   *  an already-loaded thread with history. */
+  seedEmpty(projectId: string, threadId: string): void {
+    const entry = this.entry(projectId, threadId)
+    if (entry.loaded) return
+    // A new thread has no messages; mark it loaded immediately so
+    // ThreadView can render the composer without waiting for the
+    // bounded mirror IPC round-trip.
+    entry.messages = []
+    entry.loaded = true
+    entry.loading = false
+    entry.error = ''
+    this.#notify(projectId, threadId)
+  }
+
   /** Whether the thread has finished its first load. */
   loaded(projectId: string, threadId: string): boolean {
     return this.threads.get(threadKey(projectId, threadId))?.loaded ?? false

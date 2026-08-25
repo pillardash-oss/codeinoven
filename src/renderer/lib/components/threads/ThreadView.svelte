@@ -2971,6 +2971,48 @@
 
   async function loadLocal(attempt = 0): Promise<void> {
     const { projectId, id } = thread
+    // A freshly created empty thread is seeded as loaded in Workspace
+    // before ThreadView mounts — don't show "Loading conversation..."
+    // and don't block the composer with a mirror round-trip that will
+    // just return an empty page. Config/status still load in the
+    // background without ever hiding the editor.
+    const alreadySeeded = threadMessages.loaded(projectId, id)
+    if (alreadySeeded && threadMessages.messages(projectId, id).length === 0) {
+      try {
+        const [threadData, config] = await Promise.all([
+          invoke('thread:get', projectId, id),
+          invoke('config:get')
+        ])
+        if (!alive) return
+        olderMessagesAvailable = false
+        initializeHistoryWindow(0)
+        if (threadData?.settings) {
+          settings = chatMode
+            ? normalizeChatSettings(chatSettings.initialFor(threadData, chatEffectiveSettings()))
+            : threadSettings.initialFor(threadData)
+        }
+        agentDefaults = config.agentDefaults
+        imageDescriptorAskAgain = config.imageDescriptorAskAgain === true
+        autoRetryAfterReset = config.autoRetryAfterReset === true
+        auditSettings = auditSettingsForThread()
+        if (threadData?.sessionId) {
+          threadMessages.setSessionId(projectId, id, threadData.sessionId)
+        }
+        syncOpenSubagentTabs()
+        if (!liveStatusKnown) {
+          restoreWorkingState(
+            threadData?.status ?? thread.status,
+            (threadData?.auditState ?? thread.auditState) === 'running'
+          )
+        }
+        seedContextUsageSnapshot(threadData?.contextUsage)
+        restoreQueuedMessage()
+        restoreResponseReferences()
+      } catch {
+        if (attempt === 0) return loadLocal(1)
+      }
+      return
+    }
     try {
       const [threadData, page, config] = await Promise.all([
         invoke('thread:get', projectId, id),

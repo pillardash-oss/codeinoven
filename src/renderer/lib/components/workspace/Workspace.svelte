@@ -2355,22 +2355,23 @@
       if (workspaceState.selectedThread?.id === existing.id) {
         workspaceState.requestFocusComposer()
       } else {
-        const thread = activeThread?.settings
-          ? await invoke(
-              'thread:updateSettings',
-              existing.projectId,
-              existing.id,
-              inheritedSettings
-            )
-          : existing
+        // Open instantly — settings/lifecycle sync is best-effort off the critical path
+        const needsSettingsUpdate = Boolean(activeThread?.settings)
+        const thread = existing
         upsertThreadInList(thread)
-        if (activeThread) {
-          await inheritEngineeringLifecycle(project.id, activeThread.id, thread.id)
-        }
+        threadMessages.seedEmpty(thread.projectId, thread.id)
         workspaceState.openThread(thread, project)
         if (scopeBucketId) {
           scopeState.updateThread(thread)
           scopeState.showSidebarForThread(thread, scopeBucketId)
+        }
+        if (needsSettingsUpdate) {
+          void invoke('thread:updateSettings', existing.projectId, existing.id, inheritedSettings)
+            .then((updated) => upsertThreadInList(updated))
+            .catch(() => {})
+        }
+        if (activeThread) {
+          void inheritEngineeringLifecycle(project.id, activeThread.id, thread.id)
         }
       }
       return
@@ -2387,15 +2388,18 @@
       ? threadWithInheritedSettings(created, inheritedSettings)
       : created
     upsertThreadInList(thread)
+    threadMessages.seedEmpty(thread.projectId, thread.id)
     expandedFolders.add(project.id)
     if (scopeBucketId) {
       scopeState.updateThread(thread)
       scopeState.showSidebarForThread(thread, scopeBucketId)
     }
-    if (activeThread) {
-      await inheritEngineeringLifecycle(project.id, activeThread.id, thread.id)
-    }
+    // Open instantly — lifecycle/settings persistence is off the critical path
+    // so typing and voice are never blocked by IPC or git work.
     workspaceState.openThread(thread, project)
+    if (activeThread) {
+      void inheritEngineeringLifecycle(project.id, activeThread.id, thread.id)
+    }
     if (activeThread?.settings) {
       void persistInheritedThreadSettings(thread, inheritedSettings).catch((error) => {
         reportError(error, 'The inherited thread settings could not be saved.')

@@ -6688,12 +6688,17 @@ export function registerIpcHandlers(
           }
         }
         await finalize()
+        // Broadcast immediately so the new thread opens instantly — branch
+        // detection runs afterwards and updates the row without ever blocking
+        // typing, voice, or the "Loading conversation..." state.
+        broadcastThreadUpdate(thread)
         if (thread.workingDirectory) {
           try {
             const branch = await repositoryService.getCurrentBranch(thread.workingDirectory)
             if (branch) {
               await threadManager.setBranch(thread.projectId, thread.id, branch)
               thread.branch = branch
+              broadcastThreadUpdate(thread)
             }
           } catch (error) {
             Logger.error('New thread branch detection failed', {
@@ -6702,7 +6707,6 @@ export function registerIpcHandlers(
             })
           }
         }
-        broadcastThreadUpdate(thread)
       },
       () => {
         broadcastThreadDeleted(thread)
