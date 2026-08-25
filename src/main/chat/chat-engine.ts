@@ -15393,7 +15393,7 @@ export class ChatEngine {
         event.status.state === 'waiting' &&
         eventOwner &&
         !eventOwner.ephemeral &&
-        event.status.issue.retryable
+        (event.status.issue.retryable || isUsageResetWaitIssue(event.status.issue))
       ) {
         const retryAt = event.status.issue.retryAt
         const hasFiniteRetryAt = typeof retryAt === 'number' && Number.isFinite(retryAt)
@@ -16195,23 +16195,90 @@ export class ChatEngine {
   /** Repair stale working rows for scheduler-restored retries so UI shows Waiting to retry immediately on launch. */
   async repairPendingRetryThreadStatuses(): Promise<void> {
     const scheduler = this.retryScheduler
-    if (!scheduler) return
-    // Access pending records via public getter; iterate defensively.
-    const pending = (scheduler as unknown as { pending: Map<string, { projectId: string; threadId: string }> })
-    const map = pending.pending
-    if (!map || map.size === 0) return
-    for (const record of map.values()) {
+    // 1) Repair threads that have a persisted scheduler pending (finite retryAt) — original path.
+    if (scheduler) {
       try {
-        const thread = await this.threadManager.getThread(record.projectId, record.threadId)
-        if (!thread) continue
-        if (thread.status === 'working-paused') continue
-        // Only repair threads that look like they were left in a working state
-        if (!['planning', 'executing', 'working-paused'].includes(thread.status)) continue
-        const updated = await this.threadManager.setStatus(record.projectId, record.threadId, 'working-paused', { read: false })
-        broadcastThreadUpdate(updated)
+        const pending = (scheduler as unknown as { pending: Map<string, { projectId: string; threadId: string }> })
+        const map = pending.pending
+        if (map && map.size > 0) {
+          for (const record of map.values()) {
+            try {
+              const thread = await this.threadManager.getThread(record.projectId, record.threadId)
+              if (!thread) continue
+              if (thread.status === 'working-paused') continue
+              if (!['planning', 'executing', 'working-paused'].includes(thread.status)) continue
+              const updated = await this.threadManager.setStatus(record.projectId, record.threadId, 'working-paused', { read: false })
+              broadcastThreadUpdate(updated)
+            } catch (error) {
+              Logger.dev('Pending retry repair skipped:', error)
+            }
+          }
+        }
       } catch (error) {
-        Logger.dev('Pending retry repair skipped:', error)
+        Logger.dev('Pending retry repair (scheduler map) skipped:', error)
       }
+    }
+
+    // 2) Repair orphaned working threads that never got a scheduler record (missing/beyond-6h retryAt,
+    // stale rows from before the fix, or off-first-page threads like ba9a2c59...). Scan DB directly
+    // so pagination cannot hide them, and infer a usage-reset wait from the last persisted error.
+    try {
+      const activeRows = this.database.all<{ id: string; project_id: string; session_id: string | null; status: string }>(
+        `SELECT id, project_id, session_id, status FROM threads WHERE archived = 0 AND status IN ('planning', 'executing')`
+      )
+      if (!activeRows || activeRows.length === 0) return
+      for (const row of activeRows) {
+        // Already covered by scheduler pending — skip to avoid duplicate work.
+        if (row.session_id && scheduler?.getPendingRetry(row.session_id)) continue
+        try {
+          const thread = await this.threadManager.getThread(row.project_id, row.id)
+          if (!thread) continue
+          if (thread.status === 'working-paused') continue
+          // Only threads that still look actively working should be considered.
+          if (!['planning', 'executing'].includes(thread.status)) continue
+
+          // Look for the last persisted provider error for this thread.
+          let lastError: string | null = null
+          try {
+            const errorRow = this.database.get<{ error: string | null }>(
+              `SELECT error FROM agent_messages WHERE thread_id = ? AND error IS NOT NULL ORDER BY created_at DESC LIMIT 1`,
+              row.id
+            )
+            if (errorRow?.error) lastError = errorRow.error
+          } catch {
+            // Message table may be empty or missing — fall through to next check.
+          }
+
+          // Fallback: also check in-memory session status if present (fresh failure before DB flush).
+          if (!lastError && row.session_id) {
+            const liveIssue = this.sessionStatuses.get(row.session_id)?.state === 'error'
+              ? (this.sessionStatuses.get(row.session_id) as { issue?: { message?: string } })?.issue?.message ?? null
+              : this.sessionStatuses.get(row.session_id)?.state === 'waiting'
+                ? (this.sessionStatuses.get(row.session_id) as { issue?: { message?: string } })?.issue?.message ?? null
+                : null
+            if (liveIssue) lastError = liveIssue
+          }
+
+          if (!lastError) continue
+          const kind = classifyProviderIssue(lastError)
+          const retryable = kind !== 'billing'
+          // Treat quota/rate_limit/provider_unavailable(retryable) as a retry-paused wait,
+          // even when retryAt was never derived — this covers ba9a2c59... (>6h/missing retryAt).
+          if (!isUsageResetWaitIssue({ kind, retryable })) continue
+
+          const updated = await this.threadManager.setStatus(row.project_id, row.id, 'working-paused', { read: false })
+          broadcastThreadUpdate(updated)
+          Logger.info('Repaired orphaned working thread to Waiting to retry (no scheduler record)', {
+            projectId: row.project_id,
+            threadId: row.id,
+            kind
+          })
+        } catch (error) {
+          Logger.dev('Orphaned working repair skipped:', error)
+        }
+      }
+    } catch (error) {
+      Logger.dev('Orphaned working scan skipped:', error)
     }
   }
 
