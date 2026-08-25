@@ -910,7 +910,7 @@ export class MuseDriver extends PersistentCliDriver {
     sessionStatus: false,
     contextUsage: false,
     compaction: false,
-    subagents: false,
+    subagents: true,
     nativeUtilities: []
   }
 
@@ -988,6 +988,8 @@ export class MuseDriver extends PersistentCliDriver {
     } else if (options.settings.permissionLevel === 'full_access') {
       // Full Access trusts the workspace and bypasses approval and the sandbox.
       args.push('--yolo')
+    } else {
+      args.push('--disable-approval')
     }
 
     const attachmentReferences: string[] = []
