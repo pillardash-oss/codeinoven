@@ -102,6 +102,20 @@ class SpeechController {
   private stopPromise: Promise<void> | null = null
   private sound = structuredClone(DEFAULT_SPEECH_SETTINGS)
 
+  constructor() {
+    if (typeof window !== 'undefined') {
+      window.addEventListener('keydown', this.handleGlobalKeydown, true)
+    }
+  }
+
+  private readonly handleGlobalKeydown = (event: KeyboardEvent): void => {
+    if (event.key !== 'Escape' || event.defaultPrevented) return
+    if (this.state.state !== 'recording') return
+    event.preventDefault()
+    event.stopPropagation()
+    void this.stop()
+  }
+
   isActiveTarget(targetId: string): boolean {
     return 'targetId' in this.state && this.state.targetId === targetId
   }

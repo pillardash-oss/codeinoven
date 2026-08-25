@@ -168,7 +168,12 @@
     aria-label={label}
     aria-pressed={belongsHere && speechController.state.state === 'recording'}
     disabled={disabled || anotherTargetActive || action === 'wait'}
-    onpointerdown={prepareTarget}
+    onpointerdown={(event) => {
+      // Keep the editor focused while the pointer activates recording. The
+      // target still captures its value and caret before the click is handled.
+      event.preventDefault()
+      prepareTarget()
+    }}
     onkeydown={(event) => {
       if (event.key === 'Enter' || event.key === ' ') prepareTarget()
     }}
