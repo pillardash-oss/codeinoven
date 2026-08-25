@@ -58,6 +58,10 @@ import { runHarnessCommand } from './harness-runtime'
  *   - `task.lifecycle.proposed` → tool call announced (`event.task_kind` `tool.*`)
  *   - `task.lifecycle.side_effect_intent` → tool running + provider call id
  *   - `task.lifecycle.output` → tool chunk (bash `{command,description,output}`)
+ *   - `*.compaction*` / `runtime.session` `compaction` → harness-native context
+ *     compaction checkpoint (auto when soft/hard threshold hit). Mirrored as a
+ *     `compaction` part so `formatHistoryRecap` slices from that cut on the
+ *     next turn — seamless continuation.
  *   - `tool.result` → authoritative tool completion (`call_id`, `text`)
  * The provider session UUID is intentionally not reused. The live stream is
  * the sole source of provider events because native session logs are disabled.
@@ -466,6 +470,44 @@ function museToolEvent(context: CliLineParseContext, state: MuseTurnState, tool:
   return { type: 'message.part.updated' as const, sessionId: context.sessionId, part }
 }
 
+function museCompactionResult(
+  context: CliLineParseContext,
+  summary: string | undefined,
+  auto: boolean,
+  overflow?: boolean
+): CliLineParseResult {
+  const messageId = `muse-compaction-${context.sessionId}-${Date.now()}`
+  const fallbackSummary =
+    summary ??
+    'Automatic context compaction by Muse — older history summarized per summary-preserved-suffix/v1; next turn continues seamlessly from this checkpoint with preserved suffix.'
+  const part: Extract<AgentPart, { type: 'compaction' }> = {
+    type: 'compaction',
+    id: `${messageId}:compaction`,
+    messageID: messageId,
+    auto,
+    summary: fallbackSummary,
+    ...(overflow ? { overflow: true } : {})
+  }
+  return {
+    messages: [
+      {
+        id: messageId,
+        role: 'assistant',
+        origin: 'compaction',
+        visibility: 'working_trace',
+        parts: [part],
+        createdAt: Date.now(),
+        completedAt: Date.now(),
+        harnessId: 'muse'
+      }
+    ],
+    events: [
+      { type: 'message.part.updated', sessionId: context.sessionId, part },
+      { type: 'message.completed', sessionId: context.sessionId, messageId, compaction: true }
+    ]
+  }
+}
+
 function museToolForCall(
   state: MuseTurnState,
   toolName: string,
@@ -672,7 +714,47 @@ export function mapMuseRecord(
       const event = musePermissionEvent(context, state, exportedEvent)
       return event ? { ...base, events: [event] } : base
     }
+    if (kind && kind.toLowerCase().includes('compaction')) {
+      const summary = firstString(
+        stringValue(exportedEvent['summary']),
+        stringValue(exportedEvent['text']),
+        stringValue(exportedEvent['compact_summary']),
+        stringValue(exportedEvent['summary_text']),
+        stringValue(payload['summary']),
+        stringValue(payload['text'])
+      )
+      const trigger = stringValue(exportedEvent['trigger']) ?? stringValue(exportedEvent['kind'])
+      const auto = trigger ? trigger !== 'manual' : true
+      const overflow = trigger === 'auto'
+      return { ...base, ...museCompactionResult(context, summary, auto, overflow || undefined) }
+    }
     return base
+  }
+
+  // Harness-native context compaction — emitted by Muse when the soft/hard
+  // threshold fires (summary-preserved-suffix/v1). Mirror it as a CodeInOven
+  // compaction checkpoint so the next turn's history recap slices from that cut
+  // and continues seamlessly instead of replaying the full pre-compaction
+  // transcript.
+  if (payloadType && payloadType.toLowerCase().includes('compaction')) {
+    const eventRec = record(payload['event'])
+    const summary = firstString(
+      stringValue(payload['summary']),
+      stringValue(payload['text']),
+      stringValue(payload['compact_summary']),
+      stringValue(payload['summary_text']),
+      stringValue(eventRec?.['summary']),
+      stringValue(eventRec?.['text']),
+      stringValue(eventRec?.['compact_summary']),
+      stringValue(eventRec?.['summary_text'])
+    )
+    const trigger =
+      stringValue(payload['trigger']) ??
+      stringValue(eventRec?.['trigger']) ??
+      stringValue(eventRec?.['kind'])
+    const auto = trigger ? trigger !== 'manual' : true
+    const overflow = trigger === 'auto' || payloadType.toLowerCase().includes('overflow')
+    return { ...base, ...museCompactionResult(context, summary, auto, overflow || undefined) }
   }
 
   // Tool call proposed — announce a pending tool card in the working trace.
