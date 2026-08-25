@@ -3,6 +3,7 @@ import { reportErrorWithDetails } from '$lib/stores/app-errors.svelte'
 import { toast } from 'svelte-sonner'
 import { pauseCurrentHistoryAudio } from './global-audio'
 import { logRendererError } from '../system/renderer-logger'
+import { isRemotePwaRuntime } from '$lib/runtime-context'
 import type {
   SpeechDictationSpan,
   SpeechModelArtifact,
@@ -33,8 +34,9 @@ interface ActiveCapture {
   target: SpeechEditorTarget
   snapshot: SpeechEditorSnapshot
   scope: SpeechScope
-  recorder: MediaRecorder
-  stream: MediaStream
+  recorder: MediaRecorder | null
+  stream: MediaStream | null
+  native: boolean
   sessionId: string
   attemptId: string
   startedAt: number
@@ -144,6 +146,37 @@ class SpeechController {
     }
     this.state = { state: 'requesting-permission', targetId: target.id }
 
+    const nativeStarted = isRemotePwaRuntime()
+      ? null
+      : await invoke('speech:beginNativeCapture', scope).catch(() => null)
+    if (nativeStarted?.ok) {
+      const capture: ActiveCapture = {
+        target,
+        snapshot,
+        scope,
+        recorder: null,
+        stream: null,
+        native: true,
+        sessionId: nativeStarted.value.sessionId,
+        attemptId: nativeStarted.value.attemptId,
+        startedAt: performance.now(),
+        uploadTail: Promise.resolve(),
+        queuedChunks: 0,
+        uploadError: null
+      }
+      this.active = capture
+      this.state = {
+        state: 'recording',
+        targetId: target.id,
+        attemptId: capture.attemptId,
+        startedAt: Date.now(),
+        elapsedMs: 0
+      }
+      this.startElapsedTimer(capture)
+      this.playCue('started')
+      return
+    }
+
     let stream: MediaStream
     try {
       if (typeof navigator.mediaDevices?.getUserMedia !== 'function') {
@@ -190,6 +223,7 @@ class SpeechController {
         scope,
         recorder,
         stream,
+        native: false,
         sessionId: started.value.sessionId,
         attemptId: started.value.attemptId,
         startedAt: performance.now(),
@@ -232,8 +266,8 @@ class SpeechController {
       this.clearElapsedTimer()
       if (active) {
         active.uploadError ??= cause instanceof Error ? cause : new Error(errorMessage(cause))
-        await this.stopRecorder(active.recorder).catch(() => undefined)
-        for (const track of active.stream.getTracks()) track.stop()
+        if (active.recorder) await this.stopRecorder(active.recorder).catch(() => undefined)
+        if (active.stream) for (const track of active.stream.getTracks()) track.stop()
         await active.uploadTail.catch(() => undefined)
         await invoke('speech:failCapture', active.sessionId, errorMessage(cause)).catch(
           () => undefined
@@ -272,17 +306,27 @@ class SpeechController {
 
     let finalized = false
     try {
-      await this.stopRecorder(active.recorder)
-      for (const track of active.stream.getTracks()) track.stop()
-      await active.uploadTail
-      if (active.uploadError) throw active.uploadError
       const durationMs = Math.max(0, performance.now() - active.startedAt)
-      const finished = await invoke(
-        'speech:finishCapture',
-        active.sessionId,
-        Math.round(durationMs)
-      )
-      if (!finished.ok) throw new Error(finished.error.message)
+      if (active.native) {
+        const finished = await invoke(
+          'speech:finishNativeCapture',
+          active.sessionId,
+          Math.round(durationMs)
+        )
+        if (!finished.ok) throw new Error(finished.error.message)
+      } else {
+        if (!active.recorder || !active.stream) throw new Error('Browser capture is unavailable.')
+        await this.stopRecorder(active.recorder)
+        for (const track of active.stream.getTracks()) track.stop()
+        await active.uploadTail
+        if (active.uploadError) throw active.uploadError
+        const finished = await invoke(
+          'speech:finishCapture',
+          active.sessionId,
+          Math.round(durationMs)
+        )
+        if (!finished.ok) throw new Error(finished.error.message)
+      }
       finalized = true
       this.playCue('stopped')
       this.state = {
@@ -323,11 +367,13 @@ class SpeechController {
       await (
         finalized
           ? invoke('speech:markAttemptFailure', active.attemptId, message)
-          : invoke('speech:failCapture', active.sessionId, message)
+          : active.native
+            ? invoke('speech:failNativeCapture', active.sessionId, message)
+            : invoke('speech:failCapture', active.sessionId, message)
       ).catch(() => undefined)
       this.surfaceFailure(active.target.id, finalized ? 'transcription' : 'capture', cause)
     } finally {
-      for (const track of active.stream.getTracks()) track.stop()
+      if (active.stream) for (const track of active.stream.getTracks()) track.stop()
       this.active = null
     }
   }
@@ -454,9 +500,11 @@ class SpeechController {
 
   private queueChunk(active: ActiveCapture, blob: Blob): void {
     if (blob.size === 0) return
+    const recorder = active.recorder
+    if (!recorder) return
     active.queuedChunks += 1
-    if (active.queuedChunks >= PAUSE_UPLOAD_DEPTH && active.recorder.state === 'recording') {
-      active.recorder.pause()
+    if (active.queuedChunks >= PAUSE_UPLOAD_DEPTH && recorder.state === 'recording') {
+      recorder.pause()
     }
     active.uploadTail = active.uploadTail
       .then(async () => {
@@ -472,10 +520,10 @@ class SpeechController {
         active.queuedChunks -= 1
         if (
           active.queuedChunks < PAUSE_UPLOAD_DEPTH &&
-          active.recorder.state === 'paused' &&
+          recorder.state === 'paused' &&
           !active.uploadError
         ) {
-          active.recorder.resume()
+          recorder.resume()
         }
       })
   }

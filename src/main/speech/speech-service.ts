@@ -53,6 +53,7 @@ import { SpeechCleanupService } from './speech-cleanup-service'
 import { SpeechLearningService } from './speech-learning-service'
 import { normalizeSpeechMarkdown } from '../../lib/speech/tts-normalizer'
 import { TtsPlaybackService } from './tts-playback-service'
+import { NativeSpeechCapture } from './native-speech-capture'
 
 interface InstalledArtifactIndex {
   version: 1
@@ -63,6 +64,7 @@ interface SpeechServicePaths {
   catalogPath: string
   mlxWorkerPath: string
   coremlWorkerPath: string
+  nativeCaptureWorkerPath: string
 }
 
 export interface SpeechRemoteCleanupInput {
@@ -114,6 +116,7 @@ export class SpeechService {
     join(getConfigRoot(), 'speech', 'corrections.json')
   )
   private readonly playback = new TtsPlaybackService()
+  private readonly nativeCapture: NativeSpeechCapture
   private readonly confirmations = new Map<string, SpeechConfirmation>()
 
   constructor(
@@ -122,6 +125,7 @@ export class SpeechService {
     private readonly remoteCleanup?: SpeechRemoteCleanupExecutor,
     private readonly transcribeAudio?: SpeechAudioTranscribeExecutor
   ) {
+    this.nativeCapture = new NativeSpeechCapture(paths.nativeCaptureWorkerPath)
     this.storage = storage ?? new SpeechStorage()
     this.backends = new Map<SpeechRuntime, SpeechBackend>([
       ['sherpa-onnx', new SherpaSpeechBackend()],
@@ -204,6 +208,32 @@ export class SpeechService {
     return value
   }
 
+  async beginNativeCapture(scope: SpeechScope): Promise<SpeechCaptureSessionInfo> {
+    if (!(await this.nativeCapture.available())) {
+      throw new Error('Native microphone recording is unavailable on this device.')
+    }
+    const started = await this.storage.beginNativeCapture(scope)
+    try {
+      await this.nativeCapture.start(started.sessionId, started.stagingPath)
+    } catch (cause) {
+      await this.storage.failCapture(
+        started.sessionId,
+        this.asError(cause, 'capture-device-lost').message
+      )
+      throw cause
+    }
+    const value = {
+      sessionId: started.sessionId,
+      attemptId: started.attempt.id,
+      startedAt: started.attempt.createdAt
+    }
+    this.emit({
+      kind: 'capture',
+      capture: { state: 'recording', ...value }
+    })
+    return value
+  }
+
   async recordPermissionFailure(
     scope: SpeechScope,
     message: string
@@ -227,10 +257,28 @@ export class SpeechService {
     return attempt
   }
 
+  async finishNativeCapture(
+    sessionId: string,
+    durationMs: number
+  ): Promise<SpeechRecordingAttempt> {
+    await this.nativeCapture.stop(sessionId)
+    const attempt = await this.storage.finalizeCapture(sessionId, durationMs)
+    this.emit({
+      kind: 'capture',
+      capture: { state: 'stopping', sessionId, attemptId: attempt.id }
+    })
+    return attempt
+  }
+
   async failCapture(sessionId: string, message: string): Promise<SpeechRecordingAttempt> {
     const attempt = await this.storage.failCapture(sessionId, message)
     this.emit({ kind: 'history', attemptId: attempt.id, stage: 'failed' })
     return attempt
+  }
+
+  async failNativeCapture(sessionId: string, message: string): Promise<SpeechRecordingAttempt> {
+    await this.nativeCapture.stop(sessionId).catch(() => undefined)
+    return this.failCapture(sessionId, message)
   }
 
   async markAttemptFailure(attemptId: string, message: string): Promise<SpeechRecordingAttempt> {
@@ -1252,6 +1300,14 @@ export class SpeechService {
   async dispose(): Promise<void> {
     for (const controller of this.downloadControllers.values()) controller.abort()
     this.downloadControllers.clear()
+    const activeNativeSession = this.nativeCapture.activeSessionId
+    if (activeNativeSession) {
+      await this.failNativeCapture(
+        activeNativeSession,
+        'Recording stopped because the application shut down.'
+      ).catch(() => undefined)
+    }
+    await this.nativeCapture.dispose()
     await this.queue.dispose()
     await Promise.all([...this.backends.values()].map((backend) => backend.dispose()))
     await this.storage.dispose()

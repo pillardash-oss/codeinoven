@@ -33,12 +33,14 @@ function destructiveAction(value: unknown): SpeechDestructiveAction {
 }
 
 function speechCapability(value: unknown): SpeechCapability {
-  if (value !== 'asr' && value !== 'cleanup' && value !== 'tts') throw new RangeError('Speech capability is invalid.')
+  if (value !== 'asr' && value !== 'cleanup' && value !== 'tts')
+    throw new RangeError('Speech capability is invalid.')
   return value
 }
 
 function runtime(value: unknown): SpeechRuntime {
-  if (value !== 'mlx' && value !== 'sherpa-onnx' && value !== 'gguf' && value !== 'coreml') throw new RangeError('Speech runtime is invalid.')
+  if (value !== 'mlx' && value !== 'sherpa-onnx' && value !== 'gguf' && value !== 'coreml')
+    throw new RangeError('Speech runtime is invalid.')
   return value
 }
 
@@ -148,6 +150,9 @@ export function registerSpeechIpc(
       service.beginCapture(scope(rawScope), boundedString(rawMimeType, 'MIME type', 128))
     )
   )
+  ipcMain.handle('speech:beginNativeCapture', (_event, rawScope: unknown) =>
+    speechResult(() => service.beginNativeCapture(scope(rawScope)))
+  )
   ipcMain.handle(
     'speech:recordPermissionFailure',
     (_event, rawScope: unknown, rawMessage: unknown) =>
@@ -175,10 +180,28 @@ export function registerSpeechIpc(
       )
     )
   )
+  ipcMain.handle(
+    'speech:finishNativeCapture',
+    (_event, rawSessionId: unknown, rawDurationMs: unknown) =>
+      speechResult(() =>
+        service.finishNativeCapture(
+          entityId(rawSessionId, 'Native capture session id'),
+          boundedInteger(rawDurationMs, 'Recording duration', 0, Number.MAX_SAFE_INTEGER)
+        )
+      )
+  )
   ipcMain.handle('speech:failCapture', (_event, rawSessionId: unknown, rawMessage: unknown) =>
     speechResult(() =>
       service.failCapture(
         entityId(rawSessionId, 'Capture session id'),
+        boundedString(rawMessage, 'Capture failure', 1_000)
+      )
+    )
+  )
+  ipcMain.handle('speech:failNativeCapture', (_event, rawSessionId: unknown, rawMessage: unknown) =>
+    speechResult(() =>
+      service.failNativeCapture(
+        entityId(rawSessionId, 'Native capture session id'),
         boundedString(rawMessage, 'Capture failure', 1_000)
       )
     )
@@ -408,10 +431,13 @@ export function registerSpeechIpc(
       'speech:getCapabilities',
       'speech:getCatalog',
       'speech:beginCapture',
+      'speech:beginNativeCapture',
       'speech:recordPermissionFailure',
       'speech:appendCapture',
       'speech:finishCapture',
+      'speech:finishNativeCapture',
       'speech:failCapture',
+      'speech:failNativeCapture',
       'speech:markAttemptFailure',
       'speech:transcribe',
       'speech:transcribeAudioToLlm',

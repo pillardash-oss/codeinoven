@@ -589,7 +589,10 @@ async function bootPostPaintServices(): Promise<void> {
         : join(app.getAppPath(), 'resources/speech/runtime/darwin-arm64/mlx-worker'),
       coremlWorkerPath: app.isPackaged
         ? join(process.resourcesPath, 'speech/coreml-worker')
-        : join(app.getAppPath(), 'resources/speech/runtime/darwin-arm64/coreml-worker')
+        : join(app.getAppPath(), 'resources/speech/runtime/darwin-arm64/coreml-worker'),
+      nativeCaptureWorkerPath: app.isPackaged
+        ? join(process.resourcesPath, 'speech/speech-capture-worker')
+        : join(app.getAppPath(), 'resources/speech/runtime/darwin-arm64/speech-capture-worker')
     },
     undefined,
     (input) => chatEngine!.cleanupSpeechTranscript(input),
