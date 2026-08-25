@@ -204,11 +204,26 @@ class ThreadMessagesStore {
     this.#notify(projectId, threadId)
 
     try {
-      const serverMessages =
-        recentLimit === undefined
-          ? await invoke('agent:loadMessages', projectId, threadId)
-          : (await invoke('thread:loadMessages', projectId, threadId, undefined, recentLimit))
-              .messages
+      let serverMessages: AgentMessage[]
+      if (recentLimit === undefined) {
+        serverMessages = await invoke('agent:loadMessages', projectId, threadId)
+      } else {
+        const page = await invoke(
+          'thread:loadMessages',
+          projectId,
+          threadId,
+          undefined,
+          recentLimit
+        )
+        // The bounded page is a fast mirror read. A thread can legitimately
+        // have no mirror rows yet while its provider/session transcript is
+        // already available, so do not render a valid conversation as empty.
+        const pageHasAssistant = page.messages.some((message) => message.role === 'assistant')
+        serverMessages =
+          page.messages.length > 0 && pageHasAssistant
+            ? page.messages
+            : await invoke('agent:loadMessages', projectId, threadId)
+      }
       this.reconcile(projectId, threadId, serverMessages)
       entry.loaded = true
     } catch (err) {
