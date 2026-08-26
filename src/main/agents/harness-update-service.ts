@@ -198,6 +198,14 @@ export class HarnessUpdateService {
     }
 
     const currentVersion = provider.version ? extractVersion(provider.version) : undefined
+    if (provider.executionTarget?.kind === 'bundled') {
+      return this.settle(harnessId, {
+        ...base,
+        currentVersion,
+        state: 'current',
+        detail: 'Bundled with CodeInOven — updates with the app.'
+      })
+    }
     const source = UPDATE_SOURCES[harnessId]
     if (!source) {
       return this.settle(harnessId, {
@@ -250,6 +258,9 @@ export class HarnessUpdateService {
       throw new Error(`No self-update command is configured for harness: ${harnessId}`)
     }
     const provider = this.providers.getAll().find((candidate) => candidate.id === harnessId)
+    if (provider?.executionTarget?.kind === 'bundled') {
+      throw new Error(`${definition.name} is bundled with CodeInOven — it updates with the app.`)
+    }
     const prepared =
       provider?.executionTarget?.kind === 'wsl' && provider.resolvedPath
         ? prepareWslTerminalHandoff(

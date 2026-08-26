@@ -12,6 +12,10 @@ afterPack: scripts/native-splash/after-pack.js
 extraResources:
   - from: resources/speech/model-catalog.json
     to: speech/model-catalog.json
+  # The bundled Pi harness (see scripts/build-pi-harness.ts) is pure JS with
+  # no native addons, so one copy covers every platform/arch.
+  - from: resources/harnesses/pi
+    to: harnesses/pi
 asarUnpack:
   - node_modules/ffmpeg-static/ffmpeg*
 files:
@@ -40,6 +44,8 @@ mac:
       to: speech/model-catalog.json
     - from: resources/speech/runtime/darwin-arm64
       to: speech
+    - from: resources/harnesses/pi
+      to: harnesses/pi
   hardenedRuntime: true
   notarize: true
   entitlements: build/entitlements.mac.plist

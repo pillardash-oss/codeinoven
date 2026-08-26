@@ -35,7 +35,7 @@ function run(command, args, options = {}) {
   return result.stdout.trim()
 }
 
-function writeEmbeddedIcon(headerPath) {
+function writeEmbeddedHeader(headerPath, version) {
   const bytes = readFileSync(staticIcon)
   const lines = []
   for (let offset = 0; offset < bytes.length; offset += 20) {
@@ -45,9 +45,10 @@ function writeEmbeddedIcon(headerPath) {
         .join(', ')}`
     )
   }
+  const escapedVersion = version.replaceAll('\\', '\\\\').replaceAll('"', '\\"')
   writeFileSync(
     headerPath,
-    `#ifndef CODEINOVEN_EMBEDDED_ICON_H\n#define CODEINOVEN_EMBEDDED_ICON_H\n\nstatic const unsigned char CODEINOVEN_ICON_PNG[] = {\n${lines.join(',\n')}\n};\nstatic const unsigned long CODEINOVEN_ICON_PNG_SIZE = sizeof(CODEINOVEN_ICON_PNG);\n\n#endif\n`
+    `#ifndef CODEINOVEN_EMBEDDED_ICON_H\n#define CODEINOVEN_EMBEDDED_ICON_H\n\n#define CODEINOVEN_VERSION "v${escapedVersion}"\n#define CODEINOVEN_VERSION_WIDE L"v${escapedVersion}"\n#define CODEINOVEN_COMPANY "Pillardash Solutions Limited"\n#define CODEINOVEN_COMPANY_WIDE L"Pillardash Solutions Limited"\n\nstatic const unsigned char CODEINOVEN_ICON_PNG[] = {\n${lines.join(',\n')}\n};\nstatic const unsigned long CODEINOVEN_ICON_PNG_SIZE = sizeof(CODEINOVEN_ICON_PNG);\n\n#endif\n`
   )
 }
 
@@ -141,11 +142,12 @@ async function hardenElectron(electronExecutable) {
 export default async function installNativeSplash(context) {
   const platform = context.electronPlatformName
   const productFilename = context.packager.appInfo.productFilename
+  const applicationVersion = context.packager.appInfo.version
   const executableName = context.packager.executableName ?? productFilename.toLowerCase()
   const temporaryDirectory = join(context.outDir, `native-splash-${platform}-${context.arch}`)
   rmSync(temporaryDirectory, { recursive: true, force: true })
   mkdirSync(temporaryDirectory, { recursive: true })
-  writeEmbeddedIcon(join(temporaryDirectory, 'embedded_icon.h'))
+  writeEmbeddedHeader(join(temporaryDirectory, 'embedded_icon.h'), applicationVersion)
 
   let publicExecutable
   let electronExecutable

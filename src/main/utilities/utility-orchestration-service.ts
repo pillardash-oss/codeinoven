@@ -235,6 +235,7 @@ export class UtilityOrchestrationService {
   private gatewayServer: Server | null = null
   private gatewayBaseUrl: string | null = null
   private gatewayStarting: Promise<string> | null = null
+  private gatewayCloseTimer: ReturnType<typeof setTimeout> | null = null
   private readonly bridgeHandlers: ReadonlyMap<string, GatewayBridgeHandler>
   private cuaActivityListener:
     ((pid: number, threadId: string, sessionId?: string) => void) | null = null
@@ -397,13 +398,9 @@ export class UtilityOrchestrationService {
   }
 
   async dispose(): Promise<void> {
+    this.cancelGatewayClose()
     await Promise.all([...this.turns.keys()].map((id) => this.cleanupTurn(id)))
-    const server = this.gatewayServer
-    this.gatewayServer = null
-    this.gatewayBaseUrl = null
-    this.gatewayStarting = null
-    instanceRegistry.setMcpHost(null)
-    if (server) await new Promise<void>((resolve) => server.close(() => resolve()))
+    await this.closeGatewayServer()
   }
 
   /** Whether the agent has called utility_search at least once this turn. */
@@ -479,6 +476,7 @@ export class UtilityOrchestrationService {
     await this.audit(turn.state, 'turn.cleaned', {
       activatedUtilityIds: [...turn.state.activated.keys()]
     })
+    this.scheduleGatewayClose()
   }
 
   private async handleRequest(request: IncomingMessage, response: ServerResponse): Promise<void> {
@@ -523,6 +521,7 @@ export class UtilityOrchestrationService {
    * select isolated state; opening another port is never part of starting a turn.
    */
   private async ensureGatewayServer(): Promise<string> {
+    this.cancelGatewayClose()
     if (this.gatewayBaseUrl) return this.gatewayBaseUrl
     if (this.gatewayStarting) return this.gatewayStarting
     const starting = new Promise<string>((resolve, reject) => {
@@ -553,6 +552,44 @@ export class UtilityOrchestrationService {
     } finally {
       if (this.gatewayStarting === starting) this.gatewayStarting = null
     }
+  }
+
+  private scheduleGatewayClose(): void {
+    if (this.turns.size > 0 || !this.gatewayServer) return
+    this.cancelGatewayClose()
+    this.gatewayCloseTimer = setTimeout(() => {
+      this.gatewayCloseTimer = null
+      void this.closeGatewayServerIfIdle()
+    }, 1_000)
+    this.gatewayCloseTimer.unref?.()
+  }
+
+  private cancelGatewayClose(): void {
+    if (!this.gatewayCloseTimer) return
+    clearTimeout(this.gatewayCloseTimer)
+    this.gatewayCloseTimer = null
+  }
+
+  private async closeGatewayServerIfIdle(): Promise<void> {
+    if (this.turns.size > 0) return
+    await this.closeGatewayServer()
+  }
+
+  private async closeGatewayServer(): Promise<void> {
+    this.cancelGatewayClose()
+    const server = this.gatewayServer
+    this.gatewayServer = null
+    this.gatewayBaseUrl = null
+    this.gatewayStarting = null
+    instanceRegistry.setMcpHost(null)
+    if (!server) return
+    await new Promise<void>((resolve) => {
+      if (!server.listening) {
+        resolve()
+        return
+      }
+      server.close(() => resolve())
+    })
   }
 
   /**

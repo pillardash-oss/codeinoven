@@ -13,6 +13,7 @@ import type {
   ThinkingPreset
 } from '../../lib/types'
 import { permissionPatterns } from '../../lib/agent-interactions'
+import { classifyProviderIssue } from '../../lib/provider-issue'
 import type {
   CliLineParseContext,
   CliLineParseResult,
@@ -154,7 +155,9 @@ function mapRemoteClineModel(value: unknown, providerId: string): ProviderModel 
   const id = stringValue(raw?.['id'])
   if (!id) return null
   const name = stringValue(raw?.['name']) ?? id
-  const reasoning = /reason|opus|sonnet|gemini|qwen|deepseek|kimi|mimo/iu.test(`${id} ${name}`)
+  const reasoning = /reason|opus|sonnet|gemini|qwen|deepseek|kimi|mimo|laguna/iu.test(
+    `${id} ${name}`
+  )
   // Prefer a structured vision capability when the catalog reports one;
   // otherwise default to vision-capable except for known text-only families.
   const capabilities = record(raw?.['capabilities'])
@@ -575,6 +578,33 @@ function mapCurrentClineRecord(
   state: ClineTurnState
 ): CliLineParseResult | null {
   const type = stringValue(entry['type'])
+  if (type === 'run_start') {
+    const nativeSessionId = stringValue(entry['sessionId']) ?? stringValue(entry['session_id'])
+    return nativeSessionId ? { nativeSessionId } : { events: [] }
+  }
+
+  if (type === 'error') {
+    const error = stringValue(entry['message']) ?? stringValue(entry['error'])
+    if (!error) return null
+    const kind = classifyProviderIssue(error)
+    return {
+      events: [
+        {
+          type: 'session.error',
+          sessionId: context.sessionId,
+          error,
+          issue: {
+            kind,
+            message: error,
+            rawError: error,
+            harnessId: 'cline',
+            retryable: kind !== 'billing'
+          }
+        }
+      ]
+    }
+  }
+
   if (type === 'agent_event') {
     const event = record(entry['event'])
     if (!event) return null
@@ -848,7 +878,10 @@ export class ClineDriver extends PersistentCliDriver {
     runtimeTopology: { kind: 'turn_process', scope: 'session' },
     streaming: true,
     steering: true,
-    nativeResume: true,
+    // Cline 3.x currently routes `--id` into its interactive code path when
+    // combined with `--json`, rejecting the positional prompt. Replay the
+    // durable CodeInOven transcript instead so retry remains deterministic.
+    nativeResume: false,
     messageHistory: 'mirrored',
     interactivePermissions: false,
     attachments: true,
@@ -1016,9 +1049,9 @@ export class ClineDriver extends PersistentCliDriver {
     options: SendPromptOptions
   ): Promise<CliTurnCommand> {
     const args: string[] = ['--json']
-    if (session.nativeSessionId) args.push('--id', session.nativeSessionId)
     const previousTurnCount = Math.max(
       this.turnCounts.get(session.id) ?? 0,
+      session.messages.filter((message) => message.role === 'user').length,
       session.messages.filter((message) => message.role === 'assistant').length
     )
     const turnIndex = previousTurnCount + 1
@@ -1109,7 +1142,13 @@ export class ClineDriver extends PersistentCliDriver {
       onProcessExit = () => this.stopApprovalBridge(session.id)
     }
 
-    return { command: 'cline', args, env, ...(onProcessExit ? { onProcessExit } : {}) }
+    return {
+      command: 'cline',
+      args,
+      env,
+      parseStderrJson: true,
+      ...(onProcessExit ? { onProcessExit } : {})
+    }
   }
 
   private async startApprovalBridge(

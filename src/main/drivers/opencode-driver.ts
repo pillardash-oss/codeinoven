@@ -1210,30 +1210,27 @@ export class OpenCodeDriver implements HarnessDriver {
   async generateTitle(projectPath: string, options: GenerateTitleOptions): Promise<string | null> {
     const catalogs = await this.listProviders(projectPath).catch(() => [])
     const openCodeModels = catalogs.find((catalog) => catalog.id === 'opencode')?.models ?? []
-    const freeModel = openCodeModels
-      .filter((model) => /(?:^|[-:])free$/iu.test(model.id))
-      .sort(
-        (left, right) =>
-          Number(left.id !== 'big-pickle-free') -
-          Number(right.id !== 'big-pickle-free')
-      )[0]
+    const freeModels = openCodeModels.filter((model) => /(?:^|[-:])free$/iu.test(model.id))
+    const fallbackFreeModels = freeModels.filter(
+      (model) => model.id !== 'big-pickle' && model.id !== 'big-pickle-free'
+    )
     const goFlash = catalogs
       .find((catalog) => catalog.id === 'opencode-go')
       ?.models.find((model) => model.id === 'deepseek-v4-flash')
-    const attempts = [
-      ...(freeModel ? [{ providerId: freeModel.providerId, modelId: freeModel.id }] : []),
-      ...(goFlash ? [{ providerId: goFlash.providerId, modelId: goFlash.id }] : []),
-      { providerId: options.settings.providerId, modelId: options.settings.modelId }
-    ].filter(
-      (candidate, index, all) =>
-        Boolean(candidate.providerId && candidate.modelId) &&
-        all.findIndex(
-          (other) =>
-            other.providerId === candidate.providerId && other.modelId === candidate.modelId
-        ) === index
-    )
 
-    for (const candidate of attempts) {
+    // Always pin big-pickle first; only fall back to other free/stealth models
+    // (and finally the thread model) if it fails or is unavailable.
+    const attempts = new Map<string, { providerId: string; modelId: string }>()
+    const addCandidate = (providerId?: string, modelId?: string) => {
+      if (!providerId || !modelId) return
+      attempts.set(`${providerId}/${modelId}`, { providerId, modelId })
+    }
+    addCandidate('opencode', 'big-pickle')
+    for (const model of fallbackFreeModels) addCandidate(model.providerId, model.id)
+    addCandidate(goFlash?.providerId, goFlash?.id)
+    addCandidate(options.settings.providerId, options.settings.modelId)
+
+    for (const candidate of attempts.values()) {
       let isolated: IsolatedHandle | null = null
       try {
         isolated = await this.createIsolatedSession(projectPath, 'Thread title')

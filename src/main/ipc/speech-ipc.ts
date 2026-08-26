@@ -236,6 +236,9 @@ export function registerSpeechIpc(
         )
       )
   )
+  ipcMain.handle('speech:preloadAsr', (_event, rawRuntime: unknown, rawArtifactId: unknown) =>
+    speechResult(() => service.preloadAsr(runtime(rawRuntime), entityId(rawArtifactId, 'Artifact id')))
+  )
   ipcMain.handle(
     'speech:transcribeAudioToLlm',
     (
@@ -440,6 +443,7 @@ export function registerSpeechIpc(
       'speech:failNativeCapture',
       'speech:markAttemptFailure',
       'speech:transcribe',
+      'speech:preloadAsr',
       'speech:transcribeAudioToLlm',
       'speech:validateModelPath',
       'speech:getHistory',

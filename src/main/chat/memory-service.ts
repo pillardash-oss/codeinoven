@@ -335,12 +335,15 @@ function parseMemoryMd(content: string): MemoryEntry[] {
     const source = metadata.get('source')
     const modelKeys = parseModelKeysMetadata(metadata.get('modelkeys'))
 
+    const updatedAt = safeInteger(metadata.get('updatedat'), now)
     entries.push({
       id: SAFE_ID.test(metadata.get('id') ?? '') ? metadata.get('id')! : fallbackId,
       label,
       content: cleanBody,
       enabled: metadata.get('enabled') !== 'false',
-      updatedAt: safeInteger(metadata.get('updatedat'), now),
+      // Entries written before createdAt existed fall back to their updatedAt.
+      createdAt: safeInteger(metadata.get('createdat'), updatedAt),
+      updatedAt,
       category: VALID_CATEGORIES.includes(category as MemoryCategory)
         ? (category as MemoryCategory)
         : 'preference',
@@ -366,6 +369,7 @@ function serializeMemoryMd(entries: MemoryEntry[]): string {
       const meta = [
         `id: ${entry.id}`,
         `enabled: ${entry.enabled}`,
+        `createdAt: ${entry.createdAt}`,
         `updatedAt: ${entry.updatedAt}`,
         `category: ${entry.category}`,
         `priority: ${entry.priority}`,
@@ -421,6 +425,12 @@ export function validateMemoryConfig(value: unknown): MemoryConfig {
     ) {
       throw new TypeError(`Memory entry ${index} updatedAt must be a safe timestamp`)
     }
+    const createdAt =
+      typeof entry.createdAt === 'number' &&
+      Number.isSafeInteger(entry.createdAt) &&
+      entry.createdAt >= 0
+        ? entry.createdAt
+        : entry.updatedAt
     const category = enumValue(
       entry.category,
       VALID_CATEGORIES,
@@ -453,6 +463,7 @@ export function validateMemoryConfig(value: unknown): MemoryConfig {
       label,
       content,
       enabled: entry.enabled,
+      createdAt,
       updatedAt: entry.updatedAt,
       category,
       priority,
@@ -843,6 +854,7 @@ export class MemoryService {
       label: safeLabel,
       content: safeContent,
       enabled: true,
+      createdAt: now,
       updatedAt: now,
       category,
       priority,

@@ -27,8 +27,11 @@ import type {
 
 interface ThreadMessagesEntry {
   messages: AgentMessage[]
+  /** Monotonic renderer revision for stream-driven DOM effects such as tailing. */
+  revision: number
   loaded: boolean
   loading: boolean
+  hasOlder: boolean
   error: string
   runIssue: AgentProviderIssue | null
 }
@@ -46,6 +49,9 @@ const LOAD_REVEAL_BATCH_SIZE = 6
 /** Pause between reveal batches — one frame lets the renderer paint and the
  *  composer accept input between batches. */
 const LOAD_REVEAL_INTERVAL_MS = 16
+/** Bounded navigation pages should land atomically; reveal only large explicit
+ * transcript loads where spreading the work across frames is worthwhile. */
+const LOAD_REVEAL_THRESHOLD = 80
 
 function threadKey(projectId: string, threadId: string): string {
   return `${projectId}:${threadId}`
@@ -96,6 +102,7 @@ class ThreadMessagesStore {
   #revealTimers = new Map<string, ReturnType<typeof setTimeout>>()
   #revealGens = new Map<string, number>()
   #revealPending = new Map<string, { entry: ThreadMessagesEntry; merged: AgentMessage[] }>()
+  #loadPromises = new Map<string, Promise<void>>()
 
   /** Reactive cache keyed by `projectId:threadId`. */
   threads = new SvelteMap<string, ThreadMessagesEntry>()
@@ -117,7 +124,15 @@ class ThreadMessagesStore {
     const key = threadKey(projectId, threadId)
     let entry = this.#threads.get(key)
     if (!entry) {
-      entry = { messages: [], loaded: false, loading: false, error: '', runIssue: null }
+      entry = {
+        messages: [],
+        revision: 0,
+        loaded: false,
+        loading: false,
+        hasOlder: false,
+        error: '',
+        runIssue: null
+      }
       this.#threads.set(key, entry)
       this.threads.set(key, { ...entry })
     }
@@ -127,6 +142,11 @@ class ThreadMessagesStore {
   /** Current message list for a thread — safe to use in deriveds/effects. */
   messages(projectId: string, threadId: string): AgentMessage[] {
     return this.threads.get(threadKey(projectId, threadId))?.messages ?? EMPTY_MESSAGES
+  }
+
+  /** Changes whenever this thread's cached transcript is published. */
+  streamRevision(projectId: string, threadId: string): number {
+    return this.threads.get(threadKey(projectId, threadId))?.revision ?? 0
   }
 
   /** Seed a freshly created empty thread as instantly loaded so the
@@ -142,6 +162,7 @@ class ThreadMessagesStore {
     entry.messages = []
     entry.loaded = true
     entry.loading = false
+    entry.hasOlder = false
     entry.error = ''
     this.#notify(projectId, threadId)
   }
@@ -154,6 +175,14 @@ class ThreadMessagesStore {
   /** Whether the thread is currently loading messages. */
   loading(projectId: string, threadId: string): boolean {
     return this.threads.get(threadKey(projectId, threadId))?.loading ?? false
+  }
+
+  hasOlder(projectId: string, threadId: string): boolean {
+    return this.threads.get(threadKey(projectId, threadId))?.hasOlder ?? false
+  }
+
+  async waitForLoad(projectId: string, threadId: string): Promise<void> {
+    await this.#loadPromises.get(threadKey(projectId, threadId))
   }
 
   /** Last load error for the thread, if any. */
@@ -197,18 +226,47 @@ class ThreadMessagesStore {
 
   /** Load the authoritative mirror and merge it with local optimistic state. */
   async load(projectId: string, threadId: string, recentLimit?: number): Promise<void> {
+    const key = threadKey(projectId, threadId)
+    const existing = this.#loadPromises.get(key)
+    if (existing) return existing
+    const loadPromise = this.#load(projectId, threadId, recentLimit)
+    this.#loadPromises.set(key, loadPromise)
+    try {
+      await loadPromise
+    } finally {
+      if (this.#loadPromises.get(key) === loadPromise) this.#loadPromises.delete(key)
+    }
+  }
+
+  async #load(projectId: string, threadId: string, recentLimit?: number): Promise<void> {
     const entry = this.entry(projectId, threadId)
-    if (entry.loading) return
     entry.loading = true
     entry.error = ''
     this.#notify(projectId, threadId)
 
     try {
-      const serverMessages =
-        recentLimit === undefined
-          ? await invoke('agent:loadMessages', projectId, threadId)
-          : (await invoke('thread:loadMessages', projectId, threadId, undefined, recentLimit))
-              .messages
+      let serverMessages: AgentMessage[]
+      if (recentLimit === undefined) {
+        serverMessages = await invoke('agent:loadMessages', projectId, threadId)
+        entry.hasOlder = false
+      } else {
+        const page = await invoke(
+          'thread:loadMessages',
+          projectId,
+          threadId,
+          undefined,
+          recentLimit
+        )
+        // Bounded loads are used by thread switching and hover preloads. They
+        // must remain mirror-only: a new thread, or a thread whose latest
+        // mirror page contains only a user message, is a valid bounded result.
+        // Falling back here to agent:loadMessages turns a cheap navigation into
+        // an unbounded provider transcript read and can freeze the renderer on
+        // long sessions. Callers that explicitly need the provider transcript
+        // must use load() without a limit.
+        serverMessages = page.messages
+        entry.hasOlder = page.hasOlder
+      }
       this.reconcile(projectId, threadId, serverMessages)
       entry.loaded = true
     } catch (err) {
@@ -226,7 +284,7 @@ class ThreadMessagesStore {
    *  messages or a load is in flight. */
   async preload(projectId: string, threadId: string): Promise<void> {
     const entry = this.entry(projectId, threadId)
-    if (entry.loaded || entry.loading) return
+    if (entry.loaded) return
     await this.load(projectId, threadId, THREAD_MESSAGE_PRELOAD_WINDOW)
   }
 
@@ -273,12 +331,17 @@ class ThreadMessagesStore {
   /** Merge a bounded history page without discarding pages already loaded for the thread. */
   mergePage(projectId: string, threadId: string, pageMessages: AgentMessage[]): void {
     const entry = this.entry(projectId, threadId)
-    const mergedById = new SvelteMap(entry.messages.map((message) => [message.id, message]))
+    // This accumulator is deliberately plain data, not renderer state. A
+    // reactive map here would add proxy tracking to every history-page load and
+    // wake unrelated dependents while a live trace is streaming.
+    const mergedById: Record<string, AgentMessage> = Object.fromEntries(
+      entry.messages.map((message) => [message.id, message])
+    )
     for (const message of pageMessages) {
-      const cached = mergedById.get(message.id)
-      mergedById.set(message.id, cached ? mergeMessageSnapshot(cached, message) : message)
+      const cached = mergedById[message.id]
+      mergedById[message.id] = cached ? mergeMessageSnapshot(cached, message) : message
     }
-    const merged = [...mergedById.values()].sort((a, b) => {
+    const merged = Object.values(mergedById).sort((a, b) => {
       const timeDiff = a.createdAt - b.createdAt
       if (timeDiff !== 0) return timeDiff
       return a.id.localeCompare(b.id)
@@ -310,10 +373,10 @@ class ThreadMessagesStore {
     // not to re-animate every background sync (thread:updated refreshes,
     // brainstorm trace updates) that lands after the thread is already on
     // screen. Without this guard, every such merge on a thread with more than
-    // LOAD_REVEAL_BATCH_SIZE total messages truncated the visible list back
+    // LOAD_REVEAL_THRESHOLD total messages truncated the visible list back
     // down to a handful of messages and regrew it, flickering the working
     // trace and any content past the truncated tail.
-    if (merged.length <= LOAD_REVEAL_BATCH_SIZE || entry.loaded) {
+    if (merged.length <= LOAD_REVEAL_THRESHOLD || entry.loaded) {
       this.#cancelReveal(key)
       entry.messages = merged
       entry.loaded = true
@@ -450,8 +513,13 @@ class ThreadMessagesStore {
     messageId: string,
     error: unknown
   ): void {
-    entry.error = error instanceof Error ? error.message : 'Message failed to send.'
-    entry.messages = entry.messages.filter((message) => message.id !== messageId)
+    const messageError = error instanceof Error ? error.message : 'Message failed to send.'
+    entry.error = messageError
+    // Keep the user's prompt when transport fails. Removing it makes a send
+    // failure look like the conversation was wiped and loses retry context.
+    entry.messages = entry.messages.map((message) =>
+      message.id === messageId ? { ...message, error: messageError } : message
+    )
     this.#notify(projectId, threadId)
   }
 
@@ -901,7 +969,9 @@ class ThreadMessagesStore {
 
   #publish(key: string): void {
     const entry = this.#threads.get(key)
-    if (entry) this.threads.set(key, { ...entry })
+    if (!entry) return
+    entry.revision += 1
+    this.threads.set(key, { ...entry })
   }
 }
 

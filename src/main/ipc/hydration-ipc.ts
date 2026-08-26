@@ -6,8 +6,11 @@ import { ProjectManager } from '../../lib/engines/project-manager'
 import { ScopeManager } from '../../lib/engines/scope-manager'
 import { ThreadManager } from '../../lib/engines/thread-manager'
 import { NoteRepo } from '../database/repositories/note-repo'
-import { validateBoundedInteger, validateEntityId } from './ipc-validation'
-import type { Thread } from '../../lib/types'
+import { validateBoundedInteger, validateBoundedString, validateEntityId } from './ipc-validation'
+import type { Thread, ThreadMessageCursor } from '../../lib/types'
+import { RepositoryService } from '../git/repository-service'
+import { settleThreadBranch, type ThreadBranchDeps } from '../chat/thread-branch-service'
+import { broadcastThreadBranchUpdated } from '../chat/thread-events'
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -26,6 +29,11 @@ export function registerHydrationIpcHandlers(storage: StorageEngine, database: D
   const scopeManager = new ScopeManager(database)
   const threadManager = new ThreadManager(database)
   const noteRepo = new NoteRepo(database)
+  const branchDeps: ThreadBranchDeps = {
+    resolver: new RepositoryService(),
+    store: threadManager,
+    onSettled: broadcastThreadBranchUpdated
+  }
 
   ipcMain.handle('config:get', () => storage.getConfig())
   ipcMain.handle('project:get', (_, projectId: string) => projectManager.getProject(projectId))
@@ -37,9 +45,14 @@ export function registerHydrationIpcHandlers(storage: StorageEngine, database: D
   ipcMain.handle('scope:get', (_, projectId: unknown) =>
     scopeManager.getBoard(validateEntityId(projectId, 'Project ID'))
   )
-  ipcMain.handle('thread:get', (_, projectId: string, threadId: string) =>
-    threadManager.getThread(projectId, threadId)
-  )
+  ipcMain.handle('thread:get', async (_, projectId: string, threadId: string) => {
+    const thread = await threadManager.getThreadViaWorker(projectId, threadId)
+    // A thread whose creation-time branch settle never completed (restart or a
+    // transient git failure) heals lazily on its next open — off this read's
+    // critical path, deduped while in flight.
+    if (thread) settleThreadBranch(branchDeps, thread)
+    return thread
+  })
   ipcMain.handle('note:get', async (_, projectId: unknown, threadId: unknown) => {
     const validProjectId = validateEntityId(projectId, 'Project ID')
     const validThreadId = validateEntityId(threadId, 'Thread ID')
@@ -55,7 +68,7 @@ export function registerHydrationIpcHandlers(storage: StorageEngine, database: D
         : validateEntityId(options.projectId, 'Project ID')
     const limit = validateBoundedInteger(options.limit ?? 100, 'Thread list limit', 1, 500)
     const offset = validateBoundedInteger(options.offset ?? 0, 'Thread list offset', 0, 100_000)
-    const threads = await threadManager.listAllThreads({
+    const threads = await threadManager.listThreadsForHydration({
       includeArchived: false,
       limit,
       offset,
@@ -69,4 +82,44 @@ export function registerHydrationIpcHandlers(storage: StorageEngine, database: D
     }
     return [...preferred, ...rest]
   })
+  ipcMain.handle(
+    'thread:loadMessages',
+    async (_, projectId: unknown, threadId: unknown, before?: unknown, limit: unknown = 40) => {
+      let safeBefore: ThreadMessageCursor | undefined
+      if (before !== undefined) {
+        if (!isRecord(before)) throw new TypeError('Message cursor must be an object')
+        safeBefore = {
+          createdAt: validateBoundedInteger(
+            before.createdAt,
+            'Message cursor timestamp',
+            0,
+            Number.MAX_SAFE_INTEGER
+          ),
+          id: validateBoundedString(before.id, 'Message cursor ID', 1, 512)
+        }
+      }
+      return threadManager.loadMessagePage(
+        validateEntityId(projectId, 'Project ID'),
+        validateEntityId(threadId, 'Thread ID'),
+        safeBefore,
+        validateBoundedInteger(limit, 'Message page limit', 1, 100)
+      )
+    }
+  )
+  ipcMain.handle(
+    'thread:loadMessagesAround',
+    (_, projectId: unknown, threadId: unknown, anchorId: unknown, limit: unknown = 40) =>
+      threadManager.loadMessagePageAround(
+        validateEntityId(projectId, 'Project ID'),
+        validateEntityId(threadId, 'Thread ID'),
+        validateBoundedString(anchorId, 'Message ID', 1, 512),
+        validateBoundedInteger(limit, 'Message page limit', 1, 100)
+      )
+  )
+  ipcMain.handle('thread:loadUserMessages', async (_, projectId: unknown, threadId: unknown) =>
+    threadManager.loadUserMessages(
+      validateEntityId(projectId, 'Project ID'),
+      validateEntityId(threadId, 'Thread ID')
+    )
+  )
 }

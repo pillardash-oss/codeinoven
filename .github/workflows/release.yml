@@ -102,6 +102,9 @@ jobs:
         if: matrix.target == 'linux'
         run: sudo apt-get update && sudo apt-get install -y libgtk-3-dev
 
+      - name: Build Pi harness
+        run: bun run harness:build-pi
+
       - name: Build Apple Silicon speech worker
         continue-on-error: true
         run: bun run speech:build-mlx

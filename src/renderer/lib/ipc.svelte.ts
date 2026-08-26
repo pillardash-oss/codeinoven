@@ -30,7 +30,10 @@ const HYDRATION_CHANNELS = new Set<InvokeChannel>([
   'note:get',
   'scope:get',
   'thread:get',
-  'thread:listRecent'
+  'thread:listRecent',
+  'thread:loadMessages',
+  'thread:loadMessagesAround',
+  'thread:loadUserMessages'
 ])
 
 let featureReadyPromise: Promise<void> | null = null

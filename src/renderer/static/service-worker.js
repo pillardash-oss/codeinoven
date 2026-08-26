@@ -204,11 +204,22 @@ self.addEventListener('push', (event) => {
 /** Cache a successful response without blocking the response handed back. */
 function cacheSuccess(request, response) {
   if (!response || !response.ok || response.type === 'opaque') return
+  if (isHtmlAssetFallback(request, response)) return
   const copy = response.clone()
   caches
     .open(CACHE_NAME)
     .then((cache) => cache.put(request, copy))
     .catch(() => undefined)
+}
+
+/**
+ * A missing hashed asset must never be cached as the HTML application shell.
+ * This also protects clients that were served by an older proxy configuration
+ * which returned `remote.html` with status 200 for an unknown asset path.
+ */
+function isHtmlAssetFallback(request, response) {
+  const path = new URL(request.url).pathname
+  return path.startsWith('/assets/') && response.headers.get('content-type')?.includes('text/html')
 }
 
 self.addEventListener('fetch', (event) => {
@@ -258,7 +269,10 @@ self.addEventListener('fetch', (event) => {
 
   event.respondWith(
     caches.match(request).then((cached) => {
-      if (cached) return cached
+      // A previous proxy could have poisoned this key with remote.html. Do
+      // not keep returning that cached document for a JavaScript/CSS request;
+      // go back to the network so the current build can recover normally.
+      if (cached && !isHtmlAssetFallback(request, cached)) return cached
       return fetch(request)
         .then((response) => {
           cacheSuccess(request, response)

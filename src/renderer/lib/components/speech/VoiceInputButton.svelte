@@ -1,9 +1,12 @@
 <script lang="ts">
   import { onMount } from 'svelte'
   import { Mic, TriangleAlert } from '@lucide/svelte'
+  import { toast } from 'svelte-sonner'
   import { invoke, subscribe } from '$lib/ipc.svelte'
   import RecordingIndicator from './RecordingIndicator.svelte'
   import { speechSettingsStore } from '$lib/stores/speech.svelte'
+  import { workspaceState } from '$lib/stores/workspace.svelte'
+  import { logRendererError } from '$lib/system/renderer-logger'
   import type { SpeechScope } from '../../../../lib/speech/types'
   import type { SpeechEditorSnapshot, SpeechEditorTarget } from '../../speech/editor-target'
   import { speechController } from '../../speech/speech-controller.svelte'
@@ -108,19 +111,33 @@
   })
 
   const belongsHere = $derived(speechController.isActiveTarget(targetId))
-  const anotherTargetActive = $derived(
-    speechController.state.state !== 'idle' &&
-      speechController.state.state !== 'failed' &&
-      !belongsHere
+  const activeRecordingScope = $derived(speechController.recordingScope)
+  const recordingHere = $derived(
+    activeRecordingScope !== null &&
+      scope.kind !== 'global' &&
+      activeRecordingScope.kind !== 'global' &&
+      activeRecordingScope.threadId === scope.threadId
+  )
+  const recordingElsewhere = $derived(
+    activeRecordingScope !== null &&
+      (scope.kind === 'global' ||
+        activeRecordingScope.kind === 'global' ||
+        activeRecordingScope.threadId !== scope.threadId)
   )
   const action = $derived.by(() => {
-    if (!belongsHere) return 'start' as const
-    if (speechController.state.state === 'recording') return 'stop' as const
-    if (speechController.state.state === 'failed') return 'retry' as const
-    return 'wait' as const
+    if (recordingHere || (belongsHere && speechController.state.state === 'recording'))
+      return 'stop' as const
+    if (recordingElsewhere && speechController.state.state === 'recording')
+      return 'blocked' as const
+    if (belongsHere && speechController.state.state === 'failed') return 'retry' as const
+    if (speechController.state.state !== 'idle' && speechController.state.state !== 'failed')
+      return 'wait' as const
+    return 'start' as const
   })
   const label = $derived.by(() => {
     if (action === 'stop') return 'Stop voice recording'
+    if (action === 'blocked')
+      return 'Already recording on another thread. Click to open that thread.'
     if (action === 'retry') {
       return speechController.state.state === 'failed'
         ? `${speechController.state.message} Click to retry voice recording.`
@@ -137,18 +154,72 @@
   })
 
   function prepareTarget(): void {
-    if (disabled || anotherTargetActive || action === 'stop' || action === 'wait') return
+    if (disabled || action !== 'start') return
     preparedTarget = getTarget()
     preparedSnapshot = preparedTarget?.capture() ?? null
   }
 
+  async function openBlockedRecordingThread(): Promise<void> {
+    const blockedScope = speechController.recordingScope
+    if (!blockedScope || blockedScope.kind === 'global') return
+    const projectId = blockedScope.kind === 'project' ? blockedScope.projectId : undefined
+    const threadId = blockedScope.threadId
+    if (!projectId || !threadId) return
+    try {
+      const [project, thread] = await Promise.all([
+        invoke('project:get', projectId),
+        invoke('thread:get', projectId, threadId)
+      ])
+      if (!project || !thread) return
+      await workspaceState.openThreadFromNotification?.(thread, project)
+    } catch (cause) {
+      logRendererError('Could not open the active recording thread.', cause)
+    }
+  }
+
+  async function showBlockedRecordingToast(): Promise<void> {
+    const blockedScope = speechController.recordingScope
+    let title = 'Already recording on another thread'
+    if (blockedScope && blockedScope.kind !== 'global' && blockedScope.threadId) {
+      const projectId = blockedScope.kind === 'project' ? blockedScope.projectId : undefined
+      if (projectId) {
+        try {
+          const thread = await invoke(
+            'thread:get',
+            projectId,
+            blockedScope.threadId
+          )
+          if (thread?.title) title = `Already recording on “${thread.title}”`
+        } catch {
+          // fall back to the generic title
+        }
+      }
+    }
+    toast.warning(title, {
+      id: 'voice-recording-blocked',
+      description: 'Finish the current recording before starting a new one.',
+      duration: 8_000,
+      action: {
+        label: 'Open thread',
+        onClick: () => void openBlockedRecordingThread()
+      }
+    })
+  }
+
   async function activate(): Promise<void> {
-    if (disabled || anotherTargetActive || action === 'wait') return
+    if (disabled || action === 'wait') return
     if (action === 'stop') {
       await speechController.stop()
       return
     }
-    if (action === 'retry') speechController.resetFailure(targetId)
+    if (action === 'retry') {
+      speechController.resetFailure(targetId)
+      return
+    }
+    if (action === 'blocked') {
+      await showBlockedRecordingToast()
+      return
+    }
     const target = preparedTarget ?? getTarget()
     const snapshot = preparedSnapshot ?? target?.capture()
     preparedTarget = null
@@ -161,13 +232,13 @@
 {#if !hidden}
   <button
     type="button"
-    class="relative flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-muted transition-colors hover:bg-elevated hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary disabled:cursor-not-allowed disabled:opacity-45 {anotherTargetActive
-      ? 'pointer-events-none opacity-40'
-      : ''}   {className}"
+    class="relative flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-muted transition-colors hover:bg-elevated hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary disabled:cursor-not-allowed disabled:opacity-45 {action === 'blocked'
+      ? 'opacity-60'
+      : ''} {className}"
     title={label}
     aria-label={label}
-    aria-pressed={belongsHere && speechController.state.state === 'recording'}
-    disabled={disabled || anotherTargetActive || action === 'wait'}
+    aria-pressed={action === 'stop'}
+    disabled={disabled || action === 'wait'}
     onpointerdown={(event) => {
       // Keep the editor focused while the pointer activates recording. The
       // target still captures its value and caret before the click is handled.
@@ -179,11 +250,11 @@
     }}
     onclick={() => void activate()}
   >
-    {#if belongsHere && speechController.state.state === 'recording'}
+    {#if action === 'stop'}
       <RecordingIndicator decorative />
-    {:else if belongsHere && speechController.state.state === 'failed'}
+    {:else if action === 'retry'}
       <TriangleAlert size={14} aria-hidden="true" />
-    {:else if belongsHere && speechController.state.state !== 'idle'}
+    {:else if action === 'wait'}
       <span class="flex h-3 items-center gap-[2px]" aria-hidden="true">
         <span class="wave-bar"></span>
         <span class="wave-bar wave-bar-delay-1"></span>
@@ -194,7 +265,7 @@
     {/if}
   </button>
 
-  <span class="sr-only" aria-live="polite">{belongsHere ? label : ''}</span>
+  <span class="sr-only" aria-live="polite">{action !== 'start' ? label : ''}</span>
 {/if}
 
 <style>

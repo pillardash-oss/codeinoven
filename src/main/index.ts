@@ -65,6 +65,8 @@ import { getConfigRoot } from '../lib/utils'
 import type { SpeechService } from './speech/speech-service'
 
 declare const __CODEINOVEN_PROTOTYPE_PREVIEW_ORIGIN__: string | undefined
+declare const __CODEINOVEN_DEV_REMOTE_MODE__: boolean
+declare const __CODEINOVEN_APP_VERSION__: string
 
 const mainBundleDirectory = dirname(fileURLToPath(import.meta.url))
 
@@ -340,6 +342,7 @@ function isNewTerminalShortcut(input: Electron.Input): boolean {
   )
 }
 const isProduction = app.isPackaged || process.env['NODE_ENV'] === 'production'
+const restorePersistedRemoteModeInDev = isProduction || __CODEINOVEN_DEV_REMOTE_MODE__
 
 /**
  * Window/session boundary validator. It guards external window creation,
@@ -480,10 +483,17 @@ function createSplashWindow(): {
   splashWindow = splash
   const visualReady = waitForSplashVisual(splash)
 
+  const applicationVersion = __CODEINOVEN_APP_VERSION__
   const loading =
     !isProduction && is.dev && process.env['ELECTRON_RENDERER_URL']
-      ? splash.loadURL(`${process.env['ELECTRON_RENDERER_URL']}/splash.html`)
-      : splash.loadFile(join(mainBundleDirectory, '../renderer/splash.html'))
+      ? (() => {
+          const splashUrl = new URL(`${process.env['ELECTRON_RENDERER_URL']}/splash.html`)
+          splashUrl.searchParams.set('version', applicationVersion)
+          return splash.loadURL(splashUrl.toString())
+        })()
+      : splash.loadFile(join(mainBundleDirectory, '../renderer/splash.html'), {
+          query: { version: applicationVersion }
+        })
   // `did-fail-load` resolves the visual barrier as `load-failed`; consume the
   // matching navigation rejection so it cannot become an unhandled promise.
   void loading.catch(() => undefined)
@@ -599,9 +609,19 @@ async function bootPostPaintServices(): Promise<void> {
     (input) => chatEngine!.transcribeSpeechAudio(input)
   )
   await speechService.initialize()
+  // Initialize auto-evict timers from persisted sound settings
+  try {
+    const cfg = await storage.getConfig()
+    speechService.updateUnloadOptions({
+      asr: cfg.sound.asrUnload,
+      cleanup: cfg.sound.cleanupUnload,
+      tts: cfg.sound.ttsUnload
+    })
+  } catch {
+    // defaults already applied
+  }
   unregisterSpeechIpc = registerSpeechIpc(speechService, () => mainWindow?.webContents ?? null)
   prototypePreviewService = new PrototypePreviewService()
-  const prototypePreviewPort = await prototypePreviewService.start()
   chatEngine.setPrototypePreviewRegistrar(
     (previewSlug, canonicalRoot) =>
       prototypePreviewService?.register(previewSlug, canonicalRoot) ?? Promise.resolve()
@@ -618,11 +638,22 @@ async function bootPostPaintServices(): Promise<void> {
   const { resolvePrototypePreviewOrigin } = await import('./prototypes/prototype-preview-origin')
   const previewOrigin = resolvePrototypePreviewOrigin(process.env, {
     development: !isProduction,
-    bakedOrigin: __CODEINOVEN_PROTOTYPE_PREVIEW_ORIGIN__,
-    allocatedPort: prototypePreviewPort
+    bakedOrigin: __CODEINOVEN_PROTOTYPE_PREVIEW_ORIGIN__
   })
   ipcMain.removeHandler('prototypePreview:getOrigin')
-  ipcMain.handle('prototypePreview:getOrigin', () => previewOrigin.origin ?? null)
+  ipcMain.handle('prototypePreview:getOrigin', async () => {
+    if (previewOrigin.origin || previewOrigin.source !== 'missing' || isProduction) {
+      return previewOrigin.origin
+    }
+    const service = prototypePreviewService
+    if (!service) return null
+    const port = await service.start()
+    return resolvePrototypePreviewOrigin(process.env, {
+      development: true,
+      bakedOrigin: __CODEINOVEN_PROTOTYPE_PREVIEW_ORIGIN__,
+      allocatedPort: port
+    }).origin
+  })
   if (mainWindow && !mainWindow.isDestroyed()) {
     const service = new BrowserService(mainWindow)
     browserService = service
@@ -661,7 +692,8 @@ async function bootPostPaintServices(): Promise<void> {
     worktreeService: scopeWorktreeService,
     threadCreation,
     threadDeletion,
-    hydrationHandlersRegistered: true
+    hydrationHandlersRegistered: true,
+    speechService
   })
   chatEngine.register()
   harnessManifestService.register()
@@ -769,16 +801,18 @@ async function bootPostPaintServices(): Promise<void> {
       onSessionActiveChange: (active) => powerWakeService?.setRemoteSessionActive(active)
     })
 
-    const reconcileRemoteTransportOwnership = (): void => {
+    const reconcileRemoteTransportOwnership = (startup = false): void => {
       if (!remoteMode) return
       if (remoteOwnershipPromise) {
         remoteOwnershipReconcilePending = true
         return
       }
       remoteOwnershipReconcilePending = false
-      const operation = instanceRegistry.isPreferredRemoteOwner()
-        ? remoteMode.restoreRemoteMode()
-        : remoteMode.relinquishTransportOwnership()
+      const mayRestorePersistedMode = !startup || restorePersistedRemoteModeInDev
+      const operation =
+        instanceRegistry.isPreferredRemoteOwner() && mayRestorePersistedMode
+          ? remoteMode.restoreRemoteMode()
+          : remoteMode.relinquishTransportOwnership()
       remoteOwnershipPromise = operation
         .catch((error) => Logger.error('Remote transport ownership handoff failed:', error))
         .finally(() => {
@@ -905,7 +939,7 @@ async function bootPostPaintServices(): Promise<void> {
 
     // Restore remote mode after paint so users can see app UI while the LAN
     // stack spins up in the background.
-    reconcileRemoteTransportOwnership()
+    reconcileRemoteTransportOwnership(true)
 
     try {
       notificationService.start()

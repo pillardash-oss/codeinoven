@@ -40,6 +40,8 @@ const vendorSlugs = [
   'apple',
   'aws',
   'claudecode',
+  'cline',
+  'cloudflare',
   'codex',
   'azure',
   'baichuan',
@@ -101,8 +103,13 @@ function resolveSource(slug: string): string | null {
 }
 
 mkdirSync(vendorOutDir, { recursive: true })
+const managedVendorFiles = new Set(
+  vendorSlugs
+    .map((slug) => `${slug}.svg`)
+    .concat(['opencode.svg', 'cio.svg'])
+)
 for (const stale of readdirSync(vendorOutDir)) {
-  unlinkSync(join(vendorOutDir, stale))
+  if (managedVendorFiles.has(stale)) unlinkSync(join(vendorOutDir, stale))
 }
 
 const missingVendors: string[] = []
@@ -213,7 +220,7 @@ for (const [agentId, slug] of Object.entries(agentSlugs)) {
     metadata.monochrome = 'mono.svg'
   }
 
-  writeFileSync(metadataPath, `${JSON.stringify(metadata)}\n`, 'utf8')
+  writeFileSync(metadataPath, `${JSON.stringify(metadata, null, 2)}\n`, 'utf8')
   updatedAgents += 1
 }
 

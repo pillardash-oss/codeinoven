@@ -22,6 +22,7 @@ export interface SpeechSynthesisInput {
 export interface SpeechBackend {
   readonly runtime: SpeechRuntime
   capabilities(): Promise<SpeechCapability[]>
+  warmup?(artifact: SpeechBackendArtifact, signal: AbortSignal): Promise<void>
   transcribe(input: SpeechTranscribeInput, signal: AbortSignal): Promise<string>
   cleanup(transcript: string, artifact: SpeechBackendArtifact, signal: AbortSignal): Promise<string>
   synthesize(input: SpeechSynthesisInput, signal: AbortSignal): Promise<void>

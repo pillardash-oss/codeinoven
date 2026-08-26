@@ -14,7 +14,8 @@ export default defineConfig(
     'dist/**',
     'node_modules/**',
     'out/**',
-    'services/**'
+    'services/**',
+    'resources/harnesses/**'
   ]),
   js.configs.recommended,
   ts.configs.recommended,

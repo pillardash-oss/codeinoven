@@ -33,6 +33,10 @@ private enum WorkerError: LocalizedError {
 private actor ModelCache {
     private var managers: [String: AsrManager] = [:]
 
+    func warmup(modelPath: String) async throws {
+        _ = try await manager(for: modelPath)
+    }
+
     func transcribe(modelPath: String, audioPath: String) async throws -> String {
         let manager = try await manager(for: modelPath)
         var decoderState = TdtDecoderState.make(decoderLayers: 2)
@@ -74,12 +78,17 @@ private func emit(_ response: WorkerResponse) {
 }
 
 private func handle(_ request: WorkerRequest) async throws -> WorkerResponse {
-    guard request.operation == "transcribe" else {
+    switch request.operation {
+    case "warmup":
+        try await cache.warmup(modelPath: request.model)
+        return WorkerResponse(id: request.id, ok: true, text: nil, error: nil)
+    case "transcribe":
+        guard let audio = request.audio else { throw WorkerError.missing("audio") }
+        let text = try await cache.transcribe(modelPath: request.model, audioPath: audio)
+        return WorkerResponse(id: request.id, ok: true, text: text, error: nil)
+    default:
         throw WorkerError.unsupported(request.operation)
     }
-    guard let audio = request.audio else { throw WorkerError.missing("audio") }
-    let text = try await cache.transcribe(modelPath: request.model, audioPath: audio)
-    return WorkerResponse(id: request.id, ok: true, text: text, error: nil)
 }
 
 @main

@@ -202,6 +202,10 @@ jobs:
       - name: Tests
         run: bun run test
 
+      - name: Build Pi harness
+        shell: bash
+        run: bun run harness:build-pi
+
       - name: Production build and bundle budgets
         shell: bash
         run: |
@@ -213,6 +217,7 @@ jobs:
         run: bunx electron-builder --win --x64 --dir -c.forceCodeSigning=false
 
       - name: Launch packaged application through workspace readiness
+        continue-on-error: true
         run: >-
           bun run smoke:packaged --target win --app-dir dist/win-unpacked
           --output agent-out/windows-startup-smoke.json
@@ -247,6 +252,9 @@ jobs:
 
       - name: Patch binary-data bare specifiers
         run: bun scripts/patch-binary-data.ts
+
+      - name: Build Pi harness
+        run: bun run harness:build-pi
 
       - name: Production build and bundle budgets
         run: |

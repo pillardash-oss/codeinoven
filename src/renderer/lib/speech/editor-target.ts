@@ -23,6 +23,13 @@ export interface SpeechEditorTarget {
   id: string
   capture: () => SpeechEditorSnapshot | null
   apply: (snapshot: SpeechEditorSnapshot, transcript: string) => SpeechEditorApplyResult
+  /**
+   * Optional store-level fallback used when `apply` cannot insert because the
+   * editor element was destroyed (e.g. the view was navigated away while
+   * recording was still active). The implementation should write the transcript
+   * into the backing value and report where it was inserted.
+   */
+  fallbackApply?: (snapshot: SpeechEditorSnapshot, transcript: string) => SpeechEditorApplyResult
 }
 
 interface PlainTextTargetOptions {

@@ -214,6 +214,23 @@ export class TurnFeedbackRepo {
     )
   }
 
+  /** Resolve switch-away feedback on the maintenance worker, never in the UI IPC turn. */
+  async resolvePendingForOtherThreadsViaWorker(
+    exceptThreadId: string,
+    status: Exclude<TurnOutcomeStatus, 'pending'>,
+    signal: TurnOutcomeSignal,
+    score: number
+  ): Promise<void> {
+    const result = await this.db.executeViaWorker(
+      `UPDATE turn_feedback SET status = ?, signal = ?, score = ?, resolved_at = ?
+       WHERE status = 'pending' AND thread_id <> ?`,
+      [status, signal, score, Date.now(), exceptThreadId]
+    )
+    if (!result.ok) {
+      throw new Error(result.error ?? 'Could not resolve pending turn feedback')
+    }
+  }
+
   /** Count of unresolved outcomes (debug/diagnostics). */
   pendingCount(): number {
     const row = this.db.get<{ count: number }>(

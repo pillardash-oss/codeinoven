@@ -1,7 +1,7 @@
 {
   "name": "CodeInOven Remote",
   "short_name": "CodeInOven",
-  "version": "0.5.44",
+  "version": "0.5.48",
   "description": "Remote client for the CodeInOven desktop workstation",
   "start_url": "/",
   "scope": "/",

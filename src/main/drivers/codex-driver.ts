@@ -281,6 +281,7 @@ export class CodexDriver extends PersistentCliDriver {
    *  chats inbox (`chats-cwd`) runs on its own isolated app-server. */
   private hostsByProjectPath = new Map<string, CodexAppServerHost>()
   private hostsStartingByProjectPath = new Map<string, Promise<CodexAppServerHost>>()
+  private authenticationRestartsByProjectPath = new Map<string, Promise<void>>()
   private serverRequests = new Map<string, CodexServerRequest>()
 
   protected async ensureCliReady(): Promise<void> {
@@ -624,6 +625,25 @@ export class CodexDriver extends PersistentCliDriver {
     }
   }
 
+  /**
+   * Codex's resident app-server keeps the OAuth credential it loaded at
+   * startup. Re-authentication changes the credential on disk, but an existing
+   * app-server keeps using the old one. Rebuild only this project's server so
+   * the next retry resumes the same native thread with the new credential.
+   */
+  restartAfterAuthentication(projectPath: string): Promise<void> {
+    const existing = this.authenticationRestartsByProjectPath.get(projectPath)
+    if (existing) return existing
+
+    const restart = this.restartAppServerForAuthentication(projectPath).finally(() => {
+      if (this.authenticationRestartsByProjectPath.get(projectPath) === restart) {
+        this.authenticationRestartsByProjectPath.delete(projectPath)
+      }
+    })
+    this.authenticationRestartsByProjectPath.set(projectPath, restart)
+    return restart
+  }
+
   override async deleteSession(projectPath: string, sessionId: string): Promise<void> {
     const active = this.activeTurns.get(sessionId)
     if (active) await this.finishAppServerTurn(active)
@@ -656,8 +676,22 @@ export class CodexDriver extends PersistentCliDriver {
     }
     this.hostsByProjectPath.clear()
     this.hostsStartingByProjectPath.clear()
+    this.authenticationRestartsByProjectPath.clear()
     this.serverRequests.clear()
     super.dispose()
+  }
+
+  private async restartAppServerForAuthentication(projectPath: string): Promise<void> {
+    const starting = this.hostsStartingByProjectPath.get(projectPath)
+    if (starting) await starting.catch(() => undefined)
+
+    const host = this.hostsByProjectPath.get(projectPath)
+    if (!host) return
+
+    this.hostsByProjectPath.delete(projectPath)
+    const reason = 'Codex app-server restarting after provider sign-in'
+    await this.failAppServerHost(host, reason)
+    if (!host.child.killed) host.child.kill()
   }
 
   private stopAppServerHost(host: CodexAppServerHost, reason: string): void {
@@ -1871,9 +1905,15 @@ function isCodexQuestionRequest(method: string): boolean {
   return method === 'item/tool/requestUserInput'
 }
 
+// `turn/started` fires the instant Codex's own retry loop begins its next
+// attempt, before that attempt has round-tripped to the provider at all — it
+// is not evidence the retry succeeded. Treating it as recovery flipped the UI
+// to "working" moments before the same still-exhausted quota failed the
+// attempt again, bouncing the thread between waiting and working. Only
+// signals that necessarily follow a successful provider response (streamed
+// content, completed items, plan updates) count as genuine recovery.
 function isCodexRetryRecoveryActivity(method: string): boolean {
   return (
-    method === 'turn/started' ||
     method === 'item/agentMessage/delta' ||
     method === 'item/reasoning/textDelta' ||
     method === 'item/reasoning/summaryTextDelta' ||

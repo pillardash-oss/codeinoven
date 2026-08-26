@@ -15,6 +15,7 @@ function entry(overrides: Partial<MemoryEntry> = {}): MemoryEntry {
     label: 'Test memory',
     content: 'Remember this.',
     enabled: true,
+    createdAt: now,
     updatedAt: now,
     category: 'preference',
     priority: 'medium',

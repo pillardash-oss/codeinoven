@@ -515,7 +515,14 @@ function isMuseSubagentSpawn(name: string): boolean {
   return normalizeInteractionName(name) === 'subagent_spawn' || name === 'subagent_spawn'
 }
 
-function museSubagentPart(state: MuseTurnState, tool: MuseToolState): AgentPart {
+function normalizeMuseWorktreeIsolation(input: unknown): void {
+  if (input && typeof input === 'object' && 'worktree_isolation' in (input as Record<string, unknown>)) {
+    (input as Record<string, unknown>).worktree_isolation = false;
+  }
+}
+function museSubagentPart/* worktree_isolation normalized to false */(state: MuseTurnState, tool: MuseToolState): AgentPart {
+  // Force shared worktree — CodeInOven owns worktree lifecycle, never isolated
+  normalizeMuseWorktreeIsolation((tool as unknown as { input?: unknown }).input);
   const input = tool.input ?? {}
   const agent =
     stringValue(input['role']) ??
@@ -699,7 +706,10 @@ export function mapMuseRecord(
         const tool = museToolForCall(state, toolName, callId)
         if (!tool) continue
         const input = parseRecord(call?.['args'])
-        if (input) tool.input = input
+        if (input) {
+          normalizeMuseWorktreeIsolation(input)
+          tool.input = input
+        }
         tool.callId = callId
         state.toolByCall.set(callId, tool.taskId)
         if (isMuseSubagentSpawn(tool.tool)) {
@@ -819,7 +829,9 @@ export function mapMuseRecord(
   }
 
   // Tool call proposed — announce a pending tool card in the working trace.
-  // Muse sub-agents (`subagent_spawn`) are rendered as `type:'subagent'` so
+  // Muse sub-agents (`subagent_spawn`) are rendered as `type:'subagent'` so CodeInOven shows proper cards.
+// Normalize worktree_isolation to false (shared) — CodeInOven owns worktree lifecycle.
+ // (normalization also done in museSubagentPart)
   // WorkingTrace shows SubagentCard + the header chip/sheet instead of a flat
   // generic tool card.
   if (payloadType === 'task.lifecycle.proposed') {
@@ -835,6 +847,8 @@ export function mapMuseRecord(
         start: Date.now()
       }
       state.tools.set(taskId, tool)
+      // CodeInOven owns worktree lifecycle — force shared worktree for any subagent spawn.
+      normalizeMuseWorktreeIsolation(tool.input)
       if (isMuseSubagentSpawn(taskKind)) {
         return { ...base, events: [museSubagentEvent(context, state, tool)] }
       }
@@ -997,12 +1011,33 @@ export function mapMuseRecord(
     return { ...base, events: [museToolEvent(context, state, tool)] }
   }
 
+  // Muse Spark always reasons; ensure the working trace shows a ThinkingBlock
+  // immediately when the run starts so the user sees "Thinking …" even though
+  // CLI 0.2.1 inlines reasoning into `run.output.delta` text rather than a
+  // separate reasoning delta channel. The block stays active until the terminal
+  // record closes it.
+  if (payloadType === 'run.lifecycle.started') {
+    if (!state.reasoningTime?.start) state.reasoningTime = { start: Date.now() }
+    // Emit an initial empty reasoning part so WorkingTrace renders ThinkingBlock
+    // during the busy phase. Subsequent reasoning deltas (if any) append to it.
+    if (!state.parts.some((p) => p.type === 'reasoning')) {
+      const part = reasoningPart(state)
+      upsertPart(state, part)
+      return {
+        ...base,
+        messages: [museMessage(state)],
+        events: [{ type: 'message.part.updated', sessionId: context.sessionId, part }]
+      }
+    }
+  }
+
   // Streaming reasoning trace — Muse Spark reasoning effort produces
   // provider-side thinking that the CLI surfaces as a separate delta channel.
   // The current CLI (0.2.1) inlines reasoning into `run.output.delta` text for
   // most turns, but any future `*reasoning*` / `*thinking*` payload is captured
   // here so the working trace renders a distinct `ThinkingBlock` instead of
-  // silently dropping the trace.
+  // silently dropping the trace. Also handles generic payloads that carry
+  // `reasoning`/`thinking` keys regardless of payload_type.
   if (
     payloadType === 'run.output.reasoning.delta' ||
     payloadType === 'run.reasoning.delta' ||
@@ -1062,6 +1097,36 @@ export function mapMuseRecord(
     return base
   }
 
+  // Generic reasoning payload — captures any envelope that carries reasoning/
+  // thinking content even when payload_type does not contain those words.
+  {
+    const genericDelta =
+      stringValue(payload['reasoning']) ??
+      stringValue(payload['thinking']) ??
+      stringValue(payload['reasoning_text']) ??
+      stringValue(payload['reasoning_content']) ??
+      stringValue(record(payload['event'])?.['reasoning']) ??
+      stringValue(record(payload['event'])?.['thinking'])
+    const genericSummary = stringValue(payload['reasoning_summary']) ?? stringValue(payload['summary'])
+    if (
+      genericDelta &&
+      payloadType !== 'run.output.delta' &&
+      payloadType !== 'run.terminal.completed' &&
+      payloadType !== 'run.lifecycle.started'
+    ) {
+      if (!state.reasoningTime?.start) state.reasoningTime = { start: Date.now() }
+      state.reasoning += genericDelta
+      if (genericSummary) state.reasoningSummary = genericSummary
+      const part = reasoningPart(state)
+      upsertPart(state, part)
+      return {
+        ...base,
+        messages: [museMessage(state)],
+        events: [{ type: 'message.part.updated', sessionId: context.sessionId, part }]
+      }
+    }
+  }
+
   // Turn end — `payload.terminal` is `completed` on success, anything else is an
   // error. `payload.text` is the authoritative final text.
   if (payloadType === 'run.terminal.completed') {
@@ -1078,7 +1143,7 @@ export function mapMuseRecord(
       state.reasoning = finalReasoning
       state.reasoningTime = { ...(state.reasoningTime ?? {}), end: Date.now() }
       upsertPart(state, reasoningPart(state))
-    } else if (state.reasoning && !state.reasoningTime?.end) {
+    } else if ((state.reasoning || state.reasoningTime?.start) && !state.reasoningTime?.end) {
       state.reasoningTime = { ...(state.reasoningTime ?? {}), end: Date.now() }
       upsertPart(state, reasoningPart(state))
     }
@@ -1260,12 +1325,12 @@ export class MuseDriver extends PersistentCliDriver {
       '0.95'
     )
 
-    // Enable native worktree-isolated subagents so `subagent_spawn` with
-    // `worktree_isolation: true` is accepted. This is a compatibility flag;
-    // isolation still requires the child request (`worktree_isolation:true`) —
-    // omission stays shared. Passing it here unlocks the fanout contract
-    // described in the cookbook without requiring a separate launch flag.
-    args.push('--subagent-worktree-isolation')
+    // Subagents share the CodeInOven-managed worktree/scope. Do not
+    // pass `--subagent-worktree-isolation` — CodeInOven owns the Git
+    // worktree lifecycle (`ScopeWorktreeService`); harness-owned worktrees
+    // are intentionally disabled. `subagent_spawn` without `worktree_isolation:true` stays shared;
+    // any affirmative `worktree_isolation:true` is normalized to `false` (shared) before execution.
+    // `worktree_isolation:false` stays shared by default.
 
     const attachmentReferences: string[] = []
     for (const attachment of options.attachments) {

@@ -27,6 +27,7 @@ import type { GitProvider } from '../git/git-provider.interface'
 import { ProjectFilesService } from '../editor/project-files-service'
 import { CheckpointManager } from '../storage/checkpoint-manager'
 import { ThreadCreationCoordinator } from '../chat/thread-creation-coordinator'
+import { settleThreadBranch, type ThreadBranchDeps } from '../chat/thread-branch-service'
 import { ThreadDeletionCoordinator } from '../chat/thread-deletion-coordinator'
 import { DiagnosticsService } from '../system/diagnostics-service'
 import { resolveFavicons } from '../editor/favicon-service'
@@ -49,6 +50,7 @@ import type { PowerWakeService } from '../system/power-wake-service'
 import type { RetrySchedulerService } from '../system/retry-scheduler-service'
 import {
   broadcastNoteChanged,
+  broadcastThreadBranchUpdated,
   broadcastThreadDeleted,
   broadcastThreadOperationError,
   broadcastThreadUpdate,
@@ -902,8 +904,8 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
-function isUnloadOption(value: unknown): value is '30m' | '1h' | 'keep' {
-  return value === '30m' || value === '1h' || value === 'keep'
+function isUnloadOption(value: unknown): value is '5m' | '10m' | '20m' | '30m' | 'keep' {
+  return value === '5m' || value === '10m' || value === '20m' || value === '30m' || value === 'keep'
 }
 
 function validateAttachmentStorageScope(value: unknown): AttachmentStorageScope {
@@ -2064,6 +2066,8 @@ export interface RegisterIpcHandlersOptions {
   worktreeInspector?: ManagedWorktreeInspector
   /** Shared managed-worktree service; the resolver inspector falls back to it. */
   worktreeService?: ScopeWorktreeService
+  /** Speech service for auto-evict of idle sound models. */
+  speechService?: { updateUnloadOptions: (opts: Record<string, unknown>) => void }
 }
 
 export function registerIpcHandlers(
@@ -2135,6 +2139,11 @@ export function registerIpcHandlers(
   const editorService = new EditorService()
   const repositoryService = new RepositoryService()
   const gitService = new GitService()
+  const branchBackfillDeps: ThreadBranchDeps = {
+    resolver: repositoryService,
+    store: threadManager,
+    onSettled: broadcastThreadBranchUpdated
+  }
   const vault = new SecretVault(storage)
   const githubAuthService = new GitHubAuthService(vault)
   const diagnosticsService = new DiagnosticsService(database, () =>
@@ -2146,20 +2155,37 @@ export function registerIpcHandlers(
   const turnFeedbackRepo = new TurnFeedbackRepo(database)
   const noteRepo = new NoteRepo(database)
 
-  ipcMain.handle('engineeringLifecycle:get', (_, projectId: unknown, threadId: unknown) =>
-    engineeringLifecycleEngine.get(
-      validateEntityId(projectId, 'Project ID'),
-      validateEntityId(threadId, 'Thread ID')
-    )
-  )
+  /**
+   * Optimistic renderer creates return before their database row is written.
+   * Any handler that validates thread ownership must wait for that write before
+   * consulting a thread-scoped engine.
+   */
+  async function waitForThreadReady(
+    projectId: unknown,
+    threadId: unknown,
+    projectLabel = 'Project ID',
+    threadLabel = 'Thread ID'
+  ): Promise<{ projectId: string; threadId: string }> {
+    const safeProjectId = validateEntityId(projectId, projectLabel)
+    const safeThreadId = validateEntityId(threadId, threadLabel)
+    await threadCreation.awaitReady(safeThreadId)
+    return { projectId: safeProjectId, threadId: safeThreadId }
+  }
+
+  ipcMain.handle('engineeringLifecycle:get', async (_, projectId: unknown, threadId: unknown) => {
+    const ids = await waitForThreadReady(projectId, threadId)
+    return engineeringLifecycleEngine.get(ids.projectId, ids.threadId)
+  })
   ipcMain.handle(
     'engineeringLifecycle:select',
-    (_, projectId: unknown, threadId: unknown, input: unknown) =>
-      engineeringLifecycleEngine.select(
-        validateEntityId(projectId, 'Project ID'),
-        validateEntityId(threadId, 'Thread ID'),
+    async (_, projectId: unknown, threadId: unknown, input: unknown) => {
+      const ids = await waitForThreadReady(projectId, threadId)
+      return engineeringLifecycleEngine.select(
+        ids.projectId,
+        ids.threadId,
         validateEngineeringLifecycleSelectionInput(input)
       )
+    }
   )
   ipcMain.handle(
     'engineeringLifecycle:start',
@@ -2367,6 +2393,13 @@ export function registerIpcHandlers(
     options.powerWakeService?.setEnabled(config.keepAwakeWhileWorking)
     options.powerWakeService?.setRemoteEnabled(config.keepAwakeWhileRemoteConnected)
     options.retryScheduler?.setEnabled(config.autoRetryAfterReset)
+    if (patch.sound && options.speechService) {
+      options.speechService.updateUnloadOptions({
+        asr: patch.sound.asrUnload,
+        cleanup: patch.sound.cleanupUnload,
+        tts: patch.sound.ttsUnload
+      } as Record<string, unknown>)
+    }
     return config
   })
   ipcMain.handle('config:syncAgentRole', async (_, role: unknown, selection: unknown) => {
@@ -2643,11 +2676,17 @@ export function registerIpcHandlers(
   )
 
   // ─── Engineering specifications ───────────────────────────────────────
-  ipcMain.handle('assignment:getActive', (_, projectId: unknown, coordinatorThreadId: unknown) =>
-    assignmentEngine.getActive(
-      validateEntityId(projectId, 'Project ID'),
-      validateEntityId(coordinatorThreadId, 'Coordinator thread ID')
-    )
+  ipcMain.handle(
+    'assignment:getActive',
+    async (_, projectId: unknown, coordinatorThreadId: unknown) => {
+      const ids = await waitForThreadReady(
+        projectId,
+        coordinatorThreadId,
+        'Project ID',
+        'Coordinator thread ID'
+      )
+      return assignmentEngine.getActive(ids.projectId, ids.threadId)
+    }
   )
   ipcMain.handle(
     'assignment:listVersions',
@@ -2783,12 +2822,10 @@ export function registerIpcHandlers(
       validateEntityId(threadId, 'Thread ID')
     )
   )
-  ipcMain.handle('brainstorm:getWorkflow', (_, projectId: unknown, threadId: unknown) =>
-    brainstormEngine.getWorkflowState(
-      validateEntityId(projectId, 'Project ID'),
-      validateEntityId(threadId, 'Thread ID')
-    )
-  )
+  ipcMain.handle('brainstorm:getWorkflow', async (_, projectId: unknown, threadId: unknown) => {
+    const ids = await waitForThreadReady(projectId, threadId)
+    return brainstormEngine.getWorkflowState(ids.projectId, ids.threadId)
+  })
   ipcMain.handle(
     'brainstorm:chooseEntry',
     (_, projectId: unknown, threadId: unknown, choice: unknown) => {
@@ -2808,12 +2845,10 @@ export function registerIpcHandlers(
       validateEntityId(threadId, 'Thread ID')
     )
   })
-  ipcMain.handle('brainstorm:getActive', (_, projectId: unknown, threadId: unknown) =>
-    brainstormEngine.getActive(
-      validateEntityId(projectId, 'Project ID'),
-      validateEntityId(threadId, 'Thread ID')
-    )
-  )
+  ipcMain.handle('brainstorm:getActive', async (_, projectId: unknown, threadId: unknown) => {
+    const ids = await waitForThreadReady(projectId, threadId)
+    return brainstormEngine.getActive(ids.projectId, ids.threadId)
+  })
   ipcMain.handle(
     'brainstorm:listVersions',
     (_, projectId: unknown, threadId: unknown, brainstormId: unknown) =>
@@ -3035,12 +3070,10 @@ export function registerIpcHandlers(
       validateEntityId(threadId, 'Thread ID')
     )
   )
-  ipcMain.handle('prd:getWorkflow', (_, projectId: unknown, threadId: unknown) =>
-    prdEngine.getWorkflowState(
-      validateEntityId(projectId, 'Project ID'),
-      validateEntityId(threadId, 'Thread ID')
-    )
-  )
+  ipcMain.handle('prd:getWorkflow', async (_, projectId: unknown, threadId: unknown) => {
+    const ids = await waitForThreadReady(projectId, threadId)
+    return prdEngine.getWorkflowState(ids.projectId, ids.threadId)
+  })
   ipcMain.handle('prd:chooseEntry', (_, projectId: unknown, threadId: unknown, choice: unknown) => {
     if (choice !== 'brainstorm_first' && choice !== 'start_prd') {
       throw new TypeError('PRD entry choice must be brainstorm_first or start_prd')
@@ -3057,12 +3090,10 @@ export function registerIpcHandlers(
       validateEntityId(threadId, 'Thread ID')
     )
   )
-  ipcMain.handle('prd:getActive', (_, projectId: unknown, threadId: unknown) =>
-    prdEngine.getActive(
-      validateEntityId(projectId, 'Project ID'),
-      validateEntityId(threadId, 'Thread ID')
-    )
-  )
+  ipcMain.handle('prd:getActive', async (_, projectId: unknown, threadId: unknown) => {
+    const ids = await waitForThreadReady(projectId, threadId)
+    return prdEngine.getActive(ids.projectId, ids.threadId)
+  })
   ipcMain.handle('prd:listVersions', (_, projectId: unknown, threadId: unknown, prdId: unknown) =>
     prdEngine.listVersions(
       validateEntityId(projectId, 'Project ID'),
@@ -3211,8 +3242,10 @@ export function registerIpcHandlers(
       preparePrdMarkdown(projectId, threadId, prdId, version)
   )
   ipcMain.handle('spec:getActive', async (_, projectId: unknown, threadId: unknown) => {
-    const safeProjectId = validateEntityId(projectId, 'Project ID')
-    const safeThreadId = validateEntityId(threadId, 'Thread ID')
+    const { projectId: safeProjectId, threadId: safeThreadId } = await waitForThreadReady(
+      projectId,
+      threadId
+    )
     const workflow = await specEngine.getWorkflowState(safeProjectId, safeThreadId)
     if (!workflow?.activeSpecId || !workflow.activeSpecVersion) return null
     return specEngine.getVersion(
@@ -3236,15 +3269,27 @@ export function registerIpcHandlers(
       const safeThreadId = validateEntityId(threadId, 'Thread ID')
       const safeContent = validateSpecContent(content)
       const safeProvenance = validateProvenance(provenance)
-      return memoryService.snapshotCurrent(safeProjectId, safeThreadId).then((context) =>
-        specEngine.createDraft({
-          projectId: safeProjectId,
-          threadId: safeThreadId,
-          content: safeContent,
-          provenance: safeProvenance,
-          context
-        })
-      )
+      return threadManager.getThread(safeProjectId, safeThreadId).then((thread) => {
+        const activeModelKey =
+          thread?.settings?.harnessId && thread.settings.providerId && thread.settings.modelId
+            ? modelKey(
+                thread.settings.harnessId,
+                thread.settings.providerId,
+                thread.settings.modelId
+              )
+            : undefined
+        return memoryService
+          .snapshotCurrent(safeProjectId, safeThreadId, activeModelKey)
+          .then((context) =>
+            specEngine.createDraft({
+              projectId: safeProjectId,
+              threadId: safeThreadId,
+              content: safeContent,
+              provenance: safeProvenance,
+              context
+            })
+          )
+      })
     }
   )
   ipcMain.handle(
@@ -3280,22 +3325,32 @@ export function registerIpcHandlers(
       const safeSpecId = validateEntityId(specId, 'Specification ID')
       const safeContent = validateSpecContent(content)
       const safeProvenance = validateProvenance(provenance)
-      return Promise.all([
-        specEngine.getLatest(safeProjectId, safeThreadId, safeSpecId),
-        memoryService.snapshotCurrent(safeProjectId, safeThreadId)
-      ]).then(([latest, memory]) =>
-        specEngine.createVersion({
-          projectId: safeProjectId,
-          threadId: safeThreadId,
-          specId: safeSpecId,
-          content: safeContent,
-          provenance: safeProvenance,
-          context: [
-            ...(latest?.context.filter((reference) => reference.type !== 'memory') ?? []),
-            ...memory
-          ]
-        })
-      )
+      return threadManager.getThread(safeProjectId, safeThreadId).then((thread) => {
+        const activeModelKey =
+          thread?.settings?.harnessId && thread.settings.providerId && thread.settings.modelId
+            ? modelKey(
+                thread.settings.harnessId,
+                thread.settings.providerId,
+                thread.settings.modelId
+              )
+            : undefined
+        return Promise.all([
+          specEngine.getLatest(safeProjectId, safeThreadId, safeSpecId),
+          memoryService.snapshotCurrent(safeProjectId, safeThreadId, activeModelKey)
+        ]).then(([latest, memory]) =>
+          specEngine.createVersion({
+            projectId: safeProjectId,
+            threadId: safeThreadId,
+            specId: safeSpecId,
+            content: safeContent,
+            provenance: safeProvenance,
+            context: [
+              ...(latest?.context.filter((reference) => reference.type !== 'memory') ?? []),
+              ...memory
+            ]
+          })
+        )
+      })
     }
   )
   ipcMain.handle(
@@ -3332,12 +3387,10 @@ export function registerIpcHandlers(
   ipcMain.handle('spec:validate', (_, spec: unknown) =>
     validateEngineeringSpec(validateEngineeringSpecInput(spec))
   )
-  ipcMain.handle('audit:getActive', (_, projectId: unknown, threadId: unknown) =>
-    auditEngine.getActive(
-      validateEntityId(projectId, 'Project ID'),
-      validateEntityId(threadId, 'Thread ID')
-    )
-  )
+  ipcMain.handle('audit:getActive', async (_, projectId: unknown, threadId: unknown) => {
+    const ids = await waitForThreadReady(projectId, threadId)
+    return auditEngine.getActive(ids.projectId, ids.threadId)
+  })
   ipcMain.handle(
     'audit:listVersions',
     (_, projectId: unknown, threadId: unknown, reportId: unknown) =>
@@ -3422,7 +3475,11 @@ export function registerIpcHandlers(
     const validProjectId = validateEntityId(projectId, 'Project ID')
     const validThreadId = validateEntityId(threadId, 'Thread ID')
     const assignment = assignmentEngine.getActive(validProjectId, validThreadId)
-    if (assignment?.status === 'completed' && assignment.auditCycle?.status === 'report_ready') {
+    if (
+      assignment?.status === 'completed' &&
+      assignment.auditCycle &&
+      ['report_ready', 'available'].includes(assignment.auditCycle.status)
+    ) {
       await assignmentEngine.completeAuditCycle(validProjectId, validThreadId)
       await threadManager.setStatus(validProjectId, validThreadId, 'completed')
       return threadManager.setAuditState(validProjectId, validThreadId, undefined)
@@ -6688,25 +6745,10 @@ export function registerIpcHandlers(
           }
         }
         await finalize()
-        // Broadcast immediately so the new thread opens instantly — branch
-        // detection runs afterwards and updates the row without ever blocking
-        // typing, voice, or the "Loading conversation..." state.
+        // Broadcast immediately so the new thread opens instantly — the git
+        // branch settles through a detached task below and arrives via a later
+        // broadcast, never blocking typing, voice, or "Loading conversation...".
         broadcastThreadUpdate(thread)
-        if (thread.workingDirectory) {
-          try {
-            const branch = await repositoryService.getCurrentBranch(thread.workingDirectory)
-            if (branch) {
-              await threadManager.setBranch(thread.projectId, thread.id, branch)
-              thread.branch = branch
-              broadcastThreadUpdate(thread)
-            }
-          } catch (error) {
-            Logger.error('New thread branch detection failed', {
-              threadId: thread.id,
-              error: String(error)
-            })
-          }
-        }
       },
       () => {
         broadcastThreadDeleted(thread)
@@ -6717,16 +6759,25 @@ export function registerIpcHandlers(
         )
       }
     )
+    threadCreation.beginDetached(thread.id, async (aborted) => {
+      if (aborted) return
+      settleThreadBranch(branchBackfillDeps, thread)
+    })
     return thread
   })
   if (!options.hydrationHandlersRegistered) {
-    // Reads must never wait for optimistic thread finalization: the renderer
-    // already holds the thread object returned by `thread:create`. Reading is
-    // always instant — only the send path (`ensureSession`/`sendPrompt`) queues
-    // behind readiness.
-    ipcMain.handle('thread:get', (_, projectId: string, threadId: string) =>
-      threadManager.getThread(projectId, threadId)
-    )
+    // The renderer already holds the optimistic thread object, so this is not
+    // on the initial paint path. Wait only when this exact thread is still
+    // being finalized so background hydration never races durable ownership.
+    // A thread whose creation-time settle never completed (restart or a
+    // transient git failure) heals lazily on its next open — off this read's
+    // critical path, deduped while in flight.
+    ipcMain.handle('thread:get', async (_, projectId: string, threadId: string) => {
+      const ids = await waitForThreadReady(projectId, threadId)
+      const thread = await threadManager.getThread(ids.projectId, ids.threadId)
+      if (thread) settleThreadBranch(branchBackfillDeps, thread)
+      return thread
+    })
   }
   ipcMain.handle('thread:list', (_, projectId: string) => threadManager.listThreads(projectId))
   ipcMain.handle('thread:listAll', () => threadManager.listAllThreads())
@@ -6789,51 +6840,54 @@ export function registerIpcHandlers(
     }
     return threadManager.searchThreads(safeQuery, safeOptions)
   })
-  // Mirror-only transcript read — fast disk access, never touches a harness driver.
-  ipcMain.handle(
-    'thread:loadMessages',
-    async (_, projectId: unknown, threadId: unknown, before?: unknown, limit: unknown = 40) => {
-      let safeBefore: ThreadMessageCursor | undefined
-      if (before !== undefined) {
-        if (!isRecord(before)) throw new TypeError('Message cursor must be an object')
-        safeBefore = {
-          createdAt: validateBoundedInteger(
-            before.createdAt,
-            'Message cursor timestamp',
-            0,
-            Number.MAX_SAFE_INTEGER
-          ),
-          id: validateBoundedString(before.id, 'Message cursor ID', 1, 512)
+  if (!options.hydrationHandlersRegistered) {
+    // Mirror-only transcript reads — fast disk access, never touches a harness
+    // driver. Hydration registers these before the renderer's first document
+    // so a conversation page never waits for optional feature services.
+    ipcMain.handle(
+      'thread:loadMessages',
+      async (_, projectId: unknown, threadId: unknown, before?: unknown, limit: unknown = 40) => {
+        let safeBefore: ThreadMessageCursor | undefined
+        if (before !== undefined) {
+          if (!isRecord(before)) throw new TypeError('Message cursor must be an object')
+          safeBefore = {
+            createdAt: validateBoundedInteger(
+              before.createdAt,
+              'Message cursor timestamp',
+              0,
+              Number.MAX_SAFE_INTEGER
+            ),
+            id: validateBoundedString(before.id, 'Message cursor ID', 1, 512)
+          }
         }
+        const safeProjectId = validateEntityId(projectId, 'Project ID')
+        const safeThreadId = validateEntityId(threadId, 'Thread ID')
+        return threadManager.loadMessagePage(
+          safeProjectId,
+          safeThreadId,
+          safeBefore,
+          validateBoundedInteger(limit, 'Message page limit', 1, 100)
+        )
       }
+    )
+    // Mirror-only centered transcript read for quick jumps to arbitrary messages.
+    ipcMain.handle(
+      'thread:loadMessagesAround',
+      (_, projectId: unknown, threadId: unknown, anchorId: unknown, limit: unknown = 40) =>
+        threadManager.loadMessagePageAround(
+          validateEntityId(projectId, 'Project ID'),
+          validateEntityId(threadId, 'Thread ID'),
+          validateBoundedString(anchorId, 'Message ID', 1, 512),
+          validateBoundedInteger(limit, 'Message page limit', 1, 100)
+        )
+    )
+    // Lightweight full user-message history for the header quick-jump list.
+    ipcMain.handle('thread:loadUserMessages', async (_, projectId: unknown, threadId: unknown) => {
       const safeProjectId = validateEntityId(projectId, 'Project ID')
       const safeThreadId = validateEntityId(threadId, 'Thread ID')
-      return threadManager.loadMessagePage(
-        safeProjectId,
-        safeThreadId,
-        safeBefore,
-        validateBoundedInteger(limit, 'Message page limit', 1, 100)
-      )
-    }
-  )
-  // Mirror-only centered transcript read for quick jumps to arbitrary messages.
-  ipcMain.handle(
-    'thread:loadMessagesAround',
-    (_, projectId: unknown, threadId: unknown, anchorId: unknown, limit: unknown = 40) => {
-      return threadManager.loadMessagePageAround(
-        validateEntityId(projectId, 'Project ID'),
-        validateEntityId(threadId, 'Thread ID'),
-        validateBoundedString(anchorId, 'Message ID', 1, 512),
-        validateBoundedInteger(limit, 'Message page limit', 1, 100)
-      )
-    }
-  )
-  // Lightweight full user-message history for the header quick-jump list.
-  ipcMain.handle('thread:loadUserMessages', async (_, projectId: unknown, threadId: unknown) => {
-    const safeProjectId = validateEntityId(projectId, 'Project ID')
-    const safeThreadId = validateEntityId(threadId, 'Thread ID')
-    return threadManager.loadUserMessages(safeProjectId, safeThreadId)
-  })
+      return threadManager.loadUserMessages(safeProjectId, safeThreadId)
+    })
+  }
   // Export the conversation transcript as Markdown, off the main thread.
   ipcMain.handle(
     'thread:exportTranscript',
@@ -6998,12 +7052,10 @@ export function registerIpcHandlers(
   ipcMain.handle('thread:markRead', async (_, projectId: string, threadId: string) => {
     // Opening a thread means the user moved on from wherever they were; any
     // completed turn left pending on another thread counts as a success.
-    turnFeedbackRepo.resolvePendingForOtherThreads(
-      validateEntityId(threadId, 'Thread ID'),
-      'success',
-      'switched',
-      1
-    )
+    const safeThreadId = validateEntityId(threadId, 'Thread ID')
+    void turnFeedbackRepo
+      .resolvePendingForOtherThreadsViaWorker(safeThreadId, 'success', 'switched', 1)
+      .catch((error) => Logger.dev('Thread switch feedback resolution failed:', error))
     return threadManager.markRead(projectId, threadId)
   })
   ipcMain.handle('thread:reorder', (_, projectId: unknown, orderedIds: unknown) =>
@@ -7048,6 +7100,7 @@ export function registerIpcHandlers(
       const safeProjectId = validateEntityId(projectId, 'Project ID')
       const safeThreadId = validateEntityId(threadId, 'Thread ID')
       const safeSettings = validateThreadSettings(settings)
+      await threadCreation.awaitReady(safeThreadId)
       return threadManager.updateSettings(safeProjectId, safeThreadId, safeSettings)
     }
   )

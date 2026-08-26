@@ -246,7 +246,8 @@ export class CheckpointManager {
         status,
         after,
         changes,
-        changeFilterApplied: filterChangedPaths !== undefined || changes.length !== allChanges.length,
+        changeFilterApplied:
+          filterChangedPaths !== undefined || changes.length !== allChanges.length,
         lineStats: lineStats.stats,
         completedAt: Date.now(),
         ...(completionFailure ? { failure: completionFailure } : {})
@@ -284,22 +285,23 @@ export class CheckpointManager {
     for (const [path, claimedAt] of options.foreignClaimedPaths ?? []) {
       if (claimedAt >= turnStart) foreign.set(path, claimedAt)
     }
-    const rows = await this.queryDataRows(
-      `SELECT data FROM turn_checkpoints
-       WHERE project_id = ? AND thread_id != ?
-         AND json_extract(data, '$.status') = 'completed'
-         AND json_extract(data, '$.completedAt') >= ?`,
+    // Extract only (path, completedAt) in SQL. Shipping full checkpoint JSON
+    // blobs across the worker port just to read two fields crashed the process
+    // on large projects and spiked memory on every turn completion.
+    const rows = await this.queryRows(
+      `SELECT json_extract(tc.data, '$.completedAt') AS completed_at,
+              json_extract(je.value, '$.path') AS path
+       FROM turn_checkpoints tc, json_each(tc.data, '$.changes') je
+       WHERE tc.project_id = ? AND tc.thread_id != ?
+         AND json_extract(tc.data, '$.status') = 'completed'
+         AND json_extract(tc.data, '$.completedAt') >= ?`,
       [checkpoint.projectId, checkpoint.threadId, turnStart],
       FOREIGN_CHECKPOINT_SCAN_LIMIT
     )
-    for (const { data } of rows) {
-      try {
-        const other = JSON.parse(data) as TurnCheckpoint
-        for (const change of other.changes ?? []) {
-          if (!foreign.has(change.path)) foreign.set(change.path, other.completedAt ?? turnStart)
-        }
-      } catch {
-        // A malformed row must not block turn completion.
+    for (const row of rows) {
+      const path = row['path']
+      if (typeof path === 'string' && !foreign.has(path)) {
+        foreign.set(path, Number(row['completed_at'] ?? turnStart))
       }
     }
     return foreign
@@ -432,13 +434,13 @@ export class CheckpointManager {
   async list(projectId: string, threadId: string): Promise<TurnCheckpoint[]> {
     assertId(projectId)
     assertId(threadId)
-    const rows = await this.queryDataRows(
+    const rows = await this.queryRows(
       'SELECT data FROM turn_checkpoints WHERE project_id = ? AND thread_id = ? ORDER BY created_at DESC',
       [projectId, threadId],
       10_000
     )
     return rows.map((row) =>
-      this.recoverUnfilteredChanges(projectId, JSON.parse(row.data) as TurnCheckpoint)
+      this.recoverUnfilteredChanges(projectId, JSON.parse(String(row['data'])) as TurnCheckpoint)
     )
   }
 
@@ -455,22 +457,31 @@ export class CheckpointManager {
         encoding: 'utf-8',
         mode: 0o600
       })
+      // Collect referenced hashes in SQL — a full scan used to ship every
+      // checkpoint JSON blob across the worker port, which crashed the process
+      // on large projects.
+      let rows: Record<string, unknown>[]
+      try {
+        rows = await this.queryRows(
+          `SELECT json_extract(je.value, '$.hash') AS hash
+           FROM turn_checkpoints tc, json_each(tc.data, '$.before.files') je
+           WHERE tc.project_id = ?
+           UNION
+           SELECT json_extract(je.value, '$.hash') AS hash
+           FROM turn_checkpoints tc, json_each(tc.data, '$.after.files') je
+           WHERE tc.project_id = ?`,
+          [projectId, projectId],
+          100_000
+        )
+      } catch {
+        // A malformed checkpoint row fails the whole extraction; preserving
+        // the project blob directory is safer than risking data loss.
+        return 0
+      }
       const referenced = new Set<string>()
-      const rows = await this.queryDataRows(
-        'SELECT data FROM turn_checkpoints WHERE project_id = ?',
-        [projectId],
-        100_000
-      )
       for (const row of rows) {
-        try {
-          const checkpoint = JSON.parse(row.data) as TurnCheckpoint
-          for (const file of Object.values(checkpoint.before.files)) referenced.add(file.hash)
-          for (const file of Object.values(checkpoint.after?.files ?? {})) referenced.add(file.hash)
-        } catch {
-          // A corrupt remaining checkpoint cannot safely identify its blobs, so
-          // preserve the project blob directory rather than risk data loss.
-          return 0
-        }
+        const hash = row['hash']
+        if (typeof hash === 'string') referenced.add(hash)
       }
 
       const directory = join(getConfigRoot(), `projects/${projectId}/blobs`)
@@ -559,14 +570,14 @@ export class CheckpointManager {
     assertId(projectId)
     assertId(threadId)
     assertId(turnId)
-    const rows = await this.queryDataRows(
+    const rows = await this.queryRows(
       'SELECT data FROM turn_checkpoints WHERE turn_id = ?',
       [turnId],
       2
     )
     const row = rows[0]
     return row
-      ? this.recoverUnfilteredChanges(projectId, JSON.parse(row.data) as TurnCheckpoint)
+      ? this.recoverUnfilteredChanges(projectId, JSON.parse(String(row['data'])) as TurnCheckpoint)
       : null
   }
 
@@ -787,21 +798,23 @@ export class CheckpointManager {
   }
 
   /**
-   * Bounded `turn_checkpoints.data` read on the maintenance worker's
-   * connection so disk I/O and SQLite iteration never block the Electron main
-   * process. Falls back to the primary connection when the worker is
-   * unavailable or a query cannot be served.
+   * Bounded read on the maintenance worker's connection so disk I/O and SQLite
+   * iteration never block the Electron main process. A byte-truncated result is
+   * returned as-is — re-running the query unbounded on the primary connection
+   * would move exactly the oversized payload this boundary exists to avoid back
+   * onto the main thread. The primary connection is only consulted when the
+   * worker is unavailable (e.g. in-memory test databases).
    */
-  private async queryDataRows(
+  private async queryRows(
     sql: string,
     params: unknown[],
     maxRows: number
-  ): Promise<Array<{ data: string }>> {
+  ): Promise<Record<string, unknown>[]> {
     const result = await this.db.queryViaWorker(sql, params, maxRows)
-    if (result.ok && !result.truncated) {
-      return result.rows as Array<{ data: string }>
+    if (!result.ok) {
+      return this.db.all<Record<string, unknown>>(sql, ...params)
     }
-    return this.db.all<{ data: string }>(sql, ...params)
+    return result.rows ?? []
   }
 
   /** Single write statement on the maintenance worker's connection (primary fallback). */

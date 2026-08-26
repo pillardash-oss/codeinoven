@@ -1,12 +1,44 @@
 import { spawn } from 'node:child_process'
 import { existsSync } from 'node:fs'
-import { win32 } from 'node:path'
+import { join, win32 } from 'node:path'
+import { app } from 'electron'
 import type { HarnessExecutionTarget } from '../../lib/types'
 import {
   buildProcessEnvironment,
   commandRequiresShell,
   resolveExecutablePath
 } from './cli-environment'
+
+/** Env var that makes Electron's own binary behave as a plain Node runtime. */
+const ELECTRON_RUN_AS_NODE = { ELECTRON_RUN_AS_NODE: '1' }
+
+/**
+ * Path to the bundled Pi CLI entry point (see `scripts/build-pi-harness.ts`),
+ * or `undefined` if the resource is missing (e.g. a dev checkout that never
+ * ran the build script). Used only as a fallback when no `pi` is found on
+ * PATH or in WSL — a real install always takes priority.
+ */
+function bundledPiScriptPath(): string | undefined {
+  const base = app.isPackaged
+    ? join(process.resourcesPath, 'harnesses/pi')
+    : join(app.getAppPath(), 'resources/harnesses/pi')
+  const scriptPath = join(base, 'dist/bundle/rpc-entry.js')
+  return existsSync(scriptPath) ? scriptPath : undefined
+}
+
+/** The bundled Pi runtime, spawned via Electron's own embedded Node. */
+function bundledPiRuntime(command: string): HarnessRuntime | null {
+  if (command !== 'pi') return null
+  const scriptPath = bundledPiScriptPath()
+  return scriptPath
+    ? {
+        command,
+        executable: process.execPath,
+        resolvedPath: scriptPath,
+        target: { kind: 'bundled' }
+      }
+    : null
+}
 
 const DISCOVERY_TIMEOUT_MS = 8_000
 const PATH_TRANSLATION_TIMEOUT_MS = 5_000
@@ -288,7 +320,7 @@ export async function discoverHarnessRuntimes(
   for (const command of missing) {
     if (!result.has(command)) {
       const native = nativeRuntime(command, env)
-      result.set(command, native)
+      result.set(command, native ?? bundledPiRuntime(command))
     }
   }
   for (const command of uniqueCommands) {
@@ -497,6 +529,19 @@ export async function prepareHarnessInvocation(
 ): Promise<PreparedHarnessInvocation> {
   const env = options.env ?? buildProcessEnvironment()
   if (process.platform !== 'win32') {
+    if (!resolveExecutablePath(command, env)) {
+      const bundled = bundledPiRuntime(command)
+      if (bundled) {
+        return {
+          command: bundled.executable,
+          args: [bundled.resolvedPath, ...args],
+          ...(options.cwd ? { cwd: options.cwd } : {}),
+          env: { ...env, ...ELECTRON_RUN_AS_NODE },
+          shell: false,
+          runtime: bundled
+        }
+      }
+    }
     return {
       command,
       args,
@@ -508,6 +553,16 @@ export async function prepareHarnessInvocation(
   }
   const runtime = await resolveHarnessRuntime(command, options.cwd)
   if (!runtime) throw new Error(`${command} was not found on Windows or in any WSL distribution`)
+  if (runtime.target.kind === 'bundled') {
+    return {
+      command: runtime.executable,
+      args: [runtime.resolvedPath, ...args],
+      ...(options.cwd ? { cwd: options.cwd } : {}),
+      env: { ...env, ...ELECTRON_RUN_AS_NODE },
+      shell: false,
+      runtime
+    }
+  }
   if (runtime.target.kind === 'native') {
     const native = prepareNativeInvocation(runtime, args, env)
     return {
@@ -555,6 +610,11 @@ export async function prepareHarnessTerminalHandoff(
 ): Promise<HarnessTerminalHandoff> {
   const runtime = await resolveHarnessRuntime(command)
   if (!runtime) throw new Error(`${command} was not found on Windows or in any WSL distribution`)
+  if (runtime.target.kind === 'bundled') {
+    throw new Error(
+      `${command} is bundled with CodeInOven — there is no CLI install to hand off to`
+    )
+  }
   if (runtime.target.kind === 'native') {
     return { command: runtime.executable, args, runtime }
   }
@@ -596,11 +656,18 @@ export async function probeHarnessRuntime(
   try {
     const command = runtime.executable
     const probeArgs =
-      runtime.target.kind === 'native'
-        ? args
-        : ['--distribution', runtime.target.distribution, '--', runtime.resolvedPath, ...args]
+      runtime.target.kind === 'wsl'
+        ? ['--distribution', runtime.target.distribution, '--', runtime.resolvedPath, ...args]
+        : runtime.target.kind === 'bundled'
+          ? [runtime.resolvedPath, ...args]
+          : args
     const result = await capture(command, probeArgs, {
-      env: runtime.target.kind === 'wsl' ? buildWslProcessEnvironment(env) : env,
+      env:
+        runtime.target.kind === 'wsl'
+          ? buildWslProcessEnvironment(env)
+          : runtime.target.kind === 'bundled'
+            ? { ...env, ...ELECTRON_RUN_AS_NODE }
+            : env,
       shell: runtime.target.kind === 'native' && commandRequiresShell(runtime.executable)
     })
     const stdout = decodeWslOutput(result.stdout)
@@ -662,7 +729,7 @@ export async function readHarnessHomeFile(
 ): Promise<string | null | undefined> {
   validateHarnessHomePath(relativePath)
   const runtime = await resolveHarnessRuntime(command, projectPath)
-  if (!runtime || runtime.target.kind === 'native') return undefined
+  if (!runtime || runtime.target.kind !== 'wsl') return undefined
   try {
     const result = await capture(
       runtime.executable,
@@ -691,7 +758,7 @@ export async function writeHarnessHomeFile(
   content: string
 ): Promise<boolean> {
   const runtime = await resolveHarnessRuntime(command)
-  if (!runtime || runtime.target.kind === 'native') return false
+  if (!runtime || runtime.target.kind !== 'wsl') return false
   const distribution = runtime.target.distribution
   validateHarnessHomePath(relativePath)
   if (Buffer.byteLength(content) > 4 * 1024 * 1024) {

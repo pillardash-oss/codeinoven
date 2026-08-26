@@ -37,6 +37,47 @@ const RETRY_MIN_INTERVAL_MS = 20 * 1000
 /** localStorage key under which the last-known catalogs are mirrored. */
 const CATALOG_MIRROR_KEY = `${APP_SLUG}.providerCatalog.mirror.v2`
 
+/**
+ * Merge catalog snapshots without allowing a partial/stale model record to
+ * erase optional capability metadata discovered by another snapshot.
+ *
+ * Provider catalogs arrive from several places during startup: the local
+ * mirror, the main-process snapshot, the component prop, and a live driver
+ * refresh. Thinking presets are optional, so an older record that omits them
+ * must not hide presets already reported by another record.
+ */
+export function mergeProviderCatalogEntries(catalogs: ProviderCatalog[]): ProviderCatalog[] {
+  // This is a local computation, not application state. Using SvelteMap here
+  // makes every merge write reactive signals while ModelPicker/ChatComposer
+  // are evaluating their derived values, which can cascade into a long flush.
+  // eslint-disable-next-line svelte/prefer-svelte-reactivity -- local-only merge state; it must not notify Svelte while derived values are evaluated
+  const merged = new Map<string, ProviderCatalog>()
+  for (const catalog of catalogs) {
+    const key = `${catalog.harnessId}:${catalog.id}`
+    const existing = merged.get(key)
+    if (!existing) {
+      merged.set(key, { ...catalog, models: [...catalog.models] })
+      continue
+    }
+
+    // eslint-disable-next-line svelte/prefer-svelte-reactivity -- local-only merge state; it must not notify Svelte while derived values are evaluated
+    const models = new Map(
+      existing.models.map((model) => [`${model.providerId}:${model.id}`, model])
+    )
+    for (const model of catalog.models) {
+      const modelKey = `${model.providerId}:${model.id}`
+      const prior = models.get(modelKey)
+      const mergedModel = { ...prior, ...model }
+      if (model.thinkingPresets === undefined && prior?.thinkingPresets !== undefined) {
+        mergedModel.thinkingPresets = prior.thinkingPresets
+      }
+      models.set(modelKey, mergedModel)
+    }
+    existing.models = [...models.values()]
+  }
+  return [...merged.values()]
+}
+
 class ProviderCatalogStore {
   private cache = new SvelteMap<string, ProviderCatalog[]>()
   private customOverrides = new SvelteMap<string, BaseUrlProvider | null>()
@@ -77,10 +118,7 @@ class ProviderCatalogStore {
   /**
    * Seed every project's catalog from disk. Startup never contacts harnesses.
    */
-  async init(
-    projectIds: string[],
-    options: { refresh?: boolean } = {}
-  ): Promise<void> {
+  async init(projectIds: string[], options: { refresh?: boolean } = {}): Promise<void> {
     const refresh = options.refresh ?? true
     const targets = [...new Set(projectIds)]
     await Promise.all(
@@ -161,14 +199,11 @@ class ProviderCatalogStore {
    * thread's project catalog (cold projects, driver availability differences).
    */
   allCached(): ProviderCatalog[] {
-    const union: Record<string, ProviderCatalog> = {}
-    for (const catalogs of this.cache.values()) {
-      for (const catalog of catalogs) {
-        const key = `${catalog.harnessId}:${catalog.id}`
-        union[key] ??= catalog
-      }
+    const catalogs: ProviderCatalog[] = []
+    for (const projectCatalogs of this.cache.values()) {
+      catalogs.push(...projectCatalogs)
     }
-    return this.applyCustomOverrides(Object.values(union))
+    return this.applyCustomOverrides(mergeProviderCatalogEntries(catalogs))
   }
 
   /**

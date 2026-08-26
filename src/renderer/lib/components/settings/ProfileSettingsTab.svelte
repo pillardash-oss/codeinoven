@@ -22,7 +22,7 @@
   import { getProjectIcon, projectIconOnError } from '$lib/project-icons'
   import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
 
-  type ThinkingFilter = 'all' | ThinkingLevel | 'unknown'
+  type ThinkingFilter = 'all' | ThinkingLevel
   type TaskFilter = 'all' | TurnOutcomeTaskType
   type RangePreset = 'today' | 'yesterday' | '7d' | '30d' | 'year' | 'custom'
   type ModelRankMetric = 'cost' | 'tokens' | 'runtime'
@@ -310,12 +310,13 @@
   )
   const availableThinkingLevels = $derived(
     usage.models
-      .map((model) => model.thinkingLevel ?? 'unknown')
+      .map((model) => model.thinkingLevel)
+      .filter((level): level is ThinkingLevel => level !== undefined)
       .filter((level, index, all) => all.indexOf(level) === index)
   )
   const filteredModels = $derived(
     usage.models.filter((model) =>
-      thinkingFilter === 'all' ? true : (model.thinkingLevel ?? 'unknown') === thinkingFilter
+      thinkingFilter === 'all' ? true : model.thinkingLevel === thinkingFilter
     )
   )
   const filteredPerformance = $derived(
@@ -324,8 +325,7 @@
     )
   )
 
-  function thinkingLevelLabel(level: ThinkingLevel | 'unknown'): string {
-    if (level === 'unknown') return 'Unknown'
+  function thinkingLevelLabel(level: ThinkingLevel): string {
     return (
       STANDARD_THINKING_PRESETS.find((preset) => preset.id === level)?.label ??
       level.charAt(0).toUpperCase() + level.slice(1)
@@ -1361,8 +1361,12 @@
           <div class="px-4 py-3">
             <div class="flex items-center justify-between gap-4 text-xs">
               <span class="flex min-w-0 items-center gap-2 truncate font-semibold">
-                <Brain size={15} class="text-muted" />
-                {thinkingLevelLabel(level.thinkingLevel ?? 'unknown')}
+                {#if level.thinkingLevel}
+                  <Brain size={15} class="text-muted" />
+                  {thinkingLevelLabel(level.thinkingLevel)}
+                {:else}
+                  Reported without effort metadata
+                {/if}
               </span>
               <span class="shrink-0 tabular-nums text-muted">
                 {formatNumber(level.tokens)} tokens · {formatCost(level.costUsd)}
@@ -1423,9 +1427,7 @@
                 aria-pressed={thinkingFilter === level}
                 onclick={() => (thinkingFilter = level)}
               >
-                {#if level !== 'unknown'}
-                  <Brain size={11} />
-                {/if}
+                <Brain size={11} />
                 {thinkingLevelLabel(level)}
               </button>
             {/each}

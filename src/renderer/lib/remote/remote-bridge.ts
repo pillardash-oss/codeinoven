@@ -15,9 +15,13 @@
 
 import { remoteSession } from './session-store.svelte'
 
+/** A lost response must not leave a remote panel in a permanent loading state. */
+const REMOTE_RPC_TIMEOUT_MS = 20_000
+
 type PendingInvoke = {
   resolve: (result: unknown) => void
   reject: (error: Error) => void
+  timeout: ReturnType<typeof setTimeout>
 }
 
 class RemoteRpcBridge {
@@ -44,7 +48,10 @@ class RemoteRpcBridge {
   private rejectPending(message: string): void {
     if (this.pending.size === 0) return
     const error = new Error(message)
-    for (const pending of this.pending.values()) pending.reject(error)
+    for (const pending of this.pending.values()) {
+      clearTimeout(pending.timeout)
+      pending.reject(error)
+    }
     this.pending.clear()
   }
 
@@ -62,6 +69,7 @@ class RemoteRpcBridge {
       const pending = this.pending.get(record.id)
       if (pending) {
         this.pending.delete(record.id)
+        clearTimeout(pending.timeout)
         pending.resolve(record.result)
       }
       return
@@ -70,6 +78,7 @@ class RemoteRpcBridge {
       const pending = this.pending.get(record.id)
       if (pending) {
         this.pending.delete(record.id)
+        clearTimeout(pending.timeout)
         pending.reject(new Error(String(record.message ?? 'Remote invoke failed')))
       }
       return
@@ -96,11 +105,24 @@ class RemoteRpcBridge {
     }
     const id = this.nextId++
     return new Promise<unknown>((resolve, reject) => {
-      this.pending.set(id, { resolve, reject })
+      const timeout = setTimeout(() => {
+        const pending = this.pending.get(id)
+        if (!pending) return
+        this.pending.delete(id)
+        pending.reject(
+          new Error(
+            `Remote request "${channel}" timed out. Check the desktop connection and retry.`
+          )
+        )
+      }, REMOTE_RPC_TIMEOUT_MS)
+      this.pending.set(id, { resolve, reject, timeout })
       void remoteSession
         .sendPayload({ rpc: 'invoke', id, channel, args })
         .catch((error: unknown) => {
+          const pending = this.pending.get(id)
+          if (!pending) return
           this.pending.delete(id)
+          clearTimeout(pending.timeout)
           reject(error instanceof Error ? error : new Error(String(error)))
         })
     })

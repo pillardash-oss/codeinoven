@@ -148,6 +148,13 @@ const ACCOUNT_TOKEN_REFRESH_RETRY_MS = 5 * 60_000
 const ACCOUNT_TOKEN_REFRESH_TIMER_MAX_MS = 24 * 60 * 60_000
 const ACCOUNT_PROFILE_REFRESH_RETRY_INITIAL_MS = 30_000
 const ACCOUNT_PROFILE_REFRESH_RETRY_MAX_MS = 5 * 60_000
+// Every renderer surface that shows the account (sidebar, settings, remote
+// client view) calls accountProfile() on mount. The cached profile always
+// answers instantly; this bounds how often a mount is additionally allowed to
+// revalidate over the network, so opening/switching between those views does
+// not each spend a Convex round trip. The periodic scheduleAccountProfileSync
+// timer already keeps the cache fresh in the background regardless.
+const ACCOUNT_PROFILE_REFRESH_MIN_INTERVAL_MS = 5 * 60_000
 
 function cloudResponseIsTerminal(status: number): boolean {
   return status >= 400 && status < 500 && status !== 408 && status !== 425 && status !== 429
@@ -428,6 +435,7 @@ function parseGlobalMemories(value: unknown): MemoryEntry[] | null {
       typeof entry['content'] !== 'string' ||
       typeof entry['enabled'] !== 'boolean' ||
       typeof entry['updatedAt'] !== 'number' ||
+      (entry['createdAt'] !== undefined && typeof entry['createdAt'] !== 'number') ||
       !categories.includes(entry['category'] as MemoryEntry['category']) ||
       !priorities.includes(entry['priority'] as MemoryEntry['priority']) ||
       entry['scope'] !== 'global' ||
@@ -448,6 +456,8 @@ function parseGlobalMemories(value: unknown): MemoryEntry[] | null {
       label: entry['label'],
       content: entry['content'],
       enabled: entry['enabled'],
+      // Older synced payloads predate createdAt; fall back to updatedAt.
+      createdAt: typeof entry['createdAt'] === 'number' ? entry['createdAt'] : entry['updatedAt'],
       updatedAt: entry['updatedAt'],
       category: entry['category'] as MemoryEntry['category'],
       priority: entry['priority'] as MemoryEntry['priority'],
@@ -525,6 +535,7 @@ export class RemoteModeController {
   private accountProfileRefreshPromise: Promise<void> | null = null
   private accountProfileRefreshFailureCount = 0
   private accountProfileRefreshRetryAt = 0
+  private accountProfileRefreshedAt = 0
   private cloudConfig: CloudAccessConfig | null = null
   private cloudRelay: CloudRelayClient | null = null
   private cloudEventSendQueue: Promise<void> = Promise.resolve()
@@ -1222,7 +1233,17 @@ export class RemoteModeController {
       this.cloudConfig ?? (await this.storage?.read<CloudAccessConfig>(CLOUD_CONFIG_PATH)) ?? null
     const tokenRef = freshAccountConfig?.profileTokenRef ?? cloudConfig?.profileTokenRef
     if (!tokenRef) return null
-    const token = await this.vault.resolve(tokenRef)
+    let token: string | null
+    try {
+      token = await this.vault.resolve(tokenRef)
+    } catch (error) {
+      if (error instanceof Error && error.message === 'Credential not found') {
+        token = null
+      } else {
+        throw error
+      }
+    }
+    if (token === null) return null
     const apiOrigin = freshAccountConfig?.apiOrigin ?? cloudConfig?.apiOrigin
     return fetchWithDeadline(
       new URL('/v1/profile', apiOrigin),
@@ -1317,6 +1338,9 @@ export class RemoteModeController {
   private refreshAccountProfileInBackground(): Promise<void> {
     if (this.accountProfileRefreshPromise) return this.accountProfileRefreshPromise
     if (Date.now() < this.accountProfileRefreshRetryAt) return Promise.resolve()
+    if (Date.now() - this.accountProfileRefreshedAt < ACCOUNT_PROFILE_REFRESH_MIN_INTERVAL_MS) {
+      return Promise.resolve()
+    }
     this.accountProfileRefreshPromise = this.runAccountProfileRefresh().finally(() => {
       this.accountProfileRefreshPromise = null
     })
@@ -1325,6 +1349,7 @@ export class RemoteModeController {
 
   private async runAccountProfileRefresh(): Promise<void> {
     const generation = this.accountProfileGeneration
+    this.accountProfileRefreshedAt = Date.now()
     try {
       const state = await this.fetchAccountProfile()
       if (generation !== this.accountProfileGeneration) return
@@ -1398,6 +1423,7 @@ export class RemoteModeController {
     this.accountProfileGeneration++
     this.accountProfileRefreshFailureCount = 0
     this.accountProfileRefreshRetryAt = 0
+    this.accountProfileRefreshedAt = 0
     const config =
       this.accountConfig ??
       (await this.storage?.read<AccountSessionConfig>(ACCOUNT_CONFIG_PATH)) ??
@@ -1520,6 +1546,7 @@ export class RemoteModeController {
             this.accountProfileRefreshFailureCount = 0
             this.accountProfileRefreshRetryAt = 0
             const profile = await this.syncAccountProfile()
+            this.accountProfileRefreshedAt = Date.now()
             this.broadcastAccountProfile(profile)
             this.accountCallbackResponse(
               response,

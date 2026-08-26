@@ -1140,6 +1140,10 @@ export interface IpcInvokeContract {
     ],
     import('./speech/types').SpeechResult<import('./speech/types').SpeechTranscriptionResult>
   >
+  'speech:preloadAsr': Contract<
+    [runtime: import('./speech/types').SpeechRuntime, artifactId: string],
+    import('./speech/types').SpeechResult<void>
+  >
   'speech:getHistory': Contract<
     [cursor?: string, limit?: number],
     import('./speech/types').SpeechResult<import('./speech/types').SpeechHistoryPage>

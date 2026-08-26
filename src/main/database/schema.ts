@@ -748,6 +748,7 @@ CREATE TABLE IF NOT EXISTS usage_events (
   tokens_cache_write    INTEGER CHECK(tokens_cache_write IS NULL OR tokens_cache_write >= 0),
   tokens_output         INTEGER CHECK(tokens_output IS NULL OR tokens_output >= 0),
   tokens_reasoning      INTEGER CHECK(tokens_reasoning IS NULL OR tokens_reasoning >= 0),
+  tokens_total          INTEGER CHECK(tokens_total IS NULL OR tokens_total >= 0),
   raw_total             INTEGER CHECK(raw_total IS NULL OR raw_total >= 0),
   total_semantics       TEXT NOT NULL CHECK(total_semantics IN ('includes_cache','excludes_cache','categories_may_overlap','provider_defined','unavailable')),
   cost_usd              REAL,
@@ -756,6 +757,7 @@ CREATE TABLE IF NOT EXISTS usage_events (
   tool_fee_usd          REAL CHECK(tool_fee_usd IS NULL OR tool_fee_usd >= 0),
   success               INTEGER NOT NULL CHECK(success IN (0, 1)),
   retry_cause           TEXT,
+  duration_ms           INTEGER NOT NULL DEFAULT 0 CHECK(duration_ms >= 0),
   created_at            INTEGER NOT NULL,
   CHECK(
     (cost_status = 'unavailable' AND cost_usd IS NULL AND pricing_provenance_json IS NULL)
@@ -774,6 +776,12 @@ CREATE INDEX IF NOT EXISTS idx_usage_events_parent_turn
 -- Profile utility-usage and efficiency-KPI scans filter feature + created_at.
 CREATE INDEX IF NOT EXISTS idx_usage_events_feature_timestamp
   ON usage_events(feature, created_at);
+
+-- Profile analytics always bound reads by event time. The covering identity
+-- fields keep range/group queries on the dedicated ledger instead of scanning
+-- the transcript table.
+CREATE INDEX IF NOT EXISTS idx_usage_events_analytics_range
+  ON usage_events(created_at, feature, harness_id, provider_id, model_id, thinking_level);
 
 -- ─── Turn outcome feedback (session scoring) ─────────────────────────────
 -- One row per completed user turn, opened "pending" when a successful turn
