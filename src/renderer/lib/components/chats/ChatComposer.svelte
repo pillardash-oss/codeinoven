@@ -68,6 +68,8 @@
   import { APP_NAME } from '$shared/brand'
   import { getVendorIconDataUri } from '$lib/vendor-icons/registry'
   import { isRemotePwaRuntime } from '$lib/runtime-context'
+  import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
+  import type { SpeechEditorApplyResult, SpeechEditorTarget } from '../../speech/editor-target'
   import type { ActionDefinition, ActionSelection, ActionSource } from '$lib/actions'
   import type { RichInlineBadge } from '../shared/rich-markdown'
   import type {
@@ -417,7 +419,8 @@
   let gateVisionSelection = $state<AgentModelSelection | null>(null)
   let gateDonotAsk = $state(false)
   let gateDirect = $state<boolean | undefined>(undefined)
-  const composerEditorId = `chat-composer-${crypto.randomUUID()}`
+  // svelte-ignore state_referenced_locally
+  const composerEditorId = `chat-composer-${projectId ?? 'no-project'}-${threadId ?? 'none'}`
   /** macOS shows ⌘; Windows/Linux show Ctrl — matches the global send shortcut. */
   const sendModifierLabel = navigator.platform.toUpperCase().indexOf('MAC') >= 0 ? '⌘' : 'Ctrl+'
   let mentionEntries = $state<ComposerMentionEntry[]>([])
@@ -438,8 +441,47 @@
       : ({ kind: 'inbox', ...(threadId ? { threadId } : {}) } as const)
   )
 
-  function composerSpeechTarget() {
-    return richEditor?.speechEditorTarget(composerEditorId) ?? null
+  function composerSpeechTarget(): SpeechEditorTarget | null {
+    const editorTarget = richEditor?.speechEditorTarget(composerEditorId) ?? null
+    if (!editorTarget) return null
+
+    return {
+      id: editorTarget.id,
+      capture: () => editorTarget.capture(),
+      apply: (snapshot, transcript) => editorTarget.apply(snapshot, transcript),
+      fallbackApply: (snapshot, transcript): SpeechEditorApplyResult => {
+        if (!projectId || !threadId || typeof onValueChange !== 'function') {
+          return { ok: false, reason: 'destroyed' }
+        }
+        const base = rendererRecovery.draftFor(projectId, threadId)
+        const baseMatchesSnapshot =
+          snapshot.targetId === composerEditorId && snapshot.value === base
+
+        let start: number
+        let next: string
+        if (baseMatchesSnapshot) {
+          const selectionStart = Math.min(snapshot.selection.anchor, snapshot.selection.focus)
+          const selectionEnd = Math.max(snapshot.selection.anchor, snapshot.selection.focus)
+          start = selectionStart
+          next = base.slice(0, selectionStart) + transcript + base.slice(selectionEnd)
+        } else if (base.length === 0) {
+          start = 0
+          next = transcript
+        } else {
+          const separator = /\s$/.test(base) ? '' : ' '
+          start = base.length + separator.length
+          next = base + separator + transcript
+        }
+
+        onValueChange(next)
+        return {
+          ok: true,
+          value: next,
+          startOffset: start,
+          endOffset: start + transcript.length
+        }
+      }
+    }
   }
 
   // Dropdown open state

@@ -15,7 +15,11 @@ import type {
   SpeechSynthesizedSegment
 } from '../../../lib/speech/types'
 import { DEFAULT_SPEECH_SETTINGS } from '../../../lib/speech/types'
-import type { SpeechEditorSnapshot, SpeechEditorTarget } from './editor-target'
+import type {
+  SpeechEditorApplyResult,
+  SpeechEditorSnapshot,
+  SpeechEditorTarget
+} from './editor-target'
 
 export type RendererSpeechState =
   | { state: 'idle' }
@@ -132,7 +136,7 @@ class SpeechController {
   }
 
   get recordingScope(): SpeechScope | null {
-    return this.state.state === 'recording' ? this.active?.scope ?? null : null
+    return this.state.state === 'recording' ? (this.active?.scope ?? null) : null
   }
 
   isRecordingThread(threadId: string): boolean {
@@ -349,8 +353,12 @@ class SpeechController {
       const transcript = await this.transcribeActive(active)
       await invoke('clipboard:writeText', transcript)
       const inserted = active.target.apply(insertionSnapshot, transcript)
+      let applied: SpeechEditorApplyResult = inserted
+      if (!applied.ok && applied.reason === 'destroyed' && active.target.fallbackApply) {
+        applied = active.target.fallbackApply(insertionSnapshot, transcript)
+      }
       this.playCue('completed')
-      if (!inserted.ok) {
+      if (!applied.ok) {
         const insertionNotice =
           'Transcript copied to the clipboard. It could not be inserted into the recording field.'
         try {
@@ -366,8 +374,8 @@ class SpeechController {
         attemptId: active.attemptId,
         editorId: active.target.id,
         insertedText: transcript,
-        startOffset: inserted.startOffset,
-        endOffset: inserted.endOffset,
+        startOffset: applied.startOffset,
+        endOffset: applied.endOffset,
         insertedAt: Date.now(),
         scope: structuredClone(active.scope)
       }
