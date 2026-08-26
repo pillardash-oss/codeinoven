@@ -4748,26 +4748,15 @@ export class ChatEngine {
       const expectedStatus: Extract<ThreadStatus, 'planning' | 'executing'> =
         this.planningSessions.has(sessionId) ? 'planning' : 'executing'
       const thread = await this.threadManager.getThread(info.projectId, info.threadId)
-      // Guard: never flip a visible Waiting to retry back to Working on a
-      // spurious provider working signal. A retry-paused thread stays paused
-      // until the retry actually fires (scheduler tick or native harness resume
-      // at/after retryAt). While a pending retry is still in the future, keep
-      // the paused status visible — this prevents the ec748... bounce.
+      // Guard: only block a spurious working signal that arrives before the
+      // known reset window. When retryAt is undefined or no scheduler record
+      // exists, treat provider working as authoritative — this covers native
+      // harness auto-retries and >6h/missing-window cases where the thread
+      // has legitimately picked itself up but would otherwise stay paused.
       if (thread?.status === 'working-paused') {
         const pending = this.retryScheduler?.getPendingRetry(sessionId)
-        if (pending) {
-          // Legitimate resume happens at or after retryAt; spurious working
-          // arrives well before the window. Keep paused when retryAt is still
-          // in the future (with a small grace for clock jitter).
-          const GRACE_MS = 30_000
-          if (pending.retryAt === undefined || pending.retryAt > Date.now() + GRACE_MS) return
-        } else {
-          // No scheduler record (missing retryAt, >6h un-derived, or native
-          // harness without a tracked window). Stay paused — explicit resume
-          // (scheduled continue or manual Retry) will transition the thread,
-          // not this reconciliation.
-          return
-        }
+        const GRACE_MS = 30_000
+        if (pending?.retryAt !== undefined && pending.retryAt > Date.now() + GRACE_MS) return
       }
       const assignmentChanged = thread ? await this.reconcileWorkingAssignmentState(thread) : false
       if (thread && thread.status !== expectedStatus) {
@@ -16488,7 +16477,15 @@ export class ChatEngine {
     const thread = await this.threadManager.getThread(projectId, threadId)
     if (!thread || thread.archived || !thread.sessionId || thread.sessionId !== sessionId) return
     const current = this.sessionStatuses.get(sessionId)
-    if (current?.state === 'working' || current?.state === 'waiting') return
+    if (current?.state === 'working') return
+    // A waiting session is the retry-wait we are resuming — clear the waiting
+    // card so the scheduled Continue can transition working-paused → working.
+    if (current?.state === 'waiting' || current?.state === 'error') {
+      this.sessionStatuses.delete(sessionId)
+      this.retryScheduler?.clear(sessionId)
+      updateRetryWakeWindow(sessionId, null)
+      this.clearSessionWatchdog(sessionId)
+    }
     if (thread.assignmentRole === 'coordinator' && thread.assignmentId) {
       const assignment = this.assignmentEngine.getActive(projectId, threadId)
       const hasFailedWorker = assignment?.content.tasks.some(
