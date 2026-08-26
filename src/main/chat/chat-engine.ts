@@ -7719,6 +7719,7 @@ export class ChatEngine {
             toolFeeUsd: null,
             success: attempt.success,
             retryCause: attempt.fallbackReason,
+            durationMs: attempt.usage?.durationMs ?? 0,
             createdAt: Date.now(),
             ...(hasKnownCost
               ? {
@@ -7759,6 +7760,7 @@ export class ChatEngine {
           toolFeeUsd: null,
           success: generated !== null && failure === null,
           retryCause: failure,
+          durationMs: 0,
           createdAt: Date.now(),
           costStatus: 'unavailable',
           costUsd: null,
@@ -17355,6 +17357,10 @@ export class ChatEngine {
       toolFeeUsd: null,
       success: !failure && !message.error,
       retryCause: failure ?? message.error ?? null,
+      durationMs: Math.max(
+        0,
+        Math.floor((message.completedAt ?? message.createdAt) - message.createdAt)
+      ),
       createdAt: message.completedAt ?? message.createdAt
     }
     if (knownCost === null) {
@@ -17501,6 +17507,10 @@ export class ChatEngine {
       toolFeeUsd: null,
       success: input.failure === null && !input.response?.error,
       retryCause: input.failure ?? input.response?.error ?? null,
+      durationMs:
+        input.response?.completedAt !== undefined && input.response.createdAt !== undefined
+          ? Math.max(0, Math.floor(input.response.completedAt - input.response.createdAt))
+          : 0,
       createdAt: input.response?.completedAt ?? input.response?.createdAt ?? Date.now()
     }
     const estimated =
@@ -17611,6 +17621,10 @@ export class ChatEngine {
         toolFeeUsd: null,
         success: part.state.status === 'completed',
         retryCause: failure,
+        durationMs:
+          part.state.time?.start !== undefined && part.state.time.end !== undefined
+            ? Math.max(0, Math.floor(part.state.time.end - part.state.time.start))
+            : 0,
         createdAt: part.state.time?.end ?? part.state.time?.start ?? message.createdAt,
         costStatus: 'unavailable',
         costUsd: null,
@@ -17657,6 +17671,7 @@ export class ChatEngine {
       toolFeeUsd: null,
       success: attribution.success,
       retryCause: attribution.retryCause,
+      durationMs: 0,
       createdAt: Date.now(),
       costStatus: 'unavailable',
       costUsd: null,

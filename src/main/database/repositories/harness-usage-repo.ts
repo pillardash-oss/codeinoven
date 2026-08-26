@@ -99,6 +99,7 @@ interface LocalUsageHourRow extends UsageAggregateRow {
  * parent agent turn.
  */
 const PROFILE_UTILITY_FEATURES = ['image_descriptor', 'memory', 'title', 'search_nudge'] as const
+const PROFILE_MODEL_FEATURES = "'main','audit','assignment'"
 
 /** Upper bound for profile analytics result sets (worker bounded reads). */
 const ANALYTICS_MAX_ROWS = 100_000
@@ -137,6 +138,26 @@ function tokensFromRow(
     cacheWrite: row.tokens_cache_write,
     total: row.tokens_total
   }
+}
+
+/**
+ * Return one comparable token count for a persisted snapshot. A provider raw
+ * total is authoritative. When it is absent, retain the sum of every reported
+ * normalized category so the ledger does not silently discard valid usage;
+ * `total_semantics` still records that this fallback was not provider-defined.
+ */
+function accountedTokenTotal(event: UsageEvent): number | null {
+  if (event.tokensTotal !== undefined && event.tokensTotal !== null) return event.tokensTotal
+  if (event.rawTotal !== null) return event.rawTotal
+  const categories = [
+    event.tokens.uncachedInput,
+    event.tokens.cachedInput,
+    event.tokens.cacheWrite,
+    event.tokens.output,
+    event.tokens.reasoning
+  ]
+  const reported = categories.filter((value): value is number => value !== null)
+  return reported.length > 0 ? reported.reduce((sum, value) => sum + value, 0) : null
 }
 
 function rowToHarnessUsage(row: HarnessUsageRow): HarnessUsage {
@@ -202,10 +223,10 @@ export class HarnessUsageRepo {
         id, thread_id, parent_turn_id, feature_call_id, attempt, feature,
         harness_id, provider_id, model_id, thinking_level, utility_id, raw_provider_usage_json,
         tokens_uncached_input, tokens_cached_input, tokens_cache_write,
-        tokens_output, tokens_reasoning, raw_total, total_semantics,
+        tokens_output, tokens_reasoning, tokens_total, raw_total, total_semantics,
         cost_usd, cost_status, pricing_provenance_json, tool_fee_usd,
-        success, retry_cause, created_at
-      ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+        success, retry_cause, duration_ms, created_at
+      ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
       event.id,
       event.threadId,
       event.parentTurnId,
@@ -223,6 +244,7 @@ export class HarnessUsageRepo {
       event.tokens.cacheWrite,
       event.tokens.output,
       event.tokens.reasoning,
+      accountedTokenTotal(event),
       event.rawTotal,
       event.totalSemantics,
       event.costUsd,
@@ -231,6 +253,7 @@ export class HarnessUsageRepo {
       event.toolFeeUsd,
       event.success ? 1 : 0,
       event.retryCause,
+      Math.max(0, Math.floor(event.durationMs ?? 0)),
       event.createdAt
     )
   }
@@ -628,28 +651,21 @@ export class HarnessUsageRepo {
     }
   }
 
-  /** Range-aware local Profile analytics derived from persisted assistant messages. */
+  /** Range-aware local Profile analytics derived only from usage snapshots. */
   async profileAnalytics(range: LocalProfileAnalyticsRange): Promise<LocalProfileAnalytics> {
     const activityRange = rollingActivityRange(range)
     const aggregateSelect = `COUNT(*) AS message_count,
-              SUM(COALESCE(cost, 0)) AS cost_usd,
-              SUM(COALESCE(tokens_total, CAST(json_extract(tokens_json, '$.total') AS INTEGER), 0)) AS tokens_total,
-              SUM(CASE
-                    WHEN completed_at IS NOT NULL AND completed_at > created_at
-                    THEN completed_at - created_at
-                    WHEN completed_at IS NOT NULL AND model_id IS NOT NULL
-                    THEN completed_at - COALESCE(
-                      (SELECT MAX(turn_start.created_at)
-                       FROM agent_messages turn_start
-                       WHERE turn_start.thread_id = agent_messages.thread_id
-                         AND turn_start.role = 'user'
-                         AND turn_start.created_at <= agent_messages.completed_at),
-                      completed_at
-                    )
-                    ELSE 0
-                  END) AS duration_ms`
-    const messageRange = `role = 'assistant'
-       AND harness_id IS NOT NULL
+              SUM(COALESCE(cost_usd, 0) + COALESCE(tool_fee_usd, 0)) AS cost_usd,
+              SUM(COALESCE(tokens_total, 0)) AS tokens_total,
+              SUM(duration_ms) AS duration_ms`
+    const modelRange = `feature IN (${PROFILE_MODEL_FEATURES})
+       AND created_at >= ?
+       AND created_at < ?`
+    const utilityPlaceholders = PROFILE_UTILITY_FEATURES.map(() => '?').join(',')
+    const utilityRange = `feature IN (${utilityPlaceholders})
+       AND created_at >= ?
+       AND created_at < ?`
+    const profileRange = `(feature IN (${PROFILE_MODEL_FEATURES}) OR feature IN (${utilityPlaceholders}))
        AND created_at >= ?
        AND created_at < ?`
     const params = [range.startAt, range.endAt] as const
@@ -669,9 +685,10 @@ export class HarnessUsageRepo {
         `SELECT harness_id AS id,
                   harness_id,
                   NULL AS provider_id,
+                  NULL AS thinking_level,
                   ${aggregateSelect}
-           FROM agent_messages
-           WHERE ${messageRange}
+           FROM usage_events
+           WHERE ${modelRange}
            GROUP BY harness_id
            ORDER BY message_count DESC, MAX(created_at) DESC`,
         [...params]
@@ -680,9 +697,10 @@ export class HarnessUsageRepo {
         `SELECT provider_id AS id,
                   NULL AS harness_id,
                   provider_id,
+                  NULL AS thinking_level,
                   ${aggregateSelect}
-           FROM agent_messages
-           WHERE ${messageRange} AND provider_id IS NOT NULL
+           FROM usage_events
+           WHERE ${modelRange} AND provider_id IS NOT NULL
            GROUP BY provider_id
            ORDER BY message_count DESC, MAX(created_at) DESC`,
         [...params]
@@ -693,20 +711,20 @@ export class HarnessUsageRepo {
                   provider_id,
                   thinking_level,
                   ${aggregateSelect}
-           FROM agent_messages
-           WHERE ${messageRange} AND model_id IS NOT NULL
+           FROM usage_events
+           WHERE ${modelRange} AND model_id IS NOT NULL
            GROUP BY harness_id, provider_id, model_id, thinking_level
            ORDER BY message_count DESC, MAX(created_at) DESC`,
         [...params]
       ),
       this.aggregate<LocalUsageAggregateRow>(
-        `SELECT COALESCE(thinking_level, 'unknown') AS id,
+        `SELECT thinking_level AS id,
                   NULL AS harness_id,
                   NULL AS provider_id,
                   thinking_level,
                   ${aggregateSelect}
-           FROM agent_messages
-           WHERE ${messageRange}
+           FROM usage_events
+           WHERE ${modelRange} AND thinking_level IS NOT NULL
            GROUP BY thinking_level
            ORDER BY tokens_total DESC, MAX(created_at) DESC`,
         [...params]
@@ -717,33 +735,14 @@ export class HarnessUsageRepo {
                   p.color,
                   p.icon_type,
                   p.icon,
-                  COUNT(*) AS message_count,
-                  SUM(COALESCE(m.cost, 0)) AS cost_usd,
-                  SUM(COALESCE(m.tokens_total, CAST(json_extract(m.tokens_json, '$.total') AS INTEGER), 0)) AS tokens_total,
-                  SUM(CASE
-                        WHEN m.completed_at IS NOT NULL AND m.completed_at > m.created_at
-                        THEN m.completed_at - m.created_at
-                        WHEN m.completed_at IS NOT NULL AND m.model_id IS NOT NULL
-                        THEN m.completed_at - COALESCE(
-                          (SELECT MAX(turn_start.created_at)
-                           FROM agent_messages turn_start
-                           WHERE turn_start.thread_id = m.thread_id
-                             AND turn_start.role = 'user'
-                             AND turn_start.created_at <= m.completed_at),
-                          m.completed_at
-                        )
-                        ELSE 0
-                      END) AS duration_ms,
+                  ${aggregateSelect},
                   COUNT(DISTINCT t.id) AS thread_count,
-                  COUNT(DISTINCT strftime('%Y-%m-%d', m.created_at / 1000, 'unixepoch', 'localtime')) AS active_days,
-                  MAX(m.created_at) AS last_active_at
-           FROM agent_messages m
-           JOIN threads t ON t.id = m.thread_id
+                  COUNT(DISTINCT strftime('%Y-%m-%d', e.created_at / 1000, 'unixepoch', 'localtime')) AS active_days,
+                  MAX(e.created_at) AS last_active_at
+           FROM usage_events e
+           JOIN threads t ON t.id = e.thread_id
            JOIN projects p ON p.id = t.project_id
-           WHERE m.role = 'assistant'
-             AND m.harness_id IS NOT NULL
-             AND m.created_at >= ?
-             AND m.created_at < ?
+           WHERE ${modelRange}
            GROUP BY p.id
            ORDER BY message_count DESC, last_active_at DESC`,
         [...params]
@@ -752,16 +751,13 @@ export class HarnessUsageRepo {
         `SELECT feature AS id,
                   NULL AS harness_id,
                   NULL AS provider_id,
+                  NULL AS thinking_level,
                   COUNT(*) AS message_count,
-                  SUM(COALESCE(cost_usd, 0)) AS cost_usd,
-                  SUM(COALESCE(tokens_uncached_input, 0) + COALESCE(tokens_cached_input, 0)
-                      + COALESCE(tokens_cache_write, 0) + COALESCE(tokens_output, 0)
-                      + COALESCE(tokens_reasoning, 0)) AS tokens_total,
-                  0 AS duration_ms
+                  SUM(COALESCE(cost_usd, 0) + COALESCE(tool_fee_usd, 0)) AS cost_usd,
+                  SUM(COALESCE(tokens_total, 0)) AS tokens_total,
+                  SUM(duration_ms) AS duration_ms
            FROM usage_events
-           WHERE feature IN (${PROFILE_UTILITY_FEATURES.map(() => '?').join(',')})
-             AND created_at >= ?
-             AND created_at < ?
+           WHERE ${utilityRange}
            GROUP BY feature
            ORDER BY message_count DESC, feature ASC`,
         [...PROFILE_UTILITY_FEATURES, ...params]
@@ -769,8 +765,8 @@ export class HarnessUsageRepo {
       this.aggregate<{ date: string; message_count: number }>(
         `SELECT strftime('%Y-%m-%d', created_at / 1000, 'unixepoch', 'localtime') AS date,
                   COUNT(*) AS message_count
-           FROM agent_messages
-           WHERE ${messageRange}
+           FROM usage_events
+           WHERE ${modelRange}
            GROUP BY date
            ORDER BY date ASC`,
         [activityRange.startAt, activityRange.endAt]
@@ -785,42 +781,16 @@ export class HarnessUsageRepo {
            FROM (
              SELECT strftime('%Y-%m-%d', created_at / 1000, 'unixepoch', 'localtime') AS date,
                     COUNT(*) AS message_count,
-                    SUM(COALESCE(cost, 0)) AS cost_usd,
-                    SUM(COALESCE(tokens_total, CAST(json_extract(tokens_json, '$.total') AS INTEGER), 0)) AS tokens_total,
-                    SUM(CASE
-                          WHEN completed_at IS NOT NULL AND completed_at > created_at
-                          THEN completed_at - created_at
-                          WHEN completed_at IS NOT NULL AND model_id IS NOT NULL
-                          THEN completed_at - COALESCE(
-                            (SELECT MAX(turn_start.created_at)
-                             FROM agent_messages turn_start
-                             WHERE turn_start.thread_id = agent_messages.thread_id
-                               AND turn_start.role = 'user'
-                               AND turn_start.created_at <= agent_messages.completed_at),
-                            completed_at
-                          )
-                          ELSE 0
-                        END) AS duration_ms
-             FROM agent_messages
-             WHERE ${messageRange}
-             GROUP BY date
-             UNION ALL
-             SELECT strftime('%Y-%m-%d', created_at / 1000, 'unixepoch', 'localtime') AS date,
-                    COUNT(*) AS message_count,
-                    SUM(COALESCE(cost_usd, 0)) AS cost_usd,
-                    SUM(COALESCE(tokens_uncached_input, 0) + COALESCE(tokens_cached_input, 0)
-                        + COALESCE(tokens_cache_write, 0) + COALESCE(tokens_output, 0)
-                        + COALESCE(tokens_reasoning, 0)) AS tokens_total,
-                    0 AS duration_ms
+                    SUM(COALESCE(cost_usd, 0) + COALESCE(tool_fee_usd, 0)) AS cost_usd,
+                    SUM(COALESCE(tokens_total, 0)) AS tokens_total,
+                    SUM(duration_ms) AS duration_ms
              FROM usage_events
-             WHERE feature IN (${PROFILE_UTILITY_FEATURES.map(() => '?').join(',')})
-               AND created_at >= ?
-               AND created_at < ?
+             WHERE ${profileRange}
              GROUP BY date
            )
            GROUP BY date
            ORDER BY date ASC`,
-        [...params, ...PROFILE_UTILITY_FEATURES, ...params]
+        [...PROFILE_UTILITY_FEATURES, ...params]
       ),
       this.aggregate<LocalUsageHourRow>(
         `SELECT CAST(hour_key AS INTEGER) AS id,
@@ -832,42 +802,16 @@ export class HarnessUsageRepo {
            FROM (
              SELECT strftime('%H', created_at / 1000, 'unixepoch', 'localtime') AS hour_key,
                     COUNT(*) AS message_count,
-                    SUM(COALESCE(cost, 0)) AS cost_usd,
-                    SUM(COALESCE(tokens_total, CAST(json_extract(tokens_json, '$.total') AS INTEGER), 0)) AS tokens_total,
-                    SUM(CASE
-                          WHEN completed_at IS NOT NULL AND completed_at > created_at
-                          THEN completed_at - created_at
-                          WHEN completed_at IS NOT NULL AND model_id IS NOT NULL
-                          THEN completed_at - COALESCE(
-                            (SELECT MAX(turn_start.created_at)
-                             FROM agent_messages turn_start
-                             WHERE turn_start.thread_id = agent_messages.thread_id
-                               AND turn_start.role = 'user'
-                               AND turn_start.created_at <= agent_messages.completed_at),
-                            completed_at
-                          )
-                          ELSE 0
-                        END) AS duration_ms
-             FROM agent_messages
-             WHERE ${messageRange}
-             GROUP BY hour_key
-             UNION ALL
-             SELECT strftime('%H', created_at / 1000, 'unixepoch', 'localtime') AS hour_key,
-                    COUNT(*) AS message_count,
-                    SUM(COALESCE(cost_usd, 0)) AS cost_usd,
-                    SUM(COALESCE(tokens_uncached_input, 0) + COALESCE(tokens_cached_input, 0)
-                        + COALESCE(tokens_cache_write, 0) + COALESCE(tokens_output, 0)
-                        + COALESCE(tokens_reasoning, 0)) AS tokens_total,
-                    0 AS duration_ms
+                    SUM(COALESCE(cost_usd, 0) + COALESCE(tool_fee_usd, 0)) AS cost_usd,
+                    SUM(COALESCE(tokens_total, 0)) AS tokens_total,
+                    SUM(duration_ms) AS duration_ms
              FROM usage_events
-             WHERE feature IN (${PROFILE_UTILITY_FEATURES.map(() => '?').join(',')})
-               AND created_at >= ?
-               AND created_at < ?
+             WHERE ${profileRange}
              GROUP BY hour_key
            )
            GROUP BY hour_key
            ORDER BY hour ASC`,
-        [...params, ...PROFILE_UTILITY_FEATURES, ...params]
+        [...PROFILE_UTILITY_FEATURES, ...params]
       )
     ])
     const toUsageBreakdown = (row: LocalUsageAggregateRow): LocalProfileUsageBreakdown => ({
@@ -929,7 +873,9 @@ export class HarnessUsageRepo {
       messageCount: harnessRows.reduce((sum, row) => sum + row.message_count, 0),
       costUsd: harnessCost + utilityCost,
       tokens: harnessTokens + utilityTokens,
-      durationMs: harnessRows.reduce((sum, row) => sum + row.duration_ms, 0),
+      durationMs:
+        harnessRows.reduce((sum, row) => sum + row.duration_ms, 0) +
+        utilityRows.reduce((sum, row) => sum + row.duration_ms, 0),
       topHarnessId: harnesses[0]?.id ?? null,
       topProviderId: providers[0]?.id ?? null,
       topModelId: models[0]?.id ?? null,

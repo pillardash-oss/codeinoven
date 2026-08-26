@@ -52,6 +52,7 @@ export interface TitleAttemptUsage {
   tokens?: AgentTokenUsage
   cost?: number
   costProvenance?: UsagePricingProvenance
+  durationMs?: number
 }
 
 /** Outcome of one title-candidate attempt, for event-level ledger integration. */
@@ -1277,7 +1278,11 @@ export abstract class PersistentCliDriver implements HarnessDriver {
         ? {
             tokens: response.tokens,
             cost: response.cost,
-            costProvenance: response.costProvenance
+            costProvenance: response.costProvenance,
+            durationMs:
+              response.completedAt !== undefined
+                ? Math.max(0, Math.floor(response.completedAt - response.createdAt))
+                : 0
           }
         : null
     return {

@@ -1706,11 +1706,15 @@ export interface UsageEventDetails {
   utilityId: string | null
   rawProviderUsage: Record<string, unknown>
   tokens: NormalizedUsageTokens
+  /** Accounted token count: provider rawTotal when present, otherwise the sum of reported categories. */
+  tokensTotal?: number | null
   rawTotal: number | null
   totalSemantics: UsageTotalSemantics
   toolFeeUsd: number | null
   success: boolean
   retryCause: string | null
+  /** Runtime of this usage attempt, measured from its provider timestamps when available. */
+  durationMs?: number
   createdAt: number
 }
 
