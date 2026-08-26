@@ -131,14 +131,13 @@ class SpeechController {
     return 'targetId' in this.state && this.state.targetId === targetId
   }
 
+  get recordingScope(): SpeechScope | null {
+    return this.state.state === 'recording' ? this.active?.scope ?? null : null
+  }
+
   isRecordingThread(threadId: string): boolean {
-    const scope = this.active?.scope
-    return (
-      this.state.state === 'recording' &&
-      scope !== undefined &&
-      scope.kind !== 'global' &&
-      scope.threadId === threadId
-    )
+    const scope = this.recordingScope
+    return scope !== null && scope.kind !== 'global' && scope.threadId === threadId
   }
 
   async start(
