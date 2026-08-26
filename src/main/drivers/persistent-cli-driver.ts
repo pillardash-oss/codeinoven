@@ -83,6 +83,8 @@ class TitleTurnProviderIssueError extends Error {
 }
 
 const TITLE_GENERATION_TIMEOUT_MS = 180_000
+const ABORT_TERM_GRACE_MS = 1_500
+const ABORT_KILL_GRACE_MS = 1_500
 
 /** Durable state for a logical CodeInOven session backed by a turn-based CLI. */
 export interface PersistentCliSession {
@@ -592,7 +594,53 @@ export abstract class PersistentCliDriver implements HarnessDriver {
   async abort(projectPath: string, sessionId: string): Promise<void> {
     await this.requireSession(projectPath, sessionId)
     const child = this.activeProcesses.get(sessionId)
-    if (child && !child.killed) child.kill()
+    if (!child || this.hasProcessExited(child)) return
+
+    const termExit = this.waitForProcessExit(child, ABORT_TERM_GRACE_MS)
+    child.kill('SIGTERM')
+    const exitedAfterTerm = await termExit
+    if (!exitedAfterTerm && !this.hasProcessExited(child)) {
+      const killExit = this.waitForProcessExit(child, ABORT_KILL_GRACE_MS)
+      child.kill('SIGKILL')
+      await killExit
+    }
+
+    // `finish()` removes the process before resolving this promise. Keep the
+    // abort contract bounded even if persistence or provider cleanup stalls.
+    const settlement = this.activeProcessSettlements.get(sessionId)
+    if (settlement) {
+      await Promise.race([
+        settlement,
+        new Promise<void>((resolve) => setTimeout(resolve, ABORT_KILL_GRACE_MS))
+      ])
+    }
+  }
+
+  private hasProcessExited(child: ChildProcess): boolean {
+    return (
+      (child.exitCode !== null && child.exitCode !== undefined) ||
+      (child.signalCode !== null && child.signalCode !== undefined)
+    )
+  }
+
+  private waitForProcessExit(child: ChildProcess, timeoutMs: number): Promise<boolean> {
+    if (this.hasProcessExited(child)) return Promise.resolve(true)
+    return new Promise((resolve) => {
+      let settled = false
+      const finish = (exited: boolean): void => {
+        if (settled) return
+        settled = true
+        clearTimeout(timer)
+        child.removeListener('exit', onExit)
+        child.removeListener('close', onClose)
+        resolve(exited)
+      }
+      const onExit = (): void => finish(true)
+      const onClose = (): void => finish(true)
+      const timer = setTimeout(() => finish(false), timeoutMs)
+      child.once('exit', onExit)
+      child.once('close', onClose)
+    })
   }
 
   async listProviders(_projectPath: string): Promise<ProviderCatalog[]> {

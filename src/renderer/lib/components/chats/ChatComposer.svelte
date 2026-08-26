@@ -1528,11 +1528,6 @@
     if (hasFileAttachment) e.preventDefault()
   }
 
-  // Double-Escape abort — two presses within the window stop the running turn.
-  // Single escape or any outside click cancels a pending stop confirmation.
-  const ESCAPE_ABORT_WINDOW_MS = 800
-  let lastEscapeAt = 0
-
   function onWindowKeydown(e: KeyboardEvent): void {
     if (mentionOpen) {
       if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
@@ -1643,19 +1638,17 @@
       return
     }
     if (e.key !== 'Escape') return
-    // Cancel pending stop on single escape
+    // Escape cancels the stop-button confirmation, but stops an active turn
+    // immediately when there is no pending confirmation. A running agent is a
+    // global session concern, so this remains active even when the composer
+    // editor itself does not have focus.
     if (pendingStop) {
       cancelStop()
       return
     }
     if (!working || !onStop) return
-    const now = Date.now()
-    if (now - lastEscapeAt <= ESCAPE_ABORT_WINDOW_MS) {
-      lastEscapeAt = 0
-      onStop()
-    } else {
-      lastEscapeAt = now
-    }
+    e.preventDefault()
+    onStop()
   }
 </script>
 
