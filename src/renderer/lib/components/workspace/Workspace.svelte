@@ -1221,6 +1221,16 @@
     )
   })
 
+  // App.svelte keeps this Workspace mounted (but CSS-hidden) when the user
+  // navigates to Settings/Scope, so its state survives the trip. The browser's
+  // native view has no notion of that DOM hide and keeps floating at its last
+  // screen bounds on top of whatever renders there instead — suppress it
+  // whenever this Workspace isn't the active top-level view.
+  $effect(() => {
+    contextSidebarState.setFullscreenSurfaceActive('workspace-inactive', !active)
+    return () => contextSidebarState.setFullscreenSurfaceActive('workspace-inactive', false)
+  })
+
   // The grid column/row that hosts each panel collapses the instant
   // `sidebarVisible`/`terminalDockVisible` flips, but the panel itself keeps
   // playing its out:fly for PANEL_EXIT_MS. Without this, the closing panel is
