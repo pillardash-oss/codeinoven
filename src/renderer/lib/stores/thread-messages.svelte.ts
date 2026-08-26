@@ -27,6 +27,8 @@ import type {
 
 interface ThreadMessagesEntry {
   messages: AgentMessage[]
+  /** Monotonic renderer revision for stream-driven DOM effects such as tailing. */
+  revision: number
   loaded: boolean
   loading: boolean
   hasOlder: boolean
@@ -124,6 +126,7 @@ class ThreadMessagesStore {
     if (!entry) {
       entry = {
         messages: [],
+        revision: 0,
         loaded: false,
         loading: false,
         hasOlder: false,
@@ -139,6 +142,11 @@ class ThreadMessagesStore {
   /** Current message list for a thread — safe to use in deriveds/effects. */
   messages(projectId: string, threadId: string): AgentMessage[] {
     return this.threads.get(threadKey(projectId, threadId))?.messages ?? EMPTY_MESSAGES
+  }
+
+  /** Changes whenever this thread's cached transcript is published. */
+  streamRevision(projectId: string, threadId: string): number {
+    return this.threads.get(threadKey(projectId, threadId))?.revision ?? 0
   }
 
   /** Seed a freshly created empty thread as instantly loaded so the
@@ -505,8 +513,13 @@ class ThreadMessagesStore {
     messageId: string,
     error: unknown
   ): void {
-    entry.error = error instanceof Error ? error.message : 'Message failed to send.'
-    entry.messages = entry.messages.filter((message) => message.id !== messageId)
+    const messageError = error instanceof Error ? error.message : 'Message failed to send.'
+    entry.error = messageError
+    // Keep the user's prompt when transport fails. Removing it makes a send
+    // failure look like the conversation was wiped and loses retry context.
+    entry.messages = entry.messages.map((message) =>
+      message.id === messageId ? { ...message, error: messageError } : message
+    )
     this.#notify(projectId, threadId)
   }
 
@@ -956,7 +969,9 @@ class ThreadMessagesStore {
 
   #publish(key: string): void {
     const entry = this.#threads.get(key)
-    if (entry) this.threads.set(key, { ...entry })
+    if (!entry) return
+    entry.revision += 1
+    this.threads.set(key, { ...entry })
   }
 }
 

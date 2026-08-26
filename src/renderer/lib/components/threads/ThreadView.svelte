@@ -273,10 +273,22 @@
   // Keep thread switches bounded even when the cache contains a complete
   // transcript. Markdown parsing and message-card effects run once per
   // mounted message, so rendering the entire cache blocks the renderer.
-  let visibleStartIndex = $derived(Math.min(renderedStartIndex, messages.length))
-  let visibleEndIndex = $derived(
-    Math.min(messages.length, visibleStartIndex + HISTORY_RENDER_WINDOW_SIZE)
-  )
+  // Keep the bounded window aligned to complete conversation turns. A raw
+  // message-count boundary can leave a trace visible without its user prompt,
+  // or leave the final answer below the window.
+  let visibleStartIndex = $derived.by(() => {
+    let start = Math.min(renderedStartIndex, messages.length)
+    if (start > 0 && messages[start]?.role === 'assistant') {
+      while (start > 0 && messages[start - 1]?.role === 'assistant') start -= 1
+      if (start > 0 && messages[start - 1]?.role === 'user') start -= 1
+    }
+    return start
+  })
+  let visibleEndIndex = $derived.by(() => {
+    let end = Math.min(messages.length, visibleStartIndex + HISTORY_RENDER_WINDOW_SIZE)
+    while (end < messages.length && messages[end - 1]?.role === 'assistant') end += 1
+    return end
+  })
   let visibleMessages = $derived(messages.slice(visibleStartIndex, visibleEndIndex))
   /** The last turn in the list and whether it is still the "active" turn. A
    *  trailing steer — a user message the agent has not responded to yet — does
@@ -339,39 +351,6 @@
     if (conversationBusy && messages[messages.length - 1]?.role === 'user') return []
     if (latestTurnInfo.startIndex === -1) return []
     return getTurnWorkingParts(latestTurnInfo.startIndex, conversationBusy && latestTurnInfo.active)
-  })
-  /**
-   * The live trace is a bottom-anchored surface, not part of the paginated
-   * history window. A long turn can move its assistant message outside the
-   * twelve-message render window while its parts continue streaming; keeping
-   * this derived list separate guarantees that the operator can still see the
-   * active work and that loading older history cannot hide it.
-   */
-  let latestTraceParts = $derived.by(() => {
-    if (latestTurnInfo.startIndex < 0) return []
-    if (conversationBusy && messages[messages.length - 1]?.role === 'user') return []
-    const active = threadWorking && latestTurnInfo.active
-    const mirrorParts = getTurnWorkingParts(latestTurnInfo.startIndex, active)
-    const collected =
-      restoredBusy && streamParts.length > 0
-        ? mergeWorkingParts(streamParts, mirrorParts)
-        : mirrorParts
-    return isAssignmentAuditorThread
-      ? collected.filter((part) => part.type !== 'text' || part.phase === 'commentary')
-      : collected
-  })
-  let latestTraceIsActive = $derived.by(
-    () => threadWorking && latestTurnInfo.active && !brainstormReportRefreshing
-  )
-  let latestTraceDone = $derived.by(() => {
-    return latestTurnInfo.startIndex >= 0 && isTurnCompleted(latestTurnInfo.startIndex)
-  })
-  let latestTraceNeedsDedicatedSurface = $derived.by(() => {
-    if (latestTraceParts.length === 0) return false
-    if (latestTurnInfo.startIndex < 0) return true
-    return (
-      latestTurnInfo.startIndex < visibleStartIndex || latestTurnInfo.startIndex >= visibleEndIndex
-    )
   })
   // A persisted in-flight status is only a recovery hint. Start every mount in
   // a settled idle state unless this thread is already receiving live activity;
@@ -581,10 +560,15 @@
    *  thread dropping to idle or showing a bare "Agent working…" spinner. Cleared
    *  as soon as a live session confirms the real terminal state. */
   let restoredBusy = $state(false)
-  /** Working-trace parts rebuilt from the thread's durable SSE log. Used to
-   *  backfill the restored trace when the live session is unreachable and the
-   *  message mirror has not persisted the streaming parts yet. */
+  /** Durable working-trace parts loaded from the SSE log. They fill gaps in
+   *  the live mirror and restore the latest trace after an app refresh. */
   let streamParts = $state<AgentPart[]>([])
+  let streamPartsLoadGeneration = 0
+
+  function clearStreamParts(): void {
+    streamPartsLoadGeneration += 1
+    streamParts = []
+  }
   let agentDefaults = $state<AgentDefaultsConfig>({ syncFromThreadChanges: false })
   /** Global "don't ask again" flag for the image-descriptor vision model picker. */
   let imageDescriptorAskAgain = $state(false)
@@ -2565,33 +2549,23 @@
    *  still re-opens at the live bottom. */
   // svelte-ignore state_referenced_locally
   const mountBusy = threadWorking
-  /** Changes whenever any message's parts change, so the live view follows a
-   *  streaming turn even when the message count is stable. */
-  const streamVersion = $derived(messages.reduce((sum, message) => sum + message.parts.length, 0))
+  /** Changes whenever the message cache publishes, including text deltas that
+   *  keep the message and part counts unchanged. */
+  const streamVersion = $derived(threadMessages.streamRevision(thread.projectId, thread.id))
 
-  /** Height of the blank tail zone kept below the newest message (mirrors
-   *  `pb-40` on the scroll container). While that space is at least partially
-   *  revealed the view counts as "at the latest" and keeps following the
-   *  agent's output; scrolling up past it into the messages releases the lock. */
-  const TAIL_ZONE_PADDING = 160
-  const SCROLL_AT_BOTTOM_THRESHOLD = TAIL_ZONE_PADDING + 32
+  /** Small tolerance for rounding and trackpad inertia at the live bottom.
+   *  A deliberate upward scroll beyond this distance releases tail-following. */
+  const SCROLL_AT_BOTTOM_THRESHOLD = 48
 
   function isAtBottom(el: HTMLDivElement): boolean {
     return el.scrollHeight - el.scrollTop - el.clientHeight < SCROLL_AT_BOTTOM_THRESHOLD
   }
 
-  /** Scroll position at the last scroll event (or programmatic snap). Used to
-   *  tell "the tail outgrew the view" (position unchanged, content grew) from
-   *  "the user scrolled up mid-gesture" (position moved up before the scroll
-   *  event fired), so a large arrival never kills the follow lock and a
-   *  scroll-away is never fought. */
-  let lastScrollTop = 0
   /** Prevent a history-page merge from being mistaken for new live content. */
   let preservingHistoryViewport = false
 
   function onScroll(): void {
     if (!scrollEl) return
-    lastScrollTop = scrollEl.scrollTop
     userScrolledAway = !isAtBottom(scrollEl)
     threadScrollPositions.set(thread.id, {
       top: scrollEl.scrollTop,
@@ -2602,11 +2576,7 @@
     if (scrollEl.scrollTop <= HISTORY_PRELOAD_THRESHOLD) void loadOlderMessages()
   }
 
-  /** Release the tail-follow lock the moment the user starts scrolling up. The
-   *  `scroll` event fires a frame after the wheel gesture, so waiting for it
-   *  lets a queued auto-follow callback land in that gap and snap back to the
-   *  live tail. Flipping the flag here, synchronously with the input, is what
-   *  makes the lock release "as soon as the user scrolls". */
+  /** Release the tail-follow lock synchronously when the user starts scrolling up. */
   function onWheel(event: WheelEvent): void {
     if (event.deltaY < 0) userScrolledAway = true
   }
@@ -2686,7 +2656,6 @@
       scrollEl.scrollTo({ top: scrollEl.scrollHeight, behavior: 'auto' })
       userScrolledAway = false
     }
-    lastScrollTop = scrollEl.scrollTop
     scrollRestored = true
   })
 
@@ -2695,7 +2664,7 @@
   // cards both arrive asynchronously after mount — cards mount only once the
   // checkpoint list resolves, which can be after the initial scroll, so without
   // this the latest changes card would sit just above the fold until the user
-  // scrolled. Reading `streamVersion` (total part count) makes the view follow
+  // scrolled. Reading `streamVersion` (the cache revision) makes the view follow
   // a streaming turn even when parts accumulate inside a single message, and
   // reading `busy` snaps back to the live bottom as soon as a run becomes
   // active on an otherwise idle thread.
@@ -2706,21 +2675,13 @@
     void checkpoints.length
     void threadWorking
     void streamVersion
+    if (!userScrolledAway) {
+      const maxStart = Math.max(0, messages.length - HISTORY_RENDER_WINDOW_SIZE)
+      if (renderedStartIndex !== maxStart) renderedStartIndex = maxStart
+    }
     void tick().then(() => {
       if (!scrollEl || userScrolledAway) return
-      // The scroll event lags the input gesture by a frame, so the lock can
-      // still read as engaged right after the user scrolled up. If the view
-      // actually moved up since the last recorded position the user is
-      // scrolling away — release the lock instead of fighting the input.
-      // An unchanged position means the tail simply outgrew the view in one
-      // update (a large message or card landed at once): snap to the live
-      // bottom so the stream keeps following.
-      if (!isAtBottom(scrollEl) && scrollEl.scrollTop < lastScrollTop) {
-        userScrolledAway = true
-        return
-      }
       scrollEl.scrollTop = scrollEl.scrollHeight
-      lastScrollTop = scrollEl.scrollTop
     })
   })
 
@@ -2733,13 +2694,11 @@
     // even if the bottom grew between the click and this snap's scroll event.
     userScrolledAway = false
     renderedStartIndex = Math.max(0, messages.length - HISTORY_RENDER_WINDOW_SIZE)
-    lastScrollTop = scrollEl.scrollHeight
     scrollEl.scrollTo({ top: scrollEl.scrollHeight, behavior: 'auto' })
     void tick().then(() => {
       if (!scrollEl || userScrolledAway) return
       if (!isAtBottom(scrollEl)) {
         scrollEl.scrollTop = scrollEl.scrollHeight
-        lastScrollTop = scrollEl.scrollTop
       }
     })
   }
@@ -2957,7 +2916,7 @@
 
   function beginLocalTurn(userMessageId: string): void {
     restoredBusy = false
-    streamParts = []
+    clearStreamParts()
     locallySubmittedTurnId = userMessageId
     locallySubmittedTurnAcknowledged = false
     turnSawCompaction = false
@@ -2981,7 +2940,7 @@
     if (locallySubmittedTurnId) return
     if (agentRuns.activity(thread.projectId, thread.id) === 'brainstorm_report') return
     restoredBusy = false
-    streamParts = []
+    clearStreamParts()
     liveWorkingSelection = null
     agentRuns.setIdle(thread.projectId, thread.id)
   }
@@ -2991,6 +2950,7 @@
     if (locallySubmittedTurnId && !locallySubmittedTurnAcknowledged) return false
     if (agentRuns.activity(thread.projectId, thread.id) === 'brainstorm_report') return false
     restoredBusy = false
+    clearStreamParts()
     clearLocalTurn()
     agentRuns.setIdle(thread.projectId, thread.id)
     return true
@@ -3236,22 +3196,22 @@
       // run was in progress even though the live stream is not confirming it.
       // The thread itself stays interactive (not busy) so a poke message can
       // still be sent normally.
-      if (providerStatus === null) {
-        restoredBusy = hasPersistedInFlightWork()
-        if (restoredBusy) {
-          // Rebuild the working trace from the durable SSE log so the restored
-          // trace shows everything streamed so far, not just what the mirror
-          // happened to persist. Even if the harness session died with the app,
-          // the file holds the full event stream up to the reopen.
-          void invoke('thread:loadStreamParts', projectId, id)
-            .then((parts) => {
-              if (alive) streamParts = parts
-            })
-            .catch(() => {})
-        } else {
-          streamParts = []
-          setIdleFromRestore()
-        }
+      const liveSessionWorking =
+        providerStatus?.state === 'waiting' || providerStatus?.state === 'working'
+      restoredBusy = providerStatus === null && hasPersistedInFlightWork()
+      if (liveSessionWorking || restoredBusy) {
+        // Rebuild the working trace from the durable SSE log for both live and
+        // rehydrated sessions. The bounded mirror can contain only the newest
+        // snapshot of a long turn, while the stream log retains all parts.
+        const generation = ++streamPartsLoadGeneration
+        void invoke('thread:loadStreamParts', projectId, id)
+          .then((parts) => {
+            if (alive && generation === streamPartsLoadGeneration) streamParts = parts
+          })
+          .catch(() => {})
+      } else {
+        clearStreamParts()
+        if (providerStatus === null) setIdleFromRestore()
       }
       // Never pull the full live harness transcript while mounting a thread.
       // `agent:loadMessages` is intentionally unbounded: a long-running agent
@@ -4242,10 +4202,7 @@
       // If the message never reached the conversation (the agent never started
       // working and the optimistic copy was rolled back), put it back in the
       // composer so the user doesn't lose what they were about to send.
-      if (
-        restorable &&
-        !threadMessages.messages(projectId, id).some((message) => message.id === userMessageId)
-      ) {
+      if (restorable) {
         rendererRecovery.setDraft(
           projectId,
           id,
@@ -8746,6 +8703,9 @@
                         </div>
                       {/if}
                     </div>
+                    {#if msg.error}
+                      <p class="mt-1 self-end text-xs text-danger">Not sent: {msg.error}</p>
+                    {/if}
                     <div
                       class="mt-1 flex items-center gap-1.5 self-end opacity-0 transition-opacity group-hover:opacity-100"
                     >
@@ -8791,8 +8751,7 @@
               {/if}
             {:else}
               <!-- Assistant message — single WorkTrace per turn containing ALL parts -->
-              {@const isTurnStart =
-                visibleMsgIndex === 0 || messages[msgIndex - 1]?.role === 'user'}
+              {@const isTurnStart = msgIndex === 0 || messages[msgIndex - 1]?.role === 'user'}
               {@const isTurnEnd =
                 msgIndex === messages.length - 1 || messages[msgIndex + 1]?.role === 'user'}
               {@const isLatestTurn =
@@ -8823,8 +8782,10 @@
                       restoredBusy && isLatestTurn && !liveBusy && !turnDone}
                     {@const accumulatedTurnParts = getTurnWorkingParts(msgIndex, traceIsLive)}
                     {@const collectedTurnParts =
-                      traceIsRestored && streamParts.length > 0
-                        ? mergeWorkingParts(streamParts, accumulatedTurnParts)
+                      streamParts.length > 0 && isLatestTurn
+                        ? traceIsRestored
+                          ? mergeWorkingParts(streamParts, accumulatedTurnParts)
+                          : mergeWorkingParts(accumulatedTurnParts, streamParts)
                         : accumulatedTurnParts}
                     {@const turnParts = isAssignmentAuditorThread
                       ? collectedTurnParts.filter(
@@ -8882,7 +8843,7 @@
                   {#if isTurnEnd}
                     <!-- Final text output + footer — hide only on the active in-progress turn -->
                     {#if isAssignmentAuditorThread}
-                      {#if !conversationBusy || !isLatest}
+                      {#if !conversationBusy || !isLatest || turnAuditReport}
                         {#if turnAuditReport}
                           <AuditGeneratedCard
                             state="report_ready"
@@ -8906,30 +8867,32 @@
                       {/if}
                     {:else}
                       {@const turnFinalText = getTurnFinalText(msgIndex)}
-                      {#if !conversationBusy || !isLatest}
-                        {#if turnFinalText}
-                          {@const isReadingThisTurn =
-                            'messageId' in speechController.playback &&
-                            speechController.playback.messageId === msg.id &&
-                            (speechController.playback.state === 'preparing' ||
-                              speechController.playback.state === 'playing' ||
-                              speechController.playback.state === 'paused')}
-                          <div
-                            id={`msg-${msg.id}`}
-                            class={isReadingThisTurn
-                              ? 'min-w-0 w-full rounded-lg border border-dashed border-info/40 bg-info/5 p-3 text-sm text-foreground transition-colors'
-                              : 'min-w-0 w-full text-sm text-foreground'}
-                            data-assistant-response
-                            data-conversation-searchable
-                            data-message-id={msg.id}
-                          >
-                            <MarkdownView
-                              text={(turnFinalText as Extract<AgentPart, { type: 'text' }>).text}
-                              onCiteFile={openFileCitation}
-                              onOpenLocalFile={(url) => void openFilePart(url)}
-                            />
-                          </div>
-                        {/if}
+                      {@const finalAnswerReady =
+                        turnFinalText?.type === 'text' &&
+                        turnFinalText.text.trim().length > 0 &&
+                        (turnFinalText.phase === 'final_answer' || !conversationBusy || !isLatest)}
+                      {#if finalAnswerReady && turnFinalText}
+                        {@const isReadingThisTurn =
+                          'messageId' in speechController.playback &&
+                          speechController.playback.messageId === msg.id &&
+                          (speechController.playback.state === 'preparing' ||
+                            speechController.playback.state === 'playing' ||
+                            speechController.playback.state === 'paused')}
+                        <div
+                          id={`msg-${msg.id}`}
+                          class={isReadingThisTurn
+                            ? 'min-w-0 w-full rounded-lg border border-dashed border-info/40 bg-info/5 p-3 text-sm text-foreground transition-colors'
+                            : 'min-w-0 w-full text-sm text-foreground'}
+                          data-assistant-response
+                          data-conversation-searchable
+                          data-message-id={msg.id}
+                        >
+                          <MarkdownView
+                            text={(turnFinalText as Extract<AgentPart, { type: 'text' }>).text}
+                            onCiteFile={openFileCitation}
+                            onOpenLocalFile={(url) => void openFilePart(url)}
+                          />
+                        </div>
                       {/if}
 
                       {#if turnCheckpoint && turnCheckpoint.changes.length > 0 && isCheckpointTurnEnd(msgIndex, turnCheckpoint)}
@@ -9055,36 +9018,6 @@
               {/if}
             {/if}
           {/each}
-
-          {#if latestTraceNeedsDedicatedSurface}
-            <WorkingTrace
-              parts={latestTraceParts}
-              open={latestTraceIsActive || (restoredBusy && latestTurnInfo.active)}
-              busy={latestTraceIsActive || (restoredBusy && latestTurnInfo.active)}
-              latest
-              done={latestTraceDone}
-              rehydrated={restoredBusy && !latestTraceIsActive && !latestTraceDone}
-              startTime={activeTurnStartTime}
-              modelLabel={latestTraceIsActive ? currentWorkingTraceAttribution.modelLabel : null}
-              thinkingLevel={latestTraceIsActive
-                ? currentWorkingTraceAttribution.thinkingLevel
-                : null}
-              providerName={latestTraceIsActive
-                ? currentWorkingTraceAttribution.providerName
-                : null}
-              harnessId={latestTraceIsActive ? currentWorkingTraceAttribution.harnessId : null}
-              harnessName={latestTraceIsActive ? currentWorkingTraceAttribution.harnessName : null}
-              isFast={latestTraceIsActive && currentWorkingTraceAttribution.isFast}
-              initialOpen
-              initialUserOpened={agentRuns.isTraceUserOpened(thread.projectId, thread.id)}
-              projectId={thread.projectId}
-              threadId={thread.id}
-              onToggle={(open, userOpened) =>
-                agentRuns.setTraceOpen(thread.projectId, thread.id, open, userOpened)}
-              onOpenSubagent={openSubagent}
-              onCiteFile={openFileCitation}
-            />
-          {/if}
 
           {#if specGenerationTraceActive && specGenerationTraceParts.length > 0}
             <WorkingTrace

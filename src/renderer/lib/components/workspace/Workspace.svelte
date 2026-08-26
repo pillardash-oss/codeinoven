@@ -196,6 +196,15 @@
     return null
   }
 
+  function handleConversationRenderError(error: unknown): void {
+    const thread = workspaceState.selectedThread
+    if (!thread) return
+    reportError(error, 'The conversation could not be rendered.', {
+      projectId: thread.projectId,
+      threadId: thread.id
+    })
+  }
+
   function isThreadRowVisible(threadId: string): boolean {
     const row = findThreadRow(threadId)
     if (!row) return false
@@ -3683,15 +3692,39 @@
         {#if selectedThread}
           <div class="relative flex h-full min-h-0 min-w-0 flex-col overflow-hidden">
             {#key selectedThread.id}
-              <ThreadView
-                thread={selectedThread}
-                chatMode={mode === 'chats'}
-                onForked={handleForkedThread}
-                projects={visibleProjects}
-                {projectIcons}
-                onContinueInProject={handleContinuedInProject}
-                onProjectCreated={handleChatProjectCreated}
-              />
+              <svelte:boundary onerror={handleConversationRenderError}>
+                <ThreadView
+                  thread={selectedThread}
+                  chatMode={mode === 'chats'}
+                  onForked={handleForkedThread}
+                  projects={visibleProjects}
+                  {projectIcons}
+                  onContinueInProject={handleContinuedInProject}
+                  onProjectCreated={handleChatProjectCreated}
+                />
+                {#snippet failed(_error: unknown, reset: () => void)}
+                  <div class="flex h-full min-h-0 items-center justify-center px-6">
+                    <div
+                      class="w-full max-w-md rounded-xl border border-danger/30 bg-surface px-5 py-4"
+                      role="alert"
+                    >
+                      <p class="text-sm font-semibold text-foreground">
+                        Conversation view failed to render
+                      </p>
+                      <p class="mt-1 text-sm text-muted">
+                        The thread is still saved. Reload this view to continue.
+                      </p>
+                      <button
+                        type="button"
+                        class="mt-4 rounded-lg bg-primary px-3 py-2 text-xs font-semibold text-on-primary transition-opacity hover:opacity-90"
+                        onclick={reset}
+                      >
+                        Reload conversation
+                      </button>
+                    </div>
+                  </div>
+                {/snippet}
+              </svelte:boundary>
             {/key}
           </div>
         {:else if mode === 'chats'}
