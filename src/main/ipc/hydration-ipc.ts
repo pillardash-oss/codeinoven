@@ -8,6 +8,9 @@ import { ThreadManager } from '../../lib/engines/thread-manager'
 import { NoteRepo } from '../database/repositories/note-repo'
 import { validateBoundedInteger, validateBoundedString, validateEntityId } from './ipc-validation'
 import type { Thread, ThreadMessageCursor } from '../../lib/types'
+import { RepositoryService } from '../git/repository-service'
+import { settleThreadBranch, type ThreadBranchDeps } from '../chat/thread-branch-service'
+import { broadcastThreadUpdate } from '../chat/thread-events'
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -26,6 +29,11 @@ export function registerHydrationIpcHandlers(storage: StorageEngine, database: D
   const scopeManager = new ScopeManager(database)
   const threadManager = new ThreadManager(database)
   const noteRepo = new NoteRepo(database)
+  const branchDeps: ThreadBranchDeps = {
+    resolver: new RepositoryService(),
+    store: threadManager,
+    onSettled: broadcastThreadUpdate
+  }
 
   ipcMain.handle('config:get', () => storage.getConfig())
   ipcMain.handle('project:get', (_, projectId: string) => projectManager.getProject(projectId))
@@ -37,9 +45,14 @@ export function registerHydrationIpcHandlers(storage: StorageEngine, database: D
   ipcMain.handle('scope:get', (_, projectId: unknown) =>
     scopeManager.getBoard(validateEntityId(projectId, 'Project ID'))
   )
-  ipcMain.handle('thread:get', (_, projectId: string, threadId: string) =>
-    threadManager.getThreadViaWorker(projectId, threadId)
-  )
+  ipcMain.handle('thread:get', async (_, projectId: string, threadId: string) => {
+    const thread = await threadManager.getThreadViaWorker(projectId, threadId)
+    // A thread whose creation-time branch settle never completed (restart or a
+    // transient git failure) heals lazily on its next open — off this read's
+    // critical path, deduped while in flight.
+    if (thread) settleThreadBranch(branchDeps, thread)
+    return thread
+  })
   ipcMain.handle('note:get', async (_, projectId: unknown, threadId: unknown) => {
     const validProjectId = validateEntityId(projectId, 'Project ID')
     const validThreadId = validateEntityId(threadId, 'Thread ID')

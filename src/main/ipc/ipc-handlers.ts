@@ -27,6 +27,7 @@ import type { GitProvider } from '../git/git-provider.interface'
 import { ProjectFilesService } from '../editor/project-files-service'
 import { CheckpointManager } from '../storage/checkpoint-manager'
 import { ThreadCreationCoordinator } from '../chat/thread-creation-coordinator'
+import { settleThreadBranch, type ThreadBranchDeps } from '../chat/thread-branch-service'
 import { ThreadDeletionCoordinator } from '../chat/thread-deletion-coordinator'
 import { DiagnosticsService } from '../system/diagnostics-service'
 import { resolveFavicons } from '../editor/favicon-service'
@@ -2137,6 +2138,11 @@ export function registerIpcHandlers(
   const editorService = new EditorService()
   const repositoryService = new RepositoryService()
   const gitService = new GitService()
+  const branchBackfillDeps: ThreadBranchDeps = {
+    resolver: repositoryService,
+    store: threadManager,
+    onSettled: broadcastThreadUpdate
+  }
   const vault = new SecretVault(storage)
   const githubAuthService = new GitHubAuthService(vault)
   const diagnosticsService = new DiagnosticsService(database, () =>
@@ -6726,26 +6732,9 @@ export function registerIpcHandlers(
         )
       }
     )
-    // Branch detection is deliberately detached from readiness. `awaitReady`
-    // consumers (thread:get, engineeringLifecycle:get, spec/audit/assignment/
-    // brainstorm/prd reads, thread:updateSettings) must never stall behind a
-    // git round-trip: a slow or hung `rev-parse` would otherwise freeze every
-    // thread-scoped read at the exact moment the composer settles the branch.
     threadCreation.beginDetached(thread.id, async (aborted) => {
-      if (aborted || !thread.workingDirectory) return
-      try {
-        const branch = await repositoryService.getCurrentBranch(thread.workingDirectory)
-        if (branch) {
-          await threadManager.setBranch(thread.projectId, thread.id, branch)
-          thread.branch = branch
-          broadcastThreadUpdate(thread)
-        }
-      } catch (error) {
-        Logger.error('New thread branch detection failed', {
-          threadId: thread.id,
-          error: String(error)
-        })
-      }
+      if (aborted) return
+      settleThreadBranch(branchBackfillDeps, thread)
     })
     return thread
   })
@@ -6753,9 +6742,14 @@ export function registerIpcHandlers(
     // The renderer already holds the optimistic thread object, so this is not
     // on the initial paint path. Wait only when this exact thread is still
     // being finalized so background hydration never races durable ownership.
+    // A thread whose creation-time settle never completed (restart or a
+    // transient git failure) heals lazily on its next open — off this read's
+    // critical path, deduped while in flight.
     ipcMain.handle('thread:get', async (_, projectId: string, threadId: string) => {
       const ids = await waitForThreadReady(projectId, threadId)
-      return threadManager.getThread(ids.projectId, ids.threadId)
+      const thread = await threadManager.getThread(ids.projectId, ids.threadId)
+      if (thread) settleThreadBranch(branchBackfillDeps, thread)
+      return thread
     })
   }
   ipcMain.handle('thread:list', (_, projectId: string) => threadManager.listThreads(projectId))
