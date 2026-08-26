@@ -391,33 +391,13 @@ export class SpeechService {
         failed: false
       }
       if (cleanupMode.kind === 'local') {
-        try {
-          const punctuated = await this.queue.enqueue({
-            capability: 'cleanup',
-            runtime,
-            run: (signal) =>
-              backend.cleanup(
-                rawTranscript,
-                {
-                  id: artifact.id,
-                  directory: this.artifactDirectory(artifact.id)
-                },
-                signal
-              )
-          }).result
-          const cleaned = this.cleanup.applyRules(
-            punctuated,
-            this.learning.enabled(this.requireAttemptScope(attemptId))
-          )
-          finalTranscript = cleaned.text
-          cleanupProvenance = {
-            ...cleaned.provenance,
-            runtime,
-            artifactId: cleanupMode.artifactId
-          }
-        } catch (cause) {
-          cleanupProvenance = this.cleanup.fallback(rawTranscript, cause).provenance
-        }
+        const cleaned = await this.runCleanup(
+          rawTranscript,
+          cleanupMode,
+          this.requireAttemptScope(attemptId)
+        )
+        finalTranscript = cleaned.text
+        cleanupProvenance = cleaned.provenance
       } else if (cleanupMode.kind === 'remote') {
         try {
           if (!this.remoteCleanup) throw new Error('Remote cleanup is unavailable.')
@@ -1654,6 +1634,49 @@ export class SpeechService {
   }
 
   /**
+   * Pick an installed cleanup model, independent of the current ASR runtime.
+   * Honors an explicit artifact preference, then falls back to the best available
+   * cleanup runtime for the current platform (MLX on Apple Silicon, otherwise
+   * sherpa-onnx). Core ML is excluded because it has no cleanup capability.
+   */
+  private selectInstalledCleanupArtifact(
+    preferredArtifactId?: string
+  ): { runtime: SpeechRuntime; artifact: SpeechModelArtifact } | null {
+    if (preferredArtifactId) {
+      const catalogArtifact = this.requireCatalog().artifacts.find(
+        (candidate) =>
+          candidate.id === preferredArtifactId &&
+          candidate.capability === 'cleanup' &&
+          candidate.runtime !== 'coreml' &&
+          candidate.qualification.status !== 'retired'
+      )
+      if (catalogArtifact) {
+        const installed = this.installed.artifacts.find(
+          (item) =>
+            item.artifactId === catalogArtifact.id &&
+            item.available &&
+            item.runtime === catalogArtifact.runtime
+        )
+        if (installed) {
+          return { runtime: catalogArtifact.runtime, artifact: catalogArtifact }
+        }
+      }
+    }
+    const target = this.platformTarget()
+    const fallbackRuntimes: SpeechRuntime[] =
+      target.platform === 'darwin' && target.architecture === 'arm64'
+        ? ['mlx', 'sherpa-onnx', 'gguf']
+        : ['sherpa-onnx', 'mlx', 'gguf']
+    for (const runtime of fallbackRuntimes) {
+      const artifact = this.installedCleanupArtifact(runtime)
+      if (artifact) {
+        return { runtime, artifact }
+      }
+    }
+    return null
+  }
+
+  /**
    * Apply cleanup to a transcript for the local-LLM / audio-to-LLM path. Prefers
    * an installed local cleanup model when present, otherwise applies learned
    * correction rules with no model, and never switches path silently on failure
@@ -1705,18 +1728,19 @@ export class SpeechService {
         return { text: fallback.text, provenance: { ...fallback.provenance, mode: 'remote' } }
       }
     }
+    const resolved = this.selectInstalledCleanupArtifact(
+      mode.kind === 'local' ? mode.artifactId : undefined
+    )
     try {
-      const runtime = this.currentRuntime()
-      const artifact = this.installedCleanupArtifact(runtime)
-      const punctuated = artifact
+      const punctuated = resolved
         ? await this.queue
             .enqueue({
               capability: 'cleanup',
-              runtime,
+              runtime: resolved.runtime,
               run: (signal) =>
-                this.requireBackend(runtime).cleanup(
+                this.requireBackend(resolved.runtime).cleanup(
                   rawTranscript,
-                  { id: artifact.id, directory: this.artifactDirectory(artifact.id) },
+                  { id: resolved.artifact.id, directory: this.artifactDirectory(resolved.artifact.id) },
                   signal
                 )
             })
@@ -1728,7 +1752,7 @@ export class SpeechService {
         provenance: {
           ...cleaned.provenance,
           mode: 'local',
-          ...(artifact ? { runtime, artifactId: artifact.id } : {})
+          ...(resolved ? { runtime: resolved.runtime, artifactId: resolved.artifact.id } : {})
         }
       }
     } catch (cause) {

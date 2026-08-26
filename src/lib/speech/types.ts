@@ -24,7 +24,7 @@ export const SPEECH_PLATFORM_DEFAULTS: ReadonlyArray<{
   target: SpeechPlatformTarget
   runtime: SpeechRuntime
 }> = [
-  { target: { platform: 'darwin', architecture: 'arm64' }, runtime: 'mlx' },
+  { target: { platform: 'darwin', architecture: 'arm64' }, runtime: 'coreml' },
   { target: { platform: 'win32', architecture: 'x64' }, runtime: 'sherpa-onnx' },
   { target: { platform: 'linux', architecture: 'x64' }, runtime: 'sherpa-onnx' },
   { target: { platform: 'linux', architecture: 'arm64' }, runtime: 'sherpa-onnx' }
@@ -512,7 +512,7 @@ export type SpeechProgressEvent =
   | { kind: 'history'; attemptId: string; stage: SpeechAttemptStage }
 
 export function recommendedSpeechRuntime(target: SpeechPlatformTarget): SpeechRuntime {
-  return target.platform === 'darwin' && target.architecture === 'arm64' ? 'mlx' : 'sherpa-onnx'
+  return target.platform === 'darwin' && target.architecture === 'arm64' ? 'coreml' : 'sherpa-onnx'
 }
 
 export function resolveSpeechRuntime(

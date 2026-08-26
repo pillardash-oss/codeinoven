@@ -197,6 +197,8 @@
   function bestForBadge(artifact: SpeechModelArtifact): { label: string; cls: string } | null {
     if (artifact.id === 'parakeet-tdt-v2-sherpa-onnx-int8') return { label: 'Best for English', cls: 'bg-sky-500 text-white border-sky-600' }
     if (artifact.id === 'parakeet-tdt-v3-sherpa-onnx-int8') return { label: 'Best for Multilingual', cls: 'bg-indigo-500 text-white border-indigo-600' }
+    if (artifact.id === 'parakeet-tdt-v2-coreml') return { label: 'Best for English · Core ML', cls: 'bg-sky-600 text-white border-sky-700' }
+    if (artifact.id === 'parakeet-tdt-v3-coreml') return { label: 'Best for Multilingual · Core ML', cls: 'bg-indigo-600 text-white border-indigo-700' }
     if (artifact.id === 'whisper-base-mlx-4bit') return { label: 'Apple Silicon · Fast', cls: 'bg-zinc-800 text-white border-zinc-700' }
     if (artifact.id === 'whisper-base-sherpa-int8') return { label: 'Portable · All platforms', cls: 'bg-white text-zinc-700 border-zinc-200' }
     if (artifact.id === 'kokoro-en-mlx-8bit') return { label: 'Best quality · MLX', cls: 'bg-violet-500 text-white border-violet-600' }
@@ -246,8 +248,10 @@
     const order: Record<string, number> = {
       'parakeet-tdt-v2-sherpa-onnx-int8': 1,
       'parakeet-tdt-v3-sherpa-onnx-int8': 2,
-      'whisper-base-mlx-4bit': 3,
-      'whisper-base-sherpa-int8': 4,
+      'parakeet-tdt-v2-coreml': 3,
+      'parakeet-tdt-v3-coreml': 4,
+      'whisper-base-mlx-4bit': 5,
+      'whisper-base-sherpa-int8': 6,
       'kokoro-en-mlx-8bit': 1,
       'kokoro-en-sherpa-v0-19': 2,
       'qwen3-cleanup-mlx-0-6b-4bit': 1,
