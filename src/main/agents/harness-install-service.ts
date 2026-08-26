@@ -236,7 +236,9 @@ export class HarnessInstallService {
       throw new Error(`${definition.name} is not installed — nothing to uninstall.`)
     }
     if (provider.executionTarget?.kind === 'bundled') {
-      throw new Error(`${definition.name} is bundled with CodeInOven and cannot be uninstalled separately.`)
+      throw new Error(
+        `${definition.name} is bundled with CodeInOven and cannot be uninstalled separately.`
+      )
     }
 
     const method = detectMethod(harnessId, provider.resolvedPath)

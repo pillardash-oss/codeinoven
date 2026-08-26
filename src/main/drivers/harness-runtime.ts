@@ -31,7 +31,12 @@ function bundledPiRuntime(command: string): HarnessRuntime | null {
   if (command !== 'pi') return null
   const scriptPath = bundledPiScriptPath()
   return scriptPath
-    ? { command, executable: process.execPath, resolvedPath: scriptPath, target: { kind: 'bundled' } }
+    ? {
+        command,
+        executable: process.execPath,
+        resolvedPath: scriptPath,
+        target: { kind: 'bundled' }
+      }
     : null
 }
 
@@ -606,7 +611,9 @@ export async function prepareHarnessTerminalHandoff(
   const runtime = await resolveHarnessRuntime(command)
   if (!runtime) throw new Error(`${command} was not found on Windows or in any WSL distribution`)
   if (runtime.target.kind === 'bundled') {
-    throw new Error(`${command} is bundled with CodeInOven — there is no CLI install to hand off to`)
+    throw new Error(
+      `${command} is bundled with CodeInOven — there is no CLI install to hand off to`
+    )
   }
   if (runtime.target.kind === 'native') {
     return { command: runtime.executable, args, runtime }
