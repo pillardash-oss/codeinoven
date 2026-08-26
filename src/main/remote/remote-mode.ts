@@ -435,6 +435,7 @@ function parseGlobalMemories(value: unknown): MemoryEntry[] | null {
       typeof entry['content'] !== 'string' ||
       typeof entry['enabled'] !== 'boolean' ||
       typeof entry['updatedAt'] !== 'number' ||
+      (entry['createdAt'] !== undefined && typeof entry['createdAt'] !== 'number') ||
       !categories.includes(entry['category'] as MemoryEntry['category']) ||
       !priorities.includes(entry['priority'] as MemoryEntry['priority']) ||
       entry['scope'] !== 'global' ||
@@ -455,6 +456,8 @@ function parseGlobalMemories(value: unknown): MemoryEntry[] | null {
       label: entry['label'],
       content: entry['content'],
       enabled: entry['enabled'],
+      // Older synced payloads predate createdAt; fall back to updatedAt.
+      createdAt: typeof entry['createdAt'] === 'number' ? entry['createdAt'] : entry['updatedAt'],
       updatedAt: entry['updatedAt'],
       category: entry['category'] as MemoryEntry['category'],
       priority: entry['priority'] as MemoryEntry['priority'],

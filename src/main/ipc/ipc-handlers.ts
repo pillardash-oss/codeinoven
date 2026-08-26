@@ -3268,15 +3268,27 @@ export function registerIpcHandlers(
       const safeThreadId = validateEntityId(threadId, 'Thread ID')
       const safeContent = validateSpecContent(content)
       const safeProvenance = validateProvenance(provenance)
-      return memoryService.snapshotCurrent(safeProjectId, safeThreadId).then((context) =>
-        specEngine.createDraft({
-          projectId: safeProjectId,
-          threadId: safeThreadId,
-          content: safeContent,
-          provenance: safeProvenance,
-          context
-        })
-      )
+      return threadManager.getThread(safeProjectId, safeThreadId).then((thread) => {
+        const activeModelKey =
+          thread?.settings?.harnessId && thread.settings.providerId && thread.settings.modelId
+            ? modelKey(
+                thread.settings.harnessId,
+                thread.settings.providerId,
+                thread.settings.modelId
+              )
+            : undefined
+        return memoryService
+          .snapshotCurrent(safeProjectId, safeThreadId, activeModelKey)
+          .then((context) =>
+            specEngine.createDraft({
+              projectId: safeProjectId,
+              threadId: safeThreadId,
+              content: safeContent,
+              provenance: safeProvenance,
+              context
+            })
+          )
+      })
     }
   )
   ipcMain.handle(
@@ -3312,22 +3324,32 @@ export function registerIpcHandlers(
       const safeSpecId = validateEntityId(specId, 'Specification ID')
       const safeContent = validateSpecContent(content)
       const safeProvenance = validateProvenance(provenance)
-      return Promise.all([
-        specEngine.getLatest(safeProjectId, safeThreadId, safeSpecId),
-        memoryService.snapshotCurrent(safeProjectId, safeThreadId)
-      ]).then(([latest, memory]) =>
-        specEngine.createVersion({
-          projectId: safeProjectId,
-          threadId: safeThreadId,
-          specId: safeSpecId,
-          content: safeContent,
-          provenance: safeProvenance,
-          context: [
-            ...(latest?.context.filter((reference) => reference.type !== 'memory') ?? []),
-            ...memory
-          ]
-        })
-      )
+      return threadManager.getThread(safeProjectId, safeThreadId).then((thread) => {
+        const activeModelKey =
+          thread?.settings?.harnessId && thread.settings.providerId && thread.settings.modelId
+            ? modelKey(
+                thread.settings.harnessId,
+                thread.settings.providerId,
+                thread.settings.modelId
+              )
+            : undefined
+        return Promise.all([
+          specEngine.getLatest(safeProjectId, safeThreadId, safeSpecId),
+          memoryService.snapshotCurrent(safeProjectId, safeThreadId, activeModelKey)
+        ]).then(([latest, memory]) =>
+          specEngine.createVersion({
+            projectId: safeProjectId,
+            threadId: safeThreadId,
+            specId: safeSpecId,
+            content: safeContent,
+            provenance: safeProvenance,
+            context: [
+              ...(latest?.context.filter((reference) => reference.type !== 'memory') ?? []),
+              ...memory
+            ]
+          })
+        )
+      })
     }
   )
   ipcMain.handle(

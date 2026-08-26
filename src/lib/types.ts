@@ -3496,6 +3496,7 @@ export interface MemoryEntry {
   label: string
   content: string
   enabled: boolean
+  createdAt: number
   updatedAt: number
   category: MemoryCategory
   priority: MemoryPriority
