@@ -74,6 +74,13 @@ export default defineConfig(({ mode }) => {
     'RENDERER_VITE_',
     'CODEINOVEN_'
   ])
+  // Only a production build talks to the hosted mobile gateway by default.
+  // Every other mode falls back to the local `services/remote-control` dev
+  // server (see services/remote-control/runtime-config.ts), so `bun dev`
+  // never reaches production unless MAIN_VITE_REMOTE_API_ORIGIN /
+  // MAIN_VITE_ACCOUNT_AUTH_ORIGIN are set explicitly.
+  const defaultRemoteOrigin =
+    mode === 'production' ? 'https://mobile.codeinoven.com' : 'http://localhost:8877'
   return {
     main: {
       define: {
@@ -90,12 +97,12 @@ export default defineConfig(({ mode }) => {
         // Public endpoint baked into packaged desktops. Release CI maps the
         // GitHub Actions REMOTE_API_ORIGIN variable to this build-time value.
         __CODEINOVEN_REMOTE_API_ORIGIN__: JSON.stringify(
-          env.MAIN_VITE_REMOTE_API_ORIGIN ?? 'https://mobile.codeinoven.com'
+          env.MAIN_VITE_REMOTE_API_ORIGIN ?? defaultRemoteOrigin
         ),
-        // Keep interactive account authentication on the stable mobile gateway.
-        // Coolify resolves the current Convex account service at runtime.
+        // Keep interactive account authentication on the stable mobile gateway
+        // in production; every other mode targets the local dev server above.
         __CODEINOVEN_ACCOUNT_AUTH_ORIGIN__: JSON.stringify(
-          env.MAIN_VITE_ACCOUNT_AUTH_ORIGIN ?? 'https://mobile.codeinoven.com'
+          env.MAIN_VITE_ACCOUNT_AUTH_ORIGIN ?? defaultRemoteOrigin
         ),
         // Public, isolated origin for generated Engineering prototype previews.
         // There is deliberately no production default.
