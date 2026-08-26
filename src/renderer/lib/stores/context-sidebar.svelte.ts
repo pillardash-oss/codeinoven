@@ -1,4 +1,5 @@
 import { invoke } from '$lib/ipc.svelte'
+import { SvelteSet } from 'svelte/reactivity'
 import { gitState } from './git.svelte'
 import { APP_SLUG } from '$shared/brand'
 import type {
@@ -358,7 +359,7 @@ class ContextSidebarState {
    *  fullscreen terminal/media/file editors). The browser's native view must
    *  hide while any is active, because a native view floats above every DOM
    *  modal. Tracked as a keyed set so nested/overlapping surfaces are safe. */
-  private fullscreenSurfaceKeys = $state(new Set<string>())
+  private fullscreenSurfaceKeys = new SvelteSet<string>()
   private activeProjectId: string | null = $state(null)
   private activeThreadId: string | null = $state(null)
   private notificationsVisible = $state(false)
