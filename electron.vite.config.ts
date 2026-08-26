@@ -1,10 +1,34 @@
 import { defineConfig, loadEnv } from 'electron-vite'
 import { svelte } from '@sveltejs/vite-plugin-svelte'
 import tailwindcss from '@tailwindcss/vite'
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { resolve } from 'path'
 import type { Plugin, PreviewServer, ViteDevServer } from 'vite'
 import packageJson from './package.json'
+
+// Set only by `bun run dev:remote-pwa` (see scripts/dev-remote-pwa.ts), which
+// pre-generates a self-signed cert covering the machine's LAN IPs so a phone
+// on the same WiFi gets a secure context (HMR + installable PWA + service
+// worker) straight from the Vite dev server — no production LAN gateway
+// build/rebuild cycle required. Regular `bun run dev` never sets this and is
+// unaffected.
+const remotePwaDevCertDir = resolve(__dirname, '.cio/tmp/remote-pwa-dev-cert')
+const remotePwaDevKeyPath = resolve(remotePwaDevCertDir, 'key.pem')
+const remotePwaDevCertPath = resolve(remotePwaDevCertDir, 'cert.pem')
+
+function remotePwaDevServerConfig():
+  { host: true; port: number; https: { key: Buffer; cert: Buffer } } | undefined {
+  if (process.env.REMOTE_PWA_DEV !== '1') return undefined
+  if (!existsSync(remotePwaDevKeyPath) || !existsSync(remotePwaDevCertPath)) return undefined
+  return {
+    host: true,
+    port: Number(process.env.REMOTE_PWA_DEV_PORT ?? 5173),
+    https: {
+      key: readFileSync(remotePwaDevKeyPath),
+      cert: readFileSync(remotePwaDevCertPath)
+    }
+  }
+}
 
 const pwaManifestPath = resolve(__dirname, 'src/renderer/static/manifest.webmanifest')
 const pwaManifest = JSON.parse(readFileSync(pwaManifestPath, 'utf8')) as Record<string, unknown>
@@ -131,6 +155,7 @@ export default defineConfig(({ mode }) => {
           $shared: resolve(__dirname, 'src/lib')
         }
       },
+      server: remotePwaDevServerConfig(),
       build: {
         outDir: resolve(__dirname, 'out/renderer'),
         rollupOptions: {

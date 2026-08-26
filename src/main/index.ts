@@ -341,6 +341,22 @@ function isNewTerminalShortcut(input: Electron.Input): boolean {
 }
 const isProduction = app.isPackaged || process.env['NODE_ENV'] === 'production'
 
+// Only set by `bun run dev:remote-pwa`: the renderer dev server serves HTTPS
+// over a self-signed cert so a phone gets a secure context on LAN. The
+// desktop window still loads that same dev server over https, so trust the
+// dev-only cert here — scoped to non-production so it can never affect a
+// packaged build.
+if (!isProduction && process.env['REMOTE_PWA_DEV'] === '1') {
+  app.on('certificate-error', (event, _webContents, url, _error, _certificate, callback) => {
+    if (url.startsWith('https://localhost:') || url.startsWith('https://127.0.0.1:')) {
+      event.preventDefault()
+      callback(true)
+      return
+    }
+    callback(false)
+  })
+}
+
 /**
  * Window/session boundary validator. It guards external window creation,
  * navigation, permission requests, and downloads against unsafe schemes and

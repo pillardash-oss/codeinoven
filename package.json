@@ -25,6 +25,8 @@
     "postinstall": "bun scripts/patch-binary-data.ts && electron-builder install-app-deps",
     "predev": "bun run speech:build-mlx && bun run speech:build-coreml && bun run speech:build-native-capture && bun scripts/brand-electron.ts",
     "dev": "electron-vite dev",
+    "dev:remote-pwa": "bun scripts/dev-remote-pwa.ts",
+    "dev:remote-pwa:tunnel": "bun scripts/dev-remote-pwa.ts --tunnel",
     "build": "electron-vite build",
     "build:production": "electron-vite build --mode production",
     "preview": "electron-vite preview",
