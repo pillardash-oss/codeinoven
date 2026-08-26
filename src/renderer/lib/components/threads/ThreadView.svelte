@@ -211,6 +211,7 @@
   import { LatestRequestGuard } from '$lib/refresh-guard'
   import { isRemotePwaRuntime } from '$lib/runtime-context'
   import type { ConversationController, SendPayload } from './ConversationController.svelte'
+  import * as CheckpointMatching from '../../threads/checkpoint-matching'
 
   type WorkingModelSelection = Pick<
     ThreadSettings,
@@ -271,7 +272,9 @@
 
   let alive = true
 
-  let messages = $derived(controller?.messages ?? threadMessages.messages(thread.projectId, thread.id))
+  let messages = $derived(
+    controller?.messages ?? threadMessages.messages(thread.projectId, thread.id)
+  )
   // Intentional initial-value captures — Workspace keys this view by thread ID.
   // svelte-ignore state_referenced_locally
   const savedScrollState = threadScrollPositions.get(thread.id)
@@ -1318,6 +1321,7 @@
     }
   })
   let checkpoints = $state<TurnCheckpointSummary[]>([])
+  let lastCheckpointThreadId = ''
   const checkpointRefreshGuard = new LatestRequestGuard()
   let showSpecStudio = $state(false)
   let threadViewElement = $state<HTMLDivElement | null>(null)
@@ -3703,6 +3707,10 @@
     const request = checkpointRefreshGuard.begin()
     const { projectId, id } = thread
     try {
+      if (lastCheckpointThreadId !== id) {
+        lastCheckpointThreadId = id
+        checkpoints = []
+      }
       const nextCheckpoints = await invoke('checkpoint:list', projectId, id)
       if (!alive || !checkpointRefreshGuard.isCurrent(request)) return
       checkpoints = nextCheckpoints
@@ -4590,15 +4598,7 @@
     // back to a "user" message (whose role/shape varies with what the agent
     // did mid-turn). Choosing the most recent window resolves
     // interrupted-then-resumed turns to the resumed checkpoint.
-    const completed = checkpoints.filter((checkpoint) => checkpoint.status !== 'active')
-    let owner: TurnCheckpointSummary | null = null
-    for (const checkpoint of completed) {
-      const end = checkpoint.completedAt ?? checkpoint.createdAt
-      if (assistant.createdAt >= checkpoint.createdAt - 5_000 && assistant.createdAt <= end) {
-        if (!owner || checkpoint.createdAt > owner.createdAt) owner = checkpoint
-      }
-    }
-    return owner
+    return CheckpointMatching.checkpointForTurn(messages, checkpoints, messageIndex)
   }
 
   /** True when `messageIndex` is the final assistant message of `checkpoint`'s
@@ -4606,14 +4606,7 @@
    *  being drawn multiple times when mid-turn question-answer user messages
    *  split the visual turn into several `isTurnEnd` boundaries. */
   function isCheckpointTurnEnd(messageIndex: number, checkpoint: TurnCheckpointSummary): boolean {
-    const start = checkpoint.createdAt - 5_000
-    const end = checkpoint.completedAt ?? checkpoint.createdAt
-    for (let index = messageIndex + 1; index < messages.length; index += 1) {
-      const candidate = messages[index]
-      if (candidate?.role !== 'assistant') continue
-      if (candidate.createdAt >= start && candidate.createdAt <= end) return false
-    }
-    return true
+    return CheckpointMatching.isCheckpointTurnEnd(messages, checkpoint, messageIndex)
   }
 
   async function openCheckpointFile(checkpointId: string, path: string): Promise<void> {
@@ -9062,7 +9055,8 @@
                           isReadingThisTurn &&
                           speechController.activeSegments !== null &&
                           speechController.activeSegments.length > 0 &&
-                          (speechController.playback.state === 'playing' || speechController.playback.state === 'paused')}
+                          (speechController.playback.state === 'playing' ||
+                            speechController.playback.state === 'paused')}
                         <div
                           id={`msg-${msg.id}`}
                           class="min-w-0 w-full text-sm text-foreground"
@@ -9073,7 +9067,8 @@
                           {#if isReadingActiveLine}
                             {@const segs = speechController.activeSegments!}
                             {@const activeIdx =
-                              speechController.playback.state === 'playing' || speechController.playback.state === 'paused'
+                              speechController.playback.state === 'playing' ||
+                              speechController.playback.state === 'paused'
                                 ? speechController.playback.segmentIndex
                                 : -1}
                             <div class="flex flex-col gap-1.5">

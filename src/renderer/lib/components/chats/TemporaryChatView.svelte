@@ -109,13 +109,15 @@
 {/snippet}
 
 <div class="temporary-chat-view flex h-full min-h-0 w-full flex-col overflow-hidden">
-  <ThreadView
-    thread={syntheticThreadFor(tab)}
-    chatMode={true}
-    {controller}
-    headerSnippet={header}
-    onContinueInThread={continueInThread}
-  />
+  {#key tabId}
+    <ThreadView
+      thread={syntheticThreadFor(tab)}
+      chatMode={true}
+      {controller}
+      headerSnippet={header}
+      onContinueInThread={continueInThread}
+    />
+  {/key}
 </div>
 
 <style>

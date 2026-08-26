@@ -201,7 +201,9 @@
         label:
           provider.executionTarget?.kind === 'wsl'
             ? `Ready · WSL ${provider.executionTarget.distribution}`
-            : 'Ready · Native',
+            : provider.executionTarget?.kind === 'bundled'
+              ? 'Ready · Bundled'
+              : 'Ready · Native',
         classes: 'border-success/30 bg-success/10 text-success'
       }
     }
@@ -246,7 +248,7 @@
         onClick: () => void openInBrowser(OPENCODE_V2_PRS_URL)
       })
     }
-    if (provider.status === 'available') {
+    if (provider.status === 'available' && provider.executionTarget?.kind !== 'bundled') {
       items.push({ label: `divider-${provider.id}`, divider: true })
       items.push({
         label: 'Uninstall',
@@ -718,30 +720,36 @@
               <p class="text-[10px] font-medium uppercase tracking-wide text-dimmed">
                 {provider.executionTarget?.kind === 'wsl'
                   ? `WSL path · ${provider.executionTarget.distribution}`
-                  : 'Path'}
+                  : provider.executionTarget?.kind === 'bundled'
+                    ? 'Source'
+                    : 'Path'}
               </p>
               <div class="mt-0.5 flex items-center gap-1.5">
-                <span
-                  class="min-w-0 truncate font-mono text-xs text-muted"
-                  title={provider.resolvedPath}
-                >
-                  {provider.resolvedPath ??
-                    (provider.status === 'not_found' ? 'Not found on PATH' : 'Not available')}
-                </span>
-                {#if provider.resolvedPath}
-                  <button
-                    type="button"
-                    class="flex h-5 w-5 shrink-0 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
-                    title="Copy path"
-                    aria-label="Copy {provider.name} path"
-                    onclick={() => void copyPath(provider)}
+                {#if provider.executionTarget?.kind === 'bundled'}
+                  <span class="min-w-0 truncate text-xs text-muted"> Bundled with CodeInOven </span>
+                {:else}
+                  <span
+                    class="min-w-0 truncate font-mono text-xs text-muted"
+                    title={provider.resolvedPath}
                   >
-                    {#if copiedPathId === provider.id}
-                      <Check size={11} class="text-success" />
-                    {:else}
-                      <Copy size={11} />
-                    {/if}
-                  </button>
+                    {provider.resolvedPath ??
+                      (provider.status === 'not_found' ? 'Not found on PATH' : 'Not available')}
+                  </span>
+                  {#if provider.resolvedPath}
+                    <button
+                      type="button"
+                      class="flex h-5 w-5 shrink-0 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+                      title="Copy path"
+                      aria-label="Copy {provider.name} path"
+                      onclick={() => void copyPath(provider)}
+                    >
+                      {#if copiedPathId === provider.id}
+                        <Check size={11} class="text-success" />
+                      {:else}
+                        <Copy size={11} />
+                      {/if}
+                    </button>
+                  {/if}
                 {/if}
               </div>
             </div>
