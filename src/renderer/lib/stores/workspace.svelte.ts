@@ -10,7 +10,6 @@ import { contextSidebarState } from './context-sidebar.svelte'
 import { rendererRecovery } from './renderer-recovery.svelte'
 import { notificationPanelState } from './notification-panel.svelte'
 import { gitState } from './git.svelte'
-import { threadMessages } from './thread-messages.svelte'
 import { APP_SLUG } from '$shared/brand'
 import { invoke } from '$lib/ipc.svelte'
 
@@ -140,10 +139,6 @@ class WorkspaceState {
   jumpToMessage: ((id: string) => void) | null = null
 
   openThread(thread: Thread, project: Project | null, iconUrl?: string | null): void {
-    // Start the bounded history warmup before publishing the new selection so
-    // every entry point (row click, scope board, notification, command palette,
-    // and Cmd/Ctrl navigation) shares the same preload path.
-    void threadMessages.preload(thread.projectId, thread.id)
     const visitKey = threadVisitKey(thread)
     this.recentThreadVisits = [
       visitKey,

@@ -1582,13 +1582,8 @@
     observeNavigationLocation()
     void loadConfig()
     void harnessLifecycleStore.autoUpdateOnStartup()
-    const hydrationTimer = window.setTimeout(() => {
-      void loadScopeData().finally(() => {
-        // Signal the main process that the renderer finished its initial
-        // hydration so it can timestamp the final startup phases.
-        void invoke('app:rendererReady').catch(() => undefined)
-      })
-    }, 0)
+    // Workspace owns the initial project/thread hydration. Keeping this signal
+    // there prevents App and Workspace from issuing the same startup queries.
 
     return () => {
       mq.removeEventListener('change', onColorSchemeChange)
@@ -1596,7 +1591,6 @@
       restoreWorkspaceCallbacks()
       unsubscribeIpc()
       unsubscribeShutdown()
-      window.clearTimeout(hydrationTimer)
       workspaceState.openThread = originalOpenThread
       workspaceState.clearThread = originalClearThread
     }

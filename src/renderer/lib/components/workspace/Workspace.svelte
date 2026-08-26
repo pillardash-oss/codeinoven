@@ -99,6 +99,7 @@
     threadWithInheritedSettings
   } from '$lib/thread-settings-inheritance'
   import { providerCatalog } from '$lib/stores/provider-catalog.svelte'
+  import { providerStore } from '$lib/stores/providers.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
   import { gitState } from '$lib/stores/git.svelte'
   import {
@@ -1565,18 +1566,6 @@
     if (selected && !isOrchestrationChildThread(selected)) upsertThreadInList(selected)
   })
 
-  // Warm the message cache the moment a thread is selected (including the
-  // view-switch restores between Chats and Projects) so the keyed ThreadView
-  // mounts straight onto its history instead of flashing "Loading
-  // conversation…" while `loadLocal` fetches the page. Non-destructive —
-  // ThreadView merges the same bounded window and never reloads a warm cache.
-  $effect(() => {
-    const selected = workspaceState.selectedThread
-    if (!selected) return
-    if (threadMessages.loaded(selected.projectId, selected.id)) return
-    void threadMessages.preload(selected.projectId, selected.id)
-  })
-
   // Live thread updates pushed from the main process (status/read changes
   // during agent runs) — keeps the sidebar indicators in sync without polling.
   // Updates are applied immediately so a finished turn flips the status badge
@@ -1883,11 +1872,43 @@
       // App-start git check: async — the store ensures the GitHub connection
       // before the PR indicator check runs, with or without a restored thread.
       gitState.notifyAppStarted(workspaceState.activeProject)
+
+      // The workspace is the single owner of initial hydration. Keep provider
+      // catalog work after the first data pass and after a frame so startup
+      // thread rendering is not competing with model discovery.
+      void invoke('app:waitForFeatures').then(() => {
+        window.requestAnimationFrame(() => {
+          const targets = scopeState.activeProjectId
+            ? [scopeState.activeProjectId, INBOX_PROJECT_ID]
+            : [INBOX_PROJECT_ID]
+          void providerCatalog.init(targets, { refresh: false })
+          void providerStore.init()
+          if (scopeState.activeProjectId) {
+            void providerCatalog.refresh(scopeState.activeProjectId, true)
+          }
+        })
+      })
+
+      // Preserve the initial empty-state behavior previously triggered by App.
+      // A restored thread remains selected and does not create a new one.
+      if (active && !workspaceState.selectedThread) {
+        if (mode === 'chats') {
+          workspaceState.requestNewChat()
+        } else if (
+          workspaceState.activeProject &&
+          workspaceState.activeProject.id !== INBOX_PROJECT_ID
+        ) {
+          workspaceState.requestCreateThread(scopeState.sidebarContext?.bucketId)
+        } else {
+          workspaceState.requestAddProject()
+        }
+      }
     } catch {
       projects = []
       allThreads = []
     } finally {
       loading = false
+      void invoke('app:rendererReady').catch(() => undefined)
     }
   }
 
