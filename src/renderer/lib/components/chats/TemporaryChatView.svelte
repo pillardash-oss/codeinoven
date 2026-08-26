@@ -108,10 +108,20 @@
   {/if}
 {/snippet}
 
-<ThreadView
-  thread={syntheticThreadFor(tab)}
-  chatMode={true}
-  {controller}
-  headerSnippet={header}
-  onContinueInThread={continueInThread}
-/>
+<div class="temporary-chat-view flex h-full min-h-0 w-full flex-col overflow-hidden">
+  <ThreadView
+    thread={syntheticThreadFor(tab)}
+    chatMode={true}
+    {controller}
+    headerSnippet={header}
+    onContinueInThread={continueInThread}
+  />
+</div>
+
+<style>
+  .temporary-chat-view :global(.chat-composer) {
+    position: sticky;
+    bottom: 0;
+    z-index: 10;
+  }
+</style>
