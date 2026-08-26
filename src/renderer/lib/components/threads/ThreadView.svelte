@@ -5,18 +5,14 @@
 
   interface ThreadScrollState {
     top: number
-    renderedStartIndex: number
     /** Whether the user was scrolled away from the bottom when saved. */
     awayFromBottom: boolean
   }
 
-  /** Persists each thread's scroll position and expanded history window across
-   *  component remounts (thread switching in the sidebar). */
+  /** Persists each thread's scroll position across component remounts. */
   const threadScrollPositions = new SvelteMap<string, ThreadScrollState>()
   const HISTORY_WINDOW_SIZE = 40
   const HISTORY_PRELOAD_THRESHOLD = 240
-  /** Keep initial navigation light; older messages are paged into the DOM. */
-  const HISTORY_RENDER_WINDOW_SIZE = 12
 
   import {
     AudioLines,
@@ -258,38 +254,12 @@
   let messages = $derived(threadMessages.messages(thread.projectId, thread.id))
   // Intentional initial-value captures — Workspace keys this view by thread ID.
   // svelte-ignore state_referenced_locally
-  const cachedMessages = threadMessages.messages(thread.projectId, thread.id)
-  // svelte-ignore state_referenced_locally
   const savedScrollState = threadScrollPositions.get(thread.id)
   let userScrolledAway = $state(savedScrollState?.awayFromBottom ?? false)
-  // svelte-ignore state_referenced_locally
-  let historyWindowInitialized =
-    cachedMessages.length > 0 || threadMessages.loaded(thread.projectId, thread.id)
-  let renderedStartIndex = $state(
-    savedScrollState && savedScrollState.renderedStartIndex < cachedMessages.length
-      ? Math.max(0, savedScrollState.renderedStartIndex)
-      : Math.max(0, cachedMessages.length - HISTORY_RENDER_WINDOW_SIZE)
-  )
-  // Keep thread switches bounded even when the cache contains a complete
-  // transcript. Markdown parsing and message-card effects run once per
-  // mounted message, so rendering the entire cache blocks the renderer.
-  // Keep the bounded window aligned to complete conversation turns. A raw
-  // message-count boundary can leave a trace visible without its user prompt,
-  // or leave the final answer below the window.
-  let visibleStartIndex = $derived.by(() => {
-    let start = Math.min(renderedStartIndex, messages.length)
-    if (start > 0 && messages[start]?.role === 'assistant') {
-      while (start > 0 && messages[start - 1]?.role === 'assistant') start -= 1
-      if (start > 0 && messages[start - 1]?.role === 'user') start -= 1
-    }
-    return start
-  })
-  let visibleEndIndex = $derived.by(() => {
-    let end = Math.min(messages.length, visibleStartIndex + HISTORY_RENDER_WINDOW_SIZE)
-    while (end < messages.length && messages[end - 1]?.role === 'assistant') end += 1
-    return end
-  })
-  let visibleMessages = $derived(messages.slice(visibleStartIndex, visibleEndIndex))
+  // The store already keeps the loaded history bounded to one page and grows
+  // it only when the user reaches the top. Render that page as one continuous
+  // scroll surface so the user can always scroll back down to the latest turn.
+  let visibleMessages = $derived(messages)
   /** The last turn in the list and whether it is still the "active" turn. A
    *  trailing steer — a user message the agent has not responded to yet — does
    *  not end the turn it intervenes in, so the streaming trace for the current
@@ -318,7 +288,7 @@
   let fullUserMessageHistory = $state<UserMessageSummary[]>([])
   let userMessageHistoryLoaded = false
   let userMessageHistoryLoading: Promise<void> | null = null
-  let hasOlderMessages = $derived(visibleStartIndex > 0 || olderMessagesAvailable)
+  let hasOlderMessages = $derived(olderMessagesAvailable)
   let userMessageTexts = $derived(
     messages
       .filter((msg) => msg.role === 'user')
@@ -2273,10 +2243,6 @@
     if (jumpLoading) return
     const cachedIndex = messages.findIndex((message) => message.id === id)
     if (cachedIndex >= 0) {
-      if (cachedIndex < visibleStartIndex) {
-        renderedStartIndex = cachedIndex
-        await tick()
-      }
       document.getElementById(`msg-${id}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' })
       return
     }
@@ -2293,7 +2259,6 @@
       threadMessages.mergePage(projectId, threadId, page.messages)
       const targetIndex = messages.findIndex((message) => message.id === id)
       if (targetIndex >= 0) {
-        renderedStartIndex = Math.max(0, targetIndex - Math.floor(HISTORY_WINDOW_SIZE / 4))
         olderMessagesAvailable = page.hasOlder
         await tick()
         document
@@ -2318,12 +2283,7 @@
    *  window around the message when it lies outside the loaded cache. */
   async function scrollToMessageSection(messageId: string, section: string): Promise<void> {
     const cachedIndex = messages.findIndex((message) => message.id === messageId)
-    if (cachedIndex >= 0) {
-      if (cachedIndex < visibleStartIndex) {
-        renderedStartIndex = cachedIndex
-        await tick()
-      }
-    } else {
+    if (cachedIndex < 0) {
       if (jumpLoading) return
       jumpLoading = true
       try {
@@ -2338,7 +2298,6 @@
         threadMessages.mergePage(thread.projectId, thread.id, page.messages)
         const targetIndex = messages.findIndex((message) => message.id === messageId)
         if (targetIndex < 0) return
-        renderedStartIndex = Math.max(0, targetIndex - Math.floor(HISTORY_WINDOW_SIZE / 4))
         olderMessagesAvailable = page.hasOlder
         await tick()
         if (page.hasNewer) {
@@ -2569,7 +2528,6 @@
     userScrolledAway = !isAtBottom(scrollEl)
     threadScrollPositions.set(thread.id, {
       top: scrollEl.scrollTop,
-      renderedStartIndex: visibleStartIndex,
       awayFromBottom: userScrolledAway
     })
     scheduleResponseBubbleUpdate()
@@ -2594,31 +2552,26 @@
     const previousHeight = scrollEl.scrollHeight
     const previousTop = scrollEl.scrollTop
     try {
-      if (visibleStartIndex > 0) {
-        renderedStartIndex = Math.max(0, visibleStartIndex - HISTORY_WINDOW_SIZE)
-      } else {
-        const oldest = messages[0]
-        if (!oldest) {
-          olderMessagesAvailable = false
-          return
-        }
-        const before: ThreadMessageCursor = { createdAt: oldest.createdAt, id: oldest.id }
-        const page = await invoke(
-          'thread:loadMessages',
-          thread.projectId,
-          thread.id,
-          before,
-          HISTORY_WINDOW_SIZE
-        )
-        olderMessagesAvailable = page.hasOlder
-        threadMessages.mergePage(thread.projectId, thread.id, page.messages)
+      const oldest = messages[0]
+      if (!oldest) {
+        olderMessagesAvailable = false
+        return
       }
+      const before: ThreadMessageCursor = { createdAt: oldest.createdAt, id: oldest.id }
+      const page = await invoke(
+        'thread:loadMessages',
+        thread.projectId,
+        thread.id,
+        before,
+        HISTORY_WINDOW_SIZE
+      )
+      olderMessagesAvailable = page.hasOlder
+      threadMessages.mergePage(thread.projectId, thread.id, page.messages)
       await tick()
       if (scrollEl) {
         scrollEl.scrollTop = previousTop + (scrollEl.scrollHeight - previousHeight)
         threadScrollPositions.set(thread.id, {
           top: scrollEl.scrollTop,
-          renderedStartIndex: visibleStartIndex,
           awayFromBottom: userScrolledAway
         })
       }
@@ -2646,7 +2599,6 @@
       // Always anchor a busy thread to its live tail: the conversation grew
       // while the user was away, so a stale saved offset would drop them into
       // a blank body with the current turn's message and trace out of view.
-      renderedStartIndex = Math.max(0, messages.length - HISTORY_RENDER_WINDOW_SIZE)
       scrollEl.scrollTo({ top: scrollEl.scrollHeight, behavior: 'auto' })
       userScrolledAway = false
     } else if (savedScrollState) {
@@ -2667,18 +2619,16 @@
   // scrolled. Reading `streamVersion` (the cache revision) makes the view follow
   // a streaming turn even when parts accumulate inside a single message, and
   // reading `busy` snaps back to the live bottom as soon as a run becomes
-  // active on an otherwise idle thread.
+  // active on an otherwise idle thread. A finished thread deliberately skips
+  // this effect so ordinary history scrolling is never competing with tailing.
   $effect(() => {
     if (!scrollRestored) return
     if (preservingHistoryViewport) return
+    if (!threadWorking && !restoredBusy) return
     void messages.length
     void checkpoints.length
     void threadWorking
     void streamVersion
-    if (!userScrolledAway) {
-      const maxStart = Math.max(0, messages.length - HISTORY_RENDER_WINDOW_SIZE)
-      if (renderedStartIndex !== maxStart) renderedStartIndex = maxStart
-    }
     void tick().then(() => {
       if (!scrollEl || userScrolledAway) return
       scrollEl.scrollTop = scrollEl.scrollHeight
@@ -2693,7 +2643,6 @@
     // lock synchronously and re-anchoring a tick later keeps the tail engaged
     // even if the bottom grew between the click and this snap's scroll event.
     userScrolledAway = false
-    renderedStartIndex = Math.max(0, messages.length - HISTORY_RENDER_WINDOW_SIZE)
     scrollEl.scrollTo({ top: scrollEl.scrollHeight, behavior: 'auto' })
     void tick().then(() => {
       if (!scrollEl || userScrolledAway) return
@@ -2702,18 +2651,6 @@
       }
     })
   }
-
-  // Keep the mounted transcript bounded. While following live output the
-  // window advances with the tail; while the user reads older history it stays
-  // anchored and new events do not keep adding DOM below their viewport.
-  $effect(() => {
-    const maxStart = Math.max(0, messages.length - HISTORY_RENDER_WINDOW_SIZE)
-    if (!userScrolledAway && scrollRestored && renderedStartIndex !== maxStart) {
-      renderedStartIndex = maxStart
-    } else if (renderedStartIndex > maxStart && messages.length > 0) {
-      renderedStartIndex = maxStart
-    }
-  })
 
   function formatTime(ts: number): string {
     if (!ts) return ''
@@ -2878,7 +2815,6 @@
       if (scrollEl) {
         threadScrollPositions.set(mountedThreadId, {
           top: scrollEl.scrollTop,
-          renderedStartIndex: visibleStartIndex,
           awayFromBottom: userScrolledAway
         })
       }
@@ -2902,16 +2838,6 @@
       if (messages[index]?.role === 'user') return messages[index].id
     }
     return undefined
-  }
-
-  function initializeHistoryWindow(messageCount: number): void {
-    // A busy thread always opens at its live tail: the conversation grew while
-    // the user was away, so a stale mid-conversation offset (saved scroll
-    // state or a pre-populated cache) would hide the latest turn's user
-    // message and streaming trace behind the "Load earlier messages" window.
-    if (historyWindowInitialized && !mountBusy) return
-    renderedStartIndex = Math.max(0, messageCount - HISTORY_RENDER_WINDOW_SIZE)
-    historyWindowInitialized = true
   }
 
   function beginLocalTurn(userMessageId: string): void {
@@ -3019,7 +2945,6 @@
       // so the first frame only mounts ChatComposer.
       queueMicrotask(() => {
         if (!alive) return
-        initializeHistoryWindow(0)
         if (thread.settings) {
           settings = chatMode
             ? normalizeChatSettings(chatSettings.initialFor(thread, chatEffectiveSettings()))
@@ -3072,9 +2997,6 @@
       ])
       if (!alive) return
       olderMessagesAvailable = page?.hasOlder ?? threadMessages.hasOlder(projectId, id)
-      initializeHistoryWindow(
-        page?.messages.length ?? threadMessages.messages(projectId, id).length
-      )
       if (threadData?.settings) {
         settings = chatMode
           ? normalizeChatSettings(chatSettings.initialFor(threadData, chatEffectiveSettings()))
@@ -8486,8 +8408,7 @@
             </div>
           {/if}
           <!-- Messages -->
-          {#each visibleMessages as msg, visibleMsgIndex (msg.id)}
-            {@const msgIndex = visibleStartIndex + visibleMsgIndex}
+          {#each visibleMessages as msg, msgIndex (msg.id)}
             {#if msg.role === 'user'}
               {#if !isAssignmentAuditorThread && !isActivityOnlyUserMessage(msg)}
                 <div id={`msg-${msg.id}`} class="group flex min-w-0 flex-col">
