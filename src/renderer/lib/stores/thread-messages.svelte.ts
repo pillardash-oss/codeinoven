@@ -215,14 +215,14 @@ class ThreadMessagesStore {
           undefined,
           recentLimit
         )
-        // The bounded page is a fast mirror read. A thread can legitimately
-        // have no mirror rows yet while its provider/session transcript is
-        // already available, so do not render a valid conversation as empty.
-        const pageHasAssistant = page.messages.some((message) => message.role === 'assistant')
-        serverMessages =
-          page.messages.length > 0 && pageHasAssistant
-            ? page.messages
-            : await invoke('agent:loadMessages', projectId, threadId)
+        // Bounded loads are used by thread switching and hover preloads. They
+        // must remain mirror-only: a new thread, or a thread whose latest
+        // mirror page contains only a user message, is a valid bounded result.
+        // Falling back here to agent:loadMessages turns a cheap navigation into
+        // an unbounded provider transcript read and can freeze the renderer on
+        // long sessions. Callers that explicitly need the provider transcript
+        // must use load() without a limit.
+        serverMessages = page.messages
       }
       this.reconcile(projectId, threadId, serverMessages)
       entry.loaded = true
