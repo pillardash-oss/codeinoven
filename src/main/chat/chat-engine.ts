@@ -2705,6 +2705,13 @@ export class ChatEngine {
     nativeCapabilities.push(...(driver.capabilities?.nativeUtilities ?? []))
     const applyRuntime = driver.applyPreparedUtilityRuntime?.bind(driver)
     if (!applyRuntime) return ''
+    // Shared or extension-backed harnesses cannot safely receive a fresh
+    // per-turn MCP launch overlay. Keep all app-managed utilities, including
+    // Cua, behind the turn-scoped gateway even when a specialized caller does
+    // not pass the direct-gateway flag explicitly.
+    const gatewayOnlyHarness =
+      driver instanceof OpenCodeDriver || ['codex', 'cline', 'pi'].includes(driver.id)
+    const useDirectGateway = directGateway || gatewayOnlyHarness
     let gateway: UtilityTurnGateway | undefined
     let runtime: PreparedUtilityRuntime | undefined
     try {
@@ -2729,7 +2736,7 @@ export class ChatEngine {
             ]
           : []
       )
-      if (directGateway) {
+      if (useDirectGateway) {
         this.utilityTurns.set(sessionId, { driver, projectPath, gateway, threadId })
         return [
           gateway.directInstructions,
