@@ -47,6 +47,9 @@ function pwaManifestVersionPlugin(): Plugin {
 /** Renderer root/aliases/plugins, shared with scripts/dev-remote-pwa.ts so a
  *  standalone Vite dev server for the phone PWA stays in sync with the real
  *  electron-vite renderer config instead of drifting out of a duplicate. */
+export const rendererDefine = {
+  __CODEINOVEN_APP_VERSION__: JSON.stringify(packageJson.version)
+}
 export const rendererRoot = resolve(__dirname, 'src/renderer')
 export const rendererPublicDir = resolve(__dirname, 'src/renderer/static')
 export const rendererAlias = {
@@ -132,9 +135,7 @@ export default defineConfig(({ mode }) => {
       }
     },
     renderer: {
-      define: {
-        __CODEINOVEN_APP_VERSION__: JSON.stringify(packageJson.version)
-      },
+      define: rendererDefine,
       root: rendererRoot,
       publicDir: rendererPublicDir,
       plugins: rendererPlugins(),
