@@ -889,8 +889,15 @@ export class AssignmentEngine {
     coordinatorThreadId: string
   ): Promise<AssignmentPlan> {
     const active = this.requireActive(projectId, coordinatorThreadId)
-    if (active.status !== 'completed' || active.auditCycle?.status !== 'report_ready') {
-      throw new AssignmentEngineError('invalid_transition', 'Assignment audit report is not ready')
+    if (
+      active.status !== 'completed' ||
+      !active.auditCycle ||
+      !['report_ready', 'available'].includes(active.auditCycle.status)
+    ) {
+      throw new AssignmentEngineError(
+        'invalid_transition',
+        'Assignment audit cannot be completed from its current state'
+      )
     }
     return this.saveAuditCycle(active, {
       ...active.auditCycle,

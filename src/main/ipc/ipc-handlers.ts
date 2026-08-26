@@ -3475,7 +3475,11 @@ export function registerIpcHandlers(
     const validProjectId = validateEntityId(projectId, 'Project ID')
     const validThreadId = validateEntityId(threadId, 'Thread ID')
     const assignment = assignmentEngine.getActive(validProjectId, validThreadId)
-    if (assignment?.status === 'completed' && assignment.auditCycle?.status === 'report_ready') {
+    if (
+      assignment?.status === 'completed' &&
+      assignment.auditCycle &&
+      ['report_ready', 'available'].includes(assignment.auditCycle.status)
+    ) {
       await assignmentEngine.completeAuditCycle(validProjectId, validThreadId)
       await threadManager.setStatus(validProjectId, validThreadId, 'completed')
       return threadManager.setAuditState(validProjectId, validThreadId, undefined)

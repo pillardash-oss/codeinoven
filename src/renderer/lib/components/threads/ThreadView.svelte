@@ -6691,7 +6691,17 @@
   async function completeAudit(): Promise<void> {
     auditBusy = true
     try {
-      await invoke('audit:complete', thread.projectId, thread.id)
+      const updatedThread = await invoke('audit:complete', thread.projectId, thread.id)
+      scopeState.updateThread(updatedThread)
+      if (assignment) {
+        const coordinatorThreadId = auditWorkflowThreadId()
+        const refreshedAssignment = await invoke(
+          'assignment:getActive',
+          thread.projectId,
+          coordinatorThreadId
+        ).catch(() => null)
+        if (refreshedAssignment) assignment = refreshedAssignment
+      }
       if (engineeringLifecycle?.activeStage === 'achievement') {
         engineeringLifecycle = await invoke(
           'engineeringLifecycle:complete',
@@ -9721,7 +9731,7 @@
                 busy={auditBusy}
                 onViewReport={openAuditStudio}
                 onComplete={completeAudit}
-                onCancel={returnAuditToOffer}
+                onCancel={completeAudit}
                 onReaudit={reaudit}
                 onModelChange={changeAuditModel}
                 onToggleFavorite={(providerId, modelId, harnessId) =>
