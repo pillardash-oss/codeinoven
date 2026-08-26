@@ -107,6 +107,8 @@ export interface CliTurnCommand {
   provenanceModelId?: string
   /** Called for each parsed provider record before provider-specific mapping. */
   onJsonRecord?: (value: unknown) => void
+  /** Parse JSON records written to stderr by providers using JSON output mode. */
+  parseStderrJson?: boolean
   /**
    * Load provider records that only become available after the process exits
    * (for example, interaction details from a retained session export).
@@ -490,6 +492,11 @@ export abstract class PersistentCliDriver implements HarnessDriver {
     child.on('exit', (code, signal) => {
       if (stdoutBuffer.trim())
         this.consumeJsonLine(stdoutBuffer.trim(), session, projectPath, invocation)
+      if (invocation.parseStderrJson) {
+        for (const line of stderrBuffer.split(/\r?\n/u)) {
+          this.consumeJsonLineIfPresent(line, session, projectPath, invocation)
+        }
+      }
       const failure =
         code === 0 || signal === 'SIGTERM' || invocation.isExpectedExit?.(code, signal)
           ? undefined
@@ -729,10 +736,7 @@ export abstract class PersistentCliDriver implements HarnessDriver {
    * session. Mirrors the teardown used by `steerPrompt` so interaction
    * continuations never race the process they just stopped.
    */
-  protected async settleActiveProcess(
-    sessionId: string,
-    timeoutMs = 10_000
-  ): Promise<void> {
+  protected async settleActiveProcess(sessionId: string, timeoutMs = 10_000): Promise<void> {
     const active = this.activeProcesses.get(sessionId)
     if (active && !active.killed) active.kill()
     const settlement = this.activeProcessSettlements.get(sessionId)
@@ -868,6 +872,25 @@ export abstract class PersistentCliDriver implements HarnessDriver {
         return
       }
       value = recovered
+    }
+    invocation.onJsonRecord?.(value)
+    this.consumeJsonValue(value, session, projectPath)
+  }
+
+  /** Consume a provider JSON record from stderr without treating normal stderr as JSONL noise. */
+  private consumeJsonLineIfPresent(
+    line: string,
+    session: PersistentCliSession,
+    projectPath: string,
+    invocation: CliTurnCommand
+  ): void {
+    const normalized = line.replace(/^\r+|\s+$/gu, '')
+    if (!normalized) return
+    let value: unknown
+    try {
+      value = JSON.parse(normalized) as unknown
+    } catch {
+      return
     }
     invocation.onJsonRecord?.(value)
     this.consumeJsonValue(value, session, projectPath)
