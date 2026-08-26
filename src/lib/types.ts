@@ -604,7 +604,11 @@ export type ProviderType = 'cli' | 'api' | 'hybrid'
 /** Live connection state of a provider harness on this machine. */
 export type ProviderConnectionStatus = 'idle' | 'checking' | 'available' | 'not_found' | 'error'
 
-export type HarnessExecutionTarget = { kind: 'native' } | { kind: 'wsl'; distribution: string }
+export type HarnessExecutionTarget =
+  | { kind: 'native' }
+  | { kind: 'wsl'; distribution: string }
+  /** Runs from CodeInOven's bundled copy (no CLI install on this machine). */
+  | { kind: 'bundled' }
 
 export interface ProviderConnectionInfo {
   id: string
@@ -750,7 +754,7 @@ export interface HarnessUpdateHandoff {
 // ─── Harness install & uninstall ───────────────────────────────────────────
 
 /** How a harness CLI was (or can be) installed on this machine. */
-export type HarnessInstallMethod = 'npm' | 'brew' | 'winget' | 'native'
+export type HarnessInstallMethod = 'npm' | 'brew' | 'winget' | 'native' | 'bundled'
 
 /** OS-specific install/download page for a harness, resolved for the current platform. */
 export interface HarnessInstallInfo {

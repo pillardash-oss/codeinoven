@@ -5,7 +5,6 @@ import type {
   PromptAttachment,
   PromptAssignmentTaskReference,
   PromptProjectReference,
-  PromptReference,
   SpecActionIntent,
   ThreadSettings,
   UserMessagePresentation

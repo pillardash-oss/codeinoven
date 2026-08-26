@@ -1,3 +1,4 @@
+import { SvelteMap, SvelteSet } from 'svelte/reactivity'
 import { subscribe, invoke } from '$lib/ipc.svelte'
 import { contextSidebarState, type TemporaryChatContextTab } from '$lib/stores/context-sidebar.svelte'
 import { messageId } from '$shared/id'
@@ -164,7 +165,7 @@ export class TemporaryChatController implements ConversationController {
   }
 
   async send(payload: SendPayload): Promise<void> {
-    const { text, attachments, promptReferences } = payload
+    const { text, attachments, promptReferences: _promptReferences } = payload
     const prompt = text.trim()
     if (!prompt || this.#tab.expired) return
 
@@ -227,7 +228,7 @@ export class TemporaryChatController implements ConversationController {
   }
 
   async steer(payload: SendPayload): Promise<void> {
-    const { text, attachments, promptReferences } = payload
+    const { text, attachments, promptReferences: _promptReferences } = payload
     const prompt = text.trim()
     if (!this.#tab.busy || this.#tab.expired) return
 
@@ -324,6 +325,7 @@ export class TemporaryChatController implements ConversationController {
     this.#tab.status = issue ? { state: 'error', issue } : null
   }
 
+  // eslint-disable-next-line no-unused-private-class-members
   #textFor(message: AgentMessage): string {
     return message.parts
       .filter((part): part is Extract<AgentPart, { type: 'text' }> => part.type === 'text')
@@ -375,8 +377,8 @@ export class TemporaryChatController implements ConversationController {
 
   #mergeLoaded(messages: AgentMessage[]): void {
     const assistants = messages.filter((message) => message.role === 'assistant')
-    const incomingById = new Map(assistants.map((message) => [message.id, message]))
-    const existingIds = new Set(this.#tab.messages.map((message) => message.id))
+    const incomingById = new SvelteMap(assistants.map((message) => [message.id, message]))
+    const existingIds = new SvelteSet(this.#tab.messages.map((message) => message.id))
     this.#tab.messages = [
       ...this.#tab.messages.map((message) => incomingById.get(message.id) ?? message),
       ...assistants.filter((message) => !existingIds.has(message.id))

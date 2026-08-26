@@ -43,7 +43,7 @@
   }
 
   function syntheticThreadFor(tab: TemporaryChatContextTab): Thread {
-    const status: 'created' = 'created'
+    const status = 'created' as const
     const now = Date.now()
     return {
       id: tab.temporaryChatId,

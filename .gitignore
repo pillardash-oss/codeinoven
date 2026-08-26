@@ -2,6 +2,7 @@ node_modules/
 out/
 dist/
 /resources/speech/runtime/
+/resources/harnesses/pi/
 *.log
 .DS_Store
 Thumbs.db

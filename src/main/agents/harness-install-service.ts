@@ -3,7 +3,8 @@ import { homedir } from 'os'
 import type {
   HarnessInstallInfo,
   HarnessInstallMethod,
-  HarnessUninstallHandoff
+  HarnessUninstallHandoff,
+  ProviderConnectionInfo
 } from '../../lib/types'
 import { findHarness } from './harness-registry'
 import type { ProviderConnectionService } from '../providers/provider-connection'
@@ -151,7 +152,12 @@ const BREW_PATH_MARKERS = ['Cellar', 'homebrew']
  * Resolve the install method from the resolved binary path when it can be told
  * apart, falling back to the harness's primary documented method otherwise.
  */
-function detectMethod(harnessId: string, resolvedPath: string | undefined): HarnessInstallMethod {
+function detectMethod(
+  harnessId: string,
+  resolvedPath: string | undefined,
+  executionTarget?: ProviderConnectionInfo['executionTarget']
+): HarnessInstallMethod {
+  if (executionTarget?.kind === 'bundled') return 'bundled'
   if (!resolvedPath) return primaryMethod(harnessId)
   const lower = resolvedPath.toLowerCase()
   if (NPM_PATH_MARKERS.some((marker) => lower.includes(marker))) return 'npm'
@@ -208,7 +214,9 @@ export class HarnessInstallService {
     if (!pageUrl) throw new Error(`No install page is configured for harness: ${harnessId}`)
 
     const detectedMethod =
-      provider?.status === 'available' ? detectMethod(harnessId, provider.resolvedPath) : undefined
+      provider?.status === 'available'
+        ? detectMethod(harnessId, provider.resolvedPath, provider.executionTarget)
+        : undefined
 
     return {
       harnessId,
@@ -226,6 +234,9 @@ export class HarnessInstallService {
     const provider = this.providers.getAll().find((candidate) => candidate.id === harnessId)
     if (!provider || provider.status !== 'available') {
       throw new Error(`${definition.name} is not installed — nothing to uninstall.`)
+    }
+    if (provider.executionTarget?.kind === 'bundled') {
+      throw new Error(`${definition.name} is bundled with CodeInOven and cannot be uninstalled separately.`)
     }
 
     const method = detectMethod(harnessId, provider.resolvedPath)
