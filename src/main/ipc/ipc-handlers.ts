@@ -50,6 +50,7 @@ import type { PowerWakeService } from '../system/power-wake-service'
 import type { RetrySchedulerService } from '../system/retry-scheduler-service'
 import {
   broadcastNoteChanged,
+  broadcastThreadBranchUpdated,
   broadcastThreadDeleted,
   broadcastThreadOperationError,
   broadcastThreadUpdate,
@@ -2141,7 +2142,7 @@ export function registerIpcHandlers(
   const branchBackfillDeps: ThreadBranchDeps = {
     resolver: repositoryService,
     store: threadManager,
-    onSettled: broadcastThreadUpdate
+    onSettled: broadcastThreadBranchUpdated
   }
   const vault = new SecretVault(storage)
   const githubAuthService = new GitHubAuthService(vault)

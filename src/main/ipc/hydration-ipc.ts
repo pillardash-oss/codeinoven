@@ -10,7 +10,7 @@ import { validateBoundedInteger, validateBoundedString, validateEntityId } from 
 import type { Thread, ThreadMessageCursor } from '../../lib/types'
 import { RepositoryService } from '../git/repository-service'
 import { settleThreadBranch, type ThreadBranchDeps } from '../chat/thread-branch-service'
-import { broadcastThreadUpdate } from '../chat/thread-events'
+import { broadcastThreadBranchUpdated } from '../chat/thread-events'
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -32,7 +32,7 @@ export function registerHydrationIpcHandlers(storage: StorageEngine, database: D
   const branchDeps: ThreadBranchDeps = {
     resolver: new RepositoryService(),
     store: threadManager,
-    onSettled: broadcastThreadUpdate
+    onSettled: broadcastThreadBranchUpdated
   }
 
   ipcMain.handle('config:get', () => storage.getConfig())

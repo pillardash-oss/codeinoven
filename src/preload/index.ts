@@ -576,6 +576,7 @@ const EVENT_CHANNELS = [
   'providers:status',
   'thread:deleted',
   'thread:updated',
+  'thread:branchUpdated',
   'note:changed',
   'window:beforeQuit',
   'window:confirmClose',

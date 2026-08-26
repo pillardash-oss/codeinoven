@@ -1599,6 +1599,30 @@
     })
   })
 
+  // Git branch settlement is deliberately a separate, lighter broadcast (see
+  // `broadcastThreadBranchUpdated`) so it never routes through the full
+  // `thread:updated` fan-out — that would force ThreadView's message
+  // reconcile (and every other subscriber) to run at whatever moment the
+  // branch resolves, including mid-typing on an already-open conversation.
+  // Patch the field in place: mutating the proxied thread objects is enough
+  // for the composer's branch pill to update reactively without rebuilding
+  // any list or reloading messages.
+  $effect(() => {
+    return subscribe('thread:branchUpdated', (...args: unknown[]) => {
+      const [projectId, threadId, branch] = args as [string, string, string | undefined]
+      if (
+        workspaceState.selectedThread?.projectId === projectId &&
+        workspaceState.selectedThread.id === threadId
+      ) {
+        workspaceState.selectedThread.branch = branch
+      }
+      const listed = allThreads.find(
+        (candidate) => candidate.projectId === projectId && candidate.id === threadId
+      )
+      if (listed) listed.branch = branch
+    })
+  })
+
   $effect(() => {
     return subscribe('thread:deleted', (projectId, threadId) => {
       allThreads = allThreads.filter((thread) => thread.id !== threadId)
