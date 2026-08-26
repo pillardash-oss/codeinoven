@@ -111,9 +111,10 @@ static LRESULT CALLBACK window_procedure(HWND window, UINT message, WPARAM wpara
       graphics.SetInterpolationMode(Gdiplus::InterpolationModeHighQualityBicubic);
       graphics.DrawImage(icon_bitmap, (client.right - 200) / 2, (client.bottom - 200) / 2, 200, 200);
     }
-    draw_centered_text(graphics, CODEINOVEN_VERSION_WIDE, 260.0f, 11.0f, 184, client.right);
-    draw_centered_text(graphics, L"By", 275.0f, 9.0f, 122, client.right);
-    draw_centered_text(graphics, CODEINOVEN_COMPANY_WIDE, 291.0f, 9.0f, 122, client.right);
+    static wchar_t version_by_line[256];
+    swprintf_s(version_by_line, L"%ls - By", CODEINOVEN_VERSION_WIDE);
+    draw_centered_text(graphics, version_by_line, 275.0f, 11.0f, 184, client.right);
+    draw_centered_text(graphics, CODEINOVEN_COMPANY_WIDE, 291.0f, 11.0f, 184, client.right);
     EndPaint(window, &paint);
     return 0;
   }

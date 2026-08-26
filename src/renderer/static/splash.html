@@ -58,18 +58,6 @@
       letter-spacing: 0.08em;
     }
 
-    .company {
-      color: rgba(247, 246, 242, 0.52);
-      font-size: 9px;
-      letter-spacing: 0.12em;
-    }
-
-    .byline {
-      color: rgba(247, 246, 242, 0.52);
-      font-size: 9px;
-      letter-spacing: 0.12em;
-    }
-
     /* The logo must be visible from the very first frame — this splash window is
        the only thing the user sees while a slow machine boots the main window,
        so the oven never disappears behind an invisible intro. The pop-in becomes
@@ -290,9 +278,8 @@
       </g>
     </svg>
     <div class="splash-meta" aria-label="Application version">
-      <span class="version" id="splash-version">v—</span>
-      <span class="byline">By</span>
-      <span class="company">Pillardash Solutions Limited</span>
+      <span class="version"><span id="splash-version">v—</span> - By</span>
+      <span class="version">Pillardash Solutions Limited</span>
     </div>
   </div>
   <script>

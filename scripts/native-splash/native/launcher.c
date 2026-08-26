@@ -41,9 +41,10 @@ static gboolean draw_placeholder(GtkWidget *widget, cairo_t *context, gpointer d
     gdk_cairo_set_source_pixbuf(context, icon_pixbuf, x, y);
     cairo_paint(context);
   }
-  draw_centered_text(context, CODEINOVEN_VERSION, 280.0, 11.0, 0.72, allocation.width);
-  draw_centered_text(context, "By", 295.0, 9.0, 0.48, allocation.width);
-  draw_centered_text(context, CODEINOVEN_COMPANY, 309.0, 9.0, 0.48, allocation.width);
+  static char version_by_line[256];
+  snprintf(version_by_line, sizeof(version_by_line), "%s - By", CODEINOVEN_VERSION);
+  draw_centered_text(context, version_by_line, 295.0, 11.0, 0.72, allocation.width);
+  draw_centered_text(context, CODEINOVEN_COMPANY, 309.0, 11.0, 0.72, allocation.width);
   return FALSE;
 }
 
