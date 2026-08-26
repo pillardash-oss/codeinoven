@@ -2146,20 +2146,37 @@ export function registerIpcHandlers(
   const turnFeedbackRepo = new TurnFeedbackRepo(database)
   const noteRepo = new NoteRepo(database)
 
-  ipcMain.handle('engineeringLifecycle:get', (_, projectId: unknown, threadId: unknown) =>
-    engineeringLifecycleEngine.get(
-      validateEntityId(projectId, 'Project ID'),
-      validateEntityId(threadId, 'Thread ID')
-    )
-  )
+  /**
+   * Optimistic renderer creates return before their database row is written.
+   * Any handler that validates thread ownership must wait for that write before
+   * consulting a thread-scoped engine.
+   */
+  async function waitForThreadReady(
+    projectId: unknown,
+    threadId: unknown,
+    projectLabel = 'Project ID',
+    threadLabel = 'Thread ID'
+  ): Promise<{ projectId: string; threadId: string }> {
+    const safeProjectId = validateEntityId(projectId, projectLabel)
+    const safeThreadId = validateEntityId(threadId, threadLabel)
+    await threadCreation.awaitReady(safeThreadId)
+    return { projectId: safeProjectId, threadId: safeThreadId }
+  }
+
+  ipcMain.handle('engineeringLifecycle:get', async (_, projectId: unknown, threadId: unknown) => {
+    const ids = await waitForThreadReady(projectId, threadId)
+    return engineeringLifecycleEngine.get(ids.projectId, ids.threadId)
+  })
   ipcMain.handle(
     'engineeringLifecycle:select',
-    (_, projectId: unknown, threadId: unknown, input: unknown) =>
-      engineeringLifecycleEngine.select(
-        validateEntityId(projectId, 'Project ID'),
-        validateEntityId(threadId, 'Thread ID'),
+    async (_, projectId: unknown, threadId: unknown, input: unknown) => {
+      const ids = await waitForThreadReady(projectId, threadId)
+      return engineeringLifecycleEngine.select(
+        ids.projectId,
+        ids.threadId,
         validateEngineeringLifecycleSelectionInput(input)
       )
+    }
   )
   ipcMain.handle(
     'engineeringLifecycle:start',
@@ -2643,11 +2660,17 @@ export function registerIpcHandlers(
   )
 
   // ─── Engineering specifications ───────────────────────────────────────
-  ipcMain.handle('assignment:getActive', (_, projectId: unknown, coordinatorThreadId: unknown) =>
-    assignmentEngine.getActive(
-      validateEntityId(projectId, 'Project ID'),
-      validateEntityId(coordinatorThreadId, 'Coordinator thread ID')
-    )
+  ipcMain.handle(
+    'assignment:getActive',
+    async (_, projectId: unknown, coordinatorThreadId: unknown) => {
+      const ids = await waitForThreadReady(
+        projectId,
+        coordinatorThreadId,
+        'Project ID',
+        'Coordinator thread ID'
+      )
+      return assignmentEngine.getActive(ids.projectId, ids.threadId)
+    }
   )
   ipcMain.handle(
     'assignment:listVersions',
@@ -2783,12 +2806,10 @@ export function registerIpcHandlers(
       validateEntityId(threadId, 'Thread ID')
     )
   )
-  ipcMain.handle('brainstorm:getWorkflow', (_, projectId: unknown, threadId: unknown) =>
-    brainstormEngine.getWorkflowState(
-      validateEntityId(projectId, 'Project ID'),
-      validateEntityId(threadId, 'Thread ID')
-    )
-  )
+  ipcMain.handle('brainstorm:getWorkflow', async (_, projectId: unknown, threadId: unknown) => {
+    const ids = await waitForThreadReady(projectId, threadId)
+    return brainstormEngine.getWorkflowState(ids.projectId, ids.threadId)
+  })
   ipcMain.handle(
     'brainstorm:chooseEntry',
     (_, projectId: unknown, threadId: unknown, choice: unknown) => {
@@ -2808,12 +2829,10 @@ export function registerIpcHandlers(
       validateEntityId(threadId, 'Thread ID')
     )
   })
-  ipcMain.handle('brainstorm:getActive', (_, projectId: unknown, threadId: unknown) =>
-    brainstormEngine.getActive(
-      validateEntityId(projectId, 'Project ID'),
-      validateEntityId(threadId, 'Thread ID')
-    )
-  )
+  ipcMain.handle('brainstorm:getActive', async (_, projectId: unknown, threadId: unknown) => {
+    const ids = await waitForThreadReady(projectId, threadId)
+    return brainstormEngine.getActive(ids.projectId, ids.threadId)
+  })
   ipcMain.handle(
     'brainstorm:listVersions',
     (_, projectId: unknown, threadId: unknown, brainstormId: unknown) =>
@@ -3035,12 +3054,10 @@ export function registerIpcHandlers(
       validateEntityId(threadId, 'Thread ID')
     )
   )
-  ipcMain.handle('prd:getWorkflow', (_, projectId: unknown, threadId: unknown) =>
-    prdEngine.getWorkflowState(
-      validateEntityId(projectId, 'Project ID'),
-      validateEntityId(threadId, 'Thread ID')
-    )
-  )
+  ipcMain.handle('prd:getWorkflow', async (_, projectId: unknown, threadId: unknown) => {
+    const ids = await waitForThreadReady(projectId, threadId)
+    return prdEngine.getWorkflowState(ids.projectId, ids.threadId)
+  })
   ipcMain.handle('prd:chooseEntry', (_, projectId: unknown, threadId: unknown, choice: unknown) => {
     if (choice !== 'brainstorm_first' && choice !== 'start_prd') {
       throw new TypeError('PRD entry choice must be brainstorm_first or start_prd')
@@ -3057,12 +3074,10 @@ export function registerIpcHandlers(
       validateEntityId(threadId, 'Thread ID')
     )
   )
-  ipcMain.handle('prd:getActive', (_, projectId: unknown, threadId: unknown) =>
-    prdEngine.getActive(
-      validateEntityId(projectId, 'Project ID'),
-      validateEntityId(threadId, 'Thread ID')
-    )
-  )
+  ipcMain.handle('prd:getActive', async (_, projectId: unknown, threadId: unknown) => {
+    const ids = await waitForThreadReady(projectId, threadId)
+    return prdEngine.getActive(ids.projectId, ids.threadId)
+  })
   ipcMain.handle('prd:listVersions', (_, projectId: unknown, threadId: unknown, prdId: unknown) =>
     prdEngine.listVersions(
       validateEntityId(projectId, 'Project ID'),
@@ -3211,8 +3226,10 @@ export function registerIpcHandlers(
       preparePrdMarkdown(projectId, threadId, prdId, version)
   )
   ipcMain.handle('spec:getActive', async (_, projectId: unknown, threadId: unknown) => {
-    const safeProjectId = validateEntityId(projectId, 'Project ID')
-    const safeThreadId = validateEntityId(threadId, 'Thread ID')
+    const { projectId: safeProjectId, threadId: safeThreadId } = await waitForThreadReady(
+      projectId,
+      threadId
+    )
     const workflow = await specEngine.getWorkflowState(safeProjectId, safeThreadId)
     if (!workflow?.activeSpecId || !workflow.activeSpecVersion) return null
     return specEngine.getVersion(
@@ -3332,12 +3349,10 @@ export function registerIpcHandlers(
   ipcMain.handle('spec:validate', (_, spec: unknown) =>
     validateEngineeringSpec(validateEngineeringSpecInput(spec))
   )
-  ipcMain.handle('audit:getActive', (_, projectId: unknown, threadId: unknown) =>
-    auditEngine.getActive(
-      validateEntityId(projectId, 'Project ID'),
-      validateEntityId(threadId, 'Thread ID')
-    )
-  )
+  ipcMain.handle('audit:getActive', async (_, projectId: unknown, threadId: unknown) => {
+    const ids = await waitForThreadReady(projectId, threadId)
+    return auditEngine.getActive(ids.projectId, ids.threadId)
+  })
   ipcMain.handle(
     'audit:listVersions',
     (_, projectId: unknown, threadId: unknown, reportId: unknown) =>
@@ -6720,13 +6735,13 @@ export function registerIpcHandlers(
     return thread
   })
   if (!options.hydrationHandlersRegistered) {
-    // Reads must never wait for optimistic thread finalization: the renderer
-    // already holds the thread object returned by `thread:create`. Reading is
-    // always instant — only the send path (`ensureSession`/`sendPrompt`) queues
-    // behind readiness.
-    ipcMain.handle('thread:get', (_, projectId: string, threadId: string) =>
-      threadManager.getThread(projectId, threadId)
-    )
+    // The renderer already holds the optimistic thread object, so this is not
+    // on the initial paint path. Wait only when this exact thread is still
+    // being finalized so background hydration never races durable ownership.
+    ipcMain.handle('thread:get', async (_, projectId: string, threadId: string) => {
+      const ids = await waitForThreadReady(projectId, threadId)
+      return threadManager.getThread(ids.projectId, ids.threadId)
+    })
   }
   ipcMain.handle('thread:list', (_, projectId: string) => threadManager.listThreads(projectId))
   ipcMain.handle('thread:listAll', () => threadManager.listAllThreads())
@@ -7048,6 +7063,7 @@ export function registerIpcHandlers(
       const safeProjectId = validateEntityId(projectId, 'Project ID')
       const safeThreadId = validateEntityId(threadId, 'Thread ID')
       const safeSettings = validateThreadSettings(settings)
+      await threadCreation.awaitReady(safeThreadId)
       return threadManager.updateSettings(safeProjectId, safeThreadId, safeSettings)
     }
   )
