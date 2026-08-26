@@ -149,15 +149,13 @@ jobs:
               break
             fi
             echo "startup smoke attempt $attempt failed with exit $exit_code; retrying"
+            sleep 10
             exit_code=0
           done
           if [ "$exit_code" -ne 0 ] && [ "${{ matrix.target }}" = "win" ]; then
             echo "::warning::Windows startup smoke failed with exit $exit_code (known flaky, not blocking nightly)"
             exit 0
           fi
-            echo "startup smoke attempt $attempt failed with exit $exit_code; retrying"
-            sleep 10
-          done
           exit "$exit_code"
 
       - name: Upload build artifacts
