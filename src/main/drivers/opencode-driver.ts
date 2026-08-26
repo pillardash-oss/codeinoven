@@ -1211,19 +1211,21 @@ export class OpenCodeDriver implements HarnessDriver {
     const catalogs = await this.listProviders(projectPath).catch(() => [])
     const openCodeModels = catalogs.find((catalog) => catalog.id === 'opencode')?.models ?? []
     const freeModels = openCodeModels.filter((model) => /(?:^|[-:])free$/iu.test(model.id))
-    const fallbackFreeModels = freeModels.filter((model) => model.id !== 'big-pickle-free')
+    const fallbackFreeModels = freeModels.filter(
+      (model) => model.id !== 'big-pickle' && model.id !== 'big-pickle-free'
+    )
     const goFlash = catalogs
       .find((catalog) => catalog.id === 'opencode-go')
       ?.models.find((model) => model.id === 'deepseek-v4-flash')
 
-    // Always pin big-pickle-free first; only fall back to other free/stealth
-    // models (and finally the thread model) if it fails or is unavailable.
+    // Always pin big-pickle first; only fall back to other free/stealth models
+    // (and finally the thread model) if it fails or is unavailable.
     const attempts = new Map<string, { providerId: string; modelId: string }>()
     const addCandidate = (providerId?: string, modelId?: string) => {
       if (!providerId || !modelId) return
       attempts.set(`${providerId}/${modelId}`, { providerId, modelId })
     }
-    addCandidate('opencode', 'big-pickle-free')
+    addCandidate('opencode', 'big-pickle')
     for (const model of fallbackFreeModels) addCandidate(model.providerId, model.id)
     addCandidate(goFlash?.providerId, goFlash?.id)
     addCandidate(options.settings.providerId, options.settings.modelId)
