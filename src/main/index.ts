@@ -612,7 +612,6 @@ async function bootPostPaintServices(): Promise<void> {
   }
   unregisterSpeechIpc = registerSpeechIpc(speechService, () => mainWindow?.webContents ?? null)
   prototypePreviewService = new PrototypePreviewService()
-  const prototypePreviewPort = await prototypePreviewService.start()
   chatEngine.setPrototypePreviewRegistrar(
     (previewSlug, canonicalRoot) =>
       prototypePreviewService?.register(previewSlug, canonicalRoot) ?? Promise.resolve()
@@ -629,11 +628,22 @@ async function bootPostPaintServices(): Promise<void> {
   const { resolvePrototypePreviewOrigin } = await import('./prototypes/prototype-preview-origin')
   const previewOrigin = resolvePrototypePreviewOrigin(process.env, {
     development: !isProduction,
-    bakedOrigin: __CODEINOVEN_PROTOTYPE_PREVIEW_ORIGIN__,
-    allocatedPort: prototypePreviewPort
+    bakedOrigin: __CODEINOVEN_PROTOTYPE_PREVIEW_ORIGIN__
   })
   ipcMain.removeHandler('prototypePreview:getOrigin')
-  ipcMain.handle('prototypePreview:getOrigin', () => previewOrigin.origin ?? null)
+  ipcMain.handle('prototypePreview:getOrigin', async () => {
+    if (previewOrigin.origin || previewOrigin.source !== 'missing' || isProduction) {
+      return previewOrigin.origin
+    }
+    const service = prototypePreviewService
+    if (!service) return null
+    const port = await service.start()
+    return resolvePrototypePreviewOrigin(process.env, {
+      development: true,
+      bakedOrigin: __CODEINOVEN_PROTOTYPE_PREVIEW_ORIGIN__,
+      allocatedPort: port
+    }).origin
+  })
   if (mainWindow && !mainWindow.isDestroyed()) {
     const service = new BrowserService(mainWindow)
     browserService = service
