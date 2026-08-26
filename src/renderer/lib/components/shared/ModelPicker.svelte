@@ -22,7 +22,7 @@
   import { modelKey, parseModelKey } from '$lib/model-keys'
   import { peakHoursBadgeFor } from '$shared/peak-hours'
   import { baseUrlProviderStore } from '$lib/stores/base-url-providers.svelte'
-  import { providerCatalog } from '$lib/stores/provider-catalog.svelte'
+  import { mergeProviderCatalogEntries, providerCatalog } from '$lib/stores/provider-catalog.svelte'
   import { providerStore } from '$lib/stores/providers.svelte'
   import { getVendorSlug } from '$lib/vendor-icons/registry'
   import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
@@ -124,7 +124,7 @@
    * installed version is unsupported (e.g. OpenCode V2) are dropped so they
    * behave exactly as if not installed. */
   let displayProviders = $derived(
-    mergeProviderEntries([...cachedProviders, ...providers, ...currentProviders]).filter(
+    mergeProviderCatalogEntries([...cachedProviders, ...providers, ...currentProviders]).filter(
       (provider) => !providerStore.isUnsupported(provider.harnessId)
     )
   )
@@ -314,18 +314,6 @@
   function truncateLabel(value: string): string {
     if (value.length <= MODEL_LABEL_MAX_LENGTH) return value
     return `${value.slice(0, MODEL_LABEL_MAX_LENGTH - 1).trimEnd()}…`
-  }
-
-  function mergeProviderEntries(catalogs: ProviderCatalog[]): ProviderCatalog[] {
-    const merged: ProviderCatalog[] = []
-    for (const provider of catalogs) {
-      const index = merged.findIndex(
-        (candidate) => candidate.harnessId === provider.harnessId && candidate.id === provider.id
-      )
-      if (index === -1) merged.push(provider)
-      else merged[index] = provider
-    }
-    return merged
   }
 
   /**

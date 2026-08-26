@@ -63,6 +63,7 @@
   import EngineeringToolbox from './EngineeringToolbox.svelte'
   import { speechController } from '../../speech/speech-controller.svelte'
   import ModelPicker from '../shared/ModelPicker.svelte'
+  import { mergeProviderCatalogEntries, providerCatalog } from '$lib/stores/provider-catalog.svelte'
   import { filterActions } from '$lib/actions'
   import { APP_NAME } from '$shared/brand'
   import { getVendorIconDataUri } from '$lib/vendor-icons/registry'
@@ -615,11 +616,25 @@
     else showInferenceMenu()
   }
 
+  /**
+   * Resolve against every catalog snapshot available to the renderer. The
+   * composer can mount with a persisted/partial prop while the live project
+   * catalog is still hydrating; merging here prevents that prop from passing
+   * an empty thinking-preset override to ModelPicker.
+   */
+  let cachedProviders = $derived(providerCatalog.allCached())
+  let currentProviders = $derived(
+    projectId ? (providerCatalog.cached(projectId) ?? providers) : providers
+  )
+  let resolvedProviders = $derived(
+    mergeProviderCatalogEntries([...cachedProviders, ...providers, ...currentProviders])
+  )
+
   /** Catalog entry for the selected harness/provider/model, when reported. */
   let selectedProvider = $derived(
-    providers.find(
+    resolvedProviders.find(
       (provider) => provider.harnessId === resolved.harnessId && provider.id === resolved.providerId
-    )
+    ) ?? resolvedProviders.find((provider) => provider.id === resolved.providerId)
   )
   let selectedModel = $derived(
     selectedProvider?.models.find((model) => model.id === resolved.modelId)
@@ -1095,7 +1110,7 @@
     modelMenuOpen = false
     const nextHarness = nextHarnessId ?? resolved.harnessId
     onModelUsed?.(modelKey(nextHarness, providerId, modelId))
-    const provider = providers.find(
+    const provider = resolvedProviders.find(
       (candidate) => candidate.harnessId === nextHarness && candidate.id === providerId
     )
     const model = provider?.models.find((candidate) => candidate.id === modelId)
