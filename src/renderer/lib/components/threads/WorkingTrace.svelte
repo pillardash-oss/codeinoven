@@ -438,7 +438,7 @@
   {#if isOpen}
     <div
       bind:this={traceScrollEl}
-      class="flex max-h-[min(55vh,36rem)] flex-col overflow-y-auto overscroll-contain px-3 pb-3 [&>*:first-child]:mt-2 [&>*+*]:mt-2"
+      class="max-h-[min(55vh,36rem)] overflow-y-auto overscroll-contain px-3 pb-3 [&>*:first-child]:mt-2 [&>*+*]:mt-2"
       onscroll={onTraceScroll}
     >
       {#each visibleParts as part (part.id)}
