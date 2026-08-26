@@ -6,7 +6,7 @@ const CHAT_SETTINGS_KEY = `${APP_SLUG}.chatSettings.lastUsed`
 
 /** Fallback settings used before anything has been persisted. */
 export const DEFAULT_SETTINGS: ThreadSettings = {
-  harnessId: 'opencode',
+  harnessId: 'pi',
   providerId: '',
   modelId: '',
   thinkingLevel: 'medium',

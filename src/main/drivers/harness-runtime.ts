@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process'
 import { existsSync } from 'node:fs'
-import { join, win32 } from 'node:path'
+import { delimiter, join, win32 } from 'node:path'
 import { app } from 'electron'
 import type { HarnessExecutionTarget } from '../../lib/types'
 import {
@@ -9,35 +9,45 @@ import {
   resolveExecutablePath
 } from './cli-environment'
 
-/** Env var that makes Electron's own binary behave as a plain Node runtime. */
-const ELECTRON_RUN_AS_NODE = { ELECTRON_RUN_AS_NODE: '1' }
-
 /**
- * Path to the bundled Pi CLI entry point (see `scripts/build-pi-harness.ts`),
- * or `undefined` if the resource is missing (e.g. a dev checkout that never
- * ran the build script). Used only as a fallback when no `pi` is found on
- * PATH or in WSL — a real install always takes priority.
+ * Base directory of the bundled Pi resource (see `scripts/build-pi-harness.ts`),
+ * or `undefined` if it's missing (e.g. a dev checkout that never ran the
+ * build script). Used only as a fallback when no `pi` is found on PATH or in
+ * WSL — a real install always takes priority.
  */
-function bundledPiScriptPath(): string | undefined {
+function bundledPiBase(): string | undefined {
   const base = app.isPackaged
     ? join(process.resourcesPath, 'harnesses/pi')
     : join(app.getAppPath(), 'resources/harnesses/pi')
-  const scriptPath = join(base, 'dist/bundle/rpc-entry.js')
-  return existsSync(scriptPath) ? scriptPath : undefined
+  return existsSync(join(base, 'dist/bundle/rpc-entry.js')) ? base : undefined
 }
 
 /** The bundled Pi runtime, spawned via Electron's own embedded Node. */
 function bundledPiRuntime(command: string): HarnessRuntime | null {
   if (command !== 'pi') return null
-  const scriptPath = bundledPiScriptPath()
-  return scriptPath
+  const base = bundledPiBase()
+  return base
     ? {
         command,
         executable: process.execPath,
-        resolvedPath: scriptPath,
+        resolvedPath: join(base, 'dist/bundle/rpc-entry.js'),
         target: { kind: 'bundled' }
       }
     : null
+}
+
+/**
+ * Env overrides for spawning the bundled Pi runtime: `ELECTRON_RUN_AS_NODE`
+ * makes Electron's own binary behave as a plain Node runtime, and `NODE_PATH`
+ * points at the bundled `vendor/` directory so `require('jiti')` resolves —
+ * electron-builder's extraResources copy drops nested `node_modules`
+ * directories, so that dependency ships under a differently named folder and
+ * needs NODE_PATH instead of Node's standard `node_modules` upward walk.
+ */
+function bundledPiEnv(env: NodeJS.ProcessEnv, runtime: HarnessRuntime): NodeJS.ProcessEnv {
+  const vendorDir = join(runtime.resolvedPath, '../../../vendor')
+  const nodePath = [vendorDir, env['NODE_PATH']].filter(Boolean).join(delimiter)
+  return { ...env, ELECTRON_RUN_AS_NODE: '1', NODE_PATH: nodePath }
 }
 
 const DISCOVERY_TIMEOUT_MS = 8_000
@@ -536,7 +546,7 @@ export async function prepareHarnessInvocation(
           command: bundled.executable,
           args: [bundled.resolvedPath, ...args],
           ...(options.cwd ? { cwd: options.cwd } : {}),
-          env: { ...env, ...ELECTRON_RUN_AS_NODE },
+          env: bundledPiEnv(env, bundled),
           shell: false,
           runtime: bundled
         }
@@ -558,7 +568,7 @@ export async function prepareHarnessInvocation(
       command: runtime.executable,
       args: [runtime.resolvedPath, ...args],
       ...(options.cwd ? { cwd: options.cwd } : {}),
-      env: { ...env, ...ELECTRON_RUN_AS_NODE },
+      env: bundledPiEnv(env, runtime),
       shell: false,
       runtime
     }
@@ -666,7 +676,7 @@ export async function probeHarnessRuntime(
         runtime.target.kind === 'wsl'
           ? buildWslProcessEnvironment(env)
           : runtime.target.kind === 'bundled'
-            ? { ...env, ...ELECTRON_RUN_AS_NODE }
+            ? bundledPiEnv(env, runtime)
             : env,
       shell: runtime.target.kind === 'native' && commandRequiresShell(runtime.executable)
     })

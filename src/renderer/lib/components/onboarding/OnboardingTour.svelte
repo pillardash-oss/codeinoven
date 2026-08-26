@@ -103,13 +103,12 @@
   let installBusy = $state(false)
   let installError = $state('')
 
-  const openCode = $derived(providerStore.providers.find((provider) => provider.id === 'opencode'))
-  const openCodeReady = $derived(
-    openCode?.status === 'available' &&
-      openCode.integration === 'ready' &&
-      openCode.unsupportedReason === undefined
+  const pi = $derived(providerStore.providers.find((provider) => provider.id === 'pi'))
+  const piReady = $derived(
+    pi?.status === 'available' && pi.integration === 'ready' && pi.unsupportedReason === undefined
   )
-  const openCodeChecking = $derived(openCode?.status === 'checking')
+  const piChecking = $derived(pi?.status === 'checking')
+  const piBundled = $derived(pi?.executionTarget?.kind === 'bundled')
 
   function measureTarget(): void {
     if (!activeSpotlight) return
@@ -155,24 +154,24 @@
     onStepChange(Math.max(0, step - 1))
   }
 
-  async function openOpenCodeInstall(): Promise<void> {
+  async function openPiInstall(): Promise<void> {
     installBusy = true
     installError = ''
     try {
-      const info = await invoke('harnessInstall:getInfo', 'opencode')
+      const info = await invoke('harnessInstall:getInfo', 'pi')
       await openInBrowser(info.pageUrl)
       installOpened = true
     } catch (error) {
       installError =
-        error instanceof Error ? error.message : 'The OpenCode install page could not be opened.'
+        error instanceof Error ? error.message : 'The Pi install page could not be opened.'
     } finally {
       installBusy = false
     }
   }
 
-  async function checkOpenCode(): Promise<void> {
+  async function checkPi(): Promise<void> {
     installError = ''
-    await providerStore.checkOne('opencode')
+    await providerStore.checkOne('pi')
   }
 
   onMount(() => {
@@ -423,12 +422,12 @@
     <div class="space-y-5">
       <div class="flex items-start gap-4">
         <div class="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-elevated">
-          <AgentIcon agentId="opencode" size={24} />
+          <AgentIcon agentId="pi" size={24} />
         </div>
         <div class="min-w-0 flex-1">
           <div class="flex flex-wrap items-center gap-2">
-            <h3 class="text-base font-semibold">OpenCode</h3>
-            {#if openCodeReady}
+            <h3 class="text-base font-semibold">Pi</h3>
+            {#if piReady}
               <span
                 class="inline-flex items-center gap-1 rounded-full bg-success/10 px-2 py-0.5 text-[10px] font-medium text-success"
               >
@@ -437,24 +436,26 @@
             {/if}
           </div>
           <p class="mt-1 text-sm leading-relaxed text-muted">
-            OpenCode is the recommended starting agent. It reads your request, works in the project
+            Pi ships with {APP_NAME} — no separate install. It reads your request, works in the project
             folder you choose, and reports the result in the conversation.
           </p>
         </div>
       </div>
 
-      {#if openCodeReady}
+      {#if piReady}
         <div class="rounded-xl border border-success/30 bg-success/10 p-4">
-          <p class="text-sm font-medium text-success">OpenCode is installed and ready to use.</p>
+          <p class="text-sm font-medium text-success">
+            {piBundled ? 'Pi is bundled and ready to use.' : 'Pi is installed and ready to use.'}
+          </p>
           <p class="mt-1 text-xs leading-relaxed text-muted">
-            You can add provider accounts from Harness settings when you need them.
+            Connect a Claude, OpenAI, or Google account from Harness settings, then start working.
           </p>
         </div>
       {:else}
         <div class="rounded-xl border bg-elevated p-4">
-          <p class="text-sm font-medium">Install OpenCode, then come back here</p>
+          <p class="text-sm font-medium">Install Pi, then come back here</p>
           <p class="mt-1 text-xs leading-relaxed text-dimmed">
-            The install button opens OpenCode's instructions for your operating system. After
+            The install button opens Pi's instructions for your operating system. After
             installation, choose Check again.
           </p>
           {#if installError}
@@ -466,22 +467,22 @@
               class="flex h-9 items-center gap-2 rounded-lg bg-primary px-4 text-sm font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-50"
               data-modal-primary
               disabled={installBusy}
-              onclick={() => void openOpenCodeInstall()}
+              onclick={() => void openPiInstall()}
             >
               {#if installBusy}
                 <Loader2 size={15} class="animate-spin" />
               {:else}
                 <Download size={15} />
               {/if}
-              {installOpened ? 'Open install guide again' : 'Install OpenCode'}
+              {installOpened ? 'Open install guide again' : 'Install Pi'}
             </button>
             <button
               type="button"
               class="flex h-9 items-center gap-2 rounded-lg border px-4 text-sm text-muted transition-colors hover:bg-surface hover:text-foreground disabled:opacity-50"
-              disabled={openCodeChecking}
-              onclick={() => void checkOpenCode()}
+              disabled={piChecking}
+              onclick={() => void checkPi()}
             >
-              {#if openCodeChecking}<Loader2 size={14} class="animate-spin" />{/if}
+              {#if piChecking}<Loader2 size={14} class="animate-spin" />{/if}
               Check again
             </button>
           </div>
@@ -497,7 +498,7 @@
           See all coding agents
         </button>
         <div class="flex gap-2">
-          {#if !openCodeReady}
+          {#if !piReady}
             <button
               type="button"
               class="h-9 rounded-lg px-3 text-sm text-muted transition-colors hover:bg-elevated hover:text-foreground"
