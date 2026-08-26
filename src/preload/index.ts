@@ -199,6 +199,7 @@ const INVOKE_CHANNELS = [
   'speech:failNativeCapture',
   'speech:markAttemptFailure',
   'speech:transcribe',
+  'speech:preloadAsr',
   'speech:transcribeAudioToLlm',
   'speech:getHistory',
   'speech:validateModelPath',

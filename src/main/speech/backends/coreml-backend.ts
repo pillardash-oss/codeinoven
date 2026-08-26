@@ -50,6 +50,12 @@ export class CoreMlSpeechBackend implements SpeechBackend {
     }
   }
 
+  async warmup(artifact: SpeechBackendArtifact, _signal: AbortSignal): Promise<void> {
+    this.ensureProcess()
+    const { access } = await import('node:fs/promises')
+    await access(artifact.directory)
+  }
+
   async transcribe(input: SpeechTranscribeInput, signal: AbortSignal): Promise<string> {
     const decodedPath = await this.decodeToWav(input.audioPath, signal)
     try {

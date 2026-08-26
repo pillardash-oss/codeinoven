@@ -62,10 +62,12 @@
   }>
 
   const unloadOptions = [
+    { value: '5m', label: '5 minutes' },
+    { value: '10m', label: '10 minutes' },
+    { value: '20m', label: '20 minutes' },
     { value: '30m', label: '30 minutes' },
-    { value: '1h', label: '1 hour' },
-    { value: 'keep', label: 'Keep until app closes' }
-  ] as const satisfies ReadonlyArray<{ value: '30m' | '1h' | 'keep'; label: string }>
+    { value: 'keep', label: 'Never unload' }
+  ] as const satisfies ReadonlyArray<{ value: '5m' | '10m' | '20m' | '30m' | 'keep'; label: string }>
 
   onMount(() => {
     void speech.load()
@@ -866,7 +868,7 @@
                 value={settings[item.key]}
                 onchange={(event) =>
                   patch({
-                    [item.key]: event.currentTarget.value as '30m' | '1h' | 'keep'
+                    [item.key]: event.currentTarget.value as '5m' | '10m' | '20m' | '30m' | 'keep'
                   })}
               >
                 {#each unloadOptions as option (option.value)}

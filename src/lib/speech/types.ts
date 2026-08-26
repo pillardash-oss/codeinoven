@@ -343,7 +343,7 @@ export interface SpeechCueSettings {
 }
 
 /** How long a subsystem model stays resident before it is unloaded. */
-export type SpeechUnloadOption = '30m' | '1h' | 'keep'
+export type SpeechUnloadOption = '5m' | '10m' | '20m' | '30m' | 'keep'
 
 export interface SpeechDictionaryEntry {
   id: string

@@ -449,6 +449,31 @@ export class SpeechService {
     }
   }
 
+  async preloadAsr(runtime: SpeechRuntime, artifactId: string): Promise<void> {
+    const artifact = this.requireSelectableArtifact(artifactId, runtime, 'asr')
+    const backend = this.requireBackend(runtime)
+    if (backend.warmup) {
+      const ac = new AbortController()
+      const timer = setTimeout(() => ac.abort(), 15_000)
+      try {
+        await backend.warmup(
+          {
+            id: artifact.id,
+            directory: this.artifactDirectory(artifact.id),
+            ...(artifact.familyId === 'whisper' || artifact.familyId === 'parakeet'
+              ? { modelFamily: artifact.familyId as 'whisper' | 'parakeet' }
+              : {})
+          },
+          ac.signal
+        )
+      } catch {
+        // Warmup is best-effort; transcription will surface real errors.
+      } finally {
+        clearTimeout(timer)
+      }
+    }
+  }
+
   async history(cursor?: string, limit?: number): Promise<SpeechHistoryPage> {
     return this.storage.listHistory(cursor, limit)
   }

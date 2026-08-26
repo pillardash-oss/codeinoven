@@ -27,6 +27,13 @@ export class SherpaSpeechBackend implements SpeechBackend {
     return ['asr', 'cleanup', 'tts']
   }
 
+  async warmup(artifact: SpeechBackendArtifact, _signal: AbortSignal): Promise<void> {
+    this.ensureWorker()
+    // Validate model directory exists so subsequent transcribe is fast.
+    const { access } = await import('node:fs/promises')
+    await access(artifact.directory)
+  }
+
   async transcribe(input: SpeechTranscribeInput, signal: AbortSignal): Promise<string> {
     const response = await this.request(
       {

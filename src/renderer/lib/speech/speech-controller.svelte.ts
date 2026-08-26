@@ -99,6 +99,8 @@ class SpeechController {
   playback = $state<SpeechPlaybackState>({ state: 'idle' })
   private active: ActiveCapture | null = null
   private elapsedTimer: ReturnType<typeof setInterval> | null = null
+  private preloadTimer: ReturnType<typeof setTimeout> | null = null
+  private preloadFired = false
   private readonly spans = new Map<string, SpeechDictationSpan[]>()
   private activePlayback: ActivePlayback | null = null
   private stopPromise: Promise<void> | null = null
@@ -173,6 +175,7 @@ class SpeechController {
         elapsedMs: 0
       }
       this.startElapsedTimer(capture)
+      this.scheduleAsrPreload(capture)
       this.playCue('started')
       return
     }
@@ -261,9 +264,11 @@ class SpeechController {
         elapsedMs: 0
       }
       this.startElapsedTimer(capture)
+      this.scheduleAsrPreload(capture)
       this.playCue('started')
     } catch (cause) {
       this.clearElapsedTimer()
+      this.clearPreloadTimer()
       if (active) {
         active.uploadError ??= cause instanceof Error ? cause : new Error(errorMessage(cause))
         if (active.recorder) await this.stopRecorder(active.recorder).catch(() => undefined)
@@ -298,6 +303,7 @@ class SpeechController {
 
   private async finishStop(active: ActiveCapture): Promise<void> {
     this.clearElapsedTimer()
+    this.clearPreloadTimer()
     this.state = { state: 'stopping', targetId: active.target.id, attemptId: active.attemptId }
     // Capture the target's current value and caret when the user stops, not
     // only when recording started. This lets users type and reposition the
@@ -539,6 +545,31 @@ class SpeechController {
   private clearElapsedTimer(): void {
     if (this.elapsedTimer) clearInterval(this.elapsedTimer)
     this.elapsedTimer = null
+  }
+
+  private clearPreloadTimer(): void {
+    if (this.preloadTimer) clearTimeout(this.preloadTimer)
+    this.preloadTimer = null
+  }
+
+  private scheduleAsrPreload(active: ActiveCapture): void {
+    this.clearPreloadTimer()
+    this.preloadFired = false
+    this.preloadTimer = setTimeout(() => {
+      if (this.active !== active || this.state.state !== 'recording') return
+      if (this.preloadFired) return
+      this.preloadFired = true
+      void this.preloadAsr()
+    }, 2000)
+  }
+
+  private async preloadAsr(): Promise<void> {
+    try {
+      const selection = await this.selectAsrArtifact()
+      await invoke('speech:preloadAsr', selection.runtime, selection.artifact.id)
+    } catch {
+      // Best-effort warmup; errors surface at transcription time.
+    }
   }
 
   private async selectAsrArtifact(): Promise<{

@@ -902,8 +902,8 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
-function isUnloadOption(value: unknown): value is '30m' | '1h' | 'keep' {
-  return value === '30m' || value === '1h' || value === 'keep'
+function isUnloadOption(value: unknown): value is '5m' | '10m' | '20m' | '30m' | 'keep' {
+  return value === '5m' || value === '10m' || value === '20m' || value === '30m' || value === 'keep'
 }
 
 function validateAttachmentStorageScope(value: unknown): AttachmentStorageScope {
