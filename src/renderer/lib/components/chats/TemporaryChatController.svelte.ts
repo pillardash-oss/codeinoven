@@ -1,4 +1,3 @@
-import { SvelteMap, SvelteSet } from 'svelte/reactivity'
 import { subscribe, invoke } from '$lib/ipc.svelte'
 import { contextSidebarState, type TemporaryChatContextTab } from '$lib/stores/context-sidebar.svelte'
 import { messageId } from '$shared/id'
@@ -377,8 +376,10 @@ export class TemporaryChatController implements ConversationController {
 
   #mergeLoaded(messages: AgentMessage[]): void {
     const assistants = messages.filter((message) => message.role === 'assistant')
-    const incomingById = new SvelteMap(assistants.map((message) => [message.id, message]))
-    const existingIds = new SvelteSet(this.#tab.messages.map((message) => message.id))
+    // eslint-disable-next-line svelte/prefer-svelte-reactivity
+    const incomingById = new Map(assistants.map((message) => [message.id, message]))
+    // eslint-disable-next-line svelte/prefer-svelte-reactivity
+    const existingIds = new Set(this.#tab.messages.map((message) => message.id))
     this.#tab.messages = [
       ...this.#tab.messages.map((message) => incomingById.get(message.id) ?? message),
       ...assistants.filter((message) => !existingIds.has(message.id))
