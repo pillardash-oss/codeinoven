@@ -351,6 +351,34 @@ function threadUpsertParams(thread: Thread): unknown[] {
 export class ThreadRepo {
   constructor(private db: Database) {}
 
+  private async hydrateThreadsViaWorker(rows: ThreadRow[]): Promise<Thread[]> {
+    const threads = rows.map(rowToThread)
+    if (threads.length === 0) return threads
+    const ids = threads.map((thread) => thread.id)
+    const placeholders = ids.map(() => '?').join(',')
+    const usage = await this.db.queryViaWorker(
+      `SELECT thread_id, harness_id
+       FROM harness_usage
+       WHERE thread_id IN (${placeholders})
+       GROUP BY thread_id, harness_id
+       ORDER BY MAX(last_used_at) DESC`,
+      ids,
+      0
+    )
+    if (usage.ok) {
+      const byThread = new Map<string, string[]>()
+      for (const entry of usage.rows) {
+        const threadId = String(entry['thread_id'])
+        const harnessId = String(entry['harness_id'])
+        const harnesses = byThread.get(threadId)
+        if (harnesses) harnesses.push(harnessId)
+        else byThread.set(threadId, [harnessId])
+      }
+      for (const thread of threads) thread.usedHarnessIds = byThread.get(thread.id)
+    }
+    return threads
+  }
+
   upsert(thread: Thread): void {
     this.db.run(THREAD_UPSERT_SQL, ...threadUpsertParams(thread))
   }
@@ -376,7 +404,61 @@ export class ThreadRepo {
     const result = await this.db.queryViaWorker('SELECT * FROM threads WHERE id = ?', [id], 1)
     if (!result.ok) return null
     const row = (result.rows as unknown as ThreadRow[])[0]
-    return row ? rowToThread(row) : null
+    if (!row) return null
+    const thread = rowToThread(row)
+    const usage = await this.db.queryViaWorker(
+      `SELECT harness_id
+       FROM harness_usage
+       WHERE thread_id = ?
+       GROUP BY harness_id
+       ORDER BY MAX(last_used_at) DESC`,
+      [id],
+      0
+    )
+    if (usage.ok && usage.rows.length > 0) {
+      thread.usedHarnessIds = usage.rows.map((entry) => String(entry['harness_id']))
+    }
+    return thread
+  }
+
+  /** Mark a thread read without loading it through the main SQLite connection. */
+  async markReadViaWorker(
+    projectId: string,
+    id: string
+  ): Promise<{ thread: Thread; changed: boolean } | null> {
+    const result = await this.db.queryViaWorker(
+      'SELECT * FROM threads WHERE id = ? AND project_id = ?',
+      [id, projectId],
+      1
+    )
+    if (!result.ok) return null
+    const row = (result.rows as unknown as ThreadRow[])[0]
+    if (!row) return null
+
+    const wasUnread = row.read === 0
+    if (wasUnread) {
+      const updated = await this.db.executeViaWorker(
+        'UPDATE threads SET read = 1 WHERE id = ? AND project_id = ? AND read = 0',
+        [id, projectId]
+      )
+      if (!updated.ok) throw new Error(updated.error ?? 'Could not mark thread read')
+    }
+
+    const thread = rowToThread(row)
+    thread.read = true
+    const usage = await this.db.queryViaWorker(
+      `SELECT harness_id
+       FROM harness_usage
+       WHERE thread_id = ?
+       GROUP BY harness_id
+       ORDER BY MAX(last_used_at) DESC`,
+      [id],
+      0
+    )
+    if (usage.ok && usage.rows.length > 0) {
+      thread.usedHarnessIds = usage.rows.map((entry) => String(entry['harness_id']))
+    }
+    return { thread, changed: wasUnread }
   }
 
   /** Map of thread id → distinct harness ids used in its session, newest first. */
@@ -477,7 +559,7 @@ export class ThreadRepo {
   }
 
   /** Load every thread on the database worker so unbounded hydration does not block Electron. */
-  async listAllViaWorker(options: ThreadListOptions = {}): Promise<Thread[]> {
+  async listAllViaWorker(options: ThreadListOptions = {}, hydrateUsage = true): Promise<Thread[]> {
     const { where, params, limit } = buildListClauses([], [], options)
     const result = await this.db.queryViaWorker(
       `SELECT * FROM threads ${where}
@@ -486,7 +568,13 @@ export class ThreadRepo {
       0
     )
     if (!result.ok) return this.listAll(options)
-    return this.hydrateThreads(result.rows as unknown as ThreadRow[])
+    const rows = result.rows as unknown as ThreadRow[]
+    return hydrateUsage ? this.hydrateThreadsViaWorker(rows) : rows.map(rowToThread)
+  }
+
+  /** Initial workspace rows omit optional usage metadata so first paint stays bounded. */
+  listAllForHydrationViaWorker(options: ThreadListOptions = {}): Promise<Thread[]> {
+    return this.listAllViaWorker(options, false)
   }
 
   /** Load only non-archived threads that currently hold active agent work. */

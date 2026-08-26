@@ -2531,16 +2531,34 @@
     }
   }
 
-  async function openThread(thread: Thread): Promise<void> {
+  const pendingReadThreads = new SvelteSet<string>()
+
+  function markThreadReadAfterPaint(thread: Thread): void {
+    if (thread.read) return
+    const key = `${thread.projectId}:${thread.id}`
+    if (pendingReadThreads.has(key)) return
+    pendingReadThreads.add(key)
+    window.requestAnimationFrame(() => {
+      window.setTimeout(() => {
+        pendingReadThreads.delete(key)
+        void invoke('thread:markRead', thread.projectId, thread.id)
+          .then((updated) => {
+            upsertThreadInList(updated)
+            scopeState.updateThread(updated)
+            if (workspaceState.selectedThread?.id === updated.id) {
+              workspaceState.updateThread(updated)
+            }
+          })
+          .catch(() => undefined)
+      }, 0)
+    })
+  }
+
+  function openThread(thread: Thread): void {
     workspaceState.openThread(thread, projects.find((p) => p.id === thread.projectId) ?? null)
     void scopeState.ensureBoardLoaded(thread.projectId)
-    // Reveal immediately (guaranteed even if the markRead round-trip is slow),
-    // and again once the list re-sorts from the updated activity.
-    revealThreadInSidebar(thread.id)
-    const updated = await invoke('thread:markRead', thread.projectId, thread.id)
-    upsertThreadInList(updated)
-    workspaceState.updateThread(updated)
-    scopeState.updateThread(updated)
+    markThreadReadAfterPaint(thread)
+    // Reveal immediately and again once any read-state update re-sorts the list.
     revealThreadInSidebar(thread.id)
   }
 

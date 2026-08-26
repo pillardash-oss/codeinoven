@@ -877,14 +877,12 @@ export class ThreadManager {
   }
 
   async markRead(projectId: string, threadId: string): Promise<Thread> {
-    const existing = this.requireOwnedThread(projectId, threadId)
-
-    if (existing.read) return existing
-
-    this.threadRepo.markRead(threadId)
-    const updated: Thread = { ...existing, read: true }
-    this.onChange?.(updated)
-    return updated
+    const result = await this.threadRepo.markReadViaWorker(projectId, threadId)
+    if (!result) {
+      throw new Error(`Thread not found in project ${projectId}: ${threadId}`)
+    }
+    if (result.changed) this.onChange?.(result.thread)
+    return result.thread
   }
 
   /** Persist the thread's agent settings (harness, model, thinking, permissions). */
@@ -1127,6 +1125,11 @@ export class ThreadManager {
   /** List threads across all projects, sorted pinned-first then by last activity. */
   async listAllThreads(options?: ThreadListOptions): Promise<Thread[]> {
     return this.threadRepo.listAllViaWorker(options)
+  }
+
+  /** Bounded first-paint list without optional harness-usage decoration. */
+  async listThreadsForHydration(options?: ThreadListOptions): Promise<Thread[]> {
+    return this.threadRepo.listAllForHydrationViaWorker(options)
   }
 
   /**

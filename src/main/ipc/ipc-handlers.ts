@@ -6819,51 +6819,54 @@ export function registerIpcHandlers(
     }
     return threadManager.searchThreads(safeQuery, safeOptions)
   })
-  // Mirror-only transcript read — fast disk access, never touches a harness driver.
-  ipcMain.handle(
-    'thread:loadMessages',
-    async (_, projectId: unknown, threadId: unknown, before?: unknown, limit: unknown = 40) => {
-      let safeBefore: ThreadMessageCursor | undefined
-      if (before !== undefined) {
-        if (!isRecord(before)) throw new TypeError('Message cursor must be an object')
-        safeBefore = {
-          createdAt: validateBoundedInteger(
-            before.createdAt,
-            'Message cursor timestamp',
-            0,
-            Number.MAX_SAFE_INTEGER
-          ),
-          id: validateBoundedString(before.id, 'Message cursor ID', 1, 512)
+  if (!options.hydrationHandlersRegistered) {
+    // Mirror-only transcript reads — fast disk access, never touches a harness
+    // driver. Hydration registers these before the renderer's first document
+    // so a conversation page never waits for optional feature services.
+    ipcMain.handle(
+      'thread:loadMessages',
+      async (_, projectId: unknown, threadId: unknown, before?: unknown, limit: unknown = 40) => {
+        let safeBefore: ThreadMessageCursor | undefined
+        if (before !== undefined) {
+          if (!isRecord(before)) throw new TypeError('Message cursor must be an object')
+          safeBefore = {
+            createdAt: validateBoundedInteger(
+              before.createdAt,
+              'Message cursor timestamp',
+              0,
+              Number.MAX_SAFE_INTEGER
+            ),
+            id: validateBoundedString(before.id, 'Message cursor ID', 1, 512)
+          }
         }
+        const safeProjectId = validateEntityId(projectId, 'Project ID')
+        const safeThreadId = validateEntityId(threadId, 'Thread ID')
+        return threadManager.loadMessagePage(
+          safeProjectId,
+          safeThreadId,
+          safeBefore,
+          validateBoundedInteger(limit, 'Message page limit', 1, 100)
+        )
       }
+    )
+    // Mirror-only centered transcript read for quick jumps to arbitrary messages.
+    ipcMain.handle(
+      'thread:loadMessagesAround',
+      (_, projectId: unknown, threadId: unknown, anchorId: unknown, limit: unknown = 40) =>
+        threadManager.loadMessagePageAround(
+          validateEntityId(projectId, 'Project ID'),
+          validateEntityId(threadId, 'Thread ID'),
+          validateBoundedString(anchorId, 'Message ID', 1, 512),
+          validateBoundedInteger(limit, 'Message page limit', 1, 100)
+        )
+    )
+    // Lightweight full user-message history for the header quick-jump list.
+    ipcMain.handle('thread:loadUserMessages', async (_, projectId: unknown, threadId: unknown) => {
       const safeProjectId = validateEntityId(projectId, 'Project ID')
       const safeThreadId = validateEntityId(threadId, 'Thread ID')
-      return threadManager.loadMessagePage(
-        safeProjectId,
-        safeThreadId,
-        safeBefore,
-        validateBoundedInteger(limit, 'Message page limit', 1, 100)
-      )
-    }
-  )
-  // Mirror-only centered transcript read for quick jumps to arbitrary messages.
-  ipcMain.handle(
-    'thread:loadMessagesAround',
-    (_, projectId: unknown, threadId: unknown, anchorId: unknown, limit: unknown = 40) => {
-      return threadManager.loadMessagePageAround(
-        validateEntityId(projectId, 'Project ID'),
-        validateEntityId(threadId, 'Thread ID'),
-        validateBoundedString(anchorId, 'Message ID', 1, 512),
-        validateBoundedInteger(limit, 'Message page limit', 1, 100)
-      )
-    }
-  )
-  // Lightweight full user-message history for the header quick-jump list.
-  ipcMain.handle('thread:loadUserMessages', async (_, projectId: unknown, threadId: unknown) => {
-    const safeProjectId = validateEntityId(projectId, 'Project ID')
-    const safeThreadId = validateEntityId(threadId, 'Thread ID')
-    return threadManager.loadUserMessages(safeProjectId, safeThreadId)
-  })
+      return threadManager.loadUserMessages(safeProjectId, safeThreadId)
+    })
+  }
   // Export the conversation transcript as Markdown, off the main thread.
   ipcMain.handle(
     'thread:exportTranscript',
@@ -7028,12 +7031,10 @@ export function registerIpcHandlers(
   ipcMain.handle('thread:markRead', async (_, projectId: string, threadId: string) => {
     // Opening a thread means the user moved on from wherever they were; any
     // completed turn left pending on another thread counts as a success.
-    turnFeedbackRepo.resolvePendingForOtherThreads(
-      validateEntityId(threadId, 'Thread ID'),
-      'success',
-      'switched',
-      1
-    )
+    const safeThreadId = validateEntityId(threadId, 'Thread ID')
+    void turnFeedbackRepo
+      .resolvePendingForOtherThreadsViaWorker(safeThreadId, 'success', 'switched', 1)
+      .catch((error) => Logger.dev('Thread switch feedback resolution failed:', error))
     return threadManager.markRead(projectId, threadId)
   })
   ipcMain.handle('thread:reorder', (_, projectId: unknown, orderedIds: unknown) =>

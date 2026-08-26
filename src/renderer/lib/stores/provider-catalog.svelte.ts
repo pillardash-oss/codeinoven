@@ -47,7 +47,11 @@ const CATALOG_MIRROR_KEY = `${APP_SLUG}.providerCatalog.mirror.v2`
  * must not hide presets already reported by another record.
  */
 export function mergeProviderCatalogEntries(catalogs: ProviderCatalog[]): ProviderCatalog[] {
-  const merged = new SvelteMap<string, ProviderCatalog>()
+  // This is a local computation, not application state. Using SvelteMap here
+  // makes every merge write reactive signals while ModelPicker/ChatComposer
+  // are evaluating their derived values, which can cascade into a long flush.
+  // eslint-disable-next-line svelte/prefer-svelte-reactivity -- local-only merge state; it must not notify Svelte while derived values are evaluated
+  const merged = new Map<string, ProviderCatalog>()
   for (const catalog of catalogs) {
     const key = `${catalog.harnessId}:${catalog.id}`
     const existing = merged.get(key)
@@ -56,7 +60,8 @@ export function mergeProviderCatalogEntries(catalogs: ProviderCatalog[]): Provid
       continue
     }
 
-    const models = new SvelteMap(
+    // eslint-disable-next-line svelte/prefer-svelte-reactivity -- local-only merge state; it must not notify Svelte while derived values are evaluated
+    const models = new Map(
       existing.models.map((model) => [`${model.providerId}:${model.id}`, model])
     )
     for (const model of catalog.models) {
