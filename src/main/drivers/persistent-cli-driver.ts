@@ -526,14 +526,47 @@ export abstract class PersistentCliDriver implements HarnessDriver {
     const active = this.activeProcesses.get(session.id)
     const settlement = this.activeProcessSettlements.get(session.id)
     const previous = this.activeTurnOptions.get(session.id)
-    if (!active || active.killed || !settlement || !previous) {
+    const usesNativeHistory = this.capabilities.nativeResume !== false
+    if (!previous) {
       throw new Error(`No active ${this.name} turn is available to steer for session ${session.id}`)
+    }
+    if (!active || active.killed || !settlement) {
+      if (usesNativeHistory) {
+        throw new Error(
+          `No active ${this.name} turn is available to steer for session ${session.id}`
+        )
+      }
+      // A stateless process-per-turn driver can still deliver the steer from
+      // the durable transcript when its child has already exited but the
+      // chat-engine status has not observed the terminal event yet. This is
+      // the same replay path used after a normal process boundary.
+      if (active && settlement) await settlement
+      return this.restartStatelessSteer(projectPath, options, session, previous)
     }
 
     this.steeringSessions.add(session.id)
     active.kill()
     await settlement
-    const usesNativeHistory = this.capabilities.nativeResume !== false
+    return this.restartSteerAfterStop(projectPath, options, session, previous, usesNativeHistory)
+  }
+
+  private async restartStatelessSteer(
+    projectPath: string,
+    options: SteerPromptOptions,
+    session: PersistentCliSession,
+    previous: SendPromptOptions
+  ): Promise<void> {
+    this.steeringSessions.add(session.id)
+    return this.restartSteerAfterStop(projectPath, options, session, previous, false)
+  }
+
+  private async restartSteerAfterStop(
+    projectPath: string,
+    options: SteerPromptOptions,
+    session: PersistentCliSession,
+    previous: SendPromptOptions,
+    usesNativeHistory: boolean
+  ): Promise<void> {
     const transportText = usesNativeHistory
       ? options.text
       : [
