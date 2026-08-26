@@ -28,7 +28,10 @@ await mkdir(outputDirectory, { recursive: true })
 
 await cp(join(piPackageDirectory, 'dist'), join(outputDirectory, 'dist'), { recursive: true })
 await cp(piPackageJsonPath, join(outputDirectory, 'package.json'))
-await cp(jitiPackageDirectory, join(outputDirectory, 'node_modules/jiti'), { recursive: true })
+// Named "vendor", not "node_modules" — electron-builder's extraResources copy
+// silently drops nested `node_modules` directories, so the runtime resolves
+// this one via NODE_PATH instead of Node's standard node_modules walk.
+await cp(jitiPackageDirectory, join(outputDirectory, 'vendor/jiti'), { recursive: true })
 await writeFile(join(outputDirectory, '.version'), `${version}\n`)
 
 // eslint-disable-next-line no-console
