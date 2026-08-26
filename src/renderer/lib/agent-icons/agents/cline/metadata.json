@@ -1,1 +1,9 @@
-{"id":"cline","name":"Cline","vendor":"Cline","website":"https://github.com/cline/cline","icon":"icon.svg","monochrome":"mono.svg","primaryColor":"#5B8CFF"}
+{
+  "id": "cline",
+  "name": "Cline",
+  "vendor": "Cline",
+  "website": "https://github.com/cline/cline",
+  "icon": "icon.svg",
+  "monochrome": "mono.svg",
+  "primaryColor": "#5B8CFF"
+}

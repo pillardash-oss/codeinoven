@@ -31,6 +31,10 @@ const vendorAliases: Record<string, string> = {
   // the canonical provider icons, so they inherit the surrounding text color.
   anthropic: 'claudecode',
   bytedance: 'doubao',
+  clinepass: 'cline',
+  cloudflareaigateway: 'cloudflare',
+  cloudflareai: 'cloudflare',
+  cloudflareworkersai: 'cloudflare',
   chatgpt: 'openai',
   codeinoven: 'cio',
   openai: 'codex',
