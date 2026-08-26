@@ -659,15 +659,15 @@ export class HarnessUsageRepo {
               SUM(COALESCE(tokens_total, 0)) AS tokens_total,
               SUM(duration_ms) AS duration_ms`
     const modelRange = `feature IN (${PROFILE_MODEL_FEATURES})
-       AND created_at >= ?
-       AND created_at < ?`
+       AND usage_events.created_at >= ?
+       AND usage_events.created_at < ?`
     const utilityPlaceholders = PROFILE_UTILITY_FEATURES.map(() => '?').join(',')
     const utilityRange = `feature IN (${utilityPlaceholders})
-       AND created_at >= ?
-       AND created_at < ?`
+       AND usage_events.created_at >= ?
+       AND usage_events.created_at < ?`
     const profileRange = `(feature IN (${PROFILE_MODEL_FEATURES}) OR feature IN (${utilityPlaceholders}))
-       AND created_at >= ?
-       AND created_at < ?`
+       AND usage_events.created_at >= ?
+       AND usage_events.created_at < ?`
     const params = [range.startAt, range.endAt] as const
 
     const [
@@ -737,10 +737,10 @@ export class HarnessUsageRepo {
                   p.icon,
                   ${aggregateSelect},
                   COUNT(DISTINCT t.id) AS thread_count,
-                  COUNT(DISTINCT strftime('%Y-%m-%d', e.created_at / 1000, 'unixepoch', 'localtime')) AS active_days,
-                  MAX(e.created_at) AS last_active_at
-           FROM usage_events e
-           JOIN threads t ON t.id = e.thread_id
+                  COUNT(DISTINCT strftime('%Y-%m-%d', usage_events.created_at / 1000, 'unixepoch', 'localtime')) AS active_days,
+                  MAX(usage_events.created_at) AS last_active_at
+           FROM usage_events
+           JOIN threads t ON t.id = usage_events.thread_id
            JOIN projects p ON p.id = t.project_id
            WHERE ${modelRange}
            GROUP BY p.id

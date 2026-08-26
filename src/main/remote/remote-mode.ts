@@ -1222,7 +1222,17 @@ export class RemoteModeController {
       this.cloudConfig ?? (await this.storage?.read<CloudAccessConfig>(CLOUD_CONFIG_PATH)) ?? null
     const tokenRef = freshAccountConfig?.profileTokenRef ?? cloudConfig?.profileTokenRef
     if (!tokenRef) return null
-    const token = await this.vault.resolve(tokenRef)
+    let token: string | null
+    try {
+      token = await this.vault.resolve(tokenRef)
+    } catch (error) {
+      if (error instanceof Error && error.message === 'Credential not found') {
+        token = null
+      } else {
+        throw error
+      }
+    }
+    if (token === null) return null
     const apiOrigin = freshAccountConfig?.apiOrigin ?? cloudConfig?.apiOrigin
     return fetchWithDeadline(
       new URL('/v1/profile', apiOrigin),
