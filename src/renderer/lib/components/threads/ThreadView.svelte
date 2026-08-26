@@ -526,7 +526,7 @@
   /** True while we are showing a working trace rehydrated from persisted state
    *  because no live session activity is available to confirm the run (a silent
    *  session, an app restart, or a relay drop mid-turn). The trace renders the
-   *  last-known saved parts with a "restored / reconnecting" note instead of the
+   *  last-known saved parts with an explicit saved-activity note instead of the
    *  thread dropping to idle or showing a bare "Agent working…" spinner. Cleared
    *  as soon as a live session confirms the real terminal state. */
   let restoredBusy = $state(false)
@@ -588,7 +588,24 @@
   let commands = $state<ScopedHarnessCommand[]>([])
   let pendingPermissions = $state<PermissionRequest[]>([])
   let pendingImageDescriptorError = $state<ImageDescriptorErrorRequest | null>(null)
-  let activeTodo = $derived(latestAgentTodo(messages))
+  /**
+   * Todo updates are working-trace parts too. The durable stream is written
+   * from the live event path and can be newer than the bounded message mirror
+   * that arrives with the final thread update. Feed that freshest snapshot to
+   * the task card so a trailing provider snapshot cannot rewind the visible
+   * task state.
+   */
+  let todoMessages = $derived.by(() => {
+    if (streamParts.length === 0) return messages
+    const streamMessage: AgentMessage = {
+      id: `${thread.id}:todo-stream`,
+      role: 'assistant',
+      parts: streamParts,
+      createdAt: Number.MAX_SAFE_INTEGER
+    }
+    return [...messages, streamMessage]
+  })
+  let activeTodo = $derived(latestAgentTodo(todoMessages))
   let project = $state<Project | null>(null)
   let projectIconUrl = $state<string | null>(null)
   let errorMessage = $state('')
@@ -3080,7 +3097,7 @@
       // false for null, allowing later `thread:updated` events to re-apply the
       // stale persisted `planning`/`executing` status after we had cleared it.
       liveStatusKnown = true
-      if (providerStatus?.state === 'waiting' || providerStatus?.state === 'working') {
+      if (providerStatus?.state === 'working') {
         ensureLiveWorkingSelection()
         agentRuns.setBusy(
           projectId,
@@ -3089,7 +3106,11 @@
           latestUserMessageId(),
           providerStatus.state === 'working' ? providerStatus.startedAt : undefined
         )
-      } else if (providerStatus?.state === 'error' || providerStatus?.state === 'idle') {
+      } else if (
+        providerStatus?.state === 'waiting' ||
+        providerStatus?.state === 'error' ||
+        providerStatus?.state === 'idle'
+      ) {
         setIdleFromRestore()
       }
       await refreshPendingPermissions()
@@ -3112,13 +3133,14 @@
       // view switch or refresh. The one exception is persisted evidence of a
       // mid-flight turn: if the saved latest turn has real working parts and no
       // terminal message, rehydrate that working trace (with a "restored /
-      // reconnecting" note) instead of dropping to idle, so the user can tell a
+      // saved-activity note) instead of dropping to idle, so the user can tell a
       // run was in progress even though the live stream is not confirming it.
       // The thread itself stays interactive (not busy) so a poke message can
-      // still be sent normally.
-      const liveSessionWorking =
-        providerStatus?.state === 'waiting' || providerStatus?.state === 'working'
-      restoredBusy = providerStatus === null && hasPersistedInFlightWork()
+      // still be sent normally. Paused retry waits are represented by the
+      // provider status card, not by a misleading reconnecting trace.
+      const liveSessionWorking = providerStatus?.state === 'working'
+      restoredBusy =
+        providerStatus === null && thread.status !== 'working-paused' && hasPersistedInFlightWork()
       // Always rebuild the latest logical turn from the durable SSE log. The
       // bounded mirror can contain only the newest snapshot of a long turn,
       // and a finished thread still needs the same complete trace after a
@@ -3128,7 +3150,12 @@
         .then((parts) => {
           if (!alive || generation !== streamPartsLoadGeneration) return
           streamParts = parts
-          if (providerStatus === null && !restoredBusy && hasRenderableWorkingParts(parts)) {
+          if (
+            providerStatus === null &&
+            thread.status !== 'working-paused' &&
+            !restoredBusy &&
+            hasRenderableWorkingParts(parts)
+          ) {
             restoredBusy = !isLatestTurnCompleted()
           }
         })
@@ -3383,6 +3410,13 @@
       case 'message.part.updated': {
         if (event.sessionId !== sessionId) return
         acknowledgeLocalTurn()
+        if (isTodoToolPart(event.part)) {
+          const streamPartIndex = streamParts.findLastIndex((part) => part.id === event.part.id)
+          streamParts =
+            streamPartIndex === -1
+              ? [...streamParts, event.part]
+              : streamParts.map((part, index) => (index === streamPartIndex ? event.part : part))
+        }
         if (event.part.type === 'subagent') syncOpenSubagentTabs()
         break
       }
@@ -3464,10 +3498,10 @@
         ) {
           providerStatus = event.status
         }
-        if (event.status.state === 'waiting' || event.status.state === 'working') {
+        if (event.status.state === 'working') {
           restoredBusy = false
           acknowledgeLocalTurn()
-          if (event.status.state === 'working') idleAttentionHandled = false
+          idleAttentionHandled = false
           ensureLiveWorkingSelection()
           agentRuns.setBusy(
             thread.projectId,
@@ -3476,6 +3510,11 @@
             latestUserMessageId(),
             event.status.state === 'working' ? event.status.startedAt : undefined
           )
+          errorMessage = ''
+        } else if (event.status.state === 'waiting') {
+          restoredBusy = false
+          acknowledgeLocalTurn()
+          setIdleFromSession()
           errorMessage = ''
         } else if (event.status.state === 'idle') {
           const interruptedCompaction = compactionInterrupted()

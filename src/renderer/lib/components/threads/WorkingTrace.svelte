@@ -37,8 +37,8 @@
      *  only condition under which the trace may fold itself. */
     done?: boolean
     /** True when this trace was rehydrated from persisted state because no live
-     *  session activity is confirming the run. Renders a "restored / reconnecting"
-     *  note instead of a live "Agent working…" spinner. */
+     *  session activity is confirming the run. Renders a saved-activity note
+     *  instead of a live "Agent working…" spinner. */
     rehydrated?: boolean
     initialOpen?: boolean
     initialUserOpened?: boolean
@@ -529,7 +529,7 @@
             <span class="flex min-w-0 shrink items-center gap-2">
               <RefreshCw size={11} class="shrink-0 text-info" />
               <span class="shrink-0 text-[10px] text-info/80">
-                Reconnecting — showing last saved activity
+                Showing last saved activity · live run not confirmed
               </span>
               {#if effectiveStartTime}
                 <span class="shrink-0 tabular-nums text-[10px] text-info/80">

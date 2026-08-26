@@ -236,20 +236,18 @@
 
       <p class="mt-1 text-sm leading-relaxed text-muted">{issue.message}</p>
 
-      {#if waiting && issue.retryAt}
+      {#if waiting && issue.retryAt && autoRetryEnabled}
         <p class="mt-2 text-xs font-medium text-foreground tabular-nums">
           <span aria-live="polite">
-            {#if autoRetryEnabled}
-              Auto-resume {absoluteRetryTime(issue.retryAt)} · in {relativeRetryTime(issue.retryAt)}
-            {:else}
-              Available again {absoluteRetryTime(issue.retryAt)} · in {relativeRetryTime(
-                issue.retryAt
-              )}
-            {/if}
+            Auto-resume {absoluteRetryTime(issue.retryAt)} · in {relativeRetryTime(issue.retryAt)}
           </span>
           {#if issue.attempt}
             · attempt {issue.attempt}
           {/if}
+        </p>
+      {:else if waiting && issue.retryAt}
+        <p class="mt-2 text-xs font-medium text-foreground tabular-nums">
+          Available again {absoluteRetryTime(issue.retryAt)} · in {relativeRetryTime(issue.retryAt)}
         </p>
       {:else if autoResume && issue.retryAt}
         <p class="mt-2 text-xs font-medium text-foreground tabular-nums">
@@ -267,7 +265,7 @@
         </p>
       {:else if waiting}
         <p class="mt-2 text-xs font-medium text-foreground">
-          {providerName} will retry automatically. Use “Retry now” if your connection is back.
+          Automatic retry is not scheduled. Retry now when the provider is ready.
         </p>
       {/if}
 

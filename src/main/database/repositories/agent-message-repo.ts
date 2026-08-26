@@ -124,7 +124,8 @@ export interface AgentMessageRow {
   origin: string
   visibility: string
   parts: string
-  search_text: string
+  /** Only present when the read explicitly selects the FTS text column. */
+  search_text?: string
   content_hash: string | null
   transport_parts: string | null
   transport_origin: string | null
@@ -859,6 +860,18 @@ function afterCursor(after: ThreadMessageCursor | undefined): string {
 }
 
 /**
+ * Columns read back for message mapping, excluding `search_text`. The FTS text
+ * duplicates the full message content but is never read on the read path, so
+ * shipping it across the worker port would roughly double every transcript
+ * page's serialized payload.
+ */
+const MESSAGE_READ_COLUMNS = `id, thread_id, session_id, role, origin, visibility, parts,
+  content_hash, transport_parts, transport_origin, model_id, provider_id, harness_id,
+  thinking_level, references_json, project_references_json, created_at, completed_at, cost,
+  tokens_json, rate_limits_json, usage_credits_json, context_window, context_used, error,
+  structured_output`
+
+/**
  * SQL for one bounded page of the mirrored conversation (parent-session rows),
  * ascending, cursor-paged. The worker's `query` command applies the LIMIT.
  */
@@ -870,7 +883,7 @@ export function buildLoadByThreadPageSql(
   const cursor = afterCursor(after)
   if (after) params.push(after.createdAt, after.createdAt, after.id)
   return {
-    sql: `SELECT * FROM agent_messages
+    sql: `SELECT ${MESSAGE_READ_COLUMNS} FROM agent_messages
       WHERE thread_id = ? AND session_id IS NULL
         AND visibility IN ('conversation', 'working_trace')${cursor}
       ORDER BY created_at ASC, id ASC`,
@@ -887,7 +900,7 @@ export function buildLoadAllPageSql(
   const cursor = afterCursor(after)
   if (after) params.push(after.createdAt, after.createdAt, after.id)
   return {
-    sql: `SELECT * FROM agent_messages WHERE thread_id = ? AND session_id IS NULL${cursor}
+    sql: `SELECT ${MESSAGE_READ_COLUMNS} FROM agent_messages WHERE thread_id = ? AND session_id IS NULL${cursor}
       ORDER BY created_at ASC, id ASC`,
     params
   }
@@ -920,7 +933,7 @@ export function buildLoadSessionPageSql(
   const cursor = afterCursor(after)
   if (after) params.push(after.createdAt, after.createdAt, after.id)
   return {
-    sql: `SELECT * FROM agent_messages WHERE thread_id = ? AND session_id = ?${cursor}
+    sql: `SELECT ${MESSAGE_READ_COLUMNS} FROM agent_messages WHERE thread_id = ? AND session_id = ?${cursor}
       ORDER BY created_at ASC, id ASC`,
     params
   }
@@ -955,7 +968,7 @@ export function buildLoadPageSql(
     params.push(before.createdAt, before.createdAt, before.id)
   }
   return {
-    sql: `SELECT * FROM agent_messages
+    sql: `SELECT ${MESSAGE_READ_COLUMNS} FROM agent_messages
       WHERE thread_id = ? AND session_id IS NULL
         AND visibility IN ('conversation', 'working_trace')${cursor}
       ORDER BY created_at DESC, id DESC`,

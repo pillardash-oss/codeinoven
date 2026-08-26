@@ -2,14 +2,14 @@ import { Logger } from './logger'
 import type { StorageEngine } from '../storage/storage-engine'
 import type { AgentProviderIssueKind } from '../../lib/types'
 
-/** One thread awaiting automatic resume after a usage/rate-limit reset. */
+/** One thread awaiting provider recovery after a usage/rate-limit reset. */
 export interface PendingRetryRecord {
   sessionId: string
   projectId: string
   threadId: string
   harnessId: string
-  /** Epoch ms when the provider window resets and the thread may resume. */
-  retryAt: number
+  /** Epoch ms when the provider window resets; absent when only manual retry is available. */
+  retryAt?: number
   /** Provider-reported retry attempt when the reset was surfaced. */
   attempt?: number
   /** Provider-neutral failure kind — drives how the restored card renders. */
@@ -39,12 +39,9 @@ const PERSISTENCE_FILE = 'scheduler/retry-scheduler.json'
 
 /**
  * RetrySchedulerService — remembers every thread whose turn ended in a
- * quota/rate-limit reset with a reported `retryAt`, then automatically resumes
- * the thread once that time passes while the app is open. Pending retries are
- * persisted so they survive app restarts, and the restored warning card proves
- * the resume is still scheduled. Only harnesses that do not schedule their own
- * provider retries are tracked; the chat engine enforces that gate before
- * handing records to this service (OpenCode manages its own retries). Listeners
+ * quota/rate-limit reset, then automatically resumes the thread once a known
+ * reset time passes while the app is open. Records without a reset time remain
+ * persisted for restart recovery but are never fired automatically. Listeners
  * are notified on every pending-set change so dependents (e.g. the power-wake
  * service) can re-evaluate.
  */
@@ -73,11 +70,8 @@ export class RetrySchedulerService {
   /** Apply a config change without re-reading storage. */
   setEnabled(enabled: boolean): void {
     this.enabled = enabled
-    if (!enabled) {
-      this.pending.clear()
-      void this.persist()
-    }
     this.refreshTimer()
+    if (enabled) this.tick()
     this.notifyChange()
   }
 
@@ -94,27 +88,27 @@ export class RetrySchedulerService {
   /** True when any pending retry resets at or before `deadlineMs`. */
   hasPendingRetryBefore(deadlineMs: number): boolean {
     for (const record of this.pending.values()) {
-      if (record.retryAt <= deadlineMs) return true
+      if (record.retryAt !== undefined && record.retryAt <= deadlineMs) return true
     }
     return false
   }
 
   /** Record (or refresh) a pending reset retry for a session. */
   track(record: PendingRetryRecord): boolean {
-    if (!this.enabled) return false
     this.pending.set(record.sessionId, record)
     void this.persist()
-    Logger.info('Auto-resume scheduled after usage reset', {
+    Logger.info('Retry wait retained after usage reset', {
       projectId: record.projectId,
       threadId: record.threadId,
       harnessId: record.harnessId,
-      retryAt: new Date(record.retryAt).toISOString()
+      retryAt: record.retryAt === undefined ? null : new Date(record.retryAt).toISOString(),
+      automatic: this.enabled && record.retryAt !== undefined
     })
     this.refreshTimer()
     // The reset may already have passed — fire without waiting.
     this.tick()
     this.notifyChange()
-    return true
+    return this.enabled
   }
 
   /** Drop a session from the pending set once it resolves or retires. */
@@ -136,7 +130,7 @@ export class RetrySchedulerService {
     return this.pending.size
   }
 
-  /** Whether automatic retry tracking is enabled in General settings. */
+  /** Whether automatic retries are enabled in General settings. */
   get isEnabled(): boolean {
     return this.enabled
   }
@@ -157,11 +151,6 @@ export class RetrySchedulerService {
   }
 
   private async loadPending(): Promise<void> {
-    if (!this.enabled) {
-      // Feature is off — drop any leftovers from a previous enable.
-      void this.persist()
-      return
-    }
     let saved: unknown
     try {
       saved = await this.storage.read(PERSISTENCE_FILE)
@@ -201,8 +190,7 @@ export class RetrySchedulerService {
       typeof projectId !== 'string' ||
       typeof threadId !== 'string' ||
       typeof harnessId !== 'string' ||
-      typeof retryAt !== 'number' ||
-      !Number.isFinite(retryAt) ||
+      (retryAt !== undefined && (typeof retryAt !== 'number' || !Number.isFinite(retryAt))) ||
       typeof issueKind !== 'string' ||
       !ISSUE_KINDS.has(issueKind as AgentProviderIssueKind) ||
       typeof issueMessage !== 'string'
@@ -214,7 +202,7 @@ export class RetrySchedulerService {
       projectId,
       threadId,
       harnessId,
-      retryAt,
+      ...(retryAt === undefined ? {} : { retryAt }),
       issueKind: issueKind as AgentProviderIssueKind,
       issueMessage,
       ...(typeof attempt === 'number' && Number.isFinite(attempt) ? { attempt } : {}),
@@ -238,7 +226,8 @@ export class RetrySchedulerService {
   }
 
   private refreshTimer(): void {
-    const shouldRun = this.enabled && this.pending.size > 0
+    const shouldRun =
+      this.enabled && [...this.pending.values()].some((record) => record.retryAt !== undefined)
     if (shouldRun && this.timer === null) {
       this.timer = setInterval(() => this.tick(), RETRY_TICK_MS)
     } else if (!shouldRun && this.timer !== null) {
@@ -252,7 +241,7 @@ export class RetrySchedulerService {
     const now = Date.now()
     const due: PendingRetryRecord[] = []
     for (const record of this.pending.values()) {
-      if (record.retryAt <= now) due.push(record)
+      if (record.retryAt !== undefined && record.retryAt <= now) due.push(record)
     }
     if (due.length === 0) return
     for (const record of due) {
