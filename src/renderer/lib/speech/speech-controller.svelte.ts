@@ -11,10 +11,15 @@ import type {
   SpeechScope,
   SpeechPlaybackState,
   SpeechPreparedPlayback,
+  SpeechSegment,
   SpeechSynthesizedSegment
 } from '../../../lib/speech/types'
 import { DEFAULT_SPEECH_SETTINGS } from '../../../lib/speech/types'
-import type { SpeechEditorSnapshot, SpeechEditorTarget } from './editor-target'
+import type {
+  SpeechEditorApplyResult,
+  SpeechEditorSnapshot,
+  SpeechEditorTarget
+} from './editor-target'
 
 export type RendererSpeechState =
   | { state: 'idle' }
@@ -97,10 +102,15 @@ function recordingToastMessage(cause: unknown, phase: RecordingFailurePhase): st
 class SpeechController {
   state = $state<RendererSpeechState>({ state: 'idle' })
   playback = $state<SpeechPlaybackState>({ state: 'idle' })
+  get activeSegments(): SpeechSegment[] | null {
+    return this.activePlayback?.prepared.segments ?? null
+  }
   private active: ActiveCapture | null = null
   private elapsedTimer: ReturnType<typeof setInterval> | null = null
+  private preloadTimer: ReturnType<typeof setTimeout> | null = null
+  private preloadFired = false
   private readonly spans = new Map<string, SpeechDictationSpan[]>()
-  private activePlayback: ActivePlayback | null = null
+  private activePlayback = $state<ActivePlayback | null>(null)
   private stopPromise: Promise<void> | null = null
   private sound = structuredClone(DEFAULT_SPEECH_SETTINGS)
 
@@ -112,24 +122,26 @@ class SpeechController {
 
   private readonly handleGlobalKeydown = (event: KeyboardEvent): void => {
     if (event.key !== 'Escape' || event.defaultPrevented) return
-    if (this.state.state !== 'recording') return
+    // While a capture is in any active phase, Escape belongs to the recording
+    // flow. It stops an in-progress recording and never falls through to the
+    // thread-stop handler until the capture lifecycle is fully idle again.
+    if (this.state.state === 'idle' || this.state.state === 'failed') return
     event.preventDefault()
     event.stopPropagation()
-    void this.stop()
+    if (this.state.state === 'recording') void this.stop()
   }
 
   isActiveTarget(targetId: string): boolean {
     return 'targetId' in this.state && this.state.targetId === targetId
   }
 
+  get recordingScope(): SpeechScope | null {
+    return this.state.state === 'recording' ? (this.active?.scope ?? null) : null
+  }
+
   isRecordingThread(threadId: string): boolean {
-    const scope = this.active?.scope
-    return (
-      this.state.state === 'recording' &&
-      scope !== undefined &&
-      scope.kind !== 'global' &&
-      scope.threadId === threadId
-    )
+    const scope = this.recordingScope
+    return scope !== null && scope.kind !== 'global' && scope.threadId === threadId
   }
 
   async start(
@@ -173,6 +185,7 @@ class SpeechController {
         elapsedMs: 0
       }
       this.startElapsedTimer(capture)
+      this.scheduleAsrPreload(capture)
       this.playCue('started')
       return
     }
@@ -261,9 +274,11 @@ class SpeechController {
         elapsedMs: 0
       }
       this.startElapsedTimer(capture)
+      this.scheduleAsrPreload(capture)
       this.playCue('started')
     } catch (cause) {
       this.clearElapsedTimer()
+      this.clearPreloadTimer()
       if (active) {
         active.uploadError ??= cause instanceof Error ? cause : new Error(errorMessage(cause))
         if (active.recorder) await this.stopRecorder(active.recorder).catch(() => undefined)
@@ -298,6 +313,7 @@ class SpeechController {
 
   private async finishStop(active: ActiveCapture): Promise<void> {
     this.clearElapsedTimer()
+    this.clearPreloadTimer()
     this.state = { state: 'stopping', targetId: active.target.id, attemptId: active.attemptId }
     // Capture the target's current value and caret when the user stops, not
     // only when recording started. This lets users type and reposition the
@@ -337,8 +353,12 @@ class SpeechController {
       const transcript = await this.transcribeActive(active)
       await invoke('clipboard:writeText', transcript)
       const inserted = active.target.apply(insertionSnapshot, transcript)
+      let applied: SpeechEditorApplyResult = inserted
+      if (!applied.ok && applied.reason === 'destroyed' && active.target.fallbackApply) {
+        applied = active.target.fallbackApply(insertionSnapshot, transcript)
+      }
       this.playCue('completed')
-      if (!inserted.ok) {
+      if (!applied.ok) {
         const insertionNotice =
           'Transcript copied to the clipboard. It could not be inserted into the recording field.'
         try {
@@ -354,8 +374,8 @@ class SpeechController {
         attemptId: active.attemptId,
         editorId: active.target.id,
         insertedText: transcript,
-        startOffset: inserted.startOffset,
-        endOffset: inserted.endOffset,
+        startOffset: applied.startOffset,
+        endOffset: applied.endOffset,
         insertedAt: Date.now(),
         scope: structuredClone(active.scope)
       }
@@ -539,6 +559,31 @@ class SpeechController {
   private clearElapsedTimer(): void {
     if (this.elapsedTimer) clearInterval(this.elapsedTimer)
     this.elapsedTimer = null
+  }
+
+  private clearPreloadTimer(): void {
+    if (this.preloadTimer) clearTimeout(this.preloadTimer)
+    this.preloadTimer = null
+  }
+
+  private scheduleAsrPreload(active: ActiveCapture): void {
+    this.clearPreloadTimer()
+    this.preloadFired = false
+    this.preloadTimer = setTimeout(() => {
+      if (this.active !== active || this.state.state !== 'recording') return
+      if (this.preloadFired) return
+      this.preloadFired = true
+      void this.preloadAsr()
+    }, 2000)
+  }
+
+  private async preloadAsr(): Promise<void> {
+    try {
+      const selection = await this.selectAsrArtifact()
+      await invoke('speech:preloadAsr', selection.runtime, selection.artifact.id)
+    } catch {
+      // Best-effort warmup; errors surface at transcription time.
+    }
   }
 
   private async selectAsrArtifact(): Promise<{

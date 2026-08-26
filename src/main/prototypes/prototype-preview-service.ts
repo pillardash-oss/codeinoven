@@ -69,6 +69,7 @@ function inside(root: string, target: string): boolean {
 
 export class PrototypePreviewService {
   private server: Server | null = null
+  private starting: Promise<number> | null = null
   private readonly roots = new Map<string, string>()
 
   async register(previewSlug: string, canonicalRoot: string): Promise<void> {
@@ -118,20 +119,39 @@ export class PrototypePreviewService {
       const address = this.server.address()
       if (address && typeof address !== 'string') return address.port
     }
-    this.server = createServer((request, response) => {
-      void this.respond(request.url ?? '/', response)
-    })
-    await new Promise<void>((resolvePromise, reject) => {
-      this.server?.once('error', reject)
-      this.server?.listen(0, '127.0.0.1', resolvePromise)
-    })
-    const address = this.server.address()
-    if (!address || typeof address === 'string')
-      throw new Error('Prototype preview port unavailable')
-    return address.port
+    if (this.starting) return this.starting
+
+    const starting = (async (): Promise<number> => {
+      const server = createServer((request, response) => {
+        void this.respond(request.url ?? '/', response)
+      })
+      this.server = server
+      try {
+        await new Promise<void>((resolvePromise, reject) => {
+          server.once('error', reject)
+          server.listen(0, '127.0.0.1', resolvePromise)
+        })
+        const address = server.address()
+        if (!address || typeof address === 'string') {
+          throw new Error('Prototype preview port unavailable')
+        }
+        return address.port
+      } catch (error) {
+        if (this.server === server) this.server = null
+        server.close()
+        throw error
+      }
+    })()
+    this.starting = starting
+    try {
+      return await starting
+    } finally {
+      if (this.starting === starting) this.starting = null
+    }
   }
 
   async dispose(): Promise<void> {
+    await this.starting?.catch(() => undefined)
     const server = this.server
     this.server = null
     if (!server) return

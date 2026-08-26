@@ -301,6 +301,13 @@ export interface HarnessDriver {
    */
   terminate?(projectPath: string, sessionId: string): Promise<void> | void
 
+  /**
+   * Restart transport state after the user re-authenticates a provider. This
+   * is optional because most harnesses do not keep authenticated resident
+   * processes that need to be rebuilt.
+   */
+  restartAfterAuthentication?(projectPath: string): Promise<void> | void
+
   /** List available providers and their models. */
   listProviders(projectPath: string): Promise<ProviderCatalog[]>
 

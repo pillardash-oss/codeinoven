@@ -202,6 +202,10 @@ jobs:
       - name: Tests
         run: bun run test
 
+      - name: Build Pi harness
+        shell: bash
+        run: bun run harness:build-pi
+
       - name: Production build and bundle budgets
         shell: bash
         run: |
@@ -247,6 +251,9 @@ jobs:
 
       - name: Patch binary-data bare specifiers
         run: bun scripts/patch-binary-data.ts
+
+      - name: Build Pi harness
+        run: bun run harness:build-pi
 
       - name: Production build and bundle budgets
         run: |

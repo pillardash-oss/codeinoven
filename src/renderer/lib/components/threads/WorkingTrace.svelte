@@ -13,7 +13,7 @@
     XCircle,
     Zap
   } from '@lucide/svelte'
-  import { onDestroy } from 'svelte'
+  import { onDestroy, tick } from 'svelte'
   import { DropdownMenu } from 'bits-ui'
   import ToolCard from './ToolCard.svelte'
   import SubagentCard from './SubagentCard.svelte'
@@ -37,8 +37,8 @@
      *  only condition under which the trace may fold itself. */
     done?: boolean
     /** True when this trace was rehydrated from persisted state because no live
-     *  session activity is confirming the run. Renders a "restored / reconnecting"
-     *  note instead of a live "Agent working…" spinner. */
+     *  session activity is confirming the run. Renders a saved-activity note
+     *  instead of a live "Agent working…" spinner. */
     rehydrated?: boolean
     initialOpen?: boolean
     initialUserOpened?: boolean
@@ -97,6 +97,9 @@
   let imageUrls = new FileBlobUrlManager()
   let elapsed = $state(0)
   const visibleParts = $derived(latestWorkingTraceParts(parts))
+  const TRACE_SCROLL_THRESHOLD = 32
+  let traceScrollEl = $state<HTMLDivElement>()
+  let traceAtBottom = $state(true)
 
   // When no explicit start is available, fall back to the earliest working
   // part timestamp so the timer keeps counting even at message boundaries.
@@ -174,9 +177,9 @@
       }
       isOpen = false
       notify()
-    } else if (done && !busy && isOpen && !userOpened) {
-      // Turn finished — fold after a short grace so the completed work stays
-      // visible before the final answer is revealed.
+    } else if (done && !busy && !latest && isOpen && !userOpened) {
+      // Older completed turns fold after a short grace. The latest turn stays
+      // open so a refreshed thread never hides its only context by default.
       if (closeTimer) {
         clearTimeout(closeTimer)
         closeTimer = null
@@ -190,6 +193,27 @@
     // A turn still in progress (done === false) never folds itself: a transient
     // busy=false from a harness activity blip must never hide the live trace.
     wasLatest = latest
+  })
+
+  function onTraceScroll(): void {
+    const element = traceScrollEl
+    if (!element) return
+    traceAtBottom =
+      element.scrollHeight - element.scrollTop - element.clientHeight <= TRACE_SCROLL_THRESHOLD
+  }
+
+  // New live parts follow the trace only while the user remains at its bottom.
+  // A user scroll-up is preserved, and overscroll containment keeps the outer
+  // conversation/composer from taking over the gesture.
+  $effect(() => {
+    void visibleParts.length
+    void isOpen
+    void busy
+    if (!isOpen || !traceScrollEl || !traceAtBottom) return
+    void tick().then(() => {
+      if (!traceScrollEl || !traceAtBottom) return
+      traceScrollEl.scrollTop = traceScrollEl.scrollHeight
+    })
   })
 
   $effect(() => {
@@ -319,100 +343,104 @@
             </button>
           {:else}
             <DropdownMenu.Root>
-            <DropdownMenu.Trigger
-              class="flex items-center gap-1 rounded-md bg-info/10 px-1.5 py-0.5 text-[9px] text-info transition-colors hover:bg-info/20 focus:outline-none focus-visible:ring-2 focus-visible:ring-info/40"
-              aria-label={`${subagentCount} ${subagentCount === 1 ? 'sub-agent' : 'sub-agents'} spawned — open list`}
-              title={`${subagentCount} ${subagentCount === 1 ? 'sub-agent' : 'sub-agents'} spawned — open list`}
-              onclick={(e: MouseEvent) => {
-                e.preventDefault()
-                e.stopPropagation()
-              }}
-            >
-              <Bot size={10} />
-              {#if activeSubagentCount > 0}
-                {activeSubagentCount} active · {subagentCount} total
-              {:else}
-                {subagentCount} {subagentCount === 1 ? 'sub-agent' : 'sub-agents'}
-              {/if}
-            </DropdownMenu.Trigger>
-            <DropdownMenu.Portal>
-              <DropdownMenu.Content
-                side="bottom"
-                align="end"
-                sideOffset={6}
-                collisionPadding={8}
-                class="z-50 w-80 overflow-hidden rounded-xl border bg-surface p-1 shadow-lg"
+              <DropdownMenu.Trigger
+                class="flex items-center gap-1 rounded-md bg-info/10 px-1.5 py-0.5 text-[9px] text-info transition-colors hover:bg-info/20 focus:outline-none focus-visible:ring-2 focus-visible:ring-info/40"
+                aria-label={`${subagentCount} ${subagentCount === 1 ? 'sub-agent' : 'sub-agents'} spawned — open list`}
+                title={`${subagentCount} ${subagentCount === 1 ? 'sub-agent' : 'sub-agents'} spawned — open list`}
+                onclick={(e: MouseEvent) => {
+                  e.preventDefault()
+                  e.stopPropagation()
+                }}
               >
-                <div class="flex items-center gap-1.5 px-2.5 py-1.5">
-                  <Bot size={12} class="shrink-0 text-info" />
-                  <span class="text-[11px] font-semibold text-foreground">
-                    {subagentCount}
-                    {subagentCount === 1 ? 'sub-agent' : 'sub-agents'}
-                  </span>
-                  {#if activeSubagentCount > 0}
-                    <span class="text-[10px] text-dimmed">
-                      · {activeSubagentCount} running
+                <Bot size={10} />
+                {#if activeSubagentCount > 0}
+                  {activeSubagentCount} active · {subagentCount} total
+                {:else}
+                  {subagentCount} {subagentCount === 1 ? 'sub-agent' : 'sub-agents'}
+                {/if}
+              </DropdownMenu.Trigger>
+              <DropdownMenu.Portal>
+                <DropdownMenu.Content
+                  side="bottom"
+                  align="end"
+                  sideOffset={6}
+                  collisionPadding={8}
+                  class="z-50 w-80 overflow-hidden rounded-xl border bg-surface p-1 shadow-lg"
+                >
+                  <div class="flex items-center gap-1.5 px-2.5 py-1.5">
+                    <Bot size={12} class="shrink-0 text-info" />
+                    <span class="text-[11px] font-semibold text-foreground">
+                      {subagentCount}
+                      {subagentCount === 1 ? 'sub-agent' : 'sub-agents'}
                     </span>
-                  {/if}
-                </div>
-                <DropdownMenu.Separator class="mx-1 my-1 h-px bg-border" />
-                <div class="max-h-60 overflow-y-auto p-0.5">
-                  {#each subagentParts as part (part.id)}
-                    {@const status = part.activity.status}
-                    <DropdownMenu.Item
-                      class="flex w-full cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 text-left outline-none transition-colors hover:bg-elevated focus:bg-elevated"
-                      onSelect={() => onOpenSubagent?.(part)}
-                    >
-                      {#if status === 'running'}
-                        <Loader2 size={13} class="shrink-0 animate-spin text-info" />
-                      {:else if status === 'completed'}
-                        <CheckCircle2 size={13} class="shrink-0 text-success" />
-                      {:else if status === 'error'}
-                        <XCircle size={13} class="shrink-0 text-danger" />
-                      {:else}
-                        <Clock size={13} class="shrink-0 text-dimmed" />
-                      {/if}
-                      <span class="shrink-0 text-[11px] font-semibold text-foreground">
-                        {part.activity.agent || 'Sub-agent'}
+                    {#if activeSubagentCount > 0}
+                      <span class="text-[10px] text-dimmed">
+                        · {activeSubagentCount} running
                       </span>
-                      <span class="min-w-0 flex-1 truncate text-[11px] text-muted">
-                        {part.activity.description}
-                      </span>
-                      {#if part.activity.background}
-                        <span
-                          class="flex shrink-0 items-center gap-1 rounded-md bg-raised px-1.5 py-0.5 text-[9px] text-dimmed"
-                        >
-                          <Layers3 size={9} />
-                          Background
-                        </span>
-                      {/if}
-                      {#if part.activity.time?.start}
-                        <span class="shrink-0 tabular-nums text-[10px] text-dimmed">
-                          {formatDuration(subagentElapsed(part))}
-                        </span>
-                      {/if}
-                      <span
-                        class="shrink-0 text-[10px] {status === 'error'
-                          ? 'text-danger'
-                          : status === 'running'
-                            ? 'text-info'
-                            : 'text-dimmed'}"
+                    {/if}
+                  </div>
+                  <DropdownMenu.Separator class="mx-1 my-1 h-px bg-border" />
+                  <div class="max-h-60 overflow-y-auto p-0.5">
+                    {#each subagentParts as part (part.id)}
+                      {@const status = part.activity.status}
+                      <DropdownMenu.Item
+                        class="flex w-full cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 text-left outline-none transition-colors hover:bg-elevated focus:bg-elevated"
+                        onSelect={() => onOpenSubagent?.(part)}
                       >
-                        {subagentStatusLabel(status)}
-                      </span>
-                    </DropdownMenu.Item>
-                  {/each}
-                </div>
-              </DropdownMenu.Content>
-            </DropdownMenu.Portal>
-          </DropdownMenu.Root>
+                        {#if status === 'running'}
+                          <Loader2 size={13} class="shrink-0 animate-spin text-info" />
+                        {:else if status === 'completed'}
+                          <CheckCircle2 size={13} class="shrink-0 text-success" />
+                        {:else if status === 'error'}
+                          <XCircle size={13} class="shrink-0 text-danger" />
+                        {:else}
+                          <Clock size={13} class="shrink-0 text-dimmed" />
+                        {/if}
+                        <span class="shrink-0 text-[11px] font-semibold text-foreground">
+                          {part.activity.agent || 'Sub-agent'}
+                        </span>
+                        <span class="min-w-0 flex-1 truncate text-[11px] text-muted">
+                          {part.activity.description}
+                        </span>
+                        {#if part.activity.background}
+                          <span
+                            class="flex shrink-0 items-center gap-1 rounded-md bg-raised px-1.5 py-0.5 text-[9px] text-dimmed"
+                          >
+                            <Layers3 size={9} />
+                            Background
+                          </span>
+                        {/if}
+                        {#if part.activity.time?.start}
+                          <span class="shrink-0 tabular-nums text-[10px] text-dimmed">
+                            {formatDuration(subagentElapsed(part))}
+                          </span>
+                        {/if}
+                        <span
+                          class="shrink-0 text-[10px] {status === 'error'
+                            ? 'text-danger'
+                            : status === 'running'
+                              ? 'text-info'
+                              : 'text-dimmed'}"
+                        >
+                          {subagentStatusLabel(status)}
+                        </span>
+                      </DropdownMenu.Item>
+                    {/each}
+                  </div>
+                </DropdownMenu.Content>
+              </DropdownMenu.Portal>
+            </DropdownMenu.Root>
           {/if}
         {/if}
       </span>
     {/if}
   </summary>
   {#if isOpen}
-    <div class="flex flex-col px-3 pb-3 [&>*:first-child]:mt-2 [&>*+*]:mt-2">
+    <div
+      bind:this={traceScrollEl}
+      class="max-h-[min(55vh,36rem)] overflow-y-auto overscroll-contain px-3 pb-3 [&>*:first-child]:mt-2 [&>*+*]:mt-2"
+      onscroll={onTraceScroll}
+    >
       {#each visibleParts as part (part.id)}
         {#if part.type === 'reasoning'}
           <ThinkingBlock {part} active={busy && part.id === lastReasoningId} {onCiteFile} />
@@ -501,7 +529,7 @@
             <span class="flex min-w-0 shrink items-center gap-2">
               <RefreshCw size={11} class="shrink-0 text-info" />
               <span class="shrink-0 text-[10px] text-info/80">
-                Reconnecting — showing last saved activity
+                Showing last saved activity · live run not confirmed
               </span>
               {#if effectiveStartTime}
                 <span class="shrink-0 tabular-nums text-[10px] text-info/80">

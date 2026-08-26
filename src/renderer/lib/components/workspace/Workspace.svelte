@@ -99,6 +99,7 @@
     threadWithInheritedSettings
   } from '$lib/thread-settings-inheritance'
   import { providerCatalog } from '$lib/stores/provider-catalog.svelte'
+  import { providerStore } from '$lib/stores/providers.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
   import { gitState } from '$lib/stores/git.svelte'
   import {
@@ -186,16 +187,22 @@
   function findThreadRow(threadId: string): HTMLElement | null {
     if (typeof document === 'undefined') return null
     const root = sidebarScroller ?? document
-    // All three sidebar modes stay mounted (the inactive ones are `display:none`),
-    // so the same thread id can match several rows. Only the rendered one can be
-    // scrolled to — a hidden row has no layout box and scrollIntoView is a no-op
-    // on it, which is why Projects mode never followed the selection while the
-    // flat Threads list (earlier in the DOM) always matched first.
+    // Only the active sidebar mode is mounted, so this resolves to the active
+    // row without traversing duplicate hidden lists.
     const rows = root.querySelectorAll<HTMLElement>(`[data-thread-row="${threadId}"]`)
     for (const row of rows) {
       if (row.offsetParent !== null || row.getClientRects().length > 0) return row
     }
     return null
+  }
+
+  function handleConversationRenderError(error: unknown): void {
+    const thread = workspaceState.selectedThread
+    if (!thread) return
+    reportError(error, 'The conversation could not be rendered.', {
+      projectId: thread.projectId,
+      threadId: thread.id
+    })
   }
 
   function isThreadRowVisible(threadId: string): boolean {
@@ -1221,6 +1228,16 @@
     )
   })
 
+  // App.svelte keeps this Workspace mounted (but CSS-hidden) when the user
+  // navigates to Settings/Scope, so its state survives the trip. The browser's
+  // native view has no notion of that DOM hide and keeps floating at its last
+  // screen bounds on top of whatever renders there instead — suppress it
+  // whenever this Workspace isn't the active top-level view.
+  $effect(() => {
+    contextSidebarState.setFullscreenSurfaceActive('workspace-inactive', !active)
+    return () => contextSidebarState.setFullscreenSurfaceActive('workspace-inactive', false)
+  })
+
   // The grid column/row that hosts each panel collapses the instant
   // `sidebarVisible`/`terminalDockVisible` flips, but the panel itself keeps
   // playing its out:fly for PANEL_EXIT_MS. Without this, the closing panel is
@@ -1555,16 +1572,12 @@
     if (selected && !isOrchestrationChildThread(selected)) upsertThreadInList(selected)
   })
 
-  // Warm the message cache the moment a thread is selected (including the
-  // view-switch restores between Chats and Projects) so the keyed ThreadView
-  // mounts straight onto its history instead of flashing "Loading
-  // conversation…" while `loadLocal` fetches the page. Non-destructive —
-  // ThreadView merges the same bounded window and never reloads a warm cache.
+  // Full user-message history is only needed after the history menu opens.
+  // Keeping it out of the thread mount path prevents a hidden database scan on
+  // every switch while preserving the complete jump list when requested.
   $effect(() => {
-    const selected = workspaceState.selectedThread
-    if (!selected) return
-    if (threadMessages.loaded(selected.projectId, selected.id)) return
-    void threadMessages.preload(selected.projectId, selected.id)
+    if (!showHistoryMenu) return
+    void workspaceState.loadUserMessageHistory?.()
   })
 
   // Live thread updates pushed from the main process (status/read changes
@@ -1583,6 +1596,30 @@
           void invoke('thread:markRead', updated.projectId, updated.id)
         }
       }
+    })
+  })
+
+  // Git branch settlement is deliberately a separate, lighter broadcast (see
+  // `broadcastThreadBranchUpdated`) so it never routes through the full
+  // `thread:updated` fan-out — that would force ThreadView's message
+  // reconcile (and every other subscriber) to run at whatever moment the
+  // branch resolves, including mid-typing on an already-open conversation.
+  // Patch the field in place: mutating the proxied thread objects is enough
+  // for the composer's branch pill to update reactively without rebuilding
+  // any list or reloading messages.
+  $effect(() => {
+    return subscribe('thread:branchUpdated', (...args: unknown[]) => {
+      const [projectId, threadId, branch] = args as [string, string, string | undefined]
+      if (
+        workspaceState.selectedThread?.projectId === projectId &&
+        workspaceState.selectedThread.id === threadId
+      ) {
+        workspaceState.selectedThread.branch = branch
+      }
+      const listed = allThreads.find(
+        (candidate) => candidate.projectId === projectId && candidate.id === threadId
+      )
+      if (listed) listed.branch = branch
     })
   })
 
@@ -1822,12 +1859,15 @@
       hasMoreHistory = threadList.length === INITIAL_THREAD_LIMIT
       notificationPanelState.hydrateFromThreads(uniqueThreads, projectList)
       projectIcons.clear()
-      for (const [projectId, iconUrl] of await loadProjectIcons(projectList)) {
-        projectIcons.set(projectId, iconUrl)
-      }
+      // Publish the workspace with deterministic fallback icons immediately.
+      // Custom icon IPC is cosmetic and must never delay the first usable frame.
       scopeState.setScopesFromProjects(projectList, projectIcons)
       scopeState.setThreads(uniqueThreads)
       initExpandedFolders(projectList.filter((p) => !p.hidden))
+      void loadProjectIcons(projectList).then((icons) => {
+        for (const [projectId, iconUrl] of icons) projectIcons.set(projectId, iconUrl)
+        scopeState.setScopesFromProjects(projectList, projectIcons)
+      })
       const saved = rendererRecovery.selectedThread
       const restoredThread = saved
         ? uniqueThreads.find(
@@ -1870,14 +1910,46 @@
           workspaceState.activeProjectIconUrl = projectIcons.get(project.id) ?? null
         }
       }
-      // App-start git check: async — the store ensures the GitHub connection
-      // before the PR indicator check runs, with or without a restored thread.
-      gitState.notifyAppStarted(workspaceState.activeProject)
+      // App-start Git discovery launches several local subprocesses. Keep it
+      // out of the first usable frame and let thread selection or opening the
+      // Git panel trigger it immediately when the user actually needs Git.
+      window.setTimeout(() => {
+        gitState.notifyAppStarted(workspaceState.activeProject)
+      }, 2000)
+
+      // The workspace is the single owner of initial hydration. Keep provider
+      // catalog work after the first data pass and after a frame so startup
+      // thread rendering is not competing with model discovery.
+      void invoke('app:waitForFeatures').then(() => {
+        window.requestAnimationFrame(() => {
+          const targets = scopeState.activeProjectId
+            ? [scopeState.activeProjectId, INBOX_PROJECT_ID]
+            : [INBOX_PROJECT_ID]
+          void providerCatalog.init(targets, { refresh: false })
+          void providerStore.init()
+        })
+      })
+
+      // Preserve the initial empty-state behavior previously triggered by App.
+      // A restored thread remains selected and does not create a new one.
+      if (active && !workspaceState.selectedThread) {
+        if (mode === 'chats') {
+          workspaceState.requestNewChat()
+        } else if (
+          workspaceState.activeProject &&
+          workspaceState.activeProject.id !== INBOX_PROJECT_ID
+        ) {
+          workspaceState.requestCreateThread(scopeState.sidebarContext?.bucketId)
+        } else {
+          workspaceState.requestAddProject()
+        }
+      }
     } catch {
       projects = []
       allThreads = []
     } finally {
       loading = false
+      void invoke('app:rendererReady').catch(() => undefined)
     }
   }
 
@@ -2402,7 +2474,9 @@
       ...(scopeBucketId ? { scopeBucketId } : {})
     }
     // Apply inherited settings immediately so the composer has correct model
-    const thread = optimisticThread as unknown as typeof optimisticThread & { settings: typeof inheritedSettings }
+    const thread = optimisticThread as unknown as typeof optimisticThread & {
+      settings: typeof inheritedSettings
+    }
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     upsertThreadInList(thread as any)
     threadMessages.seedEmpty(thread.projectId, thread.id)
@@ -2490,16 +2564,34 @@
     }
   }
 
-  async function openThread(thread: Thread): Promise<void> {
+  const pendingReadThreads = new SvelteSet<string>()
+
+  function markThreadReadAfterPaint(thread: Thread): void {
+    if (thread.read) return
+    const key = `${thread.projectId}:${thread.id}`
+    if (pendingReadThreads.has(key)) return
+    pendingReadThreads.add(key)
+    window.requestAnimationFrame(() => {
+      window.setTimeout(() => {
+        pendingReadThreads.delete(key)
+        void invoke('thread:markRead', thread.projectId, thread.id)
+          .then((updated) => {
+            upsertThreadInList(updated)
+            scopeState.updateThread(updated)
+            if (workspaceState.selectedThread?.id === updated.id) {
+              workspaceState.updateThread(updated)
+            }
+          })
+          .catch(() => undefined)
+      }, 0)
+    })
+  }
+
+  function openThread(thread: Thread): void {
     workspaceState.openThread(thread, projects.find((p) => p.id === thread.projectId) ?? null)
     void scopeState.ensureBoardLoaded(thread.projectId)
-    // Reveal immediately (guaranteed even if the markRead round-trip is slow),
-    // and again once the list re-sorts from the updated activity.
-    revealThreadInSidebar(thread.id)
-    const updated = await invoke('thread:markRead', thread.projectId, thread.id)
-    upsertThreadInList(updated)
-    workspaceState.updateThread(updated)
-    scopeState.updateThread(updated)
+    markThreadReadAfterPaint(thread)
+    // Reveal immediately and again once any read-state update re-sorts the list.
     revealThreadInSidebar(thread.id)
   }
 
@@ -3060,9 +3152,9 @@
       {:else if loading}
         <p class="px-2 py-4 text-sm text-dimmed">Loading...</p>
       {:else}
-        <!-- All three lists stay mounted so switching modes never tears down
-             the projects sidebar or loses its scroll position. -->
-        <div class={mode === 'chats' ? '' : 'hidden'}>
+        <!-- Only the active list stays mounted. Keeping inactive lists in the DOM
+             duplicated every row component, observer, and derived calculation. -->
+        {#if mode === 'chats'}
           {#if pinnedInboxThreads.length > 0}
             <div class="mb-3">
               <p
@@ -3111,8 +3203,8 @@
               <p class="text-xs text-dimmed">Start a new chat to get going</p>
             </div>
           {/if}
-        </div>
-        <div class={mode === 'threads' ? '' : 'hidden'}>
+        {/if}
+        {#if mode === 'threads'}
           {#if threadsSearchOpen && threadsSearchQuery.trim()}
             <!-- Threads search: results render inline in the sidebar so the user
                  can open several results without the search dismissing. -->
@@ -3187,8 +3279,8 @@
               </button>
             {/if}
           {/if}
-        </div>
-        <div class={mode === 'projects' ? '' : 'hidden'}>
+        {/if}
+        {#if mode === 'projects'}
           <!-- Pinned threads above everything -->
           <PinnedSection
             threads={pinnedThreads}
@@ -3603,7 +3695,7 @@
               {/each}
             </div>
           {/if}
-        </div>
+        {/if}
       {/if}
     </CollapsibleSidebar>
   {/if}
@@ -3624,15 +3716,39 @@
         {#if selectedThread}
           <div class="relative flex h-full min-h-0 min-w-0 flex-col overflow-hidden">
             {#key selectedThread.id}
-              <ThreadView
-                thread={selectedThread}
-                chatMode={mode === 'chats'}
-                onForked={handleForkedThread}
-                projects={visibleProjects}
-                {projectIcons}
-                onContinueInProject={handleContinuedInProject}
-                onProjectCreated={handleChatProjectCreated}
-              />
+              <svelte:boundary onerror={handleConversationRenderError}>
+                <ThreadView
+                  thread={selectedThread}
+                  chatMode={mode === 'chats'}
+                  onForked={handleForkedThread}
+                  projects={visibleProjects}
+                  {projectIcons}
+                  onContinueInProject={handleContinuedInProject}
+                  onProjectCreated={handleChatProjectCreated}
+                />
+                {#snippet failed(_error: unknown, reset: () => void)}
+                  <div class="flex h-full min-h-0 items-center justify-center px-6">
+                    <div
+                      class="w-full max-w-md rounded-xl border border-danger/30 bg-surface px-5 py-4"
+                      role="alert"
+                    >
+                      <p class="text-sm font-semibold text-foreground">
+                        Conversation view failed to render
+                      </p>
+                      <p class="mt-1 text-sm text-muted">
+                        The thread is still saved. Reload this view to continue.
+                      </p>
+                      <button
+                        type="button"
+                        class="mt-4 rounded-lg bg-primary px-3 py-2 text-xs font-semibold text-on-primary transition-opacity hover:opacity-90"
+                        onclick={reset}
+                      >
+                        Reload conversation
+                      </button>
+                    </div>
+                  </div>
+                {/snippet}
+              </svelte:boundary>
             {/key}
           </div>
         {:else if mode === 'chats'}

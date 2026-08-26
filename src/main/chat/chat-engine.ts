@@ -2705,6 +2705,13 @@ export class ChatEngine {
     nativeCapabilities.push(...(driver.capabilities?.nativeUtilities ?? []))
     const applyRuntime = driver.applyPreparedUtilityRuntime?.bind(driver)
     if (!applyRuntime) return ''
+    // Shared or extension-backed harnesses cannot safely receive a fresh
+    // per-turn MCP launch overlay. Keep all app-managed utilities, including
+    // Cua, behind the turn-scoped gateway even when a specialized caller does
+    // not pass the direct-gateway flag explicitly.
+    const gatewayOnlyHarness =
+      driver instanceof OpenCodeDriver || ['codex', 'cline', 'pi'].includes(driver.id)
+    const useDirectGateway = directGateway || gatewayOnlyHarness
     let gateway: UtilityTurnGateway | undefined
     let runtime: PreparedUtilityRuntime | undefined
     try {
@@ -2729,7 +2736,7 @@ export class ChatEngine {
             ]
           : []
       )
-      if (directGateway) {
+      if (useDirectGateway) {
         this.utilityTurns.set(sessionId, { driver, projectPath, gateway, threadId })
         return [
           gateway.directInstructions,
@@ -4543,7 +4550,12 @@ export class ChatEngine {
     projectId = validateEntityId(projectId, 'Project ID')
     threadId = validateEntityId(threadId, 'Thread ID')
     const thread = await this.threadManager.getThread(projectId, threadId)
-    if (!thread?.sessionId) return null
+    if (!thread) return null
+    if (!thread.sessionId) {
+      return thread.status === 'working-paused'
+        ? this.restoredRetryWaitStatus(thread, threadId)
+        : null
+    }
     const pendingSpec = await this.readPendingInitialSpec(projectId, threadId)
     if (pendingSpec?.state === 'pending' || pendingSpec?.state === 'generating') {
       const activeSpec = await this.getActiveSpec(projectId, threadId)
@@ -4560,22 +4572,54 @@ export class ChatEngine {
     // and its Retry specification action. Do not rehydrate a provider card.
     if (pendingSpec?.state === 'failed') return null
     const live = this.sessionStatuses.get(thread.sessionId)
-    if (live) return live
+    if (live?.state === 'waiting' || live?.state === 'error') return live
     // After an app restart the in-memory status is gone, but a persisted
     // auto-resume record is authoritative: reconstruct the waiting card so the
     // thread still shows its reset countdown and proves it will auto-run.
     const pending = this.retryScheduler?.getPendingRetry(thread.sessionId)
-    if (!pending) return null
+    if (pending) {
+      return {
+        state: 'waiting',
+        issue: {
+          kind: pending.issueKind,
+          message: pending.issueMessage,
+          harnessId: pending.harnessId,
+          retryable: true,
+          ...(pending.retryAt === undefined ? {} : { retryAt: pending.retryAt }),
+          ...(pending.rawError === undefined ? {} : { rawError: pending.rawError }),
+          ...(pending.attempt === undefined ? {} : { attempt: pending.attempt })
+        }
+      }
+    }
+    if (thread.status !== 'working-paused') return live ?? null
+    return this.restoredRetryWaitStatus(thread, threadId)
+  }
+
+  /** Rebuild a visible paused card after the in-memory provider state is gone. */
+  private restoredRetryWaitStatus(thread: Thread, threadId: string): AgentSessionStatus {
+    // A paused status can outlive the in-memory issue when the app is killed
+    // between the provider event and scheduler persistence. Rebuild a safe
+    // waiting card from the persisted failure when available, otherwise keep
+    // the user-facing state explicit and manual.
+    const row = this.database.get<{ error: string | null }>(
+      `SELECT error FROM agent_messages
+       WHERE thread_id = ? AND error IS NOT NULL
+       ORDER BY created_at DESC LIMIT 1`,
+      threadId
+    )
+    const persistedError = row?.error?.trim() ?? ''
+    const inferredKind = classifyProviderIssue(persistedError)
+    const usageWait = isUsageResetWaitIssue({ kind: inferredKind, retryable: true })
     return {
       state: 'waiting',
       issue: {
-        kind: pending.issueKind,
-        message: pending.issueMessage,
-        harnessId: pending.harnessId,
-        retryable: true,
-        retryAt: pending.retryAt,
-        ...(pending.rawError === undefined ? {} : { rawError: pending.rawError }),
-        ...(pending.attempt === undefined ? {} : { attempt: pending.attempt })
+        kind: usageWait ? inferredKind : 'unknown',
+        message: usageWait
+          ? persistedError
+          : 'This turn is paused. No automatic retry is scheduled.',
+        ...(usageWait && persistedError ? { rawError: persistedError } : {}),
+        harnessId: thread.settings?.harnessId ?? thread.sessionHarnessId ?? 'unknown',
+        retryable: true
       }
     }
   }
@@ -4704,26 +4748,15 @@ export class ChatEngine {
       const expectedStatus: Extract<ThreadStatus, 'planning' | 'executing'> =
         this.planningSessions.has(sessionId) ? 'planning' : 'executing'
       const thread = await this.threadManager.getThread(info.projectId, info.threadId)
-      // Guard: never flip a visible Waiting to retry back to Working on a
-      // spurious provider working signal. A retry-paused thread stays paused
-      // until the retry actually fires (scheduler tick or native harness resume
-      // at/after retryAt). While a pending retry is still in the future, keep
-      // the paused status visible — this prevents the ec748... bounce.
+      // Guard: only block a spurious working signal that arrives before the
+      // known reset window. When retryAt is undefined or no scheduler record
+      // exists, treat provider working as authoritative — this covers native
+      // harness auto-retries and >6h/missing-window cases where the thread
+      // has legitimately picked itself up but would otherwise stay paused.
       if (thread?.status === 'working-paused') {
         const pending = this.retryScheduler?.getPendingRetry(sessionId)
-        if (pending) {
-          // Legitimate resume happens at or after retryAt; spurious working
-          // arrives well before the window. Keep paused when retryAt is still
-          // in the future (with a small grace for clock jitter).
-          const GRACE_MS = 30_000
-          if (pending.retryAt > Date.now() + GRACE_MS) return
-        } else {
-          // No scheduler record (missing retryAt, >6h un-derived, or native
-          // harness without a tracked window). Stay paused — explicit resume
-          // (scheduled continue or manual Retry) will transition the thread,
-          // not this reconciliation.
-          return
-        }
+        const GRACE_MS = 30_000
+        if (pending?.retryAt !== undefined && pending.retryAt > Date.now() + GRACE_MS) return
       }
       const assignmentChanged = thread ? await this.reconcileWorkingAssignmentState(thread) : false
       if (thread && thread.status !== expectedStatus) {
@@ -5633,6 +5666,14 @@ export class ChatEngine {
     let sessionId: string
     try {
       sessionId = await this.ensureSession(projectId, threadId, driverId)
+      const previousStatus = this.sessionStatuses.get(sessionId)
+      if (
+        previousStatus?.state === 'error' &&
+        previousStatus.issue.kind === 'authentication' &&
+        previousStatus.issue.harnessId === driver.id
+      ) {
+        await driver.restartAfterAuthentication?.(projectPath)
+      }
       titleParentSessionId = sessionId
       if (specAction === 'implement') {
         this.engineeringImplementationSessions.add(sessionId)
@@ -7711,6 +7752,7 @@ export class ChatEngine {
             toolFeeUsd: null,
             success: attempt.success,
             retryCause: attempt.fallbackReason,
+            durationMs: attempt.usage?.durationMs ?? 0,
             createdAt: Date.now(),
             ...(hasKnownCost
               ? {
@@ -7751,6 +7793,7 @@ export class ChatEngine {
           toolFeeUsd: null,
           success: generated !== null && failure === null,
           retryCause: failure,
+          durationMs: 0,
           createdAt: Date.now(),
           costStatus: 'unavailable',
           costUsd: null,
@@ -16198,7 +16241,9 @@ export class ChatEngine {
     // 1) Repair threads that have a persisted scheduler pending (finite retryAt) — original path.
     if (scheduler) {
       try {
-        const pending = (scheduler as unknown as { pending: Map<string, { projectId: string; threadId: string }> })
+        const pending = scheduler as unknown as {
+          pending: Map<string, { projectId: string; threadId: string }>
+        }
         const map = pending.pending
         if (map && map.size > 0) {
           for (const record of map.values()) {
@@ -16207,7 +16252,12 @@ export class ChatEngine {
               if (!thread) continue
               if (thread.status === 'working-paused') continue
               if (!['planning', 'executing', 'working-paused'].includes(thread.status)) continue
-              const updated = await this.threadManager.setStatus(record.projectId, record.threadId, 'working-paused', { read: false })
+              const updated = await this.threadManager.setStatus(
+                record.projectId,
+                record.threadId,
+                'working-paused',
+                { read: false }
+              )
               broadcastThreadUpdate(updated)
             } catch (error) {
               Logger.dev('Pending retry repair skipped:', error)
@@ -16223,7 +16273,12 @@ export class ChatEngine {
     // stale rows from before the fix, or off-first-page threads like ba9a2c59...). Scan DB directly
     // so pagination cannot hide them, and infer a usage-reset wait from the last persisted error.
     try {
-      const activeRows = this.database.all<{ id: string; project_id: string; session_id: string | null; status: string }>(
+      const activeRows = this.database.all<{
+        id: string
+        project_id: string
+        session_id: string | null
+        status: string
+      }>(
         `SELECT id, project_id, session_id, status FROM threads WHERE archived = 0 AND status IN ('planning', 'executing')`
       )
       if (!activeRows || activeRows.length === 0) return
@@ -16251,11 +16306,14 @@ export class ChatEngine {
 
           // Fallback: also check in-memory session status if present (fresh failure before DB flush).
           if (!lastError && row.session_id) {
-            const liveIssue = this.sessionStatuses.get(row.session_id)?.state === 'error'
-              ? (this.sessionStatuses.get(row.session_id) as { issue?: { message?: string } })?.issue?.message ?? null
-              : this.sessionStatuses.get(row.session_id)?.state === 'waiting'
-                ? (this.sessionStatuses.get(row.session_id) as { issue?: { message?: string } })?.issue?.message ?? null
-                : null
+            const liveIssue =
+              this.sessionStatuses.get(row.session_id)?.state === 'error'
+                ? ((this.sessionStatuses.get(row.session_id) as { issue?: { message?: string } })
+                    ?.issue?.message ?? null)
+                : this.sessionStatuses.get(row.session_id)?.state === 'waiting'
+                  ? ((this.sessionStatuses.get(row.session_id) as { issue?: { message?: string } })
+                      ?.issue?.message ?? null)
+                  : null
             if (liveIssue) lastError = liveIssue
           }
 
@@ -16266,13 +16324,21 @@ export class ChatEngine {
           // even when retryAt was never derived — this covers ba9a2c59... (>6h/missing retryAt).
           if (!isUsageResetWaitIssue({ kind, retryable })) continue
 
-          const updated = await this.threadManager.setStatus(row.project_id, row.id, 'working-paused', { read: false })
+          const updated = await this.threadManager.setStatus(
+            row.project_id,
+            row.id,
+            'working-paused',
+            { read: false }
+          )
           broadcastThreadUpdate(updated)
-          Logger.info('Repaired orphaned working thread to Waiting to retry (no scheduler record)', {
-            projectId: row.project_id,
-            threadId: row.id,
-            kind
-          })
+          Logger.info(
+            'Repaired orphaned working thread to Waiting to retry (no scheduler record)',
+            {
+              projectId: row.project_id,
+              threadId: row.id,
+              kind
+            }
+          )
         } catch (error) {
           Logger.dev('Orphaned working repair skipped:', error)
         }
@@ -16288,7 +16354,8 @@ export class ChatEngine {
    * including harnesses that schedule their own provider retries (OpenCode): a
    * native resume emits `working` and clears the record, while the persisted
    * record keeps the wait alive (and re-runs the thread) across app restarts.
-   * Internal/child sessions and issues without a usable reset time are skipped.
+   * Internal/child sessions are skipped. Issues without a usable reset time are
+   * retained for manual recovery rather than discarded.
    */
   private async scheduleAutomaticRetry(
     sessionId: string,
@@ -16296,7 +16363,6 @@ export class ChatEngine {
   ): Promise<boolean> {
     const scheduler = this.retryScheduler
     if (!scheduler) return false
-    if (!scheduler.isEnabled) return false
     // A provider with an explicit retry deadline has declared that the issue
     // is safe to retry later. Known reset-based issues may also derive their
     // deadline from account telemetry; everything else stays manual unless it
@@ -16328,18 +16394,8 @@ export class ChatEngine {
         Logger.dev('Auto-resume retry time derivation unavailable:', error)
       }
     }
-    if (typeof retryAt !== 'number' || !Number.isFinite(retryAt)) {
-      // No derivable retry time (e.g. ba9a... silent case): still surface as
-      // Waiting to retry so the user sees work has stopped, even though no
-      // automatic retry can be scheduled. The thread stays paused until manual Retry.
-      if (isUsageResetWaitIssue(issue) && issue.retryable) {
-        await this.threadManager.setStatus(info.projectId, info.threadId, 'working-paused', {
-          read: false
-        })
-        updateRetryWakeWindow(sessionId, null)
-      }
-      return false
-    }
+    const hasRetryAt = typeof retryAt === 'number' && Number.isFinite(retryAt)
+    if (!hasRetryAt && !isUsageResetWaitIssue(issue)) return false
     await this.threadManager.setStatus(info.projectId, info.threadId, 'working-paused', {
       read: false
     })
@@ -16348,13 +16404,13 @@ export class ChatEngine {
       projectId: info.projectId,
       threadId: info.threadId,
       harnessId: issue.harnessId ?? info.driverId,
-      retryAt,
+      ...(hasRetryAt ? { retryAt } : {}),
       issueKind: issue.kind,
       issueMessage: issue.message,
       ...(issue.rawError === undefined ? {} : { rawError: issue.rawError }),
       ...(issue.attempt === undefined ? {} : { attempt: issue.attempt })
     })
-    if (!tracked) {
+    if (!tracked && scheduler.isEnabled) {
       await this.threadManager.setStatus(info.projectId, info.threadId, 'failed', { read: false })
       return false
     }
@@ -16372,8 +16428,7 @@ export class ChatEngine {
     // fall to failed and hide the will-retry state (ba9a... silent case).
     // scheduleAutomaticRetry already persisted working-paused in this branch,
     // so we just need to signal the caller that the thread is paused.
-    const shouldStayPaused =
-      !retryScheduled && isUsageResetWaitIssue(issue) && issue.retryable
+    const shouldStayPaused = !retryScheduled && isUsageResetWaitIssue(issue) && issue.retryable
     if (shouldStayPaused) {
       const info = this.sessionRegistry.get(sessionId)
       if (info && !info.ephemeral) {
@@ -16422,7 +16477,15 @@ export class ChatEngine {
     const thread = await this.threadManager.getThread(projectId, threadId)
     if (!thread || thread.archived || !thread.sessionId || thread.sessionId !== sessionId) return
     const current = this.sessionStatuses.get(sessionId)
-    if (current?.state === 'working' || current?.state === 'waiting') return
+    if (current?.state === 'working') return
+    // A waiting session is the retry-wait we are resuming — clear the waiting
+    // card so the scheduled Continue can transition working-paused → working.
+    if (current?.state === 'waiting' || current?.state === 'error') {
+      this.sessionStatuses.delete(sessionId)
+      this.retryScheduler?.clear(sessionId)
+      updateRetryWakeWindow(sessionId, null)
+      this.clearSessionWatchdog(sessionId)
+    }
     if (thread.assignmentRole === 'coordinator' && thread.assignmentId) {
       const assignment = this.assignmentEngine.getActive(projectId, threadId)
       const hasFailedWorker = assignment?.content.tasks.some(
@@ -16891,8 +16954,11 @@ export class ChatEngine {
         }
       }
       await this.threadManager.upsertMessages(info.projectId, info.threadId, merged, sessionId)
-      const parentTurnId = messages[latestUserIndex]?.id
-      memoryParentTurnId = parentTurnId ?? null
+      // The raw transcript may contain hidden user messages that are intentionally
+      // filtered out of the persisted mirror. Usage events and turn outcomes
+      // reference the durable parent turn, so anchor them to the persisted set.
+      const parentTurnId = classifiedMessages.findLast((message) => message.role === 'user')?.id ?? null
+      memoryParentTurnId = parentTurnId
       if (parentTurnId && turnAssistant) {
         this.recordMessageUsageEvent(info.threadId, thread, parentTurnId, turnAssistant, failure)
         this.recordToolUsageEvents(info.threadId, parentTurnId, turnAssistant)
@@ -17347,6 +17413,10 @@ export class ChatEngine {
       toolFeeUsd: null,
       success: !failure && !message.error,
       retryCause: failure ?? message.error ?? null,
+      durationMs: Math.max(
+        0,
+        Math.floor((message.completedAt ?? message.createdAt) - message.createdAt)
+      ),
       createdAt: message.completedAt ?? message.createdAt
     }
     if (knownCost === null) {
@@ -17493,6 +17563,10 @@ export class ChatEngine {
       toolFeeUsd: null,
       success: input.failure === null && !input.response?.error,
       retryCause: input.failure ?? input.response?.error ?? null,
+      durationMs:
+        input.response?.completedAt !== undefined && input.response.createdAt !== undefined
+          ? Math.max(0, Math.floor(input.response.completedAt - input.response.createdAt))
+          : 0,
       createdAt: input.response?.completedAt ?? input.response?.createdAt ?? Date.now()
     }
     const estimated =
@@ -17603,6 +17677,10 @@ export class ChatEngine {
         toolFeeUsd: null,
         success: part.state.status === 'completed',
         retryCause: failure,
+        durationMs:
+          part.state.time?.start !== undefined && part.state.time.end !== undefined
+            ? Math.max(0, Math.floor(part.state.time.end - part.state.time.start))
+            : 0,
         createdAt: part.state.time?.end ?? part.state.time?.start ?? message.createdAt,
         costStatus: 'unavailable',
         costUsd: null,
@@ -17649,6 +17727,7 @@ export class ChatEngine {
       toolFeeUsd: null,
       success: attribution.success,
       retryCause: attribution.retryCause,
+      durationMs: 0,
       createdAt: Date.now(),
       costStatus: 'unavailable',
       costUsd: null,

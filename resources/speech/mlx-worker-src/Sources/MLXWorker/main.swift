@@ -44,6 +44,10 @@ private final class ModelCache: @unchecked Sendable {
         return loaded
     }
 
+    func warmup(modelPath: String) async throws {
+        _ = try await whisperModel(at: modelPath)
+    }
+
     func transcribe(modelPath: String, audioPath: String, language: String?) async throws -> String {
         let model = try await whisperModel(at: modelPath)
         let (_, samples) = try loadAudioArray(
@@ -101,6 +105,9 @@ private func cleanTranscript(_ transcript: String) -> String {
 
 private func handle(_ request: WorkerRequest) async throws -> WorkerResponse {
     switch request.operation {
+    case "warmup":
+        try await cache.warmup(modelPath: request.model)
+        return WorkerResponse(id: request.id, ok: true, text: nil, error: nil)
     case "transcribe":
         guard let audio = request.audio else { throw WorkerError.missing("audio") }
         let language = request.language == "auto" ? nil : request.language

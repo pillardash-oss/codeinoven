@@ -1387,7 +1387,8 @@ export class RemoteRpcDispatcher {
         const assignment = this.assignmentEngine.getActive(projectId, threadId)
         if (
           assignment?.status === 'completed' &&
-          assignment.auditCycle?.status === 'report_ready'
+          assignment.auditCycle &&
+          ['report_ready', 'available'].includes(assignment.auditCycle.status)
         ) {
           await this.assignmentEngine.completeAuditCycle(projectId, threadId)
           await this.threadManager.setStatus(projectId, threadId, 'completed')

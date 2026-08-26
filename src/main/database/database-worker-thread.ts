@@ -470,8 +470,28 @@ function health(): DatabaseWorkerResult {
 /**
  * Bounded read: `maxRows` (>0) bounds the response and reports `truncated`
  * when more rows matched. Caller-owned LIMIT clauses remain inside an outer
- * safety bound.
+ * safety bound. The response is additionally byte-bounded: a single oversized
+ * result (huge text/blob columns) must never be structured-cloned across the
+ * worker port — ValueSerializer buffer growth on such a payload aborts the
+ * whole process. Truncation happens at a row boundary and always keeps the
+ * first row so cursor-paged callers make forward progress.
  */
+const MAX_QUERY_RESPONSE_BYTES = 32 * 1024 * 1024
+
+/** Conservative upper-bound estimate of one result row's serialized size. */
+function estimateRowBytes(row: Record<string, unknown>): number {
+  let total = 24
+  for (const value of Object.values(row)) {
+    if (typeof value === 'string') total += value.length * 3 + 16
+    else if (typeof value === 'number' || typeof value === 'boolean') total += 16
+    else if (typeof value === 'bigint') total += 32
+    else if (value === null || value === undefined) total += 8
+    else if (value instanceof Uint8Array) total += value.byteLength + 16
+    else total += (JSON.stringify(value)?.length ?? 0) * 3 + 16
+  }
+  return total
+}
+
 function query(request: Extract<DatabaseWorkerRequest, { kind: 'query' }>): DatabaseWorkerResult {
   try {
     const boundedQuery = buildBoundedQuery(request.sql, request.maxRows)
@@ -483,8 +503,17 @@ function query(request: Extract<DatabaseWorkerRequest, { kind: 'query' }>): Data
       .prepare(boundedQuery.sql)
       .all(...params) as Record<string, unknown>[]
     const maxRows = Math.max(0, Math.floor(request.maxRows))
-    const truncated = maxRows > 0 && rows.length > maxRows
-    return { kind: 'query', ok: true, rows: truncated ? rows.slice(0, maxRows) : rows, truncated }
+    const rowCapped = maxRows > 0 && rows.length > maxRows
+    const cappedRows = rowCapped ? rows.slice(0, maxRows) : rows
+    let bytes = 0
+    let end = 0
+    while (end < cappedRows.length) {
+      bytes += estimateRowBytes(cappedRows[end])
+      if (bytes > MAX_QUERY_RESPONSE_BYTES && end > 0) break
+      end++
+    }
+    const truncated = rowCapped || end < cappedRows.length
+    return { kind: 'query', ok: true, rows: cappedRows.slice(0, end), truncated }
   } catch (error) {
     return { kind: 'query', ok: false, error: String(error) }
   }

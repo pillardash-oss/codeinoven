@@ -64,6 +64,12 @@ const port = parentPort
 const require = createRequire(import.meta.url)
 let loadedModule: SherpaModule | null = null
 
+let cachedRecognizer: {
+  directory: string
+  modelFamily: SherpaAsrFamily
+  recognizer: SherpaRecognizer
+} | null = null
+
 function sherpa(): SherpaModule {
   if (loadedModule) return loadedModule
   const candidate: unknown = require('sherpa-onnx-node')
@@ -115,56 +121,64 @@ async function transcribe(
         reject(new Error(failure.trim() || `Audio decoding exited with code ${code ?? 'unknown'}.`))
     })
   })
+  const recognizer = await recognizerFor(request.modelDirectory, request.modelFamily)
+  try {
+    const stream = recognizer.createStream()
+    stream.acceptWaveform(runtime.readWave(wavePath))
+    const result = await recognizer.decodeAsync(stream)
+    return result.text?.trim() ?? ''
+  } finally {
+    await rm(wavePath, { force: true })
+  }
+}
+
+async function warmup(request: Extract<SpeechWorkerRequest, { kind: 'warmup' }>): Promise<void> {
+  await recognizerFor(request.modelDirectory, request.modelFamily)
+}
+
+async function recognizerFor(
+  modelDirectory: string,
+  requestedFamily: 'whisper' | 'parakeet' | undefined
+): Promise<SherpaRecognizer> {
+  if (cachedRecognizer && cachedRecognizer.directory === modelDirectory) {
+    return cachedRecognizer.recognizer
+  }
+  const runtime = sherpa()
   const modelFiles = new Set(
-    (await readdir(request.modelDirectory)).map((fileName) => fileName.toLowerCase())
+    (await readdir(modelDirectory)).map((fileName) => fileName.toLowerCase())
   )
-  const modelFamily = resolveAsrFamily(request.modelFamily, modelFiles)
+  const modelFamily = resolveAsrFamily(requestedFamily, modelFiles)
   const modelConfig =
     modelFamily === 'parakeet'
       ? {
           transducer: {
-            encoder: modelPath(
-              modelFiles,
-              request.modelDirectory,
-              ['encoder.int8.onnx', 'encoder.onnx'],
-              'encoder'
-            ),
-            decoder: modelPath(
-              modelFiles,
-              request.modelDirectory,
-              ['decoder.int8.onnx', 'decoder.onnx'],
-              'decoder'
-            ),
-            joiner: modelPath(
-              modelFiles,
-              request.modelDirectory,
-              ['joiner.int8.onnx', 'joiner.onnx'],
-              'joiner'
-            )
+            encoder: modelPath(modelFiles, modelDirectory, ['encoder.int8.onnx', 'encoder.onnx'], 'encoder'),
+            decoder: modelPath(modelFiles, modelDirectory, ['decoder.int8.onnx', 'decoder.onnx'], 'decoder'),
+            joiner: modelPath(modelFiles, modelDirectory, ['joiner.int8.onnx', 'joiner.onnx'], 'joiner')
           },
-          tokens: modelPath(modelFiles, request.modelDirectory, ['tokens.txt'], 'tokens')
+          tokens: modelPath(modelFiles, modelDirectory, ['tokens.txt'], 'tokens')
         }
       : {
           whisper: {
             encoder: modelPath(
               modelFiles,
-              request.modelDirectory,
+              modelDirectory,
               ['base-encoder.int8.onnx', 'base-encoder.onnx', 'encoder.onnx'],
               'Whisper encoder'
             ),
             decoder: modelPath(
               modelFiles,
-              request.modelDirectory,
+              modelDirectory,
               ['base-decoder.int8.onnx', 'base-decoder.onnx', 'decoder.onnx'],
               'Whisper decoder'
             ),
-            language: request.language === 'auto' ? '' : request.language,
+            language: '',
             task: 'transcribe',
             tailPaddings: -1
           },
           tokens: modelPath(
             modelFiles,
-            request.modelDirectory,
+            modelDirectory,
             ['base-tokens.txt', 'tokens.txt'],
             'Whisper tokens'
           )
@@ -178,14 +192,8 @@ async function transcribe(
       provider: 'cpu'
     }
   })
-  try {
-    const stream = recognizer.createStream()
-    stream.acceptWaveform(runtime.readWave(wavePath))
-    const result = await recognizer.decodeAsync(stream)
-    return result.text?.trim() ?? ''
-  } finally {
-    await rm(wavePath, { force: true })
-  }
+  cachedRecognizer = { directory: modelDirectory, modelFamily, recognizer }
+  return recognizer
 }
 
 function resolveAsrFamily(
@@ -260,6 +268,11 @@ if (port) {
         if (request.kind === 'shutdown') {
           emit({ id: request.id, ok: true, kind: 'shutdown' })
           port.close()
+          return
+        }
+        if (request.kind === 'warmup') {
+          await warmup(request)
+          emit({ id: request.id, ok: true, kind: 'warmup' })
           return
         }
         if (request.kind === 'transcribe') {

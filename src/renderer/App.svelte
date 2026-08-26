@@ -62,7 +62,7 @@
   import { providerStore } from '$lib/stores/providers.svelte'
   import { harnessLifecycleStore } from '$lib/stores/harness-lifecycle.svelte'
   import { prLifecycleStore } from '$lib/stores/pr-lifecycle.svelte'
-  import { loadProjectIcons, getProjectIcon } from '$lib/project-icons'
+  import { loadProjectIcons } from '$lib/project-icons'
   import { preloadScopeChunk, preloadSettingsChunk } from '$lib/page-preload'
   import { APP_NAME } from '$shared/brand'
   import type { ActionDefinition, ActionSelection, ActionSource } from '$lib/actions'
@@ -149,8 +149,6 @@
   let onboardingStep = $state(0)
   let onboardingInitialized = false
   let onboardingProjectPickerActive = false
-  /** Stored custom project icon data-URLs (project.id → url), for palette badges. */
-  let projectIconUrls = $state(new Map<string, string>())
   let paletteFocusBookmark: ElementSelectionBookmark | null = null
 
   interface FileSearchTarget {
@@ -969,9 +967,13 @@
       targets.set(id, { thread })
       const snippet = result.kind === 'message' && result.snippet ? result.snippet : undefined
       // Threads carry their project's icon and color, not a generic thread icon.
-      const projectIconUri = project
-        ? (getProjectIcon(project, projectIconUrls.get(project.id)) ?? undefined)
-        : undefined
+      // Resolve the icon from the scope state so it stays in sync with whatever
+      // hydration owns the project/icon cache (Workspace on startup, App when a
+      // new project is created). App's own projectIconUrls was never populated on
+      // startup, so it always fell back to the generic monochrome thread icon.
+      const projectIconUri = scopeState.projects.find(
+        (candidate) => candidate.id === thread.projectId
+      )?.iconUrl
       const isLiveWorking = agentRuns.hasSettled(thread.projectId, thread.id)
         ? agentRuns.isBusy(thread.projectId, thread.id)
         : Boolean(thread.sessionId) && isThreadWorking(thread)
@@ -1050,7 +1052,6 @@
       //    without waiting for the (larger) thread payload.
       const projectList = await invoke('project:list')
       const icons = await loadProjectIcons(projectList)
-      projectIconUrls = icons
       scopeState.setScopesFromProjects(projectList, icons, preferredProjectId)
 
       // 2. Tasks — recent rows only, via the bounded hydration query. The full
@@ -1088,9 +1089,6 @@
           // harness filter sorts against this so its chip order never depends on
           // catalog insertion order.
           void providerStore.init()
-          if (scopeState.activeProjectId) {
-            void providerCatalog.refresh(scopeState.activeProjectId, true)
-          }
         })
       })
     } catch {
@@ -1581,14 +1579,8 @@
     }
     observeNavigationLocation()
     void loadConfig()
-    void harnessLifecycleStore.autoUpdateOnStartup()
-    const hydrationTimer = window.setTimeout(() => {
-      void loadScopeData().finally(() => {
-        // Signal the main process that the renderer finished its initial
-        // hydration so it can timestamp the final startup phases.
-        void invoke('app:rendererReady').catch(() => undefined)
-      })
-    }, 0)
+    // Workspace owns the initial project/thread hydration. Keeping this signal
+    // there prevents App and Workspace from issuing the same startup queries.
 
     return () => {
       mq.removeEventListener('change', onColorSchemeChange)
@@ -1596,7 +1588,6 @@
       restoreWorkspaceCallbacks()
       unsubscribeIpc()
       unsubscribeShutdown()
-      window.clearTimeout(hydrationTimer)
       workspaceState.openThread = originalOpenThread
       workspaceState.clearThread = originalClearThread
     }

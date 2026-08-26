@@ -87,6 +87,19 @@ export class SpeechJobQueue {
     return this.states.get(jobId)
   }
 
+  hasActive(runtime: SpeechRuntime): boolean {
+    return this.active.has(runtime)
+  }
+
+  hasPending(runtime: SpeechRuntime): boolean {
+    const lane = this.pending.get(runtime)
+    return Boolean(lane && lane.length > 0)
+  }
+
+  isIdle(runtime: SpeechRuntime): boolean {
+    return !this.hasActive(runtime) && !this.hasPending(runtime)
+  }
+
   cancel(jobId: string): boolean {
     for (const [runtime, lane] of this.pending) {
       const index = lane.findIndex((entry) => entry.id === jobId)

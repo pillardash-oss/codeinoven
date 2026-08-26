@@ -3,7 +3,7 @@ import { svelte } from '@sveltejs/vite-plugin-svelte'
 import tailwindcss from '@tailwindcss/vite'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'path'
-import type { Plugin, PreviewServer, ViteDevServer } from 'vite'
+import type { Plugin, PluginOption, PreviewServer, ViteDevServer } from 'vite'
 import packageJson from './package.json'
 
 const pwaManifestPath = resolve(__dirname, 'src/renderer/static/manifest.webmanifest')
@@ -44,6 +44,28 @@ function pwaManifestVersionPlugin(): Plugin {
   }
 }
 
+/** Renderer root/aliases/plugins, shared with scripts/dev-remote-pwa.ts so a
+ *  standalone Vite dev server for the phone PWA stays in sync with the real
+ *  electron-vite renderer config instead of drifting out of a duplicate. */
+export const rendererDefine = {
+  __CODEINOVEN_APP_VERSION__: JSON.stringify(packageJson.version)
+}
+export const rendererRoot = resolve(__dirname, 'src/renderer')
+export const rendererPublicDir = resolve(__dirname, 'src/renderer/static')
+export const rendererAlias = {
+  $lib: resolve(__dirname, 'src/renderer/lib'),
+  $engines: resolve(__dirname, 'src/lib/engines'),
+  $adapters: resolve(__dirname, 'src/lib/adapters'),
+  $shared: resolve(__dirname, 'src/lib')
+}
+export function rendererPlugins(): PluginOption[] {
+  return [
+    pwaManifestVersionPlugin(),
+    svelte({ configFile: resolve(__dirname, 'svelte.config.js') }),
+    tailwindcss()
+  ]
+}
+
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), [
     'VITE_',
@@ -52,22 +74,35 @@ export default defineConfig(({ mode }) => {
     'RENDERER_VITE_',
     'CODEINOVEN_'
   ])
+  // Only a production build talks to the hosted mobile gateway by default.
+  // Every other mode falls back to the local `services/remote-control` dev
+  // server (see services/remote-control/runtime-config.ts), so `bun dev`
+  // never reaches production unless MAIN_VITE_REMOTE_API_ORIGIN /
+  // MAIN_VITE_ACCOUNT_AUTH_ORIGIN are set explicitly.
+  const defaultRemoteOrigin =
+    mode === 'production' ? 'https://mobile.codeinoven.com' : 'http://localhost:8877'
   return {
     main: {
       define: {
+        // Keep the splash copy tied to the package version used to build the
+        // Electron bundle.
+        __CODEINOVEN_APP_VERSION__: JSON.stringify(packageJson.version),
         // Bake the GitHub App client ID into the main bundle at build time.
         // The identifier is replaced by Vite's `define` from the shared
         // CODEINOVEN_GITHUB_CLIENT_ID value. Public by design — never a secret.
         __CODEINOVEN_GITHUB_CLIENT_ID__: JSON.stringify(env.CODEINOVEN_GITHUB_CLIENT_ID ?? ''),
+        // Development keeps persisted Remote mode off unless the developer
+        // explicitly opts into the LAN listeners for a phone test.
+        __CODEINOVEN_DEV_REMOTE_MODE__: JSON.stringify(env.CODEINOVEN_DEV_REMOTE_MODE === '1'),
         // Public endpoint baked into packaged desktops. Release CI maps the
         // GitHub Actions REMOTE_API_ORIGIN variable to this build-time value.
         __CODEINOVEN_REMOTE_API_ORIGIN__: JSON.stringify(
-          env.MAIN_VITE_REMOTE_API_ORIGIN ?? 'https://mobile.codeinoven.com'
+          env.MAIN_VITE_REMOTE_API_ORIGIN ?? defaultRemoteOrigin
         ),
-        // Keep interactive account authentication on the stable mobile gateway.
-        // Coolify resolves the current Convex account service at runtime.
+        // Keep interactive account authentication on the stable mobile gateway
+        // in production; every other mode targets the local dev server above.
         __CODEINOVEN_ACCOUNT_AUTH_ORIGIN__: JSON.stringify(
-          env.MAIN_VITE_ACCOUNT_AUTH_ORIGIN ?? 'https://mobile.codeinoven.com'
+          env.MAIN_VITE_ACCOUNT_AUTH_ORIGIN ?? defaultRemoteOrigin
         ),
         // Public, isolated origin for generated Engineering prototype previews.
         // There is deliberately no production default.
@@ -113,23 +148,12 @@ export default defineConfig(({ mode }) => {
       }
     },
     renderer: {
-      define: {
-        __CODEINOVEN_APP_VERSION__: JSON.stringify(packageJson.version)
-      },
-      root: resolve(__dirname, 'src/renderer'),
-      publicDir: resolve(__dirname, 'src/renderer/static'),
-      plugins: [
-        pwaManifestVersionPlugin(),
-        svelte({ configFile: resolve(__dirname, 'svelte.config.js') }),
-        tailwindcss()
-      ],
+      define: rendererDefine,
+      root: rendererRoot,
+      publicDir: rendererPublicDir,
+      plugins: rendererPlugins(),
       resolve: {
-        alias: {
-          $lib: resolve(__dirname, 'src/renderer/lib'),
-          $engines: resolve(__dirname, 'src/lib/engines'),
-          $adapters: resolve(__dirname, 'src/lib/adapters'),
-          $shared: resolve(__dirname, 'src/lib')
-        }
+        alias: rendererAlias
       },
       build: {
         outDir: resolve(__dirname, 'out/renderer'),

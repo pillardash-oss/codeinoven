@@ -52,6 +52,7 @@ export interface TitleAttemptUsage {
   tokens?: AgentTokenUsage
   cost?: number
   costProvenance?: UsagePricingProvenance
+  durationMs?: number
 }
 
 /** Outcome of one title-candidate attempt, for event-level ledger integration. */
@@ -83,6 +84,8 @@ class TitleTurnProviderIssueError extends Error {
 }
 
 const TITLE_GENERATION_TIMEOUT_MS = 180_000
+const ABORT_TERM_GRACE_MS = 1_500
+const ABORT_KILL_GRACE_MS = 1_500
 
 /** Durable state for a logical CodeInOven session backed by a turn-based CLI. */
 export interface PersistentCliSession {
@@ -107,6 +110,8 @@ export interface CliTurnCommand {
   provenanceModelId?: string
   /** Called for each parsed provider record before provider-specific mapping. */
   onJsonRecord?: (value: unknown) => void
+  /** Parse JSON records written to stderr by providers using JSON output mode. */
+  parseStderrJson?: boolean
   /**
    * Load provider records that only become available after the process exits
    * (for example, interaction details from a retained session export).
@@ -490,6 +495,11 @@ export abstract class PersistentCliDriver implements HarnessDriver {
     child.on('exit', (code, signal) => {
       if (stdoutBuffer.trim())
         this.consumeJsonLine(stdoutBuffer.trim(), session, projectPath, invocation)
+      if (invocation.parseStderrJson) {
+        for (const line of stderrBuffer.split(/\r?\n/u)) {
+          this.consumeJsonLineIfPresent(line, session, projectPath, invocation)
+        }
+      }
       const failure =
         code === 0 || signal === 'SIGTERM' || invocation.isExpectedExit?.(code, signal)
           ? undefined
@@ -517,14 +527,47 @@ export abstract class PersistentCliDriver implements HarnessDriver {
     const active = this.activeProcesses.get(session.id)
     const settlement = this.activeProcessSettlements.get(session.id)
     const previous = this.activeTurnOptions.get(session.id)
-    if (!active || active.killed || !settlement || !previous) {
+    const usesNativeHistory = this.capabilities.nativeResume !== false
+    if (!previous) {
       throw new Error(`No active ${this.name} turn is available to steer for session ${session.id}`)
+    }
+    if (!active || active.killed || !settlement) {
+      if (usesNativeHistory) {
+        throw new Error(
+          `No active ${this.name} turn is available to steer for session ${session.id}`
+        )
+      }
+      // A stateless process-per-turn driver can still deliver the steer from
+      // the durable transcript when its child has already exited but the
+      // chat-engine status has not observed the terminal event yet. This is
+      // the same replay path used after a normal process boundary.
+      if (active && settlement) await settlement
+      return this.restartStatelessSteer(projectPath, options, session, previous)
     }
 
     this.steeringSessions.add(session.id)
     active.kill()
     await settlement
-    const usesNativeHistory = this.capabilities.nativeResume !== false
+    return this.restartSteerAfterStop(projectPath, options, session, previous, usesNativeHistory)
+  }
+
+  private async restartStatelessSteer(
+    projectPath: string,
+    options: SteerPromptOptions,
+    session: PersistentCliSession,
+    previous: SendPromptOptions
+  ): Promise<void> {
+    this.steeringSessions.add(session.id)
+    return this.restartSteerAfterStop(projectPath, options, session, previous, false)
+  }
+
+  private async restartSteerAfterStop(
+    projectPath: string,
+    options: SteerPromptOptions,
+    session: PersistentCliSession,
+    previous: SendPromptOptions,
+    usesNativeHistory: boolean
+  ): Promise<void> {
     const transportText = usesNativeHistory
       ? options.text
       : [
@@ -585,7 +628,53 @@ export abstract class PersistentCliDriver implements HarnessDriver {
   async abort(projectPath: string, sessionId: string): Promise<void> {
     await this.requireSession(projectPath, sessionId)
     const child = this.activeProcesses.get(sessionId)
-    if (child && !child.killed) child.kill()
+    if (!child || this.hasProcessExited(child)) return
+
+    const termExit = this.waitForProcessExit(child, ABORT_TERM_GRACE_MS)
+    child.kill('SIGTERM')
+    const exitedAfterTerm = await termExit
+    if (!exitedAfterTerm && !this.hasProcessExited(child)) {
+      const killExit = this.waitForProcessExit(child, ABORT_KILL_GRACE_MS)
+      child.kill('SIGKILL')
+      await killExit
+    }
+
+    // `finish()` removes the process before resolving this promise. Keep the
+    // abort contract bounded even if persistence or provider cleanup stalls.
+    const settlement = this.activeProcessSettlements.get(sessionId)
+    if (settlement) {
+      await Promise.race([
+        settlement,
+        new Promise<void>((resolve) => setTimeout(resolve, ABORT_KILL_GRACE_MS))
+      ])
+    }
+  }
+
+  private hasProcessExited(child: ChildProcess): boolean {
+    return (
+      (child.exitCode !== null && child.exitCode !== undefined) ||
+      (child.signalCode !== null && child.signalCode !== undefined)
+    )
+  }
+
+  private waitForProcessExit(child: ChildProcess, timeoutMs: number): Promise<boolean> {
+    if (this.hasProcessExited(child)) return Promise.resolve(true)
+    return new Promise((resolve) => {
+      let settled = false
+      const finish = (exited: boolean): void => {
+        if (settled) return
+        settled = true
+        clearTimeout(timer)
+        child.removeListener('exit', onExit)
+        child.removeListener('close', onClose)
+        resolve(exited)
+      }
+      const onExit = (): void => finish(true)
+      const onClose = (): void => finish(true)
+      const timer = setTimeout(() => finish(false), timeoutMs)
+      child.once('exit', onExit)
+      child.once('close', onClose)
+    })
   }
 
   async listProviders(_projectPath: string): Promise<ProviderCatalog[]> {
@@ -729,10 +818,7 @@ export abstract class PersistentCliDriver implements HarnessDriver {
    * session. Mirrors the teardown used by `steerPrompt` so interaction
    * continuations never race the process they just stopped.
    */
-  protected async settleActiveProcess(
-    sessionId: string,
-    timeoutMs = 10_000
-  ): Promise<void> {
+  protected async settleActiveProcess(sessionId: string, timeoutMs = 10_000): Promise<void> {
     const active = this.activeProcesses.get(sessionId)
     if (active && !active.killed) active.kill()
     const settlement = this.activeProcessSettlements.get(sessionId)
@@ -868,6 +954,25 @@ export abstract class PersistentCliDriver implements HarnessDriver {
         return
       }
       value = recovered
+    }
+    invocation.onJsonRecord?.(value)
+    this.consumeJsonValue(value, session, projectPath)
+  }
+
+  /** Consume a provider JSON record from stderr without treating normal stderr as JSONL noise. */
+  private consumeJsonLineIfPresent(
+    line: string,
+    session: PersistentCliSession,
+    projectPath: string,
+    invocation: CliTurnCommand
+  ): void {
+    const normalized = line.replace(/^\r+|\s+$/gu, '')
+    if (!normalized) return
+    let value: unknown
+    try {
+      value = JSON.parse(normalized) as unknown
+    } catch {
+      return
     }
     invocation.onJsonRecord?.(value)
     this.consumeJsonValue(value, session, projectPath)
@@ -1173,7 +1278,11 @@ export abstract class PersistentCliDriver implements HarnessDriver {
         ? {
             tokens: response.tokens,
             cost: response.cost,
-            costProvenance: response.costProvenance
+            costProvenance: response.costProvenance,
+            durationMs:
+              response.completedAt !== undefined
+                ? Math.max(0, Math.floor(response.completedAt - response.createdAt))
+                : 0
           }
         : null
     return {

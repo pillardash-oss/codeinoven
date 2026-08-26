@@ -32,6 +32,7 @@
   import { openInBrowser } from '$lib/open-in-browser'
   import { faviconState } from '$lib/stores/favicons.svelte'
   import { invoke, subscribe } from '$lib/ipc.svelte'
+  import { modelKey } from '$lib/model-keys'
   import type {
     AgentCapabilityEntry,
     AgentCapabilityOrigin,
@@ -242,9 +243,10 @@
     memoryLoading = true
     memoryError = ''
     try {
-      const entries =
+      const [thread, entries] = await Promise.all([
+        invoke('thread:get', projectId, threadId),
         projectId === INBOX_PROJECT_ID
-          ? await Promise.all([
+          ? Promise.all([
               invoke('memory:getEntries'),
               invoke('memory:getEntries', INBOX_PROJECT_ID),
               invoke('memory:getEntries', INBOX_PROJECT_ID, threadId)
@@ -253,7 +255,7 @@
               ...chatEntries,
               ...threadEntries
             ])
-          : await Promise.all([
+          : Promise.all([
               invoke('memory:getEntries'),
               invoke('memory:getEntries', projectId),
               invoke('memory:getEntries', projectId, threadId)
@@ -262,9 +264,21 @@
               ...projectEntries,
               ...threadEntries
             ])
+      ])
+      const activeModelKey =
+        thread?.settings?.harnessId && thread.settings.providerId && thread.settings.modelId
+          ? modelKey(thread.settings.harnessId, thread.settings.providerId, thread.settings.modelId)
+          : undefined
       memory = [
         ...new Map(
-          entries.filter((entry) => entry.enabled).map((entry) => [entry.id, entry])
+          entries
+            .filter(
+              (entry) =>
+                entry.enabled &&
+                (entry.category !== 'models' ||
+                  Boolean(activeModelKey && entry.modelKeys?.includes(activeModelKey)))
+            )
+            .map((entry) => [entry.id, entry])
         ).values()
       ].sort((a, b) => b.updatedAt - a.updatedAt)
     } catch (loadError) {
@@ -543,7 +557,10 @@
         role="tab"
         aria-selected={section === 'contexts'}
         title="View MCP servers, skills, and memory for this conversation"
-        onclick={() => (section = 'contexts')}
+        onclick={() => {
+          section = 'contexts'
+          if (contextSection === 'memory') void loadMemory()
+        }}
       >
         <Brain size={12} />
         Contexts
@@ -594,7 +611,10 @@
           role="tab"
           aria-selected={contextSection === 'memory'}
           title="View active memory applied to this conversation"
-          onclick={() => (contextSection = 'memory')}
+          onclick={() => {
+            contextSection = 'memory'
+            void loadMemory()
+          }}
         >
           Memory
           {#if memoryCount > 0}<span class="text-[10px] tabular-nums">{memoryCount}</span>{/if}

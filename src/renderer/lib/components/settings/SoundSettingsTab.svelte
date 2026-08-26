@@ -62,10 +62,12 @@
   }>
 
   const unloadOptions = [
+    { value: '5m', label: '5 minutes' },
+    { value: '10m', label: '10 minutes' },
+    { value: '20m', label: '20 minutes' },
     { value: '30m', label: '30 minutes' },
-    { value: '1h', label: '1 hour' },
-    { value: 'keep', label: 'Keep until app closes' }
-  ] as const satisfies ReadonlyArray<{ value: '30m' | '1h' | 'keep'; label: string }>
+    { value: 'keep', label: 'Never unload' }
+  ] as const satisfies ReadonlyArray<{ value: '5m' | '10m' | '20m' | '30m' | 'keep'; label: string }>
 
   onMount(() => {
     void speech.load()
@@ -195,6 +197,8 @@
   function bestForBadge(artifact: SpeechModelArtifact): { label: string; cls: string } | null {
     if (artifact.id === 'parakeet-tdt-v2-sherpa-onnx-int8') return { label: 'Best for English', cls: 'bg-sky-500 text-white border-sky-600' }
     if (artifact.id === 'parakeet-tdt-v3-sherpa-onnx-int8') return { label: 'Best for Multilingual', cls: 'bg-indigo-500 text-white border-indigo-600' }
+    if (artifact.id === 'parakeet-tdt-v2-coreml') return { label: 'Best for English · Core ML', cls: 'bg-sky-600 text-white border-sky-700' }
+    if (artifact.id === 'parakeet-tdt-v3-coreml') return { label: 'Best for Multilingual · Core ML', cls: 'bg-indigo-600 text-white border-indigo-700' }
     if (artifact.id === 'whisper-base-mlx-4bit') return { label: 'Apple Silicon · Fast', cls: 'bg-zinc-800 text-white border-zinc-700' }
     if (artifact.id === 'whisper-base-sherpa-int8') return { label: 'Portable · All platforms', cls: 'bg-white text-zinc-700 border-zinc-200' }
     if (artifact.id === 'kokoro-en-mlx-8bit') return { label: 'Best quality · MLX', cls: 'bg-violet-500 text-white border-violet-600' }
@@ -244,8 +248,10 @@
     const order: Record<string, number> = {
       'parakeet-tdt-v2-sherpa-onnx-int8': 1,
       'parakeet-tdt-v3-sherpa-onnx-int8': 2,
-      'whisper-base-mlx-4bit': 3,
-      'whisper-base-sherpa-int8': 4,
+      'parakeet-tdt-v2-coreml': 3,
+      'parakeet-tdt-v3-coreml': 4,
+      'whisper-base-mlx-4bit': 5,
+      'whisper-base-sherpa-int8': 6,
       'kokoro-en-mlx-8bit': 1,
       'kokoro-en-sherpa-v0-19': 2,
       'qwen3-cleanup-mlx-0-6b-4bit': 1,
@@ -866,7 +872,7 @@
                 value={settings[item.key]}
                 onchange={(event) =>
                   patch({
-                    [item.key]: event.currentTarget.value as '30m' | '1h' | 'keep'
+                    [item.key]: event.currentTarget.value as '5m' | '10m' | '20m' | '30m' | 'keep'
                   })}
               >
                 {#each unloadOptions as option (option.value)}

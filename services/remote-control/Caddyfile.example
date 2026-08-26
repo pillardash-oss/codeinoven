@@ -34,6 +34,16 @@
 	@pwaRoot path /
 	rewrite @pwaRoot /remote.html
 
+	# Hashed JavaScript/CSS assets must never use the SPA fallback. Returning
+	# remote.html with a 200 for a stale chunk URL makes dynamic import() fail
+	# with an opaque module parse error and lets the service worker cache HTML
+	# under the asset URL.
+	@pwaAssets path /assets/*
+	handle @pwaAssets {
+		root * /srv/codeinoven/renderer
+		file_server
+	}
+
 	handle {
 		root * /srv/codeinoven/renderer
 		try_files {path} /remote.html

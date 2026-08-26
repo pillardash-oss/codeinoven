@@ -1,6 +1,12 @@
 export type SpeechWorkerRequest =
   | {
       id: string
+      kind: 'warmup'
+      modelDirectory: string
+      modelFamily?: 'whisper' | 'parakeet'
+    }
+  | {
+      id: string
       kind: 'transcribe'
       modelDirectory: string
       audioPath: string
@@ -19,6 +25,7 @@ export type SpeechWorkerRequest =
   | { id: string; kind: 'shutdown' }
 
 export type SpeechWorkerResponse =
+  | { id: string; ok: true; kind: 'warmup' }
   | { id: string; ok: true; kind: 'transcribe' | 'cleanup'; text: string }
   | { id: string; ok: true; kind: 'synthesize' | 'shutdown' }
   | { id: string; ok: false; error: string }

@@ -63,10 +63,13 @@
   import EngineeringToolbox from './EngineeringToolbox.svelte'
   import { speechController } from '../../speech/speech-controller.svelte'
   import ModelPicker from '../shared/ModelPicker.svelte'
+  import { mergeProviderCatalogEntries, providerCatalog } from '$lib/stores/provider-catalog.svelte'
   import { filterActions } from '$lib/actions'
   import { APP_NAME } from '$shared/brand'
   import { getVendorIconDataUri } from '$lib/vendor-icons/registry'
   import { isRemotePwaRuntime } from '$lib/runtime-context'
+  import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
+  import type { SpeechEditorApplyResult, SpeechEditorTarget } from '../../speech/editor-target'
   import type { ActionDefinition, ActionSelection, ActionSource } from '$lib/actions'
   import type { RichInlineBadge } from '../shared/rich-markdown'
   import type {
@@ -416,7 +419,8 @@
   let gateVisionSelection = $state<AgentModelSelection | null>(null)
   let gateDonotAsk = $state(false)
   let gateDirect = $state<boolean | undefined>(undefined)
-  const composerEditorId = `chat-composer-${crypto.randomUUID()}`
+  // svelte-ignore state_referenced_locally
+  const composerEditorId = `chat-composer-${projectId ?? 'no-project'}-${threadId ?? 'none'}`
   /** macOS shows ⌘; Windows/Linux show Ctrl — matches the global send shortcut. */
   const sendModifierLabel = navigator.platform.toUpperCase().indexOf('MAC') >= 0 ? '⌘' : 'Ctrl+'
   let mentionEntries = $state<ComposerMentionEntry[]>([])
@@ -437,8 +441,47 @@
       : ({ kind: 'inbox', ...(threadId ? { threadId } : {}) } as const)
   )
 
-  function composerSpeechTarget() {
-    return richEditor?.speechEditorTarget(composerEditorId) ?? null
+  function composerSpeechTarget(): SpeechEditorTarget | null {
+    const editorTarget = richEditor?.speechEditorTarget(composerEditorId) ?? null
+    if (!editorTarget) return null
+
+    return {
+      id: editorTarget.id,
+      capture: () => editorTarget.capture(),
+      apply: (snapshot, transcript) => editorTarget.apply(snapshot, transcript),
+      fallbackApply: (snapshot, transcript): SpeechEditorApplyResult => {
+        if (!projectId || !threadId || typeof onValueChange !== 'function') {
+          return { ok: false, reason: 'destroyed' }
+        }
+        const base = rendererRecovery.draftFor(projectId, threadId)
+        const baseMatchesSnapshot =
+          snapshot.targetId === composerEditorId && snapshot.value === base
+
+        let start: number
+        let next: string
+        if (baseMatchesSnapshot) {
+          const selectionStart = Math.min(snapshot.selection.anchor, snapshot.selection.focus)
+          const selectionEnd = Math.max(snapshot.selection.anchor, snapshot.selection.focus)
+          start = selectionStart
+          next = base.slice(0, selectionStart) + transcript + base.slice(selectionEnd)
+        } else if (base.length === 0) {
+          start = 0
+          next = transcript
+        } else {
+          const separator = /\s$/.test(base) ? '' : ' '
+          start = base.length + separator.length
+          next = base + separator + transcript
+        }
+
+        onValueChange(next)
+        return {
+          ok: true,
+          value: next,
+          startOffset: start,
+          endOffset: start + transcript.length
+        }
+      }
+    }
   }
 
   // Dropdown open state
@@ -615,11 +658,25 @@
     else showInferenceMenu()
   }
 
+  /**
+   * Resolve against every catalog snapshot available to the renderer. The
+   * composer can mount with a persisted/partial prop while the live project
+   * catalog is still hydrating; merging here prevents that prop from passing
+   * an empty thinking-preset override to ModelPicker.
+   */
+  let cachedProviders = $derived(providerCatalog.allCached())
+  let currentProviders = $derived(
+    projectId ? (providerCatalog.cached(projectId) ?? providers) : providers
+  )
+  let resolvedProviders = $derived(
+    mergeProviderCatalogEntries([...cachedProviders, ...providers, ...currentProviders])
+  )
+
   /** Catalog entry for the selected harness/provider/model, when reported. */
   let selectedProvider = $derived(
-    providers.find(
+    resolvedProviders.find(
       (provider) => provider.harnessId === resolved.harnessId && provider.id === resolved.providerId
-    )
+    ) ?? resolvedProviders.find((provider) => provider.id === resolved.providerId)
   )
   let selectedModel = $derived(
     selectedProvider?.models.find((model) => model.id === resolved.modelId)
@@ -1095,7 +1152,7 @@
     modelMenuOpen = false
     const nextHarness = nextHarnessId ?? resolved.harnessId
     onModelUsed?.(modelKey(nextHarness, providerId, modelId))
-    const provider = providers.find(
+    const provider = resolvedProviders.find(
       (candidate) => candidate.harnessId === nextHarness && candidate.id === providerId
     )
     const model = provider?.models.find((candidate) => candidate.id === modelId)
@@ -1513,11 +1570,6 @@
     if (hasFileAttachment) e.preventDefault()
   }
 
-  // Double-Escape abort — two presses within the window stop the running turn.
-  // Single escape or any outside click cancels a pending stop confirmation.
-  const ESCAPE_ABORT_WINDOW_MS = 800
-  let lastEscapeAt = 0
-
   function onWindowKeydown(e: KeyboardEvent): void {
     if (mentionOpen) {
       if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
@@ -1628,19 +1680,17 @@
       return
     }
     if (e.key !== 'Escape') return
-    // Cancel pending stop on single escape
+    // Escape cancels the stop-button confirmation, but stops an active turn
+    // immediately when there is no pending confirmation. A running agent is a
+    // global session concern, so this remains active even when the composer
+    // editor itself does not have focus.
     if (pendingStop) {
       cancelStop()
       return
     }
     if (!working || !onStop) return
-    const now = Date.now()
-    if (now - lastEscapeAt <= ESCAPE_ABORT_WINDOW_MS) {
-      lastEscapeAt = 0
-      onStop()
-    } else {
-      lastEscapeAt = now
-    }
+    e.preventDefault()
+    onStop()
   }
 </script>
 

@@ -54,6 +54,22 @@ export function broadcastThreadUpdate(thread: Thread): void {
   void _notificationService?.notify(thread)
 }
 
+/**
+ * Push just a settled git branch to every renderer window. Deliberately
+ * lighter than `broadcastThreadUpdate`: branch settlement is cosmetic and can
+ * land at any time after a thread is opened (creation-time detection, or a
+ * lazy heal on read), including while the user is actively typing. Routing it
+ * through the full thread broadcast would force every `thread:updated`
+ * subscriber — including ThreadView's message reconcile, which reloads and
+ * re-merges the whole transcript — to run at that moment, freezing input on
+ * large conversations for a purely cosmetic field.
+ */
+export function broadcastThreadBranchUpdated(thread: Thread): void {
+  for (const win of BrowserWindow.getAllWindows()) {
+    sendToRenderer(win.webContents, 'thread:branchUpdated', thread.projectId, thread.id, thread.branch)
+  }
+}
+
 /** Push permanent task deletion so every desktop and remote view drops it. */
 export function broadcastThreadDeleted(thread: Thread): void {
   for (const win of BrowserWindow.getAllWindows()) {

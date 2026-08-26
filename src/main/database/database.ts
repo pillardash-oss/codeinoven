@@ -638,6 +638,7 @@ export class Database {
     connection.transaction(() => {
       connection.exec(DATABASE_SCHEMA_SQL)
       this.migrateEngineeringLifecycleColumns(connection)
+      this.migrateUsageEventColumns(connection)
     })()
   }
 
@@ -660,6 +661,59 @@ export class Database {
       connection.exec(
         'ALTER TABLE engineering_lifecycle ADD COLUMN autopilot INTEGER NOT NULL DEFAULT 0'
       )
+    }
+  }
+
+  /** Existing databases predate the append-only usage snapshot fields. */
+  private migrateUsageEventColumns(connection: DatabaseType): void {
+    const columns = new Set<string>(
+      (connection.prepare('PRAGMA table_info(usage_events)').all() as Array<{ name: string }>).map(
+        (column) => column.name
+      )
+    )
+    const addedTokensTotal = !columns.has('tokens_total')
+    const addedDuration = !columns.has('duration_ms')
+
+    if (addedTokensTotal) {
+      connection.exec('ALTER TABLE usage_events ADD COLUMN tokens_total INTEGER')
+    }
+    if (addedDuration) {
+      connection.exec(
+        'ALTER TABLE usage_events ADD COLUMN duration_ms INTEGER NOT NULL DEFAULT 0 CHECK(duration_ms >= 0)'
+      )
+    }
+
+    if (addedTokensTotal) {
+      connection.exec(`
+        UPDATE usage_events
+        SET tokens_total = COALESCE(
+          raw_total,
+          COALESCE(tokens_uncached_input, 0) +
+            COALESCE(tokens_cached_input, 0) +
+            COALESCE(tokens_cache_write, 0) +
+            COALESCE(tokens_output, 0) +
+            COALESCE(tokens_reasoning, 0)
+        )
+        WHERE tokens_total IS NULL
+      `)
+    }
+
+    if (addedDuration) {
+      connection.exec(`
+        UPDATE usage_events
+        SET duration_ms = MAX(
+          0,
+          COALESCE(
+            (
+              SELECT completed_at - created_at
+              FROM agent_messages
+              WHERE agent_messages.id = usage_events.parent_turn_id
+            ),
+            0
+          )
+        )
+        WHERE duration_ms = 0
+      `)
     }
   }
 }
