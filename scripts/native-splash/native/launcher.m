@@ -29,18 +29,36 @@ static char handoff_path[sizeof(((struct sockaddr_un *)0)->sun_path)] = {0};
   (void)dirtyRect;
   [[NSColor blackColor] setFill];
   NSRectFill(self.bounds);
-  if (self.icon == nil) return;
-  const NSRect iconRect = NSMakeRect(
-      (NSWidth(self.bounds) - 200.0) / 2.0,
-      (NSHeight(self.bounds) - 200.0) / 2.0,
-      200.0,
-      200.0);
-  [self.icon drawInRect:iconRect
-               fromRect:NSZeroRect
-              operation:NSCompositingOperationSourceOver
-               fraction:1.0
-         respectFlipped:YES
-                  hints:@{NSImageHintInterpolation : @(NSImageInterpolationHigh)}];
+  if (self.icon != nil) {
+    const NSRect iconRect = NSMakeRect(
+        (NSWidth(self.bounds) - 200.0) / 2.0,
+        (NSHeight(self.bounds) - 200.0) / 2.0,
+        200.0,
+        200.0);
+    [self.icon drawInRect:iconRect
+                 fromRect:NSZeroRect
+                operation:NSCompositingOperationSourceOver
+                 fraction:1.0
+           respectFlipped:YES
+                    hints:@{NSImageHintInterpolation : @(NSImageInterpolationHigh)}];
+  }
+
+  NSDictionary *versionAttributes = @{
+    NSFontAttributeName : [NSFont systemFontOfSize:11.0 weight:NSFontWeightRegular],
+    NSForegroundColorAttributeName : [NSColor colorWithWhite:1.0 alpha:0.72]
+  };
+  NSDictionary *companyAttributes = @{
+    NSFontAttributeName : [NSFont systemFontOfSize:9.0 weight:NSFontWeightRegular],
+    NSForegroundColorAttributeName : [NSColor colorWithWhite:1.0 alpha:0.48]
+  };
+  NSString *version = [NSString stringWithUTF8String:CODEINOVEN_VERSION];
+  NSString *company = [NSString stringWithUTF8String:CODEINOVEN_COMPANY];
+  NSSize versionSize = [version sizeWithAttributes:versionAttributes];
+  NSSize companySize = [company sizeWithAttributes:companyAttributes];
+  [version drawAtPoint:NSMakePoint((NSWidth(self.bounds) - versionSize.width) / 2.0, 26.0)
+         withAttributes:versionAttributes];
+  [company drawAtPoint:NSMakePoint((NSWidth(self.bounds) - companySize.width) / 2.0, 12.0)
+         withAttributes:companyAttributes];
 }
 @end
 

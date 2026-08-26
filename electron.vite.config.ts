@@ -77,6 +77,9 @@ export default defineConfig(({ mode }) => {
   return {
     main: {
       define: {
+        // Keep the splash copy tied to the package version used to build the
+        // Electron bundle.
+        __CODEINOVEN_APP_VERSION__: JSON.stringify(packageJson.version),
         // Bake the GitHub App client ID into the main bundle at build time.
         // The identifier is replaced by Vite's `define` from the shared
         // CODEINOVEN_GITHUB_CLIENT_ID value. Public by design — never a secret.

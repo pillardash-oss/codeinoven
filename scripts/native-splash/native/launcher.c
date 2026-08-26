@@ -18,6 +18,17 @@ static GdkPixbuf *icon_pixbuf = NULL;
 static int handoff_socket = -1;
 static char handoff_path[sizeof(((struct sockaddr_un *)0)->sun_path)] = {0};
 
+static void draw_centered_text(cairo_t *context, const char *text, double baseline,
+                               double font_size, double alpha, double width) {
+  cairo_text_extents_t extents;
+  cairo_select_font_face(context, "sans", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_NORMAL);
+  cairo_set_font_size(context, font_size);
+  cairo_text_extents(context, text, &extents);
+  cairo_set_source_rgba(context, 0.97, 0.96, 0.95, alpha);
+  cairo_move_to(context, (width - extents.width) / 2.0 - extents.x_bearing, baseline);
+  cairo_show_text(context, text);
+}
+
 static gboolean draw_placeholder(GtkWidget *widget, cairo_t *context, gpointer data) {
   (void)data;
   GtkAllocation allocation;
@@ -30,6 +41,8 @@ static gboolean draw_placeholder(GtkWidget *widget, cairo_t *context, gpointer d
     gdk_cairo_set_source_pixbuf(context, icon_pixbuf, x, y);
     cairo_paint(context);
   }
+  draw_centered_text(context, CODEINOVEN_VERSION, 294.0, 11.0, 0.72, allocation.width);
+  draw_centered_text(context, CODEINOVEN_COMPANY, 309.0, 9.0, 0.48, allocation.width);
   return FALSE;
 }
 

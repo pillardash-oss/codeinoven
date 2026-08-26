@@ -66,6 +66,7 @@ import type { SpeechService } from './speech/speech-service'
 
 declare const __CODEINOVEN_PROTOTYPE_PREVIEW_ORIGIN__: string | undefined
 declare const __CODEINOVEN_DEV_REMOTE_MODE__: boolean
+declare const __CODEINOVEN_APP_VERSION__: string
 
 const mainBundleDirectory = dirname(fileURLToPath(import.meta.url))
 
@@ -482,10 +483,17 @@ function createSplashWindow(): {
   splashWindow = splash
   const visualReady = waitForSplashVisual(splash)
 
+  const applicationVersion = __CODEINOVEN_APP_VERSION__
   const loading =
     !isProduction && is.dev && process.env['ELECTRON_RENDERER_URL']
-      ? splash.loadURL(`${process.env['ELECTRON_RENDERER_URL']}/splash.html`)
-      : splash.loadFile(join(mainBundleDirectory, '../renderer/splash.html'))
+      ? (() => {
+          const splashUrl = new URL(`${process.env['ELECTRON_RENDERER_URL']}/splash.html`)
+          splashUrl.searchParams.set('version', applicationVersion)
+          return splash.loadURL(splashUrl.toString())
+        })()
+      : splash.loadFile(join(mainBundleDirectory, '../renderer/splash.html'), {
+          query: { version: applicationVersion }
+        })
   // `did-fail-load` resolves the visual barrier as `load-failed`; consume the
   // matching navigation rejection so it cannot become an unhandled promise.
   void loading.catch(() => undefined)

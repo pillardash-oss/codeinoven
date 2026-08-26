@@ -4,7 +4,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta http-equiv="Content-Security-Policy"
-    content="default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:;" />
+    content="default-src 'self'; script-src 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:;" />
   <title>CodeInOven</title>
   <style>
     * {
@@ -37,8 +37,31 @@
     }
 
     .logo {
-      height: 200px;
-      width: 200px;
+      height: 220px;
+      width: 220px;
+      flex: 0 0 auto;
+    }
+
+    .splash-meta {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 4px;
+      margin-top: 10px;
+    }
+
+    .version {
+      color: #f7f6f2;
+      font-size: 11px;
+      font-variant-numeric: tabular-nums;
+      letter-spacing: 0.08em;
+    }
+
+    .company {
+      color: rgba(247, 246, 242, 0.52);
+      font-size: 9px;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
     }
 
     /* The logo must be visible from the very first frame — this splash window is
@@ -72,7 +95,7 @@
 
 <body>
   <div class="splash">
-    <svg class="logo" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1254 1254"
+    <svg class="logo" xmlns="http://www.w3.org/2000/svg" viewBox="333 40 540 825"
       style="fill-rule: evenodd; clip-rule: evenodd; stroke-linejoin: round; stroke-miterlimit: 2">
       <defs>
         <radialGradient id="glowGrad" cx="50%" cy="45%" r="62%">
@@ -260,7 +283,17 @@
         </g>
       </g>
     </svg>
+    <div class="splash-meta" aria-label="Application version">
+      <span class="version" id="splash-version">v—</span>
+      <span class="company">Pillardash Solutions Limited</span>
+    </div>
   </div>
+  <script>
+    const version = new URLSearchParams(window.location.search).get('version')
+    if (version) {
+      document.getElementById('splash-version').textContent = `v${version.replace(/^v/i, '')}`
+    }
+  </script>
 </body>
 
 </html>
