@@ -23,7 +23,7 @@
   }
 
   const tab = resolveTab()
-  const controller = new TemporaryChatController(tab, { onContinueInThread })
+  const controller = new TemporaryChatController(tab)
 
   let converting = $state(false)
   let continueError = $state('')
@@ -113,4 +113,5 @@
   chatMode={true}
   {controller}
   headerSnippet={header}
+  onContinueInThread={continueInThread}
 />

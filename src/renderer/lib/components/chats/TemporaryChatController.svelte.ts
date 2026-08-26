@@ -13,24 +13,18 @@ import type {
 } from '$shared/types'
 import type { ConversationController, SendPayload } from '../threads/ConversationController.svelte'
 
-export interface TemporaryChatControllerDeps {
-  onContinueInThread?: (tab: TemporaryChatContextTab) => void | Promise<void>
-}
-
 export class TemporaryChatController implements ConversationController {
   readonly kind = 'temporary-chat' as const
   readonly projectId: string
   readonly conversationId: string
 
   #tab: TemporaryChatContextTab
-  #deps: TemporaryChatControllerDeps
   #unsubscribeEvent: (() => void) | null = null
   #unsubscribeExpiry: (() => void) | null = null
   #mounted = false
 
-  constructor(tab: TemporaryChatContextTab, deps: TemporaryChatControllerDeps = {}) {
+  constructor(tab: TemporaryChatContextTab) {
     this.#tab = tab
-    this.#deps = deps
     this.projectId = tab.projectId
     this.conversationId = tab.temporaryChatId
   }

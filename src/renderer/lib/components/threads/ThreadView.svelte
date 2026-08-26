@@ -231,6 +231,8 @@
     onContinueInProject?: (forked: Thread) => void
     /** Called after a brand-new project is added from the continue modal. */
     onProjectCreated?: (project: Project) => void | Promise<void>
+    /** Promote a controller-driven temporary chat into a regular thread. */
+    onContinueInThread?: () => void | Promise<void>
     /**
      * Optional conversation controller. When provided, ThreadView delegates all
      * core conversation state (messages, busy, send/steer/abort) to the
@@ -252,6 +254,7 @@
     projectIcons = new SvelteMap<string, string>(),
     onContinueInProject,
     onProjectCreated,
+    onContinueInThread,
     controller,
     headerSnippet
   }: Props = $props()
@@ -7646,6 +7649,21 @@
     }
   }
 
+  let continuingInThread = $state(false)
+
+  /** Continue a temporary chat in a regular thread. */
+  async function continueInThread(): Promise<void> {
+    if (!onContinueInThread || continuingInThread) return
+    continuingInThread = true
+    try {
+      await onContinueInThread()
+    } catch (error) {
+      errorMessage = error instanceof Error ? error.message : 'The chat could not be continued.'
+    } finally {
+      continuingInThread = false
+    }
+  }
+
   // ─── Export conversation transcript (background, off the UI thread) ─────
 
   let transcriptExportOpen = $state(false)
@@ -9106,6 +9124,21 @@
                                 messageId={msg.id}
                                 markdown={messageText(msg)}
                               />
+                              {#if onContinueInThread && controller?.kind === 'temporary-chat'}
+                                <button
+                                  class="rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+                                  aria-label="Continue this chat in a thread"
+                                  title="Continue in thread"
+                                  disabled={continuingInThread}
+                                  onclick={() => void continueInThread()}
+                                >
+                                  {#if continuingInThread}
+                                    <Loader2 size={12} class="animate-spin" />
+                                  {:else}
+                                    <MessageSquare size={12} />
+                                  {/if}
+                                </button>
+                              {/if}
                               <button
                                 class="rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
                                 aria-label="Fork thread from this message"
