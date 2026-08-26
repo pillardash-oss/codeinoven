@@ -137,6 +137,7 @@ class WorkspaceState {
   messageCount = $state(0)
   userMessages: JumpTarget[] = $state([])
   jumpToMessage: ((id: string) => void) | null = null
+  loadUserMessageHistory: (() => Promise<void>) | null = null
 
   openThread(thread: Thread, project: Project | null, iconUrl?: string | null): void {
     const visitKey = threadVisitKey(thread)
@@ -308,6 +309,7 @@ class WorkspaceState {
     this.messageCount = 0
     this.userMessages = []
     this.jumpToMessage = null
+    this.loadUserMessageHistory = null
     this.specStudioAvailable = false
     this.specStudioOpen = false
     this.pendingThreadStudioOpen = null

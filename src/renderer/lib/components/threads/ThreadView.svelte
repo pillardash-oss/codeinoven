@@ -15,6 +15,8 @@
   const threadScrollPositions = new SvelteMap<string, ThreadScrollState>()
   const HISTORY_WINDOW_SIZE = 40
   const HISTORY_PRELOAD_THRESHOLD = 240
+  /** Keep initial navigation light; older messages are paged into the DOM. */
+  const HISTORY_RENDER_WINDOW_SIZE = 12
 
   import {
     AudioLines,
@@ -144,6 +146,7 @@
   import type {
     Thread,
     ThreadMessageCursor,
+    ThreadMessagePage,
     ThreadSettings,
     ThreadContextUsage,
     ThinkingLevel,
@@ -265,12 +268,11 @@
   let renderedStartIndex = $state(
     savedScrollState && savedScrollState.renderedStartIndex < cachedMessages.length
       ? Math.max(0, savedScrollState.renderedStartIndex)
-      : Math.max(0, cachedMessages.length - HISTORY_WINDOW_SIZE)
+      : Math.max(0, cachedMessages.length - HISTORY_RENDER_WINDOW_SIZE)
   )
   // Keep thread switches bounded even when the cache contains a complete
   // transcript. Markdown parsing and message-card effects run once per
   // mounted message, so rendering the entire cache blocks the renderer.
-  const HISTORY_RENDER_WINDOW_SIZE = HISTORY_WINDOW_SIZE * 2
   let visibleStartIndex = $derived(Math.min(renderedStartIndex, messages.length))
   let visibleEndIndex = $derived(
     Math.min(messages.length, visibleStartIndex + HISTORY_RENDER_WINDOW_SIZE)
@@ -302,6 +304,8 @@
   let jumpLoading = $state(false)
   /** Full persisted user-message history for the header's quick-jump list. */
   let fullUserMessageHistory = $state<UserMessageSummary[]>([])
+  let userMessageHistoryLoaded = false
+  let userMessageHistoryLoading: Promise<void> | null = null
   let hasOlderMessages = $derived(visibleStartIndex > 0 || olderMessagesAvailable)
   let userMessageTexts = $derived(
     messages
@@ -362,6 +366,17 @@
       ? normalizeChatSettings(chatSettings.initialFor(thread, chatEffectiveSettings()))
       : threadSettings.initialFor(thread)
   )
+
+  function shouldHydrateEngineeringState(): boolean {
+    return (
+      !chatMode &&
+      (settings.engineeringMode === true ||
+        thread.assignmentId !== undefined ||
+        thread.achievementRole !== undefined ||
+        thread.auditState !== undefined)
+    )
+  }
+
   let engineeringLifecycle = $state<EngineeringLifecycleState | null>(null)
   let pendingLifecycleSelection = $state<EngineeringLifecycleSelectionInput | null>(null)
   let lifecycleCancelModalOpen = $state(false)
@@ -2620,7 +2635,7 @@
       // Always anchor a busy thread to its live tail: the conversation grew
       // while the user was away, so a stale saved offset would drop them into
       // a blank body with the current turn's message and trace out of view.
-      renderedStartIndex = Math.max(0, messages.length - HISTORY_WINDOW_SIZE)
+      renderedStartIndex = Math.max(0, messages.length - HISTORY_RENDER_WINDOW_SIZE)
       scrollEl.scrollTo({ top: scrollEl.scrollHeight, behavior: 'auto' })
       userScrolledAway = false
     } else if (savedScrollState) {
@@ -2675,7 +2690,7 @@
     // lock synchronously and re-anchoring a tick later keeps the tail engaged
     // even if the bottom grew between the click and this snap's scroll event.
     userScrolledAway = false
-    renderedStartIndex = Math.max(0, messages.length - HISTORY_WINDOW_SIZE)
+    renderedStartIndex = Math.max(0, messages.length - HISTORY_RENDER_WINDOW_SIZE)
     lastScrollTop = scrollEl.scrollHeight
     scrollEl.scrollTo({ top: scrollEl.scrollHeight, behavior: 'auto' })
     void tick().then(() => {
@@ -2691,7 +2706,7 @@
   // window advances with the tail; while the user reads older history it stays
   // anchored and new events do not keep adding DOM below their viewport.
   $effect(() => {
-    const maxStart = Math.max(0, messages.length - HISTORY_WINDOW_SIZE)
+    const maxStart = Math.max(0, messages.length - HISTORY_RENDER_WINDOW_SIZE)
     if (!userScrolledAway && scrollRestored && renderedStartIndex !== maxStart) {
       renderedStartIndex = maxStart
     } else if (renderedStartIndex > maxStart && messages.length > 0) {
@@ -2769,6 +2784,7 @@
   /** Prevents a slower background reconnect from replacing the session chosen
    *  for a newly submitted prompt. */
   let sessionBindingVersion = 0
+  let readySpecReconcileInFlight: Promise<void> | null = null
   /** Guards a newly submitted turn from stale idle snapshots while an existing
    *  thread reconnects to its persisted provider session. */
   let locallySubmittedTurnId: string | null = null
@@ -2781,8 +2797,8 @@
     const mountedProjectId = thread.projectId
     const mountedThreadId = thread.id
     workspaceState.jumpToMessage = jumpToMessage
-    void refreshEfficiencyKpis()
-    if (!chatMode) {
+    workspaceState.loadUserMessageHistory = refreshUserMessageHistory
+    if (shouldHydrateEngineeringState()) {
       void invoke('engineeringLifecycle:get', mountedProjectId, mountedThreadId)
         .then((state) => {
           if (alive) engineeringLifecycle = state
@@ -2826,9 +2842,10 @@
       }
       if (
         updatedThread.projectId === thread.projectId &&
-        (updatedThread.id === thread.id || updatedThread.assignmentId === assignment?.id)
+        (updatedThread.id === thread.id || updatedThread.assignmentId === assignment?.id) &&
+        shouldHydrateEngineeringState()
       ) {
-        void reconcileReadySpec()
+        scheduleReadySpecReconcile()
       }
       if (
         updatedThread.projectId === thread.projectId &&
@@ -2870,6 +2887,9 @@
       clearTimeout(copyResetTimer)
       workspaceState.sources = []
       workspaceState.jumpToMessage = null
+      if (workspaceState.loadUserMessageHistory === refreshUserMessageHistory) {
+        workspaceState.loadUserMessageHistory = null
+      }
       workspaceState.messageCount = 0
       workspaceState.userMessages = []
     }
@@ -2889,7 +2909,7 @@
     // state or a pre-populated cache) would hide the latest turn's user
     // message and streaming trace behind the "Load earlier messages" window.
     if (historyWindowInitialized && !mountBusy) return
-    renderedStartIndex = Math.max(0, messageCount - HISTORY_WINDOW_SIZE)
+    renderedStartIndex = Math.max(0, messageCount - HISTORY_RENDER_WINDOW_SIZE)
     historyWindowInitialized = true
   }
 
@@ -2981,6 +3001,7 @@
 
   async function loadLocal(attempt = 0): Promise<void> {
     const { projectId, id } = thread
+    await threadMessages.waitForLoad(projectId, id)
     // New empty thread seeded as loaded before mount must render the
     // composer instantly — zero IPC on the critical path. All persistence
     // reads enrich state in the background without ever blocking typing
@@ -3018,7 +3039,9 @@
             if (!alive) return
             if (threadData?.settings) {
               settings = chatMode
-                ? normalizeChatSettings(chatSettings.initialFor(threadData, chatEffectiveSettings()))
+                ? normalizeChatSettings(
+                    chatSettings.initialFor(threadData, chatEffectiveSettings())
+                  )
                 : threadSettings.initialFor(threadData)
             }
             agentDefaults = config.agentDefaults
@@ -3040,12 +3063,16 @@
     try {
       const [threadData, page, config] = await Promise.all([
         invoke('thread:get', projectId, id),
-        invoke('thread:loadMessages', projectId, id, undefined, HISTORY_WINDOW_SIZE),
+        threadMessages.loaded(projectId, id)
+          ? Promise.resolve<ThreadMessagePage | null>(null)
+          : invoke('thread:loadMessages', projectId, id, undefined, HISTORY_WINDOW_SIZE),
         invoke('config:get')
       ])
       if (!alive) return
-      olderMessagesAvailable = page.hasOlder
-      initializeHistoryWindow(page.messages.length)
+      olderMessagesAvailable = page?.hasOlder ?? threadMessages.hasOlder(projectId, id)
+      initializeHistoryWindow(
+        page?.messages.length ?? threadMessages.messages(projectId, id).length
+      )
       if (threadData?.settings) {
         settings = chatMode
           ? normalizeChatSettings(chatSettings.initialFor(threadData, chatEffectiveSettings()))
@@ -3057,7 +3084,7 @@
       auditSettings = auditSettingsForThread()
       // Merge the newest mirror page with optimistic messages and any older
       // pages already loaded for this thread.
-      threadMessages.mergePage(projectId, id, page.messages)
+      if (page) threadMessages.mergePage(projectId, id, page.messages)
       // Re-bind the thread's persisted session so its live events keep routing
       // to this cache (and the background queue dispatcher) even when the
       // renderer never sent a message on this mount.
@@ -3103,10 +3130,11 @@
     // Independent extras — each lands as it resolves, none block the paint.
     void refreshCheckpoints()
     void loadProjectContext()
-    void refreshUserMessageHistory()
 
-    if (!chatMode) {
+    if (shouldHydrateEngineeringState()) {
       try {
+        await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()))
+        if (!alive) return
         await reconcileReadySpec()
       } catch (error) {
         errorMessage =
@@ -3216,13 +3244,22 @@
   /** Load the thread's full persisted user-message history for the header jump list. */
   async function refreshUserMessageHistory(): Promise<void> {
     const { projectId, id } = thread
-    try {
-      const history = await invoke('thread:loadUserMessages', projectId, id)
-      if (!alive) return
-      fullUserMessageHistory = history
-    } catch {
-      // Non-fatal — the dropdown falls back to the loaded message window.
-    }
+    if (userMessageHistoryLoaded) return
+    if (userMessageHistoryLoading) return userMessageHistoryLoading
+    const loadPromise = (async (): Promise<void> => {
+      try {
+        const history = await invoke('thread:loadUserMessages', projectId, id)
+        if (!alive) return
+        fullUserMessageHistory = history
+        userMessageHistoryLoaded = true
+      } catch {
+        // Non-fatal — the dropdown falls back to the loaded message window.
+      } finally {
+        userMessageHistoryLoading = null
+      }
+    })()
+    userMessageHistoryLoading = loadPromise
+    return loadPromise
   }
 
   function switchProject(targetProjectId: string): void {
@@ -3469,7 +3506,7 @@
         if (providerStatus?.state !== 'error') providerStatus = null
         void refreshCheckpoints()
         setTimeout(() => void refreshEfficiencyKpis(), 100)
-        setTimeout(() => void reconcileReadySpec(), 100)
+        scheduleReadySpecReconcile()
         scheduleIdleAttention()
         break
       }
@@ -3525,7 +3562,7 @@
               'Context compaction was interrupted before your message could be processed. Send it again to continue.'
           }
           if (previousProviderStatus?.state !== 'error') providerStatus = null
-          setTimeout(() => void reconcileReadySpec(), 100)
+          scheduleReadySpecReconcile()
           scheduleIdleAttention()
         } else {
           clearLocalTurn()
@@ -4556,7 +4593,27 @@
     }
   }
 
+  function scheduleReadySpecReconcile(): void {
+    if (!shouldHydrateEngineeringState()) return
+    window.setTimeout(() => {
+      if (alive) void reconcileReadySpec()
+    }, 100)
+  }
+
   async function reconcileReadySpec(): Promise<void> {
+    if (readySpecReconcileInFlight) return readySpecReconcileInFlight
+    const reconcilePromise = reconcileReadySpecNow()
+    readySpecReconcileInFlight = reconcilePromise
+    try {
+      await reconcilePromise
+    } finally {
+      if (readySpecReconcileInFlight === reconcilePromise) {
+        readySpecReconcileInFlight = null
+      }
+    }
+  }
+
+  async function reconcileReadySpecNow(): Promise<void> {
     const { projectId, id } = thread
     const workflowThreadId = isAssignmentAuditorThread ? (thread.coordinatorThreadId ?? id) : id
     const [
@@ -8808,10 +8865,17 @@
                       {@const turnFinalText = getTurnFinalText(msgIndex)}
                       {#if !conversationBusy || !isLatest}
                         {#if turnFinalText}
-                          {@const isReadingThisTurn = 'messageId' in speechController.playback && speechController.playback.messageId === msg.id && (speechController.playback.state === 'preparing' || speechController.playback.state === 'playing' || speechController.playback.state === 'paused')}
+                          {@const isReadingThisTurn =
+                            'messageId' in speechController.playback &&
+                            speechController.playback.messageId === msg.id &&
+                            (speechController.playback.state === 'preparing' ||
+                              speechController.playback.state === 'playing' ||
+                              speechController.playback.state === 'paused')}
                           <div
                             id={`msg-${msg.id}`}
-                            class={isReadingThisTurn ? 'min-w-0 w-full rounded-lg border border-dashed border-info/40 bg-info/5 p-3 text-sm text-foreground transition-colors' : 'min-w-0 w-full text-sm text-foreground'}
+                            class={isReadingThisTurn
+                              ? 'min-w-0 w-full rounded-lg border border-dashed border-info/40 bg-info/5 p-3 text-sm text-foreground transition-colors'
+                              : 'min-w-0 w-full text-sm text-foreground'}
                             data-assistant-response
                             data-conversation-searchable
                             data-message-id={msg.id}

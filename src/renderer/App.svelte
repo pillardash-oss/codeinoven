@@ -1088,9 +1088,6 @@
           // harness filter sorts against this so its chip order never depends on
           // catalog insertion order.
           void providerStore.init()
-          if (scopeState.activeProjectId) {
-            void providerCatalog.refresh(scopeState.activeProjectId, true)
-          }
         })
       })
     } catch {
@@ -1581,7 +1578,6 @@
     }
     observeNavigationLocation()
     void loadConfig()
-    void harnessLifecycleStore.autoUpdateOnStartup()
     // Workspace owns the initial project/thread hydration. Keeping this signal
     // there prevents App and Workspace from issuing the same startup queries.
 

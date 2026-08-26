@@ -187,11 +187,8 @@
   function findThreadRow(threadId: string): HTMLElement | null {
     if (typeof document === 'undefined') return null
     const root = sidebarScroller ?? document
-    // All three sidebar modes stay mounted (the inactive ones are `display:none`),
-    // so the same thread id can match several rows. Only the rendered one can be
-    // scrolled to — a hidden row has no layout box and scrollIntoView is a no-op
-    // on it, which is why Projects mode never followed the selection while the
-    // flat Threads list (earlier in the DOM) always matched first.
+    // Only the active sidebar mode is mounted, so this resolves to the active
+    // row without traversing duplicate hidden lists.
     const rows = root.querySelectorAll<HTMLElement>(`[data-thread-row="${threadId}"]`)
     for (const row of rows) {
       if (row.offsetParent !== null || row.getClientRects().length > 0) return row
@@ -1566,6 +1563,14 @@
     if (selected && !isOrchestrationChildThread(selected)) upsertThreadInList(selected)
   })
 
+  // Full user-message history is only needed after the history menu opens.
+  // Keeping it out of the thread mount path prevents a hidden database scan on
+  // every switch while preserving the complete jump list when requested.
+  $effect(() => {
+    if (!showHistoryMenu) return
+    void workspaceState.loadUserMessageHistory?.()
+  })
+
   // Live thread updates pushed from the main process (status/read changes
   // during agent runs) — keeps the sidebar indicators in sync without polling.
   // Updates are applied immediately so a finished turn flips the status badge
@@ -1821,12 +1826,15 @@
       hasMoreHistory = threadList.length === INITIAL_THREAD_LIMIT
       notificationPanelState.hydrateFromThreads(uniqueThreads, projectList)
       projectIcons.clear()
-      for (const [projectId, iconUrl] of await loadProjectIcons(projectList)) {
-        projectIcons.set(projectId, iconUrl)
-      }
+      // Publish the workspace with deterministic fallback icons immediately.
+      // Custom icon IPC is cosmetic and must never delay the first usable frame.
       scopeState.setScopesFromProjects(projectList, projectIcons)
       scopeState.setThreads(uniqueThreads)
       initExpandedFolders(projectList.filter((p) => !p.hidden))
+      void loadProjectIcons(projectList).then((icons) => {
+        for (const [projectId, iconUrl] of icons) projectIcons.set(projectId, iconUrl)
+        scopeState.setScopesFromProjects(projectList, projectIcons)
+      })
       const saved = rendererRecovery.selectedThread
       const restoredThread = saved
         ? uniqueThreads.find(
@@ -1869,9 +1877,12 @@
           workspaceState.activeProjectIconUrl = projectIcons.get(project.id) ?? null
         }
       }
-      // App-start git check: async — the store ensures the GitHub connection
-      // before the PR indicator check runs, with or without a restored thread.
-      gitState.notifyAppStarted(workspaceState.activeProject)
+      // App-start Git discovery launches several local subprocesses. Keep it
+      // out of the first usable frame and let thread selection or opening the
+      // Git panel trigger it immediately when the user actually needs Git.
+      window.setTimeout(() => {
+        gitState.notifyAppStarted(workspaceState.activeProject)
+      }, 2000)
 
       // The workspace is the single owner of initial hydration. Keep provider
       // catalog work after the first data pass and after a frame so startup
@@ -1883,9 +1894,6 @@
             : [INBOX_PROJECT_ID]
           void providerCatalog.init(targets, { refresh: false })
           void providerStore.init()
-          if (scopeState.activeProjectId) {
-            void providerCatalog.refresh(scopeState.activeProjectId, true)
-          }
         })
       })
 
@@ -2433,7 +2441,9 @@
       ...(scopeBucketId ? { scopeBucketId } : {})
     }
     // Apply inherited settings immediately so the composer has correct model
-    const thread = optimisticThread as unknown as typeof optimisticThread & { settings: typeof inheritedSettings }
+    const thread = optimisticThread as unknown as typeof optimisticThread & {
+      settings: typeof inheritedSettings
+    }
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     upsertThreadInList(thread as any)
     threadMessages.seedEmpty(thread.projectId, thread.id)
@@ -3091,9 +3101,9 @@
       {:else if loading}
         <p class="px-2 py-4 text-sm text-dimmed">Loading...</p>
       {:else}
-        <!-- All three lists stay mounted so switching modes never tears down
-             the projects sidebar or loses its scroll position. -->
-        <div class={mode === 'chats' ? '' : 'hidden'}>
+        <!-- Only the active list stays mounted. Keeping inactive lists in the DOM
+             duplicated every row component, observer, and derived calculation. -->
+        {#if mode === 'chats'}
           {#if pinnedInboxThreads.length > 0}
             <div class="mb-3">
               <p
@@ -3142,8 +3152,8 @@
               <p class="text-xs text-dimmed">Start a new chat to get going</p>
             </div>
           {/if}
-        </div>
-        <div class={mode === 'threads' ? '' : 'hidden'}>
+        {/if}
+        {#if mode === 'threads'}
           {#if threadsSearchOpen && threadsSearchQuery.trim()}
             <!-- Threads search: results render inline in the sidebar so the user
                  can open several results without the search dismissing. -->
@@ -3218,8 +3228,8 @@
               </button>
             {/if}
           {/if}
-        </div>
-        <div class={mode === 'projects' ? '' : 'hidden'}>
+        {/if}
+        {#if mode === 'projects'}
           <!-- Pinned threads above everything -->
           <PinnedSection
             threads={pinnedThreads}
@@ -3634,7 +3644,7 @@
               {/each}
             </div>
           {/if}
-        </div>
+        {/if}
       {/if}
     </CollapsibleSidebar>
   {/if}

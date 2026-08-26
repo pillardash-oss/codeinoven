@@ -279,7 +279,8 @@ export class GitState {
 
   private async readStatus(projectId: string): Promise<GitStatus | null> {
     const [id, scope] = this.statusTarget(projectId)
-    const status = (await invoke('git:status', id, scope ?? undefined)) as GitStatus | null | undefined
+    const status = (await invoke('git:status', id, scope ?? undefined)) as
+      GitStatus | null | undefined
     if (!status) return null
     return status
   }
@@ -301,7 +302,11 @@ export class GitState {
     if (!project || project.id === INBOX_PROJECT_ID) return
     if (project.source !== 'local' || project.changeTrackingMode !== 'git') return
     if (!project.path.trim()) return
+    const scopeBucketId = thread?.scopeBucketId ?? null
+    const targetChanged =
+      this.activeProjectId !== project.id || this.activeScopeBucketId !== scopeBucketId
     this.activate(project.id, thread?.scopeBucketId ?? undefined)
+    if (!targetChanged) return
     queueMicrotask(() => void this.refresh(project.id).catch(() => {}))
   }
 
@@ -608,7 +613,10 @@ export class GitState {
       )
         return
       if (!status) {
-        this.error = errorMessage(new Error('Git status returned no result'), 'Git status could not be loaded')
+        this.error = errorMessage(
+          new Error('Git status returned no result'),
+          'Git status could not be loaded'
+        )
         this.status = null
         return
       }
