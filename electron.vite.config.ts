@@ -1,34 +1,10 @@
 import { defineConfig, loadEnv } from 'electron-vite'
 import { svelte } from '@sveltejs/vite-plugin-svelte'
 import tailwindcss from '@tailwindcss/vite'
-import { existsSync, readFileSync } from 'node:fs'
+import { readFileSync } from 'node:fs'
 import { resolve } from 'path'
-import type { Plugin, PreviewServer, ViteDevServer } from 'vite'
+import type { Plugin, PluginOption, PreviewServer, ViteDevServer } from 'vite'
 import packageJson from './package.json'
-
-// Set only by `bun run dev:remote-pwa` (see scripts/dev-remote-pwa.ts), which
-// pre-generates a self-signed cert covering the machine's LAN IPs so a phone
-// on the same WiFi gets a secure context (HMR + installable PWA + service
-// worker) straight from the Vite dev server — no production LAN gateway
-// build/rebuild cycle required. Regular `bun run dev` never sets this and is
-// unaffected.
-const remotePwaDevCertDir = resolve(__dirname, '.cio/tmp/remote-pwa-dev-cert')
-const remotePwaDevKeyPath = resolve(remotePwaDevCertDir, 'key.pem')
-const remotePwaDevCertPath = resolve(remotePwaDevCertDir, 'cert.pem')
-
-function remotePwaDevServerConfig():
-  { host: true; port: number; https: { key: Buffer; cert: Buffer } } | undefined {
-  if (process.env.REMOTE_PWA_DEV !== '1') return undefined
-  if (!existsSync(remotePwaDevKeyPath) || !existsSync(remotePwaDevCertPath)) return undefined
-  return {
-    host: true,
-    port: Number(process.env.REMOTE_PWA_DEV_PORT ?? 5173),
-    https: {
-      key: readFileSync(remotePwaDevKeyPath),
-      cert: readFileSync(remotePwaDevCertPath)
-    }
-  }
-}
 
 const pwaManifestPath = resolve(__dirname, 'src/renderer/static/manifest.webmanifest')
 const pwaManifest = JSON.parse(readFileSync(pwaManifestPath, 'utf8')) as Record<string, unknown>
@@ -66,6 +42,25 @@ function pwaManifestVersionPlugin(): Plugin {
       })
     }
   }
+}
+
+/** Renderer root/aliases/plugins, shared with scripts/dev-remote-pwa.ts so a
+ *  standalone Vite dev server for the phone PWA stays in sync with the real
+ *  electron-vite renderer config instead of drifting out of a duplicate. */
+export const rendererRoot = resolve(__dirname, 'src/renderer')
+export const rendererPublicDir = resolve(__dirname, 'src/renderer/static')
+export const rendererAlias = {
+  $lib: resolve(__dirname, 'src/renderer/lib'),
+  $engines: resolve(__dirname, 'src/lib/engines'),
+  $adapters: resolve(__dirname, 'src/lib/adapters'),
+  $shared: resolve(__dirname, 'src/lib')
+}
+export function rendererPlugins(): PluginOption[] {
+  return [
+    pwaManifestVersionPlugin(),
+    svelte({ configFile: resolve(__dirname, 'svelte.config.js') }),
+    tailwindcss()
+  ]
 }
 
 export default defineConfig(({ mode }) => {
@@ -140,22 +135,12 @@ export default defineConfig(({ mode }) => {
       define: {
         __CODEINOVEN_APP_VERSION__: JSON.stringify(packageJson.version)
       },
-      root: resolve(__dirname, 'src/renderer'),
-      publicDir: resolve(__dirname, 'src/renderer/static'),
-      plugins: [
-        pwaManifestVersionPlugin(),
-        svelte({ configFile: resolve(__dirname, 'svelte.config.js') }),
-        tailwindcss()
-      ],
+      root: rendererRoot,
+      publicDir: rendererPublicDir,
+      plugins: rendererPlugins(),
       resolve: {
-        alias: {
-          $lib: resolve(__dirname, 'src/renderer/lib'),
-          $engines: resolve(__dirname, 'src/lib/engines'),
-          $adapters: resolve(__dirname, 'src/lib/adapters'),
-          $shared: resolve(__dirname, 'src/lib')
-        }
+        alias: rendererAlias
       },
-      server: remotePwaDevServerConfig(),
       build: {
         outDir: resolve(__dirname, 'out/renderer'),
         rollupOptions: {

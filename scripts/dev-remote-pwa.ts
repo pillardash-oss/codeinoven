@@ -1,12 +1,17 @@
 /**
- * Dev workflow for testing the remote/mobile PWA (remote.html) with live HMR.
+ * Standalone HMR preview for the remote/mobile PWA (remote.html), independent
+ * of the running Electron desktop dev process.
  *
- * Runs `electron-vite dev` with the renderer dev server bound to 0.0.0.0 over
- * HTTPS (self-signed cert covering this machine's LAN IPs), so a phone on the
- * same WiFi can open the dev server directly — full HMR, no LAN-gateway
- * build/serve cycle. Pass `--tunnel` to also start an ngrok HTTP tunnel to
- * that port, for testing from a phone on a different network (cellular,
- * different WiFi) with a public HTTPS URL.
+ * Starts a plain Vite dev server (not electron-vite — the desktop app is
+ * never rebuilt or relaunched) for just the renderer, reusing the same root/
+ * aliases/plugins as electron.vite.config.ts so it never drifts out of sync.
+ * The server binds 0.0.0.0 over HTTPS (self-signed cert covering this
+ * machine's LAN IPs, generated via the same helper the production LAN
+ * gateway uses) so a phone gets a secure context — required for the service
+ * worker and "Add to Home Screen" — straight from Vite with full HMR.
+ *
+ * Pass `--tunnel` to also start an ngrok HTTP tunnel to that port, for
+ * testing from a phone on a different network (cellular, different WiFi).
  *
  * Usage:
  *   bun scripts/dev-remote-pwa.ts             # same-WiFi only
@@ -16,6 +21,13 @@ import { spawn, type ChildProcess } from 'node:child_process'
 import { mkdir } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { createServer, type ViteDevServer } from 'vite'
+import {
+  rendererAlias,
+  rendererPlugins,
+  rendererPublicDir,
+  rendererRoot
+} from '../electron.vite.config'
 import {
   loadOrCreateSelfSignedCertificate,
   detectPreferredLanIps
@@ -24,21 +36,23 @@ import { Logger } from '../src/main/system/logger'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 const certDir = join(root, '.cio/tmp/remote-pwa-dev-cert')
-const port = Number(process.env.REMOTE_PWA_DEV_PORT ?? 5173)
+const port = Number(process.env.REMOTE_PWA_DEV_PORT ?? 5180)
 const wantsTunnel = process.argv.includes('--tunnel')
 
-const children: ChildProcess[] = []
+let viteServer: ViteDevServer | null = null
+const childProcesses: ChildProcess[] = []
 let shuttingDown = false
 
-function shutdown(code: number): void {
+async function shutdown(code: number): Promise<void> {
   if (shuttingDown) return
   shuttingDown = true
-  for (const child of children) child.kill('SIGTERM')
+  for (const child of childProcesses) child.kill('SIGTERM')
+  await viteServer?.close()
   process.exit(code)
 }
 
-process.on('SIGINT', () => shutdown(0))
-process.on('SIGTERM', () => shutdown(0))
+process.on('SIGINT', () => void shutdown(0))
+process.on('SIGTERM', () => void shutdown(0))
 
 async function ngrokAvailable(): Promise<boolean> {
   return new Promise((resolvePromise) => {
@@ -71,7 +85,22 @@ async function main(): Promise<void> {
   const cert = await loadOrCreateSelfSignedCertificate(certDir)
   const lanIps = detectPreferredLanIps()
 
-  Logger.info(`[dev-remote-pwa] Self-signed cert ready for: ${cert.hosts.join(', ')}`)
+  viteServer = await createServer({
+    configFile: false,
+    root: rendererRoot,
+    publicDir: rendererPublicDir,
+    plugins: rendererPlugins(),
+    resolve: { alias: rendererAlias },
+    server: {
+      host: true,
+      port,
+      strictPort: true,
+      https: { key: cert.key, cert: cert.cert }
+    }
+  })
+  await viteServer.listen()
+
+  Logger.info(`[dev-remote-pwa] Vite dev server for remote.html listening on port ${port}.`)
   Logger.info('[dev-remote-pwa] Same-WiFi phone URL(s):')
   for (const ip of lanIps) Logger.info(`  https://${ip}:${port}/remote.html`)
   if (lanIps.length === 0) {
@@ -81,21 +110,13 @@ async function main(): Promise<void> {
     '[dev-remote-pwa] The phone browser will warn about the self-signed cert — accept/continue is expected in dev.'
   )
 
-  const devProcess = spawn('bun', ['run', 'dev'], {
-    cwd: root,
-    stdio: 'inherit',
-    env: { ...process.env, REMOTE_PWA_DEV: '1', REMOTE_PWA_DEV_PORT: String(port) }
-  })
-  children.push(devProcess)
-  devProcess.on('exit', (code) => shutdown(code ?? 0))
-
   if (wantsTunnel) {
     const ngrokProcess = spawn(
       'ngrok',
       ['http', `https://localhost:${port}`, '--log=stdout', '--log-format=logfmt'],
       { stdio: ['ignore', 'pipe', 'inherit'] }
     )
-    children.push(ngrokProcess)
+    childProcesses.push(ngrokProcess)
     ngrokProcess.stdout?.on('data', () => {})
     ngrokProcess.on('exit', (code) => {
       if (!shuttingDown) Logger.error(`[dev-remote-pwa] ngrok exited (code ${code}).`)
