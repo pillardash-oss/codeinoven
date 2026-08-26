@@ -9056,6 +9056,36 @@
             {/if}
           {/each}
 
+          {#if latestTraceNeedsDedicatedSurface}
+            <WorkingTrace
+              parts={latestTraceParts}
+              open={latestTraceIsActive || (restoredBusy && latestTurnInfo.active)}
+              busy={latestTraceIsActive || (restoredBusy && latestTurnInfo.active)}
+              latest
+              done={latestTraceDone}
+              rehydrated={restoredBusy && !latestTraceIsActive && !latestTraceDone}
+              startTime={activeTurnStartTime}
+              modelLabel={latestTraceIsActive ? currentWorkingTraceAttribution.modelLabel : null}
+              thinkingLevel={latestTraceIsActive
+                ? currentWorkingTraceAttribution.thinkingLevel
+                : null}
+              providerName={latestTraceIsActive
+                ? currentWorkingTraceAttribution.providerName
+                : null}
+              harnessId={latestTraceIsActive ? currentWorkingTraceAttribution.harnessId : null}
+              harnessName={latestTraceIsActive ? currentWorkingTraceAttribution.harnessName : null}
+              isFast={latestTraceIsActive && currentWorkingTraceAttribution.isFast}
+              initialOpen
+              initialUserOpened={agentRuns.isTraceUserOpened(thread.projectId, thread.id)}
+              projectId={thread.projectId}
+              threadId={thread.id}
+              onToggle={(open, userOpened) =>
+                agentRuns.setTraceOpen(thread.projectId, thread.id, open, userOpened)}
+              onOpenSubagent={openSubagent}
+              onCiteFile={openFileCitation}
+            />
+          {/if}
+
           {#if specGenerationTraceActive && specGenerationTraceParts.length > 0}
             <WorkingTrace
               parts={specGenerationTraceParts}
@@ -9090,39 +9120,6 @@
          the top of the whole stack: straddling an error card when one is shown
          and dropping back to its normal spot above the composer otherwise. -->
     <div class="bottom-chrome relative shrink-0">
-      {#if latestTraceNeedsDedicatedSurface}
-        <div class="conversation-gutter shrink-0 px-6 pb-2">
-          <div class="mx-auto max-w-3xl">
-            <WorkingTrace
-              parts={latestTraceParts}
-              open={latestTraceIsActive || (restoredBusy && latestTurnInfo.active)}
-              busy={latestTraceIsActive || (restoredBusy && latestTurnInfo.active)}
-              latest
-              done={latestTraceDone}
-              rehydrated={restoredBusy && !latestTraceIsActive && !latestTraceDone}
-              startTime={activeTurnStartTime}
-              modelLabel={latestTraceIsActive ? currentWorkingTraceAttribution.modelLabel : null}
-              thinkingLevel={latestTraceIsActive
-                ? currentWorkingTraceAttribution.thinkingLevel
-                : null}
-              providerName={latestTraceIsActive
-                ? currentWorkingTraceAttribution.providerName
-                : null}
-              harnessId={latestTraceIsActive ? currentWorkingTraceAttribution.harnessId : null}
-              harnessName={latestTraceIsActive ? currentWorkingTraceAttribution.harnessName : null}
-              isFast={latestTraceIsActive && currentWorkingTraceAttribution.isFast}
-              initialOpen
-              initialUserOpened={agentRuns.isTraceUserOpened(thread.projectId, thread.id)}
-              projectId={thread.projectId}
-              threadId={thread.id}
-              onToggle={(open, userOpened) =>
-                agentRuns.setTraceOpen(thread.projectId, thread.id, open, userOpened)}
-              onOpenSubagent={openSubagent}
-              onCiteFile={openFileCitation}
-            />
-          </div>
-        </div>
-      {/if}
       {#if userScrolledAway}
         <button
           type="button"
