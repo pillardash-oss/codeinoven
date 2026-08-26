@@ -6712,25 +6712,10 @@ export function registerIpcHandlers(
           }
         }
         await finalize()
-        // Broadcast immediately so the new thread opens instantly — branch
-        // detection runs afterwards and updates the row without ever blocking
-        // typing, voice, or the "Loading conversation..." state.
+        // Broadcast immediately so the new thread opens instantly — the git
+        // branch settles through a detached task below and arrives via a later
+        // broadcast, never blocking typing, voice, or "Loading conversation...".
         broadcastThreadUpdate(thread)
-        if (thread.workingDirectory) {
-          try {
-            const branch = await repositoryService.getCurrentBranch(thread.workingDirectory)
-            if (branch) {
-              await threadManager.setBranch(thread.projectId, thread.id, branch)
-              thread.branch = branch
-              broadcastThreadUpdate(thread)
-            }
-          } catch (error) {
-            Logger.error('New thread branch detection failed', {
-              threadId: thread.id,
-              error: String(error)
-            })
-          }
-        }
       },
       () => {
         broadcastThreadDeleted(thread)
@@ -6741,6 +6726,27 @@ export function registerIpcHandlers(
         )
       }
     )
+    // Branch detection is deliberately detached from readiness. `awaitReady`
+    // consumers (thread:get, engineeringLifecycle:get, spec/audit/assignment/
+    // brainstorm/prd reads, thread:updateSettings) must never stall behind a
+    // git round-trip: a slow or hung `rev-parse` would otherwise freeze every
+    // thread-scoped read at the exact moment the composer settles the branch.
+    threadCreation.beginDetached(thread.id, async (aborted) => {
+      if (aborted || !thread.workingDirectory) return
+      try {
+        const branch = await repositoryService.getCurrentBranch(thread.workingDirectory)
+        if (branch) {
+          await threadManager.setBranch(thread.projectId, thread.id, branch)
+          thread.branch = branch
+          broadcastThreadUpdate(thread)
+        }
+      } catch (error) {
+        Logger.error('New thread branch detection failed', {
+          threadId: thread.id,
+          error: String(error)
+        })
+      }
+    })
     return thread
   })
   if (!options.hydrationHandlersRegistered) {
