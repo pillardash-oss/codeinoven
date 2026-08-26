@@ -2866,7 +2866,6 @@
     if (locallySubmittedTurnId) return
     if (agentRuns.activity(thread.projectId, thread.id) === 'brainstorm_report') return
     restoredBusy = false
-    clearStreamParts()
     liveWorkingSelection = null
     agentRuns.setIdle(thread.projectId, thread.id)
   }
@@ -2876,7 +2875,6 @@
     if (locallySubmittedTurnId && !locallySubmittedTurnAcknowledged) return false
     if (agentRuns.activity(thread.projectId, thread.id) === 'brainstorm_report') return false
     restoredBusy = false
-    clearStreamParts()
     clearLocalTurn()
     agentRuns.setIdle(thread.projectId, thread.id)
     return true
@@ -3121,20 +3119,21 @@
       const liveSessionWorking =
         providerStatus?.state === 'waiting' || providerStatus?.state === 'working'
       restoredBusy = providerStatus === null && hasPersistedInFlightWork()
-      if (liveSessionWorking || restoredBusy) {
-        // Rebuild the working trace from the durable SSE log for both live and
-        // rehydrated sessions. The bounded mirror can contain only the newest
-        // snapshot of a long turn, while the stream log retains all parts.
-        const generation = ++streamPartsLoadGeneration
-        void invoke('thread:loadStreamParts', projectId, id)
-          .then((parts) => {
-            if (alive && generation === streamPartsLoadGeneration) streamParts = parts
-          })
-          .catch(() => {})
-      } else {
-        clearStreamParts()
-        if (providerStatus === null) setIdleFromRestore()
-      }
+      // Always rebuild the latest logical turn from the durable SSE log. The
+      // bounded mirror can contain only the newest snapshot of a long turn,
+      // and a finished thread still needs the same complete trace after a
+      // refresh or thread switch.
+      const generation = ++streamPartsLoadGeneration
+      void invoke('thread:loadStreamParts', projectId, id)
+        .then((parts) => {
+          if (!alive || generation !== streamPartsLoadGeneration) return
+          streamParts = parts
+          if (providerStatus === null && !restoredBusy && hasRenderableWorkingParts(parts)) {
+            restoredBusy = !isLatestTurnCompleted()
+          }
+        })
+        .catch(() => {})
+      if (!liveSessionWorking && providerStatus === null) setIdleFromRestore()
       // Never pull the full live harness transcript while mounting a thread.
       // `agent:loadMessages` is intentionally unbounded: a long-running agent
       // can return thousands of parts, and the main process then synchronizes
@@ -7980,9 +7979,25 @@
     if (startIndex === -1) return false
     if (isTurnCompleted(startIndex)) return false
     const parts = getTurnWorkingParts(startIndex, false)
+    return hasRenderableWorkingParts(parts)
+  }
+
+  function hasRenderableWorkingParts(parts: AgentPart[]): boolean {
     return parts.some(
-      (part) => part.type === 'reasoning' || part.type === 'tool' || part.type === 'subagent'
+      (part) =>
+        part.type === 'reasoning' ||
+        part.type === 'tool' ||
+        part.type === 'subagent' ||
+        part.type === 'compaction' ||
+        part.type === 'compaction-summary' ||
+        part.type === 'step-finish' ||
+        part.type === 'file'
     )
+  }
+
+  function isLatestTurnCompleted(): boolean {
+    const startIndex = latestTurnInfo.startIndex
+    return startIndex !== -1 && isTurnCompleted(startIndex)
   }
 
   /** Merge durable stream-log parts (freshest) with mirror parts, deduped by id
@@ -7999,11 +8014,44 @@
       if (!byId[part.id]) {
         order.push(part.id)
         byId[part.id] = part
+      } else {
+        byId[part.id] = moreCompleteWorkingPart(byId[part.id], part)
       }
     }
     return order.flatMap((id) => {
       const part = byId[id]
       return part ? [part] : []
+    })
+  }
+
+  function moreCompleteWorkingPart(current: AgentPart, incoming: AgentPart): AgentPart {
+    if (
+      current.type === incoming.type &&
+      (current.type === 'text' || current.type === 'reasoning') &&
+      (incoming.type === 'text' || incoming.type === 'reasoning')
+    ) {
+      if (incoming.text.startsWith(current.text) && incoming.text.length > current.text.length) {
+        return incoming
+      }
+      if (current.text.startsWith(incoming.text) && current.text.length > incoming.text.length) {
+        return current
+      }
+    }
+    if (current.type === 'subagent' && incoming.type === 'subagent') {
+      return mergeSubagentParts(current, incoming)
+    }
+    return current
+  }
+
+  function streamWorkingPartsForTurn(startMsgIndex: number): AgentPart[] {
+    let turnEndIndex = startMsgIndex
+    while (turnEndIndex + 1 < messages.length && messages[turnEndIndex + 1]?.role !== 'user') {
+      turnEndIndex += 1
+    }
+    const finalText = getTurnFinalText(turnEndIndex)
+    return streamParts.filter((part) => {
+      if (part.type === 'question' || isTodoToolPart(part)) return false
+      return !(part.type === 'text' && finalText?.id === part.id)
     })
   }
 
@@ -8675,8 +8723,7 @@
               {@const isTurnStart = msgIndex === 0 || messages[msgIndex - 1]?.role === 'user'}
               {@const isTurnEnd =
                 msgIndex === messages.length - 1 || messages[msgIndex + 1]?.role === 'user'}
-              {@const isLatestTurn =
-                msgIndex === latestTurnInfo.startIndex && latestTurnInfo.active}
+              {@const isLatestTurn = msgIndex === latestTurnInfo.startIndex}
               {@const provider = messageProvider(msg)}
               {@const modelLabel = messageModelLabel(msg)}
               {@const msgThinking = messageThinkingLevel(msg)}
@@ -8702,11 +8749,12 @@
                     {@const traceIsRestored =
                       restoredBusy && isLatestTurn && !liveBusy && !turnDone}
                     {@const accumulatedTurnParts = getTurnWorkingParts(msgIndex, traceIsLive)}
+                    {@const durableTurnParts = streamWorkingPartsForTurn(msgIndex)}
                     {@const collectedTurnParts =
                       streamParts.length > 0 && isLatestTurn
                         ? traceIsRestored
-                          ? mergeWorkingParts(streamParts, accumulatedTurnParts)
-                          : mergeWorkingParts(accumulatedTurnParts, streamParts)
+                          ? mergeWorkingParts(durableTurnParts, accumulatedTurnParts)
+                          : mergeWorkingParts(accumulatedTurnParts, durableTurnParts)
                         : accumulatedTurnParts}
                     {@const turnParts = isAssignmentAuditorThread
                       ? collectedTurnParts.filter(
@@ -8716,7 +8764,7 @@
                     {#if turnParts.length > 0}
                       <WorkingTrace
                         parts={turnParts}
-                        open={traceIsLive || traceIsRestored}
+                        open={isLatestTurn || traceIsLive || traceIsRestored}
                         busy={traceIsLive || traceIsRestored}
                         latest={isLatestTurn}
                         done={turnDone}
