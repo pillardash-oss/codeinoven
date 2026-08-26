@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onDestroy, onMount, tick } from 'svelte'
+  import { onDestroy, onMount, tick, type Snippet } from 'svelte'
   import { fly } from 'svelte/transition'
   import { SvelteMap, SvelteSet } from 'svelte/reactivity'
 
@@ -210,6 +210,7 @@
   import { workflowActionPresentation } from '$shared/workflow-action-presentation'
   import { LatestRequestGuard } from '$lib/refresh-guard'
   import { isRemotePwaRuntime } from '$lib/runtime-context'
+  import type { ConversationController, SendPayload } from './ConversationController.svelte'
 
   type WorkingModelSelection = Pick<
     ThreadSettings,
@@ -230,6 +231,17 @@
     onContinueInProject?: (forked: Thread) => void
     /** Called after a brand-new project is added from the continue modal. */
     onProjectCreated?: (project: Project) => void | Promise<void>
+    /**
+     * Optional conversation controller. When provided, ThreadView delegates all
+     * core conversation state (messages, busy, send/steer/abort) to the
+     * controller instead of threadMessages / agentRuns. Used for conversations
+     * that don't follow the regular thread lifecycle, such as temporary chats.
+     */
+    controller?: ConversationController
+    /** Optional snippet rendered at the top of the conversation surface, above
+     *  the scrollable message list. Used by surfaces such as temporary chats to
+     *  expose their own header actions without duplicating ThreadView internals. */
+    headerSnippet?: Snippet
   }
 
   let {
@@ -239,7 +251,9 @@
     projects = [],
     projectIcons = new SvelteMap<string, string>(),
     onContinueInProject,
-    onProjectCreated
+    onProjectCreated,
+    controller,
+    headerSnippet
   }: Props = $props()
 
   // Workspace clears its selected-thread state before this keyed view's
@@ -249,9 +263,12 @@
   const mountedThread = threadProp
   let thread = $derived(threadProp ?? mountedThread)
 
+  /** True when this view is driven by an external controller (e.g. temporary chat). */
+  let hasController = $derived(controller !== undefined)
+
   let alive = true
 
-  let messages = $derived(threadMessages.messages(thread.projectId, thread.id))
+  let messages = $derived(controller?.messages ?? threadMessages.messages(thread.projectId, thread.id))
   // Intentional initial-value captures — Workspace keys this view by thread ID.
   // svelte-ignore state_referenced_locally
   const savedScrollState = threadScrollPositions.get(thread.id)
@@ -288,22 +305,24 @@
   let fullUserMessageHistory = $state<UserMessageSummary[]>([])
   let userMessageHistoryLoaded = false
   let userMessageHistoryLoading: Promise<void> | null = null
-  let hasOlderMessages = $derived(olderMessagesAvailable)
+  let hasOlderMessages = $derived(controller?.hasOlder ?? olderMessagesAvailable)
   let userMessageTexts = $derived(
     messages
       .filter((msg) => msg.role === 'user')
       .map((msg) => messageText(msg))
       .filter((text) => text.trim().length > 0)
   )
-  let loaded = $derived(threadMessages.loaded(thread.projectId, thread.id))
-  let busy = $derived(agentRuns.isBusy(thread.projectId, thread.id))
-  let conversationBusy = $derived(agentRuns.isConversationBusy(thread.projectId, thread.id))
+  let loaded = $derived(controller?.loaded ?? threadMessages.loaded(thread.projectId, thread.id))
+  let busy = $derived(controller?.busy ?? agentRuns.isBusy(thread.projectId, thread.id))
+  let conversationBusy = $derived(
+    (controller?.busy ?? false) || agentRuns.isConversationBusy(thread.projectId, thread.id)
+  )
   let brainstormReportRefreshing = $derived(
-    agentRuns.activity(thread.projectId, thread.id) === 'brainstorm_report'
+    !hasController && agentRuns.activity(thread.projectId, thread.id) === 'brainstorm_report'
   )
   /** Whether the current run is confirmed by live session activity. Persisted
    *  `planning`/`executing` is not enough to make the composer or trace busy. */
-  let liveBusy = $derived(agentRuns.isLiveBusy(thread.projectId, thread.id))
+  let liveBusy = $derived(controller?.busy ?? agentRuns.isLiveBusy(thread.projectId, thread.id))
   /** Whether the latest turn currently has any renderable working-trace parts.
    *  When the thread is busy but nothing has materialized to write to the
    *  screen yet (the agent is still connecting/assembling, or the hydrated
@@ -327,26 +346,34 @@
   // `connectSession` will promote it to busy when the live session confirms it.
   // This removes the false working flash on refresh and on view remounts.
   // svelte-ignore state_referenced_locally
-  if (
-    !agentRuns.isLiveBusy(thread.projectId, thread.id) &&
-    agentRuns.activity(thread.projectId, thread.id) !== 'brainstorm_report'
-  ) {
-    agentRuns.setIdle(thread.projectId, thread.id)
+  if (!hasController) {
+    if (
+      !agentRuns.isLiveBusy(thread.projectId, thread.id) &&
+      agentRuns.activity(thread.projectId, thread.id) !== 'brainstorm_report'
+    ) {
+      agentRuns.setIdle(thread.projectId, thread.id)
+    }
   }
   /** When the current busy run started; authoritative source for the live timer. */
-  const activeTurnStartTime = $derived.by(() => {
-    const since = agentRuns.busySince(thread.projectId, thread.id)
-    return since && since > 0 ? since : undefined
-  })
+  const activeTurnStartTime = $derived(
+    controller?.activeTurnStartTime ??
+      (() => {
+        const since = agentRuns.busySince(thread.projectId, thread.id)
+        return since && since > 0 ? since : undefined
+      })()
+  )
   // Intentional initial-value capture — view is remounted (keyed) per thread.
   // svelte-ignore state_referenced_locally
   let sessionId = $state(thread.sessionId ?? '')
   // Intentional initial-value capture — the view is remounted (keyed) per thread.
+  // For controller-driven conversations, the controller owns the settings proxy.
   // svelte-ignore state_referenced_locally
   let settings = $state<ThreadSettings>(
-    chatMode
-      ? normalizeChatSettings(chatSettings.initialFor(thread, chatEffectiveSettings()))
-      : threadSettings.initialFor(thread)
+    hasController
+      ? normalizeChatSettings(controller!.settings)
+      : chatMode
+        ? normalizeChatSettings(chatSettings.initialFor(thread, chatEffectiveSettings()))
+        : threadSettings.initialFor(thread)
   )
 
   function shouldHydrateEngineeringState(): boolean {
@@ -631,6 +658,20 @@
     AgentSessionStatus,
     { state: 'waiting' | 'error' }
   > | null>(() => {
+    if (controller?.status?.state === 'waiting' || controller?.status?.state === 'error') {
+      return controller.status
+    }
+    if (controller?.error) {
+      return {
+        state: 'error',
+        issue: {
+          kind: 'unknown',
+          message: controller.error,
+          harnessId: settings.harnessId,
+          retryable: true
+        }
+      }
+    }
     if (providerStatus?.state === 'waiting' || providerStatus?.state === 'error') {
       return providerStatus
     }
@@ -962,6 +1003,7 @@
    */
   let storedHarnessUsage = $state<AgentHarnessUsage[]>([])
   $effect(() => {
+    if (controller) return
     void invoke('thread:harnessUsage', thread.projectId, thread.id)
       .then((rows) => {
         storedHarnessUsage = rows.map((row) => ({
@@ -986,6 +1028,7 @@
     projectId = thread.projectId,
     threadId = thread.id
   ): Promise<void> {
+    if (controller) return
     const requestVersion = ++efficiencyKpiRequestVersion
     try {
       const kpis = await invoke('thread:efficiencyKpis', projectId, threadId)
@@ -2560,6 +2603,10 @@
 
   async function loadOlderMessages(): Promise<void> {
     if (!scrollEl || loadingOlderMessages || !hasOlderMessages) return
+    if (controller) {
+      await controller.loadOlder()
+      return
+    }
     loadingOlderMessages = true
     preservingHistoryViewport = true
     // Loading history is an explicit request to inspect the past. Keep live
@@ -2753,6 +2800,38 @@
     const mountedThreadId = thread.id
     workspaceState.jumpToMessage = jumpToMessage
     workspaceState.loadUserMessageHistory = refreshUserMessageHistory
+
+    const onResize = (): void => scheduleResponseBubbleUpdate()
+    window.addEventListener('resize', onResize)
+
+    if (controller) {
+      controller.mount()
+      void controller.load()
+      localReady = Promise.resolve()
+      sessionReady = Promise.resolve('')
+
+      return () => {
+        alive = false
+        // Save scroll position so switching back snaps to the right place
+        if (scrollEl) {
+          threadScrollPositions.set(mountedThreadId, {
+            top: scrollEl.scrollTop,
+            awayFromBottom: userScrolledAway
+          })
+        }
+        window.removeEventListener('resize', onResize)
+        clearTimeout(copyResetTimer)
+        workspaceState.sources = []
+        workspaceState.jumpToMessage = null
+        if (workspaceState.loadUserMessageHistory === refreshUserMessageHistory) {
+          workspaceState.loadUserMessageHistory = null
+        }
+        workspaceState.messageCount = 0
+        workspaceState.userMessages = []
+        controller.unmount()
+      }
+    }
+
     if (shouldHydrateEngineeringState()) {
       void invoke('engineeringLifecycle:get', mountedProjectId, mountedThreadId)
         .then((state) => {
@@ -2766,9 +2845,6 @@
     // This view owns dispatch of the thread's queued message while mounted;
     // the background dispatcher must defer to it to avoid a double send.
     queuedMessageDispatcher.markMounted(mountedProjectId, mountedThreadId)
-
-    const onResize = (): void => scheduleResponseBubbleUpdate()
-    window.addEventListener('resize', onResize)
 
     // Subscribe to agent events for streaming
     unsubscribe = subscribe('agent:event', (...args: unknown[]) => {
@@ -2943,6 +3019,9 @@
   }
 
   async function loadLocal(attempt = 0): Promise<void> {
+    // Controller-driven conversations load themselves; ThreadView just renders.
+    if (controller) return
+
     const { projectId, id } = thread
     await threadMessages.waitForLoad(projectId, id)
     // New empty thread seeded as loaded before mount must render the
@@ -3065,6 +3144,9 @@
 
   /** Restore app-owned session state without contacting native harness transport. */
   async function connectSession(): Promise<void> {
+    // Controller-driven conversations own their own session handshake.
+    if (controller) return
+
     const { projectId, id } = thread
     // Independent extras — each lands as it resolves, none block the paint.
     void refreshCheckpoints()
@@ -3353,6 +3435,9 @@
   }
 
   function handleAgentEvent(event: AgentEvent): void {
+    // Controller-driven conversations handle their own live events.
+    if (controller) return
+
     if (
       event.type === 'spec.trace' &&
       event.projectId === thread.projectId &&
@@ -3580,6 +3665,7 @@
 
   async function refreshMessages(): Promise<void> {
     if (refreshMessagesInFlight) return refreshMessagesInFlight
+    if (controller) return
 
     const { projectId, id } = thread
     const loadPromise = (async (): Promise<void> => {
@@ -3956,6 +4042,27 @@
     restorable?: boolean,
     startAfterThreads: StartAfterThreadReference[] = []
   ): Promise<void> {
+    if (controller) {
+      errorMessage = ''
+      providerStatus = null
+      userScrolledAway = false
+      idleAttentionHandled = false
+      const payload: SendPayload = {
+        text,
+        attachments,
+        specAction,
+        direct,
+        promptContext,
+        promptReferences,
+        projectReferences,
+        presentation,
+        taskReferences
+      }
+      await controller.send(payload)
+      recordModelUse()
+      return
+    }
+
     const msg = normalizeComposerMessage(text, projectReferences)
     const hasAttachments = (attachments?.length ?? 0) > 0
     const hasProjectReferences = (projectReferences?.length ?? 0) > 0
@@ -4189,6 +4296,16 @@
     if (!busy) return
     const { projectId, id } = thread
     userRequestedStop = true
+
+    if (controller) {
+      try {
+        await controller.abort()
+      } catch (error) {
+        errorMessage = error instanceof Error ? error.message : 'The request could not be stopped.'
+      }
+      return
+    }
+
     try {
       await invoke('agent:abort', projectId, id)
       clearLocalTurn()
@@ -4336,6 +4453,24 @@
     const presentation = queuedPresentation
     const taskReferences = queuedTaskReferences
     if ((!msg && !queuedHasContent) || !busy || specFormulating) return
+
+    if (controller) {
+      clearQueuedState()
+      showQueueMenu = false
+      userScrolledAway = false
+      errorMessage = ''
+      const payload: SendPayload = {
+        text: msg,
+        attachments,
+        promptContext,
+        promptReferences,
+        projectReferences,
+        presentation,
+        taskReferences
+      }
+      await controller.steer(payload)
+      return
+    }
     clearQueuedState()
     showQueueMenu = false
     // Snap to bottom — the steer message just appeared
@@ -7319,6 +7454,11 @@
     const harnessChanged = settings.harnessId !== normalized.harnessId
     const providerChanged = settings.providerId !== normalized.providerId
     settings = normalized
+    if (controller) {
+      commitSettings(normalized)
+      controller.updateSettings(normalized)
+      return
+    }
     if (harnessChanged || providerChanged) {
       // Reset only the single-harness context meter so the battery reflects
       // the newly selected configuration. Preserve the live per-harness quota
@@ -8218,6 +8358,10 @@
   class="thread-view relative flex min-h-0 min-w-0 flex-1 flex-col"
   data-region={showSpecStudio ? 'spec-studio' : undefined}
 >
+  {#if headerSnippet}
+    {@render headerSnippet()}
+  {/if}
+
   {#if showSpecStudio}
     {#if findNavState.studioFindOpen}
       <FindInSurface
