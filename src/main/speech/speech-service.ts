@@ -29,10 +29,12 @@ import type {
   SpeechTranscriptionResult
 } from '../../lib/speech/types'
 import {
+  DEFAULT_SPEECH_SETTINGS,
   MAX_SPEECH_CHUNK_BYTES,
   recommendedSpeechRuntime,
   resolveSpeechRuntime
 } from '../../lib/speech/types'
+import type { SpeechUnloadOption } from '../../lib/speech/types'
 import { parseSpeechModelCatalog } from '../../lib/speech/model-catalog'
 import {
   buildParsedIdentityForValidation,
@@ -65,6 +67,24 @@ interface SpeechServicePaths {
   mlxWorkerPath: string
   coremlWorkerPath: string
   nativeCaptureWorkerPath: string
+}
+
+const UNLOAD_MS: Record<Exclude<SpeechUnloadOption, 'keep'>, number> = {
+  '5m': 5 * 60_000,
+  '10m': 10 * 60_000,
+  '20m': 20 * 60_000,
+  '30m': 30 * 60_000
+}
+
+const CAPABILITY_RUNTIME_MAP: Record<SpeechCapability, SpeechRuntime[]> = {
+  asr: ['sherpa-onnx', 'mlx', 'coreml'],
+  cleanup: ['sherpa-onnx', 'mlx'],
+  tts: ['sherpa-onnx', 'mlx']
+}
+
+function unloadMs(option: SpeechUnloadOption): number | null {
+  if (option === 'keep') return null
+  return UNLOAD_MS[option]
 }
 
 export interface SpeechRemoteCleanupInput {
@@ -118,6 +138,13 @@ export class SpeechService {
   private readonly playback = new TtsPlaybackService()
   private readonly nativeCapture: NativeSpeechCapture
   private readonly confirmations = new Map<string, SpeechConfirmation>()
+  private unloadOptions: Record<SpeechCapability, SpeechUnloadOption> = {
+    asr: DEFAULT_SPEECH_SETTINGS.asrUnload,
+    cleanup: DEFAULT_SPEECH_SETTINGS.cleanupUnload,
+    tts: DEFAULT_SPEECH_SETTINGS.ttsUnload
+  }
+  private readonly unloadTimers = new Map<SpeechCapability, NodeJS.Timeout>()
+  private readonly lastUsed = new Map<SpeechCapability, number>()
 
   constructor(
     private readonly paths: SpeechServicePaths,
@@ -310,6 +337,8 @@ export class SpeechService {
     language: string | 'auto',
     cleanupMode: SpeechCleanupMode = { kind: 'local' }
   ): Promise<SpeechTranscriptionResult> {
+    this.clearEvict('asr')
+    if (cleanupMode.kind === 'local') this.clearEvict('cleanup')
     const artifact = this.requireSelectableArtifact(artifactId, runtime, 'asr')
     const backend = this.requireBackend(runtime)
     const modelFamily =
@@ -431,6 +460,11 @@ export class SpeechService {
         }
       })
       this.emit({ kind: 'history', attemptId, stage: 'completed' })
+      this.touch('asr')
+      // Cleanup provenance may have touched cleanup model — also refresh cleanup timer if local cleanup used
+      if (cleanupMode.kind === 'local' && cleanupProvenance.mode === 'local' && !cleanupProvenance.failed) {
+        this.touch('cleanup')
+      }
       return { attemptId, jobId: queued.id, rawTranscript, finalTranscript }
     } catch (cause) {
       const error = this.asError(cause, 'transcription-failed')
@@ -466,11 +500,14 @@ export class SpeechService {
           },
           ac.signal
         )
+        this.touch('asr')
       } catch {
         // Warmup is best-effort; transcription will surface real errors.
       } finally {
         clearTimeout(timer)
       }
+    } else {
+      this.touch('asr')
     }
   }
 
@@ -1184,6 +1221,8 @@ export class SpeechService {
     const backend = this.requireBackend(runtime)
     const outputPath = this.storage.stagingFile(`${sessionId}.${segmentIndex}.${randomUUID()}.wav`)
     const prepared = this.playback.segment(sessionId, segmentIndex)
+    // Cancel any pending idle evict while synthesis is in-flight
+    this.clearEvict('tts')
     const queued = this.queue.enqueue({
       capability: 'tts',
       runtime,
@@ -1201,10 +1240,12 @@ export class SpeechService {
     try {
       await queued.result
       this.playback.assertActive(sessionId)
+      const audio = await this.playback.consumeAudio(outputPath)
+      this.touch('tts')
       return {
         sessionId,
         segmentIndex,
-        audio: await this.playback.consumeAudio(outputPath)
+        audio
       }
     } catch (cause) {
       await rm(outputPath, { force: true })
@@ -1322,7 +1363,105 @@ export class SpeechService {
     return this.queue.cancel(jobId)
   }
 
+  updateUnloadOptions(options: Partial<Record<SpeechCapability, SpeechUnloadOption>>): void {
+    let changed = false
+    for (const capability of ['asr', 'cleanup', 'tts'] as const) {
+      const next = options[capability]
+      if (next && next !== this.unloadOptions[capability]) {
+        this.unloadOptions[capability] = next
+        changed = true
+        // reschedule with new delay based on last activity
+        if (this.lastUsed.has(capability)) {
+          this.scheduleEvict(capability)
+        } else if (next === 'keep') {
+          this.clearEvict(capability)
+        }
+      }
+    }
+    if (changed) {
+      Logger.dev('Speech unload options updated', { ...this.unloadOptions })
+    }
+  }
+
+  private touch(capability: SpeechCapability): void {
+    this.lastUsed.set(capability, Date.now())
+    // While work is active, ensure no pending evict races; reschedule after current work settles
+    this.clearEvict(capability)
+    // Don't schedule while a job is actively running for this capability
+    if (this.isCapabilityBusy(capability)) return
+    this.scheduleEvict(capability)
+  }
+
+  private clearEvict(capability: SpeechCapability): void {
+    const timer = this.unloadTimers.get(capability)
+    if (timer) {
+      clearTimeout(timer)
+      this.unloadTimers.delete(capability)
+    }
+  }
+
+  private scheduleEvict(capability: SpeechCapability): void {
+    this.clearEvict(capability)
+    const option = this.unloadOptions[capability]
+    const delay = unloadMs(option)
+    if (delay === null) return
+    const last = this.lastUsed.get(capability) ?? Date.now()
+    // If we already have elapsed time, shorten first delay
+    const elapsed = Date.now() - last
+    const remaining = Math.max(500, delay - elapsed)
+    const timer = setTimeout(() => {
+      void this.evictCapability(capability)
+    }, remaining)
+    // Don't prevent app quit
+    if (typeof (timer as unknown as { unref?: () => void }).unref === 'function') {
+      ;(timer as unknown as { unref: () => void }).unref?.()
+    }
+    this.unloadTimers.set(capability, timer)
+  }
+
+  private isCapabilityBusy(capability: SpeechCapability): boolean {
+    for (const runtime of CAPABILITY_RUNTIME_MAP[capability]) {
+      if (this.queue.hasActive(runtime) || this.queue.hasPending(runtime)) return true
+    }
+    return false
+  }
+
+  private async evictCapability(capability: SpeechCapability): Promise<void> {
+    this.unloadTimers.delete(capability)
+    const last = this.lastUsed.get(capability)
+    const option = this.unloadOptions[capability]
+    const delay = unloadMs(option)
+    if (delay === null) return
+    if (last !== undefined && Date.now() - last < delay - 250) {
+      // Activity happened sooner than expected — reschedule
+      this.scheduleEvict(capability)
+      return
+    }
+    if (this.isCapabilityBusy(capability)) {
+      // Defer while busy; will be rescheduled on next touch
+      Logger.dev('Speech auto-evict deferred — capability busy', { capability })
+      return
+    }
+    const runtimes = CAPABILITY_RUNTIME_MAP[capability]
+    const targets = runtimes.filter((runtime) => this.queue.isIdle(runtime))
+    if (targets.length === 0) return
+    Logger.dev('Speech auto-evict', { capability, runtimes: targets, option })
+    await Promise.all(
+      targets.map(async (runtime) => {
+        const backend = this.backends.get(runtime)
+        if (!backend) return
+        try {
+          await backend.dispose()
+        } catch (cause) {
+          Logger.error('Speech auto-evict dispose failed', { capability, runtime, cause })
+        }
+      })
+    )
+  }
+
   async dispose(): Promise<void> {
+    for (const timer of this.unloadTimers.values()) clearTimeout(timer)
+    this.unloadTimers.clear()
     for (const controller of this.downloadControllers.values()) controller.abort()
     this.downloadControllers.clear()
     const activeNativeSession = this.nativeCapture.activeSessionId

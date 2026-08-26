@@ -599,6 +599,17 @@ async function bootPostPaintServices(): Promise<void> {
     (input) => chatEngine!.transcribeSpeechAudio(input)
   )
   await speechService.initialize()
+  // Initialize auto-evict timers from persisted sound settings
+  try {
+    const cfg = await storage.getConfig()
+    speechService.updateUnloadOptions({
+      asr: cfg.sound.asrUnload,
+      cleanup: cfg.sound.cleanupUnload,
+      tts: cfg.sound.ttsUnload
+    })
+  } catch {
+    // defaults already applied
+  }
   unregisterSpeechIpc = registerSpeechIpc(speechService, () => mainWindow?.webContents ?? null)
   prototypePreviewService = new PrototypePreviewService()
   const prototypePreviewPort = await prototypePreviewService.start()
@@ -661,7 +672,8 @@ async function bootPostPaintServices(): Promise<void> {
     worktreeService: scopeWorktreeService,
     threadCreation,
     threadDeletion,
-    hydrationHandlersRegistered: true
+    hydrationHandlersRegistered: true,
+    speechService
   })
   chatEngine.register()
   harnessManifestService.register()

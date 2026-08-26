@@ -2064,6 +2064,8 @@ export interface RegisterIpcHandlersOptions {
   worktreeInspector?: ManagedWorktreeInspector
   /** Shared managed-worktree service; the resolver inspector falls back to it. */
   worktreeService?: ScopeWorktreeService
+  /** Speech service for auto-evict of idle sound models. */
+  speechService?: { updateUnloadOptions: (opts: Record<string, unknown>) => void }
 }
 
 export function registerIpcHandlers(
@@ -2384,6 +2386,13 @@ export function registerIpcHandlers(
     options.powerWakeService?.setEnabled(config.keepAwakeWhileWorking)
     options.powerWakeService?.setRemoteEnabled(config.keepAwakeWhileRemoteConnected)
     options.retryScheduler?.setEnabled(config.autoRetryAfterReset)
+    if (patch.sound && options.speechService) {
+      options.speechService.updateUnloadOptions({
+        asr: patch.sound.asrUnload,
+        cleanup: patch.sound.cleanupUnload,
+        tts: patch.sound.ttsUnload
+      } as Record<string, unknown>)
+    }
     return config
   })
   ipcMain.handle('config:syncAgentRole', async (_, role: unknown, selection: unknown) => {
