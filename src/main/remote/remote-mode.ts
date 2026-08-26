@@ -148,6 +148,13 @@ const ACCOUNT_TOKEN_REFRESH_RETRY_MS = 5 * 60_000
 const ACCOUNT_TOKEN_REFRESH_TIMER_MAX_MS = 24 * 60 * 60_000
 const ACCOUNT_PROFILE_REFRESH_RETRY_INITIAL_MS = 30_000
 const ACCOUNT_PROFILE_REFRESH_RETRY_MAX_MS = 5 * 60_000
+// Every renderer surface that shows the account (sidebar, settings, remote
+// client view) calls accountProfile() on mount. The cached profile always
+// answers instantly; this bounds how often a mount is additionally allowed to
+// revalidate over the network, so opening/switching between those views does
+// not each spend a Convex round trip. The periodic scheduleAccountProfileSync
+// timer already keeps the cache fresh in the background regardless.
+const ACCOUNT_PROFILE_REFRESH_MIN_INTERVAL_MS = 5 * 60_000
 
 function cloudResponseIsTerminal(status: number): boolean {
   return status >= 400 && status < 500 && status !== 408 && status !== 425 && status !== 429
@@ -525,6 +532,7 @@ export class RemoteModeController {
   private accountProfileRefreshPromise: Promise<void> | null = null
   private accountProfileRefreshFailureCount = 0
   private accountProfileRefreshRetryAt = 0
+  private accountProfileRefreshedAt = 0
   private cloudConfig: CloudAccessConfig | null = null
   private cloudRelay: CloudRelayClient | null = null
   private cloudEventSendQueue: Promise<void> = Promise.resolve()
@@ -1327,6 +1335,9 @@ export class RemoteModeController {
   private refreshAccountProfileInBackground(): Promise<void> {
     if (this.accountProfileRefreshPromise) return this.accountProfileRefreshPromise
     if (Date.now() < this.accountProfileRefreshRetryAt) return Promise.resolve()
+    if (Date.now() - this.accountProfileRefreshedAt < ACCOUNT_PROFILE_REFRESH_MIN_INTERVAL_MS) {
+      return Promise.resolve()
+    }
     this.accountProfileRefreshPromise = this.runAccountProfileRefresh().finally(() => {
       this.accountProfileRefreshPromise = null
     })
@@ -1335,6 +1346,7 @@ export class RemoteModeController {
 
   private async runAccountProfileRefresh(): Promise<void> {
     const generation = this.accountProfileGeneration
+    this.accountProfileRefreshedAt = Date.now()
     try {
       const state = await this.fetchAccountProfile()
       if (generation !== this.accountProfileGeneration) return
@@ -1408,6 +1420,7 @@ export class RemoteModeController {
     this.accountProfileGeneration++
     this.accountProfileRefreshFailureCount = 0
     this.accountProfileRefreshRetryAt = 0
+    this.accountProfileRefreshedAt = 0
     const config =
       this.accountConfig ??
       (await this.storage?.read<AccountSessionConfig>(ACCOUNT_CONFIG_PATH)) ??
@@ -1530,6 +1543,7 @@ export class RemoteModeController {
             this.accountProfileRefreshFailureCount = 0
             this.accountProfileRefreshRetryAt = 0
             const profile = await this.syncAccountProfile()
+            this.accountProfileRefreshedAt = Date.now()
             this.broadcastAccountProfile(profile)
             this.accountCallbackResponse(
               response,
