@@ -323,12 +323,17 @@ class ThreadMessagesStore {
   /** Merge a bounded history page without discarding pages already loaded for the thread. */
   mergePage(projectId: string, threadId: string, pageMessages: AgentMessage[]): void {
     const entry = this.entry(projectId, threadId)
-    const mergedById = new SvelteMap(entry.messages.map((message) => [message.id, message]))
+    // This accumulator is deliberately plain data, not renderer state. A
+    // reactive map here would add proxy tracking to every history-page load and
+    // wake unrelated dependents while a live trace is streaming.
+    const mergedById: Record<string, AgentMessage> = Object.fromEntries(
+      entry.messages.map((message) => [message.id, message])
+    )
     for (const message of pageMessages) {
-      const cached = mergedById.get(message.id)
-      mergedById.set(message.id, cached ? mergeMessageSnapshot(cached, message) : message)
+      const cached = mergedById[message.id]
+      mergedById[message.id] = cached ? mergeMessageSnapshot(cached, message) : message
     }
-    const merged = [...mergedById.values()].sort((a, b) => {
+    const merged = Object.values(mergedById).sort((a, b) => {
       const timeDiff = a.createdAt - b.createdAt
       if (timeDiff !== 0) return timeDiff
       return a.id.localeCompare(b.id)

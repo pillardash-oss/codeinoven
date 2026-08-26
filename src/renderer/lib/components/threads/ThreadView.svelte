@@ -340,6 +340,39 @@
     if (latestTurnInfo.startIndex === -1) return []
     return getTurnWorkingParts(latestTurnInfo.startIndex, conversationBusy && latestTurnInfo.active)
   })
+  /**
+   * The live trace is a bottom-anchored surface, not part of the paginated
+   * history window. A long turn can move its assistant message outside the
+   * twelve-message render window while its parts continue streaming; keeping
+   * this derived list separate guarantees that the operator can still see the
+   * active work and that loading older history cannot hide it.
+   */
+  let latestTraceParts = $derived.by(() => {
+    if (latestTurnInfo.startIndex < 0) return []
+    if (conversationBusy && messages[messages.length - 1]?.role === 'user') return []
+    const active = threadWorking && latestTurnInfo.active
+    const mirrorParts = getTurnWorkingParts(latestTurnInfo.startIndex, active)
+    const collected =
+      restoredBusy && streamParts.length > 0
+        ? mergeWorkingParts(streamParts, mirrorParts)
+        : mirrorParts
+    return isAssignmentAuditorThread
+      ? collected.filter((part) => part.type !== 'text' || part.phase === 'commentary')
+      : collected
+  })
+  let latestTraceIsActive = $derived.by(
+    () => threadWorking && latestTurnInfo.active && !brainstormReportRefreshing
+  )
+  let latestTraceDone = $derived.by(() => {
+    return latestTurnInfo.startIndex >= 0 && isTurnCompleted(latestTurnInfo.startIndex)
+  })
+  let latestTraceNeedsDedicatedSurface = $derived.by(() => {
+    if (latestTraceParts.length === 0) return false
+    if (latestTurnInfo.startIndex < 0) return true
+    return (
+      latestTurnInfo.startIndex < visibleStartIndex || latestTurnInfo.startIndex >= visibleEndIndex
+    )
+  })
   // A persisted in-flight status is only a recovery hint. Start every mount in
   // a settled idle state unless this thread is already receiving live activity;
   // `connectSession` will promote it to busy when the live session confirms it.
@@ -2553,6 +2586,8 @@
    *  event fired), so a large arrival never kills the follow lock and a
    *  scroll-away is never fought. */
   let lastScrollTop = 0
+  /** Prevent a history-page merge from being mistaken for new live content. */
+  let preservingHistoryViewport = false
 
   function onScroll(): void {
     if (!scrollEl) return
@@ -2581,19 +2616,23 @@
   async function loadOlderMessages(): Promise<void> {
     if (!scrollEl || loadingOlderMessages || !hasOlderMessages) return
     loadingOlderMessages = true
+    preservingHistoryViewport = true
+    // Loading history is an explicit request to inspect the past. Keep live
+    // stream updates from pulling the user back to the newest message while
+    // the page is being fetched and inserted.
+    userScrolledAway = true
     const previousHeight = scrollEl.scrollHeight
     const previousTop = scrollEl.scrollTop
-    if (visibleStartIndex > 0) {
-      renderedStartIndex = Math.max(0, visibleStartIndex - HISTORY_WINDOW_SIZE)
-    } else {
-      const oldest = messages[0]
-      if (!oldest) {
-        olderMessagesAvailable = false
-        loadingOlderMessages = false
-        return
-      }
-      const before: ThreadMessageCursor = { createdAt: oldest.createdAt, id: oldest.id }
-      try {
+    try {
+      if (visibleStartIndex > 0) {
+        renderedStartIndex = Math.max(0, visibleStartIndex - HISTORY_WINDOW_SIZE)
+      } else {
+        const oldest = messages[0]
+        if (!oldest) {
+          olderMessagesAvailable = false
+          return
+        }
+        const before: ThreadMessageCursor = { createdAt: oldest.createdAt, id: oldest.id }
         const page = await invoke(
           'thread:loadMessages',
           thread.projectId,
@@ -2603,21 +2642,23 @@
         )
         olderMessagesAvailable = page.hasOlder
         threadMessages.mergePage(thread.projectId, thread.id, page.messages)
-      } catch {
-        loadingOlderMessages = false
-        return
       }
+      await tick()
+      if (scrollEl) {
+        scrollEl.scrollTop = previousTop + (scrollEl.scrollHeight - previousHeight)
+        threadScrollPositions.set(thread.id, {
+          top: scrollEl.scrollTop,
+          renderedStartIndex: visibleStartIndex,
+          awayFromBottom: userScrolledAway
+        })
+      }
+    } catch {
+      // A transient page failure leaves the current window intact; the next
+      // scroll or button press can retry from the same cursor.
+    } finally {
+      preservingHistoryViewport = false
+      loadingOlderMessages = false
     }
-    await tick()
-    if (scrollEl) {
-      scrollEl.scrollTop = previousTop + (scrollEl.scrollHeight - previousHeight)
-      threadScrollPositions.set(thread.id, {
-        top: scrollEl.scrollTop,
-        renderedStartIndex: visibleStartIndex,
-        awayFromBottom: userScrolledAway
-      })
-    }
-    loadingOlderMessages = false
   }
 
   // Restore the saved scroll position (or snap to bottom) once data is loaded.
@@ -2660,6 +2701,7 @@
   // active on an otherwise idle thread.
   $effect(() => {
     if (!scrollRestored) return
+    if (preservingHistoryViewport) return
     void messages.length
     void checkpoints.length
     void threadWorking
@@ -8775,7 +8817,8 @@
                 <div class="group mb-6 flex min-w-0 flex-col">
                   {#if isTurnStart}
                     {@const turnDone = isTurnCompleted(msgIndex)}
-                    {@const traceIsLive = liveBusy && isLatestTurn}
+                    {@const traceIsLive =
+                      threadWorking && isLatestTurn && !brainstormReportRefreshing}
                     {@const traceIsRestored =
                       restoredBusy && isLatestTurn && !liveBusy && !turnDone}
                     {@const accumulatedTurnParts = getTurnWorkingParts(msgIndex, traceIsLive)}
@@ -9047,6 +9090,39 @@
          the top of the whole stack: straddling an error card when one is shown
          and dropping back to its normal spot above the composer otherwise. -->
     <div class="bottom-chrome relative shrink-0">
+      {#if latestTraceNeedsDedicatedSurface}
+        <div class="conversation-gutter shrink-0 px-6 pb-2">
+          <div class="mx-auto max-w-3xl">
+            <WorkingTrace
+              parts={latestTraceParts}
+              open={latestTraceIsActive || (restoredBusy && latestTurnInfo.active)}
+              busy={latestTraceIsActive || (restoredBusy && latestTurnInfo.active)}
+              latest
+              done={latestTraceDone}
+              rehydrated={restoredBusy && !latestTraceIsActive && !latestTraceDone}
+              startTime={activeTurnStartTime}
+              modelLabel={latestTraceIsActive ? currentWorkingTraceAttribution.modelLabel : null}
+              thinkingLevel={latestTraceIsActive
+                ? currentWorkingTraceAttribution.thinkingLevel
+                : null}
+              providerName={latestTraceIsActive
+                ? currentWorkingTraceAttribution.providerName
+                : null}
+              harnessId={latestTraceIsActive ? currentWorkingTraceAttribution.harnessId : null}
+              harnessName={latestTraceIsActive ? currentWorkingTraceAttribution.harnessName : null}
+              isFast={latestTraceIsActive && currentWorkingTraceAttribution.isFast}
+              initialOpen
+              initialUserOpened={agentRuns.isTraceUserOpened(thread.projectId, thread.id)}
+              projectId={thread.projectId}
+              threadId={thread.id}
+              onToggle={(open, userOpened) =>
+                agentRuns.setTraceOpen(thread.projectId, thread.id, open, userOpened)}
+              onOpenSubagent={openSubagent}
+              onCiteFile={openFileCitation}
+            />
+          </div>
+        </div>
+      {/if}
       {#if userScrolledAway}
         <button
           type="button"
