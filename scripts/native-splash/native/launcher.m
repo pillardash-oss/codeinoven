@@ -51,13 +51,21 @@ static char handoff_path[sizeof(((struct sockaddr_un *)0)->sun_path)] = {0};
     NSFontAttributeName : [NSFont systemFontOfSize:9.0 weight:NSFontWeightRegular],
     NSForegroundColorAttributeName : [NSColor colorWithWhite:1.0 alpha:0.48]
   };
+  NSDictionary *bylineAttributes = @{
+    NSFontAttributeName : [NSFont systemFontOfSize:9.0 weight:NSFontWeightRegular],
+    NSForegroundColorAttributeName : [NSColor colorWithWhite:1.0 alpha:0.48]
+  };
   NSString *version = [NSString stringWithUTF8String:CODEINOVEN_VERSION];
+  NSString *byline = @"By";
   NSString *company = [NSString stringWithUTF8String:CODEINOVEN_COMPANY];
   NSSize versionSize = [version sizeWithAttributes:versionAttributes];
+  NSSize bylineSize = [byline sizeWithAttributes:bylineAttributes];
   NSSize companySize = [company sizeWithAttributes:companyAttributes];
-  [version drawAtPoint:NSMakePoint((NSWidth(self.bounds) - versionSize.width) / 2.0, 26.0)
+  [version drawAtPoint:NSMakePoint((NSWidth(self.bounds) - versionSize.width) / 2.0, 38.0)
          withAttributes:versionAttributes];
-  [company drawAtPoint:NSMakePoint((NSWidth(self.bounds) - companySize.width) / 2.0, 12.0)
+  [byline drawAtPoint:NSMakePoint((NSWidth(self.bounds) - bylineSize.width) / 2.0, 24.0)
+         withAttributes:bylineAttributes];
+  [company drawAtPoint:NSMakePoint((NSWidth(self.bounds) - companySize.width) / 2.0, 10.0)
          withAttributes:companyAttributes];
 }
 @end
