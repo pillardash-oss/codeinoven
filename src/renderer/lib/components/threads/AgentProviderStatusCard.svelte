@@ -305,7 +305,7 @@
             <Square size={12} />
             Stop request
           </button>
-        {:else if !waiting && issue.kind !== 'authentication' && onRetry}
+        {:else if !waiting && onRetry}
           <button
             class="inline-flex h-8 items-center gap-1.5 rounded-lg border border-border bg-surface px-3 text-xs font-medium text-foreground transition-colors hover:bg-elevated"
             disabled={retrying}

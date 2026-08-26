@@ -5633,6 +5633,14 @@ export class ChatEngine {
     let sessionId: string
     try {
       sessionId = await this.ensureSession(projectId, threadId, driverId)
+      const previousStatus = this.sessionStatuses.get(sessionId)
+      if (
+        previousStatus?.state === 'error' &&
+        previousStatus.issue.kind === 'authentication' &&
+        previousStatus.issue.harnessId === driver.id
+      ) {
+        await driver.restartAfterAuthentication?.(projectPath)
+      }
       titleParentSessionId = sessionId
       if (specAction === 'implement') {
         this.engineeringImplementationSessions.add(sessionId)
