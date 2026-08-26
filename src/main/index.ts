@@ -65,6 +65,7 @@ import { getConfigRoot } from '../lib/utils'
 import type { SpeechService } from './speech/speech-service'
 
 declare const __CODEINOVEN_PROTOTYPE_PREVIEW_ORIGIN__: string | undefined
+declare const __CODEINOVEN_DEV_REMOTE_MODE__: boolean
 
 const mainBundleDirectory = dirname(fileURLToPath(import.meta.url))
 
@@ -340,6 +341,7 @@ function isNewTerminalShortcut(input: Electron.Input): boolean {
   )
 }
 const isProduction = app.isPackaged || process.env['NODE_ENV'] === 'production'
+const restorePersistedRemoteModeInDev = isProduction || __CODEINOVEN_DEV_REMOTE_MODE__
 
 /**
  * Window/session boundary validator. It guards external window creation,
@@ -791,16 +793,18 @@ async function bootPostPaintServices(): Promise<void> {
       onSessionActiveChange: (active) => powerWakeService?.setRemoteSessionActive(active)
     })
 
-    const reconcileRemoteTransportOwnership = (): void => {
+    const reconcileRemoteTransportOwnership = (startup = false): void => {
       if (!remoteMode) return
       if (remoteOwnershipPromise) {
         remoteOwnershipReconcilePending = true
         return
       }
       remoteOwnershipReconcilePending = false
-      const operation = instanceRegistry.isPreferredRemoteOwner()
-        ? remoteMode.restoreRemoteMode()
-        : remoteMode.relinquishTransportOwnership()
+      const mayRestorePersistedMode = !startup || restorePersistedRemoteModeInDev
+      const operation =
+        instanceRegistry.isPreferredRemoteOwner() && mayRestorePersistedMode
+          ? remoteMode.restoreRemoteMode()
+          : remoteMode.relinquishTransportOwnership()
       remoteOwnershipPromise = operation
         .catch((error) => Logger.error('Remote transport ownership handoff failed:', error))
         .finally(() => {
@@ -927,7 +931,7 @@ async function bootPostPaintServices(): Promise<void> {
 
     // Restore remote mode after paint so users can see app UI while the LAN
     // stack spins up in the background.
-    reconcileRemoteTransportOwnership()
+    reconcileRemoteTransportOwnership(true)
 
     try {
       notificationService.start()

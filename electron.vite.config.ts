@@ -81,6 +81,9 @@ export default defineConfig(({ mode }) => {
         // The identifier is replaced by Vite's `define` from the shared
         // CODEINOVEN_GITHUB_CLIENT_ID value. Public by design — never a secret.
         __CODEINOVEN_GITHUB_CLIENT_ID__: JSON.stringify(env.CODEINOVEN_GITHUB_CLIENT_ID ?? ''),
+        // Development keeps persisted Remote mode off unless the developer
+        // explicitly opts into the LAN listeners for a phone test.
+        __CODEINOVEN_DEV_REMOTE_MODE__: JSON.stringify(env.CODEINOVEN_DEV_REMOTE_MODE === '1'),
         // Public endpoint baked into packaged desktops. Release CI maps the
         // GitHub Actions REMOTE_API_ORIGIN variable to this build-time value.
         __CODEINOVEN_REMOTE_API_ORIGIN__: JSON.stringify(
