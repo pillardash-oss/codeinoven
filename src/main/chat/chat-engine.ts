@@ -16954,8 +16954,11 @@ export class ChatEngine {
         }
       }
       await this.threadManager.upsertMessages(info.projectId, info.threadId, merged, sessionId)
-      const parentTurnId = messages[latestUserIndex]?.id
-      memoryParentTurnId = parentTurnId ?? null
+      // The raw transcript may contain hidden user messages that are intentionally
+      // filtered out of the persisted mirror. Usage events and turn outcomes
+      // reference the durable parent turn, so anchor them to the persisted set.
+      const parentTurnId = classifiedMessages.findLast((message) => message.role === 'user')?.id ?? null
+      memoryParentTurnId = parentTurnId
       if (parentTurnId && turnAssistant) {
         this.recordMessageUsageEvent(info.threadId, thread, parentTurnId, turnAssistant, failure)
         this.recordToolUsageEvents(info.threadId, parentTurnId, turnAssistant)
