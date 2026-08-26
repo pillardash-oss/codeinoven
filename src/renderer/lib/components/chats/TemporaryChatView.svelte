@@ -953,9 +953,21 @@
                   {harnessName}
                 />
               {/if}
-              <div class={isReadingChat ? 'rounded-lg border border-dashed border-info/40 bg-info/5 p-3 transition-colors' : ''}>
-                <MarkdownView text={textFor(message)} />
-              </div>
+              {#if isReadingChat && speechController.activeSegments && speechController.activeSegments.length > 0 && (speechController.playback.state === 'playing' || speechController.playback.state === 'paused')}
+                {@const segs = speechController.activeSegments}
+                {@const activeIdx = speechController.playback.state === 'playing' || speechController.playback.state === 'paused' ? speechController.playback.segmentIndex : -1}
+                <div class="flex flex-col gap-1.5 text-sm">
+                  {#each segs as seg, i (seg.id)}
+                    <div class={i === activeIdx ? 'rounded-md border border-dashed border-info/40 bg-info/5 px-2.5 py-1.5 transition-colors' : 'px-2.5 py-1 opacity-80'} data-speech-line={i === activeIdx ? 'active' : undefined}>
+                      <span class="leading-relaxed">{seg.text}</span>
+                    </div>
+                  {/each}
+                </div>
+              {:else}
+                <div class={isReadingChat && speechController.playback.state === 'preparing' ? 'rounded-lg border border-dashed border-info/40 bg-info/5 p-3 transition-colors' : ''}>
+                  <MarkdownView text={textFor(message)} />
+                </div>
+              {/if}
               {#if turnFinished(message)}
                 {@render turnFooter(message, messageIndex)}
               {/if}

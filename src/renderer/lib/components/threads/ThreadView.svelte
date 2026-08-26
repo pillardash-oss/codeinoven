@@ -8886,20 +8886,43 @@
                           (speechController.playback.state === 'preparing' ||
                             speechController.playback.state === 'playing' ||
                             speechController.playback.state === 'paused')}
+                        {@const isReadingActiveLine =
+                          isReadingThisTurn &&
+                          speechController.activeSegments !== null &&
+                          speechController.activeSegments.length > 0 &&
+                          (speechController.playback.state === 'playing' || speechController.playback.state === 'paused')}
                         <div
                           id={`msg-${msg.id}`}
-                          class={isReadingThisTurn
-                            ? 'min-w-0 w-full rounded-lg border border-dashed border-info/40 bg-info/5 p-3 text-sm text-foreground transition-colors'
-                            : 'min-w-0 w-full text-sm text-foreground'}
+                          class="min-w-0 w-full text-sm text-foreground"
                           data-assistant-response
                           data-conversation-searchable
                           data-message-id={msg.id}
                         >
-                          <MarkdownView
-                            text={(turnFinalText as Extract<AgentPart, { type: 'text' }>).text}
-                            onCiteFile={openFileCitation}
-                            onOpenLocalFile={(url) => void openFilePart(url)}
-                          />
+                          {#if isReadingActiveLine}
+                            {@const segs = speechController.activeSegments!}
+                            {@const activeIdx =
+                              speechController.playback.state === 'playing' || speechController.playback.state === 'paused'
+                                ? speechController.playback.segmentIndex
+                                : -1}
+                            <div class="flex flex-col gap-1.5">
+                              {#each segs as seg, i (seg.id)}
+                                <div
+                                  class={i === activeIdx
+                                    ? 'rounded-md border border-dashed border-info/40 bg-info/5 px-2.5 py-1.5 transition-colors'
+                                    : 'px-2.5 py-1 opacity-80'}
+                                  data-speech-line={i === activeIdx ? 'active' : undefined}
+                                >
+                                  <span class="leading-relaxed">{seg.text}</span>
+                                </div>
+                              {/each}
+                            </div>
+                          {:else}
+                            <MarkdownView
+                              text={(turnFinalText as Extract<AgentPart, { type: 'text' }>).text}
+                              onCiteFile={openFileCitation}
+                              onOpenLocalFile={(url) => void openFilePart(url)}
+                            />
+                          {/if}
                         </div>
                       {/if}
 

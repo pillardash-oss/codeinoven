@@ -11,6 +11,7 @@ import type {
   SpeechScope,
   SpeechPlaybackState,
   SpeechPreparedPlayback,
+  SpeechSegment,
   SpeechSynthesizedSegment
 } from '../../../lib/speech/types'
 import { DEFAULT_SPEECH_SETTINGS } from '../../../lib/speech/types'
@@ -97,12 +98,15 @@ function recordingToastMessage(cause: unknown, phase: RecordingFailurePhase): st
 class SpeechController {
   state = $state<RendererSpeechState>({ state: 'idle' })
   playback = $state<SpeechPlaybackState>({ state: 'idle' })
+  get activeSegments(): SpeechSegment[] | null {
+    return this.activePlayback?.prepared.segments ?? null
+  }
   private active: ActiveCapture | null = null
   private elapsedTimer: ReturnType<typeof setInterval> | null = null
   private preloadTimer: ReturnType<typeof setTimeout> | null = null
   private preloadFired = false
   private readonly spans = new Map<string, SpeechDictationSpan[]>()
-  private activePlayback: ActivePlayback | null = null
+  private activePlayback = $state<ActivePlayback | null>(null)
   private stopPromise: Promise<void> | null = null
   private sound = structuredClone(DEFAULT_SPEECH_SETTINGS)
 
