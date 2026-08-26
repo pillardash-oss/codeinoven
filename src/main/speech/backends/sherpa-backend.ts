@@ -27,11 +27,18 @@ export class SherpaSpeechBackend implements SpeechBackend {
     return ['asr', 'cleanup', 'tts']
   }
 
-  async warmup(artifact: SpeechBackendArtifact, _signal: AbortSignal): Promise<void> {
-    this.ensureWorker()
-    // Validate model directory exists so subsequent transcribe is fast.
-    const { access } = await import('node:fs/promises')
-    await access(artifact.directory)
+  async warmup(artifact: SpeechBackendArtifact, signal: AbortSignal): Promise<void> {
+    const response = await this.request(
+      {
+        id: randomUUID(),
+        kind: 'warmup',
+        modelDirectory: artifact.directory,
+        ...(artifact.modelFamily ? { modelFamily: artifact.modelFamily } : {})
+      },
+      signal
+    )
+    if (!response.ok) throw new Error(response.error)
+    if (response.kind !== 'warmup') throw new Error('Unexpected sherpa warmup response.')
   }
 
   async transcribe(input: SpeechTranscribeInput, signal: AbortSignal): Promise<string> {

@@ -114,10 +114,13 @@ class SpeechController {
 
   private readonly handleGlobalKeydown = (event: KeyboardEvent): void => {
     if (event.key !== 'Escape' || event.defaultPrevented) return
-    if (this.state.state !== 'recording') return
+    // While a capture is in any active phase, Escape belongs to the recording
+    // flow. It stops an in-progress recording and never falls through to the
+    // thread-stop handler until the capture lifecycle is fully idle again.
+    if (this.state.state === 'idle' || this.state.state === 'failed') return
     event.preventDefault()
     event.stopPropagation()
-    void this.stop()
+    if (this.state.state === 'recording') void this.stop()
   }
 
   isActiveTarget(targetId: string): boolean {

@@ -13,9 +13,9 @@ import { resolveFfmpegPath } from '../ffmpeg-path'
 
 interface CoreMlRequest {
   id: string
-  operation: 'transcribe'
+  operation: 'warmup' | 'transcribe'
   model: string
-  audio: string
+  audio?: string
 }
 
 interface CoreMlResponse {
@@ -50,10 +50,12 @@ export class CoreMlSpeechBackend implements SpeechBackend {
     }
   }
 
-  async warmup(artifact: SpeechBackendArtifact, _signal: AbortSignal): Promise<void> {
-    this.ensureProcess()
-    const { access } = await import('node:fs/promises')
-    await access(artifact.directory)
+  async warmup(artifact: SpeechBackendArtifact, signal: AbortSignal): Promise<void> {
+    const response = await this.request(
+      { id: randomUUID(), operation: 'warmup', model: artifact.directory },
+      signal
+    )
+    if (!response.ok) throw new Error(response.error ?? 'Core ML speech worker warmup failed.')
   }
 
   async transcribe(input: SpeechTranscribeInput, signal: AbortSignal): Promise<string> {
