@@ -1871,9 +1871,15 @@ function isCodexQuestionRequest(method: string): boolean {
   return method === 'item/tool/requestUserInput'
 }
 
+// `turn/started` fires the instant Codex's own retry loop begins its next
+// attempt, before that attempt has round-tripped to the provider at all — it
+// is not evidence the retry succeeded. Treating it as recovery flipped the UI
+// to "working" moments before the same still-exhausted quota failed the
+// attempt again, bouncing the thread between waiting and working. Only
+// signals that necessarily follow a successful provider response (streamed
+// content, completed items, plan updates) count as genuine recovery.
 function isCodexRetryRecoveryActivity(method: string): boolean {
   return (
-    method === 'turn/started' ||
     method === 'item/agentMessage/delta' ||
     method === 'item/reasoning/textDelta' ||
     method === 'item/reasoning/summaryTextDelta' ||
