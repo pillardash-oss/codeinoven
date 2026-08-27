@@ -189,7 +189,11 @@ import type {
   UsageEventFeature,
   UsagePricingProvenance
 } from '../../lib/types'
-import { DEFAULT_SCOPE_BUCKET_ID, INBOX_PROJECT_ID } from '../../lib/types'
+import {
+  DEFAULT_SCOPE_BUCKET_ID,
+  INBOX_PROJECT_ID,
+  isOrchestrationChildThread
+} from '../../lib/types'
 import { foldTurnStreamEvents, type TurnStreamEvent } from './turn-stream'
 import { modelKey } from '../../lib/model-keys'
 import { APP_NAME } from '../../lib/brand'
@@ -13638,13 +13642,53 @@ export class ChatEngine {
   }
 
   /**
-   * Threads that RestartRecoveryService flagged as interrupted are surfaced in
-   * the UI in their interrupted state and wait for the user to retry them.
-   * Booting the app must never silently resume agent work: an auto-continued
-   * turn spawns a full harness server (hundreds of MB) the instant the app
-   * starts, even when the user never opens the thread. Harness loading happens
-   * at the point of user-driven recovery instead.
+   * Resume regular threads that RestartRecoveryService flagged as interrupted
+   * by an app closure or unknown issue. Each eligible thread receives an
+   * internal "Continue" through the normal sendPrompt pipeline so its persisted
+   * harness session picks up where it stopped and the broadcast status flips
+   * the sidebar back to "working". Sr. Engineer coordinators and orchestration
+   * children are intentionally skipped — their owner workflows (assignments,
+   * achievement loops) are resumed by `resumePendingWork`. Gated by the
+   * "Resume work on restart" setting.
    */
+  async resumeRecoveredThreads(recovered: Thread[]): Promise<void> {
+    const config = await this.storage.getConfig()
+    if (config.resumeWorkOnRestart === false) return
+    for (const thread of recovered) {
+      try {
+        if (thread.archived) continue
+        if (thread.assignmentRole === 'coordinator' || thread.achievementRole === 'coordinator') {
+          continue
+        }
+        if (isOrchestrationChildThread(thread)) continue
+        if (!thread.settings || !thread.sessionId) continue
+        const current = this.sessionStatuses.get(thread.sessionId)
+        if (current?.state === 'working' || current?.state === 'waiting') continue
+        const activeSpec = await this.getActiveSpec(thread.projectId, thread.id)
+        const resumesSpecContract = activeSpec?.status === 'approved' && !thread.auditState
+        await this.sendPrompt(
+          thread.projectId,
+          thread.id,
+          validateThreadSettings(thread.settings),
+          resumesSpecContract ? SPEC_CONTRACT_CONTINUATION_PROMPT : 'Continue',
+          [],
+          resumesSpecContract ? 'implement' : undefined,
+          createMessageId(),
+          undefined,
+          undefined,
+          undefined,
+          'internal'
+        )
+      } catch (error) {
+        // Leave the thread in its interrupted state; the user can still Retry manually.
+        Logger.error('Recovered thread resume failed (non-fatal):', {
+          projectId: thread.projectId,
+          threadId: thread.id,
+          error: rawErrorMessage(error)
+        })
+      }
+    }
+  }
 
   /** Repair specifications persisted before their ready lifecycle finished. */
   private async recoverReadyInitialSpecs(): Promise<void> {
