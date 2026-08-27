@@ -30,13 +30,18 @@
     const caps = speechSettingsStore.capabilities
     const catalog = speechSettingsStore.catalog
     if (!caps || !catalog) return undefined as boolean | undefined
-    const installedIds = new Set(
-      caps.installedArtifacts.filter((a) => a.available).map((a) => a.artifactId)
-    )
-    return catalog.artifacts.some(
-      (a) =>
-        a.capability === 'asr' && a.qualification.status !== 'retired' && installedIds.has(a.id)
-    )
+    // Imported artifacts carry their own `capability` tag and have no catalog
+    // entry (synthetic `imported-<hash>` ids), so they can't be matched by id.
+    // Downloaded artifacts don't set `capability`, so those fall back to the
+    // catalog lookup (also gated on non-retired qualification).
+    return caps.installedArtifacts.some((a) => {
+      if (!a.available) return false
+      if (a.capability) return a.capability === 'asr'
+      const catalogEntry = catalog.artifacts.find((c) => c.id === a.artifactId)
+      return (
+        catalogEntry?.capability === 'asr' && catalogEntry.qualification.status !== 'retired'
+      )
+    })
   })
 
   let hasInstalledAsr = $derived(storeHasInstalledAsr ?? fetchedHasInstalledAsr)
@@ -56,17 +61,14 @@
         invoke('config:get')
       ])
       if (capabilities.ok && catalog.ok) {
-        const installedIds = new Set(
-          capabilities.value.installedArtifacts
-            .filter((artifact) => artifact.available)
-            .map((artifact) => artifact.artifactId)
-        )
-        fetchedHasInstalledAsr = catalog.value.artifacts.some(
-          (artifact) =>
-            artifact.capability === 'asr' &&
-            artifact.qualification.status !== 'retired' &&
-            installedIds.has(artifact.id)
-        )
+        fetchedHasInstalledAsr = capabilities.value.installedArtifacts.some((artifact) => {
+          if (!artifact.available) return false
+          if (artifact.capability) return artifact.capability === 'asr'
+          const catalogEntry = catalog.value.artifacts.find((c) => c.id === artifact.artifactId)
+          return (
+            catalogEntry?.capability === 'asr' && catalogEntry.qualification.status !== 'retired'
+          )
+        })
       }
       fetchedVoiceRecordingEnabled = Boolean(
         (config as unknown as { sound?: { voiceRecordingEnabled?: boolean } })?.sound
