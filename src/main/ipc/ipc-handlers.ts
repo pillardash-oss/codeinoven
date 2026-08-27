@@ -1670,6 +1670,10 @@ export function validateAppConfigPatch(value: unknown): AppConfigPatch {
         (language) => typeof language === 'string' && language.length <= 32
       ) ||
       typeof sound.voiceRecordingEnabled !== 'boolean' ||
+      !isRecord(sound.refinementFlags) ||
+      typeof sound.refinementFlags.smartCleanup !== 'boolean' ||
+      typeof sound.refinementFlags.selfCorrection !== 'boolean' ||
+      typeof sound.refinementFlags.preserveTechnical !== 'boolean' ||
       !isUnloadOption(sound.asrUnload) ||
       !isUnloadOption(sound.cleanupUnload) ||
       !isUnloadOption(sound.ttsUnload) ||
@@ -1708,6 +1712,11 @@ export function validateAppConfigPatch(value: unknown): AppConfigPatch {
       ttsVoiceId: optionalId('ttsVoiceId'),
       preferredLanguages: sound.preferredLanguages,
       localCleanupEnabled: sound.localCleanupEnabled,
+      refinementFlags: {
+        smartCleanup: sound.refinementFlags.smartCleanup,
+        selfCorrection: sound.refinementFlags.selfCorrection,
+        preserveTechnical: sound.refinementFlags.preserveTechnical
+      },
       remoteCleanupEnabled: sound.remoteCleanupEnabled,
       remoteCleanupSelection: sound.remoteCleanupSelection,
       remoteCleanupModelId: optionalId('remoteCleanupModelId'),

@@ -936,6 +936,49 @@
               aria-label="Toggle local transcript cleanup"
             />
           </div>
+          <div class="space-y-3 rounded-lg border bg-elevated/40 p-3">
+            <p class="text-xs font-medium text-muted">Cleanup behavior</p>
+            <div class="flex items-center justify-between gap-4">
+              <p class="text-xs text-dimmed">
+                Smart cleanup — remove “um, uh” disfluencies and add punctuation
+              </p>
+              <Switch
+                checked={settings.refinementFlags.smartCleanup}
+                onchange={(checked) =>
+                  patch({
+                    refinementFlags: { ...settings.refinementFlags, smartCleanup: checked }
+                  })}
+                aria-label="Toggle smart cleanup"
+              />
+            </div>
+            <div class="flex items-center justify-between gap-4">
+              <p class="text-xs text-dimmed">
+                Self-correction — drop “no wait / scratch that” retracts, keep final intent
+              </p>
+              <Switch
+                checked={settings.refinementFlags.selfCorrection}
+                onchange={(checked) =>
+                  patch({
+                    refinementFlags: { ...settings.refinementFlags, selfCorrection: checked }
+                  })}
+                aria-label="Toggle self-correction removal"
+              />
+            </div>
+            <div class="flex items-center justify-between gap-4">
+              <p class="text-xs text-dimmed">
+                Preserve technical — keep code identifiers exact; “index dot tsx” →
+                “index.tsx”
+              </p>
+              <Switch
+                checked={settings.refinementFlags.preserveTechnical}
+                onchange={(checked) =>
+                  patch({
+                    refinementFlags: { ...settings.refinementFlags, preserveTechnical: checked }
+                  })}
+                aria-label="Toggle technical term preservation"
+              />
+            </div>
+          </div>
           <div class="flex items-center justify-between gap-4">
             <div>
               <p class="text-sm font-medium">Remote cleanup</p>

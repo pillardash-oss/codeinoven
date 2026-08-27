@@ -18,6 +18,7 @@ import type {
   SpeechProgressEvent,
   SpeechRecordingAttempt,
   SpeechPreparedPlayback,
+  SpeechRefinementFlags,
   SpeechSynthesizedSegment,
   SpeechConfirmation,
   SpeechDestructiveAction,
@@ -36,6 +37,8 @@ import {
 } from '../../lib/speech/types'
 import type { SpeechUnloadOption } from '../../lib/speech/types'
 import { parseSpeechModelCatalog } from '../../lib/speech/model-catalog'
+import { collapseRepetitiveArtifacts } from '../../lib/speech/transcript-sanitizer'
+import { DEFAULT_REFINEMENT_FLAGS } from '../../lib/speech/types'
 import {
   buildParsedIdentityForValidation,
   CAPABILITY_RUNTIMES,
@@ -104,6 +107,8 @@ export interface SpeechRemoteCleanupInput {
   modelId?: string
   /** Lessons the remote cleanup prompt should apply as style constraints. */
   lessons?: SpeechLesson[]
+  /** Cleanup behavior toggles mirrored into the remote system prompt. */
+  flags?: SpeechRefinementFlags
 }
 
 export interface SpeechRemoteCleanupOutput {
@@ -1752,12 +1757,15 @@ export class SpeechService {
       try {
         if (!this.remoteCleanup) throw new Error('Remote cleanup is unavailable.')
         const lessons = this.learning.enabled(scope)
+        const flags = mode.flags ?? DEFAULT_REFINEMENT_FLAGS
         const remote = await this.remoteCleanup({
-          transcript: rawTranscript,
+          // Collapse ASR loop artifacts before any model sees the transcript.
+          transcript: collapseRepetitiveArtifacts(rawTranscript),
           scope,
           selection: mode.selection,
           ...(mode.modelId ? { modelId: mode.modelId } : {}),
-          ...(lessons.length ? { lessons } : {})
+          ...(lessons.length ? { lessons } : {}),
+          flags
         })
         return {
           text: remote.text,
@@ -1787,6 +1795,7 @@ export class SpeechService {
     }
     try {
       const profile = cleanupProfileFor(resolved.artifact)
+      const flags: SpeechRefinementFlags = mode.flags ?? DEFAULT_REFINEMENT_FLAGS
       const cleaned = await this.queue
         .enqueue({
           capability: 'cleanup',
@@ -1800,10 +1809,13 @@ export class SpeechService {
             const backend = this.requireBackend(resolved.runtime)
             if (backend.warmup) await backend.warmup(artifact, signal)
             return backend.cleanup(
-              rawTranscript,
+              // Collapse ASR loop artifacts before the model sees the transcript.
+              collapseRepetitiveArtifacts(rawTranscript),
               artifact,
               signal,
-              profile === 'instruct' ? { lessons: this.learning.enabled(scope) } : undefined
+              profile === 'instruct'
+                ? { lessons: this.learning.enabled(scope), flags }
+                : undefined
             )
           }
         })

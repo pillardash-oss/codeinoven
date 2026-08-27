@@ -109,9 +109,17 @@ The mic is hidden on machines with no installed local speech-to-text model unles
 
 ## Cleanup and privacy
 
-Local cleanup is enabled by default. It sends the transcript, together with the user's enabled learned lessons for the current scope, to the local instruct cleanup model served by llama-server. The model itself applies punctuation, formatting, and the style lessons — there is no rule or pattern-matching layer. If no cleanup model is installed (or the runtime is unavailable), CodeInOven inserts the raw transcript unchanged, records `modelMissing` in the attempt provenance, and the Sound → Models page shows a prominent download call-to-action. Cleanup failure never switches backend or contacts a remote model.
+Local cleanup is enabled by default. The cleanup system prompt is assembled from three user-facing behavior toggles (Sound → Preferences → Cleanup behavior) plus the user's enabled learned lessons for the current scope:
 
-Remote cleanup is a separate `Switch` that defaults off. Enabling it requires an explicit fixed model or the current conversation model. Only transcript text and minimal formatting context may leave the machine: view kind, project or thread labels, active branch, and the bounded lesson set scoped to the current mode. Audio bytes, source files, full conversation history, and unrelated project content are excluded.
+- **Smart cleanup** — remove disfluencies ("um", "uh") and filler phrases, add punctuation and capitalization.
+- **Self-correction** — drop "no wait / scratch that" retracts and keep only the final intent.
+- **Preserve technical** — keep code identifiers and paths exact; dictate `index dot tsx` → `index.tsx`, `src slash components` → `src/components`.
+
+Before any model sees the transcript, CodeInOven deterministically collapses ASR loop artifacts — pathological repetitions like "URL URL URL…" or "thanks for watching" repeated six or more times, including CJK loops — which small refine models otherwise truncate around and larger ones echo verbatim. Rhetorical repetition below the threshold is preserved.
+
+The instruct model then applies the assembled prompt and the scoped style lessons; there is no rule or pattern-matching correction layer. If no cleanup model is installed (or the runtime is unavailable), CodeInOven inserts the raw transcript unchanged, records `modelMissing` in the attempt provenance, and the Sound → Models page shows a prominent download call-to-action. Cleanup failure never switches backend or contacts a remote model.
+
+Remote cleanup is a separate `Switch` that defaults off. Enabling it requires an explicit fixed model or the current conversation model. Only transcript text and minimal formatting context may leave the machine: view kind, project or thread labels, active branch, the bounded lesson set scoped to the current mode, and the behavior toggles. Audio bytes, source files, full conversation history, and unrelated project content are excluded.
 
 The former separate "Local-LLM base URL" preference was removed: the discover-or-download llama.cpp runtime described above is the local LLM path.
 

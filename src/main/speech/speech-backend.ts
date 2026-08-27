@@ -1,5 +1,9 @@
 import type { SpeechCapability, SpeechRuntime } from '../../lib/speech/types'
-import type { SpeechCleanupProfile, SpeechLesson } from '../../lib/speech/types'
+import type {
+  SpeechCleanupProfile,
+  SpeechRefinementFlags,
+  SpeechLesson
+} from '../../lib/speech/types'
 
 export interface SpeechBackendArtifact {
   id: string
@@ -22,9 +26,10 @@ export interface SpeechSynthesisInput {
   outputPath: string
 }
 
-/** Learned style lessons the cleanup LLM is asked to apply as constraints. */
+/** Learned style lessons and behavior toggles for an instruct cleanup run. */
 export interface SpeechCleanupLessonContext {
   lessons: SpeechLesson[]
+  flags: SpeechRefinementFlags
 }
 
 export interface SpeechBackend {

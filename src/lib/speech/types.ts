@@ -240,8 +240,8 @@ export interface SpeechTranscriptionJob {
 
 export type SpeechCleanupMode =
   | { kind: 'disabled' }
-  | { kind: 'local'; artifactId?: string }
-  | { kind: 'remote'; selection: 'fixed' | 'conversation'; modelId?: string }
+  | { kind: 'local'; artifactId?: string; flags?: SpeechRefinementFlags }
+  | { kind: 'remote'; selection: 'fixed' | 'conversation'; modelId?: string; flags?: SpeechRefinementFlags }
 
 export interface SpeechCleanupRequest {
   attemptId: string
@@ -313,6 +313,22 @@ export interface SpeechLearningObservation {
   sentText: string
   scope: SpeechScope
   sentAt: number
+}
+
+/**
+ * User-facing cleanup behavior toggles. The cleanup system prompt is assembled
+ * from these plus the user's learned lessons.
+ */
+export interface SpeechRefinementFlags {
+  smartCleanup: boolean
+  selfCorrection: boolean
+  preserveTechnical: boolean
+}
+
+export const DEFAULT_REFINEMENT_FLAGS: SpeechRefinementFlags = {
+  smartCleanup: true,
+  selfCorrection: true,
+  preserveTechnical: true
 }
 
 /**
@@ -514,6 +530,7 @@ export interface SpeechSettings {
   ttsVoiceId?: string
   preferredLanguages: string[]
   localCleanupEnabled: boolean
+  refinementFlags: SpeechRefinementFlags
   remoteCleanupEnabled: boolean
   remoteCleanupSelection: 'fixed' | 'conversation'
   remoteCleanupModelId?: string
@@ -530,6 +547,7 @@ export interface SpeechSettings {
 export const DEFAULT_SPEECH_SETTINGS: SpeechSettings = {
   preferredLanguages: [],
   localCleanupEnabled: true,
+  refinementFlags: { ...DEFAULT_REFINEMENT_FLAGS },
   remoteCleanupEnabled: false,
   remoteCleanupSelection: 'conversation',
   includeCodeBlocksInSpeech: false,

@@ -5,6 +5,7 @@ import type {
   SpeechLearningObservation,
   SpeechCleanupMode,
   SpeechDestructiveAction,
+  SpeechRefinementFlags,
   SpeechRuntime,
   SpeechScope
 } from '../../lib/speech/types'
@@ -44,15 +45,36 @@ function runtime(value: unknown): SpeechRuntime {
   return value
 }
 
+function refinementFlags(value: unknown): SpeechRefinementFlags {
+  if (typeof value !== 'object' || value === null) throw new RangeError('Cleanup flags are invalid.')
+  const candidate = value as Record<string, unknown>
+  if (
+    typeof candidate['smartCleanup'] !== 'boolean' ||
+    typeof candidate['selfCorrection'] !== 'boolean' ||
+    typeof candidate['preserveTechnical'] !== 'boolean'
+  ) {
+    throw new RangeError('Cleanup flags are invalid.')
+  }
+  return {
+    smartCleanup: candidate['smartCleanup'],
+    selfCorrection: candidate['selfCorrection'],
+    preserveTechnical: candidate['preserveTechnical']
+  }
+}
+
 function cleanupMode(value: unknown): SpeechCleanupMode {
   if (typeof value !== 'object' || value === null) throw new RangeError('Cleanup mode is invalid.')
   const candidate = value as Record<string, unknown>
   if (candidate['kind'] === 'disabled') return { kind: 'disabled' }
   if (candidate['kind'] === 'local') {
     const artifactId = candidate['artifactId']
-    return artifactId === undefined
-      ? { kind: 'local' }
-      : { kind: 'local', artifactId: entityId(artifactId, 'Cleanup artifact id') }
+    const flags =
+      candidate['flags'] === undefined ? undefined : refinementFlags(candidate['flags'])
+    return {
+      kind: 'local',
+      ...(artifactId === undefined ? {} : { artifactId: entityId(artifactId, 'Cleanup artifact id') }),
+      ...(flags ? { flags } : {})
+    }
   }
   if (candidate['kind'] === 'remote') {
     const selection = candidate['selection']
@@ -63,13 +85,14 @@ function cleanupMode(value: unknown): SpeechCleanupMode {
     if (selection === 'fixed' && modelId === undefined) {
       throw new RangeError('A fixed remote cleanup model is required.')
     }
-    return modelId === undefined
-      ? { kind: 'remote', selection }
-      : {
-          kind: 'remote',
-          selection,
-          modelId: boundedString(modelId, 'Remote cleanup model', 256)
-        }
+    const flags =
+      candidate['flags'] === undefined ? undefined : refinementFlags(candidate['flags'])
+    return {
+      kind: 'remote',
+      selection,
+      ...(modelId === undefined ? {} : { modelId: boundedString(modelId, 'Remote cleanup model', 256) }),
+      ...(flags ? { flags } : {})
+    }
   }
   throw new RangeError('Cleanup mode is invalid.')
 }

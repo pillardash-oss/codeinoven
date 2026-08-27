@@ -948,15 +948,21 @@ class SpeechController {
   }
 
   private cleanupMode(): import('../../../lib/speech/types').SpeechCleanupMode {
+    const flags = this.sound.refinementFlags
     if (this.sound.remoteCleanupEnabled) {
       return {
         kind: 'remote',
         selection: this.sound.remoteCleanupSelection,
-        ...(this.sound.remoteCleanupModelId ? { modelId: this.sound.remoteCleanupModelId } : {})
+        ...(this.sound.remoteCleanupModelId ? { modelId: this.sound.remoteCleanupModelId } : {}),
+        ...(flags ? { flags } : {})
       }
     }
     return this.sound.localCleanupEnabled
-      ? { kind: 'local', artifactId: this.sound.cleanupArtifactId }
+      ? {
+          kind: 'local',
+          artifactId: this.sound.cleanupArtifactId,
+          ...(flags ? { flags } : {})
+        }
       : { kind: 'disabled' }
   }
 
