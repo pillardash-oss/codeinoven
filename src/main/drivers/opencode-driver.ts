@@ -1019,6 +1019,22 @@ export class OpenCodeDriver implements HarnessDriver {
   private isolatedServers = new Set<IsolatedHandle>()
   private titleSessions = new Set<string>()
   private processObserver: AgentProcessObserver | null = null
+
+  /**
+   * Idle lifetimes for spawned `opencode serve` processes. These are a
+   * self-defense net inside the driver: engine-side bookkeeping can lose track
+   * of servers across interrupted turns and restarts, and each leaked server
+   * costs hundreds of MB resident. After the TTL below with zero HTTP or SSE
+   * traffic, processes are killed; the next demand transparently respawns one.
+   */
+  private static readonly TURN_SERVER_IDLE_TTL_MS = 10 * 60_000
+  private static readonly ISOLATED_SERVER_IDLE_TTL_MS = 5 * 60_000
+  private static readonly SHARED_SERVER_IDLE_TTL_MS = 10 * 60_000
+  private static readonly IDLE_SWEEP_INTERVAL_MS = 60_000
+  /** Port → timestamp of the most recent HTTP request header or SSE frame. */
+  private lastServerTrafficAt = new Map<number, number>()
+  private idleSweepTimer: ReturnType<typeof setInterval> | null = null
+
   /** Coalesce concurrent battery hovers across threads into one account request. */
   private accountUsageRequest: Promise<{ rateLimits: AgentRateLimitWindow[] } | null> | null = null
 
@@ -1032,6 +1048,74 @@ export class OpenCodeDriver implements HarnessDriver {
     private readonly baseUrlProviders?: BaseUrlProviderService,
     private readonly secretVault?: SecretVault
   ) {}
+
+  /** Note live traffic against a spawned server so the idle reaper skips it. */
+  private noteServerTraffic(port: number): void {
+    this.lastServerTrafficAt.set(port, Date.now())
+    this.ensureIdleSweeper()
+  }
+
+  private idleMs(port: number): number {
+    const at = this.lastServerTrafficAt.get(port)
+    // An unknown port is a freshly spawned server — treat it as brand new so
+    // the sweeper can never kill a process between spawn and first request.
+    return at === undefined ? 0 : Date.now() - at
+  }
+
+  private ensureIdleSweeper(): void {
+    if (this.idleSweepTimer) return
+    this.idleSweepTimer = setInterval(() => {
+      try {
+        this.sweepIdleHandles()
+      } catch (error) {
+        Logger.dev('opencode idle sweep failed:', error)
+      }
+    }, OpenCodeDriver.IDLE_SWEEP_INTERVAL_MS)
+    this.idleSweepTimer.unref?.()
+  }
+
+  /**
+   * Kill pooled servers whose traffic has been silent past their TTL. A busy
+   * session always shows traffic (prompt calls, streamed SSE frames), so an
+   * eviction can only reach processes nothing is using. Restarting an evicted
+   * server on the next demand is a fast lazy spawn.
+   */
+  private sweepIdleHandles(): void {
+    for (const [sessionId, handle] of [...this.turnServers]) {
+      if (
+        this.activeSessions.has(sessionId) ||
+        this.idleMs(handle.port) < OpenCodeDriver.TURN_SERVER_IDLE_TTL_MS
+      ) {
+        continue
+      }
+      Logger.info('Reaping idle opencode turn server', { sessionId, port: handle.port })
+      void this.stopTurnServer(sessionId)
+    }
+
+    for (const handle of [...this.isolatedServers]) {
+      if (this.idleMs(handle.port) < OpenCodeDriver.ISOLATED_SERVER_IDLE_TTL_MS) continue
+      Logger.info('Reaping idle isolated opencode server', { port: handle.port })
+      if (!handle.process.killed) handle.process.kill()
+      handle.abortController.abort()
+      this.isolatedServers.delete(handle)
+    }
+
+    const shared = this.server
+    if (
+      shared &&
+      !this.starting &&
+      this.activeSessions.size === 0 &&
+      this.idleMs(shared.port) >= OpenCodeDriver.SHARED_SERVER_IDLE_TTL_MS
+    ) {
+      Logger.info('Reaping idle opencode serve host', { port: shared.port })
+      shared.abortController.abort()
+      if (!shared.process.killed) shared.process.kill()
+      this.server = null
+      this.starting = null
+      for (const controller of this.projectSubscriptions.values()) controller.abort()
+      this.projectSubscriptions.clear()
+    }
+  }
 
   // ─── HarnessDriver interface ──────────────────────────────────────────────
 
@@ -1896,6 +1980,11 @@ export class OpenCodeDriver implements HarnessDriver {
   }
 
   dispose(): void {
+    if (this.idleSweepTimer) {
+      clearInterval(this.idleSweepTimer)
+      this.idleSweepTimer = null
+    }
+    this.lastServerTrafficAt.clear()
     for (const controller of this.projectSubscriptions.values()) controller.abort()
     this.projectSubscriptions.clear()
     this.server?.abortController.abort()
@@ -1957,6 +2046,7 @@ export class OpenCodeDriver implements HarnessDriver {
     handle: ServerHandle,
     headers: Record<string, string> = {}
   ): Record<string, string> {
+    this.noteServerTraffic(handle.port)
     const directory = [...handle.projectPath].some((character) => character.codePointAt(0)! > 127)
       ? encodeURIComponent(handle.projectPath)
       : handle.projectPath
@@ -2324,6 +2414,9 @@ export class OpenCodeDriver implements HarnessDriver {
           for (;;) {
             const { done, value } = await reader.read()
             if (done || signal.aborted) break
+            // Streaming turns issue no HTTP requests of their own; incoming
+            // frames are their heartbeat against the idle reaper.
+            this.noteServerTraffic(handle.port)
             sseBuffer += decoder.decode(value, { stream: true })
             let separator: number
             while ((separator = sseBuffer.indexOf('\n\n')) !== -1) {
