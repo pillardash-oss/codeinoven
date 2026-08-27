@@ -1217,6 +1217,12 @@ export class SpeechService {
           signal
         )
     })
+    // A misresolved local model path (e.g. an imported MLX model directory
+    // that doesn't satisfy the native loader's local-model check) can make the
+    // worker silently fall back to a network model-repo lookup with no
+    // timeout of its own, hanging the request forever. Bound it here so the
+    // UI always settles instead of spinning indefinitely.
+    const timeout = setTimeout(() => this.queue.cancel(queued.id), 45_000)
     try {
       await queued.result
       this.playback.assertActive(sessionId)
@@ -1229,7 +1235,17 @@ export class SpeechService {
       }
     } catch (cause) {
       await rm(outputPath, { force: true })
+      Logger.error('Speech synthesis failed', {
+        sessionId,
+        segmentIndex,
+        runtime,
+        artifactId,
+        jobId: queued.id,
+        error: cause instanceof Error ? cause.message : String(cause)
+      })
       throw cause
+    } finally {
+      clearTimeout(timeout)
     }
   }
 
