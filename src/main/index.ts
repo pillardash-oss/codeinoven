@@ -579,6 +579,11 @@ async function bootPostPaintServices(): Promise<void> {
     scopeRootProvider(scopeRootResolver),
     modelPricingService
   )
+  // Grade any turn outcomes whose persisted deadline elapsed while the app was
+  // closed (non-fatal: a failed sweep leaves rows pending for the next launch).
+  void chatEngine.recoverPendingTurnGrades().catch((error) =>
+    Logger.dev('Pending turn grade recovery failed (non-fatal):', error)
+  )
   // Merge the app-managed lean opencode agents into the machine-wide global
   // config. Idempotent, additive-only and non-fatal; runs after first paint
   // so it never blocks the workspace, and logs a dev-only summary.

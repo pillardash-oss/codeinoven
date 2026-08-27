@@ -524,6 +524,7 @@ const INVOKE_CHANNELS = [
   'thread:reorderPinnedGlobal',
   'thread:reorderScope',
   'thread:markRead',
+  'thread:draftActivity',
   'thread:setPinned',
   'thread:setContextUsage',
   'thread:harnessUsage',

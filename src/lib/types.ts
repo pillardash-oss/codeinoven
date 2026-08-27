@@ -1642,6 +1642,7 @@ export interface AgentTokenUsage {
 export type UsageEventFeature =
   | 'main'
   | 'title'
+  | 'turn_grade'
   | 'memory'
   | 'image_descriptor'
   | 'search_nudge'
@@ -2008,32 +2009,28 @@ export interface LocalProfileAnalytics {
   generatedAt: number
 }
 
-/** Lifecycle of one scored user session awaiting a positive/negative signal. */
-export type TurnOutcomeStatus = 'pending' | 'success' | 'corrected'
+/** Lifecycle of one scored user session: captured pending, graded exactly once. */
+export type TurnOutcomeStatus = 'pending' | 'graded'
 
-/** What resolved a pending turn outcome into its final status. */
-export type TurnOutcomeSignal = 'continued' | 'switched' | 'cleaned_up' | 'corrective_feedback'
+/** What triggered the judge for a pending turn outcome. */
+export type TurnOutcomeBasis = 'deleted' | 'read_timeout' | 'draft_timeout'
 
 /** Task kind recorded with a turn outcome, mirroring usage_events.feature. */
 export type TurnOutcomeTaskType = 'main' | 'audit' | 'assignment'
 
-/** Aggregated feedback performance for one (harness, provider, model, thinking level). */
+/** Aggregated LLM-judge performance for one (harness, provider, model, thinking level). */
 export interface LocalProfileModelPerformance {
   harnessId: string
   providerId: string
   modelId: string
   thinkingLevel: ThinkingLevel | null
   taskType: TurnOutcomeTaskType
-  /** Number of resolved session outcomes for this combination. */
+  /** Number of graded session outcomes for this combination. */
   outcomes: number
-  /** Sessions that ended successfully (continued, switched away, or left until cleanup). */
-  successes: number
-  /** Sessions the user corrected with a follow-up message. */
-  corrected: number
-  /** successes / outcomes, or null before any outcome is resolved. */
+  /** Average of the 1–5 judge grades, or null when nothing was graded yet. */
+  averageGrade: number | null
+  /** averageGrade / 5 expressed as a fraction (0–1), or null before grading. */
   successRate: number | null
-  /** Average of the 0/1 per-outcome scores. */
-  averageScore: number
   /** Outcomes whose provider cost was known or estimated (priced). */
   pricedOutcomes: number
   /** Sum of priced outcome cost in USD for this combination. */

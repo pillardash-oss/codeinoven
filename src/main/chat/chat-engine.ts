@@ -174,6 +174,8 @@ import type {
   ThreadSettings,
   TurnCheckpointChangeSummary,
   TurnCheckpointSummary,
+  ThinkingLevel,
+  TurnOutcomeBasis,
   TurnOutcomeTaskType,
   UsageEventDetails,
   UsageEventFeature,
@@ -1379,6 +1381,11 @@ export interface VirtualTaskOptions {
 }
 
 export class ChatEngine {
+  /** Post-read window: how long the user may just read before grading fires. */
+  private static readonly GRADE_READING_WINDOW_MS = 5 * 60_000
+  /** Draft window: anchored at the first draft entry, never restarted. */
+  private static readonly GRADE_DRAFT_WINDOW_MS = 10 * 60_000
+
   private static readonly STREAM_BROADCAST_INTERVAL_MS = 50
   private static readonly TEMPORARY_CHAT_INACTIVITY_MS = 3 * 60 * 60 * 1000
   private static readonly AUDIT_RUN_TIMEOUT_MS = 30 * 60 * 1000
@@ -1625,6 +1632,8 @@ export class ChatEngine {
   private utilityOrchestration: UtilityOrchestrationService
   private usageRepo: HarnessUsageRepo
   private turnFeedbackRepo: TurnFeedbackRepo
+  private gradeReadingTimers = new Map<string, ReturnType<typeof setTimeout>>()
+  private gradeDraftTimers = new Map<string, ReturnType<typeof setTimeout>>()
   private utilityTurns = new Map<
     string,
     {
@@ -1670,6 +1679,10 @@ export class ChatEngine {
       },
       this.scopeRoots
     )
+    this.threadManager.onTurnFeedbackDetached = (projectId, threadIds, rows) => {
+      for (const threadId of threadIds) this.handleThreadDeletedForGrading(threadId)
+      void this.gradeDetachedTurnOutcomes(projectId, rows)
+    }
     this.memoryService = new MemoryService(storage)
     this.generatedArtifactService = new GeneratedArtifactService(storage)
     this.promptAssembler = new PromptAssembler(this.memoryService)
@@ -7554,15 +7567,9 @@ export class ChatEngine {
     }
     await this.threadManager.upsertMessages(projectId, threadId, [userMessage])
     if (dispatchOrigin === 'user') {
-      // The user reacted to the previous turn: a corrective follow-up scores it
-      // negatively, any other continuation scores it as a success.
-      const corrective = looksCorrective(displayText)
-      this.turnFeedbackRepo.resolveLatestPendingForThread(
-        threadId,
-        corrective ? 'corrected' : 'success',
-        corrective ? 'corrective_feedback' : 'continued',
-        corrective ? 0 : 1
-      )
+      // The user reacted to the previous turn: capture the follow-up text as
+      // extra judge context for that turn's pending outcome.
+      this.noteFollowUpForGrading(threadId, displayText)
     }
     return userMessage
   }
@@ -17522,12 +17529,213 @@ export class ChatEngine {
     return { costUsd, costStatus: estimated ? 'estimated' : 'known' }
   }
 
+  // ─── LLM turn grading ─────────────────────────────────────────────────────
+
+  /** A captured turn payload staged for the judge, independent of repo row shape. */
+  private toTurnGradeCandidate(row: {
+    id: string
+    harness_id: string | null
+    provider_id: string | null
+    model_id: string | null
+    thinking_level: string | null
+    user_message_text: string
+    assistant_output_text: string
+    follow_up_text: string | null
+  }): TurnGradeCandidate | null {
+    if (!row.harness_id) return null
+    return {
+      id: row.id,
+      harnessId: row.harness_id,
+      providerId: row.provider_id ?? '',
+      modelId: row.model_id ?? '',
+      thinkingLevel: (row.thinking_level ?? 'minimal') as ThinkingLevel,
+      userMessage: row.user_message_text,
+      assistantOutput: row.assistant_output_text,
+      followUp: row.follow_up_text
+    }
+  }
+
+  /** Follow-up sent while an outcome was pending: captured as extra judge context. */
+  noteFollowUpForGrading(threadId: string, text: string): void {
+    this.turnFeedbackRepo.noteFollowUp(threadId, text.slice(0, 6_000))
+  }
+
+  /**
+   * Thread deleted at any phase: cancel its countdowns. Its pending rows
+   * detach from the thread reference (SET NULL) and are graded immediately by
+   * the deletion hook, so a lost-cause thread can never score as a pass.
+   */
+  handleThreadDeletedForGrading(threadId: string): void {
+    const reading = this.gradeReadingTimers.get(threadId)
+    if (reading) {
+      clearTimeout(reading)
+      this.gradeReadingTimers.delete(threadId)
+    }
+    const draft = this.gradeDraftTimers.get(threadId)
+    if (draft) {
+      clearTimeout(draft)
+      this.gradeDraftTimers.delete(threadId)
+    }
+  }
+
+  /**
+   * The user opened the thread to read the final output. Anchor the post-read
+   * window once and start counting; draft entry later supersedes it.
+   */
+  handleThreadReadForGrading(projectId: string, threadId: string): void {
+    if (this.gradeReadingTimers.has(threadId) || this.gradeDraftTimers.has(threadId)) return
+    if (this.turnFeedbackRepo.listPendingForThread(threadId).length === 0) return
+    this.turnFeedbackRepo.scheduleReading(
+      threadId,
+      Date.now() + ChatEngine.GRADE_READING_WINDOW_MS
+    )
+    this.gradeReadingTimers.set(
+      threadId,
+      setTimeout(() => {
+        this.gradeReadingTimers.delete(threadId)
+        void this.gradePendingOutcomes(projectId, threadId, 'read_timeout')
+      }, ChatEngine.GRADE_READING_WINDOW_MS)
+    )
+  }
+
+  /**
+   * Composer activity on the thread. Entering drafting anchors a fresh 10-minute
+   * window exactly once — clearing the draft or re-entering never restarts it.
+   * When it elapses, everything captured so far is graded.
+   */
+  handleThreadDraftChangedForGrading(projectId: string, threadId: string, drafting: boolean): void {
+    if (!drafting) return
+    if (this.gradeDraftTimers.has(threadId)) return
+    const readingTimer = this.gradeReadingTimers.get(threadId)
+    if (readingTimer) {
+      clearTimeout(readingTimer)
+      this.gradeReadingTimers.delete(threadId)
+    }
+    if (this.turnFeedbackRepo.listPendingForThread(threadId).length === 0) return
+    this.turnFeedbackRepo.scheduleDraft(threadId, Date.now() + ChatEngine.GRADE_DRAFT_WINDOW_MS)
+    this.gradeDraftTimers.set(
+      threadId,
+      setTimeout(() => {
+        this.gradeDraftTimers.delete(threadId)
+        void this.gradePendingOutcomes(projectId, threadId, 'draft_timeout')
+      }, ChatEngine.GRADE_DRAFT_WINDOW_MS)
+    )
+  }
+
+  /** Crash recovery: grade every pending row whose persisted deadline elapsed. */
+  async recoverPendingTurnGrades(): Promise<void> {
+    const due = this.turnFeedbackRepo.listDuePendingWithProject(Date.now())
+    for (const row of due) {
+      const basis: TurnOutcomeBasis =
+        row.draft_deadline_ms !== null &&
+        (row.reading_deadline_ms === null || row.draft_deadline_ms <= row.reading_deadline_ms)
+          ? 'draft_timeout'
+          : 'read_timeout'
+      await this.gradeOutcomeCandidate(row.project_id, row, basis, null)
+    }
+  }
+
+  /** Grade all still-pending rows of a live thread when its deadline fired. */
+  private async gradePendingOutcomes(
+    projectId: string,
+    threadId: string,
+    basis: TurnOutcomeBasis
+  ): Promise<void> {
+    for (const row of this.turnFeedbackRepo.listPendingForThread(threadId)) {
+      await this.gradeOutcomeCandidate(projectId, row, basis, null)
+    }
+  }
+
+  /** Deletion hook: rows detached from their deleted threads are graded now. */
+  async gradeDetachedTurnOutcomes(
+    projectId: string,
+    candidates: DetachedTurnFeedbackPayload[]
+  ): Promise<void> {
+    for (const payload of candidates) {
+      if (!payload.harnessId) continue
+      const candidate: TurnGradeCandidate = {
+        id: payload.id,
+        harnessId: payload.harnessId,
+        providerId: payload.providerId ?? '',
+        modelId: payload.modelId ?? '',
+        thinkingLevel: (payload.thinkingLevel ?? 'minimal') as ThinkingLevel,
+        userMessage: payload.userMessageText,
+        assistantOutput: payload.assistantOutputText,
+        followUp: payload.followUpText
+      }
+      const graded = await this.gradeOutcomeCore(projectId, candidate, 'deleted', null)
+      if (graded !== null) this.turnFeedbackRepo.grade(candidate.id, 'deleted', graded)
+    }
+  }
+
+  /** Repo-shaped wrapper keeping the once-only guard before judging. */
+  private async gradeOutcomeCandidate(
+    projectId: string,
+    row: {
+      id: string
+      harness_id: string | null
+      provider_id: string | null
+      model_id: string | null
+      thinking_level: string | null
+      user_message_text: string
+      assistant_output_text: string
+      follow_up_text: string | null
+    },
+    basis: TurnOutcomeBasis,
+    parentSessionId: string | null
+  ): Promise<void> {
+    const candidate = this.toTurnGradeCandidate(row)
+    if (!candidate) return
+    const graded = await this.gradeOutcomeCore(projectId, candidate, basis, parentSessionId)
+    if (graded !== null) this.turnFeedbackRepo.grade(candidate.id, basis, graded)
+  }
+
+  /** Judge one candidate and persist nothing; returns the grade, or null on judge failure. */
+  private async gradeOutcomeCore(
+    projectId: string,
+    candidate: TurnGradeCandidate,
+    _basis: TurnOutcomeBasis,
+    parentSessionId: string | null
+  ): Promise<number | null> {
+    void _basis
+    let projectPath: string
+    try {
+      const resolved = await this.resolve(projectId, candidate.harnessId)
+      projectPath = resolved.projectPath
+      const { driver } = resolved
+      const grade = await driver.gradeTurn(projectPath, {
+        settings: {
+          harnessId: candidate.harnessId,
+          providerId: candidate.providerId,
+          modelId: candidate.modelId,
+          thinkingLevel: candidate.thinkingLevel,
+          permissionLevel: 'auto_review',
+          engineeringMode: false
+        },
+        userMessage: candidate.userMessage,
+        assistantOutput: candidate.assistantOutput,
+        followUp: candidate.followUp,
+        ...(parentSessionId ? { parentSessionId } : {})
+      })
+      Logger.dev('Turn grading completed', {
+        harnessId: candidate.harnessId,
+        modelId: candidate.modelId,
+        grade
+      })
+      return grade
+    } catch (error) {
+      Logger.dev('Turn grading failed:', rawErrorMessage(error))
+      return null
+    }
+  }
+
   /**
    * Open a pending session-outcome record for a completed, error-free turn that
-   * answered a visible user message. The outcome is resolved later by the first
-   * signal that arrives: the user continues/corrects, switches to another
-   * thread, or leaves the thread until cleanup. Internal orchestration turns
-   * (spec generation, repairs, hidden recaps) never open a record.
+   * answered a visible user message. Document-generating workflows (brainstorm,
+   * PRD) and audit-report threads are never graded. The outcome is judged later
+   * by the cheap-model grader from the captured exchange plus any follow-up.
+   * Internal orchestration turns (spec generation, repairs, hidden recaps)
+   * never open a record.
    */
   private async openTurnOutcome(
     sessionId: string,
@@ -17540,15 +17748,20 @@ export class ChatEngine {
   ): Promise<void> {
     if (awaitingUser) return
     if (!thread?.settings) return
-    const parentOrigin = mirror.find((message) => message.id === parentTurnId)?.origin
-    if (parentOrigin !== 'user') return
+    const projectId = thread.projectId
+    const parentMessage = mirror.find((message) => message.id === parentTurnId)
+    if (parentMessage?.origin !== 'user') return
     if (!turnAssistant.modelId && !thread.settings.modelId) return
+    // Audit-report generation and document-drafting workflows are excluded from grading.
+    if (thread.achievementRole === 'auditor') return
+    const brainstormStage = this.brainstormEngine.getWorkflowState(projectId, threadId)?.stage
+    if (brainstormStage === 'drafting') return
+    const prdStage = this.prdEngine.getWorkflowState(projectId, threadId)?.stage
+    if (prdStage === 'drafting' || prdStage === 'brainstorming') return
     const taskType: TurnOutcomeTaskType =
-      thread.achievementRole === 'auditor'
-        ? 'audit'
-        : thread.assignmentRole === 'worker' || thread.assignmentRole === 'coordinator'
-          ? 'assignment'
-          : 'main'
+      thread.assignmentRole === 'worker' || thread.assignmentRole === 'coordinator'
+        ? 'assignment'
+        : 'main'
     const { costUsd, costStatus } = this.assistantTurnCostAccounting(turnAssistant)
     await this.turnFeedbackRepo.openPendingViaWorker({
       id: `outcome:${parentTurnId}`,
@@ -17564,7 +17777,9 @@ export class ChatEngine {
       thinkingLevel: turnAssistant.thinkingLevel ?? thread.settings.thinkingLevel ?? null,
       costUsd,
       costStatus,
-      tokensTotal: turnAssistant.tokens?.total ?? null
+      tokensTotal: turnAssistant.tokens?.total ?? null,
+      userMessageText: textForMessage(parentMessage).slice(0, 6_000),
+      assistantOutputText: textForMessage(turnAssistant).slice(0, 6_000)
     })
   }
 
@@ -19103,42 +19318,6 @@ export function restoreMirrorThinkingLevel(
   })
 }
 
-/** Phrases that mark a user follow-up as correcting the previous answer. */
-/**
- * Phrases that mark a user follow-up as correcting the previous answer. Kept
- * deliberately narrow to avoid false negatives on legitimate continuations:
- * ambiguous tasking like "fix this", "try again", or a bare "wrong" (which can
- * describe a file, branch, or unrelated thing) never score a pass as a miss.
- */
-const CORRECTIVE_PATTERNS = [
-  /\bthat'?s wrong\b/iu,
-  /\byou'?re wrong\b/iu,
-  /\byou are wrong\b/iu,
-  /\bnot working\b/iu,
-  /\bdoesn'?t work\b/iu,
-  /\bdoes not work\b/iu,
-  /\bisn'?t working\b/iu,
-  /\bis not working\b/iu,
-  /\bwon'?t work\b/iu,
-  /\bstill broken\b/iu,
-  /\bstill failing\b/iu,
-  /\bthis failed\b/iu,
-  /\bit failed\b/iu,
-  /\bdidn'?t work\b/iu,
-  /\bdid not work\b/iu,
-  /\bbroke the\b/iu,
-  /\bintroduced a bug\b/iu,
-  /\bregression\b/iu,
-  /\bredo (it|this)\b/iu,
-  /\bnot correct\b/iu,
-  /\bincorrect\b/iu
-]
-
-/** Best-effort detection of a corrective user follow-up (the negative signal). */
-export function looksCorrective(text: string): boolean {
-  return CORRECTIVE_PATTERNS.some((pattern) => pattern.test(text))
-}
-
 function formatProjectReferenceContext(references: PromptProjectReference[]): string {
   if (references.length === 0) return ''
   return [
@@ -19427,6 +19606,30 @@ function titleAttemptsFromDriver(driver: HarnessDriver): readonly TitleAttemptAc
     getTitleAttempts?: () => readonly TitleAttemptAccounting[]
   }
   return candidate.getTitleAttempts?.() ?? []
+}
+
+/** Minimal judge payload shared by live-thread and detached-row grading. */
+interface TurnGradeCandidate {
+  id: string
+  harnessId: string
+  providerId: string
+  modelId: string
+  thinkingLevel: ThinkingLevel
+  userMessage: string
+  assistantOutput: string
+  followUp: string | null
+}
+
+/** Pending feedback row payload captured before its thread was deleted. */
+export interface DetachedTurnFeedbackPayload {
+  id: string
+  harnessId: string
+  providerId: string | null
+  modelId: string | null
+  thinkingLevel: string | null
+  userMessageText: string
+  assistantOutputText: string
+  followUpText: string | null
 }
 
 function rejectedMermaidMessage(message: AgentMessage, error: string): AgentMessage {

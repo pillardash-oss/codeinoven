@@ -344,8 +344,13 @@
   }
 
   function successRateLabel(entry: LocalProfileModelPerformance): string {
-    if (entry.outcomes === 0) return 'No sessions yet'
-    return `${Math.round((entry.successRate ?? 0) * 100)}%`
+    if (entry.outcomes === 0 || entry.successRate === null) return 'No graded sessions yet'
+    return `${Math.round(entry.successRate * 100)}%`
+  }
+
+  function averageGradeLabel(entry: LocalProfileModelPerformance): string {
+    if (entry.averageGrade === null) return ''
+    return `avg ${entry.averageGrade.toFixed(1)}/5`
   }
 
   function successRateWidth(entry: LocalProfileModelPerformance): string {
@@ -1486,8 +1491,8 @@
     <div class="border-b px-4 py-3">
       <h2 id="model-performance-heading" class="text-sm font-semibold">Best model by feedback</h2>
       <p class="mt-0.5 text-xs text-muted">
-        Success rate from your sessions: continuing positively, switching context, or leaving the
-        thread until cleanup scores a pass; a corrective follow-up scores a miss.
+        Each session is judged 1–5 by a cheap model from your request, the agent's final output,
+        and any follow-up you sent. The percentage is the average grade out of five.
       </p>
       {#if usage.feedbackCost.outcomes > 0}
         <p class="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
@@ -1576,15 +1581,15 @@
             ></div>
           </div>
           <p class="mt-1.5 text-[11px] tabular-nums text-dimmed">
-            {entry.outcomes} sessions · {entry.successes} passed{entry.corrected > 0
-              ? ` · ${entry.corrected} corrected`
-              : ''}{entry.costUsd > 0 ? ` · ${formatCost(entry.costUsd)} total` : ''}
+            {entry.outcomes} sessions · {averageGradeLabel(entry)}{entry.costUsd > 0
+              ? ` · ${formatCost(entry.costUsd)} total`
+              : ''}
           </p>
         </div>
       {:else}
         <p class="px-4 py-8 text-center text-xs text-muted">
-          Scores and their cost appear as you use agents: after a turn, continuing or moving on
-          counts as a pass, and a corrective follow-up counts as a miss.
+          Grades appear as you use agents: after you read a turn (or start typing a follow-up), a
+          cheap model judges the exchange and your model's score updates here.
         </p>
       {/each}
     </div>

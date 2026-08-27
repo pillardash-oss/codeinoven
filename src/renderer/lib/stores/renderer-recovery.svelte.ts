@@ -5,6 +5,7 @@ import type {
 } from '$shared/types'
 import { parseModelKey } from '$lib/model-keys'
 import { setDraftLabelCookie } from './draft-label'
+import { publishDraftActivity } from './draft-activity.svelte'
 import {
   MAX_DRAFT_LENGTH,
   MAX_RECOVERY_DRAFTS,
@@ -297,6 +298,7 @@ export class RendererRecoveryStore {
     // can show what the user is typing instead of the "New Thread" placeholder.
     setDraftLabelCookie(threadId, draft)
     this.persist()
+    publishDraftActivity(projectId, threadId, this.hasDraftContent(projectId, threadId))
   }
 
   clearDraft(projectId: string, threadId: string): void {

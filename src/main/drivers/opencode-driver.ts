@@ -27,6 +27,7 @@ import type {
   AgentEventCallback,
   AgentProcessObserver,
   GenerateTitleOptions,
+  GradeTurnOptions,
   HarnessCapabilities,
   HarnessDriver,
   HarnessToolDefinition,
@@ -50,6 +51,7 @@ import {
   readWordDocumentText
 } from './document-attachment'
 import { buildTitlePrompt, sanitizeGeneratedTitle } from '../chat/title-generator'
+import { buildTurnGradePrompt, parseTurnGrade } from '../chat/turn-grader-prompt'
 import { leanAgentConfigMap } from '../opencode/opencode-agent-definitions'
 import { prepareHarnessInvocation, runHarnessCommand } from './harness-runtime'
 
@@ -1207,7 +1209,8 @@ export class OpenCodeDriver implements HarnessDriver {
     return this.createSessionOnHandle(handle, title)
   }
 
-  async generateTitle(projectPath: string, options: GenerateTitleOptions): Promise<string | null> {
+  /** Free/cheap opencode candidates, shared by title and grading runs. */
+  private async cheapCandidates(projectPath: string): Promise<Array<{ providerId: string; modelId: string }>> {
     const catalogs = await this.listProviders(projectPath).catch(() => [])
     const openCodeModels = catalogs.find((catalog) => catalog.id === 'opencode')?.models ?? []
     const freeModels = openCodeModels.filter((model) => /(?:^|[-:])free$/iu.test(model.id))
@@ -1219,7 +1222,7 @@ export class OpenCodeDriver implements HarnessDriver {
       ?.models.find((model) => model.id === 'deepseek-v4-flash')
 
     // Always pin big-pickle first; only fall back to other free/stealth models
-    // (and finally the thread model) if it fails or is unavailable.
+    // if it fails or is unavailable. The thread model is appended by the caller.
     const attempts = new Map<string, { providerId: string; modelId: string }>()
     const addCandidate = (providerId?: string, modelId?: string) => {
       if (!providerId || !modelId) return
@@ -1228,19 +1231,39 @@ export class OpenCodeDriver implements HarnessDriver {
     addCandidate('opencode', 'big-pickle')
     for (const model of fallbackFreeModels) addCandidate(model.providerId, model.id)
     addCandidate(goFlash?.providerId, goFlash?.id)
-    addCandidate(options.settings.providerId, options.settings.modelId)
+    return [...attempts.values()]
+  }
 
-    for (const candidate of attempts.values()) {
+  /** Run one auxiliary one-shot completion per candidate on isolated servers. */
+  private async isolatedOneShot(
+    projectPath: string,
+    settings: ThreadSettings,
+    purpose: string,
+    candidates: Array<{ providerId: string; modelId: string }>,
+    promptText: string
+  ): Promise<string | null> {
+    const attempts = [
+      ...candidates,
+      { providerId: settings.providerId, modelId: settings.modelId }
+    ].filter(
+      (candidate, index, all) =>
+        Boolean(candidate.providerId && candidate.modelId) &&
+        all.findIndex(
+          (other) =>
+            other.providerId === candidate.providerId && other.modelId === candidate.modelId
+        ) === index
+    )
+    for (const candidate of attempts) {
       let isolated: IsolatedHandle | null = null
       try {
-        isolated = await this.createIsolatedSession(projectPath, 'Thread title')
+        isolated = await this.createIsolatedSession(projectPath, purpose)
         this.titleSessions.add(isolated.sessionId)
         await this.sendPrompt(
           projectPath,
           {
             sessionId: isolated.sessionId,
             settings: {
-              ...options.settings,
+              ...settings,
               providerId: candidate.providerId,
               modelId: candidate.modelId,
               thinkingLevel: 'minimal',
@@ -1248,18 +1271,18 @@ export class OpenCodeDriver implements HarnessDriver {
               permissionLevel: 'auto_review',
               engineeringMode: false
             },
-            text: buildTitlePrompt(options.message.slice(0, 2_000)),
+            text: promptText,
             attachments: [],
             readOnly: true,
             allowedTools: []
           },
           isolated
         )
-        const title = await this.waitForTitleResult(isolated)
-        if (title) return title
+        const result = await this.waitForTitleResult(isolated)
+        if (result) return result
       } catch (error) {
         Logger.dev(
-          `OpenCode title model ${candidate.providerId}/${candidate.modelId} unavailable:`,
+          `OpenCode one-shot model ${candidate.providerId}/${candidate.modelId} unavailable:`,
           error
         )
       } finally {
@@ -1271,6 +1294,33 @@ export class OpenCodeDriver implements HarnessDriver {
       }
     }
     return null
+  }
+
+  async generateTitle(projectPath: string, options: GenerateTitleOptions): Promise<string | null> {
+    const candidates = await this.cheapCandidates(projectPath)
+    return this.isolatedOneShot(
+      projectPath,
+      options.settings,
+      'Thread title',
+      candidates,
+      buildTitlePrompt(options.message.slice(0, 2_000))
+    )
+  }
+
+  async gradeTurn(projectPath: string, options: GradeTurnOptions): Promise<number | null> {
+    const candidates = await this.cheapCandidates(projectPath)
+    const result = await this.isolatedOneShot(
+      projectPath,
+      options.settings,
+      'Turn grade',
+      candidates,
+      buildTurnGradePrompt({
+        userMessage: options.userMessage,
+        assistantOutput: options.assistantOutput,
+        followUp: options.followUp ?? null
+      })
+    )
+    return result === null ? null : parseTurnGrade(result)
   }
 
   /**

@@ -2089,6 +2089,8 @@ export function registerIpcHandlers(
     | 'activeTurnChangeSummary'
     | 'hasActiveProcessesInScope'
     | 'abort'
+    | 'handleThreadReadForGrading'
+    | 'handleThreadDraftChangedForGrading'
   > &
     Partial<Pick<ChatEngine, 'runVirtualTask'>>,
   options: RegisterIpcHandlersOptions = {}
@@ -7065,14 +7067,21 @@ export function registerIpcHandlers(
     return threadManager.efficiencyKpisFor(safeProjectId, safeThreadId)
   })
   ipcMain.handle('thread:markRead', async (_, projectId: string, threadId: string) => {
-    // Opening a thread means the user moved on from wherever they were; any
-    // completed turn left pending on another thread counts as a success.
+    // Opening a thread to read the final output anchors the LLM grading
+    // countdown for its pending turn outcomes.
     const safeThreadId = validateEntityId(threadId, 'Thread ID')
-    void turnFeedbackRepo
-      .resolvePendingForOtherThreadsViaWorker(safeThreadId, 'success', 'switched', 1)
-      .catch((error) => Logger.dev('Thread switch feedback resolution failed:', error))
-    return threadManager.markRead(projectId, threadId)
+    chatEngine?.handleThreadReadForGrading(projectId, safeThreadId)
+    return threadManager.markRead(projectId, safeThreadId)
   })
+  ipcMain.handle(
+    'thread:draftActivity',
+    (_, projectId: string, threadId: string, drafting: boolean) => {
+      const safeProjectId = validateEntityId(projectId, 'Project ID')
+      const safeThreadId = validateEntityId(threadId, 'Thread ID')
+      validateBoolean(drafting, 'Drafting')
+      chatEngine?.handleThreadDraftChangedForGrading(safeProjectId, safeThreadId, drafting)
+    }
+  )
   ipcMain.handle('thread:reorder', (_, projectId: unknown, orderedIds: unknown) =>
     threadManager.reorderThreads(
       validateEntityId(projectId, 'Project ID'),

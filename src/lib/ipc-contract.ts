@@ -2245,6 +2245,8 @@ export interface IpcInvokeContract {
     import('./types').AgentPart[]
   >
   'thread:markRead': Contract<[projectId: string, threadId: string], Thread>
+  /** Renderer → main composer draft transitions feeding the turn-grading timers. */
+  'thread:draftActivity': Contract<[projectId: string, threadId: string, drafting: boolean], void>
   'thread:setPinned': Contract<[projectId: string, threadId: string, pinned: boolean], Thread>
   'thread:setContextUsage': Contract<
     [projectId: string, threadId: string, usage: ThreadContextUsage],

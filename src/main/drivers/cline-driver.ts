@@ -18,11 +18,13 @@ import type {
   CliLineParseContext,
   CliLineParseResult,
   CliTurnCommand,
-  PersistentCliSession
+  PersistentCliSession,
+  TitleModelCandidate
 } from './persistent-cli-driver'
 import { PersistentCliDriver } from './persistent-cli-driver'
 import type {
   GenerateTitleOptions,
+  GradeTurnOptions,
   HarnessCapabilities,
   SendPromptOptions,
   UtilityRuntimeOverlay,
@@ -966,7 +968,8 @@ export class ClineDriver extends PersistentCliDriver {
     return appendCustom(filterClineCatalogForAccount(discovered, hasClinePass))
   }
 
-  async generateTitle(projectPath: string, options: GenerateTitleOptions): Promise<string | null> {
+  /** Cheapest available free/pass models, shared by title and grading runs. */
+  private async cheapestCandidates(): Promise<TitleModelCandidate[]> {
     const remote = await fetchClineCatalog()
     const catalogs = remote.length > 0 ? remote : await this.listProviders()
     const models = catalogs.flatMap((catalog) => catalog.models)
@@ -980,10 +983,18 @@ export class ClineDriver extends PersistentCliDriver {
       (model) =>
         model.providerId === CLINE_PASS_PROVIDER_ID && model.id === 'cline-pass/deepseek-v4-flash'
     )
-    return this.generateTitleWithCandidates(projectPath, options, [
+    return [
       ...(free ? [{ providerId: free.providerId, modelId: free.id }] : []),
       ...(passFlash ? [{ providerId: passFlash.providerId, modelId: passFlash.id }] : [])
-    ])
+    ]
+  }
+
+  async generateTitle(projectPath: string, options: GenerateTitleOptions): Promise<string | null> {
+    return this.generateTitleWithCandidates(projectPath, options, await this.cheapestCandidates())
+  }
+
+  async gradeTurn(projectPath: string, options: GradeTurnOptions): Promise<number | null> {
+    return this.gradeTurnWithCandidates(projectPath, options, await this.cheapestCandidates())
   }
 
   async prepareUtilityRuntime(

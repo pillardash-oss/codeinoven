@@ -28,6 +28,7 @@ import type {
   AgentEventCallback,
   AgentProcessObserver,
   GenerateTitleOptions,
+  GradeTurnOptions,
   HarnessCapabilities,
   HarnessDriver,
   PreparedUtilityRuntime,
@@ -35,6 +36,7 @@ import type {
   SteerPromptOptions
 } from './driver.interface'
 import { buildTitlePrompt, sanitizeGeneratedTitle } from '../chat/title-generator'
+import { buildTurnGradePrompt, parseTurnGrade } from '../chat/turn-grader-prompt'
 import {
   isPermissionToolName,
   isQuestionToolName,
@@ -68,6 +70,16 @@ export interface TitleAttemptAccounting {
   fallbackReason: string | null
   /** Provider-reported usage retained from this attempt, or null when absent. */
   usage: TitleAttemptUsage | null
+}
+
+/** Result of one auxiliary one-shot completion sequence over the candidates. */
+export interface OneShotOutcome {
+  /** Usable validated value produced by the first successful candidate, or null. */
+  value: string | null
+  /** True when an authentication issue stopped further attempts. */
+  authFailed: boolean
+  /** Per-candidate accounting entries gathered across the sequence. */
+  attempts: TitleAttemptAccounting[]
 }
 
 interface TitleTurnWaiter {
@@ -180,6 +192,7 @@ export abstract class PersistentCliDriver implements HarnessDriver {
   private titleTurnWaiters = new Map<string, TitleTurnWaiter>()
   /** Outcomes of the most recent title-candidate run, for ledger integration. */
   private lastTitleAttempts: TitleAttemptAccounting[] = []
+  private lastGradeTurnAttempts: TitleAttemptAccounting[] = []
   private processObserver: AgentProcessObserver | null = null
   /** Provider-neutral interaction cards already surfaced for this driver instance. */
   private interactionRequests = new Set<string>()
@@ -236,12 +249,14 @@ export abstract class PersistentCliDriver implements HarnessDriver {
     await this.storage.remove(this.sessionPath(session.id))
   }
 
-  /** Run title attempts in disposable sessions, cheapest candidate first. */
-  protected async generateTitleWithCandidates(
+  /** Run one auxiliary one-shot completion per disposable session, cheapest candidate first. */
+  protected async oneShotWithCandidates(
     projectPath: string,
     options: GenerateTitleOptions,
-    candidates: TitleModelCandidate[]
-  ): Promise<string | null> {
+    candidates: TitleModelCandidate[],
+    promptText: string,
+    validate: (raw: string) => string | null
+  ): Promise<OneShotOutcome> {
     const fallback = {
       providerId: options.settings.providerId,
       modelId: options.settings.modelId
@@ -258,7 +273,7 @@ export abstract class PersistentCliDriver implements HarnessDriver {
 
     for (let index = 0; index < attempts.length; index++) {
       const candidate = attempts[index]
-      const sessionId = await this.createSession(projectPath, 'Thread title')
+      const sessionId = await this.createSession(projectPath, 'Auxiliary one-shot')
       this.titleSessions.add(sessionId)
       const completion = this.waitForTitleTurn(sessionId)
       try {
@@ -273,7 +288,7 @@ export abstract class PersistentCliDriver implements HarnessDriver {
             permissionLevel: 'auto_review',
             engineeringMode: false
           },
-          text: buildTitlePrompt(options.message.slice(0, 2_000)),
+          text: promptText,
           attachments: [],
           readOnly: true,
           allowedTools: []
@@ -291,30 +306,22 @@ export abstract class PersistentCliDriver implements HarnessDriver {
           .filter((part) => part.type === 'text')
           .map((part) => part.text)
           .join('\n')
-        const title = raw ? sanitizeGeneratedTitle(raw) : null
-        if (title) {
+        const value = raw ? validate(raw) : null
+        if (value !== null) {
           accounted.push(this.buildTitleAttempt(index + 1, candidate, true, null, response))
-          this.lastTitleAttempts = accounted
-          return title
+          return { value, authFailed: false, attempts: accounted }
         }
         accounted.push(
-          this.buildTitleAttempt(
-            index + 1,
-            candidate,
-            false,
-            'No usable title text produced',
-            response
-          )
+          this.buildTitleAttempt(index + 1, candidate, false, 'No usable response produced', response)
         )
       } catch (error) {
         const fallbackReason = this.describeTitleFailure(error)
         if (error instanceof TitleTurnProviderIssueError && error.issue.kind === 'authentication') {
           accounted.push(this.buildTitleAttempt(index + 1, candidate, false, fallbackReason))
-          this.lastTitleAttempts = accounted
-          return null
+          return { value: null, authFailed: true, attempts: accounted }
         }
         Logger.dev(
-          `${this.name} title model ${candidate.providerId}/${candidate.modelId} unavailable:`,
+          `${this.name} one-shot model ${candidate.providerId}/${candidate.modelId} unavailable:`,
           error
         )
         accounted.push(this.buildTitleAttempt(index + 1, candidate, false, fallbackReason))
@@ -325,12 +332,57 @@ export abstract class PersistentCliDriver implements HarnessDriver {
         this.titleSessions.delete(sessionId)
       }
     }
-    this.lastTitleAttempts = accounted
-    return null
+    return { value: null, authFailed: false, attempts: accounted }
+  }
+
+  /** Run title attempts in disposable sessions, cheapest candidate first. */
+  protected async generateTitleWithCandidates(
+    projectPath: string,
+    options: GenerateTitleOptions,
+    candidates: TitleModelCandidate[]
+  ): Promise<string | null> {
+    const outcome = await this.oneShotWithCandidates(
+      projectPath,
+      options,
+      candidates,
+      buildTitlePrompt(options.message.slice(0, 2_000)),
+      sanitizeGeneratedTitle
+    )
+    this.lastTitleAttempts = outcome.attempts
+    return outcome.value
+  }
+
+  /** Grade a completed turn with disposable sessions, cheapest candidate first. */
+  protected async gradeTurnWithCandidates(
+    projectPath: string,
+    options: GradeTurnOptions,
+    candidates: TitleModelCandidate[]
+  ): Promise<number | null> {
+    const outcome = await this.oneShotWithCandidates(
+      projectPath,
+      {
+        settings: options.settings,
+        message: '',
+        ...(options.parentSessionId ? { parentSessionId: options.parentSessionId } : {})
+      },
+      candidates,
+      buildTurnGradePrompt({
+        userMessage: options.userMessage,
+        assistantOutput: options.assistantOutput,
+        followUp: options.followUp ?? null
+      }),
+      parseTurnGradeForAttempt
+    )
+    this.lastGradeTurnAttempts = outcome.attempts
+    return outcome.value === null ? null : Number.parseInt(outcome.value, 10)
   }
 
   generateTitle(projectPath: string, options: GenerateTitleOptions): Promise<string | null> {
     return this.generateTitleWithCandidates(projectPath, options, [])
+  }
+
+  gradeTurn(projectPath: string, options: GradeTurnOptions): Promise<number | null> {
+    return this.gradeTurnWithCandidates(projectPath, options, [])
   }
 
   /**
@@ -341,6 +393,13 @@ export abstract class PersistentCliDriver implements HarnessDriver {
    */
   getTitleAttempts(): readonly TitleAttemptAccounting[] {
     return this.lastTitleAttempts
+  }
+
+  /**
+   * Outcomes of the most recent turn-grading run, mirroring getTitleAttempts.
+   */
+  getGradeTurnAttempts(): readonly TitleAttemptAccounting[] {
+    return this.lastGradeTurnAttempts
   }
 
   /**
@@ -1300,4 +1359,10 @@ export abstract class PersistentCliDriver implements HarnessDriver {
     if (error instanceof Error) return error.message
     return String(error)
   }
+}
+
+/** Validate a one-shot grading response; returns the grade digits for accounting. */
+function parseTurnGradeForAttempt(raw: string): string | null {
+  const grade = parseTurnGrade(raw)
+  return grade === null ? null : String(grade)
 }

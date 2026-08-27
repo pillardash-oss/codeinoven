@@ -95,11 +95,45 @@ function placeholdersFor(count: number): string {
   return Array.from({ length: count }, () => '?').join(', ')
 }
 
+/** Pending turn-feedback payload captured before its thread is deleted. */
+export interface DetachedTurnFeedbackPayload {
+  id: string
+  harnessId: string
+  providerId: string | null
+  modelId: string | null
+  thinkingLevel: string | null
+  userMessageText: string
+  assistantOutputText: string
+  followUpText: string | null
+}
+
+/** Map a pending feedback row to the judge payload that outlives its thread. */
+function toDetachedPayload(row: {
+  id: string
+  harness_id: string | null
+  provider_id: string | null
+  model_id: string | null
+  thinking_level: string | null
+  user_message_text: string
+  assistant_output_text: string
+  follow_up_text: string | null
+}): DetachedTurnFeedbackPayload {
+  return {
+    id: row.id,
+    harnessId: row.harness_id ?? '',
+    providerId: row.provider_id,
+    modelId: row.model_id,
+    thinkingLevel: row.thinking_level,
+    userMessageText: row.user_message_text,
+    assistantOutputText: row.assistant_output_text,
+    followUpText: row.follow_up_text
+  }
+}
+
 /** Build one set-based cleanup transaction for a thread tree. */
 function buildThreadDeletionStatements(
   threads: Thread[],
-  assignmentIds: Set<string>,
-  resolvedAt: number
+  assignmentIds: Set<string>
 ): SqlStatement[] {
   if (threads.length === 0) return []
 
@@ -109,12 +143,10 @@ function buildThreadDeletionStatements(
   const statements: SqlStatement[] = []
   const assignmentValues = [...assignmentIds]
 
-  statements.push({
-    sql: `UPDATE turn_feedback
-          SET status = 'success', signal = 'cleaned_up', score = 1, resolved_at = ?
-          WHERE thread_id IN (${threadPlaceholders}) AND status = 'pending'`,
-    params: [resolvedAt, ...threadIds]
-  })
+  // Pending turn-feedback rows are NOT resolved here: they keep their captured
+  // grading payload (their thread reference is SET NULL) and are judged by the
+  // LLM grader immediately after deletion — a lost-cause thread never scores
+  // as a pass just because it was deleted.
 
   if (assignmentValues.length > 0) {
     const assignmentPlaceholders = placeholdersFor(assignmentValues.length)
@@ -246,6 +278,17 @@ export class ThreadManager {
     this.agentMessageRepo = new AgentMessageRepo(db)
     this.harnessUsageRepo = new HarnessUsageRepo(db)
   }
+
+  /**
+   * Set by the ChatEngine: receives the deleted thread ids plus the pending
+   * turn-feedback rows captured before their threads were deleted so countdown
+   * timers are cancelled and the LLM grader can judge them immediately.
+   */
+  onTurnFeedbackDetached?: (
+    projectId: string,
+    threadIds: string[],
+    rows: DetachedTurnFeedbackPayload[]
+  ) => void
 
   /** Distinct harness ids used across a thread's session, newest first. */
   usedHarnessIds(threadId: string): string[] {
@@ -686,14 +729,35 @@ export class ThreadManager {
     for (const candidate of deletionOrder) {
       await this.onDelete?.(candidate)
     }
-    // The user left these threads without complaining; every pending session
-    // outcome counts as a successful (cleaned_up) session before the rows are
-    // removed. The resolution runs on this single choke point so renderer,
-    // remote, and capacity-eviction deletions all score consistently, and the
-    // rows keep their attribution for the model-performance analytics (their
-    // thread reference is SET NULL, never cascade-deleted).
+    // Capture pending turn-feedback rows before the delete transaction: their
+    // grading payload must outlive the threads (thread reference becomes NULL
+    // via ON DELETE SET NULL) so the LLM grader can judge them immediately.
+    const detachedFeedback =
+      deletionOrder.length > 0
+        ? this.db.all<{
+            id: string
+            harness_id: string | null
+            provider_id: string | null
+            model_id: string | null
+            thinking_level: string | null
+            user_message_text: string
+            assistant_output_text: string
+            follow_up_text: string | null
+          }>(
+            `SELECT id, harness_id, provider_id, model_id, thinking_level,
+                    user_message_text, assistant_output_text, follow_up_text
+             FROM turn_feedback WHERE thread_id IN (${placeholdersFor(deletionOrder.length)})
+               AND status = 'pending'`,
+            ...deletionOrder.map((candidate) => candidate.id)
+          )
+        : []
+    this.onTurnFeedbackDetached?.(
+      projectId,
+      deletionOrder.map((candidate) => candidate.id),
+      detachedFeedback.map(toDetachedPayload)
+    )
     const outcome = await this.db.transactionViaWorker(
-      buildThreadDeletionStatements(deletionOrder, assignmentIds, Date.now())
+      buildThreadDeletionStatements(deletionOrder, assignmentIds)
     )
     if (!outcome.ok) {
       throw new Error(outcome.error ?? 'thread deletion failed')

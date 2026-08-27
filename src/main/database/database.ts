@@ -641,10 +641,28 @@ export class Database {
   private applySchema(): void {
     const connection = this.requireDb()
     connection.transaction(() => {
+      this.migrateTurnFeedbackGrades(connection)
       connection.exec(DATABASE_SCHEMA_SQL)
       this.migrateEngineeringLifecycleColumns(connection)
       this.migrateUsageEventColumns(connection)
     })()
+  }
+
+  /**
+   * Databases predating LLM-graded turn feedback carry the useless binary
+   * pass/fail ledger (status 'success'/'corrected', regex-driven). The metric
+   * was unreliable by construction, so the history is wiped rather than
+   * translated: drop the table and let the canonical schema recreate it.
+   */
+  private migrateTurnFeedbackGrades(connection: DatabaseType): void {
+    const columns = new Set<string>(
+      (
+        connection.prepare('PRAGMA table_info(turn_feedback)').all() as Array<{ name: string }>
+      ).map((column) => column.name)
+    )
+    if (columns.size > 0 && !columns.has('grade')) {
+      connection.exec('DROP TABLE turn_feedback')
+    }
   }
 
   /** Existing databases predate the multi-select lifecycle columns. `CREATE TABLE IF

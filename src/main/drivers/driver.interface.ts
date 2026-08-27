@@ -224,6 +224,19 @@ export interface GenerateTitleOptions {
   parentSessionId?: string
 }
 
+/** Captured grading payload judged 1–5 by a disposable cheap-model completion. */
+export interface GradeTurnOptions {
+  settings: ThreadSettings
+  /** The initiating visible user message of the scored turn. */
+  userMessage: string
+  /** The agent's final output text for the scored turn. */
+  assistantOutput: string
+  /** Follow-up the user sent while the grade was pending, when one exists. */
+  followUp?: string | null
+  /** Parent turn whose authenticated transport permits a safe auxiliary grading process. */
+  parentSessionId?: string
+}
+
 /** Provider-neutral input appended to an already active harness turn. */
 export interface SteerPromptOptions {
   sessionId: string
@@ -265,6 +278,12 @@ export interface HarnessDriver {
    * their cheapest available model, then fall back to the active thread model.
    */
   generateTitle(projectPath: string, options: GenerateTitleOptions): Promise<string | null>
+
+  /**
+   * Judge a completed turn 1–5 in an isolated disposable session using the
+   * same cheapest-candidate strategy as title generation.
+   */
+  gradeTurn(projectPath: string, options: GradeTurnOptions): Promise<number | null>
 
   /**
    * Best-effort release of a project's in-memory harness resources without
