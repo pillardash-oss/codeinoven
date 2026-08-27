@@ -29,7 +29,10 @@ The initial families are:
 - Parakeet TDT 0.6B v2 (English-optimized) and v3 (multilingual) for local ASR through sherpa-onnx — ranked first in the ASR tab, with **Best for English** (v2) and **Best for Multilingual** (v3) badges.
 - Whisper Base for local ASR through MLX or sherpa-onnx — ranked after Parakeet, with platform badges and Hugging Face links.
 - Kokoro English for local TTS through MLX or sherpa-onnx — shown in the TTS tab with **MLX / ONNX** runtime badges and Hugging Face links.
-- Qwen3 1.7B and 0.6B official GGUF Q8_0 quantizations for local **instruct** cleanup and lesson learning. These run through a llama.cpp `llama-server` process that is either discovered on the machine or downloaded at the user's request; see the llama.cpp runtime section below.
+- Qwen3 1.7B and 0.6B official GGUF Q8_0 quantizations for local **instruct** cleanup and lesson learning.
+- superwhisper **S1 mini** GGUF Q4_K_M — a purpose-trained English dictation normalizer (punctuation, truecasing, filler removal, inverse text normalization). It speaks a fixed control-line protocol rather than free instructions: CodeInOven sends its exact trained system prompt plus `[Styling: semi-formal] [Structure: prose] [Context: general]`, and never injects lessons into it. S1 mini performs **cleanup only**; lesson learning requires one of the Qwen3 instruct models.
+
+Both families run through a llama.cpp `llama-server` process that is either discovered on the machine or downloaded at the user's request; see the llama.cpp runtime section below. The server is always started with `--jinja --chat-template-kwargs '{"enable_thinking":false}'` because every supported cleanup model was trained with thinking off.
 
 ### llama.cpp runtime (discover or download)
 

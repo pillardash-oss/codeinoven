@@ -1,10 +1,12 @@
 import type { SpeechCapability, SpeechRuntime } from '../../lib/speech/types'
-import type { SpeechLesson } from '../../lib/speech/types'
+import type { SpeechCleanupProfile, SpeechLesson } from '../../lib/speech/types'
 
 export interface SpeechBackendArtifact {
   id: string
   directory: string
   modelFamily?: 'whisper' | 'parakeet'
+  /** Cleanup prompt protocol the artifact requires. Defaults to instruct. */
+  cleanupProfile?: SpeechCleanupProfile
 }
 
 export interface SpeechTranscribeInput {

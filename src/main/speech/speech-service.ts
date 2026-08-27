@@ -92,6 +92,11 @@ function unloadMs(option: SpeechUnloadOption): number | null {
   return UNLOAD_MS[option]
 }
 
+/** Cleanup prompt protocol required by the artifact's model family. */
+function cleanupProfileFor(artifact: SpeechModelArtifact): 'instruct' | 'normalizer' {
+  return artifact.familyId === 's1-cleanup' ? 'normalizer' : 'instruct'
+}
+
 export interface SpeechRemoteCleanupInput {
   transcript: string
   scope: SpeechScope
@@ -1181,6 +1186,10 @@ export class SpeechService {
   ): Promise<import('../../lib/speech/types').SpeechExtractedLesson[]> {
     const resolved = this.selectInstalledCleanupArtifact()
     if (!resolved) return []
+    // Only instruct models can follow the lesson-extraction prompt. Specialized
+    // normalizers like S1 mini are never asked to learn.
+    if (cleanupProfileFor(resolved.artifact) !== 'instruct') return []
+    if (resolved.artifact.familyId !== 'qwen-cleanup') return []
     const backend = this.requireBackend(resolved.runtime)
     if (!(backend instanceof LlamaServerSpeechBackend)) return []
     const extracted = await this.queue
@@ -1777,6 +1786,7 @@ export class SpeechService {
       }
     }
     try {
+      const profile = cleanupProfileFor(resolved.artifact)
       const cleaned = await this.queue
         .enqueue({
           capability: 'cleanup',
@@ -1784,24 +1794,34 @@ export class SpeechService {
           run: async (signal) => {
             const artifact = {
               id: resolved.artifact.id,
-              directory: this.artifactDirectory(resolved.artifact.id)
+              directory: this.artifactDirectory(resolved.artifact.id),
+              cleanupProfile: profile
             }
             const backend = this.requireBackend(resolved.runtime)
             if (backend.warmup) await backend.warmup(artifact, signal)
-            return backend.cleanup(rawTranscript, artifact, signal, {
-              lessons: this.learning.enabled(scope)
-            })
+            return backend.cleanup(
+              rawTranscript,
+              artifact,
+              signal,
+              profile === 'instruct' ? { lessons: this.learning.enabled(scope) } : undefined
+            )
           }
         })
         .result
       this.touch('cleanup')
+      // Normalizers legitimately return an empty string for filler-only input;
+      // keep the raw transcript so dictation never loses words.
+      const finalText = cleaned.trim().length > 0 ? cleaned : rawTranscript
       return {
-        text: cleaned,
+        text: finalText,
         provenance: {
           mode: 'local',
           runtime: resolved.runtime,
           artifactId: resolved.artifact.id,
-          appliedLessonIds: this.learning.enabled(scope).map((lesson) => lesson.id),
+          appliedLessonIds:
+            profile === 'instruct'
+              ? this.learning.enabled(scope).map((lesson) => lesson.id)
+              : [],
           failed: false
         }
       }

@@ -34,6 +34,16 @@ const CLEANUP_SYSTEM_PROMPT = [
   'Return only the finalized transcript as plain text with no quotation marks or commentary.'
 ].join(' ')
 
+/**
+ * Exact, immutable input format for the S1 mini normalizer family. The model
+ * was trained on this wording and control-line grammar; any deviation can make
+ * it hallucinate, so these strings must never be edited or extended.
+ */
+const S1_SYSTEM_PROMPT =
+  'You are a text normalizer for speech-to-text transcripts. The input begins with a control line specifying the styling, structure, and context settings; clean the transcript to match those settings and output only the cleaned text.'
+
+const S1_CONTROL_LINE = '[Styling: semi-formal] [Structure: prose] [Context: general]'
+
 const LEARNING_SYSTEM_PROMPT = [
   'You observe how a user edits their own dictated transcripts and distill reusable style rules.',
   'You receive the raw ASR transcript and the final text the user actually sent.',
@@ -85,18 +95,29 @@ export class LlamaServerSpeechBackend implements SpeechBackend {
     signal: AbortSignal,
     context?: SpeechCleanupLessonContext
   ): Promise<string> {
-    const messages: ChatMessage[] = [
-      { role: 'system', content: CLEANUP_SYSTEM_PROMPT },
-      {
-        role: 'user',
-        content: JSON.stringify({
-          transcript,
-          ...(context?.lessons.length ? { lessons: formatLessons(context.lessons) } : {})
-        })
-      }
-    ]
+    const normalizer = artifact.cleanupProfile === 'normalizer'
+    const messages: ChatMessage[] = normalizer
+      ? [
+          { role: 'system', content: S1_SYSTEM_PROMPT },
+          { role: 'user', content: `${S1_CONTROL_LINE}\n${transcript}` }
+        ]
+      : [
+          { role: 'system', content: CLEANUP_SYSTEM_PROMPT },
+          {
+            role: 'user',
+            content: JSON.stringify({
+              transcript,
+              ...(context?.lessons.length ? { lessons: formatLessons(context.lessons) } : {})
+            })
+          }
+        ]
+    // Normalizers may legitimately return an empty string for filler-only input.
+    if (normalizer) {
+      const normalized = await this.complete(messages, signal)
+      return stripThinking(normalized)
+    }
     const text = await this.complete(messages, signal)
-    const trimmed = text.trim()
+    const trimmed = stripThinking(text).trim()
     if (!trimmed) throw new Error('The cleanup model returned an empty transcript.')
     return trimmed
   }
@@ -145,7 +166,19 @@ export class LlamaServerSpeechBackend implements SpeechBackend {
     if (!executable) throw new Error('No llama.cpp runtime is available.')
     const child = spawn(
       executable,
-      ['--model', modelFile, '--host', '127.0.0.1', '--port', '0'],
+      [
+        '--model',
+        modelFile,
+        '--host',
+        '127.0.0.1',
+        '--port',
+        '0',
+        // Qwen3-based cleanup models were trained with thinking off; the S1
+        // normalizer requires it too or it produces no usable output.
+        '--jinja',
+        '--chat-template-kwargs',
+        '{"enable_thinking":false}'
+      ],
       { stdio: ['ignore', 'pipe', 'pipe'] }
     ) as unknown as ChildProcessWithoutNullStreams
     this.child = child
@@ -246,6 +279,10 @@ async function locateGgufModel(directory: string): Promise<string> {
     return candidate
   }
   throw new Error('The cleanup model folder does not contain a GGUF file.')
+}
+
+function stripThinking(text: string): string {
+  return text.replace(/<think>[\s\S]*?<\/think>/giu, '').replace(/^\s*<think>\s*$/iu, '')
 }
 
 function formatLessons(lessons: SpeechLesson[]): Array<Record<string, unknown>> {

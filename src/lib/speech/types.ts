@@ -62,7 +62,13 @@ export interface SpeechCompatibilityError {
 export type SpeechRuntimeResolutionResult =
   { ok: true; value: SpeechRuntimeResolution } | { ok: false; error: SpeechCompatibilityError }
 
-export type SpeechModelFamilyId = 'whisper' | 'parakeet' | 'kokoro' | 'qwen-cleanup' | 'sherpa-punctuation'
+export type SpeechModelFamilyId =
+  | 'whisper'
+  | 'parakeet'
+  | 'kokoro'
+  | 'qwen-cleanup'
+  | 's1-cleanup'
+  | 'sherpa-punctuation'
 export type SpeechArtifactStatus = 'candidate' | 'qualified' | 'retired'
 
 export interface SpeechArtifactFile {
@@ -308,6 +314,13 @@ export interface SpeechLearningObservation {
   scope: SpeechScope
   sentAt: number
 }
+
+/**
+ * How the cleanup backend must talk to the loaded model. `instruct` models
+ * accept free-form lesson context; `normalizer` models like S1 mini follow a
+ * fixed control-line protocol and can never receive lessons.
+ */
+export type SpeechCleanupProfile = 'instruct' | 'normalizer'
 
 /** A lesson proposed by the instruct model from one observed correction. */
 export interface SpeechExtractedLesson {

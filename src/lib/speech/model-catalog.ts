@@ -25,6 +25,7 @@ const FAMILY_IDS = new Set<SpeechModelFamilyId>([
   'parakeet',
   'kokoro',
   'qwen-cleanup',
+  's1-cleanup',
   'sherpa-punctuation'
 ])
 

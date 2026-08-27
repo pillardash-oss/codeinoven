@@ -43,6 +43,15 @@
         "qwen3-cleanup-gguf-1-7b",
         "qwen3-cleanup-gguf-0-6b"
       ]
+    },
+    {
+      "id": "s1-cleanup",
+      "capability": "cleanup",
+      "label": "S1 mini normalizer",
+      "description": "superwhisper S1 mini — a 0.6B ASR-output text normalizer (punctuation, truecasing, filler removal, inverse text normalization) with a fixed control-line protocol. Cleanup only; it cannot perform lesson learning.",
+      "artifactIds": [
+        "s1-mini-cleanup-gguf-q4"
+      ]
     }
   ],
   "artifacts": [
@@ -879,6 +888,50 @@
         "benchmark": {
           "status": "pending",
           "notes": "Requires packaged llama-server latency, memory, cleanup-quality, and lesson-extraction measurements per target platform."
+        }
+      }
+    },
+    {
+      "id": "s1-mini-cleanup-gguf-q4",
+      "familyId": "s1-cleanup",
+      "capability": "cleanup",
+      "runtime": "gguf",
+      "label": "S1 mini · GGUF Q4_K_M",
+      "description": "Purpose-trained English dictation normalizer: punctuation, truecasing, filler removal, and inverse text normalization out of the box. Runs through the same llama.cpp runtime as the instruct cleanup models.",
+      "tier": "lightweight",
+      "version": "q4_k_m",
+      "repositoryRevision": "ee2c0f56e56345f475749a44ff2893e21c3cb292",
+      "platforms": [
+        "darwin"
+      ],
+      "architectures": [
+        "arm64"
+      ],
+      "languages": [
+        "en"
+      ],
+      "voices": [],
+      "files": [
+        {
+          "path": "s1-mini-q4_k_m.gguf",
+          "sourceUrl": "https://huggingface.co/superwhisper/s1-mini-GGUF/resolve/ee2c0f56e56345f475749a44ff2893e21c3cb292/s1-mini-q4_k_m.gguf",
+          "byteSize": 484219808,
+          "sha256": "3b41ebe2502cbd03e811d5d16b022f5ab551eda58d62597d152f89535003c634"
+        }
+      ],
+      "byteSize": 484219808,
+      "license": "Apache-2.0",
+      "attribution": "S1 mini fine-tune by superwhisper, quantized to GGUF; Apache-2.0 license.",
+      "sourcePageUrl": "https://huggingface.co/superwhisper/s1-mini-GGUF",
+      "minimumMemoryBytes": 1342177280,
+      "qualification": {
+        "status": "candidate",
+        "licenseReviewed": true,
+        "compatibilityReviewed": false,
+        "checksumReviewed": true,
+        "benchmark": {
+          "status": "pending",
+          "notes": "Requires packaged llama-server latency, memory, and normalization-quality measurements per target platform with the exact system prompt and control line."
         }
       }
     },
