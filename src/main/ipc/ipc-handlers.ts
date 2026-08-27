@@ -4504,6 +4504,19 @@ export function registerIpcHandlers(
     await rm(join(getConfigRoot(), 'projects', projectId), { recursive: true, force: true }).catch(
       () => {}
     )
+    // Mass deletion just freed potentially thousands of pages. Reclaim the
+    // file space off-main via the maintenance worker — this also converts
+    // pre-existing databases to `auto_vacuum = INCREMENTAL` so future
+    // incremental vacuums work. Fire-and-forget: the IPC result must not wait
+    // on an O(database-size) operation, and a concurrent WAL transaction may
+    // make VACUUM fail (fine to retry next time).
+    void database.fullVacuum().then((result) => {
+      if (result.ok && (result.freedPages ?? 0) > 0) {
+        Logger.info(`Vacuum after project deletion reclaimed ${result.freedPages} pages`)
+      } else if (!result.ok) {
+        Logger.dev(`Post-deletion vacuum skipped/failed: ${result.error}`)
+      }
+    })
   })
   if (!options.hydrationHandlersRegistered) {
     ipcMain.handle('project:getIcon', (_, projectId: string) =>

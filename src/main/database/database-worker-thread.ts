@@ -70,6 +70,10 @@ function connection(): DatabaseType {
     db.pragma('journal_mode = WAL')
     db.pragma('synchronous = NORMAL')
     db.pragma('foreign_keys = ON')
+    // Must match the primary connection: the auto_vacuum setting of THIS
+    // connection is what a VACUUM here bakes into the database header, and
+    // what makes `PRAGMA incremental_vacuum` actually hand pages back.
+    db.pragma('auto_vacuum = INCREMENTAL')
     db.pragma('busy_timeout = 5000')
     db.pragma('temp_store = MEMORY')
     db.pragma('cache_size = -32768')

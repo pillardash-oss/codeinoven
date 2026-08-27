@@ -625,6 +625,11 @@ export class Database {
     connection.pragma('journal_mode = WAL')
     connection.pragma('synchronous = NORMAL')
     connection.pragma('foreign_keys = ON')
+    // Free deleted pages onto the freelist so `PRAGMA incremental_vacuum`
+    // (maintenance worker) can hand them back to the OS in bounded batches.
+    // Takes effect on new databases immediately; existing databases convert
+    // on their next full VACUUM (triggered after project deletion).
+    connection.pragma('auto_vacuum = INCREMENTAL')
     connection.pragma('busy_timeout = 5000')
     connection.pragma('temp_store = MEMORY')
     connection.pragma('cache_size = -32768')
