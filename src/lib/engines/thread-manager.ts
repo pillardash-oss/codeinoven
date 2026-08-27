@@ -1,6 +1,9 @@
 import { writeFile, mkdir } from 'fs/promises'
 import { join } from 'path'
 import { generateId, getConfigRoot } from '../utils'
+import { THREAD_SCOPED_TABLES } from './thread-cleanup-registry'
+import { threadOwnedDirectories } from '../thread-storage-paths'
+import { rm } from 'fs/promises'
 import { messageId as createMessageId } from '../id'
 import { featureSlugFromTitle } from '../project-artifacts'
 import { ProjectRepo } from '../../main/database/repositories/project-repo'
@@ -136,60 +139,29 @@ function buildThreadDeletionStatements(
     params: assignmentValues.length > 0 ? [...assignmentValues, ...threadIds] : threadIds
   })
 
-  statements.push(
-    {
-      sql: `DELETE FROM spec_workflow WHERE project_id = ? AND thread_id IN (${threadPlaceholders})`,
-      params: [projectId, ...threadIds]
-    },
-    {
-      sql: `DELETE FROM spec_versions WHERE project_id = ? AND thread_id IN (${threadPlaceholders})`,
-      params: [projectId, ...threadIds]
-    },
-    {
-      sql: `DELETE FROM plans WHERE thread_id IN (${threadPlaceholders})`,
-      params: threadIds
-    },
-    {
-      sql: `DELETE FROM checklists WHERE thread_id IN (${threadPlaceholders})`,
-      params: threadIds
-    },
-    {
-      sql: `DELETE FROM audit_reports WHERE project_id = ? AND thread_id IN (${threadPlaceholders})`,
-      params: [projectId, ...threadIds]
-    },
-    {
-      sql: `DELETE FROM turn_checkpoints WHERE project_id = ? AND thread_id IN (${threadPlaceholders})`,
-      params: [projectId, ...threadIds]
-    },
-    {
-      sql: `DELETE FROM active_turns WHERE project_id = ? AND thread_id IN (${threadPlaceholders})`,
-      params: [projectId, ...threadIds]
-    },
-    {
-      sql: `DELETE FROM provider_sync_cursors WHERE thread_id IN (${threadPlaceholders})`,
-      params: threadIds
-    },
-    {
-      sql: `DELETE FROM agent_messages WHERE thread_id IN (${threadPlaceholders})`,
-      params: threadIds
-    },
-    {
-      sql: `DELETE FROM harness_usage WHERE thread_id IN (${threadPlaceholders})`,
-      params: threadIds
-    },
-    {
-      sql: `DELETE FROM harness_usage_messages WHERE thread_id IN (${threadPlaceholders})`,
-      params: threadIds
-    },
-    {
-      sql: `DELETE FROM harness_usage_models WHERE thread_id IN (${threadPlaceholders})`,
-      params: threadIds
-    },
-    {
-      sql: `DELETE FROM threads WHERE id IN (${threadPlaceholders})`,
-      params: threadIds
+  // Every table that stores a bare `thread_id` column *without* a real
+  // `ON DELETE CASCADE` foreign key to `threads` must be registered in
+  // `THREAD_SCOPED_TABLES` (thread-cleanup-registry.ts). Tables with a real
+  // FK clean themselves up via SQLite cascade (PRAGMA foreign_keys = ON is
+  // set on every connection) and never need an entry here.
+  for (const table of THREAD_SCOPED_TABLES) {
+    if (table.projectColumn) {
+      statements.push({
+        sql: `DELETE FROM ${table.table} WHERE ${table.projectColumn} = ? AND ${table.threadColumn} IN (${threadPlaceholders})`,
+        params: [projectId, ...threadIds]
+      })
+    } else {
+      statements.push({
+        sql: `DELETE FROM ${table.table} WHERE ${table.threadColumn} IN (${threadPlaceholders})`,
+        params: threadIds
+      })
     }
-  )
+  }
+
+  statements.push({
+    sql: `DELETE FROM threads WHERE id IN (${threadPlaceholders})`,
+    params: threadIds
+  })
 
   return statements
 }
@@ -726,7 +698,34 @@ export class ThreadManager {
     if (!outcome.ok) {
       throw new Error(outcome.error ?? 'thread deletion failed')
     }
+    await this.removeThreadDiskArtifacts(deletionOrder)
     await this.onDeleted?.(deletionOrder)
+  }
+
+  /**
+   * Delete every thread in a project through the same path as
+   * `deleteThread` (session teardown, DB row cleanup, disk artifacts), so
+   * project deletion never has to duplicate or fall behind that logic.
+   * Only walks coordinator/standalone threads — orchestration children are
+   * swept as part of their coordinator's deletion.
+   */
+  async deleteAllThreadsInProject(projectId: string): Promise<void> {
+    const projectThreads = await this.threadRepo.listForDeletionViaWorker(projectId)
+    const roots = projectThreads.filter((thread) => !isOrchestrationChildThread(thread))
+    for (const root of roots) {
+      await this.deleteThread(projectId, root.id)
+    }
+  }
+
+  /** Remove app-owned scratch directories a deleted thread wrote to. Best-effort. */
+  private async removeThreadDiskArtifacts(threads: Thread[]): Promise<void> {
+    for (const thread of threads) {
+      const project = this.projectRepo.get(thread.projectId)
+      const dirs = threadOwnedDirectories(project, thread.projectId, thread.id)
+      for (const dir of dirs) {
+        await rm(dir, { recursive: true, force: true }).catch(() => {})
+      }
+    }
   }
 
   private orchestrationDescendants(threads: Thread[], coordinatorThreadId: string): Thread[] {
@@ -749,6 +748,17 @@ export class ThreadManager {
     }
     visit(coordinatorThreadId)
     return descendants
+  }
+
+  /**
+   * Ids of every orchestration descendant of `threadId` — worker sub-agent
+   * threads dispatched by this coordinator, transitively. Used to attribute
+   * sub-agent checkpoint work to the parent thread's turn.
+   */
+  async listDescendantThreadIds(projectId: string, threadId: string): Promise<string[]> {
+    if (!this.getOwnedThread(projectId, threadId)) return []
+    const threads = await this.threadRepo.listForDeletionViaWorker(projectId)
+    return this.orchestrationDescendants(threads, threadId).map((thread) => thread.id)
   }
 
   private async assignmentIdsFor(threads: Thread[]): Promise<Set<string>> {

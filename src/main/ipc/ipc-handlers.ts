@@ -167,6 +167,7 @@ import { exportPrdMarkdown } from '../../lib/prd/prd-markdown'
 import { parseGeneratedPrdContent } from '../../lib/prd/prd-validation'
 import { atomicWrite, getConfigRoot, getScopeRootPath } from '../../lib/utils'
 import { PROJECT_DATA_DIRECTORY } from '../../lib/project-artifacts'
+import { threadAttachmentDirectory } from '../../lib/thread-storage-paths'
 import { normalizeWorkerNames } from '../../lib/assignment/worker-names'
 import { retainTemporaryAttachment } from '../editor/temporary-attachment-retention'
 import type {
@@ -2312,13 +2313,7 @@ export function registerIpcHandlers(
 
   async function attachmentStorageDirectory(scope: AttachmentStorageScope): Promise<string> {
     const project = await projectManager.getProject(scope.projectId)
-    if (project?.source === 'local' && project.path) {
-      return join(project.path, PROJECT_DATA_DIRECTORY, 'tmp', 'attachments', scope.threadId)
-    }
-
-    return scope.kind === 'chat'
-      ? join(getConfigRoot(), 'chats', scope.threadId, 'tmp')
-      : join(getConfigRoot(), 'projects', scope.projectId, 'threads', scope.threadId, 'tmp')
+    return threadAttachmentDirectory(project ?? null, scope)
   }
 
   // A File supplied through the preload represents an explicit user drop/paste
@@ -4474,17 +4469,6 @@ export function registerIpcHandlers(
     }
   )
   ipcMain.handle('project:delete', async (_, projectId: string) => {
-    // Tear down every harness session (processes, ports, utility runtimes) for
-    // the project's threads before the rows are cascade-deleted. Threads are
-    // removed from the database here, not through `thread:delete`, so the
-    // engine's per-thread teardown would otherwise never run and harness
-    // processes would leak after project removal.
-    if (chatEngine?.deleteThreadSession) {
-      const threads = await threadManager.listThreads(projectId)
-      for (const thread of threads) {
-        await chatEngine.deleteThreadSession(projectId, thread.id)
-      }
-    }
     // Never orphan a registered managed worktree silently: refuse deletion
     // until every managed association in this project is detached/removed
     // through the guarded lifecycle (dirty and unpushed work is protected).
@@ -4495,8 +4479,19 @@ export function registerIpcHandlers(
         `Cannot delete the project while ${managedBuckets.length} managed worktree scope(s) exist; remove them first`
       )
     }
+    // Delete every thread through the same path as `thread:delete` (session
+    // teardown, DB row cleanup for FK-less tables, disk artifact removal) so
+    // project deletion can never fall behind that logic or leave orphans.
+    await threadManager.deleteAllThreadsInProject(projectId)
     await projectManager.deleteProject(projectId)
     projectFilesService.disposeProject(projectId)
+    // Remove app-owned scratch data keyed by this project id (spec-context
+    // attachments, any leftover per-thread directories) that isn't tied to
+    // an individual thread and so isn't covered by the per-thread cleanup
+    // above. Best-effort: the DB rows are already gone either way.
+    await rm(join(getConfigRoot(), 'projects', projectId), { recursive: true, force: true }).catch(
+      () => {}
+    )
   })
   if (!options.hydrationHandlersRegistered) {
     ipcMain.handle('project:getIcon', (_, projectId: string) =>
