@@ -68,6 +68,10 @@ const MIME_TYPES = ['audio/webm;codecs=opus', 'audio/webm', 'audio/ogg;codecs=op
 const CAPTURE_TIMESLICE_MS = 250
 const PAUSE_UPLOAD_DEPTH = 4
 const CAPTURE_STOP_TIMEOUT_MS = 5_000
+// Text-to-speech normally starts playing within seconds. If the pipeline wedges
+// before the first audio sample, settle the UI into a retryable failure instead
+// of spinning forever.
+const PLAYBACK_STALL_WATCHDOG_MS = 60_000
 
 type RecordingFailurePhase = 'prepare' | 'permission' | 'capture' | 'transcription'
 
@@ -113,6 +117,8 @@ class SpeechController {
   private activePlayback = $state<ActivePlayback | null>(null)
   private stopPromise: Promise<void> | null = null
   private sound = structuredClone(DEFAULT_SPEECH_SETTINGS)
+  private playbackStallWatchdog: ReturnType<typeof setTimeout> | null = null
+  private playbackStallMessageId: string | null = null
 
   constructor() {
     if (typeof window !== 'undefined') {
@@ -477,6 +483,7 @@ class SpeechController {
     pauseCurrentHistoryAudio()
     await this.loadSettings()
     this.playback = { state: 'preparing', sessionId: 'pending', messageId }
+    this.armPlaybackStallWatchdog(messageId)
     try {
       const selection = await this.selectTtsArtifact()
       const prepared = await invoke(
@@ -499,6 +506,7 @@ class SpeechController {
       this.activePlayback = playback
       await this.playSegment(playback, 0)
     } catch (cause) {
+      this.clearPlaybackStallWatchdog()
       this.playback = {
         state: 'failed',
         messageId,
@@ -507,9 +515,63 @@ class SpeechController {
     }
   }
 
+  /**
+   * Bounds the window between clicking speak and the first audible sample. If
+   * something in the pipeline stalls without rejecting (the original infinite
+   * spinner bug), the watchdog settles the UI into the normal retryable failed
+   * state and tears down the pending playback session.
+   */
+  private armPlaybackStallWatchdog(messageId: string): void {
+    this.clearPlaybackStallWatchdog()
+    this.playbackStallMessageId = messageId
+    this.playbackStallWatchdog = setTimeout(() => {
+      const watchdogMessageId = this.playbackStallMessageId
+      this.playbackStallWatchdog = null
+      this.playbackStallMessageId = null
+      if (!watchdogMessageId) return
+      const stillPreparing =
+        this.playback.state === 'preparing' && this.playback.messageId === watchdogMessageId
+      const activeWithoutAudio =
+        this.activePlayback?.prepared.messageId === watchdogMessageId &&
+        this.activePlayback.audio === null
+      if (!stillPreparing && !activeWithoutAudio) return
+      void this.failStalledPlayback(watchdogMessageId)
+    }, PLAYBACK_STALL_WATCHDOG_MS)
+  }
+
+  private clearPlaybackStallWatchdog(): void {
+    if (this.playbackStallWatchdog) clearTimeout(this.playbackStallWatchdog)
+    this.playbackStallWatchdog = null
+    this.playbackStallMessageId = null
+  }
+
+  private async failStalledPlayback(messageId: string): Promise<void> {
+    logRendererError(
+      `TTS playback stalled for message ${messageId} before any audio started; watchdog stopped it.`
+    )
+    const active = this.activePlayback
+    this.activePlayback = null
+    if (active) {
+      active.audio?.pause()
+      if (active.audioUrl) URL.revokeObjectURL(active.audioUrl)
+      await invoke('speech:cancelPlayback', active.prepared.sessionId).catch(() => undefined)
+    }
+    this.playback = {
+      state: 'failed',
+      messageId,
+      error: {
+        code: 'synthesis-failed',
+        message:
+          'Text-to-speech did not start within 60 seconds. Playback was stopped — click speak to retry.',
+        retryable: true
+      }
+    }
+  }
+
   async cancelPlayback(): Promise<void> {
     const active = this.activePlayback
     this.activePlayback = null
+    this.clearPlaybackStallWatchdog()
     if (active) {
       active.audio?.pause()
       if (active.audioUrl) URL.revokeObjectURL(active.audioUrl)
@@ -820,6 +882,7 @@ class SpeechController {
         if (this.activePlayback !== playback) return
         if (index + 1 < playback.prepared.segments.length) {
           void this.playSegment(playback, index + 1).catch((cause: unknown) => {
+            this.clearPlaybackStallWatchdog()
             this.playback = {
               state: 'failed',
               messageId: playback.prepared.messageId,
@@ -831,6 +894,7 @@ class SpeechController {
             }
           })
         } else {
+          this.clearPlaybackStallWatchdog()
           this.playback = { state: 'completed', messageId: playback.prepared.messageId }
           void this.cancelPlayback()
         }
@@ -839,6 +903,7 @@ class SpeechController {
     )
     pauseCurrentHistoryAudio()
     await audio.play()
+    this.clearPlaybackStallWatchdog()
     this.playback = {
       state: 'playing',
       sessionId: playback.prepared.sessionId,

@@ -1203,6 +1203,13 @@ export class SpeechService {
     const prepared = this.playback.segment(sessionId, segmentIndex)
     // Cancel any pending idle evict while synthesis is in-flight
     this.clearEvict('tts')
+    Logger.dev('Speech synthesis started', {
+      sessionId,
+      segmentIndex,
+      runtime,
+      artifactId,
+      characters: prepared.text.length
+    })
     const queued = this.queue.enqueue({
       capability: 'tts',
       runtime,
