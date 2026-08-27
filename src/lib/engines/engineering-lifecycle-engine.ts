@@ -543,8 +543,16 @@ export class EngineeringLifecycleEngine {
       'SELECT project_id FROM threads WHERE id=?',
       threadId
     )
-    if (!row || row.project_id !== projectId) {
-      throw new EngineeringLifecycleError('not_found', 'Thread does not belong to the project')
+    // Distinguish a missing row (failed/evicted creation) from a genuine
+    // cross-project mismatch so the error names the real problem.
+    if (!row) {
+      throw new EngineeringLifecycleError('not_found', `Thread not found: ${threadId}`)
+    }
+    if (row.project_id !== projectId) {
+      throw new EngineeringLifecycleError(
+        'not_found',
+        `Thread ${threadId} does not belong to the requested project`
+      )
     }
   }
 

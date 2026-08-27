@@ -23,6 +23,7 @@ import { Logger } from '../system/logger'
  */
 export class ThreadCreationCoordinator {
   private finalizing = new Map<string, Promise<void>>()
+  private failed = new Set<string>()
   private tail: Promise<void> = Promise.resolve()
 
   /**
@@ -40,6 +41,7 @@ export class ThreadCreationCoordinator {
     const run = this.tail
       .then(() => new Promise<void>((resolve) => setImmediate(resolve)))
       .then(work)
+    this.failed.delete(threadId)
     this.tail = run.then(
       () => undefined,
       () => undefined
@@ -48,6 +50,10 @@ export class ThreadCreationCoordinator {
     void run
       .catch((error) => {
         Logger.error('Thread finalization failed', { threadId, error: String(error) })
+        // Remember the failure so scoped reads can report the real cause —
+        // without a persisted row they would otherwise surface as a
+        // misleading "thread does not belong to the project".
+        this.failed.add(threadId)
         onError?.(error)
       })
       .finally(() => {
@@ -95,5 +101,14 @@ export class ThreadCreationCoordinator {
   async awaitReady(threadId: string): Promise<void> {
     const pending = this.finalizing.get(threadId)
     if (pending) await pending.catch(() => undefined)
+  }
+
+  /**
+   * True when the thread's gated finalization ran and failed, meaning its row
+   * never reached SQLite. Callers can use this to fail fast with an accurate
+   * message instead of a confusing ownership/missing-row error downstream.
+   */
+  didFinalizationFail(threadId: string): boolean {
+    return this.failed.has(threadId)
   }
 }

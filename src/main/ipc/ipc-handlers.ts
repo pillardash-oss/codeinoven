@@ -2179,6 +2179,12 @@ export function registerIpcHandlers(
     const safeProjectId = validateEntityId(projectId, projectLabel)
     const safeThreadId = validateEntityId(threadId, threadLabel)
     await threadCreation.awaitReady(safeThreadId)
+    // A failed finalization never persisted the row; fail fast with the real
+    // cause instead of letting thread-scoped engines report a misleading
+    // ownership error. Phrase matches the renderer's 'Thread not found' retry.
+    if (threadCreation.didFinalizationFail(safeThreadId)) {
+      throw new Error(`Thread not found: ${safeThreadId} (its creation did not complete)`)
+    }
     return { projectId: safeProjectId, threadId: safeThreadId }
   }
 
