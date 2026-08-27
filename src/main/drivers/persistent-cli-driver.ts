@@ -27,7 +27,8 @@ import { prepareHarnessInvocation } from './harness-runtime'
 import type {
   AgentEventCallback,
   AgentProcessObserver,
-  AuxiliaryCompletionOptions,
+  CheapModelRequest,
+  CheapModelResult,
   GenerateTitleOptions,
   GradeTurnOptions,
   HarnessCapabilities,
@@ -256,7 +257,8 @@ export abstract class PersistentCliDriver implements HarnessDriver {
     options: GenerateTitleOptions,
     candidates: TitleModelCandidate[],
     promptText: string,
-    validate: (raw: string) => string | null
+    validate: (raw: string) => string | null,
+    timeoutMs: number = TITLE_GENERATION_TIMEOUT_MS
   ): Promise<OneShotOutcome> {
     const fallback = {
       providerId: options.settings.providerId,
@@ -276,7 +278,7 @@ export abstract class PersistentCliDriver implements HarnessDriver {
       const candidate = attempts[index]
       const sessionId = await this.createSession(projectPath, 'Auxiliary one-shot')
       this.titleSessions.add(sessionId)
-      const completion = this.waitForTitleTurn(sessionId)
+      const completion = this.waitForTitleTurn(sessionId, timeoutMs)
       try {
         await this.sendPrompt(projectPath, {
           sessionId,
@@ -379,27 +381,38 @@ export abstract class PersistentCliDriver implements HarnessDriver {
   }
 
   /**
-   * One self-contained auxiliary completion, cheapest candidate first.
+   * One self-contained cheap-model completion, cheapest candidate first.
    * Subclasses expose their cheapest models through `cheapCandidateModels`;
    * without any, the active thread model is used as the sole candidate.
+   * Every cheap-model scenario (title, grading, lessons, proposals) routes
+   * through this single entry point.
    */
-  async runAuxiliaryCompletion(
+  async provideCheapModel(
     projectPath: string,
-    options: AuxiliaryCompletionOptions
-  ): Promise<string | null> {
+    request: CheapModelRequest
+  ): Promise<CheapModelResult> {
     const candidates = await this.cheapCandidateModels(projectPath)
     const outcome = await this.oneShotWithCandidates(
       projectPath,
       {
-        settings: options.settings,
+        settings: request.settings,
         message: '',
-        ...(options.parentSessionId ? { parentSessionId: options.parentSessionId } : {})
+        ...(request.parentSessionId ? { parentSessionId: request.parentSessionId } : {})
       },
       candidates,
-      options.prompt,
-      sanitizeAuxiliaryText
+      request.prompt,
+      sanitizeAuxiliaryText,
+      request.timeoutMs ?? TITLE_GENERATION_TIMEOUT_MS
     )
-    return outcome.value
+    return {
+      text: outcome.value,
+      attempts: outcome.attempts.map((attempt) => ({
+        providerId: attempt.providerId,
+        modelId: attempt.modelId,
+        ok: attempt.success,
+        failure: attempt.fallbackReason
+      }))
+    }
   }
 
   /** Cheapest auxiliary candidates for this harness; subclasses override. */
@@ -1328,7 +1341,10 @@ export abstract class PersistentCliDriver implements HarnessDriver {
     this.eventCallback?.(event)
   }
 
-  private waitForTitleTurn(sessionId: string): { promise: Promise<void>; cancel: () => void } {
+  private waitForTitleTurn(
+    sessionId: string,
+    timeoutMs: number = TITLE_GENERATION_TIMEOUT_MS
+  ): { promise: Promise<void>; cancel: () => void } {
     let resolvePromise: () => void = () => undefined
     let rejectPromise: (error: Error) => void = () => undefined
     const promise = new Promise<void>((resolve, reject) => {
@@ -1337,8 +1353,8 @@ export abstract class PersistentCliDriver implements HarnessDriver {
     })
     const timer = setTimeout(() => {
       this.clearTitleTurnWaiter(sessionId)
-      rejectPromise(new Error(`${this.name} title generation timed out`))
-    }, TITLE_GENERATION_TIMEOUT_MS)
+      rejectPromise(new Error(`${this.name} auxiliary completion timed out`))
+    }, timeoutMs)
     this.titleTurnWaiters.set(sessionId, {
       resolve: resolvePromise,
       reject: rejectPromise,

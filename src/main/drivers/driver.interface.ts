@@ -237,13 +237,35 @@ export interface GradeTurnOptions {
   parentSessionId?: string
 }
 
-/** One self-contained auxiliary completion, cheapest candidate first. */
-export interface AuxiliaryCompletionOptions {
+/**
+ * One self-contained auxiliary completion run against the harness's cheapest
+ * available model, shared by every disposable cheap-model scenario (title
+ * generation, turn grading, speech lessons, memory proposals, …).
+ */
+export interface CheapModelRequest {
   settings: ThreadSettings
+  /** Short scenario label used as the disposable session title. */
+  purpose: string
   /** Complete, self-contained prompt. No conversation history is attached. */
   prompt: string
   /** Parent turn whose authenticated transport permits a safe auxiliary process. */
   parentSessionId?: string
+  /** Time budget per candidate attempt. Defaults to the harness standard. */
+  timeoutMs?: number
+}
+
+/** Outcome of one cheap-model candidate attempt. */
+export interface CheapModelAttempt {
+  providerId: string
+  modelId: string
+  ok: boolean
+  failure: string | null
+}
+
+export interface CheapModelResult {
+  /** Validated response text, or null when every candidate attempt failed. */
+  text: string | null
+  attempts: CheapModelAttempt[]
 }
 
 /** Provider-neutral input appended to an already active harness turn. */
@@ -295,14 +317,12 @@ export interface HarnessDriver {
   gradeTurn(projectPath: string, options: GradeTurnOptions): Promise<number | null>
 
   /**
-   * Run one self-contained auxiliary completion in a disposable session,
-   * cheapest candidate first, falling back to the active thread model.
-   * Returns the raw response text, or null when no candidate produced output.
+   * Run one self-contained completion in a disposable session, cheapest
+   * candidate first, falling back to the active thread model. Handles per-
+   * attempt timeouts and reports per-candidate outcomes. The single entry
+   * point every cheap-model scenario must go through.
    */
-  runAuxiliaryCompletion?(
-    projectPath: string,
-    options: AuxiliaryCompletionOptions
-  ): Promise<string | null>
+  provideCheapModel(projectPath: string, request: CheapModelRequest): Promise<CheapModelResult>
 
   /**
    * Best-effort release of a project's in-memory harness resources without

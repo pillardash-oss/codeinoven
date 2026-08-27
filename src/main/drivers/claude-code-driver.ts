@@ -38,7 +38,8 @@ import type {
 } from './persistent-cli-driver'
 import { PersistentCliDriver } from './persistent-cli-driver'
 import type {
-  AuxiliaryCompletionOptions,
+  CheapModelRequest,
+  CheapModelResult,
   GenerateTitleOptions,
   GradeTurnOptions,
   HarnessAuthStatus,
@@ -1527,12 +1528,14 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
     return this.gradeTurnWithCandidates(projectPath, options, candidates)
   }
 
-  async runAuxiliaryCompletion(
+  async provideCheapModel(
     projectPath: string,
-    options: AuxiliaryCompletionOptions
-  ): Promise<string | null> {
-    if (!(await this.auxiliaryTransportReady(options))) return null
-    return super.runAuxiliaryCompletion(projectPath, options)
+    request: CheapModelRequest
+  ): Promise<CheapModelResult> {
+    if (!(await this.auxiliaryTransportReady(request))) {
+      return { text: null, attempts: [] }
+    }
+    return super.provideCheapModel(projectPath, request)
   }
 
   /** Cheapest first-party candidates for any auxiliary one-shot run. */
@@ -1549,7 +1552,7 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
    * authenticated transport.
    */
   private async auxiliaryTransportReady(
-    options: GenerateTitleOptions | GradeTurnOptions | AuxiliaryCompletionOptions
+    options: GenerateTitleOptions | GradeTurnOptions | CheapModelRequest
   ): Promise<boolean> {
     const firstParty = !options.settings.providerId || options.settings.providerId === 'anthropic'
     if (

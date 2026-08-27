@@ -26,7 +26,9 @@ import type {
 import type {
   AgentEventCallback,
   AgentProcessObserver,
-  AuxiliaryCompletionOptions,
+  CheapModelAttempt,
+  CheapModelRequest,
+  CheapModelResult,
   GenerateTitleOptions,
   GradeTurnOptions,
   HarnessCapabilities,
@@ -1389,9 +1391,11 @@ export class OpenCodeDriver implements HarnessDriver {
     settings: ThreadSettings,
     purpose: string,
     candidates: Array<{ providerId: string; modelId: string }>,
-    promptText: string
+    promptText: string,
+    timeoutMs: number = TITLE_GENERATION_TIMEOUT_MS,
+    attempts?: CheapModelAttempt[]
   ): Promise<string | null> {
-    const attempts = [
+    const attemptList = [
       ...candidates,
       { providerId: settings.providerId, modelId: settings.modelId }
     ].filter(
@@ -1402,7 +1406,7 @@ export class OpenCodeDriver implements HarnessDriver {
             other.providerId === candidate.providerId && other.modelId === candidate.modelId
         ) === index
     )
-    for (const candidate of attempts) {
+    for (const candidate of attemptList) {
       let isolated: IsolatedHandle | null = null
       try {
         isolated = await this.createIsolatedSession(projectPath, purpose)
@@ -1427,9 +1431,16 @@ export class OpenCodeDriver implements HarnessDriver {
           },
           isolated
         )
-        const result = await this.waitForTitleResult(isolated)
+        const result = await this.waitForTitleResult(isolated, timeoutMs)
+        attempts?.push({ providerId: candidate.providerId, modelId: candidate.modelId, ok: result !== null, failure: result === null ? 'No usable response produced' : null })
         if (result) return result
       } catch (error) {
+        attempts?.push({
+          providerId: candidate.providerId,
+          modelId: candidate.modelId,
+          ok: false,
+          failure: error instanceof Error ? error.message : String(error)
+        })
         Logger.dev(
           `OpenCode one-shot model ${candidate.providerId}/${candidate.modelId} unavailable:`,
           error
@@ -1456,18 +1467,27 @@ export class OpenCodeDriver implements HarnessDriver {
     )
   }
 
-  async runAuxiliaryCompletion(
+  /**
+   * One self-contained cheap-model completion, cheapest candidate first
+   * (big-pickle pinned, other free models as fallback, thread model last).
+   * The single entry point every cheap-model scenario routes through.
+   */
+  async provideCheapModel(
     projectPath: string,
-    options: AuxiliaryCompletionOptions
-  ): Promise<string | null> {
+    request: CheapModelRequest
+  ): Promise<CheapModelResult> {
     const candidates = await this.cheapCandidates(projectPath)
-    return this.isolatedOneShot(
+    const attempts: CheapModelAttempt[] = []
+    const text = await this.isolatedOneShot(
       projectPath,
-      options.settings,
-      'Auxiliary one-shot',
+      request.settings,
+      request.purpose,
       candidates,
-      options.prompt
+      request.prompt,
+      request.timeoutMs ?? TITLE_GENERATION_TIMEOUT_MS,
+      attempts
     )
+    return { text, attempts }
   }
 
   async gradeTurn(projectPath: string, options: GradeTurnOptions): Promise<number | null> {
@@ -2585,8 +2605,11 @@ export class OpenCodeDriver implements HarnessDriver {
     this.eventCallback?.(event)
   }
 
-  private async waitForTitleResult(handle: IsolatedHandle): Promise<string | null> {
-    const deadline = Date.now() + TITLE_GENERATION_TIMEOUT_MS
+  private async waitForTitleResult(
+    handle: IsolatedHandle,
+    timeoutMs: number = TITLE_GENERATION_TIMEOUT_MS
+  ): Promise<string | null> {
+    const deadline = Date.now() + timeoutMs
     let lastReadError: Error | null = null
     while (Date.now() < deadline) {
       if (
@@ -2618,7 +2641,7 @@ export class OpenCodeDriver implements HarnessDriver {
       }
       await new Promise((resolve) => setTimeout(resolve, TITLE_RESULT_POLL_INTERVAL_MS))
     }
-    throw lastReadError ?? new Error('OpenCode title generation timed out')
+    throw lastReadError ?? new Error('OpenCode auxiliary completion timed out')
   }
 
   // ─── Wire-format mapping ──────────────────────────────────────────────────
