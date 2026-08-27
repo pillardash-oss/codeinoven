@@ -15668,6 +15668,24 @@ export class ChatEngine {
           this.enterRetryWait(event.sessionId, issue, event.error)
           return
         }
+        // A usage-reset wait must survive its own teardown noise. Harnesses
+        // that emit a structured limit outcome (will-retry card above) can
+        // still exit non-zero afterwards, and that trailing generic "process
+        // exited" failure classifies as unknown. It arrived AFTER the wait was
+        // entered, so honoring it here would flip the visible will-retry card
+        // into a red error badge milliseconds later.
+        const liveStatus = this.sessionStatuses.get(event.sessionId)
+        if (
+          liveStatus?.state === 'waiting' &&
+          isUsageResetWaitIssue(liveStatus.issue) &&
+          !event.issue
+        ) {
+          Logger.dev(
+            'Ignored provider teardown failure trailing an active usage-reset wait:',
+            event.error
+          )
+          return
+        }
         this.sessionStatuses.set(event.sessionId, { state: 'error', issue })
         updateRetryWakeWindow(event.sessionId, null)
         this.clearSessionWatchdog(event.sessionId)
