@@ -114,7 +114,7 @@
   import { baseUrlProviderStore } from '$lib/stores/base-url-providers.svelte'
   import { providerCatalog } from '$lib/stores/provider-catalog.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
-  import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
+  import { contextSidebarState, EXPLAIN_SELECTION_PROMPT } from '$lib/stores/context-sidebar.svelte'
   import { coordinatorDockState } from '$lib/stores/coordinator-dock.svelte'
   import { projectFilesWorkspace } from '$lib/stores/project-files.svelte'
   import {
@@ -1776,9 +1776,6 @@
       .join('\n\n')
       .slice(-80_000)
   }
-
-  const EXPLAIN_SELECTION_PROMPT =
-    'Explain the selected content clearly, based on the surrounding context. Use simple, everyday language and avoid unnecessary technical jargon unless it is truly needed. Be read-only — do not make changes or run commands.'
 
   function openTemporarySelectionChat(mode: 'elaborate' | 'quick'): void {
     const selection = responseSelection
@@ -8361,8 +8358,11 @@
    *  forever after the call actually completed. */
   function isTerminalWorkingPart(part: AgentPart): boolean {
     if (part.type === 'tool') {
-      return part.state.status === 'completed' || part.state.status === 'error' ||
+      return (
+        part.state.status === 'completed' ||
+        part.state.status === 'error' ||
         part.state.time?.end !== undefined
+      )
     }
     if (part.type === 'subagent') {
       return (
@@ -8375,7 +8375,10 @@
   }
 
   function moreCompleteWorkingPart(current: AgentPart, incoming: AgentPart): AgentPart {
-    if (current.type === incoming.type && isTerminalWorkingPart(current) !== isTerminalWorkingPart(incoming)) {
+    if (
+      current.type === incoming.type &&
+      isTerminalWorkingPart(current) !== isTerminalWorkingPart(incoming)
+    ) {
       // Whichever side carries the terminal lifecycle state wins, regardless
       // of which list was passed as "preferred".
       return isTerminalWorkingPart(incoming) ? incoming : current

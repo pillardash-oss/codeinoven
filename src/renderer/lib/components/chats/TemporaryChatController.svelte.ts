@@ -247,17 +247,29 @@ export class TemporaryChatController implements ConversationController {
 
     const temporaryChatId = this.#tab.temporaryChatId
     const attachedSelections = this.#tab.selectionAttached ? [...this.#tab.selections] : []
-    const outgoing = this.#createUserMessage(
-      prompt,
-      attachments,
-      attachedSelections.map((selection, index) => ({
-        id: `${temporaryChatId}:selection:${index}`,
-        label: `Selection ${index + 1}`,
-        text: selection
-      }))
-    )
+    // Explain tabs seed their user message at open time (the store commits it
+    // the instant the tab opens) — reuse it instead of appending a duplicate.
+    const seededMessageId = this.#tab.autoPromptMessageId
+    this.#tab.autoPromptMessageId = null
+    const seededMessage =
+      seededMessageId !== null
+        ? this.#tab.messages.find(
+            (message) => message.id === seededMessageId && message.role === 'user'
+          )
+        : undefined
+    const outgoing =
+      seededMessage ??
+      this.#createUserMessage(
+        prompt,
+        attachments,
+        attachedSelections.map((selection, index) => ({
+          id: `${temporaryChatId}:selection:${index}`,
+          label: `Selection ${index + 1}`,
+          text: selection
+        }))
+      )
 
-    this.#tab.messages = [...this.#tab.messages, outgoing]
+    if (!seededMessage) this.#tab.messages = [...this.#tab.messages, outgoing]
     if (attachedSelections.length > 0) this.#tab.selectionMessageId = outgoing.id
     this.#tab.selections = []
     this.#tab.selectionAttached = false
