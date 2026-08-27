@@ -8332,7 +8332,31 @@
     })
   }
 
+  /** A part has finished its lifecycle when its terminal status or an explicit
+   *  end timestamp is present. Terminal snapshots must always win part merges:
+   *  letting a stale `running` snapshot survive keeps tool durations ticking
+   *  forever after the call actually completed. */
+  function isTerminalWorkingPart(part: AgentPart): boolean {
+    if (part.type === 'tool') {
+      return part.state.status === 'completed' || part.state.status === 'error' ||
+        part.state.time?.end !== undefined
+    }
+    if (part.type === 'subagent') {
+      return (
+        part.activity.status === 'completed' ||
+        part.activity.status === 'error' ||
+        part.activity.time?.end !== undefined
+      )
+    }
+    return false
+  }
+
   function moreCompleteWorkingPart(current: AgentPart, incoming: AgentPart): AgentPart {
+    if (current.type === incoming.type && isTerminalWorkingPart(current) !== isTerminalWorkingPart(incoming)) {
+      // Whichever side carries the terminal lifecycle state wins, regardless
+      // of which list was passed as "preferred".
+      return isTerminalWorkingPart(incoming) ? incoming : current
+    }
     if (
       current.type === incoming.type &&
       (current.type === 'text' || current.type === 'reasoning') &&

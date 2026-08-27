@@ -19,16 +19,17 @@
 
   $effect(() => {
     if (start && end) {
+      // Finished: the duration is a frozen snapshot of the reasoning itself.
       elapsed = Math.floor((end - start) / 1000)
-    } else if (start) {
-      if (active) {
-        const interval = setInterval(() => {
-          elapsed = Math.floor((Date.now() - start) / 1000)
-        }, 1000)
-        return () => clearInterval(interval)
-      } else {
+    } else if (start && active) {
+      const interval = setInterval(() => {
         elapsed = Math.floor((Date.now() - start) / 1000)
-      }
+      }, 1000)
+      return () => clearInterval(interval)
+    } else if (start && elapsed === 0) {
+      // Inactive without an end timestamp: snapshot once, never re-derive from
+      // the wall clock on later re-renders.
+      elapsed = Math.floor((Date.now() - start) / 1000)
     }
   })
 

@@ -20,8 +20,13 @@
       elapsed = Math.max(0, Math.floor((end - start) / 1000))
       return
     }
+    if (!running) {
+      // Terminal state without an end timestamp: snapshot once, never re-derive
+      // from the wall clock on later re-renders.
+      if (elapsed === 0) elapsed = Math.max(0, Math.floor((Date.now() - start) / 1000))
+      return
+    }
     elapsed = Math.max(0, Math.floor((Date.now() - start) / 1000))
-    if (!running) return
     const interval = setInterval(() => {
       elapsed = Math.max(0, Math.floor((Date.now() - start) / 1000))
     }, 1000)
