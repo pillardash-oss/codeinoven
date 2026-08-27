@@ -84,7 +84,7 @@
     const prompt = tab.activity.prompt?.trim()
     if (!prompt) return messages
     let skippedPrompt = false
-    return messages.filter((message) => {
+    return messages.filter((message: AgentMessage) => {
       if (skippedPrompt || message.role !== 'user') return true
       const text = textParts(message)
         .map((part) => part.text.trim())
@@ -94,6 +94,19 @@
       return false
     })
   })
+  const finalOutput = $derived(tab.activity.output?.trim() ?? '')
+  const transcriptCoversOutput = $derived.by(() => {
+    if (!finalOutput) return true
+    const lastAssistant = [...messages].reverse().find((message) => message.role === 'assistant')
+    if (!lastAssistant) return false
+    const text = textParts(lastAssistant)
+      .map((part) => part.text.trim())
+      .join('\n')
+      .trim()
+    if (!text) return false
+    return text === finalOutput || text.includes(finalOutput) || finalOutput.includes(text)
+  })
+  const showCapturedOutput = $derived(finalOutput.length > 0 && !transcriptCoversOutput)
 
   onMount(() => {
     void initializeSession()
@@ -460,39 +473,14 @@
         </div>
       {/if}
 
-      {#if messages.length === 0 && tab.activity.output}
-        <div>
-          <p class="mb-1 text-[9px] font-semibold uppercase tracking-[0.12em] text-dimmed">
-            Captured result
-          </p>
-          <div class="text-xs text-foreground">
-            <MarkdownView text={tab.activity.output} />
-          </div>
-        </div>
-      {/if}
-
-      {#if !sessionId}
-        <div class="rounded-lg border border-border bg-elevated px-3 py-2.5 text-[11px] text-muted">
-          {effectiveStatus === 'running' || effectiveStatus === 'waiting'
-            ? 'This provider streams the sub-agent through the parent turn without a separate child transcript. Live output and status appear here.'
-            : 'This provider streamed the sub-agent through the parent turn without a separate child transcript. The captured activity above is the available record.'}
-        </div>
-      {:else if loading && messages.length === 0}
-        <div
-          class="flex items-center {tab.activity.output
-            ? 'gap-1.5 text-[10px] text-dimmed'
-            : 'justify-center gap-2 py-8 text-xs text-muted'}"
-        >
+      {#if loading && messages.length === 0}
+        <div class="flex items-center justify-center gap-2 py-8 text-xs text-muted">
           <Loader2 size={13} class="animate-spin text-info" />
-          {tab.activity.output ? 'Loading full activity history…' : 'Loading sub-agent session…'}
+          Loading sub-agent session…
         </div>
       {:else if loadError}
         <div class="rounded-lg border border-danger/30 bg-danger/5 px-3 py-2.5">
-          <p class="text-xs font-medium text-danger">
-            {tab.activity.output
-              ? 'Full activity history is unavailable'
-              : 'Could not load the sub-agent session'}
-          </p>
+          <p class="text-xs font-medium text-danger">Could not load the sub-agent session</p>
           <p class="mt-1 text-[11px] text-muted">{loadError}</p>
           <button
             type="button"
@@ -548,6 +536,20 @@
           </div>
         {/if}
       {/each}
+
+      {#if showCapturedOutput}
+        <div class="text-xs text-foreground">
+          <MarkdownView text={finalOutput} />
+        </div>
+      {:else if !sessionId && !loading && !loadError && !busy}
+        {#if effectiveStatus === 'completed' || effectiveStatus === 'error'}
+          <p class="text-[10px] text-dimmed">
+            No further output was recorded for this sub-agent.
+          </p>
+        {:else}
+          <p class="text-[10px] text-dimmed">Sub-agent output will appear here as it is produced.</p>
+        {/if}
+      {/if}
 
       {#if busy}
         <div class="flex items-center gap-2 text-[10px] text-info">
