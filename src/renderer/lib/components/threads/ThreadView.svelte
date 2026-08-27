@@ -553,8 +553,12 @@
       engineeringLifecycle = await invoke('engineeringLifecycle:get', thread.projectId, thread.id)
     }
   }
-  /** Snapshot of the selection that started the live turn. Model controls can
-   *  still change the next-turn settings while the current turn is running. */
+  /** Sticky snapshot of the selection that started the live turn. Every working
+   *  trace belongs to the module that produced it: composer controls may change
+   *  the next-turn settings freely while a turn runs, but they must never
+   *  re-label work that already happened. The snapshot is only overwritten when
+   *  a new turn is actually sent — never cleared by waiting, error, or idle
+   *  transitions — so resumed turns keep their original attribution. */
   let liveWorkingSelection = $state<WorkingModelSelection | null>(null)
   /** True while we are showing a working trace rehydrated from persisted state
    *  because no live session activity is available to confirm the run (a silent
@@ -709,6 +713,25 @@
       ? harnessDisplayName(visibleProviderStatus.issue.harnessId)
       : providerName
   )
+  /** Settings frozen at the moment the visible provider status card appeared.
+   *  The composer must not mutate anything already on the conversation screen:
+   *  an error card keeps showing — and retrying from "Change" affects — the
+   *  configuration of the failed attempt until a new message is actually sent.
+   *  The snapshot is refreshed only when the card's identity changes, when the
+   *  user explicitly picks a model from the card itself, or when it clears. */
+  let statusCardSettings = $state<ThreadSettings | null>(null)
+  let seenProviderStatusKey: typeof visibleProviderStatus = null
+  $effect(() => {
+    if (visibleProviderStatus !== seenProviderStatusKey) {
+      seenProviderStatusKey = visibleProviderStatus
+      statusCardSettings = chatMode
+        ? { ...settings, engineeringMode: false, assignmentMode: false, loopMode: false }
+        : { ...settings }
+    } else if (visibleProviderStatus === null && statusCardSettings !== null) {
+      statusCardSettings = null
+      seenProviderStatusKey = null
+    }
+  })
   const applicationActionSource = {
     id: 'application',
     label: APP_NAME,
@@ -3010,7 +3033,6 @@
   function clearLocalTurn(): void {
     locallySubmittedTurnId = null
     locallySubmittedTurnAcknowledged = false
-    liveWorkingSelection = null
   }
 
   /** Cached thread/session state may describe the previous turn on reconnect. */
@@ -3018,7 +3040,6 @@
     if (locallySubmittedTurnId) return
     if (agentRuns.activity(thread.projectId, thread.id) === 'brainstorm_report') return
     restoredBusy = false
-    liveWorkingSelection = null
     agentRuns.setIdle(thread.projectId, thread.id)
   }
 
@@ -6733,7 +6754,9 @@
     updateSettings({ ...settings, ...normalized })
   }
 
-  /** Switch the thread's text model from the provider-error card's picker. */
+  /** Switch the thread's text model from the provider-error card's picker.
+   *  This is an explicit mutation point on the card itself, so refresh the
+   *  card's frozen settings snapshot to reflect the user's own pick. */
   function changeThreadModel(selected: ThreadSettings): void {
     const normalized = normalizeFastInference(
       selected,
@@ -6745,6 +6768,18 @@
     rendererRecovery.addRecentModel(
       modelKey(normalized.harnessId, normalized.providerId, normalized.modelId)
     )
+    statusCardSettings =
+      statusCardSettings !== null
+        ? chatMode
+          ? {
+              ...statusCardSettings,
+              ...normalized,
+              engineeringMode: false,
+              assignmentMode: false,
+              loopMode: false
+            }
+          : { ...statusCardSettings, ...normalized }
+        : null
     updateSettings({ ...settings, ...normalized })
   }
 
@@ -8015,9 +8050,10 @@
     return fastVariantForModelId(msg.modelId)?.label ?? msg.modelId
   }
 
-  /** Harness that produced the message — falls back to the thread's harness. */
+  /** Harness that produced the message — the session's owning harness first
+   *  (stable across mid-run settings switches), then the thread's harness. */
   function messageHarnessId(msg: AgentMessage): string {
-    return msg.harnessId ?? settings.harnessId
+    return msg.harnessId ?? thread.sessionHarnessId ?? settings.harnessId
   }
 
   /** Thinking level used for the message's turn, when its model reasons. */
@@ -8033,11 +8069,12 @@
     // generic level was stamped onto its rows.
     if (model && presets.length === 0) return null
     // Prefer the level actually persisted for this turn (historical truth),
-    // falling back to the thread's current level when a message has no
-    // persisted thinking level.
+    // falling back to the model's own default. Never fall back to the live
+    // composer settings here: a finished message's badge must not mutate when
+    // the user changes the thinking level mid-conversation.
     if (msg.thinkingLevel) return msg.thinkingLevel
     if (presets.length === 0) return null
-    return resolveDefaultThinkingLevel(presets, undefined, settings.thinkingLevel) ?? null
+    return resolveDefaultThinkingLevel(presets, undefined) ?? null
   }
 
   /**
@@ -9198,7 +9235,11 @@
                               <SpeechPlaybackButton
                                 messageId={msg.id}
                                 markdown={messageText(msg)}
-                                scope={{ kind: 'project', projectId: thread.projectId, threadId: thread.id }}
+                                scope={{
+                                  kind: 'project',
+                                  projectId: thread.projectId,
+                                  threadId: thread.id
+                                }}
                               />
                               {#if onContinueInThread && controller?.kind === 'temporary-chat'}
                                 <button
@@ -9390,9 +9431,15 @@
               <AgentProviderStatusCard
                 status={visibleProviderStatus}
                 providerName={statusCardProviderName}
-                settings={chatMode
-                  ? { ...settings, engineeringMode: false, assignmentMode: false, loopMode: false }
-                  : settings}
+                settings={statusCardSettings ??
+                  (chatMode
+                    ? {
+                        ...settings,
+                        engineeringMode: false,
+                        assignmentMode: false,
+                        loopMode: false
+                      }
+                    : settings)}
                 {providers}
                 projectId={thread.projectId}
                 favoriteModels={chatMode
