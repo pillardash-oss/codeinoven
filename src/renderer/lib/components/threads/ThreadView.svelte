@@ -9194,6 +9194,7 @@
                               <SpeechPlaybackButton
                                 messageId={msg.id}
                                 markdown={messageText(msg)}
+                                scope={{ kind: 'project', projectId: thread.projectId, threadId: thread.id }}
                               />
                               {#if onContinueInThread && controller?.kind === 'temporary-chat'}
                                 <button

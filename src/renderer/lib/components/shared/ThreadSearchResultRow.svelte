@@ -20,6 +20,7 @@
 
   let thread = $derived(result.thread)
   let isRecording = $derived(speechController.isRecordingThread(thread.id))
+  let isSpeaking = $derived(!isRecording && speechController.isSpeakingThread(thread.id))
 
   /** Live-settled run state wins over the persisted status, matching ThreadRow. */
   let isWorking = $derived(
@@ -210,6 +211,8 @@
     <span class="min-w-0 flex-1 truncate text-[13px] text-foreground">{thread.title}</span>
     {#if isRecording}
       <RecordingIndicator label="Listening" />
+    {:else if isSpeaking}
+      <RecordingIndicator label="Speaking" tone="speech" />
     {:else}
       <span class="shrink-0 whitespace-nowrap text-[10px] text-dimmed">
         {relativeTime(thread.createdAt)}

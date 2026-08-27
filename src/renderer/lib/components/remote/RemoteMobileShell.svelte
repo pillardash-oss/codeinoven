@@ -923,6 +923,8 @@
                   <span class="flex min-w-0 items-center gap-2">
                     {#if speechController.isRecordingThread(result.thread.id)}
                       <RecordingIndicator label="Listening" />
+                      {:else if speechController.isSpeakingThread(result.thread.id)}
+                        <RecordingIndicator label="Speaking" tone="speech" />
                     {:else}
                       {@render threadStatusDot(result.thread)}
                     {/if}
@@ -983,6 +985,8 @@
                     </span>
                     {#if speechController.isRecordingThread(thread.id)}
                       <RecordingIndicator label="Listening" />
+                      {:else if speechController.isSpeakingThread(thread.id)}
+                        <RecordingIndicator label="Speaking" tone="speech" />
                     {:else}
                       <span class="shrink-0 text-[10px] text-dimmed"
                         >{relativeTime(thread.createdAt)}</span
@@ -1062,6 +1066,8 @@
                         </span>
                         {#if speechController.isRecordingThread(thread.id)}
                           <RecordingIndicator label="Listening" />
+                          {:else if speechController.isSpeakingThread(thread.id)}
+                            <RecordingIndicator label="Speaking" tone="speech" />
                         {:else}
                           <span class="shrink-0 text-[10px] text-dimmed"
                             >{relativeTime(thread.createdAt)}</span
@@ -1147,6 +1153,8 @@
                   </span>
                   {#if speechController.isRecordingThread(thread.id)}
                     <RecordingIndicator label="Listening" />
+                    {:else if speechController.isSpeakingThread(thread.id)}
+                      <RecordingIndicator label="Speaking" tone="speech" />
                   {:else}
                     <span class="shrink-0 text-[10px] text-dimmed"
                       >{relativeTime(thread.createdAt)}</span
@@ -1189,6 +1197,8 @@
                   </span>
                   {#if speechController.isRecordingThread(thread.id)}
                     <RecordingIndicator label="Listening" />
+                    {:else if speechController.isSpeakingThread(thread.id)}
+                      <RecordingIndicator label="Speaking" tone="speech" />
                   {:else}
                     <span class="shrink-0 text-[10px] text-dimmed"
                       >{relativeTime(thread.createdAt)}</span

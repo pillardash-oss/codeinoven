@@ -4,14 +4,17 @@
     import { slide } from 'svelte/transition'
   import { probeInstalledTts } from '../../speech/tts-availability'
   import { speechController } from '../../speech/speech-controller.svelte'
+  import type { SpeechScope } from '../../../../lib/speech/types'
 
   interface Props {
     messageId: string
     markdown: string
     disabled?: boolean
+    /** Lets thread rows show the "Speaking" indicator for this playback. */
+    scope?: SpeechScope
   }
 
-  let { messageId, markdown, disabled = false }: Props = $props()
+  let { messageId, markdown, disabled = false, scope = undefined }: Props = $props()
   const playbackState = $derived(speechController.playback)
   const ownsSession = $derived('messageId' in playbackState && playbackState.messageId === messageId)
   // The compact seek slider lives in this same row and only appears while the
@@ -49,7 +52,7 @@
   })
 
   function activate(): void {
-    void speechController.togglePlayback(messageId, markdown)
+    void speechController.togglePlayback(messageId, markdown, scope)
   }
 
   function beginScrub(event: PointerEvent): void {

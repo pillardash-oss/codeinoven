@@ -376,6 +376,8 @@
     isWorking || isRetryPaused || (Boolean(thread.sessionId) && isThreadBusy(thread) && !isDraft)
   )
   let isRecording = $derived(speechController.isRecordingThread(thread.id))
+  /** TTS playing on this thread — shares the recorder's indicator slot. */
+  let isSpeaking = $derived(!isRecording && speechController.isSpeakingThread(thread.id))
 
   /**
    * Sending clears the draft, which would otherwise flash the badge back to the
@@ -682,6 +684,8 @@
       {#if !showBottomRow}
         {#if isRecording}
           <RecordingIndicator label="Listening" />
+        {:else if isSpeaking}
+          <RecordingIndicator label="Speaking" tone="speech" />
         {:else}
           <span class="whitespace-nowrap text-[10px] text-dimmed">
             {relativeTime(thread.createdAt)}
@@ -738,6 +742,8 @@
           {/if}
           {#if isRecording}
             <RecordingIndicator label="Listening" />
+          {:else if isSpeaking}
+            <RecordingIndicator label="Speaking" tone="speech" />
           {:else}
             <span class="whitespace-nowrap text-[10px] text-dimmed">
               {relativeTime(thread.createdAt)}
@@ -879,6 +885,8 @@
       {#if !showBottomRow}
         {#if isRecording}
           <RecordingIndicator label="Listening" />
+        {:else if isSpeaking}
+          <RecordingIndicator label="Speaking" tone="speech" />
         {:else}
           <span
             class="whitespace-nowrap text-[10px] text-dimmed transition-opacity duration-150 {hovered
@@ -954,6 +962,8 @@
           {/if}
           {#if isRecording}
             <RecordingIndicator label="Listening" />
+          {:else if isSpeaking}
+            <RecordingIndicator label="Speaking" tone="speech" />
           {:else}
             <span
               class="whitespace-nowrap text-[10px] text-dimmed transition-opacity duration-150 {hovered

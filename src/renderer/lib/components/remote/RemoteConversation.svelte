@@ -1288,7 +1288,11 @@
                         {/if}
                       </button>
                     {/if}
-                    <SpeechPlaybackButton messageId={endMessage.id} markdown={final.text} />
+                    <SpeechPlaybackButton
+                      messageId={endMessage.id}
+                      markdown={final.text}
+                      scope={{ kind: 'project', projectId: thread.projectId, threadId: thread.id }}
+                    />
                     <button
                       type="button"
                       class="flex h-8 w-8 cursor-pointer items-center justify-center rounded-lg transition-colors active:bg-elevated active:text-foreground disabled:cursor-not-allowed disabled:opacity-50"

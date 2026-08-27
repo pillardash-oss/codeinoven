@@ -217,6 +217,8 @@ class SpeechController {
   private playbackStallWatchdog: ReturnType<typeof setTimeout> | null = null
   private playbackStallMessageId: string | null = null
   private pausedLingerTimer: ReturnType<typeof setTimeout> | null = null
+  /** Where the spoken response lives, for row-level "Speaking" indicators. */
+  private playbackScope = $state<SpeechScope | null>(null)
   /** Whether the read-along border + seek controls are on screen right now. */
   private readAlongVisible = $state(false)
   /** Playhead position in seconds across all retained (played) segments. */
@@ -269,12 +271,38 @@ class SpeechController {
     return scope !== null && scope.kind !== 'global' && scope.threadId === threadId
   }
 
+  /** Scope of the thread whose response is currently being spoken aloud. */
+  get speakingScope(): SpeechScope | null {
+    const playbackState = this.playback
+    if (!('messageId' in playbackState)) return null
+    if (
+      playbackState.state !== 'preparing' &&
+      playbackState.state !== 'playing' &&
+      playbackState.state !== 'paused'
+    )
+      return null
+    return this.playbackScope
+  }
+
+  isSpeakingThread(threadId: string): boolean {
+    const scope = this.speakingScope
+    return scope !== null && scope.kind !== 'global' && scope.threadId === threadId
+  }
+
   async start(
     target: SpeechEditorTarget,
     scope: SpeechScope,
     preparedSnapshot?: SpeechEditorSnapshot | null
   ): Promise<void> {
     if (this.active || !['idle', 'failed'].includes(this.state.state)) return
+    // TTS and the recorder cannot run together; whoever started last wins.
+    const playbackState = this.playback
+    if (
+      'messageId' in playbackState &&
+      ['preparing', 'playing', 'paused'].includes(playbackState.state)
+    ) {
+      await this.cancelPlayback()
+    }
     this.captureScope = scope
     await this.loadSettings()
     const snapshot = preparedSnapshot ?? target.capture()
@@ -580,7 +608,13 @@ class SpeechController {
     }
   }
 
-  async togglePlayback(messageId: string, markdown: string): Promise<void> {
+  async togglePlayback(
+    messageId: string,
+    markdown: string,
+    scope?: SpeechScope
+  ): Promise<void> {
+    // TTS and the recorder cannot run together; whoever started last wins.
+    if (this.state.state === 'recording') await this.stop()
     const active = this.activePlayback
     if (active?.prepared.messageId === messageId && active.audio) {
       if (active.audio.paused) {
@@ -634,6 +668,7 @@ class SpeechController {
       }
       this.activePlayback = playback
       this.currentSegments = playback.prepared.segments
+      this.playbackScope = scope ?? null
       await this.playSegment(playback, 0)
     } catch (cause) {
       this.clearPlaybackStallWatchdog()
@@ -684,6 +719,7 @@ class SpeechController {
     const active = this.activePlayback
     this.activePlayback = null
     this.currentSegments = null
+    this.playbackScope = null
     this.clearPlaybackStallWatchdog()
     this.resetSeekSurfaces()
     if (active) {
@@ -708,6 +744,7 @@ class SpeechController {
     const active = this.activePlayback
     this.activePlayback = null
     this.currentSegments = null
+    this.playbackScope = null
     this.clearPlaybackStallWatchdog()
     this.resetSeekSurfaces()
     if (active) {
