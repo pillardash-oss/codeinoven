@@ -1580,11 +1580,6 @@
     responseReferencesState.updateCommentDraft(thread.projectId, thread.id, id, comment)
   }
 
-  function removeResponseReferenceComment(id: string): void {
-    responseReferencesState.updateComment(thread.projectId, thread.id, id, '')
-    commentEditorReferenceId = null
-  }
-
   /** Jump back to a selection's highlight and open its comment editor. */
   function editResponseReference(id: string): void {
     commentEditorReferenceId = id
@@ -8417,7 +8412,7 @@
       scope={{ kind: 'project', projectId: thread.projectId }}
       onDraftChange={(comment) => persistResponseReferenceCommentDraft(editorReference.id, comment)}
       onDone={(comment) => saveResponseReferenceComment(editorReference.id, comment)}
-      onRemoveComment={() => removeResponseReferenceComment(editorReference.id)}
+      onRemove={() => removeResponseReference(editorReference.id)}
       onClose={() => (commentEditorReferenceId = null)}
     />
   {/if}
