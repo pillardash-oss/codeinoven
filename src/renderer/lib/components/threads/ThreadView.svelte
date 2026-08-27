@@ -9171,19 +9171,21 @@
                                   {/if}
                                 </button>
                               {/if}
-                              <button
-                                class="rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
-                                aria-label="Fork thread from this message"
-                                title="Fork from here"
-                                disabled={forkingMessageId !== null}
-                                onclick={() => forkFromMessage(msg)}
-                              >
-                                {#if forkingMessageId === msg.id}
-                                  <Loader2 size={12} class="animate-spin" />
-                                {:else}
-                                  <GitFork size={12} />
-                                {/if}
-                              </button>
+                              {#if controller?.kind !== 'temporary-chat'}
+                                <button
+                                  class="rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+                                  aria-label="Fork thread from this message"
+                                  title="Fork from here"
+                                  disabled={forkingMessageId !== null}
+                                  onclick={() => forkFromMessage(msg)}
+                                >
+                                  {#if forkingMessageId === msg.id}
+                                    <Loader2 size={12} class="animate-spin" />
+                                  {:else}
+                                    <GitFork size={12} />
+                                  {/if}
+                                </button>
+                              {/if}
                               {#if chatMode && onContinueInProject}
                                 <button
                                   class="rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"

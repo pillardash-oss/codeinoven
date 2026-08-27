@@ -490,6 +490,8 @@ export class TemporaryChatController implements ConversationController {
         }
         break
       case 'session.idle':
+        this.#tab.busy = false
+        this.#tab.status = null
         break
     }
   }
