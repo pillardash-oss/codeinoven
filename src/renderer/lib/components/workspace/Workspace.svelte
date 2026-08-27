@@ -1201,19 +1201,13 @@
   let sidebarVisible = $derived(contextSidebarState.sidebarVisible)
   let terminalDockVisible = $derived(contextSidebarState.terminalDockVisible)
 
-  /** Project + scope bucket (worktree/branch) the git sidebar panel is kept
-   *  mounted for. Switching sidebar tabs or threads within the same project
-   *  AND scope only toggles this panel's visibility via CSS so its commit
-   *  history/diffs never get torn down and refetched; it remounts (clearing
-   *  all local state) whenever the project or the git scope actually
-   *  changes, since GitStatusPanel's own state doesn't otherwise reset when
-   *  only its `scopeBucketId` prop changes without a remount. */
+  /** Project the git sidebar panel is kept mounted for. The panel stays alive
+   *  across sidebar tab switches AND thread switches within that project — its
+   *  visibility is toggled via CSS only, and scope-bucket changes are swapped
+   *  in place by GitStatusPanel itself, so switching threads never tears the
+   *  panel down. Only changing projects remounts it. */
   let gitPanelProjectId = $state<string | null>(null)
   let gitPanelScopeBucketId = $state(DEFAULT_SCOPE_BUCKET_ID)
-  // Only reconcile while the git tab itself is active. Reacting to non-git
-  // tabs here previously flipped `gitPanelScopeBucketId` to its default
-  // whenever their thread lookup failed, which changed `gitPanelKey` and
-  // remounted the kept-alive panel on every sidebar toggle.
   $effect(() => {
     const tab = contextSidebarState.sidebarActiveTab
     if (!tab || !('projectId' in tab)) return
@@ -1225,15 +1219,9 @@
     const thread = allThreads.find(
       (candidate) => candidate.projectId === tab.projectId && candidate.id === tabThreadId
     )
-    // Thread info can lag the tab switch; keep the previous scope until the
-    // authoritative one is known instead of flashing a different key.
-    if (!thread || !thread.projectId) return
-    gitPanelProjectId = thread.projectId
-    gitPanelScopeBucketId = thread.scopeBucketId ?? DEFAULT_SCOPE_BUCKET_ID
+    gitPanelProjectId = tab.projectId
+    gitPanelScopeBucketId = thread?.scopeBucketId ?? DEFAULT_SCOPE_BUCKET_ID
   })
-  const gitPanelKey = $derived(
-    gitPanelProjectId ? `${gitPanelProjectId}::${gitPanelScopeBucketId}` : null
-  )
 
   /** True when the browser's native WebContentsView is on screen, either from
    *  the right sidebar or the browser's own fullscreen dialog. The native
@@ -3867,8 +3855,8 @@
           {@const activeContextTab = contextSidebarState.sidebarActiveTab}
           {@const gitPanelThreadId =
             activeContextTab && 'threadId' in activeContextTab ? activeContextTab.threadId : ''}
-          {#if gitPanelProjectId && gitPanelKey}
-            {#key gitPanelKey}
+          {#if gitPanelProjectId}
+            {#key gitPanelProjectId}
               {#await import('../git/GitStatusPanel.svelte') then { default: GitStatusPanel }}
                 <div
                   class="h-full"
