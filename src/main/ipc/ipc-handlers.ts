@@ -1670,8 +1670,6 @@ export function validateAppConfigPatch(value: unknown): AppConfigPatch {
         (language) => typeof language === 'string' && language.length <= 32
       ) ||
       typeof sound.voiceRecordingEnabled !== 'boolean' ||
-      typeof sound.localLlmCleanupEnabled !== 'boolean' ||
-      (sound.localLlmBaseUrl !== undefined && typeof sound.localLlmBaseUrl !== 'string') ||
       !isUnloadOption(sound.asrUnload) ||
       !isUnloadOption(sound.cleanupUnload) ||
       !isUnloadOption(sound.ttsUnload) ||
@@ -1723,9 +1721,6 @@ export function validateAppConfigPatch(value: unknown): AppConfigPatch {
       },
       voiceRecordingEnabled: sound.voiceRecordingEnabled,
       voiceRecordingShortcut,
-      localLlmCleanupEnabled: sound.localLlmCleanupEnabled,
-      localLlmBaseUrl:
-        sound.localLlmBaseUrl === undefined ? undefined : String(sound.localLlmBaseUrl),
       asrUnload: sound.asrUnload,
       cleanupUnload: sound.cleanupUnload,
       ttsUnload: sound.ttsUnload

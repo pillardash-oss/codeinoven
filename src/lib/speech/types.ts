@@ -3,8 +3,8 @@ export const SPEECH_HISTORY_LIMIT_MAX = 500
 export const DEFAULT_SPEECH_HISTORY_LIMIT = 30
 export const MAX_SPEECH_CHUNK_BYTES = 512 * 1024
 export const MAX_SPEECH_QUEUE_DEPTH = 8
-export const MAX_GLOBAL_CORRECTION_RULES = 500
-export const MAX_CONTEXT_CORRECTION_RULES = 200
+export const MAX_GLOBAL_LESSONS = 500
+export const MAX_CONTEXT_LESSONS = 200
 
 export type SpeechRuntime = 'mlx' | 'sherpa-onnx' | 'gguf' | 'coreml'
 export type SpeechCapability = 'asr' | 'cleanup' | 'tts'
@@ -235,7 +235,6 @@ export interface SpeechTranscriptionJob {
 export type SpeechCleanupMode =
   | { kind: 'disabled' }
   | { kind: 'local'; artifactId?: string }
-  | { kind: 'local-llm' }
   | { kind: 'remote'; selection: 'fixed' | 'conversation'; modelId?: string }
 
 export interface SpeechCleanupRequest {
@@ -255,23 +254,37 @@ export interface SpeechCleanupContext {
 }
 
 export interface SpeechCleanupProvenance {
-  mode: 'none' | 'local' | 'local-llm' | 'remote'
+  mode: 'none' | 'local' | 'remote'
   runtime?: SpeechRuntime
   artifactId?: string
   modelId?: string
-  appliedRuleIds: string[]
+  /** Lessons the cleanup LLM was asked to apply for this transcript. */
+  appliedLessonIds: string[]
   failed: boolean
+  /** True when no qualified instruct cleanup model is installed and raw text was used. */
+  modelMissing?: boolean
   error?: SpeechError
 }
 
-export type SpeechCorrectionRuleKind = 'vocabulary' | 'formatting'
+export type SpeechLessonKind = 'vocabulary' | 'punctuation' | 'phrasing' | 'formatting' | 'style'
 
-export interface SpeechCorrectionRule {
+export interface SpeechLessonExample {
+  from: string
+  to: string
+}
+
+/**
+ * A structured lesson derived by the local instruct LLM from comparing the raw
+ * ASR transcript with the text the user actually sent. Lessons are natural
+ * instructions with examples — never regex patterns — and are applied by the
+ * LLM itself during future cleanup.
+ */
+export interface SpeechLesson {
   id: string
-  kind: SpeechCorrectionRuleKind
+  kind: SpeechLessonKind
   scope: SpeechScope
-  source: string
-  replacement: string
+  instruction: string
+  examples: SpeechLessonExample[]
   confidence: number
   evidenceCount: number
   enabled: boolean
@@ -285,16 +298,52 @@ export interface SpeechDictationSpan {
   attemptId: string
   editorId: string
   insertedText: string
-  startOffset: number
-  endOffset: number
   insertedAt: number
   scope: SpeechScope
 }
 
-export interface SpeechCorrectionObservation {
-  span: SpeechDictationSpan
+export interface SpeechLearningObservation {
+  insertedText: string
   sentText: string
+  scope: SpeechScope
   sentAt: number
+}
+
+/** A lesson proposed by the instruct model from one observed correction. */
+export interface SpeechExtractedLesson {
+  kind: SpeechLessonKind
+  instruction: string
+  examples: SpeechLessonExample[]
+}
+
+export type SpeechLlamaRuntimeSource =
+  | 'environment'
+  | 'managed'
+  | 'canonical'
+  | 'homebrew'
+  | 'path'
+
+export interface SpeechLlamaRuntimeInstallation {
+  path: string
+  realPath: string
+  source: SpeechLlamaRuntimeSource
+  version?: string
+}
+
+/**
+ * Discover-or-download status of the pinned llama.cpp runtime that serves the
+ * instruct cleanup model. Nothing is bundled; existing installs are reused.
+ */
+export interface SpeechLlamaRuntimeStatus {
+  available: boolean
+  version?: string
+  selectedPath?: string
+  installations: SpeechLlamaRuntimeInstallation[]
+  managedDir: string
+  releaseTag: string
+  downloadRequired: boolean
+  downloadName?: string
+  downloadByteSize?: number
 }
 
 export interface SpeechSegment {
@@ -455,8 +504,6 @@ export interface SpeechSettings {
   remoteCleanupEnabled: boolean
   remoteCleanupSelection: 'fixed' | 'conversation'
   remoteCleanupModelId?: string
-  localLlmCleanupEnabled: boolean
-  localLlmBaseUrl?: string
   includeCodeBlocksInSpeech: boolean
   historyLimit: number
   cues: SpeechCueSettings
@@ -472,7 +519,6 @@ export const DEFAULT_SPEECH_SETTINGS: SpeechSettings = {
   localCleanupEnabled: true,
   remoteCleanupEnabled: false,
   remoteCleanupSelection: 'conversation',
-  localLlmCleanupEnabled: false,
   includeCodeBlocksInSpeech: false,
   historyLimit: DEFAULT_SPEECH_HISTORY_LIMIT,
   cues: {
@@ -525,7 +571,7 @@ export interface SpeechHistoryPage {
 }
 
 export type SpeechDestructiveAction =
-  'history-item' | 'all-history' | 'recording' | 'rule' | 'model'
+  'history-item' | 'all-history' | 'recording' | 'lesson' | 'model'
 
 export interface SpeechConfirmation {
   token: string

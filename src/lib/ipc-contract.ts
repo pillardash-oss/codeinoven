@@ -1182,20 +1182,28 @@ export interface IpcInvokeContract {
     import('./speech/types').SpeechResult<boolean>
   >
   'speech:cancelJob': Contract<[jobId: string], import('./speech/types').SpeechResult<boolean>>
-  'speech:getCorrectionRules': Contract<
+  'speech:getLessons': Contract<
     [scope?: import('./speech/types').SpeechScope],
-    import('./speech/types').SpeechResult<import('./speech/types').SpeechCorrectionRule[]>
+    import('./speech/types').SpeechResult<import('./speech/types').SpeechLesson[]>
   >
   'speech:observeCorrection': Contract<
-    [observation: import('./speech/types').SpeechCorrectionObservation],
-    import('./speech/types').SpeechResult<import('./speech/types').SpeechCorrectionRule | null>
+    [observation: import('./speech/types').SpeechLearningObservation],
+    import('./speech/types').SpeechResult<import('./speech/types').SpeechLesson[]>
   >
-  'speech:setCorrectionRuleEnabled': Contract<
-    [ruleId: string, enabled: boolean],
-    import('./speech/types').SpeechResult<import('./speech/types').SpeechCorrectionRule>
+  'speech:setLessonEnabled': Contract<
+    [lessonId: string, enabled: boolean],
+    import('./speech/types').SpeechResult<import('./speech/types').SpeechLesson>
   >
-  'speech:deleteCorrectionRule': Contract<
-    [ruleId: string, confirmationToken: string],
+  'speech:deleteLesson': Contract<
+    [lessonId: string, confirmationToken: string],
+    import('./speech/types').SpeechResult<void>
+  >
+  'speech:getLlamaRuntimeStatus': Contract<
+    [],
+    import('./speech/types').SpeechResult<import('./speech/types').SpeechLlamaRuntimeStatus>
+  >
+  'speech:downloadLlamaRuntime': Contract<
+    [],
     import('./speech/types').SpeechResult<void>
   >
   'speech:requestConfirmation': Contract<
@@ -1871,6 +1879,10 @@ export interface IpcInvokeContract {
   >
   'providerAccounts:listOffered': Contract<[harnessId: string], OfferedProvider[]>
   'providerAccounts:logout': Contract<[harnessId: string, providerId?: string], void>
+  'providerAccounts:setApiKey': Contract<
+    [harnessId: string, providerId: string, apiKey: string],
+    void
+  >
   'providerAccounts:getHidden': Contract<[harnessId: string], string[]>
   'providerAccounts:setHidden': Contract<
     [harnessId: string, providerId: string, hidden: boolean],

@@ -137,7 +137,7 @@ export class CoreMlSpeechBackend implements SpeechBackend {
   ): Promise<string> {
     if (signal.aborted) throw new Error('Speech operation cancelled.')
     throw new Error(
-      'Core ML does not support transcript cleanup. Use MLX or sherpa-onnx cleanup models.'
+      'Core ML does not support transcript cleanup. Install the instruct cleanup model to enable it.'
     )
   }
 

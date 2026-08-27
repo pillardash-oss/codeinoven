@@ -152,8 +152,8 @@
           ? await invoke('speech:deleteHistory', pending.targetId, token)
           : pending.action === 'all-history'
             ? await invoke('speech:deleteAllHistory', token)
-            : pending.action === 'rule'
-              ? await invoke('speech:deleteCorrectionRule', pending.targetId, token)
+            : pending.action === 'lesson'
+              ? await invoke('speech:deleteLesson', pending.targetId, token)
               : pending.action === 'model' && pending.isImported
                 ? await invoke('speech:unregisterModel', pending.targetId, token)
                 : await invoke('speech:deleteArtifact', pending.targetId, token)
@@ -869,40 +869,46 @@
     {#if activeTab === 'learning'}
       <section id="settings-block-sound-rules" class="rounded-xl border bg-surface p-4">
         <h2 class="mb-3 text-xs font-semibold uppercase tracking-wide text-muted">
-          Learned corrections
+          Learned lessons
         </h2>
         <p class="mb-3 text-xs text-dimmed">
-          CodeInOven learns from the words you correct before sending and applies them to future
-          transcripts within each project or chat context.
+          After you edit a transcript before sending, the local instruct model compares what it
+          heard with what you actually wrote and distills reusable style lessons — word choices,
+          punctuation habits, phrasing rewrites. They are applied by the model itself during future
+          cleanup, separately per project and per chat context.
         </p>
-        {#if speech.rules.length === 0}<p class="text-xs text-dimmed">
-            No corrections learned yet.
+        {#if speech.lessons.length === 0}<p class="text-xs text-dimmed">
+            No lessons learned yet. Edit a dictation before sending and the model will learn from
+            the difference.
           </p>{/if}
-        {#each speech.rules as rule (rule.id)}
+        {#each speech.lessons as lesson (lesson.id)}
           <div class="flex items-center gap-3 border-t py-2 first:border-0">
             <div class="min-w-0 flex-1">
-              <p class="truncate text-xs">
-                <span class="text-muted">{rule.source}</span> → {rule.replacement}
-              </p>
+              <p class="truncate text-xs">{lesson.instruction}</p>
               <p class="text-[10px] text-dimmed">
-                {rule.scope.kind} · {Math.round(rule.confidence * 100)}% · {rule.evidenceCount}
-                observations
+                {lesson.kind} · {lesson.scope.kind} · {Math.round(lesson.confidence * 100)}% ·
+                {lesson.evidenceCount} observations
               </p>
+              {#if lesson.examples.length > 0}
+                <p class="truncate text-[10px] text-dimmed">
+                  e.g. “{lesson.examples[0].from}” → “{lesson.examples[0].to}”
+                </p>
+              {/if}
             </div>
             <Switch
-              checked={rule.enabled}
-              onchange={(checked) => void speech.setRuleEnabled(rule.id, checked)}
-              aria-label={`Toggle correction ${rule.source}`}
+              checked={lesson.enabled}
+              onchange={(checked) => void speech.setRuleEnabled(lesson.id, checked)}
+              aria-label={`Toggle lesson ${lesson.instruction}`}
             /><button
               type="button"
               class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-muted hover:bg-danger/10 hover:text-danger"
-              title={`Delete correction ${rule.source}`}
-              aria-label={`Delete correction ${rule.source}`}
+              title={`Delete lesson ${lesson.instruction}`}
+              aria-label={`Delete lesson ${lesson.instruction}`}
               onclick={() =>
                 (deleting = {
-                  action: 'rule',
-                  targetId: rule.id,
-                  label: `${rule.source} → ${rule.replacement}`
+                  action: 'lesson',
+                  targetId: lesson.id,
+                  label: lesson.instruction
                 })}><Trash2 size={13} aria-hidden="true" /></button
             >
           </div>
@@ -919,7 +925,10 @@
           <div class="flex items-center justify-between gap-4">
             <div>
               <p class="text-sm font-medium">Local cleanup</p>
-              <p class="text-xs text-dimmed">Punctuation and learned rules stay on this device.</p>
+              <p class="text-xs text-dimmed">
+                The local instruct cleanup model applies punctuation and your learned style lessons.
+                Everything stays on this device.
+              </p>
             </div>
             <Switch
               checked={settings.localCleanupEnabled}
@@ -940,35 +949,6 @@
               aria-label="Toggle remote transcript cleanup"
             />
           </div>
-          <div class="flex items-center justify-between gap-4">
-            <div>
-              <p class="text-sm font-medium">Local-LLM cleanup</p>
-              <p class="text-xs text-dimmed">
-                Format transcripts with a local LLM (llama.cpp/GGUF or MLX). Point at a running
-                server, or leave blank to use the app-managed runtime.
-              </p>
-            </div>
-            <Switch
-              checked={settings.localLlmCleanupEnabled}
-              onchange={(checked) => patch({ localLlmCleanupEnabled: checked })}
-              aria-label="Toggle local-LLM transcript cleanup"
-            />
-          </div>
-          <label class="block text-xs text-muted">
-            Local-LLM server base URL
-            <input
-              class="mt-1 w-full rounded-lg border bg-elevated px-2.5 py-2 text-xs outline-none focus:border-primary disabled:opacity-50"
-              type="text"
-              value={settings.localLlmBaseUrl ?? ''}
-              disabled={!settings.localLlmCleanupEnabled}
-              placeholder="http://127.0.0.1:8080 (LM Studio, llama.cpp server)"
-              autocomplete="off"
-              oninput={(event) =>
-                patch({
-                  localLlmBaseUrl: event.currentTarget.value.trim() || undefined
-                })}
-            />
-          </label>
           <select
             class="w-full rounded-lg border bg-elevated px-2.5 py-2 text-xs outline-none focus:border-primary disabled:opacity-50"
             aria-label="Remote cleanup model source"

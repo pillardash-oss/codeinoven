@@ -1,4 +1,5 @@
 import type { SpeechCapability, SpeechRuntime } from '../../lib/speech/types'
+import type { SpeechLesson } from '../../lib/speech/types'
 
 export interface SpeechBackendArtifact {
   id: string
@@ -19,12 +20,22 @@ export interface SpeechSynthesisInput {
   outputPath: string
 }
 
+/** Learned style lessons the cleanup LLM is asked to apply as constraints. */
+export interface SpeechCleanupLessonContext {
+  lessons: SpeechLesson[]
+}
+
 export interface SpeechBackend {
   readonly runtime: SpeechRuntime
   capabilities(): Promise<SpeechCapability[]>
   warmup?(artifact: SpeechBackendArtifact, signal: AbortSignal): Promise<void>
   transcribe(input: SpeechTranscribeInput, signal: AbortSignal): Promise<string>
-  cleanup(transcript: string, artifact: SpeechBackendArtifact, signal: AbortSignal): Promise<string>
+  cleanup(
+    transcript: string,
+    artifact: SpeechBackendArtifact,
+    signal: AbortSignal,
+    context?: SpeechCleanupLessonContext
+  ): Promise<string>
   synthesize(input: SpeechSynthesisInput, signal: AbortSignal): Promise<void>
   dispose(): Promise<void>
 }
