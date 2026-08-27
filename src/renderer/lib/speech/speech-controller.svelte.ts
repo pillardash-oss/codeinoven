@@ -107,14 +107,19 @@ class SpeechController {
   state = $state<RendererSpeechState>({ state: 'idle' })
   playback = $state<SpeechPlaybackState>({ state: 'idle' })
   get activeSegments(): SpeechSegment[] | null {
-    return this.activePlayback?.prepared.segments ?? null
+    return this.currentSegments
   }
   private active: ActiveCapture | null = null
   private elapsedTimer: ReturnType<typeof setInterval> | null = null
   private preloadTimer: ReturnType<typeof setTimeout> | null = null
   private preloadFired = false
   private readonly spans = new Map<string, SpeechDictationSpan[]>()
-  private activePlayback = $state<ActivePlayback | null>(null)
+  private activePlayback: ActivePlayback | null = null
+  // Reactive mirror consumed by the per-line TTS highlight rendering. Kept
+  // separate from activePlayback because storing the live playback record
+  // (promises, media elements) behind a $state proxy would break the raw-local
+  // identity checks that guard every step of segment playback.
+  private currentSegments = $state<SpeechSegment[] | null>(null)
   private stopPromise: Promise<void> | null = null
   private sound = structuredClone(DEFAULT_SPEECH_SETTINGS)
   private playbackStallWatchdog: ReturnType<typeof setTimeout> | null = null
@@ -504,6 +509,7 @@ class SpeechController {
         index: 0
       }
       this.activePlayback = playback
+      this.currentSegments = playback.prepared.segments
       await this.playSegment(playback, 0)
     } catch (cause) {
       this.clearPlaybackStallWatchdog()
@@ -551,6 +557,7 @@ class SpeechController {
     )
     const active = this.activePlayback
     this.activePlayback = null
+    this.currentSegments = null
     if (active) {
       active.audio?.pause()
       if (active.audioUrl) URL.revokeObjectURL(active.audioUrl)
@@ -571,6 +578,7 @@ class SpeechController {
   async cancelPlayback(): Promise<void> {
     const active = this.activePlayback
     this.activePlayback = null
+    this.currentSegments = null
     this.clearPlaybackStallWatchdog()
     if (active) {
       active.audio?.pause()
