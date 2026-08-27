@@ -21,8 +21,13 @@
       (playbackState.state === 'playing' ||
         (playbackState.state === 'paused' && speechController.seekControlsActive))
   )
+  // Full block range: past audio is real, future lines are calibrated estimates.
+  const trackLength = $derived(Math.max(speechController.estimatedTotalDurationSeconds, 0.1))
+  const fillPercent = $derived.by(() => {
+    if (trackLength <= 0) return 0
+    return Math.min(100, (speechController.generatedFrontierSeconds / trackLength) * 100)
+  })
   const thumbPosition = $derived(speechController.elapsedPlaybackSeconds)
-  const trackLength = $derived(Math.max(speechController.knownPlaybackDurationSeconds, 0.1))
   let scrubbing = $state(false)
   let scrubValue = $state(0)
   const title = $derived.by(() => {
@@ -125,6 +130,7 @@
     <div transition:slide={{ duration: 160 }}>
       <input
         class="tts-seek block w-28 cursor-pointer"
+        style="--fill:{fillPercent}%"
         type="range"
         min="0"
         max={trackLength}
@@ -146,12 +152,19 @@
 {/if}
 
 <style>
+  /* Two-tone track: filled (generated audio) vs unfilled (not yet synthesized). */
   .tts-seek {
     appearance: none;
     -webkit-appearance: none;
     height: 4px;
     border-radius: 9999px;
-    background: var(--color-border);
+    background: linear-gradient(
+      to right,
+      var(--color-primary) 0%,
+      var(--color-primary) var(--fill, 0%),
+      var(--color-border) var(--fill, 0%),
+      var(--color-border) 100%
+    );
     outline-offset: 3px;
   }
   .tts-seek:focus-visible {

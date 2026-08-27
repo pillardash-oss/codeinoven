@@ -56,11 +56,15 @@ interface ActivePlayback {
   artifact: SpeechModelArtifact
   voiceId: string
   audio: HTMLAudioElement | null
-  /** Blob URL per played/cached segment, retained for seeking back. */
+  /** Blob URL per generated segment, retained for seeking anywhere in the block. */
   retainedUrls: string[]
   /** Media duration per retained segment; NaN until metadata loads. */
   durations: number[]
+  /** Prefetch handle plus the segment index it belongs to. */
   next: Promise<SpeechSynthesizedSegment> | null
+  nextIndex: number | null
+  /** Bumped whenever the user relocates the playhead; invalidates stale chains. */
+  generation: number
   index: number
 }
 
@@ -139,7 +143,65 @@ class SpeechController {
   get knownPlaybackDurationSeconds(): number {
     return this.knownDurationSeconds
   }
+  /** Estimated duration of the entire readable block; the slider's full range. */
+  get estimatedTotalDurationSeconds(): number {
+    const playback = this.activePlayback
+    if (!playback) return 0
+    let total = 0
+    for (let i = 0; i < playback.prepared.segments.length; i += 1)
+      total += this.segmentSeconds(playback, i)
+    return total
+  }
+  /** Seconds of audio already generated (filled part of the seek track). */
+  get generatedFrontierSeconds(): number {
+    const playback = this.activePlayback
+    if (!playback) return 0
+    let total = 0
+    for (let i = 0; i < playback.retainedUrls.length; i += 1)
+      total += this.segmentSeconds(playback, i)
+    return total
+  }
+
+  private static readonly FALLBACK_CHARS_PER_SECOND = 12
+
+  /**
+   * Duration of one segment: real media length once known, otherwise a
+   * characters-per-second estimate calibrated against the audio already heard.
+   */
+  private segmentSeconds(playback: ActivePlayback, index: number): number {
+    const duration = playback.durations[index]
+    if (Number.isFinite(duration)) return duration
+    const text = playback.prepared.segments[index]?.text ?? ''
+    let knownChars = 0
+    let knownSeconds = 0
+    for (let i = 0; i < playback.retainedUrls.length; i += 1) {
+      const known = playback.durations[i]
+      if (!Number.isFinite(known)) continue
+      knownChars += playback.prepared.segments[i]?.text.length ?? 0
+      knownSeconds += known
+    }
+    if (knownChars > 0 && knownSeconds > 0) return text.length / (knownChars / knownSeconds)
+    return text.length / SpeechController.FALLBACK_CHARS_PER_SECOND
+  }
+
+  /** Maps a slider position onto (segment, offset) across the whole block. */
+  private locatePlaybackPosition(
+    playback: ActivePlayback,
+    seconds: number
+  ): { index: number; offset: number } {
+    let remaining = seconds
+    const lastIndex = playback.prepared.segments.length - 1
+    for (let i = 0; i <= lastIndex; i += 1) {
+      const span = this.segmentSeconds(playback, i)
+      if (remaining <= span || i === lastIndex) return { index: i, offset: Math.max(0, remaining) }
+      remaining -= span
+    }
+    return { index: -1, offset: 0 }
+  }
   private active: ActiveCapture | null = null
+  /** Scope captured when `start()` begins so the capture is attributable to
+   *  its thread even before permission resolves (no ActiveCapture yet). */
+  private captureScope: SpeechScope | null = null
   private elapsedTimer: ReturnType<typeof setInterval> | null = null
   private preloadTimer: ReturnType<typeof setTimeout> | null = null
   private preloadFired = false
@@ -187,8 +249,23 @@ class SpeechController {
     return this.state.state === 'recording' ? (this.active?.scope ?? null) : null
   }
 
+  /** The scope of whichever editor is dictating across every live phase —
+   *  requesting-permission → recording → stopping → transcribing. Unlike
+   *  `recordingScope` this stays non-null after the mic closes until the
+   *  transcript lands or the capture fails, so consumers that represent
+   *  in-progress drafting (thread rows) never flash back mid-pipeline. */
+  get capturingScope(): SpeechScope | null {
+    if (this.state.state === 'idle' || this.state.state === 'failed') return null
+    return this.captureScope ?? this.active?.scope ?? null
+  }
+
   isRecordingThread(threadId: string): boolean {
     const scope = this.recordingScope
+    return scope !== null && scope.kind !== 'global' && scope.threadId === threadId
+  }
+
+  isCapturingThread(threadId: string): boolean {
+    const scope = this.capturingScope
     return scope !== null && scope.kind !== 'global' && scope.threadId === threadId
   }
 
@@ -198,6 +275,7 @@ class SpeechController {
     preparedSnapshot?: SpeechEditorSnapshot | null
   ): Promise<void> {
     if (this.active || !['idle', 'failed'].includes(this.state.state)) return
+    this.captureScope = scope
     await this.loadSettings()
     const snapshot = preparedSnapshot ?? target.capture()
     if (!snapshot) {
@@ -550,6 +628,8 @@ class SpeechController {
         retainedUrls: [],
         durations: [],
         next: null,
+        nextIndex: null,
+        generation: 0,
         index: 0
       }
       this.activePlayback = playback
@@ -922,25 +1002,51 @@ class SpeechController {
 
   private async playSegment(playback: ActivePlayback, index: number): Promise<void> {
     if (this.activePlayback !== playback) return
-    // Segments already synthesized in this session (e.g. after seeking back)
-    // replay from their retained blob instead of hitting the worker again.
-    if (index >= playback.retainedUrls.length) {
-      const synthesized =
-        playback.next ? await playback.next : await this.synthesize(playback, index)
-      playback.next = null
-      if (this.activePlayback !== playback || index !== playback.retainedUrls.length) return
+    const generationAtStart = playback.generation
+    await this.obtainSegmentAudio(playback, index)
+    if (
+      this.activePlayback !== playback ||
+      playback.generation !== generationAtStart ||
+      index >= playback.retainedUrls.length
+    )
+      return
+    if (index + 1 < playback.prepared.segments.length && !playback.next) {
+      const prefetchIndex = index + 1
+      playback.next = this.synthesize(playback, prefetchIndex)
+      playback.nextIndex = prefetchIndex
+    }
+    pauseCurrentHistoryAudio()
+    await this.startSegmentAudio(playback, index, 0)
+  }
+
+  /**
+   * Makes sure a generated blob exists for `index`, synthesizing on demand and
+   * reusing an in-flight prefetch when it targets the same segment. Safe to
+   * call from both the natural chain and explicit seeks.
+   */
+  private async obtainSegmentAudio(
+    playback: ActivePlayback,
+    index: number
+  ): Promise<void> {
+    if (index < playback.retainedUrls.length) return
+    let promise: Promise<SpeechSynthesizedSegment>
+    if (playback.next && playback.nextIndex === index) {
+      promise = playback.next
+    } else {
+      // A stale prefetch for another index must not surface as unhandled.
+      playback.next?.catch(() => undefined)
+      promise = this.synthesize(playback, index)
+    }
+    playback.next = null
+    playback.nextIndex = null
+    const synthesized = await promise
+    // Retain even for an abandoned session so cleanup still revokes the blob.
+    if (index === playback.retainedUrls.length) {
       playback.retainedUrls.push(
         URL.createObjectURL(new Blob([synthesized.audio], { type: 'audio/wav' }))
       )
       playback.durations.push(Number.NaN)
     }
-    if (index + 1 < playback.prepared.segments.length && !playback.next) {
-      const prefetchIndex = index + 1
-      playback.next = this.synthesize(playback, prefetchIndex)
-    }
-    playback.index = index
-    pauseCurrentHistoryAudio()
-    await this.startSegmentAudio(playback, index, 0)
   }
 
   /**
@@ -955,6 +1061,7 @@ class SpeechController {
     autoplay = true
   ): Promise<void> {
     if (this.activePlayback !== playback) return
+    playback.index = index
     let audio = playback.audio
     if (!audio || audio.dataset.segmentIndex !== String(index)) {
       audio?.pause()
@@ -1050,18 +1157,13 @@ class SpeechController {
     )
   }
 
-  /** Publishes the cross-segment playhead and known-duration counters. */
+  /** Publishes the cross-segment playhead and generated-frontier counters. */
   private syncSeekCounters(playback: ActivePlayback): void {
     let prefix = 0
-    for (let i = 0; i < playback.index; i += 1) {
-      const duration = playback.durations[i]
-      prefix += Number.isFinite(duration) ? duration : 0
-    }
+    for (let i = 0; i < playback.index; i += 1) prefix += this.segmentSeconds(playback, i)
     const current = playback.audio?.currentTime ?? 0
     this.elapsedSeconds = prefix + current
-    let total = 0
-    for (const duration of playback.durations) total += Number.isFinite(duration) ? duration : 0
-    this.knownDurationSeconds = total
+    this.knownDurationSeconds = this.generatedFrontierSeconds
   }
 
   /** Hides the read-along border and seek controls at terminal states. */
@@ -1087,51 +1189,48 @@ class SpeechController {
   }
 
   /**
-   * Moves the playhead to `seconds` within the already-synthesized timeline.
-   * Seeking inside the current segment only moves the element's cursor; seeking
-   * back swaps in that segment's retained audio and continues from there.
+   * Moves the playhead anywhere in the whole block. Positions inside the
+   * current segment just move the cursor; other targets (forward or back)
+   * swap in that segment's retained audio, synthesizing it first when it has
+   * never been generated. A stale request (user kept dragging) is discarded.
    */
   async seekPlayback(seconds: number): Promise<void> {
     const playback = this.activePlayback
-    if (!playback || !playback.retainedUrls.length) return
-    const paused = this.playback.state === 'paused'
-    let targetIndex = -1
-    let offset = seconds
-    for (let i = 0; i <= playback.index; i += 1) {
-      const duration = playback.durations[i]
-      const known = Number.isFinite(duration) ? duration : Number.POSITIVE_INFINITY
-      if (offset <= known || i === playback.index) {
-        targetIndex = i
-        break
+    if (!playback || playback.prepared.segments.length === 0) return
+    const pausedAtStart = this.playback.state === 'paused'
+    const { index, offset } = this.locatePlaybackPosition(playback, Math.max(0, seconds))
+    if (index === -1) return
+    if (index === playback.index && playback.audio) {
+      // Cursor move within the loaded segment.
+      try {
+        playback.audio.currentTime = offset
+      } catch {
+        // Metadata pending; the next timeupdate reconciles the slider.
       }
-      offset -= known
-    }
-    if (targetIndex === -1) return
-    const durationAtTarget = playback.durations[targetIndex]
-    if (Number.isFinite(durationAtTarget)) {
-      offset = Math.max(0, Math.min(offset, Math.max(0, durationAtTarget - 0.05)))
-    }
-    if (targetIndex !== playback.index) {
-      // Discarding a stale prefetch must not surface as an unhandled rejection.
-      playback.next?.catch(() => undefined)
-      playback.next = null
-      await this.startSegmentAudio(playback, targetIndex, offset, !paused)
+      this.syncSeekCounters(playback)
+      if (pausedAtStart) {
+        this.armPausedLinger()
+      } else {
+        this.clearPausedLinger()
+        this.readAlongVisible = true
+      }
       return
     }
-    const audio = playback.audio
-    if (!audio) return
+    // Cross-segment relocation: any previously chained continuation is stale.
+    playback.generation += 1
+    const token = playback.generation
+    if (playback.audio && !playback.audio.paused && !pausedAtStart) {
+      // Stop sound immediately so scrubbing forward feels instant while the
+      // target segment (if uncached) is being generated.
+      playback.audio.pause()
+    }
     try {
-      audio.currentTime = offset
+      await this.obtainSegmentAudio(playback, index)
     } catch {
-      // Metadata pending; the next timeupdate reconciles the slider position.
+      return
     }
-    this.syncSeekCounters(playback)
-    if (paused) {
-      this.armPausedLinger()
-    } else {
-      this.clearPausedLinger()
-      this.readAlongVisible = true
-    }
+    if (this.activePlayback !== playback || playback.generation !== token) return
+    await this.startSegmentAudio(playback, index, offset, !pausedAtStart)
   }
 
   private playCue(kind: 'started' | 'stopped' | 'completed'): void {
