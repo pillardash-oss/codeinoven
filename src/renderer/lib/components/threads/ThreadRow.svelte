@@ -343,8 +343,14 @@
     | 'approval'
     | 'error'
 
-  /** Threads with any unsent composer content read as "todo" (filled gray dot). */
-  let isDraft = $derived(rendererRecovery.hasDraftContent(thread.projectId, thread.id))
+  /** Threads with any unsent composer content read as "todo" (filled gray dot).
+   *  Live dictation counts too: from the first mic press through transcription
+   *  the user is drafting with their voice, so the row must read as draft
+   *  before the transcript ever reaches the composer. */
+  let isDraft = $derived(
+    rendererRecovery.hasDraftContent(thread.projectId, thread.id) ||
+      speechController.isCapturingThread(thread.id)
+  )
 
   /** Orchestration worker/auditor threads stay silent: never presented as unread. */
   let effectiveRead = $derived(isOrchestrationChildThread(thread) || thread.read)
