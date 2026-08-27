@@ -124,11 +124,20 @@ export class TemporaryChatController implements ConversationController {
     })
 
     // Explain tabs carry an auto-prompt that should be sent immediately so the
-    // user gets an explanation without having to type anything first.
+    // user gets an explanation without having to type anything first. Show a
+    // short action label in the UI while still sending the full instruction to
+    // the agent.
     if (this.#tab.autoPrompt && !this.#tab.autoPromptSent && !this.#tab.sessionStarted) {
       const autoPrompt = this.#tab.autoPrompt
       this.#tab.autoPromptSent = true
-      void this.send({ text: autoPrompt, attachments: [], promptReferences: [] })
+      const displayText =
+        this.#tab.mode === 'elaborate' ? this.#tab.title || 'Explain' : autoPrompt
+      void this.send({
+        text: displayText,
+        attachments: [],
+        promptReferences: [],
+        transportText: autoPrompt
+      })
     }
 
     if (this.#tab.sessionStarted) {
@@ -193,9 +202,10 @@ export class TemporaryChatController implements ConversationController {
   }
 
   async send(payload: SendPayload): Promise<void> {
-    const { text, attachments, promptReferences: _promptReferences } = payload
+    const { text, attachments, transportText, promptReferences: _promptReferences } = payload
     const prompt = text.trim()
-    if (!prompt || this.#tab.expired) return
+    const backendPrompt = (transportText ?? text).trim()
+    if (!prompt || !backendPrompt || this.#tab.expired) return
 
     this.#touch()
     this.#recordModelUse()
@@ -229,7 +239,7 @@ export class TemporaryChatController implements ConversationController {
         this.#tab.threadId,
         temporaryChatId,
         this.#tab.settings,
-        prompt,
+        backendPrompt,
         attachments,
         attachedSelections,
         this.#tab.messages.length === 1 ? this.#tab.initialContext : undefined

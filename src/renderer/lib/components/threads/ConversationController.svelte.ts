@@ -24,6 +24,10 @@ export interface SendPayload {
   taskReferences?: PromptAssignmentTaskReference[]
   /** True when the user force-sends while the agent is already working. */
   direct?: boolean
+  /** Optional backend text that differs from the visible `text` (used by
+   *  temporary chats to show a short action label while sending the full
+   *  instruction to the agent). */
+  transportText?: string
 }
 
 /**
