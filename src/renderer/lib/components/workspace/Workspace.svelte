@@ -34,6 +34,7 @@
     Globe2,
     History,
     Info,
+    Loader2,
     Minimize2,
     MessageCircleDashed,
     Pause,
@@ -645,6 +646,8 @@
   // Remove-project confirmation
   let showRemoveModal = $state(false)
   let removeTarget = $state<Project | null>(null)
+  /** Project currently being deleted in the background; guards repeat clicks. */
+  let deletingProjectId = $state<string | null>(null)
 
   // Edit-project modal
   let showEditModal = $state(false)
@@ -2092,16 +2095,33 @@
   }
 
   async function deleteProject(projectId: string): Promise<void> {
-    await invoke('project:delete', projectId)
+    if (deletingProjectId !== null) return
+    const project = projects.find((p) => p.id === projectId)
+    if (!project) return
+    deletingProjectId = projectId
+
+    // Remove the project from the UI immediately (same pattern as thread
+    // deletion) so the sidebar reflects the change without waiting on IPC.
     const browserTabIds = contextSidebarState.removeProjectBrowsers(projectId)
     if (browserFullscreenTabId && browserTabIds.includes(browserFullscreenTabId)) {
       browserFullscreenTabId = null
     }
-    await invoke('browser:destroyProject', projectId)
     projects = projects.filter((p) => p.id !== projectId)
     allThreads = allThreads.filter((t) => t.projectId !== projectId)
     projectIcons.delete(projectId)
     if (selectedThread?.projectId === projectId) workspaceState.clearThread()
+
+    // Heavy backend cleanup happens asynchronously; on failure the project
+    // is restored so the user can retry.
+    try {
+      await invoke('project:delete', projectId)
+      await invoke('browser:destroyProject', projectId)
+    } catch (error) {
+      projects = [project, ...projects.filter((p) => p.id !== projectId)]
+      reportError(error, 'The project could not be deleted.')
+    } finally {
+      deletingProjectId = null
+    }
   }
 
   // ─── Folder ellipsis menu actions ────────────────────────────────────────
@@ -2229,10 +2249,11 @@
   }
 
   async function confirmRemoveProject(): Promise<void> {
-    if (!removeTarget) return
-    await deleteProject(removeTarget.id)
+    const target = removeTarget
+    if (!target || deletingProjectId !== null) return
     showRemoveModal = false
     removeTarget = null
+    await deleteProject(target.id)
   }
 
   // ─── Scope bucket actions ──────────────────────────────────────────────────
@@ -4366,19 +4387,26 @@
   {#snippet footer()}
     <button
       type="button"
-      class="rounded-lg px-3 py-2 text-sm text-muted transition-colors hover:bg-elevated"
+      class="rounded-lg px-3 py-2 text-sm text-muted transition-colors hover:bg-elevated disabled:pointer-events-none disabled:opacity-50"
       title="Cancel"
+      disabled={deletingProjectId !== null}
       onclick={() => (showRemoveModal = false)}
     >
       Cancel
     </button>
     <button
       type="button"
-      class="rounded-lg bg-danger px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-danger/90"
+      class="inline-flex items-center gap-2 rounded-lg bg-danger px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-danger/90 disabled:pointer-events-none disabled:opacity-60"
       title="Remove this project and its threads from {APP_NAME}"
+      disabled={deletingProjectId !== null}
       onclick={() => void confirmRemoveProject()}
     >
-      Remove
+      {#if deletingProjectId !== null}
+        <Loader2 size={14} class="animate-spin" />
+        Removing…
+      {:else}
+        Remove
+      {/if}
     </button>
   {/snippet}
 </Modal>
