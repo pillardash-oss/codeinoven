@@ -203,8 +203,11 @@
   }
 
   // New live parts follow the trace only while the user remains at its bottom.
-  // A user scroll-up is preserved, and overscroll containment keeps the outer
-  // conversation/composer from taking over the gesture.
+  // A user scroll-up is preserved. Scroll chaining is left enabled: reaching the
+  // top of a finished trace's inner scroller hands the gesture to the outer
+  // conversation so it can lazy-load older messages (compaction boundaries do
+  // not stop it). The tail-follow effect below keeps live output pinned while
+  // the trace is busy, which is where containment actually mattered.
   $effect(() => {
     void visibleParts.length
     void isOpen
@@ -438,7 +441,7 @@
   {#if isOpen}
     <div
       bind:this={traceScrollEl}
-      class="max-h-[min(55vh,36rem)] overflow-y-auto overscroll-contain px-3 pb-3 [&>*:first-child]:mt-2 [&>*+*]:mt-2"
+      class="max-h-[min(55vh,36rem)] overflow-y-auto px-3 pb-3 [&>*:first-child]:mt-2 [&>*+*]:mt-2"
       onscroll={onTraceScroll}
     >
       {#each visibleParts as part (part.id)}

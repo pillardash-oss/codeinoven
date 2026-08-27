@@ -3097,6 +3097,21 @@
       void Promise.all([invoke('thread:get', projectId, id), invoke('config:get')])
         .then(([threadData, config]) => {
           if (!alive) return
+          // Self-heal the history flag: a thread seeded empty must never stay
+          // permanently unable to lazy-load. One bounded probe off the critical
+          // path verifies against disk and merges real history if seeding raced
+          // a non-empty thread.
+          if (olderMessagesAvailable !== true) {
+            void invoke('thread:loadMessages', projectId, id, undefined, HISTORY_WINDOW_SIZE)
+              .then((probe) => {
+                if (!alive || !probe) return
+                if (probe.messages.length > 0 && messages.length <= probe.messages.length) {
+                  threadMessages.mergePage(projectId, id, probe.messages)
+                }
+                olderMessagesAvailable ||= probe.hasOlder
+              })
+              .catch(() => {})
+          }
           queueMicrotask(() => {
             if (!alive) return
             if (threadData?.settings) {

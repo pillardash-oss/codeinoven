@@ -689,6 +689,12 @@ export class AgentMessageRepo {
     before: ThreadMessageCursor | undefined,
     limit: number
   ): ThreadMessagePage {
+    // Backward pages are turn-aligned: a page carries at most `limit` trace/
+    // assistant rows and extends down to the next older user-role row so the
+    // chunk the renderer prepends always ends on "the older user's message"
+    // instead of slicing a working trace mid-turn. The scan cap bounds the work
+    // for pathological single-turn histories (dozens of compaction windows).
+    const scanCap = Math.max(limit * 4, limit + 40)
     const rows = before
       ? this.db.all<AgentMessageRow>(
           `SELECT * FROM agent_messages
@@ -701,7 +707,7 @@ export class AgentMessageRepo {
           before.createdAt,
           before.createdAt,
           before.id,
-          limit + 1
+          scanCap
         )
       : this.db.all<AgentMessageRow>(
           `SELECT * FROM agent_messages
@@ -710,12 +716,22 @@ export class AgentMessageRepo {
            ORDER BY created_at DESC, id DESC
            LIMIT ?`,
           threadId,
-          limit + 1
+          scanCap
         )
-    const hasOlder = rows.length > limit
-    const pageRows = hasOlder ? rows.slice(0, limit) : rows
+    // Walk newest → oldest and stop just past the first user-role row that has
+    // at most `limit` non-user rows above it. Rows above the boundary are the
+    // working-trace entries belonging to that user prompt.
+    let end = Math.min(limit, rows.length) - 1
+    for (let i = 0; i < rows.length; i++) {
+      if (rows[i].role === 'user') {
+        if (i === 0 || i > limit) break
+        end = i
+        break
+      }
+    }
+    const hasOlder = end < rows.length - 1 || rows.length >= scanCap
     return {
-      messages: pageRows.reverse().map((row) => rowToMessage(row)),
+      messages: rows.slice(0, end + 1).reverse().map((row) => rowToMessage(row)),
       hasOlder
     }
   }
