@@ -1732,6 +1732,9 @@
       .slice(-80_000)
   }
 
+  const EXPLAIN_SELECTION_PROMPT =
+    'Explain the selected content clearly, based on the surrounding context. Use simple, everyday language and avoid unnecessary technical jargon unless it is truly needed. Be read-only — do not make changes or run commands.'
+
   function openTemporarySelectionChat(mode: 'elaborate' | 'quick'): void {
     const selection = responseSelection
     if (!selection) return
@@ -1741,7 +1744,9 @@
       mode,
       selection.text,
       temporaryConversationContext(),
-      settings
+      settings,
+      true,
+      mode === 'elaborate' ? EXPLAIN_SELECTION_PROMPT : undefined
     )
     closeResponseSelection()
   }
@@ -2142,7 +2147,9 @@
       mode,
       selection,
       context,
-      settings
+      settings,
+      true,
+      mode === 'elaborate' ? EXPLAIN_SELECTION_PROMPT : undefined
     )
   }
   let auditReportActionsAvailable = $derived.by(() => {

@@ -102,6 +102,14 @@ export class TemporaryChatController implements ConversationController {
       if (event) this.#handleEvent(event)
     })
 
+    // Explain tabs carry an auto-prompt that should be sent immediately so the
+    // user gets an explanation without having to type anything first.
+    if (this.#tab.autoPrompt && !this.#tab.autoPromptSent && !this.#tab.sessionStarted) {
+      const autoPrompt = this.#tab.autoPrompt
+      this.#tab.autoPromptSent = true
+      void this.send({ text: autoPrompt, attachments: [], promptReferences: [] })
+    }
+
     if (this.#tab.sessionStarted) {
       const temporaryChatId = this.#tab.temporaryChatId
       void invoke('agent:getTemporaryChatStatus', temporaryChatId).then((status) => {
