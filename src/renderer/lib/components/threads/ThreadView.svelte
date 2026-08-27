@@ -8699,7 +8699,10 @@
                       ariaLabel="Edit message"
                       onSubmit={() => void submitEditedMessage(msg)}
                     />
-                    <div class="mt-1.5 flex items-center justify-end gap-1.5">
+                    <div
+                      class="mt-1.5 flex items-center justify-end gap-1.5"
+                      data-voice-trigger-root
+                    >
                       <button
                         class="rounded-md px-2.5 py-1 text-xs text-muted transition-colors hover:bg-elevated hover:text-foreground"
                         title="Discard the edit"
@@ -8712,6 +8715,7 @@
                         getTarget={messageEditSpeechTarget}
                         scope={{ kind: 'project', projectId: thread.projectId }}
                         disabled={busy}
+                        triggerPriority={8}
                       />
                       <button
                         class="rounded-md bg-primary px-2.5 py-1 text-xs font-semibold text-on-primary transition-opacity hover:opacity-90 disabled:opacity-50"

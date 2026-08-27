@@ -86,6 +86,7 @@
   style:width={`${POPOVER_WIDTH}px`}
   role="dialog"
   aria-label="Comment on selection"
+  data-voice-trigger-root
   {@attach draggablePopover({ x: preferredLeft, y: preferredTop })}
 >
   <div class="mb-2 flex items-center justify-between gap-2">
@@ -122,7 +123,12 @@
       <Trash2 size={12} />
       Remove
     </button>
-    <VoiceInputButton {targetId} getTarget={() => speechTarget} {scope} />
+    <VoiceInputButton
+      {targetId}
+      getTarget={() => speechTarget}
+      {scope}
+      triggerPriority={6}
+    />
     <button
       type="button"
       class="flex h-8 items-center gap-1.5 rounded-lg bg-primary px-3 text-xs font-medium text-on-primary transition-colors hover:bg-primary-hover"

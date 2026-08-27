@@ -117,6 +117,13 @@
           "scenario": "Composer focused while the agent is working."
         },
         {
+          "id": "chat-voice-dictation",
+          "keys": ["alt", "alt"],
+          "label": "Dictate with voice",
+          "description": "Starts voice dictation in whatever input with a microphone is on view — the chat composer, a selection comment, the temporary chat, or an open editor. Defaults to double-pressing the left Alt key (Option on macOS) and can be remapped in Sound > Preferences; Escape stops an active recording.",
+          "scenario": "Anywhere a microphone input is visible."
+        },
+        {
           "id": "chat-history-previous",
           "keys": ["arrowup"],
           "label": "Recall previous message",

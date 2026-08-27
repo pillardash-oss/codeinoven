@@ -10,6 +10,10 @@ import { basename, dirname, extname, isAbsolute, join, resolve } from 'path'
 import { APP_NAME, APP_SLUG } from '../../lib/brand'
 import { harnessGlobalSkillPath, SHARED_GLOBAL_SKILL_PATH } from '../../lib/native-skill-paths'
 import { modelKey } from '../../lib/model-keys'
+import {
+  DEFAULT_VOICE_RECORDING_SHORTCUT,
+  normalizeVoiceRecordingShortcut
+} from '../../lib/speech/types'
 import type { Database } from '../database/database'
 import { StorageEngine } from '../storage/storage-engine'
 import { Logger } from '../system/logger'
@@ -1684,6 +1688,13 @@ export function validateAppConfigPatch(value: unknown): AppConfigPatch {
     ) {
       throw new TypeError('Sound settings are invalid')
     }
+    const voiceRecordingShortcut =
+      sound.voiceRecordingShortcut === undefined
+        ? DEFAULT_VOICE_RECORDING_SHORTCUT
+        : normalizeVoiceRecordingShortcut(sound.voiceRecordingShortcut)
+    if (voiceRecordingShortcut === null) {
+      throw new TypeError('Sound voice recording shortcut is invalid')
+    }
     const optionalId = (field: string): string | undefined => {
       const candidate = sound[field]
       if (candidate === undefined) return undefined
@@ -1711,6 +1722,7 @@ export function validateAppConfigPatch(value: unknown): AppConfigPatch {
         volume: sound.cues.volume
       },
       voiceRecordingEnabled: sound.voiceRecordingEnabled,
+      voiceRecordingShortcut,
       localLlmCleanupEnabled: sound.localLlmCleanupEnabled,
       localLlmBaseUrl:
         sound.localLlmBaseUrl === undefined ? undefined : String(sound.localLlmBaseUrl),

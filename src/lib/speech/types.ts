@@ -354,6 +354,97 @@ export interface SpeechDictionaryEntry {
   updatedAt: number
 }
 
+/**
+ * A user-configurable keyboard binding that starts voice recording in
+ * whichever mic input is on view. `code` is a `KeyboardEvent.code` value and
+ * the modifier flags must match exactly when the key is pressed. When
+ * `doubleTap` is true the binding targets a bare modifier key and only fires
+ * when that exact physical key is pressed twice in quick succession with no
+ * other key pressed in between (the default: double-press Left Alt / Option).
+ */
+export interface VoiceRecordingShortcut {
+  code: string
+  ctrl: boolean
+  meta: boolean
+  alt: boolean
+  shift: boolean
+  doubleTap: boolean
+}
+
+/** Keys produced purely by holding a single modifier — the only legal double-tap targets. */
+export const MODIFIER_KEY_CODES: ReadonlySet<string> = new Set([
+  'AltLeft',
+  'AltRight',
+  'ControlLeft',
+  'ControlRight',
+  'MetaLeft',
+  'MetaRight',
+  'ShiftLeft',
+  'ShiftRight'
+])
+
+export const DEFAULT_VOICE_RECORDING_SHORTCUT: VoiceRecordingShortcut = {
+  code: 'AltLeft',
+  ctrl: false,
+  meta: false,
+  alt: false,
+  shift: false,
+  doubleTap: true
+}
+
+const VOICE_SHORTCUT_CODE_PATTERN = /^[A-Z][A-Za-z0-9]{0,31}$/
+
+/** Validates an unknown value into a `VoiceRecordingShortcut`, or returns null. */
+export function normalizeVoiceRecordingShortcut(value: unknown): VoiceRecordingShortcut | null {
+  if (typeof value !== 'object' || value === null) return null
+  const candidate = value as Record<string, unknown>
+  if (
+    typeof candidate.code !== 'string' ||
+    !VOICE_SHORTCUT_CODE_PATTERN.test(candidate.code) ||
+    typeof candidate.ctrl !== 'boolean' ||
+    typeof candidate.meta !== 'boolean' ||
+    typeof candidate.alt !== 'boolean' ||
+    typeof candidate.shift !== 'boolean' ||
+    typeof candidate.doubleTap !== 'boolean'
+  ) {
+    return null
+  }
+  if (candidate.doubleTap) {
+    // Double-tap bindings are bare modifiers: no extra flags, and the key itself
+    // must be a modifier so a plain letter key can never hijack typing.
+    if (
+      !MODIFIER_KEY_CODES.has(candidate.code) ||
+      candidate.ctrl ||
+      candidate.meta ||
+      candidate.alt ||
+      candidate.shift
+    ) {
+      return null
+    }
+    return {
+      code: candidate.code,
+      ctrl: false,
+      meta: false,
+      alt: false,
+      shift: false,
+      doubleTap: true
+    }
+  }
+  if (!candidate.ctrl && !candidate.meta && !candidate.alt && !MODIFIER_KEY_CODES.has(candidate.code)) {
+    // Guard against re-binding a printable key alone (letters/digits), which
+    // would make ordinary typing trigger recordings.
+    return null
+  }
+  return {
+    code: candidate.code,
+    ctrl: candidate.ctrl,
+    meta: candidate.meta,
+    alt: candidate.alt,
+    shift: candidate.shift,
+    doubleTap: false
+  }
+}
+
 export interface SpeechSettings {
   asrArtifactId?: string
   cleanupArtifactId?: string
@@ -370,6 +461,7 @@ export interface SpeechSettings {
   historyLimit: number
   cues: SpeechCueSettings
   voiceRecordingEnabled: boolean
+  voiceRecordingShortcut: VoiceRecordingShortcut
   asrUnload: SpeechUnloadOption
   cleanupUnload: SpeechUnloadOption
   ttsUnload: SpeechUnloadOption
@@ -390,6 +482,7 @@ export const DEFAULT_SPEECH_SETTINGS: SpeechSettings = {
     volume: 0.7
   },
   voiceRecordingEnabled: false,
+  voiceRecordingShortcut: DEFAULT_VOICE_RECORDING_SHORTCUT,
   asrUnload: '30m',
   cleanupUnload: '30m',
   ttsUnload: '30m'
