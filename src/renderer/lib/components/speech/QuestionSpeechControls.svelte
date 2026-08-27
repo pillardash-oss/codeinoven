@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte'
   import { CircleAlert, LoaderCircle, Pause, Play, Volume2 } from '@lucide/svelte'
-    import { slide } from 'svelte/transition'
+  import { slide } from 'svelte/transition'
   import { probeInstalledTts } from '../../speech/tts-availability'
   import { speechController } from '../../speech/speech-controller.svelte'
 
@@ -14,13 +14,6 @@
   let { messageId, markdown, disabled = false }: Props = $props()
   const playbackState = $derived(speechController.playback)
   const ownsSession = $derived('messageId' in playbackState && playbackState.messageId === messageId)
-  // The compact seek slider lives in this same row and only appears while the
-  // read-along overlay is active — the shared pause-linger timer hides both.
-  const seekExpanded = $derived(
-    ownsSession &&
-      (playbackState.state === 'playing' ||
-        (playbackState.state === 'paused' && speechController.seekControlsActive))
-  )
   // Full block range: past audio is real, future lines are calibrated estimates.
   const trackLength = $derived(Math.max(speechController.estimatedTotalDurationSeconds, 0.1))
   const fillPercent = $derived.by(() => {
@@ -30,14 +23,6 @@
   const thumbPosition = $derived(speechController.elapsedPlaybackSeconds)
   let scrubbing = $state(false)
   let scrubValue = $state(0)
-  const title = $derived.by(() => {
-    if (!ownsSession) return 'Read response aloud'
-    if (playbackState.state === 'preparing') return 'Preparing spoken response'
-    if (playbackState.state === 'playing') return 'Pause spoken response'
-    if (playbackState.state === 'paused') return 'Resume spoken response'
-    if (playbackState.state === 'failed') return 'Retry spoken response'
-    return 'Read response aloud'
-  })
 
   let hasInstalledTts = $state(null as boolean | null)
   let visibilityKnown = $state(false)
@@ -68,58 +53,68 @@
     scrubbing = false
     void speechController.seekPlayback(Number(input.value))
   }
+
+  const buttonTitle = $derived.by(() => {
+    if (!ownsSession) return 'Read the question and its options aloud'
+    if (playbackState.state === 'preparing') return 'Preparing spoken question'
+    if (playbackState.state === 'playing') return 'Pause spoken question'
+    if (playbackState.state === 'paused') return 'Resume spoken question'
+    if (playbackState.state === 'failed') return 'Retry spoken question'
+    return 'Read the question and its options aloud'
+  })
 </script>
 
 {#if !hidden}
-<div class="flex items-center gap-1.5">
-  <button
-    type="button"
-    class="rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground focus-visible:ring-2 focus-visible:ring-info focus-visible:outline-none disabled:opacity-40"
-    {title}
-    aria-label={title}
-    {disabled}
-    onclick={activate}
-  >
-    {#if ownsSession && playbackState.state === 'preparing'}
-      <LoaderCircle size={12} class="animate-spin" aria-hidden="true" />
-    {:else if ownsSession && playbackState.state === 'playing'}
-      <Pause size={12} aria-hidden="true" />
-    {:else if ownsSession && playbackState.state === 'paused'}
-      <Play size={12} aria-hidden="true" />
-    {:else if ownsSession && playbackState.state === 'failed'}
-      <CircleAlert size={12} aria-hidden="true" />
-    {:else}
-      <Volume2 size={12} aria-hidden="true" />
+  <div class="flex shrink-0 items-center gap-1.5">
+    <button
+      type="button"
+      class="flex h-7 w-7 items-center justify-center rounded-lg text-muted transition-colors hover:bg-elevated hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary disabled:cursor-not-allowed disabled:opacity-40"
+      title={buttonTitle}
+      aria-label={buttonTitle}
+      {disabled}
+      onclick={activate}
+    >
+      {#if ownsSession && playbackState.state === 'preparing'}
+        <LoaderCircle size={13} class="animate-spin" aria-hidden="true" />
+      {:else if ownsSession && playbackState.state === 'playing'}
+        <Pause size={13} aria-hidden="true" />
+      {:else if ownsSession && playbackState.state === 'paused'}
+        <Play size={13} aria-hidden="true" />
+      {:else if ownsSession && playbackState.state === 'failed'}
+        <CircleAlert size={13} aria-hidden="true" />
+      {:else}
+        <Volume2 size={13} aria-hidden="true" />
+      {/if}
+    </button>
+    <!-- Separate sibling control, not part of the play/pause button -->
+    {#if ownsSession && (playbackState.state === 'playing' || (playbackState.state === 'paused' && speechController.seekControlsActive))}
+      <div transition:slide={{ duration: 160 }}>
+        <input
+          class="question-tts-seek block h-7 w-32 cursor-pointer"
+          style="--fill:{fillPercent}%"
+          type="range"
+          min="0"
+          max={trackLength}
+          step="0.1"
+          value={scrubbing ? scrubValue : Math.min(thumbPosition, trackLength)}
+          title="Seek spoken audio"
+          aria-label="Seek spoken audio"
+          disabled={disabled}
+          onpointerdown={beginScrub}
+          onpointerup={() => {
+            scrubbing = false
+          }}
+          oninput={onScrubInput}
+          onchange={commitScrub}
+        />
+      </div>
     {/if}
-  </button>
-  {#if seekExpanded}
-    <div transition:slide={{ duration: 160 }}>
-      <input
-        class="tts-seek block w-28 cursor-pointer"
-        style="--fill:{fillPercent}%"
-        type="range"
-        min="0"
-        max={trackLength}
-        step="0.1"
-        value={scrubbing ? scrubValue : Math.min(thumbPosition, trackLength)}
-        title="Seek spoken audio"
-        aria-label="Seek spoken audio"
-        disabled={disabled || playbackState.state === 'preparing'}
-        onpointerdown={beginScrub}
-        onpointerup={() => {
-          scrubbing = false
-        }}
-        oninput={onScrubInput}
-        onchange={commitScrub}
-      />
-    </div>
-  {/if}
-</div>
+  </div>
 {/if}
 
 <style>
   /* Two-tone track: filled (generated audio) vs unfilled (not yet synthesized). */
-  .tts-seek {
+  .question-tts-seek {
     appearance: none;
     -webkit-appearance: none;
     height: 4px;
@@ -133,10 +128,10 @@
     );
     outline-offset: 3px;
   }
-  .tts-seek:focus-visible {
+  .question-tts-seek:focus-visible {
     outline: 2px solid var(--color-info);
   }
-  .tts-seek::-webkit-slider-thumb {
+  .question-tts-seek::-webkit-slider-thumb {
     appearance: none;
     -webkit-appearance: none;
     height: 10px;
@@ -147,7 +142,7 @@
     box-shadow: 0 0 0 1px var(--color-app);
     cursor: pointer;
   }
-  .tts-seek::-moz-range-thumb {
+  .question-tts-seek::-moz-range-thumb {
     height: 10px;
     width: 10px;
     border-radius: 9999px;

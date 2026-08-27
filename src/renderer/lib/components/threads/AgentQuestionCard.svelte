@@ -13,7 +13,7 @@
   import { SvelteSet } from 'svelte/reactivity'
   import { blockHtml, lexMarkdown } from '../markdown/markdown'
   import RichMarkdownEditor from '../shared/RichMarkdownEditor.svelte'
-  import SpeechPlaybackButton from '../speech/SpeechPlaybackButton.svelte'
+  import QuestionSpeechControls from '../speech/QuestionSpeechControls.svelte'
   import VoiceInputButton from '../speech/VoiceInputButton.svelte'
   import type { SpeechScope } from '../../../../lib/speech/types'
   import type { AgentQuestion, PendingAgentQuestionRequest } from '$shared/types'
@@ -509,7 +509,7 @@
         </p>
       {/if}
       <!-- Self-hides when no TTS artifact is installed -->
-      <SpeechPlaybackButton
+      <QuestionSpeechControls
         messageId={speechMessageId}
         markdown={spokenQuestionText}
         disabled={working}
