@@ -2395,18 +2395,21 @@
   }
 
   /**
-   * Manual reorder of a project's pinned threads. Rewrites pinned_at so the
+   * Manual reorder of the sidebar pinned section. Pin order is one shared
+   * global sequence across every project group, so a drop relative to any
+   * thread — same project or not — inserts the dragged thread at that point in
+   * the global order. Visually the thread stays in its own project group and
+   * lands at the group edge nearest the drop (top when dropped above a higher
+   * group, bottom when dropped below a lower one). Rewrites pinned_at so the
    * first thread is most-recently pinned (top), applied optimistically so the
-   * section reorders the moment the user drops. This is the only thing that
-   * changes pin order.
+   * section reorders the moment the user drops.
    */
   async function handlePinnedThreadMove(
-    projectId: string,
     draggedId: string,
     targetId: string,
     position: 'before' | 'after'
   ): Promise<void> {
-    const pinnedIds = pinnedThreads.filter((t) => t.projectId === projectId).map((t) => t.id)
+    const pinnedIds = pinnedThreads.map((t) => t.id)
     const fromIdx = pinnedIds.indexOf(draggedId)
     const toIdx = pinnedIds.indexOf(targetId)
     if (fromIdx === -1 || toIdx === -1) return
@@ -2420,11 +2423,12 @@
     // reorders on drop, before the persisted result returns.
     const base = Date.now()
     allThreads = allThreads.map((t) => {
-      const index = t.pinned && t.projectId === projectId ? pinnedIds.indexOf(t.id) : -1
+      const index =
+        t.pinned && !t.archived && t.projectId !== INBOX_PROJECT_ID ? pinnedIds.indexOf(t.id) : -1
       return index !== -1 ? { ...t, pinnedAt: base - index } : t
     })
 
-    const updated = await invoke('thread:reorderPinned', projectId, pinnedIds)
+    const updated = await invoke('thread:reorderPinnedGlobal', pinnedIds)
     for (const t of updated) {
       upsertThreadInList(t)
     }
@@ -3341,8 +3345,7 @@
             onTogglePin={togglePin}
             onDelete={handleDelete}
             onFork={forkThread}
-            onMovePinnedThread={(projectId, draggedId, targetId, pos) =>
-              handlePinnedThreadMove(projectId, draggedId, targetId, pos)}
+            onMovePinnedThread={handlePinnedThreadMove}
           />
 
           <!-- Pinned projects -->

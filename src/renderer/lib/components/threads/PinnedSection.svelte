@@ -15,12 +15,7 @@
     onTogglePin: (t: Thread) => void
     onDelete: (t: Thread) => Promise<void>
     onFork: (t: Thread) => void
-    onMovePinnedThread?: (
-      projectId: string,
-      id: string,
-      targetId: string,
-      position: 'before' | 'after'
-    ) => void
+    onMovePinnedThread?: (id: string, targetId: string, position: 'before' | 'after') => void
   }
 
   let {
@@ -34,11 +29,6 @@
     onFork,
     onMovePinnedThread
   }: Props = $props()
-
-  function makeMoveHandler(projectId: string) {
-    return (id: string, targetId: string, position: 'before' | 'after') =>
-      onMovePinnedThread?.(projectId, id, targetId, position)
-  }
 
   /** Pinned threads grouped by project, preserving project order. */
   let grouped = $derived(
@@ -76,7 +66,7 @@
             {onTogglePin}
             {onDelete}
             {onFork}
-            onMoveThread={onMovePinnedThread ? makeMoveHandler(group.project.id) : undefined}
+            onMoveThread={onMovePinnedThread}
           />
         {/each}
       </div>
