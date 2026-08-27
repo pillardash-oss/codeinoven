@@ -932,12 +932,9 @@ async function bootPostPaintServices(): Promise<void> {
         Logger.error('Restart recovery completed with failures', recovery.failures)
       }
       await chatEngine?.resumePendingWork()
-      // Resume the interrupted threads themselves (regular + Sr. Engineer),
-      // gated by the "Resume work on restart" setting. Each resumed thread
-      // broadcasts a working status so the sidebar flips immediately.
-      if (recovery.recovered.length > 0) {
-        await chatEngine?.resumeRecoveredThreads(recovery.recovered)
-      }
+      // Recovered threads stay interrupted in the UI and wait for the user to
+      // retry them — booting must never silently resume agent work, since an
+      // auto-continued turn spawns a full harness server at startup.
     } catch (error) {
       Logger.error('Restart recovery failed (non-fatal):', error)
     }
