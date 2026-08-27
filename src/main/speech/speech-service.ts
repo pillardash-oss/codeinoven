@@ -1,5 +1,4 @@
 import { createHash, randomUUID } from 'node:crypto'
-import { createWriteStream } from 'node:fs'
 import { access, mkdir, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import type {
@@ -60,6 +59,7 @@ import { LlamaRuntimeService } from './llama-runtime-service'
 import { Logger } from '../system/logger'
 import { getConfigRoot } from '../../lib/utils'
 import { SpeechCleanupService } from './speech-cleanup-service'
+import { downloadFileResumable } from './resumable-download'
 import { SpeechLearningService } from './speech-learning-service'
 import { normalizeSpeechMarkdown } from '../../lib/speech/tts-normalizer'
 import { TtsPlaybackService } from './tts-playback-service'
@@ -152,7 +152,6 @@ export type SpeechAudioTranscribeExecutor = (
 
 type SpeechProgressListener = (event: SpeechProgressEvent) => void
 
-const DOWNLOAD_CHUNK_BYTES = 256 * 1024
 
 /** Main-process coordinator. Native inference is delegated to bounded workers. */
 export class SpeechService {
@@ -1559,7 +1558,7 @@ export class SpeechService {
     await this.storage.dispose()
   }
 
-  private async downloadFile(
+  private downloadFile(
     url: string,
     destination: string,
     expectedBytes: number,
@@ -1567,45 +1566,7 @@ export class SpeechService {
     signal: AbortSignal,
     onProgress?: (receivedSoFar: number) => void
   ): Promise<number> {
-    const response = await fetch(url, { signal, redirect: 'follow' })
-    if (!response.ok || !response.body)
-      throw new Error(`Download failed with HTTP ${response.status}.`)
-    const stream = createWriteStream(destination, { flags: 'wx', mode: 0o600 })
-    const streamError = new Promise<never>((_resolve, reject) => stream.once('error', reject))
-    const hash = createHash('sha256')
-    let received = 0
-    try {
-      const reader = response.body.getReader()
-      while (true) {
-        const { done, value } = await reader.read()
-        if (done) break
-        for (let offset = 0; offset < value.byteLength; offset += DOWNLOAD_CHUNK_BYTES) {
-          const chunk = value.subarray(offset, offset + DOWNLOAD_CHUNK_BYTES)
-          received += chunk.byteLength
-          if (received > expectedBytes) {
-            throw new Error('Downloaded model exceeds its catalog byte count.')
-          }
-          hash.update(chunk)
-          onProgress?.(received)
-          if (!stream.write(chunk)) {
-            await Promise.race([
-              new Promise<void>((resolve) => stream.once('drain', resolve)),
-              streamError
-            ])
-          }
-        }
-      }
-      await Promise.race([new Promise<void>((resolve) => stream.end(resolve)), streamError])
-    } catch (cause) {
-      stream.destroy()
-      throw cause
-    }
-    if (received !== expectedBytes)
-      throw new Error(`Downloaded ${received} bytes; expected ${expectedBytes}.`)
-    const digest = hash.digest('hex')
-    if (digest !== expectedSha256)
-      throw new Error('Downloaded model checksum does not match the catalog.')
-    return received
+    return downloadFileResumable(url, destination, expectedBytes, expectedSha256, signal, onProgress)
   }
 
   private requireSelectableArtifact(
