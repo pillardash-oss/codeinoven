@@ -1718,39 +1718,43 @@
   />
 {/if}
 
+{#if isDragging}
+  <!-- Rendered as a sibling of .chat-composer, not a descendant: that element sets
+       container-type for its responsive toolbar, which makes it a containing block
+       for position:fixed children and would confine this overlay to its bounds
+       instead of the viewport. -->
+  <div
+    role="region"
+    aria-label="Drop zone"
+    class="fixed inset-0 z-100 flex items-center justify-center border-2 border-dashed border-primary bg-primary/20 backdrop-blur-sm pointer-events-auto"
+    ondragover={(e: DragEvent) => {
+      if (overFileTree(e)) {
+        isDragging = false
+        return
+      }
+      e.preventDefault()
+      if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy'
+    }}
+    ondrop={(e: DragEvent) => {
+      if (overFileTree(e)) return
+      e.preventDefault()
+      e.stopPropagation()
+      isDragging = false
+      handleDropFiles(e.dataTransfer)
+    }}
+  >
+    <div class="flex flex-col items-center gap-2 text-primary">
+      <Upload size={32} />
+      <span class="text-base font-medium">Drop files to attach</span>
+    </div>
+  </div>
+{/if}
+
 <div
   class="chat-composer border bg-surface shadow-sm"
   data-onboarding="composer"
   data-voice-trigger-root
 >
-  {#if isDragging}
-    <div
-      role="region"
-      aria-label="Drop zone"
-      class="fixed inset-0 z-100 flex items-center justify-center border-2 border-dashed border-primary bg-primary/20 backdrop-blur-sm pointer-events-auto"
-      ondragover={(e: DragEvent) => {
-        if (overFileTree(e)) {
-          isDragging = false
-          return
-        }
-        e.preventDefault()
-        if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy'
-      }}
-      ondrop={(e: DragEvent) => {
-        if (overFileTree(e)) return
-        e.preventDefault()
-        e.stopPropagation()
-        isDragging = false
-        handleDropFiles(e.dataTransfer)
-      }}
-    >
-      <div class="flex flex-col items-center gap-2 text-primary">
-        <Upload size={32} />
-        <span class="text-base font-medium">Drop files to attach</span>
-      </div>
-    </div>
-  {/if}
-
   {#if imageDescriptorGateOpen}
     <div
       class="mx-3 mt-2.5 rounded-xl border border-primary/30 bg-primary/5 p-4"
