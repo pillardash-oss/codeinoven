@@ -1229,7 +1229,7 @@
     // authoritative one is known instead of flashing a different key.
     if (!thread || !thread.projectId) return
     gitPanelProjectId = thread.projectId
-    gitPanelScopeBucketId = thread.scopeBucketId
+    gitPanelScopeBucketId = thread.scopeBucketId ?? DEFAULT_SCOPE_BUCKET_ID
   })
   const gitPanelKey = $derived(
     gitPanelProjectId ? `${gitPanelProjectId}::${gitPanelScopeBucketId}` : null

@@ -243,8 +243,9 @@ export class TemporaryChatController implements ConversationController {
         attachments,
         attachedSelections,
         this.#tab.messages.length === 1 ? this.#tab.initialContext : undefined
-      )) as AgentMessage
+      )) as AgentMessage | undefined
 
+      if (!response) return
       if (this.#tab.temporaryChatId !== temporaryChatId || this.#tab.expired) return
       const responseIndex = this.#tab.messages.findIndex((message) => message.id === response.id)
       this.#tab.messages =
@@ -256,6 +257,14 @@ export class TemporaryChatController implements ConversationController {
       this.#touch()
     } catch (error) {
       if (this.#tab.temporaryChatId !== temporaryChatId || this.#tab.expired) return
+      if (
+        error instanceof Error &&
+        (error.name === 'TemporaryChatCancelledError' ||
+          error.message === 'Temporary chat stopped by user' ||
+          error.message === 'Temporary chat closed')
+      ) {
+        return
+      }
       this.#tab.error =
         error instanceof Error ? error.message : 'The temporary chat could not respond.'
     } finally {

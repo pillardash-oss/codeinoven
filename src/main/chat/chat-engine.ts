@@ -703,6 +703,18 @@ const TEMPORARY_CHAT_ALLOWED_TOOLS = [
   'gemini_quota'
 ]
 
+/**
+ * Expected cancellation of an in-flight temporary chat turn — the user closed
+ * or expired the chat, or pressed stop. Settles the in-flight prompt without
+ * surfacing an error to the UI or the IPC layer.
+ */
+class TemporaryChatCancelledError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'TemporaryChatCancelledError'
+  }
+}
+
 /** Chat-only instruction — plain chat threads behave like a browser web chatbot. */
 const CHAT_SYSTEM_PROMPT = [
   `You are a general-purpose web chat assistant inside ${APP_NAME}.`,
@@ -6175,7 +6187,7 @@ export class ChatEngine {
     attachments: PromptAttachment[],
     selections?: string[],
     initialContext?: string
-  ): Promise<AgentMessage> {
+  ): Promise<AgentMessage | undefined> {
     projectId = validateEntityId(projectId, 'Project ID')
     threadId = validateEntityId(threadId, 'Thread ID')
     temporaryChatId = validateEntityId(temporaryChatId, 'Temporary chat ID', 256)
@@ -6352,6 +6364,12 @@ export class ChatEngine {
       return response
     } catch (error) {
       this.clearCompletionWaiter(temporary.sessionId)
+      if (error instanceof TemporaryChatCancelledError || !this.temporaryChats.has(temporary.id)) {
+        // Expected teardown while the turn was in flight — settle quietly so
+        // the renderer and the IPC layer never see an exception.
+        Logger.dev('Temporary chat turn cancelled before completion:', error)
+        return undefined
+      }
       await this.notifyTemporaryChatCompletion(projectId, threadId, temporary.id, 'error')
       throw error
     }
@@ -6652,7 +6670,13 @@ export class ChatEngine {
     }
     if (this.sessionStatuses.get(temporary.sessionId)?.state !== 'working') return
     this.userAbortedSessions.add(temporary.sessionId)
-    this.rejectCompletionWaiter(temporary.sessionId, 'Temporary chat stopped by user')
+    {
+      const waiter = this.completionWaiters.get(temporary.sessionId)
+      if (waiter) {
+        this.clearCompletionWaiter(temporary.sessionId)
+        waiter.reject(new TemporaryChatCancelledError('Temporary chat stopped by user'))
+      }
+    }
     const driver = this.drivers.get(temporary.driverId)
     if (driver) {
       try {
@@ -6819,7 +6843,7 @@ export class ChatEngine {
     const completion = this.completionWaiters.get(temporary.sessionId)
     if (completion) {
       this.clearCompletionWaiter(temporary.sessionId)
-      completion.reject(new Error('Temporary chat closed'))
+      completion.reject(new TemporaryChatCancelledError('Temporary chat closed'))
     }
     this.sessionRegistry.delete(temporary.sessionId)
     this.sessionStatuses.delete(temporary.sessionId)
