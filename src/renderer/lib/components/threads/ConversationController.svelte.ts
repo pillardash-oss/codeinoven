@@ -5,6 +5,7 @@ import type {
   PromptAttachment,
   PromptAssignmentTaskReference,
   PromptProjectReference,
+  PromptReference,
   SpecActionIntent,
   ThreadSettings,
   UserMessagePresentation
@@ -77,4 +78,11 @@ export interface ConversationController {
   clearError(): void
   /** Clear a provider status card. */
   clearStatus(): void
+
+  /** Optional composer-level selection references (used by temporary chats). */
+  readonly references?: PromptReference[]
+  /** Remove a single composer selection reference (used by temporary chats). */
+  removeReference?(id: string): void
+  /** Remove all composer selection references (used by temporary chats). */
+  clearReferences?(): void
 }

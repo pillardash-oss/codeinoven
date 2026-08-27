@@ -5,7 +5,7 @@
   interface Props {
     references: readonly PromptReference[]
     /** Jump to the selection's highlight and open its comment editor. */
-    onEdit: (id: string) => void
+    onEdit?: (id: string) => void
     /** Remove the selection immediately. */
     onRemove: (id: string) => void
     /** Remove every attached selection immediately. */
@@ -57,15 +57,17 @@
           {/if}
         </div>
         <div class="flex shrink-0 items-center gap-0.5">
-          <button
-            type="button"
-            class="flex h-6 w-6 items-center justify-center rounded text-dimmed transition-colors hover:bg-overlay hover:text-foreground"
-            title={`Edit comment on selection ${number}`}
-            aria-label={`Edit comment on selection ${number}`}
-            onclick={() => onEdit(reference.id)}
-          >
-            <Pencil size={11} />
-          </button>
+          {#if onEdit}
+            <button
+              type="button"
+              class="flex h-6 w-6 items-center justify-center rounded text-dimmed transition-colors hover:bg-overlay hover:text-foreground"
+              title={`Edit comment on selection ${number}`}
+              aria-label={`Edit comment on selection ${number}`}
+              onclick={() => onEdit(reference.id)}
+            >
+              <Pencil size={11} />
+            </button>
+          {/if}
           <button
             type="button"
             class="flex h-6 w-6 items-center justify-center rounded text-dimmed transition-colors hover:bg-danger/10 hover:text-danger"

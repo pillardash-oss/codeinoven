@@ -1340,6 +1340,8 @@
 
   let responseSelection = $state<ResponseSelectionCandidate | null>(null)
   let responseReferences = $derived(responseReferencesState.forThread(thread.projectId, thread.id))
+  /** Selection references shown in the composer (controller-driven for temporary chats). */
+  let composerReferences = $derived(controller?.references ?? responseReferences)
   const responseReferenceRanges = new SvelteMap<string, Range>()
   const RESPONSE_HIGHLIGHT_NAME = 'response-annotation'
   /** Viewport position for the comment bubble of each reference anchor. */
@@ -1591,6 +1593,24 @@
         element?.scrollIntoView({ behavior: 'smooth', block: 'center' })
       }
     })
+  }
+
+  /** Remove a single composer selection reference, routing to the controller for temporary chats. */
+  function removeComposerReference(id: string): void {
+    if (controller?.removeReference) {
+      controller.removeReference(id)
+    } else {
+      removeResponseReference(id)
+    }
+  }
+
+  /** Clear all composer selection references, routing to the controller for temporary chats. */
+  function clearComposerReferences(): void {
+    if (controller?.clearReferences) {
+      controller.clearReferences()
+    } else {
+      clearResponseReferences()
+    }
   }
 
   function commentEditorReference(): ResponseReferenceAnchor | null {
@@ -9139,8 +9159,8 @@
                               {#if onContinueInThread && controller?.kind === 'temporary-chat'}
                                 <button
                                   class="rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
-                                  aria-label="Continue this chat in a thread"
-                                  title="Continue in thread"
+                                  aria-label="Continue this chat in a new thread"
+                                  title="Continue in a new thread"
                                   disabled={continuingInThread}
                                   onclick={() => void continueInThread()}
                                 >
@@ -9907,10 +9927,10 @@
                     )
                   }}
                   onOpenStartAfterThread={(threadId) => void openStartAfterThread(threadId)}
-                  references={responseReferences}
-                  onRemoveReference={removeResponseReference}
-                  onRemoveAllReferences={clearResponseReferences}
-                  onEditReference={editResponseReference}
+                  references={composerReferences}
+                  onRemoveReference={removeComposerReference}
+                  onRemoveAllReferences={clearComposerReferences}
+                  onEditReference={controller ? undefined : editResponseReference}
                   onSend={sendComposerMessage}
                   historyMessages={userMessageTexts}
                   hidePermissionSelector={chatMode}
