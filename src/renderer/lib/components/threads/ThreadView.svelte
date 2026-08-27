@@ -106,6 +106,7 @@
   import { messageId } from '$shared/id'
   import { resolveDefaultThinkingLevel } from '$shared/thinking-presets'
   import { chatDraft } from '$lib/stores/chat-draft'
+  import { onEngineeringLifecycleInherited } from '$lib/thread-settings-inheritance'
   import {
     threadSettings,
     chatSettings,
@@ -410,6 +411,10 @@
     if (!pending) return base
     const autopilot = pending.autopilot === true
     const selectedStages = autopilot ? [] : normalizeLifecycleStages(pending.stages)
+    // When the staged selection turns everything off, the toolbox must read as
+    // off too — a stale `startedAt` marker from a previous run would keep the
+    // icon lit after the user toggled the modes off.
+    const cleared = !autopilot && selectedStages.length === 0
     return {
       projectId: base?.projectId ?? thread.projectId,
       threadId: base?.threadId ?? thread.id,
@@ -420,7 +425,7 @@
       ...(base?.activeStage ? { activeStage: base.activeStage } : {}),
       ...(base?.humanGate ? { humanGate: base.humanGate } : {}),
       ...(base?.failure ? { failure: base.failure } : {}),
-      ...(base?.startedAt ? { startedAt: base.startedAt } : {}),
+      ...(!cleared && base?.startedAt ? { startedAt: base.startedAt } : {}),
       updatedAt: base?.updatedAt ?? Date.now()
     }
   })
@@ -450,6 +455,26 @@
       input
     )
     updateSettings(settingsForEngineeringState(engineeringLifecycle))
+  }
+
+  /** Keep the toolbox in sync when the mode switches turn Engineering off:
+   * an idle (not actively running) lifecycle selection must reset to none and
+   * any staged selection must clear, so the toolbox icon returns to its
+   * neutral color the moment the modes go off. */
+  function resetLifecycleWhenModesOff(next: ThreadSettings): void {
+    pendingLifecycleSelection = null
+    const anyModeOn = next.engineeringMode || next.assignmentMode || next.loopMode
+    const lifecycle = engineeringLifecycle
+    if (
+      anyModeOn ||
+      !lifecycle ||
+      lifecycle.activeStage !== undefined ||
+      lifecycle.humanGate !== undefined ||
+      (lifecycle.selection === 'none' && lifecycle.startedAt === undefined)
+    ) {
+      return
+    }
+    void applyLifecycleSelection({ stages: [], autopilot: false }).catch(() => {})
   }
 
   /** Toolbox toggles are intent, never action: the selection is only staged here
@@ -2855,6 +2880,7 @@
 
   let unsubscribe: (() => void) | null = null
   let unsubscribeThreadUpdated: (() => void) | null = null
+  let unsubscribeLifecycleInheritance: (() => void) | null = null
 
   /** Resolves as soon as the session id exists; transcript and attention
    *  restoration continue independently and never block a new prompt. */
@@ -2920,6 +2946,24 @@
           reportError(error, 'Engineering lifecycle could not be loaded')
         })
     }
+    // A sibling thread may inherit its Engineering lifecycle after this view
+    // already hydrated (the inheritance write is async). Re-read once the
+    // inheritance lands so the inherited switches show as on.
+    unsubscribeLifecycleInheritance = onEngineeringLifecycleInherited((inheritedThreadId) => {
+      if (
+        !alive ||
+        inheritedThreadId !== thread.id ||
+        chatMode ||
+        settings.engineeringMode !== true
+      ) {
+        return
+      }
+      void invoke('engineeringLifecycle:get', thread.projectId, thread.id)
+        .then((state) => {
+          if (alive) engineeringLifecycle = state
+        })
+        .catch(() => {})
+    })
     scheduleResponseHighlightRestore(responseReferences)
     // This view owns dispatch of the thread's queued message while mounted;
     // the background dispatcher must defer to it to avoid a double send.
@@ -2992,6 +3036,7 @@
       }
       unsubscribe?.()
       unsubscribeThreadUpdated?.()
+      unsubscribeLifecycleInheritance?.()
       window.removeEventListener('resize', onResize)
       clearTimeout(copyResetTimer)
       workspaceState.sources = []
@@ -4501,34 +4546,44 @@
 
     if (action.id === 'mode:engineering') {
       const engineeringMode = !settings.engineeringMode
-      updateSettings({
+      const next: ThreadSettings = {
         ...settings,
         engineeringMode,
         assignmentMode: engineeringMode ? settings.assignmentMode : false,
         loopMode: engineeringMode ? settings.loopMode : false
-      })
+      }
+      updateSettings(next)
+      if (!engineeringMode) resetLifecycleWhenModesOff(next)
       return
     }
 
     if (action.id === 'mode:assignment') {
       const assignmentMode = settings.assignmentMode !== true
-      updateSettings({
+      const next: ThreadSettings = {
         ...settings,
         engineeringMode: assignmentMode ? true : settings.engineeringMode,
         assignmentMode,
         loopMode: settings.loopMode
-      })
+      }
+      updateSettings(next)
+      if (!next.engineeringMode && !next.assignmentMode && !next.loopMode) {
+        resetLifecycleWhenModesOff(next)
+      }
       return
     }
 
     if (action.id === 'mode:loop') {
       const loopMode = settings.loopMode !== true
-      updateSettings({
+      const next: ThreadSettings = {
         ...settings,
         engineeringMode: loopMode ? true : settings.engineeringMode,
         assignmentMode: settings.assignmentMode,
         loopMode
-      })
+      }
+      updateSettings(next)
+      if (!next.engineeringMode && !next.assignmentMode && !next.loopMode) {
+        resetLifecycleWhenModesOff(next)
+      }
       return
     }
 

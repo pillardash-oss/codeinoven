@@ -904,6 +904,9 @@
     if (!pending) return base
     const autopilot = pending.autopilot === true
     const selectedStages = autopilot ? [] : normalizeLifecycleStages(pending.stages)
+    // A staged "everything off" must read as off — never carry a stale
+    // `startedAt` marker that would keep the toolbox icon lit.
+    const cleared = !autopilot && selectedStages.length === 0
     return {
       projectId: base?.projectId ?? thread.projectId,
       threadId: base?.threadId ?? thread.id,
@@ -914,7 +917,7 @@
       ...(base?.activeStage ? { activeStage: base.activeStage } : {}),
       ...(base?.humanGate ? { humanGate: base.humanGate } : {}),
       ...(base?.failure ? { failure: base.failure } : {}),
-      ...(base?.startedAt ? { startedAt: base.startedAt } : {}),
+      ...(!cleared && base?.startedAt ? { startedAt: base.startedAt } : {}),
       updatedAt: base?.updatedAt ?? Date.now()
     }
   })
