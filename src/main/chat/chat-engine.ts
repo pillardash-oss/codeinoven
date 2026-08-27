@@ -12002,9 +12002,13 @@ export class ChatEngine {
       throw new Error('Assignment-backed Achievement uses Assignment audit feedback.')
     }
     const coordinator = await this.threadManager.getThread(projectId, coordinatorThreadId)
-    if (!coordinator?.settings || coordinator.settings.loopMode !== true) {
-      throw new Error('Achievement is not active.')
-    }
+    if (!coordinator) throw new Error('Achievement is not active.')
+    const settings = await this.ensureActiveAchievementForReport(
+      projectId,
+      coordinatorThreadId,
+      coordinator,
+      ['report_ready', 'reworking']
+    )
     if (
       coordinator.activeAuditId !== reportId ||
       coordinator.activeAuditVersion !== reportVersion ||
@@ -12048,7 +12052,7 @@ export class ChatEngine {
       await this.sendPrompt(
         projectId,
         coordinatorThreadId,
-        coordinator.settings,
+        settings,
         [
           marker,
           'The Achievement Auditor and user review require implementation corrections.',
@@ -12071,6 +12075,32 @@ export class ChatEngine {
     return (await this.threadManager.getThread(projectId, coordinatorThreadId)) ?? coordinator
   }
 
+  /**
+   * A durable Achievement cycle that outlived its Achievement switch (the loop
+   * toggle can flip off mid-review while a `report_ready` report persists) stays
+   * recoverable: an explicit review action on a persisted report reactivates
+   * Achievement instead of wedging the review surface forever.
+   */
+  private async ensureActiveAchievementForReport(
+    projectId: string,
+    coordinatorThreadId: string,
+    coordinator: Thread,
+    revivableStates: readonly NonNullable<Thread['auditState']>[]
+  ): Promise<ThreadSettings> {
+    const settings = coordinator.settings
+    if (!settings) throw new Error('Achievement is not active.')
+    if (settings.loopMode === true) return settings
+    const revivable =
+      coordinator.achievementRole === 'coordinator' &&
+      coordinator.activeAuditId !== undefined &&
+      coordinator.auditState !== undefined &&
+      revivableStates.includes(coordinator.auditState)
+    if (!revivable) throw new Error('Achievement is not active.')
+    const revived = { ...settings, loopMode: true }
+    await this.threadManager.updateSettings(projectId, coordinatorThreadId, revived)
+    return revived
+  }
+
   async returnAchievementAuditToOffer(
     projectId: string,
     coordinatorThreadId: string
@@ -12081,7 +12111,12 @@ export class ChatEngine {
       throw new Error('Assignment-backed Achievement uses the Assignment audit lifecycle.')
     }
     const coordinator = await this.threadManager.getThread(projectId, coordinatorThreadId)
-    if (!coordinator?.settings?.loopMode) throw new Error('Achievement is not active.')
+    if (!coordinator) throw new Error('Achievement is not active.')
+    await this.ensureActiveAchievementForReport(projectId, coordinatorThreadId, coordinator, [
+      'offered',
+      'report_ready',
+      'reworking'
+    ])
     await this.threadManager.setAuditState(projectId, coordinatorThreadId, 'offered')
     await this.threadManager.setStatus(projectId, coordinatorThreadId, 'spec', {
       read: false

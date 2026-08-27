@@ -6976,6 +6976,10 @@
           coordinatorThreadId
         )
         scopeState.updateThread(updatedCoordinator)
+        // Returning a dormant durable cycle to the offer state may revive
+        // Achievement (loopMode) on the coordinator: mirror it locally so the
+        // follow-up audit keeps routing through the Achievement flow.
+        if (updatedCoordinator.settings) settings = updatedCoordinator.settings
       }
       auditState = 'offered'
     } catch (error) {
