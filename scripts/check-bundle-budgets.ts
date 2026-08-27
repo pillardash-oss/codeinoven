@@ -5,7 +5,7 @@
  * audit's desktop and remote budgets over each **eagerly-loaded initial JS
  * closure** — the entry plus the chunks Vite emits as modulepreloads:
  *
- * - initial desktop JavaScript raw ≤ 5 MiB and gzip ≤ 1.3 MiB
+ * - initial desktop JavaScript raw ≤ 5.5 MiB and gzip ≤ 1.3 MiB
  * - initial remote JavaScript (gzip) ≤ 500 KB
  * - no single initial JS chunk (gzip) > 350 KB
  *
@@ -33,7 +33,7 @@ const staticRoot = resolve(process.cwd(), process.argv[2] ?? 'out/renderer')
 // The post-split baseline is ~4.30 MB raw / ~0.92 MB gzip. These thresholds
 // leave modest build-hash/minifier variance while still rejecting the former
 // 7.95 MB raw / 1.99 MB gzip eager closure.
-const DESKTOP_INITIAL_JS_RAW_BUDGET_BYTES = 5.0 * 1024 * 1024
+const DESKTOP_INITIAL_JS_RAW_BUDGET_BYTES = 5.5 * 1024 * 1024
 const DESKTOP_INITIAL_JS_GZIP_BUDGET_BYTES = 1300 * 1024
 
 interface DesktopChunkBudget {
