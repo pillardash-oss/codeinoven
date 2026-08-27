@@ -115,6 +115,7 @@
   import { threadNotesState } from '$lib/stores/thread-notes.svelte'
   import { memoryProposalState } from '$lib/stores/memory-proposals.svelte'
   import { rendererRecovery, type MainView } from '$lib/stores/renderer-recovery.svelte'
+  import { speechController } from '$lib/speech/speech-controller.svelte'
   import { modelKey } from '$lib/model-keys'
   import { reportError } from '$lib/stores/app-errors.svelte'
   import {
@@ -363,12 +364,18 @@
       : false
   )
   /** Threads holding any unsent composer content stay pinned at the top of their list,
-      even after the user navigates away, so they are easy to find mid-task. */
+      even after the user navigates away, so they are easy to find mid-task.
+      An active voice capture counts as draft activity too — draft status must
+      drive sort order regardless of whether the user is typing or dictating. */
   let draftThreadKeys = $derived.by(() => {
     const keys = new SvelteSet<string>()
     for (const t of allThreads) {
       if (t.archived) continue
-      if (rendererRecovery.hasDraftContent(t.projectId, t.id)) keys.add(threadVisitKey(t))
+      if (
+        rendererRecovery.hasDraftContent(t.projectId, t.id) ||
+        speechController.isCapturingThread(t.id)
+      )
+        keys.add(threadVisitKey(t))
     }
     return keys
   })
