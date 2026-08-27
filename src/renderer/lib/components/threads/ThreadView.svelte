@@ -7377,10 +7377,18 @@
           )
           if (engineeringLifecycle.autopilot) {
             await generateAssignmentDraft()
-          } else {
-            updateSettings(settingsForEngineeringState(engineeringLifecycle))
+            return
           }
-          return
+          const nextEngineeringSettings = settingsForEngineeringState(engineeringLifecycle)
+          updateSettings(nextEngineeringSettings)
+          if (nextEngineeringSettings.assignmentMode) {
+            if (assignment) openAssignmentStudio()
+            else await generateAssignmentDraft()
+            return
+          }
+          if (nextEngineeringSettings.engineeringMode || nextEngineeringSettings.loopMode) {
+            return
+          }
         }
         if (settings.assignmentMode) {
           if (assignment) openAssignmentStudio()
