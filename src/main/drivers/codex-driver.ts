@@ -451,6 +451,13 @@ export class CodexDriver extends PersistentCliDriver {
     )
   }
 
+  /** Cheapest candidates for any auxiliary one-shot run. */
+  protected override async cheapCandidateModels(
+    projectPath: string
+  ): Promise<TitleModelCandidate[]> {
+    return this.cheapestCandidate(projectPath)
+  }
+
   /** Start a Codex turn through app-server so the same native turn can be steered. */
   override async sendPrompt(projectPath: string, options: SendPromptOptions): Promise<void> {
     const session = await this.requireSession(projectPath, options.sessionId)

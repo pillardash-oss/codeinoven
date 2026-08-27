@@ -997,6 +997,11 @@ export class ClineDriver extends PersistentCliDriver {
     return this.gradeTurnWithCandidates(projectPath, options, await this.cheapestCandidates())
   }
 
+  /** Cheapest candidates for any auxiliary one-shot run. */
+  protected override async cheapCandidateModels(): Promise<TitleModelCandidate[]> {
+    return this.cheapestCandidates()
+  }
+
   async prepareUtilityRuntime(
     request: UtilityRuntimePreparationRequest
   ): Promise<UtilityRuntimeOverlay> {

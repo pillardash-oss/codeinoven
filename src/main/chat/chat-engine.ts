@@ -72,10 +72,17 @@ import type { StorageEngine } from '../storage/storage-engine'
 import type {
   SpeechRemoteCleanupInput,
   SpeechRemoteCleanupOutput,
+  SpeechRemoteLearningInput,
   SpeechAudioTranscribeInput,
   SpeechAudioTranscribeOutput
 } from '../speech/speech-service'
 import { buildCleanupSystemPrompt } from '../../lib/speech/cleanup-prompts'
+import {
+  LESSON_EXTRACTION_SYSTEM_PROMPT,
+  buildLessonExtractionUserPrompt,
+  parseLessonExtraction
+} from '../speech/lesson-protocol'
+import type { SpeechExtractedLesson } from '../../lib/speech/types'
 import type { PendingRetryRecord, RetrySchedulerService } from '../system/retry-scheduler-service'
 import { instanceRegistry } from '../system/instance-registry'
 import { SecretVault } from '../storage/secret-vault'
@@ -182,11 +189,7 @@ import type {
   UsageEventFeature,
   UsagePricingProvenance
 } from '../../lib/types'
-import {
-  DEFAULT_SCOPE_BUCKET_ID,
-  INBOX_PROJECT_ID,
-  isOrchestrationChildThread
-} from '../../lib/types'
+import { DEFAULT_SCOPE_BUCKET_ID, INBOX_PROJECT_ID } from '../../lib/types'
 import { foldTurnStreamEvents, type TurnStreamEvent } from './turn-stream'
 import { modelKey } from '../../lib/model-keys'
 import { APP_NAME } from '../../lib/brand'
@@ -3978,6 +3981,59 @@ export class ChatEngine {
         await driver.deleteSession(projectPath, sessionId).catch(() => undefined)
       }
     }
+  }
+
+  /**
+   * Distill durable style lessons from how the user edited their own dictation,
+   * mirroring the title pipeline: one self-contained prompt, no conversation
+   * history, run against the provider's cheapest available model in a
+   * disposable session. The transcript already leaves the machine when the user
+   * sends the message, so this adds no new privacy exposure.
+   */
+  async learnSpeechLessons(
+    input: SpeechRemoteLearningInput
+  ): Promise<SpeechExtractedLesson[] | null> {
+    if (input.scope.kind === 'global' || !input.scope.threadId) {
+      throw new Error('Speech learning requires an active conversation.')
+    }
+    const projectId = input.scope.kind === 'project' ? input.scope.projectId : INBOX_PROJECT_ID
+    const threadId = input.scope.threadId
+    const thread = await this.threadManager.getThread(projectId, threadId)
+    if (!thread?.settings) throw new Error('Conversation model settings are unavailable.')
+    const settings: ThreadSettings = {
+      ...thread.settings,
+      thinkingLevel: 'minimal',
+      permissionLevel: 'auto_review',
+      engineeringMode: false,
+      assignmentMode: false,
+      loopMode: false
+    }
+    const { driver, projectPath } = await this.resolve(projectId, settings.harnessId, threadId)
+    if (!driver.runAuxiliaryCompletion) throw new Error('This harness cannot run auxiliary tasks.')
+    const mode = input.scope.kind === 'project' ? 'project' : 'chat'
+    const prompt = [
+      LESSON_EXTRACTION_SYSTEM_PROMPT,
+      buildLessonExtractionUserPrompt(input.insertedText, input.sentText, mode)
+    ].join('\n\n')
+    let raw: string | null = null
+    try {
+      raw = await driver.runAuxiliaryCompletion(projectPath, { settings, prompt })
+    } finally {
+      this.memoryService.recordAuxiliaryUsage(
+        'speech_lesson',
+        estimateTokens(prompt),
+        prompt.length,
+        {
+          outputTokens: estimateTokens(raw ?? ''),
+          costUsd: null,
+          costStatus: 'unavailable'
+        }
+      )
+    }
+    if (raw === null) throw new Error('The learning model returned no response.')
+    const lessons = parseLessonExtraction(raw)
+    if (lessons === null) throw new Error('The learning response could not be parsed.')
+    return lessons
   }
 
   /**

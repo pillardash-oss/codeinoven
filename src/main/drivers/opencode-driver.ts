@@ -26,6 +26,7 @@ import type {
 import type {
   AgentEventCallback,
   AgentProcessObserver,
+  AuxiliaryCompletionOptions,
   GenerateTitleOptions,
   GradeTurnOptions,
   HarnessCapabilities,
@@ -1452,6 +1453,20 @@ export class OpenCodeDriver implements HarnessDriver {
       'Thread title',
       candidates,
       buildTitlePrompt(options.message.slice(0, 2_000))
+    )
+  }
+
+  async runAuxiliaryCompletion(
+    projectPath: string,
+    options: AuxiliaryCompletionOptions
+  ): Promise<string | null> {
+    const candidates = await this.cheapCandidates(projectPath)
+    return this.isolatedOneShot(
+      projectPath,
+      options.settings,
+      'Auxiliary one-shot',
+      candidates,
+      options.prompt
     )
   }
 

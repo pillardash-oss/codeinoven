@@ -27,6 +27,7 @@ import { prepareHarnessInvocation } from './harness-runtime'
 import type {
   AgentEventCallback,
   AgentProcessObserver,
+  AuxiliaryCompletionOptions,
   GenerateTitleOptions,
   GradeTurnOptions,
   HarnessCapabilities,
@@ -375,6 +376,35 @@ export abstract class PersistentCliDriver implements HarnessDriver {
     )
     this.lastGradeTurnAttempts = outcome.attempts
     return outcome.value === null ? null : Number.parseInt(outcome.value, 10)
+  }
+
+  /**
+   * One self-contained auxiliary completion, cheapest candidate first.
+   * Subclasses expose their cheapest models through `cheapCandidateModels`;
+   * without any, the active thread model is used as the sole candidate.
+   */
+  async runAuxiliaryCompletion(
+    projectPath: string,
+    options: AuxiliaryCompletionOptions
+  ): Promise<string | null> {
+    const candidates = await this.cheapCandidateModels(projectPath)
+    const outcome = await this.oneShotWithCandidates(
+      projectPath,
+      {
+        settings: options.settings,
+        message: '',
+        ...(options.parentSessionId ? { parentSessionId: options.parentSessionId } : {})
+      },
+      candidates,
+      options.prompt,
+      sanitizeAuxiliaryText
+    )
+    return outcome.value
+  }
+
+  /** Cheapest auxiliary candidates for this harness; subclasses override. */
+  protected async cheapCandidateModels(_projectPath: string): Promise<TitleModelCandidate[]> {
+    return []
   }
 
   generateTitle(projectPath: string, options: GenerateTitleOptions): Promise<string | null> {
@@ -1365,4 +1395,11 @@ export abstract class PersistentCliDriver implements HarnessDriver {
 function parseTurnGradeForAttempt(raw: string): string | null {
   const grade = parseTurnGrade(raw)
   return grade === null ? null : String(grade)
+}
+
+/** Accept any non-empty auxiliary response, trimmed and length-bounded. */
+function sanitizeAuxiliaryText(raw: string): string | null {
+  const value = raw.trim()
+  if (!value) return null
+  return value.length > 16_000 ? value.slice(0, 16_000) : value
 }

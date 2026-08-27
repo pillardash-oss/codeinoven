@@ -66,17 +66,13 @@ export class SpeechLearningService {
 
   /**
    * Compare the raw transcript with what the user actually sent. Whitespace-only
-   * differences never reach the model; real edits are distilled by the local
-   * instruct LLM into structured lessons which are merged into this store.
+   * differences never reach the model; real edits are distilled by an instruct
+   * LLM into structured lessons which are merged into this store.
    */
   async observe(observation: SpeechLearningObservation): Promise<SpeechLesson[]> {
     if (!hasMeaningfulChange(observation.insertedText, observation.sentText)) return []
     if (!this.learner) return []
-    const extracted = await this.learner(
-      observation.insertedText,
-      observation.sentText,
-      observation.scope.kind === 'project' ? 'project' : 'chat'
-    )
+    const extracted = await this.learner(observation)
     if (!extracted.length) return []
     const learned: SpeechLesson[] = []
     for (const lesson of extracted) {
@@ -181,9 +177,7 @@ export class SpeechLearningService {
 }
 
 export type LessonLearner = (
-  insertedText: string,
-  sentText: string,
-  mode: 'project' | 'chat'
+  observation: SpeechLearningObservation
 ) => Promise<SpeechExtractedLesson[]>
 
 function hasMeaningfulChange(inserted: string, sent: string): boolean {

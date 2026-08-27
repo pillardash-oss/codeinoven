@@ -611,7 +611,8 @@ async function bootPostPaintServices(): Promise<void> {
     },
     undefined,
     (input) => chatEngine!.cleanupSpeechTranscript(input),
-    (input) => chatEngine!.transcribeSpeechAudio(input)
+    (input) => chatEngine!.transcribeSpeechAudio(input),
+    (input) => chatEngine!.learnSpeechLessons(input)
   )
   await speechService.initialize()
   // Initialize auto-evict timers from persisted sound settings

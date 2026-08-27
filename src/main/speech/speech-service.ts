@@ -120,6 +120,21 @@ export type SpeechRemoteCleanupExecutor = (
   input: SpeechRemoteCleanupInput
 ) => Promise<SpeechRemoteCleanupOutput>
 
+export interface SpeechRemoteLearningInput {
+  insertedText: string
+  sentText: string
+  scope: SpeechScope
+}
+
+/**
+ * Lesson extraction through the active conversation provider's cheapest model
+ * (the title-generation route). Returns null when the route is unavailable so
+ * the caller can fall back to the local instruct cleanup model.
+ */
+export type SpeechRemoteLearningExecutor = (
+  input: SpeechRemoteLearningInput
+) => Promise<import('../../lib/speech/types').SpeechExtractedLesson[] | null>
+
 export interface SpeechAudioTranscribeInput {
   audio: Uint8Array<ArrayBuffer>
   language: string | 'auto'
@@ -166,14 +181,14 @@ export class SpeechService {
     private readonly paths: SpeechServicePaths,
     storage?: SpeechStorage,
     private readonly remoteCleanup?: SpeechRemoteCleanupExecutor,
-    private readonly transcribeAudio?: SpeechAudioTranscribeExecutor
+    private readonly transcribeAudio?: SpeechAudioTranscribeExecutor,
+    private readonly remoteLearning?: SpeechRemoteLearningExecutor
   ) {
     this.nativeCapture = new NativeSpeechCapture(paths.nativeCaptureWorkerPath)
     this.storage = storage ?? new SpeechStorage()
     this.learning = new SpeechLearningService(
       join(getConfigRoot(), 'speech', 'lessons.json'),
-      (insertedText, sentText, mode) =>
-        this.learnLessonsFromCorrection(insertedText, sentText, mode)
+      (observation) => this.learnLessonsFromCorrection(observation)
     )
     this.backends = new Map<SpeechRuntime, SpeechBackend>([
       ['sherpa-onnx', new SherpaSpeechBackend()],
@@ -1181,10 +1196,35 @@ export class SpeechService {
   }
 
   /**
-   * Ask the local instruct cleanup model what the user's edit teaches us.
-   * Called through the job queue so learning never overlaps cleanup inference.
+   * Ask what the user's edit teaches us. The remote cheap-model learning agent
+   * (the title-generation route) runs first; the local instruct cleanup model is
+   * the offline fallback. Called through the job queue so learning never
+   * overlaps local cleanup inference.
    */
   private async learnLessonsFromCorrection(
+    observation: SpeechLearningObservation
+  ): Promise<import('../../lib/speech/types').SpeechExtractedLesson[]> {
+    if (this.remoteLearning) {
+      try {
+        const remote = await this.remoteLearning({
+          insertedText: observation.insertedText,
+          sentText: observation.sentText,
+          scope: observation.scope
+        })
+        if (remote !== null) return remote
+      } catch {
+        // Route unavailable — fall through to the local instruct model.
+      }
+    }
+    return this.learnLessonsLocally(
+      observation.insertedText,
+      observation.sentText,
+      observation.scope.kind === 'project' ? 'project' : 'chat'
+    )
+  }
+
+  /** Local fallback: the installed Qwen3 instruct cleanup model extracts lessons. */
+  private async learnLessonsLocally(
     insertedText: string,
     sentText: string,
     mode: 'project' | 'chat'

@@ -609,6 +609,11 @@ export class AntigravityDriver extends PersistentCliDriver {
     return this.gradeTurnWithCandidates(projectPath, options, await this.cheapestCandidate())
   }
 
+  /** Cheapest candidates for any auxiliary one-shot run. */
+  protected override async cheapCandidateModels(): Promise<TitleModelCandidate[]> {
+    return this.cheapestCandidate()
+  }
+
   private resolveModelId(modelId: string, thinkingLevel: ThinkingLevel): string {
     const variants = this.modelVariants.get(modelId)
     if (!variants || variants.size === 0) return modelId

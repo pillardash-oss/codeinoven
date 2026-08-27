@@ -196,14 +196,16 @@ describe('DiagnosticsService', () => {
     const service = new DiagnosticsService(database, () => ({
       memory: { calls: 2, inputChars: 6_000, inputTokens: 1_500, estimatedCost: 0.000225 },
       title: { calls: 1, inputChars: 800, inputTokens: 200, estimatedCost: 0.00003 },
-      search_nudge: { calls: 1, inputChars: 200, inputTokens: 60, estimatedCost: 0.000012 }
+      search_nudge: { calls: 1, inputChars: 200, inputTokens: 60, estimatedCost: 0.000012 },
+      speech_lesson: { calls: 0, inputChars: 0, inputTokens: 0, estimatedCost: 0 }
     }))
 
     const report = await service.createReport(metadata)
     expect(report.auxiliaryUsage).toEqual({
       memory: { calls: 2, inputChars: 6_000, inputTokens: 1_500, estimatedCost: 0.000225 },
       title: { calls: 1, inputChars: 800, inputTokens: 200, estimatedCost: 0.00003 },
-      search_nudge: { calls: 1, inputChars: 200, inputTokens: 60, estimatedCost: 0.000012 }
+      search_nudge: { calls: 1, inputChars: 200, inputTokens: 60, estimatedCost: 0.000012 },
+      speech_lesson: { calls: 0, inputChars: 0, inputTokens: 0, estimatedCost: 0 }
     })
   })
 })

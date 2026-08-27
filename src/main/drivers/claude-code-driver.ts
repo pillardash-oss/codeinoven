@@ -38,6 +38,7 @@ import type {
 } from './persistent-cli-driver'
 import { PersistentCliDriver } from './persistent-cli-driver'
 import type {
+  AuxiliaryCompletionOptions,
   GenerateTitleOptions,
   GradeTurnOptions,
   HarnessAuthStatus,
@@ -1526,13 +1527,29 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
     return this.gradeTurnWithCandidates(projectPath, options, candidates)
   }
 
+  async runAuxiliaryCompletion(
+    projectPath: string,
+    options: AuxiliaryCompletionOptions
+  ): Promise<string | null> {
+    if (!(await this.auxiliaryTransportReady(options))) return null
+    return super.runAuxiliaryCompletion(projectPath, options)
+  }
+
+  /** Cheapest first-party candidates for any auxiliary one-shot run. */
+  protected override async cheapCandidateModels(
+    projectPath: string
+  ): Promise<TitleModelCandidate[]> {
+    const { candidates } = await this.cheapAnthropicCandidates(projectPath)
+    return candidates
+  }
+
   /**
    * Authentication/transport gate shared by auxiliary one-shot runs. Non-Anthropic
    * providers always pass; first-party runs require the parent session's
    * authenticated transport.
    */
   private async auxiliaryTransportReady(
-    options: GenerateTitleOptions | GradeTurnOptions
+    options: GenerateTitleOptions | GradeTurnOptions | AuxiliaryCompletionOptions
   ): Promise<boolean> {
     const firstParty = !options.settings.providerId || options.settings.providerId === 'anthropic'
     if (

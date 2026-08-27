@@ -1276,6 +1276,11 @@ export class MuseDriver extends PersistentCliDriver {
     return this.gradeTurnWithCandidates(projectPath, options, await this.cheapestCandidate())
   }
 
+  /** Cheapest candidates for any auxiliary one-shot run. */
+  protected override async cheapCandidateModels(): Promise<TitleModelCandidate[]> {
+    return this.cheapestCandidate()
+  }
+
   protected async buildTurnCommand(
     _projectPath: string,
     session: PersistentCliSession,

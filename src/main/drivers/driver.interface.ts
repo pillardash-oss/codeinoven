@@ -237,6 +237,15 @@ export interface GradeTurnOptions {
   parentSessionId?: string
 }
 
+/** One self-contained auxiliary completion, cheapest candidate first. */
+export interface AuxiliaryCompletionOptions {
+  settings: ThreadSettings
+  /** Complete, self-contained prompt. No conversation history is attached. */
+  prompt: string
+  /** Parent turn whose authenticated transport permits a safe auxiliary process. */
+  parentSessionId?: string
+}
+
 /** Provider-neutral input appended to an already active harness turn. */
 export interface SteerPromptOptions {
   sessionId: string
@@ -284,6 +293,16 @@ export interface HarnessDriver {
    * same cheapest-candidate strategy as title generation.
    */
   gradeTurn(projectPath: string, options: GradeTurnOptions): Promise<number | null>
+
+  /**
+   * Run one self-contained auxiliary completion in a disposable session,
+   * cheapest candidate first, falling back to the active thread model.
+   * Returns the raw response text, or null when no candidate produced output.
+   */
+  runAuxiliaryCompletion?(
+    projectPath: string,
+    options: AuxiliaryCompletionOptions
+  ): Promise<string | null>
 
   /**
    * Best-effort release of a project's in-memory harness resources without
