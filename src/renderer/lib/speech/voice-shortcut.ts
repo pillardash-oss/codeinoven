@@ -54,17 +54,37 @@ let lastTapAt = 0
 /** Set when any other key is pressed between two taps of a bare modifier. */
 let tapSequenceDirty = false
 
+/** Which KeyboardEvent flag each modifier code sets for its own keydown. A
+ *  modifier key's keydown always reports its own flag as true, so that flag
+ *  must be exempted when matching (a bare left-Alt press has altKey=true). */
+const OWN_MODIFIER_FLAG: ReadonlyMap<string, 'ctrl' | 'meta' | 'alt' | 'shift'> = new Map([
+  ['AltLeft', 'alt'],
+  ['AltRight', 'alt'],
+  ['ControlLeft', 'ctrl'],
+  ['ControlRight', 'ctrl'],
+  ['MetaLeft', 'meta'],
+  ['MetaRight', 'meta'],
+  ['ShiftLeft', 'shift'],
+  ['ShiftRight', 'shift']
+])
+
+function matchesBinding(event: KeyboardEvent, binding: VoiceRecordingShortcut): boolean {
+  if (event.code !== binding.code) return false
+  const ownFlag = OWN_MODIFIER_FLAG.get(binding.code) ?? null
+  return (
+    (ownFlag === 'ctrl' || event.ctrlKey === binding.ctrl) &&
+    (ownFlag === 'meta' || event.metaKey === binding.meta) &&
+    (ownFlag === 'alt' || event.altKey === binding.alt) &&
+    (ownFlag === 'shift' || event.shiftKey === binding.shift)
+  )
+}
+
 const handleKeydown = (event: KeyboardEvent): void => {
   // Auto-repeat never fires the shortcut nor invalidates a forming double-tap:
   // the original non-repeat keydown already decided the tap state.
   if (captureDepth > 0 || event.repeat) return
   const binding = currentBinding
-  const matches =
-    event.code === binding.code &&
-    event.ctrlKey === binding.ctrl &&
-    event.metaKey === binding.meta &&
-    event.altKey === binding.alt &&
-    event.shiftKey === binding.shift
+  const matches = matchesBinding(event, binding)
   if (!matches) {
     if (binding.doubleTap) {
       // Any other key cancels a forming double-tap pair (e.g. Alt+Tab).
