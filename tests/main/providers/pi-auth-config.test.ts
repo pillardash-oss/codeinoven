@@ -49,6 +49,8 @@ describe('PiAuthConfigService', () => {
     )
     const auth = new PiAuthConfigService(authPath)
     expect(await auth.hasCredential('github-copilot')).toBe(true)
+    expect(await auth.isOauth('github-copilot')).toBe(true)
+    expect(await auth.isOauth('missing')).toBe(false)
     await expect(auth.setApiKey('../escape', 'x')).rejects.toThrow()
   })
 })

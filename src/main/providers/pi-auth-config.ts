@@ -19,6 +19,13 @@ interface PiCredential {
 
 type PiAuthData = Record<string, PiCredential>
 
+/** Pluggable file transport so callers can route through WSL-aware helpers. */
+export interface PiAuthFileIo {
+  /** Full file text, or null when the file does not exist. */
+  read(): Promise<string | null>
+  write(content: string): Promise<void>
+}
+
 /**
  * Headless access to Pi's own credential store. Writes are atomic replace-file
  * (never in-place truncation), so a pi process reading auth.json concurrently
@@ -27,9 +34,11 @@ type PiAuthData = Record<string, PiCredential>
  */
 export class PiAuthConfigService {
   private readonly authPath: string
+  private readonly io?: PiAuthFileIo
 
-  constructor(authPath = PI_AUTH_PATH) {
+  constructor(authPath = PI_AUTH_PATH, io?: PiAuthFileIo) {
     this.authPath = authPath
+    this.io = io
   }
 
   /** Provider ids holding any stored credential. */
@@ -51,6 +60,11 @@ export class PiAuthConfigService {
     return typeof entry.key === 'string' && entry.key.trim().length > 0
   }
 
+  /** True when the provider's stored credential is an OAuth token set. */
+  async isOauth(providerId: string): Promise<boolean> {
+    return (await this.readAll())[providerId]?.type === 'oauth'
+  }
+
   /** Store an API key for a provider, replacing any previous credential. */
   async setApiKey(providerId: string, apiKey: string): Promise<void> {
     assertProviderId(providerId)
@@ -70,7 +84,8 @@ export class PiAuthConfigService {
 
   private async readAll(): Promise<PiAuthData> {
     try {
-      const raw = await readFile(this.authPath, 'utf8')
+      const raw = this.io ? await this.io.read() : await readFile(this.authPath, 'utf8')
+      if (raw === null) return {}
       const parsed = JSON.parse(raw) as unknown
       if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return {}
       return parsed as PiAuthData
@@ -80,8 +95,12 @@ export class PiAuthConfigService {
   }
 
   private async writeAll(data: PiAuthData): Promise<void> {
-    await mkdir(dirname(this.authPath), { recursive: true })
     const content = `${JSON.stringify(data, null, 2)}\n`
+    if (this.io) {
+      await this.io.write(content)
+      return
+    }
+    await mkdir(dirname(this.authPath), { recursive: true })
     const temporaryPath = `${this.authPath}.${process.pid}.${crypto.randomUUID()}.tmp`
     try {
       await writeFile(temporaryPath, content, { encoding: 'utf8', flag: 'wx', mode: 0o600 })

@@ -82,8 +82,7 @@
 
   /**
    * Harness credentials are file-backed here (Pi): pick any catalog provider
-   * and paste an API key — no terminal handoff needed. The harness's own
-   * interactive flow stays available as a fallback (OAuth-style logins).
+   * and paste an API key — the whole flow stays in-app, no terminal handoff.
    */
   let apiKeyEntry = $derived(authStatus?.capabilities?.apiKeyEntry === true)
   let apiKey = $state('')
@@ -166,7 +165,7 @@
     notice = ''
     const key = apiKey.trim()
     if (!key) {
-      actionWarning = `Enter an API key for ${selectedProvider.name}, or use interactive sign-in.`
+      actionWarning = `Enter an API key for ${selectedProvider.name}.`
       return
     }
     storingKey = true
@@ -325,8 +324,7 @@
       {:else if apiKeyEntry && canSignIn}
         <p class="min-w-0 flex-1 text-[11px] text-dimmed">
           Pick any provider from {harness.name}’s catalog and paste its API key — stored in
-          {harness.name}’s own credential file. OAuth-based providers can use Interactive sign-in
-          instead.
+          {harness.name}’s own credential file.
         </p>
       {:else if pickerLogin}
         <p class="min-w-0 flex-1 text-[11px] text-dimmed">
@@ -371,15 +369,6 @@
           </button>
         {:else if canSignIn}
           {#if apiKeyEntry}
-            <button
-              class="flex h-9 items-center gap-1.5 rounded-lg border bg-elevated px-3 text-xs font-medium text-muted transition-colors hover:bg-overlay"
-              type="button"
-              title="Open the {harness.name} terminal for OAuth-style sign-in flows"
-              disabled={storingKey}
-              onclick={() => void startConnect(null)}
-            >
-              Interactive sign-in
-            </button>
             <button
               class="flex h-9 items-center justify-center gap-1.5 rounded-lg bg-primary px-4 text-xs font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
               type="button"
