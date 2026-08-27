@@ -1201,6 +1201,21 @@
   let sidebarVisible = $derived(contextSidebarState.sidebarVisible)
   let terminalDockVisible = $derived(contextSidebarState.terminalDockVisible)
 
+  /** Project the git sidebar panel is kept mounted for. Switching sidebar
+   *  tabs within the same project only toggles this panel's visibility via
+   *  CSS so its commit history/diffs never get torn down and refetched;
+   *  it only remounts when the project scope itself actually changes. */
+  let gitPanelProjectId = $state<string | null>(null)
+  $effect(() => {
+    const tab = contextSidebarState.sidebarActiveTab
+    if (!tab) return
+    if (tab.kind === 'git') {
+      gitPanelProjectId = tab.projectId
+    } else if ('projectId' in tab && tab.projectId !== gitPanelProjectId) {
+      gitPanelProjectId = null
+    }
+  })
+
   /** True when the browser's native WebContentsView is on screen, either from
    *  the right sidebar or the browser's own fullscreen dialog. The native
    *  Ctrl+Tab overlay is only needed in this state; otherwise the DOM switcher
@@ -3831,100 +3846,107 @@
       {#if sidebarVisible}
         {#snippet contextSidebarContent()}
           {@const activeContextTab = contextSidebarState.sidebarActiveTab}
-          {#if activeContextTab}
-            {#if activeContextTab.kind === 'git'}
-              {#key activeContextTab.projectId}
-                {#await import('../git/GitStatusPanel.svelte') then { default: GitStatusPanel }}
+          {@const gitPanelThreadId =
+            activeContextTab && 'threadId' in activeContextTab ? activeContextTab.threadId : ''}
+          {#if gitPanelProjectId}
+            {#key gitPanelProjectId}
+              {#await import('../git/GitStatusPanel.svelte') then { default: GitStatusPanel }}
+                <div
+                  class="h-full"
+                  style:display={activeContextTab?.kind === 'git' ? 'block' : 'none'}
+                >
                   <GitStatusPanel
-                    projectId={activeContextTab.projectId}
-                    threadId={activeContextTab.threadId}
+                    projectId={gitPanelProjectId}
+                    threadId={gitPanelThreadId}
                     scopeBucketId={allThreads.find(
                       (thread) =>
-                        thread.projectId === activeContextTab.projectId &&
-                        thread.id === activeContextTab.threadId
+                        thread.projectId === gitPanelProjectId && thread.id === gitPanelThreadId
                     )?.scopeBucketId ?? DEFAULT_SCOPE_BUCKET_ID}
                   />
-                {/await}
-              {/key}
-            {:else}
-              {#key activeContextTab.id}
-                {#if activeContextTab.kind === 'files'}
-                  <ProjectFilesPanel
-                    projectId={activeContextTab.projectId}
-                    projectName={activeProject?.name ?? 'Project files'}
-                    projectIconUrl={activeProject
-                      ? getProjectIcon(activeProject, projectIcons.get(activeProject.id))
-                      : null}
-                  />
-                {:else if activeContextTab.kind === 'diff'}
-                  <DiffSidebarPanel
-                    projectId={activeContextTab.projectId}
-                    threadId={activeContextTab.threadId}
-                    checkpointId={activeContextTab.checkpointId}
-                    revealPath={activeContextTab.revealPath}
-                    revealNonce={activeContextTab.revealNonce}
-                  />
-                {:else if activeContextTab.kind === 'terminal'}
-                  {#if terminalFullscreenTabId === activeContextTab.id}
-                    <div class="flex h-full items-center justify-center text-xs text-muted">
-                      Terminal is open in fullscreen
-                    </div>
-                  {:else}
-                    <TerminalPanel
-                      terminalId={activeContextTab.terminalId}
-                      projectId={activeContextTab.projectId}
-                    />
-                  {/if}
-                {:else if activeContextTab.kind === 'browser'}
-                  {#if browserFullscreenTabId === activeContextTab.id}
-                    <div class="flex h-full items-center justify-center text-xs text-muted">
-                      Browser is open in fullscreen
-                    </div>
-                  {:else if showClearBrowserDataConfirm && browserDataClearProjectId === activeContextTab.projectId}
-                    <div class="h-full bg-app" aria-hidden="true"></div>
-                  {:else}
-                    <BrowserPanel tab={activeContextTab} />
-                  {/if}
-                {:else if activeContextTab.kind === 'debugger'}
-                  <AgentDebugPanel />
-                {:else if activeContextTab.kind === 'sources'}
-                  <SourcesPanel
-                    sources={workspaceState.sources}
-                    projectId={activeContextTab.projectId}
-                    threadId={activeContextTab.threadId}
-                  />
-                {:else if activeContextTab.kind === 'cloud-deployment'}
-                  {#await import('../cloud/CloudDeploymentPanel.svelte') then { default: CloudDeploymentPanel }}
-                    <CloudDeploymentPanel
-                      projectId={activeContextTab.projectId}
-                      threadId={activeContextTab.threadId}
-                    />
-                  {/await}
-                {:else if activeContextTab.kind === 'temporary-chat'}
-                  <TemporaryChatView
-                    tabId={activeContextTab.id}
-                    onContinueInThread={handleContinueInThread}
-                  />
-                {:else if activeContextTab.kind === 'notifications'}
-                  <NotificationPanel />
-                {:else if activeContextTab.kind === 'coordinator'}
-                  {#if coordinator}
-                    {@render coordinator.panel()}
-                  {/if}
-                {:else if activeContextTab.kind === 'memory'}
-                  <MemoryPanel
-                    variant="sidebar"
-                    projectId={activeContextTab.projectId}
-                    threadId={activeContextTab.threadId}
-                    bind:activeSection={activeContextTab.memorySection}
-                  />
-                {:else if activeContextTab.kind === 'thread-note'}
-                  <ThreadNotePanel tab={activeContextTab} />
+                </div>
+              {/await}
+            {/key}
+          {/if}
+          {#if activeContextTab}
+            {#key activeContextTab.id}
+              {#if activeContextTab.kind === 'files'}
+                <ProjectFilesPanel
+                  projectId={activeContextTab.projectId}
+                  projectName={activeProject?.name ?? 'Project files'}
+                  projectIconUrl={activeProject
+                    ? getProjectIcon(activeProject, projectIcons.get(activeProject.id))
+                    : null}
+                />
+              {:else if activeContextTab.kind === 'diff'}
+                <DiffSidebarPanel
+                  projectId={activeContextTab.projectId}
+                  threadId={activeContextTab.threadId}
+                  checkpointId={activeContextTab.checkpointId}
+                  revealPath={activeContextTab.revealPath}
+                  revealNonce={activeContextTab.revealNonce}
+                />
+              {:else if activeContextTab.kind === 'terminal'}
+                {#if terminalFullscreenTabId === activeContextTab.id}
+                  <div class="flex h-full items-center justify-center text-xs text-muted">
+                    Terminal is open in fullscreen
+                  </div>
                 {:else}
-                  <SubagentSessionView tab={activeContextTab} onOpenSubagent={openNestedSubagent} />
+                  <TerminalPanel
+                    terminalId={activeContextTab.terminalId}
+                    projectId={activeContextTab.projectId}
+                  />
                 {/if}
-              {/key}
-            {/if}
+              {:else if activeContextTab.kind === 'browser'}
+                {#if browserFullscreenTabId === activeContextTab.id}
+                  <div class="flex h-full items-center justify-center text-xs text-muted">
+                    Browser is open in fullscreen
+                  </div>
+                {:else if showClearBrowserDataConfirm && browserDataClearProjectId === activeContextTab.projectId}
+                  <div class="h-full bg-app" aria-hidden="true"></div>
+                {:else}
+                  <BrowserPanel tab={activeContextTab} />
+                {/if}
+              {:else if activeContextTab.kind === 'debugger'}
+                <AgentDebugPanel />
+              {:else if activeContextTab.kind === 'sources'}
+                <SourcesPanel
+                  sources={workspaceState.sources}
+                  projectId={activeContextTab.projectId}
+                  threadId={activeContextTab.threadId}
+                />
+              {:else if activeContextTab.kind === 'git'}
+                <!-- Rendered by the persistent, keep-mounted block above. -->
+              {:else if activeContextTab.kind === 'cloud-deployment'}
+                {#await import('../cloud/CloudDeploymentPanel.svelte') then { default: CloudDeploymentPanel }}
+                  <CloudDeploymentPanel
+                    projectId={activeContextTab.projectId}
+                    threadId={activeContextTab.threadId}
+                  />
+                {/await}
+              {:else if activeContextTab.kind === 'temporary-chat'}
+                <TemporaryChatView
+                  tabId={activeContextTab.id}
+                  onContinueInThread={handleContinueInThread}
+                />
+              {:else if activeContextTab.kind === 'notifications'}
+                <NotificationPanel />
+              {:else if activeContextTab.kind === 'coordinator'}
+                {#if coordinator}
+                  {@render coordinator.panel()}
+                {/if}
+              {:else if activeContextTab.kind === 'memory'}
+                <MemoryPanel
+                  variant="sidebar"
+                  projectId={activeContextTab.projectId}
+                  threadId={activeContextTab.threadId}
+                  bind:activeSection={activeContextTab.memorySection}
+                />
+              {:else if activeContextTab.kind === 'thread-note'}
+                <ThreadNotePanel tab={activeContextTab} />
+              {:else}
+                <SubagentSessionView tab={activeContextTab} onOpenSubagent={openNestedSubagent} />
+              {/if}
+            {/key}
           {/if}
         {/snippet}
         <div
