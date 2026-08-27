@@ -42,14 +42,25 @@ jobs:
           previous="$(git show "${BEFORE_SHA}:package.json" | jq -r .version)"
           version="$(node -p "require('./package.json').version")"
           upstream="$(git show origin/nightly:package.json | jq -r .version)"
-          if [ "$version" != "$upstream" ]; then
-            echo "::error::main version $version does not match nightly version $upstream"
+          # Cohesive tagging: upstream is base (e.g. 0.5.50), version is 0.5.51.
+          # Validate version is exactly one increment ahead of upstream.
+          expected="$(node -e "const m=require('./scripts/bump-version.ts'); console.log(m.incrementVersion? '': '')" 2>/dev/null || true)"
+          # Compute expected as upstream patch+1 using Node
+          expected="$(node -p "(() => { const [a,b,c]=require('./package.json').version.split('.').map(Number); let p=c+1,m=b,M=a; if(p===100){p=0;m++} if(m===100){m=0;M++} return M+'.'+m+'.'+p })()" 2>/dev/null || true)"
+          # Simpler: use upstream to compute
+          expected="$(node -p "(() => { const v='"$upstream"'.split('.').map(Number); let [M,m,p]=v; p+=1; if(p===100){p=0;m+=1} if(m===100){m=0;M+=1} return M+'.'+m+'.'+p })()")"
+          if [ "$version" != "$expected" ] && [ "$version" != "$upstream" ]; then
+            echo "::error::main version $version must be nightly base $upstream or its increment $expected (got $version)"
             exit 1
           fi
+          if [ "$version" = "$upstream" ]; then
+            echo "::warning::main version equals nightly base $upstream; stable release will reuse same version (no bump)"
+          fi
+          # Require at least one nightly prerelease for the base (supports both - and . separators for legacy)
           if ! gh release list --limit 1000 --json tagName,isPrerelease | \
-            jq -e --arg prefix "v${version}-nightly." \
-              'any(.[]; .isPrerelease and (.tagName | startswith($prefix)))' >/dev/null; then
-            echo "::error::No published nightly prerelease exists for version $version"
+            jq -e --arg base "$upstream" \
+              'any(.[]; .isPrerelease and (.tagName | test("^v\($base)-nightly[.-][0-9]+$")))' >/dev/null; then
+            echo "::error::No published nightly prerelease exists for base $upstream (expected v${upstream}-nightly-{N})"
             exit 1
           fi
           BASE_BRANCH=main HEAD_BRANCH=nightly BASE_VERSION="$previous" CURRENT_VERSION="$version" \

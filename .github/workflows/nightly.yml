@@ -196,7 +196,22 @@ jobs:
             exit 1
           fi
           echo "version=$base" >> "$GITHUB_OUTPUT"
-          echo "tag=v${base}-nightly.${GITHUB_RUN_NUMBER}" >> "$GITHUB_OUTPUT"
+          # Cohesive nightly tagging: v{base}-nightly-{N} where N increments per base version.
+          # Supports legacy v{base}-nightly.{N} tags when computing the next N.
+          max_n=0
+          for tag in $(git ls-remote --tags origin "v${base}-nightly*" | awk '{print $2}' | sed 's|refs/tags/||'); do
+            # match vX.Y.Z-nightly-N or vX.Y.Z-nightly.N
+            n=$(printf '%s' "$tag" | sed -n -E "s/^v${base}-nightly[.-]([0-9]+)$/\1/p")
+            if [ -n "$n" ] && [ "$n" -gt "$max_n" ] 2>/dev/null; then max_n=$n; fi
+          done
+          # Also check GitHub releases (covers tags not yet fetched / race)
+          for tag in $(gh release list --limit 200 --json tagName --jq '.[].tagName' 2>/dev/null | grep -E "^v${base}-nightly[.-][0-9]+$" || true); do
+            n=$(printf '%s' "$tag" | sed -n -E "s/^v${base}-nightly[.-]([0-9]+)$/\1/p")
+            if [ -n "$n" ] && [ "$n" -gt "$max_n" ] 2>/dev/null; then max_n=$n; fi
+          done
+          next=$((max_n + 1))
+          echo "tag=v${base}-nightly-${next}" >> "$GITHUB_OUTPUT"
+          echo "Resolved nightly tag v${base}-nightly-${next} (base $base, max existing $max_n)" 
 
       - name: Download build artifacts
         uses: actions/download-artifact@v7

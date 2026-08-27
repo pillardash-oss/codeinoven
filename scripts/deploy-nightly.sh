@@ -100,21 +100,13 @@ if [[ "$DEV_SHA" == "$NIGHTLY_BRANCH_SHA" ]]; then
   exit 0
 fi
 
-# --- 4. version gate: dev version must exceed current nightly -----------------
+# --- 4. version gate: dev must equal nightly base (cohesive nightly tagging) -----
 NIGHTLY_VERSION="$(pkg_version origin/nightly)"
 DEV_VERSION="$(pkg_version dev)"
 
 if ! BASE_BRANCH=nightly HEAD_BRANCH=dev BASE_VERSION="$NIGHTLY_VERSION" \
     CURRENT_VERSION="$DEV_VERSION" bun scripts/validate-release-promotion.ts >/dev/null 2>&1; then
-  warn "dev ($DEV_VERSION) is not a higher version than nightly ($NIGHTLY_VERSION); bumping dev by +1..."
-  if [[ "$DRY_RUN" -eq 0 ]]; then
-    bun run version:bump
-    git commit -am "chore: bump version for nightly promotion" 
-    git push origin dev
-    DEV_VERSION="$(pkg_version dev)"
-  else
-    say "(dry-run) bun run version:bump && git commit -am 'chore: bump version for nightly promotion' && git push origin dev"
-  fi
+  die "dev ($DEV_VERSION) must equal nightly base ($NIGHTLY_VERSION) for cohesive nightly tagging (nightly tags are v{base}-nightly-{N}). Fix package.json version to $NIGHTLY_VERSION."
 fi
 
 say ""
@@ -149,4 +141,4 @@ fi
 
 say ""
 say "${C_BOLD}Done.${C_RESET} The nightly workflow is building; verify the prerelease "
-say "v${DEV_VERSION}-nightly.<RUN_NUMBER> appears on GitHub before promoting to main."
+say "v${DEV_VERSION}-nightly-{N} appears on GitHub before promoting to main."

@@ -37,25 +37,14 @@ jobs:
         with:
           bun-version: 1.3.10
 
-      - name: Bump version when omitted
+      - name: Validate nightly promotion version (cohesive tagging)
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
           base_version="$(git show "${BASE_SHA}:package.json" | jq -r .version)"
           current_version="$(jq -r .version package.json)"
-          if BASE_BRANCH=nightly HEAD_BRANCH=dev BASE_VERSION="$base_version" \
-            CURRENT_VERSION="$current_version" bun scripts/validate-release-promotion.ts; then
-            echo "package.json is already ready for nightly promotion"
-            exit 0
-          fi
-
-          bun run version:bump
-          next_version="$(jq -r .version package.json)"
+          # Cohesive tagging: dev must equal nightly base (e.g. 0.5.50 == 0.5.50).
+          # Nightly tags are v{base}-nightly-{N} without bumping package.json.
           BASE_BRANCH=nightly HEAD_BRANCH=dev BASE_VERSION="$base_version" \
-            CURRENT_VERSION="$next_version" bun scripts/validate-release-promotion.ts
-
-          git config user.name "CodeInOven release bot"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add package.json src/renderer/static/manifest.webmanifest services/remote-control/package.json
-          git commit -m "CodeInOven-release-bot chore: bump version to $next_version"
-          git push origin HEAD:dev
+            CURRENT_VERSION="$current_version" bun scripts/validate-release-promotion.ts
+          echo "package.json $current_version is ready for nightly promotion (base $base_version)" 
