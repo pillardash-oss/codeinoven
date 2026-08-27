@@ -9136,9 +9136,7 @@
                         >
                           {#if isReadingActiveLine}
                             {@const segs = speechController.activeSegments!}
-                            {@const activeIdx = speechController.readingOverlayActive
-                              ? speechController.playback.segmentIndex
-                              : -1}
+                            {@const activeIdx = speechController.visibleSegmentIndex}
                             <div class="flex flex-col gap-1.5">
                               {#each segs as seg, i (seg.id)}
                                 <div

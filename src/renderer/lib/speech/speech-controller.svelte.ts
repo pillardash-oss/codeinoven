@@ -56,7 +56,10 @@ interface ActivePlayback {
   artifact: SpeechModelArtifact
   voiceId: string
   audio: HTMLAudioElement | null
-  audioUrl: string | null
+  /** Blob URL per played/cached segment, retained for seeking back. */
+  retainedUrls: string[]
+  /** Media duration per retained segment; NaN until metadata loads. */
+  durations: number[]
   next: Promise<SpeechSynthesizedSegment> | null
   index: number
 }
@@ -72,6 +75,9 @@ const CAPTURE_STOP_TIMEOUT_MS = 5_000
 // before the first audio sample, settle the UI into a retryable failure instead
 // of spinning forever.
 const PLAYBACK_STALL_WATCHDOG_MS = 60_000
+// After pausing, keep the read-along border and seek controls on screen for a
+// few seconds so users can resume without losing their place. Then fade out.
+const PAUSED_LINGER_MS = 5_000
 
 type RecordingFailurePhase = 'prepare' | 'permission' | 'capture' | 'transcription'
 
@@ -109,6 +115,30 @@ class SpeechController {
   get activeSegments(): SpeechSegment[] | null {
     return this.currentSegments
   }
+  /** Read-along border visibility: playing, or paused within the linger window. */
+  get readingOverlayActive(): boolean {
+    return this.readAlongVisible
+  }
+  /** Seek slider visibility mirrors the read-along overlay (same linger timer). */
+  get seekControlsActive(): boolean {
+    const state = this.playback.state
+    if (state !== 'playing' && state !== 'paused') return false
+    return this.readAlongVisible
+  }
+  /** Index of the line to highlight while the overlay is up; -1 hides it. */
+  get visibleSegmentIndex(): number {
+    if (!this.readAlongVisible) return -1
+    const current = this.playback
+    if ('segmentIndex' in current && (current.state === 'playing' || current.state === 'paused'))
+      return current.segmentIndex
+    return -1
+  }
+  get elapsedPlaybackSeconds(): number {
+    return this.elapsedSeconds
+  }
+  get knownPlaybackDurationSeconds(): number {
+    return this.knownDurationSeconds
+  }
   private active: ActiveCapture | null = null
   private elapsedTimer: ReturnType<typeof setInterval> | null = null
   private preloadTimer: ReturnType<typeof setTimeout> | null = null
@@ -124,6 +154,13 @@ class SpeechController {
   private sound = structuredClone(DEFAULT_SPEECH_SETTINGS)
   private playbackStallWatchdog: ReturnType<typeof setTimeout> | null = null
   private playbackStallMessageId: string | null = null
+  private pausedLingerTimer: ReturnType<typeof setTimeout> | null = null
+  /** Whether the read-along border + seek controls are on screen right now. */
+  private readAlongVisible = $state(false)
+  /** Playhead position in seconds across all retained (played) segments. */
+  private elapsedSeconds = $state(0)
+  /** Sum of known media durations; grows as segment metadata loads. */
+  private knownDurationSeconds = $state(0)
 
   constructor() {
     if (typeof window !== 'undefined') {
@@ -385,8 +422,6 @@ class SpeechController {
         attemptId: active.attemptId,
         editorId: active.target.id,
         insertedText: transcript,
-        startOffset: applied.startOffset,
-        endOffset: applied.endOffset,
         insertedAt: Date.now(),
         scope: structuredClone(active.scope)
       }
@@ -458,7 +493,12 @@ class SpeechController {
     this.spans.delete(targetId)
     const sentAt = Date.now()
     for (const span of spans) {
-      void invoke('speech:observeCorrection', { span, sentText, sentAt })
+      void invoke('speech:observeCorrection', {
+        insertedText: span.insertedText,
+        sentText,
+        scope: span.scope,
+        sentAt
+      })
     }
   }
 
@@ -467,6 +507,8 @@ class SpeechController {
     if (active?.prepared.messageId === messageId && active.audio) {
       if (active.audio.paused) {
         await active.audio.play()
+        this.clearPausedLinger()
+        this.readAlongVisible = true
         this.playback = {
           state: 'playing',
           sessionId: active.prepared.sessionId,
@@ -475,6 +517,7 @@ class SpeechController {
         }
       } else {
         active.audio.pause()
+        this.armPausedLinger()
         this.playback = {
           state: 'paused',
           sessionId: active.prepared.sessionId,
@@ -504,7 +547,8 @@ class SpeechController {
         artifact: selection.artifact,
         voiceId: this.sound.ttsVoiceId ?? selection.artifact.voices[0] ?? '0',
         audio: null,
-        audioUrl: null,
+        retainedUrls: [],
+        durations: [],
         next: null,
         index: 0
       }
@@ -513,6 +557,8 @@ class SpeechController {
       await this.playSegment(playback, 0)
     } catch (cause) {
       this.clearPlaybackStallWatchdog()
+      this.resetSeekSurfaces()
+      this.activePlayback?.next?.catch(() => undefined)
       this.playback = {
         state: 'failed',
         messageId,
@@ -558,9 +604,12 @@ class SpeechController {
     const active = this.activePlayback
     this.activePlayback = null
     this.currentSegments = null
+    this.clearPlaybackStallWatchdog()
+    this.resetSeekSurfaces()
     if (active) {
       active.audio?.pause()
-      if (active.audioUrl) URL.revokeObjectURL(active.audioUrl)
+      active.next?.catch(() => undefined)
+      for (const url of active.retainedUrls) URL.revokeObjectURL(url)
       await invoke('speech:cancelPlayback', active.prepared.sessionId).catch(() => undefined)
     }
     this.playback = {
@@ -580,9 +629,11 @@ class SpeechController {
     this.activePlayback = null
     this.currentSegments = null
     this.clearPlaybackStallWatchdog()
+    this.resetSeekSurfaces()
     if (active) {
       active.audio?.pause()
-      if (active.audioUrl) URL.revokeObjectURL(active.audioUrl)
+      active.next?.catch(() => undefined)
+      for (const url of active.retainedUrls) URL.revokeObjectURL(url)
       await invoke('speech:cancelPlayback', active.prepared.sessionId).catch(() => undefined)
     }
     this.playback = { state: 'idle' }
@@ -780,7 +831,6 @@ class SpeechController {
   }
 
   private cleanupMode(): import('../../../lib/speech/types').SpeechCleanupMode {
-    if (this.sound.localLlmCleanupEnabled) return { kind: 'local-llm' }
     if (this.sound.remoteCleanupEnabled) {
       return {
         kind: 'remote',
@@ -872,18 +922,105 @@ class SpeechController {
 
   private async playSegment(playback: ActivePlayback, index: number): Promise<void> {
     if (this.activePlayback !== playback) return
-    const synthesized = playback.next ? await playback.next : await this.synthesize(playback, index)
-    playback.next = null
-    if (this.activePlayback !== playback) return
-    playback.index = index
-    if (index + 1 < playback.prepared.segments.length) {
-      playback.next = this.synthesize(playback, index + 1)
+    // Segments already synthesized in this session (e.g. after seeking back)
+    // replay from their retained blob instead of hitting the worker again.
+    if (index >= playback.retainedUrls.length) {
+      const synthesized =
+        playback.next ? await playback.next : await this.synthesize(playback, index)
+      playback.next = null
+      if (this.activePlayback !== playback || index !== playback.retainedUrls.length) return
+      playback.retainedUrls.push(
+        URL.createObjectURL(new Blob([synthesized.audio], { type: 'audio/wav' }))
+      )
+      playback.durations.push(Number.NaN)
     }
-    if (playback.audioUrl) URL.revokeObjectURL(playback.audioUrl)
-    const url = URL.createObjectURL(new Blob([synthesized.audio], { type: 'audio/wav' }))
-    const audio = new Audio(url)
-    playback.audioUrl = url
-    playback.audio = audio
+    if (index + 1 < playback.prepared.segments.length && !playback.next) {
+      const prefetchIndex = index + 1
+      playback.next = this.synthesize(playback, prefetchIndex)
+    }
+    playback.index = index
+    pauseCurrentHistoryAudio()
+    await this.startSegmentAudio(playback, index, 0)
+  }
+
+  /**
+   * Plays (or positions) a segment's retained audio, constructing the element
+   * when this segment is not already loaded. Paused seeks pass autoplay=false
+   * so scrubbing never surprises the user with sudden sound.
+   */
+  private async startSegmentAudio(
+    playback: ActivePlayback,
+    index: number,
+    offsetSeconds: number,
+    autoplay = true
+  ): Promise<void> {
+    if (this.activePlayback !== playback) return
+    let audio = playback.audio
+    if (!audio || audio.dataset.segmentIndex !== String(index)) {
+      audio?.pause()
+      audio = new Audio(playback.retainedUrls[index])
+      audio.dataset.segmentIndex = String(index)
+      if (offsetSeconds > 0) audio.dataset.pendingStart = String(offsetSeconds)
+      this.wireSegmentAudio(playback, audio, index)
+      playback.audio = audio
+    } else if (offsetSeconds > 0 && audio.readyState >= 1) {
+      try {
+        audio.currentTime = offsetSeconds
+      } catch {
+        // Ignore; timeupdate reconciles the slider next tick.
+      }
+    }
+    this.syncSeekCounters(playback)
+    if (autoplay) {
+      try {
+        await audio.play()
+      } finally {
+        if (this.activePlayback === playback) {
+          this.clearPausedLinger()
+          this.readAlongVisible = true
+        }
+      }
+      if (this.activePlayback !== playback) return
+      this.clearPlaybackStallWatchdog()
+      this.playback = {
+        state: 'playing',
+        sessionId: playback.prepared.sessionId,
+        messageId: playback.prepared.messageId,
+        segmentIndex: index
+      }
+    } else {
+      // Positioned while paused: refresh the linger clock like a fresh pause.
+      this.armPausedLinger()
+    }
+  }
+
+  private wireSegmentAudio(
+    playback: ActivePlayback,
+    audio: HTMLAudioElement,
+    index: number
+  ): void {
+    audio.addEventListener(
+      'loadedmetadata',
+      () => {
+        if (this.activePlayback !== playback) return
+        playback.durations[index] = Number.isFinite(audio.duration) ? audio.duration : 0
+        const pendingStart = Number(audio.dataset.pendingStart ?? '')
+        if (pendingStart > 0) {
+          delete audio.dataset.pendingStart
+          try {
+            audio.currentTime = pendingStart
+          } catch {
+            // Ignore; the first timeupdate will still report a sane position.
+          }
+        }
+        this.syncSeekCounters(playback)
+      },
+      { once: true }
+    )
+    audio.addEventListener('timeupdate', () => {
+      if (this.activePlayback !== playback) return
+      this.syncSeekCounters(playback)
+    })
     audio.addEventListener(
       'ended',
       () => {
@@ -891,6 +1028,7 @@ class SpeechController {
         if (index + 1 < playback.prepared.segments.length) {
           void this.playSegment(playback, index + 1).catch((cause: unknown) => {
             this.clearPlaybackStallWatchdog()
+            this.resetSeekSurfaces()
             this.playback = {
               state: 'failed',
               messageId: playback.prepared.messageId,
@@ -903,20 +1041,96 @@ class SpeechController {
           })
         } else {
           this.clearPlaybackStallWatchdog()
+          this.resetSeekSurfaces()
           this.playback = { state: 'completed', messageId: playback.prepared.messageId }
           void this.cancelPlayback()
         }
       },
       { once: true }
     )
-    pauseCurrentHistoryAudio()
-    await audio.play()
-    this.clearPlaybackStallWatchdog()
-    this.playback = {
-      state: 'playing',
-      sessionId: playback.prepared.sessionId,
-      messageId: playback.prepared.messageId,
-      segmentIndex: index
+  }
+
+  /** Publishes the cross-segment playhead and known-duration counters. */
+  private syncSeekCounters(playback: ActivePlayback): void {
+    let prefix = 0
+    for (let i = 0; i < playback.index; i += 1) {
+      const duration = playback.durations[i]
+      prefix += Number.isFinite(duration) ? duration : 0
+    }
+    const current = playback.audio?.currentTime ?? 0
+    this.elapsedSeconds = prefix + current
+    let total = 0
+    for (const duration of playback.durations) total += Number.isFinite(duration) ? duration : 0
+    this.knownDurationSeconds = total
+  }
+
+  /** Hides the read-along border and seek controls at terminal states. */
+  private resetSeekSurfaces(): void {
+    this.clearPausedLinger()
+    this.readAlongVisible = false
+    this.elapsedSeconds = 0
+    this.knownDurationSeconds = 0
+  }
+
+  private armPausedLinger(): void {
+    this.clearPausedLinger()
+    this.pausedLingerTimer = setTimeout(() => {
+      this.pausedLingerTimer = null
+      if (this.playback.state !== 'paused') return
+      this.readAlongVisible = false
+    }, PAUSED_LINGER_MS)
+  }
+
+  private clearPausedLinger(): void {
+    if (this.pausedLingerTimer) clearTimeout(this.pausedLingerTimer)
+    this.pausedLingerTimer = null
+  }
+
+  /**
+   * Moves the playhead to `seconds` within the already-synthesized timeline.
+   * Seeking inside the current segment only moves the element's cursor; seeking
+   * back swaps in that segment's retained audio and continues from there.
+   */
+  async seekPlayback(seconds: number): Promise<void> {
+    const playback = this.activePlayback
+    if (!playback || !playback.retainedUrls.length) return
+    const paused = this.playback.state === 'paused'
+    let targetIndex = -1
+    let offset = seconds
+    for (let i = 0; i <= playback.index; i += 1) {
+      const duration = playback.durations[i]
+      const known = Number.isFinite(duration) ? duration : Number.POSITIVE_INFINITY
+      if (offset <= known || i === playback.index) {
+        targetIndex = i
+        break
+      }
+      offset -= known
+    }
+    if (targetIndex === -1) return
+    const durationAtTarget = playback.durations[targetIndex]
+    if (Number.isFinite(durationAtTarget)) {
+      offset = Math.max(0, Math.min(offset, Math.max(0, durationAtTarget - 0.05)))
+    }
+    if (targetIndex !== playback.index) {
+      // Discarding a stale prefetch must not surface as an unhandled rejection.
+      playback.next?.catch(() => undefined)
+      playback.next = null
+      await this.startSegmentAudio(playback, targetIndex, offset, !paused)
+      return
+    }
+    const audio = playback.audio
+    if (!audio) return
+    try {
+      audio.currentTime = offset
+    } catch {
+      // Metadata pending; the next timeupdate reconciles the slider position.
+    }
+    this.syncSeekCounters(playback)
+    if (paused) {
+      this.armPausedLinger()
+    } else {
+      this.clearPausedLinger()
+      this.readAlongVisible = true
     }
   }
 
