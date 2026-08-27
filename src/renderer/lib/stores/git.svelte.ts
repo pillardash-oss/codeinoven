@@ -330,9 +330,17 @@ export class GitState {
    * Panel-open hook: opening the git panel refreshes local status and the
    * connection-gated PR indicators immediately, so what the user sees is
    * never older than the moment they asked for it.
+   *
+   * The git tool opens from its own rail icon rather than a tab strip, so
+   * this fires on every refocus (files → git, notifications → git …). It
+   * must therefore never reset the claimed target: `activate(projectId)`
+   * without a scope would demote an already-claimed worktree bucket to null,
+   * wiping status/branches and forcing the whole panel to visually rebuild.
+   * Claiming happens properly elsewhere — the panel's own effect passes the
+   * real scope bucket; here we preserve whatever is already active.
    */
   notifyGitPanelOpened(projectId: string): void {
-    this.activate(projectId)
+    if (this.activeProjectId !== projectId) return
     queueMicrotask(() => void this.refresh(projectId).catch(() => {}))
   }
 
