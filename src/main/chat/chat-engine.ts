@@ -18014,6 +18014,7 @@ export class ChatEngine {
     // state, so close its window here before the after-snapshot is taken.
     if (info.unboundedWindowStart) this.closeUnboundedToolWindow(info)
     if (info.pendingWindowScans?.size) await Promise.all([...info.pendingWindowScans])
+    const ownThreadIds = await this.selfFamilyThreadIds(info.projectId, info.threadId)
     try {
       const checkpoint = await this.checkpointManager.completeTurn(
         info.projectId,
@@ -18034,7 +18035,11 @@ export class ChatEngine {
           : undefined,
         {
           precisePaths: new Set(info.preciseChangedPaths?.keys() ?? []),
-          foreignClaimedPaths: this.liveForeignClaimedPaths(info)
+          foreignClaimedPaths: this.liveForeignClaimedPaths(info, ownThreadIds),
+          // Worker sub-agent threads dispatched by this thread are part of the
+          // same logical turn: their captured checkpoints must never mark the
+          // turn's real changes as foreign concurrent edits.
+          ownThreadIds
         }
       )
       info.activeTurnId = undefined
@@ -18062,16 +18067,41 @@ export class ChatEngine {
   }
 
   /**
-   * Paths other active sessions' precise file tools claimed this turn. Only
-   * paths claimed by a different thread can belong to a concurrent edit; the
-   * caller time-filters these against the turn's start before dropping them.
+   * The turn-owning thread family: the thread itself plus every orchestration
+   * descendant (worker sub-agent threads it dispatched). Checkpoint work done
+   * by these threads belongs to the parent's turn instead of counting as
+   * foreign concurrent edits.
    */
-  private liveForeignClaimedPaths(self: SessionInfo): Map<string, number> {
+  private async selfFamilyThreadIds(projectId: string, threadId: string): Promise<Set<string>> {
+    const ids = new Set([threadId])
+    try {
+      for (const id of await this.threadManager.listDescendantThreadIds(projectId, threadId)) {
+        ids.add(id)
+      }
+    } catch (error) {
+      Logger.dev('Sub-agent thread lookup failed:', error)
+    }
+    return ids
+  }
+
+  /**
+   * Paths other active sessions' precise file tools claimed this turn. Only
+   * paths claimed by a different thread outside this thread's sub-agent family
+   * can belong to a concurrent edit; the caller time-filters these against the
+   * turn's start before dropping them.
+   */
+  private liveForeignClaimedPaths(
+    self: SessionInfo,
+    ownThreadIds?: ReadonlySet<string>
+  ): Map<string, number> {
     const foreign = new Map<string, number>()
     const now = Date.now()
     for (const other of this.sessionRegistry.values()) {
       if (other === self || other.projectId !== self.projectId) continue
       if (other.threadId === self.threadId) continue
+      // Worker sub-agents of this thread are part of the same logical turn —
+      // their claimed paths belong to this turn's card.
+      if (ownThreadIds?.has(other.threadId)) continue
       if (!other.activeTurnId) continue
       for (const [path, claimedAt] of other.preciseChangedPaths ?? []) {
         const existing = foreign.get(path)
@@ -18121,9 +18151,11 @@ export class ChatEngine {
     const changedPaths = session.changedPaths ?? new Set<string>()
     const rawPaths = [...changedPaths].sort().slice(0, MAX_LIVE_PATHS)
     const turnStart = checkpoint.before.createdAt
+    const ownThreadIds = await this.selfFamilyThreadIds(projectId, threadId)
     const foreign = await this.checkpointManager.foreignClaimedPathsForLive(
       checkpoint,
-      this.liveForeignClaimedPaths(session)
+      this.liveForeignClaimedPaths(session, ownThreadIds),
+      ownThreadIds
     )
     const precise = session.preciseChangedPaths ?? new Map<string, number>()
     // Batched, bounded scanning: stat + hash only claimed paths, 8 at a time,

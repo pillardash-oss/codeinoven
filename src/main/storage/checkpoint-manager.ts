@@ -58,6 +58,12 @@ export interface TurnCompletionOptions {
   precisePaths?: ReadonlySet<string>
   /** Paths other active sessions' precise file tools touched, path → claimed ms. */
   foreignClaimedPaths?: ReadonlyMap<string, number>
+  /**
+   * Thread ids owned by this turn — the thread itself plus its orchestration
+   * descendants (worker sub-agents). Checkpoints completed by these threads
+   * during the turn are part of THIS turn's work, never foreign.
+   */
+  ownThreadIds?: ReadonlySet<string>
 }
 
 /** Cap on foreign-thread checkpoints scanned while reconciling concurrent edits. */
@@ -270,9 +276,10 @@ export class CheckpointManager {
    */
   async foreignClaimedPathsForLive(
     checkpoint: TurnCheckpoint,
-    foreignLive: ReadonlyMap<string, number>
+    foreignLive: ReadonlyMap<string, number>,
+    ownThreadIds?: ReadonlySet<string>
   ): Promise<Map<string, number>> {
-    const opts: TurnCompletionOptions = { foreignClaimedPaths: foreignLive }
+    const opts: TurnCompletionOptions = { foreignClaimedPaths: foreignLive, ownThreadIds }
     return this.foreignClaimedPaths(checkpoint, opts)
   }
 
@@ -285,11 +292,12 @@ export class CheckpointManager {
     for (const [path, claimedAt] of options.foreignClaimedPaths ?? []) {
       if (claimedAt >= turnStart) foreign.set(path, claimedAt)
     }
-    // Extract only (path, completedAt) in SQL. Shipping full checkpoint JSON
+    // Extract only (threadId, completedAt, path) in SQL. Shipping full checkpoint JSON
     // blobs across the worker port just to read two fields crashed the process
     // on large projects and spiked memory on every turn completion.
     const rows = await this.queryRows(
-      `SELECT json_extract(tc.data, '$.completedAt') AS completed_at,
+      `SELECT json_extract(tc.data, '$.threadId') AS tid,
+              json_extract(tc.data, '$.completedAt') AS completed_at,
               json_extract(je.value, '$.path') AS path
        FROM turn_checkpoints tc, json_each(tc.data, '$.changes') je
        WHERE tc.project_id = ? AND tc.thread_id != ?
@@ -298,9 +306,14 @@ export class CheckpointManager {
       [checkpoint.projectId, checkpoint.threadId, turnStart],
       FOREIGN_CHECKPOINT_SCAN_LIMIT
     )
+    const own = options.ownThreadIds
     for (const row of rows) {
       const path = row['path']
+      const tid = row['tid']
       if (typeof path === 'string' && !foreign.has(path)) {
+        // Worker sub-agent threads owned by this turn are part of this work —
+        // their completions must not mark paths as foreign.
+        if (own?.has(typeof tid === 'string' ? tid : '')) continue
         foreign.set(path, Number(row['completed_at'] ?? turnStart))
       }
     }

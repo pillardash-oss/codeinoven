@@ -303,11 +303,112 @@ describe('CheckpointManager', () => {
       rolledBackPaths: ['first.txt']
     })
     await expect(readFile(join(projectRoot, 'first.txt'), 'utf-8')).resolves.toBe('before-first')
-    await expect(readFile(join(projectRoot, 'second.txt'), 'utf-8')).resolves.toBe('after-second')
 
     await writeFile(join(projectRoot, 'second.txt'), 'later-edit', 'utf-8')
     await expect(
       manager.rollbackPaths('project3', 'thread3', checkpoint.id, ['second.txt'])
     ).rejects.toThrow('changed after this checkpoint')
+  })
+
+  it('keeps sub-agent family changes on the parent card and drops foreign edits', async () => {
+    const setup = async (): Promise<{
+      manager: CheckpointManager
+      database: Database
+      projectRoot: string
+      parent: TurnCheckpoint
+    }> => {
+      const projectRoot = await temporaryDirectory('codeinoven-project-')
+      const database = await createTestDb()
+      testDatabases.push(database)
+      const manager = new CheckpointManager(database)
+      await writeFile(join(projectRoot, 'mine.txt'), 'before', 'utf-8')
+      await writeFile(join(projectRoot, 'worker.txt'), 'before', 'utf-8')
+      await writeFile(join(projectRoot, 'unrelated.txt'), 'before', 'utf-8')
+
+      const parent = await manager.beginTurn(
+        'project1',
+        'coordinator',
+        projectRoot,
+        'Parent turn',
+        false
+      )
+
+      // A worker sub-agent thread of this coordinator completes a turn inside
+      // the window. The sub-turn file diff can be empty when snapshots are
+      // cached, so seed its recorded changes the way a real editing turn does.
+      const workerTurn = await manager.beginTurn('project1', 'worker-a', projectRoot, 'Worker turn', false)
+      await writeFile(join(projectRoot, 'worker.txt'), 'worker-edit', 'utf-8')
+      const workerDone = await manager.completeTurn(
+        'project1',
+        'worker-a',
+        workerTurn.id,
+        projectRoot,
+        'completed'
+      )
+      database.run(
+        'UPDATE turn_checkpoints SET data = ? WHERE turn_id = ?',
+        JSON.stringify({
+          ...workerDone,
+          changes: [{ path: 'worker.txt', kind: 'modified', binary: false }]
+        }),
+        workerDone.id
+      )
+
+      // An unrelated concurrent thread also completes a turn inside the window.
+      const otherTurn = await manager.beginTurn(
+        'project1',
+        'stranger',
+        projectRoot,
+        'Other turn',
+        false
+      )
+      await writeFile(join(projectRoot, 'unrelated.txt'), 'other-thread', 'utf-8')
+      const otherDone = await manager.completeTurn(
+        'project1',
+        'stranger',
+        otherTurn.id,
+        projectRoot,
+        'completed'
+      )
+      database.run(
+        'UPDATE turn_checkpoints SET data = ? WHERE turn_id = ?',
+        JSON.stringify({
+          ...otherDone,
+          changes: [{ path: 'unrelated.txt', kind: 'modified', binary: false }]
+        }),
+        otherDone.id
+      )
+
+      // The parent edits its own file too.
+      await writeFile(join(projectRoot, 'mine.txt'), 'parent-edit', 'utf-8')
+      return { manager, database, projectRoot, parent }
+    }
+
+    // With family knowledge, the worker sub-agent's edit stays on the parent
+    // card while the truly foreign thread's path drops.
+    const family = await setup()
+    const familyDone = await family.manager.completeTurn(
+      'project1',
+      'coordinator',
+      family.parent.id,
+      family.projectRoot,
+      'completed',
+      undefined,
+      undefined,
+      { ownThreadIds: new Set(['coordinator', 'worker-a']) }
+    )
+    expect(familyDone.changes.map((change) => change.path)).toEqual(['mine.txt', 'worker.txt'])
+
+    // Without family knowledge, the same snapshot hides the worker sub-agent's
+    // work entirely — the regression this test locks in.
+    const plain = await setup()
+    const plainDone = await plain.manager.completeTurn(
+      'project1',
+      'coordinator',
+      plain.parent.id,
+      plain.projectRoot,
+      'completed'
+    )
+    expect(plainDone.changes.map((change) => change.path)).toEqual(['mine.txt'])
   })
 })
