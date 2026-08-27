@@ -89,4 +89,6 @@ export interface ConversationController {
   removeReference?(id: string): void
   /** Remove all composer selection references (used by temporary chats). */
   clearReferences?(): void
+  /** Attach an additional response selection to the composer (temporary chats). */
+  addSelection?(text: string): void
 }

@@ -6,8 +6,10 @@
     x: number
     y: number
     onAdd: () => void
-    onElaborate: () => void
-    onQuickChat: () => void
+    /** Opening a nested temp chat makes no sense inside one; hidden when omitted. */
+    onElaborate?: () => void
+    /** Opening a nested temp chat makes no sense inside one; hidden when omitted. */
+    onQuickChat?: () => void
     onClose: () => void
   }
 
@@ -37,22 +39,26 @@
     <MessageCirclePlus size={13} />
     Add to chat
   </button>
-  <button
-    type="button"
-    class="flex h-8 items-center gap-1.5 rounded-lg px-2.5 text-xs font-medium text-foreground transition-colors hover:bg-elevated"
-    title="Explain this selection in a temporary read-only chat"
-    onclick={onElaborate}
-  >
-    <MessageCircleDashed size={13} />
-    Explain
-  </button>
-  <button
-    type="button"
-    class="flex h-8 items-center gap-1.5 rounded-lg px-2.5 text-xs font-medium text-foreground transition-colors hover:bg-elevated"
-    title="Start a temporary read-only chat with this selection"
-    onclick={onQuickChat}
-  >
-    <MessageSquareDashed size={13} />
-    Quick chat
-  </button>
+  {#if onElaborate}
+    <button
+      type="button"
+      class="flex h-8 items-center gap-1.5 rounded-lg px-2.5 text-xs font-medium text-foreground transition-colors hover:bg-elevated"
+      title="Explain this selection in a temporary read-only chat"
+      onclick={onElaborate}
+    >
+      <MessageCircleDashed size={13} />
+      Explain
+    </button>
+  {/if}
+  {#if onQuickChat}
+    <button
+      type="button"
+      class="flex h-8 items-center gap-1.5 rounded-lg px-2.5 text-xs font-medium text-foreground transition-colors hover:bg-elevated"
+      title="Start a temporary read-only chat with this selection"
+      onclick={onQuickChat}
+    >
+      <MessageSquareDashed size={13} />
+      Quick chat
+    </button>
+  {/if}
 </div>

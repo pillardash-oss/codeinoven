@@ -108,6 +108,13 @@ export class TemporaryChatController implements ConversationController {
     this.#tab.selectionAttached = false
   }
 
+  addSelection(text: string): void {
+    if (!text.trim() || this.#tab.expired) return
+    this.#tab.selections = [...this.#tab.selections, text]
+    this.#tab.selectionAttached = true
+    this.#touch()
+  }
+
   mount(): void {
     if (this.#mounted) return
     this.#mounted = true

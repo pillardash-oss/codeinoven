@@ -1522,6 +1522,13 @@
   function addResponseReference(): void {
     const selection = responseSelection
     if (!selection) return
+    // Temporary chats keep their composer references on the controller — the
+    // thread-scoped store below is invisible to them.
+    if (controller?.addSelection) {
+      controller.addSelection(selection.text)
+      closeResponseSelection()
+      return
+    }
     const id = crypto.randomUUID()
     responseReferencesState.setForThread(thread.projectId, thread.id, [
       ...responseReferences,
@@ -8357,8 +8364,8 @@
     x={responseSelection.x}
     y={responseSelection.y}
     onAdd={addResponseReference}
-    onElaborate={() => openTemporarySelectionChat('elaborate')}
-    onQuickChat={() => openTemporarySelectionChat('quick')}
+    onElaborate={hasController ? undefined : () => openTemporarySelectionChat('elaborate')}
+    onQuickChat={hasController ? undefined : () => openTemporarySelectionChat('quick')}
     onClose={closeResponseSelection}
   />
 {/if}
