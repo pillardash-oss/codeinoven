@@ -15,23 +15,25 @@
 
   let { tabId, onContinueInThread }: Props = $props()
 
-  function resolveTab(): TemporaryChatContextTab {
-    const current = contextSidebarState.temporaryChatTab(tabId)
-    if (!current) throw new Error(`Temporary chat tab is unavailable: ${tabId}`)
-    return current
+  function resolveTab(): TemporaryChatContextTab | null {
+    return contextSidebarState.temporaryChatTab(tabId)
   }
 
+  // Resolved once per mount; the store remains the sole owner of the live tab
+  // object and the controller mutates it through the same proxy. When the tab
+  // is already gone (closed/expired between open and render) show a quiet
+  // empty state instead of crashing the panel to blank.
   const tab = resolveTab()
-  const controller = new TemporaryChatController(tab)
+  const controller = tab ? new TemporaryChatController(tab) : null
 
   async function continueInThread(): Promise<void> {
-    if (!onContinueInThread) return
+    if (!onContinueInThread || !tab) return
     try {
       await onContinueInThread(tab)
-    } catch (error) {
+    } catch (error: unknown) {
       const raw = error instanceof Error ? error.message : String(error)
       const clean = raw.replace(/^Error invoking remote method '[^']+': Error:\s*/u, '')
-      throw new Error(clean || 'The side chat could not be continued.')
+      throw new Error(clean || 'The side chat could not be continued.', { cause: error })
     }
   }
 
@@ -59,14 +61,20 @@
 </script>
 
 <div class="temporary-chat-view bg-app flex h-full min-h-0 w-full flex-col overflow-hidden">
-  {#key tabId}
-    <ThreadView
-      thread={syntheticThreadFor(tab)}
-      chatMode={true}
-      {controller}
-      onContinueInThread={continueInThread}
-    />
-  {/key}
+  {#if tab && controller}
+    {#key tabId}
+      <ThreadView
+        thread={syntheticThreadFor(tab)}
+        chatMode={true}
+        {controller}
+        onContinueInThread={continueInThread}
+      />
+    {/key}
+  {:else}
+    <div class="flex flex-1 items-center justify-center px-6 text-sm text-dimmed">
+      This side chat is no longer available.
+    </div>
+  {/if}
 </div>
 
 <style>
