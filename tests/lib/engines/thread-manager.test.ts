@@ -381,34 +381,34 @@ describe('ThreadManager', () => {
     })
 
     // A pending session outcome for the thread (as chat-engine would open it).
+    // Pending rows are detached (thread_id SET NULL) and handed to the grader
+    // via onTurnFeedbackDetached; they remain pending in the DB until judged.
     db.run(
       `INSERT INTO turn_feedback(
-        id, thread_id, parent_turn_id, created_at, status, score, feature,
-        harness_id, provider_id, model_id, thinking_level
-      ) VALUES('outcome:turn-1', ?, 'turn-1', 1, 'pending', 0, 'main', 'opencode', 'openai', 'gpt-x', 'high')`,
+        id, thread_id, parent_turn_id, created_at, status, grade, feature,
+        harness_id, provider_id, model_id, thinking_level,
+        user_message_text, assistant_output_text
+      ) VALUES('outcome:turn-1', ?, 'turn-1', 1, 'pending', NULL, 'main', 'opencode', 'openai', 'gpt-x', 'high', '', '')`,
       thread.id
     )
 
     await manager.deleteThread('project1', thread.id)
 
-    // The pending outcome was resolved to a cleaned_up success and survived the
-    // deletion (thread reference SET NULL, attribution intact) — it must not
-    // remain pending and excluded from model-performance analytics.
+    // The pending outcome survived deletion (thread reference SET NULL,
+    // attribution intact) and remains pending until the grader judges it.
     const row = db.get(
-      'SELECT thread_id, status, signal, score, model_id FROM turn_feedback WHERE parent_turn_id = ?',
+      'SELECT thread_id, status, grade, model_id FROM turn_feedback WHERE parent_turn_id = ?',
       'turn-1'
     ) as {
       thread_id: string | null
       status: string
-      signal: string
-      score: number
+      grade: number | null
       model_id: string
     }
     expect(row).toBeDefined()
     expect(row.thread_id).toBeNull()
-    expect(row.status).toBe('success')
-    expect(row.signal).toBe('cleaned_up')
-    expect(row.score).toBe(1)
+    expect(row.status).toBe('pending')
+    expect(row.grade).toBeNull()
     expect(row.model_id).toBe('gpt-x')
   })
 })
