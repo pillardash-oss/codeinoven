@@ -6,10 +6,12 @@
   interface Props {
     part: Extract<AgentPart, { type: 'reasoning' }>
     active?: boolean
+    /** True only while a live session is streaming — gates the ticking clock. */
+    live?: boolean
     onCiteFile?: (path: string, line?: number) => void
   }
 
-  let { part, active = false, onCiteFile }: Props = $props()
+  let { part, active = false, live = false, onCiteFile }: Props = $props()
 
   let open = $state(false)
   let elapsed = $state(0)
@@ -21,7 +23,7 @@
     if (start && end) {
       // Finished: the duration is a frozen snapshot of the reasoning itself.
       elapsed = Math.floor((end - start) / 1000)
-    } else if (start && active) {
+    } else if (start && active && live) {
       const interval = setInterval(() => {
         elapsed = Math.floor((Date.now() - start) / 1000)
       }, 1000)

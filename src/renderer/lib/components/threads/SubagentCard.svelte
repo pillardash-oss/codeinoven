@@ -4,10 +4,12 @@
 
   interface Props {
     part: Extract<AgentPart, { type: 'subagent' }>
+    /** True only while a live session is streaming this sub-agent. */
+    live?: boolean
     onOpen?: (part: Extract<AgentPart, { type: 'subagent' }>) => void
   }
 
-  let { part, onOpen }: Props = $props()
+  let { part, live = false, onOpen }: Props = $props()
 
   let elapsed = $state(0)
   const start = $derived(part.activity.time?.start)
@@ -20,9 +22,9 @@
       elapsed = Math.max(0, Math.floor((end - start) / 1000))
       return
     }
-    if (!running) {
-      // Terminal state without an end timestamp: snapshot once, never re-derive
-      // from the wall clock on later re-renders.
+    if (!running || !live) {
+      // Terminal, or historical/restored without an end timestamp: snapshot
+      // once, never re-derive from the wall clock on later re-renders.
       if (elapsed === 0) elapsed = Math.max(0, Math.floor((Date.now() - start) / 1000))
       return
     }

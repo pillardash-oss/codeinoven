@@ -3333,7 +3333,22 @@
             !restoredBusy &&
             hasRenderableWorkingParts(parts)
           ) {
-            restoredBusy = !isLatestTurnCompleted()
+            // Only a saved run that is still the newest work may claim the
+            // restored-trace state. Once the user has sent a newer message
+            // (locally submitted turn, or a pending user message after the
+            // last assistant turn), that stale trace is history: it must stay
+            // folded with frozen durations while the new run gets its own
+            // live trace.
+            const latestStart = latestTurnInfo.startIndex
+            let turnEnd = latestStart
+            while (turnEnd + 1 < messages.length && messages[turnEnd + 1]?.role !== 'user') {
+              turnEnd += 1
+            }
+            const hasNewerUserWork =
+              latestStart === -1 ||
+              locallySubmittedTurnId !== null ||
+              messages.slice(turnEnd + 1).some((message) => message.role === 'user')
+            restoredBusy = !hasNewerUserWork && !isLatestTurnCompleted()
           }
         })
         .catch(() => {})

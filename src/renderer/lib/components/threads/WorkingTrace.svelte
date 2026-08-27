@@ -119,11 +119,23 @@
     return undefined
   })
 
+  /** True only while a live session is streaming this trace. A restored trace
+   *  (busy with the saved-activity note) is historical: its durations are
+   *  frozen snapshots, never live wall-clock counts. */
+  const liveActivity = $derived(busy && !rehydrated)
+
   // Live count of how long the agent has been working. Ticks every second
-  // while the trace is busy; only rendered beside the busy indicator.
+  // while the trace is genuinely live; a restored trace snapshots once so the
+  // timer never keeps counting after the run it belonged to is over.
   $effect(() => {
     if (!busy || !effectiveStartTime) {
       elapsed = 0
+      return
+    }
+    if (!liveActivity) {
+      if (elapsed === 0) {
+        elapsed = Math.max(0, Math.floor((Date.now() - effectiveStartTime) / 1000))
+      }
       return
     }
     elapsed = Math.max(0, Math.floor((Date.now() - effectiveStartTime) / 1000))
@@ -446,11 +458,16 @@
     >
       {#each visibleParts as part (part.id)}
         {#if part.type === 'reasoning'}
-          <ThinkingBlock {part} active={busy && part.id === lastReasoningId} {onCiteFile} />
+          <ThinkingBlock
+            {part}
+            active={busy && part.id === lastReasoningId}
+            live={liveActivity}
+            {onCiteFile}
+          />
         {:else if part.type === 'tool'}
-          <ToolCard {part} {projectId} {threadId} {checkpointId} {checkpointPaths} />
+          <ToolCard {part} live={liveActivity} {projectId} {threadId} {checkpointId} {checkpointPaths} />
         {:else if part.type === 'subagent'}
-          <SubagentCard {part} onOpen={onOpenSubagent} />
+          <SubagentCard {part} live={liveActivity} onOpen={onOpenSubagent} />
         {:else if part.type === 'text'}
           <div class="text-sm text-foreground">
             <MarkdownView text={part.text} {onCiteFile} />
