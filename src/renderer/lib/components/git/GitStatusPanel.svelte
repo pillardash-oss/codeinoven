@@ -7,7 +7,6 @@
   import { gitState } from '$lib/stores/git.svelte'
   import { cachedHasDeployments, cacheHasDeployments } from '$lib/git-deployments-cache'
   import { DEFAULT_SCOPE_BUCKET_ID } from '$shared/types'
-  import { logRendererError } from '$lib/system/renderer-logger'
   import type {
     GitBranchInfo,
     GitCommitInfo,
@@ -87,17 +86,6 @@
   }
 
   let { projectId, threadId, scopeBucketId = DEFAULT_SCOPE_BUCKET_ID }: Props = $props()
-
-  // TEMPORARY DIAGNOSTIC — git panel keep-alive investigation. Remove once
-  // the teardown report is confirmed resolved. Surfaces mount/destroy and
-  // scope swaps in the durable log so a reported rebuild can be traced to a
-  // real unmount versus a store wipe.
-  onMount(() => {
-    logRendererError(`git-panel trace: MOUNT project=${projectId} scope=${scopeBucketId}`)
-    return () => {
-      logRendererError(`git-panel trace: DESTROY project=${projectId} scope=${scopeBucketId}`)
-    }
-  })
 
   type RepoState = 'loading' | 'git_unavailable' | 'not_git' | 'git'
   type TabId = 'changes' | 'history' | 'branches' | 'pulls' | 'deployments' | 'stashes'
@@ -1032,9 +1020,6 @@
    * keeps scoped thread switches free of a full loading flash.
    */
   function resetForScopeSwap(): void {
-    logRendererError(
-      `git-panel trace: SCOPE SWAP in place project=${projectId} scope=${scopeBucketId}`
-    )
     historyRequestId += 1
     closeCommitSearch()
     selectedCommit = null

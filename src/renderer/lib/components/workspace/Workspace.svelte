@@ -3,7 +3,6 @@
   import { fly } from 'svelte/transition'
   import { cubicOut } from 'svelte/easing'
   import { motionDuration } from '$lib/motion'
-  import { logRendererError } from '$lib/system/renderer-logger'
   import { SvelteMap, SvelteSet } from 'svelte/reactivity'
   import {
     Plus,
@@ -1219,31 +1218,17 @@
    *  panel down. Only changing projects remounts it. */
   let gitPanelProjectId = $state<string | null>(null)
   let gitPanelScopeBucketId = $state(DEFAULT_SCOPE_BUCKET_ID)
-  // TEMPORARY DIAGNOSTIC — git panel keep-alive investigation. Remove once
-  // the teardown report is confirmed resolved.
   $effect(() => {
     const tab = contextSidebarState.sidebarActiveTab
     if (!tab || !('projectId' in tab)) return
     if (tab.kind !== 'git') {
-      if (tab.projectId !== gitPanelProjectId) {
-        logRendererError(
-          `git-panel trace: HOST DROP project=${gitPanelProjectId} (active tab ${tab.kind} of project ${tab.projectId})`
-        )
-        gitPanelProjectId = null
-      }
+      if (tab.projectId !== gitPanelProjectId) gitPanelProjectId = null
       return
     }
     const tabThreadId = 'threadId' in tab ? tab.threadId : undefined
     const thread = allThreads.find(
       (candidate) => candidate.projectId === tab.projectId && candidate.id === tabThreadId
     )
-    if (gitPanelProjectId !== tab.projectId) {
-      logRendererError(
-        `git-panel trace: HOST CLAIM project=${gitPanelProjectId} -> ${tab.projectId} scope=${
-          thread?.scopeBucketId ?? DEFAULT_SCOPE_BUCKET_ID
-        }`
-      )
-    }
     gitPanelProjectId = tab.projectId
     gitPanelScopeBucketId = thread?.scopeBucketId ?? DEFAULT_SCOPE_BUCKET_ID
   })
