@@ -145,6 +145,12 @@ export interface HarnessAuthCapabilities {
    * from an incomplete in-app catalog.
    */
   pickerLogin: boolean
+  /**
+   * CodeInOven can persist an API key for a provider into the harness's own
+   * credential store (e.g. Pi's auth.json), so catalog providers can be
+   * connected headlessly without the harness's interactive flow.
+   */
+  apiKeyEntry: boolean
 }
 
 export interface HarnessAuthAccount {

@@ -80,6 +80,15 @@
    */
   let pickerLogin = $derived(authStatus?.capabilities?.pickerLogin === true)
 
+  /**
+   * Harness credentials are file-backed here (Pi): pick any catalog provider
+   * and paste an API key — no terminal handoff needed. The harness's own
+   * interactive flow stays available as a fallback (OAuth-style logins).
+   */
+  let apiKeyEntry = $derived(authStatus?.capabilities?.apiKeyEntry === true)
+  let apiKey = $state('')
+  let storingKey = $state(false)
+
   let canAddCustom = $derived(harness.supportsCustomProviders && harness.integration === 'ready')
 
   /** Only OpenCode exposes a config-file mechanism (disabled_providers) to hide providers. */
@@ -145,7 +154,38 @@
   function backToList(): void {
     selectedProvider = null
     search = ''
+    apiKey = ''
     step = 'idle'
+  }
+
+  /** Store the pasted key in the harness's own auth file and refresh state. */
+  async function connectWithKey(): Promise<void> {
+    if (!selectedProvider || storingKey) return
+    actionError = ''
+    actionWarning = ''
+    notice = ''
+    const key = apiKey.trim()
+    if (!key) {
+      actionWarning = `Enter an API key for ${selectedProvider.name}, or use interactive sign-in.`
+      return
+    }
+    storingKey = true
+    try {
+      await invoke('providerAccounts:setApiKey', harness.id, selectedProvider.id, key)
+      notice = `${selectedProvider.name} connected. Its models will appear in the picker.`
+      selectedProvider = null
+      apiKey = ''
+      await checkAuth()
+      await loadOffered()
+      providerCatalog.invalidateAll()
+    } catch (storeError) {
+      actionError =
+        storeError instanceof Error
+          ? storeError.message
+          : 'The API key could not be stored.'
+    } finally {
+      storingKey = false
+    }
   }
 
   /**
@@ -174,14 +214,16 @@
   function cancelConnection(): void {
     loginHandoff = null
     selectedProvider = null
-    step = pickerLogin ? 'idle' : 'picking'
+    apiKey = ''
+    step = pickerLogin && !apiKeyEntry ? 'idle' : 'picking'
   }
 
   async function handleLoginExit(exitCode: number): Promise<void> {
     const providerName = selectedProvider?.name ?? 'Provider'
     loginHandoff = null
     selectedProvider = null
-    step = pickerLogin ? 'idle' : 'picking'
+    apiKey = ''
+    step = pickerLogin && !apiKeyEntry ? 'idle' : 'picking'
     if (exitCode === 0) {
       notice = pickerLogin
         ? 'Sign-in complete. Newly connected providers appear above and their models show up in the model picker.'
@@ -280,6 +322,12 @@
         <p class="min-w-0 flex-1 text-[11px] text-dimmed">
           Antigravity is already connected through the Google account in your system keyring.
         </p>
+      {:else if apiKeyEntry && canSignIn}
+        <p class="min-w-0 flex-1 text-[11px] text-dimmed">
+          Pick any provider from {harness.name}’s catalog and paste its API key — stored in
+          {harness.name}’s own credential file. OAuth-based providers can use Interactive sign-in
+          instead.
+        </p>
       {:else if pickerLogin}
         <p class="min-w-0 flex-1 text-[11px] text-dimmed">
           Runs {harness.name}’s own interactive provider picker in a built-in terminal — choose any
@@ -322,27 +370,56 @@
             <CheckCircle2 size={13} /> Already connected
           </button>
         {:else if canSignIn}
-          <button
-            class="flex h-9 items-center justify-center gap-1.5 rounded-lg bg-primary px-4 text-xs font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
-            type="button"
-            disabled={!pickerLogin && step === 'picking' && !selectedProvider}
-            onclick={() =>
-              pickerLogin
-                ? void startConnect(null)
-                : step === 'idle'
-                  ? openPicker()
-                  : selectedProvider
-                    ? void startConnect(selectedProvider)
-                    : null}
-          >
-            {#if !pickerLogin && step === 'picking' && selectedProvider}
-              <Plug size={13} /> Connect with {selectedProvider.name}
-            {:else if !pickerLogin && step === 'picking'}
-              <Search size={13} /> Select a provider
-            {:else}
-              <KeyRound size={13} /> Connect provider
-            {/if}
-          </button>
+          {#if apiKeyEntry}
+            <button
+              class="flex h-9 items-center gap-1.5 rounded-lg border bg-elevated px-3 text-xs font-medium text-muted transition-colors hover:bg-overlay"
+              type="button"
+              title="Open the {harness.name} terminal for OAuth-style sign-in flows"
+              disabled={storingKey}
+              onclick={() => void startConnect(null)}
+            >
+              Interactive sign-in
+            </button>
+            <button
+              class="flex h-9 items-center justify-center gap-1.5 rounded-lg bg-primary px-4 text-xs font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
+              type="button"
+              title={step === 'picking' && selectedProvider
+                ? `Store the API key for ${selectedProvider.name}`
+                : 'Select a provider first'}
+              disabled={storingKey || (step === 'picking' && !selectedProvider)}
+              onclick={() => (step === 'idle' ? openPicker() : void connectWithKey())}
+            >
+              {#if storingKey}
+                <Loader2 size={13} class="animate-spin" />
+              {:else if step === 'idle'}
+                <Search size={13} /> Select a provider
+              {:else}
+                <KeyRound size={13} /> Connect provider
+              {/if}
+            </button>
+          {:else}
+            <button
+              class="flex h-9 items-center justify-center gap-1.5 rounded-lg bg-primary px-4 text-xs font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
+              type="button"
+              disabled={!pickerLogin && step === 'picking' && !selectedProvider}
+              onclick={() =>
+                pickerLogin
+                  ? void startConnect(null)
+                  : step === 'idle'
+                    ? openPicker()
+                    : selectedProvider
+                      ? void startConnect(selectedProvider)
+                      : null}
+            >
+              {#if !pickerLogin && step === 'picking' && selectedProvider}
+                <Plug size={13} /> Connect with {selectedProvider.name}
+              {:else if !pickerLogin && step === 'picking'}
+                <Search size={13} /> Select a provider
+              {:else}
+                <KeyRound size={13} /> Connect provider
+              {/if}
+            </button>
+          {/if}
         {:else}
           <button
             class="flex h-9 items-center gap-1.5 rounded-lg bg-elevated px-4 text-xs font-medium text-dimmed"
@@ -562,10 +639,47 @@
               {/each}
             </div>
           {/if}
+
+          {#if apiKeyEntry && selectedProvider}
+            <div class="space-y-1.5 rounded-xl border border-primary/30 bg-primary/5 p-3">
+              <label
+                class="block text-[11px] font-medium text-foreground"
+                for="provider-api-key-input"
+              >
+                API key for {selectedProvider.name}
+              </label>
+              <!-- svelte-ignore a11y_autofocus -->
+              <input
+                id="provider-api-key-input"
+                type="password"
+                autocomplete="off"
+                spellcheck="false"
+                class="h-9 w-full rounded-lg border bg-elevated px-3 text-sm outline-none focus:border-primary"
+                placeholder="Paste the API key"
+                bind:value={apiKey}
+                autofocus
+                onkeydown={(event: KeyboardEvent) => {
+                  if (event.key === 'Enter') {
+                    event.preventDefault()
+                    void connectWithKey()
+                  }
+                }}
+              />
+              <p class="text-[10px] text-dimmed">
+                Stored by CodeInOven in {harness.name}’s own credential file — never sent anywhere
+                else.
+              </p>
+            </div>
+          {/if}
         </div>
       {:else}
         <div class="rounded-xl border border-dashed px-3 py-2.5">
-          {#if pickerLogin}
+          {#if apiKeyEntry}
+            <p class="text-[11px] text-muted">
+              Click <strong class="font-medium text-foreground">Select a provider</strong> below to
+              browse {harness.name}’s full provider catalog, then paste an API key to connect.
+            </p>
+          {:else if pickerLogin}
             <p class="text-[11px] text-muted">
               Click <strong class="font-medium text-foreground">Connect provider</strong> below to
               open {harness.name}’s own provider picker in the built-in terminal — choose the

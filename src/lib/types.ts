@@ -693,6 +693,8 @@ export interface ProviderAccountAuthCapabilities {
   multipleAccounts: boolean
   /** The harness presents its own interactive provider picker in the login terminal. */
   pickerLogin: boolean
+  /** CodeInOven can store an API key for a catalog provider in the harness's own auth store. */
+  apiKeyEntry: boolean
 }
 
 export interface ProviderAccountAuthEntry {

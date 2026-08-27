@@ -41,6 +41,15 @@ export function registerProviderAccountIpc(auth = new ProviderAccountOrchestrato
       rawProviderId === undefined ? undefined : validateEntityId(rawProviderId, 'Provider ID', 256)
     )
   )
+  ipcMain.handle(
+    'providerAccounts:setApiKey',
+    (_, rawHarnessId: unknown, rawProviderId: unknown, rawApiKey: unknown) =>
+      auth.setCredential(
+        validateEntityId(rawHarnessId, 'Harness ID', 256),
+        validateEntityId(rawProviderId, 'Provider ID', 256),
+        text(rawApiKey, 'API key', 4_096, true)
+      )
+  )
   ipcMain.handle('providerAccounts:getHidden', (_, rawHarnessId: unknown) =>
     auth.getHiddenProviders(validateEntityId(rawHarnessId, 'Harness ID', 256))
   )

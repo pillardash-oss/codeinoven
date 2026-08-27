@@ -19,6 +19,11 @@ import {
   runHarnessCommand,
   writeHarnessHomeFile
 } from '../drivers/harness-runtime'
+import { PiAuthConfigService } from './pi-auth-config'
+import { listPiCatalogProviders } from './pi-catalog'
+
+/** Shared headless store for harnesses whose credentials live in files (Pi). */
+const fileBackedAuth = new PiAuthConfigService()
 
 const STATUS_TIMEOUT_MS = 10_000
 /** Status commands should emit a small response. Stop broken CLIs before they consume RAM. */
@@ -50,6 +55,16 @@ interface AuthDefinition {
    * picker (so the UI skips its in-app provider list and lets the user choose).
    */
   pickerLogin?: boolean
+  /**
+   * The harness keeps credentials in a file CodeInOven can manage headlessly:
+   * catalog providers can be connected by storing an API key, and connected
+   * ones disconnected by removing the stored credential.
+   */
+  apiKeyEntry?: boolean
+  /** Store an API key for one provider in the harness's own auth store. */
+  setCredential?(providerId: string, apiKey: string): Promise<void>
+  /** Remove one provider's stored credential (used for disconnect). */
+  removeStoredCredential?(providerId: string): Promise<void>
 }
 
 interface CommandResult {
@@ -65,7 +80,8 @@ const READ_AND_HANDOFF_ONLY: HarnessAuthCapabilities = {
   logout: false,
   accountActivation: false,
   multipleAccounts: false,
-  pickerLogin: false
+  pickerLogin: false,
+  apiKeyEntry: false
 }
 
 function stripAnsi(value: string): string {
@@ -497,7 +513,11 @@ const AUTH_DEFINITIONS: AuthDefinition[] = [
     name: 'Pi',
     command: 'pi',
     readStatus: readPiStatus,
-    loginArgs: () => ['--help']
+    loginArgs: () => [],
+    pickerLogin: true,
+    apiKeyEntry: true,
+    setCredential: (providerId, apiKey) => fileBackedAuth.setApiKey(providerId, apiKey),
+    removeStoredCredential: (providerId) => fileBackedAuth.removeCredential(providerId)
   },
   {
     id: 'antigravity',
@@ -532,9 +552,21 @@ export class ProviderAccountOrchestrator {
     if (!definition) return null
     return {
       ...READ_AND_HANDOFF_ONLY,
-      logout: definition.logoutArgs !== undefined,
-      pickerLogin: definition.pickerLogin === true
+      logout: definition.logoutArgs !== undefined || definition.removeStoredCredential !== undefined,
+      pickerLogin: definition.pickerLogin === true,
+      apiKeyEntry: definition.apiKeyEntry === true
     }
+  }
+
+  /** Store an API key for one catalog provider in a file-backed auth store. */
+  async setCredential(harnessId: string, providerId: string, apiKey: string): Promise<void> {
+    const definition = this.requireDefinition(harnessId)
+    if (!definition.setCredential) {
+      throw new Error(
+        `${harnessId} does not support headless credential storage. Use the harness's own sign-in flow.`
+      )
+    }
+    await definition.setCredential(providerId, apiKey)
   }
 
   async getStatus(harnessId: string, projectPath?: string): Promise<HarnessAuthStatus> {
@@ -578,9 +610,14 @@ export class ProviderAccountOrchestrator {
     }
   }
 
-  /** Remove a stored harness credential by running the harness's own logout CLI. */
+  /** Remove a stored harness credential via its CLI logout or auth store. */
   async logout(harnessId: string, providerId?: string): Promise<void> {
     const definition = this.requireDefinition(harnessId)
+    if (definition.removeStoredCredential) {
+      if (!providerId) throw new Error(`${harnessId} requires a provider to disconnect.`)
+      await definition.removeStoredCredential(providerId)
+      return
+    }
     if (!definition.logoutArgs) {
       throw new Error(
         `${harnessId} does not expose a logout command. Remove the credential in the harness itself.`
@@ -626,15 +663,8 @@ export class ProviderAccountOrchestrator {
           authenticated: status.state === 'authenticated'
         }))
       }
-      case 'pi': {
-        const status = await readPiStatus()
-        return status.accounts.map((account) => ({
-          id: account.label,
-          name: account.label,
-          modelCount: 0,
-          authenticated: status.state === 'authenticated'
-        }))
-      }
+      case 'pi':
+        return this.listPiOffered()
       case 'antigravity': {
         const status = await this.getStatus(harnessId)
         if (status.state === 'error') return []
@@ -658,6 +688,52 @@ export class ProviderAccountOrchestrator {
       default:
         return []
     }
+  }
+
+  /**
+   * Pi offers every catalog provider, not just connected ones. Connectivity is
+   * a stored auth.json credential or an API-keyed entry in its native
+   * models.json. Falls back to the configured-accounts view when the catalog
+   * probe cannot run.
+   */
+  private async listPiOffered(): Promise<OfferedProvider[]> {
+    const native = await readPiStatus()
+    const keyedNativeIds = new Set(
+      native.accounts.filter((account) => account.active === true).map((account) => account.label)
+    )
+    let catalog: OfferedProvider[]
+    try {
+      catalog = await listPiCatalogProviders()
+    } catch {
+      return native.accounts.map((account) => ({
+        id: account.label,
+        name: account.label,
+        modelCount: 0,
+        authenticated: keyedNativeIds.has(account.label)
+      }))
+    }
+    const merged = new Map(catalog.map((provider) => [provider.id, provider]))
+    // Native custom providers from models.json are connectable targets too and
+    // may not appear in the bundled catalog.
+    for (const account of native.accounts) {
+      if (!merged.has(account.label)) {
+        merged.set(account.label, {
+          id: account.label,
+          name: account.label,
+          modelCount: 0,
+          authenticated: false
+        })
+      }
+    }
+    for (const provider of merged.values()) {
+      if (
+        !provider.authenticated &&
+        ((await fileBackedAuth.hasCredential(provider.id)) || keyedNativeIds.has(provider.id))
+      ) {
+        provider.authenticated = true
+      }
+    }
+    return [...merged.values()]
   }
 
   /** Provider IDs currently hidden from the harness (via its own config). */
