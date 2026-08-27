@@ -2627,7 +2627,17 @@
       awayFromBottom: userScrolledAway
     })
     scheduleResponseBubbleUpdate()
-    if (scrollEl.scrollTop <= HISTORY_PRELOAD_THRESHOLD) void loadOlderMessages()
+    if (nearHistoryEdge(scrollEl)) void loadOlderMessages()
+  }
+
+  /** Whether the viewport is close enough to the loaded-history boundary that
+   *  an older page should already be streaming in. Scales with the transcript:
+   *  a fixed pixel threshold only triggers once the user has exhausted every
+   *  row in the current batch, so keep up to ~a quarter of the transcript (max
+   *  2400px) buffered ahead of them. */
+  function nearHistoryEdge(el: HTMLDivElement): boolean {
+    const trigger = Math.max(HISTORY_PRELOAD_THRESHOLD, Math.min(el.scrollHeight * 0.25, 2400))
+    return el.scrollTop <= trigger
   }
 
   /** Release the tail-follow lock synchronously when the user starts scrolling up. */
@@ -2647,33 +2657,46 @@
     preservingHistoryViewport = true
     // Loading history is an explicit request to inspect the past. Keep live
     // stream updates from pulling the user back to the newest message while
-    // the page is being fetched and inserted.
+    // pages are being fetched and inserted.
     userScrolledAway = true
-    const previousHeight = scrollEl.scrollHeight
-    const previousTop = scrollEl.scrollTop
     try {
-      const oldest = messages[0]
-      if (!oldest) {
-        olderMessagesAvailable = false
-        return
-      }
-      const before: ThreadMessageCursor = { createdAt: oldest.createdAt, id: oldest.id }
-      const page = await invoke(
-        'thread:loadMessages',
-        thread.projectId,
-        thread.id,
-        before,
-        HISTORY_WINDOW_SIZE
-      )
-      olderMessagesAvailable = page.hasOlder
-      threadMessages.mergePage(thread.projectId, thread.id, page.messages)
-      await tick()
-      if (scrollEl) {
-        scrollEl.scrollTop = previousTop + (scrollEl.scrollHeight - previousHeight)
-        threadScrollPositions.set(thread.id, {
-          top: scrollEl.scrollTop,
-          awayFromBottom: userScrolledAway
-        })
+      // Backfill ahead of the reader: keep fetching bounded batches until
+      // roughly two viewports of transcript sit above the fold, so scrolling
+      // up never lands on the boundary of the currently loaded batch.
+      for (let pageCount = 0; pageCount < 6; pageCount++) {
+        const el = scrollEl
+        if (!el || !olderMessagesAvailable) break
+        const stillNearEdge =
+          nearHistoryEdge(el) || el.scrollHeight < el.clientHeight * 2 + el.scrollTop
+        if (pageCount > 0 && !stillNearEdge) break
+        const oldest = messages[0]
+        if (!oldest) {
+          olderMessagesAvailable = false
+          break
+        }
+        const previousHeight = el.scrollHeight
+        const previousTop = el.scrollTop
+        const before: ThreadMessageCursor = { createdAt: oldest.createdAt, id: oldest.id }
+        const page = await invoke(
+          'thread:loadMessages',
+          thread.projectId,
+          thread.id,
+          before,
+          HISTORY_WINDOW_SIZE
+        )
+        if (!alive) return
+        olderMessagesAvailable = page.hasOlder
+        if (page.messages.length === 0) break
+        threadMessages.mergePage(thread.projectId, thread.id, page.messages)
+        await tick()
+        const after = scrollEl
+        if (after) {
+          after.scrollTop = previousTop + (after.scrollHeight - previousHeight)
+          threadScrollPositions.set(thread.id, {
+            top: after.scrollTop,
+            awayFromBottom: userScrolledAway
+          })
+        }
       }
     } catch {
       // A transient page failure leaves the current window intact; the next
@@ -9103,8 +9126,7 @@
                           isReadingThisTurn &&
                           speechController.activeSegments !== null &&
                           speechController.activeSegments.length > 0 &&
-                          (speechController.playback.state === 'playing' ||
-                            speechController.playback.state === 'paused')}
+                          speechController.readingOverlayActive}
                         <div
                           id={`msg-${msg.id}`}
                           class="min-w-0 w-full text-sm text-foreground"
@@ -9114,11 +9136,9 @@
                         >
                           {#if isReadingActiveLine}
                             {@const segs = speechController.activeSegments!}
-                            {@const activeIdx =
-                              speechController.playback.state === 'playing' ||
-                              speechController.playback.state === 'paused'
-                                ? speechController.playback.segmentIndex
-                                : -1}
+                            {@const activeIdx = speechController.readingOverlayActive
+                              ? speechController.playback.segmentIndex
+                              : -1}
                             <div class="flex flex-col gap-1.5">
                               {#each segs as seg, i (seg.id)}
                                 <div
