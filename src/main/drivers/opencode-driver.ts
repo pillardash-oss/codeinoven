@@ -1031,6 +1031,20 @@ export class OpenCodeDriver implements HarnessDriver {
   private static readonly ISOLATED_SERVER_IDLE_TTL_MS = 5 * 60_000
   private static readonly SHARED_SERVER_IDLE_TTL_MS = 10 * 60_000
   private static readonly IDLE_SWEEP_INTERVAL_MS = 60_000
+  /**
+   * A turn registered in `activeSessions` may legitimately emit no events far
+   * longer than the traffic TTL — a long bash command, a download, a silent
+   * sub-agent. Mirrors ChatEngine.SILENT_WORK_GRACE_MS: while a turn is this
+   * young in silence terms, its server is never reaped, no matter how quiet.
+   */
+  private static readonly SILENT_TURN_GRACE_MS = 30 * 60_000
+  /**
+   * Entries silent past twice that grace are ghosts — a turn that died without
+   * a terminal event (for example during an SSE reconnect gap). The engine's
+   * own watchdog re-checks silent turns at 30 minutes, so by 60 only ghosts
+   * remain; they are dropped so they cannot hold a server open forever.
+   */
+  private static readonly GHOST_SESSION_TTL_MS = 60 * 60_000
   /** Port → timestamp of the most recent HTTP request header or SSE frame. */
   private lastServerTrafficAt = new Map<number, number>()
   /** Session → timestamp of the most recent event or prompt targeting it.
@@ -1086,6 +1100,8 @@ export class OpenCodeDriver implements HarnessDriver {
    * server on the next demand is a fast lazy spawn.
    */
   private sweepIdleHandles(): void {
+    this.pruneGhostSessions()
+
     for (const [sessionId, handle] of [...this.turnServers]) {
       if (
         this.isSessionLive(sessionId) ||
@@ -1124,15 +1140,40 @@ export class OpenCodeDriver implements HarnessDriver {
   }
 
   /**
-   * Whether a session shows recent signs of life. Ghost `activeSessions`
-   * entries (a turn that crashed without a terminal event) must not hold the
-   * shared host open forever, so liveness is judged by the session's own last
-   * event or prompt, falling back to map membership only when no stamp exists.
+   * Drop `activeSessions` entries that have shown no sign of life for double
+   * the silent-turn grace. A real turn either emitted fresh activity or a
+   * terminal event by then (the engine's watchdog resolves stalled turns at
+   * 30 minutes); anything older is a record-keeping ghost, and keeping it
+   * would pin its harness server in memory forever.
+   */
+  private pruneGhostSessions(): void {
+    const now = Date.now()
+    for (const sessionId of [...this.activeSessions.keys()]) {
+      const at = this.lastSessionActivityAt.get(sessionId)
+      if (at !== undefined && now - at >= OpenCodeDriver.GHOST_SESSION_TTL_MS) {
+        Logger.info('Dropping ghost opencode session tracking entry', { sessionId })
+        this.activeSessions.delete(sessionId)
+        this.lastSessionActivityAt.delete(sessionId)
+      }
+    }
+    for (const [sessionId, at] of this.lastSessionActivityAt) {
+      if (!this.activeSessions.has(sessionId) && now - at >= OpenCodeDriver.GHOST_SESSION_TTL_MS) {
+        this.lastSessionActivityAt.delete(sessionId)
+      }
+    }
+  }
+
+  /**
+   * Whether a session may still be mid-turn. Membership in `activeSessions`
+   * (set on prompt send, cleared on terminal events) is the structural
+   * in-flight flag; recency of its last activity decides whether that flag is
+   * fresh enough to protect the session's server from the idle reaper.
    */
   private isSessionLive(sessionId: string): boolean {
+    if (!this.activeSessions.has(sessionId)) return false
     const at = this.lastSessionActivityAt.get(sessionId)
-    if (at === undefined) return this.activeSessions.has(sessionId)
-    return Date.now() - at < OpenCodeDriver.SHARED_SERVER_IDLE_TTL_MS
+    if (at === undefined) return true
+    return Date.now() - at < OpenCodeDriver.SILENT_TURN_GRACE_MS
   }
 
   private noteSessionActivity(sessionId: string | undefined): void {
