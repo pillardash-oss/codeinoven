@@ -3422,6 +3422,8 @@ export interface AuditReport {
   assignmentVersion?: number
   reworkCycle?: number
   version: number
+  /** Auditor verdict stamped at generation time; absent on legacy reports. */
+  outcome?: 'rework_required' | 'passed'
   content: AuditReportContent
   annotations: AuditAnnotation[]
   provenance: SpecProvenance

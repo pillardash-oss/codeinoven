@@ -21,6 +21,7 @@ export interface CreateAuditReportInput {
   assignmentId?: string
   assignmentVersion?: number
   reworkCycle?: number
+  outcome?: AuditReport['outcome']
   content: AuditReportContent
   provenance: Omit<SpecProvenance, 'createdAt' | 'parentVersion'>
 }
@@ -58,6 +59,7 @@ export class AuditEngine {
       assignmentVersion: input.assignmentVersion,
       reworkCycle: input.reworkCycle,
       version: (previous?.version ?? 0) + 1,
+      outcome: input.outcome,
       content: structuredClone(input.content),
       annotations: [],
       provenance: {

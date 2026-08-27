@@ -10147,6 +10147,7 @@
       auditThread={durableAuditThread}
       {auditState}
       reportAvailable={auditReport !== null}
+      achievementReached={thread.status === 'completed' && (thread.loopIteration ?? 0) > 0}
       selectedThreadId={thread.id}
       auditorSettings={auditSettings}
       {providers}

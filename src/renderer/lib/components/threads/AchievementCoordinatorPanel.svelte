@@ -11,6 +11,8 @@
     auditThread?: Thread
     auditState?: Thread['auditState']
     reportAvailable?: boolean
+    /** The achievement loop verified the goal and closed itself; no further work remains. */
+    achievementReached?: boolean
     selectedThreadId: string
     auditorSettings: ThreadSettings
     providers: ProviderCatalog[]
@@ -38,6 +40,7 @@
     auditThread,
     auditState,
     reportAvailable = false,
+    achievementReached = false,
     selectedThreadId,
     auditorSettings,
     providers,
@@ -66,11 +69,19 @@
   })
 
   let auditRunning = $derived(auditState === 'running')
+  let loopComplete = $derived(mode === 'achievement' && achievementReached)
   let coordinatorLabel = $derived(
     mode === 'achievement' ? 'Achievement coordinator' : 'Audit coordinator'
   )
   let modelLocked = $derived(auditRunning)
   let progress = $derived.by(() => {
+    if (loopComplete) {
+      return {
+        label: 'Achievement reached',
+        description: 'The auditor verified the goal. The achievement loop is complete.',
+        tone: 'text-success'
+      }
+    }
     if (auditState === 'report_ready') {
       return {
         label: 'Audit report ready',
@@ -189,7 +200,7 @@
           <p class="mt-1 text-xs leading-relaxed text-muted">{progress.description}</p>
         </div>
       </div>
-      {#if onResume && !coordinatorWorking && !auditRunning && auditState !== 'report_ready'}
+      {#if onResume && !loopComplete && !coordinatorWorking && !auditRunning && auditState !== 'report_ready'}
         <button
           type="button"
           class="mt-3 flex h-8 w-full items-center justify-center gap-2 rounded-lg border border-border bg-elevated px-3 text-xs font-semibold text-foreground hover:bg-overlay"

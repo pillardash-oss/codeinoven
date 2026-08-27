@@ -12711,6 +12711,7 @@ export class ChatEngine {
       assignmentVersion: input.assignment.version,
       reworkCycle: input.assignment.auditCycle?.reworkCycle,
       content: input.content,
+      outcome: this.auditRequiresRework(input.content) ? 'rework_required' : 'passed',
       provenance: {
         source: 'agent',
         actor: 'auditor',
@@ -13266,6 +13267,7 @@ export class ChatEngine {
           specId: spec.id,
           specVersion: spec.version,
           content,
+          outcome: this.auditRequiresRework(content) ? 'rework_required' : 'passed',
           provenance: {
             source: 'agent',
             actor: 'auditor',
@@ -13425,6 +13427,7 @@ export class ChatEngine {
           specId: spec.id,
           specVersion: spec.version,
           content,
+          outcome: this.auditRequiresRework(content) ? 'rework_required' : 'passed',
           provenance: {
             source: 'agent',
             actor: 'auditor',
@@ -13477,8 +13480,8 @@ export class ChatEngine {
     }
   }
 
-  private auditRequiresRework(report: AuditReport): boolean {
-    return report.content.findings.some((finding) =>
+  private auditRequiresRework(content: AuditReportContent): boolean {
+    return content.findings.some((finding) =>
       ACTIONABLE_AUDIT_SEVERITIES.has(finding.severity)
     )
   }
@@ -13535,7 +13538,7 @@ export class ChatEngine {
       const current = await this.threadManager.getThread(projectId, threadId)
       if (current?.settings?.loopMode !== true) return
 
-      if (!this.auditRequiresRework(report)) {
+      if (!this.auditRequiresRework(report.content)) {
         await this.threadManager.setAuditState(projectId, threadId, undefined)
         await this.threadManager.updateSettings(projectId, threadId, {
           ...current.settings,
