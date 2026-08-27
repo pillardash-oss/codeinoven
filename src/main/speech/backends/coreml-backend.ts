@@ -183,12 +183,23 @@ export class CoreMlSpeechBackend implements SpeechBackend {
   private ensureProcess(): ChildProcessWithoutNullStreams {
     if (this.process) return this.process
     const child = spawn(this.executablePath, [], { stdio: ['pipe', 'pipe', 'pipe'] })
+    let stderr = ''
     child.stdout.setEncoding('utf8')
     child.stdout.on('data', (chunk: string) => this.receive(chunk))
+    child.stderr.setEncoding('utf8')
+    child.stderr.on('data', (chunk: string) => {
+      if (stderr.length < 4000) stderr += chunk
+    })
     child.on('error', (error) => this.rejectAll(error))
-    child.on('exit', (code) => {
+    child.on('exit', (code, signal) => {
       this.process = null
-      this.rejectAll(new Error(`Core ML speech worker exited with code ${code ?? 'unknown'}.`))
+      const reason = signal ? `signal ${signal}` : `code ${code ?? 'unknown'}`
+      const detail = stderr.trim()
+      this.rejectAll(
+        new Error(
+          `Core ML speech worker exited with ${reason}.${detail ? ` ${detail}` : ''}`
+        )
+      )
     })
     this.process = child
     return child
