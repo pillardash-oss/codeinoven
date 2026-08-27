@@ -1201,20 +1201,31 @@
   let sidebarVisible = $derived(contextSidebarState.sidebarVisible)
   let terminalDockVisible = $derived(contextSidebarState.terminalDockVisible)
 
-  /** Project the git sidebar panel is kept mounted for. Switching sidebar
-   *  tabs within the same project only toggles this panel's visibility via
-   *  CSS so its commit history/diffs never get torn down and refetched;
-   *  it only remounts when the project scope itself actually changes. */
+  /** Project + scope bucket (worktree/branch) the git sidebar panel is kept
+   *  mounted for. Switching sidebar tabs or threads within the same project
+   *  AND scope only toggles this panel's visibility via CSS so its commit
+   *  history/diffs never get torn down and refetched; it remounts (clearing
+   *  all local state) whenever the project or the git scope actually
+   *  changes, since GitStatusPanel's own state doesn't otherwise reset when
+   *  only its `scopeBucketId` prop changes without a remount. */
   let gitPanelProjectId = $state<string | null>(null)
+  let gitPanelScopeBucketId = $state(DEFAULT_SCOPE_BUCKET_ID)
   $effect(() => {
     const tab = contextSidebarState.sidebarActiveTab
-    if (!tab) return
-    if (tab.kind === 'git') {
-      gitPanelProjectId = tab.projectId
-    } else if ('projectId' in tab && tab.projectId !== gitPanelProjectId) {
+    if (!tab || !('projectId' in tab)) return
+    if (tab.kind !== 'git' && tab.projectId !== gitPanelProjectId) {
       gitPanelProjectId = null
+      return
     }
+    const tabThreadId = 'threadId' in tab ? tab.threadId : undefined
+    gitPanelProjectId = tab.projectId
+    gitPanelScopeBucketId =
+      allThreads.find((thread) => thread.projectId === tab.projectId && thread.id === tabThreadId)
+        ?.scopeBucketId ?? DEFAULT_SCOPE_BUCKET_ID
   })
+  const gitPanelKey = $derived(
+    gitPanelProjectId ? `${gitPanelProjectId}::${gitPanelScopeBucketId}` : null
+  )
 
   /** True when the browser's native WebContentsView is on screen, either from
    *  the right sidebar or the browser's own fullscreen dialog. The native
@@ -3848,8 +3859,8 @@
           {@const activeContextTab = contextSidebarState.sidebarActiveTab}
           {@const gitPanelThreadId =
             activeContextTab && 'threadId' in activeContextTab ? activeContextTab.threadId : ''}
-          {#if gitPanelProjectId}
-            {#key gitPanelProjectId}
+          {#if gitPanelProjectId && gitPanelKey}
+            {#key gitPanelKey}
               {#await import('../git/GitStatusPanel.svelte') then { default: GitStatusPanel }}
                 <div
                   class="h-full"
@@ -3858,10 +3869,7 @@
                   <GitStatusPanel
                     projectId={gitPanelProjectId}
                     threadId={gitPanelThreadId}
-                    scopeBucketId={allThreads.find(
-                      (thread) =>
-                        thread.projectId === gitPanelProjectId && thread.id === gitPanelThreadId
-                    )?.scopeBucketId ?? DEFAULT_SCOPE_BUCKET_ID}
+                    scopeBucketId={gitPanelScopeBucketId}
                   />
                 </div>
               {/await}
