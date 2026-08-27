@@ -1033,6 +1033,11 @@ export class OpenCodeDriver implements HarnessDriver {
   private static readonly IDLE_SWEEP_INTERVAL_MS = 60_000
   /** Port → timestamp of the most recent HTTP request header or SSE frame. */
   private lastServerTrafficAt = new Map<number, number>()
+  /** Session → timestamp of the most recent event or prompt targeting it.
+   *  Ghost `activeSessions` entries (a turn that died without a terminal
+   *  event) must not hold the shared server open forever, so liveness is
+   *  judged per session, not per map membership. */
+  private lastSessionActivityAt = new Map<string, number>()
   private idleSweepTimer: ReturnType<typeof setInterval> | null = null
 
   /** Coalesce concurrent battery hovers across threads into one account request. */
@@ -1083,7 +1088,7 @@ export class OpenCodeDriver implements HarnessDriver {
   private sweepIdleHandles(): void {
     for (const [sessionId, handle] of [...this.turnServers]) {
       if (
-        this.activeSessions.has(sessionId) ||
+        this.isSessionLive(sessionId) ||
         this.idleMs(handle.port) < OpenCodeDriver.TURN_SERVER_IDLE_TTL_MS
       ) {
         continue
@@ -1104,8 +1109,8 @@ export class OpenCodeDriver implements HarnessDriver {
     if (
       shared &&
       !this.starting &&
-      this.activeSessions.size === 0 &&
-      this.idleMs(shared.port) >= OpenCodeDriver.SHARED_SERVER_IDLE_TTL_MS
+      this.idleMs(shared.port) >= OpenCodeDriver.SHARED_SERVER_IDLE_TTL_MS &&
+      ![...this.activeSessions.keys()].some((sessionId) => this.isSessionLive(sessionId))
     ) {
       Logger.info('Reaping idle opencode serve host', { port: shared.port })
       shared.abortController.abort()
@@ -1114,7 +1119,25 @@ export class OpenCodeDriver implements HarnessDriver {
       this.starting = null
       for (const controller of this.projectSubscriptions.values()) controller.abort()
       this.projectSubscriptions.clear()
+      this.activeSessions.clear()
     }
+  }
+
+  /**
+   * Whether a session shows recent signs of life. Ghost `activeSessions`
+   * entries (a turn that crashed without a terminal event) must not hold the
+   * shared host open forever, so liveness is judged by the session's own last
+   * event or prompt, falling back to map membership only when no stamp exists.
+   */
+  private isSessionLive(sessionId: string): boolean {
+    const at = this.lastSessionActivityAt.get(sessionId)
+    if (at === undefined) return this.activeSessions.has(sessionId)
+    return Date.now() - at < OpenCodeDriver.SHARED_SERVER_IDLE_TTL_MS
+  }
+
+  private noteSessionActivity(sessionId: string | undefined): void {
+    if (!sessionId) return
+    this.lastSessionActivityAt.set(sessionId, Date.now())
   }
 
   // ─── HarnessDriver interface ──────────────────────────────────────────────
@@ -1530,6 +1553,7 @@ export class OpenCodeDriver implements HarnessDriver {
     }
 
     this.activeSessions.set(opts.sessionId, projectPath)
+    this.noteSessionActivity(opts.sessionId)
     try {
       const res = await fetch(`${handle.baseUrl}/session/${opts.sessionId}/prompt_async`, {
         method: 'POST',
@@ -1985,6 +2009,7 @@ export class OpenCodeDriver implements HarnessDriver {
       this.idleSweepTimer = null
     }
     this.lastServerTrafficAt.clear()
+    this.lastSessionActivityAt.clear()
     for (const controller of this.projectSubscriptions.values()) controller.abort()
     this.projectSubscriptions.clear()
     this.server?.abortController.abort()
@@ -2466,6 +2491,7 @@ export class OpenCodeDriver implements HarnessDriver {
       }
     }
     for (const event of mapOpenCodeEvent(type, props)) {
+      this.noteSessionActivity('sessionId' in event ? event.sessionId : undefined)
       if (
         event.type === 'session.idle' ||
         (event.type === 'session.status' &&
