@@ -50,6 +50,25 @@ export function registerProviderAccountIpc(auth = new ProviderAccountOrchestrato
         text(rawApiKey, 'API key', 4_096, true)
       )
   )
+  ipcMain.handle(
+    'providerAccounts:beginOAuthLogin',
+    (_, rawHarnessId: unknown, rawProviderId: unknown) =>
+      auth.beginOAuthLogin(
+        validateEntityId(rawHarnessId, 'Harness ID', 256),
+        validateEntityId(rawProviderId, 'Provider ID', 256)
+      )
+  )
+  ipcMain.handle(
+    'providerAccounts:respondOAuthPrompt',
+    (_, rawLoginId: unknown, rawValue: unknown) =>
+      auth.respondOAuthPrompt(
+        validateEntityId(rawLoginId, 'Login ID', 256),
+        text(rawValue, 'Prompt answer', 4_096, true)
+      )
+  )
+  ipcMain.handle('providerAccounts:cancelOAuthLogin', (_, rawLoginId: unknown) =>
+    auth.cancelOAuthLogin(validateEntityId(rawLoginId, 'Login ID', 256))
+  )
   ipcMain.handle('providerAccounts:getHidden', (_, rawHarnessId: unknown) =>
     auth.getHiddenProviders(validateEntityId(rawHarnessId, 'Harness ID', 256))
   )

@@ -21,6 +21,10 @@ import {
 } from '../drivers/harness-runtime'
 import { PiAuthConfigService, type PiAuthFileIo } from './pi-auth-config'
 import { listPiCatalogProviders } from './pi-catalog'
+import { isPiOAuthProvider, runPiOAuthLogin } from './pi-oauth'
+import { BrowserWindow } from 'electron'
+import { sendToRenderer } from '../ipc/renderer-delivery'
+import { forwardRemoteEvent } from '../remote/remote-event-forwarder'
 
 const PI_NATIVE_AUTH_PATH = join(homedir(), '.pi', 'agent', 'auth.json')
 
@@ -576,6 +580,14 @@ const AUTH_DEFINITIONS: AuthDefinition[] = [
  */
 export class ProviderAccountOrchestrator {
   private statusQueueTail: Promise<void> = Promise.resolve()
+  /** Live in-app OAuth sign-ins (Pi), awaiting user prompts / completion. */
+  private oauthSessions = new Map<
+    string,
+    {
+      controller: AbortController
+      pendingPrompt?: (value: string) => void
+    }
+  >()
 
   capabilities(harnessId: string): HarnessAuthCapabilities | null {
     const definition = this.definition(harnessId)
@@ -597,6 +609,78 @@ export class ProviderAccountOrchestrator {
       )
     }
     await definition.setCredential(providerId, apiKey)
+  }
+
+  /**
+   * Start a fully in-app OAuth sign-in for a Pi catalog provider: browser URL
+   * and device codes are broadcast to the UI, prompts (paste-the-code, select)
+   * are answered via {@link respondOAuthPrompt}, and the resulting credential
+   * is stored in Pi's own auth store. Mirrors what Pi's TUI does — without the
+   * TUI.
+   */
+  async beginOAuthLogin(harnessId: string, providerId: string): Promise<string> {
+    this.requireDefinition(harnessId)
+    if (harnessId !== 'pi') {
+      throw new Error(`${harnessId} does not support in-app OAuth sign-in.`)
+    }
+    if (!isPiOAuthProvider(providerId)) {
+      throw new Error(`"${providerId}" connects with an API key, not OAuth.`)
+    }
+    const loginId = `pi-oauth-${crypto.randomUUID()}`
+    const controller = new AbortController()
+    const session: { controller: AbortController; pendingPrompt?: (value: string) => void } = {
+      controller
+    }
+    this.oauthSessions.set(loginId, session)
+    void runPiOAuthLogin(providerId, {
+      signal: controller.signal,
+      onEvent: (event) => this.broadcastOAuthEvent(loginId, { kind: 'event', event }),
+      prompt: (prompt) =>
+        new Promise<string>((resolve, reject) => {
+          const promptId = `${loginId}-p-${crypto.randomUUID()}`
+          session.pendingPrompt = resolve
+          this.broadcastOAuthEvent(loginId, { kind: 'prompt', promptId, prompt })
+          controller.signal.addEventListener(
+            'abort',
+            () => reject(new Error('Sign-in was cancelled.')),
+            { once: true }
+          )
+        })
+    })
+      .then(async (credential) => {
+        await fileBackedAuth.setOAuthCredential(providerId, credential)
+        this.broadcastOAuthEvent(loginId, { kind: 'complete', providerId })
+      })
+      .catch((error: unknown) => {
+        this.broadcastOAuthEvent(loginId, {
+          kind: 'failed',
+          error: error instanceof Error ? error.message : String(error)
+        })
+      })
+      .finally(() => this.oauthSessions.delete(loginId))
+    return loginId
+  }
+
+  /** Answer the outstanding prompt of a running OAuth sign-in. */
+  respondOAuthPrompt(loginId: string, value: string): void {
+    const session = this.oauthSessions.get(loginId)
+    const pending = session?.pendingPrompt
+    if (!session || !pending) throw new Error('No sign-in prompt is waiting for an answer.')
+    session.pendingPrompt = undefined
+    pending(value)
+  }
+
+  /** Cancel a running OAuth sign-in. */
+  cancelOAuthLogin(loginId: string): void {
+    this.oauthSessions.get(loginId)?.controller.abort()
+    this.oauthSessions.delete(loginId)
+  }
+
+  private broadcastOAuthEvent(loginId: string, payload: Record<string, unknown>): void {
+    for (const win of BrowserWindow.getAllWindows()) {
+      sendToRenderer(win.webContents, 'providerAccounts:oauthEvent', { loginId, ...payload })
+    }
+    forwardRemoteEvent('providerAccounts:oauthEvent', { loginId, ...payload })
   }
 
   async getStatus(harnessId: string, projectPath?: string): Promise<HarnessAuthStatus> {

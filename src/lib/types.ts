@@ -697,6 +697,21 @@ export interface ProviderAccountAuthCapabilities {
   apiKeyEntry: boolean
 }
 
+/** Progress surfaced while an in-app OAuth sign-in runs (Pi). */
+export type PiOAuthUiEvent =
+  | { type: 'auth_url'; url: string; instructions?: string }
+  | { type: 'device_code'; userCode: string; verificationUri: string }
+  | { type: 'progress'; message: string }
+  | { type: 'info'; message: string }
+
+/** A question an in-app OAuth sign-in needs answered before continuing. */
+export interface PiOAuthUiPrompt {
+  type: 'text' | 'secret' | 'select' | 'manual_code'
+  message: string
+  placeholder?: string
+  options?: Array<{ id: string; label: string }>
+}
+
 export interface ProviderAccountAuthEntry {
   id: string
   label: string

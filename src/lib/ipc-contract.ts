@@ -1883,6 +1883,12 @@ export interface IpcInvokeContract {
     [harnessId: string, providerId: string, apiKey: string],
     void
   >
+  'providerAccounts:beginOAuthLogin': Contract<
+    [harnessId: string, providerId: string],
+    string
+  >
+  'providerAccounts:respondOAuthPrompt': Contract<[loginId: string, value: string], void>
+  'providerAccounts:cancelOAuthLogin': Contract<[loginId: string], void>
   'providerAccounts:getHidden': Contract<[harnessId: string], string[]>
   'providerAccounts:setHidden': Contract<
     [harnessId: string, providerId: string, hidden: boolean],
@@ -2530,6 +2536,19 @@ export interface IpcEventContract {
    */
   'remote:stepUpPending': [approvals: RemotePendingStepUpApproval[]]
   'speech:progress': [progress: import('./speech/types').SpeechProgressEvent]
+  /** Live progress/prompt/completion updates for an in-app Pi OAuth sign-in. */
+  'providerAccounts:oauthEvent': [
+    payload:
+      | { loginId: string; kind: 'event'; event: import('../lib/types').PiOAuthUiEvent }
+      | {
+          loginId: string
+          kind: 'prompt'
+          promptId: string
+          prompt: import('../lib/types').PiOAuthUiPrompt
+        }
+      | { loginId: string; kind: 'complete'; providerId: string }
+      | { loginId: string; kind: 'failed'; error: string }
+  ]
 }
 
 export type InvokeChannel = keyof IpcInvokeContract

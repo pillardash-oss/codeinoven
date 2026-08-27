@@ -73,6 +73,17 @@ export class PiAuthConfigService {
     await this.writeAll(data)
   }
 
+  /**
+   * Store a full OAuth credential (refresh/access/expiry plus any extra token
+   * fields) — the same shape Pi's own TUI sign-in persists.
+   */
+  async setOAuthCredential(providerId: string, credential: Record<string, unknown>): Promise<void> {
+    assertProviderId(providerId)
+    const data = await this.readAll()
+    data[providerId] = { ...credential, type: 'oauth' }
+    await this.writeAll(data)
+  }
+
   /** Remove a provider's stored credential entirely (logout). */
   async removeCredential(providerId: string): Promise<void> {
     assertProviderId(providerId)

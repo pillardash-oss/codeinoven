@@ -417,6 +417,9 @@ const INVOKE_CHANNELS = [
   'providerAccounts:listOffered',
   'providerAccounts:logout',
   'providerAccounts:setApiKey',
+  'providerAccounts:beginOAuthLogin',
+  'providerAccounts:respondOAuthPrompt',
+  'providerAccounts:cancelOAuthLogin',
   'providerAccounts:getHidden',
   'providerAccounts:setHidden',
   'utilities:list',
@@ -602,7 +605,8 @@ const EVENT_CHANNELS = [
   'switcher:closed',
   'remote:status',
   'remote:stepUpPending',
-  'speech:progress'
+  'speech:progress',
+  'providerAccounts:oauthEvent'
 ] as const
 
 export type SendChannel = (typeof SEND_CHANNELS)[number]
