@@ -1210,18 +1210,26 @@
    *  only its `scopeBucketId` prop changes without a remount. */
   let gitPanelProjectId = $state<string | null>(null)
   let gitPanelScopeBucketId = $state(DEFAULT_SCOPE_BUCKET_ID)
+  // Only reconcile while the git tab itself is active. Reacting to non-git
+  // tabs here previously flipped `gitPanelScopeBucketId` to its default
+  // whenever their thread lookup failed, which changed `gitPanelKey` and
+  // remounted the kept-alive panel on every sidebar toggle.
   $effect(() => {
     const tab = contextSidebarState.sidebarActiveTab
     if (!tab || !('projectId' in tab)) return
-    if (tab.kind !== 'git' && tab.projectId !== gitPanelProjectId) {
-      gitPanelProjectId = null
+    if (tab.kind !== 'git') {
+      if (tab.projectId !== gitPanelProjectId) gitPanelProjectId = null
       return
     }
     const tabThreadId = 'threadId' in tab ? tab.threadId : undefined
-    gitPanelProjectId = tab.projectId
-    gitPanelScopeBucketId =
-      allThreads.find((thread) => thread.projectId === tab.projectId && thread.id === tabThreadId)
-        ?.scopeBucketId ?? DEFAULT_SCOPE_BUCKET_ID
+    const thread = allThreads.find(
+      (candidate) => candidate.projectId === tab.projectId && candidate.id === tabThreadId
+    )
+    // Thread info can lag the tab switch; keep the previous scope until the
+    // authoritative one is known instead of flashing a different key.
+    if (!thread || !thread.projectId) return
+    gitPanelProjectId = thread.projectId
+    gitPanelScopeBucketId = thread.scopeBucketId
   })
   const gitPanelKey = $derived(
     gitPanelProjectId ? `${gitPanelProjectId}::${gitPanelScopeBucketId}` : null
