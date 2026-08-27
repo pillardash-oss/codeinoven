@@ -42,15 +42,6 @@
       "artifactIds": [
         "qwen3-cleanup-mlx-0-6b-4bit"
       ]
-    },
-    {
-      "id": "sherpa-punctuation",
-      "capability": "cleanup",
-      "label": "Sherpa punctuation",
-      "description": "Portable English and Chinese punctuation restoration for sherpa-onnx.",
-      "artifactIds": [
-        "sherpa-punctuation-zh-en"
-      ]
     }
   ],
   "artifacts": [
@@ -929,60 +920,6 @@
         "benchmark": {
           "status": "pending",
           "notes": "Must pass bounded structured cleanup quality checks without broad rewriting."
-        }
-      }
-    },
-    {
-      "id": "sherpa-punctuation-zh-en",
-      "familyId": "sherpa-punctuation",
-      "capability": "cleanup",
-      "runtime": "sherpa-onnx",
-      "label": "Sherpa punctuation · English and Chinese",
-      "description": "Portable punctuation restoration candidate for English and Chinese transcripts.",
-      "tier": "balanced",
-      "version": "2024-04-12",
-      "repositoryRevision": "432aeba669265e7aeb06b9359753419683b38597",
-      "platforms": [
-        "darwin",
-        "win32",
-        "linux"
-      ],
-      "architectures": [
-        "arm64",
-        "x64"
-      ],
-      "languages": [
-        "en",
-        "zh"
-      ],
-      "voices": [],
-      "files": [
-        {
-          "path": "model.onnx",
-          "sourceUrl": "https://huggingface.co/csukuangfj/sherpa-onnx-punct-ct-transformer-zh-en-vocab272727-2024-04-12/resolve/432aeba669265e7aeb06b9359753419683b38597/model.onnx",
-          "byteSize": 294372519,
-          "sha256": "e93593a6dbd69a07f8734ef269dbe861a379755f8d1c8354719432116f2c44bd"
-        },
-        {
-          "path": "tokens.json",
-          "sourceUrl": "https://huggingface.co/csukuangfj/sherpa-onnx-punct-ct-transformer-zh-en-vocab272727-2024-04-12/resolve/432aeba669265e7aeb06b9359753419683b38597/tokens.json",
-          "byteSize": 4207480,
-          "sha256": "c960ab87bccea4aa15cf49a59f71973c2c330b46668048cd8da253749ec71ee3"
-        }
-      ],
-      "byteSize": 298579999,
-      "license": "Review pending",
-      "attribution": "Punctuation model distributed by the k2-fsa community.",
-      "sourcePageUrl": "https://huggingface.co/csukuangfj/sherpa-onnx-punct-ct-transformer-zh-en-vocab272727-2024-04-12",
-      "minimumMemoryBytes": 1073741824,
-      "qualification": {
-        "status": "candidate",
-        "licenseReviewed": false,
-        "compatibilityReviewed": false,
-        "checksumReviewed": true,
-        "benchmark": {
-          "status": "pending",
-          "notes": "License, formatting quality, memory, and latency review are still required."
         }
       }
     }

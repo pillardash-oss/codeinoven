@@ -58,7 +58,7 @@
   }
 </script>
 
-<div class="temporary-chat-view flex h-full min-h-0 w-full flex-col overflow-hidden">
+<div class="temporary-chat-view bg-app flex h-full min-h-0 w-full flex-col overflow-hidden">
   {#key tabId}
     <ThreadView
       thread={syntheticThreadFor(tab)}
