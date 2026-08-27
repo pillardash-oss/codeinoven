@@ -13,6 +13,7 @@
   import { SvelteSet } from 'svelte/reactivity'
   import { blockHtml, lexMarkdown } from '../markdown/markdown'
   import RichMarkdownEditor from '../shared/RichMarkdownEditor.svelte'
+  import SpeechPlaybackButton from '../speech/SpeechPlaybackButton.svelte'
   import VoiceInputButton from '../speech/VoiceInputButton.svelte'
   import type { SpeechScope } from '../../../../lib/speech/types'
   import type { AgentQuestion, PendingAgentQuestionRequest } from '$shared/types'
@@ -78,6 +79,31 @@
     timerPaused || request.expiresAt === undefined ? null : Math.max(0, request.expiresAt - now)
   )
   let remainingLabel = $derived(remainingMs === null ? 'Paused' : formatRemaining(remainingMs))
+
+  // Plain-markdown rendition of the question and its options that the agent
+  // speaks aloud via the speaker button; keyed to the visible question.
+  const speechMessageId = $derived(`agent-question-${request.requestId}-${currentIndex}`)
+  let spokenQuestionText = $derived.by(() => {
+    const parts: string[] = []
+    if (question.header) parts.push(question.header)
+    parts.push(question.prompt)
+    if (question.description) parts.push(question.description)
+    if (question.richOptions && question.richOptions.length > 0) {
+      parts.push(
+        `Options:\n${question.richOptions
+          .map((option) => {
+            const suffix = option.recommended ? ' (recommended)' : ''
+            return option.description
+              ? `- ${option.label}${suffix}: ${option.description}`
+              : `- ${option.label}${suffix}`
+          })
+          .join('\n')}`
+      )
+    } else if (question.options && question.options.length > 0) {
+      parts.push(`Options:\n${question.options.map((option) => `- ${option}`).join('\n')}`)
+    }
+    return parts.join('\n\n')
+  })
 
   function customAnswerSpeechTarget() {
     return customAnswerEditor?.speechEditorTarget(customAnswerSpeechTargetId) ?? null
@@ -410,12 +436,14 @@
             onValueChange={handleCustomInput}
             onSubmit={() => void handleSubmit()}
           />
-          <VoiceInputButton
-            targetId={customAnswerSpeechTargetId}
-            getTarget={customAnswerSpeechTarget}
-            {scope}
-            disabled={working}
-          />
+          <div class="flex shrink-0 items-center">
+            <VoiceInputButton
+              targetId={customAnswerSpeechTargetId}
+              getTarget={customAnswerSpeechTarget}
+              {scope}
+              disabled={working}
+            />
+          </div>
           {#if currentCustomAnswer.trim() && currentIndex < total - 1}
             <button
               type="button"
@@ -439,46 +467,54 @@
   </div>
 
   <div class="flex items-center justify-between gap-3 border-t px-4 py-2.5">
-    {#if onExplain || onQuickChat}
-      <div class="flex items-center gap-1">
-        {#if onExplain}
-          <button
-            type="button"
-            class="flex h-7 items-center gap-1 rounded-lg border border-border px-2 text-[11px] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
-            disabled={working}
-            onclick={() => openQuestionChat(onExplain)}
-            title="Explain this question to help you decide"
-            aria-label="Explain this question in a temporary read-only chat"
-          >
-            <HelpCircle size={13} />
-            Explain
-          </button>
-        {/if}
-        {#if onQuickChat}
-          <button
-            type="button"
-            class="flex h-7 items-center gap-1 rounded-lg border border-border px-2 text-[11px] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
-            disabled={working}
-            onclick={() => openQuestionChat(onQuickChat)}
-            title="Start a temporary read-only quick chat about this question"
-            aria-label="Start a temporary read-only quick chat about this question"
-          >
-            <MessageSquareDashed size={13} />
-            Quick chat
-          </button>
-        {/if}
-      </div>
-    {:else}
-      <p class="text-[11px] text-muted">
-        {#if !currentAnswers.length}
-          Answer this question to continue
-        {:else if !allAnswered}
-          {answers.filter((answer) => answer.length > 0).length} of {total} answered
-        {:else}
-          Ready to send
-        {/if}
-      </p>
-    {/if}
+    <div class="flex min-w-0 items-center gap-2">
+      {#if onExplain || onQuickChat}
+        <div class="flex shrink-0 items-center gap-1">
+          {#if onExplain}
+            <button
+              type="button"
+              class="flex h-7 items-center gap-1 rounded-lg border border-border px-2 text-[11px] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
+              disabled={working}
+              onclick={() => openQuestionChat(onExplain)}
+              title="Explain this question to help you decide"
+              aria-label="Explain this question in a temporary read-only chat"
+            >
+              <HelpCircle size={13} />
+              Explain
+            </button>
+          {/if}
+          {#if onQuickChat}
+            <button
+              type="button"
+              class="flex h-7 items-center gap-1 rounded-lg border border-border px-2 text-[11px] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
+              disabled={working}
+              onclick={() => openQuestionChat(onQuickChat)}
+              title="Start a temporary read-only quick chat about this question"
+              aria-label="Start a temporary read-only quick chat about this question"
+            >
+              <MessageSquareDashed size={13} />
+              Quick chat
+            </button>
+          {/if}
+        </div>
+      {:else}
+        <p class="min-w-0 text-[11px] text-muted">
+          {#if !currentAnswers.length}
+            Answer this question to continue
+          {:else if !allAnswered}
+            {answers.filter((answer) => answer.length > 0).length} of {total} answered
+          {:else}
+            Ready to send
+          {/if}
+        </p>
+      {/if}
+      <!-- Self-hides when no TTS artifact is installed -->
+      <SpeechPlaybackButton
+        messageId={speechMessageId}
+        markdown={spokenQuestionText}
+        disabled={working}
+      />
+    </div>
     <button
       class="flex min-h-8 items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-on-primary transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
       disabled={!allAnswered || working}
