@@ -1,5 +1,4 @@
 import { createHash, randomUUID } from 'node:crypto'
-import { createWriteStream } from 'node:fs'
 import { access, mkdir, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import type {
@@ -12,11 +11,13 @@ import type {
   SpeechError,
   SpeechHistoryPage,
   SpeechInstalledArtifact,
+  SpeechLesson,
   SpeechModelArtifact,
   SpeechModelCatalog,
   SpeechProgressEvent,
   SpeechRecordingAttempt,
   SpeechPreparedPlayback,
+  SpeechRefinementFlags,
   SpeechSynthesizedSegment,
   SpeechConfirmation,
   SpeechDestructiveAction,
@@ -24,8 +25,7 @@ import type {
   SpeechRuntime,
   SpeechRuntimeAvailability,
   SpeechScope,
-  SpeechCorrectionObservation,
-  SpeechCorrectionRule,
+  SpeechLearningObservation,
   SpeechTranscriptionResult
 } from '../../lib/speech/types'
 import {
@@ -36,6 +36,8 @@ import {
 } from '../../lib/speech/types'
 import type { SpeechUnloadOption } from '../../lib/speech/types'
 import { parseSpeechModelCatalog } from '../../lib/speech/model-catalog'
+import { collapseRepetitiveArtifacts } from '../../lib/speech/transcript-sanitizer'
+import { DEFAULT_REFINEMENT_FLAGS } from '../../lib/speech/types'
 import {
   buildParsedIdentityForValidation,
   CAPABILITY_RUNTIMES,
@@ -49,9 +51,15 @@ import type { SpeechBackend } from './speech-backend'
 import { SherpaSpeechBackend } from './backends/sherpa-backend'
 import { MlxSpeechBackend } from './backends/mlx-backend'
 import { CoreMlSpeechBackend } from './backends/coreml-backend'
+import {
+  LlamaServerSpeechBackend,
+  setLlamaServerBinary
+} from './backends/llama-backend'
+import { LlamaRuntimeService } from './llama-runtime-service'
 import { Logger } from '../system/logger'
 import { getConfigRoot } from '../../lib/utils'
 import { SpeechCleanupService } from './speech-cleanup-service'
+import { downloadFileResumable } from './resumable-download'
 import { SpeechLearningService } from './speech-learning-service'
 import { normalizeSpeechMarkdown } from '../../lib/speech/tts-normalizer'
 import { TtsPlaybackService } from './tts-playback-service'
@@ -78,7 +86,7 @@ const UNLOAD_MS: Record<Exclude<SpeechUnloadOption, 'keep'>, number> = {
 
 const CAPABILITY_RUNTIME_MAP: Record<SpeechCapability, SpeechRuntime[]> = {
   asr: ['sherpa-onnx', 'mlx', 'coreml'],
-  cleanup: ['sherpa-onnx', 'mlx'],
+  cleanup: ['gguf'],
   tts: ['sherpa-onnx', 'mlx']
 }
 
@@ -87,11 +95,20 @@ function unloadMs(option: SpeechUnloadOption): number | null {
   return UNLOAD_MS[option]
 }
 
+/** Cleanup prompt protocol required by the artifact's model family. */
+function cleanupProfileFor(artifact: SpeechModelArtifact): 'instruct' | 'normalizer' {
+  return artifact.familyId === 's1-cleanup' ? 'normalizer' : 'instruct'
+}
+
 export interface SpeechRemoteCleanupInput {
   transcript: string
   scope: SpeechScope
   selection: 'fixed' | 'conversation'
   modelId?: string
+  /** Lessons the remote cleanup prompt should apply as style constraints. */
+  lessons?: SpeechLesson[]
+  /** Cleanup behavior toggles mirrored into the remote system prompt. */
+  flags?: SpeechRefinementFlags
 }
 
 export interface SpeechRemoteCleanupOutput {
@@ -102,6 +119,21 @@ export interface SpeechRemoteCleanupOutput {
 export type SpeechRemoteCleanupExecutor = (
   input: SpeechRemoteCleanupInput
 ) => Promise<SpeechRemoteCleanupOutput>
+
+export interface SpeechRemoteLearningInput {
+  insertedText: string
+  sentText: string
+  scope: SpeechScope
+}
+
+/**
+ * Lesson extraction through the active conversation provider's cheapest model
+ * (the title-generation route). Returns null when the route is unavailable so
+ * the caller can fall back to the local instruct cleanup model.
+ */
+export type SpeechRemoteLearningExecutor = (
+  input: SpeechRemoteLearningInput
+) => Promise<import('../../lib/speech/types').SpeechExtractedLesson[] | null>
 
 export interface SpeechAudioTranscribeInput {
   audio: Uint8Array<ArrayBuffer>
@@ -120,7 +152,6 @@ export type SpeechAudioTranscribeExecutor = (
 
 type SpeechProgressListener = (event: SpeechProgressEvent) => void
 
-const DOWNLOAD_CHUNK_BYTES = 256 * 1024
 
 /** Main-process coordinator. Native inference is delegated to bounded workers. */
 export class SpeechService {
@@ -132,9 +163,8 @@ export class SpeechService {
   private catalog: SpeechModelCatalog | null = null
   private installed: InstalledArtifactIndex = { version: 1, artifacts: [] }
   private readonly cleanup = new SpeechCleanupService()
-  private readonly learning = new SpeechLearningService(
-    join(getConfigRoot(), 'speech', 'corrections.json')
-  )
+  private readonly learning: SpeechLearningService
+  private readonly llamaRuntime = new LlamaRuntimeService()
   private readonly playback = new TtsPlaybackService()
   private readonly nativeCapture: NativeSpeechCapture
   private readonly confirmations = new Map<string, SpeechConfirmation>()
@@ -150,24 +180,50 @@ export class SpeechService {
     private readonly paths: SpeechServicePaths,
     storage?: SpeechStorage,
     private readonly remoteCleanup?: SpeechRemoteCleanupExecutor,
-    private readonly transcribeAudio?: SpeechAudioTranscribeExecutor
+    private readonly transcribeAudio?: SpeechAudioTranscribeExecutor,
+    private readonly remoteLearning?: SpeechRemoteLearningExecutor
   ) {
     this.nativeCapture = new NativeSpeechCapture(paths.nativeCaptureWorkerPath)
     this.storage = storage ?? new SpeechStorage()
+    this.learning = new SpeechLearningService(
+      join(getConfigRoot(), 'speech', 'lessons.json'),
+      (observation) => this.learnLessonsFromCorrection(observation)
+    )
     this.backends = new Map<SpeechRuntime, SpeechBackend>([
       ['sherpa-onnx', new SherpaSpeechBackend()],
       ['mlx', new MlxSpeechBackend(paths.mlxWorkerPath)],
-      ['coreml', new CoreMlSpeechBackend(paths.coremlWorkerPath)]
+      ['coreml', new CoreMlSpeechBackend(paths.coremlWorkerPath)],
+      ['gguf', new LlamaServerSpeechBackend()]
     ])
   }
 
   async initialize(): Promise<void> {
     await this.storage.initialize()
     await this.learning.initialize()
+    await this.refreshLlamaRuntime()
     this.catalog = parseSpeechModelCatalog(
       JSON.parse(await readFile(this.paths.catalogPath, 'utf8'))
     )
     await this.loadInstalledIndex()
+  }
+
+  /** Resolve the discover-or-download llama.cpp runtime for cleanup inference. */
+  async refreshLlamaRuntime(): Promise<void> {
+    const status = await this.llamaRuntime.status(true)
+    if (status.selectedPath) {
+      setLlamaServerBinary(status.selectedPath)
+    } else {
+      setLlamaServerBinary(null)
+    }
+  }
+
+  async downloadLlamaRuntime(signal?: AbortSignal): Promise<void> {
+    await this.llamaRuntime.download(signal)
+    await this.refreshLlamaRuntime()
+  }
+
+  llamaRuntimeStatus(): ReturnType<LlamaRuntimeService['status']> {
+    return this.llamaRuntime.status()
   }
 
   onProgress(listener: SpeechProgressListener): () => void {
@@ -387,10 +443,10 @@ export class SpeechService {
       let finalTranscript = rawTranscript
       let cleanupProvenance: SpeechCleanupProvenance = {
         mode: 'none' as const,
-        appliedRuleIds: [] as string[],
+        appliedLessonIds: [],
         failed: false
       }
-      if (cleanupMode.kind === 'local') {
+      if (cleanupMode.kind !== 'disabled') {
         const cleaned = await this.runCleanup(
           rawTranscript,
           cleanupMode,
@@ -398,32 +454,6 @@ export class SpeechService {
         )
         finalTranscript = cleaned.text
         cleanupProvenance = cleaned.provenance
-      } else if (cleanupMode.kind === 'remote') {
-        try {
-          if (!this.remoteCleanup) throw new Error('Remote cleanup is unavailable.')
-          const remote = await this.remoteCleanup({
-            transcript: rawTranscript,
-            scope: this.requireAttemptScope(attemptId),
-            selection: cleanupMode.selection,
-            ...(cleanupMode.modelId ? { modelId: cleanupMode.modelId } : {})
-          })
-          const cleaned = this.cleanup.applyRules(
-            remote.text,
-            this.learning.enabled(this.requireAttemptScope(attemptId))
-          )
-          finalTranscript = cleaned.text
-          cleanupProvenance = {
-            mode: 'remote',
-            modelId: remote.modelId,
-            appliedRuleIds: cleaned.provenance.appliedRuleIds,
-            failed: false
-          }
-        } catch (cause) {
-          cleanupProvenance = {
-            ...this.cleanup.fallback(rawTranscript, cause).provenance,
-            mode: 'remote'
-          }
-        }
       }
       await this.storage.updateAttempt(attemptId, (attempt) => {
         attempt.stage = 'completed'
@@ -592,11 +622,6 @@ export class SpeechService {
       (item) => item.artifactId !== artifactId
     )
     await this.persistInstalledIndex()
-  }
-
-  async deleteCorrectionRuleConfirmed(ruleId: string, token: string): Promise<void> {
-    this.consumeConfirmation(token, 'rule', ruleId)
-    await this.learning.delete(ruleId)
   }
 
   /**
@@ -1152,22 +1177,75 @@ export class SpeechService {
     }
   }
 
-  correctionRules(scope?: SpeechScope): SpeechCorrectionRule[] {
+  lessons(scope?: SpeechScope): SpeechLesson[] {
     return this.learning.list(scope)
   }
 
-  observeCorrection(
-    observation: SpeechCorrectionObservation
-  ): Promise<SpeechCorrectionRule | null> {
+  observeCorrection(observation: SpeechLearningObservation): Promise<SpeechLesson[]> {
     return this.learning.observe(observation)
   }
 
-  setCorrectionRuleEnabled(ruleId: string, enabled: boolean): Promise<SpeechCorrectionRule> {
-    return this.learning.setEnabled(ruleId, enabled)
+  setLessonEnabled(lessonId: string, enabled: boolean): Promise<SpeechLesson> {
+    return this.learning.setEnabled(lessonId, enabled)
   }
 
-  deleteCorrectionRule(ruleId: string, token: string): Promise<void> {
-    return this.deleteCorrectionRuleConfirmed(ruleId, token)
+  async deleteLesson(lessonId: string, token: string): Promise<void> {
+    await this.consumeConfirmation(token, 'lesson', lessonId)
+    return this.learning.delete(lessonId)
+  }
+
+  /**
+   * Ask what the user's edit teaches us. The remote cheap-model learning agent
+   * (the title-generation route) runs first; the local instruct cleanup model is
+   * the offline fallback. Called through the job queue so learning never
+   * overlaps local cleanup inference.
+   */
+  private async learnLessonsFromCorrection(
+    observation: SpeechLearningObservation
+  ): Promise<import('../../lib/speech/types').SpeechExtractedLesson[]> {
+    if (this.remoteLearning) {
+      try {
+        const remote = await this.remoteLearning({
+          insertedText: observation.insertedText,
+          sentText: observation.sentText,
+          scope: observation.scope
+        })
+        if (remote !== null) return remote
+      } catch {
+        // Route unavailable — fall through to the local instruct model.
+      }
+    }
+    return this.learnLessonsLocally(
+      observation.insertedText,
+      observation.sentText,
+      observation.scope.kind === 'project' ? 'project' : 'chat'
+    )
+  }
+
+  /** Local fallback: the installed Qwen3 instruct cleanup model extracts lessons. */
+  private async learnLessonsLocally(
+    insertedText: string,
+    sentText: string,
+    mode: 'project' | 'chat'
+  ): Promise<import('../../lib/speech/types').SpeechExtractedLesson[]> {
+    const resolved = this.selectInstalledCleanupArtifact()
+    if (!resolved) return []
+    // Only instruct models can follow the lesson-extraction prompt. Specialized
+    // normalizers like S1 mini are never asked to learn.
+    if (cleanupProfileFor(resolved.artifact) !== 'instruct') return []
+    if (resolved.artifact.familyId !== 'qwen-cleanup') return []
+    const backend = this.requireBackend(resolved.runtime)
+    if (!(backend instanceof LlamaServerSpeechBackend)) return []
+    const extracted = await this.queue
+      .enqueue({
+        capability: 'cleanup',
+        runtime: resolved.runtime,
+        run: (signal) =>
+          backend.learnFromCorrection(insertedText, sentText, mode, signal).then((value) => value ?? [])
+      })
+      .result
+      .catch(() => [])
+    return extracted
   }
 
   preparePlayback(
@@ -1203,6 +1281,13 @@ export class SpeechService {
     const prepared = this.playback.segment(sessionId, segmentIndex)
     // Cancel any pending idle evict while synthesis is in-flight
     this.clearEvict('tts')
+    Logger.dev('Speech synthesis started', {
+      sessionId,
+      segmentIndex,
+      runtime,
+      artifactId,
+      characters: prepared.text.length
+    })
     const queued = this.queue.enqueue({
       capability: 'tts',
       runtime,
@@ -1217,6 +1302,12 @@ export class SpeechService {
           signal
         )
     })
+    // A misresolved local model path (e.g. an imported MLX model directory
+    // that doesn't satisfy the native loader's local-model check) can make the
+    // worker silently fall back to a network model-repo lookup with no
+    // timeout of its own, hanging the request forever. Bound it here so the
+    // UI always settles instead of spinning indefinitely.
+    const timeout = setTimeout(() => this.queue.cancel(queued.id), 45_000)
     try {
       await queued.result
       this.playback.assertActive(sessionId)
@@ -1229,7 +1320,17 @@ export class SpeechService {
       }
     } catch (cause) {
       await rm(outputPath, { force: true })
+      Logger.error('Speech synthesis failed', {
+        sessionId,
+        segmentIndex,
+        runtime,
+        artifactId,
+        jobId: queued.id,
+        error: cause instanceof Error ? cause.message : String(cause)
+      })
       throw cause
+    } finally {
+      clearTimeout(timeout)
     }
   }
 
@@ -1457,7 +1558,7 @@ export class SpeechService {
     await this.storage.dispose()
   }
 
-  private async downloadFile(
+  private downloadFile(
     url: string,
     destination: string,
     expectedBytes: number,
@@ -1465,45 +1566,7 @@ export class SpeechService {
     signal: AbortSignal,
     onProgress?: (receivedSoFar: number) => void
   ): Promise<number> {
-    const response = await fetch(url, { signal, redirect: 'follow' })
-    if (!response.ok || !response.body)
-      throw new Error(`Download failed with HTTP ${response.status}.`)
-    const stream = createWriteStream(destination, { flags: 'wx', mode: 0o600 })
-    const streamError = new Promise<never>((_resolve, reject) => stream.once('error', reject))
-    const hash = createHash('sha256')
-    let received = 0
-    try {
-      const reader = response.body.getReader()
-      while (true) {
-        const { done, value } = await reader.read()
-        if (done) break
-        for (let offset = 0; offset < value.byteLength; offset += DOWNLOAD_CHUNK_BYTES) {
-          const chunk = value.subarray(offset, offset + DOWNLOAD_CHUNK_BYTES)
-          received += chunk.byteLength
-          if (received > expectedBytes) {
-            throw new Error('Downloaded model exceeds its catalog byte count.')
-          }
-          hash.update(chunk)
-          onProgress?.(received)
-          if (!stream.write(chunk)) {
-            await Promise.race([
-              new Promise<void>((resolve) => stream.once('drain', resolve)),
-              streamError
-            ])
-          }
-        }
-      }
-      await Promise.race([new Promise<void>((resolve) => stream.end(resolve)), streamError])
-    } catch (cause) {
-      stream.destroy()
-      throw cause
-    }
-    if (received !== expectedBytes)
-      throw new Error(`Downloaded ${received} bytes; expected ${expectedBytes}.`)
-    const digest = hash.digest('hex')
-    if (digest !== expectedSha256)
-      throw new Error('Downloaded model checksum does not match the catalog.')
-    return received
+    return downloadFileResumable(url, destination, expectedBytes, expectedSha256, signal, onProgress)
   }
 
   private requireSelectableArtifact(
@@ -1634,10 +1697,10 @@ export class SpeechService {
   }
 
   /**
-   * Pick an installed cleanup model, independent of the current ASR runtime.
-   * Honors an explicit artifact preference, then falls back to the best available
-   * cleanup runtime for the current platform (MLX on Apple Silicon, otherwise
-   * sherpa-onnx). Core ML is excluded because it has no cleanup capability.
+   * Pick an installed instruct cleanup model. Honors an explicit artifact
+   * preference, then falls back to the lightweight GGUF cleanup model. Only the
+   * GGUF (llama.cpp) runtime provides cleanup now; the retired MLX/sherpa
+   * pseudo-cleanup paths are never selected.
    */
   private selectInstalledCleanupArtifact(
     preferredArtifactId?: string
@@ -1647,7 +1710,7 @@ export class SpeechService {
         (candidate) =>
           candidate.id === preferredArtifactId &&
           candidate.capability === 'cleanup' &&
-          candidate.runtime !== 'coreml' &&
+          candidate.runtime === 'gguf' &&
           candidate.qualification.status !== 'retired'
       )
       if (catalogArtifact) {
@@ -1662,12 +1725,7 @@ export class SpeechService {
         }
       }
     }
-    const target = this.platformTarget()
-    const fallbackRuntimes: SpeechRuntime[] =
-      target.platform === 'darwin' && target.architecture === 'arm64'
-        ? ['mlx', 'sherpa-onnx', 'gguf']
-        : ['sherpa-onnx', 'mlx', 'gguf']
-    for (const runtime of fallbackRuntimes) {
+    for (const runtime of CAPABILITY_RUNTIME_MAP['cleanup']) {
       const artifact = this.installedCleanupArtifact(runtime)
       if (artifact) {
         return { runtime, artifact }
@@ -1677,10 +1735,10 @@ export class SpeechService {
   }
 
   /**
-   * Apply cleanup to a transcript for the local-LLM / audio-to-LLM path. Prefers
-   * an installed local cleanup model when present, otherwise applies learned
-   * correction rules with no model, and never switches path silently on failure
-   * (raw transcript is returned).
+   * Apply cleanup to a transcript. Prefers the installed local instruct model,
+   * which also applies the user's learned style lessons; without a model the
+   * raw transcript is returned untouched and flagged so the UI can offer the
+   * download. Never switches path silently on failure.
    */
   private async runCleanup(
     rawTranscript: string,
@@ -1688,38 +1746,34 @@ export class SpeechService {
     scope: SpeechScope
   ): Promise<{
     text: string
-    provenance: {
-      mode: 'none' | 'local' | 'remote'
-      runtime?: SpeechRuntime
-      artifactId?: string
-      modelId?: string
-      appliedRuleIds: string[]
-      failed: boolean
-      error?: SpeechError
-    }
+    provenance: SpeechCleanupProvenance
   }> {
     if (mode.kind === 'disabled') {
       return {
         text: rawTranscript,
-        provenance: { mode: 'none', appliedRuleIds: [], failed: false }
+        provenance: { mode: 'none', appliedLessonIds: [], failed: false }
       }
     }
     if (mode.kind === 'remote') {
       try {
         if (!this.remoteCleanup) throw new Error('Remote cleanup is unavailable.')
+        const lessons = this.learning.enabled(scope)
+        const flags = mode.flags ?? DEFAULT_REFINEMENT_FLAGS
         const remote = await this.remoteCleanup({
-          transcript: rawTranscript,
+          // Collapse ASR loop artifacts before any model sees the transcript.
+          transcript: collapseRepetitiveArtifacts(rawTranscript),
           scope,
           selection: mode.selection,
-          ...(mode.modelId ? { modelId: mode.modelId } : {})
+          ...(mode.modelId ? { modelId: mode.modelId } : {}),
+          ...(lessons.length ? { lessons } : {}),
+          flags
         })
-        const cleaned = this.cleanup.applyRules(remote.text, this.learning.enabled(scope))
         return {
-          text: cleaned.text,
+          text: remote.text,
           provenance: {
             mode: 'remote',
             modelId: remote.modelId,
-            appliedRuleIds: cleaned.provenance.appliedRuleIds,
+            appliedLessonIds: lessons.map((lesson) => lesson.id),
             failed: false
           }
         }
@@ -1728,31 +1782,60 @@ export class SpeechService {
         return { text: fallback.text, provenance: { ...fallback.provenance, mode: 'remote' } }
       }
     }
-    const resolved = this.selectInstalledCleanupArtifact(
-      mode.kind === 'local' ? mode.artifactId : undefined
-    )
-    try {
-      const punctuated = resolved
-        ? await this.queue
-            .enqueue({
-              capability: 'cleanup',
-              runtime: resolved.runtime,
-              run: (signal) =>
-                this.requireBackend(resolved.runtime).cleanup(
-                  rawTranscript,
-                  { id: resolved.artifact.id, directory: this.artifactDirectory(resolved.artifact.id) },
-                  signal
-                )
-            })
-            .result.catch(() => rawTranscript)
-        : rawTranscript
-      const cleaned = this.cleanup.applyRules(punctuated, this.learning.enabled(scope))
+    const resolved = this.selectInstalledCleanupArtifact(mode.artifactId)
+    if (!resolved) {
       return {
-        text: cleaned.text,
+        text: rawTranscript,
         provenance: {
-          ...cleaned.provenance,
+          mode: 'none',
+          appliedLessonIds: [],
+          failed: false,
+          modelMissing: true
+        }
+      }
+    }
+    try {
+      const profile = cleanupProfileFor(resolved.artifact)
+      const flags: SpeechRefinementFlags = mode.flags ?? DEFAULT_REFINEMENT_FLAGS
+      const cleaned = await this.queue
+        .enqueue({
+          capability: 'cleanup',
+          runtime: resolved.runtime,
+          run: async (signal) => {
+            const artifact = {
+              id: resolved.artifact.id,
+              directory: this.artifactDirectory(resolved.artifact.id),
+              cleanupProfile: profile
+            }
+            const backend = this.requireBackend(resolved.runtime)
+            if (backend.warmup) await backend.warmup(artifact, signal)
+            return backend.cleanup(
+              // Collapse ASR loop artifacts before the model sees the transcript.
+              collapseRepetitiveArtifacts(rawTranscript),
+              artifact,
+              signal,
+              profile === 'instruct'
+                ? { lessons: this.learning.enabled(scope), flags }
+                : undefined
+            )
+          }
+        })
+        .result
+      this.touch('cleanup')
+      // Normalizers legitimately return an empty string for filler-only input;
+      // keep the raw transcript so dictation never loses words.
+      const finalText = cleaned.trim().length > 0 ? cleaned : rawTranscript
+      return {
+        text: finalText,
+        provenance: {
           mode: 'local',
-          ...(resolved ? { runtime: resolved.runtime, artifactId: resolved.artifact.id } : {})
+          runtime: resolved.runtime,
+          artifactId: resolved.artifact.id,
+          appliedLessonIds:
+            profile === 'instruct'
+              ? this.learning.enabled(scope).map((lesson) => lesson.id)
+              : [],
+          failed: false
         }
       }
     } catch (cause) {

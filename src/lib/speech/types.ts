@@ -3,8 +3,8 @@ export const SPEECH_HISTORY_LIMIT_MAX = 500
 export const DEFAULT_SPEECH_HISTORY_LIMIT = 30
 export const MAX_SPEECH_CHUNK_BYTES = 512 * 1024
 export const MAX_SPEECH_QUEUE_DEPTH = 8
-export const MAX_GLOBAL_CORRECTION_RULES = 500
-export const MAX_CONTEXT_CORRECTION_RULES = 200
+export const MAX_GLOBAL_LESSONS = 500
+export const MAX_CONTEXT_LESSONS = 200
 
 export type SpeechRuntime = 'mlx' | 'sherpa-onnx' | 'gguf' | 'coreml'
 export type SpeechCapability = 'asr' | 'cleanup' | 'tts'
@@ -62,7 +62,13 @@ export interface SpeechCompatibilityError {
 export type SpeechRuntimeResolutionResult =
   { ok: true; value: SpeechRuntimeResolution } | { ok: false; error: SpeechCompatibilityError }
 
-export type SpeechModelFamilyId = 'whisper' | 'parakeet' | 'kokoro' | 'qwen-cleanup' | 'sherpa-punctuation'
+export type SpeechModelFamilyId =
+  | 'whisper'
+  | 'parakeet'
+  | 'kokoro'
+  | 'qwen-cleanup'
+  | 's1-cleanup'
+  | 'sherpa-punctuation'
 export type SpeechArtifactStatus = 'candidate' | 'qualified' | 'retired'
 
 export interface SpeechArtifactFile {
@@ -234,9 +240,8 @@ export interface SpeechTranscriptionJob {
 
 export type SpeechCleanupMode =
   | { kind: 'disabled' }
-  | { kind: 'local'; artifactId?: string }
-  | { kind: 'local-llm' }
-  | { kind: 'remote'; selection: 'fixed' | 'conversation'; modelId?: string }
+  | { kind: 'local'; artifactId?: string; flags?: SpeechRefinementFlags }
+  | { kind: 'remote'; selection: 'fixed' | 'conversation'; modelId?: string; flags?: SpeechRefinementFlags }
 
 export interface SpeechCleanupRequest {
   attemptId: string
@@ -255,23 +260,37 @@ export interface SpeechCleanupContext {
 }
 
 export interface SpeechCleanupProvenance {
-  mode: 'none' | 'local' | 'local-llm' | 'remote'
+  mode: 'none' | 'local' | 'remote'
   runtime?: SpeechRuntime
   artifactId?: string
   modelId?: string
-  appliedRuleIds: string[]
+  /** Lessons the cleanup LLM was asked to apply for this transcript. */
+  appliedLessonIds: string[]
   failed: boolean
+  /** True when no qualified instruct cleanup model is installed and raw text was used. */
+  modelMissing?: boolean
   error?: SpeechError
 }
 
-export type SpeechCorrectionRuleKind = 'vocabulary' | 'formatting'
+export type SpeechLessonKind = 'vocabulary' | 'punctuation' | 'phrasing' | 'formatting' | 'style'
 
-export interface SpeechCorrectionRule {
+export interface SpeechLessonExample {
+  from: string
+  to: string
+}
+
+/**
+ * A structured lesson derived by the local instruct LLM from comparing the raw
+ * ASR transcript with the text the user actually sent. Lessons are natural
+ * instructions with examples — never regex patterns — and are applied by the
+ * LLM itself during future cleanup.
+ */
+export interface SpeechLesson {
   id: string
-  kind: SpeechCorrectionRuleKind
+  kind: SpeechLessonKind
   scope: SpeechScope
-  source: string
-  replacement: string
+  instruction: string
+  examples: SpeechLessonExample[]
   confidence: number
   evidenceCount: number
   enabled: boolean
@@ -285,16 +304,75 @@ export interface SpeechDictationSpan {
   attemptId: string
   editorId: string
   insertedText: string
-  startOffset: number
-  endOffset: number
   insertedAt: number
   scope: SpeechScope
 }
 
-export interface SpeechCorrectionObservation {
-  span: SpeechDictationSpan
+export interface SpeechLearningObservation {
+  insertedText: string
   sentText: string
+  scope: SpeechScope
   sentAt: number
+}
+
+/**
+ * User-facing cleanup behavior toggles. The cleanup system prompt is assembled
+ * from these plus the user's learned lessons.
+ */
+export interface SpeechRefinementFlags {
+  smartCleanup: boolean
+  selfCorrection: boolean
+  preserveTechnical: boolean
+}
+
+export const DEFAULT_REFINEMENT_FLAGS: SpeechRefinementFlags = {
+  smartCleanup: true,
+  selfCorrection: true,
+  preserveTechnical: true
+}
+
+/**
+ * How the cleanup backend must talk to the loaded model. `instruct` models
+ * accept free-form lesson context; `normalizer` models like S1 mini follow a
+ * fixed control-line protocol and can never receive lessons.
+ */
+export type SpeechCleanupProfile = 'instruct' | 'normalizer'
+
+/** A lesson proposed by the instruct model from one observed correction. */
+export interface SpeechExtractedLesson {
+  kind: SpeechLessonKind
+  instruction: string
+  examples: SpeechLessonExample[]
+}
+
+export type SpeechLlamaRuntimeSource =
+  | 'environment'
+  | 'managed'
+  | 'canonical'
+  | 'homebrew'
+  | 'path'
+
+export interface SpeechLlamaRuntimeInstallation {
+  path: string
+  realPath: string
+  source: SpeechLlamaRuntimeSource
+  version?: string
+}
+
+/**
+ * Discover-or-download status of the pinned llama.cpp runtime that serves the
+ * instruct cleanup model. Nothing is bundled; existing installs are reused.
+ */
+export interface SpeechLlamaRuntimeStatus {
+  available: boolean
+  version?: string
+  selectedPath?: string
+  installations: SpeechLlamaRuntimeInstallation[]
+  managedDir: string
+  releaseTag: string
+  downloadRequired: boolean
+  downloadName?: string
+  downloadByteSize?: number
 }
 
 export interface SpeechSegment {
@@ -354,6 +432,97 @@ export interface SpeechDictionaryEntry {
   updatedAt: number
 }
 
+/**
+ * A user-configurable keyboard binding that starts voice recording in
+ * whichever mic input is on view. `code` is a `KeyboardEvent.code` value and
+ * the modifier flags must match exactly when the key is pressed. When
+ * `doubleTap` is true the binding targets a bare modifier key and only fires
+ * when that exact physical key is pressed twice in quick succession with no
+ * other key pressed in between (the default: double-press Left Alt / Option).
+ */
+export interface VoiceRecordingShortcut {
+  code: string
+  ctrl: boolean
+  meta: boolean
+  alt: boolean
+  shift: boolean
+  doubleTap: boolean
+}
+
+/** Keys produced purely by holding a single modifier — the only legal double-tap targets. */
+export const MODIFIER_KEY_CODES: ReadonlySet<string> = new Set([
+  'AltLeft',
+  'AltRight',
+  'ControlLeft',
+  'ControlRight',
+  'MetaLeft',
+  'MetaRight',
+  'ShiftLeft',
+  'ShiftRight'
+])
+
+export const DEFAULT_VOICE_RECORDING_SHORTCUT: VoiceRecordingShortcut = {
+  code: 'AltLeft',
+  ctrl: false,
+  meta: false,
+  alt: false,
+  shift: false,
+  doubleTap: true
+}
+
+const VOICE_SHORTCUT_CODE_PATTERN = /^[A-Z][A-Za-z0-9]{0,31}$/
+
+/** Validates an unknown value into a `VoiceRecordingShortcut`, or returns null. */
+export function normalizeVoiceRecordingShortcut(value: unknown): VoiceRecordingShortcut | null {
+  if (typeof value !== 'object' || value === null) return null
+  const candidate = value as Record<string, unknown>
+  if (
+    typeof candidate.code !== 'string' ||
+    !VOICE_SHORTCUT_CODE_PATTERN.test(candidate.code) ||
+    typeof candidate.ctrl !== 'boolean' ||
+    typeof candidate.meta !== 'boolean' ||
+    typeof candidate.alt !== 'boolean' ||
+    typeof candidate.shift !== 'boolean' ||
+    typeof candidate.doubleTap !== 'boolean'
+  ) {
+    return null
+  }
+  if (candidate.doubleTap) {
+    // Double-tap bindings are bare modifiers: no extra flags, and the key itself
+    // must be a modifier so a plain letter key can never hijack typing.
+    if (
+      !MODIFIER_KEY_CODES.has(candidate.code) ||
+      candidate.ctrl ||
+      candidate.meta ||
+      candidate.alt ||
+      candidate.shift
+    ) {
+      return null
+    }
+    return {
+      code: candidate.code,
+      ctrl: false,
+      meta: false,
+      alt: false,
+      shift: false,
+      doubleTap: true
+    }
+  }
+  if (!candidate.ctrl && !candidate.meta && !candidate.alt && !MODIFIER_KEY_CODES.has(candidate.code)) {
+    // Guard against re-binding a printable key alone (letters/digits), which
+    // would make ordinary typing trigger recordings.
+    return null
+  }
+  return {
+    code: candidate.code,
+    ctrl: candidate.ctrl,
+    meta: candidate.meta,
+    alt: candidate.alt,
+    shift: candidate.shift,
+    doubleTap: false
+  }
+}
+
 export interface SpeechSettings {
   asrArtifactId?: string
   cleanupArtifactId?: string
@@ -361,15 +530,15 @@ export interface SpeechSettings {
   ttsVoiceId?: string
   preferredLanguages: string[]
   localCleanupEnabled: boolean
+  refinementFlags: SpeechRefinementFlags
   remoteCleanupEnabled: boolean
   remoteCleanupSelection: 'fixed' | 'conversation'
   remoteCleanupModelId?: string
-  localLlmCleanupEnabled: boolean
-  localLlmBaseUrl?: string
   includeCodeBlocksInSpeech: boolean
   historyLimit: number
   cues: SpeechCueSettings
   voiceRecordingEnabled: boolean
+  voiceRecordingShortcut: VoiceRecordingShortcut
   asrUnload: SpeechUnloadOption
   cleanupUnload: SpeechUnloadOption
   ttsUnload: SpeechUnloadOption
@@ -378,9 +547,9 @@ export interface SpeechSettings {
 export const DEFAULT_SPEECH_SETTINGS: SpeechSettings = {
   preferredLanguages: [],
   localCleanupEnabled: true,
+  refinementFlags: { ...DEFAULT_REFINEMENT_FLAGS },
   remoteCleanupEnabled: false,
   remoteCleanupSelection: 'conversation',
-  localLlmCleanupEnabled: false,
   includeCodeBlocksInSpeech: false,
   historyLimit: DEFAULT_SPEECH_HISTORY_LIMIT,
   cues: {
@@ -390,6 +559,7 @@ export const DEFAULT_SPEECH_SETTINGS: SpeechSettings = {
     volume: 0.7
   },
   voiceRecordingEnabled: false,
+  voiceRecordingShortcut: DEFAULT_VOICE_RECORDING_SHORTCUT,
   asrUnload: '30m',
   cleanupUnload: '30m',
   ttsUnload: '30m'
@@ -432,7 +602,7 @@ export interface SpeechHistoryPage {
 }
 
 export type SpeechDestructiveAction =
-  'history-item' | 'all-history' | 'recording' | 'rule' | 'model'
+  'history-item' | 'all-history' | 'recording' | 'lesson' | 'model'
 
 export interface SpeechConfirmation {
   token: string

@@ -246,9 +246,13 @@ export const HARNESS_USAGE_MODELS_COLUMNS_SQL = `
 
 /**
  * Column definitions for the canonical `turn_feedback` table. thread_id
- * deliberately does NOT cascade-delete: resolved outcomes are the long-term
+ * deliberately does NOT cascade-delete: graded outcomes are the long-term
  * analytics record for "best model by feedback", so rows keep their own
  * attribution when the owning thread is deleted.
+ *
+ * Rows are captured pending when a turn answers a visible user message and are
+ * graded exactly once by the cheap-model LLM judge. The captured texts and the
+ * deadline anchors let grading survive restarts without reloading sessions.
  */
 export const TURN_FEEDBACK_COLUMNS_SQL = `
   id             TEXT PRIMARY KEY NOT NULL,
@@ -257,9 +261,9 @@ export const TURN_FEEDBACK_COLUMNS_SQL = `
   session_id     TEXT,
   created_at     INTEGER NOT NULL,
   resolved_at    INTEGER,
-  status         TEXT NOT NULL CHECK(status IN ('pending','success','corrected')),
-  signal         TEXT CHECK(signal IN ('continued','switched','cleaned_up','corrective_feedback')),
-  score          REAL NOT NULL DEFAULT 0,
+  status         TEXT NOT NULL CHECK(status IN ('pending','graded')),
+  basis          TEXT CHECK(basis IN ('deleted','read_timeout','draft_timeout')),
+  grade          INTEGER CHECK(grade IS NULL OR (grade BETWEEN 1 AND 5)),
   feature        TEXT CHECK(feature IN ('main','audit','assignment')),
   task_slug      TEXT,
   harness_id     TEXT,
@@ -268,7 +272,12 @@ export const TURN_FEEDBACK_COLUMNS_SQL = `
   thinking_level TEXT,
   cost_usd       REAL,
   cost_status    TEXT CHECK(cost_status IN ('known','estimated','unavailable')),
-  tokens_total   INTEGER`
+  tokens_total   INTEGER,
+  user_message_text     TEXT NOT NULL DEFAULT '',
+  assistant_output_text TEXT NOT NULL DEFAULT '',
+  follow_up_text        TEXT,
+  reading_deadline_ms   INTEGER,
+  draft_deadline_ms     INTEGER`
 
 export const ATTACHMENT_GRANTS_SQL = `
 -- ─── Durable attachment grants ──────────────────────────────────────────
@@ -783,13 +792,13 @@ CREATE INDEX IF NOT EXISTS idx_usage_events_feature_timestamp
 CREATE INDEX IF NOT EXISTS idx_usage_events_analytics_range
   ON usage_events(created_at, feature, harness_id, provider_id, model_id, thinking_level);
 
--- ─── Turn outcome feedback (session scoring) ─────────────────────────────
--- One row per completed user turn, opened "pending" when a successful turn
--- finishes and resolved when the user signals the outcome: they continued
--- positively, corrected the answer, switched away to another thread, or left
--- the thread idle until cleanup. Scores (0/1) feed the "best model by
--- feedback" profile section, keyed by harness/provider/model/thinking level
--- and the task kind (main/audit/assignment).
+-- ─── Turn outcome feedback (LLM-judged session scoring) ──────────────────
+-- One row per completed user turn, opened "pending" with the captured grading
+-- payload when an agent answer finishes, and graded exactly once (1–5) by the
+-- cheap-model judge when a deadline fires: thread deletion, the post-read
+-- window, or the draft window. Grades feed the "best model by feedback"
+-- profile section, keyed by harness/provider/model/thinking level and task
+-- kind. A follow-up message sent while pending is stored as extra context.
 CREATE TABLE IF NOT EXISTS turn_feedback (${TURN_FEEDBACK_COLUMNS_SQL});
 
 CREATE INDEX IF NOT EXISTS idx_turn_feedback_thread
@@ -797,6 +806,9 @@ CREATE INDEX IF NOT EXISTS idx_turn_feedback_thread
 
 CREATE INDEX IF NOT EXISTS idx_turn_feedback_pending
   ON turn_feedback(status, created_at);
+
+CREATE INDEX IF NOT EXISTS idx_turn_feedback_deadline
+  ON turn_feedback(status, reading_deadline_ms, draft_deadline_ms);
 
 CREATE INDEX IF NOT EXISTS idx_turn_feedback_attribution
   ON turn_feedback(harness_id, provider_id, model_id, thinking_level, feature);`

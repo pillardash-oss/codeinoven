@@ -25,13 +25,16 @@
 
   interface Props {
     part: Extract<AgentPart, { type: 'tool' }>
+    /** True only while a live session is streaming this call. Historical or
+     *  restored traces must never tick — their durations are frozen snapshots. */
+    live?: boolean
     projectId?: string
     threadId?: string
     checkpointId?: string | null
     checkpointPaths?: string[]
   }
 
-  let { part, projectId, threadId, checkpointId = null, checkpointPaths = [] }: Props = $props()
+  let { part, live = false, projectId, threadId, checkpointId = null, checkpointPaths = [] }: Props = $props()
 
   let open = $state(false)
   let userToggled = $state(false)
@@ -86,16 +89,18 @@
 
   $effect(() => {
     if (start && end) {
+      // Completed: the duration is a frozen snapshot of the call itself.
       elapsed = Math.floor((end - start) / 1000)
-    } else if (start) {
-      if (isRunning) {
-        const interval = setInterval(() => {
-          elapsed = Math.floor((Date.now() - start) / 1000)
-        }, 1000)
-        return () => clearInterval(interval)
-      } else {
+    } else if (start && isRunning && live) {
+      const interval = setInterval(() => {
         elapsed = Math.floor((Date.now() - start) / 1000)
-      }
+      }, 1000)
+      return () => clearInterval(interval)
+    } else if (start && elapsed === 0) {
+      // Terminal state without an end timestamp (e.g. an interrupted run):
+      // snapshot once, then never re-derive from the wall clock, or the card
+      // would keep counting while the agent moves on to other tools.
+      elapsed = Math.floor((Date.now() - start) / 1000)
     }
   })
 

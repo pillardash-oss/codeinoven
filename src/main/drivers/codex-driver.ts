@@ -33,6 +33,7 @@ import { buildProcessEnvironment } from './cli-environment'
 import { attachmentReference } from './attachment-reference'
 import type {
   GenerateTitleOptions,
+  GradeTurnOptions,
   HarnessCapabilities,
   SendPromptOptions,
   SteerPromptOptions,
@@ -44,7 +45,8 @@ import {
   type CliLineParseContext,
   type CliLineParseResult,
   type CliTurnCommand,
-  type PersistentCliSession
+  type PersistentCliSession,
+  type TitleModelCandidate
 } from './persistent-cli-driver'
 import { inlineSvgAttachments, isSvgAttachment } from './svg-attachment'
 import { prepareHarnessInvocation, runHarnessCommand } from './harness-runtime'
@@ -424,16 +426,36 @@ export class CodexDriver extends PersistentCliDriver {
     throw new Error(`Command is not available in ${this.name}: ${command.name}`)
   }
 
-  async generateTitle(projectPath: string, options: GenerateTitleOptions): Promise<string | null> {
+  /** Cheapest available catalog model, shared by title and grading runs. */
+  private async cheapestCandidate(projectPath: string): Promise<TitleModelCandidate[]> {
     const catalogs = await this.listProviders(projectPath)
     const luna = catalogs
       .find((catalog) => catalog.id === 'openai')
       ?.models.find((model) => model.id === 'gpt-5.6-luna')
+    return luna ? [{ providerId: luna.providerId, modelId: luna.id }] : []
+  }
+
+  async generateTitle(projectPath: string, options: GenerateTitleOptions): Promise<string | null> {
     return this.generateTitleWithCandidates(
       projectPath,
       options,
-      luna ? [{ providerId: luna.providerId, modelId: luna.id }] : []
+      await this.cheapestCandidate(projectPath)
     )
+  }
+
+  async gradeTurn(projectPath: string, options: GradeTurnOptions): Promise<number | null> {
+    return this.gradeTurnWithCandidates(
+      projectPath,
+      options,
+      await this.cheapestCandidate(projectPath)
+    )
+  }
+
+  /** Cheapest candidates for any auxiliary one-shot run. */
+  protected override async cheapCandidateModels(
+    projectPath: string
+  ): Promise<TitleModelCandidate[]> {
+    return this.cheapestCandidate(projectPath)
   }
 
   /** Start a Codex turn through app-server so the same native turn can be steered. */

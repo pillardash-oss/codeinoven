@@ -148,6 +148,9 @@
   let commitSearchLoading = $state(false)
   let commitSearchActiveIndex = $state(0)
   let commitSearchRequestId = 0
+  /** Invalidated whenever the panel swaps scope buckets, so a history page
+   *  fetched for the previous worktree can never land in the new one's list. */
+  let historyRequestId = 0
   /** False once a page comes back shorter than requested — there's nothing older left. */
   let historyHasMore = $state(true)
   const HISTORY_PAGE_SIZE = 30
@@ -687,7 +690,9 @@
   async function loadHistory(): Promise<void> {
     if (commitHistory.length > 0) return
     loadingHistory = true
+    const request = ++historyRequestId
     const page = await gitState.getLog(projectId, HISTORY_PAGE_SIZE)
+    if (request !== historyRequestId) return
     commitHistory = page
     historyHasMore = page.length === HISTORY_PAGE_SIZE
     loadingHistory = false
@@ -697,7 +702,12 @@
   async function loadMoreHistory(): Promise<void> {
     if (loadingHistory || loadingMoreHistory || !historyHasMore) return
     loadingMoreHistory = true
+    const request = ++historyRequestId
     const page = await gitState.getLog(projectId, HISTORY_PAGE_SIZE, commitHistory.length)
+    if (request !== historyRequestId) {
+      loadingMoreHistory = false
+      return
+    }
     commitHistory = [...commitHistory, ...page]
     historyHasMore = page.length === HISTORY_PAGE_SIZE
     loadingMoreHistory = false
@@ -1001,6 +1011,62 @@
     await loadHistory()
   }
 
+  /**
+   * Swap to another scope bucket (a sibling worktree) without remounting:
+   * clear every piece of view state scoped to the previous bucket so its
+   * changes, commits, stashes and pending dialogs can never bleed into the
+   * new target, then refetch. Repo availability checks and GitHub auth stay
+   * untouched — they belong to the project, not the bucket — which is what
+   * keeps scoped thread switches free of a full loading flash.
+   */
+  function resetForScopeSwap(): void {
+    historyRequestId += 1
+    closeCommitSearch()
+    selectedCommit = null
+    selectedStash = null
+    selectedPaths = {}
+    amendMode = false
+    commitSelection = false
+    diffs = {}
+    expanded = {}
+    loadingDiff = {}
+    diffErrors = {}
+    commitDiffChanges = []
+    commitDiffs = {}
+    commitExpanded = {}
+    loadingCommitDiff = false
+    loadingCommitDiffFile = {}
+    commitDiffErrors = {}
+    commitTreeCollapsedDirs = {}
+    deleteCommitTarget = null
+    stashDiffChanges = []
+    stashDiffs = {}
+    stashExpanded = {}
+    loadingStashDiff = false
+    loadingStashDiffFile = {}
+    stashDiffErrors = {}
+    stashDropTarget = null
+    pendingOperation = null
+    checkoutConfirm = null
+    deleteBranchConfirm = null
+    forceDeleteBranchConfirm = null
+    creatingBranch = false
+    newBranchName = ''
+    discardConfirm = null
+    resetConfirm = null
+    pushConfirm = false
+    pushDiverged = false
+    pushRecoverMode = null
+    pullStrategyOpen = false
+    pullStrategyError = ''
+    showIntegrateModal = false
+    showStashModal = false
+    stashMessage = ''
+    stashPaths = null
+    void refreshStatus()
+    void reloadHistory()
+  }
+
   /** Stable background colour for a branch's avatar, keyed off its name. */
   const branchAvatarPalette = [
     'bg-primary/20 text-primary',
@@ -1027,13 +1093,48 @@
   }
 
   $effect(() => {
-    // Claim this project before reading/writing shared state so a previous
-    // project's data can never be shown or overwrite the current view.
+    // Claim this project+scope before anything else reads/writes shared state
+    // so a previous target's data can never be shown or overwrite this view.
+    // Runs for scope swaps too — the shared git store targets exactly one
+    // worktree at a time, so switching threads must retarget it even though
+    // this component stays mounted.
     gitState.activate(projectId, scopeBucketId)
-    // Fast-render: show/hide the Deployments tab from the cache immediately,
-    // long before the authoritative value comes back from the database.
+  })
+
+  /** Project-scope bootstrap. Runs on mount and when the panel is aimed at a
+   *  different project. Deliberately NOT re-run when only the scope bucket
+   *  changes: repo/git availability is a property of the project path, and
+   *  re-running it would flash the full-panel loading state on every scoped
+   *  thread switch. */
+  $effect(() => {
     hasDeployments = cachedHasDeployments(projectId) ?? false
     void loadRepoState()
+  })
+
+  /** Mirrors of the last target the swap logic saw. Plain (non-$state) locals
+   *  on purpose: writing them inside an effect must not create dependencies,
+   *  they only exist to tell first mount, project changes and pure scope
+   *  swaps apart. */
+  let appliedProjectId = ''
+  let appliedScopeBucketId = ''
+  $effect(() => {
+    if (appliedProjectId === '') {
+      // First run — the bootstrap effect above owns initial loading.
+      appliedProjectId = projectId
+      appliedScopeBucketId = scopeBucketId
+      return
+    }
+    if (projectId !== appliedProjectId) {
+      // Project change — full reload is handled by the bootstrap effect.
+      appliedProjectId = projectId
+      appliedScopeBucketId = scopeBucketId
+      return
+    }
+    if (scopeBucketId === appliedScopeBucketId) return
+    appliedScopeBucketId = scopeBucketId
+    // Scope-only change (thread switch between worktrees): reset scope-local
+    // view state in place, then refetch status/history against the new bucket.
+    resetForScopeSwap()
   })
 
   $effect(() => {

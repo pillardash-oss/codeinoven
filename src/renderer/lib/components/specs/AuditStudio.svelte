@@ -740,6 +740,16 @@
             <option value={version.version}>Version {version.version}</option>
           {/each}
         </select>
+        {#if draft.outcome}
+          <span
+            class="rounded-md px-2 py-1 text-[10px] font-semibold uppercase tracking-wide {draft.outcome ===
+            'passed'
+              ? 'bg-success/10 text-success'
+              : 'bg-warning/10 text-warning'}"
+          >
+            {draft.outcome === 'passed' ? 'Passed' : 'Rework required'}
+          </span>
+        {/if}
         <StudioHistoryControls
           canUndo={history.canUndo}
           canRedo={history.canRedo}

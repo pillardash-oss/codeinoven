@@ -2,7 +2,7 @@ import type { Database } from '../database'
 import type {
   LocalProfileModelPerformance,
   ThinkingLevel,
-  TurnOutcomeSignal,
+  TurnOutcomeBasis,
   TurnOutcomeStatus,
   TurnOutcomeTaskType
 } from '../../../lib/types'
@@ -17,8 +17,8 @@ export interface TurnFeedbackRow {
   created_at: number
   resolved_at: number | null
   status: TurnOutcomeStatus
-  signal: TurnOutcomeSignal | null
-  score: number
+  basis: TurnOutcomeBasis | null
+  grade: number | null
   feature: TurnOutcomeTaskType | null
   task_slug: string | null
   harness_id: string | null
@@ -28,9 +28,14 @@ export interface TurnFeedbackRow {
   cost_usd: number | null
   cost_status: 'known' | 'estimated' | 'unavailable' | null
   tokens_total: number | null
+  user_message_text: string
+  assistant_output_text: string
+  follow_up_text: string | null
+  reading_deadline_ms: number | null
+  draft_deadline_ms: number | null
 }
 
-/** Identity, task metadata, and cost captured when a completed turn opens a session. */
+/** Identity, task metadata, captured grading payload, and cost for a completed turn. */
 export interface OpenTurnFeedbackInput {
   id: string
   threadId: string
@@ -48,6 +53,10 @@ export interface OpenTurnFeedbackInput {
   costStatus: 'known' | 'estimated' | 'unavailable'
   /** Total reported tokens for the scored turn, when available. */
   tokensTotal: number | null
+  /** The initiating visible user message text (grading payload). */
+  userMessageText: string
+  /** The agent's final output text for the turn (grading payload). */
+  assistantOutputText: string
 }
 
 interface ModelPerformanceRow {
@@ -57,9 +66,7 @@ interface ModelPerformanceRow {
   thinking_level: string | null
   feature: string | null
   outcomes: number
-  successes: number
-  corrected: number
-  avg_score: number
+  avg_grade: number | null
   priced_outcomes: number
   cost_usd: number
   tokens_total: number
@@ -76,22 +83,25 @@ interface FeedbackCostRow {
 }
 
 /**
- * Durable session-outcome ledger for "best model by feedback". Turns open as
- * `pending` and are resolved exactly once — the `status='pending'` guard makes
- * every resolution idempotent regardless of signal ordering or restarts.
+ * Durable ledger for "best model by feedback". A completed turn captures its
+ * grading payload as `pending`; a cheap-model LLM judge later grades it 1–5
+ * exactly once — the `status='pending'` guard makes every grading idempotent
+ * regardless of deadline ordering or restarts. Deadline anchors are persisted
+ * so timers survive restarts.
  */
 export class TurnFeedbackRepo {
   constructor(private db: Database) {}
 
-  /** Open a pending outcome for a completed turn. Replays are no-ops. */
+  /** Open a pending outcome with its captured payload. Replays are no-ops. */
   openPending(input: OpenTurnFeedbackInput): void {
     this.db.run(
       `INSERT OR IGNORE INTO turn_feedback(
-        id, thread_id, parent_turn_id, session_id, created_at, resolved_at,
-        status, signal, score, feature, task_slug,
+        id, thread_id, parent_turn_id, session_id, created_at,
+        status, basis, grade, feature, task_slug,
         harness_id, provider_id, model_id, thinking_level,
-        cost_usd, cost_status, tokens_total
-      ) VALUES(?,?,?,?,?,NULL,'pending',NULL,0,?,?,?,?,?,?,?,?,?)`,
+        cost_usd, cost_status, tokens_total,
+        user_message_text, assistant_output_text
+      ) VALUES(?,?,?,?,?,'pending',NULL,NULL,?,?,?,?,?,?,?,?,?,?,?)`,
       input.id,
       input.threadId,
       input.parentTurnId,
@@ -105,7 +115,9 @@ export class TurnFeedbackRepo {
       input.thinkingLevel,
       input.costUsd,
       input.costStatus,
-      input.tokensTotal
+      input.tokensTotal,
+      input.userMessageText,
+      input.assistantOutputText
     )
   }
 
@@ -118,11 +130,12 @@ export class TurnFeedbackRepo {
   async openPendingViaWorker(input: OpenTurnFeedbackInput): Promise<void> {
     const result = await this.db.executeViaWorker(
       `INSERT OR IGNORE INTO turn_feedback(
-        id, thread_id, parent_turn_id, session_id, created_at, resolved_at,
-        status, signal, score, feature, task_slug,
+        id, thread_id, parent_turn_id, session_id, created_at,
+        status, basis, grade, feature, task_slug,
         harness_id, provider_id, model_id, thinking_level,
-        cost_usd, cost_status, tokens_total
-      ) VALUES(?,?,?,?,?,NULL,'pending',NULL,0,?,?,?,?,?,?,?,?,?)`,
+        cost_usd, cost_status, tokens_total,
+        user_message_text, assistant_output_text
+      ) VALUES(?,?,?,?,?,'pending',NULL,NULL,?,?,?,?,?,?,?,?,?,?,?)`,
       [
         input.id,
         input.threadId,
@@ -137,7 +150,9 @@ export class TurnFeedbackRepo {
         input.thinkingLevel,
         input.costUsd,
         input.costStatus,
-        input.tokensTotal
+        input.tokensTotal,
+        input.userMessageText,
+        input.assistantOutputText
       ]
     )
     if (!result.ok) {
@@ -146,7 +161,7 @@ export class TurnFeedbackRepo {
     }
   }
 
-  /** Most recent pending outcome for a thread, or null. */
+  /** Newest pending outcome for a thread, or null. */
   latestPendingForThread(threadId: string): TurnFeedbackRow | null {
     const row = this.db.get<TurnFeedbackRow>(
       `SELECT * FROM turn_feedback
@@ -157,78 +172,111 @@ export class TurnFeedbackRepo {
     return row ?? null
   }
 
-  /** Resolve the newest pending outcome on a thread. Returns true when one was resolved. */
-  resolveLatestPendingForThread(
-    threadId: string,
-    status: Exclude<TurnOutcomeStatus, 'pending'>,
-    signal: TurnOutcomeSignal,
-    score: number
-  ): boolean {
-    const latest = this.latestPendingForThread(threadId)
-    if (!latest) return false
-    this.db.run(
-      `UPDATE turn_feedback SET status = ?, signal = ?, score = ?, resolved_at = ?
-       WHERE id = ? AND status = 'pending'`,
-      status,
-      signal,
-      score,
-      Date.now(),
-      latest.id
-    )
-    return true
-  }
-
-  /** Resolve every pending outcome on a thread (used at thread deletion/eviction). */
-  resolvePendingForThread(
-    threadId: string,
-    status: Exclude<TurnOutcomeStatus, 'pending'>,
-    signal: TurnOutcomeSignal,
-    score: number
-  ): void {
-    this.db.run(
-      `UPDATE turn_feedback SET status = ?, signal = ?, score = ?, resolved_at = ?
-       WHERE thread_id = ? AND status = 'pending'`,
-      status,
-      signal,
-      score,
-      Date.now(),
+  /** Every pending outcome for a thread, oldest first. */
+  listPendingForThread(threadId: string): TurnFeedbackRow[] {
+    return this.db.all<TurnFeedbackRow>(
+      `SELECT * FROM turn_feedback
+       WHERE thread_id = ? AND status = 'pending'
+       ORDER BY created_at ASC, id ASC`,
       threadId
     )
   }
 
-  /** Resolve pending outcomes on every thread except `exceptThreadId` (context switch away). */
-  resolvePendingForOtherThreads(
-    exceptThreadId: string,
-    status: Exclude<TurnOutcomeStatus, 'pending'>,
-    signal: TurnOutcomeSignal,
-    score: number
-  ): void {
+  /**
+   * Store the follow-up message the user sent while an outcome was pending so
+   * the judge can weigh it alongside the original exchange.
+   */
+  noteFollowUp(threadId: string, text: string): void {
+    const latest = this.latestPendingForThread(threadId)
+    if (!latest) return
+    this.db.run('UPDATE turn_feedback SET follow_up_text = ? WHERE id = ?', text, latest.id)
+  }
+
+  /** Persist the post-read countdown anchor on every still-pending row of a thread. */
+  scheduleReading(threadId: string, deadlineMs: number): void {
     this.db.run(
-      `UPDATE turn_feedback SET status = ?, signal = ?, score = ?, resolved_at = ?
-       WHERE status = 'pending' AND thread_id <> ?`,
-      status,
-      signal,
-      score,
-      Date.now(),
-      exceptThreadId
+      `UPDATE turn_feedback SET reading_deadline_ms = ?
+       WHERE thread_id = ? AND status = 'pending' AND reading_deadline_ms IS NULL`,
+      deadlineMs,
+      threadId
     )
   }
 
-  /** Resolve switch-away feedback on the maintenance worker, never in the UI IPC turn. */
-  async resolvePendingForOtherThreadsViaWorker(
-    exceptThreadId: string,
-    status: Exclude<TurnOutcomeStatus, 'pending'>,
-    signal: TurnOutcomeSignal,
-    score: number
-  ): Promise<void> {
-    const result = await this.db.executeViaWorker(
-      `UPDATE turn_feedback SET status = ?, signal = ?, score = ?, resolved_at = ?
-       WHERE status = 'pending' AND thread_id <> ?`,
-      [status, signal, score, Date.now(), exceptThreadId]
+  /**
+   * Persist the draft countdown anchor on every still-pending row of a thread.
+   * The first draft entry wins: re-entering drafting never extends the window.
+   */
+  scheduleDraft(threadId: string, deadlineMs: number): void {
+    this.db.run(
+      `UPDATE turn_feedback SET draft_deadline_ms = ?
+       WHERE thread_id = ? AND status = 'pending' AND draft_deadline_ms IS NULL`,
+      deadlineMs,
+      threadId
     )
-    if (!result.ok) {
-      throw new Error(result.error ?? 'Could not resolve pending turn feedback')
-    }
+  }
+
+  /** Pending rows whose persisted deadline has elapsed (crash-recovery scan). */
+  listDuePending(nowMs: number): TurnFeedbackRow[] {
+    return this.db.all<TurnFeedbackRow>(
+      `SELECT * FROM turn_feedback
+       WHERE status = 'pending'
+         AND (reading_deadline_ms IS NOT NULL AND reading_deadline_ms <= ?
+           OR draft_deadline_ms IS NOT NULL AND draft_deadline_ms <= ?)
+       ORDER BY COALESCE(reading_deadline_ms, draft_deadline_ms) ASC`,
+      nowMs,
+      nowMs
+    )
+  }
+
+  /** Crash-recovery scan joined with the owning project so grading can re-resolve drivers. */
+  listDuePendingWithProject(nowMs: number): Array<TurnFeedbackRow & { project_id: string }> {
+    return this.db.all<TurnFeedbackRow & { project_id: string }>(
+      `SELECT tf.*, t.project_id AS project_id
+       FROM turn_feedback tf
+       JOIN threads t ON t.id = tf.thread_id
+       WHERE tf.status = 'pending'
+         AND (tf.reading_deadline_ms IS NOT NULL AND tf.reading_deadline_ms <= ?
+           OR tf.draft_deadline_ms IS NOT NULL AND tf.draft_deadline_ms <= ?)
+       ORDER BY COALESCE(tf.reading_deadline_ms, tf.draft_deadline_ms) ASC`,
+      nowMs,
+      nowMs
+    )
+  }
+
+  /**
+   * Grade one pending outcome exactly once. A null grade records that the
+   * judge could not produce a usable verdict (kept for cost accounting; the
+   * analytics aggregate ignores it). Returns true when this call did the
+   * grading; false when the row was already graded or missing.
+   */
+  grade(id: string, basis: TurnOutcomeBasis, grade: number | null): boolean {
+    const current = this.db.get<{ status: string }>(
+      'SELECT status FROM turn_feedback WHERE id = ?',
+      id
+    )
+    if (!current || current.status !== 'pending') return false
+    this.db.run(
+      `UPDATE turn_feedback SET status = 'graded', basis = ?, grade = ?, resolved_at = ?
+       WHERE id = ? AND status = 'pending'`,
+      basis,
+      grade,
+      Date.now(),
+      id
+    )
+    return true
+  }
+
+  /**
+   * Detach a thread's pending rows from timers ahead of deletion. Deletion
+   * itself only SET NULLs the thread reference; these rows stay pending until
+   * the grader drains them, keeping their captured payloads intact.
+   */
+  clearTimersForThread(threadId: string): void {
+    this.db.run(
+      `UPDATE turn_feedback SET reading_deadline_ms = NULL, draft_deadline_ms = NULL
+       WHERE thread_id = ? AND status = 'pending'`,
+      threadId
+    )
   }
 
   /** Count of unresolved outcomes (debug/diagnostics). */
@@ -239,14 +287,12 @@ export class TurnFeedbackRepo {
     return row?.count ?? 0
   }
 
-  /** Range-scoped feedback performance per (harness, provider, model, thinking level, task). */
+  /** Range-scoped LLM-judge performance per (harness, provider, model, thinking level, task). */
   modelPerformance(range: { startAt: number; endAt: number }): LocalProfileModelPerformance[] {
     const rows = this.db.all<ModelPerformanceRow>(
       `SELECT harness_id, provider_id, model_id, thinking_level, feature,
               COUNT(*) AS outcomes,
-              SUM(CASE WHEN score > 0 THEN 1 ELSE 0 END) AS successes,
-              SUM(CASE WHEN status = 'corrected' THEN 1 ELSE 0 END) AS corrected,
-              AVG(score) AS avg_score,
+              AVG(grade) AS avg_grade,
               SUM(CASE WHEN cost_status <> 'unavailable' AND cost_usd IS NOT NULL
                        THEN 1 ELSE 0 END) AS priced_outcomes,
               SUM(CASE WHEN cost_status <> 'unavailable' AND cost_usd IS NOT NULL
@@ -254,13 +300,12 @@ export class TurnFeedbackRepo {
               SUM(COALESCE(tokens_total, 0)) AS tokens_total,
               MAX(created_at) AS last_used_at
        FROM turn_feedback
-       WHERE status <> 'pending'
+       WHERE status = 'graded'
          AND created_at >= ?
          AND created_at < ?
          AND harness_id IS NOT NULL
        GROUP BY harness_id, provider_id, model_id, thinking_level, feature
-       ORDER BY (SUM(CASE WHEN score > 0 THEN 1 ELSE 0 END) * 1.0 / COUNT(*)) DESC,
-                MAX(created_at) DESC`,
+       ORDER BY AVG(grade) DESC, MAX(created_at) DESC`,
       range.startAt,
       range.endAt
     )
@@ -268,6 +313,7 @@ export class TurnFeedbackRepo {
       .map((row): LocalProfileModelPerformance | null => {
         if (!row.model_id || !row.harness_id) return null
         const outcomes = row.outcomes
+        const averageGrade = row.avg_grade !== null ? row.avg_grade : null
         return {
           harnessId: row.harness_id,
           providerId: row.provider_id ?? '',
@@ -275,10 +321,8 @@ export class TurnFeedbackRepo {
           thinkingLevel: row.thinking_level ? (row.thinking_level as ThinkingLevel) : null,
           taskType: row.feature as TurnOutcomeTaskType,
           outcomes,
-          successes: row.successes,
-          corrected: row.corrected,
-          successRate: outcomes > 0 ? row.successes / outcomes : null,
-          averageScore: outcomes > 0 ? row.avg_score : 0,
+          averageGrade,
+          successRate: averageGrade !== null ? averageGrade / 5 : null,
           pricedOutcomes: row.priced_outcomes,
           costUsd: row.cost_usd,
           tokensTotal: row.tokens_total,
@@ -288,7 +332,7 @@ export class TurnFeedbackRepo {
       .filter((entry): entry is LocalProfileModelPerformance => entry !== null)
   }
 
-  /** Range-scoped total of what the resolved feedback sessions cost to gather. */
+  /** Range-scoped total of what the graded feedback sessions cost to gather. */
   feedbackCost(range: { startAt: number; endAt: number }): {
     outcomes: number
     pricedOutcomes: number
@@ -309,7 +353,7 @@ export class TurnFeedbackRepo {
                        THEN cost_usd ELSE 0 END) AS estimated_cost_usd,
               SUM(COALESCE(tokens_total, 0)) AS tokens_total
        FROM turn_feedback
-       WHERE status <> 'pending'
+       WHERE status = 'graded'
          AND created_at >= ?
          AND created_at < ?`,
       range.startAt,

@@ -10,6 +10,7 @@
   import type { SpeechScope } from '../../../../lib/speech/types'
   import type { SpeechEditorSnapshot, SpeechEditorTarget } from '../../speech/editor-target'
   import { speechController } from '../../speech/speech-controller.svelte'
+  import { registerVoiceTriggerHost } from '../../speech/voice-trigger-registry'
 
   interface Props {
     targetId: string
@@ -17,9 +18,19 @@
     scope: SpeechScope
     disabled?: boolean
     class?: string
+    /** Boost used when several mic inputs are on view at once (overlays win). */
+    triggerPriority?: number
   }
 
-  let { targetId, getTarget, scope, disabled = false, class: className = '' }: Props = $props()
+  let {
+    targetId,
+    getTarget,
+    scope,
+    disabled = false,
+    class: className = '',
+    triggerPriority = 0
+  }: Props = $props()
+  let buttonEl = $state<HTMLElement | null>(null)
   let preparedTarget: SpeechEditorTarget | null = null
   let preparedSnapshot: SpeechEditorSnapshot | null = null
   let fetchedHasInstalledAsr = $state(false)
@@ -30,13 +41,18 @@
     const caps = speechSettingsStore.capabilities
     const catalog = speechSettingsStore.catalog
     if (!caps || !catalog) return undefined as boolean | undefined
-    const installedIds = new Set(
-      caps.installedArtifacts.filter((a) => a.available).map((a) => a.artifactId)
-    )
-    return catalog.artifacts.some(
-      (a) =>
-        a.capability === 'asr' && a.qualification.status !== 'retired' && installedIds.has(a.id)
-    )
+    // Imported artifacts carry their own `capability` tag and have no catalog
+    // entry (synthetic `imported-<hash>` ids), so they can't be matched by id.
+    // Downloaded artifacts don't set `capability`, so those fall back to the
+    // catalog lookup (also gated on non-retired qualification).
+    return caps.installedArtifacts.some((a) => {
+      if (!a.available) return false
+      if (a.capability) return a.capability === 'asr'
+      const catalogEntry = catalog.artifacts.find((c) => c.id === a.artifactId)
+      return (
+        catalogEntry?.capability === 'asr' && catalogEntry.qualification.status !== 'retired'
+      )
+    })
   })
 
   let hasInstalledAsr = $derived(storeHasInstalledAsr ?? fetchedHasInstalledAsr)
@@ -56,17 +72,14 @@
         invoke('config:get')
       ])
       if (capabilities.ok && catalog.ok) {
-        const installedIds = new Set(
-          capabilities.value.installedArtifacts
-            .filter((artifact) => artifact.available)
-            .map((artifact) => artifact.artifactId)
-        )
-        fetchedHasInstalledAsr = catalog.value.artifacts.some(
-          (artifact) =>
-            artifact.capability === 'asr' &&
-            artifact.qualification.status !== 'retired' &&
-            installedIds.has(artifact.id)
-        )
+        fetchedHasInstalledAsr = capabilities.value.installedArtifacts.some((artifact) => {
+          if (!artifact.available) return false
+          if (artifact.capability) return artifact.capability === 'asr'
+          const catalogEntry = catalog.value.artifacts.find((c) => c.id === artifact.artifactId)
+          return (
+            catalogEntry?.capability === 'asr' && catalogEntry.qualification.status !== 'retired'
+          )
+        })
       }
       fetchedVoiceRecordingEnabled = Boolean(
         (config as unknown as { sound?: { voiceRecordingEnabled?: boolean } })?.sound
@@ -227,10 +240,26 @@
     if (!target) return
     await speechController.start(target, scope, snapshot)
   }
+
+  // Expose this mic input to the global voice shortcut so double-press Left Alt
+  // (or the user's remapped binding) drives whichever recorder is on view.
+  // The effect re-registers as visibility/disability changes; a hidden button
+  // unregisters itself and can never claim the shortcut.
+  $effect(() => {
+    if (hidden || disabled || !buttonEl) return
+    return registerVoiceTriggerHost({
+      targetId,
+      priority: triggerPriority,
+      eligible: () => !hidden && !disabled,
+      element: () => buttonEl,
+      activate: () => void activate()
+    })
+  })
 </script>
 
 {#if !hidden}
   <button
+    bind:this={buttonEl}
     type="button"
     class="relative flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-muted transition-colors hover:bg-elevated hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary disabled:cursor-not-allowed disabled:opacity-45 {action === 'blocked'
       ? 'opacity-60'

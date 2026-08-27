@@ -733,6 +733,21 @@ class ThreadMessagesStore {
       if (part.type === 'reasoning' && !part.time?.end) {
         part.time = { ...part.time, end: now }
       }
+      // A tool still marked running when its message completes is finished by
+      // definition — freeze its duration so the card stops counting while the
+      // agent moves on to later tool calls.
+      if (part.type === 'tool' && part.state.status === 'running' && !part.state.time?.end) {
+        part.state.status = 'completed'
+        part.state.time = { start: part.state.time?.start ?? now, end: now }
+      }
+      if (
+        part.type === 'subagent' &&
+        part.activity.status === 'running' &&
+        !part.activity.time?.end
+      ) {
+        part.activity.status = 'completed'
+        part.activity.time = { start: part.activity.time?.start ?? now, end: now }
+      }
     }
     entry.messages = [...entry.messages]
     this.#notifyStreaming(projectId, threadId)

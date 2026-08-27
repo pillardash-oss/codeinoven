@@ -29,7 +29,20 @@ The initial families are:
 - Parakeet TDT 0.6B v2 (English-optimized) and v3 (multilingual) for local ASR through sherpa-onnx — ranked first in the ASR tab, with **Best for English** (v2) and **Best for Multilingual** (v3) badges.
 - Whisper Base for local ASR through MLX or sherpa-onnx — ranked after Parakeet, with platform badges and Hugging Face links.
 - Kokoro English for local TTS through MLX or sherpa-onnx — shown in the TTS tab with **MLX / ONNX** runtime badges and Hugging Face links.
-- Qwen3 0.6B 4-bit for compact MLX cleanup and a sherpa-onnx English and Chinese punctuation model — shown in the LLM (cleanup) tab with runtime badges and Hugging Face links.
+- Qwen3 1.7B and 0.6B official GGUF Q8_0 quantizations for local **instruct** cleanup and lesson learning.
+- superwhisper **S1 mini** GGUF Q4_K_M — a purpose-trained English dictation normalizer (punctuation, truecasing, filler removal, inverse text normalization). It speaks a fixed control-line protocol rather than free instructions: CodeInOven sends its exact trained system prompt plus `[Styling: semi-formal] [Structure: prose] [Context: general]`, and never injects lessons into it. S1 mini performs **cleanup only**; lesson learning runs through the conversation provider's cheapest model (title-route), with the Qwen3 instruct models as the offline fallback.
+
+Both families run through a llama.cpp `llama-server` process that is either discovered on the machine or downloaded at the user's request; see the llama.cpp runtime section below. The server is always started with `--jinja --chat-template-kwargs '{"enable_thinking":false}'` because every supported cleanup model was trained with thinking off.
+
+### llama.cpp runtime (discover or download)
+
+Transcript cleanup and lesson learning require a real instruction-following model, so CodeInOven never bundles an inference runtime. Instead it mirrors the CUA-driver model:
+
+1. **Discovery first.** At startup the speech service scans `$CODEINOVEN_LLAMA_SERVER_PATH`, the canonical `~/.local/bin` location, Homebrew prefixes, and every `PATH` directory for a `llama-server` binary and probes its version. An existing install is reused transparently and preferred when it matches the pinned release line.
+2. **Consented download.** If nothing is found, Sound → Models shows a download action stating exactly what will be fetched: the pinned prebuilt CPU release of llama.cpp (`b10644`), its size, and that it will be installed into the CodeInOven configuration directory (`speech/runtime/llama-b10644`). The archive's SHA-256 is verified against a pinned digest before extraction; partial installs are impossible.
+3. **Serving.** Cleanup inference runs in a locally spawned `llama-server` bound to `127.0.0.1` on an ephemeral port. The same resident-process policy applies as for ASR/TTS: instant reuse while active, unloaded after the configured idle delay.
+
+Downloads are per-platform: macOS arm64/x64, Ubuntu arm64/x64, and Windows x64/arm64 CPU builds from the official ggml-org release assets.
 
 Every downloadable file has a pinned repository revision, HTTPS URL, exact byte count, and SHA-256 digest. A catalog entry remains a non-selectable `candidate` until all of these admission gates pass:
 
@@ -96,23 +109,33 @@ The mic is hidden on machines with no installed local speech-to-text model unles
 
 ## Cleanup and privacy
 
-Local cleanup is enabled by default. It applies the selected punctuation or formatting model and enabled correction rules. If local cleanup fails, CodeInOven inserts the raw transcript, records the error, and does not switch backend or contact a remote model.
+Local cleanup is enabled by default. The cleanup system prompt is assembled from three user-facing behavior toggles (Sound → Preferences → Cleanup behavior) plus the user's enabled learned lessons for the current scope:
 
-Remote cleanup is a separate `Switch` that defaults off. Enabling it requires an explicit fixed model or the current conversation model. Only transcript text and minimal formatting context may leave the machine: view kind, project or thread labels, active branch, and the bounded glossary or rules. Audio bytes, source files, full conversation history, and unrelated project content are excluded.
+- **Smart cleanup** — remove disfluencies ("um", "uh") and filler phrases, add punctuation and capitalization.
+- **Self-correction** — drop "no wait / scratch that" retracts and keep only the final intent.
+- **Preserve technical** — keep code identifiers and paths exact; dictate `index dot tsx` → `index.tsx`, `src slash components` → `src/components`.
 
-A local-LLM cleanup control is exposed in the Sound **Preferences** tab (default off), alongside **Runtime** and **Transcript cleanup** (which no longer appear in the Models tab): when enabled, transcripts are sent to a local LLM (llama.cpp/GGUF or MLX) for formatting, via either an app-managed runtime or a user-supplied OpenAI-compatible base URL (e.g. LM Studio or a running `llama.cpp --server`). It is treated as a local path and is distinct from the off-by-default remote conversation-model cleanup. The **Preferences** tab also holds Model memory, Cues and playback, and Enable voice recording.
+Before any model sees the transcript, CodeInOven deterministically collapses ASR loop artifacts — pathological repetitions like "URL URL URL…" or "thanks for watching" repeated six or more times, including CJK loops — which small refine models otherwise truncate around and larger ones echo verbatim. Rhetorical repetition below the threshold is preserved.
+
+The instruct model then applies the assembled prompt and the scoped style lessons; there is no rule or pattern-matching correction layer. If no cleanup model is installed (or the runtime is unavailable), CodeInOven inserts the raw transcript unchanged, records `modelMissing` in the attempt provenance, and the Sound → Models page shows a prominent download call-to-action. Cleanup failure never switches backend or contacts a remote model.
+
+Remote cleanup is a separate `Switch` that defaults off. Enabling it requires an explicit fixed model or the current conversation model. Only transcript text and minimal formatting context may leave the machine: view kind, project or thread labels, active branch, the bounded lesson set scoped to the current mode, and the behavior toggles. Audio bytes, source files, full conversation history, and unrelated project content are excluded.
+
+The former separate "Local-LLM base URL" preference was removed: the discover-or-download llama.cpp runtime described above is the local LLM path.
 
 ## Model memory
 
 Speech models are kept resident so later use is instant, and are unloaded after a per-subsystem idle delay. Each subsystem (speech-to-text, cleanup LLM, text-to-speech) exposes an unload option of `30 minutes`, `1 hour`, or `keep until the application closes`. The defaults are 30 minutes. Unloading runs as part of application-close cleanup and is scheduled with batched, non-blocking timers so it never stalls the main thread.
 
-## Correction learning
+## Lesson learning
 
-Learning compares the inserted dictation span with the text the user actually sends. It derives conservative vocabulary substitutions and formatting transformations; it never fine-tunes or changes model weights.
+When the user edits a dictation before sending it, CodeInOven compares the inserted transcript with the sent text. Whitespace-only differences are ignored. For a real edit, an instruct LLM receives both texts and distills what changed — vocabulary substitutions, punctuation habits, phrasing rewrites, formatting or stylistic transforms — into **structured lessons**: a short imperative instruction plus concrete example pairs. This is deliberately not regex substitution and never fine-tunes model weights.
 
-Rules may be global, project-specific, or Inbox/chat-specific. Clear spelling and formatting corrections may activate after one high-confidence observation. Broader patterns require repeated evidence. Every rule is visible, can be disabled and re-enabled, and can be deleted after confirmation.
+Lesson extraction runs through `provideCheapModel` — the same reusable cheap-model utility as thread title generation: a single self-contained prompt, no conversation history, per-candidate timeout, run in a disposable session against the active conversation provider's cheapest available model (`speech_lesson` auxiliary feature, tracked in diagnostics). The transcript already leaves the machine when the user sends the message, so this adds no new privacy exposure. If the harness or provider cannot run the auxiliary completion, extraction falls back to the local instruct cleanup model (Qwen3), when installed. S1 mini never extracts or consumes lessons — it is a single-purpose normalizer with frozen weights and a fixed prompt protocol.
 
-Storage is capped at 500 global rules and 200 rules for each project or Inbox/chat context. When a scope is full, disabled or lowest-confidence rules with the oldest reinforcement are evicted first.
+Lessons are bucketed per mode: lessons learned while dictating inside a project apply only in that project's views, lessons learned in chat/inbox apply across chats, and the store also allows a global layer for universal habits (caps: 500 global, 200 per context; disabled/lowest-confidence/oldest-reinforced lessons are evicted first). Reinforcing an existing lesson raises its confidence toward 0.99.
+
+Every lesson is visible in Sound → Learning with kind, scope, confidence, evidence count, and examples. Lessons can be toggled per-lesson and deleted after confirmation.
 
 ## Spoken responses
 

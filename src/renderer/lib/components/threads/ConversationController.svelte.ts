@@ -5,6 +5,7 @@ import type {
   PromptAttachment,
   PromptAssignmentTaskReference,
   PromptProjectReference,
+  PromptReference,
   SpecActionIntent,
   ThreadSettings,
   UserMessagePresentation
@@ -23,6 +24,10 @@ export interface SendPayload {
   taskReferences?: PromptAssignmentTaskReference[]
   /** True when the user force-sends while the agent is already working. */
   direct?: boolean
+  /** Optional backend text that differs from the visible `text` (used by
+   *  temporary chats to show a short action label while sending the full
+   *  instruction to the agent). */
+  transportText?: string
 }
 
 /**
@@ -77,4 +82,13 @@ export interface ConversationController {
   clearError(): void
   /** Clear a provider status card. */
   clearStatus(): void
+
+  /** Optional composer-level selection references (used by temporary chats). */
+  readonly references?: PromptReference[]
+  /** Remove a single composer selection reference (used by temporary chats). */
+  removeReference?(id: string): void
+  /** Remove all composer selection references (used by temporary chats). */
+  clearReferences?(): void
+  /** Attach an additional response selection to the composer (temporary chats). */
+  addSelection?(text: string): void
 }

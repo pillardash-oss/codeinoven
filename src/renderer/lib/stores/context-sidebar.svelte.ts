@@ -1,4 +1,5 @@
 import { invoke } from '$lib/ipc.svelte'
+import { messageId } from '$shared/id'
 import { SvelteSet } from 'svelte/reactivity'
 import { gitState } from './git.svelte'
 import { APP_SLUG } from '$shared/brand'
@@ -171,6 +172,12 @@ export interface CoordinatorContextTab {
 
 export type TemporaryChatMode = 'elaborate' | 'quick'
 
+/** Shared instruction sent to the harness when the user asks a side chat to
+ *  explain a selection. Displayed in the conversation as the short action
+ *  label ("Explain") while the full instruction travels as the transport text. */
+export const EXPLAIN_SELECTION_PROMPT =
+  'Explain the selected content clearly, based on the surrounding context. Use simple, everyday language and avoid unnecessary technical jargon unless it is truly needed. Be read-only — do not make changes or run commands.'
+
 export interface TemporaryChatContextTab {
   id: string
   kind: 'temporary-chat'
@@ -193,6 +200,10 @@ export interface TemporaryChatContextTab {
   selectionAttached: boolean
   selectionMessageId: string | null
   autoPromptSent: boolean
+  /** Id of the user message seeded at open time for the auto-sent explain
+   *  prompt, so the prompt shows as a sent message the instant the tab opens
+   *  (the controller reuses it instead of appending a duplicate). */
+  autoPromptMessageId: string | null
   /** Override for the auto-sent explain prompt, when the tab was opened to
    *  explain a specific selection (e.g. an agent question) rather than the
    *  generic "explain this selection" elaboration. */
@@ -1180,6 +1191,38 @@ class ContextSidebarState {
     }
 
     const temporaryChatId = crypto.randomUUID()
+    // The explain auto-prompt commits as a user-sent message immediately, so
+    // the moment the tab opens the conversation already shows the selection
+    // chip with the action label — never a blank panel while the harness
+    // session is still being assembled.
+    const seededAutoPrompt = mode === 'elaborate' && selectionAttached ? (autoPrompt ?? '') : ''
+    const autoPromptMessageId = seededAutoPrompt ? messageId() : null
+    const messages: AgentMessage[] =
+      autoPromptMessageId !== null
+        ? [
+            {
+              id: autoPromptMessageId,
+              role: 'user',
+              parts: [
+                {
+                  type: 'text',
+                  id: `${autoPromptMessageId}:text`,
+                  messageID: autoPromptMessageId,
+                  text: mode === 'elaborate' ? 'Explain' : seededAutoPrompt
+                }
+              ],
+              references: [
+                {
+                  id: `${temporaryChatId}:selection:0`,
+                  label: 'Selection 1',
+                  text: selection
+                }
+              ],
+              createdAt: Date.now(),
+              completedAt: Date.now()
+            }
+          ]
+        : []
     const tab: TemporaryChatContextTab = {
       id: `temporary-chat:${temporaryChatId}`,
       kind: 'temporary-chat',
@@ -1192,7 +1235,7 @@ class ContextSidebarState {
       selections: selectionAttached ? [selection] : [],
       initialContext,
       settings: { ...settings, engineeringMode: false, permissionLevel: 'auto_review' },
-      messages: [],
+      messages,
       busy: false,
       error: '',
       status: null,
@@ -1200,6 +1243,7 @@ class ContextSidebarState {
       selectionAttached,
       selectionMessageId: null,
       autoPromptSent: false,
+      autoPromptMessageId,
       autoPrompt,
       sessionStarted: false,
       expired: false,
@@ -1231,6 +1275,7 @@ class ContextSidebarState {
     tab.status = null
     tab.selectionAttached = false
     tab.selectionMessageId = null
+    tab.autoPromptMessageId = null
     this.clearTemporaryChatExpiry(temporaryChatId)
     if (closeRemote) void invoke('agent:closeTemporaryChat', temporaryChatId)
   }
@@ -1249,6 +1294,7 @@ class ContextSidebarState {
     tab.selectionAttached = tab.selections.length > 0
     tab.selectionMessageId = null
     tab.autoPromptSent = false
+    tab.autoPromptMessageId = null
     tab.sessionStarted = false
     tab.expired = false
     tab.expiresAt = Date.now() + TEMPORARY_CHAT_INACTIVITY_MS

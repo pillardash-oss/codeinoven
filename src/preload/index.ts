@@ -209,10 +209,12 @@ const INVOKE_CHANNELS = [
   'speech:downloadArtifact',
   'speech:cancelDownload',
   'speech:cancelJob',
-  'speech:getCorrectionRules',
+  'speech:getLessons',
   'speech:observeCorrection',
-  'speech:setCorrectionRuleEnabled',
-  'speech:deleteCorrectionRule',
+  'speech:setLessonEnabled',
+  'speech:deleteLesson',
+  'speech:getLlamaRuntimeStatus',
+  'speech:downloadLlamaRuntime',
   'speech:requestConfirmation',
   'speech:deleteHistory',
   'speech:deleteAllHistory',
@@ -414,6 +416,10 @@ const INVOKE_CHANNELS = [
   'providerAccounts:beginLogin',
   'providerAccounts:listOffered',
   'providerAccounts:logout',
+  'providerAccounts:setApiKey',
+  'providerAccounts:beginOAuthLogin',
+  'providerAccounts:respondOAuthPrompt',
+  'providerAccounts:cancelOAuthLogin',
   'providerAccounts:getHidden',
   'providerAccounts:setHidden',
   'utilities:list',
@@ -521,6 +527,7 @@ const INVOKE_CHANNELS = [
   'thread:reorderPinnedGlobal',
   'thread:reorderScope',
   'thread:markRead',
+  'thread:draftActivity',
   'thread:setPinned',
   'thread:setContextUsage',
   'thread:harnessUsage',
@@ -598,7 +605,8 @@ const EVENT_CHANNELS = [
   'switcher:closed',
   'remote:status',
   'remote:stepUpPending',
-  'speech:progress'
+  'speech:progress',
+  'providerAccounts:oauthEvent'
 ] as const
 
 export type SendChannel = (typeof SEND_CHANNELS)[number]

@@ -37,19 +37,20 @@
     {
       "id": "qwen-cleanup",
       "capability": "cleanup",
-      "label": "Qwen cleanup",
-      "description": "Compact MLX transcript punctuation and formatting model used in non-thinking mode.",
+      "label": "Qwen3 instruct cleanup",
+      "description": "Compact Qwen3 instruct models that format transcripts and drive correction learning through a discovered or downloaded llama.cpp runtime.",
       "artifactIds": [
-        "qwen3-cleanup-mlx-0-6b-4bit"
+        "qwen3-cleanup-gguf-1-7b",
+        "qwen3-cleanup-gguf-0-6b"
       ]
     },
     {
-      "id": "sherpa-punctuation",
+      "id": "s1-cleanup",
       "capability": "cleanup",
-      "label": "Sherpa punctuation",
-      "description": "Portable English and Chinese punctuation restoration for sherpa-onnx.",
+      "label": "S1 mini normalizer",
+      "description": "superwhisper S1 mini — a 0.6B ASR-output text normalizer (punctuation, truecasing, filler removal, inverse text normalization) with a fixed control-line protocol. Cleanup only; it cannot perform lesson learning.",
       "artifactIds": [
-        "sherpa-punctuation-zh-en"
+        "s1-mini-cleanup-gguf-q4"
       ]
     }
   ],
@@ -847,15 +848,15 @@
       }
     },
     {
-      "id": "qwen3-cleanup-mlx-0-6b-4bit",
+      "id": "qwen3-cleanup-gguf-1-7b",
       "familyId": "qwen-cleanup",
       "capability": "cleanup",
-      "runtime": "mlx",
-      "label": "Qwen3 cleanup · MLX 0.6B 4-bit",
-      "description": "Compact multilingual transcript cleanup model constrained to non-thinking structured output.",
-      "tier": "lightweight",
-      "version": "73e3e38",
-      "repositoryRevision": "73e3e38d981303bc594367cd910ea6eb48349da8",
+      "runtime": "gguf",
+      "label": "Qwen3 1.7B · GGUF Q8_0",
+      "description": "Instruct LLM for transcript cleanup and correction learning. Best quality that still runs comfortably on modern devices.",
+      "tier": "balanced",
+      "version": "Q8_0",
+      "repositoryRevision": "90862c4b9d2787eaed51d12237eafdfe7c5f6077",
       "platforms": [
         "darwin"
       ],
@@ -868,59 +869,17 @@
       "voices": [],
       "files": [
         {
-          "path": "config.json",
-          "sourceUrl": "https://huggingface.co/mlx-community/Qwen3-0.6B-4bit/resolve/73e3e38d981303bc594367cd910ea6eb48349da8/config.json",
-          "byteSize": 937,
-          "sha256": "15d3ac26c043ae477273ed5802ee0f0b33bb14f18c9d3dd70910c02d906e3f1f"
-        },
-        {
-          "path": "model.safetensors",
-          "sourceUrl": "https://huggingface.co/mlx-community/Qwen3-0.6B-4bit/resolve/73e3e38d981303bc594367cd910ea6eb48349da8/model.safetensors",
-          "byteSize": 335450584,
-          "sha256": "392e8d466d56100ada00eb82031fb854297fc9e389b7d303eba3af114e87bce2"
-        },
-        {
-          "path": "tokenizer.json",
-          "sourceUrl": "https://huggingface.co/mlx-community/Qwen3-0.6B-4bit/resolve/73e3e38d981303bc594367cd910ea6eb48349da8/tokenizer.json",
-          "byteSize": 11422654,
-          "sha256": "aeb13307a71acd8fe81861d94ad54ab689df773318809eed3cbe794b4492dae4"
-        },
-        {
-          "path": "tokenizer_config.json",
-          "sourceUrl": "https://huggingface.co/mlx-community/Qwen3-0.6B-4bit/resolve/73e3e38d981303bc594367cd910ea6eb48349da8/tokenizer_config.json",
-          "byteSize": 9706,
-          "sha256": "253153d0738ceb4c668d2eff957714dd2bea0b56de772a9fdccd96cbf517e6a0"
-        },
-        {
-          "path": "vocab.json",
-          "sourceUrl": "https://huggingface.co/mlx-community/Qwen3-0.6B-4bit/resolve/73e3e38d981303bc594367cd910ea6eb48349da8/vocab.json",
-          "byteSize": 2776833,
-          "sha256": "ca10d7e9fb3ed18575dd1e277a2579c16d108e32f27439684afa0e10b1440910"
-        },
-        {
-          "path": "merges.txt",
-          "sourceUrl": "https://huggingface.co/mlx-community/Qwen3-0.6B-4bit/resolve/73e3e38d981303bc594367cd910ea6eb48349da8/merges.txt",
-          "byteSize": 1671853,
-          "sha256": "8831e4f1a044471340f7c0a83d7bd71306a5b867e95fd870f74d0c5308a904d5"
-        },
-        {
-          "path": "special_tokens_map.json",
-          "sourceUrl": "https://huggingface.co/mlx-community/Qwen3-0.6B-4bit/resolve/73e3e38d981303bc594367cd910ea6eb48349da8/special_tokens_map.json",
-          "byteSize": 613,
-          "sha256": "76862e765266b85aa9459767e33cbaf13970f327a0e88d1c65846c2ddd3a1ecd"
-        },
-        {
-          "path": "added_tokens.json",
-          "sourceUrl": "https://huggingface.co/mlx-community/Qwen3-0.6B-4bit/resolve/73e3e38d981303bc594367cd910ea6eb48349da8/added_tokens.json",
-          "byteSize": 707,
-          "sha256": "c0284b582e14987fbd3d5a2cb2bd139084371ed9acbae488829a1c900833c680"
+          "path": "Qwen3-1.7B-Q8_0.gguf",
+          "sourceUrl": "https://huggingface.co/Qwen/Qwen3-1.7B-GGUF/resolve/90862c4b9d2787eaed51d12237eafdfe7c5f6077/Qwen3-1.7B-Q8_0.gguf",
+          "byteSize": 1834426016,
+          "sha256": "061b54daade076b5d3362dac252678d17da8c68f07560be70818cace6590cb1a"
         }
       ],
-      "byteSize": 351333887,
+      "byteSize": 1834426016,
       "license": "Apache-2.0",
-      "attribution": "Qwen3 weights converted by mlx-community.",
-      "sourcePageUrl": "https://huggingface.co/mlx-community/Qwen3-0.6B-4bit",
-      "minimumMemoryBytes": 1073741824,
+      "attribution": "Qwen3 instruct weights published by Alibaba Cloud as official GGUF quantizations.",
+      "sourcePageUrl": "https://huggingface.co/Qwen/Qwen3-1.7B-GGUF",
+      "minimumMemoryBytes": 3221225472,
       "qualification": {
         "status": "candidate",
         "licenseReviewed": true,
@@ -928,61 +887,95 @@
         "checksumReviewed": true,
         "benchmark": {
           "status": "pending",
-          "notes": "Must pass bounded structured cleanup quality checks without broad rewriting."
+          "notes": "Requires packaged llama-server latency, memory, cleanup-quality, and lesson-extraction measurements per target platform."
         }
       }
     },
     {
-      "id": "sherpa-punctuation-zh-en",
-      "familyId": "sherpa-punctuation",
+      "id": "s1-mini-cleanup-gguf-q4",
+      "familyId": "s1-cleanup",
       "capability": "cleanup",
-      "runtime": "sherpa-onnx",
-      "label": "Sherpa punctuation · English and Chinese",
-      "description": "Portable punctuation restoration candidate for English and Chinese transcripts.",
-      "tier": "balanced",
-      "version": "2024-04-12",
-      "repositoryRevision": "432aeba669265e7aeb06b9359753419683b38597",
+      "runtime": "gguf",
+      "label": "S1 mini · GGUF Q4_K_M",
+      "description": "Purpose-trained English dictation normalizer: punctuation, truecasing, filler removal, and inverse text normalization out of the box. Runs through the same llama.cpp runtime as the instruct cleanup models.",
+      "tier": "lightweight",
+      "version": "q4_k_m",
+      "repositoryRevision": "ee2c0f56e56345f475749a44ff2893e21c3cb292",
       "platforms": [
-        "darwin",
-        "win32",
-        "linux"
+        "darwin"
       ],
       "architectures": [
-        "arm64",
-        "x64"
+        "arm64"
       ],
       "languages": [
-        "en",
-        "zh"
+        "en"
       ],
       "voices": [],
       "files": [
         {
-          "path": "model.onnx",
-          "sourceUrl": "https://huggingface.co/csukuangfj/sherpa-onnx-punct-ct-transformer-zh-en-vocab272727-2024-04-12/resolve/432aeba669265e7aeb06b9359753419683b38597/model.onnx",
-          "byteSize": 294372519,
-          "sha256": "e93593a6dbd69a07f8734ef269dbe861a379755f8d1c8354719432116f2c44bd"
-        },
-        {
-          "path": "tokens.json",
-          "sourceUrl": "https://huggingface.co/csukuangfj/sherpa-onnx-punct-ct-transformer-zh-en-vocab272727-2024-04-12/resolve/432aeba669265e7aeb06b9359753419683b38597/tokens.json",
-          "byteSize": 4207480,
-          "sha256": "c960ab87bccea4aa15cf49a59f71973c2c330b46668048cd8da253749ec71ee3"
+          "path": "s1-mini-q4_k_m.gguf",
+          "sourceUrl": "https://huggingface.co/superwhisper/s1-mini-GGUF/resolve/ee2c0f56e56345f475749a44ff2893e21c3cb292/s1-mini-q4_k_m.gguf",
+          "byteSize": 484219808,
+          "sha256": "3b41ebe2502cbd03e811d5d16b022f5ab551eda58d62597d152f89535003c634"
         }
       ],
-      "byteSize": 298579999,
-      "license": "Review pending",
-      "attribution": "Punctuation model distributed by the k2-fsa community.",
-      "sourcePageUrl": "https://huggingface.co/csukuangfj/sherpa-onnx-punct-ct-transformer-zh-en-vocab272727-2024-04-12",
-      "minimumMemoryBytes": 1073741824,
+      "byteSize": 484219808,
+      "license": "Apache-2.0",
+      "attribution": "S1 mini fine-tune by superwhisper, quantized to GGUF; Apache-2.0 license.",
+      "sourcePageUrl": "https://huggingface.co/superwhisper/s1-mini-GGUF",
+      "minimumMemoryBytes": 1342177280,
       "qualification": {
         "status": "candidate",
-        "licenseReviewed": false,
+        "licenseReviewed": true,
         "compatibilityReviewed": false,
         "checksumReviewed": true,
         "benchmark": {
           "status": "pending",
-          "notes": "License, formatting quality, memory, and latency review are still required."
+          "notes": "Requires packaged llama-server latency, memory, and normalization-quality measurements per target platform with the exact system prompt and control line."
+        }
+      }
+    },
+    {
+      "id": "qwen3-cleanup-gguf-0-6b",
+      "familyId": "qwen-cleanup",
+      "capability": "cleanup",
+      "runtime": "gguf",
+      "label": "Qwen3 0.6B · GGUF Q8_0",
+      "description": "Compact instruct LLM for transcript cleanup and correction learning on lower-memory machines.",
+      "tier": "lightweight",
+      "version": "Q8_0",
+      "repositoryRevision": "23749fefcc72300e3a2ad315e1317431b06b590a",
+      "platforms": [
+        "darwin"
+      ],
+      "architectures": [
+        "arm64"
+      ],
+      "languages": [
+        "multilingual"
+      ],
+      "voices": [],
+      "files": [
+        {
+          "path": "Qwen3-0.6B-Q8_0.gguf",
+          "sourceUrl": "https://huggingface.co/Qwen/Qwen3-0.6B-GGUF/resolve/23749fefcc72300e3a2ad315e1317431b06b590a/Qwen3-0.6B-Q8_0.gguf",
+          "byteSize": 639446688,
+          "sha256": "9465e63a22add5354d9bb4b99e90117043c7124007664907259bd16d043bb031"
+        }
+      ],
+      "byteSize": 639446688,
+      "license": "Apache-2.0",
+      "attribution": "Qwen3 instruct weights published by Alibaba Cloud as official GGUF quantizations.",
+      "sourcePageUrl": "https://huggingface.co/Qwen/Qwen3-0.6B-GGUF",
+      "minimumMemoryBytes": 1610612736,
+      "qualification": {
+        "status": "candidate",
+        "licenseReviewed": true,
+        "compatibilityReviewed": false,
+        "checksumReviewed": true,
+        "benchmark": {
+          "status": "pending",
+          "notes": "Requires packaged llama-server latency, memory, cleanup-quality, and lesson-extraction measurements per target platform."
         }
       }
     }

@@ -343,8 +343,14 @@
     | 'approval'
     | 'error'
 
-  /** Threads with any unsent composer content read as "todo" (filled gray dot). */
-  let isDraft = $derived(rendererRecovery.hasDraftContent(thread.projectId, thread.id))
+  /** Threads with any unsent composer content read as "todo" (filled gray dot).
+   *  Live dictation counts too: from the first mic press through transcription
+   *  the user is drafting with their voice, so the row must read as draft
+   *  before the transcript ever reaches the composer. */
+  let isDraft = $derived(
+    rendererRecovery.hasDraftContent(thread.projectId, thread.id) ||
+      speechController.isCapturingThread(thread.id)
+  )
 
   /** Orchestration worker/auditor threads stay silent: never presented as unread. */
   let effectiveRead = $derived(isOrchestrationChildThread(thread) || thread.read)
@@ -370,6 +376,8 @@
     isWorking || isRetryPaused || (Boolean(thread.sessionId) && isThreadBusy(thread) && !isDraft)
   )
   let isRecording = $derived(speechController.isRecordingThread(thread.id))
+  /** TTS playing on this thread — shares the recorder's indicator slot. */
+  let isSpeaking = $derived(!isRecording && speechController.isSpeakingThread(thread.id))
 
   /**
    * Sending clears the draft, which would otherwise flash the badge back to the
@@ -676,6 +684,8 @@
       {#if !showBottomRow}
         {#if isRecording}
           <RecordingIndicator label="Listening" />
+        {:else if isSpeaking}
+          <RecordingIndicator label="Speaking" tone="speech" />
         {:else}
           <span class="whitespace-nowrap text-[10px] text-dimmed">
             {relativeTime(thread.createdAt)}
@@ -732,6 +742,8 @@
           {/if}
           {#if isRecording}
             <RecordingIndicator label="Listening" />
+          {:else if isSpeaking}
+            <RecordingIndicator label="Speaking" tone="speech" />
           {:else}
             <span class="whitespace-nowrap text-[10px] text-dimmed">
               {relativeTime(thread.createdAt)}
@@ -873,6 +885,8 @@
       {#if !showBottomRow}
         {#if isRecording}
           <RecordingIndicator label="Listening" />
+        {:else if isSpeaking}
+          <RecordingIndicator label="Speaking" tone="speech" />
         {:else}
           <span
             class="whitespace-nowrap text-[10px] text-dimmed transition-opacity duration-150 {hovered
@@ -948,6 +962,8 @@
           {/if}
           {#if isRecording}
             <RecordingIndicator label="Listening" />
+          {:else if isSpeaking}
+            <RecordingIndicator label="Speaking" tone="speech" />
           {:else}
             <span
               class="whitespace-nowrap text-[10px] text-dimmed transition-opacity duration-150 {hovered

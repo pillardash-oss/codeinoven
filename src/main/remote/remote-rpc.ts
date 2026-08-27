@@ -113,6 +113,7 @@ import type {
 import { Logger } from '../system/logger'
 import { getConfigRoot } from '../../lib/utils'
 import { PROJECT_DATA_DIRECTORY } from '../../lib/project-artifacts'
+import { threadAttachmentDirectory } from '../../lib/thread-storage-paths'
 import { remoteWebPush, type RemotePushSubscription } from './web-push-service'
 import type { AttachmentStorageScope } from '../../lib/types'
 
@@ -2006,12 +2007,7 @@ export class RemoteRpcDispatcher {
       throw new TypeError('Attachment storage scope is invalid')
     }
     const project = await this.projectManager.getProject(scope.projectId)
-    if (project?.source === 'local' && project.path) {
-      return join(project.path, PROJECT_DATA_DIRECTORY, 'tmp', 'attachments', scope.threadId)
-    }
-    return scope.kind === 'chat'
-      ? join(getConfigRoot(), 'chats', scope.threadId, 'tmp')
-      : join(getConfigRoot(), 'projects', scope.projectId, 'threads', scope.threadId, 'tmp')
+    return threadAttachmentDirectory(project ?? null, scope)
   }
 
   private async pruneRemoteUploads(): Promise<void> {

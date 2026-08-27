@@ -1182,20 +1182,28 @@ export interface IpcInvokeContract {
     import('./speech/types').SpeechResult<boolean>
   >
   'speech:cancelJob': Contract<[jobId: string], import('./speech/types').SpeechResult<boolean>>
-  'speech:getCorrectionRules': Contract<
+  'speech:getLessons': Contract<
     [scope?: import('./speech/types').SpeechScope],
-    import('./speech/types').SpeechResult<import('./speech/types').SpeechCorrectionRule[]>
+    import('./speech/types').SpeechResult<import('./speech/types').SpeechLesson[]>
   >
   'speech:observeCorrection': Contract<
-    [observation: import('./speech/types').SpeechCorrectionObservation],
-    import('./speech/types').SpeechResult<import('./speech/types').SpeechCorrectionRule | null>
+    [observation: import('./speech/types').SpeechLearningObservation],
+    import('./speech/types').SpeechResult<import('./speech/types').SpeechLesson[]>
   >
-  'speech:setCorrectionRuleEnabled': Contract<
-    [ruleId: string, enabled: boolean],
-    import('./speech/types').SpeechResult<import('./speech/types').SpeechCorrectionRule>
+  'speech:setLessonEnabled': Contract<
+    [lessonId: string, enabled: boolean],
+    import('./speech/types').SpeechResult<import('./speech/types').SpeechLesson>
   >
-  'speech:deleteCorrectionRule': Contract<
-    [ruleId: string, confirmationToken: string],
+  'speech:deleteLesson': Contract<
+    [lessonId: string, confirmationToken: string],
+    import('./speech/types').SpeechResult<void>
+  >
+  'speech:getLlamaRuntimeStatus': Contract<
+    [],
+    import('./speech/types').SpeechResult<import('./speech/types').SpeechLlamaRuntimeStatus>
+  >
+  'speech:downloadLlamaRuntime': Contract<
+    [],
     import('./speech/types').SpeechResult<void>
   >
   'speech:requestConfirmation': Contract<
@@ -1871,6 +1879,16 @@ export interface IpcInvokeContract {
   >
   'providerAccounts:listOffered': Contract<[harnessId: string], OfferedProvider[]>
   'providerAccounts:logout': Contract<[harnessId: string, providerId?: string], void>
+  'providerAccounts:setApiKey': Contract<
+    [harnessId: string, providerId: string, apiKey: string],
+    void
+  >
+  'providerAccounts:beginOAuthLogin': Contract<
+    [harnessId: string, providerId: string],
+    string
+  >
+  'providerAccounts:respondOAuthPrompt': Contract<[loginId: string, value: string], void>
+  'providerAccounts:cancelOAuthLogin': Contract<[loginId: string], void>
   'providerAccounts:getHidden': Contract<[harnessId: string], string[]>
   'providerAccounts:setHidden': Contract<
     [harnessId: string, providerId: string, hidden: boolean],
@@ -2233,6 +2251,8 @@ export interface IpcInvokeContract {
     import('./types').AgentPart[]
   >
   'thread:markRead': Contract<[projectId: string, threadId: string], Thread>
+  /** Renderer → main composer draft transitions feeding the turn-grading timers. */
+  'thread:draftActivity': Contract<[projectId: string, threadId: string, drafting: boolean], void>
   'thread:setPinned': Contract<[projectId: string, threadId: string, pinned: boolean], Thread>
   'thread:setContextUsage': Contract<
     [projectId: string, threadId: string, usage: ThreadContextUsage],
@@ -2516,6 +2536,19 @@ export interface IpcEventContract {
    */
   'remote:stepUpPending': [approvals: RemotePendingStepUpApproval[]]
   'speech:progress': [progress: import('./speech/types').SpeechProgressEvent]
+  /** Live progress/prompt/completion updates for an in-app Pi OAuth sign-in. */
+  'providerAccounts:oauthEvent': [
+    payload:
+      | { loginId: string; kind: 'event'; event: import('../lib/types').PiOAuthUiEvent }
+      | {
+          loginId: string
+          kind: 'prompt'
+          promptId: string
+          prompt: import('../lib/types').PiOAuthUiPrompt
+        }
+      | { loginId: string; kind: 'complete'; providerId: string }
+      | { loginId: string; kind: 'failed'; error: string }
+  ]
 }
 
 export type InvokeChannel = keyof IpcInvokeContract

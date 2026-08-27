@@ -24,7 +24,11 @@ export function classifyProviderIssue(
   message: string,
   statusCode?: number
 ): AgentProviderIssueKind {
-  const normalized = message.toLowerCase()
+  // Harnesses frequently surface limits as machine-style subtype strings
+  // (`usage_limit_exceeded`, `session-limit-reached`, `rate_limit_error`).
+  // Normalize separators to spaces first, or these fall through to `unknown`
+  // and a scheduled usage-reset wait renders as a terminal error.
+  const normalized = message.replaceAll(/[_-]+/gu, ' ').toLowerCase()
   if (
     statusCode === 429 ||
     normalized.includes('rate limit') ||

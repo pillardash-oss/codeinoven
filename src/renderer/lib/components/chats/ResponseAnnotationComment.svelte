@@ -17,7 +17,8 @@
     scope: SpeechScope
     onDraftChange: (comment: string) => void
     onDone: (comment: string) => void
-    onRemoveComment: () => void
+    /** Detach the entire selection (highlight, bubble, and comment) from the chat. */
+    onRemove: () => void
     onClose: () => void
   }
 
@@ -29,7 +30,7 @@
     scope,
     onDraftChange,
     onDone,
-    onRemoveComment,
+    onRemove,
     onClose
   }: Props = $props()
 
@@ -86,6 +87,7 @@
   style:width={`${POPOVER_WIDTH}px`}
   role="dialog"
   aria-label="Comment on selection"
+  data-voice-trigger-root
   {@attach draggablePopover({ x: preferredLeft, y: preferredTop })}
 >
   <div class="mb-2 flex items-center justify-between gap-2">
@@ -115,14 +117,19 @@
     <button
       type="button"
       class="flex h-8 items-center gap-1.5 rounded-lg px-2.5 text-xs text-muted transition-colors hover:bg-danger/10 hover:text-danger disabled:pointer-events-none disabled:opacity-40"
-      title="Remove the comment from this selection"
+      title="Remove this selection from the chat entirely"
       disabled={!comment.trim()}
-      onclick={onRemoveComment}
+      onclick={onRemove}
     >
       <Trash2 size={12} />
       Remove
     </button>
-    <VoiceInputButton {targetId} getTarget={() => speechTarget} {scope} />
+    <VoiceInputButton
+      {targetId}
+      getTarget={() => speechTarget}
+      {scope}
+      triggerPriority={6}
+    />
     <button
       type="button"
       class="flex h-8 items-center gap-1.5 rounded-lg bg-primary px-3 text-xs font-medium text-on-primary transition-colors hover:bg-primary-hover"

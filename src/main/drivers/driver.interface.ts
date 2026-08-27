@@ -145,6 +145,12 @@ export interface HarnessAuthCapabilities {
    * from an incomplete in-app catalog.
    */
   pickerLogin: boolean
+  /**
+   * CodeInOven can persist an API key for a provider into the harness's own
+   * credential store (e.g. Pi's auth.json), so catalog providers can be
+   * connected headlessly without the harness's interactive flow.
+   */
+  apiKeyEntry: boolean
 }
 
 export interface HarnessAuthAccount {
@@ -218,6 +224,50 @@ export interface GenerateTitleOptions {
   parentSessionId?: string
 }
 
+/** Captured grading payload judged 1–5 by a disposable cheap-model completion. */
+export interface GradeTurnOptions {
+  settings: ThreadSettings
+  /** The initiating visible user message of the scored turn. */
+  userMessage: string
+  /** The agent's final output text for the scored turn. */
+  assistantOutput: string
+  /** Follow-up the user sent while the grade was pending, when one exists. */
+  followUp?: string | null
+  /** Parent turn whose authenticated transport permits a safe auxiliary grading process. */
+  parentSessionId?: string
+}
+
+/**
+ * One self-contained auxiliary completion run against the harness's cheapest
+ * available model, shared by every disposable cheap-model scenario (title
+ * generation, turn grading, speech lessons, memory proposals, …).
+ */
+export interface CheapModelRequest {
+  settings: ThreadSettings
+  /** Short scenario label used as the disposable session title. */
+  purpose: string
+  /** Complete, self-contained prompt. No conversation history is attached. */
+  prompt: string
+  /** Parent turn whose authenticated transport permits a safe auxiliary process. */
+  parentSessionId?: string
+  /** Time budget per candidate attempt. Defaults to the harness standard. */
+  timeoutMs?: number
+}
+
+/** Outcome of one cheap-model candidate attempt. */
+export interface CheapModelAttempt {
+  providerId: string
+  modelId: string
+  ok: boolean
+  failure: string | null
+}
+
+export interface CheapModelResult {
+  /** Validated response text, or null when every candidate attempt failed. */
+  text: string | null
+  attempts: CheapModelAttempt[]
+}
+
 /** Provider-neutral input appended to an already active harness turn. */
 export interface SteerPromptOptions {
   sessionId: string
@@ -259,6 +309,20 @@ export interface HarnessDriver {
    * their cheapest available model, then fall back to the active thread model.
    */
   generateTitle(projectPath: string, options: GenerateTitleOptions): Promise<string | null>
+
+  /**
+   * Judge a completed turn 1–5 in an isolated disposable session using the
+   * same cheapest-candidate strategy as title generation.
+   */
+  gradeTurn(projectPath: string, options: GradeTurnOptions): Promise<number | null>
+
+  /**
+   * Run one self-contained completion in a disposable session, cheapest
+   * candidate first, falling back to the active thread model. Handles per-
+   * attempt timeouts and reports per-candidate outcomes. The single entry
+   * point every cheap-model scenario must go through.
+   */
+  provideCheapModel(projectPath: string, request: CheapModelRequest): Promise<CheapModelResult>
 
   /**
    * Best-effort release of a project's in-memory harness resources without

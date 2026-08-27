@@ -114,7 +114,7 @@
   import { baseUrlProviderStore } from '$lib/stores/base-url-providers.svelte'
   import { providerCatalog } from '$lib/stores/provider-catalog.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
-  import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
+  import { contextSidebarState, EXPLAIN_SELECTION_PROMPT } from '$lib/stores/context-sidebar.svelte'
   import { coordinatorDockState } from '$lib/stores/coordinator-dock.svelte'
   import { projectFilesWorkspace } from '$lib/stores/project-files.svelte'
   import {
@@ -553,8 +553,12 @@
       engineeringLifecycle = await invoke('engineeringLifecycle:get', thread.projectId, thread.id)
     }
   }
-  /** Snapshot of the selection that started the live turn. Model controls can
-   *  still change the next-turn settings while the current turn is running. */
+  /** Sticky snapshot of the selection that started the live turn. Every working
+   *  trace belongs to the module that produced it: composer controls may change
+   *  the next-turn settings freely while a turn runs, but they must never
+   *  re-label work that already happened. The snapshot is only overwritten when
+   *  a new turn is actually sent — never cleared by waiting, error, or idle
+   *  transitions — so resumed turns keep their original attribution. */
   let liveWorkingSelection = $state<WorkingModelSelection | null>(null)
   /** True while we are showing a working trace rehydrated from persisted state
    *  because no live session activity is available to confirm the run (a silent
@@ -709,6 +713,25 @@
       ? harnessDisplayName(visibleProviderStatus.issue.harnessId)
       : providerName
   )
+  /** Settings frozen at the moment the visible provider status card appeared.
+   *  The composer must not mutate anything already on the conversation screen:
+   *  an error card keeps showing — and retrying from "Change" affects — the
+   *  configuration of the failed attempt until a new message is actually sent.
+   *  The snapshot is refreshed only when the card's identity changes, when the
+   *  user explicitly picks a model from the card itself, or when it clears. */
+  let statusCardSettings = $state<ThreadSettings | null>(null)
+  let seenProviderStatusKey: typeof visibleProviderStatus = null
+  $effect(() => {
+    if (visibleProviderStatus !== seenProviderStatusKey) {
+      seenProviderStatusKey = visibleProviderStatus
+      statusCardSettings = chatMode
+        ? { ...settings, engineeringMode: false, assignmentMode: false, loopMode: false }
+        : { ...settings }
+    } else if (visibleProviderStatus === null && statusCardSettings !== null) {
+      statusCardSettings = null
+      seenProviderStatusKey = null
+    }
+  })
   const applicationActionSource = {
     id: 'application',
     label: APP_NAME,
@@ -1340,6 +1363,8 @@
 
   let responseSelection = $state<ResponseSelectionCandidate | null>(null)
   let responseReferences = $derived(responseReferencesState.forThread(thread.projectId, thread.id))
+  /** Selection references shown in the composer (controller-driven for temporary chats). */
+  let composerReferences = $derived(controller?.references ?? responseReferences)
   const responseReferenceRanges = new SvelteMap<string, Range>()
   const RESPONSE_HIGHLIGHT_NAME = 'response-annotation'
   /** Viewport position for the comment bubble of each reference anchor. */
@@ -1520,6 +1545,13 @@
   function addResponseReference(): void {
     const selection = responseSelection
     if (!selection) return
+    // Temporary chats keep their composer references on the controller — the
+    // thread-scoped store below is invisible to them.
+    if (controller?.addSelection) {
+      controller.addSelection(selection.text)
+      closeResponseSelection()
+      return
+    }
     const id = crypto.randomUUID()
     responseReferencesState.setForThread(thread.projectId, thread.id, [
       ...responseReferences,
@@ -1571,11 +1603,6 @@
     responseReferencesState.updateCommentDraft(thread.projectId, thread.id, id, comment)
   }
 
-  function removeResponseReferenceComment(id: string): void {
-    responseReferencesState.updateComment(thread.projectId, thread.id, id, '')
-    commentEditorReferenceId = null
-  }
-
   /** Jump back to a selection's highlight and open its comment editor. */
   function editResponseReference(id: string): void {
     commentEditorReferenceId = id
@@ -1591,6 +1618,24 @@
         element?.scrollIntoView({ behavior: 'smooth', block: 'center' })
       }
     })
+  }
+
+  /** Remove a single composer selection reference, routing to the controller for temporary chats. */
+  function removeComposerReference(id: string): void {
+    if (controller?.removeReference) {
+      controller.removeReference(id)
+    } else {
+      removeResponseReference(id)
+    }
+  }
+
+  /** Clear all composer selection references, routing to the controller for temporary chats. */
+  function clearComposerReferences(): void {
+    if (controller?.clearReferences) {
+      controller.clearReferences()
+    } else {
+      clearResponseReferences()
+    }
   }
 
   function commentEditorReference(): ResponseReferenceAnchor | null {
@@ -1741,7 +1786,9 @@
       mode,
       selection.text,
       temporaryConversationContext(),
-      settings
+      settings,
+      true,
+      mode === 'elaborate' ? EXPLAIN_SELECTION_PROMPT : undefined
     )
     closeResponseSelection()
   }
@@ -2142,7 +2189,9 @@
       mode,
       selection,
       context,
-      settings
+      settings,
+      true,
+      mode === 'elaborate' ? EXPLAIN_SELECTION_PROMPT : undefined
     )
   }
   let auditReportActionsAvailable = $derived.by(() => {
@@ -2598,7 +2647,17 @@
       awayFromBottom: userScrolledAway
     })
     scheduleResponseBubbleUpdate()
-    if (scrollEl.scrollTop <= HISTORY_PRELOAD_THRESHOLD) void loadOlderMessages()
+    if (nearHistoryEdge(scrollEl)) void loadOlderMessages()
+  }
+
+  /** Whether the viewport is close enough to the loaded-history boundary that
+   *  an older page should already be streaming in. Scales with the transcript:
+   *  a fixed pixel threshold only triggers once the user has exhausted every
+   *  row in the current batch, so keep up to ~a quarter of the transcript (max
+   *  2400px) buffered ahead of them. */
+  function nearHistoryEdge(el: HTMLDivElement): boolean {
+    const trigger = Math.max(HISTORY_PRELOAD_THRESHOLD, Math.min(el.scrollHeight * 0.25, 2400))
+    return el.scrollTop <= trigger
   }
 
   /** Release the tail-follow lock synchronously when the user starts scrolling up. */
@@ -2618,33 +2677,46 @@
     preservingHistoryViewport = true
     // Loading history is an explicit request to inspect the past. Keep live
     // stream updates from pulling the user back to the newest message while
-    // the page is being fetched and inserted.
+    // pages are being fetched and inserted.
     userScrolledAway = true
-    const previousHeight = scrollEl.scrollHeight
-    const previousTop = scrollEl.scrollTop
     try {
-      const oldest = messages[0]
-      if (!oldest) {
-        olderMessagesAvailable = false
-        return
-      }
-      const before: ThreadMessageCursor = { createdAt: oldest.createdAt, id: oldest.id }
-      const page = await invoke(
-        'thread:loadMessages',
-        thread.projectId,
-        thread.id,
-        before,
-        HISTORY_WINDOW_SIZE
-      )
-      olderMessagesAvailable = page.hasOlder
-      threadMessages.mergePage(thread.projectId, thread.id, page.messages)
-      await tick()
-      if (scrollEl) {
-        scrollEl.scrollTop = previousTop + (scrollEl.scrollHeight - previousHeight)
-        threadScrollPositions.set(thread.id, {
-          top: scrollEl.scrollTop,
-          awayFromBottom: userScrolledAway
-        })
+      // Backfill ahead of the reader: keep fetching bounded batches until
+      // roughly two viewports of transcript sit above the fold, so scrolling
+      // up never lands on the boundary of the currently loaded batch.
+      for (let pageCount = 0; pageCount < 6; pageCount++) {
+        const el = scrollEl
+        if (!el || !olderMessagesAvailable) break
+        const stillNearEdge =
+          nearHistoryEdge(el) || el.scrollHeight < el.clientHeight * 2 + el.scrollTop
+        if (pageCount > 0 && !stillNearEdge) break
+        const oldest = messages[0]
+        if (!oldest) {
+          olderMessagesAvailable = false
+          break
+        }
+        const previousHeight = el.scrollHeight
+        const previousTop = el.scrollTop
+        const before: ThreadMessageCursor = { createdAt: oldest.createdAt, id: oldest.id }
+        const page = await invoke(
+          'thread:loadMessages',
+          thread.projectId,
+          thread.id,
+          before,
+          HISTORY_WINDOW_SIZE
+        )
+        if (!alive) return
+        olderMessagesAvailable = page.hasOlder
+        if (page.messages.length === 0) break
+        threadMessages.mergePage(thread.projectId, thread.id, page.messages)
+        await tick()
+        const after = scrollEl
+        if (after) {
+          after.scrollTop = previousTop + (after.scrollHeight - previousHeight)
+          threadScrollPositions.set(thread.id, {
+            top: after.scrollTop,
+            awayFromBottom: userScrolledAway
+          })
+        }
       }
     } catch {
       // A transient page failure leaves the current window intact; the next
@@ -2958,7 +3030,6 @@
   function clearLocalTurn(): void {
     locallySubmittedTurnId = null
     locallySubmittedTurnAcknowledged = false
-    liveWorkingSelection = null
   }
 
   /** Cached thread/session state may describe the previous turn on reconnect. */
@@ -2966,7 +3037,6 @@
     if (locallySubmittedTurnId) return
     if (agentRuns.activity(thread.projectId, thread.id) === 'brainstorm_report') return
     restoredBusy = false
-    liveWorkingSelection = null
     agentRuns.setIdle(thread.projectId, thread.id)
   }
 
@@ -3063,6 +3133,21 @@
       void Promise.all([invoke('thread:get', projectId, id), invoke('config:get')])
         .then(([threadData, config]) => {
           if (!alive) return
+          // Self-heal the history flag: a thread seeded empty must never stay
+          // permanently unable to lazy-load. One bounded probe off the critical
+          // path verifies against disk and merges real history if seeding raced
+          // a non-empty thread.
+          if (olderMessagesAvailable !== true) {
+            void invoke('thread:loadMessages', projectId, id, undefined, HISTORY_WINDOW_SIZE)
+              .then((probe) => {
+                if (!alive || !probe) return
+                if (probe.messages.length > 0 && messages.length <= probe.messages.length) {
+                  threadMessages.mergePage(projectId, id, probe.messages)
+                }
+                olderMessagesAvailable ||= probe.hasOlder
+              })
+              .catch(() => {})
+          }
           queueMicrotask(() => {
             if (!alive) return
             if (threadData?.settings) {
@@ -3245,7 +3330,22 @@
             !restoredBusy &&
             hasRenderableWorkingParts(parts)
           ) {
-            restoredBusy = !isLatestTurnCompleted()
+            // Only a saved run that is still the newest work may claim the
+            // restored-trace state. Once the user has sent a newer message
+            // (locally submitted turn, or a pending user message after the
+            // last assistant turn), that stale trace is history: it must stay
+            // folded with frozen durations while the new run gets its own
+            // live trace.
+            const latestStart = latestTurnInfo.startIndex
+            let turnEnd = latestStart
+            while (turnEnd + 1 < messages.length && messages[turnEnd + 1]?.role !== 'user') {
+              turnEnd += 1
+            }
+            const hasNewerUserWork =
+              latestStart === -1 ||
+              locallySubmittedTurnId !== null ||
+              messages.slice(turnEnd + 1).some((message) => message.role === 'user')
+            restoredBusy = !hasNewerUserWork && !isLatestTurnCompleted()
           }
         })
         .catch(() => {})
@@ -6666,7 +6766,9 @@
     updateSettings({ ...settings, ...normalized })
   }
 
-  /** Switch the thread's text model from the provider-error card's picker. */
+  /** Switch the thread's text model from the provider-error card's picker.
+   *  This is an explicit mutation point on the card itself, so refresh the
+   *  card's frozen settings snapshot to reflect the user's own pick. */
   function changeThreadModel(selected: ThreadSettings): void {
     const normalized = normalizeFastInference(
       selected,
@@ -6678,6 +6780,18 @@
     rendererRecovery.addRecentModel(
       modelKey(normalized.harnessId, normalized.providerId, normalized.modelId)
     )
+    statusCardSettings =
+      statusCardSettings !== null
+        ? chatMode
+          ? {
+              ...statusCardSettings,
+              ...normalized,
+              engineeringMode: false,
+              assignmentMode: false,
+              loopMode: false
+            }
+          : { ...statusCardSettings, ...normalized }
+        : null
     updateSettings({ ...settings, ...normalized })
   }
 
@@ -6909,6 +7023,10 @@
           coordinatorThreadId
         )
         scopeState.updateThread(updatedCoordinator)
+        // Returning a dormant durable cycle to the offer state may revive
+        // Achievement (loopMode) on the coordinator: mirror it locally so the
+        // follow-up audit keeps routing through the Achievement flow.
+        if (updatedCoordinator.settings) settings = updatedCoordinator.settings
       }
       auditState = 'offered'
     } catch (error) {
@@ -7256,10 +7374,18 @@
           )
           if (engineeringLifecycle.autopilot) {
             await generateAssignmentDraft()
-          } else {
-            updateSettings(settingsForEngineeringState(engineeringLifecycle))
+            return
           }
-          return
+          const nextEngineeringSettings = settingsForEngineeringState(engineeringLifecycle)
+          updateSettings(nextEngineeringSettings)
+          if (nextEngineeringSettings.assignmentMode) {
+            if (assignment) openAssignmentStudio()
+            else await generateAssignmentDraft()
+            return
+          }
+          if (nextEngineeringSettings.engineeringMode || nextEngineeringSettings.loopMode) {
+            return
+          }
         }
         if (settings.assignmentMode) {
           if (assignment) openAssignmentStudio()
@@ -7944,9 +8070,10 @@
     return fastVariantForModelId(msg.modelId)?.label ?? msg.modelId
   }
 
-  /** Harness that produced the message — falls back to the thread's harness. */
+  /** Harness that produced the message — the session's owning harness first
+   *  (stable across mid-run settings switches), then the thread's harness. */
   function messageHarnessId(msg: AgentMessage): string {
-    return msg.harnessId ?? settings.harnessId
+    return msg.harnessId ?? thread.sessionHarnessId ?? settings.harnessId
   }
 
   /** Thinking level used for the message's turn, when its model reasons. */
@@ -7962,11 +8089,12 @@
     // generic level was stamped onto its rows.
     if (model && presets.length === 0) return null
     // Prefer the level actually persisted for this turn (historical truth),
-    // falling back to the thread's current level when a message has no
-    // persisted thinking level.
+    // falling back to the model's own default. Never fall back to the live
+    // composer settings here: a finished message's badge must not mutate when
+    // the user changes the thinking level mid-conversation.
     if (msg.thinkingLevel) return msg.thinkingLevel
     if (presets.length === 0) return null
-    return resolveDefaultThinkingLevel(presets, undefined, settings.thinkingLevel) ?? null
+    return resolveDefaultThinkingLevel(presets, undefined) ?? null
   }
 
   /**
@@ -8224,7 +8352,37 @@
     })
   }
 
+  /** A part has finished its lifecycle when its terminal status or an explicit
+   *  end timestamp is present. Terminal snapshots must always win part merges:
+   *  letting a stale `running` snapshot survive keeps tool durations ticking
+   *  forever after the call actually completed. */
+  function isTerminalWorkingPart(part: AgentPart): boolean {
+    if (part.type === 'tool') {
+      return (
+        part.state.status === 'completed' ||
+        part.state.status === 'error' ||
+        part.state.time?.end !== undefined
+      )
+    }
+    if (part.type === 'subagent') {
+      return (
+        part.activity.status === 'completed' ||
+        part.activity.status === 'error' ||
+        part.activity.time?.end !== undefined
+      )
+    }
+    return false
+  }
+
   function moreCompleteWorkingPart(current: AgentPart, incoming: AgentPart): AgentPart {
+    if (
+      current.type === incoming.type &&
+      isTerminalWorkingPart(current) !== isTerminalWorkingPart(incoming)
+    ) {
+      // Whichever side carries the terminal lifecycle state wins, regardless
+      // of which list was passed as "preferred".
+      return isTerminalWorkingPart(incoming) ? incoming : current
+    }
     if (
       current.type === incoming.type &&
       (current.type === 'text' || current.type === 'reasoning') &&
@@ -8330,8 +8488,8 @@
     x={responseSelection.x}
     y={responseSelection.y}
     onAdd={addResponseReference}
-    onElaborate={() => openTemporarySelectionChat('elaborate')}
-    onQuickChat={() => openTemporarySelectionChat('quick')}
+    onElaborate={hasController ? undefined : () => openTemporarySelectionChat('elaborate')}
+    onQuickChat={hasController ? undefined : () => openTemporarySelectionChat('quick')}
     onClose={closeResponseSelection}
   />
 {/if}
@@ -8368,7 +8526,7 @@
       scope={{ kind: 'project', projectId: thread.projectId }}
       onDraftChange={(comment) => persistResponseReferenceCommentDraft(editorReference.id, comment)}
       onDone={(comment) => saveResponseReferenceComment(editorReference.id, comment)}
-      onRemoveComment={() => removeResponseReferenceComment(editorReference.id)}
+      onRemove={() => removeResponseReference(editorReference.id)}
       onClose={() => (commentEditorReferenceId = null)}
     />
   {/if}
@@ -8672,7 +8830,10 @@
                       ariaLabel="Edit message"
                       onSubmit={() => void submitEditedMessage(msg)}
                     />
-                    <div class="mt-1.5 flex items-center justify-end gap-1.5">
+                    <div
+                      class="mt-1.5 flex items-center justify-end gap-1.5"
+                      data-voice-trigger-root
+                    >
                       <button
                         class="rounded-md px-2.5 py-1 text-xs text-muted transition-colors hover:bg-elevated hover:text-foreground"
                         title="Discard the edit"
@@ -8685,6 +8846,7 @@
                         getTarget={messageEditSpeechTarget}
                         scope={{ kind: 'project', projectId: thread.projectId }}
                         disabled={busy}
+                        triggerPriority={8}
                       />
                       <button
                         class="rounded-md bg-primary px-2.5 py-1 text-xs font-semibold text-on-primary transition-opacity hover:opacity-90 disabled:opacity-50"
@@ -9055,8 +9217,7 @@
                           isReadingThisTurn &&
                           speechController.activeSegments !== null &&
                           speechController.activeSegments.length > 0 &&
-                          (speechController.playback.state === 'playing' ||
-                            speechController.playback.state === 'paused')}
+                          speechController.readingOverlayActive}
                         <div
                           id={`msg-${msg.id}`}
                           class="min-w-0 w-full text-sm text-foreground"
@@ -9066,11 +9227,7 @@
                         >
                           {#if isReadingActiveLine}
                             {@const segs = speechController.activeSegments!}
-                            {@const activeIdx =
-                              speechController.playback.state === 'playing' ||
-                              speechController.playback.state === 'paused'
-                                ? speechController.playback.segmentIndex
-                                : -1}
+                            {@const activeIdx = speechController.visibleSegmentIndex}
                             <div class="flex flex-col gap-1.5">
                               {#each segs as seg, i (seg.id)}
                                 <div
@@ -9128,12 +9285,17 @@
                               <SpeechPlaybackButton
                                 messageId={msg.id}
                                 markdown={messageText(msg)}
+                                scope={{
+                                  kind: 'project',
+                                  projectId: thread.projectId,
+                                  threadId: thread.id
+                                }}
                               />
                               {#if onContinueInThread && controller?.kind === 'temporary-chat'}
                                 <button
                                   class="rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
-                                  aria-label="Continue this chat in a thread"
-                                  title="Continue in thread"
+                                  aria-label="Continue this chat in a new thread"
+                                  title="Continue in a new thread"
                                   disabled={continuingInThread}
                                   onclick={() => void continueInThread()}
                                 >
@@ -9144,19 +9306,21 @@
                                   {/if}
                                 </button>
                               {/if}
-                              <button
-                                class="rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
-                                aria-label="Fork thread from this message"
-                                title="Fork from here"
-                                disabled={forkingMessageId !== null}
-                                onclick={() => forkFromMessage(msg)}
-                              >
-                                {#if forkingMessageId === msg.id}
-                                  <Loader2 size={12} class="animate-spin" />
-                                {:else}
-                                  <GitFork size={12} />
-                                {/if}
-                              </button>
+                              {#if controller?.kind !== 'temporary-chat'}
+                                <button
+                                  class="rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+                                  aria-label="Fork thread from this message"
+                                  title="Fork from here"
+                                  disabled={forkingMessageId !== null}
+                                  onclick={() => forkFromMessage(msg)}
+                                >
+                                  {#if forkingMessageId === msg.id}
+                                    <Loader2 size={12} class="animate-spin" />
+                                  {:else}
+                                    <GitFork size={12} />
+                                  {/if}
+                                </button>
+                              {/if}
                               {#if chatMode && onContinueInProject}
                                 <button
                                   class="rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
@@ -9317,9 +9481,15 @@
               <AgentProviderStatusCard
                 status={visibleProviderStatus}
                 providerName={statusCardProviderName}
-                settings={chatMode
-                  ? { ...settings, engineeringMode: false, assignmentMode: false, loopMode: false }
-                  : settings}
+                settings={statusCardSettings ??
+                  (chatMode
+                    ? {
+                        ...settings,
+                        engineeringMode: false,
+                        assignmentMode: false,
+                        loopMode: false
+                      }
+                    : settings)}
                 {providers}
                 projectId={thread.projectId}
                 favoriteModels={chatMode
@@ -9900,10 +10070,10 @@
                     )
                   }}
                   onOpenStartAfterThread={(threadId) => void openStartAfterThread(threadId)}
-                  references={responseReferences}
-                  onRemoveReference={removeResponseReference}
-                  onRemoveAllReferences={clearResponseReferences}
-                  onEditReference={editResponseReference}
+                  references={composerReferences}
+                  onRemoveReference={removeComposerReference}
+                  onRemoveAllReferences={clearComposerReferences}
+                  onEditReference={controller ? undefined : editResponseReference}
                   onSend={sendComposerMessage}
                   historyMessages={userMessageTexts}
                   hidePermissionSelector={chatMode}
@@ -9977,6 +10147,7 @@
       auditThread={durableAuditThread}
       {auditState}
       reportAvailable={auditReport !== null}
+      achievementReached={thread.status === 'completed' && (thread.loopIteration ?? 0) > 0}
       selectedThreadId={thread.id}
       auditorSettings={auditSettings}
       {providers}

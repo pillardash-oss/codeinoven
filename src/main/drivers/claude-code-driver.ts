@@ -33,11 +33,15 @@ import type {
   CliLineParseContext,
   CliLineParseResult,
   CliTurnCommand,
-  PersistentCliSession
+  PersistentCliSession,
+  TitleModelCandidate
 } from './persistent-cli-driver'
 import { PersistentCliDriver } from './persistent-cli-driver'
 import type {
+  CheapModelRequest,
+  CheapModelResult,
   GenerateTitleOptions,
+  GradeTurnOptions,
   HarnessAuthStatus,
   HarnessCapabilities,
   SendPromptOptions,
@@ -1498,24 +1502,67 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
     })
   }
 
-  async generateTitle(projectPath: string, options: GenerateTitleOptions): Promise<string | null> {
-    const firstParty = !options.settings.providerId || options.settings.providerId === 'anthropic'
-    if (
-      firstParty &&
-      (!options.parentSessionId ||
-        !(await this.waitForParentAuthentication(options.parentSessionId)))
-    ) {
-      return null
-    }
-    const anthropic = (await this.listProviders(projectPath)).find(
-      (catalog) => catalog.id === 'anthropic'
-    )
+  /** Cheapest first-party candidates, shared by title and grading runs. */
+  private async cheapAnthropicCandidates(
+    projectPath: string
+  ): Promise<{ candidates: TitleModelCandidate[]; anthropicFound: boolean }> {
+    const catalogs = await this.listProviders(projectPath)
+    const anthropic = catalogs.find((catalog) => catalog.id === 'anthropic')
     const candidates = ['haiku', 'sonnet'].flatMap((modelId) =>
       anthropic?.models.some((model) => model.id === modelId)
-        ? [{ providerId: 'anthropic', modelId }]
+        ? [{ providerId: 'anthropic' as const, modelId }]
         : []
     )
+    return { candidates, anthropicFound: anthropic !== undefined }
+  }
+
+  async generateTitle(projectPath: string, options: GenerateTitleOptions): Promise<string | null> {
+    if (!(await this.auxiliaryTransportReady(options))) return null
+    const { candidates } = await this.cheapAnthropicCandidates(projectPath)
     return this.generateTitleWithCandidates(projectPath, options, candidates)
+  }
+
+  async gradeTurn(projectPath: string, options: GradeTurnOptions): Promise<number | null> {
+    if (!(await this.auxiliaryTransportReady(options))) return null
+    const { candidates } = await this.cheapAnthropicCandidates(projectPath)
+    return this.gradeTurnWithCandidates(projectPath, options, candidates)
+  }
+
+  async provideCheapModel(
+    projectPath: string,
+    request: CheapModelRequest
+  ): Promise<CheapModelResult> {
+    if (!(await this.auxiliaryTransportReady(request))) {
+      return { text: null, attempts: [] }
+    }
+    return super.provideCheapModel(projectPath, request)
+  }
+
+  /** Cheapest first-party candidates for any auxiliary one-shot run. */
+  protected override async cheapCandidateModels(
+    projectPath: string
+  ): Promise<TitleModelCandidate[]> {
+    const { candidates } = await this.cheapAnthropicCandidates(projectPath)
+    return candidates
+  }
+
+  /**
+   * Authentication/transport gate shared by auxiliary one-shot runs. Non-Anthropic
+   * providers always pass; first-party runs require the parent session's
+   * authenticated transport.
+   */
+  private async auxiliaryTransportReady(
+    options: GenerateTitleOptions | GradeTurnOptions | CheapModelRequest
+  ): Promise<boolean> {
+    const firstParty = !options.settings.providerId || options.settings.providerId === 'anthropic'
+    if (
+      !firstParty ||
+      !options.parentSessionId ||
+      (await this.waitForParentAuthentication(options.parentSessionId))
+    ) {
+      return true
+    }
+    return false
   }
 
   /** Append user input to Claude's realtime stream while its turn is active. */

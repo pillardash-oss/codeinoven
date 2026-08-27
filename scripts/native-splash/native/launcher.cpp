@@ -8,6 +8,8 @@
 #include <gdiplus.h>
 #include <objidl.h>
 #include <shellapi.h>
+#include <cstdarg>
+#include <cstdio>
 #include <cstring>
 #include <string>
 #include <vector>
@@ -15,6 +17,93 @@
 
 using Gdiplus::Bitmap;
 using Gdiplus::Graphics;
+
+static HANDLE log_handle = INVALID_HANDLE_VALUE;
+
+static void log_close() {
+  if (log_handle == INVALID_HANDLE_VALUE) return;
+  FlushFileBuffers(log_handle);
+  CloseHandle(log_handle);
+  log_handle = INVALID_HANDLE_VALUE;
+}
+
+static bool log_open() {
+  std::vector<wchar_t> module_path(32768);
+  DWORD length = GetModuleFileNameW(nullptr, module_path.data(), static_cast<DWORD>(module_path.size()));
+  std::wstring log_path(module_path.data(), length);
+  const size_t dot = log_path.find_last_of(L'.');
+  if (dot == std::wstring::npos) {
+    log_path += L".startup.log";
+  } else {
+    log_path = log_path.substr(0, dot) + L".startup.log";
+  }
+  SECURITY_ATTRIBUTES security = { sizeof(security), nullptr, TRUE };
+  log_handle = CreateFileW(
+      log_path.c_str(),
+      FILE_APPEND_DATA,
+      FILE_SHARE_READ,
+      &security,
+      OPEN_ALWAYS,
+      FILE_ATTRIBUTE_NORMAL,
+      nullptr);
+  return log_handle != INVALID_HANDLE_VALUE;
+}
+
+static void log_write_narrow(const char *data, size_t length = 0) {
+  if (log_handle == INVALID_HANDLE_VALUE) return;
+  if (length == 0) length = strlen(data);
+  DWORD written = 0;
+  WriteFile(log_handle, data, static_cast<DWORD>(length), &written, nullptr);
+}
+
+static void log_write_wide(const std::wstring &text) {
+  if (log_handle == INVALID_HANDLE_VALUE || text.empty()) return;
+  const int size = WideCharToMultiByte(CP_UTF8, 0, text.data(), static_cast<int>(text.size()), nullptr, 0, nullptr, nullptr);
+  if (size <= 0) return;
+  std::vector<char> buffer(size);
+  WideCharToMultiByte(CP_UTF8, 0, text.data(), static_cast<int>(text.size()), buffer.data(), size, nullptr, nullptr);
+  DWORD written = 0;
+  WriteFile(log_handle, buffer.data(), static_cast<DWORD>(buffer.size()), &written, nullptr);
+}
+
+static void log_timestamp() {
+  SYSTEMTIME time = {};
+  GetLocalTime(&time);
+  char buffer[64] = {};
+  snprintf(
+      buffer,
+      sizeof(buffer),
+      "%04d-%02d-%02d %02d:%02d:%02d.%03d ",
+      time.wYear,
+      time.wMonth,
+      time.wDay,
+      time.wHour,
+      time.wMinute,
+      time.wSecond,
+      time.wMilliseconds);
+  log_write_narrow(buffer);
+}
+
+static void log_line(const char *text) {
+  log_timestamp();
+  log_write_narrow(text);
+  log_write_narrow("\r\n", 2);
+}
+
+static void log_line(const std::wstring &text) {
+  log_timestamp();
+  log_write_wide(text);
+  log_write_narrow("\r\n", 2);
+}
+
+static void log_line_format(const char *format, ...) {
+  char buffer[8192] = {};
+  va_list arguments;
+  va_start(arguments, format);
+  vsnprintf(buffer, sizeof(buffer), format, arguments);
+  va_end(arguments);
+  log_line(buffer);
+}
 
 static void draw_centered_text(Graphics &graphics, const wchar_t *text, float baseline,
                                float font_size, BYTE alpha, float width) {
@@ -119,10 +208,12 @@ static LRESULT CALLBACK window_procedure(HWND window, UINT message, WPARAM wpara
     return 0;
   }
   if (message == WM_SPLASH_READY) {
+    log_line("Received splash ready signal; hiding placeholder window");
     ShowWindow(window, SW_HIDE);
     return 0;
   }
   if (message == WM_ELECTRON_EXITED) {
+    log_line_format("Electron process exited with code %lu", electron_exit_code);
     ShowWindow(window, SW_HIDE);
     PostQuitMessage(static_cast<int>(electron_exit_code));
     return 0;
@@ -155,12 +246,81 @@ static DWORD WINAPI wait_for_electron(void *) {
   return 0;
 }
 
+static BOOL launch_electron(const std::wstring &child_path, const std::wstring &child_command, HANDLE *out_process) {
+  STARTUPINFOW startup = {};
+  startup.cb = sizeof(startup);
+  HANDLE stdin_handle = GetStdHandle(STD_INPUT_HANDLE);
+  if (stdin_handle == INVALID_HANDLE_VALUE) stdin_handle = nullptr;
+  const HANDLE output_handle = (log_handle != INVALID_HANDLE_VALUE) ? log_handle : nullptr;
+  startup.hStdInput = stdin_handle;
+  startup.hStdOutput = output_handle;
+  startup.hStdError = output_handle;
+  startup.dwFlags = STARTF_USESTDHANDLES;
+
+  std::vector<wchar_t> mutable_command(child_command.begin(), child_command.end());
+  mutable_command.push_back(L'\0');
+
+  log_line_format("child_path=%ls", child_path.c_str());
+  log_line_format("child_command=%ls", child_command.c_str());
+
+  PROCESS_INFORMATION process = {};
+  const BOOL launched = CreateProcessW(
+      child_path.c_str(),
+      mutable_command.data(),
+      nullptr,
+      nullptr,
+      TRUE,
+      0,
+      nullptr,
+      nullptr,
+      &startup,
+      &process);
+  if (launched) {
+    CloseHandle(process.hThread);
+    *out_process = process.hProcess;
+    log_line_format("CreateProcessW succeeded, child_pid=%lu", process.dwProcessId);
+  } else {
+    log_line_format("CreateProcessW failed, error=%lu", GetLastError());
+  }
+  return launched;
+}
+
 int WINAPI wWinMain(HINSTANCE instance, HINSTANCE previous, PWSTR command_line, int show_command) {
   (void)previous;
   (void)command_line;
   (void)show_command;
   SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
   CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+  log_open();
+  log_line("Launcher started");
+
+  int argument_count = 0;
+  LPWSTR *arguments = CommandLineToArgvW(GetCommandLineW(), &argument_count);
+  const std::wstring child_path = electron_path();
+  std::wstring child_command = quote_argument(child_path);
+  for (int index = 1; index < argument_count; index += 1) {
+    child_command.push_back(L' ');
+    child_command.append(quote_argument(arguments[index]));
+  }
+  LocalFree(arguments);
+
+  wchar_t bypass[2] = {};
+  const DWORD bypass_length = GetEnvironmentVariableW(L"CODEINOVEN_DISABLE_NATIVE_SPLASH", bypass, 2);
+  if (bypass_length > 0 && bypass[0] == L'1') {
+    log_line("CODEINOVEN_DISABLE_NATIVE_SPLASH=1; bypassing native splash");
+    HANDLE bypass_process = nullptr;
+    if (!launch_electron(child_path, child_command, &bypass_process)) {
+      log_close();
+      return 64;
+    }
+    WaitForSingleObject(bypass_process, INFINITE);
+    GetExitCodeProcess(bypass_process, &electron_exit_code);
+    log_line_format("Electron exited with code %lu", electron_exit_code);
+    CloseHandle(bypass_process);
+    log_close();
+    CoUninitialize();
+    return static_cast<int>(electron_exit_code);
+  }
 
   WNDCLASSW window_class = {};
   window_class.lpfnWndProc = window_procedure;
@@ -168,7 +328,11 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE previous, PWSTR command_line, 
   window_class.hCursor = LoadCursorW(nullptr, IDC_ARROW);
   window_class.hbrBackground = static_cast<HBRUSH>(GetStockObject(BLACK_BRUSH));
   window_class.lpszClassName = L"CodeInOvenStageZeroSplash";
-  if (!RegisterClassW(&window_class)) return 60;
+  if (!RegisterClassW(&window_class)) {
+    log_line_format("RegisterClassW failed, error=%lu", GetLastError());
+    log_close();
+    return 60;
+  }
 
   const int width = 420;
   const int height = 320;
@@ -187,7 +351,11 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE previous, PWSTR command_line, 
       nullptr,
       instance,
       nullptr);
-  if (placeholder_window == nullptr) return 61;
+  if (placeholder_window == nullptr) {
+    log_line_format("CreateWindowExW failed, error=%lu", GetLastError());
+    log_close();
+    return 61;
+  }
   ShowWindow(placeholder_window, SW_SHOW);
   UpdateWindow(placeholder_window);
 
@@ -199,6 +367,8 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE previous, PWSTR command_line, 
 
   unsigned char random_bytes[16] = {};
   if (BCryptGenRandom(nullptr, random_bytes, sizeof(random_bytes), BCRYPT_USE_SYSTEM_PREFERRED_RNG) != 0) {
+    log_line("BCryptGenRandom failed");
+    log_close();
     return 62;
   }
   wchar_t pipe_name[160] = {};
@@ -216,38 +386,20 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE previous, PWSTR command_line, 
       32,
       0,
       nullptr);
-  if (handoff_pipe == INVALID_HANDLE_VALUE) return 63;
-
-  int argument_count = 0;
-  LPWSTR *arguments = CommandLineToArgvW(GetCommandLineW(), &argument_count);
-  std::wstring child_path = electron_path();
-  std::wstring child_command = quote_argument(child_path);
-  for (int index = 1; index < argument_count; index += 1) {
-    child_command.push_back(L' ');
-    child_command.append(quote_argument(arguments[index]));
+  if (handoff_pipe == INVALID_HANDLE_VALUE) {
+    log_line_format("CreateNamedPipeW failed, error=%lu", GetLastError());
+    log_close();
+    return 63;
   }
-  LocalFree(arguments);
+  log_line_format("created named pipe %ls", pipe_name);
+
   SetEnvironmentVariableW(L"CODEINOVEN_NATIVE_SPLASH_ENDPOINT", pipe_name);
-  STARTUPINFOW startup = {};
-  startup.cb = sizeof(startup);
-  PROCESS_INFORMATION process = {};
-  std::vector<wchar_t> mutable_command(child_command.begin(), child_command.end());
-  mutable_command.push_back(L'\0');
-  const BOOL launched = CreateProcessW(
-      child_path.c_str(),
-      mutable_command.data(),
-      nullptr,
-      nullptr,
-      FALSE,
-      0,
-      nullptr,
-      nullptr,
-      &startup,
-      &process);
+  if (!launch_electron(child_path, child_command, &electron_process)) {
+    SetEnvironmentVariableW(L"CODEINOVEN_NATIVE_SPLASH_ENDPOINT", nullptr);
+    log_close();
+    return 64;
+  }
   SetEnvironmentVariableW(L"CODEINOVEN_NATIVE_SPLASH_ENDPOINT", nullptr);
-  if (!launched) return 64;
-  CloseHandle(process.hThread);
-  electron_process = process.hProcess;
 
   HANDLE handoff_thread = CreateThread(nullptr, 0, wait_for_handoff, nullptr, 0, nullptr);
   HANDLE electron_thread = CreateThread(nullptr, 0, wait_for_electron, nullptr, 0, nullptr);
@@ -262,6 +414,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE previous, PWSTR command_line, 
   CloseHandle(electron_process);
   delete icon_bitmap;
   Gdiplus::GdiplusShutdown(gdiplus_token);
+  log_close();
   CoUninitialize();
   return static_cast<int>(electron_exit_code);
 }

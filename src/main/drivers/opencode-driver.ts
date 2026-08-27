@@ -26,7 +26,11 @@ import type {
 import type {
   AgentEventCallback,
   AgentProcessObserver,
+  CheapModelAttempt,
+  CheapModelRequest,
+  CheapModelResult,
   GenerateTitleOptions,
+  GradeTurnOptions,
   HarnessCapabilities,
   HarnessDriver,
   HarnessToolDefinition,
@@ -50,6 +54,7 @@ import {
   readWordDocumentText
 } from './document-attachment'
 import { buildTitlePrompt, sanitizeGeneratedTitle } from '../chat/title-generator'
+import { buildTurnGradePrompt, parseTurnGrade } from '../chat/turn-grader-prompt'
 import { leanAgentConfigMap } from '../opencode/opencode-agent-definitions'
 import { prepareHarnessInvocation, runHarnessCommand } from './harness-runtime'
 
@@ -1017,6 +1022,41 @@ export class OpenCodeDriver implements HarnessDriver {
   private isolatedServers = new Set<IsolatedHandle>()
   private titleSessions = new Set<string>()
   private processObserver: AgentProcessObserver | null = null
+
+  /**
+   * Idle lifetimes for spawned `opencode serve` processes. These are a
+   * self-defense net inside the driver: engine-side bookkeeping can lose track
+   * of servers across interrupted turns and restarts, and each leaked server
+   * costs hundreds of MB resident. After the TTL below with zero HTTP or SSE
+   * traffic, processes are killed; the next demand transparently respawns one.
+   */
+  private static readonly TURN_SERVER_IDLE_TTL_MS = 10 * 60_000
+  private static readonly ISOLATED_SERVER_IDLE_TTL_MS = 5 * 60_000
+  private static readonly SHARED_SERVER_IDLE_TTL_MS = 10 * 60_000
+  private static readonly IDLE_SWEEP_INTERVAL_MS = 60_000
+  /**
+   * A turn registered in `activeSessions` may legitimately emit no events far
+   * longer than the traffic TTL — a long bash command, a download, a silent
+   * sub-agent. Mirrors ChatEngine.SILENT_WORK_GRACE_MS: while a turn is this
+   * young in silence terms, its server is never reaped, no matter how quiet.
+   */
+  private static readonly SILENT_TURN_GRACE_MS = 30 * 60_000
+  /**
+   * Entries silent past twice that grace are ghosts — a turn that died without
+   * a terminal event (for example during an SSE reconnect gap). The engine's
+   * own watchdog re-checks silent turns at 30 minutes, so by 60 only ghosts
+   * remain; they are dropped so they cannot hold a server open forever.
+   */
+  private static readonly GHOST_SESSION_TTL_MS = 60 * 60_000
+  /** Port → timestamp of the most recent HTTP request header or SSE frame. */
+  private lastServerTrafficAt = new Map<number, number>()
+  /** Session → timestamp of the most recent event or prompt targeting it.
+   *  Ghost `activeSessions` entries (a turn that died without a terminal
+   *  event) must not hold the shared server open forever, so liveness is
+   *  judged per session, not per map membership. */
+  private lastSessionActivityAt = new Map<string, number>()
+  private idleSweepTimer: ReturnType<typeof setInterval> | null = null
+
   /** Coalesce concurrent battery hovers across threads into one account request. */
   private accountUsageRequest: Promise<{ rateLimits: AgentRateLimitWindow[] } | null> | null = null
 
@@ -1030,6 +1070,119 @@ export class OpenCodeDriver implements HarnessDriver {
     private readonly baseUrlProviders?: BaseUrlProviderService,
     private readonly secretVault?: SecretVault
   ) {}
+
+  /** Note live traffic against a spawned server so the idle reaper skips it. */
+  private noteServerTraffic(port: number): void {
+    this.lastServerTrafficAt.set(port, Date.now())
+    this.ensureIdleSweeper()
+  }
+
+  private idleMs(port: number): number {
+    const at = this.lastServerTrafficAt.get(port)
+    // An unknown port is a freshly spawned server — treat it as brand new so
+    // the sweeper can never kill a process between spawn and first request.
+    return at === undefined ? 0 : Date.now() - at
+  }
+
+  private ensureIdleSweeper(): void {
+    if (this.idleSweepTimer) return
+    this.idleSweepTimer = setInterval(() => {
+      try {
+        this.sweepIdleHandles()
+      } catch (error) {
+        Logger.dev('opencode idle sweep failed:', error)
+      }
+    }, OpenCodeDriver.IDLE_SWEEP_INTERVAL_MS)
+    this.idleSweepTimer.unref?.()
+  }
+
+  /**
+   * Kill pooled servers whose traffic has been silent past their TTL. A busy
+   * session always shows traffic (prompt calls, streamed SSE frames), so an
+   * eviction can only reach processes nothing is using. Restarting an evicted
+   * server on the next demand is a fast lazy spawn.
+   */
+  private sweepIdleHandles(): void {
+    this.pruneGhostSessions()
+
+    for (const [sessionId, handle] of [...this.turnServers]) {
+      if (
+        this.isSessionLive(sessionId) ||
+        this.idleMs(handle.port) < OpenCodeDriver.TURN_SERVER_IDLE_TTL_MS
+      ) {
+        continue
+      }
+      Logger.info('Reaping idle opencode turn server', { sessionId, port: handle.port })
+      void this.stopTurnServer(sessionId)
+    }
+
+    for (const handle of [...this.isolatedServers]) {
+      if (this.idleMs(handle.port) < OpenCodeDriver.ISOLATED_SERVER_IDLE_TTL_MS) continue
+      Logger.info('Reaping idle isolated opencode server', { port: handle.port })
+      if (!handle.process.killed) handle.process.kill()
+      handle.abortController.abort()
+      this.isolatedServers.delete(handle)
+    }
+
+    const shared = this.server
+    if (
+      shared &&
+      !this.starting &&
+      this.idleMs(shared.port) >= OpenCodeDriver.SHARED_SERVER_IDLE_TTL_MS &&
+      ![...this.activeSessions.keys()].some((sessionId) => this.isSessionLive(sessionId))
+    ) {
+      Logger.info('Reaping idle opencode serve host', { port: shared.port })
+      shared.abortController.abort()
+      if (!shared.process.killed) shared.process.kill()
+      this.server = null
+      this.starting = null
+      for (const controller of this.projectSubscriptions.values()) controller.abort()
+      this.projectSubscriptions.clear()
+      this.activeSessions.clear()
+    }
+  }
+
+  /**
+   * Drop `activeSessions` entries that have shown no sign of life for double
+   * the silent-turn grace. A real turn either emitted fresh activity or a
+   * terminal event by then (the engine's watchdog resolves stalled turns at
+   * 30 minutes); anything older is a record-keeping ghost, and keeping it
+   * would pin its harness server in memory forever.
+   */
+  private pruneGhostSessions(): void {
+    const now = Date.now()
+    for (const sessionId of [...this.activeSessions.keys()]) {
+      const at = this.lastSessionActivityAt.get(sessionId)
+      if (at !== undefined && now - at >= OpenCodeDriver.GHOST_SESSION_TTL_MS) {
+        Logger.info('Dropping ghost opencode session tracking entry', { sessionId })
+        this.activeSessions.delete(sessionId)
+        this.lastSessionActivityAt.delete(sessionId)
+      }
+    }
+    for (const [sessionId, at] of this.lastSessionActivityAt) {
+      if (!this.activeSessions.has(sessionId) && now - at >= OpenCodeDriver.GHOST_SESSION_TTL_MS) {
+        this.lastSessionActivityAt.delete(sessionId)
+      }
+    }
+  }
+
+  /**
+   * Whether a session may still be mid-turn. Membership in `activeSessions`
+   * (set on prompt send, cleared on terminal events) is the structural
+   * in-flight flag; recency of its last activity decides whether that flag is
+   * fresh enough to protect the session's server from the idle reaper.
+   */
+  private isSessionLive(sessionId: string): boolean {
+    if (!this.activeSessions.has(sessionId)) return false
+    const at = this.lastSessionActivityAt.get(sessionId)
+    if (at === undefined) return true
+    return Date.now() - at < OpenCodeDriver.SILENT_TURN_GRACE_MS
+  }
+
+  private noteSessionActivity(sessionId: string | undefined): void {
+    if (!sessionId) return
+    this.lastSessionActivityAt.set(sessionId, Date.now())
+  }
 
   // ─── HarnessDriver interface ──────────────────────────────────────────────
 
@@ -1207,7 +1360,8 @@ export class OpenCodeDriver implements HarnessDriver {
     return this.createSessionOnHandle(handle, title)
   }
 
-  async generateTitle(projectPath: string, options: GenerateTitleOptions): Promise<string | null> {
+  /** Free/cheap opencode candidates, shared by title and grading runs. */
+  private async cheapCandidates(projectPath: string): Promise<Array<{ providerId: string; modelId: string }>> {
     const catalogs = await this.listProviders(projectPath).catch(() => [])
     const openCodeModels = catalogs.find((catalog) => catalog.id === 'opencode')?.models ?? []
     const freeModels = openCodeModels.filter((model) => /(?:^|[-:])free$/iu.test(model.id))
@@ -1219,7 +1373,7 @@ export class OpenCodeDriver implements HarnessDriver {
       ?.models.find((model) => model.id === 'deepseek-v4-flash')
 
     // Always pin big-pickle first; only fall back to other free/stealth models
-    // (and finally the thread model) if it fails or is unavailable.
+    // if it fails or is unavailable. The thread model is appended by the caller.
     const attempts = new Map<string, { providerId: string; modelId: string }>()
     const addCandidate = (providerId?: string, modelId?: string) => {
       if (!providerId || !modelId) return
@@ -1228,19 +1382,41 @@ export class OpenCodeDriver implements HarnessDriver {
     addCandidate('opencode', 'big-pickle')
     for (const model of fallbackFreeModels) addCandidate(model.providerId, model.id)
     addCandidate(goFlash?.providerId, goFlash?.id)
-    addCandidate(options.settings.providerId, options.settings.modelId)
+    return [...attempts.values()]
+  }
 
-    for (const candidate of attempts.values()) {
+  /** Run one auxiliary one-shot completion per candidate on isolated servers. */
+  private async isolatedOneShot(
+    projectPath: string,
+    settings: ThreadSettings,
+    purpose: string,
+    candidates: Array<{ providerId: string; modelId: string }>,
+    promptText: string,
+    timeoutMs: number = TITLE_GENERATION_TIMEOUT_MS,
+    attempts?: CheapModelAttempt[]
+  ): Promise<string | null> {
+    const attemptList = [
+      ...candidates,
+      { providerId: settings.providerId, modelId: settings.modelId }
+    ].filter(
+      (candidate, index, all) =>
+        Boolean(candidate.providerId && candidate.modelId) &&
+        all.findIndex(
+          (other) =>
+            other.providerId === candidate.providerId && other.modelId === candidate.modelId
+        ) === index
+    )
+    for (const candidate of attemptList) {
       let isolated: IsolatedHandle | null = null
       try {
-        isolated = await this.createIsolatedSession(projectPath, 'Thread title')
+        isolated = await this.createIsolatedSession(projectPath, purpose)
         this.titleSessions.add(isolated.sessionId)
         await this.sendPrompt(
           projectPath,
           {
             sessionId: isolated.sessionId,
             settings: {
-              ...options.settings,
+              ...settings,
               providerId: candidate.providerId,
               modelId: candidate.modelId,
               thinkingLevel: 'minimal',
@@ -1248,18 +1424,25 @@ export class OpenCodeDriver implements HarnessDriver {
               permissionLevel: 'auto_review',
               engineeringMode: false
             },
-            text: buildTitlePrompt(options.message.slice(0, 2_000)),
+            text: promptText,
             attachments: [],
             readOnly: true,
             allowedTools: []
           },
           isolated
         )
-        const title = await this.waitForTitleResult(isolated)
-        if (title) return title
+        const result = await this.waitForTitleResult(isolated, timeoutMs)
+        attempts?.push({ providerId: candidate.providerId, modelId: candidate.modelId, ok: result !== null, failure: result === null ? 'No usable response produced' : null })
+        if (result) return result
       } catch (error) {
+        attempts?.push({
+          providerId: candidate.providerId,
+          modelId: candidate.modelId,
+          ok: false,
+          failure: error instanceof Error ? error.message : String(error)
+        })
         Logger.dev(
-          `OpenCode title model ${candidate.providerId}/${candidate.modelId} unavailable:`,
+          `OpenCode one-shot model ${candidate.providerId}/${candidate.modelId} unavailable:`,
           error
         )
       } finally {
@@ -1271,6 +1454,56 @@ export class OpenCodeDriver implements HarnessDriver {
       }
     }
     return null
+  }
+
+  async generateTitle(projectPath: string, options: GenerateTitleOptions): Promise<string | null> {
+    const candidates = await this.cheapCandidates(projectPath)
+    return this.isolatedOneShot(
+      projectPath,
+      options.settings,
+      'Thread title',
+      candidates,
+      buildTitlePrompt(options.message.slice(0, 2_000))
+    )
+  }
+
+  /**
+   * One self-contained cheap-model completion, cheapest candidate first
+   * (big-pickle pinned, other free models as fallback, thread model last).
+   * The single entry point every cheap-model scenario routes through.
+   */
+  async provideCheapModel(
+    projectPath: string,
+    request: CheapModelRequest
+  ): Promise<CheapModelResult> {
+    const candidates = await this.cheapCandidates(projectPath)
+    const attempts: CheapModelAttempt[] = []
+    const text = await this.isolatedOneShot(
+      projectPath,
+      request.settings,
+      request.purpose,
+      candidates,
+      request.prompt,
+      request.timeoutMs ?? TITLE_GENERATION_TIMEOUT_MS,
+      attempts
+    )
+    return { text, attempts }
+  }
+
+  async gradeTurn(projectPath: string, options: GradeTurnOptions): Promise<number | null> {
+    const candidates = await this.cheapCandidates(projectPath)
+    const result = await this.isolatedOneShot(
+      projectPath,
+      options.settings,
+      'Turn grade',
+      candidates,
+      buildTurnGradePrompt({
+        userMessage: options.userMessage,
+        assistantOutput: options.assistantOutput,
+        followUp: options.followUp ?? null
+      })
+    )
+    return result === null ? null : parseTurnGrade(result)
   }
 
   /**
@@ -1396,6 +1629,7 @@ export class OpenCodeDriver implements HarnessDriver {
     }
 
     this.activeSessions.set(opts.sessionId, projectPath)
+    this.noteSessionActivity(opts.sessionId)
     try {
       const res = await fetch(`${handle.baseUrl}/session/${opts.sessionId}/prompt_async`, {
         method: 'POST',
@@ -1846,6 +2080,12 @@ export class OpenCodeDriver implements HarnessDriver {
   }
 
   dispose(): void {
+    if (this.idleSweepTimer) {
+      clearInterval(this.idleSweepTimer)
+      this.idleSweepTimer = null
+    }
+    this.lastServerTrafficAt.clear()
+    this.lastSessionActivityAt.clear()
     for (const controller of this.projectSubscriptions.values()) controller.abort()
     this.projectSubscriptions.clear()
     this.server?.abortController.abort()
@@ -1907,6 +2147,7 @@ export class OpenCodeDriver implements HarnessDriver {
     handle: ServerHandle,
     headers: Record<string, string> = {}
   ): Record<string, string> {
+    this.noteServerTraffic(handle.port)
     const directory = [...handle.projectPath].some((character) => character.codePointAt(0)! > 127)
       ? encodeURIComponent(handle.projectPath)
       : handle.projectPath
@@ -2274,6 +2515,9 @@ export class OpenCodeDriver implements HarnessDriver {
           for (;;) {
             const { done, value } = await reader.read()
             if (done || signal.aborted) break
+            // Streaming turns issue no HTTP requests of their own; incoming
+            // frames are their heartbeat against the idle reaper.
+            this.noteServerTraffic(handle.port)
             sseBuffer += decoder.decode(value, { stream: true })
             let separator: number
             while ((separator = sseBuffer.indexOf('\n\n')) !== -1) {
@@ -2323,6 +2567,7 @@ export class OpenCodeDriver implements HarnessDriver {
       }
     }
     for (const event of mapOpenCodeEvent(type, props)) {
+      this.noteSessionActivity('sessionId' in event ? event.sessionId : undefined)
       if (
         event.type === 'session.idle' ||
         (event.type === 'session.status' &&
@@ -2360,8 +2605,11 @@ export class OpenCodeDriver implements HarnessDriver {
     this.eventCallback?.(event)
   }
 
-  private async waitForTitleResult(handle: IsolatedHandle): Promise<string | null> {
-    const deadline = Date.now() + TITLE_GENERATION_TIMEOUT_MS
+  private async waitForTitleResult(
+    handle: IsolatedHandle,
+    timeoutMs: number = TITLE_GENERATION_TIMEOUT_MS
+  ): Promise<string | null> {
+    const deadline = Date.now() + timeoutMs
     let lastReadError: Error | null = null
     while (Date.now() < deadline) {
       if (
@@ -2393,7 +2641,7 @@ export class OpenCodeDriver implements HarnessDriver {
       }
       await new Promise((resolve) => setTimeout(resolve, TITLE_RESULT_POLL_INTERVAL_MS))
     }
-    throw lastReadError ?? new Error('OpenCode title generation timed out')
+    throw lastReadError ?? new Error('OpenCode auxiliary completion timed out')
   }
 
   // ─── Wire-format mapping ──────────────────────────────────────────────────

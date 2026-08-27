@@ -22,6 +22,20 @@ function bundledPiBase(): string | undefined {
   return existsSync(join(base, 'dist/bundle/rpc-entry.js')) ? base : undefined
 }
 
+/**
+ * Vendor directory of the bundled Pi runtime (see `scripts/build-pi-harness.ts`),
+ * or `undefined` when Pi is not bundled. Lets main-process features reuse the
+ * libraries vendored beside the harness — e.g. pi-ai's headless OAuth flows —
+ * which do not exist in the packaged app's own node_modules.
+ */
+export function bundledPiVendorDir(): string | undefined {
+  const base = app.isPackaged
+    ? join(process.resourcesPath, 'harnesses/pi')
+    : join(app.getAppPath(), 'resources/harnesses/pi')
+  const vendor = join(base, 'vendor')
+  return existsSync(vendor) ? vendor : undefined
+}
+
 /** The bundled Pi runtime, spawned via Electron's own embedded Node. */
 function bundledPiRuntime(command: string): HarnessRuntime | null {
   if (command !== 'pi') return null

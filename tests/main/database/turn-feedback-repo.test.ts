@@ -36,6 +36,8 @@ function openInput(
     costUsd: null,
     costStatus: 'unavailable',
     tokensTotal: null,
+    userMessageText: 'the request',
+    assistantOutputText: 'the answer',
     ...overrides
   }
 }
@@ -46,116 +48,95 @@ function pendingRow(db: Database, parentTurnId: string): TurnFeedbackRow | undef
 }
 
 describe('TurnFeedbackRepo lifecycle', () => {
-  it('opens a pending outcome and resolves it to success on continuation', async () => {
+  it('opens a pending outcome with its captured payload', async () => {
     const db = await createTestDb()
     try {
       seedThread(db, 't1')
       const repo = new TurnFeedbackRepo(db)
       repo.openPending(openInput('t1', 'turn-1'))
-      expect(pendingRow(db, 'turn-1')?.status).toBe('pending')
-
-      const resolved = repo.resolveLatestPendingForThread('t1', 'success', 'continued', 1)
-      expect(resolved).toBe(true)
       const row = pendingRow(db, 'turn-1')
-      expect(row?.status).toBe('success')
-      expect(row?.signal).toBe('continued')
-      expect(row?.score).toBe(1)
+      expect(row?.status).toBe('pending')
+      expect(row?.user_message_text).toBe('the request')
+      expect(row?.assistant_output_text).toBe('the answer')
     } finally {
       destroyTestDb(db)
     }
   })
 
-  it('resolves to corrected with a zero score on a corrective follow-up', async () => {
+  it('stores a follow-up on the newest pending outcome and grades it once', async () => {
     const db = await createTestDb()
     try {
       seedThread(db, 't1')
       const repo = new TurnFeedbackRepo(db)
       repo.openPending(openInput('t1', 'turn-1'))
+      repo.noteFollowUp('t1', 'actually still broken')
+      expect(pendingRow(db, 'turn-1')?.follow_up_text).toBe('actually still broken')
 
-      repo.resolveLatestPendingForThread('t1', 'corrected', 'corrective_feedback', 0)
+      expect(repo.grade('outcome:turn-1', 'draft_timeout', 2)).toBe(true)
       const row = pendingRow(db, 'turn-1')
-      expect(row?.status).toBe('corrected')
-      expect(row?.signal).toBe('corrective_feedback')
-      expect(row?.score).toBe(0)
-    } finally {
-      destroyTestDb(db)
-    }
-  })
+      expect(row?.status).toBe('graded')
+      expect(row?.basis).toBe('draft_timeout')
+      expect(row?.grade).toBe(2)
 
-  it('resolves each pending outcome at most once (idempotent)', async () => {
-    const db = await createTestDb()
-    try {
-      seedThread(db, 't1')
-      const repo = new TurnFeedbackRepo(db)
-      repo.openPending(openInput('t1', 'turn-1'))
-
-      expect(repo.resolveLatestPendingForThread('t1', 'success', 'continued', 1)).toBe(true)
-      expect(repo.resolveLatestPendingForThread('t1', 'corrected', 'corrective_feedback', 0)).toBe(
-        false
-      )
-      expect(pendingRow(db, 'turn-1')?.status).toBe('success')
+      // Grading is exactly-once.
+      expect(repo.grade('outcome:turn-1', 'deleted', 5)).toBe(false)
+      expect(pendingRow(db, 'turn-1')?.grade).toBe(2)
       expect(repo.pendingCount()).toBe(0)
     } finally {
       destroyTestDb(db)
     }
   })
 
-  it('resolves the newest pending outcome on a thread, leaving older ones open', async () => {
+  it('anchors deadline timers once and recovers due pendings with project context', async () => {
     const db = await createTestDb()
     try {
       seedThread(db, 't1')
       const repo = new TurnFeedbackRepo(db)
-      repo.openPending(openInput('t1', 'turn-1', { createdAt: 1_000 }))
-      repo.openPending(openInput('t1', 'turn-2', { createdAt: 2_000 }))
+      repo.openPending(openInput('t1', 'turn-1'))
+      repo.scheduleReading('t1', 5_000)
+      repo.scheduleReading('t1', 9_000)
+      repo.scheduleDraft('t1', 7_000)
+      repo.scheduleDraft('t1', 8_000)
+      const row = pendingRow(db, 'turn-1')
+      expect(row?.reading_deadline_ms).toBe(5_000)
+      expect(row?.draft_deadline_ms).toBe(7_000)
+      expect(repo.listDuePending(6_999)).toHaveLength(1)
+      expect(repo.listDuePendingWithProject(6_999)[0]?.project_id).toBe('p')
 
-      repo.resolveLatestPendingForThread('t1', 'success', 'continued', 1)
-      expect(pendingRow(db, 'turn-2')?.status).toBe('success')
-      expect(pendingRow(db, 'turn-1')?.status).toBe('pending')
+      // Clearing the draft never removes the anchored timer.
+      repo.clearTimersForThread('t1')
+      const cleared = pendingRow(db, 'turn-1')
+      expect(cleared?.status).toBe('pending')
     } finally {
       destroyTestDb(db)
     }
   })
 
-  it('keeps cleaned_up passes after the thread row is deleted (no cascade loss)', async () => {
+  it('keeps captured payloads after the thread row is deleted (no cascade loss)', async () => {
     const db = await createTestDb()
     try {
       seedThread(db, 't1')
       const repo = new TurnFeedbackRepo(db)
       repo.openPending(openInput('t1', 'turn-1'))
 
-      // Mirror the deletion flow: resolve first, then delete the thread.
-      repo.resolvePendingForThread('t1', 'success', 'cleaned_up', 1)
+      // Mirror the deletion flow: capture the row, delete the thread, grade detached.
+      const captured = repo.listPendingForThread('t1')
+      expect(captured).toHaveLength(1)
       db.run('DELETE FROM threads WHERE id = ?', 't1')
+      repo.grade(captured[0]?.id ?? '', 'deleted', 4)
 
       const row = pendingRow(db, 'turn-1')
-      expect(row?.status).toBe('success')
-      expect(row?.signal).toBe('cleaned_up')
+      expect(row?.status).toBe('graded')
+      expect(row?.basis).toBe('deleted')
       expect(row?.thread_id).toBeNull()
       expect(row?.model_id).toBe('gpt-5')
+      expect(row?.user_message_text).toBe('the request')
     } finally {
       destroyTestDb(db)
     }
   })
 
-  it('resolves pending outcomes on every other thread when one is focused', async () => {
-    const db = await createTestDb()
-    try {
-      seedThread(db, 't1')
-      seedThread(db, 't2')
-      const repo = new TurnFeedbackRepo(db)
-      repo.openPending(openInput('t1', 'turn-1'))
-      repo.openPending(openInput('t2', 'turn-2'))
-
-      repo.resolvePendingForOtherThreads('t2', 'success', 'switched', 1)
-      expect(pendingRow(db, 'turn-1')?.status).toBe('success')
-      expect(pendingRow(db, 'turn-1')?.signal).toBe('switched')
-      expect(pendingRow(db, 'turn-2')?.status).toBe('pending')
-    } finally {
-      destroyTestDb(db)
-    }
-  })
-
-  it('aggregates modelPerformance with success rate, corrections, and task type', async () => {
+  it('aggregates modelPerformance as average grade over five with task type', async () => {
     const db = await createTestDb()
     try {
       seedThread(db, 't1')
@@ -181,30 +162,17 @@ describe('TurnFeedbackRepo lifecycle', () => {
       repo.openPending(
         openInput('t1', 't1-3', { ...base, createdAt: 3_000, costUsd: 0.9, tokensTotal: 9000 })
       )
-      repo.openPending(
-        openInput('t2', 'audit-1', {
-          ...base,
-          threadId: 't2',
-          feature: 'audit',
-          thinkingLevel: 'low',
-          modelId: 'gpt-4o',
-          createdAt: 4_000,
-          costUsd: null,
-          costStatus: 'unavailable'
-        })
-      )
 
-      repo.resolveLatestPendingForThread('t1', 'success', 'continued', 1)
-      repo.resolveLatestPendingForThread('t1', 'corrected', 'corrective_feedback', 0)
-      repo.resolveLatestPendingForThread('t1', 'success', 'continued', 1)
-      repo.resolvePendingForThread('t2', 'success', 'cleaned_up', 1)
+      repo.grade('outcome:t1-1', 'read_timeout', 5)
+      repo.grade('outcome:t1-2', 'draft_timeout', 3)
+      repo.grade('outcome:t1-3', 'read_timeout', null)
 
       const performance = repo.modelPerformance({ startAt: 0, endAt: 10_000 })
-      const main = performance.find((entry) => entry.modelId === 'gpt-5')
+      expect(performance).toHaveLength(1)
+      const main = performance[0]
       expect(main?.outcomes).toBe(3)
-      expect(main?.successes).toBe(2)
-      expect(main?.corrected).toBe(1)
-      expect(main?.successRate).toBe(2 / 3)
+      expect(main?.averageGrade).toBe(4) // (5+3)/2 — null grades never skew the average
+      expect(main?.successRate).toBeCloseTo(0.8)
       expect(main?.thinkingLevel).toBe('high')
       expect(main?.taskType).toBe('main')
       expect(main?.harnessId).toBe('opencode')
@@ -212,17 +180,8 @@ describe('TurnFeedbackRepo lifecycle', () => {
       expect(main?.costUsd).toBeCloseTo(1.5)
       expect(main?.tokensTotal).toBe(15_000)
 
-      const audit = performance.find((entry) => entry.modelId === 'gpt-4o')
-      expect(audit?.outcomes).toBe(1)
-      expect(audit?.successRate).toBe(1)
-      expect(audit?.taskType).toBe('audit')
-      expect(audit?.thinkingLevel).toBe('low')
-      // Unpriced outcomes are counted as outcomes but never enter cost sums.
-      expect(audit?.pricedOutcomes).toBe(0)
-      expect(audit?.costUsd).toBe(0)
-
       const cost = repo.feedbackCost({ startAt: 0, endAt: 10_000 })
-      expect(cost.outcomes).toBe(4)
+      expect(cost.outcomes).toBe(3)
       expect(cost.pricedOutcomes).toBe(3)
       expect(cost.costUsd).toBeCloseTo(1.5)
       expect(cost.knownCostUsd).toBeCloseTo(1.5)
@@ -240,7 +199,7 @@ describe('TurnFeedbackRepo lifecycle', () => {
       const repo = new TurnFeedbackRepo(db)
       repo.openPending(openInput('t1', 'turn-1'))
       repo.openPending(openInput('t1', 'turn-2', { createdAt: 2_000 }))
-      repo.resolveLatestPendingForThread('t1', 'success', 'continued', 1)
+      repo.grade('outcome:turn-2', 'read_timeout', 4)
 
       const performance = repo.modelPerformance({ startAt: 0, endAt: 10_000 })
       expect(performance).toHaveLength(1)

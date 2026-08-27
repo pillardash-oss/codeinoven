@@ -27,11 +27,13 @@ import type {
   CliLineParseContext,
   CliLineParseResult,
   CliTurnCommand,
-  PersistentCliSession
+  PersistentCliSession,
+  TitleModelCandidate
 } from './persistent-cli-driver'
 import { PersistentCliDriver } from './persistent-cli-driver'
 import type {
   GenerateTitleOptions,
+  GradeTurnOptions,
   HarnessCapabilities,
   SendPromptOptions,
   SteerPromptOptions
@@ -1259,14 +1261,24 @@ export class MuseDriver extends PersistentCliDriver {
     return discovered.length > 0 ? discovered : museFallbackCatalog(capabilities)
   }
 
-  async generateTitle(projectPath: string, options: GenerateTitleOptions): Promise<string | null> {
+  /** First available catalog model, shared by title and grading runs. */
+  private async cheapestCandidate(): Promise<TitleModelCandidate[]> {
     const providers = await this.listProviders()
     const model = providers[0]?.models[0]
-    return this.generateTitleWithCandidates(
-      projectPath,
-      options,
-      model ? [{ providerId: model.providerId, modelId: model.id }] : []
-    )
+    return model ? [{ providerId: model.providerId, modelId: model.id }] : []
+  }
+
+  async generateTitle(projectPath: string, options: GenerateTitleOptions): Promise<string | null> {
+    return this.generateTitleWithCandidates(projectPath, options, await this.cheapestCandidate())
+  }
+
+  async gradeTurn(projectPath: string, options: GradeTurnOptions): Promise<number | null> {
+    return this.gradeTurnWithCandidates(projectPath, options, await this.cheapestCandidate())
+  }
+
+  /** Cheapest candidates for any auxiliary one-shot run. */
+  protected override async cheapCandidateModels(): Promise<TitleModelCandidate[]> {
+    return this.cheapestCandidate()
   }
 
   protected async buildTurnCommand(

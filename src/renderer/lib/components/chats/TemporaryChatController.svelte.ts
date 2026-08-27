@@ -1,5 +1,8 @@
 import { subscribe, invoke } from '$lib/ipc.svelte'
-import { contextSidebarState, type TemporaryChatContextTab } from '$lib/stores/context-sidebar.svelte'
+import {
+  contextSidebarState,
+  type TemporaryChatContextTab
+} from '$lib/stores/context-sidebar.svelte'
 import { messageId } from '$shared/id'
 import type {
   AgentEvent,
@@ -21,7 +24,21 @@ export class TemporaryChatController implements ConversationController {
   #tab: TemporaryChatContextTab
   #unsubscribeEvent: (() => void) | null = null
   #unsubscribeExpiry: (() => void) | null = null
+  #reconcileTimer: ReturnType<typeof setInterval> | null = null
+  #reconcileInFlight = false
+  /** Bumped whenever the authoritative final response is applied; stale
+   *  reconciliation results must never overwrite it. */
+  #applyGeneration = 0
   #mounted = false
+
+  /**
+   * Fallback poll interval while a turn is in flight. Live `agent:event`
+   * broadcasts are the primary stream, but a dropped subscription window (tab
+   * remount, missed `temporary-chat.started`) must never leave the panel blank
+   * while the agent works — merging the harness mirror restores the streaming
+   * parts and detects completion even without events.
+   */
+  static readonly RECONCILE_INTERVAL_MS = 1_500
 
   constructor(tab: TemporaryChatContextTab) {
     this.#tab = tab
@@ -87,12 +104,41 @@ export class TemporaryChatController implements ConversationController {
     return undefined
   }
 
+  get references(): PromptReference[] {
+    if (!this.#tab.selectionAttached || this.#tab.selections.length === 0) return []
+    return this.#tab.selections.map((selection, index) => ({
+      id: `${this.#tab.temporaryChatId}:selection:${index}`,
+      label: `Selection ${index + 1}`,
+      text: selection
+    }))
+  }
+
+  removeReference(id: string): void {
+    const index = Number(id.split(':').pop())
+    if (Number.isNaN(index)) return
+    this.#tab.selections = this.#tab.selections.filter((_, i) => i !== index)
+    if (this.#tab.selections.length === 0) this.#tab.selectionAttached = false
+  }
+
+  clearReferences(): void {
+    this.#tab.selections = []
+    this.#tab.selectionAttached = false
+  }
+
+  addSelection(text: string): void {
+    if (!text.trim() || this.#tab.expired) return
+    this.#tab.selections = [...this.#tab.selections, text]
+    this.#tab.selectionAttached = true
+    this.#touch()
+  }
+
   mount(): void {
     if (this.#mounted) return
     this.#mounted = true
 
     this.#unsubscribeExpiry = subscribe('agent:temporaryChatExpired', (temporaryChatId) => {
       if (temporaryChatId === this.#tab.temporaryChatId) {
+        this.#stopReconciling()
         contextSidebarState.expireTemporaryChat(this.#tab, false)
       }
     })
@@ -102,16 +148,38 @@ export class TemporaryChatController implements ConversationController {
       if (event) this.#handleEvent(event)
     })
 
+    // Explain tabs carry an auto-prompt that should be sent immediately so the
+    // user gets an explanation without having to type anything first. Show a
+    // short action label in the UI while still sending the full instruction to
+    // the agent.
+    if (this.#tab.autoPrompt && !this.#tab.autoPromptSent && !this.#tab.sessionStarted) {
+      const autoPrompt = this.#tab.autoPrompt
+      this.#tab.autoPromptSent = true
+      const displayText = this.#tab.mode === 'elaborate' ? this.#tab.title || 'Explain' : autoPrompt
+      void this.send({
+        text: displayText,
+        attachments: [],
+        promptReferences: [],
+        transportText: autoPrompt
+      })
+    }
+
     if (this.#tab.sessionStarted) {
       const temporaryChatId = this.#tab.temporaryChatId
-      void invoke('agent:getTemporaryChatStatus', temporaryChatId).then((status) => {
-        if (this.#tab.temporaryChatId !== temporaryChatId || this.#tab.expired) return
-        if (!status.active) {
-          contextSidebarState.expireTemporaryChat(this.#tab, false)
-          return
-        }
-        if (status.expiresAt) contextSidebarState.touchTemporaryChat(this.#tab, status.expiresAt)
-      })
+      void invoke('agent:getTemporaryChatStatus', temporaryChatId)
+        .then((status) => {
+          if (!status) return
+          if (this.#tab.temporaryChatId !== temporaryChatId || this.#tab.expired) return
+          if (!status.active) {
+            this.#stopReconciling()
+            contextSidebarState.expireTemporaryChat(this.#tab, false)
+            return
+          }
+          if (status.expiresAt) contextSidebarState.touchTemporaryChat(this.#tab, status.expiresAt)
+        })
+        .catch(() => {
+          // Teardown races can reject this probe; the expiry watchdog covers it.
+        })
 
       void invoke('agent:loadTemporaryChatMessages', temporaryChatId)
         .then((messages) => {
@@ -122,10 +190,15 @@ export class TemporaryChatController implements ConversationController {
           // Live events and the in-flight send still reconcile the response.
         })
     }
+
+    // While a turn is already in flight at mount time (remount mid-run), start
+    // reconciling immediately so the trace rebuilds even without live events.
+    this.#syncReconciling()
   }
 
   unmount(): void {
     this.#mounted = false
+    this.#stopReconciling()
     this.#unsubscribeExpiry?.()
     this.#unsubscribeEvent?.()
     this.#unsubscribeExpiry = null
@@ -164,26 +237,39 @@ export class TemporaryChatController implements ConversationController {
   }
 
   async send(payload: SendPayload): Promise<void> {
-    const { text, attachments, promptReferences: _promptReferences } = payload
+    const { text, attachments, transportText, promptReferences: _promptReferences } = payload
     const prompt = text.trim()
-    if (!prompt || this.#tab.expired) return
+    const backendPrompt = (transportText ?? text).trim()
+    if (!prompt || !backendPrompt || this.#tab.expired) return
 
     this.#touch()
     this.#recordModelUse()
 
     const temporaryChatId = this.#tab.temporaryChatId
     const attachedSelections = this.#tab.selectionAttached ? [...this.#tab.selections] : []
-    const outgoing = this.#createUserMessage(
-      prompt,
-      attachments,
-      attachedSelections.map((selection, index) => ({
-        id: `${temporaryChatId}:selection:${index}`,
-        label: `Selection ${index + 1}`,
-        text: selection
-      }))
-    )
+    // Explain tabs seed their user message at open time (the store commits it
+    // the instant the tab opens) — reuse it instead of appending a duplicate.
+    const seededMessageId = this.#tab.autoPromptMessageId
+    this.#tab.autoPromptMessageId = null
+    const seededMessage =
+      seededMessageId !== null
+        ? this.#tab.messages.find(
+            (message) => message.id === seededMessageId && message.role === 'user'
+          )
+        : undefined
+    const outgoing =
+      seededMessage ??
+      this.#createUserMessage(
+        prompt,
+        attachments,
+        attachedSelections.map((selection, index) => ({
+          id: `${temporaryChatId}:selection:${index}`,
+          label: `Selection ${index + 1}`,
+          text: selection
+        }))
+      )
 
-    this.#tab.messages = [...this.#tab.messages, outgoing]
+    if (!seededMessage) this.#tab.messages = [...this.#tab.messages, outgoing]
     if (attachedSelections.length > 0) this.#tab.selectionMessageId = outgoing.id
     this.#tab.selections = []
     this.#tab.selectionAttached = false
@@ -192,6 +278,7 @@ export class TemporaryChatController implements ConversationController {
     this.#tab.error = ''
     this.#tab.status = null
     this.#tab.sessionStarted = true
+    this.#syncReconciling()
 
     try {
       const response = (await invoke(
@@ -200,13 +287,17 @@ export class TemporaryChatController implements ConversationController {
         this.#tab.threadId,
         temporaryChatId,
         this.#tab.settings,
-        prompt,
+        backendPrompt,
         attachments,
         attachedSelections,
         this.#tab.messages.length === 1 ? this.#tab.initialContext : undefined
-      )) as AgentMessage
+      )) as AgentMessage | undefined
 
+      if (!response) return
       if (this.#tab.temporaryChatId !== temporaryChatId || this.#tab.expired) return
+      // Invalidate any in-flight reconciliation read before the authoritative
+      // final response lands — a stale mirror must never overwrite it.
+      this.#applyGeneration += 1
       const responseIndex = this.#tab.messages.findIndex((message) => message.id === response.id)
       this.#tab.messages =
         responseIndex < 0
@@ -217,12 +308,21 @@ export class TemporaryChatController implements ConversationController {
       this.#touch()
     } catch (error) {
       if (this.#tab.temporaryChatId !== temporaryChatId || this.#tab.expired) return
+      if (
+        error instanceof Error &&
+        (error.name === 'TemporaryChatCancelledError' ||
+          error.message === 'Temporary chat stopped by user' ||
+          error.message === 'Temporary chat closed')
+      ) {
+        return
+      }
       this.#tab.error =
         error instanceof Error ? error.message : 'The temporary chat could not respond.'
     } finally {
       if (this.#tab.temporaryChatId === temporaryChatId && !this.#tab.expired) {
         this.#tab.busy = false
       }
+      this.#syncReconciling()
     }
   }
 
@@ -276,18 +376,95 @@ export class TemporaryChatController implements ConversationController {
     contextSidebarState.touchTemporaryChat(this.#tab)
     if (!this.#tab.sessionStarted) return
     const temporaryChatId = this.#tab.temporaryChatId
-    void invoke('agent:touchTemporaryChat', temporaryChatId).then((status) => {
-      if (this.#tab.temporaryChatId !== temporaryChatId || this.#tab.expired) return
-      if (!status.active) {
-        contextSidebarState.expireTemporaryChat(this.#tab, false)
+    void invoke('agent:touchTemporaryChat', temporaryChatId)
+      .then((status) => {
+        if (!status) return
+        if (this.#tab.temporaryChatId !== temporaryChatId || this.#tab.expired) return
+        if (!status.active) {
+          this.#stopReconciling()
+          contextSidebarState.expireTemporaryChat(this.#tab, false)
+          return
+        }
+        if (status.expiresAt) contextSidebarState.touchTemporaryChat(this.#tab, status.expiresAt)
+      })
+      .catch(() => {
+        // Best-effort keep-alive; the expiry watchdog covers failures.
+      })
+  }
+
+  /** Keep the reconciliation poll alive exactly while a turn is in flight. */
+  #syncReconciling(): void {
+    if (!this.#mounted || this.#tab.expired || !this.#tab.busy) {
+      this.#stopReconciling()
+      return
+    }
+    if (this.#reconcileTimer) return
+    this.#reconcileTimer = setInterval(
+      () => void this.#reconcile(),
+      TemporaryChatController.RECONCILE_INTERVAL_MS
+    )
+    void this.#reconcile()
+  }
+
+  #stopReconciling(): void {
+    if (this.#reconcileTimer) {
+      clearInterval(this.#reconcileTimer)
+      this.#reconcileTimer = null
+    }
+  }
+
+  /**
+   * Merge the harness mirror into the tab while busy. This is the safety net
+   * for missed live events: the trace (reasoning, tools, sub-agents) and the
+   * streaming text rebuild from the mirror, and a completed final message
+   * settles the turn even if `session.idle` never arrived.
+   */
+  async #reconcile(): Promise<void> {
+    if (this.#reconcileInFlight || !this.#mounted || this.#tab.expired || !this.#tab.busy) {
+      if (!this.#tab.busy) this.#stopReconciling()
+      return
+    }
+    this.#reconcileInFlight = true
+    const temporaryChatId = this.#tab.temporaryChatId
+    const generation = this.#applyGeneration
+    try {
+      const messages = (await invoke(
+        'agent:loadTemporaryChatMessages',
+        temporaryChatId
+      )) as AgentMessage[]
+      if (
+        this.#tab.temporaryChatId !== temporaryChatId ||
+        this.#tab.expired ||
+        !this.#mounted ||
+        !this.#tab.busy
+      ) {
         return
       }
-      if (status.expiresAt) contextSidebarState.touchTemporaryChat(this.#tab, status.expiresAt)
-    })
+      // A final response that landed while the mirror was being read wins.
+      if (generation !== this.#applyGeneration) return
+      this.#mergeLoaded(messages)
+      const assistants = messages.filter((message) => message.role === 'assistant')
+      const finalAssistant = assistants.at(-1)
+      if (finalAssistant?.completedAt !== undefined) {
+        // The run finished but the idle event was missed — settle the turn.
+        this.#tab.busy = false
+        this.#tab.status = null
+        this.#stopReconciling()
+      }
+    } catch {
+      // The next tick retries; the in-flight send still settles the turn.
+    } finally {
+      this.#reconcileInFlight = false
+      if (!this.#tab.busy || this.#tab.expired || !this.#mounted) this.#stopReconciling()
+    }
   }
 
   #recordModelUse(): void {
-    if (!this.#tab.settings.harnessId || !this.#tab.settings.providerId || !this.#tab.settings.modelId)
+    if (
+      !this.#tab.settings.harnessId ||
+      !this.#tab.settings.providerId ||
+      !this.#tab.settings.modelId
+    )
       return
     // Model recording is handled by the parent via ChatComposer's onModelUsed callback.
   }
@@ -383,7 +560,7 @@ export class TemporaryChatController implements ConversationController {
     this.#tab.messages = [
       ...this.#tab.messages.map((message) => incomingById.get(message.id) ?? message),
       ...assistants.filter((message) => !existingIds.has(message.id))
-    ]
+    ].sort((left, right) => left.createdAt - right.createdAt)
   }
 
   #handleEvent(event: AgentEvent): void {
@@ -449,11 +626,13 @@ export class TemporaryChatController implements ConversationController {
       case 'session.error':
         this.#setError(event.issue, event.error ?? 'The temporary chat session failed.')
         this.#tab.busy = false
+        this.#syncReconciling()
         break
       case 'session.status':
         if (event.status.state === 'error') {
           this.#setError(event.status.issue, null)
           this.#tab.busy = false
+          this.#syncReconciling()
         } else if (event.status.state === 'waiting') {
           this.#tab.status = event.status
         } else {
@@ -461,6 +640,9 @@ export class TemporaryChatController implements ConversationController {
         }
         break
       case 'session.idle':
+        this.#tab.busy = false
+        this.#tab.status = null
+        this.#syncReconciling()
         break
     }
   }

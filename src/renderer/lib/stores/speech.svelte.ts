@@ -2,9 +2,10 @@ import { invoke, subscribe } from '$lib/ipc.svelte'
 import { toast } from 'svelte-sonner'
 import type {
   SpeechCapabilitySnapshot,
-  SpeechCorrectionRule,
   SpeechDownloadState,
   SpeechHistoryPage,
+  SpeechLlamaRuntimeStatus,
+  SpeechLesson,
   SpeechModelCatalog,
   SpeechProgressEvent,
   SpeechRuntime
@@ -14,7 +15,8 @@ class SpeechSettingsStore {
   catalog = $state<SpeechModelCatalog | null>(null)
   capabilities = $state<SpeechCapabilitySnapshot | null>(null)
   history = $state<SpeechHistoryPage>({ items: [], total: 0 })
-  rules = $state<SpeechCorrectionRule[]>([])
+  lessons = $state<SpeechLesson[]>([])
+  llamaRuntime = $state<SpeechLlamaRuntimeStatus | null>(null)
   downloads = $state<Record<string, SpeechDownloadState>>({})
   loading = $state(false)
   error = $state('')
@@ -24,20 +26,22 @@ class SpeechSettingsStore {
     this.loading = true
     this.error = ''
     try {
-      const [catalog, capabilities, history, rules] = await Promise.all([
+      const [catalog, capabilities, history, lessons, llama] = await Promise.all([
         invoke('speech:getCatalog'),
         invoke('speech:getCapabilities'),
         invoke('speech:getHistory', undefined, 50),
-        invoke('speech:getCorrectionRules', undefined)
+        invoke('speech:getLessons', undefined),
+        invoke('speech:getLlamaRuntimeStatus')
       ])
       if (!catalog.ok) throw new Error(catalog.error.message)
       if (!capabilities.ok) throw new Error(capabilities.error.message)
       if (!history.ok) throw new Error(history.error.message)
-      if (!rules.ok) throw new Error(rules.error.message)
+      if (!lessons.ok) throw new Error(lessons.error.message)
       this.catalog = catalog.value
       this.capabilities = capabilities.value
       this.history = history.value
-      this.rules = rules.value
+      this.lessons = lessons.value
+      if (llama.ok) this.llamaRuntime = llama.value
       this.unsubscribe ??= subscribe('speech:progress', (progress) => this.onProgress(progress))
     } catch (cause) {
       this.error = cause instanceof Error ? cause.message : String(cause)
@@ -88,9 +92,32 @@ class SpeechSettingsStore {
     await this.load()
   }
 
-  async setRuleEnabled(ruleId: string, enabled: boolean): Promise<void> {
-    const result = await invoke('speech:setCorrectionRuleEnabled', ruleId, enabled)
+  async setRuleEnabled(lessonId: string, enabled: boolean): Promise<void> {
+    const result = await invoke('speech:setLessonEnabled', lessonId, enabled)
     if (!result.ok) this.error = result.error.message
+    await this.load()
+  }
+
+  async deleteLesson(lessonId: string, token: string): Promise<boolean> {
+    const result = await invoke('speech:deleteLesson', lessonId, token)
+    if (!result.ok) this.error = result.error.message
+    await this.load()
+    return result.ok
+  }
+
+  async downloadLlamaRuntime(): Promise<void> {
+    this.error = ''
+    try {
+      const result = await invoke('speech:downloadLlamaRuntime')
+      if (!result.ok) {
+        this.error = result.error.message
+        toast.error(result.error.message)
+      }
+    } catch (cause) {
+      const message = cause instanceof Error ? cause.message : String(cause)
+      this.error = message
+      toast.error(message)
+    }
     await this.load()
   }
 

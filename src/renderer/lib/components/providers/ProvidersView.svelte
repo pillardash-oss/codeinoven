@@ -409,7 +409,11 @@
   }
 
   function authCountFor(harnessId: string): number {
-    return authStatuses[harnessId]?.accounts?.length ?? 0
+    // Pi lists configured-but-unauthenticated entries with active:false; other
+    // harnesses leave `active` unset on genuinely connected accounts.
+    return (
+      authStatuses[harnessId]?.accounts?.filter((account) => account.active !== false).length ?? 0
+    )
   }
 
   function totalProviderCount(harness: ProviderConnectionInfo): number {

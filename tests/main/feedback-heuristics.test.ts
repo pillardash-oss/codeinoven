@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import {
-  looksCorrective,
   restoreMirrorThinkingLevel,
   stampHarnessId
 } from '../../src/main/chat/chat-engine'
+import { buildTurnGradePrompt, parseTurnGrade } from '../../src/main/chat/turn-grader-prompt'
 import type { AgentMessage } from '../../src/lib/types'
 
 function message(id: string, overrides: Partial<AgentMessage> = {}): AgentMessage {
@@ -16,24 +16,36 @@ function message(id: string, overrides: Partial<AgentMessage> = {}): AgentMessag
   }
 }
 
-describe('looksCorrective', () => {
-  it('flags unambiguous corrections of the previous answer', () => {
-    expect(looksCorrective("that's wrong, do it again properly")).toBe(true)
-    expect(looksCorrective('this still does not work')).toBe(true)
-    expect(looksCorrective('you broke the build')).toBe(true)
-    expect(looksCorrective('there is a regression now')).toBe(true)
-    expect(looksCorrective('incorrect, the output is wrong')).toBe(true)
+describe('parseTurnGrade', () => {
+  it('accepts a JSON grade object or a bare integer', () => {
+    expect(parseTurnGrade('{"grade": 4}')).toBe(4)
+    expect(parseTurnGrade('Sure!\n\n{"grade": 5}')).toBe(5)
+    expect(parseTurnGrade('3')).toBe(3)
   })
 
-  it('does not flag ambiguous tasking or neutral continuations', () => {
-    // Audit regression: bare "wrong"/"fix this"/"try again" must not score a
-    // legitimate answer as a miss.
-    expect(looksCorrective('now fix this other part too')).toBe(false)
-    expect(looksCorrective('try again with the deployment script instead')).toBe(false)
-    expect(looksCorrective('check the wrong branch name for me')).toBe(false)
-    expect(looksCorrective('perfect, keep going')).toBe(false)
-    expect(looksCorrective('thanks, that worked')).toBe(false)
-    expect(looksCorrective('do you still think it is the right approach?')).toBe(false)
+  it('rejects unusable responses and out-of-range grades', () => {
+    expect(parseTurnGrade('I would say it went pretty well')).toBeNull()
+    expect(parseTurnGrade('')).toBeNull()
+    expect(parseTurnGrade('{"grade": 0}')).toBeNull()
+    expect(parseTurnGrade('{"grade": 6}')).toBeNull()
+  })
+})
+
+describe('buildTurnGradePrompt', () => {
+  it('wraps each payload field in explicit delimiters', () => {
+    const prompt = buildTurnGradePrompt({
+      userMessage: 'fix the bug',
+      assistantOutput: 'done',
+      followUp: 'still broken'
+    })
+    expect(prompt).toContain('<USER_MESSAGE>fix the bug</USER_MESSAGE>')
+    expect(prompt).toContain('<AGENT_OUTPUT>done</AGENT_OUTPUT>')
+    expect(prompt).toContain('<USER_FOLLOW_UP>still broken</USER_FOLLOW_UP>')
+  })
+
+  it('omits the follow-up section when there is none', () => {
+    const prompt = buildTurnGradePrompt({ userMessage: 'hi', assistantOutput: 'hello' })
+    expect(prompt).not.toContain('USER_FOLLOW_UP')
   })
 })
 

@@ -38,6 +38,13 @@ describe('classifyProviderIssue usage-limit detection', () => {
     expect(classifyProviderIssue('Your quota is exhausted')).toBe('quota')
   })
 
+  it('classifies machine-style underscore/hyphen limit strings as quota', () => {
+    expect(classifyProviderIssue('usage_limit_exceeded')).toBe('quota')
+    expect(classifyProviderIssue('session_limit_reached')).toBe('quota')
+    expect(classifyProviderIssue('error-max-usage-limit')).toBe('quota')
+    expect(classifyProviderIssue('rate_limit_error')).toBe('rate_limit')
+  })
+
   it('classifies rate-limit wording and 429 status as rate_limit', () => {
     expect(classifyProviderIssue('Rate limit exceeded', 429)).toBe('rate_limit')
     expect(classifyProviderIssue('Too many requests')).toBe('rate_limit')

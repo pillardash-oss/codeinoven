@@ -2,9 +2,10 @@ import type { WebContents } from 'electron'
 import { MAX_SPEECH_CHUNK_BYTES } from '../../lib/speech/types'
 import type {
   SpeechCapability,
-  SpeechCorrectionObservation,
+  SpeechLearningObservation,
   SpeechCleanupMode,
   SpeechDestructiveAction,
+  SpeechRefinementFlags,
   SpeechRuntime,
   SpeechScope
 } from '../../lib/speech/types'
@@ -24,7 +25,7 @@ function destructiveAction(value: unknown): SpeechDestructiveAction {
     value !== 'history-item' &&
     value !== 'all-history' &&
     value !== 'recording' &&
-    value !== 'rule' &&
+    value !== 'lesson' &&
     value !== 'model'
   ) {
     throw new RangeError('Destructive speech action is invalid.')
@@ -44,16 +45,36 @@ function runtime(value: unknown): SpeechRuntime {
   return value
 }
 
+function refinementFlags(value: unknown): SpeechRefinementFlags {
+  if (typeof value !== 'object' || value === null) throw new RangeError('Cleanup flags are invalid.')
+  const candidate = value as Record<string, unknown>
+  if (
+    typeof candidate['smartCleanup'] !== 'boolean' ||
+    typeof candidate['selfCorrection'] !== 'boolean' ||
+    typeof candidate['preserveTechnical'] !== 'boolean'
+  ) {
+    throw new RangeError('Cleanup flags are invalid.')
+  }
+  return {
+    smartCleanup: candidate['smartCleanup'],
+    selfCorrection: candidate['selfCorrection'],
+    preserveTechnical: candidate['preserveTechnical']
+  }
+}
+
 function cleanupMode(value: unknown): SpeechCleanupMode {
   if (typeof value !== 'object' || value === null) throw new RangeError('Cleanup mode is invalid.')
   const candidate = value as Record<string, unknown>
   if (candidate['kind'] === 'disabled') return { kind: 'disabled' }
-  if (candidate['kind'] === 'local-llm') return { kind: 'local-llm' }
   if (candidate['kind'] === 'local') {
     const artifactId = candidate['artifactId']
-    return artifactId === undefined
-      ? { kind: 'local' }
-      : { kind: 'local', artifactId: entityId(artifactId, 'Cleanup artifact id') }
+    const flags =
+      candidate['flags'] === undefined ? undefined : refinementFlags(candidate['flags'])
+    return {
+      kind: 'local',
+      ...(artifactId === undefined ? {} : { artifactId: entityId(artifactId, 'Cleanup artifact id') }),
+      ...(flags ? { flags } : {})
+    }
   }
   if (candidate['kind'] === 'remote') {
     const selection = candidate['selection']
@@ -64,13 +85,14 @@ function cleanupMode(value: unknown): SpeechCleanupMode {
     if (selection === 'fixed' && modelId === undefined) {
       throw new RangeError('A fixed remote cleanup model is required.')
     }
-    return modelId === undefined
-      ? { kind: 'remote', selection }
-      : {
-          kind: 'remote',
-          selection,
-          modelId: boundedString(modelId, 'Remote cleanup model', 256)
-        }
+    const flags =
+      candidate['flags'] === undefined ? undefined : refinementFlags(candidate['flags'])
+    return {
+      kind: 'remote',
+      selection,
+      ...(modelId === undefined ? {} : { modelId: boundedString(modelId, 'Remote cleanup model', 256) }),
+      ...(flags ? { flags } : {})
+    }
   }
   throw new RangeError('Cleanup mode is invalid.')
 }
@@ -110,26 +132,13 @@ function boundedInteger(value: unknown, label: string, min: number, max: number)
   return value
 }
 
-function correctionObservation(value: unknown): SpeechCorrectionObservation {
-  if (typeof value !== 'object' || value === null) throw new RangeError('Correction is invalid.')
+function learningObservation(value: unknown): SpeechLearningObservation {
+  if (typeof value !== 'object' || value === null) throw new RangeError('Observation is invalid.')
   const candidate = value as Record<string, unknown>
-  const rawSpan = candidate['span']
-  if (typeof rawSpan !== 'object' || rawSpan === null) throw new RangeError('Span is invalid.')
-  const span = rawSpan as Record<string, unknown>
-  const startOffset = boundedInteger(span['startOffset'], 'Start offset', 0, 100_000)
-  const endOffset = boundedInteger(span['endOffset'], 'End offset', startOffset, 100_000)
   return {
-    span: {
-      id: entityId(span['id'], 'Span id'),
-      attemptId: entityId(span['attemptId'], 'Attempt id'),
-      editorId: entityId(span['editorId'], 'Editor id'),
-      insertedText: boundedString(span['insertedText'], 'Inserted text', 100_000),
-      startOffset,
-      endOffset,
-      insertedAt: boundedInteger(span['insertedAt'], 'Inserted time', 0, Number.MAX_SAFE_INTEGER),
-      scope: scope(span['scope'])
-    },
+    insertedText: boundedString(candidate['insertedText'], 'Inserted text', 100_000),
     sentText: boundedString(candidate['sentText'], 'Sent text', 100_000),
+    scope: scope(candidate['scope']),
     sentAt: boundedInteger(candidate['sentAt'], 'Sent time', 0, Number.MAX_SAFE_INTEGER)
   }
 }
@@ -306,31 +315,35 @@ export function registerSpeechIpc(
   ipcMain.handle('speech:cancelJob', (_event, rawJobId: unknown) =>
     speechResult(async () => service.cancelJob(entityId(rawJobId, 'Speech job id')))
   )
-  ipcMain.handle('speech:getCorrectionRules', (_event, rawScope?: unknown) =>
-    speechResult(async () =>
-      service.correctionRules(rawScope === undefined ? undefined : scope(rawScope))
-    )
+  ipcMain.handle('speech:getLessons', (_event, rawScope?: unknown) =>
+    speechResult(async () => service.lessons(rawScope === undefined ? undefined : scope(rawScope)))
   )
   ipcMain.handle('speech:observeCorrection', (_event, rawObservation: unknown) =>
-    speechResult(() => service.observeCorrection(correctionObservation(rawObservation)))
+    speechResult(() => service.observeCorrection(learningObservation(rawObservation)))
   )
   ipcMain.handle(
-    'speech:setCorrectionRuleEnabled',
-    (_event, rawRuleId: unknown, rawEnabled: unknown) =>
+    'speech:setLessonEnabled',
+    (_event, rawLessonId: unknown, rawEnabled: unknown) =>
       speechResult(() => {
         if (typeof rawEnabled !== 'boolean') throw new RangeError('Enabled state is invalid.')
-        return service.setCorrectionRuleEnabled(entityId(rawRuleId, 'Rule id'), rawEnabled)
+        return service.setLessonEnabled(entityId(rawLessonId, 'Lesson id'), rawEnabled)
       })
   )
   ipcMain.handle(
-    'speech:deleteCorrectionRule',
-    (_event, rawRuleId: unknown, rawConfirmationToken: unknown) =>
+    'speech:deleteLesson',
+    (_event, rawLessonId: unknown, rawConfirmationToken: unknown) =>
       speechResult(() =>
-        service.deleteCorrectionRule(
-          entityId(rawRuleId, 'Rule id'),
+        service.deleteLesson(
+          entityId(rawLessonId, 'Lesson id'),
           entityId(rawConfirmationToken, 'Confirmation token')
         )
       )
+  )
+  ipcMain.handle('speech:getLlamaRuntimeStatus', () =>
+    speechResult(() => service.llamaRuntimeStatus())
+  )
+  ipcMain.handle('speech:downloadLlamaRuntime', () =>
+    speechResult(() => service.downloadLlamaRuntime())
   )
   ipcMain.handle('speech:requestConfirmation', (_event, rawAction: unknown, rawTargetId: unknown) =>
     speechResult(async () =>
@@ -453,10 +466,12 @@ export function registerSpeechIpc(
       'speech:downloadArtifact',
       'speech:cancelDownload',
       'speech:cancelJob',
-      'speech:getCorrectionRules',
+      'speech:getLessons',
       'speech:observeCorrection',
-      'speech:setCorrectionRuleEnabled',
-      'speech:deleteCorrectionRule',
+      'speech:setLessonEnabled',
+      'speech:deleteLesson',
+      'speech:getLlamaRuntimeStatus',
+      'speech:downloadLlamaRuntime',
       'speech:requestConfirmation',
       'speech:deleteHistory',
       'speech:deleteAllHistory',

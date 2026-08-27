@@ -97,6 +97,7 @@
     ThreadClickedPayload
   } from '$shared/ipc-contract'
   import { agentRuns } from '$lib/stores/agent-runs.svelte'
+  import { initVoiceShortcutListener } from '$lib/speech/voice-shortcut'
   import { statusBadgeForThread } from '$lib/thread-status-badge'
 
   type View = MainView
@@ -1563,6 +1564,7 @@
     }
     mq.addEventListener('change', onColorSchemeChange)
     window.addEventListener('keydown', onKeydown)
+    const uninstallVoiceShortcut = initVoiceShortcutListener()
 
     const restoreWorkspaceCallbacks = installWorkspaceCallbacks()
     const unsubscribeIpc = installIpcSubscriptions()
@@ -1585,6 +1587,7 @@
     return () => {
       mq.removeEventListener('change', onColorSchemeChange)
       window.removeEventListener('keydown', onKeydown)
+      uninstallVoiceShortcut()
       restoreWorkspaceCallbacks()
       unsubscribeIpc()
       unsubscribeShutdown()

@@ -34,6 +34,7 @@
     Globe2,
     History,
     Info,
+    Loader2,
     Minimize2,
     MessageCircleDashed,
     Pause,
@@ -114,6 +115,7 @@
   import { threadNotesState } from '$lib/stores/thread-notes.svelte'
   import { memoryProposalState } from '$lib/stores/memory-proposals.svelte'
   import { rendererRecovery, type MainView } from '$lib/stores/renderer-recovery.svelte'
+  import { speechController } from '$lib/speech/speech-controller.svelte'
   import { modelKey } from '$lib/model-keys'
   import { reportError } from '$lib/stores/app-errors.svelte'
   import {
@@ -362,12 +364,18 @@
       : false
   )
   /** Threads holding any unsent composer content stay pinned at the top of their list,
-      even after the user navigates away, so they are easy to find mid-task. */
+      even after the user navigates away, so they are easy to find mid-task.
+      An active voice capture counts as draft activity too — draft status must
+      drive sort order regardless of whether the user is typing or dictating. */
   let draftThreadKeys = $derived.by(() => {
     const keys = new SvelteSet<string>()
     for (const t of allThreads) {
       if (t.archived) continue
-      if (rendererRecovery.hasDraftContent(t.projectId, t.id)) keys.add(threadVisitKey(t))
+      if (
+        rendererRecovery.hasDraftContent(t.projectId, t.id) ||
+        speechController.isCapturingThread(t.id)
+      )
+        keys.add(threadVisitKey(t))
     }
     return keys
   })
@@ -645,6 +653,8 @@
   // Remove-project confirmation
   let showRemoveModal = $state(false)
   let removeTarget = $state<Project | null>(null)
+  /** Project currently being deleted in the background; guards repeat clicks. */
+  let deletingProjectId = $state<string | null>(null)
 
   // Edit-project modal
   let showEditModal = $state(false)
@@ -1200,6 +1210,28 @@
   let browserFullscreenTabId = $state<string | null>(null)
   let sidebarVisible = $derived(contextSidebarState.sidebarVisible)
   let terminalDockVisible = $derived(contextSidebarState.terminalDockVisible)
+
+  /** Project the git sidebar panel is kept mounted for. The panel stays alive
+   *  across sidebar tab switches AND thread switches within that project — its
+   *  visibility is toggled via CSS only, and scope-bucket changes are swapped
+   *  in place by GitStatusPanel itself, so switching threads never tears the
+   *  panel down. Only changing projects remounts it. */
+  let gitPanelProjectId = $state<string | null>(null)
+  let gitPanelScopeBucketId = $state(DEFAULT_SCOPE_BUCKET_ID)
+  $effect(() => {
+    const tab = contextSidebarState.sidebarActiveTab
+    if (!tab || !('projectId' in tab)) return
+    if (tab.kind !== 'git') {
+      if (tab.projectId !== gitPanelProjectId) gitPanelProjectId = null
+      return
+    }
+    const tabThreadId = 'threadId' in tab ? tab.threadId : undefined
+    const thread = allThreads.find(
+      (candidate) => candidate.projectId === tab.projectId && candidate.id === tabThreadId
+    )
+    gitPanelProjectId = tab.projectId
+    gitPanelScopeBucketId = thread?.scopeBucketId ?? DEFAULT_SCOPE_BUCKET_ID
+  })
 
   /** True when the browser's native WebContentsView is on screen, either from
    *  the right sidebar or the browser's own fullscreen dialog. The native
@@ -2070,16 +2102,33 @@
   }
 
   async function deleteProject(projectId: string): Promise<void> {
-    await invoke('project:delete', projectId)
+    if (deletingProjectId !== null) return
+    const project = projects.find((p) => p.id === projectId)
+    if (!project) return
+    deletingProjectId = projectId
+
+    // Remove the project from the UI immediately (same pattern as thread
+    // deletion) so the sidebar reflects the change without waiting on IPC.
     const browserTabIds = contextSidebarState.removeProjectBrowsers(projectId)
     if (browserFullscreenTabId && browserTabIds.includes(browserFullscreenTabId)) {
       browserFullscreenTabId = null
     }
-    await invoke('browser:destroyProject', projectId)
     projects = projects.filter((p) => p.id !== projectId)
     allThreads = allThreads.filter((t) => t.projectId !== projectId)
     projectIcons.delete(projectId)
     if (selectedThread?.projectId === projectId) workspaceState.clearThread()
+
+    // Heavy backend cleanup happens asynchronously; on failure the project
+    // is restored so the user can retry.
+    try {
+      await invoke('project:delete', projectId)
+      await invoke('browser:destroyProject', projectId)
+    } catch (error) {
+      projects = [project, ...projects.filter((p) => p.id !== projectId)]
+      reportError(error, 'The project could not be deleted.')
+    } finally {
+      deletingProjectId = null
+    }
   }
 
   // ─── Folder ellipsis menu actions ────────────────────────────────────────
@@ -2207,10 +2256,11 @@
   }
 
   async function confirmRemoveProject(): Promise<void> {
-    if (!removeTarget) return
-    await deleteProject(removeTarget.id)
+    const target = removeTarget
+    if (!target || deletingProjectId !== null) return
     showRemoveModal = false
     removeTarget = null
+    await deleteProject(target.id)
   }
 
   // ─── Scope bucket actions ──────────────────────────────────────────────────
@@ -2345,18 +2395,21 @@
   }
 
   /**
-   * Manual reorder of a project's pinned threads. Rewrites pinned_at so the
+   * Manual reorder of the sidebar pinned section. Pin order is one shared
+   * global sequence across every project group, so a drop relative to any
+   * thread — same project or not — inserts the dragged thread at that point in
+   * the global order. Visually the thread stays in its own project group and
+   * lands at the group edge nearest the drop (top when dropped above a higher
+   * group, bottom when dropped below a lower one). Rewrites pinned_at so the
    * first thread is most-recently pinned (top), applied optimistically so the
-   * section reorders the moment the user drops. This is the only thing that
-   * changes pin order.
+   * section reorders the moment the user drops.
    */
   async function handlePinnedThreadMove(
-    projectId: string,
     draggedId: string,
     targetId: string,
     position: 'before' | 'after'
   ): Promise<void> {
-    const pinnedIds = pinnedThreads.filter((t) => t.projectId === projectId).map((t) => t.id)
+    const pinnedIds = pinnedThreads.map((t) => t.id)
     const fromIdx = pinnedIds.indexOf(draggedId)
     const toIdx = pinnedIds.indexOf(targetId)
     if (fromIdx === -1 || toIdx === -1) return
@@ -2370,11 +2423,12 @@
     // reorders on drop, before the persisted result returns.
     const base = Date.now()
     allThreads = allThreads.map((t) => {
-      const index = t.pinned && t.projectId === projectId ? pinnedIds.indexOf(t.id) : -1
+      const index =
+        t.pinned && !t.archived && t.projectId !== INBOX_PROJECT_ID ? pinnedIds.indexOf(t.id) : -1
       return index !== -1 ? { ...t, pinnedAt: base - index } : t
     })
 
-    const updated = await invoke('thread:reorderPinned', projectId, pinnedIds)
+    const updated = await invoke('thread:reorderPinnedGlobal', pinnedIds)
     for (const t of updated) {
       upsertThreadInList(t)
     }
@@ -3291,8 +3345,7 @@
             onTogglePin={togglePin}
             onDelete={handleDelete}
             onFork={forkThread}
-            onMovePinnedThread={(projectId, draggedId, targetId, pos) =>
-              handlePinnedThreadMove(projectId, draggedId, targetId, pos)}
+            onMovePinnedThread={handlePinnedThreadMove}
           />
 
           <!-- Pinned projects -->
@@ -3831,6 +3884,24 @@
       {#if sidebarVisible}
         {#snippet contextSidebarContent()}
           {@const activeContextTab = contextSidebarState.sidebarActiveTab}
+          {@const gitPanelThreadId =
+            activeContextTab && 'threadId' in activeContextTab ? activeContextTab.threadId : ''}
+          {#if gitPanelProjectId}
+            {#key gitPanelProjectId}
+              {#await import('../git/GitStatusPanel.svelte') then { default: GitStatusPanel }}
+                <div
+                  class="h-full"
+                  style:display={activeContextTab?.kind === 'git' ? 'block' : 'none'}
+                >
+                  <GitStatusPanel
+                    projectId={gitPanelProjectId}
+                    threadId={gitPanelThreadId}
+                    scopeBucketId={gitPanelScopeBucketId}
+                  />
+                </div>
+              {/await}
+            {/key}
+          {/if}
           {#if activeContextTab}
             {#key activeContextTab.id}
               {#if activeContextTab.kind === 'files'}
@@ -3879,17 +3950,7 @@
                   threadId={activeContextTab.threadId}
                 />
               {:else if activeContextTab.kind === 'git'}
-                {#await import('../git/GitStatusPanel.svelte') then { default: GitStatusPanel }}
-                  <GitStatusPanel
-                    projectId={activeContextTab.projectId}
-                    threadId={activeContextTab.threadId}
-                    scopeBucketId={allThreads.find(
-                      (thread) =>
-                        thread.projectId === activeContextTab.projectId &&
-                        thread.id === activeContextTab.threadId
-                    )?.scopeBucketId ?? DEFAULT_SCOPE_BUCKET_ID}
-                  />
-                {/await}
+                <!-- Rendered by the persistent, keep-mounted block above. -->
               {:else if activeContextTab.kind === 'cloud-deployment'}
                 {#await import('../cloud/CloudDeploymentPanel.svelte') then { default: CloudDeploymentPanel }}
                   <CloudDeploymentPanel
@@ -4336,19 +4397,26 @@
   {#snippet footer()}
     <button
       type="button"
-      class="rounded-lg px-3 py-2 text-sm text-muted transition-colors hover:bg-elevated"
+      class="rounded-lg px-3 py-2 text-sm text-muted transition-colors hover:bg-elevated disabled:pointer-events-none disabled:opacity-50"
       title="Cancel"
+      disabled={deletingProjectId !== null}
       onclick={() => (showRemoveModal = false)}
     >
       Cancel
     </button>
     <button
       type="button"
-      class="rounded-lg bg-danger px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-danger/90"
+      class="inline-flex items-center gap-2 rounded-lg bg-danger px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-danger/90 disabled:pointer-events-none disabled:opacity-60"
       title="Remove this project and its threads from {APP_NAME}"
+      disabled={deletingProjectId !== null}
       onclick={() => void confirmRemoveProject()}
     >
-      Remove
+      {#if deletingProjectId !== null}
+        <Loader2 size={14} class="animate-spin" />
+        Removing…
+      {:else}
+        Remove
+      {/if}
     </button>
   {/snippet}
 </Modal>

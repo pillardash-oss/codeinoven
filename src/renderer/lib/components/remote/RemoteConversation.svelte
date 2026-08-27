@@ -21,7 +21,7 @@
     chatEffectiveSettings
   } from '$lib/stores/thread-settings.svelte'
   import { providerCatalog } from '$lib/stores/provider-catalog.svelte'
-  import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
+  import { contextSidebarState, EXPLAIN_SELECTION_PROMPT } from '$lib/stores/context-sidebar.svelte'
   import { invoke } from '$lib/ipc.svelte'
   import { messageId } from '$shared/id'
   import { isTodoToolPart } from '$lib/agent-todos'
@@ -1121,7 +1121,9 @@
       mode,
       selection.text,
       temporaryConversationContext(),
-      settings
+      settings,
+      true,
+      mode === 'elaborate' ? EXPLAIN_SELECTION_PROMPT : undefined
     )
     mobileState.openTemporaryChatTab(tab.id)
     closeResponseSelection()
@@ -1227,19 +1229,33 @@
                   />
                 {/if}
                 {#if final && !turnBusy}
-                  {@const isReadingRemote = 'messageId' in speechController.playback && speechController.playback.messageId === endMessage.id && (speechController.playback.state === 'preparing' || speechController.playback.state === 'playing' || speechController.playback.state === 'paused')}
-                  {#if isReadingRemote && speechController.activeSegments && speechController.activeSegments.length > 0 && (speechController.playback.state === 'playing' || speechController.playback.state === 'paused')}
+                  {@const isReadingRemote =
+                    'messageId' in speechController.playback &&
+                    speechController.playback.messageId === endMessage.id &&
+                    (speechController.playback.state === 'preparing' ||
+                      speechController.playback.state === 'playing' ||
+                      speechController.playback.state === 'paused')}
+                  {#if isReadingRemote && speechController.activeSegments && speechController.activeSegments.length > 0 && speechController.readingOverlayActive}
                     {@const segs = speechController.activeSegments}
-                    {@const activeIdx = speechController.playback.state === 'playing' || speechController.playback.state === 'paused' ? speechController.playback.segmentIndex : -1}
+                    {@const activeIdx = speechController.visibleSegmentIndex}
                     <div class="flex flex-col gap-1.5 text-sm text-foreground">
                       {#each segs as seg, i (seg.id)}
-                        <div class={i === activeIdx ? 'rounded-md border border-dashed border-info/40 bg-info/5 px-2.5 py-1.5 transition-colors' : 'px-2.5 py-1 opacity-80'} data-speech-line={i === activeIdx ? 'active' : undefined}>
+                        <div
+                          class={i === activeIdx
+                            ? 'rounded-md border border-dashed border-info/40 bg-info/5 px-2.5 py-1.5 transition-colors'
+                            : 'px-2.5 py-1 opacity-80'}
+                          data-speech-line={i === activeIdx ? 'active' : undefined}
+                        >
                           <span class="leading-relaxed">{seg.text}</span>
                         </div>
                       {/each}
                     </div>
                   {:else}
-                    <div class={isReadingRemote && speechController.playback.state === 'preparing' ? 'rounded-lg border border-dashed border-info/40 bg-info/5 p-3 text-sm text-foreground transition-colors' : 'text-sm text-foreground'}>
+                    <div
+                      class={isReadingRemote && speechController.playback.state === 'preparing'
+                        ? 'rounded-lg border border-dashed border-info/40 bg-info/5 p-3 text-sm text-foreground transition-colors'
+                        : 'text-sm text-foreground'}
+                    >
                       <MarkdownView text={final.text} />
                     </div>
                   {/if}
@@ -1288,7 +1304,11 @@
                         {/if}
                       </button>
                     {/if}
-                    <SpeechPlaybackButton messageId={endMessage.id} markdown={final.text} />
+                    <SpeechPlaybackButton
+                      messageId={endMessage.id}
+                      markdown={final.text}
+                      scope={{ kind: 'project', projectId: thread.projectId, threadId: thread.id }}
+                    />
                     <button
                       type="button"
                       class="flex h-8 w-8 cursor-pointer items-center justify-center rounded-lg transition-colors active:bg-elevated active:text-foreground disabled:cursor-not-allowed disabled:opacity-50"

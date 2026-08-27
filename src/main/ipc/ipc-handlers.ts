@@ -10,6 +10,10 @@ import { basename, dirname, extname, isAbsolute, join, resolve } from 'path'
 import { APP_NAME, APP_SLUG } from '../../lib/brand'
 import { harnessGlobalSkillPath, SHARED_GLOBAL_SKILL_PATH } from '../../lib/native-skill-paths'
 import { modelKey } from '../../lib/model-keys'
+import {
+  DEFAULT_VOICE_RECORDING_SHORTCUT,
+  normalizeVoiceRecordingShortcut
+} from '../../lib/speech/types'
 import type { Database } from '../database/database'
 import { StorageEngine } from '../storage/storage-engine'
 import { Logger } from '../system/logger'
@@ -167,6 +171,7 @@ import { exportPrdMarkdown } from '../../lib/prd/prd-markdown'
 import { parseGeneratedPrdContent } from '../../lib/prd/prd-validation'
 import { atomicWrite, getConfigRoot, getScopeRootPath } from '../../lib/utils'
 import { PROJECT_DATA_DIRECTORY } from '../../lib/project-artifacts'
+import { threadAttachmentDirectory } from '../../lib/thread-storage-paths'
 import { normalizeWorkerNames } from '../../lib/assignment/worker-names'
 import { retainTemporaryAttachment } from '../editor/temporary-attachment-retention'
 import type {
@@ -1665,8 +1670,10 @@ export function validateAppConfigPatch(value: unknown): AppConfigPatch {
         (language) => typeof language === 'string' && language.length <= 32
       ) ||
       typeof sound.voiceRecordingEnabled !== 'boolean' ||
-      typeof sound.localLlmCleanupEnabled !== 'boolean' ||
-      (sound.localLlmBaseUrl !== undefined && typeof sound.localLlmBaseUrl !== 'string') ||
+      !isRecord(sound.refinementFlags) ||
+      typeof sound.refinementFlags.smartCleanup !== 'boolean' ||
+      typeof sound.refinementFlags.selfCorrection !== 'boolean' ||
+      typeof sound.refinementFlags.preserveTechnical !== 'boolean' ||
       !isUnloadOption(sound.asrUnload) ||
       !isUnloadOption(sound.cleanupUnload) ||
       !isUnloadOption(sound.ttsUnload) ||
@@ -1683,6 +1690,13 @@ export function validateAppConfigPatch(value: unknown): AppConfigPatch {
     ) {
       throw new TypeError('Sound settings are invalid')
     }
+    const voiceRecordingShortcut =
+      sound.voiceRecordingShortcut === undefined
+        ? DEFAULT_VOICE_RECORDING_SHORTCUT
+        : normalizeVoiceRecordingShortcut(sound.voiceRecordingShortcut)
+    if (voiceRecordingShortcut === null) {
+      throw new TypeError('Sound voice recording shortcut is invalid')
+    }
     const optionalId = (field: string): string | undefined => {
       const candidate = sound[field]
       if (candidate === undefined) return undefined
@@ -1698,6 +1712,11 @@ export function validateAppConfigPatch(value: unknown): AppConfigPatch {
       ttsVoiceId: optionalId('ttsVoiceId'),
       preferredLanguages: sound.preferredLanguages,
       localCleanupEnabled: sound.localCleanupEnabled,
+      refinementFlags: {
+        smartCleanup: sound.refinementFlags.smartCleanup,
+        selfCorrection: sound.refinementFlags.selfCorrection,
+        preserveTechnical: sound.refinementFlags.preserveTechnical
+      },
       remoteCleanupEnabled: sound.remoteCleanupEnabled,
       remoteCleanupSelection: sound.remoteCleanupSelection,
       remoteCleanupModelId: optionalId('remoteCleanupModelId'),
@@ -1710,9 +1729,7 @@ export function validateAppConfigPatch(value: unknown): AppConfigPatch {
         volume: sound.cues.volume
       },
       voiceRecordingEnabled: sound.voiceRecordingEnabled,
-      localLlmCleanupEnabled: sound.localLlmCleanupEnabled,
-      localLlmBaseUrl:
-        sound.localLlmBaseUrl === undefined ? undefined : String(sound.localLlmBaseUrl),
+      voiceRecordingShortcut,
       asrUnload: sound.asrUnload,
       cleanupUnload: sound.cleanupUnload,
       ttsUnload: sound.ttsUnload
@@ -2081,6 +2098,8 @@ export function registerIpcHandlers(
     | 'activeTurnChangeSummary'
     | 'hasActiveProcessesInScope'
     | 'abort'
+    | 'handleThreadReadForGrading'
+    | 'handleThreadDraftChangedForGrading'
   > &
     Partial<Pick<ChatEngine, 'runVirtualTask'>>,
   options: RegisterIpcHandlersOptions = {}
@@ -2169,6 +2188,12 @@ export function registerIpcHandlers(
     const safeProjectId = validateEntityId(projectId, projectLabel)
     const safeThreadId = validateEntityId(threadId, threadLabel)
     await threadCreation.awaitReady(safeThreadId)
+    // A failed finalization never persisted the row; fail fast with the real
+    // cause instead of letting thread-scoped engines report a misleading
+    // ownership error. Phrase matches the renderer's 'Thread not found' retry.
+    if (threadCreation.didFinalizationFail(safeThreadId)) {
+      throw new Error(`Thread not found: ${safeThreadId} (its creation did not complete)`)
+    }
     return { projectId: safeProjectId, threadId: safeThreadId }
   }
 
@@ -2312,13 +2337,7 @@ export function registerIpcHandlers(
 
   async function attachmentStorageDirectory(scope: AttachmentStorageScope): Promise<string> {
     const project = await projectManager.getProject(scope.projectId)
-    if (project?.source === 'local' && project.path) {
-      return join(project.path, PROJECT_DATA_DIRECTORY, 'tmp', 'attachments', scope.threadId)
-    }
-
-    return scope.kind === 'chat'
-      ? join(getConfigRoot(), 'chats', scope.threadId, 'tmp')
-      : join(getConfigRoot(), 'projects', scope.projectId, 'threads', scope.threadId, 'tmp')
+    return threadAttachmentDirectory(project ?? null, scope)
   }
 
   // A File supplied through the preload represents an explicit user drop/paste
@@ -4474,17 +4493,6 @@ export function registerIpcHandlers(
     }
   )
   ipcMain.handle('project:delete', async (_, projectId: string) => {
-    // Tear down every harness session (processes, ports, utility runtimes) for
-    // the project's threads before the rows are cascade-deleted. Threads are
-    // removed from the database here, not through `thread:delete`, so the
-    // engine's per-thread teardown would otherwise never run and harness
-    // processes would leak after project removal.
-    if (chatEngine?.deleteThreadSession) {
-      const threads = await threadManager.listThreads(projectId)
-      for (const thread of threads) {
-        await chatEngine.deleteThreadSession(projectId, thread.id)
-      }
-    }
     // Never orphan a registered managed worktree silently: refuse deletion
     // until every managed association in this project is detached/removed
     // through the guarded lifecycle (dirty and unpushed work is protected).
@@ -4495,8 +4503,32 @@ export function registerIpcHandlers(
         `Cannot delete the project while ${managedBuckets.length} managed worktree scope(s) exist; remove them first`
       )
     }
+    // Delete every thread through the same path as `thread:delete` (session
+    // teardown, DB row cleanup for FK-less tables, disk artifact removal) so
+    // project deletion can never fall behind that logic or leave orphans.
+    await threadManager.deleteAllThreadsInProject(projectId)
     await projectManager.deleteProject(projectId)
     projectFilesService.disposeProject(projectId)
+    // Remove app-owned scratch data keyed by this project id (spec-context
+    // attachments, any leftover per-thread directories) that isn't tied to
+    // an individual thread and so isn't covered by the per-thread cleanup
+    // above. Best-effort: the DB rows are already gone either way.
+    await rm(join(getConfigRoot(), 'projects', projectId), { recursive: true, force: true }).catch(
+      () => {}
+    )
+    // Mass deletion just freed potentially thousands of pages. Reclaim the
+    // file space off-main via the maintenance worker — this also converts
+    // pre-existing databases to `auto_vacuum = INCREMENTAL` so future
+    // incremental vacuums work. Fire-and-forget: the IPC result must not wait
+    // on an O(database-size) operation, and a concurrent WAL transaction may
+    // make VACUUM fail (fine to retry next time).
+    void database.fullVacuum().then((result) => {
+      if (result.ok && (result.freedPages ?? 0) > 0) {
+        Logger.info(`Vacuum after project deletion reclaimed ${result.freedPages} pages`)
+      } else if (!result.ok) {
+        Logger.dev(`Post-deletion vacuum skipped/failed: ${result.error}`)
+      }
+    })
   })
   if (!options.hydrationHandlersRegistered) {
     ipcMain.handle('project:getIcon', (_, projectId: string) =>
@@ -7050,14 +7082,21 @@ export function registerIpcHandlers(
     return threadManager.efficiencyKpisFor(safeProjectId, safeThreadId)
   })
   ipcMain.handle('thread:markRead', async (_, projectId: string, threadId: string) => {
-    // Opening a thread means the user moved on from wherever they were; any
-    // completed turn left pending on another thread counts as a success.
+    // Opening a thread to read the final output anchors the LLM grading
+    // countdown for its pending turn outcomes.
     const safeThreadId = validateEntityId(threadId, 'Thread ID')
-    void turnFeedbackRepo
-      .resolvePendingForOtherThreadsViaWorker(safeThreadId, 'success', 'switched', 1)
-      .catch((error) => Logger.dev('Thread switch feedback resolution failed:', error))
-    return threadManager.markRead(projectId, threadId)
+    chatEngine?.handleThreadReadForGrading(projectId, safeThreadId)
+    return threadManager.markRead(projectId, safeThreadId)
   })
+  ipcMain.handle(
+    'thread:draftActivity',
+    (_, projectId: string, threadId: string, drafting: boolean) => {
+      const safeProjectId = validateEntityId(projectId, 'Project ID')
+      const safeThreadId = validateEntityId(threadId, 'Thread ID')
+      validateBoolean(drafting, 'Drafting')
+      chatEngine?.handleThreadDraftChangedForGrading(safeProjectId, safeThreadId, drafting)
+    }
+  )
   ipcMain.handle('thread:reorder', (_, projectId: unknown, orderedIds: unknown) =>
     threadManager.reorderThreads(
       validateEntityId(projectId, 'Project ID'),
