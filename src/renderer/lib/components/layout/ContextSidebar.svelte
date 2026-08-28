@@ -24,6 +24,7 @@
     X
   } from '@lucide/svelte'
   import type { ContextSidebarTab, TerminalPlacement } from '$lib/stores/context-sidebar.svelte'
+  import { agentRuns } from '$lib/stores/agent-runs.svelte'
   import FileTypeIcon from '../files/FileTypeIcon.svelte'
   import StatusBadge from '$lib/components/shared/StatusBadge.svelte'
 
@@ -310,7 +311,7 @@
                       ? 'italic'
                       : ''}">{tab.title}</span
                   >
-                  {#if tab.kind === 'temporary-chat' && tab.busy}
+                  {#if tab.kind === 'temporary-chat' && agentRuns.isBusy(tab.projectId, tab.temporaryChatId)}
                     <StatusBadge stage="working" animated title="Working" />
                   {/if}
                 </button>

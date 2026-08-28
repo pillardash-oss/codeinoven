@@ -955,7 +955,8 @@ export interface IpcInvokeContract {
       text: string,
       attachments: PromptAttachment[],
       selections: string[],
-      initialContext: string | undefined
+      initialContext: string | undefined,
+      userMessageId: string | undefined
     ],
     AgentMessage
   >
@@ -967,7 +968,8 @@ export interface IpcInvokeContract {
       settings: ThreadSettings,
       text: string,
       attachments: PromptAttachment[],
-      selections: string[]
+      selections: string[],
+      userMessageId: string | undefined
     ],
     void
   >

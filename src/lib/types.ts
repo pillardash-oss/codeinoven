@@ -2567,6 +2567,7 @@ export type AgentEvent =
       type: 'temporary-chat.started'
       sessionId: string
       temporaryChatId: string
+      projectId: string
     }
   | {
       type: 'catalog.updated'

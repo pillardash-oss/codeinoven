@@ -2064,7 +2064,8 @@ export class ChatEngine {
         text: string,
         attachments: PromptAttachment[],
         selections?: string[],
-        initialContext?: string
+        initialContext?: string,
+        userMessageId?: string
       ) =>
         this.sendTemporaryPrompt(
           projectId,
@@ -2074,7 +2075,8 @@ export class ChatEngine {
           text,
           attachments,
           selections,
-          initialContext
+          initialContext,
+          userMessageId
         )
     )
     ipcMain.handle(
@@ -2087,7 +2089,8 @@ export class ChatEngine {
         settings: ThreadSettings,
         text: string,
         attachments: PromptAttachment[],
-        selections?: string[]
+        selections?: string[],
+        userMessageId?: string
       ) =>
         this.steerTemporaryPrompt(
           projectId,
@@ -2096,7 +2099,8 @@ export class ChatEngine {
           settings,
           text,
           attachments,
-          selections
+          selections,
+          userMessageId
         )
     )
     ipcMain.handle('agent:closeTemporaryChat', (_, temporaryChatId: string) =>
@@ -6401,13 +6405,20 @@ export class ChatEngine {
     text: string,
     attachments: PromptAttachment[],
     selections?: string[],
-    initialContext?: string
+    initialContext?: string,
+    userMessageId?: string
   ): Promise<AgentMessage | undefined> {
     projectId = validateEntityId(projectId, 'Project ID')
     threadId = validateEntityId(threadId, 'Thread ID')
     temporaryChatId = validateEntityId(temporaryChatId, 'Temporary chat ID', 256)
     settings = validateThreadSettings(settings)
     text = validateBoundedString(text, 'Prompt', 1, 200_000)
+    // The renderer optimistically commits the user message under this ID; using
+    // it keeps the mirror reconcile 1:1 with the optimistic message instead of
+    // duplicating it.
+    const outboundUserMessageId = userMessageId
+      ? validateBoundedString(userMessageId, 'User message ID', 1, 128)
+      : createMessageId()
     this.markProjectActive(projectId)
     if (!Array.isArray(attachments)) {
       throw new TypeError('Temporary chat attachments must be an array')
@@ -6489,7 +6500,8 @@ export class ChatEngine {
     this.broadcast({
       type: 'temporary-chat.started',
       sessionId: temporary.sessionId,
-      temporaryChatId: temporary.id
+      temporaryChatId: temporary.id,
+      projectId: temporary.projectId
     })
 
     const driver = this.drivers.get(temporary.driverId)
@@ -6518,7 +6530,7 @@ export class ChatEngine {
       ]
         .filter(Boolean)
         .join('\n\n')
-      const userMessageId = createMessageId()
+      const userMessageId = outboundUserMessageId
       const request: SendPromptOptions = {
         sessionId: temporary.sessionId,
         settings: {
@@ -6535,6 +6547,10 @@ export class ChatEngine {
         userMessageId
       }
       traceLeanAgent('ephemeral', temporary.sessionId, temporary.driverId)
+      const outboundIds =
+        this.outboundMessageIdsBySession.get(temporary.sessionId) ?? new Set<string>()
+      outboundIds.add(userMessageId)
+      this.outboundMessageIdsBySession.set(temporary.sessionId, outboundIds)
       tokenUsageAttribution.recordPromptAttribution(
         episodeFromPieces({
           key: `eph:${temporary.sessionId}`,
@@ -6795,7 +6811,8 @@ export class ChatEngine {
     settings: ThreadSettings,
     text: string,
     attachments: PromptAttachment[],
-    selections?: string[]
+    selections?: string[],
+    userMessageId?: string
   ): Promise<void> {
     this.touchUserActivity()
     projectId = validateEntityId(projectId, 'Project ID')
@@ -6855,7 +6872,9 @@ export class ChatEngine {
       sessionId: temporary.sessionId,
       text: promptText,
       attachments: validatedAttachments,
-      userMessageId: createMessageId()
+      userMessageId: userMessageId
+        ? validateBoundedString(userMessageId, 'User message ID', 1, 128)
+        : createMessageId()
     }
     if (temporary.isolated && driver instanceof OpenCodeDriver) {
       await driver.steerPrompt(temporary.projectPath, steerOptions, temporary.isolated)
