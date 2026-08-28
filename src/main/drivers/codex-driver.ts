@@ -40,6 +40,7 @@ import type {
   UtilityRuntimeOverlay,
   UtilityRuntimePreparationRequest
 } from './driver.interface'
+import { QuestionRequestGoneError } from './driver.interface'
 import {
   PersistentCliDriver,
   type CliLineParseContext,
@@ -597,13 +598,13 @@ export class CodexDriver extends PersistentCliDriver {
 
   override async replyToQuestion(
     _projectPath: string,
-    _sessionId: string,
+    sessionId: string,
     requestId: string,
     answers: string[][]
   ): Promise<void> {
     const request = this.serverRequests.get(requestId)
     if (!request || !isCodexQuestionRequest(request.method)) {
-      throw new Error(`Codex question request is no longer pending: ${requestId}`)
+      throw new QuestionRequestGoneError(sessionId, requestId, this.name)
     }
     const questionIds = codexQuestionIds(request.params)
     const mappedAnswers: Record<string, { answers: string[] }> = {}
@@ -616,12 +617,12 @@ export class CodexDriver extends PersistentCliDriver {
 
   override async rejectQuestion(
     _projectPath: string,
-    _sessionId: string,
+    sessionId: string,
     requestId: string
   ): Promise<void> {
     const request = this.serverRequests.get(requestId)
     if (!request || !isCodexQuestionRequest(request.method)) {
-      throw new Error(`Codex question request is no longer pending: ${requestId}`)
+      throw new QuestionRequestGoneError(sessionId, requestId, this.name)
     }
     const answers: Record<string, { answers: string[] }> = {}
     for (const id of codexQuestionIds(request.params)) answers[id] = { answers: [] }

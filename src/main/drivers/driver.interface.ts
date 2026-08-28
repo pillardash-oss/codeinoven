@@ -32,6 +32,25 @@ export class InactiveQuestionTurnError extends Error {
   }
 }
 
+/**
+ * The chat engine still tracks a question as pending, but the driver's own
+ * bookkeeping already dropped it (the harness answered/cancelled it through
+ * another path, or the driver instance was reset). Retrying the same reject
+ * or reply against the driver can never succeed, so the chat engine should
+ * treat this as an already-resolved question instead of leaving the user
+ * stuck retrying a dismissal that will always fail the same way.
+ */
+export class QuestionRequestGoneError extends Error {
+  constructor(
+    readonly sessionId: string,
+    readonly requestId: string,
+    harnessName: string
+  ) {
+    super(`The ${harnessName} question ${requestId} is no longer pending on the driver`)
+    this.name = 'QuestionRequestGoneError'
+  }
+}
+
 /** Features a harness can reliably provide to CodeInOven. */
 export interface HarnessCapabilities {
   /** Truthful process topology used for app-wide host and RAM policy. */

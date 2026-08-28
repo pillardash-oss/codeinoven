@@ -49,7 +49,7 @@ import type {
   UtilityRuntimeOverlay,
   UtilityRuntimePreparationRequest
 } from './driver.interface'
-import { InactiveQuestionTurnError } from './driver.interface'
+import { InactiveQuestionTurnError, QuestionRequestGoneError } from './driver.interface'
 import { buildProcessEnvironment } from './cli-environment'
 import { attachmentReference } from './attachment-reference'
 import {
@@ -1611,7 +1611,7 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
   ): Promise<void> {
     const request = this.pendingClaudeQuestions.get(requestId)
     if (!request || request.sessionId !== sessionId) {
-      throw new Error(`Claude question request is no longer pending: ${requestId}`)
+      throw new QuestionRequestGoneError(sessionId, requestId, this.name)
     }
     const answersByPrompt = Object.fromEntries(
       request.questions.map((question, index) => [
@@ -1653,7 +1653,7 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
   ): Promise<void> {
     const request = this.pendingClaudeQuestions.get(requestId)
     if (!request || request.sessionId !== sessionId) {
-      throw new Error(`Claude question request is no longer pending: ${requestId}`)
+      throw new QuestionRequestGoneError(sessionId, requestId, this.name)
     }
     this.writeQuestionResponse(sessionId, requestId, () => {
       if (request.transport === 'control') {

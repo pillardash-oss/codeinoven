@@ -32,6 +32,7 @@ import type {
   UtilityRuntimeOverlay,
   UtilityRuntimePreparationRequest
 } from './driver.interface'
+import { QuestionRequestGoneError } from './driver.interface'
 import type { HarnessCommand, ThreadSettings } from '../../lib/types'
 import { classifyProviderIssue } from '../../lib/provider-issue'
 import {
@@ -1306,7 +1307,7 @@ export class PiDriver extends PersistentCliDriver {
   ): Promise<void> {
     const request = this.pendingUiRequests.get(requestId)
     if (!request || request.sessionId !== sessionId) {
-      throw new Error(`Pi question request is no longer pending: ${requestId}`)
+      throw new QuestionRequestGoneError(sessionId, requestId, this.name)
     }
     const answer = answers[0]?.[0] ?? ''
     const rawId = request.request['id']
@@ -1330,7 +1331,7 @@ export class PiDriver extends PersistentCliDriver {
   ): Promise<void> {
     const request = this.pendingUiRequests.get(requestId)
     if (!request || request.sessionId !== sessionId) {
-      throw new Error(`Pi question request is no longer pending: ${requestId}`)
+      throw new QuestionRequestGoneError(sessionId, requestId, this.name)
     }
     const rawId = request.request['id']
     if (typeof rawId !== 'string' && typeof rawId !== 'number') {

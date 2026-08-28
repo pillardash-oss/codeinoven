@@ -59,6 +59,7 @@ import {
 import { forwardRemoteEvent } from '../remote/remote-event-forwarder'
 import {
   InactiveQuestionTurnError,
+  QuestionRequestGoneError,
   type HarnessDriver,
   type SendPromptOptions,
   type StructuredOutputRequest
@@ -2334,8 +2335,15 @@ export class ChatEngine {
         )
       )
     } catch (error) {
-      if (!(error instanceof InactiveQuestionTurnError)) throw error
-      await this.resumeAfterInactiveQuestion(pending, 'answered', safeAnswers)
+      if (error instanceof InactiveQuestionTurnError) {
+        await this.resumeAfterInactiveQuestion(pending, 'answered', safeAnswers)
+        return
+      }
+      if (error instanceof QuestionRequestGoneError) {
+        this.finalizePendingQuestion(requestId, 'answered', safeAnswers)
+        return
+      }
+      throw error
     }
   }
 
@@ -2425,8 +2433,15 @@ export class ChatEngine {
         driver.rejectQuestion(pending.projectPath, pending.request.sessionId, requestId)
       )
     } catch (error) {
-      if (!(error instanceof InactiveQuestionTurnError)) throw error
-      await this.resumeAfterInactiveQuestion(pending, 'dismissed')
+      if (error instanceof InactiveQuestionTurnError) {
+        await this.resumeAfterInactiveQuestion(pending, 'dismissed')
+        return
+      }
+      if (error instanceof QuestionRequestGoneError) {
+        this.finalizePendingQuestion(requestId, 'dismissed')
+        return
+      }
+      throw error
     }
   }
 
@@ -15477,6 +15492,10 @@ export class ChatEngine {
           answers
         )
       ).catch((error) => {
+        if (error instanceof QuestionRequestGoneError) {
+          this.finalizePendingQuestion(pending.request.requestId, 'timed_out', answers)
+          return
+        }
         Logger.error('Automatic question resolution failed:', error)
       })
     }, delay)
