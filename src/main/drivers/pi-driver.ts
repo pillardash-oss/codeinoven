@@ -175,6 +175,19 @@ function messageTimestamp(value: Record<string, unknown>): number {
   return numberValue(value['timestamp']) ?? Date.now()
 }
 
+/**
+ * Pi's rate-limit/quota error text embeds an ISO-8601 reset time (e.g.
+ * `Your limit resets at 2026-08-28T22:52:23.222Z.`). Extract it so the retry
+ * scheduler gets a concrete `retryAt` instead of waiting on a manual retry.
+ */
+function piUsageLimitResetAt(message: string, now = Date.now()): number | undefined {
+  const match = message.match(/resets? at\s+(\d{4}-\d{2}-\d{2}T[\d:.]+Z)/iu)
+  if (!match) return undefined
+  const resetMs = Date.parse(match[1])
+  if (!Number.isFinite(resetMs) || resetMs <= now) return undefined
+  return resetMs
+}
+
 /** Map one Pi content block into a CodeInOven AgentPart. */
 function mapPiContentBlock(
   blockValue: unknown,
@@ -538,6 +551,11 @@ export function mapPiRecord(
       return message.role === 'assistant'
     })
     if (lastAssistant?.error) {
+      const kind = classifyProviderIssue(lastAssistant.error)
+      const retryAt =
+        kind === 'quota' || kind === 'rate_limit'
+          ? piUsageLimitResetAt(lastAssistant.error)
+          : undefined
       return {
         events: [
           {
@@ -546,10 +564,11 @@ export function mapPiRecord(
             status: {
               state: 'error',
               issue: {
-                kind: classifyProviderIssue(lastAssistant.error),
+                kind,
                 message: lastAssistant.error,
                 harnessId: 'pi',
-                retryable: false
+                retryable: retryAt !== undefined,
+                ...(retryAt === undefined ? {} : { retryAt })
               }
             }
           }
