@@ -399,7 +399,7 @@ function parseThinkingPresets(value: unknown): ThinkingPreset[] | undefined {
 }
 
 function parseThinkingLevel(value: unknown): ThinkingLevel | undefined {
-  if (value === undefined) return undefined
+  if (value === undefined || value === '') return undefined
   if (typeof value !== 'string' || !THINKING_LEVELS.has(value as ThinkingLevel)) {
     throw new TypeError(`Default thinking level must be one of: ${[...THINKING_LEVELS].join(', ')}`)
   }
