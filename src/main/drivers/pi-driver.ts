@@ -6,6 +6,7 @@ import { fileURLToPath } from 'url'
 import type {
   AgentMessage,
   AgentPart,
+  AgentRateLimitWindow,
   AgentTokenUsage,
   PromptAttachment,
   ProviderCatalog,
@@ -1059,6 +1060,40 @@ export class PiDriver extends PersistentCliDriver {
       this.disposeRpcClient(sessionId)
     }
     super.releaseProjectResources(projectPath)
+  }
+
+  /**
+   * Pi only reports token/context usage over its RPC session (no local usage
+   * file like Claude Code or Codex), so this can only answer while a session
+   * for the project is already running — battery hover triggers this after a
+   * turn has started one. Returns null (never a turn) otherwise, matching the
+   * documented "no turn yet" contract other drivers rely on.
+   */
+  async readAccountUsage(projectPath: string): Promise<{
+    rateLimits: AgentRateLimitWindow[]
+    contextWindow?: number
+    contextUsed?: number
+  } | null> {
+    const sessionId = [...this.sessionProjects.entries()].find(
+      ([, clientProject]) => clientProject === projectPath
+    )?.[0]
+    const client = sessionId ? this.rpcClients.get(sessionId) : undefined
+    if (!client) return null
+    try {
+      const stats = record(await client.getSessionStats())
+      const contextUsage = record(stats?.['contextUsage'])
+      const contextWindow = numberValue(contextUsage?.['contextWindow'])
+      const contextUsed = numberValue(contextUsage?.['tokens'])
+      if (contextWindow === undefined && contextUsed === undefined) return null
+      return {
+        rateLimits: [],
+        ...(contextWindow !== undefined ? { contextWindow } : {}),
+        ...(contextUsed !== undefined ? { contextUsed } : {})
+      }
+    } catch (error) {
+      Logger.dev('Pi account usage read failed:', error)
+      return null
+    }
   }
 
   async prepareUtilityRuntime(
