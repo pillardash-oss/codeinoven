@@ -101,7 +101,8 @@ export class BaseUrlProviderService {
       }
       if (hasNativeProviderCatalog(provider.harnessId)) {
         await this.nativeProviders.upsertProvider(provider, input.apiKey)
-        return structuredClone(provider)
+        const created = { ...provider, apiKeyConfigured: (input.apiKey ?? '').trim() !== '' }
+        return structuredClone(created)
       }
       if (
         input.id !== undefined &&
@@ -162,10 +163,17 @@ export class BaseUrlProviderService {
         updatedAt: Date.now()
       }
       if (hasNativeProviderCatalog(current.harnessId)) {
+        const apiKeyConfigured =
+          patch.removeApiKey === true
+            ? false
+            : patch.apiKey !== undefined
+              ? patch.apiKey.trim() !== ''
+              : current.apiKeyConfigured === true
         const nativeUpdated = {
           ...updated,
           apiKeyRef: undefined,
-          apiKeyEnvVar: undefined
+          apiKeyEnvVar: undefined,
+          apiKeyConfigured
         }
         await this.nativeProviders.upsertProvider(nativeUpdated, patch.apiKey, patch.removeApiKey)
         return structuredClone(nativeUpdated)
