@@ -1964,13 +1964,22 @@
 
       // Never auto-create a chat, thread, or project on startup — the user
       // (or the onboarding tour) initiates that. When no thread was restored
-      // from the recovery snapshot, reopen the most recent thread of the
-      // current mode if one exists; otherwise show the empty state.
+      // from the recovery snapshot, reopen the last thread the user actually
+      // visited (recentThreadVisits is persisted visit order); fall back to
+      // the most recently active thread of the mode. allThreads order is not
+      // visit recency (listRecent hoists the selected project first), so it
+      // must never be used to guess the last-open thread.
       if (active && !workspaceState.selectedThread) {
         const wantChat = mode === 'chats'
-        const last = allThreads.find(
+        const candidates = allThreads.filter(
           (t) => !t.archived && (t.projectId === INBOX_PROJECT_ID) === wantChat
         )
+        const byVisit = new Map(candidates.map((t) => [threadVisitKey(t), t]))
+        const last =
+          workspaceState.recentThreadVisits
+            .map((key) => byVisit.get(key))
+            .find((t) => t !== undefined) ??
+          candidates.sort((a, b) => b.lastActivity - a.lastActivity)[0]
         if (last) {
           workspaceState.openThread(
             last,
