@@ -93,23 +93,11 @@
   let oauthLoginId = $state<string | null>(null)
   let oauthStatus = $state('')
   let oauthDeviceCode = $state<{ userCode: string; verificationUri: string } | null>(null)
-  let oauthPrompt = $state<{ promptId: string; message: string; placeholder?: string } | null>(
-    null
-  )
+  let oauthPrompt = $state<{ promptId: string; message: string; placeholder?: string } | null>(null)
   let oauthPromptAnswer = $state('')
   let oauthStarting = $state(false)
-  /** Catalog providers connectable through a browser-based OAuth flow. */
-  const OAUTH_PROVIDER_IDS = new Set([
-    'anthropic',
-    'openai-codex',
-    'github-copilot',
-    'openrouter',
-    'kimi-coding',
-    'xai'
-  ])
-  let selectedProviderIsOauth = $derived(
-    selectedProvider !== null && OAUTH_PROVIDER_IDS.has(selectedProvider.id)
-  )
+  /** The catalog flags providers that support a fully in-app browser sign-in. */
+  let selectedProviderIsOauth = $derived(selectedProvider?.oauth === true)
 
   function resetOAuthState(): void {
     oauthLoginId = null
@@ -150,9 +138,7 @@
       oauthPrompt = {
         promptId: String(data['promptId']),
         message: String(prompt['message'] ?? 'Continue sign-in'),
-        ...(typeof prompt['placeholder'] === 'string'
-          ? { placeholder: prompt['placeholder'] }
-          : {})
+        ...(typeof prompt['placeholder'] === 'string' ? { placeholder: prompt['placeholder'] } : {})
       }
       oauthPromptAnswer = ''
     } else if (data['kind'] === 'complete') {
@@ -309,9 +295,7 @@
       providerCatalog.invalidateAll()
     } catch (storeError) {
       actionError =
-        storeError instanceof Error
-          ? storeError.message
-          : 'The API key could not be stored.'
+        storeError instanceof Error ? storeError.message : 'The API key could not be stored.'
     } finally {
       storingKey = false
     }
@@ -509,13 +493,15 @@
               title={step === 'picking' && selectedProvider
                 ? `Store the API key for ${selectedProvider.name}`
                 : 'Select a provider first'}
-              disabled={storingKey || oauthLoginId !== null || (step === 'picking' && !selectedProvider)}
+              disabled={storingKey ||
+                oauthLoginId !== null ||
+                (step === 'picking' && !selectedProvider)}
               onclick={() => (step === 'idle' ? openPicker() : void connectWithKey())}
             >
               {#if storingKey}
                 <Loader2 size={13} class="animate-spin" />
               {:else if step === 'idle'}
-                <Search size={13} /> Select a provider
+                <Search size={13} /> Search providers
               {:else}
                 <KeyRound size={13} /> Connect provider
               {/if}
@@ -537,7 +523,7 @@
               {#if !pickerLogin && step === 'picking' && selectedProvider}
                 <Plug size={13} /> Connect with {selectedProvider.name}
               {:else if !pickerLogin && step === 'picking'}
-                <Search size={13} /> Select a provider
+                <Search size={13} /> Search providers
               {:else}
                 <KeyRound size={13} /> Connect provider
               {/if}
@@ -584,25 +570,29 @@
 
   {#if tab === 'connect'}
     <div class="space-y-4">
-      <div class="flex items-center justify-between gap-3 rounded-xl border bg-surface px-3 py-2.5">
-        <div class="flex min-w-0 items-center gap-2">
-          {#if authStatus?.state === 'authenticated'}
-            <CheckCircle2 size={15} class="shrink-0 text-success" />
-          {:else}
-            <KeyRound size={15} class="shrink-0 text-dimmed" />
-          {/if}
-          <p class="truncate text-xs font-medium">{stateLabel()}</p>
-        </div>
-        <button
-          class="flex h-7 items-center gap-1 rounded-lg border bg-elevated px-2 text-[11px] font-medium hover:bg-overlay disabled:opacity-50"
-          title="Re-check {harness.name} sign-in status"
-          disabled={checkingAuth}
-          onclick={() => void checkAuth()}
+      {#if step === 'idle'}
+        <div
+          class="flex items-center justify-between gap-3 rounded-xl border bg-surface px-3 py-2.5"
         >
-          <RefreshCw size={11} class={checkingAuth ? 'animate-spin' : ''} />
-          Check
-        </button>
-      </div>
+          <div class="flex min-w-0 items-center gap-2">
+            {#if authStatus?.state === 'authenticated'}
+              <CheckCircle2 size={15} class="shrink-0 text-success" />
+            {:else}
+              <KeyRound size={15} class="shrink-0 text-dimmed" />
+            {/if}
+            <p class="truncate text-xs font-medium">{stateLabel()}</p>
+          </div>
+          <button
+            class="flex h-7 items-center gap-1 rounded-lg border bg-elevated px-2 text-[11px] font-medium hover:bg-overlay disabled:opacity-50"
+            title="Re-check {harness.name} sign-in status"
+            disabled={checkingAuth}
+            onclick={() => void checkAuth()}
+          >
+            <RefreshCw size={11} class={checkingAuth ? 'animate-spin' : ''} />
+            Check
+          </button>
+        </div>
+      {/if}
 
       {#if actionError}
         <p class="rounded-lg bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">
@@ -623,7 +613,7 @@
         </p>
       {/if}
 
-      {#if authStatus?.accounts.length}
+      {#if step === 'idle' && authStatus?.accounts.length}
         <div class="space-y-1.5">
           <p class="text-[11px] font-medium text-dimmed">Connected providers</p>
           {#each authStatus.accounts as account (account.id)}
@@ -766,26 +756,39 @@
             </div>
           {/if}
 
+          {#snippet apiKeyField(providerName: string)}
+            <label
+              class="block text-[11px] font-medium text-foreground"
+              for="provider-api-key-input"
+            >
+              API key for {providerName}
+            </label>
+            <!-- svelte-ignore a11y_autofocus -->
+            <input
+              id="provider-api-key-input"
+              type="password"
+              autocomplete="off"
+              spellcheck="false"
+              class="h-9 w-full rounded-lg border bg-elevated px-3 text-sm outline-none focus:border-primary"
+              placeholder="Paste the API key"
+              bind:value={apiKey}
+              autofocus
+              onkeydown={(event: KeyboardEvent) => {
+                if (event.key === 'Enter') {
+                  event.preventDefault()
+                  void connectWithKey()
+                }
+              }}
+            />
+            <p class="text-[10px] text-dimmed">
+              Stored by CodeInOven in {harness.name}’s own credential file — never sent anywhere
+              else.
+            </p>
+          {/snippet}
+
           {#if apiKeyEntry && selectedProvider}
             <div class="space-y-1.5 rounded-xl border border-primary/30 bg-primary/5 p-3">
-              {#if selectedProviderIsOauth && oauthLoginId === null}
-                <p class="text-[11px] font-medium text-foreground">
-                  Sign in to {selectedProvider.name}
-                </p>
-                <p class="text-[10px] text-dimmed">
-                  A browser window opens, you approve access, and this app finishes the rest — no
-                  key pasting needed.
-                </p>
-                <button
-                  class="flex h-9 items-center justify-center gap-1.5 rounded-lg bg-primary px-4 text-xs font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
-                  type="button"
-                  title="Sign in to {selectedProvider.name} in your browser"
-                  onclick={() => void startOAuthSignIn()}
-                >
-                  <KeyRound size={13} /> Sign in with browser
-                </button>
-                <p class="text-center text-[10px] text-dimmed">— or paste an API key —</p>
-              {:else if oauthLoginId !== null}
+              {#if selectedProviderIsOauth && oauthLoginId !== null}
                 <div class="space-y-2">
                   <div class="flex items-center gap-2">
                     <Loader2 size={13} class="animate-spin text-primary" />
@@ -809,13 +812,14 @@
                           class="font-medium text-primary underline underline-offset-2"
                           type="button"
                           title="Open {oauthDeviceCode.verificationUri}"
-                          onclick={() =>
-                            void openInBrowser(oauthDeviceCode?.verificationUri ?? '')}
+                          onclick={() => void openInBrowser(oauthDeviceCode?.verificationUri ?? '')}
                         >
                           {oauthDeviceCode.verificationUri}
                         </button>
                       </p>
-                      <p class="mt-1 font-mono text-base font-semibold tracking-widest text-foreground">
+                      <p
+                        class="mt-1 font-mono text-base font-semibold tracking-widest text-foreground"
+                      >
                         {oauthDeviceCode.userCode}
                       </p>
                     </div>
@@ -858,33 +862,25 @@
                   {/if}
                 </div>
               {:else}
-                <label
-                  class="block text-[11px] font-medium text-foreground"
-                  for="provider-api-key-input"
-                >
-                  API key for {selectedProvider.name}
-                </label>
-                <!-- svelte-ignore a11y_autofocus -->
-                <input
-                  id="provider-api-key-input"
-                  type="password"
-                  autocomplete="off"
-                  spellcheck="false"
-                  class="h-9 w-full rounded-lg border bg-elevated px-3 text-sm outline-none focus:border-primary"
-                  placeholder="Paste the API key"
-                  bind:value={apiKey}
-                  autofocus
-                  onkeydown={(event: KeyboardEvent) => {
-                    if (event.key === 'Enter') {
-                      event.preventDefault()
-                      void connectWithKey()
-                    }
-                  }}
-                />
-                <p class="text-[10px] text-dimmed">
-                  Stored by CodeInOven in {harness.name}’s own credential file — never sent anywhere
-                  else.
-                </p>
+                {#if selectedProviderIsOauth}
+                  <p class="text-[11px] font-medium text-foreground">
+                    Sign in to {selectedProvider.name}
+                  </p>
+                  <p class="text-[10px] text-dimmed">
+                    A browser window opens, you approve access, and this app finishes the rest — no
+                    key pasting needed.
+                  </p>
+                  <button
+                    class="flex h-9 items-center justify-center gap-1.5 rounded-lg bg-primary px-4 text-xs font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
+                    type="button"
+                    title="Sign in to {selectedProvider.name} in your browser"
+                    onclick={() => void startOAuthSignIn()}
+                  >
+                    <KeyRound size={13} /> Sign in with browser
+                  </button>
+                  <p class="text-center text-[10px] text-dimmed">— or paste an API key —</p>
+                {/if}
+                {@render apiKeyField(selectedProvider.name)}
               {/if}
             </div>
           {/if}
@@ -893,8 +889,9 @@
         <div class="rounded-xl border border-dashed px-3 py-2.5">
           {#if apiKeyEntry}
             <p class="text-[11px] text-muted">
-              Click <strong class="font-medium text-foreground">Select a provider</strong> below to
-              browse {harness.name}’s full provider catalog, then paste an API key to connect.
+              Click <strong class="font-medium text-foreground">Search providers</strong> below to
+              browse {harness.name}’s full provider catalog, then sign in or paste an API key to
+              connect.
             </p>
           {:else if pickerLogin}
             <p class="text-[11px] text-muted">

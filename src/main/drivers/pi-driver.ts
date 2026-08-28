@@ -698,6 +698,26 @@ export class PiDriver extends PersistentCliDriver {
 
   async listProviders(projectPath: string): Promise<ProviderCatalog[]> {
     const connected = await this.connectedProviderIds()
+    return this.buildCatalog(projectPath, connected)
+  }
+
+  /**
+   * The full Pi catalog — every provider the runtime knows, connected or not.
+   * This is the connect flow's searchable set: the same discovery the model
+   * picker uses, minus its connected-provider filter.
+   */
+  async listAllProviders(projectPath: string): Promise<ProviderCatalog[]> {
+    return this.buildCatalog(projectPath, null)
+  }
+
+  /**
+   * Run model discovery and group the result per provider. When `connected` is
+   * a set, only those providers are kept; `null` keeps the full catalog.
+   */
+  private async buildCatalog(
+    projectPath: string,
+    connected: Set<string> | null
+  ): Promise<ProviderCatalog[]> {
     if (connected !== null && connected.size === 0) return []
     if (!(await resolveHarnessRuntime('pi', projectPath))) {
       return this.filterConnectedCatalogs(structuredClone(PI_FALLBACK_CATALOG), connected)

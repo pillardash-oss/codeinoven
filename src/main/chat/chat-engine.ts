@@ -1,5 +1,6 @@
 import { BrowserWindow } from 'electron'
 import { readFile } from 'fs/promises'
+import { homedir } from 'os'
 import { trustedIpcMain as ipcMain } from '../ipc/trusted-ipc-main'
 import { basename, isAbsolute, join, relative, resolve } from 'path'
 import { createHash, randomBytes, randomInt } from 'crypto'
@@ -2911,13 +2912,34 @@ export class ChatEngine {
   }
 
   /**
+   * One harness's full provider catalog without the connected-only filter —
+   * the searchable set the provider-connect flow offers. Only drivers that
+   * implement `listAllProviders` (Pi today) support this; the call fails for
+   * the others so the connect flow falls back to its own enumeration.
+   */
+  async listFullProviderCatalog(
+    harnessId: string,
+    projectPath?: string
+  ): Promise<ProviderCatalog[]> {
+    const driver = this.drivers.get(harnessId)
+    if (!driver) {
+      throw new Error(
+        `Harness driver "${harnessId}" is not available. Available: ${[...this.drivers.keys()].join(', ')}`
+      )
+    }
+    if (!driver.listAllProviders) {
+      throw new Error(`Harness "${harnessId}" does not expose a full provider catalog.`)
+    }
+    return driver.listAllProviders(projectPath ?? homedir())
+  }
+
+  /**
    * Compute every implementing driver's provider-catalog input fingerprint and
    * compare it with the last recorded one. Returns (and records) whether any
    * driver's inputs drifted — e.g. the user connected or disconnected a Pi
    * provider, so cached catalogs no longer match reality. The first observation
    * only records the baseline.
-   */
-  private async providerCatalogInputsChanged(): Promise<boolean> {
+   */ private async providerCatalogInputsChanged(): Promise<boolean> {
     const current = await this.readProviderCatalogFingerprints()
     if (current === null) return false
     let changed = false
@@ -13602,9 +13624,7 @@ export class ChatEngine {
   }
 
   private auditRequiresRework(content: AuditReportContent): boolean {
-    return content.findings.some((finding) =>
-      ACTIONABLE_AUDIT_SEVERITIES.has(finding.severity)
-    )
+    return content.findings.some((finding) => ACTIONABLE_AUDIT_SEVERITIES.has(finding.severity))
   }
 
   private async loopReworkPrompt(report: AuditReport, iteration: number): Promise<string> {
@@ -17251,7 +17271,8 @@ export class ChatEngine {
       // The raw transcript may contain hidden user messages that are intentionally
       // filtered out of the persisted mirror. Usage events and turn outcomes
       // reference the durable parent turn, so anchor them to the persisted set.
-      const parentTurnId = classifiedMessages.findLast((message) => message.role === 'user')?.id ?? null
+      const parentTurnId =
+        classifiedMessages.findLast((message) => message.role === 'user')?.id ?? null
       memoryParentTurnId = parentTurnId
       if (parentTurnId && turnAssistant) {
         this.recordMessageUsageEvent(info.threadId, thread, parentTurnId, turnAssistant, failure)
@@ -17818,10 +17839,7 @@ export class ChatEngine {
   handleThreadReadForGrading(projectId: string, threadId: string): void {
     if (this.gradeReadingTimers.has(threadId) || this.gradeDraftTimers.has(threadId)) return
     if (this.turnFeedbackRepo.listPendingForThread(threadId).length === 0) return
-    this.turnFeedbackRepo.scheduleReading(
-      threadId,
-      Date.now() + ChatEngine.GRADE_READING_WINDOW_MS
-    )
+    this.turnFeedbackRepo.scheduleReading(threadId, Date.now() + ChatEngine.GRADE_READING_WINDOW_MS)
     this.gradeReadingTimers.set(
       threadId,
       setTimeout(() => {
@@ -19172,7 +19190,8 @@ export class ChatEngine {
       'Return only the required memory decision JSON object.'
     ].join('\n\n')
     let cheapFailure: string | null
-    try {      const cheap = await driver.provideCheapModel(projectPath, {
+    try {
+      const cheap = await driver.provideCheapModel(projectPath, {
         settings,
         purpose: 'Memory proposal',
         prompt: cheapPrompt

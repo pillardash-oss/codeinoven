@@ -3,7 +3,7 @@ import { mkdir, readFile, rename, rm, writeFile } from 'fs/promises'
 import { homedir } from 'os'
 import { dirname, join } from 'path'
 import { applyEdits, modify, parse, type ParseError } from 'jsonc-parser'
-import type { OfferedProvider } from '../../lib/types'
+import type { OfferedProvider, ProviderCatalog } from '../../lib/types'
 import type {
   HarnessAuthAccount,
   HarnessAuthCapabilities,
@@ -76,6 +76,16 @@ interface CommandResult {
   stdout: string
   stderr: string
   error?: string
+}
+
+export interface ProviderAccountOrchestratorOptions {
+  /**
+   * Source of a harness's full (connectivity-unfiltered) provider catalog —
+   * the model picker's own discovery path, served without its connected-only
+   * filter. Pi's searchable set is exactly this; when absent or failing the
+   * connect flow falls back to its standalone catalog probe.
+   */
+  fullCatalog?: (harnessId: string) => Promise<ProviderCatalog[]>
 }
 
 const READ_AND_HANDOFF_ONLY: HarnessAuthCapabilities = {
@@ -306,8 +316,7 @@ async function readPiStatus(projectPath?: string): Promise<HarnessAuthStatus> {
     const entry = record(rawEntry)
     if (!entry) continue
     const apiKey = typeof entry['apiKey'] === 'string' ? entry['apiKey'] : undefined
-    const authenticated =
-      Boolean(apiKey && apiKey !== 'none') || credentialIds.has(providerId)
+    const authenticated = Boolean(apiKey && apiKey !== 'none') || credentialIds.has(providerId)
     accounts.push({
       id: accountId(providerId),
       label: providerId,
@@ -323,7 +332,7 @@ async function readPiStatus(projectPath?: string): Promise<HarnessAuthStatus> {
     accounts.push({
       id: accountId(providerId),
       label: providerId,
-      ...(await fileBackedAuth.isOauth(providerId) ? { method: 'oauth' } : {}),
+      ...((await fileBackedAuth.isOauth(providerId)) ? { method: 'oauth' } : {}),
       active: true
     })
     signedIn += 1
@@ -549,6 +558,7 @@ const AUTH_DEFINITIONS: AuthDefinition[] = [
  */
 export class ProviderAccountOrchestrator {
   private statusQueueTail: Promise<void> = Promise.resolve()
+  private readonly fullCatalog: ((harnessId: string) => Promise<ProviderCatalog[]>) | undefined
   /** Live in-app OAuth sign-ins (Pi), awaiting user prompts / completion. */
   private oauthSessions = new Map<
     string,
@@ -558,12 +568,17 @@ export class ProviderAccountOrchestrator {
     }
   >()
 
+  constructor(options: ProviderAccountOrchestratorOptions = {}) {
+    this.fullCatalog = options.fullCatalog
+  }
+
   capabilities(harnessId: string): HarnessAuthCapabilities | null {
     const definition = this.definition(harnessId)
     if (!definition) return null
     return {
       ...READ_AND_HANDOFF_ONLY,
-      logout: definition.logoutArgs !== undefined || definition.removeStoredCredential !== undefined,
+      logout:
+        definition.logoutArgs !== undefined || definition.removeStoredCredential !== undefined,
       pickerLogin: definition.pickerLogin === true,
       apiKeyEntry: definition.apiKeyEntry === true
     }
@@ -774,10 +789,11 @@ export class ProviderAccountOrchestrator {
   }
 
   /**
-   * Pi offers every catalog provider, not just connected ones. Connectivity is
-   * a stored auth.json credential or an API-keyed entry in its native
-   * models.json. Falls back to the configured-accounts view when the catalog
-   * probe cannot run.
+   * Pi offers every catalog provider, not just connected ones. The searchable
+   * set is the model picker's own discovery (unfiltered); connectivity is a
+   * stored auth.json credential or an API-keyed entry in its native models.json.
+   * Falls back to the configured-accounts view when neither catalog source can
+   * run.
    */
   private async listPiOffered(): Promise<OfferedProvider[]> {
     const native = await readPiStatus()
@@ -786,14 +802,18 @@ export class ProviderAccountOrchestrator {
     )
     let catalog: OfferedProvider[]
     try {
-      catalog = await listPiCatalogProviders()
+      catalog = await this.piFullCatalog()
     } catch {
-      return native.accounts.map((account) => ({
-        id: account.label,
-        name: account.label,
-        modelCount: 0,
-        authenticated: keyedNativeIds.has(account.label)
-      }))
+      try {
+        catalog = await listPiCatalogProviders()
+      } catch {
+        return native.accounts.map((account) => ({
+          id: account.label,
+          name: account.label,
+          modelCount: 0,
+          authenticated: keyedNativeIds.has(account.label)
+        }))
+      }
     }
     const merged = new Map(catalog.map((provider) => [provider.id, provider]))
     // Native custom providers from models.json are connectable targets too and
@@ -817,6 +837,23 @@ export class ProviderAccountOrchestrator {
       }
     }
     return [...merged.values()]
+  }
+
+  /**
+   * Pi's searchable provider set: the harness driver's full catalog (the same
+   * discovery the model picker runs, without its connected-only filter),
+   * carrying OAuth-capability flags so the UI can offer in-app sign-in.
+   */
+  private async piFullCatalog(): Promise<OfferedProvider[]> {
+    if (!this.fullCatalog) throw new Error('No full-catalog source is wired for Pi.')
+    const catalogs = await this.fullCatalog('pi')
+    return catalogs.map((catalog) => ({
+      id: catalog.id,
+      name: catalog.name,
+      modelCount: catalog.models.length,
+      authenticated: false,
+      oauth: isPiOAuthProvider(catalog.id)
+    }))
   }
 
   /** Provider IDs currently hidden from the harness (via its own config). */

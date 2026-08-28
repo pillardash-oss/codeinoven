@@ -802,6 +802,8 @@ export interface OfferedProvider {
   modelCount: number
   /** Whether credentials are already stored for this provider. */
   authenticated: boolean
+  /** Whether the harness supports a fully in-app OAuth sign-in for this provider. */
+  oauth?: boolean
   /** Human-readable hint when the provider cannot be connected from the UI. */
   detail?: string
 }
