@@ -148,11 +148,19 @@ export class TemporaryChatController implements ConversationController {
       if (event) this.#handleEvent(event)
     })
 
+    // Capture before the auto-send below flips `sessionStarted`. The status and
+    // mirror probes are remount hygiene: on the turn a mount itself starts, the
+    // backend has not registered the temporary chat yet (`sendTemporaryPrompt`
+    // only registers it after assembling the isolated harness session), so an
+    // immediate probe reports `active: false` and would expire a healthy tab —
+    // wiping the seeded selection message and blocking every follow-up.
+    const alreadyStarted = this.#tab.sessionStarted
+
     // Explain tabs carry an auto-prompt that should be sent immediately so the
     // user gets an explanation without having to type anything first. Show a
     // short action label in the UI while still sending the full instruction to
     // the agent.
-    if (this.#tab.autoPrompt && !this.#tab.autoPromptSent && !this.#tab.sessionStarted) {
+    if (this.#tab.autoPrompt && !this.#tab.autoPromptSent && !alreadyStarted) {
       const autoPrompt = this.#tab.autoPrompt
       this.#tab.autoPromptSent = true
       const displayText = this.#tab.mode === 'elaborate' ? this.#tab.title || 'Explain' : autoPrompt
@@ -164,13 +172,16 @@ export class TemporaryChatController implements ConversationController {
       })
     }
 
-    if (this.#tab.sessionStarted) {
+    if (alreadyStarted) {
       const temporaryChatId = this.#tab.temporaryChatId
       void invoke('agent:getTemporaryChatStatus', temporaryChatId)
         .then((status) => {
           if (!status) return
           if (this.#tab.temporaryChatId !== temporaryChatId || this.#tab.expired) return
-          if (!status.active) {
+          // A busy tab has an in-flight `sendTemporaryPrompt` that may still be
+          // registering the backend chat — only an idle tab with no backend
+          // counterpart is genuinely dead.
+          if (!status.active && !this.#tab.busy) {
             this.#stopReconciling()
             contextSidebarState.expireTemporaryChat(this.#tab, false)
             return
@@ -380,7 +391,9 @@ export class TemporaryChatController implements ConversationController {
       .then((status) => {
         if (!status) return
         if (this.#tab.temporaryChatId !== temporaryChatId || this.#tab.expired) return
-        if (!status.active) {
+        // Same registration race as mount: a busy turn may still be creating
+        // the backend chat, so only expire when nothing is in flight.
+        if (!status.active && !this.#tab.busy) {
           this.#stopReconciling()
           contextSidebarState.expireTemporaryChat(this.#tab, false)
           return
@@ -565,6 +578,9 @@ export class TemporaryChatController implements ConversationController {
 
   #handleEvent(event: AgentEvent): void {
     if (!('sessionId' in event)) return
+    // An expired tab no longer owns a conversation — the store wiped its
+    // messages, so late events for a dying session must not ghost-repopulate it.
+    if (this.#tab.expired) return
     if (event.type === 'temporary-chat.started') {
       this.#tab.sessionId = event.sessionId
       return
