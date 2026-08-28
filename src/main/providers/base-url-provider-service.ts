@@ -4,7 +4,6 @@ import type {
   BaseUrlProviderModel,
   BaseUrlProviderUpdateRequest
 } from '../../lib/types'
-import { generateId } from '../../lib/utils'
 import {
   hasNativeProviderCatalog,
   NativeProviderConfigService
@@ -73,6 +72,25 @@ export class BaseUrlProviderService {
     return provider ? structuredClone(provider) : null
   }
 
+  /** Ids already used within a harness — native harnesses keep their own
+   *  catalog file, so those must be read live rather than from the store. */
+  private async existingIdsFor(
+    harnessId: string,
+    store: BaseUrlProviderStore
+  ): Promise<Set<string>> {
+    if (hasNativeProviderCatalog(harnessId)) {
+      const native = await this.nativeProviders.listProviders()
+      return new Set(
+        native.filter((provider) => provider.harnessId === harnessId).map((provider) => provider.id)
+      )
+    }
+    return new Set(
+      store.providers
+        .filter((provider) => provider.harnessId === harnessId)
+        .map((provider) => provider.id)
+    )
+  }
+
   async listEnabled(harnessId?: string): Promise<BaseUrlProvider[]> {
     const providers = (await this.load()).providers.filter((provider) => provider.enabled)
     return structuredClone(
@@ -88,7 +106,10 @@ export class BaseUrlProviderService {
     return this.enqueue(async () => {
       const store = await this.load()
       const now = Date.now()
-      const id = input.id === undefined ? generateId() : identifier(input.id, 'Base URL provider ID')
+      const id =
+        input.id === undefined
+          ? deriveProviderId(input.name, await this.existingIdsFor(input.harnessId, store))
+          : identifier(input.id, 'Base URL provider ID')
       const apiKeyRef = input.apiKeyRef
       const apiKeyEnvVar = apiKeyRef === undefined ? undefined : apiKeyEnvVarFor(id)
       const provider: BaseUrlProvider = {
@@ -106,7 +127,9 @@ export class BaseUrlProviderService {
       }
       if (
         input.id !== undefined &&
-        store.providers.some((candidate) => candidate.harnessId === provider.harnessId && candidate.id === id)
+        store.providers.some(
+          (candidate) => candidate.harnessId === provider.harnessId && candidate.id === id
+        )
       ) {
         throw new Error(`Base URL provider already exists: ${provider.harnessId}:${id}`)
       }
@@ -242,6 +265,29 @@ export class BaseUrlProviderService {
 function apiKeyEnvVarFor(providerId: string): string {
   const suffix = providerId.replace(/[^a-zA-Z0-9]/gu, '_').toUpperCase()
   return `CODEINOVEN_BUP_${suffix}_KEY`
+}
+
+/**
+ * Provider ids double as the key shown in harness-native config files
+ * (opencode.json, models.json), so a random hex string there is opaque.
+ * Deriving `cio-<slug>` from the display name keeps that view readable.
+ */
+function slugifyProviderName(name: string): string {
+  const slug = name
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9]+/gu, '-')
+    .replace(/^-+|-+$/gu, '')
+  return slug || 'provider'
+}
+
+/** Appends `-2`, `-3`, … until the slug no longer collides within the harness. */
+function deriveProviderId(name: string, existingIds: ReadonlySet<string>): string {
+  const base = `cio-${slugifyProviderName(name)}`
+  if (!existingIds.has(base)) return base
+  let suffix = 2
+  while (existingIds.has(`${base}-${suffix}`)) suffix++
+  return `${base}-${suffix}`
 }
 
 function normalizeCreateInput(

@@ -179,10 +179,7 @@
 
   function addDiscoveredModel(model: DiscoveredBaseUrlModel): void {
     if (draft.models.some((m) => m.id === model.id)) return
-    draft.models = [
-      ...draft.models,
-      { ...emptyModelDraft(), id: model.id, name: model.name }
-    ]
+    draft.models = [...draft.models, { ...emptyModelDraft(), id: model.id, name: model.name }]
   }
 
   /** Auto-search once a base URL is typed and the draft has no models of its
@@ -712,8 +709,8 @@
         {:else if discoveredModels.length > 0}
           <div class="space-y-1">
             <p class="text-[11px] font-medium text-dimmed">
-              Found {discoveredModels.length} model{discoveredModels.length === 1 ? '' : 's'} —
-              click to add
+              Found {discoveredModels.length} model{discoveredModels.length === 1 ? '' : 's'} — click
+              to add
             </p>
             <div class="flex flex-wrap gap-1.5">
               {#each discoveredModels as model (model.id)}
@@ -744,17 +741,15 @@
               >
                 <Copy size={12} />
               </button>
-              {#if draft.models.length > 1}
-                <button
-                  class="flex h-6 w-6 items-center justify-center rounded text-muted hover:bg-danger/10 hover:text-danger"
-                  aria-label="Remove model {index + 1}"
-                  title="Remove model {index + 1}"
-                  type="button"
-                  onclick={() => removeModel(index)}
-                >
-                  <X size={12} />
-                </button>
-              {/if}
+              <button
+                class="flex h-6 w-6 items-center justify-center rounded text-muted hover:bg-danger/10 hover:text-danger"
+                aria-label="Remove model {index + 1}"
+                title="Remove model {index + 1}"
+                type="button"
+                onclick={() => removeModel(index)}
+              >
+                <X size={12} />
+              </button>
             </div>
           </div>
           <div class="mt-2 grid grid-cols-2 gap-2">
