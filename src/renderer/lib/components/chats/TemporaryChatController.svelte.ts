@@ -16,6 +16,32 @@ import type {
 } from '$shared/types'
 import type { ConversationController, SendPayload } from '../threads/ConversationController.svelte'
 
+/**
+ * Union two renderings of the same assistant message without ever dropping a
+ * part the UI already streamed. The harness mirror is authoritative for the
+ * content of parts it knows, but its snapshot can lag or omit live-only parts
+ * (step markers, in-flight reasoning); wholesale replacement shrank the working
+ * trace mid-turn, so parts merge by ID — incoming content wins, existing
+ * positions and live-only parts are preserved.
+ */
+function mergeAssistantMessage(existing: AgentMessage, incoming: AgentMessage): AgentMessage {
+  // eslint-disable-next-line svelte/prefer-svelte-reactivity
+  const byId = new Map<string, AgentPart>()
+  const order: string[] = []
+  for (const part of [...existing.parts, ...incoming.parts]) {
+    if (byId.has(part.id)) {
+      byId.set(part.id, part)
+      continue
+    }
+    byId.set(part.id, part)
+    order.push(part.id)
+  }
+  return {
+    ...incoming,
+    parts: order.map((id) => byId.get(id) as AgentPart)
+  }
+}
+
 export class TemporaryChatController implements ConversationController {
   readonly kind = 'temporary-chat' as const
   readonly projectId: string
@@ -30,6 +56,10 @@ export class TemporaryChatController implements ConversationController {
    *  reconciliation results must never overwrite it. */
   #applyGeneration = 0
   #mounted = false
+  /** Monotonic sequence of turn submissions. A settled older submission must
+   *  never clear `busy` while a newer one is still in flight — that race is
+   *  what left follow-up turns without any working indicator. */
+  #sendSequence = 0
 
   /**
    * Fallback poll interval while a turn is in flight. Live `agent:event`
@@ -285,6 +315,7 @@ export class TemporaryChatController implements ConversationController {
     this.#tab.selections = []
     this.#tab.selectionAttached = false
     this.#tab.draft = ''
+    const sendSequence = ++this.#sendSequence
     this.#tab.busy = true
     this.#tab.error = ''
     this.#tab.status = null
@@ -314,7 +345,7 @@ export class TemporaryChatController implements ConversationController {
         responseIndex < 0
           ? [...this.#tab.messages, response]
           : this.#tab.messages.map((message, index) =>
-              index === responseIndex ? { ...message, ...response } : message
+              index === responseIndex ? mergeAssistantMessage(message, response) : message
             )
       this.#touch()
     } catch (error) {
@@ -330,7 +361,13 @@ export class TemporaryChatController implements ConversationController {
       this.#tab.error =
         error instanceof Error ? error.message : 'The temporary chat could not respond.'
     } finally {
-      if (this.#tab.temporaryChatId === temporaryChatId && !this.#tab.expired) {
+      // Only the newest submission may settle the flag — an older overlapping
+      // turn resolving later must not kill the newer turn's working indicator.
+      if (
+        this.#tab.temporaryChatId === temporaryChatId &&
+        !this.#tab.expired &&
+        sendSequence === this.#sendSequence
+      ) {
         this.#tab.busy = false
       }
       this.#syncReconciling()
@@ -568,11 +605,12 @@ export class TemporaryChatController implements ConversationController {
     const assistants = messages.filter((message) => message.role === 'assistant')
     // eslint-disable-next-line svelte/prefer-svelte-reactivity
     const incomingById = new Map(assistants.map((message) => [message.id, message]))
-    // eslint-disable-next-line svelte/prefer-svelte-reactivity
-    const existingIds = new Set(this.#tab.messages.map((message) => message.id))
     this.#tab.messages = [
-      ...this.#tab.messages.map((message) => incomingById.get(message.id) ?? message),
-      ...assistants.filter((message) => !existingIds.has(message.id))
+      ...this.#tab.messages.map((message) => {
+        const incoming = incomingById.get(message.id)
+        return incoming ? mergeAssistantMessage(message, incoming) : message
+      }),
+      ...assistants.filter((message) => !this.#tab.messages.some((m) => m.id === message.id))
     ].sort((left, right) => left.createdAt - right.createdAt)
   }
 
