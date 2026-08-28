@@ -37,9 +37,10 @@ class UpdaterState {
     }
   }
 
+  /** Explicit user-initiated check — failures surface as a visible error state. */
   async checkForUpdates(): Promise<void> {
     try {
-      this.status = await invoke('updater:check')
+      this.status = await invoke('updater:check', true)
     } catch (error: unknown) {
       this.status = {
         canAutoUpdate: false,
