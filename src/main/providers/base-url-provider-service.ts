@@ -279,8 +279,8 @@ function normalizeModels(
   value: Array<Omit<BaseUrlProviderModel, 'id' | 'providerId'> & { id?: string }>,
   providerId: string
 ): BaseUrlProviderModel[] {
-  if (!Array.isArray(value) || value.length === 0) {
-    throw new TypeError('Base URL provider must expose at least one model')
+  if (!Array.isArray(value)) {
+    throw new TypeError('Base URL provider models must be an array')
   }
   if (value.length > MODELS_MAX) {
     throw new TypeError(`Base URL provider supports at most ${MODELS_MAX} models`)
@@ -438,8 +438,8 @@ function parseHeaders(value: unknown): Record<string, string> | undefined {
 }
 
 function parseModels(value: unknown, providerId: string): BaseUrlProviderModel[] {
-  if (!Array.isArray(value) || value.length === 0) {
-    throw new TypeError('Base URL provider must expose at least one model')
+  if (!Array.isArray(value)) {
+    throw new TypeError('Base URL provider models must be an array')
   }
   if (value.length > MODELS_MAX) {
     throw new TypeError(`Base URL provider supports at most ${MODELS_MAX} models`)

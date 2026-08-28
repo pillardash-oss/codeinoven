@@ -25,7 +25,9 @@ import type {
   BaseUrlProvider,
   BaseUrlProviderCopyClipboardRequest,
   BaseUrlProviderCreateRequest,
+  BaseUrlProviderFetchModelsRequest,
   BaseUrlProviderUpdateRequest,
+  DiscoveredBaseUrlModel,
   BrainstormContent,
   BrainstormDecisionAction,
   BrainstormDocument,
@@ -1906,6 +1908,10 @@ export interface IpcInvokeContract {
   'baseUrlProviders:copyProviderToClipboard': Contract<
     [input: BaseUrlProviderCopyClipboardRequest],
     void
+  >
+  'baseUrlProviders:fetchModels': Contract<
+    [input: BaseUrlProviderFetchModelsRequest],
+    DiscoveredBaseUrlModel[]
   >
   'gateway:list': Contract<[], import('./gateway-types').GatewayStatus[]>
   'gateway:setEnabled': Contract<

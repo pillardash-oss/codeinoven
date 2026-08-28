@@ -63,7 +63,12 @@
       if (group) group.push(candidate)
       else groups.set(candidate.id, [candidate])
     }
-    return [...groups.values()]
+    // Newest provider first — adding one at the bottom of a long list is easy to miss.
+    return [...groups.values()].sort(
+      (left, right) =>
+        Math.max(...right.map((provider) => provider.createdAt)) -
+        Math.max(...left.map((provider) => provider.createdAt))
+    )
   })
 
   /** A group is shown when any of its linked harnesses match the active filter. */

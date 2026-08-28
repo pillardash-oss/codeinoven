@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { ArrowLeft, ClipboardPaste, Copy, Loader2, Plus, X } from '@lucide/svelte'
+  import { ArrowLeft, ClipboardPaste, Copy, Loader2, Plus, RefreshCw, X } from '@lucide/svelte'
   import { toast } from 'svelte-sonner'
   import { invoke } from '$lib/ipc.svelte'
   import { copyText as copyTextToClipboard } from '$lib/copy-text'
@@ -19,6 +19,7 @@
     BaseUrlProviderCreateRequest,
     BaseUrlProviderModel,
     BaseUrlProviderUpdateRequest,
+    DiscoveredBaseUrlModel,
     ProviderConnectionInfo,
     ThinkingLevel
   } from '$shared/types'
@@ -150,6 +151,49 @@
       draft.harnessIds.some((id) => !linkedProviders.some((p) => p.harnessId === id))
   )
 
+  /** Models found at `${baseURL}/models`, offered as one-click adds when the
+   *  draft has none of its own yet. Cached in main for 24h; `force` bypasses that. */
+  let discoveredModels = $state<DiscoveredBaseUrlModel[]>([])
+  let discoveringModels = $state(false)
+  let discoverError = $state('')
+
+  async function discoverModels(force = false): Promise<void> {
+    if (!draft.baseURL.trim()) return
+    discoveringModels = true
+    discoverError = ''
+    try {
+      discoveredModels = await baseUrlProviderStore.fetchModels({
+        baseURL: draft.baseURL.trim(),
+        ...(draft.id ? { id: draft.id, harnessId: draft.harnessIds[0] } : {}),
+        ...(draft.apiKey ? { apiKey: draft.apiKey } : {}),
+        ...(parseHeaders(draft.headers) ? { headers: parseHeaders(draft.headers) } : {}),
+        force
+      })
+    } catch (fetchError) {
+      discoverError =
+        fetchError instanceof Error ? fetchError.message : 'Failed to fetch model list.'
+    } finally {
+      discoveringModels = false
+    }
+  }
+
+  function addDiscoveredModel(model: DiscoveredBaseUrlModel): void {
+    if (draft.models.some((m) => m.id === model.id)) return
+    draft.models = [
+      ...draft.models,
+      { ...emptyModelDraft(), id: model.id, name: model.name }
+    ]
+  }
+
+  /** Auto-search once a base URL is typed and the draft has no models of its
+   *  own yet — debounced so it doesn't refire on every keystroke. */
+  $effect(() => {
+    const baseURL = draft.baseURL.trim()
+    if (draft.models.length > 0 || !baseURL || discoveredModels.length > 0) return
+    const timer = setTimeout(() => void discoverModels(false), 500)
+    return () => clearTimeout(timer)
+  })
+
   /** Seed the draft from the edited provider's linked group, or start blank
    * for create mode. The component is mounted per-edit, so the initial prop
    * value is authoritative. */
@@ -168,17 +212,15 @@
               .map(([key, value]) => `${key}: ${value}`)
               .join('\n')
           : '',
-        models: provider.models.length
-          ? provider.models.map((model) => ({
-              id: model.id,
-              name: model.name,
-              contextWindow: model.contextWindow?.toString() ?? '',
-              maxOutputTokens: model.maxOutputTokens?.toString() ?? '',
-              reasoning: model.reasoning,
-              defaultThinkingLevel: model.defaultThinkingLevel ?? '',
-              vision: model.vision ?? true
-            }))
-          : [emptyModelDraft()],
+        models: provider.models.map((model) => ({
+          id: model.id,
+          name: model.name,
+          contextWindow: model.contextWindow?.toString() ?? '',
+          maxOutputTokens: model.maxOutputTokens?.toString() ?? '',
+          reasoning: model.reasoning,
+          defaultThinkingLevel: model.defaultThinkingLevel ?? '',
+          vision: model.vision ?? true
+        })),
         enabled: provider.enabled
       }
     }
@@ -211,7 +253,7 @@
       apiKey: '',
       removeApiKey: false,
       headers: '',
-      models: [emptyModelDraft()],
+      models: [],
       enabled: true
     }
   }
@@ -627,6 +669,20 @@
         <span class="text-xs font-medium">Models</span>
         <div class="flex items-center gap-1.5">
           <button
+            class="flex h-7 items-center gap-1 rounded-lg border bg-elevated px-2 text-[11px] font-medium hover:bg-overlay disabled:opacity-50"
+            type="button"
+            title="Fetch available models from {draft.baseURL || 'the base URL'}/models"
+            disabled={!draft.baseURL.trim() || discoveringModels}
+            onclick={() => void discoverModels(true)}
+          >
+            {#if discoveringModels}
+              <Loader2 size={11} class="animate-spin" />
+            {:else}
+              <RefreshCw size={11} />
+            {/if}
+            Refresh models
+          </button>
+          <button
             class="flex h-7 items-center gap-1 rounded-lg border bg-elevated px-2 text-[11px] font-medium hover:bg-overlay"
             type="button"
             title="Paste a copied model from the clipboard"
@@ -643,6 +699,37 @@
           </button>
         </div>
       </div>
+      {#if draft.models.length === 0}
+        <p class="rounded-lg border border-dashed p-3 text-[11px] text-dimmed">
+          If no model is added, we will search for model entries using the /models route.
+        </p>
+        {#if discoverError}
+          <p class="text-[11px] text-danger">{discoverError}</p>
+        {:else if discoveringModels}
+          <p class="flex items-center gap-1.5 text-[11px] text-dimmed">
+            <Loader2 size={11} class="animate-spin" /> Searching {draft.baseURL}/models…
+          </p>
+        {:else if discoveredModels.length > 0}
+          <div class="space-y-1">
+            <p class="text-[11px] font-medium text-dimmed">
+              Found {discoveredModels.length} model{discoveredModels.length === 1 ? '' : 's'} —
+              click to add
+            </p>
+            <div class="flex flex-wrap gap-1.5">
+              {#each discoveredModels as model (model.id)}
+                <button
+                  class="rounded-full border bg-elevated px-2.5 py-1 text-[11px] font-mono hover:bg-overlay disabled:opacity-40"
+                  type="button"
+                  disabled={draft.models.some((m) => m.id === model.id)}
+                  onclick={() => addDiscoveredModel(model)}
+                >
+                  {model.name === model.id ? model.id : `${model.name} (${model.id})`}
+                </button>
+              {/each}
+            </div>
+          </div>
+        {/if}
+      {/if}
       {#each draft.models as model, index (index)}
         <div class="rounded-lg border bg-elevated/50 p-3">
           <div class="flex items-center justify-between">

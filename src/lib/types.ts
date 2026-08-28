@@ -912,6 +912,24 @@ export interface BaseUrlProviderCopyClipboardRequest {
   enabled: boolean
 }
 
+/** Request to discover models from `${baseURL}/models`. Pass `harnessId`+`id`
+ *  for a saved provider so main can resolve its vaulted API key when `apiKey`
+ *  is omitted; set `force` to bypass the 24h cache. */
+export interface BaseUrlProviderFetchModelsRequest {
+  harnessId?: string
+  id?: string
+  baseURL: string
+  apiKey?: string
+  headers?: Record<string, string>
+  force?: boolean
+}
+
+/** A model entry discovered from an OpenAI-compatible `/models` endpoint. */
+export interface DiscoveredBaseUrlModel {
+  id: string
+  name: string
+}
+
 export type CuaPermissionStatus = 'granted' | 'missing' | 'unknown' | 'not_required'
 export type CuaInstallationSource =
   'environment' | 'application' | 'canonical' | 'homebrew' | 'path'

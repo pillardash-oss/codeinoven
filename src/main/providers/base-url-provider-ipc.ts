@@ -2,6 +2,7 @@ import { clipboard } from 'electron'
 import { trustedIpcMain as ipcMain } from '../ipc/trusted-ipc-main'
 import type {
   BaseUrlProviderCreateRequest,
+  BaseUrlProviderFetchModelsRequest,
   BaseUrlProviderModel,
   BaseUrlProviderUpdateRequest,
   ThinkingLevel,
@@ -13,6 +14,7 @@ import { hasNativeProviderCatalog } from '../agents/native-provider-config-servi
 import { SecretVault } from '../storage/secret-vault'
 import type { StorageEngine } from '../storage/storage-engine'
 import { serializeProviderClipboard } from '../../lib/provider-clipboard'
+import { discoverBaseUrlModels } from './base-url-model-discovery'
 
 const CREATE_FIELDS = new Set([
   'harnessId',
@@ -155,6 +157,20 @@ export function registerBaseUrlProviderIpc(
       })
     )
   })
+
+  ipcMain.handle('baseUrlProviders:fetchModels', async (_, rawInput: unknown) => {
+    const input = parseFetchModelsRequest(rawInput)
+    let apiKey = input.apiKey
+    if (!apiKey && input.harnessId && input.id) {
+      const provider = await providers.getProvider(input.harnessId, input.id)
+      if (provider?.apiKeyRef) apiKey = await vault.resolve(provider.apiKeyRef)
+    }
+    return discoverBaseUrlModels(input.baseURL, {
+      ...(apiKey ? { apiKey } : {}),
+      ...(input.headers ? { headers: input.headers } : {}),
+      force: input.force
+    })
+  })
 }
 
 // ─── Request parsing & validation ────────────────────────────────────────────
@@ -195,7 +211,7 @@ function parseCreateRequest(value: unknown): ParsedCreateRequest {
       ? {}
       : { apiKey: boundedStr(raw['apiKey'], 'API key', 1, 8_192) }),
     headers: parseHeaders(raw['headers']),
-    models: parseModels(raw['models']),
+    models: raw['models'] === undefined ? [] : parseModels(raw['models']),
     ...(raw['enabled'] === undefined ? {} : { enabled: asBoolean(raw['enabled'], 'enabled') }),
     ...(raw['id'] === undefined
       ? {}
@@ -251,8 +267,8 @@ function parseClipboardModels(value: unknown): Array<{
   defaultThinkingLevel: ThinkingLevel | ''
   vision: boolean
 }> {
-  if (!Array.isArray(value) || value.length === 0) {
-    throw new TypeError('Base URL provider must expose at least one model')
+  if (!Array.isArray(value)) {
+    throw new TypeError('Base URL provider models must be an array')
   }
   if (value.length > MAX_MODELS) {
     throw new TypeError(`Base URL provider supports at most ${MAX_MODELS} models`)
@@ -283,6 +299,24 @@ function parseClipboardModels(value: unknown): Array<{
       vision: raw['vision'] === false ? false : true
     }
   })
+}
+
+function parseFetchModelsRequest(value: unknown): BaseUrlProviderFetchModelsRequest {
+  const raw = record(value, 'Base URL provider fetch-models request')
+  return {
+    ...(raw['harnessId'] === undefined
+      ? {}
+      : { harnessId: validateEntityId(raw['harnessId'], 'Base URL provider harness ID', 256) }),
+    ...(raw['id'] === undefined
+      ? {}
+      : { id: validateEntityId(raw['id'], 'Base URL provider ID', 256) }),
+    baseURL: boundedStr(raw['baseURL'], 'Base URL provider base URL', 1, 2_048),
+    ...(raw['apiKey'] === undefined
+      ? {}
+      : { apiKey: boundedStr(raw['apiKey'], 'API key', 1, 8_192) }),
+    ...(raw['headers'] === undefined ? {} : { headers: parseHeaders(raw['headers']) }),
+    ...(raw['force'] === undefined ? {} : { force: asBoolean(raw['force'], 'force') })
+  }
 }
 
 function parseUpdateRequest(value: unknown): ParsedUpdateRequest {
@@ -328,8 +362,8 @@ function parseHeaders(value: unknown): Record<string, string> | undefined {
 function parseModels(
   value: unknown
 ): Array<Omit<BaseUrlProviderModel, 'id' | 'providerId'> & { id?: string }> {
-  if (!Array.isArray(value) || value.length === 0) {
-    throw new TypeError('Base URL provider must expose at least one model')
+  if (!Array.isArray(value)) {
+    throw new TypeError('Base URL provider models must be an array')
   }
   if (value.length > MAX_MODELS) {
     throw new TypeError(`Base URL provider supports at most ${MAX_MODELS} models`)
