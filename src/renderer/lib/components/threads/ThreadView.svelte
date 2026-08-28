@@ -295,8 +295,14 @@
     const startIndex = lastTurnStartIndex(messages)
     if (startIndex === -1) return { startIndex: -1, active: false }
     let endIndex = startIndex
-    while (endIndex + 1 < messages.length && messages[endIndex + 1]?.role === 'assistant') {
-      endIndex += 1
+    while (endIndex + 1 < messages.length) {
+      const next = messages[endIndex + 1]
+      if (!next) break
+      if (next.role === 'assistant' || isActivityOnlyUserMessage(next)) {
+        endIndex += 1
+        continue
+      }
+      break
     }
     const trailingUserOnly =
       endIndex < messages.length - 1 &&
@@ -344,7 +350,13 @@
    *  must not be mistaken for the current work. Count nothing in that window
    *  so the bottom working placeholder keeps showing instead of a blank tail. */
   let latestTurnRenderableParts = $derived.by(() => {
-    if (conversationBusy && messages[messages.length - 1]?.role === 'user') return []
+    const lastMessage = messages[messages.length - 1]
+    if (
+      conversationBusy &&
+      lastMessage?.role === 'user' &&
+      !isActivityOnlyUserMessage(lastMessage)
+    )
+      return []
     if (latestTurnInfo.startIndex === -1) return []
     return getTurnWorkingParts(latestTurnInfo.startIndex, conversationBusy && latestTurnInfo.active)
   })
@@ -2862,18 +2874,36 @@
     const assistantMsg = messages[msgIndex]
     if (assistantMsg?.role !== 'assistant' || !assistantMsg.completedAt) return null
     let turnStartIndex = msgIndex - 1
-    while (turnStartIndex >= 0 && messages[turnStartIndex]?.role === 'assistant') {
-      turnStartIndex--
+    while (turnStartIndex >= 0) {
+      const message = messages[turnStartIndex]
+      if (!message) break
+      if (message.role === 'assistant') {
+        turnStartIndex--
+        continue
+      }
+      if (message.role === 'user' && isActivityOnlyUserMessage(message)) {
+        turnStartIndex--
+        continue
+      }
+      break
     }
     const userMsg = messages[turnStartIndex]
     if (userMsg?.role !== 'user' || !userMsg.createdAt) return null
     return assistantMsg.completedAt - userMsg.createdAt
   }
 
-  /** When the agent started working on the turn whose trace opens at msgIndex. */
+  /** When the agent started working on the turn whose trace opens at msgIndex.
+   *  Activity-only user messages between the prompt and the first assistant
+   *  message are skipped so the trace timer starts at the real prompt. */
   function getTurnStartTime(msgIndex: number): number | undefined {
-    const preceding = messages[msgIndex - 1]
-    return preceding?.role === 'user' ? preceding.createdAt : undefined
+    for (let i = msgIndex - 1; i >= 0; i--) {
+      const message = messages[i]
+      if (!message) break
+      if (message.role === 'assistant') break
+      if (isActivityOnlyUserMessage(message)) continue
+      return message.createdAt
+    }
+    return undefined
   }
 
   // ─── Agent session lifecycle ─────────────────────────────────────────────
@@ -8289,6 +8319,30 @@
     )
   }
 
+  /** Activity-only user messages (compaction notices, sub-agent envelopes) ride
+   *  mid-turn on the user role. They must stay invisible in the transcript but
+   *  also transparent to turn grouping: one prompt → one working trace, with
+   *  the final output after it. */
+  function isTurnStartIndex(index: number): boolean {
+    for (let i = index - 1; i >= 0; i--) {
+      const message = messages[i]
+      if (!message) break
+      if (message.role === 'assistant') return false
+      if (!isActivityOnlyUserMessage(message)) return true
+    }
+    return true
+  }
+
+  function isTurnEndIndex(index: number): boolean {
+    for (let i = index + 1; i < messages.length; i++) {
+      const message = messages[i]
+      if (!message) break
+      if (message.role === 'assistant') return false
+      if (!isActivityOnlyUserMessage(message)) return true
+    }
+    return true
+  }
+
   /** Return the index of the first assistant message of the last turn in the
    *  list. A trailing steer — a user message the agent has not responded to yet
    *  — does not end the turn it intervenes in, so the last turn is the one that
@@ -8298,31 +8352,62 @@
     for (let i = messageList.length - 1; i >= 0; i--) {
       if (messageList[i]?.role !== 'assistant') continue
       let j = i
-      while (j > 0 && messageList[j - 1]?.role === 'assistant') j--
+      while (j > 0) {
+        const previous = messageList[j - 1]
+        if (previous?.role === 'assistant') {
+          j--
+          continue
+        }
+        if (previous?.role === 'user' && isActivityOnlyUserMessage(previous)) {
+          j--
+          continue
+        }
+        break
+      }
       return j
     }
     return -1
   }
 
-  /** Collect every ordered intermediate part; only the final text is rendered below the trace. */
+  /** Collect every ordered intermediate part; only the final text is rendered below the trace.
+   *  Activity-only user messages (sub-agent envelopes, compaction notices) are
+   *  transparent: the turn spans them and their sub-agent/compaction parts are
+   *  harvested so one prompt keeps a single continuous working trace. */
   function getTurnWorkingParts(startMsgIndex: number, includeCurrentFinal: boolean): AgentPart[] {
-    const preceding = messages[startMsgIndex - 1]
     const parts: AgentPart[] = []
-    if (preceding?.role === 'user') {
+    for (let i = startMsgIndex - 1; i >= 0; i--) {
+      const preceding = messages[i]
+      if (!preceding || preceding.role !== 'user') break
       for (const part of preceding.parts) {
         if (part.type === 'compaction' || part.type === 'subagent') {
           appendWorkingPart(parts, part)
         }
       }
+      if (!isActivityOnlyUserMessage(preceding)) break
     }
     let turnEndIndex = startMsgIndex
-    while (turnEndIndex + 1 < messages.length && messages[turnEndIndex + 1]?.role !== 'user') {
-      turnEndIndex += 1
+    while (turnEndIndex + 1 < messages.length) {
+      const next = messages[turnEndIndex + 1]
+      if (!next) break
+      if (next.role === 'assistant' || isActivityOnlyUserMessage(next)) {
+        turnEndIndex += 1
+        continue
+      }
+      break
     }
     const finalText = getTurnFinalText(turnEndIndex)
     for (let i = startMsgIndex; i <= turnEndIndex; i++) {
       const m = messages[i]
-      if (!m || m.role === 'user') break
+      if (!m) break
+      if (m.role === 'user') {
+        if (!isActivityOnlyUserMessage(m)) break
+        for (const part of m.parts) {
+          if (part.type === 'compaction' || part.type === 'subagent') {
+            appendWorkingPart(parts, part)
+          }
+        }
+        continue
+      }
       for (const p of m.parts) {
         if (
           p.type === 'text' &&
@@ -8344,8 +8429,14 @@
    *  assistant message — the only state in which the working trace may fold. */
   function isTurnCompleted(startMsgIndex: number): boolean {
     let endIndex = startMsgIndex
-    while (endIndex + 1 < messages.length && messages[endIndex + 1]?.role !== 'user') {
-      endIndex += 1
+    while (endIndex + 1 < messages.length) {
+      const next = messages[endIndex + 1]
+      if (!next) break
+      if (next.role === 'assistant' || isActivityOnlyUserMessage(next)) {
+        endIndex += 1
+        continue
+      }
+      break
     }
     const last = messages[endIndex]
     return last?.role === 'assistant' && last.completedAt !== undefined
@@ -8458,8 +8549,14 @@
 
   function streamWorkingPartsForTurn(startMsgIndex: number): AgentPart[] {
     let turnEndIndex = startMsgIndex
-    while (turnEndIndex + 1 < messages.length && messages[turnEndIndex + 1]?.role !== 'user') {
-      turnEndIndex += 1
+    while (turnEndIndex + 1 < messages.length) {
+      const next = messages[turnEndIndex + 1]
+      if (!next) break
+      if (next.role === 'assistant' || isActivityOnlyUserMessage(next)) {
+        turnEndIndex += 1
+        continue
+      }
+      break
     }
     const finalText = getTurnFinalText(turnEndIndex)
     return streamParts.filter((part) => {
@@ -8468,20 +8565,27 @@
     })
   }
 
-  /** Find the last text part in a turn ending at the given message index. */
+  /** Find the last text part in a turn ending at the given message index.
+   *  Activity-only user messages are transparent to the turn span. */
   function getTurnFinalText(endMsgIndex: number): AgentPart | null {
     let turnStart = endMsgIndex
     for (let i = endMsgIndex; i >= 0; i--) {
-      if (messages[i]?.role === 'user') {
-        turnStart = i + 1
-        break
-      }
+      const message = messages[i]
+      if (!message) break
+      if (message.role !== 'user') continue
+      if (isActivityOnlyUserMessage(message)) continue
+      turnStart = i + 1
+      break
     }
     let finalText: AgentPart | null = null
     for (let i = turnStart; i <= endMsgIndex; i++) {
       if (i >= messages.length) break
       const message = messages[i]
-      if (!message || message.role === 'user') break
+      if (!message) break
+      if (message.role === 'user') {
+        if (isActivityOnlyUserMessage(message)) continue
+        break
+      }
       for (const p of message.parts) {
         if (p.type === 'text') finalText = p
       }
@@ -9141,9 +9245,8 @@
               {/if}
             {:else}
               <!-- Assistant message — single WorkTrace per turn containing ALL parts -->
-              {@const isTurnStart = msgIndex === 0 || messages[msgIndex - 1]?.role === 'user'}
-              {@const isTurnEnd =
-                msgIndex === messages.length - 1 || messages[msgIndex + 1]?.role === 'user'}
+              {@const isTurnStart = isTurnStartIndex(msgIndex)}
+              {@const isTurnEnd = isTurnEndIndex(msgIndex)}
               {@const isLatestTurn = msgIndex === latestTurnInfo.startIndex}
               {@const provider = messageProvider(msg)}
               {@const modelLabel = messageModelLabel(msg)}
