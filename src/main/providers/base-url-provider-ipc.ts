@@ -34,7 +34,8 @@ const UPDATE_FIELDS = new Set([
   'models',
   'enabled'
 ])
-const SAFE_MODEL_ID = /^[a-zA-Z0-9][a-zA-Z0-9._:/@+-]*$/u
+/** Model IDs routinely include slashes/at-signs (LM Studio: `org/model`, HF: `org/model@precision`, Cloudflare: `@cf/org/model`). */
+const SAFE_MODEL_ID = /^[a-zA-Z0-9@][a-zA-Z0-9._:/@+-]*$/u
 /** Thinking presets map to OpenCode variant IDs — keep them conservative. */
 const SAFE_PRESET_ID = /^[a-zA-Z0-9][a-zA-Z0-9._:-]*$/u
 const THINKING_LEVELS = new Set(['minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'])

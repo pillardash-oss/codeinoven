@@ -14,8 +14,8 @@ import type { StorageEngine } from '../storage/storage-engine'
 const STORE_PATH = 'accounts/base-url-providers.json'
 const STORE_VERSION = 1
 const SAFE_ID = /^[a-zA-Z0-9][a-zA-Z0-9._:-]*$/u
-/** Model IDs routinely include slashes/at-signs (LM Studio: `org/model`, HF: `org/model@precision`). */
-const SAFE_MODEL_ID = /^[a-zA-Z0-9][a-zA-Z0-9._:/@+-]*$/u
+/** Model IDs routinely include slashes/at-signs (LM Studio: `org/model`, HF: `org/model@precision`, Cloudflare: `@cf/org/model`). */
+const SAFE_MODEL_ID = /^[a-zA-Z0-9@][a-zA-Z0-9._:/@+-]*$/u
 const SECRET_REF = /^secret_[a-zA-Z0-9._:-]+$/u
 const ENV_VAR = /^[A-Za-z_][A-Za-z0-9_]*$/u
 const HTTP_HEADERS_MAX = 32
