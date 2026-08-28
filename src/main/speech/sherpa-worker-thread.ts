@@ -61,7 +61,7 @@ interface SherpaModule {
 type SherpaAsrFamily = 'whisper' | 'parakeet'
 
 const port = parentPort
-const require = createRequire(import.meta.url)
+const nodeRequire = createRequire(import.meta.url)
 let loadedModule: SherpaModule | null = null
 
 let cachedRecognizer: {
@@ -72,7 +72,7 @@ let cachedRecognizer: {
 
 function sherpa(): SherpaModule {
   if (loadedModule) return loadedModule
-  const candidate: unknown = require('sherpa-onnx-node')
+  const candidate: unknown = nodeRequire('sherpa-onnx-node')
   if (typeof candidate !== 'object' || candidate === null) {
     throw new Error('The packaged sherpa-onnx module is unavailable.')
   }
