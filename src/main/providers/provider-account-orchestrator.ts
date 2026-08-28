@@ -21,7 +21,7 @@ import {
 } from '../drivers/harness-runtime'
 import { PiAuthConfigService, piAuthFileIo } from './pi-auth-config'
 import { listPiCatalogProviders } from './pi-catalog'
-import { isPiOAuthProvider, runPiOAuthLogin } from './pi-oauth'
+import { runPiLogin, listPiProviderAuthInfo } from './pi-login'
 import { BrowserWindow } from 'electron'
 import { sendToRenderer } from '../ipc/renderer-delivery'
 import { forwardRemoteEvent } from '../remote/remote-event-forwarder'
@@ -581,19 +581,18 @@ export class ProviderAccountOrchestrator {
   }
 
   /**
-   * Start a fully in-app OAuth sign-in for a Pi catalog provider: browser URL
-   * and device codes are broadcast to the UI, prompts (paste-the-code, select)
-   * are answered via {@link respondOAuthPrompt}, and the resulting credential
-   * is stored in Pi's own auth store. Mirrors what Pi's TUI does — without the
-   * TUI.
+   * Start a fully in-app sign-in for a Pi catalog provider by running the
+   * provider's own `login()` from pi-ai — OAuth browser/device flows for the
+   * providers that define them, and the provider's real multi-field API-key
+   * flow (e.g. Cloudflare's key + account id + gateway id) otherwise. Events
+   * and prompts are broadcast to the UI; answers arrive via
+   * {@link respondOAuthPrompt}; the resulting credential is stored in Pi's own
+   * auth store. Mirrors what Pi's TUI does — without the TUI.
    */
   async beginOAuthLogin(harnessId: string, providerId: string): Promise<string> {
     this.requireDefinition(harnessId)
     if (harnessId !== 'pi') {
-      throw new Error(`${harnessId} does not support in-app OAuth sign-in.`)
-    }
-    if (!isPiOAuthProvider(providerId)) {
-      throw new Error(`"${providerId}" connects with an API key, not OAuth.`)
+      throw new Error(`${harnessId} does not support in-app sign-in.`)
     }
     const loginId = `pi-oauth-${crypto.randomUUID()}`
     const controller = new AbortController()
@@ -601,7 +600,7 @@ export class ProviderAccountOrchestrator {
       controller
     }
     this.oauthSessions.set(loginId, session)
-    void runPiOAuthLogin(providerId, {
+    void runPiLogin(providerId, {
       signal: controller.signal,
       onEvent: (event) => this.broadcastOAuthEvent(loginId, { kind: 'event', event }),
       prompt: (prompt) =>
@@ -617,7 +616,11 @@ export class ProviderAccountOrchestrator {
         })
     })
       .then(async (credential) => {
-        await fileBackedAuth.setOAuthCredential(providerId, credential)
+        if (credential.type === 'oauth') {
+          await fileBackedAuth.setOAuthCredential(providerId, credential)
+        } else {
+          await fileBackedAuth.setApiKey(providerId, credential.key ?? '', credential.env)
+        }
         this.broadcastOAuthEvent(loginId, { kind: 'complete', providerId })
       })
       .catch((error: unknown) => {
@@ -810,9 +813,10 @@ export class ProviderAccountOrchestrator {
         })
       }
     }
+    const authInfo = await listPiProviderAuthInfo()
     for (const provider of merged.values()) {
-      // OAuth capability comes from the same registry Pi's own TUI uses.
-      provider.oauth = isPiOAuthProvider(provider.id)
+      // Sign-in capability comes from the same registry Pi's own TUI uses.
+      provider.oauth = authInfo.get(provider.id)?.oauth === true
       if (
         !provider.authenticated &&
         ((await fileBackedAuth.hasCredential(provider.id)) || keyedNativeIds.has(provider.id))

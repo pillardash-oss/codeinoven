@@ -43,6 +43,7 @@ export const piAuthFileIo: PiAuthFileIo = {
 interface PiCredential {
   type?: string
   key?: unknown
+  env?: unknown
   refresh?: unknown
   access?: unknown
 }
@@ -95,11 +96,23 @@ export class PiAuthConfigService {
     return (await this.readAll())[providerId]?.type === 'oauth'
   }
 
-  /** Store an API key for a provider, replacing any previous credential. */
-  async setApiKey(providerId: string, apiKey: string): Promise<void> {
+  /**
+   * Store an API key credential, replacing any previous entry. `env` carries
+   * provider-scoped config values Pi's flows collect (Cloudflare account /
+   * gateway ids) and resolves at request time.
+   */
+  async setApiKey(
+    providerId: string,
+    apiKey: string,
+    env?: Record<string, string>
+  ): Promise<void> {
     assertProviderId(providerId)
     const data = await this.readAll()
-    data[providerId] = { type: 'api_key', key: apiKey }
+    data[providerId] = {
+      type: 'api_key',
+      key: apiKey,
+      ...(env !== undefined && Object.keys(env).length > 0 ? { env } : {})
+    }
     await this.writeAll(data)
   }
 
