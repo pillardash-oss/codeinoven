@@ -376,14 +376,6 @@ export interface HarnessDriver {
   listProviders(projectPath: string): Promise<ProviderCatalog[]>
 
   /**
-   * The harness's full provider catalog without the connected-only filter —
-   * the searchable set of the provider-connect flow. Optional: harnesses whose
-   * catalogs are small or identity-based (one provider per harness) do not
-   * need a separate unfiltered view.
-   */
-  listAllProviders?(projectPath: string): Promise<ProviderCatalog[]>
-
-  /**
    * Cheap, spawn-free staleness fingerprint of the driver's provider-catalog
    * inputs (connected providers, auth state, configured model lists). The chat
    * engine compares it against the fingerprint recorded with the last cached

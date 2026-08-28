@@ -851,22 +851,11 @@ async function bootPostPaintServices(): Promise<void> {
     harnessInstallService.register()
 
     const { registerProviderAccountIpc } = await import('./ipc/provider-account-ipc')
-    const { ProviderAccountOrchestrator } =
-      await import('./providers/provider-account-orchestrator')
     const { registerBaseUrlProviderIpc } = await import('./providers/base-url-provider-ipc')
     const { registerUtilityIpc } = await import('./ipc/utility-ipc')
     const { registerGatewayIpc } = await import('./ipc/gateway-ipc')
     const { OwnedProcessJournal } = await import('./system/owned-process-journal')
-    registerProviderAccountIpc(
-      // The connect flow's searchable set is the agent engine's own harness
-      // discovery (Pi's full catalog, unfiltered by connectivity).
-      new ProviderAccountOrchestrator({
-        fullCatalog: (harnessId) => {
-          if (!chatEngine) throw new Error('The agent engine is not ready yet.')
-          return chatEngine.listFullProviderCatalog(harnessId)
-        }
-      })
-    )
+    registerProviderAccountIpc()
     registerBaseUrlProviderIpc(storage)
     registerUtilityIpc(storage, undefined, undefined, undefined, computerUsePipService ?? undefined)
     gatewaySupervisor = registerGatewayIpc(

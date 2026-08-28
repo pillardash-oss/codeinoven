@@ -1,6 +1,5 @@
 import { BrowserWindow } from 'electron'
 import { readFile } from 'fs/promises'
-import { homedir } from 'os'
 import { trustedIpcMain as ipcMain } from '../ipc/trusted-ipc-main'
 import { basename, isAbsolute, join, relative, resolve } from 'path'
 import { createHash, randomBytes, randomInt } from 'crypto'
@@ -2914,28 +2913,6 @@ export class ChatEngine {
     } finally {
       if (this.providerDiscovery === discovery) this.providerDiscovery = null
     }
-  }
-
-  /**
-   * One harness's full provider catalog without the connected-only filter —
-   * the searchable set the provider-connect flow offers. Only drivers that
-   * implement `listAllProviders` (Pi today) support this; the call fails for
-   * the others so the connect flow falls back to its own enumeration.
-   */
-  async listFullProviderCatalog(
-    harnessId: string,
-    projectPath?: string
-  ): Promise<ProviderCatalog[]> {
-    const driver = this.drivers.get(harnessId)
-    if (!driver) {
-      throw new Error(
-        `Harness driver "${harnessId}" is not available. Available: ${[...this.drivers.keys()].join(', ')}`
-      )
-    }
-    if (!driver.listAllProviders) {
-      throw new Error(`Harness "${harnessId}" does not expose a full provider catalog.`)
-    }
-    return driver.listAllProviders(projectPath ?? homedir())
   }
 
   /**
@@ -17366,8 +17343,7 @@ export class ChatEngine {
         const utilityTurn = this.utilityTurns.get(sessionId)
         const searchExposed = Boolean(
           utilityTurn &&
-            (utilityTurn.gateway.instructions.trim() ||
-              utilityTurn.gateway.directInstructions.trim())
+          (utilityTurn.gateway.instructions.trim() || utilityTurn.gateway.directInstructions.trim())
         )
         const alreadySearched = utilityTurn
           ? this.utilityOrchestration.hasSearched(utilityTurn.gateway.id) ||
