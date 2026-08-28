@@ -4,6 +4,7 @@
     CheckCircle2,
     KeyRound,
     Loader2,
+    Pencil,
     Plug,
     RefreshCw,
     Search,
@@ -19,6 +20,7 @@
   import Switch from '../ui/Switch.svelte'
   import ProviderLoginTerminal from './ProviderLoginTerminal.svelte'
   import type {
+    BaseUrlProvider,
     OfferedProvider,
     ProviderAccountAuthEntry,
     ProviderAccountAuthStatus,
@@ -31,9 +33,11 @@
     onClose: () => void
     /** Hand the user off to the custom base-URL editor, pre-scoped to this harness. */
     onAddCustom: (harnessId: string) => void
+    /** Hand the user off to the custom base-URL editor to edit an existing provider. */
+    onEditCustom: (provider: BaseUrlProvider) => void
   }
 
-  let { harness, onClose, onAddCustom }: Props = $props()
+  let { harness, onClose, onAddCustom, onEditCustom }: Props = $props()
 
   type AddTab = 'connect' | 'custom'
   type ConnectStep = 'idle' | 'picking' | 'running'
@@ -57,9 +61,10 @@
   let actionWarning = $state('')
   let actionError = $state('')
 
-  let customCount = $derived(
-    baseUrlProviderStore.providers.filter((provider) => provider.harnessId === harness.id).length
+  let customProviders = $derived(
+    baseUrlProviderStore.providers.filter((provider) => provider.harnessId === harness.id)
   )
+  let customCount = $derived(customProviders.length)
 
   let canSignIn = $derived(
     authStatus !== null &&
@@ -144,11 +149,15 @@
       oauthPrompt = {
         promptId: String(data['promptId']),
         type:
-          prompt['type'] === 'secret' || prompt['type'] === 'select' || prompt['type'] === 'manual_code'
+          prompt['type'] === 'secret' ||
+          prompt['type'] === 'select' ||
+          prompt['type'] === 'manual_code'
             ? prompt['type']
             : 'text',
         message: String(prompt['message'] ?? 'Continue sign-in'),
-        ...(typeof prompt['placeholder'] === 'string' ? { placeholder: prompt['placeholder'] } : {}),
+        ...(typeof prompt['placeholder'] === 'string'
+          ? { placeholder: prompt['placeholder'] }
+          : {}),
         ...(Array.isArray(prompt['options'])
           ? {
               options: (prompt['options'] as Array<Record<string, unknown>>).map((option) => ({
@@ -980,6 +989,51 @@
           </span>
         </p>
       </div>
+
+      {#if customProviders.length > 0}
+        <div class="space-y-1.5">
+          <p class="text-[11px] font-medium text-dimmed">Custom providers</p>
+          {#each customProviders as provider (provider.id)}
+            <div
+              class="flex items-center justify-between gap-2 rounded-lg border bg-surface px-3 py-2"
+            >
+              <div class="flex min-w-0 items-center gap-2">
+                <Server size={13} class="shrink-0 text-dimmed" />
+                <span class="truncate text-xs">{provider.name}</span>
+                <span
+                  class="truncate rounded-full bg-elevated px-1.5 py-0.5 font-mono text-[10px] text-dimmed"
+                  title={provider.baseURL}
+                >
+                  {provider.baseURL}
+                </span>
+                {#if !provider.enabled}
+                  <span
+                    class="shrink-0 rounded-full bg-raised px-1.5 py-0.5 text-[10px] font-medium text-dimmed"
+                  >
+                    Disabled
+                  </span>
+                {/if}
+              </div>
+              <button
+                class="flex h-7 shrink-0 items-center gap-1 rounded-lg border bg-elevated px-2 text-[11px] font-medium hover:bg-overlay"
+                title="Edit {provider.name}"
+                type="button"
+                onclick={() => onEditCustom(provider)}
+              >
+                <Pencil size={11} /> Edit
+              </button>
+            </div>
+          {/each}
+        </div>
+      {:else}
+        <div class="rounded-xl border border-dashed p-4 text-center">
+          <p class="text-xs text-muted">
+            No custom providers for {harness.name} yet. Click
+            <strong class="font-medium text-foreground">Open custom provider form</strong> below to add
+            one.
+          </p>
+        </div>
+      {/if}
     </div>
   {/if}
 </Modal>

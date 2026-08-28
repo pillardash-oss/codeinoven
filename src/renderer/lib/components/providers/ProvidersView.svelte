@@ -29,7 +29,11 @@
   import { toast } from 'svelte-sonner'
   import AgentIcon from '$lib/agent-icons/AgentIcon.svelte'
   import { APP_NAME } from '$shared/brand'
-  import type { ProviderAccountAuthStatus, ProviderConnectionInfo } from '$shared/types'
+  import type {
+    BaseUrlProvider,
+    ProviderAccountAuthStatus,
+    ProviderConnectionInfo
+  } from '$shared/types'
   import type { HarnessManifestEntry } from '$shared/types'
   import BaseUrlProvidersPanel from './BaseUrlProvidersPanel.svelte'
   import AddProviderModal from './AddProviderModal.svelte'
@@ -61,6 +65,11 @@
   let authStatuses = $state.raw<Record<string, ProviderAccountAuthStatus>>({})
   let addTarget = $state<ProviderConnectionInfo | null>(null)
   let customEditorFor = $state<string | null>(null)
+  /** Provider being edited in the custom base-URL editor, or null when creating one. */
+  let customEditorProvider = $state<BaseUrlProvider | null>(null)
+  /** Set only when the editor was opened from the Add-provider modal, so its
+   *  footer Back button can return there instead of closing everything. */
+  let customEditorReturnTo = $state<ProviderConnectionInfo | null>(null)
   /** Harness awaiting uninstall confirmation, with its resolved handoff command. */
   let uninstallTarget = $state<ProviderConnectionInfo | null>(null)
   let uninstallCommand = $state<string>('')
@@ -999,7 +1008,15 @@
     harness={addTarget}
     onClose={() => (addTarget = null)}
     onAddCustom={(harnessId) => {
+      customEditorReturnTo = addTarget
       customEditorFor = harnessId
+      customEditorProvider = null
+      addTarget = null
+    }}
+    onEditCustom={(provider) => {
+      customEditorReturnTo = addTarget
+      customEditorFor = provider.harnessId
+      customEditorProvider = provider
       addTarget = null
     }}
   />
@@ -1007,11 +1024,27 @@
 
 {#if customEditorFor}
   <BaseUrlProviderEditor
-    provider={null}
+    provider={customEditorProvider}
     harnesses={baseUrlHarnesses}
     defaultHarnessId={customEditorFor}
-    onClose={() => (customEditorFor = null)}
-    onSaved={() => (customEditorFor = null)}
+    onClose={() => {
+      customEditorFor = null
+      customEditorProvider = null
+      customEditorReturnTo = null
+    }}
+    onSaved={() => {
+      customEditorFor = null
+      customEditorProvider = null
+      customEditorReturnTo = null
+    }}
+    onBack={customEditorReturnTo
+      ? () => {
+          addTarget = customEditorReturnTo
+          customEditorFor = null
+          customEditorProvider = null
+          customEditorReturnTo = null
+        }
+      : undefined}
   />
 {/if}
 

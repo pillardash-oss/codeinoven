@@ -1489,11 +1489,16 @@ export class ChatEngine {
   private activeCompactions = new Set<string>()
   /**
    * Last provider/model each harness session was successfully dispatched
-   * under. A later model switch on a reused native session is detectable
-   * without a per-turn mirror read; the mirror backfills the first turn after
-   * an app restart.
+   * under, plus the thinking level the turn started with. A later model
+   * switch on a reused native session is detectable without a per-turn mirror
+   * read; the mirror backfills the first turn after an app restart. The
+   * thinking level rides along so turn completion stamps what the turn
+   * actually ran with — never the composer's mid-turn changes.
    */
-  private readonly sessionModelIds = new Map<string, { providerId: string; modelId: string }>()
+  private readonly sessionModelIds = new Map<
+    string,
+    { providerId: string; modelId: string; thinkingLevel?: ThinkingLevel }
+  >()
   private specRevisionTasks = new Map<string, Promise<EngineeringSpec | null>>()
   /** Fresh sessions prepared for the approved-spec implementation handoff.
    * The renderer and send path both call ensureSession; retain the new id so
@@ -6281,7 +6286,8 @@ export class ChatEngine {
         await driver.sendPrompt(projectPath, prompt)
         this.sessionModelIds.set(sessionId, {
           providerId: settings.providerId,
-          modelId: settings.modelId
+          modelId: settings.modelId,
+          thinkingLevel: settings.thinkingLevel ?? undefined
         })
         void scheduleAutoTitle()
         promptDispatched = true
@@ -6378,7 +6384,8 @@ export class ChatEngine {
       }
       this.sessionModelIds.set(sessionId, {
         providerId: settings.providerId,
-        modelId: settings.modelId
+        modelId: settings.modelId,
+        thinkingLevel: settings.thinkingLevel ?? undefined
       })
       void scheduleAutoTitle()
       if (origin === 'internal' && this.isCoordinatorThread(targetThread)) {
@@ -17168,16 +17175,18 @@ export class ChatEngine {
       const messages =
         activeTurnStartIndex > 0 ? loadedMessages.slice(activeTurnStartIndex) : loadedMessages
 
-      // The thread's settings are authoritative for the turn that just
-      // completed: stamp only its newest assistant message. Historical
-      // transcript rows keep whatever level they were persisted with (restored
-      // below), so a level change never rewrites the past.
+      // Stamp the turn's thinking level from what the turn was dispatched
+      // with — the per-session snapshot, not the thread's current settings.
+      // The user may have changed the composer mid-turn while waiting; those
+      // changes belong to the next turn and must never re-label this one.
       const latestUserIndex = messages.findLastIndex((message) => message.role === 'user')
       const turnAssistant = [...messages.slice(latestUserIndex + 1)]
         .reverse()
         .find((message) => message.role === 'assistant')
-      if (turnAssistant && !turnAssistant.thinkingLevel && thread?.settings?.thinkingLevel) {
-        turnAssistant.thinkingLevel = thread.settings.thinkingLevel
+      const turnSelection = this.sessionModelIds.get(sessionId)
+      const turnThinkingLevel = turnSelection?.thinkingLevel ?? thread?.settings?.thinkingLevel
+      if (turnAssistant && !turnAssistant.thinkingLevel && turnThinkingLevel) {
+        turnAssistant.thinkingLevel = turnThinkingLevel
       }
 
       this.applyReasoningStamps(sessionId, messages)

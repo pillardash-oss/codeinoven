@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { ClipboardPaste, Copy, Loader2, Plus, X } from '@lucide/svelte'
+  import { ArrowLeft, ClipboardPaste, Copy, Loader2, Plus, X } from '@lucide/svelte'
   import { toast } from 'svelte-sonner'
   import { invoke } from '$lib/ipc.svelte'
   import { copyText as copyTextToClipboard } from '$lib/copy-text'
@@ -33,6 +33,10 @@
     onClose: () => void
     /** Invoked with the persisted provider after a successful save. */
     onSaved: (provider: BaseUrlProvider) => void
+    /** Shown as a footer "Back" button when set — lets a caller that opened
+     *  this editor from its own modal (e.g. Add provider) return there
+     *  instead of closing everything. */
+    onBack?: () => void
   }
 
   interface ModelDraft {
@@ -110,7 +114,7 @@
     }
   ]
 
-  let { provider, harnesses, defaultHarnessId, onClose, onSaved }: Props = $props()
+  let { provider, harnesses, defaultHarnessId, onClose, onSaved, onBack }: Props = $props()
 
   /**
    * Harnesses whose driver consumes custom base-URL providers. When the prop
@@ -450,7 +454,19 @@
 >
   {#snippet footer()}
     <div class="flex w-full items-center justify-between gap-3">
-      <Switch bind:checked={draft.enabled} label="Enabled" class="font-medium" />
+      <div class="flex items-center gap-3">
+        {#if onBack}
+          <button
+            class="flex h-9 items-center gap-1.5 rounded-lg border bg-elevated px-3 text-xs font-medium hover:bg-overlay"
+            type="button"
+            title="Back to Add provider"
+            onclick={onBack}
+          >
+            <ArrowLeft size={13} /> Back
+          </button>
+        {/if}
+        <Switch bind:checked={draft.enabled} label="Enabled" class="font-medium" />
+      </div>
       <div class="flex items-center gap-2">
         <button
           class="h-9 rounded-lg border bg-elevated px-3 text-xs font-medium hover:bg-overlay"

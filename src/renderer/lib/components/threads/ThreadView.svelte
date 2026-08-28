@@ -4230,6 +4230,10 @@
       providerStatus = null
       userScrolledAway = false
       idleAttentionHandled = false
+      // Snapshot the selection this turn starts with before anything else can
+      // change it — identical to the thread path, so mid-turn composer edits
+      // never re-label the running trace.
+      captureLiveWorkingSelection()
       const payload: SendPayload = {
         text,
         attachments,
