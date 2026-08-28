@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto'
-import { access, mkdir, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises'
+import { access, mkdir, readFile, readdir, rename, rm, statfs, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import type {
   SpeechCapability,
@@ -1338,6 +1338,33 @@ export class SpeechService {
     return this.playback.cancel(sessionId)
   }
 
+  /**
+   * Preflight a model download against the available disk space so a nearly
+   * full disk produces a clear, actionable error up front instead of a raw
+   * ENOSPC failure midway through writing gigabytes of model files.
+   */
+  private async assertDiskSpace(path: string, byteSize: number): Promise<void> {
+    if (!Number.isFinite(byteSize) || byteSize <= 0) return
+    try {
+      const stats = await statfs(path)
+      const available = Number(stats.bavail) * Number(stats.bsize)
+      // Require the artifact size plus a small working margin (the app
+      // database, logs, and temp files share the same volume).
+      const margin = Math.min(Math.max(byteSize * 0.05, 64 * 1024 * 1024), 1_073_741_824)
+      if (available < byteSize + margin) {
+        throw new Error(
+          `Not enough disk space to download this model: ${Math.round(
+            (byteSize + margin) / (1024 * 1024)
+          )} MB is needed, ${Math.round(available / (1024 * 1024))} MB is available. Free up space and try again.`
+        )
+      }
+    } catch (cause) {
+      if (cause instanceof Error && cause.message.startsWith('Not enough disk space')) throw cause
+      // statfs itself failing must never block a download; the streaming write
+      // below still surfaces a real error if the disk is genuinely unwritable.
+    }
+  }
+
   async downloadArtifact(artifactId: string): Promise<void> {
     if (this.downloadControllers.has(artifactId))
       throw new Error('Model download is already active.')
@@ -1352,6 +1379,7 @@ export class SpeechService {
     const destination = this.storage.modelDirectory(artifactId)
     let received = 0
     try {
+      await this.assertDiskSpace(staging, artifact.byteSize)
       await mkdir(staging, { recursive: true })
       this.emitDownload(artifact, {
         state: 'downloading',
