@@ -79,7 +79,7 @@ jobs:
       matrix:
         include:
           - name: macOS (Apple Silicon)
-            os: macos-14
+            os: macos-26
             target: mac
             arch: --arm64
             artifact: mac-arm64
@@ -116,9 +116,12 @@ jobs:
       - name: Build Pi harness
         run: bun run harness:build-pi
 
-      - name: Build Apple Silicon speech worker
-        continue-on-error: true
-        run: bun run speech:build-mlx
+      - name: Build Apple Silicon speech workers
+        if: matrix.target == 'mac'
+        run: |
+          bun run speech:build-mlx
+          bun run speech:build-coreml
+          bun run speech:build-native-capture
 
       - name: Build production bundle
         run: bun run build:production

@@ -33,12 +33,21 @@ export function validateReleasePromotion(input: {
   const currentVersion = parseVersion(input.currentVersion, 'Pull request package version')
   if (input.baseBranch === 'nightly') {
     // Cohesive tagging: dev == nightly base, nightly tags are v{base}-nightly-{N}
-    if (compareVersions(currentVersion, baseVersion) !== 0) {
-      throw new Error(
-        `package.json version must equal nightly base for ${input.headBranch} → ${input.baseBranch} ` +
-          `(${input.baseVersion} → ${input.currentVersion}); ` +
-          `nightly tags are v\${base}-nightly-{N} without bumping package.json`
-      )
+    // Allow either equality or a single patch bump to catch up to the latest stable
+    // (e.g. nightly still on 0.5.50 while dev/stable moved to 0.5.51).
+    const cmp = compareVersions(currentVersion, baseVersion)
+    if (cmp !== 0) {
+      const isOnePatchAhead =
+        currentVersion[0] === baseVersion[0] &&
+        currentVersion[1] === baseVersion[1] &&
+        currentVersion[2] === baseVersion[2] + 1
+      if (!isOnePatchAhead) {
+        throw new Error(
+          `package.json version must equal nightly base for ${input.headBranch} → ${input.baseBranch} ` +
+            `(${input.baseVersion} → ${input.currentVersion}); ` +
+            `nightly tags are v\${base}-nightly-{N} without bumping package.json`
+        )
+      }
     }
     return
   }

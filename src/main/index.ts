@@ -137,8 +137,8 @@ if (hasNativeSplashHandoff()) startupTelemetry.mark('nativeSplash:active')
 // Electron process entry is marked exactly once at module scope.
 startupTelemetry.mark('process:entry')
 // Privacy-preserving process-wide crash policy: uncaught exceptions and
-// unhandled rejections are logged and exit nonzero instead of leaving a
-// headless or silently-hung process.
+// unhandled rejections are logged and never exit the process — a failed
+// background operation must never kill the app on the user's behalf.
 installProcessCrashDiagnostics()
 
 let mainWindow: BrowserWindow | null = null
@@ -1274,15 +1274,12 @@ void app
       // All feature service graphs are imported and constructed only after
       // the primary window has both loaded and rendered. This includes the IPC
       // graph, so optional engines never compete with the visible workspace.
+      // A failure here degrades the app instead of killing it: the window and
+      // already-registered services stay alive, and the failure is fully
+      // logged for diagnosis. A background feature failing must never exit
+      // the whole app on the user's behalf.
       void bootPostPaintServices().catch((error) => {
-        void handleFatalStartupFailure({
-          error,
-          appName: APP_NAME,
-          resources: [{ name: 'database', close: () => database.close() }],
-          showErrorBox: dialog.showErrorBox,
-          quit: (code) => app.exit(code),
-          telemetry: startupTelemetry
-        })
+        Logger.error('Post-paint service boot failed; app continues with degraded features', error)
       })
     }
 

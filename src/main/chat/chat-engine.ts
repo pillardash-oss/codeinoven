@@ -5530,7 +5530,15 @@ export class ChatEngine {
       targetThread?.sessionId &&
       this.engineeringImplementationSessions.has(targetThread.sessionId)
     ) {
-      specAction = 'implement'
+      if (origin === 'user') {
+        // A plain user message is explicit intent: retire the spec-contract
+        // continuation flag so the turn is answered as a normal chat turn
+        // instead of being hijacked into "COMPLETE THE TOTAL SPEC CONTRACT!"
+        // prompting after the achievement loop has finished.
+        this.engineeringImplementationSessions.delete(targetThread.sessionId)
+      } else {
+        specAction = 'implement'
+      }
     }
     if (
       targetThread?.userInputLocked &&
@@ -13546,6 +13554,9 @@ export class ChatEngine {
           loopMode: false
         })
         await this.threadManager.setStatus(projectId, threadId, 'completed', { read: false })
+        if (current.sessionId) {
+          this.engineeringImplementationSessions.delete(current.sessionId)
+        }
         this.broadcastToast(
           `Achievement completed after ${iteration} ${iteration === 1 ? 'audit' : 'audits'}.`,
           'info'
@@ -13561,6 +13572,9 @@ export class ChatEngine {
           loopMode: false
         })
         this.markEngineeringLifecycleFailure(projectId, threadId, failure)
+        if (current.sessionId) {
+          this.engineeringImplementationSessions.delete(current.sessionId)
+        }
         this.broadcastToast(failure)
         return
       }
@@ -13596,6 +13610,9 @@ export class ChatEngine {
         await this.threadManager.setAuditState(projectId, threadId, undefined)
       }
       this.markEngineeringLifecycleFailure(projectId, threadId, error)
+      if (current?.sessionId) {
+        this.engineeringImplementationSessions.delete(current.sessionId)
+      }
       this.broadcastToast(`Achievement stopped: ${rawErrorMessage(error)}`)
     } finally {
       this.activeLoopRuns.delete(key)

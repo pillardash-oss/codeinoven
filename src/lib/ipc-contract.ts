@@ -2289,7 +2289,7 @@ export interface IpcInvokeContract {
     [projectId: string, threadId: string, settings: ThreadSettings],
     Thread
   >
-  'updater:check': Contract<[], UpdaterStatus>
+  'updater:check': Contract<[explicit?: boolean], UpdaterStatus>
   'updater:getStatus': Contract<[], UpdaterStatus>
   'updater:download': Contract<[], void>
   'updater:install': Contract<[], void>

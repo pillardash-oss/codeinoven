@@ -56,6 +56,28 @@ export async function runGit(
   return stdout
 }
 
+/** Like {@link runGit} but throws when git exits non-zero. */
+export async function runGitChecked(
+  args: string[],
+  options: { cwd: string; timeoutMs?: number } = { cwd: process.cwd() }
+): Promise<string> {
+  const command = gitExecutable()
+  const { stdout, exitCode, timedOut } = await runExecutable(
+    command,
+    args,
+    options.cwd,
+    options.timeoutMs ?? 60_000
+  )
+  if (timedOut) throw new Error(`git command timed out: git ${args[0] ?? ''}`)
+  if (exitCode !== 0) {
+    const detail = stdout.trim()
+    throw new Error(
+      `git ${args[0] ?? ''} failed with exit code ${exitCode}${detail ? `: ${detail}` : ''}`
+    )
+  }
+  return stdout
+}
+
 /** Run one structured setup command sequentially with bounded in-memory output. */
 export async function runSetupCommand(
   spec: ScopeSetupCommandSpec,

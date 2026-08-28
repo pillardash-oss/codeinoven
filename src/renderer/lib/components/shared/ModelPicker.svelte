@@ -463,6 +463,7 @@
     search = ''
     harnessFilterOpen = false
     pickerListScrollTop = 0
+    activeRowKey = null
   }
 
   function handleOpenChange(nextOpen: boolean): void {
@@ -527,6 +528,12 @@
 
   let pickerListScrollTop = $state(0)
   let pickerViewport = $state(240)
+  /** Row key the user last navigated to via keyboard, or hovered via an actual
+   *  pointer movement. Deliberately not driven by CSS `:hover`/`:focus`: those
+   *  are geometric and re-fire when the virtual list auto-scrolls a row under a
+   *  stationary cursor, which would silently move the highlight without the
+   *  user ever touching the mouse. */
+  let activeRowKey = $state<string | null>(null)
 
   /** Flatten every visible list section into positioned rows. */
   let pickerLayout = $derived.by(() => {
@@ -932,8 +939,11 @@
               if (event.key === 'ArrowDown') {
                 event.preventDefault()
                 scrollPickerListTo(0)
-                const firstBtn = document.querySelector(`#${CSS.escape(listId)} .model-row-btn`)
-                if (firstBtn instanceof HTMLElement) firstBtn.focus()
+                activeRowKey = pickerModelKeys[0] ?? null
+                void tick().then(() => {
+                  const firstBtn = document.querySelector(`#${CSS.escape(listId)} .model-row-btn`)
+                  if (firstBtn instanceof HTMLElement) firstBtn.focus()
+                })
                 return
               }
               if (event.key === 'Escape') {
@@ -1221,9 +1231,7 @@
             <GripVertical size={11} />
           </span>
         {/if}
-        <div class={item.draggable ? 'pl-4' : ''}>
-          {@render modelRow(item.entry, item.key)}
-        </div>
+        {@render modelRow(item.entry, item.key, item.draggable)}
         <div
           class="pointer-events-none absolute inset-x-0 top-0 h-0.5 transition-colors {favoriteDropTarget?.key ===
             key && favoriteDropTarget.position === 'before'
@@ -1243,15 +1251,22 @@
   {/if}
 {/snippet}
 
-{#snippet modelRow(entry: ModelEntry, rowKey: string)}
+{#snippet modelRow(entry: ModelEntry, rowKey: string, indent: boolean = false)}
   {@const key = modelKey(entry.provider.harnessId, entry.provider.id, entry.model.id)}
   {@const peak = peakHoursBadgeFor(entry.model.id)}
+  {@const active = activeRowKey === rowKey || isSelectedModel(entry)}
   <button
-    class={`model-row-btn flex w-full flex-col rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-elevated focus:bg-elevated focus:outline-none ${isSelectedModel(entry) ? 'bg-elevated' : ''}`}
+    class={`model-row-btn flex w-full flex-col rounded-lg py-1.5 text-left transition-colors focus:outline-none ${indent ? 'pl-4 pr-2' : 'px-2'} ${active ? 'bg-elevated' : ''}`}
     title={`Use ${entry.model.name}`}
     data-model-id={entry.model.id}
     data-model-key={rowKey}
     onclick={() => choose(entry.provider.id, entry.model.id, entry.provider.harnessId)}
+    onpointermove={() => {
+      if (activeRowKey !== rowKey) activeRowKey = rowKey
+    }}
+    onfocus={() => {
+      activeRowKey = rowKey
+    }}
     onkeydown={(event: KeyboardEvent) => {
       if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
         event.preventDefault()
@@ -1263,6 +1278,7 @@
             : Math.max(currentIndex - 1, 0)
         if (targetIndex === currentIndex) return
         const targetKey = pickerModelKeys[targetIndex]
+        activeRowKey = targetKey
         const targetItemIndex = pickerLayout.items.findIndex((item) => item.key === targetKey)
         if (targetItemIndex !== -1) {
           scrollPickerListTo(pickerLayout.offsets[targetItemIndex] - 60)

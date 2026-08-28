@@ -7264,7 +7264,9 @@ export function registerIpcHandlers(
 
   // ─── Updater ────────────────────────────────────────────────────────────
   if (updaterService) {
-    ipcMain.handle('updater:check', () => updaterService.checkForUpdates())
+    ipcMain.handle('updater:check', (_, explicit?: unknown) =>
+      updaterService.checkForUpdates(explicit === true)
+    )
 
     ipcMain.handle('updater:getStatus', () => updaterService.status)
 
