@@ -665,6 +665,11 @@
 
   /** Pixel offset of the currently selected model row, if it is listed. */
   function pickerOffsetForSelectedModel(): number | undefined {
+    return pickerLayout.offsets[pickerIndexForSelectedModel() ?? -1]
+  }
+
+  /** Index of the currently selected model's row within the flattened list. */
+  function pickerIndexForSelectedModel(): number | undefined {
     const index = pickerLayout.items.findIndex(
       (item) =>
         item.kind === 'model' &&
@@ -672,7 +677,13 @@
         item.entry.provider.id === providerId &&
         item.entry.provider.harnessId === harnessId
     )
-    return index === -1 ? undefined : pickerLayout.offsets[index]
+    return index === -1 ? undefined : index
+  }
+
+  /** Row key of the currently selected model, if it is listed. */
+  function pickerKeyForSelectedModel(): string | undefined {
+    const index = pickerIndexForSelectedModel()
+    return index === undefined ? undefined : pickerLayout.items[index]?.key
   }
 
   /** Scroll the virtual list to a pixel offset (state + DOM stay in sync). */
@@ -945,9 +956,26 @@
               if (event.key === 'ArrowDown') {
                 event.preventDefault()
                 keyboardNavActive = true
+                // Anchor the first arrow-key press on the active model so nav
+                // starts from what's selected, not the top of the list — but
+                // once the user has typed a search, "top of the results" is
+                // the more useful anchor.
+                const targetKey = search ? undefined : pickerKeyForSelectedModel()
+                if (targetKey) {
+                  const targetIndex = pickerLayout.items.findIndex((item) => item.key === targetKey)
+                  if (targetIndex !== -1) scrollPickerListTo(pickerLayout.offsets[targetIndex] - 60)
+                  void tick().then(() => {
+                    modelList
+                      ?.querySelector<HTMLElement>(`[data-model-key="${CSS.escape(targetKey)}"]`)
+                      ?.focus()
+                  })
+                  return
+                }
                 scrollPickerListTo(0)
-                const firstBtn = document.querySelector(`#${CSS.escape(listId)} .model-row-btn`)
-                if (firstBtn instanceof HTMLElement) firstBtn.focus()
+                void tick().then(() => {
+                  const firstBtn = document.querySelector(`#${CSS.escape(listId)} .model-row-btn`)
+                  if (firstBtn instanceof HTMLElement) firstBtn.focus()
+                })
                 return
               }
               if (event.key === 'Escape') {
