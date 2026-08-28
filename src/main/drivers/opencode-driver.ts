@@ -2053,12 +2053,21 @@ export class OpenCodeDriver implements HarnessDriver {
     }
   }
 
+  /**
+   * Reuse-only poll: pending questions live in a running server's memory, so
+   * spawning a fresh `opencode serve` could never surface them — it would only
+   * boot the full harness. The thread mount calls this on every startup for
+   * reconnect recovery, so collect the handles that already exist (pooled +
+   * per-turn) and never start one here; a server spawned for real work gets
+   * picked up by the next poll or the SSE stream.
+   */
   async listPendingQuestions(projectPath: string): Promise<AgentQuestionRequest[]> {
-    const pooled = await this.ensureServer(projectPath)
+    const pooled = this.server ? this.scopedHandle(this.server, projectPath) : null
     const handles = [
-      pooled,
+      ...(pooled ? [pooled] : []),
       ...[...this.turnServers.values()].filter((handle) => handle.projectPath === projectPath)
     ]
+    if (handles.length === 0) return []
     const pending = await Promise.all(
       handles.map(async (handle) => {
         const response = await fetch(`${handle.baseUrl}/question`, {
