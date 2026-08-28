@@ -15,7 +15,8 @@ import type {
 } from '../../lib/types'
 import { normalizeAgentQuestions } from '../../lib/agent-interactions'
 import { buildProcessEnvironment } from './cli-environment'
-import { hasNativeProviderCatalog } from '../agents/native-provider-config-service'
+import { hasNativeProviderCatalog, piNativeProviderIds } from '../agents/native-provider-config-service'
+import { PiAuthConfigService, piAuthFileIo } from '../providers/pi-auth-config'
 import type { BaseUrlProviderService } from '../providers/base-url-provider-service'
 import type { SecretVault } from '../storage/secret-vault'
 import type { StorageEngine } from '../storage/storage-engine'
@@ -663,6 +664,8 @@ export class PiDriver extends PersistentCliDriver {
   private activeTurns = new Set<string>()
   private pendingUiRequests = new Map<string, PiUiRequest>()
   private nativeMcpConfigSupport: Promise<boolean> | null = null
+  /** WSL-aware read view of Pi's own credential store (`~/.pi/agent/auth.json`). */
+  private readonly authConfig = new PiAuthConfigService(undefined, piAuthFileIo)
 
   constructor(
     storage: StorageEngine,
@@ -691,14 +694,18 @@ export class PiDriver extends PersistentCliDriver {
   }
 
   async listProviders(projectPath: string): Promise<ProviderCatalog[]> {
+    const connected = await this.connectedProviderIds()
+    if (connected !== null && connected.size === 0) return []
     if (!(await resolveHarnessRuntime('pi', projectPath))) {
-      return structuredClone(PI_FALLBACK_CATALOG)
+      return this.filterConnectedCatalogs(structuredClone(PI_FALLBACK_CATALOG), connected)
     }
     try {
       const overlay = await this.buildProviderOverlay(projectPath)
       const models = await this.discoverModels(projectPath, overlay)
       await overlay.cleanup()
-      if (models.length === 0) return structuredClone(PI_FALLBACK_CATALOG)
+      if (models.length === 0) {
+        return this.filterConnectedCatalogs(structuredClone(PI_FALLBACK_CATALOG), connected)
+      }
       const byProvider = new Map<string, ProviderModel[]>()
       for (const model of models) {
         const providerId = stringValue(model['provider'])
@@ -726,11 +733,57 @@ export class PiDriver extends PersistentCliDriver {
         harnessId: 'pi',
         models
       }))
-      return catalogs.length > 0 ? catalogs : structuredClone(PI_FALLBACK_CATALOG)
+      return this.filterConnectedCatalogs(
+        catalogs.length > 0 ? catalogs : structuredClone(PI_FALLBACK_CATALOG),
+        connected
+      )
     } catch (error) {
       Logger.dev('Pi provider discovery failed, using fallback catalog', error)
-      return structuredClone(PI_FALLBACK_CATALOG)
+      return this.filterConnectedCatalogs(structuredClone(PI_FALLBACK_CATALOG), connected)
     }
+  }
+
+  /**
+   * The providers the user is actually connected to, keyed by the same provider
+   * ids pi's catalog reports: credentials in `~/.pi/agent/auth.json` (written by
+   * pi's TUI or CodeInOven's connect flow), providers configured in
+   * `~/.pi/agent/models.json` (keyed catalog providers and keyless local
+   * servers alike), and CodeInOven-managed base-URL providers injected through
+   * the discovery overlay. Returns `null` when the connected set cannot be
+   * determined reliably — callers then keep the catalog unfiltered rather than
+   * wrongly hiding every provider behind a transient read failure.
+   */
+  private async connectedProviderIds(): Promise<Set<string> | null> {
+    const overlay = this.baseUrlProviders
+      ? await this.baseUrlProviders.listEnabled(this.id).catch(() => null)
+      : []
+    const nativeIds = await piNativeProviderIds().catch(() => null)
+    if (overlay === null || nativeIds === null) return null
+    const connected = new Set<string>([...(await this.authConfig.credentialIds()), ...nativeIds])
+    for (const provider of overlay) connected.add(provider.id)
+    return connected
+  }
+
+  private filterConnectedCatalogs(
+    catalogs: ProviderCatalog[],
+    connected: Set<string> | null
+  ): ProviderCatalog[] {
+    if (connected === null) return catalogs
+    return catalogs.filter((catalog) => connected.has(catalog.id))
+  }
+
+  /** Cheap staleness signature of the connected-provider set; see the interface contract. */
+  async providerCatalogFingerprint(): Promise<string | null> {
+    const connected = await this.connectedProviderIds()
+    if (connected === null) return null
+    const overlay = this.baseUrlProviders
+      ? await this.baseUrlProviders.listEnabled(this.id).catch(() => [])
+      : []
+    const overlayModels = overlay
+      .map((provider) => `${provider.id}=${provider.models.map((model) => model.id).join(',')}`)
+      .sort()
+      .join('|')
+    return JSON.stringify([[...connected].sort(), overlayModels])
   }
 
   private async discoverModels(

@@ -743,7 +743,11 @@ async function bootPostPaintServices(): Promise<void> {
     ])
 
     ptyService = new PtyService(storage, database, scopeRootResolver)
-    providerConnection = new ProviderConnectionService()
+    // A probe that changes a harness's install state (new install, version
+    // bump) invalidates cached provider catalogs so the model picker reflects it.
+    providerConnection = new ProviderConnectionService(() => {
+      void chatEngine?.invalidateProviderCatalogs()
+    })
     harnessUpdateService = new HarnessUpdateService(providerConnection)
     harnessAutoUpdateService = new HarnessAutoUpdateService(storage)
     harnessInstallService = new HarnessInstallService(providerConnection)

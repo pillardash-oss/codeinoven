@@ -317,6 +317,8 @@ interface PersistedProviderCatalog {
   schemaVersion: 3
   discoveredAt: number
   catalogs: ProviderCatalog[]
+  /** Last-seen per-driver catalog-input fingerprints; drift invalidates the snapshot. */
+  catalogFingerprints?: Record<string, string>
 }
 
 const AUDIT_REPORT_JSON_CONTRACT =
@@ -1530,6 +1532,16 @@ export class ChatEngine {
   private providerCache = new Map<string, ProviderCatalog[]>()
   private sharedProviderCatalog: PersistedProviderCatalog | null = null
   private providerDiscovery: Promise<ProviderCatalog[]> | null = null
+  /**
+   * Last-seen provider-catalog input fingerprints per driver (drivers that
+   * implement `providerCatalogFingerprint`). A drift between the recorded
+   * value and a freshly computed one invalidates the shared catalog cache —
+   * e.g. the user connecting or logging out of a pi provider while the 1h TTL
+   * cache would otherwise keep serving the stale model list.
+   */
+  private catalogFingerprints = new Map<string, string>()
+  /** Guards concurrent probe-driven catalog invalidations. */
+  private catalogInvalidationInFlight: Promise<void> | null = null
   /** Resolved agent tool catalogs keyed by their discovery context. */
   private toolCatalogCache = new Map<string, { catalog: AgentToolCatalog; at: number }>()
   /**
@@ -2869,8 +2881,9 @@ export class ChatEngine {
     projectId = validateEntityId(projectId, 'Project ID')
     // An explicit provider refresh can change which models/drivers expose tools.
     if (force) this.toolCatalogCache.clear()
+    const stale = force || (await this.providerCatalogInputsChanged())
     if (
-      !force &&
+      !stale &&
       this.sharedProviderCatalog &&
       Date.now() - this.sharedProviderCatalog.discoveredAt < PROVIDER_CATALOG_TTL_MS
     ) {
@@ -2878,7 +2891,7 @@ export class ChatEngine {
       this.providerCache.set(projectId, catalogs)
       return catalogs
     }
-    if (!force) {
+    if (!stale) {
       // Cold start: reuse the persisted snapshot so the model picker is
       // populated immediately without contacting any harness.
       const persisted = await this.loadPersistedProviders()
@@ -2895,6 +2908,80 @@ export class ChatEngine {
     } finally {
       if (this.providerDiscovery === discovery) this.providerDiscovery = null
     }
+  }
+
+  /**
+   * Compute every implementing driver's provider-catalog input fingerprint and
+   * compare it with the last recorded one. Returns (and records) whether any
+   * driver's inputs drifted — e.g. the user connected or disconnected a Pi
+   * provider, so cached catalogs no longer match reality. The first observation
+   * only records the baseline.
+   */
+  private async providerCatalogInputsChanged(): Promise<boolean> {
+    const current = await this.readProviderCatalogFingerprints()
+    if (current === null) return false
+    let changed = false
+    for (const [driverId, fingerprint] of Object.entries(current)) {
+      const previous = this.catalogFingerprints.get(driverId)
+      if (previous !== undefined && previous !== fingerprint) changed = true
+      this.catalogFingerprints.set(driverId, fingerprint)
+    }
+    return changed
+  }
+
+  /** Fresh fingerprints from every driver that implements the capability. */
+  private async readProviderCatalogFingerprints(): Promise<Record<string, string> | null> {
+    const capable = [...this.drivers.values()].filter(
+      (driver) => driver.providerCatalogFingerprint !== undefined
+    )
+    if (capable.length === 0) return null
+    const entries = await Promise.all(
+      capable.map(async (driver): Promise<[string, string] | null> => {
+        try {
+          const fingerprint = await driver.providerCatalogFingerprint?.()
+          return fingerprint === null || fingerprint === undefined
+            ? null
+            : ([driver.id, fingerprint] as const)
+        } catch {
+          // Cannot determine — treat as unchanged rather than forcing a refresh.
+          return null
+        }
+      })
+    )
+    const record: Record<string, string> = {}
+    for (const entry of entries) {
+      if (entry) record[entry[0]] = entry[1]
+    }
+    return Object.keys(record).length > 0 ? record : null
+  }
+
+  /** Re-record driver fingerprints after a discovery pass so drift baselines stay current. */
+  private async recordCatalogFingerprints(): Promise<void> {
+    const current = await this.readProviderCatalogFingerprints()
+    if (!current) return
+    for (const [driverId, fingerprint] of Object.entries(current)) {
+      this.catalogFingerprints.set(driverId, fingerprint)
+    }
+  }
+
+  /** Last recorded fingerprints, persisted alongside the catalog snapshot. */
+  private persistedCatalogFingerprints(): Record<string, string> | undefined {
+    return this.catalogFingerprints.size > 0
+      ? Object.fromEntries(this.catalogFingerprints)
+      : undefined
+  }
+
+  /**
+   * A harness probe reported a changed install state (status/version). Re-run
+   * provider discovery and push the fresh catalog to open pickers.
+   */
+  async invalidateProviderCatalogs(): Promise<void> {
+    if (this.catalogInvalidationInFlight) return this.catalogInvalidationInFlight
+    const run = this.rebroadcastUpdatedCatalogs().finally(() => {
+      if (this.catalogInvalidationInFlight === run) this.catalogInvalidationInFlight = null
+    })
+    this.catalogInvalidationInFlight = run
+    return run
   }
 
   /**
@@ -3015,6 +3102,9 @@ export class ChatEngine {
         .flat()
     )
     this.sharedProviderCatalog = { schemaVersion: 3, discoveredAt: Date.now(), catalogs: merged }
+    // Discovery reflects the drivers' current catalog inputs; re-baseline so the
+    // next drift comparison starts from these values.
+    void this.recordCatalogFingerprints()
     this.providerCache.set(projectId, merged)
     void this.persistProviders(projectId, merged)
     // Drivers still probing when the budget expired keep working in the
@@ -3057,8 +3147,27 @@ export class ChatEngine {
         Array.isArray(stored.catalogs) &&
         Date.now() - stored.discoveredAt < PROVIDER_CATALOG_TTL_MS
       ) {
+        // The snapshot may predate catalog-input changes made while the app was
+        // closed (e.g. a pi provider connected from the CLI); fingerprints
+        // recorded with the snapshot catch that without contacting any harness.
+        if (stored.catalogFingerprints) {
+          const current = await this.readProviderCatalogFingerprints()
+          if (
+            current &&
+            Object.entries(current).some(
+              ([driverId, fingerprint]) => stored.catalogFingerprints?.[driverId] !== fingerprint
+            )
+          ) {
+            return null
+          }
+        }
         const catalogs = this.filterInstalledProviderCatalogs(stored.catalogs)
         this.sharedProviderCatalog = { ...stored, catalogs }
+        if (stored.catalogFingerprints && this.catalogFingerprints.size === 0) {
+          for (const [driverId, fingerprint] of Object.entries(stored.catalogFingerprints)) {
+            this.catalogFingerprints.set(driverId, fingerprint)
+          }
+        }
         return catalogs
       }
       return null
@@ -3103,13 +3212,16 @@ export class ChatEngine {
   /** Persist a merged catalog snapshot so the next launch is instantly populated. */
   private async persistProviders(projectId: string, catalogs: ProviderCatalog[]): Promise<void> {
     try {
-      const snapshot =
+      const base =
         this.sharedProviderCatalog ??
         ({
           schemaVersion: 3,
           discoveredAt: Date.now(),
           catalogs
         } satisfies PersistedProviderCatalog)
+      const fingerprints = this.persistedCatalogFingerprints()
+      const snapshot: PersistedProviderCatalog =
+        fingerprints === undefined ? base : { ...base, catalogFingerprints: fingerprints }
       await this.storage.write(this.providerCatalogPath(), snapshot)
     } catch (error) {
       Logger.info('Provider catalog persistence skipped', {
@@ -3182,6 +3294,7 @@ export class ChatEngine {
       discoveredAt: Date.now(),
       catalogs: refreshed
     }
+    void this.recordCatalogFingerprints()
     // Background enrichment can surface new providers/models that own tools.
     this.toolCatalogCache.clear()
     this.providerCache.set(projectId, refreshed)

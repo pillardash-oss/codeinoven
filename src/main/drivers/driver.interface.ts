@@ -375,6 +375,15 @@ export interface HarnessDriver {
   /** List available providers and their models. */
   listProviders(projectPath: string): Promise<ProviderCatalog[]>
 
+  /**
+   * Cheap, spawn-free staleness fingerprint of the driver's provider-catalog
+   * inputs (connected providers, auth state, configured model lists). The chat
+   * engine compares it against the fingerprint recorded with the last cached
+   * catalog and forces re-discovery when it drifts. Return `null` when the
+   * driver cannot determine one reliably (the cache then keeps its normal TTL).
+   */
+  providerCatalogFingerprint?(): Promise<string | null>
+
   /** List slash commands the harness exposes. */
   listCommands(projectPath: string): Promise<HarnessCommand[]>
 

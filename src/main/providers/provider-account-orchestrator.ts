@@ -19,43 +19,12 @@ import {
   runHarnessCommand,
   writeHarnessHomeFile
 } from '../drivers/harness-runtime'
-import { PiAuthConfigService, type PiAuthFileIo } from './pi-auth-config'
+import { PiAuthConfigService, piAuthFileIo } from './pi-auth-config'
 import { listPiCatalogProviders } from './pi-catalog'
 import { isPiOAuthProvider, runPiOAuthLogin } from './pi-oauth'
 import { BrowserWindow } from 'electron'
 import { sendToRenderer } from '../ipc/renderer-delivery'
 import { forwardRemoteEvent } from '../remote/remote-event-forwarder'
-
-const PI_NATIVE_AUTH_PATH = join(homedir(), '.pi', 'agent', 'auth.json')
-
-/**
- * Transport that honors WSL-resident pi installs: read/write the auth file
- * inside the distro when pi runs there (matching `readPiStatus`'s view), and
- * fall back to a plain atomic write on the native filesystem otherwise.
- */
-const piAuthFileIo: PiAuthFileIo = {
-  async read(): Promise<string | null> {
-    const wslRaw = await readHarnessHomeFile('pi', '.pi/agent/auth.json').catch(() => undefined)
-    if (wslRaw !== undefined) return wslRaw
-    try {
-      return await readFile(PI_NATIVE_AUTH_PATH, 'utf8')
-    } catch {
-      return null
-    }
-  },
-  async write(content: string): Promise<void> {
-    if (await writeHarnessHomeFile('pi', '.pi/agent/auth.json', content)) return
-    await mkdir(dirname(PI_NATIVE_AUTH_PATH), { recursive: true })
-    const temporaryPath = `${PI_NATIVE_AUTH_PATH}.${process.pid}.${crypto.randomUUID()}.tmp`
-    try {
-      await writeFile(temporaryPath, content, { encoding: 'utf8', flag: 'wx', mode: 0o600 })
-      await rename(temporaryPath, PI_NATIVE_AUTH_PATH)
-    } catch (error) {
-      await rm(temporaryPath, { force: true }).catch(() => undefined)
-      throw error
-    }
-  }
-}
 
 /** Shared headless store for harnesses whose credentials live in files (Pi). */
 const fileBackedAuth = new PiAuthConfigService(undefined, piAuthFileIo)

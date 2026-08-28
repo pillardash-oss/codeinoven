@@ -1,9 +1,39 @@
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
+import { readHarnessHomeFile, writeHarnessHomeFile } from '../drivers/harness-runtime'
 
 const PI_AGENT_DIR = join(homedir(), '.pi', 'agent')
 const PI_AUTH_PATH = join(PI_AGENT_DIR, 'auth.json')
+
+/**
+ * Transport that honors WSL-resident pi installs: read/write the auth file
+ * inside the distro when pi runs there (matching `readPiStatus`'s view), and
+ * fall back to a plain atomic write on the native filesystem otherwise.
+ */
+export const piAuthFileIo: PiAuthFileIo = {
+  async read(): Promise<string | null> {
+    const wslRaw = await readHarnessHomeFile('pi', '.pi/agent/auth.json').catch(() => undefined)
+    if (wslRaw !== undefined) return wslRaw
+    try {
+      return await readFile(PI_AUTH_PATH, 'utf8')
+    } catch {
+      return null
+    }
+  },
+  async write(content: string): Promise<void> {
+    if (await writeHarnessHomeFile('pi', '.pi/agent/auth.json', content)) return
+    await mkdir(dirname(PI_AUTH_PATH), { recursive: true })
+    const temporaryPath = `${PI_AUTH_PATH}.${process.pid}.${crypto.randomUUID()}.tmp`
+    try {
+      await writeFile(temporaryPath, content, { encoding: 'utf8', flag: 'wx', mode: 0o600 })
+      await rename(temporaryPath, PI_AUTH_PATH)
+    } catch (error) {
+      await rm(temporaryPath, { force: true }).catch(() => undefined)
+      throw error
+    }
+  }
+}
 
 /**
  * One stored credential in Pi's auth store (`~/.pi/agent/auth.json`),

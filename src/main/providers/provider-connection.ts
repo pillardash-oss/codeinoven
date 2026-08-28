@@ -44,8 +44,13 @@ export class ProviderConnectionService {
   private checkAllInFlight: Promise<ProviderConnectionInfo[]> | null = null
   private checkOneInFlight = new Map<string, Promise<ProviderConnectionInfo>>()
   private probeQueueTail: Promise<void> = Promise.resolve()
+  /** Last settled (non-probing) result per harness, for change detection. */
+  private lastSettled = new Map<string, ProviderConnectionInfo>()
+  /** Fired when a probe changes a harness's install state (status/version). */
+  private readonly onStatusesChanged?: () => void
 
-  constructor() {
+  constructor(onStatusesChanged?: () => void) {
+    this.onStatusesChanged = onStatusesChanged
     for (const harness of listHarnesses()) {
       this.statuses.set(harness.id, {
         id: harness.id,
@@ -141,6 +146,7 @@ export class ProviderConnectionService {
         this.probe(definition, runtimes.get(definition.command) ?? null)
       )
       this.statuses.set(result.id, result)
+      this.noteSettled(result)
       if ((index + 1) % PROBE_BROADCAST_BATCH_SIZE === 0 || index === harnesses.length - 1) {
         this.broadcast()
       }
@@ -156,6 +162,24 @@ export class ProviderConnectionService {
   private update(info: ProviderConnectionInfo): void {
     this.statuses.set(info.id, info)
     this.broadcast()
+    this.noteSettled(info)
+  }
+
+  /**
+   * Record a settled (non-probing) result and fire `onStatusesChanged` when the
+   * harness's install state or version differs from the last settled probe —
+   * e.g. pi was just installed or upgraded while the app is running.
+   */
+  private noteSettled(info: ProviderConnectionInfo): void {
+    if (info.status === 'checking' || info.status === 'idle') return
+    const settled = this.lastSettled.get(info.id)
+    this.lastSettled.set(info.id, info)
+    if (
+      settled &&
+      (settled.status !== info.status || (settled.version ?? '') !== (info.version ?? ''))
+    ) {
+      this.onStatusesChanged?.()
+    }
   }
 
   private broadcast(): void {

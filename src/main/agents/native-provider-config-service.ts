@@ -17,6 +17,17 @@ export function hasNativeProviderCatalog(harnessId: string): boolean {
   return NATIVE_HARNESSES.has(harnessId)
 }
 
+/**
+ * Provider ids the user configured natively in Pi's `~/.pi/agent/models.json` —
+ * explicit connect targets regardless of whether their entry carries an API
+ * key (keyless local servers are legitimate).
+ */
+export async function piNativeProviderIds(): Promise<Set<string>> {
+  const config = await readJsoncObject(PI_MODELS_PATH)
+  const providers = record(config['providers']) ?? {}
+  return new Set(Object.keys(providers))
+}
+
 /** Reads and surgically edits harness-owned custom provider catalogs. */
 export class NativeProviderConfigService {
   async listProviders(): Promise<BaseUrlProvider[]> {
