@@ -463,7 +463,7 @@
     search = ''
     harnessFilterOpen = false
     pickerListScrollTop = 0
-    activeRowKey = null
+    keyboardNavActive = false
   }
 
   function handleOpenChange(nextOpen: boolean): void {
@@ -528,12 +528,13 @@
 
   let pickerListScrollTop = $state(0)
   let pickerViewport = $state(240)
-  /** Row key the user last navigated to via keyboard, or hovered via an actual
-   *  pointer movement. Deliberately not driven by CSS `:hover`/`:focus`: those
-   *  are geometric and re-fire when the virtual list auto-scrolls a row under a
-   *  stationary cursor, which would silently move the highlight without the
-   *  user ever touching the mouse. */
-  let activeRowKey = $state<string | null>(null)
+  /** True right after an arrow-key press, until the mouse physically moves.
+   *  CSS `:hover` is geometric — it re-fires on whatever row ends up under a
+   *  stationary cursor once the virtual list auto-scrolls for keyboard nav.
+   *  While this is true, rows go pointer-events: none so a parked mouse can't
+   *  paint a stale `:hover`; a real `mousemove` clears it and hands control
+   *  straight back to the mouse. */
+  let keyboardNavActive = $state(false)
 
   /** Flatten every visible list section into positioned rows. */
   let pickerLayout = $derived.by(() => {
@@ -714,9 +715,14 @@
       pickerListScrollTop = node.scrollTop
     }
     node.addEventListener('scroll', onScroll, { passive: true })
+    const onMouseMove = (): void => {
+      if (keyboardNavActive) keyboardNavActive = false
+    }
+    node.addEventListener('mousemove', onMouseMove, { passive: true })
     return () => {
       resizeObserver.disconnect()
       node.removeEventListener('scroll', onScroll)
+      node.removeEventListener('mousemove', onMouseMove)
     }
   }
 
@@ -938,12 +944,10 @@
             onkeydown={(event: KeyboardEvent) => {
               if (event.key === 'ArrowDown') {
                 event.preventDefault()
+                keyboardNavActive = true
                 scrollPickerListTo(0)
-                activeRowKey = pickerModelKeys[0] ?? null
-                void tick().then(() => {
-                  const firstBtn = document.querySelector(`#${CSS.escape(listId)} .model-row-btn`)
-                  if (firstBtn instanceof HTMLElement) firstBtn.focus()
-                })
+                const firstBtn = document.querySelector(`#${CSS.escape(listId)} .model-row-btn`)
+                if (firstBtn instanceof HTMLElement) firstBtn.focus()
                 return
               }
               if (event.key === 'Escape') {
@@ -1254,19 +1258,12 @@
 {#snippet modelRow(entry: ModelEntry, rowKey: string, indent: boolean = false)}
   {@const key = modelKey(entry.provider.harnessId, entry.provider.id, entry.model.id)}
   {@const peak = peakHoursBadgeFor(entry.model.id)}
-  {@const active = activeRowKey === rowKey || isSelectedModel(entry)}
   <button
-    class={`model-row-btn flex w-full flex-col rounded-lg py-1.5 text-left transition-colors focus:outline-none ${indent ? 'pl-4 pr-2' : 'px-2'} ${active ? 'bg-elevated' : ''}`}
+    class={`model-row-btn flex w-full flex-col rounded-lg py-1.5 text-left transition-colors hover:bg-elevated focus:bg-elevated focus:outline-none ${indent ? 'pl-4 pr-2' : 'px-2'} ${isSelectedModel(entry) ? 'bg-elevated' : ''} ${keyboardNavActive ? 'pointer-events-none' : ''}`}
     title={`Use ${entry.model.name}`}
     data-model-id={entry.model.id}
     data-model-key={rowKey}
     onclick={() => choose(entry.provider.id, entry.model.id, entry.provider.harnessId)}
-    onpointermove={() => {
-      if (activeRowKey !== rowKey) activeRowKey = rowKey
-    }}
-    onfocus={() => {
-      activeRowKey = rowKey
-    }}
     onkeydown={(event: KeyboardEvent) => {
       if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
         event.preventDefault()
@@ -1277,8 +1274,8 @@
             ? Math.min(currentIndex + 1, pickerModelKeys.length - 1)
             : Math.max(currentIndex - 1, 0)
         if (targetIndex === currentIndex) return
+        keyboardNavActive = true
         const targetKey = pickerModelKeys[targetIndex]
-        activeRowKey = targetKey
         const targetItemIndex = pickerLayout.items.findIndex((item) => item.key === targetKey)
         if (targetItemIndex !== -1) {
           scrollPickerListTo(pickerLayout.offsets[targetItemIndex] - 60)
