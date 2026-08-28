@@ -203,21 +203,14 @@ export async function handleFatalStartupFailure(
 /**
  * Privacy-preserving process-wide crash diagnostics: route uncaught exceptions
  * and unhandled rejections through the Logger instead of letting Electron's
- * default dialog or a silent hang take over. An unhandled rejection is logged
- * but never fatal — a failed background operation (e.g. a model download
- * hitting ENOSPC) must never kill the whole app. An uncaught exception may
- * still exit, since it can leave the process in a corrupt state.
+ * default dialog or a silent hang take over. Neither is fatal: a failed
+ * background operation (e.g. a model download hitting ENOSPC) must never kill
+ * the whole app. Both are logged with full context so failures remain fully
+ * diagnosable; the app keeps running and the affected feature degrades.
  */
-export function installProcessCrashDiagnostics(
-  options: { exit?: (code: number) => void } = {}
-): void {
-  const exit = options.exit ?? ((code: number) => process.exit(code))
-
+export function installProcessCrashDiagnostics(): void {
   process.on('uncaughtException', (error: Error) => {
-    Logger.error('Uncaught exception', error)
-    void Logger.flush()
-      .catch(() => undefined)
-      .finally(() => exit(1))
+    Logger.error('Uncaught exception (non-fatal; the app keeps running)', error)
   })
 
   process.on('unhandledRejection', (reason: unknown) => {
