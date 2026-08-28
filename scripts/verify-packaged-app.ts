@@ -97,14 +97,18 @@ if (bundledModelWeight) {
 }
 
 if (target === 'mac') {
-  // MLX worker requires Swift 6.2; CI macOS runner has 5.10 - warn but don't fail
-  const hasMlxWorker = Boolean(findFileUnder(absArtifactDir, (entry) => entry === 'mlx-worker'))
-  const hasMlxMetallib = Boolean(findFileUnder(absArtifactDir, (entry) => entry === 'mlx.metallib'))
-  if (!hasMlxWorker) {
-    Logger.info('[verify-packaged-app] Apple Silicon MLX worker not found (Swift 6.2 required, runner has 5.10) - skipping')
-  }
-  if (!hasMlxMetallib) {
-    Logger.info('[verify-packaged-app] Apple Silicon MLX Metal library not found - skipping')
+  // Native speech workers are mandatory: a packaged mac build without them
+  // silently hides the mic and speaker buttons and flags installed models as
+  // downloadable (the capabilities probe fails and marks artifacts
+  // unavailable). Never ship one.
+  const speechWorkers: Array<[string, string]> = [
+    ['MLX speech worker', 'mlx-worker'],
+    ['MLX Metal library', 'mlx.metallib'],
+    ['Core ML speech worker', 'coreml-worker'],
+    ['native speech capture worker', 'speech-capture-worker']
+  ]
+  for (const [label, fileName] of speechWorkers) {
+    mustHave(label, Boolean(findFileUnder(absArtifactDir, (entry) => entry === fileName)))
   }
   mustHave('mac disk image', hasExtension('.dmg'))
   mustHave('mac zip artifact', hasExtension('.zip'))
