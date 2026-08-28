@@ -1,15 +1,17 @@
 import type { SpeechSegment } from './types'
 
 const MAX_SEGMENT_CHARACTERS = 480
-// Kokoro-class TTS engines reject any input beyond 510 tokenizer tokens. The
-// hard cap above bounds characters, but dense scripts (CJK) tokenize at roughly
-// one token per character and overflow well before it. Budget every segment
-// conservatively below the engine ceiling: CJK glyphs weigh 1.5 tokens each,
-// other non-ASCII scripts 0.6, ASCII prose about 0.3.
-const MAX_SEGMENT_TOKENS = 400
-const WIDE_TOKENS_PER_CHAR = 1.5
-const MIDDLE_TOKENS_PER_CHAR = 0.6
-const ASCII_TOKENS_PER_CHAR = 0.3
+// Kokoro-class TTS engines reject any input beyond 510 tokenizer tokens, and
+// that count is taken over the *phonemized* text: the engine maps every scalar
+// of its G2P output through the phoneme vocabulary. English phonemization is
+// roughly length-preserving (~1 token per character), spoken digits expand
+// heavily ("259" becomes "two hundred fifty-nine"), and CJK glyphs surface
+// several phonemes each. Weights below are calibrated against real engine
+// rejections (a 480-character technical segment was rejected at 579 tokens).
+const MAX_SEGMENT_TOKENS = 380
+const WIDE_TOKENS_PER_CHAR = 2.0
+const DIGIT_TOKENS_PER_CHAR = 6.0
+const DEFAULT_TOKENS_PER_CHAR = 1.0
 
 function inlineText(value: string): string {
   return value
@@ -23,6 +25,7 @@ function inlineText(value: string): string {
 }
 
 function charTokens(code: number): number {
+  if (code >= 0x30 && code <= 0x39) return DIGIT_TOKENS_PER_CHAR
   const wide =
     (code >= 0x1100 && code <= 0x11ff) ||
     (code >= 0x2e80 && code <= 0x9fff) ||
@@ -33,8 +36,7 @@ function charTokens(code: number): number {
     (code >= 0x1f300 && code <= 0x1faff) ||
     (code >= 0x30000 && code <= 0x3134f)
   if (wide) return WIDE_TOKENS_PER_CHAR
-  if (code >= 0x80) return MIDDLE_TOKENS_PER_CHAR
-  return ASCII_TOKENS_PER_CHAR
+  return DEFAULT_TOKENS_PER_CHAR
 }
 
 function estimatedTokens(value: string): number {
@@ -45,23 +47,24 @@ function estimatedTokens(value: string): number {
 
 /**
  * Blocks are packed from whole words so a segment boundary never cuts one in
- * half. Spaceless scripts (CJK) and pathological tokens (long URLs) have no
- * whitespace to split on, so anything longer than this is broken at CJK
- * punctuation first, then hard-split as a last resort.
+ * half. Long technical tokens (paths, URLs) break at their own separators so
+ * they stay pronounceable, spaceless scripts (CJK) have no such marks and are
+ * broken at CJK punctuation first, then hard-split as a last resort.
  */
 const LONG_UNIT_CHARACTERS = 24
 const UNIT_BREAK_AFTER = /[.,;:!?)\]】」』。，、；：！？…〕〗〙〛]/u
+const UNIT_SEPARATOR_AFTER = /(?<=[/._\-=&:~+@#\\|<>])/u
 
 function splitUnits(value: string): string[] {
   const units: string[] = []
-  for (const word of value.split(/\s+/u)) {
-    if (!word) continue
-    if (word.length <= LONG_UNIT_CHARACTERS) {
-      units.push(word)
-      continue
+  const pushPiece = (piece: string): void => {
+    if (!piece) return
+    if (piece.length <= LONG_UNIT_CHARACTERS) {
+      units.push(piece)
+      return
     }
     let current = ''
-    for (const char of word) {
+    for (const char of piece) {
       current += char
       if (current.length >= LONG_UNIT_CHARACTERS || UNIT_BREAK_AFTER.test(char)) {
         units.push(current)
@@ -69,6 +72,14 @@ function splitUnits(value: string): string[] {
       }
     }
     if (current) units.push(current)
+  }
+  for (const word of value.split(/\s+/u)) {
+    if (!word) continue
+    if (word.length <= LONG_UNIT_CHARACTERS) {
+      units.push(word)
+      continue
+    }
+    for (const piece of word.split(UNIT_SEPARATOR_AFTER)) pushPiece(piece)
   }
   return units
 }
