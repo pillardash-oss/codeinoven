@@ -15,7 +15,10 @@ import type {
 } from '../../lib/types'
 import { normalizeAgentQuestions } from '../../lib/agent-interactions'
 import { buildProcessEnvironment } from './cli-environment'
-import { hasNativeProviderCatalog, piNativeProviderIds } from '../agents/native-provider-config-service'
+import {
+  hasNativeProviderCatalog,
+  piNativeProviderIds
+} from '../agents/native-provider-config-service'
 import { PiAuthConfigService, piAuthFileIo } from '../providers/pi-auth-config'
 import type { BaseUrlProviderService } from '../providers/base-url-provider-service'
 import type { SecretVault } from '../storage/secret-vault'
