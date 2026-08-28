@@ -54,7 +54,7 @@ interface SherpaModule {
   OfflineRecognizer: SherpaRecognizerConstructor
   OfflinePunctuation: SherpaPunctuationConstructor
   OfflineTts: SherpaTtsConstructor
-  readWave: (path: string) => SherpaWave
+  readWave: (path: string, enableExternalBuffer: boolean) => SherpaWave
   writeWave: (path: string, wave: SherpaWave) => void
 }
 
@@ -124,7 +124,7 @@ async function transcribe(
   const recognizer = await recognizerFor(request.modelDirectory, request.modelFamily)
   try {
     const stream = recognizer.createStream()
-    stream.acceptWaveform(runtime.readWave(wavePath))
+    stream.acceptWaveform(runtime.readWave(wavePath, false))
     const result = await recognizer.decodeAsync(stream)
     return result.text?.trim() ?? ''
   } finally {
@@ -256,7 +256,7 @@ async function synthesize(
     text: request.text,
     sid: request.speakerId,
     speed: 1,
-    enableExternalBuffer: true
+    enableExternalBuffer: false
   })
   runtime.writeWave(request.outputPath, audio)
 }
