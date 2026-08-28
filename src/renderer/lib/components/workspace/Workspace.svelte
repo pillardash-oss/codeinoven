@@ -1962,18 +1962,21 @@
         })
       })
 
-      // Preserve the initial empty-state behavior previously triggered by App.
-      // A restored thread remains selected and does not create a new one.
+      // Never auto-create a chat, thread, or project on startup — the user
+      // (or the onboarding tour) initiates that. When no thread was restored
+      // from the recovery snapshot, reopen the most recent thread of the
+      // current mode if one exists; otherwise show the empty state.
       if (active && !workspaceState.selectedThread) {
-        if (mode === 'chats') {
-          workspaceState.requestNewChat()
-        } else if (
-          workspaceState.activeProject &&
-          workspaceState.activeProject.id !== INBOX_PROJECT_ID
-        ) {
-          workspaceState.requestCreateThread(scopeState.sidebarContext?.bucketId)
-        } else {
-          workspaceState.requestAddProject()
+        const wantChat = mode === 'chats'
+        const last = allThreads.find(
+          (t) => !t.archived && (t.projectId === INBOX_PROJECT_ID) === wantChat
+        )
+        if (last) {
+          workspaceState.openThread(
+            last,
+            projectList.find((candidate) => candidate.id === last.projectId) ?? null
+          )
+          void scopeState.ensureBoardLoaded(last.projectId)
         }
       }
     } catch {
