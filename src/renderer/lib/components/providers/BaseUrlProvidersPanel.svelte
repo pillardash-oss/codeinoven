@@ -149,8 +149,8 @@
   <div class="flex items-start justify-between">
     <div>
       <p class="text-xs text-muted">
-        Add custom OpenAI-compatible providers by base URL. Models appear in the picker after the
-        next agent turn.
+        Add custom OpenAI-compatible providers by base URL. Models are ready in the picker as soon
+        as you save.
       </p>
     </div>
     <button

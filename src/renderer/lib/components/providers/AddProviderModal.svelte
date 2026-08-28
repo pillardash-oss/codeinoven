@@ -480,7 +480,7 @@
       {#if tab === 'custom'}
         <p class="min-w-0 flex-1 text-[11px] text-dimmed">
           Add any OpenAI-compatible endpoint by base URL — Ollama, LM Studio, llama.cpp, or a hosted
-          gateway. Models appear in the picker after the next agent turn.
+          gateway. Models are ready in the picker as soon as you save.
         </p>
       {:else if antigravityConnected}
         <p class="min-w-0 flex-1 text-[11px] text-dimmed">
