@@ -601,10 +601,45 @@ export class GitService {
     return this.enqueue(projectPath, async () => {
       const directory = await this.repo(projectPath)
       await this.wrapError(projectPath, 'mutation', async () => {
-        await this.client(directory).deleteLocalBranch(name, force)
+        const git = this.client(directory)
+        await this.removeWorktreesForBranch(git, name)
+        await git.deleteLocalBranch(name, force)
       })
       return this.readStatus(directory)
     })
+  }
+
+  /**
+   * Git refuses `branch -d` while the branch is checked out in any worktree.
+   * Remove clean owning worktrees and prune stale registrations so the delete
+   * succeeds; a dirty live worktree keeps blocking and surfaces git's error.
+   */
+  private async removeWorktreesForBranch(git: SimpleGit, name: string): Promise<void> {
+    let listing: string
+    try {
+      listing = await git.raw(['worktree', 'list', '--porcelain'])
+    } catch {
+      return
+    }
+    const target = `refs/heads/${name}`
+    const lines = listing.split('\n')
+    const paths: string[] = []
+    for (let index = 0; index < lines.length; index += 1) {
+      if (!lines[index].startsWith('worktree ')) continue
+      const path = lines[index].slice('worktree '.length)
+      const branch = lines
+        .slice(index + 1, index + 5)
+        .find((line) => line.startsWith('branch '))
+        ?.slice('branch '.length)
+      if (branch === target) paths.push(path)
+    }
+    for (const path of paths) {
+      await git.raw(['worktree', 'remove', path]).catch(async () => {
+        // Path already gone or dirty — prune clears stale registrations; a
+        // live dirty worktree stays registered and the branch delete reports it.
+        await git.raw(['worktree', 'prune']).catch(() => undefined)
+      })
+    }
   }
 
   /** `offset` skips the N newest commits — pages in older history for infinite scroll. */
