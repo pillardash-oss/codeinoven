@@ -3338,8 +3338,11 @@
           <!-- Pinned threads above everything -->
           <PinnedSection
             threads={pinnedThreads}
-            projects={visibleProjects}
             selectedThreadId={selectedThread?.id ?? null}
+            getProjectIconUrl={(projectId) => {
+              const project = projects.find((p) => p.id === projectId)
+              return project ? getProjectIcon(project, projectIcons.get(project.id)) : null
+            }}
             onOpen={openThread}
             onRename={handleRename}
             onTogglePin={togglePin}
