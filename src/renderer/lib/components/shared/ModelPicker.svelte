@@ -1259,7 +1259,7 @@
   {@const key = modelKey(entry.provider.harnessId, entry.provider.id, entry.model.id)}
   {@const peak = peakHoursBadgeFor(entry.model.id)}
   <button
-    class={`model-row-btn flex w-full flex-col rounded-lg py-1.5 text-left transition-colors hover:bg-elevated focus:bg-elevated focus:outline-none ${indent ? 'pl-4 pr-2' : 'px-2'} ${isSelectedModel(entry) ? 'bg-elevated' : ''} ${keyboardNavActive ? 'pointer-events-none' : ''}`}
+    class={`model-row-btn flex w-full flex-col rounded-lg border-l-2 border-transparent py-1.5 text-left transition-colors hover:bg-elevated focus:border-primary focus:bg-elevated focus:outline-none ${indent ? 'pl-3.5 pr-2' : 'pl-1.5 pr-2'} ${isSelectedModel(entry) ? 'bg-elevated' : ''} ${keyboardNavActive ? 'pointer-events-none' : ''}`}
     title={`Use ${entry.model.name}`}
     data-model-id={entry.model.id}
     data-model-key={rowKey}
