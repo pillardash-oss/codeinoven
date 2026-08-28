@@ -82,6 +82,14 @@
     'ultra'
   ]
 
+  /** The main-process provider service persists at most 128 models per provider. */
+  const MAX_DISCOVERED_MODELS_TO_SAVE = 128
+
+  /** Mirror of the service's SAFE_MODEL_ID: ids routinely include slashes/at-signs
+   *  (LM Studio `org/model`, HF `org/model@precision`) — anything else would
+   *  make the whole save fail main-process validation, so it is skipped here. */
+  const SAFE_DISCOVERED_MODEL_ID = /^[a-zA-Z0-9@][a-zA-Z0-9._:/@+-]*$/u
+
   interface QuickPreset {
     name: string
     baseURL: string
@@ -175,6 +183,45 @@
     } finally {
       discoveringModels = false
     }
+  }
+
+  /** Persisted model rows for the provider, ready to hand to the save flow.
+   *  When the user defined no models of their own, every model discovered from
+   *  `${baseURL}/models` becomes a provider model so the provider is usable the
+   *  moment it is saved — the picker cache already overlays saved providers. */
+  async function resolveModelsToSave(
+    headers: Record<string, string> | undefined
+  ): Promise<Array<Omit<BaseUrlProviderModel, 'id' | 'providerId'> & { id?: string }>> {
+    if (draft.models.length > 0) return buildModels()
+    const baseURL = draft.baseURL.trim()
+    if (!baseURL) return []
+    let models = discoveredModels
+    if (models.length === 0) {
+      // Fresh discovery (never the 24h cache) so a just-saved provider never
+      // inherits a stale list from an earlier base-URL probe.
+      try {
+        models = await baseUrlProviderStore.fetchModels({
+          baseURL,
+          ...(draft.id ? { id: draft.id, harnessId: draft.harnessIds[0] } : {}),
+          ...(draft.apiKey ? { apiKey: draft.apiKey } : {}),
+          ...(headers ? { headers } : {}),
+          force: true
+        })
+        discoveredModels = models
+      } catch {
+        // Unreachable endpoint — save proceeds with no models; the picker
+        // still shows the provider and the editor keeps its error surfaced.
+        return []
+      }
+    }
+    return models
+      .filter((model) => SAFE_DISCOVERED_MODEL_ID.test(model.id))
+      .slice(0, MAX_DISCOVERED_MODELS_TO_SAVE)
+      .map((model) => ({
+        id: model.id,
+        name: (model.name || model.id).slice(0, 256),
+        reasoning: false
+      }))
   }
 
   function addDiscoveredModel(model: DiscoveredBaseUrlModel): void {
@@ -343,8 +390,8 @@
       return
     }
     try {
-      const models = buildModels()
       const headers = parseHeaders(draft.headers)
+      const models = await resolveModelsToSave(headers)
       const currentHarnessIds = linkedProviders.map((p) => p.harnessId)
       const toKeep = draft.harnessIds.filter((id) => currentHarnessIds.includes(id))
       const toRemove = currentHarnessIds.filter((id) => !draft.harnessIds.includes(id))
@@ -698,7 +745,8 @@
       </div>
       {#if draft.models.length === 0}
         <p class="rounded-lg border border-dashed p-3 text-[11px] text-dimmed">
-          If no model is added, we will search for model entries using the /models route.
+          No models added. On save, we will fetch the model list from the /models route and add
+          every model found.
         </p>
         {#if discoverError}
           <p class="text-[11px] text-danger">{discoverError}</p>

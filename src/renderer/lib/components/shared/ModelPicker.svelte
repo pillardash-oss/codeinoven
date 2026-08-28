@@ -846,7 +846,11 @@
       >
         {#if selectedProvider}
           <span class="flex shrink-0 items-center gap-0.5">
-            {@render modelVendorIcons(selectedProvider.harnessId, selectedProvider.name)}
+            {@render modelVendorIcons(
+              selectedProvider.harnessId,
+              selectedProvider.name,
+              selectedProvider.id
+            )}
           </span>
         {:else if selectedHarnessIcon}
           {@render harnessIcon(harnessId)}
@@ -1144,10 +1148,10 @@
   {/if}
 {/snippet}
 
-{#snippet modelVendorIcons(harnessId: string, providerName: string)}
+{#snippet modelVendorIcons(harnessId: string, providerName: string, providerId?: string)}
   {@render harnessIcon(harnessId)}
-  {#if !vendorMatches(harnessId, providerName)}
-    <VendorIcon name={providerName} size={12} />
+  {#if !vendorMatches(harnessId, providerId ?? providerName)}
+    <VendorIcon name={providerName} id={providerId} size={12} />
   {/if}
 {/snippet}
 
@@ -1193,7 +1197,7 @@
       size={11}
       class={`shrink-0 text-dimmed transition-transform ${collapsed ? '' : 'rotate-90'}`}
     />
-    <VendorIcon name={provider.name} size={14} />
+    <VendorIcon name={provider.name} id={provider.id} size={14} />
     <span class="text-[10px] font-semibold uppercase tracking-wide text-dimmed">
       {provider.name}
     </span>
@@ -1404,7 +1408,7 @@
       </span>
     </span>
     <span class="flex items-center gap-1 truncate text-[10px] text-dimmed">
-      {@render modelVendorIcons(entry.provider.harnessId, entry.provider.name)}
+      {@render modelVendorIcons(entry.provider.harnessId, entry.provider.name, entry.provider.id)}
       <span class="truncate">{entry.provider.name}</span>
     </span>
   </button>

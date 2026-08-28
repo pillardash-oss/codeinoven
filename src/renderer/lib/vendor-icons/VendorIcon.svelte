@@ -4,13 +4,17 @@
   interface Props {
     /** Vendor display name (e.g. "OpenAI", "Mistral AI"). */
     name: string
+    /** Vendor/provider id when known (e.g. "cio-my-provider"). Ids are tried
+     *  before the display name so custom CodeInOven providers always render
+     *  the CodeInOven mark regardless of their display name. */
+    id?: string
     /** Square icon edge in pixels. */
     size?: number
     class?: string
   }
 
-  let { name, size = 14, class: className = '' }: Props = $props()
-  let svg = $derived(getVendorIconSvg(name))
+  let { name, id, size = 14, class: className = '' }: Props = $props()
+  let svg = $derived(getVendorIconSvg(id) ?? getVendorIconSvg(name))
   let monogram = $derived(name.trim().charAt(0).toUpperCase() || '?')
 </script>
 

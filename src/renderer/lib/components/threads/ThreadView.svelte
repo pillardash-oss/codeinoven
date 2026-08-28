@@ -8218,6 +8218,7 @@
             null)
           : null,
       providerName: provider?.name ?? null,
+      providerId: provider?.id ?? null,
       harnessId: selection.harnessId || null,
       harnessName: selection.harnessId
         ? (getAgentIcon(selection.harnessId)?.name ?? selection.harnessId)
@@ -9306,6 +9307,9 @@
                         providerName={useLiveAttribution
                           ? currentWorkingTraceAttribution.providerName
                           : provider?.name}
+                        providerId={useLiveAttribution
+                          ? currentWorkingTraceAttribution.providerId
+                          : provider?.id}
                         harnessId={useLiveAttribution
                           ? currentWorkingTraceAttribution.harnessId
                           : harnessId}
@@ -9521,7 +9525,11 @@
                               {#if modelLabel}
                                 <span class="text-[10px] text-dimmed">·</span>
                                 <span class="flex items-center gap-1 text-[10px] text-dimmed">
-                                  <VendorIcon name={provider?.name ?? modelLabel} size={12} />
+                                  <VendorIcon
+                                    name={provider?.name ?? modelLabel}
+                                    id={provider?.id}
+                                    size={12}
+                                  />
                                   {modelLabel}
                                   {#if fastVariant}
                                     <Zap

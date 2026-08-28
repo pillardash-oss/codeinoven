@@ -213,7 +213,12 @@
       <div class="flex items-baseline justify-between gap-3 py-0.5 text-[10px]">
         <span class="flex min-w-0 items-center gap-1.5">
           {#if model.providerId}
-            <VendorIcon name={model.providerId} size={11} class="shrink-0 text-dimmed" />
+            <VendorIcon
+              name={model.providerId}
+              id={model.providerId}
+              size={11}
+              class="shrink-0 text-dimmed"
+            />
           {/if}
           <span class="truncate font-medium text-foreground">{model.modelId}</span>
           {#if model.thinkingLevel}

@@ -49,6 +49,7 @@
     /** Thinking level used for this trace's turn, when the model reasons. */
     thinkingLevel?: ThinkingLevel | null
     providerName?: string | null
+    providerId?: string | null
     harnessId?: string | null
     harnessName?: string | null
     isFast?: boolean
@@ -74,6 +75,7 @@
     modelLabel = null,
     thinkingLevel = null,
     providerName,
+    providerId,
     harnessId,
     harnessName,
     isFast = false,
@@ -465,7 +467,14 @@
             {onCiteFile}
           />
         {:else if part.type === 'tool'}
-          <ToolCard {part} live={liveActivity} {projectId} {threadId} {checkpointId} {checkpointPaths} />
+          <ToolCard
+            {part}
+            live={liveActivity}
+            {projectId}
+            {threadId}
+            {checkpointId}
+            {checkpointPaths}
+          />
         {:else if part.type === 'subagent'}
           <SubagentCard {part} live={liveActivity} onOpen={onOpenSubagent} />
         {:else if part.type === 'text'}
@@ -580,7 +589,11 @@
                 <span>·</span>
               {/if}
               <span class="flex shrink-0 items-center gap-1">
-                <VendorIcon name={providerName ?? modelLabel} size={11} />
+                <VendorIcon
+                  name={providerName ?? modelLabel}
+                  id={providerId ?? undefined}
+                  size={11}
+                />
                 <span class="truncate">{modelLabel}</span>
               </span>
               {#if isFast}
