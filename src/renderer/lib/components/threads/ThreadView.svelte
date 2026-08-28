@@ -9435,8 +9435,8 @@
                       {#if !busy || !isLatest}
                         <!-- Footer shown once per turn on the last assistant message -->
                         <div class="mt-1 flex flex-col">
-                          <div class="flex items-center gap-1.5">
-                            <div class="flex items-center gap-0.5">
+                          <div class="flex flex-wrap items-center gap-x-1.5 gap-y-0.5">
+                            <div class="flex shrink-0 items-center gap-0.5">
                               <button
                                 class="rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
                                 aria-label="Copy message"
@@ -9508,7 +9508,7 @@
                               </button>
                             </div>
                             <div
-                              class="pointer-events-none flex items-center gap-1.5 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100"
+                              class="pointer-events-none flex shrink-0 flex-wrap items-center gap-x-1.5 gap-y-0.5 whitespace-nowrap opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100"
                             >
                               <span class="flex items-center gap-1 text-[10px] text-dimmed">
                                 <AgentIcon agentId={messageHarnessId(msg)} size={14} />
