@@ -63,11 +63,12 @@
       if (group) group.push(candidate)
       else groups.set(candidate.id, [candidate])
     }
-    // Newest provider first — adding one at the bottom of a long list is easy to miss.
+    // Most recently updated first — adding or editing one at the bottom of a
+    // long list is easy to miss, and a saved edit should resurface it too.
     return [...groups.values()].sort(
       (left, right) =>
-        Math.max(...right.map((provider) => provider.createdAt)) -
-        Math.max(...left.map((provider) => provider.createdAt))
+        Math.max(...right.map((provider) => provider.updatedAt)) -
+        Math.max(...left.map((provider) => provider.updatedAt))
     )
   })
 
