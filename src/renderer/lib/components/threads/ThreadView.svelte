@@ -53,6 +53,7 @@
   import VoiceInputButton from '../speech/VoiceInputButton.svelte'
   import SpeechPlaybackButton from '../speech/SpeechPlaybackButton.svelte'
   import { speechController } from '../../speech/speech-controller.svelte'
+  import { spokenWordOffset } from '../../speech/read-along'
   import WorkingTrace from './WorkingTrace.svelte'
   import FindInSurface from './FindInSurface.svelte'
   import ContinueInProjectModal from './ContinueInProjectModal.svelte'
@@ -351,11 +352,7 @@
    *  so the bottom working placeholder keeps showing instead of a blank tail. */
   let latestTurnRenderableParts = $derived.by(() => {
     const lastMessage = messages[messages.length - 1]
-    if (
-      conversationBusy &&
-      lastMessage?.role === 'user' &&
-      !isActivityOnlyUserMessage(lastMessage)
-    )
+    if (conversationBusy && lastMessage?.role === 'user' && !isActivityOnlyUserMessage(lastMessage))
       return []
     if (latestTurnInfo.startIndex === -1) return []
     return getTurnWorkingParts(latestTurnInfo.startIndex, conversationBusy && latestTurnInfo.active)
@@ -9386,15 +9383,27 @@
                           {#if isReadingActiveLine}
                             {@const segs = speechController.activeSegments!}
                             {@const activeIdx = speechController.visibleSegmentIndex}
+                            {@const spokenProgress = speechController.activeSegmentProgress}
                             <div class="flex flex-col gap-1.5">
                               {#each segs as seg, i (seg.id)}
+                                {@const spokenOffset =
+                                  i === activeIdx ? spokenWordOffset(seg.text, spokenProgress) : -1}
                                 <div
                                   class={i === activeIdx
                                     ? 'rounded-md border border-dashed border-info/40 bg-info/5 px-2.5 py-1.5 transition-colors'
                                     : 'px-2.5 py-1 opacity-80'}
                                   data-speech-line={i === activeIdx ? 'active' : undefined}
                                 >
-                                  <span class="leading-relaxed">{seg.text}</span>
+                                  <span class="leading-relaxed">
+                                    {#if spokenOffset > 0}
+                                      <span
+                                        class="rounded-sm bg-info/20 px-0.5 box-decoration-clone"
+                                        >{seg.text.slice(0, spokenOffset)}</span
+                                      >{seg.text.slice(spokenOffset)}
+                                    {:else}
+                                      {seg.text}
+                                    {/if}
+                                  </span>
                                 </div>
                               {/each}
                             </div>

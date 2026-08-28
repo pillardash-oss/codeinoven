@@ -149,6 +149,26 @@ class SpeechController {
   get knownPlaybackDurationSeconds(): number {
     return this.knownDurationSeconds
   }
+  /**
+   * Fraction (0..1) of the active block already spoken, for word-level
+   * read-along highlighting. Reactive through the `elapsedSeconds` mirror,
+   * which the segment audio's timeupdate events refresh several times a
+   * second — plenty for advancing a whole-word highlight.
+   */
+  get activeSegmentProgress(): number {
+    const current = this.playback
+    if (!('segmentIndex' in current) || (current.state !== 'playing' && current.state !== 'paused'))
+      return 0
+    const playback = this.activePlayback
+    if (!playback) return 0
+    const index = current.segmentIndex
+    let prefix = 0
+    for (let i = 0; i < index; i += 1) prefix += this.segmentSeconds(playback, i)
+    const span = this.segmentSeconds(playback, index)
+    if (!(span > 0)) return 0
+    const within = this.elapsedSeconds - prefix
+    return Math.min(1, Math.max(0, within / span))
+  }
   /** Estimated duration of the entire readable block; the slider's full range. */
   get estimatedTotalDurationSeconds(): number {
     const playback = this.activePlayback

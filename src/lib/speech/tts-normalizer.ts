@@ -43,58 +43,62 @@ function estimatedTokens(value: string): number {
   return tokens
 }
 
-/** Splits a single over-budget piece into chunks that respect both budgets. */
-function chunkWithinBudgets(value: string): string[] {
-  const chunks: string[] = []
+/**
+ * Blocks are packed from whole words so a segment boundary never cuts one in
+ * half. Spaceless scripts (CJK) and pathological tokens (long URLs) have no
+ * whitespace to split on, so anything longer than this is broken at CJK
+ * punctuation first, then hard-split as a last resort.
+ */
+const LONG_UNIT_CHARACTERS = 24
+const UNIT_BREAK_AFTER = /[.,;:!?)\]】」』。，、；：！？…〕〗〙〛]/u
+
+function splitUnits(value: string): string[] {
+  const units: string[] = []
+  for (const word of value.split(/\s+/u)) {
+    if (!word) continue
+    if (word.length <= LONG_UNIT_CHARACTERS) {
+      units.push(word)
+      continue
+    }
+    let current = ''
+    for (const char of word) {
+      current += char
+      if (current.length >= LONG_UNIT_CHARACTERS || UNIT_BREAK_AFTER.test(char)) {
+        units.push(current)
+        current = ''
+      }
+    }
+    if (current) units.push(current)
+  }
+  return units
+}
+
+/** Greedily packs whole-word units into segments under both budgets. */
+function packUnits(units: string[]): string[] {
+  const segments: string[] = []
   let current = ''
   let currentTokens = 0
-  for (const char of value) {
-    const weight = charTokens(char.codePointAt(0) ?? 0)
-    if (
-      current.length > 0 &&
-      (current.length + 1 > MAX_SEGMENT_CHARACTERS || currentTokens + weight > MAX_SEGMENT_TOKENS)
-    ) {
-      chunks.push(current)
-      current = ''
-      currentTokens = 0
+  for (const unit of units) {
+    const unitTokens = estimatedTokens(unit)
+    if (current) {
+      if (
+        current.length + 1 + unit.length > MAX_SEGMENT_CHARACTERS ||
+        currentTokens + 1 + unitTokens > MAX_SEGMENT_TOKENS
+      ) {
+        segments.push(current)
+        current = ''
+        currentTokens = 0
+      }
     }
-    current += char
-    currentTokens += weight
+    current = current ? `${current} ${unit}` : unit
+    currentTokens += unitTokens + 1
   }
-  if (current) chunks.push(current)
-  return chunks
+  if (current) segments.push(current)
+  return segments
 }
 
 function sentences(value: string): string[] {
-  const pieces = value.match(/[^.!?]+(?:[.!?]+|$)/gu) ?? [value]
-  const segments: string[] = []
-  let pending = ''
-  let pendingTokens = 0
-  const pushPending = (): void => {
-    if (!pending) return
-    segments.push(pending)
-    pending = ''
-    pendingTokens = 0
-  }
-  for (const piece of pieces.map((item) => item.trim()).filter(Boolean)) {
-    const pieceTokens = estimatedTokens(piece)
-    if (
-      pending &&
-      (pending.length + piece.length + 1 > MAX_SEGMENT_CHARACTERS ||
-        pendingTokens + pieceTokens + 1 > MAX_SEGMENT_TOKENS)
-    ) {
-      pushPending()
-    }
-    if (piece.length > MAX_SEGMENT_CHARACTERS || pieceTokens > MAX_SEGMENT_TOKENS) {
-      pushPending()
-      for (const chunk of chunkWithinBudgets(piece)) segments.push(chunk)
-      continue
-    }
-    pending = pending ? `${pending} ${piece}` : piece
-    pendingTokens += pieceTokens + 1
-  }
-  pushPending()
-  return segments
+  return packUnits(splitUnits(value))
 }
 
 /** Deterministic Markdown-to-speech normalization without rendering HTML. */
