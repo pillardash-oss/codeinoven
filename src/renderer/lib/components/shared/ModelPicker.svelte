@@ -1235,7 +1235,7 @@
             <GripVertical size={11} />
           </span>
         {/if}
-        {@render modelRow(item.entry, item.key, item.draggable)}
+        {@render modelRow(item.entry, item.key)}
         <div
           class="pointer-events-none absolute inset-x-0 top-0 h-0.5 transition-colors {favoriteDropTarget?.key ===
             key && favoriteDropTarget.position === 'before'
@@ -1255,11 +1255,11 @@
   {/if}
 {/snippet}
 
-{#snippet modelRow(entry: ModelEntry, rowKey: string, indent: boolean = false)}
+{#snippet modelRow(entry: ModelEntry, rowKey: string)}
   {@const key = modelKey(entry.provider.harnessId, entry.provider.id, entry.model.id)}
   {@const peak = peakHoursBadgeFor(entry.model.id)}
   <button
-    class={`model-row-btn flex w-full flex-col rounded-lg border-l-2 border-transparent py-1.5 text-left transition-colors hover:bg-elevated focus:border-foreground focus:bg-elevated focus:outline-none ${indent ? 'pl-3.5 pr-2' : 'pl-1.5 pr-2'} ${isSelectedModel(entry) ? 'bg-elevated' : ''} ${keyboardNavActive ? 'pointer-events-none' : ''}`}
+    class={`model-row-btn ml-4 flex w-[calc(100%-1rem)] flex-col rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-elevated focus:bg-elevated focus:outline-none ${isSelectedModel(entry) ? 'bg-elevated' : ''} ${keyboardNavActive ? 'pointer-events-none' : ''}`}
     title={`Use ${entry.model.name}`}
     data-model-id={entry.model.id}
     data-model-key={rowKey}
