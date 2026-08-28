@@ -868,6 +868,12 @@ export interface BaseUrlProviderCreateRequest {
   headers?: Record<string, string>
   models: Array<Omit<BaseUrlProviderModel, 'id' | 'providerId'> & { id?: string }>
   enabled?: boolean
+  /**
+   * Reuse this id instead of generating one. Lets the renderer link the same
+   * logical provider across multiple harnesses: every record sharing an id
+   * (regardless of harnessId) is treated as one linked provider.
+   */
+  id?: string
 }
 
 /** Renderer-safe update request. Omitted API key retains the current value. */

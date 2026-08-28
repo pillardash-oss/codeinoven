@@ -47,7 +47,10 @@
 
   interface ProviderDraft {
     id: string | null
-    harnessId: string
+    /** Harnesses this provider is linked to. Saving applies the shared fields
+     *  below to every one of them, creating/removing per-harness records as
+     *  the selection changes. */
+    harnessIds: string[]
     npm: string
     name: string
     baseURL: string
@@ -124,18 +127,33 @@
     )
   })
 
-  let draft = $state<ProviderDraft>(createDraft())
-  let apiKeyConfigured = $derived(
-    provider?.apiKeyConfigured === true || provider?.apiKeyRef !== undefined
+  /** Every persisted record sharing this provider's id — one per linked
+   *  harness. Empty in create mode. Fields are kept in sync across the group,
+   *  so any member's values are representative of the whole group. */
+  let linkedProviders = $derived(
+    provider ? baseUrlProviderStore.providers.filter((p) => p.id === provider.id) : []
   )
 
-  /** Seed the draft from the edited provider, or start blank for create mode.
-   * The component is mounted per-edit, so the initial prop value is authoritative. */
+  let draft = $state<ProviderDraft>(createDraft())
+  let apiKeyConfigured = $derived(
+    linkedProviders.some((p) => p.apiKeyConfigured === true || p.apiKeyRef !== undefined)
+  )
+  /** Newly-checked harnesses can't inherit a key they never had — the vault
+   *  only exposes ciphertext, so main can't silently copy it across. */
+  let addingHarnessWithoutKey = $derived(
+    apiKeyConfigured &&
+      !draft.apiKey &&
+      draft.harnessIds.some((id) => !linkedProviders.some((p) => p.harnessId === id))
+  )
+
+  /** Seed the draft from the edited provider's linked group, or start blank
+   * for create mode. The component is mounted per-edit, so the initial prop
+   * value is authoritative. */
   function createDraft(): ProviderDraft {
     if (provider) {
       return {
         id: provider.id,
-        harnessId: provider.harnessId,
+        harnessIds: linkedProviders.map((p) => p.harnessId),
         npm: provider.npm,
         name: provider.name,
         baseURL: provider.baseURL,
@@ -178,9 +196,11 @@
   function emptyDraft(): ProviderDraft {
     return {
       id: null,
-      harnessId: availableHarnesses.some((harness) => harness.id === defaultHarnessId)
-        ? defaultHarnessId
-        : (availableHarnesses[0]?.id ?? 'opencode'),
+      harnessIds: [
+        availableHarnesses.some((harness) => harness.id === defaultHarnessId)
+          ? defaultHarnessId
+          : (availableHarnesses[0]?.id ?? 'opencode')
+      ],
       npm: NPM_OPTIONS[0].value,
       name: '',
       baseURL: '',
@@ -192,10 +212,20 @@
     }
   }
 
+  /** Toggle a harness in or out of the linked set. At least one must stay selected. */
+  function toggleHarness(id: string): void {
+    if (draft.harnessIds.includes(id)) {
+      if (draft.harnessIds.length === 1) return
+      draft.harnessIds = draft.harnessIds.filter((harnessId) => harnessId !== id)
+    } else {
+      draft.harnessIds = [...draft.harnessIds, id]
+    }
+  }
+
   function applyPreset(preset: QuickPreset): void {
-    const harnessId = draft.harnessId
+    const harnessIds = draft.harnessIds
     draft = emptyDraft()
-    draft.harnessId = harnessId
+    draft.harnessIds = harnessIds
     draft.name = preset.name
     draft.baseURL = preset.baseURL
     draft.npm = preset.npm
@@ -257,13 +287,30 @@
     })
   }
 
+  /**
+   * Applies the draft to every selected harness: updates records already
+   * linked, deletes ones the user unchecked, and creates new ones for
+   * newly-checked harnesses — all sharing the same provider id so they stay
+   * linked. A brand-new provider seeds the id from its first created record.
+   */
   async function save(event: SubmitEvent): Promise<void> {
     event.preventDefault()
+    if (draft.harnessIds.length === 0) {
+      toast.error('Select at least one harness.')
+      return
+    }
     try {
       const models = buildModels()
       const headers = parseHeaders(draft.headers)
-      let saved: BaseUrlProvider
-      if (draft.id) {
+      const currentHarnessIds = linkedProviders.map((p) => p.harnessId)
+      const toKeep = draft.harnessIds.filter((id) => currentHarnessIds.includes(id))
+      const toRemove = currentHarnessIds.filter((id) => !draft.harnessIds.includes(id))
+      const toAdd = draft.harnessIds.filter((id) => !currentHarnessIds.includes(id))
+
+      let groupId = draft.id ?? undefined
+      let saved: BaseUrlProvider | undefined
+
+      if (groupId) {
         const patch: BaseUrlProviderUpdateRequest = {
           npm: draft.npm,
           name: draft.name.trim(),
@@ -274,20 +321,31 @@
           ...(draft.removeApiKey ? { removeApiKey: true } : {}),
           ...(draft.apiKey ? { apiKey: draft.apiKey } : {})
         }
-        saved = await baseUrlProviderStore.update(draft.harnessId, draft.id, patch)
-      } else {
+        for (const harnessId of toKeep) {
+          saved = await baseUrlProviderStore.update(harnessId, groupId, patch)
+        }
+        for (const harnessId of toRemove) {
+          await baseUrlProviderStore.remove(harnessId, groupId)
+        }
+      }
+
+      for (const harnessId of toAdd) {
         const input: BaseUrlProviderCreateRequest = {
-          harnessId: draft.harnessId,
+          harnessId,
           npm: draft.npm,
           name: draft.name.trim(),
           baseURL: draft.baseURL.trim(),
           models,
           enabled: draft.enabled,
           ...(headers === undefined ? {} : { headers }),
-          ...(draft.apiKey ? { apiKey: draft.apiKey } : {})
+          ...(draft.apiKey ? { apiKey: draft.apiKey } : {}),
+          ...(groupId ? { id: groupId } : {})
         }
         saved = await baseUrlProviderStore.create(input)
+        groupId = saved.id
       }
+
+      if (!saved) throw new Error('No harness selected to save.')
       toast.success(draft.id ? 'Provider updated.' : 'Provider created.')
       onSaved(saved)
     } catch (saveError) {
@@ -310,11 +368,12 @@
     }
   }
 
-  /** Copy the whole provider, resolving the vaulted API key in main for saved providers. */
+  /** Copy the whole provider, resolving the vaulted API key in main for saved providers.
+   *  For a multi-harness link, the first selected harness's stored key is used. */
   async function copyProviderDraft(): Promise<void> {
     try {
       const request: BaseUrlProviderCopyClipboardRequest = {
-        harnessId: draft.harnessId,
+        harnessId: draft.harnessIds[0],
         ...(draft.id ? { id: draft.id } : {}),
         npm: draft.npm,
         name: draft.name,
@@ -331,14 +390,13 @@
     }
   }
 
-  /** Overwrite the draft from a copied provider, keeping the current form's harness. */
+  /** Overwrite the draft from a copied provider, keeping the current form's harnesses. */
   async function pasteProviderFromClipboard(): Promise<void> {
     try {
       const text = await invoke('clipboard:readText')
       const provider = parseProviderClipboard(text)
       draft = {
         ...draft,
-        harnessId: draft.harnessId,
         npm: provider.npm,
         name: provider.name,
         baseURL: provider.baseURL,
@@ -416,13 +474,23 @@
 
   <form id="base-url-provider-form" class="space-y-4" onsubmit={save}>
     <fieldset class="space-y-1.5 text-xs font-medium">
-      <legend>Harness</legend>
+      <legend>Harnesses</legend>
+      <p class="text-[11px] font-normal text-dimmed">
+        Select every harness that should offer this provider. Saving applies your changes to all of
+        them.
+      </p>
       <HarnessToggleGroup
         options={availableHarnesses.map((harness) => ({ id: harness.id, name: harness.name }))}
-        value={draft.harnessId}
-        disabled={provider !== null}
-        onchange={(id: string) => (draft.harnessId = id)}
+        value={draft.harnessIds}
+        disabled={baseUrlProviderStore.saving}
+        onToggle={toggleHarness}
       />
+      {#if addingHarnessWithoutKey}
+        <p class="text-[11px] text-warning">
+          Newly-added harnesses won't get the stored API key — re-enter it below to apply it there
+          too.
+        </p>
+      {/if}
     </fieldset>
 
     <div class="space-y-1.5">

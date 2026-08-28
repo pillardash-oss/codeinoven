@@ -22,7 +22,8 @@ const CREATE_FIELDS = new Set([
   'apiKey',
   'headers',
   'models',
-  'enabled'
+  'enabled',
+  'id'
 ])
 const UPDATE_FIELDS = new Set([
   'npm',
@@ -65,7 +66,8 @@ export function registerBaseUrlProviderIpc(
         ...(apiKeyRef === undefined ? {} : { apiKeyRef }),
         headers: input.headers,
         models: input.models,
-        ...(input.enabled === undefined ? {} : { enabled: input.enabled })
+        ...(input.enabled === undefined ? {} : { enabled: input.enabled }),
+        ...(input.id === undefined ? {} : { id: input.id })
       } satisfies BaseUrlProviderCreateRequest)
     } catch (error) {
       if (apiKeyRef) await vault.remove(apiKeyRef)
@@ -166,6 +168,8 @@ interface ParsedCreateRequest {
   headers?: Record<string, string>
   models: Array<Omit<BaseUrlProviderModel, 'id' | 'providerId'> & { id?: string }>
   enabled?: boolean
+  /** Reuses an existing provider id to link this record to sibling harnesses. */
+  id?: string
 }
 
 interface ParsedUpdateRequest {
@@ -192,7 +196,10 @@ function parseCreateRequest(value: unknown): ParsedCreateRequest {
       : { apiKey: boundedStr(raw['apiKey'], 'API key', 1, 8_192) }),
     headers: parseHeaders(raw['headers']),
     models: parseModels(raw['models']),
-    ...(raw['enabled'] === undefined ? {} : { enabled: asBoolean(raw['enabled'], 'enabled') })
+    ...(raw['enabled'] === undefined ? {} : { enabled: asBoolean(raw['enabled'], 'enabled') }),
+    ...(raw['id'] === undefined
+      ? {}
+      : { id: validateEntityId(raw['id'], 'Base URL provider ID', 256) })
   }
 }
 

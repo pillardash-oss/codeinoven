@@ -534,11 +534,17 @@ function parseDefaultThinkingLevel(value: unknown): BaseUrlProviderModel['defaul
 
 // ─── Primitives ──────────────────────────────────────────────────────────────
 
-function assertUniqueIds(values: Array<{ id: string }>, label: string): void {
-  const ids = new Set<string>()
+/**
+ * Ids are unique per harness, not globally — linking the same provider
+ * across harnesses (multi-harness base URL providers) intentionally reuses
+ * one id across several `harnessId` records.
+ */
+function assertUniqueIds(values: Array<{ id: string; harnessId: string }>, label: string): void {
+  const seen = new Set<string>()
   for (const value of values) {
-    if (ids.has(value.id)) throw new Error(`${label} store contains duplicate ID: ${value.id}`)
-    ids.add(value.id)
+    const key = `${value.harnessId}:${value.id}`
+    if (seen.has(key)) throw new Error(`${label} store contains duplicate ID: ${value.id}`)
+    seen.add(key)
   }
 }
 
