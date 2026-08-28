@@ -375,7 +375,7 @@ export class UtilityOrchestrationService {
       id,
       resolvedUtilities: [...always, gateway],
       instructions: hasOnDemand
-        ? `A minimal app gateway is available. When you need a skill, MCP, utility, or other capability that is not directly available in this session, use ${UTILITY_SEARCH_TOOL_NAME} to discover it. If you already know an eligible utility, activate it directly with ${UTILITY_ACTIVATE_TOOL_NAME}, then use ${UTILITY_INVOKE_TOOL_NAME}. When you search, the result reports an explicit \`notFound\` boolean: only when it is true may you conclude that the capability does not exist in this session. Activated utilities exist only for this turn. ${recoveryInstruction}`
+        ? `A minimal app gateway is available. When you need a skill, MCP, utility, or other capability that is not directly available in this session, use ${UTILITY_SEARCH_TOOL_NAME} to discover it. Before concluding that any capability (MCP, skill, tool, utility) is unavailable or does not exist, you must first call ${UTILITY_SEARCH_TOOL_NAME}; only conclude unavailability when the search result reports notFound:true. If you already know an eligible utility, activate it directly with ${UTILITY_ACTIVATE_TOOL_NAME}, then use ${UTILITY_INVOKE_TOOL_NAME}. When you search, the result reports an explicit \`notFound\` boolean: only when it is true may you conclude that the capability does not exist in this session. Activated utilities exist only for this turn. ${recoveryInstruction}`
         : '',
       directInstructions: [
         'App-managed utilities are available through a turn-scoped loopback gateway. Use the shell to POST JSON with curl, setting Content-Type: application/json and the authorization header below; never print or persist the bearer token.',
@@ -383,6 +383,7 @@ export class UtilityOrchestrationService {
         `Authorization header: Bearer ${token}`,
         recoveryInstruction,
         'Search by capability name or task intent: POST /search with {"query":"capability or task","kinds":["mcp","skill","computer_use","image_descriptor"]}. A `matchType` of `candidates` means you must inspect the project-aware candidates semantically; `notFound` is true only when no eligible utility exists for the requested kinds.',
+        'Before concluding that any capability (MCP, skill, tool, utility) is unavailable or does not exist, search /search first; only conclude unavailability when the result reports notFound:true. Never treat "the tools are not exposed in this session" as proof of absence.',
         'Activate: POST /activate with {"utility_id":"id-from-search"}; if you already know an eligible utility id, activate it directly without searching first.',
         'Invoke: POST /invoke with {"utility_id":"id","operation":"tool-or-operation","input":{}}.',
         ...(request.allowManagement

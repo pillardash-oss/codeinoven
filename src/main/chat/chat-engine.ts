@@ -257,7 +257,12 @@ import {
   validateMermaidOutput,
   type MermaidValidationFailure
 } from './mermaid-output-validator'
-import { detectUnavailableToolCall, searchNudgePromptForToolCall } from './not-available-detector'
+import {
+  concludesCapabilityUnavailable,
+  detectUnavailableToolCall,
+  searchNudgePromptForProse,
+  searchNudgePromptForToolCall
+} from './not-available-detector'
 
 /**
  * Workflow instruction injected into every prompt when Engineering is
@@ -17341,6 +17346,62 @@ export class ChatEngine {
           await this.broadcastThreadSessionError(info.projectId, info.threadId, sessionId, issue)
         }
         return
+      }
+      // The agent's final prose concluded that a capability/tool/MCP is
+      // unavailable, yet it never attempted the tool call (so the tool-error
+      // nudge path never fired) and never used utility_search despite the
+      // gateway exposing it this turn. Nudge it — via the same tight
+      // detector family that previously proved false-positive-prone, now
+      // restricted to high-confidence availability conclusions (session-
+      // scoped tool-shaped claims and personal possession denials). One nudge
+      // per turn, shared with the tool-error path, so it cannot loop.
+      if (
+        !failure &&
+        !awaitingUser &&
+        !suppressTerminalAnswer &&
+        turnAssistant &&
+        thread?.settings &&
+        (this.searchNudgeAttempts.get(sessionId) ?? 0) < 1
+      ) {
+        const utilityTurn = this.utilityTurns.get(sessionId)
+        const searchExposed = Boolean(
+          utilityTurn &&
+            (utilityTurn.gateway.instructions.trim() ||
+              utilityTurn.gateway.directInstructions.trim())
+        )
+        const alreadySearched = utilityTurn
+          ? this.utilityOrchestration.hasSearched(utilityTurn.gateway.id) ||
+            this.utilityOrchestration.hasActivatedOnDemand(utilityTurn.gateway.id)
+          : true
+        const claimedUnavailable = concludesCapabilityUnavailable(assistantText(turnAssistant))
+        if (searchExposed && !alreadySearched && claimedUnavailable) {
+          this.searchNudgeAttempts.set(sessionId, 1)
+          await this.finishCheckpoint(sessionId, info, 'completed')
+          await this.cleanupTurnUtilities(sessionId)
+          turnUtilitiesCleaned = true
+          if (pendingMemory) this.pendingMemoryDecisions.set(sessionId, pendingMemory)
+          try {
+            await this.sendPrompt(
+              info.projectId,
+              info.threadId,
+              thread.settings,
+              searchNudgePromptForProse(claimedUnavailable),
+              [],
+              undefined,
+              undefined,
+              undefined,
+              undefined,
+              undefined,
+              'internal'
+            )
+          } catch (error) {
+            this.pendingMemoryDecisions.delete(sessionId)
+            const issue = this.fallbackProviderIssue(info.driverId, rawErrorMessage(error))
+            await this.threadManager.setStatus(info.projectId, info.threadId, 'failed')
+            await this.broadcastThreadSessionError(info.projectId, info.threadId, sessionId, issue)
+          }
+          return
+        }
       }
       if (missingFinalResponse && !failure && thread?.settings) {
         this.incompleteTurnRecoveryAttempts.set(sessionId, 1)
