@@ -64,6 +64,9 @@
 
   let authStatuses = $state.raw<Record<string, ProviderAccountAuthStatus>>({})
   let addTarget = $state<ProviderConnectionInfo | null>(null)
+  /** Tab the Add-provider modal opens on — 'custom' when returning there via
+   *  the editor's Back button, so the user lands back on the list they left. */
+  let addTargetInitialTab = $state<'connect' | 'custom'>('connect')
   let customEditorFor = $state<string | null>(null)
   /** Provider being edited in the custom base-URL editor, or null when creating one. */
   let customEditorProvider = $state<BaseUrlProvider | null>(null)
@@ -840,7 +843,10 @@
                     ? `Add a provider to ${provider.name}`
                     : 'Install the harness first, then re-check to add providers'}
                   disabled={!canAddProvider(provider)}
-                  onclick={() => (addTarget = provider)}
+                  onclick={() => {
+                    addTargetInitialTab = 'connect'
+                    addTarget = provider
+                  }}
                 >
                   <Plus size={13} /> Add provider
                 </button>
@@ -1006,6 +1012,7 @@
 {#if addTarget}
   <AddProviderModal
     harness={addTarget}
+    initialTab={addTargetInitialTab}
     onClose={() => (addTarget = null)}
     onAddCustom={(harnessId) => {
       customEditorReturnTo = addTarget
@@ -1039,6 +1046,7 @@
     }}
     onBack={customEditorReturnTo
       ? () => {
+          addTargetInitialTab = 'custom'
           addTarget = customEditorReturnTo
           customEditorFor = null
           customEditorProvider = null

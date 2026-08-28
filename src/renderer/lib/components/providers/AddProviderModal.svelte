@@ -28,6 +28,9 @@
     ProviderConnectionInfo
   } from '$shared/types'
 
+  type AddTab = 'connect' | 'custom'
+  type ConnectStep = 'idle' | 'picking' | 'running'
+
   interface Props {
     harness: ProviderConnectionInfo
     onClose: () => void
@@ -35,14 +38,18 @@
     onAddCustom: (harnessId: string) => void
     /** Hand the user off to the custom base-URL editor to edit an existing provider. */
     onEditCustom: (provider: BaseUrlProvider) => void
+    /** Tab shown on open — e.g. 'custom' when returning here via the editor's Back button. */
+    initialTab?: AddTab
   }
 
-  let { harness, onClose, onAddCustom, onEditCustom }: Props = $props()
+  let { harness, onClose, onAddCustom, onEditCustom, initialTab = 'connect' }: Props = $props()
 
-  type AddTab = 'connect' | 'custom'
-  type ConnectStep = 'idle' | 'picking' | 'running'
+  /** The component is mounted per-open, so the initial prop value is authoritative. */
+  function startingTab(): AddTab {
+    return initialTab
+  }
 
-  let tab = $state<AddTab>('connect')
+  let tab = $state<AddTab>(startingTab())
   let step = $state<ConnectStep>('idle')
   let authStatus = $state<ProviderAccountAuthStatus | null>(null)
   let checkingAuth = $state(false)
