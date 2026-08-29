@@ -418,6 +418,13 @@ export function mapPiRecord(
     const failed = entry['isError'] === true
     const result = record(entry['result'])
     const output = serializeContent(result?.['content']) ?? stringValue(result?.['text'])
+    // The end event may not repeat `args`; never wipe the input captured at start.
+    const existing = findToolPart(context, callId)
+    const endArgs = record(entry['args'])
+    const input =
+      endArgs && Object.keys(endArgs).length > 0
+        ? endArgs
+        : (existing?.state.input ?? {})
     return {
       events: [
         {
@@ -431,7 +438,7 @@ export function mapPiRecord(
             tool: toolName,
             state: {
               status: failed ? 'error' : 'completed',
-              input: record(entry['args']) ?? {},
+              input,
               ...(output ? { output } : {}),
               ...(failed ? { error: stringValue(result?.['error']) } : {})
             }
