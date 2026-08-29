@@ -1458,6 +1458,7 @@ export class MuseDriver extends PersistentCliDriver {
             (tool.status === 'pending' || tool.status === 'running')
         )
       : false
+    if (turnState) turnState.expectsProcessStop = true
     if (!hasActiveTool) {
       await super.steerPrompt(projectPath, options)
       return
@@ -1472,6 +1473,12 @@ export class MuseDriver extends PersistentCliDriver {
     const queue = this.pendingSteers.get(sessionId)
     if (!queue || queue.length === 0) return
     this.pendingSteers.delete(sessionId)
+    // Delivering the queued steer requires SIGTERM-ing the still-running turn
+    // process (exit code 143 + Muse's shutdown banner on stderr). Mark the stop
+    // as deliberate so `isExpectedExit` suppresses the bogus crash error and
+    // steering stays seamless like native-streaming harnesses.
+    const turnState = this.turnStates.get(sessionId)
+    if (turnState) turnState.expectsProcessStop = true
     const last = queue[queue.length - 1]
     const merged: SteerPromptOptions = {
       ...last.options,
