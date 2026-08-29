@@ -803,6 +803,11 @@ function partFromBlock(
     const callId = string(block['id']) ?? `claude-call-${messageId}-${index}`
     const name = string(block['name']) ?? 'unknown'
     const input = record(block['input']) ?? {}
+    // AskUserQuestion is handled exclusively through the native can_use_tool
+    // control request. Promoting it here too would race that control event
+    // and register a second, differently-keyed question.asked, showing the
+    // same question set twice.
+    if (name === 'AskUserQuestion') return null
     if (isClaudeSubagentTool(name)) {
       return claudeSubagentPart(messageId, callId, name, input, 'pending')
     }
