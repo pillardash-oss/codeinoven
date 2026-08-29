@@ -35,12 +35,11 @@ const SENSITIVE_CONFIG_KEY = /(api[-_]?key|authorization|credential|password|sec
 const WEB_TOOL_PROVIDERS = new Set<WebToolProviderId>(['exa', 'firecrawl', 'brave', 'custom'])
 
 /** Stable id of the app-seeded image-descriptor utility. */
-export const APP_IMAGE_DESCRIPTOR_UTILITY_ID = 'codeinoven:image-descriptor'
+export const APP_IMAGE_DESCRIPTOR_UTILITY_ID = 'cio:image-descriptor'
 /** Stable id of the app-owned, always-active MCP host recovery utility. */
-export const APP_RETRIEVE_MCP_HOST_UTILITY_ID = 'codeinoven:retrieve-mcp-host'
+export const APP_RETRIEVE_MCP_HOST_UTILITY_ID = 'cio:retrieve-mcp-host'
 /** Stable id of the browser control utility backed by the in-app browser. */
 export const APP_BROWSER_UTILITY_ID = 'cio:browser'
-const LEGACY_APP_BROWSER_UTILITY_ID = 'codeinoven:browser'
 
 interface UtilityRegistryFile {
   version: number
@@ -59,7 +58,7 @@ export class UtilityRegistryService {
   /** In-flight seeding guard so concurrent callers share one seed write. */
   private seeding: Promise<void> | null = null
 
-  constructor(private readonly storage: StorageEngine) {}
+  constructor(private readonly storage: StorageEngine) { }
 
   /** Every public entry point first guarantees the app-owned default utility. */
   private async ensureAppDefaultsSeeded(): Promise<void> {
@@ -144,55 +143,10 @@ export class UtilityRegistryService {
         updatedAt: now
       }
     ]
-    let registryChanged = false
-    const browserDefault = defaults.find((utility) => utility.id === APP_BROWSER_UTILITY_ID)
-    if (!browserDefault) throw new Error('The app-owned browser utility default is missing')
-    const legacyBrowserIndex = registry.utilities.findIndex(
-      (utility) => utility.id === LEGACY_APP_BROWSER_UTILITY_ID
-    )
-    const browserIndex = registry.utilities.findIndex(
-      (utility) => utility.id === APP_BROWSER_UTILITY_ID
-    )
-    if (browserIndex >= 0) {
-      const existing = registry.utilities[browserIndex]
-      const needsRefresh =
-        existing.kind !== browserDefault.kind ||
-        existing.name !== browserDefault.name ||
-        existing.description !== browserDefault.description ||
-        existing.enabled !== browserDefault.enabled ||
-        existing.activation !== browserDefault.activation ||
-        JSON.stringify(existing.scope) !== JSON.stringify(browserDefault.scope) ||
-        JSON.stringify(existing.config) !== JSON.stringify(browserDefault.config) ||
-        JSON.stringify(existing.harnessBindings) !== JSON.stringify(browserDefault.harnessBindings)
-      if (needsRefresh) {
-        registry.utilities[browserIndex] = {
-          ...browserDefault,
-          createdAt: existing.createdAt,
-          updatedAt: now
-        }
-        registryChanged = true
-      }
-      if (legacyBrowserIndex >= 0) {
-        registry.utilities.splice(legacyBrowserIndex, 1)
-        registryChanged = true
-      }
-    } else if (legacyBrowserIndex >= 0) {
-      const legacy = registry.utilities[legacyBrowserIndex]
-      registry.utilities[legacyBrowserIndex] = {
-        ...browserDefault,
-        createdAt: legacy.createdAt,
-        updatedAt: now
-      }
-      registryChanged = true
-    }
-
     const existingIds = new Set(registry.utilities.map((utility) => utility.id))
     const missing = defaults.filter((utility) => !existingIds.has(utility.id))
     if (missing.length > 0) {
       registry.utilities.push(...missing)
-      registryChanged = true
-    }
-    if (registryChanged) {
       await this.storage.write(REGISTRY_PATH, registry)
     }
     this.appDefaultsSeeded = true
@@ -368,8 +322,8 @@ export class UtilityRegistryService {
 
       const implicitCapability =
         utility.kind === 'web_search' ||
-        utility.kind === 'web_fetch' ||
-        utility.kind === 'computer_use'
+          utility.kind === 'web_fetch' ||
+          utility.kind === 'computer_use'
           ? utility.kind
           : undefined
       const capability = binding.nativeCapability
@@ -586,12 +540,12 @@ function parseCredentials(value: unknown): UtilityCredentialMetadata[] {
       required: entry['required'] === true,
       ...(optionalString(entry['environmentVariable'], 'Credential environment variable', 160)
         ? {
-            environmentVariable: optionalString(
-              entry['environmentVariable'],
-              'Credential environment variable',
-              160
-            )
-          }
+          environmentVariable: optionalString(
+            entry['environmentVariable'],
+            'Credential environment variable',
+            160
+          )
+        }
         : {})
     }
     if (entry['required'] !== true && entry['required'] !== false) {
@@ -632,8 +586,8 @@ function parseBindings(value: unknown): HarnessUtilityBinding[] {
       ...(entry['options'] === undefined
         ? {}
         : {
-            options: checkedNonSecretRecord(entry['options'], 'Harness binding options')
-          })
+          options: checkedNonSecretRecord(entry['options'], 'Harness binding options')
+        })
     }
     if (harnesses.has(binding.harnessId)) {
       throw new TypeError(`Duplicate harness binding: ${binding.harnessId}`)

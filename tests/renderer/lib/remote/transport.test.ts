@@ -147,7 +147,7 @@ describe('createLanTransport — proof of possession (A-04)', () => {
     expect(hello.token).toBeUndefined()
     expect(hello.bootstrap).toBe('bootstrap')
     expect(hello.signature.length).toBeGreaterThan(40)
-    expect(hello.transcript).toContain('codeinoven:enroll:bootstrap:challenge-1')
+    expect(hello.transcript).toContain('cio:enroll:bootstrap:challenge-1')
     expect(hello.signingPublicJwk.kty).toBe('EC')
     expect(hello.agreementPublicJwk.kty).toBe('EC')
 
@@ -229,7 +229,7 @@ describe('createLanTransport — proof of possession (A-04)', () => {
     expect(hello.deviceId).toBe('device-abc')
     expect(hello.authVersion).toBe(2)
     expect(hello.token).toBeUndefined()
-    expect(hello.transcript).toBe('codeinoven:auth:challenge-3:device-abc:2')
+    expect(hello.transcript).toBe('cio:auth:challenge-3:device-abc:2')
 
     socket.receive(JSON.stringify({ type: 'remote:hello:ok' }))
     await expect(connectPromise).resolves.toBe('open')

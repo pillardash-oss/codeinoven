@@ -42,7 +42,7 @@
     savePreferredDesktop
   } from '$lib/remote/preferred-desktop'
 
-  const PENDING_ENROLLMENT_CODE_KEY = 'codeinoven:pending-remote-enrollment'
+  const PENDING_ENROLLMENT_CODE_KEY = 'cio:pending-remote-enrollment'
   const DESKTOP_STATUS_REFRESH_MAX_DELAY_MS = 15_000
   const DESKTOP_APPROVAL_TIMEOUT_MS = 60_000
   const DESKTOP_CONNECTION_TIMEOUT_MS = 60_000

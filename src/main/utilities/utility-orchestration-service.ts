@@ -54,7 +54,7 @@ const BRIDGE_SCRIPT_PATH = 'runtime/utility-gateway/bridge.mjs'
 const RETRIEVE_MCP_HOST_ROUTE = '/retrieve-mcp-host'
 const RETRIEVE_MCP_HOST_SCRIPT_PATH = `runtime/utility-gateway/${RETRIEVE_MCP_HOST_TOOL_NAME}.mjs`
 const MAX_REQUEST_BYTES = 1_000_000
-const CUA_UTILITY_ID = 'codeinoven:cua-driver'
+const CUA_UTILITY_ID = 'cio:cua-driver'
 const UTILITY_SEARCH_STOP_WORDS = new Set([
   'a',
   'an',
@@ -1125,7 +1125,7 @@ function gatewayUtility(
 ): ResolvedUtility {
   const now = Date.now()
   const utility: UtilityDefinitionFor<'mcp'> = {
-    id: `codeinoven-utility-gateway:${request.threadId}`,
+    id: `cio:utility-gateway:${request.threadId}`,
     kind: 'mcp',
     name: 'CodeInOven utilities',
     description: 'Search, activate, and invoke scoped app-owned utilities on demand.',
