@@ -4,6 +4,11 @@ import { join } from 'path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { StorageEngine } from '../../../src/main/storage/storage-engine'
 import { PiDriver, mapPiRecord } from '../../../src/main/drivers/pi-driver'
+import {
+  PI_STATUS_EXTENSION_KEY,
+  PI_STATUS_IDLE,
+  PI_STATUS_WORKING
+} from '../../../src/main/drivers/pi-status-extension'
 import type {
   CliLineParseContext,
   PersistentCliSession
@@ -25,6 +30,8 @@ const rpcMock = vi.hoisted(() => {
     setAutoRetry: ReturnType<typeof vi.fn>
     setAutoCompaction: ReturnType<typeof vi.fn>
     dispose: ReturnType<typeof vi.fn>
+    onEvent: (record: Record<string, unknown>) => void
+    emitStatus: (record: Record<string, unknown>) => void
     emit: (record: Record<string, unknown>) => void
   }> = []
   return {
@@ -44,7 +51,10 @@ const rpcMock = vi.hoisted(() => {
       setAutoRetry: ReturnType<typeof vi.fn>
       setAutoCompaction: ReturnType<typeof vi.fn>
       dispose: ReturnType<typeof vi.fn>
-      constructor(options: { onEvent?: (record: Record<string, unknown>) => void }) {
+      constructor(options: {
+        onEvent?: (record: Record<string, unknown>) => void
+        onExtensionStatus?: (record: Record<string, unknown>) => void
+      }) {
         this.newSession = vi.fn(async () => undefined)
         this.prompt = vi.fn(async () => undefined)
         this.steer = vi.fn(async () => undefined)
@@ -73,11 +83,16 @@ const rpcMock = vi.hoisted(() => {
         this.setAutoCompaction = vi.fn(async () => undefined)
         this.dispose = vi.fn()
         this.onEvent = options.onEvent ?? (() => undefined)
+        this.onExtensionStatus = options.onExtensionStatus ?? (() => undefined)
         clients.push(this)
       }
       onEvent: (record: Record<string, unknown>) => void
+      onExtensionStatus: (record: Record<string, unknown>) => void
       emit(record: Record<string, unknown>): void {
         this.onEvent(record)
+      }
+      emitStatus(record: Record<string, unknown>): void {
+        this.onExtensionStatus(record)
       }
     },
     resolvePiExecutable: vi.fn(async () => 'pi'),
@@ -91,6 +106,33 @@ vi.mock('../../../src/main/drivers/pi-rpc-client', () => ({
   PiRpcClient: rpcMock.PiRpcClient,
   resolvePiExecutable: rpcMock.resolvePiExecutable
 }))
+
+// The connected-provider filter reads the real user-level pi credential and
+// native-provider stores, which are non-hermetic inputs. Stub both so the
+// connected set cannot be determined and catalogs stay unfiltered — the
+// documented behavior for unreliable reads.
+vi.mock('../../../src/main/providers/pi-auth-config', async () => {
+  const actual = await vi.importActual<typeof import('../../../src/main/providers/pi-auth-config')>(
+    '../../../src/main/providers/pi-auth-config'
+  )
+  return {
+    ...actual,
+    piAuthFileIo: {
+      read: vi.fn(async () => null),
+      write: vi.fn(async () => undefined)
+    }
+  }
+})
+
+vi.mock('../../../src/main/agents/native-provider-config-service', async () => {
+  const actual = await vi.importActual<
+    typeof import('../../../src/main/agents/native-provider-config-service')
+  >('../../../src/main/agents/native-provider-config-service')
+  return {
+    ...actual,
+    piNativeProviderIds: vi.fn(async () => null)
+  }
+})
 
 vi.mock('../../../src/main/drivers/harness-runtime', async () => {
   const actual = await vi.importActual<typeof import('../../../src/main/drivers/harness-runtime')>(
@@ -232,6 +274,69 @@ describe('PiDriver', () => {
       { name: 'session-name', description: 'Set session name' },
       { name: 'skill:docs', description: 'Docs skill', source: 'skill' }
     ])
+  })
+
+  it('emits a working session status from the status extension record', async () => {
+    const driver = new PiDriver(await storage())
+    const sessionId = await driver.createSession('/project', 'Pi')
+    const events: Array<{ type: string; status?: { state: string } }> = []
+    driver.onEvent((event) => events.push(event as { type: string; status?: { state: string } }))
+    await driver.sendPrompt('/project', { sessionId, settings, text: 'go', attachments: [] })
+    const client = rpcMock.client
+    expect(client).toBeDefined()
+    client.emitStatus({
+      type: 'extension_ui_request',
+      id: 'ui-1',
+      method: 'setStatus',
+      statusKey: PI_STATUS_EXTENSION_KEY,
+      statusText: PI_STATUS_WORKING
+    })
+    const status = events.find((event) => event.type === 'session.status')
+    expect(status?.status?.state).toBe('working')
+  })
+
+  it('emits an idle session status from the status extension record', async () => {
+    const driver = new PiDriver(await storage())
+    const sessionId = await driver.createSession('/project', 'Pi')
+    const events: Array<{ type: string; status?: { state: string } }> = []
+    driver.onEvent((event) => events.push(event as { type: string; status?: { state: string } }))
+    await driver.sendPrompt('/project', { sessionId, settings, text: 'go', attachments: [] })
+    const client = rpcMock.client
+    expect(client).toBeDefined()
+    client.emitStatus({
+      type: 'extension_ui_request',
+      id: 'ui-2',
+      method: 'setStatus',
+      statusKey: PI_STATUS_EXTENSION_KEY,
+      statusText: PI_STATUS_IDLE
+    })
+    const status = events.find((event) => event.type === 'session.status')
+    expect(status?.status?.state).toBe('idle')
+  })
+
+  it('ignores status records from foreign extension keys', async () => {
+    const driver = new PiDriver(await storage())
+    const sessionId = await driver.createSession('/project', 'Pi')
+    const events: Array<{ type: string; status?: { state: string } }> = []
+    driver.onEvent((event) => events.push(event as { type: string; status?: { state: string } }))
+    await driver.sendPrompt('/project', { sessionId, settings, text: 'go', attachments: [] })
+    const client = rpcMock.client
+    expect(client).toBeDefined()
+    client.emitStatus({
+      type: 'extension_ui_request',
+      id: 'ui-3',
+      method: 'setStatus',
+      statusKey: 'user-extension',
+      statusText: PI_STATUS_WORKING
+    })
+    client.emitStatus({
+      type: 'extension_ui_request',
+      id: 'ui-4',
+      method: 'setStatus',
+      statusKey: PI_STATUS_EXTENSION_KEY,
+      statusText: 'user status text'
+    })
+    expect(events.find((event) => event.type === 'session.status')).toBeUndefined()
   })
 
   it('finalizes a running turn when agent_settled arrives after streaming', async () => {

@@ -43,6 +43,13 @@ import {
 import { inlineSvgAttachments, isSvgAttachment } from './svg-attachment'
 import { piMcpExtension } from './pi-mcp-extension'
 import { piCustomProvidersExtension } from './pi-providers-extension'
+import {
+  PI_STATUS_COMPACTING,
+  PI_STATUS_EXTENSION_KEY,
+  PI_STATUS_IDLE,
+  PI_STATUS_WORKING,
+  piStatusExtension
+} from './pi-status-extension'
 import { PiRpcClient } from './pi-rpc-client'
 import {
   prepareHarnessInvocation,
@@ -475,8 +482,7 @@ export function mapPiRecord(
     const continuable =
       message['stopReason'] === 'error' && isContinuableFinishReasonError(rawError)
     const failed =
-      (message['stopReason'] === 'error' && !continuable) ||
-      message['stopReason'] === 'aborted'
+      (message['stopReason'] === 'error' && !continuable) || message['stopReason'] === 'aborted'
     const completed: SessionAgentEvent = {
       type: 'message.completed',
       sessionId: context.sessionId,
@@ -723,6 +729,10 @@ export class PiDriver extends PersistentCliDriver {
    */
   private silentContinues = new Map<string, PiSilentContinueState>()
   private nativeMcpConfigSupport: Promise<boolean> | null = null
+  /** Materialized app-owned status extension path, cached across sessions. */
+  private statusExtensionPath: string | null = null
+  private statusExtensionDirectory: string | null = null
+  private statusExtensionFailed = false
   /** WSL-aware read view of Pi's own credential store (`~/.pi/agent/auth.json`). */
   private readonly authConfig = new PiAuthConfigService(undefined, piAuthFileIo)
 
@@ -1231,7 +1241,31 @@ export class PiDriver extends PersistentCliDriver {
     this.turnStates.clear()
     this.silentContinues.clear()
     this.pendingUiRequests.clear()
+    const statusDirectory = this.statusExtensionDirectory
+    this.statusExtensionPath = null
+    this.statusExtensionDirectory = null
+    if (statusDirectory) {
+      void rm(statusDirectory, { recursive: true, force: true }).catch(() => undefined)
+    }
     super.dispose()
+  }
+
+  /**
+   * Live probe of the pi session's streaming state (`get_state` →
+   * `isStreaming`), used by restart recovery to avoid resuming a turn the
+   * surviving pi process is still executing — the same role OpenCode's
+   * session-status probe plays for its shared server.
+   */
+  async isSessionBusy(projectPath: string, sessionId: string): Promise<boolean> {
+    const client = this.rpcClients.get(sessionId)
+    if (!client || this.sessionProjects.get(sessionId) !== projectPath) return false
+    try {
+      const state = record(await client.getState())
+      return state?.['isStreaming'] === true || state?.['isCompacting'] === true
+    } catch (error) {
+      Logger.dev('Pi session busy probe failed:', error)
+      return false
+    }
   }
 
   private async ensureRpcClient(projectPath: string, sessionId: string): Promise<PiRpcClient> {
@@ -1254,13 +1288,22 @@ export class PiDriver extends PersistentCliDriver {
         'Pi is not installed. Install the Pi CLI globally, then retry. (npm i -g @earendil-works/pi-coding-agent)'
       )
     }
-    const invocation = await prepareHarnessInvocation('pi', ['--mode', 'rpc', ...args], {
-      cwd: projectPath,
-      env: {
-        ...buildProcessEnvironment(),
-        ...runtimeEnv
+    // The app-owned status extension reports working/idle over the RPC stream
+    // so session status matches the other harness drivers. A materialization
+    // failure must never block the turn — pi then simply runs unmonitored.
+    const statusExtension = await this.materializeStatusExtension()
+    const extensionArgs = statusExtension ? ['--extension', statusExtension] : []
+    const invocation = await prepareHarnessInvocation(
+      'pi',
+      ['--mode', 'rpc', ...extensionArgs, ...args],
+      {
+        cwd: projectPath,
+        env: {
+          ...buildProcessEnvironment(),
+          ...runtimeEnv
+        }
       }
-    })
+    )
     const client = new PiRpcClient({
       invocation,
       onEvent: (record) => {
@@ -1268,6 +1311,9 @@ export class PiDriver extends PersistentCliDriver {
       },
       onUiRequest: (record) => {
         this.handleUiRequest(record, sessionId)
+      },
+      onExtensionStatus: (record) => {
+        this.handleExtensionStatus(record, sessionId)
       },
       onExit: (code) => {
         this.handleRpcExit(code, sessionId)
@@ -1436,6 +1482,30 @@ export class PiDriver extends PersistentCliDriver {
     }
   }
 
+  /**
+   * Map the app-owned status extension's `setStatus` records into
+   * authoritative `session.status` events. The extension reports
+   * `cio:working` on `agent_start` (and after compaction), `cio:idle` on
+   * `agent_settled`, and `cio:compacting` during auto-compaction — the same
+   * lifecycle visibility codex/claude-code/opencode drivers provide.
+   */
+  private handleExtensionStatus(record: Record<string, unknown>, sessionId: string): void {
+    if (stringValue(record['statusKey']) !== PI_STATUS_EXTENSION_KEY) return
+    const text = stringValue(record['statusText'])
+    if (!text) return
+    if (!this.activeTurns.has(sessionId)) return
+    const state =
+      text === PI_STATUS_WORKING || text === PI_STATUS_COMPACTING
+        ? ({ state: 'working' } as const)
+        : text === PI_STATUS_IDLE
+          ? ({ state: 'idle' } as const)
+          : null
+    if (!state) return
+    // `agent_settled` remains the sole finalization trigger (usage stats +
+    // session persistence); the idle status here only clears the busy flag.
+    this.emit({ type: 'session.status', sessionId, status: state })
+  }
+
   private handleUiRequest(record: Record<string, unknown>, sessionId: string): void {
     const rawId = record['id']
     const method = stringValue(record['method'])
@@ -1548,6 +1618,30 @@ export class PiDriver extends PersistentCliDriver {
       Logger.error('Pi session persistence failed:', error)
     }
     this.emit({ type: 'session.idle', sessionId: session.id })
+  }
+
+  /**
+   * Write the app-owned status extension to a shared temp file (once per
+   * driver). The cached path is reused across sessions; a failed write
+   * returns null and the session launches without status monitoring instead
+   * of failing the turn.
+   */
+  private async materializeStatusExtension(): Promise<string | null> {
+    if (this.statusExtensionPath) return this.statusExtensionPath
+    if (this.statusExtensionFailed) return null
+    try {
+      if (!this.statusExtensionDirectory) {
+        this.statusExtensionDirectory = await mkdtemp(join(tmpdir(), 'codeinoven-pi-status-'))
+      }
+      const path = join(this.statusExtensionDirectory, 'codeinoven-status.ts')
+      await writeFile(path, piStatusExtension(), 'utf8')
+      this.statusExtensionPath = path
+      return path
+    } catch (error) {
+      this.statusExtensionFailed = true
+      Logger.dev('Pi status extension materialization failed:', error)
+      return null
+    }
   }
 
   private disposeRpcClient(sessionId: string): void {
