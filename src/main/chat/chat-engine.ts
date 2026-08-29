@@ -1751,7 +1751,7 @@ export class ChatEngine {
     this.utilityRegistry = new UtilityRegistryService(storage)
     this.capabilityDiscovery = new CapabilityDiscoveryService()
     this.baseUrlProviders = new BaseUrlProviderService(storage)
-    this.utilityOrchestration = new UtilityOrchestrationService(storage)
+    this.utilityOrchestration = new UtilityOrchestrationService(storage, database)
     this.utilityOrchestration.setImageDescriptorExecutor((request) =>
       this.executeImageDescriptor(request)
     )

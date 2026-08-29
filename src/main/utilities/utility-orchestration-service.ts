@@ -22,8 +22,11 @@ import {
   UTILITY_SEARCH_TOOL_NAME,
   UTILITY_ACTIVATE_TOOL_NAME,
   UTILITY_INVOKE_TOOL_NAME,
-  UTILITY_MANAGE_TOOL_NAME
+  UTILITY_MANAGE_TOOL_NAME,
+  UTILITY_DIAGNOSTICS_TOOL_NAME
 } from '../../lib/gateway-tools'
+import { CioDiagnosticsService } from './cio-diagnostics-service'
+import { ProjectRepo } from '../database/repositories/project-repo'
 import {
   StdioMcpClient,
   MCP_TIMEOUT_MS,
@@ -213,6 +216,8 @@ interface TurnState {
   cuaSessionIds: Map<string, string>
   /** Utilities created through the explicit setup-only management capability. */
   managedUtilities: UtilityDefinition[]
+  /** Lazily created read-only diagnostics provider for explicit @cio-utility turns. */
+  diagnostics: CioDiagnosticsService | null
   /** Lazily derived once because a turn may issue several refined searches. */
   projectSearchTerms: Promise<Set<string>> | null
 }
@@ -243,6 +248,7 @@ export class UtilityOrchestrationService {
   private browserExecutor: BrowserUtilityExecutor | null = null
   constructor(
     private readonly storage: StorageEngine,
+    private readonly database?: import('../database/database').Database,
     private readonly cuaBridge = new CuaBridgeService(storage)
   ) {
     this.registry = new UtilityRegistryService(storage)
@@ -275,6 +281,8 @@ export class UtilityOrchestrationService {
         return (state, input) => this.invoke(state, input)
       case UTILITY_MANAGE_TOOL_NAME:
         return (state, input) => this.manage(state, input)
+      case UTILITY_DIAGNOSTICS_TOOL_NAME:
+        return (state, input) => this.runDiagnostics(state, input)
       default:
         return null
     }
@@ -327,8 +335,11 @@ export class UtilityOrchestrationService {
     const hasOnDemand = eligible.some(({ utility }) => utility.activation === 'on_demand')
     const gatewayTools = GATEWAY_TOOLS.filter(
       ({ name }) =>
-        (name !== UTILITY_MANAGE_TOOL_NAME && hasOnDemand) ||
-        (name === UTILITY_MANAGE_TOOL_NAME && request.allowManagement === true)
+        (name !== UTILITY_MANAGE_TOOL_NAME &&
+          name !== UTILITY_DIAGNOSTICS_TOOL_NAME &&
+          hasOnDemand) ||
+        ((name === UTILITY_MANAGE_TOOL_NAME || name === UTILITY_DIAGNOSTICS_TOOL_NAME) &&
+          request.allowManagement === true)
     )
     if (gatewayTools.length === 0) {
       return {
@@ -349,6 +360,7 @@ export class UtilityOrchestrationService {
       searched: false,
       cuaSessionIds: new Map(),
       managedUtilities: [],
+      diagnostics: null,
       projectSearchTerms: null
     }
     const bridgeUrl = await this.ensureGatewayServer()
@@ -464,6 +476,55 @@ export class UtilityOrchestrationService {
         name: utility.name
       }))
     }
+  }
+
+  /** Project id → name map used to label diagnostic thread results. */
+  private projectNames(): Map<string, string> {
+    if (!this.database) return new Map()
+    try {
+      const projects = new ProjectRepo(this.database).list()
+      return new Map(projects.map((project) => [project.id, project.name]))
+    } catch {
+      return new Map()
+    }
+  }
+
+  /** Read-only app diagnostics, available only on explicit @cio-utility turns. */
+  private async runDiagnostics(
+    state: TurnState,
+    input: Record<string, unknown>
+  ): Promise<unknown> {
+    if (state.request.allowManagement !== true) {
+      throw new Error('App diagnostics are not enabled for this turn')
+    }
+    state.diagnostics ??= new CioDiagnosticsService(requiredDatabase(this.database), () =>
+      this.projectNames()
+    )
+    const diagnostics = state.diagnostics
+    const action = input['action']
+    if (action === 'lookup_thread') {
+      const query = requiredString(input['query'], 'query', 300)
+      return diagnostics.lookupThread(query)
+    }
+    if (action === 'search_threads') {
+      const query = requiredString(input['query'], 'query', 300)
+      return { threads: await diagnostics.searchThreads(query) }
+    }
+    if (action === 'read_messages') {
+      const threadId = requiredString(input['thread_id'], 'thread_id', 128)
+      const limit = typeof input['limit'] === 'number' ? input['limit'] : 40
+      return {
+        threadId,
+        messages: await diagnostics.loadThreadMessages(threadId, limit)
+      }
+    }
+    if (action === 'read_log') {
+      const file = requiredString(input['file'], 'file', 120)
+      const level = typeof input['level'] === 'string' ? input['level'] : undefined
+      const limit = typeof input['limit'] === 'number' ? input['limit'] : 100
+      return diagnostics.readLog(file, { level, limit })
+    }
+    throw new TypeError('Diagnostics action is invalid')
   }
 
   private async cleanupTurn(id: string): Promise<void> {
@@ -1369,6 +1430,14 @@ function optionalKinds(value: unknown): Set<UtilityKind> | null {
 function recordValue(value: unknown): Record<string, unknown> {
   if (!isRecord(value)) throw new TypeError('Expected an object')
   return value
+}
+
+/** Explicit @cio-utility diagnostics require the app database; fail fast otherwise. */
+function requiredDatabase(
+  database: import('../database/database').Database | undefined
+): import('../database/database').Database {
+  if (!database) throw new Error('App diagnostics are unavailable in this deployment')
+  return database
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

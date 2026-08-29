@@ -982,7 +982,8 @@
                 entry: {
                   id: 'cio-utility',
                   name: '@cio-utility',
-                  description: 'Set up a skill, MCP server, or plugin with a CodeInOven agent.'
+                  description:
+                    'Set up a skill, MCP server, or plugin, or debug an app issue with a CodeInOven agent.'
                 }
               }
             ]

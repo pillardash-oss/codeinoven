@@ -6,6 +6,8 @@ export const UTILITY_ACTIVATE_TOOL_NAME = 'utility_activate'
 export const UTILITY_INVOKE_TOOL_NAME = 'utility_invoke'
 /** Explicit-setup-only operation for installing validated utility definitions. */
 export const UTILITY_MANAGE_TOOL_NAME = 'utility_manage'
+/** Explicit-turn-only, read-only app diagnostics for debugging user-reported issues. */
+export const UTILITY_DIAGNOSTICS_TOOL_NAME = 'utility_diagnostics'
 /** Shell-callable, turn-bound host recovery tool; intentionally never transported through MCP. */
 export const RETRIEVE_MCP_HOST_TOOL_NAME = 'retrieve_mcp_host'
 
@@ -101,6 +103,44 @@ export const GATEWAY_TOOLS: GatewayToolDefinition[] = [
     },
     route: '/manage',
     sentWhen: 'Only an explicit @cio-utility or Setup with agent turn'
+  },
+  {
+    name: UTILITY_DIAGNOSTICS_TOOL_NAME,
+    description:
+      'Read-only CodeInOven app diagnostics for debugging: look up any thread by id or exact title across projects, read a bounded page of its mirrored conversation, and read recent app log entries (main.jsonl, error.log, permission-events.jsonl). All output is redacted and bounded. Available only during an explicit @cio-utility turn. Never write, delete, or configure anything with it.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        action: {
+          type: 'string',
+          enum: ['lookup_thread', 'search_threads', 'read_messages', 'read_log'],
+          description: 'Diagnostic operation to perform.'
+        },
+        query: {
+          type: 'string',
+          description:
+            'For lookup_thread: thread id or exact thread title. For search_threads: title substring.'
+        },
+        thread_id: { type: 'string', description: 'For read_messages: the thread id to inspect.' },
+        limit: {
+          type: 'number',
+          description: 'Optional cap; read_messages returns at most 120 messages, read_log at most 200 entries.'
+        },
+        level: {
+          type: 'string',
+          description: 'For read_log: optional level filter (dev, info, error).'
+        },
+        file: {
+          type: 'string',
+          description:
+            'For read_log: one of logs/main.jsonl, logs/error.log, logs/permission-events.jsonl.'
+        }
+      },
+      required: ['action'],
+      additionalProperties: false
+    },
+    route: '/diagnostics',
+    sentWhen: 'Only an explicit @cio-utility debugging turn'
   }
 ]
 
