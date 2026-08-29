@@ -733,9 +733,10 @@ class ThreadMessagesStore {
         settings,
         transportText ?? text,
         attachments,
-        (references ?? []).map((reference) => reference.text).filter(Boolean),
+        references ?? [],
         initialContext,
-        messageId
+        messageId,
+        text
       )
       // The backend returns the authoritative final assistant message; merge it
       // through the same never-downgrade snapshot path a thread's mirror uses.
@@ -775,8 +776,9 @@ class ThreadMessagesStore {
         settings,
         text,
         attachments,
-        references.map((reference) => reference.text).filter(Boolean),
-        messageId
+        references,
+        messageId,
+        text
       )
     } catch (error) {
       this.rejectOptimistic(projectId, conversationId, entry, messageId, error)
