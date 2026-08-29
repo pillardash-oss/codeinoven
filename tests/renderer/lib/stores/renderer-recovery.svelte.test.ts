@@ -256,6 +256,151 @@ describe('RendererRecoveryStore', () => {
     expect(store.hasDraftContent('project-1', 'thread-1')).toBe(false)
   })
 
+  it('queues messages FIFO per thread and dequeues the head on delivery', () => {
+    const storage = new MemoryStorage()
+    const store = new RendererRecoveryStore(storage)
+
+    const first = {
+      text: 'First step',
+      attachments: [],
+      promptReferences: [],
+      projectReferences: [],
+      taskReferences: [],
+      startAfterThreads: []
+    }
+    const second = {
+      text: 'Second step',
+      attachments: [],
+      promptReferences: [],
+      projectReferences: [],
+      taskReferences: [],
+      startAfterThreads: []
+    }
+
+    // Two messages queued while the agent is busy — both persist, in order.
+    store.setQueuedMessage('project-1', 'thread-1', first)
+    store.setQueuedMessage('project-1', 'thread-1', second)
+    store.flushPersist()
+    expect(store.queuedMessageCount('project-1', 'thread-1')).toBe(2)
+    expect(store.queuedMessageFor('project-1', 'thread-1')?.text).toBe('First step')
+    expect(store.queuedMessagesFor('project-1', 'thread-1').map((entry) => entry.text)).toEqual([
+      'First step',
+      'Second step'
+    ])
+
+    // Delivery dequeues exactly one (the head) — the second stays queued.
+    store.clearQueuedMessage('project-1', 'thread-1')
+    expect(store.queuedMessageFor('project-1', 'thread-1')?.text).toBe('Second step')
+
+    // Dequeueing the last message drops the thread's queue entry entirely.
+    store.clearQueuedMessage('project-1', 'thread-1')
+    expect(store.queuedMessageFor('project-1', 'thread-1')).toBeNull()
+    expect(store.queuedMessageThreads()).toEqual([])
+  })
+
+  it('updates the queued head in place without touching later messages', () => {
+    const storage = new MemoryStorage()
+    const store = new RendererRecoveryStore(storage)
+    store.setQueuedMessage('project-1', 'thread-1', {
+      text: 'First',
+      attachments: [],
+      promptReferences: [],
+      projectReferences: [],
+      taskReferences: [],
+      startAfterThreads: []
+    })
+    store.setQueuedMessage('project-1', 'thread-1', {
+      text: 'Second',
+      attachments: [],
+      promptReferences: [],
+      projectReferences: [],
+      taskReferences: [],
+      startAfterThreads: []
+    })
+
+    store.updateQueuedHead('project-1', 'thread-1', {
+      text: 'First',
+      attachments: [],
+      promptReferences: [],
+      projectReferences: [],
+      taskReferences: [],
+      startAfterThreads: [{ id: 'source-1', title: 'Source one' }]
+    })
+    expect(store.queuedMessagesFor('project-1', 'thread-1').map((entry) => entry.text)).toEqual([
+      'First',
+      'Second'
+    ])
+    expect(store.queuedMessageFor('project-1', 'thread-1')?.startAfterThreads).toEqual([
+      { id: 'source-1', title: 'Source one' }
+    ])
+  })
+
+  it('delete-all clears every queued message for a thread', () => {
+    const storage = new MemoryStorage()
+    const store = new RendererRecoveryStore(storage)
+    for (const text of ['One', 'Two', 'Three']) {
+      store.setQueuedMessage('project-1', 'thread-1', {
+        text,
+        attachments: [],
+        promptReferences: [],
+        projectReferences: [],
+        taskReferences: [],
+        startAfterThreads: []
+      })
+    }
+    store.clearAllQueuedMessages('project-1', 'thread-1')
+    expect(store.queuedMessageCount('project-1', 'thread-1')).toBe(0)
+    expect(store.hasDraftContent('project-1', 'thread-1')).toBe(false)
+  })
+
+  it('parses legacy single-object queues and FIFO arrays from storage', () => {
+    const legacyKey = JSON.stringify(['project-1', 'thread-1'])
+    const fifoKey = JSON.stringify(['project-1', 'thread-2'])
+    const parsed = parseRendererRecoveryState(
+      JSON.stringify({
+        version: 1,
+        // Pre-FIFO snapshot: one object per thread.
+        queuedMessages: {
+          [legacyKey]: {
+            text: 'Legacy queued',
+            attachments: [],
+            projectReferences: [],
+            taskReferences: [],
+            promptReferences: []
+          },
+          // FIFO snapshot: an array of entries.
+          [fifoKey]: [
+            {
+              text: 'One',
+              attachments: [],
+              projectReferences: [],
+              taskReferences: [],
+              promptReferences: []
+            },
+            {
+              text: 'Two',
+              attachments: [],
+              projectReferences: [],
+              taskReferences: [],
+              promptReferences: []
+            },
+            {
+              text: '',
+              attachments: [],
+              projectReferences: [],
+              taskReferences: [],
+              promptReferences: []
+            }
+          ]
+        }
+      })
+    )
+
+    expect(parsed.queuedMessages[legacyKey]?.map((entry) => entry.text)).toEqual(['Legacy queued'])
+    // Empty-text entries are dropped field by field.
+    expect(parsed.queuedMessages[fifoKey]?.map((entry) => entry.text)).toEqual(['One', 'Two'])
+  })
+
   it('continues operating when storage access fails', () => {
     expect(() => {
       loadRendererRecoveryState(new UnavailableStorage())

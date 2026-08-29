@@ -740,11 +740,6 @@
       visibleProviderStatus.issue === proactiveAuthIssue
   )
   const providerName = $derived(harnessDisplayName(settings.harnessId))
-  /** Connection info for the thread's harness — carries the manifest-declared
-   *  `supportsManualCompaction` flag surfaced by the main process. */
-  const threadConnection = $derived(
-    providerStore.providers.find((provider) => provider.id === settings.harnessId)
-  )
   /** Harness that actually produced the visible provider issue. When it differs
    *  from the thread's current harness (e.g. a Codex usage-limit card still on
    *  screen while the user already switched the thread to OpenCode), the badge
