@@ -199,8 +199,9 @@ jobs:
             exit 1
           fi
           echo "version=$base" >> "$GITHUB_OUTPUT"
-          # Cohesive nightly tagging: v{base}-nightly-{N} where N increments per base version.
-          # Supports legacy v{base}-nightly.{N} tags when computing the next N.
+          # Semver-correct: stable 0.5.51 -> nightly 0.5.52-nightly-1
+          # nightly's package.json already bumped to next patch, so base is next stable.
+          # N increments per base version. Supports legacy v{base}-nightly.{N} tags.
           max_n=0
           for tag in $(git ls-remote --tags origin "v${base}-nightly*" | awk '{print $2}' | sed 's|refs/tags/||'); do
             # match vX.Y.Z-nightly-N or vX.Y.Z-nightly.N

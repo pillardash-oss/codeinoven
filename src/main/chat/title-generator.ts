@@ -27,6 +27,15 @@ export function buildTitlePrompt(message: string): string {
   return `${TITLE_INSTRUCTION} <MSG_START>${message}<MSG_END>`
 }
 
+/** Fixed prompt sent to a heartbeat's target model — no user content, nothing to wrap. */
+export const HEARTBEAT_PROMPT = 'Simply respond pong'
+
+/** Accept any non-empty reply; the content is discarded, only "did it answer" matters. */
+export function sanitizeHeartbeatReply(raw: string): string | null {
+  const value = raw.trim()
+  return value ? value.slice(0, 200) : null
+}
+
 /**
  * Derive a deterministic fallback title from the first message text.
  * Mirrors the standalone-chat derivation: first line, markdown stripped,

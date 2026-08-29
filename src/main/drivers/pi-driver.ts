@@ -6,16 +6,18 @@ import { fileURLToPath } from 'url'
 import type {
   AgentMessage,
   AgentPart,
+  AgentRateLimitWindow,
   AgentTokenUsage,
   PromptAttachment,
   ProviderCatalog,
   ProviderModel,
-  SessionAgentEvent,
-  ThinkingPreset
+  SessionAgentEvent
 } from '../../lib/types'
+import { PI_THINKING_PRESETS } from '../../lib/pi-thinking-presets'
 import { normalizeAgentQuestions } from '../../lib/agent-interactions'
 import { buildProcessEnvironment } from './cli-environment'
-import { hasNativeProviderCatalog } from '../agents/native-provider-config-service'
+import { piNativeProviderIds } from '../agents/native-provider-config-service'
+import { PiAuthConfigService, piAuthFileIo } from '../providers/pi-auth-config'
 import type { BaseUrlProviderService } from '../providers/base-url-provider-service'
 import type { SecretVault } from '../storage/secret-vault'
 import type { StorageEngine } from '../storage/storage-engine'
@@ -28,6 +30,7 @@ import type {
   UtilityRuntimeOverlay,
   UtilityRuntimePreparationRequest
 } from './driver.interface'
+import { QuestionRequestGoneError } from './driver.interface'
 import type { HarnessCommand, ThreadSettings } from '../../lib/types'
 import { classifyProviderIssue } from '../../lib/provider-issue'
 import {
@@ -40,6 +43,13 @@ import {
 import { inlineSvgAttachments, isSvgAttachment } from './svg-attachment'
 import { piMcpExtension } from './pi-mcp-extension'
 import { piCustomProvidersExtension } from './pi-providers-extension'
+import {
+  PI_STATUS_COMPACTING,
+  PI_STATUS_EXTENSION_KEY,
+  PI_STATUS_IDLE,
+  PI_STATUS_WORKING,
+  piStatusExtension
+} from './pi-status-extension'
 import { PiRpcClient } from './pi-rpc-client'
 import {
   prepareHarnessInvocation,
@@ -47,13 +57,7 @@ import {
   runHarnessCommand
 } from './harness-runtime'
 
-const THINKING_PRESETS: ThinkingPreset[] = [
-  { id: 'minimal', label: 'Minimal', description: 'Minimum reasoning effort' },
-  { id: 'low', label: 'Low', description: 'Low reasoning effort' },
-  { id: 'medium', label: 'Medium', description: 'Moderate reasoning effort' },
-  { id: 'high', label: 'High', description: 'High reasoning effort' },
-  { id: 'xhigh', label: 'Extra high', description: 'Extra-high reasoning effort' }
-]
+const THINKING_PRESETS = PI_THINKING_PRESETS
 
 /** Pi thinking levels accepted by `set_thinking_level`. */
 const PI_THINKING_LEVELS: Record<string, string> = {
@@ -170,6 +174,32 @@ function messageTimestamp(value: Record<string, unknown>): number {
   return numberValue(value['timestamp']) ?? Date.now()
 }
 
+/**
+ * Pi's rate-limit/quota error text embeds an ISO-8601 reset time (e.g.
+ * `Your limit resets at 2026-08-28T22:52:23.222Z.`). Extract it so the retry
+ * scheduler gets a concrete `retryAt` instead of waiting on a manual retry.
+ */
+function piUsageLimitResetAt(message: string, now = Date.now()): number | undefined {
+  const match = message.match(/resets? at\s+(\d{4}-\d{2}-\d{2}T[\d:.]+Z)/iu)
+  if (!match) return undefined
+  const resetMs = Date.parse(match[1])
+  if (!Number.isFinite(resetMs) || resetMs <= now) return undefined
+  return resetMs
+}
+
+/**
+ * True when a Pi failure is a finish-reason flake the model can recover from by
+ * simply being asked to continue. pi's provider adapter maps any unrecognized
+ * provider `finish_reason` to `stopReason: "error"` with the message
+ * `Provider finish_reason: <reason>` — a transient stream/provider issue, not a
+ * terminal outcome. `content_filter` is the exception: re-prompting past a
+ * moderation stop is wrong, so it stays a real error.
+ */
+export function isContinuableFinishReasonError(error: string): boolean {
+  const match = error.match(/^Provider finish_reason: (.+)$/u)
+  return match !== null && match[1] !== 'content_filter'
+}
+
 /** Map one Pi content block into a CodeInOven AgentPart. */
 function mapPiContentBlock(
   blockValue: unknown,
@@ -265,6 +295,15 @@ interface PiUiRequest {
   client: PiRpcClient
   request: Record<string, unknown>
 }
+
+interface PiSilentContinueState {
+  attempts: number
+  owed: boolean
+  lastError: string
+}
+
+/** Silent continues per turn before the failure is surfaced as a real error. */
+const SILENT_CONTINUE_MAX_ATTEMPTS = 3
 
 /** Map one documented Pi JSON print-mode record into CodeInOven's stable shapes. */
 export function mapPiRecord(
@@ -379,6 +418,13 @@ export function mapPiRecord(
     const failed = entry['isError'] === true
     const result = record(entry['result'])
     const output = serializeContent(result?.['content']) ?? stringValue(result?.['text'])
+    // The end event may not repeat `args`; never wipe the input captured at start.
+    const existing = findToolPart(context, callId)
+    const endArgs = record(entry['args'])
+    const input =
+      endArgs && Object.keys(endArgs).length > 0
+        ? endArgs
+        : (existing?.state.input ?? {})
     return {
       events: [
         {
@@ -392,7 +438,7 @@ export function mapPiRecord(
             tool: toolName,
             state: {
               status: failed ? 'error' : 'completed',
-              input: record(entry['args']) ?? {},
+              input,
               ...(output ? { output } : {}),
               ...(failed ? { error: stringValue(result?.['error']) } : {})
             }
@@ -439,14 +485,20 @@ export function mapPiRecord(
     }
     const usage = mapPiUsage(message['usage'])
     const cost = mapPiCost(message['usage'])
-    const failed = message['stopReason'] === 'error' || message['stopReason'] === 'aborted'
+    const rawError = errorText(message)
+    const continuable =
+      message['stopReason'] === 'error' && isContinuableFinishReasonError(rawError)
+    const failed =
+      (message['stopReason'] === 'error' && !continuable) || message['stopReason'] === 'aborted'
     const completed: SessionAgentEvent = {
       type: 'message.completed',
       sessionId: context.sessionId,
       messageId,
       ...(usage ? { tokens: usage } : {}),
       ...(cost !== undefined ? { cost } : {}),
-      ...(failed ? { error: errorText(message) } : {})
+      // A continuable finish-reason flake is neutralized here; the driver
+      // reads the marker back when deciding whether to silently re-prompt.
+      ...(continuable ? { silentContinue: { error: rawError } } : failed ? { error: rawError } : {})
     }
     events.push(completed)
     return { events }
@@ -533,6 +585,11 @@ export function mapPiRecord(
       return message.role === 'assistant'
     })
     if (lastAssistant?.error) {
+      const kind = classifyProviderIssue(lastAssistant.error)
+      const retryAt =
+        kind === 'quota' || kind === 'rate_limit'
+          ? piUsageLimitResetAt(lastAssistant.error)
+          : undefined
       return {
         events: [
           {
@@ -541,10 +598,11 @@ export function mapPiRecord(
             status: {
               state: 'error',
               issue: {
-                kind: classifyProviderIssue(lastAssistant.error),
+                kind,
                 message: lastAssistant.error,
                 harnessId: 'pi',
-                retryable: false
+                retryable: retryAt !== undefined,
+                ...(retryAt === undefined ? {} : { retryAt })
               }
             }
           }
@@ -595,7 +653,12 @@ function buildAssistantMessage(
   })
   const usage = mapPiUsage(message['usage'])
   const cost = mapPiCost(message['usage'])
-  const failed = message['stopReason'] === 'error' || message['stopReason'] === 'aborted'
+  const rawError = errorText(message)
+  const continuableError =
+    message['stopReason'] === 'error' && isContinuableFinishReasonError(rawError) ? rawError : null
+  const failed =
+    (message['stopReason'] === 'error' && continuableError === null) ||
+    message['stopReason'] === 'aborted'
   const completed: AgentMessage = {
     id: messageId,
     role: 'assistant',
@@ -606,7 +669,9 @@ function buildAssistantMessage(
     providerId: stringValue(message['provider']),
     ...(usage ? { tokens: usage } : {}),
     ...(cost !== undefined ? { cost } : {}),
-    ...(failed ? { error: errorText(message) } : {})
+    // A continuable finish-reason flake must not mark the mirrored message as
+    // failed: the driver silently re-prompts and the turn keeps going.
+    ...(failed ? { error: rawError } : {})
   }
   return { events, messages: [completed] }
 }
@@ -662,7 +727,21 @@ export class PiDriver extends PersistentCliDriver {
   private sessionProjects = new Map<string, string>()
   private activeTurns = new Set<string>()
   private pendingUiRequests = new Map<string, PiUiRequest>()
+  /**
+   * Bounded silent-continue bookkeeping per session. When a turn settles with a
+   * finish-reason flake (`Provider finish_reason: other` and friends), the
+   * driver silently re-prompts the model instead of surfacing the error. The
+   * mirror is claimed only while a continuation is actually owed, so every
+   * other path keeps its plain `message.completed`/finalization behavior.
+   */
+  private silentContinues = new Map<string, PiSilentContinueState>()
   private nativeMcpConfigSupport: Promise<boolean> | null = null
+  /** Materialized app-owned status extension path, cached across sessions. */
+  private statusExtensionPath: string | null = null
+  private statusExtensionDirectory: string | null = null
+  private statusExtensionFailed = false
+  /** WSL-aware read view of Pi's own credential store (`~/.pi/agent/auth.json`). */
+  private readonly authConfig = new PiAuthConfigService(undefined, piAuthFileIo)
 
   constructor(
     storage: StorageEngine,
@@ -691,14 +770,18 @@ export class PiDriver extends PersistentCliDriver {
   }
 
   async listProviders(projectPath: string): Promise<ProviderCatalog[]> {
+    const connected = await this.connectedProviderIds()
+    if (connected !== null && connected.size === 0) return []
     if (!(await resolveHarnessRuntime('pi', projectPath))) {
-      return structuredClone(PI_FALLBACK_CATALOG)
+      return this.filterConnectedCatalogs(structuredClone(PI_FALLBACK_CATALOG), connected)
     }
     try {
       const overlay = await this.buildProviderOverlay(projectPath)
       const models = await this.discoverModels(projectPath, overlay)
       await overlay.cleanup()
-      if (models.length === 0) return structuredClone(PI_FALLBACK_CATALOG)
+      if (models.length === 0) {
+        return this.filterConnectedCatalogs(structuredClone(PI_FALLBACK_CATALOG), connected)
+      }
       const byProvider = new Map<string, ProviderModel[]>()
       for (const model of models) {
         const providerId = stringValue(model['provider'])
@@ -726,11 +809,57 @@ export class PiDriver extends PersistentCliDriver {
         harnessId: 'pi',
         models
       }))
-      return catalogs.length > 0 ? catalogs : structuredClone(PI_FALLBACK_CATALOG)
+      return this.filterConnectedCatalogs(
+        catalogs.length > 0 ? catalogs : structuredClone(PI_FALLBACK_CATALOG),
+        connected
+      )
     } catch (error) {
       Logger.dev('Pi provider discovery failed, using fallback catalog', error)
-      return structuredClone(PI_FALLBACK_CATALOG)
+      return this.filterConnectedCatalogs(structuredClone(PI_FALLBACK_CATALOG), connected)
     }
+  }
+
+  /**
+   * The providers the user is actually connected to, keyed by the same provider
+   * ids pi's catalog reports: credentials in `~/.pi/agent/auth.json` (written by
+   * pi's TUI or CodeInOven's connect flow), providers configured in
+   * `~/.pi/agent/models.json` (keyed catalog providers and keyless local
+   * servers alike), and CodeInOven-managed base-URL providers injected through
+   * the discovery overlay. Returns `null` when the connected set cannot be
+   * determined reliably — callers then keep the catalog unfiltered rather than
+   * wrongly hiding every provider behind a transient read failure.
+   */
+  private async connectedProviderIds(): Promise<Set<string> | null> {
+    const overlay = this.baseUrlProviders
+      ? await this.baseUrlProviders.listEnabled(this.id).catch(() => null)
+      : []
+    const nativeIds = await piNativeProviderIds().catch(() => null)
+    if (overlay === null || nativeIds === null) return null
+    const connected = new Set<string>([...(await this.authConfig.credentialIds()), ...nativeIds])
+    for (const provider of overlay) connected.add(provider.id)
+    return connected
+  }
+
+  private filterConnectedCatalogs(
+    catalogs: ProviderCatalog[],
+    connected: Set<string> | null
+  ): ProviderCatalog[] {
+    if (connected === null) return catalogs
+    return catalogs.filter((catalog) => connected.has(catalog.id))
+  }
+
+  /** Cheap staleness signature of the connected-provider set; see the interface contract. */
+  async providerCatalogFingerprint(): Promise<string | null> {
+    const connected = await this.connectedProviderIds()
+    if (connected === null) return null
+    const overlay = this.baseUrlProviders
+      ? await this.baseUrlProviders.listEnabled(this.id).catch(() => [])
+      : []
+    const overlayModels = overlay
+      .map((provider) => `${provider.id}=${provider.models.map((model) => model.id).join(',')}`)
+      .sort()
+      .join('|')
+    return JSON.stringify([[...connected].sort(), overlayModels])
   }
 
   private async discoverModels(
@@ -835,6 +964,7 @@ export class PiDriver extends PersistentCliDriver {
     }
     const client = await this.ensureRpcClient(projectPath, session.id)
     const commandText = (args.trim() ? `${command.name} ${args}` : command.name).trim()
+    this.silentContinues.delete(session.id)
     this.activeTurns.add(session.id)
     try {
       await client.prompt(commandText)
@@ -854,11 +984,13 @@ export class PiDriver extends PersistentCliDriver {
     void _settings
     await this.requireSession(projectPath, sessionId)
     const client = this.rpcClients.get(sessionId)
-    if (!client || !this.activeTurns.has(sessionId)) {
-      throw new Error(`No active Pi turn is available to compact for session ${sessionId}`)
+    if (!client) {
+      throw new Error(`No active Pi session is available to compact for ${sessionId}`)
     }
-    // pi emits compaction_start/compaction_end events as it summarizes; awaiting
-    // here keeps the compaction handoff deterministic from the caller's view.
+    // pi's `compact` RPC aborts any active run and then compacts, so it works
+    // both mid-turn and on an idle session. Awaiting here keeps the handoff
+    // deterministic from the caller's view; compaction_start/compaction_end
+    // events stream out as it summarizes.
     await client.compact()
   }
 
@@ -884,6 +1016,7 @@ export class PiDriver extends PersistentCliDriver {
       options.settings.thinkingLevel
     )
     this.appendUserMessage(session, options)
+    this.silentContinues.delete(session.id)
     this.activeTurns.add(session.id)
 
     const inlineSvg = await inlineSvgAttachments(options.attachments)
@@ -973,6 +1106,7 @@ export class PiDriver extends PersistentCliDriver {
     this.disposeRpcClient(sessionId)
     this.activeTurns.delete(sessionId)
     this.turnStates.delete(sessionId)
+    this.silentContinues.delete(sessionId)
     await super.deleteSession(projectPath, sessionId)
   }
 
@@ -983,6 +1117,40 @@ export class PiDriver extends PersistentCliDriver {
       this.disposeRpcClient(sessionId)
     }
     super.releaseProjectResources(projectPath)
+  }
+
+  /**
+   * Pi only reports token/context usage over its RPC session (no local usage
+   * file like Claude Code or Codex), so this can only answer while a session
+   * for the project is already running — battery hover triggers this after a
+   * turn has started one. Returns null (never a turn) otherwise, matching the
+   * documented "no turn yet" contract other drivers rely on.
+   */
+  async readAccountUsage(projectPath: string): Promise<{
+    rateLimits: AgentRateLimitWindow[]
+    contextWindow?: number
+    contextUsed?: number
+  } | null> {
+    const sessionId = [...this.sessionProjects.entries()].find(
+      ([, clientProject]) => clientProject === projectPath
+    )?.[0]
+    const client = sessionId ? this.rpcClients.get(sessionId) : undefined
+    if (!client) return null
+    try {
+      const stats = record(await client.getSessionStats())
+      const contextUsage = record(stats?.['contextUsage'])
+      const contextWindow = numberValue(contextUsage?.['contextWindow'])
+      const contextUsed = numberValue(contextUsage?.['tokens'])
+      if (contextWindow === undefined && contextUsed === undefined) return null
+      return {
+        rateLimits: [],
+        ...(contextWindow !== undefined ? { contextWindow } : {}),
+        ...(contextUsed !== undefined ? { contextUsed } : {})
+      }
+    } catch (error) {
+      Logger.dev('Pi account usage read failed:', error)
+      return null
+    }
   }
 
   async prepareUtilityRuntime(
@@ -1058,22 +1226,6 @@ export class PiDriver extends PersistentCliDriver {
       }
     }
 
-    if (this.baseUrlProviders && this.secretVault && !hasNativeProviderCatalog(this.id)) {
-      const customProviders = await this.baseUrlProviders.listEnabled(this.id)
-      if (customProviders.length > 0) {
-        for (const custom of customProviders) {
-          if (!custom.apiKeyRef || !custom.apiKeyEnvVar) continue
-          env[custom.apiKeyEnvVar] = await this.secretVault.resolve(custom.apiKeyRef)
-        }
-        args.push('--extension', '{{config:pi-codeinoven-providers}}')
-        configFiles.push({
-          id: 'pi-codeinoven-providers',
-          relativePath: 'pi/codeinoven-providers.ts',
-          content: piCustomProvidersExtension(customProviders)
-        })
-      }
-    }
-
     if (configFiles.length === 0) return {}
     return { args, configFiles, env }
   }
@@ -1096,8 +1248,33 @@ export class PiDriver extends PersistentCliDriver {
     this.rpcClients.clear()
     this.activeTurns.clear()
     this.turnStates.clear()
+    this.silentContinues.clear()
     this.pendingUiRequests.clear()
+    const statusDirectory = this.statusExtensionDirectory
+    this.statusExtensionPath = null
+    this.statusExtensionDirectory = null
+    if (statusDirectory) {
+      void rm(statusDirectory, { recursive: true, force: true }).catch(() => undefined)
+    }
     super.dispose()
+  }
+
+  /**
+   * Live probe of the pi session's streaming state (`get_state` →
+   * `isStreaming`), used by restart recovery to avoid resuming a turn the
+   * surviving pi process is still executing — the same role OpenCode's
+   * session-status probe plays for its shared server.
+   */
+  async isSessionBusy(projectPath: string, sessionId: string): Promise<boolean> {
+    const client = this.rpcClients.get(sessionId)
+    if (!client || this.sessionProjects.get(sessionId) !== projectPath) return false
+    try {
+      const state = record(await client.getState())
+      return state?.['isStreaming'] === true || state?.['isCompacting'] === true
+    } catch (error) {
+      Logger.dev('Pi session busy probe failed:', error)
+      return false
+    }
   }
 
   private async ensureRpcClient(projectPath: string, sessionId: string): Promise<PiRpcClient> {
@@ -1120,13 +1297,22 @@ export class PiDriver extends PersistentCliDriver {
         'Pi is not installed. Install the Pi CLI globally, then retry. (npm i -g @earendil-works/pi-coding-agent)'
       )
     }
-    const invocation = await prepareHarnessInvocation('pi', ['--mode', 'rpc', ...args], {
-      cwd: projectPath,
-      env: {
-        ...buildProcessEnvironment(),
-        ...runtimeEnv
+    // The app-owned status extension reports working/idle over the RPC stream
+    // so session status matches the other harness drivers. A materialization
+    // failure must never block the turn — pi then simply runs unmonitored.
+    const statusExtension = await this.materializeStatusExtension()
+    const extensionArgs = statusExtension ? ['--extension', statusExtension] : []
+    const invocation = await prepareHarnessInvocation(
+      'pi',
+      ['--mode', 'rpc', ...extensionArgs, ...args],
+      {
+        cwd: projectPath,
+        env: {
+          ...buildProcessEnvironment(),
+          ...runtimeEnv
+        }
       }
-    })
+    )
     const client = new PiRpcClient({
       invocation,
       onEvent: (record) => {
@@ -1134,6 +1320,9 @@ export class PiDriver extends PersistentCliDriver {
       },
       onUiRequest: (record) => {
         this.handleUiRequest(record, sessionId)
+      },
+      onExtensionStatus: (record) => {
+        this.handleExtensionStatus(record, sessionId)
       },
       onExit: (code) => {
         this.handleRpcExit(code, sessionId)
@@ -1184,6 +1373,38 @@ export class PiDriver extends PersistentCliDriver {
         if (result.nativeSessionId) session.nativeSessionId = result.nativeSessionId
         if (result.messages) this.mergeMessages(session, result.messages)
         for (const event of this.normalizeInteractionEvents(session.id, result.events ?? [])) {
+          // A continuable finish-reason flake is claimed by the driver: strip
+          // the marker and never let the errored completion reach the engine,
+          // or the chat would show a failure the silent continue is about to
+          // recover from. The empty assistant message is dropped from the
+          // mirror so the user never sees a blank failed turn.
+          if (event.type === 'message.completed' && event.silentContinue) {
+            const state = this.silentContinues.get(session.id) ?? {
+              attempts: 0,
+              owed: false,
+              lastError: ''
+            }
+            state.lastError = event.silentContinue.error
+            const { silentContinue, ...clean } = event
+            void silentContinue
+            if (state.attempts < SILENT_CONTINUE_MAX_ATTEMPTS) {
+              state.owed = true
+              state.attempts += 1
+              this.silentContinues.set(session.id, state)
+              // Mark the flaked message complete (without the error) so the
+              // mirror stays consistent; content-bearing messages are kept.
+              this.applyEventToSession(session, clean)
+              this.dropMirroredEmptyAssistant(session)
+              continue
+            }
+            // Cap reached: surface the original error through the normal path.
+            state.owed = false
+            this.silentContinues.set(session.id, state)
+            const failure: SessionAgentEvent = { ...clean, error: state.lastError }
+            this.applyEventToSession(session, failure)
+            this.emit(failure)
+            continue
+          }
           this.applyEventToSession(session, event)
           this.emit({ ...event, sessionId: session.id })
         }
@@ -1193,6 +1414,7 @@ export class PiDriver extends PersistentCliDriver {
         // `agent_settled` is a stable signal that no retry or queued
         // continuation remains, so never finalize a turn on `agent_end`.
         if (record['type'] === 'agent_settled') {
+          if (this.beginSilentContinue(session)) return
           this.activeTurns.delete(session.id)
           void this.refreshSessionUsage(session).finally(() => {
             void this.finishTurn(session)
@@ -1202,6 +1424,56 @@ export class PiDriver extends PersistentCliDriver {
       .catch((error) => {
         Logger.dev('Pi event handler dropped', error)
       })
+  }
+
+  /**
+   * Drop the trailing assistant message the mirror captured for a flaked turn
+   * when it produced no user-visible content, so the silent continue does not
+   * leave a blank stub behind.
+   */
+  private dropMirroredEmptyAssistant(session: PersistentCliSession): void {
+    const last = [...session.messages].reverse().find((message) => message.role === 'assistant')
+    if (!last || last.error) return
+    const hasContent = last.parts.some((part) => {
+      if (part.type === 'text' || part.type === 'reasoning') return part.text.trim().length > 0
+      return part.type === 'tool'
+    })
+    if (hasContent) return
+    const index = session.messages.indexOf(last)
+    if (index !== -1) session.messages.splice(index, 1)
+  }
+
+  /**
+   * Claim a owed silent continue when the turn settles. Returns true when a
+   * continuation was started (the turn stays active); false when there is
+   * nothing owed and the turn should finalize normally.
+   */
+  private beginSilentContinue(session: PersistentCliSession): boolean {
+    const state = this.silentContinues.get(session.id)
+    if (!state?.owed) return false
+    state.owed = false
+    this.dropMirroredEmptyAssistant(session)
+    const client = this.rpcClients.get(session.id)
+    if (!client) {
+      this.failSilentContinue(session, state.lastError)
+      return true
+    }
+    void client.prompt('Continue.').catch((error: unknown) => {
+      this.failSilentContinue(session, error instanceof Error ? error.message : state.lastError)
+    })
+    return true
+  }
+
+  /** Surface a silent continue that could not be started as a real error. */
+  private failSilentContinue(session: PersistentCliSession, error: string): void {
+    this.silentContinues.delete(session.id)
+    this.activeTurns.delete(session.id)
+    this.emit({
+      type: 'session.error',
+      sessionId: session.id,
+      error: error || 'Pi turn failed'
+    })
+    void this.finishTurn(session)
   }
 
   private handleRpcExit(code: number | null, sessionId: string): void {
@@ -1217,6 +1489,30 @@ export class PiDriver extends PersistentCliDriver {
           .catch((error) => Logger.dev('Pi exit finalization failed:', error))
       }
     }
+  }
+
+  /**
+   * Map the app-owned status extension's `setStatus` records into
+   * authoritative `session.status` events. The extension reports
+   * `cio:working` on `agent_start` (and after compaction), `cio:idle` on
+   * `agent_settled`, and `cio:compacting` during auto-compaction — the same
+   * lifecycle visibility codex/claude-code/opencode drivers provide.
+   */
+  private handleExtensionStatus(record: Record<string, unknown>, sessionId: string): void {
+    if (stringValue(record['statusKey']) !== PI_STATUS_EXTENSION_KEY) return
+    const text = stringValue(record['statusText'])
+    if (!text) return
+    if (!this.activeTurns.has(sessionId)) return
+    const state =
+      text === PI_STATUS_WORKING || text === PI_STATUS_COMPACTING
+        ? ({ state: 'working' } as const)
+        : text === PI_STATUS_IDLE
+          ? ({ state: 'idle' } as const)
+          : null
+    if (!state) return
+    // `agent_settled` remains the sole finalization trigger (usage stats +
+    // session persistence); the idle status here only clears the busy flag.
+    this.emit({ type: 'session.status', sessionId, status: state })
   }
 
   private handleUiRequest(record: Record<string, unknown>, sessionId: string): void {
@@ -1250,7 +1546,7 @@ export class PiDriver extends PersistentCliDriver {
   ): Promise<void> {
     const request = this.pendingUiRequests.get(requestId)
     if (!request || request.sessionId !== sessionId) {
-      throw new Error(`Pi question request is no longer pending: ${requestId}`)
+      throw new QuestionRequestGoneError(sessionId, requestId, this.name)
     }
     const answer = answers[0]?.[0] ?? ''
     const rawId = request.request['id']
@@ -1274,7 +1570,7 @@ export class PiDriver extends PersistentCliDriver {
   ): Promise<void> {
     const request = this.pendingUiRequests.get(requestId)
     if (!request || request.sessionId !== sessionId) {
-      throw new Error(`Pi question request is no longer pending: ${requestId}`)
+      throw new QuestionRequestGoneError(sessionId, requestId, this.name)
     }
     const rawId = request.request['id']
     if (typeof rawId !== 'string' && typeof rawId !== 'number') {
@@ -1331,6 +1627,30 @@ export class PiDriver extends PersistentCliDriver {
       Logger.error('Pi session persistence failed:', error)
     }
     this.emit({ type: 'session.idle', sessionId: session.id })
+  }
+
+  /**
+   * Write the app-owned status extension to a shared temp file (once per
+   * driver). The cached path is reused across sessions; a failed write
+   * returns null and the session launches without status monitoring instead
+   * of failing the turn.
+   */
+  private async materializeStatusExtension(): Promise<string | null> {
+    if (this.statusExtensionPath) return this.statusExtensionPath
+    if (this.statusExtensionFailed) return null
+    try {
+      if (!this.statusExtensionDirectory) {
+        this.statusExtensionDirectory = await mkdtemp(join(tmpdir(), 'codeinoven-pi-status-'))
+      }
+      const path = join(this.statusExtensionDirectory, 'codeinoven-status.ts')
+      await writeFile(path, piStatusExtension(), 'utf8')
+      this.statusExtensionPath = path
+      return path
+    } catch (error) {
+      this.statusExtensionFailed = true
+      Logger.dev('Pi status extension materialization failed:', error)
+      return null
+    }
   }
 
   private disposeRpcClient(sessionId: string): void {

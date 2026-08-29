@@ -148,6 +148,8 @@ const INVOKE_CHANNELS = [
   'baseUrlProviders:update',
   'baseUrlProviders:delete',
   'baseUrlProviders:copyProviderToClipboard',
+  'baseUrlProviders:fetchModels',
+  'baseUrlProviders:fetchUsage',
   'gateway:list',
   'gateway:setEnabled',
   'gateway:start',
@@ -561,7 +563,12 @@ const INVOKE_CHANNELS = [
   'remotePush:unsubscribe',
   'app:confirmClose',
   'app:waitForFeatures',
-  'app:rendererReady'
+  'app:rendererReady',
+  'heartbeat:list',
+  'heartbeat:create',
+  'heartbeat:update',
+  'heartbeat:delete',
+  'heartbeat:toggle'
 ] as const satisfies readonly InvokeChannel[]
 
 type MissingInvokeChannel = Exclude<InvokeChannel, (typeof INVOKE_CHANNELS)[number]>

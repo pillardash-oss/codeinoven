@@ -46,6 +46,7 @@
   import KeymapSettingsTab from './KeymapSettingsTab.svelte'
   import SettingsMemoryTab from '../memory/MemoryPanel.svelte'
   import AuditSettingsTab from './AuditSettingsTab.svelte'
+  import HeartbeatSettingsView from './HeartbeatSettingsView.svelte'
   import RemoteSettingsTab from './RemoteSettingsTab.svelte'
   import ProfileSettingsTab from './ProfileSettingsTab.svelte'
   import CloudDeploymentsSettingsTab from './CloudDeploymentsSettingsTab.svelte'
@@ -807,6 +808,8 @@
       <AuditSettingsTab {config} {settingsReady} {updateConfig} />
     {:else if section === 'cio-prompts'}
       <CioPromptsSettings />
+    {:else if section === 'heartbeat'}
+      <HeartbeatSettingsView />
     {:else if section === 'memory'}
       <SettingsMemoryTab
         variant="settings"

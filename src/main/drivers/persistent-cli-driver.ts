@@ -34,10 +34,16 @@ import type {
   HarnessCapabilities,
   HarnessDriver,
   PreparedUtilityRuntime,
+  SendHeartbeatPingOptions,
   SendPromptOptions,
   SteerPromptOptions
 } from './driver.interface'
-import { buildTitlePrompt, sanitizeGeneratedTitle } from '../chat/title-generator'
+import {
+  buildTitlePrompt,
+  HEARTBEAT_PROMPT,
+  sanitizeGeneratedTitle,
+  sanitizeHeartbeatReply
+} from '../chat/title-generator'
 import { buildTurnGradePrompt, parseTurnGrade } from '../chat/turn-grader-prompt'
 import {
   isPermissionToolName,
@@ -422,6 +428,21 @@ export abstract class PersistentCliDriver implements HarnessDriver {
 
   generateTitle(projectPath: string, options: GenerateTitleOptions): Promise<string | null> {
     return this.generateTitleWithCandidates(projectPath, options, [])
+  }
+
+  /** Ping the exact configured model — no cheap-candidate substitution. */
+  async sendHeartbeatPing(
+    projectPath: string,
+    options: SendHeartbeatPingOptions
+  ): Promise<boolean> {
+    const outcome = await this.oneShotWithCandidates(
+      projectPath,
+      { settings: options.settings, message: '' },
+      [],
+      HEARTBEAT_PROMPT,
+      sanitizeHeartbeatReply
+    )
+    return outcome.value !== null
   }
 
   gradeTurn(projectPath: string, options: GradeTurnOptions): Promise<number | null> {

@@ -51,10 +51,7 @@ import type { SpeechBackend } from './speech-backend'
 import { SherpaSpeechBackend } from './backends/sherpa-backend'
 import { MlxSpeechBackend } from './backends/mlx-backend'
 import { CoreMlSpeechBackend } from './backends/coreml-backend'
-import {
-  LlamaServerSpeechBackend,
-  setLlamaServerBinary
-} from './backends/llama-backend'
+import { LlamaServerSpeechBackend, setLlamaServerBinary } from './backends/llama-backend'
 import { LlamaRuntimeService } from './llama-runtime-service'
 import { Logger } from '../system/logger'
 import { getConfigRoot } from '../../lib/utils'
@@ -151,7 +148,6 @@ export type SpeechAudioTranscribeExecutor = (
 ) => Promise<SpeechAudioTranscribeOutput>
 
 type SpeechProgressListener = (event: SpeechProgressEvent) => void
-
 
 /** Main-process coordinator. Native inference is delegated to bounded workers. */
 export class SpeechService {
@@ -259,17 +255,33 @@ export class SpeechService {
       runtimes,
       recommendedRuntime: recommendedSpeechRuntime(target),
       ...(selected.ok ? { selectedRuntime: selected.value.runtime } : {}),
-      installedArtifacts: this.installed.artifacts.map((artifact) => {
-        const runtime = runtimeAvailability.get(artifact.runtime)
-        if (artifact.available && runtime && !runtime.available) {
-          return structuredClone({
-            ...artifact,
-            available: false,
-            unavailableReason: runtime.reason ?? 'Runtime unavailable.'
-          })
-        }
-        return structuredClone(artifact)
-      })
+      installedArtifacts: await Promise.all(
+        this.installed.artifacts.map(async (artifact) => {
+          const runtime = runtimeAvailability.get(artifact.runtime)
+          if (
+            artifact.source === 'import' &&
+            artifact.importPath &&
+            !(await access(artifact.importPath).then(
+              () => true,
+              () => false
+            ))
+          ) {
+            return structuredClone({
+              ...artifact,
+              available: false,
+              unavailableReason: 'The imported model path no longer exists on disk.'
+            })
+          }
+          if (artifact.available && runtime && !runtime.available) {
+            return structuredClone({
+              ...artifact,
+              available: false,
+              unavailableReason: runtime.reason ?? 'Runtime unavailable.'
+            })
+          }
+          return structuredClone(artifact)
+        })
+      )
     }
   }
 
@@ -472,7 +484,11 @@ export class SpeechService {
       this.emit({ kind: 'history', attemptId, stage: 'completed' })
       this.touch('asr')
       // Cleanup provenance may have touched cleanup model — also refresh cleanup timer if local cleanup used
-      if (cleanupMode.kind === 'local' && cleanupProvenance.mode === 'local' && !cleanupProvenance.failed) {
+      if (
+        cleanupMode.kind === 'local' &&
+        cleanupProvenance.mode === 'local' &&
+        !cleanupProvenance.failed
+      ) {
         this.touch('cleanup')
       }
       return { attemptId, jobId: queued.id, rawTranscript, finalTranscript }
@@ -1241,10 +1257,11 @@ export class SpeechService {
         capability: 'cleanup',
         runtime: resolved.runtime,
         run: (signal) =>
-          backend.learnFromCorrection(insertedText, sentText, mode, signal).then((value) => value ?? [])
+          backend
+            .learnFromCorrection(insertedText, sentText, mode, signal)
+            .then((value) => value ?? [])
       })
-      .result
-      .catch(() => [])
+      .result.catch(() => [])
     return extracted
   }
 
@@ -1594,7 +1611,14 @@ export class SpeechService {
     signal: AbortSignal,
     onProgress?: (receivedSoFar: number) => void
   ): Promise<number> {
-    return downloadFileResumable(url, destination, expectedBytes, expectedSha256, signal, onProgress)
+    return downloadFileResumable(
+      url,
+      destination,
+      expectedBytes,
+      expectedSha256,
+      signal,
+      onProgress
+    )
   }
 
   private requireSelectableArtifact(
@@ -1825,30 +1849,26 @@ export class SpeechService {
     try {
       const profile = cleanupProfileFor(resolved.artifact)
       const flags: SpeechRefinementFlags = mode.flags ?? DEFAULT_REFINEMENT_FLAGS
-      const cleaned = await this.queue
-        .enqueue({
-          capability: 'cleanup',
-          runtime: resolved.runtime,
-          run: async (signal) => {
-            const artifact = {
-              id: resolved.artifact.id,
-              directory: this.artifactDirectory(resolved.artifact.id),
-              cleanupProfile: profile
-            }
-            const backend = this.requireBackend(resolved.runtime)
-            if (backend.warmup) await backend.warmup(artifact, signal)
-            return backend.cleanup(
-              // Collapse ASR loop artifacts before the model sees the transcript.
-              collapseRepetitiveArtifacts(rawTranscript),
-              artifact,
-              signal,
-              profile === 'instruct'
-                ? { lessons: this.learning.enabled(scope), flags }
-                : undefined
-            )
+      const cleaned = await this.queue.enqueue({
+        capability: 'cleanup',
+        runtime: resolved.runtime,
+        run: async (signal) => {
+          const artifact = {
+            id: resolved.artifact.id,
+            directory: this.artifactDirectory(resolved.artifact.id),
+            cleanupProfile: profile
           }
-        })
-        .result
+          const backend = this.requireBackend(resolved.runtime)
+          if (backend.warmup) await backend.warmup(artifact, signal)
+          return backend.cleanup(
+            // Collapse ASR loop artifacts before the model sees the transcript.
+            collapseRepetitiveArtifacts(rawTranscript),
+            artifact,
+            signal,
+            profile === 'instruct' ? { lessons: this.learning.enabled(scope), flags } : undefined
+          )
+        }
+      }).result
       this.touch('cleanup')
       // Normalizers legitimately return an empty string for filler-only input;
       // keep the raw transcript so dictation never loses words.
@@ -1860,9 +1880,7 @@ export class SpeechService {
           runtime: resolved.runtime,
           artifactId: resolved.artifact.id,
           appliedLessonIds:
-            profile === 'instruct'
-              ? this.learning.enabled(scope).map((lesson) => lesson.id)
-              : [],
+            profile === 'instruct' ? this.learning.enabled(scope).map((lesson) => lesson.id) : [],
           failed: false
         }
       }

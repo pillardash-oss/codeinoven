@@ -4,7 +4,7 @@ import type { ProviderConnectionInfo } from '../../lib/types'
 export const HARNESS_MANIFEST_SCHEMA_VERSION = 1
 
 /** Stable behavior keys every harness manifest can declare. Extend to grow. */
-export type HarnessManifestBehavior = 'loadsAgentsMd'
+export type HarnessManifestBehavior = 'loadsAgentsMd' | 'manualCompaction'
 
 /**
  * Declarative, versioned behavior manifest for one harness. This is the
@@ -58,7 +58,7 @@ const HARNESSES: readonly HarnessDescriptor[] = [
     versionArgs: ['--version'],
     integration: 'ready',
     supportsCustomProviders: true,
-    manifest: manifest({ loadsAgentsMd: true })
+    manifest: manifest({ loadsAgentsMd: true, manualCompaction: true })
   },
   {
     id: 'codex',
@@ -67,7 +67,7 @@ const HARNESSES: readonly HarnessDescriptor[] = [
     versionArgs: ['--version'],
     integration: 'ready',
     supportsCustomProviders: true,
-    manifest: manifest({ loadsAgentsMd: true })
+    manifest: manifest({ loadsAgentsMd: true, manualCompaction: true })
   },
   {
     id: 'claude-code',
@@ -78,7 +78,8 @@ const HARNESSES: readonly HarnessDescriptor[] = [
     supportsCustomProviders: true,
     // Claude Code reads CLAUDE.md natively. Project behavior is supplied by
     // CodeInOven's application prompt layer rather than project AGENTS.md.
-    manifest: manifest({ loadsAgentsMd: false })
+    // Manual compaction: `claude -p /compact --resume <id>` (verified live).
+    manifest: manifest({ loadsAgentsMd: false, manualCompaction: true })
   },
   {
     id: 'pi',
@@ -89,7 +90,8 @@ const HARNESSES: readonly HarnessDescriptor[] = [
     supportsCustomProviders: true,
     // Pi has no native AGENTS.md/CLAUDE.md instruction loading; the app-level
     // behavior prompt remains available for Engineering implementation turns.
-    manifest: manifest({ loadsAgentsMd: false })
+    // Manual compaction: `compact` RPC, idle-safe.
+    manifest: manifest({ loadsAgentsMd: false, manualCompaction: true })
   },
   {
     id: 'cline',
@@ -98,7 +100,10 @@ const HARNESSES: readonly HarnessDescriptor[] = [
     versionArgs: ['--version'],
     integration: 'ready',
     supportsCustomProviders: true,
-    manifest: manifest({ loadsAgentsMd: true })
+    // Cline 3.x has no non-interactive compaction entry (`/compact` as a
+    // positional prompt is rejected; `--compaction` only tunes automatic
+    // compaction).
+    manifest: manifest({ loadsAgentsMd: true, manualCompaction: false })
   },
   {
     id: 'antigravity',
@@ -108,7 +113,8 @@ const HARNESSES: readonly HarnessDescriptor[] = [
     integration: 'ready',
     supportsCustomProviders: false,
     // Antigravity reads AGENTS.md and GEMINI.md rule files natively.
-    manifest: manifest({ loadsAgentsMd: true })
+    // `/compact` in print mode is treated as ordinary prompt text (verified live).
+    manifest: manifest({ loadsAgentsMd: true, manualCompaction: false })
   },
   {
     id: 'muse',
@@ -117,7 +123,8 @@ const HARNESSES: readonly HarnessDescriptor[] = [
     versionArgs: ['--version'],
     integration: 'ready',
     supportsCustomProviders: false,
-    manifest: manifest({ loadsAgentsMd: true })
+    // Muse compacts via a local summary checkpoint for its stateless transport.
+    manifest: manifest({ loadsAgentsMd: true, manualCompaction: true })
   }
 ]
 
@@ -145,4 +152,15 @@ export function harnessManifestFor(id: string): HarnessManifest | undefined {
  */
 export function harnessLoadsAgentsMd(id: string): boolean {
   return harnessManifestFor(id)?.behaviors['loadsAgentsMd'] ?? false
+}
+
+/**
+ * Declared (manifest) value of whether the harness supports an explicit,
+ * user-requested context compaction (the driver implements `compactSession`
+ * and advertises `capabilities.compaction`). The UI gates its "Compact
+ * conversation" action on this declaration so the gate cannot drift from the
+ * capability again.
+ */
+export function harnessSupportsManualCompaction(id: string): boolean {
+  return harnessManifestFor(id)?.behaviors['manualCompaction'] ?? false
 }

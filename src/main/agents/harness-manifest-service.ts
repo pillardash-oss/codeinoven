@@ -4,7 +4,10 @@ import type {
   HarnessConfirmationSource,
   HarnessManifestEntry
 } from '../../lib/types'
-import { harnessLoadsAgentsMd } from './harness-registry'
+import {
+  harnessLoadsAgentsMd,
+  listHarnesses
+} from './harness-registry'
 import type { HarnessManifestBehavior } from './harness-registry'
 import { Logger } from '../system/logger'
 import type { StorageEngine } from '../storage/storage-engine'
@@ -22,6 +25,10 @@ interface PersistedHarnessManifest {
 }
 
 const EMPTY: PersistedHarnessManifest = { schemaVersion: 1, confirmed: {}, inUse: {} }
+
+function isKnownBehavior(behavior: string): behavior is HarnessManifestBehavior {
+  return behavior === 'loadsAgentsMd' || behavior === 'manualCompaction'
+}
 
 /**
  * Layered behavior resolution for coding harnesses.
@@ -133,12 +140,9 @@ export class HarnessManifestService {
   /** Effective behavior views for every known harness (Settings surface). */
   async list(): Promise<HarnessManifestEntry[]> {
     await this.load()
-    const harnessIds = new Set<string>([
-      ...Object.keys(this.state.confirmed),
-      ...Object.keys(this.state.inUse)
-    ])
     const entries: HarnessManifestEntry[] = []
-    for (const harnessId of harnessIds) {
+    for (const harness of listHarnesses()) {
+      const harnessId = harness.id
       const declared = harnessLoadsAgentsMd(harnessId)
       const confirmed = this.state.confirmed[harnessId]?.['loadsAgentsMd']
       entries.push({
@@ -160,7 +164,7 @@ export class HarnessManifestService {
       if (!input || typeof input.harnessId !== 'string' || !input.harnessId.trim()) {
         throw new TypeError('Harness ID is required')
       }
-      if (input.behavior !== 'loadsAgentsMd') {
+      if (!isKnownBehavior(input.behavior)) {
         throw new TypeError(`Unknown manifest behavior: ${String(input.behavior)}`)
       }
       if (typeof input.value !== 'boolean') {
@@ -173,7 +177,7 @@ export class HarnessManifestService {
       if (!input || typeof input.harnessId !== 'string' || !input.harnessId.trim()) {
         throw new TypeError('Harness ID is required')
       }
-      if (input.behavior !== 'loadsAgentsMd') {
+      if (!isKnownBehavior(input.behavior)) {
         throw new TypeError(`Unknown manifest behavior: ${String(input.behavior)}`)
       }
       return this.resetBehavior(input.harnessId, input.behavior)

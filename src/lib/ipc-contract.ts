@@ -25,7 +25,9 @@ import type {
   BaseUrlProvider,
   BaseUrlProviderCopyClipboardRequest,
   BaseUrlProviderCreateRequest,
+  BaseUrlProviderFetchModelsRequest,
   BaseUrlProviderUpdateRequest,
+  DiscoveredBaseUrlModel,
   BrainstormContent,
   BrainstormDecisionAction,
   BrainstormDocument,
@@ -46,6 +48,7 @@ import type {
   EngineeringLifecycleState,
   EngineeringLifecycleTransitionResult,
   ScopedHarnessCommand,
+  HeartbeatConfig,
   HistoryEntry,
   HistoryRole,
   ImageDescriptorErrorRequest,
@@ -849,7 +852,7 @@ export interface IpcInvokeContract {
   'agent:listPermissions': Contract<[projectId: string, threadId: string], PermissionRequest[]>
   'agent:listProviders': Contract<[projectId: string], ProviderCatalog[]>
   'agent:listProviderSnapshot': Contract<[projectId: string], ProviderCatalog[]>
-  'agent:refreshProviderCatalog': Contract<[projectId: string], ProviderCatalog[]>
+  'agent:refreshProviderCatalog': Contract<[projectId: string, force?: boolean], ProviderCatalog[]>
   'agent:refreshAccountUsage': Contract<[projectId: string, threadId: string], AgentAccountUsage[]>
   'agent:getHarnessAuthStatus': Contract<[projectId: string, harnessId: string], boolean | null>
   'agent:listTools': Contract<
@@ -954,8 +957,10 @@ export interface IpcInvokeContract {
       settings: ThreadSettings,
       text: string,
       attachments: PromptAttachment[],
-      selections: string[],
-      initialContext: string | undefined
+      references: PromptReference[],
+      initialContext: string | undefined,
+      userMessageId: string | undefined,
+      displayText: string | undefined
     ],
     AgentMessage
   >
@@ -967,7 +972,9 @@ export interface IpcInvokeContract {
       settings: ThreadSettings,
       text: string,
       attachments: PromptAttachment[],
-      selections: string[]
+      references: PromptReference[],
+      userMessageId: string | undefined,
+      displayText: string | undefined
     ],
     void
   >
@@ -1905,6 +1912,25 @@ export interface IpcInvokeContract {
     [input: BaseUrlProviderCopyClipboardRequest],
     void
   >
+  'baseUrlProviders:fetchModels': Contract<
+    [input: BaseUrlProviderFetchModelsRequest],
+    DiscoveredBaseUrlModel[]
+  >
+  'baseUrlProviders:fetchUsage': Contract<
+    [harnessId: string, id: string],
+    import('./types').CustomProviderUsage | null
+  >
+  'heartbeat:list': Contract<[], HeartbeatConfig[]>
+  'heartbeat:create': Contract<
+    [input: Omit<HeartbeatConfig, 'id' | 'lastRun'>],
+    HeartbeatConfig
+  >
+  'heartbeat:update': Contract<
+    [id: string, patch: Partial<Omit<HeartbeatConfig, 'id'>>],
+    HeartbeatConfig
+  >
+  'heartbeat:delete': Contract<[id: string], boolean>
+  'heartbeat:toggle': Contract<[id: string, enabled: boolean], HeartbeatConfig>
   'gateway:list': Contract<[], import('./gateway-types').GatewayStatus[]>
   'gateway:setEnabled': Contract<
     [pluginId: string, enabled: boolean],

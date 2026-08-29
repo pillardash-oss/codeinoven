@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { ClipboardPaste, Copy, Loader2, Plus, X } from '@lucide/svelte'
+  import { ArrowLeft, ClipboardPaste, Copy, Loader2, Plus, RefreshCw, X } from '@lucide/svelte'
   import { toast } from 'svelte-sonner'
   import { invoke } from '$lib/ipc.svelte'
   import { copyText as copyTextToClipboard } from '$lib/copy-text'
@@ -19,6 +19,7 @@
     BaseUrlProviderCreateRequest,
     BaseUrlProviderModel,
     BaseUrlProviderUpdateRequest,
+    DiscoveredBaseUrlModel,
     ProviderConnectionInfo,
     ThinkingLevel
   } from '$shared/types'
@@ -33,6 +34,10 @@
     onClose: () => void
     /** Invoked with the persisted provider after a successful save. */
     onSaved: (provider: BaseUrlProvider) => void
+    /** Shown as a footer "Back" button when set — lets a caller that opened
+     *  this editor from its own modal (e.g. Add provider) return there
+     *  instead of closing everything. */
+    onBack?: () => void
   }
 
   interface ModelDraft {
@@ -47,13 +52,18 @@
 
   interface ProviderDraft {
     id: string | null
-    harnessId: string
+    /** Harnesses this provider is linked to. Saving applies the shared fields
+     *  below to every one of them, creating/removing per-harness records as
+     *  the selection changes. */
+    harnessIds: string[]
     npm: string
     name: string
     baseURL: string
     apiKey: string
     removeApiKey: boolean
     headers: string
+    /** Optional account status/usage route (e.g. /status or /usage). */
+    usagePath: string
     models: ModelDraft[]
     enabled: boolean
   }
@@ -73,6 +83,14 @@
     'max',
     'ultra'
   ]
+
+  /** The main-process provider service persists at most 128 models per provider. */
+  const MAX_DISCOVERED_MODELS_TO_SAVE = 128
+
+  /** Mirror of the service's SAFE_MODEL_ID: ids routinely include slashes/at-signs
+   *  (LM Studio `org/model`, HF `org/model@precision`) — anything else would
+   *  make the whole save fail main-process validation, so it is skipped here. */
+  const SAFE_DISCOVERED_MODEL_ID = /^[a-zA-Z0-9@][a-zA-Z0-9._:/@+-]*$/u
 
   interface QuickPreset {
     name: string
@@ -107,7 +125,7 @@
     }
   ]
 
-  let { provider, harnesses, defaultHarnessId, onClose, onSaved }: Props = $props()
+  let { provider, harnesses, defaultHarnessId, onClose, onSaved, onBack }: Props = $props()
 
   /**
    * Harnesses whose driver consumes custom base-URL providers. When the prop
@@ -124,18 +142,125 @@
     )
   })
 
-  let draft = $state<ProviderDraft>(createDraft())
-  let apiKeyConfigured = $derived(
-    provider?.apiKeyConfigured === true || provider?.apiKeyRef !== undefined
+  /** Every persisted record sharing this provider's id — one per linked
+   *  harness. Empty in create mode. Fields are kept in sync across the group,
+   *  so any member's values are representative of the whole group. */
+  let linkedProviders = $derived(
+    provider ? baseUrlProviderStore.providers.filter((p) => p.id === provider.id) : []
   )
 
-  /** Seed the draft from the edited provider, or start blank for create mode.
-   * The component is mounted per-edit, so the initial prop value is authoritative. */
+  let draft = $state<ProviderDraft>(createDraft())
+  let apiKeyConfigured = $derived(
+    linkedProviders.some((p) => p.apiKeyConfigured === true || p.apiKeyRef !== undefined)
+  )
+  /** Newly-checked harnesses can't inherit a key they never had — the vault
+   *  only exposes ciphertext, so main can't silently copy it across. */
+  let addingHarnessWithoutKey = $derived(
+    apiKeyConfigured &&
+      !draft.apiKey &&
+      draft.harnessIds.some((id) => !linkedProviders.some((p) => p.harnessId === id))
+  )
+
+  /** Models found at `${baseURL}/models`, offered as one-click adds when the
+   *  draft has none of its own yet. Cached in main for 24h; `force` bypasses that. */
+  let discoveredModels = $state<DiscoveredBaseUrlModel[]>([])
+  let discoveringModels = $state(false)
+  let discoverError = $state('')
+
+  async function discoverModels(force = false): Promise<void> {
+    if (!draft.baseURL.trim()) return
+    discoveringModels = true
+    discoverError = ''
+    try {
+      discoveredModels = await baseUrlProviderStore.fetchModels({
+        baseURL: draft.baseURL.trim(),
+        ...(draft.id ? { id: draft.id, harnessId: draft.harnessIds[0] } : {}),
+        ...(draft.apiKey ? { apiKey: draft.apiKey } : {}),
+        ...(parseHeaders(draft.headers) ? { headers: parseHeaders(draft.headers) } : {}),
+        force
+      })
+    } catch (fetchError) {
+      discoverError =
+        fetchError instanceof Error ? fetchError.message : 'Failed to fetch model list.'
+    } finally {
+      discoveringModels = false
+    }
+  }
+
+  /** Persisted model rows for the provider, ready to hand to the save flow.
+   *  When the user defined no models of their own, every model discovered from
+   *  `${baseURL}/models` becomes a provider model so the provider is usable the
+   *  moment it is saved — the picker cache already overlays saved providers. */
+  async function resolveModelsToSave(
+    headers: Record<string, string> | undefined
+  ): Promise<Array<Omit<BaseUrlProviderModel, 'id' | 'providerId'> & { id?: string }>> {
+    if (draft.models.length > 0) return buildModels()
+    const baseURL = draft.baseURL.trim()
+    if (!baseURL) return []
+    let models = discoveredModels
+    if (models.length === 0) {
+      // Fresh discovery (never the 24h cache) so a just-saved provider never
+      // inherits a stale list from an earlier base-URL probe.
+      try {
+        models = await baseUrlProviderStore.fetchModels({
+          baseURL,
+          ...(draft.id ? { id: draft.id, harnessId: draft.harnessIds[0] } : {}),
+          ...(draft.apiKey ? { apiKey: draft.apiKey } : {}),
+          ...(headers ? { headers } : {}),
+          force: true
+        })
+        discoveredModels = models
+      } catch {
+        // Unreachable endpoint — save proceeds with no models; the picker
+        // still shows the provider and the editor keeps its error surfaced.
+        return []
+      }
+    }
+    return models
+      .filter((model) => SAFE_DISCOVERED_MODEL_ID.test(model.id))
+      .slice(0, MAX_DISCOVERED_MODELS_TO_SAVE)
+      .map((model) => ({
+        id: model.id,
+        name: (model.name || model.id).slice(0, 256),
+        // Most current models can reason; an endpoint that doesn't expose a
+        // reasoning flag isn't evidence the model can't. Off-by-default just
+        // hid the thinking controls for models that support them.
+        reasoning: true,
+        ...(model.contextWindow ? { contextWindow: model.contextWindow } : {})
+      }))
+  }
+
+  function addDiscoveredModel(model: DiscoveredBaseUrlModel): void {
+    if (draft.models.some((m) => m.id === model.id)) return
+    draft.models = [
+      ...draft.models,
+      {
+        ...emptyModelDraft(),
+        id: model.id,
+        name: model.name,
+        reasoning: true,
+        contextWindow: model.contextWindow ? String(model.contextWindow) : ''
+      }
+    ]
+  }
+
+  /** Auto-search once a base URL is typed and the draft has no models of its
+   *  own yet — debounced so it doesn't refire on every keystroke. */
+  $effect(() => {
+    const baseURL = draft.baseURL.trim()
+    if (draft.models.length > 0 || !baseURL || discoveredModels.length > 0) return
+    const timer = setTimeout(() => void discoverModels(false), 500)
+    return () => clearTimeout(timer)
+  })
+
+  /** Seed the draft from the edited provider's linked group, or start blank
+   * for create mode. The component is mounted per-edit, so the initial prop
+   * value is authoritative. */
   function createDraft(): ProviderDraft {
     if (provider) {
       return {
         id: provider.id,
-        harnessId: provider.harnessId,
+        harnessIds: linkedProviders.map((p) => p.harnessId),
         npm: provider.npm,
         name: provider.name,
         baseURL: provider.baseURL,
@@ -146,17 +271,16 @@
               .map(([key, value]) => `${key}: ${value}`)
               .join('\n')
           : '',
-        models: provider.models.length
-          ? provider.models.map((model) => ({
-              id: model.id,
-              name: model.name,
-              contextWindow: model.contextWindow?.toString() ?? '',
-              maxOutputTokens: model.maxOutputTokens?.toString() ?? '',
-              reasoning: model.reasoning,
-              defaultThinkingLevel: model.defaultThinkingLevel ?? '',
-              vision: model.vision ?? true
-            }))
-          : [emptyModelDraft()],
+        usagePath: provider.usagePath ?? '',
+        models: provider.models.map((model) => ({
+          id: model.id,
+          name: model.name,
+          contextWindow: model.contextWindow?.toString() ?? '',
+          maxOutputTokens: model.maxOutputTokens?.toString() ?? '',
+          reasoning: model.reasoning,
+          defaultThinkingLevel: model.defaultThinkingLevel ?? '',
+          vision: model.vision ?? true
+        })),
         enabled: provider.enabled
       }
     }
@@ -178,24 +302,37 @@
   function emptyDraft(): ProviderDraft {
     return {
       id: null,
-      harnessId: availableHarnesses.some((harness) => harness.id === defaultHarnessId)
-        ? defaultHarnessId
-        : (availableHarnesses[0]?.id ?? 'opencode'),
+      harnessIds: [
+        availableHarnesses.some((harness) => harness.id === defaultHarnessId)
+          ? defaultHarnessId
+          : (availableHarnesses[0]?.id ?? 'opencode')
+      ],
       npm: NPM_OPTIONS[0].value,
       name: '',
       baseURL: '',
       apiKey: '',
       removeApiKey: false,
       headers: '',
-      models: [emptyModelDraft()],
+      usagePath: '',
+      models: [],
       enabled: true
     }
   }
 
+  /** Toggle a harness in or out of the linked set. At least one must stay selected. */
+  function toggleHarness(id: string): void {
+    if (draft.harnessIds.includes(id)) {
+      if (draft.harnessIds.length === 1) return
+      draft.harnessIds = draft.harnessIds.filter((harnessId) => harnessId !== id)
+    } else {
+      draft.harnessIds = [...draft.harnessIds, id]
+    }
+  }
+
   function applyPreset(preset: QuickPreset): void {
-    const harnessId = draft.harnessId
+    const harnessIds = draft.harnessIds
     draft = emptyDraft()
-    draft.harnessId = harnessId
+    draft.harnessIds = harnessIds
     draft.name = preset.name
     draft.baseURL = preset.baseURL
     draft.npm = preset.npm
@@ -257,37 +394,67 @@
     })
   }
 
+  /**
+   * Applies the draft to every selected harness: updates records already
+   * linked, deletes ones the user unchecked, and creates new ones for
+   * newly-checked harnesses — all sharing the same provider id so they stay
+   * linked. A brand-new provider seeds the id from its first created record.
+   */
   async function save(event: SubmitEvent): Promise<void> {
     event.preventDefault()
+    if (draft.harnessIds.length === 0) {
+      toast.error('Select at least one harness.')
+      return
+    }
     try {
-      const models = buildModels()
       const headers = parseHeaders(draft.headers)
-      let saved: BaseUrlProvider
-      if (draft.id) {
+      const models = await resolveModelsToSave(headers)
+      const currentHarnessIds = linkedProviders.map((p) => p.harnessId)
+      const toKeep = draft.harnessIds.filter((id) => currentHarnessIds.includes(id))
+      const toRemove = currentHarnessIds.filter((id) => !draft.harnessIds.includes(id))
+      const toAdd = draft.harnessIds.filter((id) => !currentHarnessIds.includes(id))
+
+      let groupId = draft.id ?? undefined
+      let saved: BaseUrlProvider | undefined
+
+      if (groupId) {
         const patch: BaseUrlProviderUpdateRequest = {
           npm: draft.npm,
           name: draft.name.trim(),
           baseURL: draft.baseURL.trim(),
           models,
           enabled: draft.enabled,
+          usagePath: draft.usagePath.trim(),
           ...(headers === undefined ? {} : { headers }),
           ...(draft.removeApiKey ? { removeApiKey: true } : {}),
           ...(draft.apiKey ? { apiKey: draft.apiKey } : {})
         }
-        saved = await baseUrlProviderStore.update(draft.harnessId, draft.id, patch)
-      } else {
+        for (const harnessId of toKeep) {
+          saved = await baseUrlProviderStore.update(harnessId, groupId, patch)
+        }
+        for (const harnessId of toRemove) {
+          await baseUrlProviderStore.remove(harnessId, groupId)
+        }
+      }
+
+      for (const harnessId of toAdd) {
         const input: BaseUrlProviderCreateRequest = {
-          harnessId: draft.harnessId,
+          harnessId,
           npm: draft.npm,
           name: draft.name.trim(),
           baseURL: draft.baseURL.trim(),
           models,
           enabled: draft.enabled,
+          ...(draft.usagePath.trim() ? { usagePath: draft.usagePath.trim() } : {}),
           ...(headers === undefined ? {} : { headers }),
-          ...(draft.apiKey ? { apiKey: draft.apiKey } : {})
+          ...(draft.apiKey ? { apiKey: draft.apiKey } : {}),
+          ...(groupId ? { id: groupId } : {})
         }
         saved = await baseUrlProviderStore.create(input)
+        groupId = saved.id
       }
+
+      if (!saved) throw new Error('No harness selected to save.')
       toast.success(draft.id ? 'Provider updated.' : 'Provider created.')
       onSaved(saved)
     } catch (saveError) {
@@ -310,17 +477,19 @@
     }
   }
 
-  /** Copy the whole provider, resolving the vaulted API key in main for saved providers. */
+  /** Copy the whole provider, resolving the vaulted API key in main for saved providers.
+   *  For a multi-harness link, the first selected harness's stored key is used. */
   async function copyProviderDraft(): Promise<void> {
     try {
       const request: BaseUrlProviderCopyClipboardRequest = {
-        harnessId: draft.harnessId,
+        harnessId: draft.harnessIds[0],
         ...(draft.id ? { id: draft.id } : {}),
         npm: draft.npm,
         name: draft.name,
         baseURL: draft.baseURL,
         ...(draft.apiKey ? { apiKey: draft.apiKey } : {}),
         headers: draft.headers,
+        usagePath: draft.usagePath,
         models: draft.models,
         enabled: draft.enabled
       }
@@ -331,20 +500,20 @@
     }
   }
 
-  /** Overwrite the draft from a copied provider, keeping the current form's harness. */
+  /** Overwrite the draft from a copied provider, keeping the current form's harnesses. */
   async function pasteProviderFromClipboard(): Promise<void> {
     try {
       const text = await invoke('clipboard:readText')
       const provider = parseProviderClipboard(text)
       draft = {
         ...draft,
-        harnessId: draft.harnessId,
         npm: provider.npm,
         name: provider.name,
         baseURL: provider.baseURL,
         apiKey: provider.apiKey,
         removeApiKey: false,
         headers: provider.headers,
+        ...(provider.usagePath ? { usagePath: provider.usagePath } : {}),
         models: provider.models.map(modelToDraft),
         enabled: provider.enabled
       }
@@ -392,7 +561,19 @@
 >
   {#snippet footer()}
     <div class="flex w-full items-center justify-between gap-3">
-      <Switch bind:checked={draft.enabled} label="Enabled" class="font-medium" />
+      <div class="flex items-center gap-3">
+        {#if onBack}
+          <button
+            class="flex h-9 items-center gap-1.5 rounded-lg border bg-elevated px-3 text-xs font-medium hover:bg-overlay"
+            type="button"
+            title="Back to Add provider"
+            onclick={onBack}
+          >
+            <ArrowLeft size={13} /> Back
+          </button>
+        {/if}
+        <Switch bind:checked={draft.enabled} label="Enabled" class="font-medium" />
+      </div>
       <div class="flex items-center gap-2">
         <button
           class="h-9 rounded-lg border bg-elevated px-3 text-xs font-medium hover:bg-overlay"
@@ -416,13 +597,23 @@
 
   <form id="base-url-provider-form" class="space-y-4" onsubmit={save}>
     <fieldset class="space-y-1.5 text-xs font-medium">
-      <legend>Harness</legend>
+      <legend>Harnesses</legend>
+      <p class="text-[11px] font-normal text-dimmed">
+        Select every harness that should offer this provider. Saving applies your changes to all of
+        them.
+      </p>
       <HarnessToggleGroup
         options={availableHarnesses.map((harness) => ({ id: harness.id, name: harness.name }))}
-        value={draft.harnessId}
-        disabled={provider !== null}
-        onchange={(id: string) => (draft.harnessId = id)}
+        value={draft.harnessIds}
+        disabled={baseUrlProviderStore.saving}
+        onToggle={toggleHarness}
       />
+      {#if addingHarnessWithoutKey}
+        <p class="text-[11px] text-warning">
+          Newly-added harnesses won't get the stored API key — re-enter it below to apply it there
+          too.
+        </p>
+      {/if}
     </fieldset>
 
     <div class="space-y-1.5">
@@ -538,10 +729,40 @@
         bind:value={draft.headers}></textarea>
     </label>
 
+    <label class="block space-y-1 text-xs font-medium" for="base-url-provider-usage-path">
+      <span>Status route (optional)</span>
+      <input
+        id="base-url-provider-usage-path"
+        class="h-9 w-full rounded-lg border bg-elevated px-3 font-mono text-sm outline-none focus:border-primary"
+        placeholder="/status or /usage"
+        autocomplete="off"
+        spellcheck="false"
+        bind:value={draft.usagePath}
+      />
+      <span class="block text-[11px] font-normal text-dimmed">
+        Path (relative to the base URL) or full URL that reports this account's usage/limit. Used to
+        show quota bars; leave empty if the provider has none.
+      </span>
+    </label>
+
     <div class="space-y-2">
       <div class="flex items-center justify-between">
         <span class="text-xs font-medium">Models</span>
         <div class="flex items-center gap-1.5">
+          <button
+            class="flex h-7 items-center gap-1 rounded-lg border bg-elevated px-2 text-[11px] font-medium hover:bg-overlay disabled:opacity-50"
+            type="button"
+            title="Fetch available models from {draft.baseURL || 'the base URL'}/models"
+            disabled={!draft.baseURL.trim() || discoveringModels}
+            onclick={() => void discoverModels(true)}
+          >
+            {#if discoveringModels}
+              <Loader2 size={11} class="animate-spin" />
+            {:else}
+              <RefreshCw size={11} />
+            {/if}
+            Refresh models
+          </button>
           <button
             class="flex h-7 items-center gap-1 rounded-lg border bg-elevated px-2 text-[11px] font-medium hover:bg-overlay"
             type="button"
@@ -559,6 +780,38 @@
           </button>
         </div>
       </div>
+      {#if draft.models.length === 0}
+        <p class="rounded-lg border border-dashed p-3 text-[11px] text-dimmed">
+          No models added. On save, we will fetch the model list from the /models route and add
+          every model found.
+        </p>
+        {#if discoverError}
+          <p class="text-[11px] text-danger">{discoverError}</p>
+        {:else if discoveringModels}
+          <p class="flex items-center gap-1.5 text-[11px] text-dimmed">
+            <Loader2 size={11} class="animate-spin" /> Searching {draft.baseURL}/models…
+          </p>
+        {:else if discoveredModels.length > 0}
+          <div class="space-y-1">
+            <p class="text-[11px] font-medium text-dimmed">
+              Found {discoveredModels.length} model{discoveredModels.length === 1 ? '' : 's'} — click
+              to add
+            </p>
+            <div class="flex flex-wrap gap-1.5">
+              {#each discoveredModels as model (model.id)}
+                <button
+                  class="rounded-full border bg-elevated px-2.5 py-1 text-[11px] font-mono hover:bg-overlay disabled:opacity-40"
+                  type="button"
+                  disabled={draft.models.some((m) => m.id === model.id)}
+                  onclick={() => addDiscoveredModel(model)}
+                >
+                  {model.name === model.id ? model.id : `${model.name} (${model.id})`}
+                </button>
+              {/each}
+            </div>
+          </div>
+        {/if}
+      {/if}
       {#each draft.models as model, index (index)}
         <div class="rounded-lg border bg-elevated/50 p-3">
           <div class="flex items-center justify-between">
@@ -573,17 +826,15 @@
               >
                 <Copy size={12} />
               </button>
-              {#if draft.models.length > 1}
-                <button
-                  class="flex h-6 w-6 items-center justify-center rounded text-muted hover:bg-danger/10 hover:text-danger"
-                  aria-label="Remove model {index + 1}"
-                  title="Remove model {index + 1}"
-                  type="button"
-                  onclick={() => removeModel(index)}
-                >
-                  <X size={12} />
-                </button>
-              {/if}
+              <button
+                class="flex h-6 w-6 items-center justify-center rounded text-muted hover:bg-danger/10 hover:text-danger"
+                aria-label="Remove model {index + 1}"
+                title="Remove model {index + 1}"
+                type="button"
+                onclick={() => removeModel(index)}
+              >
+                <X size={12} />
+              </button>
             </div>
           </div>
           <div class="mt-2 grid grid-cols-2 gap-2">

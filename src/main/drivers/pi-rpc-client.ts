@@ -23,6 +23,11 @@ interface PiRpcOptions {
   onEvent?: (record: Record<string, unknown>) => void
   /** Called for dialog-style extension UI requests that need a human answer. */
   onUiRequest?: (record: Record<string, unknown>) => void
+  /**
+   * Called for fire-and-forget extension UI records (setStatus/setWidget/
+   * notify/setTitle) that carry state without expecting a reply.
+   */
+  onExtensionStatus?: (record: Record<string, unknown>) => void
   /** Called once when the pi process exits unexpectedly. */
   onExit?: (code: number | null) => void
 }
@@ -46,6 +51,7 @@ export class PiRpcClient {
   private readonly onEvent: (record: Record<string, unknown>) => void
   private readonly onExit: (code: number | null) => void
   private readonly onUiRequest: (record: Record<string, unknown>) => void
+  private readonly onExtensionStatus: (record: Record<string, unknown>) => void
   private readonly pending = new Map<string, PendingRequest>()
   private buffer = ''
   private nextId = 1
@@ -56,6 +62,7 @@ export class PiRpcClient {
     // A dialog without a consumer must still be answered or pi stalls waiting
     // for a human; the driver always supplies its own handler that surfaces it.
     this.onUiRequest = options.onUiRequest ?? ((record) => this.dismissUiDialog(record))
+    this.onExtensionStatus = options.onExtensionStatus ?? (() => undefined)
     this.onExit = options.onExit ?? (() => undefined)
     this.child = spawn(options.invocation.command, options.invocation.args, {
       ...(options.invocation.cwd ? { cwd: options.invocation.cwd } : {}),
@@ -201,7 +208,11 @@ export class PiRpcClient {
       // Only dialog methods block on a client response. Fire-and-forget methods
       // (notify, setStatus, setWidget, setTitle, set_editor_text) never expect a
       // reply, so answering them would be noise.
-      if (isExtensionUiDialogMethod(record['method'])) this.onUiRequest(record)
+      if (isExtensionUiDialogMethod(record['method'])) {
+        this.onUiRequest(record)
+        return
+      }
+      if (isExtensionStatusMethod(record['method'])) this.onExtensionStatus(record)
       return
     }
     this.onEvent(record)
@@ -252,4 +263,9 @@ export class PiRpcClient {
 /** Dialog extension UI methods that block until the client replies. */
 function isExtensionUiDialogMethod(method: unknown): boolean {
   return method === 'select' || method === 'confirm' || method === 'input' || method === 'editor'
+}
+
+/** Fire-and-forget extension UI methods that carry observable state. */
+function isExtensionStatusMethod(method: unknown): boolean {
+  return method === 'setStatus' || method === 'notify' || method === 'setWidget'
 }

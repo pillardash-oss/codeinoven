@@ -77,18 +77,13 @@ say "  nightly -> ${C_GREEN}$(git rev-parse --short origin/nightly)${C_RESET}  (
 say "  main    -> ${C_GREEN}$(git rev-parse --short origin/main)${C_RESET}  (version $MAIN_VERSION)"
 say ""
 
-# --- 2. enforce the version gate (cohesive: nightly base 0.5.50 -> stable 0.5.51) --
-# Compute expected stable as nightly base +1 patch
-EXPECTED_STABLE="$(node -p "(() => { const v='"$NIGHTLY_VERSION"'.split('.').map(Number); let [M,m,p]=v; p+=1; if(p===100){p=0;m+=1} if(m===100){m=0;M+=1} return M+'.'+m+'.'+p })()")"
-# Allow either nightly base or its increment; deploy-main will bump if needed
-if [ "$NIGHTLY_VERSION" = "$EXPECTED_STABLE" ]; then EXPECTED_STABLE="$NIGHTLY_VERSION"; fi
-# Validate increase: previous main -> expected stable must increase
+# --- 2. enforce the version gate (semver-correct: nightly 0.5.52-nightly-1 -> stable 0.5.52) --
+# Nightly already carries the next stable version (stable 0.5.51 -> nightly 0.5.52-nightly-1)
+# So expected stable is exactly nightly's version.
+EXPECTED_STABLE="$NIGHTLY_VERSION"
 if ! BASE_BRANCH=main HEAD_BRANCH=nightly BASE_VERSION="$MAIN_VERSION" \
     CURRENT_VERSION="$EXPECTED_STABLE" bun scripts/validate-release-promotion.ts >/dev/null 2>&1; then
-  warn "Stable $EXPECTED_STABLE would not increase over main $MAIN_VERSION; checking nightly base"
-  BASE_BRANCH=main HEAD_BRANCH=nightly BASE_VERSION="$MAIN_VERSION" \
-    CURRENT_VERSION="$NIGHTLY_VERSION" bun scripts/validate-release-promotion.ts
-  EXPECTED_STABLE="$NIGHTLY_VERSION"
+  die "Stable $EXPECTED_STABLE would not increase over main $MAIN_VERSION (nightly $NIGHTLY_VERSION). Ensure nightly is ahead of main."
 fi
 ok "Version gate passed: main ($MAIN_VERSION) -> stable ($EXPECTED_STABLE) via nightly ($NIGHTLY_VERSION)."
 
@@ -116,25 +111,8 @@ if [[ "$DRY_RUN" -eq 0 ]]; then
   git checkout main
   git pull --ff-only origin main
   git merge --no-ff origin/nightly -X theirs -m "Release: promote v$NIGHTLY_VERSION from nightly to main"
-
-  # Cohesive tagging: bump main to next patch for stable release (e.g. 0.5.50 -> 0.5.51)
-  STABLE_VERSION="$(node -p "(() => { const v='"$NIGHTLY_VERSION"'.split('.').map(Number); let [M,m,p]=v; p+=1; if(p===100){p=0;m+=1} if(m===100){m=0;M+=1} return M+'.'+m+'.'+p })()")"
-  # Write stable version to all version files
-  node -e "
-    const fs=require('fs');
-    const v='"$STABLE_VERSION"';
-    const files=['package.json','src/renderer/static/manifest.webmanifest','services/remote-control/package.json'];
-    for(const f of files){
-      const j=JSON.parse(fs.readFileSync(f,'utf8'));
-      j.version=v;
-      fs.writeFileSync(f, JSON.stringify(j,null,2)+'\n');
-    }
-    console.log('Bumped to '+v);
-  "
-  git add package.json src/renderer/static/manifest.webmanifest services/remote-control/package.json
-  if ! git diff --cached --quiet; then
-    git commit -m "Release: bump to $STABLE_VERSION for stable release (from nightly $NIGHTLY_VERSION)"
-  fi
+  # Nightly already carries next stable (e.g. stable 0.5.51 -> nightly 0.5.52-nightly-1 -> stable 0.5.52)
+  # No bump needed - main version equals nightly version
 
   say "Pushing main..."
   git push origin main

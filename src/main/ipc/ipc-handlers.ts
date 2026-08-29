@@ -52,6 +52,7 @@ import { AGENT_BEHAVIOR_PROMPT_MAX_LENGTH } from '../../lib/agent-behavior'
 import { CIO_PROMPT_MAX_LENGTH, isCioPromptId } from '../../lib/cio-prompts'
 import type { PowerWakeService } from '../system/power-wake-service'
 import type { RetrySchedulerService } from '../system/retry-scheduler-service'
+import type { HeartbeatSchedulerService } from '../system/heartbeat-scheduler-service'
 import {
   broadcastNoteChanged,
   broadcastThreadBranchUpdated,
@@ -199,7 +200,9 @@ import type {
   GitHubPermissionRequired,
   GitHubDeploymentOverview,
   AuditSectionId,
+  HeartbeatConfig,
   HistoryEntry,
+  ThinkingLevel,
   EditorId,
   LocalProfileAnalyticsRange,
   MemoryEntry,
@@ -220,6 +223,7 @@ import type {
   UtilityDefinitionInput
 } from '../../lib/types'
 import { CLOUD_DEPLOYMENT_PROVIDER_KIND_VALUES, INBOX_PROJECT_ID } from '../../lib/types'
+import { THINKING_LEVEL_ORDER } from '../../lib/thinking-presets'
 
 type NewAssignmentProvenance = Omit<AssignmentProvenance, 'createdAt' | 'parentVersion'>
 
@@ -2071,6 +2075,8 @@ export interface RegisterIpcHandlersOptions {
   powerWakeService?: PowerWakeService
   /** Auto-resume scheduler gated by the General settings toggle. */
   retryScheduler?: RetrySchedulerService
+  /** Timed usage-window "keep warm" ping scheduler backing the Heartbeat settings page. */
+  heartbeatScheduler?: HeartbeatSchedulerService
   /** Confirmed-override layer on the declarative harness behavior manifests. */
   harnessManifestService?: HarnessManifestService
   /** Hydration channels already registered before BrowserWindow navigation. */
@@ -2085,6 +2091,68 @@ export interface RegisterIpcHandlersOptions {
   worktreeService?: ScopeWorktreeService
   /** Speech service for auto-evict of idle sound models. */
   speechService?: { updateUnloadOptions: (opts: Record<string, unknown>) => void }
+}
+
+const HEARTBEAT_TIME_PATTERN = /^([01]\d|2[0-3]):[0-5]\d$/
+
+function validateHeartbeatTimes(value: unknown): string[] {
+  if (!Array.isArray(value) || value.length === 0) {
+    throw new TypeError('Heartbeat must have at least one scheduled time')
+  }
+  const times = value.map((entry) => {
+    if (typeof entry !== 'string' || !HEARTBEAT_TIME_PATTERN.test(entry)) {
+      throw new TypeError('Heartbeat times must be 24h HH:mm strings')
+    }
+    return entry
+  })
+  return [...new Set(times)]
+}
+
+function validateHeartbeatThinkingLevel(value: unknown): ThinkingLevel | undefined {
+  if (value === undefined) return undefined
+  if (typeof value !== 'string' || !THINKING_LEVEL_ORDER.includes(value as ThinkingLevel)) {
+    throw new TypeError('Heartbeat thinking level is invalid')
+  }
+  return value as ThinkingLevel
+}
+
+function validateHeartbeatCreateInput(value: unknown): Omit<HeartbeatConfig, 'id' | 'lastRun'> {
+  if (typeof value !== 'object' || value === null) throw new TypeError('Invalid heartbeat input')
+  const input = value as Record<string, unknown>
+  return {
+    name: validateBoundedString(input.name, 'Heartbeat name', 1, 100),
+    harnessId: validateBoundedString(input.harnessId, 'Heartbeat harness ID', 1, 100),
+    providerId: validateBoundedString(input.providerId, 'Heartbeat provider ID', 1, 100),
+    modelId: validateBoundedString(input.modelId, 'Heartbeat model ID', 1, 200),
+    thinkingLevel: validateHeartbeatThinkingLevel(input.thinkingLevel),
+    times: validateHeartbeatTimes(input.times),
+    enabled: typeof input.enabled === 'boolean' ? input.enabled : true
+  }
+}
+
+function validateHeartbeatPatchInput(value: unknown): Partial<Omit<HeartbeatConfig, 'id'>> {
+  if (typeof value !== 'object' || value === null) throw new TypeError('Invalid heartbeat patch')
+  const input = value as Record<string, unknown>
+  const patch: Partial<Omit<HeartbeatConfig, 'id'>> = {}
+  if (input.name !== undefined) patch.name = validateBoundedString(input.name, 'Heartbeat name', 1, 100)
+  if (input.harnessId !== undefined) {
+    patch.harnessId = validateBoundedString(input.harnessId, 'Heartbeat harness ID', 1, 100)
+  }
+  if (input.providerId !== undefined) {
+    patch.providerId = validateBoundedString(input.providerId, 'Heartbeat provider ID', 1, 100)
+  }
+  if (input.modelId !== undefined) {
+    patch.modelId = validateBoundedString(input.modelId, 'Heartbeat model ID', 1, 200)
+  }
+  if (input.thinkingLevel !== undefined) {
+    patch.thinkingLevel = validateHeartbeatThinkingLevel(input.thinkingLevel)
+  }
+  if (input.times !== undefined) patch.times = validateHeartbeatTimes(input.times)
+  if (input.enabled !== undefined) {
+    if (typeof input.enabled !== 'boolean') throw new TypeError('Heartbeat enabled flag must be a boolean')
+    patch.enabled = input.enabled
+  }
+  return patch
 }
 
 export function registerIpcHandlers(
@@ -2450,6 +2518,31 @@ export function registerIpcHandlers(
     if (typeof id !== 'string' || !isCioPromptId(id)) throw new TypeError('Invalid CIO prompt ID')
     await storage.resetCioPrompt(id)
     return storage.getCioPromptSettings()
+  })
+  ipcMain.handle('heartbeat:list', () => options.heartbeatScheduler?.list() ?? storage.getHeartbeats())
+  ipcMain.handle('heartbeat:create', async (_, input: unknown) => {
+    const scheduler = options.heartbeatScheduler
+    if (!scheduler) throw new Error('Heartbeat scheduler is not available')
+    return scheduler.create(validateHeartbeatCreateInput(input))
+  })
+  ipcMain.handle('heartbeat:update', async (_, id: unknown, patch: unknown) => {
+    const scheduler = options.heartbeatScheduler
+    if (!scheduler) throw new Error('Heartbeat scheduler is not available')
+    const safeId = validateBoundedString(id, 'Heartbeat ID', 1, 200)
+    return scheduler.update(safeId, validateHeartbeatPatchInput(patch))
+  })
+  ipcMain.handle('heartbeat:delete', async (_, id: unknown) => {
+    const scheduler = options.heartbeatScheduler
+    if (!scheduler) throw new Error('Heartbeat scheduler is not available')
+    const safeId = validateBoundedString(id, 'Heartbeat ID', 1, 200)
+    return scheduler.remove(safeId)
+  })
+  ipcMain.handle('heartbeat:toggle', async (_, id: unknown, enabled: unknown) => {
+    const scheduler = options.heartbeatScheduler
+    if (!scheduler) throw new Error('Heartbeat scheduler is not available')
+    const safeId = validateBoundedString(id, 'Heartbeat ID', 1, 200)
+    if (typeof enabled !== 'boolean') throw new TypeError('Heartbeat enabled flag must be a boolean')
+    return scheduler.update(safeId, { enabled })
   })
   ipcMain.handle('workerNames:getSettings', () => storage.getWorkerNameSettings())
   ipcMain.handle('workerNames:saveCustom', async (_, input: unknown) => {

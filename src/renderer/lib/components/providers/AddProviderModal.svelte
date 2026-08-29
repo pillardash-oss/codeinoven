@@ -4,6 +4,7 @@
     CheckCircle2,
     KeyRound,
     Loader2,
+    Pencil,
     Plug,
     RefreshCw,
     Search,
@@ -19,6 +20,7 @@
   import Switch from '../ui/Switch.svelte'
   import ProviderLoginTerminal from './ProviderLoginTerminal.svelte'
   import type {
+    BaseUrlProvider,
     OfferedProvider,
     ProviderAccountAuthEntry,
     ProviderAccountAuthStatus,
@@ -26,19 +28,28 @@
     ProviderConnectionInfo
   } from '$shared/types'
 
+  type AddTab = 'connect' | 'custom'
+  type ConnectStep = 'idle' | 'picking' | 'running'
+
   interface Props {
     harness: ProviderConnectionInfo
     onClose: () => void
     /** Hand the user off to the custom base-URL editor, pre-scoped to this harness. */
     onAddCustom: (harnessId: string) => void
+    /** Hand the user off to the custom base-URL editor to edit an existing provider. */
+    onEditCustom: (provider: BaseUrlProvider) => void
+    /** Tab shown on open — e.g. 'custom' when returning here via the editor's Back button. */
+    initialTab?: AddTab
   }
 
-  let { harness, onClose, onAddCustom }: Props = $props()
+  let { harness, onClose, onAddCustom, onEditCustom, initialTab = 'connect' }: Props = $props()
 
-  type AddTab = 'connect' | 'custom'
-  type ConnectStep = 'idle' | 'picking' | 'running'
+  /** The component is mounted per-open, so the initial prop value is authoritative. */
+  function startingTab(): AddTab {
+    return initialTab
+  }
 
-  let tab = $state<AddTab>('connect')
+  let tab = $state<AddTab>(startingTab())
   let step = $state<ConnectStep>('idle')
   let authStatus = $state<ProviderAccountAuthStatus | null>(null)
   let checkingAuth = $state(false)
@@ -57,9 +68,10 @@
   let actionWarning = $state('')
   let actionError = $state('')
 
-  let customCount = $derived(
-    baseUrlProviderStore.providers.filter((provider) => provider.harnessId === harness.id).length
+  let customProviders = $derived(
+    baseUrlProviderStore.providers.filter((provider) => provider.harnessId === harness.id)
   )
+  let customCount = $derived(customProviders.length)
 
   let canSignIn = $derived(
     authStatus !== null &&
@@ -89,27 +101,21 @@
   let apiKey = $state('')
   let storingKey = $state(false)
 
-  /** In-app OAuth sign-in state (Pi providers whose catalogs require OAuth). */
+  /** In-app sign-in state (Pi: OAuth flows and the provider's own key flows). */
   let oauthLoginId = $state<string | null>(null)
   let oauthStatus = $state('')
   let oauthDeviceCode = $state<{ userCode: string; verificationUri: string } | null>(null)
-  let oauthPrompt = $state<{ promptId: string; message: string; placeholder?: string } | null>(
-    null
-  )
+  let oauthPrompt = $state<{
+    promptId: string
+    type: 'text' | 'secret' | 'select' | 'manual_code'
+    message: string
+    placeholder?: string
+    options?: Array<{ id: string; label: string }>
+  } | null>(null)
   let oauthPromptAnswer = $state('')
   let oauthStarting = $state(false)
-  /** Catalog providers connectable through a browser-based OAuth flow. */
-  const OAUTH_PROVIDER_IDS = new Set([
-    'anthropic',
-    'openai-codex',
-    'github-copilot',
-    'openrouter',
-    'kimi-coding',
-    'xai'
-  ])
-  let selectedProviderIsOauth = $derived(
-    selectedProvider !== null && OAUTH_PROVIDER_IDS.has(selectedProvider.id)
-  )
+  /** The catalog flags providers that support a fully in-app browser sign-in. */
+  let selectedProviderIsOauth = $derived(selectedProvider?.oauth === true)
 
   function resetOAuthState(): void {
     oauthLoginId = null
@@ -149,9 +155,23 @@
       if (!prompt) return
       oauthPrompt = {
         promptId: String(data['promptId']),
+        type:
+          prompt['type'] === 'secret' ||
+          prompt['type'] === 'select' ||
+          prompt['type'] === 'manual_code'
+            ? prompt['type']
+            : 'text',
         message: String(prompt['message'] ?? 'Continue sign-in'),
         ...(typeof prompt['placeholder'] === 'string'
           ? { placeholder: prompt['placeholder'] }
+          : {}),
+        ...(Array.isArray(prompt['options'])
+          ? {
+              options: (prompt['options'] as Array<Record<string, unknown>>).map((option) => ({
+                id: String(option['id']),
+                label: String(option['label'])
+              }))
+            }
           : {})
       }
       oauthPromptAnswer = ''
@@ -170,8 +190,8 @@
     }
   }
 
-  /** Launch the browser-based OAuth flow for the selected provider. */
-  async function startOAuthSignIn(): Promise<void> {
+  /** Launch the provider's own in-app sign-in flow (OAuth or guided key entry). */
+  async function startProviderSignIn(): Promise<void> {
     if (!selectedProvider || oauthStarting) return
     actionError = ''
     actionWarning = ''
@@ -200,6 +220,19 @@
     oauthStatus = 'Continuing sign-in…'
     try {
       await invoke('providerAccounts:respondOAuthPrompt', oauthLoginId, answer)
+    } catch (answerError) {
+      actionError =
+        answerError instanceof Error ? answerError.message : 'The answer could not be sent.'
+    }
+  }
+
+  /** Answer a select prompt by choosing one of its options directly. */
+  async function answerSelectPrompt(optionId: string): Promise<void> {
+    if (!oauthLoginId || !oauthPrompt) return
+    oauthPrompt = null
+    oauthStatus = 'Continuing sign-in…'
+    try {
+      await invoke('providerAccounts:respondOAuthPrompt', oauthLoginId, optionId)
     } catch (answerError) {
       actionError =
         answerError instanceof Error ? answerError.message : 'The answer could not be sent.'
@@ -309,9 +342,7 @@
       providerCatalog.invalidateAll()
     } catch (storeError) {
       actionError =
-        storeError instanceof Error
-          ? storeError.message
-          : 'The API key could not be stored.'
+        storeError instanceof Error ? storeError.message : 'The API key could not be stored.'
     } finally {
       storingKey = false
     }
@@ -449,7 +480,7 @@
       {#if tab === 'custom'}
         <p class="min-w-0 flex-1 text-[11px] text-dimmed">
           Add any OpenAI-compatible endpoint by base URL — Ollama, LM Studio, llama.cpp, or a hosted
-          gateway. Models appear in the picker after the next agent turn.
+          gateway. Models are ready in the picker as soon as you save.
         </p>
       {:else if antigravityConnected}
         <p class="min-w-0 flex-1 text-[11px] text-dimmed">
@@ -509,13 +540,15 @@
               title={step === 'picking' && selectedProvider
                 ? `Store the API key for ${selectedProvider.name}`
                 : 'Select a provider first'}
-              disabled={storingKey || oauthLoginId !== null || (step === 'picking' && !selectedProvider)}
+              disabled={storingKey ||
+                oauthLoginId !== null ||
+                (step === 'picking' && !selectedProvider)}
               onclick={() => (step === 'idle' ? openPicker() : void connectWithKey())}
             >
               {#if storingKey}
                 <Loader2 size={13} class="animate-spin" />
               {:else if step === 'idle'}
-                <Search size={13} /> Select a provider
+                <Search size={13} /> Search providers
               {:else}
                 <KeyRound size={13} /> Connect provider
               {/if}
@@ -537,7 +570,7 @@
               {#if !pickerLogin && step === 'picking' && selectedProvider}
                 <Plug size={13} /> Connect with {selectedProvider.name}
               {:else if !pickerLogin && step === 'picking'}
-                <Search size={13} /> Select a provider
+                <Search size={13} /> Search providers
               {:else}
                 <KeyRound size={13} /> Connect provider
               {/if}
@@ -584,25 +617,29 @@
 
   {#if tab === 'connect'}
     <div class="space-y-4">
-      <div class="flex items-center justify-between gap-3 rounded-xl border bg-surface px-3 py-2.5">
-        <div class="flex min-w-0 items-center gap-2">
-          {#if authStatus?.state === 'authenticated'}
-            <CheckCircle2 size={15} class="shrink-0 text-success" />
-          {:else}
-            <KeyRound size={15} class="shrink-0 text-dimmed" />
-          {/if}
-          <p class="truncate text-xs font-medium">{stateLabel()}</p>
-        </div>
-        <button
-          class="flex h-7 items-center gap-1 rounded-lg border bg-elevated px-2 text-[11px] font-medium hover:bg-overlay disabled:opacity-50"
-          title="Re-check {harness.name} sign-in status"
-          disabled={checkingAuth}
-          onclick={() => void checkAuth()}
+      {#if step === 'idle'}
+        <div
+          class="flex items-center justify-between gap-3 rounded-xl border bg-surface px-3 py-2.5"
         >
-          <RefreshCw size={11} class={checkingAuth ? 'animate-spin' : ''} />
-          Check
-        </button>
-      </div>
+          <div class="flex min-w-0 items-center gap-2">
+            {#if authStatus?.state === 'authenticated'}
+              <CheckCircle2 size={15} class="shrink-0 text-success" />
+            {:else}
+              <KeyRound size={15} class="shrink-0 text-dimmed" />
+            {/if}
+            <p class="truncate text-xs font-medium">{stateLabel()}</p>
+          </div>
+          <button
+            class="flex h-7 items-center gap-1 rounded-lg border bg-elevated px-2 text-[11px] font-medium hover:bg-overlay disabled:opacity-50"
+            title="Re-check {harness.name} sign-in status"
+            disabled={checkingAuth}
+            onclick={() => void checkAuth()}
+          >
+            <RefreshCw size={11} class={checkingAuth ? 'animate-spin' : ''} />
+            Check
+          </button>
+        </div>
+      {/if}
 
       {#if actionError}
         <p class="rounded-lg bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">
@@ -623,7 +660,7 @@
         </p>
       {/if}
 
-      {#if authStatus?.accounts.length}
+      {#if step === 'idle' && authStatus?.accounts.length}
         <div class="space-y-1.5">
           <p class="text-[11px] font-medium text-dimmed">Connected providers</p>
           {#each authStatus.accounts as account (account.id)}
@@ -766,26 +803,39 @@
             </div>
           {/if}
 
+          {#snippet apiKeyField(providerName: string)}
+            <label
+              class="block text-[11px] font-medium text-foreground"
+              for="provider-api-key-input"
+            >
+              API key for {providerName}
+            </label>
+            <!-- svelte-ignore a11y_autofocus -->
+            <input
+              id="provider-api-key-input"
+              type="password"
+              autocomplete="off"
+              spellcheck="false"
+              class="h-9 w-full rounded-lg border bg-elevated px-3 text-sm outline-none focus:border-primary"
+              placeholder="Paste the API key"
+              bind:value={apiKey}
+              autofocus
+              onkeydown={(event: KeyboardEvent) => {
+                if (event.key === 'Enter') {
+                  event.preventDefault()
+                  void connectWithKey()
+                }
+              }}
+            />
+            <p class="text-[10px] text-dimmed">
+              Stored by CodeInOven in {harness.name}’s own credential file — never sent anywhere
+              else.
+            </p>
+          {/snippet}
+
           {#if apiKeyEntry && selectedProvider}
             <div class="space-y-1.5 rounded-xl border border-primary/30 bg-primary/5 p-3">
-              {#if selectedProviderIsOauth && oauthLoginId === null}
-                <p class="text-[11px] font-medium text-foreground">
-                  Sign in to {selectedProvider.name}
-                </p>
-                <p class="text-[10px] text-dimmed">
-                  A browser window opens, you approve access, and this app finishes the rest — no
-                  key pasting needed.
-                </p>
-                <button
-                  class="flex h-9 items-center justify-center gap-1.5 rounded-lg bg-primary px-4 text-xs font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
-                  type="button"
-                  title="Sign in to {selectedProvider.name} in your browser"
-                  onclick={() => void startOAuthSignIn()}
-                >
-                  <KeyRound size={13} /> Sign in with browser
-                </button>
-                <p class="text-center text-[10px] text-dimmed">— or paste an API key —</p>
-              {:else if oauthLoginId !== null}
+              {#if oauthLoginId !== null}
                 <div class="space-y-2">
                   <div class="flex items-center gap-2">
                     <Loader2 size={13} class="animate-spin text-primary" />
@@ -809,82 +859,106 @@
                           class="font-medium text-primary underline underline-offset-2"
                           type="button"
                           title="Open {oauthDeviceCode.verificationUri}"
-                          onclick={() =>
-                            void openInBrowser(oauthDeviceCode?.verificationUri ?? '')}
+                          onclick={() => void openInBrowser(oauthDeviceCode?.verificationUri ?? '')}
                         >
                           {oauthDeviceCode.verificationUri}
                         </button>
                       </p>
-                      <p class="mt-1 font-mono text-base font-semibold tracking-widest text-foreground">
+                      <p
+                        class="mt-1 font-mono text-base font-semibold tracking-widest text-foreground"
+                      >
                         {oauthDeviceCode.userCode}
                       </p>
                     </div>
                   {/if}
                   {#if oauthPrompt}
                     <div class="space-y-1.5">
-                      <label
-                        class="block text-[11px] font-medium text-foreground"
-                        for="oauth-prompt-input"
-                      >
-                        {oauthPrompt.message}
-                      </label>
-                      <!-- svelte-ignore a11y_autofocus -->
-                      <input
-                        id="oauth-prompt-input"
-                        type="text"
-                        autocomplete="off"
-                        spellcheck="false"
-                        class="h-9 w-full rounded-lg border bg-elevated px-3 text-sm outline-none focus:border-primary"
-                        placeholder={oauthPrompt.placeholder ?? 'Paste the code'}
-                        bind:value={oauthPromptAnswer}
-                        autofocus
-                        onkeydown={(event: KeyboardEvent) => {
-                          if (event.key === 'Enter') {
-                            event.preventDefault()
-                            void submitOAuthPrompt()
-                          }
-                        }}
-                      />
-                      <button
-                        class="flex h-8 w-full items-center justify-center rounded-lg bg-primary text-xs font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
-                        type="button"
-                        title="Continue the sign-in"
-                        disabled={oauthPromptAnswer.trim() === ''}
-                        onclick={() => void submitOAuthPrompt()}
-                      >
-                        Continue
-                      </button>
+                      {#if oauthPrompt.type === 'select' && oauthPrompt.options}
+                        <p class="text-[11px] font-medium text-foreground">{oauthPrompt.message}</p>
+                        <div class="space-y-1">
+                          {#each oauthPrompt.options as option (option.id)}
+                            <button
+                              class="w-full rounded-lg border bg-elevated px-3 py-2 text-left text-xs text-foreground hover:bg-overlay"
+                              type="button"
+                              title="Choose {option.label}"
+                              onclick={() => void answerSelectPrompt(option.id)}
+                            >
+                              {option.label}
+                            </button>
+                          {/each}
+                        </div>
+                      {:else}
+                        <label
+                          class="block text-[11px] font-medium text-foreground"
+                          for="oauth-prompt-input"
+                        >
+                          {oauthPrompt.message}
+                        </label>
+                        <!-- svelte-ignore a11y_autofocus -->
+                        <input
+                          id="oauth-prompt-input"
+                          type={oauthPrompt.type === 'secret' ? 'password' : 'text'}
+                          autocomplete="off"
+                          spellcheck="false"
+                          class="h-9 w-full rounded-lg border bg-elevated px-3 text-sm outline-none focus:border-primary"
+                          placeholder={oauthPrompt.placeholder ??
+                            (oauthPrompt.type === 'secret' ? 'Enter the value' : 'Paste the code')}
+                          bind:value={oauthPromptAnswer}
+                          autofocus
+                          onkeydown={(event: KeyboardEvent) => {
+                            if (event.key === 'Enter') {
+                              event.preventDefault()
+                              void submitOAuthPrompt()
+                            }
+                          }}
+                        />
+                        <button
+                          class="flex h-8 w-full items-center justify-center rounded-lg bg-primary text-xs font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
+                          type="button"
+                          title="Continue the sign-in"
+                          disabled={oauthPromptAnswer.trim() === ''}
+                          onclick={() => void submitOAuthPrompt()}
+                        >
+                          Continue
+                        </button>
+                      {/if}
                     </div>
                   {/if}
                 </div>
-              {:else}
-                <label
-                  class="block text-[11px] font-medium text-foreground"
-                  for="provider-api-key-input"
-                >
-                  API key for {selectedProvider.name}
-                </label>
-                <!-- svelte-ignore a11y_autofocus -->
-                <input
-                  id="provider-api-key-input"
-                  type="password"
-                  autocomplete="off"
-                  spellcheck="false"
-                  class="h-9 w-full rounded-lg border bg-elevated px-3 text-sm outline-none focus:border-primary"
-                  placeholder="Paste the API key"
-                  bind:value={apiKey}
-                  autofocus
-                  onkeydown={(event: KeyboardEvent) => {
-                    if (event.key === 'Enter') {
-                      event.preventDefault()
-                      void connectWithKey()
-                    }
-                  }}
-                />
-                <p class="text-[10px] text-dimmed">
-                  Stored by CodeInOven in {harness.name}’s own credential file — never sent anywhere
-                  else.
+              {:else if selectedProviderIsOauth}
+                <p class="text-[11px] font-medium text-foreground">
+                  Sign in to {selectedProvider.name}
                 </p>
+                <p class="text-[10px] text-dimmed">
+                  A browser window opens, you approve access, and this app finishes the rest — no
+                  key pasting needed.
+                </p>
+                <button
+                  class="flex h-9 items-center justify-center gap-1.5 rounded-lg bg-primary px-4 text-xs font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
+                  type="button"
+                  title="Sign in to {selectedProvider.name} in your browser"
+                  onclick={() => void startProviderSignIn()}
+                >
+                  <KeyRound size={13} /> Sign in with browser
+                </button>
+                <p class="text-center text-[10px] text-dimmed">— or paste an API key —</p>
+                {@render apiKeyField(selectedProvider.name)}
+              {:else}
+                <p class="text-[11px] font-medium text-foreground">
+                  Connect to {selectedProvider.name}
+                </p>
+                <p class="text-[10px] text-dimmed">
+                  {harness.name}'s own sign-in flow runs right here — answer its prompts and the
+                  credential is stored in {harness.name}'s credential file.
+                </p>
+                <button
+                  class="flex h-9 items-center justify-center gap-1.5 rounded-lg bg-primary px-4 text-xs font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
+                  type="button"
+                  title="Connect to {selectedProvider.name}"
+                  onclick={() => void startProviderSignIn()}
+                >
+                  <KeyRound size={13} /> Connect
+                </button>
               {/if}
             </div>
           {/if}
@@ -893,8 +967,9 @@
         <div class="rounded-xl border border-dashed px-3 py-2.5">
           {#if apiKeyEntry}
             <p class="text-[11px] text-muted">
-              Click <strong class="font-medium text-foreground">Select a provider</strong> below to
-              browse {harness.name}’s full provider catalog, then paste an API key to connect.
+              Click <strong class="font-medium text-foreground">Search providers</strong> below to
+              browse {harness.name}’s full provider catalog, then sign in or paste an API key to
+              connect.
             </p>
           {:else if pickerLogin}
             <p class="text-[11px] text-muted">
@@ -921,6 +996,51 @@
           </span>
         </p>
       </div>
+
+      {#if customProviders.length > 0}
+        <div class="space-y-1.5">
+          <p class="text-[11px] font-medium text-dimmed">Custom providers</p>
+          {#each customProviders as provider (provider.id)}
+            <div
+              class="flex items-center justify-between gap-2 rounded-lg border bg-surface px-3 py-2"
+            >
+              <div class="flex min-w-0 items-center gap-2">
+                <Server size={13} class="shrink-0 text-dimmed" />
+                <span class="truncate text-xs">{provider.name}</span>
+                <span
+                  class="truncate rounded-full bg-elevated px-1.5 py-0.5 font-mono text-[10px] text-dimmed"
+                  title={provider.baseURL}
+                >
+                  {provider.baseURL}
+                </span>
+                {#if !provider.enabled}
+                  <span
+                    class="shrink-0 rounded-full bg-raised px-1.5 py-0.5 text-[10px] font-medium text-dimmed"
+                  >
+                    Disabled
+                  </span>
+                {/if}
+              </div>
+              <button
+                class="flex h-7 shrink-0 items-center gap-1 rounded-lg border bg-elevated px-2 text-[11px] font-medium hover:bg-overlay"
+                title="Edit {provider.name}"
+                type="button"
+                onclick={() => onEditCustom(provider)}
+              >
+                <Pencil size={11} /> Edit
+              </button>
+            </div>
+          {/each}
+        </div>
+      {:else}
+        <div class="rounded-xl border border-dashed p-4 text-center">
+          <p class="text-xs text-muted">
+            No custom providers for {harness.name} yet. Click
+            <strong class="font-medium text-foreground">Open custom provider form</strong> below to add
+            one.
+          </p>
+        </div>
+      {/if}
     </div>
   {/if}
 </Modal>

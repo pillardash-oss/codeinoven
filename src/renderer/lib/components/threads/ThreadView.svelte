@@ -53,6 +53,7 @@
   import VoiceInputButton from '../speech/VoiceInputButton.svelte'
   import SpeechPlaybackButton from '../speech/SpeechPlaybackButton.svelte'
   import { speechController } from '../../speech/speech-controller.svelte'
+  import { spokenWordOffset } from '../../speech/read-along'
   import WorkingTrace from './WorkingTrace.svelte'
   import FindInSurface from './FindInSurface.svelte'
   import ContinueInProjectModal from './ContinueInProjectModal.svelte'
@@ -101,6 +102,7 @@
   import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
   import { getAgentIcon } from '$lib/agent-icons/registry'
   import { invoke, subscribe } from '$lib/ipc.svelte'
+  import { isUsageResetWaitIssue } from '$shared/provider-issue'
   import { copyText } from '$lib/copy-text'
   import { ENGINEERING_SPEC_REQUEST_PROMPT } from '$shared/agent-tools'
   import { messageId } from '$shared/id'
@@ -113,6 +115,7 @@
     chatEffectiveSettings
   } from '$lib/stores/thread-settings.svelte'
   import { baseUrlProviderStore } from '$lib/stores/base-url-providers.svelte'
+  import { providerStore } from '$lib/stores/providers.svelte'
   import { providerCatalog } from '$lib/stores/provider-catalog.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
   import { contextSidebarState, EXPLAIN_SELECTION_PROMPT } from '$lib/stores/context-sidebar.svelte'
@@ -208,6 +211,7 @@
     representativeLifecycleSelection
   } from '$shared/engines/engineering-lifecycle-engine'
   import { APP_NAME } from '$shared/brand'
+  import { supportsManualCompaction } from '$shared/thread-status-policy'
   import { workflowActionPresentation } from '$shared/workflow-action-presentation'
   import { LatestRequestGuard } from '$lib/refresh-guard'
   import { isRemotePwaRuntime } from '$lib/runtime-context'
@@ -351,11 +355,7 @@
    *  so the bottom working placeholder keeps showing instead of a blank tail. */
   let latestTurnRenderableParts = $derived.by(() => {
     const lastMessage = messages[messages.length - 1]
-    if (
-      conversationBusy &&
-      lastMessage?.role === 'user' &&
-      !isActivityOnlyUserMessage(lastMessage)
-    )
+    if (conversationBusy && lastMessage?.role === 'user' && !isActivityOnlyUserMessage(lastMessage))
       return []
     if (latestTurnInfo.startIndex === -1) return []
     return getTurnWorkingParts(latestTurnInfo.startIndex, conversationBusy && latestTurnInfo.active)
@@ -913,7 +913,7 @@
       category: 'command',
       source: applicationActionSource,
       keywords: ['summarize', 'context', 'tokens'],
-      ...(!['opencode', 'codex'].includes(settings.harnessId)
+      ...(!supportsManualCompaction(settings.harnessId, providerStore.providers)
         ? { disabledReason: `${providerName} does not support manual compaction` }
         : busy
           ? { disabledReason: 'Wait for the active run to finish' }
@@ -3616,6 +3616,21 @@
     errorMessage = ''
   }
 
+  /**
+   * A usage/rate-limit issue is a scheduled will-retry wait, not a failure:
+   * route it to the waiting card (countdown + retry scheduling) so the thread
+   * row keeps its "Waiting to retry" spinner instead of flashing an error
+   * badge while the card itself renders the will-retry treatment.
+   */
+  function setProviderStatusFromIssue(issue: AgentProviderIssue): void {
+    if (isUsageResetWaitIssue(issue)) {
+      providerStatus = { state: 'waiting', issue }
+      errorMessage = ''
+    } else {
+      setProviderError(issue)
+    }
+  }
+
   function handleAgentEvent(event: AgentEvent): void {
     // Controller-driven conversations handle their own live events.
     if (controller) return
@@ -3667,7 +3682,7 @@
       pendingPermissions = []
       pendingQuestionRequests = []
       pendingImageDescriptorError = null
-      setProviderError(event.issue)
+      setProviderStatusFromIssue(event.issue)
       void refreshCheckpoints()
       return
     }
@@ -3707,7 +3722,7 @@
           // a session failure, so never surface the error banner.
           if (!userRequestedStop) {
             if (event.issue) {
-              setProviderError(event.issue)
+              setProviderStatusFromIssue(event.issue)
             } else {
               errorMessage = event.error
             }
@@ -3727,7 +3742,11 @@
           compactionInterruptedNotice =
             'Context compaction was interrupted before your message could be processed. Send it again to continue.'
         }
-        if (providerStatus?.state !== 'error') providerStatus = null
+        // Error and will-retry cards survive idle (the scheduled auto-resume
+        // owns the session now); everything else clears.
+        if (providerStatus?.state !== 'error' && providerStatus?.state !== 'waiting') {
+          providerStatus = null
+        }
         void refreshCheckpoints()
         setTimeout(() => void refreshEfficiencyKpis(), 100)
         scheduleReadySpecReconcile()
@@ -3743,7 +3762,7 @@
         pendingImageDescriptorError = null
         if (!userRequestedStop) {
           if (event.issue) {
-            setProviderError(event.issue)
+            setProviderStatusFromIssue(event.issue)
           } else {
             errorMessage = event.error ?? 'The harness session failed.'
           }
@@ -3790,7 +3809,13 @@
             compactionInterruptedNotice =
               'Context compaction was interrupted before your message could be processed. Send it again to continue.'
           }
-          if (previousProviderStatus?.state !== 'error') providerStatus = null
+          // Error and will-retry cards survive idle; everything else clears.
+          if (
+            previousProviderStatus?.state !== 'error' &&
+            previousProviderStatus?.state !== 'waiting'
+          ) {
+            providerStatus = null
+          }
           scheduleReadySpecReconcile()
           scheduleIdleAttention()
         } else {
@@ -4016,10 +4041,11 @@
     const pendingProjectReferences = queuedProjectReferences
     const pendingPresentation = queuedPresentation
     const pendingTaskReferences = queuedTaskReferences
+    const pendingStartAfterThreads = queuedStartAfterThreads
     if (!pending && !queuedHasContent) return
-    if (queuedStartAfterThreads.length > 0) {
+    if (pendingStartAfterThreads.length > 0) {
       const dependencies = await Promise.all(
-        queuedStartAfterThreads.map((reference) => invoke('thread:get', projectId, reference.id))
+        pendingStartAfterThreads.map((reference) => invoke('thread:get', projectId, reference.id))
       )
       if (dependencies.some((dependency) => !dependency || !isTerminalThread(dependency.status))) {
         idleAttentionHandled = false
@@ -4031,6 +4057,8 @@
     // the race, whoever claimed it will send it — never send here.
     if (!claimQueuedMessage(projectId, id)) return
     try {
+      // Dequeue only the head — remaining queued messages stay FIFO for the
+      // following idle transitions (one message per turn).
       clearQueuedState()
       await sendMessage(
         pending,
@@ -4055,7 +4083,8 @@
     void handleIdleAttention()
   }
 
-  /** Clear the in-memory queue and its persisted recovery entry. */
+  /** Clear the in-memory head entry and dequeue the persisted head message.
+   *  Remaining queued messages stay in the FIFO for the next idle turn. */
   function clearQueuedState(): void {
     queuedMessage = ''
     queuedAttachments = []
@@ -4069,29 +4098,50 @@
     rendererRecovery.clearQueuedMessage(thread.projectId, thread.id)
   }
 
-  /** Bring a persisted queued message back after a reload or thread remount. */
+  /** Bring persisted queued messages back after a reload or thread remount.
+   *  The head entry hydrates the in-memory copy; the rest stay in the store. */
   function restoreQueuedMessage(): void {
+    syncQueuedFromStore()
+    if (!queuedMessage && !queuedHasContent) return
     const entry = rendererRecovery.queuedMessageFor(thread.projectId, thread.id)
-    if (!entry || queuedMessage || queuedHasContent) return
-    queuedMessage = entry.text
-    queuedAttachments = entry.attachments
-    queuedPromptContext = entry.promptContext
-    queuedPromptReferences = entry.promptReferences
-    queuedProjectReferences = entry.projectReferences
-    queuedPresentation = entry.presentation
-    queuedTaskReferences = entry.taskReferences
-    queuedStartAfterThreads = entry.startAfterThreads
-    queuedHasContent =
-      entry.text !== '' ||
-      entry.attachments.length > 0 ||
-      Boolean(entry.promptContext) ||
-      entry.promptReferences.length > 0 ||
-      entry.projectReferences.length > 0 ||
-      entry.taskReferences.length > 0
+    if (!entry) return
     if (entry.promptReferences.length > 0) {
       responseReferencesState.setForThread(thread.projectId, thread.id, entry.promptReferences)
       scheduleResponseHighlightRestore(entry.promptReferences)
     }
+  }
+
+  /** Mirror the store's head queued message into the in-memory card state.
+   *  Keeps the card showing the next message the FIFO will actually send. */
+  function syncQueuedFromStore(): void {
+    const head = rendererRecovery.queuedMessageFor(thread.projectId, thread.id)
+    if (!head) {
+      queuedMessage = ''
+      queuedAttachments = []
+      queuedPromptContext = undefined
+      queuedPromptReferences = []
+      queuedProjectReferences = []
+      queuedPresentation = undefined
+      queuedTaskReferences = []
+      queuedStartAfterThreads = []
+      queuedHasContent = false
+      return
+    }
+    queuedMessage = head.text
+    queuedAttachments = head.attachments
+    queuedPromptContext = head.promptContext
+    queuedPromptReferences = head.promptReferences
+    queuedProjectReferences = head.projectReferences
+    queuedPresentation = head.presentation
+    queuedTaskReferences = head.taskReferences
+    queuedStartAfterThreads = head.startAfterThreads
+    queuedHasContent =
+      head.text !== '' ||
+      head.attachments.length > 0 ||
+      Boolean(head.promptContext) ||
+      head.promptReferences.length > 0 ||
+      head.projectReferences.length > 0 ||
+      head.taskReferences.length > 0
   }
 
   /** Recover response-selection annotations persisted with the composer draft
@@ -4126,6 +4176,8 @@
    *  (e.g. a selection carrying only a user comment). */
   let queuedHasContent = $state(false)
   let showQueueMenu = $state(false)
+  /** Count of messages waiting in the thread's FIFO queue (from the store). */
+  const queuedCount = $derived(rendererRecovery.queuedMessageCount(thread.projectId, thread.id))
   let composerRestoreKey = $state(0)
   let pendingQuestionRequests = $state<PendingAgentQuestionRequest[]>([])
   const resolvedQuestionRequestIds = new SvelteSet<string>()
@@ -4233,6 +4285,10 @@
       providerStatus = null
       userScrolledAway = false
       idleAttentionHandled = false
+      // Snapshot the selection this turn starts with before anything else can
+      // change it — identical to the thread path, so mid-turn composer edits
+      // never re-label the running trace.
+      captureLiveWorkingSelection()
       const payload: SendPayload = {
         text,
         attachments,
@@ -4288,6 +4344,9 @@
       queuedTaskReferences = taskReferences
       queuedStartAfterThreads = dependencyThreads
       queuedHasContent = true
+      // Append to the thread's FIFO queue — a later queued message sends after
+      // earlier ones, one per idle turn. The in-memory mirror then follows the
+      // store head so the queue card always shows the next message to send.
       rendererRecovery.setQueuedMessage(thread.projectId, thread.id, {
         text: msg,
         attachments,
@@ -4298,6 +4357,7 @@
         taskReferences,
         startAfterThreads: dependencyThreads
       })
+      syncQueuedFromStore()
       idleAttentionHandled = false
       void handleIdleAttention()
       return
@@ -4479,7 +4539,11 @@
 
   /** Stop the in-flight turn — wired to the composer's stop button and double Escape. */
   async function abortRun(): Promise<void> {
-    if (!busy) return
+    // A scheduled usage-reset retry leaves `busy` false (the session.status
+    // 'waiting' handler marks the run idle so the working UI doesn't stick),
+    // but the "Stop request" button on the provider card is shown for that
+    // same state — so this must not bail out before invoking the abort.
+    if (!busy && providerStatus?.state !== 'waiting') return
     const { projectId, id } = thread
     userRequestedStop = true
 
@@ -4703,6 +4767,9 @@
         queuedPresentation = presentation
         queuedTaskReferences = taskReferences
         queuedHasContent = true
+        // Put it back at the front of the FIFO (steer consumed the head).
+        const remaining = rendererRecovery.queuedMessagesFor(projectId, id)
+        rendererRecovery.clearAllQueuedMessages(projectId, id)
         rendererRecovery.setQueuedMessage(projectId, id, {
           text: msg,
           attachments,
@@ -4713,6 +4780,8 @@
           taskReferences,
           startAfterThreads: []
         })
+        for (const entry of remaining) rendererRecovery.setQueuedMessage(projectId, id, entry)
+        syncQueuedFromStore()
       }
       errorMessage = error instanceof Error ? error.message : 'Steer message could not be sent.'
       if (promptReferences.length > 0) {
@@ -4744,6 +4813,21 @@
   function deleteQueuedMessage(): void {
     showQueueMenu = false
     clearQueuedState()
+  }
+
+  /** Delete every queued message for the thread. */
+  function deleteAllQueuedMessages(): void {
+    showQueueMenu = false
+    queuedMessage = ''
+    queuedAttachments = []
+    queuedPromptContext = undefined
+    queuedPromptReferences = []
+    queuedProjectReferences = []
+    queuedPresentation = undefined
+    queuedTaskReferences = []
+    queuedStartAfterThreads = []
+    queuedHasContent = false
+    rendererRecovery.clearAllQueuedMessages(thread.projectId, thread.id)
   }
 
   // ─── Permissions ───────────────────────────────────────────────────────
@@ -6341,7 +6425,7 @@
   }
 
   function persistQueuedStartAfterThreads(): void {
-    rendererRecovery.setQueuedMessage(thread.projectId, thread.id, {
+    rendererRecovery.updateQueuedHead(thread.projectId, thread.id, {
       text: queuedMessage,
       attachments: queuedAttachments,
       promptContext: queuedPromptContext,
@@ -8217,6 +8301,7 @@
             null)
           : null,
       providerName: provider?.name ?? null,
+      providerId: provider?.id ?? null,
       harnessId: selection.harnessId || null,
       harnessName: selection.harnessId
         ? (getAgentIcon(selection.harnessId)?.name ?? selection.harnessId)
@@ -9305,6 +9390,9 @@
                         providerName={useLiveAttribution
                           ? currentWorkingTraceAttribution.providerName
                           : provider?.name}
+                        providerId={useLiveAttribution
+                          ? currentWorkingTraceAttribution.providerId
+                          : provider?.id}
                         harnessId={useLiveAttribution
                           ? currentWorkingTraceAttribution.harnessId
                           : harnessId}
@@ -9386,15 +9474,27 @@
                           {#if isReadingActiveLine}
                             {@const segs = speechController.activeSegments!}
                             {@const activeIdx = speechController.visibleSegmentIndex}
+                            {@const spokenProgress = speechController.activeSegmentProgress}
                             <div class="flex flex-col gap-1.5">
                               {#each segs as seg, i (seg.id)}
+                                {@const spokenOffset =
+                                  i === activeIdx ? spokenWordOffset(seg.text, spokenProgress) : -1}
                                 <div
                                   class={i === activeIdx
                                     ? 'rounded-md border border-dashed border-info/40 bg-info/5 px-2.5 py-1.5 transition-colors'
                                     : 'px-2.5 py-1 opacity-80'}
                                   data-speech-line={i === activeIdx ? 'active' : undefined}
                                 >
-                                  <span class="leading-relaxed">{seg.text}</span>
+                                  <span class="leading-relaxed">
+                                    {#if spokenOffset > 0}
+                                      <span
+                                        class="rounded-sm bg-info/20 px-0.5 box-decoration-clone"
+                                        >{seg.text.slice(0, spokenOffset)}</span
+                                      >{seg.text.slice(spokenOffset)}
+                                    {:else}
+                                      {seg.text}
+                                    {/if}
+                                  </span>
                                 </div>
                               {/each}
                             </div>
@@ -9426,8 +9526,8 @@
                       {#if !busy || !isLatest}
                         <!-- Footer shown once per turn on the last assistant message -->
                         <div class="mt-1 flex flex-col">
-                          <div class="flex items-center gap-1.5">
-                            <div class="flex items-center gap-0.5">
+                          <div class="flex flex-wrap items-center gap-x-1.5 gap-y-0.5">
+                            <div class="flex shrink-0 items-center gap-0.5">
                               <button
                                 class="rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
                                 aria-label="Copy message"
@@ -9499,7 +9599,7 @@
                               </button>
                             </div>
                             <div
-                              class="pointer-events-none flex items-center gap-1.5 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100"
+                              class="pointer-events-none flex shrink-0 flex-wrap items-center gap-x-1.5 gap-y-0.5 whitespace-nowrap opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100"
                             >
                               <span class="flex items-center gap-1 text-[10px] text-dimmed">
                                 <AgentIcon agentId={messageHarnessId(msg)} size={14} />
@@ -9508,7 +9608,11 @@
                               {#if modelLabel}
                                 <span class="text-[10px] text-dimmed">·</span>
                                 <span class="flex items-center gap-1 text-[10px] text-dimmed">
-                                  <VendorIcon name={provider?.name ?? modelLabel} size={12} />
+                                  <VendorIcon
+                                    name={provider?.name ?? modelLabel}
+                                    id={provider?.id}
+                                    size={12}
+                                  />
                                   {modelLabel}
                                   {#if fastVariant}
                                     <Zap
@@ -9715,7 +9819,11 @@
               <div class="rounded-t-xl border border-border bg-surface shadow-sm">
                 <div class="flex items-center justify-between gap-2 px-3 pt-2.5 pb-1">
                   <span class="text-[10px] font-semibold uppercase tracking-wide text-dimmed"
-                    >{queuedStartAfterThreads.length > 0 ? 'Starts after' : 'Queued'}</span
+                    >{queuedCount > 1
+                      ? `Queued · ${queuedCount}`
+                      : queuedStartAfterThreads.length > 0
+                        ? 'Starts after'
+                        : 'Queued'}</span
                   >
                   <div class="flex items-center gap-1">
                     <button
@@ -9775,6 +9883,17 @@
                             <Trash2 size={13} />
                             Delete
                           </button>
+                          {#if queuedCount > 1}
+                            <div class="mx-2 my-1 border-t"></div>
+                            <button
+                              class="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-sm text-danger transition-colors hover:bg-danger/10"
+                              role="menuitem"
+                              onclick={deleteAllQueuedMessages}
+                            >
+                              <Trash2 size={13} />
+                              Delete all ({queuedCount})
+                            </button>
+                          {/if}
                         </div>
                       {/if}
                     </div>
@@ -9852,6 +9971,18 @@
                   </div>
                 {:else}
                   <p class="px-3 pb-2.5 text-[12px] text-muted line-clamp-3">{queuedMessage}</p>
+                {/if}
+                {#if queuedCount > 1}
+                  <div class="border-t px-3 pb-2.5 pt-2">
+                    <p class="text-[10px] font-semibold uppercase tracking-wide text-dimmed">
+                      Next up
+                    </p>
+                    {#each rendererRecovery
+                      .queuedMessagesFor(thread.projectId, thread.id)
+                      .slice(1) as next (next.text)}
+                      <p class="line-clamp-2 pt-1 text-[12px] text-muted">{next.text}</p>
+                    {/each}
+                  </div>
                 {/if}
               </div>
             </div>
@@ -10163,7 +10294,10 @@
                   onHideUsage={hideContextUsage}
                   usageRefreshing={refreshingAccountUsage}
                   {harnessUsage}
-                  canCompact={['opencode', 'codex'].includes(settings.harnessId) && !busy}
+                  canCompact={supportsManualCompaction(
+                    settings.harnessId,
+                    providerStore.providers
+                  ) && !busy}
                   {compacting}
                   onCompact={() => void compactWork()}
                   projectContext={composerProject}

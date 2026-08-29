@@ -13,7 +13,9 @@
 
   let { messageId, markdown, disabled = false }: Props = $props()
   const playbackState = $derived(speechController.playback)
-  const ownsSession = $derived('messageId' in playbackState && playbackState.messageId === messageId)
+  const ownsSession = $derived(
+    'messageId' in playbackState && playbackState.messageId === messageId
+  )
   // Full block range: past audio is real, future lines are calibrated estimates.
   const trackLength = $derived(Math.max(speechController.estimatedTotalDurationSeconds, 0.1))
   const fillPercent = $derived.by(() => {
@@ -48,10 +50,13 @@
     scrubValue = Number(input.value)
   }
 
-  function commitScrub(event: Event): void {
-    const input = event.currentTarget as HTMLInputElement
+  function commitScrub(): void {
+    // Commit the value captured while scrubbing, not `input.value`: the
+    // pointerup handler clears `scrubbing` before `change` dispatches, which
+    // makes the reactive binding overwrite the input with the current playhead
+    // — reading it here would seek right back to where playback already is.
     scrubbing = false
-    void speechController.seekPlayback(Number(input.value))
+    void speechController.seekPlayback(scrubValue)
   }
 
   const buttonTitle = $derived.by(() => {
@@ -99,7 +104,7 @@
           value={scrubbing ? scrubValue : Math.min(thumbPosition, trackLength)}
           title="Seek spoken audio"
           aria-label="Seek spoken audio"
-          disabled={disabled}
+          {disabled}
           onpointerdown={beginScrub}
           onpointerup={() => {
             scrubbing = false

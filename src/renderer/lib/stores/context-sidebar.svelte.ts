@@ -1,14 +1,11 @@
 import { invoke } from '$lib/ipc.svelte'
 import { messageId } from '$shared/id'
 import { SvelteSet } from 'svelte/reactivity'
+import { agentRuns } from './agent-runs.svelte'
+import { threadMessages } from './thread-messages.svelte'
 import { gitState } from './git.svelte'
 import { APP_SLUG } from '$shared/brand'
-import type {
-  AgentMessage,
-  AgentSessionStatus,
-  AgentSubagentActivity,
-  ThreadSettings
-} from '$shared/types'
+import type { AgentSubagentActivity, ThreadSettings } from '$shared/types'
 
 const TEMPORARY_CHAT_INACTIVITY_MS = 3 * 60 * 60 * 1000
 const CONTEXT_SIDEBAR_MIN_WIDTH = 340
@@ -185,24 +182,17 @@ export interface TemporaryChatContextTab {
   projectId: string
   threadId: string
   temporaryChatId: string
+  /** Isolated harness session for the side chat, once the first turn starts. */
   sessionId: string | null
   mode: TemporaryChatMode
   selections: string[]
   initialContext: string
   settings: ThreadSettings
-  messages: AgentMessage[]
-  busy: boolean
-  error: string
-  /** Structured provider lifecycle state mirroring the main chat, so the
-   *  temporary chat renders the same provider status card above its composer. */
-  status: Extract<AgentSessionStatus, { state: 'waiting' | 'error' }> | null
-  draft: string
   selectionAttached: boolean
-  selectionMessageId: string | null
   autoPromptSent: boolean
   /** Id of the user message seeded at open time for the auto-sent explain
    *  prompt, so the prompt shows as a sent message the instant the tab opens
-   *  (the controller reuses it instead of appending a duplicate). */
+   *  (the send reuses it instead of appending a duplicate). */
   autoPromptMessageId: string | null
   /** Override for the auto-sent explain prompt, when the tab was opened to
    *  explain a specific selection (e.g. an agent question) rather than the
@@ -1179,8 +1169,8 @@ class ContextSidebarState {
           tab.kind === 'temporary-chat' &&
           tab.mode === 'quick' &&
           !tab.expired &&
-          !tab.busy &&
-          tab.messages.length === 0
+          !agentRuns.isBusy(projectId, tab.temporaryChatId) &&
+          threadMessages.messages(projectId, tab.temporaryChatId).length === 0
       )
       if (existing) {
         existing.selections = [...existing.selections, selection]
@@ -1194,35 +1184,33 @@ class ContextSidebarState {
     // The explain auto-prompt commits as a user-sent message immediately, so
     // the moment the tab opens the conversation already shows the selection
     // chip with the action label — never a blank panel while the harness
-    // session is still being assembled.
+    // session is still being assembled. The message lives in the shared
+    // thread-messages pipeline like every other conversation.
     const seededAutoPrompt = mode === 'elaborate' && selectionAttached ? (autoPrompt ?? '') : ''
     const autoPromptMessageId = seededAutoPrompt ? messageId() : null
-    const messages: AgentMessage[] =
-      autoPromptMessageId !== null
-        ? [
-            {
-              id: autoPromptMessageId,
-              role: 'user',
-              parts: [
-                {
-                  type: 'text',
-                  id: `${autoPromptMessageId}:text`,
-                  messageID: autoPromptMessageId,
-                  text: mode === 'elaborate' ? 'Explain' : seededAutoPrompt
-                }
-              ],
-              references: [
-                {
-                  id: `${temporaryChatId}:selection:0`,
-                  label: 'Selection 1',
-                  text: selection
-                }
-              ],
-              createdAt: Date.now(),
-              completedAt: Date.now()
-            }
-          ]
-        : []
+    if (autoPromptMessageId !== null) {
+      threadMessages.seedMessage(projectId, temporaryChatId, {
+        id: autoPromptMessageId,
+        role: 'user',
+        parts: [
+          {
+            type: 'text',
+            id: `${autoPromptMessageId}:text`,
+            messageID: autoPromptMessageId,
+            text: mode === 'elaborate' ? 'Explain' : seededAutoPrompt
+          }
+        ],
+        references: [
+          {
+            id: `${temporaryChatId}:selection:0`,
+            label: 'Selection 1',
+            text: selection
+          }
+        ],
+        createdAt: Date.now(),
+        completedAt: Date.now()
+      })
+    }
     const tab: TemporaryChatContextTab = {
       id: `temporary-chat:${temporaryChatId}`,
       kind: 'temporary-chat',
@@ -1235,13 +1223,7 @@ class ContextSidebarState {
       selections: selectionAttached ? [selection] : [],
       initialContext,
       settings: { ...settings, engineeringMode: false, permissionLevel: 'auto_review' },
-      messages,
-      busy: false,
-      error: '',
-      status: null,
-      draft: '',
       selectionAttached,
-      selectionMessageId: null,
       autoPromptSent: false,
       autoPromptMessageId,
       autoPrompt,
@@ -1267,32 +1249,27 @@ class ContextSidebarState {
     if (tab.expired) return
     const temporaryChatId = tab.temporaryChatId
     tab.expired = true
-    tab.messages = []
-    tab.draft = ''
     tab.initialContext = ''
-    tab.busy = false
-    tab.error = ''
-    tab.status = null
     tab.selectionAttached = false
-    tab.selectionMessageId = null
     tab.autoPromptMessageId = null
+    // Conversation state lives in the shared pipeline now — drop its cache so
+    // an expired side chat leaves nothing behind.
+    threadMessages.clear(tab.projectId, temporaryChatId)
+    agentRuns.clear(tab.projectId, temporaryChatId)
     this.clearTemporaryChatExpiry(temporaryChatId)
     if (closeRemote) void invoke('agent:closeTemporaryChat', temporaryChatId)
   }
 
   restartTemporaryChat(tab: TemporaryChatContextTab): void {
+    // A fresh conversation identity: drop the old cache, then regenerate the id.
+    threadMessages.clear(tab.projectId, tab.temporaryChatId)
+    agentRuns.clear(tab.projectId, tab.temporaryChatId)
     this.clearTemporaryChatExpiry(tab.temporaryChatId)
     tab.temporaryChatId = crypto.randomUUID()
     tab.sessionId = null
-    tab.messages = []
-    tab.busy = false
-    tab.error = ''
-    tab.status = null
-    tab.draft = ''
     // Re-attach the selections on restart only when there are any — a quick chat
     // opened from the last agent turn has no selection attached.
     tab.selectionAttached = tab.selections.length > 0
-    tab.selectionMessageId = null
     tab.autoPromptSent = false
     tab.autoPromptMessageId = null
     tab.sessionStarted = false

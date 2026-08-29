@@ -30,7 +30,10 @@ export function piCustomProvidersExtension(providers: BaseUrlProvider[]): string
             id: model.id,
             name: model.name || model.id,
             reasoning: model.reasoning,
-            input: ['text'],
+            // Unset `vision` is treated as capable everywhere else in this
+            // codebase — this was hardcoded to text-only regardless, silently
+            // dropping image attachments for every vision-capable model.
+            input: model.vision === false ? ['text'] : ['text', 'image'],
             contextWindow: model.contextWindow ?? 128000,
             maxTokens: model.maxOutputTokens ?? 16384,
             cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }

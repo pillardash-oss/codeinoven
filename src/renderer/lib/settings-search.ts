@@ -3,6 +3,7 @@ import {
   ChartColumn,
   Cloud,
   Globe,
+  HeartPulse,
   Info,
   Keyboard,
   MessageSquareCode,
@@ -70,6 +71,14 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     description: 'Prompts CodeInOven injects into agent sessions.',
     keywords: ['prompts', 'instructions'],
     icon: MessageSquareCode
+  },
+  {
+    id: 'heartbeat',
+    section: 'heartbeat',
+    title: 'Heartbeat',
+    description: 'Timed pings that keep a model’s usage window warm.',
+    keywords: ['ping', 'pong', 'usage window', 'reset', 'schedule'],
+    icon: HeartPulse
   },
   {
     id: 'harnesses',

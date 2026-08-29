@@ -238,6 +238,61 @@ class ThreadMessagesStore {
     }
   }
 
+  /**
+   * Load a temporary side chat from its harness mirror.
+   *
+   * Temporary conversations share every primitive with threads — cache entry,
+   * reconcile merge, event application, busy tracking — and differ only in
+   * where their mirror lives (`agent:loadTemporaryChatMessages`) and that the
+   * mirror is unpaged.
+   */
+  async loadTemporary(projectId: string, conversationId: string): Promise<void> {
+    const key = threadKey(projectId, conversationId)
+    const existing = this.#loadPromises.get(key)
+    if (existing) return existing
+    const loadPromise = (async (): Promise<void> => {
+      const entry = this.entry(projectId, conversationId)
+      entry.loading = true
+      entry.error = ''
+      this.#notify(projectId, conversationId)
+      try {
+        const serverMessages = await invoke('agent:loadTemporaryChatMessages', conversationId)
+        this.reconcile(projectId, conversationId, serverMessages)
+        entry.hasOlder = false
+        entry.loaded = true
+      } catch (err) {
+        entry.error = err instanceof Error ? err.message : 'Could not load messages.'
+      } finally {
+        entry.loading = false
+        this.#notify(projectId, conversationId)
+      }
+    })()
+    this.#loadPromises.set(key, loadPromise)
+    try {
+      await loadPromise
+    } finally {
+      if (this.#loadPromises.get(key) === loadPromise) this.#loadPromises.delete(key)
+    }
+  }
+
+  /**
+   * Commit a pre-built message into a temporary conversation immediately —
+   * used by side chats that must show their seeded selection prompt the instant
+   * the tab opens, before any turn is submitted. The message joins the same
+   * cache a thread uses, so later mirror reconciles merge against it.
+   */
+  seedMessage(projectId: string, conversationId: string, message: AgentMessage): void {
+    this.#cancelReveal(threadKey(projectId, conversationId))
+    const entry = this.entry(projectId, conversationId)
+    if (entry.messages.some((candidate) => candidate.id === message.id)) return
+    entry.messages = [...entry.messages, message]
+    entry.loaded = true
+    entry.loading = false
+    entry.hasOlder = false
+    entry.error = ''
+    this.#notify(projectId, conversationId)
+  }
+
   async #load(projectId: string, threadId: string, recentLimit?: number): Promise<void> {
     const entry = this.entry(projectId, threadId)
     entry.loading = true
@@ -444,6 +499,11 @@ class ThreadMessagesStore {
     this.#flushReveal(threadKey(projectId, threadId))
     const entry = this.entry(projectId, threadId)
     const messageId = userMessageId ?? createMessageId()
+    // A pre-seeded message (the side chat's explain prompt committed at open
+    // time) already occupies this ID — reuse it instead of appending a duplicate.
+    if (entry.messages.some((candidate) => candidate.id === messageId)) {
+      return { entry, messageId }
+    }
     const optimistic: AgentMessage = {
       id: messageId,
       role: 'user',
@@ -625,6 +685,105 @@ class ThreadMessagesStore {
       throw error
     }
     return messageId
+  }
+
+  /**
+   * Send a turn into a temporary side chat.
+   *
+   * Temporary conversations are ordinary entries in this store — same
+   * optimistic append, same mirror reconciliation, same event-driven busy
+   * tracking. Only the backend transport differs (`agent:sendTemporaryPrompt`,
+   * read-only, returns the final assistant message instead of the confirmed
+   * user message), and the visible text may differ from the transport text
+   * (the explain tab shows a short action label while sending the full
+   * instruction).
+   */
+  async sendTemporary(
+    projectId: string,
+    threadId: string,
+    conversationId: string,
+    settings: ThreadSettings,
+    options: {
+      text: string
+      transportText?: string
+      attachments?: PromptAttachment[]
+      references?: PromptReference[]
+      initialContext?: string
+      userMessageId?: string
+    }
+  ): Promise<void> {
+    const { text, transportText, attachments = [], references, initialContext, userMessageId } =
+      options
+    this.setRunIssue(projectId, conversationId, null)
+    const { entry, messageId } = this.appendOptimistic(
+      projectId,
+      conversationId,
+      text,
+      attachments,
+      userMessageId,
+      references
+    )
+    agentRuns.setBusy(projectId, conversationId, true, messageId)
+    try {
+      const response = await invoke(
+        'agent:sendTemporaryPrompt',
+        projectId,
+        threadId,
+        conversationId,
+        settings,
+        transportText ?? text,
+        attachments,
+        references ?? [],
+        initialContext,
+        messageId,
+        text
+      )
+      // The backend returns the authoritative final assistant message; merge it
+      // through the same never-downgrade snapshot path a thread's mirror uses.
+      if (response) this.mergePage(projectId, conversationId, [response])
+    } catch (error) {
+      this.rejectOptimistic(projectId, conversationId, entry, messageId, error)
+      throw error
+    }
+  }
+
+  /** Steer — append a user intervention into a temporary chat's active turn. */
+  async steerTemporary(
+    projectId: string,
+    threadId: string,
+    conversationId: string,
+    settings: ThreadSettings,
+    text: string,
+    attachments: PromptAttachment[] = [],
+    references: PromptReference[] = []
+  ): Promise<void> {
+    this.setRunIssue(projectId, conversationId, null)
+    const { entry, messageId } = this.appendOptimistic(
+      projectId,
+      conversationId,
+      text,
+      attachments,
+      undefined,
+      references
+    )
+    agentRuns.setBusy(projectId, conversationId, true, messageId)
+    try {
+      await invoke(
+        'agent:steerTemporaryPrompt',
+        projectId,
+        threadId,
+        conversationId,
+        settings,
+        text,
+        attachments,
+        references,
+        messageId,
+        text
+      )
+    } catch (error) {
+      this.rejectOptimistic(projectId, conversationId, entry, messageId, error)
+      throw error
+    }
   }
 
   /** Apply a streaming part update to the cached messages. */
@@ -860,6 +1019,12 @@ class ThreadMessagesStore {
       return
     }
     if (!('sessionId' in event)) return
+    // A temporary chat's isolated session coming up — bind it so the shared
+    // pipeline routes streaming events to the side chat like any thread.
+    if (event.type === 'temporary-chat.started') {
+      this.setSessionId(event.projectId, event.temporaryChatId, event.sessionId)
+      return
+    }
     const target = this.#threadsBySession.get(event.sessionId)
     if (!target) return
     const { projectId, threadId } = target
