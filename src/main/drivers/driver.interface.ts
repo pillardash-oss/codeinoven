@@ -357,6 +357,17 @@ export interface HarnessDriver {
   /** Append user input to the active turn using the harness's native steering protocol. */
   steerPrompt?(projectPath: string, opts: SteerPromptOptions): Promise<void>
 
+  /**
+   * Ask the harness whether a session currently has a live agent loop. Used by
+   * restart recovery: the engine's in-memory session-status map is empty after
+   * a restart, but the harness process may have survived and still be running
+   * the pre-restart turn — resuming such a session spawns a second concurrent
+   * run that interleaves outputs and derails both turns. Drivers without a
+   * status probe simply omit this; callers treat `false`/throwaway errors as
+   * "not busy" to keep the legacy behavior.
+   */
+  isSessionBusy?(projectPath: string, sessionId: string): Promise<boolean>
+
   /** Load the full message history for a session. */
   loadMessages(projectPath: string, sessionId: string): Promise<AgentMessage[]>
 

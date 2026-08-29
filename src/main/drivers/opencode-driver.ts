@@ -1693,6 +1693,37 @@ export class OpenCodeDriver implements HarnessDriver {
     if (!res.ok) throw await errorFromResponse(res, 'Failed to steer active OpenCode session')
   }
 
+  /**
+   * Live probe of the shared server's session-status map (`GET /session/status`,
+   * a Record of sessionID → `{ type: 'busy' | 'idle' | 'retry' | 'completed' }`).
+   * Used by restart recovery before resuming an "interrupted" thread: the
+   * surviving `opencode serve` process may still be running the pre-restart
+   * turn, and sending a prompt then would start a second concurrent loop on
+   * the same session. Best-effort: any transport/parse failure reports
+   * "not busy" so recovery keeps its legacy behavior rather than blocking.
+   */
+  async isSessionBusy(projectPath: string, sessionId: string): Promise<boolean> {
+    let handle: ServerHandle
+    try {
+      handle = await this.ensureServer(projectPath)
+    } catch {
+      return false
+    }
+    try {
+      const res = await fetch(`${handle.baseUrl}/session/status`, {
+        method: 'GET',
+        headers: this.headersFor(handle)
+      })
+      if (!res.ok) return false
+      const statuses = recordValue(await res.json())
+      if (!statuses) return false
+      const status = recordValue(statuses[sessionId])
+      return status?.['type'] === 'busy' || status?.['type'] === 'retry'
+    } catch {
+      return false
+    }
+  }
+
   async loadMessages(
     projectPath: string,
     sessionId: string,

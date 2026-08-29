@@ -13854,6 +13854,29 @@ export class ChatEngine {
         if (!thread.settings || !thread.sessionId) continue
         const current = this.sessionStatuses.get(thread.sessionId)
         if (current?.state === 'working' || current?.state === 'waiting') continue
+        // The in-memory status map is empty right after a restart, but the
+        // harness process may have survived it and still be running the
+        // pre-restart turn. Resuming a live session spawns a second concurrent
+        // run that interleaves outputs and derails both turns, so probe the
+        // driver first and leave genuinely-busy sessions alone (their events
+        // keep flowing and will complete the turn normally).
+        if (thread.sessionHarnessId) {
+          try {
+            const driver = await this.resolve(thread.projectId, thread.sessionHarnessId, thread.id)
+            if (
+              driver.driver.isSessionBusy &&
+              (await driver.driver.isSessionBusy(driver.projectPath, thread.sessionId))
+            ) {
+              continue
+            }
+          } catch (error) {
+            // Driver unavailable or probe failed — resume anyway (legacy path).
+            Logger.dev('Recovered-thread busy probe skipped:', {
+              threadId: thread.id,
+              error: rawErrorMessage(error)
+            })
+          }
+        }
         const activeSpec = await this.getActiveSpec(thread.projectId, thread.id)
         const resumesSpecContract = activeSpec?.status === 'approved' && !thread.auditState
         await this.sendPrompt(
