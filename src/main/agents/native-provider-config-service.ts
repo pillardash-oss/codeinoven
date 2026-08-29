@@ -5,13 +5,35 @@ import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { applyEdits, modify, parse, type ParseError } from 'jsonc-parser'
-import type { BaseUrlProvider, BaseUrlProviderModel } from '../../lib/types'
+import type { BaseUrlProvider, BaseUrlProviderModel, ThinkingLevel } from '../../lib/types'
 import { PI_THINKING_PRESETS } from '../../lib/pi-thinking-presets'
 
 const OPENCODE_CONFIG_PATH = join(homedir(), '.config', 'opencode', 'opencode.json')
 const PI_MODELS_PATH = join(homedir(), '.pi', 'agent', 'models.json')
 const NATIVE_HARNESSES = new Set(['opencode', 'pi'])
 const FORMAT_OPTIONS = { tabSize: 2, insertSpaces: true, eol: '\n' }
+const THINKING_LEVELS = new Set<ThinkingLevel>([
+  'minimal',
+  'low',
+  'medium',
+  'high',
+  'xhigh',
+  'max',
+  'ultra'
+])
+
+/**
+ * A model's default thinking level is a CodeInOven-only picker convenience
+ * (pre-selects the thread's thinking level the first time the model is
+ * chosen) — neither opencode's nor pi's own schema has a concept for it. This
+ * writes/reads it under a clearly CodeInOven-owned key rather than dropping
+ * it, so it survives a save/reload round trip like every other model field.
+ */
+function readDefaultThinkingLevel(value: unknown): ThinkingLevel | undefined {
+  return typeof value === 'string' && THINKING_LEVELS.has(value as ThinkingLevel)
+    ? (value as ThinkingLevel)
+    : undefined
+}
 
 /** Native harness files that can round-trip both providers and their model catalogs. */
 export function hasNativeProviderCatalog(harnessId: string): boolean {
@@ -250,7 +272,10 @@ function openCodeModel(providerId: string, id: string, value: unknown): BaseUrlP
       : {}),
     // `vision` is left unset (treated as capable) unless opencode explicitly
     // declares an input modality list that omits "image".
-    ...(inputModalities && !inputModalities.includes('image') ? { vision: false } : {})
+    ...(inputModalities && !inputModalities.includes('image') ? { vision: false } : {}),
+    ...(readDefaultThinkingLevel(model['cioDefaultThinkingLevel'])
+      ? { defaultThinkingLevel: readDefaultThinkingLevel(model['cioDefaultThinkingLevel']) }
+      : {})
   }
 }
 
@@ -272,7 +297,10 @@ function piModel(providerId: string, value: unknown): BaseUrlProviderModel | nul
     reasoning,
     // Pi's model config has no per-model variant list (unlike opencode's
     // `variants`), so a reasoning model always gets Pi's fixed thinking levels.
-    ...(reasoning ? { thinkingPresets: PI_THINKING_PRESETS } : {})
+    ...(reasoning ? { thinkingPresets: PI_THINKING_PRESETS } : {}),
+    ...(readDefaultThinkingLevel(model['cioDefaultThinkingLevel'])
+      ? { defaultThinkingLevel: readDefaultThinkingLevel(model['cioDefaultThinkingLevel']) }
+      : {})
   }
 }
 
@@ -300,7 +328,8 @@ function serializeOpenCodeModel(model: BaseUrlProviderModel): Record<string, unk
     modalities: {
       input: model.vision === false ? ['text'] : ['text', 'image'],
       output: ['text']
-    }
+    },
+    ...(model.defaultThinkingLevel ? { cioDefaultThinkingLevel: model.defaultThinkingLevel } : {})
   }
 }
 
@@ -310,7 +339,8 @@ function serializePiModel(model: BaseUrlProviderModel): Record<string, unknown> 
     name: model.name,
     reasoning: model.reasoning,
     ...(model.contextWindow ? { contextWindow: model.contextWindow } : {}),
-    ...(model.maxOutputTokens ? { maxTokens: model.maxOutputTokens } : {})
+    ...(model.maxOutputTokens ? { maxTokens: model.maxOutputTokens } : {}),
+    ...(model.defaultThinkingLevel ? { cioDefaultThinkingLevel: model.defaultThinkingLevel } : {})
   }
 }
 
