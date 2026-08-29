@@ -16,10 +16,7 @@ import type {
 import { PI_THINKING_PRESETS } from '../../lib/pi-thinking-presets'
 import { normalizeAgentQuestions } from '../../lib/agent-interactions'
 import { buildProcessEnvironment } from './cli-environment'
-import {
-  hasNativeProviderCatalog,
-  piNativeProviderIds
-} from '../agents/native-provider-config-service'
+import { piNativeProviderIds } from '../agents/native-provider-config-service'
 import { PiAuthConfigService, piAuthFileIo } from '../providers/pi-auth-config'
 import type { BaseUrlProviderService } from '../providers/base-url-provider-service'
 import type { SecretVault } from '../storage/secret-vault'
@@ -1159,22 +1156,6 @@ export class PiDriver extends PersistentCliDriver {
           id: 'pi-mcp-extension',
           relativePath: 'pi/codeinoven-mcp-extension.ts',
           content: piMcpExtension(stdioServers)
-        })
-      }
-    }
-
-    if (this.baseUrlProviders && this.secretVault && !hasNativeProviderCatalog(this.id)) {
-      const customProviders = await this.baseUrlProviders.listEnabled(this.id)
-      if (customProviders.length > 0) {
-        for (const custom of customProviders) {
-          if (!custom.apiKeyRef || !custom.apiKeyEnvVar) continue
-          env[custom.apiKeyEnvVar] = await this.secretVault.resolve(custom.apiKeyRef)
-        }
-        args.push('--extension', '{{config:pi-codeinoven-providers}}')
-        configFiles.push({
-          id: 'pi-codeinoven-providers',
-          relativePath: 'pi/codeinoven-providers.ts',
-          content: piCustomProvidersExtension(customProviders)
         })
       }
     }
