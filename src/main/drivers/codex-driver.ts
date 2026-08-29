@@ -339,7 +339,7 @@ export class CodexDriver extends PersistentCliDriver {
           name: model.name || model.id,
           reasoning: model.reasoning,
           thinkingPresets: model.reasoning ? THINKING_PRESETS : undefined,
-          attachment: true,
+          attachment: model.vision !== false,
           toolcall: true,
           ...(model.contextWindow ? { contextWindow: model.contextWindow } : {})
         }))

@@ -226,6 +226,8 @@ function openCodeModel(providerId: string, id: string, value: unknown): BaseUrlP
   const model = record(value) ?? {}
   const limit = record(model['limit'])
   const variants = record(model['variants'])
+  const modalities = record(model['modalities'])
+  const inputModalities = Array.isArray(modalities?.['input']) ? modalities['input'] : undefined
   return {
     id,
     providerId,
@@ -245,7 +247,10 @@ function openCodeModel(providerId: string, id: string, value: unknown): BaseUrlP
             description: `${variant} reasoning effort`
           }))
         }
-      : {})
+      : {}),
+    // `vision` is left unset (treated as capable) unless opencode explicitly
+    // declares an input modality list that omits "image".
+    ...(inputModalities && !inputModalities.includes('image') ? { vision: false } : {})
   }
 }
 
@@ -272,21 +277,30 @@ function piModel(providerId: string, value: unknown): BaseUrlProviderModel | nul
 }
 
 function serializeOpenCodeModel(model: BaseUrlProviderModel): Record<string, unknown> {
-  const limit =
-    model.contextWindow && model.maxOutputTokens
-      ? { context: model.contextWindow, output: model.maxOutputTokens }
-      : undefined
+  // Either bound is meaningful on its own (e.g. discovery often reports only
+  // context_length) — requiring both dropped a known context window whenever
+  // the output limit was missing.
+  const limit = {
+    ...(model.contextWindow ? { context: model.contextWindow } : {}),
+    ...(model.maxOutputTokens ? { output: model.maxOutputTokens } : {})
+  }
   return {
     name: model.name,
     ...(model.reasoning ? { reasoning: true } : {}),
-    ...(limit ? { limit } : {}),
+    ...(Object.keys(limit).length > 0 ? { limit } : {}),
     ...(model.thinkingPresets?.length
       ? {
           variants: Object.fromEntries(
             model.thinkingPresets.map((preset) => [preset.id, { name: preset.label }])
           )
         }
-      : {})
+      : {}),
+    // Unset `vision` is treated as capable everywhere else in this codebase;
+    // mirror that here rather than letting opencode's own default apply.
+    modalities: {
+      input: model.vision === false ? ['text'] : ['text', 'image'],
+      output: ['text']
+    }
   }
 }
 

@@ -1474,7 +1474,7 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
           thinkingPresets: model.reasoning
             ? (model.thinkingPresets ?? THINKING_PRESETS)
             : undefined,
-          attachment: true,
+          attachment: model.vision !== false,
           toolcall: true,
           ...(model.contextWindow ? { contextWindow: model.contextWindow } : {})
         }))

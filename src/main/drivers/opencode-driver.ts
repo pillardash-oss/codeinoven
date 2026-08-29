@@ -54,11 +54,7 @@ import {
   isWordDocumentAttachment,
   readWordDocumentText
 } from './document-attachment'
-import {
-  buildTitlePrompt,
-  HEARTBEAT_PROMPT,
-  sanitizeGeneratedTitle
-} from '../chat/title-generator'
+import { buildTitlePrompt, HEARTBEAT_PROMPT, sanitizeGeneratedTitle } from '../chat/title-generator'
 import { buildTurnGradePrompt, parseTurnGrade } from '../chat/turn-grader-prompt'
 import { leanAgentConfigMap } from '../opencode/opencode-agent-definitions'
 import { prepareHarnessInvocation, runHarnessCommand } from './harness-runtime'
@@ -1295,10 +1291,13 @@ export class OpenCodeDriver implements HarnessDriver {
         if (custom.headers) options.headers = custom.headers
         const models: Record<string, Record<string, unknown>> = {}
         for (const model of custom.models) {
-          const limit =
-            model.contextWindow && model.maxOutputTokens
-              ? { context: model.contextWindow, output: model.maxOutputTokens }
-              : undefined
+          // Either bound is meaningful on its own (e.g. discovery often
+          // reports only context_length) — requiring both dropped a known
+          // context window whenever the output limit was missing.
+          const limit = {
+            ...(model.contextWindow ? { context: model.contextWindow } : {}),
+            ...(model.maxOutputTokens ? { output: model.maxOutputTokens } : {})
+          }
           const variants =
             model.thinkingPresets && model.thinkingPresets.length > 0
               ? model.thinkingPresets.map((p) => [p.id, { name: p.label }])
@@ -1308,8 +1307,14 @@ export class OpenCodeDriver implements HarnessDriver {
           models[model.id] = {
             name: model.name,
             ...(model.reasoning ? { reasoning: true } : {}),
-            ...(limit ? { limit } : {}),
-            ...(variants.length > 0 ? { variants: Object.fromEntries(variants) } : {})
+            ...(Object.keys(limit).length > 0 ? { limit } : {}),
+            ...(variants.length > 0 ? { variants: Object.fromEntries(variants) } : {}),
+            // Unset `vision` is treated as capable everywhere else in this
+            // codebase; mirror that here rather than opencode's own default.
+            modalities: {
+              input: model.vision === false ? ['text'] : ['text', 'image'],
+              output: ['text']
+            }
           }
         }
         provider[custom.id] = {
@@ -1366,7 +1371,9 @@ export class OpenCodeDriver implements HarnessDriver {
   }
 
   /** Free/cheap opencode candidates, shared by title and grading runs. */
-  private async cheapCandidates(projectPath: string): Promise<Array<{ providerId: string; modelId: string }>> {
+  private async cheapCandidates(
+    projectPath: string
+  ): Promise<Array<{ providerId: string; modelId: string }>> {
     const catalogs = await this.listProviders(projectPath).catch(() => [])
     const openCodeModels = catalogs.find((catalog) => catalog.id === 'opencode')?.models ?? []
     const freeModels = openCodeModels.filter((model) => /(?:^|[-:])free$/iu.test(model.id))
@@ -1437,7 +1444,12 @@ export class OpenCodeDriver implements HarnessDriver {
           isolated
         )
         const result = await this.waitForTitleResult(isolated, timeoutMs)
-        attempts?.push({ providerId: candidate.providerId, modelId: candidate.modelId, ok: result !== null, failure: result === null ? 'No usable response produced' : null })
+        attempts?.push({
+          providerId: candidate.providerId,
+          modelId: candidate.modelId,
+          ok: result !== null,
+          failure: result === null ? 'No usable response produced' : null
+        })
         if (result) return result
       } catch (error) {
         attempts?.push({
