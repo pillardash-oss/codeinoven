@@ -482,9 +482,51 @@
 {/snippet}
 
 <div class="mx-auto max-w-5xl p-6 pb-24">
-  <!-- Row 1 — page title and tabs, fixed. Never shifts with the active tab. -->
+  <!-- Header: title, per-tab blurb, and primary actions on the same visual row. -->
   <div class="flex flex-wrap items-center justify-between gap-4">
-    <h1 class="text-xl font-bold tracking-tight">Utilities</h1>
+    <div class="min-w-0 flex-1">
+      <div class="flex flex-wrap items-center gap-3">
+        <h1 class="text-xl font-bold tracking-tight">Utilities</h1>
+        <!-- Action buttons — share the title row so they never drift out of alignment. -->
+        <button
+          class="flex h-8 items-center gap-1.5 rounded-lg bg-primary px-2.5 text-xs font-medium text-on-primary hover:bg-primary-hover"
+          title="Add a skill, MCP server, or other utility"
+          onclick={openCreate}
+        >
+          <Plus size={13} /> Add utility
+        </button>
+        <button
+          class="flex h-8 items-center gap-1.5 rounded-lg border bg-elevated px-2.5 text-xs font-medium hover:bg-overlay disabled:opacity-50"
+          disabled={activeTab === 'tools'
+            ? agentToolsStore.loading || agentToolsStore.refreshing
+            : loading}
+          title="Refresh utilities"
+          onclick={refreshActiveTab}
+        >
+          <RefreshCw
+            size={13}
+            class={(
+              activeTab === 'tools' ? agentToolsStore.loading || agentToolsStore.refreshing : loading
+            )
+              ? 'animate-spin'
+              : ''}
+          /> Refresh
+        </button>
+        {#if activeTab === 'all' || activeTab === 'skills'}
+          <button
+            class="flex h-8 items-center gap-1.5 rounded-lg border bg-elevated px-2.5 text-xs font-medium hover:bg-overlay"
+            title="Open the skills marketplace"
+            onclick={onOpenMarketplace}
+          >
+            <Search size={13} /> Skills marketplace
+          </button>
+        {/if}
+      </div>
+      <!-- Per-tab description — stays on the same block as the title, not floating alone. -->
+      <p class="mt-1 text-sm text-muted">{TAB_BLURB[activeTab]}</p>
+    </div>
+
+    <!-- Tabs anchored to the right of the same row. -->
     <div
       class="flex flex-wrap items-center gap-0.5 rounded-lg border bg-elevated p-0.5"
       role="tablist"
@@ -518,48 +560,6 @@
         </button>
       {/each}
     </div>
-  </div>
-
-  <!-- Row 2 — description, under the title/tabs row. -->
-  <p class="mt-1 min-h-4 text-sm text-muted">{TAB_BLURB[activeTab]}</p>
-
-  <!-- Row 3 — catalog actions stay stable across every tab. -->
-  <div class="mt-4 flex flex-wrap items-center justify-between gap-2">
-    <div class="flex flex-wrap gap-2">
-      <button
-        class="flex h-8 items-center gap-1.5 rounded-lg bg-primary px-2.5 text-xs font-medium text-on-primary hover:bg-primary-hover"
-        title="Add a skill, MCP server, or other utility"
-        onclick={openCreate}
-      >
-        <Plus size={13} /> Add utility
-      </button>
-      <button
-        class="flex h-8 items-center gap-1.5 rounded-lg border bg-elevated px-2.5 text-xs font-medium hover:bg-overlay disabled:opacity-50"
-        disabled={activeTab === 'tools'
-          ? agentToolsStore.loading || agentToolsStore.refreshing
-          : loading}
-        title="Refresh utilities"
-        onclick={refreshActiveTab}
-      >
-        <RefreshCw
-          size={13}
-          class={(
-            activeTab === 'tools' ? agentToolsStore.loading || agentToolsStore.refreshing : loading
-          )
-            ? 'animate-spin'
-            : ''}
-        /> Refresh
-      </button>
-    </div>
-    {#if activeTab === 'all' || activeTab === 'skills'}
-      <button
-        class="flex h-8 items-center gap-1.5 rounded-lg border bg-elevated px-2.5 text-xs font-medium hover:bg-overlay"
-        title="Open the skills marketplace"
-        onclick={onOpenMarketplace}
-      >
-        <Search size={13} /> Skills marketplace
-      </button>
-    {/if}
   </div>
 
   {#if isListTab(activeTab)}
