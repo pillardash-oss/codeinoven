@@ -37,6 +37,21 @@ describe('computePromptBudget', () => {
     })
     expect(budget.availableInputTokens).toBeGreaterThanOrEqual(1)
   })
+
+  it('falls back to the default window when the reported window is implausibly small', () => {
+    // A stale/corrupt catalog record reporting a near-zero window must not
+    // collapse the budget to ~1 token and reject every user message.
+    for (const bogus of [0, 1, 10, 2048]) {
+      const budget = computePromptBudget({ contextWindow: bogus })
+      expect(budget.contextWindow).toBe(DEFAULT_PROMPT_BUDGET.contextWindowTokens)
+      expect(budget.availableInputTokens).toBeGreaterThan(100_000)
+    }
+  })
+
+  it('honors plausible small windows from genuinely compact models', () => {
+    const budget = computePromptBudget({ contextWindow: 8_192 })
+    expect(budget.contextWindow).toBe(8_192)
+  })
 })
 
 describe('token estimation and truncation', () => {

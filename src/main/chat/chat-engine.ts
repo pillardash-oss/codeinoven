@@ -1848,8 +1848,8 @@ export class ChatEngine {
     ipcMain.handle('agent:listProviderSnapshot', (_, projectId: string) =>
       this.listProviderSnapshot(projectId)
     )
-    ipcMain.handle('agent:refreshProviderCatalog', (_, projectId: string) =>
-      this.listProviders(projectId, true)
+    ipcMain.handle('agent:refreshProviderCatalog', (_, projectId: string, force = true) =>
+      this.listProviders(projectId, force === true)
     )
     ipcMain.handle('agent:refreshAccountUsage', (_, projectId: string, threadId: string) =>
       this.refreshAccountUsage(projectId, threadId)

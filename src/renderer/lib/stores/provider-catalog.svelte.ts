@@ -28,6 +28,13 @@ import { APP_SLUG } from '$shared/brand'
  */
 /** Fresh catalog is reused within this window instead of re-fetching drivers. */
 const CATALOG_FRESH_TTL_MS = 24 * 60 * 60 * 1000
+/**
+ * Picker-interaction freshness window. Model pickers revalidate on every open;
+ * within this short window the cached copy is reused so opening the picker
+ * never pings harnesses, but after 5 minutes the open triggers a background
+ * revalidation — keeping the visible list from going stale for long sessions.
+ */
+const CATALOG_PICKER_TTL_MS = 5 * 60 * 1000
 /** Base backoff for background retries of a failed hydration (doubles per try). */
 const RETRY_BASE_DELAY_MS = 20 * 1000
 /** Cap for the exponential retry backoff. */
@@ -217,10 +224,20 @@ class ProviderCatalogStore {
     const existing = this.cache.get(projectId)
     const lastFetched = this.refreshedAt.get(projectId)
     const lastFailed = this.failedAt.get(projectId)
-    if (!force && existing && lastFetched && Date.now() - lastFetched < CATALOG_FRESH_TTL_MS) {
+    if (!force && existing && lastFetched) {
       // A snapshot that failed to hydrate is revalidated on the next picker
       // open once the backoff elapses — never silently served forever.
-      if (lastFailed === undefined || Date.now() - lastFailed < RETRY_MIN_INTERVAL_MS) {
+      const failureFresh =
+        lastFailed !== undefined && Date.now() - lastFailed < RETRY_MIN_INTERVAL_MS
+      if (failureFresh) return Promise.resolve(this.applyCustomOverrides(existing))
+      if (Date.now() - lastFetched < CATALOG_PICKER_TTL_MS) {
+        return Promise.resolve(this.applyCustomOverrides(existing))
+      }
+      // Older than the picker window but inside the long TTL: revalidate in
+      // the background and serve the cached copy immediately so the picker
+      // opens without waiting on harness probes.
+      if (Date.now() - lastFetched < CATALOG_FRESH_TTL_MS) {
+        this.revalidateInBackground(projectId)
         return Promise.resolve(this.applyCustomOverrides(existing))
       }
     }
@@ -235,6 +252,17 @@ class ProviderCatalogStore {
     this.inflight.set(projectId, request)
     this.refreshingProjects.add(projectId)
     return request
+  }
+
+  /**
+   * Background revalidation for a cached-but-aging catalog: probe the
+   * harnesses without blocking the caller. Deduped by the inflight map, so
+   * rapid picker opens share one probe.
+   */
+  private revalidateInBackground(projectId: string): void {
+    void this.refresh(projectId, true).catch(() => {
+      // probe() already records the failure and schedules retries.
+    })
   }
 
   /**

@@ -852,7 +852,7 @@ export interface IpcInvokeContract {
   'agent:listPermissions': Contract<[projectId: string, threadId: string], PermissionRequest[]>
   'agent:listProviders': Contract<[projectId: string], ProviderCatalog[]>
   'agent:listProviderSnapshot': Contract<[projectId: string], ProviderCatalog[]>
-  'agent:refreshProviderCatalog': Contract<[projectId: string], ProviderCatalog[]>
+  'agent:refreshProviderCatalog': Contract<[projectId: string, force?: boolean], ProviderCatalog[]>
   'agent:refreshAccountUsage': Contract<[projectId: string, threadId: string], AgentAccountUsage[]>
   'agent:getHarnessAuthStatus': Contract<[projectId: string, harnessId: string], boolean | null>
   'agent:listTools': Contract<
