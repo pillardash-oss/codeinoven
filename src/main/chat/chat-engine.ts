@@ -8163,10 +8163,11 @@ export class ChatEngine {
     // never overwrite a manual title.
     const latest = await this.threadManager.getThread(projectId, threadId)
     if (!latest || latest.titleSource === 'manual') return
-    await this.threadManager.updateThread(projectId, threadId, {
+    const updated = await this.threadManager.updateThread(projectId, threadId, {
       title: generated,
       titleSource: 'auto'
     })
+    if (updated) broadcastThreadUpdate(updated)
     Logger.dev('Thread auto-title generation applied', { projectId, threadId, driverId })
   }
 
