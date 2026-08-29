@@ -43,6 +43,7 @@ export {
   settingsSectionForView,
   settingsViewForSection
 } from './renderer-recovery'
+export { publishDraftActivity } from './draft-activity.svelte'
 
 /** How long to wait after the last mutation before writing recovery state to
  *  storage. Long enough that bursts of mutations (draft typing, model toggles)

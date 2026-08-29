@@ -123,6 +123,7 @@
   import { projectFilesWorkspace } from '$lib/stores/project-files.svelte'
   import {
     rendererRecovery,
+    publishDraftActivity,
     type StartAfterThreadReference
   } from '$lib/stores/renderer-recovery.svelte'
   import { modelKey, parseModelKey } from '$lib/model-keys'
@@ -531,6 +532,7 @@
       )
       // The parked draft was re-seeded into the composer; the send now owns it.
       rendererRecovery.clearDraft(thread.projectId, thread.id)
+      publishDraftActivity(thread.projectId, thread.id, false)
       composerRestoreKey += 1
     }
   }
@@ -3486,6 +3488,7 @@
     const taskReferences = rendererRecovery.taskReferencesFor(oldProjectId, oldThreadId)
     const promptReferences = rendererRecovery.draftPromptReferences(oldProjectId, oldThreadId)
     rendererRecovery.clearDraft(oldProjectId, oldThreadId)
+    publishDraftActivity(oldProjectId, oldThreadId, false)
 
     const targetProject = scopeState.projectRecords.find((p) => p.id === targetProjectId)
     if (!targetProject) return
@@ -8710,6 +8713,9 @@
   onDestroy(() => {
     CSS.highlights?.delete(RESPONSE_HIGHLIGHT_NAME)
     imageUrls.destroy()
+    // Signal the main process that this thread's composer is gone so the
+    // draft-timer never fires for a composer that no longer exists.
+    publishDraftActivity(thread.projectId, thread.id, false)
   })
 </script>
 
@@ -10328,24 +10334,42 @@
                     thread.projectId,
                     thread.id
                   )}
-                  onValueChange={(value) =>
-                    rendererRecovery.setDraft(thread.projectId, thread.id, value)}
-                  onAttachmentsChange={(files) =>
+                  onValueChange={(value) => {
+                    rendererRecovery.setDraft(thread.projectId, thread.id, value)
+                    publishDraftActivity(
+                      thread.projectId,
+                      thread.id,
+                      rendererRecovery.hasDraftContent(thread.projectId, thread.id)
+                    )
+                  }}
+                  onAttachmentsChange={(files) => {
                     rendererRecovery.setDraft(
                       thread.projectId,
                       thread.id,
                       rendererRecovery.draftFor(thread.projectId, thread.id),
                       files
-                    )}
-                  onProjectReferencesChange={(projectReferences) =>
+                    )
+                    publishDraftActivity(
+                      thread.projectId,
+                      thread.id,
+                      rendererRecovery.hasDraftContent(thread.projectId, thread.id)
+                    )
+                  }}
+                  onProjectReferencesChange={(projectReferences) => {
                     rendererRecovery.setDraft(
                       thread.projectId,
                       thread.id,
                       rendererRecovery.draftFor(thread.projectId, thread.id),
                       rendererRecovery.attachmentsFor(thread.projectId, thread.id),
                       projectReferences
-                    )}
-                  onTaskReferencesChange={(taskReferences) =>
+                    )
+                    publishDraftActivity(
+                      thread.projectId,
+                      thread.id,
+                      rendererRecovery.hasDraftContent(thread.projectId, thread.id)
+                    )
+                  }}
+                  onTaskReferencesChange={(taskReferences) => {
                     rendererRecovery.setDraft(
                       thread.projectId,
                       thread.id,
@@ -10353,12 +10377,23 @@
                       rendererRecovery.attachmentsFor(thread.projectId, thread.id),
                       rendererRecovery.projectReferencesFor(thread.projectId, thread.id),
                       taskReferences
-                    )}
+                    )
+                    publishDraftActivity(
+                      thread.projectId,
+                      thread.id,
+                      rendererRecovery.hasDraftContent(thread.projectId, thread.id)
+                    )
+                  }}
                   onStartAfterThreadsChange={(startAfterThreads) => {
                     rendererRecovery.setStartAfterThreads(
                       thread.projectId,
                       thread.id,
                       startAfterThreads
+                    )
+                    publishDraftActivity(
+                      thread.projectId,
+                      thread.id,
+                      rendererRecovery.hasDraftContent(thread.projectId, thread.id)
                     )
                   }}
                   onOpenStartAfterThread={(threadId) => void openStartAfterThread(threadId)}
