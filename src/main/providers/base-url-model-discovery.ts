@@ -14,7 +14,11 @@ interface CacheEntry {
 
 const cache = new Map<string, CacheEntry>()
 
-function cacheKey(baseURL: string, apiKey: string | undefined, headers: Record<string, string> | undefined): string {
+function cacheKey(
+  baseURL: string,
+  apiKey: string | undefined,
+  headers: Record<string, string> | undefined
+): string {
   return JSON.stringify([baseURL, apiKey ?? '', headers ?? {}])
 }
 
@@ -70,7 +74,10 @@ function parseModelsResponse(body: unknown): DiscoveredBaseUrlModel[] {
     if (!id || seen.has(id)) continue
     seen.add(id)
     const name = typeof raw['name'] === 'string' && raw['name'] ? raw['name'] : id
-    models.push({ id, name })
+    const contextWindow = positiveInteger(
+      raw['context_length'] ?? raw['context_window'] ?? raw['contextWindow']
+    )
+    models.push({ id, name, ...(contextWindow === undefined ? {} : { contextWindow }) })
   }
   return models
 }
@@ -82,4 +89,10 @@ function extractModelList(body: unknown): unknown[] {
     if (Array.isArray(data)) return data
   }
   return []
+}
+
+function positiveInteger(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0
+    ? Math.floor(value)
+    : undefined
 }

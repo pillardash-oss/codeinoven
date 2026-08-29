@@ -220,13 +220,26 @@
       .map((model) => ({
         id: model.id,
         name: (model.name || model.id).slice(0, 256),
-        reasoning: false
+        // Most current models can reason; an endpoint that doesn't expose a
+        // reasoning flag isn't evidence the model can't. Off-by-default just
+        // hid the thinking controls for models that support them.
+        reasoning: true,
+        ...(model.contextWindow ? { contextWindow: model.contextWindow } : {})
       }))
   }
 
   function addDiscoveredModel(model: DiscoveredBaseUrlModel): void {
     if (draft.models.some((m) => m.id === model.id)) return
-    draft.models = [...draft.models, { ...emptyModelDraft(), id: model.id, name: model.name }]
+    draft.models = [
+      ...draft.models,
+      {
+        ...emptyModelDraft(),
+        id: model.id,
+        name: model.name,
+        reasoning: true,
+        contextWindow: model.contextWindow ? String(model.contextWindow) : ''
+      }
+    ]
   }
 
   /** Auto-search once a base URL is typed and the draft has no models of its

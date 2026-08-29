@@ -928,6 +928,8 @@ export interface BaseUrlProviderFetchModelsRequest {
 export interface DiscoveredBaseUrlModel {
   id: string
   name: string
+  /** Context window in tokens, when the endpoint reports one (e.g. `context_length`). */
+  contextWindow?: number
 }
 
 export type CuaPermissionStatus = 'granted' | 'missing' | 'unknown' | 'not_required'
