@@ -128,6 +128,24 @@ export function isThreadExecutionActiveStatus(status: ThreadStatus): boolean {
   return threadStatusPolicy(status).executionActive
 }
 
+/**
+ * Harnesses whose drivers implement manual context compaction
+ * (`HarnessCapabilities.compaction` + `compactSession`). The UI gates its
+ * "Compact conversation" action on this list; extend it when a driver gains
+ * compaction support so the action and the capability stay in sync.
+ */
+export const MANUAL_COMPACTION_HARNESSES: readonly string[] = [
+  'opencode',
+  'codex',
+  'pi',
+  'claude-code',
+  'muse'
+]
+
+export function supportsManualCompaction(harnessId: string | undefined): boolean {
+  return harnessId !== undefined && MANUAL_COMPACTION_HARNESSES.includes(harnessId)
+}
+
 export function isThreadBusyStatus(status: ThreadStatus): boolean {
   return threadStatusPolicy(status).busy
 }

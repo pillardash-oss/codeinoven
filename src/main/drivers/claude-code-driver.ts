@@ -110,6 +110,7 @@ const ONE_SHOT_SPAWN_LIMIT = 4
 
 /** Commands Claude Code documents as usable without its interactive TUI. */
 const CLAUDE_NON_INTERACTIVE_COMMANDS: readonly HarnessCommand[] = [
+  { name: 'compact', description: 'Summarize older history to free context' },
   { name: 'config', description: 'Set Claude Code preferences with key=value arguments' },
   { name: 'settings', description: 'Set Claude Code preferences with key=value arguments' }
 ]
@@ -1394,7 +1395,7 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
     providerCatalog: true,
     sessionStatus: true,
     contextUsage: true,
-    compaction: false,
+    compaction: true,
     subagents: true,
     structuredOutput: true,
     nativeUtilities: ['web_search', 'web_fetch']
@@ -1505,6 +1506,37 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
       text,
       attachments: []
     })
+  }
+
+  /**
+   * Compact the thread by resuming Claude's native session with the `/compact`
+   * slash command in a one-shot print process. Claude writes its own
+   * `compact_boundary` record into the resumed session and emits it on the
+   * stream, which the record parser mirrors as a compaction checkpoint; the
+   * normal turn machinery then reports idle. Throws when the session has no
+   * native id yet (nothing to resume) or Claude reports "no messages".
+   */
+  async compactSession(
+    projectPath: string,
+    sessionId: string,
+    settings: ThreadSettings
+  ): Promise<void> {
+    const session = await this.requireSession(projectPath, sessionId)
+    if (!session.nativeSessionId) {
+      throw new Error('No Claude Code session is available to compact yet')
+    }
+    this.emit({ type: 'session.status', sessionId, status: { state: 'working' } })
+    try {
+      await this.sendPrompt(projectPath, {
+        sessionId,
+        settings,
+        text: '/compact',
+        attachments: []
+      })
+    } catch (error) {
+      this.emit({ type: 'session.idle', sessionId })
+      throw error
+    }
   }
 
   /** Cheapest first-party candidates, shared by title and grading runs. */

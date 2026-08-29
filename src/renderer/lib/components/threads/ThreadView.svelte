@@ -210,6 +210,7 @@
     representativeLifecycleSelection
   } from '$shared/engines/engineering-lifecycle-engine'
   import { APP_NAME } from '$shared/brand'
+  import { supportsManualCompaction } from '$shared/thread-status-policy'
   import { workflowActionPresentation } from '$shared/workflow-action-presentation'
   import { LatestRequestGuard } from '$lib/refresh-guard'
   import { isRemotePwaRuntime } from '$lib/runtime-context'
@@ -911,7 +912,7 @@
       category: 'command',
       source: applicationActionSource,
       keywords: ['summarize', 'context', 'tokens'],
-      ...(!['opencode', 'codex', 'pi'].includes(settings.harnessId)
+      ...(!supportsManualCompaction(settings.harnessId)
         ? { disabledReason: `${providerName} does not support manual compaction` }
         : busy
           ? { disabledReason: 'Wait for the active run to finish' }
@@ -10214,7 +10215,7 @@
                   onHideUsage={hideContextUsage}
                   usageRefreshing={refreshingAccountUsage}
                   {harnessUsage}
-                  canCompact={['opencode', 'codex'].includes(settings.harnessId) && !busy}
+                  canCompact={supportsManualCompaction(settings.harnessId) && !busy}
                   {compacting}
                   onCompact={() => void compactWork()}
                   projectContext={composerProject}
