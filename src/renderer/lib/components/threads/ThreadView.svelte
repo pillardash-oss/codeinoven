@@ -115,6 +115,7 @@
     chatEffectiveSettings
   } from '$lib/stores/thread-settings.svelte'
   import { baseUrlProviderStore } from '$lib/stores/base-url-providers.svelte'
+  import { providerStore } from '$lib/stores/providers.svelte'
   import { providerCatalog } from '$lib/stores/provider-catalog.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
   import { contextSidebarState, EXPLAIN_SELECTION_PROMPT } from '$lib/stores/context-sidebar.svelte'
@@ -739,6 +740,11 @@
       visibleProviderStatus.issue === proactiveAuthIssue
   )
   const providerName = $derived(harnessDisplayName(settings.harnessId))
+  /** Connection info for the thread's harness — carries the manifest-declared
+   *  `supportsManualCompaction` flag surfaced by the main process. */
+  const threadConnection = $derived(
+    providerStore.providers.find((provider) => provider.id === settings.harnessId)
+  )
   /** Harness that actually produced the visible provider issue. When it differs
    *  from the thread's current harness (e.g. a Codex usage-limit card still on
    *  screen while the user already switched the thread to OpenCode), the badge
@@ -912,7 +918,7 @@
       category: 'command',
       source: applicationActionSource,
       keywords: ['summarize', 'context', 'tokens'],
-      ...(!supportsManualCompaction(settings.harnessId)
+      ...(!supportsManualCompaction(settings.harnessId, providerStore.providers)
         ? { disabledReason: `${providerName} does not support manual compaction` }
         : busy
           ? { disabledReason: 'Wait for the active run to finish' }
@@ -4040,10 +4046,11 @@
     const pendingProjectReferences = queuedProjectReferences
     const pendingPresentation = queuedPresentation
     const pendingTaskReferences = queuedTaskReferences
+    const pendingStartAfterThreads = queuedStartAfterThreads
     if (!pending && !queuedHasContent) return
-    if (queuedStartAfterThreads.length > 0) {
+    if (pendingStartAfterThreads.length > 0) {
       const dependencies = await Promise.all(
-        queuedStartAfterThreads.map((reference) => invoke('thread:get', projectId, reference.id))
+        pendingStartAfterThreads.map((reference) => invoke('thread:get', projectId, reference.id))
       )
       if (dependencies.some((dependency) => !dependency || !isTerminalThread(dependency.status))) {
         idleAttentionHandled = false
@@ -4055,6 +4062,8 @@
     // the race, whoever claimed it will send it — never send here.
     if (!claimQueuedMessage(projectId, id)) return
     try {
+      // Dequeue only the head — remaining queued messages stay FIFO for the
+      // following idle transitions (one message per turn).
       clearQueuedState()
       await sendMessage(
         pending,
@@ -4079,7 +4088,8 @@
     void handleIdleAttention()
   }
 
-  /** Clear the in-memory queue and its persisted recovery entry. */
+  /** Clear the in-memory head entry and dequeue the persisted head message.
+   *  Remaining queued messages stay in the FIFO for the next idle turn. */
   function clearQueuedState(): void {
     queuedMessage = ''
     queuedAttachments = []
@@ -4093,29 +4103,50 @@
     rendererRecovery.clearQueuedMessage(thread.projectId, thread.id)
   }
 
-  /** Bring a persisted queued message back after a reload or thread remount. */
+  /** Bring persisted queued messages back after a reload or thread remount.
+   *  The head entry hydrates the in-memory copy; the rest stay in the store. */
   function restoreQueuedMessage(): void {
+    syncQueuedFromStore()
+    if (!queuedMessage && !queuedHasContent) return
     const entry = rendererRecovery.queuedMessageFor(thread.projectId, thread.id)
-    if (!entry || queuedMessage || queuedHasContent) return
-    queuedMessage = entry.text
-    queuedAttachments = entry.attachments
-    queuedPromptContext = entry.promptContext
-    queuedPromptReferences = entry.promptReferences
-    queuedProjectReferences = entry.projectReferences
-    queuedPresentation = entry.presentation
-    queuedTaskReferences = entry.taskReferences
-    queuedStartAfterThreads = entry.startAfterThreads
-    queuedHasContent =
-      entry.text !== '' ||
-      entry.attachments.length > 0 ||
-      Boolean(entry.promptContext) ||
-      entry.promptReferences.length > 0 ||
-      entry.projectReferences.length > 0 ||
-      entry.taskReferences.length > 0
+    if (!entry) return
     if (entry.promptReferences.length > 0) {
       responseReferencesState.setForThread(thread.projectId, thread.id, entry.promptReferences)
       scheduleResponseHighlightRestore(entry.promptReferences)
     }
+  }
+
+  /** Mirror the store's head queued message into the in-memory card state.
+   *  Keeps the card showing the next message the FIFO will actually send. */
+  function syncQueuedFromStore(): void {
+    const head = rendererRecovery.queuedMessageFor(thread.projectId, thread.id)
+    if (!head) {
+      queuedMessage = ''
+      queuedAttachments = []
+      queuedPromptContext = undefined
+      queuedPromptReferences = []
+      queuedProjectReferences = []
+      queuedPresentation = undefined
+      queuedTaskReferences = []
+      queuedStartAfterThreads = []
+      queuedHasContent = false
+      return
+    }
+    queuedMessage = head.text
+    queuedAttachments = head.attachments
+    queuedPromptContext = head.promptContext
+    queuedPromptReferences = head.promptReferences
+    queuedProjectReferences = head.projectReferences
+    queuedPresentation = head.presentation
+    queuedTaskReferences = head.taskReferences
+    queuedStartAfterThreads = head.startAfterThreads
+    queuedHasContent =
+      head.text !== '' ||
+      head.attachments.length > 0 ||
+      Boolean(head.promptContext) ||
+      head.promptReferences.length > 0 ||
+      head.projectReferences.length > 0 ||
+      head.taskReferences.length > 0
   }
 
   /** Recover response-selection annotations persisted with the composer draft
@@ -4150,6 +4181,8 @@
    *  (e.g. a selection carrying only a user comment). */
   let queuedHasContent = $state(false)
   let showQueueMenu = $state(false)
+  /** Count of messages waiting in the thread's FIFO queue (from the store). */
+  const queuedCount = $derived(rendererRecovery.queuedMessageCount(thread.projectId, thread.id))
   let composerRestoreKey = $state(0)
   let pendingQuestionRequests = $state<PendingAgentQuestionRequest[]>([])
   const resolvedQuestionRequestIds = new SvelteSet<string>()
@@ -4316,6 +4349,9 @@
       queuedTaskReferences = taskReferences
       queuedStartAfterThreads = dependencyThreads
       queuedHasContent = true
+      // Append to the thread's FIFO queue — a later queued message sends after
+      // earlier ones, one per idle turn. The in-memory mirror then follows the
+      // store head so the queue card always shows the next message to send.
       rendererRecovery.setQueuedMessage(thread.projectId, thread.id, {
         text: msg,
         attachments,
@@ -4326,6 +4362,7 @@
         taskReferences,
         startAfterThreads: dependencyThreads
       })
+      syncQueuedFromStore()
       idleAttentionHandled = false
       void handleIdleAttention()
       return
@@ -4735,6 +4772,9 @@
         queuedPresentation = presentation
         queuedTaskReferences = taskReferences
         queuedHasContent = true
+        // Put it back at the front of the FIFO (steer consumed the head).
+        const remaining = rendererRecovery.queuedMessagesFor(projectId, id)
+        rendererRecovery.clearAllQueuedMessages(projectId, id)
         rendererRecovery.setQueuedMessage(projectId, id, {
           text: msg,
           attachments,
@@ -4745,6 +4785,8 @@
           taskReferences,
           startAfterThreads: []
         })
+        for (const entry of remaining) rendererRecovery.setQueuedMessage(projectId, id, entry)
+        syncQueuedFromStore()
       }
       errorMessage = error instanceof Error ? error.message : 'Steer message could not be sent.'
       if (promptReferences.length > 0) {
@@ -4776,6 +4818,21 @@
   function deleteQueuedMessage(): void {
     showQueueMenu = false
     clearQueuedState()
+  }
+
+  /** Delete every queued message for the thread. */
+  function deleteAllQueuedMessages(): void {
+    showQueueMenu = false
+    queuedMessage = ''
+    queuedAttachments = []
+    queuedPromptContext = undefined
+    queuedPromptReferences = []
+    queuedProjectReferences = []
+    queuedPresentation = undefined
+    queuedTaskReferences = []
+    queuedStartAfterThreads = []
+    queuedHasContent = false
+    rendererRecovery.clearAllQueuedMessages(thread.projectId, thread.id)
   }
 
   // ─── Permissions ───────────────────────────────────────────────────────
@@ -6373,7 +6430,7 @@
   }
 
   function persistQueuedStartAfterThreads(): void {
-    rendererRecovery.setQueuedMessage(thread.projectId, thread.id, {
+    rendererRecovery.updateQueuedHead(thread.projectId, thread.id, {
       text: queuedMessage,
       attachments: queuedAttachments,
       promptContext: queuedPromptContext,
@@ -9767,7 +9824,11 @@
               <div class="rounded-t-xl border border-border bg-surface shadow-sm">
                 <div class="flex items-center justify-between gap-2 px-3 pt-2.5 pb-1">
                   <span class="text-[10px] font-semibold uppercase tracking-wide text-dimmed"
-                    >{queuedStartAfterThreads.length > 0 ? 'Starts after' : 'Queued'}</span
+                    >{queuedCount > 1
+                      ? `Queued · ${queuedCount}`
+                      : queuedStartAfterThreads.length > 0
+                        ? 'Starts after'
+                        : 'Queued'}</span
                   >
                   <div class="flex items-center gap-1">
                     <button
@@ -9827,6 +9888,17 @@
                             <Trash2 size={13} />
                             Delete
                           </button>
+                          {#if queuedCount > 1}
+                            <div class="mx-2 my-1 border-t"></div>
+                            <button
+                              class="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-sm text-danger transition-colors hover:bg-danger/10"
+                              role="menuitem"
+                              onclick={deleteAllQueuedMessages}
+                            >
+                              <Trash2 size={13} />
+                              Delete all ({queuedCount})
+                            </button>
+                          {/if}
                         </div>
                       {/if}
                     </div>
@@ -9904,6 +9976,18 @@
                   </div>
                 {:else}
                   <p class="px-3 pb-2.5 text-[12px] text-muted line-clamp-3">{queuedMessage}</p>
+                {/if}
+                {#if queuedCount > 1}
+                  <div class="border-t px-3 pb-2.5 pt-2">
+                    <p class="text-[10px] font-semibold uppercase tracking-wide text-dimmed">
+                      Next up
+                    </p>
+                    {#each rendererRecovery
+                      .queuedMessagesFor(thread.projectId, thread.id)
+                      .slice(1) as next (next.text)}
+                      <p class="line-clamp-2 pt-1 text-[12px] text-muted">{next.text}</p>
+                    {/each}
+                  </div>
                 {/if}
               </div>
             </div>
@@ -10215,7 +10299,10 @@
                   onHideUsage={hideContextUsage}
                   usageRefreshing={refreshingAccountUsage}
                   {harnessUsage}
-                  canCompact={supportsManualCompaction(settings.harnessId) && !busy}
+                  canCompact={supportsManualCompaction(
+                    settings.harnessId,
+                    providerStore.providers
+                  ) && !busy}
                   {compacting}
                   onCompact={() => void compactWork()}
                   projectContext={composerProject}

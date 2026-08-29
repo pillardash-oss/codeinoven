@@ -618,6 +618,8 @@ export interface ProviderConnectionInfo {
   integration: 'ready' | 'planned'
   /** Whether this harness can consume custom base-URL providers at runtime. */
   supportsCustomProviders: boolean
+  /** Whether this harness supports manual context compaction (harness manifest). */
+  supportsManualCompaction?: boolean
   status: ProviderConnectionStatus
   /** Absolute path to the resolved binary, when found. */
   resolvedPath?: string

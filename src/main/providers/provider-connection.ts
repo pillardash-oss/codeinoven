@@ -1,7 +1,12 @@
 import { BrowserWindow } from 'electron'
 import { trustedIpcMain as ipcMain } from '../ipc/trusted-ipc-main'
 import type { ProviderConnectionInfo } from '../../lib/types'
-import { findHarness, listHarnesses, type HarnessDescriptor } from '../agents/harness-registry'
+import {
+  findHarness,
+  harnessSupportsManualCompaction,
+  listHarnesses,
+  type HarnessDescriptor
+} from '../agents/harness-registry'
 import { forwardRemoteEvent } from '../remote/remote-event-forwarder'
 import { sendToRenderer } from '../ipc/renderer-delivery'
 import {
@@ -58,6 +63,7 @@ export class ProviderConnectionService {
         command: harness.command,
         integration: harness.integration,
         supportsCustomProviders: harness.supportsCustomProviders,
+        supportsManualCompaction: harnessSupportsManualCompaction(harness.id),
         status: 'idle'
       })
     }
@@ -97,6 +103,7 @@ export class ProviderConnectionService {
           command: id,
           integration: 'planned',
           supportsCustomProviders: false,
+          supportsManualCompaction: false,
           status: 'error',
           detail: 'Unknown provider'
         }
@@ -201,6 +208,7 @@ export class ProviderConnectionService {
       command: def.command,
       integration: def.integration,
       supportsCustomProviders: def.supportsCustomProviders,
+      supportsManualCompaction: harnessSupportsManualCompaction(def.id),
       status: 'idle'
     }
 
