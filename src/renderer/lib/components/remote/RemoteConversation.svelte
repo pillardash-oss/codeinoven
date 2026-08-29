@@ -28,6 +28,7 @@
   import { copyText } from '$lib/copy-text'
   import SpeechPlaybackButton from '../speech/SpeechPlaybackButton.svelte'
   import { speechController } from '../../speech/speech-controller.svelte'
+  import { spokenWordOffset } from '../../speech/read-along'
   import { attachmentPreviewKind, fileUrlToPath } from '$lib/mime'
   import { getAgentIcon } from '$lib/agent-icons/registry'
   import { fastVariantForModelId } from '$shared/fast-inference'
@@ -904,6 +905,9 @@
     if (!pending) return base
     const autopilot = pending.autopilot === true
     const selectedStages = autopilot ? [] : normalizeLifecycleStages(pending.stages)
+    // A staged "everything off" must read as off — never carry a stale
+    // `startedAt` marker that would keep the toolbox icon lit.
+    const cleared = !autopilot && selectedStages.length === 0
     return {
       projectId: base?.projectId ?? thread.projectId,
       threadId: base?.threadId ?? thread.id,
@@ -914,7 +918,7 @@
       ...(base?.activeStage ? { activeStage: base.activeStage } : {}),
       ...(base?.humanGate ? { humanGate: base.humanGate } : {}),
       ...(base?.failure ? { failure: base.failure } : {}),
-      ...(base?.startedAt ? { startedAt: base.startedAt } : {}),
+      ...(!cleared && base?.startedAt ? { startedAt: base.startedAt } : {}),
       updatedAt: base?.updatedAt ?? Date.now()
     }
   })
@@ -1238,15 +1242,26 @@
                   {#if isReadingRemote && speechController.activeSegments && speechController.activeSegments.length > 0 && speechController.readingOverlayActive}
                     {@const segs = speechController.activeSegments}
                     {@const activeIdx = speechController.visibleSegmentIndex}
+                    {@const spokenProgress = speechController.activeSegmentProgress}
                     <div class="flex flex-col gap-1.5 text-sm text-foreground">
                       {#each segs as seg, i (seg.id)}
+                        {@const spokenOffset =
+                          i === activeIdx ? spokenWordOffset(seg.text, spokenProgress) : -1}
                         <div
                           class={i === activeIdx
                             ? 'rounded-md border border-dashed border-info/40 bg-info/5 px-2.5 py-1.5 transition-colors'
                             : 'px-2.5 py-1 opacity-80'}
                           data-speech-line={i === activeIdx ? 'active' : undefined}
                         >
-                          <span class="leading-relaxed">{seg.text}</span>
+                          <span class="leading-relaxed">
+                            {#if spokenOffset > 0}
+                              <span class="rounded-sm bg-info/20 px-0.5 box-decoration-clone"
+                                >{seg.text.slice(0, spokenOffset)}</span
+                              >{seg.text.slice(spokenOffset)}
+                            {:else}
+                              {seg.text}
+                            {/if}
+                          </span>
                         </div>
                       {/each}
                     </div>

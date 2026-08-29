@@ -19,43 +19,12 @@ import {
   runHarnessCommand,
   writeHarnessHomeFile
 } from '../drivers/harness-runtime'
-import { PiAuthConfigService, type PiAuthFileIo } from './pi-auth-config'
+import { PiAuthConfigService, piAuthFileIo } from './pi-auth-config'
 import { listPiCatalogProviders } from './pi-catalog'
-import { isPiOAuthProvider, runPiOAuthLogin } from './pi-oauth'
+import { runPiLogin, listPiProviderAuthInfo } from './pi-login'
 import { BrowserWindow } from 'electron'
 import { sendToRenderer } from '../ipc/renderer-delivery'
 import { forwardRemoteEvent } from '../remote/remote-event-forwarder'
-
-const PI_NATIVE_AUTH_PATH = join(homedir(), '.pi', 'agent', 'auth.json')
-
-/**
- * Transport that honors WSL-resident pi installs: read/write the auth file
- * inside the distro when pi runs there (matching `readPiStatus`'s view), and
- * fall back to a plain atomic write on the native filesystem otherwise.
- */
-const piAuthFileIo: PiAuthFileIo = {
-  async read(): Promise<string | null> {
-    const wslRaw = await readHarnessHomeFile('pi', '.pi/agent/auth.json').catch(() => undefined)
-    if (wslRaw !== undefined) return wslRaw
-    try {
-      return await readFile(PI_NATIVE_AUTH_PATH, 'utf8')
-    } catch {
-      return null
-    }
-  },
-  async write(content: string): Promise<void> {
-    if (await writeHarnessHomeFile('pi', '.pi/agent/auth.json', content)) return
-    await mkdir(dirname(PI_NATIVE_AUTH_PATH), { recursive: true })
-    const temporaryPath = `${PI_NATIVE_AUTH_PATH}.${process.pid}.${crypto.randomUUID()}.tmp`
-    try {
-      await writeFile(temporaryPath, content, { encoding: 'utf8', flag: 'wx', mode: 0o600 })
-      await rename(temporaryPath, PI_NATIVE_AUTH_PATH)
-    } catch (error) {
-      await rm(temporaryPath, { force: true }).catch(() => undefined)
-      throw error
-    }
-  }
-}
 
 /** Shared headless store for harnesses whose credentials live in files (Pi). */
 const fileBackedAuth = new PiAuthConfigService(undefined, piAuthFileIo)
@@ -337,8 +306,7 @@ async function readPiStatus(projectPath?: string): Promise<HarnessAuthStatus> {
     const entry = record(rawEntry)
     if (!entry) continue
     const apiKey = typeof entry['apiKey'] === 'string' ? entry['apiKey'] : undefined
-    const authenticated =
-      Boolean(apiKey && apiKey !== 'none') || credentialIds.has(providerId)
+    const authenticated = Boolean(apiKey && apiKey !== 'none') || credentialIds.has(providerId)
     accounts.push({
       id: accountId(providerId),
       label: providerId,
@@ -354,7 +322,7 @@ async function readPiStatus(projectPath?: string): Promise<HarnessAuthStatus> {
     accounts.push({
       id: accountId(providerId),
       label: providerId,
-      ...(await fileBackedAuth.isOauth(providerId) ? { method: 'oauth' } : {}),
+      ...((await fileBackedAuth.isOauth(providerId)) ? { method: 'oauth' } : {}),
       active: true
     })
     signedIn += 1
@@ -594,7 +562,8 @@ export class ProviderAccountOrchestrator {
     if (!definition) return null
     return {
       ...READ_AND_HANDOFF_ONLY,
-      logout: definition.logoutArgs !== undefined || definition.removeStoredCredential !== undefined,
+      logout:
+        definition.logoutArgs !== undefined || definition.removeStoredCredential !== undefined,
       pickerLogin: definition.pickerLogin === true,
       apiKeyEntry: definition.apiKeyEntry === true
     }
@@ -612,19 +581,18 @@ export class ProviderAccountOrchestrator {
   }
 
   /**
-   * Start a fully in-app OAuth sign-in for a Pi catalog provider: browser URL
-   * and device codes are broadcast to the UI, prompts (paste-the-code, select)
-   * are answered via {@link respondOAuthPrompt}, and the resulting credential
-   * is stored in Pi's own auth store. Mirrors what Pi's TUI does — without the
-   * TUI.
+   * Start a fully in-app sign-in for a Pi catalog provider by running the
+   * provider's own `login()` from pi-ai — OAuth browser/device flows for the
+   * providers that define them, and the provider's real multi-field API-key
+   * flow (e.g. Cloudflare's key + account id + gateway id) otherwise. Events
+   * and prompts are broadcast to the UI; answers arrive via
+   * {@link respondOAuthPrompt}; the resulting credential is stored in Pi's own
+   * auth store. Mirrors what Pi's TUI does — without the TUI.
    */
   async beginOAuthLogin(harnessId: string, providerId: string): Promise<string> {
     this.requireDefinition(harnessId)
     if (harnessId !== 'pi') {
-      throw new Error(`${harnessId} does not support in-app OAuth sign-in.`)
-    }
-    if (!isPiOAuthProvider(providerId)) {
-      throw new Error(`"${providerId}" connects with an API key, not OAuth.`)
+      throw new Error(`${harnessId} does not support in-app sign-in.`)
     }
     const loginId = `pi-oauth-${crypto.randomUUID()}`
     const controller = new AbortController()
@@ -632,7 +600,7 @@ export class ProviderAccountOrchestrator {
       controller
     }
     this.oauthSessions.set(loginId, session)
-    void runPiOAuthLogin(providerId, {
+    void runPiLogin(providerId, {
       signal: controller.signal,
       onEvent: (event) => this.broadcastOAuthEvent(loginId, { kind: 'event', event }),
       prompt: (prompt) =>
@@ -648,7 +616,11 @@ export class ProviderAccountOrchestrator {
         })
     })
       .then(async (credential) => {
-        await fileBackedAuth.setOAuthCredential(providerId, credential)
+        if (credential.type === 'oauth') {
+          await fileBackedAuth.setOAuthCredential(providerId, credential)
+        } else {
+          await fileBackedAuth.setApiKey(providerId, credential.key ?? '', credential.env)
+        }
         this.broadcastOAuthEvent(loginId, { kind: 'complete', providerId })
       })
       .catch((error: unknown) => {
@@ -805,10 +777,12 @@ export class ProviderAccountOrchestrator {
   }
 
   /**
-   * Pi offers every catalog provider, not just connected ones. Connectivity is
-   * a stored auth.json credential or an API-keyed entry in its native
-   * models.json. Falls back to the configured-accounts view when the catalog
-   * probe cannot run.
+   * Pi offers every catalog provider, not just connected ones. The searchable
+   * set is Pi's own built-in provider registry (`@earendil-works/pi-ai`); the
+   * RPC `get_available_models` only reports providers that already hold usable
+   * credentials, so it is not the connect flow's catalog. Connectivity is a
+   * stored auth.json credential or an API-keyed entry in its native models.json.
+   * Falls back to the configured-accounts view when the registry cannot load.
    */
   private async listPiOffered(): Promise<OfferedProvider[]> {
     const native = await readPiStatus()
@@ -839,7 +813,10 @@ export class ProviderAccountOrchestrator {
         })
       }
     }
+    const authInfo = await listPiProviderAuthInfo()
     for (const provider of merged.values()) {
+      // Sign-in capability comes from the same registry Pi's own TUI uses.
+      provider.oauth = authInfo.get(provider.id)?.oauth === true
       if (
         !provider.authenticated &&
         ((await fileBackedAuth.hasCredential(provider.id)) || keyedNativeIds.has(provider.id))

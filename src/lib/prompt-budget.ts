@@ -14,6 +14,13 @@ export const DEFAULT_PROMPT_BUDGET = {
   toolHeadroomTokens: 8_192
 } as const
 
+/**
+ * A cached `contextWindow` below this is treated as a corrupt/partial catalog
+ * record rather than a real limit — honoring it would collapse the input
+ * budget to ~1 token and deterministically reject every user message.
+ */
+const MIN_PLAUSIBLE_CONTEXT_WINDOW = 4_096
+
 export interface PromptBudgetInput {
   /** Selected model's maximum context tokens (`ProviderModel.contextWindow`). */
   contextWindow?: number
@@ -31,7 +38,13 @@ export interface PromptBudget {
 }
 
 export function computePromptBudget(input: PromptBudgetInput = {}): PromptBudget {
-  const contextWindow = input.contextWindow ?? DEFAULT_PROMPT_BUDGET.contextWindowTokens
+  const reportedWindow = input.contextWindow ?? DEFAULT_PROMPT_BUDGET.contextWindowTokens
+  // An implausibly small window (bad cache record, discovery glitch) must not
+  // shrink the budget to near-zero; fall back to the default window instead.
+  const contextWindow =
+    input.contextWindow !== undefined && reportedWindow < MIN_PLAUSIBLE_CONTEXT_WINDOW
+      ? DEFAULT_PROMPT_BUDGET.contextWindowTokens
+      : reportedWindow
   const reservedOutputTokens = Math.max(
     0,
     input.outputTokens ?? DEFAULT_PROMPT_BUDGET.outputReserveTokens

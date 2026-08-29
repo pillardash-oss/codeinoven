@@ -689,10 +689,9 @@ describe.skipIf(process.platform === 'win32')('ClaudeCodeDriver', () => {
         })}\n`
       )
     )
-    const questionEvent = events.find((event) => event.type === 'question.asked')
-    expect(questionEvent).toBeDefined()
-    if (!questionEvent || questionEvent.type !== 'question.asked') throw new Error('unreachable')
-    expect(questionEvent.questions[0]?.prompt).toBe('Which approach?')
+    // AskUserQuestion tool_use is intentionally not promoted to question.asked
+    // (handled exclusively via can_use_tool control request to avoid duplicate).
+    expect(events.some((event) => event.type === 'question.asked')).toBe(false)
 
     child.stdout.emit(
       'data',
@@ -711,9 +710,12 @@ describe.skipIf(process.platform === 'win32')('ClaudeCodeDriver', () => {
         })}\n`
       )
     )
+    const questionEvent = events.find((event) => event.type === 'question.asked')
+    expect(questionEvent).toBeDefined()
+    if (!questionEvent || questionEvent.type !== 'question.asked') throw new Error('unreachable')
+    expect(questionEvent.questions[0]?.prompt).toBe('Which approach?')
     const questionEvents = events.filter((event) => event.type === 'question.asked')
-    expect(questionEvents).toHaveLength(2)
-    expect(questionEvents[1]?.requestId).toBe(questionEvent.requestId)
+    expect(questionEvents).toHaveLength(1)
 
     await driver.replyToQuestion('/project', sessionId, questionEvent.requestId, [['A']])
     const lastWrite = child.stdin.write.mock.calls.at(-1)?.[0] as string

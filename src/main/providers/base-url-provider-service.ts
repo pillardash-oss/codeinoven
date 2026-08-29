@@ -4,7 +4,6 @@ import type {
   BaseUrlProviderModel,
   BaseUrlProviderUpdateRequest
 } from '../../lib/types'
-import { generateId } from '../../lib/utils'
 import {
   hasNativeProviderCatalog,
   NativeProviderConfigService
@@ -14,8 +13,8 @@ import type { StorageEngine } from '../storage/storage-engine'
 const STORE_PATH = 'accounts/base-url-providers.json'
 const STORE_VERSION = 1
 const SAFE_ID = /^[a-zA-Z0-9][a-zA-Z0-9._:-]*$/u
-/** Model IDs routinely include slashes/at-signs (LM Studio: `org/model`, HF: `org/model@precision`). */
-const SAFE_MODEL_ID = /^[a-zA-Z0-9][a-zA-Z0-9._:/@+-]*$/u
+/** Model IDs routinely include slashes/at-signs (LM Studio: `org/model`, HF: `org/model@precision`, Cloudflare: `@cf/org/model`). */
+const SAFE_MODEL_ID = /^[a-zA-Z0-9@][a-zA-Z0-9._:/@+-]*$/u
 const SECRET_REF = /^secret_[a-zA-Z0-9._:-]+$/u
 const ENV_VAR = /^[A-Za-z_][A-Za-z0-9_]*$/u
 const HTTP_HEADERS_MAX = 32
@@ -36,6 +35,7 @@ interface NormalizedBaseUrlProvider {
   apiKeyEnvVar?: string
   headers?: Record<string, string>
   models: BaseUrlProviderModel[]
+  usagePath?: string
   enabled: boolean
 }
 
@@ -73,6 +73,25 @@ export class BaseUrlProviderService {
     return provider ? structuredClone(provider) : null
   }
 
+  /** Ids already used within a harness — native harnesses keep their own
+   *  catalog file, so those must be read live rather than from the store. */
+  private async existingIdsFor(
+    harnessId: string,
+    store: BaseUrlProviderStore
+  ): Promise<Set<string>> {
+    if (hasNativeProviderCatalog(harnessId)) {
+      const native = await this.nativeProviders.listProviders()
+      return new Set(
+        native.filter((provider) => provider.harnessId === harnessId).map((provider) => provider.id)
+      )
+    }
+    return new Set(
+      store.providers
+        .filter((provider) => provider.harnessId === harnessId)
+        .map((provider) => provider.id)
+    )
+  }
+
   async listEnabled(harnessId?: string): Promise<BaseUrlProvider[]> {
     const providers = (await this.load()).providers.filter((provider) => provider.enabled)
     return structuredClone(
@@ -88,7 +107,10 @@ export class BaseUrlProviderService {
     return this.enqueue(async () => {
       const store = await this.load()
       const now = Date.now()
-      const id = input.id === undefined ? generateId() : identifier(input.id, 'Base URL provider ID')
+      const id =
+        input.id === undefined
+          ? deriveProviderId(input.name, await this.existingIdsFor(input.harnessId, store))
+          : identifier(input.id, 'Base URL provider ID')
       const apiKeyRef = input.apiKeyRef
       const apiKeyEnvVar = apiKeyRef === undefined ? undefined : apiKeyEnvVarFor(id)
       const provider: BaseUrlProvider = {
@@ -101,11 +123,14 @@ export class BaseUrlProviderService {
       }
       if (hasNativeProviderCatalog(provider.harnessId)) {
         await this.nativeProviders.upsertProvider(provider, input.apiKey)
-        return structuredClone(provider)
+        const created = { ...provider, apiKeyConfigured: (input.apiKey ?? '').trim() !== '' }
+        return structuredClone(created)
       }
       if (
         input.id !== undefined &&
-        store.providers.some((candidate) => candidate.harnessId === provider.harnessId && candidate.id === id)
+        store.providers.some(
+          (candidate) => candidate.harnessId === provider.harnessId && candidate.id === id
+        )
       ) {
         throw new Error(`Base URL provider already exists: ${provider.harnessId}:${id}`)
       }
@@ -141,6 +166,10 @@ export class BaseUrlProviderService {
         baseURL: patch.baseURL ?? current.baseURL,
         headers: patch.headers === undefined ? current.headers : patch.headers,
         models: patch.models ?? current.models,
+        // An explicit empty string clears the route; undefined keeps it.
+        ...(patch.usagePath === undefined
+          ? { usagePath: current.usagePath ?? '' }
+          : { usagePath: patch.usagePath }),
         enabled: patch.enabled ?? current.enabled
       }
 
@@ -162,10 +191,17 @@ export class BaseUrlProviderService {
         updatedAt: Date.now()
       }
       if (hasNativeProviderCatalog(current.harnessId)) {
+        const apiKeyConfigured =
+          patch.removeApiKey === true
+            ? false
+            : patch.apiKey !== undefined
+              ? patch.apiKey.trim() !== ''
+              : current.apiKeyConfigured === true
         const nativeUpdated = {
           ...updated,
           apiKeyRef: undefined,
-          apiKeyEnvVar: undefined
+          apiKeyEnvVar: undefined,
+          apiKeyConfigured
         }
         await this.nativeProviders.upsertProvider(nativeUpdated, patch.apiKey, patch.removeApiKey)
         return structuredClone(nativeUpdated)
@@ -236,6 +272,29 @@ function apiKeyEnvVarFor(providerId: string): string {
   return `CODEINOVEN_BUP_${suffix}_KEY`
 }
 
+/**
+ * Provider ids double as the key shown in harness-native config files
+ * (opencode.json, models.json), so a random hex string there is opaque.
+ * Deriving `cio-<slug>` from the display name keeps that view readable.
+ */
+function slugifyProviderName(name: string): string {
+  const slug = name
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9]+/gu, '-')
+    .replace(/^-+|-+$/gu, '')
+  return slug || 'provider'
+}
+
+/** Appends `-2`, `-3`, … until the slug no longer collides within the harness. */
+function deriveProviderId(name: string, existingIds: ReadonlySet<string>): string {
+  const base = `cio-${slugifyProviderName(name)}`
+  if (!existingIds.has(base)) return base
+  let suffix = 2
+  while (existingIds.has(`${base}-${suffix}`)) suffix++
+  return `${base}-${suffix}`
+}
+
 function normalizeCreateInput(
   input: BaseUrlProviderCreateRequest,
   id: string
@@ -246,8 +305,44 @@ function normalizeCreateInput(
   const baseURL = boundedString(input.baseURL, 'Base URL provider base URL', 1, 2_048)
   const headers = normalizeHeaders(input.headers)
   const models = normalizeModels(input.models, id)
+  const usagePath = normalizeUsagePath(input.usagePath)
   const enabled = typeof input.enabled === 'boolean' ? input.enabled : true
-  return { harnessId, npm, name, baseURL, headers, models, enabled }
+  return {
+    harnessId,
+    npm,
+    name,
+    baseURL,
+    headers,
+    models,
+    ...(usagePath ? { usagePath } : {}),
+    enabled
+  }
+}
+
+/**
+ * Validate the optional account status/usage route. Accepts an absolute
+ * `http(s)` URL or a root-relative path (`/status`, `/usage`, `/v1/usage`);
+ * an empty string clears the route.
+ */
+export function normalizeUsagePath(value: string | undefined): string | undefined {
+  if (value === undefined) return undefined
+  const trimmed = value.trim()
+  if (!trimmed) return undefined
+  if (/^https?:\/\//iu.test(trimmed)) {
+    if (trimmed.length > 2_048) {
+      throw new TypeError('Usage route URL must be at most 2048 characters')
+    }
+    return trimmed
+  }
+  if (!/^\/[a-zA-Z0-9._~:/?#[\]@!$&'()*+,;=%-]*$/u.test(trimmed)) {
+    throw new TypeError(
+      'Usage route must be an absolute http(s) URL or a path starting with / (e.g. /status)'
+    )
+  }
+  if (trimmed.length > 2_048) {
+    throw new TypeError('Usage route must be at most 2048 characters')
+  }
+  return trimmed
 }
 
 function normalizeHeaders(
@@ -271,8 +366,8 @@ function normalizeModels(
   value: Array<Omit<BaseUrlProviderModel, 'id' | 'providerId'> & { id?: string }>,
   providerId: string
 ): BaseUrlProviderModel[] {
-  if (!Array.isArray(value) || value.length === 0) {
-    throw new TypeError('Base URL provider must expose at least one model')
+  if (!Array.isArray(value)) {
+    throw new TypeError('Base URL provider models must be an array')
   }
   if (value.length > MODELS_MAX) {
     throw new TypeError(`Base URL provider supports at most ${MODELS_MAX} models`)
@@ -430,8 +525,8 @@ function parseHeaders(value: unknown): Record<string, string> | undefined {
 }
 
 function parseModels(value: unknown, providerId: string): BaseUrlProviderModel[] {
-  if (!Array.isArray(value) || value.length === 0) {
-    throw new TypeError('Base URL provider must expose at least one model')
+  if (!Array.isArray(value)) {
+    throw new TypeError('Base URL provider models must be an array')
   }
   if (value.length > MODELS_MAX) {
     throw new TypeError(`Base URL provider supports at most ${MODELS_MAX} models`)
@@ -526,11 +621,17 @@ function parseDefaultThinkingLevel(value: unknown): BaseUrlProviderModel['defaul
 
 // ─── Primitives ──────────────────────────────────────────────────────────────
 
-function assertUniqueIds(values: Array<{ id: string }>, label: string): void {
-  const ids = new Set<string>()
+/**
+ * Ids are unique per harness, not globally — linking the same provider
+ * across harnesses (multi-harness base URL providers) intentionally reuses
+ * one id across several `harnessId` records.
+ */
+function assertUniqueIds(values: Array<{ id: string; harnessId: string }>, label: string): void {
+  const seen = new Set<string>()
   for (const value of values) {
-    if (ids.has(value.id)) throw new Error(`${label} store contains duplicate ID: ${value.id}`)
-    ids.add(value.id)
+    const key = `${value.harnessId}:${value.id}`
+    if (seen.has(key)) throw new Error(`${label} store contains duplicate ID: ${value.id}`)
+    seen.add(key)
   }
 }
 

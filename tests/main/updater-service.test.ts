@@ -346,3 +346,54 @@ describe('UpdaterService session-safe install', () => {
     })
   })
 })
+
+describe('UpdaterService check failure handling', () => {
+  it('a background check network failure falls back to idle, not a sticky error', async () => {
+    const storage = makeStorage()
+    const service = new UpdaterService(storage)
+    service.setChatEngine(makeChatEngine(() => 0))
+
+    autoUpdater.checkForUpdates.mockRejectedValue(new Error('getaddrinfo ENOTFOUND'))
+    service.start()
+    await flush()
+
+    // electron-updater both emits 'error' and rejects the check promise.
+    autoUpdater.emit('error', new Error('getaddrinfo ENOTFOUND'))
+    await flush()
+
+    expect(service.status.state).toBe('idle')
+    expect(service.status.errorMessage).toBeUndefined()
+  })
+
+  it('an explicit user-initiated check failure still reports the error', async () => {
+    const storage = makeStorage()
+    const service = new UpdaterService(storage)
+    service.setChatEngine(makeChatEngine(() => 0))
+
+    autoUpdater.checkForUpdates.mockRejectedValue(new Error('offline'))
+    const pending = service.checkForUpdates(true)
+    await flush()
+    autoUpdater.emit('error', new Error('offline'))
+    await pending
+
+    expect(service.status.state).toBe('error')
+    expect(service.status.errorMessage).toBe('offline')
+  })
+
+  it('a background failure never clobbers a downloaded update', async () => {
+    const storage = makeStorage()
+    const service = new UpdaterService(storage)
+    service.setChatEngine(makeChatEngine(() => 1))
+
+    await emitDownloaded()
+    expect(service.status.state).toBe('waiting')
+
+    autoUpdater.checkForUpdates.mockRejectedValue(new Error('offline'))
+    const pending = service.checkForUpdates()
+    autoUpdater.emit('error', new Error('offline'))
+    await flush()
+    await pending
+
+    expect(service.status.state).toBe('waiting')
+  })
+})

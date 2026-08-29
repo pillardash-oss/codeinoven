@@ -43,6 +43,7 @@ import type { ComputerUsePipService } from './utilities/computer-use-pip-service
 import type { UpdaterService } from './notifications/updater-service'
 import type { PowerWakeService } from './system/power-wake-service'
 import type { RetrySchedulerService } from './system/retry-scheduler-service'
+import type { HeartbeatSchedulerService } from './system/heartbeat-scheduler-service'
 import { ModelPricingService } from './providers/model-pricing-service'
 import { ThreadCreationCoordinator } from './chat/thread-creation-coordinator'
 import { ThreadDeletionCoordinator } from './chat/thread-deletion-coordinator'
@@ -137,8 +138,8 @@ if (hasNativeSplashHandoff()) startupTelemetry.mark('nativeSplash:active')
 // Electron process entry is marked exactly once at module scope.
 startupTelemetry.mark('process:entry')
 // Privacy-preserving process-wide crash policy: uncaught exceptions and
-// unhandled rejections are logged and exit nonzero instead of leaving a
-// headless or silently-hung process.
+// unhandled rejections are logged and never exit the process — a failed
+// background operation must never kill the app on the user's behalf.
 installProcessCrashDiagnostics()
 
 let mainWindow: BrowserWindow | null = null
@@ -377,6 +378,7 @@ let notificationService: NotificationService | null = null
 let updaterService: UpdaterService | null = null
 let powerWakeService: PowerWakeService | null = null
 let retryScheduler: RetrySchedulerService | null = null
+let heartbeatScheduler: HeartbeatSchedulerService | null = null
 let remoteCredentials: DeviceCredentialService | null = null
 let remoteMode: RemoteModeController | null = null
 let stopRemoteOwnershipListener: (() => void) | null = null
@@ -535,6 +537,7 @@ async function bootPostPaintServices(): Promise<void> {
     { UpdaterService },
     { PowerWakeService },
     { RetrySchedulerService },
+    { HeartbeatSchedulerService },
     { SpeechService },
     { registerSpeechIpc },
     { PrototypePreviewService }
@@ -551,6 +554,7 @@ async function bootPostPaintServices(): Promise<void> {
     import('./notifications/updater-service'),
     import('./system/power-wake-service'),
     import('./system/retry-scheduler-service'),
+    import('./system/heartbeat-scheduler-service'),
     import('./speech/speech-service'),
     import('./ipc/speech-ipc'),
     import('./prototypes/prototype-preview-service')
@@ -581,9 +585,9 @@ async function bootPostPaintServices(): Promise<void> {
   )
   // Grade any turn outcomes whose persisted deadline elapsed while the app was
   // closed (non-fatal: a failed sweep leaves rows pending for the next launch).
-  void chatEngine.recoverPendingTurnGrades().catch((error) =>
-    Logger.dev('Pending turn grade recovery failed (non-fatal):', error)
-  )
+  void chatEngine
+    .recoverPendingTurnGrades()
+    .catch((error) => Logger.dev('Pending turn grade recovery failed (non-fatal):', error))
   // Merge the app-managed lean opencode agents into the machine-wide global
   // config. Idempotent, additive-only and non-fatal; runs after first paint
   // so it never blocks the workspace, and logs a dev-only summary.
@@ -594,6 +598,8 @@ async function bootPostPaintServices(): Promise<void> {
   updaterService = new UpdaterService(storage)
   powerWakeService = new PowerWakeService(storage, database)
   retryScheduler = new RetrySchedulerService(storage)
+  heartbeatScheduler = new HeartbeatSchedulerService(storage)
+  chatEngine.attachHeartbeatScheduler(heartbeatScheduler)
   speechService = new SpeechService(
     {
       catalogPath: app.isPackaged
@@ -694,6 +700,7 @@ async function bootPostPaintServices(): Promise<void> {
     projectFilesService,
     powerWakeService,
     retryScheduler,
+    heartbeatScheduler,
     harnessManifestService,
     worktreeService: scopeWorktreeService,
     threadCreation,
@@ -743,7 +750,11 @@ async function bootPostPaintServices(): Promise<void> {
     ])
 
     ptyService = new PtyService(storage, database, scopeRootResolver)
-    providerConnection = new ProviderConnectionService()
+    // A probe that changes a harness's install state (new install, version
+    // bump) invalidates cached provider catalogs so the model picker reflects it.
+    providerConnection = new ProviderConnectionService(() => {
+      void chatEngine?.invalidateProviderCatalogs()
+    })
     harnessUpdateService = new HarnessUpdateService(providerConnection)
     harnessAutoUpdateService = new HarnessAutoUpdateService(storage)
     harnessInstallService = new HarnessInstallService(providerConnection)
@@ -886,6 +897,12 @@ async function bootPostPaintServices(): Promise<void> {
       await chatEngine?.repairPendingRetryThreadStatuses()
     } catch (error) {
       Logger.error('Retry scheduler startup failed (non-fatal):', error)
+    }
+
+    try {
+      await heartbeatScheduler?.start()
+    } catch (error) {
+      Logger.error('Heartbeat scheduler startup failed (non-fatal):', error)
     }
 
     try {
@@ -1274,15 +1291,12 @@ void app
       // All feature service graphs are imported and constructed only after
       // the primary window has both loaded and rendered. This includes the IPC
       // graph, so optional engines never compete with the visible workspace.
+      // A failure here degrades the app instead of killing it: the window and
+      // already-registered services stay alive, and the failure is fully
+      // logged for diagnosis. A background feature failing must never exit
+      // the whole app on the user's behalf.
       void bootPostPaintServices().catch((error) => {
-        void handleFatalStartupFailure({
-          error,
-          appName: APP_NAME,
-          resources: [{ name: 'database', close: () => database.close() }],
-          showErrorBox: dialog.showErrorBox,
-          quit: (code) => app.exit(code),
-          telemetry: startupTelemetry
-        })
+        Logger.error('Post-paint service boot failed; app continues with degraded features', error)
       })
     }
 
@@ -1368,6 +1382,10 @@ void app
           close: () => retryScheduler?.dispose()
         },
         {
+          name: 'heartbeatScheduler',
+          close: () => heartbeatScheduler?.dispose()
+        },
+        {
           name: 'speechService',
           close: () => void speechService?.dispose()
         }
@@ -1438,6 +1456,12 @@ async function runShutdownPipeline(): Promise<void> {
     retryScheduler?.dispose()
   } catch (error) {
     Logger.error('Retry scheduler cleanup failed during shutdown:', error)
+  }
+
+  try {
+    heartbeatScheduler?.dispose()
+  } catch (error) {
+    Logger.error('Heartbeat scheduler cleanup failed during shutdown:', error)
   }
 
   try {

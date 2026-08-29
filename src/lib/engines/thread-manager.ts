@@ -8,6 +8,7 @@ import { messageId as createMessageId } from '../id'
 import { featureSlugFromTitle } from '../project-artifacts'
 import { ProjectRepo } from '../../main/database/repositories/project-repo'
 import { HarnessUsageRepo } from '../../main/database/repositories/harness-usage-repo'
+import { EngineeringLifecycleEngine } from './engineering-lifecycle-engine'
 import {
   AgentMessageRepo,
   type ProviderDeltaSyncResult,
@@ -259,6 +260,7 @@ export class ThreadManager {
   private projectRepo: ProjectRepo
   private agentMessageRepo: AgentMessageRepo
   private harnessUsageRepo: HarnessUsageRepo
+  private engineeringLifecycleEngine: EngineeringLifecycleEngine
 
   /**
    * @param onChange Invoked after a thread's status/read state is persisted so
@@ -277,6 +279,7 @@ export class ThreadManager {
     this.projectRepo = new ProjectRepo(db)
     this.agentMessageRepo = new AgentMessageRepo(db)
     this.harnessUsageRepo = new HarnessUsageRepo(db)
+    this.engineeringLifecycleEngine = new EngineeringLifecycleEngine(db)
   }
 
   /**
@@ -1307,6 +1310,22 @@ export class ThreadManager {
     // Same-scope forks re-resolve their compatibility directory from the
     // destination scope inside `createThread`, so a stale parent directory
     // can never override the authoritative root.
+    // A fork of an Engineering thread must open with the same switches lit:
+    // carry the parent's stage selection (and Auto Pilot) into the fork so
+    // the toolbox reflects exactly what the user had turned on.
+    if (parent.settings?.engineeringMode === true) {
+      const sourceLifecycle = this.engineeringLifecycleEngine.get(projectId, threadId)
+      if (sourceLifecycle && sourceLifecycle.selection !== 'none') {
+        try {
+          this.engineeringLifecycleEngine.select(destinationProjectId, forked.id, {
+            stages: sourceLifecycle.selectedStages ?? [],
+            autopilot: sourceLifecycle.autopilot === true
+          })
+        } catch {
+          // Lifecycle inheritance is cosmetic — never fail the fork on it.
+        }
+      }
+    }
     if (copied.length > 0) {
       const withNewIds = remapCopiedMessages(copied)
       await this.saveMessages(destinationProjectId, forked.id, withNewIds)

@@ -26,6 +26,8 @@ export interface BaseUrlProviderClipboardData {
   baseURL: string
   apiKey: string
   headers: string
+  /** Account status/usage route carried through copy/paste. Empty when none. */
+  usagePath?: string
   models: BaseUrlProviderModelClipboardData[]
   enabled: boolean
 }
@@ -124,6 +126,7 @@ function parseProvider(raw: unknown): BaseUrlProviderClipboardData {
     baseURL: requiredString(provider['baseURL'], 'provider base URL'),
     apiKey: optionalString(provider['apiKey']),
     headers: optionalString(provider['headers']),
+    usagePath: optionalString(provider['usagePath']),
     models: provider['models'].map(parseModel),
     enabled: provider['enabled'] !== false
   }

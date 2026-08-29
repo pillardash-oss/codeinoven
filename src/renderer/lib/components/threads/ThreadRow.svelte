@@ -199,6 +199,10 @@
     return providers.find((provider) => provider.id === providerId)?.name ?? null
   })
 
+  /** Provider id of the thread's current model — ids drive icon resolution so
+   *  custom CodeInOven providers (`cio-…`) always render the CodeInOven mark. */
+  const currentModelProviderId = $derived(thread.settings?.providerId ?? null)
+
   $effect(() => {
     const row = harnessRowEl
     if (!row) return
@@ -693,7 +697,11 @@
         {/if}
       {:else if currentModelProviderName}
         <span class="flex shrink-0 items-center" title={thread.settings?.modelId ?? 'Model'}>
-          <VendorIcon name={currentModelProviderName} size={13} />
+          <VendorIcon
+            name={currentModelProviderName}
+            id={currentModelProviderId ?? undefined}
+            size={13}
+          />
         </span>
       {/if}
       {#if selected}
@@ -907,7 +915,11 @@
             aria-hidden={hovered}
             title={thread.settings?.modelId ?? 'Model'}
           >
-            <VendorIcon name={currentModelProviderName} size={13} />
+            <VendorIcon
+              name={currentModelProviderName}
+              id={currentModelProviderId ?? undefined}
+              size={13}
+            />
           </span>
         {/if}
       {/if}

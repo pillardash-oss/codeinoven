@@ -71,7 +71,7 @@ export class RendererRecoveryStore {
   chatRecentModels = $state<string[]>([])
   auditModelKey = $state<string | undefined>(undefined)
   private composerDrafts = $state<Record<string, ComposerDraftEntry>>({})
-  private queuedMessages = $state<Record<string, QueuedMessageEntry>>({})
+  private queuedMessages = $state<Record<string, QueuedMessageEntry[]>>({})
 
   /** Trailing debounce so rapid mutations (e.g. typing a draft) coalesce into
    *  one disk write instead of serializing the whole snapshot on every keystroke.
@@ -137,7 +137,7 @@ export class RendererRecoveryStore {
       selectedProjectId: this.selectedProjectId,
       selectedThread: this.selectedThread ? { ...this.selectedThread } : null,
       composerDrafts: { ...this.composerDrafts },
-      queuedMessages: { ...this.queuedMessages },
+      queuedMessages: { ...this.queuedMessages }, // shallow-copied; arrays shared read-only
       collapsedFolders: [...this.collapsedFolders],
       favoriteModels: [...this.favoriteModels],
       recentModels: [...this.recentModels],
@@ -208,7 +208,8 @@ export class RendererRecoveryStore {
       entry.taskReferences.length > 0 ||
       entry.promptReferences.length > 0 ||
       entry.startAfterThreads.length > 0 ||
-      this.queuedMessageFor(projectId, threadId) !== null
+      this.queuedMessageFor(projectId, threadId) !== null ||
+      this.queuedMessagesFor(projectId, threadId).length > 0
     )
   }
 
@@ -388,16 +389,30 @@ export class RendererRecoveryStore {
     )
   }
 
-  /** The persisted queued message for a thread, if any. */
+  /** The oldest queued message for a thread — the next one to be delivered. */
   queuedMessageFor(projectId: string, threadId: string): QueuedMessageEntry | null {
     if (!isRecoveryIdentifier(projectId) || !isRecoveryIdentifier(threadId)) return null
-    return this.queuedMessages[recoveryDraftKey(projectId, threadId)] ?? null
+    const queue = this.queuedMessages[recoveryDraftKey(projectId, threadId)]
+    return queue?.[0] ?? null
   }
 
-  /** Enumerate every thread that currently has a persisted queued message. */
+  /** Every queued message for a thread, oldest (next to send) first. */
+  queuedMessagesFor(projectId: string, threadId: string): QueuedMessageEntry[] {
+    if (!isRecoveryIdentifier(projectId) || !isRecoveryIdentifier(threadId)) return []
+    return this.queuedMessages[recoveryDraftKey(projectId, threadId)] ?? []
+  }
+
+  /** Number of queued messages waiting on a thread. */
+  queuedMessageCount(projectId: string, threadId: string): number {
+    return this.queuedMessagesFor(projectId, threadId).length
+  }
+
+  /** Enumerate every thread that currently has queued messages. */
   queuedMessageThreads(): Array<{ projectId: string; threadId: string }> {
     const threads: Array<{ projectId: string; threadId: string }> = []
     for (const key of Object.keys(this.queuedMessages)) {
+      const queue = this.queuedMessages[key]
+      if (!queue || queue.length === 0) continue
       let parsed: unknown
       try {
         parsed = JSON.parse(key)
@@ -416,7 +431,8 @@ export class RendererRecoveryStore {
     return threads
   }
 
-  /** Persist a message queued while the agent was busy. */
+  /** Queue a message behind any others already waiting for an idle agent
+   *  (first in, first out — the oldest queued message sends first). */
   setQueuedMessage(projectId: string, threadId: string, entry: QueuedMessageEntry): void {
     const hasContext =
       entry.text.length > 0 ||
@@ -436,14 +452,15 @@ export class RendererRecoveryStore {
     }
 
     const key = recoveryDraftKey(projectId, threadId)
-    if (this.queuedMessages[key] === entry) return
+    const queue = this.queuedMessages[key]
+    if (queue && queue[queue.length - 1] === entry) return
 
     const next = { ...this.queuedMessages }
-    if (!(key in next) && Object.keys(next).length >= MAX_RECOVERY_DRAFTS) {
+    if (!queue && Object.keys(next).length >= MAX_RECOVERY_DRAFTS) {
       const oldestKey = Object.keys(next)[0]
       if (oldestKey) delete next[oldestKey]
     }
-    next[key] = {
+    const persistedEntry: QueuedMessageEntry = {
       text: entry.text,
       attachments: entry.attachments,
       promptContext: entry.promptContext,
@@ -453,12 +470,55 @@ export class RendererRecoveryStore {
       taskReferences: entry.taskReferences,
       startAfterThreads: entry.startAfterThreads
     }
+    next[key] = [...(queue ?? []), persistedEntry]
     this.queuedMessages = next
     this.persist()
   }
 
-  /** Drop the persisted queued message once it is consumed or discarded. */
+  /** Rewrite the oldest queued message in place (e.g. editing its "starts
+   *  after" dependencies). No-op when the thread has no queued message. */
+  updateQueuedHead(projectId: string, threadId: string, entry: QueuedMessageEntry): void {
+    if (!isRecoveryIdentifier(projectId) || !isRecoveryIdentifier(threadId)) return
+    const key = recoveryDraftKey(projectId, threadId)
+    const queue = this.queuedMessages[key]
+    if (!queue || queue.length === 0) return
+    const next = { ...this.queuedMessages }
+    next[key] = [
+      {
+        text: entry.text,
+        attachments: entry.attachments,
+        promptContext: entry.promptContext,
+        promptReferences: entry.promptReferences,
+        projectReferences: entry.projectReferences,
+        presentation: entry.presentation,
+        taskReferences: entry.taskReferences,
+        startAfterThreads: entry.startAfterThreads
+      },
+      ...queue.slice(1)
+    ]
+    this.queuedMessages = next
+    this.persist()
+  }
+
+  /** Drop the oldest queued message once it has been consumed or discarded. */
   clearQueuedMessage(projectId: string, threadId: string): void {
+    if (!isRecoveryIdentifier(projectId) || !isRecoveryIdentifier(threadId)) return
+    const key = recoveryDraftKey(projectId, threadId)
+    const queue = this.queuedMessages[key]
+    if (!queue || queue.length === 0) return
+    const next = { ...this.queuedMessages }
+    const remaining = queue.slice(1)
+    if (remaining.length > 0) {
+      next[key] = remaining
+    } else {
+      delete next[key]
+    }
+    this.queuedMessages = next
+    this.persist()
+  }
+
+  /** Drop every queued message for a thread (Delete all). */
+  clearAllQueuedMessages(projectId: string, threadId: string): void {
     if (!isRecoveryIdentifier(projectId) || !isRecoveryIdentifier(threadId)) return
     const key = recoveryDraftKey(projectId, threadId)
     if (!(key in this.queuedMessages)) return

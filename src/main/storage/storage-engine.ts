@@ -12,7 +12,7 @@ import {
   atomicWrite,
   resolveWithinRoot
 } from '../../lib/utils'
-import type { AppConfig } from '../../lib/types'
+import type { AppConfig, HeartbeatConfig } from '../../lib/types'
 import { AGENT_BEHAVIOR_FILENAME, DEFAULT_AGENT_BEHAVIOR_PROMPT } from '../../lib/agent-behavior'
 import {
   CIO_PROMPT_DEFINITIONS,
@@ -68,6 +68,8 @@ const DEFAULT_CONFIG: AppConfig = {
  * StorageEngine — manages all filesystem persistence under ~/.config/pillardash/codeinoven/
  * All writes are atomic (write .tmp then rename).
  */
+const HEARTBEATS_FILE = 'heartbeat/heartbeats.json'
+
 export class StorageEngine {
   private root: string
   private readonly allowOrphanProjectArtifacts: boolean
@@ -308,6 +310,16 @@ export class StorageEngine {
       defaults: defaults.length > 0 ? defaults : [...FALLBACK_WORKER_NAMES],
       custom: await this.readWorkerNameFile(CUSTOM_WORKER_NAMES_FILE)
     }
+  }
+
+  /** Read the configured heartbeat pings (empty when none configured yet). */
+  async getHeartbeats(): Promise<HeartbeatConfig[]> {
+    return (await this.read<HeartbeatConfig[]>(HEARTBEATS_FILE)) ?? []
+  }
+
+  /** Persist the full list of configured heartbeat pings. */
+  async saveHeartbeats(heartbeats: HeartbeatConfig[]): Promise<void> {
+    await this.write(HEARTBEATS_FILE, heartbeats)
   }
 
   /** Read a JSON file relative to config root */

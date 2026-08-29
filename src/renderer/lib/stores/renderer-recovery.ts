@@ -16,6 +16,7 @@ export type SettingsSection =
   | 'memory'
   | 'audits'
   | 'cio-prompts'
+  | 'heartbeat'
   | 'harnesses'
   | 'utilities'
   | 'gateways'
@@ -36,6 +37,7 @@ export type MainView =
   | 'settings-memory'
   | 'settings-audits'
   | 'settings-cio-prompts'
+  | 'settings-heartbeat'
   | 'settings-harnesses'
   | 'settings-utilities'
   | 'settings-gateways'
@@ -77,8 +79,9 @@ export interface QueuedResponseReference extends PromptReference {
 
 /**
  * A message queued while the agent was busy. Kept in the recovery snapshot so
- * an app refresh or state restart never drops it; it is cleared once sent,
- * steered, edited back into the composer, or deleted.
+ * an app refresh or state restart never drops it; it is dequeued (first in,
+ * first out) once sent, or removed when steered, edited back into the
+ * composer, or deleted.
  */
 export interface QueuedMessageEntry {
   text: string
@@ -104,8 +107,9 @@ export interface RendererRecoverySnapshot {
   selectedProjectId: string | null
   selectedThread: SelectedThreadReference | null
   composerDrafts: Record<string, ComposerDraftEntry>
-  /** Queued messages awaiting an idle agent, keyed like composer drafts. */
-  queuedMessages: Record<string, QueuedMessageEntry>
+  /** Queued messages awaiting an idle agent, keyed like composer drafts.
+   *  Multiple messages queue FIFO per thread — one is delivered per idle turn. */
+  queuedMessages: Record<string, QueuedMessageEntry[]>
   /** Project ids the user has manually collapsed in the sidebar. */
   collapsedFolders: string[]
   /** Model keys (providerId:modelId) the user has favorited for quick access. */
@@ -137,6 +141,7 @@ const MAIN_VIEWS: readonly MainView[] = [
   'settings-memory',
   'settings-audits',
   'settings-cio-prompts',
+  'settings-heartbeat',
   'settings-harnesses',
   'settings-utilities',
   'settings-sound',
@@ -150,6 +155,7 @@ const SETTINGS_SECTIONS: readonly SettingsSection[] = [
   'memory',
   'audits',
   'cio-prompts',
+  'heartbeat',
   'harnesses',
   'utilities',
   'gateways',
@@ -399,42 +405,50 @@ function parseDrafts(value: unknown): Record<string, ComposerDraftEntry> {
   return drafts
 }
 
-function parseQueuedMessages(value: unknown): Record<string, QueuedMessageEntry> {
+function parseQueuedMessages(value: unknown): Record<string, QueuedMessageEntry[]> {
   if (!isRecord(value)) return {}
 
-  const queued: Record<string, QueuedMessageEntry> = {}
+  const queued: Record<string, QueuedMessageEntry[]> = {}
   let count = 0
   for (const [key, raw] of Object.entries(value)) {
     if (count >= MAX_RECOVERY_DRAFTS) break
     if (!isDraftKey(key)) continue
-    if (!isRecord(raw)) continue
 
-    const text = typeof raw.text === 'string' ? raw.text : ''
-    if (text.length === 0 || text.length > MAX_DRAFT_LENGTH) continue
+    // Entries are stored as FIFO arrays. Older snapshots kept a single
+    // object per thread — accept both so a pre-FIFO queue survives the upgrade.
+    const rawEntries: unknown[] = Array.isArray(raw) ? raw : isRecord(raw) ? [raw] : []
+    const entries: QueuedMessageEntry[] = []
+    for (const item of rawEntries) {
+      if (count >= MAX_RECOVERY_DRAFTS) break
+      if (!isRecord(item)) continue
+      const text = typeof item.text === 'string' ? item.text : ''
+      if (text.length === 0 || text.length > MAX_DRAFT_LENGTH) continue
 
-    const attachments = Array.isArray(raw.attachments)
-      ? raw.attachments.filter(isPromptAttachment)
-      : []
-    const promptReferences = Array.isArray(raw.promptReferences)
-      ? raw.promptReferences.filter(isQueuedResponseReference).slice(0, 20)
-      : []
-    const projectReferences = Array.isArray(raw.projectReferences)
-      ? raw.projectReferences.filter(isPromptProjectReference).slice(0, 20)
-      : []
-    const taskReferences = Array.isArray(raw.taskReferences)
-      ? raw.taskReferences.filter(isPromptAssignmentTaskReference).slice(0, 20)
-      : []
-    queued[key] = {
-      text,
-      attachments,
-      promptContext: typeof raw.promptContext === 'string' ? raw.promptContext : undefined,
-      promptReferences,
-      projectReferences,
-      presentation: isUserMessagePresentation(raw.presentation) ? raw.presentation : undefined,
-      taskReferences,
-      startAfterThreads: parseStartAfterThreads(raw.startAfterThreads)
+      const attachments = Array.isArray(item.attachments)
+        ? item.attachments.filter(isPromptAttachment)
+        : []
+      const promptReferences = Array.isArray(item.promptReferences)
+        ? item.promptReferences.filter(isQueuedResponseReference).slice(0, 20)
+        : []
+      const projectReferences = Array.isArray(item.projectReferences)
+        ? item.projectReferences.filter(isPromptProjectReference).slice(0, 20)
+        : []
+      const taskReferences = Array.isArray(item.taskReferences)
+        ? item.taskReferences.filter(isPromptAssignmentTaskReference).slice(0, 20)
+        : []
+      entries.push({
+        text,
+        attachments,
+        promptContext: typeof item.promptContext === 'string' ? item.promptContext : undefined,
+        promptReferences,
+        projectReferences,
+        presentation: isUserMessagePresentation(item.presentation) ? item.presentation : undefined,
+        taskReferences,
+        startAfterThreads: parseStartAfterThreads(item.startAfterThreads)
+      })
+      count += 1
     }
-    count += 1
+    if (entries.length > 0) queued[key] = entries
   }
   return queued
 }

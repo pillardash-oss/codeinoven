@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte'
   import { CircleAlert, LoaderCircle, Pause, Play, Volume2 } from '@lucide/svelte'
-    import { slide } from 'svelte/transition'
+  import { slide } from 'svelte/transition'
   import { probeInstalledTts } from '../../speech/tts-availability'
   import { speechController } from '../../speech/speech-controller.svelte'
   import type { SpeechScope } from '../../../../lib/speech/types'
@@ -16,7 +16,9 @@
 
   let { messageId, markdown, disabled = false, scope = undefined }: Props = $props()
   const playbackState = $derived(speechController.playback)
-  const ownsSession = $derived('messageId' in playbackState && playbackState.messageId === messageId)
+  const ownsSession = $derived(
+    'messageId' in playbackState && playbackState.messageId === messageId
+  )
   // The compact seek slider lives in this same row and only appears while the
   // read-along overlay is active — the shared pause-linger timer hides both.
   const seekExpanded = $derived(
@@ -66,58 +68,61 @@
     scrubValue = Number(input.value)
   }
 
-  function commitScrub(event: Event): void {
-    const input = event.currentTarget as HTMLInputElement
+  function commitScrub(): void {
+    // Commit the value captured while scrubbing, not `input.value`: the
+    // pointerup handler clears `scrubbing` before `change` dispatches, which
+    // makes the reactive binding overwrite the input with the current playhead
+    // — reading it here would seek right back to where playback already is.
     scrubbing = false
-    void speechController.seekPlayback(Number(input.value))
+    void speechController.seekPlayback(scrubValue)
   }
 </script>
 
 {#if !hidden}
-<div class="flex items-center gap-1.5">
-  <button
-    type="button"
-    class="rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground focus-visible:ring-2 focus-visible:ring-info focus-visible:outline-none disabled:opacity-40"
-    {title}
-    aria-label={title}
-    {disabled}
-    onclick={activate}
-  >
-    {#if ownsSession && playbackState.state === 'preparing'}
-      <LoaderCircle size={12} class="animate-spin" aria-hidden="true" />
-    {:else if ownsSession && playbackState.state === 'playing'}
-      <Pause size={12} aria-hidden="true" />
-    {:else if ownsSession && playbackState.state === 'paused'}
-      <Play size={12} aria-hidden="true" />
-    {:else if ownsSession && playbackState.state === 'failed'}
-      <CircleAlert size={12} aria-hidden="true" />
-    {:else}
-      <Volume2 size={12} aria-hidden="true" />
+  <div class="flex items-center gap-1.5">
+    <button
+      type="button"
+      class="rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground focus-visible:ring-2 focus-visible:ring-info focus-visible:outline-none disabled:opacity-40"
+      {title}
+      aria-label={title}
+      {disabled}
+      onclick={activate}
+    >
+      {#if ownsSession && playbackState.state === 'preparing'}
+        <LoaderCircle size={12} class="animate-spin" aria-hidden="true" />
+      {:else if ownsSession && playbackState.state === 'playing'}
+        <Pause size={12} aria-hidden="true" />
+      {:else if ownsSession && playbackState.state === 'paused'}
+        <Play size={12} aria-hidden="true" />
+      {:else if ownsSession && playbackState.state === 'failed'}
+        <CircleAlert size={12} aria-hidden="true" />
+      {:else}
+        <Volume2 size={12} aria-hidden="true" />
+      {/if}
+    </button>
+    {#if seekExpanded}
+      <div transition:slide={{ duration: 160 }}>
+        <input
+          class="tts-seek block w-28 cursor-pointer"
+          style="--fill:{fillPercent}%"
+          type="range"
+          min="0"
+          max={trackLength}
+          step="0.1"
+          value={scrubbing ? scrubValue : Math.min(thumbPosition, trackLength)}
+          title="Seek spoken audio"
+          aria-label="Seek spoken audio"
+          disabled={disabled || playbackState.state === 'preparing'}
+          onpointerdown={beginScrub}
+          onpointerup={() => {
+            scrubbing = false
+          }}
+          oninput={onScrubInput}
+          onchange={commitScrub}
+        />
+      </div>
     {/if}
-  </button>
-  {#if seekExpanded}
-    <div transition:slide={{ duration: 160 }}>
-      <input
-        class="tts-seek block w-28 cursor-pointer"
-        style="--fill:{fillPercent}%"
-        type="range"
-        min="0"
-        max={trackLength}
-        step="0.1"
-        value={scrubbing ? scrubValue : Math.min(thumbPosition, trackLength)}
-        title="Seek spoken audio"
-        aria-label="Seek spoken audio"
-        disabled={disabled || playbackState.state === 'preparing'}
-        onpointerdown={beginScrub}
-        onpointerup={() => {
-          scrubbing = false
-        }}
-        oninput={onScrubInput}
-        onchange={commitScrub}
-      />
-    </div>
-  {/if}
-</div>
+  </div>
 {/if}
 
 <style>

@@ -1962,18 +1962,30 @@
         })
       })
 
-      // Preserve the initial empty-state behavior previously triggered by App.
-      // A restored thread remains selected and does not create a new one.
+      // Never auto-create a chat, thread, or project on startup — the user
+      // (or the onboarding tour) initiates that. When no thread was restored
+      // from the recovery snapshot, reopen the last thread the user actually
+      // visited (recentThreadVisits is persisted visit order); fall back to
+      // the most recently active thread of the mode. allThreads order is not
+      // visit recency (listRecent hoists the selected project first), so it
+      // must never be used to guess the last-open thread.
       if (active && !workspaceState.selectedThread) {
-        if (mode === 'chats') {
-          workspaceState.requestNewChat()
-        } else if (
-          workspaceState.activeProject &&
-          workspaceState.activeProject.id !== INBOX_PROJECT_ID
-        ) {
-          workspaceState.requestCreateThread(scopeState.sidebarContext?.bucketId)
-        } else {
-          workspaceState.requestAddProject()
+        const wantChat = mode === 'chats'
+        const candidates = allThreads.filter(
+          (t) => !t.archived && (t.projectId === INBOX_PROJECT_ID) === wantChat
+        )
+        const byVisit = new Map(candidates.map((t) => [threadVisitKey(t), t]))
+        const last =
+          workspaceState.recentThreadVisits
+            .map((key) => byVisit.get(key))
+            .find((t) => t !== undefined) ??
+          candidates.sort((a, b) => b.lastActivity - a.lastActivity)[0]
+        if (last) {
+          workspaceState.openThread(
+            last,
+            projectList.find((candidate) => candidate.id === last.projectId) ?? null
+          )
+          void scopeState.ensureBoardLoaded(last.projectId)
         }
       }
     } catch {
@@ -3338,8 +3350,11 @@
           <!-- Pinned threads above everything -->
           <PinnedSection
             threads={pinnedThreads}
-            projects={visibleProjects}
             selectedThreadId={selectedThread?.id ?? null}
+            getProjectIconUrl={(projectId) => {
+              const project = projects.find((p) => p.id === projectId)
+              return project ? getProjectIcon(project, projectIcons.get(project.id)) : null
+            }}
             onOpen={openThread}
             onRename={handleRename}
             onTogglePin={togglePin}

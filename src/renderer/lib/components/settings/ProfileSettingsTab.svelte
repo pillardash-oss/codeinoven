@@ -1089,13 +1089,13 @@
                 />
               {:else}
                 <span class="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-elevated">
-                  <VendorIcon name={model.providerId ?? model.id} size={17} />
+                  <VendorIcon name={model.providerId ?? model.id} id={model.providerId} size={17} />
                 </span>
               {/if}
               <div class="min-w-0">
                 <p class="truncate text-sm font-semibold">{model.id}</p>
                 <p class="mt-0.5 flex items-center gap-1.5 text-[11px] text-muted">
-                  <VendorIcon name={model.providerId ?? model.id} size={12} />
+                  <VendorIcon name={model.providerId ?? model.id} id={model.providerId} size={12} />
                   <span class="truncate">
                     {formatIdentifier(model.providerId ?? '')} · {formatIdentifier(
                       model.harnessId ?? ''
@@ -1331,7 +1331,7 @@
           <div class="px-4 py-3">
             <div class="flex items-center justify-between gap-4 text-xs">
               <span class="flex min-w-0 items-center gap-2 truncate font-semibold">
-                <VendorIcon name={provider.id} size={16} />
+                <VendorIcon name={provider.id} id={provider.id} size={16} />
                 <span class="truncate">{formatIdentifier(provider.id)}</span>
               </span>
               <span class="shrink-0 tabular-nums text-muted">
@@ -1451,7 +1451,7 @@
                     alt=""
                   />
                 {/if}
-                <VendorIcon name={model.providerId ?? model.id} size={15} />
+                <VendorIcon name={model.providerId ?? model.id} id={model.providerId} size={15} />
                 <span class="truncate">{model.id}</span>
                 {#if model.thinkingLevel}
                   <span
@@ -1491,8 +1491,8 @@
     <div class="border-b px-4 py-3">
       <h2 id="model-performance-heading" class="text-sm font-semibold">Best model by feedback</h2>
       <p class="mt-0.5 text-xs text-muted">
-        Each session is judged 1–5 by a cheap model from your request, the agent's final output,
-        and any follow-up you sent. The percentage is the average grade out of five.
+        Each session is judged 1–5 by a cheap model from your request, the agent's final output, and
+        any follow-up you sent. The percentage is the average grade out of five.
       </p>
       {#if usage.feedbackCost.outcomes > 0}
         <p class="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
@@ -1552,7 +1552,11 @@
                   alt=""
                 />
               {/if}
-              <VendorIcon name={entry.providerId || entry.modelId} size={15} />
+              <VendorIcon
+                name={entry.providerId || entry.modelId}
+                id={entry.providerId}
+                size={15}
+              />
               <span class="truncate">{entry.modelId}</span>
               {#if entry.thinkingLevel}
                 <span

@@ -475,6 +475,14 @@
                       )}">{runtimeBadge(artifact.runtime)}</span
                     >
                     <span class="text-[10px] text-dimmed">· external</span>
+                    {#if !artifact.available}
+                      <span
+                        class="inline-flex items-center gap-1 rounded-full bg-danger px-2 py-0.5 text-[10px] font-semibold text-white"
+                        title={artifact.unavailableReason ??
+                          'The imported model path no longer exists.'}
+                        ><X size={10} aria-hidden="true" /> Not found</span
+                      >
+                    {/if}
                     {#if isActiveImported(artifact.artifactId, activeModelSubTab)}
                       <span
                         class="inline-flex items-center gap-1 rounded-full bg-success px-2 py-0.5 text-[10px] font-semibold text-white"
@@ -513,11 +521,19 @@
                       )}">{runtimeBadge(artifact.runtime)}</span
                     >
                     <span>· external</span>
+                    {#if !artifact.available}
+                      <span
+                        class="inline-flex items-center gap-1 rounded-full bg-danger px-2 py-0.5 text-[10px] font-semibold text-white"
+                        title={artifact.unavailableReason ??
+                          'The imported model path no longer exists.'}
+                        ><X size={10} aria-hidden="true" /> Not found</span
+                      >
+                    {/if}
                   </p>
                 {/if}
               </div>
               <div class="flex shrink-0 items-center gap-1">
-                {#if !isActiveImported(artifact.artifactId, activeModelSubTab)}
+                {#if !isActiveImported(artifact.artifactId, activeModelSubTab) && artifact.available}
                   <button
                     type="button"
                     class="inline-flex items-center gap-1 rounded-lg bg-primary px-2.5 py-1 text-xs font-medium text-on-primary hover:bg-primary/90"
@@ -527,7 +543,7 @@
                     ><Star size={11} aria-hidden="true" /> Set Active</button
                   >
                 {/if}
-                {#if !isActiveImported(artifact.artifactId, activeModelSubTab)}<button
+                {#if !isActiveImported(artifact.artifactId, activeModelSubTab) || !artifact.available}<button
                     type="button"
                     class="flex h-7 w-7 items-center justify-center rounded-lg border border-transparent text-dimmed hover:border-border hover:bg-surface hover:text-muted"
                     title={`Unregister ${artifact.importPath}`}
@@ -966,8 +982,7 @@
             </div>
             <div class="flex items-center justify-between gap-4">
               <p class="text-xs text-dimmed">
-                Preserve technical — keep code identifiers exact; “index dot tsx” →
-                “index.tsx”
+                Preserve technical — keep code identifiers exact; “index dot tsx” → “index.tsx”
               </p>
               <Switch
                 checked={settings.refinementFlags.preserveTechnical}

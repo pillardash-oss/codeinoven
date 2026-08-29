@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto'
-import { access, mkdir, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises'
+import { access, mkdir, readFile, readdir, rename, rm, statfs, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import type {
   SpeechCapability,
@@ -51,10 +51,7 @@ import type { SpeechBackend } from './speech-backend'
 import { SherpaSpeechBackend } from './backends/sherpa-backend'
 import { MlxSpeechBackend } from './backends/mlx-backend'
 import { CoreMlSpeechBackend } from './backends/coreml-backend'
-import {
-  LlamaServerSpeechBackend,
-  setLlamaServerBinary
-} from './backends/llama-backend'
+import { LlamaServerSpeechBackend, setLlamaServerBinary } from './backends/llama-backend'
 import { LlamaRuntimeService } from './llama-runtime-service'
 import { Logger } from '../system/logger'
 import { getConfigRoot } from '../../lib/utils'
@@ -151,7 +148,6 @@ export type SpeechAudioTranscribeExecutor = (
 ) => Promise<SpeechAudioTranscribeOutput>
 
 type SpeechProgressListener = (event: SpeechProgressEvent) => void
-
 
 /** Main-process coordinator. Native inference is delegated to bounded workers. */
 export class SpeechService {
@@ -259,17 +255,33 @@ export class SpeechService {
       runtimes,
       recommendedRuntime: recommendedSpeechRuntime(target),
       ...(selected.ok ? { selectedRuntime: selected.value.runtime } : {}),
-      installedArtifacts: this.installed.artifacts.map((artifact) => {
-        const runtime = runtimeAvailability.get(artifact.runtime)
-        if (artifact.available && runtime && !runtime.available) {
-          return structuredClone({
-            ...artifact,
-            available: false,
-            unavailableReason: runtime.reason ?? 'Runtime unavailable.'
-          })
-        }
-        return structuredClone(artifact)
-      })
+      installedArtifacts: await Promise.all(
+        this.installed.artifacts.map(async (artifact) => {
+          const runtime = runtimeAvailability.get(artifact.runtime)
+          if (
+            artifact.source === 'import' &&
+            artifact.importPath &&
+            !(await access(artifact.importPath).then(
+              () => true,
+              () => false
+            ))
+          ) {
+            return structuredClone({
+              ...artifact,
+              available: false,
+              unavailableReason: 'The imported model path no longer exists on disk.'
+            })
+          }
+          if (artifact.available && runtime && !runtime.available) {
+            return structuredClone({
+              ...artifact,
+              available: false,
+              unavailableReason: runtime.reason ?? 'Runtime unavailable.'
+            })
+          }
+          return structuredClone(artifact)
+        })
+      )
     }
   }
 
@@ -472,7 +484,11 @@ export class SpeechService {
       this.emit({ kind: 'history', attemptId, stage: 'completed' })
       this.touch('asr')
       // Cleanup provenance may have touched cleanup model — also refresh cleanup timer if local cleanup used
-      if (cleanupMode.kind === 'local' && cleanupProvenance.mode === 'local' && !cleanupProvenance.failed) {
+      if (
+        cleanupMode.kind === 'local' &&
+        cleanupProvenance.mode === 'local' &&
+        !cleanupProvenance.failed
+      ) {
         this.touch('cleanup')
       }
       return { attemptId, jobId: queued.id, rawTranscript, finalTranscript }
@@ -1241,10 +1257,11 @@ export class SpeechService {
         capability: 'cleanup',
         runtime: resolved.runtime,
         run: (signal) =>
-          backend.learnFromCorrection(insertedText, sentText, mode, signal).then((value) => value ?? [])
+          backend
+            .learnFromCorrection(insertedText, sentText, mode, signal)
+            .then((value) => value ?? [])
       })
-      .result
-      .catch(() => [])
+      .result.catch(() => [])
     return extracted
   }
 
@@ -1338,6 +1355,33 @@ export class SpeechService {
     return this.playback.cancel(sessionId)
   }
 
+  /**
+   * Preflight a model download against the available disk space so a nearly
+   * full disk produces a clear, actionable error up front instead of a raw
+   * ENOSPC failure midway through writing gigabytes of model files.
+   */
+  private async assertDiskSpace(path: string, byteSize: number): Promise<void> {
+    if (!Number.isFinite(byteSize) || byteSize <= 0) return
+    try {
+      const stats = await statfs(path)
+      const available = Number(stats.bavail) * Number(stats.bsize)
+      // Require the artifact size plus a small working margin (the app
+      // database, logs, and temp files share the same volume).
+      const margin = Math.min(Math.max(byteSize * 0.05, 64 * 1024 * 1024), 1_073_741_824)
+      if (available < byteSize + margin) {
+        throw new Error(
+          `Not enough disk space to download this model: ${Math.round(
+            (byteSize + margin) / (1024 * 1024)
+          )} MB is needed, ${Math.round(available / (1024 * 1024))} MB is available. Free up space and try again.`
+        )
+      }
+    } catch (cause) {
+      if (cause instanceof Error && cause.message.startsWith('Not enough disk space')) throw cause
+      // statfs itself failing must never block a download; the streaming write
+      // below still surfaces a real error if the disk is genuinely unwritable.
+    }
+  }
+
   async downloadArtifact(artifactId: string): Promise<void> {
     if (this.downloadControllers.has(artifactId))
       throw new Error('Model download is already active.')
@@ -1352,6 +1396,7 @@ export class SpeechService {
     const destination = this.storage.modelDirectory(artifactId)
     let received = 0
     try {
+      await this.assertDiskSpace(staging, artifact.byteSize)
       await mkdir(staging, { recursive: true })
       this.emitDownload(artifact, {
         state: 'downloading',
@@ -1566,7 +1611,14 @@ export class SpeechService {
     signal: AbortSignal,
     onProgress?: (receivedSoFar: number) => void
   ): Promise<number> {
-    return downloadFileResumable(url, destination, expectedBytes, expectedSha256, signal, onProgress)
+    return downloadFileResumable(
+      url,
+      destination,
+      expectedBytes,
+      expectedSha256,
+      signal,
+      onProgress
+    )
   }
 
   private requireSelectableArtifact(
@@ -1797,30 +1849,26 @@ export class SpeechService {
     try {
       const profile = cleanupProfileFor(resolved.artifact)
       const flags: SpeechRefinementFlags = mode.flags ?? DEFAULT_REFINEMENT_FLAGS
-      const cleaned = await this.queue
-        .enqueue({
-          capability: 'cleanup',
-          runtime: resolved.runtime,
-          run: async (signal) => {
-            const artifact = {
-              id: resolved.artifact.id,
-              directory: this.artifactDirectory(resolved.artifact.id),
-              cleanupProfile: profile
-            }
-            const backend = this.requireBackend(resolved.runtime)
-            if (backend.warmup) await backend.warmup(artifact, signal)
-            return backend.cleanup(
-              // Collapse ASR loop artifacts before the model sees the transcript.
-              collapseRepetitiveArtifacts(rawTranscript),
-              artifact,
-              signal,
-              profile === 'instruct'
-                ? { lessons: this.learning.enabled(scope), flags }
-                : undefined
-            )
+      const cleaned = await this.queue.enqueue({
+        capability: 'cleanup',
+        runtime: resolved.runtime,
+        run: async (signal) => {
+          const artifact = {
+            id: resolved.artifact.id,
+            directory: this.artifactDirectory(resolved.artifact.id),
+            cleanupProfile: profile
           }
-        })
-        .result
+          const backend = this.requireBackend(resolved.runtime)
+          if (backend.warmup) await backend.warmup(artifact, signal)
+          return backend.cleanup(
+            // Collapse ASR loop artifacts before the model sees the transcript.
+            collapseRepetitiveArtifacts(rawTranscript),
+            artifact,
+            signal,
+            profile === 'instruct' ? { lessons: this.learning.enabled(scope), flags } : undefined
+          )
+        }
+      }).result
       this.touch('cleanup')
       // Normalizers legitimately return an empty string for filler-only input;
       // keep the raw transcript so dictation never loses words.
@@ -1832,9 +1880,7 @@ export class SpeechService {
           runtime: resolved.runtime,
           artifactId: resolved.artifact.id,
           appliedLessonIds:
-            profile === 'instruct'
-              ? this.learning.enabled(scope).map((lesson) => lesson.id)
-              : [],
+            profile === 'instruct' ? this.learning.enabled(scope).map((lesson) => lesson.id) : [],
           failed: false
         }
       }

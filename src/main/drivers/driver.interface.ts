@@ -32,6 +32,25 @@ export class InactiveQuestionTurnError extends Error {
   }
 }
 
+/**
+ * The chat engine still tracks a question as pending, but the driver's own
+ * bookkeeping already dropped it (the harness answered/cancelled it through
+ * another path, or the driver instance was reset). Retrying the same reject
+ * or reply against the driver can never succeed, so the chat engine should
+ * treat this as an already-resolved question instead of leaving the user
+ * stuck retrying a dismissal that will always fail the same way.
+ */
+export class QuestionRequestGoneError extends Error {
+  constructor(
+    readonly sessionId: string,
+    readonly requestId: string,
+    harnessName: string
+  ) {
+    super(`The ${harnessName} question ${requestId} is no longer pending on the driver`)
+    this.name = 'QuestionRequestGoneError'
+  }
+}
+
 /** Features a harness can reliably provide to CodeInOven. */
 export interface HarnessCapabilities {
   /** Truthful process topology used for app-wide host and RAM policy. */
@@ -268,6 +287,11 @@ export interface CheapModelResult {
   attempts: CheapModelAttempt[]
 }
 
+/** Input for one disposable heartbeat "ping" completion, pinned to the exact selected model. */
+export interface SendHeartbeatPingOptions {
+  settings: ThreadSettings
+}
+
 /** Provider-neutral input appended to an already active harness turn. */
 export interface SteerPromptOptions {
   sessionId: string
@@ -325,6 +349,14 @@ export interface HarnessDriver {
   provideCheapModel(projectPath: string, request: CheapModelRequest): Promise<CheapModelResult>
 
   /**
+   * Send a single disposable "ping" completion pinned to the exact model in
+   * `options.settings` (no cheap-candidate substitution) so a configured
+   * Heartbeat keeps that specific provider's usage window warm. Resolves
+   * true when any reply was received.
+   */
+  sendHeartbeatPing(projectPath: string, options: SendHeartbeatPingOptions): Promise<boolean>
+
+  /**
    * Best-effort release of a project's in-memory harness resources without
    * deleting any sessions. Called by the idle reaper after a project has been
    * fully idle for a grace period. The harness session(s) persist on disk and
@@ -337,6 +369,17 @@ export interface HarnessDriver {
 
   /** Append user input to the active turn using the harness's native steering protocol. */
   steerPrompt?(projectPath: string, opts: SteerPromptOptions): Promise<void>
+
+  /**
+   * Ask the harness whether a session currently has a live agent loop. Used by
+   * restart recovery: the engine's in-memory session-status map is empty after
+   * a restart, but the harness process may have survived and still be running
+   * the pre-restart turn — resuming such a session spawns a second concurrent
+   * run that interleaves outputs and derails both turns. Drivers without a
+   * status probe simply omit this; callers treat `false`/throwaway errors as
+   * "not busy" to keep the legacy behavior.
+   */
+  isSessionBusy?(projectPath: string, sessionId: string): Promise<boolean>
 
   /** Load the full message history for a session. */
   loadMessages(projectPath: string, sessionId: string): Promise<AgentMessage[]>
@@ -374,6 +417,15 @@ export interface HarnessDriver {
 
   /** List available providers and their models. */
   listProviders(projectPath: string): Promise<ProviderCatalog[]>
+
+  /**
+   * Cheap, spawn-free staleness fingerprint of the driver's provider-catalog
+   * inputs (connected providers, auth state, configured model lists). The chat
+   * engine compares it against the fingerprint recorded with the last cached
+   * catalog and forces re-discovery when it drifts. Return `null` when the
+   * driver cannot determine one reliably (the cache then keeps its normal TTL).
+   */
+  providerCatalogFingerprint?(): Promise<string | null>
 
   /** List slash commands the harness exposes. */
   listCommands(projectPath: string): Promise<HarnessCommand[]>

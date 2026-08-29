@@ -35,6 +35,7 @@ import type {
   HarnessDriver,
   HarnessToolDefinition,
   PreparedUtilityRuntime,
+  SendHeartbeatPingOptions,
   SendPromptOptions,
   SteerPromptOptions,
   UtilityRuntimeOverlay,
@@ -53,7 +54,7 @@ import {
   isWordDocumentAttachment,
   readWordDocumentText
 } from './document-attachment'
-import { buildTitlePrompt, sanitizeGeneratedTitle } from '../chat/title-generator'
+import { buildTitlePrompt, HEARTBEAT_PROMPT, sanitizeGeneratedTitle } from '../chat/title-generator'
 import { buildTurnGradePrompt, parseTurnGrade } from '../chat/turn-grader-prompt'
 import { leanAgentConfigMap } from '../opencode/opencode-agent-definitions'
 import { prepareHarnessInvocation, runHarnessCommand } from './harness-runtime'
@@ -1290,21 +1291,34 @@ export class OpenCodeDriver implements HarnessDriver {
         if (custom.headers) options.headers = custom.headers
         const models: Record<string, Record<string, unknown>> = {}
         for (const model of custom.models) {
-          const limit =
-            model.contextWindow && model.maxOutputTokens
-              ? { context: model.contextWindow, output: model.maxOutputTokens }
-              : undefined
+          // Either bound is meaningful on its own (e.g. discovery often
+          // reports only context_length) — requiring both dropped a known
+          // context window whenever the output limit was missing.
+          const limit = {
+            ...(model.contextWindow ? { context: model.contextWindow } : {}),
+            ...(model.maxOutputTokens ? { output: model.maxOutputTokens } : {})
+          }
+          // opencode dispatches by passing the thread's thinking level
+          // straight through as the variant key, so the key must equal the
+          // level it selects — `thinkingLevel` in the value is what opencode
+          // itself reads to know which effort to actually request.
           const variants =
             model.thinkingPresets && model.thinkingPresets.length > 0
-              ? model.thinkingPresets.map((p) => [p.id, { name: p.label }])
+              ? model.thinkingPresets.map((p) => [p.id, { thinkingLevel: p.id }])
               : model.reasoning || model.defaultThinkingLevel
-                ? STANDARD_THINKING_VARIANTS.map((p) => [p.id, { name: p.label }])
+                ? STANDARD_THINKING_VARIANTS.map((p) => [p.id, { thinkingLevel: p.id }])
                 : []
           models[model.id] = {
             name: model.name,
             ...(model.reasoning ? { reasoning: true } : {}),
-            ...(limit ? { limit } : {}),
-            ...(variants.length > 0 ? { variants: Object.fromEntries(variants) } : {})
+            ...(Object.keys(limit).length > 0 ? { limit } : {}),
+            ...(variants.length > 0 ? { variants: Object.fromEntries(variants) } : {}),
+            // Unset `vision` is treated as capable everywhere else in this
+            // codebase; mirror that here rather than opencode's own default.
+            modalities: {
+              input: model.vision === false ? ['text'] : ['text', 'image'],
+              output: ['text']
+            }
           }
         }
         provider[custom.id] = {
@@ -1361,7 +1375,9 @@ export class OpenCodeDriver implements HarnessDriver {
   }
 
   /** Free/cheap opencode candidates, shared by title and grading runs. */
-  private async cheapCandidates(projectPath: string): Promise<Array<{ providerId: string; modelId: string }>> {
+  private async cheapCandidates(
+    projectPath: string
+  ): Promise<Array<{ providerId: string; modelId: string }>> {
     const catalogs = await this.listProviders(projectPath).catch(() => [])
     const openCodeModels = catalogs.find((catalog) => catalog.id === 'opencode')?.models ?? []
     const freeModels = openCodeModels.filter((model) => /(?:^|[-:])free$/iu.test(model.id))
@@ -1432,7 +1448,12 @@ export class OpenCodeDriver implements HarnessDriver {
           isolated
         )
         const result = await this.waitForTitleResult(isolated, timeoutMs)
-        attempts?.push({ providerId: candidate.providerId, modelId: candidate.modelId, ok: result !== null, failure: result === null ? 'No usable response produced' : null })
+        attempts?.push({
+          providerId: candidate.providerId,
+          modelId: candidate.modelId,
+          ok: result !== null,
+          failure: result === null ? 'No usable response produced' : null
+        })
         if (result) return result
       } catch (error) {
         attempts?.push({
@@ -1465,6 +1486,21 @@ export class OpenCodeDriver implements HarnessDriver {
       candidates,
       buildTitlePrompt(options.message.slice(0, 2_000))
     )
+  }
+
+  /** Ping the exact configured model — no cheap-candidate substitution. */
+  async sendHeartbeatPing(
+    projectPath: string,
+    options: SendHeartbeatPingOptions
+  ): Promise<boolean> {
+    const reply = await this.isolatedOneShot(
+      projectPath,
+      options.settings,
+      'Heartbeat',
+      [],
+      HEARTBEAT_PROMPT
+    )
+    return reply !== null
   }
 
   /**
@@ -1691,6 +1727,37 @@ export class OpenCodeDriver implements HarnessDriver {
       body: JSON.stringify({ messageID: opts.userMessageId, parts })
     })
     if (!res.ok) throw await errorFromResponse(res, 'Failed to steer active OpenCode session')
+  }
+
+  /**
+   * Live probe of the shared server's session-status map (`GET /session/status`,
+   * a Record of sessionID → `{ type: 'busy' | 'idle' | 'retry' | 'completed' }`).
+   * Used by restart recovery before resuming an "interrupted" thread: the
+   * surviving `opencode serve` process may still be running the pre-restart
+   * turn, and sending a prompt then would start a second concurrent loop on
+   * the same session. Best-effort: any transport/parse failure reports
+   * "not busy" so recovery keeps its legacy behavior rather than blocking.
+   */
+  async isSessionBusy(projectPath: string, sessionId: string): Promise<boolean> {
+    let handle: ServerHandle
+    try {
+      handle = await this.ensureServer(projectPath)
+    } catch {
+      return false
+    }
+    try {
+      const res = await fetch(`${handle.baseUrl}/session/status`, {
+        method: 'GET',
+        headers: this.headersFor(handle)
+      })
+      if (!res.ok) return false
+      const statuses = recordValue(await res.json())
+      if (!statuses) return false
+      const status = recordValue(statuses[sessionId])
+      return status?.['type'] === 'busy' || status?.['type'] === 'retry'
+    } catch {
+      return false
+    }
   }
 
   async loadMessages(
@@ -2053,12 +2120,21 @@ export class OpenCodeDriver implements HarnessDriver {
     }
   }
 
+  /**
+   * Reuse-only poll: pending questions live in a running server's memory, so
+   * spawning a fresh `opencode serve` could never surface them — it would only
+   * boot the full harness. The thread mount calls this on every startup for
+   * reconnect recovery, so collect the handles that already exist (pooled +
+   * per-turn) and never start one here; a server spawned for real work gets
+   * picked up by the next poll or the SSE stream.
+   */
   async listPendingQuestions(projectPath: string): Promise<AgentQuestionRequest[]> {
-    const pooled = await this.ensureServer(projectPath)
+    const pooled = this.server ? this.scopedHandle(this.server, projectPath) : null
     const handles = [
-      pooled,
+      ...(pooled ? [pooled] : []),
       ...[...this.turnServers.values()].filter((handle) => handle.projectPath === projectPath)
     ]
+    if (handles.length === 0) return []
     const pending = await Promise.all(
       handles.map(async (handle) => {
         const response = await fetch(`${handle.baseUrl}/question`, {

@@ -618,6 +618,8 @@ export interface ProviderConnectionInfo {
   integration: 'ready' | 'planned'
   /** Whether this harness can consume custom base-URL providers at runtime. */
   supportsCustomProviders: boolean
+  /** Whether this harness supports manual context compaction (harness manifest). */
+  supportsManualCompaction?: boolean
   status: ProviderConnectionStatus
   /** Absolute path to the resolved binary, when found. */
   resolvedPath?: string
@@ -802,6 +804,8 @@ export interface OfferedProvider {
   modelCount: number
   /** Whether credentials are already stored for this provider. */
   authenticated: boolean
+  /** Whether the harness supports a fully in-app OAuth sign-in for this provider. */
+  oauth?: boolean
   /** Human-readable hint when the provider cannot be connected from the UI. */
   detail?: string
 }
@@ -850,6 +854,13 @@ export interface BaseUrlProvider {
   headers?: Record<string, string>
   /** Models this provider exposes. */
   models: BaseUrlProviderModel[]
+  /**
+   * Optional account status/usage route, relative to `baseURL` (e.g. `/status`,
+   * `/usage`) or an absolute URL. Providers backed by a subscription often
+   * expose one; when set, CodeInOven polls it for quota windows shown in the
+   * usage UI. Empty means the provider reports no usage.
+   */
+  usagePath?: string
   enabled: boolean
   createdAt: number
   updatedAt: number
@@ -865,7 +876,15 @@ export interface BaseUrlProviderCreateRequest {
   apiKey?: string
   headers?: Record<string, string>
   models: Array<Omit<BaseUrlProviderModel, 'id' | 'providerId'> & { id?: string }>
+  /** Optional account status/usage route relative to `baseURL`, or an absolute URL. */
+  usagePath?: string
   enabled?: boolean
+  /**
+   * Reuse this id instead of generating one. Lets the renderer link the same
+   * logical provider across multiple harnesses: every record sharing an id
+   * (regardless of harnessId) is treated as one linked provider.
+   */
+  id?: string
 }
 
 /** Renderer-safe update request. Omitted API key retains the current value. */
@@ -879,6 +898,8 @@ export interface BaseUrlProviderUpdateRequest {
   removeApiKey?: boolean
   headers?: Record<string, string>
   models?: Array<Omit<BaseUrlProviderModel, 'id' | 'providerId'> & { id?: string }>
+  /** Optional account status/usage route; empty string clears it. */
+  usagePath?: string
   enabled?: boolean
 }
 
@@ -893,6 +914,8 @@ export interface BaseUrlProviderCopyClipboardRequest {
   baseURL: string
   apiKey?: string
   headers?: string
+  /** Account status/usage route carried through copy/paste. */
+  usagePath?: string
   models: Array<{
     id: string
     name: string
@@ -902,6 +925,26 @@ export interface BaseUrlProviderCopyClipboardRequest {
     defaultThinkingLevel: ThinkingLevel | ''
   }>
   enabled: boolean
+}
+
+/** Request to discover models from `${baseURL}/models`. Pass `harnessId`+`id`
+ *  for a saved provider so main can resolve its vaulted API key when `apiKey`
+ *  is omitted; set `force` to bypass the 24h cache. */
+export interface BaseUrlProviderFetchModelsRequest {
+  harnessId?: string
+  id?: string
+  baseURL: string
+  apiKey?: string
+  headers?: Record<string, string>
+  force?: boolean
+}
+
+/** A model entry discovered from an OpenAI-compatible `/models` endpoint. */
+export interface DiscoveredBaseUrlModel {
+  id: string
+  name: string
+  /** Context window in tokens, when the endpoint reports one (e.g. `context_length`). */
+  contextWindow?: number
 }
 
 export type CuaPermissionStatus = 'granted' | 'missing' | 'unknown' | 'not_required'
@@ -1058,6 +1101,29 @@ export interface ThreadSettings {
   loopAuditor?: AgentModelSelection
   /** Vision model used to describe images for this thread's text-only model. */
   imageDescriptor?: AgentModelSelection
+}
+
+/** Result of the most recent heartbeat ping attempt. */
+export interface HeartbeatLastRun {
+  /** Epoch ms when the ping was sent. */
+  at: number
+  success: boolean
+  error?: string
+}
+
+/**
+ * A scheduled "keep the usage window warm" ping. At each configured time of
+ * day, an ephemeral thread sends `Simply respond pong` to the selected model
+ * and discards the reply — the same disposable-session mechanism title
+ * generation uses, just to touch the provider's usage window early.
+ */
+export interface HeartbeatConfig extends AgentModelSelection {
+  id: string
+  name: string
+  /** Times of day in 24h `HH:mm` local-time form, e.g. `["04:00", "13:30", "22:00"]`. */
+  times: string[]
+  enabled: boolean
+  lastRun?: HeartbeatLastRun
 }
 
 /** A model exposed by a harness provider. */
@@ -1870,6 +1936,22 @@ export interface AgentAccountUsage {
   contextUsed?: number
 }
 
+/**
+ * Quota telemetry read from one custom provider's user-defined usage route.
+ * The route is the provider author's contract — CodeInOven accepts the common
+ * OpenAI/`new-api`-style `{ data: [...] }` envelope plus flat quota objects
+ * and maps whatever it can recognize into rate-limit windows.
+ */
+export interface CustomProviderUsage {
+  providerId: string
+  /** Harness the usage route belongs to. */
+  harnessId: string
+  rateLimits: AgentRateLimitWindow[]
+  credits?: AgentUsageCredits
+  /** Raw endpoint the snapshot came from, for diagnostics. */
+  source: string
+}
+
 /** Last-known usage snapshot stored with a thread so the meter restores
  *  instantly on mount and is evacuated automatically when the thread row is
  *  deleted. The harness/provider pair guard against showing usage from a
@@ -2478,6 +2560,8 @@ export type AgentEvent =
       credits?: AgentUsageCredits
       /** The completed assistant message summarizes a compaction and is trace-only. */
       compaction?: boolean
+      /** Driver-internal silent-continue marker; stripped before broadcast. */
+      silentContinue?: AgentSilentContinueMarker
     }
   | {
       type: 'usage.updated'
@@ -2565,6 +2649,7 @@ export type AgentEvent =
       type: 'temporary-chat.started'
       sessionId: string
       temporaryChatId: string
+      projectId: string
     }
   | {
       type: 'catalog.updated'
@@ -2600,6 +2685,17 @@ export type SessionAgentEvent = Exclude<
   AgentEvent,
   { type: 'catalog.updated' } | { type: 'providerCatalog.updated' }
 >
+
+/**
+ * Driver-internal marker on a `message.completed` event: the turn hit a
+ * recoverable finish-reason flake and the driver intends to silently continue
+ * instead of surfacing the error. Never broadcast to renderers — drivers strip
+ * it before emitting events to the engine.
+ */
+export interface AgentSilentContinueMarker {
+  /** The original provider error text, kept for diagnostics when retries cap out. */
+  error: string
+}
 
 // ─── Change Tracking ────────────────────────────────────────────────────────
 

@@ -17,7 +17,7 @@ import type {
 import { getScopeRootPath } from '../../lib/utils'
 import { ScopeManager } from '../../lib/engines/scope-manager'
 import { ProjectManager } from '../../lib/engines/project-manager'
-import { runGit, runSetupCommand } from './scope-worktree-process'
+import { runGit, runGitChecked, runSetupCommand } from './scope-worktree-process'
 import type {
   ManagedWorktreeInspector,
   WorktreeRegistration
@@ -1093,7 +1093,36 @@ export class ScopeWorktreeService implements ManagedWorktreeInspector {
       const descriptor = this.requireManaged(target)
       const project = await this.projects.getProject(target.projectId)
       if (!project) throw new Error('Project not found')
-      await runGit(['branch', '-D', descriptor.branch], { cwd: project.path, timeoutMs: 60_000 })
+
+      // Git refuses `branch -D` while the branch is checked out in a worktree,
+      // so remove the owning worktree first; deletion is one confirmed action.
+      const worktreePath = getScopeRootPath(target.projectId, descriptor.directoryName)
+      try {
+        await runGitChecked(['worktree', 'remove', worktreePath], {
+          cwd: project.path,
+          timeoutMs: 120_000
+        })
+      } catch {
+        // The directory is already gone or the registration is stale — prune
+        // clears dead metadata; a live dirty worktree keeps blocking below.
+        await runGit(['worktree', 'prune'], { cwd: project.path, timeoutMs: 60_000 }).catch(
+          () => undefined
+        )
+      }
+
+      try {
+        await runGitChecked(['branch', '-D', descriptor.branch], {
+          cwd: project.path,
+          timeoutMs: 60_000
+        })
+      } catch (cause) {
+        const detail = cause instanceof Error ? cause.message : String(cause)
+        throw new Error(
+          `Branch could not be deleted because it is still checked out in a worktree with uncommitted changes. Remove that worktree first. (${detail})`,
+          { cause }
+        )
+      }
+      this.scopes.deleteBucket(target.projectId, target.scopeBucketId)
     })
   }
 

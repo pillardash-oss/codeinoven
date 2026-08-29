@@ -30,6 +30,10 @@ export class UpdaterService {
   private deferredInstallPoll: ReturnType<typeof setInterval> | null = null
   private installPending = false
   private installApproved = false
+  /** True while the user explicitly asked for a check (Settings) — its failure is reportable. */
+  private explicitCheckInFlight = false
+  /** True while a check initiated by this service is still resolving. */
+  private checkInFlight = false
 
   constructor(storage: StorageEngine) {
     this.storage = storage
@@ -89,6 +93,17 @@ export class UpdaterService {
 
     autoUpdater.on('error', (error) => {
       Logger.error('Updater error:', error.message)
+      // During a check, the rejected check promise settles the state (see
+      // `settleCheckFailure`) — the event must not race it into a sticky error.
+      // Idle/checking states mean the failure came from a background check, so
+      // a transient network issue must not leave a sticky sidebar badge.
+      if (
+        this.checkInFlight ||
+        this._status.state === 'idle' ||
+        this._status.state === 'checking'
+      ) {
+        return
+      }
       this.updateState({
         state: 'error',
         errorMessage: error.message
@@ -146,29 +161,52 @@ export class UpdaterService {
     }
   }
 
-  async checkForUpdates(): Promise<UpdaterStatus> {
+  /**
+   * Check for updates. When `explicit` is set (user initiated from Settings), a
+   * failure is reported as a visible error state; background checks (startup,
+   * periodic) fail silently back to idle so a transient network issue never
+   * leaves a permanent error badge in the sidebar.
+   */
+  async checkForUpdates(explicit = false): Promise<UpdaterStatus> {
     if (!this._status.canAutoUpdate) return this.status
+    this.explicitCheckInFlight = explicit
+    this.checkInFlight = true
     try {
       await this.applyConfiguredChannel()
-      autoUpdater.checkForUpdates().catch((error: unknown) => {
-        Logger.error('Updater: check failed', error)
-        if (this._status.state !== 'downloaded' && this._status.state !== 'downloading') {
-          this.updateState({
-            state: 'error',
-            errorMessage: error instanceof Error ? error.message : 'Update check failed'
-          })
-        }
-      })
+      autoUpdater
+        .checkForUpdates()
+        .catch((error: unknown) => {
+          Logger.error('Updater: check failed', error)
+          this.settleCheckFailure(error)
+        })
+        .finally(() => {
+          this.checkInFlight = false
+          this.explicitCheckInFlight = false
+        })
     } catch (error: unknown) {
       Logger.error('Updater: check failed', error)
-      if (this._status.state !== 'downloaded' && this._status.state !== 'downloading') {
-        this.updateState({
-          state: 'error',
-          errorMessage: error instanceof Error ? error.message : 'Update check failed'
-        })
-      }
+      this.checkInFlight = false
+      this.explicitCheckInFlight = false
+      this.settleCheckFailure(error)
     }
     return this.status
+  }
+
+  /** Resolve a failed check: sticky error only when the user asked for it. */
+  private settleCheckFailure(error: unknown): void {
+    if (this._status.state === 'downloaded' || this._status.state === 'downloading') return
+    if (!this.explicitCheckInFlight) {
+      // Transient (often offline) background failure — keep the sidebar calm
+      // and never clobber a meaningful state (available/waiting/downloaded).
+      if (this._status.state === 'checking' || this._status.state === 'error') {
+        this.updateState({ state: 'idle' })
+      }
+      return
+    }
+    this.updateState({
+      state: 'error',
+      errorMessage: error instanceof Error ? error.message : 'Update check failed'
+    })
   }
 
   /**

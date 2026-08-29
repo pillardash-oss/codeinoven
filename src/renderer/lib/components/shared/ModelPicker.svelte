@@ -463,6 +463,7 @@
     search = ''
     harnessFilterOpen = false
     pickerListScrollTop = 0
+    keyboardNavActive = false
   }
 
   function handleOpenChange(nextOpen: boolean): void {
@@ -527,6 +528,13 @@
 
   let pickerListScrollTop = $state(0)
   let pickerViewport = $state(240)
+  /** True right after an arrow-key press, until the mouse physically moves.
+   *  CSS `:hover` is geometric — it re-fires on whatever row ends up under a
+   *  stationary cursor once the virtual list auto-scrolls for keyboard nav.
+   *  While this is true, rows go pointer-events: none so a parked mouse can't
+   *  paint a stale `:hover`; a real `mousemove` clears it and hands control
+   *  straight back to the mouse. */
+  let keyboardNavActive = $state(false)
 
   /** Flatten every visible list section into positioned rows. */
   let pickerLayout = $derived.by(() => {
@@ -657,6 +665,11 @@
 
   /** Pixel offset of the currently selected model row, if it is listed. */
   function pickerOffsetForSelectedModel(): number | undefined {
+    return pickerLayout.offsets[pickerIndexForSelectedModel() ?? -1]
+  }
+
+  /** Index of the currently selected model's row within the flattened list. */
+  function pickerIndexForSelectedModel(): number | undefined {
     const index = pickerLayout.items.findIndex(
       (item) =>
         item.kind === 'model' &&
@@ -664,7 +677,13 @@
         item.entry.provider.id === providerId &&
         item.entry.provider.harnessId === harnessId
     )
-    return index === -1 ? undefined : pickerLayout.offsets[index]
+    return index === -1 ? undefined : index
+  }
+
+  /** Row key of the currently selected model, if it is listed. */
+  function pickerKeyForSelectedModel(): string | undefined {
+    const index = pickerIndexForSelectedModel()
+    return index === undefined ? undefined : pickerLayout.items[index]?.key
   }
 
   /** Scroll the virtual list to a pixel offset (state + DOM stay in sync). */
@@ -707,9 +726,14 @@
       pickerListScrollTop = node.scrollTop
     }
     node.addEventListener('scroll', onScroll, { passive: true })
+    const onMouseMove = (): void => {
+      if (keyboardNavActive) keyboardNavActive = false
+    }
+    node.addEventListener('mousemove', onMouseMove, { passive: true })
     return () => {
       resizeObserver.disconnect()
       node.removeEventListener('scroll', onScroll)
+      node.removeEventListener('mousemove', onMouseMove)
     }
   }
 
@@ -822,7 +846,11 @@
       >
         {#if selectedProvider}
           <span class="flex shrink-0 items-center gap-0.5">
-            {@render modelVendorIcons(selectedProvider.harnessId, selectedProvider.name)}
+            {@render modelVendorIcons(
+              selectedProvider.harnessId,
+              selectedProvider.name,
+              selectedProvider.id
+            )}
           </span>
         {:else if selectedHarnessIcon}
           {@render harnessIcon(harnessId)}
@@ -931,9 +959,27 @@
             onkeydown={(event: KeyboardEvent) => {
               if (event.key === 'ArrowDown') {
                 event.preventDefault()
+                keyboardNavActive = true
+                // Anchor the first arrow-key press on the active model so nav
+                // starts from what's selected, not the top of the list — but
+                // once the user has typed a search, "top of the results" is
+                // the more useful anchor.
+                const targetKey = search ? undefined : pickerKeyForSelectedModel()
+                if (targetKey) {
+                  const targetIndex = pickerLayout.items.findIndex((item) => item.key === targetKey)
+                  if (targetIndex !== -1) scrollPickerListTo(pickerLayout.offsets[targetIndex] - 60)
+                  void tick().then(() => {
+                    modelList
+                      ?.querySelector<HTMLElement>(`[data-model-key="${CSS.escape(targetKey)}"]`)
+                      ?.focus()
+                  })
+                  return
+                }
                 scrollPickerListTo(0)
-                const firstBtn = document.querySelector(`#${CSS.escape(listId)} .model-row-btn`)
-                if (firstBtn instanceof HTMLElement) firstBtn.focus()
+                void tick().then(() => {
+                  const firstBtn = document.querySelector(`#${CSS.escape(listId)} .model-row-btn`)
+                  if (firstBtn instanceof HTMLElement) firstBtn.focus()
+                })
                 return
               }
               if (event.key === 'Escape') {
@@ -1102,10 +1148,10 @@
   {/if}
 {/snippet}
 
-{#snippet modelVendorIcons(harnessId: string, providerName: string)}
+{#snippet modelVendorIcons(harnessId: string, providerName: string, providerId?: string)}
   {@render harnessIcon(harnessId)}
-  {#if !vendorMatches(harnessId, providerName)}
-    <VendorIcon name={providerName} size={12} />
+  {#if !vendorMatches(harnessId, providerId ?? providerName)}
+    <VendorIcon name={providerName} id={providerId} size={12} />
   {/if}
 {/snippet}
 
@@ -1151,7 +1197,7 @@
       size={11}
       class={`shrink-0 text-dimmed transition-transform ${collapsed ? '' : 'rotate-90'}`}
     />
-    <VendorIcon name={provider.name} size={14} />
+    <VendorIcon name={provider.name} id={provider.id} size={14} />
     <span class="text-[10px] font-semibold uppercase tracking-wide text-dimmed">
       {provider.name}
     </span>
@@ -1221,9 +1267,7 @@
             <GripVertical size={11} />
           </span>
         {/if}
-        <div class={item.draggable ? 'pl-4' : ''}>
-          {@render modelRow(item.entry, item.key)}
-        </div>
+        {@render modelRow(item.entry, item.key)}
         <div
           class="pointer-events-none absolute inset-x-0 top-0 h-0.5 transition-colors {favoriteDropTarget?.key ===
             key && favoriteDropTarget.position === 'before'
@@ -1247,7 +1291,7 @@
   {@const key = modelKey(entry.provider.harnessId, entry.provider.id, entry.model.id)}
   {@const peak = peakHoursBadgeFor(entry.model.id)}
   <button
-    class={`model-row-btn flex w-full flex-col rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-elevated focus:bg-elevated focus:outline-none ${isSelectedModel(entry) ? 'bg-elevated' : ''}`}
+    class={`model-row-btn ml-4 flex w-[calc(100%-1rem)] flex-col rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-elevated focus:bg-elevated focus:outline-none ${isSelectedModel(entry) ? 'bg-elevated' : ''} ${keyboardNavActive ? 'pointer-events-none' : ''}`}
     title={`Use ${entry.model.name}`}
     data-model-id={entry.model.id}
     data-model-key={rowKey}
@@ -1262,6 +1306,7 @@
             ? Math.min(currentIndex + 1, pickerModelKeys.length - 1)
             : Math.max(currentIndex - 1, 0)
         if (targetIndex === currentIndex) return
+        keyboardNavActive = true
         const targetKey = pickerModelKeys[targetIndex]
         const targetItemIndex = pickerLayout.items.findIndex((item) => item.key === targetKey)
         if (targetItemIndex !== -1) {
@@ -1363,7 +1408,7 @@
       </span>
     </span>
     <span class="flex items-center gap-1 truncate text-[10px] text-dimmed">
-      {@render modelVendorIcons(entry.provider.harnessId, entry.provider.name)}
+      {@render modelVendorIcons(entry.provider.harnessId, entry.provider.name, entry.provider.id)}
       <span class="truncate">{entry.provider.name}</span>
     </span>
   </button>

@@ -815,6 +815,11 @@
     cancelStop()
   })
 
+  // Double-Escape abort — two presses within the window stop the running turn.
+  // Single escape or any outside click cancels a pending stop confirmation.
+  const ESCAPE_ABORT_WINDOW_MS = 800
+  let lastEscapeAt = 0
+
   function confirmStop(): void {
     if (!onStop) return
     if (pendingStop) {
@@ -977,7 +982,8 @@
                 entry: {
                   id: 'cio-utility',
                   name: '@cio-utility',
-                  description: 'Set up a skill, MCP server, or plugin with a CodeInOven agent.'
+                  description:
+                    'Set up a skill, MCP server, or plugin, or debug an app issue with a CodeInOven agent.'
                 }
               }
             ]
@@ -1680,17 +1686,23 @@
       return
     }
     if (e.key !== 'Escape') return
-    // Escape cancels the stop-button confirmation, but stops an active turn
-    // immediately when there is no pending confirmation. A running agent is a
-    // global session concern, so this remains active even when the composer
-    // editor itself does not have focus.
+    // Escape cancels the stop-button confirmation. Two Escapes within the
+    // window stop the running turn; a single Escape only arms the stop and
+    // cancels a pending confirmation instead. A running agent is a global
+    // session concern, so this remains active even when the composer editor
+    // itself does not have focus.
     if (pendingStop) {
       cancelStop()
       return
     }
     if (!working || !onStop) return
-    e.preventDefault()
-    onStop()
+    const now = Date.now()
+    if (now - lastEscapeAt <= ESCAPE_ABORT_WINDOW_MS) {
+      lastEscapeAt = 0
+      onStop()
+    } else {
+      lastEscapeAt = now
+    }
   }
 </script>
 
