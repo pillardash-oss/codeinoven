@@ -303,7 +303,7 @@ interface PiSilentContinueState {
 }
 
 /** Silent continues per turn before the failure is surfaced as a real error. */
-const SILENT_CONTINUE_MAX_ATTEMPTS = 3
+const SILENT_CONTINUE_MAX_ATTEMPTS = 10
 
 /** Map one documented Pi JSON print-mode record into CodeInOven's stable shapes. */
 export function mapPiRecord(
@@ -1373,6 +1373,21 @@ export class PiDriver extends PersistentCliDriver {
         if (result.nativeSessionId) session.nativeSessionId = result.nativeSessionId
         if (result.messages) this.mergeMessages(session, result.messages)
         for (const event of this.normalizeInteractionEvents(session.id, result.events ?? [])) {
+          // A successful assistant completion proves the provider recovered, so
+          // the flake budget resets: a long agentic turn that survives many
+          // scattered hiccups must not be capped by their cumulative count.
+          if (
+            event.type === 'message.completed' &&
+            !event.error &&
+            !event.silentContinue &&
+            !event.compaction
+          ) {
+            const state = this.silentContinues.get(session.id)
+            if (state && state.attempts > 0) {
+              state.attempts = 0
+              this.silentContinues.set(session.id, state)
+            }
+          }
           // A continuable finish-reason flake is claimed by the driver: strip
           // the marker and never let the errored completion reach the engine,
           // or the chat would show a failure the silent continue is about to
