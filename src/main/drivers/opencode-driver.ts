@@ -46,7 +46,11 @@ import { BaseUrlProviderService } from '../providers/base-url-provider-service'
 import { hasNativeProviderCatalog } from '../agents/native-provider-config-service'
 import { SecretVault } from '../storage/secret-vault'
 import { resolveFastModelId } from '../../lib/fast-inference'
-import { classifyProviderIssue } from '../../lib/provider-issue'
+import {
+  classifyProviderIssue,
+  extractProviderErrorEnvelope,
+  parseUsageResetAt
+} from '../../lib/provider-issue'
 import { isSvgAttachment, readSvgAttachmentText, formatSvgAsText } from './svg-attachment'
 import { isTextAttachment, readTextAttachment, formatTextAsText } from './text-attachment'
 import {
@@ -273,21 +277,36 @@ function openCodeIssue(
 ): AgentProviderIssue {
   const error = recordValue(raw)
   const data = recordValue(error?.['data'])
-  const message =
+  const rawMessage =
     stringValue(data?.['message']) ??
     stringValue(error?.['message']) ??
     stringValue(raw) ??
     fallback
+  // OpenCode (and upstream providers it proxies) sometimes hands back a raw
+  // JSON error body as the message string itself (e.g.
+  // `429: {"message":"...weekly usage limit...","type":"rate_limit_error",
+  // "code":"RATE_LIMITED"}`) instead of a plain sentence. Unwrap it so the UI
+  // never has to render the JSON blob as the "friendly" message.
+  const envelope = extractProviderErrorEnvelope(rawMessage)
   const statusCode = numberValue(data?.['statusCode']) ?? numberValue(error?.['statusCode'])
+  const kind = classifyProviderIssue(rawMessage, statusCode)
+  // A genuine usage/quota reset date embedded in the message is authoritative
+  // over any short-interval retry hint the caller passed in `overrides` (e.g.
+  // OpenCode's own internal retry backoff, which fires every few seconds and
+  // is meaningless against a multi-day weekly cap).
+  const usageResetAt =
+    kind === 'quota' || kind === 'rate_limit' ? parseUsageResetAt(envelope.message) : undefined
   return {
-    kind: classifyProviderIssue(message, statusCode),
-    message,
+    kind,
+    message: envelope.message,
+    ...(envelope.message === rawMessage ? {} : { rawError: rawMessage }),
     harnessId: 'opencode',
     retryable:
       overrides.retryable ??
       (typeof data?.['isRetryable'] === 'boolean' ? data['isRetryable'] : false),
     ...(statusCode === undefined ? {} : { statusCode }),
-    ...overrides
+    ...overrides,
+    ...(usageResetAt === undefined ? {} : { retryAt: usageResetAt })
   }
 }
 

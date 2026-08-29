@@ -88,6 +88,18 @@
     if (issue.retryAt) subscribeToClock()
     return Date.now()
   })
+  /**
+   * A reset far in the future (e.g. a multi-day weekly usage cap) is not
+   * something the app should present as an imminent, live-ticking
+   * auto-resume — that reads as broken when the countdown says "in 6 days".
+   * It also isn't something the harness's own short-interval retry hint
+   * (meant for transient errors) should drive. Once the reset falls inside
+   * this window, switch to the live auto-resume countdown.
+   */
+  const AUTO_SCHEDULE_WINDOW_MS = 30 * 60 * 1000
+  const withinAutoScheduleWindow = $derived(
+    issue.retryAt !== undefined && issue.retryAt - now <= AUTO_SCHEDULE_WINDOW_MS
+  )
   const rawError = $derived(issue.rawError?.trim() || issue.message.trim())
   const waiting = $derived(status.state === 'waiting')
   /**
@@ -236,7 +248,7 @@
 
       <p class="mt-1 text-sm leading-relaxed text-muted">{issue.message}</p>
 
-      {#if waiting && issue.retryAt && autoRetryEnabled}
+      {#if waiting && issue.retryAt && autoRetryEnabled && withinAutoScheduleWindow}
         <p class="mt-2 text-xs font-medium text-foreground tabular-nums">
           <span aria-live="polite">
             Auto-resume {absoluteRetryTime(issue.retryAt)} · in {relativeRetryTime(issue.retryAt)}
@@ -247,9 +259,9 @@
         </p>
       {:else if waiting && issue.retryAt}
         <p class="mt-2 text-xs font-medium text-foreground tabular-nums">
-          Available again {absoluteRetryTime(issue.retryAt)} · in {relativeRetryTime(issue.retryAt)}
+          Will retry {absoluteRetryTime(issue.retryAt)}
         </p>
-      {:else if autoResume && issue.retryAt}
+      {:else if autoResume && issue.retryAt && withinAutoScheduleWindow}
         <p class="mt-2 text-xs font-medium text-foreground tabular-nums">
           {#if autoRetryEnabled}
             Auto-resume {absoluteRetryTime(issue.retryAt)} · in {relativeRetryTime(issue.retryAt)}
@@ -261,7 +273,7 @@
         </p>
       {:else if issue.retryAt}
         <p class="mt-2 text-xs font-medium text-foreground tabular-nums">
-          Available again {absoluteRetryTime(issue.retryAt)} · in {relativeRetryTime(issue.retryAt)}
+          Will retry {absoluteRetryTime(issue.retryAt)}
         </p>
       {:else if waiting}
         <p class="mt-2 text-xs font-medium text-foreground">

@@ -32,7 +32,11 @@ import type {
 } from './driver.interface'
 import { QuestionRequestGoneError } from './driver.interface'
 import type { HarnessCommand, ThreadSettings } from '../../lib/types'
-import { classifyProviderIssue } from '../../lib/provider-issue'
+import {
+  classifyProviderIssue,
+  extractProviderErrorEnvelope,
+  parseUsageResetAt
+} from '../../lib/provider-issue'
 import {
   PersistentCliDriver,
   type CliLineParseContext,
@@ -43,6 +47,7 @@ import {
 import { inlineSvgAttachments, isSvgAttachment } from './svg-attachment'
 import { piMcpExtension } from './pi-mcp-extension'
 import { piCustomProvidersExtension } from './pi-providers-extension'
+import { piUtilityGatewayExtension } from './pi-utility-gateway-extension'
 import {
   PI_STATUS_COMPACTING,
   PI_STATUS_EXTENSION_KEY,
@@ -172,19 +177,6 @@ function errorText(value: Record<string, unknown>): string {
 
 function messageTimestamp(value: Record<string, unknown>): number {
   return numberValue(value['timestamp']) ?? Date.now()
-}
-
-/**
- * Pi's rate-limit/quota error text embeds an ISO-8601 reset time (e.g.
- * `Your limit resets at 2026-08-28T22:52:23.222Z.`). Extract it so the retry
- * scheduler gets a concrete `retryAt` instead of waiting on a manual retry.
- */
-function piUsageLimitResetAt(message: string, now = Date.now()): number | undefined {
-  const match = message.match(/resets? at\s+(\d{4}-\d{2}-\d{2}T[\d:.]+Z)/iu)
-  if (!match) return undefined
-  const resetMs = Date.parse(match[1])
-  if (!Number.isFinite(resetMs) || resetMs <= now) return undefined
-  return resetMs
 }
 
 /**
@@ -586,10 +578,9 @@ export function mapPiRecord(
     })
     if (lastAssistant?.error) {
       const kind = classifyProviderIssue(lastAssistant.error)
+      const message = extractProviderErrorEnvelope(lastAssistant.error).message
       const retryAt =
-        kind === 'quota' || kind === 'rate_limit'
-          ? piUsageLimitResetAt(lastAssistant.error)
-          : undefined
+        kind === 'quota' || kind === 'rate_limit' ? parseUsageResetAt(message) : undefined
       return {
         events: [
           {
@@ -599,7 +590,8 @@ export function mapPiRecord(
               state: 'error',
               issue: {
                 kind,
-                message: lastAssistant.error,
+                message,
+                rawError: lastAssistant.error,
                 harnessId: 'pi',
                 retryable: retryAt !== undefined,
                 ...(retryAt === undefined ? {} : { retryAt })
@@ -724,6 +716,8 @@ export class PiDriver extends PersistentCliDriver {
 
   private turnStates = new Map<string, PiTurnState>()
   private rpcClients = new Map<string, PiRpcClient>()
+  /** Session-keyed turn handoff files carrying { url, token } for the gateway extension. */
+  private gatewayHandoffPaths = new Map<string, string>()
   private sessionProjects = new Map<string, string>()
   private activeTurns = new Set<string>()
   private pendingUiRequests = new Map<string, PiUiRequest>()
@@ -1107,6 +1101,7 @@ export class PiDriver extends PersistentCliDriver {
     this.activeTurns.delete(sessionId)
     this.turnStates.delete(sessionId)
     this.silentContinues.delete(sessionId)
+    await this.removeGatewayHandoff(sessionId)
     await super.deleteSession(projectPath, sessionId)
   }
 
@@ -1150,6 +1145,37 @@ export class PiDriver extends PersistentCliDriver {
     } catch (error) {
       Logger.dev('Pi account usage read failed:', error)
       return null
+    }
+  }
+
+  /**
+   * Publish the turn-scoped gateway endpoint for the app-owned utility gateway
+   * extension. Pi sessions are persistent RPC processes whose extensions load
+   * at spawn, so the per-turn URL+token reach the extension through a
+   * session-keyed handoff file the driver rewrites per turn; clearing it on
+   * turn end makes stale tokens unusable. A failed write is logged and swallowed
+   * — the prose curl fallback stays fully functional without the extension.
+   */
+  async publishUtilityGatewayEndpoint(
+    _projectPath: string,
+    sessionId: string,
+    endpoint: { url: string; token: string } | null
+  ): Promise<void> {
+    void _projectPath
+    const handoffPath = this.gatewayHandoffPaths.get(sessionId)
+    if (!handoffPath) {
+      if (endpoint !== null) {
+        Logger.dev('Pi utility gateway endpoint dropped: no extension materialized')
+      }
+      return
+    }
+    try {
+      if (endpoint === null) await this.storage.removeRaw(handoffPath)
+      else {
+        await this.storage.writeRaw(handoffPath, JSON.stringify(endpoint))
+      }
+    } catch (error) {
+      Logger.dev('Pi utility gateway handoff update failed:', error)
     }
   }
 
@@ -1250,6 +1276,10 @@ export class PiDriver extends PersistentCliDriver {
     this.turnStates.clear()
     this.silentContinues.clear()
     this.pendingUiRequests.clear()
+    for (const sessionId of this.gatewayHandoffPaths.keys()) {
+      void this.removeGatewayHandoff(sessionId)
+    }
+    this.gatewayHandoffPaths.clear()
     const statusDirectory = this.statusExtensionDirectory
     this.statusExtensionPath = null
     this.statusExtensionDirectory = null
@@ -1302,6 +1332,12 @@ export class PiDriver extends PersistentCliDriver {
     // failure must never block the turn — pi then simply runs unmonitored.
     const statusExtension = await this.materializeStatusExtension()
     const extensionArgs = statusExtension ? ['--extension', statusExtension] : []
+    // The app-owned gateway extension registers utility_search/activate/invoke
+    // as first-class tools so the model gets structured affordances for the
+    // turn-scoped utility gateway (Pi has no native MCP host to transport it).
+    // The per-turn endpoint arrives later via publishUtilityGatewayEndpoint.
+    const gatewayExtension = await this.materializeGatewayExtension(sessionId)
+    if (gatewayExtension) extensionArgs.push('--extension', gatewayExtension)
     const invocation = await prepareHarnessInvocation(
       'pi',
       ['--mode', 'rpc', ...extensionArgs, ...args],
@@ -1479,6 +1515,18 @@ export class PiDriver extends PersistentCliDriver {
     return true
   }
 
+  /** Remove a session's gateway handoff file and forget its path. */
+  private async removeGatewayHandoff(sessionId: string): Promise<void> {
+    const handoffPath = this.gatewayHandoffPaths.get(sessionId)
+    if (!handoffPath) return
+    this.gatewayHandoffPaths.delete(sessionId)
+    try {
+      await this.storage.removeRaw(handoffPath)
+    } catch (error) {
+      Logger.dev('Pi utility gateway handoff removal failed:', error)
+    }
+  }
+
   /** Surface a silent continue that could not be started as a real error. */
   private failSilentContinue(session: PersistentCliSession, error: string): void {
     this.silentContinues.delete(session.id)
@@ -1650,6 +1698,42 @@ export class PiDriver extends PersistentCliDriver {
    * returns null and the session launches without status monitoring instead
    * of failing the turn.
    */
+  /**
+   * Materialize one app-owned gateway extension module plus its session-keyed
+   * handoff file. The extension registers the gateway tools at pi spawn, while
+   * the handoff is rewritten per turn by `publishUtilityGatewayEndpoint`;
+   * this method only guarantees both files exist. The extension embeds the
+   * absolute handoff path, so both files are session-keyed — concurrent
+   * sessions never overwrite each other's turn credentials.
+   */
+  private async materializeGatewayExtension(sessionId: string): Promise<string | null> {
+    const existing = this.gatewayHandoffPaths.get(sessionId)
+    if (existing) return existing
+    try {
+      const directory = join('runtime', 'pi-utility-gateway', sessionId)
+      const handoffRelative = join(directory, 'handoff.json')
+      const extensionRelative = join(directory, 'codeinoven-utility-gateway.ts')
+      // Empty endpoint values: the tools surface a clear gateway-inactive error
+      // until the first direct-gateway turn publishes the real { url, token }.
+      await this.storage.writeRaw(handoffRelative, JSON.stringify({ url: '', token: '' }))
+      const handoffPath = this.storage.resolve(handoffRelative)
+      await this.storage.writeRaw(
+        extensionRelative,
+        piUtilityGatewayExtension().replace(
+          '__HANDOFF_PATH__',
+          JSON.stringify(handoffPath).slice(1, -1)
+        )
+      )
+      this.gatewayHandoffPaths.set(sessionId, handoffPath)
+      return this.storage.resolve(extensionRelative)
+    } catch (error) {
+      // A failed materialization must never block the turn; the prose curl
+      // fallback stays fully functional without the extension.
+      Logger.dev('Pi utility gateway extension materialization failed:', error)
+      return null
+    }
+  }
+
   private async materializeStatusExtension(): Promise<string | null> {
     if (this.statusExtensionPath) return this.statusExtensionPath
     if (this.statusExtensionFailed) return null

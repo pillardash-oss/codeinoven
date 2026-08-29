@@ -13,6 +13,11 @@ import type {
   ThinkingLevel,
   ThinkingPreset
 } from '../../lib/types'
+import {
+  classifyProviderIssue,
+  extractProviderErrorEnvelope,
+  parseUsageResetAt
+} from '../../lib/provider-issue'
 import { THINKING_LEVEL_ORDER } from '../../lib/thinking-presets'
 import {
   isQuestionToolName,
@@ -352,17 +357,17 @@ function museToolNeedsPermission(toolName: string): boolean {
 }
 
 function museIssue(error: string): AgentProviderIssue {
-  const normalized = error.toLowerCase()
-  const quota =
-    normalized.includes('quota') || normalized.includes('limit') || normalized.includes('402')
-  const authentication =
-    normalized.includes('auth') || normalized.includes('sign in') || normalized.includes('api key')
+  const envelope = extractProviderErrorEnvelope(error)
+  const kind = classifyProviderIssue(error)
+  const retryAt =
+    kind === 'quota' || kind === 'rate_limit' ? parseUsageResetAt(envelope.message) : undefined
   return {
-    kind: quota ? 'quota' : authentication ? 'authentication' : 'unknown',
-    message: error,
+    kind,
+    message: envelope.message,
     rawError: error,
     harnessId: 'muse',
-    retryable: quota
+    retryable: retryAt !== undefined || kind === 'quota' || kind === 'rate_limit',
+    ...(retryAt === undefined ? {} : { retryAt })
   }
 }
 
@@ -454,7 +459,10 @@ function reasoningPart(state: MuseTurnState): Extract<AgentPart, { type: 'reason
 function museToolPart(state: MuseTurnState, tool: MuseToolState): AgentPart {
   return {
     type: 'tool',
-    id: `muse-tool-${tool.taskId}`,
+    // The Muse CLI restarts its task-id counter on every `muse exec` run, so
+    // `task_id` alone collides across turns and every tool card in the thread
+    // folds into one. Anchor the part id to the per-turn message id instead.
+    id: `${state.messageId}:tool-${tool.taskId}`,
     messageID: state.messageId,
     callID: tool.callId ?? `muse-task-${tool.taskId}`,
     tool: tool.tool,
@@ -994,7 +1002,31 @@ export function mapMuseRecord(
     const text = stringValue(payload['text'])
     const failed = outcome === 'failure' || outcome === 'error'
     tool.status = failed ? 'error' : 'completed'
-    if (text) tool.output = text
+    if (text) {
+      // For shell tools the result text is the same JSON
+      // `{command, description, output, …}` chunk that `task.lifecycle.output`
+      // streamed. Prefer its parsed fields so the card shows a real command
+      // and the plain tool output instead of one opaque JSON blob.
+      let resultText = text
+      if (text.trimStart().startsWith('{')) {
+        try {
+          const parsed = record(JSON.parse(text) as unknown)
+          if (parsed) {
+            const command = stringValue(parsed['command'])
+            const output = stringValue(parsed['output'])
+            const exitCode = numberValue(parsed['exit_code'])
+            if (command) tool.input = { command, ...tool.input }
+            if (!tool.title && stringValue(parsed['description']))
+              tool.title = stringValue(parsed['description'])
+            if (output !== undefined && exitCode !== undefined) resultText = output
+            else resultText = text
+          }
+        } catch {
+          // Keep the raw text when the payload is not the expected JSON shape.
+        }
+      }
+      tool.output = resultText
+    }
     // `edit_facts.path` is the project-relative file that the tool changed.
     // Surfacing it as the tool input lets the checkpoint change tracker map the
     // edit to a concrete path, so the working-trace diff and rollback capture
@@ -1013,9 +1045,23 @@ export function mapMuseRecord(
     return { ...base, events: [museToolEvent(context, state, tool)] }
   }
 
+  // Tool lifecycle completion — Muse 1.x never re-emits the committed tool
+  // call and `tool.result` is absent for non-shell tools, so without this
+  // handler completed tool cards would stay `running` forever with an empty
+  // input. Flip the matching task to `completed` when its lifecycle closes.
+  if (payloadType === 'task.lifecycle.completed') {
+    const tool = taskId ? state.tools.get(taskId) : undefined
+    if (!tool || tool.status === 'completed' || tool.status === 'error') return base
+    tool.status = 'completed'
+    tool.end = Date.now()
+    if (isQuestionToolName(tool.tool)) return base
+    if (isMuseSubagentSpawn(tool.tool)) return { ...base, events: [museSubagentEvent(context, state, tool)] }
+    return { ...base, events: [museToolEvent(context, state, tool)] }
+  }
+
   // Muse Spark always reasons; ensure the working trace shows a ThinkingBlock
   // immediately when the run starts so the user sees "Thinking …" even though
-  // CLI 0.2.1 inlines reasoning into `run.output.delta` text rather than a
+  // the CLI inlines reasoning into `run.output.delta` text rather than a
   // separate reasoning delta channel. The block stays active until the terminal
   // record closes it.
   if (payloadType === 'run.lifecycle.started') {
