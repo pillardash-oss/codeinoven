@@ -8260,6 +8260,11 @@ export class ChatEngine {
     await driver.abort(projectPath, thread.sessionId)
     await this.cleanupTurnUtilities(thread.sessionId)
     updateRetryWakeWindow(thread.sessionId, null)
+    // A thread waiting on a scheduled usage-reset retry has no live turn to
+    // abort, so a Stop click must cancel the pending resume itself — otherwise
+    // the scheduler fires later and silently revives the thread the user
+    // deliberately stopped.
+    this.retryScheduler?.clear(thread.sessionId)
     this.sessionStatuses.set(thread.sessionId, { state: 'idle' })
     this.clearPendingQuestionsForSession(thread.sessionId)
     this.clearPendingPermissionsForSession(thread.sessionId)
