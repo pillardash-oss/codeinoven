@@ -4480,7 +4480,11 @@
 
   /** Stop the in-flight turn — wired to the composer's stop button and double Escape. */
   async function abortRun(): Promise<void> {
-    if (!busy) return
+    // A scheduled usage-reset retry leaves `busy` false (the session.status
+    // 'waiting' handler marks the run idle so the working UI doesn't stick),
+    // but the "Stop request" button on the provider card is shown for that
+    // same state — so this must not bail out before invoking the abort.
+    if (!busy && providerStatus?.state !== 'waiting') return
     const { projectId, id } = thread
     userRequestedStop = true
 
