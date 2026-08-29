@@ -1,3 +1,4 @@
+import { Logger } from '../../system/logger'
 import type { Database } from '../database'
 import type {
   AccountActivityDay,
@@ -216,46 +217,60 @@ export interface UsageCostCoverage {
 export class HarnessUsageRepo {
   constructor(private db: Database) {}
 
-  /** Persist one usage attempt. Replaying its stable identity is a no-op. */
+  /**
+   * Persist one usage attempt. Replaying its stable identity is a no-op.
+   * Usage telemetry is best-effort: a stale `parentTurnId` (e.g. the owning
+   * `agent_messages` row was deleted, edited, or not yet committed) can trip
+   * the FK constraint. Swallow that instead of letting it mask the real
+   * error in whatever `finally` block called us.
+   */
   recordEvent(event: UsageEvent): void {
-    this.db.run(
-      `INSERT OR IGNORE INTO usage_events(
-        id, thread_id, parent_turn_id, feature_call_id, attempt, feature,
-        harness_id, provider_id, model_id, thinking_level, utility_id, raw_provider_usage_json,
-        tokens_uncached_input, tokens_cached_input, tokens_cache_write,
-        tokens_output, tokens_reasoning, tokens_total, raw_total, total_semantics,
-        cost_usd, cost_status, pricing_provenance_json, tool_fee_usd,
-        success, retry_cause, duration_ms, created_at
-      ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-      event.id,
-      event.threadId,
-      event.parentTurnId,
-      event.featureCallId,
-      event.attempt,
-      event.feature,
-      event.harnessId,
-      event.providerId,
-      event.modelId,
-      event.thinkingLevel,
-      event.utilityId,
-      JSON.stringify(event.rawProviderUsage),
-      event.tokens.uncachedInput,
-      event.tokens.cachedInput,
-      event.tokens.cacheWrite,
-      event.tokens.output,
-      event.tokens.reasoning,
-      accountedTokenTotal(event),
-      event.rawTotal,
-      event.totalSemantics,
-      event.costUsd,
-      event.costStatus,
-      event.pricingProvenance === null ? null : JSON.stringify(event.pricingProvenance),
-      event.toolFeeUsd,
-      event.success ? 1 : 0,
-      event.retryCause,
-      Math.max(0, Math.floor(event.durationMs ?? 0)),
-      event.createdAt
-    )
+    try {
+      this.db.run(
+        `INSERT OR IGNORE INTO usage_events(
+          id, thread_id, parent_turn_id, feature_call_id, attempt, feature,
+          harness_id, provider_id, model_id, thinking_level, utility_id, raw_provider_usage_json,
+          tokens_uncached_input, tokens_cached_input, tokens_cache_write,
+          tokens_output, tokens_reasoning, tokens_total, raw_total, total_semantics,
+          cost_usd, cost_status, pricing_provenance_json, tool_fee_usd,
+          success, retry_cause, duration_ms, created_at
+        ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+        event.id,
+        event.threadId,
+        event.parentTurnId,
+        event.featureCallId,
+        event.attempt,
+        event.feature,
+        event.harnessId,
+        event.providerId,
+        event.modelId,
+        event.thinkingLevel,
+        event.utilityId,
+        JSON.stringify(event.rawProviderUsage),
+        event.tokens.uncachedInput,
+        event.tokens.cachedInput,
+        event.tokens.cacheWrite,
+        event.tokens.output,
+        event.tokens.reasoning,
+        accountedTokenTotal(event),
+        event.rawTotal,
+        event.totalSemantics,
+        event.costUsd,
+        event.costStatus,
+        event.pricingProvenance === null ? null : JSON.stringify(event.pricingProvenance),
+        event.toolFeeUsd,
+        event.success ? 1 : 0,
+        event.retryCause,
+        Math.max(0, Math.floor(event.durationMs ?? 0)),
+        event.createdAt
+      )
+    } catch (error) {
+      Logger.dev('Failed to record usage event; dropping telemetry', {
+        feature: event.feature,
+        parentTurnId: event.parentTurnId,
+        error
+      })
+    }
   }
 
   /** Cost totals with explicit coverage; unavailable events never enter USD sums. */
