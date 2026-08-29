@@ -85,6 +85,7 @@ import {
 } from '../speech/lesson-protocol'
 import type { SpeechExtractedLesson } from '../../lib/speech/types'
 import type { PendingRetryRecord, RetrySchedulerService } from '../system/retry-scheduler-service'
+import type { HeartbeatSchedulerService } from '../system/heartbeat-scheduler-service'
 import { instanceRegistry } from '../system/instance-registry'
 import { SecretVault } from '../storage/secret-vault'
 import { UtilityRuntimeService } from '../utilities/utility-runtime-service'
@@ -160,6 +161,7 @@ import type {
   EngineeringSpecContent,
   HarnessCommand,
   HarnessCommandSource,
+  HeartbeatConfig,
   ImageDescriptorErrorRequest,
   ImageDescriptorReplyAction,
   MemoryCategory,
@@ -1097,6 +1099,25 @@ interface TemporaryChatSession {
   expiryTimer: ReturnType<typeof setTimeout>
 }
 
+/**
+ * Presentation-safe user-message records for temporary chats — the in-memory
+ * analog of the thread mirror's `persistOutboundMessage` rows. The harness
+ * transcript only ever contains the full transport prompt, so without this
+ * overlay the internal instruction leaks into the temporary chat UI (and into
+ * converted threads). Display parts ride here; the echoed harness record under
+ * the same ID demotes to `transportParts` when the transcript is loaded.
+ */
+interface TemporaryChatDisplayRecord {
+  message: AgentMessage
+  references: PromptReference[]
+}
+
+/** Every recorded turn, ordered oldest-first — one record per user turn, so
+ *  later turns never erase the presentation-safe view of earlier ones. */
+interface TemporaryChatDisplayHistory {
+  records: TemporaryChatDisplayRecord[]
+}
+
 interface ActiveBrainstormSession {
   sessionId: string
   driver: HarnessDriver
@@ -1435,6 +1456,7 @@ export class ChatEngine {
   /** Harness sessions implementing an approved specification until its contract is fulfilled. */
   private engineeringImplementationSessions = new Set<string>()
   private temporaryChats = new Map<string, TemporaryChatSession>()
+  private temporaryChatDisplayMessages = new Map<string, TemporaryChatDisplayHistory>()
   private initialSpecTasks = new Map<string, Promise<EngineeringSpec | null>>()
   private activeInitialSpecSessions = new Map<string, ActiveInitialSpecSession>()
   private userAbortedInitialSpecOperations = new Set<string>()
@@ -1920,8 +1942,8 @@ export class ChatEngine {
     ipcMain.handle('thread:loadStreamParts', (_, projectId: string, threadId: string) =>
       this.loadTurnStreamParts(projectId, threadId)
     )
-    ipcMain.handle('agent:loadTemporaryChatMessages', (_, temporaryChatId: string) =>
-      this.loadTemporaryChatMessages(temporaryChatId)
+    ipcMain.handle('agent:loadTemporaryChatMessages', async (_, temporaryChatId: string) =>
+      (await this.loadTemporaryConversation(temporaryChatId)).map(withoutTransportParts)
     )
     ipcMain.handle('agent:getSessionStatus', (_, projectId: string, threadId: string) =>
       this.getSessionStatus(projectId, threadId)
@@ -2076,9 +2098,10 @@ export class ChatEngine {
         settings: ThreadSettings,
         text: string,
         attachments: PromptAttachment[],
-        selections?: string[],
+        references?: PromptReference[],
         initialContext?: string,
-        userMessageId?: string
+        userMessageId?: string,
+        displayText?: string
       ) =>
         this.sendTemporaryPrompt(
           projectId,
@@ -2087,9 +2110,10 @@ export class ChatEngine {
           settings,
           text,
           attachments,
-          selections,
+          references,
           initialContext,
-          userMessageId
+          userMessageId,
+          displayText
         )
     )
     ipcMain.handle(
@@ -2102,8 +2126,9 @@ export class ChatEngine {
         settings: ThreadSettings,
         text: string,
         attachments: PromptAttachment[],
-        selections?: string[],
-        userMessageId?: string
+        references?: PromptReference[],
+        userMessageId?: string,
+        displayText?: string
       ) =>
         this.steerTemporaryPrompt(
           projectId,
@@ -2112,8 +2137,9 @@ export class ChatEngine {
           settings,
           text,
           attachments,
-          selections,
-          userMessageId
+          references,
+          userMessageId,
+          displayText
         )
     )
     ipcMain.handle('agent:closeTemporaryChat', (_, temporaryChatId: string) =>
@@ -6433,15 +6459,20 @@ export class ChatEngine {
     settings: ThreadSettings,
     text: string,
     attachments: PromptAttachment[],
-    selections?: string[],
+    references?: PromptReference[],
     initialContext?: string,
-    userMessageId?: string
+    userMessageId?: string,
+    displayText?: string
   ): Promise<AgentMessage | undefined> {
     projectId = validateEntityId(projectId, 'Project ID')
     threadId = validateEntityId(threadId, 'Thread ID')
     temporaryChatId = validateEntityId(temporaryChatId, 'Temporary chat ID', 256)
     settings = validateThreadSettings(settings)
     text = validateBoundedString(text, 'Prompt', 1, 200_000)
+    const validatedReferences = this.validatePromptReferences(references)
+    const safeDisplayText = displayText
+      ? validateBoundedString(displayText, 'Display text', 1, 200_000)
+      : text
     // The renderer optimistically commits the user message under this ID; using
     // it keeps the mirror reconcile 1:1 with the optimistic message instead of
     // duplicating it.
@@ -6463,13 +6494,7 @@ export class ChatEngine {
           : {})
       }
     })
-    const selectedTexts = Array.isArray(selections)
-      ? selections
-          .map((selection) =>
-            validateBoundedString(selection, 'Selected response text', 1, 100_000)
-          )
-          .filter(Boolean)
-      : []
+    const selectedTexts = validatedReferences.map((reference) => reference.text).filter(Boolean)
     let context = initialContext
       ? validateBoundedString(initialContext, 'Temporary chat context', 1, 100_000)
       : ''
@@ -6560,6 +6585,17 @@ export class ChatEngine {
         .filter(Boolean)
         .join('\n\n')
       const userMessageId = outboundUserMessageId
+      // Presentation-safe record BEFORE the prompt leaves the process — the
+      // same ordering guarantee `persistOutboundMessage` gives threads, so the
+      // harness echo can never be the display source of truth.
+      this.recordTemporaryDisplayMessage(
+        temporary.id,
+        temporary.sessionId,
+        userMessageId,
+        safeDisplayText,
+        validatedAttachments,
+        validatedReferences
+      )
       const request: SendPromptOptions = {
         sessionId: temporary.sessionId,
         settings: {
@@ -6849,8 +6885,9 @@ export class ChatEngine {
     settings: ThreadSettings,
     text: string,
     attachments: PromptAttachment[],
-    selections?: string[],
-    userMessageId?: string
+    references?: PromptReference[],
+    userMessageId?: string,
+    displayText?: string
   ): Promise<void> {
     this.touchUserActivity()
     projectId = validateEntityId(projectId, 'Project ID')
@@ -6858,6 +6895,10 @@ export class ChatEngine {
     temporaryChatId = validateEntityId(temporaryChatId, 'Temporary chat ID', 256)
     settings = validateThreadSettings(settings)
     text = validateBoundedString(text, 'Prompt', 1, 200_000)
+    const validatedReferences = this.validatePromptReferences(references)
+    const safeDisplayText = displayText
+      ? validateBoundedString(displayText, 'Display text', 1, 200_000)
+      : text
     if (!Array.isArray(attachments)) {
       throw new TypeError('Temporary chat attachments must be an array')
     }
@@ -6872,13 +6913,6 @@ export class ChatEngine {
           : {})
       }
     })
-    const selectedTexts = Array.isArray(selections)
-      ? selections
-          .map((selection) =>
-            validateBoundedString(selection, 'Selected response text', 1, 100_000)
-          )
-          .filter(Boolean)
-      : []
 
     const temporary = this.temporaryChats.get(temporaryChatId)
     if (!temporary || temporary.kind !== 'chat') {
@@ -6901,18 +6935,35 @@ export class ChatEngine {
       throw new Error(`${driver.name} does not expose native active-turn steering`)
     }
     assertHarnessRequestCapabilities(driver, validatedAttachments, 'auto_review')
+    const selectedTexts = validatedReferences.map((reference) => reference.text).filter(Boolean)
     const promptText = selectedTexts.length
       ? `Referenced response selections:\n${selectedTexts
           .map((selection, index) => `<selection ${index + 1}>\n${selection}\n</selection>`)
           .join('\n\n')}\n\nUser request:\n${text}`
       : text
+    const steerUserMessageId = userMessageId
+      ? validateBoundedString(userMessageId, 'User message ID', 1, 128)
+      : createMessageId()
+    // Threads register steered outbound IDs so the live `message.part.updated`
+    // echo never overwrites the display record; temporary steers skipped this,
+    // letting the full transport prompt ghost into the conversation.
+    const outboundIds =
+      this.outboundMessageIdsBySession.get(temporary.sessionId) ?? new Set<string>()
+    outboundIds.add(steerUserMessageId)
+    this.outboundMessageIdsBySession.set(temporary.sessionId, outboundIds)
+    this.recordTemporaryDisplayMessage(
+      temporary.id,
+      temporary.sessionId,
+      steerUserMessageId,
+      safeDisplayText,
+      validatedAttachments,
+      validatedReferences
+    )
     const steerOptions = {
       sessionId: temporary.sessionId,
       text: promptText,
       attachments: validatedAttachments,
-      userMessageId: userMessageId
-        ? validateBoundedString(userMessageId, 'User message ID', 1, 128)
-        : createMessageId()
+      userMessageId: steerUserMessageId
     }
     if (temporary.isolated && driver instanceof OpenCodeDriver) {
       await driver.steerPrompt(temporary.projectPath, steerOptions, temporary.isolated)
@@ -7023,7 +7074,7 @@ export class ChatEngine {
       throw new Error('This side chat does not belong to the current thread')
     }
 
-    const conversation = (await this.loadTemporaryChatMessages(temporaryChatId)).filter(
+    const conversation = (await this.loadTemporaryConversation(temporaryChatId)).filter(
       (message) => message.role === 'user' || message.role === 'assistant'
     )
     if (conversation.length === 0) {
@@ -7069,6 +7120,101 @@ export class ChatEngine {
     return stampHarnessId(messages, temporary.driverId)
   }
 
+  /**
+   * Commit the presentation-safe view of a temporary-chat user message — the
+   * in-memory analog of the thread mirror's `persistOutboundMessage`. Must run
+   * before the prompt leaves the process so the harness echo under the same ID
+   * can never become the display source of truth.
+   */
+  private recordTemporaryDisplayMessage(
+    temporaryChatId: string,
+    sessionId: string,
+    messageId: string,
+    displayText: string,
+    attachments: Array<{ mime: string; url: string; filename?: string }>,
+    references: PromptReference[]
+  ): void {
+    const fileParts = attachments.map((attachment, index): AgentPart => ({
+      type: 'file',
+      id: `${messageId}-file-${index}`,
+      messageID: messageId,
+      mime: attachment.mime,
+      url: attachment.url,
+      filename: attachment.filename
+    }))
+    const message: AgentMessage = {
+      id: messageId,
+      role: 'user',
+      origin: 'user',
+      visibility: 'conversation',
+      parts: [
+        {
+          type: 'text',
+          id: `${messageId}-text`,
+          messageID: messageId,
+          text: displayText
+        },
+        ...fileParts
+      ],
+      references: references.length > 0 ? references : undefined,
+      createdAt: Date.now(),
+      completedAt: Date.now()
+    }
+    const records = this.temporaryChatDisplayMessages.get(temporaryChatId)?.records ?? []
+    this.temporaryChatDisplayMessages.set(temporaryChatId, {
+      records: [
+        ...records.filter((existing) => existing.message.id !== messageId),
+        { message, references }
+      ]
+    })
+    const outboundIds = this.outboundMessageIdsBySession.get(sessionId) ?? new Set<string>()
+    outboundIds.add(messageId)
+    this.outboundMessageIdsBySession.set(sessionId, outboundIds)
+  }
+
+  /**
+   * Presentation-safe temporary-conversation mirror: the harness transcript
+   * overlaid with the display records committed at send/steer time. An echoed
+   * harness user message under a recorded ID keeps that ID but demotes its raw
+   * parts to `transportParts` — exactly the display/transport split
+   * `persistOutboundMessage` gives threads. Records not yet echoed (turn still
+   * streaming) appear from the overlay so a mid-turn reload shows them.
+   */
+  async loadTemporaryConversation(temporaryChatId: string): Promise<AgentMessage[]> {
+    const messages = await this.loadTemporaryChatMessages(temporaryChatId)
+    const history = this.temporaryChatDisplayMessages.get(temporaryChatId)
+    if (!history || history.records.length === 0) return messages
+    const recordsById = new Map(history.records.map((entry) => [entry.message.id, entry]))
+    const overlaid: AgentMessage[] = []
+    for (const message of messages) {
+      const record = recordsById.get(message.id)
+      if (!record) {
+        overlaid.push(message)
+        continue
+      }
+      // The echo keeps its ID but loses its raw payload — the display record
+      // becomes the visible parts, the raw harness parts demote to transport.
+      overlaid.push({
+        ...message,
+        origin: 'user',
+        visibility: 'conversation',
+        parts: record.message.parts,
+        transportParts: message.parts,
+        transportOrigin: 'orchestrator',
+        references: record.references.length > 0 ? record.references : undefined
+      })
+    }
+    // Records the transcript has not echoed yet (turn still streaming, or the
+    // driver does not mirror user turns) still render: append them in recorded
+    // order so a mid-turn reload keeps the conversation coherent.
+    const echoedIds = new Set(messages.map((message) => message.id))
+    for (const record of history.records) {
+      if (echoedIds.has(record.message.id)) continue
+      overlaid.push(record.message)
+    }
+    return overlaid.sort((left, right) => left.createdAt - right.createdAt)
+  }
+
   getTemporaryChatStatus(temporaryChatId: string): {
     active: boolean
     expiresAt?: number
@@ -7111,6 +7257,8 @@ export class ChatEngine {
     const temporary = this.temporaryChats.get(temporaryChatId)
     if (!temporary) return false
     this.temporaryChats.delete(temporaryChatId)
+    this.temporaryChatDisplayMessages.delete(temporaryChatId)
+    this.outboundMessageIdsBySession.delete(temporary.sessionId)
     clearTimeout(temporary.expiryTimer)
     const completion = this.completionWaiters.get(temporary.sessionId)
     if (completion) {
@@ -16618,6 +16766,35 @@ export class ChatEngine {
   attachRetryScheduler(scheduler: RetrySchedulerService): void {
     this.retryScheduler = scheduler
     scheduler.attachContinue((record) => this.continueScheduledThread(record))
+  }
+
+  /** Wire the heartbeat scheduler's timed pings back through this engine's drivers. */
+  attachHeartbeatScheduler(scheduler: HeartbeatSchedulerService): void {
+    scheduler.attachPing((config) => this.sendHeartbeatPing(config))
+  }
+
+  /**
+   * Send one disposable "ping" completion for a configured Heartbeat, pinned
+   * to its exact harness/provider/model — no visible thread, no cheap-model
+   * substitution. Runs in the same inbox scratch directory as standalone chats.
+   */
+  private async sendHeartbeatPing(config: HeartbeatConfig): Promise<boolean> {
+    const driver = this.drivers.get(config.harnessId)
+    if (!driver) {
+      throw new Error(`Harness driver "${config.harnessId}" is not available`)
+    }
+    const projectPath = await this.resolveProjectPath(INBOX_PROJECT_ID)
+    await driver.ensureReady(projectPath)
+    return driver.sendHeartbeatPing(projectPath, {
+      settings: {
+        harnessId: config.harnessId,
+        providerId: config.providerId,
+        modelId: config.modelId,
+        thinkingLevel: config.thinkingLevel ?? 'minimal',
+        permissionLevel: 'auto_review',
+        engineeringMode: false
+      }
+    })
   }
 
   /** Repair stale working rows for scheduler-restored retries so UI shows Waiting to retry immediately on launch. */

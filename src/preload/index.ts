@@ -562,7 +562,12 @@ const INVOKE_CHANNELS = [
   'remotePush:unsubscribe',
   'app:confirmClose',
   'app:waitForFeatures',
-  'app:rendererReady'
+  'app:rendererReady',
+  'heartbeat:list',
+  'heartbeat:create',
+  'heartbeat:update',
+  'heartbeat:delete',
+  'heartbeat:toggle'
 ] as const satisfies readonly InvokeChannel[]
 
 type MissingInvokeChannel = Exclude<InvokeChannel, (typeof INVOKE_CHANNELS)[number]>

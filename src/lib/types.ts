@@ -1088,6 +1088,29 @@ export interface ThreadSettings {
   imageDescriptor?: AgentModelSelection
 }
 
+/** Result of the most recent heartbeat ping attempt. */
+export interface HeartbeatLastRun {
+  /** Epoch ms when the ping was sent. */
+  at: number
+  success: boolean
+  error?: string
+}
+
+/**
+ * A scheduled "keep the usage window warm" ping. At each configured time of
+ * day, an ephemeral thread sends `Simply respond pong` to the selected model
+ * and discards the reply — the same disposable-session mechanism title
+ * generation uses, just to touch the provider's usage window early.
+ */
+export interface HeartbeatConfig extends AgentModelSelection {
+  id: string
+  name: string
+  /** Times of day in 24h `HH:mm` local-time form, e.g. `["04:00", "13:30", "22:00"]`. */
+  times: string[]
+  enabled: boolean
+  lastRun?: HeartbeatLastRun
+}
+
 /** A model exposed by a harness provider. */
 export interface ProviderModel {
   id: string

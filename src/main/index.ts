@@ -43,6 +43,7 @@ import type { ComputerUsePipService } from './utilities/computer-use-pip-service
 import type { UpdaterService } from './notifications/updater-service'
 import type { PowerWakeService } from './system/power-wake-service'
 import type { RetrySchedulerService } from './system/retry-scheduler-service'
+import type { HeartbeatSchedulerService } from './system/heartbeat-scheduler-service'
 import { ModelPricingService } from './providers/model-pricing-service'
 import { ThreadCreationCoordinator } from './chat/thread-creation-coordinator'
 import { ThreadDeletionCoordinator } from './chat/thread-deletion-coordinator'
@@ -377,6 +378,7 @@ let notificationService: NotificationService | null = null
 let updaterService: UpdaterService | null = null
 let powerWakeService: PowerWakeService | null = null
 let retryScheduler: RetrySchedulerService | null = null
+let heartbeatScheduler: HeartbeatSchedulerService | null = null
 let remoteCredentials: DeviceCredentialService | null = null
 let remoteMode: RemoteModeController | null = null
 let stopRemoteOwnershipListener: (() => void) | null = null
@@ -535,6 +537,7 @@ async function bootPostPaintServices(): Promise<void> {
     { UpdaterService },
     { PowerWakeService },
     { RetrySchedulerService },
+    { HeartbeatSchedulerService },
     { SpeechService },
     { registerSpeechIpc },
     { PrototypePreviewService }
@@ -551,6 +554,7 @@ async function bootPostPaintServices(): Promise<void> {
     import('./notifications/updater-service'),
     import('./system/power-wake-service'),
     import('./system/retry-scheduler-service'),
+    import('./system/heartbeat-scheduler-service'),
     import('./speech/speech-service'),
     import('./ipc/speech-ipc'),
     import('./prototypes/prototype-preview-service')
@@ -594,6 +598,8 @@ async function bootPostPaintServices(): Promise<void> {
   updaterService = new UpdaterService(storage)
   powerWakeService = new PowerWakeService(storage, database)
   retryScheduler = new RetrySchedulerService(storage)
+  heartbeatScheduler = new HeartbeatSchedulerService(storage)
+  chatEngine.attachHeartbeatScheduler(heartbeatScheduler)
   speechService = new SpeechService(
     {
       catalogPath: app.isPackaged
@@ -694,6 +700,7 @@ async function bootPostPaintServices(): Promise<void> {
     projectFilesService,
     powerWakeService,
     retryScheduler,
+    heartbeatScheduler,
     harnessManifestService,
     worktreeService: scopeWorktreeService,
     threadCreation,
@@ -890,6 +897,12 @@ async function bootPostPaintServices(): Promise<void> {
       await chatEngine?.repairPendingRetryThreadStatuses()
     } catch (error) {
       Logger.error('Retry scheduler startup failed (non-fatal):', error)
+    }
+
+    try {
+      await heartbeatScheduler?.start()
+    } catch (error) {
+      Logger.error('Heartbeat scheduler startup failed (non-fatal):', error)
     }
 
     try {
@@ -1369,6 +1382,10 @@ void app
           close: () => retryScheduler?.dispose()
         },
         {
+          name: 'heartbeatScheduler',
+          close: () => heartbeatScheduler?.dispose()
+        },
+        {
           name: 'speechService',
           close: () => void speechService?.dispose()
         }
@@ -1439,6 +1456,12 @@ async function runShutdownPipeline(): Promise<void> {
     retryScheduler?.dispose()
   } catch (error) {
     Logger.error('Retry scheduler cleanup failed during shutdown:', error)
+  }
+
+  try {
+    heartbeatScheduler?.dispose()
+  } catch (error) {
+    Logger.error('Heartbeat scheduler cleanup failed during shutdown:', error)
   }
 
   try {

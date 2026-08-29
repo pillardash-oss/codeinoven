@@ -287,6 +287,11 @@ export interface CheapModelResult {
   attempts: CheapModelAttempt[]
 }
 
+/** Input for one disposable heartbeat "ping" completion, pinned to the exact selected model. */
+export interface SendHeartbeatPingOptions {
+  settings: ThreadSettings
+}
+
 /** Provider-neutral input appended to an already active harness turn. */
 export interface SteerPromptOptions {
   sessionId: string
@@ -342,6 +347,14 @@ export interface HarnessDriver {
    * point every cheap-model scenario must go through.
    */
   provideCheapModel(projectPath: string, request: CheapModelRequest): Promise<CheapModelResult>
+
+  /**
+   * Send a single disposable "ping" completion pinned to the exact model in
+   * `options.settings` (no cheap-candidate substitution) so a configured
+   * Heartbeat keeps that specific provider's usage window warm. Resolves
+   * true when any reply was received.
+   */
+  sendHeartbeatPing(projectPath: string, options: SendHeartbeatPingOptions): Promise<boolean>
 
   /**
    * Best-effort release of a project's in-memory harness resources without

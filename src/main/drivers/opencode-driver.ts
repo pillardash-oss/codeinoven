@@ -35,6 +35,7 @@ import type {
   HarnessDriver,
   HarnessToolDefinition,
   PreparedUtilityRuntime,
+  SendHeartbeatPingOptions,
   SendPromptOptions,
   SteerPromptOptions,
   UtilityRuntimeOverlay,
@@ -53,7 +54,11 @@ import {
   isWordDocumentAttachment,
   readWordDocumentText
 } from './document-attachment'
-import { buildTitlePrompt, sanitizeGeneratedTitle } from '../chat/title-generator'
+import {
+  buildTitlePrompt,
+  HEARTBEAT_PROMPT,
+  sanitizeGeneratedTitle
+} from '../chat/title-generator'
 import { buildTurnGradePrompt, parseTurnGrade } from '../chat/turn-grader-prompt'
 import { leanAgentConfigMap } from '../opencode/opencode-agent-definitions'
 import { prepareHarnessInvocation, runHarnessCommand } from './harness-runtime'
@@ -1465,6 +1470,21 @@ export class OpenCodeDriver implements HarnessDriver {
       candidates,
       buildTitlePrompt(options.message.slice(0, 2_000))
     )
+  }
+
+  /** Ping the exact configured model — no cheap-candidate substitution. */
+  async sendHeartbeatPing(
+    projectPath: string,
+    options: SendHeartbeatPingOptions
+  ): Promise<boolean> {
+    const reply = await this.isolatedOneShot(
+      projectPath,
+      options.settings,
+      'Heartbeat',
+      [],
+      HEARTBEAT_PROMPT
+    )
+    return reply !== null
   }
 
   /**

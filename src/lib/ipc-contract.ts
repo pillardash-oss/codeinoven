@@ -48,6 +48,7 @@ import type {
   EngineeringLifecycleState,
   EngineeringLifecycleTransitionResult,
   ScopedHarnessCommand,
+  HeartbeatConfig,
   HistoryEntry,
   HistoryRole,
   ImageDescriptorErrorRequest,
@@ -956,9 +957,10 @@ export interface IpcInvokeContract {
       settings: ThreadSettings,
       text: string,
       attachments: PromptAttachment[],
-      selections: string[],
+      references: PromptReference[],
       initialContext: string | undefined,
-      userMessageId: string | undefined
+      userMessageId: string | undefined,
+      displayText: string | undefined
     ],
     AgentMessage
   >
@@ -970,8 +972,9 @@ export interface IpcInvokeContract {
       settings: ThreadSettings,
       text: string,
       attachments: PromptAttachment[],
-      selections: string[],
-      userMessageId: string | undefined
+      references: PromptReference[],
+      userMessageId: string | undefined,
+      displayText: string | undefined
     ],
     void
   >
@@ -1913,6 +1916,17 @@ export interface IpcInvokeContract {
     [input: BaseUrlProviderFetchModelsRequest],
     DiscoveredBaseUrlModel[]
   >
+  'heartbeat:list': Contract<[], HeartbeatConfig[]>
+  'heartbeat:create': Contract<
+    [input: Omit<HeartbeatConfig, 'id' | 'lastRun'>],
+    HeartbeatConfig
+  >
+  'heartbeat:update': Contract<
+    [id: string, patch: Partial<Omit<HeartbeatConfig, 'id'>>],
+    HeartbeatConfig
+  >
+  'heartbeat:delete': Contract<[id: string], boolean>
+  'heartbeat:toggle': Contract<[id: string, enabled: boolean], HeartbeatConfig>
   'gateway:list': Contract<[], import('./gateway-types').GatewayStatus[]>
   'gateway:setEnabled': Contract<
     [pluginId: string, enabled: boolean],
