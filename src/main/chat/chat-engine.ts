@@ -156,6 +156,7 @@ import type {
   BrainstormEntryChoice,
   PrdContent,
   PrdDocument,
+  CustomProviderUsage,
   PendingAgentQuestionRequest,
   EngineeringSpec,
   EngineeringSpecContent,
@@ -206,6 +207,7 @@ import { registerCioPromptDefault, type CioPromptId } from '../../lib/cio-prompt
 import { estimateTokenCostUsd } from '../providers/pricing'
 import { ModelPricingService } from '../providers/model-pricing-service'
 import { OpenUsageClient } from '../usage/openusage-client'
+import { CustomProviderUsageClient } from '../providers/custom-provider-usage-client'
 import {
   budgetTurnLayers,
   composeBudgetedSend,
@@ -1436,6 +1438,7 @@ export class ChatEngine {
   private static readonly CATALOG_DRIVER_BUDGET_MS = 800
   private drivers = new Map<string, HarnessDriver>()
   private readonly openUsage = new OpenUsageClient()
+  private readonly customProviderUsage = new CustomProviderUsageClient()
   private sessionRegistry = new Map<string, SessionInfo>()
   private childSessionOwners = new Map<string, ChildSessionInfo>()
   private childCaptureTasks = new Map<string, Promise<AgentMessage[]>>()
@@ -3082,17 +3085,27 @@ export class ChatEngine {
             !nativeTelemetry || nativeTelemetry.rateLimits.length === 0
               ? await this.openUsage.readHarnessUsage(harnessId)
               : null
+          // A custom provider with a user-defined usage route answers the
+          // quota question directly when the harness itself reports nothing.
+          const customUsage =
+            nativeTelemetry?.rateLimits.length || openUsage?.rateLimits.length
+              ? null
+              : await this.readCustomProviderUsage(harnessId, thread.settings?.providerId)
           const telemetry =
-            nativeTelemetry || openUsage
+            nativeTelemetry || openUsage || customUsage
               ? {
                   rateLimits: nativeTelemetry?.rateLimits.length
                     ? nativeTelemetry.rateLimits
-                    : (openUsage?.rateLimits ?? []),
+                    : openUsage?.rateLimits.length
+                      ? openUsage.rateLimits
+                      : (customUsage?.rateLimits ?? []),
                   ...(nativeTelemetry?.credits
                     ? { credits: nativeTelemetry.credits }
                     : openUsage?.credits
                       ? { credits: openUsage.credits }
-                      : {}),
+                      : customUsage?.credits
+                        ? { credits: customUsage.credits }
+                        : {}),
                   ...(nativeTelemetry?.contextWindow === undefined
                     ? {}
                     : { contextWindow: nativeTelemetry.contextWindow }),
@@ -3118,6 +3131,36 @@ export class ChatEngine {
       })
     )
     return results.filter((entry): entry is AgentAccountUsage => entry !== null)
+  }
+
+  /**
+   * Read the thread's active custom provider's user-defined usage route, when
+   * it declares one. Best-effort: a missing provider, no route, or a route
+   * that parses to nothing returns null and the usage UI simply shows no bars.
+   */
+  private async readCustomProviderUsage(
+    harnessId: string,
+    providerId: string | undefined
+  ): Promise<CustomProviderUsage | null> {
+    if (!providerId) return null
+    try {
+      const provider = await this.baseUrlProviders.getProvider(harnessId, providerId)
+      if (!provider?.usagePath) return null
+      const apiKey = provider.apiKeyRef
+        ? await this.secretVault.resolve(provider.apiKeyRef)
+        : undefined
+      return await this.customProviderUsage.read(
+        provider.id,
+        provider.harnessId,
+        provider.baseURL,
+        provider.usagePath,
+        apiKey,
+        provider.headers
+      )
+    } catch (error) {
+      Logger.dev('Custom provider usage read failed:', error)
+      return null
+    }
   }
 
   /**

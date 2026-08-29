@@ -911,7 +911,7 @@
       category: 'command',
       source: applicationActionSource,
       keywords: ['summarize', 'context', 'tokens'],
-      ...(!['opencode', 'codex'].includes(settings.harnessId)
+      ...(!['opencode', 'codex', 'pi'].includes(settings.harnessId)
         ? { disabledReason: `${providerName} does not support manual compaction` }
         : busy
           ? { disabledReason: 'Wait for the active run to finish' }

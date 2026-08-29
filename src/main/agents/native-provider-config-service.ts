@@ -107,6 +107,7 @@ export class NativeProviderConfigService {
       ...existingOptions,
       baseURL: provider.baseURL,
       ...(provider.headers ? { headers: provider.headers } : {}),
+      ...(provider.usagePath ? { usagePath: provider.usagePath } : {}),
       ...(apiKey ? { apiKey } : {})
     }
     if (removeApiKey) delete options['apiKey']
@@ -184,6 +185,7 @@ export class NativeProviderConfigService {
             : 'openai-completions',
       apiKey: removeApiKey ? 'none' : (apiKey ?? existing['apiKey'] ?? 'none'),
       ...(provider.headers ? { headers: provider.headers } : {}),
+      ...(provider.usagePath ? { usagePath: provider.usagePath } : {}),
       models: provider.models.map(serializePiModel)
     }
     await updateJsonc(PI_MODELS_PATH, ['providers', provider.id], entry)
@@ -203,6 +205,7 @@ function nativeProvider(
   const headers = stringRecord(record(source['headers']))
   const apiKey = stringValue(source['apiKey'])
   const apiKeyConfigured = apiKey !== undefined && apiKey.trim() !== '' && apiKey !== 'none'
+  const usagePath = stringValue(source['usagePath'])
   return {
     id,
     harnessId,
@@ -211,6 +214,7 @@ function nativeProvider(
     baseURL,
     apiKeyConfigured,
     ...(headers ? { headers } : {}),
+    ...(usagePath ? { usagePath } : {}),
     models,
     enabled,
     createdAt: 0,

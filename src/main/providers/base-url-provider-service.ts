@@ -35,6 +35,7 @@ interface NormalizedBaseUrlProvider {
   apiKeyEnvVar?: string
   headers?: Record<string, string>
   models: BaseUrlProviderModel[]
+  usagePath?: string
   enabled: boolean
 }
 
@@ -165,6 +166,10 @@ export class BaseUrlProviderService {
         baseURL: patch.baseURL ?? current.baseURL,
         headers: patch.headers === undefined ? current.headers : patch.headers,
         models: patch.models ?? current.models,
+        // An explicit empty string clears the route; undefined keeps it.
+        ...(patch.usagePath === undefined
+          ? { usagePath: current.usagePath ?? '' }
+          : { usagePath: patch.usagePath }),
         enabled: patch.enabled ?? current.enabled
       }
 
@@ -300,8 +305,44 @@ function normalizeCreateInput(
   const baseURL = boundedString(input.baseURL, 'Base URL provider base URL', 1, 2_048)
   const headers = normalizeHeaders(input.headers)
   const models = normalizeModels(input.models, id)
+  const usagePath = normalizeUsagePath(input.usagePath)
   const enabled = typeof input.enabled === 'boolean' ? input.enabled : true
-  return { harnessId, npm, name, baseURL, headers, models, enabled }
+  return {
+    harnessId,
+    npm,
+    name,
+    baseURL,
+    headers,
+    models,
+    ...(usagePath ? { usagePath } : {}),
+    enabled
+  }
+}
+
+/**
+ * Validate the optional account status/usage route. Accepts an absolute
+ * `http(s)` URL or a root-relative path (`/status`, `/usage`, `/v1/usage`);
+ * an empty string clears the route.
+ */
+export function normalizeUsagePath(value: string | undefined): string | undefined {
+  if (value === undefined) return undefined
+  const trimmed = value.trim()
+  if (!trimmed) return undefined
+  if (/^https?:\/\//iu.test(trimmed)) {
+    if (trimmed.length > 2_048) {
+      throw new TypeError('Usage route URL must be at most 2048 characters')
+    }
+    return trimmed
+  }
+  if (!/^\/[a-zA-Z0-9._~:/?#[\]@!$&'()*+,;=%-]*$/u.test(trimmed)) {
+    throw new TypeError(
+      'Usage route must be an absolute http(s) URL or a path starting with / (e.g. /status)'
+    )
+  }
+  if (trimmed.length > 2_048) {
+    throw new TypeError('Usage route must be at most 2048 characters')
+  }
+  return trimmed
 }
 
 function normalizeHeaders(

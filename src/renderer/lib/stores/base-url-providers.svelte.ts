@@ -6,6 +6,7 @@ import type {
   BaseUrlProviderFetchModelsRequest,
   BaseUrlProviderModel,
   BaseUrlProviderUpdateRequest,
+  CustomProviderUsage,
   DiscoveredBaseUrlModel,
   ThinkingLevel
 } from '$shared/types'
@@ -101,6 +102,12 @@ class BaseUrlProviderStore {
    *  Pass `force: true` (the picker's refresh button) to bypass the cache. */
   async fetchModels(request: BaseUrlProviderFetchModelsRequest): Promise<DiscoveredBaseUrlModel[]> {
     return invoke('baseUrlProviders:fetchModels', request)
+  }
+
+  /** Read a saved provider's account status/usage route. Null when the
+   *  provider declares no route or the route yields nothing usable. */
+  async fetchUsage(harnessId: string, id: string): Promise<CustomProviderUsage | null> {
+    return invoke('baseUrlProviders:fetchUsage', harnessId, id)
   }
 
   /** The stored custom model backing a harness catalog entry, if any. */

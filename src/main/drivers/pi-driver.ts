@@ -977,11 +977,13 @@ export class PiDriver extends PersistentCliDriver {
     void _settings
     await this.requireSession(projectPath, sessionId)
     const client = this.rpcClients.get(sessionId)
-    if (!client || !this.activeTurns.has(sessionId)) {
-      throw new Error(`No active Pi turn is available to compact for session ${sessionId}`)
+    if (!client) {
+      throw new Error(`No active Pi session is available to compact for ${sessionId}`)
     }
-    // pi emits compaction_start/compaction_end events as it summarizes; awaiting
-    // here keeps the compaction handoff deterministic from the caller's view.
+    // pi's `compact` RPC aborts any active run and then compacts, so it works
+    // both mid-turn and on an idle session. Awaiting here keeps the handoff
+    // deterministic from the caller's view; compaction_start/compaction_end
+    // events stream out as it summarizes.
     await client.compact()
   }
 

@@ -1916,6 +1916,10 @@ export interface IpcInvokeContract {
     [input: BaseUrlProviderFetchModelsRequest],
     DiscoveredBaseUrlModel[]
   >
+  'baseUrlProviders:fetchUsage': Contract<
+    [harnessId: string, id: string],
+    import('./types').CustomProviderUsage | null
+  >
   'heartbeat:list': Contract<[], HeartbeatConfig[]>
   'heartbeat:create': Contract<
     [input: Omit<HeartbeatConfig, 'id' | 'lastRun'>],

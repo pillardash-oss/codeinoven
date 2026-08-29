@@ -15,6 +15,8 @@ import { SecretVault } from '../storage/secret-vault'
 import type { StorageEngine } from '../storage/storage-engine'
 import { serializeProviderClipboard } from '../../lib/provider-clipboard'
 import { discoverBaseUrlModels } from './base-url-model-discovery'
+import { normalizeUsagePath } from './base-url-provider-service'
+import { CustomProviderUsageClient } from './custom-provider-usage-client'
 
 const CREATE_FIELDS = new Set([
   'harnessId',
@@ -24,6 +26,7 @@ const CREATE_FIELDS = new Set([
   'apiKey',
   'headers',
   'models',
+  'usagePath',
   'enabled',
   'id'
 ])
@@ -35,6 +38,7 @@ const UPDATE_FIELDS = new Set([
   'removeApiKey',
   'headers',
   'models',
+  'usagePath',
   'enabled'
 ])
 /** Model IDs routinely include slashes/at-signs (LM Studio: `org/model`, HF: `org/model@precision`, Cloudflare: `@cf/org/model`). */
@@ -52,6 +56,7 @@ export function registerBaseUrlProviderIpc(
   providers = new BaseUrlProviderService(storage),
   vault = new SecretVault(storage)
 ): void {
+  const usageClient = new CustomProviderUsageClient()
   ipcMain.handle('baseUrlProviders:list', () => providers.listProviders())
 
   ipcMain.handle('baseUrlProviders:create', async (_, rawInput: unknown) => {
@@ -68,6 +73,7 @@ export function registerBaseUrlProviderIpc(
         ...(apiKeyRef === undefined ? {} : { apiKeyRef }),
         headers: input.headers,
         models: input.models,
+        ...(input.usagePath === undefined ? {} : { usagePath: input.usagePath }),
         ...(input.enabled === undefined ? {} : { enabled: input.enabled }),
         ...(input.id === undefined ? {} : { id: input.id })
       } satisfies BaseUrlProviderCreateRequest)
@@ -110,6 +116,7 @@ export function registerBaseUrlProviderIpc(
           ...(native && patch.apiKey !== undefined ? { apiKey: patch.apiKey } : {}),
           ...(patch.headers === undefined ? {} : { headers: patch.headers }),
           ...(patch.models === undefined ? {} : { models: patch.models }),
+          ...(patch.usagePath === undefined ? {} : { usagePath: patch.usagePath }),
           ...(patch.enabled === undefined ? {} : { enabled: patch.enabled }),
           ...(patch.removeApiKey === true ? { removeApiKey: true } : {}),
           ...(nextApiKeyRef !== undefined ? { apiKeyRef: nextApiKeyRef } : {})
@@ -152,6 +159,7 @@ export function registerBaseUrlProviderIpc(
         baseURL: input.baseURL,
         apiKey,
         headers: input.headers ?? '',
+        ...(input.usagePath ? { usagePath: input.usagePath } : {}),
         models: input.models,
         enabled: input.enabled
       })
@@ -171,6 +179,25 @@ export function registerBaseUrlProviderIpc(
       force: input.force
     })
   })
+
+  ipcMain.handle(
+    'baseUrlProviders:fetchUsage',
+    async (_, rawHarnessId: unknown, rawId: unknown) => {
+      const harnessId = validateEntityId(rawHarnessId, 'Base URL provider harness ID', 256)
+      const id = validateEntityId(rawId, 'Base URL provider ID', 256)
+      const provider = await providers.getProvider(harnessId, id)
+      if (!provider?.usagePath) return null
+      const apiKey = provider.apiKeyRef ? await vault.resolve(provider.apiKeyRef) : undefined
+      return usageClient.read(
+        provider.id,
+        provider.harnessId,
+        provider.baseURL,
+        provider.usagePath,
+        apiKey,
+        provider.headers
+      )
+    }
+  )
 }
 
 // ─── Request parsing & validation ────────────────────────────────────────────
@@ -183,6 +210,7 @@ interface ParsedCreateRequest {
   apiKey?: string
   headers?: Record<string, string>
   models: Array<Omit<BaseUrlProviderModel, 'id' | 'providerId'> & { id?: string }>
+  usagePath?: string
   enabled?: boolean
   /** Reuses an existing provider id to link this record to sibling harnesses. */
   id?: string
@@ -196,6 +224,7 @@ interface ParsedUpdateRequest {
   removeApiKey?: boolean
   headers?: Record<string, string>
   models?: Array<Omit<BaseUrlProviderModel, 'id' | 'providerId'> & { id?: string }>
+  usagePath?: string
   enabled?: boolean
 }
 
@@ -212,6 +241,7 @@ function parseCreateRequest(value: unknown): ParsedCreateRequest {
       : { apiKey: boundedStr(raw['apiKey'], 'API key', 1, 8_192) }),
     headers: parseHeaders(raw['headers']),
     models: raw['models'] === undefined ? [] : parseModels(raw['models']),
+    ...(raw['usagePath'] === undefined ? {} : { usagePath: parseUsagePath(raw['usagePath']) }),
     ...(raw['enabled'] === undefined ? {} : { enabled: asBoolean(raw['enabled'], 'enabled') }),
     ...(raw['id'] === undefined
       ? {}
@@ -227,6 +257,7 @@ function parseCopyClipboardRequest(value: unknown): {
   baseURL: string
   apiKey?: string
   headers?: string
+  usagePath?: string
   models: Array<{
     id: string
     name: string
@@ -253,6 +284,9 @@ function parseCopyClipboardRequest(value: unknown): {
     ...(raw['headers'] === undefined
       ? {}
       : { headers: preserveStr(raw['headers'], 'Headers', 0, 16_384) }),
+    ...(raw['usagePath'] === undefined
+      ? {}
+      : { usagePath: preserveStr(raw['usagePath'], 'Usage route', 0, 2_048) }),
     models: parseClipboardModels(raw['models']),
     enabled: raw['enabled'] === undefined ? true : asBoolean(raw['enabled'], 'enabled')
   }
@@ -340,8 +374,15 @@ function parseUpdateRequest(value: unknown): ParsedUpdateRequest {
       : { removeApiKey: asBoolean(raw['removeApiKey'], 'removeApiKey') }),
     headers: raw['headers'] === undefined ? undefined : parseHeaders(raw['headers']),
     models: raw['models'] === undefined ? undefined : parseModels(raw['models']),
+    ...(raw['usagePath'] === undefined ? {} : { usagePath: parseUsagePath(raw['usagePath']) }),
     ...(raw['enabled'] === undefined ? {} : { enabled: asBoolean(raw['enabled'], 'enabled') })
   }
+}
+
+/** Validate an optional status/usage route (absolute URL or root-relative path). */
+function parseUsagePath(value: unknown): string {
+  const raw = preserveStr(value, 'Usage route', 0, 2_048)
+  return normalizeUsagePath(raw) ?? ''
 }
 
 function parseHeaders(value: unknown): Record<string, string> | undefined {

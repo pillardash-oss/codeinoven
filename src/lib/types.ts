@@ -852,6 +852,13 @@ export interface BaseUrlProvider {
   headers?: Record<string, string>
   /** Models this provider exposes. */
   models: BaseUrlProviderModel[]
+  /**
+   * Optional account status/usage route, relative to `baseURL` (e.g. `/status`,
+   * `/usage`) or an absolute URL. Providers backed by a subscription often
+   * expose one; when set, CodeInOven polls it for quota windows shown in the
+   * usage UI. Empty means the provider reports no usage.
+   */
+  usagePath?: string
   enabled: boolean
   createdAt: number
   updatedAt: number
@@ -867,6 +874,8 @@ export interface BaseUrlProviderCreateRequest {
   apiKey?: string
   headers?: Record<string, string>
   models: Array<Omit<BaseUrlProviderModel, 'id' | 'providerId'> & { id?: string }>
+  /** Optional account status/usage route relative to `baseURL`, or an absolute URL. */
+  usagePath?: string
   enabled?: boolean
   /**
    * Reuse this id instead of generating one. Lets the renderer link the same
@@ -887,6 +896,8 @@ export interface BaseUrlProviderUpdateRequest {
   removeApiKey?: boolean
   headers?: Record<string, string>
   models?: Array<Omit<BaseUrlProviderModel, 'id' | 'providerId'> & { id?: string }>
+  /** Optional account status/usage route; empty string clears it. */
+  usagePath?: string
   enabled?: boolean
 }
 
@@ -901,6 +912,8 @@ export interface BaseUrlProviderCopyClipboardRequest {
   baseURL: string
   apiKey?: string
   headers?: string
+  /** Account status/usage route carried through copy/paste. */
+  usagePath?: string
   models: Array<{
     id: string
     name: string
@@ -1919,6 +1932,22 @@ export interface AgentAccountUsage {
   contextWindow?: number
   /** Tokens currently occupying the model context, when known. */
   contextUsed?: number
+}
+
+/**
+ * Quota telemetry read from one custom provider's user-defined usage route.
+ * The route is the provider author's contract — CodeInOven accepts the common
+ * OpenAI/`new-api`-style `{ data: [...] }` envelope plus flat quota objects
+ * and maps whatever it can recognize into rate-limit windows.
+ */
+export interface CustomProviderUsage {
+  providerId: string
+  /** Harness the usage route belongs to. */
+  harnessId: string
+  rateLimits: AgentRateLimitWindow[]
+  credits?: AgentUsageCredits
+  /** Raw endpoint the snapshot came from, for diagnostics. */
+  source: string
 }
 
 /** Last-known usage snapshot stored with a thread so the meter restores

@@ -62,6 +62,8 @@
     apiKey: string
     removeApiKey: boolean
     headers: string
+    /** Optional account status/usage route (e.g. /status or /usage). */
+    usagePath: string
     models: ModelDraft[]
     enabled: boolean
   }
@@ -269,6 +271,7 @@
               .map(([key, value]) => `${key}: ${value}`)
               .join('\n')
           : '',
+        usagePath: provider.usagePath ?? '',
         models: provider.models.map((model) => ({
           id: model.id,
           name: model.name,
@@ -310,6 +313,7 @@
       apiKey: '',
       removeApiKey: false,
       headers: '',
+      usagePath: '',
       models: [],
       enabled: true
     }
@@ -420,6 +424,7 @@
           baseURL: draft.baseURL.trim(),
           models,
           enabled: draft.enabled,
+          usagePath: draft.usagePath.trim(),
           ...(headers === undefined ? {} : { headers }),
           ...(draft.removeApiKey ? { removeApiKey: true } : {}),
           ...(draft.apiKey ? { apiKey: draft.apiKey } : {})
@@ -440,6 +445,7 @@
           baseURL: draft.baseURL.trim(),
           models,
           enabled: draft.enabled,
+          ...(draft.usagePath.trim() ? { usagePath: draft.usagePath.trim() } : {}),
           ...(headers === undefined ? {} : { headers }),
           ...(draft.apiKey ? { apiKey: draft.apiKey } : {}),
           ...(groupId ? { id: groupId } : {})
@@ -483,6 +489,7 @@
         baseURL: draft.baseURL,
         ...(draft.apiKey ? { apiKey: draft.apiKey } : {}),
         headers: draft.headers,
+        usagePath: draft.usagePath,
         models: draft.models,
         enabled: draft.enabled
       }
@@ -506,6 +513,7 @@
         apiKey: provider.apiKey,
         removeApiKey: false,
         headers: provider.headers,
+        ...(provider.usagePath ? { usagePath: provider.usagePath } : {}),
         models: provider.models.map(modelToDraft),
         enabled: provider.enabled
       }
@@ -719,6 +727,22 @@
         autocomplete="off"
         spellcheck="false"
         bind:value={draft.headers}></textarea>
+    </label>
+
+    <label class="block space-y-1 text-xs font-medium" for="base-url-provider-usage-path">
+      <span>Status route (optional)</span>
+      <input
+        id="base-url-provider-usage-path"
+        class="h-9 w-full rounded-lg border bg-elevated px-3 font-mono text-sm outline-none focus:border-primary"
+        placeholder="/status or /usage"
+        autocomplete="off"
+        spellcheck="false"
+        bind:value={draft.usagePath}
+      />
+      <span class="block text-[11px] font-normal text-dimmed">
+        Path (relative to the base URL) or full URL that reports this account's usage/limit. Used to
+        show quota bars; leave empty if the provider has none.
+      </span>
     </label>
 
     <div class="space-y-2">

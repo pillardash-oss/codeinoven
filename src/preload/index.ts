@@ -149,6 +149,7 @@ const INVOKE_CHANNELS = [
   'baseUrlProviders:delete',
   'baseUrlProviders:copyProviderToClipboard',
   'baseUrlProviders:fetchModels',
+  'baseUrlProviders:fetchUsage',
   'gateway:list',
   'gateway:setEnabled',
   'gateway:start',
