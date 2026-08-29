@@ -94,6 +94,7 @@
   import type {
     AgentNotificationPayload,
     CloseConfirmationPayload,
+    CloseConfirmationProject,
     ThreadClickedPayload
   } from '$shared/ipc-contract'
   import { agentRuns } from '$lib/stores/agent-runs.svelte'
@@ -1288,6 +1289,34 @@
     await invoke('app:confirmClose')
   }
 
+  /**
+   * While the close-confirmation modal is open, watch the threads it listed as
+   * still working. As each one leaves that state (completed, failed, or
+   * otherwise no longer executing/planning) it drops off the list. Once none
+   * remain — and no unsaved files are pending — the close the user already
+   * asked for proceeds automatically instead of waiting on a second click.
+   */
+  function settleCloseConfirmationThread(thread: Thread): void {
+    const current = closeConfirmation
+    if (!current || isThreadWorking(thread)) return
+
+    const projects: CloseConfirmationProject[] = []
+    for (const project of current.projects) {
+      const threads = project.threads.filter((entry) => entry.threadId !== thread.id)
+      if (threads.length > 0) {
+        projects.push({ ...project, threads, threadCount: threads.length })
+      }
+    }
+    if (projects.length === current.projects.length) return
+
+    if (projects.length === 0 && current.files.length === 0) {
+      closeConfirmation = null
+      void confirmForceClose()
+      return
+    }
+    closeConfirmation = { ...current, projects }
+  }
+
   /** Save every unsaved file, then close the app. Stays open if a save fails. */
   async function confirmForceCloseSaving(): Promise<void> {
     if (await projectFilesWorkspace.saveAllUnsaved()) {
@@ -1327,6 +1356,7 @@
       if (thread.read) {
         notificationPanelState.dismissForThread(thread.projectId, thread.id)
       }
+      settleCloseConfirmationThread(thread)
     })
     const unsubscribeThreadDeleted = subscribe('thread:deleted', (projectId, threadId) => {
       scopeState.removeThread(threadId)
