@@ -261,13 +261,19 @@ function openCodeModel(providerId: string, id: string, value: unknown): BaseUrlP
       ? { maxOutputTokens: positiveInteger(limit?.['output']) }
       : {}),
     reasoning: model['reasoning'] === true || variants !== undefined,
+    // opencode's variant *key* is a free-form label — the level it actually
+    // dispatches with is `thinkingLevel` inside the value (falls back to the
+    // key for older/hand-written configs that don't set it).
     ...(variants
       ? {
-          thinkingPresets: Object.keys(variants).map((variant) => ({
-            id: variant,
-            label: variant.charAt(0).toUpperCase() + variant.slice(1),
-            description: `${variant} reasoning effort`
-          }))
+          thinkingPresets: Object.entries(variants).map(([variant, value]) => {
+            const level = stringValue(record(value)?.['thinkingLevel']) ?? variant
+            return {
+              id: level,
+              label: level.charAt(0).toUpperCase() + level.slice(1),
+              description: `${level} reasoning effort`
+            }
+          })
         }
       : {}),
     // `vision` is left unset (treated as capable) unless opencode explicitly
@@ -316,10 +322,14 @@ function serializeOpenCodeModel(model: BaseUrlProviderModel): Record<string, unk
     name: model.name,
     ...(model.reasoning ? { reasoning: true } : {}),
     ...(Object.keys(limit).length > 0 ? { limit } : {}),
+    // opencode dispatches by passing the thread's thinking level straight
+    // through as the variant key (see opencode-driver's `variant:` field), so
+    // the key must equal the level it selects — the value's `thinkingLevel`
+    // is what opencode itself reads to know which effort to actually request.
     ...(model.thinkingPresets?.length
       ? {
           variants: Object.fromEntries(
-            model.thinkingPresets.map((preset) => [preset.id, { name: preset.label }])
+            model.thinkingPresets.map((preset) => [preset.id, { thinkingLevel: preset.id }])
           )
         }
       : {}),

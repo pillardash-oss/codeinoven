@@ -1298,11 +1298,15 @@ export class OpenCodeDriver implements HarnessDriver {
             ...(model.contextWindow ? { context: model.contextWindow } : {}),
             ...(model.maxOutputTokens ? { output: model.maxOutputTokens } : {})
           }
+          // opencode dispatches by passing the thread's thinking level
+          // straight through as the variant key, so the key must equal the
+          // level it selects — `thinkingLevel` in the value is what opencode
+          // itself reads to know which effort to actually request.
           const variants =
             model.thinkingPresets && model.thinkingPresets.length > 0
-              ? model.thinkingPresets.map((p) => [p.id, { name: p.label }])
+              ? model.thinkingPresets.map((p) => [p.id, { thinkingLevel: p.id }])
               : model.reasoning || model.defaultThinkingLevel
-                ? STANDARD_THINKING_VARIANTS.map((p) => [p.id, { name: p.label }])
+                ? STANDARD_THINKING_VARIANTS.map((p) => [p.id, { thinkingLevel: p.id }])
                 : []
           models[model.id] = {
             name: model.name,
