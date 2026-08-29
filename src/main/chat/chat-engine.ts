@@ -16165,12 +16165,7 @@ export class ChatEngine {
         // exited" failure classifies as unknown. It arrived AFTER the wait was
         // entered, so honoring it here would flip the visible will-retry card
         // into a red error badge milliseconds later.
-        const liveStatus = this.sessionStatuses.get(event.sessionId)
-        if (
-          liveStatus?.state === 'waiting' &&
-          isUsageResetWaitIssue(liveStatus.issue) &&
-          !event.issue
-        ) {
+        if (this.isUsageResetWaitActive(event.sessionId) && !event.issue) {
           Logger.dev(
             'Ignored provider teardown failure trailing an active usage-reset wait:',
             event.error
@@ -17047,6 +17042,17 @@ export class ChatEngine {
   }
 
   /**
+   * True when the session is currently showing a usage/rate-limit reset wait —
+   * the unified will-retry state. Any later terminal-looking signal (trailing
+   * idle finalization, issue-less teardown failure) must defer to it instead of
+   * overwriting the pause with a terminal error.
+   */
+  private isUsageResetWaitActive(sessionId: string): boolean {
+    const status = this.sessionStatuses.get(sessionId)
+    return status?.state === 'waiting' && isUsageResetWaitIssue(status.issue)
+  }
+
+  /**
    * Resume a thread whose usage window reset. Sends an internal "Continue"
    * through the normal sendPrompt pipeline (mirroring the manual Retry action)
    * so the agent picks up from its existing session and context. Skipped when
@@ -17781,8 +17787,19 @@ export class ChatEngine {
       // otherwise claim success, keep it failed so a terminal "done"
       // notification can never shadow the real error.
       const threadBeforeFinalize = await this.threadManager.getThread(info.projectId, info.threadId)
-      const finalStatus =
-        userAborted || contractBlocked
+      // A live usage-reset wait owns this turn's outcome: the harness reported
+      // its limit as the waiting card and the engine already persisted
+      // `working-paused` with a scheduled resume. The idle finalization's own
+      // failure scan (the limit message rides on the last assistant record) is
+      // not a second terminal event — letting it set `failed` would overwrite
+      // the pause, flip the row to an error badge, and fire a misleading
+      // "hit an error" notification while the will-retry card is on screen.
+      // The checkpoint still finalizes (same as the session-error wait path);
+      // only the thread status stays paused.
+      const resetWaitActive = !userAborted && this.isUsageResetWaitActive(sessionId)
+      const finalStatus = resetWaitActive
+        ? 'working-paused'
+        : userAborted || contractBlocked
           ? 'interrupted'
           : failure
             ? 'failed'

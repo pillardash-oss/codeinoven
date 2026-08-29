@@ -102,6 +102,7 @@
   import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
   import { getAgentIcon } from '$lib/agent-icons/registry'
   import { invoke, subscribe } from '$lib/ipc.svelte'
+  import { isUsageResetWaitIssue } from '$shared/provider-issue'
   import { copyText } from '$lib/copy-text'
   import { ENGINEERING_SPEC_REQUEST_PROMPT } from '$shared/agent-tools'
   import { messageId } from '$shared/id'
@@ -3613,6 +3614,21 @@
     errorMessage = ''
   }
 
+  /**
+   * A usage/rate-limit issue is a scheduled will-retry wait, not a failure:
+   * route it to the waiting card (countdown + retry scheduling) so the thread
+   * row keeps its "Waiting to retry" spinner instead of flashing an error
+   * badge while the card itself renders the will-retry treatment.
+   */
+  function setProviderStatusFromIssue(issue: AgentProviderIssue): void {
+    if (isUsageResetWaitIssue(issue)) {
+      providerStatus = { state: 'waiting', issue }
+      errorMessage = ''
+    } else {
+      setProviderError(issue)
+    }
+  }
+
   function handleAgentEvent(event: AgentEvent): void {
     // Controller-driven conversations handle their own live events.
     if (controller) return
@@ -3664,7 +3680,7 @@
       pendingPermissions = []
       pendingQuestionRequests = []
       pendingImageDescriptorError = null
-      setProviderError(event.issue)
+      setProviderStatusFromIssue(event.issue)
       void refreshCheckpoints()
       return
     }
@@ -3704,7 +3720,7 @@
           // a session failure, so never surface the error banner.
           if (!userRequestedStop) {
             if (event.issue) {
-              setProviderError(event.issue)
+              setProviderStatusFromIssue(event.issue)
             } else {
               errorMessage = event.error
             }
@@ -3724,7 +3740,11 @@
           compactionInterruptedNotice =
             'Context compaction was interrupted before your message could be processed. Send it again to continue.'
         }
-        if (providerStatus?.state !== 'error') providerStatus = null
+        // Error and will-retry cards survive idle (the scheduled auto-resume
+        // owns the session now); everything else clears.
+        if (providerStatus?.state !== 'error' && providerStatus?.state !== 'waiting') {
+          providerStatus = null
+        }
         void refreshCheckpoints()
         setTimeout(() => void refreshEfficiencyKpis(), 100)
         scheduleReadySpecReconcile()
@@ -3740,7 +3760,7 @@
         pendingImageDescriptorError = null
         if (!userRequestedStop) {
           if (event.issue) {
-            setProviderError(event.issue)
+            setProviderStatusFromIssue(event.issue)
           } else {
             errorMessage = event.error ?? 'The harness session failed.'
           }
@@ -3787,7 +3807,13 @@
             compactionInterruptedNotice =
               'Context compaction was interrupted before your message could be processed. Send it again to continue.'
           }
-          if (previousProviderStatus?.state !== 'error') providerStatus = null
+          // Error and will-retry cards survive idle; everything else clears.
+          if (
+            previousProviderStatus?.state !== 'error' &&
+            previousProviderStatus?.state !== 'waiting'
+          ) {
+            providerStatus = null
+          }
           scheduleReadySpecReconcile()
           scheduleIdleAttention()
         } else {
