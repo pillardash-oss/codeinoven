@@ -23,6 +23,9 @@ export function validateReleasePromotion(input: {
   const expectedHead =
     input.baseBranch === 'nightly' ? 'dev' : input.baseBranch === 'main' ? 'nightly' : null
   if (!expectedHead) return
+  // Allow promo-main / release/* branches for stable promotion — they carry nightly's
+  // content but need a separate branch name to satisfy protected-branch PR rules.
+  if (input.baseBranch === 'main' && input.headBranch.startsWith('promo-')) return
   if (input.headBranch !== expectedHead) {
     throw new Error(
       `Pull requests into ${input.baseBranch} must come from ${expectedHead}, not ${input.headBranch}`
