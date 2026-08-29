@@ -100,13 +100,38 @@ if [[ "$DEV_SHA" == "$NIGHTLY_BRANCH_SHA" ]]; then
   exit 0
 fi
 
-# --- 4. version gate: dev must equal nightly base (cohesive nightly tagging) -----
+# --- 4. version gate: dev must be next patch after stable (semver-correct nightly) -----
 NIGHTLY_VERSION="$(pkg_version origin/nightly)"
 DEV_VERSION="$(pkg_version dev)"
 
+# Semver-correct: stable 0.5.51 -> nightly 0.5.52-nightly-1 must be > stable.
+# dev must be one patch ahead of nightly (first nightly after stable),
+# or equal for subsequent nightlies on same base.
+# Only auto-bump when dev==nightly AND nightly equals stable (main) — i.e. first nightly after a stable.
 if ! BASE_BRANCH=nightly HEAD_BRANCH=dev BASE_VERSION="$NIGHTLY_VERSION" \
     CURRENT_VERSION="$DEV_VERSION" bun scripts/validate-release-promotion.ts >/dev/null 2>&1; then
-  die "dev ($DEV_VERSION) must equal nightly base ($NIGHTLY_VERSION) for cohesive nightly tagging (nightly tags are v{base}-nightly-{N}). Fix package.json version to $NIGHTLY_VERSION."
+  if [ "$DEV_VERSION" = "$NIGHTLY_VERSION" ]; then
+    MAIN_VERSION="$(pkg_version origin/main 2>/dev/null || echo "$NIGHTLY_VERSION")"
+    if [ "$NIGHTLY_VERSION" = "$MAIN_VERSION" ]; then
+      warn "dev ($DEV_VERSION) equals nightly ($NIGHTLY_VERSION) which equals stable ($MAIN_VERSION) — bumping dev to next patch for semver-correct nightly (stable $MAIN_VERSION -> nightly $MAIN_VERSION+1)..."
+      if [[ "$DRY_RUN" -eq 0 ]]; then
+        git checkout dev
+        bun scripts/bump-version.ts
+        DEV_VERSION="$(pkg_version dev)"
+        git add package.json src/renderer/static/manifest.webmanifest services/remote-control/package.json
+        git commit -m "chore: bump version for nightly promotion"
+        git push origin dev
+        ok "Bumped dev to $DEV_VERSION and pushed."
+      else
+        say "(dry-run) bun scripts/bump-version.ts && git push origin dev"
+        DEV_VERSION="$(node -p "(() => { const v='"$DEV_VERSION"'.split('.').map(Number); let [M,m,p]=v; p+=1; if(p===100){p=0;m+=1} if(m===100){m=0;M+=1} return M+'.'+m+'.'+p })()")"
+      fi
+    else
+      die "dev ($DEV_VERSION) must be one patch ahead of nightly ($NIGHTLY_VERSION) for semver-correct nightly (nightly $NIGHTLY_VERSION is already ahead of stable $MAIN_VERSION)."
+    fi
+  else
+    die "dev ($DEV_VERSION) must be equal or one patch ahead of nightly ($NIGHTLY_VERSION) (e.g. stable $NIGHTLY_VERSION -> 0.5.52-nightly-1, then 0.5.52-nightly-2)."
+  fi
 fi
 
 say ""
