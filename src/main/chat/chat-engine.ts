@@ -318,6 +318,13 @@ function formatAttachedImageDescriptions(results: readonly ImageDescriptorResult
 const PROVIDER_CATALOG_TTL_MS = 60 * 60 * 1000
 /** How long a resolved agent tool catalog stays fresh before re-discovery. */
 const TOOL_CATALOG_TTL_MS = 30 * 1000
+/**
+ * Cooldown used to schedule an automatic retry for a quota/rate-limit wait
+ * when the provider's error carries no parseable reset time (or one already
+ * in the past). Without this, such a wait would show no timer and never
+ * auto-resume — see scheduleAutomaticRetry.
+ */
+const USAGE_RESET_FALLBACK_RETRY_MS = 60 * 60 * 1000
 
 interface PersistedProviderCatalog {
   schemaVersion: 3
@@ -16709,14 +16716,25 @@ export class ChatEngine {
             { read: false }
           )
           broadcastThreadUpdate(updated)
-          Logger.info(
-            'Repaired orphaned working thread to Waiting to retry (no scheduler record)',
-            {
+          // The row previously had no scheduler record at all — give it a real
+          // fallback timer instead of leaving the card "waiting" with nothing
+          // to auto-resume it.
+          if (scheduler && row.session_id) {
+            scheduler.track({
+              sessionId: row.session_id,
               projectId: row.project_id,
               threadId: row.id,
-              kind
-            }
-          )
+              harnessId: thread.sessionHarnessId ?? thread.settings?.harnessId ?? 'unknown',
+              retryAt: Date.now() + USAGE_RESET_FALLBACK_RETRY_MS,
+              issueKind: kind,
+              issueMessage: lastError
+            })
+          }
+          Logger.info('Repaired orphaned working thread to Waiting to retry', {
+            projectId: row.project_id,
+            threadId: row.id,
+            kind
+          })
         } catch (error) {
           Logger.dev('Orphaned working repair skipped:', error)
         }
@@ -16772,8 +16790,17 @@ export class ChatEngine {
         Logger.dev('Auto-resume retry time derivation unavailable:', error)
       }
     }
+    const usageResetWait = isUsageResetWaitIssue(issue)
+    if (retryAt === undefined && usageResetWait) {
+      // A usage-reset wait with no derivable reset time (the provider gave no
+      // parseable date, or gave one already in the past) must still get a
+      // concrete timer — otherwise the card is stuck on "waiting" forever with
+      // no date and no schedule. Retry after a fixed cooldown; if the provider
+      // is still limited, the next failure re-tracks with a fresh cooldown.
+      retryAt = Date.now() + USAGE_RESET_FALLBACK_RETRY_MS
+    }
     const hasRetryAt = typeof retryAt === 'number' && Number.isFinite(retryAt)
-    if (!hasRetryAt && !isUsageResetWaitIssue(issue)) return false
+    if (!hasRetryAt && !usageResetWait) return false
     await this.threadManager.setStatus(info.projectId, info.threadId, 'working-paused', {
       read: false
     })
