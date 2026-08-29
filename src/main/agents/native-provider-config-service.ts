@@ -6,6 +6,7 @@ import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { applyEdits, modify, parse, type ParseError } from 'jsonc-parser'
 import type { BaseUrlProvider, BaseUrlProviderModel } from '../../lib/types'
+import { PI_THINKING_PRESETS } from '../../lib/pi-thinking-presets'
 
 const OPENCODE_CONFIG_PATH = join(homedir(), '.config', 'opencode', 'opencode.json')
 const PI_MODELS_PATH = join(homedir(), '.pi', 'agent', 'models.json')
@@ -248,6 +249,7 @@ function piModel(providerId: string, value: unknown): BaseUrlProviderModel | nul
   const model = record(value)
   const id = stringValue(model?.['id'])
   if (!model || !id) return null
+  const reasoning = model['reasoning'] === true
   return {
     id,
     providerId,
@@ -258,7 +260,10 @@ function piModel(providerId: string, value: unknown): BaseUrlProviderModel | nul
     ...(positiveInteger(model['maxTokens'])
       ? { maxOutputTokens: positiveInteger(model['maxTokens']) }
       : {}),
-    reasoning: model['reasoning'] === true
+    reasoning,
+    // Pi's model config has no per-model variant list (unlike opencode's
+    // `variants`), so a reasoning model always gets Pi's fixed thinking levels.
+    ...(reasoning ? { thinkingPresets: PI_THINKING_PRESETS } : {})
   }
 }
 

@@ -11,9 +11,9 @@ import type {
   PromptAttachment,
   ProviderCatalog,
   ProviderModel,
-  SessionAgentEvent,
-  ThinkingPreset
+  SessionAgentEvent
 } from '../../lib/types'
+import { PI_THINKING_PRESETS } from '../../lib/pi-thinking-presets'
 import { normalizeAgentQuestions } from '../../lib/agent-interactions'
 import { buildProcessEnvironment } from './cli-environment'
 import {
@@ -53,13 +53,7 @@ import {
   runHarnessCommand
 } from './harness-runtime'
 
-const THINKING_PRESETS: ThinkingPreset[] = [
-  { id: 'minimal', label: 'Minimal', description: 'Minimum reasoning effort' },
-  { id: 'low', label: 'Low', description: 'Low reasoning effort' },
-  { id: 'medium', label: 'Medium', description: 'Moderate reasoning effort' },
-  { id: 'high', label: 'High', description: 'High reasoning effort' },
-  { id: 'xhigh', label: 'Extra high', description: 'Extra-high reasoning effort' }
-]
+const THINKING_PRESETS = PI_THINKING_PRESETS
 
 /** Pi thinking levels accepted by `set_thinking_level`. */
 const PI_THINKING_LEVELS: Record<string, string> = {
