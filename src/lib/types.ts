@@ -2529,6 +2529,8 @@ export type AgentEvent =
       credits?: AgentUsageCredits
       /** The completed assistant message summarizes a compaction and is trace-only. */
       compaction?: boolean
+      /** Driver-internal silent-continue marker; stripped before broadcast. */
+      silentContinue?: AgentSilentContinueMarker
     }
   | {
       type: 'usage.updated'
@@ -2652,6 +2654,17 @@ export type SessionAgentEvent = Exclude<
   AgentEvent,
   { type: 'catalog.updated' } | { type: 'providerCatalog.updated' }
 >
+
+/**
+ * Driver-internal marker on a `message.completed` event: the turn hit a
+ * recoverable finish-reason flake and the driver intends to silently continue
+ * instead of surfacing the error. Never broadcast to renderers — drivers strip
+ * it before emitting events to the engine.
+ */
+export interface AgentSilentContinueMarker {
+  /** The original provider error text, kept for diagnostics when retries cap out. */
+  error: string
+}
 
 // ─── Change Tracking ────────────────────────────────────────────────────────
 

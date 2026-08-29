@@ -180,6 +180,19 @@ function piUsageLimitResetAt(message: string, now = Date.now()): number | undefi
   return resetMs
 }
 
+/**
+ * True when a Pi failure is a finish-reason flake the model can recover from by
+ * simply being asked to continue. pi's provider adapter maps any unrecognized
+ * provider `finish_reason` to `stopReason: "error"` with the message
+ * `Provider finish_reason: <reason>` — a transient stream/provider issue, not a
+ * terminal outcome. `content_filter` is the exception: re-prompting past a
+ * moderation stop is wrong, so it stays a real error.
+ */
+export function isContinuableFinishReasonError(error: string): boolean {
+  const match = error.match(/^Provider finish_reason: (.+)$/u)
+  return match !== null && match[1] !== 'content_filter'
+}
+
 /** Map one Pi content block into a CodeInOven AgentPart. */
 function mapPiContentBlock(
   blockValue: unknown,
@@ -275,6 +288,15 @@ interface PiUiRequest {
   client: PiRpcClient
   request: Record<string, unknown>
 }
+
+interface PiSilentContinueState {
+  attempts: number
+  owed: boolean
+  lastError: string
+}
+
+/** Silent continues per turn before the failure is surfaced as a real error. */
+const SILENT_CONTINUE_MAX_ATTEMPTS = 3
 
 /** Map one documented Pi JSON print-mode record into CodeInOven's stable shapes. */
 export function mapPiRecord(
@@ -449,14 +471,21 @@ export function mapPiRecord(
     }
     const usage = mapPiUsage(message['usage'])
     const cost = mapPiCost(message['usage'])
-    const failed = message['stopReason'] === 'error' || message['stopReason'] === 'aborted'
+    const rawError = errorText(message)
+    const continuable =
+      message['stopReason'] === 'error' && isContinuableFinishReasonError(rawError)
+    const failed =
+      (message['stopReason'] === 'error' && !continuable) ||
+      message['stopReason'] === 'aborted'
     const completed: SessionAgentEvent = {
       type: 'message.completed',
       sessionId: context.sessionId,
       messageId,
       ...(usage ? { tokens: usage } : {}),
       ...(cost !== undefined ? { cost } : {}),
-      ...(failed ? { error: errorText(message) } : {})
+      // A continuable finish-reason flake is neutralized here; the driver
+      // reads the marker back when deciding whether to silently re-prompt.
+      ...(continuable ? { silentContinue: { error: rawError } } : failed ? { error: rawError } : {})
     }
     events.push(completed)
     return { events }
@@ -611,7 +640,12 @@ function buildAssistantMessage(
   })
   const usage = mapPiUsage(message['usage'])
   const cost = mapPiCost(message['usage'])
-  const failed = message['stopReason'] === 'error' || message['stopReason'] === 'aborted'
+  const rawError = errorText(message)
+  const continuableError =
+    message['stopReason'] === 'error' && isContinuableFinishReasonError(rawError) ? rawError : null
+  const failed =
+    (message['stopReason'] === 'error' && continuableError === null) ||
+    message['stopReason'] === 'aborted'
   const completed: AgentMessage = {
     id: messageId,
     role: 'assistant',
@@ -622,7 +656,9 @@ function buildAssistantMessage(
     providerId: stringValue(message['provider']),
     ...(usage ? { tokens: usage } : {}),
     ...(cost !== undefined ? { cost } : {}),
-    ...(failed ? { error: errorText(message) } : {})
+    // A continuable finish-reason flake must not mark the mirrored message as
+    // failed: the driver silently re-prompts and the turn keeps going.
+    ...(failed ? { error: rawError } : {})
   }
   return { events, messages: [completed] }
 }
@@ -678,6 +714,14 @@ export class PiDriver extends PersistentCliDriver {
   private sessionProjects = new Map<string, string>()
   private activeTurns = new Set<string>()
   private pendingUiRequests = new Map<string, PiUiRequest>()
+  /**
+   * Bounded silent-continue bookkeeping per session. When a turn settles with a
+   * finish-reason flake (`Provider finish_reason: other` and friends), the
+   * driver silently re-prompts the model instead of surfacing the error. The
+   * mirror is claimed only while a continuation is actually owed, so every
+   * other path keeps its plain `message.completed`/finalization behavior.
+   */
+  private silentContinues = new Map<string, PiSilentContinueState>()
   private nativeMcpConfigSupport: Promise<boolean> | null = null
   /** WSL-aware read view of Pi's own credential store (`~/.pi/agent/auth.json`). */
   private readonly authConfig = new PiAuthConfigService(undefined, piAuthFileIo)
@@ -903,6 +947,7 @@ export class PiDriver extends PersistentCliDriver {
     }
     const client = await this.ensureRpcClient(projectPath, session.id)
     const commandText = (args.trim() ? `${command.name} ${args}` : command.name).trim()
+    this.silentContinues.delete(session.id)
     this.activeTurns.add(session.id)
     try {
       await client.prompt(commandText)
@@ -952,6 +997,7 @@ export class PiDriver extends PersistentCliDriver {
       options.settings.thinkingLevel
     )
     this.appendUserMessage(session, options)
+    this.silentContinues.delete(session.id)
     this.activeTurns.add(session.id)
 
     const inlineSvg = await inlineSvgAttachments(options.attachments)
@@ -1041,6 +1087,7 @@ export class PiDriver extends PersistentCliDriver {
     this.disposeRpcClient(sessionId)
     this.activeTurns.delete(sessionId)
     this.turnStates.delete(sessionId)
+    this.silentContinues.delete(sessionId)
     await super.deleteSession(projectPath, sessionId)
   }
 
@@ -1182,6 +1229,7 @@ export class PiDriver extends PersistentCliDriver {
     this.rpcClients.clear()
     this.activeTurns.clear()
     this.turnStates.clear()
+    this.silentContinues.clear()
     this.pendingUiRequests.clear()
     super.dispose()
   }
@@ -1270,6 +1318,38 @@ export class PiDriver extends PersistentCliDriver {
         if (result.nativeSessionId) session.nativeSessionId = result.nativeSessionId
         if (result.messages) this.mergeMessages(session, result.messages)
         for (const event of this.normalizeInteractionEvents(session.id, result.events ?? [])) {
+          // A continuable finish-reason flake is claimed by the driver: strip
+          // the marker and never let the errored completion reach the engine,
+          // or the chat would show a failure the silent continue is about to
+          // recover from. The empty assistant message is dropped from the
+          // mirror so the user never sees a blank failed turn.
+          if (event.type === 'message.completed' && event.silentContinue) {
+            const state = this.silentContinues.get(session.id) ?? {
+              attempts: 0,
+              owed: false,
+              lastError: ''
+            }
+            state.lastError = event.silentContinue.error
+            const { silentContinue, ...clean } = event
+            void silentContinue
+            if (state.attempts < SILENT_CONTINUE_MAX_ATTEMPTS) {
+              state.owed = true
+              state.attempts += 1
+              this.silentContinues.set(session.id, state)
+              // Mark the flaked message complete (without the error) so the
+              // mirror stays consistent; content-bearing messages are kept.
+              this.applyEventToSession(session, clean)
+              this.dropMirroredEmptyAssistant(session)
+              continue
+            }
+            // Cap reached: surface the original error through the normal path.
+            state.owed = false
+            this.silentContinues.set(session.id, state)
+            const failure: SessionAgentEvent = { ...clean, error: state.lastError }
+            this.applyEventToSession(session, failure)
+            this.emit(failure)
+            continue
+          }
           this.applyEventToSession(session, event)
           this.emit({ ...event, sessionId: session.id })
         }
@@ -1279,6 +1359,7 @@ export class PiDriver extends PersistentCliDriver {
         // `agent_settled` is a stable signal that no retry or queued
         // continuation remains, so never finalize a turn on `agent_end`.
         if (record['type'] === 'agent_settled') {
+          if (this.beginSilentContinue(session)) return
           this.activeTurns.delete(session.id)
           void this.refreshSessionUsage(session).finally(() => {
             void this.finishTurn(session)
@@ -1288,6 +1369,56 @@ export class PiDriver extends PersistentCliDriver {
       .catch((error) => {
         Logger.dev('Pi event handler dropped', error)
       })
+  }
+
+  /**
+   * Drop the trailing assistant message the mirror captured for a flaked turn
+   * when it produced no user-visible content, so the silent continue does not
+   * leave a blank stub behind.
+   */
+  private dropMirroredEmptyAssistant(session: PersistentCliSession): void {
+    const last = [...session.messages].reverse().find((message) => message.role === 'assistant')
+    if (!last || last.error) return
+    const hasContent = last.parts.some((part) => {
+      if (part.type === 'text' || part.type === 'reasoning') return part.text.trim().length > 0
+      return part.type === 'tool'
+    })
+    if (hasContent) return
+    const index = session.messages.indexOf(last)
+    if (index !== -1) session.messages.splice(index, 1)
+  }
+
+  /**
+   * Claim a owed silent continue when the turn settles. Returns true when a
+   * continuation was started (the turn stays active); false when there is
+   * nothing owed and the turn should finalize normally.
+   */
+  private beginSilentContinue(session: PersistentCliSession): boolean {
+    const state = this.silentContinues.get(session.id)
+    if (!state?.owed) return false
+    state.owed = false
+    this.dropMirroredEmptyAssistant(session)
+    const client = this.rpcClients.get(session.id)
+    if (!client) {
+      this.failSilentContinue(session, state.lastError)
+      return true
+    }
+    void client.prompt('Continue.').catch((error: unknown) => {
+      this.failSilentContinue(session, error instanceof Error ? error.message : state.lastError)
+    })
+    return true
+  }
+
+  /** Surface a silent continue that could not be started as a real error. */
+  private failSilentContinue(session: PersistentCliSession, error: string): void {
+    this.silentContinues.delete(session.id)
+    this.activeTurns.delete(session.id)
+    this.emit({
+      type: 'session.error',
+      sessionId: session.id,
+      error: error || 'Pi turn failed'
+    })
+    void this.finishTurn(session)
   }
 
   private handleRpcExit(code: number | null, sessionId: string): void {
