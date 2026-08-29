@@ -6589,6 +6589,15 @@ export class ChatEngine {
       } else {
         await driver.sendPrompt(temporary.projectPath, request)
       }
+      // Snapshot the selection this turn was dispatched with. Temporary
+      // sessions are reused across turns, so this must happen on every send —
+      // completion-time attribution then reads what the turn ran with, never
+      // the composer's mid-turn changes.
+      this.sessionModelIds.set(temporary.sessionId, {
+        providerId: settings.providerId,
+        modelId: settings.modelId,
+        thinkingLevel: settings.thinkingLevel ?? undefined
+      })
       temporary.contextApplied = true
       await completion
       const messages =
