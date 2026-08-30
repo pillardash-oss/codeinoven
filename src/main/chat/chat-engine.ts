@@ -17023,7 +17023,41 @@ export class ChatEngine {
     // registered or after its checkpoint finalized — they are real working
     // parts, and dropping them made traces vanish when the user stopped a run
     // and sent a follow-up, or re-entered a thread mid-turn.
-    return foldTurnStreamEvents(events, latestTurnId || undefined)
+    //
+    // The turn tag alone is not a safe scope: steered continuations keep the
+    // original turn's anchor, and segments of the log predate turn binding
+    // entirely (restored sessions, planning turns emit with an empty turnId).
+    // Folding those wholesale rehydrated earlier turns into the newest trace,
+    // so the fold is additionally cut at the current logical turn's start —
+    // the newest real user message in the mirror. Everything streamed before
+    // that prompt belongs to an earlier turn that the mirror already carries.
+    const turnStartTs = await this.currentTurnStartTs(projectId, threadId)
+    return foldTurnStreamEvents(events, latestTurnId || undefined, turnStartTs)
+  }
+
+  /** Timestamp of the newest non-activity user message in the mirror — the
+   *  start of the current logical turn. Activity-only user messages (compaction
+   *  notices, sub-agent envelopes) ride mid-turn and are skipped, so the
+   *  boundary lands on the prompt that opened the turn. Returns undefined when
+   *  no such message exists (fresh thread, orchestrator-only transcript), in
+   *  which case the fold keeps the whole log as before. */
+  private async currentTurnStartTs(
+    projectId: string,
+    threadId: string
+  ): Promise<number | undefined> {
+    const page = await this.threadManager.loadMessagePage(projectId, threadId, undefined, 80)
+    for (let i = page.messages.length - 1; i >= 0; i--) {
+      const message = page.messages[i]
+      if (!message || message.role !== 'user') continue
+      if (
+        message.parts.length > 0 &&
+        message.parts.every((part) => part.type === 'compaction' || part.type === 'subagent')
+      ) {
+        continue
+      }
+      return message.createdAt || undefined
+    }
+    return undefined
   }
 
   /**

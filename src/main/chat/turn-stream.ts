@@ -47,8 +47,19 @@ export type TurnStreamEvent =
  * to no specific turn. They are folded into whichever turn is requested (or the
  * whole-log fold) so real working parts never disappear from a rehydrated trace
  * just because their turn anchor was unbound at emit time.
+ *
+ * When `minTs` is supplied, every event streamed before that timestamp is
+ * dropped — bound or unbound. The log is thread-wide, and neither the steer
+ * continuation (which keeps the original turn's anchor) nor a legacy unbound
+ * segment may pull earlier turns' parts into the newest trace; callers derive
+ * `minTs` from the mirror's newest real user message, the start of the current
+ * logical turn.
  */
-export function foldTurnStreamEvents(events: TurnStreamEvent[], turnId?: string): AgentPart[] {
+export function foldTurnStreamEvents(
+  events: TurnStreamEvent[],
+  turnId?: string,
+  minTs?: number
+): AgentPart[] {
   const parts: AgentPart[] = []
   const indexById = new Map<string, number>()
   // Text length already present in the stored part, so a delta never re-appends
@@ -56,6 +67,7 @@ export function foldTurnStreamEvents(events: TurnStreamEvent[], turnId?: string)
   const textBaseline = new Map<string, number>()
 
   for (const event of events) {
+    if (minTs !== undefined && event.ts < minTs) continue
     if (turnId !== undefined && event.turnId !== turnId && event.turnId !== '') continue
     if (event.kind === 'part.updated') {
       const part = event.part

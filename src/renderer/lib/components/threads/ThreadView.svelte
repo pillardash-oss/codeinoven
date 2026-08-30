@@ -4825,6 +4825,11 @@
     }
     clearQueuedState()
     showQueueMenu = false
+    // The steer opens a fresh trace under the steered message. Drop the
+    // durable fold loaded at mount (and its todo snapshot) — it describes the
+    // turn the steer is interrupting, and a steered continuation keeps the
+    // old turn's stream anchor, so it must never feed the new trace.
+    clearStreamParts()
     // Snap to bottom — the steer message just appeared
     userScrolledAway = false
     errorMessage = ''
@@ -8736,9 +8741,21 @@
       break
     }
     const finalText = getTurnFinalText(turnEndIndex)
+    // The durable stream log is thread-wide and its turn tags are not a safe
+    // scope: a steered continuation keeps the original turn's anchor, and log
+    // segments written before turn binding fold into the latest turn. Drop
+    // every durable part the mirror already persisted BEFORE this turn started
+    // so earlier traces can never bleed into the newest one; parts not yet in
+    // the mirror (the current turn's in-flight work) are exactly the gap this
+    // list exists to fill.
+    const priorPartIds = new SvelteSet<string>()
+    for (let i = 0; i < startMsgIndex; i++) {
+      for (const part of messages[i]?.parts ?? []) priorPartIds.add(part.id)
+    }
     return streamParts.filter((part) => {
       if (part.type === 'question' || isTodoToolPart(part)) return false
-      return !(part.type === 'text' && finalText?.id === part.id)
+      if (part.type === 'text' && finalText?.id === part.id) return false
+      return !priorPartIds.has(part.id)
     })
   }
 
