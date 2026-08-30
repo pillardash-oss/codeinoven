@@ -30,3 +30,13 @@ export function latestWorkingTraceParts(parts: AgentPart[]): AgentPart[] {
 
   return latestParts
 }
+
+/**
+ * A live turn must mount the trace shell even before its first part streams
+ * in — otherwise a busy thread renders as a bare "Working..." line with no
+ * card, instead of the spinner/header that tells the user something is
+ * actually happening.
+ */
+export function shouldMountWorkingTrace(turnPartsLength: number, traceIsLive: boolean): boolean {
+  return turnPartsLength > 0 || traceIsLive
+}

@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onDestroy, onMount, tick, type Snippet } from 'svelte'
+  import { shouldMountWorkingTrace } from '$lib/working-trace-parts'
   import { fly } from 'svelte/transition'
   import { SvelteMap, SvelteSet } from 'svelte/reactivity'
 
@@ -9101,6 +9102,7 @@
           onOpenInEditor={openBrainstormInEditor}
           onRevealInAppFile={revealBrainstormInAppFile}
           onOpenPrototype={openPrototypePreview}
+          onGenerateHifi={selectLofiPrototype}
         />
       {/key}
     {:else if studioDocument === 'prd' && studioPrd}
@@ -9652,7 +9654,7 @@
                           (part) => part.type !== 'text' || part.phase === 'commentary'
                         )
                       : collectedTurnParts}
-                    {#if turnParts.length > 0 || traceIsLive}
+                    {#if shouldMountWorkingTrace(turnParts.length, traceIsLive)}
                       <WorkingTrace
                         parts={turnParts}
                         open={isLatestTurn || traceIsLive || traceIsRestored}
@@ -10561,7 +10563,6 @@
                 prototypes={readyBrainstorm.content.prototypes ?? []}
                 busy={brainstormBusy}
                 onReview={openBrainstormStudio}
-                onSelectPrototype={selectLofiPrototype}
                 onContinueWithoutHifi={openBrainstormStudio}
                 finalizeLabel={engineeringLifecycle?.activeStage === 'brainstorm'
                   ? 'Finalize Brainstorm'
