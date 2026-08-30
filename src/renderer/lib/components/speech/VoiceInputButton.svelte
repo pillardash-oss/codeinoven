@@ -293,19 +293,17 @@
         <span class="wave-bar wave-bar-delay-2"></span>
       </span>
     {:else if transcribingHere}
-      <span class="relative flex items-center justify-center" aria-hidden="true">
-        <Mic size={14} aria-hidden="true" />
-        <span
-          class="transcribing-ping absolute inset-0 rounded-full"
-          aria-hidden="true"
-        ></span>
+      <span class="flex h-3 items-center gap-[2px]" aria-hidden="true">
+        <span class="wave-bar wave-bar-transcribing"></span>
+        <span class="wave-bar wave-bar-transcribing wave-bar-delay-1"></span>
+        <span class="wave-bar wave-bar-transcribing wave-bar-delay-2"></span>
       </span>
     {:else}
       <Mic size={14} aria-hidden="true" />
     {/if}
   </button>
 
-  <span class="sr-only" aria-live="polite">{action !== 'start' ? label : ''}</span>
+  <span class="sr-only" aria-live="polite">{action !== 'start' || transcribingHere ? label : ''}</span>
 {/if}
 
 <style>
@@ -332,18 +330,7 @@
   .wave-bar-delay-2 {
     animation-delay: 0.3s;
   }
-  .transcribing-ping {
-    box-shadow: 0 0 0 0 var(--color-info);
-    animation: cio-transcribe-ping 1.4s cubic-bezier(0, 0, 0.2, 1) infinite;
-  }
-  @keyframes cio-transcribe-ping {
-    0% {
-      box-shadow: 0 0 0 0 var(--color-info);
-      opacity: 0.6;
-    }
-    100% {
-      box-shadow: 0 0 0 5px transparent;
-      opacity: 1;
-    }
+  .wave-bar-transcribing {
+    background: var(--color-info);
   }
 </style>
