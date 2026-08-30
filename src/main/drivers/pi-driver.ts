@@ -1993,9 +1993,9 @@ export class PiDriver extends PersistentCliDriver {
       })
       return
     }
-    // The core-tools question tool marks its dialogs so the scope header
-    // stays separate from the question text instead of being duplicated
-    // into both card fields.
+    // The core-tools question tool marks its dialogs so the scope header,
+    // description, predefined options, and multi-select flag stay separate
+    // from the question text instead of being duplicated or lost.
     const markerQuestion = this.questionMarkerPayload(record)
     const questions = normalizeAgentQuestions({
       questions: [
@@ -2017,9 +2017,14 @@ export class PiDriver extends PersistentCliDriver {
 
   /** Parse the core-tools question tool's marker payload from a select/input
    *  dialog title, or null when the dialog is not a marked question. */
-  private questionMarkerPayload(
-    record: Record<string, unknown>
-  ): { prompt: string; header?: string; description?: string; custom?: boolean } | null {
+  private questionMarkerPayload(record: Record<string, unknown>): {
+    prompt: string
+    header?: string
+    description?: string
+    options?: string[]
+    multiple?: boolean
+    custom?: boolean
+  } | null {
     const title = stringValue(record['title'])
     if (!title?.startsWith(CIO_QUESTION_MARKER)) return null
     try {
@@ -2027,15 +2032,22 @@ export class PiDriver extends PersistentCliDriver {
         prompt?: unknown
         header?: unknown
         description?: unknown
+        options?: unknown
+        multiple?: unknown
       }
       const prompt = typeof payload.prompt === 'string' ? payload.prompt : ''
       if (!prompt) return null
       const header = typeof payload.header === 'string' ? payload.header : undefined
       const description = typeof payload.description === 'string' ? payload.description : undefined
+      const options = Array.isArray(payload.options)
+        ? payload.options.filter((option): option is string => typeof option === 'string')
+        : []
       return {
         prompt,
         ...(header ? { header } : {}),
         ...(description && description !== prompt ? { description } : {}),
+        ...(options.length > 0 ? { options } : {}),
+        ...(payload.multiple === true ? { multiple: true } : {}),
         custom: stringValue(record['method']) !== 'confirm'
       }
     } catch {

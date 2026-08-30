@@ -221,13 +221,18 @@ function textResult(value) {
 
 /**
  * Dialog title for one question: the question text, prefixed with a
- * structured payload when a scope header or description is present so the
- * driver can render them as separate card fields.
+ * structured payload whenever the question carries card fields (scope
+ * header, description, predefined options, multi-select) so the driver can
+ * render them as separate card fields instead of a plain free-text ask.
  */
 function questionDialogTitle(question) {
   const meta = {}
   if (question.header) meta.header = question.header
   if (question.description) meta.description = question.description
+  if (Array.isArray(question.options) && question.options.length > 0) {
+    meta.options = question.options
+  }
+  if (question.multiple === true) meta.multiple = true
   if (Object.keys(meta).length === 0) return question.question
   return CIO_QUESTION_MARKER + JSON.stringify({ ...meta, prompt: question.question })
 }
