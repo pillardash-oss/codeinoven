@@ -5507,11 +5507,29 @@ export class ChatEngine {
    *  (tracked via the same lifecycle the streaming event feed already stamps). */
   private hasInFlightTool(sessionId: string): boolean {
     const times = this.toolTimes.get(sessionId)
-    if (!times) return false
-    for (const entry of times.values()) {
-      if (entry.end === undefined) return true
+    if (times) {
+      for (const entry of times.values()) {
+        if (entry.end === undefined) return true
+      }
+    }
+    // Sub-agent delegation (OpenCode's "task" tool and similar) runs tool
+    // calls under a child session, not the thread's own session — a steer's
+    // in-flight check must follow those down or it never sees them as busy.
+    for (const [childSessionId, owner] of this.childSessionOwners) {
+      if (owner.parentSessionId !== sessionId) continue
+      const childTimes = this.toolTimes.get(childSessionId)
+      if (!childTimes) continue
+      for (const entry of childTimes.values()) {
+        if (entry.end === undefined) return true
+      }
     }
     return false
+  }
+
+  /** Resolve a child session back to the root thread session that owns its
+   *  steer-hold state (child sessions never hold steers of their own). */
+  private rootSessionIdForSteer(sessionId: string): string {
+    return this.childSessionOwners.get(sessionId)?.parentSessionId ?? sessionId
   }
 
   /** Register a held steer and tell renderers the undo window is open. */
@@ -16627,9 +16645,15 @@ export class ChatEngine {
           perSession.set(part.id, { start, end })
           part.state.time = { start, end }
           // Steer-undo window: the last in-flight tool of the turn just ended,
-          // so any held steer can now reach the harness.
-          if (this.heldSteers.has(event.sessionId) && !this.hasInFlightTool(event.sessionId)) {
-            void this.flushHeldSteers(event.sessionId, 'mid-turn')
+          // so any held steer can now reach the harness. A tool that just
+          // completed may belong to a sub-agent's child session rather than
+          // the thread's own session — resolve to the root before checking.
+          const rootSteerSessionId = this.rootSessionIdForSteer(event.sessionId)
+          if (
+            this.heldSteers.has(rootSteerSessionId) &&
+            !this.hasInFlightTool(rootSteerSessionId)
+          ) {
+            void this.flushHeldSteers(rootSteerSessionId, 'mid-turn')
           }
         }
         if (part.state.status === 'error') {
