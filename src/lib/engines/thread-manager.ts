@@ -263,6 +263,14 @@ export class ThreadManager {
   private engineeringLifecycleEngine: EngineeringLifecycleEngine
 
   /**
+   * Per-thread cache of the full user-message jump list (keyed by
+   * `${projectId}:${threadId}`), populated on first async worker-backed load
+   * and busted only when a new user message is applied to that thread or the
+   * thread is deleted — repeated menu-opens never re-scan the database.
+   */
+  private readonly userMessageHistoryCache = new Map<string, UserMessageSummary[]>()
+
+  /**
    * @param onChange Invoked after a thread's status/read state is persisted so
    * callers (main process) can push live updates to renderer windows.
    * @param onDelete Invoked before a thread's rows are removed so callers can
@@ -765,6 +773,9 @@ export class ThreadManager {
     if (!outcome.ok) {
       throw new Error(outcome.error ?? 'thread deletion failed')
     }
+    for (const candidate of deletionOrder) {
+      this.userMessageHistoryCache.delete(this.userMessageHistoryCacheKey(projectId, candidate.id))
+    }
     await this.removeThreadDiskArtifacts(deletionOrder)
     await this.onDeleted?.(deletionOrder)
   }
@@ -1102,7 +1113,15 @@ export class ThreadManager {
       }
     }
     const resolvedSessionId = sessionId ?? thread.sessionId ?? ''
-    return this.db.syncProviderDeltasViaWorker(threadId, resolvedSessionId, messages)
+    const result = await this.db.syncProviderDeltasViaWorker(threadId, resolvedSessionId, messages)
+    if (result.applied > 0 && messages.some((message) => message.role === 'user')) {
+      this.userMessageHistoryCache.delete(this.userMessageHistoryCacheKey(projectId, threadId))
+    }
+    return result
+  }
+
+  private userMessageHistoryCacheKey(projectId: string, threadId: string): string {
+    return `${projectId}:${threadId}`
   }
 
   /** Load the mirrored agent conversation, or an empty list when absent. */
@@ -1147,11 +1166,16 @@ export class ThreadManager {
   /** Load every mirrored user-authored conversation message, oldest to newest. */
   async loadUserMessages(projectId: string, threadId: string): Promise<UserMessageSummary[]> {
     if (!this.getOwnedThread(projectId, threadId)) return []
+    const cacheKey = this.userMessageHistoryCacheKey(projectId, threadId)
+    const cached = this.userMessageHistoryCache.get(cacheKey)
+    if (cached) return cached
     const page = await this.pagedMessageRows((after) =>
       buildLoadUserMessagesPageSql(threadId, after)
     )
     if (!page.ok) return this.agentMessageRepo.loadUserMessagesByThread(threadId)
-    return mapUserMessageRows(page.rows)
+    const history = mapUserMessageRows(page.rows)
+    this.userMessageHistoryCache.set(cacheKey, history)
+    return history
   }
 
   /** Load every parent-session record, including hidden transport-only prompts. */
