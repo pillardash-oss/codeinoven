@@ -314,26 +314,6 @@
     }
   }
 
-  async function retryEngineeringLifecycle(): Promise<void> {
-    const current = engineeringLifecycle
-    if (current?.humanGate !== 'terminal_failure' || !current.resumeToken) return
-    try {
-      engineeringLifecycle = await invoke(
-        'engineeringLifecycle:retry',
-        thread.projectId,
-        thread.id,
-        current.resumeToken
-      )
-      settings = settingsForEngineeringState(engineeringLifecycle)
-      await deliver(
-        `Retry the persisted ${engineeringLifecycle.activeStage ?? 'Engineering'} stage from its durable state.`,
-        []
-      )
-    } catch (error) {
-      sendError = error instanceof Error ? error.message : 'The Engineering stage could not retry.'
-    }
-  }
-
   async function selectRemoteLofi(prototypeId: string): Promise<void> {
     const draft = gateBrainstorm
     if (!draft) return
@@ -346,7 +326,7 @@
         draft.id,
         draft.version,
         `Generate one direct HiFi prototype H1 based on selected LoFi prototype ${prototypeId}. Preserve all existing prototypes and aligned Brainstorm content.`,
-        { prototypeRequest: { fidelity: 'hifi', count: 1 } }
+        { fidelity: 'hifi', count: 1 }
       )
       await refreshEngineeringLifecycle()
     } catch (error) {
@@ -1552,7 +1532,6 @@
         engineeringLifecycle={pendingLifecycleDisplay}
         engineeringActive={toolboxActive}
         onEngineeringLifecycleSelect={selectEngineeringLifecycle}
-        onEngineeringLifecycleRetry={retryEngineeringLifecycle}
         showChatModes={false}
         initialStartAfterThreads={queuedMessage?.startAfterThreads}
         initialValue={composerRestore?.text ?? ''}
