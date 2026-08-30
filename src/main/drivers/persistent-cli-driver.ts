@@ -321,7 +321,13 @@ export abstract class PersistentCliDriver implements HarnessDriver {
           return { value, authFailed: false, attempts: accounted }
         }
         accounted.push(
-          this.buildTitleAttempt(index + 1, candidate, false, 'No usable response produced', response)
+          this.buildTitleAttempt(
+            index + 1,
+            candidate,
+            false,
+            'No usable response produced',
+            response
+          )
         )
       } catch (error) {
         const fallbackReason = this.describeTitleFailure(error)
@@ -1113,15 +1119,32 @@ export abstract class PersistentCliDriver implements HarnessDriver {
     })
     if (!result) return
     if (result.nativeSessionId) session.nativeSessionId = result.nativeSessionId
+    this.applyParseResult(result, session, { trackProcessIssues: true })
+  }
+
+  /**
+   * Apply a parse result produced outside the live stdout loop (e.g. a
+   * harness-side log replay or a driver-side finalize pass) to the durable
+   * session and the live event stream. Mirrors the stdout application path
+   * exactly, minus process-issue bookkeeping.
+   */
+  protected applyParseResult(
+    result: CliLineParseResult,
+    session: PersistentCliSession,
+    options?: { trackProcessIssues?: boolean }
+  ): void {
+    if (result.nativeSessionId) session.nativeSessionId = result.nativeSessionId
     if (result.messages) this.mergeMessages(session, result.messages)
     for (const event of this.normalizeInteractionEvents(session.id, result.events ?? [])) {
-      if (event.type === 'session.error' || (event.type === 'message.completed' && event.issue)) {
-        this.structuredProcessIssues.add(session.id)
-      } else if (event.type === 'session.status') {
-        if (event.status.state === 'waiting' || event.status.state === 'error') {
+      if (options?.trackProcessIssues) {
+        if (event.type === 'session.error' || (event.type === 'message.completed' && event.issue)) {
           this.structuredProcessIssues.add(session.id)
-        } else {
-          this.structuredProcessIssues.delete(session.id)
+        } else if (event.type === 'session.status') {
+          if (event.status.state === 'waiting' || event.status.state === 'error') {
+            this.structuredProcessIssues.add(session.id)
+          } else {
+            this.structuredProcessIssues.delete(session.id)
+          }
         }
       }
       this.applyEventToSession(session, event)
