@@ -1264,6 +1264,14 @@
 
   onMount(() => {
     void loadAttachmentPreviews(attachments)
+    // A voice recording started in this thread keeps running while the user
+    // navigates away and back, which destroys and remounts this composer. The
+    // speech controller still holds the destroyed editor target, so the
+    // transcript would silently land in the draft store without appearing in
+    // the visible editor. Hand the live editor target back to the controller
+    // when one is mid-capture for this composer.
+    const liveTarget = composerSpeechTarget()
+    if (liveTarget) speechController.reattachTarget(liveTarget)
   })
 
   async function addFileAttachments(

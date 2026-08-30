@@ -272,6 +272,22 @@ class SpeechController {
     return 'targetId' in this.state && this.state.targetId === targetId
   }
 
+  /**
+   * Swaps the active capture's editor target for a live one with the same id.
+   * The editor that started a recording can be destroyed by navigation while
+   * the capture is still running (the controller outlives the view); when an
+   * equivalent editor mounts again — e.g. the user returned to the thread
+   * before the transcript landed — the transcript must insert into the visible
+   * editor instead of falling back to the draft store behind its back. Returns
+   * true when the reattach happened.
+   */
+  reattachTarget(target: SpeechEditorTarget): boolean {
+    const active = this.active
+    if (!active || active.target.id !== target.id) return false
+    active.target = target
+    return true
+  }
+
   get recordingScope(): SpeechScope | null {
     return this.state.state === 'recording' ? (this.active?.scope ?? null) : null
   }
