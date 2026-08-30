@@ -888,7 +888,7 @@ export default function codeInOvenCoreToolsExtension(pi) {
   pi.on('before_agent_start', (event) => {
     const extra = loadCioSystemPrompt()
     if (!extra) return undefined
-    return { systemPrompt: event.systemPrompt + '\n\n' + extra }
+    return { systemPrompt: event.systemPrompt + '\\n\\n' + extra }
   })
 
   // Permission gate: destructive tool calls require an explicit permission
