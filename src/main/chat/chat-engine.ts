@@ -857,7 +857,7 @@ const BRAINSTORM_GENERATION_SYSTEM_PROMPT = [
   'In Boundaries, capture user-stated and verified constraints with evidence where applicable.',
   'In Agreed Direction, state the current direction, the reason it fits, and the immediate handoff into specification. Keep alternatives only when the user has not ruled them out.',
   'You may append Additional Info (additional_info) only when useful material does not fit a required section. Omit it when empty.',
-  'When the dispatch supplies an exact session-report revision path under the feature versions directory, write the report Markdown to exactly that path and nowhere else; never modify any other file. Do not implement, assign work, or claim the engineering specification is ready. This document is discovery input for a later specification.',
+  'When the dispatch supplies an exact session-report revision path under the feature versions directory, write the report Markdown to exactly that path. When the dispatch also names one or more prototype files to create or rebuild under the feature prototypes directory, write exactly those prototype files too — the same turn owns both writes; do not defer the prototype file to a later turn or only describe it in the report. Never write to any other path than the ones the dispatch names. Do not implement, assign work, or claim the engineering specification is ready. This document is discovery input for a later specification.',
   'Prefer clarity and accuracy over length. Do not repeat the request in different words or hide uncertainty behind confident prose.',
   MERMAID_OUTPUT_INSTRUCTION
 ].join(' ')
@@ -882,7 +882,7 @@ const BRAINSTORM_JSON_SHAPE = JSON.stringify({
 })
 
 const BRAINSTORM_JSON_FALLBACK_SYSTEM_PROMPT = [
-  'Research the supplied discussion and project, then return one valid Brainstorm JSON object. Read-only project and web research tools are available and should be used when relevant. When the dispatch supplies an exact session-report revision path, write the report there and nowhere else; otherwise do not mutate files. Do not return explanatory prose outside the object, or use Markdown fences around the object.',
+  'Research the supplied discussion and project, then return one valid Brainstorm JSON object. Read-only project and web research tools are available and should be used when relevant. When the dispatch supplies an exact session-report revision path, write the report there. When the dispatch also names prototype files to create or rebuild, write exactly those too, in this same turn. Never write to any other path than the ones the dispatch names; otherwise do not mutate files. Do not return explanatory prose outside the object, or use Markdown fences around the object.',
   BRAINSTORM_GENERATION_SYSTEM_PROMPT,
   `Use this exact object shape: ${BRAINSTORM_JSON_SHAPE}`,
   'First response character must be { and last must be }.'
