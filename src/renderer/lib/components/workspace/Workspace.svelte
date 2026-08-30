@@ -686,14 +686,16 @@
     contextSidebarState.openDiff(selectedThread.projectId, selectedThread.id)
   }
 
-  function openNewTerminal(): void {
-    if (!selectedThread) return
-    contextSidebarState.openNewTerminal(selectedThread.projectId, selectedThread.id)
+  function openNewTerminal(): string | null {
+    if (!selectedThread) return null
+    const id = contextSidebarState.openNewTerminal(selectedThread.projectId, selectedThread.id)
+    if (id) terminalFullscreenTabId = id
+    return id
   }
 
-  function openNewBrowser(): void {
+  function openNewBrowser(): string | null {
     const activeTab = contextSidebarState.sidebarActiveTab
-    contextSidebarState.openBrowser(
+    return contextSidebarState.openBrowser(
       activeTab?.kind === 'browser' ? activeTab.url : 'http://localhost:3000/'
     )
   }
@@ -4682,7 +4684,10 @@
     minimizeLabel="Minimize terminal"
     onSelect={(id) => (terminalFullscreenTabId = id)}
     onCloseTab={(id) => closeFullscreenTab('terminal', id)}
-    onNew={openNewTerminal}
+    onNew={() => {
+      const id = openNewTerminal()
+      if (id) terminalFullscreenTabId = id
+    }}
     onMinimize={() => (terminalFullscreenTabId = null)}
   >
     {#snippet icon()}
@@ -4711,7 +4716,10 @@
       minimizeLabel="Minimize browser"
       onSelect={(id) => (browserFullscreenTabId = id)}
       onCloseTab={(id) => closeFullscreenTab('browser', id)}
-      onNew={openNewBrowser}
+      onNew={() => {
+        const id = openNewBrowser()
+        if (id) browserFullscreenTabId = id
+      }}
       onMinimize={() => (browserFullscreenTabId = null)}
     >
       {#snippet icon()}

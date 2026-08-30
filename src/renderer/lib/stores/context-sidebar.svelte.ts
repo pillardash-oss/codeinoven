@@ -1291,7 +1291,7 @@ class ContextSidebarState {
     this.openNewTerminal(projectId, threadId)
   }
 
-  openNewTerminal(projectId: string, threadId: string): void {
+  openNewTerminal(projectId: string, threadId: string): string {
     const context = this.ensureProjectContext(projectId)
     context.terminalSequence += 1
     const sequence = context.terminalSequence
@@ -1304,6 +1304,7 @@ class ContextSidebarState {
       projectId,
       threadId
     })
+    return id
   }
 
   openDebugger(projectId: string, threadId: string): void {
