@@ -1,4 +1,5 @@
 import { invoke } from '$lib/ipc.svelte'
+import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
 import { mobileState } from '$lib/remote/mobile-state.svelte'
 import { workspaceState } from '$lib/stores/workspace.svelte'
 import { reportErrorWithDetails } from '$lib/stores/app-errors.svelte'
@@ -285,6 +286,15 @@ class SpeechController {
     if (!active) return false
     const scope = active.scope
     if (scope.kind === 'global' || scope.threadId === undefined) return true
+    // Temporary side chats render a synthetic thread that is never the
+    // selected workspace thread — they live in the context sidebar. When a
+    // temporary chat is the active sidebar tab, the user "is on" that chat,
+    // so Escape must reach its own recording (and nothing else).
+    const sidebarTab = contextSidebarState.activeTab
+    if (sidebarTab?.kind === 'temporary-chat') {
+      if (sidebarTab.temporaryChatId !== scope.threadId) return false
+      return scope.kind !== 'project' || sidebarTab.projectId === scope.projectId
+    }
     const viewed = isRemotePwaRuntime()
       ? mobileState.selectedThread
       : workspaceState.selectedThread
