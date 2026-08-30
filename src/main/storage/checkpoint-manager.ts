@@ -2,6 +2,7 @@ import { mkdir, readFile, readdir, rm, writeFile } from 'fs/promises'
 import { dirname, join, resolve, sep } from 'path'
 import { APP_NAME } from '../../lib/brand'
 import { generateId, getConfigRoot } from '../../lib/utils'
+import { Logger } from '../system/logger'
 import type {
   TurnCheckpointChangeSummary,
   TurnCheckpointFileDiff,
@@ -68,6 +69,10 @@ export interface TurnCompletionOptions {
 
 /** Cap on foreign-thread checkpoints scanned while reconciling concurrent edits. */
 const FOREIGN_CHECKPOINT_SCAN_LIMIT = 500
+
+/** Upper bounds for one line-stats repair pass so startup is never blocked. */
+const REPAIR_MAX_CHECKPOINTS = 200
+const REPAIR_MAX_FILES = 500
 
 const MAX_LINE_DIFF_BYTES = 1024 * 1024
 const MAX_LINE_DIFF_LINES = 20_000
@@ -455,6 +460,83 @@ export class CheckpointManager {
     return rows.map((row) =>
       this.recoverUnfilteredChanges(projectId, JSON.parse(String(row['data'])) as TurnCheckpoint)
     )
+  }
+
+  /**
+   * One-time repair pass for checkpoints whose line stats were recorded as
+   * `{ truncated: true }` by the previous gating, which measured whole-file
+   * line counts instead of the trimmed changed region and therefore rejected
+   * large files with small edits. The blob-backed history is intact, so the
+   * exact counts can be recomputed and persisted. Idempotent: repaired
+   * checkpoints no longer match the candidate query, and checkpoints whose
+   * blobs are genuinely gone keep their honest truncated marker. Only terminal
+   * checkpoints are touched — `active` and `interrupted` rows can still be
+   * finalized by `completeTurn` and must never be rewritten from a read path.
+   */
+  async repairTruncatedLineStats(): Promise<number> {
+    let rows: Record<string, unknown>[]
+    try {
+      rows = await this.queryRows(
+        `SELECT DISTINCT tc.turn_id AS turn_id, tc.project_id AS project_id, tc.thread_id AS thread_id
+         FROM turn_checkpoints tc, json_each(tc.data, '$.lineStats') ls
+         WHERE json_extract(ls.value, '$.truncated') = 1
+         LIMIT ?`,
+        [REPAIR_MAX_CHECKPOINTS],
+        REPAIR_MAX_CHECKPOINTS
+      )
+    } catch (error) {
+      Logger.error('Line-stats repair could not list candidates (non-fatal):', error)
+      return 0
+    }
+    let repaired = 0
+    let repairedFiles = 0
+    for (const row of rows) {
+      if (repairedFiles >= REPAIR_MAX_FILES) break
+      const turnId = row['turn_id']
+      const projectId = row['project_id']
+      const threadId = row['thread_id']
+      if (
+        typeof turnId !== 'string' ||
+        typeof projectId !== 'string' ||
+        typeof threadId !== 'string'
+      ) {
+        continue
+      }
+      try {
+        const checkpoint = await this.get(projectId, threadId, turnId)
+        if (!checkpoint) continue
+        if (checkpoint.status === 'active' || checkpoint.status === 'interrupted') continue
+        const pending = checkpoint.changes.filter((change) => {
+          const stats = checkpoint.lineStats?.[change.path]
+          return stats !== undefined && stats.truncated === true && stats.additions === undefined
+        })
+        if (pending.length === 0) continue
+        const recomputed = await this.calculateLineStats(this.tracker(projectId), pending)
+        const lineStats: Record<string, CheckpointLineStats> = { ...(checkpoint.lineStats ?? {}) }
+        let recovered = 0
+        for (const change of pending) {
+          const stats = recomputed.stats[change.path]
+          if (stats && stats.additions !== undefined) {
+            lineStats[change.path] = stats
+            recovered += 1
+            repairedFiles += 1
+          }
+        }
+        if (recovered === 0) {
+          // Nothing recovered for this checkpoint (blobs genuinely unavailable);
+          // keep the honest truncated marker instead of rewriting the row.
+          continue
+        }
+        await this.save({ ...checkpoint, lineStats })
+        repaired += 1
+        // Yield between checkpoints so a large first-run repair never
+        // monopolizes the main process.
+        await new Promise<void>((resolve) => setImmediate(resolve))
+      } catch (error) {
+        Logger.error('Line-stats repair skipped a checkpoint (non-fatal):', error)
+      }
+    }
+    return repaired
   }
 
   /** Remove project checkpoint blobs that no remaining thread references. */
@@ -921,9 +1003,6 @@ function calculateBoundedLineStats(
   } catch {
     return { truncated: true }
   }
-  if (before.length + after.length > MAX_LINE_DIFF_LINES) {
-    return { truncated: true }
-  }
 
   let prefix = 0
   while (prefix < before.length && prefix < after.length && before[prefix] === after[prefix]) {
@@ -938,6 +1017,13 @@ function calculateBoundedLineStats(
 
   const oldLines = before.slice(prefix, beforeEnd)
   const newLines = after.slice(prefix, afterEnd)
+  // The line budget guards the expensive alignment below, which only ever sees
+  // the trimmed changed region — never the full files. Gating on whole-file
+  // line counts here would reject large files with small edits (the common
+  // case) even though computing their exact stats is cheap.
+  if (oldLines.length + newLines.length > MAX_LINE_DIFF_LINES) {
+    return { truncated: true }
+  }
   if (oldLines.length === 0) return { additions: newLines.length, deletions: 0 }
   if (newLines.length === 0) return { additions: 0, deletions: oldLines.length }
 

@@ -13,6 +13,7 @@ import { AccountProfileRepo } from './database/repositories/account-profile-repo
 import { loadDeviceIdentity } from './account/device-identity'
 import { readMemorySyncState } from './remote/memory-sync-state'
 import { StorageEngine } from './storage/storage-engine'
+import { CheckpointManager } from './storage/checkpoint-manager'
 import { registerHydrationIpcHandlers } from './ipc/hydration-ipc'
 import {
   installFilePreviewProtocol,
@@ -958,6 +959,19 @@ async function bootPostPaintServices(): Promise<void> {
       }
     } catch (error) {
       Logger.error('Restart recovery failed (non-fatal):', error)
+    }
+
+    // One-time repair of file-change cards whose line counts were recorded as
+    // truncated by the previous whole-file gating (large files with small
+    // edits showed +0 −0). Bounded, idempotent, and batched; a no-op once every
+    // candidate has been repaired.
+    try {
+      const repaired = await new CheckpointManager(database).repairTruncatedLineStats()
+      if (repaired > 0) {
+        Logger.info(`Restored line counts for ${repaired} file-change checkpoints`)
+      }
+    } catch (error) {
+      Logger.error('Line-stats repair failed (non-fatal):', error)
     }
 
     // Restore remote mode after paint so users can see app UI while the LAN
