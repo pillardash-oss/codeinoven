@@ -87,6 +87,8 @@ import {
   validateGitPathArray,
   validateGitRelativePath,
   validateGitResetMode,
+  validateGitRevision,
+  validateGitRestoreTarget,
   validateHistoryRole,
   validateMergeMethod,
   validateMergeTarget,
@@ -5023,6 +5025,19 @@ export function registerIpcHandlers(
             : validateEntityId(scopeBucketId, 'Scope bucket ID')
         ),
         validateGitPathArray(paths)
+      )
+  )
+  ipcMain.handle(
+    'git:restoreFiles',
+    async (_, projectId: unknown, source: unknown, paths: unknown, target: unknown, scopeBucketId?: unknown) =>
+      gitService.restoreFiles(
+        await resolveProjectPath(
+          validateEntityId(projectId, 'Project ID'),
+          scopeBucketId === undefined ? undefined : validateEntityId(scopeBucketId, 'Scope bucket ID')
+        ),
+        validateGitRevision(source),
+        validateGitPathArray(paths),
+        validateGitRestoreTarget(target)
       )
   )
   ipcMain.handle(

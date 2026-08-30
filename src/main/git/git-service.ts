@@ -27,6 +27,7 @@ import type {
   GitIdentity,
   GitPullStrategy,
   GitRemoteInfo,
+  GitRestoreTarget,
   GitResetMode,
   GitStashEntry,
   GitStatus,
@@ -511,6 +512,39 @@ export class GitService {
       }
       return this.readStatus(directory)
     })
+  }
+
+  /**
+   * Restore files from a commit-like source (commit hash, `stash@{n}`, branch)
+   * into the index and working tree so the user can pull historical content
+   * back without reverting the whole commit or popping the whole stash.
+   */
+  async restoreFiles(
+    projectPath: string,
+    source: string,
+    paths: string[],
+    target: GitRestoreTarget
+  ): Promise<GitStatus> {
+    return this.enqueue(projectPath, async () => {
+      const directory = await this.repo(projectPath)
+      const safePaths = paths.map((path) => this.assertRelativePath(directory, path))
+      if (safePaths.length === 0) return this.readStatus(directory)
+      const safeSource = this.assertTreeIsh(source)
+      const args =
+        target === 'staged'
+          ? ['restore', '--staged', '--source', safeSource, '--', ...safePaths]
+          : ['restore', '--staged', '--worktree', '--source', safeSource, '--', ...safePaths]
+      await this.wrapError(directory, 'mutation', async () => {
+        await this.client(directory).raw(args)
+      })
+      return this.readStatus(directory)
+    })
+  }
+
+  /** Reject anything that could be interpreted as an option by `git restore`. */
+  private assertTreeIsh(value: string): string {
+    if (!value || value.startsWith('-')) throw new TypeError('A valid revision is required')
+    return value
   }
 
   async commit(projectPath: string, message: string): Promise<GitStatus> {

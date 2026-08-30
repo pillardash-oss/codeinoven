@@ -3912,6 +3912,9 @@ export interface GitCommitInfo {
 /** Reset severity: soft keeps index+worktree, mixed resets index, hard discards all local changes. */
 export type GitResetMode = 'soft' | 'mixed' | 'hard'
 
+/** Where a restored file lands: the index only, or the index and working tree. */
+export type GitRestoreTarget = 'staged' | 'worktree'
+
 /** Renderer-safe git reset request. */
 export interface GitResetInput {
   mode: GitResetMode

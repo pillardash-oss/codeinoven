@@ -2,6 +2,7 @@ import { fileURLToPath } from 'url'
 import { realpath } from 'fs/promises'
 import { isAbsolute, posix, relative, resolve, sep, win32 } from 'path'
 import type { WebFrameMain } from 'electron'
+import type { GitRestoreTarget } from '../../lib/types'
 import type {
   ChecklistItemStatus,
   CreateProjectInput,
@@ -630,6 +631,22 @@ export function validateGitResetMode(value: unknown): 'soft' | 'mixed' | 'hard' 
     throw new TypeError('Reset mode must be one of: soft, mixed, hard')
   }
   return value as 'soft' | 'mixed' | 'hard'
+}
+
+/** Validate a restore target: the index only, or the index and working tree. */
+export function validateGitRestoreTarget(value: unknown): GitRestoreTarget {
+  if (value !== 'staged' && value !== 'worktree') {
+    throw new TypeError('Restore target must be one of: staged, worktree')
+  }
+  return value
+}
+
+/** Validate a revision-like restore source (commit hash, `stash@{n}`, branch). */
+export function validateGitRevision(value: unknown): string {
+  if (typeof value !== 'string' || !value.trim() || value.trim().startsWith('-')) {
+    throw new TypeError('A valid git revision is required')
+  }
+  return value.trim()
 }
 
 /** Validate a git identity name/email pair. */

@@ -19,6 +19,7 @@
     GitHubUser,
     GitHubWorkflowRun,
     GitResetMode,
+    GitRestoreTarget,
     GitStashEntry,
     ThreadStatus
   } from '$shared/types'
@@ -1488,6 +1489,16 @@
     }
   }
 
+  /** Restore a file's content from the commit or stash being viewed. */
+  async function restoreFromSource(
+    source: string,
+    path: string,
+    target: GitRestoreTarget
+  ): Promise<void> {
+    await gitState.restoreFiles(projectId, source, [path], target)
+    if (!gitState.error) void refreshStatus()
+  }
+
   function requestCommitSelected(): void {
     if (selectedPathList.length === 0) return
     void stageSelectedAction(false).then(() => {
@@ -2142,6 +2153,8 @@
                       readonly
                       onToggleDiff={() => void toggleCommitDiff(change)}
                       onToggleStage={() => {}}
+                      onRestore={(path, target) =>
+                        void restoreFromSource(selectedCommit?.hash ?? 'HEAD', path, target)}
                     />
                   {/each}
                 {/if}
@@ -2950,6 +2963,8 @@
                       readonly
                       onToggleDiff={() => void toggleStashDiff(change)}
                       onToggleStage={() => {}}
+                      onRestore={(path, target) =>
+                        void restoreFromSource(selectedStash?.id ?? 'HEAD', path, target)}
                     />
                   {/each}
                 </div>

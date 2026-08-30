@@ -20,6 +20,7 @@ import type {
   GitHubWorkflowRunDetail,
   GitIdentity,
   GitPullStrategy,
+  GitRestoreTarget,
   GitRemoteInfo,
   GitResetMode,
   GitStashEntry,
@@ -65,6 +66,7 @@ export type GitOperation =
   | 'discard'
   | 'stash-pop'
   | 'stash-drop'
+  | 'restore-files'
   | 'abortMerge'
   | 'abortRebase'
   | 'pr-create'
@@ -1844,6 +1846,25 @@ export class GitState {
 
   async getStashFileDiff(projectId: string, id: string, path: string): Promise<GitDiff> {
     return invoke('git:stashFileDiff', ...this.scopedGitArgs(projectId, id, path))
+  }
+
+  /** Restore files from a commit-like source back into the index and/or working tree. */
+  async restoreFiles(
+    projectId: string,
+    source: string,
+    paths: string[],
+    target: GitRestoreTarget
+  ): Promise<void> {
+    this.markBusy('restore-files', true)
+    try {
+      await invoke(
+        'git:restoreFiles',
+        ...this.scopedGitArgs(projectId, source, paths, target)
+      )
+      await this.refresh(projectId)
+    } finally {
+      this.markBusy('restore-files', false)
+    }
   }
 
   async amend(projectId: string, message: string): Promise<void> {

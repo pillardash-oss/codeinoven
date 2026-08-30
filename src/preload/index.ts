@@ -248,6 +248,7 @@ const INVOKE_CHANNELS = [
   'git:stage',
   'git:resolveConflicted',
   'git:unstage',
+  'git:restoreFiles',
   'git:commit',
   'git:init',
   'git:branches',

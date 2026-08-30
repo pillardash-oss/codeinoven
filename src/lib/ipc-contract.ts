@@ -1327,6 +1327,16 @@ export interface IpcInvokeContract {
     GitStatus
   >
   'git:unstage': Contract<[projectId: string, paths: string[], scopeBucketId?: string], GitStatus>
+  'git:restoreFiles': Contract<
+    [
+      projectId: string,
+      source: string,
+      paths: string[],
+      target: import('./types').GitRestoreTarget,
+      scopeBucketId?: string
+    ],
+    GitStatus
+  >
   'git:commit': Contract<[projectId: string, message: string, scopeBucketId?: string], GitStatus>
   'git:init': Contract<[projectId: string, scopeBucketId?: string], GitStatus>
   'git:branches': Contract<[projectId: string, scopeBucketId?: string], GitBranchInfo[]>
