@@ -1,5 +1,6 @@
 import type {
   HarnessUtilityBinding,
+  ImageDescriptorUtilityConfig,
   ResolvedUtility,
   UtilityActivation,
   UtilityConfigMap,
@@ -41,6 +42,20 @@ export const APP_RETRIEVE_MCP_HOST_UTILITY_ID = 'cio:retrieve-mcp-host'
 /** Stable id of the browser control utility backed by the in-app browser. */
 export const APP_BROWSER_UTILITY_ID = 'cio:browser'
 
+/** App-owned ids seeded before the `cio:` rename, mapped to their current ids. */
+const LEGACY_APP_UTILITY_IDS: Readonly<Record<string, string>> = {
+  'codeinoven:image-descriptor': APP_IMAGE_DESCRIPTOR_UTILITY_ID,
+  'codeinoven:retrieve-mcp-host': APP_RETRIEVE_MCP_HOST_UTILITY_ID
+}
+
+function isBlankImageDescriptorConfig(config: ImageDescriptorUtilityConfig): boolean {
+  return (
+    config.harnessId.trim() === '' &&
+    config.providerId.trim() === '' &&
+    config.modelId.trim() === ''
+  )
+}
+
 interface UtilityRegistryFile {
   version: number
   utilities: UtilityDefinition[]
@@ -76,6 +91,7 @@ export class UtilityRegistryService {
   /** Idempotently seed every app-owned utility when missing. */
   private async performSeed(): Promise<void> {
     const registry = await this.loadRaw()
+    const migrated = this.migrateLegacyAppUtilities(registry)
     const now = Date.now()
     const harnesses = listHarnesses()
     const defaults: UtilityDefinition[] = [
@@ -145,11 +161,48 @@ export class UtilityRegistryService {
     ]
     const existingIds = new Set(registry.utilities.map((utility) => utility.id))
     const missing = defaults.filter((utility) => !existingIds.has(utility.id))
-    if (missing.length > 0) {
+    if (missing.length > 0 || migrated) {
       registry.utilities.push(...missing)
       await this.storage.write(REGISTRY_PATH, registry)
     }
     this.appDefaultsSeeded = true
+  }
+
+  /**
+   * Renames legacy `codeinoven:` app-owned utilities to their current ids so
+   * registries created before the rename do not keep stale duplicates.
+   */
+  private migrateLegacyAppUtilities(registry: UtilityRegistryFile): boolean {
+    let changed = false
+    for (const [legacyId, currentId] of Object.entries(LEGACY_APP_UTILITY_IDS)) {
+      const legacyIndex = registry.utilities.findIndex((utility) => utility.id === legacyId)
+      if (legacyIndex === -1) continue
+      const legacy = registry.utilities[legacyIndex]
+      const hasCurrent = registry.utilities.some((utility) => utility.id === currentId)
+      if (!hasCurrent) {
+        registry.utilities[legacyIndex] = { ...legacy, id: currentId }
+      } else {
+        registry.utilities.splice(legacyIndex, 1)
+        // Preserve a pinned vision model from the legacy entry when the
+        // current entry is still on its blank defaults.
+        const current = registry.utilities.find((utility) => utility.id === currentId)
+        if (
+          current &&
+          legacy.kind === 'image_descriptor' &&
+          current.kind === 'image_descriptor' &&
+          !isBlankImageDescriptorConfig(legacy.config) &&
+          isBlankImageDescriptorConfig(current.config)
+        ) {
+          registry.utilities[registry.utilities.indexOf(current)] = {
+            ...current,
+            config: legacy.config,
+            updatedAt: Date.now()
+          }
+        }
+      }
+      changed = true
+    }
+    return changed
   }
 
   /** Raw registry read that never triggers seeding (used by the seed itself). */
