@@ -3547,10 +3547,17 @@
     try {
       if (busy) {
         userRequestedStop = true
-        await invoke('agent:abort', thread.projectId, thread.id)
-        clearLocalTurn()
-        agentRuns.setIdle(thread.projectId, thread.id)
-        providerStatus = null
+        if (controller) {
+          // Controller conversations (temporary chats) run on their own
+          // conversation id — abort that, never the parent thread.
+          await controller.abort()
+          providerStatus = null
+        } else {
+          await invoke('agent:abort', thread.projectId, thread.id)
+          clearLocalTurn()
+          agentRuns.setIdle(thread.projectId, thread.id)
+          providerStatus = null
+        }
       }
       await sendMessage('Continue', [], undefined, true, undefined, [], [], {
         action: 'Retry connection'
@@ -4291,6 +4298,10 @@
     if (controller) {
       errorMessage = ''
       providerStatus = null
+      // A stale transport/load error must not keep the provider status card on
+      // screen while the new turn runs — the same rule the thread path follows
+      // by clearing cached error state at send time.
+      controller.clearError()
       userScrolledAway = false
       idleAttentionHandled = false
       // Snapshot the selection this turn starts with before anything else can
@@ -9832,7 +9843,14 @@
                   errorMessage = ''
                   providerStatus = null
                   proactiveAuthIssue = null
-                  void dismissSessionError()
+                  if (controller) {
+                    // Controller conversations own their error state in the
+                    // controller's store key — clearing the thread-scoped
+                    // backend error would leave the card stuck on screen.
+                    controller.clearStatus()
+                  } else {
+                    void dismissSessionError()
+                  }
                 }}
               />
             </div>
