@@ -1719,7 +1719,7 @@
   function responseReferenceContext(): string | undefined {
     if (responseReferences.length === 0) return undefined
     return [
-      'The user attached these excerpts from your earlier response as references:',
+      'The user quoted excerpts from your earlier response as references. A reference carrying a "User comment:" line is user-authored input that your reply must explicitly address — if it asks a question, answer it; if it corrects or challenges, respond to it; never treat it as ignorable context. References without a comment are context the user wants accounted for. Combine all references and the typed message into one work list and cover every item.',
       ...responseReferences.map((reference) => {
         const comment = reference.comment ? `User comment: ${reference.comment}\n` : ''
         return `[${reference.label}]\n${comment}<selection>\n${reference.text}\n</selection>`
