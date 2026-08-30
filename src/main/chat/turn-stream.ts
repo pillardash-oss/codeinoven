@@ -48,6 +48,14 @@ export type TurnStreamEvent =
  * whole-log fold) so real working parts never disappear from a rehydrated trace
  * just because their turn anchor was unbound at emit time.
  *
+ * When `minTs` is supplied, a part is only included in the output if its most
+ * recent activity (snapshot or delta) happened at or after that timestamp —
+ * i.e. the boundary filters by last activity, never by snapshot time. This
+ * matters for steered turns: the user's steer message moves the turn boundary
+ * to mid-turn, and part snapshots streamed before the steer must still fold
+ * (with their full accumulated text) or the steer would retroactively erase
+ * the trace built up before it.
+ *
  * When `minTs` is supplied, every event streamed before that timestamp is
  * dropped — bound or unbound. The log is thread-wide, and neither the steer
  * continuation (which keeps the original turn's anchor) nor a legacy unbound
@@ -66,8 +74,9 @@ export function foldTurnStreamEvents(
   // text a later snapshot already included.
   const textBaseline = new Map<string, number>()
 
+  const lastActivityTs = new Map<string, number>()
+
   for (const event of events) {
-    if (minTs !== undefined && event.ts < minTs) continue
     if (turnId !== undefined && event.turnId !== turnId && event.turnId !== '') continue
     if (event.kind === 'part.updated') {
       const part = event.part
@@ -80,8 +89,10 @@ export function foldTurnStreamEvents(
       }
       const text = part.type === 'reasoning' || part.type === 'text' ? part.text.length : 0
       textBaseline.set(part.id, text)
+      lastActivityTs.set(part.id, event.ts)
       continue
     }
+    lastActivityTs.set(event.partId, event.ts)
     if (event.kind !== 'part.delta') continue
     const existingIndex = indexById.get(event.partId)
     if (existingIndex === undefined) continue
@@ -101,5 +112,10 @@ export function foldTurnStreamEvents(
     textBaseline.set(part.id, updated.text.length)
   }
 
-  return parts
+  if (minTs === undefined) return parts
+  // Boundary filter: a part survives only if it was touched at or after the
+  // boundary. Snapshots streamed before it still fold (so deltas can append
+  // and text stays intact), but stale parts from before the boundary are
+  // excluded from the output.
+  return parts.filter((part) => (lastActivityTs.get(part.id) ?? 0) >= minTs)
 }
