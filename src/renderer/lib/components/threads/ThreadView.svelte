@@ -2150,9 +2150,7 @@
         (auditState === undefined && auditReport !== null))
   )
   let plainEngineeringAuditRunning = $derived(
-    studioOnlyAuditWorkflow &&
-      (engineeringOn || plainAuditTriggered) &&
-      auditState === 'running'
+    studioOnlyAuditWorkflow && (engineeringOn || plainAuditTriggered) && auditState === 'running'
   )
   let plainEngineeringAuditReady = $derived(
     studioOnlyAuditWorkflow &&
@@ -3070,10 +3068,7 @@
     // already hydrated (the inheritance write is async). Re-read once the
     // inheritance lands so the inherited switches show as on.
     unsubscribeLifecycleInheritance = onEngineeringLifecycleInherited((inheritedThreadId) => {
-      if (
-        !alive ||
-        inheritedThreadId !== thread.id || chatMode
-      ) {
+      if (!alive || inheritedThreadId !== thread.id || chatMode) {
         return
       }
       void invoke('engineeringLifecycle:get', thread.projectId, thread.id)
@@ -3791,13 +3786,11 @@
       case 'message.part.updated': {
         if (event.sessionId !== sessionId) return
         acknowledgeLocalTurn()
-        if (isTodoToolPart(event.part)) {
-          const streamPartIndex = streamParts.findLastIndex((part) => part.id === event.part.id)
-          streamParts =
-            streamPartIndex === -1
-              ? [...streamParts, event.part]
-              : streamParts.map((part, index) => (index === streamPartIndex ? event.part : part))
-        }
+        const streamPartIndex = streamParts.findLastIndex((part) => part.id === event.part.id)
+        streamParts =
+          streamPartIndex === -1
+            ? [...streamParts, event.part]
+            : streamParts.map((part, index) => (index === streamPartIndex ? event.part : part))
         if (event.part.type === 'subagent') syncOpenSubagentTabs()
         break
       }
@@ -6288,7 +6281,9 @@
         )
       } catch (error) {
         brainstormError =
-          error instanceof Error ? error.message : 'The Brainstorm discussion message failed to send.'
+          error instanceof Error
+            ? error.message
+            : 'The Brainstorm discussion message failed to send.'
         errorMessage = brainstormError
         throw error
       }
