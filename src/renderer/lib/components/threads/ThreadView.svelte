@@ -310,23 +310,16 @@
   let renderLimit = $state(TAIL_RENDER_INITIAL_LIMIT)
 
   /** Grow the render window progressively so mounting the loaded page never
-   *  blocks the composer on one synchronous markdown flush. Each batch
-   *  prepends older messages above the viewport, so the viewport's distance
-   *  from the bottom is captured before the batch mounts and restored after:
-   *  without that compensation every prepend shoves the visible tail downward
-   *  and the user watches the conversation jump while the window grows. */
+   *  blocks the composer on one synchronous markdown flush. Do NOT manually
+   *  adjust scrollTop here: the browser's native scroll anchoring already
+   *  compensates for prepends above the viewport, and adding a manual delta
+   *  on top of it double-adjusts — the exact jumping/flicker seen while
+   *  scrolling during the reveal. */
   $effect(() => {
     const total = messages.length
     if (renderLimit >= total) return
     const timer = setTimeout(() => {
-      const previousHeight = scrollEl?.scrollHeight ?? 0
-      const previousTop = scrollEl?.scrollTop ?? 0
       renderLimit = Math.min(total, renderLimit + TAIL_RENDER_GROW_STEP)
-      void tick().then(() => {
-        if (!scrollEl) return
-        const growth = scrollEl.scrollHeight - previousHeight
-        if (growth > 0) scrollEl.scrollTop = previousTop + growth
-      })
     }, TAIL_RENDER_GROW_DELAY_MS)
     return () => clearTimeout(timer)
   })
