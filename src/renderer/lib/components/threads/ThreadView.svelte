@@ -2895,19 +2895,15 @@
   // behaviour. Later arrivals are followed by the auto-scroll effect instead.
   $effect(() => {
     if (!loaded || !scrollEl || scrollRestored) return
-    if (mountBusy) {
-      // Always anchor a busy thread to its live tail: the conversation grew
-      // while the user was away, so a stale saved offset would drop them into
-      // a blank body with the current turn's message and trace out of view.
+    // Every thread switch opens at the live bottom: the latest output, the
+    // working trace, the file-changes cards. A saved pixel offset is stale the
+    // moment the conversation grows, so restoring it lands the user mid-list
+    // (or at the oldest message once the page reflows) — never restore it.
+    void tick().then(() => {
+      if (!scrollEl || scrollRestored) return
       scrollEl.scrollTo({ top: scrollEl.scrollHeight, behavior: 'auto' })
       userScrolledAway = false
-    } else if (savedScrollState) {
-      scrollEl.scrollTop = savedScrollState.top
-      userScrolledAway = savedScrollState.awayFromBottom
-    } else {
-      scrollEl.scrollTo({ top: scrollEl.scrollHeight, behavior: 'auto' })
-      userScrolledAway = false
-    }
+    })
     scrollRestored = true
   })
 
