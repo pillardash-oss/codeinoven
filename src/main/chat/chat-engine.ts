@@ -61,6 +61,7 @@ import { forwardRemoteEvent } from '../remote/remote-event-forwarder'
 import {
   InactiveQuestionTurnError,
   QuestionRequestGoneError,
+  type HarnessCapabilities,
   type HarnessDriver,
   type SendPromptOptions,
   type SteerPromptOptions,
@@ -910,13 +911,23 @@ const BRAINSTORM_RESEARCH_ALLOWED_TOOLS = [
 export const BRAINSTORM_DOCUMENT_WRITE_TOOLS = [...BRAINSTORM_RESEARCH_ALLOWED_TOOLS, 'edit']
 
 /**
- * Whether the brainstorm document turn may dispatch through the agent's
- * scoped-write channel. Only the opencode driver honors the lean-agent
- * identifier and its path-scoped edit permission; every other harness keeps
- * the read-only sandbox so no unscoped write channel ever opens.
+ * Whether the brainstorm document turn may dispatch through the write
+ * channel. The turn always runs at `auto_review`, so on any driver whose
+ * permission-asked events actually reach the app (`interactivePermissions`)
+ * the same PermissionPolicy that governs every other edit already scopes the
+ * write: auto-approve unless the path matches a protected pattern (`.git`,
+ * lockfiles, etc). Opencode is the one exception — it enforces the boundary
+ * natively through the `cio-brainstorm` agent's path-scoped `edit`
+ * permission, so it qualifies even without `interactivePermissions`. A
+ * driver with neither channel (no permission stream, no native scoping)
+ * keeps the read-only sandbox because the app would have no way to see or
+ * bound the write.
  */
-export function brainstormDocumentWriteEnabled(driverId: string): boolean {
-  return driverId === 'opencode'
+export function brainstormDocumentWriteEnabled(
+  driverId: string,
+  capabilities?: HarnessCapabilities
+): boolean {
+  return driverId === 'opencode' || capabilities?.interactivePermissions === true
 }
 
 const BRAINSTORM_GENERATION_TIMEOUT_MS = 10 * 60 * 1000
@@ -11649,7 +11660,7 @@ export class ChatEngine {
     // through its path-scoped `edit` permission. The app still validates the
     // returned content via the cio_brainstorm_doc contract and records the
     // authoritative copy through BrainstormEngine.
-    const brainstormWriteRoute = brainstormDocumentWriteEnabled(driverId)
+    const brainstormWriteRoute = brainstormDocumentWriteEnabled(driverId, driver.capabilities)
     let revisionPathInstruction = ''
     let featureSlug: string | undefined
     const lifecycle = this.engineeringLifecycleEngine.get(projectId, threadId)
@@ -11828,11 +11839,14 @@ export class ChatEngine {
           .filter(Boolean)
           .join('\n\n')
         // Scoped-write route (P3-cp4): on opencode the `cio-brainstorm` agent
-        // permission scopes `edit` to `.cio/specs/*/versions/**`, so the
-        // session-report revision persists through the agent's own write while
-        // the app still validates via the cio_brainstorm_doc contract. Every
-        // other harness keeps the read-only sandbox.
-        const brainstormWriteRoute = brainstormDocumentWriteEnabled(driverId)
+        // permission scopes `edit` to `.cio/specs/*/versions/**` natively; on
+        // any other driver that streams permission-asked events to the app,
+        // the same auto_review PermissionPolicy forced on this prompt already
+        // scopes the write (auto-approve unless the path is protected). The
+        // app still validates the returned content via the cio_brainstorm_doc
+        // contract either way. A driver with neither channel keeps the
+        // read-only sandbox.
+        const brainstormWriteRoute = brainstormDocumentWriteEnabled(driverId, driver.capabilities)
         const prompt: SendPromptOptions = {
           sessionId,
           settings: {

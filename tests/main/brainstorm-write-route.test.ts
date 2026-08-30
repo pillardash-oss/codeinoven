@@ -6,15 +6,19 @@ import {
 import { leanAgentDefinition, leanAgentNameForMode } from '../../src/main/opencode/opencode-agent-definitions'
 
 /**
- * P3-cp4 — the brainstorm document-generation turn must dispatch through the
- * agent's SCOPED-WRITE channel on opencode:
+ * P3-cp4 — the brainstorm document-generation turn must dispatch through a
+ * SCOPED-WRITE channel on every driver capable of one:
  *
  * - `readOnly` is false (the write channel is live),
  * - the body tool map permits `edit`,
- * - the dispatched agent is `cio-brainstorm`, whose permission scopes `edit`
- *   to the feature versions and explicitly requested prototype directories and
- *   denies every other write path,
- * - non-opencode harnesses keep the read-only sandbox with no `edit`.
+ * - on opencode, the dispatched agent is `cio-brainstorm`, whose permission
+ *   scopes `edit` to the feature versions and explicitly requested prototype
+ *   directories and denies every other write path (native scoping),
+ * - on any other driver that streams `permission.asked` events to the app
+ *   (`interactivePermissions: true`), the write route is also enabled — the
+ *   turn always runs at `auto_review`, so the same PermissionPolicy that
+ *   governs every other edit already scopes the write (app-side scoping),
+ * - a driver with neither channel keeps the read-only sandbox with no `edit`.
  *
  * The `brainstorm_document` structured contract remains the validation
  * authority; this test pins the DISPATCH contract only.
@@ -24,11 +28,22 @@ const SCOPED_WRITE_PATH = '.cio/specs/*/versions/**'
 const SCOPED_PROTOTYPE_PATH = '.cio/specs/*/prototypes/**'
 
 describe('brainstorm scoped-write route', () => {
-  it('enables the write route only for the opencode driver', () => {
+  it('enables the write route on opencode, and on any driver whose permission-asked events reach the app', () => {
     expect(brainstormDocumentWriteEnabled('opencode')).toBe(true)
+    expect(brainstormDocumentWriteEnabled('opencode', { interactivePermissions: false } as never)).toBe(
+      true
+    )
+    expect(
+      brainstormDocumentWriteEnabled('claude-code', { interactivePermissions: true } as never)
+    ).toBe(true)
+    expect(brainstormDocumentWriteEnabled('codex', { interactivePermissions: true } as never)).toBe(
+      true
+    )
+    expect(brainstormDocumentWriteEnabled('cline', { interactivePermissions: false } as never)).toBe(
+      false
+    )
     expect(brainstormDocumentWriteEnabled('claude-code')).toBe(false)
     expect(brainstormDocumentWriteEnabled('codex')).toBe(false)
-    expect(brainstormDocumentWriteEnabled('cline')).toBe(false)
   })
 
   it('permits edit in the body tool map for the write route', () => {
