@@ -394,6 +394,15 @@
                 <Plus size={13} />
               </button>
             {/if}
+            <button
+              type="button"
+              class="flex h-7 w-7 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+              aria-label="Fullscreen"
+              title="Fullscreen"
+              onclick={() => activeTabId && onFullscreenTab?.(activeTabId)}
+            >
+              <Maximize2 size={13} />
+            </button>
           {:else if terminalMode}
             {#if onNewTerminal}
               <button
