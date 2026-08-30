@@ -89,16 +89,18 @@
               <GitFork size={13} />
             {/if}
           </button>
-          <button
-            type="button"
-            class="shrink-0 rounded p-1 text-dimmed opacity-0 transition-all group-hover/msg:opacity-100 hover:bg-elevated hover:text-danger disabled:cursor-not-allowed disabled:opacity-50"
-            aria-label="Delete this message and everything before it"
-            title="Delete up (this message and everything before)"
-            disabled={busy}
-            onclick={() => onDelete(message.id, 'up')}
-          >
-            <Shredder size={13} />
-          </button>
+          {#if index > 0}
+            <button
+              type="button"
+              class="shrink-0 rounded p-1 text-dimmed opacity-0 transition-all group-hover/msg:opacity-100 hover:bg-elevated hover:text-danger disabled:cursor-not-allowed disabled:opacity-50"
+              aria-label="Delete this message and everything before it"
+              title="Delete up (this message and everything before)"
+              disabled={busy}
+              onclick={() => onDelete(message.id, 'up')}
+            >
+              <Shredder size={13} />
+            </button>
+          {/if}
           <button
             type="button"
             class="shrink-0 rounded p-1 text-dimmed opacity-0 transition-all group-hover/msg:opacity-100 hover:bg-elevated hover:text-danger disabled:cursor-not-allowed disabled:opacity-50"
@@ -109,16 +111,18 @@
           >
             <Trash2 size={13} />
           </button>
-          <button
-            type="button"
-            class="shrink-0 rounded p-1 text-dimmed opacity-0 transition-all group-hover/msg:opacity-100 hover:bg-elevated hover:text-danger disabled:cursor-not-allowed disabled:opacity-50"
-            aria-label="Delete this message and everything after it"
-            title="Delete down (this message and everything after)"
-            disabled={busy}
-            onclick={() => onDelete(message.id, 'down')}
-          >
-            <Shredder size={13} class="rotate-180" />
-          </button>
+          {#if index < messages.length - 1}
+            <button
+              type="button"
+              class="shrink-0 rounded p-1 text-dimmed opacity-0 transition-all group-hover/msg:opacity-100 hover:bg-elevated hover:text-danger disabled:cursor-not-allowed disabled:opacity-50"
+              aria-label="Delete this message and everything after it"
+              title="Delete down (this message and everything after)"
+              disabled={busy}
+              onclick={() => onDelete(message.id, 'down')}
+            >
+              <Shredder size={13} class="rotate-180" />
+            </button>
+          {/if}
         </div>
         {#if message.tracePreview && message.tracePreview.length > 0}
           <div class="ml-5 border-l pl-3">
