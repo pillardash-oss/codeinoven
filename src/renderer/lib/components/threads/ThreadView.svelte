@@ -2907,8 +2907,12 @@
       // trace folds, cards, images — so hold the bottom across frames until
       // the page's height settles. The user's first upward scroll releases it.
       startTailPin()
+      // Flag the restore *after* the scroll actually ran: setting it in the
+      // effect body would poison this callback's own `scrollRestored` guard
+      // (the body runs synchronously, before `tick()` resolves) and the
+      // snap-to-bottom would never fire.
+      scrollRestored = true
     })
-    scrollRestored = true
   })
 
   /** Frames the bottom-pin kept re-asserting after the height last changed.
