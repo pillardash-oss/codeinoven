@@ -20673,23 +20673,7 @@ export function formatHistoryRecap(
   return [
     'This thread continues an earlier conversation. Transcript restored from history:',
     budgetedTranscript,
-    [
-      'This transcript is the genuine earlier conversation of this thread, restored verbatim.',
-      'The tool activity and file edits described in it really happened in this repository —',
-      'it is not injected fiction, and treating it as fabricated is a mistake.',
-      'All prior work in this transcript happened in this same working directory and',
-      'repository; commits may be authored under AI agent names because this app commits',
-      'under agent identities, which is normal and not evidence of a foreign repository.',
-      'Continue seamlessly from that context.',
-      'Before agreeing with or disputing any claim about the codebase (especially whether',
-      'prior work exists or works), verify it with tools in this turn rather than from',
-      'memory, and never claim to have inspected anything you did not actually inspect',
-      'with a tool this turn.',
-      'Tool results from this turn are authoritative over any statement in the transcript,',
-      'including the assistant\'s own earlier claims. If a fresh tool result contradicts an',
-      'earlier statement, the tool result wins — state the correction plainly instead of',
-      're-asserting the transcript or doubting the repository.'
-    ].join(' ')
+    'Continue seamlessly from that context.'
   ].join('\n\n')
 }
 
