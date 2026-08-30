@@ -362,7 +362,7 @@
             {retrying ? 'Retrying…' : retryLabel}
           </button>
         {/if}
-        {#if !waiting && settings && providers.length > 0 && onModelChange}
+        {#if settings && providers.length > 0 && onModelChange}
           <ModelPicker
             {providers}
             {projectId}
