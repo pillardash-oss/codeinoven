@@ -159,6 +159,13 @@
     settings = updated
   }
 
+  /** Switch the thread's text model from an engineering card's picker.
+   *  Persist immediately so the next run (e.g. a scheduled retry) uses it. */
+  async function changeThreadModel(updated: ThreadSettings): Promise<void> {
+    settings = updated
+    await invoke('thread:updateSettings', thread.projectId, thread.id, settings)
+  }
+
   function settingsForEngineeringState(state: EngineeringLifecycleState | null): ThreadSettings {
     if (!state || (state.selectedStages.length === 0 && !state.autopilot)) {
       return {
@@ -1440,6 +1447,10 @@
           busy={lifecycleChoiceBusy}
           onBrainstormFirst={() => choosePrdEntry('brainstorm_first')}
           onJumpIn={() => choosePrdEntry('start_prd')}
+          {settings}
+          {providers}
+          projectId={thread.projectId}
+          onModelChange={(updated) => void changeThreadModel(updated)}
         />
       </div>
     {/if}

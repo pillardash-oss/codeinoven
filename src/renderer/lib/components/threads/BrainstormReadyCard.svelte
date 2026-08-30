@@ -1,6 +1,7 @@
 <script lang="ts">
   import { ArrowRight, Lightbulb } from '@lucide/svelte'
-  import type { BrainstormPrototype } from '$shared/types'
+  import type { BrainstormPrototype, ProviderCatalog, ThreadSettings } from '$shared/types'
+  import EngineeringModelSwitch from '../shared/EngineeringModelSwitch.svelte'
 
   interface Props {
     version: number
@@ -11,6 +12,18 @@
     onSelectPrototype?: (prototypeId: string) => void | Promise<void>
     onContinueWithoutHifi?: () => void
     finalizeLabel?: string
+    settings?: ThreadSettings
+    providers?: ProviderCatalog[]
+    projectId?: string | null
+    favoriteModels?: string[]
+    recentModels?: string[]
+    onModelChange?: (settings: ThreadSettings) => void
+    onToggleFavorite?: (providerId: string, modelId: string, harnessId: string) => void
+    onReorderFavorite?: (
+      draggedKey: string,
+      targetKey: string,
+      position: 'before' | 'after'
+    ) => void
   }
 
   let {
@@ -21,7 +34,15 @@
     prototypes = [],
     onSelectPrototype,
     onContinueWithoutHifi,
-    finalizeLabel = 'Prepare spec'
+    finalizeLabel = 'Prepare spec',
+    settings,
+    providers = [],
+    projectId = null,
+    favoriteModels = [],
+    recentModels = [],
+    onModelChange,
+    onToggleFavorite,
+    onReorderFavorite
   }: Props = $props()
 
   let lofiPrototypes = $derived(prototypes.filter((prototype) => prototype.fidelity === 'lofi'))
@@ -65,6 +86,16 @@
   </div>
 
   <div class="flex items-center justify-end gap-2 border-t px-4 py-2.5">
+    <EngineeringModelSwitch
+      {settings}
+      {providers}
+      {projectId}
+      {favoriteModels}
+      {recentModels}
+      {onModelChange}
+      {onToggleFavorite}
+      {onReorderFavorite}
+    />
     {#if lofiPrototypes.length > 0 && !hasHifi && onContinueWithoutHifi}
       <button
         class="min-h-8 rounded-lg px-3 py-1.5 text-xs font-semibold text-muted hover:bg-elevated hover:text-foreground disabled:opacity-40"

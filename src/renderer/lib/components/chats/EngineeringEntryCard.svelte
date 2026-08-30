@@ -1,5 +1,7 @@
 <script lang="ts">
   import { FileText, Lightbulb, PenLine } from '@lucide/svelte'
+  import type { ProviderCatalog, ThreadSettings } from '$shared/types'
+  import EngineeringModelSwitch from '../shared/EngineeringModelSwitch.svelte'
 
   interface Props {
     /** Which document the "Jump directly into…" choice produces. */
@@ -7,8 +9,33 @@
     busy?: boolean
     onBrainstormFirst: () => void | Promise<void>
     onJumpIn: () => void | Promise<void>
+    settings?: ThreadSettings
+    providers?: ProviderCatalog[]
+    projectId?: string | null
+    favoriteModels?: string[]
+    recentModels?: string[]
+    onModelChange?: (settings: ThreadSettings) => void
+    onToggleFavorite?: (providerId: string, modelId: string, harnessId: string) => void
+    onReorderFavorite?: (
+      draggedKey: string,
+      targetKey: string,
+      position: 'before' | 'after'
+    ) => void
   }
-  let { target, busy = false, onBrainstormFirst, onJumpIn }: Props = $props()
+  let {
+    target,
+    busy = false,
+    onBrainstormFirst,
+    onJumpIn,
+    settings,
+    providers = [],
+    projectId = null,
+    favoriteModels = [],
+    recentModels = [],
+    onModelChange,
+    onToggleFavorite,
+    onReorderFavorite
+  }: Props = $props()
 
   const label = $derived(target === 'prd' ? 'PRD' : 'Spec')
 </script>
@@ -48,8 +75,21 @@
       </span>
     </button>
   </div>
-  <p class="mt-3 flex items-center gap-1.5 text-[11px] text-muted">
-    <FileText size={12} class="shrink-0" />
-    Jumping in still lets the Sr. Engineer ask alignment questions — it just skips the Brainstorm document.
-  </p>
+  <div class="mt-3 flex items-center justify-between gap-2">
+    <p class="flex min-w-0 items-center gap-1.5 text-[11px] text-muted">
+      <FileText size={12} class="shrink-0" />
+      Jumping in still lets the Sr. Engineer ask alignment questions — it just skips the Brainstorm
+      document.
+    </p>
+    <EngineeringModelSwitch
+      {settings}
+      {providers}
+      {projectId}
+      {favoriteModels}
+      {recentModels}
+      {onModelChange}
+      {onToggleFavorite}
+      {onReorderFavorite}
+    />
+  </div>
 </section>

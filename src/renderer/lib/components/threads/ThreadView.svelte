@@ -10118,6 +10118,16 @@
                 busy={prdBusy || brainstormBusy}
                 onBrainstormFirst={() => chooseEngineeringEntry('brainstorm_first')}
                 onJumpIn={() => chooseEngineeringEntry('jump_in')}
+                {settings}
+                {providers}
+                projectId={thread.projectId}
+                favoriteModels={rendererRecovery.favoriteModels}
+                recentModels={rendererRecovery.recentModels}
+                onModelChange={changeThreadModel}
+                onToggleFavorite={(providerId, modelId, harnessId) =>
+                  rendererRecovery.toggleFavorite(modelKey(harnessId, providerId, modelId))}
+                onReorderFavorite={(draggedKey, targetKey, position) =>
+                  rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
               />
             {:else if brainstormWorkflow?.entryChoice && !brainstorm && !spec && brainstormGenerationFailed && !busy}
               <BrainstormEntryChoiceCard
@@ -10167,6 +10177,16 @@
                   onUpdate={handleQuestionUpdate}
                   onExplain={handleQuestionExplain}
                   onQuickChat={handleQuestionQuickChat}
+                  {settings}
+                  {providers}
+                  projectId={thread.projectId}
+                  favoriteModels={rendererRecovery.favoriteModels}
+                  recentModels={rendererRecovery.recentModels}
+                  onModelChange={changeThreadModel}
+                  onToggleFavorite={(providerId, modelId, harnessId) =>
+                    rendererRecovery.toggleFavorite(modelKey(harnessId, providerId, modelId))}
+                  onReorderFavorite={(draggedKey, targetKey, position) =>
+                    rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
                 />
               {/key}
             {:else if assignmentAuditState === 'running' && assignment && !achievementAutonomous}
@@ -10264,7 +10284,21 @@
                   rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
               />
             {:else if prd?.status === 'draft' && !busy && !specFormulating}
-              <PrdReadyCard busy={prdBusy} onReview={openPrdStudio} onFinalize={finalizePrd} />
+              <PrdReadyCard
+                busy={prdBusy}
+                onReview={openPrdStudio}
+                onFinalize={finalizePrd}
+                {settings}
+                {providers}
+                projectId={thread.projectId}
+                favoriteModels={rendererRecovery.favoriteModels}
+                recentModels={rendererRecovery.recentModels}
+                onModelChange={changeThreadModel}
+                onToggleFavorite={(providerId, modelId, harnessId) =>
+                  rendererRecovery.toggleFavorite(modelKey(harnessId, providerId, modelId))}
+                onReorderFavorite={(draggedKey, targetKey, position) =>
+                  rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
+              />
             {:else if brainstormWorkflow?.stage === 'drafting' && brainstorm && !busy && !specFormulating}
               {@const readyBrainstorm = brainstorm}
               <BrainstormReadyCard
@@ -10278,6 +10312,16 @@
                   ? 'Finalize Brainstorm'
                   : 'Prepare spec'}
                 onFinalize={() => submitBrainstormDecision('finalize', readyBrainstorm, '')}
+                {settings}
+                {providers}
+                projectId={thread.projectId}
+                favoriteModels={rendererRecovery.favoriteModels}
+                recentModels={rendererRecovery.recentModels}
+                onModelChange={changeThreadModel}
+                onToggleFavorite={(providerId, modelId, harnessId) =>
+                  rendererRecovery.toggleFavorite(modelKey(harnessId, providerId, modelId))}
+                onReorderFavorite={(draggedKey, targetKey, position) =>
+                  rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
               />
             {:else if assignment?.status === 'draft' && !busy && !specFormulating}
               {#key assignment.version}

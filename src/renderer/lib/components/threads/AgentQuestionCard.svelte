@@ -16,7 +16,13 @@
   import QuestionSpeechControls from '../speech/QuestionSpeechControls.svelte'
   import VoiceInputButton from '../speech/VoiceInputButton.svelte'
   import type { SpeechScope } from '../../../../lib/speech/types'
-  import type { AgentQuestion, PendingAgentQuestionRequest } from '$shared/types'
+  import type {
+    AgentQuestion,
+    PendingAgentQuestionRequest,
+    ProviderCatalog,
+    ThreadSettings
+  } from '$shared/types'
+  import EngineeringModelSwitch from '../shared/EngineeringModelSwitch.svelte'
 
   interface Props {
     request: PendingAgentQuestionRequest
@@ -33,9 +39,37 @@
     onExplain?: (requestId: string, question: AgentQuestion) => void
     /** Open a quick chat for the given question, pausing its timeout. */
     onQuickChat?: (requestId: string, question: AgentQuestion) => void
+    settings?: ThreadSettings
+    providers?: ProviderCatalog[]
+    projectId?: string | null
+    favoriteModels?: string[]
+    recentModels?: string[]
+    onModelChange?: (settings: ThreadSettings) => void
+    onToggleFavorite?: (providerId: string, modelId: string, harnessId: string) => void
+    onReorderFavorite?: (
+      draggedKey: string,
+      targetKey: string,
+      position: 'before' | 'after'
+    ) => void
   }
 
-  let { request, onAnswer, onDismiss, onUpdate, scope, onExplain, onQuickChat }: Props = $props()
+  let {
+    request,
+    onAnswer,
+    onDismiss,
+    onUpdate,
+    scope,
+    onExplain,
+    onQuickChat,
+    settings,
+    providers = [],
+    projectId = null,
+    favoriteModels = [],
+    recentModels = [],
+    onModelChange,
+    onToggleFavorite,
+    onReorderFavorite
+  }: Props = $props()
 
   // The parent keys this component by request id, so these drafts belong to one
   // authoritative pending request for the lifetime of the component.
@@ -515,17 +549,29 @@
         disabled={working}
       />
     </div>
-    <button
-      class="flex min-h-8 items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-on-primary transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
-      disabled={!allAnswered || working}
-      onclick={() => void handleSubmit()}
-    >
+    <div class="flex shrink-0 items-center gap-2">
+      <EngineeringModelSwitch
+        {settings}
+        {providers}
+        {projectId}
+        {favoriteModels}
+        {recentModels}
+        {onModelChange}
+        {onToggleFavorite}
+        {onReorderFavorite}
+      />
+      <button
+        class="flex min-h-8 items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-on-primary transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
+        disabled={!allAnswered || working}
+        onclick={() => void handleSubmit()}
+      >
       {#if working}
         Sending…
       {:else}
         <Send size={13} />
         Submit {total > 1 ? 'answers' : 'answer'}
       {/if}
-    </button>
+      </button>
+    </div>
   </div>
 </section>
