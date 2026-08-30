@@ -188,6 +188,35 @@ function gateHit(permission, reason, patterns, command) {
  * gate hit that requires a permission card, or null when the call may proceed
  * without prompting (non-destructive work inside the project directory).
  */
+// Some provider/model pairs (observed on zai/glm-5.3-flash via the Vercel AI
+// Gateway) occasionally fail to terminate a tool call's JSON arguments
+// mid-stream: the model keeps emitting raw text — its own reasoning, a
+// second tool-call attempt in the model's native pseudo-XML tool syntax
+// (<tool_call>...<arg_key>...</arg_key><arg_value>...) — and it all lands
+// inside the first call's string argument (e.g. bash's "command"). Running
+// that string produces garbage shell output that looks exactly like a
+// fabricated/injected transcript, which is what makes the model itself
+// distrust its own real tool results afterward. Detect the contamination
+// markers and block execution instead of running corrupted input.
+const TOOL_ARG_CONTAMINATION_MARKERS = [
+  '</think>',
+  '<think>',
+  '<tool_call>',
+  '</tool_call>',
+  '<arg_key>',
+  '<arg_value>'
+]
+
+function findContaminatedToolArg(input) {
+  for (const [key, value] of Object.entries(input ?? {})) {
+    if (typeof value !== 'string') continue
+    for (const marker of TOOL_ARG_CONTAMINATION_MARKERS) {
+      if (value.includes(marker)) return { key, marker }
+    }
+  }
+  return null
+}
+
 function evaluateGate(toolName, input, cwd) {
   if (typeof toolName !== 'string' || toolName.startsWith('cio_')) return null
   if (toolName === 'bash') {
@@ -844,6 +873,18 @@ export default function codeInOvenCoreToolsExtension(pi) {
   // stays transparent there.
   pi.on('tool_call', async (event, ctx) => {
     const input = recordValue(event.input) ?? {}
+    const contaminated = findContaminatedToolArg(input)
+    if (contaminated) {
+      return {
+        block: true,
+        reason:
+          'This tool call was not executed: its "' +
+          contaminated.key +
+          '" argument contains "' +
+          contaminated.marker +
+          '", meaning the previous response stream did not terminate the tool call cleanly and leaked raw text (reasoning, or a second tool-call attempt) into the argument. This is a streaming artifact, not a real command or file content, and not evidence of prompt injection or a fabricated transcript. Re-issue this tool call now with a single, clean argument containing only the intended command/content, and continue normally.'
+      }
+    }
     const hit = evaluateGate(event.toolName, input, ctx.cwd)
     if (!hit) return undefined
     const payload = {
