@@ -99,6 +99,7 @@
     supportsFastInference
   } from '$shared/fast-inference'
   import { FileBlobUrlManager } from '$lib/media-urls.svelte'
+  import { isAtLatest, mayReanchorToLatest } from '$lib/scroll-anchor'
   import { actionContext } from '$lib/stores/action-context.svelte'
   import type { ActionDefinition, ActionSelection, ActionSource } from '$lib/actions'
   import SpecStudio from '../specs/SpecStudio.svelte'
@@ -2772,29 +2773,10 @@
   let scrollEl = $state<HTMLDivElement | undefined>()
   /** True once the saved position (or initial bottom) has been applied. */
   let scrollRestored = $state(false)
-  /** Whether the thread was working when the view mounted. A busy thread always
-   *  re-opens at the live bottom so the last message and the streaming trace are
-   *  immediately visible on return — a saved mid-conversation offset from before
-   *  the turn grew is stale and hides the action. Captured non-reactively so the
-   *  restore decision is made once at mount; the persisted in-flight status is
-   *  included so a thread that is working but was never marked busy in the store
-   *  still re-opens at the live bottom. */
-  // svelte-ignore state_referenced_locally
-  const mountBusy = threadWorking
-  /** Changes whenever the message cache publishes, including text deltas that
-   *  keep the message and part counts unchanged. */
-  const streamVersion = $derived(threadMessages.streamRevision(thread.projectId, thread.id))
-
-  /** Small tolerance for rounding and trackpad inertia at the live bottom.
-   *  A deliberate upward scroll beyond this distance releases tail-following. */
-  const SCROLL_AT_BOTTOM_THRESHOLD = 48
 
   function isAtBottom(el: HTMLDivElement): boolean {
-    return el.scrollHeight - el.scrollTop - el.clientHeight < SCROLL_AT_BOTTOM_THRESHOLD
+    return isAtLatest(el)
   }
-
-  /** Prevent a history-page merge from being mistaken for new live content. */
-  let preservingHistoryViewport = false
 
   function onScroll(): void {
     if (!scrollEl) return
@@ -2831,10 +2813,7 @@
       return
     }
     loadingOlderMessages = true
-    preservingHistoryViewport = true
-    // Loading history is an explicit request to inspect the past. Keep live
-    // stream updates from pulling the user back to the newest message while
-    // pages are being fetched and inserted.
+    // Loading history is an explicit request to inspect the past.
     userScrolledAway = true
     try {
       // Backfill ahead of the reader: keep fetching bounded batches until
@@ -2879,34 +2858,21 @@
       // A transient page failure leaves the current window intact; the next
       // scroll or button press can retry from the same cursor.
     } finally {
-      preservingHistoryViewport = false
       loadingOlderMessages = false
     }
   }
 
-  // Restore the saved scroll position (or snap to bottom) once data is loaded.
-  // A thread the agent is working on re-opens at the live bottom instead of a
-  // saved offset: the conversation grew while the user was away, so the old
-  // pixel offset now lands mid-trace and hides the latest message + stream.
-  // This runs once: without a `scrollRestored` guard the synchronous
-  // `messages.length` read above makes the effect re-run on every message that
-  // streams in while the thread is busy, snapping the user back to the live
-  // tail and re-locking `userScrolledAway` — the exact "tail steals scroll"
-  // behaviour. Later arrivals are followed by the auto-scroll effect instead.
+  // A thread always opens at the live bottom: the latest output, the working
+  // trace, the file-changes cards. A saved pixel offset is stale the moment
+  // the conversation grows, so restoring it lands the user mid-list — never
+  // restore it. This runs once per thread (the view is remounted per thread
+  // switch); later arrivals are followed by the resize observer below.
   $effect(() => {
     if (!loaded || !scrollEl || scrollRestored) return
-    // Every thread switch opens at the live bottom: the latest output, the
-    // working trace, the file-changes cards. A saved pixel offset is stale the
-    // moment the conversation grows, so restoring it lands the user mid-list
-    // (or at the oldest message once the page reflows) — never restore it.
     void tick().then(() => {
       if (!scrollEl || scrollRestored) return
       scrollEl.scrollTo({ top: scrollEl.scrollHeight, behavior: 'auto' })
       userScrolledAway = false
-      // Async content keeps mounting after this first frame — markdown,
-      // trace folds, cards, images — so hold the bottom across frames until
-      // the page's height settles. The user's first upward scroll releases it.
-      startTailPin()
       // Flag the restore *after* the scroll actually ran: setting it in the
       // effect body would poison this callback's own `scrollRestored` guard
       // (the body runs synchronously, before `tick()` resolves) and the
@@ -2915,67 +2881,28 @@
     })
   })
 
-  /** Frames the bottom-pin kept re-asserting after the height last changed.
-   *  Async content (markdown, trace folds, cards, images) mounts across several
-   *  frames after `loaded` flips, each growing the page; the pin releases once
-   *  the height holds steady for this many consecutive frames. */
-  const TAIL_PIN_SETTLE_FRAMES = 20
-  /** Height seen on the previous pin frame; changes reset the settle countdown. */
-  let tailPinLastHeight = -1
-  /** Frames until the pin releases once the height stops changing. */
-  let tailPinSettle = TAIL_PIN_SETTLE_FRAMES
-  /** Handle for the pending pin frame so a new pin cancels the old loop. */
-  let tailPinHandle = 0
-
-  /** Pin the viewport to the live bottom across frames. Checks
-   *  `userScrolledAway` every frame, so the user's first upward scroll or
-   *  wheel tick releases the pin and scrolling behaves as a pure snapshot.
-   *  Reads no reactive state, so Svelte never re-runs it. */
-  function runTailPin(): void {
-    const el = scrollEl
-    if (!el || userScrolledAway) return
-    // The page keeps growing after `loaded` flips — markdown hydrates, trace
-    // folds mount, file-changes cards resolve — so re-assert the bottom on
-    // every frame until the height holds steady for the settle window.
-    el.scrollTop = el.scrollHeight
-    if (el.scrollHeight !== tailPinLastHeight) {
-      tailPinLastHeight = el.scrollHeight
-      tailPinSettle = TAIL_PIN_SETTLE_FRAMES
-    } else if (tailPinSettle > 0) {
-      tailPinSettle -= 1
-    }
-    if (tailPinSettle > 0) tailPinHandle = requestAnimationFrame(runTailPin)
-  }
-
-  /** Start (or restart) the tail pin. Safe to call repeatedly: the previous
-   *  loop's frame handle is cancelled before a new one is scheduled. */
-  function startTailPin(): void {
-    cancelAnimationFrame(tailPinHandle)
-    tailPinHandle = requestAnimationFrame(runTailPin)
-  }
-
-  // After the initial restore, auto-scroll only when new content arrives and
-  // the user hasn't scrolled away from the bottom. Messages and the file-changes
-  // cards both arrive asynchronously after mount — cards mount only once the
-  // checkpoint list resolves, which can be after the initial scroll, so without
-  // this the latest changes card would sit just above the fold until the user
-  // scrolled. Reading `streamVersion` (the cache revision) makes the view follow
-  // a streaming turn even when parts accumulate inside a single message, and
-  // reading `busy` snaps back to the live bottom as soon as a run becomes
-  // active on an otherwise idle thread. A finished thread deliberately skips
-  // this effect so ordinary history scrolling is never competing with tailing.
+  // Follow the live tail without ever fighting the reader. Whenever the
+  // conversation content changes size — messages stream in, markdown and
+  // images finish rendering, cards resolve, a sent message lands — re-anchor
+  // to the latest message, but only while the reader is still at the bottom.
+  // Their first upward scroll or wheel tick sets `userScrolledAway` and the
+  // viewport is never touched again until they jump back. This is purely
+  // event-driven: no timers, no animation-frame loops, so scrolling can never
+  // be interrupted by a competing writer.
   $effect(() => {
-    if (!scrollRestored) return
-    if (preservingHistoryViewport) return
-    if (!threadWorking && !restoredBusy) return
-    void messages.length
-    void checkpoints.length
-    void threadWorking
-    void streamVersion
-    void tick().then(() => {
-      if (!scrollEl || userScrolledAway) return
-      scrollEl.scrollTop = scrollEl.scrollHeight
+    const el = scrollEl
+    const content = el?.firstElementChild
+    if (!el || !(content instanceof Element)) return
+    const observer = new ResizeObserver(() => {
+      if (!scrollEl || !mayReanchorToLatest(userScrolledAway)) return
+      // Re-anchor only when the viewport actually drifted from the bottom —
+      // a no-op write here would fire a pointless scroll event per resize.
+      if (scrollEl.scrollHeight - scrollEl.scrollTop - scrollEl.clientHeight > 1) {
+        scrollEl.scrollTop = scrollEl.scrollHeight
+      }
     })
+    observer.observe(content)
+    return () => observer.disconnect()
   })
 
   function scrollToLatest(): void {
