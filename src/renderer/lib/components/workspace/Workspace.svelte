@@ -4681,12 +4681,40 @@
               {terminalTab.title}
             </Dialog.Title>
             <Dialog.Description class="sr-only">Fullscreen terminal</Dialog.Description>
-            <Dialog.Close
-              class="titlebar-no-drag flex h-7 w-7 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
-              aria-label="Close fullscreen terminal"
-              title="Close fullscreen terminal"
+            <div class="flex max-w-[min(50%,20rem)] shrink-0 overflow-x-auto">
+              <div class="flex min-w-max items-center gap-1">
+                {#each contextSidebarState.terminalTabs as terminalStripTab (terminalStripTab.id)}
+                  <button
+                    type="button"
+                    class="flex h-7 max-w-40 shrink-0 items-center gap-1.5 rounded-md px-2 text-[11px] font-medium transition-colors {terminalStripTab.id ===
+                    terminalFullscreenTabId
+                      ? 'bg-elevated text-foreground'
+                      : 'text-dimmed hover:bg-elevated hover:text-foreground'}"
+                    aria-current={terminalStripTab.id === terminalFullscreenTabId ? 'page' : undefined}
+                    title={terminalStripTab.title}
+                    onclick={() => (terminalFullscreenTabId = terminalStripTab.id)}
+                  >
+                    <SquareTerminal size={11} class="shrink-0" />
+                    <span class="truncate">{terminalStripTab.title}</span>
+                  </button>
+                {/each}
+              </div>
+            </div>
+            <button
+              type="button"
+              class="titlebar-no-drag flex h-7 w-7 shrink-0 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+              aria-label="Open another terminal"
+              title="New terminal"
+              onclick={openNewTerminal}
             >
-              <X size={14} />
+              <Plus size={14} />
+            </button>
+            <Dialog.Close
+              class="titlebar-no-drag flex h-7 w-7 shrink-0 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+              aria-label="Minimize terminal"
+              title="Minimize terminal"
+            >
+              <Minimize2 size={14} />
             </Dialog.Close>
           </div>
           <TerminalPanel terminalId={terminalTab.terminalId} projectId={terminalTab.projectId} />
