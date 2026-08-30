@@ -216,6 +216,7 @@
   import { workflowActionPresentation } from '$shared/workflow-action-presentation'
   import { LatestRequestGuard } from '$lib/refresh-guard'
   import { isRemotePwaRuntime } from '$lib/runtime-context'
+  import { openInBrowser } from '$lib/open-in-browser'
   import type { ConversationController, SendPayload } from './ConversationController.svelte'
   import * as CheckpointMatching from '../../threads/checkpoint-matching'
 
@@ -5868,7 +5869,7 @@
       errorMessage = 'Prototype preview origin is not configured for this deployment.'
       return
     }
-    await invoke('shell:openExternal', new URL(previewPath, `${origin}/`).toString())
+    await openInBrowser(new URL(previewPath, `${origin}/`).toString())
   }
 
   async function saveBrainstorm(edited: BrainstormDocument): Promise<BrainstormDocument | null> {
