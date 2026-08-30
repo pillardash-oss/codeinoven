@@ -158,7 +158,9 @@
   let preferredName = $derived(editorPreference.preferredInfo?.name ?? 'System Default')
   // svelte-ignore state_referenced_locally
   let loadedKey = $state(`${brainstorm.id}:${brainstorm.version}:${brainstorm.updatedAt}`)
-  let selectedSection = $state<BrainstormSectionId>('context')
+  type BrainstormNavigationSectionId = BrainstormSectionId | 'prototypes'
+
+  let selectedSection = $state<BrainstormNavigationSectionId>('context')
   /** Phone only: the section rail is a bottom drawer instead of a column. */
   let sectionsOpen = $state(false)
   // svelte-ignore state_referenced_locally
@@ -219,6 +221,19 @@
     )
   )
 
+  interface NavigationSection {
+    id: BrainstormNavigationSectionId
+    title: string
+  }
+
+  const navigationSections = $derived.by<NavigationSection[]>(() => {
+    const items: NavigationSection[] = [...visibleSections]
+    if ((draft.content.prototypes?.length ?? 0) > 0) {
+      items.push({ id: 'prototypes', title: 'Prototypes' })
+    }
+    return items
+  })
+
   const openAnnotationCount = $derived(
     draft.annotations.filter((annotation) => annotation.status === 'open').length
   )
@@ -246,11 +261,12 @@
     void refreshAnnotationMarkers()
   })
 
-  function sectionFor(sectionId: BrainstormSectionId): BrainstormSection | undefined {
+  function sectionFor(sectionId: BrainstormNavigationSectionId): BrainstormSection | undefined {
+    if (sectionId === 'prototypes') return undefined
     return draft.content.sections.find((section) => section.id === sectionId)
   }
 
-  function annotationsFor(sectionId: BrainstormSectionId): BrainstormAnnotation[] {
+  function annotationsFor(sectionId: BrainstormNavigationSectionId): BrainstormAnnotation[] {
     return draft.annotations.filter(
       (annotation) => annotation.section === sectionId && annotation.status === 'open'
     )
@@ -343,7 +359,7 @@
     return { startLine, endLine: startLine + quote.split('\n').length - 1 }
   }
 
-  async function selectAndScroll(sectionId: BrainstormSectionId): Promise<void> {
+  async function selectAndScroll(sectionId: BrainstormNavigationSectionId): Promise<void> {
     sectionsOpen = false
     selectedSection = sectionId
     await tick()
@@ -947,7 +963,7 @@
       </div>
       <div class="min-h-0 flex-1 overflow-y-auto overscroll-contain">
         <div class="space-y-0.5 p-2" role="tablist" aria-orientation="vertical">
-          {#each visibleSections as section (section.id)}
+          {#each navigationSections as section (section.id)}
             {@const annotationCount = annotationsFor(section.id).length}
             <button
               class="flex w-full items-center justify-between gap-2 rounded-md px-2.5 py-2 text-left text-xs transition-colors max-md:py-3 {selectedSection ===
