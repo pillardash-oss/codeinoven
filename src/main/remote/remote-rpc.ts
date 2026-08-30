@@ -159,6 +159,7 @@ export interface RemoteRpcServices {
     | 'runCommand'
     | 'compactSession'
     | 'truncateMessages'
+    | 'deleteMessages'
     | 'dismissQuestion'
     | 'updateQuestion'
     | 'listContextCapabilities'

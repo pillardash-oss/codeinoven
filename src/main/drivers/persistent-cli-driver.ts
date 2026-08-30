@@ -113,6 +113,8 @@ export interface PersistentCliSession {
   title: string
   projectPathHash: string
   nativeSessionId?: string
+  /** Owning thread, stamped by the engine so sessions survive harness switches. */
+  threadId?: string
   messages: AgentMessage[]
   createdAt: number
   updatedAt: number
@@ -1357,6 +1359,54 @@ export abstract class PersistentCliDriver implements HarnessDriver {
 
   private sessionPath(sessionId: string): string {
     return `drivers/${this.id}/sessions/${sessionId}.json`
+  }
+
+  /**
+   * Stamp the owning thread onto a session record. The engine calls this when
+   * binding a session so the driver can relocate the thread's sessions later —
+   * e.g. after a harness switch moved the thread's session slot elsewhere.
+   */
+  async tagSessionThread(projectPath: string, sessionId: string, threadId: string): Promise<void> {
+    try {
+      const session = await this.requireSession(projectPath, sessionId)
+      if (session.threadId === threadId) return
+      session.threadId = threadId
+      await this.persistSession(session)
+    } catch {
+      // Best-effort: an untagged session only costs native resume after a
+      // harness switch, never the current turn.
+    }
+  }
+
+  /**
+   * The most recent session record for a thread in this project, or null.
+   * Scans this driver's session records by project hash + stamped thread id.
+   */
+  protected async findLatestThreadSession(
+    projectPath: string,
+    threadId: string
+  ): Promise<PersistentCliSession | null> {
+    const hash = this.projectPathHash(projectPath)
+    let names: string[]
+    try {
+      names = await this.storage.list(`drivers/${this.id}/sessions`)
+    } catch {
+      return null
+    }
+    let latest: PersistentCliSession | null = null
+    for (const name of names) {
+      if (!name.endsWith('.json')) continue
+      try {
+        const session = await this.storage.read<PersistentCliSession>(
+          `drivers/${this.id}/sessions/${name}`
+        )
+        if (!session || session.threadId !== threadId || session.projectPathHash !== hash) continue
+        if (!latest || session.updatedAt > latest.updatedAt) latest = session
+      } catch {
+        continue
+      }
+    }
+    return latest
   }
 
   private projectPathHash(projectPath: string): string {

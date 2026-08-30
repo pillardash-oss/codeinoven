@@ -395,7 +395,34 @@ export interface HarnessDriver {
     projectPath: string,
     fromSessionId: string,
     toSessionId: string
-  ): Promise<void>
+  ): Promise<boolean>
+
+  /** Stamp the owning thread onto a session record so the driver can later
+   * relocate the thread's sessions across harness switches. Best-effort. */
+  tagSessionThread?(projectPath: string, sessionId: string, threadId: string): Promise<void>
+
+  /**
+   * Restore this session's native conversation binding from the driver's most
+   * recent resumable session record for the given thread. Used when a thread
+   * returns to a harness after a switch: the thread's session slot moved to
+   * the other harness, but this harness still holds the real transcript.
+   * Returns true when a binding was restored. Best-effort; implementations
+   * must not throw.
+   */
+  restoreNativeBinding?(projectPath: string, sessionId: string, threadId: string): Promise<boolean>
+
+  /**
+   * Seed a freshly created session with the thread's edited history as a
+   * native transcript, so the next turn resumes the real conversation instead
+   * of replaying the mirror as a history recap. Returns true when the session
+   * now natively holds history. No-ops on drivers without native transcripts.
+   * Best-effort; must not throw.
+   */
+  prefillNativeSession?(
+    projectPath: string,
+    sessionId: string,
+    messages: readonly AgentMessage[]
+  ): Promise<boolean>
 
   /**
    * Load only the active turn beginning at a stable user-message id. Drivers

@@ -477,6 +477,19 @@ function rawErrorMessage(error: unknown): string {
   return fallback
 }
 
+/**
+ * Remove quoted spans (straight/curly single & double quotes, backticks) from
+ * an instruction so keyword-based intent detection only scans the user's own
+ * words. A request like: build a hifi from "the lofi v2" must match on the
+ * instruction proper, never on material the user merely quoted or pasted.
+ */
+function stripQuotedSpans(source: string): string {
+  return source
+    .replace(/`[^`\n]*`/gu, ' ')
+    .replace(/["\u201c\u201d][^"\u201c\u201d\n]*["\u201c\u201d]/gu, ' ')
+    .replace(/['\u2018\u2019][^'\u2018\u2019\n]*['\u2018\u2019]/gu, ' ')
+}
+
 /** Parse the assistant's text into the batched descriptor object, tolerating a
  *  surrounding JSON code fence. Throws a clear error when the output is not a
  *  JSON object so the caller can safely fall back to per-image calls instead of
@@ -3816,9 +3829,13 @@ export class ChatEngine {
     }
     let storedSessionMessages: AgentMessage[] = []
     let unavailableSessionId: string | undefined
+    let nativeHistoryBound = false
     if (sessionId) {
       try {
         storedSessionMessages = await driver.loadMessages(projectPath, sessionId)
+        // Backfill the thread stamp on records created before tagging existed
+        // so harness-switch relocation can find them later.
+        void driver.tagSessionThread?.(projectPath, sessionId, threadId).catch(() => {})
       } catch {
         Logger.info('Stored harness session is unavailable; creating a replacement', {
           projectId,
@@ -3838,14 +3855,53 @@ export class ChatEngine {
         sessionId,
         driverId
       )
+      // Stamp the thread onto the driver record so the session can be
+      // relocated across harness switches (see the switch branch below).
+      try {
+        await driver.tagSessionThread?.(projectPath, sessionId, threadId)
+      } catch (error) {
+        Logger.dev('Session thread tagging failed:', error)
+      }
+      // A harness switch discards the returning harness's session slot, but
+      // that harness still holds the thread's real native transcript. Restore
+      // the binding so the next RPC spawn resumes it instead of cold-starting
+      // on the engine's history recap.
+      if (switchedHarness) {
+        try {
+          nativeHistoryBound =
+            (await driver.restoreNativeBinding?.(projectPath, sessionId, threadId)) ?? false
+        } catch (error) {
+          Logger.dev('Native binding restore after harness switch failed:', error)
+        }
+      }
       // The replacement session must adopt the replaced session's native
       // transcript binding (same harness), or the harness's own history is
       // orphaned and every later turn falls back to the recap replay.
       if (unavailableSessionId) {
         try {
-          await driver.inheritNativeSession?.(projectPath, unavailableSessionId, sessionId)
+          nativeHistoryBound =
+            (await driver.inheritNativeSession?.(
+              projectPath,
+              unavailableSessionId,
+              sessionId
+            )) ?? false
         } catch (error) {
           Logger.dev('Native session inheritance onto replacement failed:', error)
+        }
+      }
+      // A session edited via delete/truncate starts with no harness history
+      // of its own. Seed the driver's native transcript from the edited
+      // mirror so the next turn resumes the real (edited) conversation
+      // natively instead of replaying it as a history recap.
+      if (!nativeHistoryBound && !switchedHarness) {
+        try {
+          const editedMirror = await this.threadManager.loadMessageRecords(projectId, threadId)
+          const prefillMirror =
+            editedMirror.at(-1)?.role === 'user' ? editedMirror.slice(0, -1) : editedMirror
+          nativeHistoryBound =
+            (await driver.prefillNativeSession?.(projectPath, sessionId, prefillMirror)) ?? false
+        } catch (error) {
+          Logger.dev('Native transcript prefill after session edit failed:', error)
         }
       }
       // The desktop view adopts ensureSession's return value directly. Publish
@@ -3862,10 +3918,13 @@ export class ChatEngine {
       }
     }
     // Record whether the harness natively holds the conversation so the recap
-    // path can skip a second provider history load.
+    // path can skip a second provider history load. A freshly created session
+    // that inherited, restored, or was pre-filled with native history counts
+    // too — the recap must not replay on top of a natively bound transcript.
     this.sessionNativeHistory.set(
       sessionId,
-      driver.capabilities.nativeResume !== false && storedSessionMessages.length > 0
+      (driver.capabilities.nativeResume !== false && storedSessionMessages.length > 0) ||
+        nativeHistoryBound
     )
 
     // A reused native session is replayed in full under whichever model the
@@ -5385,6 +5444,19 @@ export class ChatEngine {
       this.preparedImplementationSessions.delete(thread.sessionId)
       this.outboundMessageIdsBySession.delete(thread.sessionId)
       await this.threadManager.clearSessionId(projectId, threadId)
+      // Destroy the stale driver record — and with it the native transcript
+      // binding — so the pre-edit conversation can never be restored onto a
+      // later session. The next turn seeds a fresh native transcript from the
+      // edited mirror (see ensureSession's prefill).
+      const driver = this.drivers.get(
+        thread.settings?.harnessId ?? thread.sessionHarnessId ?? DEFAULT_HARNESS
+      )
+      try {
+        const projectPath = await this.resolveProjectPath(projectId)
+        await driver?.deleteSession?.(projectPath, thread.sessionId)
+      } catch (error) {
+        Logger.dev('Stale session cleanup after message deletion failed:', error)
+      }
     }
     return presentableMessages(kept)
   }
@@ -11551,8 +11623,12 @@ export class ChatEngine {
     let revisionPathInstruction = ''
     let featureSlug: string | undefined
     const lifecycle = this.engineeringLifecycleEngine.get(projectId, threadId)
+    // Intent keywords must be detected on the instruction proper — text the
+    // user *quoted* (their own description of a prior stage, a pasted
+    // document, etc.) is not a request for this turn.
+    const instructionSource = stripQuotedSpans(source)
     const prototypeMentioned = /\b(prototype|wireframe|mockup|lofi|lo-fi|hifi|hi-fi)\b/iu.test(
-      source
+      instructionSource
     )
     const prototypeFidelity =
       lifecycle?.autopilot === true

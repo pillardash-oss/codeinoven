@@ -1,4 +1,5 @@
-import { mkdtemp, readdir, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises'
+import { randomUUID } from 'node:crypto'
 import { existsSync } from 'node:fs'
 import { homedir, tmpdir } from 'os'
 import { join } from 'path'
@@ -881,6 +882,52 @@ function nativeUserMessageText(message: Record<string, unknown>): string | undef
     )
     .filter((text): text is string => Boolean(text))
   return parts.join('\n')
+}
+
+/**
+ * Serialize CodeInOven mirror messages into native pi session JSONL entries —
+ * the inverse of `parseNativePiSession` at conversation granularity. Only text
+ * content is carried over: tool calls and reasoning blocks are execution
+ * detail the resumed model does not need, and fabricating toolResult entries
+ * would desynchronize pi's own accounting. Returns an empty array when the
+ * mirror carries no conversational text.
+ */
+function prefillTranscriptEntries(
+  projectPath: string,
+  messages: readonly AgentMessage[]
+): string[] {
+  const lines: string[] = [
+    JSON.stringify({
+      type: 'session',
+      version: 3,
+      id: randomUUID(),
+      timestamp: new Date().toISOString(),
+      cwd: projectPath
+    })
+  ]
+  let parentId: string | null = null
+  let wroteMessage = false
+  for (const message of messages) {
+    const text = message.parts
+      .filter((part): part is Extract<AgentPart, { type: 'text' }> => part.type === 'text')
+      .map((part) => part.text)
+      .join('\n')
+      .trim()
+    if (!text) continue
+    const id = randomUUID()
+    lines.push(
+      JSON.stringify({
+        type: 'message',
+        id,
+        parentId,
+        timestamp: new Date(message.createdAt ?? Date.now()).toISOString(),
+        message: { role: message.role, content: [{ type: 'text', text }] }
+      })
+    )
+    parentId = id
+    wroteMessage = true
+  }
+  return wroteMessage ? lines : []
 }
 
 /**
@@ -1824,6 +1871,82 @@ export class PiDriver extends PersistentCliDriver {
   }
 
   /**
+   * Restore this session's native pi transcript binding from the most recent
+   * resumable session record for the thread. Called when a thread returns to
+   * pi after a harness switch: the thread's session slot now belongs to the
+   * other harness, but pi still holds the real transcript on disk — without
+   * this the returning turn cold-starts on the engine's history recap, which
+   * weaker models read as injected fiction and freeze on.
+   */
+  async restoreNativeBinding(
+    projectPath: string,
+    sessionId: string,
+    threadId: string
+  ): Promise<boolean> {
+    try {
+      const replacement = await this.requireSession(projectPath, sessionId)
+      if (replacement.nativeSessionId) return true
+      const previous = await this.findLatestThreadSession(projectPath, threadId)
+      if (!previous || previous.id === sessionId) return false
+      const nativeId = previous.nativeSessionId
+      if (!nativeId) return false
+      if (!existsSync(nativePiSessionDir(projectPath))) return false
+      if (!(await findNativePiSessionFile(projectPath, nativeId))) return false
+      replacement.nativeSessionId = nativeId
+      Logger.info('Restored native Pi transcript binding after harness switch', {
+        sessionId,
+        threadId,
+        fromSessionId: previous.id,
+        nativeSessionId: nativeId
+      })
+      return true
+    } catch (error) {
+      Logger.dev('Native Pi binding restore skipped:', error)
+      return false
+    }
+  }
+
+  /**
+   * Seed a fresh session with the thread's edited history as a native pi
+   * transcript. Used after the user edits a session (delete/truncate/collapse):
+   * instead of replaying the remaining mirror as a history recap — which weak
+   * models read as injected fiction and stall on — the next RPC spawn resumes
+   * this synthetic transcript natively, exactly as if the conversation had
+   * happened in pi itself.
+   */
+  async prefillNativeSession(
+    projectPath: string,
+    sessionId: string,
+    messages: readonly AgentMessage[]
+  ): Promise<boolean> {
+    try {
+      const session = await this.requireSession(projectPath, sessionId)
+      if (session.nativeSessionId) return true
+      const entries = prefillTranscriptEntries(projectPath, messages)
+      if (entries.length === 0) return false
+      const dir = nativePiSessionDir(projectPath)
+      await mkdir(dir, { recursive: true })
+      const nativeId = randomUUID()
+      const file = join(
+        dir,
+        `${new Date().toISOString().replace(/[:.]/gu, '-')}_${nativeId}.jsonl`
+      )
+      await writeFile(file, `${entries.join('\n')}\n`, 'utf8')
+      session.nativeSessionId = nativeId
+      await this.persistSession(session)
+      Logger.info('Seeded a native Pi transcript from the edited mirror', {
+        sessionId,
+        nativeSessionId: nativeId,
+        entries: entries.length
+      })
+      return true
+    } catch (error) {
+      Logger.dev('Native Pi transcript prefill skipped:', error)
+      return false
+    }
+  }
+
+  /**
    * Carry a replaced session's native pi transcript binding over to the
    * replacement record. When the engine mints a replacement app session (the
    * stored session became unreachable), the fresh record starts without a
@@ -1835,23 +1958,25 @@ export class PiDriver extends PersistentCliDriver {
     projectPath: string,
     fromSessionId: string,
     toSessionId: string
-  ): Promise<void> {
+  ): Promise<boolean> {
     try {
       const previous = await this.readSessionRecord(projectPath, fromSessionId)
       const nativeId = previous?.nativeSessionId
-      if (!nativeId) return
-      if (!existsSync(nativePiSessionDir(projectPath))) return
-      if (!(await findNativePiSessionFile(projectPath, nativeId))) return
+      if (!nativeId) return false
+      if (!existsSync(nativePiSessionDir(projectPath))) return false
+      if (!(await findNativePiSessionFile(projectPath, nativeId))) return false
       const replacement = await this.requireSession(projectPath, toSessionId)
-      if (replacement.nativeSessionId) return
+      if (replacement.nativeSessionId) return true
       replacement.nativeSessionId = nativeId
       Logger.info('Inherited native Pi session transcript onto a replacement session', {
         fromSessionId,
         toSessionId,
         nativeSessionId: nativeId
       })
+      return true
     } catch (error) {
       Logger.dev('Native Pi session inheritance skipped:', error)
+      return false
     }
   }
 
