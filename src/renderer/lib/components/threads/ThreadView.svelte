@@ -303,30 +303,12 @@
   // it only when the user reaches the top. Render that page as one continuous
   // scroll surface so the user can always scroll back down to the latest turn.
 
-  /** Tail-first render window: how many of the loaded messages are mounted.
-   *  A thread switch starts at the newest tail so the first frame paints the
-   *  last turns instantly, then the window grows across frames to reveal the
-   *  rest of the loaded page without ever blocking the renderer on markdown. */
-  let renderLimit = $state(TAIL_RENDER_INITIAL_LIMIT)
+  /** The thread page is bounded (HISTORY_WINDOW_SIZE), so the loaded page is
+   *  mounted as one static snapshot. No progressive windowing: the reveal must
+   *  never mutate the list after first paint, and scrolling must be a pure
+   *  snapshot scroll with zero runtime work. */
 
-  /** Complete the render window in one step on the frame after mount. The
-   *  store page is bounded (HISTORY_WINDOW_SIZE), so this is a bounded flush,
-   *  and completing it in one mutation — rather than stepping the limit over
-   *  several frames — keeps the mounted list static while the user scrolls.
-   *  Stepwise growth re-anchors mid-scroll and was the source of the jumping
-   *  and flicker reported during the reveal. */
-  $effect(() => {
-    const total = messages.length
-    if (renderLimit >= total) return
-    const timer = setTimeout(() => {
-      renderLimit = total
-    }, TAIL_RENDER_GROW_DELAY_MS)
-    return () => clearTimeout(timer)
-  })
-
-  let visibleMessages = $derived(
-    renderLimit >= messages.length ? messages : messages.slice(-renderLimit)
-  )
+  let visibleMessages = $derived(messages)
   /** The last turn in the list and whether it is still the "active" turn. A
    *  trailing steer — a user message the agent has not responded to yet — does
    *  not end the turn it intervenes in, so the streaming trace for the current
