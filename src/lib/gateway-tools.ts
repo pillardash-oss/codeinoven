@@ -1,9 +1,9 @@
 import { UTILITY_KIND_VALUES } from './types'
 
 /** Stable app-owned gateway tool names. */
-export const UTILITY_SEARCH_TOOL_NAME = 'utility_search'
-export const UTILITY_ACTIVATE_TOOL_NAME = 'utility_activate'
-export const UTILITY_INVOKE_TOOL_NAME = 'utility_invoke'
+export const UTILITY_SEARCH_TOOL_NAME = 'cio_util_find'
+export const UTILITY_ACTIVATE_TOOL_NAME = 'cio_util_init'
+export const UTILITY_INVOKE_TOOL_NAME = 'cio_util_use'
 /** Explicit-setup-only operation for installing validated utility definitions. */
 export const UTILITY_MANAGE_TOOL_NAME = 'utility_manage'
 /** Explicit-turn-only, read-only app diagnostics for debugging user-reported issues. */

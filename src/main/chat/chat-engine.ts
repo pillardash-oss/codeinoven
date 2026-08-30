@@ -13393,7 +13393,7 @@ export class ChatEngine {
     const observedToolNames = observedTools.map((part) => part.tool.toLowerCase())
     if (
       input.utilitySearchRequired &&
-      !observedToolNames.some((name) => name.includes('utility_search'))
+      !observedToolNames.some((name) => name.includes('cio_util_find'))
     ) {
       issues.push('verification.utilities has no utility_search call in the auditor transcript')
     }
@@ -16714,7 +16714,7 @@ export class ChatEngine {
     if (!info || info.ephemeral || !info.activeTurnId) return
     if ((this.searchNudgeAttempts.get(sessionId) ?? 0) >= 1) return
     const toolName = part.tool.trim()
-    if (!toolName || toolName.toLocaleLowerCase().includes('utility_search')) return
+    if (!toolName || toolName.toLocaleLowerCase().includes('cio_util_find')) return
     const toolError = [part.state.error, part.state.output, part.state.title]
       .filter((value): value is string => Boolean(value?.trim()))
       .join('\n')

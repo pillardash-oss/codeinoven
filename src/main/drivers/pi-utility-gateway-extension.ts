@@ -21,9 +21,9 @@
  */
 
 export const PI_UTILITY_GATEWAY_TOOL_NAMES = [
-  'utility_search',
-  'utility_activate',
-  'utility_invoke'
+  'cio_util_find',
+  'cio_util_init',
+  'cio_util_use'
 ] as const
 
 export function piUtilityGatewayExtension(): string {
@@ -116,7 +116,7 @@ function textResult(value: unknown): { content: Array<{ type: 'text'; text: stri
 
 export default function codeInOvenUtilityGatewayExtension(pi: ExtensionAPI): void {
   pi.registerTool({
-    name: 'utility_search',
+    name: 'cio_util_find',
     label: 'Search CodeInOven utilities',
     description:
       'Search app-managed MCP servers, skills, utilities, web services, and computer-use capabilities by capability name or natural-language task intent. If no direct lexical match exists, the result returns project-aware candidates for you to evaluate semantically. If you already know an eligible utility, you may activate it directly. Only conclude a capability does not exist after a search where notFound is true.',
@@ -139,7 +139,7 @@ export default function codeInOvenUtilityGatewayExtension(pi: ExtensionAPI): voi
   })
 
   pi.registerTool({
-    name: 'utility_activate',
+    name: 'cio_util_init',
     label: 'Activate CodeInOven utility',
     description:
       'Activate one installed utility for the current turn and inspect the operations it exposes.',
@@ -153,7 +153,7 @@ export default function codeInOvenUtilityGatewayExtension(pi: ExtensionAPI): voi
   })
 
   pi.registerTool({
-    name: 'utility_invoke',
+    name: 'cio_util_use',
     label: 'Invoke CodeInOven utility operation',
     description: 'Invoke an operation on a utility activated for the current turn.',
     parameters: Type.Object({
