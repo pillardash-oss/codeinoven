@@ -4697,7 +4697,7 @@
             </Dialog.Title>
             <Dialog.Description class="sr-only">Fullscreen terminal</Dialog.Description>
             <div class="flex w-4/5 min-w-0 shrink-0 overflow-x-auto">
-              <div class="flex min-w-max items-center gap-1">
+              <div class="ml-auto flex min-w-max items-center gap-1">
                 {#each fullscreenTerminalTabs as terminalStripTab (terminalStripTab.id)}
                   <div
                     class="group flex h-7 shrink-0 items-center rounded-md {terminalStripTab.id ===
@@ -4778,7 +4778,7 @@
               {browserTab.title}
             </Dialog.Title>
             <div class="titlebar-no-drag flex w-4/5 min-w-0 shrink-0 overflow-x-auto">
-              <div class="flex min-w-max items-center gap-1">
+              <div class="ml-auto flex min-w-max items-center gap-1">
                 {#each fullscreenBrowserTabs as fullscreenTab (fullscreenTab.id)}
                   <div
                     class="group flex h-7 shrink-0 items-center rounded-md {fullscreenTab.id ===
