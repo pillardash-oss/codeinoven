@@ -1,6 +1,5 @@
 <script lang="ts">
-  import { DropdownMenu } from 'bits-ui'
-  import { ArrowDownToLine, GitFork, Loader2, Trash2, X } from '@lucide/svelte'
+  import { GitFork, Loader2, Shredder, Trash2, X } from '@lucide/svelte'
 
   export type DeleteMode = 'down' | 'single' | 'up'
 
@@ -90,62 +89,36 @@
               <GitFork size={13} />
             {/if}
           </button>
-          <DropdownMenu.Root>
-            <DropdownMenu.Trigger
-              class="shrink-0 rounded p-1 text-dimmed opacity-0 transition-opacity group-hover/msg:opacity-100 hover:text-danger disabled:cursor-not-allowed disabled:opacity-50"
-              aria-label="Delete history around this message"
-              title="Delete history"
-              disabled={busy}
-            >
-              <Trash2 size={13} />
-            </DropdownMenu.Trigger>
-            <DropdownMenu.Portal>
-              <DropdownMenu.Content
-                side="left"
-                align="start"
-                sideOffset={4}
-                collisionPadding={8}
-                class="z-50 w-56 overflow-hidden rounded-xl border bg-surface p-1 shadow-lg"
-              >
-                <DropdownMenu.Item
-                  class="flex w-full items-start gap-2 rounded-lg px-2.5 py-1.5 text-sm text-danger outline-none transition-colors hover:bg-danger/10 focus:bg-danger/10"
-                  onSelect={() => onDelete(message.id, 'down')}
-                >
-                  <ArrowDownToLine size={13} class="mt-0.5 shrink-0" />
-                  <span>
-                    Delete from this point down
-                    <span class="block text-[11px] text-dimmed">
-                      This message and everything after it is deleted.
-                    </span>
-                  </span>
-                </DropdownMenu.Item>
-                <DropdownMenu.Item
-                  class="flex w-full items-start gap-2 rounded-lg px-2.5 py-1.5 text-sm text-danger outline-none transition-colors hover:bg-danger/10 focus:bg-danger/10"
-                  onSelect={() => onDelete(message.id, 'single')}
-                >
-                  <Trash2 size={13} class="mt-0.5 shrink-0" />
-                  <span>
-                    Delete just this message
-                    <span class="block text-[11px] text-dimmed">
-                      Only this message and its work trace are deleted.
-                    </span>
-                  </span>
-                </DropdownMenu.Item>
-                <DropdownMenu.Item
-                  class="flex w-full items-start gap-2 rounded-lg px-2.5 py-1.5 text-sm text-danger outline-none transition-colors hover:bg-danger/10 focus:bg-danger/10"
-                  onSelect={() => onDelete(message.id, 'up')}
-                >
-                  <ArrowDownToLine size={13} class="mt-0.5 shrink-0 rotate-180" />
-                  <span>
-                    Delete from this point up
-                    <span class="block text-[11px] text-dimmed">
-                      This message and everything before it is deleted.
-                    </span>
-                  </span>
-                </DropdownMenu.Item>
-              </DropdownMenu.Content>
-            </DropdownMenu.Portal>
-          </DropdownMenu.Root>
+          <button
+            type="button"
+            class="shrink-0 rounded p-1 text-dimmed opacity-0 transition-all group-hover/msg:opacity-100 hover:bg-elevated hover:text-danger disabled:cursor-not-allowed disabled:opacity-50"
+            aria-label="Delete just this message and its work trace"
+            title="Delete just this message"
+            disabled={busy}
+            onclick={() => onDelete(message.id, 'single')}
+          >
+            <Trash2 size={13} />
+          </button>
+          <button
+            type="button"
+            class="shrink-0 rounded p-1 text-dimmed opacity-0 transition-all group-hover/msg:opacity-100 hover:bg-elevated hover:text-danger disabled:cursor-not-allowed disabled:opacity-50"
+            aria-label="Delete this message and everything before it"
+            title="Delete up (this message and everything before)"
+            disabled={busy}
+            onclick={() => onDelete(message.id, 'up')}
+          >
+            <Shredder size={13} class="rotate-180" />
+          </button>
+          <button
+            type="button"
+            class="shrink-0 rounded p-1 text-dimmed opacity-0 transition-all group-hover/msg:opacity-100 hover:bg-elevated hover:text-danger disabled:cursor-not-allowed disabled:opacity-50"
+            aria-label="Delete this message and everything after it"
+            title="Delete down (this message and everything after)"
+            disabled={busy}
+            onclick={() => onDelete(message.id, 'down')}
+          >
+            <Shredder size={13} />
+          </button>
         </div>
         {#if message.tracePreview && message.tracePreview.length > 0}
           <div class="ml-5 border-l pl-3">
