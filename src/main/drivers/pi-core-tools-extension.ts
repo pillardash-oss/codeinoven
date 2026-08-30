@@ -86,10 +86,15 @@ const CIO_SYSTEM_PROMPT_PATH = '__CIO_SYSTEM_PROMPT_PATH__'
 // Pi's own bundled system prompt opens with a "you are an assistant" framing
 // that pushes models toward generic chatbot hedging (permission-seeking,
 // disclaiming, "I should be cautious") instead of acting as an autonomous
-// engineering agent. CodeInOven is an Agentic Development Environment, not a
-// chat product, so the identity line is replaced rather than appended to —
-// the rest of Pi's own prompt (tool list, guidelines, doc paths) is left
-// intact since it is still accurate and useful.
+// engineering agent. This only gets swapped for genuine project-thread work
+// (Engineering and regular project chats with full workspace scope), never
+// for plain/temporary chat or file-system-enabled chat threads — those are
+// still meant to read as a chat assistant, not an autonomous engineering
+// agent. The full workspace-scope block (buildWorkspaceContext in
+// prompt-assembler.ts) is the only prompt layer that ever contains this
+// marker line, so its presence is the reliable "this is project mode, not
+// chat mode" signal.
+const CIO_PROJECT_MODE_MARKER = 'WORKING SCOPE — this overrides ambiguous instructions:'
 const PI_ASSISTANT_IDENTITY_LINE =
   'You are an expert coding assistant operating inside pi, a coding agent harness. You help users by reading files, executing commands, editing code, and writing new files.'
 const CIO_AGENT_IDENTITY_LINE =
@@ -898,10 +903,12 @@ export default function codeInOvenCoreToolsExtension(pi) {
   // instead of duplicating them inside every user turn's text (see
   // loadCioSystemPrompt above for why).
   pi.on('before_agent_start', (event) => {
-    const base = event.systemPrompt.includes(PI_ASSISTANT_IDENTITY_LINE)
-      ? event.systemPrompt.replace(PI_ASSISTANT_IDENTITY_LINE, CIO_AGENT_IDENTITY_LINE)
-      : event.systemPrompt
     const extra = loadCioSystemPrompt()
+    const isProjectMode = extra.includes(CIO_PROJECT_MODE_MARKER)
+    const base =
+      isProjectMode && event.systemPrompt.includes(PI_ASSISTANT_IDENTITY_LINE)
+        ? event.systemPrompt.replace(PI_ASSISTANT_IDENTITY_LINE, CIO_AGENT_IDENTITY_LINE)
+        : event.systemPrompt
     if (base === event.systemPrompt && !extra) return undefined
     return { systemPrompt: extra ? base + '\\n\\n' + extra : base }
   })
