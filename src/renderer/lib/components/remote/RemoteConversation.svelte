@@ -930,6 +930,17 @@
     }
   })
 
+  /** Toolbox icon activity mirrors the staged selection, not the persisted
+   *  settings: toggles are intent-only until send, so the icon must dim or
+   *  light the moment a switch flips — not after the next message. */
+  const toolboxActive = $derived.by(() => {
+    const pending = pendingLifecycleSelection
+    if (pending) {
+      return pending.autopilot === true || normalizeLifecycleStages(pending.stages).length > 0
+    }
+    return settings.engineeringMode === true
+  })
+
   function handleSend(
     text: string,
     attachments: PromptAttachment[],
@@ -1540,6 +1551,7 @@
         hidePermissionSelector={chatMode}
         showEngineeringMode={!chatMode}
         engineeringLifecycle={pendingLifecycleDisplay}
+        engineeringActive={toolboxActive}
         onEngineeringLifecycleSelect={selectEngineeringLifecycle}
         onEngineeringLifecycleRetry={retryEngineeringLifecycle}
         showChatModes={false}

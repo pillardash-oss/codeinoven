@@ -2555,9 +2555,6 @@
     }
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     workspaceState.openThread(thread as any, project)
-    if (activeThread) {
-      void inheritEngineeringLifecycle(project.id, activeThread.id, thread.id)
-    }
     // Persist in background with the same stable id — no ID swap, branch
     // detection runs after the first thread:update broadcast, never blocking typing.
     void invoke('thread:create', {
@@ -2578,6 +2575,20 @@
         if (workspaceState.selectedThread?.id === optimisticId) {
           workspaceState.openThread(confirmed, project)
         }
+        // Lifecycle inheritance must run only after the destination row is
+        // durable: fired concurrently with creation, its internal `thread:get`
+        // can race ahead of the insert and the "Thread not found" failure is
+        // swallowed — leaving the toolbox icon lit while every switch reads off.
+        if (activeThread) {
+          void inheritEngineeringLifecycle(project.id, activeThread.id, optimisticId)
+        }
+        if (activeThread?.settings) {
+          // Settings already applied optimistically and persisted by thread:create;
+          // this update keeps the pre-fix main-process path honest now that the
+          // row is guaranteed durable.
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          void persistInheritedThreadSettings(thread as any, inheritedSettings).catch(() => {})
+        }
       })
       .catch((error) => {
         // Creation failed — remove the optimistic thread so the UI does not strand on a phantom
@@ -2588,11 +2599,6 @@
         }
         reportError(error, 'The new thread could not be created.')
       })
-    if (activeThread?.settings) {
-      // Settings already applied optimistically; background persistence will confirm via thread:update
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      void persistInheritedThreadSettings(thread as any, inheritedSettings).catch(() => {})
-    }
   }
 
   /** Start a fresh standalone chat — shows the composer immediately. */

@@ -448,6 +448,18 @@
     }
   })
 
+  /** Toolbox icon activity mirrors the staged selection, not the persisted
+   *  settings: toggles are intent-only until send, so the icon must dim or
+   *  light the moment a switch flips — not after the next message.
+   *  Without a staged selection the persisted mode stays authoritative. */
+  const toolboxActive = $derived.by(() => {
+    const pending = pendingLifecycleSelection
+    if (pending) {
+      return pending.autopilot === true || normalizeLifecycleStages(pending.stages).length > 0
+    }
+    return settings.engineeringMode === true
+  })
+
   function settingsForEngineeringState(state: EngineeringLifecycleState | null): ThreadSettings {
     if (!state || (state.selectedStages.length === 0 && !state.autopilot)) {
       return { ...settings, engineeringMode: false, assignmentMode: false, loopMode: false }
@@ -10392,6 +10404,7 @@
                   autofocus
                   showEngineeringMode={!chatMode}
                   engineeringLifecycle={pendingLifecycleDisplay}
+                  engineeringActive={toolboxActive}
                   onEngineeringLifecycleSelect={selectEngineeringLifecycle}
                   onEngineeringLifecycleRetry={retryEngineeringLifecycle}
                   showChatModes={chatMode}

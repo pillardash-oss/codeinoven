@@ -177,6 +177,9 @@
     /** False on the Chats tab — plain chats never surface the engineer toggle. */
     showEngineeringMode?: boolean
     engineeringLifecycle?: EngineeringLifecycleState | null
+    /** Overrides the settings-derived Engineering activity for the toolbox
+     *  icon so staged (send-deferred) selections light or dim it live. */
+    engineeringActive?: boolean
     onEngineeringLifecycleSelect?: (
       input: EngineeringLifecycleSelectionInput
     ) => void | Promise<void>
@@ -277,6 +280,7 @@
     onEditReference,
     showEngineeringMode = true,
     engineeringLifecycle = null,
+    engineeringActive,
     onEngineeringLifecycleSelect,
     onEngineeringLifecycleRetry,
     showChatModes = false,
@@ -2304,7 +2308,7 @@
       <EngineeringToolbox
         bind:this={engineeringToolbox}
         lifecycleState={engineeringLifecycle}
-        active={resolved.engineeringMode === true}
+        active={(engineeringActive ?? resolved.engineeringMode) === true}
         disabled={readOnlyMode}
         onselect={onEngineeringLifecycleSelect}
         onretry={onEngineeringLifecycleRetry}
