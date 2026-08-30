@@ -234,6 +234,9 @@ async function recognizerFor(
     featConfig: { sampleRate: ASR_SAMPLE_RATE, featureDim: 80 },
     modelConfig: {
       ...modelConfig,
+      // Stage-level parallelism comes from one worker thread per stage
+      // (ASR / TTS); raising this intra-op count historically spawned
+      // unbounded native threads and crashed the app. Keep it at 1.
       numThreads: 1,
       debug: false,
       provider: 'cpu'

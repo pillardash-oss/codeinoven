@@ -14,16 +14,32 @@ import type { SpeechWorkerRequest, SpeechWorkerResponse } from '../speech-worker
 interface PendingRequest {
   resolve: (response: SpeechWorkerResponse) => void
   reject: (error: Error) => void
+  worker: Worker
 }
 
-/** Portable sherpa adapter; every native call runs inside one worker thread. */
+/**
+ * Speech pipeline stage a worker thread is dedicated to. Each stage gets at
+ * most one worker thread, so a TTS synthesis can run while an ASR transcription
+ * is in flight without either stage growing unbounded native threads.
+ */
+type SpeechWorkerStage = 'asr' | 'tts'
+
+function stageForRequest(request: SpeechWorkerRequest): SpeechWorkerStage {
+  return request.kind === 'synthesize' ? 'tts' : 'asr'
+}
+
+/**
+ * Portable sherpa adapter; native calls run inside stage-dedicated worker
+ * threads (at most one ASR worker plus one TTS worker per backend instance).
+ * Together with the llama.cpp cleanup server this keeps the app at a maximum
+ * of three concurrent speech threads.
+ */
 export class SherpaSpeechBackend implements SpeechBackend {
   readonly runtime = 'sherpa-onnx' as const
-  private worker: Worker | null = null
+  private readonly workers = new Map<SpeechWorkerStage, Worker>()
   private readonly pending = new Map<string, PendingRequest>()
 
   async capabilities(): Promise<SpeechCapability[]> {
-    this.ensureWorker()
     return ['asr', 'cleanup', 'tts']
   }
 
@@ -95,17 +111,19 @@ export class SherpaSpeechBackend implements SpeechBackend {
   }
 
   async dispose(): Promise<void> {
-    const worker = this.worker
-    if (!worker) return
-    const request: SpeechWorkerRequest = { id: randomUUID(), kind: 'shutdown' }
-    await this.request(request, new AbortController().signal).catch(() => undefined)
-    await worker.terminate()
-    this.worker = null
+    const workers = [...this.workers.values()]
+    this.workers.clear()
+    for (const pending of this.pending.values()) {
+      pending.reject(new Error('Sherpa speech worker stopped.'))
+    }
+    this.pending.clear()
+    await Promise.all(workers.map((worker) => worker.terminate()))
   }
 
-  private ensureWorker(): Worker {
-    if (this.worker) return this.worker
-    const worker = createSherpaWorker({ name: 'codeinoven-sherpa-speech' })
+  private ensureWorker(stage: SpeechWorkerStage): Worker {
+    const existing = this.workers.get(stage)
+    if (existing) return existing
+    const worker = createSherpaWorker({ name: `codeinoven-sherpa-${stage}` })
     worker.on('message', (response: SpeechWorkerResponse) => {
       const pending = this.pending.get(response.id)
       if (!pending) return
@@ -113,13 +131,17 @@ export class SherpaSpeechBackend implements SpeechBackend {
       pending.resolve(response)
     })
     worker.on('error', (error) =>
-      this.rejectAll(error instanceof Error ? error : new Error(String(error)))
+      this.rejectWorker(worker, error instanceof Error ? error : new Error(String(error)))
     )
     worker.on('exit', (code) => {
-      this.worker = null
-      if (code !== 0) this.rejectAll(new Error(`Sherpa speech worker exited with code ${code}.`))
+      for (const [key, candidate] of this.workers) {
+        if (candidate === worker) this.workers.delete(key)
+      }
+      if (code !== 0) {
+        this.rejectWorker(worker, new Error(`Sherpa ${stage} worker exited with code ${code}.`))
+      }
     })
-    this.worker = worker
+    this.workers.set(stage, worker)
     return worker
   }
 
@@ -128,17 +150,19 @@ export class SherpaSpeechBackend implements SpeechBackend {
     signal: AbortSignal
   ): Promise<SpeechWorkerResponse> {
     if (signal.aborted) return Promise.reject(new Error('Speech operation cancelled.'))
-    const worker = this.ensureWorker()
+    const worker = this.ensureWorker(stageForRequest(request))
     return new Promise<SpeechWorkerResponse>((resolve, reject) => {
       const abort = (): void => {
         this.pending.delete(request.id)
         reject(new Error('Speech operation cancelled.'))
-        const activeWorker = this.worker
-        this.worker = null
-        void activeWorker?.terminate()
+        void worker.terminate()
+        for (const [stage, candidate] of this.workers) {
+          if (candidate === worker) this.workers.delete(stage)
+        }
       }
       signal.addEventListener('abort', abort, { once: true })
       this.pending.set(request.id, {
+        worker,
         resolve: (response) => {
           signal.removeEventListener('abort', abort)
           resolve(response)
@@ -152,8 +176,11 @@ export class SherpaSpeechBackend implements SpeechBackend {
     })
   }
 
-  private rejectAll(error: Error): void {
-    for (const pending of this.pending.values()) pending.reject(error)
-    this.pending.clear()
+  private rejectWorker(worker: Worker, error: Error): void {
+    for (const [id, pending] of this.pending) {
+      if (pending.worker !== worker) continue
+      this.pending.delete(id)
+      pending.reject(error)
+    }
   }
 }
