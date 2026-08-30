@@ -117,6 +117,19 @@ export class PiRpcClient {
     await this.send({ type: 'new_session' })
   }
 
+  /**
+   * Load a previously persisted Pi session file so the conversation continues
+   * with its full native history. Rejects when pi rejects the switch or an
+   * extension cancels it (`session_before_switch`), so the caller can fall
+   * back to a fresh session.
+   */
+  async switchSession(sessionPath: string): Promise<void> {
+    const data = await this.send({ type: 'switch_session', sessionPath })
+    if (record(data)?.['cancelled'] === true) {
+      throw new Error('Pi cancelled the session switch (session_before_switch)')
+    }
+  }
+
   /** Send a prompt turn. The response resolves at preflight; events stream after. */
   async prompt(message: string, images?: PiRpcImage[]): Promise<void> {
     await this.send(
@@ -267,6 +280,12 @@ export class PiRpcClient {
     }
     this.pending.clear()
   }
+}
+
+function record(value: unknown): Record<string, unknown> | null {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null
 }
 
 /** Dialog extension UI methods that block until the client replies. */

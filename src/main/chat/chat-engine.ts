@@ -8647,7 +8647,14 @@ export class ChatEngine {
     // A queued child report has not reached the harness yet. Exclude it from a
     // fresh-session recap so it appears exactly once as the next prompt when
     // the Sr. Engineer becomes idle, never once in history and again as input.
-    const mirror = persistedMirror.filter((message) => !queuedHandoffIds.has(message.id))
+    const mirrored = persistedMirror.filter((message) => !queuedHandoffIds.has(message.id))
+    // The current turn's user message is always delivered as the prompt itself,
+    // in every branch below. It must never also appear as a "restored from
+    // history" entry: on a brand-new or forked thread the mirror holds nothing
+    // else, and a recap that announces an earlier conversation but only echoes
+    // the question back reads to the model as a fabricated/injected context —
+    // the exact pattern that makes resuming models refuse to continue.
+    const mirror = mirrored.at(-1)?.role === 'user' ? mirrored.slice(0, -1) : mirrored
     if (mirror.length === 0) return ''
     if (thread?.sessionId && sameHarness) {
       // `ensureSession` already confirmed whether the harness natively holds
@@ -8661,8 +8668,7 @@ export class ChatEngine {
       try {
         const { driver } = await this.resolve(projectId, driverId, threadId)
         if (driver.capabilities?.nativeResume === false) {
-          const priorMessages = mirror.at(-1)?.role === 'user' ? mirror.slice(0, -1) : mirror
-          return formatHistoryRecap(priorMessages, { maxInputTokens: budget })
+          return formatHistoryRecap(mirror, { maxInputTokens: budget })
         }
       } catch {
         // The durable mirror remains the safe fallback when the driver is unavailable.

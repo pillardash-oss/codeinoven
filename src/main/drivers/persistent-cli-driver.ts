@@ -187,7 +187,7 @@ export abstract class PersistentCliDriver implements HarnessDriver {
     Pick<SendPromptOptions, 'text' | 'attachments'>
   >()
   private utilityRuntimes = new Map<string, PreparedUtilityRuntime>()
-  private sessionCache = new Map<string, PersistentCliSession>()
+  protected sessionCache = new Map<string, PersistentCliSession>()
   private deletedSessions = new Set<string>()
   /** Sessions whose provider stream already supplied a structured terminal issue. */
   private structuredProcessIssues = new Set<string>()
@@ -302,7 +302,11 @@ export abstract class PersistentCliDriver implements HarnessDriver {
           allowedTools: []
         })
         await completion.promise
-        const messages = await this.loadMessages(projectPath, sessionId)
+        // Read the live session record directly: a driver override may answer
+        // from a native transcript or report [] for unresumable sessions, while
+        // title generation always wants this disposable session's own mirror.
+        const titleSession = await this.requireSession(projectPath, sessionId)
+        const messages = titleSession.messages
         const response = [...messages].reverse().find((message) => message.role === 'assistant')
         if (response?.error) {
           accounted.push(

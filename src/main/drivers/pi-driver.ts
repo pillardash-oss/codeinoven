@@ -989,7 +989,7 @@ export class PiDriver extends PersistentCliDriver {
     runtimeTopology: { kind: 'shared_daemon', scope: 'application', sessionWorkers: true },
     streaming: true,
     steering: true,
-    nativeResume: false,
+    nativeResume: true,
     messageHistory: 'mirrored',
     interactivePermissions: true,
     attachments: true,
@@ -1011,6 +1011,13 @@ export class PiDriver extends PersistentCliDriver {
   private gatewayExtensionPaths = new Map<string, string>()
   private sessionProjects = new Map<string, string>()
   private activeTurns = new Set<string>()
+  /**
+   * Sessions whose live RPC process was started by loading the previously
+   * persisted native pi transcript (`switch_session`). The chat engine's
+   * resume decision reads `loadMessages` before this process exists; this set
+   * records the outcome for observability and cleanup.
+   */
+  private readonly resumedNativeSessions = new Set<string>()
   private pendingUiRequests = new Map<string, PiUiRequest>()
   /**
    * Bounded silent-continue bookkeeping per session. When a turn settles with a
@@ -1715,7 +1722,11 @@ export class PiDriver extends PersistentCliDriver {
     this.sessionProjects.set(sessionId, projectPath)
     try {
       await client.newSession()
-      // Best-effort tuning: a transient failure here must never block the turn.
+      // Resume the persisted native transcript BEFORE syncing the native
+      // session id: `switch_session` makes the resumed session current, so the
+      // sync below then records the same id the thread was already bound to.
+      // A transient failure here must never block the turn.
+      await this.resumeNativePiSession(projectPath, sessionId, client)
       await Promise.allSettled([
         client.setAutoRetry(true),
         client.setAutoCompaction(true),
@@ -1733,19 +1744,106 @@ export class PiDriver extends PersistentCliDriver {
     return client
   }
 
+  /**
+   * Continue a previously persisted native pi session in the freshly spawned
+   * RPC process by loading pi's own transcript file. Without this, every
+   * driver-side process replacement (app restart, idle dispose, crash) made
+   * the next turn a cold session — the engine's history recap was the only
+   * context carrier, and models that see their prior work restated without
+   * tool evidence treat it as fabricated and refuse to continue.
+   *
+   * Best-effort: any failure leaves the fresh session in place and the
+   * engine's recap replay covers the gap.
+   */
+  private async resumeNativePiSession(
+    projectPath: string,
+    sessionId: string,
+    client: PiRpcClient
+  ): Promise<void> {
+    try {
+      const session = await this.requireSession(projectPath, sessionId)
+      const nativeId = session.nativeSessionId
+      if (!nativeId) return
+      if (!existsSync(nativePiSessionDir(projectPath))) return
+      const file = await findNativePiSessionFile(projectPath, nativeId)
+      if (!file) return
+      await client.switchSession(file)
+      this.resumedNativeSessions.add(sessionId)
+      Logger.info('Resumed native Pi session transcript', { sessionId, nativeSessionId: nativeId })
+    } catch (error) {
+      Logger.dev('Native Pi session resume unavailable; continuing fresh:', error)
+    }
+  }
+
   /** Mirror the native pi session id so driver records stay addressable. */
   /**
    * Load messages for an app-managed session, or — for sub-agent worker
    * threads — the native pi session transcript persisted on disk by the
    * in-process sub-agent session.
+   *
+   * The native transcript is authoritative whenever it exists and the live RPC
+   * process is not already holding the conversation in memory: the engine's
+   * resume decision treats a non-empty `loadMessages` result as "this harness
+   * session natively holds the conversation" and skips the history-recap
+   * replay. Returning the mirror there would make a fresh (unresumable) pi
+   * session look resumable and silently drop all context.
    */
   override async loadMessages(projectPath: string, sessionId: string): Promise<AgentMessage[]> {
+    if (!this.rpcClients.has(sessionId)) {
+      const record = await this.readSessionRecord(projectPath, sessionId)
+      if (record) {
+        const native = await this.loadResumableNativeMessages(projectPath, sessionId, record)
+        if (native) return native
+        if (record.nativeSessionId) {
+          // The session was bound to a native pi session whose transcript is
+          // gone — the next turn starts a fresh session, so report no native
+          // history and let the engine replay the durable mirror instead.
+          return []
+        }
+      }
+    }
     try {
       return await super.loadMessages(projectPath, sessionId)
     } catch (error) {
       const native = await this.loadNativeSubagentMessages(projectPath, sessionId)
       if (native) return native
       throw error
+    }
+  }
+
+  /** The persisted session record, or null when the session is unknown. */
+  private async readSessionRecord(
+    projectPath: string,
+    sessionId: string
+  ): Promise<PersistentCliSession | null> {
+    try {
+      return await this.requireSession(projectPath, sessionId)
+    } catch {
+      return null
+    }
+  }
+
+  /**
+   * Parse pi's own transcript for a cold (no live RPC process) session whose
+   * native session file still exists on disk. Returns null when the session is
+   * not natively resumable so the caller falls back to the mirror.
+   */
+  private async loadResumableNativeMessages(
+    projectPath: string,
+    sessionId: string,
+    sessionRecord: PersistentCliSession
+  ): Promise<AgentMessage[] | null> {
+    const nativeId = sessionRecord.nativeSessionId
+    if (!nativeId) return null
+    if (!existsSync(nativePiSessionDir(projectPath))) return null
+    const file = await findNativePiSessionFile(projectPath, nativeId)
+    if (!file) return null
+    try {
+      const messages = await parseNativePiSession(file, sessionId)
+      return messages.length > 0 ? messages : null
+    } catch (error) {
+      Logger.dev('Pi native transcript parse failed during resume check:', error)
+      return null
     }
   }
 
@@ -1922,6 +2020,10 @@ export class PiDriver extends PersistentCliDriver {
 
   private handleRpcExit(code: number | null, sessionId: string): void {
     void code
+    // Drop the dead client so the next turn spawns a fresh RPC process and
+    // resumes the persisted native transcript instead of failing on a dead
+    // pipe (or worse, silently continuing a context-less session).
+    this.disposeRpcClient(sessionId)
     if (this.activeTurns.has(sessionId)) {
       this.activeTurns.delete(sessionId)
       // The pi process died mid-turn; persist whatever was mirrored and
@@ -2296,6 +2398,7 @@ export class PiDriver extends PersistentCliDriver {
       client.dispose()
       this.rpcClients.delete(sessionId)
     }
+    this.resumedNativeSessions.delete(sessionId)
   }
 
   private async buildProviderOverlay(projectPath: string): Promise<ProviderOverlay> {
