@@ -1,4 +1,6 @@
 import { invoke } from '$lib/ipc.svelte'
+import { mobileState } from '$lib/remote/mobile-state.svelte'
+import { workspaceState } from '$lib/stores/workspace.svelte'
 import { reportErrorWithDetails } from '$lib/stores/app-errors.svelte'
 import { toast } from 'svelte-sonner'
 import { pauseCurrentHistoryAudio } from './global-audio'
@@ -263,9 +265,32 @@ class SpeechController {
   private readonly handleGlobalKeydown = (event: KeyboardEvent): void => {
     if (event.key !== 'Escape' || event.defaultPrevented) return
     if (this.state.state !== 'recording') return
+    if (!this.escapeStopsRecording()) return
     event.preventDefault()
     event.stopPropagation()
     void this.stop()
+  }
+
+  /**
+   * Escape may end a recording only while the user is viewing the surface that
+   * is recording. A thread-scoped capture keeps running when the user navigates
+   * to another thread, so Escape pressed there must keep its normal meaning
+   * (stop that thread's run, close an overlay) instead of killing a recording
+   * happening elsewhere — the user returns to the recording thread to stop it.
+   * Recordings without a thread (global overlays like the switcher) stay
+   * Escapable from anywhere because their owning surface remains on screen.
+   */
+  private escapeStopsRecording(): boolean {
+    const active = this.active
+    if (!active) return false
+    const scope = active.scope
+    if (scope.kind === 'global' || scope.threadId === undefined) return true
+    const viewed = isRemotePwaRuntime()
+      ? mobileState.selectedThread
+      : workspaceState.selectedThread
+    if (!viewed || viewed.id !== scope.threadId) return false
+    if (scope.kind === 'project') return viewed.projectId === scope.projectId
+    return true
   }
 
   isActiveTarget(targetId: string): boolean {
