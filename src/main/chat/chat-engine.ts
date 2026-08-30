@@ -233,6 +233,7 @@ import {
   planPrototypeGeneration,
   resolvePrototypeArtifactPaths
 } from '../../lib/prototypes/prototype-artifacts'
+import type { BrainstormPrototypeFidelity } from '../../lib/types'
 import { readPrototypePreviewChunk } from '../prototypes/prototype-preview-service'
 import { PRD_DOCUMENT_JSON_SCHEMA, parseGeneratedPrdContent } from '../../lib/prd/prd-validation'
 import {
@@ -2087,8 +2088,12 @@ export class ChatEngine {
         threadId: string,
         brainstormId: string,
         version: number,
-        note: string
-      ) => this.reviewBrainstorm(projectId, threadId, brainstormId, version, note)
+        note: string,
+        prototypeRequest?: { fidelity: BrainstormPrototypeFidelity; count?: number }
+      ) =>
+        this.reviewBrainstorm(projectId, threadId, brainstormId, version, note, {
+          prototypeRequest
+        })
     )
     ipcMain.handle(
       'agent:finalizeBrainstorm',
@@ -10763,7 +10768,11 @@ export class ChatEngine {
     brainstormId: string,
     version: number,
     note: string,
-    options: { sessionTurn?: boolean } = {}
+    options: {
+      sessionTurn?: boolean
+      /** When set, forces prototype artifact generation for this revision. */
+      prototypeRequest?: { fidelity: BrainstormPrototypeFidelity; count?: number }
+    } = {}
   ): Promise<BrainstormDocument> {
     projectId = validateEntityId(projectId, 'Project ID')
     threadId = validateEntityId(threadId, 'Thread ID')
@@ -10832,6 +10841,7 @@ export class ChatEngine {
           ? {
               announceProgress: false,
               allowPrototypeSkip: true,
+              prototypeOverride: options.prototypeRequest,
               onPrototypesSkipped: (reason: string) => {
                 prototypesSkipped = reason
               }
@@ -10840,6 +10850,9 @@ export class ChatEngine {
               includeConversationContext: false,
               presentation: workflowActionPresentation('Review Brainstorm', note),
               allowPrototypeSkip: true,
+              ...(options.prototypeRequest
+                ? { prototypeOverride: options.prototypeRequest }
+                : {}),
               onPrototypesSkipped: (reason: string) => {
                 prototypesSkipped = reason
               }
@@ -11584,6 +11597,9 @@ export class ChatEngine {
       /** Continue without new prototype artifacts instead of failing when the
        *  harness cannot create scoped prototype files (review refreshes). */
       allowPrototypeSkip?: boolean
+      /** Forces prototype artifact generation for this turn, bypassing intent
+       *  detection on the source text. Count defaults to 1 per fidelity. */
+      prototypeOverride?: { fidelity: BrainstormPrototypeFidelity; count?: number }
       onPrototypesSkipped?: (reason: string) => void
     } = {}
   ): Promise<BrainstormContent> {
@@ -11630,24 +11646,28 @@ export class ChatEngine {
     const prototypeMentioned = /\b(prototype|wireframe|mockup|lofi|lo-fi|hifi|hi-fi)\b/iu.test(
       instructionSource
     )
-    const prototypeFidelity =
-      lifecycle?.autopilot === true
+    const prototypeFidelity: BrainstormPrototypeFidelity | undefined =
+      options.prototypeOverride?.fidelity ??
+      (lifecycle?.autopilot === true
         ? 'lofi'
         : /\b(hifi|hi-fi|high[ -]fidelity)\b/iu.test(source)
           ? 'hifi'
           : prototypeMentioned
             ? 'lofi'
-            : undefined
-    const requestedPrototypeCount = prototypeFidelity
-      ? Number(
-          /\b([1-9]|1[0-9]|20)\s+(?:lofi|lo-fi|hifi|hi-fi|prototype|wireframe|mockup)/iu.exec(
-            source
-          )?.[1]
-        ) || undefined
-      : undefined
-    const prototypeBatches = prototypeFidelity
-      ? planPrototypeGeneration(prototypeFidelity, requestedPrototypeCount)
-      : []
+            : undefined)
+    const requestedPrototypeCount =
+      options.prototypeOverride?.count ??
+      (prototypeFidelity
+        ? Number(
+            /\b([1-9]|1[0-9]|20)\s+(?:lofi|lo-fi|hifi|hi-fi|prototype|wireframe|mockup)/iu.exec(
+              source
+            )?.[1]
+          ) || undefined
+        : undefined)
+    const prototypeBatches =
+      prototypeFidelity && prototypeFidelity !== undefined
+        ? planPrototypeGeneration(prototypeFidelity, requestedPrototypeCount)
+        : []
     if (brainstormWriteRoute) {
       featureSlug = await ensureFeatureSlug(this.database, projectId, threadId)
       const revisionRelativePath = join(

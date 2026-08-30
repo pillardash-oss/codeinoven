@@ -6405,7 +6405,8 @@
           current.threadId,
           current.id,
           current.version,
-          `Generate one direct HiFi prototype H1 based on selected LoFi prototype ${prototypeId}. Preserve all existing LoFi prototypes and the aligned Brainstorm content.`
+          `Generate one direct HiFi prototype H1 based on selected LoFi prototype ${prototypeId}. Preserve all existing LoFi prototypes and the aligned Brainstorm content.`,
+          { prototypeRequest: { fidelity: 'hifi', count: 1 } }
         )
       )
     } catch (error) {

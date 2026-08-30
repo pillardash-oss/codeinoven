@@ -345,7 +345,8 @@
         draft.threadId,
         draft.id,
         draft.version,
-        `Generate one direct HiFi prototype H1 based on selected LoFi prototype ${prototypeId}. Preserve all existing prototypes and aligned Brainstorm content.`
+        `Generate one direct HiFi prototype H1 based on selected LoFi prototype ${prototypeId}. Preserve all existing prototypes and aligned Brainstorm content.`,
+        { prototypeRequest: { fidelity: 'hifi', count: 1 } }
       )
       await refreshEngineeringLifecycle()
     } catch (error) {

@@ -95,6 +95,7 @@ import type {
   AuditGenerationRequest,
   BrainstormContent,
   BrainstormEntryChoice,
+  BrainstormPrototypeFidelity,
   CreateThreadInput,
   EngineeringSpecContent,
   GitResetMode,
@@ -1094,7 +1095,8 @@ export class RemoteRpcDispatcher {
           this.string(args[1]),
           this.string(args[2]),
           args[3] as number,
-          typeof args[4] === 'string' ? args[4] : ''
+          typeof args[4] === 'string' ? args[4] : '',
+          args[5] === undefined ? undefined : { prototypeRequest: args[5] as { fidelity: BrainstormPrototypeFidelity; count?: number } }
         )
       case 'agent:finalizeBrainstorm':
         return chatEngine.finalizeBrainstorm(

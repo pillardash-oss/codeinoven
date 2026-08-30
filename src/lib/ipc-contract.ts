@@ -30,6 +30,7 @@ import type {
   DiscoveredBaseUrlModel,
   BrainstormContent,
   BrainstormDecisionAction,
+  BrainstormPrototypeFidelity,
   BrainstormDocument,
   BrainstormEntryChoice,
   BrainstormProvenance,
@@ -557,7 +558,14 @@ export interface IpcInvokeContract {
     BrainstormDocument | EngineeringSpec | null
   >
   'agent:reviewBrainstorm': Contract<
-    [projectId: string, threadId: string, brainstormId: string, version: number, note: string],
+    [
+      projectId: string,
+      threadId: string,
+      brainstormId: string,
+      version: number,
+      note: string,
+      prototypeRequest?: { fidelity: BrainstormPrototypeFidelity; count?: number }
+    ],
     BrainstormDocument
   >
   'agent:finalizeBrainstorm': Contract<
