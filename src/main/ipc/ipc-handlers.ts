@@ -36,6 +36,7 @@ import { settleThreadBranch, type ThreadBranchDeps } from '../chat/thread-branch
 import { ThreadDeletionCoordinator } from '../chat/thread-deletion-coordinator'
 import { DiagnosticsService } from '../system/diagnostics-service'
 import { resolveFavicons } from '../editor/favicon-service'
+import { isNetworkError } from '../util/network-error'
 import {
   MemoryService,
   parseMemoryExport,
@@ -236,6 +237,9 @@ const MAX_PATHLESS_ATTACHMENT_BYTES = 32 * 1024 * 1024
 const PR_PAGE_SIZE = 20
 const GITHUB_REPOSITORY_ACCESS_MESSAGE =
   'GitHub cannot access this repository. Install the CodeInOven GitHub App on it and grant the requested repository permissions.'
+/** Returned instead of a raw fetch failure when GitHub is unreachable (offline). */
+const GITHUB_OFFLINE_MESSAGE =
+  'GitHub is unreachable right now. Pull requests will refresh automatically once you are back online.'
 const GITHUB_APP_INSTALL_URL = 'https://github.com/apps/codeinoven/installations/new'
 const SLASH_COMMAND_MODES = new Set(['app', 'passthrough'])
 const GIT_PULL_PREFERENCES = new Set(['ask', 'merge', 'rebase', 'ff-only'])
@@ -5866,6 +5870,11 @@ export function registerIpcHandlers(
             hasMore: false,
             accessError: GITHUB_REPOSITORY_ACCESS_MESSAGE
           }
+        }
+        // An unreachable GitHub is a transient state, not a broken feature —
+        // degrade to an offline page so the renderer keeps its last known data.
+        if (isNetworkError(error)) {
+          return { items: [], page: safePage, hasMore: false, accessError: GITHUB_OFFLINE_MESSAGE }
         }
         throw error
       }
