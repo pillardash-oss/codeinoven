@@ -32,6 +32,7 @@
     fastSelectionModelId,
     supportsFastInference
   } from '$shared/fast-inference'
+  import { DEFAULT_HARNESS } from '$shared/harness-default'
   import { STANDARD_THINKING_PRESETS, resolveDefaultThinkingLevel } from '$shared/thinking-presets'
   import { invoke } from '$lib/ipc.svelte'
   import { modelKey } from '$lib/model-keys'
@@ -250,7 +251,7 @@
     onActionSelect,
     onSlashCommand,
     providers = [],
-    harnessId = 'pi',
+    harnessId = DEFAULT_HARNESS,
     projectContext,
     projectId = null,
     threadId = '',

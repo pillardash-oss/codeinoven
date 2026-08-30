@@ -16,6 +16,7 @@
     ProviderCatalog,
     ThinkingLevel
   } from '$shared/types'
+  import { DEFAULT_HARNESS } from '$shared/harness-default'
 
   interface Props {
     config: AppConfig
@@ -200,7 +201,7 @@
               <ModelPicker
                 {providers}
                 projectId={rendererRecovery.selectedProjectId}
-                harnessId={selection?.harnessId ?? providers[0]?.harnessId ?? 'pi'}
+                harnessId={selection?.harnessId ?? providers[0]?.harnessId ?? DEFAULT_HARNESS}
                 providerId={selection?.providerId ?? ''}
                 modelId={selection?.modelId ?? ''}
                 favoriteModels={rendererRecovery.favoriteModels}
@@ -282,7 +283,7 @@
           <ModelPicker
             {providers}
             projectId={rendererRecovery.selectedProjectId}
-            harnessId={defaults.imageDescriptor?.harnessId ?? providers[0]?.harnessId ?? 'pi'}
+            harnessId={defaults.imageDescriptor?.harnessId ?? providers[0]?.harnessId ?? DEFAULT_HARNESS}
             providerId={defaults.imageDescriptor?.providerId ?? ''}
             modelId={defaults.imageDescriptor?.modelId ?? ''}
             favoriteModels={rendererRecovery.favoriteModels}

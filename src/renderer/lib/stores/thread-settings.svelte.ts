@@ -1,12 +1,13 @@
 import type { Thread, ThreadSettings } from '$shared/types'
 import { APP_SLUG } from '$shared/brand'
+import { DEFAULT_HARNESS } from '$shared/harness-default'
 
 const THREAD_SETTINGS_KEY = `${APP_SLUG}.threadSettings.lastUsed`
 const CHAT_SETTINGS_KEY = `${APP_SLUG}.chatSettings.lastUsed`
 
 /** Fallback settings used before anything has been persisted. */
 export const DEFAULT_SETTINGS: ThreadSettings = {
-  harnessId: 'pi',
+  harnessId: DEFAULT_HARNESS,
   providerId: '',
   modelId: '',
   thinkingLevel: 'medium',

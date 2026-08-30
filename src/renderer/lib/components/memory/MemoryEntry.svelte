@@ -1,5 +1,6 @@
 <script lang="ts">
   import type { MemoryCategory, MemoryEntry, MemoryPriority, MemoryScope } from '$shared/types'
+  import { DEFAULT_HARNESS } from '$shared/harness-default'
   import { parseModelKey } from '$lib/model-keys'
   import { providerCatalog } from '$lib/stores/provider-catalog.svelte'
   import RichMarkdownEditor from '../shared/RichMarkdownEditor.svelte'
@@ -244,7 +245,7 @@
           <ModelPicker
             providers={providerCatalog.allCached()}
             {projectId}
-            harnessId={selectedModel?.harnessId ?? 'pi'}
+            harnessId={selectedModel?.harnessId ?? DEFAULT_HARNESS}
             providerId={selectedModel?.providerId ?? ''}
             modelId={selectedModel?.modelId ?? ''}
             variant="field"

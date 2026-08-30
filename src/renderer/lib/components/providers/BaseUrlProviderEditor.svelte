@@ -13,6 +13,7 @@
     parseProviderClipboard,
     serializeModelClipboard
   } from '$shared/provider-clipboard'
+  import { DEFAULT_HARNESS } from '$shared/harness-default'
   import type {
     BaseUrlProvider,
     BaseUrlProviderCopyClipboardRequest,
@@ -305,7 +306,7 @@
       harnessIds: [
         availableHarnesses.some((harness) => harness.id === defaultHarnessId)
           ? defaultHarnessId
-          : (availableHarnesses[0]?.id ?? 'pi')
+          : (availableHarnesses[0]?.id ?? DEFAULT_HARNESS)
       ],
       npm: NPM_OPTIONS[0].value,
       name: '',

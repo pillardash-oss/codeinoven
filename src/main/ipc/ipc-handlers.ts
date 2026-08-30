@@ -8,6 +8,7 @@ import { randomUUID } from 'node:crypto'
 import { spawn } from 'node:child_process'
 import { basename, dirname, extname, isAbsolute, join, resolve } from 'path'
 import { APP_NAME, APP_SLUG } from '../../lib/brand'
+import { DEFAULT_HARNESS } from '../../lib/harness-default'
 import { harnessGlobalSkillPath, SHARED_GLOBAL_SKILL_PATH } from '../../lib/native-skill-paths'
 import { modelKey } from '../../lib/model-keys'
 import {
@@ -2585,7 +2586,7 @@ export function registerIpcHandlers(
                 : thread?.settings?.harnessId === 'muse'
                   ? 'Muse Code'
                   : 'OpenCode'
-    const harnessId = thread?.settings?.harnessId ?? 'pi'
+    const harnessId = thread?.settings?.harnessId ?? DEFAULT_HARNESS
     const driverInfo = {
       id: harnessId,
       name: driverName

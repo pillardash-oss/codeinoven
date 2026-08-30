@@ -19,6 +19,7 @@
   import Switch from '../ui/Switch.svelte'
   import Modal from '../ui/Modal.svelte'
   import type { HeartbeatConfig, ProviderCatalog, ThinkingLevel } from '$shared/types'
+  import { DEFAULT_HARNESS } from '$shared/harness-default'
 
   let providers = $state<ProviderCatalog[]>([])
   let providersLoading = $state(true)
@@ -341,7 +342,7 @@
       <ModelPicker
         {providers}
         projectId={rendererRecovery.selectedProjectId}
-        harnessId={draftHarnessId || providers[0]?.harnessId || 'pi'}
+        harnessId={draftHarnessId || providers[0]?.harnessId || DEFAULT_HARNESS}
         providerId={draftProviderId}
         modelId={draftModelId}
         favoriteModels={rendererRecovery.favoriteModels}

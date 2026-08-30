@@ -24,6 +24,7 @@ import { AntigravityDriver } from '../drivers/antigravity-driver'
 import { MuseDriver } from '../drivers/muse-driver'
 import { PiDriver } from '../drivers/pi-driver'
 import { CheckpointManager } from '../storage/checkpoint-manager'
+import { DEFAULT_HARNESS } from '../../lib/harness-default'
 import { findHarness, listHarnesses } from '../agents/harness-registry'
 import { buildProcessEnvironment, resolveExecutablePath } from '../drivers/cli-environment'
 import { CheckpointLimitError, type ProjectFingerprint } from '../git/change-tracking-service'
@@ -2608,7 +2609,7 @@ export class ChatEngine {
       thread.sessionHarnessId ??
       this.sessionRegistry.get(thread.sessionId)?.driverId ??
       thread.settings?.harnessId ??
-      'pi'
+      DEFAULT_HARNESS
     const { driver, projectPath } = await this.resolve(projectId, driverId, threadId)
     const providerRequests = await driver.listPendingQuestions(projectPath)
     const timeoutMs = (await this.storage.getConfig()).questionTimeoutMs
@@ -3693,7 +3694,7 @@ export class ChatEngine {
     threadId = validateEntityId(threadId, 'Thread ID')
     const thread = await this.threadManager.getThread(projectId, threadId)
     if (!thread) throw new Error(`Thread not found: ${threadId}`)
-    const harnessId = thread.settings?.harnessId ?? 'pi'
+    const harnessId = thread.settings?.harnessId ?? DEFAULT_HARNESS
     const driver = this.drivers.get(harnessId)
     const harnessName = driver?.name ?? harnessId
     const projectPath = await this.resolveProjectPath(projectId)
@@ -3758,7 +3759,7 @@ export class ChatEngine {
     const thread = await this.threadManager.getThread(projectId, threadId)
     if (!thread) throw new Error(`Thread not found: ${threadId}`)
 
-    const driverId = requestedDriverId ?? thread.settings?.harnessId ?? 'pi'
+    const driverId = requestedDriverId ?? thread.settings?.harnessId ?? DEFAULT_HARNESS
     const { driver, projectPath } = await this.resolve(projectId, driverId, threadId)
 
     // A harness switch orphans the old harness's session. The thread's bound
@@ -4059,7 +4060,7 @@ export class ChatEngine {
     // transcript syncs completely and the new harness never sees a foreign id.
     const registeredOwner = this.sessionRegistry.get(thread.sessionId)?.driverId
     const driverId =
-      registeredOwner ?? thread.sessionHarnessId ?? thread.settings?.harnessId ?? 'pi'
+      registeredOwner ?? thread.sessionHarnessId ?? thread.settings?.harnessId ?? DEFAULT_HARNESS
     try {
       const { driver, projectPath } = await this.resolve(projectId, driverId, threadId)
       this.registerSession(
@@ -4530,7 +4531,7 @@ export class ChatEngine {
       thread.sessionHarnessId ??
       (thread.sessionId ? this.sessionRegistry.get(thread.sessionId)?.driverId : undefined) ??
       thread.settings?.harnessId ??
-      'pi'
+      DEFAULT_HARNESS
     const { projectPath } = await this.resolve(projectId, driverId, threadId)
     const owner: ChildSessionInfo = {
       projectId,
@@ -4842,7 +4843,7 @@ export class ChatEngine {
     try {
       const threadSettings =
         settings ?? (await this.threadManager.getThread(projectId, threadId))?.settings
-      const harnessId = threadSettings?.harnessId ?? 'pi'
+      const harnessId = threadSettings?.harnessId ?? DEFAULT_HARNESS
       const driver = this.drivers.get(harnessId)
       const config = await this.storage.getConfig()
       // Trimmed modes get a compact scope guard instead of the full workspace
@@ -5477,7 +5478,7 @@ export class ChatEngine {
     const activeSessionOwner =
       this.sessionRegistry.get(activeSessionId)?.driverId ?? thread.sessionHarnessId
     const driverId =
-      activeBrainstorm?.driverId ?? activeSessionOwner ?? thread.settings?.harnessId ?? 'pi'
+      activeBrainstorm?.driverId ?? activeSessionOwner ?? thread.settings?.harnessId ?? DEFAULT_HARNESS
     const resolved = activeBrainstorm ?? (await this.resolve(projectId, driverId, threadId))
     const { driver, projectPath } = resolved
     if (driver.capabilities?.steering !== true || !driver.steerPrompt) {
@@ -6079,7 +6080,7 @@ export class ChatEngine {
       }
     }
 
-    const driverId = settings.harnessId || 'pi'
+    const driverId = settings.harnessId || DEFAULT_HARNESS
     const { driver, projectPath } = await this.resolve(projectId, driverId, threadId)
     // Branch metadata must use the same resolved cwd as the harness. Relative
     // thread directories are anchored to the project root by resolveThreadPath.
@@ -6774,7 +6775,7 @@ export class ChatEngine {
       if (!context) {
         context = formatHistoryRecap(await this.loadMessages(projectId, threadId))
       }
-      const driverId = settings.harnessId || 'pi'
+      const driverId = settings.harnessId || DEFAULT_HARNESS
       const { driver, projectPath } = await this.resolve(projectId, driverId, threadId)
       const isolated =
         driver instanceof OpenCodeDriver
@@ -6977,7 +6978,7 @@ export class ChatEngine {
     text = validateBoundedString(text, 'Virtual task prompt', 1, 200_000)
     this.markProjectActive(projectId)
 
-    const driverId = settings.harnessId || 'pi'
+    const driverId = settings.harnessId || DEFAULT_HARNESS
     const { driver, projectPath } = await this.resolve(projectId, driverId)
     assertHarnessRequestCapabilities(driver, [], settings.permissionLevel)
     const isolated =
@@ -7406,7 +7407,7 @@ export class ChatEngine {
 
     const thread = await this.threadManager.createThread({
       projectId,
-      providerId: parent?.providerId ?? 'pi',
+      providerId: parent?.providerId ?? DEFAULT_HARNESS,
       title: threadTitle,
       titleSource: safeTitle ? 'manual' : 'auto',
       settings: safeSettings,
@@ -8736,7 +8737,7 @@ export class ChatEngine {
       this.sessionRegistry.get(thread.sessionId)?.driverId ??
       thread.sessionHarnessId ??
       thread.settings?.harnessId ??
-      'pi'
+      DEFAULT_HARNESS
     const { driver, projectPath } = await this.resolve(projectId, driverId, threadId)
     await driver.abort(projectPath, thread.sessionId)
     await this.cleanupTurnUtilities(thread.sessionId)
@@ -9057,7 +9058,7 @@ export class ChatEngine {
     threadId = validateEntityId(threadId, 'Thread ID')
     const thread = await this.threadManager.getThread(projectId, threadId)
     if (!thread) throw new Error(`Thread not found: ${threadId}`)
-    const driverId = thread.settings?.harnessId ?? 'pi'
+    const driverId = thread.settings?.harnessId ?? DEFAULT_HARNESS
     const { driver, projectPath } = await this.resolve(projectId, driverId, threadId)
     if (!driver.capabilities?.commands) return []
 
@@ -10835,7 +10836,7 @@ export class ChatEngine {
     const active = this.prdEngine.getActive(projectId, threadId)
     if (active) return active
 
-    const driverId = settings.harnessId || 'pi'
+    const driverId = settings.harnessId || DEFAULT_HARNESS
     const { driver, projectPath } = await this.resolve(projectId, driverId, threadId)
     assertHarnessRequestCapabilities(driver, attachments, settings.permissionLevel)
     const userMessage = await this.persistOutboundMessage(
@@ -11425,7 +11426,7 @@ export class ChatEngine {
       presentation?: UserMessagePresentation
     } = {}
   ): Promise<BrainstormContent> {
-    const driverId = settings.harnessId || 'pi'
+    const driverId = settings.harnessId || DEFAULT_HARNESS
     const { driver, projectPath } = await this.resolve(projectId, driverId, threadId)
     const behaviorPrompt = await this.getBehaviorPrompt(
       projectId,
@@ -11872,7 +11873,7 @@ export class ChatEngine {
       throw new TypeError('Invalid specification generation mode')
     }
 
-    const driverId = settings.harnessId || 'pi'
+    const driverId = settings.harnessId || DEFAULT_HARNESS
     const { driver, projectPath } = await this.resolve(projectId, driverId, threadId)
     let source = instructions
     if (request.mode === 'conversation') {
@@ -12164,7 +12165,7 @@ export class ChatEngine {
     settings: ThreadSettings,
     spec: EngineeringSpec
   ): Promise<AssignmentPlanContent> {
-    const driverId = settings.harnessId || 'pi'
+    const driverId = settings.harnessId || DEFAULT_HARNESS
     const { driver, projectPath } = await this.resolve(projectId, driverId, coordinatorThreadId)
     const messages = await this.threadManager.loadMessageRecords(projectId, coordinatorThreadId)
     const transcript = formatConversationTranscript(messages, { maxCharacters: 80_000 })
@@ -13421,7 +13422,7 @@ export class ChatEngine {
       settings
     )
     const auditorSettings = auditorThread.settings ?? settings
-    const driverId = auditorSettings.harnessId || 'pi'
+    const driverId = auditorSettings.harnessId || DEFAULT_HARNESS
     const { driver, projectPath } = await this.resolve(projectId, driverId, auditorThread.id)
     const sessionId = await this.ensureSession(projectId, auditorThread.id, driverId)
     // Durable sessions must remain loadable after the run. OpenCode accepts a
@@ -13833,7 +13834,7 @@ export class ChatEngine {
       settings
     )
     const auditorSettings = auditorThread.settings ?? settings
-    const driverId = auditorSettings.harnessId || 'pi'
+    const driverId = auditorSettings.harnessId || DEFAULT_HARNESS
     const { driver, projectPath } = await this.resolve(projectId, driverId, auditorThread.id)
     const sessionId = await this.ensureSession(projectId, auditorThread.id, driverId)
     const specPath = await this.artifactRef(
@@ -13981,7 +13982,7 @@ export class ChatEngine {
       settings
     )
     const auditorSettings = auditorThread.settings ?? settings
-    const driverId = auditorSettings.harnessId || 'pi'
+    const driverId = auditorSettings.harnessId || DEFAULT_HARNESS
     const { driver, projectPath } = await this.resolve(projectId, driverId, auditorThread.id)
     const sessionId = await this.ensureSession(projectId, auditorThread.id, driverId)
     const specPath = await this.artifactRef(
@@ -14456,7 +14457,7 @@ export class ChatEngine {
       }
       const settings = validateThreadSettings(
         thread.settings ?? {
-          harnessId: 'pi',
+          harnessId: DEFAULT_HARNESS,
           providerId: thread.providerId,
           modelId: '',
           thinkingLevel: 'medium',
@@ -14564,7 +14565,7 @@ export class ChatEngine {
       'projects',
       projectId,
       'spec-memory',
-      this.specMemorySegment(settings.harnessId || 'pi'),
+      this.specMemorySegment(settings.harnessId || DEFAULT_HARNESS),
       this.specMemorySegment(settings.providerId),
       this.specMemorySegment(settings.modelId),
       'lessons.json'
@@ -14617,7 +14618,7 @@ export class ChatEngine {
     })
     return {
       schemaVersion: 1,
-      harnessId: settings.harnessId || 'pi',
+      harnessId: settings.harnessId || DEFAULT_HARNESS,
       providerId: settings.providerId,
       modelId: settings.modelId,
       lessons: lessons.slice(-SPEC_MEMORY_MAX_LESSONS),
@@ -14685,7 +14686,7 @@ export class ChatEngine {
     ].slice(-SPEC_MEMORY_MAX_LESSONS)
     await this.storage.write(this.specMemoryPath(projectId, settings), {
       schemaVersion: 1,
-      harnessId: settings.harnessId || 'pi',
+      harnessId: settings.harnessId || DEFAULT_HARNESS,
       providerId: settings.providerId,
       modelId: settings.modelId,
       lessons,
@@ -14717,7 +14718,7 @@ export class ChatEngine {
       threadId: input.threadId,
       attempt: Math.max(1, input.attempt),
       format: input.format,
-      harnessId: input.settings.harnessId || 'pi',
+      harnessId: input.settings.harnessId || DEFAULT_HARNESS,
       providerId: input.settings.providerId,
       modelId: input.settings.modelId,
       diagnostic: input.error.diagnostic,
@@ -14831,7 +14832,7 @@ export class ChatEngine {
       threadId: input.threadId,
       attempt: Math.max(1, input.attempt),
       format: input.format,
-      harnessId: input.settings.harnessId || 'pi',
+      harnessId: input.settings.harnessId || DEFAULT_HARNESS,
       providerId: input.settings.providerId,
       modelId: input.settings.modelId,
       diagnostic: input.error.diagnostic,
@@ -15276,7 +15277,7 @@ export class ChatEngine {
     try {
       const { driver, projectPath } = await this.resolve(
         pending.projectId,
-        pending.settings.harnessId || 'pi',
+        pending.settings.harnessId || DEFAULT_HARNESS,
         pending.threadId
       )
       const messages = await driver.loadMessages(projectPath, pending.sessionId)
@@ -15513,7 +15514,7 @@ export class ChatEngine {
     const thread = await this.threadManager.getThread(projectId, threadId)
     if (!thread?.sessionId) throw new Error('No active session for this thread')
     if (!thread.settings) throw new Error('Select a model before running a command')
-    const driverId = thread.settings?.harnessId ?? 'pi'
+    const driverId = thread.settings?.harnessId ?? DEFAULT_HARNESS
     const { driver, projectPath } = await this.resolve(projectId, driverId, threadId)
     if (!driver.capabilities?.commands) {
       throw new Error(`${driver.name} does not support slash commands`)
@@ -15590,7 +15591,7 @@ export class ChatEngine {
     if (!thread.settings) {
       throw new Error('Select a model before compacting this thread')
     }
-    const driverId = thread.settings.harnessId ?? 'pi'
+    const driverId = thread.settings.harnessId ?? DEFAULT_HARNESS
     const { driver, projectPath } = await this.resolve(projectId, driverId, threadId)
     if (!driver.capabilities?.compaction || !driver.compactSession) {
       throw new Error(`${driver.name} does not support manual compaction`)
@@ -17428,7 +17429,7 @@ export class ChatEngine {
         return
       }
     }
-    const driverId = record.harnessId || thread.settings?.harnessId || 'pi'
+    const driverId = record.harnessId || thread.settings?.harnessId || DEFAULT_HARNESS
     const settings = validateThreadSettings(
       thread.settings ?? {
         harnessId: driverId,

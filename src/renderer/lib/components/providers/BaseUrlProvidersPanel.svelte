@@ -16,6 +16,7 @@
   import AgentIcon from '$lib/agent-icons/AgentIcon.svelte'
   import Modal from '../ui/Modal.svelte'
   import type { BaseUrlProvider, ProviderConnectionInfo } from '$shared/types'
+  import { DEFAULT_HARNESS } from '$shared/harness-default'
   import BaseUrlProviderEditor from './BaseUrlProviderEditor.svelte'
 
   interface Props {
@@ -87,7 +88,7 @@
    *  user narrowed the list, otherwise the first base-URL harness. */
   let defaultCreateHarnessId = $derived.by(() => {
     if (selectedHarnesses.size > 0) return [...selectedHarnesses][0]
-    return baseUrlHarnesses[0]?.id ?? 'pi'
+    return baseUrlHarnesses[0]?.id ?? DEFAULT_HARNESS
   })
 
   function toggleHarnessFilter(id: string): void {

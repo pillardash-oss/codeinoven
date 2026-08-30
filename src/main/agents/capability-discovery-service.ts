@@ -2,6 +2,7 @@ import { readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import type { Dirent } from 'node:fs'
 import { homedir } from 'node:os'
 import { basename, join } from 'node:path'
+import { DEFAULT_HARNESS } from '../../lib/harness-default'
 import type {
   AgentCapabilityCatalog,
   AgentCapabilityEntry,
@@ -99,7 +100,7 @@ const HARNESS_SPECS: Record<string, HarnessSpec> = {
 }
 
 const DEFAULT_SPEC: HarnessSpec = {
-  id: 'pi',
+  id: DEFAULT_HARNESS,
   globalConfigPaths: [],
   projectConfigPaths: [],
   globalSkillDirs: [],
