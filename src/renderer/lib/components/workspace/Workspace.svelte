@@ -4719,7 +4719,7 @@
             <Dialog.Title class="min-w-0 flex-1 truncate text-xs font-semibold text-foreground">
               {browserTab.title}
             </Dialog.Title>
-            <div class="flex max-w-[min(50%,20rem)] shrink-0 overflow-x-auto">
+            <div class="titlebar-no-drag flex max-w-[min(50%,20rem)] shrink-0 overflow-x-auto">
               <div class="flex min-w-max items-center gap-1">
                 {#each fullscreenBrowserTabs as fullscreenTab (fullscreenTab.id)}
                   <button
@@ -4741,7 +4741,7 @@
             <Dialog.Description class="sr-only">Fullscreen browser</Dialog.Description>
             <button
               type="button"
-              class="flex h-7 w-7 shrink-0 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+              class="titlebar-no-drag flex h-7 w-7 shrink-0 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
               aria-label="New browser tab"
               title="New browser tab"
               onclick={openNewBrowser}
