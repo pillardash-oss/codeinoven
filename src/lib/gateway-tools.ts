@@ -7,7 +7,7 @@ export const UTILITY_INVOKE_TOOL_NAME = 'cio_util_use'
 /** Explicit-setup-only operation for installing validated utility definitions. */
 export const UTILITY_MANAGE_TOOL_NAME = 'cio_util_manage'
 /** Explicit-turn-only, read-only app diagnostics for debugging user-reported issues. */
-export const UTILITY_DIAGNOSTICS_TOOL_NAME = 'cio_util_diagnostics'
+export const UTILITY_DIAGNOSTICS_TOOL_NAME = 'cio_util_diagnose'
 /** Shell-callable, turn-bound host recovery tool; intentionally never transported through MCP. */
 export const RETRIEVE_MCP_HOST_TOOL_NAME = 'retrieve_mcp_host'
 

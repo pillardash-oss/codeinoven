@@ -66,7 +66,7 @@ export const CIO_PROMPT_TEMPLATE_TAGS = [
   {
     tag: '{{PRODUCT_REQUIREMENTS_DOCUMENT_TOOL_NAME}}',
     description: 'The stable product requirements document tool name.',
-    value: 'cio_prod'
+    value: 'cio_prd'
   }
 ] as const
 

@@ -7,7 +7,7 @@ import { GATEWAY_TOOLS } from './gateway-tools'
 /** Stable application-facing name for the canonical specification contract. */
 export const ENGINEERING_SPEC_TOOL_NAME = 'engineering_spec'
 export const BRAINSTORM_DOCUMENT_TOOL_NAME = 'cio_brainstorm_doc'
-export const PRODUCT_REQUIREMENTS_DOCUMENT_TOOL_NAME = 'cio_prod'
+export const PRODUCT_REQUIREMENTS_DOCUMENT_TOOL_NAME = 'cio_prd'
 export const FEATURE_AUDIT_TOOL_NAME = 'request_audit'
 export const AUDIT_REPORT_TOOL_NAME = 'audit_report'
 export const PROPOSE_MEMORY_TOOL_NAME = 'propose_memory'
