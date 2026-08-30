@@ -44,6 +44,12 @@
  * the primary is streaming, a fresh turn when it is idle. The model sees
  * the notification and final output as a user-role context message, but it
  * never renders in the transcript: the driver ignores custom-role messages.
+ *
+ * Completion reporting: workers track every file they edit or write (and
+ * are instructed to list shell-created files), and those paths accompany the
+ * result and notification because the primary agent owns committing. An
+ * agent_settled guard wakes the primary with a fresh turn whenever it tries
+ * to end its work while sub-agents are still running.
  */
 
 export const CIO_PERMISSION_MARKER = 'cio-permission:'
@@ -417,6 +423,11 @@ export default function codeInOvenCoreToolsExtension(pi) {
     return parts.join('\\n\\n')
   }
 
+  function subAgentFiles(record) {
+    const files = Array.isArray(record.files) ? record.files : []
+    return files.slice().sort()
+  }
+
   function subAgentPayload(record) {
     return {
       agentId: record.agentId,
@@ -427,6 +438,7 @@ export default function codeInOvenCoreToolsExtension(pi) {
       ...(record.modelId ? { model: record.modelId } : {}),
       thinkingLevel: record.thinkingLevel,
       ...(record.error ? { error: record.error } : {}),
+      files: subAgentFiles(record),
       output: record.output
     }
   }
@@ -457,6 +469,7 @@ export default function codeInOvenCoreToolsExtension(pi) {
       ...(record.modelId ? { model: record.modelId } : {}),
       thinkingLevel: record.thinkingLevel,
       ...(record.error ? { error: record.error } : {}),
+      files: subAgentFiles(record),
       output: record.finalOutput || record.output,
       ...(record.endedAt ? { durationMs: record.endedAt - record.startedAt } : {})
     }
@@ -471,9 +484,11 @@ export default function codeInOvenCoreToolsExtension(pi) {
    */
   function notifySubAgentDone(record) {
     if (!pi || typeof pi.sendMessage !== 'function') return
+    const files = subAgentFiles(record)
     const text =
       'Sub-agent done for task ' + record.purpose + ' (' + record.agentId + ', status: ' + record.status + ').' +
       (record.error ? ' Error: ' + record.error : '') +
+      (files.length > 0 ? '\\n\\nFiles it worked on (you are responsible for committing approved work): ' + files.join(', ') : '') +
       '\\n\\nThis is the final output of the sub-agent — use it as you continue your work:\\n\\n' +
       (record.finalOutput || record.output || '(the sub-agent produced no text output)')
     try {
@@ -498,7 +513,7 @@ export default function codeInOvenCoreToolsExtension(pi) {
   }
 
   /** Built-in worker tools wrapped with the same permission gate as the primary. */
-  function gatedWorkerTools(parentCtx) {
+  function gatedWorkerTools(parentCtx, touchedFiles) {
     async function gate(toolName, params) {
       const hit = evaluateGate(toolName, recordValue(params) ?? {}, parentCtx.cwd)
       if (!hit) return null
@@ -534,6 +549,19 @@ export default function codeInOvenCoreToolsExtension(pi) {
           const denial = await gate(definition.name, params)
           if (denial) {
             return { content: [{ type: 'text', text: denial }] }
+          }
+          // Track every file the worker edits or writes so the primary can
+          // commit the work; shell-created files are reported by the worker
+          // in its final message instead.
+          if (
+            touchedFiles &&
+            (definition.name === 'edit' || definition.name === 'write') &&
+            typeof params === 'object' &&
+            params !== null &&
+            typeof params.path === 'string' &&
+            !touchedFiles.includes(params.path)
+          ) {
+            touchedFiles.push(params.path)
           }
           return inner(toolCallId, params, signal, onUpdate, ctx)
         }
@@ -571,7 +599,7 @@ export default function codeInOvenCoreToolsExtension(pi) {
         ...(resolvedModel ? { model: resolvedModel } : {}),
         ...(spec.thinkingLevel ? { thinkingLevel: spec.thinkingLevel } : {}),
         tools: ['read', 'bash', 'edit', 'write'],
-        customTools: gatedWorkerTools(parentCtx)
+        customTools: gatedWorkerTools(parentCtx, touchedFiles)
       })
       session = created.session
     } catch (error) {
@@ -590,6 +618,7 @@ export default function codeInOvenCoreToolsExtension(pi) {
         session.modelRuntime.registerProvider(providerId, config)
       } catch {}
     }
+    const touchedFiles = []
     const record = {
       agentId,
       purpose: spec.purpose,
@@ -599,6 +628,7 @@ export default function codeInOvenCoreToolsExtension(pi) {
       thinkingLevel: spec.thinkingLevel ?? parentCtx.thinkingLevel ?? 'medium',
       status: 'running',
       output: '',
+      files: touchedFiles,
       startedAt: Date.now(),
       session
     }
@@ -652,6 +682,7 @@ export default function codeInOvenCoreToolsExtension(pi) {
       'Purpose: ' + spec.purpose + '.',
       'The user does not chat with you directly: your final message is returned to the primary agent, which reports to the user.',
       'Work autonomously and do not ask the user questions. Permission requests for destructive actions are surfaced to the user on the primary thread.',
+      'Your final message MUST list every file you created or modified (relative to the project root), including files changed through shell commands — the primary agent is responsible for committing the work and needs this list.',
       '',
       'Instructions from the primary agent:',
       '',
@@ -663,11 +694,11 @@ export default function codeInOvenCoreToolsExtension(pi) {
     name: 'cio_spawn_agent',
     label: 'Spawn a sub-agent',
     description:
-      'Spawn a sub-agent worker thread that executes one focused task (explore, implementation, tests, cleanup, documentation, or any custom purpose) and returns only its final result, keeping its transcript out of your context. By default — unless the user explicitly asks you to use sub-agents differently — delegate any task that can run in parallel with your own work to a sub-agent: explore or research a topic while you continue working, hand off long-running work so you can proceed without waiting and without polluting your context, and once your own work is done, spawn a sub-agent to run the checks for the files you touched (lint, typecheck, tests) so the work finishes faster. Run several sub-agents concurrently with background:true — each one automatically steers you a notification with its final output the moment it finishes, so you can keep working and act on results as they land. cio_agent_status remains available for explicit polling. Sub-agents cannot spawn further sub-agents, and they inherit your model and thinking level unless you pass model/thinking_level overrides.',
+      'Spawn a sub-agent worker thread that executes one focused task (explore, implementation, tests, cleanup, documentation, or any custom purpose) and returns only its final result, keeping its transcript out of your context. By default — unless the user explicitly asks you to use sub-agents differently — delegate any task that can run in parallel with your own work to a sub-agent: explore or research a topic while you continue working, hand off long-running work so you can proceed without waiting and without polluting your context, and once your own work is done, spawn a sub-agent to run the checks for the files you touched (lint, typecheck, tests) so the work finishes faster. Run several sub-agents concurrently with background:true — each one automatically steers you a notification with its final output the moment it finishes, so you can keep working and act on results as they land. Omit background to block until the sub-agent finishes and returns its result directly — use that whenever you need the output before proceeding. You must never end your turn while any sub-agent is still running, regardless of outcome; workers report every file they touched because you are responsible for committing approved work. Sub-agents cannot spawn further sub-agents, and they inherit your model and thinking level unless you pass model/thinking_level overrides.',
     promptSnippet: 'Spawn sub-agent worker threads for focused or parallelizable tasks (explore, implement, tests, cleanup, docs)',
     promptGuidelines: [
       'By default, delegate parallelizable tasks to sub-agents instead of doing them inline: exploring a topic while you keep working, handing off work so you can continue without polluting your context, or running post-work checks (lint, typecheck, tests) for the files you touched.',
-      'Give each sub-agent complete, self-contained instructions; spawn separate sub-agents for independent work and collect results with cio_agent_status.'
+      'Give each sub-agent complete, self-contained instructions; spawn separate sub-agents for independent work and collect results with cio_agent_status. Never end your turn while sub-agents are still running — wait for every result (successful or failed) with cio_agent_status (wait: true) first, because the primary agent owns committing the files the workers changed.'
     ],
     parameters: Type.Object({
       purpose: Type.String({
@@ -725,7 +756,7 @@ export default function codeInOvenCoreToolsExtension(pi) {
     name: 'cio_agent_status',
     label: 'Check sub-agent status',
     description:
-      'Check the status and output of spawned sub-agent threads. Background sub-agents steer you a completion notification with their final output automatically; use this tool to poll explicitly or wait:true to block until a running sub-agent finishes.',
+      'Check the status and output of spawned sub-agent threads. Background sub-agents steer you a completion notification with their final output automatically; use this tool to poll explicitly, or wait:true to block until every running sub-agent finishes (with or without a specific agent_id) — always do this before ending your turn so no result is lost.',
     promptSnippet: 'Check or wait for spawned sub-agent threads and collect their results',
     promptGuidelines: [
       'Background sub-agents announce completion themselves with a steer message containing their final output; use cio_agent_status to poll explicitly, with wait:true before finishing the turn so no result is lost.'
@@ -736,7 +767,8 @@ export default function codeInOvenCoreToolsExtension(pi) {
       ),
       wait: Type.Optional(
         Type.Boolean({
-          description: 'Wait for the sub-agent to finish before returning.'
+          description:
+            'Wait for running sub-agents to finish (success or failure) before returning.'
         })
       )
     }),
@@ -774,6 +806,35 @@ export default function codeInOvenCoreToolsExtension(pi) {
         } catch {}
       }
     }
+  })
+
+  // Turn-end guard: the primary must never finish its work while sub-agents
+  // are still running. When a run settles with live workers, wake the agent
+  // with a fresh turn instructing it to collect every result (completed or
+  // failed) before finishing. Loop terminates because the wait blocks until
+  // the workers resolve.
+  pi.on('agent_settled', async () => {
+    const running = []
+    for (const record of subAgents.values()) {
+      if (record.status === 'running') {
+        running.push(record.purpose + ' (' + record.agentId + ')')
+      }
+    }
+    if (running.length === 0) return
+    if (!pi || typeof pi.sendMessage !== 'function') return
+    try {
+      void pi.sendMessage(
+        {
+          customType: 'cio-subagent-wait',
+          content:
+            'Your turn ended while sub-agents are still running: ' +
+            running.join(', ') +
+            '. Do not finish your work yet. Call cio_agent_status with agent_id set to each running id (or omit agent_id) and wait:true to block until they finish, then incorporate every result — successful or failed — before ending your turn. Sub-agents report the files they changed; you are responsible for committing approved work.',
+          display: false
+        },
+        { triggerTurn: true }
+      )
+    } catch {}
   })
 
   // Permission gate: destructive tool calls require an explicit permission
