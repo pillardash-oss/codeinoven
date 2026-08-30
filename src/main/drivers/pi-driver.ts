@@ -1,5 +1,6 @@
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
-import { tmpdir } from 'os'
+import { mkdtemp, readdir, rm, writeFile } from 'node:fs/promises'
+import { existsSync } from 'node:fs'
+import { homedir, tmpdir } from 'os'
 import { join } from 'path'
 import { readFile } from 'node:fs/promises'
 import { fileURLToPath } from 'url'
@@ -7,6 +8,7 @@ import type {
   AgentMessage,
   AgentPart,
   AgentRateLimitWindow,
+  AgentSubagentActivity,
   AgentTokenUsage,
   PromptAttachment,
   ProviderCatalog,
@@ -14,7 +16,7 @@ import type {
   SessionAgentEvent
 } from '../../lib/types'
 import { PI_THINKING_PRESETS } from '../../lib/pi-thinking-presets'
-import { normalizeAgentQuestions } from '../../lib/agent-interactions'
+import { normalizeAgentQuestions, parseRecord } from '../../lib/agent-interactions'
 import { buildProcessEnvironment } from './cli-environment'
 import { piNativeProviderIds } from '../agents/native-provider-config-service'
 import { PiAuthConfigService, piAuthFileIo } from '../providers/pi-auth-config'
@@ -47,7 +49,11 @@ import {
 import { inlineSvgAttachments, isSvgAttachment } from './svg-attachment'
 import { piMcpExtension } from './pi-mcp-extension'
 import { piCustomProvidersExtension } from './pi-providers-extension'
-import { CIO_PERMISSION_MARKER, piCoreToolsExtension } from './pi-core-tools-extension'
+import {
+  CIO_PERMISSION_MARKER,
+  CIO_SUBAGENT_MARKER,
+  piCoreToolsExtension
+} from './pi-core-tools-extension'
 import { piUtilityGatewayExtension } from './pi-utility-gateway-extension'
 import {
   PI_STATUS_COMPACTING,
@@ -193,6 +199,86 @@ export function isContinuableFinishReasonError(error: string): boolean {
   return match !== null && match[1] !== 'content_filter'
 }
 
+/** The extension tool whose calls render as sub-agent activity cards. */
+const CIO_SPAWN_TOOL = 'cio_spawn_agent'
+
+/** Build a sub-agent activity part for one `cio_spawn_agent` call. */
+function cioSubagentPart(
+  messageId: string,
+  callID: string,
+  input: Record<string, unknown> | null | undefined,
+  patch?: Partial<AgentSubagentActivity>
+): Extract<AgentPart, { type: 'subagent' }> {
+  const purpose = stringValue(input?.['purpose']) ?? 'sub-agent'
+  return {
+    type: 'subagent',
+    id: `pi-subagent-${callID}`,
+    messageID: messageId,
+    callID,
+    activity: {
+      status: 'pending',
+      agent: purpose,
+      description: purpose,
+      prompt: stringValue(input?.['instructions']),
+      background: input?.['background'] === true,
+      ...patch
+    }
+  }
+}
+
+/** Find the running sub-agent part for a spawn call id. */
+function findSubagentPart(
+  context: CliLineParseContext,
+  callId: string
+): Extract<AgentPart, { type: 'subagent' }> | undefined {
+  for (const message of [...context.session.messages].reverse()) {
+    const part = message.parts.find(
+      (candidate): candidate is Extract<AgentPart, { type: 'subagent' }> =>
+        candidate.type === 'subagent' && candidate.callID === callId
+    )
+    if (part) return part
+  }
+  return undefined
+}
+
+/**
+ * Parse a `cio-subagent:` marker payload (structured sub-agent progress
+ * streamed through tool-execution updates) into activity fields.
+ */
+function parseSubagentPayload(output: string | undefined): AgentSubagentActivity | undefined {
+  if (!output || !output.startsWith(CIO_SUBAGENT_MARKER)) return undefined
+  return subagentActivityFromPayload(parseRecord(output.slice(CIO_SUBAGENT_MARKER.length)))
+}
+
+/** Activity fields from the extension's structured sub-agent payload. */
+function subagentActivityFromPayload(
+  payload: Record<string, unknown> | undefined
+): AgentSubagentActivity | undefined {
+  if (!payload || !stringValue(payload['agentId'])) return undefined
+  const status = stringValue(payload['status'])
+  const childSessionId = stringValue(payload['childSessionId'])
+  const modelId = stringValue(payload['model'])
+  const output = stringValue(payload['output'])
+  const error = stringValue(payload['error'])
+  const sessionFile = stringValue(payload['sessionFile'])
+  return {
+    status:
+      status === 'completed' || status === 'error'
+        ? status
+        : status === 'running'
+          ? 'running'
+          : 'pending',
+    agent: stringValue(payload['purpose']) ?? 'sub-agent',
+    description: stringValue(payload['purpose']) ?? 'sub-agent',
+    ...(childSessionId ? { childSessionId } : {}),
+    ...(modelId ? { modelId } : {}),
+    background: false,
+    ...(output ? { output } : {}),
+    ...(error ? { error } : {}),
+    ...(sessionFile ? { metadata: { sessionFile } } : {})
+  }
+}
+
 /** Map one Pi content block into a CodeInOven AgentPart. */
 function mapPiContentBlock(
   blockValue: unknown,
@@ -222,6 +308,9 @@ function mapPiContentBlock(
     }
   }
   if (type === 'toolCall') {
+    if (stringValue(block['name']) === CIO_SPAWN_TOOL) {
+      return cioSubagentPart(messageId, callID, record(block['arguments']))
+    }
     return {
       type: 'tool',
       id: `${messageId}:tool:${callID}`,
@@ -369,7 +458,7 @@ export function mapPiRecord(
   if (type === 'message_end' && entry['message']) {
     const message = record(entry['message'])
     if (message?.['role'] !== 'assistant') return { events: [] }
-    return buildAssistantMessage(message, context, turnState)
+    return buildAssistantMessage(message, context.sessionId, turnState)
   }
 
   if (type === 'tool_execution_start' || type === 'tool_execution_update') {
@@ -380,6 +469,33 @@ export function mapPiRecord(
     const toolName = stringValue(entry['toolName']) ?? 'tool'
     const partialResult = record(entry['partialResult'])
     const partialOutput = serializeContent(partialResult?.['content'])
+    if (toolName === CIO_SPAWN_TOOL) {
+      const args = record(entry['args'])
+      const existing = findSubagentPart(context, callId)
+      const base = existing?.activity ?? cioSubagentPart(messageId, callId, args).activity
+      const payloadPatch =
+        type === 'tool_execution_update' ? parseSubagentPayload(partialOutput) : undefined
+      return {
+        events: [
+          {
+            type: 'message.part.updated',
+            sessionId: context.sessionId,
+            part: {
+              type: 'subagent',
+              id: existing?.id ?? `pi-subagent-${callId}`,
+              messageID: existing?.messageID ?? messageId,
+              callID: callId,
+              activity: {
+                ...base,
+                ...(payloadPatch ?? {}),
+                status: 'running',
+                time: base.time ?? { start: Date.now() }
+              }
+            }
+          }
+        ]
+      }
+    }
     return {
       events: [
         {
@@ -411,6 +527,33 @@ export function mapPiRecord(
     const failed = entry['isError'] === true
     const result = record(entry['result'])
     const output = serializeContent(result?.['content']) ?? stringValue(result?.['text'])
+    if (toolName === CIO_SPAWN_TOOL) {
+      const existing = findSubagentPart(context, callId)
+      const base =
+        existing?.activity ?? cioSubagentPart(messageId, callId, record(entry['args'])).activity
+      // The final result carries the full structured sub-agent payload.
+      const payloadPatch = subagentActivityFromPayload(parseRecord(output ?? ''))
+      return {
+        events: [
+          {
+            type: 'message.part.updated',
+            sessionId: context.sessionId,
+            part: {
+              type: 'subagent',
+              id: existing?.id ?? `pi-subagent-${callId}`,
+              messageID: existing?.messageID ?? messageId,
+              callID: callId,
+              activity: {
+                ...base,
+                ...(payloadPatch ?? {}),
+                status: failed ? 'error' : (payloadPatch?.status ?? 'completed'),
+                time: { start: base.time?.start ?? Date.now(), end: Date.now() }
+              }
+            }
+          }
+        ]
+      }
+    }
     // The end event may not repeat `args`; never wipe the input captured at start.
     const existing = findToolPart(context, callId)
     const endArgs = record(entry['args'])
@@ -455,7 +598,31 @@ export function mapPiRecord(
       if (!callId) continue
       const failed = result?.['isError'] === true
       const output = serializeContent(result?.['content'])
-      const existing = findToolPart(context, callId)
+      const existingToolPart = findToolPart(context, callId)
+      if ((stringValue(result?.['toolName']) ?? existingToolPart?.tool) === CIO_SPAWN_TOOL) {
+        const existingSubagent = findSubagentPart(context, callId)
+        const base =
+          existingSubagent?.activity ?? cioSubagentPart(messageId, callId, undefined).activity
+        const payloadPatch = subagentActivityFromPayload(parseRecord(output ?? ''))
+        events.push({
+          type: 'message.part.updated',
+          sessionId: context.sessionId,
+          part: {
+            type: 'subagent',
+            id: existingSubagent?.id ?? `pi-subagent-${callId}`,
+            messageID: existingSubagent?.messageID ?? messageId,
+            callID: callId,
+            activity: {
+              ...base,
+              ...(payloadPatch ?? {}),
+              status: failed ? 'error' : (payloadPatch?.status ?? 'completed'),
+              time: { start: base.time?.start ?? Date.now(), end: Date.now() }
+            }
+          }
+        })
+        continue
+      }
+      const existing = existingToolPart
       events.push({
         type: 'message.part.updated',
         sessionId: context.sessionId,
@@ -627,11 +794,11 @@ export function mapPiRecord(
 /** Build the full assistant message and its part events from a Pi message object. */
 function buildAssistantMessage(
   message: Record<string, unknown>,
-  context: CliLineParseContext,
+  sessionId: string,
   turnState: PiTurnState
 ): CliLineParseResult | null {
   const content = Array.isArray(message['content']) ? message['content'] : []
-  const messageId = `pi-${context.sessionId}-${turnState.turnIndex}`
+  const messageId = `pi-${sessionId}-${turnState.turnIndex}`
   const now = messageTimestamp(message)
   const parts: AgentPart[] = []
   const events: SessionAgentEvent[] = []
@@ -640,7 +807,7 @@ function buildAssistantMessage(
     const part = mapPiContentBlock(blockValue, messageId, index, callId)
     if (!part) return
     parts.push(part)
-    events.push({ type: 'message.part.updated', sessionId: context.sessionId, part })
+    events.push({ type: 'message.part.updated', sessionId, part })
   })
   const usage = mapPiUsage(message['usage'])
   const cost = mapPiCost(message['usage'])
@@ -665,6 +832,128 @@ function buildAssistantMessage(
     ...(failed ? { error: rawError } : {})
   }
   return { events, messages: [completed] }
+}
+
+function piAgentDir(): string {
+  const envDir = process.env.PI_CODING_AGENT_DIR
+  if (envDir) {
+    if (envDir === '~') return homedir()
+    if (envDir.startsWith('~/')) return join(homedir(), envDir.slice(2))
+    return envDir
+  }
+  return join(homedir(), '.pi', 'agent')
+}
+
+/** Mirror pi's own session-dir encoding (`--<cwd>--` under the agent dir). */
+function nativePiSessionDir(projectPath: string): string {
+  const safePath = `--${projectPath.replace(/^[/\\]/u, '').replace(/[/\\:]/gu, '-')}--`
+  return join(piAgentDir(), 'sessions', safePath)
+}
+
+/**
+ * Find a native pi session transcript by session id. Pi names files
+ * `<timestamp>_<sessionId>.jsonl`; the newest match wins.
+ */
+async function findNativePiSessionFile(
+  projectPath: string,
+  sessionId: string
+): Promise<string | null> {
+  const dir = nativePiSessionDir(projectPath)
+  let entries: string[]
+  try {
+    entries = await readdir(dir)
+  } catch {
+    return null
+  }
+  const matches = entries.filter((name) => name.endsWith(`_${sessionId}.jsonl`)).sort()
+  const latest = matches.at(-1)
+  return latest ? join(dir, latest) : null
+}
+
+function nativeUserMessageText(message: Record<string, unknown>): string | undefined {
+  const content = message['content']
+  if (typeof content === 'string') return content
+  if (!Array.isArray(content)) return undefined
+  const parts = content
+    .map((block) =>
+      record(block)?.['type'] === 'text' ? stringValue(record(block)?.['text']) : undefined
+    )
+    .filter((text): text is string => Boolean(text))
+  return parts.join('\n')
+}
+
+/**
+ * Parse a native pi session JSONL transcript into CodeInOven messages.
+ * Used for sub-agent worker threads, which run as in-process pi sessions
+ * persisted by pi's own SessionManager rather than mirrored through RPC.
+ */
+async function parseNativePiSession(file: string, sessionId: string): Promise<AgentMessage[]> {
+  const content = await readFile(file, 'utf8')
+  const messages: AgentMessage[] = []
+  let turnIndex = 0
+  let userIndex = 0
+  for (const line of content.split('\n')) {
+    if (!line.trim()) continue
+    let entry: Record<string, unknown> | undefined
+    try {
+      entry = record(JSON.parse(line)) ?? undefined
+    } catch {
+      continue
+    }
+    if (!entry || entry['type'] !== 'message') continue
+    const message = record(entry['message'])
+    if (!message) continue
+    const role = stringValue(message['role'])
+    if (role === 'assistant') {
+      turnIndex += 1
+      const built = buildAssistantMessage(message, sessionId, {
+        assistantMessageId: null,
+        turnIndex
+      })
+      if (built?.messages?.length) messages.push(...built.messages)
+      continue
+    }
+    if (role === 'user') {
+      const text = nativeUserMessageText(message)
+      if (!text) continue
+      userIndex += 1
+      const messageId = `pi-${sessionId}-user-${userIndex}`
+      messages.push({
+        id: messageId,
+        role: 'user',
+        parts: [{ type: 'text', id: `${messageId}:text`, messageID: messageId, text }],
+        createdAt: messageTimestamp(message)
+      })
+      continue
+    }
+    if (role === 'toolResult') {
+      const callId = stringValue(message['toolCallId'])
+      if (!callId) continue
+      const output = serializeContent(message['content'])
+      const failed = message['isError'] === true
+      // Complete the most recent tool part carrying this call id.
+      for (let index = messages.length - 1; index >= 0; index -= 1) {
+        const candidate = messages[index]
+        if (!candidate) continue
+        const partIndex = candidate.parts.findIndex(
+          (part) => part.type === 'tool' && part.callID === callId
+        )
+        const part = partIndex === -1 ? undefined : candidate.parts[partIndex]
+        if (!part || part.type !== 'tool') continue
+        candidate.parts[partIndex] = {
+          ...part,
+          state: {
+            ...part.state,
+            status: failed ? 'error' : 'completed',
+            ...(output ? { output } : {}),
+            ...(failed && output ? { error: output } : {})
+          }
+        }
+        break
+      }
+    }
+  }
+  return messages
 }
 
 async function localAttachmentPath(attachment: PromptAttachment): Promise<string> {
@@ -708,7 +997,7 @@ export class PiDriver extends PersistentCliDriver {
     sessionStatus: true,
     contextUsage: true,
     compaction: true,
-    subagents: false,
+    subagents: true,
     scheduledRetry: true,
     nativeUtilities: []
   }
@@ -1444,6 +1733,40 @@ export class PiDriver extends PersistentCliDriver {
   }
 
   /** Mirror the native pi session id so driver records stay addressable. */
+  /**
+   * Load messages for an app-managed session, or — for sub-agent worker
+   * threads — the native pi session transcript persisted on disk by the
+   * in-process sub-agent session.
+   */
+  override async loadMessages(projectPath: string, sessionId: string): Promise<AgentMessage[]> {
+    try {
+      return await super.loadMessages(projectPath, sessionId)
+    } catch (error) {
+      const native = await this.loadNativeSubagentMessages(projectPath, sessionId)
+      if (native) return native
+      throw error
+    }
+  }
+
+  /** Returns null when no native transcript exists so the caller rethrows. */
+  private async loadNativeSubagentMessages(
+    projectPath: string,
+    sessionId: string
+  ): Promise<AgentMessage[] | null> {
+    if (existsSync(nativePiSessionDir(projectPath))) {
+      const file = await findNativePiSessionFile(projectPath, sessionId)
+      if (file) {
+        try {
+          return await parseNativePiSession(file, sessionId)
+        } catch (error) {
+          Logger.dev('Pi native sub-agent transcript parse failed:', error)
+          return null
+        }
+      }
+    }
+    return null
+  }
+
   private async syncNativeSessionId(projectPath: string, sessionId: string): Promise<void> {
     const client = this.rpcClients.get(sessionId)
     if (!client) return

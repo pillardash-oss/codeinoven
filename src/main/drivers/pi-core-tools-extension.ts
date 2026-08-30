@@ -24,22 +24,42 @@
  * and the chat engine's PermissionPolicy enrichment (risk, reason, auto-reply
  * in full-access mode) keeps working unchanged.
  *
- * The marker constant is shared with the driver: `CIO_PERMISSION_MARKER`.
+ * The marker constants are shared with the driver: `CIO_PERMISSION_MARKER`
+ * for permission dialogs and `CIO_SUBAGENT_MARKER` for sub-agent progress
+ * streamed through tool-execution updates.
+ *
+ * Sub-agents: `cio_spawn_agent` opens a nested in-process pi session (a
+ * persistent worker "thread" controlled by the primary agent). Sub-agents
+ * get gated wrappers around the built-in tools — never the spawn tool, so
+ * they cannot recurse — inherit the primary's model/thinking level unless
+ * overridden per spawn, and bubble every permission request up to the
+ * primary thread through the parent extension-UI context.
  */
 
 export const CIO_PERMISSION_MARKER = 'cio-permission:'
+export const CIO_SUBAGENT_MARKER = 'cio-subagent:'
 
 /** Tool names registered by the core-tools extension (exported for tests). */
 export const PI_CORE_TOOLS_TOOL_NAMES = [
   'cio_ask_user',
   'cio_todo_write',
-  'cio_request_files'
+  'cio_request_files',
+  'cio_spawn_agent',
+  'cio_agent_status'
 ] as const
 
 export function piCoreToolsExtension(): string {
   return `import { existsSync } from 'node:fs'
 import { isAbsolute, relative, resolve } from 'node:path'
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent'
+import {
+  createAgentSession,
+  createBashToolDefinition,
+  createEditToolDefinition,
+  createReadToolDefinition,
+  createWriteToolDefinition,
+  SessionManager
+} from '@earendil-works/pi-coding-agent'
 import { Type } from 'typebox'
 
 const CIO_PERMISSION_MARKER = 'cio-permission:'
@@ -335,6 +355,355 @@ export default function codeInOvenCoreToolsExtension(pi) {
           ? 'None of the given paths exist; ask the user to double-check them.'
           : 'Read the existing files before continuing.'
       })
+    }
+  })
+
+  // ── Sub-agent spawning ──────────────────────────────────────────────
+  // Sub-agents are nested pi sessions ("worker threads") controlled by the
+  // primary agent. They never receive the spawn tool, so they cannot
+  // recurse; their permission requests ride the parent's extension-UI
+  // context so the permission card appears on the primary thread.
+  const CIO_SUBAGENT_MARKER = 'cio-subagent:'
+  const CIO_SUBAGENT_MAX_CONCURRENT = 4
+  const CIO_SUBAGENT_OUTPUT_CAP = 20000
+  const CIO_SUBAGENT_THINKING_LEVELS = ['minimal', 'low', 'medium', 'high', 'xhigh', 'max']
+  const subAgents = new Map()
+  let subAgentCounter = 0
+
+  function capOutput(text) {
+    return text.length > CIO_SUBAGENT_OUTPUT_CAP
+      ? text.slice(0, CIO_SUBAGENT_OUTPUT_CAP) + '\\n…(output truncated)'
+      : text
+  }
+
+  function subAgentText(message) {
+    const content = Array.isArray(message && message.content) ? message.content : []
+    const parts = []
+    for (const block of content) {
+      if (block && block.type === 'text' && typeof block.text === 'string' && block.text.trim()) {
+        parts.push(block.text.trim())
+      }
+    }
+    return parts.join('\\n\\n')
+  }
+
+  function subAgentPayload(record) {
+    return {
+      agentId: record.agentId,
+      purpose: record.purpose,
+      childSessionId: record.childSessionId,
+      ...(record.sessionFile ? { sessionFile: record.sessionFile } : {}),
+      status: record.status,
+      ...(record.modelId ? { model: record.modelId } : {}),
+      thinkingLevel: record.thinkingLevel,
+      ...(record.error ? { error: record.error } : {}),
+      output: record.output
+    }
+  }
+
+  function sendSubAgentUpdate(onUpdate, record) {
+    if (!onUpdate) return
+    try {
+      onUpdate({
+        content: [
+          { type: 'text', text: CIO_SUBAGENT_MARKER + JSON.stringify(subAgentPayload(record)) }
+        ]
+      })
+    } catch {}
+  }
+
+  function subAgentResult(record) {
+    return {
+      ...subAgentPayload(record),
+      ...(record.endedAt ? { durationMs: record.endedAt - record.startedAt } : {})
+    }
+  }
+
+  async function resolveSubAgentModel(parentCtx, reference) {
+    const registry = parentCtx.modelRegistry
+    const slashIndex = reference.indexOf('/')
+    if (slashIndex > 0) {
+      const found = registry.find(reference.slice(0, slashIndex), reference.slice(slashIndex + 1))
+      if (found) return found
+    }
+    const available = registry.getAvailable()
+    const byId = available.find(function (candidate) { return candidate.id === reference })
+    if (byId) return byId
+    return registry.getAll().find(function (candidate) { return candidate.id === reference })
+  }
+
+  /** Built-in worker tools wrapped with the same permission gate as the primary. */
+  function gatedWorkerTools(parentCtx) {
+    async function gate(toolName, params) {
+      const hit = evaluateGate(toolName, recordValue(params) ?? {}, parentCtx.cwd)
+      if (!hit) return null
+      const payload = {
+        permission: hit.permission,
+        patterns: hit.patterns,
+        tool: toolName,
+        subagent: true,
+        ...(hit.command === undefined ? {} : { command: hit.command })
+      }
+      const approved = await parentCtx.ui.confirm(
+        'Sub-agent needs permission: ' + hit.reason,
+        CIO_PERMISSION_MARKER + JSON.stringify(payload)
+      )
+      if (approved) return null
+      return (
+        'The user denied this sub-agent action in the permission card because it is destructive (' +
+        hit.reason +
+        '). Do not retry it as-is; continue with a safe alternative.'
+      )
+    }
+    const builtins = [
+      createReadToolDefinition(parentCtx.cwd),
+      createBashToolDefinition(parentCtx.cwd),
+      createEditToolDefinition(parentCtx.cwd),
+      createWriteToolDefinition(parentCtx.cwd)
+    ]
+    return builtins.map(function (definition) {
+      const inner = definition.execute.bind(definition)
+      return {
+        ...definition,
+        async execute(toolCallId, params, signal, onUpdate, ctx) {
+          const denial = await gate(definition.name, params)
+          if (denial) {
+            return { content: [{ type: 'text', text: denial }] }
+          }
+          return inner(toolCallId, params, signal, onUpdate, ctx)
+        }
+      }
+    })
+  }
+
+  async function runSubAgent(parentCtx, onUpdate, spec, signal) {
+    let runningCount = 0
+    for (const record of subAgents.values()) {
+      if (record.status === 'running') runningCount += 1
+    }
+    if (runningCount >= CIO_SUBAGENT_MAX_CONCURRENT) {
+      return {
+        error:
+          'Too many sub-agents are running (' + CIO_SUBAGENT_MAX_CONCURRENT + ' max). Collect finished results with cio_agent_status before spawning another.'
+      }
+    }
+    let resolvedModel = parentCtx.model
+    if (spec.model) {
+      resolvedModel = await resolveSubAgentModel(parentCtx, spec.model)
+      if (!resolvedModel) return { error: 'Model not found: ' + spec.model }
+    }
+    subAgentCounter += 1
+    const agentId = 'cio-subagent-' + subAgentCounter
+    let session
+    try {
+      const sessionDir = process.env.CIO_SUBAGENT_SESSION_DIR
+      const sessionManager = sessionDir
+        ? SessionManager.create(parentCtx.cwd, sessionDir)
+        : SessionManager.create(parentCtx.cwd)
+      const created = await createAgentSession({
+        cwd: parentCtx.cwd,
+        sessionManager,
+        ...(resolvedModel ? { model: resolvedModel } : {}),
+        ...(spec.thinkingLevel ? { thinkingLevel: spec.thinkingLevel } : {}),
+        tools: ['read', 'bash', 'edit', 'write'],
+        customTools: gatedWorkerTools(parentCtx)
+      })
+      session = created.session
+    } catch (error) {
+      return {
+        error:
+          'Failed to start the sub-agent session: ' +
+          (error && error.message ? error.message : String(error))
+      }
+    }
+    // App-managed custom providers live only in the primary session's model
+    // registry; mirror them so the sub-agent resolves the same models.
+    for (const providerId of parentCtx.modelRegistry.getRegisteredProviderIds()) {
+      const config = parentCtx.modelRegistry.getRegisteredProviderConfig(providerId)
+      if (!config) continue
+      try {
+        session.modelRuntime.registerProvider(providerId, config)
+      } catch {}
+    }
+    const record = {
+      agentId,
+      purpose: spec.purpose,
+      childSessionId: session.sessionId,
+      sessionFile: session.sessionFile,
+      modelId: resolvedModel ? resolvedModel.provider + '/' + resolvedModel.id : '',
+      thinkingLevel: spec.thinkingLevel ?? parentCtx.thinkingLevel ?? 'medium',
+      status: 'running',
+      output: '',
+      startedAt: Date.now(),
+      session
+    }
+    subAgents.set(agentId, record)
+    const onAbort = function () {
+      void session.abort()
+    }
+    if (signal) {
+      if (signal.aborted) onAbort()
+      else signal.addEventListener('abort', onAbort, { once: true })
+    }
+    session.subscribe(function (event) {
+      if (event.type !== 'message_end') return
+      const text = subAgentText(event.message)
+      if (!text) return
+      record.output = capOutput(record.output ? record.output + '\\n\\n' + text : text)
+      sendSubAgentUpdate(onUpdate, record)
+    })
+    record.promise = (async function () {
+      try {
+        await session.prompt(spec.instructions, { expandPromptTemplates: false })
+        record.output = capOutput(subAgentText(lastAssistant(session)) || record.output)
+        record.status = 'completed'
+      } catch (error) {
+        record.status = 'error'
+        record.error = error && error.message ? error.message : String(error)
+        record.output = capOutput(subAgentText(lastAssistant(session)) || record.output)
+      } finally {
+        record.endedAt = Date.now()
+        sendSubAgentUpdate(onUpdate, record)
+      }
+    })()
+    return { record }
+  }
+
+  function lastAssistant(session) {
+    for (let index = session.messages.length - 1; index >= 0; index -= 1) {
+      const message = session.messages[index]
+      if (message && message.role === 'assistant') return message
+    }
+    return null
+  }
+
+  function workerPrompt(spec) {
+    return [
+      'You are a CodeInOven sub-agent spawned by the primary agent to own one focused piece of work.',
+      'Purpose: ' + spec.purpose + '.',
+      'The user does not chat with you directly: your final message is returned to the primary agent, which reports to the user.',
+      'Work autonomously and do not ask the user questions. Permission requests for destructive actions are surfaced to the user on the primary thread.',
+      '',
+      'Instructions from the primary agent:',
+      '',
+      spec.instructions
+    ].join('\\n')
+  }
+
+  pi.registerTool({
+    name: 'cio_spawn_agent',
+    label: 'Spawn a sub-agent',
+    description:
+      'Spawn a sub-agent worker thread that executes one focused task (explore, implementation, tests, cleanup, documentation, or any custom purpose) and returns its result. Sub-agents cannot spawn further sub-agents. They inherit your model and thinking level unless overridden. Use background:true to run several sub-agents concurrently, then collect results with cio_agent_status.',
+    promptSnippet: 'Spawn sub-agent worker threads for focused tasks (explore, implement, tests, cleanup, docs)',
+    promptGuidelines: [
+      'Use cio_spawn_agent to delegate a focused piece of work to a sub-agent thread; give it complete, self-contained instructions.',
+      'Spawn separate sub-agents for independent work (explore, tests, cleanup, documentation) and collect results with cio_agent_status.'
+    ],
+    parameters: Type.Object({
+      purpose: Type.String({
+        description: 'Short task category, e.g. explore, implementation, tests, cleanup, documentation.'
+      }),
+      instructions: Type.String({
+        description: 'The complete, self-contained task instructions for the sub-agent.'
+      }),
+      model: Type.Optional(
+        Type.String({
+          description:
+            "Model override as 'provider/model-id' or a model id. Defaults to the primary agent's model."
+        })
+      ),
+      thinking_level: Type.Optional(
+        Type.Union(CIO_SUBAGENT_THINKING_LEVELS.map(function (level) { return Type.Literal(level) }), {
+          description:
+            "Thinking-level override. Defaults to the primary agent's thinking level."
+        })
+      ),
+      background: Type.Optional(
+        Type.Boolean({
+          description:
+            'Run in the background and return immediately; collect the result later with cio_agent_status.'
+        })
+      )
+    }),
+    async execute(_toolCallId, params, signal, onUpdate, ctx) {
+      const spec = {
+        purpose: params.purpose,
+        instructions: params.instructions,
+        model: params.model,
+        thinkingLevel: params.thinking_level,
+        background: params.background === true
+      }
+      const result = await runSubAgent(ctx, onUpdate, spec, signal ?? undefined)
+      if (result.error) {
+        return textResult({ spawned: false, error: result.error })
+      }
+      if (spec.background) {
+        return textResult({
+          spawned: true,
+          agentId: result.record.agentId,
+          childSessionId: result.record.childSessionId,
+          status: result.record.status,
+          note: 'Sub-agent is running in the background. Poll with cio_agent_status (wait: true) to collect the result.'
+        })
+      }
+      await result.record.promise
+      return textResult(subAgentResult(result.record))
+    }
+  })
+
+  pi.registerTool({
+    name: 'cio_agent_status',
+    label: 'Check sub-agent status',
+    description:
+      'Check the status and output of spawned sub-agent threads. Use wait:true to block until a running sub-agent finishes and collect its result.',
+    promptSnippet: 'Check or wait for spawned sub-agent threads and collect their results',
+    promptGuidelines: [
+      'Use cio_agent_status to collect background sub-agent results; call it with wait:true before finishing the turn so no result is lost.'
+    ],
+    parameters: Type.Object({
+      agent_id: Type.Optional(
+        Type.String({ description: 'A specific sub-agent id. Omit to report all sub-agents.' })
+      ),
+      wait: Type.Optional(
+        Type.Boolean({
+          description: 'Wait for the sub-agent to finish before returning.'
+        })
+      )
+    }),
+    async execute(_toolCallId, params) {
+      const wait = params.wait === true
+      let records
+      if (params.agent_id) {
+        const record = subAgents.get(params.agent_id)
+        if (!record) {
+          return textResult({ found: false, error: 'Unknown sub-agent id: ' + params.agent_id })
+        }
+        records = [record]
+      } else {
+        records = [...subAgents.values()]
+        if (records.length === 0) {
+          return textResult({ agents: [], note: 'No sub-agents have been spawned in this session.' })
+        }
+      }
+      if (wait) {
+        const running = records.filter(function (record) { return record.status === 'running' })
+        if (running.length > 0) {
+          await Promise.all(running.map(function (record) { return record.promise }))
+        }
+      }
+      return textResult({ agents: records.map(function (record) { return subAgentResult(record) }) })
+    }
+  })
+
+  // Abort every live sub-agent when the owning session shuts down.
+  pi.on('session_shutdown', async () => {
+    for (const record of subAgents.values()) {
+      if (record.status === 'running') {
+        try {
+          await record.session.abort()
+        } catch {}
+      }
     }
   })
 

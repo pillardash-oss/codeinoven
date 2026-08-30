@@ -13,6 +13,7 @@ import type {
   CliLineParseContext,
   PersistentCliSession
 } from '../../../src/main/drivers/persistent-cli-driver'
+import type { SessionAgentEvent } from '../../../src/lib/types'
 
 const rpcMock = vi.hoisted(() => {
   const clients: Array<{
@@ -374,5 +375,156 @@ describe('PiDriver', () => {
     await ready
     expect(events).toContain('session.idle')
     expect(rpcMock.client.getSessionStats).toHaveBeenCalled()
+  })
+
+  it('maps cio_spawn_agent tool calls into subagent activity parts', () => {
+    const context = sessionContext('s-1')
+    const state = { assistantMessageId: null, turnIndex: 1 }
+    const result = mapPiRecord(
+      {
+        type: 'message_end',
+        message: {
+          role: 'assistant',
+          content: [
+            { type: 'text', text: 'Spawning a cleanup worker.' },
+            {
+              type: 'toolCall',
+              id: 'call-spawn-1',
+              name: 'cio_spawn_agent',
+              arguments: {
+                purpose: 'cleanup',
+                instructions: 'Run lint and format.',
+                background: true
+              }
+            }
+          ],
+          timestamp: Date.now()
+        }
+      },
+      context,
+      state
+    )
+    const part = result?.events?.find(
+      (event): event is Extract<SessionAgentEvent, { type: 'message.part.updated' }> =>
+        event.type === 'message.part.updated' && event.part.type === 'subagent'
+    )?.part
+    expect(part).toMatchObject({
+      type: 'subagent',
+      id: 'pi-subagent-call-spawn-1',
+      callID: 'call-spawn-1',
+      activity: {
+        status: 'pending',
+        agent: 'cleanup',
+        prompt: 'Run lint and format.',
+        background: true
+      }
+    })
+  })
+
+  it('tracks sub-agent progress and results through execution events', () => {
+    const context = sessionContext('s-1')
+    const state = { assistantMessageId: null, turnIndex: 1 }
+    // The assistant message carrying the spawn call must exist first.
+    mapPiRecord(
+      {
+        type: 'message_end',
+        message: {
+          role: 'assistant',
+          content: [
+            {
+              type: 'toolCall',
+              id: 'call-spawn-2',
+              name: 'cio_spawn_agent',
+              arguments: { purpose: 'tests', instructions: 'Run baseline tests.' }
+            }
+          ],
+          timestamp: Date.now()
+        }
+      },
+      context,
+      state
+    )
+    const start = mapPiRecord(
+      {
+        type: 'tool_execution_start',
+        toolCallId: 'call-spawn-2',
+        toolName: 'cio_spawn_agent',
+        args: { purpose: 'tests', instructions: 'Run baseline tests.' }
+      },
+      context,
+      state
+    )
+    expect(start?.events?.[0]).toMatchObject({
+      type: 'message.part.updated',
+      part: { type: 'subagent', activity: { status: 'running' } }
+    })
+
+    const markerPayload = {
+      agentId: 'cio-subagent-1',
+      purpose: 'tests',
+      childSessionId: 'native-child-1',
+      status: 'running',
+      model: 'lmstudio/qwen3.5-9b',
+      thinkingLevel: 'medium',
+      output: 'Running vitest…'
+    }
+    const update = mapPiRecord(
+      {
+        type: 'tool_execution_update',
+        toolCallId: 'call-spawn-2',
+        toolName: 'cio_spawn_agent',
+        args: {},
+        partialResult: {
+          content: [{ type: 'text', text: `cio-subagent:${JSON.stringify(markerPayload)}` }]
+        }
+      },
+      context,
+      state
+    )
+    const updatedPart =
+      update?.events?.[0]?.type === 'message.part.updated' ? update.events[0].part : undefined
+    expect(updatedPart).toMatchObject({
+      type: 'subagent',
+      activity: {
+        status: 'running',
+        childSessionId: 'native-child-1',
+        modelId: 'lmstudio/qwen3.5-9b',
+        output: 'Running vitest…'
+      }
+    })
+
+    const end = mapPiRecord(
+      {
+        type: 'tool_execution_end',
+        toolCallId: 'call-spawn-2',
+        toolName: 'cio_spawn_agent',
+        isError: false,
+        result: {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify({
+                ...markerPayload,
+                status: 'completed',
+                output: 'All 10 tests passed.'
+              })
+            }
+          ]
+        }
+      },
+      context,
+      state
+    )
+    const endPart =
+      end?.events?.[0]?.type === 'message.part.updated' ? end.events[0].part : undefined
+    expect(endPart).toMatchObject({
+      type: 'subagent',
+      activity: {
+        status: 'completed',
+        childSessionId: 'native-child-1',
+        output: 'All 10 tests passed.'
+      }
+    })
+    expect(endPart?.type === 'subagent' ? endPart.activity.time?.end : undefined).toBeDefined()
   })
 })
