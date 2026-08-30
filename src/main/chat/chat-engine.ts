@@ -1,5 +1,6 @@
 import { BrowserWindow } from 'electron'
-import { readFile } from 'fs/promises'
+import { readdir, readFile } from 'fs/promises'
+import type { Dirent } from 'node:fs'
 import { trustedIpcMain as ipcMain } from '../ipc/trusted-ipc-main'
 import { basename, isAbsolute, join, relative, resolve } from 'path'
 import { createHash, randomBytes, randomInt } from 'crypto'
@@ -230,6 +231,7 @@ import {
 } from '../../lib/agent-tools'
 import { BrainstormEngine } from '../../lib/engines/brainstorm-engine'
 import {
+  SAFE_PROTOTYPE_ID,
   finalizePrototypeArtifact,
   planPrototypeGeneration,
   resolvePrototypeArtifactPaths
@@ -11768,17 +11770,18 @@ export class ChatEngine {
         for (const batch of prototypeBatches) {
           const finalized = await Promise.all(
             batch.map(async (item) => {
-              const candidate = declared.get(item.id)
+              const prototypeCandidate = declared.get(item.id)
               const artifact = await finalizePrototypeArtifact({
                 projectRoot,
                 featureSlug,
                 prototypeId: item.id,
                 fidelity: item.fidelity,
                 title:
-                  candidate?.title || `${item.fidelity === 'lofi' ? 'LoFi' : 'HiFi'} ${item.id}`,
+                  prototypeCandidate?.title ||
+                  `${item.fidelity === 'lofi' ? 'LoFi' : 'HiFi'} ${item.id}`,
                 entryFile: 'index.html',
-                ...(candidate?.parentPrototypeId
-                  ? { parentPrototypeId: candidate.parentPrototypeId }
+                ...(prototypeCandidate?.parentPrototypeId
+                  ? { parentPrototypeId: prototypeCandidate.parentPrototypeId }
                   : {})
               })
               const paths = resolvePrototypeArtifactPaths(projectRoot, featureSlug, item.id)
@@ -11788,7 +11791,46 @@ export class ChatEngine {
           )
           prototypes.push(...finalized)
         }
-        completed = { ...content, prototypes }
+        // The model may create prototypes beyond the declared batch (e.g. an
+        // extra concept it invented mid-turn). Discover any valid prototype
+        // directories on disk that the plan did not cover and finalize them
+        // so nothing the model actually built is silently dropped.
+        const prototypesRoot = resolve(
+          projectRoot,
+          '.cio',
+          'specs',
+          featureSlug,
+          'prototypes'
+        )
+        const plannedIds = new Set(prototypeBatches.flat().map((item) => item.id))
+        let discovered: Dirent[] = []
+        try {
+          discovered = (await readdir(prototypesRoot, { withFileTypes: true }))
+            .filter(
+              (entry) =>
+                entry.isDirectory() &&
+                SAFE_PROTOTYPE_ID.test(entry.name) &&
+                !plannedIds.has(entry.name)
+            )
+            .sort((a, b) => a.name.localeCompare(b.name))
+        } catch {
+          // No prototypes directory: nothing extra to discover.
+        }
+        for (const entry of discovered) {
+          const candidate = declared.get(entry.name)
+          const artifact = await finalizePrototypeArtifact({
+            projectRoot,
+            featureSlug,
+            prototypeId: entry.name,
+            fidelity: prototypeFidelity ?? 'lofi',
+            title: candidate?.title || `Prototype ${entry.name}`,
+            entryFile: 'index.html',
+            ...(candidate?.parentPrototypeId ? { parentPrototypeId: candidate.parentPrototypeId } : {})
+          })
+          const paths = resolvePrototypeArtifactPaths(projectRoot, featureSlug, entry.name)
+          await this.prototypePreviewRegistrar?.(paths.previewSlug, paths.canonicalRoot)
+          prototypes.push(artifact)
+        }
       } else if (prototypeBatches.length > 0) {
         if (!skipPrototypeGeneration) {
           throw new Error('This harness cannot create scoped prototype artifacts')

@@ -50,7 +50,7 @@ export function planPrototypeGeneration(
 }
 
 const SAFE_FEATURE = /^[a-z0-9][a-z0-9-]{0,127}$/u
-const SAFE_PROTOTYPE_ID = /^[LH][1-9][0-9]*$/u
+export const SAFE_PROTOTYPE_ID = /^[LH][1-9][0-9]*$/u
 
 export interface PrototypeArtifactInput {
   projectRoot: string
