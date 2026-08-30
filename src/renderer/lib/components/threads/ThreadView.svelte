@@ -2903,9 +2903,52 @@
       if (!scrollEl || scrollRestored) return
       scrollEl.scrollTo({ top: scrollEl.scrollHeight, behavior: 'auto' })
       userScrolledAway = false
+      // Async content keeps mounting after this first frame — markdown,
+      // trace folds, cards, images — so hold the bottom across frames until
+      // the page's height settles. The user's first upward scroll releases it.
+      startTailPin()
     })
     scrollRestored = true
   })
+
+  /** Frames the bottom-pin kept re-asserting after the height last changed.
+   *  Async content (markdown, trace folds, cards, images) mounts across several
+   *  frames after `loaded` flips, each growing the page; the pin releases once
+   *  the height holds steady for this many consecutive frames. */
+  const TAIL_PIN_SETTLE_FRAMES = 20
+  /** Height seen on the previous pin frame; changes reset the settle countdown. */
+  let tailPinLastHeight = -1
+  /** Frames until the pin releases once the height stops changing. */
+  let tailPinSettle = TAIL_PIN_SETTLE_FRAMES
+  /** Handle for the pending pin frame so a new pin cancels the old loop. */
+  let tailPinHandle = 0
+
+  /** Pin the viewport to the live bottom across frames. Checks
+   *  `userScrolledAway` every frame, so the user's first upward scroll or
+   *  wheel tick releases the pin and scrolling behaves as a pure snapshot.
+   *  Reads no reactive state, so Svelte never re-runs it. */
+  function runTailPin(): void {
+    const el = scrollEl
+    if (!el || userScrolledAway) return
+    // The page keeps growing after `loaded` flips — markdown hydrates, trace
+    // folds mount, file-changes cards resolve — so re-assert the bottom on
+    // every frame until the height holds steady for the settle window.
+    el.scrollTop = el.scrollHeight
+    if (el.scrollHeight !== tailPinLastHeight) {
+      tailPinLastHeight = el.scrollHeight
+      tailPinSettle = TAIL_PIN_SETTLE_FRAMES
+    } else if (tailPinSettle > 0) {
+      tailPinSettle -= 1
+    }
+    if (tailPinSettle > 0) tailPinHandle = requestAnimationFrame(runTailPin)
+  }
+
+  /** Start (or restart) the tail pin. Safe to call repeatedly: the previous
+   *  loop's frame handle is cancelled before a new one is scheduled. */
+  function startTailPin(): void {
+    cancelAnimationFrame(tailPinHandle)
+    tailPinHandle = requestAnimationFrame(runTailPin)
+  }
 
   // After the initial restore, auto-scroll only when new content arrives and
   // the user hasn't scrolled away from the bottom. Messages and the file-changes
