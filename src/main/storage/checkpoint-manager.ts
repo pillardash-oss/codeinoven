@@ -640,7 +640,12 @@ export class CheckpointManager {
     const checkpoint = await this.get(projectId, threadId, turnId)
     if (!checkpoint) throw new Error(`Turn checkpoint not found: ${turnId}`)
     const change = checkpoint.changes.find((candidate) => candidate.path === path)
-    if (!change) throw new Error(`Path is not part of this checkpoint: ${path}`)
+    if (!change) {
+      // Stale renderer state (or a change filtered out at completion) can
+      // request a path this checkpoint never recorded. Serve the live diff
+      // for it instead of throwing so a hover popover degrades gracefully.
+      return this.getLiveFileDiff(projectId, threadId, turnId, path)
+    }
     const binary = change.before?.binary ?? change.after?.binary ?? false
     if (binary) {
       return { path, kind: change.kind, binary: true, truncated: false }
