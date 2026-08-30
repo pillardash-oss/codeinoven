@@ -9,7 +9,6 @@
     onReview: () => void
     onFinalize: () => void
     prototypes?: BrainstormPrototype[]
-    onSelectPrototype?: (prototypeId: string) => void | Promise<void>
     onContinueWithoutHifi?: () => void
     finalizeLabel?: string
     settings?: ThreadSettings
@@ -34,7 +33,6 @@
     onReview,
     onFinalize,
     prototypes = [],
-    onSelectPrototype,
     onContinueWithoutHifi,
     finalizeLabel = 'Prepare spec',
     settings,
@@ -90,23 +88,6 @@
             >
             <span class="truncate text-xs text-foreground">{prototype.title}</span>
           </div>
-        {/each}
-      </div>
-    {/if}
-    {#if lofiPrototypes.length > 0 && !hasHifi && onSelectPrototype}
-      <div class="grid gap-2 pt-2 sm:grid-cols-2">
-        {#each lofiPrototypes as prototype (prototype.id)}
-          <button
-            type="button"
-            class="rounded-lg border bg-raised px-3 py-2 text-left hover:bg-elevated disabled:opacity-40"
-            disabled={busy}
-            onclick={() => void onSelectPrototype?.(prototype.id)}
-          >
-            <span class="text-xs font-semibold text-thread-spec">{prototype.id}</span>
-            <span class="mt-0.5 block text-xs text-foreground"
-              >Build HiFi from {prototype.title}</span
-            >
-          </button>
         {/each}
       </div>
     {/if}

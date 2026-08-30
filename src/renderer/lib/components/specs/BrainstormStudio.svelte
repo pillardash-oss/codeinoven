@@ -101,6 +101,7 @@
     onOpenInEditor?: (brainstorm: BrainstormDocument) => CallbackResult
     onRevealInAppFile?: (brainstorm: BrainstormDocument) => CallbackResult
     onOpenPrototype?: (previewPath: string) => CallbackResult
+    onGenerateHifi?: (prototypeId: string) => CallbackResult
   }
 
   let {
@@ -131,7 +132,8 @@
     onNextStep,
     onOpenInEditor,
     onRevealInAppFile,
-    onOpenPrototype
+    onOpenPrototype,
+    onGenerateHifi
   }: Props = $props()
 
   const canonicalSections: Array<{ id: BrainstormSectionId; title: string }> = [
@@ -1124,32 +1126,48 @@
             <h2 class="text-xl font-semibold tracking-tight">Prototypes</h2>
             <div class="mt-4 grid gap-3 sm:grid-cols-2">
               {#each draft.content.prototypes as prototype (prototype.id)}
-                <article class="rounded-xl border bg-surface p-4 shadow-sm">
-                  <div class="flex items-start justify-between gap-3">
-                    <div>
-                      <p class="text-xs font-semibold text-thread-spec">{prototype.id}</p>
-                      <h3 class="mt-1 text-sm font-semibold text-foreground">{prototype.title}</h3>
+                <article
+                  class="flex max-h-64 flex-col overflow-hidden rounded-xl border bg-surface shadow-sm"
+                >
+                  <button
+                    type="button"
+                    class="flex min-h-0 flex-1 flex-col text-left"
+                    title="Open {prototype.title} preview"
+                    onclick={() => onOpenPrototype?.(prototype.previewPath)}
+                  >
+                    <div class="flex items-start justify-between gap-3 p-4 pb-0">
+                      <div>
+                        <p class="text-xs font-semibold text-thread-spec">{prototype.id}</p>
+                        <h3 class="mt-1 text-sm font-semibold text-foreground">
+                          {prototype.title}
+                        </h3>
+                      </div>
+                      <span class="rounded-full bg-raised px-2 py-1 text-[10px] text-muted">
+                        {prototype.fidelity === 'lofi' ? 'LoFi' : 'HiFi'}
+                      </span>
                     </div>
-                    <span class="rounded-full bg-raised px-2 py-1 text-[10px] text-muted">
-                      {prototype.fidelity === 'lofi' ? 'LoFi' : 'HiFi'}
-                    </span>
-                  </div>
+                    <div class="min-h-0 flex-1 overflow-y-auto p-4">
+                      <iframe
+                        src={prototype.previewPath}
+                        title="{prototype.title} preview"
+                        class="pointer-events-none h-40 w-full rounded-lg border bg-raised"
+                        sandbox="allow-scripts"
+                      ></iframe>
+                    </div>
+                  </button>
                   {#if prototype.parentPrototypeId}
-                    <p class="mt-2 text-[11px] text-muted">
+                    <p class="mt-2 px-4 text-[11px] text-muted">
                       Based on {prototype.parentPrototypeId}
                     </p>
                   {/if}
-                  <p class="mt-3 truncate font-mono text-[10px] text-dimmed">
-                    {prototype.previewPath}
-                  </p>
-                  <div class="mt-3 flex gap-2">
-                    {#if onOpenPrototype}
+                  <div class="mt-3 flex gap-2 p-4 pt-0">
+                    {#if prototype.fidelity === 'lofi' && onGenerateHifi}
                       <button
                         type="button"
                         class="rounded-lg bg-thread-spec px-2.5 py-1.5 text-xs font-medium text-foreground"
-                        onclick={() => void onOpenPrototype?.(prototype.previewPath)}
+                        onclick={() => void onGenerateHifi?.(prototype.id)}
                       >
-                        Open preview
+                        HiFi from this
                       </button>
                     {/if}
                     <button
