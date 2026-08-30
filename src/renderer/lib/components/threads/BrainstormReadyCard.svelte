@@ -50,6 +50,9 @@
 
   let lofiPrototypes = $derived(prototypes.filter((prototype) => prototype.fidelity === 'lofi'))
   let hasHifi = $derived(prototypes.some((prototype) => prototype.fidelity === 'hifi'))
+
+  const fidelityLabel = (fidelity: BrainstormPrototype['fidelity']): string =>
+    fidelity === 'hifi' ? 'HiFi' : 'LoFi'
 </script>
 
 <section
@@ -69,6 +72,27 @@
       Keep talking to refine the direction, review the concise report, or use it to prepare the
       specification.
     </p>
+    {#if prototypes.length > 0}
+      <div class="space-y-1 pt-1">
+        <p class="text-xs font-semibold uppercase tracking-wide text-muted">
+          Captured prototypes ({prototypes.length})
+        </p>
+        {#each prototypes as prototype (prototype.id)}
+          <div
+            class="flex items-center gap-2 rounded-lg border bg-raised px-3 py-2"
+            aria-label="Prototype {prototype.id}: {prototype.title}"
+          >
+            <span
+              class="shrink-0 rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide {'hifi' ===
+              prototype.fidelity
+                ? 'bg-thread-spec/10 text-thread-spec'
+                : 'bg-overlay text-muted'}">{fidelityLabel(prototype.fidelity)}</span
+            >
+            <span class="truncate text-xs text-foreground">{prototype.title}</span>
+          </div>
+        {/each}
+      </div>
+    {/if}
     {#if lofiPrototypes.length > 0 && !hasHifi && onSelectPrototype}
       <div class="grid gap-2 pt-2 sm:grid-cols-2">
         {#each lofiPrototypes as prototype (prototype.id)}
