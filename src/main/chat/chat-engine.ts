@@ -5459,6 +5459,15 @@ export class ChatEngine {
           ? [...mirror.slice(0, cutoff), ...mirror.slice(turnEnd)]
           : mirror.slice(turnEnd)
     }
+    // Working traces belong to the turn they were produced under. When the
+    // anchor message is removed, drop every working_trace row inside the
+    // removed span even if a late-arriving trace row sorted after the next
+    // user message — an orphaned trace must never outlive its prompt.
+    const removedSpanStart = cutoff !== -1 ? mirror[cutoff].createdAt : Number.POSITIVE_INFINITY
+    kept = kept.filter(
+      (message) =>
+        !(message.visibility === 'working_trace' && message.createdAt >= removedSpanStart)
+    )
     await this.threadManager.saveMessages(projectId, threadId, kept)
 
     if (thread.sessionId) {
