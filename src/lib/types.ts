@@ -2093,6 +2093,8 @@ export interface LocalProfileAnalytics {
   costUsd: number
   tokens: number
   durationMs: number
+  /** Wall-clock runtime of assistant responses, from agent_messages. */
+  responseDurationMs: number
   topHarnessId: string | null
   topProviderId: string | null
   topModelId: string | null

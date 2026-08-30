@@ -101,6 +101,7 @@
     dailyUsage: [],
     hourlyUsage: [],
     modelPerformance: [],
+    responseDurationMs: 0,
     feedbackCost: {
       outcomes: 0,
       pricedOutcomes: 0,
@@ -112,7 +113,7 @@
     generatedAt: 0
   }
 
-  let usage = $state<LocalProfileAnalytics>(EMPTY_USAGE)
+  let usage = $state<LocalProfileAnalytics>(EMPTY_USAGE)  // responseDurationMs added below
   let accountState = $state<AccountProfileState>({ status: 'signed-out', profile: null })
   let loading = $state(true)
   let errorMessage = $state('')

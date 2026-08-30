@@ -694,6 +694,7 @@ export class HarnessUsageRepo {
       utilityRows,
       activityRows,
       dailyRows,
+      responseRows,
       hourlyRows
     ] = await Promise.all([
       this.aggregate<LocalUsageAggregateRow>(
@@ -807,6 +808,18 @@ export class HarnessUsageRepo {
            ORDER BY date ASC`,
         [...PROFILE_UTILITY_FEATURES, ...params]
       ),
+      // Real agent responses: count durable assistant messages (not usage
+      // events) within the range, and sum their wall-clock turn runtime.
+      this.aggregate<{ message_count: number; duration_ms: number }>(
+        `SELECT COUNT(*) AS message_count,
+                COALESCE(SUM(COALESCE(completed_at, created_at) - created_at), 0) AS duration_ms
+         FROM agent_messages
+         WHERE role = 'assistant'
+           AND harness_id IS NOT NULL
+           AND created_at >= ?
+           AND created_at < ?`,
+        [range.startAt, range.endAt]
+      ),
       this.aggregate<LocalUsageHourRow>(
         `SELECT CAST(hour_key AS INTEGER) AS id,
                   CAST(hour_key AS INTEGER) AS hour,
@@ -885,7 +898,10 @@ export class HarnessUsageRepo {
     return {
       range,
       activityRange,
-      messageCount: harnessRows.reduce((sum, row) => sum + row.message_count, 0),
+      // Real agent responses come from the durable assistant-message ledger,
+      // not from usage events, so retries never inflate the count.
+      messageCount: responseRows[0]?.message_count ?? 0,
+      responseDurationMs: responseRows[0]?.duration_ms ?? 0,
       costUsd: harnessCost + utilityCost,
       tokens: harnessTokens + utilityTokens,
       durationMs:
