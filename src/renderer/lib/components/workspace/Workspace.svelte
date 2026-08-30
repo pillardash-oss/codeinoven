@@ -1606,10 +1606,13 @@
 
   // Full user-message history is only needed after the history menu opens.
   // Keeping it out of the thread mount path prevents a hidden database scan on
-  // every switch while preserving the complete jump list when requested.
+  // every switch. Also re-fires when the active thread changes (the callback
+  // pointer swaps on ThreadView mount) so the list refreshes for the new
+  // thread if the menu is already open — without scanning on every mount.
   $effect(() => {
-    if (!showHistoryMenu) return
-    void workspaceState.loadUserMessageHistory?.()
+    const load = workspaceState.loadUserMessageHistory
+    if (!showHistoryMenu || !load) return
+    void load()
   })
 
   // Live thread updates pushed from the main process (status/read changes
