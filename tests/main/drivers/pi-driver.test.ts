@@ -210,8 +210,9 @@ describe('PiDriver', () => {
     expect(client.prompt).toHaveBeenCalledWith('go', [])
   })
 
-  it('delivers a system prompt and read-only tool scope on the turn', async () => {
-    const driver = new PiDriver(await storage())
+  it('publishes the system prompt through the core-tools handoff file instead of the turn text', async () => {
+    const storageEngine = await storage()
+    const driver = new PiDriver(storageEngine)
     const sessionId = await driver.createSession('/project', 'Pi')
     await driver.sendPrompt('/project', {
       sessionId,
@@ -224,8 +225,18 @@ describe('PiDriver', () => {
     const client = rpcMock.clients[0]
     expect(client).toBeDefined()
     const [promptText] = client.prompt.mock.calls[0] as [string, undefined]
-    expect(promptText).toContain('Be surgical.')
+    // The system prompt must not be duplicated into the user turn's text —
+    // it is delivered as a real system-role field via the core-tools
+    // extension's before_agent_start hook, which reads the handoff file
+    // below. Re-sending it in every turn's text made models mistake the
+    // repeated block for injected/duplicated content.
+    expect(promptText).not.toContain('Be surgical.')
     expect(promptText).toContain('inspect')
+
+    const handoff = await storageEngine.readRaw(
+      `runtime/pi-core-tools/${sessionId}/system-prompt.txt`
+    )
+    expect(handoff).toBe('Be surgical.')
   })
 
   it('surfaces a permanently failed run from agent_settled', () => {

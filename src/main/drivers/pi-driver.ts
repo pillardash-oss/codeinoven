@@ -1079,9 +1079,20 @@ export class PiDriver extends PersistentCliDriver {
   private statusExtensionPath: string | null = null
   private statusExtensionDirectory: string | null = null
   private statusExtensionFailed = false
-  /** Materialized app-owned core-tools extension path, cached across sessions. */
-  private coreToolsExtensionPath: string | null = null
-  private coreToolsExtensionDirectory: string | null = null
+  /** Session-keyed absolute path to the materialized core-tools extension module, passed to `--extension`. */
+  private coreToolsExtensionPaths = new Map<string, string>()
+  /**
+   * Session-keyed handoff file carrying the CodeInOven-composed system prompt
+   * (work ethic, persistent preferences, working scope, skills), storage-relative.
+   * The extension's `before_agent_start` hook reads this fresh on every agent
+   * loop start and appends it to Pi's own system prompt as a real system-role
+   * field. This exists so that content is sent once per request via the
+   * system prompt, not re-concatenated into every user turn's text — doing
+   * the latter made every fresh turn replay the same multi-kilobyte block
+   * inside "user" content, which models can (and did) mistake for injected
+   * or duplicated content.
+   */
+  private cioSystemPromptPaths = new Map<string, string>()
   private coreToolsExtensionFailed = false
   /** WSL-aware read view of Pi's own credential store (`~/.pi/agent/auth.json`). */
   private readonly authConfig = new PiAuthConfigService(undefined, piAuthFileIo)
@@ -1404,14 +1415,10 @@ export class PiDriver extends PersistentCliDriver {
         references.push(`Attached file: ${path}`)
       }
     }
-    const prompt = [
-      options.systemPrompt ? options.systemPrompt : '',
-      inlineSvg,
-      ...references,
-      options.text
-    ]
-      .filter(Boolean)
-      .join('\n\n')
+    if (options.systemPrompt) {
+      await this.publishCioSystemPrompt(session.id, options.systemPrompt)
+    }
+    const prompt = [inlineSvg, ...references, options.text].filter(Boolean).join('\n\n')
 
     try {
       await client.prompt(prompt, images)
@@ -1676,12 +1683,8 @@ export class PiDriver extends PersistentCliDriver {
     if (statusDirectory) {
       void rm(statusDirectory, { recursive: true, force: true }).catch(() => undefined)
     }
-    const coreToolsDirectory = this.coreToolsExtensionDirectory
-    this.coreToolsExtensionPath = null
-    this.coreToolsExtensionDirectory = null
-    if (coreToolsDirectory) {
-      void rm(coreToolsDirectory, { recursive: true, force: true }).catch(() => undefined)
-    }
+    this.coreToolsExtensionPaths.clear()
+    this.cioSystemPromptPaths.clear()
     super.dispose()
   }
 
@@ -1737,7 +1740,7 @@ export class PiDriver extends PersistentCliDriver {
     // The app-owned core-tools extension registers the question, todo, and
     // file-request tools plus the destructive-action permission gate (marker
     // confirm dialogs upgraded to permission.asked in handleUiRequest).
-    const coreToolsExtension = await this.materializeCoreToolsExtension()
+    const coreToolsExtension = await this.materializeCoreToolsExtension(sessionId)
     if (coreToolsExtension) extensionArgs.push('--extension', coreToolsExtension)
     const invocation = await prepareHarnessInvocation(
       'pi',
@@ -2511,23 +2514,45 @@ export class PiDriver extends PersistentCliDriver {
     }
   }
 
-  private async materializeCoreToolsExtension(): Promise<string | null> {
-    if (this.coreToolsExtensionPath) return this.coreToolsExtensionPath
+  private async materializeCoreToolsExtension(sessionId: string): Promise<string | null> {
+    const existing = this.coreToolsExtensionPaths.get(sessionId)
+    if (existing) return existing
     if (this.coreToolsExtensionFailed) return null
     try {
-      if (!this.coreToolsExtensionDirectory) {
-        this.coreToolsExtensionDirectory = await mkdtemp(
-          join(tmpdir(), 'codeinoven-pi-core-tools-')
+      const directory = join('runtime', 'pi-core-tools', sessionId)
+      const systemPromptRelative = join(directory, 'system-prompt.txt')
+      const extensionRelative = join(directory, 'codeinoven-core-tools.ts')
+      await this.storage.writeRaw(systemPromptRelative, '')
+      const systemPromptAbsolute = this.storage.resolve(systemPromptRelative)
+      await this.storage.writeRaw(
+        extensionRelative,
+        piCoreToolsExtension().replace(
+          '__CIO_SYSTEM_PROMPT_PATH__',
+          JSON.stringify(systemPromptAbsolute).slice(1, -1)
         )
-      }
-      const path = join(this.coreToolsExtensionDirectory, 'codeinoven-core-tools.ts')
-      await writeFile(path, piCoreToolsExtension(), 'utf8')
-      this.coreToolsExtensionPath = path
-      return path
+      )
+      this.cioSystemPromptPaths.set(sessionId, systemPromptRelative)
+      const extensionAbsolute = this.storage.resolve(extensionRelative)
+      this.coreToolsExtensionPaths.set(sessionId, extensionAbsolute)
+      return extensionAbsolute
     } catch (error) {
       this.coreToolsExtensionFailed = true
       Logger.dev('Pi core-tools extension materialization failed:', error)
       return null
+    }
+  }
+
+  /** Rewrite the session's CIO system-prompt handoff file so the extension's
+   *  `before_agent_start` hook picks it up on the next agent loop start. A
+   *  missing materialized path (extension failed to load) means the turn
+   *  falls back to Pi's own system prompt only — never blocks the turn. */
+  private async publishCioSystemPrompt(sessionId: string, systemPrompt: string): Promise<void> {
+    const path = this.cioSystemPromptPaths.get(sessionId)
+    if (!path) return
+    try {
+      await this.storage.writeRaw(path, systemPrompt)
+    } catch (error) {
+      Logger.dev('Pi core-tools system-prompt handoff update failed:', error)
     }
   }
 

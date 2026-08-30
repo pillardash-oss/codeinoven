@@ -66,7 +66,7 @@ export const PI_CORE_TOOLS_TOOL_NAMES = [
 ] as const
 
 export function piCoreToolsExtension(): string {
-  return `import { existsSync } from 'node:fs'
+  return `import { existsSync, readFileSync } from 'node:fs'
 import { isAbsolute, relative, resolve } from 'node:path'
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent'
 import {
@@ -81,6 +81,22 @@ import { Type } from 'typebox'
 
 const CIO_PERMISSION_MARKER = 'cio-permission:'
 const CIO_QUESTION_MARKER = 'cio-question:'
+const CIO_SYSTEM_PROMPT_PATH = '__CIO_SYSTEM_PROMPT_PATH__'
+
+// The driver rewrites this file per turn with the CodeInOven-composed
+// instructions (work ethic, persistent preferences, working scope, skills).
+// Reading it here and returning it from before_agent_start delivers it as a
+// real system-role field on every request, instead of the driver
+// concatenating it into the user turn's text — which replayed the same
+// multi-kilobyte block inside every "user" message and made models mistake
+// the repeated block for injected/duplicated content.
+function loadCioSystemPrompt() {
+  try {
+    return readFileSync(CIO_SYSTEM_PROMPT_PATH, 'utf8').trim()
+  } catch {
+    return ''
+  }
+}
 
 interface GateHit {
   permission: string
@@ -864,6 +880,15 @@ export default function codeInOvenCoreToolsExtension(pi) {
         { triggerTurn: true }
       )
     } catch {}
+  })
+
+  // Deliver the CodeInOven-composed instructions as a real system-role field
+  // instead of duplicating them inside every user turn's text (see
+  // loadCioSystemPrompt above for why).
+  pi.on('before_agent_start', (event) => {
+    const extra = loadCioSystemPrompt()
+    if (!extra) return undefined
+    return { systemPrompt: event.systemPrompt + '\n\n' + extra }
   })
 
   // Permission gate: destructive tool calls require an explicit permission
