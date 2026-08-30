@@ -188,7 +188,7 @@ describe('DatabaseWorker production wrapper', () => {
     )
     usage.recordEvent(usageEvent(thread.id, 'auxiliary-only', 'memory'))
 
-    const kpis = usage.efficiencyKpisForThread(thread.id)
+    const kpis = await usage.efficiencyKpisForThread(thread.id)
     expect(kpis.successfulTurns).toBe(2)
     expect(kpis.mainAttempts).toBe(2)
     expect(kpis.toolResultTokens).toBe(123)

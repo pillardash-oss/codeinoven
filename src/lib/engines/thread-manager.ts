@@ -312,7 +312,10 @@ export class ThreadManager {
   }
 
   /** Efficiency and cost-coverage KPIs for a thread's completed successful user turns. */
-  efficiencyKpisFor(_projectId: string, threadId: string): import('../types').UsageEfficiencyKpis {
+  efficiencyKpisFor(
+    _projectId: string,
+    threadId: string
+  ): Promise<import('../types').UsageEfficiencyKpis> {
     return this.harnessUsageRepo.efficiencyKpisForThread(threadId)
   }
 

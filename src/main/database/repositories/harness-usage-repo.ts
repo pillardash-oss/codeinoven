@@ -300,20 +300,25 @@ export class HarnessUsageRepo {
   }
 
   /** Economically comparable metrics for completed successful user turns. */
-  efficiencyKpis(range?: LocalProfileAnalyticsRange): UsageEfficiencyKpis {
+  efficiencyKpis(range?: LocalProfileAnalyticsRange): Promise<UsageEfficiencyKpis> {
     return this.computeEfficiencyKpis(range)
   }
 
   /** Economically comparable metrics scoped to a single thread's completed turns. */
-  efficiencyKpisForThread(threadId: string): UsageEfficiencyKpis {
+  efficiencyKpisForThread(threadId: string): Promise<UsageEfficiencyKpis> {
     return this.computeEfficiencyKpis(undefined, threadId)
   }
 
-  private computeEfficiencyKpis(
+  /**
+   * Both KPI queries run on the maintenance worker connection so their full
+   * `usage_events` scans never block the Electron main thread (primary-
+   * connection fallback for in-memory test databases).
+   */
+  private async computeEfficiencyKpis(
     range?: LocalProfileAnalyticsRange,
     threadId?: string
-  ): UsageEfficiencyKpis {
-    const row = this.db.get<{
+  ): Promise<UsageEfficiencyKpis> {
+    const [row] = await this.aggregate<{
       successful_turns: number
       uncached_input: number
       cached_input: number
@@ -384,13 +389,14 @@ export class HarnessUsageRepo {
                            THEN COALESCE(tokens_uncached_input, 0) + COALESCE(tokens_output, 0)
                            ELSE 0 END), 0) AS tool_result_tokens
        FROM scoped`,
-      range?.startAt ?? null,
-      range?.startAt ?? null,
-      range?.endAt ?? null,
-      range?.endAt ?? null,
-      threadId ?? null,
-      threadId ?? null
-    )
+      [
+        range?.startAt ?? null,
+        range?.startAt ?? null,
+        range?.endAt ?? null,
+        range?.endAt ?? null,
+        threadId ?? null,
+        threadId ?? null
+      ])
     const successfulTurns = row?.successful_turns ?? 0
     const uncachedInputTokens = row?.uncached_input ?? 0
     const cachedInputTokens = row?.cached_input ?? 0
@@ -408,7 +414,7 @@ export class HarnessUsageRepo {
     const pricedCostEvents = row?.priced_cost_events ?? 0
     const totalCostEvents = row?.total_cost_events ?? 0
     const toolResultTokens = row?.tool_result_tokens ?? 0
-    const cacheBreakdownRows = this.db.all<{
+    const cacheBreakdownRows = await this.aggregate<{
       harness_id: string | null
       provider_id: string | null
       model_id: string | null
@@ -444,13 +450,14 @@ export class HarnessUsageRepo {
        WHERE feature IN ('main', 'audit', 'assignment')
        GROUP BY harness_id, provider_id, model_id
        ORDER BY main_attempts DESC, harness_id ASC, provider_id ASC, model_id ASC`,
-      range?.startAt ?? null,
-      range?.startAt ?? null,
-      range?.endAt ?? null,
-      range?.endAt ?? null,
-      threadId ?? null,
-      threadId ?? null
-    )
+      [
+        range?.startAt ?? null,
+        range?.startAt ?? null,
+        range?.endAt ?? null,
+        range?.endAt ?? null,
+        threadId ?? null,
+        threadId ?? null
+      ])
     const cacheBreakdown: UsageCacheHitBreakdown[] = cacheBreakdownRows.map((entry) => ({
       harnessId: entry.harness_id,
       providerId: entry.provider_id,
