@@ -392,7 +392,7 @@ interface MuseToolState {
 }
 
 /** Turn-scoped state correlating the streamed records of one assistant message. */
-interface MuseTurnState {
+export interface MuseTurnState {
   turnIndex: number
   messageId: string
   createdAt: number
