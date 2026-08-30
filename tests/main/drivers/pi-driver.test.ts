@@ -210,6 +210,46 @@ describe('PiDriver', () => {
     expect(client.prompt).toHaveBeenCalledWith('go', [])
   })
 
+  it('skips re-sending set_model/set_thinking_level when nothing changed since the last turn', async () => {
+    // Regression: pi's own interactive mode only calls set_model/
+    // set_thinking_level when the user actually changes them, never before
+    // every prompt. Re-sending both unconditionally added two blocking RPC
+    // round-trips with no progress signal, leaving follow-up turns stuck on
+    // a bare spinner. The steer path (session.activeTurns already set,
+    // hit by this second call since no turn-end event was emitted) must
+    // stay a no-op for unchanged settings too.
+    const driver = new PiDriver(await storage())
+    const sessionId = await driver.createSession('/project', 'Pi')
+    await driver.sendPrompt('/project', { sessionId, settings, text: 'go', attachments: [] })
+    const client = rpcMock.clients[0]
+    expect(client.setModel).toHaveBeenCalledTimes(1)
+    expect(client.setThinkingLevel).toHaveBeenCalledTimes(1)
+
+    await driver.sendPrompt('/project', { sessionId, settings, text: 'again', attachments: [] })
+    expect(client.setModel).toHaveBeenCalledTimes(1)
+    expect(client.setThinkingLevel).toHaveBeenCalledTimes(1)
+
+    await driver.sendPrompt('/project', {
+      sessionId,
+      settings: { ...settings, thinkingLevel: 'high' },
+      text: 'raise thinking',
+      attachments: []
+    })
+    expect(client.setModel).toHaveBeenCalledTimes(1)
+    expect(client.setThinkingLevel).toHaveBeenCalledTimes(2)
+    expect(client.setThinkingLevel).toHaveBeenLastCalledWith('high')
+
+    await driver.sendPrompt('/project', {
+      sessionId,
+      settings: { ...settings, modelId: 'qwen/qwen3.5-32b', thinkingLevel: 'high' },
+      text: 'switch model',
+      attachments: []
+    })
+    expect(client.setModel).toHaveBeenCalledTimes(2)
+    expect(client.setModel).toHaveBeenLastCalledWith('lmstudio', 'qwen/qwen3.5-32b')
+    expect(client.setThinkingLevel).toHaveBeenCalledTimes(2)
+  })
+
   it('publishes the system prompt through the core-tools handoff file instead of the turn text', async () => {
     const storageEngine = await storage()
     const driver = new PiDriver(storageEngine)

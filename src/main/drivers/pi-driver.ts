@@ -1054,6 +1054,20 @@ export class PiDriver extends PersistentCliDriver {
 
   private turnStates = new Map<string, PiTurnState>()
   private rpcClients = new Map<string, PiRpcClient>()
+  /**
+   * Model/thinking-level last applied to each session's live pi RPC process.
+   * Pi's own interactive mode only sends `set_model`/`set_thinking_level`
+   * when the user actually changes them (see interactive-mode.js), never
+   * before every prompt — re-sending them unconditionally on every turn adds
+   * two blocking RPC round-trips with no progress signal, which is what left
+   * follow-up turns stuck on the bare spinner. Cleared whenever the RPC
+   * client is disposed so a freshly spawned process still gets an explicit
+   * set_model on its first turn.
+   */
+  private appliedPiSettings = new Map<
+    string,
+    { provider: string; modelId: string; thinkingLevel: string }
+  >()
   /** Session-keyed turn handoff files carrying { url, token } for the gateway extension, storage-relative. */
   private gatewayHandoffPaths = new Map<string, string>()
   /** Session-keyed absolute path to the materialized gateway extension module, passed to `--extension`. */
@@ -1364,8 +1378,12 @@ export class PiDriver extends PersistentCliDriver {
       const activeModel = this.resolveModel(options.settings.providerId, options.settings.modelId)
       if (activeModel) {
         try {
-          await client.setModel(activeModel.provider, activeModel.modelId)
-          await client.setThinkingLevel(piThinkingLevel(options.settings.thinkingLevel))
+          await this.applyPiSettingsIfChanged(
+            session.id,
+            client,
+            activeModel,
+            options.settings.thinkingLevel
+          )
         } catch {
           // The active turn keeps its current model/thinking level; steering
           // must not fail just because a mid-turn model switch was rejected.
@@ -1388,8 +1406,7 @@ export class PiDriver extends PersistentCliDriver {
         `Pi model is unavailable: ${options.settings.providerId}/${options.settings.modelId}`
       )
     }
-    await client.setModel(model.provider, model.modelId)
-    await client.setThinkingLevel(piThinkingLevel(options.settings.thinkingLevel))
+    await this.applyPiSettingsIfChanged(session.id, client, model, options.settings.thinkingLevel)
 
     this.setTurnProvenance(
       session.id,
@@ -1439,6 +1456,43 @@ export class PiDriver extends PersistentCliDriver {
   ): { provider: string; modelId: string } | null {
     if (!providerId || !modelId) return null
     return { provider: providerId, modelId }
+  }
+
+  /**
+   * Only send `set_model`/`set_thinking_level` when the session's live pi
+   * process doesn't already have them applied. Each is a full RPC round-trip
+   * with no progress event, so paying for both on every turn — as opposed to
+   * only when the user actually changes a setting, which is what pi's own
+   * interactive mode does — left follow-up turns stuck on a bare spinner for
+   * however long those round-trips took.
+   */
+  private async applyPiSettingsIfChanged(
+    sessionId: string,
+    client: PiRpcClient,
+    model: { provider: string; modelId: string },
+    thinkingLevel: string
+  ): Promise<void> {
+    const level = piThinkingLevel(thinkingLevel)
+    const applied = this.appliedPiSettings.get(sessionId)
+    if (
+      applied &&
+      applied.provider === model.provider &&
+      applied.modelId === model.modelId &&
+      applied.thinkingLevel === level
+    ) {
+      return
+    }
+    if (!applied || applied.provider !== model.provider || applied.modelId !== model.modelId) {
+      await client.setModel(model.provider, model.modelId)
+    }
+    if (!applied || applied.thinkingLevel !== level) {
+      await client.setThinkingLevel(level)
+    }
+    this.appliedPiSettings.set(sessionId, {
+      provider: model.provider,
+      modelId: model.modelId,
+      thinkingLevel: level
+    })
   }
 
   async steerPrompt(projectPath: string, options: SteerPromptOptions): Promise<void> {
@@ -2615,6 +2669,7 @@ export class PiDriver extends PersistentCliDriver {
       this.rpcClients.delete(sessionId)
     }
     this.resumedNativeSessions.delete(sessionId)
+    this.appliedPiSettings.delete(sessionId)
   }
 
   private async buildProviderOverlay(projectPath: string): Promise<ProviderOverlay> {
