@@ -1188,7 +1188,7 @@ function operationPid(input: Record<string, unknown>): number | null {
   if (typeof directPid === 'number' && Number.isInteger(directPid) && directPid > 0) {
     return directPid
   }
-  const target = recordValue(input['target'])
+  const target = isRecord(input['target']) ? input['target'] : {}
   const targetPid = target['pid']
   return typeof targetPid === 'number' && Number.isInteger(targetPid) && targetPid > 0
     ? targetPid
