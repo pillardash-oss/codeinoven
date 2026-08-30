@@ -10430,7 +10430,7 @@
                   rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
               />
             {:else}
-              {#if activeTodo}
+              {#if activeTodo && !failureRetryVisible}
                 <AgentTodoCard items={activeTodo.items} signature={activeTodo.signature} {busy} />
               {/if}
               {#key composerRestoreKey}
