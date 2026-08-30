@@ -448,6 +448,18 @@ export interface HarnessDriver {
   ): Promise<void>
 
   /**
+   * Publish a turn-scoped endpoint for harness bridges that cannot receive a
+   * per-turn launch overlay (shared or extension-backed harnesses). The payload
+   * is written session-keyed by the driver; `null` clears any active endpoint
+   * so turn-scoped tokens cannot be replayed after cleanup.
+   */
+  publishUtilityGatewayEndpoint?(
+    projectPath: string,
+    sessionId: string,
+    endpoint: { url: string; token: string } | null
+  ): Promise<void>
+
+  /**
    * Start any session-specific transport needed by the prepared runtime before
    * prompt composition finishes. Implementations must keep this idempotent.
    */

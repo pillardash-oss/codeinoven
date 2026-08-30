@@ -128,6 +128,13 @@ export interface UtilityTurnGateway {
   instructions: string
   /** Shell-callable fallback for harnesses that cannot safely load a per-turn MCP runtime. */
   directInstructions: string
+  /**
+   * Turn-scoped loopback endpoint for direct-gateway harnesses whose persistent
+   * session extensions cannot receive a per-turn launch overlay. Drivers like
+   * Pi hand { url, token } to their bridge through a session-keyed channel;
+   * `null` when the direct path is not in use for this turn.
+   */
+  directEndpoint: { url: string; token: string } | null
   cleanup(): Promise<void>
 }
 
@@ -347,6 +354,7 @@ export class UtilityOrchestrationService {
         resolvedUtilities: always,
         instructions: '',
         directInstructions: '',
+        directEndpoint: null,
         cleanup: async () => undefined
       }
     }
@@ -406,6 +414,7 @@ export class UtilityOrchestrationService {
         'Describe images: search for the image descriptor utility with {"query":"describe image","kinds":["image_descriptor"]}, activate its id, then POST /invoke with {"utility_id":"id","operation":"describe","input":{"images":[{"id":"image-1","source":"path-or-url","type":"path"}]}}.',
         'Treat these endpoints exactly like utility_search, utility_activate, and utility_invoke tool calls.'
       ].join('\n'),
+      directEndpoint: { url: bridgeUrl, token },
       cleanup
     }
   }

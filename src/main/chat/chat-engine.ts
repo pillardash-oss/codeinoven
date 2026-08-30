@@ -2815,6 +2815,10 @@ export class ChatEngine {
     nativeCapabilities.push(...(driver.capabilities?.nativeUtilities ?? []))
     const applyRuntime = driver.applyPreparedUtilityRuntime?.bind(driver)
     if (!applyRuntime) return ''
+    // Capture before the instanceof check below: control-flow analysis widens
+    // `driver` to `HarnessDriver | OpenCodeDriver` afterwards, and the union
+    // hides this optional method.
+    const publishUtilityEndpoint = driver.publishUtilityGatewayEndpoint?.bind(driver)
     // Shared or extension-backed harnesses cannot safely receive a fresh
     // per-turn MCP launch overlay. Keep all app-managed utilities, including
     // Cua, behind the turn-scoped gateway even when a specialized caller does
@@ -2847,6 +2851,12 @@ export class ChatEngine {
           : []
       )
       if (useDirectGateway) {
+        // Harnesses with persistent extension-backed sessions (Pi) receive the
+        // turn-scoped endpoint through a session-keyed handoff so their
+        // gateway extension can route tools without a per-turn relaunch.
+        if (gateway.directEndpoint && publishUtilityEndpoint) {
+          await publishUtilityEndpoint(projectPath, sessionId, gateway.directEndpoint)
+        }
         this.utilityTurns.set(sessionId, { driver, projectPath, gateway, threadId })
         return [
           gateway.directInstructions,
@@ -2922,6 +2932,9 @@ export class ChatEngine {
     this.utilityTurns.delete(sessionId)
     this.computerUsePip?.notifyTurnEnded(turn.threadId)
     try {
+      if (turn.driver.publishUtilityGatewayEndpoint) {
+        await turn.driver.publishUtilityGatewayEndpoint(turn.projectPath, sessionId, null)
+      }
       await turn.driver.applyPreparedUtilityRuntime?.(turn.projectPath, null, sessionId)
     } catch (error) {
       await turn.runtime?.cleanup()
