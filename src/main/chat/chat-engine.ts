@@ -20454,6 +20454,84 @@ export function textForMessage(message: AgentMessage): string {
     .join('\n')
 }
 
+/**
+ * Canonical action categories a tool call is reduced to in a replay recap.
+ * Raw tool identifiers diverge per harness (Claude Code's `Bash`/`Read`/`Task`
+ * vs. Pi's lowercase `bash`/`read`/`cio_spawn_agent` vs. opencode's `webfetch`,
+ * etc.), so a recap built from one harness and replayed into another — or
+ * into a fresh process of the same harness after a version change — must not
+ * assert tool names the resuming session may not recognize as its own. These
+ * patterns match on intent, not on any one harness's naming, and are checked
+ * in order from most to least specific.
+ */
+const TOOL_ACTION_PATTERNS: Array<{ match: RegExp; label: string }> = [
+  { match: /todo/i, label: 'updated the task list' },
+  { match: /task|spawn.?agent|subagent|agent.?status/i, label: 'delegated to a sub-agent' },
+  { match: /websearch|web.?search/i, label: 'searched the web' },
+  { match: /webfetch|fetch|browse|curl/i, label: 'fetched a URL' },
+  { match: /bash|shell|exec|terminal|command/i, label: 'ran a shell command' },
+  { match: /multiedit|notebook.?edit|apply.?patch|patch/i, label: 'edited a file' },
+  { match: /^edit$|^edit[-_]/i, label: 'edited a file' },
+  { match: /^write$|write[-_]?file/i, label: 'wrote a file' },
+  { match: /^read$|read.?file|^cat$/i, label: 'read a file' },
+  { match: /grep|glob|^find$|search/i, label: 'searched files' }
+]
+
+const TOOL_CALL_INPUT_PARAM_CAP = 150
+const TOOL_CALL_RESULT_CAP = 500
+
+/** First present, truthy input field a resume recap can show as the call's subject. */
+function summarizeToolInput(input: Record<string, unknown>): string {
+  const candidateKeys = [
+    'command',
+    'path',
+    'file_path',
+    'filePath',
+    'pattern',
+    'query',
+    'url',
+    'purpose',
+    'description',
+    'prompt'
+  ]
+  for (const key of candidateKeys) {
+    const value = input[key]
+    if (typeof value === 'string' && value.trim()) {
+      return value.length > TOOL_CALL_INPUT_PARAM_CAP
+        ? `${value.slice(0, TOOL_CALL_INPUT_PARAM_CAP)}…`
+        : value
+    }
+  }
+  return ''
+}
+
+function truncateToolResult(text: string): string {
+  return text.length > TOOL_CALL_RESULT_CAP
+    ? `${text.slice(0, TOOL_CALL_RESULT_CAP)}…(truncated)`
+    : text
+}
+
+/**
+ * Harness-agnostic one-line description of a completed tool call, preserving
+ * that real work happened and what it returned without naming a tool
+ * identifier that only makes sense to the harness that ran it. Used to keep
+ * replay recaps from reading as unbacked prose the resumed session has no
+ * reason to trust (see formatConversationTranscript).
+ */
+function describeToolPart(part: Extract<AgentPart, { type: 'tool' }>): string {
+  const action =
+    TOOL_ACTION_PATTERNS.find(({ match }) => match.test(part.tool))?.label ??
+    `used a tool (${part.tool})`
+  const subject = summarizeToolInput(part.state.input ?? {})
+  const line = subject ? `${action}: ${subject}` : action
+  if (part.state.status === 'error' || part.state.error) {
+    const error = part.state.error ? ` — ${truncateToolResult(part.state.error)}` : ''
+    return `[Action failed] ${line}${error}`
+  }
+  const output = part.state.output?.trim()
+  return output ? `[Action] ${line}\n→ ${truncateToolResult(output)}` : `[Action] ${line}`
+}
+
 function formatConversationTranscript(
   messages: AgentMessage[],
   options: { includeHidden?: boolean; maxCharacters?: number } = {}
@@ -20476,6 +20554,7 @@ function formatConversationTranscript(
           if (part.type === 'compaction' && part.summary?.trim()) {
             return [`[Compacted conversation summary]\n${part.summary}`]
           }
+          if (part.type === 'tool') return [describeToolPart(part)]
           if (part.type !== 'question') return []
           const answer = part.question.answer?.trim()
           return [`Question: ${part.question.prompt}${answer ? `\nAnswer: ${answer}` : ''}`]
