@@ -309,17 +309,17 @@
    *  rest of the loaded page without ever blocking the renderer on markdown. */
   let renderLimit = $state(TAIL_RENDER_INITIAL_LIMIT)
 
-  /** Grow the render window progressively so mounting the loaded page never
-   *  blocks the composer on one synchronous markdown flush. Do NOT manually
-   *  adjust scrollTop here: the browser's native scroll anchoring already
-   *  compensates for prepends above the viewport, and adding a manual delta
-   *  on top of it double-adjusts — the exact jumping/flicker seen while
-   *  scrolling during the reveal. */
+  /** Complete the render window in one step on the frame after mount. The
+   *  store page is bounded (HISTORY_WINDOW_SIZE), so this is a bounded flush,
+   *  and completing it in one mutation — rather than stepping the limit over
+   *  several frames — keeps the mounted list static while the user scrolls.
+   *  Stepwise growth re-anchors mid-scroll and was the source of the jumping
+   *  and flicker reported during the reveal. */
   $effect(() => {
     const total = messages.length
     if (renderLimit >= total) return
     const timer = setTimeout(() => {
-      renderLimit = Math.min(total, renderLimit + TAIL_RENDER_GROW_STEP)
+      renderLimit = total
     }, TAIL_RENDER_GROW_DELAY_MS)
     return () => clearTimeout(timer)
   })
