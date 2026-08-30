@@ -9,7 +9,6 @@
     onReview: () => void
     onFinalize: () => void
     prototypes?: BrainstormPrototype[]
-    onContinueWithoutHifi?: () => void
     onOpenPrototype?: (previewPath: string) => CallbackResult
     finalizeLabel?: string
     settings?: ThreadSettings
@@ -34,7 +33,6 @@
     onReview,
     onFinalize,
     prototypes = [],
-    onContinueWithoutHifi,
     onOpenPrototype,
     finalizeLabel = 'Prepare spec',
     settings,
@@ -49,9 +47,6 @@
   }: Props = $props()
 
   type CallbackResult = void | Promise<void>
-
-  let lofiPrototypes = $derived(prototypes.filter((prototype) => prototype.fidelity === 'lofi'))
-  let hasHifi = $derived(prototypes.some((prototype) => prototype.fidelity === 'hifi'))
 
   const fidelityLabel = (fidelity: BrainstormPrototype['fidelity']): string =>
     fidelity === 'hifi' ? 'HiFi' : 'LoFi'
@@ -113,13 +108,6 @@
       {onToggleFavorite}
       {onReorderFavorite}
     />
-    {#if lofiPrototypes.length > 0 && !hasHifi && onContinueWithoutHifi}
-      <button
-        class="min-h-8 rounded-lg px-3 py-1.5 text-xs font-semibold text-muted hover:bg-elevated hover:text-foreground disabled:opacity-40"
-        disabled={busy}
-        onclick={onContinueWithoutHifi}>Continue without HiFi</button
-      >
-    {/if}
     <button
       class="min-h-8 rounded-lg border bg-elevated px-3 py-1.5 text-xs font-semibold text-foreground transition-colors hover:bg-overlay disabled:opacity-40"
       disabled={busy}

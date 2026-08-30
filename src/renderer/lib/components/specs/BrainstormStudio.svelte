@@ -1157,7 +1157,7 @@
                     {#if onOpenPrototype}
                       <button
                         type="button"
-                        class="rounded-lg bg-thread-spec px-2.5 py-1.5 text-xs font-medium text-foreground"
+                        class="rounded-lg px-2.5 py-1.5 text-xs font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
                         onclick={() => void onOpenPrototype?.(prototype.previewPath)}
                       >
                         View prototype

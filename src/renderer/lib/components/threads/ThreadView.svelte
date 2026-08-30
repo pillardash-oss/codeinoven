@@ -10564,7 +10564,6 @@
                 busy={brainstormBusy}
                 onReview={openBrainstormStudio}
                 onOpenPrototype={openPrototypePreview}
-                onContinueWithoutHifi={openBrainstormStudio}
                 finalizeLabel={engineeringLifecycle?.activeStage === 'brainstorm'
                   ? 'Finalize Brainstorm'
                   : 'Prepare spec'}
