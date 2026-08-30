@@ -3986,7 +3986,10 @@
                 {:else if showClearBrowserDataConfirm && browserDataClearProjectId === activeContextTab.projectId}
                   <div class="h-full bg-app" aria-hidden="true"></div>
                 {:else}
-                  <BrowserPanel tab={activeContextTab} />
+                  <BrowserPanel
+                    tab={activeContextTab}
+                    suppressed={browserFullscreenTabId !== null}
+                  />
                 {/if}
               {:else if activeContextTab.kind === 'debugger'}
                 <AgentDebugPanel />

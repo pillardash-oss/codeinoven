@@ -23,9 +23,13 @@
   interface Props {
     tab: BrowserContextTab
     fullscreen?: boolean
+    /** True while this tab's native view is shown by another instance (e.g. the
+     *  fullscreen dialog). Forces the native view hidden so two instances never
+     *  fight over the same WebContentsView. */
+    suppressed?: boolean
   }
 
-  let { tab, fullscreen = false }: Props = $props()
+  let { tab, fullscreen = false, suppressed = false }: Props = $props()
 
   // Capture stable tab identity at construction — `tab` is a prop object that
   // Svelte may detach during keyed destroy, so every async callback and
@@ -60,7 +64,8 @@
   const initialSurface = tab.surface
   let activeSurface = $derived((tab as BrowserContextTab | null)?.surface ?? initialSurface)
   let panelVisible = $derived(
-    !contextSidebarState.fullscreenSuppression &&
+    !suppressed &&
+      !contextSidebarState.fullscreenSuppression &&
       (fullscreen ||
         (contextSidebarState.sidebarVisible &&
           contextSidebarState.sidebarActiveTab?.id === tabId))
