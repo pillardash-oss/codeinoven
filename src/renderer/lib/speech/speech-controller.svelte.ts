@@ -592,6 +592,7 @@ class SpeechController {
       this.surfaceFailure(active.target.id, 'capture', cause)
     } finally {
       if (active.stream) for (const track of active.stream.getTracks()) track.stop()
+      this.active = null
       if (this.state.state === 'stopping') this.state = { state: 'idle' }
     }
   }
