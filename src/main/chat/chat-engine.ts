@@ -62,6 +62,7 @@ import {
   QuestionRequestGoneError,
   type HarnessDriver,
   type SendPromptOptions,
+  type SteerPromptOptions,
   type StructuredOutputRequest
 } from '../drivers/driver.interface'
 import type { TitleAttemptAccounting } from '../drivers/persistent-cli-driver'
@@ -1071,6 +1072,11 @@ interface SessionInfo {
   activeTurnId?: string
   /** Stable user message that starts the active provider turn. */
   activeTurnUserMessageId?: string
+  /** Last bound turn id for this session. Stream events emitted while
+   *  `activeTurnId` is unbound (pre-registration setup, post-checkpoint
+   *  teardown, silent continues) still carry this id so the durable trace log
+   *  keeps them attached to a real turn instead of an unbindable empty tag. */
+  lastTurnId?: string
   /** Composed request occupancy used only when the harness emits no native context usage. */
   estimatedContextUsed?: number
   changedPaths?: Set<string>
@@ -1109,6 +1115,27 @@ interface TemporaryChatSession {
  * converted threads). Display parts ride here; the echoed harness record under
  * the same ID demotes to `transportParts` when the transcript is loaded.
  */
+/**
+ * A steered user message held by the chat engine while the harness's active
+ * turn still has a tool call in flight. The harness has NOT received it yet,
+ * so the user can undo it. When the last in-flight tool ends the steer is
+ * delivered mid-turn; when the whole turn idles first it is flushed as a
+ * regular next-turn send. One record per active steer, keyed by session.
+ */
+interface HeldSteer {
+  projectId: string
+  /** Thread id (threads) or temporary chat id (temporary chats). */
+  conversationId: string
+  userMessageId: string
+  kind: 'thread' | 'temporary'
+  /** Deliver the steer to the live turn now (tool window closed mid-turn). */
+  deliverMidTurn: () => Promise<void>
+  /** The turn ended before a delivery window opened — send as the next turn. */
+  deliverAfterTurn: () => Promise<void>
+  /** Drop the steer entirely: nothing ever reached the harness. */
+  discard: () => Promise<void>
+}
+
 interface TemporaryChatDisplayRecord {
   message: AgentMessage
   references: PromptReference[]
@@ -1618,6 +1645,10 @@ export class ChatEngine {
    */
   private toolTimes = new Map<string, Map<string, { start: number; end?: number }>>()
 
+  /** Steered messages held back from the harness while its active turn has a
+   *  tool call in flight — the undo window. Keyed by sessionId. */
+  private heldSteers = new Map<string, HeldSteer>()
+
   /**
    * Per-session watchdog timers. Each timer is set after a prompt is sent and
    * reset on every SSE activity for that session. When the timer fires, provider
@@ -1985,6 +2016,11 @@ export class ChatEngine {
       'agent:truncateMessages',
       (_, projectId: string, threadId: string, messageId: string) =>
         this.truncateMessages(projectId, threadId, messageId)
+    )
+    ipcMain.handle(
+      'agent:discardSteer',
+      (_, projectId: string, threadId: string, messageId: string) =>
+        this.discardSteer(projectId, threadId, messageId)
     )
     ipcMain.handle(
       'agent:sendPrompt',
@@ -5287,6 +5323,7 @@ export class ChatEngine {
     if (thread.sessionId) {
       // Forget the old session so its idle sync cannot resurrect the
       // truncated messages into the mirror.
+      this.clearHeldSteers(thread.sessionId)
       this.sessionRegistry.delete(thread.sessionId)
       this.reasoningTimes.delete(thread.sessionId)
       this.toolTimes.delete(thread.sessionId)
@@ -5297,6 +5334,91 @@ export class ChatEngine {
       await this.threadManager.clearSessionId(projectId, threadId)
     }
     return presentableMessages(kept)
+  }
+
+  /** Whether the session's active turn has a tool call that has not ended yet
+   *  (tracked via the same lifecycle the streaming event feed already stamps). */
+  private hasInFlightTool(sessionId: string): boolean {
+    const times = this.toolTimes.get(sessionId)
+    if (!times) return false
+    for (const entry of times.values()) {
+      if (entry.end === undefined) return true
+    }
+    return false
+  }
+
+  /** Register a held steer and tell renderers the undo window is open. */
+  private trackHeldSteer(sessionId: string, steer: HeldSteer): void {
+    // One steer at a time per session — a second steer while one is held
+    // replaces the pending delivery, but only the latest is undoable.
+    this.heldSteers.set(sessionId, steer)
+    this.broadcast({ type: 'steer.held', sessionId, userMessageId: steer.userMessageId })
+  }
+
+  /** Deliver every held steer for a session whose last in-flight tool just
+   *  ended — the undo window closes the moment the harness can absorb input. */
+  private async flushHeldSteers(sessionId: string, mode: 'mid-turn' | 'after-turn'): Promise<void> {
+    const steer = this.heldSteers.get(sessionId)
+    if (!steer) return
+    if (mode === 'mid-turn') {
+      this.heldSteers.delete(sessionId)
+      try {
+        await steer.deliverMidTurn()
+      } catch (error) {
+        Logger.error('Held steer delivery failed:', error)
+        // The harness never absorbed the steer — treat it as discarded so the
+        // undo state cannot get stuck and the transcript stays consistent.
+        await steer.discard().catch(() => undefined)
+        this.broadcast({ type: 'steer.discarded', sessionId, userMessageId: steer.userMessageId })
+        return
+      }
+      this.broadcast({ type: 'steer.delivered', sessionId, userMessageId: steer.userMessageId })
+      return
+    }
+    // after-turn: the whole turn finished while the steer was held. Deliver as
+    // a regular next-turn send; discard on failure (the session is gone).
+    this.heldSteers.delete(sessionId)
+    try {
+      await steer.deliverAfterTurn()
+    } catch (error) {
+      Logger.error('Held steer after-turn delivery failed:', error)
+      await steer.discard().catch(() => undefined)
+      this.broadcast({ type: 'steer.discarded', sessionId, userMessageId: steer.userMessageId })
+      return
+    }
+    // The undo window closed — the steer is now an ordinary sent message.
+    this.broadcast({ type: 'steer.delivered', sessionId, userMessageId: steer.userMessageId })
+  }
+
+  /** Drop a held steer before delivery — nothing ever reached the harness. */
+  async discardSteer(projectId: string, threadId: string, userMessageId: string): Promise<void> {
+    projectId = validateEntityId(projectId, 'Project ID')
+    threadId = validateEntityId(threadId, 'Thread ID')
+    userMessageId = validateEntityId(userMessageId, 'Message ID', 256)
+    for (const [sessionId, steer] of this.heldSteers) {
+      if (
+        steer.projectId !== projectId ||
+        steer.conversationId !== threadId ||
+        steer.userMessageId !== userMessageId
+      ) {
+        continue
+      }
+      this.heldSteers.delete(sessionId)
+      await steer.discard()
+      this.broadcast({ type: 'steer.discarded', sessionId, userMessageId })
+      return
+    }
+  }
+
+  /** Clear any held steer for a session (driver reset, teardown, abort). The
+   *  steer never reached the harness, so its persisted record is removed too —
+   *  the conversation must look like the steer never happened. */
+  private clearHeldSteers(sessionId: string): void {
+    const steer = this.heldSteers.get(sessionId)
+    if (!steer) return
+    this.heldSteers.delete(sessionId)
+    void steer.discard().catch(() => undefined)
+    this.broadcast({ type: 'steer.discarded', sessionId, userMessageId: steer.userMessageId })
   }
 
   /** Append a user message to the harness's currently active native turn. */
@@ -5448,11 +5570,61 @@ export class ChatEngine {
       attachments,
       userMessageId: messageId
     }
-    if (activeBrainstorm?.isolated && driver instanceof OpenCodeDriver) {
-      await driver.steerPrompt(projectPath, steerOptions, activeBrainstorm.isolated)
-    } else {
-      await driver.steerPrompt(projectPath, steerOptions)
+    const steer = driver.steerPrompt.bind(driver) as (
+      projectPath: string,
+      opts: SteerPromptOptions,
+      isolated?: IsolatedHandle
+    ) => Promise<void>
+    const deliverNow = async (): Promise<void> => {
+      if (activeBrainstorm?.isolated && driver instanceof OpenCodeDriver) {
+        await steer(projectPath, steerOptions, activeBrainstorm.isolated)
+      } else {
+        await steer(projectPath, steerOptions)
+      }
     }
+    // CodeInOven owns steer delivery timing for every harness: while the turn
+    // still has a tool call in flight, hold the steer so the user can undo it.
+    // The moment the last in-flight tool ends, the steer is delivered.
+    if (this.hasInFlightTool(activeSessionId)) {
+      this.trackHeldSteer(activeSessionId, {
+        projectId,
+        conversationId: threadId,
+        userMessageId: messageId,
+        kind: 'thread',
+        deliverMidTurn: deliverNow,
+        deliverAfterTurn: async () => {
+          // The turn ended while the steer was held — it becomes the next
+          // turn's regular send. persistOutboundMessage dedupes by ID, so the
+          // already-persisted user message is kept as-is.
+          await this.sendPrompt(
+            projectId,
+            threadId,
+            steerSettings,
+            text,
+            attachments,
+            undefined,
+            messageId,
+            promptContext,
+            promptReferences,
+            projectReferences,
+            'user',
+            presentation,
+            taskReferences
+          )
+        },
+        discard: async () => {
+          // Remove the persisted user message — the harness never saw it, so
+          // the conversation must look like the steer never happened.
+          const mirror = await this.threadManager.loadMessageRecords(projectId, threadId)
+          const kept = mirror.filter((message) => message.id !== messageId)
+          if (kept.length !== mirror.length) {
+            await this.threadManager.saveMessages(projectId, threadId, kept)
+          }
+        }
+      })
+      return withoutTransportParts(userMessage)
+    }
+    await deliverNow()
     return withoutTransportParts(userMessage)
   }
 
@@ -6088,12 +6260,52 @@ export class ChatEngine {
       // Note: steering appends to the LIVE native turn, which still runs under
       // the model that started it. Do not record the new settings model here —
       // that would mask a pending model switch until the following resume.
-      await driver.steerPrompt(projectPath, {
-        sessionId,
-        text: driverText,
-        attachments,
-        userMessageId: messageId
-      })
+      const deliverFallbackSteer = (): Promise<void> => {
+        const steer = driver.steerPrompt
+        if (!steer) return Promise.reject(new Error('steer unavailable'))
+        return steer.call(driver, projectPath, {
+          sessionId,
+          text: driverText,
+          attachments,
+          userMessageId: messageId
+        })
+      }
+      // Same undo window as steerPrompt: hold while a tool call is in flight.
+      if (this.hasInFlightTool(sessionId)) {
+        this.trackHeldSteer(sessionId, {
+          projectId,
+          conversationId: threadId,
+          userMessageId: messageId,
+          kind: 'thread',
+          deliverMidTurn: deliverFallbackSteer,
+          deliverAfterTurn: async () => {
+            await this.sendPrompt(
+              projectId,
+              threadId,
+              settings,
+              text,
+              attachments,
+              specAction,
+              messageId,
+              promptContext,
+              promptReferences,
+              projectReferences,
+              origin,
+              presentation,
+              taskReferences
+            )
+          },
+          discard: async () => {
+            const mirror = await this.threadManager.loadMessageRecords(projectId, threadId)
+            const kept = mirror.filter((message) => message.id !== messageId)
+            if (kept.length !== mirror.length) {
+              await this.threadManager.saveMessages(projectId, threadId, kept)
+            }
+          }
+        })
+        return publicUserMessage
+      }
+      await deliverFallbackSteer()
       this.markSessionWorking(sessionId)
       return publicUserMessage
     }
@@ -7021,11 +7233,59 @@ export class ChatEngine {
       attachments: validatedAttachments,
       userMessageId: steerUserMessageId
     }
-    if (temporary.isolated && driver instanceof OpenCodeDriver) {
-      await driver.steerPrompt(temporary.projectPath, steerOptions, temporary.isolated)
-    } else {
-      await driver.steerPrompt(temporary.projectPath, steerOptions)
+    const steerTemporary = driver.steerPrompt.bind(driver) as (
+      projectPath: string,
+      opts: SteerPromptOptions,
+      isolated?: IsolatedHandle
+    ) => Promise<void>
+    const deliverTemporarySteer = async (): Promise<void> => {
+      if (temporary.isolated && driver instanceof OpenCodeDriver) {
+        await steerTemporary(temporary.projectPath, steerOptions, temporary.isolated)
+      } else {
+        await steerTemporary(temporary.projectPath, steerOptions)
+      }
     }
+    // Same undo window as thread steers: hold while a tool call is in flight.
+    if (this.hasInFlightTool(temporary.sessionId)) {
+      const temporaryChatId = temporary.id
+      this.trackHeldSteer(temporary.sessionId, {
+        projectId,
+        conversationId: temporaryChatId,
+        userMessageId: steerUserMessageId,
+        kind: 'temporary',
+        deliverMidTurn: deliverTemporarySteer,
+        deliverAfterTurn: async () => {
+          // The turn ended while the steer was held — send as the next turn.
+          await this.sendTemporaryPrompt(
+            projectId,
+            threadId,
+            temporaryChatId,
+            settings,
+            text,
+            validatedAttachments,
+            validatedReferences,
+            undefined,
+            steerUserMessageId,
+            safeDisplayText
+          )
+        },
+        discard: async () => {
+          // Drop the display record and outbound registration — the harness
+          // never received the steer.
+          const history = this.temporaryChatDisplayMessages.get(temporaryChatId)
+          if (history) {
+            this.temporaryChatDisplayMessages.set(temporaryChatId, {
+              records: history.records.filter((entry) => entry.message.id !== steerUserMessageId)
+            })
+          }
+          const outboundIds =
+            this.outboundMessageIdsBySession.get(temporary.sessionId) ?? new Set<string>()
+          outboundIds.delete(steerUserMessageId)
+        }
+      })
+      return
+    }
+    await deliverTemporarySteer()
   }
 
   /**
@@ -8481,6 +8741,8 @@ export class ChatEngine {
     await driver.abort(projectPath, thread.sessionId)
     await this.cleanupTurnUtilities(thread.sessionId)
     updateRetryWakeWindow(thread.sessionId, null)
+    // A held steer's turn is dead — undo is no longer meaningful, drop it.
+    this.clearHeldSteers(thread.sessionId)
     // A thread waiting on a scheduled usage-reset retry has no live turn to
     // abort, so a Stop click must cancel the pending resume itself — otherwise
     // the scheduler fires later and silently revives the thread the user
@@ -16134,6 +16396,11 @@ export class ChatEngine {
           const end = now
           perSession.set(part.id, { start, end })
           part.state.time = { start, end }
+          // Steer-undo window: the last in-flight tool of the turn just ended,
+          // so any held steer can now reach the harness.
+          if (this.heldSteers.has(event.sessionId) && !this.hasInFlightTool(event.sessionId)) {
+            void this.flushHeldSteers(event.sessionId, 'mid-turn')
+          }
         }
         if (part.state.status === 'error') {
           void this.nudgeUnavailableToolCall(driverId, event.sessionId, part).catch((error) =>
@@ -16528,6 +16795,12 @@ export class ChatEngine {
   private handleSessionIdleSignal(sessionId: string): void {
     if (this.handledIdleSessions.has(sessionId)) return
     this.handledIdleSessions.add(sessionId)
+    // The turn ended while a steer was still held (no tool window opened, or
+    // the idle arrived between the tool end and the async flush). Deliver it
+    // as the next turn's regular send.
+    if (this.heldSteers.has(sessionId)) {
+      void this.flushHeldSteers(sessionId, 'after-turn')
+    }
     const finalization = this.onSessionIdle(sessionId).finally(() => {
       if (this.sessionIdleFinalizations.get(sessionId) === finalization) {
         this.sessionIdleFinalizations.delete(sessionId)
@@ -16639,7 +16912,12 @@ export class ChatEngine {
   ): Promise<void> {
     const ts = Date.now()
     const sessionId = event.sessionId
-    const turnId = owner.activeTurnId ?? ''
+    // Bind the event to the session's active turn; while the active turn is
+    // unbound (pre-registration setup, post-checkpoint teardown, silent
+    // continues) fall back to the session's LAST bound turn so the durable
+    // trace keeps a real anchor instead of an empty tag that no reload fold
+    // can ever re-attach.
+    const turnId = owner.activeTurnId ?? owner.lastTurnId ?? ''
     const streamEvent: TurnStreamEvent =
       event.type === 'message.part.updated'
         ? {
@@ -16691,6 +16969,11 @@ export class ChatEngine {
         // A malformed line must not block rehydration of the rest of the stream.
       }
     }
+    // Fold the latest bound turn PLUS every unbound-turn event. Unbound events
+    // (empty turnId) are emitted while the session's active turn was not yet
+    // registered or after its checkpoint finalized — they are real working
+    // parts, and dropping them made traces vanish when the user stopped a run
+    // and sent a follow-up, or re-entered a thread mid-turn.
     return foldTurnStreamEvents(events, latestTurnId || undefined)
   }
 
@@ -17803,6 +18086,14 @@ export class ChatEngine {
       if (failure) this.pendingBrainstormTurns.delete(sessionId)
       let revisedSpec: EngineeringSpec | null = null
       let revisedBrainstorm: BrainstormDocument | null = null
+      // Post-turn artifact updates (spec revision, brainstorm report) must
+      // stay silent when they fail: the main turn's work is already done, the
+      // previous artifact version remains reviewable, and each surface has its
+      // own retry affordance (review notes stay on the document; the brainstorm
+      // trace carries the error into the conversation). Toasting or marking the
+      // thread `failed` here fired a misleading "hit an error" notification for
+      // a thread that kept working, so the error is only logged.
+      let auxiliaryFailure: string | null = null
       if (!failure && !awaitingUser && hasPendingRevision) {
         try {
           revisedSpec = await this.runPendingSpecRevision(sessionId, messages, {
@@ -17810,9 +18101,14 @@ export class ChatEngine {
             threadId: info.threadId
           })
         } catch (error) {
-          failure =
+          auxiliaryFailure =
             error instanceof Error ? error.message : 'The specification revision was invalid.'
-          this.broadcastToast(`Specification update failed: ${failure}`)
+          Logger.error('Specification update failed after a completed turn', {
+            projectId: info.projectId,
+            threadId: info.threadId,
+            sessionId,
+            error: auxiliaryFailure
+          })
         }
       }
       if (!failure && !awaitingUser && pendingBrainstormTurn) {
@@ -17834,9 +18130,14 @@ export class ChatEngine {
                 )
           this.pendingBrainstormTurns.delete(sessionId)
         } catch (error) {
-          failure = error instanceof Error ? error.message : 'The Brainstorm revision failed.'
+          auxiliaryFailure = error instanceof Error ? error.message : 'The Brainstorm revision failed.'
           this.pendingBrainstormTurns.delete(sessionId)
-          this.broadcastToast(`Brainstorm update failed: ${failure}`)
+          Logger.error('Brainstorm update failed after a completed turn', {
+            projectId: info.projectId,
+            threadId: info.threadId,
+            sessionId,
+            error: auxiliaryFailure
+          })
         }
       }
       // Race-safe guard: if the persisted thread is already `failed` (an
@@ -17862,11 +18163,19 @@ export class ChatEngine {
             ? 'failed'
             : revisedSpec || revisedBrainstorm
               ? 'spec'
-              : awaitingUser
-                ? 'awaiting_approval'
-                : threadBeforeFinalize?.status === 'failed'
-                  ? 'failed'
+              : auxiliaryFailure
+                ? // An auxiliary artifact update failed: settle on the
+                  // previous artifact's reviewable state instead of `failed`,
+                  // which would fire a misleading error notification.
+                  (await this.getActiveSpec(info.projectId, info.threadId)) ||
+                  (await this.brainstormEngine.getActive(info.projectId, info.threadId))
+                  ? 'spec'
                   : 'completed'
+                : awaitingUser
+                  ? 'awaiting_approval'
+                  : threadBeforeFinalize?.status === 'failed'
+                    ? 'failed'
+                    : 'completed'
       await this.threadManager.setStatus(info.projectId, info.threadId, finalStatus, {
         read: userAborted
       })
@@ -19230,6 +19539,7 @@ export class ChatEngine {
       // harness switch) can never clobber which driver owns the session.
       driverId: existing?.driverId ?? driverId,
       activeTurnId: activeTurnId ?? existing?.activeTurnId,
+      lastTurnId: activeTurnId ?? existing?.activeTurnId ?? existing?.lastTurnId,
       activeTurnUserMessageId: existing?.activeTurnUserMessageId,
       estimatedContextUsed: activeTurnId ? undefined : existing?.estimatedContextUsed,
       changedPaths: activeTurnId ? undefined : existing?.changedPaths,
