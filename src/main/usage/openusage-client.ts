@@ -21,13 +21,6 @@ interface CachedTelemetry {
   value: OpenUsageTelemetry | null
 }
 
-const PROVIDER_BY_HARNESS: Readonly<Record<string, string>> = {
-  antigravity: 'antigravity',
-  'claude-code': 'claude',
-  codex: 'codex',
-  opencode: 'opencode'
-}
-
 const RESOURCE_LABELS: Readonly<Record<string, string>> = {
   session: 'Session',
   weekly: 'Weekly',
@@ -239,9 +232,7 @@ export class OpenUsageClient {
   private readonly cache = new Map<string, CachedTelemetry>()
   private readonly inflight = new Map<string, Promise<OpenUsageTelemetry | null>>()
 
-  async readHarnessUsage(harnessId: string): Promise<OpenUsageTelemetry | null> {
-    const providerId = PROVIDER_BY_HARNESS[harnessId]
-    if (!providerId) return null
+  async readProviderUsage(providerId: string): Promise<OpenUsageTelemetry | null> {
     const cached = this.cache.get(providerId)
     if (cached && cached.expiresAt > Date.now()) return cached.value
     const existing = this.inflight.get(providerId)

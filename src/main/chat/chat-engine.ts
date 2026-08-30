@@ -3191,10 +3191,14 @@ export class ChatEngine {
           const nativeTelemetry = driver.readAccountUsage
             ? await driver.readAccountUsage(projectPath)
             : null
-          const openUsage =
-            !nativeTelemetry || nativeTelemetry.rateLimits.length === 0
-              ? await this.openUsage.readHarnessUsage(harnessId)
-              : null
+          // OpenUsage is keyed by PROVIDER, not harness: resolve the provider
+          // the harness session actually ran against (e.g. a pi thread pointed
+          // at Z.AI queries "z-ai", not "pi").
+          const openUsageProviderId =
+            providerByHarness.get(harnessId) ?? thread.settings?.providerId ?? harnessId
+          const openUsage = openUsageProviderId
+            ? await this.openUsage.readProviderUsage(openUsageProviderId)
+            : null
           // A custom provider with a user-defined usage route answers the
           // quota question directly when the harness itself reports nothing.
           const customUsage =
