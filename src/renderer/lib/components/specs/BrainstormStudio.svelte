@@ -1016,8 +1016,10 @@
           </div>
         </div>
 
-        {#if onRevealInAppFile || onOpenInEditor}
-          <div class="flex shrink-0 items-center gap-1 border-t p-2">
+      </div>
+
+      {#if onRevealInAppFile || onOpenInEditor}
+        <div class="flex shrink-0 items-center gap-1 border-t p-2">
             {#if onRevealInAppFile}
               <button
                 class="flex h-8 flex-1 items-center justify-center gap-2 rounded-lg px-2.5 text-xs font-medium text-muted hover:bg-elevated hover:text-foreground disabled:opacity-50"
@@ -1046,7 +1048,6 @@
             {/if}
           </div>
         {/if}
-      </div>
     </aside>
 
     <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
