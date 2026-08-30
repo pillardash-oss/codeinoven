@@ -137,6 +137,7 @@
   let changesView = $state<'list' | 'tree'>(savedView.changesView)
   let selectedPaths = $state<Record<string, boolean>>({})
   let discardConfirm = $state<string[] | null>(null)
+  let restoreWorktreeConfirm = $state<{ source: string; path: string } | null>(null)
   let commitSelection = $state(false)
   let commitTextarea = $state<HTMLTextAreaElement | null>(null)
   let newBranchInput = $state<HTMLInputElement | null>(null)
@@ -1489,13 +1490,27 @@
     }
   }
 
-  /** Restore a file's content from the commit or stash being viewed. */
+  /** Restore a file's content from the commit or stash being viewed. Restoring
+   *  to the working tree overwrites uncommitted local edits, so that target is
+   *  confirmed by the user before it runs. */
   async function restoreFromSource(
     source: string,
     path: string,
     target: GitRestoreTarget
   ): Promise<void> {
+    if (target === 'worktree') {
+      restoreWorktreeConfirm = { source, path }
+      return
+    }
     await gitState.restoreFiles(projectId, source, [path], target)
+    if (!gitState.error) void refreshStatus()
+  }
+
+  async function confirmRestoreWorktree(): Promise<void> {
+    const pending = restoreWorktreeConfirm
+    if (!pending) return
+    restoreWorktreeConfirm = null
+    await gitState.restoreFiles(projectId, pending.source, [pending.path], 'worktree')
     if (!gitState.error) void refreshStatus()
   }
 
@@ -3851,6 +3866,37 @@
             onclick={() => void confirmDiscard()}
           >
             Discard changes
+          </AlertDialog.Action>
+        </div>
+      </AlertDialog.Content>
+    </AlertDialog.Portal>
+  </AlertDialog.Root>
+{/if}
+
+{#if restoreWorktreeConfirm}
+  <AlertDialog.Root open onOpenChange={() => (restoreWorktreeConfirm = null)}>
+    <AlertDialog.Portal>
+      <AlertDialog.Content
+        class="fixed left-1/2 top-1/2 z-50 w-[min(28rem,calc(100vw-2rem))] -translate-x-1/2 -translate-y-1/2 rounded-xl border border-border bg-surface p-5 shadow-xl"
+      >
+        <AlertDialog.Title class="text-sm font-semibold text-foreground">
+          Restore {restoreWorktreeConfirm.path}?
+        </AlertDialog.Title>
+        <AlertDialog.Description class="mt-2 text-xs leading-5 text-muted">
+          The file on disk will be overwritten with its content from this history entry. Any
+          uncommitted local edits to it are lost. This cannot be undone.
+        </AlertDialog.Description>
+        <div class="mt-5 flex justify-end gap-2">
+          <AlertDialog.Cancel
+            class="h-8 rounded-lg border border-border px-3 text-xs text-foreground hover:bg-elevated"
+          >
+            Cancel
+          </AlertDialog.Cancel>
+          <AlertDialog.Action
+            class="h-8 rounded-lg bg-danger px-3 text-xs font-medium text-on-primary hover:opacity-90"
+            onclick={() => void confirmRestoreWorktree()}
+          >
+            Restore file
           </AlertDialog.Action>
         </div>
       </AlertDialog.Content>
