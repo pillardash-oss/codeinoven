@@ -3021,6 +3021,10 @@
     const mountedThreadId = thread.id
     workspaceState.jumpToMessage = jumpToMessage
     workspaceState.loadUserMessageHistory = refreshUserMessageHistory
+    // History is lazy-loaded on menu open, but the panel may already be
+    // visible (restored session) — kick a refresh on mount so its count and
+    // entries are never stale from a previous app run.
+    void refreshUserMessageHistory()
 
     const onResize = (): void => scheduleResponseBubbleUpdate()
     window.addEventListener('resize', onResize)
