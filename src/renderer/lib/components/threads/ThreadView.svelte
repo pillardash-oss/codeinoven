@@ -8952,6 +8952,28 @@
     findNavState.closeConversationFind()
   }
 
+  // While a run is streaming, re-pull the durable SSE log every second so the
+  // trace stays fresh even when live 'agent:event' broadcasts are not the
+  // transport (e.g. a second app instance viewing the same thread, which never
+  // receives this instance's in-process window broadcasts and would otherwise
+  // show a trace frozen at whatever was on disk at mount).
+  $effect(() => {
+    if (!busy) return
+    const poll = setInterval(() => {
+      const generation = ++streamPartsLoadGeneration
+      void invoke('thread:loadStreamParts', thread.projectId, thread.id)
+        .then((parts) => {
+          if (!alive || generation !== streamPartsLoadGeneration) return
+          streamParts = parts
+        })
+        .catch(() => {})
+    }, 1000)
+    return () => {
+      clearInterval(poll)
+      streamPartsLoadGeneration += 1
+    }
+  })
+
   onDestroy(() => {
     CSS.highlights?.delete(RESPONSE_HIGHLIGHT_NAME)
     imageUrls.destroy()
