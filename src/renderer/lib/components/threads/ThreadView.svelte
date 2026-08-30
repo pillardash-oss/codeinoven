@@ -10470,179 +10470,184 @@
                   rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
               />
             {:else}
-              {#if activeTodo && !failureRetryVisible}
-                <AgentTodoCard items={activeTodo.items} signature={activeTodo.signature} {busy} />
+              {#if !failureRetryVisible}
+                {#if activeTodo}
+                  <AgentTodoCard items={activeTodo.items} signature={activeTodo.signature} {busy} />
+                {/if}
+                {#key composerRestoreKey}
+                  <ChatComposer
+                    bind:this={composer}
+                    placeholder={activePlanningEntry === 'brainstorm'
+                      ? 'Sr. Engineer is preparing the Brainstorm…'
+                      : activePlanningEntry === 'spec'
+                        ? 'Sr. Engineer is preparing the specification…'
+                        : specFormulating
+                          ? 'Formulating specification…'
+                          : delegatedWorkBusy
+                            ? `${delegatedActivityLabel} — message the Sr. Engineer`
+                            : busy
+                              ? `${APP_NAME} is working — type to queue a message`
+                              : 'Send a message...'}
+                    disabled={specFormulating}
+                    working={busy}
+                    onStop={abortRun}
+                    autofocus
+                    showEngineeringMode={!chatMode}
+                    engineeringLifecycle={pendingLifecycleDisplay}
+                    engineeringActive={toolboxActive}
+                    onEngineeringLifecycleSelect={selectEngineeringLifecycle}
+                    showChatModes={chatMode}
+                    {settings}
+                    onSettingsChange={updateSettings}
+                    {providers}
+                    harnessId={settings.harnessId}
+                    actions={activeActions}
+                    onActionSelect={handleActionSelection}
+                    onSlashCommand={executeHarnessCommand}
+                    contextUsage={contextUsageDisplay}
+                    efficiencyKpis={storedEfficiencyKpis}
+                    onRevealUsage={revealContextUsage}
+                    onHideUsage={hideContextUsage}
+                    usageRefreshing={refreshingAccountUsage}
+                    {harnessUsage}
+                    canCompact={supportsManualCompaction(
+                      settings.harnessId,
+                      providerStore.providers
+                    ) && !busy}
+                    {compacting}
+                    onCompact={() => void compactWork()}
+                    projectContext={composerProject}
+                    projectId={thread.projectId}
+                    threadId={thread.id}
+                    attachmentStorage={{
+                      kind: chatMode ? 'chat' : 'project',
+                      projectId: thread.projectId,
+                      threadId: thread.id
+                    }}
+                    onSwitchProject={(pid) => void switchProject(pid)}
+                    fileTagProjectId={project?.source === 'local' && project.path
+                      ? thread.projectId
+                      : undefined}
+                    assignmentId={assignment?.id}
+                    assignmentTasks={assignment?.content.tasks ?? []}
+                    initialValue={rendererRecovery.draftFor(thread.projectId, thread.id)}
+                    initialAttachments={rendererRecovery.attachmentsFor(
+                      thread.projectId,
+                      thread.id
+                    )}
+                    initialProjectReferences={rendererRecovery.projectReferencesFor(
+                      thread.projectId,
+                      thread.id
+                    )}
+                    initialTaskReferences={rendererRecovery.taskReferencesFor(
+                      thread.projectId,
+                      thread.id
+                    )}
+                    initialStartAfterThreads={rendererRecovery.startAfterThreadsFor(
+                      thread.projectId,
+                      thread.id
+                    )}
+                    onValueChange={(value) => {
+                      rendererRecovery.setDraft(thread.projectId, thread.id, value)
+                      publishDraftActivity(
+                        thread.projectId,
+                        thread.id,
+                        rendererRecovery.hasDraftContent(thread.projectId, thread.id)
+                      )
+                    }}
+                    onAttachmentsChange={(files) => {
+                      rendererRecovery.setDraft(
+                        thread.projectId,
+                        thread.id,
+                        rendererRecovery.draftFor(thread.projectId, thread.id),
+                        files
+                      )
+                      publishDraftActivity(
+                        thread.projectId,
+                        thread.id,
+                        rendererRecovery.hasDraftContent(thread.projectId, thread.id)
+                      )
+                    }}
+                    onProjectReferencesChange={(projectReferences) => {
+                      rendererRecovery.setDraft(
+                        thread.projectId,
+                        thread.id,
+                        rendererRecovery.draftFor(thread.projectId, thread.id),
+                        rendererRecovery.attachmentsFor(thread.projectId, thread.id),
+                        projectReferences
+                      )
+                      publishDraftActivity(
+                        thread.projectId,
+                        thread.id,
+                        rendererRecovery.hasDraftContent(thread.projectId, thread.id)
+                      )
+                    }}
+                    onTaskReferencesChange={(taskReferences) => {
+                      rendererRecovery.setDraft(
+                        thread.projectId,
+                        thread.id,
+                        rendererRecovery.draftFor(thread.projectId, thread.id),
+                        rendererRecovery.attachmentsFor(thread.projectId, thread.id),
+                        rendererRecovery.projectReferencesFor(thread.projectId, thread.id),
+                        taskReferences
+                      )
+                      publishDraftActivity(
+                        thread.projectId,
+                        thread.id,
+                        rendererRecovery.hasDraftContent(thread.projectId, thread.id)
+                      )
+                    }}
+                    onStartAfterThreadsChange={(startAfterThreads) => {
+                      rendererRecovery.setStartAfterThreads(
+                        thread.projectId,
+                        thread.id,
+                        startAfterThreads
+                      )
+                      publishDraftActivity(
+                        thread.projectId,
+                        thread.id,
+                        rendererRecovery.hasDraftContent(thread.projectId, thread.id)
+                      )
+                    }}
+                    onOpenStartAfterThread={(threadId) => void openStartAfterThread(threadId)}
+                    references={composerReferences}
+                    onRemoveReference={removeComposerReference}
+                    onRemoveAllReferences={clearComposerReferences}
+                    onEditReference={controller ? undefined : editResponseReference}
+                    onSend={sendComposerMessage}
+                    historyMessages={userMessageTexts}
+                    hidePermissionSelector={chatMode}
+                    favoriteModels={chatMode
+                      ? rendererRecovery.chatFavoriteModels
+                      : rendererRecovery.favoriteModels}
+                    onToggleFavorite={(providerId, modelId, harnessId) =>
+                      chatMode
+                        ? rendererRecovery.toggleChatFavorite(
+                            modelKey(harnessId, providerId, modelId)
+                          )
+                        : rendererRecovery.toggleFavorite(modelKey(harnessId, providerId, modelId))}
+                    onReorderFavorite={(draggedKey, targetKey, position) =>
+                      chatMode
+                        ? rendererRecovery.reorderChatFavorite(draggedKey, targetKey, position)
+                        : rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
+                    recentModels={chatMode
+                      ? rendererRecovery.chatRecentModels
+                      : rendererRecovery.recentModels}
+                    onRemoveRecent={(key) =>
+                      chatMode
+                        ? rendererRecovery.removeChatRecentModel(key)
+                        : rendererRecovery.removeRecentModel(key)}
+                    onModelUsed={(modelKey) =>
+                      chatMode
+                        ? rendererRecovery.addChatRecentModel(modelKey)
+                        : rendererRecovery.addRecentModel(modelKey)}
+                    imageDescriptorDefault={agentDefaults.imageDescriptor}
+                    {imageDescriptorAskAgain}
+                    onImageDescriptorDefaultChange={setImageDescriptorDefault}
+                    onImageDescriptorAskAgainChange={setImageDescriptorAskAgain}
+                  />
+                {/key}
               {/if}
-              {#key composerRestoreKey}
-                <ChatComposer
-                  bind:this={composer}
-                  placeholder={activePlanningEntry === 'brainstorm'
-                    ? 'Sr. Engineer is preparing the Brainstorm…'
-                    : activePlanningEntry === 'spec'
-                      ? 'Sr. Engineer is preparing the specification…'
-                      : specFormulating
-                        ? 'Formulating specification…'
-                        : delegatedWorkBusy
-                          ? `${delegatedActivityLabel} — message the Sr. Engineer`
-                          : busy
-                            ? `${APP_NAME} is working — type to queue a message`
-                            : 'Send a message...'}
-                  disabled={specFormulating}
-                  working={busy}
-                  onStop={abortRun}
-                  autofocus
-                  showEngineeringMode={!chatMode}
-                  engineeringLifecycle={pendingLifecycleDisplay}
-                  engineeringActive={toolboxActive}
-                  onEngineeringLifecycleSelect={selectEngineeringLifecycle}
-                  showChatModes={chatMode}
-                  {settings}
-                  onSettingsChange={updateSettings}
-                  {providers}
-                  harnessId={settings.harnessId}
-                  actions={activeActions}
-                  onActionSelect={handleActionSelection}
-                  onSlashCommand={executeHarnessCommand}
-                  contextUsage={contextUsageDisplay}
-                  efficiencyKpis={storedEfficiencyKpis}
-                  onRevealUsage={revealContextUsage}
-                  onHideUsage={hideContextUsage}
-                  usageRefreshing={refreshingAccountUsage}
-                  {harnessUsage}
-                  canCompact={supportsManualCompaction(
-                    settings.harnessId,
-                    providerStore.providers
-                  ) && !busy}
-                  {compacting}
-                  onCompact={() => void compactWork()}
-                  projectContext={composerProject}
-                  projectId={thread.projectId}
-                  threadId={thread.id}
-                  attachmentStorage={{
-                    kind: chatMode ? 'chat' : 'project',
-                    projectId: thread.projectId,
-                    threadId: thread.id
-                  }}
-                  onSwitchProject={(pid) => void switchProject(pid)}
-                  fileTagProjectId={project?.source === 'local' && project.path
-                    ? thread.projectId
-                    : undefined}
-                  assignmentId={assignment?.id}
-                  assignmentTasks={assignment?.content.tasks ?? []}
-                  initialValue={rendererRecovery.draftFor(thread.projectId, thread.id)}
-                  initialAttachments={rendererRecovery.attachmentsFor(thread.projectId, thread.id)}
-                  initialProjectReferences={rendererRecovery.projectReferencesFor(
-                    thread.projectId,
-                    thread.id
-                  )}
-                  initialTaskReferences={rendererRecovery.taskReferencesFor(
-                    thread.projectId,
-                    thread.id
-                  )}
-                  initialStartAfterThreads={rendererRecovery.startAfterThreadsFor(
-                    thread.projectId,
-                    thread.id
-                  )}
-                  onValueChange={(value) => {
-                    rendererRecovery.setDraft(thread.projectId, thread.id, value)
-                    publishDraftActivity(
-                      thread.projectId,
-                      thread.id,
-                      rendererRecovery.hasDraftContent(thread.projectId, thread.id)
-                    )
-                  }}
-                  onAttachmentsChange={(files) => {
-                    rendererRecovery.setDraft(
-                      thread.projectId,
-                      thread.id,
-                      rendererRecovery.draftFor(thread.projectId, thread.id),
-                      files
-                    )
-                    publishDraftActivity(
-                      thread.projectId,
-                      thread.id,
-                      rendererRecovery.hasDraftContent(thread.projectId, thread.id)
-                    )
-                  }}
-                  onProjectReferencesChange={(projectReferences) => {
-                    rendererRecovery.setDraft(
-                      thread.projectId,
-                      thread.id,
-                      rendererRecovery.draftFor(thread.projectId, thread.id),
-                      rendererRecovery.attachmentsFor(thread.projectId, thread.id),
-                      projectReferences
-                    )
-                    publishDraftActivity(
-                      thread.projectId,
-                      thread.id,
-                      rendererRecovery.hasDraftContent(thread.projectId, thread.id)
-                    )
-                  }}
-                  onTaskReferencesChange={(taskReferences) => {
-                    rendererRecovery.setDraft(
-                      thread.projectId,
-                      thread.id,
-                      rendererRecovery.draftFor(thread.projectId, thread.id),
-                      rendererRecovery.attachmentsFor(thread.projectId, thread.id),
-                      rendererRecovery.projectReferencesFor(thread.projectId, thread.id),
-                      taskReferences
-                    )
-                    publishDraftActivity(
-                      thread.projectId,
-                      thread.id,
-                      rendererRecovery.hasDraftContent(thread.projectId, thread.id)
-                    )
-                  }}
-                  onStartAfterThreadsChange={(startAfterThreads) => {
-                    rendererRecovery.setStartAfterThreads(
-                      thread.projectId,
-                      thread.id,
-                      startAfterThreads
-                    )
-                    publishDraftActivity(
-                      thread.projectId,
-                      thread.id,
-                      rendererRecovery.hasDraftContent(thread.projectId, thread.id)
-                    )
-                  }}
-                  onOpenStartAfterThread={(threadId) => void openStartAfterThread(threadId)}
-                  references={composerReferences}
-                  onRemoveReference={removeComposerReference}
-                  onRemoveAllReferences={clearComposerReferences}
-                  onEditReference={controller ? undefined : editResponseReference}
-                  onSend={sendComposerMessage}
-                  historyMessages={userMessageTexts}
-                  hidePermissionSelector={chatMode}
-                  favoriteModels={chatMode
-                    ? rendererRecovery.chatFavoriteModels
-                    : rendererRecovery.favoriteModels}
-                  onToggleFavorite={(providerId, modelId, harnessId) =>
-                    chatMode
-                      ? rendererRecovery.toggleChatFavorite(
-                          modelKey(harnessId, providerId, modelId)
-                        )
-                      : rendererRecovery.toggleFavorite(modelKey(harnessId, providerId, modelId))}
-                  onReorderFavorite={(draggedKey, targetKey, position) =>
-                    chatMode
-                      ? rendererRecovery.reorderChatFavorite(draggedKey, targetKey, position)
-                      : rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
-                  recentModels={chatMode
-                    ? rendererRecovery.chatRecentModels
-                    : rendererRecovery.recentModels}
-                  onRemoveRecent={(key) =>
-                    chatMode
-                      ? rendererRecovery.removeChatRecentModel(key)
-                      : rendererRecovery.removeRecentModel(key)}
-                  onModelUsed={(modelKey) =>
-                    chatMode
-                      ? rendererRecovery.addChatRecentModel(modelKey)
-                      : rendererRecovery.addRecentModel(modelKey)}
-                  imageDescriptorDefault={agentDefaults.imageDescriptor}
-                  {imageDescriptorAskAgain}
-                  onImageDescriptorDefaultChange={setImageDescriptorDefault}
-                  onImageDescriptorAskAgainChange={setImageDescriptorAskAgain}
-                />
-              {/key}
             {/if}
           </div>
         </div>
