@@ -1632,6 +1632,8 @@
     }
     observeNavigationLocation()
     void loadConfig()
+    // Fire-and-forget: probes opted-in harnesses and docks quiet auto-updates.
+    void harnessLifecycleStore.autoUpdateOnStartup()
     // Workspace owns the initial project/thread hydration. Keeping this signal
     // there prevents App and Workspace from issuing the same startup queries.
 
