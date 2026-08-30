@@ -18185,8 +18185,16 @@ export class ChatEngine {
       const parentTurnId =
         classifiedMessages.findLast((message) => message.role === 'user')?.id ?? null
       memoryParentTurnId = parentTurnId
+      if (turnAssistant) {
+        this.recordMessageUsageEvent(
+          info.threadId,
+          thread,
+          parentTurnId ?? turnAssistant.id,
+          turnAssistant,
+          failure
+        )
+      }
       if (parentTurnId && turnAssistant) {
-        this.recordMessageUsageEvent(info.threadId, thread, parentTurnId, turnAssistant, failure)
         this.recordToolUsageEvents(info.threadId, parentTurnId, turnAssistant)
       }
       if (
@@ -18683,7 +18691,7 @@ export class ChatEngine {
   private recordMessageUsageEvent(
     threadId: string,
     thread: Thread | null,
-    parentTurnId: string,
+    parentTurnId: string | null,
     message: AgentMessage,
     failure?: string
   ): void {
@@ -18709,7 +18717,7 @@ export class ChatEngine {
     const details: UsageEventDetails = {
       id: `message:${message.id}`,
       threadId,
-      parentTurnId,
+      parentTurnId: parentTurnId ?? message.id,
       featureCallId: message.id,
       attempt: 1,
       feature,
