@@ -136,16 +136,6 @@
     onOpenPrototype
   }: Props = $props()
 
-  const canonicalSections: Array<{ id: BrainstormSectionId; title: string }> = [
-    { id: 'context', title: 'What We Learned' },
-    { id: 'goals', title: 'What We Are Building' },
-    { id: 'decisions', title: 'Aligned Decisions' },
-    { id: 'open_questions', title: 'Still to Decide' },
-    { id: 'constraints', title: 'Boundaries' },
-    { id: 'proposed_direction', title: 'Agreed Direction' },
-    { id: 'additional_info', title: 'Additional Notes' }
-  ]
-
   // This component is keyed by document identity in ThreadView. The effect below only reconciles
   // a newly selected or persisted version while retaining intentional local edit buffers.
   // svelte-ignore state_referenced_locally
@@ -215,20 +205,19 @@
   )
   const latestVersion = $derived(sortedVersions[0]?.version ?? draft.version)
   const canEdit = $derived(draft.status === 'draft' && draft.version === latestVersion)
-  const visibleSections = $derived(
-    canonicalSections.filter(
-      ({ id }) => id !== 'additional_info' || Boolean(sectionFor(id)?.markdown.trim())
-    )
-  )
-
   interface NavigationSection {
     id: BrainstormNavigationSectionId
     title: string
   }
 
+  // Sidebar headings are a projection of the document itself: every section present in the
+  // content gets an entry, in document order, followed by Prototypes when artifacts exist.
   const navigationSections = $derived.by<NavigationSection[]>(() => {
-    const items: NavigationSection[] = [...visibleSections]
-    if ((draft.content.prototypes?.length ?? 0) > 0) {
+    const items: NavigationSection[] = draft.content.sections.map((section) => ({
+      id: section.id,
+      title: section.title
+    }))
+    if (draft.content.prototypes?.length) {
       items.push({ id: 'prototypes', title: 'Prototypes' })
     }
     return items
@@ -249,7 +238,7 @@
     pendingAction = null
     closePendingAnnotation()
     closeAnnotation()
-    if (!visibleSections.some((section) => section.id === selectedSection)) {
+    if (!navigationSections.some((section) => section.id === selectedSection)) {
       selectedSection = 'context'
     }
   })
@@ -1015,39 +1004,38 @@
             {/each}
           </div>
         </div>
-
       </div>
 
       {#if onRevealInAppFile || onOpenInEditor}
         <div class="flex shrink-0 items-center gap-1 border-t p-2">
-            {#if onRevealInAppFile}
-              <button
-                class="flex h-8 flex-1 items-center justify-center gap-2 rounded-lg px-2.5 text-xs font-medium text-muted hover:bg-elevated hover:text-foreground disabled:opacity-50"
-                disabled={busy}
-                title="Reveal this brainstorm as Markdown in the file tree"
-                onclick={() => void onRevealInAppFile?.(draft)}
-              >
-                <FileText size={13} />
-                View
-              </button>
-            {/if}
-            {#if onOpenInEditor}
-              <button
-                class="flex h-8 flex-1 items-center justify-center gap-2 rounded-lg px-2.5 text-xs font-medium text-muted hover:bg-elevated hover:text-foreground disabled:opacity-50"
-                disabled={busy}
-                title={`Open this brainstorm as Markdown in ${preferredName}`}
-                onclick={() => void onOpenInEditor?.(draft)}
-              >
-                {#if preferredIcon}
-                  <img src={preferredIcon} alt="" class="h-3.5 w-3.5 shrink-0" />
-                {:else}
-                  <AppWindow size={14} class="shrink-0" />
-                {/if}
-                Open
-              </button>
-            {/if}
-          </div>
-        {/if}
+          {#if onRevealInAppFile}
+            <button
+              class="flex h-8 flex-1 items-center justify-center gap-2 rounded-lg px-2.5 text-xs font-medium text-muted hover:bg-elevated hover:text-foreground disabled:opacity-50"
+              disabled={busy}
+              title="Reveal this brainstorm as Markdown in the file tree"
+              onclick={() => void onRevealInAppFile?.(draft)}
+            >
+              <FileText size={13} />
+              View
+            </button>
+          {/if}
+          {#if onOpenInEditor}
+            <button
+              class="flex h-8 flex-1 items-center justify-center gap-2 rounded-lg px-2.5 text-xs font-medium text-muted hover:bg-elevated hover:text-foreground disabled:opacity-50"
+              disabled={busy}
+              title={`Open this brainstorm as Markdown in ${preferredName}`}
+              onclick={() => void onOpenInEditor?.(draft)}
+            >
+              {#if preferredIcon}
+                <img src={preferredIcon} alt="" class="h-3.5 w-3.5 shrink-0" />
+              {:else}
+                <AppWindow size={14} class="shrink-0" />
+              {/if}
+              Open
+            </button>
+          {/if}
+        </div>
+      {/if}
     </aside>
 
     <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
@@ -1084,7 +1072,7 @@
           </section>
         </header>
 
-        {#each visibleSections as sectionDefinition (sectionDefinition.id)}
+        {#each draft.content.sections as sectionDefinition (sectionDefinition.id)}
           {@const section = sectionFor(sectionDefinition.id)}
           {#if section}
             <section
