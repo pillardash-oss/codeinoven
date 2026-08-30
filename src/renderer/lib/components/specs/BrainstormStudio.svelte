@@ -639,7 +639,10 @@
     return edits
   }
 
+  let submittingAction = $state(false)
+
   async function submitAction(action: BrainstormDecisionAction): Promise<void> {
+    if (submittingAction) return
     const reviewEdits = collectReviewEdits()
     let submitted = $state.snapshot(draft)
     if (dirty) {
@@ -648,13 +651,21 @@
       submitted = saved
     }
     const notes = additionalNotes
-    pendingAction = null
-    additionalNotes = ''
-    await onSubmit(action, submitted, notes, {
-      baselineAvailable: brainstorm.generatedContent !== undefined,
-      edits: reviewEdits
-    })
-    speechController.observeSent(decisionSpeechTargetId, notes)
+    submittingAction = true
+    try {
+      // Only clear the panel and the user's typed notes once the send has
+      // actually gone through — a painstakingly-typed draft must survive a
+      // failed or merely-deferred submit so the user never has to retype it.
+      await onSubmit(action, submitted, notes, {
+        baselineAvailable: brainstorm.generatedContent !== undefined,
+        edits: reviewEdits
+      })
+      pendingAction = null
+      additionalNotes = ''
+      speechController.observeSent(decisionSpeechTargetId, notes)
+    } finally {
+      submittingAction = false
+    }
   }
 
   let nextStepBusy = $state(false)
@@ -891,7 +902,7 @@
         />
         <button
           class="rounded-lg bg-primary px-3 py-2 text-xs font-semibold text-on-primary disabled:opacity-50"
-          disabled={busy}
+          disabled={busy || submittingAction}
           title={pendingAction === 'review' ? 'Discuss report changes' : 'Prepare specification'}
           onclick={() => void submitAction(pendingAction!)}
           >{pendingAction === 'review' ? 'Discuss' : 'Prepare spec'}</button

@@ -86,4 +86,33 @@ describe('prototype artifacts and preview service', () => {
       })
     ).rejects.toThrow('already exists')
   })
+
+  it('allows regenerating the same prototype id by replacing its own preview link', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'codeinoven-prototype-'))
+    roots.push(projectRoot)
+    const paths = resolvePrototypeArtifactPaths(projectRoot, 'toolbox', 'H1')
+    await mkdir(paths.canonicalRoot, { recursive: true })
+    await writeFile(join(paths.canonicalRoot, 'index.html'), '<h1>v1</h1>')
+    await finalizePrototypeArtifact({
+      projectRoot,
+      featureSlug: 'toolbox',
+      prototypeId: 'H1',
+      fidelity: 'hifi',
+      title: 'Rebuild me',
+      entryFile: 'index.html'
+    })
+
+    await writeFile(join(paths.canonicalRoot, 'index.html'), '<h1>v2</h1>')
+    const rebuilt = await finalizePrototypeArtifact({
+      projectRoot,
+      featureSlug: 'toolbox',
+      prototypeId: 'H1',
+      fidelity: 'hifi',
+      title: 'Rebuild me',
+      entryFile: 'index.html'
+    })
+    expect(rebuilt.previewPath).toBe('cio/toolbox-h1/')
+    const chunk = await readPrototypePreviewChunk(paths.canonicalRoot, 'index.html', 0)
+    expect(Buffer.from(chunk.base64, 'base64').toString('utf8')).toContain('v2')
+  })
 })

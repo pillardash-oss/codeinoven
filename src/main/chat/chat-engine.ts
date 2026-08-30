@@ -18425,6 +18425,13 @@ export class ChatEngine {
             sessionId,
             error: auxiliaryFailure
           })
+          // The thread status intentionally stays on the previous artifact's
+          // reviewable state below (not `failed`) so a background rebuild
+          // hiccup never fires a misleading "hit an error" notification for a
+          // turn that otherwise completed fine. But staying fully silent left
+          // the user with no signal at all that their requested rebuild never
+          // happened, so still surface it as a toast.
+          this.broadcastToast(`Brainstorm update failed: ${auxiliaryFailure}`)
         }
       }
       // Race-safe guard: if the persisted thread is already `failed` (an

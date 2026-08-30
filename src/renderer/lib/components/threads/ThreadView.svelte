@@ -6266,16 +6266,28 @@
       const feedback =
         notes.trim() ||
         'I want to continue discussing this Brainstorm before preparing the specification.'
-      await sendMessage(
-        feedback,
-        [],
-        undefined,
-        undefined,
-        await brainstormReviewDiscussionContext(draft, notes, reviewChanges),
-        [],
-        [],
-        workflowActionPresentation('Review Brainstorm', notes)
-      )
+      try {
+        await sendMessage(
+          feedback,
+          [],
+          undefined,
+          // A deliberate "Discuss" click must never fall into the queue-behind-
+          // busy path: `busy` can still read stale-true for a moment right
+          // after the previous turn (e.g. a prototype build) finishes, which
+          // silently deferred the message with no feedback and made it look
+          // like the click did nothing.
+          true,
+          await brainstormReviewDiscussionContext(draft, notes, reviewChanges),
+          [],
+          [],
+          workflowActionPresentation('Review Brainstorm', notes)
+        )
+      } catch (error) {
+        brainstormError =
+          error instanceof Error ? error.message : 'The Brainstorm discussion message failed to send.'
+        errorMessage = brainstormError
+        throw error
+      }
       return
     }
     brainstormBusy = true
