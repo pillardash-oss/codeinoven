@@ -175,7 +175,6 @@ const settings = {
   modelId: 'qwen/qwen3.5-9b',
   thinkingLevel: 'medium' as const,
   permissionLevel: 'auto_review' as const,
-  engineeringMode: false
 }
 
 function sessionContext(

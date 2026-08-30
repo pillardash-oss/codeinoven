@@ -1222,7 +1222,7 @@ class ContextSidebarState {
       mode,
       selections: selectionAttached ? [selection] : [],
       initialContext,
-      settings: { ...settings, engineeringMode: false, permissionLevel: 'auto_review' },
+      settings: { ...settings, permissionLevel: 'auto_review' },
       selectionAttached,
       autoPromptSent: false,
       autoPromptMessageId,

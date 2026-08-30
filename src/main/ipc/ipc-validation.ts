@@ -126,7 +126,6 @@ const THREAD_SETTINGS_FIELDS = new Set([
   'thinkingLevel',
   'inferenceMode',
   'permissionLevel',
-  'engineeringMode',
   'assignmentMode',
   'loopMode',
   'fileSystemMode',
@@ -997,7 +996,6 @@ export function validateThreadSettings(value: unknown): ThreadSettings {
     modelId: validateBoundedString(input.modelId, 'Model ID', 0, 256),
     thinkingLevel: assertEnum(input.thinkingLevel, THINKING_LEVELS, 'thinking level'),
     permissionLevel: assertEnum(input.permissionLevel, PERMISSION_LEVELS, 'permission level'),
-    engineeringMode: validateBoolean(input.engineeringMode, 'Engineering'),
     assignmentMode:
       input.assignmentMode === undefined
         ? false

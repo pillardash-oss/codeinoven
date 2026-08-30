@@ -42,7 +42,6 @@ const validSettings = {
   modelId: 'anthropic/claude-sonnet-4',
   thinkingLevel: 'high',
   permissionLevel: 'auto_review',
-  engineeringMode: true,
   assignmentMode: false,
   loopMode: false
 }
@@ -115,9 +114,6 @@ describe('IPC structured input validation', () => {
   })
 
   it('rejects invalid, incomplete, and extended thread settings', () => {
-    expect(() => validateThreadSettings({ ...validSettings, engineeringMode: 'yes' })).toThrow(
-      TypeError
-    )
     expect(() => validateThreadSettings({ ...validSettings, permissionLevel: 'all' })).toThrow(
       TypeError
     )

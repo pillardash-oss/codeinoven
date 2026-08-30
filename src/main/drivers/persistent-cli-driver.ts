@@ -294,8 +294,7 @@ export abstract class PersistentCliDriver implements HarnessDriver {
             modelId: candidate.modelId,
             thinkingLevel: 'minimal',
             inferenceMode: 'normal',
-            permissionLevel: 'auto_review',
-            engineeringMode: false
+            permissionLevel: 'auto_review'
           },
           text: promptText,
           attachments: [],

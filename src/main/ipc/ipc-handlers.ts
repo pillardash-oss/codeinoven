@@ -2274,11 +2274,29 @@ export function registerIpcHandlers(
     'engineeringLifecycle:select',
     async (_, projectId: unknown, threadId: unknown, input: unknown) => {
       const ids = await waitForThreadReady(projectId, threadId)
-      return engineeringLifecycleEngine.select(
+      const previous = engineeringLifecycleEngine.get(ids.projectId, ids.threadId)
+      const next = engineeringLifecycleEngine.select(
         ids.projectId,
         ids.threadId,
         validateEngineeringLifecycleSelectionInput(input)
       )
+      // Engineering is now expressed purely through the lifecycle selection, so
+      // the senior-engineer/auditor defaults attach the moment a thread first
+      // gains an active selection (previously tied to the creation-time flag).
+      if ((previous?.selection ?? 'none') === 'none' && next.selection !== 'none') {
+        const thread = await threadManager.getThread(ids.projectId, ids.threadId)
+        if (thread?.settings) {
+          const defaults = (await storage.getConfig()).agentDefaults
+          const baseSettings = { ...thread.settings }
+          delete baseSettings.loopAuditor
+          await threadManager.updateSettings(ids.projectId, ids.threadId, {
+            ...baseSettings,
+            ...(defaults.seniorEngineer ?? {}),
+            ...(defaults.auditor ? { loopAuditor: defaults.auditor } : {})
+          })
+        }
+      }
+      return next
     }
   )
   ipcMain.handle(
@@ -2593,8 +2611,11 @@ export function registerIpcHandlers(
     }
     const workflow = await specEngine.getWorkflowState(safeProjectId, safeThreadId)
     const hasActiveSpec = Boolean(workflow?.activeSpecId && workflow.activeSpecVersion)
-    const engineeringMode = thread?.settings?.engineeringMode !== false
-    const mode = !engineeringMode ? 'chat' : hasActiveSpec ? 'brainstorm' : 'implement'
+    const lifecycle = engineeringLifecycleEngine.get(safeProjectId, safeThreadId)
+    const engineeringActive =
+      lifecycle !== null &&
+      ((lifecycle.selection ?? 'none') !== 'none' || lifecycle.startedAt !== undefined)
+    const mode = !engineeringActive ? 'chat' : hasActiveSpec ? 'brainstorm' : 'implement'
     return assembler.getLayers(
       safeProjectId,
       safeThreadId,
@@ -6522,7 +6543,6 @@ export function registerIpcHandlers(
       thinkingLevel: requestedSettings.thinkingLevel,
       inferenceMode: 'normal',
       permissionLevel: 'auto_review',
-      engineeringMode: false,
       assignmentMode: false,
       loopMode: false,
       fileSystemMode: false
@@ -6564,7 +6584,6 @@ export function registerIpcHandlers(
     const settings = validateThreadSettings({
       ...validateThreadSettings(args[2]),
       permissionLevel: 'auto_review',
-      engineeringMode: false,
       assignmentMode: false,
       loopMode: false
     })
@@ -6860,16 +6879,6 @@ export function registerIpcHandlers(
     threadCreation.begin(
       thread.id,
       async () => {
-        if (validated.settings?.engineeringMode) {
-          const baseSettings = { ...validated.settings }
-          delete baseSettings.loopAuditor
-          const defaults = (await storage.getConfig()).agentDefaults
-          thread.settings = {
-            ...baseSettings,
-            ...(defaults.seniorEngineer ?? {}),
-            ...(defaults.auditor ? { loopAuditor: defaults.auditor } : {})
-          }
-        }
         await finalize()
         // Broadcast immediately so the new thread opens instantly — the git
         // branch settles through a detached task below and arrives via a later

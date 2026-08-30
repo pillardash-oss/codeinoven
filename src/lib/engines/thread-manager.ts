@@ -1313,7 +1313,7 @@ export class ThreadManager {
     // A fork of an Engineering thread must open with the same switches lit:
     // carry the parent's stage selection (and Auto Pilot) into the fork so
     // the toolbox reflects exactly what the user had turned on.
-    if (parent.settings?.engineeringMode === true) {
+    {
       const sourceLifecycle = this.engineeringLifecycleEngine.get(projectId, threadId)
       if (sourceLifecycle && sourceLifecycle.selection !== 'none') {
         try {

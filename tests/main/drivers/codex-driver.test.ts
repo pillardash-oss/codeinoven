@@ -96,7 +96,6 @@ const settings = {
   modelId: 'gpt-5.6-sol',
   thinkingLevel: 'medium' as const,
   permissionLevel: 'auto_review' as const,
-  engineeringMode: false
 }
 
 describe.skipIf(process.platform === 'win32')('CodexDriver', () => {

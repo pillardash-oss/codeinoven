@@ -71,7 +71,6 @@ export interface DiagnosticsThreadSummary {
   archived: boolean
   read: boolean
   permissionLevel?: PermissionLevel
-  engineeringMode?: boolean
   loopMode?: boolean
   fileSystemMode?: boolean
   loopIteration?: number
@@ -198,7 +197,6 @@ function summarizePermissionEvent(value: unknown): DiagnosticsPermissionEvent | 
 
 function summarizeThread(thread: Thread): DiagnosticsThreadSummary {
   const permissionLevel = thread.settings?.permissionLevel
-  const engineeringMode = thread.settings?.engineeringMode
   const loopMode = thread.settings?.loopMode
   const fileSystemMode = thread.settings?.fileSystemMode
   return {
@@ -209,7 +207,6 @@ function summarizeThread(thread: Thread): DiagnosticsThreadSummary {
     archived: thread.archived,
     read: thread.read,
     ...(permissionLevel ? { permissionLevel } : {}),
-    ...(engineeringMode !== undefined ? { engineeringMode } : {}),
     ...(loopMode !== undefined ? { loopMode } : {}),
     ...(fileSystemMode !== undefined ? { fileSystemMode } : {}),
     ...(thread.loopIteration !== undefined ? { loopIteration: thread.loopIteration } : {}),

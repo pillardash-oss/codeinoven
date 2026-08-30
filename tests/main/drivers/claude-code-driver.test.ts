@@ -84,7 +84,6 @@ describe.skipIf(process.platform === 'win32')('ClaudeCodeDriver', () => {
         modelId: 'sonnet',
         thinkingLevel: 'medium',
         permissionLevel: 'auto_review',
-        engineeringMode: false
       }
     })
     expect(spawnMock).toHaveBeenCalledWith(
@@ -156,7 +155,6 @@ describe.skipIf(process.platform === 'win32')('ClaudeCodeDriver', () => {
         modelId: 'sonnet',
         thinkingLevel: 'medium',
         permissionLevel: 'auto_review',
-        engineeringMode: false
       }
     })
     expect(spawnMock).toHaveBeenLastCalledWith(
@@ -182,7 +180,6 @@ describe.skipIf(process.platform === 'win32')('ClaudeCodeDriver', () => {
       modelId: 'haiku',
       thinkingLevel: 'minimal',
       permissionLevel: 'auto_review',
-      engineeringMode: false
     } as const
 
     await driver.sendPrompt('/project', {
@@ -222,7 +219,6 @@ describe.skipIf(process.platform === 'win32')('ClaudeCodeDriver', () => {
         modelId: '',
         thinkingLevel: 'low',
         permissionLevel: 'auto_review',
-        engineeringMode: false
       }
     })
     child.stdout.emit(
@@ -416,7 +412,6 @@ describe.skipIf(process.platform === 'win32')('ClaudeCodeDriver', () => {
         modelId: '',
         thinkingLevel: 'low',
         permissionLevel: 'auto_review',
-        engineeringMode: false
       }
     })
     expect(child.stdin.write).toHaveBeenCalledWith(
@@ -459,7 +454,6 @@ describe.skipIf(process.platform === 'win32')('ClaudeCodeDriver', () => {
         modelId: '',
         thinkingLevel: 'low',
         permissionLevel: 'auto_review',
-        engineeringMode: false
       }
     })
     child.stdout.emit(
@@ -511,7 +505,6 @@ describe.skipIf(process.platform === 'win32')('ClaudeCodeDriver', () => {
         modelId: '',
         thinkingLevel: 'low',
         permissionLevel: 'auto_review',
-        engineeringMode: false
       }
     })
     child.stdout.emit(
@@ -570,7 +563,6 @@ describe.skipIf(process.platform === 'win32')('ClaudeCodeDriver', () => {
         modelId: '',
         thinkingLevel: 'low',
         permissionLevel: 'auto_review',
-        engineeringMode: false
       }
     })
     child.stdout.emit(
@@ -636,7 +628,6 @@ describe.skipIf(process.platform === 'win32')('ClaudeCodeDriver', () => {
         modelId: '',
         thinkingLevel: 'low',
         permissionLevel: 'auto_review',
-        engineeringMode: false
       }
     })
     child.stdout.emit(

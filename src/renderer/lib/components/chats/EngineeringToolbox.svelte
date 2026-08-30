@@ -8,10 +8,8 @@
 
   interface Props {
     lifecycleState: EngineeringLifecycleState | null
-    /** Whether the thread is in engineering mode. A thread can be in
-     *  engineering mode (inherited or via a lifecycle stage selection) before
-     *  any specific stage has been chosen, e.g. when a new thread inherits the
-     *  previous thread's engineering settings. */
+    /** Whether any Engineering lifecycle stage is active for the thread —
+     *  either staged (intent-only) or persisted via an inherited selection. */
     active?: boolean
     disabled?: boolean
     onselect: (input: EngineeringLifecycleSelectionInput) => void | Promise<void>

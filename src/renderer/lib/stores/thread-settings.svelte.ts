@@ -13,7 +13,6 @@ export const DEFAULT_SETTINGS: ThreadSettings = {
   thinkingLevel: 'medium',
   inferenceMode: 'normal',
   permissionLevel: 'auto_review',
-  engineeringMode: false,
   loopMode: false,
   fileSystemMode: false
 }
@@ -26,7 +25,6 @@ export const DEFAULT_SETTINGS: ThreadSettings = {
  */
 export const CHAT_DEFAULT_SETTINGS: ThreadSettings = {
   ...DEFAULT_SETTINGS,
-  engineeringMode: false,
   permissionLevel: 'auto_review'
 }
 
@@ -111,7 +109,6 @@ export function chatEffectiveSettings(): ThreadSettings {
     providerId: project.providerId,
     modelId: project.modelId,
     thinkingLevel: project.thinkingLevel,
-    engineeringMode: false,
     permissionLevel: 'auto_review'
   }
 }

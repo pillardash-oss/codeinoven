@@ -404,13 +404,7 @@
   )
 
   function shouldHydrateEngineeringState(): boolean {
-    return (
-      !chatMode &&
-      (settings.engineeringMode === true ||
-        thread.assignmentId !== undefined ||
-        thread.achievementRole !== undefined ||
-        thread.auditState !== undefined)
-    )
+    return !chatMode
   }
 
   let engineeringLifecycle = $state<EngineeringLifecycleState | null>(null)
@@ -458,27 +452,28 @@
   /** Toolbox icon activity mirrors the staged selection, not the persisted
    *  settings: toggles are intent-only until send, so the icon must dim or
    *  light the moment a switch flips — not after the next message.
-   *  Without a staged selection the persisted mode stays authoritative. */
-  const toolboxActive = $derived.by(() => {
+   *  Without a staged selection the persisted lifecycle stays authoritative. */
+  /** Whether the thread currently runs any Engineering lifecycle stage — a
+   *  staged (intent-only) selection wins over the persisted lifecycle state. */
+  const engineeringOn = $derived.by(() => {
     const pending = pendingLifecycleSelection
     if (pending) {
       return pending.autopilot === true || normalizeLifecycleStages(pending.stages).length > 0
     }
-    return settings.engineeringMode === true
+    const lifecycle = engineeringLifecycle
+    return (
+      lifecycle !== null &&
+      ((lifecycle.selection ?? 'none') !== 'none' || lifecycle.startedAt !== undefined)
+    )
   })
 
   function settingsForEngineeringState(state: EngineeringLifecycleState | null): ThreadSettings {
     if (!state || (state.selectedStages.length === 0 && !state.autopilot)) {
-      return { ...settings, engineeringMode: false, assignmentMode: false, loopMode: false }
+      return { ...settings, assignmentMode: false, loopMode: false }
     }
     const { selectedStages, autopilot } = state
     return {
       ...settings,
-      engineeringMode:
-        autopilot ||
-        selectedStages.includes('brainstorm') ||
-        selectedStages.includes('prd') ||
-        selectedStages.includes('spec'),
       assignmentMode: autopilot || selectedStages.includes('assignment'),
       loopMode: autopilot || selectedStages.includes('achievement')
     }
@@ -650,7 +645,7 @@
   /** Chats are for questions and research: they never inject the Engineering
    *  workflow and always run with auto permission review. */
   function normalizeChatSettings(next: ThreadSettings): ThreadSettings {
-    return { ...next, engineeringMode: false, permissionLevel: 'auto_review' }
+    return { ...next, permissionLevel: 'auto_review' }
   }
 
   /** Commit to the chat-scoped last-used store on the Chats tab, and to the
@@ -787,7 +782,7 @@
     if (visibleProviderStatus !== seenProviderStatusKey) {
       seenProviderStatusKey = visibleProviderStatus
       statusCardSettings = chatMode
-        ? { ...settings, engineeringMode: false, assignmentMode: false, loopMode: false }
+        ? { ...settings, assignmentMode: false, loopMode: false }
         : { ...settings }
     } else if (visibleProviderStatus === null && statusCardSettings !== null) {
       statusCardSettings = null
@@ -2111,7 +2106,7 @@
   )
   let plainEngineeringAuditAvailable = $derived(
     studioOnlyAuditWorkflow &&
-      (settings.engineeringMode === true || plainAuditTriggered) &&
+      (engineeringOn || plainAuditTriggered) &&
       spec?.status === 'approved' &&
       (auditState === 'offered' ||
         auditState === 'running' ||
@@ -2121,12 +2116,12 @@
   )
   let plainEngineeringAuditRunning = $derived(
     studioOnlyAuditWorkflow &&
-      (settings.engineeringMode === true || plainAuditTriggered) &&
+      (engineeringOn || plainAuditTriggered) &&
       auditState === 'running'
   )
   let plainEngineeringAuditReady = $derived(
     studioOnlyAuditWorkflow &&
-      (settings.engineeringMode === true || plainAuditTriggered) &&
+      (engineeringOn || plainAuditTriggered) &&
       auditState === 'report_ready' &&
       auditReport !== null
   )
@@ -2252,7 +2247,7 @@
   let achievementAutonomous = $derived(
     settings.loopMode === true &&
       spec?.status === 'approved' &&
-      settings.engineeringMode === false &&
+      !engineeringOn &&
       (settings.assignmentMode !== true ||
         (assignment !== null && !['draft', 'stopped'].includes(assignment.status)))
   )
@@ -2321,7 +2316,6 @@
   $effect(() => {
     const persisted = thread.settings
     if (persisted) {
-      settings.engineeringMode = persisted.engineeringMode
       settings.assignmentMode = persisted.assignmentMode
       settings.loopMode = persisted.loopMode
       settings.loopAuditor = persisted.loopAuditor
@@ -2343,7 +2337,6 @@
       return {
         ...settings,
         ...settings.loopAuditor,
-        engineeringMode: false,
         loopMode: false
       }
     }
@@ -2354,7 +2347,6 @@
       return {
         ...settings,
         ...inheritedAuditor,
-        engineeringMode: false,
         loopMode: false
       }
     }
@@ -2399,7 +2391,7 @@
         : 'Formulating specification'
     }
     if (specFormulating) return 'Formulating'
-    if (!settings.engineeringMode) return 'Working'
+    if (!engineeringOn) return 'Working'
     switch (thread.status) {
       case 'planning':
         return 'Planning'
@@ -3076,9 +3068,7 @@
     unsubscribeLifecycleInheritance = onEngineeringLifecycleInherited((inheritedThreadId) => {
       if (
         !alive ||
-        inheritedThreadId !== thread.id ||
-        chatMode ||
-        settings.engineeringMode !== true
+        inheritedThreadId !== thread.id || chatMode
       ) {
         return
       }
@@ -4609,7 +4599,7 @@
       await tick()
       if (scrollEl) scrollEl.scrollTop = scrollEl.scrollHeight
       await sendPromise
-      if (settings.engineeringMode) {
+      if (engineeringOn) {
         await reconcileReadySpec()
         if (brainstormWorkflow?.stage === 'choice_pending') {
           clearLocalTurn()
@@ -5466,13 +5456,11 @@
       settings = engineeringLifecycle?.autopilot
         ? {
             ...settings,
-            engineeringMode: false,
             assignmentMode: true,
             loopMode: true
           }
         : {
             ...settings,
-            engineeringMode: false,
             assignmentMode: false
           }
       commitSettings(settings)
@@ -7032,7 +7020,6 @@
         ...settings,
         ...normalized,
         permissionLevel: 'auto_review',
-        engineeringMode: false,
         assignmentMode: false,
         loopMode: false,
         loopAuditor: undefined
@@ -7078,7 +7065,6 @@
           ? {
               ...statusCardSettings,
               ...normalized,
-              engineeringMode: false,
               assignmentMode: false,
               loopMode: false
             }
@@ -7109,7 +7095,7 @@
           'achievement'
         )
       }
-      settings = { ...settings, engineeringMode: false, loopMode: false }
+      settings = { ...settings, loopMode: false }
       commitSettings(settings)
       await invoke('thread:updateSettings', thread.projectId, thread.id, settings)
       auditState = undefined
@@ -7675,7 +7661,7 @@
             else await generateAssignmentDraft()
             return
           }
-          if (nextEngineeringSettings.engineeringMode || nextEngineeringSettings.loopMode) {
+          if (nextEngineeringSettings.assignmentMode || nextEngineeringSettings.loopMode) {
             return
           }
         }
@@ -7908,7 +7894,7 @@
         proactiveAuthIssue = null
       }
     }
-    if (seniorModelChanged && normalized.engineeringMode) {
+    if (seniorModelChanged && engineeringOn) {
       syncAgentRole('seniorEngineer', {
         harnessId: normalized.harnessId,
         providerId: normalized.providerId,
@@ -10011,7 +9997,6 @@
                   (chatMode
                     ? {
                         ...settings,
-                        engineeringMode: false,
                         assignmentMode: false,
                         loopMode: false
                       }
@@ -10632,7 +10617,7 @@
                     autofocus
                     showEngineeringMode={!chatMode}
                     engineeringLifecycle={pendingLifecycleDisplay}
-                    engineeringActive={toolboxActive}
+                    engineeringActive={engineeringOn}
                     onEngineeringLifecycleSelect={selectEngineeringLifecycle}
                     showChatModes={chatMode}
                     {settings}

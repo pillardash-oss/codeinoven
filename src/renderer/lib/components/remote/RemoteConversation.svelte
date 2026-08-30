@@ -170,7 +170,6 @@
     if (!state || (state.selectedStages.length === 0 && !state.autopilot)) {
       return {
         ...settings,
-        engineeringMode: false,
         assignmentMode: false,
         loopMode: false
       }
@@ -178,11 +177,6 @@
     const { selectedStages, autopilot } = state
     return {
       ...settings,
-      engineeringMode:
-        autopilot ||
-        selectedStages.includes('brainstorm') ||
-        selectedStages.includes('prd') ||
-        selectedStages.includes('spec'),
       assignmentMode: autopilot || selectedStages.includes('assignment'),
       loopMode: autopilot || selectedStages.includes('achievement')
     }
@@ -938,7 +932,11 @@
     if (pending) {
       return pending.autopilot === true || normalizeLifecycleStages(pending.stages).length > 0
     }
-    return settings.engineeringMode === true
+    return (
+      engineeringLifecycle !== null &&
+      ((engineeringLifecycle.selection ?? 'none') !== 'none' ||
+        engineeringLifecycle.startedAt !== undefined)
+    )
   })
 
   function handleSend(

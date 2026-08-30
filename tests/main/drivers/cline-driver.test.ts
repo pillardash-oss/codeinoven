@@ -52,7 +52,6 @@ const settings = {
   modelId: 'poolside/laguna-s-2.1:free',
   thinkingLevel: 'medium' as const,
   permissionLevel: 'auto_review' as const,
-  engineeringMode: false
 }
 
 describe.skipIf(process.platform === 'win32')('ClineDriver approval bridge', () => {

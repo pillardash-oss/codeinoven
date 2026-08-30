@@ -655,7 +655,6 @@
       thinkingLevel: selection.thinkingLevel,
       inferenceMode: 'normal',
       permissionLevel: 'auto_review',
-      engineeringMode: false,
       assignmentMode: false,
       loopMode: false,
       fileSystemMode: false
