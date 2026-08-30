@@ -632,11 +632,11 @@ export default function codeInOvenCoreToolsExtension(pi) {
     name: 'cio_spawn_agent',
     label: 'Spawn a sub-agent',
     description:
-      'Spawn a sub-agent worker thread that executes one focused task (explore, implementation, tests, cleanup, documentation, or any custom purpose) and returns its result. Sub-agents cannot spawn further sub-agents. They inherit your model and thinking level unless overridden. Use background:true to run several sub-agents concurrently, then collect results with cio_agent_status.',
-    promptSnippet: 'Spawn sub-agent worker threads for focused tasks (explore, implement, tests, cleanup, docs)',
+      'Spawn a sub-agent worker thread that executes one focused task (explore, implementation, tests, cleanup, documentation, or any custom purpose) and returns only its final result, keeping its transcript out of your context. By default — unless the user explicitly asks you to use sub-agents differently — delegate any task that can run in parallel with your own work to a sub-agent: explore or research a topic while you continue working, hand off long-running work so you can proceed without waiting and without polluting your context, and once your own work is done, spawn a sub-agent to run the checks for the files you touched (lint, typecheck, tests) so the work finishes faster. Run several sub-agents concurrently with background:true and collect results with cio_agent_status (wait: true). Sub-agents cannot spawn further sub-agents, and they inherit your model and thinking level unless you pass model/thinking_level overrides.',
+    promptSnippet: 'Spawn sub-agent worker threads for focused or parallelizable tasks (explore, implement, tests, cleanup, docs)',
     promptGuidelines: [
-      'Use cio_spawn_agent to delegate a focused piece of work to a sub-agent thread; give it complete, self-contained instructions.',
-      'Spawn separate sub-agents for independent work (explore, tests, cleanup, documentation) and collect results with cio_agent_status.'
+      'By default, delegate parallelizable tasks to sub-agents instead of doing them inline: exploring a topic while you keep working, handing off work so you can continue without polluting your context, or running post-work checks (lint, typecheck, tests) for the files you touched.',
+      'Give each sub-agent complete, self-contained instructions; spawn separate sub-agents for independent work and collect results with cio_agent_status.'
     ],
     parameters: Type.Object({
       purpose: Type.String({
