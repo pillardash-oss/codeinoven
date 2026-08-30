@@ -1170,6 +1170,18 @@ interface ActiveBrainstormSession {
   isolated?: IsolatedHandle
 }
 
+interface TurnStreamCacheEntry {
+  /** Raw prefix of the stream log already consumed by this entry. */
+  consumedRaw: string
+  /** Every parsed stream event, in log order. */
+  events: TurnStreamEvent[]
+  /** Turn id of the last event that carried one. */
+  latestTurnId: string
+  /** Fold inputs the cached `folded` parts were built from. */
+  foldKey: string | null
+  folded: AgentPart[] | null
+}
+
 interface ActiveInitialSpecSession {
   sessionId: string
   threadSessionId: string
@@ -1478,6 +1490,8 @@ export class ChatEngine {
   private static readonly TEMPORARY_CHAT_INACTIVITY_MS = 3 * 60 * 60 * 1000
   private static readonly AUDIT_RUN_TIMEOUT_MS = 30 * 60 * 1000
   private static readonly CATALOG_DRIVER_BUDGET_MS = 800
+  /** Parsed stream-log entries held per thread before the oldest is evicted. */
+  private static readonly TURN_STREAM_CACHE_LIMIT = 16
   private drivers = new Map<string, HarnessDriver>()
   private readonly openUsage = new OpenUsageClient()
   private readonly customProviderUsage = new CustomProviderUsageClient()
@@ -1494,6 +1508,8 @@ export class ChatEngine {
   /** One automatic utility-search nudge per active turn, per session. */
   private searchNudgeAttempts = new Map<string, number>()
   /** Latest high-frequency stream mutations waiting for the next renderer frame. */
+  /** Parsed stream-log state per thread so a reopen only parses appended bytes. */
+  private turnStreamCache = new Map<string, TurnStreamCacheEntry>()
   private pendingStreamBroadcasts = new Map<string, AgentEvent>()
   private streamBroadcastTimer: ReturnType<typeof setTimeout> | null = null
   /** Number of hidden continuations issued after a turn ended without a final response. */
@@ -3885,11 +3901,8 @@ export class ChatEngine {
       if (unavailableSessionId) {
         try {
           nativeHistoryBound =
-            (await driver.inheritNativeSession?.(
-              projectPath,
-              unavailableSessionId,
-              sessionId
-            )) ?? false
+            (await driver.inheritNativeSession?.(projectPath, unavailableSessionId, sessionId)) ??
+            false
         } catch (error) {
           Logger.dev('Native session inheritance onto replacement failed:', error)
         }
@@ -5607,7 +5620,10 @@ export class ChatEngine {
     const activeSessionOwner =
       this.sessionRegistry.get(activeSessionId)?.driverId ?? thread.sessionHarnessId
     const driverId =
-      activeBrainstorm?.driverId ?? activeSessionOwner ?? thread.settings?.harnessId ?? DEFAULT_HARNESS
+      activeBrainstorm?.driverId ??
+      activeSessionOwner ??
+      thread.settings?.harnessId ??
+      DEFAULT_HARNESS
     const resolved = activeBrainstorm ?? (await this.resolve(projectId, driverId, threadId))
     const { driver, projectPath } = resolved
     if (driver.capabilities?.steering !== true || !driver.steerPrompt) {
@@ -10850,9 +10866,7 @@ export class ChatEngine {
               includeConversationContext: false,
               presentation: workflowActionPresentation('Review Brainstorm', note),
               allowPrototypeSkip: true,
-              ...(options.prototypeRequest
-                ? { prototypeOverride: options.prototypeRequest }
-                : {}),
+              ...(options.prototypeRequest ? { prototypeOverride: options.prototypeRequest } : {}),
               onPrototypesSkipped: (reason: string) => {
                 prototypesSkipped = reason
               }
@@ -17139,40 +17153,77 @@ export class ChatEngine {
 
   /** Rebuild the working-trace parts from the thread's durable SSE log. Returns
    *  only the most recent logical turn's parts, so a reopened mid-turn thread
-   *  shows its own streamed work rather than stale parts from earlier turns. */
+   *  shows its own streamed work rather than stale parts from earlier turns.
+   *  Parsed events are cached per thread and the log is append-only, so a
+   *  reopen only parses bytes appended since the last load. */
   async loadTurnStreamParts(projectId: string, threadId: string): Promise<AgentPart[]> {
-    const raw = await this.storage.readRaw(this.turnStreamPath(projectId, threadId))
-    if (!raw) return []
-    const events: TurnStreamEvent[] = []
-    let latestTurnId = ''
-    for (const line of raw.split('\n')) {
-      const trimmed = line.trim()
-      if (!trimmed) continue
-      try {
-        const parsed = JSON.parse(trimmed) as TurnStreamEvent
-        if (parsed.kind === 'part.updated' || parsed.kind === 'part.delta') {
-          events.push(parsed)
-          if (parsed.turnId) latestTurnId = parsed.turnId
+    const streamPath = this.turnStreamPath(projectId, threadId)
+    const entry = this.turnStreamCache.get(streamPath) ?? {
+      consumedRaw: '',
+      events: [],
+      latestTurnId: '',
+      foldKey: null,
+      folded: null
+    }
+    this.turnStreamCache.delete(streamPath)
+    this.turnStreamCache.set(streamPath, entry)
+    while (this.turnStreamCache.size > ChatEngine.TURN_STREAM_CACHE_LIMIT) {
+      const oldest = this.turnStreamCache.keys().next().value
+      if (oldest === undefined || oldest === streamPath) break
+      this.turnStreamCache.delete(oldest)
+    }
+
+    const raw = await this.storage.readRaw(streamPath)
+    if (!raw) {
+      this.turnStreamCache.delete(streamPath)
+      return []
+    }
+    // The log is append-only, so a shrink or a diverging prefix means the file
+    // was rewritten underneath us — drop every cached event and re-parse cold.
+    if (raw.length < entry.consumedRaw.length || !raw.startsWith(entry.consumedRaw)) {
+      entry.consumedRaw = ''
+      entry.events = []
+      entry.latestTurnId = ''
+      entry.foldKey = null
+      entry.folded = null
+    }
+    if (raw.length !== entry.consumedRaw.length) {
+      // Consume only up to the last complete line; a trailing partial line is
+      // left unparsed until its newline lands.
+      const appended = raw.slice(entry.consumedRaw.length)
+      const lastNewline = appended.lastIndexOf('\n')
+      if (lastNewline !== -1) {
+        const consumable = appended.slice(0, lastNewline + 1)
+        for (const line of consumable.split('\n')) {
+          const trimmed = line.trim()
+          if (!trimmed) continue
+          try {
+            const parsed = JSON.parse(trimmed) as TurnStreamEvent
+            if (parsed.kind === 'part.updated' || parsed.kind === 'part.delta') {
+              entry.events.push(parsed)
+              if (parsed.turnId) entry.latestTurnId = parsed.turnId
+            }
+          } catch {
+            // A malformed line must not block rehydration of the rest of the stream.
+          }
         }
-      } catch {
-        // A malformed line must not block rehydration of the rest of the stream.
+        entry.consumedRaw = raw.slice(0, entry.consumedRaw.length + consumable.length)
       }
     }
-    // Fold the latest bound turn PLUS every unbound-turn event. Unbound events
-    // (empty turnId) are emitted while the session's active turn was not yet
-    // registered or after its checkpoint finalized — they are real working
-    // parts, and dropping them made traces vanish when the user stopped a run
-    // and sent a follow-up, or re-entered a thread mid-turn.
-    //
-    // The turn tag alone is not a safe scope: steered continuations keep the
-    // original turn's anchor, and segments of the log predate turn binding
-    // entirely (restored sessions, planning turns emit with an empty turnId).
-    // Folding those wholesale rehydrated earlier turns into the newest trace,
-    // so the fold is additionally cut at the current logical turn's start —
-    // the newest real user message in the mirror. Everything streamed before
-    // that prompt belongs to an earlier turn that the mirror already carries.
+
+    // Fold the latest bound turn PLUS every unbound-turn event. Re-folding is
+    // skipped entirely when neither the events nor the turn boundary changed.
     const turnStartTs = await this.currentTurnStartTs(projectId, threadId)
-    return foldTurnStreamEvents(events, latestTurnId || undefined, turnStartTs)
+    const foldKey = `${entry.events.length}:${entry.latestTurnId}:${turnStartTs ?? ''}`
+    if (entry.foldKey !== foldKey || !entry.folded) {
+      entry.folded = foldTurnStreamEvents(
+        entry.events,
+        entry.latestTurnId || undefined,
+        turnStartTs
+      )
+      entry.foldKey = foldKey
+    }
+    return entry.folded
   }
 
   /** Timestamp of the newest non-activity user message in the mirror — the
@@ -18351,7 +18402,8 @@ export class ChatEngine {
                 )
           this.pendingBrainstormTurns.delete(sessionId)
         } catch (error) {
-          auxiliaryFailure = error instanceof Error ? error.message : 'The Brainstorm revision failed.'
+          auxiliaryFailure =
+            error instanceof Error ? error.message : 'The Brainstorm revision failed.'
           this.pendingBrainstormTurns.delete(sessionId)
           Logger.error('Brainstorm update failed after a completed turn', {
             projectId: info.projectId,
