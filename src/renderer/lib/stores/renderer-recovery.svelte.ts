@@ -578,6 +578,14 @@ export class RendererRecoveryStore {
     this.persist()
   }
 
+  /** Removes one model from the chat-thread recently-used history (picker "x" button). */
+  removeRecentModel(modelKey: string): void {
+    const next = this.recentModels.filter((k) => k !== modelKey)
+    if (next.length === this.recentModels.length) return
+    this.recentModels = next
+    this.persist()
+  }
+
   toggleChatFavorite(modelKey: string): void {
     const idx = this.chatFavoriteModels.indexOf(modelKey)
     if (idx === -1) {
@@ -617,6 +625,14 @@ export class RendererRecoveryStore {
       modelKey,
       ...this.chatRecentModels.filter((k) => k !== modelKey)
     ].slice(0, 10)
+    this.persist()
+  }
+
+  /** Removes one model from the inbox-chat recently-used history (picker "x" button). */
+  removeChatRecentModel(modelKey: string): void {
+    const next = this.chatRecentModels.filter((k) => k !== modelKey)
+    if (next.length === this.chatRecentModels.length) return
+    this.chatRecentModels = next
     this.persist()
   }
 

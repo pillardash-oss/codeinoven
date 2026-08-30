@@ -69,6 +69,10 @@
      *  the previous level. */
     onSelectThinking?: (level: ThinkingLevel) => void
     onToggleFavorite?: (providerId: string, modelId: string, harnessId: string) => void
+    /** Removes a model from the caller's recently-used history; when provided,
+     *  recent rows show a small "x" next to the favorite star. No confirmation —
+     *  removing from history is trivially re-triggered by using the model. */
+    onRemoveRecent?: (modelKey: string) => void
     /** Reorders a favorite relative to another favorite; position in display order. */
     onReorderFavorite?: (
       draggedKey: string,
@@ -101,6 +105,7 @@
     onSelectMultiple,
     onSelectThinking,
     onToggleFavorite,
+    onRemoveRecent,
     onReorderFavorite
   }: Props = $props()
 
@@ -523,6 +528,9 @@
         key: string
         entry: ModelEntry
         favoriteKey?: string
+        /** Stored recently-used key of the row, when the row comes from the
+         *  "Recently used" section — enables the remove-from-history "x". */
+        recentKey?: string
         draggable: boolean
       }
 
@@ -576,7 +584,13 @@
       })
       if (!collapsedGroups.has('recent')) {
         for (const entry of recentModelsList) {
-          items.push({ kind: 'model', key: `rec-${modelEntryKey(entry)}`, entry, draggable: false })
+          items.push({
+            kind: 'model',
+            key: `rec-${modelEntryKey(entry)}`,
+            entry,
+            recentKey: modelEntryKey(entry),
+            draggable: false
+          })
         }
       }
       items.push({ kind: 'divider', key: 'div-recent' })
@@ -1282,16 +1296,16 @@
         ></div>
       </div>
     {:else}
-      {@render modelRow(item.entry, item.key)}
+      {@render modelRow(item.entry, item.key, item.recentKey)}
     {/if}
   {/if}
 {/snippet}
 
-{#snippet modelRow(entry: ModelEntry, rowKey: string)}
+{#snippet modelRow(entry: ModelEntry, rowKey: string, recentKey?: string)}
   {@const key = modelKey(entry.provider.harnessId, entry.provider.id, entry.model.id)}
   {@const peak = peakHoursBadgeFor(entry.model.id)}
   <button
-    class={`model-row-btn ml-4 flex w-[calc(100%-1rem)] flex-col rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-elevated focus:bg-elevated focus:outline-none ${isSelectedModel(entry) ? 'bg-elevated' : ''} ${keyboardNavActive ? 'pointer-events-none' : ''}`}
+    class={`model-row-btn group/row ml-4 flex w-[calc(100%-1rem)] flex-col rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-elevated focus:bg-elevated focus:outline-none ${isSelectedModel(entry) ? 'bg-elevated' : ''} ${keyboardNavActive ? 'pointer-events-none' : ''}`}
     title={`Use ${entry.model.name}`}
     data-model-id={entry.model.id}
     data-model-key={rowKey}
@@ -1403,6 +1417,28 @@
               size={11}
               class={favoriteModelsSet.has(key) ? 'fill-amber-400 text-amber-400' : ''}
             />
+          </span>
+        {/if}
+        {#if onRemoveRecent && recentKey !== undefined}
+          <span
+            role="button"
+            tabindex="0"
+            class="shrink-0 cursor-pointer rounded-sm text-dimmed opacity-0 transition-colors group-hover/row:opacity-100 focus-visible:opacity-100 hover:text-foreground"
+            title="Remove from recently used"
+            aria-label={`Remove ${entry.model.name} from recently used`}
+            onclick={(event: MouseEvent) => {
+              event.stopPropagation()
+              onRemoveRecent(recentKey)
+            }}
+            onkeydown={(event: KeyboardEvent) => {
+              if (event.key === 'Enter' || event.key === ' ') {
+                event.stopPropagation()
+                event.preventDefault()
+                onRemoveRecent(recentKey)
+              }
+            }}
+          >
+            <X size={11} />
           </span>
         {/if}
       </span>

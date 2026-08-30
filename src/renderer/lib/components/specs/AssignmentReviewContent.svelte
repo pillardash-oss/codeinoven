@@ -34,6 +34,8 @@
       selection: AssignmentModelSelection
     ) => void | Promise<void>
     onToggleFavorite?: (providerId: string, modelId: string, harnessId: string) => void
+    /** Removes one model from the recently-used history; shows the "x" on recent rows. */
+    onRemoveRecent?: (modelKey: string) => void
     onReorderFavorite?: (
       draggedKey: string,
       targetKey: string,
@@ -63,6 +65,7 @@
     onSeniorModelChange,
     onTaskModelChange,
     onToggleFavorite,
+    onRemoveRecent,
     onReorderFavorite,
     annotations = [],
     onOpenAnnotation,
@@ -349,6 +352,7 @@
               modelId={selectedPhaseModel.modelId}
               {favoriteModels}
               {recentModels}
+              {onRemoveRecent}
               side="bottom"
               variant="action"
               label="Phase model"
@@ -457,6 +461,7 @@
                     modelId={selectedTaskModel.modelId}
                     {favoriteModels}
                     {recentModels}
+                    {onRemoveRecent}
                     side="top"
                     variant="action"
                     label={task.model ? 'Task model' : 'Use phase model'}

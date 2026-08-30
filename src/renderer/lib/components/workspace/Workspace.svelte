@@ -3860,6 +3860,7 @@
                     onReorderFavorite={(draggedKey, targetKey, position) =>
                       rendererRecovery.reorderChatFavorite(draggedKey, targetKey, position)}
                     recentModels={rendererRecovery.chatRecentModels}
+                    onRemoveRecent={(key) => rendererRecovery.removeChatRecentModel(key)}
                     onModelUsed={(modelKey) => rendererRecovery.addChatRecentModel(modelKey)}
                     imageDescriptorDefault={config?.agentDefaults.imageDescriptor}
                     imageDescriptorAskAgain={config?.imageDescriptorAskAgain === true}

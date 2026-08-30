@@ -197,6 +197,8 @@
     favoriteModels?: string[]
     /** Called when the user toggles a model as favorite. */
     onToggleFavorite?: (providerId: string, modelId: string, harnessId: string) => void
+    /** Removes one model from the recently-used history; shows the "x" on recent rows. */
+    onRemoveRecent?: (modelKey: string) => void
     /** Called when the user reorders a favorite relative to another favorite. */
     onReorderFavorite?: (
       draggedKey: string,
@@ -287,6 +289,7 @@
     allowAttachments = false,
     favoriteModels = [],
     onToggleFavorite,
+    onRemoveRecent,
     onReorderFavorite,
     recentModels = [],
     onModelUsed,
@@ -1817,6 +1820,7 @@
             modelId={gateVisionSelection?.modelId ?? ''}
             {favoriteModels}
             {recentModels}
+            {onRemoveRecent}
             visionOnly
             side="top"
             variant="field"
@@ -2395,6 +2399,7 @@
       modelId={resolved.modelId}
       {favoriteModels}
       {recentModels}
+      {onRemoveRecent}
       bind:open={modelMenuOpen}
       bind:thinkingMenuOpen
       onSelect={selectModel}

@@ -206,6 +206,7 @@
                 modelId={selection?.modelId ?? ''}
                 favoriteModels={rendererRecovery.favoriteModels}
                 recentModels={rendererRecovery.recentModels}
+                onRemoveRecent={(key) => rendererRecovery.removeRecentModel(key)}
                 side="bottom"
                 variant="field"
                 label={selection ? undefined : 'Choose model'}
@@ -288,6 +289,7 @@
             modelId={defaults.imageDescriptor?.modelId ?? ''}
             favoriteModels={rendererRecovery.favoriteModels}
             recentModels={rendererRecovery.recentModels}
+            onRemoveRecent={(key) => rendererRecovery.removeRecentModel(key)}
             visionOnly
             side="bottom"
             variant="field"

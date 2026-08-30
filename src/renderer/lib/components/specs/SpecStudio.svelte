@@ -108,6 +108,8 @@
     onRunImplementationAudit?: () => CallbackResult
     onAuditModelChange: (settings: ThreadSettings) => void
     onToggleFavorite?: (providerId: string, modelId: string, harnessId: string) => void
+    /** Removes one model from the recently-used history; shows the "x" on recent rows. */
+    onRemoveRecent?: (modelKey: string) => void
     onReorderFavorite?: (
       draggedKey: string,
       targetKey: string,
@@ -219,6 +221,7 @@
     onRunImplementationAudit,
     onAuditModelChange,
     onToggleFavorite,
+    onRemoveRecent,
     onReorderFavorite,
     onMarkImplementationComplete,
     onSave,
@@ -1119,6 +1122,7 @@
               modelId={auditSettings.modelId}
               {favoriteModels}
               {recentModels}
+              {onRemoveRecent}
               side="top"
               variant="action"
               onSelect={chooseAuditModel}

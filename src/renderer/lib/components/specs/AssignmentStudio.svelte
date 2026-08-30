@@ -83,6 +83,8 @@
       selection: AssignmentModelSelection
     ) => void | Promise<void>
     onToggleFavorite?: (providerId: string, modelId: string, harnessId: string) => void
+    /** Removes one model from the recently-used history; shows the "x" on recent rows. */
+    onRemoveRecent?: (modelKey: string) => void
     onReorderFavorite?: (
       draggedKey: string,
       targetKey: string,
@@ -140,6 +142,7 @@
     onSeniorModelChange,
     onTaskModelChange,
     onToggleFavorite,
+    onRemoveRecent,
     onReorderFavorite,
     onAddAnnotation,
     onUpdateAnnotation,
@@ -839,6 +842,7 @@
           {seniorModel}
           {favoriteModels}
           {recentModels}
+          {onRemoveRecent}
           {annotations}
           onOpenAnnotation={(annotation) => void openAnnotation(annotation)}
           onAnnotateSection={openSectionAnnotation}

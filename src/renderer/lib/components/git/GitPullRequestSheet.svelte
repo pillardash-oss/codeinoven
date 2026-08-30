@@ -904,6 +904,7 @@
                         label={prComposeAgentSettings.selection ? undefined : 'Choose a model'}
                         favoriteModels={rendererRecovery.favoriteModels}
                         recentModels={rendererRecovery.recentModels}
+                        onRemoveRecent={(key) => rendererRecovery.removeRecentModel(key)}
                         side="top"
                         variant="action"
                         onSelect={chooseComposeModel}

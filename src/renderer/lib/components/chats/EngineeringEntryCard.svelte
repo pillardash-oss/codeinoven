@@ -16,6 +16,8 @@
     recentModels?: string[]
     onModelChange?: (settings: ThreadSettings) => void
     onToggleFavorite?: (providerId: string, modelId: string, harnessId: string) => void
+    /** Removes one model from the recently-used history; shows the "x" on recent rows. */
+    onRemoveRecent?: (modelKey: string) => void
     onReorderFavorite?: (
       draggedKey: string,
       targetKey: string,
@@ -34,6 +36,7 @@
     recentModels = [],
     onModelChange,
     onToggleFavorite,
+    onRemoveRecent,
     onReorderFavorite
   }: Props = $props()
 
@@ -87,6 +90,7 @@
       {projectId}
       {favoriteModels}
       {recentModels}
+      {onRemoveRecent}
       {onModelChange}
       {onToggleFavorite}
       {onReorderFavorite}

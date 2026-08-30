@@ -9008,6 +9008,7 @@
           seniorModel={seniorModelForThread()}
           favoriteModels={rendererRecovery.favoriteModels}
           recentModels={rendererRecovery.recentModels}
+          onRemoveRecent={(key) => rendererRecovery.removeRecentModel(key)}
           busy={assignmentBusy || busy}
           error={assignmentError}
           readOnly={studioAssignment.status !== 'draft' ||
@@ -9058,6 +9059,7 @@
           {auditSettings}
           favoriteModels={rendererRecovery.favoriteModels}
           recentModels={rendererRecovery.recentModels}
+          onRemoveRecent={(key) => rendererRecovery.removeRecentModel(key)}
           history={specStudioHistories.forDocument(`${spec.id}:${spec.version}`)}
           validation={specValidation}
           versions={specVersions}
@@ -9539,6 +9541,7 @@
                             projectId={thread.projectId}
                             favoriteModels={rendererRecovery.favoriteModels}
                             recentModels={rendererRecovery.recentModels}
+                            onRemoveRecent={(key) => rendererRecovery.removeRecentModel(key)}
                             onRetry={retryAssignmentAuditFromAuditor}
                             onModelChange={changeAuditModel}
                             onToggleFavorite={(providerId, modelId, harnessId) =>
@@ -9824,6 +9827,7 @@
                 projectId={thread.projectId}
                 favoriteModels={rendererRecovery.favoriteModels}
                 recentModels={rendererRecovery.recentModels}
+                onRemoveRecent={(key) => rendererRecovery.removeRecentModel(key)}
                 sourceLabel={item.task.workerName ?? item.worker.title}
                 sourceDetail={item.task.title}
                 retryLabel="Retry worker"
@@ -9865,6 +9869,10 @@
                 recentModels={chatMode
                   ? rendererRecovery.chatRecentModels
                   : rendererRecovery.recentModels}
+                onRemoveRecent={(key) =>
+                  chatMode
+                    ? rendererRecovery.removeChatRecentModel(key)
+                    : rendererRecovery.removeRecentModel(key)}
                 onModelChange={changeThreadModel}
                 onToggleFavorite={(providerId, modelId, harnessId) =>
                   chatMode
@@ -10113,6 +10121,7 @@
                   projectId={thread.projectId}
                   favoriteModels={rendererRecovery.favoriteModels}
                   recentModels={rendererRecovery.recentModels}
+                  onRemoveRecent={(key) => rendererRecovery.removeRecentModel(key)}
                   onRetry={async (requestId, selection, remember) => {
                     if (remember) {
                       agentDefaults = { ...agentDefaults, imageDescriptor: selection }
@@ -10142,6 +10151,7 @@
                 projectId={thread.projectId}
                 favoriteModels={rendererRecovery.favoriteModels}
                 recentModels={rendererRecovery.recentModels}
+                onRemoveRecent={(key) => rendererRecovery.removeRecentModel(key)}
                 onRetry={() => void retryEngineeringLifecycle()}
                 onCancel={() => void cancelEngineeringFailure()}
                 onModelChange={changeThreadModel}
@@ -10164,6 +10174,7 @@
                 projectId={thread.projectId}
                 favoriteModels={rendererRecovery.favoriteModels}
                 recentModels={rendererRecovery.recentModels}
+                onRemoveRecent={(key) => rendererRecovery.removeRecentModel(key)}
                 busy={auditBusy || busy}
                 onRetry={retryAssignmentAuditFromAuditor}
                 onModelChange={changeAuditModel}
@@ -10184,6 +10195,7 @@
                 projectId={thread.projectId}
                 favoriteModels={rendererRecovery.favoriteModels}
                 recentModels={rendererRecovery.recentModels}
+                onRemoveRecent={(key) => rendererRecovery.removeRecentModel(key)}
                 onModelChange={changeThreadModel}
                 onToggleFavorite={(providerId, modelId, harnessId) =>
                   rendererRecovery.toggleFavorite(modelKey(harnessId, providerId, modelId))}
@@ -10199,6 +10211,7 @@
                 {settings}
                 favoriteModels={rendererRecovery.favoriteModels}
                 recentModels={rendererRecovery.recentModels}
+                onRemoveRecent={(key) => rendererRecovery.removeRecentModel(key)}
                 onStartBrainstorm={() => chooseBrainstormEntry('brainstorm')}
                 onJumpToSpec={() => chooseBrainstormEntry('spec')}
                 onModelChange={changeSpecModel}
@@ -10243,6 +10256,7 @@
                   projectId={thread.projectId}
                   favoriteModels={rendererRecovery.favoriteModels}
                   recentModels={rendererRecovery.recentModels}
+                  onRemoveRecent={(key) => rendererRecovery.removeRecentModel(key)}
                   onModelChange={changeThreadModel}
                   onToggleFavorite={(providerId, modelId, harnessId) =>
                     rendererRecovery.toggleFavorite(modelKey(harnessId, providerId, modelId))}
@@ -10259,6 +10273,7 @@
                 projectId={thread.projectId}
                 favoriteModels={rendererRecovery.favoriteModels}
                 recentModels={rendererRecovery.recentModels}
+                onRemoveRecent={(key) => rendererRecovery.removeRecentModel(key)}
                 busy={auditBusy}
                 onRetry={() => void openAssignmentAuditWork()}
                 onModelChange={changeAuditModel}
@@ -10276,6 +10291,7 @@
                 projectId={thread.projectId}
                 favoriteModels={rendererRecovery.favoriteModels}
                 recentModels={rendererRecovery.recentModels}
+                onRemoveRecent={(key) => rendererRecovery.removeRecentModel(key)}
                 onRetry={generateDurableImplementationAudit}
                 onModelChange={changeAuditModel}
                 onToggleFavorite={(providerId, modelId, harnessId) =>
@@ -10298,6 +10314,7 @@
                 projectId={thread.projectId}
                 favoriteModels={rendererRecovery.favoriteModels}
                 recentModels={rendererRecovery.recentModels}
+                onRemoveRecent={(key) => rendererRecovery.removeRecentModel(key)}
                 busy={auditBusy}
                 onRetry={generateDurableAssignmentAudit}
                 onModelChange={changeAuditModel}
@@ -10316,6 +10333,7 @@
                 projectId={thread.projectId}
                 favoriteModels={rendererRecovery.favoriteModels}
                 recentModels={rendererRecovery.recentModels}
+                onRemoveRecent={(key) => rendererRecovery.removeRecentModel(key)}
                 busy={auditBusy}
                 onCancel={completeAudit}
                 onAudit={generateAudit}
@@ -10333,6 +10351,7 @@
                 settings={auditSettings}
                 favoriteModels={rendererRecovery.favoriteModels}
                 recentModels={rendererRecovery.recentModels}
+                onRemoveRecent={(key) => rendererRecovery.removeRecentModel(key)}
                 busy={auditBusy}
                 onViewReport={openAuditStudio}
                 onComplete={completeAudit}
@@ -10354,6 +10373,7 @@
                 projectId={thread.projectId}
                 favoriteModels={rendererRecovery.favoriteModels}
                 recentModels={rendererRecovery.recentModels}
+                onRemoveRecent={(key) => rendererRecovery.removeRecentModel(key)}
                 onModelChange={changeThreadModel}
                 onToggleFavorite={(providerId, modelId, harnessId) =>
                   rendererRecovery.toggleFavorite(modelKey(harnessId, providerId, modelId))}
@@ -10378,6 +10398,7 @@
                 projectId={thread.projectId}
                 favoriteModels={rendererRecovery.favoriteModels}
                 recentModels={rendererRecovery.recentModels}
+                onRemoveRecent={(key) => rendererRecovery.removeRecentModel(key)}
                 onModelChange={changeThreadModel}
                 onToggleFavorite={(providerId, modelId, harnessId) =>
                   rendererRecovery.toggleFavorite(modelKey(harnessId, providerId, modelId))}
@@ -10395,6 +10416,7 @@
                   seniorModel={seniorModelForThread()}
                   favoriteModels={rendererRecovery.favoriteModels}
                   recentModels={rendererRecovery.recentModels}
+                  onRemoveRecent={(key) => rendererRecovery.removeRecentModel(key)}
                   busy={assignmentBusy}
                   error={assignmentError}
                   onSave={(content) => void saveAssignment(content)}
@@ -10415,6 +10437,7 @@
                 {settings}
                 favoriteModels={rendererRecovery.favoriteModels}
                 recentModels={rendererRecovery.recentModels}
+                onRemoveRecent={(key) => rendererRecovery.removeRecentModel(key)}
                 busy={busy || specBusy}
                 assignmentMode={settings.assignmentMode === true}
                 assignmentAvailable={assignment !== null}
@@ -10589,6 +10612,10 @@
                   recentModels={chatMode
                     ? rendererRecovery.chatRecentModels
                     : rendererRecovery.recentModels}
+                  onRemoveRecent={(key) =>
+                    chatMode
+                      ? rendererRecovery.removeChatRecentModel(key)
+                      : rendererRecovery.removeRecentModel(key)}
                   onModelUsed={(modelKey) =>
                     chatMode
                       ? rendererRecovery.addChatRecentModel(modelKey)
@@ -10650,6 +10677,7 @@
       projectId={thread.projectId}
       favoriteModels={rendererRecovery.favoriteModels}
       recentModels={rendererRecovery.recentModels}
+      onRemoveRecent={(key) => rendererRecovery.removeRecentModel(key)}
       coordinatorWorking={busy || delegatedWorkBusy}
       onOpenAudit={() => void generateAudit(auditSettings)}
       onViewReport={openAuditStudio}
@@ -10679,6 +10707,7 @@
       projectId={thread.projectId}
       favoriteModels={rendererRecovery.favoriteModels}
       recentModels={rendererRecovery.recentModels}
+      onRemoveRecent={(key) => rendererRecovery.removeRecentModel(key)}
       coordinatorWorking={auditBusy}
       onOpenAudit={() => void generateAudit(auditSettings)}
       onViewReport={openAuditStudio}

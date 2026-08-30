@@ -347,6 +347,7 @@
         modelId={draftModelId}
         favoriteModels={rendererRecovery.favoriteModels}
         recentModels={rendererRecovery.recentModels}
+        onRemoveRecent={(key) => rendererRecovery.removeRecentModel(key)}
         side="bottom"
         variant="field"
         label={draftModelId ? undefined : 'Choose model'}
