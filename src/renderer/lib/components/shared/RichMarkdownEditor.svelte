@@ -918,6 +918,15 @@
     // so bookmark it first and restore it onto the freshly rendered content.
     const bookmark = captureVisibleSelection()
     replaceEditorContent(markdown)
+    // A paste whose tail renders as a fenced code block must never park the caret
+    // inside or against the non-editable wrapper — typing, the slash menu and the
+    // input rules all go dead there. Guarantee a trailing editable paragraph.
+    if (editor.lastElementChild?.matches('[data-editor-codeblock]')) {
+      const p = document.createElement('p')
+      p.innerHTML = '<br>'
+      // eslint-disable-next-line svelte/no-dom-manipulating
+      editor.appendChild(p)
+    }
     if (pasteEndsAtEditorEnd) placeCaretAtEditorEnd()
     else if (bookmark) restoreSelection(bookmark)
     else placeCaretAtEditorEnd()
