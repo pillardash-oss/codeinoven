@@ -11761,7 +11761,10 @@ export class ChatEngine {
         summary: content.summary,
         sections: content.sections
       }
-      if (prototypeBatches.length > 0 && brainstormWriteRoute && featureSlug !== undefined) {
+      // Reconciliation runs on every write-capable brainstorm turn — not just
+      // generation turns — so prototypes the model created ad hoc (or a
+      // previous turn failed to register) still land in the document.
+      if (brainstormWriteRoute && featureSlug !== undefined) {
         const declared = new Map(
           (content.prototypes ?? []).map((prototype) => [prototype.id, prototype])
         )
@@ -11830,6 +11833,9 @@ export class ChatEngine {
           const paths = resolvePrototypeArtifactPaths(projectRoot, featureSlug, entry.name)
           await this.prototypePreviewRegistrar?.(paths.previewSlug, paths.canonicalRoot)
           prototypes.push(artifact)
+        }
+        if (prototypes.length > 0) {
+          completed = { ...completed, prototypes }
         }
       } else if (prototypeBatches.length > 0) {
         if (!skipPrototypeGeneration) {
