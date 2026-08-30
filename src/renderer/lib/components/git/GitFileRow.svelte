@@ -53,13 +53,12 @@
   }: Props = $props()
 
   const hasActions = $derived(
-    !readonly &&
-      (onStash !== undefined ||
-        onOpenInEditor !== undefined ||
-        onIgnore !== undefined ||
-        onDiscard !== undefined ||
-        onRestore !== undefined ||
-        onResolveConflict !== undefined)
+    onStash !== undefined ||
+      onOpenInEditor !== undefined ||
+      onIgnore !== undefined ||
+      onDiscard !== undefined ||
+      onResolveConflict !== undefined ||
+      onRestore !== undefined
   )
 
   const letter = $derived(
@@ -246,18 +245,20 @@
               </ContextMenu.Item>
             {/if}
           {:else}
-            <ContextMenu.Item
-              class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[11px] text-foreground outline-none data-highlighted:bg-elevated"
-              onSelect={() => onToggleStage()}
-            >
-              {#if change.staged}
-                <span class="inline-block w-3 text-center text-[10px] text-danger">−</span>
-                Unstage file
-              {:else}
-                <Check size={12} class="text-success" />
-                Stage file
-              {/if}
-            </ContextMenu.Item>
+            {#if !readonly}
+              <ContextMenu.Item
+                class="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[11px] text-foreground outline-none data-highlighted:bg-elevated"
+                onSelect={() => onToggleStage()}
+              >
+                {#if change.staged}
+                  <span class="inline-block w-3 text-center text-[10px] text-danger">−</span>
+                  Unstage file
+                {:else}
+                  <Check size={12} class="text-success" />
+                  Stage file
+                {/if}
+              </ContextMenu.Item>
+            {/if}
             {#if onStash}
               <ContextMenu.Separator class="my-1 h-px bg-border" />
               <ContextMenu.Item
