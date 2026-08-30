@@ -645,7 +645,6 @@ export class Database {
       connection.exec(DATABASE_SCHEMA_SQL)
       this.migrateEngineeringLifecycleColumns(connection)
       this.migrateUsageEventColumns(connection)
-      this.backfillUsageEventsFromAgentMessages(connection)
       this.migrateThreadSettingsLegacyEngineeringFlag(connection)
     })()
   }
@@ -681,50 +680,6 @@ export class Database {
    * idempotent — rows already recorded by the live recorder are skipped, so
    * only lost turns (mirrored sessions, recorder outages) are inserted.
    */
-  private backfillUsageEventsFromAgentMessages(connection: DatabaseType): void {
-    connection.exec(`
-      INSERT OR IGNORE INTO usage_events(
-        id, thread_id, parent_turn_id, feature_call_id, attempt, feature,
-        harness_id, provider_id, model_id, thinking_level,
-        raw_provider_usage_json, tokens_total, raw_total, total_semantics,
-        cost_usd, cost_status, pricing_provenance_json, success, duration_ms, created_at
-      )
-      SELECT
-        'backfill:' || m.id,
-        m.thread_id,
-        m.id,
-        m.id,
-        1,
-        'main',
-        m.harness_id,
-        m.provider_id,
-        m.model_id,
-        m.thinking_level,
-        '{}',
-        m.tokens_total,
-        m.tokens_total,
-        'unavailable',
-        m.cost,
-        CASE
-          WHEN m.cost IS NOT NULL THEN 'known'
-          ELSE 'unavailable'
-        END,
-        CASE
-          WHEN m.cost IS NOT NULL THEN '{"source":"backfill","currency":"USD"}'
-          ELSE NULL
-        END,
-        CASE
-          WHEN m.error IS NULL THEN 1
-          ELSE 0
-        END,
-        CAST((COALESCE(m.completed_at, m.created_at) - m.created_at) AS INTEGER),
-        m.created_at
-      FROM agent_messages m
-      WHERE m.role = 'assistant'
-        AND m.visibility = 'conversation'
-    `)
-  }
-
   migrateThreadSettingsLegacyEngineeringFlag(connection?: DatabaseType): void {
     const target = connection ?? this.requireDb()
     const rows = target

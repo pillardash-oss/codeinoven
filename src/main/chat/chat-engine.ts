@@ -18703,7 +18703,7 @@ export class ChatEngine {
           : 'main'
     const normalizedUsage = message.normalizedUsage
     tokenUsageAttribution.recordTurnTotals({
-      key: parentTurnId,
+      key: parentTurnId ?? message.id,
       agent: null,
       driverId: message.harnessId ?? thread?.settings?.harnessId ?? null,
       harnessVersion: currentHarnessVersion(),
