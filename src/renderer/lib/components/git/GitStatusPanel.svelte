@@ -434,7 +434,7 @@
     if (!project) return
     const thread = await invoke('thread:create', {
       projectId,
-      providerId: 'opencode',
+      providerId: 'pi',
       title,
       workingDirectory: project.path,
       settings: { ...threadSettings.lastUsed }
@@ -547,7 +547,7 @@
 
     const thread = await invoke('thread:create', {
       projectId,
-      providerId: 'opencode',
+      providerId: 'pi',
       title: `Review PR #${pr.number}`,
       workingDirectory: project.path,
       settings: { ...threadSettings.lastUsed }
@@ -628,7 +628,7 @@
 
     const thread = await invoke('thread:create', {
       projectId,
-      providerId: 'opencode',
+      providerId: 'pi',
       title: `Resolve conflicts in PR #${pr.number}`,
       workingDirectory: project.path,
       settings: { ...threadSettings.lastUsed }

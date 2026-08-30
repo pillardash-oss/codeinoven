@@ -222,7 +222,7 @@ export class TemporaryChatController implements ConversationController {
       threadMessages.setRunIssue(this.projectId, this.conversationId, {
         kind: 'unknown',
         message: error instanceof Error ? error.message : 'The request could not be stopped.',
-        harnessId: this.#tab.settings.harnessId ?? 'opencode',
+        harnessId: this.#tab.settings.harnessId ?? 'pi',
         retryable: false
       })
     }

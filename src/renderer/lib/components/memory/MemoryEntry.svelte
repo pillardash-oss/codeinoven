@@ -244,7 +244,7 @@
           <ModelPicker
             providers={providerCatalog.allCached()}
             {projectId}
-            harnessId={selectedModel?.harnessId ?? 'opencode'}
+            harnessId={selectedModel?.harnessId ?? 'pi'}
             providerId={selectedModel?.providerId ?? ''}
             modelId={selectedModel?.modelId ?? ''}
             variant="field"

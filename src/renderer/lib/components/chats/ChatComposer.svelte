@@ -250,7 +250,7 @@
     onActionSelect,
     onSlashCommand,
     providers = [],
-    harnessId = 'opencode',
+    harnessId = 'pi',
     projectContext,
     projectId = null,
     threadId = '',

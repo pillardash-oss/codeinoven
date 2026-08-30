@@ -316,7 +316,7 @@
         category: 'navigation',
         source: applicationSource,
         icon: GraduationCap,
-        keywords: ['onboarding', 'tour', 'help', 'setup', 'opencode']
+        keywords: ['onboarding', 'tour', 'help', 'setup', 'pi']
       }
     ]
 

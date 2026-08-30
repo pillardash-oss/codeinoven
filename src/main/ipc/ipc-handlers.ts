@@ -2585,7 +2585,7 @@ export function registerIpcHandlers(
                 : thread?.settings?.harnessId === 'muse'
                   ? 'Muse Code'
                   : 'OpenCode'
-    const harnessId = thread?.settings?.harnessId ?? 'opencode'
+    const harnessId = thread?.settings?.harnessId ?? 'pi'
     const driverInfo = {
       id: harnessId,
       name: driverName

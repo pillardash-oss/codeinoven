@@ -87,7 +87,7 @@
    *  user narrowed the list, otherwise the first base-URL harness. */
   let defaultCreateHarnessId = $derived.by(() => {
     if (selectedHarnesses.size > 0) return [...selectedHarnesses][0]
-    return baseUrlHarnesses[0]?.id ?? 'opencode'
+    return baseUrlHarnesses[0]?.id ?? 'pi'
   })
 
   function toggleHarnessFilter(id: string): void {

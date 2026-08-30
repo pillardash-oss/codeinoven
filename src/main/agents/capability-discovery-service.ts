@@ -99,12 +99,12 @@ const HARNESS_SPECS: Record<string, HarnessSpec> = {
 }
 
 const DEFAULT_SPEC: HarnessSpec = {
-  id: 'opencode',
-  globalConfigPaths: ['.config/opencode/opencode.json'],
-  projectConfigPaths: ['.opencode/opencode.json', 'opencode.json'],
-  globalSkillDirs: ['.config/opencode/skills'],
-  projectSkillDirs: ['.opencode/skills'],
-  mcpFormat: 'opencode'
+  id: 'pi',
+  globalConfigPaths: [],
+  projectConfigPaths: [],
+  globalSkillDirs: [],
+  projectSkillDirs: ['.pi/skills'],
+  mcpFormat: 'mcpServers'
 }
 
 interface DiscoveryResult {

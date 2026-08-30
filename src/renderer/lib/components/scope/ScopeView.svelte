@@ -244,7 +244,7 @@
     try {
       const created = await invoke('thread:create', {
         projectId: activeProject.id,
-        providerId: 'opencode',
+        providerId: 'pi',
         title: DEFAULT_THREAD_TITLE,
         workingDirectory: activeProject.path,
         settings: inheritedSettings,

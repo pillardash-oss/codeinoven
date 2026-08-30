@@ -341,7 +341,7 @@
       <ModelPicker
         {providers}
         projectId={rendererRecovery.selectedProjectId}
-        harnessId={draftHarnessId || providers[0]?.harnessId || 'opencode'}
+        harnessId={draftHarnessId || providers[0]?.harnessId || 'pi'}
         providerId={draftProviderId}
         modelId={draftModelId}
         favoriteModels={rendererRecovery.favoriteModels}

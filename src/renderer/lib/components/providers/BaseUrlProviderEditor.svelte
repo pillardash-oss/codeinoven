@@ -305,7 +305,7 @@
       harnessIds: [
         availableHarnesses.some((harness) => harness.id === defaultHarnessId)
           ? defaultHarnessId
-          : (availableHarnesses[0]?.id ?? 'opencode')
+          : (availableHarnesses[0]?.id ?? 'pi')
       ],
       npm: NPM_OPTIONS[0].value,
       name: '',

@@ -2525,7 +2525,7 @@
     const optimisticThread = {
       id: optimisticId,
       projectId: project.id,
-      providerId: 'opencode' as const,
+      providerId: 'pi' as const,
       title: DEFAULT_THREAD_TITLE,
       titleSource: 'default' as const,
       status: 'created' as const,
@@ -2563,7 +2563,7 @@
     void invoke('thread:create', {
       id: optimisticId,
       projectId: project.id,
-      providerId: 'opencode',
+      providerId: 'pi',
       title: DEFAULT_THREAD_TITLE,
       workingDirectory: project.path,
       settings: inheritedSettings,
@@ -2612,7 +2612,7 @@
       const inbox = await invoke('project:ensureInbox')
       const thread = await invoke('thread:create', {
         projectId: inbox.id,
-        providerId: 'opencode',
+        providerId: 'pi',
         title: DEFAULT_THREAD_TITLE,
         workingDirectory: '',
         settings: chatEffectiveSettings()

@@ -200,7 +200,7 @@
               <ModelPicker
                 {providers}
                 projectId={rendererRecovery.selectedProjectId}
-                harnessId={selection?.harnessId ?? providers[0]?.harnessId ?? 'opencode'}
+                harnessId={selection?.harnessId ?? providers[0]?.harnessId ?? 'pi'}
                 providerId={selection?.providerId ?? ''}
                 modelId={selection?.modelId ?? ''}
                 favoriteModels={rendererRecovery.favoriteModels}
@@ -282,7 +282,7 @@
           <ModelPicker
             {providers}
             projectId={rendererRecovery.selectedProjectId}
-            harnessId={defaults.imageDescriptor?.harnessId ?? providers[0]?.harnessId ?? 'opencode'}
+            harnessId={defaults.imageDescriptor?.harnessId ?? providers[0]?.harnessId ?? 'pi'}
             providerId={defaults.imageDescriptor?.providerId ?? ''}
             modelId={defaults.imageDescriptor?.modelId ?? ''}
             favoriteModels={rendererRecovery.favoriteModels}
