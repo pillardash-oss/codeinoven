@@ -51,6 +51,7 @@ import { piMcpExtension } from './pi-mcp-extension'
 import { piCustomProvidersExtension } from './pi-providers-extension'
 import {
   CIO_PERMISSION_MARKER,
+  CIO_QUESTION_MARKER,
   CIO_SUBAGENT_MARKER,
   piCoreToolsExtension
 } from './pi-core-tools-extension'
@@ -1992,12 +1993,17 @@ export class PiDriver extends PersistentCliDriver {
       })
       return
     }
-    const prompt =
-      stringValue(record['title']) ?? stringValue(record['message']) ?? 'Pi needs your input.'
+    // The core-tools question tool marks its dialogs so the scope header
+    // stays separate from the question text instead of being duplicated
+    // into both card fields.
+    const markerQuestion = this.questionMarkerPayload(record)
     const questions = normalizeAgentQuestions({
       questions: [
-        {
-          prompt,
+        markerQuestion ?? {
+          prompt:
+            stringValue(record['title']) ??
+            stringValue(record['message']) ??
+            'Pi needs your input.',
           header: stringValue(record['title']),
           description: stringValue(record['message']),
           options: Array.isArray(record['options']) ? record['options'] : undefined,
@@ -2007,6 +2013,34 @@ export class PiDriver extends PersistentCliDriver {
     })
     this.pendingUiRequests.set(requestId, { sessionId, method, client, request: record })
     this.emit({ type: 'question.asked', sessionId, requestId, questions })
+  }
+
+  /** Parse the core-tools question tool's marker payload from a select/input
+   *  dialog title, or null when the dialog is not a marked question. */
+  private questionMarkerPayload(
+    record: Record<string, unknown>
+  ): { prompt: string; header?: string; description?: string; custom?: boolean } | null {
+    const title = stringValue(record['title'])
+    if (!title?.startsWith(CIO_QUESTION_MARKER)) return null
+    try {
+      const payload = JSON.parse(title.slice(CIO_QUESTION_MARKER.length)) as {
+        prompt?: unknown
+        header?: unknown
+        description?: unknown
+      }
+      const prompt = typeof payload.prompt === 'string' ? payload.prompt : ''
+      if (!prompt) return null
+      const header = typeof payload.header === 'string' ? payload.header : undefined
+      const description = typeof payload.description === 'string' ? payload.description : undefined
+      return {
+        prompt,
+        ...(header ? { header } : {}),
+        ...(description && description !== prompt ? { description } : {}),
+        custom: stringValue(record['method']) !== 'confirm'
+      }
+    } catch {
+      return null
+    }
   }
 
   /** Parse the core-tools permission gate's marker payload from a confirm

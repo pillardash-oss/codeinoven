@@ -25,8 +25,10 @@
  * in full-access mode) keeps working unchanged.
  *
  * The marker constants are shared with the driver: `CIO_PERMISSION_MARKER`
- * for permission dialogs and `CIO_SUBAGENT_MARKER` for sub-agent progress
- * streamed through tool-execution updates.
+ * for permission dialogs, `CIO_SUBAGENT_MARKER` for sub-agent progress
+ * streamed through tool-execution updates, and `CIO_QUESTION_MARKER` for
+ * question dialogs carrying the scope header separately from the question
+ * text (pi's dialog signature has a single title string).
  *
  * Sub-agents: `cio_spawn_agent` opens a nested in-process pi session (a
  * persistent worker "thread" controlled by the primary agent). Sub-agents
@@ -40,6 +42,7 @@
 
 export const CIO_PERMISSION_MARKER = 'cio-permission:'
 export const CIO_SUBAGENT_MARKER = 'cio-subagent:'
+export const CIO_QUESTION_MARKER = 'cio-question:'
 
 /** Tool names registered by the core-tools extension (exported for tests). */
 export const PI_CORE_TOOLS_TOOL_NAMES = [
@@ -65,6 +68,7 @@ import {
 import { Type } from 'typebox'
 
 const CIO_PERMISSION_MARKER = 'cio-permission:'
+const CIO_QUESTION_MARKER = 'cio-question:'
 
 interface GateHit {
   permission: string
@@ -215,6 +219,19 @@ function textResult(value) {
   }
 }
 
+/**
+ * Dialog title for one question: the question text, prefixed with a
+ * structured payload when a scope header or description is present so the
+ * driver can render them as separate card fields.
+ */
+function questionDialogTitle(question) {
+  const meta = {}
+  if (question.header) meta.header = question.header
+  if (question.description) meta.description = question.description
+  if (Object.keys(meta).length === 0) return question.question
+  return CIO_QUESTION_MARKER + JSON.stringify({ ...meta, prompt: question.question })
+}
+
 export default function codeInOvenCoreToolsExtension(pi) {
   pi.registerTool({
     name: 'cio_ask_user',
@@ -245,17 +262,17 @@ export default function codeInOvenCoreToolsExtension(pi) {
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       const answers = []
       for (const question of params.questions) {
-        const prompt = question.header
-          ? question.header + ': ' + question.question
-          : question.question
+        // The dialog title carries the structured question (scope header and
+        // question text stay separate); the driver splits it for the card.
+        const title = questionDialogTitle(question)
         let value
         if (Array.isArray(question.options) && question.options.length > 0 && !question.multiple) {
-          value = await ctx.ui.select(prompt, question.options)
+          value = await ctx.ui.select(title, question.options)
         } else {
           const placeholder = Array.isArray(question.options) && question.options.length > 0
             ? 'Choose one or more, separated by commas: ' + question.options.join(', ')
             : 'Type your answer'
-          value = await ctx.ui.input(prompt, placeholder)
+          value = await ctx.ui.input(title, placeholder)
         }
         if (value === undefined) {
           answers.push({ question: question.question, dismissed: true, answer: [] })

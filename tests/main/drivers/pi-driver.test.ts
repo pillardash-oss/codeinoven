@@ -32,6 +32,8 @@ const rpcMock = vi.hoisted(() => {
     setAutoCompaction: ReturnType<typeof vi.fn>
     dispose: ReturnType<typeof vi.fn>
     onEvent: (record: Record<string, unknown>) => void
+    onUiRequest: (record: Record<string, unknown>) => void
+    emitUi: (record: Record<string, unknown>) => void
     emitStatus: (record: Record<string, unknown>) => void
     emit: (record: Record<string, unknown>) => void
   }> = []
@@ -54,6 +56,7 @@ const rpcMock = vi.hoisted(() => {
       dispose: ReturnType<typeof vi.fn>
       constructor(options: {
         onEvent?: (record: Record<string, unknown>) => void
+        onUiRequest?: (record: Record<string, unknown>) => void
         onExtensionStatus?: (record: Record<string, unknown>) => void
       }) {
         this.newSession = vi.fn(async () => undefined)
@@ -84,13 +87,18 @@ const rpcMock = vi.hoisted(() => {
         this.setAutoCompaction = vi.fn(async () => undefined)
         this.dispose = vi.fn()
         this.onEvent = options.onEvent ?? (() => undefined)
+        this.onUiRequest = options.onUiRequest ?? (() => undefined)
         this.onExtensionStatus = options.onExtensionStatus ?? (() => undefined)
         clients.push(this)
       }
       onEvent: (record: Record<string, unknown>) => void
+      onUiRequest: (record: Record<string, unknown>) => void
       onExtensionStatus: (record: Record<string, unknown>) => void
       emit(record: Record<string, unknown>): void {
         this.onEvent(record)
+      }
+      emitUi(record: Record<string, unknown>): void {
+        this.onUiRequest(record)
       }
       emitStatus(record: Record<string, unknown>): void {
         this.onExtensionStatus(record)
@@ -526,5 +534,33 @@ describe('PiDriver', () => {
       }
     })
     expect(endPart?.type === 'subagent' ? endPart.activity.time?.end : undefined).toBeDefined()
+  })
+
+  it('splits the question marker payload into scope header and question text', async () => {
+    const driver = new PiDriver(await storage())
+    const sessionId = await driver.createSession('/project', 'Pi')
+    const events: unknown[] = []
+    driver.onEvent((event) => events.push(event))
+    await driver.sendPrompt('/project', { sessionId, settings, text: 'go', attachments: [] })
+    const client = rpcMock.client
+    expect(client).toBeDefined()
+    client.emitUi({
+      type: 'extension_ui_request',
+      id: 'ui-q1',
+      method: 'select',
+      title: `cio-question:${JSON.stringify({
+        header: 'Next step',
+        prompt: 'Want me to implement the fix for the silent brainstorm refresh failure?'
+      })}`,
+      options: ['Fix both defects', 'No fix for now']
+    })
+    const asked = events.find((event) => (event as { type: string }).type === 'question.asked') as
+      { questions: Array<{ header?: string; prompt: string }> } | undefined
+    expect(asked?.questions?.[0]).toMatchObject({
+      header: 'Next step',
+      prompt: 'Want me to implement the fix for the silent brainstorm refresh failure?'
+    })
+    // The scope header must not leak into the question body.
+    expect(asked?.questions?.[0]?.prompt.startsWith('Next step')).toBe(false)
   })
 })
