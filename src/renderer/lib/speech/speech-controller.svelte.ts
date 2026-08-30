@@ -292,11 +292,14 @@ class SpeechController {
     // Temporary side chats render a synthetic thread that is never the
     // selected workspace thread — they live in the context sidebar. When a
     // temporary chat is the active sidebar tab, the user "is on" that chat,
-    // so Escape must reach its own recording (and nothing else).
+    // so Escape must reach its own recording. A recording belonging to any
+    // other thread must not be gated by the sidebar tab; it falls through to
+    // the viewed-thread check below.
     const sidebarTab = contextSidebarState.activeTab
     if (sidebarTab?.kind === 'temporary-chat') {
-      if (sidebarTab.temporaryChatId !== scope.threadId) return false
-      return scope.kind !== 'project' || sidebarTab.projectId === scope.projectId
+      if (sidebarTab.temporaryChatId === scope.threadId) {
+        return scope.kind !== 'project' || sidebarTab.projectId === scope.projectId
+      }
     }
     const viewed = isRemotePwaRuntime()
       ? mobileState.selectedThread
@@ -559,7 +562,6 @@ class SpeechController {
     // caret while the mic is active without losing the intended insertion point.
     const insertionSnapshot = active.target.capture() ?? active.snapshot
 
-    let finalized = false
     try {
       const durationMs = Math.max(0, performance.now() - active.startedAt)
       if (active.native) {
@@ -582,7 +584,6 @@ class SpeechController {
         )
         if (!finished.ok) throw new Error(finished.error.message)
       }
-      finalized = true
       this.playCue('stopped')
       const transcription = this.deliverTranscript(active, insertionSnapshot)
       this.transcriptions.set(active.attemptId, transcription)
