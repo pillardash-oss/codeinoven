@@ -690,6 +690,14 @@
           <RecordingIndicator label="Listening" />
         {:else if isSpeaking}
           <RecordingIndicator label="Speaking" tone="speech" />
+        {:else if isBusyIndicator && currentModelProviderName}
+          <span class="flex shrink-0 items-center" title={thread.settings?.modelId ?? 'Model'}>
+            <VendorIcon
+              name={currentModelProviderName}
+              id={currentModelProviderId ?? undefined}
+              size={13}
+            />
+          </span>
         {:else}
           <span class="whitespace-nowrap text-[10px] text-dimmed">
             {relativeTime(thread.createdAt)}
