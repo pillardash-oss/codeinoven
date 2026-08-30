@@ -160,6 +160,22 @@ let shutdownFailsafe: ReturnType<typeof setTimeout> | null = null
  */
 let quitConfirmed = false
 
+/**
+ * Hard failsafe for the quit lifecycle. The close-confirmation flow round-trips
+ * through the renderer, so a wedged renderer could otherwise hold quit hostage
+ * indefinitely. This timer guarantees the process converges on exit: if the
+ * pipeline has not completed within 15 seconds of the user asking to quit, the
+ * process force-exits. Re-arming on every before-quit keeps it correct across
+ * repeated close attempts.
+ */
+function armQuitFailsafe(): void {
+  if (shutdownFailsafe) clearTimeout(shutdownFailsafe)
+  shutdownFailsafe = setTimeout(() => {
+    Logger.error('Quit failsafe fired — forcing exit')
+    app.exit(0)
+  }, 15_000)
+}
+
 /** Projects that still have threads being worked on, most active first. */
 function getActiveThreadProjects(): CloseConfirmationProject[] {
   try {
@@ -1569,6 +1585,11 @@ async function runShutdownPipeline(): Promise<void> {
 app.on('before-quit', (event) => {
   if (quitCleanupStarted) return
   event.preventDefault()
+
+  // Hard failsafe: a wedged renderer must never hold quit hostage. Arm it on
+  // every before-quit so the process is guaranteed to converge on exit even
+  // when the confirmation round-trip never completes.
+  armQuitFailsafe()
 
   // If the user hasn't explicitly approved a force close, gate the quit on the
   // close-confirmation flow (which proceeds immediately when nothing is working).
