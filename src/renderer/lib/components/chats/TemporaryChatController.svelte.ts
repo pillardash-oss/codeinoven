@@ -94,14 +94,14 @@ export class TemporaryChatController implements ConversationController {
   get references(): PromptReference[] {
     if (!this.#tab.selectionAttached || this.#tab.selections.length === 0) return []
     return this.#tab.selections.map((selection, index) => ({
-      id: `${this.#tab.temporaryChatId}:selection:${index}`,
+      id: `${this.#tab.temporaryChatId}.selection.${index}`,
       label: `Selection ${index + 1}`,
       text: selection
     }))
   }
 
   removeReference(id: string): void {
-    const index = Number(id.split(':').pop())
+    const index = Number(id.split('.').pop())
     if (Number.isNaN(index)) return
     this.#tab.selections = this.#tab.selections.filter((_, i) => i !== index)
     if (this.#tab.selections.length === 0) this.#tab.selectionAttached = false

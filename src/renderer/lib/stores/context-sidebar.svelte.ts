@@ -1202,7 +1202,7 @@ class ContextSidebarState {
         ],
         references: [
           {
-            id: `${temporaryChatId}:selection:0`,
+            id: `${temporaryChatId}.selection.0`,
             label: 'Selection 1',
             text: selection
           }
