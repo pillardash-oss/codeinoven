@@ -45,7 +45,8 @@ export class SpeechJobQueue {
   private readonly pending = new Map<SpeechRuntime, QueueEntry<unknown>[]>([
     ['mlx', []],
     ['sherpa-onnx', []],
-    ['coreml', []]
+    ['coreml', []],
+    ['gguf', []]
   ])
   private readonly active = new Map<string, QueueEntry<unknown>>()
   private readonly states = new Map<string, SpeechJobState>()
