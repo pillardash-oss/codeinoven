@@ -8,6 +8,7 @@ import type {
   UtilityDefinition,
   UtilityDefinitionInput,
   UtilityDefinitionFor,
+  McpUtilityConfig,
   UtilityKind,
   PermissionLevel
 } from '../../lib/types'
@@ -335,6 +336,18 @@ export class UtilityOrchestrationService {
         request.permissionLevel
       )
       if (cuaUtility) eligible.push(cuaUtility)
+    }
+    // Stamp the thread's permission level onto the Cua Driver MCP utility so
+    // its launch environment always matches how this thread runs tools.
+    for (const entry of eligible) {
+      if (entry.utility.id !== 'cio:cua-driver') continue
+      const config = entry.utility.config as McpUtilityConfig
+      config.environment = {
+        ...config.environment,
+        ...(request.permissionLevel === 'full_access'
+          ? { CUA_DRIVER_DANGEROUSLY_BYPASS_APPROVALS: 'true' }
+          : { CUA_DRIVER_DISABLE_UNRESTRICTED: 'true' })
+      }
     }
     const always = eligible.filter(
       ({ utility }) => utility.activation === 'always' && utility.kind !== 'mcp'
