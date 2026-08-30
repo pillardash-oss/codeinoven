@@ -41,6 +41,8 @@ export const APP_IMAGE_DESCRIPTOR_UTILITY_ID = 'cio:image-descriptor'
 export const APP_RETRIEVE_MCP_HOST_UTILITY_ID = 'cio:retrieve-mcp-host'
 /** Stable id of the browser control utility backed by the in-app browser. */
 export const APP_BROWSER_UTILITY_ID = 'cio:browser'
+/** Stable id of the Cua Driver computer-use MCP utility. */
+export const APP_CUA_DRIVER_UTILITY_ID = 'cio:cua-driver'
 
 /** App-owned ids seeded before the `cio:` rename, mapped to their current ids. */
 const LEGACY_APP_UTILITY_IDS: Readonly<Record<string, string>> = {
@@ -153,6 +155,30 @@ export class UtilityRegistryService {
           harnessId: harness.id,
           strategy: 'native',
           nativeCapability: 'browser'
+        })),
+        appOwned: true,
+        createdAt: now,
+        updatedAt: now
+      },
+      {
+        id: APP_CUA_DRIVER_UTILITY_ID,
+        kind: 'mcp',
+        name: 'cio:cua-driver',
+        description:
+          'MCP server for the Cua Driver computer-use agent: screenshot capture, mouse clicks, typing, scrolling, and other desktop GUI automation exposed as MCP tools over stdio.',
+        enabled: true,
+        activation: 'on_demand',
+        scope: { level: 'global' },
+        config: {
+          transport: 'stdio' as const,
+          command: 'cua-driver',
+          args: ['mcp']
+        },
+        credentials: [],
+        harnessBindings: harnesses.map((harness) => ({
+          harnessId: harness.id,
+          strategy: 'mcp' as const,
+          transportName: 'cua-driver'
         })),
         appOwned: true,
         createdAt: now,
