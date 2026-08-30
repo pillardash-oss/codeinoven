@@ -303,12 +303,33 @@
   // it only when the user reaches the top. Render that page as one continuous
   // scroll surface so the user can always scroll back down to the latest turn.
 
-  /** The thread page is bounded (HISTORY_WINDOW_SIZE), so the loaded page is
-   *  mounted as one static snapshot. No progressive windowing: the reveal must
-   *  never mutate the list after first paint, and scrolling must be a pure
-   *  snapshot scroll with zero runtime work. */
+  /** Frame one mounts only the newest tail — enough markdown to block the
+   *  composer for seconds if flushed all at once — then the window completes
+   *  across the next frames. Once complete it never shrinks or re-mounts:
+   *  scrolling is a pure snapshot scroll with zero runtime work. */
+  let renderLimit = $state(TAIL_RENDER_INITIAL_LIMIT)
 
-  let visibleMessages = $derived(messages)
+  let visibleMessages = $derived(
+    renderLimit >= messages.length ? messages : messages.slice(-renderLimit)
+  )
+
+  /** Complete the mount on the frame after first paint, in one step, so the
+   *  list is static for the lifetime of the view. */
+  $effect(() => {
+    if (renderLimit >= messages.length) return
+    let raf = 0
+    const timer = setTimeout(() => {
+      raf = requestAnimationFrame(() => {
+        raf = requestAnimationFrame(() => {
+          renderLimit = messages.length
+        })
+      })
+    }, TAIL_RENDER_GROW_DELAY_MS)
+    return () => {
+      clearTimeout(timer)
+      cancelAnimationFrame(raf)
+    }
+  })
   /** The last turn in the list and whether it is still the "active" turn. A
    *  trailing steer — a user message the agent has not responded to yet — does
    *  not end the turn it intervenes in, so the streaming trace for the current
