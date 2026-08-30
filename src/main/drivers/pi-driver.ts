@@ -716,8 +716,10 @@ export class PiDriver extends PersistentCliDriver {
 
   private turnStates = new Map<string, PiTurnState>()
   private rpcClients = new Map<string, PiRpcClient>()
-  /** Session-keyed turn handoff files carrying { url, token } for the gateway extension. */
+  /** Session-keyed turn handoff files carrying { url, token } for the gateway extension, storage-relative. */
   private gatewayHandoffPaths = new Map<string, string>()
+  /** Session-keyed absolute path to the materialized gateway extension module, passed to `--extension`. */
+  private gatewayExtensionPaths = new Map<string, string>()
   private sessionProjects = new Map<string, string>()
   private activeTurns = new Set<string>()
   private pendingUiRequests = new Map<string, PiUiRequest>()
@@ -1280,6 +1282,7 @@ export class PiDriver extends PersistentCliDriver {
       void this.removeGatewayHandoff(sessionId)
     }
     this.gatewayHandoffPaths.clear()
+    this.gatewayExtensionPaths.clear()
     const statusDirectory = this.statusExtensionDirectory
     this.statusExtensionPath = null
     this.statusExtensionDirectory = null
@@ -1707,7 +1710,7 @@ export class PiDriver extends PersistentCliDriver {
    * sessions never overwrite each other's turn credentials.
    */
   private async materializeGatewayExtension(sessionId: string): Promise<string | null> {
-    const existing = this.gatewayHandoffPaths.get(sessionId)
+    const existing = this.gatewayExtensionPaths.get(sessionId)
     if (existing) return existing
     try {
       const directory = join('runtime', 'pi-utility-gateway', sessionId)
@@ -1716,16 +1719,21 @@ export class PiDriver extends PersistentCliDriver {
       // Empty endpoint values: the tools surface a clear gateway-inactive error
       // until the first direct-gateway turn publishes the real { url, token }.
       await this.storage.writeRaw(handoffRelative, JSON.stringify({ url: '', token: '' }))
-      const handoffPath = this.storage.resolve(handoffRelative)
+      const handoffAbsolute = this.storage.resolve(handoffRelative)
       await this.storage.writeRaw(
         extensionRelative,
         piUtilityGatewayExtension().replace(
           '__HANDOFF_PATH__',
-          JSON.stringify(handoffPath).slice(1, -1)
+          JSON.stringify(handoffAbsolute).slice(1, -1)
         )
       )
-      this.gatewayHandoffPaths.set(sessionId, handoffPath)
-      return this.storage.resolve(extensionRelative)
+      // Storage-relative: publishUtilityGatewayEndpoint and removeGatewayHandoff
+      // route through storage.writeRaw/removeRaw, which resolve paths themselves
+      // and reject an already-absolute one.
+      this.gatewayHandoffPaths.set(sessionId, handoffRelative)
+      const extensionAbsolute = this.storage.resolve(extensionRelative)
+      this.gatewayExtensionPaths.set(sessionId, extensionAbsolute)
+      return extensionAbsolute
     } catch (error) {
       // A failed materialization must never block the turn; the prose curl
       // fallback stays fully functional without the extension.

@@ -54,6 +54,7 @@ export class PiRpcClient {
   private readonly onExtensionStatus: (record: Record<string, unknown>) => void
   private readonly pending = new Map<string, PendingRequest>()
   private buffer = ''
+  private stderrBuffer = ''
   private nextId = 1
   private disposed = false
 
@@ -71,13 +72,21 @@ export class PiRpcClient {
       stdio: ['pipe', 'pipe', 'pipe']
     })
     this.child.stdout?.on('data', (chunk: Buffer) => this.consume(chunk.toString()))
-    this.child.stderr?.on('data', () => undefined)
+    // Capped rolling tail so a crash reason (missing dependency, bad flag,
+    // uncaught exception) reaches the error surfaced to the user instead of
+    // a bare "exited with code 1" that gives no clue what went wrong.
+    this.child.stderr?.on('data', (chunk: Buffer) => {
+      this.stderrBuffer = `${this.stderrBuffer}${chunk.toString()}`.slice(-4_000)
+    })
     this.child.on('error', (error) => {
       this.failAll(new Error(`Failed to launch pi: ${error.message}`))
       this.onExit(null)
     })
     this.child.on('exit', (code) => {
-      this.failAll(new Error(`Pi process exited with code ${code ?? 'unknown'}`))
+      const detail = this.stderrBuffer.trim()
+      this.failAll(
+        new Error(`Pi process exited with code ${code ?? 'unknown'}${detail ? `: ${detail}` : ''}`)
+      )
       this.onExit(code)
     })
   }
