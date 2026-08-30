@@ -83,6 +83,18 @@ const CIO_PERMISSION_MARKER = 'cio-permission:'
 const CIO_QUESTION_MARKER = 'cio-question:'
 const CIO_SYSTEM_PROMPT_PATH = '__CIO_SYSTEM_PROMPT_PATH__'
 
+// Pi's own bundled system prompt opens with a "you are an assistant" framing
+// that pushes models toward generic chatbot hedging (permission-seeking,
+// disclaiming, "I should be cautious") instead of acting as an autonomous
+// engineering agent. CodeInOven is an Agentic Development Environment, not a
+// chat product, so the identity line is replaced rather than appended to —
+// the rest of Pi's own prompt (tool list, guidelines, doc paths) is left
+// intact since it is still accurate and useful.
+const PI_ASSISTANT_IDENTITY_LINE =
+  'You are an expert coding assistant operating inside pi, a coding agent harness. You help users by reading files, executing commands, editing code, and writing new files.'
+const CIO_AGENT_IDENTITY_LINE =
+  'You are the agentic engine driving CodeInOven, an Agentic Development Environment (ADE) for autonomous software engineering — not a chat assistant. You act directly: read files, execute commands, edit code, and write new files to complete real engineering work end to end on the open project, without waiting for permission to do what you were already asked to do.'
+
 // The driver rewrites this file per turn with the CodeInOven-composed
 // instructions (work ethic, persistent preferences, working scope, skills).
 // Reading it here and returning it from before_agent_start delivers it as a
@@ -886,9 +898,12 @@ export default function codeInOvenCoreToolsExtension(pi) {
   // instead of duplicating them inside every user turn's text (see
   // loadCioSystemPrompt above for why).
   pi.on('before_agent_start', (event) => {
+    const base = event.systemPrompt.includes(PI_ASSISTANT_IDENTITY_LINE)
+      ? event.systemPrompt.replace(PI_ASSISTANT_IDENTITY_LINE, CIO_AGENT_IDENTITY_LINE)
+      : event.systemPrompt
     const extra = loadCioSystemPrompt()
-    if (!extra) return undefined
-    return { systemPrompt: event.systemPrompt + '\\n\\n' + extra }
+    if (base === event.systemPrompt && !extra) return undefined
+    return { systemPrompt: extra ? base + '\\n\\n' + extra : base }
   })
 
   // Permission gate: destructive tool calls require an explicit permission
