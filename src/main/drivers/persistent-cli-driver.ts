@@ -494,8 +494,23 @@ export abstract class PersistentCliDriver implements HarnessDriver {
 
   async sendPrompt(projectPath: string, opts: SendPromptOptions): Promise<void> {
     const session = await this.requireSession(projectPath, opts.sessionId)
-    if (this.activeProcesses.has(session.id)) {
-      throw new Error(`A turn is already active for session ${session.id}`)
+    // A previous turn can leave a lingering process behind (e.g. a CLI hung on
+    // a dead socket after a network failure) while the chat engine already
+    // considers the session idle and dispatches a retry here. Replace the
+    // orphaned turn — stop its process and drain its settlement — instead of
+    // rejecting the retry with "A turn is already active".
+    const orphan = this.activeProcesses.get(session.id)
+    if (orphan) {
+      this.steeringSessions.add(session.id)
+      try {
+        if (orphan.exitCode === null && orphan.signalCode === null && !orphan.killed) {
+          orphan.kill()
+        }
+        const settlement = this.activeProcessSettlements.get(session.id)
+        if (settlement) await settlement
+      } finally {
+        this.steeringSessions.delete(session.id)
+      }
     }
 
     const invocation = await this.buildTurnCommand(projectPath, session, opts)
