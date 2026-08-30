@@ -1592,8 +1592,7 @@
         </div>
       {:else}
         <p class="px-4 py-8 text-center text-xs text-muted">
-          Grades appear as you use agents: after you read a turn (or start typing a follow-up), a
-          cheap model judges the exchange and your model's score updates here.
+          The more you use CodeInOven, the more models that do a good job will appear here.
         </p>
       {/each}
     </div>
