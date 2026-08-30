@@ -997,6 +997,19 @@ class ThreadMessagesStore {
       agentRuns.completeBackground(projectId, threadId, 'brainstorm_report')
       return
     }
+    if (update.type === 'refresh.failed') {
+      // A failed post-turn refresh must clear the background busy state (no
+      // 'refresh.completed' will arrive) and surface the failure like any
+      // other terminal run issue instead of silently dropping the version.
+      agentRuns.completeBackground(projectId, threadId, 'brainstorm_report')
+      this.setRunIssue(projectId, threadId, {
+        kind: 'unknown',
+        message: update.error,
+        harnessId: update.harnessId,
+        retryable: true
+      })
+      return
+    }
     if (update.type === 'started' || update.type === 'completed') {
       this.mergePage(projectId, threadId, update.messages)
       if (update.type === 'started') {

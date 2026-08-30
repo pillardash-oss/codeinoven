@@ -10652,6 +10652,7 @@ export class ChatEngine {
     }
     this.activeBrainstormOperations.add(operationKey)
     const refreshSessionId = `brainstorm-refresh-${brainstormId}-v${version}-${Date.now()}`
+    let refreshHarnessId = DEFAULT_HARNESS
     if (options.sessionTurn) {
       this.broadcast({
         type: 'brainstorm.trace',
@@ -10676,6 +10677,7 @@ export class ChatEngine {
       }
       const thread = await this.threadManager.getThread(projectId, threadId)
       if (!thread?.settings) throw new Error('Sr. Engineer settings are missing')
+      refreshHarnessId = thread.settings.harnessId || DEFAULT_HARNESS
       await this.threadManager.setStatus(projectId, threadId, 'planning')
       const brainstormPath = await this.artifactRef(
         projectId,
@@ -10688,6 +10690,7 @@ export class ChatEngine {
           .map((comment) => `- ${comment.body}`),
         ...(note.trim() ? [`- ${note.trim()}`] : [])
       ].join('\n')
+      let prototypesSkipped: string | null = null
       const content = await this.generateBrainstormContent(
         projectId,
         threadId,
@@ -10703,24 +10706,33 @@ export class ChatEngine {
           .filter(Boolean)
           .join('\n\n'),
         options.sessionTurn
-          ? { announceProgress: false }
+          ? {
+              announceProgress: false,
+              allowPrototypeSkip: true,
+              onPrototypesSkipped: (reason: string) => {
+                prototypesSkipped = reason
+              }
+            }
           : {
               includeConversationContext: false,
-              presentation: workflowActionPresentation('Review Brainstorm', note)
+              presentation: workflowActionPresentation('Review Brainstorm', note),
+              allowPrototypeSkip: true,
+              onPrototypesSkipped: (reason: string) => {
+                prototypesSkipped = reason
+              }
             }
       )
+      // Existing prototype entries must survive every revision: review edits
+      // never target them, and dropping them would hide the prototype
+      // selection gate and orphan the finalized artifacts.
       const existingPrototypes = current.content.prototypes ?? []
-      const mergedContent = content.prototypes?.length
-        ? {
-            ...content,
-            prototypes: [
-              ...existingPrototypes,
-              ...content.prototypes.filter(
-                (prototype) => !existingPrototypes.some((existing) => existing.id === prototype.id)
-              )
-            ]
-          }
-        : content
+      const generatedPrototypes = (content.prototypes ?? []).filter(
+        (prototype) => !existingPrototypes.some((existing) => existing.id === prototype.id)
+      )
+      const mergedContent: BrainstormContent =
+        existingPrototypes.length > 0 || generatedPrototypes.length > 0
+          ? { ...content, prototypes: [...existingPrototypes, ...generatedPrototypes] }
+          : content
       let revised = await this.brainstormEngine.createVersion({
         projectId,
         threadId,
@@ -10745,9 +10757,32 @@ export class ChatEngine {
           note
         )
       }
+      if (prototypesSkipped) {
+        revised = await this.brainstormEngine.addDecisionComment(
+          projectId,
+          threadId,
+          brainstormId,
+          revised.version,
+          'review',
+          `${prototypesSkipped}. Existing prototype entries were preserved; generate prototypes from a harness with scoped-write support.`
+        )
+      }
       await this.publishBrainstormReady(revised, thread.sessionId)
       return revised
     } catch (error) {
+      if (options.sessionTurn) {
+        this.broadcast({
+          type: 'brainstorm.trace',
+          sessionId: refreshSessionId,
+          projectId,
+          threadId,
+          update: {
+            type: 'refresh.failed',
+            error: rawErrorMessage(error),
+            harnessId: refreshHarnessId
+          }
+        })
+      }
       if (this.userAbortedBrainstormOperations.delete(operationKey)) {
         await this.threadManager.setStatus(projectId, threadId, 'interrupted', { read: true })
         const unchanged = this.brainstormEngine.getVersion(
@@ -11424,6 +11459,10 @@ export class ChatEngine {
       includeConversationContext?: boolean
       announceProgress?: boolean
       presentation?: UserMessagePresentation
+      /** Continue without new prototype artifacts instead of failing when the
+       *  harness cannot create scoped prototype files (review refreshes). */
+      allowPrototypeSkip?: boolean
+      onPrototypesSkipped?: (reason: string) => void
     } = {}
   ): Promise<BrainstormContent> {
     const driverId = settings.harnessId || DEFAULT_HARNESS
@@ -11509,16 +11548,16 @@ export class ChatEngine {
           : [])
       ].join('\n')
     }
+    const prototypeWriteCapable = brainstormWriteRoute && featureSlug !== undefined
+    const skipPrototypeGeneration =
+      prototypeBatches.length > 0 && !prototypeWriteCapable && options.allowPrototypeSkip === true
     const finish = async (content: BrainstormContent): Promise<BrainstormContent> => {
       let completed: BrainstormContent = {
         title: content.title,
         summary: content.summary,
         sections: content.sections
       }
-      if (prototypeBatches.length > 0) {
-        if (!brainstormWriteRoute || !featureSlug) {
-          throw new Error('This harness cannot create scoped prototype artifacts')
-        }
+      if (prototypeBatches.length > 0 && brainstormWriteRoute && featureSlug !== undefined) {
         const declared = new Map(
           (content.prototypes ?? []).map((prototype) => [prototype.id, prototype])
         )
@@ -11548,6 +11587,15 @@ export class ChatEngine {
           prototypes.push(...finalized)
         }
         completed = { ...content, prototypes }
+      } else if (prototypeBatches.length > 0) {
+        if (!skipPrototypeGeneration) {
+          throw new Error('This harness cannot create scoped prototype artifacts')
+        }
+        // Review refreshes must still land their version bump: skip new
+        // prototype artifacts and let the caller carry existing ones forward.
+        const reason = 'This harness cannot create scoped prototype artifacts'
+        Logger.error('Skipping brainstorm prototype generation', { projectId, threadId, reason })
+        options.onPrototypesSkipped?.(reason)
       }
       await this.completeBrainstormConversationTurn(projectId, threadId, completed, settings)
       return completed
@@ -11612,9 +11660,9 @@ export class ChatEngine {
                 BRAINSTORM_JSON_FALLBACK_SYSTEM_PROMPT
               ].join('\n\n'),
           BRAINSTORM_DECISION_INTEGRITY_SYSTEM_PROMPT,
-          prototypeBatches.length > 0
+          prototypeBatches.length > 0 && !skipPrototypeGeneration
             ? 'Prototype content is part of this Brainstorm. Include only the requested prototype entries.'
-            : 'No prototype was requested. Do not include a prototypes field, prototype section, placeholder, or prototype wording.',
+            : 'No new prototype artifacts are generated in this turn. Do not include a prototypes field, prototype section, placeholder, or prototype wording.',
           behaviorPrompt
         ]
           .filter(Boolean)

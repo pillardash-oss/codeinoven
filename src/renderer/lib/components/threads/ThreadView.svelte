@@ -3675,6 +3675,9 @@
       event.projectId === thread.projectId &&
       event.threadId === thread.id
     ) {
+      if (event.update.type === 'refresh.failed') {
+        errorMessage = event.update.error
+      }
       return
     }
     if (

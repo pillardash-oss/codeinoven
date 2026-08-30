@@ -2506,6 +2506,7 @@ export type BrainstormTraceUpdate =
   | { type: 'completed'; messages: AgentMessage[] }
   | { type: 'refresh.started'; startedAt: number }
   | { type: 'refresh.completed' }
+  | { type: 'refresh.failed'; error: string; harnessId: string }
 
 export type SpecGenerationTraceUpdate =
   | { type: 'started'; startedAt: number }
