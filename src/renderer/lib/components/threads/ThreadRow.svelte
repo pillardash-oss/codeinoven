@@ -897,12 +897,27 @@
         {displayTitle}
       </span>
 
-      <!-- Single-line default: time rides on the top line -->
+      <!-- Single-line default: time rides on the top line, swapped for the
+           working model's provider icon while the thread is working -->
       {#if !showBottomRow}
         {#if isRecording}
           <RecordingIndicator label="Listening" />
         {:else if isSpeaking}
           <RecordingIndicator label="Speaking" tone="speech" />
+        {:else if isBusyIndicator && currentModelProviderName}
+          <span
+            class="flex shrink-0 items-center transition-opacity duration-150 {hovered
+              ? 'opacity-0'
+              : 'opacity-100'}"
+            aria-hidden={hovered}
+            title={thread.settings?.modelId ?? 'Model'}
+          >
+            <VendorIcon
+              name={currentModelProviderName}
+              id={currentModelProviderId ?? undefined}
+              size={13}
+            />
+          </span>
         {:else}
           <span
             class="whitespace-nowrap text-[10px] text-dimmed transition-opacity duration-150 {hovered
