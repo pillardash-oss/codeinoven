@@ -11,6 +11,13 @@
 
   /** Persists each thread's scroll position across component remounts. */
   const threadScrollPositions = new SvelteMap<string, ThreadScrollState>()
+  /** Messages mounted on the very first frame after a thread switch — only the
+   *  newest tail; the rest of the loaded page reveals across the next frames. */
+  const TAIL_RENDER_INITIAL_LIMIT = 12
+  /** How many more messages mount per frame while the tail window grows. */
+  const TAIL_RENDER_GROW_STEP = 16
+  /** Delay between tail-window growth steps — one frame lets each batch paint. */
+  const TAIL_RENDER_GROW_DELAY_MS = 16
   const HISTORY_WINDOW_SIZE = 40
   const HISTORY_PRELOAD_THRESHOLD = 240
 
@@ -295,7 +302,27 @@
   // The store already keeps the loaded history bounded to one page and grows
   // it only when the user reaches the top. Render that page as one continuous
   // scroll surface so the user can always scroll back down to the latest turn.
-  let visibleMessages = $derived(messages)
+
+  /** Tail-first render window: how many of the loaded messages are mounted.
+   *  A thread switch starts at the newest tail so the first frame paints the
+   *  last turns instantly, then the window grows across frames to reveal the
+   *  rest of the loaded page without ever blocking the renderer on markdown. */
+  let renderLimit = $state(TAIL_RENDER_INITIAL_LIMIT)
+
+  /** Grow the render window progressively so mounting the loaded page never
+   *  blocks the composer on one synchronous markdown flush. */
+  $effect(() => {
+    const total = messages.length
+    if (renderLimit >= total) return
+    const timer = setTimeout(() => {
+      renderLimit = Math.min(total, renderLimit + TAIL_RENDER_GROW_STEP)
+    }, TAIL_RENDER_GROW_DELAY_MS)
+    return () => clearTimeout(timer)
+  })
+
+  let visibleMessages = $derived(
+    renderLimit >= messages.length ? messages : messages.slice(-renderLimit)
+  )
   /** The last turn in the list and whether it is still the "active" turn. A
    *  trailing steer — a user message the agent has not responded to yet — does
    *  not end the turn it intervenes in, so the streaming trace for the current
