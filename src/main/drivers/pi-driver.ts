@@ -8,6 +8,7 @@ import { fileURLToPath } from 'url'
 import type {
   AgentMessage,
   AgentPart,
+  AgentQuestion,
   AgentRateLimitWindow,
   AgentSubagentActivity,
   AgentTokenUsage,
@@ -52,6 +53,7 @@ import { piMcpExtension } from './pi-mcp-extension'
 import { piCustomProvidersExtension } from './pi-providers-extension'
 import {
   CIO_PERMISSION_MARKER,
+  CIO_QUESTION_BATCH_MARKER,
   CIO_QUESTION_MARKER,
   CIO_SUBAGENT_MARKER,
   piCoreToolsExtension
@@ -2258,6 +2260,11 @@ export class PiDriver extends PersistentCliDriver {
     // The core-tools question tool marks its dialogs so the scope header,
     // description, predefined options, and multi-select flag stay separate
     // from the question text instead of being duplicated or lost.
+    const batchQuestions = this.questionBatchPayload(record)
+    if (batchQuestions) {
+      this.emit({ type: 'question.asked', sessionId, requestId, questions: batchQuestions })
+      return
+    }
     const markerQuestion = this.questionMarkerPayload(record)
     const questions = normalizeAgentQuestions({
       questions: [
@@ -2312,6 +2319,22 @@ export class PiDriver extends PersistentCliDriver {
         ...(payload.multiple === true ? { multiple: true } : {}),
         custom: stringValue(record['method']) !== 'confirm'
       }
+    } catch {
+      return null
+    }
+  }
+
+  /** Parse a multi-question batch payload from a select/input dialog title,
+   *  or null when the dialog is not a marked batch. */
+  private questionBatchPayload(record: Record<string, unknown>): AgentQuestion[] | null {
+    const title = stringValue(record['title'])
+    if (!title?.startsWith(CIO_QUESTION_BATCH_MARKER)) return null
+    try {
+      const payload = JSON.parse(title.slice(CIO_QUESTION_BATCH_MARKER.length)) as {
+        questions?: unknown
+      }
+      if (!Array.isArray(payload.questions)) return null
+      return normalizeAgentQuestions({ questions: payload.questions })
     } catch {
       return null
     }
@@ -2395,6 +2418,10 @@ export class PiDriver extends PersistentCliDriver {
       request.client.respondToExtensionUiRequest(rawId, {
         confirmed: /^(true|yes|y|allow|ok)$/iu.test(answer)
       })
+    } else if (answers.length > 1) {
+      // Batch mode: resolve with every answer so the extension can map one
+      // answer array per batched question.
+      request.client.respondToExtensionUiRequest(rawId, { value: JSON.stringify(answers) })
     } else {
       request.client.respondToExtensionUiRequest(rawId, { value: answer })
     }

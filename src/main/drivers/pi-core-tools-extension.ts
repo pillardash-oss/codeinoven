@@ -54,6 +54,7 @@
 
 export const CIO_PERMISSION_MARKER = 'cio-permission:'
 export const CIO_SUBAGENT_MARKER = 'cio-subagent:'
+export const CIO_QUESTION_BATCH_MARKER = 'cio-question-batch:'
 export const CIO_QUESTION_MARKER = 'cio-question:'
 
 /** Tool names registered by the core-tools extension (exported for tests). */
@@ -80,6 +81,7 @@ import {
 import { Type } from 'typebox'
 
 const CIO_PERMISSION_MARKER = 'cio-permission:'
+const CIO_QUESTION_BATCH_MARKER = 'cio-question-batch:'
 const CIO_QUESTION_MARKER = 'cio-question:'
 const CIO_SYSTEM_PROMPT_PATH = '__CIO_SYSTEM_PROMPT_PATH__'
 
@@ -339,30 +341,60 @@ export default function codeInOvenCoreToolsExtension(pi) {
       )
     }),
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      // Encode the ENTIRE batch into one dialog so the driver registers ONE
+      // multi-question pending request and the renderer shows one paginated
+      // card (1/N, 2/N, …) instead of one card per question.
+      const title =
+        params.questions.length === 1
+          ? questionDialogTitle(params.questions[0])
+          : CIO_QUESTION_BATCH_MARKER + JSON.stringify({ questions: params.questions })
+      const value =
+        params.questions.length === 1 && Array.isArray(params.questions[0].options) && params.questions[0].options.length > 0
+          ? await ctx.ui.select(title, params.questions[0].options)
+          : await ctx.ui.input(
+              title,
+              params.questions.length === 1
+                ? 'Type your answer'
+                : 'Answer the questions in the card above, then submit.'
+            )
       const answers = []
-      for (const question of params.questions) {
-        // The dialog title carries the structured question (scope header and
-        // question text stay separate); the driver splits it for the card.
-        const title = questionDialogTitle(question)
-        let value
-        if (Array.isArray(question.options) && question.options.length > 0 && !question.multiple) {
-          value = await ctx.ui.select(title, question.options)
-        } else {
-          const placeholder = Array.isArray(question.options) && question.options.length > 0
-            ? 'Choose one or more, separated by commas: ' + question.options.join(', ')
-            : 'Type your answer'
-          value = await ctx.ui.input(title, placeholder)
-        }
+      if (params.questions.length === 1) {
+        const question = params.questions[0]
         if (value === undefined) {
           answers.push({ question: question.question, dismissed: true, answer: [] })
-          continue
+        } else {
+          const parts = value
+            .split(question.multiple ? /[,\\n]/u : /\\n/u)
+            .map((part) => part.trim())
+            .filter(Boolean)
+          answers.push({ question: question.question, dismissed: false, answer: parts })
         }
-        const parts = value
-          .split(question.multiple ? /[,\\n]/u : /\\n/u)
-          .map((part) => part.trim())
-          .filter(Boolean)
-        answers.push({ question: question.question, dismissed: false, answer: parts })
+        return textResult({ answers })
       }
+      // Batch mode: the driver resolves the dialog with the full answers
+      // array (one answer array per batched question, in order).
+      let parsed
+      try {
+        parsed = value === undefined ? null : (JSON.parse(value) as unknown)
+      } catch {
+        parsed = null
+      }
+      if (!Array.isArray(parsed)) {
+        answers.push({ question: 'Batch answers', dismissed: true, answer: [] })
+        return textResult({ answers })
+      }
+      params.questions.forEach((question, index) => {
+        const entry = parsed[index]
+        if (!Array.isArray(entry)) {
+          answers.push({ question: question.question, dismissed: true, answer: [] })
+          return
+        }
+        answers.push({
+          question: question.question,
+          dismissed: false,
+          answer: entry.filter((part) => typeof part === 'string')
+        })
+      })
       return textResult({ answers })
     }
   })
