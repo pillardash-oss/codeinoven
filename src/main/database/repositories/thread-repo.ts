@@ -787,9 +787,9 @@ export function buildThreadSearchSql(
   const title = {
     sql: `SELECT t.* FROM threads t
       WHERE (? IS NULL OR t.project_id = ?)
-        AND t.title LIKE ? ESCAPE '\\'
+        AND (t.title LIKE ? ESCAPE '\\' OR t.id = ?)
       ORDER BY t.last_activity DESC`,
-    params: [projectId, projectId, `%${escapeLike(trimmed)}%`]
+    params: [projectId, projectId, `%${escapeLike(trimmed)}%`, trimmed]
   }
   const ftsQuery = toFtsQuery(trimmed)
   const fts = ftsQuery
