@@ -703,11 +703,12 @@ export class Database {
         '{}',
         m.tokens_total,
         m.tokens_total,
+        'unavailable',
+        m.cost,
         CASE
           WHEN m.cost IS NOT NULL THEN 'known'
           ELSE 'unavailable'
         END,
-        m.cost,
         CASE
           WHEN m.cost IS NOT NULL THEN '{"source":"backfill","currency":"USD"}'
           ELSE NULL
