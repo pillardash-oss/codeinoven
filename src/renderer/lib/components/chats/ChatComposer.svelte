@@ -311,13 +311,15 @@
     hideUsageIndicator = false
   }: Props = $props()
 
-  /** Resolved settings — uses the prop if provided, else the global last-used.
-   *  Chats always run with auto permission review, so when the permission
-   *  selector is hidden the level is pinned to `auto_review`. */
+  /** Base composer settings — the prop when provided, else the global last-used. */
+  const baseSettings = $derived(settings ?? threadSettingsStore.lastUsed)
+  /** Resolved settings — chats run with auto permission review until File System
+   *  is enabled, so the level stays pinned to `auto_review` while File System is
+   *  off and unlocks (selector visible, up to Full Access) once it is turned on. */
   let resolved = $derived<ThreadSettings>(
-    hidePermissionSelector
-      ? { ...(settings ?? threadSettingsStore.lastUsed), permissionLevel: 'auto_review' as const }
-      : (settings ?? threadSettingsStore.lastUsed)
+    hidePermissionSelector && baseSettings.fileSystemMode !== true
+      ? { ...baseSettings, permissionLevel: 'auto_review' as const }
+      : baseSettings
   )
 
   function projectReferenceToken(reference: Pick<PromptProjectReference, 'path'>): string {
@@ -2316,7 +2318,7 @@
         <Shield size={12} />
         <span class="composer-control-label">Read only</span>
       </span>
-    {:else if !hidePermissionSelector}
+    {:else if !hidePermissionSelector || resolved.fileSystemMode === true}
       <div class="relative">
         <button
           type="button"

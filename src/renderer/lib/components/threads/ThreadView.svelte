@@ -997,18 +997,22 @@
       })
     }
 
-    for (const permission of actionPermissionLevels) {
-      actions.push({
-        id: actionId(`mode:permission:${permission.id}`),
-        title: `Permissions: ${permission.label}`,
-        description:
-          permission.id === 'full_access'
-            ? 'Run in yolo mode — every operation auto-approved'
-            : 'Auto-run every permission unless it is explicitly denied',
-        category: 'mode',
-        source: applicationActionSource,
-        keywords: ['access', 'approval', 'security', permission.label]
-      })
+    // Chat mode only surfaces permission levels once File System is enabled —
+    // chats run with auto permission review until the user opts into files.
+    if (!chatMode || settings.fileSystemMode === true) {
+      for (const permission of actionPermissionLevels) {
+        actions.push({
+          id: actionId(`mode:permission:${permission.id}`),
+          title: `Permissions: ${permission.label}`,
+          description:
+            permission.id === 'full_access'
+              ? 'Run in yolo mode — every operation auto-approved'
+              : 'Auto-run every permission unless it is explicitly denied',
+          category: 'mode',
+          source: applicationActionSource,
+          keywords: ['access', 'approval', 'security', permission.label]
+        })
+      }
     }
 
     actions.push({
