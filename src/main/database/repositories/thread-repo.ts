@@ -1,13 +1,14 @@
 import type { Database } from '../database'
-import type {
-  AgentRateLimitWindow,
-  AgentTokenUsage,
-  Thread,
-  ThreadContextUsage,
-  ThreadSearchResult,
-  ThreadStatus,
-  ThreadSettings,
-  ThreadTitleSource
+import {
+  sanitizeThreadSettings,
+  type AgentRateLimitWindow,
+  type AgentTokenUsage,
+  type Thread,
+  type ThreadContextUsage,
+  type ThreadSearchResult,
+  type ThreadStatus,
+  type ThreadSettings,
+  type ThreadTitleSource
 } from '../../../lib/types'
 
 interface ThreadRow {
@@ -134,7 +135,9 @@ function rowToThread(row: ThreadRow): Thread {
     branch: row.branch ?? undefined,
     featureSlug: row.feature_slug ?? undefined,
     scopeBucketId: row.scope_bucket_id ?? undefined,
-    settings: row.settings ? (JSON.parse(row.settings) as ThreadSettings) : undefined,
+    settings: row.settings
+      ? (sanitizeThreadSettings(JSON.parse(row.settings)) as ThreadSettings)
+      : undefined,
     contextUsage: row.context_usage
       ? (parseThreadContextUsage(parseStoredJson(row.context_usage)) ?? undefined)
       : undefined,

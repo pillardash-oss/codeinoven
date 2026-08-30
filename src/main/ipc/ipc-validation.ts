@@ -988,7 +988,10 @@ export function validateChecklistItemStatus(value: unknown): ChecklistItemStatus
 
 export function validateThreadSettings(value: unknown): ThreadSettings {
   const input = assertRecord(value, 'Thread settings')
-  rejectUnknownFields(input, THREAD_SETTINGS_FIELDS, 'thread settings')
+  // Settings persisted before the legacy `engineeringMode` flag was scrubbed
+  // still carry it — tolerate and drop it instead of rejecting the payload.
+  const { engineeringMode: _legacyEngineeringMode, ...rest } = input
+  rejectUnknownFields(rest, THREAD_SETTINGS_FIELDS, 'thread settings')
 
   const settings: ThreadSettings = {
     harnessId: validateEntityId(input.harnessId, 'Harness ID'),

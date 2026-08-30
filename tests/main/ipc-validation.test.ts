@@ -117,6 +117,10 @@ describe('IPC structured input validation', () => {
     expect(() => validateThreadSettings({ ...validSettings, permissionLevel: 'all' })).toThrow(
       TypeError
     )
+    // The legacy engineeringMode flag persisted before the scrub is tolerated and dropped.
+    expect(validateThreadSettings({ ...validSettings, engineeringMode: true })).toEqual(
+      validSettings
+    )
     expect(() => validateThreadSettings({ ...validSettings, extra: true })).toThrow(
       'Unsupported thread settings field'
     )

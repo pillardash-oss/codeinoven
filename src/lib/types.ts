@@ -1101,6 +1101,18 @@ export interface ThreadSettings {
   imageDescriptor?: AgentModelSelection
 }
 
+/**
+ * Strip settings fields from removed eras so stale persisted rows and
+ * last-used snapshots never re-enter the app. Currently drops the legacy
+ * `engineeringMode` flag, which was superseded by the Engineering lifecycle
+ * selection. Returns a shallow copy; never mutates the input.
+ */
+export function sanitizeThreadSettings(settings: unknown): Partial<ThreadSettings> {
+  if (typeof settings !== 'object' || settings === null || Array.isArray(settings)) return {}
+  const { engineeringMode: _legacyEngineeringMode, ...rest } = settings as Record<string, unknown>
+  return rest as Partial<ThreadSettings>
+}
+
 /** Result of the most recent heartbeat ping attempt. */
 export interface HeartbeatLastRun {
   /** Epoch ms when the ping was sent. */

@@ -645,6 +645,7 @@ export class Database {
       connection.exec(DATABASE_SCHEMA_SQL)
       this.migrateEngineeringLifecycleColumns(connection)
       this.migrateUsageEventColumns(connection)
+      this.migrateThreadSettingsLegacyEngineeringFlag(connection)
     })()
   }
 
@@ -662,6 +663,33 @@ export class Database {
     )
     if (columns.size > 0 && !columns.has('grade')) {
       connection.exec('DROP TABLE turn_feedback')
+    }
+  }
+
+  /**
+   * Rows persisted before the legacy `engineeringMode` settings flag was
+   * scrubbed still carry it inside their settings JSON. Rewrite affected rows
+   * without the flag — the Engineering lifecycle selection is the single
+   * source of truth now. Idempotent and safe to re-run. Malformed rows are
+   * left untouched; the read-path sanitizer in the thread repository still
+   * guards them.
+   */
+  migrateThreadSettingsLegacyEngineeringFlag(connection?: DatabaseType): void {
+    const target = connection ?? this.requireDb()
+    const rows = target
+      .prepare("SELECT id, settings FROM threads WHERE settings LIKE '%\"engineeringMode\"%'")
+      .all() as Array<{ id: string; settings: string }>
+    if (rows.length === 0) return
+    const update = target.prepare('UPDATE threads SET settings = ? WHERE id = ?')
+    for (const row of rows) {
+      try {
+        const parsed = JSON.parse(row.settings) as Record<string, unknown>
+        if (!('engineeringMode' in parsed)) continue
+        const { engineeringMode: _legacyEngineeringMode, ...rest } = parsed
+        update.run(JSON.stringify(rest), row.id)
+      } catch {
+        // A malformed settings blob must never abort startup.
+      }
     }
   }
 

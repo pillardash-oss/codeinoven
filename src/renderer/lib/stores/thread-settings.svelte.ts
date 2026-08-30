@@ -1,4 +1,4 @@
-import type { Thread, ThreadSettings } from '$shared/types'
+import { sanitizeThreadSettings, type Thread, type ThreadSettings } from '$shared/types'
 import { APP_SLUG } from '$shared/brand'
 import { DEFAULT_HARNESS } from '$shared/harness-default'
 
@@ -33,7 +33,7 @@ function load(storageKey: string, defaults: ThreadSettings): ThreadSettings {
   try {
     const raw = window.localStorage.getItem(storageKey)
     if (!raw) return { ...defaults }
-    const parsed = JSON.parse(raw) as Partial<ThreadSettings>
+    const parsed = sanitizeThreadSettings(JSON.parse(raw))
     return { ...defaults, ...parsed }
   } catch {
     return { ...defaults }
