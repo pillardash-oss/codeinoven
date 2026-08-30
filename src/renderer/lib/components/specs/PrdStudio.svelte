@@ -174,7 +174,7 @@
               class="z-50 w-52 rounded-lg border border-border bg-surface p-1 shadow-lg"
             >
               <DropdownMenu.Item
-                class="flex cursor-default items-center justify-between gap-3 rounded-md px-2 py-1.5 text-xs outline-none data-[highlighted]:bg-elevated"
+                class="flex cursor-pointer items-center justify-between gap-3 rounded-md px-2 py-1.5 text-xs outline-none data-[highlighted]:bg-elevated"
                 title="Generate an implementation-ready Spec from this PRD"
                 disabled={nextStepBusy}
                 onSelect={() => {

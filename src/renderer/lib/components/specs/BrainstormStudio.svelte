@@ -767,7 +767,7 @@
             >
               {#each sortedVersions as version (version.version)}
                 <DropdownMenu.Item
-                  class="flex cursor-default items-center justify-between gap-3 rounded-md px-2 py-1.5 text-xs outline-none data-[highlighted]:bg-elevated"
+                  class="flex cursor-pointer items-center justify-between gap-3 rounded-md px-2 py-1.5 text-xs outline-none data-[highlighted]:bg-elevated"
                   textValue={`Version ${version.version}`}
                   title={`Open brainstorm version ${version.version}`}
                   onSelect={() => void onSelectVersion(version.version)}
@@ -836,7 +836,7 @@
                 class="z-50 w-52 rounded-lg border border-border bg-surface p-1 shadow-lg"
               >
                 <DropdownMenu.Item
-                  class="flex cursor-default items-center justify-between gap-3 rounded-md px-2 py-1.5 text-xs outline-none data-[highlighted]:bg-elevated"
+                  class="flex cursor-pointer items-center justify-between gap-3 rounded-md px-2 py-1.5 text-xs outline-none data-[highlighted]:bg-elevated"
                   title="Prototype a low-fidelity Lo-Fi wireframe direction"
                   disabled={nextStepBusy}
                   onSelect={() => void runNextStep('lofi')}
@@ -844,7 +844,7 @@
                   <span>Prototype Lo-Fi</span>
                 </DropdownMenu.Item>
                 <DropdownMenu.Item
-                  class="flex cursor-default items-center justify-between gap-3 rounded-md px-2 py-1.5 text-xs outline-none data-[highlighted]:bg-elevated"
+                  class="flex cursor-pointer items-center justify-between gap-3 rounded-md px-2 py-1.5 text-xs outline-none data-[highlighted]:bg-elevated"
                   title="Prototype a single high-fidelity Hi-Fi direction"
                   disabled={nextStepBusy}
                   onSelect={() => void runNextStep('hifi')}
@@ -852,7 +852,7 @@
                   <span>Prototype Hi-Fi</span>
                 </DropdownMenu.Item>
                 <DropdownMenu.Item
-                  class="flex cursor-default items-center justify-between gap-3 rounded-md px-2 py-1.5 text-xs outline-none data-[highlighted]:bg-elevated"
+                  class="flex cursor-pointer items-center justify-between gap-3 rounded-md px-2 py-1.5 text-xs outline-none data-[highlighted]:bg-elevated"
                   title="Generate the product requirements document from this Brainstorm"
                   disabled={nextStepBusy}
                   onSelect={() => void runNextStep('prd')}
@@ -860,7 +860,7 @@
                   <span>Generate PRD</span>
                 </DropdownMenu.Item>
                 <DropdownMenu.Item
-                  class="flex cursor-default items-center justify-between gap-3 rounded-md px-2 py-1.5 text-xs outline-none data-[highlighted]:bg-elevated"
+                  class="flex cursor-pointer items-center justify-between gap-3 rounded-md px-2 py-1.5 text-xs outline-none data-[highlighted]:bg-elevated"
                   title="Finalize this Brainstorm and generate an implementation-ready Spec"
                   disabled={nextStepBusy}
                   onSelect={() => void runNextStep('spec')}

@@ -1067,7 +1067,7 @@
             >
               {#each sortedVersions as version (version.version)}
                 <DropdownMenu.Item
-                  class="flex cursor-default items-center justify-between gap-3 rounded-md px-2 py-1.5 text-left text-xs outline-none data-[highlighted]:bg-elevated"
+                  class="flex cursor-pointer items-center justify-between gap-3 rounded-md px-2 py-1.5 text-left text-xs outline-none data-[highlighted]:bg-elevated"
                   textValue={`Version ${version.version}`}
                   title={`Open version ${version.version}`}
                   onSelect={() => void onSelectVersion(version.version)}
@@ -1848,7 +1848,7 @@
                 >
                   {#each contextTypes as item (item.type)}
                     <DropdownMenu.Item
-                      class="flex w-full cursor-default items-start gap-2 rounded-md px-2 py-2 text-left outline-none data-[highlighted]:bg-elevated"
+                      class="flex w-full cursor-pointer items-start gap-2 rounded-md px-2 py-2 text-left outline-none data-[highlighted]:bg-elevated"
                       textValue={item.label}
                       title={item.description}
                       onSelect={() => {
@@ -1934,7 +1934,7 @@
                     {@const selected = selectedContextPaths.has(entry.path)}
                     <button
                       type="button"
-                      class="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs hover:bg-elevated disabled:cursor-default disabled:opacity-60"
+                      class="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs hover:bg-elevated disabled:cursor-pointer disabled:opacity-60"
                       title={selected
                         ? `${entry.path} is already included`
                         : `Include ${entry.path}`}
