@@ -122,6 +122,7 @@ export const REMOTE_ALLOWED_CHANNELS: readonly string[] = [
   'agent:runCommand',
   'agent:compact',
   'agent:truncateMessages',
+  'agent:deleteMessages',
   'agent:listContextCapabilities',
   'agent:listProcesses',
   'agent:listArtifacts',
@@ -508,6 +509,7 @@ export const REMOTE_CHANNEL_AUTHORIZATION: Readonly<Record<string, RemoteChannel
   // command.run — default-No, always step-up
   'agent:runCommand': { scope: 'command.run', stepUp: 'always' },
   'agent:truncateMessages': { scope: 'command.run', stepUp: 'always' },
+  'agent:deleteMessages': { scope: 'command.run', stepUp: 'always' },
 
   // workflow.read — default, no step-up
   'engineeringLifecycle:get': { scope: 'workflow.read', stepUp: 'none' },

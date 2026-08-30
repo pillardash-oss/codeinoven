@@ -44,6 +44,18 @@ export function threadVisitKey(thread: Pick<Thread, 'projectId' | 'id'>): string
 export interface JumpTarget {
   id: string
   content: string
+  /** First few work-trace snippets of the turn that follows this message. */
+  tracePreview?: string[]
+}
+
+/** Actions the mounted thread exposes to the history side panel. */
+export interface HistoryMessageActions {
+  fork: (id: string) => void
+  requestDelete: (id: string, content: string, mode: 'down' | 'single' | 'up') => void
+  /** A turn is running — destructive history actions are disabled. */
+  busy: boolean
+  /** Id of the message a fork is being created from, if any. */
+  forkingId: string | null
 }
 
 export interface SpecAgentResponse {
@@ -138,6 +150,7 @@ class WorkspaceState {
   userMessages: JumpTarget[] = $state([])
   jumpToMessage: ((id: string) => void) | null = null
   loadUserMessageHistory: (() => Promise<void>) | null = null
+  historyActions: HistoryMessageActions | null = $state(null)
 
   openThread(thread: Thread, project: Project | null, iconUrl?: string | null): void {
     const visitKey = threadVisitKey(thread)
@@ -310,6 +323,7 @@ class WorkspaceState {
     this.userMessages = []
     this.jumpToMessage = null
     this.loadUserMessageHistory = null
+    this.historyActions = null
     this.specStudioAvailable = false
     this.specStudioOpen = false
     this.pendingThreadStudioOpen = null

@@ -989,6 +989,13 @@ export class RemoteRpcDispatcher {
           this.string(args[1]),
           this.string(args[2])
         )
+      case 'agent:deleteMessages':
+        return chatEngine.deleteMessages(
+          this.string(args[0]),
+          this.string(args[1]),
+          this.string(args[2]),
+          this.string(args[3]) as 'down' | 'single' | 'up'
+        )
       case 'agent:listContextCapabilities':
         return chatEngine.listContextCapabilities(this.string(args[0]), this.string(args[1]))
       case 'agent:listProcesses':

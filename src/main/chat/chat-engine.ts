@@ -2019,6 +2019,11 @@ export class ChatEngine {
         this.truncateMessages(projectId, threadId, messageId)
     )
     ipcMain.handle(
+      'agent:deleteMessages',
+      (_, projectId: string, threadId: string, messageId: string, mode: 'down' | 'single' | 'up') =>
+        this.deleteMessages(projectId, threadId, messageId, mode)
+    )
+    ipcMain.handle(
       'agent:discardSteer',
       (_, projectId: string, threadId: string, messageId: string) =>
         this.discardSteer(projectId, threadId, messageId)
@@ -5308,6 +5313,22 @@ export class ChatEngine {
     threadId: string,
     messageId: string
   ): Promise<AgentMessage[]> {
+    return this.deleteMessages(projectId, threadId, messageId, 'down')
+  }
+
+  /**
+   * Delete history around a message. `down` keeps the prefix before it;
+   * `single` removes the message together with its turn (everything up to the
+   * next user message) so earlier and later messages splice together; `up`
+   * keeps only the messages after the message's turn. All modes discard the
+   * harness session — the next send replays the remaining mirror as a recap.
+   */
+  async deleteMessages(
+    projectId: string,
+    threadId: string,
+    messageId: string,
+    mode: 'down' | 'single' | 'up'
+  ): Promise<AgentMessage[]> {
     projectId = validateEntityId(projectId, 'Project ID')
     threadId = validateEntityId(threadId, 'Thread ID')
     messageId = validateEntityId(messageId, 'Message ID', 256)
@@ -5318,7 +5339,22 @@ export class ChatEngine {
     const cutoff = mirror.findIndex((m) => m.id === messageId)
     // An id missing from the mirror was never persisted (optimistic local
     // message) — nothing after it exists, so the mirror is kept whole.
-    const kept = cutoff === -1 ? mirror : mirror.slice(0, cutoff)
+    let kept: typeof mirror
+    if (cutoff === -1) {
+      kept = mirror
+    } else if (mode === 'down') {
+      kept = mirror.slice(0, cutoff)
+    } else {
+      // A turn spans from its user message to just before the next user
+      // message (steers are user messages too, so contiguous user messages
+      // stay inside the removed span only when they precede the target).
+      let turnEnd = cutoff + 1
+      while (turnEnd < mirror.length && mirror[turnEnd].role !== 'user') turnEnd++
+      kept =
+        mode === 'single'
+          ? [...mirror.slice(0, cutoff), ...mirror.slice(turnEnd)]
+          : mirror.slice(turnEnd)
+    }
     await this.threadManager.saveMessages(projectId, threadId, kept)
 
     if (thread.sessionId) {

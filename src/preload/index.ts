@@ -143,6 +143,7 @@ const INVOKE_CHANNELS = [
   'agent:touchTemporaryChat',
   'agent:closeTemporaryChat',
   'agent:truncateMessages',
+  'agent:deleteMessages',
   'temporary-chat:convertToThread',
   'baseUrlProviders:list',
   'baseUrlProviders:create',

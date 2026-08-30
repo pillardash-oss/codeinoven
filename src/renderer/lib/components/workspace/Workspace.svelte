@@ -75,7 +75,7 @@
   import AppearancePicker from '../shared/AppearancePicker.svelte'
   import ScopeBadge from '../shared/ScopeBadge.svelte'
   import StatusBadge from '../shared/StatusBadge.svelte'
-  import MessageHistoryPanel from '../shared/MessageHistoryPanel.svelte'
+  import HistorySidePanel from '../shared/HistorySidePanel.svelte'
   import ProjectCreateControl from '../shared/ProjectCreateControl.svelte'
   import ThreadSearchControl from '../shared/ThreadSearchControl.svelte'
   import SidebarAccountControls from './SidebarAccountControls.svelte'
@@ -4106,21 +4106,20 @@
     title="Close history"
     onclick={() => (showHistoryMenu = false)}
   ></button>
-  <div
-    class="absolute right-full top-0 z-40 mr-2 w-72 overflow-hidden border bg-surface shadow-lg"
-    role="menu"
-    aria-label="Jump to message"
-  >
-    <p class="border-b px-3 py-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-dimmed">
-      Your messages
-    </p>
-    <div class="max-h-72 overflow-y-auto">
-      <MessageHistoryPanel
-        messages={workspaceState.userMessages}
-        onSelect={(id) => jumpToHistoryMessage(id)}
-      />
-    </div>
-  </div>
+  <HistorySidePanel
+    messages={workspaceState.userMessages}
+    busy={workspaceState.historyActions?.busy ?? false}
+    forkingId={workspaceState.historyActions?.forkingId ?? null}
+    onSelect={(id) => jumpToHistoryMessage(id)}
+    onFork={(id) => workspaceState.historyActions?.fork(id)}
+    onDelete={(id, mode) =>
+      workspaceState.historyActions?.requestDelete(
+        id,
+        workspaceState.userMessages.find((message) => message.id === id)?.content ?? '',
+        mode
+      )}
+    onClose={() => (showHistoryMenu = false)}
+  />
 {/snippet}
 
 {#snippet browserMenu()}

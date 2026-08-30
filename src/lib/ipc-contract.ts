@@ -1005,6 +1005,16 @@ export interface IpcInvokeContract {
     [projectId: string, threadId: string, messageId: string],
     AgentMessage[]
   >
+  /**
+   * Delete history around a message. `down` keeps only the messages before it
+   * (truncate semantics). `single` removes the message and its turn's work
+   * trace, splicing earlier and later messages together. `up` removes the
+   * message and everything before it, keeping later messages.
+   */
+  'agent:deleteMessages': Contract<
+    [projectId: string, threadId: string, messageId: string, mode: 'down' | 'single' | 'up'],
+    AgentMessage[]
+  >
   'agent:discardSteer': Contract<
     [projectId: string, threadId: string, messageId: string],
     void

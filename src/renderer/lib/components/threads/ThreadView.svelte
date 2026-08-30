@@ -119,7 +119,7 @@
   import { baseUrlProviderStore } from '$lib/stores/base-url-providers.svelte'
   import { providerStore } from '$lib/stores/providers.svelte'
   import { providerCatalog } from '$lib/stores/provider-catalog.svelte'
-  import { workspaceState } from '$lib/stores/workspace.svelte'
+  import { workspaceState, type HistoryMessageActions } from '$lib/stores/workspace.svelte'
   import { contextSidebarState, EXPLAIN_SELECTION_PROMPT } from '$lib/stores/context-sidebar.svelte'
   import { coordinatorDockState } from '$lib/stores/coordinator-dock.svelte'
   import { projectFilesWorkspace } from '$lib/stores/project-files.svelte'
@@ -2586,9 +2586,10 @@
     void scrollToMessageSection(target.messageId, target.section)
   })
 
-  // Feed the header's history dropdown with every user-authored message: the
+  // Feed the header's history panel with every user-authored message: the
   // full persisted history plus any live/optimistic cache messages still pending
-  // in the mirror, deduped and kept in chronological order.
+  // in the mirror, deduped and kept in chronological order. Each message carries
+  // a short work-trace preview from the turn that follows it.
   $effect(() => {
     const byId: Record<string, UserMessageSummary> = {}
     for (const entry of fullUserMessageHistory) byId[entry.id] = entry
@@ -2600,11 +2601,30 @@
         createdAt: message.createdAt
       }
     }
+    const tracePreviews = tracePreviewByUserMessage(messages)
     const userMessages = Object.values(byId)
       .sort((a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id))
-      .map(({ id, content }) => ({ id, content }))
+      .map(({ id, content }) => ({
+        id,
+        content,
+        ...(tracePreviews.get(id) === undefined ? {} : { tracePreview: tracePreviews.get(id) })
+      }))
     workspaceState.messageCount = userMessages.length
     workspaceState.userMessages = userMessages
+  })
+
+  // Expose fork/delete to the history side panel; identity-safe cleanup below.
+  $effect(() => {
+    const actions: HistoryMessageActions = {
+      fork: (id) => void forkFromHistoryMessage(id),
+      requestDelete: requestHistoryMessageDelete,
+      busy,
+      forkingId: forkingMessageId
+    }
+    workspaceState.historyActions = actions
+    return () => {
+      if (workspaceState.historyActions === actions) workspaceState.historyActions = null
+    }
   })
 
   $effect(() => {
@@ -7947,6 +7967,45 @@
     return action === 'implement' ? 'Implement spec' : 'Review spec'
   }
 
+  /**
+   * Short work-trace snippets per user message, used as tree children in the
+   * history side panel: up to three labels from the turn that follows the
+   * message (its assistant reply), stopping at the next user message.
+   */
+  function tracePreviewByUserMessage(entries: AgentMessage[]): SvelteMap<string, string[]> {
+    const TRACE_PREVIEW_LIMIT = 3
+    const SNIPPET_LIMIT = 80
+    const previews = new SvelteMap<string, string[]>()
+    let currentUser: string | null = null
+    let snippets: string[] = []
+    const push = (snippet: string): void => {
+      if (currentUser === null || snippets.length >= TRACE_PREVIEW_LIMIT) return
+      const line = snippet.trim().split('\n', 1)[0] ?? ''
+      if (line.length === 0) return
+      snippets.push(line.length > SNIPPET_LIMIT ? `${line.slice(0, SNIPPET_LIMIT)}…` : line)
+    }
+    const flush = (): void => {
+      if (currentUser !== null && snippets.length > 0) previews.set(currentUser, snippets)
+      currentUser = null
+      snippets = []
+    }
+    for (const message of entries) {
+      if (message.role === 'user') {
+        flush()
+        currentUser = message.id
+        continue
+      }
+      if (currentUser === null) continue
+      for (const part of message.parts) {
+        if (part.type === 'tool') push(part.tool)
+        else if (part.type === 'reasoning') push(part.summary ?? part.text)
+        else if (part.type === 'subagent') push(part.activity.description)
+      }
+    }
+    flush()
+    return previews
+  }
+
   /** Return only content stored in the durable display parts. */
   function messageText(msg: AgentMessage): string {
     const text = rawMessageText(msg)
@@ -8007,8 +8066,38 @@
   let editingText = $state('')
   let editingMessageAttachments = $state<PromptAttachment[]>([])
   let editingMessageProjectReferences = $state<PromptProjectReference[]>([])
-  let messagePendingDelete = $state<AgentMessage | null>(null)
+  /** A deletion awaiting confirmation, with the scope chosen in the history panel. */
+  interface PendingMessageDelete {
+    id: string
+    content: string
+    mode: 'down' | 'single' | 'up'
+  }
+  let messagePendingDelete = $state<PendingMessageDelete | null>(null)
   let deletingMessageId = $state<string | null>(null)
+
+  /** Confirmation copy must state the exact scope of each delete mode. */
+  let deleteConfirmTitle = $derived.by(() => {
+    switch (messagePendingDelete?.mode) {
+      case 'single':
+        return 'Delete just this message?'
+      case 'up':
+        return 'Delete from this point up?'
+      default:
+        return 'Delete from this point down?'
+    }
+  })
+  let deleteConfirmBody = $derived.by(() => {
+    const content = messagePendingDelete?.content.trim() ?? ''
+    const subject = content.length > 0 ? `“${content.slice(0, 80)}”` : 'This message'
+    switch (messagePendingDelete?.mode) {
+      case 'single':
+        return `Only ${subject} and its work trace will be deleted. Earlier and later messages stay and the conversation closes over the gap.`
+      case 'up':
+        return `${subject} and every message before it will be deleted. Later messages remain as the start of the conversation.`
+      default:
+        return `${subject} and every message after it will be deleted. Earlier messages remain as the start of the conversation.`
+    }
+  })
 
   async function copyMessage(msg: AgentMessage): Promise<void> {
     try {
@@ -8033,6 +8122,33 @@
         `${thread.title} (fork)`,
         undefined,
         msg.id
+      )
+      onForked?.(forked)
+    } catch (error) {
+      errorMessage = error instanceof Error ? error.message : 'The chat could not be forked.'
+    } finally {
+      forkingMessageId = null
+    }
+  }
+
+  /** Fork from a message selected in the history side panel (by id). */
+  async function forkFromHistoryMessage(id: string): Promise<void> {
+    if (forkingMessageId || busy) return
+    const msg = messages.find((candidate) => candidate.id === id)
+    if (msg) {
+      await forkFromMessage(msg)
+      return
+    }
+    // The message may live outside the loaded window — fork by id directly.
+    forkingMessageId = id
+    try {
+      const forked = await invoke(
+        'thread:fork',
+        thread.projectId,
+        thread.id,
+        `${thread.title} (fork)`,
+        undefined,
+        id
       )
       onForked?.(forked)
     } catch (error) {
@@ -8159,23 +8275,39 @@
   /** Open the confirmation dialog before deleting history up to and including a message. */
   function requestDeleteMessage(msg: AgentMessage): void {
     if (busy) return
-    messagePendingDelete = msg
+    messagePendingDelete = { id: msg.id, content: messageText(msg), mode: 'down' }
+  }
+
+  /** Open the confirmation dialog for a deletion requested from the history side panel. */
+  function requestHistoryMessageDelete(
+    id: string,
+    content: string,
+    mode: 'down' | 'single' | 'up'
+  ): void {
+    if (busy) return
+    messagePendingDelete = { id, content, mode }
   }
 
   function cancelDeleteMessage(): void {
     messagePendingDelete = null
   }
 
-  /** Delete the message and everything after it, discarding the harness session. */
+  /** Delete history around the pending message, discarding the harness session. */
   async function confirmDeleteMessage(): Promise<void> {
-    const msg = messagePendingDelete
-    if (!msg || deletingMessageId) return
+    const pending = messagePendingDelete
+    if (!pending || deletingMessageId) return
     messagePendingDelete = null
-    deletingMessageId = msg.id
+    deletingMessageId = pending.id
     try {
-      // Truncation drops the message, everything after it, and the harness
-      // session. The next send rebinds a fresh session via prepareSessionForSend.
-      await threadMessages.truncate(thread.projectId, thread.id, msg.id)
+      // Deletion drops the chosen span and the harness session. The next send
+      // rebinds a fresh session via prepareSessionForSend, which replays the
+      // remaining mirrored transcript as context.
+      await threadMessages.remove(thread.projectId, thread.id, pending.id, pending.mode)
+      // The persisted user-message history changed — force a reload so the
+      // history panel never shows deleted messages.
+      userMessageHistoryLoaded = false
+      fullUserMessageHistory = []
+      void refreshUserMessageHistory()
     } catch (error) {
       errorMessage = error instanceof Error ? error.message : 'The message could not be deleted.'
     } finally {
@@ -10823,11 +10955,13 @@
   {/snippet}
 </Modal>
 
-<Modal open={messagePendingDelete !== null} title="Delete message?" onClose={cancelDeleteMessage}>
-  <p class="text-sm text-muted">
-    This will delete the conversation history up to this point, and this message will be deleted
-    too. This cannot be undone.
-  </p>
+<Modal
+  open={messagePendingDelete !== null}
+  title={deleteConfirmTitle}
+  onClose={cancelDeleteMessage}
+>
+  <p class="text-sm text-muted">{deleteConfirmBody}</p>
+  <p class="mt-2 text-sm font-medium text-foreground">This cannot be undone.</p>
   {#snippet footer()}
     <button
       class="rounded-lg border bg-elevated px-3 py-2 text-sm font-medium hover:bg-overlay"

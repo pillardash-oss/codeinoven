@@ -960,6 +960,27 @@ class ThreadMessagesStore {
   /** Drop a message and everything after it from the cache. */
   async truncate(projectId: string, threadId: string, messageId: string): Promise<AgentMessage[]> {
     const kept = await invoke('agent:truncateMessages', projectId, threadId, messageId)
+    this.#applyRemoval(projectId, threadId, kept)
+    return kept
+  }
+
+  /**
+   * Delete history around a message: `down` keeps the prefix before it,
+   * `single` removes the message and its turn's work trace and splices the
+   * neighbours together, `up` keeps only later messages.
+   */
+  async remove(
+    projectId: string,
+    threadId: string,
+    messageId: string,
+    mode: 'down' | 'single' | 'up'
+  ): Promise<AgentMessage[]> {
+    const kept = await invoke('agent:deleteMessages', projectId, threadId, messageId, mode)
+    this.#applyRemoval(projectId, threadId, kept)
+    return kept
+  }
+
+  #applyRemoval(projectId: string, threadId: string, kept: AgentMessage[]): void {
     const key = threadKey(projectId, threadId)
     this.#cancelReveal(key)
     const entry = this.entry(projectId, threadId)
@@ -968,7 +989,6 @@ class ThreadMessagesStore {
     entry.error = ''
     this.#sessionIds.delete(key)
     this.#notify(projectId, threadId)
-    return kept
   }
 
   /** Clear the cache for a thread (e.g. on deletion). */
