@@ -821,11 +821,9 @@
     cancelStop()
   })
 
-  // Double-Escape abort — two presses within the window stop the running turn.
-  // Single escape or any outside click cancels a pending stop confirmation.
-  const ESCAPE_ABORT_WINDOW_MS = 800
-  let lastEscapeAt = 0
-
+  /** Arms the stop confirmation on the first press; the second press calls
+   *  `onStop`. Shared by the stop button and the Escape-key flow so both paths
+   *  show the same visual armed state. */
   function confirmStop(): void {
     if (!onStop) return
     if (pendingStop) {
@@ -1699,24 +1697,17 @@
       void engineeringToolbox?.openAndFocus()
       return
     }
+    // While the agent runs, the first Escape arms the stop button with a
+    // visible "Stop?" state and the second confirms the abort. A running agent
+    // is a global session concern, so this remains active even when the
+    // composer editor itself does not have focus.
     if (e.key !== 'Escape') return
-    // Escape cancels the stop-button confirmation. Two Escapes within the
-    // window stop the running turn; a single Escape only arms the stop and
-    // cancels a pending confirmation instead. A running agent is a global
-    // session concern, so this remains active even when the composer editor
-    // itself does not have focus.
-    if (pendingStop) {
-      cancelStop()
+    if (working && onStop) {
+      confirmStop()
       return
     }
-    if (!working || !onStop) return
-    const now = Date.now()
-    if (now - lastEscapeAt <= ESCAPE_ABORT_WINDOW_MS) {
-      lastEscapeAt = 0
-      onStop()
-    } else {
-      lastEscapeAt = now
-    }
+    // Idle — Escape only dismisses a stale armed confirmation.
+    if (pendingStop) cancelStop()
   }
 </script>
 
@@ -2516,7 +2507,7 @@
               ? 'Queue message'
               : 'Send message'}
         title={pendingStop
-          ? 'Click again to stop — Esc to cancel'
+          ? 'Click again to stop'
           : canStop
             ? 'Stop the running agent'
             : working

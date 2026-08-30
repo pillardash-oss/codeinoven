@@ -1488,7 +1488,11 @@ export class PiDriver extends PersistentCliDriver {
     try {
       await client.abort()
     } catch {
-      // The turn may have already ended.
+      // The abort RPC failed — the pi process is wedged or already gone, so a
+      // graceful abort can never land. Kill the process so the run actually
+      // stops instead of silently continuing; the exit event finalizes the
+      // session state and a fresh run spawns a new process on demand.
+      client.dispose()
     } finally {
       this.activeTurns.delete(sessionId)
     }
