@@ -206,7 +206,8 @@
     UserMessageSummary,
     UsageEfficiencyKpis,
     EngineeringLifecycleSelectionInput,
-    EngineeringLifecycleState
+    EngineeringLifecycleState,
+    EngineeringLifecycleStage
   } from '$shared/types'
   import {
     hasSelectedStage,
@@ -491,26 +492,6 @@
       input
     )
     updateSettings(settingsForEngineeringState(engineeringLifecycle))
-  }
-
-  /** Keep the toolbox in sync when the mode switches turn Engineering off:
-   * an idle (not actively running) lifecycle selection must reset to none and
-   * any staged selection must clear, so the toolbox icon returns to its
-   * neutral color the moment the modes go off. */
-  function resetLifecycleWhenModesOff(next: ThreadSettings): void {
-    pendingLifecycleSelection = null
-    const anyModeOn = next.engineeringMode || next.assignmentMode || next.loopMode
-    const lifecycle = engineeringLifecycle
-    if (
-      anyModeOn ||
-      !lifecycle ||
-      lifecycle.activeStage !== undefined ||
-      lifecycle.humanGate !== undefined ||
-      (lifecycle.selection === 'none' && lifecycle.startedAt === undefined)
-    ) {
-      return
-    }
-    void applyLifecycleSelection({ stages: [], autopilot: false }).catch(() => {})
   }
 
   /** Toolbox toggles are intent, never action: the selection is only staged here
@@ -850,6 +831,64 @@
     { id: 'full_access', label: 'Full Access' }
   ]
 
+  /** Engineering lifecycle stages exposed as individual action-menu toggles.
+   *  Mirrors the Engineering Toolbox rows so both surfaces stay in sync. */
+  const engineeringStageActions: ReadonlyArray<{
+    stage: EngineeringLifecycleStage
+    label: string
+    description: string
+    keywords: string[]
+  }> = [
+    {
+      stage: 'brainstorm',
+      label: 'Brainstorm',
+      description: 'Research, prototype and align your vision.',
+      keywords: ['brainstorm', 'research', 'vision']
+    },
+    {
+      stage: 'prd',
+      label: 'PRD',
+      description: 'Define product requirements, usecases and outcomes.',
+      keywords: ['prd', 'product', 'requirements']
+    },
+    {
+      stage: 'spec',
+      label: 'Spec',
+      description: 'Create an implementation-ready contract.',
+      keywords: ['spec', 'specification', 'contract']
+    },
+    {
+      stage: 'assignment',
+      label: 'Assignment',
+      description: 'Break up your tasks & assign to worker agents.',
+      keywords: ['assignment', 'coordinator', 'workers', 'parallel']
+    },
+    {
+      stage: 'achievement',
+      label: 'Achievement',
+      description: 'Spec, Implement, Audit and rework until complete.',
+      keywords: ['achievement', 'loop', 'goal', 'audit', 'implementation']
+    }
+  ]
+
+  /** The lifecycle selection currently in force: a staged (intent-only)
+   *  selection from the toolbox or action menu wins over the persisted one. */
+  const effectiveLifecycleSelection = $derived.by(
+    (): { stages: EngineeringLifecycleStage[]; autopilot: boolean } => {
+      const pending = pendingLifecycleSelection
+      if (pending) {
+        return {
+          stages: normalizeLifecycleStages(pending.stages),
+          autopilot: pending.autopilot === true
+        }
+      }
+      return {
+        stages: normalizeLifecycleStages(engineeringLifecycle?.selectedStages ?? []),
+        autopilot: engineeringLifecycle?.autopilot === true
+      }
+    }
+  )
+
   function actionId(value: string): ActionDefinition['id'] {
     return value as ActionDefinition['id']
   }
@@ -901,39 +940,30 @@
     }
 
     if (!chatMode) {
-      actions.push(
-        {
-          id: 'mode:engineering',
-          title: settings.engineeringMode ? 'Turn off Engineering' : 'Turn on Engineering',
-          description: settings.engineeringMode
-            ? 'Use a direct conversation without the specification workflow'
-            : 'Use the specification review and implementation workflow',
+      // Engineering is a set of lifecycle stages, not one switch: expose every
+      // stage as its own toggle so "turn engineering on/off" is never ambiguous.
+      // Each action stages the selection exactly like the Engineering Toolbox —
+      // intent only, applied when the next message is sent.
+      const lifecycle = effectiveLifecycleSelection
+      for (const stage of engineeringStageActions) {
+        const enabled = lifecycle.autopilot || lifecycle.stages.includes(stage.stage)
+        actions.push({
+          id: actionId(`mode:stage:${stage.stage}`),
+          title: enabled ? `Turn off ${stage.label}` : `Turn on ${stage.label}`,
+          description: stage.description,
           category: 'mode',
           source: applicationActionSource,
-          shortcut: ['⇧', 'Tab'],
-          keywords: ['engineer', 'specification', 'workflow']
-        },
-        {
-          id: 'mode:assignment',
-          title: settings.assignmentMode ? 'Turn off Assignment' : 'Turn on Assignment',
-          description: settings.assignmentMode
-            ? 'Return to a single-agent engineering workflow'
-            : 'Coordinate a plan across specialized worker threads',
-          category: 'mode',
-          source: applicationActionSource,
-          keywords: ['assignment', 'coordinator', 'workers', 'parallel']
-        },
-        {
-          id: 'mode:loop',
-          title: settings.loopMode ? 'Turn off Achievement' : 'Turn on Achievement',
-          description: settings.loopMode
-            ? 'Stop automatic audit and corrective implementation cycles'
-            : 'Automatically audit and correct the approved implementation until it passes',
-          category: 'mode',
-          source: applicationActionSource,
-          keywords: ['loop', 'achievement', 'goal', 'audit', 'implementation']
-        }
-      )
+          keywords: stage.keywords
+        })
+      }
+      actions.push({
+        id: 'mode:autopilot',
+        title: lifecycle.autopilot ? 'Turn off Auto Pilot' : 'Turn on Auto Pilot',
+        description: 'Run every Engineering stage on full autonomy, reworking until complete.',
+        category: 'mode',
+        source: applicationActionSource,
+        keywords: ['autopilot', 'auto', 'pilot', 'autonomy', 'engineering']
+      })
     }
 
     for (const permission of actionPermissionLevels) {
@@ -4717,46 +4747,24 @@
       return
     }
 
-    if (action.id === 'mode:engineering') {
-      const engineeringMode = !settings.engineeringMode
-      const next: ThreadSettings = {
-        ...settings,
-        engineeringMode,
-        assignmentMode: engineeringMode ? settings.assignmentMode : false,
-        loopMode: engineeringMode ? settings.loopMode : false
-      }
-      updateSettings(next)
-      if (!engineeringMode) resetLifecycleWhenModesOff(next)
+    // Engineering lifecycle stage toggles stage their selection exactly like
+    // the Engineering Toolbox: intent only, applied when a message is sent.
+    const stageToggle = /^mode:stage:(brainstorm|prd|spec|assignment|achievement)$/u.exec(action.id)
+    if (stageToggle) {
+      const current = effectiveLifecycleSelection
+      if (current.autopilot) return
+      const stage = stageToggle[1] as EngineeringLifecycleStage
+      const stages = current.stages.includes(stage)
+        ? current.stages.filter((candidate) => candidate !== stage)
+        : [...current.stages, stage]
+      selectEngineeringLifecycle({ stages, autopilot: false })
       return
     }
 
-    if (action.id === 'mode:assignment') {
-      const assignmentMode = settings.assignmentMode !== true
-      const next: ThreadSettings = {
-        ...settings,
-        engineeringMode: assignmentMode ? true : settings.engineeringMode,
-        assignmentMode,
-        loopMode: settings.loopMode
-      }
-      updateSettings(next)
-      if (!next.engineeringMode && !next.assignmentMode && !next.loopMode) {
-        resetLifecycleWhenModesOff(next)
-      }
-      return
-    }
-
-    if (action.id === 'mode:loop') {
-      const loopMode = settings.loopMode !== true
-      const next: ThreadSettings = {
-        ...settings,
-        engineeringMode: loopMode ? true : settings.engineeringMode,
-        assignmentMode: settings.assignmentMode,
-        loopMode
-      }
-      updateSettings(next)
-      if (!next.engineeringMode && !next.assignmentMode && !next.loopMode) {
-        resetLifecycleWhenModesOff(next)
-      }
+    if (action.id === 'mode:autopilot') {
+      const current = effectiveLifecycleSelection
+      const autopilot = !current.autopilot
+      selectEngineeringLifecycle({ stages: autopilot ? [] : current.stages, autopilot })
       return
     }
 
