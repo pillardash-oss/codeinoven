@@ -63,6 +63,7 @@
   import DiffSidebarPanel from '../files/DiffSidebarPanel.svelte'
   import ContextSidebar from '../layout/ContextSidebar.svelte'
   import ContextDock, { type ContextDockItem } from '../layout/ContextDock.svelte'
+  import FullscreenPanelDialog from '../workspace/FullscreenPanelDialog.svelte'
   import { coordinatorDockState } from '$lib/stores/coordinator-dock.svelte'
   import SubagentSessionView from '../threads/SubagentSessionView.svelte'
   import SourcesPanel from '../threads/SourcesPanel.svelte'
@@ -4672,165 +4673,56 @@
   onSelect={openThreadFromSwitcher}
 />
 
-<!-- Terminal fullscreen dialog -->
-{#if terminalFullscreenTabId}
+{#if terminalFullscreenTabId && fullscreenTerminalTabs.length > 0}
   {@const terminalTab = contextSidebarState.tabs.find((t) => t.id === terminalFullscreenTabId)}
-  {#if terminalTab?.kind === 'terminal'}
-    <Dialog.Root
-      open={true}
-      onOpenChange={(open) => {
-        if (!open) terminalFullscreenTabId = null
-      }}
-    >
-      <Dialog.Portal>
-        <Dialog.Overlay class="fixed inset-0 z-50 bg-overlay/80 backdrop-blur-sm" />
-        <Dialog.Content
-          class="fixed inset-0 z-50 flex min-h-0 flex-col overflow-hidden bg-app shadow-xl"
-          onEscapeKeydown={(e) => e.preventDefault()}
-        >
-          <div
-            class="titlebar-drag flex h-10 shrink-0 items-center gap-2 border-b border-border pr-3"
-            style={trafficLightInsetStyle()}
-          >
-            <Dialog.Title class="min-w-0 flex-1 truncate text-xs font-semibold text-foreground">
-              {terminalTab.title}
-            </Dialog.Title>
-            <Dialog.Description class="sr-only">Fullscreen terminal</Dialog.Description>
-            <div class="flex w-4/5 min-w-0 shrink-0 overflow-x-auto">
-              <div class="ml-auto flex min-w-max items-center gap-1">
-                {#each fullscreenTerminalTabs as terminalStripTab (terminalStripTab.id)}
-                  <div
-                    class="group flex h-7 shrink-0 items-center rounded-md {terminalStripTab.id ===
-                    terminalFullscreenTabId
-                      ? 'bg-elevated text-foreground'
-                      : 'text-dimmed hover:bg-elevated hover:text-foreground'}"
-                  >
-                    <button
-                      type="button"
-                      class="flex h-7 min-w-0 items-center gap-1.5 rounded-md py-1 pl-2"
-                      aria-current={terminalStripTab.id === terminalFullscreenTabId ? 'page' : undefined}
-                      title={terminalStripTab.title}
-                      onclick={() => (terminalFullscreenTabId = terminalStripTab.id)}
-                    >
-                      <SquareTerminal size={11} class="shrink-0" />
-                      <span class="max-w-40 truncate text-[11px] font-medium"
-                        >{terminalStripTab.title}</span
-                      >
-                    </button>
-                    <button
-                      type="button"
-                      class="mr-1 flex h-5 w-5 shrink-0 items-center justify-center rounded text-dimmed opacity-70 transition-colors hover:bg-raised hover:text-foreground group-hover:opacity-100"
-                      aria-label={`Close ${terminalStripTab.title}`}
-                      title={`Close ${terminalStripTab.title}`}
-                      onclick={() => closeFullscreenTab('terminal', terminalStripTab.id)}
-                    >
-                      <X size={10} />
-                    </button>
-                  </div>
-                {/each}
-              </div>
-            </div>
-            <button
-              type="button"
-              class="titlebar-no-drag flex h-7 w-7 shrink-0 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
-              aria-label="Open another terminal"
-              title="New terminal"
-              onclick={openNewTerminal}
-            >
-              <Plus size={14} />
-            </button>
-            <Dialog.Close
-              class="titlebar-no-drag flex h-7 w-7 shrink-0 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
-              aria-label="Minimize terminal"
-              title="Minimize terminal"
-            >
-              <Minimize2 size={14} />
-            </Dialog.Close>
-          </div>
-          <TerminalPanel terminalId={terminalTab.terminalId} projectId={terminalTab.projectId} />
-        </Dialog.Content>
-      </Dialog.Portal>
-    </Dialog.Root>
-  {/if}
+  <FullscreenPanelDialog
+    tabs={fullscreenTerminalTabs}
+    activeTabId={terminalFullscreenTabId}
+    newLabel="New terminal"
+    minimizeLabel="Minimize terminal"
+    onSelect={(id) => (terminalFullscreenTabId = id)}
+    onCloseTab={(id) => closeFullscreenTab('terminal', id)}
+    onNew={openNewTerminal}
+    onMinimize={() => (terminalFullscreenTabId = null)}
+  >
+    {#snippet icon()}
+      <SquareTerminal size={11} class="shrink-0" />
+    {/snippet}
+    {#snippet children()}
+      {#if terminalTab?.kind === 'terminal'}
+        {#key terminalFullscreenTabId}
+          <TerminalPanel
+            terminalId={terminalTab.terminalId}
+            projectId={terminalTab.projectId}
+          />
+        {/key}
+      {/if}
+    {/snippet}
+  </FullscreenPanelDialog>
 {/if}
 
-<!-- Browser fullscreen dialog -->
 {#if browserFullscreenTabId}
   {@const browserTab = contextSidebarState.tabs.find((tab) => tab.id === browserFullscreenTabId)}
   {#if browserTab?.kind === 'browser'}
-    <Dialog.Root
-      open={true}
-      onOpenChange={(open) => {
-        if (!open) browserFullscreenTabId = null
-      }}
+    <FullscreenPanelDialog
+      tabs={fullscreenBrowserTabs}
+      activeTabId={browserFullscreenTabId}
+      newLabel="New browser tab"
+      minimizeLabel="Minimize browser"
+      onSelect={(id) => (browserFullscreenTabId = id)}
+      onCloseTab={(id) => closeFullscreenTab('browser', id)}
+      onNew={openNewBrowser}
+      onMinimize={() => (browserFullscreenTabId = null)}
     >
-      <Dialog.Portal>
-        <Dialog.Overlay class="fixed inset-0 z-50 bg-overlay/80 backdrop-blur-sm" />
-        <Dialog.Content
-          class="fixed inset-0 z-50 flex min-h-0 flex-col overflow-hidden bg-app shadow-xl"
-          onEscapeKeydown={(event) => event.preventDefault()}
-        >
-          <div
-            class="titlebar-drag flex h-10 shrink-0 items-center gap-2 border-b border-border pr-3"
-            style={trafficLightInsetStyle()}
-          >
-            <Dialog.Title class="min-w-0 flex-1 truncate text-xs font-semibold text-foreground">
-              {browserTab.title}
-            </Dialog.Title>
-            <div class="titlebar-no-drag flex w-4/5 min-w-0 shrink-0 overflow-x-auto">
-              <div class="ml-auto flex min-w-max items-center gap-1">
-                {#each fullscreenBrowserTabs as fullscreenTab (fullscreenTab.id)}
-                  <div
-                    class="group flex h-7 shrink-0 items-center rounded-md {fullscreenTab.id ===
-                    browserFullscreenTabId
-                      ? 'bg-elevated text-foreground'
-                      : 'text-dimmed hover:bg-elevated hover:text-foreground'}"
-                  >
-                    <button
-                      type="button"
-                      class="flex h-7 min-w-0 items-center gap-1.5 rounded-md py-1 pl-2"
-                      aria-current={fullscreenTab.id === browserFullscreenTabId ? 'page' : undefined}
-                      title={fullscreenTab.title}
-                      onclick={() => (browserFullscreenTabId = fullscreenTab.id)}
-                    >
-                      <Globe2 size={11} class="shrink-0" />
-                      <span class="max-w-40 truncate text-[11px] font-medium">{fullscreenTab.title}</span>
-                    </button>
-                    <button
-                      type="button"
-                      class="mr-1 flex h-5 w-5 shrink-0 items-center justify-center rounded text-dimmed opacity-70 transition-colors hover:bg-raised hover:text-foreground group-hover:opacity-100"
-                      aria-label={`Close ${fullscreenTab.title}`}
-                      title={`Close ${fullscreenTab.title}`}
-                      onclick={() => closeFullscreenTab('browser', fullscreenTab.id)}
-                    >
-                      <X size={10} />
-                    </button>
-                  </div>
-                {/each}
-              </div>
-            </div>
-            <Dialog.Description class="sr-only">Fullscreen browser</Dialog.Description>
-            <button
-              type="button"
-              class="titlebar-no-drag flex h-7 w-7 shrink-0 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
-              aria-label="New browser tab"
-              title="New browser tab"
-              onclick={openNewBrowser}
-            >
-              <Plus size={14} />
-            </button>
-            <Dialog.Close
-              class="titlebar-no-drag flex h-7 w-7 shrink-0 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
-              aria-label="Minimize browser"
-              title="Minimize browser"
-            >
-              <Minimize2 size={14} />
-            </Dialog.Close>
-          </div>
+      {#snippet icon()}
+        <Globe2 size={11} class="shrink-0" />
+      {/snippet}
+      {#snippet children()}
+        {#key browserFullscreenTabId}
           <BrowserPanel tab={browserTab} fullscreen />
-        </Dialog.Content>
-      </Dialog.Portal>
-    </Dialog.Root>
+        {/key}
+      {/snippet}
+    </FullscreenPanelDialog>
   {/if}
 {/if}
 
