@@ -1212,6 +1212,21 @@
   let fullscreenBrowserTabs = $derived(
     contextSidebarState.tabs.filter((tab) => tab.kind === 'browser')
   )
+  let fullscreenTerminalTabs = $derived(
+    contextSidebarState.tabs.filter((tab) => tab.kind === 'terminal')
+  )
+
+  /** Close a tab from a fullscreen strip without tearing the fullscreen down
+   *  unless it was the last tab of that kind. */
+  function closeFullscreenTab(kind: 'terminal' | 'browser', tabId: string): void {
+    const openTabs = contextSidebarState.tabs.filter((tab) => tab.kind === kind)
+    const remaining = openTabs.filter((tab) => tab.id !== tabId)
+    closeContextTab(tabId)
+    if (remaining.length === 0) return
+    const fallback = remaining.at(-1)?.id ?? null
+    if (kind === 'terminal') terminalFullscreenTabId = fallback
+    else browserFullscreenTabId = fallback
+  }
   let sidebarVisible = $derived(contextSidebarState.sidebarVisible)
   let terminalDockVisible = $derived(contextSidebarState.terminalDockVisible)
 
@@ -4683,7 +4698,7 @@
             <Dialog.Description class="sr-only">Fullscreen terminal</Dialog.Description>
             <div class="flex w-4/5 min-w-0 shrink-0 overflow-x-auto">
               <div class="flex min-w-max items-center gap-1">
-                {#each contextSidebarState.terminalTabs as terminalStripTab (terminalStripTab.id)}
+                {#each fullscreenTerminalTabs as terminalStripTab (terminalStripTab.id)}
                   <div
                     class="group flex h-7 shrink-0 items-center rounded-md {terminalStripTab.id ===
                     terminalFullscreenTabId
@@ -4707,7 +4722,7 @@
                       class="mr-1 flex h-5 w-5 shrink-0 items-center justify-center rounded text-dimmed opacity-70 transition-colors hover:bg-raised hover:text-foreground group-hover:opacity-100"
                       aria-label={`Close ${terminalStripTab.title}`}
                       title={`Close ${terminalStripTab.title}`}
-                      onclick={() => closeContextTab(terminalStripTab.id)}
+                      onclick={() => closeFullscreenTab('terminal', terminalStripTab.id)}
                     >
                       <X size={10} />
                     </button>
@@ -4786,7 +4801,7 @@
                       class="mr-1 flex h-5 w-5 shrink-0 items-center justify-center rounded text-dimmed opacity-70 transition-colors hover:bg-raised hover:text-foreground group-hover:opacity-100"
                       aria-label={`Close ${fullscreenTab.title}`}
                       title={`Close ${fullscreenTab.title}`}
-                      onclick={() => closeContextTab(fullscreenTab.id)}
+                      onclick={() => closeFullscreenTab('browser', fullscreenTab.id)}
                     >
                       <X size={10} />
                     </button>
