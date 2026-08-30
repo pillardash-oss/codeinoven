@@ -116,6 +116,25 @@
         issue.kind === 'provider_unavailable')
   )
 
+  const URL_PATTERN = /https?:\/\/[^\s<>"']+/g
+
+  function messageParts(message: string): Array<{ text: string; isLink: boolean }> {
+    const parts: Array<{ text: string; isLink: boolean }> = []
+    let lastIndex = 0
+    for (const match of message.matchAll(URL_PATTERN)) {
+      const start = match.index ?? 0
+      if (start > lastIndex) {
+        parts.push({ text: message.slice(lastIndex, start), isLink: false })
+      }
+      parts.push({ text: match[0], isLink: true })
+      lastIndex = start + match[0].length
+    }
+    if (lastIndex < message.length) {
+      parts.push({ text: message.slice(lastIndex), isLink: false })
+    }
+    return parts
+  }
+
   function issueTitle(kind: AgentProviderIssueKind): string {
     switch (kind) {
       case 'rate_limit':
@@ -246,7 +265,21 @@
         <p class="mt-1 text-xs font-medium text-foreground">Task · {sourceDetail}</p>
       {/if}
 
-      <p class="mt-1 text-sm leading-relaxed text-muted">{issue.message}</p>
+      <p class="mt-1 text-sm leading-relaxed text-muted select-text">
+        {#each messageParts(issue.message) as part, index (index)}
+          {#if part.isLink}
+            <a
+              href={part.text}
+              target="_blank"
+              rel="noopener noreferrer"
+              class="break-all text-accent underline underline-offset-2 hover:text-accent/80"
+              >{part.text}</a
+            >
+          {:else}
+            {part.text}
+          {/if}
+        {/each}
+      </p>
 
       {#if waiting && issue.retryAt && autoRetryEnabled && withinAutoScheduleWindow}
         <p class="mt-2 text-xs font-medium text-foreground tabular-nums">
