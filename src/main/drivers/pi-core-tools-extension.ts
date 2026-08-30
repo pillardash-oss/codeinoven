@@ -322,7 +322,8 @@ export default function codeInOvenCoreToolsExtension(pi) {
     promptSnippet: 'Ask the user structured questions (options or free text) and wait for answers',
     promptGuidelines: [
       'Use cio_ask_user when a decision, preference, or clarification from the user is needed before continuing.',
-      'Provide short option labels with a separate question field; keep each question self-contained.'
+      'Provide short option labels with a separate question field; keep each question self-contained.',
+      'Write option labels as plain text only — never prefix them with colons, quotes, bullets, or other markers.'
     ],
     parameters: Type.Object({
       questions: Type.Array(

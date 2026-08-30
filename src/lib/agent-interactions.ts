@@ -110,11 +110,27 @@ export function normalizeAgentQuestions(
   return single ? [single] : [{ prompt: fallbackPrompt, custom: true }]
 }
 
+/**
+ * Strip list-marker/typographic artifacts models leak into option labels —
+ * most commonly the defining key's colon duplicated into the first array
+ * element ("options": [": Option one", ...]), plus stray markdown bullet
+ * markers. Returns an empty string when nothing remains.
+ */
+function cleanOptionLabel(value: string): string {
+  let label = value.trim()
+  // Bullet markers: only strip when followed by whitespace so negative
+  // values like "-5" survive untouched.
+  label = label.replace(/^(?:[-*•·>]+\s+)+/u, '')
+  // Stray colon prefix (the reported artifact).
+  label = label.replace(/^:+\s*/u, '')
+  return label.trim()
+}
+
 function normalizeQuestion(value: unknown, index: number): AgentQuestion | null {
   const input = recordValue(value)
   if (!input) {
     const prompt = firstString(value)
-    return prompt ? { prompt, custom: true } : null
+    return prompt ? { prompt: cleanOptionLabel(prompt), custom: true } : null
   }
   const prompt = firstString(
     input['question'],
@@ -131,7 +147,8 @@ function normalizeQuestion(value: unknown, index: number): AgentQuestion | null 
         .map((option) =>
           firstString(option, recordValue(option)?.['label'], recordValue(option)?.['name'])
         )
-        .filter((option): option is string => option !== undefined)
+        .map((option) => (option === undefined ? '' : cleanOptionLabel(option)))
+        .filter((option): option is string => option.length > 0)
     : []
   const richOptions = Array.isArray(optionValues)
     ? optionValues
@@ -139,16 +156,18 @@ function normalizeQuestion(value: unknown, index: number): AgentQuestion | null 
           const entry = recordValue(option)
           if (!entry) {
             const label = firstString(option)
-            return label ? { label } : null
+            return label ? { label: cleanOptionLabel(label) } : null
           }
           const label = firstString(entry['label'], entry['name'], entry['value'])
           if (!label) return null
+          const cleanedLabel = cleanOptionLabel(label)
+          if (!cleanedLabel) return null
           return {
-            label,
+            label: cleanedLabel,
             ...(firstString(entry['description'], entry['detail'], entry['help'])
               ? { description: firstString(entry['description'], entry['detail'], entry['help']) }
               : {}),
-            ...(entry['recommended'] === true || /\(recommended\)/iu.test(label)
+            ...(entry['recommended'] === true || /\(recommended\)/iu.test(cleanedLabel)
               ? { recommended: true }
               : {})
           }
