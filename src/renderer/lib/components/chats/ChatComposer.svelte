@@ -183,7 +183,6 @@
     onEngineeringLifecycleSelect?: (
       input: EngineeringLifecycleSelectionInput
     ) => void | Promise<void>
-    onEngineeringLifecycleRetry?: () => void | Promise<void>
     /** True on the Chats tab — surfaces the chat-only Engineering and File System toggles. */
     showChatModes?: boolean
     /** Hides the permission level selector and forces auto review — chats are
@@ -282,7 +281,6 @@
     engineeringLifecycle = null,
     engineeringActive,
     onEngineeringLifecycleSelect,
-    onEngineeringLifecycleRetry,
     showChatModes = false,
     hidePermissionSelector = false,
     readOnlyMode = false,
@@ -2311,7 +2309,6 @@
         active={(engineeringActive ?? resolved.engineeringMode) === true}
         disabled={readOnlyMode}
         onselect={onEngineeringLifecycleSelect}
-        onretry={onEngineeringLifecycleRetry}
       />
     {/if}
 

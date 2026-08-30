@@ -71,6 +71,7 @@
   import SpecReadyCard from './SpecReadyCard.svelte'
   import BrainstormEntryChoiceCard from './BrainstormEntryChoiceCard.svelte'
   import BrainstormReadyCard from './BrainstormReadyCard.svelte'
+  import EngineeringRetryCard from './EngineeringRetryCard.svelte'
   import EngineeringEntryCard from '../chats/EngineeringEntryCard.svelte'
   import PrdReadyCard from './PrdReadyCard.svelte'
   import EngineeringFlowCancelModal from './EngineeringFlowCancelModal.svelte'
@@ -414,6 +415,11 @@
   let engineeringLifecycle = $state<EngineeringLifecycleState | null>(null)
   let pendingLifecycleSelection = $state<EngineeringLifecycleSelectionInput | null>(null)
   let lifecycleCancelModalOpen = $state(false)
+  /** True while the Engineering lifecycle retry from the failure card is running. */
+  let engineeringLifecycleRetrying = $state(false)
+  /** While a stage failed terminally, the retry card is the only card present:
+   *  every other stage card is suppressed until the user retries or cancels. */
+  const failureRetryVisible = $derived(engineeringLifecycle?.humanGate === 'terminal_failure')
   /** A user send that was parked behind the replacement guard, resubmitted after
    *  the user confirms stopping the active Engineering work. */
   let pendingGuardedSend = $state<GuardedSendPayload | null>(null)
@@ -557,6 +563,7 @@
   async function retryEngineeringLifecycle(): Promise<void> {
     const current = engineeringLifecycle
     if (current?.humanGate !== 'terminal_failure' || !current.resumeToken) return
+    engineeringLifecycleRetrying = true
     try {
       engineeringLifecycle = await invoke(
         'engineeringLifecycle:retry',
@@ -607,6 +614,26 @@
       errorMessage =
         error instanceof Error ? error.message : 'The Engineering stage could not retry.'
       engineeringLifecycle = await invoke('engineeringLifecycle:get', thread.projectId, thread.id)
+    } finally {
+      engineeringLifecycleRetrying = false
+    }
+  }
+
+  /** Stop the Engineering lifecycle from the prominent failure card. The failed
+   *  stage already ended, so no in-flight turn needs the replacement guard —
+   *  cancelling reveals the normal card for the stage underneath. */
+  async function cancelEngineeringFailure(): Promise<void> {
+    try {
+      engineeringLifecycle = await invoke(
+        'engineeringLifecycle:cancel',
+        thread.projectId,
+        thread.id,
+        true
+      )
+      updateSettings(settingsForEngineeringState(engineeringLifecycle))
+    } catch (error) {
+      errorMessage =
+        error instanceof Error ? error.message : 'The Engineering stage could not be cancelled.'
     }
   }
   /** Sticky snapshot of the selection that started the live turn. Every working
@@ -10105,6 +10132,25 @@
                 />
               {/key}
             {/if}
+            {#if failureRetryVisible}
+              <EngineeringRetryCard
+                stage={engineeringLifecycle.activeStage}
+                failure={engineeringLifecycle.failure}
+                busy={engineeringLifecycleRetrying}
+                {settings}
+                {providers}
+                projectId={thread.projectId}
+                favoriteModels={rendererRecovery.favoriteModels}
+                recentModels={rendererRecovery.recentModels}
+                onRetry={() => void retryEngineeringLifecycle()}
+                onCancel={() => void cancelEngineeringFailure()}
+                onModelChange={changeThreadModel}
+                onToggleFavorite={(providerId, modelId, harnessId) =>
+                  rendererRecovery.toggleFavorite(modelKey(harnessId, providerId, modelId))}
+                onReorderFavorite={(draggedKey, targetKey, position) =>
+                  rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
+              />
+            {/if}
             {#if isAssignmentAuditorThread}
               <AuditGeneratedCard
                 state={assignmentAuditState}
@@ -10127,7 +10173,7 @@
                   rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
                 onViewReport={openCoordinatorAuditReport}
               />
-            {:else if (pendingEngineeringEntry === 'prd' || pendingEngineeringEntry === 'spec') && !busy}
+            {:else if (pendingEngineeringEntry === 'prd' || pendingEngineeringEntry === 'spec') && !busy && !failureRetryVisible}
               <EngineeringEntryCard
                 target={pendingEngineeringEntry}
                 busy={prdBusy || brainstormBusy}
@@ -10144,7 +10190,7 @@
                 onReorderFavorite={(draggedKey, targetKey, position) =>
                   rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
               />
-            {:else if brainstormWorkflow?.entryChoice && !brainstorm && !spec && brainstormGenerationFailed && !busy}
+            {:else if brainstormWorkflow?.entryChoice && !brainstorm && !spec && brainstormGenerationFailed && !busy && !failureRetryVisible}
               <BrainstormEntryChoiceCard
                 busy={brainstormBusy}
                 retryChoice={brainstormWorkflow.entryChoice}
@@ -10162,7 +10208,7 @@
                 onReorderFavorite={(draggedKey, targetKey, position) =>
                   rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
               />
-            {:else if brainstormWorkflow?.stage === 'choice_pending' && !busy}
+            {:else if brainstormWorkflow?.stage === 'choice_pending' && !busy && !failureRetryVisible}
               <BrainstormEntryChoiceCard
                 busy={brainstormBusy}
                 onStartBrainstorm={() => chooseBrainstormEntry('brainstorm')}
@@ -10204,7 +10250,7 @@
                     rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
                 />
               {/key}
-            {:else if assignmentAuditState === 'running' && assignment && !achievementAutonomous}
+            {:else if assignmentAuditState === 'running' && assignment && !achievementAutonomous && !failureRetryVisible}
               <AuditGeneratedCard
                 state="running"
                 reworkCycle={assignmentReworkCycle}
@@ -10222,7 +10268,7 @@
                   rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
                 onViewReport={openAuditStudio}
               />
-            {:else if plainEngineeringAuditRunning && !achievementAutonomous}
+            {:else if plainEngineeringAuditRunning && !achievementAutonomous && !failureRetryVisible}
               <AuditGeneratedCard
                 state="running"
                 settings={auditSettings}
@@ -10239,7 +10285,7 @@
                 onViewTrace={() => void openDurableAuditWork()}
                 onViewReport={openAuditStudio}
               />
-            {:else if assignmentAuditState === 'failed' && assignment && !busy && !achievementAutonomous}
+            {:else if assignmentAuditState === 'failed' && assignment && !busy && !achievementAutonomous && !failureRetryVisible}
               <AuditGeneratedCard
                 state="failed"
                 error={assignmentAuditFailure}
@@ -10261,7 +10307,7 @@
                   rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
                 onViewReport={openAuditStudio}
               />
-            {:else if assignmentAuditState === 'offered' && !busy && !achievementAutonomous && !studioOnlyAuditWorkflow}
+            {:else if assignmentAuditState === 'offered' && !busy && !achievementAutonomous && !studioOnlyAuditWorkflow && !failureRetryVisible}
               <AuditOfferCard
                 threadTitle={thread.title}
                 reworkCycle={assignmentReworkCycle}
@@ -10279,7 +10325,7 @@
                 onReorderFavorite={(draggedKey, targetKey, position) =>
                   rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
               />
-            {:else if assignmentAuditState === 'report_ready' && auditReport && !busy && !achievementAutonomous && !studioOnlyAuditWorkflow}
+            {:else if assignmentAuditState === 'report_ready' && auditReport && !busy && !achievementAutonomous && !studioOnlyAuditWorkflow && !failureRetryVisible}
               <AuditReadyCard
                 report={auditReport}
                 {providers}
@@ -10298,7 +10344,7 @@
                 onReorderFavorite={(draggedKey, targetKey, position) =>
                   rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
               />
-            {:else if prd?.status === 'draft' && !busy && !specFormulating}
+            {:else if prd?.status === 'draft' && !busy && !specFormulating && !failureRetryVisible}
               <PrdReadyCard
                 busy={prdBusy}
                 onReview={openPrdStudio}
@@ -10314,7 +10360,7 @@
                 onReorderFavorite={(draggedKey, targetKey, position) =>
                   rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
               />
-            {:else if brainstormWorkflow?.stage === 'drafting' && brainstorm && !busy && !specFormulating}
+            {:else if brainstormWorkflow?.stage === 'drafting' && brainstorm && !busy && !specFormulating && !failureRetryVisible}
               {@const readyBrainstorm = brainstorm}
               <BrainstormReadyCard
                 version={readyBrainstorm.version}
@@ -10338,7 +10384,7 @@
                 onReorderFavorite={(draggedKey, targetKey, position) =>
                   rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
               />
-            {:else if assignment?.status === 'draft' && !busy && !specFormulating}
+            {:else if assignment?.status === 'draft' && !busy && !specFormulating && !failureRetryVisible}
               {#key assignment.version}
                 <AssignmentReadyCard
                   {assignment}
@@ -10362,7 +10408,7 @@
                     rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
                 />
               {/key}
-            {:else if (specReadyToolVisible || (settings.assignmentMode && spec && !assignment)) && spec && !busy && !specFormulating}
+            {:else if (specReadyToolVisible || (settings.assignmentMode && spec && !assignment)) && spec && !busy && !specFormulating && !failureRetryVisible}
               <SpecReadyCard
                 {providers}
                 projectId={thread.projectId}
@@ -10409,7 +10455,6 @@
                   engineeringLifecycle={pendingLifecycleDisplay}
                   engineeringActive={toolboxActive}
                   onEngineeringLifecycleSelect={selectEngineeringLifecycle}
-                  onEngineeringLifecycleRetry={retryEngineeringLifecycle}
                   showChatModes={chatMode}
                   {settings}
                   onSettingsChange={updateSettings}
