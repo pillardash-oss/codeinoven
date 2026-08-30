@@ -980,6 +980,20 @@
         ? agentRuns.isBusy(thread.projectId, thread.id)
         : Boolean(thread.sessionId) && isThreadWorking(thread)
       const status = statusBadgeForThread(thread, isLiveWorking)
+      // Model/harness metadata for the result row: while the thread is working
+      // the current provider + model is shown, otherwise the thread's harnesses
+      // and provider appear as icons — mirroring the sidebar thread row.
+      const harnessIds = Array.from(
+        new Set([
+          ...(thread.usedHarnessIds ?? []),
+          ...(thread.settings?.harnessId ? [thread.settings.harnessId] : [])
+        ])
+      )
+      const providerId = thread.settings?.providerId ?? thread.providerId
+      const providers = providerCatalog.cached(thread.projectId) ?? providerCatalog.allCached()
+      const providerName = providerId
+        ? (providers.find((provider) => provider.id === providerId)?.name ?? null)
+        : null
       const projectLabel = project?.name ?? thread.projectId
       const createdLabel = relativeThreadTime(thread.createdAt)
       actions.push({
@@ -998,6 +1012,13 @@
         showSourceBadge: false,
         ...(projectIconUri ? { iconUri: projectIconUri } : { icon: MessagesSquare }),
         ...(status ? { status } : {}),
+        threadMeta: {
+          working: isLiveWorking,
+          harnessIds,
+          providerName,
+          providerId,
+          modelId: thread.settings?.modelId ?? null
+        },
         keywords: [project?.name ?? thread.projectId, thread.title, ...(snippet ? [snippet] : [])]
       })
     }

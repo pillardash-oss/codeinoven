@@ -43,6 +43,23 @@ export interface ActionDefinition {
   /** Optional live status rendered as a colored badge + human label (e.g. thread
    *  working / retrying / error) so results can be distinguished at a glance. */
   status?: ActionStatusBadge
+  /** Optional thread model/harness metadata rendered at the end of the
+   *  description row: the currently working provider + model while the thread
+   *  is working, otherwise the thread's harnesses and provider as icons. */
+  threadMeta?: ActionThreadMeta
+}
+
+export interface ActionThreadMeta {
+  /** Whether the thread is currently working — picks the current model over the history icons. */
+  working: boolean
+  /** Distinct harnesses associated with the thread, newest first. */
+  harnessIds: readonly string[]
+  /** Resolved provider display name for the thread's current model. */
+  providerName: string | null
+  /** Provider id of the thread's current model — drives icon resolution. */
+  providerId: string | null
+  /** Model identifier of the thread's current model. */
+  modelId: string | null
 }
 
 export interface ActionStatusBadge {
