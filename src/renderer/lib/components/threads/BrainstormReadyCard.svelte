@@ -10,6 +10,7 @@
     onFinalize: () => void
     prototypes?: BrainstormPrototype[]
     onContinueWithoutHifi?: () => void
+    onOpenPrototype?: (previewPath: string) => CallbackResult
     finalizeLabel?: string
     settings?: ThreadSettings
     providers?: ProviderCatalog[]
@@ -34,6 +35,7 @@
     onFinalize,
     prototypes = [],
     onContinueWithoutHifi,
+    onOpenPrototype,
     finalizeLabel = 'Prepare spec',
     settings,
     providers = [],
@@ -45,6 +47,8 @@
     onRemoveRecent,
     onReorderFavorite
   }: Props = $props()
+
+  type CallbackResult = void | Promise<void>
 
   let lofiPrototypes = $derived(prototypes.filter((prototype) => prototype.fidelity === 'lofi'))
   let hasHifi = $derived(prototypes.some((prototype) => prototype.fidelity === 'hifi'))
@@ -71,14 +75,18 @@
       specification.
     </p>
     {#if prototypes.length > 0}
-      <div class="space-y-1 pt-1">
+      <div class="max-h-60 space-y-1 overflow-y-auto pt-1">
         <p class="text-xs font-semibold uppercase tracking-wide text-muted">
           Captured prototypes ({prototypes.length})
         </p>
         {#each prototypes as prototype (prototype.id)}
-          <div
-            class="flex items-center gap-2 rounded-lg border bg-raised px-3 py-2"
+          <button
+            type="button"
+            class="flex w-full items-center gap-2 rounded-lg border bg-raised px-3 py-2 text-left hover:bg-elevated disabled:opacity-40"
+            title="Open {prototype.title} preview"
             aria-label="Prototype {prototype.id}: {prototype.title}"
+            disabled={busy}
+            onclick={() => onOpenPrototype?.(prototype.previewPath)}
           >
             <span
               class="shrink-0 rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide {'hifi' ===
@@ -87,7 +95,7 @@
                 : 'bg-overlay text-muted'}">{fidelityLabel(prototype.fidelity)}</span
             >
             <span class="truncate text-xs text-foreground">{prototype.title}</span>
-          </div>
+          </button>
         {/each}
       </div>
     {/if}
