@@ -9652,7 +9652,7 @@
                           (part) => part.type !== 'text' || part.phase === 'commentary'
                         )
                       : collectedTurnParts}
-                    {#if turnParts.length > 0}
+                    {#if turnParts.length > 0 || traceIsLive}
                       <WorkingTrace
                         parts={turnParts}
                         open={isLatestTurn || traceIsLive || traceIsRestored}
