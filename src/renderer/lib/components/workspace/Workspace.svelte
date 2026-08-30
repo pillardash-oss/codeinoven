@@ -4681,22 +4681,37 @@
               {terminalTab.title}
             </Dialog.Title>
             <Dialog.Description class="sr-only">Fullscreen terminal</Dialog.Description>
-            <div class="flex max-w-[min(50%,20rem)] shrink-0 overflow-x-auto">
+            <div class="flex w-4/5 min-w-0 shrink-0 overflow-x-auto">
               <div class="flex min-w-max items-center gap-1">
                 {#each contextSidebarState.terminalTabs as terminalStripTab (terminalStripTab.id)}
-                  <button
-                    type="button"
-                    class="flex h-7 max-w-40 shrink-0 items-center gap-1.5 rounded-md px-2 text-[11px] font-medium transition-colors {terminalStripTab.id ===
+                  <div
+                    class="group flex h-7 shrink-0 items-center rounded-md {terminalStripTab.id ===
                     terminalFullscreenTabId
                       ? 'bg-elevated text-foreground'
                       : 'text-dimmed hover:bg-elevated hover:text-foreground'}"
-                    aria-current={terminalStripTab.id === terminalFullscreenTabId ? 'page' : undefined}
-                    title={terminalStripTab.title}
-                    onclick={() => (terminalFullscreenTabId = terminalStripTab.id)}
                   >
-                    <SquareTerminal size={11} class="shrink-0" />
-                    <span class="truncate">{terminalStripTab.title}</span>
-                  </button>
+                    <button
+                      type="button"
+                      class="flex h-7 min-w-0 items-center gap-1.5 rounded-md py-1 pl-2"
+                      aria-current={terminalStripTab.id === terminalFullscreenTabId ? 'page' : undefined}
+                      title={terminalStripTab.title}
+                      onclick={() => (terminalFullscreenTabId = terminalStripTab.id)}
+                    >
+                      <SquareTerminal size={11} class="shrink-0" />
+                      <span class="max-w-40 truncate text-[11px] font-medium"
+                        >{terminalStripTab.title}</span
+                      >
+                    </button>
+                    <button
+                      type="button"
+                      class="mr-1 flex h-5 w-5 shrink-0 items-center justify-center rounded text-dimmed opacity-70 transition-colors hover:bg-raised hover:text-foreground group-hover:opacity-100"
+                      aria-label={`Close ${terminalStripTab.title}`}
+                      title={`Close ${terminalStripTab.title}`}
+                      onclick={() => closeContextTab(terminalStripTab.id)}
+                    >
+                      <X size={10} />
+                    </button>
+                  </div>
                 {/each}
               </div>
             </div>
@@ -4747,22 +4762,35 @@
             <Dialog.Title class="min-w-0 flex-1 truncate text-xs font-semibold text-foreground">
               {browserTab.title}
             </Dialog.Title>
-            <div class="titlebar-no-drag flex max-w-[min(50%,20rem)] shrink-0 overflow-x-auto">
+            <div class="titlebar-no-drag flex w-4/5 min-w-0 shrink-0 overflow-x-auto">
               <div class="flex min-w-max items-center gap-1">
                 {#each fullscreenBrowserTabs as fullscreenTab (fullscreenTab.id)}
-                  <button
-                    type="button"
-                    class="flex h-7 max-w-40 shrink-0 items-center gap-1.5 rounded-md px-2 text-[11px] font-medium transition-colors {fullscreenTab.id ===
+                  <div
+                    class="group flex h-7 shrink-0 items-center rounded-md {fullscreenTab.id ===
                     browserFullscreenTabId
                       ? 'bg-elevated text-foreground'
                       : 'text-dimmed hover:bg-elevated hover:text-foreground'}"
-                    aria-current={fullscreenTab.id === browserFullscreenTabId ? 'page' : undefined}
-                    title={fullscreenTab.title}
-                    onclick={() => (browserFullscreenTabId = fullscreenTab.id)}
                   >
-                    <Globe2 size={11} class="shrink-0" />
-                    <span class="truncate">{fullscreenTab.title}</span>
-                  </button>
+                    <button
+                      type="button"
+                      class="flex h-7 min-w-0 items-center gap-1.5 rounded-md py-1 pl-2"
+                      aria-current={fullscreenTab.id === browserFullscreenTabId ? 'page' : undefined}
+                      title={fullscreenTab.title}
+                      onclick={() => (browserFullscreenTabId = fullscreenTab.id)}
+                    >
+                      <Globe2 size={11} class="shrink-0" />
+                      <span class="max-w-40 truncate text-[11px] font-medium">{fullscreenTab.title}</span>
+                    </button>
+                    <button
+                      type="button"
+                      class="mr-1 flex h-5 w-5 shrink-0 items-center justify-center rounded text-dimmed opacity-70 transition-colors hover:bg-raised hover:text-foreground group-hover:opacity-100"
+                      aria-label={`Close ${fullscreenTab.title}`}
+                      title={`Close ${fullscreenTab.title}`}
+                      onclick={() => closeContextTab(fullscreenTab.id)}
+                    >
+                      <X size={10} />
+                    </button>
+                  </div>
                 {/each}
               </div>
             </div>
