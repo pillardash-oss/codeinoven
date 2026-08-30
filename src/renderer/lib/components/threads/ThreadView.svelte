@@ -573,30 +573,28 @@
       )
       updateSettings(settingsForEngineeringState(engineeringLifecycle))
       const stage = engineeringLifecycle.activeStage
+      const failureNote = current.failure?.trim()
+        ? ` The previous attempt failed with: ${current.failure.trim()}`
+        : ''
       if (stage === 'brainstorm') {
-        const active = await invoke('brainstorm:getActive', thread.projectId, thread.id)
-        if (active) applyBrainstormDocument(active)
-        else
-          await sendMessage(
-            'Retry the persisted Brainstorm stage using the existing conversation and project context.',
-            [],
-            undefined,
-            true
-          )
+        // Retry always continues the same stage in the same conversation — the
+        // agent has the full history, so never shortcut to the stale document.
+        await sendMessage(
+          `Retry the persisted Brainstorm stage using the existing conversation and project context.${failureNote}`,
+          [],
+          undefined,
+          true
+        )
       } else if (stage === 'prd') {
-        const active = await invoke('prd:getActive', thread.projectId, thread.id)
-        if (active) prd = active
-        else {
-          prd = await invoke(
-            'agent:generatePrd',
-            thread.projectId,
-            thread.id,
-            settings,
-            'Retry the persisted PRD stage using the existing conversation, finalized Brainstorm, and project context.',
-            [],
-            messageId()
-          )
-        }
+        prd = await invoke(
+          'agent:generatePrd',
+          thread.projectId,
+          thread.id,
+          settings,
+          `Retry the persisted PRD stage using the existing conversation, finalized Brainstorm, and project context.${failureNote}`,
+          [],
+          messageId()
+        )
       } else if (stage === 'spec') {
         await setActiveSpec(await invoke('agent:ensureInitialSpec', thread.projectId, thread.id))
       } else if (stage === 'assignment') {
