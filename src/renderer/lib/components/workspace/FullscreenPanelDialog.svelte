@@ -42,7 +42,7 @@
         class="titlebar-drag flex h-10 shrink-0 items-center gap-2 border-b border-border pr-3"
         style={trafficLightInsetStyle()}
       >
-        <div class="titlebar-no-drag flex w-4/5 min-w-0 shrink-0 overflow-x-auto">
+        <div class="titlebar-no-drag flex min-w-0 flex-1 overflow-x-auto">
           <div class="ml-auto flex min-w-max items-center gap-1">
             {#each tabs as tab (tab.id)}
               <button
