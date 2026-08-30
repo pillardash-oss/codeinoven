@@ -315,17 +315,6 @@
                     <StatusBadge stage="working" animated title="Working" />
                   {/if}
                 </button>
-                {#if (tab.kind === 'terminal' || tab.kind === 'browser') && onFullscreenTab}
-                  <button
-                    type="button"
-                    class="flex h-6 w-6 shrink-0 items-center justify-center rounded text-dimmed opacity-70 transition-colors hover:bg-raised hover:text-foreground group-hover:opacity-100"
-                    aria-label={`Fullscreen ${tab.title}`}
-                    title="Fullscreen"
-                    onclick={() => onFullscreenTab(tab.id)}
-                  >
-                    <Maximize2 size={11} />
-                  </button>
-                {/if}
                 <button
                   type="button"
                   class="mr-1 flex h-6 w-6 shrink-0 items-center justify-center rounded text-dimmed opacity-70 transition-colors hover:bg-raised hover:text-foreground group-hover:opacity-100"
@@ -428,6 +417,15 @@
                 <ChevronDown size={13} />
               </button>
             {/if}
+            <button
+              type="button"
+              class="flex h-7 w-7 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+              aria-label="Fullscreen"
+              title="Fullscreen"
+              onclick={() => activeTabId && onFullscreenTab?.(activeTabId)}
+            >
+              <Maximize2 size={13} />
+            </button>
             <button
               type="button"
               class="flex h-7 w-7 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"

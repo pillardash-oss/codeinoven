@@ -1208,6 +1208,10 @@
 
   let terminalFullscreenTabId = $state<string | null>(null)
   let browserFullscreenTabId = $state<string | null>(null)
+  /** All open browser tabs, for the fullscreen dialog's tab strip. */
+  let fullscreenBrowserTabs = $derived(
+    contextSidebarState.tabs.filter((tab) => tab.kind === 'browser')
+  )
   let sidebarVisible = $derived(contextSidebarState.sidebarVisible)
   let terminalDockVisible = $derived(contextSidebarState.terminalDockVisible)
 
@@ -4715,9 +4719,37 @@
             <Dialog.Title class="min-w-0 flex-1 truncate text-xs font-semibold text-foreground">
               {browserTab.title}
             </Dialog.Title>
+            <div class="flex max-w-[min(50%,20rem)] shrink-0 overflow-x-auto">
+              <div class="flex min-w-max items-center gap-1">
+                {#each fullscreenBrowserTabs as fullscreenTab (fullscreenTab.id)}
+                  <button
+                    type="button"
+                    class="flex h-7 max-w-40 shrink-0 items-center gap-1.5 rounded-md px-2 text-[11px] font-medium transition-colors {fullscreenTab.id ===
+                    browserFullscreenTabId
+                      ? 'bg-elevated text-foreground'
+                      : 'text-dimmed hover:bg-elevated hover:text-foreground'}"
+                    aria-current={fullscreenTab.id === browserFullscreenTabId ? 'page' : undefined}
+                    title={fullscreenTab.title}
+                    onclick={() => (browserFullscreenTabId = fullscreenTab.id)}
+                  >
+                    <Globe2 size={11} class="shrink-0" />
+                    <span class="truncate">{fullscreenTab.title}</span>
+                  </button>
+                {/each}
+              </div>
+            </div>
             <Dialog.Description class="sr-only">Fullscreen browser</Dialog.Description>
+            <button
+              type="button"
+              class="flex h-7 w-7 shrink-0 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+              aria-label="New browser tab"
+              title="New browser tab"
+              onclick={openNewBrowser}
+            >
+              <Plus size={14} />
+            </button>
             <Dialog.Close
-              class="titlebar-no-drag flex h-7 w-7 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+              class="titlebar-no-drag flex h-7 w-7 shrink-0 items-center justify-center rounded text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
               aria-label="Minimize browser"
               title="Minimize browser"
             >
