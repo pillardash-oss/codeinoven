@@ -36,6 +36,7 @@
     ShieldCheck,
     Target,
     Trash2,
+    Undo2,
     Video,
     X,
     Zap
@@ -282,6 +283,9 @@
   let messages = $derived(
     controller?.messages ?? threadMessages.messages(thread.projectId, thread.id)
   )
+  /** The conversation identity for held-steer tracking: temporary chats use
+   *  their own id, threads use the thread id. */
+  let conversationId = $derived(controller?.conversationId ?? thread.id)
   // Intentional initial-value captures — Workspace keys this view by thread ID.
   // svelte-ignore state_referenced_locally
   const savedScrollState = threadScrollPositions.get(thread.id)
@@ -4705,6 +4709,37 @@
 
     const command = commands.find((candidate) => actionId(candidate.id) === action.id)
     if (command) await executeHarnessCommand(command.id, '')
+  }
+
+  /** Undo a steered message that is still held before harness delivery. The
+   *  steer never reached the agent, so the session continues untouched; on
+   *  threads the text returns to the composer queue for editing/resending. */
+  async function undoHeldSteer(msg: AgentMessage): Promise<void> {
+    try {
+      await threadMessages.discardSteer(thread.projectId, conversationId, msg.id)
+      // Threads only: put the undone steer back into the FIFO composer queue
+      // so the text and attachments are not lost — the user can edit and
+      // resend. Temporary chats just drop the message.
+      if (conversationId !== thread.id) return
+      const text = msg.parts
+        .filter((part) => part.type === 'text')
+        .map((part) => part.text)
+        .join('\n\n')
+      const attachments: PromptAttachment[] = msg.parts
+        .filter((part) => part.type === 'file')
+        .map((part) => ({ mime: part.mime, url: part.url, filename: part.filename }))
+      rendererRecovery.setQueuedMessage(thread.projectId, thread.id, {
+        text,
+        attachments,
+        promptReferences: [],
+        projectReferences: [],
+        taskReferences: [],
+        startAfterThreads: []
+      })
+      syncQueuedFromStore()
+    } catch (error) {
+      errorMessage = error instanceof Error ? error.message : 'The steer could not be undone.'
+    }
   }
 
   /** Steer — send the queued message immediately as an intervention while the agent is working. */
@@ -9296,6 +9331,16 @@
                       class="mt-1 flex items-center gap-1.5 self-end opacity-0 transition-opacity group-hover:opacity-100"
                     >
                       <div class="flex items-center gap-0.5">
+                        {#if threadMessages.isSteerHeld(thread.projectId, conversationId, msg.id)}
+                          <button
+                            class="rounded p-1 text-accent transition-colors hover:bg-elevated"
+                            aria-label="Undo steer — the message has not reached the agent yet"
+                            title="Undo — the agent never receives a steered message that is undone"
+                            onclick={() => void undoHeldSteer(msg)}
+                          >
+                            <Undo2 size={12} />
+                          </button>
+                        {/if}
                         <button
                           class="rounded p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
                           aria-label="Copy message"

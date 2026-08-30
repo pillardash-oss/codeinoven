@@ -1005,6 +1005,10 @@ export interface IpcInvokeContract {
     [projectId: string, threadId: string, messageId: string],
     AgentMessage[]
   >
+  'agent:discardSteer': Contract<
+    [projectId: string, threadId: string, messageId: string],
+    void
+  >
   'checklist:generate': Contract<
     [projectId: string, threadId: string, planContent: string],
     Checklist

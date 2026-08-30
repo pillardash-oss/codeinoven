@@ -136,6 +136,7 @@ const INVOKE_CHANNELS = [
   'agent:runCommand',
   'agent:sendPrompt',
   'agent:steerPrompt',
+  'agent:discardSteer',
   'agent:sendTemporaryPrompt',
   'agent:steerTemporaryPrompt',
   'agent:abortTemporaryChat',

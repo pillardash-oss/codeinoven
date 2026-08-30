@@ -9,7 +9,7 @@
 import { invoke, subscribe } from '$lib/ipc.svelte'
 import { agentRuns } from '$lib/stores/agent-runs.svelte'
 import { messageId as createMessageId } from '$shared/id'
-import { SvelteMap } from 'svelte/reactivity'
+import { SvelteMap, SvelteSet } from 'svelte/reactivity'
 import type {
   AgentEvent,
   AgentMessage,
@@ -34,6 +34,9 @@ interface ThreadMessagesEntry {
   hasOlder: boolean
   error: string
   runIssue: AgentProviderIssue | null
+  /** User messages held by the chat engine before delivery to the harness —
+   *  the steer-undo window. Keyed by user message id. */
+  heldSteerIds: Set<string>
 }
 
 /** Bounded window warmed on hover, matching the ThreadView history window so a
@@ -131,7 +134,8 @@ class ThreadMessagesStore {
         loading: false,
         hasOlder: false,
         error: '',
-        runIssue: null
+        runIssue: null,
+        heldSteerIds: new SvelteSet<string>()
       }
       this.#threads.set(key, entry)
       this.threads.set(key, { ...entry })
@@ -200,6 +204,17 @@ class ThreadMessagesStore {
     if (entry.runIssue === issue) return
     entry.runIssue = issue
     this.#notify(projectId, threadId)
+  }
+
+  /** Whether this user message is held by the engine before harness delivery
+   *  (the steer-undo window). */
+  isSteerHeld(projectId: string, threadId: string, messageId: string): boolean {
+    return this.threads.get(threadKey(projectId, threadId))?.heldSteerIds.has(messageId) ?? false
+  }
+
+  /** Ask the engine to drop a held steer before it reaches the harness. */
+  async discardSteer(projectId: string, threadId: string, messageId: string): Promise<void> {
+    await invoke('agent:discardSteer', projectId, threadId, messageId)
   }
 
   clearLoadError(projectId: string, threadId: string): void {
@@ -1039,6 +1054,25 @@ class ThreadMessagesStore {
     }
 
     switch (event.type) {
+      case 'steer.held':
+      case 'steer.delivered':
+      case 'steer.discarded': {
+        const entry = this.entry(projectId, threadId)
+        if (event.type === 'steer.held') {
+          entry.heldSteerIds.add(event.userMessageId)
+        } else {
+          entry.heldSteerIds.delete(event.userMessageId)
+          if (event.type === 'steer.discarded') {
+            // The steer never reached the harness — remove the optimistic
+            // message so the conversation looks untouched.
+            entry.messages = entry.messages.filter(
+              (message) => message.id !== event.userMessageId
+            )
+          }
+        }
+        this.#notify(projectId, threadId)
+        break
+      }
       case 'message.part.updated':
         this.upsertPart(projectId, threadId, event.sessionId, event.part)
         break

@@ -2675,6 +2675,25 @@ export type AgentEvent =
       requestId: string
       action: ImageDescriptorReplyAction
     }
+  | {
+      /** A steered message is held by the chat engine until the harness's
+       *  in-flight tool call ends; it has not reached the harness yet. */
+      type: 'steer.held'
+      sessionId: string
+      userMessageId: string
+    }
+  | {
+      /** A held steer was delivered to the harness (undo window closed). */
+      type: 'steer.delivered'
+      sessionId: string
+      userMessageId: string
+    }
+  | {
+      /** A held steer was discarded by the user; the harness never saw it. */
+      type: 'steer.discarded'
+      sessionId: string
+      userMessageId: string
+    }
 
 /**
  * Agent events that are tied to a running session. Catalog events are app-level

@@ -147,6 +147,7 @@ export interface RemoteRpcServices {
     | 'ensureSession'
     | 'sendPrompt'
     | 'steerPrompt'
+    | 'discardSteer'
     | 'abort'
     | 'listPermissions'
     | 'replyPermission'
@@ -919,6 +920,12 @@ export class RemoteRpcDispatcher {
           args[7] as PromptProjectReference[] | undefined,
           args[8] as UserMessagePresentation | undefined,
           args[9] as PromptAssignmentTaskReference[] | undefined
+        )
+      case 'agent:discardSteer':
+        return chatEngine.discardSteer(
+          this.string(args[0]),
+          this.string(args[1]),
+          this.string(args[2])
         )
       case 'agent:abort':
         return chatEngine.abort(this.string(args[0]), this.string(args[1]))
