@@ -29,6 +29,17 @@
     onCloseTab,
     children
   }: Props = $props()
+
+  let stripElement = $state<HTMLDivElement>()
+
+  // Keep the active tab visible: whenever the active tab changes, scroll it
+  // into view inside the strip so a newly opened or newly focused tab is
+  // never hidden beyond the strip's scroll edge.
+  $effect(() => {
+    if (!activeTabId || !stripElement) return
+    const activeButton = stripElement.querySelector<HTMLButtonElement>('[data-active="true"]')
+    activeButton?.scrollIntoView({ inline: 'nearest', block: 'nearest' })
+  })
 </script>
 
 <Dialog.Root open={true} onOpenChange={(open) => !open && onMinimize()}>
@@ -42,11 +53,15 @@
         class="titlebar-drag flex h-10 shrink-0 items-center gap-2 border-b border-border pr-3"
         style={trafficLightInsetStyle()}
       >
-        <div class="titlebar-no-drag flex min-w-0 flex-1 overflow-x-auto">
+        <div
+          bind:this={stripElement}
+          class="titlebar-no-drag flex min-w-0 flex-1 overflow-x-auto"
+        >
           <div class="ml-auto flex min-w-max items-center gap-1">
             {#each tabs as tab (tab.id)}
               <button
                 type="button"
+                data-active={tab.id === activeTabId ? 'true' : undefined}
                 class="group flex h-7 shrink-0 items-center gap-1.5 rounded-md px-2 text-[11px] font-medium transition-colors {tab.id ===
                 activeTabId
                   ? 'bg-elevated text-foreground'
