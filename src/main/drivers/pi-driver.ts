@@ -31,7 +31,7 @@ import type {
   UtilityRuntimePreparationRequest
 } from './driver.interface'
 import { QuestionRequestGoneError } from './driver.interface'
-import type { HarnessCommand, ThreadSettings } from '../../lib/types'
+import type { HarnessCommand, PermissionReply, ThreadSettings } from '../../lib/types'
 import {
   classifyProviderIssue,
   extractProviderErrorEnvelope,
@@ -47,6 +47,7 @@ import {
 import { inlineSvgAttachments, isSvgAttachment } from './svg-attachment'
 import { piMcpExtension } from './pi-mcp-extension'
 import { piCustomProvidersExtension } from './pi-providers-extension'
+import { CIO_PERMISSION_MARKER, piCoreToolsExtension } from './pi-core-tools-extension'
 import { piUtilityGatewayExtension } from './pi-utility-gateway-extension'
 import {
   PI_STATUS_COMPACTING,
@@ -414,9 +415,7 @@ export function mapPiRecord(
     const existing = findToolPart(context, callId)
     const endArgs = record(entry['args'])
     const input =
-      endArgs && Object.keys(endArgs).length > 0
-        ? endArgs
-        : (existing?.state.input ?? {})
+      endArgs && Object.keys(endArgs).length > 0 ? endArgs : (existing?.state.input ?? {})
     return {
       events: [
         {
@@ -736,6 +735,10 @@ export class PiDriver extends PersistentCliDriver {
   private statusExtensionPath: string | null = null
   private statusExtensionDirectory: string | null = null
   private statusExtensionFailed = false
+  /** Materialized app-owned core-tools extension path, cached across sessions. */
+  private coreToolsExtensionPath: string | null = null
+  private coreToolsExtensionDirectory: string | null = null
+  private coreToolsExtensionFailed = false
   /** WSL-aware read view of Pi's own credential store (`~/.pi/agent/auth.json`). */
   private readonly authConfig = new PiAuthConfigService(undefined, piAuthFileIo)
 
@@ -992,10 +995,36 @@ export class PiDriver extends PersistentCliDriver {
 
   override async sendPrompt(projectPath: string, options: SendPromptOptions): Promise<void> {
     const session = await this.requireSession(projectPath, options.sessionId)
-    if (this.activeTurns.has(session.id)) {
-      throw new Error(`A turn is already active for session ${session.id}`)
-    }
     const client = await this.ensureRpcClient(projectPath, session.id)
+    // A live turn owns this session (silent continue, auto-retry, an idle race
+    // between the harness and the chat-engine status). Throwing here surfaced a
+    // second user-facing error on top of a turn that is still producing output
+    // — the user clicks retry and is told the session already has an active
+    // turn. Instead, re-anchor provenance with the incoming settings and
+    // deliver the prompt through pi's steer channel so the live working trace
+    // simply continues.
+    if (this.activeTurns.has(session.id)) {
+      const activeModel = this.resolveModel(options.settings.providerId, options.settings.modelId)
+      if (activeModel) {
+        try {
+          await client.setModel(activeModel.provider, activeModel.modelId)
+          await client.setThinkingLevel(piThinkingLevel(options.settings.thinkingLevel))
+        } catch {
+          // The active turn keeps its current model/thinking level; steering
+          // must not fail just because a mid-turn model switch was rejected.
+        }
+      }
+      this.setTurnProvenance(
+        session.id,
+        options.settings.providerId,
+        options.settings.modelId,
+        options.settings.thinkingLevel
+      )
+      this.appendUserMessage(session, options)
+      this.silentContinues.delete(session.id)
+      await this.steerIntoActiveTurn(session.id, options.text, options.attachments)
+      return
+    }
     const model = this.resolveModel(options.settings.providerId, options.settings.modelId)
     if (!model) {
       throw new Error(
@@ -1065,10 +1094,24 @@ export class PiDriver extends PersistentCliDriver {
     if (!client || !this.activeTurns.has(options.sessionId)) {
       throw new Error(`No active Pi turn is available to steer for session ${options.sessionId}`)
     }
-    const inlineSvg = await inlineSvgAttachments(options.attachments)
+    await this.steerIntoActiveTurn(options.sessionId, options.text, options.attachments)
+  }
+
+  /** Compose attachments + text and deliver them into the session's live turn
+   *  through pi's steer channel. The caller must have verified an active turn. */
+  private async steerIntoActiveTurn(
+    sessionId: string,
+    text: string,
+    attachments: SendPromptOptions['attachments']
+  ): Promise<void> {
+    const client = this.rpcClients.get(sessionId)
+    if (!client) {
+      throw new Error(`No active Pi turn is available to steer for session ${sessionId}`)
+    }
+    const inlineSvg = await inlineSvgAttachments(attachments)
     const images: PiImageContent[] = []
     const references: string[] = []
-    for (const attachment of options.attachments) {
+    for (const attachment of attachments) {
       if (isSvgAttachment(attachment)) continue
       const path = await localAttachmentPath(attachment)
       if (attachment.mime.toLowerCase().startsWith('image/')) {
@@ -1081,7 +1124,7 @@ export class PiDriver extends PersistentCliDriver {
         references.push(`Attached file: ${path}`)
       }
     }
-    const message = [inlineSvg, ...references, options.text].filter(Boolean).join('\n\n')
+    const message = [inlineSvg, ...references, text].filter(Boolean).join('\n\n')
     await client.steer(message, images)
   }
 
@@ -1289,6 +1332,12 @@ export class PiDriver extends PersistentCliDriver {
     if (statusDirectory) {
       void rm(statusDirectory, { recursive: true, force: true }).catch(() => undefined)
     }
+    const coreToolsDirectory = this.coreToolsExtensionDirectory
+    this.coreToolsExtensionPath = null
+    this.coreToolsExtensionDirectory = null
+    if (coreToolsDirectory) {
+      void rm(coreToolsDirectory, { recursive: true, force: true }).catch(() => undefined)
+    }
     super.dispose()
   }
 
@@ -1341,6 +1390,11 @@ export class PiDriver extends PersistentCliDriver {
     // The per-turn endpoint arrives later via publishUtilityGatewayEndpoint.
     const gatewayExtension = await this.materializeGatewayExtension(sessionId)
     if (gatewayExtension) extensionArgs.push('--extension', gatewayExtension)
+    // The app-owned core-tools extension registers the question, todo, and
+    // file-request tools plus the destructive-action permission gate (marker
+    // confirm dialogs upgraded to permission.asked in handleUiRequest).
+    const coreToolsExtension = await this.materializeCoreToolsExtension()
+    if (coreToolsExtension) extensionArgs.push('--extension', coreToolsExtension)
     const invocation = await prepareHarnessInvocation(
       'pi',
       ['--mode', 'rpc', ...extensionArgs, ...args],
@@ -1587,6 +1641,34 @@ export class PiDriver extends PersistentCliDriver {
     const client = this.rpcClients.get(sessionId)
     if ((typeof rawId !== 'string' && typeof rawId !== 'number') || !method || !client) return
     const requestId = `pi-ui-${sessionId}-${String(rawId)}`.replace(/[^a-zA-Z0-9._-]/gu, '-')
+    // The core-tools extension's permission gate marks its confirm dialogs
+    // with a structured payload so they surface as real permission cards
+    // (policy enrichment, allow/reject) instead of plain question cards.
+    const permissionPayload = this.permissionMarkerPayload(record)
+    if (permissionPayload) {
+      this.pendingUiRequests.set(requestId, {
+        sessionId,
+        method: 'cio-permission',
+        client,
+        request: record
+      })
+      this.emit({
+        type: 'permission.asked',
+        sessionId,
+        permission: {
+          id: requestId,
+          sessionId,
+          permission: permissionPayload.permission,
+          patterns: permissionPayload.patterns,
+          metadata: {
+            ...(permissionPayload.tool ? { tool: permissionPayload.tool } : {}),
+            ...(permissionPayload.command ? { command: permissionPayload.command } : {}),
+            reason: stringValue(record['title']) ?? 'Destructive action requires approval'
+          }
+        }
+      })
+      return
+    }
     const prompt =
       stringValue(record['title']) ?? stringValue(record['message']) ?? 'Pi needs your input.'
     const questions = normalizeAgentQuestions({
@@ -1602,6 +1684,65 @@ export class PiDriver extends PersistentCliDriver {
     })
     this.pendingUiRequests.set(requestId, { sessionId, method, client, request: record })
     this.emit({ type: 'question.asked', sessionId, requestId, questions })
+  }
+
+  /** Parse the core-tools permission gate's marker payload from a confirm
+   *  dialog, or null when the dialog is an ordinary confirmation. */
+  private permissionMarkerPayload(
+    record: Record<string, unknown>
+  ): { permission: string; patterns: string[]; tool?: string; command?: string } | null {
+    if (stringValue(record['method']) !== 'confirm') return null
+    const message = stringValue(record['message'])
+    if (!message?.startsWith(CIO_PERMISSION_MARKER)) return null
+    try {
+      const payload = JSON.parse(message.slice(CIO_PERMISSION_MARKER.length)) as {
+        permission?: unknown
+        patterns?: unknown
+        tool?: unknown
+        command?: unknown
+      }
+      const permission = typeof payload.permission === 'string' ? payload.permission : ''
+      if (!permission) return null
+      const patterns = Array.isArray(payload.patterns)
+        ? payload.patterns.filter((pattern): pattern is string => typeof pattern === 'string')
+        : []
+      return {
+        permission,
+        patterns,
+        ...(typeof payload.tool === 'string' ? { tool: payload.tool } : {}),
+        ...(typeof payload.command === 'string' ? { command: payload.command } : {})
+      }
+    } catch {
+      return null
+    }
+  }
+
+  /** Resolve the core-tools permission gate's confirm dialog. `reject` also
+   *  covers alternative-instruction rejects: the gate blocks the tool call and
+   *  the engine delivers the corrective feedback to the model separately. */
+  override async replyPermission(
+    _projectPath: string,
+    requestId: string,
+    reply: PermissionReply,
+    _message?: string,
+    _sessionId?: string
+  ): Promise<void> {
+    void _projectPath
+    void _message
+    void _sessionId
+    const request = this.pendingUiRequests.get(requestId)
+    if (!request || request.method !== 'cio-permission') {
+      throw new Error(`Pi permission request is no longer pending: ${requestId}`)
+    }
+    const rawId = request.request['id']
+    if (typeof rawId !== 'string' && typeof rawId !== 'number') {
+      throw new Error(`Pi permission request has an invalid id: ${requestId}`)
+    }
+    request.client.respondToExtensionUiRequest(
+      rawId,
+      reply === 'reject' ? { cancelled: true } : { confirmed: true }
+    )
+    this.pendingUiRequests.delete(requestId)
   }
 
   override async replyToQuestion(
@@ -1738,6 +1879,26 @@ export class PiDriver extends PersistentCliDriver {
       // A failed materialization must never block the turn; the prose curl
       // fallback stays fully functional without the extension.
       Logger.dev('Pi utility gateway extension materialization failed:', error)
+      return null
+    }
+  }
+
+  private async materializeCoreToolsExtension(): Promise<string | null> {
+    if (this.coreToolsExtensionPath) return this.coreToolsExtensionPath
+    if (this.coreToolsExtensionFailed) return null
+    try {
+      if (!this.coreToolsExtensionDirectory) {
+        this.coreToolsExtensionDirectory = await mkdtemp(
+          join(tmpdir(), 'codeinoven-pi-core-tools-')
+        )
+      }
+      const path = join(this.coreToolsExtensionDirectory, 'codeinoven-core-tools.ts')
+      await writeFile(path, piCoreToolsExtension(), 'utf8')
+      this.coreToolsExtensionPath = path
+      return path
+    } catch (error) {
+      this.coreToolsExtensionFailed = true
+      Logger.dev('Pi core-tools extension materialization failed:', error)
       return null
     }
   }
