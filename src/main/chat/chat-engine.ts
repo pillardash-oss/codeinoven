@@ -902,7 +902,7 @@ const BRAINSTORM_RESEARCH_ALLOWED_TOOLS = [
  * route is active: research tools plus `edit`, whose execution scope comes
  * exclusively from the `cio-brainstorm` agent permission (write allowed only
  * under the feature versions directory, `.cio/specs/<slug>/versions/`). The
- * `brainstorm_document` structured contract stays the validation authority;
+ * `cio_brainstorm_doc` structured contract stays the validation authority;
  * the agent write is only the persistence channel for the session-report
  * revision.
  */
@@ -11617,7 +11617,7 @@ export class ChatEngine {
     // Scoped-write route (P3-cp4): on opencode, supply the EXACT revision path
     // so the `cio-brainstorm` agent persists the session-report revision itself
     // through its path-scoped `edit` permission. The app still validates the
-    // returned content via the brainstorm_document contract and records the
+    // returned content via the cio_brainstorm_doc contract and records the
     // authoritative copy through BrainstormEngine.
     const brainstormWriteRoute = brainstormDocumentWriteEnabled(driverId)
     let revisionPathInstruction = ''
@@ -11796,7 +11796,7 @@ export class ChatEngine {
         // Scoped-write route (P3-cp4): on opencode the `cio-brainstorm` agent
         // permission scopes `edit` to `.cio/specs/*/versions/**`, so the
         // session-report revision persists through the agent's own write while
-        // the app still validates via the brainstorm_document contract. Every
+        // the app still validates via the cio_brainstorm_doc contract. Every
         // other harness keeps the read-only sandbox.
         const brainstormWriteRoute = brainstormDocumentWriteEnabled(driverId)
         const prompt: SendPromptOptions = {
