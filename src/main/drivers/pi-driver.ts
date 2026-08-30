@@ -2454,6 +2454,9 @@ export class PiDriver extends PersistentCliDriver {
       this.applyEventToSession(session, event)
       this.emit(event)
     } catch (error) {
+      // A disposed client means the session was torn down mid-refresh — an
+      // expected race at turn end, not a failure worth surfacing.
+      if (error instanceof Error && error.message === 'Pi process disposed') return
       Logger.dev('Pi session stats refresh failed:', error)
     }
   }
