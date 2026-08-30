@@ -33,7 +33,9 @@
  * get gated wrappers around the built-in tools — never the spawn tool, so
  * they cannot recurse — inherit the primary's model/thinking level unless
  * overridden per spawn, and bubble every permission request up to the
- * primary thread through the parent extension-UI context.
+ * primary thread through the parent extension-UI context. Permission cards
+ * are pure UI on the primary thread: the primary agent's context only ever
+ * receives the sub-agent's final message, never its transcript.
  */
 
 export const CIO_PERMISSION_MARKER = 'cio-permission:'
@@ -412,9 +414,22 @@ export default function codeInOvenCoreToolsExtension(pi) {
     } catch {}
   }
 
+  /**
+   * What the primary agent receives: metadata plus ONLY the sub-agent's
+   * final message — never the running transcript. The full transcript stays
+   * in the sub-agent's own session, viewable in the UI.
+   */
   function subAgentResult(record) {
     return {
-      ...subAgentPayload(record),
+      agentId: record.agentId,
+      purpose: record.purpose,
+      childSessionId: record.childSessionId,
+      ...(record.sessionFile ? { sessionFile: record.sessionFile } : {}),
+      status: record.status,
+      ...(record.modelId ? { model: record.modelId } : {}),
+      thinkingLevel: record.thinkingLevel,
+      ...(record.error ? { error: record.error } : {}),
+      output: record.finalOutput || record.output,
       ...(record.endedAt ? { durationMs: record.endedAt - record.startedAt } : {})
     }
   }
@@ -555,13 +570,14 @@ export default function codeInOvenCoreToolsExtension(pi) {
     record.promise = (async function () {
       try {
         await session.prompt(spec.instructions, { expandPromptTemplates: false })
-        record.output = capOutput(subAgentText(lastAssistant(session)) || record.output)
         record.status = 'completed'
       } catch (error) {
         record.status = 'error'
         record.error = error && error.message ? error.message : String(error)
-        record.output = capOutput(subAgentText(lastAssistant(session)) || record.output)
       } finally {
+        // Only the sub-agent's final message goes back to the primary agent;
+        // the accumulated output stays a live preview for the UI card.
+        record.finalOutput = capOutput(subAgentText(lastAssistant(session)))
         record.endedAt = Date.now()
         sendSubAgentUpdate(onUpdate, record)
       }
