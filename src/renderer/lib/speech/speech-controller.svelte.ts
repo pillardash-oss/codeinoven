@@ -237,6 +237,8 @@ class SpeechController {
   private preloadFired = false
   /** In-flight background transcription jobs, keyed by attempt id. */
   private readonly transcriptions = new Map<string, Promise<void>>()
+  /** Target ids with a background transcription job still in flight. */
+  private transcribingTargets = $state<string[]>([])
   private readonly spans = new Map<string, SpeechDictationSpan[]>()
   private activePlayback: ActivePlayback | null = null
   // Reactive mirror consumed by the per-line TTS highlight rendering. Kept
@@ -346,6 +348,12 @@ class SpeechController {
   isCapturingThread(threadId: string): boolean {
     const scope = this.capturingScope
     return scope !== null && scope.kind !== 'global' && scope.threadId === threadId
+  }
+
+  /** Whether a detached background transcription is still running for this
+   *  editor target — the transcript will land in the field when it settles. */
+  isTranscribingTarget(targetId: string): boolean {
+    return this.transcribingTargets.includes(targetId)
   }
 
   /** Scope of the thread whose response is currently being spoken aloud. */
@@ -606,6 +614,7 @@ class SpeechController {
     active: ActiveCapture,
     insertionSnapshot: SpeechEditorSnapshot
   ): Promise<void> {
+    this.transcribingTargets = [...this.transcribingTargets, active.target.id]
     try {
       const transcript = await this.transcribeActive(active)
       await invoke('clipboard:writeText', transcript)
@@ -645,6 +654,10 @@ class SpeechController {
       } catch {
         // Toast failures must never break the detached job.
       }
+    } finally {
+      this.transcribingTargets = this.transcribingTargets.filter(
+        (id) => id !== active.target.id
+      )
     }
   }
 

@@ -124,6 +124,7 @@
   })
 
   const belongsHere = $derived(speechController.isActiveTarget(targetId))
+  const transcribingHere = $derived(speechController.isTranscribingTarget(targetId))
   const activeRecordingScope = $derived(speechController.recordingScope)
   const recordingHere = $derived(
     activeRecordingScope !== null &&
@@ -163,6 +164,8 @@
           ? 'Stopping voice recording'
           : 'Transcribing voice recording'
     }
+    if (transcribingHere)
+      return 'Transcribing your last recording — click to start a new one'
     return 'Start voice recording'
   })
 
@@ -289,6 +292,14 @@
         <span class="wave-bar wave-bar-delay-1"></span>
         <span class="wave-bar wave-bar-delay-2"></span>
       </span>
+    {:else if transcribingHere}
+      <span class="relative flex items-center justify-center" aria-hidden="true">
+        <Mic size={14} aria-hidden="true" />
+        <span
+          class="transcribing-ping absolute inset-0 rounded-full"
+          aria-hidden="true"
+        ></span>
+      </span>
     {:else}
       <Mic size={14} aria-hidden="true" />
     {/if}
@@ -320,5 +331,19 @@
   }
   .wave-bar-delay-2 {
     animation-delay: 0.3s;
+  }
+  .transcribing-ping {
+    box-shadow: 0 0 0 0 var(--color-info);
+    animation: cio-transcribe-ping 1.4s cubic-bezier(0, 0, 0.2, 1) infinite;
+  }
+  @keyframes cio-transcribe-ping {
+    0% {
+      box-shadow: 0 0 0 0 var(--color-info);
+      opacity: 0.6;
+    }
+    100% {
+      box-shadow: 0 0 0 5px transparent;
+      opacity: 1;
+    }
   }
 </style>
