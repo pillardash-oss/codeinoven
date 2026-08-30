@@ -35,7 +35,6 @@ export type RendererSpeechState =
       elapsedMs: number
     }
   | { state: 'stopping'; targetId: string; attemptId: string }
-  | { state: 'transcribing'; targetId: string; attemptId: string }
   | { state: 'failed'; targetId?: string; message: string }
 
 interface ActiveCapture {
@@ -236,6 +235,8 @@ class SpeechController {
   private elapsedTimer: ReturnType<typeof setInterval> | null = null
   private preloadTimer: ReturnType<typeof setTimeout> | null = null
   private preloadFired = false
+  /** In-flight background transcription jobs, keyed by attempt id. */
+  private readonly transcriptions = new Map<string, Promise<void>>()
   private readonly spans = new Map<string, SpeechDictationSpan[]>()
   private activePlayback: ActivePlayback | null = null
   // Reactive mirror consumed by the per-line TTS highlight rendering. Kept
@@ -328,10 +329,10 @@ class SpeechController {
   }
 
   /** The scope of whichever editor is dictating across every live phase —
-   *  requesting-permission → recording → stopping → transcribing. Unlike
-   *  `recordingScope` this stays non-null after the mic closes until the
-   *  transcript lands or the capture fails, so consumers that represent
-   *  in-progress drafting (thread rows) never flash back mid-pipeline. */
+   *  requesting-permission → recording → stopping. Unlike `recordingScope`
+   *  this stays non-null after the mic closes until the transcript lands or
+   *  the capture fails, so consumers that represent in-progress drafting
+   *  (thread rows) never flash back mid-pipeline. */
   get capturingScope(): SpeechScope | null {
     if (this.state.state === 'idle' || this.state.state === 'failed') return null
     return this.captureScope ?? this.active?.scope ?? null
@@ -575,11 +576,36 @@ class SpeechController {
       }
       finalized = true
       this.playCue('stopped')
-      this.state = {
-        state: 'transcribing',
-        targetId: active.target.id,
-        attemptId: active.attemptId
-      }
+      const transcription = this.deliverTranscript(active, insertionSnapshot)
+      this.transcriptions.set(active.attemptId, transcription)
+      void transcription.finally(() => {
+        const current = this.transcriptions.get(active.attemptId)
+        if (current === transcription) this.transcriptions.delete(active.attemptId)
+      })
+    } catch (cause) {
+      const message = errorMessage(cause)
+      await (
+        active.native
+          ? invoke('speech:failNativeCapture', active.sessionId, message)
+          : invoke('speech:failCapture', active.sessionId, message)
+      ).catch(() => undefined)
+      this.surfaceFailure(active.target.id, 'capture', cause)
+    } finally {
+      if (active.stream) for (const track of active.stream.getTracks()) track.stop()
+      if (this.state.state === 'stopping') this.state = { state: 'idle' }
+    }
+  }
+
+  /**
+   * Detached per-attempt transcription job. Runs in the background so the
+   * microphone and the shared state machine free up for a new recording while
+   * ASR is still processing. Never rejects: every failure path is settled here.
+   */
+  private async deliverTranscript(
+    active: ActiveCapture,
+    insertionSnapshot: SpeechEditorSnapshot
+  ): Promise<void> {
+    try {
       const transcript = await this.transcribeActive(active)
       await invoke('clipboard:writeText', transcript)
       const inserted = active.target.apply(insertionSnapshot, transcript)
@@ -587,7 +613,6 @@ class SpeechController {
       if (!applied.ok && applied.reason === 'destroyed' && active.target.fallbackApply) {
         applied = active.target.fallbackApply(insertionSnapshot, transcript)
       }
-      this.playCue('completed')
       if (!applied.ok) {
         const insertionNotice =
           'Transcript copied to the clipboard. It could not be inserted into the recording field.'
@@ -596,7 +621,6 @@ class SpeechController {
         } catch (cause) {
           logRendererError('Could not show the voice recording clipboard notice.', cause)
         }
-        this.state = { state: 'idle' }
         return
       }
       const span: SpeechDictationSpan = {
@@ -609,20 +633,17 @@ class SpeechController {
       }
       const current = this.spans.get(active.target.id) ?? []
       this.spans.set(active.target.id, [...current.slice(-7), span])
-      this.state = { state: 'idle' }
+      this.playCue('completed')
     } catch (cause) {
-      const message = errorMessage(cause)
-      await (
-        finalized
-          ? invoke('speech:markAttemptFailure', active.attemptId, message)
-          : active.native
-            ? invoke('speech:failNativeCapture', active.sessionId, message)
-            : invoke('speech:failCapture', active.sessionId, message)
-      ).catch(() => undefined)
-      this.surfaceFailure(active.target.id, finalized ? 'transcription' : 'capture', cause)
-    } finally {
-      if (active.stream) for (const track of active.stream.getTracks()) track.stop()
-      this.active = null
+      await invoke('speech:markAttemptFailure', active.attemptId, errorMessage(cause)).catch(
+        () => undefined
+      )
+      logRendererError(`Voice transcription failed for attempt ${active.attemptId}: ${errorMessage(cause)}`)
+      try {
+        reportErrorWithDetails('Voice transcription failed.', { details: errorMessage(cause) })
+      } catch {
+        // Toast failures must never break the detached job.
+      }
     }
   }
 
