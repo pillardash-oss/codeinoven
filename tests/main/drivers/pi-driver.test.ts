@@ -563,4 +563,23 @@ describe('PiDriver', () => {
     // The scope header must not leak into the question body.
     expect(asked?.questions?.[0]?.prompt.startsWith('Next step')).toBe(false)
   })
+
+  it('keeps sub-agent-done custom messages out of the transcript', () => {
+    const context = sessionContext('s-1')
+    const state = { assistantMessageId: null, turnIndex: 1 }
+    const record = {
+      type: 'message_end',
+      message: {
+        role: 'custom',
+        customType: 'cio-subagent-done',
+        content: 'Sub-agent done for task explore codebase (cio-subagent-1, status: completed).',
+        display: false,
+        timestamp: Date.now()
+      }
+    }
+    const result = mapPiRecord(record, context, state)
+    expect(result?.events ?? []).toEqual([])
+    // And it must not be mistaken for a user message.
+    expect(context.session.messages).toHaveLength(0)
+  })
 })

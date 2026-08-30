@@ -38,6 +38,12 @@
  * primary thread through the parent extension-UI context. Permission cards
  * are pure UI on the primary thread: the primary agent's context only ever
  * receives the sub-agent's final message, never its transcript.
+ *
+ * Background sub-agents announce completion to the primary agent through a
+ * display:false custom message delivered with pi.sendMessage — steer while
+ * the primary is streaming, a fresh turn when it is idle. The model sees
+ * the notification and final output as a user-role context message, but it
+ * never renders in the transcript: the driver ignores custom-role messages.
  */
 
 export const CIO_PERMISSION_MARKER = 'cio-permission:'
@@ -456,6 +462,28 @@ export default function codeInOvenCoreToolsExtension(pi) {
     }
   }
 
+  /**
+   * Steer the primary agent when a background sub-agent finishes. Uses a
+   * display:false custom message: it reaches the model as a user-role
+   * context message (with the final output) but never shows in the
+   * transcript — the driver ignores custom-role messages. While the primary
+   * is streaming this steers the current run; when idle it triggers a turn.
+   */
+  function notifySubAgentDone(record) {
+    if (!pi || typeof pi.sendMessage !== 'function') return
+    const text =
+      'Sub-agent done for task ' + record.purpose + ' (' + record.agentId + ', status: ' + record.status + ').' +
+      (record.error ? ' Error: ' + record.error : '') +
+      '\\n\\nThis is the final output of the sub-agent — use it as you continue your work:\\n\\n' +
+      (record.finalOutput || record.output || '(the sub-agent produced no text output)')
+    try {
+      void pi.sendMessage(
+        { customType: 'cio-subagent-done', content: text, display: false },
+        { triggerTurn: true, deliverAs: 'steer' }
+      )
+    } catch {}
+  }
+
   async function resolveSubAgentModel(parentCtx, reference) {
     const registry = parentCtx.modelRegistry
     const slashIndex = reference.indexOf('/')
@@ -602,6 +630,9 @@ export default function codeInOvenCoreToolsExtension(pi) {
         record.finalOutput = capOutput(subAgentText(lastAssistant(session)))
         record.endedAt = Date.now()
         sendSubAgentUpdate(onUpdate, record)
+        // Background workers announce themselves; foreground spawns are
+        // awaited inline by the primary and need no notification.
+        if (spec.background) notifySubAgentDone(record)
       }
     })()
     return { record }
@@ -632,7 +663,7 @@ export default function codeInOvenCoreToolsExtension(pi) {
     name: 'cio_spawn_agent',
     label: 'Spawn a sub-agent',
     description:
-      'Spawn a sub-agent worker thread that executes one focused task (explore, implementation, tests, cleanup, documentation, or any custom purpose) and returns only its final result, keeping its transcript out of your context. By default — unless the user explicitly asks you to use sub-agents differently — delegate any task that can run in parallel with your own work to a sub-agent: explore or research a topic while you continue working, hand off long-running work so you can proceed without waiting and without polluting your context, and once your own work is done, spawn a sub-agent to run the checks for the files you touched (lint, typecheck, tests) so the work finishes faster. Run several sub-agents concurrently with background:true and collect results with cio_agent_status (wait: true). Sub-agents cannot spawn further sub-agents, and they inherit your model and thinking level unless you pass model/thinking_level overrides.',
+      'Spawn a sub-agent worker thread that executes one focused task (explore, implementation, tests, cleanup, documentation, or any custom purpose) and returns only its final result, keeping its transcript out of your context. By default — unless the user explicitly asks you to use sub-agents differently — delegate any task that can run in parallel with your own work to a sub-agent: explore or research a topic while you continue working, hand off long-running work so you can proceed without waiting and without polluting your context, and once your own work is done, spawn a sub-agent to run the checks for the files you touched (lint, typecheck, tests) so the work finishes faster. Run several sub-agents concurrently with background:true — each one automatically steers you a notification with its final output the moment it finishes, so you can keep working and act on results as they land. cio_agent_status remains available for explicit polling. Sub-agents cannot spawn further sub-agents, and they inherit your model and thinking level unless you pass model/thinking_level overrides.',
     promptSnippet: 'Spawn sub-agent worker threads for focused or parallelizable tasks (explore, implement, tests, cleanup, docs)',
     promptGuidelines: [
       'By default, delegate parallelizable tasks to sub-agents instead of doing them inline: exploring a topic while you keep working, handing off work so you can continue without polluting your context, or running post-work checks (lint, typecheck, tests) for the files you touched.',
@@ -660,7 +691,7 @@ export default function codeInOvenCoreToolsExtension(pi) {
       background: Type.Optional(
         Type.Boolean({
           description:
-            'Run in the background and return immediately; collect the result later with cio_agent_status.'
+            'Run in the background and return immediately; the finished sub-agent steers you its final output automatically.'
         })
       )
     }),
@@ -682,7 +713,7 @@ export default function codeInOvenCoreToolsExtension(pi) {
           agentId: result.record.agentId,
           childSessionId: result.record.childSessionId,
           status: result.record.status,
-          note: 'Sub-agent is running in the background. Poll with cio_agent_status (wait: true) to collect the result.'
+          note: 'Sub-agent is running in the background. When it finishes you will receive a steer message (sub-agent done for task …) carrying its final output — keep working until then; cio_agent_status (wait: true) is available for explicit polling.'
         })
       }
       await result.record.promise
@@ -694,10 +725,10 @@ export default function codeInOvenCoreToolsExtension(pi) {
     name: 'cio_agent_status',
     label: 'Check sub-agent status',
     description:
-      'Check the status and output of spawned sub-agent threads. Use wait:true to block until a running sub-agent finishes and collect its result.',
+      'Check the status and output of spawned sub-agent threads. Background sub-agents steer you a completion notification with their final output automatically; use this tool to poll explicitly or wait:true to block until a running sub-agent finishes.',
     promptSnippet: 'Check or wait for spawned sub-agent threads and collect their results',
     promptGuidelines: [
-      'Use cio_agent_status to collect background sub-agent results; call it with wait:true before finishing the turn so no result is lost.'
+      'Background sub-agents announce completion themselves with a steer message containing their final output; use cio_agent_status to poll explicitly, with wait:true before finishing the turn so no result is lost.'
     ],
     parameters: Type.Object({
       agent_id: Type.Optional(
