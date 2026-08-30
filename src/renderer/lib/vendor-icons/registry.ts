@@ -55,7 +55,8 @@ const vendorAliases: Record<string, string> = {
   '01ai': 'zeroone',
   opencodego: 'opencode',
   opencodezen: 'opencode',
-  vertexai: 'gemini'
+  vertexai: 'gemini',
+  vercelaigateway: 'vercel'
 }
 
 export function normalizeVendorName(value: string): string {
