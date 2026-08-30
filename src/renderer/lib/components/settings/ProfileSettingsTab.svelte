@@ -1491,8 +1491,7 @@
     <div class="border-b px-4 py-3">
       <h2 id="model-performance-heading" class="text-sm font-semibold">Best model by feedback</h2>
       <p class="mt-0.5 text-xs text-muted">
-        Each session is judged 1–5 by a cheap model from your request, the agent's final output, and
-        any follow-up you sent. The percentage is the average grade out of five.
+        The more you use CodeInOven, the more models that do a good job will appear here.
       </p>
       {#if usage.feedbackCost.outcomes > 0}
         <p class="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
