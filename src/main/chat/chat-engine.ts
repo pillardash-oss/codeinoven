@@ -16626,11 +16626,6 @@ export class ChatEngine {
           const end = now
           perSession.set(part.id, { start, end })
           part.state.time = { start, end }
-          // Steer-undo window: the last in-flight tool of the turn just ended,
-          // so any held steer can now reach the harness.
-          if (this.heldSteers.has(event.sessionId) && !this.hasInFlightTool(event.sessionId)) {
-            void this.flushHeldSteers(event.sessionId, 'mid-turn')
-          }
         }
         if (part.state.status === 'error') {
           void this.nudgeUnavailableToolCall(driverId, event.sessionId, part).catch((error) =>
