@@ -1824,6 +1824,38 @@ export class PiDriver extends PersistentCliDriver {
   }
 
   /**
+   * Carry a replaced session's native pi transcript binding over to the
+   * replacement record. When the engine mints a replacement app session (the
+   * stored session became unreachable), the fresh record starts without a
+   * nativeSessionId — without this transfer the thread's real native
+   * transcript is orphaned and every later turn degrades to the engine's
+   * history recap, which models can misread as fabricated context.
+   */
+  async inheritNativeSession(
+    projectPath: string,
+    fromSessionId: string,
+    toSessionId: string
+  ): Promise<void> {
+    try {
+      const previous = await this.readSessionRecord(projectPath, fromSessionId)
+      const nativeId = previous?.nativeSessionId
+      if (!nativeId) return
+      if (!existsSync(nativePiSessionDir(projectPath))) return
+      if (!(await findNativePiSessionFile(projectPath, nativeId))) return
+      const replacement = await this.requireSession(projectPath, toSessionId)
+      if (replacement.nativeSessionId) return
+      replacement.nativeSessionId = nativeId
+      Logger.info('Inherited native Pi session transcript onto a replacement session', {
+        fromSessionId,
+        toSessionId,
+        nativeSessionId: nativeId
+      })
+    } catch (error) {
+      Logger.dev('Native Pi session inheritance skipped:', error)
+    }
+  }
+
+  /**
    * Parse pi's own transcript for a cold (no live RPC process) session whose
    * native session file still exists on disk. Returns null when the session is
    * not natively resumable so the caller falls back to the mirror.

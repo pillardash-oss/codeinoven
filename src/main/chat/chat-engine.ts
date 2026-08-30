@@ -3815,6 +3815,7 @@ export class ChatEngine {
       rotatedPlanningSession = true
     }
     let storedSessionMessages: AgentMessage[] = []
+    let unavailableSessionId: string | undefined
     if (sessionId) {
       try {
         storedSessionMessages = await driver.loadMessages(projectPath, sessionId)
@@ -3825,6 +3826,7 @@ export class ChatEngine {
           sessionId
         })
         this.retireSessionState(sessionId)
+        unavailableSessionId = sessionId
         sessionId = undefined
       }
     }
@@ -3836,6 +3838,16 @@ export class ChatEngine {
         sessionId,
         driverId
       )
+      // The replacement session must adopt the replaced session's native
+      // transcript binding (same harness), or the harness's own history is
+      // orphaned and every later turn falls back to the recap replay.
+      if (unavailableSessionId) {
+        try {
+          await driver.inheritNativeSession?.(projectPath, unavailableSessionId, sessionId)
+        } catch (error) {
+          Logger.dev('Native session inheritance onto replacement failed:', error)
+        }
+      }
       // The desktop view adopts ensureSession's return value directly. Publish
       // the persisted binding too so remote renderers can route the very first
       // streamed part from a new or replacement harness session.
@@ -20661,7 +20673,16 @@ export function formatHistoryRecap(
   return [
     'This thread continues an earlier conversation. Transcript restored from history:',
     budgetedTranscript,
-    'Continue seamlessly from that context.'
+    [
+      'This transcript is the genuine earlier conversation of this thread, restored verbatim.',
+      'The tool activity and file edits described in it really happened in this repository —',
+      'it is not injected fiction, and treating it as fabricated is a mistake.',
+      'Continue seamlessly from that context.',
+      'Before agreeing with or disputing any claim about the codebase (especially whether',
+      'prior work exists or works), verify it with tools in this turn rather than from',
+      'memory, and never claim to have inspected anything you did not actually inspect',
+      'with a tool this turn.'
+    ].join(' ')
   ].join('\n\n')
 }
 

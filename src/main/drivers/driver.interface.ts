@@ -385,6 +385,19 @@ export interface HarnessDriver {
   loadMessages(projectPath: string, sessionId: string): Promise<AgentMessage[]>
 
   /**
+   * Carry a replaced session's native conversation binding over to its
+   * replacement, so a harness that persists its own transcript (native resume)
+   * keeps resuming the real history instead of silently degrading every later
+   * turn to the engine's history recap. Best-effort; implementations must not
+   * throw when the old session is unknown or its transcript is gone.
+   */
+  inheritNativeSession?(
+    projectPath: string,
+    fromSessionId: string,
+    toSessionId: string
+  ): Promise<void>
+
+  /**
    * Load only the active turn beginning at a stable user-message id. Drivers
    * with an in-memory session should implement this so turn finalization never
    * rescans a conversation whose cost grows with thread age.
