@@ -41,6 +41,12 @@ export type TurnStreamEvent =
  * Order is the first-seen order, deduplicated by part id. When `turnId` is
  * supplied only events from that logical turn are folded; otherwise the whole
  * log is folded (used for tests and unbounded reads).
+ *
+ * Events persisted with an empty `turnId` (emitted while the session's active
+ * turn was unbound — pre-registration setup, teardown, silent continues) belong
+ * to no specific turn. They are folded into whichever turn is requested (or the
+ * whole-log fold) so real working parts never disappear from a rehydrated trace
+ * just because their turn anchor was unbound at emit time.
  */
 export function foldTurnStreamEvents(events: TurnStreamEvent[], turnId?: string): AgentPart[] {
   const parts: AgentPart[] = []
@@ -50,7 +56,7 @@ export function foldTurnStreamEvents(events: TurnStreamEvent[], turnId?: string)
   const textBaseline = new Map<string, number>()
 
   for (const event of events) {
-    if (turnId !== undefined && event.turnId !== turnId) continue
+    if (turnId !== undefined && event.turnId !== turnId && event.turnId !== '') continue
     if (event.kind === 'part.updated') {
       const part = event.part
       const existingIndex = indexById.get(part.id)
