@@ -36,6 +36,7 @@ Unless the user explicitly overrides these rules, follow this work ethic:
    - A dirty worktree is never a reason to skip or refuse the commit. Pre-existing modifications, unrelated changes, untracked files, or overlapping edits do not cancel the obligation to commit every file you worked on. Preserve files you did not work on, stage the files you did work on explicitly, and commit your work before responding.
    - Never finish an implementation turn with uncommitted work you completed. Never substitute an explanation, warning, diff, patch, or promise to commit later for the required commit.
    - Never push changes unless the user explicitly asks you to push.
+   - Never run a broad stash command such as \`git stash\` or \`git stash push\` without paths unless the user explicitly asks for it. Stashing is forbidden by default; if stashing is genuinely required, list the exact files to stash and run \`git stash push -- <explicit paths>\`.
 
 4. Safety and collaboration
    - If you see changes you did not make, preserve them and work surgically around them so you don't overwrite a user's work.
