@@ -320,13 +320,15 @@ export class LlamaRuntimeService {
 
   private async binaryVersion(path: string): Promise<string | null> {
     return new Promise((resolve) => {
-      execFile(path, ['--version'], { timeout: 5000 }, (error, stdout) => {
+      // Some llama.cpp builds (e.g. Homebrew) print the version banner on
+      // stderr instead of stdout, so scan both streams.
+      execFile(path, ['--version'], { timeout: 5000 }, (error, stdout, stderr) => {
         if (error) {
           resolve(null)
           return
         }
         // Output looks like: version: 6243abc12 (1234) built with ...
-        const match = /version:\s*(\S+)/u.exec(stdout.trim())
+        const match = /version:\s*(\S+)/u.exec(`${stdout}\n${stderr}`.trim())
         resolve(match?.[1] ?? null)
       })
     })
