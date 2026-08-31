@@ -36,6 +36,7 @@
     FileDiff,
     Folder,
     FolderOpen,
+    FolderTree,
     GitBranch,
     GitCommit,
     GitFork,
@@ -205,7 +206,12 @@
   ]
 
   const status = $derived(gitState.status)
-  const localBranches = $derived(gitState.branches.filter((branch) => branch.kind === 'local'))
+  const localBranches = $derived(
+    gitState.branches.filter((branch) => branch.kind === 'local' && branch.worktreePath === null)
+  )
+  const worktreeBranches = $derived(
+    gitState.branches.filter((branch) => branch.kind === 'local' && branch.worktreePath !== null)
+  )
   const localBranchNames = $derived(new Set(localBranches.map((branch) => branch.name)))
   const isHeadCommit = $derived(
     selectedCommit !== null && commitHistory[0]?.hash === selectedCommit.hash
@@ -344,6 +350,8 @@
   function requestCheckout(branch: GitBranchInfo): void {
     if (branch.kind === 'local' && branch.name === status?.branch) return
     if (branch.kind === 'remote' && localBranchNames.has(branch.name)) return
+    // Git refuses the same branch in two worktrees; those branches are display-only here.
+    if (branch.worktreePath !== null) return
     checkoutConfirm = branch
   }
 
@@ -2738,142 +2746,181 @@
                 <p class="text-xs font-medium text-muted">No branches</p>
               </div>
             {:else}
-              {@const sortedBranches = [...gitState.branches].sort((a, b) => {
-                if (a.kind !== b.kind) return a.kind === 'local' ? -1 : 1
-                if (a.current !== b.current) return a.current ? -1 : 1
-                return a.ref.localeCompare(b.ref)
-              })}
+              {@const branchSections = [
+                {
+                  key: 'local',
+                  label: 'Local',
+                  branches: [...localBranches].sort((a, b) => {
+                    if (a.current !== b.current) return a.current ? -1 : 1
+                    return a.ref.localeCompare(b.ref)
+                  })
+                },
+                {
+                  key: 'worktrees',
+                  label: 'Worktrees',
+                  branches: [...worktreeBranches].sort((a, b) => a.ref.localeCompare(b.ref))
+                },
+                {
+                  key: 'remote',
+                  label: 'Remote',
+                  branches: [...gitState.branches]
+                    .filter((branch) => branch.kind === 'remote')
+                    .sort((a, b) => a.ref.localeCompare(b.ref))
+                }
+              ].filter((section) => section.branches.length > 0)}
               <div class="space-y-0.5">
-                {#each sortedBranches as branch, index (branch.ref)}
-                  {#if index === 0 || sortedBranches[index - 1]?.kind !== branch.kind}
-                    <p
-                      class="px-2 pb-1 pt-2 text-[9px] font-semibold uppercase tracking-wide text-dimmed first:pt-0"
-                    >
-                      {branch.kind === 'local' ? 'Local' : 'Remote'}
-                    </p>
-                  {/if}
-                  {@const canFetch = Boolean(branch.remote)}
-                  {@const hasLocalCounterpart =
-                    branch.kind === 'remote' && localBranchNames.has(branch.name)}
-                  <ContextMenu.Root>
-                    <ContextMenu.Trigger
-                      class="block w-full"
-                      aria-label={`Actions for branch ${branch.ref}`}
-                    >
-                      <div
-                        class="group flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-elevated/50"
+                {#each branchSections as section (section.key)}
+                  <p
+                    class="px-2 pb-1 pt-2 text-[9px] font-semibold uppercase tracking-wide text-dimmed"
+                  >
+                    {section.label}
+                  </p>
+                  {#each section.branches as branch (branch.ref)}
+                    {@const canFetch = Boolean(branch.remote)}
+                    {@const inWorktree = branch.worktreePath !== null}
+                    {@const hasLocalCounterpart =
+                      branch.kind === 'remote' && localBranchNames.has(branch.name)}
+                    <ContextMenu.Root>
+                      <ContextMenu.Trigger
+                        class="block w-full"
+                        aria-label={`Actions for branch ${branch.ref}`}
                       >
-                        <span
-                          class={[
-                            'flex size-5 shrink-0 items-center justify-center rounded-full',
-                            branchAvatarClass(branch.ref)
-                          ]}
+                        <div
+                          class="group flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-elevated/50"
                         >
-                          <GitBranch size={11} />
-                        </span>
-                        <span class="min-w-0 flex-1">
-                          <button
-                            type="button"
-                            class="block w-full cursor-pointer truncate text-left text-[11px] text-foreground disabled:cursor-default"
-                            disabled={branch.current || hasLocalCounterpart}
-                            title={branch.current
-                              ? undefined
-                              : hasLocalCounterpart
-                                ? `${branch.ref} already has a local branch`
-                                : branch.kind === 'local'
-                                  ? `Check out ${branch.name}`
-                                  : `Create local branch ${branch.name} from ${branch.ref}`}
-                            onclick={() => requestCheckout(branch)}
+                          <span
+                            class={[
+                              'flex size-5 shrink-0 items-center justify-center rounded-full',
+                              inWorktree
+                                ? 'bg-warning/10 text-warning'
+                                : branchAvatarClass(branch.ref)
+                            ]}
                           >
-                            {branch.kind === 'local' ? branch.name : branch.ref}
-                          </button>
-                          {#if branch.kind === 'local' && branch.upstream}
-                            <span class="block truncate text-[9px] text-dimmed">
-                              tracks {branch.upstream}
-                            </span>
-                          {:else if branch.kind === 'remote'}
-                            <span class="block truncate text-[9px] text-dimmed">
-                              {hasLocalCounterpart ? 'local branch exists' : 'remote branch'}
-                            </span>
-                          {/if}
-                        </span>
-                        {#if branch.ahead > 0 || branch.behind > 0}
-                          <span class="flex shrink-0 items-center gap-0.5 text-[9px] tabular-nums">
-                            {#if branch.ahead > 0}
-                              <span class="text-success">+{branch.ahead}</span>
-                            {/if}
-                            {#if branch.behind > 0}
-                              <span class="text-danger">−{branch.behind}</span>
+                            {#if inWorktree}
+                              <FolderTree size={11} />
+                            {:else}
+                              <GitBranch size={11} />
                             {/if}
                           </span>
-                        {/if}
-                        <div class="relative h-6 w-16 shrink-0">
-                          <DropdownMenu.Root>
-                            <DropdownMenu.Trigger
-                              class="peer absolute inset-y-0 right-0 flex h-6 w-6 cursor-pointer items-center justify-center rounded text-dimmed opacity-0 transition-opacity hover:bg-elevated hover:text-foreground focus-visible:opacity-100 group-hover:opacity-100 data-[state=open]:opacity-100"
-                              aria-label={`More actions for branch ${branch.ref}`}
-                              title={`More actions for branch ${branch.ref}`}
+                          <span class="min-w-0 flex-1">
+                            <button
+                              type="button"
+                              class="block w-full cursor-pointer truncate text-left text-[11px] text-foreground disabled:cursor-default"
+                              disabled={branch.current || hasLocalCounterpart || inWorktree}
+                              title={branch.current
+                                ? undefined
+                                : inWorktree
+                                  ? `Checked out in worktree ${branch.worktreePath ?? ''} — git allows a branch in only one worktree`
+                                  : hasLocalCounterpart
+                                    ? `${branch.ref} already has a local branch`
+                                    : branch.kind === 'local'
+                                      ? `Check out ${branch.name}`
+                                      : `Create local branch ${branch.name} from ${branch.ref}`}
+                              onclick={() => requestCheckout(branch)}
                             >
-                              <MoreHorizontal size={13} />
-                            </DropdownMenu.Trigger>
-                            <DropdownMenu.Portal>
-                              <DropdownMenu.Content
-                                class="z-50 min-w-48 overflow-hidden rounded-lg border border-border bg-surface p-1 shadow-xl"
-                                side="bottom"
-                                align="end"
-                                sideOffset={4}
-                                collisionPadding={8}
-                              >
-                                <BranchActionsMenu
-                                  isCurrent={branch.current}
-                                  canCheckout={!hasLocalCounterpart}
-                                  canDelete={branch.kind === 'local'}
-                                  {canFetch}
-                                  checkoutLabel={branch.kind === 'local'
-                                    ? 'Check out'
-                                    : 'Create local branch'}
-                                  busy={gitState.isBusy('checkout') || gitState.isBusy('fetch')}
-                                  onCheckout={() => requestCheckout(branch)}
-                                  onFetch={() => void fetchBranchAction(branch)}
-                                  onDelete={() => requestDeleteBranch(branch.name)}
-                                />
-                              </DropdownMenu.Content>
-                            </DropdownMenu.Portal>
-                          </DropdownMenu.Root>
-                          {#if branch.current}
+                              {branch.kind === 'local' ? branch.name : branch.ref}
+                            </button>
+                            {#if branch.kind === 'local' && branch.upstream}
+                              <span class="block truncate text-[9px] text-dimmed">
+                                tracks {branch.upstream}
+                              </span>
+                            {:else if inWorktree}
+                              <span class="block truncate text-[9px] text-dimmed">
+                                checked out in worktree
+                              </span>
+                            {:else if branch.kind === 'remote'}
+                              <span class="block truncate text-[9px] text-dimmed">
+                                {hasLocalCounterpart ? 'local branch exists' : 'remote branch'}
+                              </span>
+                            {/if}
+                          </span>
+                          {#if inWorktree}
                             <span
-                              class="pointer-events-none absolute inset-y-0 right-0 flex items-center whitespace-nowrap rounded bg-primary/15 px-1.5 text-[8px] font-semibold text-primary opacity-100 transition-opacity group-hover:opacity-0 peer-hover:opacity-0 peer-data-[state=open]:opacity-0"
+                              class="shrink-0 rounded bg-warning/10 px-1 py-0.5 text-[8px] font-semibold uppercase tracking-wide text-warning"
                             >
-                              current
+                              worktree
                             </span>
                           {/if}
+                          {#if branch.ahead > 0 || branch.behind > 0}
+                            <span
+                              class="flex shrink-0 items-center gap-0.5 text-[9px] tabular-nums"
+                            >
+                              {#if branch.ahead > 0}
+                                <span class="text-success">+{branch.ahead}</span>
+                              {/if}
+                              {#if branch.behind > 0}
+                                <span class="text-danger">−{branch.behind}</span>
+                              {/if}
+                            </span>
+                          {/if}
+                          <div class="relative h-6 w-16 shrink-0">
+                            <DropdownMenu.Root>
+                              <DropdownMenu.Trigger
+                                class="peer absolute inset-y-0 right-0 flex h-6 w-6 cursor-pointer items-center justify-center rounded text-dimmed opacity-0 transition-opacity hover:bg-elevated hover:text-foreground focus-visible:opacity-100 group-hover:opacity-100 data-[state=open]:opacity-100"
+                                aria-label={`More actions for branch ${branch.ref}`}
+                                title={`More actions for branch ${branch.ref}`}
+                              >
+                                <MoreHorizontal size={13} />
+                              </DropdownMenu.Trigger>
+                              <DropdownMenu.Portal>
+                                <DropdownMenu.Content
+                                  class="z-50 min-w-48 overflow-hidden rounded-lg border border-border bg-surface p-1 shadow-xl"
+                                  side="bottom"
+                                  align="end"
+                                  sideOffset={4}
+                                  collisionPadding={8}
+                                >
+                                  <BranchActionsMenu
+                                    isCurrent={branch.current}
+                                    canCheckout={!hasLocalCounterpart && !inWorktree}
+                                    canDelete={branch.kind === 'local'}
+                                    {canFetch}
+                                    checkoutLabel={branch.kind === 'local'
+                                      ? 'Check out'
+                                      : 'Create local branch'}
+                                    busy={gitState.isBusy('checkout') || gitState.isBusy('fetch')}
+                                    onCheckout={() => requestCheckout(branch)}
+                                    onFetch={() => void fetchBranchAction(branch)}
+                                    onDelete={() => requestDeleteBranch(branch.name)}
+                                  />
+                                </DropdownMenu.Content>
+                              </DropdownMenu.Portal>
+                            </DropdownMenu.Root>
+                            {#if branch.current}
+                              <span
+                                class="pointer-events-none absolute inset-y-0 right-0 flex items-center whitespace-nowrap rounded bg-primary/15 px-1.5 text-[8px] font-semibold text-primary opacity-100 transition-opacity group-hover:opacity-0 peer-hover:opacity-0 peer-data-[state=open]:opacity-0"
+                              >
+                                current
+                              </span>
+                            {/if}
+                          </div>
                         </div>
-                      </div>
-                    </ContextMenu.Trigger>
-                    <ContextMenu.Portal>
-                      <ContextMenu.Content
-                        class="z-50 min-w-48 overflow-hidden rounded-lg border border-border bg-surface p-1 shadow-xl"
-                        side="bottom"
-                        align="start"
-                        sideOffset={4}
-                        collisionPadding={8}
-                      >
-                        <BranchActionsMenu
-                          isCurrent={branch.current}
-                          canCheckout={!hasLocalCounterpart}
-                          canDelete={branch.kind === 'local'}
-                          {canFetch}
-                          checkoutLabel={branch.kind === 'local'
-                            ? 'Check out'
-                            : 'Create local branch'}
-                          busy={gitState.isBusy('checkout') || gitState.isBusy('fetch')}
-                          onCheckout={() => requestCheckout(branch)}
-                          onFetch={() => void fetchBranchAction(branch)}
-                          onDelete={() => requestDeleteBranch(branch.name)}
-                        />
-                      </ContextMenu.Content>
-                    </ContextMenu.Portal>
-                  </ContextMenu.Root>
+                      </ContextMenu.Trigger>
+                      <ContextMenu.Portal>
+                        <ContextMenu.Content
+                          class="z-50 min-w-48 overflow-hidden rounded-lg border border-border bg-surface p-1 shadow-xl"
+                          side="bottom"
+                          align="start"
+                          sideOffset={4}
+                          collisionPadding={8}
+                        >
+                          <BranchActionsMenu
+                            isCurrent={branch.current}
+                            canCheckout={!hasLocalCounterpart && !inWorktree}
+                            canDelete={branch.kind === 'local'}
+                            {canFetch}
+                            checkoutLabel={branch.kind === 'local'
+                              ? 'Check out'
+                              : 'Create local branch'}
+                            busy={gitState.isBusy('checkout') || gitState.isBusy('fetch')}
+                            onCheckout={() => requestCheckout(branch)}
+                            onFetch={() => void fetchBranchAction(branch)}
+                            onDelete={() => requestDeleteBranch(branch.name)}
+                          />
+                        </ContextMenu.Content>
+                      </ContextMenu.Portal>
+                    </ContextMenu.Root>
+                  {/each}
                 {/each}
               </div>
             {/if}

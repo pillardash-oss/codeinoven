@@ -37,6 +37,7 @@ import type {
   PrComposeInput
 } from '../../lib/types'
 import { Logger } from '../system/logger'
+import { parseWorktreePorcelain } from './scope-worktree-service'
 
 /** Upper bound on a single diff payload so the IPC contract never floods. */
 const MAX_DIFF_BYTES = 500 * 1024
@@ -573,18 +574,23 @@ export class GitService {
       const directory = await this.repo(projectPath)
       return this.wrapError(projectPath, 'read', async () => {
         const git = this.client(directory)
-        const [output, remotes] = await Promise.all([
+        const [output, remotes, worktreeRaw] = await Promise.all([
           git.raw([
             'for-each-ref',
             '--format=%(refname)%09%(refname:short)%09%(HEAD)%09%(upstream:short)%09%(upstream:remotename)%09%(upstream:track)%09%(symref)',
             'refs/heads',
             'refs/remotes'
           ]),
-          git.getRemotes()
+          git.getRemotes(),
+          git.raw(['worktree', 'list', '--porcelain', '-z']).catch(() => '')
         ])
         return this.parseBranchRefs(
           Array.isArray(output) ? output.join('\n') : output,
-          remotes.map(({ name }) => name)
+          remotes.map(({ name }) => name),
+          this.worktreeBranchPaths(
+            Array.isArray(worktreeRaw) ? worktreeRaw.join('\0') : worktreeRaw,
+            directory
+          )
         )
       })
     })
@@ -1692,7 +1698,30 @@ export class GitService {
     }
   }
 
-  private parseBranchRefs(raw: string, remoteNames: string[]): GitBranchInfo[] {
+  /** Map branch short names to the linked worktree paths that hold them. The entry for the
+   *  checkout being operated on (`directory`) is skipped: its branch is the panel's current
+   *  branch, not a foreign worktree. Falls back to skipping the primary (first) worktree when
+   *  the exact path does not match. */
+  private worktreeBranchPaths(raw: string, directory: string): Map<string, string> {
+    const entries = parseWorktreePorcelain(raw).entries
+    const paths = new Map<string, string>()
+    const normalizedDirectory = resolve(directory)
+    const primaryPath = entries[0]?.path ? resolve(entries[0].path) : null
+    for (const entry of entries) {
+      if (!entry.head?.startsWith('refs/heads/')) continue
+      const entryPath = resolve(entry.path)
+      if (entryPath === normalizedDirectory) return paths
+      if (entryPath === primaryPath) continue
+      paths.set(entry.head.slice('refs/heads/'.length), entry.path)
+    }
+    return paths
+  }
+
+  private parseBranchRefs(
+    raw: string,
+    remoteNames: string[],
+    worktreePaths: ReadonlyMap<string, string>
+  ): GitBranchInfo[] {
     const namesBySpecificity = [...remoteNames].sort((left, right) => right.length - left.length)
     const branches: GitBranchInfo[] = []
     for (const line of raw.split('\n')) {
@@ -1710,7 +1739,8 @@ export class GitService {
           remote: remoteName || null,
           upstream: upstream || null,
           ahead: Number.parseInt(ahead, 10) || 0,
-          behind: Number.parseInt(behind, 10) || 0
+          behind: Number.parseInt(behind, 10) || 0,
+          worktreePath: worktreePaths.get(ref) ?? null
         })
         continue
       }
@@ -1727,7 +1757,8 @@ export class GitService {
         remote,
         upstream: null,
         ahead: 0,
-        behind: 0
+        behind: 0,
+        worktreePath: null
       })
     }
     return branches

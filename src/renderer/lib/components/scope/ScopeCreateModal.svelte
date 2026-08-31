@@ -30,6 +30,8 @@
   let localBranches = $state.raw<GitBranchInfo[]>([])
   let branchesLoading = $state(true)
   let branchesError = $state<string | null>(null)
+  /** Local branches hidden from the source list because a worktree already holds them. */
+  let hiddenWorktreeBranches = $state(0)
   let sourceInfo = $state.raw<ScopeWorktreeSourceInfo | null>(null)
   let error = $state<string | null>(null)
   let busy = $state(false)
@@ -39,9 +41,13 @@
       const branches = (await invoke('git:branches', getProjectId())).filter(
         (branch) => branch.kind === 'local'
       )
-      localBranches = branches
-      baseBranch = branches.find((branch) => branch.current)?.name ?? branches[0]?.name ?? ''
-      branchesError = branches.length > 0 ? null : 'This repository has no local branches.'
+      // Git allows a branch in only one worktree, so branches already checked out in a
+      // linked worktree are not offered as worktree sources.
+      const available = branches.filter((branch) => branch.worktreePath === null)
+      hiddenWorktreeBranches = branches.length - available.length
+      localBranches = available
+      baseBranch = available.find((branch) => branch.current)?.name ?? available[0]?.name ?? ''
+      branchesError = available.length > 0 ? null : 'This repository has no local branches.'
     } catch (cause) {
       localBranches = []
       baseBranch = ''
@@ -207,12 +213,21 @@
               {/if}
             </div>
           </div>
-          <p
-            id={`${componentId}-base-branch-status`}
-            class={branchesError ? 'mt-1 text-xs text-danger' : 'sr-only'}
-          >
-            {branchesError ?? 'Only local branches are available as worktree sources.'}
-          </p>
+          {#if branchesError}
+            <p id={`${componentId}-base-branch-status`} class="mt-1 text-xs text-danger">
+              {branchesError}
+            </p>
+          {:else if hiddenWorktreeBranches > 0}
+            <p id={`${componentId}-base-branch-status`} class="mt-1 text-xs text-muted">
+              {hiddenWorktreeBranches}
+              {hiddenWorktreeBranches === 1 ? 'branch is' : 'branches are'} already checked out in a worktree
+              and cannot be used as a source.
+            </p>
+          {:else}
+            <p id={`${componentId}-base-branch-status`} class="sr-only">
+              Only local branches are available as worktree sources.
+            </p>
+          {/if}
           {#if sourceInfo}
             <p class="text-xs text-dimmed">
               Forks from <span class="text-muted">{baseBranch || sourceInfo.currentBranch}</span>

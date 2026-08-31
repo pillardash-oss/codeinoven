@@ -3879,6 +3879,10 @@ export interface GitBranchInfo {
   upstream: string | null
   ahead: number
   behind: number
+  /** Absolute path of a linked worktree where this branch is checked out, when one exists.
+   *  Null for regular branches and for the checkout the git panel is operating in. Such
+   *  branches cannot be checked out elsewhere: git refuses the same branch in two worktrees. */
+  worktreePath: string | null
 }
 
 /** A configured remote. */

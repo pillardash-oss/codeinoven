@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { ChevronDown, Check, GitBranch, Plus, Search, Trash2 } from '@lucide/svelte'
+  import { ChevronDown, Check, FolderTree, GitBranch, Plus, Search, Trash2 } from '@lucide/svelte'
   import { AlertDialog, DropdownMenu } from 'bits-ui'
   import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
   import { parseRemoteIdentity } from '$lib/git-remote-identity'
@@ -31,7 +31,12 @@
       : branches
   )
 
-  const localBranches = $derived(filtered.filter((branch) => branch.kind === 'local'))
+  const localBranches = $derived(
+    filtered.filter((branch) => branch.kind === 'local' && branch.worktreePath === null)
+  )
+  const worktreeBranches = $derived(
+    filtered.filter((branch) => branch.kind === 'local' && branch.worktreePath !== null)
+  )
   const remoteBranches = $derived(filtered.filter((branch) => branch.kind === 'remote'))
   const localNames = $derived(
     new Set(branches.filter((branch) => branch.kind === 'local').map((branch) => branch.name))
@@ -174,6 +179,37 @@
                   <Trash2 size={12} />
                 </button>
               {/if}
+            </div>
+          {/each}
+        {/if}
+
+        {#if worktreeBranches.length > 0}
+          <DropdownMenu.Separator class="mx-2 my-1 h-px bg-border" />
+          <p class="px-3 py-1 text-[9px] font-semibold uppercase tracking-wide text-dimmed">
+            Worktrees
+          </p>
+          {#each worktreeBranches as branch (branch.ref)}
+            <div
+              class="flex w-full items-center gap-2 px-3 py-1.5 text-[11px] outline-none"
+              title={`Checked out in worktree ${branch.worktreePath ?? ''}`}
+            >
+              <FolderTree size={11} class="shrink-0 text-warning" />
+              <span class="min-w-0 flex-1 truncate text-left text-muted">{branch.name}</span>
+              {#if branch.ahead > 0 || branch.behind > 0}
+                <span class="flex shrink-0 items-center gap-0.5 text-[9px] tabular-nums">
+                  {#if branch.ahead > 0}
+                    <span class="text-success">+{branch.ahead}</span>
+                  {/if}
+                  {#if branch.behind > 0}
+                    <span class="text-danger">−{branch.behind}</span>
+                  {/if}
+                </span>
+              {/if}
+              <span
+                class="shrink-0 rounded bg-warning/10 px-1 py-0.5 text-[8px] font-semibold uppercase tracking-wide text-warning"
+              >
+                worktree
+              </span>
             </div>
           {/each}
         {/if}
