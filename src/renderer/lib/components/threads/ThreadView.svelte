@@ -1040,7 +1040,9 @@
     // Quick chat is anchored at the last agent turn, so it only makes sense once
     // the agent has responded. It deliberately stays usable while the agent is
     // working — no busy/commandExecuting disabledReason.
-    if (messages.some((message) => message.role === 'assistant')) {
+    // Controller-driven views (quick chats) never offer it — a quick chat
+    // cannot open another quick chat from its own last turn.
+    if (!hasController && messages.some((message) => message.role === 'assistant')) {
       actions.push({
         id: 'command:quick-chat',
         title: '/quick chat',
