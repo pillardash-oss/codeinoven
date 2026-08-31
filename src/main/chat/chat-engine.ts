@@ -3884,9 +3884,10 @@ export class ChatEngine {
     const previousSessionId = switchedHarness ? thread.sessionId : undefined
 
     let sessionId = switchedHarness ? undefined : thread.sessionId
-    if (sessionId && this.engineeringLifecycleActive(projectId, threadId)) {
-      this.planningSessions.add(sessionId)
-    }
+    // Planning-turn suppression is applied per turn in sendPrompt (where the
+    // turn's intent is known). Marking the session here unconditionally for a
+    // lifecycle-active thread would suppress the final answer of every parked
+    // chat and follow-up turn for the rest of the app lifetime.
     let rotatedPlanningSession = false
     if (
       sessionId &&
@@ -6420,6 +6421,16 @@ export class ChatEngine {
       titleParentSessionId = sessionId
       if (specAction === 'implement') {
         this.engineeringImplementationSessions.add(sessionId)
+      }
+      // The planning-session mark drives terminal-answer suppression at turn
+      // finalization and on transcript reloads. It must reflect THIS turn's
+      // intent, never stale membership from an earlier planning turn: planning
+      // turns suppress their chat prose (the deliverable is the spec/brainstorm
+      // document), while implementation turns and parked-lifecycle chat turns
+      // show their final answer in the conversation.
+      if (planningSpecTurn) {
+        this.planningSessions.add(sessionId)
+      } else {
         this.planningSessions.delete(sessionId)
       }
     } catch (error) {
