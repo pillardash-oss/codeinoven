@@ -13074,8 +13074,8 @@ export class ChatEngine {
       throw new Error('Assignment-backed Achievement uses Assignment audit feedback.')
     }
     const coordinator = await this.threadManager.getThread(projectId, coordinatorThreadId)
-    if (!coordinator) throw new Error('Achievement is not active.')
-    const settings = await this.ensureActiveAchievementForReport(
+    if (!coordinator) throw new Error('No coordinator thread exists for this audit.')
+    const { settings, achievement } = await this.resolveAuditReviewContext(
       projectId,
       coordinatorThreadId,
       coordinator,
@@ -13086,12 +13086,15 @@ export class ChatEngine {
       coordinator.activeAuditVersion !== reportVersion ||
       (coordinator.auditState !== 'report_ready' && coordinator.auditState !== 'reworking')
     ) {
-      throw new Error('The selected Achievement audit report is not ready for feedback.')
+      throw new Error('The selected audit report is not ready for feedback.')
     }
     const report = this.auditEngine
       .listVersions(projectId, coordinatorThreadId, reportId)
       .find((candidate) => candidate.version === reportVersion)
-    if (!report) throw new Error('Achievement audit report not found.')
+    if (!report)
+      throw new Error(
+        achievement ? 'Achievement audit report not found.' : 'Audit report not found.'
+      )
 
     const handoffDigest = createHash('sha256')
       .update(
@@ -13127,9 +13130,11 @@ export class ChatEngine {
         settings,
         [
           marker,
-          'The Achievement Auditor and user review require implementation corrections.',
-          'Digest every actionable finding, open audit annotation, and user note. Implement the corrections in this Sr. Engineer thread, run focused verification, then allow Achievement to audit again.',
-          await this.cioPrompt('achievement-implementation'),
+          'The Auditor and user review require implementation corrections.',
+          achievement
+            ? 'Digest every actionable finding, open audit annotation, and user note. Implement the corrections in this Sr. Engineer thread, run focused verification, then allow Achievement to audit again.'
+            : 'Digest every actionable finding, open audit annotation, and user note. Implement the corrections in this Sr. Engineer thread, run focused verification, then request a fresh audit when ready.',
+          ...(achievement ? [await this.cioPrompt('achievement-implementation')] : []),
           `Audit report: ${auditPath}`,
           `User feedback:\n${feedback.trim()}`,
           `Open audit annotations:\n${formatOpenAnnotations(report.annotations)}`
@@ -13141,36 +13146,54 @@ export class ChatEngine {
         undefined,
         undefined,
         'internal',
-        workflowActionPresentation(`Apply Achievement audit v${report.version}`, feedback)
+        workflowActionPresentation(
+          achievement
+            ? `Apply Achievement audit v${report.version}`
+            : `Apply audit v${report.version}`,
+          feedback
+        )
       )
     }
     return (await this.threadManager.getThread(projectId, coordinatorThreadId)) ?? coordinator
   }
 
   /**
-   * A durable Achievement cycle that outlived its Achievement switch (the loop
-   * toggle can flip off mid-review while a `report_ready` report persists) stays
-   * recoverable: an explicit review action on a persisted report reactivates
-   * Achievement instead of wedging the review surface forever.
+   * Classifies a coordinator thread for an audit review action (feedback or
+   * return-to-offer). A durable Achievement cycle that outlived its Achievement
+   * switch (the loop toggle can flip off mid-review while a `report_ready`
+   * report persists) stays recoverable: an explicit review action on a persisted
+   * report reactivates Achievement instead of wedging the review surface
+   * forever. A plain implementation audit that was never run under Achievement
+   * stays plain: the review proceeds without touching loopMode, because audits
+   * must be reviewable without Achievement turned on.
    */
-  private async ensureActiveAchievementForReport(
+  private async resolveAuditReviewContext(
     projectId: string,
     coordinatorThreadId: string,
     coordinator: Thread,
-    revivableStates: readonly NonNullable<Thread['auditState']>[]
-  ): Promise<ThreadSettings> {
+    reviewableStates: readonly NonNullable<Thread['auditState']>[]
+  ): Promise<{ settings: ThreadSettings; achievement: boolean }> {
     const settings = coordinator.settings
-    if (!settings) throw new Error('Achievement is not active.')
-    if (settings.loopMode === true) return settings
+    if (!settings) throw new Error('The coordinator thread has no settings to review against.')
+    if (settings.loopMode === true) return { settings, achievement: true }
     const revivable =
       coordinator.achievementRole === 'coordinator' &&
       coordinator.activeAuditId !== undefined &&
       coordinator.auditState !== undefined &&
-      revivableStates.includes(coordinator.auditState)
-    if (!revivable) throw new Error('Achievement is not active.')
-    const revived = { ...settings, loopMode: true }
-    await this.threadManager.updateSettings(projectId, coordinatorThreadId, revived)
-    return revived
+      reviewableStates.includes(coordinator.auditState)
+    if (revivable) {
+      const revived = { ...settings, loopMode: true }
+      await this.threadManager.updateSettings(projectId, coordinatorThreadId, revived)
+      return { settings: revived, achievement: true }
+    }
+    const plainReviewable =
+      coordinator.activeAuditId !== undefined &&
+      coordinator.auditState !== undefined &&
+      reviewableStates.includes(coordinator.auditState)
+    if (!plainReviewable) {
+      throw new Error('No audit report is awaiting review on this thread.')
+    }
+    return { settings, achievement: false }
   }
 
   async returnAchievementAuditToOffer(
@@ -13183,8 +13206,8 @@ export class ChatEngine {
       throw new Error('Assignment-backed Achievement uses the Assignment audit lifecycle.')
     }
     const coordinator = await this.threadManager.getThread(projectId, coordinatorThreadId)
-    if (!coordinator) throw new Error('Achievement is not active.')
-    await this.ensureActiveAchievementForReport(projectId, coordinatorThreadId, coordinator, [
+    if (!coordinator) throw new Error('No coordinator thread exists for this audit.')
+    await this.resolveAuditReviewContext(projectId, coordinatorThreadId, coordinator, [
       'offered',
       'report_ready',
       'reworking'
