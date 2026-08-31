@@ -58,8 +58,30 @@ describe('prototype artifacts and preview service', () => {
     const response = await fetch(`http://127.0.0.1:${port}/${prototype.previewPath}`)
     expect(response.status).toBe(200)
     expect(response.headers.get('x-content-type-options')).toBe('nosniff')
-    expect(response.headers.get('content-security-policy')).toContain("connect-src 'none'")
+    const csp = response.headers.get('content-security-policy') ?? ''
+    // Dev-preview posture: interactive prototypes run (inline scripts, self-posting
+    // forms, same-origin fetch) while cross-origin reach is still denied.
+    expect(csp).toContain("script-src 'self' 'unsafe-inline'")
+    expect(csp).toContain("connect-src 'self'")
+    expect(csp).toContain("form-action 'self'")
+    expect(csp).toContain("frame-ancestors 'none'")
+    expect(csp).toContain("base-uri 'none'")
+    expect(csp).toContain("object-src 'none'")
     await expect(response.text()).resolves.toContain('LoFi')
+    // Demo forms post back to the prototype's own URL and must still be served.
+    const selfPost = await fetch(`http://127.0.0.1:${port}/${prototype.previewPath}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body: 'email=ngozi%40example.com&password=password'
+    })
+    expect(selfPost.status).toBe(200)
+    await expect(selfPost.text()).resolves.toContain('LoFi')
+    // Origin-root favicon requests return the built-in placeholder instead of 404 noise.
+    const favicon = await fetch(`http://127.0.0.1:${port}/favicon.ico`)
+    expect(favicon.status).toBe(200)
+    expect(favicon.headers.get('content-type')).toBe('image/png')
+    expect(favicon.headers.get('content-security-policy')).toBe(csp)
+    expect((await favicon.arrayBuffer()).byteLength).toBeGreaterThan(0)
     await expect(fetch(`http://127.0.0.1:${port}/cio/toolbox-l1/../secret`)).resolves.toMatchObject(
       {
         status: 404
