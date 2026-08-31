@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onDestroy, onMount, tick, type Snippet } from 'svelte'
   import { shouldMountWorkingTrace } from '$lib/working-trace-parts'
+  import { reconcilesPendingAttention } from '$lib/session-attention'
   import { fly } from 'svelte/transition'
   import { SvelteMap, SvelteSet } from 'svelte/reactivity'
 
@@ -3908,7 +3909,7 @@
           // authoritative pending queues the same way the 'idle' transition
           // already does below, so a missed push self-heals instead of
           // requiring the user to leave and come back.
-          scheduleIdleAttention()
+          if (reconcilesPendingAttention(event.status.state)) scheduleIdleAttention()
         } else if (event.status.state === 'idle') {
           const interruptedCompaction = compactionInterrupted()
           if (!setIdleFromSession()) return
@@ -3924,7 +3925,7 @@
             providerStatus = null
           }
           scheduleReadySpecReconcile()
-          scheduleIdleAttention()
+          if (reconcilesPendingAttention(event.status.state)) scheduleIdleAttention()
         } else {
           clearLocalTurn()
           agentRuns.setIdle(thread.projectId, thread.id)
