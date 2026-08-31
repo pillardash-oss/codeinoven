@@ -8996,6 +8996,19 @@ export class ChatEngine {
     // the scheduler fires later and silently revives the thread the user
     // deliberately stopped.
     this.retryScheduler?.clear(thread.sessionId)
+    // A queued specification generation must die with the run the user just
+    // stopped. If the persisted spec-generation record survives, reopening the
+    // thread resumes the exact spec work the user deliberately cancelled.
+    // Only pending/generating records are removed: a failed record never
+    // auto-resumes and backs the dedicated Retry card.
+    const pendingInitialSpec = await this.readPendingInitialSpec(projectId, threadId)
+    if (
+      pendingInitialSpec &&
+      (pendingInitialSpec.state === 'pending' || pendingInitialSpec.state === 'generating')
+    ) {
+      this.userAbortedInitialSpecOperations.add(this.initialSpecKey(projectId, threadId))
+      await this.clearPendingInitialSpec(projectId, threadId)
+    }
     this.sessionStatuses.set(thread.sessionId, { state: 'idle' })
     this.clearPendingQuestionsForSession(thread.sessionId)
     this.clearPendingPermissionsForSession(thread.sessionId)
@@ -12292,6 +12305,18 @@ export class ChatEngine {
         this.sessionStatuses.set(workflowThread.sessionId, status)
         this.broadcast({ type: 'session.status', sessionId: workflowThread.sessionId, status })
       }
+      // A stop that landed while the spec session was still being created must
+      // win: tear the just-created session down instead of running the prompt.
+      if (this.userAbortedInitialSpecOperations.has(workflowKey)) {
+        this.activeInitialSpecSessions.delete(workflowKey)
+        this.sessionRegistry.delete(sessionId)
+        if (isolated && driver instanceof OpenCodeDriver) {
+          driver.disposeIsolatedSession(isolated)
+        } else {
+          await driver.deleteSession?.(projectPath, sessionId).catch(() => undefined)
+        }
+        throw new Error('Specification generation was stopped by the user.')
+      }
       const completion = this.waitForSessionCompletion(
         sessionId,
         SPEC_GENERATION_TIMEOUT_MS,
@@ -15439,6 +15464,18 @@ export class ChatEngine {
     let lastError = ''
     let encounteredInvalidSpec = Boolean(pending.repairArtifactPath)
     while (pending.attempts < SPEC_GENERATION_MAX_ATTEMPTS) {
+      // A stop that landed between attempts (or before the first one) must
+      // cancel the remaining attempts instead of letting the loop continue.
+      if (this.userAbortedInitialSpecOperations.delete(operationKey)) {
+        await this.clearPendingInitialSpec(projectId, threadId)
+        await this.threadManager.setStatus(projectId, threadId, 'interrupted', { read: true })
+        Logger.info('Specification generation interrupted by user', {
+          projectId,
+          threadId,
+          attempt: pending.attempts
+        })
+        return null
+      }
       pending = {
         ...pending,
         state: 'generating',
