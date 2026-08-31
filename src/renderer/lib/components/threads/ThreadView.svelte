@@ -6984,6 +6984,10 @@
   }
 
   async function openDurableAuditWork(): Promise<void> {
+    if (durableAuditThread) {
+      workspaceState.openThread(durableAuditThread, project)
+      return
+    }
     coordinatorDockState.setAutoOpen(true)
     contextSidebarState.openCoordinator(thread.projectId, thread.id, 'Audit coordinator')
   }
