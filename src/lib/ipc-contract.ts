@@ -270,7 +270,7 @@ export interface BrowserPermissionRequest {
 export type BrowserConsoleLevel = 'debug' | 'info' | 'warning' | 'error'
 
 /** Where a renderer log line originated, for the durable log tag. */
-export type RendererLogSource = 'error' | 'unhandledrejection' | 'console'
+export type RendererLogSource = 'error' | 'unhandledrejection' | 'console' | 'watchdog'
 
 /** Renderer-level log levels forwarded to the main-process Logger. */
 export type RendererLogLevel = 'dev' | 'info' | 'error'

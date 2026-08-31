@@ -3,6 +3,7 @@ import App from './App.svelte'
 import './app.css'
 import { createRingBufferLogger, setRemoteLogger } from './lib/remote/logger'
 import { installRendererErrorCapture } from './lib/system/renderer-logger'
+import { installStallWatchdog } from './lib/system/stall-watchdog'
 
 // Retain remote-connection diagnostics in memory so they are observable (the
 // Remote view exposes them) without using console.*.
@@ -12,6 +13,10 @@ setRemoteLogger(createRingBufferLogger())
 // console.error output) from the first renderer statement and forward them to
 // the main-process durable log so client crashes are diagnosable on disk.
 installRendererErrorCapture()
+
+// Dev-only diagnostic: flags a silent agent-event stream and dumps the recent
+// event trail to the durable log. No-ops entirely in production builds.
+installStallWatchdog()
 
 const notificationSound = new Audio(new URL('./alert.wav', document.baseURI).href)
 notificationSound.preload = 'auto'
