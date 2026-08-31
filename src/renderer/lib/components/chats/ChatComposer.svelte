@@ -863,7 +863,12 @@
     pendingStop = false
   }
 
-  function isHarnessSlashAction(action: ActionDefinition): boolean {
+  /** Actions whose selection inserts `/title ` into the composer and whose
+   *  typed `/title args` submit is routed through `onSlashCommand`. Harness
+   *  command/skill/mcp actions qualify natively; app-owned actions opt in via
+   *  the `slashCommand` flag. */
+  function isSlashRoutedAction(action: ActionDefinition): boolean {
+    if (action.slashCommand === true) return true
     return (
       action.source.kind === 'harness' &&
       (action.category === 'command' || action.category === 'skill' || action.category === 'mcp') &&
@@ -898,7 +903,7 @@
     const selectedQuery = slashQuery
     slashOpen = false
 
-    const replacement = isHarnessSlashAction(action) ? `${action.title} ` : ''
+    const replacement = isSlashRoutedAction(action) ? `${action.title} ` : ''
     const replaced = richEditor.replaceTextBeforeCaret(
       /(^|\s)\/[^\s/]*$/u,
       (_match, prefix) => `${prefix}${replacement}`
@@ -916,7 +921,7 @@
       return
     }
 
-    if (isHarnessSlashAction(action)) {
+    if (isSlashRoutedAction(action)) {
       return
     }
 
@@ -947,7 +952,7 @@
     if (slashCommand && onSlashCommand) {
       const name = slashCommand[1]
       const action = actions.find(
-        (candidate) => isHarnessSlashAction(candidate) && candidate.title === `/${name}`
+        (candidate) => isSlashRoutedAction(candidate) && candidate.title === `/${name}`
       )
       if (action) {
         if (action.disabledReason) return

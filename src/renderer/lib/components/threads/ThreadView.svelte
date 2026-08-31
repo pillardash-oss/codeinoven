@@ -165,6 +165,7 @@
     ThinkingLevel,
     PermissionLevel,
     ScopedHarnessCommand,
+    AgentCapabilityEntry,
     AgentMessage,
     AgentPart,
     AgentEvent,
@@ -744,6 +745,10 @@
   }
 
   let commands = $state<ScopedHarnessCommand[]>([])
+  /** Skills visible to the thread's active harness: harness-native, global-layer,
+   *  and CodeInOven-registered (Utilities) skills. Rendered as slash actions. */
+  let capabilitySkills = $state<AgentCapabilityEntry[]>([])
+  let capabilityHarnessName = $state('')
   let pendingPermissions = $state<PermissionRequest[]>([])
   let pendingImageDescriptorError = $state<ImageDescriptorErrorRequest | null>(null)
   /**
@@ -863,6 +868,12 @@
     label: providerName,
     kind: 'harness'
   })
+  /** Global-layer skills shared by every project and harness. */
+  const globalSkillActionSource = {
+    id: 'global-skills',
+    label: 'Global',
+    kind: 'app'
+  } satisfies ActionSource
   /** Thinking levels derived from all provider model presets, deduplicated. */
   let actionThinkingLevels = $derived.by(() => {
     const seen = new SvelteSet<string>()
@@ -1083,6 +1094,52 @@
         source: harnessActionSource,
         keywords: [command.name, command.source, settings.harnessId],
         ...(busy || commandExecuting ? { disabledReason: 'Wait for the active run to finish' } : {})
+      })
+    }
+
+    // CodeInOven utility turn — the slash spelling of the @cio-utility composer
+    // tag. Selecting sends the tag (plus any typed arguments) through the normal
+    // send path, so the main-process utility orchestration owns the contract.
+    actions.push({
+      id: 'command:cio-utility',
+      title: '/cio-utility',
+      description: 'Start a CodeInOven utility turn — install utilities or debug the app',
+      category: 'command',
+      source: applicationActionSource,
+      keywords: ['cio', 'utility', 'utilities', 'setup', 'install', 'skill', 'mcp', 'debug'],
+      slashCommand: true,
+      ...(busy || commandExecuting ? { disabledReason: 'Wait for the active run to finish' } : {})
+    })
+
+    // Skills the thread's harness can see but does not expose as native slash
+    // commands: global-layer skills and CodeInOven-registered skills. Harness-
+    // reported skills are skipped — they are already listed above.
+    const harnessCommandNames = new Set(commands.map((command) => command.name.toLocaleLowerCase()))
+    for (const skill of capabilitySkills) {
+      if (harnessCommandNames.has(skill.name.toLocaleLowerCase())) continue
+      actions.push({
+        id: actionId(`cio-skill:${skill.id}`),
+        title: `/${skill.name}`,
+        description:
+          skill.origin === 'global'
+            ? `Global skill · ${skill.description ?? 'Available in every project'}`
+            : skill.origin === 'application'
+              ? `CodeInOven skill · ${skill.description ?? 'Installed via Utilities'}`
+              : `${capabilityHarnessName || 'Harness'} skill · ${skill.description ?? ''}`.trim(),
+        category: 'skill',
+        source:
+          skill.origin === 'harness'
+            ? harnessActionSource
+            : skill.origin === 'global'
+              ? globalSkillActionSource
+              : applicationActionSource,
+        keywords: [skill.name, skill.origin, 'skill'],
+        slashCommand: true,
+        ...(!skill.enabled
+          ? { disabledReason: 'Disabled in Utilities' }
+          : busy || commandExecuting
+            ? { disabledReason: 'Wait for the active run to finish' }
+            : {})
       })
     }
 
@@ -3070,6 +3127,8 @@
       void controller.load()
       localReady = Promise.resolve()
       sessionReady = Promise.resolve('')
+      void refreshCommands()
+      void refreshCapabilitySkills()
 
       return () => {
         alive = false
@@ -3119,6 +3178,12 @@
     // This view owns dispatch of the thread's queued message while mounted;
     // the background dispatcher must defer to it to avoid a double send.
     queuedMessageDispatcher.markMounted(mountedProjectId, mountedThreadId)
+
+    // Slash menu inputs: harness commands and the skills visible to the
+    // thread's harness. Previously commands only loaded after a harness
+    // switch, leaving a freshly mounted thread's slash menu empty.
+    void refreshCommands()
+    void refreshCapabilitySkills()
 
     // Subscribe to agent events for streaming
     unsubscribe = subscribe('agent:event', (...args: unknown[]) => {
@@ -4083,6 +4148,22 @@
     }
   }
 
+  /** Load the skills the thread's harness can see (harness-native, global, and
+   *  CodeInOven-registered). Discovery is supplementary — the composer keeps
+   *  working when it fails. */
+  async function refreshCapabilitySkills(): Promise<void> {
+    const { projectId, id } = thread
+    try {
+      const capabilities = await invoke('agent:listContextCapabilities', projectId, id)
+      if (capabilities.harnessId !== settings.harnessId) return
+      capabilityHarnessName = capabilities.harnessName
+      capabilitySkills = capabilities.skill
+    } catch {
+      // Capability discovery is supplementary; messaging remains available.
+      capabilitySkills = []
+    }
+  }
+
   /** Hydrate the authoritative pending-question queue from the main process. */
   async function refreshPendingQuestions(): Promise<void> {
     const { projectId, id } = thread
@@ -4729,8 +4810,35 @@
     }
   }
 
+  /** Send a CodeInOven utility turn — the slash spelling of the @cio-utility
+   *  composer tag. The main process owns the utility contract for that turn. */
+  function triggerCioUtilityTurn(args: string): void {
+    const request = args.trim()
+    sendComposerMessage(request ? `@cio-utility ${request}` : '@cio-utility', [])
+  }
+
+  /** Invoke a capability skill the harness does not expose as a native slash
+   *  command by sending a turn that asks the agent to load and follow it. */
+  function triggerCapabilitySkill(actionKey: string, args: string): void {
+    const skill = capabilitySkills.find((candidate) => `cio-skill:${candidate.id}` === actionKey)
+    if (!skill) return
+    const request = args.trim()
+    sendComposerMessage(
+      request ? `${request}\n\n(Use the "${skill.name}" skill for this.)` : `Use the "${skill.name}" skill.`,
+      []
+    )
+  }
+
   async function executeHarnessCommand(commandId: string, args: string): Promise<void> {
     if (busy || commandExecuting) return
+    if (commandId === 'command:cio-utility') {
+      triggerCioUtilityTurn(args)
+      return
+    }
+    if (commandId.startsWith('cio-skill:')) {
+      triggerCapabilitySkill(commandId, args)
+      return
+    }
     const { projectId, id } = thread
     const command = commands.find((candidate) => actionId(candidate.id) === commandId)
     if (!command) return
@@ -4820,6 +4928,13 @@
 
     if (action.id === 'command:quick-chat') {
       openQuickChatFromLastTurn()
+      return
+    }
+
+    // App-owned slash commands (/cio-utility and capability skills) route
+    // through the same handler the composer's submit path uses.
+    if (action.id === 'command:cio-utility' || action.id.startsWith('cio-skill:')) {
+      await executeHarnessCommand(action.id, '')
       return
     }
 
@@ -7969,9 +8084,15 @@
     commitSettings(normalized)
     const persistence = invoke('thread:updateSettings', thread.projectId, thread.id, normalized)
     if (harnessChanged) {
-      void persistence.then(refreshCommands).catch(() => {
-        commands = []
-      })
+      void persistence
+        .then(() => {
+          refreshCommands()
+          refreshCapabilitySkills()
+        })
+        .catch(() => {
+          commands = []
+          capabilitySkills = []
+        })
     } else {
       persistence.catch(() => {
         // Non-fatal — the send path persists the settings again.

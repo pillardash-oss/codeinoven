@@ -38,6 +38,11 @@ export interface ActionDefinition {
   disabledReason?: string
   /** Optional lucide icon rendered in place of the category letter badge. */
   icon?: Component
+  /** Selecting the action inserts `/title ` into the composer and submitting
+   *  routes the typed `/title args` text through `onSlashCommand`. Harness
+   *  command/skill/mcp actions are routed implicitly; app-owned actions opt in
+   *  with this flag. */
+  slashCommand?: boolean
   /** Optional colored data-URI (e.g. a file/folder icon) rendered in the badge. */
   iconUri?: string
   /** Optional live status rendered as a colored badge + human label (e.g. thread
