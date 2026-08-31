@@ -229,7 +229,11 @@ import {
   PROPOSE_MEMORY_SCHEMA,
   SPEC_GENERATION_SCHEMA
 } from '../../lib/agent-tools'
-import { UTILITY_ACTIVATE_TOOL_NAME, UTILITY_INVOKE_TOOL_NAME, UTILITY_SEARCH_TOOL_NAME } from '../../lib/gateway-tools'
+import {
+  UTILITY_ACTIVATE_TOOL_NAME,
+  UTILITY_INVOKE_TOOL_NAME,
+  UTILITY_SEARCH_TOOL_NAME
+} from '../../lib/gateway-tools'
 import { BrainstormEngine } from '../../lib/engines/brainstorm-engine'
 import {
   SAFE_PROTOTYPE_ID,
@@ -298,8 +302,7 @@ const MEMORY_RESPONSE_BOUNDARY_INSTRUCTION = [
 ].join(' ')
 
 /** Guidance injected for models that cannot see images (attachment: false). */
-const IMAGE_DESCRIPTOR_SYSTEM_NOTE =
-  `You cannot directly see images. The application describes images attached to the user turn with the configured vision model before dispatch and supplies that evidence in the prompt. For follow-up inspection, the image descriptor is available on demand through the app gateway: search for it with ${UTILITY_SEARCH_TOOL_NAME} using kinds ["image_descriptor"], activate the result with ${UTILITY_ACTIVATE_TOOL_NAME}, then invoke its describe operation with ${UTILITY_INVOKE_TOOL_NAME} passing {"images":[{"id":"image-1","source":"path-or-url","type":"path"}]} (or "type":"binary" with base64 data when the bytes cannot be referenced by path). The operation accepts several images per call, so batch frames at once. If the media is a video file you cannot read directly, check whether ffmpeg is available on the system (e.g., ffmpeg -version or which ffmpeg); if no system ffmpeg is found, this app bundles ffmpeg via ffmpeg-static — resolve its path and use it.`
+const IMAGE_DESCRIPTOR_SYSTEM_NOTE = `You cannot directly see images. The application describes images attached to the user turn with the configured vision model before dispatch and supplies that evidence in the prompt. For follow-up inspection, the image descriptor is available on demand through the app gateway: search for it with ${UTILITY_SEARCH_TOOL_NAME} using kinds ["image_descriptor"], activate the result with ${UTILITY_ACTIVATE_TOOL_NAME}, then invoke its describe operation with ${UTILITY_INVOKE_TOOL_NAME} passing {"images":[{"id":"image-1","source":"path-or-url","type":"path"}]} (or "type":"binary" with base64 data when the bytes cannot be referenced by path). The operation accepts several images per call, so batch frames at once. If the media is a video file you cannot read directly, check whether ffmpeg is available on the system (e.g., ffmpeg -version or which ffmpeg); if no system ffmpeg is found, this app bundles ffmpeg via ffmpeg-static — resolve its path and use it.`
 
 function isImagePromptAttachment(attachment: PromptAttachment): boolean {
   if (attachment.mime.toLocaleLowerCase().startsWith('image/')) return true
@@ -5706,7 +5709,8 @@ export class ChatEngine {
     const validatedPresentation = this.validateUserMessagePresentation(presentation)
     const validatedProjectReferences = await this.validateProjectReferences(
       projectId,
-      projectReferences
+      projectReferences,
+      thread.scopeBucketId
     )
     const projectReferenceContext = formatProjectReferenceContext(validatedProjectReferences)
     let hiddenContext = [hiddenPromptContext, projectReferenceContext].filter(Boolean).join('\n\n')
@@ -6166,7 +6170,8 @@ export class ChatEngine {
     const validatedPresentation = this.validateUserMessagePresentation(presentation)
     const validatedProjectReferences = await this.validateProjectReferences(
       projectId,
-      projectReferences
+      projectReferences,
+      targetThread?.scopeBucketId
     )
     const projectReferenceContext = formatProjectReferenceContext(validatedProjectReferences)
     let hiddenContext = [hiddenPromptContext, projectReferenceContext].filter(Boolean).join('\n\n')
@@ -8551,7 +8556,8 @@ export class ChatEngine {
 
   private async validateProjectReferences(
     projectId: string,
-    references: PromptProjectReference[] | undefined
+    references: PromptProjectReference[] | undefined,
+    scopeBucketId?: string
   ): Promise<PromptProjectReference[]> {
     if (references === undefined || references.length === 0) return []
     if (!Array.isArray(references) || references.length > 20) {
@@ -8581,7 +8587,7 @@ export class ChatEngine {
       }
       return { id, name, path, kind: reference.kind }
     })
-    return this.projectFilesService.validatePromptReferences(projectId, validated)
+    return this.projectFilesService.validatePromptReferences(projectId, validated, scopeBucketId)
   }
 
   // ─── Thread auto-titling ──────────────────────────────────────────────────
@@ -8939,7 +8945,10 @@ export class ChatEngine {
       markNotificationAborting(projectId, threadId)
       this.userAbortedAssignmentDraftOperations.add(brainstormKey)
       this.userAbortedSessions.add(activeAssignmentDraft.sessionId)
-      if (activeAssignmentDraft.isolated && activeAssignmentDraft.driver instanceof OpenCodeDriver) {
+      if (
+        activeAssignmentDraft.isolated &&
+        activeAssignmentDraft.driver instanceof OpenCodeDriver
+      ) {
         await activeAssignmentDraft.driver.abort(
           activeAssignmentDraft.projectPath,
           activeAssignmentDraft.sessionId,

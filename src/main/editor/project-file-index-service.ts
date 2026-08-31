@@ -176,6 +176,11 @@ export class ProjectFileIndexService {
     this.indexVersions.set(projectId, (this.indexVersions.get(projectId) ?? 0) + 1)
   }
 
+  /** Live index keys so callers can sweep scoped variants during teardown. */
+  indexKeys(): Iterable<string> {
+    return this.indexes.keys()
+  }
+
   /** Tear down everything for a removed project: watcher, pending batches, and
    *  the cached index. */
   dispose(projectId: string): void {

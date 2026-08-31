@@ -21,6 +21,16 @@ export interface ProjectFilesProjectLookup {
   getProject(projectId: string): Promise<Project | null>
 }
 
+/** Resolves a managed scope's filesystem root; unhealthy scopes fail closed. */
+export interface ProjectFilesScopeRootLookup {
+  resolveCompatibilityRoot(projectId: string, scopeBucketId: string): Promise<string | null>
+}
+
+/** Cache/invalidation key for a (project, scope) root pair. */
+function scopedKey(projectId: string, scopeBucketId?: string): string {
+  return scopeBucketId ? `${projectId}::${scopeBucketId}` : projectId
+}
+
 function isWithinRoot(root: string, target: string): boolean {
   const pathFromRoot = relative(root, target)
   return (
@@ -57,10 +67,17 @@ export class ProjectFilesService {
   private readonly fileIndex = new ProjectFileIndexService()
   private mutationQueue: Promise<void> = Promise.resolve()
 
-  constructor(private readonly projects: ProjectFilesProjectLookup) {}
+  constructor(
+    private readonly projects: ProjectFilesProjectLookup,
+    private readonly scopeRoots?: ProjectFilesScopeRootLookup
+  ) {}
 
-  async listDirectory(projectId: string, relativeDirectory: string): Promise<ProjectFileEntry[]> {
-    const root = await this.projectRoot(projectId)
+  async listDirectory(
+    projectId: string,
+    relativeDirectory: string,
+    scopeBucketId?: string
+  ): Promise<ProjectFileEntry[]> {
+    const root = await this.projectRoot(projectId, scopeBucketId)
     const directory = await this.resolveExistingPath(root, relativeDirectory, true)
     const entries = await readdir(directory, { withFileTypes: true })
     const visible = entries
@@ -96,15 +113,34 @@ export class ProjectFilesService {
   async searchFiles(
     projectId: string,
     query: string,
-    category: 'all' | 'rules'
+    category: 'all' | 'rules',
+    scopeBucketId?: string
   ): Promise<ProjectFileEntry[]> {
-    const root = await this.projectRoot(projectId)
+    const root = await this.projectRoot(projectId, scopeBucketId)
     const project = await this.projects.getProject(projectId)
-    return this.fileIndex.search(projectId, root, query, category, project?.name)
+    // Scoped searches index their own root: a worktree checkout must never
+    // share (or poison) the project-root index.
+    return this.fileIndex.search(
+      scopedKey(projectId, scopeBucketId),
+      root,
+      query,
+      category,
+      project?.name
+    )
   }
 
-  invalidateProject(projectId: string): void {
+  invalidateProject(projectId: string, scopeBucketId?: string): void {
+    if (scopeBucketId) {
+      this.fileIndex.invalidate(scopedKey(projectId, scopeBucketId))
+      return
+    }
+    // A project-level invalidation clears the project root's index plus every
+    // scoped index derived from it, so stale worktree entries never survive.
     this.fileIndex.invalidate(projectId)
+    const prefix = `${projectId}::`
+    for (const key of [...this.fileIndex.indexKeys()]) {
+      if (key.startsWith(prefix)) this.fileIndex.invalidate(key)
+    }
   }
 
   /** Warm the file index for a project in the background and start watching
@@ -124,6 +160,10 @@ export class ProjectFilesService {
   /** Stop watching a project and drop its index (project removed). */
   disposeProject(projectId: string): void {
     this.fileIndex.dispose(projectId)
+    const prefix = `${projectId}::`
+    for (const key of [...this.fileIndex.indexKeys()]) {
+      if (key.startsWith(prefix)) this.fileIndex.dispose(key)
+    }
   }
 
   /**
@@ -136,14 +176,15 @@ export class ProjectFilesService {
    */
   async resolveCitationPaths(
     projectId: string,
-    candidates: string[]
+    candidates: string[],
+    scopeBucketId?: string
   ): Promise<Record<string, string | null>> {
     const project = await this.projects.getProject(projectId)
     if (!project) throw new Error(`Project not found: ${projectId}`)
     if (project.source !== 'local' || !project.path.trim()) {
       return Object.fromEntries(candidates.map((candidate) => [candidate, null]))
     }
-    const root = await this.projectRoot(projectId)
+    const root = await this.projectRoot(projectId, scopeBucketId)
     const results: Record<string, string | null> = {}
     for (const rawCandidate of candidates) {
       results[rawCandidate] = await this.resolveCitationPath(root, rawCandidate)
@@ -225,9 +266,10 @@ export class ProjectFilesService {
    */
   async validatePromptReferences(
     projectId: string,
-    references: PromptProjectReference[]
+    references: PromptProjectReference[],
+    scopeBucketId?: string
   ): Promise<PromptProjectReference[]> {
-    const root = await this.projectRoot(projectId)
+    const root = await this.projectRoot(projectId, scopeBucketId)
     return Promise.all(
       references.map(async (reference) => {
         const entry = await this.resolveExistingEntry(root, reference.path)
@@ -243,8 +285,12 @@ export class ProjectFilesService {
     )
   }
 
-  async readText(projectId: string, relativePath: string): Promise<ProjectTextFile> {
-    const root = await this.projectRoot(projectId)
+  async readText(
+    projectId: string,
+    relativePath: string,
+    scopeBucketId?: string
+  ): Promise<ProjectTextFile> {
+    const root = await this.projectRoot(projectId, scopeBucketId)
     const target = await this.resolveExistingPath(root, relativePath, false)
     return this.readResolvedText(target, relativePath)
   }
@@ -252,10 +298,11 @@ export class ProjectFilesService {
   async createFile(
     projectId: string,
     relativeDirectory: string,
-    name: string
+    name: string,
+    scopeBucketId?: string
   ): Promise<ProjectFileEntry> {
     return this.runMutationExclusive(async () => {
-      const root = await this.projectRoot(projectId)
+      const root = await this.projectRoot(projectId, scopeBucketId)
       const target = await this.resolveNewPath(root, relativeDirectory, name)
       const file = await open(
         target.absolutePath,
@@ -263,7 +310,7 @@ export class ProjectFilesService {
         0o600
       )
       await file.close()
-      this.invalidateProject(projectId)
+      this.invalidateProject(projectId, scopeBucketId)
       return { name, path: target.relativePath, kind: 'file' }
     })
   }
@@ -271,13 +318,14 @@ export class ProjectFilesService {
   async createDirectory(
     projectId: string,
     relativeDirectory: string,
-    name: string
+    name: string,
+    scopeBucketId?: string
   ): Promise<ProjectFileEntry> {
     return this.runMutationExclusive(async () => {
-      const root = await this.projectRoot(projectId)
+      const root = await this.projectRoot(projectId, scopeBucketId)
       const target = await this.resolveNewPath(root, relativeDirectory, name)
       await mkdir(target.absolutePath)
-      this.invalidateProject(projectId)
+      this.invalidateProject(projectId, scopeBucketId)
       return { name, path: target.relativePath, kind: 'directory' }
     })
   }
@@ -285,10 +333,11 @@ export class ProjectFilesService {
   async renameEntry(
     projectId: string,
     relativePath: string,
-    name: string
+    name: string,
+    scopeBucketId?: string
   ): Promise<ProjectFileEntry> {
     return this.runMutationExclusive(async () => {
-      const root = await this.projectRoot(projectId)
+      const root = await this.projectRoot(projectId, scopeBucketId)
       const source = await this.resolveExistingEntry(root, relativePath)
       const target = await this.resolveNewPath(root, toPosixPath(dirname(relativePath)), name)
       if (source.kind === 'directory') {
@@ -302,13 +351,17 @@ export class ProjectFilesService {
           throw error
         }
       }
-      this.invalidateProject(projectId)
+      this.invalidateProject(projectId, scopeBucketId)
       return { name, path: target.relativePath, kind: source.kind }
     })
   }
 
-  async resolveForTrash(projectId: string, relativePath: string): Promise<string> {
-    const root = await this.projectRoot(projectId)
+  async resolveForTrash(
+    projectId: string,
+    relativePath: string,
+    scopeBucketId?: string
+  ): Promise<string> {
+    const root = await this.projectRoot(projectId, scopeBucketId)
     return (await this.resolveExistingEntry(root, relativePath)).absolutePath
   }
 
@@ -317,11 +370,13 @@ export class ProjectFilesService {
     sourcePath: string,
     destinationProjectId: string,
     destinationDirectory: string,
-    mode: ProjectFileTransferMode
+    mode: ProjectFileTransferMode,
+    sourceScopeBucketId?: string,
+    destinationScopeBucketId?: string
   ): Promise<ProjectFileEntry> {
     return this.runMutationExclusive(async () => {
-      const sourceRoot = await this.projectRoot(sourceProjectId)
-      const destinationRoot = await this.projectRoot(destinationProjectId)
+      const sourceRoot = await this.projectRoot(sourceProjectId, sourceScopeBucketId)
+      const destinationRoot = await this.projectRoot(destinationProjectId, destinationScopeBucketId)
       const source = await this.resolveExistingEntry(sourceRoot, sourcePath)
       if (sourceProjectId === destinationProjectId) {
         const destinationPosix = toPosixPath(destinationDirectory)
@@ -356,8 +411,13 @@ export class ProjectFilesService {
           throw error
         }
       }
-      this.invalidateProject(destinationProjectId)
-      if (sourceProjectId !== destinationProjectId) this.invalidateProject(sourceProjectId)
+      this.invalidateProject(destinationProjectId, destinationScopeBucketId)
+      if (
+        sourceProjectId !== destinationProjectId ||
+        sourceScopeBucketId !== destinationScopeBucketId
+      ) {
+        this.invalidateProject(sourceProjectId, sourceScopeBucketId)
+      }
       return { name: basename(sourcePath), path: target.relativePath, kind: source.kind }
     })
   }
@@ -397,16 +457,17 @@ export class ProjectFilesService {
   async importPaths(
     projectId: string,
     sourcePaths: string[],
-    destinationDirectory: string
+    destinationDirectory: string,
+    scopeBucketId?: string
   ): Promise<ProjectFileEntry[]> {
     return this.runMutationExclusive(async () => {
-      const root = await this.projectRoot(projectId)
+      const root = await this.projectRoot(projectId, scopeBucketId)
       const destination = await this.resolveExistingPath(root, destinationDirectory, true)
       const imported: ProjectFileEntry[] = []
       for (const sourcePath of sourcePaths) {
         imported.push(await this.importOne(root, destination, sourcePath))
       }
-      this.invalidateProject(projectId)
+      this.invalidateProject(projectId, scopeBucketId)
       return imported
     })
   }
@@ -418,10 +479,11 @@ export class ProjectFilesService {
   async dropPaths(
     projectId: string,
     sourcePaths: string[],
-    destinationDirectory: string
+    destinationDirectory: string,
+    scopeBucketId?: string
   ): Promise<ProjectFileDropResult[]> {
     return this.runMutationExclusive(async () => {
-      const root = await this.projectRoot(projectId)
+      const root = await this.projectRoot(projectId, scopeBucketId)
       const destination = await this.resolveExistingPath(root, destinationDirectory, true)
       const dropped: ProjectFileDropResult[] = []
       const candidates: string[] = []
@@ -451,13 +513,13 @@ export class ProjectFilesService {
         }
       }
 
-      this.invalidateProject(projectId)
+      this.invalidateProject(projectId, scopeBucketId)
       return dropped
     })
   }
 
-  resolveForDragSync(projectId: string, relativePaths: string[]): string[] {
-    const root = this.projectRoots.get(projectId)
+  resolveForDragSync(projectId: string, relativePaths: string[], scopeBucketId?: string): string[] {
+    const root = this.projectRoots.get(scopedKey(projectId, scopeBucketId))
     if (!root) throw new Error('Project files must be loaded before they can be dragged')
     const resolved: string[] = []
     const uniquePaths = [...new Set(relativePaths)].filter(
@@ -618,8 +680,12 @@ export class ProjectFilesService {
     }
   }
 
-  async getInfo(projectId: string, relativePath: string): Promise<ProjectFileInfo> {
-    const root = await this.projectRoot(projectId)
+  async getInfo(
+    projectId: string,
+    relativePath: string,
+    scopeBucketId?: string
+  ): Promise<ProjectFileInfo> {
+    const root = await this.projectRoot(projectId, scopeBucketId)
     const entry = await this.resolveExistingEntry(root, relativePath)
     const metadata = await lstat(entry.absolutePath)
     return {
@@ -634,8 +700,12 @@ export class ProjectFilesService {
     }
   }
 
-  async resolveForExternalEditor(projectId: string, relativePath: string): Promise<string> {
-    const root = await this.projectRoot(projectId)
+  async resolveForExternalEditor(
+    projectId: string,
+    relativePath: string,
+    scopeBucketId?: string
+  ): Promise<string> {
+    const root = await this.projectRoot(projectId, scopeBucketId)
     return this.resolveExistingPath(root, relativePath, false)
   }
 
@@ -643,12 +713,13 @@ export class ProjectFilesService {
     projectId: string,
     relativePath: string,
     content: string,
-    expectedRevision: string
+    expectedRevision: string,
+    scopeBucketId?: string
   ): Promise<ProjectTextFile> {
-    const key = `${projectId}:${relativePath}`
+    const key = `${projectId}:${scopeBucketId ?? ''}:${relativePath}`
     return this.runMutationExclusive(() =>
       this.runWriteExclusive(key, async () => {
-        const root = await this.projectRoot(projectId)
+        const root = await this.projectRoot(projectId, scopeBucketId)
         const target = await this.resolveExistingPath(root, relativePath, false)
         const current = await this.readResolvedText(target, relativePath)
         if (current.revision !== expectedRevision) {
@@ -700,7 +771,31 @@ export class ProjectFilesService {
     )
   }
 
-  private async projectRoot(projectId: string): Promise<string> {
+  private async projectRoot(projectId: string, scopeBucketId?: string): Promise<string> {
+    const cacheKey = scopedKey(projectId, scopeBucketId)
+    const cached = this.projectRoots.get(cacheKey)
+    if (cached) return cached
+
+    // A managed scope's worktree is the authoritative root for the call and is
+    // resolved fail-closed: an unhealthy managed scope throws instead of
+    // silently operating on the project directory.
+    if (scopeBucketId) {
+      if (!this.scopeRoots) {
+        throw new Error('Managed scope resolution is unavailable for project files')
+      }
+      const scopedRoot = await this.scopeRoots.resolveCompatibilityRoot(projectId, scopeBucketId)
+      if (!scopedRoot) {
+        throw new Error(`Scope root unavailable: ${projectId}:${scopeBucketId}`)
+      }
+      const root = await realpath(scopedRoot)
+      const metadata = await lstat(root)
+      if (!metadata.isDirectory()) {
+        throw new Error('Project root is not a directory')
+      }
+      this.projectRoots.set(cacheKey, root)
+      return root
+    }
+
     const project = await this.projects.getProject(projectId)
     if (!project) throw new Error(`Project not found: ${projectId}`)
     if (project.source !== 'local') {
@@ -714,7 +809,7 @@ export class ProjectFilesService {
     if (!metadata.isDirectory()) {
       throw new Error('Project root is not a directory')
     }
-    this.projectRoots.set(projectId, root)
+    this.projectRoots.set(cacheKey, root)
     return root
   }
 

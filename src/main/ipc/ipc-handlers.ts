@@ -2187,7 +2187,6 @@ export function registerIpcHandlers(
   options: RegisterIpcHandlersOptions = {}
 ): void {
   const projectManager = options.projectManager ?? new ProjectManager(database)
-  const projectFilesService = options.projectFilesService ?? new ProjectFilesService(projectManager)
   const threadCreation = options.threadCreation ?? new ThreadCreationCoordinator()
   const threadDeletion = options.threadDeletion ?? new ThreadDeletionCoordinator()
   const checkpointManager = new CheckpointManager(database)
@@ -2208,6 +2207,10 @@ export function registerIpcHandlers(
     options.worktreeInspector ?? scopeWorktreeService
   )
   const scopeRoots = scopeRootProvider(scopeRootResolver)
+  // Constructed after the scope resolver so interactive file surfaces can
+  // resolve managed worktree roots instead of always reading the project root.
+  const projectFilesService =
+    options.projectFilesService ?? new ProjectFilesService(projectManager, scopeRoots)
   const threadManager = new ThreadManager(
     database,
     broadcastThreadUpdate,
@@ -4759,33 +4762,42 @@ export function registerIpcHandlers(
   ipcMain.handle('project:reorder', (_, orderedIds: unknown) =>
     projectManager.reorderProjects(validateStringArray(orderedIds, 'Ordered IDs'))
   )
-  ipcMain.handle('projectFiles:list', (_, projectId: unknown, relativeDirectory: unknown) => {
-    const validatedProjectId = validateEntityId(projectId, 'Project ID')
-    const directory = requireString(relativeDirectory, 'Project directory', true)
-    if (directory === '') {
-      void projectFilesService.prewarmProject(validatedProjectId)
+  ipcMain.handle(
+    'projectFiles:list',
+    (_, projectId: unknown, relativeDirectory: unknown, scopeBucketId?: unknown) => {
+      const validatedProjectId = validateEntityId(projectId, 'Project ID')
+      const directory = requireString(relativeDirectory, 'Project directory', true)
+      if (directory === '') {
+        void projectFilesService.prewarmProject(validatedProjectId)
+      }
+      return projectFilesService.listDirectory(
+        validatedProjectId,
+        directory,
+        scopeBucketId === undefined ? undefined : validateEntityId(scopeBucketId, 'Scope bucket ID')
+      )
     }
-    return projectFilesService.listDirectory(validatedProjectId, directory)
-  })
+  )
   ipcMain.handle(
     'projectFiles:search',
-    (_, projectId: unknown, query: unknown, category: unknown) => {
+    (_, projectId: unknown, query: unknown, category: unknown, scopeBucketId?: unknown) => {
       if (category !== 'all' && category !== 'rules') {
         throw new TypeError('Project file search category must be all or rules')
       }
       return projectFilesService.searchFiles(
         validateEntityId(projectId, 'Project ID'),
         requireString(query, 'Project file search query', true),
-        category
+        category,
+        scopeBucketId === undefined ? undefined : validateEntityId(scopeBucketId, 'Scope bucket ID')
       )
     }
   )
   ipcMain.handle(
     'projectFiles:resolveCitationPaths',
-    (_, projectId: unknown, candidates: unknown) =>
+    (_, projectId: unknown, candidates: unknown, scopeBucketId?: unknown) =>
       projectFilesService.resolveCitationPaths(
         validateEntityId(projectId, 'Project ID'),
-        validateStringArray(candidates, 'Citation paths')
+        validateStringArray(candidates, 'Citation paths'),
+        scopeBucketId === undefined ? undefined : validateEntityId(scopeBucketId, 'Scope bucket ID')
       )
   )
   ipcMain.handle('projectFiles:resolveExternalCitationPaths', (_, absolutePaths: unknown) =>
@@ -4795,74 +4807,97 @@ export function registerIpcHandlers(
   )
   ipcMain.handle(
     'projectFiles:create',
-    (_, projectId: unknown, relativeDirectory: unknown, name: unknown) =>
+    (_, projectId: unknown, relativeDirectory: unknown, name: unknown, scopeBucketId?: unknown) =>
       projectFilesService.createFile(
         validateEntityId(projectId, 'Project ID'),
         requireString(relativeDirectory, 'Project directory', true),
-        requireString(name, 'File name')
+        requireString(name, 'File name'),
+        scopeBucketId === undefined ? undefined : validateEntityId(scopeBucketId, 'Scope bucket ID')
       )
   )
   ipcMain.handle(
     'projectFiles:createDirectory',
-    (_, projectId: unknown, relativeDirectory: unknown, name: unknown) =>
+    (_, projectId: unknown, relativeDirectory: unknown, name: unknown, scopeBucketId?: unknown) =>
       projectFilesService.createDirectory(
         validateEntityId(projectId, 'Project ID'),
         requireString(relativeDirectory, 'Project directory', true),
-        requireString(name, 'Folder name')
+        requireString(name, 'Folder name'),
+        scopeBucketId === undefined ? undefined : validateEntityId(scopeBucketId, 'Scope bucket ID')
       )
   )
-  ipcMain.handle('projectFiles:delete', async (_, projectId: unknown, relativePath: unknown) => {
-    const validatedProjectId = validateEntityId(projectId, 'Project ID')
-    const target = await projectFilesService.resolveForTrash(
-      validatedProjectId,
-      requireString(relativePath, 'Project file path')
-    )
-    await shell.trashItem(target)
-    projectFilesService.invalidateProject(validatedProjectId)
-  })
-  ipcMain.handle('projectFiles:info', (_, projectId: unknown, relativePath: unknown) =>
-    projectFilesService.getInfo(
-      validateEntityId(projectId, 'Project ID'),
-      requireString(relativePath, 'Project file path')
-    )
+  ipcMain.handle(
+    'projectFiles:delete',
+    async (_, projectId: unknown, relativePath: unknown, scopeBucketId?: unknown) => {
+      const validatedProjectId = validateEntityId(projectId, 'Project ID')
+      const validatedScopeBucketId =
+        scopeBucketId === undefined ? undefined : validateEntityId(scopeBucketId, 'Scope bucket ID')
+      const target = await projectFilesService.resolveForTrash(
+        validatedProjectId,
+        requireString(relativePath, 'Project file path'),
+        validatedScopeBucketId
+      )
+      await shell.trashItem(target)
+      projectFilesService.invalidateProject(validatedProjectId, validatedScopeBucketId)
+    }
+  )
+  ipcMain.handle(
+    'projectFiles:info',
+    (_, projectId: unknown, relativePath: unknown, scopeBucketId?: unknown) =>
+      projectFilesService.getInfo(
+        validateEntityId(projectId, 'Project ID'),
+        requireString(relativePath, 'Project file path'),
+        scopeBucketId === undefined ? undefined : validateEntityId(scopeBucketId, 'Scope bucket ID')
+      )
   )
   privileged(
     'projectFiles:openInEditor',
-    async (_event, projectId: unknown, relativePath: unknown) => {
+    async (_event, projectId: unknown, relativePath: unknown, scopeBucketId?: unknown) => {
       const config = await storage.getConfig()
       const target = await projectFilesService.resolveForExternalEditor(
         validateEntityId(projectId, 'Project ID'),
-        requireString(relativePath, 'Project file path')
+        requireString(relativePath, 'Project file path'),
+        scopeBucketId === undefined ? undefined : validateEntityId(scopeBucketId, 'Scope bucket ID')
       )
       await editorService.openInEditor(config.preferredEditor, target, 'file')
     }
   )
   privileged(
     'projectFiles:openInEditorWith',
-    async (_event, projectId: unknown, relativePath: unknown, editorId: unknown) => {
+    async (
+      _event,
+      projectId: unknown,
+      relativePath: unknown,
+      editorId: unknown,
+      scopeBucketId?: unknown
+    ) => {
       if (typeof editorId !== 'string' || !EDITOR_IDS.has(editorId as EditorId)) {
         throw new TypeError('Unknown editor')
       }
       const target = await projectFilesService.resolveForExternalEditor(
         validateEntityId(projectId, 'Project ID'),
-        requireString(relativePath, 'Project file path')
+        requireString(relativePath, 'Project file path'),
+        scopeBucketId === undefined ? undefined : validateEntityId(scopeBucketId, 'Scope bucket ID')
       )
       await editorService.openInEditor(editorId as EditorId, target, 'file')
     }
   )
-  ipcMain.handle('projectFiles:read', (_, projectId: unknown, relativePath: unknown) =>
-    projectFilesService.readText(
-      validateEntityId(projectId, 'Project ID'),
-      requireString(relativePath, 'Project file path')
-    )
+  ipcMain.handle(
+    'projectFiles:read',
+    (_, projectId: unknown, relativePath: unknown, scopeBucketId?: unknown) =>
+      projectFilesService.readText(
+        validateEntityId(projectId, 'Project ID'),
+        requireString(relativePath, 'Project file path'),
+        scopeBucketId === undefined ? undefined : validateEntityId(scopeBucketId, 'Scope bucket ID')
+      )
   )
   ipcMain.handle(
     'projectFiles:rename',
-    (_, projectId: unknown, relativePath: unknown, name: unknown) =>
+    (_, projectId: unknown, relativePath: unknown, name: unknown, scopeBucketId?: unknown) =>
       projectFilesService.renameEntry(
         validateEntityId(projectId, 'Project ID'),
         requireString(relativePath, 'Project file path'),
-        requireString(name, 'File name')
+        requireString(name, 'File name'),
+        scopeBucketId === undefined ? undefined : validateEntityId(scopeBucketId, 'Scope bucket ID')
       )
   )
   ipcMain.handle(
@@ -4873,7 +4908,9 @@ export function registerIpcHandlers(
       sourcePath: unknown,
       destinationProjectId: unknown,
       destinationDirectory: unknown,
-      mode: unknown
+      mode: unknown,
+      sourceScopeBucketId?: unknown,
+      destinationScopeBucketId?: unknown
     ) => {
       if (mode !== 'copy' && mode !== 'move') {
         throw new TypeError('Project file transfer mode must be copy or move')
@@ -4883,47 +4920,80 @@ export function registerIpcHandlers(
         requireString(sourcePath, 'Source file path'),
         validateEntityId(destinationProjectId, 'Project ID'),
         requireString(destinationDirectory, 'Destination directory', true),
-        mode
+        mode,
+        sourceScopeBucketId === undefined
+          ? undefined
+          : validateEntityId(sourceScopeBucketId, 'Scope bucket ID'),
+        destinationScopeBucketId === undefined
+          ? undefined
+          : validateEntityId(destinationScopeBucketId, 'Scope bucket ID')
       )
     }
   )
   ipcMain.handle(
     'projectFiles:importPaths',
-    (_, projectId: unknown, sourcePaths: unknown, destinationDirectory: unknown) =>
+    (
+      _,
+      projectId: unknown,
+      sourcePaths: unknown,
+      destinationDirectory: unknown,
+      scopeBucketId?: unknown
+    ) =>
       projectFilesService.importPaths(
         validateEntityId(projectId, 'Project ID'),
         validateStringArray(sourcePaths, 'Import source paths'),
-        requireString(destinationDirectory, 'Destination directory', true)
+        requireString(destinationDirectory, 'Destination directory', true),
+        scopeBucketId === undefined ? undefined : validateEntityId(scopeBucketId, 'Scope bucket ID')
       )
   )
   ipcMain.handle(
     'projectFiles:dropPaths',
-    (_, projectId: unknown, sourcePaths: unknown, destinationDirectory: unknown) =>
+    (
+      _,
+      projectId: unknown,
+      sourcePaths: unknown,
+      destinationDirectory: unknown,
+      scopeBucketId?: unknown
+    ) =>
       projectFilesService.dropPaths(
         validateEntityId(projectId, 'Project ID'),
         validateStringArray(sourcePaths, 'Dropped paths'),
-        requireString(destinationDirectory, 'Destination directory', true)
+        requireString(destinationDirectory, 'Destination directory', true),
+        scopeBucketId === undefined ? undefined : validateEntityId(scopeBucketId, 'Scope bucket ID')
       )
   )
-  ipcMain.on('projectFiles:startDrag', (event, projectId: unknown, relativePaths: unknown) => {
-    void (async () => {
-      try {
-        const paths = projectFilesService.resolveForDragSync(
-          validateEntityId(projectId, 'Project ID'),
-          validateStringArray(relativePaths, 'Dragged paths')
-        )
-        if (paths.length === 0) throw new Error('No files are available to drag')
-        const icon = await resolveDragIcon(paths[0])
-        event.sender.startDrag({ file: paths[0], files: paths, icon })
-        Logger.dev('Native file drag started', { files: paths.length })
-      } catch (error) {
-        Logger.error('Could not start native file drag', error)
-      }
-    })()
-  })
+  ipcMain.on(
+    'projectFiles:startDrag',
+    (event, projectId: unknown, relativePaths: unknown, scopeBucketId?: unknown) => {
+      void (async () => {
+        try {
+          const paths = projectFilesService.resolveForDragSync(
+            validateEntityId(projectId, 'Project ID'),
+            validateStringArray(relativePaths, 'Dragged paths'),
+            scopeBucketId === undefined
+              ? undefined
+              : validateEntityId(scopeBucketId, 'Scope bucket ID')
+          )
+          if (paths.length === 0) throw new Error('No files are available to drag')
+          const icon = await resolveDragIcon(paths[0])
+          event.sender.startDrag({ file: paths[0], files: paths, icon })
+          Logger.dev('Native file drag started', { files: paths.length })
+        } catch (error) {
+          Logger.error('Could not start native file drag', error)
+        }
+      })()
+    }
+  )
   ipcMain.handle(
     'projectFiles:save',
-    (_, projectId: unknown, relativePath: unknown, content: unknown, expectedRevision: unknown) => {
+    (
+      _,
+      projectId: unknown,
+      relativePath: unknown,
+      content: unknown,
+      expectedRevision: unknown,
+      scopeBucketId?: unknown
+    ) => {
       const revision = requireString(expectedRevision, 'Project file revision')
       if (!/^[a-f0-9]{64}$/u.test(revision)) {
         throw new TypeError('Project file revision must be a SHA-256 digest')
@@ -4932,29 +5002,34 @@ export function registerIpcHandlers(
         validateEntityId(projectId, 'Project ID'),
         requireString(relativePath, 'Project file path'),
         requireString(content, 'Project file content', true),
-        revision
+        revision,
+        scopeBucketId === undefined ? undefined : validateEntityId(scopeBucketId, 'Scope bucket ID')
       )
     }
   )
-  ipcMain.handle('projectFiles:saveAs', async (_, projectId: unknown, relativePath: unknown) => {
-    const safeRelativePath = requireString(relativePath, 'Project file path')
-    const textFile = await projectFilesService.readText(
-      validateEntityId(projectId, 'Project ID'),
-      safeRelativePath
-    )
-    const win = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0] ?? null
-    const options: Electron.SaveDialogOptions = {
-      title: 'Save file as',
-      defaultPath: basename(safeRelativePath),
-      filters: [{ name: 'All Files', extensions: ['*'] }]
+  ipcMain.handle(
+    'projectFiles:saveAs',
+    async (_, projectId: unknown, relativePath: unknown, scopeBucketId?: unknown) => {
+      const safeRelativePath = requireString(relativePath, 'Project file path')
+      const textFile = await projectFilesService.readText(
+        validateEntityId(projectId, 'Project ID'),
+        safeRelativePath,
+        scopeBucketId === undefined ? undefined : validateEntityId(scopeBucketId, 'Scope bucket ID')
+      )
+      const win = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0] ?? null
+      const options: Electron.SaveDialogOptions = {
+        title: 'Save file as',
+        defaultPath: basename(safeRelativePath),
+        filters: [{ name: 'All Files', extensions: ['*'] }]
+      }
+      const result = win
+        ? await dialog.showSaveDialog(win, options)
+        : await dialog.showSaveDialog(options)
+      if (result.canceled || !result.filePath) return null
+      await atomicWrite(result.filePath, textFile.content)
+      return result.filePath
     }
-    const result = win
-      ? await dialog.showSaveDialog(win, options)
-      : await dialog.showSaveDialog(options)
-    if (result.canceled || !result.filePath) return null
-    await atomicWrite(result.filePath, textFile.content)
-    return result.filePath
-  })
+  )
   ipcMain.handle('repository:preflight', (_, projectPath: string) =>
     repositoryService.preflight(projectPath)
   )

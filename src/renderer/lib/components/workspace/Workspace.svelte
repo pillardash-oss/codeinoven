@@ -4031,12 +4031,15 @@
                   <TerminalPanel
                     terminalId={activeContextTab.terminalId}
                     projectId={activeContextTab.projectId}
+                    scopeBucketId={workspaceState.activeScopeBucketIdFor(
+                      activeContextTab.projectId
+                    )}
                   />
                 {/if}
               {:else if activeContextTab.kind === 'actions'}
                 <ActionsPanel
                   projectId={activeContextTab.projectId}
-                  scopeBucketId={selectedThread?.scopeBucketId}
+                  scopeBucketId={workspaceState.activeScopeBucketIdFor(activeContextTab.projectId)}
                 />
               {:else if activeContextTab.kind === 'browser'}
                 {#if browserFullscreenTabId === activeContextTab.id}
@@ -4139,6 +4142,7 @@
                 <TerminalPanel
                   terminalId={activeDockTab.terminalId}
                   projectId={activeDockTab.projectId}
+                  scopeBucketId={workspaceState.activeScopeBucketIdFor(activeDockTab.projectId)}
                 />
               {/key}
             {/if}
@@ -4759,7 +4763,11 @@
     {#snippet children()}
       {#if terminalTab?.kind === 'terminal'}
         {#key terminalFullscreenTabId}
-          <TerminalPanel terminalId={terminalTab.terminalId} projectId={terminalTab.projectId} />
+          <TerminalPanel
+            terminalId={terminalTab.terminalId}
+            projectId={terminalTab.projectId}
+            scopeBucketId={workspaceState.activeScopeBucketIdFor(terminalTab.projectId)}
+          />
         {/key}
       {/if}
     {/snippet}

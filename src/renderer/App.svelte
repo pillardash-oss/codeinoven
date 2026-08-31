@@ -836,7 +836,13 @@
     const projectResults = await Promise.all(
       projects.map(async (project) => {
         try {
-          const entries = await invoke('projectFiles:search', project.id, query, 'all')
+          const entries = await invoke(
+            'projectFiles:search',
+            project.id,
+            query,
+            'all',
+            workspaceState.activeScopeBucketIdFor(project.id)
+          )
           return { project, entries: entries.slice(0, 12) }
         } catch {
           return { project, entries: [] }

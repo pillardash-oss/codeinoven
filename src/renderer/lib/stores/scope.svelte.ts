@@ -630,6 +630,12 @@ class ScopeState {
     })
   }
 
+  /** Record the bucket that became active for a project (e.g. a thread opened
+   *  inside it) so scope-driven surfaces can follow without a sidebar click. */
+  noteProjectBucket(projectId: string, bucketId: string): void {
+    this.lastBucketByProject.set(projectId, bucketId)
+  }
+
   lastBucketForProject(projectId: string): string {
     const saved = this.lastBucketByProject.get(projectId)
     if (saved) return saved

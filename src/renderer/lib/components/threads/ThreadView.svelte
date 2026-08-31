@@ -7796,7 +7796,8 @@
       'projectFiles:search',
       thread.projectId,
       query,
-      type === 'project_rule' ? 'rules' : 'all'
+      type === 'project_rule' ? 'rules' : 'all',
+      workspaceState.activeScopeBucketIdFor(thread.projectId)
     )
   }
 

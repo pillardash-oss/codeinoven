@@ -151,7 +151,12 @@
   async function openInPreferred(): Promise<void> {
     if (!resolved) return
     try {
-      await invoke('projectFiles:openInEditor', resolved.projectId, resolved.relativePath)
+      await invoke(
+        'projectFiles:openInEditor',
+        resolved.projectId,
+        resolved.relativePath,
+        workspaceState.activeScopeBucketIdFor(resolved.projectId)
+      )
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Could not open the file.')
     }
@@ -164,7 +169,8 @@
         'projectFiles:openInEditorWith',
         resolved.projectId,
         resolved.relativePath,
-        editorId
+        editorId,
+        workspaceState.activeScopeBucketIdFor(resolved.projectId)
       )
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Could not open the file.')

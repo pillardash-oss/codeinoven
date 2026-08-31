@@ -1830,13 +1830,16 @@ export interface IpcInvokeContract {
   'project:setIcon': Contract<[projectId: string, sourcePath: string], Project>
   'project:clearIcon': Contract<[projectId: string], Project>
   'project:update': Contract<[projectId: string, input: Partial<CreateProjectInput>], Project>
-  'projectFiles:list': Contract<[projectId: string, relativeDirectory: string], ProjectFileEntry[]>
+  'projectFiles:list': Contract<
+    [projectId: string, relativeDirectory: string, scopeBucketId?: string],
+    ProjectFileEntry[]
+  >
   'projectFiles:search': Contract<
-    [projectId: string, query: string, category: 'all' | 'rules'],
+    [projectId: string, query: string, category: 'all' | 'rules', scopeBucketId?: string],
     ProjectFileEntry[]
   >
   'projectFiles:resolveCitationPaths': Contract<
-    [projectId: string, candidates: string[]],
+    [projectId: string, candidates: string[], scopeBucketId?: string],
     Record<string, string | null>
   >
   'projectFiles:resolveExternalCitationPaths': Contract<
@@ -1844,46 +1847,79 @@ export interface IpcInvokeContract {
     Record<string, boolean>
   >
   'projectFiles:create': Contract<
-    [projectId: string, relativeDirectory: string, name: string],
+    [projectId: string, relativeDirectory: string, name: string, scopeBucketId?: string],
     ProjectFileEntry
   >
   'projectFiles:createDirectory': Contract<
-    [projectId: string, relativeDirectory: string, name: string],
+    [projectId: string, relativeDirectory: string, name: string, scopeBucketId?: string],
     ProjectFileEntry
   >
-  'projectFiles:delete': Contract<[projectId: string, relativePath: string], void>
-  'projectFiles:info': Contract<[projectId: string, relativePath: string], ProjectFileInfo>
-  'projectFiles:openInEditor': Contract<[projectId: string, relativePath: string], void>
-  'projectFiles:openInEditorWith': Contract<
-    [projectId: string, relativePath: string, editorId: EditorId],
+  'projectFiles:delete': Contract<
+    [projectId: string, relativePath: string, scopeBucketId?: string],
     void
   >
-  'projectFiles:saveAs': Contract<[projectId: string, relativePath: string], string | null>
+  'projectFiles:info': Contract<
+    [projectId: string, relativePath: string, scopeBucketId?: string],
+    ProjectFileInfo
+  >
+  'projectFiles:openInEditor': Contract<
+    [projectId: string, relativePath: string, scopeBucketId?: string],
+    void
+  >
+  'projectFiles:openInEditorWith': Contract<
+    [projectId: string, relativePath: string, editorId: EditorId, scopeBucketId?: string],
+    void
+  >
+  'projectFiles:saveAs': Contract<
+    [projectId: string, relativePath: string, scopeBucketId?: string],
+    string | null
+  >
   'projectFiles:paste': Contract<
     [
       sourceProjectId: string,
       sourcePath: string,
       destinationProjectId: string,
       destinationDirectory: string,
-      mode: ProjectFileTransferMode
+      mode: ProjectFileTransferMode,
+      sourceScopeBucketId?: string,
+      destinationScopeBucketId?: string
     ],
     ProjectFileEntry
   >
   'projectFiles:importPaths': Contract<
-    [projectId: string, sourcePaths: string[], destinationDirectory: string],
+    [
+      projectId: string,
+      sourcePaths: string[],
+      destinationDirectory: string,
+      scopeBucketId?: string
+    ],
     ProjectFileEntry[]
   >
   'projectFiles:dropPaths': Contract<
-    [projectId: string, sourcePaths: string[], destinationDirectory: string],
+    [
+      projectId: string,
+      sourcePaths: string[],
+      destinationDirectory: string,
+      scopeBucketId?: string
+    ],
     ProjectFileDropResult[]
   >
-  'projectFiles:read': Contract<[projectId: string, relativePath: string], ProjectTextFile>
+  'projectFiles:read': Contract<
+    [projectId: string, relativePath: string, scopeBucketId?: string],
+    ProjectTextFile
+  >
   'projectFiles:rename': Contract<
-    [projectId: string, relativePath: string, name: string],
+    [projectId: string, relativePath: string, name: string, scopeBucketId?: string],
     ProjectFileEntry
   >
   'projectFiles:save': Contract<
-    [projectId: string, relativePath: string, content: string, expectedRevision: string],
+    [
+      projectId: string,
+      relativePath: string,
+      content: string,
+      expectedRevision: string,
+      scopeBucketId?: string
+    ],
     ProjectTextFile
   >
   'providers:check': Contract<[providerId: string], ProviderConnectionInfo>
@@ -1994,7 +2030,7 @@ export interface IpcInvokeContract {
   'computerUse:pipBringToFront': Contract<[], void>
   'computerUse:pipDismiss': Contract<[], void>
   'pty:create': Contract<
-    [id: string, projectId: string, columns: number, rows: number],
+    [id: string, projectId: string, columns: number, rows: number, scopeBucketId?: string],
     { id: string; pid: number }
   >
   'pty:createCommand': Contract<

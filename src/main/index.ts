@@ -585,7 +585,10 @@ async function bootPostPaintServices(): Promise<void> {
     scopeManager,
     scopeWorktreeService
   )
-  const projectFilesService = new ProjectFilesService(projectManager)
+  const projectFilesService = new ProjectFilesService(
+    projectManager,
+    scopeRootProvider(scopeRootResolver)
+  )
   appfileProjectFiles = projectFilesService
   computerUsePipService = new ComputerUsePipService(storage)
   harnessManifestService = new HarnessManifestService(storage)

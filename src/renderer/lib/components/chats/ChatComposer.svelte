@@ -36,6 +36,7 @@
   import { STANDARD_THINKING_PRESETS, resolveDefaultThinkingLevel } from '$shared/thinking-presets'
   import { invoke } from '$lib/ipc.svelte'
   import { isEscapeClaimed } from '$lib/stores/page-surface.svelte'
+  import { workspaceState } from '$lib/stores/workspace.svelte'
   import { modelKey } from '$lib/model-keys'
   import ProjectSwitch from '$lib/components/shared/ProjectSwitch.svelte'
   import ProjectIdentity from '$lib/components/shared/ProjectIdentity.svelte'
@@ -1032,7 +1033,13 @@
         })
         .map((entry) => ({ type: 'task', entry }))
       const files = fileTagProjectId
-        ? await invoke('projectFiles:search', fileTagProjectId, query, 'all')
+        ? await invoke(
+            'projectFiles:search',
+            fileTagProjectId,
+            query,
+            'all',
+            workspaceState.activeScopeBucketIdFor(fileTagProjectId)
+          )
         : []
       const entries: ComposerMentionEntry[] = [
         ...utilityEntries,

@@ -125,13 +125,14 @@ class TerminalSessionManager {
   async attach(
     session: TerminalSession,
     container: HTMLDivElement,
-    projectId: string
+    projectId: string,
+    scopeBucketId?: string
   ): Promise<void> {
     if (session.host.parentElement !== container) {
       container.replaceChildren(session.host)
     }
     session.fitAddon.fit()
-    await this.ensurePty(session, projectId)
+    await this.ensurePty(session, projectId, scopeBucketId)
     session.term.focus()
   }
 
@@ -177,13 +178,26 @@ class TerminalSessionManager {
     return this.runtime
   }
 
-  /** Spawn the shell PTY after the terminal has been attached and sized. */
-  private async ensurePty(session: TerminalSession, projectId: string): Promise<void> {
+  /** Spawn the shell PTY after the terminal has been attached and sized. The
+   *  scope bucket resolves the shell's working directory: a managed worktree
+   *  scope starts the shell inside its checkout instead of the project root. */
+  private async ensurePty(
+    session: TerminalSession,
+    projectId: string,
+    scopeBucketId?: string
+  ): Promise<void> {
     if (session.ptySpawned) return
     session.projectId = projectId
     session.ptySpawned = true
     try {
-      await invoke('pty:create', session.id, projectId, session.term.cols, session.term.rows)
+      await invoke(
+        'pty:create',
+        session.id,
+        projectId,
+        session.term.cols,
+        session.term.rows,
+        scopeBucketId
+      )
     } catch (error) {
       session.ptySpawned = false
       throw error

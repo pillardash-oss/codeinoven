@@ -16,6 +16,7 @@
     Save
   } from '@lucide/svelte'
   import { invoke, subscribe } from '$lib/ipc.svelte'
+  import { workspaceState } from '$lib/stores/workspace.svelte'
   import ConflictResolutionView from './ConflictResolutionView.svelte'
   import type {
     ConflictResolutionController,
@@ -119,7 +120,12 @@
     }
     let cancelled = false
     svgPreviewFailed = false
-    void invoke('projectFiles:read', projectId, activeTab.path)
+    void invoke(
+      'projectFiles:read',
+      projectId,
+      activeTab.path,
+      workspaceState.activeScopeBucketIdFor(projectId)
+    )
       .then((source: ProjectTextFile) => {
         if (cancelled) return
         const url = URL.createObjectURL(new Blob([source.content], { type: 'image/svg+xml' }))
@@ -338,7 +344,12 @@
 
   async function openSelectedInEditor(): Promise<void> {
     if (!activeTab) return
-    await invoke('projectFiles:openInEditor', projectId, activeTab.path)
+    await invoke(
+      'projectFiles:openInEditor',
+      projectId,
+      activeTab.path,
+      workspaceState.activeScopeBucketIdFor(projectId)
+    )
   }
 
   function startRename(): void {

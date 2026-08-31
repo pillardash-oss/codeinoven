@@ -1,5 +1,6 @@
 import type { ILink, ILinkProvider } from 'ghostty-web'
 import { invoke } from '$lib/ipc.svelte'
+import { workspaceState } from '$lib/stores/workspace.svelte'
 
 /**
  * A buffer line as exposed by ghostty-web's active buffer. Only the cell
@@ -169,7 +170,12 @@ export class FileLinkProvider implements ILinkProvider {
 
     if (needsCheck.size > 0) {
       try {
-        const result = await invoke('projectFiles:resolveCitationPaths', projectId, [...needsCheck])
+        const result = await invoke(
+          'projectFiles:resolveCitationPaths',
+          projectId,
+          [...needsCheck],
+          workspaceState.activeScopeBucketIdFor(projectId)
+        )
         const now = Date.now()
         for (const [variant, path] of Object.entries(result)) {
           this.validated.set(variant, { path, at: now })
@@ -229,7 +235,12 @@ const VALIDATION_CACHE_LIMIT = 300
 
 async function revealPath(projectId: string, relativePath: string): Promise<void> {
   try {
-    const info = await invoke('projectFiles:info', projectId, relativePath)
+    const info = await invoke(
+      'projectFiles:info',
+      projectId,
+      relativePath,
+      workspaceState.activeScopeBucketIdFor(projectId)
+    )
     await invoke('shell:revealPath', info.absolutePath)
   } catch {
     // The entry may have been deleted between scan and click — nothing to reveal.

@@ -10,6 +10,7 @@ import { contextSidebarState } from './context-sidebar.svelte'
 import { rendererRecovery } from './renderer-recovery.svelte'
 import { notificationPanelState } from './notification-panel.svelte'
 import { gitState } from './git.svelte'
+import { scopeState } from './scope.svelte'
 import { APP_SLUG } from '$shared/brand'
 import { invoke } from '$lib/ipc.svelte'
 
@@ -166,6 +167,9 @@ class WorkspaceState {
     void this.refreshSourceProcessCount(thread.projectId, thread.id)
     contextSidebarState.activateThread(thread.projectId, thread.id, thread.title)
     rendererRecovery.setSelectedThread(thread.projectId, thread.id)
+    // Opening a thread re-anchors the project's active scope (file manager,
+    // terminal, and action roots follow the thread's scope bucket).
+    scopeState.noteProjectBucket(thread.projectId, thread.scopeBucketId ?? DEFAULT_SCOPE_BUCKET_ID)
     // Event-driven git refresh: every thread open (creation, switch, restore)
     // tells the git store the project is in use, so it can refresh status and
     // the connection-gated PR indicators without any polling.
@@ -173,6 +177,17 @@ class WorkspaceState {
     // The moment a thread is opened its notifications are stale — drop them so
     // an error/completion that was already seen never lingers in the panel.
     notificationPanelState.dismissForThread(thread.projectId, thread.id)
+  }
+
+  /** The project's active scope bucket: the open thread's bucket when it belongs
+   *  to that project, else the bucket last selected for it in the scope sidebar.
+   *  Drives the file manager, terminal, and action roots so managed-worktree
+   *  scopes never fall back to the main project directory. */
+  activeScopeBucketIdFor(projectId: string): string {
+    if (this.selectedThread?.projectId === projectId) {
+      return this.selectedThread.scopeBucketId ?? DEFAULT_SCOPE_BUCKET_ID
+    }
+    return scopeState.lastBucketForProject(projectId)
   }
 
   openThreadStudio(

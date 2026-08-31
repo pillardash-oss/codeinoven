@@ -18,6 +18,7 @@
   } from '@lucide/svelte'
   import type { ProjectFileEntry, ProjectFileInfo, ProjectFileTransferMode } from '$shared/types'
   import { invoke } from '$lib/ipc.svelte'
+  import { workspaceState } from '$lib/stores/workspace.svelte'
   import { copyText } from '$lib/copy-text'
   import { clampFileExplorerWidth } from '$lib/stores/file-explorer.svelte'
   import { projectFilesWorkspace, type ProjectFilesState } from '$lib/stores/project-files.svelte'
@@ -249,7 +250,13 @@
 
     const timer = setTimeout(async () => {
       try {
-        const results = await invoke('projectFiles:search', projectId, query, 'all')
+        const results = await invoke(
+          'projectFiles:search',
+          projectId,
+          query,
+          'all',
+          workspaceState.activeScopeBucketIdFor(projectId)
+        )
         if (requestId !== searchRequestId) return
 
         const dirsToLoad = new SvelteSet<string>()
