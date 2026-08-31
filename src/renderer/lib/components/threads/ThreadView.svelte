@@ -120,6 +120,11 @@
   import { messageId } from '$shared/id'
   import { resolveDefaultThinkingLevel } from '$shared/thinking-presets'
   import { chatDraft } from '$lib/stores/chat-draft'
+  import {
+    loadLifecycleIntent,
+    saveLifecycleIntent,
+    clearLifecycleIntent
+  } from '$lib/stores/lifecycle-intent'
   import { onEngineeringLifecycleInherited } from '$lib/thread-settings-inheritance'
   import {
     threadSettings,
@@ -560,6 +565,10 @@
    *  assignment offer cards, or pop the replacement guard. */
   function selectEngineeringLifecycle(input: EngineeringLifecycleSelectionInput): void {
     pendingLifecycleSelection = input
+    // Persist the staged intent so the switches stay exactly where the user
+    // left them across thread switches and app restarts — a send must never
+    // steer a different prompt than the one the switches currently show.
+    saveLifecycleIntent(thread.projectId, thread.id, input)
   }
 
   async function confirmLifecycleReplacement(): Promise<void> {
@@ -572,6 +581,9 @@
     )
     lifecycleCancelModalOpen = false
     pendingLifecycleSelection = null
+    // The staged intent was either applied or discarded by this confirmation —
+    // it must not resurface on the next mount.
+    clearLifecycleIntent(thread.projectId, thread.id)
     if (replacement.stages.length > 0 || replacement.autopilot) {
       await applyLifecycleSelection(replacement)
     } else {
@@ -1993,6 +2005,7 @@
           return
         }
         pendingLifecycleSelection = null
+        clearLifecycleIntent(thread.projectId, thread.id)
         await applyLifecycleSelection(staged)
       }
       await sendMessage(
@@ -3201,6 +3214,10 @@
         .catch((error) => {
           reportError(error, 'Engineering lifecycle could not be loaded')
         })
+      // Restore a staged (not-yet-sent) Toolbox selection from a previous
+      // session or thread switch so the switches keep the user's last choice.
+      const stagedIntent = loadLifecycleIntent(mountedProjectId, mountedThreadId)
+      if (stagedIntent) pendingLifecycleSelection = stagedIntent
     }
     // A sibling thread may inherit its Engineering lifecycle after this view
     // already hydrated (the inheritance write is async). Re-read once the

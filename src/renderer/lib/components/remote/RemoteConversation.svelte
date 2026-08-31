@@ -14,6 +14,11 @@
     X
   } from '@lucide/svelte'
   import { threadMessages } from '$lib/stores/thread-messages.svelte'
+  import {
+    loadLifecycleIntent,
+    saveLifecycleIntent,
+    clearLifecycleIntent
+  } from '$lib/stores/lifecycle-intent'
   import { agentRuns } from '$lib/stores/agent-runs.svelte'
   import {
     threadSettings,
@@ -226,7 +231,13 @@
       }
     }
     void hydrate()
-    if (!chatMode) void refreshEngineeringLifecycle()
+    if (!chatMode) {
+      void refreshEngineeringLifecycle()
+      // Restore a staged (not-yet-sent) Toolbox selection so the switches keep
+      // the user's last choice across thread switches and app restarts.
+      const stagedIntent = loadLifecycleIntent(projectId, id)
+      if (stagedIntent) pendingLifecycleSelection = stagedIntent
+    }
     const bind = (sessionId: string | undefined): void => {
       if (sessionId) threadMessages.setSessionId(projectId, id, sessionId)
     }
@@ -272,6 +283,10 @@
    *  playing around in the composer must not apply settings or open the guard. */
   function selectEngineeringLifecycle(input: EngineeringLifecycleSelectionInput): void {
     pendingLifecycleSelection = input
+    // Persist the staged intent so the switches stay exactly where the user
+    // left them across thread switches and app restarts — a send must never
+    // steer a different prompt than the one the switches currently show.
+    saveLifecycleIntent(thread.projectId, thread.id, input)
   }
 
   async function confirmLifecycleReplacement(): Promise<void> {
@@ -284,6 +299,9 @@
     )
     pendingLifecycleSelection = null
     lifecycleGuardOpen = false
+    // The staged intent was either applied or discarded by this confirmation —
+    // it must not resurface on the next mount.
+    clearLifecycleIntent(thread.projectId, thread.id)
     if (replacement.stages.length > 0 || replacement.autopilot) {
       await applyLifecycleSelection(replacement)
     }
@@ -959,6 +977,7 @@
           return
         }
         pendingLifecycleSelection = null
+        clearLifecycleIntent(thread.projectId, thread.id)
         await applyLifecycleSelection(staged)
       }
       if (dependencies.length > 0 || (busy && !direct)) {
