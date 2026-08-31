@@ -67,6 +67,7 @@ import {
   PI_STATUS_WORKING,
   piStatusExtension
 } from './pi-status-extension'
+import { PI_USAGE_EXTENSION_KEY, piUsageExtension } from './pi-usage-extension'
 import { PiRpcClient } from './pi-rpc-client'
 import {
   prepareHarnessInvocation,
@@ -186,6 +187,161 @@ function errorText(value: Record<string, unknown>): string {
     stringValue(value['message']) ??
     'Pi turn failed'
   )
+}
+
+/** Numeric header value ('1234' → 1234); non-numeric returns undefined. */
+function headerNumber(value: string | undefined): number | undefined {
+  if (value === undefined) return undefined
+  const parsed = Number(value)
+  return Number.isFinite(parsed) ? parsed : undefined
+}
+
+/**
+ * Parse a rate-limit reset value. Providers send either a relative duration
+ * ('1s', '6m0s', '1h0m30s') or an absolute ISO timestamp; both resolve to an
+ * absolute reset epoch, undefined when unparseable.
+ */
+function headerResetAt(value: string | undefined): number | undefined {
+  if (value === undefined) return undefined
+  if (/^\d/u.test(value)) {
+    let seconds = 0
+    for (const [, amount, unit] of value.matchAll(/(\d+(?:\.\d+)?)([hms])/gu)) {
+      const n = Number(amount)
+      if (!Number.isFinite(n)) return undefined
+      seconds += unit === 'h' ? n * 3600 : unit === 'm' ? n * 60 : n
+    }
+    if (seconds > 0) return Date.now() + seconds * 1_000
+    return undefined
+  }
+  const epoch = Date.parse(value)
+  return Number.isFinite(epoch) ? epoch : undefined
+}
+
+/** Build a usage bar window from remaining/limit header pairs. */
+function windowFromHeaders(
+  id: string,
+  label: string,
+  headers: Record<string, string>,
+  remainingKey: string,
+  limitKey: string,
+  resetKey?: string,
+  extra?: Partial<AgentRateLimitWindow>
+): AgentRateLimitWindow | null {
+  const remaining = headerNumber(headers[remainingKey])
+  const limit = headerNumber(headers[limitKey])
+  if (remaining === undefined && limit === undefined) return null
+  const usedPercent =
+    remaining !== undefined && limit !== undefined && limit > 0
+      ? Math.min(100, Math.max(0, ((limit - remaining) / limit) * 100))
+      : undefined
+  const resetsAt = resetKey ? headerResetAt(headers[resetKey]) : undefined
+  if (remaining === undefined && limit === undefined && resetsAt === undefined) return null
+  return {
+    id,
+    label,
+    ...(remaining !== undefined ? { remaining } : {}),
+    ...(limit !== undefined ? { limit } : {}),
+    ...(usedPercent !== undefined ? { usedPercent } : {}),
+    ...(resetsAt !== undefined ? { resetsAt } : {}),
+    ...extra
+  }
+}
+
+/**
+ * Map the usage extension's captured provider response headers into display
+ * usage bars. Recognizes the Anthropic subscription unified windows (5-hour,
+ * 7-day, with overage state), Anthropic per-minute request/token buckets, and
+ * the OpenAI-compatible `x-ratelimit-*` family (OpenAI, OpenRouter, most
+ * base-URL providers). Unrecognized headers are ignored.
+ */
+export function mapPiRateLimitHeaders(payload: unknown): AgentRateLimitWindow[] {
+  const envelope = record(payload)
+  const headers = record(envelope?.['headers'])
+  if (!headers) return []
+  const stringHeaders: Record<string, string> = {}
+  for (const [key, value] of Object.entries(headers)) {
+    if (typeof value === 'string') stringHeaders[key.toLowerCase()] = value
+  }
+  const windows: AgentRateLimitWindow[] = []
+
+  // Anthropic subscription unified windows — the quota Claude Pro/Max usage
+  // bars show. Status and overage fields live on the 5-hour window, matching
+  // how Claude Code surfaces them.
+  const unifiedStatus = stringHeaders['anthropic-ratelimit-unified-5h-status']
+  const fiveHour = windowFromHeaders(
+    'pi-unified-5h',
+    '5-hour limit',
+    stringHeaders,
+    'anthropic-ratelimit-unified-5h-remaining',
+    'anthropic-ratelimit-unified-5h-limit',
+    'anthropic-ratelimit-unified-5h-reset',
+    {
+      windowMinutes: 300,
+      ...(unifiedStatus !== undefined ? { status: unifiedStatus } : {}),
+      ...(stringHeaders['anthropic-ratelimit-unified-overage-status'] !== undefined
+        ? { overageStatus: stringHeaders['anthropic-ratelimit-unified-overage-status'] }
+        : {}),
+      ...(stringHeaders['anthropic-ratelimit-unified-overage-disabled-reason'] !== undefined
+        ? {
+            overageDisabledReason:
+              stringHeaders['anthropic-ratelimit-unified-overage-disabled-reason']
+          }
+        : {})
+    }
+  )
+  if (fiveHour) windows.push(fiveHour)
+  const sevenDay = windowFromHeaders(
+    'pi-unified-7d',
+    '7-day limit',
+    stringHeaders,
+    'anthropic-ratelimit-unified-7d-remaining',
+    'anthropic-ratelimit-unified-7d-limit',
+    'anthropic-ratelimit-unified-7d-reset',
+    { windowMinutes: 10_080 }
+  )
+  if (sevenDay) windows.push(sevenDay)
+
+  // Anthropic per-minute buckets.
+  const requests = windowFromHeaders(
+    'pi-requests',
+    'Requests',
+    stringHeaders,
+    'anthropic-ratelimit-requests-remaining',
+    'anthropic-ratelimit-requests-limit',
+    'anthropic-ratelimit-requests-reset'
+  )
+  if (requests) windows.push(requests)
+  const inputTokens = windowFromHeaders(
+    'pi-input-tokens',
+    'Input tokens',
+    stringHeaders,
+    'anthropic-ratelimit-input-tokens-remaining',
+    'anthropic-ratelimit-input-tokens-limit',
+    'anthropic-ratelimit-input-tokens-reset'
+  )
+  if (inputTokens) windows.push(inputTokens)
+
+  // OpenAI-compatible family (OpenAI, OpenRouter, OpenAI-compatible proxies).
+  const openAiRequests = windowFromHeaders(
+    'pi-openai-requests',
+    'Requests',
+    stringHeaders,
+    'x-ratelimit-remaining-requests',
+    'x-ratelimit-limit-requests',
+    'x-ratelimit-reset-requests'
+  )
+  if (openAiRequests) windows.push(openAiRequests)
+  const openAiTokens = windowFromHeaders(
+    'pi-openai-tokens',
+    'Tokens',
+    stringHeaders,
+    'x-ratelimit-remaining-tokens',
+    'x-ratelimit-limit-tokens',
+    'x-ratelimit-reset-tokens'
+  )
+  if (openAiTokens) windows.push(openAiTokens)
+
+  return windows
 }
 
 function messageTimestamp(value: Record<string, unknown>): number {
@@ -1097,6 +1253,12 @@ export class PiDriver extends PersistentCliDriver {
   private statusExtensionPath: string | null = null
   private statusExtensionDirectory: string | null = null
   private statusExtensionFailed = false
+  /** Materialized app-owned usage extension path, cached across sessions. */
+  private usageExtensionPath: string | null = null
+  private usageExtensionDirectory: string | null = null
+  private usageExtensionFailed = false
+  /** Latest provider rate-limit windows reported by the usage extension, per session. */
+  private latestRateLimits = new Map<string, AgentRateLimitWindow[]>()
   /** Session-keyed absolute path to the materialized core-tools extension module, passed to `--extension`. */
   private coreToolsExtensionPaths = new Map<string, string>()
   /**
@@ -1618,21 +1780,27 @@ export class PiDriver extends PersistentCliDriver {
       ([, clientProject]) => clientProject === projectPath
     )?.[0]
     const client = sessionId ? this.rpcClients.get(sessionId) : undefined
-    if (!client) return null
+    const cachedRateLimits = this.latestRateLimits.get(sessionId ?? '') ?? []
+    if (!client) {
+      // No live session — but recently reported quota windows still answer
+      // the hover contract, mirroring how codex/claude-code serve cached bars.
+      return cachedRateLimits.length > 0 ? { rateLimits: cachedRateLimits } : null
+    }
     try {
       const stats = record(await client.getSessionStats())
       const contextUsage = record(stats?.['contextUsage'])
       const contextWindow = numberValue(contextUsage?.['contextWindow'])
       const contextUsed = numberValue(contextUsage?.['tokens'])
-      if (contextWindow === undefined && contextUsed === undefined) return null
+      if (contextWindow === undefined && contextUsed === undefined && cachedRateLimits.length === 0)
+        return null
       return {
-        rateLimits: [],
+        ...(cachedRateLimits.length > 0 ? { rateLimits: cachedRateLimits } : { rateLimits: [] }),
         ...(contextWindow !== undefined ? { contextWindow } : {}),
         ...(contextUsed !== undefined ? { contextUsed } : {})
       }
     } catch (error) {
       Logger.dev('Pi account usage read failed:', error)
-      return null
+      return cachedRateLimits.length > 0 ? { rateLimits: cachedRateLimits } : null
     }
   }
 
@@ -1823,6 +1991,10 @@ export class PiDriver extends PersistentCliDriver {
     // failure must never block the turn — pi then simply runs unmonitored.
     const statusExtension = await this.materializeStatusExtension()
     const extensionArgs = statusExtension ? ['--extension', statusExtension] : []
+    // The app-owned usage extension forwards provider rate-limit headers so
+    // usage bars match the other harness drivers. Same failure contract.
+    const usageExtension = await this.materializeUsageExtension()
+    if (usageExtension) extensionArgs.push('--extension', usageExtension)
     // The app-owned gateway extension registers the interactive gateway tools
     // from GATEWAY_TOOLS as first-class tools so the model gets structured affordances for the
     // turn-scoped utility gateway (Pi has no native MCP host to transport it).
@@ -2294,6 +2466,10 @@ export class PiDriver extends PersistentCliDriver {
    * lifecycle visibility codex/claude-code/opencode drivers provide.
    */
   private handleExtensionStatus(record: Record<string, unknown>, sessionId: string): void {
+    if (stringValue(record['statusKey']) === PI_USAGE_EXTENSION_KEY) {
+      this.handleUsageStatus(record, sessionId)
+      return
+    }
     if (stringValue(record['statusKey']) !== PI_STATUS_EXTENSION_KEY) return
     const text = stringValue(record['statusText'])
     if (!text) return
@@ -2308,6 +2484,25 @@ export class PiDriver extends PersistentCliDriver {
     // `agent_settled` remains the sole finalization trigger (usage stats +
     // session persistence); the idle status here only clears the busy flag.
     this.emit({ type: 'session.status', sessionId, status: state })
+  }
+
+  /**
+   * Consume the usage extension's `setStatus` records: a JSON payload of the
+   * provider response's rate-limit headers. Mapped into display windows and
+   * cached per session until the next provider response refreshes them.
+   */
+  private handleUsageStatus(record: Record<string, unknown>, sessionId: string): void {
+    const text = stringValue(record['statusText'])
+    if (!text) return
+    let payload: unknown
+    try {
+      payload = JSON.parse(text) as unknown
+    } catch {
+      return
+    }
+    const windows = mapPiRateLimitHeaders(payload)
+    if (windows.length === 0) return
+    this.latestRateLimits.set(sessionId, windows)
   }
 
   private handleUiRequest(record: Record<string, unknown>, sessionId: string): void {
@@ -2510,11 +2705,13 @@ export class PiDriver extends PersistentCliDriver {
         typeof stats?.['cost'] === 'number' ? (stats['cost'] as number) : mapPiCost(stats)
       const contextWindow = numberValue(contextUsage?.['contextWindow'])
       const contextUsed = numberValue(contextUsage?.['tokens'])
+      const rateLimits = this.latestRateLimits.get(session.id) ?? []
       if (
         tokens === undefined &&
         cost === undefined &&
         contextWindow === undefined &&
-        contextUsed === undefined
+        contextUsed === undefined &&
+        rateLimits.length === 0
       ) {
         return
       }
@@ -2525,7 +2722,8 @@ export class PiDriver extends PersistentCliDriver {
         ...(tokens ? { tokens } : {}),
         ...(cost !== undefined ? { cost } : {}),
         ...(contextWindow !== undefined ? { contextWindow } : {}),
-        ...(contextUsed !== undefined ? { contextUsed } : {})
+        ...(contextUsed !== undefined ? { contextUsed } : {}),
+        ...(rateLimits.length > 0 ? { rateLimits } : {})
       }
       this.applyEventToSession(session, event)
       this.emit(event)
@@ -2653,6 +2851,30 @@ export class PiDriver extends PersistentCliDriver {
     }
   }
 
+  /**
+   * Write the app-owned usage extension to a shared temp file (once per
+   * driver). The cached path is reused across sessions; a failed write
+   * returns null and the session launches without usage bars instead of
+   * failing the turn.
+   */
+  private async materializeUsageExtension(): Promise<string | null> {
+    if (this.usageExtensionPath) return this.usageExtensionPath
+    if (this.usageExtensionFailed) return null
+    try {
+      if (!this.usageExtensionDirectory) {
+        this.usageExtensionDirectory = await mkdtemp(join(tmpdir(), 'codeinoven-pi-usage-'))
+      }
+      const path = join(this.usageExtensionDirectory, 'codeinoven-usage.ts')
+      await writeFile(path, piUsageExtension(), 'utf8')
+      this.usageExtensionPath = path
+      return path
+    } catch (error) {
+      this.usageExtensionFailed = true
+      Logger.dev('Pi usage extension materialization failed:', error)
+      return null
+    }
+  }
+
   private disposeRpcClient(sessionId: string): void {
     const client = this.rpcClients.get(sessionId)
     if (client) {
@@ -2661,6 +2883,7 @@ export class PiDriver extends PersistentCliDriver {
     }
     this.resumedNativeSessions.delete(sessionId)
     this.appliedPiSettings.delete(sessionId)
+    this.latestRateLimits.delete(sessionId)
   }
 
   private async buildProviderOverlay(projectPath: string): Promise<ProviderOverlay> {
