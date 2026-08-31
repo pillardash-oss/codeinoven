@@ -78,6 +78,23 @@ const MAX_LINE_DIFF_BYTES = 1024 * 1024
 const MAX_LINE_DIFF_LINES = 20_000
 const MAX_LINE_DIFF_DISTANCE = 4_000
 const MAX_LINE_DIFF_WORK = 4_000_000
+/**
+ * Maximum user-facing failure text persisted on (and rendered from) a turn
+ * checkpoint. A checkpoint failure is a short explanation (interruption notice,
+ * capture warning, contract rejection) — never a transcript. The bound also
+ * heals legacy checkpoints: before the textual usage-limit detection was
+ * structurally guarded, an agent's entire final message could be recorded as
+ * the failure and then splash into the run-changes card verbatim.
+ */
+export const MAX_CHECKPOINT_FAILURE_LENGTH = 600
+
+/** Bound a checkpoint's user-facing failure text to a short explanation. */
+function boundCheckpointFailure(failure: string): string {
+  const trimmed = failure.trim()
+  if (trimmed.length <= MAX_CHECKPOINT_FAILURE_LENGTH) return trimmed
+  return `${trimmed.slice(0, MAX_CHECKPOINT_FAILURE_LENGTH).trimEnd()}…`
+}
+
 /** Byte window returned for a per-file diff. Kept small to bound IPC payloads. */
 const MAX_DIFF_WINDOW_BYTES = 64 * 1024
 /** Context bytes kept around the changed region so the diff reads naturally. */
@@ -244,7 +261,8 @@ export class CheckpointManager {
       const captureWarning = this.captureWarning(
         changes.filter((change) => contentUnavailable.has(change.path)).map((change) => change.path)
       )
-      const completionFailure = [failure, captureWarning].filter(Boolean).join(' ')
+      const joinedFailure = [failure, captureWarning].filter(Boolean).join(' ')
+      const completionFailure = joinedFailure ? boundCheckpointFailure(joinedFailure) : ''
       const updated: TurnCheckpoint = {
         ...checkpoint,
         status,
@@ -368,7 +386,7 @@ export class CheckpointManager {
       const updated: TurnCheckpoint = {
         ...checkpoint,
         status: 'interrupted',
-        failure: `${interruption} Change capture failed: ${detail}`
+        failure: boundCheckpointFailure(`${interruption} Change capture failed: ${detail}`)
       }
       await this.save(updated)
       await this.writeRow('DELETE FROM active_turns WHERE project_id = ? AND thread_id = ?', [
@@ -407,7 +425,9 @@ export class CheckpointManager {
       const updated: TurnCheckpoint = {
         ...checkpoint,
         status: 'completed',
-        failure: `Change capture failed while finalizing a completed turn: ${detail}`
+        failure: boundCheckpointFailure(
+          `Change capture failed while finalizing a completed turn: ${detail}`
+        )
       }
       await this.save(updated)
       await this.writeRow('DELETE FROM active_turns WHERE project_id = ? AND thread_id = ?', [
@@ -430,7 +450,7 @@ export class CheckpointManager {
     const updated: TurnCheckpoint = {
       ...checkpoint,
       status: 'failed',
-      failure,
+      failure: boundCheckpointFailure(failure),
       completedAt: checkpoint.completedAt ?? Date.now()
     }
     await this.save(updated)
@@ -742,15 +762,19 @@ export class CheckpointManager {
    * and rollback-capable after the checkpoint format evolved.
    */
   private recoverUnfilteredChanges(projectId: string, checkpoint: TurnCheckpoint): TurnCheckpoint {
-    if (
-      checkpoint.changes.length > 0 ||
-      !checkpoint.after ||
-      checkpoint.changeFilterApplied === true
-    ) {
-      return checkpoint
+    // Read-time heal for legacy poison: checkpoints written before the failure
+    // bound could carry an entire agent transcript as `failure`. Overlong
+    // failure text is never a legitimate explanation — strip it so it can
+    // never splash into the run-changes card, regardless of when it was saved.
+    const healed =
+      checkpoint.failure !== undefined && checkpoint.failure.length > MAX_CHECKPOINT_FAILURE_LENGTH
+        ? { ...checkpoint, failure: undefined }
+        : checkpoint
+    if (healed.changes.length > 0 || !healed.after || healed.changeFilterApplied === true) {
+      return healed
     }
-    const changes = this.tracker(projectId).calculateChanges(checkpoint.before, checkpoint.after)
-    return changes.length > 0 ? { ...checkpoint, changes } : checkpoint
+    const changes = this.tracker(projectId).calculateChanges(healed.before, healed.after)
+    return changes.length > 0 ? { ...healed, changes } : healed
   }
 
   async rollback(projectId: string, threadId: string, turnId: string): Promise<TurnCheckpoint> {

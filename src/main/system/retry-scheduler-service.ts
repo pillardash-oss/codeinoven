@@ -34,6 +34,16 @@ const ISSUE_KINDS = new Set<AgentProviderIssueKind>([
 /** How often the ticker checks whether any pending reset window has passed. */
 const RETRY_TICK_MS = 15_000
 
+/**
+ * Maximum persisted card message accepted when restoring records. A genuine
+ * provider failure message is short; before the textual usage-limit detection
+ * was structurally guarded, an agent's entire final message could be persisted
+ * here as the issue and would re-create the splashed card on every launch.
+ * Reject overlong legacy records on load — the dropped prose is meaningless,
+ * and a still-paused thread falls back to the generic restored card.
+ */
+const MAX_SAVED_ISSUE_MESSAGE_LENGTH = 1_000
+
 /** Config-relative file holding pending retries so they survive app restarts. */
 const PERSISTENCE_FILE = 'scheduler/retry-scheduler.json'
 
@@ -193,7 +203,8 @@ export class RetrySchedulerService {
       (retryAt !== undefined && (typeof retryAt !== 'number' || !Number.isFinite(retryAt))) ||
       typeof issueKind !== 'string' ||
       !ISSUE_KINDS.has(issueKind as AgentProviderIssueKind) ||
-      typeof issueMessage !== 'string'
+      typeof issueMessage !== 'string' ||
+      issueMessage.length > MAX_SAVED_ISSUE_MESSAGE_LENGTH
     ) {
       return null
     }
