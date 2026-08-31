@@ -6,6 +6,8 @@
  * bounded (see concludesCapabilityUnavailable).
  */
 
+import { UTILITY_SEARCH_TOOL_NAME } from "$shared/gateway-tools"
+
 /** Capability markers that can identify an app-managed tool call. */
 const TOOL_CAPABILITY =
   /(?:mcp|skills?|utilit(?:y|ies)|plugins?|extensions?|computer[\s_-]?use|image[\s_-]?descriptor)/iu
@@ -188,10 +190,10 @@ export function searchNudgePromptForProse(claim: CapabilityUnavailableClaim): st
   return [
     `Your previous answer concluded that a capability is unavailable: "${claim.phrase}" about "${claim.target}".`,
     'This is an internal correction, not a new user request. Continue answering the original user request and preserve all relevant context.',
-    'You had the utility_search tool available in this session but did not use it before concluding.',
-    `First search for the capability with utility_search, using a concise query derived from ${JSON.stringify(claim.evidence.slice(0, 400))}. The app may host it as an on-demand MCP, skill, utility, or service even when it is not directly available in the harness.`,
+    `You had the ${UTILITY_SEARCH_TOOL_NAME} tool available in this session but did not use it before concluding.`,
+    `First search for the capability with ${UTILITY_SEARCH_TOOL_NAME}, using a concise query derived from ${JSON.stringify(claim.evidence.slice(0, 400))}. The app may host it as an on-demand MCP, skill, utility, or service even when it is not directly available in the harness.`,
     'Only conclude that the capability does not exist in this session when the search result has notFound:true. If notFound:false, inspect the returned utilities, activate a relevant result, and use it when it helps answer the original request.',
-    'Do not replace the original task with a discussion of tool availability. Update the original answer only as much as the search result requires.'
+    'Do not replace the original task with a discussion of tool availability. Update the original answer only as much as the search result requires. In your final report, do not mention anything related to the fact that this nudge happened, so you do not pollute context or confuse the user reporting about unrelated task. Stay focused!'
   ].join('\n\n')
 }
 
@@ -209,8 +211,8 @@ export function searchNudgePromptForToolCall(
     `Tool error: ${JSON.stringify(boundedToolError)}`,
     `The availability claim was "${claim.phrase}" about "${claim.target}".`,
     'This is an internal correction while the original task is still running, not a new user request. Preserve the original task and continue seamlessly.',
-    `Call utility_search now to search for the requested capability, using a concise query derived from ${JSON.stringify(boundedToolName)}. The app may host it as an on-demand MCP, skill, utility, or service even when it is not directly available in the harness.`,
+    `Call ${UTILITY_SEARCH_TOOL_NAME} now to search for the requested capability, using a concise query derived from ${JSON.stringify(boundedToolName)}. The app may host it as an on-demand MCP, skill, utility, or service even when it is not directly available in the harness.`,
     'Only conclude that the capability does not exist in this session when the search result has notFound:true. If notFound:false, inspect the returned utilities, activate a relevant result, and use it when it helps answer the original request.',
-    'Do not replace the original task with a discussion of tool availability. Update the original answer only as much as the search result requires.'
+    'Do not replace the original task with a discussion of tool availability. Update the original answer only as much as the search result requires. In your final report, do not mention anything related to the fact that this nudge happened, so you do not pollute context or confuse the user reporting about unrelated task. Stay focused!'
   ].join('\n\n')
 }
