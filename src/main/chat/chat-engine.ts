@@ -20090,7 +20090,7 @@ export class ChatEngine {
     // actively probe the connection instead of extending the silence window
     // indefinitely on faith.
     if (driver?.isSessionBusy) {
-      const probe = await this.probeSessionLiveness(driver, info)
+      const probe = await this.probeSessionLiveness(driver, info, sessionId)
       if (probe === 'busy') return null
       const message =
         probe === 'wedged'
@@ -20112,13 +20112,14 @@ export class ChatEngine {
    * connection surfaces to the user in seconds, not minutes.
    */
   private async probeSessionLiveness(
-    driver: AgentDriver,
-    info: SessionInfo
+    driver: HarnessDriver,
+    info: SessionInfo,
+    sessionId: string
   ): Promise<'busy' | 'idle' | 'wedged'> {
     const PROBE_TIMEOUT_MS = 15_000
     try {
       const busy = await Promise.race([
-        driver.isSessionBusy!(info.projectPath, info.sessionId ?? ''),
+        driver.isSessionBusy!(info.projectPath, sessionId),
         new Promise<never>((_, reject) =>
           setTimeout(() => reject(new Error('liveness probe timed out')), PROBE_TIMEOUT_MS)
         )
