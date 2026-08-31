@@ -254,6 +254,7 @@ import { createAutoTitleLauncher } from './title-generation-policy'
 import { artifactInstruction, GeneratedArtifactService } from './generated-artifact-service'
 import {
   classifyProviderIssue,
+  isUsageLimitNoticeText,
   isUsageResetWaitIssue,
   parseUsageResetAt
 } from '../../lib/provider-issue'
@@ -649,7 +650,7 @@ export const SPEC_BRAINSTORM_SYSTEM_PROMPT = [
   'The app owns the active feature specification under `.cio/specs/<feature-slug>/spec.md`; never create or overwrite a separate specification file.',
   'CodeInOven also owns plan, progress, Assignment, audit, and test-evidence artifacts under that same feature directory. The application Agent behavior layer may define the work ethic, but it cannot redirect those platform artifacts to agent-out, the repository root, or another path.',
   'Do not announce specification readiness as a prose call-to-action; the app displays the persisted specification tool automatically after your turn.',
-  `Apart from calling the question tool when clarification is required, never send a normal assistant answer in Engineering mode. Treat requests phrased as questions as planning requests too. End every planning turn that does not require clarification by submitting the complete specification through ${ENGINEERING_SPEC_TOOL_NAME}.`,
+  `Apart from calling the question tool when clarification is required, never send a normal assistant answer in Engineering mode. Treat requests phrased as questions as planning requests too. End every planning turn that does not require clarification by submitting the complete specification through the ${ENGINEERING_SPEC_TOOL_NAME} contract when that contract is exposed in this session; if it is not exposed, end with exactly one complete specification JSON object (the required fields are defined in the specification instructions) and no other prose.`,
   MERMAID_OUTPUT_INSTRUCTION,
   QUESTION_TOOL_INSTRUCTION
 ].join(' ')
@@ -823,11 +824,26 @@ const ACHIEVEMENT_IMPLEMENT_SYSTEM_PROMPT = [
  * re-formulate problem statements.
  */
 const ENGINEERING_PARKED_LIFECYCLE_INSTRUCTION = [
-  'The Engineering lifecycle for this thread is parked: no stage is actively running and no decision is awaiting your button.',
-  'Answer the user directly in implementation mode. Do NOT re-enter brainstorming, generate a new specification, or reformulate problem statements unless the user explicitly asks you to use the Engineering Studio buttons (Review, Next step, Implement) or to start a specific stage.',
-  'If the user asks you to implement, review, or advance a stage from a plain message, explain that they must use the Review / Next step / Implement buttons in the Engineering Studio, or fork this branch into another branch and turn Engineering mode off to continue without the lifecycle.',
+  'The Engineering lifecycle for this thread is parked: no stage is actively running and no decision is awaiting your button. You are in normal implementation mode.',
+  'Direct change requests — e.g. styling, copy, layout, behavior fixes, or new small features — are ordinary implementation work: implement them immediately with your tools in this turn. The existing approved specification stays authoritative context; it does not need to be rewritten for polish-level changes.',
+  'Do NOT re-enter brainstorming, generate a new specification, or reformulate problem statements unless the user explicitly asks for Engineering Studio work (a new specification, Review, or Next step). Never route a direct change request into a specification.',
+  'Only explain the Engineering Studio buttons (Review, Next step, Implement) when the user explicitly wants to advance or restart a lifecycle stage.',
   'Continue assisting with code and discussions as a regular engineering assistant.'
 ].join(' ')
+
+/** Spec-generation contract schema, optionally requiring the Assignment graph. */
+function specGenerationSchema(assignmentRequired: boolean): Record<string, unknown> {
+  return assignmentRequired
+    ? {
+        ...SPEC_GENERATION_SCHEMA,
+        properties: {
+          ...(SPEC_GENERATION_SCHEMA.properties as Record<string, unknown>),
+          assignment: ASSIGNMENT_PLAN_SCHEMA
+        },
+        required: [...((SPEC_GENERATION_SCHEMA.required as string[]) ?? []), 'assignment']
+      }
+    : SPEC_GENERATION_SCHEMA
+}
 
 const SPEC_MARKDOWN_INSTRUCTION =
   'Write human-facing prose string fields as readable Markdown. Use short paragraphs with blank-line separation. When one string enumerates multiple distinct steps, findings, or recommendations, use newline-delimited `1.` or `-` list items; never compress them into inline forms such as `(1) ...; (2) ...`. Do not add list markers inside fields already modeled as arrays, and do not repeat specification section headings inside field values.'
@@ -6329,15 +6345,16 @@ export class ChatEngine {
     if (driverId !== 'claude-code') void scheduleAutoTitle()
     const isChatThread = project.id === INBOX_PROJECT_ID
     const chatFileSystemEnabled = isChatThread && settings.fileSystemMode === true
-    // A parked lifecycle (stages selected but no circle actively running and no
-    // decision gate pending) means the user is free to chat: their message must
-    // NOT be hijacked into the planning/spec workflow. Only explicit designated
-    // stage actions ('request'/'review' from the studios) or an actively
-    // planning lifecycle take the brainstorming path.
+    // A parked lifecycle (no circle actively running and no decision gate
+    // pending) means the user is free to chat: their message must NOT be
+    // hijacked into the planning/spec workflow. Only explicit designated stage
+    // actions ('request'/'review' from the studios) or an actively planning
+    // lifecycle take the brainstorming path. Parking must not depend on
+    // `selection`: a completed manual circle resets `selection` to 'none' while
+    // keeping `startedAt` set, and that thread stays in implementation mode.
     const lifecycleForMode = this.engineeringLifecycleEngine.get(projectId, threadId)
     const lifecycleParked =
       lifecycleForMode !== null &&
-      lifecycleForMode.selection !== 'none' &&
       lifecycleForMode.activeStage === undefined &&
       lifecycleForMode.humanGate === undefined
     const explicitPlanningAction = specAction === 'request' || specAction === 'review'
@@ -6782,6 +6799,23 @@ export class ChatEngine {
               activeSpec.annotations
             )
           : ''
+        // Expose the engineering_spec contract for real on interactive
+        // spec-revision turns: structured-output-capable harnesses (claude-code)
+        // enforce the schema on the final response, so the model cannot end the
+        // turn without a valid specification submission. Brainstorm-discussion
+        // turns stay conversational, and unsupported models keep the
+        // validated text-JSON fallback in persistPendingSpecRevision.
+        const structuredOutputKey = `${driverId}:${settings.providerId}:${settings.modelId}`
+        const revisionStructuredOutput =
+          activeSpec !== null &&
+          !activeBrainstormSession &&
+          driver.capabilities?.structuredOutput === true &&
+          !this.unsupportedStructuredOutputModels.has(structuredOutputKey)
+            ? {
+                schema: specGenerationSchema(settings.assignmentMode === true),
+                retryCount: 2
+              }
+            : undefined
         const prompt: SendPromptOptions = {
           sessionId,
           settings,
@@ -6800,6 +6834,9 @@ export class ChatEngine {
             historyRecap
           }),
           allowedTools: SPEC_BRAINSTORM_ALLOWED_TOOLS,
+          ...(revisionStructuredOutput === undefined
+            ? {}
+            : { structuredOutput: revisionStructuredOutput }),
           userMessageId: messageId
         }
         await driver.sendPrompt(projectPath, prompt)
@@ -12218,16 +12255,7 @@ export class ChatEngine {
     ]
       .filter(Boolean)
       .join('\n\n')
-    const generationSchema = assignmentRequired
-      ? {
-          ...SPEC_GENERATION_SCHEMA,
-          properties: {
-            ...(SPEC_GENERATION_SCHEMA.properties as Record<string, unknown>),
-            assignment: ASSIGNMENT_PLAN_SCHEMA
-          },
-          required: [...((SPEC_GENERATION_SCHEMA.required as string[]) ?? []), 'assignment']
-        }
-      : SPEC_GENERATION_SCHEMA
+    const generationSchema = specGenerationSchema(assignmentRequired)
     const instructions = validateBoundedString(
       request.instructions,
       'Specification instructions',
@@ -17927,6 +17955,11 @@ export class ChatEngine {
    * path, so the turn finishes as a plain idle completion and auto-resume
    * never schedules — the thread just looks silently stuck. Catch it here by
    * re-classifying the latest assistant message text right after idle.
+   *
+   * The text must structurally BE the notice (isUsageLimitNoticeText), not
+   * merely mention limits: an ordinary agent answer that discusses usage
+   * limits at length must never be classified as a limit notice, or the whole
+   * agent output splashes into the usage-limit card as its error message.
    */
   private async detectTextualUsageLimitWait(
     driverId: string,
@@ -17945,7 +17978,7 @@ export class ChatEngine {
       .map((part) => part.text)
       .join('\n')
       .trim()
-    if (!text) return
+    if (!text || !isUsageLimitNoticeText(text)) return
     const kind = classifyProviderIssue(text)
     if (!isUsageResetWaitIssue({ kind, retryable: true })) return
     const retryAt = parseUsageResetAt(text)
