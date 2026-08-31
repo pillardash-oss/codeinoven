@@ -819,20 +819,24 @@
       >
         <div class="ml-auto flex h-full w-max items-center gap-0.5">
           {#each scopeState.projects as project (project.id)}
+            {@const projectColor = project.color ?? pickColorForSeed(project.id)}
+            {@const isActiveProject = scopeState.activeProjectId === project.id}
             <button
-              class="flex min-h-9 shrink-0 items-center gap-1.5 rounded-md px-3 py-1 text-xs transition-colors {scopeState.activeProjectId ===
-              project.id
+              class="flex min-h-9 shrink-0 items-center gap-1.5 rounded-md px-3 py-1 text-xs transition-colors {isActiveProject
                 ? 'bg-elevated font-medium text-foreground'
                 : 'text-muted hover:bg-elevated hover:text-foreground'}"
               role="tab"
-              aria-selected={scopeState.activeProjectId === project.id}
+              aria-selected={isActiveProject}
               title={projectIdentityTitle(project)}
               onclick={() => void switchProject(project.id)}
             >
               <span
-                class="flex h-5 w-5 shrink-0 items-center justify-center overflow-hidden rounded-md border bg-raised"
-                style:border-color={project.color ?? pickColorForSeed(project.id)}
-                style:background-color={`color-mix(in srgb, ${project.color ?? pickColorForSeed(project.id)} 12%, var(--color-raised))`}
+                class="flex h-5 w-5 shrink-0 items-center justify-center overflow-hidden rounded-md border bg-raised {isActiveProject ? 'ring-1' : ''}"
+                style:border-color={isActiveProject
+                  ? projectColor
+                  : `color-mix(in srgb, ${projectColor} 45%, transparent)`}
+                style:background-color={`color-mix(in srgb, ${projectColor} ${isActiveProject ? '22' : '6'}%, var(--color-raised))`}
+                style:--tw-ring-color={`color-mix(in srgb, ${projectColor} 30%, transparent)`}
                 aria-hidden="true"
               >
                 {#if project.iconUrl}
