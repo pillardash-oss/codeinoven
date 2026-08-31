@@ -87,6 +87,14 @@ export function mergeProviderCatalogEntries(catalogs: ProviderCatalog[]): Provid
 
 class ProviderCatalogStore {
   private cache = new SvelteMap<string, ProviderCatalog[]>()
+  /**
+   * Projects whose cache entry was validated this session — snapshot-seeded via
+   * `init`, probed, or received through a `providerCatalog.updated` broadcast.
+   * Mirror-seeded entries for projects outside this set are unvalidated relics
+   * (they can predate harness-side catalog changes, e.g. the connected-provider
+   * filter) and must never reach `allCached`'s cross-project union.
+   */
+  private knownProjects = new SvelteSet<string>()
   private customOverrides = new SvelteMap<string, BaseUrlProvider | null>()
   private refreshedAt = new Map<string, number>()
   /** When the last hydration attempt for a project failed. */
@@ -113,6 +121,7 @@ class ProviderCatalogStore {
       const event = args[0] as AgentEvent | undefined
       if (event?.type === 'providerCatalog.updated') {
         this.cache.set(event.projectId, event.catalogs)
+        this.knownProjects.add(event.projectId)
         this.refreshedAt.set(event.projectId, Date.now())
         this.failedAt.delete(event.projectId)
         this.retryAttempts.delete(event.projectId)
@@ -128,6 +137,16 @@ class ProviderCatalogStore {
   async init(projectIds: string[], options: { refresh?: boolean } = {}): Promise<void> {
     const refresh = options.refresh ?? true
     const targets = [...new Set(projectIds)]
+    // Mirror-seeded entries for projects this session has not validated are
+    // unvalidated relics: `init` only runs for the active project (plus inbox),
+    // so a stale entry for any other project would otherwise sit in the cache
+    // forever — never revalidated (mirror entries carry no refreshedAt), never
+    // pruned, and unioned into every picker via `allCached`. Drop them here and
+    // rewrite the mirror so relics cannot resurrect across restarts.
+    for (const projectId of targets) this.knownProjects.add(projectId)
+    for (const projectId of [...this.cache.keys()]) {
+      if (!this.knownProjects.has(projectId)) this.cache.delete(projectId)
+    }
     await Promise.all(
       targets.map(async (projectId) => {
         try {
@@ -204,10 +223,14 @@ class ProviderCatalogStore {
    * Deduped union of every currently cached project catalog. Used to resolve
    * global favorites / recently-used models that may not exist in the current
    * thread's project catalog (cold projects, driver availability differences).
+   * Only validated projects contribute — a mirror-seeded entry for a project
+   * this session never initialized is unvalidated relic data that must not
+   * leak into pickers through this union.
    */
   allCached(): ProviderCatalog[] {
     const catalogs: ProviderCatalog[] = []
-    for (const projectCatalogs of this.cache.values()) {
+    for (const [projectId, projectCatalogs] of this.cache) {
+      if (!this.knownProjects.has(projectId)) continue
       catalogs.push(...projectCatalogs)
     }
     return this.applyCustomOverrides(mergeProviderCatalogEntries(catalogs))
@@ -274,6 +297,7 @@ class ProviderCatalogStore {
     try {
       const catalogs = await invoke('agent:refreshProviderCatalog', projectId)
       this.cache.set(projectId, catalogs)
+      this.knownProjects.add(projectId)
       this.refreshedAt.set(projectId, Date.now())
       this.failedAt.delete(projectId)
       this.retryAttempts.delete(projectId)
