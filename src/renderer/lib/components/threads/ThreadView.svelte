@@ -2188,6 +2188,8 @@
   let durableAuditThread = $state<Thread | undefined>()
   let assignmentCoordinatorThread = $state<Thread | undefined>()
   let assignmentBusy = $state(false)
+  /** True while the Sr. Engineer composes an Assignment draft from the approved Spec. */
+  let assignmentFormulating = $state(false)
   let assignmentError = $state('')
   let assignmentSeniorSettingsPersistence: Promise<void> = Promise.resolve()
   let assignmentFocusTaskId = $state<string | undefined>()
@@ -2571,6 +2573,7 @@
         : 'Formulating specification'
     }
     if (specFormulating) return 'Formulating'
+    if (assignmentFormulating) return 'Formulating Assignment'
     if (!engineeringOn) return 'Working'
     switch (thread.status) {
       case 'planning':
@@ -5745,6 +5748,7 @@
   async function generateAssignmentDraft(): Promise<void> {
     if (!spec || assignmentBusy) return
     assignmentBusy = true
+    assignmentFormulating = true
     assignmentError = ''
     try {
       // The main process only generates an Assignment from an approved Spec.
@@ -5794,6 +5798,7 @@
       errorMessage = assignmentError
     } finally {
       assignmentBusy = false
+      assignmentFormulating = false
     }
   }
 
@@ -10272,7 +10277,7 @@
             />
           {/if}
 
-          {#if brainstormReportRefreshing || delegatedWorkBusy || (!pendingLiveTurn && !activePlanningEntry && !specFormulating && busy && latestTurnRenderableParts.length === 0)}
+          {#if brainstormReportRefreshing || delegatedWorkBusy || assignmentFormulating || (!pendingLiveTurn && !activePlanningEntry && !specFormulating && busy && latestTurnRenderableParts.length === 0)}
             <div class="flex items-center gap-2 text-sm text-dimmed">
               <Loader2 size={14} class="animate-spin text-info" />
               <span>
@@ -10957,13 +10962,15 @@
                       ? 'Sr. Engineer is preparing the Brainstorm…'
                       : activePlanningEntry === 'spec'
                         ? 'Sr. Engineer is preparing the specification…'
-                        : specFormulating
-                          ? 'Formulating specification…'
-                          : delegatedWorkBusy
-                            ? `${delegatedActivityLabel} — message the Sr. Engineer`
-                            : busy
-                              ? `${APP_NAME} is working — type to queue a message`
-                              : 'Send a message...'}
+                        : assignmentFormulating
+                          ? 'Sr. Engineer is preparing the Assignment…'
+                          : specFormulating
+                            ? 'Formulating specification…'
+                            : delegatedWorkBusy
+                              ? `${delegatedActivityLabel} — message the Sr. Engineer`
+                              : busy
+                                ? `${APP_NAME} is working — type to queue a message`
+                                : 'Send a message...'}
                     disabled={specFormulating}
                     working={busy}
                     onStop={abortRun}
