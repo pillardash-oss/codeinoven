@@ -1150,7 +1150,7 @@
                     {prototype.previewPath}
                   </p>
                   <div class="mt-3 flex gap-2">
-                    {#if prototype.fidelity === 'lofi' && onGenerateHifi}
+                    {#if prototype.fidelity === 'lofi' && draft.status === 'draft' && onGenerateHifi}
                       <button
                         type="button"
                         class="rounded-lg bg-thread-spec px-2.5 py-1.5 text-xs font-medium text-foreground"
