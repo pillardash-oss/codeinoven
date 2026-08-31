@@ -305,7 +305,7 @@ export default function codeInOvenCoreToolsExtension(pi) {
     name: '${CIO_ASK_USER_TOOL_NAME}',
     label: 'Ask the user a question',
     description:
-      'Ask the user one to three structured questions and wait for their answers. Each question offers two or three described choices plus a custom answer. Use this whenever a decision, preference, or clarification is needed before continuing.',
+      'Ask the user one to three structured questions and wait for their answers. Each question offers two or more described choices plus a custom answer. Use this whenever a decision, preference, or clarification is needed before continuing.',
     promptSnippet: 'Ask structured questions with described choices and wait for answers',
     promptGuidelines: [
       'Use ${CIO_ASK_USER_TOOL_NAME} when a decision, preference, or clarification from the user is needed before continuing.',
@@ -329,9 +329,8 @@ export default function codeInOvenCoreToolsExtension(pi) {
               })
             }),
             {
-              description: 'Two or three choices.',
-              minItems: 2,
-              maxItems: 3
+              description: 'Two or more choices.',
+              minItems: 2
             }
           ),
           multiple: Type.Optional(
