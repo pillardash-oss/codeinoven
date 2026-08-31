@@ -20,7 +20,7 @@ import type {
 } from '../../lib/types'
 import { PI_THINKING_PRESETS } from '../../lib/pi-thinking-presets'
 import { normalizeAgentQuestions, parseRecord } from '../../lib/agent-interactions'
-import { CIO_SPAWN_AGENT_TOOL_NAME } from '../../lib/core-tools'
+import { CIO_SPAWN_AGENT_TOOL_NAME, CIO_SUBAGENT_DONE_MESSAGE_TYPE } from '../../lib/core-tools'
 import { buildProcessEnvironment } from './cli-environment'
 import { piNativeProviderIds } from '../agents/native-provider-config-service'
 import { PiAuthConfigService, piAuthFileIo } from '../providers/pi-auth-config'
@@ -415,6 +415,22 @@ function findSubagentPart(
   return undefined
 }
 
+/** Find a sub-agent part by its child session id (spawn call id may be unknown). */
+function findSubagentPartByChildSession(
+  context: CliLineParseContext,
+  childSessionId: string | undefined
+): Extract<AgentPart, { type: 'subagent' }> | undefined {
+  if (!childSessionId) return undefined
+  for (const message of [...context.session.messages].reverse()) {
+    const part = message.parts.find(
+      (candidate): candidate is Extract<AgentPart, { type: 'subagent' }> =>
+        candidate.type === 'subagent' && candidate.activity.childSessionId === childSessionId
+    )
+    if (part) return part
+  }
+  return undefined
+}
+
 /**
  * Parse a `cio-subagent:` marker payload (structured sub-agent progress
  * streamed through tool-execution updates) into activity fields.
@@ -472,6 +488,51 @@ function spawnFailurePatch(output: string | undefined): AgentSubagentActivity | 
     description: 'sub-agent',
     background: false,
     error
+  }
+}
+
+/**
+ * Close a sub-agent card from the `cio-subagent-done` custom message. Once a
+ * background spawn's tool call has returned, pi drops tool-execution updates
+ * (`acceptingUpdates` is false after execute resolves), so the extension's
+ * terminal marker payload can never arrive through the tool channel and the
+ * card would stay "Working" forever. The extension therefore rides the
+ * completion notification — a display:false custom message the model still
+ * needs for its final output — with the structured payload in `details`.
+ */
+function spawnDoneCustomEvent(
+  message: Record<string, unknown>,
+  context: CliLineParseContext
+): CliLineParseResult | null {
+  if (stringValue(message['customType']) !== CIO_SUBAGENT_DONE_MESSAGE_TYPE) {
+    return { events: [] }
+  }
+  const payload = record(message['details']) ?? undefined
+  const activity = subagentActivityFromPayload(payload)
+  const existing = findSubagentPartByChildSession(context, stringValue(payload?.['childSessionId']))
+  if (!activity || !existing) return { events: [] }
+  return {
+    events: [
+      {
+        type: 'message.part.updated',
+        sessionId: context.sessionId,
+        part: {
+          type: 'subagent',
+          id: existing.id,
+          messageID: existing.messageID,
+          callID: existing.callID,
+          activity: {
+            ...existing.activity,
+            ...activity,
+            background: existing.activity.background,
+            time: {
+              start: existing.activity.time?.start ?? Date.now(),
+              end: Date.now()
+            }
+          }
+        }
+      }
+    ]
   }
 }
 
@@ -670,6 +731,7 @@ export function mapPiRecord(
 
   if (type === 'message_end' && entry['message']) {
     const message = record(entry['message'])
+    if (message?.['role'] === 'custom') return spawnDoneCustomEvent(message, context)
     if (message?.['role'] !== 'assistant') return { events: [] }
     return buildAssistantMessage(message, context.sessionId, turnState)
   }
@@ -701,7 +763,8 @@ export function mapPiRecord(
               activity: {
                 ...base,
                 ...(payloadPatch ?? {}),
-                status: 'running',
+                status: payloadPatch?.status ?? 'running',
+                background: base.background,
                 time: base.time ?? { start: Date.now() }
               }
             }
@@ -763,6 +826,7 @@ export function mapPiRecord(
                 status: failed
                   ? 'error'
                   : (payloadPatch?.status ?? failurePatch?.status ?? 'completed'),
+                background: base.background,
                 time: { start: base.time?.start ?? Date.now(), end: Date.now() }
               }
             }
@@ -835,6 +899,7 @@ export function mapPiRecord(
               status: failed
                 ? 'error'
                 : (payloadPatch?.status ?? failurePatch?.status ?? 'completed'),
+              background: base.background,
               time: { start: base.time?.start ?? Date.now(), end: Date.now() }
             }
           }

@@ -57,6 +57,7 @@ import {
   CIO_AGENT_STATUS_TOOL_NAME,
   CIO_REQUEST_FILES_TOOL_NAME,
   CIO_SPAWN_AGENT_TOOL_NAME,
+  CIO_SUBAGENT_DONE_MESSAGE_TYPE,
   CIO_TODO_WRITE_TOOL_NAME
 } from '../../lib/core-tools'
 
@@ -569,7 +570,16 @@ export default function codeInOvenCoreToolsExtension(pi) {
       (record.finalOutput || record.output || '(the sub-agent produced no text output)')
     try {
       void pi.sendMessage(
-        { customType: 'cio-subagent-done', content: text, display: false },
+        {
+          customType: '${CIO_SUBAGENT_DONE_MESSAGE_TYPE}',
+          content: text,
+          display: false,
+          // Structured terminal payload for the CodeInOven driver: once this
+          // spawn tool call has returned, pi drops tool-execution updates,
+          // so this custom message is the only channel that can still close
+          // the sub-agent card on the primary thread.
+          details: subAgentPayload(record)
+        },
         { triggerTurn: true, deliverAs: 'steer' }
       )
     } catch {}
