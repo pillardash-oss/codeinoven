@@ -10,6 +10,7 @@ import type {
   AgentPart,
   AgentQuestion,
   AgentRateLimitWindow,
+  AgentUsageCredits,
   AgentSubagentActivity,
   AgentTokenUsage,
   PromptAttachment,
@@ -68,6 +69,7 @@ import {
   piStatusExtension
 } from './pi-status-extension'
 import { PI_USAGE_EXTENSION_KEY, piUsageExtension } from './pi-usage-extension'
+import { fetchPiProviderCredits } from './pi-provider-usage'
 import { PiRpcClient } from './pi-rpc-client'
 import {
   prepareHarnessInvocation,
@@ -245,6 +247,16 @@ function windowFromHeaders(
     ...(resetsAt !== undefined ? { resetsAt } : {}),
     ...extra
   }
+}
+
+/**
+ * The pi provider id the captured headers came from, taken from the usage
+ * extension's payload (`ctx.model.provider` — the same id space as thread
+ * settings' providerId). Used to key persisted windows per provider.
+ */
+function piUsageProviderId(payload: unknown): string | undefined {
+  const provider = record(payload)?.['provider']
+  return typeof provider === 'string' && provider.length > 0 ? provider : undefined
 }
 
 /**
@@ -1302,14 +1314,19 @@ export class PiDriver extends PersistentCliDriver {
   private usageExtensionPath: string | null = null
   private usageExtensionDirectory: string | null = null
   private usageExtensionFailed = false
-  /** Latest provider rate-limit windows reported by the usage extension, per session. */
-  private latestRateLimits = new Map<string, AgentRateLimitWindow[]>()
-  /** Latest windows per project, persisted to storage so hovers after an app
-   *  restart (no live RPC session, no in-memory cache) still show bars. */
+  /** Latest provider rate-limit windows reported by the usage extension,
+   *  per session, with the pi provider id the response came from. */
+  private latestRateLimits = new Map<
+    string,
+    { providerId?: string; windows: AgentRateLimitWindow[] }
+  >()
+  /** Latest windows per pi provider id, persisted to storage so hovers after
+   *  an app restart (no live RPC session, no in-memory cache) still show bars
+   *  — and so the same provider used across multiple projects shares them. */
   private persistedRateLimits: Map<string, AgentRateLimitWindow[]> | null = null
   private persistedRateLimitsWrite: Promise<void> | null = null
   private static readonly USAGE_WINDOWS_PATH = 'runtime/pi-usage/windows.json'
-  private static readonly USAGE_WINDOWS_MAX_PROJECTS = 50
+  private static readonly USAGE_WINDOWS_MAX_PROVIDERS = 50
   /** Session-keyed absolute path to the materialized core-tools extension module, passed to `--extension`. */
   private coreToolsExtensionPaths = new Map<string, string>()
   /**
@@ -1816,14 +1833,18 @@ export class PiDriver extends PersistentCliDriver {
   }
 
   /**
-   * Pi only reports token/context usage over its RPC session (no local usage
-   * file like Claude Code or Codex), so this can only answer while a session
-   * for the project is already running — battery hover triggers this after a
-   * turn has started one. Returns null (never a turn) otherwise, matching the
-   * documented "no turn yet" contract other drivers rely on.
+   * Quota telemetry for the battery popover: the latest provider rate-limit
+   * windows (keyed by pi provider id, shared across projects) plus prepaid
+   * credits for known gateways, and live context stats when a session for
+   * the project is running. Provider-scoped data answers even without a live
+   * session, mirroring the cached-bars contract of the other drivers.
    */
-  async readAccountUsage(projectPath: string): Promise<{
+  async readAccountUsage(
+    projectPath: string,
+    providerId?: string
+  ): Promise<{
     rateLimits: AgentRateLimitWindow[]
+    credits?: AgentUsageCredits
     contextWindow?: number
     contextUsed?: number
   } | null> {
@@ -1831,29 +1852,42 @@ export class PiDriver extends PersistentCliDriver {
       ([, clientProject]) => clientProject === projectPath
     )?.[0]
     const client = sessionId ? this.rpcClients.get(sessionId) : undefined
-    const cachedRateLimits =
-      (sessionId !== undefined ? this.latestRateLimits.get(sessionId) : undefined) ??
-      (await this.loadPersistedRateLimits()).get(projectPath) ?? []
+    const persisted = await this.loadPersistedRateLimits()
+    const sessionCache = sessionId !== undefined ? this.latestRateLimits.get(sessionId) : undefined
+    // Provider-keyed windows win; the live session's latest capture answers
+    // only when it matches the requested provider (or no provider was given).
+    const providerWindows = providerId
+      ? (persisted.get(providerId) ??
+         (sessionCache && (sessionCache.providerId === providerId || !sessionCache.providerId)
+           ? sessionCache.windows
+           : undefined))
+      : (sessionCache?.windows ?? [...persisted.values()].at(-1))
+    const windows = providerWindows ?? []
+    const credits = (providerId ? await fetchPiProviderCredits(providerId) : null) ?? undefined
     if (!client) {
-      // No live session — but recently reported quota windows still answer
-      // the hover contract, mirroring how codex/claude-code serve cached bars.
-      return cachedRateLimits.length > 0 ? { rateLimits: cachedRateLimits } : null
+      return windows.length > 0 || credits ? { rateLimits: windows, credits } : null
     }
     try {
       const stats = record(await client.getSessionStats())
       const contextUsage = record(stats?.['contextUsage'])
       const contextWindow = numberValue(contextUsage?.['contextWindow'])
       const contextUsed = numberValue(contextUsage?.['tokens'])
-      if (contextWindow === undefined && contextUsed === undefined && cachedRateLimits.length === 0)
+      if (
+        contextWindow === undefined &&
+        contextUsed === undefined &&
+        windows.length === 0 &&
+        !credits
+      )
         return null
       return {
-        ...(cachedRateLimits.length > 0 ? { rateLimits: cachedRateLimits } : { rateLimits: [] }),
+        ...(windows.length > 0 ? { rateLimits: windows } : { rateLimits: [] }),
+        ...(credits ? { credits } : {}),
         ...(contextWindow !== undefined ? { contextWindow } : {}),
         ...(contextUsed !== undefined ? { contextUsed } : {})
       }
     } catch (error) {
       Logger.dev('Pi account usage read failed:', error)
-      return cachedRateLimits.length > 0 ? { rateLimits: cachedRateLimits } : null
+      return windows.length > 0 || credits ? { rateLimits: windows, credits } : null
     }
   }
 
@@ -2564,9 +2598,9 @@ export class PiDriver extends PersistentCliDriver {
     }
     const windows = mapPiRateLimitHeaders(payload)
     if (windows.length === 0) return
-    this.latestRateLimits.set(sessionId, windows)
-    const projectPath = this.sessionProjects.get(sessionId)
-    if (projectPath) await this.rememberPersistedRateLimits(projectPath, windows)
+    const providerId = piUsageProviderId(payload)
+    this.latestRateLimits.set(sessionId, { providerId, windows })
+    if (providerId) await this.rememberPersistedRateLimits(providerId, windows)
   }
 
   /** Load the persisted per-project windows map once per driver lifetime. */
@@ -2598,16 +2632,16 @@ export class PiDriver extends PersistentCliDriver {
     return map
   }
 
-  /** Store the latest windows for a project; writes are serialized and
+  /** Store the latest windows for a pi provider; writes are serialized and
    *  bounded so a long-lived driver never grows the file without bound. */
   private async rememberPersistedRateLimits(
-    projectPath: string,
+    providerId: string,
     windows: AgentRateLimitWindow[]
   ): Promise<void> {
     const map = await this.loadPersistedRateLimits()
-    map.delete(projectPath)
-    map.set(projectPath, windows)
-    while (map.size > PiDriver.USAGE_WINDOWS_MAX_PROJECTS) {
+    map.delete(providerId)
+    map.set(providerId, windows)
+    while (map.size > PiDriver.USAGE_WINDOWS_MAX_PROVIDERS) {
       const oldest = map.keys().next().value
       if (oldest === undefined) break
       map.delete(oldest)
@@ -2823,7 +2857,7 @@ export class PiDriver extends PersistentCliDriver {
         typeof stats?.['cost'] === 'number' ? (stats['cost'] as number) : mapPiCost(stats)
       const contextWindow = numberValue(contextUsage?.['contextWindow'])
       const contextUsed = numberValue(contextUsage?.['tokens'])
-      const rateLimits = this.latestRateLimits.get(session.id) ?? []
+      const rateLimits = this.latestRateLimits.get(session.id)?.windows ?? []
       if (
         tokens === undefined &&
         cost === undefined &&

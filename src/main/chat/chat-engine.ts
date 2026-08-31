@@ -3215,7 +3215,7 @@ export class ChatEngine {
         try {
           const { driver, projectPath } = await this.resolve(projectIdSafe, harnessId, threadId)
           const nativeTelemetry = driver.readAccountUsage
-            ? await driver.readAccountUsage(projectPath)
+            ? await driver.readAccountUsage(projectPath, thread.settings?.providerId)
             : null
           // OpenUsage is keyed by PROVIDER, not harness: resolve the provider
           // the harness session actually ran against (e.g. a pi thread pointed

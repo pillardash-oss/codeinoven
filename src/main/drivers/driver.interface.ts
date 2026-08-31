@@ -518,7 +518,7 @@ export interface HarnessDriver {
    * predate quota capture — can still show live quota. Returns null when the
    * harness cannot report quota without a turn.
    */
-  readAccountUsage?(projectPath: string): Promise<{
+  readAccountUsage?(projectPath: string, providerId?: string): Promise<{
     rateLimits: AgentRateLimitWindow[]
     credits?: AgentUsageCredits
     contextWindow?: number
