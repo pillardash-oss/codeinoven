@@ -54,9 +54,9 @@ import {
 import { isSvgAttachment, readSvgAttachmentText, formatSvgAsText } from './svg-attachment'
 import { isTextAttachment, readTextAttachment, formatTextAsText } from './text-attachment'
 import {
-  formatWordDocumentAsText,
-  isWordDocumentAttachment,
-  readWordDocumentText
+  formatDocumentAsText,
+  isDocumentAttachment,
+  readDocumentText
 } from './document-attachment'
 import { buildTitlePrompt, HEARTBEAT_PROMPT, sanitizeGeneratedTitle } from '../chat/title-generator'
 import { buildTurnGradePrompt, parseTurnGrade } from '../chat/turn-grader-prompt'
@@ -1619,10 +1619,10 @@ export class OpenCodeDriver implements HarnessDriver {
           continue
         }
       }
-      if (isWordDocumentAttachment(attachment)) {
-        const content = await readWordDocumentText(attachment)
+      if (isDocumentAttachment(attachment)) {
+        const content = await readDocumentText(attachment)
         if (content !== null) {
-          parts.push({ type: 'text', text: formatWordDocumentAsText(attachment, content) })
+          parts.push({ type: 'text', text: formatDocumentAsText(attachment, content) })
           continue
         }
       }
@@ -1709,10 +1709,10 @@ export class OpenCodeDriver implements HarnessDriver {
           continue
         }
       }
-      if (isWordDocumentAttachment(attachment)) {
-        const content = await readWordDocumentText(attachment)
+      if (isDocumentAttachment(attachment)) {
+        const content = await readDocumentText(attachment)
         if (content !== null) {
-          parts.push({ type: 'text', text: formatWordDocumentAsText(attachment, content) })
+          parts.push({ type: 'text', text: formatDocumentAsText(attachment, content) })
           continue
         }
       }
