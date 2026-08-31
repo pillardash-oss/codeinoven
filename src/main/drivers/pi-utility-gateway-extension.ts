@@ -70,6 +70,11 @@ function loadHandoff(): GatewayHandoff {
   // per turn, so mtime granularity is not needed — a fresh read per call keeps
   // turn rotation correct without caching stale tokens.
   const handoff = JSON.parse(readFileSync(HANDOFF_PATH, 'utf8')) as GatewayHandoff
+  // An empty handoff is the seed written before the first real endpoint publish;
+  // treat it exactly like a missing file so callGateway surfaces the friendly
+  // "gateway is not active" error instead of the opaque "Invalid URL" that
+  // constructing a URL from an empty base throws.
+  if (!handoff.url || !handoff.token) throw new Error('Gateway handoff is empty')
   cachedHandoff = { path: HANDOFF_PATH, handoff }
   return handoff
 }

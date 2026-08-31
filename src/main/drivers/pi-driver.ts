@@ -1287,6 +1287,14 @@ export class PiDriver extends PersistentCliDriver {
   private gatewayHandoffPaths = new Map<string, string>()
   /** Session-keyed absolute path to the materialized gateway extension module, passed to `--extension`. */
   private gatewayExtensionPaths = new Map<string, string>()
+  /**
+   * Session-keyed endpoints published before the gateway extension was materialized.
+   * On the first turn of a fresh session, publishUtilityGatewayEndpoint runs before
+   * sendPrompt spawns Pi and materializes the handoff file, so the endpoint must be
+   * held here and flushed by materializeGatewayExtension — otherwise every first
+   * cio_util_* call fails with `new URL(route, '')` → "Invalid URL".
+   */
+  private pendingGatewayEndpoints = new Map<string, { url: string; token: string }>()
   private sessionProjects = new Map<string, string>()
   private activeTurns = new Set<string>()
   /**
@@ -1908,7 +1916,14 @@ export class PiDriver extends PersistentCliDriver {
     const handoffPath = this.gatewayHandoffPaths.get(sessionId)
     if (!handoffPath) {
       if (endpoint !== null) {
-        Logger.dev('Pi utility gateway endpoint dropped: no extension materialized')
+        // First turn of a fresh session: the extension materializes only inside
+        // ensureRpcClient (during sendPrompt), which runs after this publish.
+        // Defer the endpoint instead of dropping it so the spawned session starts
+        // with a working gateway rather than the empty { url: '', token: '' } seed.
+        this.pendingGatewayEndpoints.set(sessionId, endpoint)
+        Logger.dev('Pi utility gateway endpoint deferred: extension not yet materialized')
+      } else {
+        this.pendingGatewayEndpoints.delete(sessionId)
       }
       return
     }
@@ -2024,6 +2039,7 @@ export class PiDriver extends PersistentCliDriver {
     }
     this.gatewayHandoffPaths.clear()
     this.gatewayExtensionPaths.clear()
+    this.pendingGatewayEndpoints.clear()
     const statusDirectory = this.statusExtensionDirectory
     this.statusExtensionPath = null
     this.statusExtensionDirectory = null
@@ -2514,8 +2530,12 @@ export class PiDriver extends PersistentCliDriver {
   /** Remove a session's gateway handoff file and forget its path. */
   private async removeGatewayHandoff(sessionId: string): Promise<void> {
     const handoffPath = this.gatewayHandoffPaths.get(sessionId)
-    if (!handoffPath) return
+    if (!handoffPath) {
+      this.pendingGatewayEndpoints.delete(sessionId)
+      return
+    }
     this.gatewayHandoffPaths.delete(sessionId)
+    this.pendingGatewayEndpoints.delete(sessionId)
     try {
       await this.storage.removeRaw(handoffPath)
     } catch (error) {
@@ -2934,6 +2954,13 @@ export class PiDriver extends PersistentCliDriver {
       this.gatewayHandoffPaths.set(sessionId, handoffRelative)
       const extensionAbsolute = this.storage.resolve(extensionRelative)
       this.gatewayExtensionPaths.set(sessionId, extensionAbsolute)
+      // Flush an endpoint that arrived before this materialization (first turn of
+      // a fresh session); the handoff file still holds the empty seed otherwise.
+      const pendingEndpoint = this.pendingGatewayEndpoints.get(sessionId)
+      if (pendingEndpoint) {
+        this.pendingGatewayEndpoints.delete(sessionId)
+        await this.storage.writeRaw(handoffRelative, JSON.stringify(pendingEndpoint))
+      }
       return extensionAbsolute
     } catch (error) {
       // A failed materialization must never block the turn; the prose curl
