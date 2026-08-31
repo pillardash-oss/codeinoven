@@ -9,7 +9,8 @@ import type {
   ProviderModel,
   SessionAgentEvent,
   ThinkingLevel,
-  ThinkingPreset
+  ThinkingPreset,
+  ThreadSettings
 } from '../../lib/types'
 import { buildProcessEnvironment } from './cli-environment'
 import { attachmentReferences } from './attachment-reference'
@@ -618,7 +619,7 @@ export class AntigravityDriver extends PersistentCliDriver {
     providerCatalog: true,
     sessionStatus: false,
     contextUsage: true,
-    compaction: false,
+    compaction: true,
     subagents: true,
     nativeUtilities: ['web_search', 'web_fetch']
   }
@@ -655,6 +656,40 @@ export class AntigravityDriver extends PersistentCliDriver {
       .map((modelId) => models.find((model) => model.id === modelId))
       .find((model) => model !== undefined)
     return cheapest ? [{ providerId: cheapest.providerId, modelId: cheapest.id }] : []
+  }
+
+  /**
+   * Compact a conversation by running agy's `/compact` slash command as a
+   * regular print-mode turn. Print mode expands slash commands unless
+   * `--disable-slash-commands` is passed, so the command executes against the
+   * resumed conversation and whatever agy streams back flows through the normal
+   * turn machinery. NOTE: verified against `agy --help` (the flag exists to
+   * disable expansion, so expansion is the default) but not yet exercised
+   * end-to-end — the account quota was exhausted at implementation time; if agy
+   * ever refuses the command headlessly the turn fails visibly and the session
+   * stays usable.
+   */
+  async compactSession(
+    projectPath: string,
+    sessionId: string,
+    settings: ThreadSettings
+  ): Promise<void> {
+    const session = await this.requireSession(projectPath, sessionId)
+    if (!session.nativeSessionId) {
+      throw new Error('No Antigravity conversation is available to compact yet')
+    }
+    this.emit({ type: 'session.status', sessionId, status: { state: 'working' } })
+    try {
+      await this.sendPrompt(projectPath, {
+        sessionId,
+        settings,
+        text: '/compact',
+        attachments: []
+      })
+    } catch (error) {
+      this.emit({ type: 'session.idle', sessionId })
+      throw error
+    }
   }
 
   async generateTitle(projectPath: string, options: GenerateTitleOptions): Promise<string | null> {
