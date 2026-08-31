@@ -16642,6 +16642,7 @@ export class ChatEngine {
       this.releasedProjects.delete(eventOwner.projectId)
       this.forwardBrainstormTrace(eventOwner, event)
       this.forwardInitialSpecTrace(eventOwner, event)
+      this.forwardAssignmentDraftTrace(eventOwner, event)
     }
     if (eventOwner && (event.type === 'message.completed' || event.type === 'usage.updated')) {
       const selection = this.sessionModelIds.get(event.sessionId)
@@ -17140,6 +17141,57 @@ export class ChatEngine {
         }
       })
     }
+  }
+
+  /** Bubble the active isolated Assignment draft up to its coordinator thread:
+   *  any offshoot session of the Sr. Engineer must stay visible there while it
+   *  works. Mirrors the specification-generation trace forwarding. */
+  private forwardAssignmentDraftTrace(owner: SessionInfo, event: AgentEvent): void {
+    if (!owner.ephemeral || !('sessionId' in event)) return
+    const key = `${owner.projectId}:${owner.threadId}`
+    const active = this.activeAssignmentDraftSessions.get(key)
+    if (!active || active.sessionId !== event.sessionId) return
+
+    if (event.type === 'session.idle' || event.type === 'session.error') {
+      this.broadcast({
+        type: 'assignment.trace',
+        sessionId: event.sessionId,
+        projectId: owner.projectId,
+        threadId: owner.threadId,
+        update: { type: 'completed' }
+      })
+      return
+    }
+
+    if (event.type === 'message.part.delta') {
+      this.broadcast({
+        type: 'assignment.trace',
+        sessionId: event.sessionId,
+        projectId: owner.projectId,
+        threadId: owner.threadId,
+        update: {
+          type: 'part.delta',
+          partId: `${event.sessionId}:${event.partId}`,
+          field: event.field,
+          delta: event.delta
+        }
+      })
+      return
+    }
+
+    if (event.type !== 'message.part.updated') return
+    const sourcePart = event.part
+    if (!['reasoning', 'tool', 'subagent', 'step-finish'].includes(sourcePart.type)) return
+    this.broadcast({
+      type: 'assignment.trace',
+      sessionId: event.sessionId,
+      projectId: owner.projectId,
+      threadId: owner.threadId,
+      update: {
+        type: 'part.updated',
+        part: { ...sourcePart, id: `${event.sessionId}:${sourcePart.id}` }
+      }
+    })
   }
 
   /** Expose genuine trace parts from the active isolated specification worker. */

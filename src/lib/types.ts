@@ -2545,6 +2545,9 @@ export type SpecGenerationTraceUpdate =
   | { type: 'part.delta'; partId: string; field: string; delta: string }
   | { type: 'completed' }
 
+/** Live trace of an isolated offshoot run (shares the spec trace shape). */
+export type AssignmentGenerationTraceUpdate = SpecGenerationTraceUpdate
+
 export type AgentEvent =
   | { type: 'message.part.updated'; sessionId: string; part: AgentPart }
   | {
@@ -2668,6 +2671,13 @@ export type AgentEvent =
       projectId: string
       threadId: string
       update: SpecGenerationTraceUpdate
+    }
+  | {
+      type: 'assignment.trace'
+      sessionId: string
+      projectId: string
+      threadId: string
+      update: AssignmentGenerationTraceUpdate
     }
   | {
       type: 'spec.ready'

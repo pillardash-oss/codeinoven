@@ -198,6 +198,7 @@
     BrainstormReviewChanges,
     BrainstormSectionId,
     SpecGenerationTraceUpdate,
+    AssignmentGenerationTraceUpdate,
     BrainstormWorkflowState,
     PrdContent,
     PrdDocument,
@@ -2122,6 +2123,9 @@
   let specGenerationTraceParts = $state<AgentPart[]>([])
   let specGenerationTraceActive = $state(false)
   let specGenerationTraceStartedAt = $state<number | undefined>()
+  let assignmentGenerationTraceParts = $state<AgentPart[]>([])
+  let assignmentGenerationTraceActive = $state(false)
+  let assignmentGenerationTraceStartedAt = $state<number | undefined>()
 
   function specTracePartStart(part: AgentPart): number | undefined {
     if (part.type === 'reasoning') return part.time?.start
@@ -2134,6 +2138,12 @@
     specGenerationTraceParts = []
     specGenerationTraceStartedAt = undefined
     specGenerationTraceActive = false
+  }
+
+  function clearAssignmentGenerationTrace(): void {
+    assignmentGenerationTraceParts = []
+    assignmentGenerationTraceStartedAt = undefined
+    assignmentGenerationTraceActive = false
   }
 
   function applySpecGenerationTrace(update: SpecGenerationTraceUpdate): void {
@@ -2166,6 +2176,44 @@
     }
     if (!specGenerationTraceActive || update.field !== 'text') return
     specGenerationTraceParts = specGenerationTraceParts.map((part) => {
+      if (part.id !== update.partId || part.type !== 'reasoning') return part
+      return { ...part, text: `${part.text}${update.delta}` }
+    })
+  }
+
+  /** Live trace of the isolated Assignment draft offshoot — mirrors the spec
+   *  generation trace so the coordinator thread always bubbles up offshoot
+   *  sessions while they work. */
+  function applyAssignmentGenerationTrace(update: AssignmentGenerationTraceUpdate): void {
+    if (update.type === 'started') {
+      assignmentGenerationTraceParts = []
+      assignmentGenerationTraceStartedAt = update.startedAt
+      assignmentGenerationTraceActive = true
+      return
+    }
+    if (update.type === 'completed') {
+      clearAssignmentGenerationTrace()
+      return
+    }
+    if (update.type === 'part.updated') {
+      if (!assignmentGenerationTraceActive) {
+        assignmentGenerationTraceParts = []
+        assignmentGenerationTraceStartedAt = specTracePartStart(update.part) ?? Date.now()
+        assignmentGenerationTraceActive = true
+      }
+      const partIndex = assignmentGenerationTraceParts.findIndex(
+        (candidate) => candidate.id === update.part.id
+      )
+      assignmentGenerationTraceParts =
+        partIndex === -1
+          ? [...assignmentGenerationTraceParts, update.part]
+          : assignmentGenerationTraceParts.map((candidate, index) =>
+              index === partIndex ? update.part : candidate
+            )
+      return
+    }
+    if (!assignmentGenerationTraceActive || update.field !== 'text') return
+    assignmentGenerationTraceParts = assignmentGenerationTraceParts.map((part) => {
       if (part.id !== update.partId || part.type !== 'reasoning') return part
       return { ...part, text: `${part.text}${update.delta}` }
     })
@@ -3901,6 +3949,15 @@
       return
     }
     if (
+      event.type === 'assignment.trace' &&
+      event.projectId === thread.projectId &&
+      event.threadId === thread.id
+    ) {
+      knownEphemeralSessionIds.add(event.sessionId)
+      applyAssignmentGenerationTrace(event.update)
+      return
+    }
+    if (
       event.type === 'brainstorm.trace' &&
       event.projectId === thread.projectId &&
       event.threadId === thread.id
@@ -3925,6 +3982,7 @@
       event.threadId === thread.id
     ) {
       if (event.type === 'spec.ready') clearSpecGenerationTrace()
+      clearAssignmentGenerationTrace()
       clearLocalTurn()
       agentRuns.setIdle(thread.projectId, thread.id)
       if (providerStatus?.state !== 'error') providerStatus = null
@@ -3937,6 +3995,7 @@
     if (event.type === 'thread.error') {
       if (event.projectId !== thread.projectId || event.threadId !== thread.id) return
       clearSpecGenerationTrace()
+      clearAssignmentGenerationTrace()
       restoredBusy = false
       clearLocalTurn()
       agentRuns.setIdle(thread.projectId, thread.id)
@@ -5356,6 +5415,7 @@
       agentRuns.setIdle(thread.projectId, thread.id)
       if (providerStatus?.state !== 'error') providerStatus = null
     }
+    if (assignment) clearAssignmentGenerationTrace()
     brainstormWorkflow = workflow
     brainstorm = activeBrainstorm
     prd = activePrd
@@ -10272,6 +10332,18 @@
               busy
               latest
               startTime={specGenerationTraceStartedAt}
+              projectId={thread.projectId}
+              threadId={thread.id}
+            />
+          {/if}
+
+          {#if assignmentGenerationTraceActive && assignmentGenerationTraceParts.length > 0}
+            <WorkingTrace
+              parts={assignmentGenerationTraceParts}
+              open
+              busy
+              latest
+              startTime={assignmentGenerationTraceStartedAt}
               projectId={thread.projectId}
               threadId={thread.id}
             />
