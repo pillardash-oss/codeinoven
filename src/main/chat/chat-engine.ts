@@ -17711,16 +17711,28 @@ export class ChatEngine {
     if (retryAt === undefined && driver.readAccountUsage) {
       // Some harnesses surface a usage reset without attaching it to the error
       // (e.g. Codex reports windows via account/rateLimits/read) — ask the
-      // driver for the farthest reset window as the retry time.
+      // driver for the reset window as the retry time. A harness can report
+      // several concurrent windows (e.g. Codex's 5-hour and weekly limits, one
+      // per model), so pick among the windows that actually caused this wait
+      // (fully used) rather than the farthest one overall — otherwise an
+      // unrelated model's fresh weekly/5-hour window can push the retry hours
+      // or days past the real reset the message reported.
       try {
         const telemetry = await driver.readAccountUsage(info.projectPath)
-        const resetsAt = telemetry?.rateLimits
+        const futureWindows = (telemetry?.rateLimits ?? []).filter(
+          (limit): limit is typeof limit & { resetsAt: number } =>
+            typeof limit.resetsAt === 'number' &&
+            Number.isFinite(limit.resetsAt) &&
+            limit.resetsAt > Date.now()
+        )
+        const exhaustedResets = futureWindows
+          .filter((limit) => (limit.usedPercent ?? 0) >= 100)
           .map((limit) => limit.resetsAt)
-          .filter(
-            (value): value is number =>
-              typeof value === 'number' && Number.isFinite(value) && value > Date.now()
-          )
-        if (resetsAt && resetsAt.length > 0) retryAt = Math.max(...resetsAt)
+        if (exhaustedResets.length > 0) {
+          retryAt = Math.min(...exhaustedResets)
+        } else if (futureWindows.length > 0) {
+          retryAt = Math.max(...futureWindows.map((limit) => limit.resetsAt))
+        }
       } catch (error) {
         Logger.dev('Auto-resume retry time derivation unavailable:', error)
       }

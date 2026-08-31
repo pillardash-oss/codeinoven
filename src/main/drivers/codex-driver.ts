@@ -1973,10 +1973,14 @@ function codexRetryIssue(
 }
 
 /** Parse the concrete reset time Codex embeds in its usage-limit message,
- *  e.g. "…or try again at Aug 20th, 2026 7:30 AM." */
+ *  e.g. "…or try again at Aug 20th, 2026 7:30 AM." Tolerates an optional
+ *  leading weekday ("…try again at Monday, Sep 7th, 2026 12:40 PM.") and
+ *  "a.m./p.m." with periods, since a stricter match here silently falls
+ *  through to a farther, unrelated reset window (see `scheduleAutomaticRetry`)
+ *  instead of trusting the date the provider itself reported. */
 function codexUsageLimitResetAt(message: string, now = Date.now()): number | undefined {
   const match = message.match(
-    /\btry again at\s+([a-z]+)\s+(\d{1,2})(?:st|nd|rd|th)?,\s*(\d{4})\s+(\d{1,2}):(\d{2})\s*(am|pm)\b/iu
+    /\btry again at\s+(?:[a-z]+,\s+)?([a-z]+)\s+(\d{1,2})(?:st|nd|rd|th)?,\s*(\d{4})\s+(\d{1,2})[:.](\d{2})\s*(a\.?m\.?|p\.?m\.?)\b/iu
   )
   if (!match) return undefined
   let month: number | undefined
@@ -1993,7 +1997,7 @@ function codexUsageLimitResetAt(message: string, now = Date.now()): number | und
   const hour12 = Number(match[4])
   const minute = Number(match[5])
   if (hour12 < 1 || hour12 > 12 || minute < 0 || minute > 59) return undefined
-  const hour = (hour12 % 12) + (match[6].toLowerCase() === 'pm' ? 12 : 0)
+  const hour = (hour12 % 12) + (match[6].toLowerCase().startsWith('p') ? 12 : 0)
   const reset = new Date(year, month, day, hour, minute, 0, 0)
   if (!Number.isFinite(reset.getTime()) || reset.getTime() <= now) return undefined
   return reset.getTime()
