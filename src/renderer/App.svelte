@@ -1672,6 +1672,7 @@
       <Workspace
         mode={lastContentView}
         active={activeView === 'projects' || activeView === 'chats' || activeView === 'threads'}
+        scopeViewActive={activeView === 'scope'}
         {navigate}
         {config}
         {updateConfig}
