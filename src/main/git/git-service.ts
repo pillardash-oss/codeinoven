@@ -11,6 +11,7 @@ import {
   unlink
 } from 'fs/promises'
 import { resolve, relative, isAbsolute, sep, dirname } from 'path'
+import { realpathSync } from 'fs'
 import { createHash } from 'node:crypto'
 import { simpleGit } from 'simple-git'
 import type { DefaultLogFields, LogOptions, SimpleGit, StatusResult } from 'simple-git'
@@ -1698,23 +1699,33 @@ export class GitService {
     }
   }
 
-  /** Map branch short names to the linked worktree paths that hold them. The entry for the
-   *  checkout being operated on (`directory`) is skipped: its branch is the panel's current
-   *  branch, not a foreign worktree. Falls back to skipping the primary (first) worktree when
-   *  the exact path does not match. */
+  /** Map branch short names to the worktree paths that hold them. The entry for the checkout
+   *  being operated on (`directory`) is skipped: its branch is the panel's current branch and
+   *  already carries `current`, so it must not be double-flagged as a foreign worktree. Every
+   *  other checkout — including the primary repository when viewed from a linked worktree —
+   *  flags its branch, because git refuses checking that branch out anywhere else. */
   private worktreeBranchPaths(raw: string, directory: string): Map<string, string> {
     const entries = parseWorktreePorcelain(raw).entries
     const paths = new Map<string, string>()
-    const normalizedDirectory = resolve(directory)
-    const primaryPath = entries[0]?.path ? resolve(entries[0].path) : null
+    const directoryKey = this.worktreePathKey(directory)
     for (const entry of entries) {
       if (!entry.head?.startsWith('refs/heads/')) continue
-      const entryPath = resolve(entry.path)
-      if (entryPath === normalizedDirectory) return paths
-      if (entryPath === primaryPath) continue
+      // Git reports realpaths; the operating directory may still contain symlinks, so both
+      // sides are normalized before comparing (lexical fallback for vanished worktrees).
+      if (this.worktreePathKey(entry.path) === directoryKey) continue
       paths.set(entry.head.slice('refs/heads/'.length), entry.path)
     }
     return paths
+  }
+
+  /** Stable comparison key for a worktree path: real location, or lexical resolution when the
+   *  path no longer exists on disk. */
+  private worktreePathKey(path: string): string {
+    try {
+      return realpathSync(path)
+    } catch {
+      return resolve(path)
+    }
   }
 
   private parseBranchRefs(
