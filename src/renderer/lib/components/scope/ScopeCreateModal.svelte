@@ -30,8 +30,8 @@
   let localBranches = $state.raw<GitBranchInfo[]>([])
   let branchesLoading = $state(true)
   let branchesError = $state<string | null>(null)
-  /** Local branches hidden from the source list because a worktree already holds them. */
-  let hiddenWorktreeBranches = $state(0)
+  /** Local branches whose options carry the [WrkT] worktree marker in the source dropdown. */
+  let worktreeSourceCount = $state(0)
   let sourceInfo = $state.raw<ScopeWorktreeSourceInfo | null>(null)
   let error = $state<string | null>(null)
   let busy = $state(false)
@@ -41,13 +41,12 @@
       const branches = (await invoke('git:branches', getProjectId())).filter(
         (branch) => branch.kind === 'local'
       )
-      // Git allows a branch in only one worktree, so branches already checked out in a
-      // linked worktree are not offered as worktree sources.
-      const available = branches.filter((branch) => branch.worktreePath === null)
-      hiddenWorktreeBranches = branches.length - available.length
-      localBranches = available
-      baseBranch = available.find((branch) => branch.current)?.name ?? available[0]?.name ?? ''
-      branchesError = available.length > 0 ? null : 'This repository has no local branches.'
+      // Forking a fresh cio/ branch from a worktree branch is git-legal, so every local
+      // branch is offered; worktree branches are marked with [WrkT] instead of hidden.
+      worktreeSourceCount = branches.filter((branch) => branch.worktreePath !== null).length
+      localBranches = branches
+      baseBranch = branches.find((branch) => branch.current)?.name ?? branches[0]?.name ?? ''
+      branchesError = branches.length > 0 ? null : 'This repository has no local branches.'
     } catch (cause) {
       localBranches = []
       baseBranch = ''
@@ -200,7 +199,9 @@
                 {:else}
                   {#each localBranches as branch (branch.ref)}
                     <option value={branch.name}>
-                      {branch.name}{branch.current ? ' (current)' : ''}
+                      {branch.name}{branch.current ? ' (current)' : ''}{branch.worktreePath
+                        ? ' [WrkT]'
+                        : ''}
                     </option>
                   {/each}
                 {/if}
@@ -217,11 +218,9 @@
             <p id={`${componentId}-base-branch-status`} class="mt-1 text-xs text-danger">
               {branchesError}
             </p>
-          {:else if hiddenWorktreeBranches > 0}
+          {:else if worktreeSourceCount > 0}
             <p id={`${componentId}-base-branch-status`} class="mt-1 text-xs text-muted">
-              {hiddenWorktreeBranches}
-              {hiddenWorktreeBranches === 1 ? 'branch is' : 'branches are'} already checked out in a worktree
-              and cannot be used as a source.
+              [WrkT] marks branches already checked out in a worktree.
             </p>
           {:else}
             <p id={`${componentId}-base-branch-status`} class="sr-only">
