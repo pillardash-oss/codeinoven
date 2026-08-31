@@ -185,23 +185,15 @@
           draggable="false"
         />
       {/if}
-      {#if bucket.root.kind === 'worktree'}
-        <span
-          class="flex shrink-0 items-center gap-1 rounded bg-warning/10 px-1 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-warning"
-          title="Managed Git worktree scope on {bucket.root.branch}"
-        >
-          <FolderTree size={9} />
-          Worktree
-        </span>
-      {/if}
       <h2 id="scope-bucket-{bucket.id}" class="truncate text-xs font-semibold text-foreground">
         {bucket.name}
       </h2>
       {#if bucket.root.kind === 'worktree'}
         <span
-          class="shrink-0 rounded border border-overlay bg-overlay px-1 py-0.5 font-mono text-[9px] leading-none text-muted"
+          class="flex shrink-0 items-center gap-1 rounded border border-overlay bg-overlay px-1 py-0.5 font-mono text-[9px] leading-none text-muted"
           title="Managed Git worktree scope on {bucket.root.branch}"
         >
+          <FolderTree size={9} class="text-warning" />
           {bucket.root.branch}
         </span>
       {/if}

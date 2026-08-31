@@ -192,14 +192,6 @@
   >
     <Ellipsis size={14} />
   </button>
-  {#if isManaged}
-    <span
-      class="pointer-events-none mr-0.5 inline-flex -space-x-1.5 items-center"
-      title="Managed Git worktree scope"
-    >
-      <GitBranch size={13} class="text-muted" />
-    </span>
-  {/if}
   {#if showMenu}
     <button
       class="fixed inset-0 z-40 cursor-default"
