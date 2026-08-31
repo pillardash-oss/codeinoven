@@ -1073,10 +1073,16 @@ export class CodexDriver extends PersistentCliDriver {
     const turn = recordValue(params['turn'])
     const status = stringValue(turn?.['status'])
     const error = recordValue(turn?.['error'])
+    // A prior `error` notification (e.g. a usage-limit hit with
+    // `willRetry: false`) already captured `active.failure`/`active.failureIssue`
+    // before the turn tore down. The app-server can report that teardown as a
+    // non-`'failed'` terminal status (e.g. `'interrupted'`) — falling through to
+    // `undefined` here would silently drop the captured failure and let the
+    // turn look like a clean success.
     const message =
       status === 'failed'
         ? (stringValue(error?.['message']) ?? active.failure ?? 'Codex turn failed')
-        : undefined
+        : active.failure
     const unsupportedSummary = [message, active.failure].some(
       (candidate) => candidate !== undefined && isUnsupportedReasoningSummary(candidate)
     )
@@ -1087,7 +1093,7 @@ export class CodexDriver extends PersistentCliDriver {
     const issue =
       status === 'failed'
         ? (codexUsageLimitIssue(error, message ?? '') ?? active.failureIssue)
-        : undefined
+        : active.failureIssue
     void this.completeAppServerTurn(active, message, issue)
   }
 

@@ -1195,6 +1195,14 @@ interface TurnStreamCacheEntry {
   folded: AgentPart[] | null
 }
 
+interface ActiveAssignmentDraftSession {
+  sessionId: string
+  driver: HarnessDriver
+  driverId: string
+  projectPath: string
+  isolated?: IsolatedHandle
+}
+
 interface ActiveInitialSpecSession {
   sessionId: string
   threadSessionId: string
@@ -1563,6 +1571,9 @@ export class ChatEngine {
   private static readonly MAX_ASSIGNMENT_CONTINUATION_STALLS = 2
   /** Concurrent late-Assignment requests for one coordinator share one model run. */
   private activeAssignmentDraftRuns = new Map<string, Promise<AssignmentPlan>>()
+  /** The killable driver session currently drafting an Assignment, so Stop/Esc can reach it. */
+  private activeAssignmentDraftSessions = new Map<string, ActiveAssignmentDraftSession>()
+  private userAbortedAssignmentDraftOperations = new Set<string>()
   private activeAchievementAuditorEnsures = new Map<string, Promise<Thread>>()
   private activeAchievementAuditRuns = new Map<
     string,
@@ -12214,7 +12225,7 @@ export class ChatEngine {
         projectId,
         threadId,
         projectPath,
-        'auto_review',
+        settings.permissionLevel,
         driverId,
         undefined,
         true
@@ -12253,10 +12264,7 @@ export class ChatEngine {
       try {
         const prompt: SendPromptOptions = {
           sessionId,
-          settings: {
-            ...settings,
-            permissionLevel: 'auto_review'
-          },
+          settings,
           text: [source, repairError ? this.specRepairInstruction(repairError) : '']
             .filter(Boolean)
             .join('\n\n'),
@@ -18395,7 +18403,14 @@ export class ChatEngine {
           return
         }
       }
-      if (missingFinalResponse && !failure && thread?.settings) {
+      // A live usage-reset wait (the harness's turn ended because the limit
+      // hit, not because it silently dropped output) already has a scheduled
+      // resume via `enterRetryWait`/`scheduleAutomaticRetry`. Auto-continuing
+      // here would race that scheduled retry and, once it also fails to
+      // resume immediately, fall into the catch below and flip the thread
+      // from the will-retry wait to a terminal error.
+      const resetWaitActiveForRecovery = !userAborted && this.isUsageResetWaitActive(sessionId)
+      if (missingFinalResponse && !failure && !resetWaitActiveForRecovery && thread?.settings) {
         this.incompleteTurnRecoveryAttempts.set(sessionId, 1)
         await this.finishCheckpoint(sessionId, info, 'failed', INCOMPLETE_TURN_MESSAGE)
         await this.cleanupTurnUtilities(sessionId)
@@ -18574,7 +18589,12 @@ export class ChatEngine {
       await this.threadManager.setStatus(info.projectId, info.threadId, finalStatus, {
         read: userAborted
       })
-      if (failure === INCOMPLETE_TURN_MESSAGE) {
+      // A live usage-reset wait already owns this turn's outcome (see
+      // `resetWaitActive` above). Broadcasting the generic "incomplete turn"
+      // failure here would overwrite the session's `waiting` status back to
+      // `error` and swap the will-retry card for a misleading error card,
+      // even though `finalStatus` correctly kept the thread `working-paused`.
+      if (failure === INCOMPLETE_TURN_MESSAGE && !resetWaitActive) {
         await this.broadcastThreadSessionError(
           info.projectId,
           info.threadId,
