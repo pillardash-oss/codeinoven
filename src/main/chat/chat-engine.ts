@@ -252,7 +252,11 @@ import {
 import { deriveTitleFromText } from './title-generator'
 import { createAutoTitleLauncher } from './title-generation-policy'
 import { artifactInstruction, GeneratedArtifactService } from './generated-artifact-service'
-import { classifyProviderIssue, isUsageResetWaitIssue } from '../../lib/provider-issue'
+import {
+  classifyProviderIssue,
+  isUsageResetWaitIssue,
+  parseUsageResetAt
+} from '../../lib/provider-issue'
 import { generateId } from '../../lib/utils'
 import {
   ensureFeatureSlug,
@@ -16852,6 +16856,11 @@ export class ChatEngine {
       }
       this.handleSessionIdleSignal(event.sessionId)
       if (resetWaitIdle) return
+      if (eventOwner) {
+        void this.detectTextualUsageLimitWait(driverId, event.sessionId, eventOwner).catch(
+          (error) => Logger.dev('Textual usage-limit detection failed:', error)
+        )
+      }
     }
     if (event.type === 'session.error') {
       // A deliberate user stop must never surface as a session error.
@@ -17855,6 +17864,46 @@ export class ChatEngine {
   private isUsageResetWaitActive(sessionId: string): boolean {
     const status = this.sessionStatuses.get(sessionId)
     return status?.state === 'waiting' && isUsageResetWaitIssue(status.issue)
+  }
+
+  /**
+   * Some harnesses (opencode observed in the wild) can report a usage-cap
+   * notice as ordinary completed assistant text instead of a structured
+   * session error, e.g. "5-hour usage limit reached. Resets in 1hr 53min."
+   * That text never reaches classifyProviderIssue through the session.error
+   * path, so the turn finishes as a plain idle completion and auto-resume
+   * never schedules — the thread just looks silently stuck. Catch it here by
+   * re-classifying the latest assistant message text right after idle.
+   */
+  private async detectTextualUsageLimitWait(
+    driverId: string,
+    sessionId: string,
+    info: SessionInfo
+  ): Promise<void> {
+    if (this.isUsageResetWaitActive(sessionId)) return
+    if (this.sessionStatuses.get(sessionId)?.state === 'error') return
+    const driver = this.drivers.get(driverId)
+    if (!driver) return
+    const messages = await driver.loadMessages(info.projectPath, sessionId)
+    const latest = messages.at(-1)
+    if (latest?.role !== 'assistant' || latest.error) return
+    const text = latest.parts
+      .filter((part) => part.type === 'text')
+      .map((part) => part.text)
+      .join('\n')
+      .trim()
+    if (!text) return
+    const kind = classifyProviderIssue(text)
+    if (!isUsageResetWaitIssue({ kind, retryable: true })) return
+    const retryAt = parseUsageResetAt(text)
+    const issue: AgentProviderIssue = {
+      kind,
+      message: text,
+      harnessId: driverId,
+      retryable: true,
+      ...(retryAt === undefined ? {} : { retryAt })
+    }
+    this.enterRetryWait(sessionId, issue, text)
   }
 
   /**

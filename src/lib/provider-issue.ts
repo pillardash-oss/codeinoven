@@ -58,11 +58,23 @@ export function extractProviderErrorEnvelope(raw: string): ProviderErrorEnvelope
  * transient errors and is meaningless against a multi-day quota reset.
  */
 export function parseUsageResetAt(message: string, now = Date.now()): number | undefined {
-  const match = /resets? at\s+(\d{4}-\d{2}-\d{2}T[\d:.]+Z)/iu.exec(message)
-  if (!match) return undefined
-  const resetMs = Date.parse(match[1] ?? '')
-  if (!Number.isFinite(resetMs) || resetMs <= now) return undefined
-  return resetMs
+  const absolute = /resets? at\s+(\d{4}-\d{2}-\d{2}T[\d:.]+Z)/iu.exec(message)
+  if (absolute) {
+    const resetMs = Date.parse(absolute[1] ?? '')
+    if (Number.isFinite(resetMs) && resetMs > now) return resetMs
+  }
+  // Some harnesses (e.g. opencode's usage-cap notice) report a relative
+  // countdown instead of an absolute timestamp, e.g. "Resets in 1hr 53min"
+  // or "Resets in 2h 5m". Convert that into an absolute retryAt too, or this
+  // class of message is left with no reset time and can't schedule a resume.
+  const relative = /resets?\s+in\s+(?:(\d+)\s*h(?:ou)?rs?)?\s*(?:(\d+)\s*m(?:in)?s?)?/iu.exec(message)
+  if (relative && (relative[1] || relative[2])) {
+    const hours = Number(relative[1] ?? 0)
+    const minutes = Number(relative[2] ?? 0)
+    const deltaMs = (hours * 60 + minutes) * 60_000
+    if (deltaMs > 0) return now + deltaMs
+  }
+  return undefined
 }
 
 /**
