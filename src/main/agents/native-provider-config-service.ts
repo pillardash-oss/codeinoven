@@ -51,6 +51,25 @@ export async function piNativeProviderIds(): Promise<Set<string>> {
   return new Set(Object.keys(providers))
 }
 
+/**
+ * Provider ids the user configured natively in opencode's
+ * `~/.config/opencode/opencode.json` (`provider` entries — explicit connect
+ * targets regardless of whether their entry carries an API key), minus ids the
+ * user disabled via `disabled_providers`. Returns `null` when the config exists
+ * but cannot be parsed — callers then keep their catalog unfiltered rather
+ * than wrongly hiding every provider behind a read failure.
+ */
+export async function opencodeNativeProviderIds(): Promise<Set<string> | null> {
+  try {
+    const config = await readJsoncObject(OPENCODE_CONFIG_PATH)
+    const providers = record(config['provider']) ?? {}
+    const disabled = new Set(stringArray(config['disabled_providers']))
+    return new Set(Object.keys(providers).filter((id) => !disabled.has(id)))
+  } catch {
+    return null
+  }
+}
+
 /** Reads and surgically edits harness-owned custom provider catalogs. */
 export class NativeProviderConfigService {
   async listProviders(): Promise<BaseUrlProvider[]> {
