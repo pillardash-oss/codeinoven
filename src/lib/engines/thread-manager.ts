@@ -676,14 +676,24 @@ export class ThreadManager {
   ): Promise<Thread> {
     const existing = this.requireOwnedThread(projectId, threadId)
 
+    // Moving a thread to a different scope counts as activity on it: the
+    // thread jumps to the top of the destination scope instead of arriving
+    // with a stale timestamp (which would also make it the immediate
+    // candidate for automatic eviction).
+    const movedScopes =
+      input.scopeBucketId !== undefined &&
+      input.scopeBucketId !== (existing.scopeBucketId ?? DEFAULT_SCOPE_BUCKET_ID)
+
     const updated: Thread = {
       ...existing,
+      lastActivity: movedScopes
+        ? Date.now()
+        : (input.lastActivity ?? existing.lastActivity),
       title: input.title ?? existing.title,
       titleSource: input.titleSource ?? existing.titleSource,
       providerId: input.providerId ?? existing.providerId,
       workingDirectory: input.workingDirectory ?? existing.workingDirectory,
       scopeBucketId: input.scopeBucketId ?? existing.scopeBucketId,
-      lastActivity: input.lastActivity ?? existing.lastActivity,
       read: input.read ?? existing.read,
       assignmentId: input.assignmentId ?? existing.assignmentId,
       assignmentRole: input.assignmentRole ?? existing.assignmentRole,
