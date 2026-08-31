@@ -2875,6 +2875,8 @@ export class ChatEngine {
     this.activeInitialSpecSessions.clear()
     this.userAbortedInitialSpecOperations.clear()
     this.activeAssignmentDraftRuns.clear()
+    this.activeAssignmentDraftSessions.clear()
+    this.userAbortedAssignmentDraftOperations.clear()
     this.activeAchievementAuditorEnsures.clear()
     this.activeAchievementAuditRuns.clear()
     this.unsupportedStructuredOutputModels.clear()
@@ -8931,6 +8933,28 @@ export class ChatEngine {
       clearNotificationAborting(projectId, threadId)
       return
     }
+    const activeAssignmentDraft = this.activeAssignmentDraftSessions.get(brainstormKey)
+    if (activeAssignmentDraft) {
+      markNotificationAborting(projectId, threadId)
+      this.userAbortedAssignmentDraftOperations.add(brainstormKey)
+      this.userAbortedSessions.add(activeAssignmentDraft.sessionId)
+      if (activeAssignmentDraft.isolated && activeAssignmentDraft.driver instanceof OpenCodeDriver) {
+        await activeAssignmentDraft.driver.abort(
+          activeAssignmentDraft.projectPath,
+          activeAssignmentDraft.sessionId,
+          activeAssignmentDraft.isolated
+        )
+      } else {
+        await activeAssignmentDraft.driver.abort(
+          activeAssignmentDraft.projectPath,
+          activeAssignmentDraft.sessionId
+        )
+      }
+      this.clearSessionWatchdog(activeAssignmentDraft.sessionId)
+      await this.threadManager.setStatus(projectId, threadId, 'interrupted', { read: true })
+      clearNotificationAborting(projectId, threadId)
+      return
+    }
     if (!thread?.sessionId) return
     // Suppress any stale notification the dying agent might emit during abort.
     markNotificationAborting(projectId, threadId)
@@ -12508,6 +12532,7 @@ export class ChatEngine {
       !isZenFreeModel &&
       !this.unsupportedStructuredOutputModels.has(structuredOutputKey)
     let lastError: Error | null = null
+    const draftKey = `${projectId}:${coordinatorThreadId}`
 
     for (const useStructuredOutput of structured ? [true, false] : [false]) {
       const isolated =
@@ -12530,6 +12555,13 @@ export class ChatEngine {
         undefined,
         true
       )
+      this.activeAssignmentDraftSessions.set(draftKey, {
+        sessionId,
+        driver,
+        driverId,
+        projectPath,
+        ...(isolated ? { isolated } : {})
+      })
       const completion = this.waitForSessionCompletion(sessionId, 180_000, 'Assignment generation')
       try {
         const request: SendPromptOptions = {
@@ -12579,6 +12611,7 @@ export class ChatEngine {
           await driver.abort(projectPath, sessionId).catch(() => undefined)
         }
         lastError = error instanceof Error ? error : new Error('Assignment generation failed.')
+        if (this.userAbortedAssignmentDraftOperations.delete(draftKey)) throw lastError
         if (useStructuredOutput) {
           this.unsupportedStructuredOutputModels.add(structuredOutputKey)
           Logger.info('Structured Assignment generation failed; using JSON-only output:', {
@@ -12594,6 +12627,9 @@ export class ChatEngine {
         this.reasoningTimes.delete(sessionId)
         this.toolTimes.delete(sessionId)
         if (isolated && driver instanceof OpenCodeDriver) driver.disposeIsolatedSession(isolated)
+        if (this.activeAssignmentDraftSessions.get(draftKey)?.sessionId === sessionId) {
+          this.activeAssignmentDraftSessions.delete(draftKey)
+        }
       }
     }
     throw lastError ?? new Error('Assignment generation failed.')

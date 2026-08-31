@@ -429,6 +429,13 @@
   // Intentional initial-value capture — view is remounted (keyed) per thread.
   // svelte-ignore state_referenced_locally
   let sessionId = $state(thread.sessionId ?? '')
+  // Ephemeral sessions this thread spawned (spec/brainstorm drafting) carry
+  // their own sessionId, distinct from the thread's main `sessionId` above.
+  // Track them so permission events raised on those sessions aren't silently
+  // dropped by the exact-match gate below — that used to require leaving and
+  // returning to the thread (forcing a remount) before the permission card
+  // would appear.
+  const knownEphemeralSessionIds = new Set<string>()
   // Intentional initial-value capture — the view is remounted (keyed) per thread.
   // For controller-driven conversations, the controller owns the settings proxy.
   // svelte-ignore state_referenced_locally
@@ -3740,6 +3747,7 @@
       event.projectId === thread.projectId &&
       event.threadId === thread.id
     ) {
+      knownEphemeralSessionIds.add(event.sessionId)
       applySpecGenerationTrace(event.update)
       return
     }
@@ -3748,6 +3756,7 @@
       event.projectId === thread.projectId &&
       event.threadId === thread.id
     ) {
+      knownEphemeralSessionIds.add(event.sessionId)
       if (event.update.type === 'refresh.failed') {
         errorMessage = event.update.error
       }
@@ -3936,7 +3945,7 @@
         break
       }
       case 'permission.asked': {
-        if (event.sessionId !== sessionId) return
+        if (event.sessionId !== sessionId && !knownEphemeralSessionIds.has(event.sessionId)) return
         pendingPermissions = [
           ...pendingPermissions.filter((request) => request.id !== event.permission.id),
           event.permission
@@ -3944,7 +3953,7 @@
         break
       }
       case 'permission.replied': {
-        if (event.sessionId !== sessionId) return
+        if (event.sessionId !== sessionId && !knownEphemeralSessionIds.has(event.sessionId)) return
         pendingPermissions = pendingPermissions.filter((request) => request.id !== event.requestId)
         break
       }
