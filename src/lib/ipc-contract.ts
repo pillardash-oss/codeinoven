@@ -1755,6 +1755,8 @@ export interface IpcInvokeContract {
     { board: ScopeBoard; bucket: ScopeBucket }
   >
   'scope:setArchive': Contract<[projectId: string, bucketId: string, archived: boolean], ScopeBoard>
+  /** Pin or unpin a scope; pinned scopes are exempt from thread eviction. */
+  'scope:setPinned': Contract<[projectId: string, bucketId: string, pinned: boolean], ScopeBoard>
   'scope:delete': Contract<[projectId: string, bucketId: string], ScopeBoard>
   /** Create an isolated managed worktree and attach it to a scope. */
   'scope:worktree:create': Contract<

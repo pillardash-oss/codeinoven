@@ -25,8 +25,10 @@ import {
 import {
   buildThreadSearchSql,
   mergeThreadSearchResults,
-  ThreadRepo
+  ThreadRepo,
+  type ThreadCapacityCandidate
 } from '../../main/database/repositories/thread-repo'
+import { ScopeManager } from './scope-manager'
 import type { Database } from '../../main/database/database'
 import {
   DEFAULT_SCOPE_BUCKET_ID,
@@ -72,6 +74,26 @@ function isProtectedFromAutomaticCleanup(thread: Pick<Thread, 'pinned' | 'status
   return thread.pinned || thread.status === 'spec'
 }
 
+/**
+ * Scope-bucket ids whose threads live outside the regular bucket. Reads the
+ * board lazily per use; the scope board is a single JSON row, so this is cheap.
+ */
+function pinnedScopeIdsFromBoard(board: import('../types').ScopeBoard): Set<string> {
+  const ids = new Set<string>()
+  for (const bucket of board.buckets) {
+    if (bucket.pinned === true) ids.add(bucket.id)
+  }
+  return ids
+}
+
+/** Threads in pinned scopes never count toward the project thread limit. */
+function isInPinnedScope(
+  candidate: Pick<ThreadCapacityCandidate, 'scopeBucketId'>,
+  pinnedScopes: Set<string>
+): boolean {
+  return pinnedScopes.has(candidate.scopeBucketId ?? DEFAULT_SCOPE_BUCKET_ID)
+}
+
 /** Deterministic view of a project's thread capacity for the UI. */
 export interface ThreadCapacity {
   limit: number
@@ -79,6 +101,8 @@ export interface ThreadCapacity {
   pinnedCount: number
   protectedCount: number
   deletableCount: number
+  /** Threads in pinned scopes, kept outside the regular bucket. */
+  pinnedScopeCount: number
 }
 
 /** Paging/visibility controls for thread listings. */
@@ -253,7 +277,11 @@ export class ThreadManager {
     this.agentMessageRepo = new AgentMessageRepo(db)
     this.harnessUsageRepo = new HarnessUsageRepo(db)
     this.engineeringLifecycleEngine = new EngineeringLifecycleEngine(db)
+    this.scopeManager = new ScopeManager(db)
   }
+
+  /** Reads scope boards to keep pinned scopes outside the thread bucket. */
+  private readonly scopeManager: ScopeManager
 
   /**
    * Set by the ChatEngine so deleting a thread makes its durable feedback rows
@@ -261,6 +289,7 @@ export class ThreadManager {
    */
   onTurnFeedbackDeleted?: (projectId: string, threadIds: string[]) => void
 
+  /** Distinct harness ids used across a thread's session, newest first. */
   /** Distinct harness ids used across a thread's session, newest first. */
   usedHarnessIds(threadId: string): string[] {
     return this.harnessUsageRepo.harnessIdsFor(threadId)
@@ -364,13 +393,26 @@ export class ThreadManager {
       if (!project) {
         throw new Error(`Project not found: ${input.projectId}`)
       }
+      const pinnedScopes = pinnedScopeIdsFromBoard(this.scopeManager.getBoard(input.projectId))
+      const newThreadInPinnedScope = pinnedScopes.has(input.scopeBucketId ?? DEFAULT_SCOPE_BUCKET_ID)
       const active = await this.threadRepo.listCapacityCandidatesViaWorker(input.projectId)
+      // Threads in pinned scopes sit outside the regular bucket: they neither
+      // fill it nor are they eligible for automatic eviction.
+      const regularCount = active.filter((candidate) => !isInPinnedScope(candidate, pinnedScopes))
+        .length
       let toEvictId: string | undefined
-      if (!creatingOrchestrationChild && active.length >= project.threadLimit) {
-        const toEvict = active.find((candidate) => !isProtectedFromAutomaticCleanup(candidate))
+      if (
+        !creatingOrchestrationChild &&
+        !newThreadInPinnedScope &&
+        regularCount >= project.threadLimit
+      ) {
+        const toEvict = active.find(
+          (candidate) =>
+            !isInPinnedScope(candidate, pinnedScopes) && !isProtectedFromAutomaticCleanup(candidate)
+        )
         toEvictId = toEvict?.id
         if (!toEvictId) {
-          throw new AllThreadsProtectedError(input.projectId, project.threadLimit, active.length)
+          throw new AllThreadsProtectedError(input.projectId, project.threadLimit, regularCount)
         }
       }
 
@@ -1184,12 +1226,19 @@ export class ThreadManager {
     const threads = this.threadRepo.listByProject(projectId)
     const logicalThreads = threads.filter((thread) => !isOrchestrationChildThread(thread))
     const active = logicalThreads.filter((thread) => !thread.archived)
+    const pinnedScopes = pinnedScopeIdsFromBoard(this.scopeManager.getBoard(projectId))
+    // Pinned-scope threads live outside the regular bucket and are reported
+    // separately so the UI can explain the capacity numbers.
+    const regular = active.filter(
+      (thread) => !isInPinnedScope({ scopeBucketId: thread.scopeBucketId }, pinnedScopes)
+    )
     return {
       limit: project.threadLimit,
-      activeCount: active.length,
-      pinnedCount: active.filter((t) => t.pinned).length,
-      protectedCount: active.filter((t) => isProtectedFromAutomaticCleanup(t)).length,
-      deletableCount: active.filter((t) => !isProtectedFromAutomaticCleanup(t)).length
+      activeCount: regular.length,
+      pinnedCount: regular.filter((t) => t.pinned).length,
+      protectedCount: regular.filter((t) => isProtectedFromAutomaticCleanup(t)).length,
+      deletableCount: regular.filter((t) => !isProtectedFromAutomaticCleanup(t)).length,
+      pinnedScopeCount: active.length - regular.length
     }
   }
 

@@ -55,6 +55,7 @@ interface RawBucketLike {
   collapsedSlices?: unknown
   root?: unknown
   archivedAt?: unknown
+  pinned?: unknown
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -122,6 +123,7 @@ function parseBucket(raw: RawBucketLike): ScopeBucket {
   if (typeof raw.color === 'string') bucket.color = raw.color
   if (typeof raw.iconType === 'string') bucket.iconType = raw.iconType
   if (typeof raw.archivedAt === 'number') bucket.archivedAt = raw.archivedAt
+  if (raw.pinned === true) bucket.pinned = true
   return bucket
 }
 
@@ -409,6 +411,31 @@ export class ScopeManager {
         const next: ScopeBucket = { ...candidate }
         if (archived) next.archivedAt = Date.now()
         else delete next.archivedAt
+        return next
+      })
+    }
+    this.persist(projectId, updated)
+    return updated
+  }
+
+  /**
+   * Pin or unpin a scope. Pinned scopes are exempt from automatic thread
+   * eviction and their threads do not count toward the project thread limit.
+   * The Default scope is the bucket itself, so pinning it is refused.
+   */
+  setPinned(projectId: string, bucketId: string, pinned: boolean): ScopeBoard {
+    if (bucketId === DEFAULT_SCOPE_BUCKET_ID) {
+      throw new ScopeManagerError('The Default scope cannot be pinned')
+    }
+    const board = this.loadMutable(projectId)
+    this.requireBucket(board, bucketId)
+    const updated: ScopeBoard = {
+      ...board,
+      buckets: board.buckets.map((candidate) => {
+        if (candidate.id !== bucketId) return candidate
+        const next: ScopeBucket = { ...candidate }
+        if (pinned) next.pinned = true
+        else delete next.pinned
         return next
       })
     }

@@ -746,6 +746,9 @@
                 draggable="false"
               />
             {/if}
+            {#if scopeBucket.pinned}
+              <Pin size={8} class="shrink-0 text-accent" aria-hidden="true" />
+            {/if}
             <span class="truncate">{scopeBucket.name}</span>
           </span>
         {/if}
@@ -984,6 +987,9 @@
                 class="h-2 w-2 shrink-0 object-contain opacity-45 grayscale"
                 draggable="false"
               />
+            {/if}
+            {#if scopeBucket.pinned}
+              <Pin size={8} class="shrink-0 text-accent" aria-hidden="true" />
             {/if}
             <span class="truncate">{scopeBucket.name}</span>
           </span>

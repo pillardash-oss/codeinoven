@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { Pin } from '@lucide/svelte'
   import { getIconSvgDataUrl, generateInitialsIconSvg } from '$lib/project-svg-icons'
   import { pickColorForSeed } from '$lib/project-colors'
   import type { ScopeBucket } from '$shared/types'
@@ -36,6 +37,16 @@
       class="shrink-0 object-contain {size === 'xs' ? 'h-3 w-3' : 'h-3.5 w-3.5'}"
       draggable="false"
     />
+  {/if}
+  {#if bucket.pinned}
+    <span
+      class="shrink-0 text-accent"
+      role="img"
+      aria-label="Pinned scope: threads never auto-clean and do not count toward the thread limit"
+      title="Pinned scope: threads never auto-clean and do not count toward the thread limit"
+    >
+      <Pin size={size === 'xs' ? 9 : 11} />
+    </span>
   {/if}
   {bucket.name}
 </code>

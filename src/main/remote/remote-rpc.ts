@@ -858,6 +858,12 @@ export class RemoteRpcDispatcher {
           this.string(args[1]),
           this.boolean(args[2])
         )
+      case 'scope:setPinned':
+        return this.scopeManager.setPinned(
+          this.string(args[0]),
+          this.string(args[1]),
+          this.boolean(args[2])
+        )
       case 'scope:delete':
         return this.scopeManager.deleteBucket(this.string(args[0]), this.string(args[1]))
       case 'scope:setWorktreeDefaults':

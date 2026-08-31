@@ -313,6 +313,19 @@
     }
   }
 
+  async function togglePinned(bucket: ScopeBucket): Promise<void> {
+    if (!scopeState.activeProjectId) return
+    try {
+      await scopeState.setPinned(
+        scopeState.activeProjectId,
+        bucket.id,
+        bucket.pinned !== true
+      )
+    } catch (error) {
+      actionError = errorMessage(error, 'The scope could not be pinned.')
+    }
+  }
+
   async function retrySetup(bucket: ScopeBucket): Promise<void> {
     if (!scopeState.activeProjectId || bucket.root.kind !== 'worktree') return
     try {
@@ -431,6 +444,7 @@
               onToggleSlice={(stage) => toggleSlice(bucket.id, stage)}
               onEditBucket={() => askEditBucket(bucket)}
               onDeleteBucket={() => (deleteBucketTarget = bucket)}
+              onTogglePinned={() => void togglePinned(bucket)}
               onArchive={() => void toggleArchive(bucket, true)}
               onRestore={() => void toggleArchive(bucket, false)}
               onCreateWorktree={() => (createWorktreeTarget = bucket)}

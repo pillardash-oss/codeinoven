@@ -358,6 +358,7 @@ const INVOKE_CHANNELS = [
   'scope:updateCollapse',
   'scope:create',
   'scope:setArchive',
+  'scope:setPinned',
   'scope:delete',
   'scope:worktree:create',
   'scope:worktree:sourceInfo',

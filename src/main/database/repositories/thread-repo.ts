@@ -233,6 +233,8 @@ export interface ThreadCapacityCandidate {
   pinned: boolean
   status: ThreadStatus
   lastActivity: number
+  /** Owning scope bucket; `undefined` resolves to the Default scope. */
+  scopeBucketId?: string
 }
 
 function buildOrderBy(options: ThreadListOptions): string {
@@ -516,7 +518,7 @@ export class ThreadRepo {
    */
   async listCapacityCandidatesViaWorker(projectId: string): Promise<ThreadCapacityCandidate[]> {
     const result = await this.db.queryViaWorker(
-      `SELECT id, pinned, status, last_activity
+      `SELECT id, pinned, status, last_activity, scope_bucket_id
        FROM threads
        WHERE project_id = ?
          AND archived = 0
@@ -532,7 +534,8 @@ export class ThreadRepo {
       id: String(row['id']),
       pinned: row['pinned'] === 1,
       status: String(row['status']) as ThreadStatus,
-      lastActivity: Number(row['last_activity'])
+      lastActivity: Number(row['last_activity']),
+      scopeBucketId: row['scope_bucket_id'] == null ? undefined : String(row['scope_bucket_id'])
     }))
   }
 

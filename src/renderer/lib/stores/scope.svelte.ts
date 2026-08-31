@@ -854,6 +854,14 @@ class ScopeState {
     if (projectId === this.activeProjectId) this.board = cloned
   }
 
+  /** Pin or unpin a scope. Pinned scopes are exempt from thread eviction. */
+  async setPinned(projectId: string, bucketId: string, pinned: boolean): Promise<void> {
+    const board = await invoke('scope:setPinned', projectId, bucketId, pinned)
+    const cloned = cloneBoard(board)
+    this.boards.set(projectId, cloned)
+    if (projectId === this.activeProjectId) this.board = cloned
+  }
+
   /** Persistent project-level managed-worktree defaults. */
   async setWorktreeDefaults(projectId: string, defaults: ScopeWorktreeDefaults): Promise<void> {
     const board = await invoke('scope:setWorktreeDefaults', projectId, defaults)

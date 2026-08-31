@@ -85,6 +85,12 @@ export interface ScopeBucket {
   root: ScopeRootDescriptor
   /** Present when the scope is archived; archival never mutates Git state. */
   archivedAt?: number
+  /**
+   * Pinned scopes sit outside the regular thread bucket: their threads are
+   * never evicted by automatic cleanup and never count toward the project's
+   * thread limit. Display-only flag; the Default scope can never be pinned.
+   */
+  pinned?: boolean
 }
 
 /** Identifies the project + scope pair every scope-aware operation targets. */

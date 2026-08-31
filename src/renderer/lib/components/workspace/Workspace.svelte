@@ -3226,6 +3226,9 @@
                           draggable="false"
                         />
                       {/if}
+                      {#if bucket.pinned}
+                        <Pin size={10} class="shrink-0 text-accent" aria-hidden="true" />
+                      {/if}
                       <span class="truncate">{bucket.name}</span>
                     </button>
                     <div class="opacity-0 transition-opacity group-hover:opacity-100">
