@@ -1,5 +1,6 @@
 import { invoke } from '$lib/ipc.svelte'
 import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
+import { isWorkspaceCovered } from '$lib/stores/page-surface.svelte'
 import { mobileState } from '$lib/remote/mobile-state.svelte'
 import { workspaceState } from '$lib/stores/workspace.svelte'
 import { reportErrorWithDetails } from '$lib/stores/app-errors.svelte'
@@ -287,6 +288,10 @@ class SpeechController {
   private escapeStopsRecording(): boolean {
     const active = this.active
     if (!active) return false
+    // A full-page surface (a Settings page or the Scope view) covers the
+    // workspace shell, so the user is not viewing the recording surface —
+    // Escape there closes the page on top and must never kill a recording.
+    if (isWorkspaceCovered()) return false
     const scope = active.scope
     if (scope.kind === 'global' || scope.threadId === undefined) return true
     // Temporary side chats render a synthetic thread that is never the
