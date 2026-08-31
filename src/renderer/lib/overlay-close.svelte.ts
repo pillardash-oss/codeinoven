@@ -79,3 +79,16 @@ export function closeTopVisibleDialog(): boolean {
   )
   return true
 }
+
+/**
+ * True while any overlay that owns Escape is open: a registered reusable
+ * overlay (Modal / DockableModal / SideSheet / BottomSheet) or a visible
+ * aria-modal dialog (bits-ui palettes and dialogs). Safe to call from a late
+ * keydown listener during the very keydown that closes the overlay: Svelte
+ * flushes the unmount/unregistration in a microtask after the event finishes
+ * dispatching, so the overlay is still registered and mounted for the whole
+ * duration of that event.
+ */
+export function isOverlayOpen(): boolean {
+  return closeHandlers.length > 0 || findTopVisibleDialog() !== null
+}

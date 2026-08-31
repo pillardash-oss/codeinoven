@@ -35,7 +35,7 @@
   import { DEFAULT_HARNESS } from '$shared/harness-default'
   import { STANDARD_THINKING_PRESETS, resolveDefaultThinkingLevel } from '$shared/thinking-presets'
   import { invoke } from '$lib/ipc.svelte'
-  import { isWorkspaceCovered } from '$lib/stores/page-surface.svelte'
+  import { isEscapeClaimed } from '$lib/stores/page-surface.svelte'
   import { modelKey } from '$lib/model-keys'
   import ProjectSwitch from '$lib/components/shared/ProjectSwitch.svelte'
   import ProjectIdentity from '$lib/components/shared/ProjectIdentity.svelte'
@@ -1622,12 +1622,12 @@
   }
 
   function onWindowKeydown(e: KeyboardEvent): void {
-    // A full-page surface (Settings page / Scope view) covers the workspace
-    // shell, so this composer is hidden and the page on top owns Escape.
-    // Reacting here would arm the "Stop?" confirmation invisibly, making the
-    // user's next Escape on the thread abort the run without them ever seeing
-    // the armed state.
-    if (isWorkspaceCovered()) return
+    // While a surface above this composer owns Escape — a Settings/Scope page
+    // covering the shell, an open modal or palette (spotlight) — or the event
+    // was already consumed by such an overlay, stay inert. Reacting here would
+    // arm the "Stop?" confirmation invisibly, making the user's next Escape on
+    // the thread abort the run without them ever seeing the armed state.
+    if (isEscapeClaimed(e)) return
     if (mentionOpen) {
       if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
         e.preventDefault()
