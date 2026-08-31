@@ -713,9 +713,7 @@
 
   function openNewTerminal(): string | null {
     if (!selectedThread) return null
-    const id = contextSidebarState.openNewTerminal(selectedThread.projectId, selectedThread.id)
-    if (id) terminalFullscreenTabId = id
-    return id
+    return contextSidebarState.openNewTerminal(selectedThread.projectId, selectedThread.id)
   }
 
   function openNewBrowser(): string | null {
