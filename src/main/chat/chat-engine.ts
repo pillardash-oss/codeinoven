@@ -18457,7 +18457,14 @@ export class ChatEngine {
         : await this.readPendingSpecRevision(info.projectId, info.threadId)
       const hasPendingRevision =
         this.pendingSpecRevisions.has(sessionId) || persistedRevision?.sessionId === sessionId
+      // Claim the pending entry up front: a duplicate idle finalization for the
+      // same turn (double `session.idle`/`session.status` delivery after a late
+      // part event cleared the idle guard) must not call reviewBrainstorm a
+      // second time while the first refresh still holds the brainstorm lock —
+      // that race surfaced as a misleading "already updating this Brainstorm"
+      // toast even though the first refresh completed fine.
       const pendingBrainstormTurn = this.pendingBrainstormTurns.get(sessionId)
+      if (pendingBrainstormTurn) this.pendingBrainstormTurns.delete(sessionId)
       if (failure && hasPendingRevision) {
         this.pendingSpecRevisions.delete(sessionId)
         await this.clearPendingSpecRevision(info.projectId, info.threadId)
@@ -18507,11 +18514,9 @@ export class ChatEngine {
                   info.threadId,
                   pendingBrainstormTurn.note
                 )
-          this.pendingBrainstormTurns.delete(sessionId)
         } catch (error) {
           auxiliaryFailure =
             error instanceof Error ? error.message : 'The Brainstorm revision failed.'
-          this.pendingBrainstormTurns.delete(sessionId)
           Logger.error('Brainstorm update failed after a completed turn', {
             projectId: info.projectId,
             threadId: info.threadId,
@@ -20057,8 +20062,8 @@ export class ChatEngine {
     info: SessionInfo
   ): Promise<AgentProviderIssue | null> {
     const harnessId = info.driverId
+    const driver = this.drivers.get(harnessId)
     try {
-      const driver = this.drivers.get(harnessId)
       if (driver) {
         const messages = await driver.loadMessages(info.projectPath, sessionId)
         const latest = messages.at(-1)
@@ -20076,7 +20081,52 @@ export class ChatEngine {
     } catch {
       /* A failed health read is not proof that the active turn failed. */
     }
+
+    // The persisted transcript only ever carries an error the provider itself
+    // reported. A wedged RPC transport (the driver process alive but no
+    // longer answering, e.g. pi's known RPC-wedge failure mode) never writes
+    // anything — it just stops emitting events forever, and the check above
+    // can never see it. For drivers that can report live process state,
+    // actively probe the connection instead of extending the silence window
+    // indefinitely on faith.
+    if (driver?.isSessionBusy) {
+      const probe = await this.probeSessionLiveness(driver, info)
+      if (probe === 'busy') return null
+      const message =
+        probe === 'wedged'
+          ? `The ${harnessId} session stopped responding (its connection appears wedged).`
+          : `The ${harnessId} session went idle without completing the turn.`
+      return {
+        kind: 'network',
+        message,
+        harnessId,
+        retryable: true
+      }
+    }
     return null
+  }
+
+  /**
+   * Ask the driver's live process whether it is still actually streaming.
+   * Bounded independently of the driver's own RPC timeout so a wedged
+   * connection surfaces to the user in seconds, not minutes.
+   */
+  private async probeSessionLiveness(
+    driver: AgentDriver,
+    info: SessionInfo
+  ): Promise<'busy' | 'idle' | 'wedged'> {
+    const PROBE_TIMEOUT_MS = 15_000
+    try {
+      const busy = await Promise.race([
+        driver.isSessionBusy!(info.projectPath, info.sessionId ?? ''),
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error('liveness probe timed out')), PROBE_TIMEOUT_MS)
+        )
+      ])
+      return busy ? 'busy' : 'idle'
+    } catch {
+      return 'wedged'
+    }
   }
 
   // ─── Completion waiter — used by ephemeral sessions ─────────────────────
