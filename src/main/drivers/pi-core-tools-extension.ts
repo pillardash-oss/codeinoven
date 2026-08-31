@@ -54,7 +54,6 @@
 
 export const CIO_PERMISSION_MARKER = 'cio-permission:'
 export const CIO_SUBAGENT_MARKER = 'cio-subagent:'
-export const CIO_QUESTION_BATCH_MARKER = 'cio-question-batch:'
 export const CIO_QUESTION_MARKER = 'cio-question:'
 
 /** Tool names registered by the core-tools extension (exported for tests). */
@@ -81,7 +80,6 @@ import {
 import { Type } from 'typebox'
 
 const CIO_PERMISSION_MARKER = 'cio-permission:'
-const CIO_QUESTION_BATCH_MARKER = 'cio-question-batch:'
 const CIO_QUESTION_MARKER = 'cio-question:'
 const CIO_SYSTEM_PROMPT_PATH = '__CIO_SYSTEM_PROMPT_PATH__'
 
@@ -295,22 +293,10 @@ function textResult(value) {
   }
 }
 
-/**
- * Dialog title for one question: the question text, prefixed with a
- * structured payload whenever the question carries card fields (scope
- * header, description, predefined options, multi-select) so the driver can
- * render them as separate card fields instead of a plain free-text ask.
- */
-function questionDialogTitle(question) {
-  const meta = {}
-  if (question.header) meta.header = question.header
-  if (question.description) meta.description = question.description
-  if (Array.isArray(question.options) && question.options.length > 0) {
-    meta.options = question.options
-  }
-  if (question.multiple === true) meta.multiple = true
-  if (Object.keys(meta).length === 0) return question.question
-  return CIO_QUESTION_MARKER + JSON.stringify({ ...meta, prompt: question.question })
+/** Pi's RPC UI has no structured question method, so one tagged envelope
+ * carries the native question contract through its existing dialog channel. */
+function questionDialogTitle(questions) {
+  return CIO_QUESTION_MARKER + JSON.stringify({ questions })
 }
 
 export default function codeInOvenCoreToolsExtension(pi) {
@@ -318,62 +304,55 @@ export default function codeInOvenCoreToolsExtension(pi) {
     name: 'cio_ask_user',
     label: 'Ask the user a question',
     description:
-      'Ask the user one or more structured questions and wait for their answers. Each question may offer predefined answer options or free text. Use this whenever a decision, preference, or clarification is needed before continuing.',
-    promptSnippet: 'Ask the user structured questions (options or free text) and wait for answers',
+      'Ask the user one to three structured questions and wait for their answers. Each question offers two or three described choices plus a custom answer. Use this whenever a decision, preference, or clarification is needed before continuing.',
+    promptSnippet: 'Ask structured questions with described choices and wait for answers',
     promptGuidelines: [
       'Use cio_ask_user when a decision, preference, or clarification from the user is needed before continuing.',
-      'Provide short option labels with a separate question field; keep each question self-contained.',
-      'Write option labels as plain text only — never prefix them with colons, quotes, bullets, or other markers.'
+      'Ask one to three short questions at a time. Put the recommended option first and add (Recommended) to its label.',
+      'Keep option labels short. Put context and tradeoffs in each option description, not in the question text.',
+      'Custom answers are always available; do not add an Other option.'
     ],
     parameters: Type.Object({
       questions: Type.Array(
         Type.Object({
           question: Type.String({ description: 'The question text.' }),
-          header: Type.Optional(Type.String({ description: 'Very short label (max 30 chars).' })),
-          description: Type.Optional(Type.String({ description: 'Optional background context.' })),
-          options: Type.Optional(
-            Type.Array(Type.String(), { description: 'Predefined answer options.' })
+          header: Type.String({
+            description: 'Short header label (12 or fewer characters).',
+            maxLength: 12
+          }),
+          options: Type.Array(
+            Type.Object({
+              label: Type.String({ description: 'Short option label (1-5 words).' }),
+              description: Type.String({
+                description: 'One short sentence explaining the impact or tradeoff.'
+              })
+            }),
+            {
+              description: 'Two or three choices.',
+              minItems: 2,
+              maxItems: 3
+            }
           ),
           multiple: Type.Optional(
-            Type.Boolean({ description: 'Allow multiple options to be selected.' })
+            Type.Boolean({ description: 'Allow more than one option to be selected.' })
           )
         }),
-        { description: 'Questions to ask, in order.', minItems: 1 }
+        { description: 'Questions to ask, in order.', minItems: 1, maxItems: 3 }
       )
     }),
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-      // Encode the ENTIRE batch into one dialog so the driver registers ONE
-      // multi-question pending request and the renderer shows one paginated
-      // card (1/N, 2/N, …) instead of one card per question.
-      const title =
-        params.questions.length === 1
-          ? questionDialogTitle(params.questions[0])
-          : CIO_QUESTION_BATCH_MARKER + JSON.stringify({ questions: params.questions })
+      const title = questionDialogTitle(params.questions)
       const value =
-        params.questions.length === 1 && Array.isArray(params.questions[0].options) && params.questions[0].options.length > 0
-          ? await ctx.ui.select(title, params.questions[0].options)
+        params.questions.length === 1
+          ? await ctx.ui.select(
+              title,
+              params.questions[0].options.map((option) => option.label)
+            )
           : await ctx.ui.input(
               title,
-              params.questions.length === 1
-                ? 'Type your answer'
-                : 'Answer the questions in the card above, then submit.'
+              'Answer the questions in the card above, then submit.'
             )
       const answers = []
-      if (params.questions.length === 1) {
-        const question = params.questions[0]
-        if (value === undefined) {
-          answers.push({ question: question.question, dismissed: true, answer: [] })
-        } else {
-          const parts = value
-            .split(question.multiple ? /[,\\n]/u : /\\n/u)
-            .map((part) => part.trim())
-            .filter(Boolean)
-          answers.push({ question: question.question, dismissed: false, answer: parts })
-        }
-        return textResult({ answers })
-      }
-      // Batch mode: the driver resolves the dialog with the full answers
-      // array (one answer array per batched question, in order).
       let parsed
       try {
         parsed = value === undefined ? null : (JSON.parse(value) as unknown)
@@ -381,7 +360,9 @@ export default function codeInOvenCoreToolsExtension(pi) {
         parsed = null
       }
       if (!Array.isArray(parsed)) {
-        answers.push({ question: 'Batch answers', dismissed: true, answer: [] })
+        params.questions.forEach((question) => {
+          answers.push({ question: question.question, dismissed: true, answer: [] })
+        })
         return textResult({ answers })
       }
       params.questions.forEach((question, index) => {

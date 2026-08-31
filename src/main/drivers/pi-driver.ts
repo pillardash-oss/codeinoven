@@ -54,7 +54,6 @@ import { piMcpExtension } from './pi-mcp-extension'
 import { piCustomProvidersExtension } from './pi-providers-extension'
 import {
   CIO_PERMISSION_MARKER,
-  CIO_QUESTION_BATCH_MARKER,
   CIO_QUESTION_MARKER,
   CIO_SUBAGENT_MARKER,
   piCoreToolsExtension
@@ -2344,18 +2343,23 @@ export class PiDriver extends PersistentCliDriver {
       })
       return
     }
-    // The core-tools question tool marks its dialogs so the scope header,
-    // description, predefined options, and multi-select flag stay separate
-    // from the question text instead of being duplicated or lost.
-    const batchQuestions = this.questionBatchPayload(record)
-    if (batchQuestions) {
-      this.emit({ type: 'question.asked', sessionId, requestId, questions: batchQuestions })
+    // Pi has no structured question RPC method. The core-tools extension sends
+    // one tagged envelope through the dialog channel and the driver unwraps it
+    // directly into the shared question contract.
+    const markedQuestions = this.questionMarkerPayload(record)
+    if (markedQuestions) {
+      this.pendingUiRequests.set(requestId, {
+        sessionId,
+        method: 'cio-question',
+        client,
+        request: record
+      })
+      this.emit({ type: 'question.asked', sessionId, requestId, questions: markedQuestions })
       return
     }
-    const markerQuestion = this.questionMarkerPayload(record)
     const questions = normalizeAgentQuestions({
       questions: [
-        markerQuestion ?? {
+        {
           prompt:
             stringValue(record['title']) ??
             stringValue(record['message']) ??
@@ -2371,53 +2375,12 @@ export class PiDriver extends PersistentCliDriver {
     this.emit({ type: 'question.asked', sessionId, requestId, questions })
   }
 
-  /** Parse the core-tools question tool's marker payload from a select/input
-   *  dialog title, or null when the dialog is not a marked question. */
-  private questionMarkerPayload(record: Record<string, unknown>): {
-    prompt: string
-    header?: string
-    description?: string
-    options?: string[]
-    multiple?: boolean
-    custom?: boolean
-  } | null {
+  /** Parse the core-tools extension's canonical question envelope. */
+  private questionMarkerPayload(record: Record<string, unknown>): AgentQuestion[] | null {
     const title = stringValue(record['title'])
     if (!title?.startsWith(CIO_QUESTION_MARKER)) return null
     try {
       const payload = JSON.parse(title.slice(CIO_QUESTION_MARKER.length)) as {
-        prompt?: unknown
-        header?: unknown
-        description?: unknown
-        options?: unknown
-        multiple?: unknown
-      }
-      const prompt = typeof payload.prompt === 'string' ? payload.prompt : ''
-      if (!prompt) return null
-      const header = typeof payload.header === 'string' ? payload.header : undefined
-      const description = typeof payload.description === 'string' ? payload.description : undefined
-      const options = Array.isArray(payload.options)
-        ? payload.options.filter((option): option is string => typeof option === 'string')
-        : []
-      return {
-        prompt,
-        ...(header ? { header } : {}),
-        ...(description && description !== prompt ? { description } : {}),
-        ...(options.length > 0 ? { options } : {}),
-        ...(payload.multiple === true ? { multiple: true } : {}),
-        custom: stringValue(record['method']) !== 'confirm'
-      }
-    } catch {
-      return null
-    }
-  }
-
-  /** Parse a multi-question batch payload from a select/input dialog title,
-   *  or null when the dialog is not a marked batch. */
-  private questionBatchPayload(record: Record<string, unknown>): AgentQuestion[] | null {
-    const title = stringValue(record['title'])
-    if (!title?.startsWith(CIO_QUESTION_BATCH_MARKER)) return null
-    try {
-      const payload = JSON.parse(title.slice(CIO_QUESTION_BATCH_MARKER.length)) as {
         questions?: unknown
       }
       if (!Array.isArray(payload.questions)) return null
@@ -2505,9 +2468,7 @@ export class PiDriver extends PersistentCliDriver {
       request.client.respondToExtensionUiRequest(rawId, {
         confirmed: /^(true|yes|y|allow|ok)$/iu.test(answer)
       })
-    } else if (answers.length > 1) {
-      // Batch mode: resolve with every answer so the extension can map one
-      // answer array per batched question.
+    } else if (request.method === 'cio-question') {
       request.client.respondToExtensionUiRequest(rawId, { value: JSON.stringify(answers) })
     } else {
       request.client.respondToExtensionUiRequest(rawId, { value: answer })

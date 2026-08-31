@@ -30,6 +30,7 @@ const rpcMock = vi.hoisted(() => {
     compact: ReturnType<typeof vi.fn>
     setAutoRetry: ReturnType<typeof vi.fn>
     setAutoCompaction: ReturnType<typeof vi.fn>
+    respondToExtensionUiRequest: ReturnType<typeof vi.fn>
     dispose: ReturnType<typeof vi.fn>
     onEvent: (record: Record<string, unknown>) => void
     onUiRequest: (record: Record<string, unknown>) => void
@@ -53,6 +54,7 @@ const rpcMock = vi.hoisted(() => {
       compact: ReturnType<typeof vi.fn>
       setAutoRetry: ReturnType<typeof vi.fn>
       setAutoCompaction: ReturnType<typeof vi.fn>
+      respondToExtensionUiRequest: ReturnType<typeof vi.fn>
       dispose: ReturnType<typeof vi.fn>
       constructor(options: {
         onEvent?: (record: Record<string, unknown>) => void
@@ -85,6 +87,7 @@ const rpcMock = vi.hoisted(() => {
         this.compact = vi.fn(async () => undefined)
         this.setAutoRetry = vi.fn(async () => undefined)
         this.setAutoCompaction = vi.fn(async () => undefined)
+        this.respondToExtensionUiRequest = vi.fn()
         this.dispose = vi.fn()
         this.onEvent = options.onEvent ?? (() => undefined)
         this.onUiRequest = options.onUiRequest ?? (() => undefined)
@@ -174,7 +177,7 @@ const settings = {
   providerId: 'lmstudio',
   modelId: 'qwen/qwen3.5-9b',
   thinkingLevel: 'medium' as const,
-  permissionLevel: 'auto_review' as const,
+  permissionLevel: 'auto_review' as const
 }
 
 function sessionContext(
@@ -586,7 +589,7 @@ describe('PiDriver', () => {
     expect(endPart?.type === 'subagent' ? endPart.activity.time?.end : undefined).toBeDefined()
   })
 
-  it('splits the question marker payload into scope header and question text', async () => {
+  it('maps and answers the canonical Pi question envelope', async () => {
     const driver = new PiDriver(await storage())
     const sessionId = await driver.createSession('/project', 'Pi')
     const events: unknown[] = []
@@ -599,19 +602,58 @@ describe('PiDriver', () => {
       id: 'ui-q1',
       method: 'select',
       title: `cio-question:${JSON.stringify({
-        header: 'Next step',
-        prompt: 'Want me to implement the fix for the silent brainstorm refresh failure?'
+        questions: [
+          {
+            header: 'Next step',
+            question: 'Want me to implement the fix for the silent brainstorm refresh failure?',
+            options: [
+              {
+                label: 'Fix both (Recommended)',
+                description: 'Repair the refresh and preserve structured question choices.'
+              },
+              {
+                label: 'No fix',
+                description: 'Leave the current behavior unchanged.'
+              }
+            ]
+          }
+        ]
       })}`,
-      options: ['Fix both defects', 'No fix for now']
+      options: ['Fix both (Recommended)', 'No fix']
     })
     const asked = events.find((event) => (event as { type: string }).type === 'question.asked') as
-      { questions: Array<{ header?: string; prompt: string }> } | undefined
+      | {
+          requestId: string
+          questions: Array<{
+            header?: string
+            prompt: string
+            richOptions?: Array<{ label: string; description?: string; recommended?: boolean }>
+          }>
+        }
+      | undefined
     expect(asked?.questions?.[0]).toMatchObject({
       header: 'Next step',
-      prompt: 'Want me to implement the fix for the silent brainstorm refresh failure?'
+      prompt: 'Want me to implement the fix for the silent brainstorm refresh failure?',
+      richOptions: [
+        {
+          label: 'Fix both (Recommended)',
+          description: 'Repair the refresh and preserve structured question choices.',
+          recommended: true
+        },
+        {
+          label: 'No fix',
+          description: 'Leave the current behavior unchanged.'
+        }
+      ]
     })
-    // The scope header must not leak into the question body.
     expect(asked?.questions?.[0]?.prompt.startsWith('Next step')).toBe(false)
+    if (!asked) throw new Error('Expected Pi to emit a question request')
+    await driver.replyToQuestion('/project', sessionId, asked.requestId, [
+      ['Fix both (Recommended)']
+    ])
+    expect(client.respondToExtensionUiRequest).toHaveBeenCalledWith('ui-q1', {
+      value: JSON.stringify([['Fix both (Recommended)']])
+    })
   })
 
   it('keeps sub-agent-done custom messages out of the transcript', () => {
