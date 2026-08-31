@@ -1,5 +1,15 @@
 <script lang="ts">
-  import { FileTerminal, Pencil, Play, Plus, Square, Trash2, Variable, X } from '@lucide/svelte'
+  import {
+    Copy,
+    FileTerminal,
+    Pencil,
+    Play,
+    Plus,
+    Square,
+    Trash2,
+    Variable,
+    X
+  } from '@lucide/svelte'
   import Modal from '$lib/components/ui/Modal.svelte'
   import Switch from '$lib/components/ui/Switch.svelte'
   import ActionTerminal from './ActionTerminal.svelte'
@@ -76,6 +86,13 @@
     if (!runTarget) return
     projectActionsState.start(runTarget, runValues)
     runTarget = null
+  }
+  function duplicate(action: ProjectAction): void {
+    void projectActionsState.save(projectId, null, {
+      name: action.name ? `${action.name} (copy)` : '',
+      script: action.script,
+      variables: action.variables.map((variable) => ({ ...variable }))
+    })
   }
 </script>
 
@@ -170,6 +187,16 @@
                     event.stopPropagation()
                     openEditor(action)
                   }}><Pencil size={13} /></button
+                >
+                <button
+                  type="button"
+                  class="flex h-7 w-7 items-center justify-center rounded-md text-muted hover:bg-overlay hover:text-foreground"
+                  title="Duplicate action"
+                  aria-label={`Duplicate ${action.name || 'action'}`}
+                  onclick={(event) => {
+                    event.stopPropagation()
+                    duplicate(action)
+                  }}><Copy size={13} /></button
                 >
                 <button
                   type="button"
