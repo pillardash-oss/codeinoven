@@ -533,6 +533,23 @@ interface PiTurnState {
   turnIndex: number
 }
 
+/** Highest driver-generated assistant index already present for this app
+ *  session. Pi's RPC process restarts its own turn counter when an old native
+ *  transcript is resumed, but CodeInOven message and part IDs must remain
+ *  unique across the full persisted session. */
+function latestPiTurnIndex(messages: readonly AgentMessage[], sessionId: string): number {
+  const prefix = `pi-${sessionId}-`
+  let latest = 0
+  for (const message of messages) {
+    if (message.role !== 'assistant' || !message.id.startsWith(prefix)) continue
+    const suffix = message.id.slice(prefix.length)
+    if (!/^\d+$/u.test(suffix)) continue
+    const index = Number(suffix)
+    if (Number.isSafeInteger(index)) latest = Math.max(latest, index)
+  }
+  return latest
+}
+
 interface PiUiRequest {
   sessionId: string
   method: string
@@ -1969,6 +1986,15 @@ export class PiDriver extends PersistentCliDriver {
   private async ensureRpcClient(projectPath: string, sessionId: string): Promise<PiRpcClient> {
     const existing = this.rpcClients.get(sessionId)
     if (existing) return existing
+    const session = await this.requireSession(projectPath, sessionId)
+    const currentTurnState = this.turnStates.get(sessionId)
+    this.turnStates.set(sessionId, {
+      assistantMessageId: currentTurnState?.assistantMessageId ?? null,
+      turnIndex: Math.max(
+        currentTurnState?.turnIndex ?? 0,
+        latestPiTurnIndex(session.messages, sessionId)
+      )
+    })
     const runtime = this.utilityRuntime(sessionId)
     const args = runtime
       ? runtime.args.map((arg) => this.resolveRuntimePlaceholders(arg, runtime))

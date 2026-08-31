@@ -404,9 +404,7 @@
       .some((message) => message.role === 'assistant')
     return assistantMirrored ? null : { userMessageId, userMessageIndex }
   })
-  let pendingLiveTurnParts = $derived(
-    pendingLiveTurn ? streamWorkingPartsForPendingTurn(pendingLiveTurn.userMessageIndex) : []
-  )
+  let pendingLiveTurnParts = $derived(pendingLiveTurn ? streamWorkingPartsForPendingTurn() : [])
   /** Whether the latest turn currently has any renderable working-trace parts.
    *  When the thread is busy but nothing has materialized to write to the
    *  screen yet (the agent is still connecting/assembling, or the hydrated
@@ -694,10 +692,6 @@
    *  the live mirror and restore the latest trace after an app refresh. */
   let streamParts = $state<AgentPart[]>([])
   let streamPartsLoadGeneration = 0
-  /** Part IDs that existed before the locally submitted turn. Pi may append a
-   *  follow-up's parts to its prior assistant message until the turn stops, so
-   *  message position alone cannot separate old and new trace content. */
-  let liveTurnPriorPartIds = $state.raw<ReadonlySet<string>>(new Set())
 
   function clearStreamParts(): void {
     streamPartsLoadGeneration += 1
@@ -3216,9 +3210,6 @@
 
   function beginLocalTurn(userMessageId: string): void {
     restoredBusy = false
-    liveTurnPriorPartIds = new Set(
-      messages.flatMap((message) => message.parts.map((part) => part.id))
-    )
     clearStreamParts()
     locallySubmittedTurnId = userMessageId
     locallySubmittedTurnAcknowledged = false
@@ -8955,20 +8946,12 @@
     })
   }
 
-  /** Return only durable parts produced after a pending user follow-up. The
-   *  local pre-turn snapshot is authoritative because Pi can temporarily write
-   *  new parts into an already-completed assistant message. On a remount, fall
-   *  back to the parts visible before the pending user message. */
-  function streamWorkingPartsForPendingTurn(userMessageIndex: number): AgentPart[] {
-    const priorPartIds = new SvelteSet<string>(liveTurnPriorPartIds)
-    if (priorPartIds.size === 0) {
-      for (let index = 0; index < userMessageIndex; index += 1) {
-        for (const part of messages[index]?.parts ?? []) priorPartIds.add(part.id)
-      }
-    }
-    return streamParts.filter(
-      (part) => part.type !== 'question' && !isTodoToolPart(part) && !priorPartIds.has(part.id)
-    )
+  /** The main-process stream fold is already scoped to the newest real user
+   *  message by event timestamp. Do not filter it against historical part IDs:
+   *  a resumed Pi process may restart its local message counter, so an old and
+   *  current part can temporarily carry the same provider-generated ID. */
+  function streamWorkingPartsForPendingTurn(): AgentPart[] {
+    return streamParts.filter((part) => part.type !== 'question' && !isTodoToolPart(part))
   }
 
   function withoutPendingLiveParts(parts: AgentPart[]): AgentPart[] {
