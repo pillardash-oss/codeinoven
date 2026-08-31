@@ -189,11 +189,23 @@ export class SpeechService {
       ['sherpa-onnx', new SherpaSpeechBackend()],
       ['mlx', new MlxSpeechBackend(paths.mlxWorkerPath)],
       ['coreml', new CoreMlSpeechBackend(paths.coremlWorkerPath)],
-      ['gguf', new LlamaServerSpeechBackend()]
+      [
+        'gguf',
+        new LlamaServerSpeechBackend(
+          (pid, command, cwd) => this.llamaRuntime.registerServerProcess(pid, command, cwd),
+          (pid) => this.llamaRuntime.unregisterServerProcess(pid)
+        )
+      ]
     ])
   }
 
   async initialize(): Promise<void> {
+    // Reap any app-owned llama-server orphaned by an unclean previous run before
+    // anything can spawn one again. Only servers this app spawned are journaled,
+    // so a user's own llama-server is never touched.
+    await this.llamaRuntime.recoverOrphans().catch((error) => {
+      Logger.error('Llama-server orphan recovery failed (non-fatal):', error)
+    })
     await this.storage.initialize()
     await this.learning.initialize()
     await this.refreshLlamaRuntime()
@@ -1638,6 +1650,9 @@ export class SpeechService {
     await this.nativeCapture.dispose()
     await this.queue.dispose()
     await Promise.all([...this.backends.values()].map((backend) => backend.dispose()))
+    // Clean shutdown: the servers were SIGTERMed above, so clear the journal so
+    // the next launch has nothing to reap.
+    await this.llamaRuntime.clearOrphanJournal()
     await this.storage.dispose()
   }
 

@@ -12,8 +12,12 @@ import {
 } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { delimiter, join } from 'node:path'
-import { spawn } from 'node:child_process'
+import { spawn, execFile } from 'node:child_process'
+import { promisify } from 'node:util'
 import { getConfigRoot } from '../../lib/utils'
+import { buildProcessEnvironment, resolveExecutablePath } from '../drivers/cli-environment'
+import { Logger } from '../system/logger'
+import { OwnedProcessJournal } from '../system/owned-process-journal'
 import type {
   SpeechLlamaRuntimeInstallation,
   SpeechLlamaRuntimeSource,
@@ -94,10 +98,77 @@ function serverBinaryName(): string {
 export class LlamaRuntimeService {
   private statusCache: LlamaRuntimeStatus | null = null
 
+  private readonly journal = new OwnedProcessJournal(
+    join(getConfigRoot(), 'speech', 'owned-processes.json')
+  )
+
   constructor(private readonly root = join(getConfigRoot(), 'speech', 'runtime')) {}
 
   managedDirectory(): string {
     return join(this.root, `llama-${LLAMA_RELEASE_TAG}`)
+  }
+
+  /**
+   * Record a llama-server the app spawned so a later launch can reap it if an
+   * unclean exit leaves it orphaned. Only app-spawned servers are ever journaled,
+   * so a user's own llama-server is never in scope for reaping.
+   */
+  registerServerProcess(pid: number, command: string, cwd: string): void {
+    this.journal.register(pid, command, cwd)
+  }
+
+  /** Drop a server that exited or was cleanly killed. */
+  unregisterServerProcess(pid: number): void {
+    this.journal.unregister(pid)
+  }
+
+  /** Clear the journal after a clean shutdown so nothing is reaped next launch. */
+  async clearOrphanJournal(): Promise<void> {
+    this.journal.clear()
+    await this.journal.flush()
+  }
+
+  /**
+   * Kill a llama-server this app spawned and left orphaned by a crash or
+   * force-quit, then clear the journal. A journaled PID is only killed when
+   * every check passes: the live process is orphaned (dead parent) AND its
+   * command line still contains the exact executable path the app spawned it
+   * from. Any uncertainty — recycled PID running an unrelated copy, no journal
+   * entry at all — skips the kill. A user's own llama-server is never journaled,
+   * so it is never touched. Must run before any server spawn on this launch.
+   */
+  async recoverOrphans(): Promise<{ killed: number[]; skipped: number[] }> {
+    const roots = await this.journal.load()
+    if (roots.length === 0) return { killed: [], skipped: [] }
+    const snapshot = await processSnapshot()
+    if (snapshot === null) {
+      return { killed: [], skipped: roots.map((root) => root.pid) }
+    }
+    const alive = new Set(snapshot.map((entry) => entry.pid))
+    const killed: number[] = []
+    const skipped: number[] = []
+    for (const root of roots) {
+      const entry = snapshot.find((candidate) => candidate.pid === root.pid)
+      if (!entry) {
+        skipped.push(root.pid)
+        continue
+      }
+      const orphaned = entry.parentPid <= 1 || !alive.has(entry.parentPid)
+      const commandMatches =
+        root.command.length > 0 && entry.command.includes(root.command)
+      if (!orphaned || !commandMatches) {
+        skipped.push(root.pid)
+        continue
+      }
+      await killProcessTree(root.pid)
+      killed.push(root.pid)
+    }
+    this.journal.clear()
+    await this.journal.flush()
+    if (killed.length > 0) {
+      Logger.info('Reaped orphaned llama-server processes', { killed })
+    }
+    return { killed, skipped }
   }
 
   async status(force = false): Promise<LlamaRuntimeStatus> {
@@ -334,5 +405,56 @@ export class LlamaRuntimeService {
     } catch {
       return false
     }
+  }
+}
+
+interface LlamaProcessEntry {
+  pid: number
+  parentPid: number
+  command: string
+}
+
+const execFileAsync = promisify(execFile)
+
+/**
+ * Live Unix process snapshot used to decide orphan status. Returns null on
+ * platforms or failures where a reliable parentage view is unavailable,
+ * disabling recovery rather than risking a recycled-PID kill.
+ */
+async function processSnapshot(): Promise<LlamaProcessEntry[] | null> {
+  if (process.platform === 'win32') return null
+  const resolved = resolveExecutablePath('ps')
+  if (!resolved) return null
+  try {
+    const { stdout } = await execFileAsync(resolved, ['-axo', 'pid=,ppid=,command='], {
+      env: buildProcessEnvironment()
+    })
+    const entries: LlamaProcessEntry[] = []
+    for (const line of stdout.split(/\r?\n/u)) {
+      const match = line.match(/^\s*(\d+)\s+(\d+)\s+(.+)$/u)
+      if (!match) continue
+      entries.push({
+        pid: Number(match[1]),
+        parentPid: Number(match[2]),
+        command: match[3]?.trim() || ''
+      })
+    }
+    return entries
+  } catch {
+    return null
+  }
+}
+
+async function killProcessTree(pid: number): Promise<void> {
+  try {
+    process.kill(pid, 'SIGTERM')
+  } catch {
+    return
+  }
+  await new Promise((resolve) => setTimeout(resolve, 2_000))
+  try {
+    process.kill(pid, 'SIGKILL')
+  } catch {
+    // Already gone.
   }
 }
