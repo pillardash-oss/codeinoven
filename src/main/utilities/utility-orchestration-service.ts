@@ -218,7 +218,7 @@ interface TurnState {
   activated: Map<string, ResolvedUtility>
   clients: Map<string, McpClient>
   attributionSequence: number
-  /** True once the agent has called utility_search this turn. */
+  /** True once the agent has called the app utility-search tool this turn. */
   searched: boolean
   /** Session ids created for Cua utilities so cursor state is turn-scoped. */
   cuaSessionIds: Map<string, string>
@@ -425,7 +425,7 @@ export class UtilityOrchestrationService {
             ]
           : []),
         'Describe images: search for the image descriptor utility with {"query":"describe image","kinds":["image_descriptor"]}, activate its id, then POST /invoke with {"utility_id":"id","operation":"describe","input":{"images":[{"id":"image-1","source":"path-or-url","type":"path"}]}}.',
-        'Treat these endpoints exactly like utility_search, utility_activate, and utility_invoke tool calls.'
+        `Treat these endpoints exactly like ${UTILITY_SEARCH_TOOL_NAME}, ${UTILITY_ACTIVATE_TOOL_NAME}, and ${UTILITY_INVOKE_TOOL_NAME} tool calls.`
       ].join('\n'),
       directEndpoint: { url: bridgeUrl, token },
       cleanup
@@ -438,7 +438,7 @@ export class UtilityOrchestrationService {
     await this.closeGatewayServer()
   }
 
-  /** Whether the agent has called utility_search at least once this turn. */
+  /** Whether the agent has called the app utility-search tool at least once this turn. */
   hasSearched(gatewayId: string): boolean {
     return this.turns.get(gatewayId)?.state.searched === true
   }
@@ -1554,7 +1554,9 @@ const sessionId = process.argv[2]?.trim()
 const turnId = process.argv[3]?.trim()
 
 if (!sessionId || sessionId.length > 128 || !turnId || turnId.length > 128) {
-  process.stderr.write('retrieve_mcp_host requires the current utility session and turn ids.\n')
+  process.stderr.write(
+    '${RETRIEVE_MCP_HOST_TOOL_NAME} requires the current utility session and turn ids.\n'
+  )
   process.exit(1)
 }
 

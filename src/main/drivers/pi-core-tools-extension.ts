@@ -52,18 +52,19 @@
  * to end its work while sub-agents are still running.
  */
 
+import {
+  CIO_ASK_USER_TOOL_NAME,
+  CIO_AGENT_STATUS_TOOL_NAME,
+  CIO_REQUEST_FILES_TOOL_NAME,
+  CIO_SPAWN_AGENT_TOOL_NAME,
+  CIO_TODO_WRITE_TOOL_NAME
+} from '../../lib/core-tools'
+
+export { PI_CORE_TOOLS_TOOL_NAMES } from '../../lib/core-tools'
+
 export const CIO_PERMISSION_MARKER = 'cio-permission:'
 export const CIO_SUBAGENT_MARKER = 'cio-subagent:'
 export const CIO_QUESTION_MARKER = 'cio-question:'
-
-/** Tool names registered by the core-tools extension (exported for tests). */
-export const PI_CORE_TOOLS_TOOL_NAMES = [
-  'cio_ask_user',
-  'cio_todo_write',
-  'cio_request_files',
-  'cio_spawn_agent',
-  'cio_agent_status'
-] as const
 
 export function piCoreToolsExtension(): string {
   return `import { existsSync, readFileSync } from 'node:fs'
@@ -301,13 +302,13 @@ function questionDialogTitle(questions) {
 
 export default function codeInOvenCoreToolsExtension(pi) {
   pi.registerTool({
-    name: 'cio_ask_user',
+    name: '${CIO_ASK_USER_TOOL_NAME}',
     label: 'Ask the user a question',
     description:
       'Ask the user one to three structured questions and wait for their answers. Each question offers two or three described choices plus a custom answer. Use this whenever a decision, preference, or clarification is needed before continuing.',
     promptSnippet: 'Ask structured questions with described choices and wait for answers',
     promptGuidelines: [
-      'Use cio_ask_user when a decision, preference, or clarification from the user is needed before continuing.',
+      'Use ${CIO_ASK_USER_TOOL_NAME} when a decision, preference, or clarification from the user is needed before continuing.',
       'Ask one to three short questions at a time. Put the recommended option first and add (Recommended) to its label.',
       'Keep option labels short. Put context and tradeoffs in each option description, not in the question text.',
       'Custom answers are always available; do not add an Other option.'
@@ -382,13 +383,13 @@ export default function codeInOvenCoreToolsExtension(pi) {
   })
 
   pi.registerTool({
-    name: 'cio_todo_write',
+    name: '${CIO_TODO_WRITE_TOOL_NAME}',
     label: 'Write the todo list',
     description:
       'Create or update the visible todo list so the user can track progress. Replace the whole list on every call: give every task with its current status (pending, in_progress, or completed). Mark tasks in_progress just before starting and completed immediately after finishing.',
     promptSnippet: 'Publish or update the shared todo list (task tracking)',
     promptGuidelines: [
-      'Use cio_todo_write as soon as a task spans multiple steps: publish the full plan, keep exactly one task in_progress, and update statuses as work advances.'
+      'Use ${CIO_TODO_WRITE_TOOL_NAME} as soon as a task spans multiple steps: publish the full plan, keep exactly one task in_progress, and update statuses as work advances.'
     ],
     parameters: Type.Object({
       todos: Type.Array(
@@ -419,13 +420,13 @@ export default function codeInOvenCoreToolsExtension(pi) {
   })
 
   pi.registerTool({
-    name: 'cio_request_files',
+    name: '${CIO_REQUEST_FILES_TOOL_NAME}',
     label: 'Request files from the user',
     description:
       'Ask the user to share files by typing their paths. The paths are validated against the filesystem and returned so you can read them. Use this when the work needs files that are not yet in the conversation.',
     promptSnippet: 'Ask the user to share file paths and receive a validated file list',
     promptGuidelines: [
-      'Use cio_request_files when the task needs files the user has not shared yet; pass a clear message about which files and formats help.'
+      'Use ${CIO_REQUEST_FILES_TOOL_NAME} when the task needs files the user has not shared yet; pass a clear message about which files and formats help.'
     ],
     parameters: Type.Object({
       message: Type.Optional(
@@ -653,7 +654,7 @@ export default function codeInOvenCoreToolsExtension(pi) {
     if (runningCount >= CIO_SUBAGENT_MAX_CONCURRENT) {
       return {
         error:
-          'Too many sub-agents are running (' + CIO_SUBAGENT_MAX_CONCURRENT + ' max). Collect finished results with cio_agent_status before spawning another.'
+          'Too many sub-agents are running (' + CIO_SUBAGENT_MAX_CONCURRENT + ' max). Collect finished results with ${CIO_AGENT_STATUS_TOOL_NAME} before spawning another.'
       }
     }
     let resolvedModel = parentCtx.model
@@ -767,14 +768,14 @@ export default function codeInOvenCoreToolsExtension(pi) {
   }
 
   pi.registerTool({
-    name: 'cio_spawn_agent',
+    name: '${CIO_SPAWN_AGENT_TOOL_NAME}',
     label: 'Spawn a sub-agent',
     description:
       'Spawn a sub-agent worker thread that executes one focused task (explore, implementation, tests, cleanup, documentation, or any custom purpose) and returns only its final result, keeping its transcript out of your context. By default — unless the user explicitly asks you to use sub-agents differently — delegate any task that can run in parallel with your own work to a sub-agent: explore or research a topic while you continue working, hand off long-running work so you can proceed without waiting and without polluting your context, and once your own work is done, spawn a sub-agent to run the checks for the files you touched (lint, typecheck, tests) so the work finishes faster. Run several sub-agents concurrently with background:true — each one automatically steers you a notification with its final output the moment it finishes, so you can keep working and act on results as they land. Omit background to block until the sub-agent finishes and returns its result directly — use that whenever you need the output before proceeding. You must never end your turn while any sub-agent is still running, regardless of outcome; workers report every file they touched because you are responsible for committing approved work. Sub-agents cannot spawn further sub-agents, and they inherit your model and thinking level unless you pass model/thinking_level overrides.',
     promptSnippet: 'Spawn sub-agent worker threads for focused or parallelizable tasks (explore, implement, tests, cleanup, docs)',
     promptGuidelines: [
       'By default, delegate parallelizable tasks to sub-agents instead of doing them inline: exploring a topic while you keep working, handing off work so you can continue without polluting your context, or running post-work checks (lint, typecheck, tests) for the files you touched.',
-      'Give each sub-agent complete, self-contained instructions; spawn separate sub-agents for independent work and collect results with cio_agent_status. Never end your turn while sub-agents are still running — wait for every result (successful or failed) with cio_agent_status (wait: true) first, because the primary agent owns committing the files the workers changed.'
+      'Give each sub-agent complete, self-contained instructions; spawn separate sub-agents for independent work and collect results with ${CIO_AGENT_STATUS_TOOL_NAME}. Never end your turn while sub-agents are still running — wait for every result (successful or failed) with ${CIO_AGENT_STATUS_TOOL_NAME} (wait: true) first, because the primary agent owns committing the files the workers changed.'
     ],
     parameters: Type.Object({
       purpose: Type.String({
@@ -820,7 +821,7 @@ export default function codeInOvenCoreToolsExtension(pi) {
           agentId: result.record.agentId,
           childSessionId: result.record.childSessionId,
           status: result.record.status,
-          note: 'Sub-agent is running in the background. When it finishes you will receive a steer message (sub-agent done for task …) carrying its final output — keep working until then; cio_agent_status (wait: true) is available for explicit polling.'
+          note: 'Sub-agent is running in the background. When it finishes you will receive a steer message (sub-agent done for task …) carrying its final output — keep working until then; ${CIO_AGENT_STATUS_TOOL_NAME} (wait: true) is available for explicit polling.'
         })
       }
       await result.record.promise
@@ -829,13 +830,13 @@ export default function codeInOvenCoreToolsExtension(pi) {
   })
 
   pi.registerTool({
-    name: 'cio_agent_status',
+    name: '${CIO_AGENT_STATUS_TOOL_NAME}',
     label: 'Check sub-agent status',
     description:
       'Check the status and output of spawned sub-agent threads. Background sub-agents steer you a completion notification with their final output automatically; use this tool to poll explicitly, or wait:true to block until every running sub-agent finishes (with or without a specific agent_id) — always do this before ending your turn so no result is lost.',
     promptSnippet: 'Check or wait for spawned sub-agent threads and collect their results',
     promptGuidelines: [
-      'Background sub-agents announce completion themselves with a steer message containing their final output; use cio_agent_status to poll explicitly, with wait:true before finishing the turn so no result is lost.'
+      'Background sub-agents announce completion themselves with a steer message containing their final output; use ${CIO_AGENT_STATUS_TOOL_NAME} to poll explicitly, with wait:true before finishing the turn so no result is lost.'
     ],
     parameters: Type.Object({
       agent_id: Type.Optional(
@@ -905,7 +906,7 @@ export default function codeInOvenCoreToolsExtension(pi) {
           content:
             'Your turn ended while sub-agents are still running: ' +
             running.join(', ') +
-            '. Do not finish your work yet. Call cio_agent_status with agent_id set to each running id (or omit agent_id) and wait:true to block until they finish, then incorporate every result — successful or failed — before ending your turn. Sub-agents report the files they changed; you are responsible for committing approved work.',
+            '. Do not finish your work yet. Call ${CIO_AGENT_STATUS_TOOL_NAME} with agent_id set to each running id (or omit agent_id) and wait:true to block until they finish, then incorporate every result — successful or failed — before ending your turn. Sub-agents report the files they changed; you are responsible for committing approved work.',
           display: false
         },
         { triggerTurn: true }

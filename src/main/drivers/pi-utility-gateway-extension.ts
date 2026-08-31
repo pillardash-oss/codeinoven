@@ -3,10 +3,15 @@
  *
  * Pi has no native MCP host, so the utility gateway cannot be transported as an
  * MCP server the way Claude Code's `--mcp-config` path does it. Instead this
- * extension registers the three gateway tools (`utility_search`,
- * `utility_activate`, `utility_invoke`) as first-class Pi tools, so the model
- * gets real structured tool affordances instead of relying only on the prose
- * "curl" instructions injected into the system prompt.
+ * extension registers the interactive gateway tools from `GATEWAY_TOOLS` as
+ * first-class Pi tools, so the model gets real structured tool affordances
+ * instead of relying only on the prose "curl" instructions injected into the
+ * system prompt.
+ *
+ * Tool names, descriptions, and routes are interpolated from the canonical
+ * catalog in `src/lib/gateway-tools.ts`, so updating that catalog updates
+ * this extension everywhere — no surface can drift.
+ *
  *
  * The gateway URL and bearer token are turn-scoped, while a Pi session process
  * persists across turns — extensions load at spawn, so their source cannot
@@ -20,11 +25,30 @@
  * affordance upgrade, not a replacement of the documented shell path.
  */
 
+import {
+  GATEWAY_TOOLS,
+  UTILITY_ACTIVATE_TOOL_NAME,
+  UTILITY_INVOKE_TOOL_NAME,
+  UTILITY_SEARCH_TOOL_NAME,
+  type GatewayToolDefinition
+} from '../../lib/gateway-tools'
+
+/** The gateway tools the extension registers as first-class Pi tools. */
 export const PI_UTILITY_GATEWAY_TOOL_NAMES = [
-  'cio_util_find',
-  'cio_util_init',
-  'cio_util_use'
+  UTILITY_SEARCH_TOOL_NAME,
+  UTILITY_ACTIVATE_TOOL_NAME,
+  UTILITY_INVOKE_TOOL_NAME
 ] as const
+
+function gatewayTool(name: string): GatewayToolDefinition {
+  const definition = GATEWAY_TOOLS.find((tool) => tool.name === name)
+  if (!definition) throw new Error(`Gateway tool ${name} is missing from GATEWAY_TOOLS`)
+  return definition
+}
+
+const searchTool = gatewayTool(UTILITY_SEARCH_TOOL_NAME)
+const activateTool = gatewayTool(UTILITY_ACTIVATE_TOOL_NAME)
+const invokeTool = gatewayTool(UTILITY_INVOKE_TOOL_NAME)
 
 export function piUtilityGatewayExtension(): string {
   return `import { readFileSync } from 'node:fs'
@@ -116,10 +140,9 @@ function textResult(value: unknown): { content: Array<{ type: 'text'; text: stri
 
 export default function codeInOvenUtilityGatewayExtension(pi: ExtensionAPI): void {
   pi.registerTool({
-    name: 'cio_util_find',
+    name: ${JSON.stringify(searchTool.name)},
     label: 'Search CodeInOven utilities',
-    description:
-      'Search app-managed MCP servers, skills, utilities, web services, and computer-use capabilities by capability name or natural-language task intent. If no direct lexical match exists, the result returns project-aware candidates for you to evaluate semantically. If you already know an eligible utility, you may activate it directly. Only conclude a capability does not exist after a search where notFound is true.',
+    description: ${JSON.stringify(searchTool.description)},
     parameters: Type.Object({
       query: Type.String({ description: 'Capability or task to search for.' }),
       kinds: Type.Optional(
@@ -133,36 +156,35 @@ export default function codeInOvenUtilityGatewayExtension(pi: ExtensionAPI): voi
       const body: Record<string, unknown> = { query: params.query }
       if (params.kinds !== undefined) body.kinds = params.kinds
       if (params.limit !== undefined) body.limit = params.limit
-      const result = await callGateway('/search', body)
+      const result = await callGateway(${JSON.stringify(searchTool.route)}, body)
       return textResult(result)
     }
   })
 
   pi.registerTool({
-    name: 'cio_util_init',
+    name: ${JSON.stringify(activateTool.name)},
     label: 'Activate CodeInOven utility',
-    description:
-      'Activate one installed utility for the current turn and inspect the operations it exposes.',
+    description: ${JSON.stringify(activateTool.description)},
     parameters: Type.Object({
       utility_id: Type.String({ description: 'Installed utility identifier.' })
     }),
     async execute(_toolCallId, params) {
-      const result = await callGateway('/activate', { utility_id: params.utility_id })
+      const result = await callGateway(${JSON.stringify(activateTool.route)}, { utility_id: params.utility_id })
       return textResult(result)
     }
   })
 
   pi.registerTool({
-    name: 'cio_util_use',
+    name: ${JSON.stringify(invokeTool.name)},
     label: 'Invoke CodeInOven utility operation',
-    description: 'Invoke an operation on a utility activated for the current turn.',
+    description: ${JSON.stringify(invokeTool.description)},
     parameters: Type.Object({
       utility_id: Type.String({ description: 'Utility activated earlier this turn.' }),
       operation: Type.String({ description: 'Operation or tool name to invoke.' }),
       input: Type.Optional(Type.Record(Type.String(), Type.Unknown()))
     }),
     async execute(_toolCallId, params) {
-      const result = await callGateway('/invoke', {
+      const result = await callGateway(${JSON.stringify(invokeTool.route)}, {
         utility_id: params.utility_id,
         operation: params.operation,
         input: params.input ?? {}

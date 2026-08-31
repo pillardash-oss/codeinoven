@@ -229,6 +229,7 @@ import {
   PROPOSE_MEMORY_SCHEMA,
   SPEC_GENERATION_SCHEMA
 } from '../../lib/agent-tools'
+import { UTILITY_ACTIVATE_TOOL_NAME, UTILITY_INVOKE_TOOL_NAME, UTILITY_SEARCH_TOOL_NAME } from '../../lib/gateway-tools'
 import { BrainstormEngine } from '../../lib/engines/brainstorm-engine'
 import {
   SAFE_PROTOTYPE_ID,
@@ -298,7 +299,7 @@ const MEMORY_RESPONSE_BOUNDARY_INSTRUCTION = [
 
 /** Guidance injected for models that cannot see images (attachment: false). */
 const IMAGE_DESCRIPTOR_SYSTEM_NOTE =
-  'You cannot directly see images. The application describes images attached to the user turn with the configured vision model before dispatch and supplies that evidence in the prompt. For follow-up inspection, the image descriptor is available on demand through the app gateway: search for it with utility_search using kinds ["image_descriptor"], activate the result with utility_activate, then invoke its describe operation with utility_invoke passing {"images":[{"id":"image-1","source":"path-or-url","type":"path"}]} (or "type":"binary" with base64 data when the bytes cannot be referenced by path). The operation accepts several images per call, so batch frames at once. If the media is a video file you cannot read directly, check whether ffmpeg is available on the system (e.g., ffmpeg -version or which ffmpeg); if no system ffmpeg is found, this app bundles ffmpeg via ffmpeg-static — resolve its path and use it.'
+  `You cannot directly see images. The application describes images attached to the user turn with the configured vision model before dispatch and supplies that evidence in the prompt. For follow-up inspection, the image descriptor is available on demand through the app gateway: search for it with ${UTILITY_SEARCH_TOOL_NAME} using kinds ["image_descriptor"], activate the result with ${UTILITY_ACTIVATE_TOOL_NAME}, then invoke its describe operation with ${UTILITY_INVOKE_TOOL_NAME} passing {"images":[{"id":"image-1","source":"path-or-url","type":"path"}]} (or "type":"binary" with base64 data when the bytes cannot be referenced by path). The operation accepts several images per call, so batch frames at once. If the media is a video file you cannot read directly, check whether ffmpeg is available on the system (e.g., ffmpeg -version or which ffmpeg); if no system ffmpeg is found, this app bundles ffmpeg via ffmpeg-static — resolve its path and use it.`
 
 function isImagePromptAttachment(attachment: PromptAttachment): boolean {
   if (attachment.mime.toLocaleLowerCase().startsWith('image/')) return true
@@ -387,7 +388,7 @@ const ASSIGNMENT_AUDIT_EVIDENCE_CONTRACT = [
   'Run format verification and lint against every applicable audited file, passing the explicit file paths rather than a whole-project directory or broad glob. Use a non-writing formatter check; never rewrite implementation files during an independent audit.',
   'Run the repository-specific scoped typecheck, static check, or build check that covers the audited files.',
   'Run only focused tests related to the changed files and feature. Never run the entire application test suite unless the audited feature is itself repository-wide and the Assignment explicitly requires it.',
-  'When the code uses a framework or technology with an installed MCP, skill, or other app utility, call utility_search, activate the relevant result, and invoke its validation/autofix analysis in non-writing mode. For Svelte, use the Svelte documentation and autofixer utility when available.',
+  `When the code uses a framework or technology with an installed MCP, skill, or other app utility, call ${UTILITY_SEARCH_TOOL_NAME}, activate the relevant result, and invoke its validation/autofix analysis in non-writing mode. For Svelte, use the Svelte documentation and autofixer utility when available.`,
   'A check that cannot safely be scoped must be recorded as not_applicable with the concrete reason; do not replace it with a whole-repository command.',
   'Record the exact repository revision, audited-file inventory, commands, target files, exit codes, concise factual evidence, utilities used or unavailable, and limitations.',
   'Cite every finding to the exact project-rooted relative path (e.g. `src/app.html`), never a bare filename such as `app.html` and never a full absolute filesystem path, and cite any external reference as a Markdown link.',
@@ -13567,9 +13568,11 @@ export class ChatEngine {
     const observedToolNames = observedTools.map((part) => part.tool.toLowerCase())
     if (
       input.utilitySearchRequired &&
-      !observedToolNames.some((name) => name.includes('cio_util_find'))
+      !observedToolNames.some((name) => name.includes(UTILITY_SEARCH_TOOL_NAME))
     ) {
-      issues.push('verification.utilities has no utility_search call in the auditor transcript')
+      issues.push(
+        `verification.utilities has no ${UTILITY_SEARCH_TOOL_NAME} call in the auditor transcript`
+      )
     }
     for (const utility of verification?.utilities ?? []) {
       if (utility.status !== 'used') continue
@@ -16883,7 +16886,8 @@ export class ChatEngine {
    * that its MCP/skill/utility is unavailable. This is deliberately attached
    * to the tool error event: a direct app-utility activation is allowed to
    * proceed, while a native-harness miss gets one chance to discover the same
-   * capability through utility_search before the agent gives up.
+   * capability through the app utility-search tool (UTILITY_SEARCH_TOOL_NAME)
+   * before the agent gives up.
    */
   private async nudgeUnavailableToolCall(
     driverId: string,
@@ -16894,7 +16898,7 @@ export class ChatEngine {
     if (!info || info.ephemeral || !info.activeTurnId) return
     if ((this.searchNudgeAttempts.get(sessionId) ?? 0) >= 1) return
     const toolName = part.tool.trim()
-    if (!toolName || toolName.toLocaleLowerCase().includes('cio_util_find')) return
+    if (!toolName || toolName.toLocaleLowerCase().includes(UTILITY_SEARCH_TOOL_NAME)) return
     const toolError = [part.state.error, part.state.output, part.state.title]
       .filter((value): value is string => Boolean(value?.trim()))
       .join('\n')
@@ -18386,7 +18390,8 @@ export class ChatEngine {
       }
       // The agent's final prose concluded that a capability/tool/MCP is
       // unavailable, yet it never attempted the tool call (so the tool-error
-      // nudge path never fired) and never used utility_search despite the
+      // nudge path never fired) and never used the app utility-search tool
+      // (UTILITY_SEARCH_TOOL_NAME) despite the
       // gateway exposing it this turn. Nudge it — via the same tight
       // detector family that previously proved false-positive-prone, now
       // restricted to high-confidence availability conclusions (session-
@@ -20805,7 +20810,7 @@ export function textForMessage(message: AgentMessage): string {
 /**
  * Canonical action categories a tool call is reduced to in a replay recap.
  * Raw tool identifiers diverge per harness (Claude Code's `Bash`/`Read`/`Task`
- * vs. Pi's lowercase `bash`/`read`/`cio_spawn_agent` vs. opencode's `webfetch`,
+ * vs. Pi's lowercase `bash`/`read`/spawn-tool names vs. opencode's `webfetch`,
  * etc.), so a recap built from one harness and replayed into another — or
  * into a fresh process of the same harness after a version change — must not
  * assert tool names the resuming session may not recognize as its own. These

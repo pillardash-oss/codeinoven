@@ -19,6 +19,7 @@ import type {
 } from '../../lib/types'
 import { PI_THINKING_PRESETS } from '../../lib/pi-thinking-presets'
 import { normalizeAgentQuestions, parseRecord } from '../../lib/agent-interactions'
+import { CIO_SPAWN_AGENT_TOOL_NAME } from '../../lib/core-tools'
 import { buildProcessEnvironment } from './cli-environment'
 import { piNativeProviderIds } from '../agents/native-provider-config-service'
 import { PiAuthConfigService, piAuthFileIo } from '../providers/pi-auth-config'
@@ -205,9 +206,9 @@ export function isContinuableFinishReasonError(error: string): boolean {
 }
 
 /** The extension tool whose calls render as sub-agent activity cards. */
-const CIO_SPAWN_TOOL = 'cio_spawn_agent'
+const CIO_SPAWN_TOOL = CIO_SPAWN_AGENT_TOOL_NAME
 
-/** Build a sub-agent activity part for one `cio_spawn_agent` call. */
+/** Build a sub-agent activity part for one spawn-tool call. */
 function cioSubagentPart(
   messageId: string,
   callID: string,
@@ -1822,8 +1823,8 @@ export class PiDriver extends PersistentCliDriver {
     // failure must never block the turn — pi then simply runs unmonitored.
     const statusExtension = await this.materializeStatusExtension()
     const extensionArgs = statusExtension ? ['--extension', statusExtension] : []
-    // The app-owned gateway extension registers utility_search/activate/invoke
-    // as first-class tools so the model gets structured affordances for the
+    // The app-owned gateway extension registers the interactive gateway tools
+    // from GATEWAY_TOOLS as first-class tools so the model gets structured affordances for the
     // turn-scoped utility gateway (Pi has no native MCP host to transport it).
     // The per-turn endpoint arrives later via publishUtilityGatewayEndpoint.
     const gatewayExtension = await this.materializeGatewayExtension(sessionId)

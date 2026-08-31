@@ -17,6 +17,7 @@ import type {
 import { UTILITY_KIND_VALUES } from '../../lib/types'
 import { ALL_HARNESSES_BINDING_ID } from '../../lib/types'
 import { generateId } from '../../lib/utils'
+import { RETRIEVE_MCP_HOST_TOOL_NAME } from '../../lib/gateway-tools'
 import { listHarnesses } from '../agents/harness-registry'
 import type { StorageEngine } from '../storage/storage-engine'
 
@@ -120,7 +121,7 @@ export class UtilityRegistryService {
       {
         id: APP_RETRIEVE_MCP_HOST_UTILITY_ID,
         kind: 'skill',
-        name: 'retrieve_mcp_host',
+        name: RETRIEVE_MCP_HOST_TOOL_NAME,
         description:
           'Recovers the live app-managed MCP/utility gateway host from the CodeInOven instance that owns the exact current utility turn.',
         enabled: true,
@@ -128,13 +129,13 @@ export class UtilityRegistryService {
         scope: { level: 'global' },
         config: {
           instructions:
-            'This app-owned utility is always active. If the app-managed gateway is unreachable, use the exact retrieve_mcp_host shell command supplied in the current turn instructions. Do not search for or activate this utility first; its shell transport is intentionally independent of MCP.'
+            `This app-owned utility is always active. If the app-managed gateway is unreachable, use the exact ${RETRIEVE_MCP_HOST_TOOL_NAME} shell command supplied in the current turn instructions. Do not search for or activate this utility first; its shell transport is intentionally independent of MCP.`
         },
         credentials: [],
         harnessBindings: harnesses.map((harness) => ({
           harnessId: harness.id,
           strategy: 'skill',
-          transportName: 'retrieve_mcp_host'
+          transportName: RETRIEVE_MCP_HOST_TOOL_NAME
         })),
         appOwned: true,
         createdAt: now,
@@ -313,7 +314,7 @@ export class UtilityRegistryService {
         )
       }
       if (current.id === APP_RETRIEVE_MCP_HOST_UTILITY_ID && patch.config !== undefined) {
-        throw new Error('The app-owned retrieve_mcp_host utility is fully managed')
+        throw new Error(`The app-owned ${RETRIEVE_MCP_HOST_TOOL_NAME} utility is fully managed`)
       }
 
       const normalized = normalizeInput({
