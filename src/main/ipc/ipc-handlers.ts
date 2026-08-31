@@ -2567,6 +2567,22 @@ export function registerIpcHandlers(
     await storage.write(projectActionsPath(projectId), { actions: next })
     return true
   })
+  ipcMain.handle('projectActions:reorder', async (_, projectId: string, orderedIds: unknown) => {
+    if (!Array.isArray(orderedIds)) throw new TypeError('Action order is invalid')
+    const ids = orderedIds.map((id) => validateEntityId(id, 'Action ID'))
+    const actions = await readProjectActions(projectId)
+    if (ids.length !== actions.length || new Set(ids).size !== ids.length)
+      throw new TypeError('Action order is invalid')
+    const byId = new Map(actions.map((action) => [action.id, action]))
+    const next: ProjectAction[] = []
+    for (const id of ids) {
+      const action = byId.get(id)
+      if (!action) throw new TypeError('Action order is invalid')
+      next.push(action)
+    }
+    await storage.write(projectActionsPath(projectId), { actions: next })
+    return next
+  })
   ipcMain.handle('config:update', async (_, input: unknown) => {
     const patch = validateAppConfigPatch(input)
     if (patch.agentBehaviorPrompt) {

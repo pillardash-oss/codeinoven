@@ -94,6 +94,55 @@
       variables: action.variables.map((variable) => ({ ...variable }))
     })
   }
+  let draggingId = $state<string | null>(null)
+  let dragStartOrder: string[] | null = null
+  function dragStart(action: ProjectAction, event: DragEvent): void {
+    dragStartOrder = actions.map((entry) => entry.id)
+    draggingId = action.id
+    const transfer = event.dataTransfer
+    if (transfer) {
+      transfer.effectAllowed = 'move'
+      transfer.setData('text/plain', action.id)
+    }
+  }
+  function dragOver(action: ProjectAction, event: DragEvent): void {
+    if (!draggingId || draggingId === action.id) return
+    event.preventDefault()
+    const transfer = event.dataTransfer
+    if (transfer) transfer.dropEffect = 'move'
+    const current = actions
+    const from = current.findIndex((entry) => entry.id === draggingId)
+    const to = current.findIndex((entry) => entry.id === action.id)
+    if (from === -1 || to === -1) return
+    const next = [...current]
+    next.splice(to, 0, next.splice(from, 1)[0])
+    projectActionsState.reorderLocal(projectId, next)
+  }
+  function dragEnd(): void {
+    const finalOrder = actions.map((entry) => entry.id)
+    const changed =
+      dragStartOrder !== null &&
+      (dragStartOrder.length !== finalOrder.length ||
+        dragStartOrder.some((id, index) => id !== finalOrder[index]))
+    draggingId = null
+    dragStartOrder = null
+    if (changed) void projectActionsState.reorder(projectId, finalOrder)
+  }
+  function moveBy(action: ProjectAction, delta: number): void {
+    const current = actions
+    const from = current.findIndex((entry) => entry.id === action.id)
+    const to = from + delta
+    if (from === -1 || to < 0 || to >= current.length) return
+    const next = [...current]
+    const moved = next[from]
+    next[from] = next[to]
+    next[to] = moved
+    projectActionsState.reorderLocal(projectId, next)
+    void projectActionsState.reorder(
+      projectId,
+      next.map((entry) => entry.id)
+    )
+  }
 </script>
 
 <section class="flex h-full min-h-0 flex-col bg-app" aria-label="Actions">
@@ -129,7 +178,14 @@
         {#each actions as action (action.id)}
           {@const run = projectActionsState.run(action.id)}
           <article
-            class="group overflow-hidden rounded-lg border border-transparent bg-surface hover:border-border"
+            class="group cursor-grab overflow-hidden rounded-lg border border-transparent bg-surface hover:border-border active:cursor-grabbing {draggingId ===
+            action.id
+              ? 'opacity-50'
+              : ''}"
+            draggable="true"
+            ondragstart={(event) => dragStart(action, event)}
+            ondragover={(event) => dragOver(action, event)}
+            ondragend={dragEnd}
           >
             <div
               class="flex min-w-0 items-center gap-2 px-2 py-2"
@@ -139,6 +195,13 @@
               onkeydown={(event) => {
                 if (run && (event.key === 'Enter' || event.key === ' '))
                   projectActionsState.toggle(action.id)
+                else if (event.altKey && event.key === 'ArrowUp') {
+                  event.preventDefault()
+                  moveBy(action, -1)
+                } else if (event.altKey && event.key === 'ArrowDown') {
+                  event.preventDefault()
+                  moveBy(action, 1)
+                }
               }}
             >
               <span

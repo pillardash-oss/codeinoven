@@ -2060,6 +2060,10 @@ export interface IpcInvokeContract {
     import('./project-actions').ProjectAction
   >
   'projectActions:delete': Contract<[projectId: string, actionId: string], boolean>
+  'projectActions:reorder': Contract<
+    [projectId: string, orderedIds: string[]],
+    import('./project-actions').ProjectAction[]
+  >
   'repository:init': Contract<[projectPath: string], RepositoryPreflightResult>
   'repository:preflight': Contract<[projectPath: string], RepositoryPreflightResult>
   'repository:remoteOrigin': Contract<[projectPath: string], string | null>

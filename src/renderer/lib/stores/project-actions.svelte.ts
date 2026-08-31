@@ -57,6 +57,14 @@ class ProjectActionsState {
         this.actions(projectId).filter((action) => action.id !== actionId)
       )
   }
+  /** Optimistic in-memory order update during drag; call `reorder` to persist. */
+  reorderLocal(projectId: string, ordered: ProjectAction[]): void {
+    this.actionsByProject.set(projectId, ordered)
+  }
+  async reorder(projectId: string, orderedIds: string[]): Promise<void> {
+    const ordered = await invoke('projectActions:reorder', projectId, orderedIds)
+    this.actionsByProject.set(projectId, ordered)
+  }
   start(action: ProjectAction, variables: Record<string, string>): void {
     const terminalId = `action-${action.id}-${crypto.randomUUID()}`
     this.exitSubscriptions.get(action.id)?.()

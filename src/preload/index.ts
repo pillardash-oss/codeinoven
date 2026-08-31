@@ -453,6 +453,7 @@ const INVOKE_CHANNELS = [
   'projectActions:list',
   'projectActions:save',
   'projectActions:delete',
+  'projectActions:reorder',
   'repository:init',
   'repository:preflight',
   'repository:remoteOrigin',
