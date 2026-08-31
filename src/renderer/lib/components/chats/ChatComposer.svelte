@@ -1216,9 +1216,9 @@
   }
 
   /** Loads the preview payload for one attachment: blob URLs for binary media,
-   *  converted Word HTML, or decoded text. Missing/undecodable files silently
-   *  yield no preview so the chip falls back to the file:// URL or the modal
-   *  shows its unavailable state. */
+   *  converted document HTML (DOCX, DOC, ODT, PPTX), or decoded text. Missing/
+   *  undecodable files silently yield no preview so the chip falls back to the
+   *  file:// URL or the modal shows its unavailable state. */
   async function loadAttachmentPreview(file: PromptAttachment): Promise<void> {
     const kind = attachmentPreviewKind(file.mime, file.filename ?? '')
     if (!kind) return
@@ -1229,7 +1229,7 @@
         if (previewDocuments[file.url] !== undefined && previewUrls[file.url]) return
         if (previewDocumentLoading[file.url]) return
         previewDocumentLoading = { ...previewDocumentLoading, [file.url]: true }
-        const html = await invoke('file:readWordPreview', filePath)
+        const html = await invoke('file:readDocumentPreview', filePath)
         if (!html) return
         previewDocuments = { ...previewDocuments, [file.url]: html }
         if (!previewUrls[file.url]) {

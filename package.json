@@ -62,15 +62,18 @@
     "@codemirror/view": "^6.43.9",
     "@lezer/highlight": "^1.2.3",
     "@replit/codemirror-lang-svelte": "^6.0.0",
+    "@xmldom/xmldom": "0.8.13",
     "better-sqlite3": "^13.0.3",
     "chokidar": "^5.0.0",
     "electron-updater": "^6.8.9",
     "ffmpeg-static": "5.2.0",
+    "jszip": "3.10.1",
     "mammoth": "1.12.1",
     "node-pty": "1.1.0",
     "sherpa-onnx-node": "1.13.6",
     "web-push": "^3.6.7",
-    "werift": "^0.24.4"
+    "werift": "^0.24.4",
+    "word-extractor": "^1.0.4"
   },
   "devDependencies": {
     "@earendil-works/pi-coding-agent": "0.84.3",

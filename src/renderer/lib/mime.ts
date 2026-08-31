@@ -12,6 +12,7 @@ const EXTENSION_MIME_MAP: Record<string, string> = {
   pdf: 'application/pdf',
   doc: 'application/msword',
   docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  odt: 'application/vnd.oasis.opendocument.text',
   xls: 'application/vnd.ms-excel',
   xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
   ppt: 'application/vnd.ms-powerpoint',
@@ -133,11 +134,11 @@ const TEXT_EXTENSION_PATTERN =
 const CSV_EXTENSION_PATTERN = /\.(?:csv|tsv)$/iu
 
 /** The kind of inline preview a chat attachment supports, or `null` when the
- *  file type has no renderer (images render as `<img>`, PDF and converted DOCX
- *  content in isolated frames, video/audio via the native media elements,
- *  markdown via `MarkdownView`, plain text raw, CSV as a table). Filename
- *  extensions provide a fallback for files whose reported mime is
- *  `application/octet-stream` or empty. */
+ *  file type has no renderer (images render as `<img>`, PDF and converted
+ *  document content (DOCX, DOC, ODT, PPTX) in isolated frames, video/audio via
+ *  the native media elements, markdown via `MarkdownView`, plain text raw, CSV
+ *  as a table). Filename extensions provide a fallback for files whose reported
+ *  mime is `application/octet-stream` or empty. */
 export type AttachmentPreviewKind =
   'image' | 'pdf' | 'document' | 'video' | 'audio' | 'markdown' | 'text' | 'csv'
 
@@ -151,7 +152,10 @@ export function attachmentPreviewKind(
   if (isPdfMime(mime) || /\.pdf$/iu.test(filename)) return 'pdf'
   if (
     mime === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' ||
-    /\.docx$/iu.test(filename)
+    mime === 'application/msword' ||
+    mime === 'application/vnd.openxmlformats-officedocument.presentationml.presentation' ||
+    mime === 'application/vnd.oasis.opendocument.text' ||
+    /\.(?:docx|doc|odt|pptx)$/iu.test(filename)
   ) {
     return 'document'
   }

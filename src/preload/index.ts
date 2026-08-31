@@ -235,7 +235,7 @@ const INVOKE_CHANNELS = [
   'storage:openDataDirectory',
   'file:read',
   'file:readAsDataUrl',
-  'file:readWordPreview',
+  'file:readDocumentPreview',
   'editors:detect',
   'editors:getPreferred',
   'editors:setPreferred',

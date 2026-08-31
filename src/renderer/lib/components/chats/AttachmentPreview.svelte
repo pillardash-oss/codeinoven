@@ -27,7 +27,8 @@
     src?: string
     /** Decoded text content for markdown/plain-text previews. */
     text?: string
-    /** Semantic HTML produced from a Word document in the main process. */
+    /** Semantic HTML produced from a document attachment (DOCX, DOC, ODT,
+     *  PPTX) in the main process. */
     documentHtml?: string
     documentLoading?: boolean
     /** Persists edits when this is an app-owned pasted-text attachment. */
@@ -63,7 +64,7 @@
   let confirmCloseOpen = $state(false)
   const dirty = $derived(editableText && draft !== (text ?? ''))
   const documentSrcdoc = $derived(
-    kind === 'document' && documentHtml ? wordPreviewDocument(documentHtml) : undefined
+    kind === 'document' && documentHtml ? documentPreviewFrame(documentHtml) : undefined
   )
 
   const panZoom = new PanZoom()
@@ -87,7 +88,7 @@
     link.remove()
   }
 
-  function wordPreviewDocument(html: string): string {
+  function documentPreviewFrame(html: string): string {
     const sanitized = DOMPurify.sanitize(html)
     return `<!doctype html>
 <html lang="en">

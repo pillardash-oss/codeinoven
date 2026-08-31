@@ -1284,7 +1284,7 @@ export interface IpcInvokeContract {
   'storage:openDataDirectory': Contract<[], boolean>
   'file:read': Contract<[filePath: string], Uint8Array<ArrayBuffer> | null>
   'file:readAsDataUrl': Contract<[filePath: string], string | null>
-  'file:readWordPreview': Contract<[filePath: string], string | null>
+  'file:readDocumentPreview': Contract<[filePath: string], string | null>
   'editors:detect': Contract<[], EditorInfo[]>
   'editors:getPreferred': Contract<[], EditorId>
   'editors:setPreferred': Contract<[editorId: EditorId], void>
