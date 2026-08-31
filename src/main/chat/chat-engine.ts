@@ -19504,6 +19504,16 @@ export class ChatEngine {
     const info = this.sessionRegistry.get(sessionId)
     if (!info) return
     if (info.ephemeral) return
+    // A `session.error` event is not proof the underlying turn actually died —
+    // e.g. pi's transient extension_error fires while its persistent RPC
+    // process keeps running and finishes the turn normally. Probe the live
+    // process before tearing anything down so a false alarm doesn't wipe the
+    // turn's utility gateway handoff out from under still-running tool calls.
+    const errorDriver = this.drivers.get(info.driverId)
+    if (errorDriver?.isSessionBusy) {
+      const probe = await this.probeSessionLiveness(errorDriver, info, sessionId)
+      if (probe === 'busy') return
+    }
     this.pendingMemoryDecisions.delete(sessionId)
     this.mermaidRepairAttempts.delete(sessionId)
     this.incompleteTurnRecoveryAttempts.delete(sessionId)
