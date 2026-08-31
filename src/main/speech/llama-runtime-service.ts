@@ -1,6 +1,15 @@
-import { execFile } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { constants, access, chmod, mkdir, open, readdir, realpath, rm, stat } from 'node:fs/promises'
+import {
+  constants,
+  access,
+  chmod,
+  mkdir,
+  open,
+  readdir,
+  realpath,
+  rm,
+  stat
+} from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { delimiter, join } from 'node:path'
 import { spawn } from 'node:child_process'
@@ -105,9 +114,7 @@ export class LlamaRuntimeService {
       managedDir: this.managedDirectory(),
       releaseTag: LLAMA_RELEASE_TAG,
       downloadRequired: !selected && Boolean(asset),
-      ...(asset
-        ? { downloadName: asset.archiveName, downloadByteSize: asset.byteSize }
-        : {})
+      ...(asset ? { downloadName: asset.archiveName, downloadByteSize: asset.byteSize } : {})
     }
     return this.statusCache
   }
@@ -187,11 +194,9 @@ export class LlamaRuntimeService {
   /** System bsdtar handles tar.gz everywhere and zip archives on Windows 10+. */
   private extract(archivePath: string, targetDir: string): Promise<void> {
     return new Promise((resolve, reject) => {
-      const child = spawn(
-        'tar',
-        ['-xf', archivePath, '-C', targetDir],
-        { stdio: ['ignore', 'ignore', 'pipe'] }
-      )
+      const child = spawn('tar', ['-xf', archivePath, '-C', targetDir], {
+        stdio: ['ignore', 'ignore', 'pipe']
+      })
       let failure = ''
       child.stderr.setEncoding('utf8')
       child.stderr.on('data', (chunk: string) => {
@@ -200,7 +205,8 @@ export class LlamaRuntimeService {
       child.once('error', reject)
       child.once('exit', (code) => {
         if (code === 0) resolve()
-        else reject(new Error(failure.trim() || `Extraction exited with code ${code ?? 'unknown'}.`))
+        else
+          reject(new Error(failure.trim() || `Extraction exited with code ${code ?? 'unknown'}.`))
       })
     })
   }
@@ -290,48 +296,35 @@ export class LlamaRuntimeService {
       homebrew: 3,
       path: 4
     }
-    const interim = await Promise.all(
-      [...grouped.entries()].map(async ([realPath, group]): Promise<{
+    const interim = [...grouped.entries()].map(
+      ([realPath, group]): {
         realPath: string
         source: LlamaRuntimeSource
         path: string
         version: string | null
-      }> => ({
+      } => ({
         realPath,
         source: group
           .map((item) => item.source)
           .sort((left, right) => sourceRank[left] - sourceRank[right])[0],
         path: group[0]?.path ?? realPath,
-        version: await this.binaryVersion(realPath)
-      }))
+        version: group.some((item) => item.source === 'managed') ? LLAMA_RELEASE_TAG : null
+      })
     )
     return interim
-      .filter((installation): installation is LlamaRuntimeInstallation & { version: string } =>
-        installation.version !== null)
       .sort((left, right) => {
         // Pinned-release builds first so behavior matches what we test against.
-        const leftPinned = left.version.startsWith(LLAMA_RELEASE_TAG.slice(1)) ? 0 : 1
-        const rightPinned = right.version.startsWith(LLAMA_RELEASE_TAG.slice(1)) ? 0 : 1
+        const leftPinned = left.version?.startsWith(LLAMA_RELEASE_TAG.slice(1)) ? 0 : 1
+        const rightPinned = right.version?.startsWith(LLAMA_RELEASE_TAG.slice(1)) ? 0 : 1
         if (leftPinned !== rightPinned) return leftPinned - rightPinned
         return left.path.length - right.path.length
       })
-      .map(({ path, source, realPath, version }) => ({ path, source, realPath, version }))
-  }
-
-  private async binaryVersion(path: string): Promise<string | null> {
-    return new Promise((resolve) => {
-      // Some llama.cpp builds (e.g. Homebrew) print the version banner on
-      // stderr instead of stdout, so scan both streams.
-      execFile(path, ['--version'], { timeout: 5000 }, (error, stdout, stderr) => {
-        if (error) {
-          resolve(null)
-          return
-        }
-        // Output looks like: version: 6243abc12 (1234) built with ...
-        const match = /version:\s*(\S+)/u.exec(`${stdout}\n${stderr}`.trim())
-        resolve(match?.[1] ?? null)
-      })
-    })
+      .map(({ path, source, realPath, version }) => ({
+        path,
+        source,
+        realPath,
+        ...(version ? { version } : {})
+      }))
   }
 
   private async isExecutable(path: string): Promise<boolean> {
