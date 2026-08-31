@@ -1393,31 +1393,15 @@ export class OpenCodeDriver implements HarnessDriver {
     return this.createSessionOnHandle(handle, title)
   }
 
-  /** Free/cheap opencode candidates, shared by title and grading runs. */
+  /** Big Pickle is OpenCode's single cheap auxiliary candidate. */
   private async cheapCandidates(
-    projectPath: string
+    _projectPath: string
   ): Promise<Array<{ providerId: string; modelId: string }>> {
-    const catalogs = await this.listProviders(projectPath).catch(() => [])
-    const openCodeModels = catalogs.find((catalog) => catalog.id === 'opencode')?.models ?? []
-    const freeModels = openCodeModels.filter((model) => /(?:^|[-:])free$/iu.test(model.id))
-    const fallbackFreeModels = freeModels.filter(
-      (model) => model.id !== 'big-pickle' && model.id !== 'big-pickle-free'
-    )
-    const goFlash = catalogs
-      .find((catalog) => catalog.id === 'opencode-go')
-      ?.models.find((model) => model.id === 'deepseek-v4-flash')
-
-    // Always pin big-pickle first; only fall back to other free/stealth models
-    // if it fails or is unavailable. The thread model is appended by the caller.
-    const attempts = new Map<string, { providerId: string; modelId: string }>()
-    const addCandidate = (providerId?: string, modelId?: string) => {
-      if (!providerId || !modelId) return
-      attempts.set(`${providerId}/${modelId}`, { providerId, modelId })
-    }
-    addCandidate('opencode', 'big-pickle')
-    for (const model of fallbackFreeModels) addCandidate(model.providerId, model.id)
-    addCandidate(goFlash?.providerId, goFlash?.id)
-    return [...attempts.values()]
+    void _projectPath
+    // Pin the known alias so catalog discovery cannot block the fallback. The
+    // one-shot runner appends the conversation model and tries it when Big
+    // Pickle times out, fails, or produces an invalid response.
+    return [{ providerId: 'opencode', modelId: 'big-pickle' }]
   }
 
   /** Run one auxiliary one-shot completion per candidate on isolated servers. */

@@ -2122,7 +2122,7 @@ export interface LocalProfileAnalytics {
 export type TurnOutcomeStatus = 'pending' | 'graded'
 
 /** What triggered the judge for a pending turn outcome. */
-export type TurnOutcomeBasis = 'deleted' | 'read_timeout' | 'draft_timeout'
+export type TurnOutcomeBasis = 'deleted' | 'general_timeout' | 'read_timeout' | 'draft_timeout'
 
 /** Task kind recorded with a turn outcome, mirroring usage_events.feature. */
 export type TurnOutcomeTaskType = 'main' | 'audit' | 'assignment'

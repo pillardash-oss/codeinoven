@@ -1498,6 +1498,12 @@ export class ChatEngine {
   private static readonly GRADE_READING_WINDOW_MS = 5 * 60_000
   /** Draft window: anchored at the first draft entry, never restarted. */
   private static readonly GRADE_DRAFT_WINDOW_MS = 10 * 60_000
+  /** Hard fallback: unread and untouched completed turns are still evaluated. */
+  private static readonly GRADE_GENERAL_WINDOW_MS = 30 * 60_000
+  /** Failed judges retry out of band without blocking newer completed turns. */
+  private static readonly GRADE_RETRY_BASE_MS = 5 * 60_000
+  /** Bound each drain so model feedback never monopolizes the main process. */
+  private static readonly GRADE_DRAIN_BATCH_SIZE = 3
 
   private static readonly STREAM_BROADCAST_INTERVAL_MS = 50
   private static readonly TEMPORARY_CHAT_INACTIVITY_MS = 3 * 60 * 60 * 1000
@@ -1770,8 +1776,8 @@ export class ChatEngine {
   private utilityOrchestration: UtilityOrchestrationService
   private usageRepo: HarnessUsageRepo
   private turnFeedbackRepo: TurnFeedbackRepo
-  private gradeReadingTimers = new Map<string, ReturnType<typeof setTimeout>>()
-  private gradeDraftTimers = new Map<string, ReturnType<typeof setTimeout>>()
+  private gradeDrainTimer: ReturnType<typeof setTimeout> | null = null
+  private gradeDrainRunning = false
   private utilityTurns = new Map<
     string,
     {
@@ -1817,9 +1823,10 @@ export class ChatEngine {
       },
       this.scopeRoots
     )
-    this.threadManager.onTurnFeedbackDetached = (projectId, threadIds, rows) => {
-      for (const threadId of threadIds) this.handleThreadDeletedForGrading(threadId)
-      void this.gradeDetachedTurnOutcomes(projectId, rows)
+    this.threadManager.onTurnFeedbackDeleted = (_projectId, threadIds) => {
+      void _projectId
+      this.turnFeedbackRepo.scheduleDeleted(threadIds, Date.now())
+      this.scheduleTurnFeedbackDrain()
     }
     this.memoryService = new MemoryService(storage)
     this.generatedArtifactService = new GeneratedArtifactService(storage)
@@ -11798,13 +11805,7 @@ export class ChatEngine {
         // extra concept it invented mid-turn). Discover any valid prototype
         // directories on disk that the plan did not cover and finalize them
         // so nothing the model actually built is silently dropped.
-        const prototypesRoot = resolve(
-          projectRoot,
-          '.cio',
-          'specs',
-          featureSlug,
-          'prototypes'
-        )
+        const prototypesRoot = resolve(projectRoot, '.cio', 'specs', featureSlug, 'prototypes')
         const plannedIds = new Set(prototypeBatches.flat().map((item) => item.id))
         let discovered: Dirent[] = []
         try {
@@ -11828,7 +11829,9 @@ export class ChatEngine {
             fidelity: prototypeFidelity ?? 'lofi',
             title: candidate?.title || `Prototype ${entry.name}`,
             entryFile: 'index.html',
-            ...(candidate?.parentPrototypeId ? { parentPrototypeId: candidate.parentPrototypeId } : {})
+            ...(candidate?.parentPrototypeId
+              ? { parentPrototypeId: candidate.parentPrototypeId }
+              : {})
           })
           const paths = resolvePrototypeArtifactPaths(projectRoot, featureSlug, entry.name)
           await this.prototypePreviewRegistrar?.(paths.previewSlug, paths.canonicalRoot)
@@ -18915,38 +18918,15 @@ export class ChatEngine {
   }
 
   /**
-   * Thread deleted at any phase: cancel its countdowns. Its pending rows
-   * detach from the thread reference (SET NULL) and are graded immediately by
-   * the deletion hook, so a lost-cause thread can never score as a pass.
-   */
-  handleThreadDeletedForGrading(threadId: string): void {
-    const reading = this.gradeReadingTimers.get(threadId)
-    if (reading) {
-      clearTimeout(reading)
-      this.gradeReadingTimers.delete(threadId)
-    }
-    const draft = this.gradeDraftTimers.get(threadId)
-    if (draft) {
-      clearTimeout(draft)
-      this.gradeDraftTimers.delete(threadId)
-    }
-  }
-
-  /**
-   * The user opened the thread to read the final output. Anchor the post-read
-   * window once and start counting; draft entry later supersedes it.
+   * The user opened the thread to read the final output. The repository moves
+   * still-general rows to one durable post-read deadline; no per-thread timer
+   * is needed.
    */
   handleThreadReadForGrading(projectId: string, threadId: string): void {
-    if (this.gradeReadingTimers.has(threadId) || this.gradeDraftTimers.has(threadId)) return
+    void projectId
     if (this.turnFeedbackRepo.listPendingForThread(threadId).length === 0) return
     this.turnFeedbackRepo.scheduleReading(threadId, Date.now() + ChatEngine.GRADE_READING_WINDOW_MS)
-    this.gradeReadingTimers.set(
-      threadId,
-      setTimeout(() => {
-        this.gradeReadingTimers.delete(threadId)
-        void this.gradePendingOutcomes(projectId, threadId, 'read_timeout')
-      }, ChatEngine.GRADE_READING_WINDOW_MS)
-    )
+    this.scheduleTurnFeedbackDrain()
   }
 
   /**
@@ -18955,67 +18935,59 @@ export class ChatEngine {
    * When it elapses, everything captured so far is graded.
    */
   handleThreadDraftChangedForGrading(projectId: string, threadId: string, drafting: boolean): void {
+    void projectId
     if (!drafting) return
-    if (this.gradeDraftTimers.has(threadId)) return
-    const readingTimer = this.gradeReadingTimers.get(threadId)
-    if (readingTimer) {
-      clearTimeout(readingTimer)
-      this.gradeReadingTimers.delete(threadId)
-    }
     if (this.turnFeedbackRepo.listPendingForThread(threadId).length === 0) return
     this.turnFeedbackRepo.scheduleDraft(threadId, Date.now() + ChatEngine.GRADE_DRAFT_WINDOW_MS)
-    this.gradeDraftTimers.set(
-      threadId,
-      setTimeout(() => {
-        this.gradeDraftTimers.delete(threadId)
-        void this.gradePendingOutcomes(projectId, threadId, 'draft_timeout')
-      }, ChatEngine.GRADE_DRAFT_WINDOW_MS)
-    )
+    this.scheduleTurnFeedbackDrain()
   }
 
-  /** Crash recovery: grade every pending row whose persisted deadline elapsed. */
+  /** Restart recovery drains overdue rows and re-arms the earliest future row. */
   async recoverPendingTurnGrades(): Promise<void> {
-    const due = this.turnFeedbackRepo.listDuePendingWithProject(Date.now())
-    for (const row of due) {
-      const basis: TurnOutcomeBasis =
-        row.draft_deadline_ms !== null &&
-        (row.reading_deadline_ms === null || row.draft_deadline_ms <= row.reading_deadline_ms)
-          ? 'draft_timeout'
-          : 'read_timeout'
-      await this.gradeOutcomeCandidate(row.project_id, row, basis, null)
-    }
+    await this.drainTurnFeedbackQueue()
   }
 
-  /** Grade all still-pending rows of a live thread when its deadline fired. */
-  private async gradePendingOutcomes(
-    projectId: string,
-    threadId: string,
-    basis: TurnOutcomeBasis
-  ): Promise<void> {
-    for (const row of this.turnFeedbackRepo.listPendingForThread(threadId)) {
-      await this.gradeOutcomeCandidate(projectId, row, basis, null)
+  /** Arm one process-wide wake-up for the earliest durable queue row. */
+  private scheduleTurnFeedbackDrain(delayOverrideMs?: number): void {
+    if (this.gradeDrainTimer) clearTimeout(this.gradeDrainTimer)
+    const nextDeadline = this.turnFeedbackRepo.nextPendingDeadline()
+    if (nextDeadline === null) {
+      this.gradeDrainTimer = null
+      return
     }
+    const delay = delayOverrideMs ?? Math.max(0, Math.min(2_147_483_647, nextDeadline - Date.now()))
+    this.gradeDrainTimer = setTimeout(() => {
+      this.gradeDrainTimer = null
+      void this.drainTurnFeedbackQueue()
+    }, delay)
   }
 
-  /** Deletion hook: rows detached from their deleted threads are graded now. */
-  async gradeDetachedTurnOutcomes(
-    projectId: string,
-    candidates: DetachedTurnFeedbackPayload[]
-  ): Promise<void> {
-    for (const payload of candidates) {
-      if (!payload.harnessId) continue
-      const candidate: TurnGradeCandidate = {
-        id: payload.id,
-        harnessId: payload.harnessId,
-        providerId: payload.providerId ?? '',
-        modelId: payload.modelId ?? '',
-        thinkingLevel: (payload.thinkingLevel ?? 'minimal') as ThinkingLevel,
-        userMessage: payload.userMessageText,
-        assistantOutput: payload.assistantOutputText,
-        followUp: payload.followUpText
+  /**
+   * Independent post-conversation runner. Each persisted parent-turn row is a
+   * checkpoint, so later drains continue at the oldest still-pending turn and
+   * the same thread can be evaluated any number of times across its lifetime.
+   */
+  private async drainTurnFeedbackQueue(): Promise<void> {
+    if (this.gradeDrainRunning) return
+    this.gradeDrainRunning = true
+    let processed = 0
+    try {
+      const rows = this.turnFeedbackRepo.listDuePendingWithProject(Date.now())
+      for (const row of rows) {
+        const basis = row.basis ?? 'general_timeout'
+        const graded = await this.gradeOutcomeCandidate(row.project_id, row, basis, null)
+        if (!graded) {
+          const exponent = Math.min(row.attempt_count, 4)
+          const retryDelay = ChatEngine.GRADE_RETRY_BASE_MS * 2 ** exponent
+          this.turnFeedbackRepo.defer(row.id, Date.now() + retryDelay)
+        }
+        processed += 1
       }
-      const graded = await this.gradeOutcomeCore(projectId, candidate, 'deleted', null)
-      if (graded !== null) this.turnFeedbackRepo.grade(candidate.id, 'deleted', graded)
+    } finally {
+      this.gradeDrainRunning = false
+      this.scheduleTurnFeedbackDrain(
+        processed >= ChatEngine.GRADE_DRAIN_BATCH_SIZE ? 100 : undefined
+      )
     }
   }
 
@@ -19034,11 +19006,11 @@ export class ChatEngine {
     },
     basis: TurnOutcomeBasis,
     parentSessionId: string | null
-  ): Promise<void> {
+  ): Promise<boolean> {
     const candidate = this.toTurnGradeCandidate(row)
-    if (!candidate) return
+    if (!candidate) return false
     const graded = await this.gradeOutcomeCore(projectId, candidate, basis, parentSessionId)
-    if (graded !== null) this.turnFeedbackRepo.grade(candidate.id, basis, graded)
+    return graded !== null && this.turnFeedbackRepo.grade(candidate.id, basis, graded)
   }
 
   /** Judge one candidate and persist nothing; returns the grade, or null on judge failure. */
@@ -19115,6 +19087,7 @@ export class ChatEngine {
     const { costUsd, costStatus } = this.assistantTurnCostAccounting(turnAssistant)
     await this.turnFeedbackRepo.openPendingViaWorker({
       id: `outcome:${parentTurnId}`,
+      projectId,
       threadId,
       parentTurnId,
       sessionId,
@@ -19129,8 +19102,10 @@ export class ChatEngine {
       costStatus,
       tokensTotal: turnAssistant.tokens?.total ?? null,
       userMessageText: textForMessage(parentMessage).slice(0, 6_000),
-      assistantOutputText: textForMessage(turnAssistant).slice(0, 6_000)
+      assistantOutputText: textForMessage(turnAssistant).slice(0, 6_000),
+      generalDeadlineMs: Date.now() + ChatEngine.GRADE_GENERAL_WINDOW_MS
     })
+    this.scheduleTurnFeedbackDrain()
   }
 
   private recordAuxiliaryUsageEvent(input: {
@@ -21122,7 +21097,7 @@ function titleAttemptsFromDriver(driver: HarnessDriver): readonly TitleAttemptAc
   return candidate.getTitleAttempts?.() ?? []
 }
 
-/** Minimal judge payload shared by live-thread and detached-row grading. */
+/** Minimal judge payload reconstructed from one durable queue row. */
 interface TurnGradeCandidate {
   id: string
   harnessId: string
@@ -21132,18 +21107,6 @@ interface TurnGradeCandidate {
   userMessage: string
   assistantOutput: string
   followUp: string | null
-}
-
-/** Pending feedback row payload captured before its thread was deleted. */
-export interface DetachedTurnFeedbackPayload {
-  id: string
-  harnessId: string
-  providerId: string | null
-  modelId: string | null
-  thinkingLevel: string | null
-  userMessageText: string
-  assistantOutputText: string
-  followUpText: string | null
 }
 
 function rejectedMermaidMessage(message: AgentMessage, error: string): AgentMessage {

@@ -427,13 +427,10 @@ export class CodexDriver extends PersistentCliDriver {
     throw new Error(`Command is not available in ${this.name}: ${command.name}`)
   }
 
-  /** Cheapest available catalog model, shared by title and grading runs. */
-  private async cheapestCandidate(projectPath: string): Promise<TitleModelCandidate[]> {
-    const catalogs = await this.listProviders(projectPath)
-    const luna = catalogs
-      .find((catalog) => catalog.id === 'openai')
-      ?.models.find((model) => model.id === 'gpt-5.6-luna')
-    return luna ? [{ providerId: luna.providerId, modelId: luna.id }] : []
+  /** Luna is Codex's single cheap auxiliary candidate. */
+  private async cheapestCandidate(_projectPath: string): Promise<TitleModelCandidate[]> {
+    void _projectPath
+    return [{ providerId: 'openai', modelId: 'gpt-5.6-luna' }]
   }
 
   async generateTitle(projectPath: string, options: GenerateTitleOptions): Promise<string | null> {

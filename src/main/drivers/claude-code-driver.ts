@@ -1539,30 +1539,30 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
     }
   }
 
-  /** Cheapest first-party candidates, shared by title and grading runs. */
-  private async cheapAnthropicCandidates(
-    projectPath: string
-  ): Promise<{ candidates: TitleModelCandidate[]; anthropicFound: boolean }> {
-    const catalogs = await this.listProviders(projectPath)
-    const anthropic = catalogs.find((catalog) => catalog.id === 'anthropic')
-    const candidates = ['haiku', 'sonnet'].flatMap((modelId) =>
-      anthropic?.models.some((model) => model.id === modelId)
-        ? [{ providerId: 'anthropic' as const, modelId }]
-        : []
-    )
-    return { candidates, anthropicFound: anthropic !== undefined }
+  /** Haiku is Claude Code's single cheap auxiliary candidate. */
+  private async cheapAnthropicCandidates(_projectPath: string): Promise<TitleModelCandidate[]> {
+    void _projectPath
+    // The stable alias is attempted directly. The shared one-shot runner adds
+    // the conversation model as the only fallback on timeout or failure.
+    return [{ providerId: 'anthropic', modelId: 'haiku' }]
   }
 
   async generateTitle(projectPath: string, options: GenerateTitleOptions): Promise<string | null> {
     if (!(await this.auxiliaryTransportReady(options))) return null
-    const { candidates } = await this.cheapAnthropicCandidates(projectPath)
-    return this.generateTitleWithCandidates(projectPath, options, candidates)
+    return this.generateTitleWithCandidates(
+      projectPath,
+      options,
+      await this.cheapAnthropicCandidates(projectPath)
+    )
   }
 
   async gradeTurn(projectPath: string, options: GradeTurnOptions): Promise<number | null> {
     if (!(await this.auxiliaryTransportReady(options))) return null
-    const { candidates } = await this.cheapAnthropicCandidates(projectPath)
-    return this.gradeTurnWithCandidates(projectPath, options, candidates)
+    return this.gradeTurnWithCandidates(
+      projectPath,
+      options,
+      await this.cheapAnthropicCandidates(projectPath)
+    )
   }
 
   async provideCheapModel(
@@ -1579,8 +1579,7 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
   protected override async cheapCandidateModels(
     projectPath: string
   ): Promise<TitleModelCandidate[]> {
-    const { candidates } = await this.cheapAnthropicCandidates(projectPath)
-    return candidates
+    return this.cheapAnthropicCandidates(projectPath)
   }
 
   /**

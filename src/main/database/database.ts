@@ -5,7 +5,7 @@ import DatabaseConstructor from 'better-sqlite3'
 import type { Database as DatabaseType, Statement } from 'better-sqlite3'
 import { getConfigRoot } from '../../lib/utils'
 import { Logger } from '../system/logger'
-import { DATABASE_SCHEMA_SQL } from './schema'
+import { DATABASE_SCHEMA_SQL, TURN_FEEDBACK_COLUMNS_SQL } from './schema'
 import {
   DatabaseWorker,
   DATABASE_WORKER_DEFAULTS,
@@ -657,13 +657,69 @@ export class Database {
    */
   private migrateTurnFeedbackGrades(connection: DatabaseType): void {
     const columns = new Set<string>(
-      (
-        connection.prepare('PRAGMA table_info(turn_feedback)').all() as Array<{ name: string }>
-      ).map((column) => column.name)
+      (connection.prepare('PRAGMA table_info(turn_feedback)').all() as Array<{ name: string }>).map(
+        (column) => column.name
+      )
     )
     if (columns.size > 0 && !columns.has('grade')) {
       connection.exec('DROP TABLE turn_feedback')
+      return
     }
+    if (columns.size === 0 || columns.has('due_at_ms')) return
+
+    // Replace the deadline-per-trigger table with one durable queue deadline.
+    // Existing grades and captured payloads survive; pending rows inherit the
+    // earliest old deadline, or a bounded general deadline when none existed.
+    connection.exec('ALTER TABLE turn_feedback RENAME TO turn_feedback_legacy')
+    connection.exec(`CREATE TABLE turn_feedback (${TURN_FEEDBACK_COLUMNS_SQL})`)
+    connection.exec(`
+      INSERT INTO turn_feedback(
+        id, thread_id, project_id, parent_turn_id, session_id, created_at,
+        resolved_at, status, basis, grade, feature, task_slug,
+        harness_id, provider_id, model_id, thinking_level,
+        cost_usd, cost_status, tokens_total,
+        user_message_text, assistant_output_text, follow_up_text,
+        reading_deadline_ms, draft_deadline_ms,
+        general_deadline_ms, due_at_ms, attempt_count, last_attempt_at_ms
+      )
+      SELECT
+        legacy.id,
+        legacy.thread_id,
+        (SELECT project_id FROM threads WHERE id = legacy.thread_id),
+        legacy.parent_turn_id,
+        legacy.session_id,
+        legacy.created_at,
+        legacy.resolved_at,
+        legacy.status,
+        legacy.basis,
+        legacy.grade,
+        legacy.feature,
+        legacy.task_slug,
+        legacy.harness_id,
+        legacy.provider_id,
+        legacy.model_id,
+        legacy.thinking_level,
+        legacy.cost_usd,
+        legacy.cost_status,
+        legacy.tokens_total,
+        legacy.user_message_text,
+        legacy.assistant_output_text,
+        legacy.follow_up_text,
+        legacy.reading_deadline_ms,
+        legacy.draft_deadline_ms,
+        legacy.created_at + 1800000,
+        CASE
+          WHEN legacy.status <> 'pending' THEN NULL
+          WHEN legacy.reading_deadline_ms IS NULL THEN
+            COALESCE(legacy.draft_deadline_ms, legacy.created_at + 1800000)
+          WHEN legacy.draft_deadline_ms IS NULL THEN legacy.reading_deadline_ms
+          ELSE MIN(legacy.reading_deadline_ms, legacy.draft_deadline_ms)
+        END,
+        0,
+        NULL
+      FROM turn_feedback_legacy AS legacy
+    `)
+    connection.exec('DROP TABLE turn_feedback_legacy')
   }
 
   /**
@@ -683,7 +739,7 @@ export class Database {
   migrateThreadSettingsLegacyEngineeringFlag(connection?: DatabaseType): void {
     const target = connection ?? this.requireDb()
     const rows = target
-      .prepare("SELECT id, settings FROM threads WHERE settings LIKE '%\"engineeringMode\"%'")
+      .prepare('SELECT id, settings FROM threads WHERE settings LIKE \'%"engineeringMode"%\'')
       .all() as Array<{ id: string; settings: string }>
     if (rows.length === 0) return
     const update = target.prepare('UPDATE threads SET settings = ? WHERE id = ?')

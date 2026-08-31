@@ -338,7 +338,10 @@ export abstract class PersistentCliDriver implements HarnessDriver {
         const fallbackReason = this.describeTitleFailure(error)
         if (error instanceof TitleTurnProviderIssueError && error.issue.kind === 'authentication') {
           accounted.push(this.buildTitleAttempt(index + 1, candidate, false, fallbackReason))
-          return { value: null, authFailed: true, attempts: accounted }
+          if (index === attempts.length - 1) {
+            return { value: null, authFailed: true, attempts: accounted }
+          }
+          continue
         }
         Logger.dev(
           `${this.name} one-shot model ${candidate.providerId}/${candidate.modelId} unavailable:`,
@@ -437,8 +440,12 @@ export abstract class PersistentCliDriver implements HarnessDriver {
     return []
   }
 
-  generateTitle(projectPath: string, options: GenerateTitleOptions): Promise<string | null> {
-    return this.generateTitleWithCandidates(projectPath, options, [])
+  async generateTitle(projectPath: string, options: GenerateTitleOptions): Promise<string | null> {
+    return this.generateTitleWithCandidates(
+      projectPath,
+      options,
+      await this.cheapCandidateModels(projectPath)
+    )
   }
 
   /** Ping the exact configured model — no cheap-candidate substitution. */
@@ -456,8 +463,12 @@ export abstract class PersistentCliDriver implements HarnessDriver {
     return outcome.value !== null
   }
 
-  gradeTurn(projectPath: string, options: GradeTurnOptions): Promise<number | null> {
-    return this.gradeTurnWithCandidates(projectPath, options, [])
+  async gradeTurn(projectPath: string, options: GradeTurnOptions): Promise<number | null> {
+    return this.gradeTurnWithCandidates(
+      projectPath,
+      options,
+      await this.cheapCandidateModels(projectPath)
+    )
   }
 
   /**

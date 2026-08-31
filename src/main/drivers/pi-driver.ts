@@ -46,7 +46,8 @@ import {
   type CliLineParseContext,
   type CliLineParseResult,
   type CliTurnCommand,
-  type PersistentCliSession
+  type PersistentCliSession,
+  type TitleModelCandidate
 } from './persistent-cli-driver'
 import { inlineSvgAttachments, isSvgAttachment } from './svg-attachment'
 import { piMcpExtension } from './pi-mcp-extension'
@@ -74,6 +75,7 @@ import {
 } from './harness-runtime'
 
 const THINKING_PRESETS = PI_THINKING_PRESETS
+const PI_CHEAP_MODEL_DISCOVERY_TIMEOUT_MS = 10_000
 
 /** Pi thinking levels accepted by `set_thinking_level`. */
 const PI_THINKING_LEVELS: Record<string, string> = {
@@ -1121,8 +1123,12 @@ export class PiDriver extends PersistentCliDriver {
     super(storage)
   }
 
-  generateTitle(projectPath: string, options: GenerateTitleOptions): Promise<string | null> {
-    return this.generateTitleWithCandidates(projectPath, options, [])
+  async generateTitle(projectPath: string, options: GenerateTitleOptions): Promise<string | null> {
+    return this.generateTitleWithCandidates(
+      projectPath,
+      options,
+      await this.cheapCandidateModels(projectPath)
+    )
   }
 
   protected async ensureCliReady(projectPath: string): Promise<void> {
@@ -1187,6 +1193,32 @@ export class PiDriver extends PersistentCliDriver {
       Logger.dev('Pi provider discovery failed, using fallback catalog', error)
       return this.filterConnectedCatalogs(structuredClone(PI_FALLBACK_CATALOG), connected)
     }
+  }
+
+  /** Every connected Pi model whose display name or id identifies it as free. */
+  protected override async cheapCandidateModels(
+    projectPath: string
+  ): Promise<TitleModelCandidate[]> {
+    let timeout: ReturnType<typeof setTimeout> | null = null
+    const catalogs = await Promise.race([
+      this.listProviders(projectPath).catch(() => []),
+      new Promise<ProviderCatalog[]>((resolve) => {
+        timeout = setTimeout(() => resolve([]), PI_CHEAP_MODEL_DISCOVERY_TIMEOUT_MS)
+      })
+    ]).finally(() => {
+      if (timeout) clearTimeout(timeout)
+    })
+    const candidates = new Map<string, TitleModelCandidate>()
+    for (const catalog of catalogs) {
+      for (const model of catalog.models) {
+        if (!/free/iu.test(model.id) && !/free/iu.test(model.name)) continue
+        candidates.set(`${model.providerId}/${model.id}`, {
+          providerId: model.providerId,
+          modelId: model.id
+        })
+      }
+    }
+    return [...candidates.values()]
   }
 
   /**
@@ -1990,10 +2022,7 @@ export class PiDriver extends PersistentCliDriver {
       const dir = nativePiSessionDir(projectPath)
       await mkdir(dir, { recursive: true })
       const nativeId = randomUUID()
-      const file = join(
-        dir,
-        `${new Date().toISOString().replace(/[:.]/gu, '-')}_${nativeId}.jsonl`
-      )
+      const file = join(dir, `${new Date().toISOString().replace(/[:.]/gu, '-')}_${nativeId}.jsonl`)
       await writeFile(file, `${entries.join('\n')}\n`, 'utf8')
       session.nativeSessionId = nativeId
       await this.persistSession(session)
