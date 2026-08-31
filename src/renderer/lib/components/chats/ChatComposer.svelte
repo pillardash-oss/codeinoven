@@ -642,14 +642,13 @@
     thinkingMenuOpen = false
   }
 
-  // Prior-open tracking for the focus-on-close edge detection below. This is a
-  // non-reactive scratch value read/written only inside the effect — the effect
-  // re-runs because it also reads the reactive menu state, so keeping the
-  // previous value in a plain variable (rather than $state) is correct.
+  // Focus restoration on close for every menu/overlay that steals focus from
+  // the editor: each returns the caret to its last published position rather
+  // than the end, so mid-sentence editing stays seamless.
   let modelWasOpen = false
   $effect(() => {
     if (modelWasOpen && !modelMenuOpen) {
-      focusComposerAtEnd()
+      focusComposerAtSavedCaret()
     }
     modelWasOpen = modelMenuOpen
   })
@@ -657,9 +656,25 @@
   let thinkingWasOpen = false
   $effect(() => {
     if (thinkingWasOpen && !thinkingMenuOpen) {
-      focusComposerAtEnd()
+      focusComposerAtSavedCaret()
     }
     thinkingWasOpen = thinkingMenuOpen
+  })
+
+  let permissionWasOpen = false
+  $effect(() => {
+    if (permissionWasOpen && !permissionMenuOpen) {
+      focusComposerAtSavedCaret()
+    }
+    permissionWasOpen = permissionMenuOpen
+  })
+
+  let inferenceWasOpen = false
+  $effect(() => {
+    if (inferenceWasOpen && !inferenceMenuOpen) {
+      focusComposerAtSavedCaret()
+    }
+    inferenceWasOpen = inferenceMenuOpen
   })
 
   function toggleInferenceMenu(): void {
@@ -728,6 +743,7 @@
 
   function cancelImageDescriptorGate(): void {
     imageDescriptorGateOpen = false
+    focusComposerAtSavedCaret()
   }
 
   /** Persist the chosen vision model (thread + optional global default) and send. */
@@ -861,6 +877,18 @@
       if (!(editor instanceof HTMLDivElement)) return
       editor.focus()
       placeCaretAtEnd(editor)
+    })
+  }
+
+  /** Focus the composer editor and restore the caret to the position the user
+   *  last had inside it — published continuously by the rich editor via its
+   *  selection tracking. Falls back to the end when no position is known.
+   *  This is the right default whenever an overlay that stole focus (menu,
+   *  attachment preview, picker) closes: typing resumes exactly where it left
+   *  off instead of the caret jumping to the end. */
+  export function focusComposerAtSavedCaret(): void {
+    void tick().then(() => {
+      richEditor?.focusAtBookmark(richEditor.caretBookmark())
     })
   }
 
@@ -1387,6 +1415,7 @@
     }
     const paths = await invoke('dialog:pickFiles', attachmentStorage)
     await addFileAttachments(paths.map((path) => ({ path })))
+    focusComposerAtSavedCaret()
   }
 
   async function handleRemoteFileSelection(event: Event): Promise<void> {
@@ -1402,6 +1431,7 @@
       }
     }
     input.value = ''
+    focusComposerAtSavedCaret()
   }
 
   // ─── Global file drop (full viewport) ─────────────────────────────────────
@@ -1740,7 +1770,10 @@
     documentHtml={previewDocuments[previewFile.url]}
     documentLoading={previewDocumentLoading[previewFile.url] ?? false}
     onSaveText={isEditablePastedTextAttachment(previewFile) ? savePreviewText : undefined}
-    onClose={() => (previewFile = null)}
+    onClose={() => {
+      previewFile = null
+      focusComposerAtSavedCaret()
+    }}
   />
 {/if}
 
@@ -2551,6 +2584,7 @@
   onClose={() => {
     startAfterPickerOpen = false
     if (startAfterThreads.length === 0) startAfterEnabled = false
+    focusComposerAtSavedCaret()
   }}
 />
 

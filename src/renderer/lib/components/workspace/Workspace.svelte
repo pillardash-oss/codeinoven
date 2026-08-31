@@ -653,6 +653,18 @@
     }, 120)
   }
 
+  /** Clicking into the chat composer means the user found what they were
+   *  looking for: any open sidebar thread search is dismissed immediately
+   *  ("click and go") instead of lingering and blocking the composer. Runs in
+   *  the capture phase so it fires before focus settles into the editor. */
+  function handleComposerPointerDown(event: Event): void {
+    const target = event.target
+    if (!(target instanceof Element)) return
+    if (!target.closest('[data-onboarding="composer"]')) return
+    if (threadsSearchOpen) closeThreadsSearch()
+    for (const projectId of [...projectSearchOpen]) closeProjectSearch(projectId)
+  }
+
   /** Project icon data URLs keyed by project id. */
   const projectIcons = new SvelteMap<string, string>()
 
@@ -2921,6 +2933,8 @@
 
   loadData()
 </script>
+
+<svelte:document onpointerdowncapture={handleComposerPointerDown} />
 
 <div class="flex h-full">
   <!-- Shared sidebar — shows Projects or Chats depending on the shell mode -->

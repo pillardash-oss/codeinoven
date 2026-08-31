@@ -333,13 +333,9 @@
       cancelAnimationFrame(raf)
     }
   })
-  /** The last turn in the list and whether it is still the "active" turn. A
-   *  trailing steer — a user message the agent has not responded to yet — does
-   *  not end the turn it intervenes in, so the streaming trace for the current
-   *  request stays open until that turn actually completes (or the agent starts
-   *  a newer turn). While the thread is busy, the latest turn is by definition
-   *  the active one: a steer the agent is demonstrably working on must keep its
-   *  trace open even when the preceding assistant message is stamped complete. */
+  /** The latest turn that already has an assistant message. A newly submitted
+   *  user follow-up is handled separately until its first assistant message is
+   *  mirrored, so it can never lend live state to the preceding trace. */
   const latestTurnInfo = $derived.by(() => {
     const startIndex = lastTurnStartIndex(messages)
     if (startIndex === -1) return { startIndex: -1, active: false }
@@ -385,6 +381,32 @@
   /** Whether the current run is confirmed by live session activity. Persisted
    *  `planning`/`executing` is not enough to make the composer or trace busy. */
   let liveBusy = $derived(controller?.busy ?? agentRuns.isLiveBusy(thread.projectId, thread.id))
+  /** A live turn whose user message is visible but whose assistant message has
+   *  not been mirrored yet. Pi can keep streaming durable parts in this state
+   *  for an entire follow-up turn. Render those parts under the user message
+   *  instead of treating the preceding assistant trace as the active one. */
+  let pendingLiveTurn = $derived.by(() => {
+    if (!conversationBusy || brainstormReportRefreshing) return null
+    const userMessageId = agentRuns.currentTurnUserMessageId(thread.projectId, conversationId)
+    if (!userMessageId) return null
+    const userMessageIndex = messages.findIndex((message) => message.id === userMessageId)
+    const userMessage = messages[userMessageIndex]
+    if (
+      userMessageIndex === -1 ||
+      !userMessage ||
+      userMessage.role !== 'user' ||
+      isActivityOnlyUserMessage(userMessage)
+    ) {
+      return null
+    }
+    const assistantMirrored = messages
+      .slice(userMessageIndex + 1)
+      .some((message) => message.role === 'assistant')
+    return assistantMirrored ? null : { userMessageId, userMessageIndex }
+  })
+  let pendingLiveTurnParts = $derived(
+    pendingLiveTurn ? streamWorkingPartsForPendingTurn(pendingLiveTurn.userMessageIndex) : []
+  )
   /** Whether the latest turn currently has any renderable working-trace parts.
    *  When the thread is busy but nothing has materialized to write to the
    *  screen yet (the agent is still connecting/assembling, or the hydrated
@@ -672,6 +694,10 @@
    *  the live mirror and restore the latest trace after an app refresh. */
   let streamParts = $state<AgentPart[]>([])
   let streamPartsLoadGeneration = 0
+  /** Part IDs that existed before the locally submitted turn. Pi may append a
+   *  follow-up's parts to its prior assistant message until the turn stops, so
+   *  message position alone cannot separate old and new trace content. */
+  let liveTurnPriorPartIds = $state.raw<ReadonlySet<string>>(new Set())
 
   function clearStreamParts(): void {
     streamPartsLoadGeneration += 1
@@ -3190,6 +3216,9 @@
 
   function beginLocalTurn(userMessageId: string): void {
     restoredBusy = false
+    liveTurnPriorPartIds = new Set(
+      messages.flatMap((message) => message.parts.map((part) => part.id))
+    )
     clearStreamParts()
     locallySubmittedTurnId = userMessageId
     locallySubmittedTurnAcknowledged = false
@@ -4337,7 +4366,7 @@
     const current = workspaceState.focusComposerEditorCount
     if (current === focusComposerEditorBaseline) return
     focusComposerEditorBaseline = current
-    composer?.focusComposerAtEnd()
+    composer?.focusComposerAtSavedCaret()
   })
 
   /** Send or queue a message. When the agent is busy the text is queued and
@@ -8925,6 +8954,28 @@
     })
   }
 
+  /** Return only durable parts produced after a pending user follow-up. The
+   *  local pre-turn snapshot is authoritative because Pi can temporarily write
+   *  new parts into an already-completed assistant message. On a remount, fall
+   *  back to the parts visible before the pending user message. */
+  function streamWorkingPartsForPendingTurn(userMessageIndex: number): AgentPart[] {
+    const priorPartIds = new SvelteSet<string>(liveTurnPriorPartIds)
+    if (priorPartIds.size === 0) {
+      for (let index = 0; index < userMessageIndex; index += 1) {
+        for (const part of messages[index]?.parts ?? []) priorPartIds.add(part.id)
+      }
+    }
+    return streamParts.filter(
+      (part) => part.type !== 'question' && !isTodoToolPart(part) && !priorPartIds.has(part.id)
+    )
+  }
+
+  function withoutPendingLiveParts(parts: AgentPart[]): AgentPart[] {
+    if (!pendingLiveTurn || pendingLiveTurnParts.length === 0) return parts
+    const pendingPartIds = new SvelteSet(pendingLiveTurnParts.map((part) => part.id))
+    return parts.filter((part) => !pendingPartIds.has(part.id))
+  }
+
   /** Find the last text part in a turn ending at the given message index.
    *  Activity-only user messages are transparent to the turn span. */
   function getTurnFinalText(endMsgIndex: number): AgentPart | null {
@@ -9666,18 +9717,21 @@
                 <div class="group mb-6 flex min-w-0 flex-col">
                   {#if isTurnStart}
                     {@const turnDone = isTurnCompleted(msgIndex)}
+                    {@const isCurrentAssistantTurn = isLatestTurn && !pendingLiveTurn}
                     {@const traceIsLive =
-                      threadWorking && isLatestTurn && !brainstormReportRefreshing}
+                      threadWorking && isCurrentAssistantTurn && !brainstormReportRefreshing}
                     {@const traceIsRestored =
                       restoredBusy && isLatestTurn && !liveBusy && !turnDone}
                     {@const accumulatedTurnParts = getTurnWorkingParts(msgIndex, traceIsLive)}
-                    {@const durableTurnParts = streamWorkingPartsForTurn(msgIndex)}
+                    {@const durableTurnParts = pendingLiveTurn
+                      ? []
+                      : streamWorkingPartsForTurn(msgIndex)}
                     {@const collectedTurnParts =
-                      streamParts.length > 0 && isLatestTurn
+                      streamParts.length > 0 && isCurrentAssistantTurn
                         ? traceIsRestored
                           ? mergeWorkingParts(durableTurnParts, accumulatedTurnParts)
                           : mergeWorkingParts(accumulatedTurnParts, durableTurnParts)
-                        : accumulatedTurnParts}
+                        : withoutPendingLiveParts(accumulatedTurnParts)}
                     {@const turnParts = isAssignmentAuditorThread
                       ? collectedTurnParts.filter(
                           (part) => part.type !== 'text' || part.phase === 'commentary'
@@ -9686,9 +9740,9 @@
                     {#if shouldMountWorkingTrace(turnParts.length, traceIsLive)}
                       <WorkingTrace
                         parts={turnParts}
-                        open={isLatestTurn || traceIsLive || traceIsRestored}
+                        open={isCurrentAssistantTurn || traceIsLive || traceIsRestored}
                         busy={traceIsLive || traceIsRestored}
-                        latest={isLatestTurn}
+                        latest={isCurrentAssistantTurn}
                         done={turnDone}
                         rehydrated={traceIsRestored}
                         startTime={isLatestTurn
@@ -9715,16 +9769,16 @@
                         isFast={useLiveAttribution
                           ? currentWorkingTraceAttribution.isFast
                           : fastVariant !== null}
-                        initialOpen={isLatestTurn &&
+                        initialOpen={isCurrentAssistantTurn &&
                           agentRuns.isTraceOpen(thread.projectId, thread.id)}
-                        initialUserOpened={isLatestTurn &&
+                        initialUserOpened={isCurrentAssistantTurn &&
                           agentRuns.isTraceUserOpened(thread.projectId, thread.id)}
                         projectId={thread.projectId}
                         threadId={thread.id}
                         checkpointId={turnCheckpoint?.id ?? null}
                         checkpointPaths={turnCheckpoint?.changes.map((change) => change.path) ?? []}
                         onToggle={(open, userOpened) => {
-                          if (isLatestTurn) {
+                          if (isCurrentAssistantTurn) {
                             agentRuns.setTraceOpen(thread.projectId, thread.id, open, userOpened)
                           }
                         }}
@@ -9971,6 +10025,31 @@
               {/if}
             {/if}
           {/each}
+
+          {#if pendingLiveTurn}
+            <WorkingTrace
+              parts={pendingLiveTurnParts}
+              open
+              busy
+              latest
+              startTime={activeTurnStartTime}
+              modelLabel={currentWorkingTraceAttribution.modelLabel}
+              thinkingLevel={currentWorkingTraceAttribution.thinkingLevel}
+              providerName={currentWorkingTraceAttribution.providerName}
+              providerId={currentWorkingTraceAttribution.providerId}
+              harnessId={currentWorkingTraceAttribution.harnessId}
+              harnessName={currentWorkingTraceAttribution.harnessName}
+              isFast={currentWorkingTraceAttribution.isFast}
+              initialOpen={agentRuns.isTraceOpen(thread.projectId, conversationId)}
+              initialUserOpened={agentRuns.isTraceUserOpened(thread.projectId, conversationId)}
+              projectId={thread.projectId}
+              threadId={thread.id}
+              onToggle={(open, userOpened) =>
+                agentRuns.setTraceOpen(thread.projectId, conversationId, open, userOpened)}
+              onOpenSubagent={openSubagent}
+              onCiteFile={openFileCitation}
+            />
+          {/if}
 
           {#if specGenerationTraceActive && specGenerationTraceParts.length > 0}
             <WorkingTrace

@@ -183,6 +183,12 @@
     return visit(root) ?? { node: root, offset: root.childNodes.length }
   }
 
+  /** Most recent caret position seen inside this editor. Tracked on every
+   *  selection change (including while focus sits elsewhere, e.g. a menu or a
+   *  modal) so focus-return flows can restore the caret exactly where the user
+   *  left it instead of jumping to the end. */
+  let lastSelectionBookmark: SelectionBookmark | null = null
+
   function captureSelection(): SelectionBookmark | null {
     if (!editor) return null
     const selection = window.getSelection()
@@ -196,7 +202,38 @@
     }
     const anchor = pointOffset(editor, selection.anchorNode, selection.anchorOffset)
     const focus = pointOffset(editor, selection.focusNode, selection.focusOffset)
-    return anchor === null || focus === null ? null : { anchor, focus }
+    if (anchor === null || focus === null) return null
+    const bookmark = { anchor, focus }
+    lastSelectionBookmark = bookmark
+    return bookmark
+  }
+
+  /** Bookmark of the caret's latest position inside this editor — the live
+   *  selection when it still points here, otherwise the last tracked position. */
+  export function caretBookmark(): SelectionBookmark | null {
+    return captureSelection() ?? lastSelectionBookmark
+  }
+
+  /** Focus the editor and restore the caret to `bookmark` (clamped to the
+   *  current text length), falling back to the end when no bookmark exists.
+   *  Used by focus-return flows after overlays (menus, previews, pickers)
+   *  close, so typing resumes exactly where it left off. */
+  export function focusAtBookmark(bookmark: SelectionBookmark | null): void {
+    if (!editor) return
+    editor.focus()
+    if (!bookmark) {
+      placeCaretAtEnd(editor)
+      publishCaretText()
+      return
+    }
+    const length = nodeLength(editor)
+    const clamped: SelectionBookmark = {
+      anchor: Math.min(bookmark.anchor, length),
+      focus: Math.min(bookmark.focus, length)
+    }
+    restoreSelection(clamped)
+    lastSelectionBookmark = clamped
+    publishCaretText()
   }
 
   function restoreSelection(bookmark: SelectionBookmark | null): void {
@@ -415,6 +452,10 @@
     resetHistoryGroup()
     publishHistoryEntry(entry)
     publishHistoryState()
+  }
+
+  function handleSelectionChange(): void {
+    captureSelection()
   }
 
   function badgeSignature(): string {
@@ -958,7 +999,11 @@
       placeCaretAtEnd(editor)
       publishCaretText()
     }
+    // Track the caret even while focus sits elsewhere (menus, modals, pickers)
+    // so focus-return flows can restore the exact last position.
+    document.addEventListener('selectionchange', handleSelectionChange)
     return () => {
+      document.removeEventListener('selectionchange', handleSelectionChange)
       onHistoryControllerChange?.(null)
       onHistoryStateChange?.({ canUndo: false, canRedo: false })
     }
