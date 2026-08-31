@@ -30,6 +30,7 @@
     Download,
     FileDown,
     FileDiff,
+    FileTerminal,
     FolderTree,
     Globe2,
     History,
@@ -58,6 +59,7 @@
   import ThreadView from '../threads/ThreadView.svelte'
   import SpecConversationSidebar from '../specs/SpecConversationSidebar.svelte'
   import TerminalPanel from '../terminal/TerminalPanel.svelte'
+  import ActionsPanel from '../actions/ActionsPanel.svelte'
   import BrowserPanel from '../browser/BrowserPanel.svelte'
   import ProjectFilesPanel from '../files/ProjectFilesPanel.svelte'
   import DiffSidebarPanel from '../files/DiffSidebarPanel.svelte'
@@ -83,6 +85,7 @@
   import ScopeActionsMenu from '../shared/ScopeActionsMenu.svelte'
   import ScopeCreateControl from '../shared/ScopeCreateControl.svelte'
   import { invoke, subscribe } from '$lib/ipc.svelte'
+  import { projectActionsState } from '$lib/stores/project-actions.svelte'
   import { copyText } from '$lib/copy-text'
   import { loadProjectIcons, getProjectIcon, projectIconOnError } from '$lib/project-icons'
   import { getIconSvgDataUrl, generateInitialsIconSvg } from '$lib/project-svg-icons'
@@ -157,13 +160,17 @@
     mode: 'projects' | 'chats' | 'threads'
     /** Whether the shell is the on-screen view (hidden while in Settings/Scope). */
     active?: boolean
+    /** True while the Scope page is on screen — thread switches must keep the
+     *  scope store's active project in sync with the selected thread. */
+    scopeViewActive?: boolean
     navigate: (view: MainView) => void
     /** Global app config — drives the image-descriptor default + ask-again flag. */
     config?: AppConfig
     updateConfig?: (patch: AppConfigPatch) => Promise<void>
   }
 
-  let { mode, active = true, navigate, config, updateConfig }: Props = $props()
+  let { mode, active = true, scopeViewActive = false, navigate, config, updateConfig }: Props =
+    $props()
 
   const INITIAL_THREAD_LIMIT = 100
   const HISTORY_PAGE_LIMIT = 50
@@ -717,6 +724,11 @@
     contextSidebarState.openSources(selectedThread.projectId, selectedThread.id)
   }
 
+  function openActionsTab(): void {
+    if (!selectedThread) return
+    contextSidebarState.openActions(selectedThread.projectId, selectedThread.id)
+  }
+
   function openCloudDeploymentsTab(): void {
     if (!selectedThread) return
     contextSidebarState.openCloudDeployments(selectedThread.projectId, selectedThread.id)
@@ -1048,6 +1060,16 @@
         icon: SquareTerminal,
         active: terminalOpen,
         onSelect: toggleTerminal
+      })
+      const runningActions = projectActionsState.runningCount(selectedThread.projectId)
+      workspaceTools.push({
+        id: 'actions',
+        label: runningActions > 0 ? `Actions (${runningActions} running)` : 'Actions',
+        icon: FileTerminal,
+        active: dockKindActive('actions'),
+        countBadge: runningActions > 0 ? String(runningActions) : undefined,
+        countBadgeTone: runningActions > 0 ? 'working' : undefined,
+        onSelect: () => toggleDockPanel('actions', openActionsTab)
       })
     }
 
@@ -2695,6 +2717,19 @@
   async function openThreadFromSwitcher(thread: Thread): Promise<void> {
     if (thread.projectId === INBOX_PROJECT_ID) navigate('chats')
     else if (mode === 'chats') navigate('projects')
+    // The scope store reads its own activeProjectId / sidebarContext, not the
+    // workspace selection, so a cross-project Ctrl+Tab jump must sync it —
+    // otherwise the scope view tabs and the scope-state sidebar stay stuck on
+    // the previous project. On the Scope page the view itself follows the
+    // thread's project; an active scope-state sidebar follows the thread and
+    // its own scope bucket.
+    if (thread.projectId !== INBOX_PROJECT_ID) {
+      if (scopeViewActive) {
+        void scopeState.activateProject(thread.projectId)
+      } else if (scopeState.sidebarContext) {
+        scopeState.showSidebarForThread(thread)
+      }
+    }
     await openThread(thread)
     // A Ctrl+Tab selection is a deliberate jump to a specific thread. When it
     // crosses modes (e.g. Chats → Projects) the mode switch opens a suppression
@@ -3978,6 +4013,8 @@
                     projectId={activeContextTab.projectId}
                   />
                 {/if}
+              {:else if activeContextTab.kind === 'actions'}
+                <ActionsPanel projectId={activeContextTab.projectId} />
               {:else if activeContextTab.kind === 'browser'}
                 {#if browserFullscreenTabId === activeContextTab.id}
                   <div class="flex h-full items-center justify-center text-xs text-muted">
@@ -4699,10 +4736,7 @@
     {#snippet children()}
       {#if terminalTab?.kind === 'terminal'}
         {#key terminalFullscreenTabId}
-          <TerminalPanel
-            terminalId={terminalTab.terminalId}
-            projectId={terminalTab.projectId}
-          />
+          <TerminalPanel terminalId={terminalTab.terminalId} projectId={terminalTab.projectId} />
         {/key}
       {/if}
     {/snippet}

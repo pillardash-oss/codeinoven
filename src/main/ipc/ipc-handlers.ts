@@ -16,6 +16,11 @@ import {
   normalizeVoiceRecordingShortcut
 } from '../../lib/speech/types'
 import type { Database } from '../database/database'
+import type {
+  ProjectAction,
+  ProjectActionInput,
+  ProjectActionVariable
+} from '../../lib/project-actions'
 import { StorageEngine } from '../storage/storage-engine'
 import { Logger } from '../system/logger'
 import { EditorService } from '../editor/editor-service'
@@ -2141,7 +2146,8 @@ function validateHeartbeatPatchInput(value: unknown): Partial<Omit<HeartbeatConf
   if (typeof value !== 'object' || value === null) throw new TypeError('Invalid heartbeat patch')
   const input = value as Record<string, unknown>
   const patch: Partial<Omit<HeartbeatConfig, 'id'>> = {}
-  if (input.name !== undefined) patch.name = validateBoundedString(input.name, 'Heartbeat name', 1, 100)
+  if (input.name !== undefined)
+    patch.name = validateBoundedString(input.name, 'Heartbeat name', 1, 100)
   if (input.harnessId !== undefined) {
     patch.harnessId = validateBoundedString(input.harnessId, 'Heartbeat harness ID', 1, 100)
   }
@@ -2156,7 +2162,8 @@ function validateHeartbeatPatchInput(value: unknown): Partial<Omit<HeartbeatConf
   }
   if (input.times !== undefined) patch.times = validateHeartbeatTimes(input.times)
   if (input.enabled !== undefined) {
-    if (typeof input.enabled !== 'boolean') throw new TypeError('Heartbeat enabled flag must be a boolean')
+    if (typeof input.enabled !== 'boolean')
+      throw new TypeError('Heartbeat enabled flag must be a boolean')
     patch.enabled = input.enabled
   }
   return patch
@@ -2495,6 +2502,68 @@ export function registerIpcHandlers(
   if (!options.hydrationHandlersRegistered) {
     ipcMain.handle('config:get', () => storage.getConfig())
   }
+  const projectActionsPath = (projectId: string): string =>
+    `projects/${validateEntityId(projectId, 'Project ID')}/actions.json`
+  const readProjectActions = async (projectId: string): Promise<ProjectAction[]> => {
+    const stored = await storage.read<{ actions?: unknown }>(projectActionsPath(projectId))
+    return Array.isArray(stored?.actions) ? (stored.actions as ProjectAction[]) : []
+  }
+  const validateProjectActionInput = (value: unknown): ProjectActionInput => {
+    if (!value || typeof value !== 'object' || Array.isArray(value))
+      throw new TypeError('Action is invalid')
+    const record = value as Record<string, unknown>
+    const name = validateBoundedString(record['name'], 'Action name', 0, 120).trim()
+    const script = validateBoundedString(record['script'], 'Action script', 1, 100_000).trim()
+    if (!script) throw new TypeError('Action script is required')
+    const rawVariables = record['variables']
+    if (!Array.isArray(rawVariables) || rawVariables.length > 30)
+      throw new TypeError('Action variables are invalid')
+    const variables: ProjectActionVariable[] = rawVariables.map((entry) => {
+      if (!entry || typeof entry !== 'object' || Array.isArray(entry))
+        throw new TypeError('Action variable is invalid')
+      const variable = entry as Record<string, unknown>
+      const variableName = validateBoundedString(variable['name'], 'Variable name', 1, 64).trim()
+      if (!/^[A-Za-z_][A-Za-z0-9_]*$/u.test(variableName))
+        throw new TypeError('Variable names must be valid shell environment names')
+      return {
+        name: variableName,
+        label:
+          validateBoundedString(variable['label'], 'Variable label', 0, 120).trim() || variableName,
+        required: validateBoolean(variable['required'], 'Variable required')
+      }
+    })
+    if (new Set(variables.map((variable) => variable.name)).size !== variables.length)
+      throw new TypeError('Variable names must be unique')
+    return { name, script, variables }
+  }
+  ipcMain.handle('projectActions:list', (_, projectId: string) => readProjectActions(projectId))
+  ipcMain.handle(
+    'projectActions:save',
+    async (_, projectId: string, actionId: string | null, value: unknown) => {
+      const input = validateProjectActionInput(value)
+      const actions = await readProjectActions(projectId)
+      const now = Date.now()
+      const existing = actionId ? actions.find((action) => action.id === actionId) : undefined
+      const action: ProjectAction = {
+        id: existing?.id ?? randomUUID(),
+        ...input,
+        createdAt: existing?.createdAt ?? now,
+        updatedAt: now
+      }
+      const next = existing
+        ? actions.map((item) => (item.id === action.id ? action : item))
+        : [...actions, action]
+      await storage.write(projectActionsPath(projectId), { actions: next })
+      return action
+    }
+  )
+  ipcMain.handle('projectActions:delete', async (_, projectId: string, actionId: string) => {
+    const actions = await readProjectActions(projectId)
+    const next = actions.filter((action) => action.id !== validateEntityId(actionId, 'Action ID'))
+    if (next.length === actions.length) return false
+    await storage.write(projectActionsPath(projectId), { actions: next })
+    return true
+  })
   ipcMain.handle('config:update', async (_, input: unknown) => {
     const patch = validateAppConfigPatch(input)
     if (patch.agentBehaviorPrompt) {
@@ -2544,7 +2613,10 @@ export function registerIpcHandlers(
     await storage.resetCioPrompt(id)
     return storage.getCioPromptSettings()
   })
-  ipcMain.handle('heartbeat:list', () => options.heartbeatScheduler?.list() ?? storage.getHeartbeats())
+  ipcMain.handle(
+    'heartbeat:list',
+    () => options.heartbeatScheduler?.list() ?? storage.getHeartbeats()
+  )
   ipcMain.handle('heartbeat:create', async (_, input: unknown) => {
     const scheduler = options.heartbeatScheduler
     if (!scheduler) throw new Error('Heartbeat scheduler is not available')
@@ -2566,7 +2638,8 @@ export function registerIpcHandlers(
     const scheduler = options.heartbeatScheduler
     if (!scheduler) throw new Error('Heartbeat scheduler is not available')
     const safeId = validateBoundedString(id, 'Heartbeat ID', 1, 200)
-    if (typeof enabled !== 'boolean') throw new TypeError('Heartbeat enabled flag must be a boolean')
+    if (typeof enabled !== 'boolean')
+      throw new TypeError('Heartbeat enabled flag must be a boolean')
     return scheduler.update(safeId, { enabled })
   })
   ipcMain.handle('workerNames:getSettings', () => storage.getWorkerNameSettings())
@@ -5033,11 +5106,20 @@ export function registerIpcHandlers(
   )
   ipcMain.handle(
     'git:restoreFiles',
-    async (_, projectId: unknown, source: unknown, paths: unknown, target: unknown, scopeBucketId?: unknown) =>
+    async (
+      _,
+      projectId: unknown,
+      source: unknown,
+      paths: unknown,
+      target: unknown,
+      scopeBucketId?: unknown
+    ) =>
       gitService.restoreFiles(
         await resolveProjectPath(
           validateEntityId(projectId, 'Project ID'),
-          scopeBucketId === undefined ? undefined : validateEntityId(scopeBucketId, 'Scope bucket ID')
+          scopeBucketId === undefined
+            ? undefined
+            : validateEntityId(scopeBucketId, 'Scope bucket ID')
         ),
         validateGitRevision(source),
         validateGitPathArray(paths),

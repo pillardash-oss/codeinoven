@@ -16,6 +16,7 @@
     badgeTitle?: string
     /** Renders a compact neutral count badge above the tool icon. */
     countBadge?: string
+    countBadgeTone?: 'working'
     /** Coloured emphasis: amber for attention-worthy tools (e.g. a thread note),
      *  info for ephemeral tools that match their in-panel icon colour. */
     tone?: 'warning' | 'info'
@@ -105,7 +106,10 @@
           {/if}
           {#if item.countBadge !== undefined}
             <span
-              class="absolute -top-1 -right-1 flex h-3.5 min-w-3.5 items-center justify-center rounded-full bg-raised px-1 text-[9px] font-semibold leading-none tabular-nums text-muted ring-1 ring-border"
+              class="absolute -top-1 -right-1 flex h-3.5 min-w-3.5 items-center justify-center rounded-full px-1 text-[9px] font-semibold leading-none tabular-nums ring-1 {item.countBadgeTone ===
+              'working'
+                ? 'bg-thread-working text-on-primary ring-thread-working'
+                : 'bg-raised text-muted ring-border'}"
               aria-hidden="true"
             >
               {item.countBadge}

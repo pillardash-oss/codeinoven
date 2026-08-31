@@ -1023,10 +1023,7 @@ export interface IpcInvokeContract {
     [projectId: string, threadId: string, messageId: string, mode: 'down' | 'single' | 'up'],
     AgentMessage[]
   >
-  'agent:discardSteer': Contract<
-    [projectId: string, threadId: string, messageId: string],
-    void
-  >
+  'agent:discardSteer': Contract<[projectId: string, threadId: string, messageId: string], void>
   'checklist:generate': Contract<
     [projectId: string, threadId: string, planContent: string],
     Checklist
@@ -1231,10 +1228,7 @@ export interface IpcInvokeContract {
     [],
     import('./speech/types').SpeechResult<import('./speech/types').SpeechLlamaRuntimeStatus>
   >
-  'speech:downloadLlamaRuntime': Contract<
-    [],
-    import('./speech/types').SpeechResult<void>
-  >
+  'speech:downloadLlamaRuntime': Contract<[], import('./speech/types').SpeechResult<void>>
   'speech:requestConfirmation': Contract<
     [action: import('./speech/types').SpeechDestructiveAction, targetId: string],
     import('./speech/types').SpeechResult<import('./speech/types').SpeechConfirmation>
@@ -1922,10 +1916,7 @@ export interface IpcInvokeContract {
     [harnessId: string, providerId: string, apiKey: string],
     void
   >
-  'providerAccounts:beginOAuthLogin': Contract<
-    [harnessId: string, providerId: string],
-    string
-  >
+  'providerAccounts:beginOAuthLogin': Contract<[harnessId: string, providerId: string], string>
   'providerAccounts:respondOAuthPrompt': Contract<[loginId: string, value: string], void>
   'providerAccounts:cancelOAuthLogin': Contract<[loginId: string], void>
   'providerAccounts:getHidden': Contract<[harnessId: string], string[]>
@@ -1953,10 +1944,7 @@ export interface IpcInvokeContract {
     import('./types').CustomProviderUsage | null
   >
   'heartbeat:list': Contract<[], HeartbeatConfig[]>
-  'heartbeat:create': Contract<
-    [input: Omit<HeartbeatConfig, 'id' | 'lastRun'>],
-    HeartbeatConfig
-  >
+  'heartbeat:create': Contract<[input: Omit<HeartbeatConfig, 'id' | 'lastRun'>], HeartbeatConfig>
   'heartbeat:update': Contract<
     [id: string, patch: Partial<Omit<HeartbeatConfig, 'id'>>],
     HeartbeatConfig
@@ -2013,7 +2001,28 @@ export interface IpcInvokeContract {
     [id: string, command: string, args: string[], columns: number, rows: number],
     { id: string; pid: number }
   >
+  'pty:createAction': Contract<
+    [
+      id: string,
+      projectId: string,
+      script: string,
+      variables: Record<string, string>,
+      columns: number,
+      rows: number
+    ],
+    { id: string; pid: number }
+  >
   'pty:destroy': Contract<[id: string], void>
+  'projectActions:list': Contract<[projectId: string], import('./project-actions').ProjectAction[]>
+  'projectActions:save': Contract<
+    [
+      projectId: string,
+      actionId: string | null,
+      input: import('./project-actions').ProjectActionInput
+    ],
+    import('./project-actions').ProjectAction
+  >
+  'projectActions:delete': Contract<[projectId: string, actionId: string], boolean>
   'repository:init': Contract<[projectPath: string], RepositoryPreflightResult>
   'repository:preflight': Contract<[projectPath: string], RepositoryPreflightResult>
   'repository:remoteOrigin': Contract<[projectPath: string], string | null>

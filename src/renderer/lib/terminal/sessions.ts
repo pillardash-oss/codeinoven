@@ -19,6 +19,7 @@ export interface TerminalSession {
   projectId: string | null
   /** Consecutive immediate shell exits since the last healthy (2s) uptime. */
   respawnCount: number
+  kind: 'shell' | 'action'
 }
 
 const MAX_RESPAWNS = 5
@@ -93,7 +94,7 @@ class TerminalSessionManager {
   /** Return the live session for `id`, creating its Ghostty terminal if needed. */
   async getOrCreate(id: string): Promise<TerminalSession> {
     const existing = this.sessions.get(id)
-    if (existing && !existing.exited) return existing
+    if (existing && (!existing.exited || existing.kind === 'action')) return existing
     if (existing?.exited) this.teardown(id)
 
     const pending = this.pendingSessions.get(id)
@@ -108,6 +109,12 @@ class TerminalSessionManager {
         this.pendingSessions.delete(id)
       }
     }
+  }
+
+  async getOrCreateAction(id: string): Promise<TerminalSession> {
+    const session = await this.getOrCreate(id)
+    session.kind = 'action'
+    return session
   }
 
   getSession(id: string): TerminalSession | undefined {
@@ -125,6 +132,36 @@ class TerminalSessionManager {
     }
     session.fitAddon.fit()
     await this.ensurePty(session, projectId)
+    session.term.focus()
+  }
+
+  async attachAction(
+    session: TerminalSession,
+    container: HTMLDivElement,
+    projectId: string,
+    script: string,
+    variables: Record<string, string>
+  ): Promise<void> {
+    if (session.host.parentElement !== container) container.replaceChildren(session.host)
+    session.fitAddon.fit()
+    if (!session.ptySpawned) {
+      session.projectId = projectId
+      session.ptySpawned = true
+      try {
+        await invoke(
+          'pty:createAction',
+          session.id,
+          projectId,
+          script,
+          variables,
+          session.term.cols,
+          session.term.rows
+        )
+      } catch (error) {
+        session.ptySpawned = false
+        throw error
+      }
+    }
     session.term.focus()
   }
 
@@ -201,7 +238,8 @@ class TerminalSessionManager {
       exited: false,
       ptySpawned: false,
       projectId: null,
-      respawnCount: 0
+      respawnCount: 0,
+      kind: 'shell'
     }
     this.sessions.set(id, session)
 
@@ -266,7 +304,8 @@ class TerminalSessionManager {
     subs.push(
       subscribe(`pty:exit:${id}`, () => {
         term.write('\r\n\x1b[90m[process exited]\x1b[0m\r\n')
-        void respawn()
+        session.exited = true
+        if (session.kind === 'shell') void respawn()
       })
     )
     subs.push(() => {

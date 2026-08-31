@@ -96,6 +96,14 @@ export interface GitContextTab {
   threadId: string
 }
 
+export interface ActionsContextTab {
+  id: string
+  kind: 'actions'
+  title: string
+  projectId: string
+  threadId: string
+}
+
 export interface BrowserContextTab {
   id: string
   kind: 'browser'
@@ -211,6 +219,7 @@ export type ContextSidebarTab =
   | DebuggerContextTab
   | SourcesContextTab
   | GitContextTab
+  | ActionsContextTab
   | ThreadNoteContextTab
   | CloudDeploymentContextTab
   | TemporaryChatContextTab
@@ -252,6 +261,7 @@ const NOTIFICATIONS_TAB: NotificationContextTab = {
 const PROJECT_TAB_KINDS = new Set<ContextSidebarTab['kind']>([
   'files',
   'terminal',
+  'actions',
   'git',
   'cloud-deployment',
   'memory'
@@ -911,6 +921,18 @@ class ContextSidebarState {
     // re-reads local status and the connection-gated PR indicators so the
     // panel never shows data older than the moment it was opened.
     gitState.notifyGitPanelOpened(projectId)
+  }
+
+  openActions(projectId: string, threadId: string): void {
+    const context = this.ensureProjectContext(projectId)
+    const id = `actions:${projectId}`
+    const existing = context.tabs.find((tab) => tab.id === id)
+    if (existing) {
+      if (existing.kind === 'actions') existing.threadId = threadId
+      this.focusInProjectContext(context, id)
+      return
+    }
+    this.openProject(context, { id, kind: 'actions', title: 'Actions', projectId, threadId })
   }
 
   openBrowser(url: string, requestedTabId?: string): string | null {

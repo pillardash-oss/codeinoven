@@ -9,6 +9,7 @@
     ChevronDown,
     Cloud,
     FileDiff,
+    FileTerminal,
     Files,
     GitBranch,
     Globe2,
@@ -100,6 +101,7 @@
     'debugger',
     'notifications',
     'git',
+    'actions',
     'thread-note',
     'coordinator'
   ])
@@ -235,6 +237,8 @@
       <FileDiff size={12} class="shrink-0" />
     {:else if tab.kind === 'terminal'}
       <SquareTerminal size={12} class="shrink-0" />
+    {:else if tab.kind === 'actions'}
+      <FileTerminal size={12} class="shrink-0" />
     {:else if tab.kind === 'browser'}
       <Globe2 size={12} class="shrink-0" />
     {:else if tab.kind === 'debugger'}
