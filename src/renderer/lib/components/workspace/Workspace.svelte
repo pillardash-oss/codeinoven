@@ -790,8 +790,10 @@
   )
 
   function focusBrowser(): void {
-    const tab = browserTabs.at(-1)
-    if (tab) contextSidebarState.focus(tab.id)
+    // Prefer the remembered active tab over the last one so a restart (or any
+    // path that lost track of the active tab) reopens what the user last saw.
+    const id = contextSidebarState.rememberedBrowserTabId
+    if (id) contextSidebarState.focus(id)
   }
 
   function focusSubagent(): void {

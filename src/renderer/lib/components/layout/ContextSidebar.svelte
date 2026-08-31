@@ -137,6 +137,19 @@
   let dragTabId = $state<string | null>(null)
   let dropTargetId = $state<string | null>(null)
   let dropPosition = $state<'before' | 'after' | null>(null)
+  let stripScroller = $state<HTMLDivElement>()
+
+  // Keep the active tab visible in the strip: whenever the strip mounts or the
+  // active tab changes (a link opened a new browser tab, a tab was selected,
+  // the workspace came back from fullscreen), scroll it into view horizontally
+  // so it is never hidden past the strip's scroll edge. Mirrors the fullscreen
+  // dialog strip's behavior.
+  $effect(() => {
+    const scroller = stripScroller
+    if (!scroller || !activeTabId) return
+    const activeButton = scroller.querySelector<HTMLElement>('[data-active-tab="true"]')
+    activeButton?.scrollIntoView({ inline: 'nearest', block: 'nearest' })
+  })
 
   function setDragImage(e: DragEvent, label: string): void {
     const ghost = document.createElement('div')
@@ -267,7 +280,7 @@
   {#if !headerless}
     <div class="flex h-10 shrink-0 items-center border-b border-border">
       {#if tabbedMode}
-        <div class="min-w-0 flex-1 overflow-x-auto">
+        <div class="min-w-0 flex-1 overflow-x-auto" bind:this={stripScroller}>
           <div class="flex h-10 min-w-max items-stretch">
             {#each stripTabs as tab (tab.id)}
               <div
@@ -306,6 +319,7 @@
                   type="button"
                   class="flex min-w-0 flex-1 items-center gap-1.5 py-2 pl-3 text-left"
                   aria-current={activeTabId === tab.id ? 'page' : undefined}
+                  data-active-tab={activeTabId === tab.id ? 'true' : undefined}
                   title={tab.title}
                   onclick={() => onSelect(tab.id)}
                 >

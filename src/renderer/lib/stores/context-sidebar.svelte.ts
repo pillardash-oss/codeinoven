@@ -271,68 +271,83 @@ function isProjectTab(tab: ContextSidebarTab): boolean {
   return PROJECT_TAB_KINDS.has(tab.kind)
 }
 
-function loadBrowserTabs(): BrowserContextTab[] {
-  if (typeof window === 'undefined') return []
+/** Restored browser tab list plus which tab was last active. The active id is
+ *  validated against the restored tabs so a stale id can never win. */
+function loadPersistedBrowserTabs(): { tabs: BrowserContextTab[]; activeTabId: string | null } {
+  const empty: { tabs: BrowserContextTab[]; activeTabId: string | null } = {
+    tabs: [],
+    activeTabId: null
+  }
+  if (typeof window === 'undefined') return empty
   try {
     const raw = window.localStorage.getItem(BROWSER_TABS_STORAGE_KEY)
-    if (!raw) return []
+    if (!raw) return empty
     const snapshot: unknown = JSON.parse(raw)
-    if (!snapshot || typeof snapshot !== 'object' || Array.isArray(snapshot)) return []
-    const tabs = (snapshot as Record<string, unknown>)['tabs']
-    if (!Array.isArray(tabs)) return []
-    const restored: BrowserContextTab[] = []
-    for (const value of tabs.slice(-MAX_PERSISTED_BROWSER_TABS)) {
-      if (!value || typeof value !== 'object' || Array.isArray(value)) continue
-      const tab = value as Record<string, unknown>
-      const id = tab['id']
-      const projectId = tab['projectId']
-      const threadId = tab['threadId']
-      const title = tab['title']
-      const url = tab['url']
-      if (
-        typeof id !== 'string' ||
-        !BROWSER_TAB_ID_PATTERN.test(id) ||
-        restored.some((candidate) => candidate.id === id) ||
-        typeof projectId !== 'string' ||
-        projectId.length === 0 ||
-        projectId.length > 512 ||
-        typeof threadId !== 'string' ||
-        threadId.length > 512 ||
-        typeof title !== 'string' ||
-        title.length > 240 ||
-        typeof url !== 'string'
-      ) {
-        continue
-      }
-      let parsed: URL
-      try {
-        parsed = new URL(url)
-      } catch {
-        continue
-      }
-      if (
-        (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') ||
-        parsed.username !== '' ||
-        parsed.password !== ''
-      ) {
-        continue
-      }
-      restored.push({
-        id,
-        kind: 'browser',
-        title,
-        projectId,
-        threadId,
-        url: parsed.href,
-        // Restored tabs stay inert until the user opens the project's browser.
-        // Start on the page so that explicit action is the only load trigger.
-        surface: 'page'
-      })
-    }
-    return restored
+    if (!snapshot || typeof snapshot !== 'object' || Array.isArray(snapshot)) return empty
+    const record = snapshot as Record<string, unknown>
+    const tabs = loadBrowserTabs(record)
+    const activeId = record['activeTabId']
+    const activeTabId =
+      typeof activeId === 'string' && BROWSER_TAB_ID_PATTERN.test(activeId) ? activeId : null
+    return { tabs, activeTabId: tabs.some((tab) => tab.id === activeTabId) ? activeTabId : null }
   } catch {
-    return []
+    return empty
   }
+}
+
+function loadBrowserTabs(snapshot: Record<string, unknown>): BrowserContextTab[] {
+  const tabs = snapshot['tabs']
+  if (!Array.isArray(tabs)) return []
+  const restored: BrowserContextTab[] = []
+  for (const value of tabs.slice(-MAX_PERSISTED_BROWSER_TABS)) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) continue
+    const tab = value as Record<string, unknown>
+    const id = tab['id']
+    const projectId = tab['projectId']
+    const threadId = tab['threadId']
+    const title = tab['title']
+    const url = tab['url']
+    if (
+      typeof id !== 'string' ||
+      !BROWSER_TAB_ID_PATTERN.test(id) ||
+      restored.some((candidate) => candidate.id === id) ||
+      typeof projectId !== 'string' ||
+      projectId.length === 0 ||
+      projectId.length > 512 ||
+      typeof threadId !== 'string' ||
+      threadId.length > 512 ||
+      typeof title !== 'string' ||
+      title.length > 240 ||
+      typeof url !== 'string'
+    ) {
+      continue
+    }
+    let parsed: URL
+    try {
+      parsed = new URL(url)
+    } catch {
+      continue
+    }
+    if (
+      (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') ||
+      parsed.username !== '' ||
+      parsed.password !== ''
+    ) {
+      continue
+    }
+    restored.push({
+      id,
+      kind: 'browser',
+      title,
+      projectId,
+      threadId,
+      url: parsed.href,
+      // Restored tabs stay inert until the user opens the project's browser.
+      // Start on the page so that explicit action is the only load trigger.
+      surface: 'page'
+    })
+  }
+  return restored
 }
 
 function contextKey(projectId: string, threadId: string): string {
@@ -360,11 +375,14 @@ function sameSubagentActivity(
   )
 }
 
+/** Parsed once at module load: the persisted tab list plus the last active tab. */
+const persistedBrowserTabs = loadPersistedBrowserTabs()
+
 class ContextSidebarState {
   private contexts: Record<string, ThreadSidebarContext> = $state({})
   private projectContexts: Record<string, ProjectSidebarContext> = $state({})
-  private browserTabs: BrowserContextTab[] = $state(loadBrowserTabs())
-  private browserActiveTabId: string | null = $state(null)
+  private browserTabs: BrowserContextTab[] = $state(persistedBrowserTabs.tabs)
+  private browserActiveTabId: string | null = $state(persistedBrowserTabs.activeTabId)
   private browserVisible = $state(false)
   /** Keys of full-window DOM surfaces currently covering the workspace (e.g.
    *  fullscreen terminal/media/file editors). The browser's native view must
@@ -435,6 +453,19 @@ class ContextSidebarState {
       this.activeBrowserTabs.find((tab) => tab.id === this.browserActiveTabId) ??
       this.activeBrowserTabs.at(-1)
     return active?.surface === 'page'
+  }
+
+  /** The browser tab to focus when the browser workspace is revealed: the
+   *  remembered active tab when it still belongs to the active project,
+   *  otherwise the project's last open tab. Restarts, project switches and
+   *  tab closures all funnel through this so the sidebar never falls back to
+   *  an arbitrary tab. */
+  get rememberedBrowserTabId(): string | null {
+    const tabs = this.activeBrowserTabs
+    if (tabs.length === 0) return null
+    return this.browserActiveTabId && tabs.some((tab) => tab.id === this.browserActiveTabId)
+      ? this.browserActiveTabId
+      : (tabs.at(-1)?.id ?? null)
   }
 
   /**
@@ -1624,6 +1655,7 @@ class ContextSidebarState {
     this.browserActiveTabId = id
     this.browserVisible = true
     this.notificationsVisible = false
+    this.persistBrowserTabs()
   }
 
   /** Detach the native browser view at the store layer. The panel's own
@@ -1642,7 +1674,11 @@ class ContextSidebarState {
     try {
       window.localStorage.setItem(
         BROWSER_TABS_STORAGE_KEY,
-        JSON.stringify({ version: 1, tabs: this.browserTabs.slice(-MAX_PERSISTED_BROWSER_TABS) })
+        JSON.stringify({
+          version: 1,
+          tabs: this.browserTabs.slice(-MAX_PERSISTED_BROWSER_TABS),
+          activeTabId: this.browserActiveTabId
+        })
       )
     } catch {
       // Browser restoration is best-effort; blocked storage must not break the sidebar.
