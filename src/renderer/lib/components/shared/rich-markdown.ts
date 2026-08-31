@@ -1,3 +1,9 @@
+import {
+  isDoubleQuoteOpen,
+  isInsideUnclosedInlineCode,
+  isQuotedMentionPosition
+} from '$shared/mention-context'
+
 const INLINE_CODE_CLASS =
   'rounded border border-border bg-elevated px-1 py-0.5 font-mono text-[0.9em]'
 const INLINE_BADGE_CLASS =
@@ -124,7 +130,8 @@ function collectEditorDefinitions(lines: string[]): EditorDefinitions {
 function renderInline(
   source: string,
   inlineBadges: readonly RichInlineBadge[],
-  context: EditorRenderContext
+  context: EditorRenderContext,
+  quoteOpenAtLineStart = false
 ): string {
   const code: string[] = []
   const badges: string[] = []
@@ -143,7 +150,19 @@ function renderInline(
     (left, right) => right.value.length - left.value.length
   )) {
     if (!badge.value) continue
-    prepared = prepared.replaceAll(badge.value, (_match, offset: number, source: string) => {
+    prepared = prepared.replaceAll(badge.value, (match, offset: number, text: string) => {
+      // Mentions and other badge values never become badges inside a block
+      // quote, an open double-quoted passage, or an unclosed inline code span —
+      // there the text must stay literal. (Closed inline code and fenced code
+      // blocks are already safe: they are stashed or block-rendered before this
+      // loop runs.)
+      if (
+        quoteOpenAtLineStart ||
+        isQuotedMentionPosition(text, offset) ||
+        isInsideUnclosedInlineCode(text.slice(0, offset))
+      ) {
+        return match
+      }
       const icon = badge.iconSrc
         ? `<img src="${escapeHtml(badge.iconSrc)}" alt="" class="${INLINE_BADGE_ICON_CLASS}">`
         : ''
@@ -307,13 +326,18 @@ export function renderRichMarkdown(
       paragraphLineIndexes.push(index)
       index += 1
     }
+    let quotePrefix = ''
     blocks.push(
       `<p class="mb-1 last:mb-0">${paragraph
-        .map((line, lineIndex) =>
-          definitionLines.has(paragraphLineIndexes[lineIndex] ?? 0)
+        .map((line, lineIndex) => {
+          // Carry double-quote state across the paragraph's lines so a quote
+          // opened on an earlier line keeps later lines badge-free too.
+          const quoteOpen = isDoubleQuoteOpen(quotePrefix)
+          quotePrefix += `${line}\n`
+          return definitionLines.has(paragraphLineIndexes[lineIndex] ?? 0)
             ? escapeHtml(line)
-            : renderInline(line, inlineBadges, context)
-        )
+            : renderInline(line, inlineBadges, context, quoteOpen)
+        })
         .join('<br>')}</p>`
     )
   }
